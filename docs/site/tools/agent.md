@@ -241,7 +241,7 @@ Snapshot-aware clients and brokers prefer the manifest and fall back to `/graph.
 
 The crawler uses the same token resolution as other clients:
 
-1. **`DEMARKUS_AUTH` env var**: fallback for all servers
+1. **`DEMARKUS_AUTH` env var**: sent to the hub only, and only when exactly one hub is configured; crawled servers never receive it
 2. **Stored tokens**: `~/.mark/tokens.toml` per-host tokens
 
 Store tokens before crawling:

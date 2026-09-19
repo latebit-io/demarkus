@@ -80,6 +80,9 @@ func main() {
 	if gsErr != nil {
 		log.Printf("warning: graph store unavailable: %v", gsErr)
 	}
+	if *defaultHost == "" && (*token != "" || os.Getenv("DEMARKUS_AUTH") != "") {
+		log.Printf("warning: -token and DEMARKUS_AUTH apply to the -host server only; none is set, so they are unused")
+	}
 	h := &handler{client: client, defaultHost: *defaultHost, token: *token, graphStore: gs}
 	s.AddTools(h.profileTools(*defaultHost, *profile)...)
 
@@ -304,12 +307,15 @@ func (h *handler) seedPass(ctx context.Context, host string) bool { //nolint:goc
 	return true
 }
 
-// resolveToken returns the auth token for a host using the shared cascade:
-// explicit -token flag > DEMARKUS_AUTH env var > stored token for host.
-// Reloads the token store on each call so changes on disk are picked up
-// without restarting the MCP server.
+// resolveToken scopes the -token flag and DEMARKUS_AUTH to the default host;
+// other hosts get their stored token only. Reloads the store on each call so
+// changes on disk apply without a restart.
 func (h *handler) resolveToken(host string) string {
-	return tokens.Resolve(h.token, host, tokens.LoadDefault())
+	cred := tokens.Credential{Explicit: h.token}
+	if origin, _, err := fetch.ParseMarkURL(h.defaultHost); err == nil {
+		cred.Origin = origin
+	}
+	return tokens.Resolve(cred, host, tokens.LoadDefault())
 }
 
 // resolveURL parses a mark:// URL or bare path (when -host is set) into host and path.

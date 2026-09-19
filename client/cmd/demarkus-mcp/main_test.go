@@ -608,7 +608,7 @@ func TestHandlerMarkPublish_Metadata(t *testing.T) {
 			}}, nil
 		},
 	}
-	h := &handler{client: sc, token: "test-token"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test-token"}
 
 	res, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
 		"url":              "mark://example.com/doc.md",
@@ -651,7 +651,7 @@ func TestHandlerMarkLookup(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test-token"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test-token"}
 	result, err := h.markLookup(context.Background(), newCallToolRequest(map[string]any{
 		"url":    "mark://example.com/docs/",
 		"query":  "auth middleware",
@@ -689,7 +689,7 @@ func TestHandlerMarkLookup_BodyMatch(t *testing.T) {
 		}}
 	}
 	call := func(sc *stubClient) string {
-		h := &handler{client: sc, token: "test-token"}
+		h := &handler{client: sc, defaultHost: "mark://example.com", token: "test-token"}
 		result, err := h.markLookup(context.Background(), newCallToolRequest(map[string]any{
 			"url": "mark://example.com/", "query": "hairpin", "match": "body",
 		}))
@@ -709,7 +709,7 @@ func TestHandlerMarkLookup_BodyMatch(t *testing.T) {
 }
 
 func TestHandlerMarkLookup_RequiresQuery(t *testing.T) {
-	h := &handler{client: &stubClient{}, token: "test-token"}
+	h := &handler{client: &stubClient{}, defaultHost: "mark://example.com", token: "test-token"}
 	result, err := h.markLookup(context.Background(), newCallToolRequest(map[string]any{
 		"url": "mark://example.com/",
 	}))
@@ -741,7 +741,7 @@ func TestHandlerMarkAppend_AutoResolveVersion(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test-token"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test-token"}
 	ctx := context.Background()
 
 	result, err := h.markAppend(ctx, newCallToolRequest(map[string]any{
@@ -771,7 +771,7 @@ func TestHandlerMarkAppend_AutoResolveVersionNotFound(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test-token"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test-token"}
 	ctx := context.Background()
 
 	result, err := h.markAppend(ctx, newCallToolRequest(map[string]any{
@@ -798,7 +798,7 @@ func TestHandlerMarkAppend_ExplicitVersion(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test-token"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test-token"}
 	ctx := context.Background()
 
 	result, err := h.markAppend(ctx, newCallToolRequest(map[string]any{
@@ -818,7 +818,7 @@ func TestHandlerMarkAppend_ExplicitVersion(t *testing.T) {
 }
 
 func TestHandlerMarkAppend_NegativeVersion(t *testing.T) {
-	h := &handler{token: "test-token"}
+	h := &handler{defaultHost: "mark://example.com", token: "test-token"}
 	ctx := context.Background()
 
 	result, err := h.markAppend(ctx, newCallToolRequest(map[string]any{
@@ -1051,7 +1051,7 @@ func TestHandlerMarkIndex_Success(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test-token"}
+	h := &handler{client: sc, defaultHost: "mark://hub.com", token: "test-token"}
 	result, err := h.markIndex(context.Background(), newCallToolRequest(map[string]any{
 		"source":           "mark://source.com",
 		"target":           "mark://hub.com/indexes/source.md",
@@ -1140,7 +1140,7 @@ func TestHandlerMarkIndex_BlocksWithoutManifest(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test-token"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test-token"}
 	result, err := h.markIndex(context.Background(), newCallToolRequest(map[string]any{
 		"source":           "mark://source.com",
 		"target":           "mark://hub.com/indexes/source.md",
@@ -1181,7 +1181,7 @@ func TestHandlerMarkIndex_ForceOverridesManifest(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test-token"}
+	h := &handler{client: sc, defaultHost: "mark://hub.com", token: "test-token"}
 	result, err := h.markIndex(context.Background(), newCallToolRequest(map[string]any{
 		"source":           "mark://source.com",
 		"target":           "mark://hub.com/indexes/source.md",
@@ -1231,7 +1231,7 @@ func TestHandlerMarkIndex_SourceNoManifestWarns(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test-token"}
+	h := &handler{client: sc, defaultHost: "mark://hub.com", token: "test-token"}
 	result, err := h.markIndex(context.Background(), newCallToolRequest(map[string]any{
 		"source":           "mark://source.com",
 		"target":           "mark://hub.com/indexes/source.md",
@@ -1488,7 +1488,7 @@ func TestHandlerMarkGraphPublish(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, graphStore: gs, token: "test-token"}
+	h := &handler{client: sc, graphStore: gs, defaultHost: "mark://target.com", token: "test-token"}
 	ctx := context.Background()
 
 	result, err := h.markGraphPublish(ctx, newCallToolRequest(map[string]any{
@@ -1558,7 +1558,7 @@ func TestHandlerMarkGraphPublish_NegativeVersion(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	h := &handler{graphStore: gs, token: "test-token"}
+	h := &handler{graphStore: gs, defaultHost: "mark://target.com", token: "test-token"}
 	ctx := context.Background()
 
 	result, err := h.markGraphPublish(ctx, newCallToolRequest(map[string]any{
@@ -1603,7 +1603,7 @@ func TestHandlerMarkPublish_OnConflictMergeDisjoint(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test"}
 	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
 		"url":              "mark://example.com/doc.md",
 		"body":             "a\nB\nc\n",
@@ -1663,7 +1663,7 @@ func TestHandlerMarkPublish_OnConflictMergeOverlap(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test"}
 	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
 		"url":              "mark://example.com/doc.md",
 		"body":             "a\nB\nc\n",
@@ -1695,7 +1695,7 @@ func TestHandlerMarkPublish_OnConflictMergeOverlap(t *testing.T) {
 }
 
 func TestHandlerMarkPublish_OnConflictInvalid(t *testing.T) {
-	h := &handler{client: &stubClient{}, token: "test"}
+	h := &handler{client: &stubClient{}, defaultHost: "mark://example.com", token: "test"}
 	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
 		"url":              "mark://example.com/doc.md",
 		"body":             "x",
@@ -1723,7 +1723,7 @@ func TestHandlerMarkPublish_NegativeExpectedVersionRejected(t *testing.T) {
 			if onConflict != "" {
 				args["on_conflict"] = onConflict
 			}
-			h := &handler{client: &stubClient{}, token: "test"}
+			h := &handler{client: &stubClient{}, defaultHost: "mark://example.com", token: "test"}
 			result, err := h.markPublish(context.Background(), newCallToolRequest(args))
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -1751,7 +1751,7 @@ func TestHandlerMarkPublish_BlankOnConflictUsesDefault(t *testing.T) {
 					}}, nil
 				},
 			}
-			h := &handler{client: sc, token: "test"}
+			h := &handler{client: sc, defaultHost: "mark://example.com", token: "test"}
 			result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
 				"url":              "mark://example.com/doc.md",
 				"body":             "x",
@@ -1798,7 +1798,7 @@ func TestHandlerMarkPublish_DefaultIsMerge(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test"}
 	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
 		"url":              "mark://example.com/doc.md",
 		"body":             "a\nB\nc\n",
@@ -1834,7 +1834,7 @@ func TestHandlerMarkPublish_OnConflictFail_OptOut(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test"}
 	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
 		"url":              "mark://example.com/doc.md",
 		"body":             "x",
@@ -1874,7 +1874,7 @@ func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess(t *testing.T) {
 		},
 	}
 
-	h := &handler{client: sc, token: "test"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test"}
 	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
 		"url":              "mark://example.com/doc.md",
 		"body":             "x",
@@ -1918,7 +1918,7 @@ func TestHandlerMarkPublish_OnConflictMergeFirstTrySuccess_PreservesAllMetadata(
 		},
 	}
 
-	h := &handler{client: sc, token: "test"}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test"}
 	result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
 		"url":              "mark://example.com/doc.md",
 		"body":             "x",
@@ -1980,7 +1980,7 @@ func TestHandlerMarkGraphPublish_Retention(t *testing.T) {
 				}}, nil
 			},
 		}
-		return &handler{client: sc, graphStore: gs, token: "test-token"}
+		return &handler{client: sc, graphStore: gs, defaultHost: "mark://target.com", token: "test-token"}
 	}
 
 	tests := []struct {
@@ -2034,4 +2034,29 @@ func TestHandlerMarkGraphPublish_Retention(t *testing.T) {
 		}
 		assertIsToolError(t, result, "retention must be >= 0")
 	})
+}
+
+func TestResolveToken_ScopedToDefaultHost(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("DEMARKUS_AUTH", "env-token")
+	tests := []struct {
+		name        string
+		defaultHost string
+		flagToken   string
+		host        string
+		want        string
+	}{
+		{"flag on default host", "mark://example.com", "flag-token", "example.com:6309", "flag-token"},
+		{"env on default host", "mark://example.com", "", "example.com:6309", "env-token"},
+		{"foreign host gets nothing", "mark://example.com", "flag-token", "evil.example:6309", ""},
+		{"no default host scopes to no host", "", "flag-token", "example.com:6309", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &handler{defaultHost: tt.defaultHost, token: tt.flagToken}
+			if got := h.resolveToken(tt.host); got != tt.want {
+				t.Errorf("resolveToken(%q) = %q, want %q", tt.host, got, tt.want)
+			}
+		})
+	}
 }

@@ -52,7 +52,7 @@ func (o *CrawlOutcome) Is(target error) bool { return target == ErrIncomplete &&
 // CrawlWarning removes an already-rendered outcome from joined persistence errors.
 // Other errors retain their context and identity, including ordinary wrappers.
 func CrawlWarning(err error, outcome *CrawlOutcome) error {
-	if err == nil || err == outcome {
+	if err == nil || err == outcome { //nolint:errorlint // identity only; wrappers keep their context
 		return nil
 	}
 	joined, ok := err.(interface{ Unwrap() []error })

@@ -53,6 +53,8 @@ jobs:
             install:
               - 'install.sh'
               - 'install-stack.sh'
+              - 'install-readonly.sh'
+              - 'scripts/test-install-checksum.sh'
               - 'scripts/test-install-renewal.sh'
               - 'scripts/test-install-stack-tokens.sh'
               - 'scripts/test-install-update-stack.sh'
@@ -73,6 +75,40 @@ jobs:
               - 'tools/go.mod'
               - 'tools/go.sum'
 
+  repo-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # check-comment-length.sh needs the merge base with main
+          fetch-depth: 0
+      - name: Shell scripts
+        run: bash scripts/check-shell.sh
+      - name: Plugin copies
+        run: bash scripts/check-identical-copies.sh
+      - name: Comment length
+        run: |
+          git branch -f main origin/main 2>/dev/null || true
+          bash scripts/check-comment-length.sh
+
+  lint-ratchet:
+    needs: detect-changes
+    if: >-
+      needs.detect-changes.outputs.protocol == 'true' ||
+      needs.detect-changes.outputs.server == 'true' ||
+      needs.detect-changes.outputs.client == 'true' ||
+      needs.detect-changes.outputs.broker == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.9.0
+      - name: Lint ratchet
+        run: bash scripts/lint-ratchet.sh
+
   test-protocol:
     needs: detect-changes
     if: needs.detect-changes.outputs.protocol == 'true'
@@ -87,9 +123,11 @@ jobs:
           version: v2.9.0
           working-directory: protocol
       - name: Test
-        run: cd protocol && go test ./...
+        run: cd protocol && go test -race ./...
       - name: Vet
         run: cd protocol && go vet ./...
+      - name: Vulnerabilities
+        run: cd protocol && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   test-server:
     needs: detect-changes
@@ -110,9 +148,11 @@ jobs:
           version: v2.9.0
           working-directory: server
       - name: Test
-        run: cd server && go test ./...
+        run: cd server && go test -race ./...
       - name: Vet
         run: cd server && go vet ./...
+      - name: Vulnerabilities
+        run: cd server && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       # Optional storage SDKs must not leak into the default server binary.
       - name: Build
         run: |
@@ -155,9 +195,11 @@ jobs:
           version: v2.9.0
           working-directory: client
       - name: Test
-        run: cd client && go test ./...
+        run: cd client && go test -race ./...
       - name: Vet
         run: cd client && go vet ./...
+      - name: Vulnerabilities
+        run: cd client && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: Build CLI
         run: cd client && go build -o /dev/null ./cmd/demarkus
       - name: Build TUI
@@ -183,9 +225,11 @@ jobs:
           version: v2.9.0
           working-directory: tools
       - name: Test
-        run: cd tools && go test ./...
+        run: cd tools && go test -race ./...
       - name: Vet
         run: cd tools && go vet ./...
+      - name: Vulnerabilities
+        run: cd tools && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: Build
         run: cd tools && go build -o /dev/null ./demarkus-knowledge-broker
 
@@ -220,6 +264,8 @@ jobs:
         run: bash scripts/test-install-stack-tokens.sh
       - name: Test stack component updates
         run: bash scripts/test-install-update-stack.sh
+      - name: Test checksum verification fails closed
+        run: bash scripts/test-install-checksum.sh
 
   test-agent-plugins:
     needs: detect-changes
@@ -246,7 +292,7 @@ jobs:
       - name: Check generated prompts
         run: |
           cd tools
-          go test ./plugin-prompts ./demarkus-plugin/...
+          go test -race ./plugin-prompts ./demarkus-plugin/...
           go run ./plugin-prompts check
       - name: Install plugin development dependencies
         # No audit or fund calls in CI, and a short fetch timeout: a hung

@@ -154,28 +154,34 @@ func TestResolve(t *testing.T) {
 		t.Fatalf("Set: %v", err)
 	}
 
+	const origin = "localhost:6309"
+	if err := s.Set("other.example:6309", "other-stored"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
 	tests := []struct {
-		name     string
-		explicit string
-		host     string
-		envVal   string
-		store    *Store
-		want     string
+		name   string
+		cred   Credential
+		host   string
+		envVal string
+		store  *Store
+		want   string
 	}{
-		{"explicit wins", "flag-token", "localhost:6309", "", s, "flag-token"},
-		{"env wins over store", "", "localhost:6309", "env-token", s, "env-token"},
-		{"store fallback", "", "localhost:6309", "", s, "stored-token"},
-		{"nil store", "", "localhost:6309", "", nil, ""},
-		{"unknown host", "", "unknown:6309", "", s, ""},
-		{"explicit wins even with env", "flag-token", "localhost:6309", "env-token", s, "flag-token"},
+		{"explicit wins", Credential{Explicit: "flag-token", Origin: origin}, origin, "", s, "flag-token"},
+		{"env wins over store", Credential{Origin: origin}, origin, "env-token", s, "env-token"},
+		{"store fallback", Credential{Origin: origin}, origin, "", s, "stored-token"},
+		{"nil store", Credential{Origin: origin}, origin, "", nil, ""},
+		{"unknown host", Credential{Origin: origin}, "unknown:6309", "", s, ""},
+		{"explicit wins even with env", Credential{Explicit: "flag-token", Origin: origin}, origin, "env-token", s, "flag-token"},
+		{"explicit never reaches a foreign host", Credential{Explicit: "flag-token", Origin: origin}, "evil.example:6309", "", s, ""},
+		{"env never reaches a foreign host", Credential{Origin: origin}, "evil.example:6309", "env-token", s, ""},
+		{"foreign host still gets its stored token", Credential{Explicit: "flag-token", Origin: origin}, "other.example:6309", "env-token", s, "other-stored"},
+		{"no origin scopes flag and env to no host", Credential{Explicit: "flag-token"}, origin, "env-token", s, "stored-token"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("DEMARKUS_AUTH", "")
-			if tt.envVal != "" {
-				t.Setenv("DEMARKUS_AUTH", tt.envVal)
-			}
-			got := Resolve(tt.explicit, tt.host, tt.store)
+			t.Setenv("DEMARKUS_AUTH", tt.envVal)
+			got := Resolve(tt.cred, tt.host, tt.store)
 			if got != tt.want {
 				t.Errorf("Resolve() = %q, want %q", got, tt.want)
 			}

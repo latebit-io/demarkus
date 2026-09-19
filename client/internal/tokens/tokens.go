@@ -75,15 +75,23 @@ func LoadDefault() *Store {
 	return s
 }
 
-// Resolve returns the auth token for a host using a cascading lookup:
-// explicit value (flag/caller) > DEMARKUS_AUTH env var > stored token.
+// Credential is a flag or DEMARKUS_AUTH token bound to the one host it was issued for.
+type Credential struct {
+	Explicit string // flag or caller value; empty falls back to DEMARKUS_AUTH
+	Origin   string // host:port the token belongs to; empty means no host
+}
+
+// Resolve returns the token for host: the credential on its origin, else the
+// stored token. Foreign hosts reached through links never see the credential.
 // The store can be nil (skips stored token lookup).
-func Resolve(explicit, host string, store *Store) string {
-	if explicit != "" {
-		return explicit
-	}
-	if env := os.Getenv("DEMARKUS_AUTH"); env != "" {
-		return env
+func Resolve(cred Credential, host string, store *Store) string {
+	if cred.Origin != "" && host == cred.Origin {
+		if cred.Explicit != "" {
+			return cred.Explicit
+		}
+		if env := os.Getenv("DEMARKUS_AUTH"); env != "" {
+			return env
+		}
 	}
 	return store.Get(host)
 }

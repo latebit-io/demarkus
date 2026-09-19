@@ -1,0 +1,38 @@
+# Guideline rules with existing violations. scripts/lint-ratchet.sh compares
+# findings to lint-ratchet.txt: new ones fail, fixed ones must be removed.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - gosec
+    - funlen
+    - revive
+
+  settings:
+    errcheck:
+      check-blank: true
+    gosec:
+      excludes:
+        # opening caller-named paths is what a document store does
+        - G304
+    funlen:
+      lines: 100
+      statements: 60
+    revive:
+      rules:
+        - name: argument-limit
+          arguments: [4]
+        # two values plus error
+        - name: function-result-limit
+          arguments: [3]
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [errcheck, gosec, funlen, revive]
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

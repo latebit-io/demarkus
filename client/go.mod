@@ -12,7 +12,7 @@ require (
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/mattn/go-runewidth v0.0.21
 	github.com/quic-go/quic-go v0.59.1
-	github.com/yuin/goldmark v1.7.8
+	github.com/yuin/goldmark v1.7.17
 	golang.org/x/term v0.43.0
 )
 
@@ -47,9 +47,9 @@ require (
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 

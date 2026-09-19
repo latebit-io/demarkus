@@ -110,7 +110,7 @@ func okfImportMain(args []string) {
 		return
 	}
 
-	token := tokens.Resolve(*authToken, host, tokens.LoadDefault())
+	token := tokens.Resolve(tokens.Credential{Explicit: *authToken, Origin: host}, host, tokens.LoadDefault())
 	client := fetch.NewClient(fetch.Options{Insecure: *insecure})
 	defer client.Close()
 
@@ -157,7 +157,7 @@ func okfExportMain(args []string) {
 	}
 	outDir := fs.Arg(1)
 
-	token := tokens.Resolve(*authToken, host, tokens.LoadDefault())
+	token := tokens.Resolve(tokens.Credential{Explicit: *authToken, Origin: host}, host, tokens.LoadDefault())
 	client := fetch.NewClient(fetch.Options{Insecure: *insecure})
 	defer client.Close()
 

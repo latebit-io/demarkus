@@ -428,7 +428,7 @@ func TestReadSemantics(t *testing.T) {
 				}
 			})
 		}
-		if _, err := store.Get("/missing.md", 0); err != os.ErrNotExist {
+		if _, err := store.Get("/missing.md", 0); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("direct Get error = %v, want exact os.ErrNotExist", err)
 		}
 	})

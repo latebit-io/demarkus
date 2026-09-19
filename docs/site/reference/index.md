@@ -126,7 +126,7 @@ The crawler uses the same token resolution as other clients:
 
 | Env var | Description |
 |---------|-------------|
-| `DEMARKUS_AUTH` | Fallback auth token for all servers |
+| `DEMARKUS_AUTH` | Fallback auth token for the origin server only (named host, first TUI host, MCP `-host`, or the agent's single hub) |
 
 For per-server tokens, use `demarkus token add mark://host:6309 <token>` before crawling.
 

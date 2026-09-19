@@ -1,4 +1,4 @@
-.PHONY: all protocol server knowledge-server client tools image image-server image-knowledge-server image-broker image-memory-broker image-agent test clean install help lint fmt vet deps
+.PHONY: all protocol server knowledge-server client tools image image-server image-knowledge-server image-broker image-memory-broker image-agent test clean install help lint fmt vet vuln fuzz deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
@@ -115,10 +115,10 @@ image-agent:
 # Run tests
 test:
 	@echo "Running tests..."
-	@cd protocol && go test ./... && echo "✓ Protocol tests passed"
-	@cd server && go test ./... && echo "✓ Server tests passed"
-	@cd client && go test ./... && echo "✓ Client tests passed"
-	@cd tools && go test ./... && echo "✓ Tools tests passed"
+	@cd protocol && go test -race ./... && echo "✓ Protocol tests passed"
+	@cd server && go test -race ./... && echo "✓ Server tests passed"
+	@cd client && go test -race ./... && echo "✓ Client tests passed"
+	@cd tools && go test -race ./... && echo "✓ Tools tests passed"
 
 # Clean build artifacts
 clean:
@@ -186,6 +186,22 @@ vet:
 	@cd client && go vet ./...
 	@cd tools && go vet ./...
 	@echo "✓ Code vetted"
+
+# Report known vulnerabilities reachable from our code
+vuln:
+	@for mod in protocol server client tools; do \
+		echo "govulncheck $$mod..."; \
+		(cd $$mod && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...) || exit 1; \
+	done
+
+# Short fuzz pass over the protocol parsers; seeds alone run under `make test`
+FUZZTIME ?= 20s
+fuzz:
+	@cd protocol && for t in .:FuzzParseRequest .:FuzzParseResponse .:FuzzRequestRoundTrip \
+		./store:FuzzStoredVersionRoundTrip ./store:FuzzInspectStoredVersion \
+		./token:FuzzParseBytes ./mdoutline:FuzzHeadings; do \
+		go test -run '^$$' -fuzz "^$${t#*:}\$$" -fuzztime $(FUZZTIME) "$${t%%:*}" || exit 1; \
+	done
 
 # Update dependencies
 deps:

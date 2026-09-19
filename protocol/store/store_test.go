@@ -1199,7 +1199,7 @@ func TestArchive(t *testing.T) {
 			t.Fatalf("Archive: %v", err)
 		}
 		_, err := s.Write("/doc.md", []byte("# New content\n"), nil)
-		if err != ErrArchived {
+		if !errors.Is(err, ErrArchived) {
 			t.Errorf("expected ErrArchived, got: %v", err)
 		}
 	})

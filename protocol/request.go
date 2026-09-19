@@ -242,6 +242,9 @@ func (req Request) WriteTo(w io.Writer) (int64, error) {
 		buf.WriteString(frontmatterFence)
 		buf.Write(yamlBytes)
 		buf.WriteString(frontmatterFence)
+	} else if strings.HasPrefix(req.Body, frontmatterOpen) {
+		// Empty block first, or the parser reads the body's own fence as metadata.
+		buf.WriteString(frontmatterOpen + frontmatterClose)
 	}
 
 	if req.Body != "" {

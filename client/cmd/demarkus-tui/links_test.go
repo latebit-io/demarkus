@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
@@ -807,5 +808,33 @@ func TestHandleMouseWheelPreservesHoverWhenNoScroll(t *testing.T) {
 	got := out.(model)
 	if got.hoverIdx != 3 {
 		t.Errorf("hoverIdx = %d when no scroll occurred, want 3 (preserved)", got.hoverIdx)
+	}
+}
+
+// A second click while a followed link is still loading must not index the
+// cleared link list through regions left over from the previous page.
+func TestClickDuringLoadDoesNotPanic(t *testing.T) {
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(5))
+	m := model{
+		viewport:       vp,
+		ready:          true,
+		viewMode:       viewDocument,
+		links:          []string{"mark://example.com/next.md"},
+		linkRegions:    []linkRegion{{idx: 0, line: 0, startCol: 0, endCol: 10}},
+		markedRendered: "marked",
+		addressBar:     textinput.New(),
+	}
+	click := tea.MouseClickMsg{Button: tea.MouseLeft, X: 1, Y: 2}
+
+	out, _ := m.handleMouseClick(click)
+	loading := out.(model)
+	if len(loading.linkRegions) != 0 || loading.markedRendered != "" {
+		t.Fatalf("followLink kept stale regions: %d regions, marked %q", len(loading.linkRegions), loading.markedRendered)
+	}
+
+	// Stale regions from any other path must still be ignored, not indexed.
+	loading.linkRegions = []linkRegion{{idx: 3, line: 0, startCol: 0, endCol: 10}}
+	if _, cmd := loading.handleMouseClick(click); cmd != nil {
+		t.Fatal("click on an out-of-range region must not follow a link")
 	}
 }

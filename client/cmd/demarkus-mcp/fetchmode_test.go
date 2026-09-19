@@ -424,7 +424,7 @@ func TestHandlerMarkPublish_NarrowingNote(t *testing.T) {
 		if version == 0 {
 			sc.published = nil
 		}
-		h := &handler{client: sc, token: "test"}
+		h := &handler{client: sc, defaultHost: "mark://example.com", token: "test"}
 		result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
 			"url": "mark://example.com/doc.md", "body": "y", "expected_version": version,
 			"metadata": meta, "on_conflict": onConflict,

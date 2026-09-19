@@ -71,16 +71,17 @@ func (m model) startCrawl(ctx context.Context, url string) tea.Cmd {
 	seq := m.crawlSeq
 	client := m.client
 	gs := m.graphStore
+	cred := tokens.Credential{Origin: m.authOrigin}
 	return func() tea.Msg {
 		store := tokens.LoadDefault()
-		g, err := gs.CrawlAndPersist(ctx, url, graphstore.NewFetchFunc(client, store), fetch.ParseMarkURL, graphstore.CrawlOptions{
+		g, err := gs.CrawlAndPersist(ctx, url, graphstore.NewFetchFunc(client, store, cred), fetch.ParseMarkURL, graphstore.CrawlOptions{
 			MaxDepth: 10,
 			MaxNodes: maxCrawlNodes,
 			Workers:  5,
 		})
 		if gs != nil && ctx.Err() == nil {
 			if sources := gs.Backlinks(url); len(sources) > 0 {
-				_, validationErr := gs.Revalidate(ctx, sources, graphstore.NewFetchFunc(client, store), fetch.ParseMarkURL)
+				_, validationErr := gs.Revalidate(ctx, sources, graphstore.NewFetchFunc(client, store, cred), fetch.ParseMarkURL)
 				err = errors.Join(err, validationErr)
 			}
 		}
@@ -133,12 +134,13 @@ func (m model) startRelationRefresh(ctx context.Context, url string) tea.Cmd {
 	seq := m.crawlSeq
 	store := m.graphStore
 	client := m.client
+	cred := tokens.Credential{Origin: m.authOrigin}
 	return func() tea.Msg {
 		urls := store.Backlinks(url)
 		if len(urls) == 0 {
 			return relationRefreshResult{url: url, seq: seq}
 		}
-		result, err := store.Revalidate(ctx, urls, graphstore.NewFetchFunc(client, tokens.LoadDefault()), fetch.ParseMarkURL)
+		result, err := store.Revalidate(ctx, urls, graphstore.NewFetchFunc(client, tokens.LoadDefault(), cred), fetch.ParseMarkURL)
 		return relationRefreshResult{url: url, summary: graphstore.ValidationSummary(result, err), seq: seq}
 	}
 }

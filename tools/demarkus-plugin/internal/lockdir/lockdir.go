@@ -292,5 +292,5 @@ func PidAlive(pid int) bool {
 		return false
 	}
 	err = p.Signal(syscall.Signal(0))
-	return err == nil || err == syscall.EPERM
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

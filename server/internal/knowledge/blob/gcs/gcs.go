@@ -329,7 +329,7 @@ func classifyProviderError(ctx context.Context, op, key string, cause error) err
 	if classification.category == nil {
 		classification.category = blob.ErrUnavailable
 	}
-	ambiguous := isMutation(op) && classification.category != blob.ErrPrecondition
+	ambiguous := isMutation(op) && !errors.Is(classification.category, blob.ErrPrecondition)
 
 	errorsToJoin := []error{classification.category}
 	if ambiguous {

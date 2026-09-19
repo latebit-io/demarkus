@@ -10,8 +10,13 @@ linters:
     - prealloc
     - modernize
     - unconvert
+    - errorlint
+    - bodyclose
 
   settings:
+    # errorf stays off: integrity and policy errors hide the inner cause with %v on purpose
+    errorlint:
+      errorf: false
     gocyclo:
       min-complexity: 25
     gocritic:

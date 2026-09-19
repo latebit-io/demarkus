@@ -124,7 +124,7 @@ The 15 registered tools are `mark_fetch`, `mark_list`, `mark_explore`, `mark_ver
 
 ## Accessing Private Servers
 
-All three clients support read authentication for servers with protected paths. Tokens are resolved in this order: explicit token flag (CLI: `-auth`, MCP: `-token`; TUI has no token flag) > `DEMARKUS_AUTH` env var > stored token from `~/.mark/tokens.toml`.
+All three clients support read authentication for servers with protected paths. Tokens are resolved in this order: explicit token flag (CLI: `-auth`, MCP: `-token`; TUI has no token flag) > `DEMARKUS_AUTH` env var > stored token from `~/.mark/tokens.toml`. The flag and `DEMARKUS_AUTH` are sent to one host only: the server you named (CLI), the first server you open (TUI), or the `-host` server (MCP). Servers reached through links or crawls receive only their own stored token.
 
 ### Store a token once
 
@@ -164,7 +164,7 @@ demarkus-mcp -host mark://private.example:6309 -token <raw-token> -insecure
 demarkus-mcp -host mark://private.example:6309 -insecure
 ```
 
-The MCP server resolves tokens per-host: the `-token` flag takes precedence, then `DEMARKUS_AUTH`, then the stored token for the target host.
+The MCP server resolves tokens per-host: on the `-host` server the `-token` flag takes precedence, then `DEMARKUS_AUTH`; every other host gets only its stored token. Without `-host`, the flag and env var are unused.
 
 ## Related Tools
 

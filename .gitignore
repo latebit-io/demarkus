@@ -45,6 +45,7 @@ dist/
 client/demarkus
 client/demarkus-tui
 client/demarkus-mcp
+client/demarkus-agent
 server/demarkus-server
 server/demarkus-knowledge-server
 tools/demarkus-token/demarkus-token

@@ -709,11 +709,11 @@ func (f *EtagFetcher) Etags() map[string]string {
 // CrawlOptions uses the same admission and resource limits as transient crawls.
 type CrawlOptions = graph.CrawlOptions
 
-// NewFetchFunc creates a FetchFunc for CrawlAndPersist from a protocol
-// client and token store, resolving tokens per host.
-func NewFetchFunc(client *fetch.Client, tokenStore *tokens.Store) FetchFunc {
+// NewFetchFunc creates a FetchFunc for CrawlAndPersist that resolves tokens per
+// host; cred reaches its origin only, never hosts the crawl discovers.
+func NewFetchFunc(client *fetch.Client, tokenStore *tokens.Store, cred tokens.Credential) FetchFunc {
 	return func(ctx context.Context, host, path string) (graph.FetchResult, error) {
-		r, fetchErr := client.FetchContext(ctx, host, path, tokens.Resolve("", host, tokenStore))
+		r, fetchErr := client.FetchContext(ctx, host, path, tokens.Resolve(cred, host, tokenStore))
 		if fetchErr != nil {
 			return graph.FetchResult{}, fetchErr
 		}

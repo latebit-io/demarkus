@@ -124,7 +124,7 @@ func requestMain() {
 	}
 
 	ts := tokens.LoadDefault()
-	token := tokens.Resolve(*authToken, host, ts)
+	token := tokens.Resolve(tokens.Credential{Explicit: *authToken, Origin: host}, host, ts)
 	// Confirm destructive metadata before resolveBody so the prompt runs while
 	// stdin is still untouched (resolveBody may consume stdin for the body).
 	// Only PUBLISH/APPEND transmit metadata, so only they can prune.
@@ -214,7 +214,7 @@ func editMain(args []string) {
 		editorFields = []string{"vi"}
 	}
 
-	token := tokens.Resolve(*authToken, host, tokens.LoadDefault())
+	token := tokens.Resolve(tokens.Credential{Explicit: *authToken, Origin: host}, host, tokens.LoadDefault())
 
 	opts := fetch.Options{Insecure: *insecure}
 	if *useCache {
@@ -361,6 +361,9 @@ func graphMain(args []string) {
 	defer client.Close()
 
 	ts := tokens.LoadDefault()
+	// A bad URL leaves the origin empty; the crawl reports the parse error itself.
+	origin, _, _ := fetch.ParseMarkURL(rawURL) //nolint:errcheck // see above
+	cred := tokens.Credential{Origin: origin}
 
 	gs, err := graphstore.Load(graphstore.DefaultPath())
 	if err != nil {
@@ -369,7 +372,7 @@ func graphMain(args []string) {
 
 	fmt.Printf("Crawling %s (depth %d)...\n", rawURL, *depth)
 
-	g, err := gs.CrawlAndPersist(context.Background(), rawURL, graphstore.NewFetchFunc(client, ts), fetch.ParseMarkURL, graphstore.CrawlOptions{
+	g, err := gs.CrawlAndPersist(context.Background(), rawURL, graphstore.NewFetchFunc(client, ts, cred), fetch.ParseMarkURL, graphstore.CrawlOptions{
 		MaxDepth: *depth,
 		OnNode: func(n *graph.Node) {
 			title := n.Title
@@ -588,7 +591,7 @@ func bookmarkMain(args []string) {
 		client := fetch.NewClient(fetch.Options{Insecure: *insecure})
 		defer client.Close()
 
-		result, err := client.Fetch(host, path, tokens.Resolve("", host, tokens.LoadDefault()))
+		result, err := client.Fetch(host, path, tokens.Resolve(tokens.Credential{Origin: host}, host, tokens.LoadDefault()))
 		if err == nil && result.Response.Status == protocol.StatusOK {
 			if t := links.ExtractTitle(result.Response.Body); t != "" {
 				title = t
@@ -724,7 +727,7 @@ func lookupMain(args []string) {
 		log.Fatal(err)
 	}
 
-	token := tokens.Resolve(*authToken, host, tokens.LoadDefault())
+	token := tokens.Resolve(tokens.Credential{Explicit: *authToken, Origin: host}, host, tokens.LoadDefault())
 
 	client := fetch.NewClient(fetch.Options{Insecure: *insecure})
 	defer client.Close()

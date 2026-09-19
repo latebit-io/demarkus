@@ -69,6 +69,38 @@ fetch_latest_version() {
     | sed 's|.*"tag_name": *"'"$tag_prefix"'\([^"]*\)".*|\1|'
 }
 
+# verify_sha256 exits unless file matches its entry in the checksums file.
+# Every unverifiable case is fatal: no file, no entry, no sha tool.
+verify_sha256() {
+  local file="$1" sums="$2"
+  local name expected actual
+  name=$(basename "$file")
+  if [ ! -f "$sums" ]; then
+    log_error "No checksums file for ${name}; refusing to install unverified"
+    exit 1
+  fi
+  expected=$(awk -v n="$name" '$2 == n || $2 == "*" n {print $1; exit}' "$sums")
+  if [ -z "$expected" ]; then
+    log_error "No checksum entry for ${name}; refusing to install unverified"
+    exit 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$file" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$file" | awk '{print $1}')
+  else
+    log_error "sha256sum or shasum is required to verify ${name}"
+    exit 1
+  fi
+  if [ "$expected" != "$actual" ]; then
+    log_error "Checksum mismatch for ${name}"
+    log_error "  Expected: $expected"
+    log_error "  Actual:   $actual"
+    exit 1
+  fi
+  log_info "Checksum verified"
+}
+
 download_binary() {
   local component="$1"
   local version="$2"
@@ -86,25 +118,11 @@ download_binary() {
   log_info "Downloading ${binary} v${version}..."
   curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${dest}/${archive}" "${base_url}/${archive}"
 
-  # Verify checksum
-  if curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${dest}/${checksums}" "${base_url}/${checksums}" 2>/dev/null; then
-    local expected actual
-    expected=$(grep "${archive}" "${dest}/${checksums}" | awk '{print $1}')
-    if [ -n "$expected" ]; then
-      if command -v sha256sum >/dev/null 2>&1; then
-        actual=$(sha256sum "${dest}/${archive}" | awk '{print $1}')
-      elif command -v shasum >/dev/null 2>&1; then
-        actual=$(shasum -a 256 "${dest}/${archive}" | awk '{print $1}')
-      fi
-      if [ -n "$actual" ] && [ "$expected" != "$actual" ]; then
-        log_error "Checksum mismatch for ${archive}"
-        log_error "  Expected: $expected"
-        log_error "  Actual:   $actual"
-        exit 1
-      fi
-      log_info "Checksum verified"
-    fi
-  fi
+  curl -fsSL "${CURL_AUTH_ARGS[@]}" -o "${dest}/${checksums}" "${base_url}/${checksums}" || {
+    log_error "Failed to download ${checksums}"
+    exit 1
+  }
+  verify_sha256 "${dest}/${archive}" "${dest}/${checksums}"
 
   tar -xzf "${dest}/${archive}" -C "$dest" "$binary" 2>/dev/null || \
     tar -xzf "${dest}/${archive}" -C "$dest"

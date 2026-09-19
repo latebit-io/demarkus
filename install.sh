@@ -222,8 +222,8 @@ detect_platform() {
 
 # Parse version string into comparable integer: 1.2.3 -> 1002003
 version_num() {
-  local IFS='.'
-  local parts=($1)
+  local parts
+  IFS='.' read -r -a parts <<<"$1"
   echo $(( ${parts[0]:-0} * 1000000 + ${parts[1]:-0} * 1000 + ${parts[2]:-0} ))
 }
 
@@ -310,6 +310,38 @@ download_asset_file() {
   fi
 }
 
+# verify_sha256 exits unless file matches its entry in the checksums file.
+# Every unverifiable case is fatal: no file, no entry, no sha tool.
+verify_sha256() {
+  local file="$1" sums="$2"
+  local name expected actual
+  name=$(basename "$file")
+  if [ ! -f "$sums" ]; then
+    log_error "No checksums file for ${name}; refusing to install unverified"
+    exit 1
+  fi
+  expected=$(awk -v n="$name" '$2 == n || $2 == "*" n {print $1; exit}' "$sums")
+  if [ -z "$expected" ]; then
+    log_error "No checksum entry for ${name}; refusing to install unverified"
+    exit 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$file" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$file" | awk '{print $1}')
+  else
+    log_error "sha256sum or shasum is required to verify ${name}"
+    exit 1
+  fi
+  if [ "$expected" != "$actual" ]; then
+    log_error "Checksum mismatch for ${name}"
+    log_error "  Expected: $expected"
+    log_error "  Actual:   $actual"
+    exit 1
+  fi
+  log_info "Checksum verified"
+}
+
 download_and_verify() {
   local component="$1" # "server" or "client"
   local version="$2"
@@ -328,40 +360,12 @@ download_and_verify() {
   }
 
   download_asset_file "$tag" "$checksums_file" "${tmpdir}/${checksums_file}" || {
-    log_warn "Could not download checksums file, skipping verification"
-    tar xzf "${tmpdir}/${archive_file}" -C "${tmpdir}"
-    return 0
+    log_error "Failed to download ${checksums_file}"
+    exit 1
   }
 
-  log_info "Verifying checksum..."
-  local expected
-  expected=$(grep "${archive_file}" "${tmpdir}/${checksums_file}" | awk '{print $1}')
-  if [ -z "$expected" ]; then
-    log_warn "No checksum found for ${archive_file}, skipping verification"
-    tar xzf "${tmpdir}/${archive_file}" -C "${tmpdir}"
-    return 0
-  fi
+  verify_sha256 "${tmpdir}/${archive_file}" "${tmpdir}/${checksums_file}"
 
-  local actual
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual=$(sha256sum "${tmpdir}/${archive_file}" | awk '{print $1}')
-  elif command -v shasum >/dev/null 2>&1; then
-    actual=$(shasum -a 256 "${tmpdir}/${archive_file}" | awk '{print $1}')
-  else
-    log_warn "No sha256sum or shasum available, skipping verification"
-    tar xzf "${tmpdir}/${archive_file}" -C "${tmpdir}"
-    return 0
-  fi
-
-  if [ "$expected" != "$actual" ]; then
-    log_error "Checksum mismatch!"
-    log_error "  Expected: $expected"
-    log_error "  Actual:   $actual"
-    exit 1
-  fi
-  log_info "Checksum verified"
-
-  # Extract
   tar xzf "${tmpdir}/${archive_file}" -C "${tmpdir}"
 }
 
@@ -383,39 +387,16 @@ download_and_verify_asset() {
     exit 1
   }
 
-  # Checksums file may already be downloaded by a prior download_and_verify call
-  if [ -f "${tmpdir}/${checksums_file}" ]; then
-    log_info "Verifying checksum..."
-    local expected
-    expected=$(grep "${archive_file}" "${tmpdir}/${checksums_file}" | awk '{print $1}')
-    if [ -z "$expected" ]; then
-      log_warn "No checksum found for ${archive_file}, skipping verification"
-    else
-      local actual
-      if command -v sha256sum >/dev/null 2>&1; then
-        actual=$(sha256sum "${tmpdir}/${archive_file}" | awk '{print $1}')
-      elif command -v shasum >/dev/null 2>&1; then
-        actual=$(shasum -a 256 "${tmpdir}/${archive_file}" | awk '{print $1}')
-      else
-        log_warn "No sha256sum or shasum available, skipping verification"
-        actual=""
-      fi
-
-      if [ -n "$actual" ] && [ "$expected" != "$actual" ]; then
-        log_error "Checksum mismatch!"
-        log_error "  Expected: $expected"
-        log_error "  Actual:   $actual"
-        exit 1
-      fi
-      if [ -n "$actual" ]; then
-        log_info "Checksum verified"
-      fi
-    fi
-  else
-    log_warn "No checksums file available, skipping verification"
+  # A prior call for the same release may have fetched the checksums already.
+  if [ ! -f "${tmpdir}/${checksums_file}" ]; then
+    download_asset_file "$tag" "$checksums_file" "${tmpdir}/${checksums_file}" || {
+      log_error "Failed to download ${checksums_file}"
+      exit 1
+    }
   fi
 
-  # Extract
+  verify_sha256 "${tmpdir}/${archive_file}" "${tmpdir}/${checksums_file}"
+
   tar xzf "${tmpdir}/${archive_file}" -C "${tmpdir}"
 }
 
@@ -1260,7 +1241,7 @@ install_broker() {
   # the admin-CLI tools stream.
   download_asset_file "broker/v${broker_version}" "demarkus-broker_checksums.txt" \
     "${tmpdir}/demarkus-broker_checksums.txt" 2>/dev/null \
-    || log_warn "Could not download broker checksums; verification will be skipped"
+    || { log_error "Could not download broker checksums"; exit 1; }
   download_and_verify_asset "$BROKER_SERVICE" "$broker_version" "broker" "$tmpdir"
   # Atomic replace: after a migration the broker may already be running,
   # and cp onto a live executable fails with ETXTBSY.
@@ -1446,14 +1427,11 @@ fetch_library_binary() {
     log_error "Could not download ${lib_asset}"
     exit 1
   fi
-  if curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/demarkus-library_checksums.txt" -o "${tmpdir}/demarkus-library_checksums.txt"; then
-    (cd "$tmpdir" && grep "$lib_asset" demarkus-library_checksums.txt | sha256sum -c - >/dev/null) || {
-      log_error "Checksum verification failed for ${lib_asset}"
-      exit 1
-    }
-  else
-    log_warn "Could not download library checksums; skipping verification"
+  if ! curl -fsSL "${CURL_TIMEOUT_ARGS[@]}" "https://github.com/${LIBRARY_REPO}/releases/download/v${lib_version}/demarkus-library_checksums.txt" -o "${tmpdir}/demarkus-library_checksums.txt"; then
+    log_error "Could not download library checksums"
+    exit 1
   fi
+  verify_sha256 "${tmpdir}/${lib_asset}" "${tmpdir}/demarkus-library_checksums.txt"
   tar -xzf "${tmpdir}/${lib_asset}" -C "$tmpdir" demarkus-library
   install_binary_atomic "${tmpdir}/demarkus-library" "${INSTALL_DIR}/demarkus-library"
   _LIBRARY_VERSION="$lib_version"
@@ -1904,7 +1882,7 @@ do_install() {
   # can verify each per-binary archive against it.
   download_asset_file "tools/v${tools_version}" "demarkus-tools_checksums.txt" \
     "${_TMPDIR}/demarkus-tools_checksums.txt" 2>/dev/null \
-    || log_warn "Could not download tools checksums; per-binary verification will be skipped"
+    || { log_error "Could not download tools checksums"; exit 1; }
   download_and_verify_asset "demarkus-token" "$tools_version" "tools" "$_TMPDIR"
   install_binaries "$_TMPDIR" "demarkus-token"
   download_and_verify_asset "demarkus-publish" "$tools_version" "tools" "$_TMPDIR"
@@ -2351,7 +2329,7 @@ update_stack_component() {
       fi
       download_asset_file "broker/v${version}" "demarkus-broker_checksums.txt" \
         "${tmpdir}/demarkus-broker_checksums.txt" 2>/dev/null \
-        || log_warn "Could not download broker checksums; verification will be skipped"
+        || { log_error "Could not download broker checksums"; exit 1; }
       download_and_verify_asset "$binary" "$version" "broker" "$tmpdir"
       install_binary_atomic "${tmpdir}/${binary}" "${INSTALL_DIR}/${binary}"
       log_info "${binary} updated to ${version}"
@@ -2420,7 +2398,7 @@ _do_update_inner() {
   if [ -n "$tools_version" ]; then
     download_asset_file "tools/v${tools_version}" "demarkus-tools_checksums.txt" \
       "${_TMPDIR}/demarkus-tools_checksums.txt" 2>/dev/null \
-      || log_warn "Could not download tools checksums; per-binary verification will be skipped"
+      || { log_error "Could not download tools checksums"; exit 1; }
     download_and_verify_asset "demarkus-token" "$tools_version" "tools" "$_TMPDIR"
     download_and_verify_asset "demarkus-publish" "$tools_version" "tools" "$_TMPDIR"
   else

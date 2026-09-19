@@ -48,7 +48,9 @@ type historyEntry struct {
 }
 
 type model struct {
-	addressBar  textinput.Model
+	addressBar textinput.Model
+	// authOrigin is the first host the user named; DEMARKUS_AUTH goes nowhere else.
+	authOrigin  string
 	viewport    viewport.Model
 	focus       focus
 	status      string
@@ -265,6 +267,7 @@ func initialModel(initialURL string, client *fetch.Client, styleName string, ext
 		hoverIdx:        -1,
 		bookmarkStore:   bs,
 		bookmarkMsg:     bmMsg,
+		authOrigin:      originHost(initialURL),
 		graphStore:      gs,
 		styleName:       styleName,
 		externalSchemes: externalSchemes,
@@ -410,6 +413,10 @@ func (m model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 			for _, r := range m.linkRegions {
 				if r.line != contentLine || contentCol < r.startCol || contentCol >= r.endCol {
 					continue
+				}
+				// Regions can outlive the links they index while a fetch is in flight.
+				if r.idx < 0 || r.idx >= len(m.links) {
+					break
 				}
 				return m.followLink(m.links[r.idx])
 			}
@@ -662,6 +669,7 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 		if err != nil {
 			rendered = msg.result.Response.Body
 			m.markedRendered = ""
+			m.linkRegions = nil
 		} else {
 			m.markedRendered = injectLinkMarkers(r, m.linkInfos)
 			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
@@ -718,6 +726,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.fetchSeq++
 				m.err = nil
 				m.pendingBody = ""
+				if m.authOrigin == "" {
+					m.authOrigin = originHost(raw)
+				}
 				return m, m.doFetch(raw)
 			}
 			return m, nil
@@ -760,6 +771,8 @@ func (m model) handleViewportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.status = ""
 				m.links = nil
+				m.linkRegions = nil
+				m.markedRendered = ""
 				m.rawBody = ""
 				m.linkIdx = -1
 				m.metadata = nil
@@ -925,6 +938,8 @@ func (m model) followLink(target string) (tea.Model, tea.Cmd) {
 	m.loading = true
 	m.fetchSeq++
 	m.links = nil
+	m.linkRegions = nil
+	m.markedRendered = ""
 	m.linkIdx = -1
 	m.hoverIdx = -1
 	return m, m.doFetch(target)
@@ -1217,14 +1232,24 @@ func (m model) statusBarView() string {
 	return style.Render(strings.Join(parts, "  "))
 }
 
+// originHost returns the dial host of a user-entered URL, or "" when it does not parse.
+func originHost(raw string) string {
+	host, _, err := fetch.ParseMarkURL(raw)
+	if err != nil {
+		return ""
+	}
+	return host
+}
+
 func (m model) doFetch(raw string) tea.Cmd {
 	seq := m.fetchSeq
+	cred := tokens.Credential{Origin: m.authOrigin}
 	return func() tea.Msg {
 		host, path, err := fetch.ParseMarkURL(raw)
 		if err != nil {
 			return fetchResult{err: err, url: raw, seq: seq}
 		}
-		result, err := m.client.Fetch(host, path, tokens.Resolve("", host, tokens.LoadDefault()))
+		result, err := m.client.Fetch(host, path, tokens.Resolve(cred, host, tokens.LoadDefault()))
 		return fetchResult{result: result, err: err, graphURL: links.NodeURL(host, path), url: raw, seq: seq}
 	}
 }
