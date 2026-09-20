@@ -172,7 +172,7 @@ func (h *Handler) writeParseError(w io.Writer, err error) {
 		return
 	}
 	h.logger().Error("parse request failed", "error", err)
-	h.writeError(w, protocol.StatusServerError, "bad request")
+	h.writeError(w, protocol.StatusServerError, "could not read request")
 }
 
 func isReadVerb(verb string) bool {
@@ -1002,6 +1002,7 @@ func classifyRefusal(err error) *refusal {
 }
 
 func (h *Handler) writePublishError(w io.Writer, req protocol.Request, expectedVersion int, doc *store.Document, err error, tokenLabel string) {
+	refused := classifyRefusal(err)
 	switch {
 	case errors.Is(err, store.ErrConflict):
 		h.logger().Info("publish conflict", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
@@ -1040,10 +1041,9 @@ func (h *Handler) writePublishError(w io.Writer, req protocol.Request, expectedV
 	case errors.Is(err, store.ErrInvalidMeta):
 		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid metadata")
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
-	case classifyRefusal(err) != nil:
-		r := classifyRefusal(err)
-		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", r.reason)
-		h.writeError(w, r.status, r.message)
+	case refused != nil:
+		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", refused.reason)
+		h.writeError(w, refused.status, refused.message)
 	default:
 		h.logger().Error("publish failed", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
@@ -1143,6 +1143,7 @@ func (h *Handler) handleAppend(w io.Writer, req protocol.Request) {
 }
 
 func (h *Handler) writeAppendError(w io.Writer, req protocol.Request, expectedVersion int, doc *store.Document, err error, tokenLabel string) {
+	refused := classifyRefusal(err)
 	switch {
 	case errors.Is(err, store.ErrConflict):
 		h.logger().Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
@@ -1167,10 +1168,9 @@ func (h *Handler) writeAppendError(w io.Writer, req protocol.Request, expectedVe
 	case errors.Is(err, store.ErrInvalidMeta):
 		h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "merged metadata invalid")
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
-	case classifyRefusal(err) != nil:
-		r := classifyRefusal(err)
-		h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", r.reason)
-		h.writeError(w, r.status, r.message)
+	case refused != nil:
+		h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", refused.reason)
+		h.writeError(w, refused.status, refused.message)
 	default:
 		h.logger().Error("append failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")

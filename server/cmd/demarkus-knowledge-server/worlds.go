@@ -53,6 +53,8 @@ type worldManager struct {
 	// needsPublish marks a failed router/token publish so the retry
 	// loop re-attempts it without waiting for another config event.
 	needsPublish bool
+	// retiring holds replaced and removed worlds until a publish succeeds.
+	retiring []retiredWorld
 	// beforeRetire is a test hook, called before a retired runtime closes.
 	beforeRetire func(name string)
 	// resilient marks dynamic deployments (worldsFile set): a failed
@@ -117,6 +119,12 @@ func (m *worldManager) Reload() error {
 	return m.apply(config.Worlds)
 }
 
+// retiredWorld is a runtime out of m.entries that the router may still reach.
+type retiredWorld struct {
+	name  string
+	entry *worldEntry
+}
+
 // apply diffs desired against live. In resilient mode per-world failures
 // are logged and retried; in static mode the first failure is returned.
 func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
@@ -128,7 +136,6 @@ func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
 		want[desired[index].Name] = &desired[index]
 	}
 
-	retired := make(map[string]*worldEntry)
 	for name, entry := range m.entries {
 		target, keep := want[name]
 		if keep && reflect.DeepEqual(entry.config, *target) {
@@ -139,9 +146,9 @@ func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
 		} else {
 			m.logger.Info("world removed", "world", name)
 		}
-		// Closed after the publish below, so the router never points at a
-		// closed runtime.
-		retired[name] = entry
+		// Closed by the next publish that succeeds, so the router never
+		// points at a closed runtime.
+		m.retiring = append(m.retiring, retiredWorld{name: name, entry: entry})
 		delete(m.entries, name)
 	}
 	for name := range m.pending {
@@ -177,9 +184,6 @@ func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
 		m.logger.Error("world publish failed; will retry", "error", publishErr)
 		m.needsPublish = true
 		publishErr = nil
-	}
-	for name, entry := range retired {
-		m.retireEntryLocked(name, entry)
 	}
 	return errors.Join(firstErr, publishErr)
 }
@@ -367,6 +371,11 @@ func (m *worldManager) publishLocked() error {
 	}); err != nil {
 		return fmt.Errorf("publish world views: %w", err)
 	}
+	// The router left them only now; a failed publish keeps them serving.
+	for _, retired := range m.retiring {
+		m.retireEntryLocked(retired.name, retired.entry)
+	}
+	m.retiring = nil
 	return nil
 }
 
@@ -430,4 +439,8 @@ func (m *worldManager) Close() {
 	for name, entry := range m.entries {
 		m.closeEntryLocked(name, entry)
 	}
+	for _, retired := range m.retiring {
+		m.retireEntryLocked(retired.name, retired.entry)
+	}
+	m.retiring = nil
 }

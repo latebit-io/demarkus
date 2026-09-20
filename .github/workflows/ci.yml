@@ -78,11 +78,15 @@ jobs:
 
   repo-checks:
     runs-on: ubuntu-latest
+    # Runs scripts from the pull request; no authenticated git, no API call.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
           # check-comment-length.sh needs the merge base with main
           fetch-depth: 0
+          persist-credentials: false
       - name: Shell scripts
         run: bash scripts/check-shell.sh
       - name: Plugin copies

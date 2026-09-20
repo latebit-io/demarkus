@@ -187,6 +187,9 @@ func TestRuntimeLimitsConcurrentStreams(t *testing.T) {
 	if response.Status != protocol.StatusRateLimited {
 		t.Fatalf("status = %q, want %q", response.Status, protocol.StatusRateLimited)
 	}
+	if second.deadlineAtFirstWrite.IsZero() {
+		t.Error("concurrency refusal was written with no write deadline")
+	}
 	close(reader.release)
 	<-served
 	if err := runtime.Close(); err != nil {
@@ -266,8 +269,12 @@ func TestRuntimeOverQUIC(t *testing.T) {
 
 func TestWriteRateLimited(t *testing.T) {
 	stream := newTestStream("")
-	if err := writeRateLimited(stream); err != nil {
+	runtime := newTestRuntime(t, &Config{RequestTimeout: 5 * time.Second})
+	if err := runtime.writeRateLimited(stream); err != nil {
 		t.Fatalf("writeRateLimited: %v", err)
+	}
+	if stream.deadlineAtFirstWrite.IsZero() {
+		t.Error("early refusal was written with no write deadline")
 	}
 	response, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
@@ -328,13 +335,24 @@ type testStream struct {
 	mu            sync.Mutex
 	closed        bool
 	writeDeadline time.Time
+	// deadlineAtFirstWrite is the write deadline in force when output began.
+	deadlineAtFirstWrite time.Time
+	wrote                bool
 }
 
 func newTestStream(request string) *testStream {
 	return &testStream{Reader: strings.NewReader(request)}
 }
 
-func (s *testStream) Write(p []byte) (int, error)     { return s.output.Write(p) }
+func (s *testStream) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	if !s.wrote {
+		s.wrote = true
+		s.deadlineAtFirstWrite = s.writeDeadline
+	}
+	s.mu.Unlock()
+	return s.output.Write(p)
+}
 func (s *testStream) SetReadDeadline(time.Time) error { return nil }
 func (s *testStream) SetWriteDeadline(deadline time.Time) error {
 	s.mu.Lock()

@@ -903,10 +903,39 @@ ensure_self_dial() {
 
 # --- Service management ---
 
-# installed_server_pids lists servers started from INSTALL_DIR only. A bare name
-# match would also hit the plugin managed server under ~/.demarkus/bin.
+# server_exe_path prints the executable behind a pid, however it was started.
+# Linux reads /proc; macOS ps prints the full path as the command name.
+server_exe_path() {
+  local pid="$1" exe=""
+  if [ -e "/proc/${pid}/exe" ]; then
+    exe=$($SUDO readlink "/proc/${pid}/exe" 2>/dev/null || true)
+    exe="${exe% (deleted)}"
+  else
+    exe=$(ps -o comm= -p "$pid" 2>/dev/null || true)
+  fi
+  printf '%s\n' "$exe"
+}
+
+# resolved_path prints path with its directory symlinks resolved.
+resolved_path() {
+  local dir
+  dir=$(cd "$(dirname "$1")" 2>/dev/null && pwd -P) || { printf '%s\n' "$1"; return 0; }
+  printf '%s/%s\n' "$dir" "$(basename "$1")"
+}
+
+# installed_server_pids lists servers running the INSTALL_DIR binary, by
+# executable rather than argv[0]: a PATH start has a bare name, and a name
+# match alone would hit the plugin managed server under ~/.demarkus/bin.
 installed_server_pids() {
-  pgrep -f "^${INSTALL_DIR}/demarkus-server( |\$)" 2>/dev/null || true
+  local want pid exe
+  want=$(resolved_path "${INSTALL_DIR}/demarkus-server")
+  for pid in $( { pgrep -x demarkus-server; pgrep -f '(^|/)demarkus-server( |$)'; } 2>/dev/null | sort -un); do
+    exe=$(server_exe_path "$pid")
+    [ -n "$exe" ] || continue
+    if [ "$(resolved_path "$exe")" = "$want" ]; then
+      echo "$pid"
+    fi
+  done
 }
 
 # stop_installed_server ends leftovers the service manager did not stop:

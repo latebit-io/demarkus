@@ -44,3 +44,33 @@ func TestCheckManifestsTransportFailure(t *testing.T) {
 		})
 	}
 }
+
+// force answers a missing target manifest only; any other status blocks.
+func TestCheckManifestsForceOnlyOverridesNotFound(t *testing.T) {
+	tests := []struct {
+		status    string
+		wantBlock bool
+	}{
+		{protocol.StatusNotFound, false},
+		{protocol.StatusUnauthorized, true},
+		{protocol.StatusNotPermitted, true},
+		{protocol.StatusServerError, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			sc := &stubClient{fetchFn: func(host, _, _ string) (fetch.Result, error) {
+				if host == "hub.com:6309" {
+					return fetch.Result{Response: protocol.Response{Status: tt.status}}, nil
+				}
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
+			}}
+			_, block := (&handler{client: sc}).checkManifests("source.com:6309", "hub.com:6309", false, true)
+			if (block != nil) != tt.wantBlock {
+				t.Fatalf("block = %v, want blocked=%v", block, tt.wantBlock)
+			}
+			if tt.wantBlock {
+				assertIsToolError(t, block, tt.status)
+			}
+		})
+	}
+}

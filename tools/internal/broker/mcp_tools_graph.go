@@ -561,7 +561,9 @@ func (g *mcpGateway) checkIndexManifests(sourceWorld, targetWorld string, dryRun
 	if err != nil {
 		return warnings, mcp.NewToolResultError(fmt.Sprintf("could not check target agent manifest: %v", err))
 	}
-	if tgtManifest.Response.Status != protocol.StatusOK {
+	switch tgtManifest.Response.Status {
+	case protocol.StatusOK:
+	case protocol.StatusNotFound:
 		if !force {
 			return warnings, mcp.NewToolResultError(
 				"target server has no agent manifest; cannot verify it accepts index publications. " +
@@ -569,6 +571,9 @@ func (g *mcpGateway) checkIndexManifests(sourceWorld, targetWorld string, dryRun
 			)
 		}
 		warnings = append(warnings, "warning: target server has no agent manifest (force=true override)")
+	default:
+		// Unauthorized or a server fault says nothing about the manifest.
+		return warnings, mcp.NewToolResultError("could not check target agent manifest: status " + tgtManifest.Response.Status)
 	}
 	return warnings, nil
 }

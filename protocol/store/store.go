@@ -1377,18 +1377,22 @@ func createVersionFile(vFile string, stored []byte, version int) error {
 	return nil
 }
 
+// errSwapNotApplied marks a swap that failed before the pointer moved, so the
+// new version file is unreferenced and safe to remove.
+var errSwapNotApplied = errors.New("current pointer not updated")
+
 // swapCurrent points the current file at relTarget by renaming a temp symlink
 // over it, so readers never see it missing. Relative, so the root can move.
 func swapCurrent(currentFile, relTarget string) error {
 	tmpLink := currentFile + ".tmp"
 	if err := removeIfPresent(tmpLink); err != nil {
-		return fmt.Errorf("clear stale temp link: %w", err)
+		return fmt.Errorf("clear stale temp link: %w: %w", errSwapNotApplied, err)
 	}
 	if err := os.Symlink(relTarget, tmpLink); err != nil {
-		return fmt.Errorf("symlink current file: %w", err)
+		return fmt.Errorf("symlink current file: %w: %w", errSwapNotApplied, err)
 	}
 	if err := os.Rename(tmpLink, currentFile); err != nil {
-		return errors.Join(fmt.Errorf("rename current file: %w", err), removeIfPresent(tmpLink))
+		return errors.Join(fmt.Errorf("rename current file: %w: %w", errSwapNotApplied, err), removeIfPresent(tmpLink))
 	}
 	return syncDir(filepath.Dir(currentFile))
 }
@@ -1472,6 +1476,10 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 		return nil, err
 	}
 	if err := swapCurrent(currentFile, newVersionSymlinkTarget(base, next)); err != nil {
+		// An unreferenced version would fail every later write with O_EXCL.
+		if errors.Is(err, errSwapNotApplied) {
+			err = errors.Join(err, removeIfPresent(vFile))
+		}
 		return nil, err
 	}
 

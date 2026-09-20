@@ -46,3 +46,34 @@ func TestCheckIndexManifestsTransportFailure(t *testing.T) {
 		})
 	}
 }
+
+// force answers a missing target manifest only; any other status blocks.
+func TestCheckIndexManifestsForceOnlyOverridesNotFound(t *testing.T) {
+	tests := []struct {
+		status    string
+		wantBlock bool
+	}{
+		{protocol.StatusNotFound, false},
+		{protocol.StatusUnauthorized, true},
+		{protocol.StatusNotPermitted, true},
+		{protocol.StatusServerError, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			d := &fakeDispatcher{fetchFn: func(world, _, _ string) (fetch.Result, error) {
+				if world == "hub" {
+					return fetch.Result{Response: protocol.Response{Status: tt.status}}, nil
+				}
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
+			}}
+			g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+			_, block := g.checkIndexManifests("team-a", "hub", false, true)
+			if (block != nil) != tt.wantBlock {
+				t.Fatalf("block = %v, want blocked=%v", block, tt.wantBlock)
+			}
+			if tt.wantBlock && !strings.Contains(toolResultText(t, block), tt.status) {
+				t.Errorf("block text = %q, want the status", toolResultText(t, block))
+			}
+		})
+	}
+}

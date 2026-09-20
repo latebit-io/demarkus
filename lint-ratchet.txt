@@ -13,7 +13,6 @@
 3 client/cmd/demarkus/okf.go: Error return value of `fs.Parse` is not checked (errcheck)
 1 client/cmd/demarkus/okf.go: G301: Expect directory permissions to be 0750 or less (gosec)
 1 client/cmd/demarkus/okf.go: G306: Expect WriteFile permissions to be 0600 or less (gosec)
-1 client/fetch/fetch.go: Error return value of `c.opts.Cache.Get` is not checked (errcheck)
 1 client/fetch/fetch.go: Error return value of `conn.CloseWithError` is not checked (errcheck)
 1 client/fetch/fetch.go: G402: TLS InsecureSkipVerify may be true. (gosec)
 3 client/fetch/fetch.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)

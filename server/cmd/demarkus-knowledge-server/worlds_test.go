@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
@@ -430,5 +431,57 @@ func TestWorldManagerUnroutesBeforeClosing(t *testing.T) {
 	}
 	if !h.routes("bob.memory.svc.cluster.local") {
 		t.Error("replaced world lost routing")
+	}
+}
+
+// A failed publish leaves the router on the old runtimes, so they must stay
+// open until a later publish really replaces them.
+func TestWorldManagerKeepsRetiredRuntimeUntilPublishSucceeds(t *testing.T) {
+	tokensDir := t.TempDir()
+	shared := fmt.Sprintf("[tokens.w]\nhash = %q\npaths = [\"/*\"]\noperations = [\"publish\"]\n", protocol.HashToken("same-secret"))
+	tokensA := filepath.Join(tokensDir, "alice.toml")
+	if err := os.WriteFile(tokensA, []byte(shared), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokensB := writeTokens(t, tokensDir, "bob")
+	h := newWorldsHarness(t, "worlds:\n"+
+		worldFragment("alice", testWorldID, tokensA, true)+
+		worldFragment("bob", testWorldIDB, tokensB, true))
+
+	var retired []string
+	h.manager.beforeRetire = func(name string) { retired = append(retired, name) }
+
+	// bob is replaced, and its new tokens collide with alice: the publish fails.
+	if err := os.WriteFile(tokensB, []byte(shared), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.writeFragment(t, "worlds:\n"+
+		worldFragment("alice", testWorldID, tokensA, true)+
+		worldFragment("bob", testWorldIDB, tokensB, false))
+	if err := h.manager.Reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if len(retired) != 0 {
+		t.Fatalf("retired %v although the router still points at the old runtime", retired)
+	}
+	if !h.routes("bob.memory.svc.cluster.local") {
+		t.Fatal("bob lost routing after a failed publish")
+	}
+
+	// The collision is fixed; the retry publishes and only then retires.
+	if err := os.WriteFile(tokensB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The coordinator reloads published worlds only, so the staged runtime is
+	// refreshed by hand here.
+	h.manager.mu.Lock()
+	reloadErr := h.manager.entries["bob"].runtime.ReloadTokens()
+	h.manager.mu.Unlock()
+	if reloadErr != nil {
+		t.Fatalf("reload staged tokens: %v", reloadErr)
+	}
+	h.manager.retryPending()
+	if !slices.Equal(retired, []string{"bob"}) {
+		t.Errorf("retired = %v, want bob after the successful publish", retired)
 	}
 }

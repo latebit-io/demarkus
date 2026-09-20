@@ -160,7 +160,7 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 		cancel()
 		if err != nil {
 			logger.Warn("rate limited", "ip", ratelimit.ExtractIP(remote), "error", err)
-			if writeErr := writeRateLimited(stream); writeErr != nil {
+			if writeErr := r.writeRateLimited(stream); writeErr != nil {
 				logger.Warn("writing rate-limited response", "ip", ratelimit.ExtractIP(remote), "error", writeErr)
 			}
 			if closeErr := stream.Close(); closeErr != nil {
@@ -198,7 +198,7 @@ func (r *Runtime) acquire(ctx context.Context, remote net.Addr, stream quicserve
 	case <-waitCtx.Done():
 		ip := ratelimit.ExtractIP(remote)
 		logger.Warn("concurrency limited", "ip", ip, "error", waitCtx.Err())
-		if err := writeRateLimited(stream); err != nil {
+		if err := r.writeRateLimited(stream); err != nil {
 			logger.Warn("writing concurrency-limited response", "ip", ip, "error", err)
 		}
 		if err := stream.Close(); err != nil {
@@ -268,7 +268,16 @@ func (r *Runtime) Close() error {
 	return r.closeErr
 }
 
-func writeRateLimited(stream quicserve.Stream) error {
+// writeRateLimited refuses before the request deadlines exist, so it bounds
+// its own write: a peer that stops reading must not hold the stream open.
+func (r *Runtime) writeRateLimited(stream quicserve.Stream) error {
+	budget := r.requestTimeout
+	if budget <= 0 {
+		budget = maxRateWaitBudget
+	}
+	if err := stream.SetWriteDeadline(time.Now().Add(budget)); err != nil {
+		return fmt.Errorf("set write deadline: %w", err)
+	}
 	_, err := protocol.Response{Status: protocol.StatusRateLimited}.WriteTo(stream)
 	return err
 }
