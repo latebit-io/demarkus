@@ -157,7 +157,7 @@ The TUI loads tokens fresh on each navigation, so tokens added via CLI while the
 ### MCP
 
 ```bash
-# Single token for all hosts
+# Token for the -host server only
 demarkus-mcp -host mark://private.example:6309 -token <raw-token> -insecure
 
 # Or rely on stored tokens (per-host resolution)

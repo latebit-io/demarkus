@@ -2,6 +2,10 @@
 # findings to lint-ratchet.txt: new ones fail, fixed ones must be removed.
 version: "2"
 
+run:
+  # lint-ratchet.txt keys are repo relative: paths resolve from this file, not the module
+  relative-path-mode: cfg
+
 linters:
   default: none
   enable:
