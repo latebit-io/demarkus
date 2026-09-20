@@ -656,13 +656,17 @@ func (c *Client) acquire(ctx context.Context, host string) (*quic.Conn, error) {
 			return nil, err
 		}
 		c.mu.Lock()
-		if !c.draining[conn] {
+		// Still pooled and not retiring: an idle evict closes without marking draining.
+		if c.conns[host] == conn && !c.draining[conn] {
 			c.inflight[conn]++
 			c.mu.Unlock()
 			return conn, nil
 		}
-		// Evicted between lookup and here; the pool entry is already gone.
+		// Evicted between lookup and here; look again.
 		c.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 	}
 }
 
