@@ -472,16 +472,53 @@ func TestWorldManagerKeepsRetiredRuntimeUntilPublishSucceeds(t *testing.T) {
 	if err := os.WriteFile(tokensB, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// The coordinator reloads published worlds only, so the staged runtime is
-	// refreshed by hand here.
-	h.manager.mu.Lock()
-	reloadErr := h.manager.entries["bob"].runtime.ReloadTokens()
-	h.manager.mu.Unlock()
-	if reloadErr != nil {
-		t.Fatalf("reload staged tokens: %v", reloadErr)
-	}
+	// The coordinator reloads published worlds only; the retry must refresh
+	// the staged runtime itself or it fails the same validation forever.
 	h.manager.retryPending()
 	if !slices.Equal(retired, []string{"bob"}) {
 		t.Errorf("retired = %v, want bob after the successful publish", retired)
+	}
+}
+
+// A staged runtime the router never reached closes at once when superseded;
+// queueing it would grow m.retiring on every changed reload.
+func TestWorldManagerClosesSupersededStagedRuntime(t *testing.T) {
+	tokensDir := t.TempDir()
+	shared := fmt.Sprintf("[tokens.w]\nhash = %q\npaths = [\"/*\"]\noperations = [\"publish\"]\n", protocol.HashToken("same-secret"))
+	tokensA := filepath.Join(tokensDir, "alice.toml")
+	if err := os.WriteFile(tokensA, []byte(shared), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokensB := writeTokens(t, tokensDir, "bob")
+	h := newWorldsHarness(t, "worlds:\n"+
+		worldFragment("alice", testWorldID, tokensA, true)+
+		worldFragment("bob", testWorldIDB, tokensB, true))
+
+	var retired []string
+	h.manager.beforeRetire = func(name string) { retired = append(retired, name) }
+
+	// Two changed reloads in a row, each failing to publish on the collision.
+	if err := os.WriteFile(tokensB, []byte(shared), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, bootstrap := range []bool{false, true} {
+		h.writeFragment(t, "worlds:\n"+
+			worldFragment("alice", testWorldID, tokensA, true)+
+			worldFragment("bob", testWorldIDB, tokensB, bootstrap))
+		if err := h.manager.Reload(); err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+	}
+
+	// The first staged bob closed when the second replaced it; the published
+	// bob is the only one still waiting.
+	if !slices.Equal(retired, []string{"bob"}) {
+		t.Errorf("retired = %v, want exactly the superseded staged bob", retired)
+	}
+	h.manager.mu.Lock()
+	waiting := len(h.manager.retiring)
+	h.manager.mu.Unlock()
+	if waiting != 1 {
+		t.Errorf("retiring holds %d runtimes, want 1", waiting)
 	}
 }

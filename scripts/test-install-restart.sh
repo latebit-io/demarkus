@@ -87,6 +87,15 @@ kill -0 "$plugin" 2>/dev/null || fail "plugin managed server was killed"
 
 verify_server_running && fail "verify_server_running: want failure with the server down"
 
+# A live candidate that cannot be inspected aborts instead of being skipped:
+# skipping could replace the binary under a running server.
+real_exe_path=$(declare -f server_exe_path)
+server_exe_path() { if [ "$1" = "$plugin" ]; then echo ""; else ps -o comm= -p "$1" 2>/dev/null || true; fi; }
+installed_server_pids >/dev/null && fail "installed_server_pids: want failure for an uninspectable live process"
+stop_installed_server && fail "stop_installed_server: want failure when inspection fails"
+kill -0 "$plugin" 2>/dev/null || fail "uninspectable process was killed"
+eval "$real_exe_path"
+
 # Linux trusts the unit state, not the process table.
 # shellcheck disable=SC2034  # read by verify_server_running
 PLATFORM="linux"

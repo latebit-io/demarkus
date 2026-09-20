@@ -53,7 +53,7 @@
 2 protocol/store/store.go: Error return value of `os.Remove` is not checked (errcheck)
 1 protocol/store/store.go: Error return value of `rootFS.Close` is not checked (errcheck)
 1 protocol/store/store.go: Error return value of `s.CurrentVersionResult` is not checked (errcheck)
-3 protocol/store/store.go: G301: Expect directory permissions to be 0750 or less (gosec)
+2 protocol/store/store.go: G301: Expect directory permissions to be 0750 or less (gosec)
 1 protocol/store/store.go: G302: Expect file permissions to be 0600 or less (gosec)
 2 protocol/store/store.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)
 1 protocol/token/tomlio.go: Error return value of `dir.Close` is not checked (errcheck)

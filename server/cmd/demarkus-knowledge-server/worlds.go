@@ -65,6 +65,9 @@ type worldManager struct {
 type worldEntry struct {
 	config  knowledgeconfig.WorldConfig
 	runtime *worldruntime.Runtime
+	// published is set once a router publish carried this runtime; until
+	// then nothing routes to it and it can close at once.
+	published bool
 }
 
 // newWorldManager opens the initial world set. In static mode (no
@@ -146,10 +149,14 @@ func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
 		} else {
 			m.logger.Info("world removed", "world", name)
 		}
+		delete(m.entries, name)
+		if !entry.published {
+			m.retireEntryLocked(name, entry)
+			continue
+		}
 		// Closed by the next publish that succeeds, so the router never
 		// points at a closed runtime.
 		m.retiring = append(m.retiring, retiredWorld{name: name, entry: entry})
-		delete(m.entries, name)
 	}
 	for name := range m.pending {
 		if _, keep := want[name]; !keep {
@@ -371,6 +378,9 @@ func (m *worldManager) publishLocked() error {
 	}); err != nil {
 		return fmt.Errorf("publish world views: %w", err)
 	}
+	for _, entry := range m.entries {
+		entry.published = true
+	}
 	// The router left them only now; a failed publish keeps them serving.
 	for _, retired := range m.retiring {
 		m.retireEntryLocked(retired.name, retired.entry)
@@ -410,12 +420,27 @@ func (m *worldManager) retryPending() {
 		recovered = true
 	}
 	if recovered {
+		m.reloadStagedTokensLocked()
 		if err := m.publishLocked(); err != nil {
 			m.logger.Error("publish after world retry failed", "error", err)
 			m.needsPublish = true
 			return
 		}
 		m.needsPublish = false
+	}
+}
+
+// reloadStagedTokensLocked refreshes runtimes no publish has carried yet. The
+// coordinator reloads published worlds only, so a staged runtime would retry
+// with the token snapshot that made its publish fail.
+func (m *worldManager) reloadStagedTokensLocked() {
+	for name, entry := range m.entries {
+		if entry.published {
+			continue
+		}
+		if err := entry.runtime.ReloadTokens(); err != nil {
+			m.logger.Warn("staged world token reload failed", "world", name, "error", err)
+		}
 	}
 }
 

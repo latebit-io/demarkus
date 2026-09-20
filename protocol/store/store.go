@@ -1352,6 +1352,35 @@ func syncDirectory(dir string) error {
 	return nil
 }
 
+// mkdirAllDurable is MkdirAll plus a sync of every directory that gained an
+// entry, so a crash cannot drop the new tree while the pointer survives.
+// A path that already exists costs one Lstat.
+func mkdirAllDurable(dir string) error {
+	var created []string
+	for p := dir; ; p = filepath.Dir(p) {
+		if _, err := os.Lstat(p); err == nil || !errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		created = append(created, p)
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	if len(created) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	// Shallowest first: each created directory is an entry in its parent.
+	for _, p := range slices.Backward(created) {
+		if err := syncDir(filepath.Dir(p)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // createVersionFile writes and syncs a new version. O_EXCL is the immutability
 // guard: an existing file fails the create instead of racing a stat.
 func createVersionFile(vFile string, stored []byte, version int) error {
@@ -1418,7 +1447,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 	}
 
 	versionsDir := filepath.Join(s.root, dir, "versions")
-	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
+	if err := mkdirAllDurable(versionsDir); err != nil {
 		return nil, fmt.Errorf("create versions dir: %w", err)
 	}
 
@@ -1456,7 +1485,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 
 	// Create per-document subdirectory for new documents.
 	docDir := filepath.Join(versionsDir, base)
-	if err := os.MkdirAll(docDir, 0o755); err != nil {
+	if err := mkdirAllDurable(docDir); err != nil {
 		return nil, fmt.Errorf("create per-doc versions dir: %w", err)
 	}
 

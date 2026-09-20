@@ -88,8 +88,10 @@ func TestWriteFailedSyncAfterSwapKeepsVersion(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
+	// Only the sync after the pointer moved fails; root is also synced
+	// earlier, when the versions directory is created under it.
 	syncDir = func(dir string) error {
-		if dir == root {
+		if _, err := os.Lstat(filepath.Join(root, "a.md")); dir == root && err == nil {
 			return errors.New("disk gone")
 		}
 		return syncDirectory(dir)
@@ -101,5 +103,39 @@ func TestWriteFailedSyncAfterSwapKeepsVersion(t *testing.T) {
 	}
 	if _, err := s.Get("/a.md", 0); err != nil {
 		t.Errorf("current pointer dangles after a late sync failure: %v", err)
+	}
+}
+
+// Every directory a first write creates is an entry in its parent; an
+// unsynced parent can lose the version tree while the pointer survives.
+func TestWriteSyncsParentsOfCreatedDirectories(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	var dirs []string
+	syncDir = func(dir string) error { dirs = append(dirs, dir); return syncDirectory(dir) }
+	t.Cleanup(func() { syncDir = syncDirectory })
+
+	if _, err := s.Write("/notes/sub/a.md", []byte("# A\n"), nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	for _, want := range []string{
+		root,                                // owns notes
+		filepath.Join(root, "notes"),        // owns sub
+		filepath.Join(root, "notes", "sub"), // owns versions and the pointer
+		filepath.Join(root, "notes", "sub", "versions"), // owns the a.md version dir
+	} {
+		if !slices.Contains(dirs, want) {
+			t.Errorf("directory %s not synced; synced %v", want, dirs)
+		}
+	}
+
+	// A later write creates nothing, so it syncs nothing above the document.
+	dirs = nil
+	if _, err := s.Write("/notes/sub/a.md", []byte("# A2\n"), nil); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	if slices.Contains(dirs, root) || slices.Contains(dirs, filepath.Join(root, "notes")) {
+		t.Errorf("steady state write synced ancestors: %v", dirs)
 	}
 }

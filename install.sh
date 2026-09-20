@@ -931,7 +931,13 @@ installed_server_pids() {
   want=$(resolved_path "${INSTALL_DIR}/demarkus-server")
   for pid in $( { pgrep -x demarkus-server; pgrep -f '(^|/)demarkus-server( |$)'; } 2>/dev/null | sort -un); do
     exe=$(server_exe_path "$pid")
-    [ -n "$exe" ] || continue
+    if [ -z "$exe" ]; then
+      # Gone between pgrep and the lookup is fine; alive and unreadable is
+      # not: skipping it could replace the binary under a running server.
+      ps -p "$pid" >/dev/null 2>&1 || continue
+      log_error "Cannot inspect process ${pid}; cannot tell whether it runs ${want}"
+      return 1
+    fi
     if [ "$(resolved_path "$exe")" = "$want" ]; then
       echo "$pid"
     fi
@@ -939,34 +945,36 @@ installed_server_pids() {
 }
 
 # stop_installed_server ends leftovers the service manager did not stop:
-# TERM, then KILL. Returns 1 when one survives both.
+# TERM, then KILL. Returns 1 when one survives both or cannot be inspected.
 stop_installed_server() {
   local pids wait_count=0
-  pids=$(installed_server_pids)
+  pids=$(installed_server_pids) || return 1
   [ -n "$pids" ] || return 0
   # shellcheck disable=SC2086  # a pid list, split on purpose
   $SUDO kill $pids 2>/dev/null || true
-  while [ -n "$(installed_server_pids)" ] && [ "$wait_count" -lt "${SERVER_WAIT_SECONDS:-5}" ]; do
+  while [ "$wait_count" -lt "${SERVER_WAIT_SECONDS:-5}" ]; do
+    pids=$(installed_server_pids) || return 1
+    [ -n "$pids" ] || return 0
     sleep 1
     wait_count=$((wait_count + 1))
   done
-  pids=$(installed_server_pids)
-  [ -n "$pids" ] || return 0
   # shellcheck disable=SC2086  # a pid list, split on purpose
   $SUDO kill -9 $pids 2>/dev/null || true
   sleep 1
-  [ -z "$(installed_server_pids)" ]
+  pids=$(installed_server_pids) || return 1
+  [ -z "$pids" ]
 }
 
 # verify_server_running needs two good probes a second apart, so a server
 # that starts and dies at once does not pass.
 verify_server_running() {
-  local tries=0 streak=0
+  local tries=0 streak=0 pids
   while [ "$tries" -lt "${SERVER_WAIT_SECONDS:-10}" ]; do
     if [ "$PLATFORM" = "linux" ]; then
       if $SUDO systemctl is-active --quiet demarkus; then streak=$((streak + 1)); else streak=0; fi
     else
-      if [ -n "$(installed_server_pids)" ]; then streak=$((streak + 1)); else streak=0; fi
+      # A failed inspection is not proof the server runs.
+      if pids=$(installed_server_pids) && [ -n "$pids" ]; then streak=$((streak + 1)); else streak=0; fi
     fi
     [ "$streak" -ge 2 ] && return 0
     sleep 1
@@ -1890,7 +1898,9 @@ do_install() {
   fi
 
   # Stop service before binary replacement (avoids "Text file busy")
-  if [ -n "$(installed_server_pids)" ]; then
+  local running_pids
+  running_pids=$(installed_server_pids) || exit 1
+  if [ -n "$running_pids" ]; then
     log_info "Stopping running service before replacing binaries"
     if [ "$PLATFORM" = "linux" ]; then
       $SUDO systemctl stop demarkus 2>/dev/null || true
