@@ -110,7 +110,9 @@ func (w submitted) matches(head Doc) bool {
 		return false
 	}
 	for k, v := range w.meta {
-		if strings.TrimSpace(head.Metadata[k]) != strings.TrimSpace(v) {
+		// An absent key is a mismatch even when the submitted value is empty.
+		actual, ok := head.Metadata[k]
+		if !ok || strings.TrimSpace(actual) != strings.TrimSpace(v) {
 			return false
 		}
 	}

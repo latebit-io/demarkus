@@ -298,6 +298,7 @@ func TestCandidateReconcilesItsOwnWrite(t *testing.T) {
 		{name: "conflict with another writer", publish: PublishResult{Status: statusConflict, ServerVersion: 4}, head: Doc{Status: statusOK, Body: "theirs", Version: 4}, wantStatus: OutcomeCandidate},
 		{name: "same body, our metadata landed", meta: map[string]string{"tags": "a,b"}, publishErr: errors.New("timeout"), head: Doc{Status: statusOK, Body: "mine", Version: 4, Metadata: map[string]string{"tags": "a,b", "version": "4"}}, wantStatus: OutcomeOK},
 		{name: "same body, someone else's metadata", meta: map[string]string{"tags": "a,b"}, publishErr: errors.New("timeout"), head: Doc{Status: statusOK, Body: "mine", Version: 4, Metadata: map[string]string{"tags": "z"}}, wantErr: true},
+		{name: "empty submitted value, key absent on head", meta: map[string]string{"tags": ""}, publishErr: errors.New("timeout"), head: Doc{Status: statusOK, Body: "mine", Version: 4, Metadata: map[string]string{"version": "4"}}, wantErr: true},
 		{name: "conflict, same body, someone else's metadata", meta: map[string]string{"tags": "a,b"}, publish: PublishResult{Status: statusConflict, ServerVersion: 4}, head: Doc{Status: statusOK, Body: "mine", Version: 4}, wantStatus: OutcomeCandidate},
 	}
 	for _, tt := range tests {

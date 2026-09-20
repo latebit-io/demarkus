@@ -105,6 +105,10 @@ type Client struct {
 	quicConf *quic.Config
 	mu       sync.Mutex
 	conns    map[string]*quic.Conn
+	// inflight counts requests per connection; draining holds evicted
+	// connections until their last request releases them.
+	inflight map[*quic.Conn]int
+	draining map[*quic.Conn]bool
 }
 
 // NewClient creates a new client with the given options.
@@ -124,6 +128,8 @@ func NewClient(opts Options) *Client {
 		},
 		quicConf: qc,
 		conns:    make(map[string]*quic.Conn),
+		inflight: make(map[*quic.Conn]int),
+		draining: make(map[*quic.Conn]bool),
 	}
 }
 
@@ -132,9 +138,18 @@ func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for host, conn := range c.conns {
-		_ = conn.CloseWithError(0, "")
+		closeConn(conn)
 		delete(c.conns, host)
 	}
+	for conn := range c.draining {
+		closeConn(conn)
+		delete(c.draining, conn)
+	}
+}
+
+// closeConn closes best effort: the peer may already be gone, and no caller can act on it.
+func closeConn(conn *quic.Conn) {
+	_ = conn.CloseWithError(0, "")
 }
 
 // Fetch retrieves a document from a Mark Protocol server.
@@ -521,26 +536,30 @@ func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(co
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
 		}
-		conn, err := c.getConnContext(ctx, host)
+		// A failed dial stored nothing; whatever is pooled belongs to someone else.
+		conn, err := c.acquire(ctx, host)
 		if err != nil {
 			if attempt < maxRetries-1 && isTransientError(err) {
 				if err := waitForRetry(ctx, retryDelay); err != nil {
 					return Result{}, err
 				}
-				c.removeConn(host)
 				continue
 			}
 			return Result{}, err
 		}
 
 		result, err := fn(conn)
+		unknown := !resend && errors.Is(err, ErrOutcomeUnknown)
+		if err != nil && (unknown || isTransientError(err)) {
+			c.evict(host, conn)
+		}
+		c.release(conn)
 		if err == nil {
 			return result, nil
 		}
 		// Checked before caller cancellation, which would otherwise read as a
 		// definite failure and invite a resend of a write that may have landed.
-		if !resend && errors.Is(err, ErrOutcomeUnknown) {
-			c.removeConn(host)
+		if unknown {
 			return Result{}, err
 		}
 		if ctx.Err() != nil {
@@ -552,7 +571,6 @@ func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(co
 			if err := waitForRetry(ctx, retryDelay); err != nil {
 				return Result{}, err
 			}
-			c.removeConn(host)
 			continue
 		}
 
@@ -577,11 +595,10 @@ func (c *Client) getConnContext(ctx context.Context, host string) (*quic.Conn, e
 	c.mu.Unlock()
 
 	if ok {
-		if conn.Context().Err() != nil {
-			c.removeConn(host)
-		} else {
+		if conn.Context().Err() == nil {
 			return conn, nil
 		}
+		c.evict(host, conn)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, c.opts.DialTimeout)
@@ -614,7 +631,7 @@ func (c *Client) getConnContext(ctx context.Context, host string) (*quic.Conn, e
 		// Another goroutine dialed and stored a connection while we were dialing.
 		// Use theirs; close ours.
 		c.mu.Unlock()
-		_ = conn.CloseWithError(0, "")
+		closeConn(conn)
 		return existing, nil
 	}
 	c.conns[host] = conn
@@ -630,10 +647,58 @@ func authorityHostname(authority string) string {
 	return authority
 }
 
-func (c *Client) removeConn(host string) {
+// acquire returns the pooled connection for host, dialing if needed, and counts
+// the caller as a user until release.
+func (c *Client) acquire(ctx context.Context, host string) (*quic.Conn, error) {
+	for {
+		conn, err := c.getConnContext(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		if !c.draining[conn] {
+			c.inflight[conn]++
+			c.mu.Unlock()
+			return conn, nil
+		}
+		// Evicted between lookup and here; the pool entry is already gone.
+		c.mu.Unlock()
+	}
+}
+
+// release ends one use of conn and closes it if it was evicted and is now idle.
+func (c *Client) release(conn *quic.Conn) {
 	c.mu.Lock()
-	delete(c.conns, host)
+	c.inflight[conn]--
+	idle := c.inflight[conn] <= 0
+	if idle {
+		delete(c.inflight, conn)
+	}
+	closing := idle && c.draining[conn]
+	if closing {
+		delete(c.draining, conn)
+	}
 	c.mu.Unlock()
+	if closing {
+		closeConn(conn)
+	}
+}
+
+// evict retires conn: no new users, closed after its last release. The pool
+// entry goes only if it still is conn, so a replacement is never dropped.
+func (c *Client) evict(host string, conn *quic.Conn) {
+	c.mu.Lock()
+	if c.conns[host] == conn {
+		delete(c.conns, host)
+	}
+	idle := c.inflight[conn] <= 0
+	if !idle {
+		c.draining[conn] = true
+	}
+	c.mu.Unlock()
+	if idle {
+		closeConn(conn)
+	}
 }
 
 func isTransientError(err error) bool {
