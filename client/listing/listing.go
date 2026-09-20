@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/render"
 )
 
 // Entry is one decoded immediate child of the listed directory.
@@ -54,6 +55,17 @@ func ParsePage(dir string, resp protocol.Response, after string) (Page, error) {
 		page.Entries = append(page.Entries, entry)
 	}
 	return page, nil
+}
+
+// RenderPage renders entries as the server would, for fakes and fixtures, so
+// a ParsePage consumer is tested against the real page shape. Only Name and
+// IsDir are read; an empty nextCursor marks the last page.
+func RenderPage(dir string, entries []Entry, nextCursor string) protocol.Response {
+	rows := make([]render.ListEntry, 0, len(entries))
+	for _, entry := range entries {
+		rows = append(rows, render.ListEntry{Name: entry.Name, IsDir: entry.IsDir})
+	}
+	return render.ListResponse(dir, rows, nextCursor)
 }
 
 // ResolveEntry decodes and contains one relative LIST link target.

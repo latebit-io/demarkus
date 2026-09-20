@@ -14,7 +14,9 @@
 package tokens
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -64,12 +66,16 @@ func Load(path string) (*Store, error) {
 	return s, nil
 }
 
+// warnf reports a tokens file that could not be used; tests replace it.
+var warnf = log.Printf
+
 // LoadDefault loads tokens from the default path (~/.mark/tokens.toml).
-// Returns an empty store if the file is missing or unreadable.
+// A broken file is reported and reads as empty, so requests go out unauthenticated.
 func LoadDefault() *Store {
 	path := DefaultPath()
 	s, err := Load(path)
-	if err != nil || s == nil {
+	if err != nil {
+		warnf("tokens: no stored tokens in use: %v", err)
 		return &Store{path: path, tokens: make(map[string]entry)}
 	}
 	return s
@@ -131,18 +137,42 @@ func (s *Store) Hosts() []string {
 	return hosts
 }
 
+// save replaces the file by rename so a concurrent reader never sees it truncated.
 func (s *Store) save() error {
 	dir := filepath.Dir(s.path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create tokens directory: %w", err)
 	}
-	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	tmp, err := os.CreateTemp(dir, ".tokens-*.tmp")
 	if err != nil {
-		return fmt.Errorf("open tokens file: %w", err)
+		return fmt.Errorf("create tokens temp file: %w", err)
 	}
-	if err := toml.NewEncoder(f).Encode(s.tokens); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("write tokens file: %w", err)
+	if err := writeTokens(tmp, s.tokens); err != nil {
+		return errors.Join(err, removeTemp(tmp.Name()))
 	}
-	return f.Close()
+	if err := os.Rename(tmp.Name(), s.path); err != nil {
+		return errors.Join(fmt.Errorf("replace tokens file: %w", err), removeTemp(tmp.Name()))
+	}
+	return nil
+}
+
+// writeTokens encodes, syncs and closes f. CreateTemp already made it 0600.
+func writeTokens(f *os.File, tokens map[string]entry) error {
+	if err := toml.NewEncoder(f).Encode(tokens); err != nil {
+		return errors.Join(fmt.Errorf("write tokens file: %w", err), f.Close())
+	}
+	if err := f.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("sync tokens file: %w", err), f.Close())
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close tokens file: %w", err)
+	}
+	return nil
+}
+
+func removeTemp(name string) error {
+	if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove temp file %s: %w", name, err)
+	}
+	return nil
 }

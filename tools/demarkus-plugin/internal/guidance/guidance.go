@@ -130,8 +130,9 @@ func memoryOffer() (string, error) {
 	if _, e := os.Stat(sentinel); e == nil {
 		return "", nil // already shown
 	}
+	// Best effort: a missing sentinel only repeats the offer next session.
 	_ = os.MkdirAll(filepath.Dir(sentinel), 0o755)
-	_ = os.WriteFile(sentinel, nil, 0o644) // best-effort; re-offer beats hard-fail
+	_ = os.WriteFile(sentinel, nil, 0o644)
 	return memoryOfferText, nil
 }
 
@@ -149,6 +150,7 @@ func knowledge(in Input) (Output, error) {
 		if _, e := os.Stat(sentinel); e == nil {
 			return Output{}, nil
 		}
+		// Best effort: a missing sentinel only repeats the hint next session.
 		_ = os.MkdirAll(filepath.Dir(sentinel), 0o755)
 		_ = os.WriteFile(sentinel, nil, 0o644)
 		return Output{Context: "demarkus-knowledge is installed but no knowledge system is joined yet. To connect this installation to your organization's shared demarkus knowledge base, run `/knowledge-join <broker-url>`."}, nil

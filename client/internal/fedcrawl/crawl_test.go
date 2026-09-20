@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -135,22 +137,23 @@ func (m *mockClient) addDocWithMeta(host, path, body, hash string, extra map[str
 func (m *mockClient) addList(host, path, entries string) {
 	lines := strings.Split(strings.TrimSuffix(entries, "\n"), "\n")
 	sort.Strings(lines)
-	m.addListPage(host, path, "", strings.Join(lines, "\n")+"\n", true, "")
+	m.addListPage(host, path, "", strings.Join(lines, "\n")+"\n", "")
 }
 
-func (m *mockClient) addListPage(host, path, cursor, entries string, complete bool, next string) {
-	metadata := map[string]string{
-		"entries":  strconv.Itoa(len(links.Extract(entries))),
-		"complete": strconv.FormatBool(complete),
+// addListPage stores the server's own rendering of the named entries; the
+// entries string is only a terse way to name them.
+func (m *mockClient) addListPage(host, path, cursor, entries, next string) {
+	dests := links.Extract(entries)
+	rows := make([]listing.Entry, 0, len(dests))
+	for _, dest := range dests {
+		name, err := url.PathUnescape(dest)
+		if err != nil {
+			name = dest
+		}
+		rows = append(rows, listing.Entry{Name: strings.TrimSuffix(name, "/"), IsDir: strings.HasSuffix(name, "/")})
 	}
-	if next != "" {
-		metadata["next-cursor"] = next
-	}
-	m.lists[host+path+"\x00"+cursor] = mockPage{
-		status:   protocol.StatusOK,
-		body:     entries,
-		metadata: metadata,
-	}
+	page := listing.RenderPage(path, rows, next)
+	m.lists[host+path+"\x00"+cursor] = mockPage{status: page.Status, body: page.Body, metadata: page.Metadata}
 }
 
 func (m *mockClient) Fetch(host, path, _ string) (fetch.Result, error) {
@@ -236,8 +239,8 @@ func TestCrawlerFollowsListPages(t *testing.T) {
 	cfg.Crawl.MaxDocuments = 100
 
 	client := newMockClient()
-	client.addListPage("example.com:6309", "/", "", "- [a.md](a.md)\n- [b.md](b.md)\n", false, "next")
-	client.addListPage("example.com:6309", "/", "next", "- [c.md](c.md)\n", true, "")
+	client.addListPage("example.com:6309", "/", "", "- [a.md](a.md)\n- [b.md](b.md)\n", "next")
+	client.addListPage("example.com:6309", "/", "next", "- [c.md](c.md)\n", "")
 	for _, name := range []string{"a", "b", "c"} {
 		client.addDoc("example.com:6309", "/"+name+".md", "# "+name, "sha256-"+strings.Repeat(name, 64))
 	}
@@ -470,7 +473,7 @@ func TestCrawlerHashesGraphExportWithoutRecrawlingIt(t *testing.T) {
 	cfg.Seeds = []string{"mark://content"}
 
 	client := newMockClient()
-	client.addListPage("content:6309", "/", "", "- [graph/](graph/)\n- [graph.md](graph.md)\n- [index.md](index.md)\n", true, "")
+	client.addListPage("content:6309", "/", "", "- [graph/](graph/)\n- [graph.md](graph.md)\n- [index.md](index.md)\n", "")
 	client.addList("content:6309", "/graph/", "- [manifest.md](manifest.md)\n- [shards/](shards/)\n")
 	client.addList("content:6309", "/graph/shards/", "- [a/](a/)\n")
 	client.addList("content:6309", "/graph/shards/a/", "- [nodes-000.md](nodes-000.md)\n")

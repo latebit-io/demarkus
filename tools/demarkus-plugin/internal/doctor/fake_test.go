@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/render"
 )
 
 // fakeDoc is one stored document; Status defaults to ok.
@@ -68,19 +69,20 @@ func (f *fakeStore) List(_ context.Context, dir string, _ bool, cursor string) (
 		}
 	}
 	end := min(start+f.pageSize, len(sorted))
-	var b strings.Builder
-	b.WriteString("\n# Index of " + dir + "\n\n")
+	// The page is the server's own rendering, so the walker is tested
+	// against the real shape, escaping included.
+	entries := make([]render.ListEntry, 0, end-start)
 	for _, n := range sorted[start:end] {
-		b.WriteString("- [" + n + "](" + n + ")\n")
+		entries = append(entries, render.ListEntry{Name: strings.TrimSuffix(n, "/"), IsDir: strings.HasSuffix(n, "/")})
 	}
-	meta := map[string]string{"entries": strconv.Itoa(end - start), "complete": strconv.FormatBool(end == len(sorted))}
+	nextCursor := ""
 	if end < len(sorted) {
-		meta["next-cursor"] = strings.TrimSuffix(sorted[end-1], "/")
+		nextCursor = strings.TrimSuffix(sorted[end-1], "/")
 		if f.stuck {
-			meta["next-cursor"] = "x"
+			nextCursor = "x"
 		}
 	}
-	return protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: b.String()}, nil
+	return render.ListResponse(dir, entries, nextCursor), nil
 }
 
 func (f *fakeStore) Fetch(_ context.Context, docPath string) (protocol.Response, error) {

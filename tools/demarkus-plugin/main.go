@@ -75,6 +75,22 @@ func printUsage() {
 
 var sentinelSafeRe = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 
+// readNudgeInput decodes the hook payload; empty input is a zero Input.
+func readNudgeInput(r io.Reader) (nudge.Input, error) {
+	var in nudge.Input
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return in, fmt.Errorf("read input: %w", err)
+	}
+	if strings.TrimSpace(string(raw)) == "" {
+		return in, nil
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return in, fmt.Errorf("parse input: %w", err)
+	}
+	return in, nil
+}
+
 // cmdNudge reads a nudge request as JSON on stdin and emits the reminder in
 // the adapter's --format shape (json | claude | cursor). Empty nudge → no
 // output; fails silent.
@@ -86,15 +102,12 @@ func cmdNudge() {
 	changed := fs.Bool("changed-files", false, "session-end: the session changed files")
 	memoryWrite := fs.Bool("memory-write", false, "session-end: a memory write happened")
 	fs.BoolVar(memoryWrite, "soul-write", false, "deprecated alias of -memory-write")
-	_ = fs.Parse(os.Args[2:])
+	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits, never returns an error
 
-	var in nudge.Input
-	raw, _ := io.ReadAll(os.Stdin)
-	if strings.TrimSpace(string(raw)) != "" {
-		if err := json.Unmarshal(raw, &in); err != nil {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: parse input: "+err.Error())
-			return
-		}
+	in, err := readNudgeInput(os.Stdin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: "+err.Error())
+		return
 	}
 	// Flag overrides let bash adapters pipe a raw Claude payload (for prompt /
 	// tool_input) while setting the event/surface/booleans without building JSON.
@@ -207,7 +220,7 @@ func cmdGuidance() {
 	guidanceFile := fs.String("guidance-file", "", "path to the plugin's static guidance markdown")
 	projectDir := fs.String("project-dir", "", "project directory for the slug and binding header (default: harness environment)")
 	format := fs.String("format", "json", "output format: json | claude | cursor")
-	_ = fs.Parse(os.Args[2:])
+	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits, never returns an error
 
 	out, err := guidance.Evaluate(guidance.Input{Surface: *surface, GuidanceFile: *guidanceFile, ProjectDir: *projectDir})
 	if err != nil {
@@ -235,7 +248,7 @@ func cmdGuidance() {
 func cmdGate() {
 	fs := flag.NewFlagSet("gate", flag.ExitOnError)
 	format := fs.String("format", "json", "output format: json {decision,reason} | claude-pre (deny/ask) | claude-post (warn) | cursor (permission; warn = allow + agent_message)")
-	_ = fs.Parse(os.Args[2:])
+	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits, never returns an error
 
 	fail := func(msg string) {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] gate: "+msg+"; deferring")

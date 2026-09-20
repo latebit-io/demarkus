@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -81,7 +80,7 @@ func (store *Store) WriteVersionResult(path string, expected int, content []byte
 // ErrDocumentQuota rejects a write that would create a new document
 // path beyond Options.MaxDocuments. Existing documents keep accepting
 // updates, appends, and archives.
-var ErrDocumentQuota = errors.New("document quota exceeded")
+var ErrDocumentQuota = fmt.Errorf("document %w", backend.ErrQuota)
 
 // checkDocumentQuota gates new-path creation against MaxDocuments.
 func (store *Store) checkDocumentQuota(view *readView) error {
@@ -304,7 +303,7 @@ func (store *Store) buildArchiveCandidate(
 		return nil, MutationResult{}, os.ErrNotExist
 	}
 	if archived && store.requirePolicy && path == publishpolicy.DocumentPath {
-		return nil, MutationResult{}, fmt.Errorf("%w: required policy cannot be archived", ErrInvalidPolicy)
+		return nil, MutationResult{}, fmt.Errorf("%w: %w: required policy cannot be archived", backend.ErrRejected, ErrInvalidPolicy)
 	}
 	history, err := view.loadHistory(&entry)
 	if err != nil {
@@ -343,14 +342,14 @@ func (store *Store) buildArchiveCandidate(
 
 func validateNewPathTopology(snapshot *snapshot, path string) error {
 	if _, exists := snapshot.Directories[path]; exists {
-		return fmt.Errorf("cannot publish %s: a directory exists at this path", path)
+		return fmt.Errorf("cannot publish %s: a directory exists at this path: %w", path, protocolstore.ErrPathCollision)
 	}
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	ancestor := ""
 	for _, part := range parts[:len(parts)-1] {
 		ancestor += "/" + part
 		if _, exists := snapshot.Paths[ancestor]; exists {
-			return fmt.Errorf("cannot publish %s: a document exists at ancestor %s", path, ancestor)
+			return fmt.Errorf("cannot publish %s: a document exists at ancestor %s: %w", path, ancestor, protocolstore.ErrPathCollision)
 		}
 	}
 	return nil

@@ -3,9 +3,11 @@ package bucketstore
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/server/internal/backend"
 )
 
 var (
@@ -35,11 +37,25 @@ func (err *PolicyError) Error() string {
 	return fmt.Sprintf("publish policy %s: %d violation(s)", err.Strictness, len(err.Result.Violations))
 }
 
-func (err *PolicyError) Unwrap() error {
+func (err *PolicyError) Unwrap() []error {
 	if err.Strictness == publishpolicy.Ask {
-		return ErrPolicyApprovalRequired
+		return []error{ErrPolicyApprovalRequired, backend.ErrRejected}
 	}
-	return ErrPolicyBlocked
+	return []error{ErrPolicyBlocked, backend.ErrRejected}
+}
+
+// RejectionMessage lists the violations so the publisher can correct them.
+func (err *PolicyError) RejectionMessage() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "publish policy (%s) refused this write:\n", err.Strictness)
+	for _, v := range err.Result.Violations {
+		if v.Name == "" {
+			fmt.Fprintf(&b, "- %s\n", v.Code)
+			continue
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", v.Code, v.Name)
+	}
+	return b.String()
 }
 
 func (view *readView) currentPolicy(require bool) (publishpolicy.Policy, error) {
@@ -77,7 +93,7 @@ func evaluateMutationPolicy(
 	if path == publishpolicy.DocumentPath {
 		candidate := publishpolicy.Parse(string(body))
 		if err := candidate.Validate(); err != nil {
-			return "", publishpolicy.Result{}, fmt.Errorf("%w: candidate policy: %v", ErrInvalidPolicy, err)
+			return "", publishpolicy.Result{}, fmt.Errorf("%w: %w: candidate policy: %v", backend.ErrRejected, ErrInvalidPolicy, err)
 		}
 	}
 	policy, err := view.currentPolicy(require)

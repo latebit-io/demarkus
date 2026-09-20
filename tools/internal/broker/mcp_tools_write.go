@@ -48,15 +48,17 @@ func (g *mcpGateway) gateWrite(claims *Claims, worldName string) (*WorldConfig, 
 	if !claims.EmailVerified {
 		return nil, mcp.NewToolResultError("identity email is not verified")
 	}
-	claims.Email = canonicalEmail(claims.Email)
-	if claims.Email == "" {
+	// A copy: the claims hang off a context concurrent tool calls share.
+	canonical := *claims
+	canonical.Email = canonicalEmail(claims.Email)
+	if canonical.Email == "" {
 		return nil, mcp.NewToolResultError("identity has no email claim")
 	}
 	worldCfg := lookupWorld(g.srv.cfg, worldName)
 	if worldCfg == nil {
 		return nil, mcp.NewToolResultError(fmt.Sprintf("world %q is not configured", worldName))
 	}
-	if !worldAllows(&worldCfg.Allow, claims) {
+	if !worldAllows(&worldCfg.Allow, &canonical) {
 		return nil, mcp.NewToolResultError(fmt.Sprintf("write access denied for world %q", worldName))
 	}
 	return worldCfg, nil

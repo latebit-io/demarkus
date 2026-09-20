@@ -171,6 +171,7 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 			if m == nil {
 				continue
 			}
+			// The row regex admits digits only; overflow reads as zero links.
 			linkCount, _ := strconv.Atoi(m[4])
 			nodes = append(nodes, StoredNode{
 				URL:       m[1],
@@ -182,6 +183,7 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 			// The two shapes are $-anchored with disjoint column counts,
 			// so they cannot cross-match; enriched first for clarity.
 			if m := edgeRowRe.FindStringSubmatch(trimmed); m != nil {
+				// Digits only per the regex; overflow falls to the floor of one below.
 				count, _ := strconv.Atoi(m[6])
 				edges = append(edges, StoredEdge{
 					From:   m[1],

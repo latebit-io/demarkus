@@ -170,8 +170,14 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 		}
 	}
 	if r.requestTimeout > 0 {
-		if err := stream.SetReadDeadline(time.Now().Add(r.requestTimeout)); err != nil {
+		// The write bound keeps a client that stops reading from pinning the
+		// read view and a concurrency slot.
+		deadline := time.Now().Add(r.requestTimeout)
+		if err := stream.SetReadDeadline(deadline); err != nil {
 			logger.Debug("setting stream read deadline", "error", err)
+		}
+		if err := stream.SetWriteDeadline(deadline); err != nil {
+			logger.Debug("setting stream write deadline", "error", err)
 		}
 	}
 	requestHandler := *r.handler

@@ -3,7 +3,6 @@ package broker
 import (
 	"context"
 	"net/http"
-	"strings"
 )
 
 // installResponse confirms identity and lists readable worlds without
@@ -44,7 +43,10 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "email not verified", http.StatusForbidden)
 		return
 	}
-	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
+	// A copy: the request context owns the verified claims.
+	canonical := *claims
+	canonical.Email = canonicalEmail(claims.Email)
+	claims = &canonical
 
 	// no-store + no-cache: today the body carries only identity + URLs,
 	// but the headers are set before writeJSON so a future addition of

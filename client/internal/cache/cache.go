@@ -3,6 +3,8 @@ package cache
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,26 +55,16 @@ func New(dir string) *Cache {
 	return &Cache{Dir: dir}
 }
 
-// Put writes a response to the cache atomically.
-// Writes metadata first (which is smaller), then body. This ensures
-// if we crash, we don't have orphaned body files without metadata.
+// renameFile is os.Rename; tests replace it to interrupt a Put.
+var renameFile = os.Rename
+
+// Put replaces body then metadata, each by rename. A crash in between leaves
+// the old etag over the new body, which revalidates; the reverse never would.
 func (c *Cache) Put(host, path, verb string, resp protocol.Response) error {
 	filePath := c.filePath(host, path, verb)
-	metaPath := filePath + ".meta"
 
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		// A stale flat-file cache entry may block directory creation.
-		// Remove it and retry once.
-		if os.Remove(dir) == nil {
-			// Also remove the companion .meta file from the old layout.
-			_ = os.Remove(dir + ".meta")
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return err
-			}
-		} else {
-			return err
-		}
+	if err := c.ensureDir(filepath.Dir(filePath)); err != nil {
+		return err
 	}
 
 	m := meta{
@@ -82,23 +74,58 @@ func (c *Cache) Put(host, path, verb string, resp protocol.Response) error {
 		CachedAt: time.Now().UTC(),
 		Metadata: resp.Metadata,
 	}
-
-	// Write metadata first (atomic order for crash safety).
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
-		return err
-	}
-	if err := os.WriteFile(metaPath, buf.Bytes(), 0o644); err != nil {
-		return err
+		return fmt.Errorf("encode cache metadata %s: %w", filePath, err)
 	}
 
-	// Then write body. If this fails, metadata still exists as a marker.
-	if err := os.WriteFile(filePath, []byte(resp.Body), 0o644); err != nil {
-		// Best effort cleanup if body write fails.
-		_ = os.Remove(metaPath)
+	if err := replaceFile(filePath, []byte(resp.Body)); err != nil {
 		return err
 	}
+	return replaceFile(filePath+".meta", buf.Bytes())
+}
 
+// ensureDir creates dir; a flat-file entry from the old layout in the way is removed.
+func (c *Cache) ensureDir(dir string) error {
+	err := os.MkdirAll(dir, 0o755)
+	if err == nil {
+		return nil
+	}
+	if os.Remove(dir) != nil {
+		return fmt.Errorf("create cache dir %s: %w", dir, err)
+	}
+	if rmErr := os.Remove(dir + ".meta"); rmErr != nil && !os.IsNotExist(rmErr) {
+		return fmt.Errorf("remove stale cache metadata %s.meta: %w", dir, rmErr)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create cache dir %s: %w", dir, err)
+	}
+	return nil
+}
+
+// replaceFile writes data to a temp file beside path and renames it into place.
+// The file stays 0600: a cached body may have been fetched with a token.
+func replaceFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".put-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create cache temp file for %s: %w", path, err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return errors.Join(fmt.Errorf("write cache file %s: %w", path, err), tmp.Close(), removeTemp(tmp.Name()))
+	}
+	if err := tmp.Close(); err != nil {
+		return errors.Join(fmt.Errorf("close cache file %s: %w", path, err), removeTemp(tmp.Name()))
+	}
+	if err := renameFile(tmp.Name(), path); err != nil {
+		return errors.Join(fmt.Errorf("replace cache file %s: %w", path, err), removeTemp(tmp.Name()))
+	}
+	return nil
+}
+
+func removeTemp(name string) error {
+	if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove temp file %s: %w", name, err)
+	}
 	return nil
 }
 

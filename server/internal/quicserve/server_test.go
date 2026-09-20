@@ -418,6 +418,10 @@ func (s *fakeStream) SetReadDeadline(time.Time) error {
 	return nil
 }
 
+func (s *fakeStream) SetWriteDeadline(time.Time) error {
+	return nil
+}
+
 type fakeAddr string
 
 func (a fakeAddr) Network() string { return "fake" }

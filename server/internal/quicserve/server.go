@@ -22,6 +22,7 @@ var ErrServerClosed = errors.New("quicserve: server closed")
 type Stream interface {
 	io.ReadWriteCloser
 	SetReadDeadline(time.Time) error
+	SetWriteDeadline(time.Time) error
 }
 
 // Endpoint handles streams for one accepted connection.

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -397,5 +398,37 @@ func TestWorldManagerStaticModeFailsFast(t *testing.T) {
 	worlds := "worlds:\n" + worldFragment("alice", testWorldID, tokens, false)
 	if _, err := openHarness(t, t.TempDir(), worlds, unreachable); err == nil {
 		t.Fatal("static mode must fail fast on an unopenable world")
+	}
+}
+
+// A retired world must leave the router before its runtime closes; otherwise
+// streams routed in between reach a closed runtime and are dropped.
+func TestWorldManagerUnroutesBeforeClosing(t *testing.T) {
+	tokensDir := t.TempDir()
+	tokensA := writeTokens(t, tokensDir, "alice")
+	tokensB := writeTokens(t, tokensDir, "bob")
+	h := newWorldsHarness(t, "worlds:\n"+
+		worldFragment("alice", testWorldID, tokensA, true)+
+		worldFragment("bob", testWorldIDB, tokensB, true))
+
+	var retired []string
+	h.manager.beforeRetire = func(name string) {
+		retired = append(retired, name)
+		if name == "alice" && h.routes("alice.memory.svc.cluster.local") {
+			t.Error("removed world still routed while its runtime closes")
+		}
+	}
+
+	// alice is removed; bob is replaced by a changed config.
+	h.writeFragment(t, "worlds:\n"+worldFragment("bob", testWorldIDB, tokensB, false))
+	if err := h.manager.Reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	slices.Sort(retired)
+	if !slices.Equal(retired, []string{"alice", "bob"}) {
+		t.Errorf("retired = %v, want alice and bob", retired)
+	}
+	if !h.routes("bob.memory.svc.cluster.local") {
+		t.Error("replaced world lost routing")
 	}
 }

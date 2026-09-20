@@ -3,6 +3,7 @@ package protocol
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -95,6 +96,10 @@ func ParseRequest(r io.Reader) (Request, error) {
 	return req, nil
 }
 
+// ErrMalformedRequest marks a request that breaks the wire grammar, as opposed
+// to a read failure or a size limit. Servers answer it with bad-request.
+var ErrMalformedRequest = errors.New("malformed request")
+
 // parseRequestLine reads and validates the request line ("VERB /path\n").
 func parseRequestLine(br *bufio.Reader) (verb, path string, err error) {
 	line, err := readLineLimited(br, MaxRequestLineLength)
@@ -104,14 +109,14 @@ func parseRequestLine(br *bufio.Reader) (verb, path string, err error) {
 
 	verb, path, ok := strings.Cut(line, " ")
 	if !ok {
-		return "", "", fmt.Errorf("malformed request: %q", line)
+		return "", "", fmt.Errorf("%w: %q", ErrMalformedRequest, line)
 	}
 
 	if verb == "" {
-		return "", "", fmt.Errorf("empty verb")
+		return "", "", fmt.Errorf("%w: empty verb", ErrMalformedRequest)
 	}
 	if !IsValidVerb(verb) {
-		return "", "", fmt.Errorf("unknown verb: %q", verb)
+		return "", "", fmt.Errorf("%w: unknown verb: %q", ErrMalformedRequest, verb)
 	}
 
 	if err := ValidateRequestPath(path); err != nil {
@@ -124,13 +129,13 @@ func parseRequestLine(br *bufio.Reader) (verb, path string, err error) {
 // ValidateRequestPath checks the path syntax shared by wire and storage layers.
 func ValidateRequestPath(path string) error {
 	if path == "" || !strings.HasPrefix(path, "/") {
-		return fmt.Errorf("invalid path: %q", path)
+		return fmt.Errorf("%w: invalid path: %q", ErrMalformedRequest, path)
 	}
 	if len(path) > MaxRequestPathLength {
-		return fmt.Errorf("invalid path: exceeds %d bytes", MaxRequestPathLength)
+		return fmt.Errorf("%w: invalid path: exceeds %d bytes", ErrMalformedRequest, MaxRequestPathLength)
 	}
 	if containsControlChars(path) {
-		return fmt.Errorf("invalid path: contains control characters")
+		return fmt.Errorf("%w: invalid path: contains control characters", ErrMalformedRequest)
 	}
 	return nil
 }
@@ -179,7 +184,7 @@ func splitFrontmatterAndBody(data []byte) (fm, body []byte, err error) {
 		fmEnd = len(inner) - len(frontmatterTrim)
 		bodyStart = len(inner)
 	} else {
-		return nil, nil, fmt.Errorf("malformed request: unclosed frontmatter")
+		return nil, nil, fmt.Errorf("%w: unclosed frontmatter", ErrMalformedRequest)
 	}
 
 	fm = inner[:fmEnd]
@@ -196,7 +201,7 @@ func splitFrontmatterAndBody(data []byte) (fm, body []byte, err error) {
 func decodeFrontmatter(fm []byte) (map[string]string, error) {
 	var meta map[string]string
 	if err := yaml.Unmarshal(fm, &meta); err != nil {
-		return nil, fmt.Errorf("parsing request metadata: %w", err)
+		return nil, fmt.Errorf("%w: parsing request metadata: %w", ErrMalformedRequest, err)
 	}
 	if meta == nil {
 		meta = make(map[string]string)

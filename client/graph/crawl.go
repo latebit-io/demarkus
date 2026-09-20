@@ -78,6 +78,7 @@ type RelRef struct {
 type ExtractedEdges struct {
 	BodyLinkCount int
 	Edges         []Edge
+	RejectedRels  []RejectedRel // rel- values that produced no edge
 }
 
 // ExtractDocumentEdges resolves body links and typed relations against docURL.
@@ -97,7 +98,9 @@ func ExtractDocumentEdges(docURL, body string, metadata map[string]string) Extra
 			Count:  1,
 		})
 	}
-	for _, relation := range RelEdges(docURL, metadata) {
+	relations := RelEdges(docURL, metadata)
+	extracted.RejectedRels = relations.Rejected
+	for _, relation := range relations.Refs {
 		extracted.Edges = append(extracted.Edges, Edge{
 			From:  docURL,
 			To:    relation.Target,
@@ -108,37 +111,62 @@ func ExtractDocumentEdges(docURL, body string, metadata map[string]string) Extra
 	return extracted
 }
 
+// RejectedRel is one rel-<predicate> value that produced no edge, and why.
+type RejectedRel struct {
+	Key    string
+	Value  string
+	Reason string
+}
+
+// RelResult is what RelEdges read from one document's metadata.
+type RelResult struct {
+	Refs     []RelRef
+	Rejected []RejectedRel
+}
+
 // RelEdges resolves comma-separated rel-<predicate> refs against docURL.
-// Malformed and self references are ignored so bad metadata cannot fail a crawl.
-func RelEdges(docURL string, metadata map[string]string) []RelRef {
+// Bad values never fail a crawl (ADR 0004); they come back as Rejected.
+func RelEdges(docURL string, metadata map[string]string) RelResult {
 	// Callers may pass a dial address (fedcrawl does); compare like with like
 	// so a self-reference is not mistaken for an edge to a different node.
 	docURL = links.CanonicalURL(docURL)
-	var refs []RelRef
+	var result RelResult
 	keys := make([]string, 0, len(metadata))
 	for key := range metadata {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		val := metadata[key]
 		pred, ok := strings.CutPrefix(key, "rel-")
-		if !ok || pred == "" {
+		if !ok {
 			continue
 		}
-		for ref := range strings.SplitSeq(val, ",") {
+		for ref := range strings.SplitSeq(metadata[key], ",") {
 			ref = strings.TrimSpace(ref)
-			if ref == "" || strings.IndexFunc(ref, unicode.IsSpace) >= 0 {
+			if ref == "" {
+				continue // a trailing comma, not a reference
+			}
+			reason := ""
+			resolved := ""
+			switch {
+			case pred == "":
+				reason = "empty predicate"
+			case strings.IndexFunc(ref, unicode.IsSpace) >= 0:
+				reason = "whitespace in reference"
+			default:
+				resolved = links.CanonicalURL(links.Resolve(docURL, ref))
+				if resolved == docURL {
+					reason = "self reference"
+				}
+			}
+			if reason != "" {
+				result.Rejected = append(result.Rejected, RejectedRel{Key: key, Value: ref, Reason: reason})
 				continue
 			}
-			resolved := links.CanonicalURL(links.Resolve(docURL, ref))
-			if resolved == docURL {
-				continue
-			}
-			refs = append(refs, RelRef{Rel: pred, Target: resolved})
+			result.Refs = append(result.Refs, RelRef{Rel: pred, Target: resolved})
 		}
 	}
-	return refs
+	return result
 }
 
 // Crawl uses level barriers so first admission always has shortest-path depth.
@@ -237,6 +265,7 @@ func (r *crawlRun) observe(ctx context.Context, item crawlItem, res *crawlFetch)
 		extracted = ExtractDocumentEdges(item.url, res.result.Body, res.result.Metadata)
 		node.Title = links.ExtractTitle(res.result.Body)
 		node.LinkCount = extracted.BodyLinkCount
+		r.outcome.RejectedRels += len(extracted.RejectedRels)
 	}
 	node.Observation.Complete = SourceComplete(node)
 	if !r.reserveOutput(len(nodeSummary(node)) + 32) {

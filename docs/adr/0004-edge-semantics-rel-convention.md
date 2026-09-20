@@ -1,6 +1,6 @@
 # ADR 0004: Edge semantics: provenance on every edge, typed relations via `rel-` metadata
 
-Status: accepted (2026-07-13)
+Status: accepted (2026-07-13). Amended 2026-09-20: skipped relation values carry a diagnostic.
 
 ## Context
 
@@ -58,9 +58,12 @@ rel-depends-on: /architecture.md, mark://other-world/spec.md
   `rel-x`. The hyphen form is the one that rides the existing channel intact:
   publish → `meta.rel-<predicate>` on disk → returned bare on FETCH.
 - **Values are comma-separated refs**, resolved against the document's own
-  URL (matching how body links resolve). Malformed refs (empty, internal
+  URL (matching how body links resolve). Malformed refs (internal
   whitespace), self-references, and an empty predicate (`rel-`) are skipped
-  silently; bad metadata must never fail a crawl.
+  with a diagnostic; bad metadata must never fail a crawl. `graph.RelEdges`
+  returns each skipped value with its reason, the crawl summary counts them,
+  and the federation crawler logs them. An empty element, a trailing comma
+  for one, is not a reference and is dropped without a diagnostic.
 - Both crawlers ingest the convention as typed edges: the client graph crawl
   (`graph.RelEdges`, fed by the fetch callback's new `Metadata` field) and
   the federation crawler (which additionally applies its mark://-only,

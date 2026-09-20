@@ -188,8 +188,8 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
 		}
-		if resp.Status != protocol.StatusServerError {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusServerError)
+		if resp.Status != protocol.StatusBadRequest {
+			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusBadRequest)
 		}
 	})
 }

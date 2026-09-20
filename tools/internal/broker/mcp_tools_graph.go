@@ -544,21 +544,31 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 // operator who intends the publish anyway can opt in.
 func (g *mcpGateway) checkIndexManifests(sourceWorld, targetWorld string, dryRun, force bool) ([]string, *mcp.CallToolResult) {
 	var warnings []string
+	// An unread manifest is not a missing one: the source only warns, and
+	// force overrides a missing target manifest, never an unreachable target.
 	srcManifest, err := g.dispatcher.Fetch(sourceWorld, protocol.WellKnownManifestPath, "")
-	if err != nil || srcManifest.Response.Status != protocol.StatusOK {
+	switch {
+	case err != nil:
+		warnings = append(warnings, fmt.Sprintf("warning: could not check source agent manifest: %v", err))
+	case srcManifest.Response.Status != protocol.StatusOK:
 		warnings = append(warnings, "warning: source server has no agent manifest")
 	}
-	if !dryRun {
-		tgtManifest, terr := g.dispatcher.Fetch(targetWorld, protocol.WellKnownManifestPath, "")
-		if terr != nil || tgtManifest.Response.Status != protocol.StatusOK {
-			if !force {
-				return warnings, mcp.NewToolResultError(
-					"target server has no agent manifest; cannot verify it accepts index publications. " +
-						"Use force=true to override, or publish a manifest at /.well-known/agent-manifest.md on the target.",
-				)
-			}
-			warnings = append(warnings, "warning: target server has no agent manifest (force=true override)")
+	if dryRun {
+		return warnings, nil
+	}
+
+	tgtManifest, err := g.dispatcher.Fetch(targetWorld, protocol.WellKnownManifestPath, "")
+	if err != nil {
+		return warnings, mcp.NewToolResultError(fmt.Sprintf("could not check target agent manifest: %v", err))
+	}
+	if tgtManifest.Response.Status != protocol.StatusOK {
+		if !force {
+			return warnings, mcp.NewToolResultError(
+				"target server has no agent manifest; cannot verify it accepts index publications. " +
+					"Use force=true to override, or publish a manifest at /.well-known/agent-manifest.md on the target.",
+			)
 		}
+		warnings = append(warnings, "warning: target server has no agent manifest (force=true override)")
 	}
 	return warnings, nil
 }

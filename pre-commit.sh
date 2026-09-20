@@ -35,6 +35,9 @@ bash scripts/check-shell.sh
 echo "Checking plugin copies..."
 bash scripts/check-identical-copies.sh
 
+echo "Checking session start hooks..."
+bash scripts/test-session-start-hooks.sh
+
 echo "Checking generated plugin prompts..."
 (cd tools && go run ./plugin-prompts check)
 

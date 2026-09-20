@@ -903,6 +903,49 @@ ensure_self_dial() {
 
 # --- Service management ---
 
+# installed_server_pids lists servers started from INSTALL_DIR only. A bare name
+# match would also hit the plugin managed server under ~/.demarkus/bin.
+installed_server_pids() {
+  pgrep -f "^${INSTALL_DIR}/demarkus-server( |\$)" 2>/dev/null || true
+}
+
+# stop_installed_server ends leftovers the service manager did not stop:
+# TERM, then KILL. Returns 1 when one survives both.
+stop_installed_server() {
+  local pids wait_count=0
+  pids=$(installed_server_pids)
+  [ -n "$pids" ] || return 0
+  # shellcheck disable=SC2086  # a pid list, split on purpose
+  $SUDO kill $pids 2>/dev/null || true
+  while [ -n "$(installed_server_pids)" ] && [ "$wait_count" -lt "${SERVER_WAIT_SECONDS:-5}" ]; do
+    sleep 1
+    wait_count=$((wait_count + 1))
+  done
+  pids=$(installed_server_pids)
+  [ -n "$pids" ] || return 0
+  # shellcheck disable=SC2086  # a pid list, split on purpose
+  $SUDO kill -9 $pids 2>/dev/null || true
+  sleep 1
+  [ -z "$(installed_server_pids)" ]
+}
+
+# verify_server_running needs two good probes a second apart, so a server
+# that starts and dies at once does not pass.
+verify_server_running() {
+  local tries=0 streak=0
+  while [ "$tries" -lt "${SERVER_WAIT_SECONDS:-10}" ]; do
+    if [ "$PLATFORM" = "linux" ]; then
+      if $SUDO systemctl is-active --quiet demarkus; then streak=$((streak + 1)); else streak=0; fi
+    else
+      if [ -n "$(installed_server_pids)" ]; then streak=$((streak + 1)); else streak=0; fi
+    fi
+    [ "$streak" -ge 2 ] && return 0
+    sleep 1
+    tries=$((tries + 1))
+  done
+  return 1
+}
+
 setup_systemd() {
   local content_root="$1"
   local tokens_file="$2"
@@ -1024,7 +1067,12 @@ EOF
   else
     launchctl load "$plist_file" 2>/dev/null || true
   fi
-  log_info "Service loaded (logs: ${log_dir}/)"
+  # The load calls fail for an already loaded service, so the process decides.
+  if ! verify_server_running; then
+    log_error "Service did not start (logs: ${log_dir}/)"
+    return 1
+  fi
+  log_info "Service running (logs: ${log_dir}/)"
 }
 
 # --- Existing config detection ---
@@ -1813,7 +1861,7 @@ do_install() {
   fi
 
   # Stop service before binary replacement (avoids "Text file busy")
-  if pgrep -x demarkus-server >/dev/null 2>&1; then
+  if [ -n "$(installed_server_pids)" ]; then
     log_info "Stopping running service before replacing binaries"
     if [ "$PLATFORM" = "linux" ]; then
       $SUDO systemctl stop demarkus 2>/dev/null || true
@@ -1829,21 +1877,10 @@ do_install() {
         fi
       fi
     fi
-    # Wait for process to exit, escalate if needed
-    local wait_count=0
-    while pgrep -x demarkus-server >/dev/null 2>&1 && [ $wait_count -lt 5 ]; do
-      sleep 1
-      wait_count=$((wait_count + 1))
-    done
-    # SIGTERM if still running (handles manually started processes)
-    if pgrep -x demarkus-server >/dev/null 2>&1; then
-      $SUDO pkill -x demarkus-server 2>/dev/null || true
-      sleep 2
-    fi
-    # SIGKILL as last resort
-    if pgrep -x demarkus-server >/dev/null 2>&1; then
-      $SUDO pkill -9 -x demarkus-server 2>/dev/null || true
-      sleep 1
+    # Handles manually started processes the service manager does not own.
+    if ! stop_installed_server; then
+      log_error "Could not stop ${INSTALL_DIR}/demarkus-server"
+      exit 1
     fi
   fi
 
@@ -2416,9 +2453,6 @@ _do_update_inner() {
   # Stop service before replacing binaries (avoids "Text file busy")
   if [ "$PLATFORM" = "linux" ]; then
     $SUDO systemctl stop demarkus 2>/dev/null || true
-    sleep 1
-    $SUDO pkill -f demarkus-server 2>/dev/null || true
-    sleep 1
   elif [ "$PLATFORM" = "darwin" ]; then
     local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
     if [ -f "$plist" ]; then
@@ -2430,8 +2464,10 @@ _do_update_inner() {
         launchctl unload "$plist" 2>/dev/null || true
       fi
     fi
-    pkill -f demarkus-server 2>/dev/null || true
-    sleep 1
+  fi
+  if ! stop_installed_server; then
+    log_error "Could not stop ${INSTALL_DIR}/demarkus-server"
+    exit 1
   fi
 
   # Replace binaries
@@ -2446,12 +2482,17 @@ _do_update_inner() {
     install_binaries "$_TMPDIR" "demarkus-publish"
   fi
 
-  # Restart service
+  # Restart service. A host with no unit or plist runs the server by hand.
+  local server_managed=false
   if [ "$PLATFORM" = "linux" ]; then
-    $SUDO systemctl restart demarkus 2>/dev/null || log_warn "Could not restart service"
+    if $SUDO test -f "${SYSTEMD_DIR}/demarkus.service"; then
+      server_managed=true
+      $SUDO systemctl restart demarkus 2>/dev/null || log_warn "Could not restart service"
+    fi
   elif [ "$PLATFORM" = "darwin" ]; then
     local plist="$HOME/Library/LaunchAgents/io.latebit.demarkus.plist"
     if [ -f "$plist" ]; then
+      server_managed=true
       local macos_major
       macos_major=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
       if [ "${macos_major:-0}" -ge 14 ] 2>/dev/null; then
@@ -2538,6 +2579,12 @@ RestrictSUIDSGID=yes
     echo "$to" > "${CONFIG_DIR}/version"
   else
     echo "$to" | $SUDO tee "${CONFIG_DIR}/version" > /dev/null
+  fi
+
+  # Checked last so the hardening restart above is covered too.
+  if [ "$server_managed" = true ] && ! verify_server_running; then
+    log_error "Binaries updated to v${to} but demarkus-server is not running"
+    exit 1
   fi
 
   log_step "Updated to v${to}"

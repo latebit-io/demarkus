@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -229,58 +228,22 @@ func collectLookupAllResults(results []lookupAllWorldResult) (matches []lookupAl
 }
 
 func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch, error) {
-	lines := strings.Split(strings.ReplaceAll(result.Response.Body, "\r\n", "\n"), "\n")
-	header, columns := -1, 0
-	for i, line := range lines {
-		cells, ok := lookuptable.SplitRow(line)
-		if ok && lookuptable.IsHeader(cells) {
-			header, columns = i, len(cells)
-			break
-		}
+	table, err := lookuptable.ParseTable(result.Response.Body)
+	if err != nil {
+		return nil, err
 	}
-	if header < 0 {
-		return nil, fmt.Errorf("malformed LOOKUP response: result table missing")
-	}
-
-	matches := make([]lookupAllMatch, 0)
-	for _, line := range lines[header+1:] {
-		if strings.TrimSpace(line) == "" {
-			if len(matches) > 0 {
-				break
-			}
-			continue
-		}
-		cells, ok := lookuptable.SplitRow(line)
-		if !ok {
-			break
-		}
-		if lookuptable.IsSeparator(cells) {
-			continue
-		}
-		if len(cells) != columns {
-			return nil, fmt.Errorf("malformed LOOKUP response: row has %d columns, header %d", len(cells), columns)
-		}
-		importance, err := strconv.ParseFloat(lookuptable.Unescape(cells[1]), 64)
-		if err != nil || math.IsNaN(importance) || math.IsInf(importance, 0) || importance < 0 || importance > 1 {
-			return nil, fmt.Errorf("malformed LOOKUP response: invalid importance %q", cells[1])
-		}
-		matchPath, anchor := lookuptable.SplitLocation(cells[0])
-		if !strings.HasPrefix(matchPath, "/") {
-			return nil, fmt.Errorf("malformed LOOKUP response: invalid path %q", matchPath)
-		}
-		match := lookupAllMatch{
+	matches := make([]lookupAllMatch, 0, len(table.Rows))
+	for i, row := range table.Rows {
+		matches = append(matches, lookupAllMatch{
 			world:      world,
-			path:       matchPath,
-			anchor:     anchor,
-			importance: importance,
-			title:      lookuptable.Unescape(cells[2]),
-			tags:       lookuptable.Unescape(cells[3]),
-			rank:       len(matches),
-		}
-		if columns == lookuptable.BodyColumns {
-			match.snippet = lookuptable.Unescape(cells[4])
-		}
-		matches = append(matches, match)
+			path:       row.Path,
+			anchor:     row.Anchor,
+			importance: row.Importance,
+			title:      row.Title,
+			tags:       row.Tags,
+			snippet:    row.Snippet,
+			rank:       i,
+		})
 	}
 
 	want, err := strconv.Atoi(result.Response.Metadata["matches"])

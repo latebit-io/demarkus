@@ -212,3 +212,29 @@ func TestConfirmRetention(t *testing.T) {
 		})
 	}
 }
+
+func TestExitCodeForStatus(t *testing.T) {
+	tests := []struct {
+		status string
+		want   int
+	}{
+		{protocol.StatusOK, 0},
+		{protocol.StatusCreated, 0},
+		{protocol.StatusNotModified, 0},
+		{protocol.StatusNotFound, 1},
+		{protocol.StatusConflict, 1},
+		{protocol.StatusUnauthorized, 1},
+		{protocol.StatusNotPermitted, 1},
+		{protocol.StatusBadRequest, 1},
+		{protocol.StatusServerError, 1},
+		{protocol.StatusArchived, 1},
+		{"something-new", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			if got := exitCodeForStatus(tt.status); got != tt.want {
+				t.Errorf("exitCodeForStatus(%q) = %d, want %d", tt.status, got, tt.want)
+			}
+		})
+	}
+}

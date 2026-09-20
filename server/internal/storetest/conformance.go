@@ -592,8 +592,8 @@ func testPathCollisions(t *testing.T, s handler.DocumentStore) {
 	// A document cannot be created where a directory exists. Both backends
 	// must reject the write before persisting anything: no fetchable
 	// document and no version state may remain.
-	if _, err := s.WriteVersion("/col", 0, []byte("x"), nil); err == nil {
-		t.Error("want error writing document over existing directory /col")
+	if _, err := s.WriteVersion("/col", 0, []byte("x"), nil); !errors.Is(err, store.ErrPathCollision) {
+		t.Errorf("writing document over existing directory /col: err = %v, want ErrPathCollision", err)
 	}
 	if _, err := s.Get("/col", 0); err == nil {
 		t.Error("collision write left fetchable document at /col")
@@ -603,8 +603,8 @@ func testPathCollisions(t *testing.T, s handler.DocumentStore) {
 	}
 
 	// A document cannot be created beneath an existing document.
-	if _, err := s.WriteVersion("/col/doc.md/child.md", 0, []byte("x"), nil); err == nil {
-		t.Error("want error writing document under existing document /col/doc.md")
+	if _, err := s.WriteVersion("/col/doc.md/child.md", 0, []byte("x"), nil); !errors.Is(err, store.ErrPathCollision) {
+		t.Errorf("writing document under existing document /col/doc.md: err = %v, want ErrPathCollision", err)
 	}
 	if _, err := s.Get("/col/doc.md/child.md", 0); err == nil {
 		t.Error("collision write left fetchable document under /col/doc.md")

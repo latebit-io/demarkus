@@ -34,6 +34,7 @@ type CrawlOutcome struct {
 	Admitted     int
 	PeakFrontier int
 	PeakWorkers  int
+	RejectedRels int // rel- metadata values that produced no edge
 	cause        error
 }
 
@@ -80,6 +81,9 @@ func (o *CrawlOutcome) Summary() string {
 	}
 	if o.Failures > 0 {
 		s += fmt.Sprintf("; failed: %d", o.Failures)
+	}
+	if o.RejectedRels > 0 {
+		s += fmt.Sprintf("; rejected relations: %d", o.RejectedRels)
 	}
 	return s
 }

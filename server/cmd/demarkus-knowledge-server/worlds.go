@@ -53,6 +53,8 @@ type worldManager struct {
 	// needsPublish marks a failed router/token publish so the retry
 	// loop re-attempts it without waiting for another config event.
 	needsPublish bool
+	// beforeRetire is a test hook, called before a retired runtime closes.
+	beforeRetire func(name string)
 	// resilient marks dynamic deployments (worldsFile set): a failed
 	// world open degrades to pending instead of failing the process.
 	resilient bool
@@ -126,6 +128,7 @@ func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
 		want[desired[index].Name] = &desired[index]
 	}
 
+	retired := make(map[string]*worldEntry)
 	for name, entry := range m.entries {
 		target, keep := want[name]
 		if keep && reflect.DeepEqual(entry.config, *target) {
@@ -136,7 +139,10 @@ func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
 		} else {
 			m.logger.Info("world removed", "world", name)
 		}
-		m.closeEntryLocked(name, entry)
+		// Closed after the publish below, so the router never points at a
+		// closed runtime.
+		retired[name] = entry
+		delete(m.entries, name)
 	}
 	for name := range m.pending {
 		if _, keep := want[name]; !keep {
@@ -171,6 +177,9 @@ func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
 		m.logger.Error("world publish failed; will retry", "error", publishErr)
 		m.needsPublish = true
 		publishErr = nil
+	}
+	for name, entry := range retired {
+		m.retireEntryLocked(name, entry)
 	}
 	return errors.Join(firstErr, publishErr)
 }
@@ -320,11 +329,19 @@ func (m *worldManager) releaseTokenWatchLocked(tokensFile string) {
 }
 
 func (m *worldManager) closeEntryLocked(name string, entry *worldEntry) {
+	delete(m.entries, name)
+	m.retireEntryLocked(name, entry)
+}
+
+// retireEntryLocked closes an entry already removed from m.entries.
+func (m *worldManager) retireEntryLocked(name string, entry *worldEntry) {
+	if m.beforeRetire != nil {
+		m.beforeRetire(name)
+	}
 	m.releaseTokenWatchLocked(entry.config.Auth.TokensFile)
 	if err := entry.runtime.Close(); err != nil {
 		m.logger.Warn("world runtime close failed", "world", name, "error", err)
 	}
-	delete(m.entries, name)
 }
 
 // publishLocked rebuilds the router and token-coordinator views from

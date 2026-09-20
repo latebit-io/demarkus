@@ -3,11 +3,13 @@ package listwalk
 import (
 	"errors"
 	"fmt"
-	"strconv"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -28,18 +30,22 @@ func (s *stubLister) ListWithOptions(_, dir, _ string, opts fetch.ListOptions) (
 	if !ok {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 	}
-	return listPage(body, true, ""), nil
+	return listPage(dir, body, ""), nil
 }
 
-func listPage(body string, complete bool, next string) fetch.Result {
-	meta := map[string]string{
-		"entries":  strconv.Itoa(len(links.Extract(body))),
-		"complete": strconv.FormatBool(complete),
+// listPage serves the server's own rendering of the named entries; body is
+// only a terse way to name them ("- [a.md](a.md)", a trailing slash for a directory).
+func listPage(dir, body, next string) fetch.Result {
+	dests := links.Extract(body)
+	entries := make([]listing.Entry, 0, len(dests))
+	for _, dest := range dests {
+		name, err := url.PathUnescape(dest)
+		if err != nil {
+			name = dest
+		}
+		entries = append(entries, listing.Entry{Name: strings.TrimSuffix(name, "/"), IsDir: strings.HasSuffix(name, "/")})
 	}
-	if next != "" {
-		meta["next-cursor"] = next
-	}
-	return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: body}}
+	return fetch.Result{Response: listing.RenderPage(dir, entries, next)}
 }
 
 func TestWalk(t *testing.T) {
@@ -61,8 +67,8 @@ func TestWalk(t *testing.T) {
 
 	t.Run("collects every page before completing directory", func(t *testing.T) {
 		l := &stubLister{pages: map[string]fetch.Result{
-			"/\x00":     listPage("- [a.md](a.md)\n- [b.md](b.md)\n", false, "next"),
-			"/\x00next": listPage("- [c.md](c.md)\n", true, ""),
+			"/\x00":     listPage("/", "- [a.md](a.md)\n- [b.md](b.md)\n", "next"),
+			"/\x00next": listPage("/", "- [c.md](c.md)\n", ""),
 		}}
 		var got []string
 		w := Walker{Client: l, Host: "h", Strict: true}
@@ -91,7 +97,7 @@ func TestWalk(t *testing.T) {
 
 	t.Run("page budget counts continuations", func(t *testing.T) {
 		l := &stubLister{pages: map[string]fetch.Result{
-			"/\x00": listPage("- [a.md](a.md)\n", false, "next"),
+			"/\x00": listPage("/", "- [a.md](a.md)\n", "next"),
 		}}
 		err := (&Walker{Client: l, Host: "h", MaxLists: 1}).Walk("/", func(string) error { return nil })
 		if !errors.Is(err, ErrListBudget) {
@@ -101,8 +107,8 @@ func TestWalk(t *testing.T) {
 
 	t.Run("rejects cross-page ordering drift", func(t *testing.T) {
 		l := &stubLister{pages: map[string]fetch.Result{
-			"/\x00":     listPage("- [b.md](b.md)\n", false, "next"),
-			"/\x00next": listPage("- [a.md](a.md)\n", true, ""),
+			"/\x00":     listPage("/", "- [b.md](b.md)\n", "next"),
+			"/\x00next": listPage("/", "- [a.md](a.md)\n", ""),
 		}}
 		if err := (&Walker{Client: l, Host: "h"}).Walk("/", func(string) error { return nil }); err == nil {
 			t.Fatal("ordering drift accepted")

@@ -47,7 +47,7 @@ func okfValidateMain(args []string) {
 	fs := flag.NewFlagSet("okf validate", flag.ExitOnError)
 	strict := fs.Bool("strict", false, "treat warnings as failures")
 	quiet := fs.Bool("quiet", false, "print only the summary line")
-	_ = fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
 	if fs.NArg() != 1 {
 		okfUsage()
 		os.Exit(2)
@@ -82,7 +82,7 @@ func okfImportMain(args []string) {
 	authToken := fs.String("auth", "", "auth token for publishing (env: DEMARKUS_AUTH)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	dryRun := fs.Bool("dry-run", false, "build and report the plan without publishing")
-	_ = fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
 	if fs.NArg() != 2 {
 		okfUsage()
 		os.Exit(2)
@@ -144,7 +144,7 @@ func okfExportMain(args []string) {
 	fs := flag.NewFlagSet("okf export", flag.ExitOnError)
 	authToken := fs.String("auth", "", "auth token for reads on private paths (env: DEMARKUS_AUTH)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
-	_ = fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
 	if fs.NArg() != 2 {
 		okfUsage()
 		os.Exit(2)

@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"maps"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/render"
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
@@ -79,12 +79,12 @@ type Stream interface {
 
 // HandleStream reads a request from the stream and writes a response.
 func (h *Handler) HandleStream(stream Stream) {
+	// The response is already written or failed; a close error changes nothing.
 	defer func() { _ = stream.Close() }()
 
 	req, err := protocol.ParseRequest(stream)
 	if err != nil {
-		h.logger().Error("parse request failed", "error", err)
-		h.writeError(stream, protocol.StatusServerError, "bad request")
+		h.writeParseError(stream, err)
 		return
 	}
 
@@ -159,8 +159,20 @@ func (h *Handler) HandleStream(stream Stream) {
 			h.handleAppend(stream, req)
 		}
 	default:
-		h.writeError(stream, protocol.StatusServerError, "unsupported verb: "+sanitize(req.Verb))
+		h.writeError(stream, protocol.StatusBadRequest, "unsupported verb: "+sanitize(req.Verb))
 	}
+}
+
+// writeParseError follows SPEC 7: a grammar error is the client's; a read
+// failure or a size limit is not.
+func (h *Handler) writeParseError(w io.Writer, err error) {
+	if errors.Is(err, protocol.ErrMalformedRequest) {
+		h.logger().Warn("malformed request", "error", err)
+		h.writeError(w, protocol.StatusBadRequest, "bad request")
+		return
+	}
+	h.logger().Error("parse request failed", "error", err)
+	h.writeError(w, protocol.StatusServerError, "bad request")
 }
 
 func isReadVerb(verb string) bool {
@@ -185,6 +197,23 @@ func parseVersionPath(reqPath string) (basePath string, version int) {
 		return reqPath, 0
 	}
 	return base, num
+}
+
+// versionedFetch is parseVersionPath minus directories: /api/v2 under a
+// directory /api is a path, since a directory can never hold versions.
+func (h *Handler) versionedFetch(reqPath string, reader storagebackend.Reader) (basePath string, version int) {
+	basePath, version = parseVersionPath(reqPath)
+	if version == 0 {
+		return reqPath, 0
+	}
+	isDir, err := reader.IsDir(basePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		h.logger().Warn("isdir check failed; treating as a version path", "path", sanitize(basePath), "error", err)
+	}
+	if isDir {
+		return reqPath, 0
+	}
+	return basePath, version
 }
 
 func (h *Handler) handleFetchByHash(w io.Writer, req protocol.Request, hash string, reader storagebackend.Reader) {
@@ -282,7 +311,7 @@ func (h *Handler) handleFetch(w io.Writer, req protocol.Request, reader storageb
 
 	// For versioned paths, check read auth on the base path so that
 	// /doc.md/v2 is gated by the same token as /doc.md.
-	if basePath, version := parseVersionPath(req.Path); version > 0 {
+	if basePath, version := h.versionedFetch(req.Path, reader); version > 0 {
 		authReq := req
 		authReq.Path = basePath
 		if !h.authorizeRead(w, authReq) {
@@ -422,19 +451,16 @@ func (h *Handler) handleList(w io.Writer, req protocol.Request, reader storageba
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
 	}
-	metadata := map[string]string{
-		"entries":  strconv.Itoa(page.EntryCount),
-		"complete": strconv.FormatBool(page.Complete),
-	}
+	nextCursor := ""
 	if !page.Complete {
-		nextCursor, err := encodeListCursor(reqPath, includeArchived, page.LastName)
+		nextCursor, err = encodeListCursor(reqPath, includeArchived, page.LastName)
 		if err != nil {
 			h.logger().Error("encode list cursor failed", "path", sanitize(reqPath), "error", err)
 			h.writeError(w, protocol.StatusServerError, "internal error")
 			return
 		}
-		metadata["next-cursor"] = nextCursor
 	}
+	metadata := render.ListMetadata(page.EntryCount, nextCursor)
 
 	resp := protocol.Response{
 		Status:   protocol.StatusOK,
@@ -480,30 +506,18 @@ func buildDirectoryIndex(reqPath string, entries []store.DirEntry) (body string,
 func buildLookupResults(query, scope string, rows []catalog.Result, mode catalog.Mode) string {
 	body := mode == catalog.MatchBody
 	var sb strings.Builder
-	sb.WriteString("\n# Lookup matches for \"" + escapeMD(query) + "\" in " + escapeMD(scope) + "\n\n")
-	if body {
-		sb.WriteString("| Path | Importance | Title | Tags | Snippet |\n")
-		sb.WriteString("|------|------------|-------|------|---------|\n")
-	} else {
-		sb.WriteString("| Path | Importance | Title | Tags |\n")
-		sb.WriteString("|------|------------|-------|------|\n")
-	}
+	sb.WriteString(render.LookupHeading(query, scope))
+	sb.WriteString(render.LookupHeader(body))
 	for i := range rows {
 		r := &rows[i]
-		// The anchor is appended after escaping: a slug cannot break the
-		// table, and clients fetch path#anchor next.
-		location := escapeMD(r.Path)
-		if r.Anchor != "" {
-			location += "#" + r.Anchor
-		}
-		sb.WriteString("| " + location +
-			" | " + strconv.FormatFloat(r.Importance, 'f', 2, 64) +
-			" | " + escapeMD(r.DisplayTitle()) +
-			" | " + escapeMD(strings.Join(r.Tags, ", ")))
-		if body {
-			sb.WriteString(" | " + escapeMD(r.Snippet))
-		}
-		sb.WriteString(" |\n")
+		sb.WriteString(render.LookupRowLine(&render.LookupRow{
+			Path:       r.Path,
+			Anchor:     r.Anchor,
+			Importance: r.Importance,
+			Title:      r.DisplayTitle(),
+			Tags:       r.Tags,
+			Snippet:    r.Snippet,
+		}, body))
 	}
 	return sb.String()
 }
@@ -629,11 +643,9 @@ func (h *Handler) handleVersions(w io.Writer, req protocol.Request, reader stora
 	}
 
 	var body strings.Builder
-	body.WriteString("\n# Version History: " + escapeMD(reqPath) + "\n\n")
+	body.WriteString(render.VersionsHeading(reqPath))
 	for _, v := range versions {
-		body.WriteString(fmt.Sprintf("- [v%d](%s/v%d) - %s\n",
-			v.Version, escapeURL(reqPath), v.Version,
-			v.Modified.Format(time.RFC3339)))
+		body.WriteString(render.VersionLine(reqPath, v.Version, v.Modified))
 	}
 
 	meta := map[string]string{
@@ -824,6 +836,11 @@ func (h *Handler) handleArchive(w io.Writer, req protocol.Request) {
 			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 			return
 		}
+		if r := classifyRefusal(err); r != nil {
+			h.logger().Info("archive rejected", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", r.reason)
+			h.writeError(w, r.status, r.message)
+			return
+		}
 		h.logger().Error("archive failed", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 		return
@@ -961,6 +978,29 @@ func (h *Handler) handlePublish(w io.Writer, req protocol.Request) {
 
 // writePublishError maps a WriteVersion failure onto the protocol response
 // for PUBLISH, covering every sentinel in the DocumentStore error contract.
+// refusal is a store error the client can act on, with its response.
+type refusal struct {
+	status  string
+	message string
+	reason  string
+}
+
+// classifyRefusal maps backend-neutral refusals; nil means a server fault.
+func classifyRefusal(err error) *refusal {
+	var rejection storagebackend.Rejection
+	switch {
+	case errors.Is(err, store.ErrPathCollision):
+		return &refusal{status: protocol.StatusBadRequest, message: err.Error(), reason: "path collision"}
+	case errors.Is(err, storagebackend.ErrQuota):
+		return &refusal{status: protocol.StatusNotPermitted, message: err.Error(), reason: "quota"}
+	case errors.As(err, &rejection):
+		return &refusal{status: protocol.StatusBadRequest, message: rejection.RejectionMessage(), reason: "rejected"}
+	case errors.Is(err, storagebackend.ErrRejected):
+		return &refusal{status: protocol.StatusBadRequest, message: err.Error(), reason: "rejected"}
+	}
+	return nil
+}
+
 func (h *Handler) writePublishError(w io.Writer, req protocol.Request, expectedVersion int, doc *store.Document, err error, tokenLabel string) {
 	switch {
 	case errors.Is(err, store.ErrConflict):
@@ -1000,6 +1040,10 @@ func (h *Handler) writePublishError(w io.Writer, req protocol.Request, expectedV
 	case errors.Is(err, store.ErrInvalidMeta):
 		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid metadata")
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
+	case classifyRefusal(err) != nil:
+		r := classifyRefusal(err)
+		h.logger().Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", r.reason)
+		h.writeError(w, r.status, r.message)
 	default:
 		h.logger().Error("publish failed", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
@@ -1123,6 +1167,10 @@ func (h *Handler) writeAppendError(w io.Writer, req protocol.Request, expectedVe
 	case errors.Is(err, store.ErrInvalidMeta):
 		h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "merged metadata invalid")
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
+	case classifyRefusal(err) != nil:
+		r := classifyRefusal(err)
+		h.logger().Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", r.reason)
+		h.writeError(w, r.status, r.message)
 	default:
 		h.logger().Error("append failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
@@ -1167,27 +1215,9 @@ func statusTitle(s string) string {
 	return strings.ToUpper(s[:1]) + strings.ReplaceAll(s[1:], "-", " ")
 }
 
-var mdReplacer = strings.NewReplacer(
-	`\`, `\\`,
-	`[`, `\[`, `]`, `\]`,
-	`(`, `\(`, `)`, `\)`,
-	`*`, `\*`, `_`, `\_`,
-	"`", "\\`", `~`, `\~`,
-	`#`, `\#`, `|`, `\|`,
-)
-
-func escapeMD(s string) string {
-	return mdReplacer.Replace(s)
-}
-
-func escapeURL(s string) string {
-	return url.PathEscape(s)
-}
-
-// logPrune audit-logs retention pruning performed by a write. Version
-// deletions must always be attributable, so this runs on every write outcome
-// that carries a prune result — including conflict paths, where the write
-// (and its prune) happened despite the conflict response.
+// logPrune audit-logs retention pruning. Deletions must be attributable, so
+// it runs on every write outcome carrying a prune result, conflict paths
+// included: there the write and its prune happened despite the response.
 func (h *Handler) logPrune(operation, reqPath, tokenLabel string, doc *store.Document) {
 	if doc == nil || doc.Prune == nil {
 		return

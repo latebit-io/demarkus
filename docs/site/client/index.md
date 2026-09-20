@@ -34,6 +34,8 @@ demarkus --insecure -X VERSIONS mark://localhost:6309/hello.md
 demarkus --insecure mark://localhost:6309/hello.md/v1
 ```
 
+The exit code is 0 for `ok`, `created` and `not-modified`. Any other status, a conflict or a missing document for example, still prints the response body and exits 1, so scripts can detect a refused request.
+
 ### Edit a document
 
 Opens a document in `$EDITOR` (falls back to `vi`), then publishes changes when you exit the editor. If the document doesn't exist, creates a new one. Empty documents are rejected.

@@ -440,7 +440,7 @@ func TestCrawlSkipsMalformedRelRefs(t *testing.T) {
 // that, so comparing raw strings would emit a bogus self-edge.
 func TestRelEdgesSkipsSelfReferenceAcrossURLForms(t *testing.T) {
 	for _, docURL := range []string{"mark://host:6309/doc.md", "mark://host/doc.md"} {
-		refs := RelEdges(docURL, map[string]string{"rel-supersedes": "/doc.md, /other.md"})
+		refs := RelEdges(docURL, map[string]string{"rel-supersedes": "/doc.md, /other.md"}).Refs
 		if len(refs) != 1 {
 			t.Fatalf("RelEdges(%q) = %+v, want only the non-self target", docURL, refs)
 		}

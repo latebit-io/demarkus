@@ -110,6 +110,10 @@ var ErrInvalidContent = fmt.Errorf("document body must be valid UTF-8 text")
 // APPEND's merge (SPEC 6.6) can breach caps both sides satisfied alone.
 var ErrInvalidMeta = fmt.Errorf("invalid publisher metadata")
 
+// ErrPathCollision means the path is taken by the other kind: a document where
+// a directory exists, or a document beneath another document.
+var ErrPathCollision = errors.New("path collision")
+
 // ErrIntegrity marks verified stored state whose bytes or hash chain are corrupt.
 var ErrIntegrity = fmt.Errorf("stored version integrity failure")
 
@@ -444,6 +448,9 @@ type PartialWalkError struct {
 }
 
 func (e *PartialWalkError) Error() string {
+	if len(e.Skipped) == 0 {
+		return fmt.Sprintf("walk skipped %d entries", e.Total)
+	}
 	return fmt.Sprintf("walk skipped %d entries (first %s: %v)", e.Total, e.Skipped[0].Path, e.Skipped[0].Err)
 }
 
@@ -1005,7 +1012,7 @@ func (s *Store) containWrite(reqPath, rel string) error {
 	if _, err := s.resolve(reqPath); err != nil {
 		if errors.Is(err, errUnderDocument) {
 			// Topology collision, same class as writing over a directory.
-			return fmt.Errorf("cannot publish %s: a document exists at an ancestor", reqPath)
+			return fmt.Errorf("cannot publish %s: a document exists at an ancestor: %w", reqPath, ErrPathCollision)
 		}
 		if errors.Is(err, os.ErrNotExist) {
 			return os.ErrNotExist
@@ -1325,6 +1332,74 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	return s.write(reqPath, content, meta)
 }
 
+// syncFile and syncDir are the durability calls; tests replace them.
+var (
+	syncFile = (*os.File).Sync
+	syncDir  = syncDirectory
+)
+
+func syncDirectory(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open directory %s: %w", dir, err)
+	}
+	if err := d.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("sync directory %s: %w", dir, err), d.Close())
+	}
+	if err := d.Close(); err != nil {
+		return fmt.Errorf("close directory %s: %w", dir, err)
+	}
+	return nil
+}
+
+// createVersionFile writes and syncs a new version. O_EXCL is the immutability
+// guard: an existing file fails the create instead of racing a stat.
+func createVersionFile(vFile string, stored []byte, version int) error {
+	f, err := os.OpenFile(vFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("version %d: %w", version, ErrVersionExists)
+		}
+		return fmt.Errorf("create version file: %w", err)
+	}
+	if _, err := f.Write(stored); err != nil {
+		return errors.Join(fmt.Errorf("write version file: %w", err), f.Close(), removeIfPresent(vFile))
+	}
+	if err := syncFile(f); err != nil {
+		return errors.Join(fmt.Errorf("sync version file: %w", err), f.Close(), removeIfPresent(vFile))
+	}
+	if err := f.Close(); err != nil {
+		return errors.Join(fmt.Errorf("close version file: %w", err), removeIfPresent(vFile))
+	}
+	if err := syncDir(filepath.Dir(vFile)); err != nil {
+		return errors.Join(err, removeIfPresent(vFile))
+	}
+	return nil
+}
+
+// swapCurrent points the current file at relTarget by renaming a temp symlink
+// over it, so readers never see it missing. Relative, so the root can move.
+func swapCurrent(currentFile, relTarget string) error {
+	tmpLink := currentFile + ".tmp"
+	if err := removeIfPresent(tmpLink); err != nil {
+		return fmt.Errorf("clear stale temp link: %w", err)
+	}
+	if err := os.Symlink(relTarget, tmpLink); err != nil {
+		return fmt.Errorf("symlink current file: %w", err)
+	}
+	if err := os.Rename(tmpLink, currentFile); err != nil {
+		return errors.Join(fmt.Errorf("rename current file: %w", err), removeIfPresent(tmpLink))
+	}
+	return syncDir(filepath.Dir(currentFile))
+}
+
+func removeIfPresent(name string) error {
+	if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", name, err)
+	}
+	return nil
+}
+
 // write is the validated core shared by Write and WriteVersion.
 func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*Document, error) {
 	cleaned, err := RelPath(reqPath)
@@ -1357,7 +1432,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 		// Reject the document/directory collision before any version file is
 		// written; failing later on the current-pointer rename would leave a
 		// dangling version file behind.
-		return nil, fmt.Errorf("cannot publish %s: a directory exists at this path", reqPath)
+		return nil, fmt.Errorf("cannot publish %s: a directory exists at this path: %w", reqPath, ErrPathCollision)
 	} else {
 		current, err := s.CurrentVersionResult(reqPath)
 		if err != nil {
@@ -1393,38 +1468,11 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 		return nil, ErrSizeLimit
 	}
 
-	// Immutability guard + atomic write: O_CREATE|O_EXCL fails if the file
-	// already exists, preventing TOCTOU races between a stat check and rename.
-	f, err := os.OpenFile(vFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		if os.IsExist(err) {
-			return nil, fmt.Errorf("version %d: %w", next, ErrVersionExists)
-		}
-		return nil, fmt.Errorf("create version file: %w", err)
+	if err := createVersionFile(vFile, stored, next); err != nil {
+		return nil, err
 	}
-	if _, err := f.Write(stored); err != nil {
-		_ = f.Close()
-		_ = os.Remove(vFile)
-		return nil, fmt.Errorf("write version file: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(vFile)
-		return nil, fmt.Errorf("close version file: %w", err)
-	}
-
-	// Atomically update the current file to point at the new version.
-	// Create a temp symlink then rename over the current path so readers
-	// never see a missing file. Use a relative target so the content
-	// directory can be relocated without breaking links.
-	relTarget := newVersionSymlinkTarget(base, next)
-	tmpLink := currentFile + ".tmp"
-	_ = os.Remove(tmpLink) // clean up any stale temp link
-	if err := os.Symlink(relTarget, tmpLink); err != nil {
-		return nil, fmt.Errorf("symlink current file: %w", err)
-	}
-	if err := os.Rename(tmpLink, currentFile); err != nil {
-		_ = os.Remove(tmpLink)
-		return nil, fmt.Errorf("rename current file: %w", err)
+	if err := swapCurrent(currentFile, newVersionSymlinkTarget(base, next)); err != nil {
+		return nil, err
 	}
 
 	info, err := os.Stat(vFile)
@@ -1507,7 +1555,7 @@ func (s *Store) pruneVersions(versionsDir, base string, current, keep int) *Prun
 		return nil
 	}
 	relDocDir, err := filepath.Rel(s.root, filepath.Join(versionsDir, base))
-	if err != nil || strings.HasPrefix(relDocDir, "..") {
+	if err != nil || !filepath.IsLocal(relDocDir) {
 		return &PruneResult{Err: fmt.Errorf("prune: doc dir escapes store root: %q", relDocDir)}
 	}
 	rootFS, err := os.OpenRoot(s.root)

@@ -978,26 +978,32 @@ var errIndexTruncated = errors.New("document limit reached, index is truncated")
 // checkManifests verifies agent manifests on source and target servers.
 // Returns warnings, a tool error result (if blocked), or nil to proceed.
 func (h *handler) checkManifests(sourceHost, targetHost string, dryRun, force bool) (warnings []string, block *mcp.CallToolResult) {
-	// Check source manifest (warn only).
+	// An unread manifest is not a missing one: the source only warns, and
+	// force overrides a missing target manifest, never an unreachable target.
 	srcManifest, err := h.client.Fetch(sourceHost, protocol.WellKnownManifestPath, "")
-	if err != nil || srcManifest.Response.Status != protocol.StatusOK {
+	switch {
+	case err != nil:
+		warnings = append(warnings, fmt.Sprintf("warning: could not check source agent manifest: %v", err))
+	case srcManifest.Response.Status != protocol.StatusOK:
 		warnings = append(warnings, "warning: source server has no agent manifest")
 	}
-
-	// Check target manifest (block unless force or dry run).
-	if !dryRun {
-		tgtManifest, err := h.client.Fetch(targetHost, protocol.WellKnownManifestPath, "")
-		if err != nil || tgtManifest.Response.Status != protocol.StatusOK {
-			if !force {
-				return warnings, mcp.NewToolResultError(
-					"target server has no agent manifest; cannot verify it accepts index publications. " +
-						"Use force=true to override, or publish a manifest at /.well-known/agent-manifest.md on the target.",
-				)
-			}
-			warnings = append(warnings, "warning: target server has no agent manifest (force=true override)")
-		}
+	if dryRun {
+		return warnings, nil
 	}
 
+	tgtManifest, err := h.client.Fetch(targetHost, protocol.WellKnownManifestPath, "")
+	if err != nil {
+		return warnings, mcp.NewToolResultError(fmt.Sprintf("could not check target agent manifest: %v", err))
+	}
+	if tgtManifest.Response.Status != protocol.StatusOK {
+		if !force {
+			return warnings, mcp.NewToolResultError(
+				"target server has no agent manifest; cannot verify it accepts index publications. " +
+					"Use force=true to override, or publish a manifest at /.well-known/agent-manifest.md on the target.",
+			)
+		}
+		warnings = append(warnings, "warning: target server has no agent manifest (force=true override)")
+	}
 	return warnings, nil
 }
 

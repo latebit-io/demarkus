@@ -421,6 +421,7 @@ func (c *Client) cachedRequestMetaContext(ctx context.Context, host, path, token
 
 		var cached *cache.Entry
 		if useCache {
+			// An unreadable cache entry is a miss: the request goes out unconditional.
 			cached, _ = c.opts.Cache.Get(host, path, verb)
 			if cached != nil {
 				if etag := cached.Response.Metadata["etag"]; etag != "" {

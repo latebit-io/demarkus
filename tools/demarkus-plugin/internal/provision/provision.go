@@ -697,7 +697,9 @@ func ensureTokenEntry(root, tokensTOML string) error {
 		// Reassert 0600 on the idempotent path: an existing token left
 		// world/group-readable (e.g. from an older install) would otherwise stay
 		// exposed forever since we return without regenerating.
-		_ = os.Chmod(tokenFile, 0o600)
+		if err := os.Chmod(tokenFile, 0o600); err != nil {
+			return fmt.Errorf("restrict token file %s: %w", tokenFile, err)
+		}
 		return nil
 	}
 
@@ -844,7 +846,7 @@ func portIsFree(port int) bool {
 		}
 		return true // permissive on any other probe failure
 	}
-	_ = conn.Close()
+	_ = conn.Close() // probe connection; the dial result is the answer
 	return true
 }
 
@@ -925,6 +927,7 @@ func tokensFromArgv(argv []string) string {
 // pidOfServerAtRoot returns the PID of a demarkus-server whose -root flag (or
 // DEMARKUS_ROOT env) equals root (literal match), or 0 when none match.
 func pidOfServerAtRoot(root string) int {
+	// For callers that treat "could not look" as "none"; others use the probed form.
 	pid, _ := pidOfServerAtRootProbed(root)
 	return pid
 }
@@ -1025,6 +1028,7 @@ func findRunningDemarkus() (string, bool) {
 		port := portOfServer(args, pid)
 		root := flagValue(args, rootFlagRe)
 		if root == "" {
+			// An unreadable environment lists as "(unknown)" below.
 			root, _ = procEnv(pid, "DEMARKUS_ROOT")
 		}
 		if root == "" {

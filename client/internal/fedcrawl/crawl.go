@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 
 	"slices"
@@ -593,6 +594,9 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 func (c *Crawler) recordEdges(host, docPath, body string, meta map[string]string) []graph.Edge {
 	url := links.NodeURL(host, docPath)
 	extracted := graph.ExtractDocumentEdges(url, body, meta)
+	for _, rejected := range extracted.RejectedRels {
+		slog.Warn("relation metadata skipped", "doc", url, "key", rejected.Key, "value", rejected.Value, "reason", rejected.Reason)
+	}
 	edges := make([]graph.Edge, 0, len(extracted.Edges))
 	var linkCount int
 	for _, edge := range extracted.Edges {

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -171,17 +172,7 @@ func requestMain() {
 		log.Fatal(err)
 	}
 
-	if *verbose {
-		fmt.Fprintf(os.Stderr, "[%s]", result.Response.Status)
-		for k, v := range result.Response.Metadata {
-			fmt.Fprintf(os.Stderr, " %s=%s", k, v)
-		}
-		if result.FromCache {
-			fmt.Fprint(os.Stderr, " (cached)")
-		}
-		fmt.Fprintln(os.Stderr)
-	}
-	fmt.Print(result.Response.Body)
+	printResult(result, *verbose)
 }
 
 func editMain(args []string) {
@@ -196,7 +187,7 @@ func editMain(args []string) {
 		fmt.Fprintf(os.Stderr, "Creates a new document if it doesn't exist.\n\n")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
 
 	if fs.NArg() < 1 {
 		fs.Usage()
@@ -251,6 +242,7 @@ func editMain(args []string) {
 	if err != nil {
 		log.Fatalf("create temp file: %v", err)
 	}
+	// Best effort: a leftover temp file holds only what the user just saw.
 	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	if _, err := tmpFile.WriteString(original); err != nil {
@@ -303,13 +295,12 @@ func editMain(args []string) {
 			os.Exit(1)
 		}
 		conflictFile := f.Name()
+		// A failed close can lose buffered bytes, so it counts as a failed save.
 		_, writeErr = f.WriteString(newBody)
-		if writeErr != nil {
-			_ = f.Close()
+		if writeErr = errors.Join(writeErr, f.Close()); writeErr != nil {
 			fmt.Fprintf(os.Stderr, "failed to save edits: %v\n", writeErr)
 			os.Exit(1)
 		}
-		_ = f.Close()
 		serverVersion := result.Response.Metadata["server-version"]
 		fmt.Fprintf(os.Stderr, "Conflict: document updated to version %s since you fetched version %d.\n", serverVersion, fetchedVersion)
 		fmt.Fprintf(os.Stderr, "Your edits saved to %s\n", conflictFile)
@@ -344,7 +335,7 @@ func graphMain(args []string) {
 		fmt.Fprintf(os.Stderr, "       demarkus graph export [-o file.md]\n\n")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
 
 	if fs.NArg() < 1 {
 		fs.Usage()
@@ -413,7 +404,7 @@ func graphExportMain(args []string) {
 		fmt.Fprintf(os.Stderr, "usage: demarkus graph export [-o file.md]\n\nExport the stored graph as a publishable markdown document.\n\n")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
 	if fs.NArg() != 0 {
 		fs.Usage()
 		os.Exit(2)
@@ -444,7 +435,7 @@ func infoMain(args []string) {
 		fmt.Fprintf(os.Stderr, "Fetch the agent manifest from a Mark Protocol server.\n\n")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
 
 	if fs.NArg() < 1 {
 		fs.Usage()
@@ -576,7 +567,7 @@ func bookmarkMain(args []string) {
 	case "add":
 		fs := flag.NewFlagSet("bookmark add", flag.ExitOnError)
 		insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
-		_ = fs.Parse(args[1:])
+		_ = fs.Parse(args[1:]) // ExitOnError: Parse exits, never returns an error
 		if fs.NArg() < 1 {
 			log.Fatal("usage: demarkus bookmark add [-insecure] mark://host:port/path")
 		}
@@ -712,7 +703,7 @@ func lookupMain(args []string) {
 		fmt.Fprintf(os.Stderr, "matches section text; a server without body match answers from the catalog.\n\n")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
 
 	if fs.NArg() < 1 {
 		fs.Usage()
@@ -741,14 +732,41 @@ func lookupMain(args []string) {
 		fmt.Fprintln(os.Stderr, "note: "+fetch.CatalogFallbackNote)
 	}
 
-	if *verbose {
+	printResult(result, *verbose)
+}
+
+// exitCodeForStatus lets scripts detect a refused request: the body of a
+// conflict or not-found is still printed, but the exit is non zero.
+func exitCodeForStatus(status string) int {
+	switch status {
+	case protocol.StatusOK, protocol.StatusCreated, protocol.StatusNotModified:
+		return 0
+	}
+	return 1
+}
+
+// printResult writes the body, the status line when verbose, and exits non
+// zero for a refused request.
+func printResult(result fetch.Result, verbose bool) {
+	if verbose {
 		fmt.Fprintf(os.Stderr, "[%s]", result.Response.Status)
 		for k, v := range result.Response.Metadata {
 			fmt.Fprintf(os.Stderr, " %s=%s", k, v)
 		}
+		if result.FromCache {
+			fmt.Fprint(os.Stderr, " (cached)")
+		}
 		fmt.Fprintln(os.Stderr)
 	}
 	fmt.Print(result.Response.Body)
+	exitOnFailedStatus(result.Response.Status)
+}
+
+func exitOnFailedStatus(status string) {
+	if code := exitCodeForStatus(status); code != 0 {
+		fmt.Fprintf(os.Stderr, "demarkus: %s\n", status)
+		os.Exit(code)
+	}
 }
 
 // metaFlag collects repeatable `-meta key=value` publisher-metadata pairs.

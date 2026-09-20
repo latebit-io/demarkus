@@ -26,7 +26,7 @@ func (store *Store) runMutation(build mutationBuilder) (MutationResult, error) {
 	case <-store.commitToken:
 		defer func() { store.commitToken <- struct{}{} }()
 	case <-ctx.Done():
-		return MutationResult{}, ctx.Err()
+		return MutationResult{}, fmt.Errorf("wait for commit token: %w", ctx.Err())
 	}
 
 	operationID, err := store.newOperationID()

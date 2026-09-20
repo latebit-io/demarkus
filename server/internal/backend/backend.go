@@ -2,11 +2,26 @@
 package backend
 
 import (
+	"errors"
 	"time"
 
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
+
+// Refusals a backend reports without the handler knowing the backend.
+var (
+	// ErrQuota means the write would pass a configured limit.
+	ErrQuota = errors.New("quota exceeded")
+	// ErrRejected means the store refused a write the publisher can correct.
+	ErrRejected = errors.New("write rejected")
+)
+
+// Rejection is an ErrRejected that carries its reason for the response body.
+type Rejection interface {
+	error
+	RejectionMessage() string
+}
 
 // Reader exposes one committed document-store snapshot.
 type Reader interface {

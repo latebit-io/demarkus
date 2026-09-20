@@ -4,7 +4,11 @@
 // table uses this one copy.
 package lookuptable
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/latebit-io/demarkus/protocol/render"
+)
 
 // Columns of the catalog table; body mode appends Snippet.
 const (
@@ -16,10 +20,7 @@ var headerCells = []string{"Path", "Importance", "Title", "Tags", "Snippet"}
 
 // Header renders the header and separator rows, body mode adding Snippet.
 func Header(body bool) string {
-	if body {
-		return "| Path | Importance | Title | Tags | Snippet |\n|------|------------|-------|------|---------|\n"
-	}
-	return "| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n"
+	return render.LookupHeader(body)
 }
 
 // SplitRow splits a table line into its trimmed cells. ok is false when the
@@ -44,7 +45,7 @@ func SplitRow(line string) (cells []string, ok bool) {
 
 // JoinRow renders cells as one table line in the wire's spacing.
 func JoinRow(cells []string) string {
-	return "| " + strings.Join(cells, " | ") + " |"
+	return render.JoinRow(cells)
 }
 
 func validWidth(cells []string) bool {
@@ -106,31 +107,11 @@ func charEscaped(s string, at int) bool {
 
 // Unescape reverses the server's markdown cell escaping.
 func Unescape(s string) string {
-	if !strings.Contains(s, `\`) {
-		return s
-	}
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+1 < len(s) && strings.ContainsRune(`\\[]()*_`+"`~#|", rune(s[i+1])) {
-			i++
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
+	return render.Unescape(s)
 }
-
-var cellEscaper = strings.NewReplacer(
-	"\r\n", " ", "\r", " ", "\n", " ",
-	`\`, `\\`,
-	`[`, `\[`, `]`, `\]`,
-	`(`, `\(`, `)`, `\)`,
-	`*`, `\*`, `_`, `\_`,
-	"`", "\\`", `~`, `\~`,
-	`#`, `\#`, `|`, `\|`,
-)
 
 // Escape applies the server's markdown cell escaping; a line break of any
 // form becomes one space.
 func Escape(s string) string {
-	return cellEscaper.Replace(s)
+	return render.EscapeCell(s)
 }

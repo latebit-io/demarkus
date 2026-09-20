@@ -56,6 +56,7 @@ jobs:
               - 'install-readonly.sh'
               - 'scripts/test-install-checksum.sh'
               - 'scripts/test-install-renewal.sh'
+              - 'scripts/test-install-restart.sh'
               - 'scripts/test-install-stack-tokens.sh'
               - 'scripts/test-install-update-stack.sh'
             agent_plugins:
@@ -86,6 +87,8 @@ jobs:
         run: bash scripts/check-shell.sh
       - name: Plugin copies
         run: bash scripts/check-identical-copies.sh
+      - name: Session start hooks report failures
+        run: bash scripts/test-session-start-hooks.sh
       - name: Comment length
         run: |
           git branch -f main origin/main 2>/dev/null || true
@@ -266,6 +269,8 @@ jobs:
         run: bash scripts/test-install-update-stack.sh
       - name: Test checksum verification fails closed
         run: bash scripts/test-install-checksum.sh
+      - name: Test update stops and verifies only the installed server
+        run: bash scripts/test-install-restart.sh
 
   test-agent-plugins:
     needs: detect-changes

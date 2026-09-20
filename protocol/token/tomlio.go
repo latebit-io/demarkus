@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -26,6 +27,10 @@ var ErrLabelExists = errors.New("label already exists")
 // is nil. Returning rather than panicking lets the broker recover from a
 // programming error without crashing its issuance loop.
 var ErrNilEntry = errors.New("entry is required")
+
+// ErrEntryUnencodable means the entry cannot be written as TOML that reads
+// back unchanged, a control character in the label for one.
+var ErrEntryUnencodable = errors.New("entry cannot be encoded as TOML")
 
 // ReadFile decodes a tokens.toml from disk. A non-existent file is reported
 // as os.ErrNotExist via errors.Is; callers can treat that as an empty File.
@@ -64,27 +69,50 @@ func AppendEntry(path, label string, entry *Entry) error {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("read tokens file %q: %w", path, err)
 		}
-		if len(existing) > 0 {
-			var current File
-			if err := toml.Unmarshal(existing, &current); err != nil {
-				return fmt.Errorf("decode tokens file %q: %w", path, err)
-			}
-			if _, present := current.Tokens[label]; present {
-				return fmt.Errorf("%s: %w", label, ErrLabelExists)
-			}
+		out, err := appendChecked(existing, label, entry)
+		if err != nil {
+			return fmt.Errorf("tokens file %q: %w", path, err)
 		}
 		return writeAtomic(path, func(w io.Writer) error {
-			if len(existing) > 0 {
-				if _, err := w.Write(existing); err != nil {
-					return fmt.Errorf("copy existing tokens file content: %w", err)
-				}
-			}
-			if _, err := io.WriteString(w, FormatEntry(label, entry)); err != nil {
-				return fmt.Errorf("write new token entry: %w", err)
+			if _, err := w.Write(out); err != nil {
+				return fmt.Errorf("write tokens file content: %w", err)
 			}
 			return nil
 		})
 	})
+}
+
+// appendChecked returns existing plus the formatted entry, and fails closed
+// unless the result parses and reads back the same entry under the same label.
+func appendChecked(existing []byte, label string, entry *Entry) ([]byte, error) {
+	if len(existing) > 0 {
+		var current File
+		if err := toml.Unmarshal(existing, &current); err != nil {
+			return nil, fmt.Errorf("decode tokens bytes: %w", err)
+		}
+		if _, present := current.Tokens[label]; present {
+			return nil, fmt.Errorf("%s: %w", label, ErrLabelExists)
+		}
+	}
+	formatted := FormatEntry(label, entry)
+	out := make([]byte, 0, len(existing)+len(formatted))
+	out = append(out, existing...)
+	out = append(out, formatted...)
+
+	var reread File
+	if err := toml.Unmarshal(out, &reread); err != nil {
+		return nil, fmt.Errorf("%q: %w: %v", label, ErrEntryUnencodable, err) //nolint:errorlint // parser detail only
+	}
+	got, ok := reread.Tokens[label]
+	if !ok || !sameEntry(&got, entry) {
+		return nil, fmt.Errorf("%q: %w: does not read back as written", label, ErrEntryUnencodable)
+	}
+	return out, nil
+}
+
+func sameEntry(a, b *Entry) bool {
+	return a.Hash == b.Hash && a.Expires == b.Expires &&
+		slices.Equal(a.Paths, b.Paths) && slices.Equal(a.Operations, b.Operations)
 }
 
 // ParseBytes decodes tokens.toml bytes into a File. An empty input
@@ -115,20 +143,7 @@ func AppendBytes(existing []byte, label string, entry *Entry) ([]byte, error) {
 	if entry == nil {
 		return nil, ErrNilEntry
 	}
-	if len(existing) > 0 {
-		var current File
-		if err := toml.Unmarshal(existing, &current); err != nil {
-			return nil, fmt.Errorf("decode tokens bytes: %w", err)
-		}
-		if _, present := current.Tokens[label]; present {
-			return nil, fmt.Errorf("%s: %w", label, ErrLabelExists)
-		}
-	}
-	formatted := FormatEntry(label, entry)
-	out := make([]byte, 0, len(existing)+len(formatted))
-	out = append(out, existing...)
-	out = append(out, formatted...)
-	return out, nil
+	return appendChecked(existing, label, entry)
 }
 
 // RemoveBytes returns tokens.toml bytes with the given label removed. If

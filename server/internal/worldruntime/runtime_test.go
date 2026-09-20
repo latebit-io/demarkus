@@ -52,6 +52,22 @@ func TestRuntimeServesHealthAndClosesBackendOnce(t *testing.T) {
 	}
 }
 
+// A client that stops reading must not hold the read view and a slot forever.
+func TestRuntimeBoundsResponseWrite(t *testing.T) {
+	timeout := 5 * time.Second
+	runtime := newTestRuntime(t, &Config{RequestTimeout: timeout})
+	stream := newTestStream("FETCH /health\n")
+	before := time.Now()
+	runtime.ServeStream(context.Background(), testAddr("127.0.0.1:1234"), stream)
+
+	stream.mu.Lock()
+	deadline := stream.writeDeadline
+	stream.mu.Unlock()
+	if deadline.Before(before.Add(timeout)) || deadline.After(time.Now().Add(timeout)) {
+		t.Errorf("write deadline = %v, want about %v from the request start", deadline, timeout)
+	}
+}
+
 func TestRuntimeRejectsStreamsAfterClose(t *testing.T) {
 	runtime := newTestRuntime(t, &Config{})
 	if err := runtime.Close(); err != nil {
@@ -308,9 +324,10 @@ func writeFile(t *testing.T, path, content string) {
 
 type testStream struct {
 	io.Reader
-	output bytes.Buffer
-	mu     sync.Mutex
-	closed bool
+	output        bytes.Buffer
+	mu            sync.Mutex
+	closed        bool
+	writeDeadline time.Time
 }
 
 func newTestStream(request string) *testStream {
@@ -319,6 +336,12 @@ func newTestStream(request string) *testStream {
 
 func (s *testStream) Write(p []byte) (int, error)     { return s.output.Write(p) }
 func (s *testStream) SetReadDeadline(time.Time) error { return nil }
+func (s *testStream) SetWriteDeadline(deadline time.Time) error {
+	s.mu.Lock()
+	s.writeDeadline = deadline
+	s.mu.Unlock()
+	return nil
+}
 func (s *testStream) Close() error {
 	s.mu.Lock()
 	s.closed = true
