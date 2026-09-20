@@ -49,6 +49,10 @@ if [ "$(uname -s)" = "Linux" ]; then
   by_path=$!
   "$TMP/plugin/demarkus-server" 60 &
   plugin=$!
+  # An update replaces the binary under a running server; /proc then reports
+  # the path with " (deleted)" and the link dangles. It must still be found.
+  sleep 1
+  rm "$INSTALL_DIR/demarkus-server"
 else
   # macOS kills a copied system binary, so argv[0] is faked with exec and the
   # executable lookup is stubbed to say what a real copy would report.

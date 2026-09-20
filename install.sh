@@ -907,7 +907,8 @@ ensure_self_dial() {
 # Linux reads /proc; macOS ps prints the full path as the command name.
 server_exe_path() {
   local pid="$1" exe=""
-  if [ -e "/proc/${pid}/exe" ]; then
+  # -L, not -e: the link of a replaced or unlinked binary dangles.
+  if [ -L "/proc/${pid}/exe" ]; then
     exe=$($SUDO readlink "/proc/${pid}/exe" 2>/dev/null || true)
     exe="${exe% (deleted)}"
   else

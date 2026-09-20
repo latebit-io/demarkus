@@ -1353,8 +1353,8 @@ func syncDirectory(dir string) error {
 }
 
 // mkdirAllDurable is MkdirAll plus a sync of every directory that gained an
-// entry, so a crash cannot drop the new tree while the pointer survives.
-// A path that already exists costs one Lstat.
+// entry, so a crash cannot drop the new tree while the pointer survives. A
+// failed sync undoes the creation. An existing path costs one Lstat.
 func mkdirAllDurable(dir string) error {
 	var created []string
 	for p := dir; ; p = filepath.Dir(p) {
@@ -1375,10 +1375,23 @@ func mkdirAllDurable(dir string) error {
 	// Shallowest first: each created directory is an entry in its parent.
 	for _, p := range slices.Backward(created) {
 		if err := syncDir(filepath.Dir(p)); err != nil {
-			return err
+			return errors.Join(err, removeCreated(created))
 		}
 	}
 	return nil
+}
+
+// removeCreated undoes a directory creation whose sync failed, deepest first,
+// so a retry creates and syncs them again instead of finding them present.
+// A directory another writer already filled stays and is reported.
+func removeCreated(created []string) error {
+	var errs []error
+	for _, p := range created {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("undo unsynced directory %s: %w", p, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // createVersionFile writes and syncs a new version. O_EXCL is the immutability

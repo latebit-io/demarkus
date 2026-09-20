@@ -139,3 +139,41 @@ func TestWriteSyncsParentsOfCreatedDirectories(t *testing.T) {
 		t.Errorf("steady state write synced ancestors: %v", dirs)
 	}
 }
+
+// A failed parent sync must not be forgotten: the retry has to sync every
+// directory the first attempt created, not find them present and skip.
+func TestWriteRetryRedoesFailedDirectorySyncs(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	failing := true
+	var dirs []string
+	syncDir = func(dir string) error {
+		if failing && dir == filepath.Join(root, "notes") {
+			return errors.New("disk gone")
+		}
+		dirs = append(dirs, dir)
+		return syncDirectory(dir)
+	}
+	t.Cleanup(func() { syncDir = syncDirectory })
+
+	if _, err := s.Write("/notes/sub/a.md", []byte("# A\n"), nil); err == nil {
+		t.Fatal("write: want the sync error")
+	}
+
+	failing = false
+	dirs = nil
+	if _, err := s.Write("/notes/sub/a.md", []byte("# A\n"), nil); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	for _, want := range []string{
+		root,
+		filepath.Join(root, "notes"),
+		filepath.Join(root, "notes", "sub"),
+		filepath.Join(root, "notes", "sub", "versions"),
+	} {
+		if !slices.Contains(dirs, want) {
+			t.Errorf("retry did not sync %s; synced %v", want, dirs)
+		}
+	}
+}

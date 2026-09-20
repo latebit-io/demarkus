@@ -468,6 +468,23 @@ func TestWorldManagerKeepsRetiredRuntimeUntilPublishSucceeds(t *testing.T) {
 		t.Fatal("bob lost routing after a failed publish")
 	}
 
+	// An unreadable staged tokens file must block the publish: going live
+	// with the old snapshot would serve credentials the operator replaced.
+	if err := os.WriteFile(tokensB, []byte("not [valid toml"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.manager.retryPending()
+	h.manager.mu.Lock()
+	reloadErr := h.manager.reloadStagedTokensLocked()
+	stillNeeded, published := h.manager.needsPublish, h.manager.entries["bob"].published
+	h.manager.mu.Unlock()
+	if reloadErr == nil || !strings.Contains(reloadErr.Error(), "bob") {
+		t.Fatalf("staged reload error = %v, want one naming bob", reloadErr)
+	}
+	if !stillNeeded || published || len(retired) != 0 {
+		t.Fatalf("after a failed token reload: needsPublish=%v published=%v retired=%v", stillNeeded, published, retired)
+	}
+
 	// The collision is fixed; the retry publishes and only then retires.
 	if err := os.WriteFile(tokensB, nil, 0o600); err != nil {
 		t.Fatal(err)

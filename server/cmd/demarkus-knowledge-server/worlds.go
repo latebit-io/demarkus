@@ -420,7 +420,11 @@ func (m *worldManager) retryPending() {
 		recovered = true
 	}
 	if recovered {
-		m.reloadStagedTokensLocked()
+		if err := m.reloadStagedTokensLocked(); err != nil {
+			m.logger.Error("staged token reload failed; publish deferred", "error", err)
+			m.needsPublish = true
+			return
+		}
 		if err := m.publishLocked(); err != nil {
 			m.logger.Error("publish after world retry failed", "error", err)
 			m.needsPublish = true
@@ -430,18 +434,20 @@ func (m *worldManager) retryPending() {
 	}
 }
 
-// reloadStagedTokensLocked refreshes runtimes no publish has carried yet. The
-// coordinator reloads published worlds only, so a staged runtime would retry
-// with the token snapshot that made its publish fail.
-func (m *worldManager) reloadStagedTokensLocked() {
+// reloadStagedTokensLocked refreshes runtimes no publish has carried yet; the
+// coordinator reloads published worlds only. A failure blocks the publish:
+// going live with the old snapshot could serve replaced credentials.
+func (m *worldManager) reloadStagedTokensLocked() error {
+	var errs []error
 	for name, entry := range m.entries {
 		if entry.published {
 			continue
 		}
 		if err := entry.runtime.ReloadTokens(); err != nil {
-			m.logger.Warn("staged world token reload failed", "world", name, "error", err)
+			errs = append(errs, fmt.Errorf("world %q: %w", name, err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // Router exposes the dynamic router (selector + handshake hook source).
