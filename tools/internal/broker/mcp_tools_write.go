@@ -224,9 +224,10 @@ func mergeDocFromResult(r fetch.Result) (merge.Doc, error) {
 		return merge.Doc{}, err
 	}
 	return merge.Doc{
-		Status:  r.Response.Status,
-		Body:    r.Response.Body,
-		Version: v,
+		Status:   r.Response.Status,
+		Body:     r.Response.Body,
+		Version:  v,
+		Metadata: r.Response.Metadata,
 	}, nil
 }
 

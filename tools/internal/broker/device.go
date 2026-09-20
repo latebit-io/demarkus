@@ -120,7 +120,7 @@ func (s *Server) deviceAuthorize(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, errGrantStoreFull) {
 		s.log.WarnContext(r.Context(), "broker: device authorize refused", "err", err)
 		w.Header().Set("Retry-After", "60")
-		http.Error(w, "too many pending grants", http.StatusServiceUnavailable)
+		writeJSON(w, http.StatusServiceUnavailable, deviceTokenError{Error: "temporarily_unavailable"})
 		return
 	}
 	if err != nil {

@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -44,7 +45,7 @@ func TestSaveMcpPreservesModeAndSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read target: %v", err)
 	}
-	if !filepath.IsAbs(realPath) || len(data) < 20 {
+	if !bytes.Contains(data, []byte(`"x"`)) {
 		t.Errorf("target was not rewritten: %q", data)
 	}
 }

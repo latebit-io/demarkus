@@ -284,6 +284,7 @@ func TestCandidate(t *testing.T) {
 func TestCandidateReconcilesItsOwnWrite(t *testing.T) {
 	tests := []struct {
 		name       string
+		meta       map[string]string
 		publishErr error
 		publish    PublishResult
 		head       Doc
@@ -295,6 +296,9 @@ func TestCandidateReconcilesItsOwnWrite(t *testing.T) {
 		{name: "lost response, someone else wrote", publishErr: errors.New("timeout"), head: Doc{Status: statusOK, Body: "theirs", Version: 4}, wantErr: true},
 		{name: "conflict with our own attempt", publish: PublishResult{Status: statusConflict, ServerVersion: 4}, head: Doc{Status: statusOK, Body: "mine", Version: 4}, wantStatus: OutcomeOK},
 		{name: "conflict with another writer", publish: PublishResult{Status: statusConflict, ServerVersion: 4}, head: Doc{Status: statusOK, Body: "theirs", Version: 4}, wantStatus: OutcomeCandidate},
+		{name: "same body, our metadata landed", meta: map[string]string{"tags": "a,b"}, publishErr: errors.New("timeout"), head: Doc{Status: statusOK, Body: "mine", Version: 4, Metadata: map[string]string{"tags": "a,b", "version": "4"}}, wantStatus: OutcomeOK},
+		{name: "same body, someone else's metadata", meta: map[string]string{"tags": "a,b"}, publishErr: errors.New("timeout"), head: Doc{Status: statusOK, Body: "mine", Version: 4, Metadata: map[string]string{"tags": "z"}}, wantErr: true},
+		{name: "conflict, same body, someone else's metadata", meta: map[string]string{"tags": "a,b"}, publish: PublishResult{Status: statusConflict, ServerVersion: 4}, head: Doc{Status: statusOK, Body: "mine", Version: 4}, wantStatus: OutcomeCandidate},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -304,7 +308,7 @@ func TestCandidateReconcilesItsOwnWrite(t *testing.T) {
 				publishResults: []PublishResult{tt.publish},
 				publishErrs:    []error{tt.publishErr},
 			}
-			out, err := Candidate(c, "/doc.md", "mine", 3, nil)
+			out, err := Candidate(c, "/doc.md", "mine", 3, tt.meta)
 			if tt.wantErr != (err != nil) {
 				t.Fatalf("Candidate() error = %v, wantErr %v", err, tt.wantErr)
 			}

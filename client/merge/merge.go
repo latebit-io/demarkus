@@ -8,9 +8,10 @@ import (
 
 // Doc is a fetched document used as input to a merge.
 type Doc struct {
-	Status  string
-	Body    string
-	Version int
+	Status   string
+	Body     string
+	Version  int
+	Metadata map[string]string // response metadata, publisher keys included
 }
 
 // PublishResult is what a publish returns. Status is the raw protocol status
@@ -87,12 +88,33 @@ const statusOK = "ok"
 
 // landed reports whether the head is exactly what this call submitted: body at
 // expectedVersion+1. A failed probe reads as not landed; the caller's error stands.
-func landed(c Client, path, body string, expectedVersion int) (Doc, bool) {
+func landed(c Client, path string, w submitted) (Doc, bool) {
 	head, err := c.FetchCurrent(path)
 	if err != nil || head.Status != statusOK {
 		return Doc{}, false
 	}
-	return head, head.Version == expectedVersion+1 && head.Body == body
+	return head, w.matches(head)
+}
+
+// submitted is what one Candidate call tried to write.
+type submitted struct {
+	body            string
+	expectedVersion int
+	meta            map[string]string
+}
+
+// matches compares version, body and every submitted metadata key, so another
+// writer's identical body with different metadata is not mistaken for ours.
+func (w submitted) matches(head Doc) bool {
+	if head.Version != w.expectedVersion+1 || head.Body != w.body {
+		return false
+	}
+	for k, v := range w.meta {
+		if strings.TrimSpace(head.Metadata[k]) != strings.TrimSpace(v) {
+			return false
+		}
+	}
+	return true
 }
 
 // Candidate publishes body to path with optimistic concurrency. On a
@@ -115,10 +137,11 @@ func Candidate(c Client, path, body string, expectedVersion int, meta map[string
 		return Outcome{}, ErrInvalidExpectedVersion
 	}
 
+	ours := submitted{body: body, expectedVersion: expectedVersion, meta: meta}
 	pub, err := c.Publish(path, body, expectedVersion, meta)
 	if err != nil {
 		// The write may have landed with its response lost; never resend it.
-		if head, ok := landed(c, path, body, expectedVersion); ok {
+		if head, ok := landed(c, path, ours); ok {
 			return Outcome{Status: OutcomeOK, Publish: PublishResult{Status: statusOK, Version: head.Version}}, nil
 		}
 		return Outcome{}, fmt.Errorf("publish: %w", err)
@@ -135,7 +158,7 @@ func Candidate(c Client, path, body string, expectedVersion int, meta map[string
 		return Outcome{}, fmt.Errorf("fetch current: status %s", latest.Status)
 	}
 	// A conflict against our own earlier attempt is a success, not a merge.
-	if latest.Version == expectedVersion+1 && latest.Body == body {
+	if ours.matches(latest) {
 		return Outcome{Status: OutcomeOK, Publish: PublishResult{Status: statusOK, Version: latest.Version}}, nil
 	}
 

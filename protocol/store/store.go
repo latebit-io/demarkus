@@ -1013,7 +1013,10 @@ func (s *Store) containWrite(reqPath, rel string) error {
 		return fmt.Errorf("resolve path: %w", err)
 	}
 	if err := s.containDoc(rel); err != nil {
-		return os.ErrNotExist
+		if errors.Is(err, os.ErrNotExist) {
+			return os.ErrNotExist
+		}
+		return fmt.Errorf("resolve version tree: %w", err)
 	}
 	return nil
 }

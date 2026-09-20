@@ -26,8 +26,8 @@ func TestVersionQuestionsStayInsideRoot(t *testing.T) {
 	s := New(root)
 	outsideDoc(t, root)
 
-	if v, err := s.CurrentVersionResult("/linked/doc.md"); err == nil && v != 0 {
-		t.Errorf("CurrentVersionResult read version %d through an escaping symlink", v)
+	if v, err := s.CurrentVersionResult("/linked/doc.md"); v != 0 || err != nil {
+		t.Errorf("CurrentVersionResult = (%d, %v) for an escaping symlink, want (0, nil)", v, err)
 	}
 	if p, err := s.VersionFilePath("/linked/doc.md", 1); err == nil {
 		t.Errorf("VersionFilePath returned %q for an escaping path", p)

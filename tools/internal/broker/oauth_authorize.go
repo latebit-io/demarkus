@@ -104,6 +104,8 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	nonce, err := s.setAuthCodeStateCookie(w, authCodeID)
 	if err != nil {
+		// No callback can ever present this id; do not let it hold a slot until the sweep.
+		s.authCodeStore.Cancel(authCodeID)
 		s.log.ErrorContext(r.Context(), "broker: auth code state", "err", err)
 		redirectAuthorizeError(w, r, redirectURI, clientState, "server_error", "internal error")
 		return

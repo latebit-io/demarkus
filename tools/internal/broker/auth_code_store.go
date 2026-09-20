@@ -182,6 +182,13 @@ func (s *authCodeStore) Begin(req *AuthCodeRequest) (string, error) {
 	return id, nil
 }
 
+// Cancel drops a pending grant whose login could not be started.
+func (s *authCodeStore) Cancel(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pending, id)
+}
+
 // LookupPending returns a copy of the pending grant for the supplied
 // id, or false when the id is unknown or expired. Unlike Bind it
 // does not mutate the store — callbacks can peek (e.g. for logging)

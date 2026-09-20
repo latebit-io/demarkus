@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -53,5 +54,33 @@ func TestWritesAreNotResentAfterTheRequestIsSent(t *testing.T) {
 	}
 	if got := reads.Load(); got < 2 {
 		t.Fatalf("server saw %d fetch attempts, want reads to keep retrying", got)
+	}
+}
+
+// Caller cancellation after the request went out must still read as outcome
+// unknown; a plain context error would invite a resend of a landed write.
+func TestCancelAfterSendStaysOutcomeUnknown(t *testing.T) {
+	received := make(chan struct{}, 1)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	addr := startTestServer(t, func(protocol.Request) protocol.Response {
+		received <- struct{}{}
+		<-release
+		return protocol.Response{Status: protocol.StatusOK}
+	})
+	c := NewClient(Options{Insecure: true, RequestTimeout: 5 * time.Second})
+	t.Cleanup(c.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-received
+		cancel()
+	}()
+	_, err := c.PublishContext(ctx, addr, "/a.md", "body", "", 0, nil)
+	if !errors.Is(err, ErrOutcomeUnknown) {
+		t.Fatalf("error = %v, want ErrOutcomeUnknown", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want it to still unwrap to context.Canceled", err)
 	}
 }

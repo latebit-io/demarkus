@@ -456,13 +456,19 @@ func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req 
 	defer stopCancel()
 
 	// From the first written byte on, the server may have acted on the request.
-	if _, err := req.WriteTo(stream); err != nil {
+	if n, err := req.WriteTo(stream); err != nil {
 		stream.CancelWrite(0)
 		stream.CancelRead(0)
 		if ctx.Err() != nil {
-			return Result{}, &sentError{cause: ctx.Err()}
+			err = ctx.Err()
+		} else {
+			err = fmt.Errorf("send request: %w", err)
 		}
-		return Result{}, &sentError{cause: fmt.Errorf("send request: %w", err)}
+		// The request goes out in one write; zero accepted bytes means nothing was sent.
+		if n == 0 {
+			return Result{}, err
+		}
+		return Result{}, &sentError{cause: err}
 	}
 	if err := stream.Close(); err != nil {
 		stream.CancelRead(0)
@@ -531,16 +537,17 @@ func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(co
 		if err == nil {
 			return result, nil
 		}
+		// Checked before caller cancellation, which would otherwise read as a
+		// definite failure and invite a resend of a write that may have landed.
+		if !resend && errors.Is(err, ErrOutcomeUnknown) {
+			c.removeConn(host)
+			return Result{}, err
+		}
 		if ctx.Err() != nil {
 			return Result{}, ctx.Err()
 		}
 
 		lastErr = err
-		if !resend && errors.Is(err, ErrOutcomeUnknown) {
-			// The pooled connection is suspect either way; the next call redials.
-			c.removeConn(host)
-			return Result{}, err
-		}
 		if attempt < maxRetries-1 && isTransientError(err) {
 			if err := waitForRetry(ctx, retryDelay); err != nil {
 				return Result{}, err
