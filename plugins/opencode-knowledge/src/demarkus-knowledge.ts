@@ -49,15 +49,15 @@ function reportFailure(operation: string, detail: string): void {
   console.error(`[demarkus-knowledge] ${message}`);
 }
 
-function runBin<T>(args: string[], payload?: unknown, allowEmpty = false): Promise<T | null> {
+function runBin<T>(args: string[], payload?: unknown, allowEmpty = false, bin = BIN): Promise<T | null> {
   return new Promise((resolve) => {
     const operation = args[0] ?? "helper";
-    if (!existsSync(BIN)) {
-      reportFailure(operation, `${BIN} is not installed; this call is allowed to continue`);
+    if (!existsSync(bin)) {
+      reportFailure(operation, `${bin} is not installed; this call is allowed to continue`);
       resolve(null);
       return;
     }
-    const child = execFile(BIN, args, { encoding: "utf8", timeout: 5000 }, (err, stdout) => {
+    const child = execFile(bin, args, { encoding: "utf8", timeout: 5000 }, (err, stdout) => {
       if (err) {
         reportFailure(operation, err.message);
         resolve(null);
@@ -84,9 +84,13 @@ function runBin<T>(args: string[], payload?: unknown, allowEmpty = false): Promi
   });
 }
 
-async function callGate(toolName: string, input: Record<string, unknown>, cwd: string): Promise<GateDecision> {
-  const decision = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd });
-  return decision && typeof decision.decision === "string" ? decision : { decision: "allow" };
+// callGate asks `demarkus-plugin gate` to decide a mark_publish/mark_append call.
+// Fails closed: only a missing helper allows; crash, timeout or bad output blocks.
+export async function callGate(toolName: string, input: Record<string, unknown>, cwd: string, bin = BIN): Promise<GateDecision> {
+  if (!existsSync(bin)) return { decision: "allow" };
+  const d = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd }, false, bin);
+  if (d && typeof d.decision === "string") return d;
+  return { decision: "block", reason: `[demarkus-knowledge] gate failed (crash, timeout or bad output); write blocked. Retry, or reinstall ${bin}` };
 }
 
 async function callNudge(request: Record<string, unknown>): Promise<string> {

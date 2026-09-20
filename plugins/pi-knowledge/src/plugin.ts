@@ -20,13 +20,13 @@ export interface GateDecision {
 
 // runBin pipes an optional JSON payload to a demarkus-plugin subcommand and
 // resolves parsed stdout, or null on any failure (missing binary, timeout, parse).
-function runBin<T>(args: string[], payload?: unknown): Promise<T | null> {
+function runBin<T>(args: string[], payload?: unknown, bin = BIN): Promise<T | null> {
   return new Promise((resolve) => {
-    if (!existsSync(BIN)) {
+    if (!existsSync(bin)) {
       resolve(null);
       return;
     }
-    const child = execFile(BIN, args, { encoding: "utf8", timeout: 5000 }, (err, stdout) => {
+    const child = execFile(bin, args, { encoding: "utf8", timeout: 5000 }, (err, stdout) => {
       if (err) {
         resolve(null);
         return;
@@ -49,11 +49,12 @@ function runBin<T>(args: string[], payload?: unknown): Promise<T | null> {
 }
 
 // callGate asks `demarkus-plugin gate` to decide a mark_publish/mark_append call.
-// Input is passed verbatim (the binary unwraps the pi-mcp-adapter proxy itself).
-// Allow on any failure (missing binary, timeout, parse).
-export async function callGate(toolName: string, input: Record<string, unknown>, cwd: string): Promise<GateDecision> {
-  const d = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd });
-  return d && typeof d.decision === "string" ? d : { decision: "allow" };
+// Fails closed: only a missing helper allows; crash, timeout or bad output blocks.
+export async function callGate(toolName: string, input: Record<string, unknown>, cwd: string, bin = BIN): Promise<GateDecision> {
+  if (!existsSync(bin)) return { decision: "allow" };
+  const d = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd }, bin);
+  if (d && typeof d.decision === "string") return d;
+  return { decision: "block", reason: `[demarkus-knowledge] gate failed (crash, timeout or bad output); write blocked. Retry, or reinstall ${bin}` };
 }
 
 // callNudge asks `demarkus-plugin nudge` for a recall/promote/session-end

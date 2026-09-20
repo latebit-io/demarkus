@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+
+	"golang.org/x/oauth2"
 	"net/url"
 	"strings"
 	"testing"
@@ -259,5 +261,31 @@ func TestCompositeVerifierNilSignerIsPassThrough(t *testing.T) {
 	}
 	if claims.Email != "from-primary@x.com" {
 		t.Errorf("Email = %q", claims.Email)
+	}
+}
+
+// A hung IdP token endpoint must not pin the callback handler.
+func TestExchangeIsBoundedByVerifierHTTPClient(t *testing.T) {
+	release := make(chan struct{})
+	idp := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	defer idp.Close()
+	defer close(release)
+
+	v := &oidcVerifier{
+		oauth:      &oauth2.Config{ClientID: "c", Endpoint: oauth2.Endpoint{TokenURL: idp.URL}},
+		httpClient: &http.Client{Timeout: 100 * time.Millisecond},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := v.Exchange(context.Background(), "code")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Exchange against a hung IdP returned no error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Exchange did not honor the verifier's HTTP timeout")
 	}
 }

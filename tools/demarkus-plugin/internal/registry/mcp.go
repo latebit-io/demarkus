@@ -3,6 +3,7 @@ package registry
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -82,7 +83,20 @@ func saveMcp(path string, m map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(path, append(out, '\n'))
+	// The config is the user's file: write through a symlink to its target and
+	// keep the existing mode, which may be 0600 because other servers' keys live there.
+	target, perm := path, os.FileMode(0o644)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		target = resolved
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("resolve %s: %w", path, err)
+	}
+	if info, err := os.Stat(target); err == nil {
+		perm = info.Mode().Perm()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat %s: %w", target, err)
+	}
+	return atomicWritePerm(target, append(out, '\n'), perm)
 }
 
 func servers(m map[string]any) map[string]any { return m["mcpServers"].(map[string]any) }

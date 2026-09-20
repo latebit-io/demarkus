@@ -519,13 +519,30 @@ func registryPromoteTarget(args []string) {
 // setEnv replaces key in an execve environment; execve keeps the first
 // duplicate, so an inherited value would otherwise win over ours.
 func setEnv(env []string, key, value string) []string {
+	return append(unsetEnv(env, key), key+"="+value)
+}
+
+// unsetEnv returns env without any entry for key.
+func unsetEnv(env []string, key string) []string {
 	kept := env[:0:0]
 	for _, entry := range env {
 		if !strings.HasPrefix(entry, key+"=") {
 			kept = append(kept, entry)
 		}
 	}
-	return append(kept, key+"="+value)
+	return kept
+}
+
+// mcpServeEnv builds the demarkus-mcp environment. An inherited DEMARKUS_AUTH
+// is always dropped: it belongs to some other server, and exec keeps the first duplicate.
+func mcpServeEnv(base []string, token string) []string {
+	env := unsetEnv(base, "DEMARKUS_AUTH")
+	if token != "" {
+		env = append(env, "DEMARKUS_AUTH="+token)
+	}
+	// Plugin prompts are checked against the lean profile. The environment
+	// carries the choice so an older demarkus-mcp still starts.
+	return setEnv(env, "DEMARKUS_MCP_PROFILE", "lean")
 }
 
 // cmdMcpServe launches demarkus-mcp for the local memory or a joined remote one
@@ -568,14 +585,7 @@ func cmdMcpServe(args []string) {
 	}
 	host, insecure := ep.Host, ep.Insecure
 
-	env := os.Environ()
-	if ep.Token != "" {
-		env = append(env, "DEMARKUS_AUTH="+ep.Token)
-	}
-
-	// Plugin prompts are checked against the lean profile. The environment
-	// carries the choice so an older demarkus-mcp still starts.
-	env = setEnv(env, "DEMARKUS_MCP_PROFILE", "lean")
+	env := mcpServeEnv(os.Environ(), ep.Token)
 	argv := []string{mcpBin, "-host", host}
 	if insecure {
 		argv = append(argv, "-insecure")

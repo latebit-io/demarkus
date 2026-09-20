@@ -131,6 +131,7 @@ type authCodeStore struct {
 	clock      func() time.Time
 	pendingTTL time.Duration
 	codeTTL    time.Duration
+	maxPending int
 }
 
 // newAuthCodeStore builds a fresh in-memory store. pendingTTL is the
@@ -153,6 +154,7 @@ func newAuthCodeStore(clock func() time.Time, pendingTTL, codeTTL time.Duration)
 		clock:      clock,
 		pendingTTL: pendingTTL,
 		codeTTL:    codeTTL,
+		maxPending: maxPendingGrants,
 	}
 }
 
@@ -170,6 +172,9 @@ func (s *authCodeStore) Begin(req *AuthCodeRequest) (string, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.pending) >= s.maxPending {
+		return "", errGrantStoreFull
+	}
 	s.pending[id] = &PendingAuthCode{
 		AuthCodeRequest: *req,
 		ExpiresAt:       s.clock().Add(s.pendingTTL),

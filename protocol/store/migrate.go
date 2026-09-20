@@ -147,6 +147,9 @@ func (s *Store) exportArchived(reqPath string, tipStored []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if err := s.containDoc(rel); err != nil {
+		return false, err
+	}
 	docDir := filepath.Join(s.root, filepath.Dir(rel), "versions", filepath.Base(rel))
 	return effectiveArchived(docDir, tipStored)
 }
@@ -183,6 +186,9 @@ func (s *Store) ImportDoc(ctx context.Context, reqPath string, document StoredDo
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if err := s.containDoc(rel); err != nil {
+		return fmt.Errorf("import %s: %w", reqPath, err)
 	}
 	currentFile := filepath.Join(s.root, rel)
 	if _, err := os.Lstat(currentFile); err == nil {

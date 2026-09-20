@@ -117,6 +117,12 @@ func (s *Server) deviceAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.DebugContext(r.Context(), "broker: device authorize", "client_id", clientID)
 	deviceCode, userCode, expiresAt, err := s.deviceStore.Authorize()
+	if errors.Is(err, errGrantStoreFull) {
+		s.log.WarnContext(r.Context(), "broker: device authorize refused", "err", err)
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, "too many pending grants", http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: device authorize failed", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -347,6 +353,13 @@ func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Stored claims outlive config: a tightened org gate must stop the mint.
+	if err := gateIdentity(s.cfg.OIDC.AllowDomains, &record.Claims); err != nil {
+		s.log.InfoContext(r.Context(), "broker: refresh identity rejected", "err", err,
+			"subject", hashSubject(record.Claims.Subject), "hd", record.Claims.HD)
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
+		return
+	}
 	now := s.clock()
 	idToken, err := s.idTokenSigner.Sign(&record.Claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
 	if err != nil {
@@ -566,12 +579,10 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 		s.renderDeviceDone(w, r)
 		return
 	}
-	if !oidcDomainAllowed(s.cfg.OIDC.AllowDomains, exchange.Claims.HD) {
-		// Allowlist miss IS a real denial (the identity is
-		// authenticated but not authorized), so Deny the grant —
-		// the polling client should see access_denied, not keep
-		// retrying.
-		s.log.InfoContext(r.Context(), "broker: device callback rejected by allowDomains",
+	if err := gateIdentity(s.cfg.OIDC.AllowDomains, &exchange.Claims); err != nil {
+		// A gate refusal is a real denial, not a transient failure: Deny the
+		// grant so the poller sees access_denied instead of retrying.
+		s.log.InfoContext(r.Context(), "broker: device callback identity rejected", "err", err,
 			"subject", hashSubject(exchange.Claims.Subject), "hd", exchange.Claims.HD)
 		if denyErr := s.deviceStore.Deny(deviceCode); denyErr != nil {
 			s.log.WarnContext(r.Context(), "broker: device deny failed", "err", denyErr)

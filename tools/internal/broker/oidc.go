@@ -79,6 +79,9 @@ var ErrEmailUnverified = errors.New("broker: id_token email not verified")
 type oidcVerifier struct {
 	oauth    *oauth2.Config
 	verifier *oidc.IDTokenVerifier
+	// httpClient bounds the token exchange; oauth2 falls back to the
+	// timeout-free default client when the context carries none.
+	httpClient *http.Client
 }
 
 // NewVerifier builds an OIDC Verifier from the broker's OIDCConfig.
@@ -101,7 +104,8 @@ func NewVerifier(ctx context.Context, cfg *OIDCConfig) (Verifier, error) {
 	}
 	// Bound the discovery fetch: the default client has no timeout and
 	// the context alone does not cancel it (same cap as Discovery's).
-	ctx = oidc.ClientContext(ctx, &http.Client{Timeout: discoveryHTTPTimeout})
+	httpClient := &http.Client{Timeout: discoveryHTTPTimeout}
+	ctx = oidc.ClientContext(ctx, httpClient)
 	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("broker: oidc discovery for %s: %w", cfg.Issuer, err)
@@ -114,7 +118,8 @@ func NewVerifier(ctx context.Context, cfg *OIDCConfig) (Verifier, error) {
 			RedirectURL:  cfg.RedirectURL,
 			Scopes:       []string{oidc.ScopeOpenID, "email"},
 		},
-		verifier: provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
+		verifier:   provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
+		httpClient: httpClient,
 	}, nil
 }
 
@@ -123,6 +128,9 @@ func (v *oidcVerifier) AuthCodeURL(state string) string {
 }
 
 func (v *oidcVerifier) Exchange(ctx context.Context, code string) (ExchangeResult, error) {
+	if v.httpClient != nil {
+		ctx = oidc.ClientContext(ctx, v.httpClient)
+	}
 	tok, err := v.oauth.Exchange(ctx, code)
 	if err != nil {
 		return ExchangeResult{}, fmt.Errorf("broker: oauth exchange: %w", err)

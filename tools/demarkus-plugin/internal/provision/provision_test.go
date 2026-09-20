@@ -129,14 +129,14 @@ func TestPortIsFreeAndFindFreePort(t *testing.T) {
 
 func TestPidIsServerAtRootRejectsNonsense(t *testing.T) {
 	// PID 0 and a clearly-dead high PID are never our server.
-	if pidIsServerAtRoot(0, "/whatever") {
+	if probeServerAtRoot(0, "/whatever") == ownershipYes {
 		t.Error("pid 0 should never match")
 	}
-	if pidIsServerAtRoot(-5, "/whatever") {
+	if probeServerAtRoot(-5, "/whatever") == ownershipYes {
 		t.Error("negative pid should never match")
 	}
 	// Our own test process is alive but is not demarkus-server.
-	if pidIsServerAtRoot(os.Getpid(), "/whatever") {
+	if probeServerAtRoot(os.Getpid(), "/whatever") == ownershipYes {
 		t.Error("the test process is not a demarkus-server at any root")
 	}
 }

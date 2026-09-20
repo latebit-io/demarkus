@@ -122,7 +122,15 @@ type deviceStore struct {
 	clock        func() time.Time
 	expiresIn    time.Duration
 	pollInterval time.Duration
+	maxPending   int
 }
+
+// maxPendingGrants bounds each unauthenticated grant map; the janitor frees
+// expired entries, so a full store is an attack or a stuck sweep, not load.
+const maxPendingGrants = 10000
+
+// errGrantStoreFull is returned instead of growing a grant map past its cap.
+var errGrantStoreFull = errors.New("broker: too many pending grants")
 
 // newDeviceStore builds a fresh in-memory store. expiresIn is the
 // device-code TTL (10m default — see plan open question §5);
@@ -140,6 +148,7 @@ func newDeviceStore(clock func() time.Time, expiresIn, pollInterval time.Duratio
 		clock:        clock,
 		expiresIn:    expiresIn,
 		pollInterval: pollInterval,
+		maxPending:   maxPendingGrants,
 	}
 }
 
@@ -157,6 +166,9 @@ func newDeviceStore(clock func() time.Time, expiresIn, pollInterval time.Duratio
 func (s *deviceStore) Authorize() (deviceCode, userCode string, expiresAt time.Time, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.codes) >= s.maxPending {
+		return "", "", time.Time{}, errGrantStoreFull
+	}
 	now := s.clock()
 	expiresAt = now.Add(s.expiresIn)
 

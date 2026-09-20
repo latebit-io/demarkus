@@ -1,6 +1,8 @@
 package broker
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -95,15 +97,26 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: auth code begin failed", "err", err)
-		redirectAuthorizeError(w, r, redirectURI, clientState, "server_error", "internal error")
+		code, description := authorizeBeginError(err)
+		redirectAuthorizeError(w, r, redirectURI, clientState, code, description)
 		return
 	}
 
-	nonce, err := NewNonce()
+	nonce, err := s.setAuthCodeStateCookie(w, authCodeID)
 	if err != nil {
-		s.log.ErrorContext(r.Context(), "broker: nonce", "err", err)
+		s.log.ErrorContext(r.Context(), "broker: auth code state", "err", err)
 		redirectAuthorizeError(w, r, redirectURI, clientState, "server_error", "internal error")
 		return
+	}
+	http.Redirect(w, r, s.verifier.AuthCodeURL(nonce), http.StatusFound)
+}
+
+// setAuthCodeStateCookie signs a State carrying authCodeID into the callback
+// cookie and returns its nonce, which rides to the IdP as the state parameter.
+func (s *Server) setAuthCodeStateCookie(w http.ResponseWriter, authCodeID string) (string, error) {
+	nonce, err := NewNonce()
+	if err != nil {
+		return "", fmt.Errorf("nonce: %w", err)
 	}
 	state := State{
 		Nonce:      nonce,
@@ -112,9 +125,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	signed, err := s.signer.Sign(state)
 	if err != nil {
-		s.log.ErrorContext(r.Context(), "broker: sign state", "err", err)
-		redirectAuthorizeError(w, r, redirectURI, clientState, "server_error", "internal error")
-		return
+		return "", fmt.Errorf("sign state: %w", err)
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     stateCookieName,
@@ -126,7 +137,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		Expires:  state.ExpiresAt,
 		MaxAge:   int(s.cfg.Server.StateTTL.Seconds()),
 	})
-	http.Redirect(w, r, s.verifier.AuthCodeURL(nonce), http.StatusFound)
+	return nonce, nil
 }
 
 // authCodeCallback resumes the auth-code flow after the IdP has
@@ -159,7 +170,7 @@ func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCo
 		// plain 400; the MCP SDK will see it as an aborted browser
 		// leg.
 		s.log.WarnContext(r.Context(), "broker: auth code callback: pending entry missing",
-			"authCodeID", authCodeID)
+			"authCodeID", hashSubject(authCodeID))
 		http.Error(w, "authorization session expired", http.StatusBadRequest)
 		return
 	}
@@ -192,11 +203,11 @@ func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCo
 		return
 	}
 
-	if !oidcDomainAllowed(s.cfg.OIDC.AllowDomains, exchange.Claims.HD) {
-		s.log.InfoContext(r.Context(), "broker: auth code rejected by allowDomains",
+	if err := gateIdentity(s.cfg.OIDC.AllowDomains, &exchange.Claims); err != nil {
+		s.log.InfoContext(r.Context(), "broker: auth code identity rejected", "err", err,
 			"subject", hashSubject(exchange.Claims.Subject), "hd", exchange.Claims.HD)
 		redirectAuthorizeError(w, r, pending.RedirectURI, pending.ClientState,
-			"access_denied", "domain not permitted")
+			"access_denied", strings.TrimPrefix(err.Error(), "broker: "))
 		return
 	}
 
@@ -213,6 +224,15 @@ func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCo
 		"subject", hashSubject(exchange.Claims.Subject))
 
 	redirectAuthorizeSuccess(w, r, pending.RedirectURI, pending.ClientState, authCode, s.cfg.Server.PublicURL)
+}
+
+// authorizeBeginError maps a Begin failure to its RFC 6749 error code; a full
+// store is the client's cue to retry later, anything else is ours.
+func authorizeBeginError(err error) (code, description string) {
+	if errors.Is(err, errGrantStoreFull) {
+		return "temporarily_unavailable", "too many pending grants"
+	}
+	return "server_error", "internal error"
 }
 
 // writeAuthorizeJSONError emits a pre-redirect-trust error in the

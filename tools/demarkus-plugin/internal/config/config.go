@@ -4,6 +4,8 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -607,8 +609,11 @@ type PluginConfig struct {
 	TokensTOML string
 }
 
+// ErrConfigIncomplete marks a plugin-memory.conf that exists but lacks a required key.
+var ErrConfigIncomplete = errors.New("plugin-memory.conf is incomplete")
+
 // LoadConfig parses the shell-style plugin-memory.conf (KEY=value lines, possibly
-// printf %q-quoted). Returns nil when the file is absent or incomplete.
+// printf %q-quoted). Nil means absent or empty; a damaged file is an error.
 func LoadConfig() (*PluginConfig, error) {
 	p, err := path("plugin-memory.conf")
 	if err != nil {
@@ -628,8 +633,10 @@ func LoadConfig() (*PluginConfig, error) {
 			}
 		}
 	}
-	if out["SOUL_DIR"] == "" || out["PORT"] == "" || out["MODE"] == "" {
-		return nil, nil
+	for _, key := range []string{"SOUL_DIR", "PORT", "MODE"} {
+		if out[key] == "" {
+			return nil, fmt.Errorf("%w: %s has no %s; fix or remove it, then run /soul-init", ErrConfigIncomplete, p, key)
+		}
 	}
 	return &PluginConfig{MemoryDir: out["SOUL_DIR"], Port: out["PORT"], Mode: out["MODE"], TokensTOML: out["TOKENS"]}, nil
 }

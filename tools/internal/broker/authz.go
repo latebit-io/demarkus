@@ -42,6 +42,29 @@ func oidcDomainAllowed(allowDomains []string, hd string) bool {
 	return slices.Contains(allowDomains, strings.ToLower(strings.TrimSpace(hd)))
 }
 
+// Identity gate refusals; each sign-in surface maps them to its own envelope.
+var (
+	errIdentityUnverified = errors.New("broker: email not verified")
+	errIdentityDomain     = errors.New("broker: domain not permitted")
+	errIdentityNoEmail    = errors.New("broker: email claim missing")
+)
+
+// gateIdentity is the one org gate for every path that admits or mints an
+// identity. It canonicalizes claims.Email so stored and signed claims agree.
+func gateIdentity(allowDomains []string, claims *Claims) error {
+	if !claims.EmailVerified {
+		return errIdentityUnverified
+	}
+	if !oidcDomainAllowed(allowDomains, claims.HD) {
+		return errIdentityDomain
+	}
+	claims.Email = canonicalEmail(claims.Email)
+	if claims.Email == "" {
+		return errIdentityNoEmail
+	}
+	return nil
+}
+
 // authorizedWorlds returns the configured worlds whose Allow predicate
 // admits claims — the WRITER set. Used by /auth/callback and /me/install
 // (which wire writable worlds into a plugin) and mirrored by the MCP write

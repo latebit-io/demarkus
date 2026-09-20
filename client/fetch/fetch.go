@@ -290,7 +290,7 @@ func (c *Client) PublishContext(ctx context.Context, host, path, body, token str
 	if expectedVersion >= 0 {
 		req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
 	}
-	return c.doWithRetryContext(ctx, host, func(conn *quic.Conn) (Result, error) {
+	return c.doWriteContext(ctx, host, func(conn *quic.Conn) (Result, error) {
 		return c.requestOnConnContext(ctx, conn, req)
 	})
 }
@@ -311,7 +311,7 @@ func (c *Client) Append(host, path, body, token string, expectedVersion int, met
 		req.Metadata["auth"] = token
 	}
 	req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
-	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
+	return c.doWriteContext(context.Background(), host, func(conn *quic.Conn) (Result, error) {
 		return c.requestOnConn(conn, req)
 	})
 }
@@ -383,7 +383,7 @@ func (c *Client) Archive(host, path, token string) (Result, error) {
 	if token != "" {
 		req.Metadata["auth"] = token
 	}
-	return c.doWithRetry(host, func(conn *quic.Conn) (Result, error) {
+	return c.doWriteContext(context.Background(), host, func(conn *quic.Conn) (Result, error) {
 		return c.requestOnConn(conn, req)
 	})
 }
@@ -455,40 +455,58 @@ func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req 
 	})
 	defer stopCancel()
 
+	// From the first written byte on, the server may have acted on the request.
 	if _, err := req.WriteTo(stream); err != nil {
 		stream.CancelWrite(0)
 		stream.CancelRead(0)
 		if ctx.Err() != nil {
-			return Result{}, ctx.Err()
+			return Result{}, &sentError{cause: ctx.Err()}
 		}
-		return Result{}, fmt.Errorf("send request: %w", err)
+		return Result{}, &sentError{cause: fmt.Errorf("send request: %w", err)}
 	}
 	if err := stream.Close(); err != nil {
 		stream.CancelRead(0)
 		if ctx.Err() != nil {
-			return Result{}, ctx.Err()
+			return Result{}, &sentError{cause: ctx.Err()}
 		}
-		return Result{}, fmt.Errorf("close request stream: %w", err)
+		return Result{}, &sentError{cause: fmt.Errorf("close request stream: %w", err)}
 	}
 
 	resp, err := protocol.ParseResponse(responseReader(ctx, stream))
 	if err != nil {
 		stream.CancelRead(0)
 		if ctx.Err() != nil {
-			return Result{}, ctx.Err()
+			return Result{}, &sentError{cause: ctx.Err()}
 		}
-		return Result{}, fmt.Errorf("read response: %w", err)
+		return Result{}, &sentError{cause: fmt.Errorf("read response: %w", err)}
 	}
 
 	return Result{Response: resp}, nil
 }
 
-// doWithRetry retries transient failures up to 5 times with a fixed 100ms delay.
-func (c *Client) doWithRetry(host string, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
-	return c.doWithRetryContext(context.Background(), host, fn)
+// ErrOutcomeUnknown marks a write that failed after its request was sent: it
+// may or may not have landed. Callers reconcile against the head, never resend.
+var ErrOutcomeUnknown = errors.New("request sent but outcome unknown")
+
+// sentError wraps a failure that happened after request bytes left the client.
+type sentError struct{ cause error }
+
+func (e *sentError) Error() string   { return e.cause.Error() }
+func (e *sentError) Unwrap() error   { return e.cause }
+func (e *sentError) Is(t error) bool { return t == ErrOutcomeUnknown }
+
+// doWriteContext is doWithRetryContext for non idempotent verbs: dial and
+// open stream failures retry, anything after the request was sent does not.
+func (c *Client) doWriteContext(ctx context.Context, host string, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
+	return c.retry(ctx, host, false, fn)
 }
 
+// doWithRetryContext retries transient failures up to 5 times with a fixed 100ms delay.
 func (c *Client) doWithRetryContext(ctx context.Context, host string, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
+	return c.retry(ctx, host, true, fn)
+}
+
+func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
 	const maxRetries = 5
 	const retryDelay = 100 * time.Millisecond
 
@@ -518,6 +536,11 @@ func (c *Client) doWithRetryContext(ctx context.Context, host string, fn func(co
 		}
 
 		lastErr = err
+		if !resend && errors.Is(err, ErrOutcomeUnknown) {
+			// The pooled connection is suspect either way; the next call redials.
+			c.removeConn(host)
+			return Result{}, err
+		}
 		if attempt < maxRetries-1 && isTransientError(err) {
 			if err := waitForRetry(ctx, retryDelay); err != nil {
 				return Result{}, err

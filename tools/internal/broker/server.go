@@ -2,6 +2,7 @@ package broker
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -247,10 +248,10 @@ func (s *Server) Routes() http.Handler {
 	// HTML form) is unprotected: humans hand-typing codes rarely hit
 	// any rate threshold, and serving a static page has no state to
 	// leak.
-	mux.Handle("POST /device/authorize", s.ipRateLimit(http.HandlerFunc(s.deviceAuthorize)))
+	mux.Handle("POST /device/authorize", s.ipRateLimit(limitForm(http.HandlerFunc(s.deviceAuthorize))))
 	mux.HandleFunc("GET /device", s.deviceFormGet)
-	mux.Handle("POST /device", s.ipRateLimit(http.HandlerFunc(s.deviceFormPost)))
-	mux.Handle("POST /device/token", s.ipRateLimit(http.HandlerFunc(s.deviceToken)))
+	mux.Handle("POST /device", s.ipRateLimit(limitForm(http.HandlerFunc(s.deviceFormPost))))
+	mux.Handle("POST /device/token", s.ipRateLimit(limitForm(http.HandlerFunc(s.deviceToken))))
 	// RFC 7591 dynamic client registration. Open (unauthenticated) per
 	// the spec's §2 open-registration mode; rubber-stamps any caller
 	// because the broker's actual access control lives at the
@@ -265,11 +266,11 @@ func (s *Server) Routes() http.Handler {
 	// client_id is unknown). GET + POST both routed at the same handler
 	// per RFC 6749 §3.1. See oauth_authorize.go for the probe rationale.
 	mux.Handle("GET /oauth/authorize", s.ipRateLimit(http.HandlerFunc(s.oauthAuthorize)))
-	mux.Handle("POST /oauth/authorize", s.ipRateLimit(http.HandlerFunc(s.oauthAuthorize)))
+	mux.Handle("POST /oauth/authorize", s.ipRateLimit(limitForm(http.HandlerFunc(s.oauthAuthorize))))
 	// RFC 7009 token revocation. Unauthenticated (possession of
 	// the token IS the authz signal) under the IP limiter for
 	// defense-in-depth. Operates on refresh tokens only.
-	mux.Handle("POST /token/revoke", s.ipRateLimit(http.HandlerFunc(s.tokenRevoke)))
+	mux.Handle("POST /token/revoke", s.ipRateLimit(limitForm(http.HandlerFunc(s.tokenRevoke))))
 	// /me/install verifies the bearer, rate-limits by subject, and lists
 	// readable worlds without token material.
 	mux.Handle("GET /me/install", s.requireAuth(s.subjectRateLimit(http.HandlerFunc(s.meInstall))))
@@ -352,8 +353,9 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid state", http.StatusUnauthorized)
 		return
 	}
-	if state.Nonce != queryState {
-		s.log.WarnContext(r.Context(), "broker: state mismatch", "want", state.Nonce, "got", queryState)
+	if subtle.ConstantTimeCompare([]byte(state.Nonce), []byte(queryState)) != 1 {
+		// Fingerprints only: the cookie holding the expected nonce is still live here.
+		s.log.WarnContext(r.Context(), "broker: state mismatch", "want", hashSubject(state.Nonce), "got", hashSubject(queryState))
 		http.Error(w, "state mismatch", http.StatusUnauthorized)
 		return
 	}
@@ -403,20 +405,9 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := exchange.Claims
-	if !claims.EmailVerified {
-		s.log.InfoContext(r.Context(), "broker: rejected unverified identity", "subject", hashSubject(claims.Subject))
-		http.Error(w, "email not verified", http.StatusForbidden)
-		return
-	}
-	if !oidcDomainAllowed(s.cfg.OIDC.AllowDomains, claims.HD) {
-		s.log.InfoContext(r.Context(), "broker: rejected by allowDomains", "subject", hashSubject(claims.Subject), "hd", claims.HD)
-		http.Error(w, "domain not permitted", http.StatusForbidden)
-		return
-	}
-	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
-	if claims.Email == "" {
-		s.log.InfoContext(r.Context(), "broker: identity has no email", "subject", hashSubject(claims.Subject))
-		http.Error(w, "email claim missing", http.StatusForbidden)
+	if err := gateIdentity(s.cfg.OIDC.AllowDomains, &claims); err != nil {
+		s.log.InfoContext(r.Context(), "broker: identity rejected", "err", err, "subject", hashSubject(claims.Subject), "hd", claims.HD)
+		http.Error(w, strings.TrimPrefix(err.Error(), "broker: "), http.StatusForbidden)
 		return
 	}
 	// Publish tokens remain broker-internal; installability rules live
@@ -428,6 +419,18 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, installResponse{
 		Email:  claims.Email,
 		Worlds: out,
+	})
+}
+
+// maxFormBytes bounds an OAuth form body; the largest real field is a JWT sized token.
+const maxFormBytes = 64 << 10
+
+// limitForm caps the body before ParseForm, which otherwise reads up to 10 MB
+// from an unauthenticated caller.
+func limitForm(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+		next.ServeHTTP(w, r)
 	})
 }
 

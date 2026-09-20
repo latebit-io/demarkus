@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -48,22 +49,15 @@ func (s *Server) gatewayAuth(next http.Handler) http.Handler {
 			s.writeMCPAuthChallenge(w, "invalid_token", "invalid bearer token")
 			return
 		}
-		if !oidcDomainAllowed(s.cfg.OIDC.AllowDomains, claims.HD) {
-			s.log.InfoContext(r.Context(), "broker: mcp gateway bearer rejected by allowDomains",
+		if err := gateIdentity(s.cfg.OIDC.AllowDomains, &claims); err != nil {
+			s.log.InfoContext(r.Context(), "broker: mcp gateway identity rejected", "err", err,
 				"subject", hashSubject(claims.Subject), "hd", claims.HD)
-			s.writeMCPAuthChallenge(w, "invalid_token", "invalid bearer token")
-			return
-		}
-		if !claims.EmailVerified {
-			s.log.WarnContext(r.Context(), "broker: mcp gateway rejected unverified email",
-				"subject", hashSubject(claims.Subject))
-			s.writeMCPAuthChallenge(w, "invalid_token", "email not verified")
-			return
-		}
-		if canonicalEmail(claims.Email) == "" {
-			s.log.WarnContext(r.Context(), "broker: mcp gateway rejected empty email claim",
-				"subject", hashSubject(claims.Subject))
-			s.writeMCPAuthChallenge(w, "invalid_token", "email claim missing")
+			description := strings.TrimPrefix(err.Error(), "broker: ")
+			if errors.Is(err, errIdentityDomain) {
+				// Do not tell a foreign identity which domains are admitted.
+				description = "invalid bearer token"
+			}
+			s.writeMCPAuthChallenge(w, "invalid_token", description)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(ctxWithClaims(r.Context(), &claims)))

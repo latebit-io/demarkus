@@ -278,3 +278,48 @@ func TestCandidate(t *testing.T) {
 		}
 	})
 }
+
+// A lost response or a conflict against our own first attempt is a success
+// when the head is exactly what was submitted at expected+1 (debt: self conflict).
+func TestCandidateReconcilesItsOwnWrite(t *testing.T) {
+	tests := []struct {
+		name       string
+		publishErr error
+		publish    PublishResult
+		head       Doc
+		wantStatus OutcomeStatus
+		wantErr    bool
+	}{
+		{name: "lost response, write landed", publishErr: errors.New("timeout"), head: Doc{Status: statusOK, Body: "mine", Version: 4}, wantStatus: OutcomeOK},
+		{name: "lost response, write did not land", publishErr: errors.New("timeout"), head: Doc{Status: statusOK, Body: "old", Version: 3}, wantErr: true},
+		{name: "lost response, someone else wrote", publishErr: errors.New("timeout"), head: Doc{Status: statusOK, Body: "theirs", Version: 4}, wantErr: true},
+		{name: "conflict with our own attempt", publish: PublishResult{Status: statusConflict, ServerVersion: 4}, head: Doc{Status: statusOK, Body: "mine", Version: 4}, wantStatus: OutcomeOK},
+		{name: "conflict with another writer", publish: PublishResult{Status: statusConflict, ServerVersion: 4}, head: Doc{Status: statusOK, Body: "theirs", Version: 4}, wantStatus: OutcomeCandidate},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &stubClient{
+				versionedDocs:  map[int]Doc{3: {Status: statusOK, Body: "old", Version: 3}},
+				currentDocs:    []Doc{tt.head},
+				publishResults: []PublishResult{tt.publish},
+				publishErrs:    []error{tt.publishErr},
+			}
+			out, err := Candidate(c, "/doc.md", "mine", 3, nil)
+			if tt.wantErr != (err != nil) {
+				t.Fatalf("Candidate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if out.Status != tt.wantStatus {
+				t.Fatalf("status = %q, want %q", out.Status, tt.wantStatus)
+			}
+			if tt.wantStatus == OutcomeOK && out.Publish.Version != 4 {
+				t.Errorf("version = %d, want 4", out.Publish.Version)
+			}
+			if len(c.publishedBody) != 1 {
+				t.Errorf("publish called %d times, want exactly 1", len(c.publishedBody))
+			}
+		})
+	}
+}

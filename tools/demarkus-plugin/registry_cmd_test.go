@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -135,5 +136,36 @@ func TestSetEnvReplacesInheritedValue(t *testing.T) {
 		if strings.HasPrefix(entry, "DEMARKUS_MCP_PROFILE=") {
 			t.Fatalf("inherited profile survived: %v", env)
 		}
+	}
+}
+
+func TestMcpServeEnvScopesAuthToTheCatalogToken(t *testing.T) {
+	inherited := []string{"PATH=/bin", "DEMARKUS_AUTH=users-other-token", "DEMARKUS_MCP_PROFILE=full"}
+	tests := []struct {
+		name     string
+		token    string
+		wantAuth []string
+	}{
+		{"catalog token replaces the inherited one", "catalog-token", []string{"DEMARKUS_AUTH=catalog-token"}},
+		{"no catalog token leaves none", "", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var auth, profile []string
+			for _, entry := range mcpServeEnv(inherited, tt.token) {
+				switch {
+				case strings.HasPrefix(entry, "DEMARKUS_AUTH="):
+					auth = append(auth, entry)
+				case strings.HasPrefix(entry, "DEMARKUS_MCP_PROFILE="):
+					profile = append(profile, entry)
+				}
+			}
+			if !slices.Equal(auth, tt.wantAuth) {
+				t.Errorf("DEMARKUS_AUTH entries = %v, want %v", auth, tt.wantAuth)
+			}
+			if !slices.Equal(profile, []string{"DEMARKUS_MCP_PROFILE=lean"}) {
+				t.Errorf("profile entries = %v, want one lean entry", profile)
+			}
+		})
 	}
 }

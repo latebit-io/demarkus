@@ -577,6 +577,9 @@ func (s *Store) VersionFilePath(reqPath string, version int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := s.containDoc(rel); err != nil {
+		return "", err
+	}
 	return filepath.Join(s.root, versionRelPath(rel, version)), nil
 }
 
@@ -993,8 +996,38 @@ func (s *Store) resolve(reqPath string) (string, error) {
 		return "", os.ErrNotExist
 	}
 
-	joined := filepath.Join(s.root, cleaned)
+	return s.contain(filepath.Join(s.root, cleaned))
+}
 
+// containWrite keeps a write inside the root: the document path and its
+// versions tree, which can be a planted symlink even when the path is not.
+func (s *Store) containWrite(reqPath, rel string) error {
+	if _, err := s.resolve(reqPath); err != nil {
+		if errors.Is(err, errUnderDocument) {
+			// Topology collision, same class as writing over a directory.
+			return fmt.Errorf("cannot publish %s: a document exists at an ancestor", reqPath)
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			return os.ErrNotExist
+		}
+		return fmt.Errorf("resolve path: %w", err)
+	}
+	if err := s.containDoc(rel); err != nil {
+		return os.ErrNotExist
+	}
+	return nil
+}
+
+// containDoc rejects a document whose versions directory resolves outside the
+// root. Callers keep building paths from s.root; this is the check, not the path.
+func (s *Store) containDoc(rel string) error {
+	_, err := s.contain(filepath.Join(s.root, filepath.Dir(rel), "versions", filepath.Base(rel)))
+	return err
+}
+
+// contain resolves symlinks in a path under the root and returns os.ErrNotExist
+// when the result escapes it. The path need not exist yet.
+func (s *Store) contain(joined string) (string, error) {
 	absRoot, err := s.resolvedRoot()
 	if err != nil {
 		return "", err
@@ -1036,6 +1069,13 @@ func (s *Store) CurrentVersion(reqPath string) int {
 func (s *Store) CurrentVersionResult(reqPath string) (int, error) {
 	cleaned, err := RelPath(reqPath)
 	if err != nil {
+		return 0, err
+	}
+	if err := s.containDoc(cleaned); err != nil {
+		// Escaping or beneath a document: no versions here, not a path error.
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
 		return 0, err
 	}
 	versionsDir := filepath.Join(s.root, filepath.Dir(cleaned), "versions")
@@ -1085,6 +1125,10 @@ func (s *Store) findVersions(reqPath string) []VersionInfo {
 	cleaned = strings.TrimLeft(cleaned, "/")
 	base := filepath.Base(cleaned)
 
+	// An escaping document has no versions here; readers see it as absent.
+	if s.containDoc(cleaned) != nil {
+		return nil
+	}
 	versionsDir := filepath.Join(s.root, filepath.Dir(cleaned), "versions")
 	return s.findVersionsPerDoc(versionsDir, base)
 }
@@ -1127,9 +1171,13 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 		return nil, err
 	}
 
-	info, err := os.Stat(filePath)
+	// Lstat the unresolved name: a planted symlink is never a version.
+	info, err := os.Lstat(filepath.Join(s.root, versionRelPath(cleaned, version)))
 	if err != nil {
 		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, os.ErrNotExist
 	}
 	if info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
 		return nil, fmt.Errorf("file exceeds size limit")
@@ -1283,16 +1331,8 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 	base := filepath.Base(cleaned)
 	dir := filepath.Dir(cleaned)
 
-	// Validate path stays within the store root (resolve handles traversal + symlinks).
-	if _, err := s.resolve(reqPath); err != nil {
-		if errors.Is(err, errUnderDocument) {
-			// Topology collision, same class as writing over a directory.
-			return nil, fmt.Errorf("cannot publish %s: a document exists at an ancestor", reqPath)
-		}
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, os.ErrNotExist
-		}
-		return nil, fmt.Errorf("resolve path: %w", err)
+	if err := s.containWrite(reqPath, filepath.Join(dir, base)); err != nil {
+		return nil, err
 	}
 
 	versionsDir := filepath.Join(s.root, dir, "versions")
@@ -1665,6 +1705,9 @@ func (s *Store) VerifyChain(reqPath string) error {
 	cleaned = strings.TrimLeft(cleaned, "/")
 	base := filepath.Base(cleaned)
 	dir := filepath.Dir(cleaned)
+	if err := s.containDoc(cleaned); err != nil {
+		return fmt.Errorf("verify chain %s: %w", reqPath, err)
+	}
 	versionsDir := filepath.Join(s.root, dir, "versions")
 
 	var previousData []byte

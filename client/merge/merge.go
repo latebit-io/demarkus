@@ -85,6 +85,16 @@ const statusConflict = "conflict"
 // statusOK matches protocol.StatusOK for fetch responses.
 const statusOK = "ok"
 
+// landed reports whether the head is exactly what this call submitted: body at
+// expectedVersion+1. A failed probe reads as not landed; the caller's error stands.
+func landed(c Client, path, body string, expectedVersion int) (Doc, bool) {
+	head, err := c.FetchCurrent(path)
+	if err != nil || head.Status != statusOK {
+		return Doc{}, false
+	}
+	return head, head.Version == expectedVersion+1 && head.Body == body
+}
+
 // Candidate publishes body to path with optimistic concurrency. On a
 // version mismatch it produces a diff3 merge candidate (base = the version
 // the agent edited from, theirs = the current latest, ours = body) and
@@ -107,10 +117,26 @@ func Candidate(c Client, path, body string, expectedVersion int, meta map[string
 
 	pub, err := c.Publish(path, body, expectedVersion, meta)
 	if err != nil {
+		// The write may have landed with its response lost; never resend it.
+		if head, ok := landed(c, path, body, expectedVersion); ok {
+			return Outcome{Status: OutcomeOK, Publish: PublishResult{Status: statusOK, Version: head.Version}}, nil
+		}
 		return Outcome{}, fmt.Errorf("publish: %w", err)
 	}
 	if pub.Status != statusConflict {
 		return Outcome{Status: OutcomeOK, Publish: pub}, nil
+	}
+
+	latest, err := c.FetchCurrent(path)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("fetch current: %w", err)
+	}
+	if latest.Status != statusOK {
+		return Outcome{}, fmt.Errorf("fetch current: status %s", latest.Status)
+	}
+	// A conflict against our own earlier attempt is a success, not a merge.
+	if latest.Version == expectedVersion+1 && latest.Body == body {
+		return Outcome{Status: OutcomeOK, Publish: PublishResult{Status: statusOK, Version: latest.Version}}, nil
 	}
 
 	base := ""
@@ -125,17 +151,8 @@ func Candidate(c Client, path, body string, expectedVersion int, meta map[string
 		base = baseDoc.Body
 	}
 
-	latest, err := c.FetchCurrent(path)
-	if err != nil {
-		return Outcome{}, fmt.Errorf("fetch current: %w", err)
-	}
-	if latest.Status != statusOK {
-		return Outcome{}, fmt.Errorf("fetch current: status %s", latest.Status)
-	}
-	// A candidate without a real head version would force the agent's
-	// follow-up publish into create-only semantics (expected_version=0),
-	// which would either silently change behavior or fail at the server.
-	// Fail fast instead of returning an unusable PublishAtVersion.
+	// Without a real head version the follow-up publish would fall into
+	// create-only semantics (expected_version=0); fail fast instead.
 	if latest.Version <= 0 {
 		return Outcome{}, fmt.Errorf("fetch current: missing or invalid version metadata")
 	}
