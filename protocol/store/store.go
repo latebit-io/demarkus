@@ -316,6 +316,7 @@ type Store struct {
 	// hashErr records an incomplete index build. Hits remain valid, but misses
 	// cannot be reported as confirmed absence until a clean rebuild succeeds.
 	hashErr error
+	dirDebt dirSyncDebt
 }
 
 // New creates a store rooted at the given directory. For a pre-existing root
@@ -1352,10 +1353,44 @@ func syncDirectory(dir string) error {
 	return nil
 }
 
+// dirSyncDebt holds directory syncs still owed: a sync failed and the created
+// directory could not be removed again, so a retry would find it present.
+type dirSyncDebt struct {
+	mu   sync.Mutex
+	owed map[string]struct{}
+}
+
+func (d *dirSyncDebt) add(dirs []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.owed == nil {
+		d.owed = make(map[string]struct{})
+	}
+	for _, dir := range dirs {
+		d.owed[dir] = struct{}{}
+	}
+}
+
+// settle syncs what is owed; a directory stays owed until its sync succeeds.
+func (d *dirSyncDebt) settle() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for dir := range d.owed {
+		if err := syncDir(dir); err != nil {
+			return fmt.Errorf("settle owed directory sync: %w", err)
+		}
+		delete(d.owed, dir)
+	}
+	return nil
+}
+
 // mkdirAllDurable is MkdirAll plus a sync of every directory that gained an
 // entry, so a crash cannot drop the new tree while the pointer survives. A
 // failed sync undoes the creation. An existing path costs one Lstat.
-func mkdirAllDurable(dir string) error {
+func (s *Store) mkdirAllDurable(dir string) error {
+	if err := s.dirDebt.settle(); err != nil {
+		return err
+	}
 	var created []string
 	for p := dir; ; p = filepath.Dir(p) {
 		if _, err := os.Lstat(p); err == nil || !errors.Is(err, os.ErrNotExist) {
@@ -1375,10 +1410,23 @@ func mkdirAllDurable(dir string) error {
 	// Shallowest first: each created directory is an entry in its parent.
 	for _, p := range slices.Backward(created) {
 		if err := syncDir(filepath.Dir(p)); err != nil {
-			return errors.Join(err, removeCreated(created))
+			undoErr := removeCreated(created)
+			if undoErr != nil {
+				// The tree stays, so every parent sync stays owed.
+				s.dirDebt.add(parentsOf(created))
+			}
+			return errors.Join(err, undoErr)
 		}
 	}
 	return nil
+}
+
+func parentsOf(dirs []string) []string {
+	parents := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		parents = append(parents, filepath.Dir(dir))
+	}
+	return parents
 }
 
 // removeCreated undoes a directory creation whose sync failed, deepest first,
@@ -1460,7 +1508,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 	}
 
 	versionsDir := filepath.Join(s.root, dir, "versions")
-	if err := mkdirAllDurable(versionsDir); err != nil {
+	if err := s.mkdirAllDurable(versionsDir); err != nil {
 		return nil, fmt.Errorf("create versions dir: %w", err)
 	}
 
@@ -1498,7 +1546,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 
 	// Create per-document subdirectory for new documents.
 	docDir := filepath.Join(versionsDir, base)
-	if err := mkdirAllDurable(docDir); err != nil {
+	if err := s.mkdirAllDurable(docDir); err != nil {
 		return nil, fmt.Errorf("create per-doc versions dir: %w", err)
 	}
 

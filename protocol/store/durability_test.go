@@ -177,3 +177,44 @@ func TestWriteRetryRedoesFailedDirectorySyncs(t *testing.T) {
 		}
 	}
 }
+
+// When the rollback cannot remove a directory, the failed syncs stay owed:
+// a retry finds the tree present and would otherwise skip them.
+func TestWriteRetrySettlesSyncsOwedAfterFailedRollback(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	failing := true
+	var dirs []string
+	syncDir = func(dir string) error {
+		if failing && dir == filepath.Join(root, "notes") {
+			// A stray file keeps the rollback from removing the new tree.
+			stray := filepath.Join(root, "notes", "sub", "versions", "stray")
+			if err := os.WriteFile(stray, nil, 0o600); err != nil {
+				t.Fatalf("plant stray file: %v", err)
+			}
+			return errors.New("disk gone")
+		}
+		dirs = append(dirs, dir)
+		return syncDirectory(dir)
+	}
+	t.Cleanup(func() { syncDir = syncDirectory })
+
+	if _, err := s.Write("/notes/sub/a.md", []byte("# A\n"), nil); err == nil {
+		t.Fatal("write: want the sync error")
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes", "sub", "versions")); err != nil {
+		t.Fatalf("test setup: the tree should have survived the rollback: %v", err)
+	}
+
+	failing = false
+	dirs = nil
+	if _, err := s.Write("/notes/sub/a.md", []byte("# A\n"), nil); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	for _, want := range []string{root, filepath.Join(root, "notes"), filepath.Join(root, "notes", "sub")} {
+		if !slices.Contains(dirs, want) {
+			t.Errorf("retry did not settle the owed sync of %s; synced %v", want, dirs)
+		}
+	}
+}
