@@ -182,7 +182,12 @@ func TestWritesReconcileAfterAnUnknownOutcome(t *testing.T) {
 				ArchiveFn: func(context.Context, fetch.ArchiveRequest) (fetch.Result, error) {
 					return fetch.Result{}, fetchtest.LostResponse()
 				},
-				FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) { return tt.head, nil },
+				FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+					if r.Path == "/doc.md/v3" {
+						return fetchtest.Head("old", 3, nil), nil // the base every write here started from
+					}
+					return tt.head, nil
+				},
 			}
 			got := tt.call(newTools(t, backend, writingHooks()))
 			if got.IsError != tt.wantErr || got.Text != tt.wantText {

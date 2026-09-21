@@ -1,6 +1,7 @@
 package fetchtest
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"strconv"
@@ -44,3 +45,18 @@ func Head(body string, version int, meta map[string]string) fetch.Result {
 
 // LostResponse is a write that was sent and never answered.
 func LostResponse() error { return fmt.Errorf("read response: %w", fetch.ErrOutcomeUnknown) }
+
+// History answers FETCH for a document with the given versions, oldest first:
+// docPath is the newest, docPath/vN is version N, anything else is not found.
+// Every version carries meta, as versions written by one publisher do.
+func History(docPath string, meta map[string]string, bodies ...string) func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
+	return func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		for i, body := range bodies {
+			version := i + 1
+			if r.Path == protocol.VersionPath(docPath, version) || (version == len(bodies) && r.Path == docPath) {
+				return Head(body, version, meta), nil
+			}
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}
+}

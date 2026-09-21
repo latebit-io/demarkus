@@ -14,6 +14,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // Backend is the part of the protocol client a write needs.
@@ -89,7 +90,9 @@ func (d *Doc) Publish(ctx context.Context, w Write, mode string) (Result, error)
 			Host: d.Host, Path: d.Path, Token: token,
 			Body: w.Body, ExpectedVersion: w.ExpectedVersion, Metadata: w.Metadata,
 		})
-	}, probe{path: protocol.VersionPath(d.Path, w.ExpectedVersion+1), landed: w.landedAt})
+	}, probe{path: protocol.VersionPath(d.Path, w.ExpectedVersion+1), landed: func(written *headDoc) (bool, error) {
+		return w.landedAt(written), nil
+	}})
 	if err != nil {
 		if mode == merge.OnConflictMerge {
 			// Tool text in this mode has always named the step that failed.
@@ -174,8 +177,9 @@ type VersionError struct{ Reason string }
 
 func (e *VersionError) Error() string { return "could not resolve version: " + e.Reason }
 
-// Append adds to the document. It landed when the head is the next version,
-// ends in the appended body and carries every metadata key that was sent.
+// Append adds to the document. It landed when the next version is exactly the
+// base with the addition joined as the protocol joins them, under every
+// metadata key that was sent.
 func (d *Doc) Append(ctx context.Context, req AppendRequest) (Result, error) {
 	if req.ExpectedVersion < 0 {
 		return Result{}, ErrInvalidExpectedVersion
@@ -192,9 +196,13 @@ func (d *Doc) Append(ctx context.Context, req AppendRequest) (Result, error) {
 			Host: d.Host, Path: d.Path, Token: token,
 			Body: req.Body, ExpectedVersion: expected, Metadata: req.Metadata,
 		})
-	}, probe{path: protocol.VersionPath(d.Path, expected+1), landed: func(written *headDoc) bool {
-		return written.status == protocol.StatusOK && written.version == expected+1 &&
-			strings.HasSuffix(written.body, req.Body) && written.carries(req.Metadata)
+	}, probe{path: protocol.VersionPath(d.Path, expected+1), landed: func(written *headDoc) (bool, error) {
+		// The cheap checks first: the base is read only for a likely match.
+		if written.status != protocol.StatusOK || written.version != expected+1 ||
+			!strings.HasSuffix(written.body, req.Body) || !written.carries(req.Metadata) {
+			return false, nil
+		}
+		return d.isAppendOf(ctx, written, expected, req.Body)
 	}})
 }
 
@@ -203,7 +211,9 @@ func (d *Doc) Append(ctx context.Context, req AppendRequest) (Result, error) {
 func (d *Doc) Archive(ctx context.Context) (Result, error) {
 	result, err := d.send(ctx, func(token string) (fetch.Result, error) {
 		return d.Backend.Archive(ctx, fetch.ArchiveRequest{Host: d.Host, Path: d.Path, Token: token})
-	}, probe{path: d.Path, landed: func(head *headDoc) bool { return head.status == protocol.StatusArchived }})
+	}, probe{path: d.Path, landed: func(head *headDoc) (bool, error) {
+		return head.status == protocol.StatusArchived, nil
+	}})
 	if err == nil && result.Reconciled {
 		result.Response.Metadata["archived"] = "true" // as the server answers an ARCHIVE
 	}
@@ -215,7 +225,7 @@ func (d *Doc) Archive(ctx context.Context) (Result, error) {
 // created, which no later writer can change; ARCHIVE is a state of the head.
 type probe struct {
 	path   string
-	landed func(found *headDoc) bool
+	landed func(found *headDoc) (bool, error)
 }
 
 // send runs one write through the surface's WriteFunc, once. When its response
@@ -232,11 +242,33 @@ func (d *Doc) send(ctx context.Context, op func(token string) (fetch.Result, err
 			// The outcome stays unknown; why the look did not help is said too.
 			return Result{}, fmt.Errorf("%w; reconcile: %w", err, probeErr)
 		}
-		if look.landed(&found) {
+		landed, probeErr := look.landed(&found)
+		if probeErr != nil {
+			return Result{}, fmt.Errorf("%w; reconcile: %w", err, probeErr)
+		}
+		if landed {
 			return reconciledAt(found.version), nil
 		}
 	}
 	return Result{}, err
+}
+
+// isAppendOf is whether written is the base version with addition appended. A
+// suffix alone would also match a competing write that ends in the same words.
+// A base that is gone (retention) proves nothing, so nothing is claimed.
+func (d *Doc) isAppendOf(ctx context.Context, written *headDoc, baseVersion int, addition string) (bool, error) {
+	base, err := d.head(ctx, protocol.VersionPath(d.Path, baseVersion))
+	if err != nil {
+		return false, fmt.Errorf("fetch base v%d: %w", baseVersion, err)
+	}
+	if base.status != protocol.StatusOK {
+		return false, nil
+	}
+	want, err := storefmt.JoinContent([]byte(base.body), []byte(addition))
+	if err != nil {
+		return false, nil //nolint:nilerr // too large to have been accepted, so it did not land
+	}
+	return written.body == string(want), nil
 }
 
 // reconciledAt answers as the server would have: a landed write is ok.

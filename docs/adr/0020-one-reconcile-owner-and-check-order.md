@@ -30,9 +30,13 @@ after `fetch.ErrOutcomeUnknown`, the generation publisher after any error, and
 - PUBLISH and APPEND are looked for at the version they would have created,
   `<path>/v<expected+1>`, which no later writer can change, so a head that has
   moved on does not turn a landed write into an unknown one. The write landed
-  when that version carries every metadata key that was sent; PUBLISH also
-  needs the body equal, APPEND the body as a suffix. ARCHIVE is a state of the
-  head: it landed when the head is archived, whoever archived it.
+  when that version holds every metadata key that was sent with the same
+  value, surrounding whitespace aside, and the whole body matches: for PUBLISH
+  the body sent, for APPEND the base version joined with the addition by the
+  protocol's own rule (`storefmt.JoinContent`). A suffix is not enough: a
+  competing write at the same version may end in the same words. A base that
+  retention has pruned proves nothing, so nothing is claimed. ARCHIVE is a
+  state of the head: it landed when the head is archived, whoever archived it.
 - An answered write is passed on as the server wrote it. Refusing one over
   malformed metadata would report a write that landed as a failure and invite
   the resend this contract exists to prevent. What a probe reads is validated,

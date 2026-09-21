@@ -46,16 +46,14 @@ func TestToolBodiesBinding(t *testing.T) {
 	}
 }
 
-// A write whose response was lost is looked for at the head, never resent, and
-// the agent the head carries is the caller's verified email.
-func TestLostWriteResponseReconcilesAgainstTheHead(t *testing.T) {
+// A write whose response was lost is looked for, never resent, and the agent
+// the landed version carries is the caller's verified email.
+func TestLostWriteResponseIsReconciled(t *testing.T) {
 	d := &fakeDispatcher{
 		AppendFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
 			return fetch.Result{}, fetchtest.LostResponse()
 		},
-		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
-			return fetchtest.Head("old\nmore", 4, map[string]string{"agent": "alice@example.com"}), nil
-		},
+		FetchFn: fetchtest.History("/foo.md", map[string]string{"agent": "alice@example.com"}, "a", "b", "old", "old\nmore"),
 	}
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
 	res, err := g.handleMarkAppend(withAliceClaims(context.Background()), callToolReq("mark_append", map[string]any{

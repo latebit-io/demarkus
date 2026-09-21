@@ -36,10 +36,14 @@ var conflictAt6 = answer(protocol.StatusConflict, map[string]string{"server-vers
 // history serves the head, at /doc.md and at its own version path as a server
 // does, and base at /doc.md/v<baseVersion>; any other version is not found.
 func history(baseVersion int, base string, head fetch.Result) func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
-	headVersion, _ := strconv.Atoi(head.Response.Metadata["version"]) // a head without one has no version path
+	// A head without a usable version has no version path to be served at.
+	headPath := ""
+	if v, err := strconv.Atoi(head.Response.Metadata["version"]); err == nil && v > 0 {
+		headPath = protocol.VersionPath("/doc.md", v)
+	}
 	return func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
 		switch r.Path {
-		case "/doc.md", protocol.VersionPath("/doc.md", headVersion):
+		case "/doc.md", headPath:
 			return head, nil
 		case protocol.VersionPath("/doc.md", baseVersion):
 			return fetchtest.Head(base, baseVersion, nil), nil
@@ -261,7 +265,12 @@ func TestWritesReconcileAnUnknownOutcome(t *testing.T) {
 				ArchiveFn: func(context.Context, fetch.ArchiveRequest) (fetch.Result, error) {
 					return fetch.Result{}, fetchtest.LostResponse()
 				},
-				FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) { return tt.head, nil },
+				FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+					if r.Path == "/doc.md/v3" {
+						return fetchtest.Head("old", 3, nil), nil // the base every write here started from
+					}
+					return tt.head, nil
+				},
 			}
 			got, err := tt.call(doc(backend))
 			if !tt.landed {
@@ -446,8 +455,11 @@ func TestReconcileLooksAtTheVersionItWroteNotTheHead(t *testing.T) {
 			backend := &fetchtest.Client{
 				PublishFn: lostWrite, AppendFn: lostWrite,
 				FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-					if r.Path == protocol.VersionPath("/doc.md", 4) {
+					switch r.Path {
+					case "/doc.md/v4":
 						return tt.ours, nil
+					case "/doc.md/v3":
+						return fetchtest.Head("old", 3, nil), nil
 					}
 					return fetchtest.Head("a later writer's", 5, nil), nil
 				},
@@ -462,9 +474,49 @@ func TestReconcileLooksAtTheVersionItWroteNotTheHead(t *testing.T) {
 			if err != nil || !got.Reconciled || versionOf(got) != 4 {
 				t.Fatalf("got %+v, %v; want our write found at v4", got, err)
 			}
-			if len(backend.FetchCalls) != 1 || backend.FetchCalls[0].Path != "/doc.md/v4" {
-				t.Errorf("reads = %+v, want one look at the version written", backend.FetchCalls)
+			// The version written first; an append then reads its base. Never the head.
+			for i, read := range backend.FetchCalls {
+				if (i == 0 && read.Path != "/doc.md/v4") || read.Path == "/doc.md" {
+					t.Errorf("read %d = %s, want the version written, then at most its base", i, read.Path)
+				}
 			}
 		})
+	}
+}
+
+// An APPEND is known by the whole document it would have produced, base plus
+// addition as the protocol joins them. A competing write at the same version
+// may end in the same words under the same agent; that is not our append.
+func TestAppendIsRecognizedByTheWholeDocumentNotItsSuffix(t *testing.T) {
+	meta := map[string]string{"agent": "me"}
+	lost := func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+		return fetch.Result{}, fetchtest.LostResponse()
+	}
+	appendMore := func(fetchFn func(context.Context, fetch.FetchRequest) (fetch.Result, error)) (docwrite.Result, error) {
+		backend := &fetchtest.Client{AppendFn: lost, FetchFn: fetchFn}
+		return doc(backend).Append(t.Context(), docwrite.AppendRequest{Body: "more", ExpectedVersion: 3, Metadata: meta})
+	}
+
+	got, err := appendMore(fetchtest.History("/doc.md", meta, "a", "b", "old", "old\nmore"))
+	if err != nil || !got.Reconciled || versionOf(got) != 4 {
+		t.Errorf("ours = %+v, %v; want it found at v4", got, err)
+	}
+	// The base already ends in a newline: the protocol adds none.
+	got, err = appendMore(fetchtest.History("/doc.md", meta, "a", "b", "old\n", "old\nmore"))
+	if err != nil || !got.Reconciled {
+		t.Errorf("base with a trailing newline = %+v, %v", got, err)
+	}
+	if _, err := appendMore(fetchtest.History("/doc.md", meta, "a", "b", "old", "someone rewrote it\nmore")); !errors.Is(err, fetch.ErrOutcomeUnknown) {
+		t.Errorf("a competing write ending in the same words: err = %v, want the unknown outcome to stand", err)
+	}
+	// Retention pruned the base: nothing to compare against, so nothing is claimed.
+	pruned := func(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		if r.Path == "/doc.md/v3" {
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		}
+		return fetchtest.History("/doc.md", meta, "a", "b", "old", "old\nmore")(ctx, r)
+	}
+	if _, err := appendMore(pruned); !errors.Is(err, fetch.ErrOutcomeUnknown) {
+		t.Errorf("pruned base: err = %v, want the unknown outcome to stand", err)
 	}
 }
