@@ -28,7 +28,11 @@ func TestPublishedDocumentKeepsPublisherMetadata(t *testing.T) {
 		t.Error("stored document has no content-hash")
 	}
 	meta["tags"] = "changed"
-	if again, _ := c.Fetch("h", "/doc.md", ""); again.Response.Metadata["tags"] != "a,b" {
+	again, err := c.Fetch("h", "/doc.md", "")
+	if err != nil {
+		t.Fatalf("second Fetch: %v", err)
+	}
+	if again.Response.Metadata["tags"] != "a,b" {
 		t.Error("stored metadata aliases the caller's map")
 	}
 }
