@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -263,7 +264,7 @@ func TestMetadataArg(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := marktools.MetadataArg(tt.args)
-			if (err != nil) != tt.wantErr || len(got) != len(tt.want) {
+			if (err != nil) != tt.wantErr || !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("MetadataArg = %v, %v; want %v, error=%v", got, err, tt.want, tt.wantErr)
 			}
 		})
