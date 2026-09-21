@@ -8,28 +8,34 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
+// sectionSources are the bodies an index pass need not read from the bucket.
+type sectionSources struct {
+	previous *snapshot
+	fresh    map[string][]byte
+}
+
 // indexSections fills the snapshot's section index: unchanged bodies carry
 // over from previous by hash, fresh bodies index directly, the rest are read
 // in parallel. A body that fails to load is logged and skipped (ADR 0012).
-func (store *Store) indexSections(ctx context.Context, loaded, previous *snapshot, fresh map[string][]byte, workers int) error {
+func (store *Store) indexSections(ctx context.Context, loaded *snapshot, sources sectionSources, workers int) error {
 	var pending []string
 	for path, entry := range loaded.Paths {
 		if entry.Archived {
 			continue
 		}
-		if body, ok := fresh[path]; ok {
+		if body, ok := sources.fresh[path]; ok {
 			loaded.Catalog.SetSections(path, catalog.IndexSections(body))
 			continue
 		}
-		if doc := carriedSections(previous, path, entry.BodyHash); doc != nil {
+		if doc := carriedSections(sources.previous, path, entry.BodyHash); doc != nil {
 			loaded.Catalog.SetSections(path, doc)
 			continue
 		}
 		pending = append(pending, path)
 	}
 	return runParallel(ctx, workers, pending, func(ctx context.Context, path string) error {
-		view := &readView{ctx: ctx, objects: store.objects, snapshot: loaded}
-		document, err := view.get(path, 0)
+		view := &readView{objects: store.objects, snapshot: loaded}
+		document, err := view.get(ctx, path, 0)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return fmt.Errorf("index sections %s: %w", path, err)

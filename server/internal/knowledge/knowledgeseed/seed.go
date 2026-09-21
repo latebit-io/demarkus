@@ -12,7 +12,8 @@ import (
 	"syscall"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 // policyBody is the default write policy. Directives parse anywhere in the
@@ -33,24 +34,25 @@ var policyMetadata = map[string]string{
 
 // DefaultPolicySeed returns the default write policy as a fresh seed, so a
 // caller can neither mutate the embedded body nor share its metadata map.
-func DefaultPolicySeed() bucketstore.PolicySeed {
-	return bucketstore.PolicySeed{
-		Body:     bytes.Clone(policyBody),
-		Metadata: maps.Clone(policyMetadata),
-	}
+func DefaultPolicySeed() writepolicy.PolicySeed {
+	metadata := maps.Clone(policyMetadata)
+	// Only the default is a placeholder a broker may replace; an operator's
+	// file is curated and must read as such.
+	metadata["agent"] = publishpolicy.SeedAgent
+	return writepolicy.PolicySeed{Body: bytes.Clone(policyBody), Metadata: metadata}
 }
 
 // PolicySeedFromFile reads an operator-supplied policy body and returns it
 // as a validated seed carrying the same catalog metadata as the default, so
 // the two sources cannot drift on the axes a policy must have.
-func PolicySeedFromFile(name string) (bucketstore.PolicySeed, error) {
+func PolicySeedFromFile(name string) (writepolicy.PolicySeed, error) {
 	body, err := readPolicyFile(name)
 	if err != nil {
-		return bucketstore.PolicySeed{}, err
+		return writepolicy.PolicySeed{}, err
 	}
-	seed := bucketstore.PolicySeed{Body: body, Metadata: maps.Clone(policyMetadata)}
-	if err := bucketstore.ValidatePolicySeed(seed); err != nil {
-		return bucketstore.PolicySeed{}, fmt.Errorf("policy file %q: %w", name, err)
+	seed := writepolicy.PolicySeed{Body: body, Metadata: maps.Clone(policyMetadata)}
+	if err := writepolicy.ValidateSeed(seed); err != nil {
+		return writepolicy.PolicySeed{}, fmt.Errorf("policy file %q: %w", name, err)
 	}
 	return seed, nil
 }

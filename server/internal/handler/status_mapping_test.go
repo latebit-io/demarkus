@@ -29,7 +29,7 @@ func TestRequestErrorStatusMapping(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stream := &mockStream{Reader: strings.NewReader(tt.request)}
-			(&Handler{Logger: discardLogger}).HandleStream(context.Background(), stream)
+			newHandler(fileBackend(t), nil).HandleStream(context.Background(), stream)
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
 				t.Fatalf("parse response: %v", err)
@@ -38,5 +38,18 @@ func TestRequestErrorStatusMapping(t *testing.T) {
 				t.Errorf("status = %q, want %q", resp.Status, tt.want)
 			}
 		})
+	}
+}
+
+func TestNewRefusesIncompleteConfig(t *testing.T) {
+	store := fileBackend(t).Store
+	if _, err := New(Config{Logger: discardLogger}); err == nil {
+		t.Error("New accepted a config without a store")
+	}
+	if _, err := New(Config{Store: store}); err == nil {
+		t.Error("New accepted a config without a logger")
+	}
+	if _, err := New(Config{Store: store, Logger: discardLogger}); err != nil {
+		t.Errorf("New with store and logger: %v", err)
 	}
 }

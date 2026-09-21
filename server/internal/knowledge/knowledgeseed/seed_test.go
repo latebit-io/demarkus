@@ -59,9 +59,17 @@ func TestPolicySeedFromFile(t *testing.T) {
 			t.Errorf("body = %q", seed.Body)
 		}
 		for key, expected := range DefaultPolicySeed().Metadata {
-			if seed.Metadata[key] != expected {
+			if key != "agent" && seed.Metadata[key] != expected {
 				t.Errorf("metadata[%q] = %q, want %q", key, seed.Metadata[key], expected)
 			}
+		}
+		// An operator's file is curated: a broker must not take it for the
+		// default placeholder and replace it.
+		if agent, marked := seed.Metadata["agent"]; marked {
+			t.Errorf("file seed carries agent %q, want no seed marker", agent)
+		}
+		if DefaultPolicySeed().Metadata["agent"] != publishpolicy.SeedAgent {
+			t.Error("default seed lost its marker")
 		}
 	})
 

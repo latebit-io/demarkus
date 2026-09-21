@@ -4,6 +4,7 @@ package filestore
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -76,17 +77,24 @@ func (s *Store) Append(ctx context.Context, req backend.WriteRequest) (*storefmt
 }
 
 // SetArchived commits archive and catalog state under one lock.
-func (s *Store) SetArchived(ctx context.Context, path string, archived bool) (backend.ArchiveResult, error) {
+func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (backend.ArchiveResult, error) {
 	return call(ctx, func() (backend.ArchiveResult, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		document, changed, err := s.documents.ArchiveResult(path, archived)
+		spec := &storefmt.ArchiveSpec{ArchiveChange: storefmt.ArchiveChange{Path: req.Path, Archived: req.Archived}}
+		if req.Precondition != nil {
+			// Under the write lock, reading the state the change commits against.
+			spec.Check = func(change storefmt.ArchiveChange) error {
+				return req.Precondition(ctx, &readView{store: s}, change)
+			}
+		}
+		document, changed, err := s.documents.ArchiveChecked(spec)
 		switch {
 		case !changed:
-		case archived:
-			s.catalog.Remove(path)
+		case req.Archived:
+			s.catalog.Remove(req.Path)
 		default:
-			s.catalog.Put(path, document.Metadata, document.Content, document.Modified)
+			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
 		}
 		return backend.ArchiveResult{Document: document, Changed: changed}, err
 	})
@@ -102,40 +110,53 @@ func (s *Store) OpenReadView(ctx context.Context) (backend.ReadView, error) {
 }
 
 type readView struct {
-	store *Store
-	once  sync.Once
+	store  *Store
+	once   sync.Once
+	closed atomic.Bool
+}
+
+// read runs one view call; a closed view no longer holds the read lock.
+func read[T any](ctx context.Context, view *readView, fn func() (T, error)) (T, error) {
+	if view.closed.Load() {
+		var zero T
+		return zero, backend.ErrViewClosed
+	}
+	return call(ctx, fn)
 }
 
 func (view *readView) Get(ctx context.Context, path string, version int) (*storefmt.Document, error) {
-	return call(ctx, func() (*storefmt.Document, error) { return view.store.documents.Get(path, version) })
+	return read(ctx, view, func() (*storefmt.Document, error) { return view.store.documents.Get(path, version) })
 }
 
 func (view *readView) ListEntries(ctx context.Context, path string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {
-	return call(ctx, func() ([]storefmt.DirEntry, error) { return view.store.documents.ListEntries(path, opts) })
+	return read(ctx, view, func() ([]storefmt.DirEntry, error) { return view.store.documents.ListEntries(path, opts) })
 }
 
 func (view *readView) IsDir(ctx context.Context, path string) (bool, error) {
-	return call(ctx, func() (bool, error) { return view.store.documents.IsDir(path) })
+	return read(ctx, view, func() (bool, error) { return view.store.documents.IsDir(path) })
 }
 
 func (view *readView) Versions(ctx context.Context, path string) ([]storefmt.VersionInfo, error) {
-	return call(ctx, func() ([]storefmt.VersionInfo, error) { return view.store.documents.Versions(path) })
+	return read(ctx, view, func() ([]storefmt.VersionInfo, error) { return view.store.documents.Versions(path) })
 }
 
 func (view *readView) LookupHash(ctx context.Context, hash string) (string, error) {
-	return call(ctx, func() (string, error) { return view.store.documents.LookupHashResult(hash) })
+	return read(ctx, view, func() (string, error) { return view.store.documents.LookupHashResult(hash) })
 }
 
 func (view *readView) VerifyChain(ctx context.Context, path string) error {
-	_, err := call(ctx, func() (struct{}, error) { return struct{}{}, view.store.documents.VerifyChain(path) })
+	_, err := read(ctx, view, func() (struct{}, error) { return struct{}{}, view.store.documents.VerifyChain(path) })
 	return err
 }
 
 func (view *readView) Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error) {
-	return call(ctx, func() ([]catalog.Result, error) { return view.store.catalog.Lookup(query, opts) })
+	return read(ctx, view, func() ([]catalog.Result, error) { return view.store.catalog.Lookup(query, opts) })
 }
 
 func (view *readView) Close() error {
-	view.once.Do(view.store.mu.RUnlock)
+	view.once.Do(func() {
+		view.closed.Store(true)
+		view.store.mu.RUnlock()
+	})
 	return nil
 }

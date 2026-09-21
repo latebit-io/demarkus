@@ -1,6 +1,6 @@
 # ADR 0015: The backend contract takes a context per call and reads through views
 
-Status: accepted (2026-09-21).
+Status: accepted (2026-09-21). Amended by [ADR 0017](0017-archive-precondition-closed-views-and-seeding.md): a read on a closed view answers `backend.ErrViewClosed`, and `SetArchived` takes an `ArchiveRequest`.
 
 ## Context
 

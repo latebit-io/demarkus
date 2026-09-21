@@ -1,4 +1,4 @@
-.PHONY: all protocol server knowledge-server client tools image image-server image-knowledge-server image-broker image-memory-broker image-agent test clean install help lint fmt vet vuln fuzz deps
+.PHONY: all protocol server knowledge-server client tools image image-server image-knowledge-server image-broker image-memory-broker image-agent test clean install help lint fmt vet vuln fuzz smoke deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
@@ -203,6 +203,10 @@ fuzz:
 		go test -run '^$$' -fuzz "^$${t#*:}\$$" -fuzztime $(FUZZTIME) "$${t%%:*}" || exit 1; \
 	done
 	@cd tools && go test -run '^$$' -fuzz '^FuzzParseBytes$$' -fuzztime $(FUZZTIME) ./internal/token
+
+# Built binaries over real QUIC; the knowledge half needs Docker.
+smoke: server knowledge-server client tools
+	@bash scripts/smoke.sh
 
 # Update dependencies
 deps:

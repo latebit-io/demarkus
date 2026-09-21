@@ -17,6 +17,8 @@ var (
 	ErrQuota = errors.New("quota exceeded")
 	// ErrRejected means the store refused a write the publisher can correct.
 	ErrRejected = errors.New("write rejected")
+	// ErrReadOnly means the store was opened read-only and takes no write.
+	ErrReadOnly = errors.New("store is read-only")
 )
 
 // Rejection is an ErrRejected that carries its reason for the response body.
@@ -27,6 +29,9 @@ type Rejection interface {
 
 // ErrNotFound means the path, version or hash names nothing a reader may see.
 var ErrNotFound = errors.New("not found")
+
+// ErrViewClosed means a read reached a view after its Close.
+var ErrViewClosed = errors.New("read view is closed")
 
 // FromNotExist marks a backend's own missing-file error as ErrNotFound, keeping
 // the cause in the chain.
@@ -65,6 +70,18 @@ type WriteRequest struct {
 // the write and is returned as is; a retried commit runs it again.
 type Precondition func(ctx context.Context, state Reader, write storefmt.PreparedWrite) error
 
+// ArchiveRequest is one archive or unarchive transition.
+type ArchiveRequest struct {
+	Path     string
+	Archived bool
+	// Precondition, when set, judges the transition inside the commit.
+	Precondition ArchivePrecondition
+}
+
+// ArchivePrecondition runs after the not found and no-op checks and before
+// anything is stored, under the same rules as Precondition.
+type ArchivePrecondition func(ctx context.Context, state Reader, change storefmt.ArchiveChange) error
+
 // ArchiveResult is the document after an archive transition; Changed is false
 // when it already had the requested state.
 type ArchiveResult struct {
@@ -78,7 +95,7 @@ type Store interface {
 	ViewProvider
 	Publish(ctx context.Context, req WriteRequest) (*storefmt.Document, error)
 	Append(ctx context.Context, req WriteRequest) (*storefmt.Document, error)
-	SetArchived(ctx context.Context, reqPath string, archived bool) (ArchiveResult, error)
+	SetArchived(ctx context.Context, req ArchiveRequest) (ArchiveResult, error)
 }
 
 // CatalogReader exposes LOOKUP against the same snapshot as Reader.
@@ -86,7 +103,8 @@ type CatalogReader interface {
 	Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error)
 }
 
-// ReadView pins all read surfaces to one committed backend snapshot.
+// ReadView pins all read surfaces to one committed backend snapshot. Close is
+// idempotent; every read after it answers ErrViewClosed.
 type ReadView interface {
 	Reader
 	CatalogReader

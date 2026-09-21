@@ -36,11 +36,15 @@ func newHandlerWithTokens(b LookupBackend, extra map[string]auth.Token) *handler
 	}
 	maps.Copy(tokens, extra)
 	ts := auth.NewTokenStore(tokens)
-	return &handler.Handler{
+	built, err := handler.New(handler.Config{
 		Store:         b.Store,
 		GetTokenStore: func() *auth.TokenStore { return ts },
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		panic(err) // both fields are set above
 	}
+	return built
 }
 
 type mockStream struct {

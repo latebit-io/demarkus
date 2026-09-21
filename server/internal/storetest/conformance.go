@@ -18,6 +18,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
+	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
@@ -69,6 +70,8 @@ func RunConformance(t *testing.T, factory Factory, tamper Tamper) {
 		{"CanceledContext", testCanceledContext},
 		{"ListPaging", testListPaging},
 		{"Precondition", testPrecondition},
+		{"ArchivePrecondition", testArchivePrecondition},
+		{"ClosedView", testClosedView},
 		{"VerifyChainTampered", func(t *testing.T, s Direct) { testVerifyChainTampered(t, s, tamper) }},
 		{"VerifyChainTamperedTip", func(t *testing.T, s Direct) { testVerifyChainTamperedTip(t, s, tamper) }},
 	}
@@ -876,7 +879,7 @@ func testCanceledContext(t *testing.T, s Direct) {
 	if _, err := s.Append(ctx, request); !errors.Is(err, context.Canceled) {
 		t.Errorf("Append: %v, want canceled", err)
 	}
-	if _, err := s.SetArchived(ctx, "/ctx.md", true); !errors.Is(err, context.Canceled) {
+	if _, err := s.SetArchived(ctx, backend.ArchiveRequest{Path: "/ctx.md", Archived: true}); !errors.Is(err, context.Canceled) {
 		t.Errorf("SetArchived: %v, want canceled", err)
 	}
 	if got := currentVersion(t, s, "/ctx.md"); got != 1 {
@@ -991,5 +994,93 @@ func testPrecondition(t *testing.T, s Direct) {
 	accepted.Precondition = record(nil)
 	if doc, err := s.Publish(ctx, accepted); err != nil || doc.Version != 2 {
 		t.Fatalf("accepted publish = %+v, %v", doc, err)
+	}
+}
+
+// testArchivePrecondition: an archive transition's precondition runs inside the
+// commit, after the not found and no-op checks, sees the canonical change and
+// the state it commits against, and its error leaves the state alone.
+func testArchivePrecondition(t *testing.T, s Direct) {
+	ctx := context.Background()
+	mustWrite(t, s, "/arch-pre.md", 0, "one\n")
+	errRefused := errors.New("refused by precondition")
+	var seen []storefmt.ArchiveChange
+	record := func(verdict error) backend.ArchivePrecondition {
+		return func(ctx context.Context, state backend.Reader, change storefmt.ArchiveChange) error {
+			current, err := state.Get(ctx, "/arch-pre.md", 0)
+			if err != nil {
+				return fmt.Errorf("precondition read: %w", err)
+			}
+			if current.Archived == change.Archived {
+				return fmt.Errorf("precondition saw archived=%t, want the state before the change", current.Archived)
+			}
+			seen = append(seen, change)
+			return verdict
+		}
+	}
+
+	refused := backend.ArchiveRequest{Path: "arch-pre.md", Archived: true, Precondition: record(errRefused)}
+	if _, err := s.SetArchived(ctx, refused); !errors.Is(err, errRefused) {
+		t.Fatalf("refused archive: %v, want the precondition error", err)
+	}
+	if doc, err := s.Get("/arch-pre.md", 0); err != nil || doc.Archived {
+		t.Fatalf("after a refused archive = %+v, %v, want it live", doc, err)
+	}
+	if len(seen) != 1 || seen[0] != (storefmt.ArchiveChange{Path: "/arch-pre.md", Archived: true}) {
+		t.Fatalf("precondition saw %+v, want one canonical change", seen)
+	}
+
+	// Not found and no-op transitions are decided before the precondition.
+	seen = nil
+	missing := backend.ArchiveRequest{Path: "/arch-absent.md", Archived: true, Precondition: record(errRefused)}
+	if _, err := s.SetArchived(ctx, missing); !errors.Is(err, backend.ErrNotFound) {
+		t.Errorf("archive of a missing document: %v, want not found", err)
+	}
+	noop := backend.ArchiveRequest{Path: "/arch-pre.md", Precondition: record(errRefused)}
+	if result, err := s.SetArchived(ctx, noop); err != nil || result.Changed {
+		t.Errorf("unarchive of a live document = %+v, %v, want unchanged", result, err)
+	}
+	if len(seen) != 0 {
+		t.Errorf("precondition ran %d times for transitions decided earlier", len(seen))
+	}
+
+	accepted := refused
+	accepted.Precondition = record(nil)
+	if result, err := s.SetArchived(ctx, accepted); err != nil || !result.Changed || !result.Document.Archived {
+		t.Fatalf("accepted archive = %+v, %v", result, err)
+	}
+}
+
+// testClosedView: every read on a closed view answers backend.ErrViewClosed,
+// a second Close is harmless, and the store keeps serving new views and writes.
+func testClosedView(t *testing.T, s Direct) {
+	ctx := context.Background()
+	mustWrite(t, s, "/closed.md", 0, "# v1\n")
+	view, err := s.OpenReadView(ctx)
+	if err != nil {
+		t.Fatalf("open view: %v", err)
+	}
+	for range 2 {
+		if err := view.Close(); err != nil {
+			t.Fatalf("close view: %v", err)
+		}
+	}
+	reads := map[string]func() error{
+		"Get":         func() error { _, err := view.Get(ctx, "/closed.md", 0); return err },
+		"ListEntries": func() error { _, err := view.ListEntries(ctx, "/", storefmt.ListOptions{}); return err },
+		"IsDir":       func() error { _, err := view.IsDir(ctx, "/"); return err },
+		"Versions":    func() error { _, err := view.Versions(ctx, "/closed.md"); return err },
+		"LookupHash":  func() error { _, err := view.LookupHash(ctx, "sha256-0"); return err },
+		"VerifyChain": func() error { return view.VerifyChain(ctx, "/closed.md") },
+		"Lookup":      func() error { _, err := view.Lookup(ctx, "v1", catalog.Options{}); return err },
+	}
+	for name, read := range reads {
+		if err := read(); !errors.Is(err, backend.ErrViewClosed) {
+			t.Errorf("%s on a closed view: %v, want ErrViewClosed", name, err)
+		}
+	}
+	mustWrite(t, s, "/closed.md", 1, "# v2\n")
+	if got := currentVersion(t, s, "/closed.md"); got != 2 {
+		t.Errorf("version after the view closed = %d, want 2", got)
 	}
 }

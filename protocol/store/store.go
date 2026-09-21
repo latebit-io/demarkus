@@ -1002,6 +1002,13 @@ func (s *Store) getVersion(reqPath string, version int) (*storefmt.Document, err
 
 // ArchiveResult changes archive state and returns its committed result.
 func (s *Store) ArchiveResult(reqPath string, archived bool) (*storefmt.Document, bool, error) {
+	return s.ArchiveChecked(&storefmt.ArchiveSpec{ArchiveChange: storefmt.ArchiveChange{Path: reqPath, Archived: archived}})
+}
+
+// ArchiveChecked is ArchiveResult with an optional check run before the state
+// changes; a no-op transition is decided first and never reaches it.
+func (s *Store) ArchiveChecked(spec *storefmt.ArchiveSpec) (*storefmt.Document, bool, error) {
+	reqPath, archived := spec.Path, spec.Archived
 	if _, err := s.resolve(reqPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, false, os.ErrNotExist
@@ -1052,6 +1059,11 @@ func (s *Store) ArchiveResult(reqPath string, archived bool) (*storefmt.Document
 		}
 		s.updateArchiveIndex(reqPath, data, archived)
 		return doc, false, nil
+	}
+	if spec.Check != nil {
+		if err := spec.Check(storefmt.ArchiveChange{Path: storefmt.CanonicalPath(reqPath), Archived: archived}); err != nil {
+			return nil, false, err
+		}
 	}
 
 	committed, stateErr := writeArchiveState(filepath.Dir(versionFile), archived)

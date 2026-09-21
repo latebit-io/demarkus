@@ -540,3 +540,33 @@ func TestWorldManagerClosesSupersededStagedRuntime(t *testing.T) {
 		t.Errorf("retiring holds %d runtimes, want 1", waiting)
 	}
 }
+
+func TestWorldManagerReadOnlyWorldWritesNothing(t *testing.T) {
+	tokens := writeTokens(t, t.TempDir(), "acme")
+	worlds := "worlds:\n" + worldFragment("acme", testWorldID, tokens, false) + "    readOnly: true\n"
+	h, err := openHarness(t, t.TempDir(), worlds, nil)
+	if err == nil {
+		t.Fatal("read-only world over an empty bucket came up")
+	}
+	// Neither genesis nor a policy seed may be authored for it.
+	listed, err := h.objects(t, "acme").List(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(listed.Objects) != 0 {
+		t.Errorf("read-only open wrote %d objects", len(listed.Objects))
+	}
+}
+
+func TestWorldManagerSeedsProvisionedWorld(t *testing.T) {
+	tokens := writeTokens(t, t.TempDir(), "alice")
+	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, tokens, true))
+
+	// A provisioned world holds a policy before it serves a write; the marker
+	// lets its broker tell this seed from a curated policy and replace it.
+	document := h.seededPolicy(t, "alice")
+	if document.Version != 1 || document.Metadata["agent"] != publishpolicy.SeedAgent {
+		t.Errorf("provisioned world policy = version %d agent %q, want the marked seed at v1",
+			document.Version, document.Metadata["agent"])
+	}
+}

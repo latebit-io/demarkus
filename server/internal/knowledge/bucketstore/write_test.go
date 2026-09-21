@@ -54,11 +54,14 @@ func TestRejectionConformance(t *testing.T) {
 	storetest.RunRejectionConformance(t, storetest.RejectionFactories{
 		Quota: func(t *testing.T) storetest.LookupBackend { return open(t, Options{MaxDocuments: 2}) },
 		Policy: func(t *testing.T) storetest.LookupBackend {
-			seed := PolicySeed{
+			seed := writepolicy.PolicySeed{
 				Body:     []byte("# Write Policy\n\nCurated.\n\nstrictness: block\nrequire_tags: domain\n"),
 				Metadata: policyMetadata(),
 			}
-			b := open(t, Options{PolicySeed: &seed})
+			b := open(t, Options{})
+			if _, err := writepolicy.Seed(context.Background(), b.Store, seed); err != nil {
+				t.Fatalf("seed policy: %v", err)
+			}
 			b.Store = writepolicy.Enforce(b.Store, writepolicy.Options{Require: true})
 			return b
 		},
@@ -112,8 +115,8 @@ func tamperBucketVersion(t testing.TB, documentStore handler.DocumentStore, path
 	if !exists {
 		t.Fatalf("tamper path %s is missing", path)
 	}
-	view := &readView{ctx: context.Background(), objects: store.objects, snapshot: loaded}
-	history, err := view.loadHistory(&entry)
+	view := &readView{objects: store.objects, snapshot: loaded}
+	history, err := view.loadHistory(context.Background(), &entry)
 	if err != nil {
 		t.Fatalf("tamper load history: %v", err)
 	}

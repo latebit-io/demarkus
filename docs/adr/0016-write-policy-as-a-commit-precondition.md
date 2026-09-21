@@ -1,6 +1,6 @@
 # ADR 0016: The publish policy is enforced above the store, inside its commit
 
-Status: accepted (2026-09-21).
+Status: accepted (2026-09-21). Amended by [ADR 0017](0017-archive-precondition-closed-views-and-seeding.md): seeding moved to `writepolicy.Seed` and the archive guard runs as a precondition.
 
 ## Context
 

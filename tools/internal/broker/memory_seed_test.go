@@ -8,6 +8,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
 // freshWorldDispatcher fakes empty tenant worlds: everything is
@@ -145,5 +146,56 @@ func TestEnsureMemorySeedRetriesAfterFailure(t *testing.T) {
 	g.memorySeed.mu.Unlock()
 	if !seeded {
 		t.Fatal("retry after failure did not seed the world")
+	}
+}
+
+// policyDispatcher fakes a fresh world whose server already seeded a policy.
+func policyDispatcher(policyMeta map[string]string) *fakeDispatcher {
+	return &fakeDispatcher{
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
+			if path != publishpolicy.DocumentPath {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: policyMeta, Body: "# Policy\n"}}, nil
+		},
+	}
+}
+
+func TestEnsureMemorySeedReplacesServerSeededPolicy(t *testing.T) {
+	d := policyDispatcher(map[string]string{"version": "1", "agent": publishpolicy.SeedAgent})
+	g := newMemoryGateway(t, memoryTestConfig(), d)
+	g.ensureMemorySeed(withAliceClaims(context.Background()), &g.srv.cfg.Worlds[0])
+
+	calls := d.Calls().Publish
+	if len(calls) != 3 || calls[0].Path != publishpolicy.DocumentPath {
+		t.Fatalf("seed publishes = %+v, want the policy first of three", calls)
+	}
+	// Version two over the server's marked seed; never create-only, which
+	// would conflict and leave the knowledge default in a memory world.
+	if calls[0].ExpectedVersion != 1 {
+		t.Errorf("policy expectedVersion = %d, want 1", calls[0].ExpectedVersion)
+	}
+}
+
+func TestEnsureMemorySeedKeepsCuratedPolicy(t *testing.T) {
+	for name, meta := range map[string]map[string]string{
+		"written by a user":         {"version": "1", "agent": "alice@example.com"},
+		"seed already replaced":     {"version": "2", "agent": "demarkus-memory-broker"},
+		"marked seed edited later":  {"version": "3", "agent": publishpolicy.SeedAgent},
+		"no agent on the first one": {"version": "1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := policyDispatcher(meta)
+			g := newMemoryGateway(t, memoryTestConfig(), d)
+			g.ensureMemorySeed(withAliceClaims(context.Background()), &g.srv.cfg.Worlds[0])
+			for _, call := range d.Calls().Publish {
+				if call.Path == publishpolicy.DocumentPath {
+					t.Errorf("policy republished at expected version %d", call.ExpectedVersion)
+				}
+			}
+			if got := len(d.Calls().Publish); got != 2 {
+				t.Errorf("published %d docs, want the template and the hub", got)
+			}
+		})
 	}
 }

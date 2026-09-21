@@ -26,17 +26,24 @@ type enforcer struct {
 	require bool
 }
 
+// chain runs the caller's precondition, then the enforcer's.
+func chain[T any](inner, next func(context.Context, backend.Reader, T) error) func(context.Context, backend.Reader, T) error {
+	if inner == nil {
+		return next
+	}
+	return func(ctx context.Context, state backend.Reader, change T) error {
+		if err := inner(ctx, state, change); err != nil {
+			return err
+		}
+		return next(ctx, state, change)
+	}
+}
+
 // guard adds the policy verdict after any precondition the caller set.
 func (e *enforcer) guard(req *backend.WriteRequest) {
-	inner := req.Precondition
-	req.Precondition = func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
-		if inner != nil {
-			if err := inner(ctx, state, write); err != nil {
-				return err
-			}
-		}
+	req.Precondition = chain(req.Precondition, func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
 		return evaluate(ctx, state, write, e.require)
-	}
+	})
 }
 
 func (e *enforcer) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
@@ -50,24 +57,34 @@ func (e *enforcer) Append(ctx context.Context, req backend.WriteRequest) (*store
 }
 
 // SetArchived refuses to archive a required policy: the world would then
-// refuse every write. The rule needs no state, so it runs before the store.
-func (e *enforcer) SetArchived(ctx context.Context, reqPath string, archived bool) (backend.ArchiveResult, error) {
-	if archived && e.require && storefmt.CanonicalPath(reqPath) == publishpolicy.DocumentPath {
-		return backend.ArchiveResult{}, fmt.Errorf("%w: %w: required policy cannot be archived", backend.ErrRejected, ErrInvalidPolicy)
+// refuse every write. The guard runs inside the commit, after the caller's own.
+func (e *enforcer) SetArchived(ctx context.Context, req backend.ArchiveRequest) (backend.ArchiveResult, error) {
+	req.Precondition = chain(req.Precondition, e.keepRequiredPolicy)
+	return e.Store.SetArchived(ctx, req)
+}
+
+func (e *enforcer) keepRequiredPolicy(_ context.Context, _ backend.Reader, change storefmt.ArchiveChange) error {
+	if change.Archived && e.require && change.Path == publishpolicy.DocumentPath {
+		return fmt.Errorf("%w: %w: required policy cannot be archived", backend.ErrRejected, ErrInvalidPolicy)
 	}
-	return e.Store.SetArchived(ctx, reqPath, archived)
+	return nil
 }
 
 // Validate reports whether the world holds a usable policy document, which a
 // server checks before it starts enforcing one.
-func Validate(ctx context.Context, store backend.Store) (err error) {
+func Validate(ctx context.Context, store backend.Store) error {
+	return inspect(ctx, store)
+}
+
+// inspect reads the current policy through one view and returns its verdict.
+func inspect(ctx context.Context, store backend.Store) (err error) {
 	view, err := store.OpenReadView(ctx)
 	if err != nil {
-		return fmt.Errorf("validate policy: %w", err)
+		return fmt.Errorf("read policy: %w", err)
 	}
 	defer func() {
 		if closeErr := view.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("validate policy: close view: %w", closeErr)
+			err = fmt.Errorf("read policy: close view: %w", closeErr)
 		}
 	}()
 	_, err = Current(ctx, view, true)

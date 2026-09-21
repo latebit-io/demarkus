@@ -686,8 +686,8 @@ func currentRetainedHistory(t *testing.T, store *Store, path string) retainedHis
 	if !exists {
 		t.Fatalf("path %s is missing", path)
 	}
-	view := &readView{ctx: context.Background(), objects: store.objects, snapshot: loaded}
-	history, err := view.loadHistory(&entry)
+	view := &readView{objects: store.objects, snapshot: loaded}
+	history, err := view.loadHistory(context.Background(), &entry)
 	if err != nil {
 		t.Fatalf("load manifest %s: %v", path, err)
 	}

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
@@ -219,23 +220,24 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 		WorldID:        world.Bucket.WorldID,
 		Logger:         m.logger.With("world", world.Name),
 		RequestTimeout: time.Duration(world.Limits.RequestTimeout),
-		PolicySeed:     seed,
 		MaxDocuments:   world.Limits.MaxDocuments,
+		ReadOnly:       world.ReadOnly,
 	})
 	if err != nil {
 		return fmt.Errorf("bucket: %w", err)
 	}
-	// A provisioned world gets its policy from the broker later; every other
-	// world must hold a usable one before it serves a write.
-	requirePolicy := !world.Bootstrap
-	if requirePolicy {
-		if err := writepolicy.Validate(ctx, store); err != nil {
-			return fmt.Errorf("policy: %w", err)
-		}
+	// Every world holds a usable policy before it serves a write. A provisioned
+	// world's broker replaces the marked seed with its own as version two.
+	created, err := writepolicy.Ensure(ctx, store, seed)
+	if err != nil {
+		return fmt.Errorf("policy: %w", err)
+	}
+	if created {
+		m.logger.Info("seeded the initial write policy", "world", world.Name, "path", publishpolicy.DocumentPath)
 	}
 	runtime, err := worldruntime.New(&worldruntime.Config{
 		Name:              world.Name,
-		Store:             writepolicy.Enforce(store, writepolicy.Options{Require: requirePolicy}),
+		Store:             writepolicy.Enforce(store, writepolicy.Options{Require: true}),
 		TokensFile:        world.Auth.TokensFile,
 		DisableTokenWatch: true, // the coordinator owns reloads
 		ReadOnly:          world.ReadOnly,
@@ -257,26 +259,17 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	entry := &worldEntry{config: *world, runtime: runtime}
 	m.entries[world.Name] = entry
 	m.acquireTokenWatchLocked(world.Auth.TokensFile)
-	m.logger.Info("world opened", "world", world.Name, "bootstrap", world.Bootstrap)
+	m.logger.Info("world opened", "world", world.Name)
 	return nil
 }
 
 // policySeed picks the world's initial policy: the operator's file when
-// configured, else the embedded default. A provisioned world is seeded by
-// its broker and a read-only world never writes, so neither carries one.
-func policySeed(world *knowledgeconfig.WorldConfig) (*bucketstore.PolicySeed, error) {
-	if world.Bootstrap || world.ReadOnly {
-		return nil, nil
-	}
+// configured, else the embedded default.
+func policySeed(world *knowledgeconfig.WorldConfig) (writepolicy.PolicySeed, error) {
 	if world.Policy.File == "" {
-		seed := knowledgeseed.DefaultPolicySeed()
-		return &seed, nil
+		return knowledgeseed.DefaultPolicySeed(), nil
 	}
-	seed, err := knowledgeseed.PolicySeedFromFile(world.Policy.File)
-	if err != nil {
-		return nil, err
-	}
-	return &seed, nil
+	return knowledgeseed.PolicySeedFromFile(world.Policy.File)
 }
 
 // ensureGenesis creates the world's genesis when its bucket is empty, so a

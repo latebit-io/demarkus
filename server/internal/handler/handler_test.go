@@ -145,7 +145,7 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 		flatDir := setupContentDir(t, map[string]string{
 			"flat.md": "# Flat\n",
 		})
-		flatH := &Handler{Store: filestore.New(store.New(flatDir), catalog.New()), Logger: discardLogger}
+		flatH := mustNew(Config{Store: filestore.New(store.New(flatDir), catalog.New()), Logger: discardLogger})
 
 		stream := newMockStream("FETCH /flat.md\n")
 		flatH.HandleStream(context.Background(), stream)
@@ -840,7 +840,7 @@ func TestRelativeContentDir(t *testing.T) {
 	}
 
 	relStore := store.New("./site")
-	h := &Handler{Store: filestore.New(relStore, catalog.New()), Logger: discardLogger}
+	h := mustNew(Config{Store: filestore.New(relStore, catalog.New()), Logger: discardLogger})
 
 	t.Run("fetch works with relative content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /page.md\n")
@@ -917,7 +917,7 @@ func TestContentDirAsSymlink(t *testing.T) {
 	}
 
 	symlinkStore := store.New(symlinkDir)
-	h := &Handler{Store: filestore.New(symlinkStore, catalog.New()), Logger: discardLogger}
+	h := mustNew(Config{Store: filestore.New(symlinkStore, catalog.New()), Logger: discardLogger})
 
 	t.Run("fetch through symlinked content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /file.md\n")
@@ -1016,7 +1016,7 @@ func testHandleVersions(t *testing.T, newBackend backendFactory) {
 			"flat.md": "# Flat\n",
 		})
 		// File-only: raw flat file fixture.
-		flatH := &Handler{Store: filestore.New(store.New(flatDir), catalog.New()), Logger: discardLogger}
+		flatH := mustNew(Config{Store: filestore.New(store.New(flatDir), catalog.New()), Logger: discardLogger})
 
 		stream := newMockStream("VERSIONS /flat.md\n")
 		flatH.HandleStream(context.Background(), stream)
@@ -1040,21 +1040,6 @@ func testHandleVersions(t *testing.T, newBackend backendFactory) {
 		}
 		if resp.Status != protocol.StatusNotFound {
 			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
-		}
-	})
-
-	t.Run("no store configured", func(t *testing.T) {
-		noStoreH := &Handler{Logger: discardLogger}
-
-		stream := newMockStream("VERSIONS /doc.md\n")
-		noStoreH.HandleStream(context.Background(), stream)
-
-		resp, err := protocol.ParseResponse(&stream.output)
-		if err != nil {
-			t.Fatalf("parse response: %v", err)
-		}
-		if resp.Status != protocol.StatusServerError {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusServerError)
 		}
 	})
 }
@@ -1258,21 +1243,6 @@ func testHandlePublish(t *testing.T, newBackend backendFactory) {
 		}
 		if resp.Metadata["version"] != "2" {
 			t.Errorf("version: got %q, want %q", resp.Metadata["version"], "2")
-		}
-	})
-
-	t.Run("no store configured", func(t *testing.T) {
-		h := &Handler{Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
-
-		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# New\n")
-		h.HandleStream(context.Background(), stream)
-
-		resp, err := protocol.ParseResponse(&stream.output)
-		if err != nil {
-			t.Fatalf("parse response: %v", err)
-		}
-		if resp.Status != protocol.StatusServerError {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusServerError)
 		}
 	})
 
@@ -1660,7 +1630,7 @@ func (spy *archiveResultStore) OpenReadView(ctx context.Context) (storagebackend
 	return spy.DocumentStore.OpenReadView(ctx)
 }
 
-func (spy *archiveResultStore) SetArchived(context.Context, string, bool) (storagebackend.ArchiveResult, error) {
+func (spy *archiveResultStore) SetArchived(context.Context, storagebackend.ArchiveRequest) (storagebackend.ArchiveResult, error) {
 	spy.archiveCalls++
 	return storagebackend.ArchiveResult{Document: spy.document, Changed: spy.changed}, spy.err
 }
@@ -2406,11 +2376,7 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 	// Write the well-known manifest so we can test it's always accessible.
 	mustWrite(t, b, "/.well-known/agent-manifest.md", []byte("# Manifest\n"), nil)
 
-	h := &Handler{
-		Store:         b.Store,
-		GetTokenStore: func() *auth.TokenStore { return tokenStore },
-		Logger:        discardLogger,
-	}
+	h := newHandler(b, tokenStore)
 
 	tests := []struct {
 		name       string
@@ -2726,7 +2692,7 @@ func testFetchHashLookupFailure(t *testing.T, newBackend backendFactory) {
 		t.Run(test.name, func(t *testing.T) {
 			b := newBackend(t)
 			h := newHandler(b, nil)
-			h.Store = &viewStore{DocumentStore: b.Store, wrap: func(view storagebackend.ReadView) storagebackend.ReadView {
+			h.store = &viewStore{DocumentStore: b.Store, wrap: func(view storagebackend.ReadView) storagebackend.ReadView {
 				return &hashResultView{ReadView: view, path: test.path, err: test.err}
 			}}
 			stream := newMockStream("FETCH " + hashPath + "\n")
@@ -2749,7 +2715,7 @@ func testReadOnlyMode(t *testing.T, newBackend backendFactory) {
 	seedBackend(t, b, map[string]string{
 		"doc.md": "# Existing\n",
 	})
-	h := &Handler{
+	h := mustNew(Config{
 		Store:    b.Store,
 		Logger:   discardLogger,
 		ReadOnly: true,
@@ -2758,7 +2724,7 @@ func testReadOnlyMode(t *testing.T, newBackend backendFactory) {
 				protocol.HashToken("secret"): {Paths: []string{"/*"}, Operations: []string{"publish", "append", "archive"}},
 			})
 		},
-	}
+	})
 	authMeta := "---\nauth: secret\n---\n"
 
 	for _, verb := range []string{"PUBLISH", "APPEND", "ARCHIVE"} {
@@ -2836,7 +2802,7 @@ func testHandlePublish_Retention(t *testing.T, newBackend backendFactory) {
 			mustWrite(t, b, "/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil)
 		}
 		var logBuf bytes.Buffer
-		h := &Handler{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := mustNew(Config{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }})
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nretention: 2\n---\n# Version 6\n")
 		h.HandleStream(context.Background(), stream)
@@ -2889,7 +2855,7 @@ func testHandlePublish_Retention(t *testing.T, newBackend backendFactory) {
 			mustWrite(t, b, "/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil)
 		}
 		var logBuf bytes.Buffer
-		h := &Handler{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := mustNew(Config{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }})
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n---\n# Version 4\n")
 		h.HandleStream(context.Background(), stream)
@@ -2937,7 +2903,7 @@ func testHandleAppend_Retention(t *testing.T, newBackend backendFactory) {
 		b := newBackend(t)
 		seedDoc(t, b, 5)
 		var logBuf bytes.Buffer
-		h := &Handler{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := mustNew(Config{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }})
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 5\nretention: 2\n---\nappended line\n")
 		h.HandleStream(context.Background(), stream)
@@ -2988,7 +2954,7 @@ func testHandleAppend_Retention(t *testing.T, newBackend backendFactory) {
 		b := newBackend(t)
 		seedDoc(t, b, 3)
 		var logBuf bytes.Buffer
-		h := &Handler{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := mustNew(Config{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }})
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 3\n---\nappended line\n")
 		h.HandleStream(context.Background(), stream)

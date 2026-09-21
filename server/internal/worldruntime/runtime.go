@@ -89,11 +89,14 @@ func New(config *Config) (*Runtime, error) {
 		closeBackend:   config.CloseBackend,
 		watchDone:      make(chan struct{}),
 	}
-	runtime.handler = &handler.Handler{
+	runtime.handler, err = handler.New(handler.Config{
 		Store:         config.Store,
 		GetTokenStore: tokens.Current,
 		Logger:        logger,
 		ReadOnly:      config.ReadOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("world runtime: %w", err)
 	}
 	if config.RateLimit > 0 {
 		runtime.limiter = ratelimit.New(config.RateLimit, config.RateBurst)
@@ -180,9 +183,7 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 			logger.Debug("setting stream write deadline", "error", err)
 		}
 	}
-	requestHandler := *r.handler
-	requestHandler.Logger = logger
-	requestHandler.HandleStream(requestCtx, stream)
+	r.handler.WithLogger(logger).HandleStream(requestCtx, stream)
 }
 
 func (r *Runtime) acquire(ctx context.Context, remote net.Addr, stream quicserve.Stream, logger *slog.Logger) bool {

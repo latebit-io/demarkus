@@ -67,9 +67,18 @@ func mustWrite(t testing.TB, b backend, path string, body []byte, meta map[strin
 // newHandler wires a backend into a Handler as main.go does; ts may be nil
 // for read-only tests.
 func newHandler(b backend, ts *auth.TokenStore) *Handler {
-	h := &Handler{Store: b.Store, Logger: discardLogger}
+	config := Config{Store: b.Store, Logger: discardLogger}
 	if ts != nil {
-		h.GetTokenStore = func() *auth.TokenStore { return ts }
+		config.GetTokenStore = func() *auth.TokenStore { return ts }
+	}
+	return mustNew(config)
+}
+
+// mustNew builds a handler from a config the test knows to be complete.
+func mustNew(config Config) *Handler {
+	h, err := New(config)
+	if err != nil {
+		panic(err)
 	}
 	return h
 }

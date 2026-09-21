@@ -13,8 +13,15 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 )
 
+// ExportOptions names the world to export and how many shards load at once.
+type ExportOptions struct {
+	WorldID string
+	Workers int
+}
+
 // ExportDocs reads every retained version from one immutable root snapshot.
-func ExportDocs(ctx context.Context, objects blob.Store, worldID string, workers int, fn func(string, storefmt.StoredDocument) error) error {
+func ExportDocs(ctx context.Context, objects blob.Store, options ExportOptions, fn func(string, storefmt.StoredDocument) error) error {
+	worldID, workers := options.WorldID, options.Workers
 	if ctx == nil {
 		return fmt.Errorf("export bucket store: %w: context is nil", blob.ErrPrecondition)
 	}
@@ -37,21 +44,21 @@ func ExportDocs(ctx context.Context, objects blob.Store, worldID string, workers
 	if err != nil {
 		return fmt.Errorf("export bucket store: %w", err)
 	}
-	view := readView{ctx: ctx, objects: objects, snapshot: loaded}
+	view := readView{objects: objects, snapshot: loaded}
 	paths := slices.Collect(maps.Keys(loaded.Paths))
 	sort.Slice(paths, func(i, j int) bool {
 		return slices.Compare(strings.Split(paths[i], "/"), strings.Split(paths[j], "/")) < 0
 	})
 	for _, path := range paths {
 		entry := loaded.Paths[path]
-		history, err := view.loadHistory(&entry)
+		history, err := view.loadHistory(ctx, &entry)
 		if err != nil {
 			return fmt.Errorf("export %s: %w", path, err)
 		}
 		versions := make([]storefmt.StoredVersion, len(history.versions))
 		for index := range history.versions {
 			retained := &history.versions[index]
-			raw, err := view.loadBlob(retained.entry.Blob)
+			raw, err := view.loadBlob(ctx, retained.entry.Blob)
 			if err != nil {
 				return fmt.Errorf("export %s v%d: %w", path, retained.entry.Version, err)
 			}

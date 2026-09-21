@@ -64,6 +64,17 @@ func TestEnforceKeepsTheCallersPrecondition(t *testing.T) {
 	if _, err := gated.Publish(context.Background(), req); !errors.Is(err, errMine) {
 		t.Errorf("publish = %v, want the caller's precondition to run first", err)
 	}
+	raw := newStore(t)
+	if _, err := (backendtest.Direct{Store: raw}).WriteVersion("/a.md", 0, []byte("# A\n"), nil); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	archive := backend.ArchiveRequest{
+		Path: "/a.md", Archived: true,
+		Precondition: func(context.Context, backend.Reader, storefmt.ArchiveChange) error { return errMine },
+	}
+	if _, err := writepolicy.Enforce(raw, writepolicy.Options{}).SetArchived(context.Background(), archive); !errors.Is(err, errMine) {
+		t.Errorf("archive = %v, want the caller's precondition to run first", err)
+	}
 }
 
 func TestRequireAndValidate(t *testing.T) {

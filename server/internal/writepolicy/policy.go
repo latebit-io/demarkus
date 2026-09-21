@@ -20,6 +20,8 @@ var (
 	ErrPolicyApprovalRequired = errors.New("publish policy requires approval")
 	// ErrInvalidPolicy reports a missing or malformed required policy.
 	ErrInvalidPolicy = errors.New("invalid publish policy")
+	// errPolicyMissing narrows ErrInvalidPolicy to a world with no document.
+	errPolicyMissing = errors.New("policy document is missing")
 )
 
 // PolicyError carries the violations so the handler can list them.
@@ -60,7 +62,7 @@ func Current(ctx context.Context, reader backend.Reader, require bool) (publishp
 	switch {
 	case errors.Is(err, backend.ErrNotFound):
 		if require {
-			return publishpolicy.Policy{}, fmt.Errorf("%w: %s is missing", ErrInvalidPolicy, publishpolicy.DocumentPath)
+			return publishpolicy.Policy{}, fmt.Errorf("%w: %w: %s", ErrInvalidPolicy, errPolicyMissing, publishpolicy.DocumentPath)
 		}
 		return publishpolicy.Policy{}, nil
 	case err != nil:

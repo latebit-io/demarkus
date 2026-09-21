@@ -111,5 +111,5 @@ func (d Direct) AppendVersion(reqPath string, expected int, content []byte, meta
 
 // Archive sets archive state with a background context.
 func (d Direct) Archive(reqPath string, archived bool) (backend.ArchiveResult, error) {
-	return d.SetArchived(context.Background(), reqPath, archived)
+	return d.SetArchived(context.Background(), backend.ArchiveRequest{Path: reqPath, Archived: archived})
 }

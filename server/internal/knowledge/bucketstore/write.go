@@ -26,18 +26,18 @@ type candidateMutation struct {
 	shard       shardObject
 	shardIndex  int
 	objects     []modelObject
-	result      MutationResult
+	result      mutationResult
 	operationID string
 	prepared    *snapshot
 }
 
-// MutationResult is a committed or refused mutation.
-type MutationResult struct {
+// mutationResult is a committed or refused mutation.
+type mutationResult struct {
 	Document *storefmt.Document
 	Changed  bool
 }
 
-type mutationBuilder func(context.Context, *readView, string) (*candidateMutation, MutationResult, error)
+type mutationBuilder func(context.Context, *readView, string) (*candidateMutation, mutationResult, error)
 
 // Publish commits one version.
 func (store *Store) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
@@ -46,22 +46,22 @@ func (store *Store) Publish(ctx context.Context, req backend.WriteRequest) (*sto
 }
 
 // publish keeps the policy output that Publish drops.
-func (store *Store) publish(ctx context.Context, req backend.WriteRequest) (MutationResult, error) {
+func (store *Store) publish(ctx context.Context, req backend.WriteRequest) (mutationResult, error) {
 	path, expected, content, metadata := req.Path, req.ExpectedVersion, req.Content, req.Metadata
 	if err := storefmt.ValidateWrite(content, metadata); err != nil {
-		return MutationResult{}, err
+		return mutationResult{}, err
 	}
 	canonical, err := canonicalMutationPath(path)
 	if err != nil {
-		return MutationResult{}, err
+		return mutationResult{}, err
 	}
 	body := bytes.Clone(content)
 	meta := maps.Clone(metadata)
 	blindBase := -1
-	return store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, MutationResult, error) {
+	return store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
 		if _, exists := view.snapshot.Paths[canonical]; !exists {
 			if err := store.checkDocumentQuota(view); err != nil {
-				return nil, MutationResult{}, err
+				return nil, mutationResult{}, err
 			}
 		}
 		if expected < 0 {
@@ -103,42 +103,42 @@ func (store *Store) Append(ctx context.Context, req backend.WriteRequest) (*stor
 }
 
 // appendVersion keeps the policy output that Append drops.
-func (store *Store) appendVersion(ctx context.Context, req backend.WriteRequest) (MutationResult, error) {
+func (store *Store) appendVersion(ctx context.Context, req backend.WriteRequest) (mutationResult, error) {
 	path, expected, content, metadata := req.Path, req.ExpectedVersion, req.Content, req.Metadata
 	if expected < 1 {
-		return MutationResult{}, fmt.Errorf("APPEND requires expected-version >= 1, got %d", expected)
+		return mutationResult{}, fmt.Errorf("APPEND requires expected-version >= 1, got %d", expected)
 	}
 	if len(content) == 0 {
-		return MutationResult{}, fmt.Errorf("APPEND requires non-empty content")
+		return mutationResult{}, fmt.Errorf("APPEND requires non-empty content")
 	}
 	if err := storefmt.ValidateMeta(metadata); err != nil {
-		return MutationResult{}, err
+		return mutationResult{}, err
 	}
 	canonical, err := canonicalMutationPath(path)
 	if err != nil {
-		return MutationResult{}, err
+		return mutationResult{}, err
 	}
 	addition := bytes.Clone(content)
 	meta := maps.Clone(metadata)
-	return store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, MutationResult, error) {
+	return store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
 		entry, exists := view.snapshot.Paths[canonical]
 		if !exists {
-			return nil, MutationResult{}, backend.ErrNotFound
+			return nil, mutationResult{}, backend.ErrNotFound
 		}
 		if entry.Current != expected {
 			return nil, conflictResult(entry.Current), storefmt.ErrConflict
 		}
-		base, err := view.Get(canonical, expected)
+		base, err := view.Get(ctx, canonical, expected)
 		if err != nil {
-			return nil, MutationResult{}, err
+			return nil, mutationResult{}, err
 		}
 		combined, err := storefmt.JoinContent(base.Content, addition)
 		if err != nil {
-			return nil, MutationResult{}, err
+			return nil, mutationResult{}, err
 		}
 		merged := storefmt.PrepareAppendMeta(canonical, base.Metadata, meta)
 		if err := storefmt.ValidateWrite(combined, merged); err != nil {
-			return nil, MutationResult{}, err
+			return nil, mutationResult{}, err
 		}
 		write := writeCandidate{path: canonical, expected: expected, body: combined, metadata: merged, precondition: req.Precondition}
 		return store.buildWriteCandidate(ctx, view, operationID, &write)
@@ -146,15 +146,19 @@ func (store *Store) appendVersion(ctx context.Context, req backend.WriteRequest)
 }
 
 // SetArchived atomically toggles operational archive state.
-func (store *Store) SetArchived(ctx context.Context, path string, archived bool) (backend.ArchiveResult, error) {
-	canonical, err := canonicalMutationPath(path)
+func (store *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (backend.ArchiveResult, error) {
+	canonical, err := canonicalMutationPath(req.Path)
 	if err != nil {
 		return backend.ArchiveResult{}, err
 	}
-	result, err := store.runMutation(ctx, func(_ context.Context, view *readView, operationID string) (*candidateMutation, MutationResult, error) {
-		return store.buildArchiveCandidate(view, operationID, canonical, archived)
+	archive := archiveCandidate{
+		change:       storefmt.ArchiveChange{Path: canonical, Archived: req.Archived},
+		precondition: req.Precondition,
+	}
+	result, err := store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
+		return store.buildArchiveCandidate(ctx, view, operationID, &archive)
 	})
-	return backend.ArchiveResult{Document: result.Document, Changed: result.Changed}, err
+	return backend.ArchiveResult(result), err
 }
 
 func canonicalMutationPath(path string) (string, error) {
@@ -170,8 +174,8 @@ func canonicalMutationPath(path string) (string, error) {
 	return canonical, nil
 }
 
-func conflictResult(version int) MutationResult {
-	return MutationResult{Document: &storefmt.Document{Version: version}}
+func conflictResult(version int) mutationResult {
+	return mutationResult{Document: &storefmt.Document{Version: version}}
 }
 
 // writeCandidate is one prepared PUBLISH or APPEND inside a commit attempt.
@@ -206,13 +210,13 @@ type writeBase struct {
 	unchanged   *storefmt.Document
 }
 
-func loadWriteBase(view *readView, entry *snapshotEntry, write *writeCandidate) (writeBase, error) {
-	history, err := view.loadHistory(entry)
+func loadWriteBase(ctx context.Context, view *readView, entry *snapshotEntry, write *writeCandidate) (writeBase, error) {
+	history, err := view.loadHistory(ctx, entry)
 	if err != nil {
 		return writeBase{}, err
 	}
 	tip := history.versions[len(history.versions)-1]
-	previousRaw, err := view.loadBlob(tip.entry.Blob)
+	previousRaw, err := view.loadBlob(ctx, tip.entry.Blob)
 	if err != nil {
 		return writeBase{}, err
 	}
@@ -232,7 +236,7 @@ func (store *Store) buildWriteCandidate(
 	view *readView,
 	operationID string,
 	write *writeCandidate,
-) (*candidateMutation, MutationResult, error) {
+) (*candidateMutation, mutationResult, error) {
 	path, expected, body, metadata := write.path, write.expected, write.body, write.metadata
 	entry, exists := view.snapshot.Paths[path]
 	current := 0
@@ -243,17 +247,17 @@ func (store *Store) buildWriteCandidate(
 		return nil, conflictResult(current), storefmt.ErrConflict
 	}
 	if err := checkWritable(view.snapshot, path); err != nil {
-		return nil, MutationResult{}, err
+		return nil, mutationResult{}, err
 	}
 
 	var base writeBase
 	if exists {
 		var err error
-		if base, err = loadWriteBase(view, &entry, write); err != nil {
-			return nil, MutationResult{}, err
+		if base, err = loadWriteBase(ctx, view, &entry, write); err != nil {
+			return nil, mutationResult{}, err
 		}
 		if base.unchanged != nil {
-			return nil, MutationResult{Document: base.unchanged}, storefmt.ErrNotModified
+			return nil, mutationResult{Document: base.unchanged}, storefmt.ErrNotModified
 		}
 	}
 	history, previousRaw := base.history, base.previousRaw
@@ -261,15 +265,15 @@ func (store *Store) buildWriteCandidate(
 	next := current + 1
 	stored, err := storefmt.SerializeVersion(next, previousRaw, body, metadata)
 	if err != nil {
-		return nil, MutationResult{}, err
+		return nil, mutationResult{}, err
 	}
 	modified := store.now().UTC().Truncate(time.Second)
 	persisted := storefmt.ExtractMetadata(stored)
 	if write.precondition != nil {
 		// Each commit attempt judges the write against the snapshot it rebased on.
 		prepared := storefmt.PreparedWrite{Path: path, Content: body, Metadata: persisted}
-		if err := write.precondition(ctx, attemptView(view), prepared); err != nil {
-			return nil, MutationResult{}, err
+		if err := write.precondition(ctx, attemptView(ctx, view), prepared); err != nil {
+			return nil, mutationResult{}, err
 		}
 	}
 
@@ -288,7 +292,7 @@ func (store *Store) buildWriteCandidate(
 	}
 	historyRefs, historyObjects, err := buildHistoryBlocks(pathHash(path), versions, oldManifest.History, map[int]bool{next: true})
 	if err != nil {
-		return nil, MutationResult{}, err
+		return nil, mutationResult{}, err
 	}
 	manifest := manifestObject{
 		Schema:   schemaVersion,
@@ -299,7 +303,7 @@ func (store *Store) buildWriteCandidate(
 	}
 	manifestModel, manifestRef, err := buildManifestModel(manifest)
 	if err != nil {
-		return nil, MutationResult{}, err
+		return nil, mutationResult{}, err
 	}
 	catalogRecord := makeCatalogRecord(path, persisted, body, modified)
 	newEntry := shardEntry{
@@ -325,52 +329,70 @@ func (store *Store) buildWriteCandidate(
 	objects = append(objects, modelObject{Key: versionEntry.Blob.Key, Data: bytes.Clone(stored)})
 	objects = append(objects, historyObjects...)
 	objects = append(objects, manifestModel)
-	result := MutationResult{Document: document, Changed: true}
-	return store.buildNamespaceCandidate(view.ctx, view.snapshot, operationID, &newEntry, !exists, objects, result, body)
+	result := mutationResult{Document: document, Changed: true}
+	return store.buildNamespaceCandidate(ctx, view.snapshot, &namespaceChange{
+		operationID: operationID, entry: &newEntry, created: !exists, objects: objects, result: result, body: body,
+	})
+}
+
+// archiveCandidate is one canonical archive transition inside a commit attempt.
+type archiveCandidate struct {
+	change       storefmt.ArchiveChange
+	precondition backend.ArchivePrecondition
 }
 
 func (store *Store) buildArchiveCandidate(
+	ctx context.Context,
 	view *readView,
-	operationID, path string,
-	archived bool,
-) (*candidateMutation, MutationResult, error) {
+	operationID string,
+	archive *archiveCandidate,
+) (*candidateMutation, mutationResult, error) {
+	path, archived := archive.change.Path, archive.change.Archived
 	entry, exists := view.snapshot.Paths[path]
 	if !exists {
-		return nil, MutationResult{}, backend.ErrNotFound
+		return nil, mutationResult{}, backend.ErrNotFound
 	}
-	history, err := view.loadHistory(&entry)
+	history, err := view.loadHistory(ctx, &entry)
 	if err != nil {
-		return nil, MutationResult{}, err
+		return nil, mutationResult{}, err
 	}
 	tip := history.versions[len(history.versions)-1]
-	raw, err := view.loadBlob(tip.entry.Blob)
+	raw, err := view.loadBlob(ctx, tip.entry.Blob)
 	if err != nil {
-		return nil, MutationResult{}, err
+		return nil, mutationResult{}, err
 	}
 	storedTip, err := validateStoredDocument(raw, &tip)
 	if err != nil {
-		return nil, MutationResult{}, err
+		return nil, mutationResult{}, err
 	}
 	if entry.Archived == archived {
 		document := documentFromRetained(raw, &tip, &storedTip, archived)
-		return nil, MutationResult{Document: document, Changed: false}, nil
+		return nil, mutationResult{Document: document, Changed: false}, nil
+	}
+	if archive.precondition != nil {
+		// Judged again on every rebased attempt, as a write is.
+		if err := archive.precondition(ctx, attemptView(ctx, view), archive.change); err != nil {
+			return nil, mutationResult{}, err
+		}
 	}
 	manifest := history.manifest
 	manifest.Archived = archived
 	manifestModel, manifestRef, err := buildManifestModel(manifest)
 	if err != nil {
-		return nil, MutationResult{}, err
+		return nil, mutationResult{}, err
 	}
 	oldEntry, err := snapshotShardEntry(view.snapshot, path)
 	if err != nil {
-		return nil, MutationResult{}, err
+		return nil, mutationResult{}, err
 	}
 	oldEntry.Manifest = manifestRef
 	oldEntry.Archived = archived
 	objects := []modelObject{manifestModel}
 	document := documentFromRetained(raw, &tip, &storedTip, archived)
-	result := MutationResult{Document: document, Changed: true}
-	return store.buildNamespaceCandidate(view.ctx, view.snapshot, operationID, &oldEntry, false, objects, result, nil)
+	result := mutationResult{Document: document, Changed: true}
+	return store.buildNamespaceCandidate(ctx, view.snapshot, &namespaceChange{
+		operationID: operationID, entry: &oldEntry, objects: objects, result: result,
+	})
 }
 
 func validateNewPathTopology(snapshot *snapshot, path string) error {
@@ -507,67 +529,73 @@ func snapshotShardEntry(snapshot *snapshot, path string) (shardEntry, error) {
 	return entries[position], nil
 }
 
+// namespaceChange is one changed entry plus the objects staged for it. body is
+// the written content, nil for an archive flip.
+type namespaceChange struct {
+	operationID string
+	entry       *shardEntry
+	created     bool
+	objects     []modelObject
+	result      mutationResult
+	body        []byte
+}
+
 // buildNamespaceCandidate derives the committed snapshot from base plus one
-// changed entry; body is the written content, nil for an archive flip, so
-// the section index needs at most one bucket read.
+// changed entry, so the section index needs at most one bucket read.
 func (store *Store) buildNamespaceCandidate(
 	ctx context.Context,
 	base *snapshot,
-	operationID string,
-	entry *shardEntry,
-	created bool,
-	objects []modelObject,
-	result MutationResult,
-	body []byte,
-) (*candidateMutation, MutationResult, error) {
+	change *namespaceChange,
+) (*candidateMutation, mutationResult, error) {
+	entry, objects := change.entry, change.objects
 	shardIndex := int(pathHashBytes(entry.Path)[0])
 	shard := base.Shards[shardIndex]
 	shard.Entries = slices.Clone(shard.Entries)
 	position := sort.Search(len(shard.Entries), func(position int) bool {
 		return shard.Entries[position].Path >= entry.Path
 	})
-	if created {
+	if change.created {
 		shard.Entries = slices.Insert(shard.Entries, position, *entry)
 	} else {
 		if position == len(shard.Entries) || shard.Entries[position].Path != entry.Path {
-			return nil, MutationResult{}, fmt.Errorf("%w: path %s is missing from shard", storefmt.ErrIntegrity, entry.Path)
+			return nil, mutationResult{}, fmt.Errorf("%w: path %s is missing from shard", storefmt.ErrIntegrity, entry.Path)
 		}
 		shard.Entries[position] = *entry
 	}
 	shardID := fmt.Sprintf("%02x", shardIndex)
 	if err := validateShardObject(&shard, shardID); err != nil {
-		return nil, MutationResult{}, fmt.Errorf("build shard: %w", err)
+		return nil, mutationResult{}, fmt.Errorf("build shard: %w", err)
 	}
 	shardModel, shardObjectRef, err := immutableJSON(func(hash string) string {
 		return shardKey(shardID, hash)
 	}, shard)
 	if err != nil {
-		return nil, MutationResult{}, fmt.Errorf("build shard: %w", err)
+		return nil, mutationResult{}, fmt.Errorf("build shard: %w", err)
 	}
 	objects = append(objects, shardModel)
 
 	root := base.Root
 	root.Shards = slices.Clone(root.Shards)
 	root.Shards[shardIndex] = shardRef{Shard: shardID, objectRef: shardObjectRef}
-	if created {
+	if change.created {
 		root.DocumentCount++
 	}
 	if err := validateRootObject(&root, base.Head.WorldID); err != nil {
-		return nil, MutationResult{}, fmt.Errorf("build root: %w", err)
+		return nil, mutationResult{}, fmt.Errorf("build root: %w", err)
 	}
 	rootModel, rootRef, err := immutableJSON(rootKey, root)
 	if err != nil {
-		return nil, MutationResult{}, fmt.Errorf("build root: %w", err)
+		return nil, mutationResult{}, fmt.Errorf("build root: %w", err)
 	}
 	objects = append(objects, rootModel)
 
-	head := nextHead(&base.Head, rootRef, operationID)
+	head := nextHead(&base.Head, rootRef, change.operationID)
 	if err := validateHeadObject(&head); err != nil {
-		return nil, MutationResult{}, fmt.Errorf("build head: %w", err)
+		return nil, mutationResult{}, fmt.Errorf("build head: %w", err)
 	}
 	headData, err := marshalImmutable(head)
 	if err != nil {
-		return nil, MutationResult{}, fmt.Errorf("build head: %w", err)
+		return nil, mutationResult{}, fmt.Errorf("build head: %w", err)
 	}
 	shards := new([shardCount]shardObject)
 	*shards = *base.Shards
@@ -576,14 +604,14 @@ func (store *Store) buildNamespaceCandidate(
 	preparedAttributes.Size = int64(len(headData))
 	prepared, err := buildDerivedSnapshot(&head, preparedAttributes, &root, shards)
 	if err != nil {
-		return nil, MutationResult{}, fmt.Errorf("prepare committed snapshot: %w", err)
+		return nil, mutationResult{}, fmt.Errorf("prepare committed snapshot: %w", err)
 	}
 	var fresh map[string][]byte
-	if body != nil {
-		fresh = map[string][]byte{entry.Path: body}
+	if change.body != nil {
+		fresh = map[string][]byte{entry.Path: change.body}
 	}
-	if err := store.indexSections(ctx, prepared, base, fresh, 1); err != nil {
-		return nil, MutationResult{}, fmt.Errorf("prepare committed snapshot: %w", err)
+	if err := store.indexSections(ctx, prepared, sectionSources{previous: base, fresh: fresh}, 1); err != nil {
+		return nil, mutationResult{}, fmt.Errorf("prepare committed snapshot: %w", err)
 	}
 	return &candidateMutation{
 		base:        base,
@@ -593,10 +621,10 @@ func (store *Store) buildNamespaceCandidate(
 		shard:       shard,
 		shardIndex:  shardIndex,
 		objects:     objects,
-		result:      result,
-		operationID: operationID,
+		result:      change.result,
+		operationID: change.operationID,
 		prepared:    prepared,
-	}, result, nil
+	}, change.result, nil
 }
 
 func nextHead(current *headObject, root objectRef, operationID string) headObject {

@@ -80,9 +80,9 @@ type WorldConfig struct {
 	Policy      PolicyConfig `yaml:"policy"`
 	ReadOnly    bool         `yaml:"readOnly"`
 	Limits      LimitsConfig `yaml:"limits"`
-	// Bootstrap makes the server initialize the bucket's genesis on world
-	// open when it holds no head object, and opens the store without
-	// requiring a policy document (the provisioner seeds one later).
+	// Bootstrap marks a broker provisioned world. Deprecated: the open ignores
+	// it, since every writable world gets genesis and a seeded policy. It only
+	// forbids policy.file, because that world's broker owns its policy.
 	Bootstrap bool `yaml:"bootstrap"`
 }
 
@@ -572,7 +572,7 @@ func validatePolicyPath(value string) error {
 }
 
 // validatePolicyFile accepts an unset file and otherwise refuses a path
-// the seeder could not use, or a world that is never seeded at all.
+// the seeder could not use, or a world whose policy is not the operator's.
 func validatePolicyFile(location string, world *WorldConfig) error {
 	if world.Policy.File == "" {
 		return nil
@@ -582,7 +582,7 @@ func validatePolicyFile(location string, world *WorldConfig) error {
 		return fmt.Errorf("%s.policy.file must be a canonical absolute path (got %q)", location, file)
 	}
 	if world.ReadOnly {
-		return fmt.Errorf("%s.policy.file must not be set on a read-only world, which is never seeded", location)
+		return fmt.Errorf("%s.policy.file must not be set on a read-only world, which refuses the seed", location)
 	}
 	if world.Bootstrap {
 		return fmt.Errorf("%s.policy.file must not be set on a bootstrap world, whose provisioner owns its policy", location)

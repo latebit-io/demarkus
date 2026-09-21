@@ -174,7 +174,7 @@ func testHandleLookupReadAuthFiltering(t *testing.T, newBackend backendFactory) 
 		seedDoc{"/public/doc.md", map[string]string{"tags": "auth", "title": "Public"}},
 		seedDoc{"/private/secret.md", map[string]string{"tags": "auth", "title": "Secret"}},
 	)
-	h.GetTokenStore = func() *auth.TokenStore { return ts }
+	h.getTokenStore = func() *auth.TokenStore { return ts }
 
 	t.Run("without token omits protected doc", func(t *testing.T) {
 		resp := sendLookup(t, h, lookupReq("/", "query: auth"))
@@ -216,7 +216,7 @@ func testHandleLookupPinsTokenSnapshot(t *testing.T, newBackend backendFactory) 
 		seedDoc{"/private/secret.md", map[string]string{"tags": "auth", "title": "Secret"}},
 	)
 	calls := 0
-	h.GetTokenStore = func() *auth.TokenStore {
+	h.getTokenStore = func() *auth.TokenStore {
 		calls++
 		if calls == 1 {
 			return protected
@@ -255,11 +255,7 @@ func catalogHandler(t *testing.T, b backend) (h *Handler, secret string) {
 			Operations: []string{"publish"},
 		},
 	})
-	return &Handler{
-		Store:         b.Store,
-		Logger:        discardLogger,
-		GetTokenStore: func() *auth.TokenStore { return ts },
-	}, secret
+	return newHandler(b, ts), secret
 }
 
 // TestHandleLookupCatalogUpdates verifies PUBLISH/ARCHIVE keep the catalog in

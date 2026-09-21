@@ -24,21 +24,6 @@ import (
 
 var _ backend.Store = (*Store)(nil)
 
-// pinnedSurface reads one contract view without naming a context per call.
-type pinnedSurface struct{ view backend.ReadView }
-
-func (p pinnedSurface) Get(reqPath string, version int) (*storefmt.Document, error) {
-	return p.view.Get(context.Background(), reqPath, version)
-}
-
-func (p pinnedSurface) Versions(reqPath string) ([]storefmt.VersionInfo, error) {
-	return p.view.Versions(context.Background(), reqPath)
-}
-
-func (p pinnedSurface) VerifyChain(reqPath string) error {
-	return p.view.VerifyChain(context.Background(), reqPath)
-}
-
 func TestSnapshotRefresh(t *testing.T) {
 	t.Run("unchanged head uses Head and reuses snapshot", func(t *testing.T) {
 		memory := initializedMemory(t)
@@ -55,7 +40,7 @@ func TestSnapshotRefresh(t *testing.T) {
 		if err != nil {
 			t.Fatalf("open read view: %v", err)
 		}
-		if view.snapshot != cached {
+		if view.pinned() != cached {
 			t.Error("unchanged head did not reuse snapshot pointer")
 		}
 		if err := view.Close(); err != nil {
@@ -103,7 +88,7 @@ func TestSnapshotRefresh(t *testing.T) {
 				t.Errorf("close: %v", err)
 			}
 		}()
-		after := view.snapshot
+		after := view.pinned()
 		if after == before {
 			t.Fatal("changed head reused old snapshot")
 		}
@@ -310,8 +295,8 @@ func TestReadViewContextAndSnapshot(t *testing.T) {
 		missingBody:   "# A v2\n",
 	})
 	for _, used := range observed.counts().contexts {
-		if used != old.ctx {
-			t.Error("view operation used a different context")
+		if used.Value(pinnedKey{}) == nil {
+			t.Error("view operation did not run under the call's context")
 		}
 	}
 
@@ -338,8 +323,8 @@ func TestReadViewContextAndSnapshot(t *testing.T) {
 	if err := contractView.Close(); err != nil {
 		t.Fatalf("close contract view: %v", err)
 	}
-	if _, err := contractView.IsDir(context.Background(), "/"); !errors.Is(err, context.Canceled) {
-		t.Errorf("read after close error = %v, want canceled", err)
+	if _, err := contractView.IsDir(context.Background(), "/"); !errors.Is(err, backend.ErrViewClosed) {
+		t.Errorf("read after close error = %v, want ErrViewClosed", err)
 	}
 }
 
@@ -780,7 +765,7 @@ func TestReadIntegrityNormalization(t *testing.T) {
 							t.Errorf("close request view: %v", err)
 						}
 					}()
-					surface = pinnedSurface{view: view}
+					surface = &pinnedView{ctx: context.Background(), view: view}
 				}
 				deleteObject(t, memory, commit.documents["/docs/a.md"].entry.Manifest.Key)
 				err = operation.read(surface)
@@ -1233,7 +1218,7 @@ func removePreviousHash(t *testing.T, raw []byte) []byte {
 	return without
 }
 
-func openTestReadView(t *testing.T, memory blob.Store) *readView {
+func openTestReadView(t *testing.T, memory blob.Store) *pinnedView {
 	t.Helper()
 	store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
@@ -1246,7 +1231,7 @@ func openTestReadView(t *testing.T, memory blob.Store) *readView {
 	return view
 }
 
-func closeTestReadView(t *testing.T, view *readView) {
+func closeTestReadView(t *testing.T, view *pinnedView) {
 	t.Helper()
 	if view != nil {
 		if err := view.Close(); err != nil {
@@ -1255,7 +1240,7 @@ func closeTestReadView(t *testing.T, view *readView) {
 	}
 }
 
-func assertViewBody(t *testing.T, view *readView, wantBody string, wantVersion int) {
+func assertViewBody(t *testing.T, view *pinnedView, wantBody string, wantVersion int) {
 	t.Helper()
 	document, err := view.Get("/docs/a.md", 0)
 	if err != nil {
@@ -1276,7 +1261,7 @@ type pinnedReadWant struct {
 	missingBody   string
 }
 
-func assertPinnedReadView(t *testing.T, view *readView, want *pinnedReadWant) {
+func assertPinnedReadView(t *testing.T, view *pinnedView, want *pinnedReadWant) {
 	t.Helper()
 	assertViewBody(t, view, want.body, want.version)
 	if isDirectory, err := view.IsDir("/docs"); err != nil || !isDirectory {
@@ -1318,7 +1303,7 @@ func assertPinnedReadView(t *testing.T, view *readView, want *pinnedReadWant) {
 	}
 }
 
-func assertEntries(t *testing.T, view *readView, requestPath string, includeArchived bool, want []storefmt.DirEntry) {
+func assertEntries(t *testing.T, view *pinnedView, requestPath string, includeArchived bool, want []storefmt.DirEntry) {
 	t.Helper()
 	entries, err := view.ListEntries(requestPath, includeArchived)
 	if err != nil {
@@ -1510,11 +1495,11 @@ func (store *interleavingBlobStore) release() {
 }
 
 type readViewResult struct {
-	view *readView
+	view *pinnedView
 	err  error
 }
 
-func receiveReadView(t *testing.T, results <-chan readViewResult) *readView {
+func receiveReadView(t *testing.T, results <-chan readViewResult) *pinnedView {
 	t.Helper()
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()

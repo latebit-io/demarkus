@@ -35,7 +35,7 @@ func TestExportDocsPreservesPinnedStoredDocuments(t *testing.T) {
 	}
 	got := make(map[string]storefmt.StoredDocument)
 	var paths []string
-	if err := ExportDocs(t.Context(), memory, testWorldID, 2, func(path string, document storefmt.StoredDocument) error {
+	if err := ExportDocs(t.Context(), memory, ExportOptions{WorldID: testWorldID, Workers: 2}, func(path string, document storefmt.StoredDocument) error {
 		paths = append(paths, path)
 		got[path] = document
 		return nil
@@ -57,7 +57,7 @@ func TestExportDocsPinsRootBeforeCallbacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var paths []string
-	if err := ExportDocs(t.Context(), memory, testWorldID, 1, func(path string, _ storefmt.StoredDocument) error {
+	if err := ExportDocs(t.Context(), memory, ExportOptions{WorldID: testWorldID, Workers: 1}, func(path string, _ storefmt.StoredDocument) error {
 		paths = append(paths, path)
 		if _, err := writer.WriteVersion("/later.md", 0, []byte("# Later\n"), nil); err != nil {
 			return err
@@ -76,11 +76,11 @@ func TestExportDocsSurfacesCancellationAndCallbackFailure(t *testing.T) {
 	commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/doc.md", "# Doc\n")})
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := ExportDocs(ctx, memory, testWorldID, 1, func(string, storefmt.StoredDocument) error { return nil }); !errors.Is(err, context.Canceled) {
+	if err := ExportDocs(ctx, memory, ExportOptions{WorldID: testWorldID, Workers: 1}, func(string, storefmt.StoredDocument) error { return nil }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled export error=%v", err)
 	}
 	want := errors.New("stop export")
-	if err := ExportDocs(t.Context(), memory, testWorldID, 1, func(string, storefmt.StoredDocument) error { return want }); !errors.Is(err, want) {
+	if err := ExportDocs(t.Context(), memory, ExportOptions{WorldID: testWorldID, Workers: 1}, func(string, storefmt.StoredDocument) error { return want }); !errors.Is(err, want) {
 		t.Fatalf("callback error=%v", err)
 	}
 }

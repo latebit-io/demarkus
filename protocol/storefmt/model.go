@@ -139,6 +139,23 @@ type PreparedWrite struct {
 // checks and before anything is stored; its error refuses the write.
 type WriteCheck func(PreparedWrite) error
 
+// ArchiveChange is an archive transition as it would be stored.
+type ArchiveChange struct {
+	Path     string
+	Archived bool
+}
+
+// ArchiveCheck judges a transition after the not found and no-op checks and
+// before anything is stored; its error refuses the transition.
+type ArchiveCheck func(ArchiveChange) error
+
+// ArchiveSpec is one archive transition as requested; Check may be nil and
+// sees the change with its path made canonical.
+type ArchiveSpec struct {
+	ArchiveChange
+	Check ArchiveCheck
+}
+
 // WriteSpec is one versioned write. A negative ExpectedVersion skips the
 // version check; Check may be nil.
 type WriteSpec struct {

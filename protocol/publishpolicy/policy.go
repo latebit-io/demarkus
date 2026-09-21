@@ -9,6 +9,10 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
+// SeedAgent is the agent metadata value on a policy a knowledge server seeded
+// itself, so a provisioner can tell it from a curated policy and replace it.
+const SeedAgent = "demarkus-knowledge-server"
+
 // DocumentPath is the conventional versioned policy document path.
 const DocumentPath = "/.well-known/demarkus/policy.md"
 

@@ -27,7 +27,7 @@ func (s *refusingStore) Append(context.Context, storagebackend.WriteRequest) (*s
 	return nil, s.err
 }
 
-func (s *refusingStore) SetArchived(context.Context, string, bool) (storagebackend.ArchiveResult, error) {
+func (s *refusingStore) SetArchived(context.Context, storagebackend.ArchiveRequest) (storagebackend.ArchiveResult, error) {
 	return storagebackend.ArchiveResult{}, s.err
 }
 
@@ -54,6 +54,7 @@ func TestWriteRejectionStatusMapping(t *testing.T) {
 		{name: "path collision", err: fmt.Errorf("cannot publish /a.md: %w", storefmt.ErrPathCollision), status: protocol.StatusBadRequest, contains: "cannot publish"},
 		{name: "quota", err: fmt.Errorf("document %w: limit 10", storagebackend.ErrQuota), status: protocol.StatusNotPermitted, contains: "quota"},
 		{name: "policy violations", err: violationsError{}, status: protocol.StatusBadRequest, contains: "missing-tags"},
+		{name: "read-only store", err: fmt.Errorf("commit: %w", storagebackend.ErrReadOnly), status: protocol.StatusNotPermitted, contains: "read-only"},
 		{name: "unclassified", err: errors.New("bucket unreachable"), status: protocol.StatusServerError, contains: "internal error"},
 	}
 	requests := []struct {
@@ -71,7 +72,7 @@ func TestWriteRejectionStatusMapping(t *testing.T) {
 				b := fileBackend(t)
 				seedBackend(t, b, map[string]string{"a.md": "# A\n"})
 				h := newHandler(b, ts)
-				h.Store = &refusingStore{DocumentStore: b.Store, err: e.err}
+				h.store = &refusingStore{DocumentStore: b.Store, err: e.err}
 
 				stream := newMockStream(r.request)
 				h.HandleStream(context.Background(), stream)

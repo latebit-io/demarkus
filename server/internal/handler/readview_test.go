@@ -47,7 +47,7 @@ func TestHandleReadViewLifecycle(t *testing.T) {
 	seedBackend(t, b, map[string]string{"hello.md": "# Hello\n"})
 	provider := &trackingViewProvider{DocumentStore: b.Store}
 	h := newHandler(b, nil)
-	h.Store = provider
+	h.store = provider
 
 	stream := newMockStream("FETCH /hello.md\n")
 	h.HandleStream(context.Background(), stream)
@@ -67,7 +67,7 @@ func TestHandleReadViewOpenError(t *testing.T) {
 	b := fileBackend(t)
 	provider := &trackingViewProvider{DocumentStore: b.Store, openErr: errors.New("snapshot unavailable")}
 	h := newHandler(b, nil)
-	h.Store = provider
+	h.store = provider
 
 	stream := newMockStream("FETCH /hello.md\n")
 	h.HandleStream(context.Background(), stream)
@@ -88,7 +88,7 @@ func TestHandleReadViewCloseErrorDoesNotReplaceResponse(t *testing.T) {
 	seedBackend(t, b, map[string]string{"hello.md": "# Hello\n"})
 	provider := &trackingViewProvider{DocumentStore: b.Store, closeErr: errors.New("close failed")}
 	h := newHandler(b, nil)
-	h.Store = provider
+	h.store = provider
 
 	stream := newMockStream("FETCH /hello.md\n")
 	h.HandleStream(context.Background(), stream)

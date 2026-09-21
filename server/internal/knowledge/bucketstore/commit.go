@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 )
 
@@ -19,31 +20,34 @@ const (
 	commitRebase
 )
 
-func (store *Store) runMutation(ctx context.Context, build mutationBuilder) (MutationResult, error) {
+func (store *Store) runMutation(ctx context.Context, build mutationBuilder) (mutationResult, error) {
+	if store.readOnly {
+		return mutationResult{}, backend.ErrReadOnly
+	}
 	ctx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
 	select {
 	case <-store.commitToken:
 		defer func() { store.commitToken <- struct{}{} }()
 	case <-ctx.Done():
-		return MutationResult{}, fmt.Errorf("wait for commit token: %w", ctx.Err())
+		return mutationResult{}, fmt.Errorf("wait for commit token: %w", ctx.Err())
 	}
 
 	operationID, err := store.newOperationID()
 	if err != nil {
-		return MutationResult{}, fmt.Errorf("create operation ID: %w", err)
+		return mutationResult{}, fmt.Errorf("create operation ID: %w", err)
 	}
 	if !validWorldID(operationID) {
-		return MutationResult{}, fmt.Errorf("create operation ID: invalid UUID %q", operationID)
+		return mutationResult{}, fmt.Errorf("create operation ID: invalid UUID %q", operationID)
 	}
 
-	var result MutationResult
+	var result mutationResult
 	for attempt := range maximumMutationAttempts {
 		loaded, err := store.refreshSnapshot(ctx)
 		if err != nil {
 			return result, fmt.Errorf("operation %s refresh: %w", operationID, err)
 		}
-		view := &readView{ctx: ctx, objects: store.objects, snapshot: loaded}
+		view := &readView{objects: store.objects, snapshot: loaded}
 		candidate, built, err := build(ctx, view, operationID)
 		result = built
 		if err != nil || candidate == nil {

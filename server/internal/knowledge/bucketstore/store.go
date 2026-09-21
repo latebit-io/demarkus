@@ -30,9 +30,8 @@ type Options struct {
 	WorldID        string
 	RequestTimeout time.Duration
 	ShardWorkers   int
-	// PolicySeed is published create-only when the world holds no policy yet.
-	// The store itself enforces no policy; see the writepolicy package.
-	PolicySeed *PolicySeed
+	// ReadOnly makes every write answer backend.ErrReadOnly before any I/O.
+	ReadOnly bool
 	// MaxDocuments caps distinct document paths (0 = unlimited); a new
 	// path beyond the cap is rejected. Approximate under concurrency:
 	// a per-tenant quota, not an exact invariant.
@@ -49,6 +48,7 @@ type Store struct {
 	shardWorkers   int
 	logger         *slog.Logger
 	maxDocuments   int
+	readOnly       bool
 	snapshot       atomic.Pointer[snapshot]
 	refreshMu      sync.Mutex
 	commitToken    chan struct{}
@@ -135,6 +135,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		shardWorkers:   options.ShardWorkers,
 		logger:         options.Logger,
 		maxDocuments:   options.MaxDocuments,
+		readOnly:       options.ReadOnly,
 		commitToken:    make(chan struct{}, 1),
 		commitInterval: defaultCommitInterval,
 		now:            time.Now,
@@ -151,17 +152,12 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	}
 	// The first index reads every body, so it runs under the caller's
 	// context rather than the per-request timeout that bounds one refresh.
-	if err := store.indexSections(ctx, loaded, nil, nil, store.shardWorkers); err != nil {
+	if err := store.indexSections(ctx, loaded, sectionSources{}, store.shardWorkers); err != nil {
 		store.refreshMu.Unlock()
 		return nil, fmt.Errorf("open bucket store: %w", err)
 	}
 	store.snapshot.Store(loaded)
 	store.refreshMu.Unlock()
-	if options.PolicySeed != nil {
-		if err := store.seedPolicy(ctx, *options.PolicySeed); err != nil {
-			return nil, fmt.Errorf("open bucket store: %w", err)
-		}
-	}
 	return store, nil
 }
 
@@ -174,13 +170,13 @@ func loadRootSnapshot(ctx context.Context, objects blob.Store, worldID string, w
 		return nil, err
 	}
 
-	root, err := getImmutable(ctx, objects, head.Root, rootKey(head.Root.Hash), func(root *rootObject) error {
+	root, err := getImmutable(ctx, objects, keyedRef{head.Root, rootKey(head.Root.Hash)}, func(root *rootObject) error {
 		return validateRootObject(root, head.WorldID)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("load root: %w", err)
 	}
-	shards, err := loadShards(ctx, objects, root.Shards, nil, workers)
+	shards, err := loadShards(ctx, objects, shardLoad{refs: root.Shards, workers: workers})
 	if err != nil {
 		return nil, err
 	}
@@ -261,13 +257,13 @@ func (store *Store) refreshSnapshot(ctx context.Context) (*snapshot, error) {
 	if cached != nil && head.Sequence <= cached.Head.Sequence {
 		return nil, fmt.Errorf("%w: head sequence moved from %d to %d", blob.ErrIntegrity, cached.Head.Sequence, head.Sequence)
 	}
-	root, err := getImmutable(ctx, store.objects, head.Root, rootKey(head.Root.Hash), func(root *rootObject) error {
+	root, err := getImmutable(ctx, store.objects, keyedRef{head.Root, rootKey(head.Root.Hash)}, func(root *rootObject) error {
 		return validateRootObject(root, head.WorldID)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("load root: %w", err)
 	}
-	shards, err := loadShards(ctx, store.objects, root.Shards, cached, store.shardWorkers)
+	shards, err := loadShards(ctx, store.objects, shardLoad{refs: root.Shards, previous: cached, workers: store.shardWorkers})
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +271,7 @@ func (store *Store) refreshSnapshot(ctx context.Context) (*snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: build snapshot: %v", blob.ErrIntegrity, err)
 	}
-	if err := store.indexSections(ctx, loaded, cached, nil, store.shardWorkers); err != nil {
+	if err := store.indexSections(ctx, loaded, sectionSources{previous: cached}, store.shardWorkers); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -300,26 +296,27 @@ func validateCachedHead(cached *snapshot, attributes blob.Attributes) error {
 	return nil
 }
 
-func loadShards(
-	ctx context.Context,
-	objects blob.Store,
-	refs []shardRef,
-	previous *snapshot,
-	workers int,
-) (*[shardCount]shardObject, error) {
+// shardLoad names the shards to read; a ref unchanged from previous is reused.
+type shardLoad struct {
+	refs     []shardRef
+	previous *snapshot
+	workers  int
+}
+
+func loadShards(ctx context.Context, objects blob.Store, load shardLoad) (*[shardCount]shardObject, error) {
 	loaded := new([shardCount]shardObject)
 	changed := make([]int, 0, shardCount)
 	for index := range shardCount {
-		if previous != nil && refs[index] == previous.Root.Shards[index] {
-			loaded[index] = previous.Shards[index]
+		if load.previous != nil && load.refs[index] == load.previous.Root.Shards[index] {
+			loaded[index] = load.previous.Shards[index]
 			continue
 		}
 		changed = append(changed, index)
 	}
-	err := runParallel(ctx, workers, changed, func(ctx context.Context, index int) error {
-		ref := refs[index]
+	err := runParallel(ctx, load.workers, changed, func(ctx context.Context, index int) error {
+		ref := load.refs[index]
 		expectedShard := fmt.Sprintf("%02x", index)
-		shard, err := getImmutable(ctx, objects, ref.objectRef, shardKey(expectedShard, ref.Hash), func(shard *shardObject) error {
+		shard, err := getImmutable(ctx, objects, keyedRef{ref.objectRef, shardKey(expectedShard, ref.Hash)}, func(shard *shardObject) error {
 			return validateShardObject(shard, expectedShard)
 		})
 		if err != nil {
@@ -334,7 +331,7 @@ func loadShards(
 	return loaded, nil
 }
 
-// runParallel applies fn to every job on up to workers goroutines. The first
+// runParallel applies fn to every job on up to load.workers goroutines. The first
 // error cancels the rest and is returned; fn's errors are not retried.
 func runParallel[T any](ctx context.Context, workers int, jobs []T, fn func(ctx context.Context, job T) error) error {
 	if workers < 1 {
@@ -368,15 +365,16 @@ func runParallel[T any](ctx context.Context, workers int, jobs []T, fn func(ctx 
 	return context.Cause(workCtx)
 }
 
-func getImmutable[T any](
-	ctx context.Context,
-	objects blob.Store,
-	ref objectRef,
-	expectedKey string,
-	validate func(*T) error,
-) (T, error) {
+// keyedRef is a stored reference and the key its kind and hash must produce.
+type keyedRef struct {
+	objectRef
+	expectedKey string
+}
+
+func getImmutable[T any](ctx context.Context, objects blob.Store, keyed keyedRef, validate func(*T) error) (T, error) {
+	ref := keyed.objectRef
 	var result T
-	if err := verifyRef(ref, expectedKey); err != nil {
+	if err := verifyRef(ref, keyed.expectedKey); err != nil {
 		return result, fmt.Errorf("%w: %v", blob.ErrIntegrity, err)
 	}
 	value, err := objects.Get(ctx, ref.Key)
