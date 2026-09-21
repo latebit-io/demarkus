@@ -94,7 +94,7 @@ func (store *Store) seedPolicy(ctx context.Context, seed PolicySeed) error {
 	}
 	if created {
 		store.logger.Info("seeded the initial write policy",
-			"world", store.worldID, "path", publishpolicy.DocumentPath)
+			"world_id", store.worldID, "path", publishpolicy.DocumentPath)
 	}
 	return nil
 }
