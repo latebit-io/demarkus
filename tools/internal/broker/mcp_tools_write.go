@@ -8,6 +8,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/generation"
+	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/client/metaguard"
@@ -74,12 +75,8 @@ func (g *mcpGateway) gateWrite(claims *Claims, worldName string) (*WorldConfig, 
 // caller-supplied "agent" key so identity cannot be spoofed. The world
 // validates keys/values and rejects reserved keys, so this stays a thin
 // pass-through.
-func publisherMeta(args map[string]any, claims *Claims) map[string]string {
+func publisherMeta(raw map[string]any, claims *Claims) map[string]string {
 	meta := agentMetaFromClaims(claims)
-	raw, ok := args["metadata"].(map[string]any)
-	if !ok {
-		return meta
-	}
 	for k, v := range raw {
 		if k == "agent" {
 			continue // identity is broker-set; callers cannot override it
@@ -118,6 +115,10 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	callerMeta, err := marktools.MetadataArg(req.GetArguments())
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	claims, ok := claimsFromCtx(ctx)
 	if !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
@@ -125,7 +126,7 @@ func (g *mcpGateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequ
 	if _, errRes := g.gateWrite(claims, worldName); errRes != nil {
 		return errRes, nil
 	}
-	meta := publisherMeta(req.GetArguments(), claims)
+	meta := publisherMeta(callerMeta, claims)
 	// Warn-only narrowing gate, run after a write that landed.
 	gate := func(status string) string {
 		if !protocol.IsWriteSuccess(status) {

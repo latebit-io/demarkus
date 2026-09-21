@@ -441,7 +441,9 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 	if version, err := req.RequireInt("expected_version"); err == nil {
 		args.ExpectedVersion = &version
 	}
-	args.Metadata, _ = req.GetArguments()["metadata"].(map[string]any)
+	if args.Metadata, err = marktools.MetadataArg(req.GetArguments()); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Publish(ctx, args) })
 }
 

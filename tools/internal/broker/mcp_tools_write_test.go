@@ -1111,3 +1111,17 @@ func TestHandleMarkPublishRefusalShowsTheServersReason(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleMarkPublishRefusesMetadataThatIsNotAnObject(t *testing.T) {
+	d := &fakeDispatcher{}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url": "mark://team-a/foo.md", "body": "# Doc\n", "expected_version": float64(1), "metadata": "tags: go",
+	}))
+	if err != nil || !res.IsError || !strings.Contains(toolResultText(t, res), "metadata must be an object") {
+		t.Fatalf("handleMarkPublish = (%+v, %v), want the argument refused", res, err)
+	}
+	if len(d.PublishCalls) != 0 {
+		t.Errorf("published %d times with its metadata dropped", len(d.PublishCalls))
+	}
+}

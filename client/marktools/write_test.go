@@ -244,3 +244,28 @@ func TestPublishRefusalShowsTheServersReason(t *testing.T) {
 		}
 	}
 }
+
+// PUBLISH replaces the metadata map, so a mistyped argument must not read as none.
+func TestMetadataArg(t *testing.T) {
+	object := map[string]any{"tags": "go"}
+	tests := []struct {
+		name    string
+		args    map[string]any
+		want    map[string]any
+		wantErr bool
+	}{
+		{"absent", map[string]any{}, nil, false},
+		{"null", map[string]any{"metadata": nil}, nil, false},
+		{"object", map[string]any{"metadata": object}, object, false},
+		{"string", map[string]any{"metadata": "tags: go"}, nil, true},
+		{"array", map[string]any{"metadata": []any{"go"}}, nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := marktools.MetadataArg(tt.args)
+			if (err != nil) != tt.wantErr || len(got) != len(tt.want) {
+				t.Fatalf("MetadataArg = %v, %v; want %v, error=%v", got, err, tt.want, tt.wantErr)
+			}
+		})
+	}
+}

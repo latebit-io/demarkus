@@ -1084,3 +1084,17 @@ func TestHandlersReachTheirBodies(t *testing.T) {
 		}
 	})
 }
+
+func TestHandlerMarkPublish_RefusesMetadataThatIsNotAnObject(t *testing.T) {
+	sc := &stubClient{}
+	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test-token"}
+	res, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
+		"url": "/doc.md", "body": "# Doc", "expected_version": float64(1), "metadata": "tags: go",
+	}))
+	if err != nil || !res.IsError || !strings.Contains(resultText(t, res), "metadata must be an object") {
+		t.Fatalf("markPublish = (%+v, %v), want the argument refused", res, err)
+	}
+	if len(sc.PublishCalls) != 0 {
+		t.Errorf("published %d times with its metadata dropped", len(sc.PublishCalls))
+	}
+}
