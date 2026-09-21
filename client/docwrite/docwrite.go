@@ -89,7 +89,7 @@ func (d *Doc) Publish(ctx context.Context, w Write, mode string) (Result, error)
 			Host: d.Host, Path: d.Path, Token: token,
 			Body: w.Body, ExpectedVersion: w.ExpectedVersion, Metadata: w.Metadata,
 		})
-	}, w.landedAt)
+	}, probe{path: protocol.VersionPath(d.Path, w.ExpectedVersion+1), landed: w.landedAt})
 	if err != nil {
 		if mode == merge.OnConflictMerge {
 			// Tool text in this mode has always named the step that failed.
@@ -192,10 +192,10 @@ func (d *Doc) Append(ctx context.Context, req AppendRequest) (Result, error) {
 			Host: d.Host, Path: d.Path, Token: token,
 			Body: req.Body, ExpectedVersion: expected, Metadata: req.Metadata,
 		})
-	}, func(head *headDoc) bool {
-		return head.status == protocol.StatusOK && head.version == expected+1 &&
-			strings.HasSuffix(head.body, req.Body) && head.carries(req.Metadata)
-	})
+	}, probe{path: protocol.VersionPath(d.Path, expected+1), landed: func(written *headDoc) bool {
+		return written.status == protocol.StatusOK && written.version == expected+1 &&
+			strings.HasSuffix(written.body, req.Body) && written.carries(req.Metadata)
+	}})
 }
 
 // Archive archives the document. Archived is a state, not an event, so an
@@ -203,30 +203,37 @@ func (d *Doc) Append(ctx context.Context, req AppendRequest) (Result, error) {
 func (d *Doc) Archive(ctx context.Context) (Result, error) {
 	result, err := d.send(ctx, func(token string) (fetch.Result, error) {
 		return d.Backend.Archive(ctx, fetch.ArchiveRequest{Host: d.Host, Path: d.Path, Token: token})
-	}, func(head *headDoc) bool { return head.status == protocol.StatusArchived })
+	}, probe{path: d.Path, landed: func(head *headDoc) bool { return head.status == protocol.StatusArchived }})
 	if err == nil && result.Reconciled {
 		result.Response.Metadata["archived"] = "true" // as the server answers an ARCHIVE
 	}
 	return result, err
 }
 
+// probe is where to look for a write whose response was lost, and what it
+// looks like there. PUBLISH and APPEND look at the version they would have
+// created, which no later writer can change; ARCHIVE is a state of the head.
+type probe struct {
+	path   string
+	landed func(found *headDoc) bool
+}
+
 // send runs one write through the surface's WriteFunc, once. When its response
-// is lost the write may have landed, so the head is looked at, never resent:
-// landed says whether the head is this write.
-func (d *Doc) send(ctx context.Context, op func(token string) (fetch.Result, error), landed func(*headDoc) bool) (Result, error) {
+// is lost the write may have landed, so it is looked for, never resent.
+func (d *Doc) send(ctx context.Context, op func(token string) (fetch.Result, error), look probe) (Result, error) {
 	r, err := d.Write(ctx, op)
 	if err == nil {
 		// Answered is answered: the response is passed on as the server wrote it.
 		return Result{Response: r.Response}, nil
 	}
 	if errors.Is(err, fetch.ErrOutcomeUnknown) {
-		head, probeErr := d.head(ctx, d.Path)
+		found, probeErr := d.head(ctx, look.path)
 		if probeErr != nil {
 			// The outcome stays unknown; why the look did not help is said too.
 			return Result{}, fmt.Errorf("%w; reconcile: %w", err, probeErr)
 		}
-		if landed(&head) {
-			return reconciledAt(head.version), nil
+		if look.landed(&found) {
+			return reconciledAt(found.version), nil
 		}
 	}
 	return Result{}, err

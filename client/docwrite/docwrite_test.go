@@ -33,12 +33,13 @@ func answer(status string, meta map[string]string) func(context.Context, fetch.W
 
 var conflictAt6 = answer(protocol.StatusConflict, map[string]string{"server-version": "6"})
 
-// history serves the head, and base at /doc.md/v<baseVersion>; any other
-// version is not found.
+// history serves the head, at /doc.md and at its own version path as a server
+// does, and base at /doc.md/v<baseVersion>; any other version is not found.
 func history(baseVersion int, base string, head fetch.Result) func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
+	headVersion, _ := strconv.Atoi(head.Response.Metadata["version"]) // a head without one has no version path
 	return func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
 		switch r.Path {
-		case "/doc.md":
+		case "/doc.md", protocol.VersionPath("/doc.md", headVersion):
 			return head, nil
 		case protocol.VersionPath("/doc.md", baseVersion):
 			return fetchtest.Head(base, baseVersion, nil), nil
@@ -413,5 +414,57 @@ func TestAFailedHeadProbeIsReported(t *testing.T) {
 	}
 	if want := "read response: request sent but outcome unknown; reconcile: dial refused"; err.Error() != want {
 		t.Errorf("err = %q\nwant  %q", err, want)
+	}
+}
+
+// Someone else may write between our lost response and our look. The version
+// our write would have created is immutable, so that is where to look: the
+// head having moved on must not turn a landed write into an unknown one.
+func TestReconcileLooksAtTheVersionItWroteNotTheHead(t *testing.T) {
+	meta := map[string]string{"agent": "me"}
+	lostWrite := func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+		return fetch.Result{}, fetchtest.LostResponse()
+	}
+	tests := []struct {
+		name string
+		ours fetch.Result // what /doc.md/v4 holds
+		call func(*docwrite.Doc) (docwrite.Result, error)
+		want bool
+	}{
+		{"publish landed, head moved on", fetchtest.Head("mine", 4, meta), func(d *docwrite.Doc) (docwrite.Result, error) {
+			return d.Publish(t.Context(), docwrite.Write{Body: "mine", ExpectedVersion: 3, Metadata: meta}, merge.OnConflictFail)
+		}, true},
+		{"append landed, head moved on", fetchtest.Head("old\nmore", 4, meta), func(d *docwrite.Doc) (docwrite.Result, error) {
+			return d.Append(t.Context(), docwrite.AppendRequest{Body: "more", ExpectedVersion: 3, Metadata: meta})
+		}, true},
+		{"v4 is someone else's", fetchtest.Head("theirs", 4, nil), func(d *docwrite.Doc) (docwrite.Result, error) {
+			return d.Publish(t.Context(), docwrite.Write{Body: "mine", ExpectedVersion: 3, Metadata: meta}, merge.OnConflictFail)
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &fetchtest.Client{
+				PublishFn: lostWrite, AppendFn: lostWrite,
+				FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+					if r.Path == protocol.VersionPath("/doc.md", 4) {
+						return tt.ours, nil
+					}
+					return fetchtest.Head("a later writer's", 5, nil), nil
+				},
+			}
+			got, err := tt.call(doc(backend))
+			if !tt.want {
+				if !errors.Is(err, fetch.ErrOutcomeUnknown) {
+					t.Fatalf("err = %v, want the unknown outcome to stand", err)
+				}
+				return
+			}
+			if err != nil || !got.Reconciled || versionOf(got) != 4 {
+				t.Fatalf("got %+v, %v; want our write found at v4", got, err)
+			}
+			if len(backend.FetchCalls) != 1 || backend.FetchCalls[0].Path != "/doc.md/v4" {
+				t.Errorf("reads = %+v, want one look at the version written", backend.FetchCalls)
+			}
+		})
 	}
 }

@@ -20,20 +20,23 @@ after `fetch.ErrOutcomeUnknown`, the generation publisher after any error, and
   of `mark_index` publishes nothing and asks nobody.
 - `client/docwrite` owns what happens after a write is sent, for PUBLISH in both
   conflict modes, APPEND and ARCHIVE: one `Result{Response, Reconciled,
-  Candidate}`, one path that looks at the head. `client/merge` is the three way
+  Candidate}`, one path that looks for a lost write. `client/merge` is the three way
   merge and the `on_conflict` parser, nothing else. `mark_graph_publish`
   publishes through `docwrite`.
-- The head is looked at only when the response was lost
+- The server is asked only when the response was lost
   (`fetch.ErrOutcomeUnknown`). A write that never left cannot have landed, and a
   probe then only doubles the time a failure takes. A look that itself fails
   settles nothing and is reported beside the unknown outcome, never dropped.
-- A write landed when the head is the next version and carries every metadata
-  key that was sent; PUBLISH also needs the body equal, APPEND the body as a
-  suffix. ARCHIVE landed when the head is archived, whoever archived it.
+- PUBLISH and APPEND are looked for at the version they would have created,
+  `<path>/v<expected+1>`, which no later writer can change, so a head that has
+  moved on does not turn a landed write into an unknown one. The write landed
+  when that version carries every metadata key that was sent; PUBLISH also
+  needs the body equal, APPEND the body as a suffix. ARCHIVE is a state of the
+  head: it landed when the head is archived, whoever archived it.
 - An answered write is passed on as the server wrote it. Refusing one over
   malformed metadata would report a write that landed as a failure and invite
-  the resend this contract exists to prevent. The head is validated, because
-  its version decides whether a write landed.
+  the resend this contract exists to prevent. What a probe reads is validated,
+  because its version decides whether a write landed.
 - Generated documents (hash index, graph snapshot) keep their own rule in
   `client/generation`: settled by content, since every document is read back at
   its version anyway, and a refusal is settled the same way because the head
