@@ -15,6 +15,12 @@ GCS_PORT=${SMOKE_GCS_PORT:-14443}
 GCS_IMAGE=${SMOKE_GCS_IMAGE:-fsouza/fake-gcs-server:latest}
 GCS_NAME="demarkus-smoke-gcs-$$"
 STEP_LIMIT=${SMOKE_STEP_LIMIT:-15}
+case "$STEP_LIMIT" in
+'' | *[!0-9]* | 0*)
+  echo "SMOKE_STEP_LIMIT must be a positive whole number of seconds (got '$STEP_LIMIT')" >&2
+  exit 2
+  ;;
+esac
 WORLD_ID=52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
 POLICY=/.well-known/demarkus/policy.md
 
@@ -45,7 +51,10 @@ bounded() {
   "$@" &
   pid=$!
   # Detached from stdout, or a command substitution would wait out the sleep.
-  (sleep "$STEP_LIMIT" && kill "$pid" 2>/dev/null) >/dev/null 2>&1 &
+  (
+    sleep "$STEP_LIMIT"
+    kill "$pid" 2>/dev/null
+  ) >/dev/null 2>&1 &
   dog=$!
   wait "$pid"
   status=$?

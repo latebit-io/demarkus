@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
-	"sync"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -51,33 +51,54 @@ func TestPreconditionReaderCloseIsHarmless(t *testing.T) {
 	}
 }
 
-// Close waits for admitted reads, and a writer blocked behind the view gets the
-// lock only after them: every read is whole or refused, never after the unlock.
-func TestCloseRacesReadsSafely(t *testing.T) {
+// Close waits for a read it already admitted and only then unlocks, so no
+// read runs after the store lock is gone.
+func TestCloseWaitsForAdmittedRead(t *testing.T) {
 	ctx := context.Background()
 	s := New(store.New(t.TempDir()), catalog.New())
-	if _, err := s.Publish(ctx, backend.WriteRequest{Path: "/a.md", Content: []byte("# A\n")}); err != nil {
-		t.Fatalf("publish: %v", err)
-	}
-	view, err := s.OpenReadView(ctx)
+	opened, err := s.OpenReadView(ctx)
 	if err != nil {
 		t.Fatalf("open view: %v", err)
 	}
-	var readers sync.WaitGroup
-	for range 8 {
-		readers.Go(func() {
-			for range 50 {
-				if _, err := view.Get(ctx, "/a.md", 0); err != nil && !errors.Is(err, backend.ErrViewClosed) {
-					t.Errorf("read during close: %v", err)
-				}
-			}
+	view := opened.(*readView)
+
+	admitted, release := make(chan struct{}), make(chan struct{})
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := admit(view, func(reader) (struct{}, error) {
+			close(admitted)
+			<-release
+			return struct{}{}, nil
 		})
+		readDone <- err
+	}()
+	<-admitted
+
+	closed := make(chan error, 1)
+	go func() { closed <- view.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned (%v) while an admitted read was still running", err)
+	case <-time.After(50 * time.Millisecond):
 	}
-	if err := view.Close(); err != nil {
+	// The read lock is still held, so a writer cannot have got in either.
+	if s.mu.TryLock() {
+		s.mu.Unlock()
+		t.Fatal("store write lock was free while an admitted read was running")
+	}
+
+	close(release)
+	if err := <-readDone; err != nil {
+		t.Errorf("admitted read: %v", err)
+	}
+	if err := <-closed; err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	if _, err := s.Publish(ctx, backend.WriteRequest{Path: "/a.md", ExpectedVersion: 1, Content: []byte("# B\n")}); err != nil {
-		t.Fatalf("publish after close: %v", err)
+	if _, err := view.Get(ctx, "/a.md", 0); !errors.Is(err, backend.ErrViewClosed) {
+		t.Errorf("read after close: %v, want ErrViewClosed", err)
 	}
-	readers.Wait()
+	if !s.mu.TryLock() {
+		t.Fatal("store lock still held after Close")
+	}
+	s.mu.Unlock()
 }
