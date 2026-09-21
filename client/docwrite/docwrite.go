@@ -220,7 +220,12 @@ func (d *Doc) send(ctx context.Context, op func(token string) (fetch.Result, err
 		return Result{Response: r.Response}, nil
 	}
 	if errors.Is(err, fetch.ErrOutcomeUnknown) {
-		if head, probeErr := d.head(ctx, d.Path); probeErr == nil && landed(&head) {
+		head, probeErr := d.head(ctx, d.Path)
+		if probeErr != nil {
+			// The outcome stays unknown; why the look did not help is said too.
+			return Result{}, fmt.Errorf("%w; reconcile: %w", err, probeErr)
+		}
+		if landed(&head) {
 			return reconciledAt(head.version), nil
 		}
 	}

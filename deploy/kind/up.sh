@@ -26,6 +26,9 @@
 # broker-minted code -> /device/token exchange, with negative (wrong
 # verifier -> invalid_grant) and replay (one-shot code) assertions. This is
 # the OAuth surface Claude Code's MCP SDK uses via /knowledge-join.
+# With the Bearer it minted, the same pod then drives the MCP gateway: session,
+# tools/list, the read tools, a publish, append and archive round trip against
+# the world over QUIC, a stale publish, and the refusals an agent can meet.
 #
 # It also drives the CONFIDENTIAL web-client flow (phase-1b web SSO): a
 # webClients registry entry is rendered through the local chart, then the

@@ -25,7 +25,8 @@ after `fetch.ErrOutcomeUnknown`, the generation publisher after any error, and
   publishes through `docwrite`.
 - The head is looked at only when the response was lost
   (`fetch.ErrOutcomeUnknown`). A write that never left cannot have landed, and a
-  probe then only doubles the time a failure takes.
+  probe then only doubles the time a failure takes. A look that itself fails
+  settles nothing and is reported beside the unknown outcome, never dropped.
 - A write landed when the head is the next version and carries every metadata
   key that was sent; PUBLISH also needs the body equal, APPEND the body as a
   suffix. ARCHIVE landed when the head is archived, whoever archived it.
@@ -50,9 +51,9 @@ after `fetch.ErrOutcomeUnknown`, the generation publisher after any error, and
   filter stayed gateway code under their existing tests.
 - Broker output changed where the owner accepted it: a lost response is
   reconciled or says the write may have landed, `mark_index` warns per skip and
-  skips only a too deep directory, the siblings label reads ` (first page)`, an
-  unresolvable APPEND version reads `could not resolve version: ...`, and
-  `page_size: null` reads as absent.
+  skips only a directory that is too deep, an incomplete siblings page is
+  labelled `(first page)`, an unresolvable APPEND version reads
+  `could not resolve version: ...`, and `page_size: null` reads as absent.
 - Client output changed for a caller without a token who also sends bad
   arguments (the argument error comes first) and for `mark_index` without a
   token, which is refused before the crawl.

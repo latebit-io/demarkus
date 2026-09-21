@@ -44,22 +44,27 @@ func (s *Store) Seed(ctx context.Context, src SeedSource) { //nolint:gocritic //
 		replaced, problem := s.seedPass(ctx, &src)
 		if problem != nil {
 			s.MarkSeedFailure(src.Owner)
+			src.report(problem)
 		}
-		// A current or absent graph changed nothing worth writing.
+		// A current or absent graph changed nothing worth writing. A failed
+		// save is its own problem: the mark or the new seed is lost on restart.
 		if replaced || problem != nil {
-			if err := s.Save(); err != nil && problem == nil {
+			if err := s.Save(); err != nil {
 				problem = &SeedProblem{Owner: src.Owner, Step: "save", Err: err}
+				src.report(problem)
 			}
-		}
-		switch {
-		case problem == nil:
-		case src.Problem != nil:
-			src.Problem(*problem)
-		default:
-			log.Printf("warning: %v", *problem)
 		}
 		return problem == nil
 	})
+}
+
+// report hands a problem to the listener, or logs it: never silent.
+func (src *SeedSource) report(problem *SeedProblem) {
+	if src.Problem != nil {
+		src.Problem(*problem)
+		return
+	}
+	log.Printf("warning: %v", *problem)
 }
 
 // ExpireSeedCheck makes the owner's next Seed check again at once.

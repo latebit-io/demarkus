@@ -396,3 +396,22 @@ func TestAHeadWithAMalformedVersionSettlesNothing(t *testing.T) {
 		t.Errorf("err = %v, want the unknown outcome to stand", err)
 	}
 }
+
+// A probe that fails settles nothing, but it is not swallowed: the caller
+// learns the outcome is unknown and why the look at the head did not help.
+func TestAFailedHeadProbeIsReported(t *testing.T) {
+	probeFailed := errors.New("dial refused")
+	backend := &fetchtest.Client{
+		AppendFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+			return fetch.Result{}, fetchtest.LostResponse()
+		},
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) { return fetch.Result{}, probeFailed },
+	}
+	_, err := doc(backend).Append(t.Context(), docwrite.AppendRequest{Body: "x", ExpectedVersion: 3})
+	if !errors.Is(err, fetch.ErrOutcomeUnknown) || !errors.Is(err, probeFailed) {
+		t.Fatalf("err = %v, want the unknown outcome and the probe failure", err)
+	}
+	if want := "read response: request sent but outcome unknown; reconcile: dial refused"; err.Error() != want {
+		t.Errorf("err = %q\nwant  %q", err, want)
+	}
+}

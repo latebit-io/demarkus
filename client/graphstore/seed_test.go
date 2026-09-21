@@ -3,6 +3,9 @@ package graphstore
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -133,5 +136,33 @@ func TestSeedRewriteRunsBeforeTheSeedIsReplaced(t *testing.T) {
 		}})
 	if n := store.NodeCount(); n != 0 {
 		t.Errorf("nodes = %d, want the filtered rows kept out", n)
+	}
+}
+
+// A store that cannot be written loses the failure mark on restart. That is a
+// second problem, reported beside the first, never instead of it or not at all.
+func TestSeedReportsASaveFailureBesideTheSeedProblem(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read only directory")
+	}
+	dir := t.TempDir()
+	store, err := Load(filepath.Join(dir, "graph.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Loadable, then not writable: Save cannot create its temporary file.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Errorf("restore %s: %v", dir, err)
+		}
+	})
+	remote := &seedRemote{err: errors.New("dial refused")}
+	var steps []string
+	store.Seed(t.Context(), SeedSource{Owner: "w", Fetch: remote.fetch, Problem: func(p SeedProblem) { steps = append(steps, p.Step) }})
+	if !slices.Equal(steps, []string{"fetch", "save"}) {
+		t.Errorf("problems = %v, want the seed problem and the save problem", steps)
 	}
 }
