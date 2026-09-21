@@ -24,12 +24,9 @@ type Document struct {
 	Prune *PruneResult
 }
 
-// PruneResult describes the contiguous range of oldest versions deleted by
-// retention pruning after a successful write. From/To are zero when a
-// deletion failure stopped pruning before anything was removed. Err is
-// non-nil when pruning stopped early; versions From..To were already deleted
-// and the rest remain a contiguous suffix, so the hash chain stays
-// verifiable.
+// PruneResult is the range of oldest versions a write pruned; zero when nothing
+// was removed. With Err set, pruning stopped early and the survivors are still
+// a contiguous, verifiable suffix.
 type PruneResult struct {
 	From int
 	To   int

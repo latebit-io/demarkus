@@ -11,24 +11,16 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
-// MaxStoreFrontmatter is the maximum overhead the store-managed frontmatter
-// adds to a version file (version, archived, previous-hash, publisher
-// metadata, and delimiters). It must cover MaxMetaBytes of publisher metadata
-// plus the operational fields and per-line serialization overhead.
+// MaxStoreFrontmatter bounds the frontmatter a version file carries: the
+// operational fields, MaxMetaBytes of publisher metadata and line overhead.
 const MaxStoreFrontmatter = 2048
 
-// metaPrefix is the key prefix for non-spec publisher metadata in store
-// frontmatter. On disk: "meta.importance: 0.8". Stripped when returned to
-// clients. Keys recognized by the Open Knowledge Format (see okfKeys) are
-// written bare instead, so the store frontmatter matches the OKF spec for the
-// fields it defines.
+// metaPrefix marks publisher keys the Open Knowledge Format does not define,
+// on disk "meta.importance: 0.8"; it is stripped before clients see the key.
 const metaPrefix = "meta."
 
-// okfKeys are the publisher metadata keys recognized by the Open Knowledge
-// Format (OKF) spec. They serialize as bare frontmatter fields (e.g. "tags:")
-// to conform to the spec; every other publisher key keeps the metaPrefix. The
-// in-memory metadata map is bare-keyed either way — only on-disk serialization
-// differs.
+// okfKeys are the publisher keys the OKF spec defines; they serialize bare
+// ("tags:") while every other key takes metaPrefix. In memory all keys are bare.
 var okfKeys = map[string]bool{
 	"type":        true,
 	"title":       true,
@@ -38,37 +30,27 @@ var okfKeys = map[string]bool{
 	"timestamp":   true,
 }
 
-// retentionKey is the publisher metadata key that bounds a document's version
-// history. When the just-written version carries it, the write prunes the
-// oldest versions so at most that many remain (current included). It is
-// publisher metadata, not a reserved store field: any writer with publish
-// capability may set it, the same trust level that can archive the document.
-// Absent retention means keep every version — the default is unchanged.
+// retentionKey bounds a document's history: a write carrying it prunes down to
+// that many versions. Publisher metadata, so any writer who may archive may set
+// it; absent means keep every version.
 const retentionKey = "retention"
 
-// reservedMetaKeys are bare frontmatter fields owned by the store. Publishers
-// may not set them (validateMeta rejects them) and extractMetadata never
-// surfaces them as publisher metadata, preventing a publisher from forging
-// store state such as version or archival.
+// reservedMetaKeys are store owned fields. ValidateMeta refuses them and
+// ExtractMetadata never returns them, so a publisher cannot forge store state.
 var reservedMetaKeys = map[string]bool{
 	"version":       true,
 	"previous-hash": true,
 	"archived":      true,
 }
 
-// IsReservedMetaKey reports whether a publisher metadata key is reserved by the
-// store and would be rejected on publish. Callers that build metadata from
-// untrusted sources (e.g. importing external documents) use this to drop or
-// rename colliding keys before publishing.
+// IsReservedMetaKey reports a key a publish would refuse, so importers of
+// outside documents can drop or rename it first.
 func IsReservedMetaKey(key string) bool {
 	return reservedMetaKeys[key]
 }
 
-// ParseRetention parses a retention metadata value. ok is true only for a
-// positive integer — the only form that prunes; validateMeta rejects every
-// other value. Exported so clients gating destructive-confirmation UX (the
-// CLI prompt) share the exact predicate the server enforces instead of
-// re-implementing it and drifting.
+// ParseRetention accepts only a positive integer, the one form that prunes.
+// Clients that confirm destructive writes share this predicate with the server.
 func ParseRetention(v string) (n int, ok bool) {
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 {
@@ -77,10 +59,8 @@ func ParseRetention(v string) (n int, ok bool) {
 	return n, true
 }
 
-// RetentionValue returns the retention count declared in publisher metadata,
-// or 0 when absent. validateMeta has already rejected non-integer or < 1
-// values, so a parse failure here means the map bypassed validation — treat
-// it as no retention rather than pruning on a value that was never vetted.
+// RetentionValue is the declared retention, or 0. A value that fails to parse
+// bypassed ValidateMeta, so it counts as no retention rather than pruning.
 func RetentionValue(meta map[string]string) int {
 	v, ok := meta[retentionKey]
 	if !ok {
@@ -184,13 +164,9 @@ func ValidateMeta(meta map[string]string) error {
 	return nil
 }
 
-// ExtractMetadata parses publisher metadata from store frontmatter, returning a
-// bare-keyed map (or nil if none found). Two on-disk forms are recognized:
-// recognized OKF fields written bare (okfKeys, "tags" parsed from its YAML
-// list), and every other publisher key carried under metaPrefix (stripped
-// here). Reserved store fields (reservedMetaKeys) and any other bare key are
-// ignored, so operational state never surfaces as publisher metadata. An older
-// "meta."-prefixed tags value is read as-is, keeping prior writes readable.
+// ExtractMetadata returns bare keyed publisher metadata, or nil: OKF fields
+// read bare, other keys under metaPrefix, reserved and unknown bare keys
+// skipped. An older "meta.tags" value still reads.
 func ExtractMetadata(data []byte) map[string]string {
 	split, ok := splitStored(data)
 	if !ok {
@@ -229,13 +205,9 @@ func ExtractMetadata(data []byte) map[string]string {
 	return meta
 }
 
-// SerializedMetaSize returns the byte size a publisher key/value pair counts
-// against MaxMetaBytes: the key length plus the value length as actually
-// serialized on disk. The OKF "tags" field is stored as a YAML flow list, which
-// is longer than its comma-separated map form, so counting the raw value would
-// undercount the on-disk size and let a tag-heavy document slip past the budget
-// only to overflow the frontmatter. Per-line delimiters and the "meta." prefix
-// are fixed, bounded overhead covered by maxStoreFrontmatter, not counted here.
+// SerializedMetaSize is what a pair costs against MaxMetaBytes: key plus value
+// as written. Tags count as their longer YAML list form, or a tag heavy
+// document would pass the budget and overflow the frontmatter.
 func SerializedMetaSize(key, value string) int {
 	if key == "tags" {
 		return len(key) + len(FormatTagsList(value))
@@ -249,10 +221,8 @@ func FormatTagsList(csv string) string {
 	return "[" + strings.Join(protocol.SplitTags(csv), ", ") + "]"
 }
 
-// parseTagsList parses a tags value back to the comma-separated form held in the
-// metadata map. It accepts both the OKF YAML flow list ("[sales, revenue]") and
-// a bare comma-separated string (older "meta.tags" writes), so prior versions
-// stay readable.
+// parseTagsList returns tags in the comma separated map form, from the OKF
+// flow list or from an older bare "meta.tags" string.
 func parseTagsList(v string) string {
 	v = strings.TrimSpace(v)
 	if strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]") {

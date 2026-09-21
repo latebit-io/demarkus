@@ -25,6 +25,12 @@ files_and_lines=$(git diff -U0 -M "$base" -- '*.go' | awk '
       for (i = 0; i < len; i++) printf "%s %d\n", file, a[1] + i
     }
   }')
+# Untracked files are all new lines; without them a new file passes here and
+# fails in CI once it is committed.
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  files_and_lines+=$'\n'$(awk -v f="$f" '{ printf "%s %d\n", f, NR }' "$f")
+done < <(git ls-files --others --exclude-standard -- '*.go')
 [ -n "$files_and_lines" ] || exit 0
 
 files=()

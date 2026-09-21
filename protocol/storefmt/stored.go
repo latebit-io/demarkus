@@ -42,10 +42,8 @@ func IsArchived(data []byte) bool {
 	return value == "true"
 }
 
-// JoinContent concatenates existing and new content with a newline separator.
-// A separator is only added when existing content is non-empty and does not
-// already end with a newline. Returns ErrSizeLimit if the result exceeds
-// protocol.MaxBodyLength.
+// JoinContent appends content, adding a newline only when existing lacks one.
+// It returns ErrSizeLimit past protocol.MaxBodyLength.
 func JoinContent(existing, content []byte) ([]byte, error) {
 	if len(content) == 0 {
 		return existing, nil
