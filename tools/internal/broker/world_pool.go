@@ -9,37 +9,21 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
-// worldDispatcher is the read/write surface the MCP tool handlers
-// use to reach worlds. The production implementation is *worldPool,
-// which holds one *fetch.Client per worldName and resolves the
-// internal address from WorldConfig. Tests inject a fake that
-// scripts canned responses without dialing QUIC.
-//
-// Surface kept narrow on purpose: handlers do not see fetch.Client
-// or QUIC concepts; they hand the dispatcher a worldName + path +
-// token (+ body / expectedVersion / meta for the write verbs) and
-// consume the resulting fetch.Result. Slice 2 added the three read
-// verbs; Slice 3 adds the three write verbs. The 7 federation
-// tools land in Slices 4–5.
+// worldDispatcher is how the MCP tool handlers reach worlds; tests inject a
+// fake. It takes the fetch request structs with Host carrying the WORLD NAME,
+// never a dial address: *worldPool resolves the address itself.
 type worldDispatcher interface {
-	Fetch(worldName, path, token string) (fetch.Result, error)
-	FetchContext(ctx context.Context, worldName, path, token string) (fetch.Result, error)
-	FetchConditional(worldName, path, token, etag string) (fetch.Result, error)
-	FetchConditionalContext(ctx context.Context, worldName, path, token, etag string) (fetch.Result, error)
-	List(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error)
-	Versions(worldName, path, token string) (fetch.Result, error)
-	Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
-	LookupContext(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
-	Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	PublishContext(ctx context.Context, worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	Archive(worldName, path, token string) (fetch.Result, error)
+	Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error)
+	List(ctx context.Context, r fetch.ListRequest) (fetch.Result, error)
+	Versions(ctx context.Context, r fetch.VersionsRequest) (fetch.Result, error)
+	Lookup(ctx context.Context, r fetch.LookupRequest) (fetch.Result, error)
+	Publish(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error)
+	Append(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error)
+	Archive(ctx context.Context, r fetch.ArchiveRequest) (fetch.Result, error)
 }
 
-// errWorldNotFound surfaces when a tool call targets a worldName
-// that doesn't match any cfg.Worlds[]. The handler maps it to an
-// MCP tool-error so the agent sees a descriptive message rather
-// than a transport-level failure.
+// errWorldNotFound names a world the broker has no config for; handlers map
+// it to a tool error instead of a transport failure.
 type errWorldNotFound struct {
 	worldName string
 }
@@ -65,13 +49,8 @@ type worldPool struct {
 	opts    fetch.Options
 }
 
-// newWorldPool builds a worldPool from cfg. Internal addresses are
-// resolved eagerly so a typo in WorldConfig.InternalAddress fails
-// at construction (visible in startup logs) rather than at first
-// tool call (buried in MCP error envelopes). opts is the
-// fetch.Options template every per-world client inherits; tests
-// pass insecure-skip-verify, production picks up the broker's
-// TLS posture from the chart.
+// newWorldPool builds an empty pool; clients are created on first use. opts
+// is the template every per world client inherits (TLS posture, timeouts).
 func newWorldPool(cfg *Config, opts fetch.Options) *worldPool {
 	return &worldPool{
 		cfg:     cfg,
@@ -80,12 +59,8 @@ func newWorldPool(cfg *Config, opts fetch.Options) *worldPool {
 	}
 }
 
-// resolveWorldAddress applies the plan v3 rule: InternalAddress
-// wins when set; otherwise the standard Kubernetes Service DNS
-// pattern `<name>.<namespace>.svc.cluster.local:<DefaultPort>`.
-// The protocol's DefaultPort is the broker-server contract, not
-// a worldPool concern, so we read it from the protocol package
-// rather than hard-coding 6309.
+// resolveWorldAddress: InternalAddress wins when set, else the Kubernetes
+// Service DNS name on the protocol's default port.
 func resolveWorldAddress(w *WorldConfig) string {
 	if w.InternalAddress != "" {
 		return w.InternalAddress
@@ -93,135 +68,82 @@ func resolveWorldAddress(w *WorldConfig) string {
 	return fmt.Sprintf("%s.%s.svc.cluster.local:%d", w.Name, w.Namespace, protocol.DefaultPort)
 }
 
-// Fetch dispatches a FETCH against worldName. Returns
-// errWorldNotFound when the broker has no WorldConfig for the
-// name; otherwise forwards whatever fetch.Result the world emits
-// — the broker's byte-for-byte proxy contract demands no
-// transformation.
-func (p *worldPool) Fetch(worldName, path, token string) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
+// Every verb is a byte for byte proxy: the world name in r.Host is swapped for
+// the world's address and the world's response comes back untransformed. An
+// unknown world answers errWorldNotFound.
+
+// Fetch dispatches a FETCH; IfNoneMatch carries the graph seeder's own etag.
+func (p *worldPool) Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+	c, host, err := p.clientFor(r.Host)
 	if err != nil {
 		return fetch.Result{}, err
 	}
-	return c.Fetch(host, path, token)
+	r.Host = host
+	return c.Fetch(ctx, r)
 }
 
-func (p *worldPool) FetchContext(ctx context.Context, worldName, path, token string) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
+// List dispatches a LIST.
+func (p *worldPool) List(ctx context.Context, r fetch.ListRequest) (fetch.Result, error) {
+	c, host, err := p.clientFor(r.Host)
 	if err != nil {
 		return fetch.Result{}, err
 	}
-	return c.FetchContext(ctx, host, path, token)
+	r.Host = host
+	return c.List(ctx, r)
 }
 
-func (p *worldPool) FetchConditionalContext(ctx context.Context, worldName, path, token, etag string) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
+// Versions dispatches a VERSIONS.
+func (p *worldPool) Versions(ctx context.Context, r fetch.VersionsRequest) (fetch.Result, error) {
+	c, host, err := p.clientFor(r.Host)
 	if err != nil {
 		return fetch.Result{}, err
 	}
-	return c.FetchConditionalContext(ctx, host, path, token, etag)
+	r.Host = host
+	return c.Versions(ctx, r)
 }
 
-// FetchConditional dispatches a FETCH with an explicit if-none-match etag
-// (the graph seeder tracks /graph.md freshness itself).
-func (p *worldPool) FetchConditional(worldName, path, token, etag string) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
+// Lookup dispatches a LOOKUP; the world ranks and filters.
+func (p *worldPool) Lookup(ctx context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+	c, host, err := p.clientFor(r.Host)
 	if err != nil {
 		return fetch.Result{}, err
 	}
-	return c.FetchConditional(host, path, token, etag)
+	r.Host = host
+	return c.Lookup(ctx, r)
 }
 
-// List dispatches a LIST against worldName. Same proxy contract
-// as Fetch — the world's response shape is preserved. opts forwards
-// LIST options (e.g. IncludeArchived) to the world verbatim.
-func (p *worldPool) List(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
+// Publish dispatches a PUBLISH; ExpectedVersion follows fetch.WriteRequest.
+func (p *worldPool) Publish(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+	c, host, err := p.clientFor(r.Host)
 	if err != nil {
 		return fetch.Result{}, err
 	}
-	return c.ListWithOptions(host, path, token, opts)
+	r.Host = host
+	return c.Publish(ctx, r)
 }
 
-// Versions dispatches a VERSIONS against worldName. Same proxy
-// contract.
-func (p *worldPool) Versions(worldName, path, token string) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
+// Append dispatches an APPEND.
+func (p *worldPool) Append(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+	c, host, err := p.clientFor(r.Host)
 	if err != nil {
 		return fetch.Result{}, err
 	}
-	return c.Versions(host, path, token)
+	r.Host = host
+	return c.Append(ctx, r)
 }
 
-// Lookup dispatches a LOOKUP against worldName. Same proxy
-// contract as the other reads — the world ranks and filters; the
-// broker forwards the query/options and hands back the world's
-// importance-ranked table verbatim.
-func (p *worldPool) Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
+// Archive dispatches an ARCHIVE: history stays, status flips to archived.
+func (p *worldPool) Archive(ctx context.Context, r fetch.ArchiveRequest) (fetch.Result, error) {
+	c, host, err := p.clientFor(r.Host)
 	if err != nil {
 		return fetch.Result{}, err
 	}
-	return c.Lookup(host, scope, query, token, opts)
+	r.Host = host
+	return c.Archive(ctx, r)
 }
 
-func (p *worldPool) LookupContext(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
-	if err != nil {
-		return fetch.Result{}, err
-	}
-	return c.LookupContext(ctx, host, scope, query, token, opts)
-}
-
-// Publish dispatches a PUBLISH against worldName. Byte-for-byte
-// proxy: the broker forwards body and metadata verbatim, then
-// hands the world's response back without transformation.
-// expectedVersion follows fetch.Client.Publish's semantics:
-// <0 unconditional, 0 create-only, >0 update-only.
-func (p *worldPool) Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
-	if err != nil {
-		return fetch.Result{}, err
-	}
-	return c.Publish(host, path, body, token, expectedVersion, meta)
-}
-
-func (p *worldPool) PublishContext(ctx context.Context, worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
-	if err != nil {
-		return fetch.Result{}, err
-	}
-	return c.PublishContext(ctx, host, path, body, token, expectedVersion, meta)
-}
-
-// Append dispatches an APPEND against worldName. The world
-// enforces the expectedVersion >= 1 invariant; the dispatcher
-// stays as a thin proxy so the world's protocol-level error
-// envelopes (`bad-request` on missing version) flow through
-// unchanged.
-func (p *worldPool) Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
-	if err != nil {
-		return fetch.Result{}, err
-	}
-	return c.Append(host, path, body, token, expectedVersion, meta)
-}
-
-// Archive dispatches an ARCHIVE against worldName. The demarkus
-// protocol's destructive verb is ARCHIVE (not DELETE) — the
-// world keeps version history and flips status to `archived`.
-func (p *worldPool) Archive(worldName, path, token string) (fetch.Result, error) {
-	c, host, err := p.clientFor(worldName)
-	if err != nil {
-		return fetch.Result{}, err
-	}
-	return c.Archive(host, path, token)
-}
-
-// Close closes every per-world fetch.Client, releasing pooled
-// QUIC connections. Called from main.go's shutdown path
-// alongside the http.Server.Shutdown sequence so connections
-// land in a clean GOAWAY rather than dangling.
+// Close closes every per world client and its pooled QUIC connections; part
+// of the broker's shutdown path.
 func (p *worldPool) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

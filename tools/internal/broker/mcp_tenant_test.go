@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
@@ -183,30 +182,34 @@ func TestTenantGateDeniesCrossTenantEveryTool(t *testing.T) {
 func assertNoWorldTraffic(t *testing.T, d *fakeDispatcher, world string) {
 	t.Helper()
 	calls := d.Calls()
-	reads := map[string][]fetchtest.Call{"fetch": calls.Fetch, "list": calls.List, "versions": calls.Versions, "archive": calls.Archive}
-	for verb, recorded := range reads {
-		for _, c := range recorded {
-			if c.Host == world {
-				t.Errorf("%s dispatched to %s%s", verb, world, c.Path)
-			}
+	touched := func(verb, host, path string) {
+		if host == world {
+			t.Errorf("%s dispatched to %s%s", verb, world, path)
 		}
 	}
-	for _, c := range calls.FetchCond {
-		if c.Host == world {
-			t.Errorf("conditional fetch dispatched to %s%s", world, c.Path)
-		}
+	for _, c := range calls.Fetch {
+		touched("fetch", c.Host, c.Path)
+	}
+	for _, c := range calls.Seed {
+		touched("conditional fetch", c.Host, c.Path)
+	}
+	for _, c := range calls.List {
+		touched("list", c.Host, c.Path)
+	}
+	for _, c := range calls.Versions {
+		touched("versions", c.Host, c.Path)
+	}
+	for _, c := range calls.Archive {
+		touched("archive", c.Host, c.Path)
 	}
 	for _, c := range calls.Lookup {
-		if c.Host == world {
-			t.Errorf("lookup dispatched to %s", world)
-		}
+		touched("lookup", c.Host, c.Scope)
 	}
-	for verb, recorded := range map[string][]fetchtest.WriteCall{"publish": calls.Publish, "append": calls.Append} {
-		for _, c := range recorded {
-			if c.Host == world {
-				t.Errorf("%s dispatched to %s%s", verb, world, c.Path)
-			}
-		}
+	for _, c := range calls.Publish {
+		touched("publish", c.Host, c.Path)
+	}
+	for _, c := range calls.Append {
+		touched("append", c.Host, c.Path)
 	}
 }
 
@@ -461,7 +464,8 @@ func testMemoryGraphSeedSources(t *testing.T, format string) {
 					d.Published[tenant+"-w"+path] = fetch.Result{Response: shard}
 				}
 			}
-			d.FetchCondFn = func(world, path, _, _ string) (fetch.Result, error) {
+			d.SeedFn = func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+				world, path := r.Host, r.Path
 				response, ok := responses[world+path]
 				if !ok {
 					return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
@@ -607,7 +611,8 @@ func testMemoryGraphReauthorization(t *testing.T, failure, entrypoint string) {
 func TestMemoryGraphSeedRefreshIsScoped(t *testing.T) {
 	d := seededDispatcher()
 	empty := false
-	d.FetchCondFn = func(world, path, _, etag string) (fetch.Result, error) {
+	d.SeedFn = func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		world, path, etag := r.Host, r.Path, r.IfNoneMatch
 		if path != "/graph.md" {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		}
@@ -642,7 +647,8 @@ func TestMemoryGraphSeedRefreshIsScoped(t *testing.T) {
 func TestMemoryGraphRefreshDoesNotBlockAnotherTenant(t *testing.T) {
 	d := seededDispatcher()
 	started, release := make(chan struct{}), make(chan struct{})
-	d.FetchCondFn = func(world, path, _, _ string) (fetch.Result, error) {
+	d.SeedFn = func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		world, path := r.Host, r.Path
 		if world == "alice-w" && path == graphstore.SnapshotManifestPath {
 			close(started)
 			<-release
@@ -692,7 +698,8 @@ func TestMemoryGraphRetiredRefreshCannotPopulateNewScope(t *testing.T) {
 	}
 	started, release := make(chan struct{}), make(chan struct{})
 	var first atomic.Bool
-	d.FetchCondFn = func(_, path, _, _ string) (fetch.Result, error) {
+	d.SeedFn = func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		path := r.Path
 		if path == graphstore.SnapshotManifestPath && !first.Swap(true) {
 			close(started)
 			<-release
@@ -906,7 +913,8 @@ func TestTenantGateEmailChangeResolvesSameWorld(t *testing.T) {
 func TestTenantGateProvisioningNotReadyMessage(t *testing.T) {
 	cfg := provisioningTestConfig(ProvisionOpen)
 	d := &fakeDispatcher{
-		FetchFn: func(worldName, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			worldName := r.Host
 			if strings.HasPrefix(worldName, "eve-adams-") {
 				return fetch.Result{}, errors.New("dial: no route to world")
 			}

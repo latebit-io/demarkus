@@ -15,7 +15,7 @@ import (
 // not-found until published (the fake's published map then serves it).
 func freshWorldDispatcher() *fakeDispatcher {
 	return &fakeDispatcher{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
 	}
@@ -50,11 +50,11 @@ func TestEnsureMemorySeedSeedsFreshWorld(t *testing.T) {
 		if c.ExpectedVersion != 0 {
 			t.Errorf("seed publish %d expectedVersion = %d, want 0 (create-only)", i, c.ExpectedVersion)
 		}
-		if c.Meta["tags"] == "" {
+		if c.Metadata["tags"] == "" {
 			t.Errorf("seed publish %d has no tags", i)
 		}
-		if c.Meta["agent"] != "demarkus-memory-broker" {
-			t.Errorf("seed publish %d agent = %q, want demarkus-memory-broker", i, c.Meta["agent"])
+		if c.Metadata["agent"] != "demarkus-memory-broker" {
+			t.Errorf("seed publish %d agent = %q, want demarkus-memory-broker", i, c.Metadata["agent"])
 		}
 		if strings.HasPrefix(c.Body, "---") {
 			t.Errorf("seed publish %d body opens with a frontmatter fence", i)
@@ -106,10 +106,10 @@ func TestTenantGateSeedsOnFirstCall(t *testing.T) {
 func TestEnsureMemorySeedRetriesAfterFailure(t *testing.T) {
 	fail := true
 	d := &fakeDispatcher{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
-		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
 			if fail {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusServerError}}, nil
 			}
@@ -152,7 +152,8 @@ func TestEnsureMemorySeedRetriesAfterFailure(t *testing.T) {
 // policyDispatcher fakes a fresh world whose server already seeded a policy.
 func policyDispatcher(policyMeta map[string]string) *fakeDispatcher {
 	return &fakeDispatcher{
-		FetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
 			if path != publishpolicy.DocumentPath {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 			}
@@ -204,7 +205,8 @@ func TestEnsureMemorySeedKeepsCuratedPolicy(t *testing.T) {
 // publish conflicted with the server's seed, yet the hub still landed.
 func TestEnsureMemorySeedReplacesServerSeedInSeededWorld(t *testing.T) {
 	d := &fakeDispatcher{
-		FetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
 			meta := map[string]string{"version": "1"}
 			if path == publishpolicy.DocumentPath {
 				meta["agent"] = publishpolicy.SeedAgent

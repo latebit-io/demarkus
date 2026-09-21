@@ -176,3 +176,13 @@ func removeTemp(name string) error {
 	}
 	return nil
 }
+
+// Resolver answers Resolve for one credential and store; it is the client's
+// fetch.TokenResolver. A nil Store skips the stored token lookup.
+type Resolver struct {
+	Credential Credential
+	Store      *Store
+}
+
+// Token returns the token for host.
+func (r Resolver) Token(host string) string { return Resolve(r.Credential, host, r.Store) }

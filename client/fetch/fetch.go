@@ -9,45 +9,14 @@ import (
 	"log"
 	"maps"
 	"net"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/internal/cache"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/quic-go/quic-go"
 )
-
-// ParseMarkURL parses a mark:// URL and returns the host (with default port) and path.
-func ParseMarkURL(raw string) (host, path string, err error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid URL: %w", err)
-	}
-	if u.Scheme != "mark" {
-		return "", "", fmt.Errorf("unsupported scheme: %s (expected mark://)", u.Scheme)
-	}
-	hostname := strings.ToLower(u.Hostname())
-	if hostname == "" {
-		return "", "", fmt.Errorf("invalid URL: authority host is required")
-	}
-	port := u.Port()
-	if port == "" {
-		port = strconv.Itoa(protocol.DefaultPort)
-	}
-	portNumber, err := strconv.Atoi(port)
-	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return "", "", fmt.Errorf("invalid URL: port %q must be between 1 and 65535", port)
-	}
-	host = net.JoinHostPort(hostname, port)
-	path = u.Path
-	if path == "" {
-		path = "/"
-	}
-	return host, path, nil
-}
 
 // Result holds a response and metadata about how it was served.
 type Result struct {
@@ -62,9 +31,23 @@ type Endpoint struct {
 	ServerName  string
 }
 
+// ResponseCache holds cacheable reads, keyed by host, path and verb. A miss is
+// a nil entry with no error. The client caches only tokenless reads without
+// options, since neither a token nor an option is part of the key.
+type ResponseCache interface {
+	Get(host, path, verb string) (*CachedResponse, error)
+	Put(host, path, verb string, resp protocol.Response) error
+}
+
+// CachedResponse is a stored response and when it was stored.
+type CachedResponse struct {
+	Response protocol.Response
+	CachedAt time.Time
+}
+
 // Options configures client behavior.
 type Options struct {
-	Cache          *cache.Cache
+	Cache          ResponseCache // nil disables caching
 	Insecure       bool
 	DialTimeout    time.Duration
 	RequestTimeout time.Duration
@@ -72,17 +55,9 @@ type Options struct {
 	// authority (host:port). URLs, caches, tokens, and connection pooling remain
 	// keyed by that authority.
 	Endpoints map[string]Endpoint
-	// KeepAlivePeriod controls QUIC keep-alive PING cadence on pooled
-	// connections. Long-lived consumers (TUI, MCP servers, federation
-	// crawlers) keep one connection per host across many requests; if
-	// the connection sits idle long enough for the NAT path or server-
-	// side idle timer to drop it, the next request silently waits for
-	// RequestTimeout before transient-failure retry kicks in. With
-	// keep-alive set, quic-go sends PING frames at this interval
-	// whenever the connection has been idle, holding the path open
-	// across typical 30s+ NAT timeouts. Default 25s (under common NAT
-	// thresholds, well under quic-go's 30s default idle timeout). Set
-	// to a negative value to disable.
+	// KeepAlivePeriod is the QUIC PING cadence on idle pooled connections, so a
+	// NAT or server idle timer never drops one between requests. Default 25s,
+	// under common NAT timeouts; negative disables.
 	KeepAlivePeriod time.Duration
 }
 
@@ -152,46 +127,6 @@ func closeConn(conn *quic.Conn) {
 	_ = conn.CloseWithError(0, "")
 }
 
-// Fetch retrieves a document from a Mark Protocol server.
-// If token is non-empty, it is sent as the auth metadata for read access to private paths.
-func (c *Client) Fetch(host, path, token string) (Result, error) {
-	return c.FetchContext(context.Background(), host, path, token)
-}
-
-// FetchContext is Fetch with caller cancellation propagated through network I/O.
-func (c *Client) FetchContext(ctx context.Context, host, path, token string) (Result, error) {
-	return c.cachedRequestMetaContext(ctx, host, path, token, protocol.VerbFetch, nil)
-}
-
-// FetchConditional is Fetch with an explicit if-none-match etag, for callers
-// that track document freshness themselves (e.g. the graph seeder, whose
-// authenticated fetches skip the disk cache so the built-in conditional path
-// never fires). A not-modified status returns with an empty body. An empty
-// etag degrades to a plain Fetch.
-func (c *Client) FetchConditional(host, path, token, etag string) (Result, error) {
-	return c.FetchConditionalContext(context.Background(), host, path, token, etag)
-}
-
-// FetchConditionalContext is FetchConditional with caller cancellation.
-func (c *Client) FetchConditionalContext(ctx context.Context, host, path, token, etag string) (Result, error) {
-	if etag == "" {
-		return c.FetchContext(ctx, host, path, token)
-	}
-	return c.cachedRequestMetaContext(ctx, host, path, token, protocol.VerbFetch, map[string]string{"if-none-match": etag})
-}
-
-// ListOptions carries optional parameters for a LIST request.
-type ListOptions struct {
-	// IncludeArchived asks the server to include archived documents (and
-	// directories that contain only archived documents) in the listing.
-	// Default false: archived entries are hidden.
-	IncludeArchived bool
-	// Cursor continues the same directory and archive-mode listing.
-	Cursor string
-	// PageSize caps entries returned; zero uses the server default.
-	PageSize int
-}
-
 // ErrListCompletenessUnknown means a LIST response predates machine-readable
 // pagination metadata. Callers cannot infer completeness from its body.
 var ErrListCompletenessUnknown = errors.New("LIST response completeness is unknown")
@@ -236,109 +171,6 @@ func ParseListPageMetadata(resp protocol.Response) (ListPageMetadata, error) {
 	return ListPageMetadata{Entries: entries, Complete: complete, NextCursor: next}, nil
 }
 
-// List retrieves a directory listing from a Mark Protocol server.
-// If token is non-empty, it is sent as the auth metadata for read access to private paths.
-func (c *Client) List(host, path, token string) (Result, error) {
-	return c.ListWithOptions(host, path, token, ListOptions{})
-}
-
-// ListWithOptions is List with explicit LIST options (e.g. IncludeArchived).
-func (c *Client) ListWithOptions(host, path, token string, opts ListOptions) (Result, error) {
-	return c.ListWithOptionsContext(context.Background(), host, path, token, opts)
-}
-
-// ListWithOptionsContext is ListWithOptions with caller cancellation propagated through network I/O.
-func (c *Client) ListWithOptionsContext(ctx context.Context, host, path, token string, opts ListOptions) (Result, error) {
-	if opts.PageSize < 0 || opts.PageSize > protocol.MaxListPageSize {
-		return Result{}, fmt.Errorf("LIST page size must be between 1 and %d, or 0 for the server default", protocol.MaxListPageSize)
-	}
-	extra := make(map[string]string)
-	if opts.IncludeArchived {
-		extra["include-archived"] = "true"
-	}
-	if opts.Cursor != "" {
-		extra["cursor"] = opts.Cursor
-	}
-	if opts.PageSize > 0 {
-		extra["page-size"] = strconv.Itoa(opts.PageSize)
-	}
-	if len(extra) == 0 {
-		extra = nil
-	}
-	return c.cachedRequestMetaContext(ctx, host, path, token, protocol.VerbList, extra)
-}
-
-// Versions retrieves the version history of a document.
-// If token is non-empty, it is sent as the auth metadata for read access to private paths.
-func (c *Client) Versions(host, path, token string) (Result, error) {
-	return c.VersionsContext(context.Background(), host, path, token)
-}
-
-// VersionsContext is Versions with caller cancellation propagated through network I/O.
-func (c *Client) VersionsContext(ctx context.Context, host, path, token string) (Result, error) {
-	req := protocol.Request{Verb: protocol.VerbVersions, Path: path, Metadata: make(map[string]string)}
-	if token != "" {
-		req.Metadata["auth"] = token
-	}
-	return c.doWithRetryContext(ctx, host, func(conn *quic.Conn) (Result, error) {
-		return c.requestOnConnContext(ctx, conn, req)
-	})
-}
-
-// Publish creates or updates a document on a Mark Protocol server.
-// If token is non-empty, it is sent as the auth metadata for capability-based auth.
-// expectedVersion controls optimistic concurrency:
-//   - < 0: no check (server accepts unconditionally)
-//   - 0: create-only (server rejects if document already exists)
-//   - > 0: update-only (server rejects if current version doesn't match)
-func (c *Client) Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (Result, error) {
-	return c.PublishContext(context.Background(), host, path, body, token, expectedVersion, meta)
-}
-
-// PublishContext is Publish with caller cancellation propagated through network I/O.
-func (c *Client) PublishContext(ctx context.Context, host, path, body, token string, expectedVersion int, meta map[string]string) (Result, error) {
-	req := protocol.Request{Verb: protocol.VerbPublish, Path: path, Metadata: make(map[string]string), Body: body}
-	maps.Copy(req.Metadata, meta)
-	if token != "" {
-		req.Metadata["auth"] = token
-	}
-	if expectedVersion >= 0 {
-		req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
-	}
-	return c.doWriteContext(ctx, host, func(conn *quic.Conn) (Result, error) {
-		return c.requestOnConnContext(ctx, conn, req)
-	})
-}
-
-// Append adds content to the end of an existing document.
-// expectedVersion is required and must be >= 1 (the document must already exist).
-// If token is non-empty, it is sent as the auth metadata for capability-based auth.
-func (c *Client) Append(host, path, body, token string, expectedVersion int, meta map[string]string) (Result, error) {
-	if expectedVersion < 1 {
-		return Result{}, fmt.Errorf("APPEND requires expected-version >= 1, got %d", expectedVersion)
-	}
-	if body == "" {
-		return Result{}, fmt.Errorf("APPEND requires a non-empty body")
-	}
-	req := protocol.Request{Verb: protocol.VerbAppend, Path: path, Metadata: make(map[string]string), Body: body}
-	maps.Copy(req.Metadata, meta)
-	if token != "" {
-		req.Metadata["auth"] = token
-	}
-	req.Metadata["expected-version"] = strconv.Itoa(expectedVersion)
-	return c.doWriteContext(context.Background(), host, func(conn *quic.Conn) (Result, error) {
-		return c.requestOnConn(conn, req)
-	})
-}
-
-// LookupOptions configures a LOOKUP request. Zero values are omitted from the
-// request so the server applies its own defaults.
-type LookupOptions struct {
-	Filter string // comma-separated key=value predicates
-	Limit  int    // max results; <= 0 lets the server choose
-	Match  string // MatchCatalog (default) or MatchBody; empty omits the key
-}
-
 // LOOKUP match modes. A server without body match answers from the
 // catalog; AnsweredFromCatalog detects that.
 const (
@@ -350,76 +182,24 @@ const (
 // and the server answered from the catalog instead.
 const CatalogFallbackNote = "server answered from the catalog (no body match); an empty table is not evidence of absence"
 
-// AnsweredFromCatalog reports a body-match request that the server answered
-// in catalog mode: an ok response without the match: body echo.
-func AnsweredFromCatalog(opts LookupOptions, r Result) bool {
-	return opts.Match == MatchBody && r.Response.Status == protocol.StatusOK && r.Response.Metadata["match"] != MatchBody
+// readRequest is one cacheable read: FETCH or LIST.
+type readRequest struct {
+	host, path, token, verb string
+	extra                   map[string]string // request options; any of them bypasses the cache
 }
 
-// Lookup queries a server's catalog for documents matching a subject under
-// scope, returning an importance-ranked markdown table. query is required.
-// If token is non-empty it is sent so read-auth-gated documents are included.
-func (c *Client) Lookup(host, scope, query, token string, opts LookupOptions) (Result, error) {
-	return c.LookupContext(context.Background(), host, scope, query, token, opts)
-}
-
-// LookupContext is Lookup with caller cancellation propagated through dialing,
-// retries, and stream I/O.
-func (c *Client) LookupContext(ctx context.Context, host, scope, query, token string, opts LookupOptions) (Result, error) {
-	if query == "" {
-		return Result{}, fmt.Errorf("LOOKUP requires a non-empty query")
-	}
-	// Rejected here, once for every surface, rather than relayed back as a
-	// bad-request body the caller would have to read.
-	if _, err := protocol.ParseMatch(opts.Match); err != nil {
-		return Result{}, err
-	}
-	req := protocol.Request{Verb: protocol.VerbLookup, Path: scope, Metadata: map[string]string{"query": query}}
-	if opts.Filter != "" {
-		req.Metadata["filter"] = opts.Filter
-	}
-	if opts.Limit > 0 {
-		req.Metadata["limit"] = strconv.Itoa(opts.Limit)
-	}
-	if opts.Match != "" {
-		req.Metadata["match"] = opts.Match
-	}
-	if token != "" {
-		req.Metadata["auth"] = token
-	}
+// cachedRead serves a read through the response cache when it may.
+func (c *Client) cachedRead(ctx context.Context, r readRequest) (Result, error) {
+	host, path, token, verb, extra := r.host, r.path, r.token, r.verb, r.extra
 	return c.doWithRetryContext(ctx, host, func(conn *quic.Conn) (Result, error) {
-		return c.requestOnConnContext(ctx, conn, req)
-	})
-}
-
-// Archive marks a document as archived on a Mark Protocol server.
-func (c *Client) Archive(host, path, token string) (Result, error) {
-	req := protocol.Request{Verb: protocol.VerbArchive, Path: path, Metadata: make(map[string]string)}
-	if token != "" {
-		req.Metadata["auth"] = token
-	}
-	return c.doWriteContext(context.Background(), host, func(conn *quic.Conn) (Result, error) {
-		return c.requestOnConn(conn, req)
-	})
-}
-
-// cachedRequestMeta handles cacheable reads with optional request metadata.
-// Extra metadata bypasses caching because cache keys do not include it.
-func (c *Client) cachedRequestMetaContext(ctx context.Context, host, path, token, verb string, extra map[string]string) (Result, error) {
-	return c.doWithRetryContext(ctx, host, func(conn *quic.Conn) (Result, error) {
-		req := protocol.Request{Verb: verb, Path: path, Metadata: make(map[string]string)}
-
-		if token != "" {
-			req.Metadata["auth"] = token
-		}
-		maps.Copy(req.Metadata, extra)
+		req := newRequest(verb, path, token, extra)
 
 		// Skip cache for authenticated requests (to avoid persisting private
 		// content to disk) and for option-bearing requests (the cache key does
 		// not encode the extra metadata).
 		useCache := c.opts.Cache != nil && token == "" && len(extra) == 0
 
-		var cached *cache.Entry
+		var cached *CachedResponse
 		if useCache {
 			// An unreadable cache entry is a miss: the request goes out unconditional.
 			var cacheErr error
@@ -455,11 +235,7 @@ func (c *Client) cachedRequestMetaContext(ctx context.Context, host, path, token
 	})
 }
 
-// requestOnConn opens a stream, sends a request, and reads the response.
-func (c *Client) requestOnConn(conn *quic.Conn, req protocol.Request) (Result, error) {
-	return c.requestOnConnContext(context.Background(), conn, req)
-}
-
+// requestOnConnContext opens a stream, sends a request, and reads the response.
 func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req protocol.Request) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.opts.RequestTimeout)
 	defer cancel()
@@ -730,13 +506,9 @@ func isTransientError(err error) bool {
 	return false
 }
 
-// isTimeoutError reports whether err (or anything it wraps) is a timeout.
-// It must use errors.As, not a bare type assertion: every error returned from
-// this package is wrapped (e.g. fmt.Errorf("open stream: %w", …)), and a
-// *fmt.wrapError does not itself implement Timeout(). A bare assertion misses
-// the wrapped context.DeadlineExceeded, so a timed-out OpenStreamSync would be
-// classed non-transient and doWithRetry would never evict+redial the dead
-// pooled connection — wedging every subsequent request on that host.
+// isTimeoutError must use errors.As: every error here is wrapped, and a bare
+// assertion would miss a timed out OpenStreamSync, leave the dead pooled
+// connection in place and wedge every later request to that host.
 func isTimeoutError(err error) bool {
 	var te interface{ Timeout() bool }
 	return errors.As(err, &te) && te.Timeout()

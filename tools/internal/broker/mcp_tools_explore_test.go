@@ -32,14 +32,14 @@ var exploreTestListing = []string{"alpha.md", "docs/", "hub.md", "notes.md"}
 
 func exploreDispatcher() *fakeDispatcher {
 	return &fakeDispatcher{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "2", "modified": "2026-07-05T00:00:00Z", "etag": "xyz"},
 				Body:     exploreTestDoc,
 			}}, nil
 		},
-		ListFn: func(_, _, _ string) (fetch.Result, error) {
+		ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
 			return fetchtest.ListPage("/", "", exploreTestListing...), nil
 		},
 	}
@@ -116,7 +116,7 @@ func TestHandleMarkExploreBacklinksFromGraphStore(t *testing.T) {
 
 func TestHandleMarkExploreOrdinaryReadCachesTypedRelations(t *testing.T) {
 	d := exploreDispatcher()
-	d.FetchFn = func(_, _, _ string) (fetch.Result, error) {
+	d.FetchFn = func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status:   protocol.StatusOK,
 			Metadata: map[string]string{"version": "4", "rel-supersedes": "/old.md"},
@@ -146,14 +146,14 @@ func TestHandleMarkExploreSectionCaps(t *testing.T) {
 		fmt.Fprintf(&body, "- [Doc %d](/doc-%d.md)\n\n", i, i)
 	}
 	d := &fakeDispatcher{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "1"},
 				Body:     body.String(),
 			}}, nil
 		},
-		ListFn: func(_, _, _ string) (fetch.Result, error) {
+		ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
 			return fetchtest.ListPage("/", ""), nil
 		},
 	}
@@ -170,7 +170,7 @@ func TestHandleMarkExploreSectionCaps(t *testing.T) {
 
 func TestHandleMarkExploreListFailureDegrades(t *testing.T) {
 	d := exploreDispatcher()
-	d.ListFn = func(_, _, _ string) (fetch.Result, error) {
+	d.ListFn = func(context.Context, fetch.ListRequest) (fetch.Result, error) {
 		return fetch.Result{}, fmt.Errorf("boom")
 	}
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
@@ -198,7 +198,7 @@ func TestHandleMarkExploreInvalidURL(t *testing.T) {
 
 func TestHandleMarkExploreConfirmedAbsenceClearsAdjacency(t *testing.T) {
 	d := exploreDispatcher()
-	d.FetchFn = func(_, _, _ string) (fetch.Result, error) {
+	d.FetchFn = func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound, Metadata: map[string]string{"version": "2"}}}, nil
 	}
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
@@ -223,7 +223,7 @@ func TestHandleMarkExploreConfirmedAbsenceClearsAdjacency(t *testing.T) {
 
 func TestHandleMarkExploreBinaryNotice(t *testing.T) {
 	d := exploreDispatcher()
-	d.FetchFn = func(_, _, _ string) (fetch.Result, error) {
+	d.FetchFn = func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK, Metadata: map[string]string{"version": "1", "etag": "abc"},
 			Body: "[false relation](/false.md)\xff",

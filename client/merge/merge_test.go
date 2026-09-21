@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -20,9 +21,11 @@ type stubClient struct {
 	publishedExp   []int
 	currentIdx     int
 	publishIdx     int
+	contexts       []context.Context // one per call, in order
 }
 
-func (s *stubClient) FetchVersion(_ string, version int) (Doc, error) {
+func (s *stubClient) FetchVersion(ctx context.Context, _ string, version int) (Doc, error) {
+	s.contexts = append(s.contexts, ctx)
 	if s.fetchErr != nil {
 		return Doc{}, s.fetchErr
 	}
@@ -33,7 +36,8 @@ func (s *stubClient) FetchVersion(_ string, version int) (Doc, error) {
 	return d, nil
 }
 
-func (s *stubClient) FetchCurrent(_ string) (Doc, error) {
+func (s *stubClient) FetchCurrent(ctx context.Context, _ string) (Doc, error) {
+	s.contexts = append(s.contexts, ctx)
 	if s.currentErr != nil {
 		return Doc{}, s.currentErr
 	}
@@ -45,10 +49,11 @@ func (s *stubClient) FetchCurrent(_ string) (Doc, error) {
 	return d, nil
 }
 
-func (s *stubClient) Publish(_, body string, expectedVersion int, meta map[string]string) (PublishResult, error) {
-	s.publishedBody = append(s.publishedBody, body)
-	s.publishedMeta = append(s.publishedMeta, meta)
-	s.publishedExp = append(s.publishedExp, expectedVersion)
+func (s *stubClient) Publish(ctx context.Context, w Write) (PublishResult, error) {
+	s.contexts = append(s.contexts, ctx)
+	s.publishedBody = append(s.publishedBody, w.Body)
+	s.publishedMeta = append(s.publishedMeta, w.Metadata)
+	s.publishedExp = append(s.publishedExp, w.ExpectedVersion)
 	if s.publishIdx < len(s.publishErrs) && s.publishErrs[s.publishIdx] != nil {
 		err := s.publishErrs[s.publishIdx]
 		s.publishIdx++
@@ -67,7 +72,7 @@ func TestCandidate(t *testing.T) {
 		c := &stubClient{
 			publishResults: []PublishResult{{Status: "ok", Version: 6}},
 		}
-		out, err := Candidate(c, "/p", "body", 5, nil)
+		out, err := Candidate(t.Context(), c, Write{Path: "/p", Body: "body", ExpectedVersion: 5})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -99,7 +104,7 @@ func TestCandidate(t *testing.T) {
 				{Status: "conflict", ServerVersion: 6},
 			},
 		}
-		out, err := Candidate(c, "/p", "a\nB\nc\n", 5, nil)
+		out, err := Candidate(t.Context(), c, Write{Path: "/p", Body: "a\nB\nc\n", ExpectedVersion: 5})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -134,7 +139,7 @@ func TestCandidate(t *testing.T) {
 				{Status: "conflict", ServerVersion: 6},
 			},
 		}
-		out, err := Candidate(c, "/p", "a\nB\nc\n", 5, nil)
+		out, err := Candidate(t.Context(), c, Write{Path: "/p", Body: "a\nB\nc\n", ExpectedVersion: 5})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -162,7 +167,7 @@ func TestCandidate(t *testing.T) {
 				{Status: "conflict", ServerVersion: 3},
 			},
 		}
-		out, err := Candidate(c, "/p", "x\ny\n", 0, nil)
+		out, err := Candidate(t.Context(), c, Write{Path: "/p", Body: "x\ny\n", ExpectedVersion: 0})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -178,7 +183,7 @@ func TestCandidate(t *testing.T) {
 	})
 
 	t.Run("invalid expected_version", func(t *testing.T) {
-		_, err := Candidate(&stubClient{}, "/p", "b", -1, nil)
+		_, err := Candidate(t.Context(), &stubClient{}, Write{Path: "/p", Body: "b", ExpectedVersion: -1})
 		if !errors.Is(err, ErrInvalidExpectedVersion) {
 			t.Errorf("want ErrInvalidExpectedVersion, got %v", err)
 		}
@@ -189,7 +194,7 @@ func TestCandidate(t *testing.T) {
 			publishResults: []PublishResult{{Status: "ok", Version: 6}},
 		}
 		meta := map[string]string{"agent": "test"}
-		_, err := Candidate(c, "/p", "body", 5, meta)
+		_, err := Candidate(t.Context(), c, Write{Path: "/p", Body: "body", ExpectedVersion: 5, Metadata: meta})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -213,7 +218,7 @@ func TestCandidate(t *testing.T) {
 				{Status: "conflict", ServerVersion: 6},
 			},
 		}
-		_, err := Candidate(c, "/p", "x\nB\n", 5, nil)
+		_, err := Candidate(t.Context(), c, Write{Path: "/p", Body: "x\nB\n", ExpectedVersion: 5})
 		if err == nil {
 			t.Fatal("expected error for missing head version")
 		}
@@ -229,7 +234,7 @@ func TestCandidate(t *testing.T) {
 			},
 			fetchErr: errors.New("network down"),
 		}
-		_, err := Candidate(c, "/p", "body", 5, nil)
+		_, err := Candidate(t.Context(), c, Write{Path: "/p", Body: "body", ExpectedVersion: 5})
 		if err == nil {
 			t.Fatal("expected error from base fetch")
 		}
@@ -251,7 +256,7 @@ func TestCandidate(t *testing.T) {
 				{Status: "ok", Version: 7},
 			},
 		}
-		out1, err := Candidate(c, "/p", "a\nB\nc\n", 5, nil)
+		out1, err := Candidate(t.Context(), c, Write{Path: "/p", Body: "a\nB\nc\n", ExpectedVersion: 5})
 		if err != nil {
 			t.Fatalf("round 1: %v", err)
 		}
@@ -260,7 +265,7 @@ func TestCandidate(t *testing.T) {
 		}
 
 		// Agent's semantic verification is a no-op for this test.
-		out2, err := Candidate(c, "/p", out1.Body, out1.PublishAtVersion, nil)
+		out2, err := Candidate(t.Context(), c, Write{Path: "/p", Body: out1.Body, ExpectedVersion: out1.PublishAtVersion})
 		if err != nil {
 			t.Fatalf("round 2: %v", err)
 		}
@@ -309,7 +314,7 @@ func TestCandidateReconcilesItsOwnWrite(t *testing.T) {
 				publishResults: []PublishResult{tt.publish},
 				publishErrs:    []error{tt.publishErr},
 			}
-			out, err := Candidate(c, "/doc.md", "mine", 3, tt.meta)
+			out, err := Candidate(t.Context(), c, Write{Path: "/doc.md", Body: "mine", ExpectedVersion: 3, Metadata: tt.meta})
 			if tt.wantErr != (err != nil) {
 				t.Fatalf("Candidate() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -326,5 +331,47 @@ func TestCandidateReconcilesItsOwnWrite(t *testing.T) {
 				t.Errorf("publish called %d times, want exactly 1", len(c.publishedBody))
 			}
 		})
+	}
+}
+
+// Every call Candidate makes, the merge path's three included, runs under the
+// caller's context, so a cancelled tool call stops instead of finishing alone.
+func TestCandidatePassesItsContextToEveryCall(t *testing.T) {
+	type key struct{}
+	ctx := context.WithValue(t.Context(), key{}, "caller")
+	c := &stubClient{
+		publishResults: []PublishResult{{Status: "conflict"}},
+		currentDocs:    []Doc{{Status: "ok", Body: "a\nb\nC\n", Version: 6}},
+		versionedDocs:  map[int]Doc{5: {Status: "ok", Body: "a\nb\nc\n", Version: 5}},
+	}
+	out, err := Candidate(ctx, c, Write{Path: "/p", Body: "a\nB\nc\n", ExpectedVersion: 5})
+	if err != nil || out.Status != OutcomeCandidate {
+		t.Fatalf("Candidate = %+v, %v, want a merge candidate", out, err)
+	}
+	if len(c.contexts) != 3 {
+		t.Fatalf("calls = %d, want publish, fetch current, fetch base", len(c.contexts))
+	}
+	for i, got := range c.contexts {
+		if got.Value(key{}) != "caller" {
+			t.Errorf("call %d ran under a context that is not the caller's", i)
+		}
+	}
+}
+
+// Without the version the writer started from there is nothing to merge
+// against: it never existed, or retention pruned it. The conflict is the answer.
+func TestCandidateWithoutABaseReportsTheConflict(t *testing.T) {
+	conflict := PublishResult{Status: "conflict", ServerVersion: 6, Metadata: map[string]string{"server-version": "6"}}
+	c := &stubClient{
+		publishResults: []PublishResult{conflict},
+		currentDocs:    []Doc{{Status: "ok", Body: "theirs", Version: 6}},
+		versionedDocs:  map[int]Doc{}, // v9 answers not-found
+	}
+	out, err := Candidate(t.Context(), c, Write{Path: "/p", Body: "mine", ExpectedVersion: 9})
+	if err != nil {
+		t.Fatalf("err = %v, want the conflict as an outcome", err)
+	}
+	if out.Status != OutcomeOK || out.Publish.Status != "conflict" || out.Publish.ServerVersion != 6 {
+		t.Errorf("outcome = %+v, want the server's conflict passed through", out)
 	}
 }

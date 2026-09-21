@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/url"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/listing"
-	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -67,20 +65,18 @@ func registerResources(s *mcpserver.MCPServer, h *handler, defaultHost string) {
 	), h.readResource)
 }
 
-// registerListedResources fetches the host's top-level listing and
-// registers each document as a concrete resource so client pickers show
-// real content, not just the two well-known entries. Best-effort by
-// design: it runs in a goroutine after the server starts serving, and a
-// down or slow host only costs the extra picker entries — never startup.
-// Late additions notify connected clients via listChanged.
-func registerListedResources(s *mcpserver.MCPServer, h *handler, defaultHost string) {
-	host, path, err := h.resolveURL("/")
+// registerListedResources adds the host's top level documents to the picker.
+// Best effort, in a goroutine after serving starts: a slow host costs picker
+// entries, never startup. Late additions notify clients via listChanged.
+func registerListedResources(ctx context.Context, s *mcpserver.MCPServer, h *handler, defaultHost string) {
+	root, err := h.resolveURL("/")
 	if err != nil {
 		// Unreachable in practice (callers gate on -host being set), but a
 		// silent return would make any future regression undiagnosable.
 		log.Printf("resource listing skipped (%v): picker shows well-known entries only", err)
 		return
 	}
+	host, path := root.DialHost(), root.Path
 	var resources []mcpserver.ServerResource
 	cursor, lastName := "", ""
 	seenCursors := make(map[string]struct{})
@@ -91,7 +87,8 @@ func registerListedResources(s *mcpserver.MCPServer, h *handler, defaultHost str
 			break
 		}
 		listCalls++
-		result, err := h.client.ListWithOptions(host, path, h.resolveToken(host), fetch.ListOptions{
+		result, err := h.client.List(ctx, fetch.ListRequest{
+			Host: host, Path: path, Token: h.resolveToken(host),
 			Cursor:   cursor,
 			PageSize: protocol.MaxListPageSize,
 		})
@@ -151,46 +148,18 @@ func registerListedResources(s *mcpserver.MCPServer, h *handler, defaultHost str
 
 // readResource serves every resource read: whole documents and #anchor
 // sections, for both the concrete resources and the URI template.
-func (h *handler) readResource(_ context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	raw := req.Params.URI
-	docURL, anchor, _ := strings.Cut(raw, "#")
-
-	host, path, err := h.resolveURL(docURL)
+func (h *handler) readResource(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	tools, err := h.bodies()
 	if err != nil {
-		return nil, fmt.Errorf("invalid resource URI %q: %w", raw, err)
+		return nil, err
 	}
-	result, err := h.client.Fetch(host, path, h.resolveToken(host))
+	resource, err := tools.ReadResource(ctx, req.Params.URI)
 	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", docURL, err)
+		return nil, err
 	}
-	if result.Response.Status != protocol.StatusOK {
-		return nil, fmt.Errorf("%s: %s", docURL, result.Response.Status)
-	}
-
-	body := result.Response.Body
-	// Binary/non-UTF-8 body: return a plain-text notice, not mojibake.
-	if mdoutline.BinaryBody(body) {
-		return []mcp.ResourceContents{mcp.TextResourceContents{
-			URI:      raw,
-			MIMEType: "text/plain",
-			Text:     mdoutline.NonMarkdownNotice(len(body)),
-		}}, nil
-	}
-	if anchor != "" {
-		section, ok := mdoutline.Section(body, anchor)
-		if !ok {
-			available := strings.Join(mdoutline.Anchors(body), ", ")
-			if available == "" {
-				available = "(document has no headings)"
-			}
-			return nil, fmt.Errorf("section #%s not found in %s; available anchors: %s", anchor, docURL, available)
-		}
-		body = section
-	}
-
 	return []mcp.ResourceContents{mcp.TextResourceContents{
-		URI:      raw,
-		MIMEType: "text/markdown",
-		Text:     body,
+		URI:      req.Params.URI,
+		MIMEType: resource.MIMEType,
+		Text:     resource.Text,
 	}}, nil
 }

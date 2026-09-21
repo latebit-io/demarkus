@@ -17,7 +17,7 @@ import (
 )
 
 // fakeDispatcher is the shared scriptable client; see client/fetchtest.
-type fakeDispatcher = fetchtest.Dispatcher
+type fakeDispatcher = fetchtest.Client
 
 func TestParseToolURLDoubleSlashShape(t *testing.T) {
 	world, path, err := parseToolURL("mark://team-a/foo.md")
@@ -186,7 +186,7 @@ func withAliceClaims(ctx context.Context) context.Context {
 func TestHandleMarkFetchHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Metadata: map[string]string{
@@ -259,7 +259,7 @@ func TestHandleMarkFetchHappyPath(t *testing.T) {
 func TestHandleMarkLookupHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		LookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(context.Context, fetch.LookupRequest) (fetch.Result, error) {
 			row := render.LookupRow{Path: "/docs/auth.md", Importance: 0.9, Title: "Auth", Tags: []string{"auth"}}
 			return fetchtest.Lookup("auth", "/docs/", "", row), nil
 		},
@@ -291,8 +291,8 @@ func TestHandleMarkLookupHappyPath(t *testing.T) {
 	if call.Host != "team-a" || call.Scope != "/docs/" || call.Query != "auth" {
 		t.Errorf("dispatcher saw worldName=%q scope=%q query=%q", call.Host, call.Scope, call.Query)
 	}
-	if call.Opts.Filter != "project=broker" || call.Opts.Limit != 5 {
-		t.Errorf("dispatcher saw opts=%+v, want {Filter:project=broker Limit:5}", call.Opts)
+	if call.Filter != "project=broker" || call.Limit != 5 {
+		t.Errorf("dispatcher saw opts=%+v, want {Filter:project=broker Limit:5}", call)
 	}
 	// Reads dispatch unauthenticated — the empty bearer flows through.
 	if call.Token != "" {
@@ -316,7 +316,7 @@ func TestHandleMarkLookupRequiresQuery(t *testing.T) {
 func TestHandleMarkListHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		ListFn: func(_, _, _ string) (fetch.Result, error) {
+		ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
 			page := fetchtest.ListPage("/", "", "bar.md", "foo.md")
 			page.Response.Metadata["modified"] = "2026-05-21T10:00:00Z"
 			return page, nil
@@ -341,8 +341,9 @@ func TestHandleMarkListHappyPath(t *testing.T) {
 			t.Errorf("response missing %q\nfull:\n%s", want, text)
 		}
 	}
-	if len(d.ListOpts) != 1 || d.ListOpts[0] != (fetch.ListOptions{IncludeArchived: true, Cursor: "next", PageSize: 25}) {
-		t.Errorf("LIST options = %+v", d.ListOpts)
+	want := fetch.ListRequest{Host: d.ListCalls[0].Host, Path: d.ListCalls[0].Path, IncludeArchived: true, Cursor: "next", PageSize: 25}
+	if len(d.ListCalls) != 1 || d.ListCalls[0] != want {
+		t.Errorf("LIST options = %+v", d.ListCalls)
 	}
 }
 
@@ -358,7 +359,7 @@ func TestHandleMarkListRejectsFractionalPageSize(t *testing.T) {
 }
 
 func TestHandleMarkListRejectsRepeatedCursor(t *testing.T) {
-	d := &fakeDispatcher{ListOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+	d := &fakeDispatcher{ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK,
 			Metadata: map[string]string{
@@ -379,7 +380,7 @@ func TestHandleMarkListRejectsRepeatedCursor(t *testing.T) {
 }
 
 func TestHandleMarkListRejectsMissingContinuationCursor(t *testing.T) {
-	d := &fakeDispatcher{ListOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+	d := &fakeDispatcher{ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK,
 			Metadata: map[string]string{
@@ -402,7 +403,7 @@ func TestHandleMarkListRejectsMissingContinuationCursor(t *testing.T) {
 func TestHandleMarkVersionsHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		VersionsFn: func(_, _, _ string) (fetch.Result, error) {
+		VersionsFn: func(context.Context, fetch.VersionsRequest) (fetch.Result, error) {
 			return fetchtest.Golden(t, "versions"), nil
 		},
 	}
@@ -493,7 +494,7 @@ func toolResultText(t testing.TB, res *mcp.CallToolResult) string {
 func TestMCPGatewayMarkFetchEndToEnd(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Metadata: map[string]string{
@@ -558,10 +559,10 @@ func TestMCPGatewayMarkFetchEndToEnd(t *testing.T) {
 
 func TestHandleMarkLookupBodyMatchFallbackNote(t *testing.T) {
 	cfg := mcpTestConfig()
-	var seen fetch.LookupOptions
+	var seen fetch.LookupRequest
 	d := &fakeDispatcher{
-		LookupFn: func(_, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
-			seen = opts
+		LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+			seen = r
 			return fetchtest.Lookup("hairpin", "/", ""), nil
 		},
 	}

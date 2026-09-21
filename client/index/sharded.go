@@ -1,17 +1,17 @@
 package index
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
-	"net/url"
 	"path"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/generation"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -23,8 +23,6 @@ const (
 	HashPrefixLength        = 2
 	MaxManifestShards       = 4096
 	MaxIndexEntries         = 1_000_000
-	SlotA                   = "a"
-	SlotB                   = "b"
 )
 
 // ErrUnsupportedFormat reports a generated index format this client cannot read.
@@ -71,19 +69,6 @@ func (a ShardArtifact) Ref(version int) ShardRef { //nolint:gocritic // immutabl
 		Rows:        a.Rows,
 		Bytes:       a.Bytes,
 	}
-}
-
-// InactiveSlot returns the slot not named by the current manifest.
-func InactiveSlot(active string) string {
-	if active == SlotA {
-		return SlotB
-	}
-	return SlotA
-}
-
-// VersionPath returns the immutable FETCH path for one document version.
-func VersionPath(docPath string, version int) string {
-	return fmt.Sprintf("%s/v%d", docPath, version)
 }
 
 // BuildManifest renders a deterministic v2 manifest.
@@ -185,7 +170,7 @@ func BuildShards(manifestPath, slot string, entries []Entry, targetBytes int) ([
 	if err := validateManifestPath(manifestPath); err != nil {
 		return nil, err
 	}
-	if slot != SlotA && slot != SlotB {
+	if slot != generation.SlotA && slot != generation.SlotB {
 		return nil, fmt.Errorf("invalid shard slot %q", slot)
 	}
 	if targetBytes == 0 {
@@ -247,7 +232,7 @@ func VerifyShard(ref ShardRef, resp protocol.Response) ([]Entry, error) {
 	if len(resp.Body) != ref.Bytes {
 		return nil, fmt.Errorf("shard %s byte count mismatch: got %d, want %d", ref.Path, len(resp.Body), ref.Bytes)
 	}
-	bodyHash := BodyHash(resp.Body)
+	bodyHash := generation.BodyHash(resp.Body)
 	if bodyHash != ref.ContentHash || resp.Metadata["content-hash"] != ref.ContentHash {
 		return nil, fmt.Errorf("shard %s content hash mismatch", ref.Path)
 	}
@@ -296,7 +281,7 @@ func EntriesForHash(manifestPath, body, hash string, fetchShard func(string) (pr
 		if ref.Prefix != prefix {
 			continue
 		}
-		resp, err := fetchShard(VersionPath(ref.Path, ref.Version))
+		resp, err := fetchShard(generation.VersionPath(ref.Path, ref.Version))
 		if err != nil {
 			return nil, fmt.Errorf("fetch shard %s: %w", ref.Path, err)
 		}
@@ -330,7 +315,7 @@ func LoadEntries(manifestPath, body string, fetchShard func(string) (protocol.Re
 	}
 	var entries []Entry
 	for _, ref := range m.Shards {
-		resp, err := fetchShard(VersionPath(ref.Path, ref.Version))
+		resp, err := fetchShard(generation.VersionPath(ref.Path, ref.Version))
 		if err != nil {
 			return nil, fmt.Errorf("fetch shard %s: %w", ref.Path, err)
 		}
@@ -344,12 +329,6 @@ func LoadEntries(manifestPath, body string, fetchShard func(string) (protocol.Re
 		return nil, fmt.Errorf("manifest document count mismatch: got %d, want %d", len(entries), m.Documents)
 	}
 	return entries, nil
-}
-
-// BodyHash returns the protocol content hash for a generated body.
-func BodyHash(body string) string {
-	sum := sha256.Sum256([]byte(body))
-	return fmt.Sprintf("sha256-%x", sum)
 }
 
 func buildPrefixParts(manifestPath, slot, prefix string, entries []Entry, target int) ([]ShardArtifact, error) {
@@ -385,7 +364,7 @@ func buildPrefixParts(manifestPath, slot, prefix string, entries []Entry, target
 			Rows:   end - start,
 			Bytes:  len(body),
 		}
-		artifact.ContentHash = BodyHash(body)
+		artifact.ContentHash = generation.BodyHash(body)
 		artifacts = append(artifacts, artifact)
 		start = end
 	}
@@ -468,7 +447,7 @@ func validateManifest(manifestPath string, m Manifest) error { //nolint:gocyclo,
 	if m.Indexed.IsZero() || m.Indexed.Year() < 1 || m.Indexed.Year() > 9999 {
 		return errors.New("manifest indexed time is required")
 	}
-	if m.ActiveSlot != SlotA && m.ActiveSlot != SlotB {
+	if m.ActiveSlot != generation.SlotA && m.ActiveSlot != generation.SlotB {
 		return fmt.Errorf("invalid active slot %q", m.ActiveSlot)
 	}
 	if m.Documents < 0 || m.Documents > MaxIndexEntries {
@@ -688,11 +667,11 @@ func validateManifestPath(manifestPath string) error {
 	if err := protocol.ValidateRequestPath(manifestPath); err != nil || path.Clean(manifestPath) != manifestPath || manifestPath == "/" {
 		return fmt.Errorf("invalid manifest path %q", manifestPath)
 	}
-	generated := shardPath(manifestPath, SlotA, "00", 0)
+	generated := shardPath(manifestPath, generation.SlotA, "00", 0)
 	if err := protocol.ValidateRequestPath(generated); err != nil {
 		return fmt.Errorf("manifest path cannot produce valid shard paths: %w", err)
 	}
-	if err := protocol.ValidateRequestPath(VersionPath(generated, math.MaxInt)); err != nil {
+	if err := protocol.ValidateRequestPath(generation.VersionPath(generated, math.MaxInt)); err != nil {
 		return fmt.Errorf("manifest path cannot produce versioned shard paths: %w", err)
 	}
 	return nil
@@ -703,17 +682,8 @@ func validateEntry(entry Entry) error {
 	if !ok || cleanHash != entry.Hash {
 		return fmt.Errorf("invalid content hash %q", entry.Hash)
 	}
-	server, err := url.Parse(entry.Server)
-	if err != nil || server.Scheme != "mark" || server.Hostname() == "" ||
-		server.User != nil || (server.Path != "" && server.Path != "/") || server.RawQuery != "" || server.Fragment != "" ||
-		strings.ContainsAny(entry.Server, "\r\n\t") {
+	if _, err := links.ParseServer(entry.Server); err != nil {
 		return fmt.Errorf("invalid index server %q", entry.Server)
-	}
-	if port := server.Port(); port != "" {
-		n, portErr := strconv.Atoi(port)
-		if portErr != nil || n < 1 || n > 65535 {
-			return fmt.Errorf("invalid index server %q", entry.Server)
-		}
 	}
 	if err := protocol.ValidateRequestPath(entry.Path); err != nil || entry.Path == "/" ||
 		path.Clean(entry.Path) != entry.Path {

@@ -143,7 +143,7 @@ func (g *mcpGateway) ensureMemorySeed(ctx context.Context, w *WorldConfig) {
 // it is still checked for a server policy seed an older broker left in place.
 // True means verified seeded; false keeps the world eligible for retry.
 func (g *mcpGateway) seedMemoryWorld(ctx context.Context, w *WorldConfig) bool {
-	result, err := g.dispatcher.FetchContext(ctx, w.Name, "/index.md", "")
+	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: w.Name, Path: "/index.md"})
 	if err != nil {
 		g.log.Warn("memory seed check failed", "world", w.Name, "err", err)
 		return false
@@ -198,7 +198,7 @@ func (g *mcpGateway) memorySeedAction(ctx context.Context, w *WorldConfig, doc *
 	if !doc.overServerSeed {
 		return seedCreate
 	}
-	result, err := g.dispatcher.FetchContext(ctx, w.Name, doc.path, "")
+	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: w.Name, Path: doc.path})
 	if err != nil {
 		g.log.Warn("memory seed policy check failed", "world", w.Name, "path", doc.path, "err", err)
 		return seedFailed
@@ -239,7 +239,10 @@ func (g *mcpGateway) publishMemorySeedDoc(ctx context.Context, w *WorldConfig, d
 	// dispatchWithWriteAuth provisions the world write token and absorbs
 	// first-mint Secret propagation lag, which a fresh world's first write hits.
 	pres, pubErr := g.dispatchWithWriteAuth(ctx, w.Name, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Publish(w.Name, doc.path, string(body), token, action.expectedVersion(), doc.meta)
+		return g.dispatcher.Publish(ctx, fetch.WriteRequest{
+			Host: w.Name, Path: doc.path, Body: string(body), Token: token,
+			ExpectedVersion: action.expectedVersion(), Metadata: doc.meta,
+		})
 	})
 	if pubErr != nil {
 		g.log.Warn("memory seed publish failed", "world", w.Name, "path", doc.path, "err", pubErr)

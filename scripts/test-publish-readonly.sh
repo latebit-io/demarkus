@@ -88,7 +88,7 @@ fi
 # 7. Verify writes are rejected in read-only mode
 echo ""
 echo "--- verifying write is rejected ---"
-OUTPUT=$($CLIENT -insecure -X PUBLISH -body "should fail" mark://localhost:$PORT/test.md 2>&1)
+OUTPUT=$($CLIENT -insecure -X PUBLISH -force -body "should fail" mark://localhost:$PORT/test.md 2>&1)
 if echo "$OUTPUT" | grep -q "read-only"; then
   echo "PASS: write correctly rejected in read-only mode"
 else

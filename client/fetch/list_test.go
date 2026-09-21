@@ -58,13 +58,14 @@ func TestListWithOptionsWritesPaginationMetadata(t *testing.T) {
 	client := NewClient(Options{Insecure: true})
 	defer client.Close()
 
-	_, err := client.ListWithOptions(host, "/docs", "secret", ListOptions{
+	_, err := client.List(t.Context(), ListRequest{
+		Host: host, Path: "/docs", Token: "secret",
 		IncludeArchived: true,
 		Cursor:          "next",
 		PageSize:        25,
 	})
 	if err != nil {
-		t.Fatalf("ListWithOptions: %v", err)
+		t.Fatalf("List: %v", err)
 	}
 	req := <-requests
 	for key, want := range map[string]string{
@@ -74,7 +75,7 @@ func TestListWithOptionsWritesPaginationMetadata(t *testing.T) {
 			t.Errorf("metadata[%q] = %q, want %q", key, req.Metadata[key], want)
 		}
 	}
-	if _, err := client.ListWithOptions(host, "/docs", "", ListOptions{PageSize: protocol.MaxListPageSize + 1}); err == nil {
+	if _, err := client.List(t.Context(), ListRequest{Host: host, Path: "/docs", PageSize: protocol.MaxListPageSize + 1}); err == nil {
 		t.Fatal("oversized page request accepted")
 	}
 }

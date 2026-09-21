@@ -39,6 +39,10 @@ func newFake(docs map[string]fakeDoc) *fakeStore {
 
 func (f *fakeStore) List(_ context.Context, dir string, _ bool, cursor string) (protocol.Response, error) {
 	f.listCalls++
+	// As the server does, a directory reads the same without its trailing slash.
+	if !strings.HasSuffix(dir, "/") {
+		dir += "/"
+	}
 	if st := f.listStatus[dir]; st != "" {
 		return protocol.Response{Status: st}, nil
 	}

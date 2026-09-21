@@ -2,6 +2,7 @@ package provision
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -266,15 +267,15 @@ type mockSeedClient struct {
 	published     []publishCall
 }
 
-func (m *mockSeedClient) Fetch(_, _, _ string) (fetch.Result, error) {
+func (m *mockSeedClient) Fetch(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 	if m.fetchErr != nil {
 		return fetch.Result{}, m.fetchErr
 	}
 	return fetch.Result{Response: protocol.Response{Status: m.fetchStatus}}, nil
 }
 
-func (m *mockSeedClient) Publish(_, path, body, _ string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
-	m.published = append(m.published, publishCall{path, body, expectedVersion})
+func (m *mockSeedClient) Publish(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+	m.published = append(m.published, publishCall{r.Path, r.Body, r.ExpectedVersion})
 	st := m.publishStatus
 	if st == "" {
 		st = protocol.StatusCreated
@@ -293,7 +294,7 @@ func TestSeedDocPublishesThroughProtocol(t *testing.T) {
 		{"server unreachable", &mockSeedClient{fetchErr: errors.New("dial refused")}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			seedDoc(tt.mock, "localhost:1", "tok", "index.md", nil)
+			seedDoc(t.Context(), tt.mock, seedSpec{Host: "localhost:1", Token: "tok", Name: "index.md"})
 			if len(tt.mock.published) != 0 {
 				t.Errorf("published %d docs, want 0", len(tt.mock.published))
 			}
@@ -302,7 +303,7 @@ func TestSeedDocPublishesThroughProtocol(t *testing.T) {
 
 	// Not found: publishes the embedded seed, create-only.
 	m := &mockSeedClient{fetchStatus: protocol.StatusNotFound}
-	seedDoc(m, "localhost:1", "tok", "index.md", nil)
+	seedDoc(t.Context(), m, seedSpec{Host: "localhost:1", Token: "tok", Name: "index.md"})
 	if len(m.published) != 1 {
 		t.Fatalf("published %d docs, want 1", len(m.published))
 	}
@@ -784,9 +785,9 @@ type mockAppendClient struct {
 	expectedVersion int
 }
 
-func (m *mockAppendClient) Append(_, path, _, _ string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
-	m.path = path
-	m.expectedVersion = expectedVersion
+func (m *mockAppendClient) Append(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+	m.path = r.Path
+	m.expectedVersion = r.ExpectedVersion
 	if m.err != nil {
 		return fetch.Result{}, m.err
 	}
@@ -806,7 +807,7 @@ func TestVerifyTokenWith(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := verifyTokenWith(c.mock, "localhost:6309", "tok")
+			err := verifyTokenWith(t.Context(), c.mock, "localhost:6309", "tok")
 			if (err != nil) != c.wantErr {
 				t.Errorf("verifyTokenWith error = %v, wantErr %v", err, c.wantErr)
 			}

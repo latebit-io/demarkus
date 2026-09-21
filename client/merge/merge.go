@@ -1,8 +1,10 @@
 package merge
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +24,8 @@ type PublishResult struct {
 	Version       int
 	ServerVersion int
 	Metadata      map[string]string
+	// Body is the server's own words: on a refusal, what to fix.
+	Body string
 }
 
 // on_conflict values a publish accepts.
@@ -46,9 +50,17 @@ func ParseOnConflict(raw string) (string, error) {
 // Client is the subset of fetch.Client operations Candidate needs.
 // Defined here so the merge package is testable without QUIC.
 type Client interface {
-	FetchVersion(path string, version int) (Doc, error)
-	FetchCurrent(path string) (Doc, error)
-	Publish(path, body string, expectedVersion int, meta map[string]string) (PublishResult, error)
+	FetchVersion(ctx context.Context, path string, version int) (Doc, error)
+	FetchCurrent(ctx context.Context, path string) (Doc, error)
+	Publish(ctx context.Context, w Write) (PublishResult, error)
+}
+
+// Write is one publish attempt. ExpectedVersion 0 creates only; a conflict in
+// that mode merges against an empty base.
+type Write struct {
+	Path, Body      string
+	ExpectedVersion int
+	Metadata        map[string]string
 }
 
 // OutcomeStatus describes the result of a Candidate call.
@@ -86,30 +98,27 @@ const statusConflict = "conflict"
 // statusOK matches protocol.StatusOK for fetch responses.
 const statusOK = "ok"
 
-// landed reports whether the head is exactly what this call submitted: body at
-// expectedVersion+1. A failed probe reads as not landed; the caller's error stands.
-func landed(c Client, path string, w submitted) (Doc, bool) {
-	head, err := c.FetchCurrent(path)
+// statusNotFound matches protocol.StatusNotFound.
+const statusNotFound = "not-found"
+
+// Landed reports whether the head is exactly what w submitted: body at
+// ExpectedVersion+1 with every submitted metadata key. A failed probe reads as
+// not landed; the caller's error stands.
+func Landed(ctx context.Context, c Client, w Write) (Doc, bool) {
+	head, err := c.FetchCurrent(ctx, w.Path)
 	if err != nil || head.Status != statusOK {
 		return Doc{}, false
 	}
 	return head, w.matches(head)
 }
 
-// submitted is what one Candidate call tried to write.
-type submitted struct {
-	body            string
-	expectedVersion int
-	meta            map[string]string
-}
-
 // matches compares version, body and every submitted metadata key, so another
 // writer's identical body with different metadata is not mistaken for ours.
-func (w submitted) matches(head Doc) bool {
-	if head.Version != w.expectedVersion+1 || head.Body != w.body {
+func (w Write) matches(head Doc) bool {
+	if head.Version != w.ExpectedVersion+1 || head.Body != w.Body {
 		return false
 	}
-	for k, v := range w.meta {
+	for k, v := range w.Metadata {
 		// An absent key is a mismatch even when the submitted value is empty.
 		actual, ok := head.Metadata[k]
 		if !ok || strings.TrimSpace(actual) != strings.TrimSpace(v) {
@@ -119,32 +128,19 @@ func (w submitted) matches(head Doc) bool {
 	return true
 }
 
-// Candidate publishes body to path with optimistic concurrency. On a
-// version mismatch it produces a diff3 merge candidate (base = the version
-// the agent edited from, theirs = the current latest, ours = body) and
-// returns it for the agent to semantically verify and republish. The tool
-// never auto-publishes the merge — line-level disjoint ≠ semantically
-// disjoint, so the agent must always inspect the candidate before it
-// becomes the new head.
-//
-// Iteration is the agent's responsibility: if the agent's follow-up publish
-// itself conflicts (a third writer slipped in), the agent simply calls
-// Candidate again with the new body and version.
-//
-// expectedVersion = 0 means create-only. Conflicts in that mode merge
-// against an empty base — non-overlapping insertions on both sides make it
-// through cleanly; overlapping insertions get markers.
-func Candidate(c Client, path, body string, expectedVersion int, meta map[string]string) (Outcome, error) {
-	if expectedVersion < 0 {
+// Candidate publishes w. On a version conflict it returns a diff3 candidate
+// (base: the version edited from, theirs: the head) and never publishes it:
+// disjoint lines are not disjoint meaning, so the caller reviews and republishes.
+func Candidate(ctx context.Context, c Client, w Write) (Outcome, error) {
+	if w.ExpectedVersion < 0 {
 		return Outcome{}, ErrInvalidExpectedVersion
 	}
 
-	ours := submitted{body: body, expectedVersion: expectedVersion, meta: meta}
-	pub, err := c.Publish(path, body, expectedVersion, meta)
+	pub, err := c.Publish(ctx, w)
 	if err != nil {
 		// The write may have landed with its response lost; never resend it.
-		if head, ok := landed(c, path, ours); ok {
-			return Outcome{Status: OutcomeOK, Publish: PublishResult{Status: statusOK, Version: head.Version}}, nil
+		if head, ok := Landed(ctx, c, w); ok {
+			return Outcome{Status: OutcomeOK, Publish: Reconciled(head)}, nil
 		}
 		return Outcome{}, fmt.Errorf("publish: %w", err)
 	}
@@ -152,7 +148,7 @@ func Candidate(c Client, path, body string, expectedVersion int, meta map[string
 		return Outcome{Status: OutcomeOK, Publish: pub}, nil
 	}
 
-	latest, err := c.FetchCurrent(path)
+	latest, err := c.FetchCurrent(ctx, w.Path)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("fetch current: %w", err)
 	}
@@ -160,18 +156,23 @@ func Candidate(c Client, path, body string, expectedVersion int, meta map[string
 		return Outcome{}, fmt.Errorf("fetch current: status %s", latest.Status)
 	}
 	// A conflict against our own earlier attempt is a success, not a merge.
-	if ours.matches(latest) {
-		return Outcome{Status: OutcomeOK, Publish: PublishResult{Status: statusOK, Version: latest.Version}}, nil
+	if w.matches(latest) {
+		return Outcome{Status: OutcomeOK, Publish: Reconciled(latest)}, nil
 	}
 
 	base := ""
-	if expectedVersion > 0 {
-		baseDoc, err := c.FetchVersion(path, expectedVersion)
+	if w.ExpectedVersion > 0 {
+		baseDoc, err := c.FetchVersion(ctx, w.Path, w.ExpectedVersion)
 		if err != nil {
-			return Outcome{}, fmt.Errorf("fetch base v%d: %w", expectedVersion, err)
+			return Outcome{}, fmt.Errorf("fetch base v%d: %w", w.ExpectedVersion, err)
+		}
+		// No base: it never existed, or retention pruned it. Nothing to merge
+		// against, so the server's conflict is the answer.
+		if baseDoc.Status == statusNotFound {
+			return Outcome{Status: OutcomeOK, Publish: pub}, nil
 		}
 		if baseDoc.Status != statusOK {
-			return Outcome{}, fmt.Errorf("fetch base v%d: status %s", expectedVersion, baseDoc.Status)
+			return Outcome{}, fmt.Errorf("fetch base v%d: status %s", w.ExpectedVersion, baseDoc.Status)
 		}
 		base = baseDoc.Body
 	}
@@ -182,13 +183,19 @@ func Candidate(c Client, path, body string, expectedVersion int, meta map[string
 		return Outcome{}, fmt.Errorf("fetch current: missing or invalid version metadata")
 	}
 
-	merged := Diff3(base, body, latest.Body)
+	merged := Diff3(base, w.Body, latest.Body)
 	return Outcome{
 		Status:           OutcomeCandidate,
 		Body:             merged.Body,
 		HasMarkers:       merged.Conflict,
-		BaseVersion:      expectedVersion,
+		BaseVersion:      w.ExpectedVersion,
 		TheirVersion:     latest.Version,
 		PublishAtVersion: latest.Version,
 	}, nil
+}
+
+// Reconciled is the result of a write found at the head instead of answered:
+// ok at the head's version, which is all that is known about it.
+func Reconciled(head Doc) PublishResult {
+	return PublishResult{Status: statusOK, Version: head.Version, Metadata: map[string]string{"version": strconv.Itoa(head.Version)}}
 }

@@ -101,7 +101,7 @@ func TestEndpointOverridesKeepLogicalConnectionsSeparate(t *testing.T) {
 	defer c.Close()
 
 	for _, authority := range []string{"world-a:6309", "world-b:6309"} {
-		result, err := c.Fetch(authority, "/index.md", "")
+		result, err := c.Fetch(t.Context(), FetchRequest{Host: authority, Path: "/index.md"})
 		if err != nil {
 			t.Fatalf("Fetch(%s): %v", authority, err)
 		}
@@ -115,37 +115,6 @@ func TestEndpointOverridesKeepLogicalConnectionsSeparate(t *testing.T) {
 		if !got[want] {
 			t.Errorf("observed SNI = %v, missing %q", got, want)
 		}
-	}
-}
-
-func TestParseMarkURLNormalizesAuthority(t *testing.T) {
-	tests := []struct {
-		raw      string
-		wantHost string
-		wantPath string
-	}{
-		{"mark://WORLD/Index.md", "world:6309", "/Index.md"},
-		{"mark://world:7000", "world:7000", "/"},
-		{"mark://[2001:db8::1]/index.md", "[2001:db8::1]:6309", "/index.md"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.raw, func(t *testing.T) {
-			host, path, err := ParseMarkURL(tt.raw)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if host != tt.wantHost || path != tt.wantPath {
-				t.Errorf("ParseMarkURL(%q) = (%q, %q), want (%q, %q)", tt.raw, host, path, tt.wantHost, tt.wantPath)
-			}
-		})
-	}
-
-	for _, raw := range []string{"mark://", "mark://world:0", "mark://world:65536"} {
-		t.Run("invalid "+raw, func(t *testing.T) {
-			if _, _, err := ParseMarkURL(raw); err == nil {
-				t.Fatalf("ParseMarkURL(%q) unexpectedly succeeded", raw)
-			}
-		})
 	}
 }
 
@@ -165,7 +134,7 @@ func TestFetchConditional(t *testing.T) {
 	defer c.Close()
 
 	// No etag: plain fetch, full body.
-	r, err := c.FetchConditional(host, "/graph.md", "", "")
+	r, err := c.Fetch(t.Context(), FetchRequest{Host: host, Path: "/graph.md"})
 	if err != nil {
 		t.Fatalf("FetchConditional without etag: %v", err)
 	}
@@ -177,7 +146,7 @@ func TestFetchConditional(t *testing.T) {
 	}
 
 	// Matching etag: not-modified passthrough with empty body.
-	r, err = c.FetchConditional(host, "/graph.md", "", etag)
+	r, err = c.Fetch(t.Context(), FetchRequest{Host: host, Path: "/graph.md", IfNoneMatch: etag})
 	if err != nil {
 		t.Fatalf("FetchConditional with etag: %v", err)
 	}
@@ -189,7 +158,7 @@ func TestFetchConditional(t *testing.T) {
 	}
 
 	// Stale etag: full body again.
-	r, err = c.FetchConditional(host, "/graph.md", "", "stale")
+	r, err = c.Fetch(t.Context(), FetchRequest{Host: host, Path: "/graph.md", IfNoneMatch: "stale"})
 	if err != nil {
 		t.Fatalf("FetchConditional with stale etag: %v", err)
 	}

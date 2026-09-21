@@ -1262,8 +1262,15 @@ func restartLocalServerOnUpgrade(replaced bool) {
 
 // seedClient is the protocol surface seeding needs; *fetch.Client satisfies it.
 type seedClient interface {
-	Fetch(host, path, token string) (fetch.Result, error)
-	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error)
+	Publish(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error)
+}
+
+// seedSpec names one embedded seed document and where it goes.
+type seedSpec struct {
+	Host, Token string
+	Name        string // file under seed/, published at the memory root
+	Meta        map[string]string
 }
 
 // readPluginToken loads and trims the plugin's raw token.
@@ -1297,10 +1304,14 @@ func seedMemoryDocs(port int) {
 	}
 	cl := localClient()
 	defer cl.Close()
-	seedDoc(cl, "localhost:"+strconv.Itoa(port), tok, "index.md", map[string]string{
-		"tags":       "index,hub,projects,navigation",
-		"importance": "0.9",
-		// no OKF type: hubs stay untyped
+	// No caller context: provisioning is bounded by the client's own timeouts.
+	seedDoc(context.Background(), cl, seedSpec{
+		Host: "localhost:" + strconv.Itoa(port), Token: tok, Name: "index.md",
+		Meta: map[string]string{
+			"tags":       "index,hub,projects,navigation",
+			"importance": "0.9",
+			// no OKF type: hubs stay untyped
+		},
 	})
 }
 
@@ -1339,9 +1350,9 @@ func cleanupLegacyTemplate(memoryDir string) {
 // seedDoc publishes the embedded seed for name at the memory root unless the
 // server already serves it. Create-only: over a legacy flat file this relies
 // on the store's flat-to-v1 migration, whose conflict preserves user content.
-func seedDoc(cl seedClient, host, tok, name string, meta map[string]string) {
-	docPath := "/" + name
-	res, err := cl.Fetch(host, docPath, tok)
+func seedDoc(ctx context.Context, cl seedClient, seed seedSpec) {
+	name, docPath := seed.Name, "/"+seed.Name
+	res, err := cl.Fetch(ctx, fetch.FetchRequest{Host: seed.Host, Path: docPath, Token: seed.Token})
 	if err != nil {
 		warnf("could not check %s before seeding (server unreachable?): %v", docPath, err)
 		return
@@ -1362,7 +1373,10 @@ func seedDoc(cl seedClient, host, tok, name string, meta map[string]string) {
 		return
 	}
 	// expected-version 0 = create-only: a concurrent writer winning the race is fine.
-	pres, err := cl.Publish(host, docPath, string(content), tok, 0, meta)
+	pres, err := cl.Publish(ctx, fetch.WriteRequest{
+		Host: seed.Host, Path: docPath, Token: seed.Token,
+		Body: string(content), ExpectedVersion: 0, Metadata: seed.Meta,
+	})
 	if err != nil {
 		warnf("could not seed %s: %v", docPath, err)
 		return
@@ -1627,7 +1641,7 @@ func doReuse(port int, root string) error {
 // authProbeClient is the one-verb surface the auth probe needs;
 // *fetch.Client satisfies it.
 type authProbeClient interface {
-	Append(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	Append(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error)
 }
 
 // probeExpectedVersion can never match a real document, so the probe APPEND
@@ -1646,7 +1660,8 @@ func verifyPluginToken(port int) error {
 	defer cl.Close()
 	host := "localhost:" + strconv.Itoa(port)
 	for attempt := 0; ; attempt++ {
-		err = verifyTokenWith(cl, host, tok)
+		// No caller context: the probe is bounded by the client's own timeouts.
+		err = verifyTokenWith(context.Background(), cl, host, tok)
 		if !errors.Is(err, errUnauthorized) || attempt >= 3 {
 			return err
 		}
@@ -1658,8 +1673,11 @@ func verifyPluginToken(port int) error {
 // failures, which callers must not report as token drift.
 var errUnauthorized = errors.New("auth probe returned unauthorized")
 
-func verifyTokenWith(cl authProbeClient, host, tok string) error {
-	res, err := cl.Append(host, "/.demarkus-plugin-auth-probe.md", "probe", tok, probeExpectedVersion, nil)
+func verifyTokenWith(ctx context.Context, cl authProbeClient, host, tok string) error {
+	res, err := cl.Append(ctx, fetch.WriteRequest{
+		Host: host, Path: "/.demarkus-plugin-auth-probe.md", Token: tok,
+		Body: "probe", ExpectedVersion: probeExpectedVersion,
+	})
 	if err != nil {
 		return fmt.Errorf("auth probe: %w", err)
 	}

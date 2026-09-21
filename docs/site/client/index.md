@@ -24,8 +24,14 @@ demarkus --insecure mark://localhost:6309/index.md
 demarkus --insecure -X LIST mark://localhost:6309/
 demarkus --insecure -X LIST -page-size 250 -cursor '<next-cursor>' mark://localhost:6309/
 
-# Publish a document
-demarkus --insecure -X PUBLISH -auth $TOKEN -body "# Hello" mark://localhost:6309/hello.md
+# Create a document (0 means it must not exist yet)
+demarkus --insecure -X PUBLISH -expected-version 0 -auth $TOKEN -body "# Hello" mark://localhost:6309/hello.md
+
+# Replace version 1
+demarkus --insecure -X PUBLISH -expected-version 1 -auth $TOKEN -body "# Hello again" mark://localhost:6309/hello.md
+
+# Append; the current version is looked up when -expected-version is omitted
+demarkus --insecure -X APPEND -auth $TOKEN -body "One more line." mark://localhost:6309/hello.md
 
 # View version history
 demarkus --insecure -X VERSIONS mark://localhost:6309/hello.md
@@ -36,9 +42,27 @@ demarkus --insecure mark://localhost:6309/hello.md/v1
 
 The exit code is 0 for `ok`, `created` and `not-modified`. Any other status, a conflict or a missing document for example, still prints the response body and exits 1, so scripts can detect a refused request.
 
+### Writes are version checked
+
+`PUBLISH` needs `-expected-version`: `0` creates and fails if the document exists, `N` replaces version `N` and fails if someone else wrote in between. `-force` skips the check and overwrites whatever is there; seeding scripts use it.
+
+When the version is stale the CLI does what the MCP tools do: it fetches the version you started from and the current one, merges your body into it, prints the merged candidate on stdout and the facts on stderr, and exits 1. Nothing is published. Review the candidate, then publish it with the version the notice names:
+
+```bash
+demarkus -X PUBLISH -expected-version 3 -auth $TOKEN -body "$(cat edited.md)" mark://host/doc.md > candidate.md
+# [merge-candidate] your-version=3 current-version=4 publish-at-version=4 has-markers=false
+demarkus -X PUBLISH -expected-version 4 -auth $TOKEN mark://host/doc.md < candidate.md
+```
+
+`has-markers=true` means both sides changed the same lines and the candidate holds conflict markers to resolve first. `-on-conflict fail` prints the bare `conflict` status instead of merging.
+
+A write is sent once. If its response is lost, the CLI looks at the document and reports success when the write is there; when it cannot tell, the error says the write may have landed. Fetch the document before retrying, because a resend would conflict with the first attempt.
+
 ### Edit a document
 
-Opens a document in `$EDITOR` (falls back to `vi`), then publishes changes when you exit the editor. If the document doesn't exist, creates a new one. Empty documents are rejected.
+Opens a document in `$EDITOR` (falls back to `vi`), then publishes changes when you exit the editor, checked against the version you opened and carrying the document's tags and other metadata. If the document doesn't exist, creates a new one. Empty documents are rejected.
+
+Your work is never lost: if someone else published while you were editing, the merged candidate is written to a temporary file; if the publish fails for any other reason, your edits are. Either way the message names the file.
 
 ```bash
 # Edit an existing document

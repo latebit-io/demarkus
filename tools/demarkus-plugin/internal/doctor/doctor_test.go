@@ -262,3 +262,28 @@ func TestReportMarkdownAndClean(t *testing.T) {
 		t.Fatalf("token drift renders as a check section:\n%s", md)
 	}
 }
+
+// Findings are reported in document order, which is breadth first: a
+// directory's documents, then its subdirectories level by level. The shared
+// walker is depth first, so the inventory has to restore this order.
+func TestInventoryOrderIsBreadthFirst(t *testing.T) {
+	docs := map[string]fakeDoc{}
+	for _, p := range []string{
+		"/z.md", "/a/one.md", "/a/deep/two.md", "/a/deep/er/three.md", "/b/four.md", "/b/sub/five.md",
+	} {
+		docs[p] = tagged("# T\n\nSummary.\n")
+	}
+	a := &audit{store: newFake(docs), opts: Options{Scope: "/"}, docs: map[string]*document{}, dirs: map[string]bool{}}
+	if err := a.inventory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := "[/z.md /a/one.md /b/four.md /a/deep/two.md /b/sub/five.md /a/deep/er/three.md]"
+	if got := fmt.Sprint(a.order); got != want {
+		t.Errorf("order = %s\n want  %s", got, want)
+	}
+	for _, dir := range []string{"/", "/a/", "/a/deep/", "/a/deep/er/", "/b/", "/b/sub/"} {
+		if !a.dirs[dir] {
+			t.Errorf("directory %s missing from the inventory", dir)
+		}
+	}
+}

@@ -15,9 +15,10 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
-// Fetcher abstracts the ability to fetch a document by host and path.
+// Fetcher fetches one parsed mark:// target. A direct client dials
+// target.DialHost(); the broker routes target.Hostname() as a world name.
 type Fetcher interface {
-	Fetch(ctx context.Context, host, path string) (FetchResult, error)
+	Fetch(ctx context.Context, target links.Target) (FetchResult, error)
 }
 
 // FetchResult holds the response from a fetch operation.
@@ -172,15 +173,15 @@ func RelEdges(docURL string, metadata map[string]string) RelResult {
 // Crawl uses level barriers so first admission always has shortest-path depth.
 // Partial crawls return valid observations and an ErrIncomplete outcome.
 // Boundary edges are retained; their destinations are outside requested scope.
-func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(string) (string, string, error), opts CrawlOptions) (*Graph, error) {
+func Crawl(ctx context.Context, startURL string, fetcher Fetcher, opts CrawlOptions) (*Graph, error) {
 	opts.applyDefaults()
 	g := New()
 	startURL = links.CanonicalURL(startURL)
 	if len(startURL) > opts.MaxOutputBytes-512 || len(nodeSummary(&Node{URL: startURL, Incomplete: true})) > opts.MaxOutputBytes-512-len(startURL) {
 		return nil, errors.New("crawl start URL exceeds output budget")
 	}
-	if strings.HasPrefix(startURL, "mark://") && (parseURL == nil || fetcher == nil) {
-		return nil, fmt.Errorf("crawl %s: fetcher and parseURL are required", startURL)
+	if strings.HasPrefix(startURL, "mark://") && fetcher == nil {
+		return nil, fmt.Errorf("crawl %s: fetcher is required", startURL)
 	}
 	o := &CrawlOutcome{StartURL: startURL, MaxDepth: opts.MaxDepth}
 	ctx, budget := fetch.WithResponseBudget(ctx, opts.MaxFetchBytes)
@@ -202,7 +203,7 @@ func Crawl(ctx context.Context, startURL string, fetcher Fetcher, parseURL func(
 			results := make([]crawlFetch, batchSize)
 			var wg sync.WaitGroup
 			for i, item := range batch {
-				wg.Go(func() { results[i] = fetchItem(ctx, item.url, fetcher, parseURL) })
+				wg.Go(func() { results[i] = fetchItem(ctx, item.url, fetcher) })
 			}
 			o.PeakWorkers = max(o.PeakWorkers, batchSize)
 			wg.Wait()
@@ -358,21 +359,18 @@ type crawlFetch struct {
 	fetched bool
 }
 
-func fetchItem(ctx context.Context, url string, fetcher Fetcher, parseURL func(string) (string, string, error)) crawlFetch {
+func fetchItem(ctx context.Context, url string, fetcher Fetcher) crawlFetch {
 	if err := ctx.Err(); err != nil {
 		return crawlFetch{err: err}
 	}
 	if !strings.HasPrefix(url, "mark://") {
 		return crawlFetch{result: FetchResult{Status: "external"}}
 	}
-	if parseURL == nil {
-		return crawlFetch{err: errors.New("parseURL is required")}
-	}
-	host, path, err := parseURL(url)
+	target, err := links.ParseMark(url)
 	if err != nil {
 		return crawlFetch{err: err}
 	}
-	result, err := fetcher.Fetch(ctx, host, path)
+	result, err := fetcher.Fetch(ctx, target)
 	return crawlFetch{result: result, err: err, fetched: true}
 }
 

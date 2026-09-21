@@ -54,3 +54,33 @@ func TestRenderPageRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// Listings hold relative children only: anything else is refused, not joined.
+func TestResolveEntry(t *testing.T) {
+	tests := []struct {
+		name   string
+		dir    string
+		dest   string
+		want   Entry
+		wantOK bool
+	}{
+		{"file at root", "/", "a.md", Entry{Path: "/a.md"}, true},
+		{"file in subdir", "/docs/", "a.md", Entry{Path: "/docs/a.md"}, true},
+		{"dir entry", "/", "sub/", Entry{Path: "/sub", IsDir: true}, true},
+		{"escaped name decoded", "/", "my%20doc.md", Entry{Path: "/my doc.md"}, true},
+		{"absolute rejected", "/docs/", "/etc/passwd", Entry{}, false},
+		{"parent escape rejected", "/docs/", "../secret.md", Entry{}, false},
+		{"nested escape rejected", "/docs/", "a/../../secret.md", Entry{}, false},
+		{"encoded escape rejected", "/docs/", "..%2Fsecret.md", Entry{}, false},
+		{"url rejected", "/", "mark://evil.com/x.md", Entry{}, false},
+		{"empty rejected", "/", "", Entry{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ResolveEntry(tt.dir, tt.dest)
+			if ok != tt.wantOK || got.Path != tt.want.Path || got.IsDir != tt.want.IsDir {
+				t.Errorf("ResolveEntry(%q, %q) = (%+v, %v), want (%+v, %v)", tt.dir, tt.dest, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}

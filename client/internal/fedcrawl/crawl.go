@@ -20,14 +20,14 @@ import (
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/listing"
+	"github.com/latebit-io/demarkus/client/listwalk"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
 // FetchClient wraps the operations needed for crawling.
 type FetchClient interface {
-	Fetch(host, path, token string) (fetch.Result, error)
-	ListWithOptions(host, path, token string, opts fetch.ListOptions) (fetch.Result, error)
+	Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error)
+	List(ctx context.Context, r fetch.ListRequest) (fetch.Result, error)
 }
 
 // Crawler orchestrates multi-server federation crawling.
@@ -162,7 +162,7 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 
 	// Seed the queue.
 	for _, seed := range c.cfg.Seeds {
-		host, _, err := fetch.ParseMarkURL(seed + "/")
+		host, err := links.DialHost(seed + "/")
 		if err != nil {
 			recordIncomplete("invalid seed %q: %v", seed, err)
 			continue
@@ -231,186 +231,121 @@ type crawlRun struct {
 // crawlServer crawls a single server, collecting hashes and discovering new servers.
 // Returns the number of documents successfully crawled.
 func (c *Crawler) crawlServer(ctx context.Context, run *crawlRun, host string) (int, error) {
-	walk := &serverWalk{
-		c:       c,
-		run:     run,
-		host:    host,
-		token:   c.resolveToken(host),
-		visited: make(map[string]bool),
+	walk := &serverWalk{c: c, run: run, host: host, authority: links.AuthorityURL(host), token: c.resolveToken(host)}
+	depth := c.cfg.Crawl.MaxDepth
+	if depth == 0 {
+		depth = listwalk.RootOnly // the walker reads zero as its default
 	}
-
-	// Start from root.
-	err := walk.walkDir(ctx, "/", 0)
+	walker := listwalk.Walker{
+		Client:   c.client,
+		Host:     host,
+		Token:    walk.token,
+		MaxDepth: depth,
+		// The LIST budget bounds breadth; MaxDocuments caps FETCHes, not listings.
+		MaxLists:   max(c.cfg.Crawl.MaxDocuments, 100),
+		BeforeList: c.pause,
+		OnProblem:  walk.problem,
+	}
+	err := walker.Walk(ctx, "/", func(docPath string) error { return walk.visit(ctx, docPath) })
 	return walk.count, err
 }
 
-// serverWalk carries the per-server walk state so it isn't threaded as
-// parameters through every recursion level.
+// serverWalk is the state of one server's walk.
 type serverWalk struct {
-	c       *Crawler
-	run     *crawlRun
-	host    string
-	token   string
-	count   int
-	lists   int             // LIST requests issued to this server
-	visited map[string]bool // normalized paths, dedups repeated references
+	c         *Crawler
+	run       *crawlRun
+	host      string
+	authority string // host's identity, stamped on every entry it yields
+	token     string
+	count     int
 }
 
-// walkDir recursively walks a directory on a server, collecting hashes and discovering links.
-func (s *serverWalk) walkDir(ctx context.Context, dirPath string, depth int) error {
-	c := s.c
-
-	// MaxDepth is the cycle-safety bound: a self-referencing listing mints
-	// ever-deeper distinct paths the visited set cannot catch. The LIST
-	// budget bounds breadth (MaxDocuments caps FETCHes, not listings).
-	if depth > c.cfg.Crawl.MaxDepth {
-		return errors.New("depth limit reached, crawl incomplete")
+// problem is the crawler's walk policy: a root that cannot be listed fails the
+// server; anything below it is recorded and the walk carries on with siblings.
+func (s *serverWalk) problem(p *listwalk.Problem) error {
+	switch {
+	case p.Kind == listwalk.ProblemInvalidEntry:
+		s.run.recordIncomplete("server %s: invalid listing entry %q in %s", s.host, p.Entry, p.Dir)
+	case p.Dir == "/":
+		return p
+	default:
+		s.run.recordIncomplete("dir %s%s: %v", s.host, p.Dir, p)
 	}
-	if s.visited[dirPath] {
+	return nil
+}
+
+// visit fetches one document, records its hash and edges, and queues the
+// servers it links to. Only the document budget and cancellation end the walk.
+func (s *serverWalk) visit(ctx context.Context, fullPath string) error {
+	c := s.c
+	// Bound attempts, not successes: failed peers must not bypass the cap.
+	if int(s.run.fetchCount.Add(1)) > c.cfg.Crawl.MaxDocuments {
+		s.run.fetchCount.Add(-1)
+		return errors.New("document limit reached, crawl incomplete")
+	}
+	if err := c.pause(ctx); err != nil {
+		return err
+	}
+
+	url := links.NodeURL(s.host, fullPath)
+	doc, err := c.client.Fetch(ctx, fetch.FetchRequest{Host: s.host, Path: fullPath, Token: s.token})
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if c.state != nil {
+			c.state.RecordObservation(url, &protocol.Response{Status: "error"})
+		}
+		s.run.recordIncomplete("fetch %s%s: %v", s.host, fullPath, err)
 		return nil
 	}
-	s.visited[dirPath] = true
-	return s.walkDirectoryPages(ctx, dirPath, depth)
-}
-
-func (s *serverWalk) walkEntries(ctx context.Context, entries []listing.Entry, depth int) error {
-	c := s.c
-	for _, entry := range entries {
-		// Check context cancellation.
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		fullPath := entry.Path
-
-		if entry.IsDir {
-			// Directory — recurse.
-			if err := s.walkDir(ctx, fullPath+"/", depth+1); err != nil {
-				// Only abort on cancellation; record other errors and continue.
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return err
-				}
-				s.run.recordIncomplete("dir %s%s: %v", s.host, fullPath, err)
-			}
-			continue
-		}
-
-		if s.visited[fullPath] {
-			continue
-		}
-		s.visited[fullPath] = true
-
-		// Bound attempts, not successes: failed peers must not bypass the cap.
-		newCount := int(s.run.fetchCount.Add(1))
-		if newCount > c.cfg.Crawl.MaxDocuments {
-			s.run.fetchCount.Add(-1)
-			return errors.New("document limit reached, crawl incomplete")
-		}
-
-		// Apply politeness delay.
-		if c.cfg.Politeness.RequestDelay > 0 {
-			time.Sleep(c.cfg.Politeness.RequestDelay)
-		}
-
-		doc, err := c.client.Fetch(s.host, fullPath, s.token)
-		if err != nil {
-			if c.state != nil {
-				c.state.RecordObservation(links.NodeURL(s.host, fullPath), &protocol.Response{Status: "error"})
-			}
-			s.run.recordIncomplete("fetch %s%s: %v", s.host, fullPath, err)
-			continue
-		}
-
-		url := links.NodeURL(s.host, fullPath)
-
-		// Record visit.
-		if c.state != nil {
-			c.state.RecordObservation(url, &doc.Response)
-		}
-
-		if doc.Response.Status != protocol.StatusOK {
-			s.run.recordIncomplete("fetch %s%s: status %s", s.host, fullPath, doc.Response.Status)
-			continue
-		}
-
-		// Collect content hash.
-		contentHash := doc.Response.Metadata["content-hash"]
-		if _, ok := protocol.IsHashPath(contentHash); ok {
-			entry := index.Entry{
-				Hash:   contentHash,
-				Server: "mark://" + s.host,
-				Path:   fullPath,
-			}
-			c.mu.Lock()
-			c.hashes[contentHash] = append(c.hashes[contentHash], entry)
-			c.mu.Unlock()
-		} else {
-			s.run.recordIncomplete("fetch %s%s: missing or invalid content-hash", s.host, fullPath)
-		}
-
-		// Generated graph exports are data, not authored discovery links.
-		if !isGeneratedGraphPath(fullPath) {
-			edges := c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
-			c.discoverServers(edges, s.host, s.run.queue, s.run.wg, s.run.recordIncomplete)
-		}
-
-		s.run.docCount.Add(1)
-		s.count++
+	if c.state != nil {
+		c.state.RecordObservation(url, &doc.Response)
+	}
+	if doc.Response.Status != protocol.StatusOK {
+		s.run.recordIncomplete("fetch %s%s: status %s", s.host, fullPath, doc.Response.Status)
+		return nil
 	}
 
+	contentHash := doc.Response.Metadata["content-hash"]
+	if _, ok := protocol.IsHashPath(contentHash); ok {
+		entry := index.Entry{Hash: contentHash, Server: s.authority, Path: fullPath}
+		c.mu.Lock()
+		c.hashes[contentHash] = append(c.hashes[contentHash], entry)
+		c.mu.Unlock()
+	} else {
+		s.run.recordIncomplete("fetch %s%s: missing or invalid content-hash", s.host, fullPath)
+	}
+
+	// Generated graph exports are data, not authored discovery links.
+	if !isGeneratedGraphPath(fullPath) {
+		edges := c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
+		c.discoverServers(edges, s.host, s.run.queue, s.run.wg, s.run.recordIncomplete)
+	}
+
+	s.run.docCount.Add(1)
+	s.count++
 	return nil
 }
 
 func isGeneratedGraphPath(docPath string) bool {
 	shardPrefix := graphstore.SnapshotShardRoot(graphstore.SnapshotManifestPath) + "/"
-	return docPath == "/graph.md" || docPath == graphstore.SnapshotManifestPath || strings.HasPrefix(docPath, shardPrefix)
+	return docPath == graphstore.LegacyExportPath || docPath == graphstore.SnapshotManifestPath || strings.HasPrefix(docPath, shardPrefix)
 }
 
-func (s *serverWalk) walkDirectoryPages(ctx context.Context, dirPath string, depth int) error {
-	limit := max(s.c.cfg.Crawl.MaxDocuments, 100)
-	cursor := ""
-	seenCursors := make(map[string]struct{})
-	lastName := ""
-	for {
-		if s.lists >= limit {
-			return fmt.Errorf("list budget exhausted at %s, crawl incomplete", dirPath)
-		}
-		s.lists++
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if s.c.cfg.Politeness.RequestDelay > 0 {
-			time.Sleep(s.c.cfg.Politeness.RequestDelay)
-		}
-
-		result, err := s.c.client.ListWithOptions(s.host, dirPath, s.token, fetch.ListOptions{
-			Cursor:   cursor,
-			PageSize: protocol.MaxListPageSize,
-		})
-		if err != nil {
-			return fmt.Errorf("list %s: %w", dirPath, err)
-		}
-		if result.Response.Status != protocol.StatusOK {
-			return fmt.Errorf("list %s: status %s, crawl incomplete", dirPath, result.Response.Status)
-		}
-		page, err := listing.ParsePage(dirPath, result.Response, lastName)
-		if err != nil {
-			return fmt.Errorf("list %s: %w", dirPath, err)
-		}
-		for _, dest := range page.Invalid {
-			s.run.recordIncomplete("server %s: invalid listing entry %q in %s", s.host, dest, dirPath)
-		}
-		lastName = page.LastName
-		if err := s.walkEntries(ctx, page.Entries, depth); err != nil {
-			return err
-		}
-		if page.Complete {
-			return nil
-		}
-		if _, duplicate := seenCursors[page.NextCursor]; duplicate || page.NextCursor == cursor {
-			return fmt.Errorf("list %s: continuation cursor did not advance", dirPath)
-		}
-		seenCursors[page.NextCursor] = struct{}{}
-		cursor = page.NextCursor
+// pause waits out the politeness delay, or stops early when ctx ends: the
+// request after it would be sent for nobody.
+func (c *Crawler) pause(ctx context.Context) error {
+	if c.cfg.Politeness.RequestDelay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(c.cfg.Politeness.RequestDelay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -422,7 +357,7 @@ func (c *Crawler) discoverServers(edges []graph.Edge, currentHost string, queue 
 		}
 
 		// Parse to extract host.
-		host, _, err := fetch.ParseMarkURL(edge.To)
+		host, err := links.DialHost(edge.To)
 		if err != nil {
 			continue
 		}
@@ -467,7 +402,7 @@ func (c *Crawler) discoverServers(edges []graph.Edge, currentHost string, queue 
 }
 
 func (c *Crawler) isPublishOnlyHub(host string) bool {
-	authority := "mark://" + host
+	authority := links.AuthorityURL(host)
 	return slices.Contains(c.cfg.Hubs, authority) && !slices.Contains(c.cfg.Seeds, authority)
 }
 
@@ -477,7 +412,7 @@ func singleHubHost(hubs []string) string {
 	if len(hubs) != 1 {
 		return ""
 	}
-	host, _, err := fetch.ParseMarkURL(hubs[0])
+	host, err := links.DialHost(hubs[0])
 	if err != nil {
 		return ""
 	}
@@ -507,9 +442,10 @@ func (c *Crawler) entriesForServer(host string) []index.Entry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var entries []index.Entry
+	server := links.AuthorityURL(host)
 	for _, entriesForHash := range c.hashes {
 		for _, entry := range entriesForHash {
-			if entry.Server == "mark://"+host {
+			if entry.Server == server {
 				entries = append(entries, entry)
 			}
 		}
@@ -558,7 +494,7 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 	var publishErrs []error
 
 	for _, hub := range c.cfg.Hubs {
-		host, _, err := fetch.ParseMarkURL(hub + "/")
+		host, err := links.DialHost(hub + "/")
 		if err != nil {
 			publishErrs = append(publishErrs, fmt.Errorf("parse hub URL %q: %w", hub, err))
 			continue
@@ -570,7 +506,7 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 			// Publish an index for each discovered server
 			for serverHost := range c.servers {
 				idxPath := "/index/" + serverHost + ".md"
-				if err := c.publishShardedIndex(ctx, client, host, idxPath, "mark://"+serverHost, c.entriesForServer(serverHost), now, token); err != nil {
+				if err := c.publishShardedIndex(ctx, client, host, idxPath, links.AuthorityURL(serverHost), c.entriesForServer(serverHost), now, token); err != nil {
 					publishErrs = append(publishErrs, fmt.Errorf("publish %s to hub %s: %w", idxPath, hub, err))
 					continue
 				}
@@ -638,11 +574,11 @@ func (c *Crawler) normalizeTarget(resolved string) (string, bool) {
 	if !strings.HasPrefix(resolved, "mark://") {
 		return "", false
 	}
-	th, tp, err := fetch.ParseMarkURL(resolved)
-	if err != nil || isLoopbackHost(th) {
+	target, err := links.ParseMark(resolved)
+	if err != nil || isLoopbackHost(target.DialHost()) {
 		return "", false
 	}
-	return links.NodeURL(th, tp), true
+	return target.NodeURL(), true
 }
 
 // isLoopbackHost reports whether a mark:// host (host:port or bare) is loopback,
@@ -721,7 +657,7 @@ func (c *Crawler) PublishGraphToHubs(ctx context.Context, client PublishClient) 
 	var publishErrs []error
 
 	for _, hub := range c.cfg.Hubs {
-		host, _, err := fetch.ParseMarkURL(hub + "/")
+		host, err := links.DialHost(hub + "/")
 		if err != nil {
 			publishErrs = append(publishErrs, fmt.Errorf("parse hub URL %q: %w", hub, err))
 			continue
@@ -733,7 +669,7 @@ func (c *Crawler) PublishGraphToHubs(ctx context.Context, client PublishClient) 
 		} else {
 			published = true
 		}
-		if err := c.publishIndex(ctx, client, host, "/graph.md", body, token); err != nil {
+		if err := c.publishIndex(ctx, client, host, graphstore.LegacyExportPath, body, token); err != nil {
 			publishErrs = append(publishErrs, fmt.Errorf("publish /graph.md to hub %s: %w", hub, err))
 		} else {
 			published = true
@@ -753,11 +689,14 @@ func (c *Crawler) publishGraphSnapshot(ctx context.Context, client PublishClient
 		Nodes:        nodes,
 		Edges:        edges,
 	}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
-		result, err := client.FetchContext(ioCtx, host, docPath, token)
+		result, err := client.Fetch(ioCtx, fetch.FetchRequest{Host: host, Path: docPath, Token: token})
 		return result.Response, err
 	}, func(ioCtx context.Context, docPath, body string, expectedVersion int) (protocol.Response, error) {
 		meta := c.generatedArtifactMeta(docPath == graphstore.SnapshotManifestPath)
-		result, err := client.PublishContext(ioCtx, host, docPath, body, token, expectedVersion, meta)
+		result, err := client.Publish(ioCtx, fetch.WriteRequest{
+			Host: host, Path: docPath, Token: token,
+			Body: body, ExpectedVersion: expectedVersion, Metadata: meta,
+		})
 		return result.Response, err
 	})
 	return err
@@ -765,10 +704,8 @@ func (c *Crawler) publishGraphSnapshot(ctx context.Context, client PublishClient
 
 // PublishClient wraps the operations needed for publishing.
 type PublishClient interface {
-	Fetch(host, path, token string) (fetch.Result, error)
-	FetchContext(ctx context.Context, host, path, token string) (fetch.Result, error)
-	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	PublishContext(ctx context.Context, host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
+	Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error)
+	Publish(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error)
 }
 
 func (c *Crawler) publishShardedIndex(ctx context.Context, client PublishClient, host, manifestPath, source string, entries []index.Entry, indexed time.Time, token string) error {
@@ -778,11 +715,14 @@ func (c *Crawler) publishShardedIndex(ctx context.Context, client PublishClient,
 		Indexed:      indexed,
 		Entries:      entries,
 	}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
-		result, err := client.FetchContext(ioCtx, host, docPath, token)
+		result, err := client.Fetch(ioCtx, fetch.FetchRequest{Host: host, Path: docPath, Token: token})
 		return result.Response, err
 	}, func(ioCtx context.Context, docPath, body string, expectedVersion int) (protocol.Response, error) {
 		meta := c.generatedArtifactMeta(docPath == manifestPath)
-		result, err := client.PublishContext(ioCtx, host, docPath, body, token, expectedVersion, meta)
+		result, err := client.Publish(ioCtx, fetch.WriteRequest{
+			Host: host, Path: docPath, Token: token,
+			Body: body, ExpectedVersion: expectedVersion, Metadata: meta,
+		})
 		return result.Response, err
 	})
 	return err
@@ -809,7 +749,10 @@ func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, 
 
 	meta := c.generatedArtifactMeta(true)
 	// Retention bounds generated whole-document history (SPEC §9.9).
-	result, err := client.PublishContext(ctx, host, docPath, body, token, -1, meta)
+	result, err := client.Publish(ctx, fetch.WriteRequest{
+		Host: host, Path: docPath, Token: token,
+		Body: body, ExpectedVersion: -1, Metadata: meta,
+	})
 	if err != nil {
 		return err
 	}

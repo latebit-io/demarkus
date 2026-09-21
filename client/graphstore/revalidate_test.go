@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -23,7 +24,7 @@ func TestRevalidationSingleFlightAndCancellation(t *testing.T) {
 	store.Merge(g, nil)
 	started := make(chan struct{})
 	var calls atomic.Int32
-	fetchFn := func(ctx context.Context, _, _ string) (graph.FetchResult, error) {
+	fetchFn := func(ctx context.Context, _ links.Target) (graph.FetchResult, error) {
 		calls.Add(1)
 		close(started)
 		<-ctx.Done()
@@ -32,7 +33,7 @@ func TestRevalidationSingleFlightAndCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { _, err := store.Revalidate(ctx, nil, fetchFn, fetch.ParseMarkURL); done <- err }()
+	go func() { _, err := store.Revalidate(ctx, nil, fetchFn); done <- err }()
 	select {
 	case <-started:
 	case err := <-done:
@@ -40,7 +41,7 @@ func TestRevalidationSingleFlightAndCancellation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("revalidation did not start")
 	}
-	second, err := store.Revalidate(t.Context(), nil, fetchFn, fetch.ParseMarkURL)
+	second, err := store.Revalidate(t.Context(), nil, fetchFn)
 	if err != nil || second.Attempts != 0 {
 		t.Fatalf("duplicate revalidation: %+v, %v", second, err)
 	}
@@ -67,7 +68,7 @@ func TestRevalidationBoundsPreFetchFailures(t *testing.T) {
 	for i := range RevalidationLimit + 1 {
 		store.ReplaceSeed(fmt.Sprint(i), []StoredNode{{URL: fmt.Sprintf("mark://source/%d.md", i), Status: "ok"}}, nil)
 	}
-	result, err := store.Revalidate(t.Context(), nil, nil, nil)
+	result, err := store.Revalidate(t.Context(), nil, nil)
 	if err == nil || result.Attempts != RevalidationLimit || result.Remaining != 1 || result.Fetches != 0 {
 		t.Fatalf("unbounded pre-fetch failures: %+v, %v", result, err)
 	}
@@ -78,9 +79,9 @@ func TestRevalidationByteCapPreservesLastGood(t *testing.T) {
 	g := revisionGraph(3, "last-good")
 	g.GetNode(freshnessSource).Observation.AttemptedAt = time.Time{}
 	store.Merge(g, nil)
-	result, err := store.Revalidate(t.Context(), nil, func(context.Context, string, string) (graph.FetchResult, error) {
+	result, err := store.Revalidate(t.Context(), nil, func(context.Context, links.Target) (graph.FetchResult, error) {
 		return graph.FetchResult{Status: "ok", Body: strings.Repeat("x", int(revalidationBytes)+1), Metadata: map[string]string{"version": "4"}}, nil
-	}, fetch.ParseMarkURL)
+	})
 	if !errors.Is(err, graph.ErrIncomplete) || result.Fetches != 1 {
 		t.Fatalf("byte cap: %+v, %v", result, err)
 	}
@@ -91,20 +92,20 @@ func TestRevalidationByteCapPreservesLastGood(t *testing.T) {
 }
 
 func TestSnapshotV1RemainsUnknown(t *testing.T) {
-	artifacts, err := BuildSnapshotShards(SnapshotManifestPath, SnapshotSlotA, []StoredNode{{URL: freshnessSource, Status: "ok"}}, nil, 0)
+	artifacts, err := BuildSnapshotShards(SnapshotManifestPath, generation.SlotA, []StoredNode{{URL: freshnessSource, Status: "ok"}}, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	artifact := artifacts[0]
 	artifact.Body = strings.ReplaceAll(artifact.Body, SnapshotShardFormat, "demarkus-graph-snapshot-shard/v1")
-	artifact.ContentHash = SnapshotBodyHash(artifact.Body)
+	artifact.ContentHash = generation.BodyHash(artifact.Body)
 	artifact.Bytes = len(artifact.Body)
-	manifest, err := BuildSnapshotManifest(SnapshotManifestPath, SnapshotManifest{Exported: time.Now(), Complete: true, Nodes: 1, ActiveSlot: SnapshotSlotA, Shards: []SnapshotShardRef{artifact.Ref(83)}})
+	manifest, err := BuildSnapshotManifest(SnapshotManifestPath, SnapshotManifest{Exported: time.Now(), Complete: true, Nodes: 1, ActiveSlot: generation.SlotA, Shards: []SnapshotShardRef{artifact.Ref(83)}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	manifest = strings.ReplaceAll(manifest, SnapshotManifestFormat, "demarkus-graph-snapshot/v1")
-	nodes, _, err := LoadSnapshot(SnapshotManifestPath, protocol.Response{Status: "ok", Body: manifest, Metadata: map[string]string{"content-hash": SnapshotBodyHash(manifest)}}, func(string) (protocol.Response, error) {
+	nodes, _, err := LoadSnapshot(SnapshotManifestPath, protocol.Response{Status: "ok", Body: manifest, Metadata: map[string]string{"content-hash": generation.BodyHash(manifest)}}, func(string) (protocol.Response, error) {
 		return protocol.Response{Status: "ok", Body: artifact.Body, Metadata: map[string]string{"version": "83", "content-hash": artifact.ContentHash}}, nil
 	})
 	if err != nil {

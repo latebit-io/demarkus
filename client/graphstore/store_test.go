@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/links"
 )
 
 func TestLoadEmpty(t *testing.T) {
@@ -346,6 +347,40 @@ func TestLoadMigratesV1KeysToIdentity(t *testing.T) {
 	}
 }
 
+// ADR 0018: host case is not identity. A store written before it may hold one
+// document under two host spellings; load merges them and reads accept either.
+func TestLoadMergesHostCaseSpellings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	stored := `{"version":2,"nodes":[
+		{"url":"mark://Docs.Example/Index.md","title":"stale","status":"ok","crawled_at":"2026-01-01T00:00:00Z"},
+		{"url":"mark://docs.example/Index.md","title":"fresh","status":"ok","crawled_at":"2026-06-01T00:00:00Z"},
+		{"url":"mark://docs.example/index.md","title":"other path","status":"ok","crawled_at":"2026-06-01T00:00:00Z"}
+	],"edges":[
+		{"from":"mark://Docs.Example/Index.md","to":"mark://DOCS.example/about.md"},
+		{"from":"mark://docs.example/Index.md","to":"mark://docs.example/about.md"}
+	]}`
+	if err := os.WriteFile(path, []byte(stored), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.NodeCount() != 2 {
+		t.Errorf("NodeCount = %d, want 2 (host spellings merge, path case stays distinct)", s.NodeCount())
+	}
+	if n := s.GetNode("mark://DOCS.EXAMPLE/Index.md"); n == nil || n.Title != "fresh" {
+		t.Errorf("merged node = %+v, want the more recently crawled copy under any host spelling", n)
+	}
+	if len(s.edges) != 1 {
+		t.Errorf("edges = %+v, want the two spellings deduped to 1", s.edges)
+	}
+	if bl := s.Backlinks("mark://Docs.Example/about.md"); len(bl) != 1 || bl[0] != "mark://docs.example/Index.md" {
+		t.Errorf("Backlinks = %v, want [mark://docs.example/Index.md]", bl)
+	}
+}
+
 func TestBacklinks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
 	s, err := Load(path)
@@ -652,7 +687,8 @@ func TestCrawlAndPersist(t *testing.T) {
 		"host:6309/about.md": {body: "# About\n", etag: "etag-2"},
 	}
 
-	fetchFunc := func(_ context.Context, host, path string) (graph.FetchResult, error) {
+	fetchFunc := func(_ context.Context, target links.Target) (graph.FetchResult, error) {
+		host, path := target.DialHost(), target.Path
 		key := host + path
 		p, ok := pages[key]
 		if !ok {
@@ -662,7 +698,7 @@ func TestCrawlAndPersist(t *testing.T) {
 	}
 
 	var nodeCount atomic.Int32
-	g, err := s.CrawlAndPersist(context.Background(), "mark://host:6309/index.md", fetchFunc, canonicalizingParseURL, CrawlOptions{
+	g, err := s.CrawlAndPersist(context.Background(), "mark://host:6309/index.md", fetchFunc, CrawlOptions{
 		MaxDepth: 2,
 		MaxNodes: 100,
 		OnNode: func(_ *graph.Node) {
@@ -701,14 +737,11 @@ func TestCrawlAndPersist(t *testing.T) {
 func TestCrawlAndPersist_NilStore(t *testing.T) {
 	var s *Store
 
-	fetchFunc := func(_ context.Context, _, _ string) (graph.FetchResult, error) {
+	fetchFunc := func(_ context.Context, _ links.Target) (graph.FetchResult, error) {
 		return graph.FetchResult{Status: "ok", Body: "# Doc\n", Metadata: map[string]string{"etag": "etag-1"}}, nil
 	}
-	parseURL := func(_ string) (string, string, error) {
-		return "host:6309", "/doc.md", nil
-	}
 
-	g, err := s.CrawlAndPersist(context.Background(), "mark://host:6309/doc.md", fetchFunc, parseURL, CrawlOptions{
+	g, err := s.CrawlAndPersist(context.Background(), "mark://host:6309/doc.md", fetchFunc, CrawlOptions{
 		MaxDepth: 1,
 	})
 	if err != nil {
@@ -719,23 +752,6 @@ func TestCrawlAndPersist_NilStore(t *testing.T) {
 	}
 }
 
-// canonicalizingParseURL mirrors fetch.ParseMarkURL: it splits a mark:// URL
-// and supplies the default port when the address omits one.
-func canonicalizingParseURL(raw string) (host, path string, err error) {
-	rest, ok := strings.CutPrefix(raw, "mark://")
-	if !ok {
-		return "", "", fmt.Errorf("invalid URL: %s", raw)
-	}
-	host, path = rest, "/"
-	if i := strings.Index(rest, "/"); i >= 0 {
-		host, path = rest[:i], rest[i:]
-	}
-	if !strings.Contains(host, ":") {
-		host += ":6309"
-	}
-	return host, path, nil
-}
-
 func crawlTwoPageSite(t *testing.T, startURL string) *Store {
 	t.Helper()
 
@@ -743,7 +759,8 @@ func crawlTwoPageSite(t *testing.T, startURL string) *Store {
 		"host:6309/index.md": {body: "# Home\n[About](/about.md)\n", etag: "etag-1"},
 		"host:6309/about.md": {body: "# About\n", etag: "etag-2"},
 	}
-	fetchFunc := func(_ context.Context, host, path string) (graph.FetchResult, error) {
+	fetchFunc := func(_ context.Context, target links.Target) (graph.FetchResult, error) {
+		host, path := target.DialHost(), target.Path
 		p, ok := pages[host+path]
 		if !ok {
 			return graph.FetchResult{Status: "not-found"}, nil
@@ -755,7 +772,7 @@ func crawlTwoPageSite(t *testing.T, startURL string) *Store {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if _, err := s.CrawlAndPersist(context.Background(), startURL, fetchFunc, canonicalizingParseURL, CrawlOptions{
+	if _, err := s.CrawlAndPersist(context.Background(), startURL, fetchFunc, CrawlOptions{
 		MaxDepth: 2,
 	}); err != nil {
 		t.Fatalf("CrawlAndPersist(%s): %v", startURL, err)
@@ -796,36 +813,18 @@ func TestCrawlAndPersistCanonicalizesStartURL(t *testing.T) {
 func TestCrawlAndPersistExternalStartNeedsNoParser(t *testing.T) {
 	s := New()
 
-	fetchFunc := func(_ context.Context, _, _ string) (graph.FetchResult, error) {
+	fetchFunc := func(_ context.Context, _ links.Target) (graph.FetchResult, error) {
 		t.Error("fetch called for an external start URL")
 		return graph.FetchResult{}, nil
 	}
 
-	g, err := s.CrawlAndPersist(context.Background(), "https://example.com/page", fetchFunc, nil, CrawlOptions{})
+	g, err := s.CrawlAndPersist(context.Background(), "https://example.com/page", fetchFunc, CrawlOptions{})
 	if err != nil {
 		t.Fatalf("CrawlAndPersist: %v", err)
 	}
 	n := g.GetNode("https://example.com/page")
 	if n == nil || n.Status != "external" {
 		t.Errorf("node = %+v, want status external", n)
-	}
-}
-
-// A mark:// crawl without a parser must fail up front: Crawl would otherwise
-// dereference the nil parser in a worker goroutine and panic the process.
-func TestCrawlAndPersistMarkStartRequiresParser(t *testing.T) {
-	s := New()
-
-	fetchFunc := func(_ context.Context, _, _ string) (graph.FetchResult, error) {
-		return graph.FetchResult{Status: "ok"}, nil
-	}
-
-	_, err := s.CrawlAndPersist(context.Background(), "mark://host/doc.md", fetchFunc, nil, CrawlOptions{})
-	if err == nil {
-		t.Fatal("CrawlAndPersist with nil parseURL: expected an error")
-	}
-	if !strings.Contains(err.Error(), "parseURL is required") {
-		t.Errorf("error = %q, want it to name the missing parser", err)
 	}
 }
 

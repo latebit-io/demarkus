@@ -59,6 +59,7 @@ type model struct {
 	err         error
 	loading     bool
 	client      *fetch.Client
+	fetcher     documentFetcher // client, narrowed so a test can hold a fetch open
 	pendingBody string
 	width       int
 	height      int
@@ -82,7 +83,13 @@ type model struct {
 	hoverIdx       int              // -1 = no hover, index of link under mouse cursor
 
 	// Fetch sequencing: ignore stale results from superseded fetches.
-	fetchSeq uint64
+	// currentURL is the document on screen, "" when none is. The address bar is
+	// an input and stops naming it as soon as it is edited.
+	currentURL string
+	fetchSeq   uint64
+	// fetchCancel ends the fetch in flight; initFetch is the one Init starts.
+	fetchCancel context.CancelFunc
+	initFetch   tea.Cmd
 
 	// Graph view
 	viewMode        viewMode
@@ -171,6 +178,7 @@ func (m model) canGoForward() bool {
 func (m *model) restoreHistory() {
 	entry := m.history[m.histIdx]
 	m.addressBar.SetValue(entry.url)
+	m.currentURL = entry.url
 	m.status = entry.status
 	m.metadata = entry.metadata
 	m.rawBody = entry.rawBody
@@ -257,10 +265,11 @@ func initialModel(initialURL string, client *fetch.Client, styleName string, ext
 		}
 	}
 
-	return model{
+	m := model{
 		addressBar:      ti,
 		focus:           focusAddressBar,
 		client:          client,
+		fetcher:         client,
 		loading:         initialURL != "",
 		histIdx:         -1,
 		linkIdx:         -1,
@@ -272,12 +281,16 @@ func initialModel(initialURL string, client *fetch.Client, styleName string, ext
 		styleName:       styleName,
 		externalSchemes: externalSchemes,
 	}
+	if initialURL != "" {
+		m.initFetch = m.startFetch(initialURL)
+	}
+	return m
 }
 
 func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{textinput.Blink}
-	if m.addressBar.Value() != "" {
-		cmds = append(cmds, m.doFetch(m.addressBar.Value()))
+	if m.initFetch != nil {
+		cmds = append(cmds, m.initFetch)
 	}
 	if m.bookmarkMsg != "" {
 		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
@@ -622,8 +635,10 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 	if msg.seq != m.fetchSeq {
 		return m, nil
 	}
+	m.releaseFetch()
 	m.loading = false
 	if msg.err != nil {
+		m.currentURL = ""
 		m.err = msg.err
 		m.pendingBody = ""
 		m.status = ""
@@ -640,6 +655,7 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	m.currentURL = msg.url
 	m.err = nil
 	m.status = msg.result.Response.Status
 	m.metadata = msg.result.Response.Metadata
@@ -723,13 +739,13 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if raw != "" {
 				m.cancelCrawl()
 				m.loading = true
-				m.fetchSeq++
 				m.err = nil
 				m.pendingBody = ""
 				if m.authOrigin == "" {
 					m.authOrigin = originHost(raw)
 				}
-				return m, m.doFetch(raw)
+				cmd := m.startFetch(raw) // before the return: it changes m
+				return m, cmd
 			}
 			return m, nil
 		case tea.KeyEscape:
@@ -936,13 +952,13 @@ func (m model) followLink(target string) (tea.Model, tea.Cmd) {
 	}
 	m.addressBar.SetValue(target)
 	m.loading = true
-	m.fetchSeq++
 	m.links = nil
 	m.linkRegions = nil
 	m.markedRendered = ""
 	m.linkIdx = -1
 	m.hoverIdx = -1
-	return m, m.doFetch(target)
+	cmd := m.startFetch(target) // before the return: it changes m
+	return m, cmd
 }
 
 // openExternal launches target in the user's system handler if its scheme
@@ -1006,7 +1022,7 @@ func isAlpha(r rune) bool { return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= '
 func isDigit(r rune) bool { return r >= '0' && r <= '9' }
 
 func (m model) handleGraphToggle() (tea.Model, tea.Cmd) {
-	url := m.addressBar.Value()
+	url := m.currentURL
 	if url == "" {
 		return m, nil
 	}
@@ -1048,7 +1064,7 @@ func (m model) handleGraphToggle() (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleBookmarkToggle() (tea.Model, tea.Cmd) {
-	url := m.addressBar.Value()
+	url := m.currentURL
 	if url == "" || m.bookmarkStore == nil {
 		return m, nil
 	}
@@ -1093,8 +1109,9 @@ func (m model) handleBookmarkView() (tea.Model, tea.Cmd) {
 	m.linkRegions = nil
 	m.status = "bookmarks"
 	m.addressBar.SetValue("")
+	m.currentURL = ""
 	m.loading = false
-	m.fetchSeq++
+	m.cancelFetch()
 	m.metadata = nil
 	m.fromCache = false
 	m.err = nil
@@ -1211,7 +1228,7 @@ func (m model) statusBarView() string {
 	}
 
 	parts := []string{"[" + m.status + "]"}
-	if m.status != "bookmarks" && m.bookmarkStore != nil && m.bookmarkStore.Has(m.addressBar.Value()) {
+	if m.status != "bookmarks" && m.bookmarkStore != nil && m.bookmarkStore.Has(m.currentURL) {
 		parts = append(parts, "★")
 	}
 	if m.fromCache {
@@ -1234,23 +1251,53 @@ func (m model) statusBarView() string {
 
 // originHost returns the dial host of a user-entered URL, or "" when it does not parse.
 func originHost(raw string) string {
-	host, _, err := fetch.ParseMarkURL(raw)
+	host, err := links.DialHost(raw)
 	if err != nil {
 		return ""
 	}
 	return host
 }
 
-func (m model) doFetch(raw string) tea.Cmd {
+// documentFetcher is the one verb the document view needs.
+type documentFetcher interface {
+	Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error)
+}
+
+// startFetch supersedes the fetch in flight and returns the command for raw.
+func (m *model) startFetch(raw string) tea.Cmd {
+	m.cancelFetch()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.fetchCancel = cancel
+	return m.doFetch(ctx, raw)
+}
+
+// cancelFetch ends the fetch in flight and makes its result read as stale.
+func (m *model) cancelFetch() {
+	m.releaseFetch()
+	m.fetchSeq++
+}
+
+// releaseFetch frees the context of a fetch that finished or is unwanted.
+func (m *model) releaseFetch() {
+	if m.fetchCancel != nil {
+		m.fetchCancel()
+		m.fetchCancel = nil
+	}
+}
+
+// doFetch reads raw under ctx and tags the result with the current sequence.
+func (m model) doFetch(ctx context.Context, raw string) tea.Cmd {
 	seq := m.fetchSeq
 	cred := tokens.Credential{Origin: m.authOrigin}
 	return func() tea.Msg {
-		host, path, err := fetch.ParseMarkURL(raw)
+		target, err := links.ParseMark(raw)
 		if err != nil {
 			return fetchResult{err: err, url: raw, seq: seq}
 		}
-		result, err := m.client.Fetch(host, path, tokens.Resolve(cred, host, tokens.LoadDefault()))
-		return fetchResult{result: result, err: err, graphURL: links.NodeURL(host, path), url: raw, seq: seq}
+		host := target.DialHost()
+		token := tokens.Resolve(cred, host, tokens.LoadDefault())
+		result, err := m.fetcher.Fetch(ctx, fetch.FetchRequest{Host: host, Path: target.Path, Token: token})
+		return fetchResult{result: result, err: err, graphURL: target.NodeURL(), url: raw, seq: seq}
 	}
 }
 

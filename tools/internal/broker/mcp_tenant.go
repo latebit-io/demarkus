@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -92,7 +93,7 @@ func (g *mcpGateway) resolveOrProvision(ctx context.Context) (WorldConfig, *mcp.
 		// The knowledge server picks the new world up asynchronously;
 		// give the caller a clear retry message until it answers.
 		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_, ferr := g.dispatcher.FetchContext(probeCtx, w.Name, "/index.md", "")
+		_, ferr := g.dispatcher.Fetch(probeCtx, fetch.FetchRequest{Host: w.Name, Path: "/index.md"})
 		cancel()
 		if ferr != nil {
 			return WorldConfig{}, mcp.NewToolResultError("your memory world is being provisioned; try again in about a minute")

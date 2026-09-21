@@ -8,12 +8,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/client/links"
 )
 
-type fetchFunc func(context.Context, string, string) (FetchResult, error)
+type fetchFunc func(context.Context, links.Target) (FetchResult, error)
 
-func (f fetchFunc) Fetch(ctx context.Context, host, path string) (FetchResult, error) {
-	return f(ctx, host, path)
+func (f fetchFunc) Fetch(ctx context.Context, target links.Target) (FetchResult, error) {
+	return f(ctx, target)
 }
 
 func TestCrawlBounds(t *testing.T) {
@@ -37,7 +39,7 @@ func TestCrawlBounds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newMockFetcher()
 			f.add("host:6309", "/root.md", body.String())
-			g, err := Crawl(t.Context(), "mark://host/root.md", f, mockParseURL, tt.opts)
+			g, err := Crawl(t.Context(), "mark://host/root.md", f, tt.opts)
 			if tt.reason == "" {
 				if err != nil || !g.Outcome.Complete {
 					t.Fatalf("complete requested scope: %v, %+v", err, g.Outcome)
@@ -67,7 +69,7 @@ func TestCrawlExactNodeCapIsComplete(t *testing.T) {
 	f := newMockFetcher()
 	f.add("host:6309", "/root.md", "[child](/child.md)")
 	f.add("host:6309", "/child.md", "# Child")
-	g, err := Crawl(t.Context(), "mark://host/root.md", f, mockParseURL, CrawlOptions{MaxDepth: 1, MaxNodes: 2})
+	g, err := Crawl(t.Context(), "mark://host/root.md", f, CrawlOptions{MaxDepth: 1, MaxNodes: 2})
 	if err != nil || !g.Outcome.Complete || g.NodeCount() != 2 {
 		t.Fatalf("exact fit is complete: %+v, %v", g.Outcome, err)
 	}
@@ -77,7 +79,8 @@ func TestCrawlMidFetchCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	started := make(chan struct{})
-	f := fetchFunc(func(ctx context.Context, _, path string) (FetchResult, error) {
+	f := fetchFunc(func(ctx context.Context, target links.Target) (FetchResult, error) {
+		path := target.Path
 		if path == "/root.md" {
 			return FetchResult{Status: "ok", Body: "[child](/child.md)"}, nil
 		}
@@ -89,7 +92,7 @@ func TestCrawlMidFetchCancellation(t *testing.T) {
 	var g *Graph
 	var err error
 	go func() {
-		g, err = Crawl(ctx, "mark://host/root.md", f, mockParseURL, CrawlOptions{MaxDepth: 1})
+		g, err = Crawl(ctx, "mark://host/root.md", f, CrawlOptions{MaxDepth: 1})
 		close(done)
 	}()
 	select {
@@ -111,7 +114,8 @@ func TestCrawlMidFetchCancellation(t *testing.T) {
 func TestCrawlFailedPeers(t *testing.T) {
 	for _, status := range []string{"", "unauthorized", "server-error", "rate-limited", "external", "transport"} {
 		t.Run(status, func(t *testing.T) {
-			f := fetchFunc(func(_ context.Context, _, path string) (FetchResult, error) {
+			f := fetchFunc(func(_ context.Context, target links.Target) (FetchResult, error) {
+				path := target.Path
 				if path == "/root.md" {
 					return FetchResult{Status: "ok", Body: "[good](/good.md) [bad](mark://peer/bad.md)"}, nil
 				}
@@ -123,7 +127,7 @@ func TestCrawlFailedPeers(t *testing.T) {
 				}
 				return FetchResult{Status: status}, nil
 			})
-			g, err := Crawl(t.Context(), "mark://host/root.md", f, mockParseURL, CrawlOptions{MaxDepth: 1})
+			g, err := Crawl(t.Context(), "mark://host/root.md", f, CrawlOptions{MaxDepth: 1})
 			if !errors.Is(err, ErrIncomplete) || g.Outcome.Failures != 1 || g.EdgeCount() != 3 || g.NodeCount() != 3 {
 				t.Fatalf("failed peer lost valid neighborhood: %+v, %v", g.Outcome, err)
 			}
@@ -141,7 +145,7 @@ func TestCrawlWorkerCeiling(t *testing.T) {
 		fmt.Fprintf(&body, "[child](/%d.md)\n", i)
 	}
 	f.add("host:6309", "/root.md", body.String())
-	g, err := Crawl(t.Context(), "mark://host/root.md", f, mockParseURL, CrawlOptions{MaxDepth: 1, Workers: 1000000})
+	g, err := Crawl(t.Context(), "mark://host/root.md", f, CrawlOptions{MaxDepth: 1, Workers: 1000000})
 	if err != nil || g.Outcome.PeakWorkers != 32 {
 		t.Fatalf("worker bound: %+v, %v", g.Outcome, err)
 	}
@@ -151,7 +155,7 @@ func TestCrawlRetainsMinimalRootWithinOutputBudget(t *testing.T) {
 	const root = "mark://host/root.md"
 	f := newMockFetcher()
 	f.add("host:6309", "/root.md", "# "+strings.Repeat("large title ", 200))
-	g, err := Crawl(t.Context(), root, f, mockParseURL, CrawlOptions{MaxOutputBytes: 1024})
+	g, err := Crawl(t.Context(), root, f, CrawlOptions{MaxOutputBytes: 1024})
 	if !errors.Is(err, ErrIncomplete) || !slices.Contains(g.Outcome.Reasons, ReasonOutputCap) {
 		t.Fatalf("want output-cap, got %v", err)
 	}
@@ -166,7 +170,7 @@ func TestCrawlRetainsMinimalRootWithinOutputBudget(t *testing.T) {
 func TestCrawlRejectsUnrepresentableRootBeforeFetch(t *testing.T) {
 	root := "mark://host/" + strings.Repeat("x", 500)
 	f := newMockFetcher()
-	g, err := Crawl(t.Context(), root, f, mockParseURL, CrawlOptions{MaxOutputBytes: 1024})
+	g, err := Crawl(t.Context(), root, f, CrawlOptions{MaxOutputBytes: 1024})
 	if err == nil || g != nil || len(f.calls) != 0 {
 		t.Fatalf("unrepresentable root: graph=%v err=%v fetches=%d", g, err, len(f.calls))
 	}
@@ -178,7 +182,7 @@ func TestCrawlRetainsMinimalChildWithinOutputBudget(t *testing.T) {
 	f := newMockFetcher()
 	f.add("host:6309", "/root.md", "[child](/child.md)")
 	f.add("host:6309", "/child.md", "# "+strings.Repeat("large title ", 200))
-	g, err := Crawl(t.Context(), root, f, mockParseURL, CrawlOptions{MaxDepth: 1, MaxOutputBytes: 1024})
+	g, err := Crawl(t.Context(), root, f, CrawlOptions{MaxDepth: 1, MaxOutputBytes: 1024})
 	if !errors.Is(err, ErrIncomplete) {
 		t.Fatal("expected partial traversal")
 	}

@@ -1,7 +1,6 @@
 package graphstore
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
@@ -22,6 +22,8 @@ import (
 const (
 	// SnapshotManifestPath is the additive entry point for atomic graph snapshots.
 	SnapshotManifestPath = "/graph/manifest.md"
+	// LegacyExportPath is the single document export that predates snapshots.
+	LegacyExportPath = "/graph.md"
 	// SnapshotManifestFormat identifies the manifest wire format.
 	SnapshotManifestFormat = "demarkus-graph-snapshot/v2"
 	// SnapshotShardFormat identifies the shard wire format.
@@ -36,11 +38,7 @@ const (
 	// MaxSnapshotNodes bounds one complete generation.
 	MaxSnapshotNodes = 1_000_000
 	// MaxSnapshotEdges bounds one complete generation.
-	MaxSnapshotEdges = 1_000_000
-	// SnapshotSlotA is the first alternating publication slot.
-	SnapshotSlotA = "a"
-	// SnapshotSlotB is the second alternating publication slot.
-	SnapshotSlotB          = "b"
+	MaxSnapshotEdges       = 1_000_000
 	snapshotShardKindNodes = "nodes"
 	snapshotShardKindEdges = "edges"
 	snapshotJSONFence      = "\n```json\n"
@@ -88,25 +86,6 @@ func (a SnapshotArtifact) Ref(version int) SnapshotShardRef { //nolint:gocritic 
 		Kind: a.Kind, Part: a.Part, Path: a.Path, Version: version,
 		ContentHash: a.ContentHash, Nodes: a.Nodes, Edges: a.Edges, Bytes: a.Bytes,
 	}
-}
-
-// InactiveSnapshotSlot returns the slot not named by the current manifest.
-func InactiveSnapshotSlot(active string) string {
-	if active == SnapshotSlotA {
-		return SnapshotSlotB
-	}
-	return SnapshotSlotA
-}
-
-// SnapshotVersionPath returns an immutable FETCH path.
-func SnapshotVersionPath(docPath string, version int) string {
-	return fmt.Sprintf("%s/v%d", docPath, version)
-}
-
-// SnapshotBodyHash returns the protocol content hash for body.
-func SnapshotBodyHash(body string) string {
-	sum := sha256.Sum256([]byte(body))
-	return fmt.Sprintf("sha256-%x", sum)
 }
 
 // BuildSnapshotManifest renders a deterministic snapshot manifest.
@@ -205,7 +184,7 @@ func BuildSnapshotShards(manifestPath, slot string, nodes []StoredNode, edges []
 	if err := validateSnapshotManifestPath(manifestPath); err != nil {
 		return nil, err
 	}
-	if slot != SnapshotSlotA && slot != SnapshotSlotB {
+	if slot != generation.SlotA && slot != generation.SlotB {
 		return nil, fmt.Errorf("invalid snapshot slot %q", slot)
 	}
 	if targetBytes == 0 {
@@ -267,7 +246,7 @@ func LoadSnapshot(manifestPath string, response protocol.Response, fetchShard fu
 	if response.Status != protocol.StatusOK {
 		return nil, nil, fmt.Errorf("snapshot manifest returned %s", response.Status)
 	}
-	if response.Metadata["content-hash"] != SnapshotBodyHash(response.Body) {
+	if response.Metadata["content-hash"] != generation.BodyHash(response.Body) {
 		return nil, nil, errors.New("snapshot manifest content hash mismatch")
 	}
 	manifest, err := ParseSnapshotManifest(manifestPath, response.Body)
@@ -282,7 +261,7 @@ func LoadSnapshot(manifestPath string, response protocol.Response, fetchShard fu
 	seenNodes := make(map[string]struct{}, manifest.Nodes)
 	seenEdges := make(map[edgeKey]struct{}, manifest.Edges)
 	for _, ref := range manifest.Shards {
-		shard, err := fetchShard(SnapshotVersionPath(ref.Path, ref.Version))
+		shard, err := fetchShard(generation.VersionPath(ref.Path, ref.Version))
 		if err != nil {
 			return nil, nil, fmt.Errorf("fetch graph shard %s: %w", ref.Path, err)
 		}
@@ -475,7 +454,7 @@ func buildSnapshotArtifact(manifestPath, slot, kind string, part int, nodes []St
 		Kind: kind, Part: part, Path: snapshotShardPath(manifestPath, slot, kind, part),
 		Body: body, Nodes: len(nodes), Edges: len(edges), Bytes: len(body),
 	}
-	artifact.ContentHash = SnapshotBodyHash(body)
+	artifact.ContentHash = generation.BodyHash(body)
 	return artifact, nil
 }
 
@@ -490,7 +469,7 @@ func verifySnapshotShard(ref SnapshotShardRef, response protocol.Response) ([]St
 	if version != ref.Version {
 		return nil, nil, fmt.Errorf("graph shard %s version mismatch", ref.Path)
 	}
-	if len(response.Body) != ref.Bytes || SnapshotBodyHash(response.Body) != ref.ContentHash || response.Metadata["content-hash"] != ref.ContentHash {
+	if len(response.Body) != ref.Bytes || generation.BodyHash(response.Body) != ref.ContentHash || response.Metadata["content-hash"] != ref.ContentHash {
 		return nil, nil, fmt.Errorf("graph shard %s content mismatch", ref.Path)
 	}
 	meta, payloadText, err := parseSnapshotDocument(response.Body, "# Graph Snapshot Shard")
@@ -566,7 +545,7 @@ func validateSnapshotManifest(manifestPath string, manifest SnapshotManifest) er
 	if manifest.Exported.IsZero() || manifest.Exported.Year() < 1 || manifest.Exported.Year() > 9999 || !manifest.Complete {
 		return errors.New("complete snapshot metadata is required")
 	}
-	if manifest.ActiveSlot != SnapshotSlotA && manifest.ActiveSlot != SnapshotSlotB {
+	if manifest.ActiveSlot != generation.SlotA && manifest.ActiveSlot != generation.SlotB {
 		return fmt.Errorf("invalid snapshot slot %q", manifest.ActiveSlot)
 	}
 	if manifest.Nodes < 0 || manifest.Nodes > MaxSnapshotNodes || manifest.Edges < 0 || manifest.Edges > MaxSnapshotEdges {
@@ -623,8 +602,8 @@ func validateSnapshotManifestPath(manifestPath string) error {
 	if _, ok := protocol.IsHashPath(manifestPath); ok || snapshotVersionSuffix(manifestPath) {
 		return fmt.Errorf("snapshot manifest path conflicts with immutable fetch syntax %q", manifestPath)
 	}
-	generated := snapshotShardPath(manifestPath, SnapshotSlotA, snapshotShardKindNodes, MaxSnapshotShards-1)
-	if err := protocol.ValidateRequestPath(SnapshotVersionPath(generated, math.MaxInt)); err != nil {
+	generated := snapshotShardPath(manifestPath, generation.SlotA, snapshotShardKindNodes, MaxSnapshotShards-1)
+	if err := protocol.ValidateRequestPath(generation.VersionPath(generated, math.MaxInt)); err != nil {
 		return fmt.Errorf("snapshot path cannot produce valid shards: %w", err)
 	}
 	return nil

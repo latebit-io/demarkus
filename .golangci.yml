@@ -26,6 +26,11 @@ linters:
         - performance
       disabled-checks:
         - exitAfterDefer
+      settings:
+        # Request structs go by value so a callee cannot change the caller's
+        # request; the largest is 104 bytes of string headers.
+        hugeParam:
+          sizeThreshold: 128
     revive:
       rules:
         - name: blank-imports

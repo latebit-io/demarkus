@@ -179,8 +179,8 @@ func Note(text string) string {
 
 // CatalogFallback is the note appended to a lookup result when body match
 // was requested and the server answered from the catalog; else "".
-func CatalogFallback(opts fetch.LookupOptions, r fetch.Result) string {
-	if !fetch.AnsweredFromCatalog(opts, r) {
+func CatalogFallback(req fetch.LookupRequest, r fetch.Result) string {
+	if !fetch.AnsweredFromCatalog(req, r) {
 		return ""
 	}
 	return Note(fetch.CatalogFallbackNote)

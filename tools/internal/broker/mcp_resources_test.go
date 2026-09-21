@@ -125,7 +125,7 @@ func TestGatewayReadResource_Errors(t *testing.T) {
 		},
 		{
 			"non-ok status surfaces",
-			&fakeDispatcher{FetchFn: func(_, _, _ string) (fetch.Result, error) {
+			&fakeDispatcher{FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 			}},
 			"mark://team-a/missing.md",
@@ -133,7 +133,7 @@ func TestGatewayReadResource_Errors(t *testing.T) {
 		},
 		{
 			"transport error surfaces",
-			&fakeDispatcher{FetchFn: func(_, _, _ string) (fetch.Result, error) {
+			&fakeDispatcher{FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 				return fetch.Result{}, fmt.Errorf("boom")
 			}},
 			"mark://team-a/doc.md",

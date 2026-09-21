@@ -16,8 +16,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/latebit-io/demarkus/client/links"
 )
 
 // linkRe matches markdown list items: - [title](url) with optional — date suffix.
@@ -69,9 +72,14 @@ func (s *Store) parse(content string) {
 		if m == nil {
 			continue
 		}
+		// A file from before identity keys may hold one document twice; the first wins.
+		url := links.CanonicalURL(m[2])
+		if s.hasCanonical(url) {
+			continue
+		}
 		s.bookmarks = append(s.bookmarks, Bookmark{
 			Title: unescapeTitle(m[1]),
-			URL:   m[2],
+			URL:   url,
 			Date:  m[3],
 		})
 	}
@@ -82,19 +90,19 @@ func (s *Store) List() []Bookmark {
 	return s.bookmarks
 }
 
-// Has returns true if the given URL is bookmarked.
+// Has reports whether the document is bookmarked, under any spelling of its URL.
 func (s *Store) Has(url string) bool {
-	for _, b := range s.bookmarks {
-		if b.URL == url {
-			return true
-		}
-	}
-	return false
+	return s.hasCanonical(links.CanonicalURL(url))
+}
+
+func (s *Store) hasCanonical(url string) bool {
+	return slices.ContainsFunc(s.bookmarks, func(b Bookmark) bool { return b.URL == url })
 }
 
 // Add appends a bookmark. If the URL is already bookmarked, this is a no-op.
 func (s *Store) Add(url, title string) error {
-	if s.Has(url) {
+	url = links.CanonicalURL(url)
+	if s.hasCanonical(url) {
 		return nil
 	}
 	date := time.Now().Format("2006-01-02")
@@ -108,6 +116,7 @@ func (s *Store) Add(url, title string) error {
 
 // Remove deletes the bookmark with the given URL and writes to disk.
 func (s *Store) Remove(url string) error {
+	url = links.CanonicalURL(url)
 	filtered := make([]Bookmark, 0, len(s.bookmarks))
 	for _, b := range s.bookmarks {
 		if b.URL != url {

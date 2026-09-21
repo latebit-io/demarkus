@@ -158,7 +158,7 @@ func generatedGraphURL(raw string) bool {
 		return false
 	}
 	shards := SnapshotShardRoot(SnapshotManifestPath) + "/"
-	return generatedGraphPath(parsed.Path, "/graph.md") || generatedGraphPath(parsed.Path, SnapshotManifestPath) || strings.HasPrefix(parsed.Path, shards)
+	return generatedGraphPath(parsed.Path, LegacyExportPath) || generatedGraphPath(parsed.Path, SnapshotManifestPath) || strings.HasPrefix(parsed.Path, shards)
 }
 
 func generatedGraphPath(path, base string) bool {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/client/links"
 )
 
 // Entry maps a content hash to a server location.
@@ -85,20 +85,28 @@ func Build(source string, indexed time.Time, entries []Entry) string {
 // from representation differences (trailing slash, default port).
 func Merge(existing []Entry, sourceServer string, newEntries []Entry) []Entry {
 	canonical := canonicalServer(sourceServer)
+	// Entries are many and servers few: parse each spelling once.
+	same := map[string]bool{}
 	var result []Entry
 	for _, e := range existing {
-		if canonicalServer(e.Server) != canonical {
+		isSource, known := same[e.Server]
+		if !known {
+			isSource = canonicalServer(e.Server) == canonical
+			same[e.Server] = isSource
+		}
+		if !isSource {
 			result = append(result, e)
 		}
 	}
 	return append(result, newEntries...)
 }
 
-// canonicalServer normalizes a mark:// server URL for comparison.
-// It strips trailing slashes, removes the default port, and lowercases.
+// canonicalServer is the server's identity, so every spelling of one server
+// compares equal. A string that is not a server URL compares as written.
 func canonicalServer(s string) string {
-	s = strings.TrimRight(s, "/")
-	defaultSuffix := fmt.Sprintf(":%d", protocol.DefaultPort)
-	s = strings.TrimSuffix(s, defaultSuffix)
-	return strings.ToLower(s)
+	target, err := links.ParseServer(s)
+	if err != nil {
+		return s
+	}
+	return target.AuthorityURL()
 }

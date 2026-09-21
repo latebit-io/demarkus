@@ -2,6 +2,8 @@
 
 Status: accepted (2026-08-18). Shipped in PR #320 (`2964a35`); the managed
 binary pins that close the mixed-version window followed in #319 and #321.
+Amended by [ADR 0018](0018-one-mark-url-parser-and-lowercase-host-identity.md):
+identity lowercases the host, and one parser in `links` serves dialing and identity.
 Amended before acceptance from what implementing it taught: three claims below
 were wrong as first written and are corrected in place, and the "What
 implementation changed" section records what moved and why.
@@ -178,5 +180,5 @@ Amended 2026-08-17 after building this on `feat/node-identity-default-port`.
   `links.NodeURL` puts the rule in one place but cannot stop a future caller
   from concatenating a fifth one. Making it a named type touches every
   signature that carries a node URL, so it wants its own change.
-- Case normalization of the authority. `mark://Host/x` and `mark://host/x`
-  remain distinct until there is evidence anyone writes the former.
+- Case normalization of the authority. Decided in ADR 0018: the host is
+  lowercased, so `mark://Host/x` and `mark://host/x` are one node.

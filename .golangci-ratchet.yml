@@ -36,9 +36,6 @@ linters:
     rules:
       - path: _test\.go
         linters: [errcheck, gosec, funlen, revive]
-      # test doubles mirror the signatures of the interfaces they stand in for
-      - path: client/fetchtest/
-        linters: [revive]
 
 issues:
   max-issues-per-linter: 0

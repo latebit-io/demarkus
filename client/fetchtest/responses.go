@@ -1,10 +1,14 @@
 package fetchtest
 
 import (
+	"fmt"
+	"maps"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/render"
 	"github.com/latebit-io/demarkus/protocol/wiretest"
 )
@@ -30,3 +34,13 @@ func Versions(docPath string, current int) fetch.Result {
 	}
 	return fetch.Result{Response: render.VersionsResponse(docPath, history, true)}
 }
+
+// Head is a live document at version, as a FETCH of it answers.
+func Head(body string, version int, meta map[string]string) fetch.Result {
+	m := map[string]string{"version": strconv.Itoa(version)}
+	maps.Copy(m, meta)
+	return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: m}}
+}
+
+// LostResponse is a write that was sent and never answered.
+func LostResponse() error { return fmt.Errorf("read response: %w", fetch.ErrOutcomeUnknown) }

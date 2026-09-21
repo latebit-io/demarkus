@@ -81,7 +81,7 @@ The `mark_discover` tool fetches the agent manifest from the connected server. I
 The manifest is published like any other document:
 
 ```bash
-demarkus -X PUBLISH mark://host/.well-known/agent-manifest.md < manifest.md
+demarkus -X PUBLISH -expected-version 0 mark://host/.well-known/agent-manifest.md < manifest.md
 ```
 
 ### Token Permissions

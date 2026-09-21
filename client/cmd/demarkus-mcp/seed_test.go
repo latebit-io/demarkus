@@ -12,6 +12,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
+	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
@@ -37,7 +38,7 @@ func hubSnapshot(t *testing.T) (protocol.Response, map[string]protocol.Response)
 		{URL: "mark://host:6309/b.md", Title: "Page B", Status: "ok"},
 	}
 	edges := []graphstore.StoredEdge{{From: "mark://host:6309/a.md", To: "mark://host:6309/b.md", Label: "B", Count: 1}}
-	artifacts, err := graphstore.BuildSnapshotShards(graphstore.SnapshotManifestPath, graphstore.SnapshotSlotA, nodes, edges, 0)
+	artifacts, err := graphstore.BuildSnapshotShards(graphstore.SnapshotManifestPath, generation.SlotA, nodes, edges, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,20 +46,20 @@ func hubSnapshot(t *testing.T) (protocol.Response, map[string]protocol.Response)
 	shards := make(map[string]protocol.Response, len(artifacts))
 	for i, artifact := range artifacts {
 		refs[i] = artifact.Ref(i + 1)
-		shards[graphstore.SnapshotVersionPath(artifact.Path, i+1)] = protocol.Response{
+		shards[generation.VersionPath(artifact.Path, i+1)] = protocol.Response{
 			Status: protocol.StatusOK, Body: artifact.Body,
 			Metadata: map[string]string{"version": strconv.Itoa(i + 1), "content-hash": artifact.ContentHash},
 		}
 	}
 	manifest, err := graphstore.BuildSnapshotManifest(graphstore.SnapshotManifestPath, graphstore.SnapshotManifest{
 		Exported: exported, Complete: true, Nodes: len(nodes), Edges: len(edges),
-		ActiveSlot: graphstore.SnapshotSlotA, Shards: refs,
+		ActiveSlot: generation.SlotA, Shards: refs,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return protocol.Response{Status: protocol.StatusOK, Body: manifest, Metadata: map[string]string{
-		"etag": "snapshot-etag-1", "content-hash": graphstore.SnapshotBodyHash(manifest),
+		"etag": "snapshot-etag-1", "content-hash": generation.BodyHash(manifest),
 	}}, shards
 }
 
@@ -81,26 +82,23 @@ func resultText(t *testing.T, res *mcp.CallToolResult) string {
 }
 
 // legacySeed hides the snapshot manifest unless the stub scripts one, so a
-// FetchCondFn that ignores its path serves /graph.md only.
+// SeedFn that ignores its path serves /graph.md only. The fake alone would
+// hand such a SeedFn the manifest too.
 type legacySeed struct{ *stubClient }
 
-func (l legacySeed) FetchConditional(host, path, token, etag string) (fetch.Result, error) {
-	if path == graphstore.SnapshotManifestPath && l.SnapshotFn == nil {
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-	}
-	return l.stubClient.FetchConditional(host, path, token, etag)
-}
-
-func (l legacySeed) FetchConditionalContext(ctx context.Context, host, path, token, etag string) (fetch.Result, error) {
+func (l legacySeed) Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error) {
 	if err := ctx.Err(); err != nil {
 		return fetch.Result{}, err
 	}
-	return l.FetchConditional(host, path, token, etag)
+	if r.Path == graphstore.SnapshotManifestPath && l.SnapshotFn == nil {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}
+	return l.stubClient.Fetch(ctx, r)
 }
 
 // unavailableSeedSource keeps seeded edges unverified: a source that cannot be
 // reached is unknown, while one that answers not-found loses its edges.
-func unavailableSeedSource(_, _, _ string) (fetch.Result, error) {
+func unavailableSeedSource(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 	return fetch.Result{}, errors.New("source unavailable during seed test")
 }
 
@@ -108,8 +106,8 @@ func TestSeedGraph_ColdStoreAnswersBacklinks(t *testing.T) {
 	var gotPath string
 	sc := &stubClient{
 		FetchFn: unavailableSeedSource,
-		FetchCondFn: func(_, path, _, _ string) (fetch.Result, error) {
-			gotPath = path
+		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			gotPath = r.Path
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"etag": "hub-etag-1"},
@@ -144,7 +142,7 @@ func TestSeedGraph_EmptyLegacyGenerationClearsSeed(t *testing.T) {
 		[]graphstore.StoredNode{{URL: "mark://host/source.md", Status: "ok"}},
 		[]graphstore.StoredEdge{{From: "mark://host/source.md", To: "mark://host/old.md", Count: 1}},
 	)
-	sc := &stubClient{FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+	sc := &stubClient{SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK,
 			Body:   graphstore.BuildExport(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), nil, nil),
@@ -163,18 +161,19 @@ func TestSeedGraph_EmptyLegacyGenerationClearsSeed(t *testing.T) {
 func TestSeedGraph_PrefersAtomicSnapshot(t *testing.T) {
 	manifest, shards := hubSnapshot(t)
 	sc := &stubClient{
-		SnapshotFn: func(_, path, _, _ string) (fetch.Result, error) {
+		SnapshotFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
 			if path != graphstore.SnapshotManifestPath {
 				t.Fatalf("snapshot path = %q", path)
 			}
 			return fetch.Result{Response: manifest}, nil
 		},
-		FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			t.Fatal("legacy graph should not be fetched when snapshot exists")
 			return fetch.Result{}, nil
 		},
-		FetchFn: func(_, path, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: shards[path]}, nil
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			return fetch.Result{Response: shards[r.Path]}, nil
 		},
 	}
 	h := &handler{client: legacySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
@@ -194,12 +193,12 @@ func TestSeedGraph_SnapshotShardFetchHonorsCancellation(t *testing.T) {
 	manifest, shards := hubSnapshot(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	sc := &stubClient{
-		SnapshotFn: func(_, _, _, _ string) (fetch.Result, error) {
+		SnapshotFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			cancel()
 			return fetch.Result{Response: manifest}, nil
 		},
-		FetchFn: func(_, path, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: shards[path]}, nil
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			return fetch.Result{Response: shards[r.Path]}, nil
 		},
 	}
 	h := &handler{client: legacySeed{sc}, graphStore: emptyGraphStore(t)}
@@ -220,7 +219,7 @@ func TestSeedGraph_SnapshotShardFetchHonorsCancellation(t *testing.T) {
 func TestSeedGraph_DefaultHostWithoutPortCanonicalizes(t *testing.T) {
 	sc := &stubClient{
 		FetchFn: unavailableSeedSource,
-		FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
 		},
 	}
@@ -241,8 +240,8 @@ func TestSeedGraph_SeedsResolvedHostNotDefault(t *testing.T) {
 	var gotHosts []string
 	sc := &stubClient{
 		FetchFn: unavailableSeedSource,
-		FetchCondFn: func(host, _, _, _ string) (fetch.Result, error) {
-			gotHosts = append(gotHosts, host)
+		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			gotHosts = append(gotHosts, r.Host)
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
 		},
 	}
@@ -262,7 +261,7 @@ func TestSeedGraph_SeedsResolvedHostNotDefault(t *testing.T) {
 
 func TestSeedGraph_NotFoundDegrades(t *testing.T) {
 	sc := &stubClient{
-		FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
 	}
@@ -279,7 +278,7 @@ func TestSeedGraph_NotFoundDegrades(t *testing.T) {
 
 func TestSeedGraph_FetchErrorDegrades(t *testing.T) {
 	sc := &stubClient{
-		FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{}, errors.New("dial refused")
 		},
 	}
@@ -314,13 +313,13 @@ func TestSeedGraph_FailurePersistsLastGoodDiagnostics(t *testing.T) {
 				t.Fatal(err)
 			}
 			sc := &stubClient{
-				SnapshotFn: func(_, _, _, _ string) (fetch.Result, error) {
+				SnapshotFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 					if failure == "snapshot" {
 						return fetch.Result{}, errors.New("snapshot unavailable")
 					}
 					return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 				},
-				FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+				SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 					return fetch.Result{}, errors.New("legacy export unavailable")
 				},
 			}
@@ -355,7 +354,7 @@ func TestSeedGraph_LocalCrawlWins(t *testing.T) {
 
 	sc := &stubClient{
 		FetchFn: unavailableSeedSource,
-		FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			// Hub still claims a.md links to b.md.
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
 		},
@@ -382,7 +381,7 @@ func TestSeedGraph_LocalCrawlWins(t *testing.T) {
 func TestSeedGraph_ThrottledWithinWindow(t *testing.T) {
 	calls := 0
 	sc := &stubClient{
-		FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			calls++
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
 		},
@@ -403,7 +402,7 @@ func TestSeedGraph_RefreshIsSingleFlight(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls atomic.Int32
-	sc := &stubClient{FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+	sc := &stubClient{SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 		if calls.Add(1) == 1 {
 			close(started)
 		}
@@ -439,7 +438,8 @@ func TestSeedGraph_EtagRoundTrip(t *testing.T) {
 	var gotEtags []string
 	sc := &stubClient{
 		FetchFn: unavailableSeedSource,
-		FetchCondFn: func(_, _, _, etag string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			etag := r.IfNoneMatch
 			gotEtags = append(gotEtags, etag)
 			if etag == "hub-etag-1" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotModified}}, nil
@@ -475,16 +475,16 @@ func TestSeedGraph_EtagRoundTrip(t *testing.T) {
 
 func TestSeedGraph_ExploreBacklinksSeeded(t *testing.T) {
 	sc := &stubClient{
-		FetchFn: func(_, path, _ string) (fetch.Result, error) {
-			if path == "/a.md" {
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			if r.Path == "/a.md" {
 				return fetch.Result{}, errors.New("source unavailable")
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# B\n\nBody.\n"}}, nil
 		},
-		FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
 		},
-		ListFn: func(_, _, _ string) (fetch.Result, error) {
+		ListFn: func(_ context.Context, _ fetch.ListRequest) (fetch.Result, error) {
 			return fetchtest.ListPage("/", ""), nil
 		},
 	}
@@ -503,10 +503,10 @@ func TestSeedGraph_ExploreBacklinksSeeded(t *testing.T) {
 func TestSeedGraph_MarkGraphSeeds(t *testing.T) {
 	calls := 0
 	sc := &stubClient{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# Doc\n"}}, nil
 		},
-		FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			calls++
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
 		},
@@ -528,7 +528,7 @@ func TestSeedGraph_MarkGraphSeeds(t *testing.T) {
 func TestSeedGraph_FailureBacksOff(t *testing.T) {
 	var calls atomic.Int32
 	sc := &stubClient{
-		SnapshotFn: func(_, _, _, _ string) (fetch.Result, error) {
+		SnapshotFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			calls.Add(1)
 			return fetch.Result{}, errors.New("world unreachable")
 		},

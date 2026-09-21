@@ -15,7 +15,7 @@ const (
 )
 
 func profileSchemas(profile string) []mcp.Tool {
-	h := &handler{}
+	h := &handler{client: &stubClient{}}
 	entries := h.profileTools("mark://example.com:6309", profile)
 	tools := make([]mcp.Tool, 0, len(entries))
 	for i := range entries {

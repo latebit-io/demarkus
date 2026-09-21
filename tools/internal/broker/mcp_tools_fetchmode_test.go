@@ -29,7 +29,7 @@ func bigFetchModeDoc() string {
 // fetchModeDispatcher scripts one document with the given identity.
 func fetchModeDispatcher(body, version, etag string) *fakeDispatcher {
 	return &fakeDispatcher{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": version, "modified": "2026-07-05T00:00:00Z", "etag": etag},

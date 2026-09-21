@@ -72,17 +72,18 @@ func (g *mcpGateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolRe
 	}
 
 	worlds := readableWorlds(g.srv.cfg)
-	opts := fetch.LookupOptions{
+	lookup := fetch.LookupRequest{
+		Scope: scope, Query: query,
 		Filter: req.GetString("filter", ""),
 		Limit:  limit,
 		Match:  req.GetString("match", ""),
 	}
 	// The client validates per request, which never runs with no readable
 	// worlds and would otherwise surface as an all-worlds failure.
-	if _, err := protocol.ParseMatch(opts.Match); err != nil {
+	if _, err := protocol.ParseMatch(lookup.Match); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	results := g.lookupAllWorlds(ctx, worlds, scope, query, opts)
+	results := g.lookupAllWorlds(ctx, worlds, lookup)
 	matches, failures, catalogWorlds := collectLookupAllResults(results)
 	if len(failures) == len(worlds) && len(worlds) > 0 {
 		return mcp.NewToolResultError("lookup failed in all worlds: " + formatLookupAllFailureList(failures)), nil
@@ -105,7 +106,7 @@ func (g *mcpGateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolRe
 	}
 	report := lookupAllReport{
 		query: query, worlds: len(worlds), matches: matches, failures: failures,
-		body: opts.Match == fetch.MatchBody, catalogWorlds: catalogWorlds,
+		body: lookup.Match == fetch.MatchBody, catalogWorlds: catalogWorlds,
 	}
 	merged := report.result()
 	text := mcpfmt.Format(merged, mcpfmt.LookupAll.Options(&req))
@@ -131,7 +132,8 @@ type lookupAllReport struct {
 	catalogWorlds []string // worlds that answered a body request from the catalog
 }
 
-func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []WorldConfig, scope, query string, opts fetch.LookupOptions) []lookupAllWorldResult {
+// lookupAllWorlds sends lookup to every world; Host is filled in per world.
+func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []WorldConfig, lookup fetch.LookupRequest) []lookupAllWorldResult {
 	jobs := make(chan WorldConfig)
 	results := make(chan lookupAllWorldResult, len(worlds))
 	workers := min(lookupAllWorkers, len(worlds))
@@ -146,7 +148,9 @@ func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []WorldConfig, 
 					continue
 				default:
 				}
-				result, err := g.dispatcher.LookupContext(ctx, world.Name, scope, query, "", opts)
+				perWorld := lookup
+				perWorld.Host = world.Name
+				result, err := g.dispatcher.Lookup(ctx, perWorld)
 				if err == nil && result.Response.Status != protocol.StatusOK {
 					err = fmt.Errorf("status %s%s", result.Response.Status, lookupFailureDetail(result.Response.Body))
 				}
@@ -154,7 +158,7 @@ func (g *mcpGateway) lookupAllWorlds(ctx context.Context, worlds []WorldConfig, 
 				if err == nil {
 					matches, err = parseLookupAllMatches(world.Name, result)
 				}
-				results <- lookupAllWorldResult{world: world.Name, matches: matches, catalog: fetch.AnsweredFromCatalog(opts, result), err: err}
+				results <- lookupAllWorldResult{world: world.Name, matches: matches, catalog: fetch.AnsweredFromCatalog(lookup, result), err: err}
 			}
 		})
 	}

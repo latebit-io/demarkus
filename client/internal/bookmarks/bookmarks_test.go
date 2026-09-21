@@ -31,10 +31,11 @@ func TestLoadExisting(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 bookmarks, got %d", len(got))
 	}
-	if got[0].Title != "Hello" || got[0].URL != "mark://localhost:6309/hello.md" || got[0].Date != "2026-03-04" {
+	// A stored URL loads as its identity: the default port is not part of it (C14).
+	if got[0].Title != "Hello" || got[0].URL != "mark://localhost/hello.md" || got[0].Date != "2026-03-04" {
 		t.Fatalf("unexpected first bookmark: %+v", got[0])
 	}
-	if got[1].Title != "World" || got[1].URL != "mark://other:6309/world.md" || got[1].Date != "" {
+	if got[1].Title != "World" || got[1].URL != "mark://other/world.md" || got[1].Date != "" {
 		t.Fatalf("unexpected second bookmark: %+v", got[1])
 	}
 }
@@ -222,5 +223,48 @@ func TestBackslashBracketInTitle(t *testing.T) {
 	}
 	if got[0].Title != title {
 		t.Fatalf("expected title %q, got %q", title, got[0].Title)
+	}
+}
+
+// A bookmark names a document, so every spelling of its URL is one bookmark:
+// with or without the default port, in any host case (ADR 0005, ADR 0018).
+func TestBookmarksAreKeyedByIdentity(t *testing.T) {
+	s, err := Load(filepath.Join(t.TempDir(), "bookmarks.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://Host.Example:6309/doc.md", "Doc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://host.example/doc.md", "Doc again"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.List(); len(got) != 1 || got[0].URL != "mark://host.example/doc.md" || got[0].Title != "Doc" {
+		t.Fatalf("bookmarks = %+v, want one entry under its identity", got)
+	}
+	for _, spelling := range []string{"mark://host.example/doc.md", "mark://host.example:6309/doc.md", "mark://HOST.example/doc.md"} {
+		if !s.Has(spelling) {
+			t.Errorf("Has(%q) = false", spelling)
+		}
+	}
+	if err := s.Remove("mark://host.example:6309/doc.md"); err != nil || len(s.List()) != 0 {
+		t.Errorf("Remove by another spelling left %+v, %v", s.List(), err)
+	}
+}
+
+// A file written before bookmarks were canonical may hold one document twice.
+func TestLoadMergesSpellingsOfOneDocument(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	old := "# Bookmarks\n\n- [First](mark://host:6309/doc.md) — 2026-01-01\n- [Second](mark://host/doc.md) — 2026-02-01\n- [Other](mark://host:7000/doc.md) — 2026-03-01\n"
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.List()
+	if len(got) != 2 || got[0].URL != "mark://host/doc.md" || got[0].Title != "First" || got[1].URL != "mark://host:7000/doc.md" {
+		t.Errorf("bookmarks = %+v, want the first spelling kept and the other server untouched", got)
 	}
 }

@@ -24,7 +24,7 @@ import (
 // just calling mark_fetch) because the agent's prompt-side
 // discovery convention is "ask the server what you can do" and
 // that's easier to express as a dedicated verb.
-func (g *mcpGateway) handleMarkDiscover(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
+func (g *mcpGateway) handleMarkDiscover(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -33,7 +33,7 @@ func (g *mcpGateway) handleMarkDiscover(_ context.Context, req mcp.CallToolReque
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	result, err := g.dispatcher.Fetch(worldName, protocol.WellKnownManifestPath, "")
+	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: protocol.WellKnownManifestPath})
 	if err != nil {
 		return g.toolErrorFor("discover", worldName, err), nil
 	}
@@ -50,7 +50,7 @@ func (g *mcpGateway) handleMarkDiscover(_ context.Context, req mcp.CallToolReque
 // next candidate. Cross-org resolution is out of scope for
 // Slice 4a; an index that points exclusively at outside servers
 // returns the descriptive "could not resolve" tool error.
-func (g *mcpGateway) handleMarkResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (g *mcpGateway) handleMarkResolve(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	hash, err := req.RequireString("hash")
 	if err != nil {
 		return mcp.NewToolResultError("hash is required"), nil
@@ -70,7 +70,7 @@ func (g *mcpGateway) handleMarkResolve(_ context.Context, req mcp.CallToolReques
 	}
 
 	// 1. Fetch the index document.
-	indexResult, err := g.dispatcher.Fetch(indexWorld, indexPath, "")
+	indexResult, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: indexWorld, Path: indexPath})
 	if err != nil {
 		return g.toolErrorFor("resolve (index fetch)", indexWorld, err), nil
 	}
@@ -80,7 +80,7 @@ func (g *mcpGateway) handleMarkResolve(_ context.Context, req mcp.CallToolReques
 
 	// 2. V2 manifests fetch only matching prefix shards; legacy indexes stay inline.
 	matches, err := index.EntriesForHash(indexPath, indexResult.Response.Body, hash, func(shardPath string) (protocol.Response, error) {
-		result, err := g.dispatcher.Fetch(indexWorld, shardPath, "")
+		result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: indexWorld, Path: shardPath})
 		return result.Response, err
 	})
 	if err != nil {
@@ -98,7 +98,7 @@ func (g *mcpGateway) handleMarkResolve(_ context.Context, req mcp.CallToolReques
 	// candidate's complaint.
 	var lastErr string
 	for _, m := range matches {
-		result, perCandidateErr := g.resolveCandidate(m, hash)
+		result, perCandidateErr := g.resolveCandidate(ctx, m, hash)
 		if perCandidateErr != "" {
 			lastErr = perCandidateErr
 			continue
@@ -108,19 +108,14 @@ func (g *mcpGateway) handleMarkResolve(_ context.Context, req mcp.CallToolReques
 	return mcp.NewToolResultError(fmt.Sprintf("could not resolve hash from any server: %s", lastErr)), nil
 }
 
-// resolveCandidate attempts to fetch the content for a single
-// index entry. Returns the fetch.Result on success and an empty
-// error string; on any failure mode returns the canned error
-// string the outer loop reports back. Split out of
-// handleMarkResolve so the per-candidate decision tree (parse
-// server URL → dispatch → status check → content-hash verify)
-// stays readable.
-func (g *mcpGateway) resolveCandidate(entry index.Entry, hash string) (result fetch.Result, skipReason string) {
+// resolveCandidate fetches hash from one index entry's server. On failure
+// skipReason says why, for the outer loop's final message.
+func (g *mcpGateway) resolveCandidate(ctx context.Context, entry index.Entry, hash string) (result fetch.Result, skipReason string) {
 	candidateWorld, _, perr := parseToolURL(entry.Server)
 	if perr != nil {
 		return fetch.Result{}, fmt.Sprintf("%s: invalid server URL: %v", entry.Server, perr)
 	}
-	result, derr := g.dispatcher.Fetch(candidateWorld, "/"+hash, "")
+	result, derr := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: candidateWorld, Path: "/" + hash})
 	if derr != nil {
 		var notFound *errWorldNotFound
 		// A candidate the broker has no WorldConfig for is a clean skip

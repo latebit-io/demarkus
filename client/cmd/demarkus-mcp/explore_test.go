@@ -2,341 +2,42 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
-	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-const exploreDoc = `# Hub
-
-The hub links everything together.
-
-## Sections
-
-- [Alpha](/alpha.md)
-- [Beta](/docs/beta.md)
-
-## More
-
-See [Alpha](/alpha.md) again (deduped).
-`
-
-var exploreListing = []string{"alpha.md", "docs/", "hub.md", "notes.md"}
+// The explore card (sections, caps, backlinks, relations, degradation) is
+// tested where it lives, in client/marktools. Here: required arguments, this
+// server's URL rule, and that every argument reaches the body.
 
 func exploreStub() *stubClient {
 	return &stubClient{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "2", "modified": "2026-07-04T00:00:00Z", "etag": "xyz"},
-				Body:     exploreDoc,
+				Body:     "# Hub\n\nThe hub links everything together.\n\n- [Alpha](/alpha.md)\n- [Beta](/docs/beta.md)\n",
 			}}, nil
 		},
-		ListFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetchtest.ListPage("/", "", exploreListing...), nil
+		ListFn: func(_ context.Context, _ fetch.ListRequest) (fetch.Result, error) {
+			return fetchtest.ListPage("/", "", "alpha.md", "hub.md"), nil
 		},
 	}
 }
 
-func exploreText(t *testing.T, h *handler, url string) string {
-	t.Helper()
-	result, err := h.markExplore(context.Background(), newCallToolRequest(map[string]any{"url": url}))
+func TestHandlerMarkExplore_MissingURL(t *testing.T) {
+	h := &handler{client: &stubClient{}}
+	result, err := h.markExplore(context.Background(), newCallToolRequest(map[string]any{}))
 	if err != nil {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
-	if result.IsError {
-		t.Fatalf("unexpected tool error: %v", result.Content)
-	}
-	return result.Content[0].(mcp.TextContent).Text
-}
-
-func TestHandlerMarkExplore_Card(t *testing.T) {
-	h := &handler{client: exploreStub()}
-	text := exploreText(t, h, "mark://host:6309/hub.md")
-
-	wants := []string{
-		"status: ok",
-		"version: 2",
-		"size: ",
-		"## Outline",
-		"- Hub (#hub,",
-		"  - Sections (#sections,",
-		"## Opening",
-		"The hub links everything together.",
-		"## Outbound links (2)",
-		"- [Alpha](/alpha.md)",
-		"- [Beta](/docs/beta.md)",
-		"## Backlinks",
-		"(graph store unavailable)",
-		"## Siblings in / (3)",
-		"- alpha.md",
-		"- notes.md",
-		"- docs/",
-		"fetch mark://host:6309/hub.md#<anchor> for a section",
-	}
-	for _, want := range wants {
-		if !strings.Contains(text, want) {
-			t.Errorf("card missing %q in:\n%s", want, text)
-		}
-	}
-	if strings.Contains(text, "- hub.md") {
-		t.Error("siblings must exclude the document itself")
-	}
-	// /alpha.md is linked twice in the doc; outbound dedup lists it once.
-	if strings.Count(text, "(/alpha.md)") != 1 {
-		t.Errorf("outbound links should be deduplicated:\n%s", text)
-	}
-}
-
-func TestHandlerMarkExplore_BacklinksFromStore(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "graph.json")
-	gs, err := graphstore.Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	g := graph.New()
-	observation := graph.Observe("mark://host/a.md", map[string]string{"version": "2"})
-	observation.Complete = true
-	g.AddNode(&graph.Node{URL: "mark://host:6309/a.md", Title: "Page A", Status: "ok", Observation: observation})
-	g.AddNode(&graph.Node{URL: "mark://host:6309/hub.md", Title: "Hub", Status: "ok"})
-	g.AddEdge("mark://host:6309/a.md", "mark://host:6309/hub.md")
-	gs.Merge(g, nil)
-
-	h := &handler{client: exploreStub(), graphStore: gs}
-	text := exploreText(t, h, "mark://host:6309/hub.md")
-
-	// The card shows node identity, which omits the default port (ADR 0005),
-	// even though the caller addressed the document by its dial address.
-	for _, want := range []string{"## Backlinks (1)", "[Page A](mark://host/a.md)", "freshness: fresh"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("expected backlink %q in card:\n%s", want, text)
-		}
-	}
-	if strings.Contains(text, "## Relations") || strings.Contains(text, "[source](") {
-		t.Fatalf("default card expanded the relation neighborhood:\n%s", text)
-	}
-}
-
-func TestHandlerMarkExplore_OrdinaryReadCachesTypedRelations(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "graph.json")
-	gs, err := graphstore.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sc := exploreStub()
-	sc.FetchFn = func(_, _, _ string) (fetch.Result, error) {
-		return fetch.Result{Response: protocol.Response{
-			Status: protocol.StatusOK,
-			Metadata: map[string]string{
-				"version": "3", "etag": "v3", "rel-supersedes": "/old.md", "rel-depends-on": "/base.md",
-			},
-			Body: "# Current\n\n[Body](/body.md)\n",
-		}}, nil
-	}
-	h := &handler{client: sc, graphStore: gs}
-	result, callErr := h.markExplore(context.Background(), newCallToolRequest(map[string]any{
-		"url": "mark://host:6309/current.md", "direction": "outgoing", "relations": []string{"supersedes"},
-	}))
-	if callErr != nil || result.IsError {
-		t.Fatalf("markExplore: err=%v result=%+v", callErr, result)
-	}
-	text := result.Content[0].(mcp.TextContent).Text
-	for _, want := range []string{"## Relations (1 documents)", "mark://host/old.md", "outgoing [supersedes]", "[source](mark://host/current.md)"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("missing %q in:\n%s", want, text)
-		}
-	}
-	if strings.Contains(text, "mark://host/base.md") || strings.Contains(text, "mark://host/body.md") {
-		t.Errorf("relation filter leaked unmatched rows:\n%s", text)
-	}
-
-	reloaded, err := graphstore.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	page, err := reloaded.Neighborhood("mark://host/current.md", graphstore.NeighborhoodOptions{Direction: graphstore.NeighborhoodOutgoing})
-	if err != nil || page.TotalRows != 3 {
-		t.Fatalf("cold persisted neighborhood = %+v, %v", page, err)
-	}
-}
-
-func TestHandlerMarkExplore_RelationPagination(t *testing.T) {
-	var body strings.Builder
-	body.WriteString("# Current\n\n")
-	for i := range 5 {
-		fmt.Fprintf(&body, "[%02d](/%02d.md)\n", i, i)
-	}
-	sc := exploreStub()
-	sc.FetchFn = func(_, _, _ string) (fetch.Result, error) {
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "1"}, Body: body.String()}}, nil
-	}
-	h := &handler{client: sc, graphStore: graphstore.New()}
-	first, err := h.markExplore(context.Background(), newCallToolRequest(map[string]any{
-		"url": "mark://host/current.md", "direction": "outgoing", "page_size": 2,
-	}))
-	if err != nil || first.IsError {
-		t.Fatalf("first page: err=%v result=%+v", err, first)
-	}
-	firstText := first.Content[0].(mcp.TextContent).Text
-	cursor := lineValue(firstText, "next-cursor: ")
-	if cursor == "" || !strings.Contains(firstText, "mark://host/00.md") || strings.Contains(firstText, "mark://host/02.md") {
-		t.Fatalf("first page not bounded:\n%s", firstText)
-	}
-	second, err := h.markExplore(context.Background(), newCallToolRequest(map[string]any{
-		"url": "mark://host/current.md", "direction": "outgoing", "page_size": 2, "cursor": cursor,
-	}))
-	if err != nil || second.IsError {
-		t.Fatalf("second page: err=%v result=%+v", err, second)
-	}
-	secondText := second.Content[0].(mcp.TextContent).Text
-	if !strings.Contains(secondText, "mark://host/02.md") || strings.Contains(secondText, "mark://host/00.md") {
-		t.Fatalf("second page did not continue:\n%s", secondText)
-	}
-}
-
-func lineValue(text, prefix string) string {
-	for line := range strings.SplitSeq(text, "\n") {
-		if value, ok := strings.CutPrefix(line, prefix); ok {
-			return value
-		}
-	}
-	return ""
-}
-
-func TestHandlerMarkExplore_SectionCaps(t *testing.T) {
-	var body strings.Builder
-	body.WriteString("# Big hub\n\n")
-	for i := range 15 {
-		fmt.Fprintf(&body, "## Section %d\n\n", i)
-		fmt.Fprintf(&body, "- [Doc %d](/doc-%d.md)\n\n", i, i)
-	}
-	sc := &stubClient{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"version": "1"},
-				Body:     body.String(),
-			}}, nil
-		},
-		ListFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetchtest.ListPage("/", ""), nil
-		},
-	}
-	h := &handler{client: sc}
-	text := exploreText(t, h, "mark://host:6309/hub.md")
-
-	if !strings.Contains(text, "+6 more headings") {
-		t.Errorf("expected heading overflow marker (16 headings, cap 10):\n%s", text)
-	}
-	if !strings.Contains(text, "+5 more links") {
-		t.Errorf("expected link overflow marker (15 links, cap 10):\n%s", text)
-	}
-	if strings.Contains(text, "Section 12") && strings.Contains(text, "#section-12") {
-		t.Error("headings past the cap should not be listed")
-	}
-}
-
-func TestHandlerMarkExplore_ListFailureDegrades(t *testing.T) {
-	sc := exploreStub()
-	sc.ListFn = func(_, _, _ string) (fetch.Result, error) {
-		return fetch.Result{}, fmt.Errorf("boom")
-	}
-	h := &handler{client: sc}
-	text := exploreText(t, h, "mark://host:6309/hub.md")
-	if !strings.Contains(text, "(listing unavailable)") {
-		t.Errorf("LIST failure should degrade to a note:\n%s", text)
-	}
-	if !strings.Contains(text, "## Outline") {
-		t.Error("card should still render the rest")
-	}
-}
-
-func TestHandlerMarkExplore_NonOKPassthrough(t *testing.T) {
-	gs := graphstore.New()
-	gs.ObserveDocument("mark://host/missing.md", graph.FetchResult{
-		Status: "ok", Body: "# Old\n\n[target](/target.md)", Metadata: map[string]string{"version": "1"},
-	})
-	sc := &stubClient{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusNotFound,
-				Metadata: map[string]string{"version": "2"},
-			}}, nil
-		},
-	}
-	h := &handler{client: sc, graphStore: gs}
-	text := exploreText(t, h, "mark://host:6309/missing.md")
-	if !strings.Contains(text, "status: not-found") {
-		t.Errorf("non-ok fetch should pass through, got:\n%s", text)
-	}
-	if got := gs.Backlinks("mark://host/target.md"); len(got) != 0 {
-		t.Fatalf("confirmed absence retained stale adjacency: %v", got)
-	}
-}
-
-func TestHandlerMarkExplore_BinaryNotice(t *testing.T) {
-	gs := graphstore.New()
-	sc := &stubClient{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"version": "1", "modified": "2026-07-04T00:00:00Z", "etag": "abc"},
-				Body:     "[false relation](/false.md)\xff",
-			}}, nil
-		},
-	}
-	h := &handler{client: sc, graphStore: gs}
-	text := exploreText(t, h, "mark://host:6309/img.png")
-	if !strings.Contains(text, "non-markdown or binary document") {
-		t.Errorf("binary body should return the notice, got:\n%s", text)
-	}
-	if strings.Contains(text, "## Outline") {
-		t.Error("binary body must not be run through the outline builder")
-	}
-	if got := gs.Backlinks("mark://host/false.md"); len(got) != 0 {
-		t.Fatalf("binary body cached false relation: %v", got)
-	}
-}
-
-func TestHandlerMarkExplore_BinarySurfacesGraphSaveFailure(t *testing.T) {
-	root := t.TempDir()
-	parent := filepath.Join(root, "blocked")
-	if err := os.Mkdir(parent, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	gs, err := graphstore.Load(filepath.Join(parent, "graph.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(parent); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(parent, []byte("not a directory"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sc := &stubClient{
-		FetchFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{
-				Status: protocol.StatusOK, Metadata: map[string]string{"version": "1"}, Body: "\x89PNG\xff",
-			}}, nil
-		},
-	}
-	h := &handler{client: sc, graphStore: gs}
-	text := exploreText(t, h, "mark://host/image.png")
-	if !strings.Contains(text, "graph cache save failed") {
-		t.Fatalf("binary response hid cache failure:\n%s", text)
-	}
+	assertIsToolError(t, result, "url is required")
 }
 
 func TestHandlerMarkExplore_InvalidURL(t *testing.T) {
@@ -348,49 +49,32 @@ func TestHandlerMarkExplore_InvalidURL(t *testing.T) {
 	assertIsToolError(t, result, "requires -host flag")
 }
 
-// staleBacklinkStore returns a store where a.md links to hub.md and a.md's
-// observation is old enough to be due for revalidation.
-func staleBacklinkStore(t *testing.T) *graphstore.Store {
-	t.Helper()
-	gs, err := graphstore.Load(filepath.Join(t.TempDir(), "graph.json"))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	g := graph.New()
-	observation := graph.Observe("mark://host/a.md", map[string]string{"version": "2"})
-	observation.Complete = true
-	observation.ObservedAt = time.Now().Add(-time.Hour)
-	observation.AttemptedAt = observation.ObservedAt
-	g.AddNode(&graph.Node{URL: "mark://host/a.md", Title: "Page A", Status: "ok", Observation: observation})
-	g.AddNode(&graph.Node{URL: "mark://host/hub.md", Title: "Hub", Status: "ok"})
-	g.AddEdge("mark://host/a.md", "mark://host/hub.md")
-	gs.Merge(g, nil)
-	return gs
-}
-
-func TestHandlerMarkExplore_DefaultSkipsRevalidation(t *testing.T) {
-	sc := exploreStub()
-	var fetched []string
-	base := sc.FetchFn
-	sc.FetchFn = func(host, path, token string) (fetch.Result, error) {
-		fetched = append(fetched, path)
-		return base(host, path, token)
-	}
-	h := &handler{client: sc, graphStore: staleBacklinkStore(t)}
-
-	text := exploreText(t, h, "mark://host/hub.md")
-	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "freshness: stale") {
-		t.Fatalf("default card must render cached backlinks with their freshness:\n%s", text)
-	}
-	if strings.Contains(text, "revalidation:") || slices.Contains(fetched, "/a.md") {
-		t.Fatalf("default explore must not revalidate sources; fetched=%v\n%s", fetched, text)
+// A url alone gets the default card; a relation argument switches the graph
+// section, and direction, relations, page_size and verbose all arrive.
+func TestHandlerMarkExplore_ArgumentsReachTheBody(t *testing.T) {
+	h := &handler{client: exploreStub(), graphStore: graphstore.New()}
+	explore := func(args map[string]any) string {
+		t.Helper()
+		result, err := h.markExplore(context.Background(), newCallToolRequest(args))
+		if err != nil || result.IsError {
+			t.Fatalf("markExplore: err=%v result=%+v", err, result)
+		}
+		return result.Content[0].(mcp.TextContent).Text
 	}
 
-	res, err := h.markExplore(context.Background(), newCallToolRequest(map[string]any{"url": "mark://host/hub.md", "direction": "incoming"}))
-	if err != nil || res.IsError {
-		t.Fatalf("relation explore: err=%v result=%+v", err, res)
+	card := explore(map[string]any{"url": "mark://host:6309/hub.md"})
+	if !strings.Contains(card, "## Backlinks (0)") || strings.Contains(card, "## Relations") || strings.Contains(card, "etag: xyz\n") {
+		t.Fatalf("default card:\n%s", card)
 	}
-	if !slices.Contains(fetched, "/a.md") {
-		t.Fatalf("relation explore must revalidate sources; fetched=%v", fetched)
+	relations := explore(map[string]any{
+		"url": "mark://host:6309/hub.md", "direction": "outgoing", "page_size": 1, "verbose": true,
+	})
+	for _, want := range []string{"## Relations (2 documents)", "mark://host/alpha.md", "next-cursor: ", "etag: xyz\n"} {
+		if !strings.Contains(relations, want) {
+			t.Errorf("relation card missing %q:\n%s", want, relations)
+		}
+	}
+	if strings.Contains(relations, "mark://host/docs/beta.md") {
+		t.Errorf("page_size did not reach the body:\n%s", relations)
 	}
 }

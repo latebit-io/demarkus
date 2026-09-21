@@ -15,10 +15,10 @@ func TestLookupSendsMatchOnlyWhenSet(t *testing.T) {
 	})
 	c := NewClient(Options{Insecure: true})
 	defer c.Close()
-	if _, err := c.Lookup(host, "/", "auth", "", LookupOptions{}); err != nil {
+	if _, err := c.Lookup(t.Context(), LookupRequest{Host: host, Scope: "/", Query: "auth"}); err != nil {
 		t.Fatalf("lookup: %v", err)
 	}
-	if _, err := c.Lookup(host, "/", "auth", "", LookupOptions{Match: MatchBody}); err != nil {
+	if _, err := c.Lookup(t.Context(), LookupRequest{Host: host, Scope: "/", Query: "auth", Match: MatchBody}); err != nil {
 		t.Fatalf("lookup body: %v", err)
 	}
 	first, second := <-seen, <-seen
@@ -33,7 +33,7 @@ func TestLookupRejectsUnknownMatchBeforeDialing(t *testing.T) {
 	for _, bad := range []string{"BODY", "bogus", "body,catalog"} {
 		// An unroutable host proves the request never left: a dial would fail
 		// with a different error.
-		_, err := c.Lookup("mark://127.0.0.1:1", "/", "auth", "", LookupOptions{Match: bad})
+		_, err := c.Lookup(t.Context(), LookupRequest{Host: "mark://127.0.0.1:1", Scope: "/", Query: "auth", Match: bad})
 		if err == nil || !strings.Contains(err.Error(), "match must be") {
 			t.Errorf("Lookup(match=%q) err = %v, want validation error", bad, err)
 		}
@@ -41,11 +41,11 @@ func TestLookupRejectsUnknownMatchBeforeDialing(t *testing.T) {
 }
 
 func TestAnsweredFromCatalog(t *testing.T) {
-	body := LookupOptions{Match: MatchBody}
+	body := LookupRequest{Match: MatchBody}
 	ok := Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"match": "body"}}}
 	silent := Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{}}}
 	failed := Result{Response: protocol.Response{Status: protocol.StatusBadRequest}}
-	if AnsweredFromCatalog(body, ok) || !AnsweredFromCatalog(body, silent) || AnsweredFromCatalog(body, failed) || AnsweredFromCatalog(LookupOptions{}, silent) {
+	if AnsweredFromCatalog(body, ok) || !AnsweredFromCatalog(body, silent) || AnsweredFromCatalog(body, failed) || AnsweredFromCatalog(LookupRequest{}, silent) {
 		t.Error("AnsweredFromCatalog: want true only for an ok body request lacking the echo")
 	}
 }

@@ -39,10 +39,9 @@ func ConceptID(relPath string) string {
 	return strings.TrimSuffix(filepath.ToSlash(relPath), ".md")
 }
 
-// SplitFrontmatter separates a leading YAML frontmatter block ("---" ... "---")
-// from the markdown body. ok is false when the data has no frontmatter block, in
-// which case fm is empty and body is the whole input. CRLF and a closing
-// delimiter at end-of-file are tolerated.
+// SplitFrontmatter splits a bundle file written by someone else's tools, so it
+// tolerates CRLF and reads an unclosed fence as "no frontmatter". That is why
+// it is not protocol.SplitFrontmatter, which is the strict wire grammar.
 func SplitFrontmatter(data []byte) (fm string, body []byte, ok bool) {
 	lines := strings.SplitAfter(string(data), "\n")
 	if len(lines) == 0 || strings.TrimRight(lines[0], "\r\n") != "---" {

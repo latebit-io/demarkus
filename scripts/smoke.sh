@@ -24,7 +24,7 @@ esac
 WORLD_ID=52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
 POLICY=/.well-known/demarkus/policy.md
 
-for bin in server/bin/demarkus-server server/bin/demarkus-knowledge-server client/bin/demarkus tools/bin/demarkus-token; do
+for bin in server/bin/demarkus-server server/bin/demarkus-knowledge-server client/bin/demarkus client/bin/demarkus-mcp tools/bin/demarkus-token; do
   if [ ! -x "$bin" ]; then
     echo "missing $bin: run make server knowledge-server client tools" >&2
     exit 2
@@ -135,16 +135,20 @@ stop_server() {
 verbs() {
   local U=$1 n page1 page2 cursor hash
   expect "health" '^\[ok\]' -- "${C[@]}" "$U/health"
-  expect "publish without token is unauthorized" 'unauthorized' -- "${C[@]}" -X PUBLISH -body "# A" "$U/docs/a.md"
-  expect "publish with a read-only token is not permitted" 'not-permitted' -- "${C[@]}" -X PUBLISH -auth "$R" -body "# A" "$U/docs/a.md"
+  expect "publish without token is unauthorized" 'unauthorized' -- "${C[@]}" -X PUBLISH -force -body "# A" "$U/docs/a.md"
+  expect "publish with a read-only token is not permitted" 'not-permitted' -- "${C[@]}" -X PUBLISH -force -auth "$R" -body "# A" "$U/docs/a.md"
   expect "publish creates v1" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=smoke,alpha -body $'# A\none' "$U/docs/a.md"
   for n in b c d e; do
     expect "publish creates $n.md" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=smoke -body "# $n" "$U/docs/$n.md"
   done
   expect "stale expected-version conflicts" 'conflict' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 7 -body "# A2" "$U/docs/a.md"
   expect "create-only on an existing doc conflicts" 'conflict' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -body "# A2" "$U/docs/a.md"
-  expect "non .md path is bad-request" 'bad-request' -- "${C[@]}" -X PUBLISH -auth "$W" -body "x" "$U/docs/a.txt"
+  expect "non .md path is bad-request" 'bad-request' -- "${C[@]}" -X PUBLISH -force -auth "$W" -body "x" "$U/docs/a.txt"
   expect "append makes v2" 'created' -- "${C[@]}" -X APPEND -auth "$W" -expected-version 1 -body "two" "$U/docs/a.md"
+  expect "publish without a version is refused before it is sent" 'requires -expected-version' -- "${C[@]}" -X PUBLISH -auth "$W" -body "x" "$U/docs/a.md"
+  expect "a stale publish offers a merge candidate" 'merge-candidate.*publish-at-version=2' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 1 -body $'# A\none\nmine' "$U/docs/a.md"
+  expect "on-conflict fail reports the bare conflict" '^\[conflict\]' -- "${C[@]}" -X PUBLISH -on-conflict fail -auth "$W" -expected-version 1 -body "x" "$U/docs/a.md"
+  expect "append resolves its own version" 'created' -- "${C[@]}" -X APPEND -auth "$W" -body "more" "$U/docs/b.md"
   expect "fetch returns the joined body" '^two$' -- "${C[@]}" "$U/docs/a.md"
   expect "fetch carries version 2" 'version=2' -- "${C[@]}" "$U/docs/a.md"
   expect "fetch of v1 omits the append" '^one$' -- "${C[@]}" "$U/docs/a.md/v1"
@@ -166,8 +170,8 @@ verbs() {
   expect "archive" '^\[ok\]' -- "${C[@]}" -X ARCHIVE -auth "$W" "$U/docs/e.md"
   expect "archived doc leaves the listing" 'entries=4' -- "${C[@]}" -X LIST "$U/docs/"
   expect "archived doc shows with include-archived" 'entries=5' -- "${C[@]}" -X LIST -include-archived "$U/docs/"
-  expect "publish to an archived doc is refused" 'archived' -- "${C[@]}" -X PUBLISH -auth "$W" -body "# E2" "$U/docs/e.md"
-  expect "unarchive with an empty body" '^\[ok\]' -- "${C[@]}" -X PUBLISH -auth "$W" -body "" "$U/docs/e.md"
+  expect "publish to an archived doc is refused" 'archived' -- "${C[@]}" -X PUBLISH -force -auth "$W" -body "# E2" "$U/docs/e.md"
+  expect "unarchive with an empty body" '^\[ok\]' -- "${C[@]}" -X PUBLISH -force -auth "$W" -body "" "$U/docs/e.md"
   expect "unarchived doc is listed again" 'entries=5' -- "${C[@]}" -X LIST "$U/docs/"
   expect "publish creates the private doc" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -body "# Secret" "$U/private/s.md"
   expect "private read without token is unauthorized" 'unauthorized' -- "${C[@]}" "$U/private/s.md"
@@ -195,8 +199,42 @@ policy() {
   expect "the policy is still live" 'version=2' -- "${C[@]}" "$U$POLICY"
 }
 
+# mcp_call <url> <tool> <json arguments>: one tools/call through the built
+# demarkus-mcp over stdio. HOME is private so the run never touches the user's
+# graph store, cache or tokens.
+mcp_call() {
+  local url=$1 tool=$2 arguments=$3
+  mkdir -p "$WORK/mcphome"
+  printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$tool\",\"arguments\":$arguments}}" |
+    HOME="$WORK/mcphome" client/bin/demarkus-mcp -host "$url" -token "$W" -insecure -no-cache -profile full 2>>"$WORK/mcp.log" | tail -1
+}
+
+# mcp_tools <url>: the MCP surface over real QUIC, after verbs has filled /docs.
+mcp_tools() {
+  local U=$1
+  expect "mcp list shows a.md" 'a\.md' -- mcp_call "$U" mark_list '{"url":"/docs/"}'
+  expect "mcp versions reports the current version" 'current: 2' -- mcp_call "$U" mark_versions '{"url":"/docs/a.md"}'
+  expect "mcp fetch returns the body" 'two' -- mcp_call "$U" mark_fetch '{"url":"/docs/a.md"}'
+  expect "mcp lookup body match finds a.md" '/docs/a\.md' -- mcp_call "$U" mark_lookup '{"url":"/","query":"two","match":"body"}'
+  expect "mcp explore orients on a.md" 'a\.md' -- mcp_call "$U" mark_explore '{"url":"/docs/a.md"}'
+  expect "mcp publish creates a document" 'created' -- mcp_call "$U" mark_publish '{"url":"/mcp/new.md","body":"# New\\n\\nfirst\\n","expected_version":0,"metadata":{"tags":"smoke,mcp","importance":"0.1"}}'
+  expect "mcp publish at a stale version offers a merge" 'merge' -- mcp_call "$U" mark_publish '{"url":"/docs/a.md","body":"# A\\nmine\\n","expected_version":1}'
+  expect "mcp append resolves the version itself" 'version' -- mcp_call "$U" mark_append '{"url":"/mcp/new.md","body":"second"}'
+  expect "mcp fetch sees the append" 'second' -- mcp_call "$U" mark_fetch '{"url":"/mcp/new.md"}'
+  expect "mcp index dry run names the source by identity" "from mark://localhost:$FILE_PORT" -- mcp_call "$U" mark_index "{\"source\":\"$U\",\"target\":\"/index/smoke.md\",\"dry_run\":true,\"force\":true}"
+  expect "mcp archive archives the document" 'archived' -- mcp_call "$U" mark_archive '{"url":"/mcp/new.md"}'
+  refute "mcp stderr has no panic" 'panic|fatal error' -- cat "$WORK/mcp.log"
+}
+
 no_errors() {
-  refute "$1 log has no ERROR lines" 'level=ERROR' -- cat "$2"
+  # awk prints only the offending lines and exits 0. A peer closing with code 0
+  # mid response is a client leaving, as the short lived MCP process does; the
+  # server still logs that at ERROR (finding S37).
+  refute "$1 log has no ERROR lines" 'level=ERROR' -- \
+    awk '/level=ERROR/ && !/write response failed.*Application error 0x0 \(remote\)/' "$2"
 }
 
 smoke_file() {
@@ -209,6 +247,7 @@ smoke_file() {
   }
   start_file || return 1
   verbs "$U"
+  mcp_tools "$U"
   stop_server
   start_file || return 1
   expect "restart rebuilds the lookup catalog" 'lookup catalog built.*entries=[1-9]' -- tail -n 8 "$WORK/file.log"

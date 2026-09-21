@@ -45,19 +45,19 @@ func ValidationSummary(result Revalidation, err error) string {
 
 // RevalidateBacklinks refreshes the sources linking to url and reports the
 // pass; an empty string means nothing links there. Shared by every surface.
-func (s *Store) RevalidateBacklinks(ctx context.Context, url string, fetchFn FetchFunc, parseURL func(string) (string, string, error)) string {
+func (s *Store) RevalidateBacklinks(ctx context.Context, url string, fetchFn FetchFunc) string {
 	urls := s.Backlinks(url)
 	if len(urls) == 0 {
 		return ""
 	}
-	result, err := s.Revalidate(ctx, urls, fetchFn, parseURL)
+	result, err := s.Revalidate(ctx, urls, fetchFn)
 	return ValidationSummary(result, err) + s.FreshnessSummaryFor(urls) + "\n"
 }
 
 // Revalidate reads due sources without following edges. Nil URLs means all sources;
 // an empty non-nil list means no sources. Attempts are single-flight and cooled down.
 // The pass merges and saves once, so the store rebuilds once per call.
-func (s *Store) Revalidate(ctx context.Context, urls []string, fetchFn FetchFunc, parseURL func(string) (string, string, error)) (Revalidation, error) {
+func (s *Store) Revalidate(ctx context.Context, urls []string, fetchFn FetchFunc) (Revalidation, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	nodes := s.nodesFor(urls)
@@ -84,7 +84,7 @@ func (s *Store) Revalidate(ctx context.Context, urls []string, fetchFn FetchFunc
 			continue
 		}
 		result.Attempts++
-		crawled, crawledEtags, err := crawlGraph(ctx, node.URL, fetchFn, parseURL, CrawlOptions{
+		crawled, crawledEtags, err := crawlGraph(ctx, node.URL, fetchFn, CrawlOptions{
 			MaxDepth: 0, MaxNodes: 1, Workers: 1,
 			MaxFetchBytes: revalidationBytes - max(result.Bytes, result.ReadBytes), MaxOutputBytes: 128 << 10,
 		})

@@ -24,7 +24,8 @@ fi
 publish() {
   local path="$1"
   local body="$2"
-  local args=(-X PUBLISH -insecure -body "$body")
+  # -force: seeding overwrites whatever a previous run left.
+  local args=(-X PUBLISH -force -insecure -body "$body")
   if [[ -n "$TOKEN" ]]; then
     args+=(-auth "$TOKEN")
   fi

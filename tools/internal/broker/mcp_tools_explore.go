@@ -35,7 +35,7 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	result, err := g.dispatcher.Fetch(worldName, path, "")
+	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: path})
 	if err != nil {
 		return g.toolErrorFor("explore", worldName, err), nil
 	}
@@ -102,7 +102,7 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 	} else {
 		b.WriteString(mcpfmt.FormatExploreBacklinks(state.graphStore.BacklinksEnriched(docURL)))
 	}
-	g.writeSiblingsSection(&b, worldName, path)
+	g.writeSiblingsSection(ctx, &b, worldName, path)
 
 	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; mark_fetch force=true for the full body\n", docURL)
 
@@ -114,12 +114,12 @@ func (g *mcpGateway) handleMarkExplore(ctx context.Context, req mcp.CallToolRequ
 
 // writeSiblingsSection appends the sibling listing of the document's
 // parent directory. A failed LIST degrades to a note, never an error.
-func (g *mcpGateway) writeSiblingsSection(b *strings.Builder, worldName, path string) {
+func (g *mcpGateway) writeSiblingsSection(ctx context.Context, b *strings.Builder, worldName, path string) {
 	dir := path[:strings.LastIndex(path, "/")+1]
 	self := path[strings.LastIndex(path, "/")+1:]
 
 	fmt.Fprintf(b, "\n## Siblings in %s", dir)
-	result, err := g.dispatcher.List(worldName, dir, "", fetch.ListOptions{PageSize: exploreSectionCap + 2})
+	result, err := g.dispatcher.List(ctx, fetch.ListRequest{Host: worldName, Path: dir, PageSize: exploreSectionCap + 2})
 	if err != nil || result.Response.Status != protocol.StatusOK {
 		b.WriteString("\n(listing unavailable)\n")
 		return

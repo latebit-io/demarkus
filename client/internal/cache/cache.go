@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -22,15 +23,14 @@ type Cache struct {
 	Dir string
 }
 
-// Entry is a cached response with metadata about when it was stored.
-type Entry struct {
-	Response protocol.Response
-	CachedAt time.Time
-}
+// Entry is the client's cached response type; Cache implements fetch.ResponseCache.
+type Entry = fetch.CachedResponse
+
+var _ fetch.ResponseCache = (*Cache)(nil)
 
 // meta is the TOML-serializable cache metadata.
 type meta struct {
-	URL      string            `toml:"url"`
+	URL      string            `toml:"url"` // dial address the entry was read from; a label, never a node identity
 	Verb     string            `toml:"verb"`
 	Status   string            `toml:"status"`
 	CachedAt time.Time         `toml:"cached_at"`

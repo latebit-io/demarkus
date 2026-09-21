@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -23,14 +24,15 @@ func TestCheckIndexManifestsTransportFailure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := &fakeDispatcher{FetchFn: func(world, _, _ string) (fetch.Result, error) {
+			d := &fakeDispatcher{FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+				world := r.Host
 				if world == tt.failWorld {
 					return fetch.Result{}, errors.New("dial timeout")
 				}
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
 			}}
 			g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
-			warnings, block := g.checkIndexManifests("team-a", "hub", false, true)
+			warnings, block := g.checkIndexManifests(t.Context(), manifestCheck{sourceWorld: "team-a", targetWorld: "hub", force: true})
 			if (block != nil) != tt.wantBlock {
 				t.Fatalf("block = %v, want blocked=%v", block, tt.wantBlock)
 			}
@@ -60,14 +62,15 @@ func TestCheckIndexManifestsForceOnlyOverridesNotFound(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.status, func(t *testing.T) {
-			d := &fakeDispatcher{FetchFn: func(world, _, _ string) (fetch.Result, error) {
+			d := &fakeDispatcher{FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+				world := r.Host
 				if world == "hub" {
 					return fetch.Result{Response: protocol.Response{Status: tt.status}}, nil
 				}
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
 			}}
 			g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
-			_, block := g.checkIndexManifests("team-a", "hub", false, true)
+			_, block := g.checkIndexManifests(t.Context(), manifestCheck{sourceWorld: "team-a", targetWorld: "hub", force: true})
 			if (block != nil) != tt.wantBlock {
 				t.Fatalf("block = %v, want blocked=%v", block, tt.wantBlock)
 			}

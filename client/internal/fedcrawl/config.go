@@ -12,6 +12,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/links"
 )
 
 // Config holds the crawler configuration loaded from a TOML file.
@@ -168,18 +169,11 @@ func (c *Config) Validate() error {
 func normalizeServerURLs(kind string, values []string) ([]string, error) {
 	normalized := make([]string, len(values))
 	for i, raw := range values {
-		u, err := url.Parse(raw)
-		if err != nil || u.Scheme != "mark" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return nil, fmt.Errorf("%s %d %q must be a mark:// server URL", kind, i, raw)
-		}
-		host, path, err := fetch.ParseMarkURL(raw)
+		target, err := links.ParseServer(raw)
 		if err != nil {
 			return nil, fmt.Errorf("%s %d %q: %w", kind, i, raw, err)
 		}
-		if path != "/" {
-			return nil, fmt.Errorf("%s %d %q must not contain a document path", kind, i, raw)
-		}
-		normalized[i] = "mark://" + host
+		normalized[i] = target.AuthorityURL()
 	}
 	return normalized, nil
 }
@@ -242,11 +236,7 @@ func normalizeAuthority(raw string) (string, error) {
 	if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return "", fmt.Errorf("must contain only host and optional port")
 	}
-	host, _, err := fetch.ParseMarkURL(u.String())
-	if err != nil {
-		return "", err
-	}
-	return strings.ToLower(host), nil
+	return links.DialHost(u.String()) // already lowercase
 }
 
 func authorityHostname(authority string) string {

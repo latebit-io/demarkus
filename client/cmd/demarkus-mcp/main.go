@@ -5,11 +5,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
-	"math"
 	"net"
 	"os"
 	"strconv"
@@ -19,18 +17,13 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchdedup"
-	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
-	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/internal/cache"
-	"github.com/latebit-io/demarkus/client/internal/listwalk"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/lookupexpand"
+	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
-	"github.com/latebit-io/demarkus/client/mdoutline"
-	"github.com/latebit-io/demarkus/client/merge"
-	"github.com/latebit-io/demarkus/client/metaguard"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -90,7 +83,8 @@ func main() {
 	registerPrompts(s, *defaultHost)
 	if *defaultHost != "" {
 		// Best-effort picker population; never blocks or fails startup.
-		go registerListedResources(s, h, *defaultHost)
+		// Best effort for the life of the process; each LIST has the client's own timeout.
+		go registerListedResources(context.Background(), s, h, *defaultHost)
 	}
 
 	if err := mcpserver.ServeStdio(s); err != nil {
@@ -102,7 +96,7 @@ func routeDefaultHost(opts *fetch.Options, defaultHost, dialAddress string) erro
 	if dialAddress == "" {
 		return nil
 	}
-	host, _, err := fetch.ParseMarkURL(defaultHost)
+	host, err := links.DialHost(defaultHost)
 	if err != nil {
 		return fmt.Errorf("dial-address requires a valid default host: %w", err)
 	}
@@ -122,24 +116,8 @@ func routeDefaultHost(opts *fetch.Options, defaultHost, dialAddress string) erro
 	return nil
 }
 
-// markClient defines the fetch operations used by MCP tool handlers.
-type markClient interface {
-	Fetch(host, path, token string) (fetch.Result, error)
-	FetchContext(ctx context.Context, host, path, token string) (fetch.Result, error)
-	FetchConditional(host, path, token, etag string) (fetch.Result, error)
-	FetchConditionalContext(ctx context.Context, host, path, token, etag string) (fetch.Result, error)
-	List(host, path, token string) (fetch.Result, error)
-	ListWithOptions(host, path, token string, opts fetch.ListOptions) (fetch.Result, error)
-	Versions(host, path, token string) (fetch.Result, error)
-	Lookup(host, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
-	Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	PublishContext(ctx context.Context, host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	Append(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	Archive(host, path, token string) (fetch.Result, error)
-}
-
 type handler struct {
-	client      markClient
+	client      marktools.Backend
 	defaultHost string
 	token       string
 	graphStore  *graphstore.Store
@@ -245,7 +223,7 @@ func (h *handler) seedGraph(ctx context.Context, host string) {
 func (h *handler) seedPass(ctx context.Context, host string) bool { //nolint:gocyclo // snapshot-first fallback has explicit terminal states
 	token := h.resolveToken(host)
 	etag := h.graphStore.SeedEtag(host)
-	result, err := h.client.FetchConditionalContext(ctx, host, graphstore.SnapshotManifestPath, token, etag)
+	result, err := h.client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: graphstore.SnapshotManifestPath, Token: token, IfNoneMatch: etag})
 	if err != nil {
 		log.Printf("warning: graph snapshot fetch mark://%s%s: %v", host, graphstore.SnapshotManifestPath, err)
 		return false
@@ -255,7 +233,7 @@ func (h *handler) seedPass(ctx context.Context, host string) bool { //nolint:goc
 	}
 	if result.Response.Status == protocol.StatusOK {
 		nodes, edges, loadErr := graphstore.LoadSnapshot(graphstore.SnapshotManifestPath, result.Response, func(shardPath string) (protocol.Response, error) {
-			shard, fetchErr := h.client.FetchContext(ctx, host, shardPath, token)
+			shard, fetchErr := h.client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: shardPath, Token: token})
 			return shard.Response, fetchErr
 		})
 		if loadErr != nil {
@@ -276,10 +254,9 @@ func (h *handler) seedPass(ctx context.Context, host string) bool { //nolint:goc
 		return false
 	}
 
-	const legacyPath = "/graph.md"
-	result, err = h.client.FetchConditionalContext(ctx, host, legacyPath, token, etag)
+	result, err = h.client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: graphstore.LegacyExportPath, Token: token, IfNoneMatch: etag})
 	if err != nil {
-		log.Printf("warning: graph seed fetch mark://%s%s: %v", host, legacyPath, err)
+		log.Printf("warning: graph seed fetch mark://%s%s: %v", host, graphstore.LegacyExportPath, err)
 		return false
 	}
 	if result.Response.Status == protocol.StatusNotFound {
@@ -289,12 +266,12 @@ func (h *handler) seedPass(ctx context.Context, host string) bool { //nolint:goc
 		return true
 	}
 	if result.Response.Status != protocol.StatusOK {
-		log.Printf("warning: legacy graph seed mark://%s%s returned %s", host, legacyPath, result.Response.Status)
+		log.Printf("warning: legacy graph seed mark://%s%s returned %s", host, graphstore.LegacyExportPath, result.Response.Status)
 		return false
 	}
 	nodes, edges, parseErr := graphstore.ParseExportStrict(result.Response.Body)
 	if parseErr != nil {
-		log.Printf("warning: legacy graph seed parse mark://%s%s: %v", host, legacyPath, parseErr)
+		log.Printf("warning: legacy graph seed parse mark://%s%s: %v", host, graphstore.LegacyExportPath, parseErr)
 		return false
 	}
 	h.graphStore.ReplaceSeed(host, nodes, edges)
@@ -312,21 +289,21 @@ func (h *handler) seedPass(ctx context.Context, host string) bool { //nolint:goc
 // changes on disk apply without a restart.
 func (h *handler) resolveToken(host string) string {
 	cred := tokens.Credential{Explicit: h.token}
-	if origin, _, err := fetch.ParseMarkURL(h.defaultHost); err == nil {
-		cred.Origin = origin
+	if origin, err := links.ParseMark(h.defaultHost); err == nil {
+		cred.Origin = origin.DialHost()
 	}
 	return tokens.Resolve(cred, host, tokens.LoadDefault())
 }
 
 // resolveURL parses a mark:// URL or bare path (when -host is set) into host and path.
-func (h *handler) resolveURL(rawURL string) (host, path string, err error) {
+func (h *handler) resolveURL(rawURL string) (links.Target, error) {
 	if strings.HasPrefix(rawURL, "/") {
 		if h.defaultHost == "" {
-			return "", "", fmt.Errorf("bare path %q requires -host flag", rawURL)
+			return links.Target{}, fmt.Errorf("bare path %q requires -host flag", rawURL)
 		}
-		return fetch.ParseMarkURL(h.defaultHost + rawURL)
+		rawURL = h.defaultHost + rawURL
 	}
-	return fetch.ParseMarkURL(rawURL)
+	return links.ParseMark(rawURL)
 }
 
 // Tool definitions.
@@ -346,11 +323,6 @@ func urlDesc(host string) string {
 	}
 	return "mark:// URL, e.g. mark://host/index.md"
 }
-
-// outlineThreshold is the body size (bytes) above which mark_fetch returns
-// an outline instead of the full body, unless force=true or a #section is
-// requested.
-const outlineThreshold = mdoutline.OutlineThreshold
 
 func markLookupTool(host string) mcp.Tool {
 	options := append([]mcp.ToolOption{
@@ -386,193 +358,51 @@ func markIndexTool(host string) mcp.Tool {
 	)
 }
 
-// publisherMeta merges the optional "metadata" argument (values coerced to
-// strings) over the agent identity; a caller-supplied "agent" key is skipped
-// so identity cannot be spoofed. The server validates keys and values.
-func publisherMeta(ctx context.Context, args map[string]any) map[string]string {
-	meta := agentMeta(ctx)
-	raw, ok := args["metadata"].(map[string]any)
-	if !ok {
-		return meta
-	}
-	for k, v := range raw {
-		if k == "agent" {
-			continue // identity is server-set; callers cannot override it
-		}
-		meta[k] = fmt.Sprintf("%v", v)
-	}
-	return meta
-}
-
-// agentMeta is the "agent" publisher key: the MCP client name from the
+// agentName is the "agent" publisher value: the MCP client name from the
 // session context, "unknown" when unavailable.
-func agentMeta(ctx context.Context) map[string]string {
-	name := "unknown"
+func agentName(ctx context.Context) string {
 	if session := mcpserver.ClientSessionFromContext(ctx); session != nil {
 		if s, ok := session.(mcpserver.SessionWithClientInfo); ok {
 			if n := s.GetClientInfo().Name; n != "" {
-				name = n
+				return n
 			}
 		}
 	}
-	return map[string]string{"agent": name}
+	return "unknown"
 }
 
 // Tool handlers.
 // Handler signatures are dictated by mcp-go's ToolHandlerFunc type.
 
-func (h *handler) markFetch(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (h *handler) markFetch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-	docURL, anchor, _ := strings.Cut(rawURL, "#")
-	force := req.GetBool("force", false)
-	opts := mcpfmt.Fetch.Options(&req)
-
-	host, path, err := h.resolveURL(docURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-
-	result, err := h.client.Fetch(host, path, h.resolveToken(host))
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("fetch failed: %v", err)), nil
-	}
-	if result.Response.Status != protocol.StatusOK {
-		return mcp.NewToolResultText(mcpfmt.Format(result, opts)), nil
-	}
-
-	body := result.Response.Body
-	version := result.Response.Metadata["version"]
-	etag := result.Response.Metadata["etag"]
-	key := host + path
-
-	// Binary/non-UTF-8 body: always a notice, never bytes. MCP text can't carry
-	// binary faithfully (JSON mangles it); byte-exact retrieval is the CLI's job.
-	if mdoutline.BinaryBody(body) {
-		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.NonMarkdownNotice(len(body)),
-			map[string]string{"mode": "binary"}, opts)), nil
-	}
-
-	// #section slice: works at any size and bypasses dedup — the agent is
-	// asking for content it has not necessarily seen.
-	if anchor != "" {
-		section, ok := mdoutline.Section(body, anchor)
-		if !ok {
-			available := strings.Join(mdoutline.Anchors(body), ", ")
-			if available == "" {
-				available = "(document has no headings)"
-			}
-			return mcp.NewToolResultError(fmt.Sprintf("section #%s not found in %s; available anchors: %s", anchor, docURL, available)), nil
-		}
-		return mcp.NewToolResultText(mcpfmt.FormatWith(result, section,
-			map[string]string{"section": "#" + anchor}, opts)), nil
-	}
-
-	// Dedup needs at least one identity field: with version and etag both
-	// absent, two different bodies would compare equal and a changed
-	// document would be silently reported as unchanged.
-	cur := fetchdedup.Doc{Version: version, Etag: etag}
-	prev, seenBefore := h.seenLookup(key)
-	if seenBefore && !force && cur.Identified() && prev == cur {
-		return mcp.NewToolResultText(fetchdedup.UnchangedNotice(cur, opts.Verbose)), nil
-	}
-
-	extra := map[string]string{}
-	// cur.Identified() also gates the note: a response that lost both
-	// identity fields has nothing truthful to say about what changed.
-	if seenBefore && cur.Identified() && prev != cur {
-		extra["note"] = fetchdedup.ChangedNote(prev, cur)
-	}
-
-	// Size gate: large documents return an outline unless forced.
-	if !force && len(body) >= outlineThreshold {
-		extra["mode"] = "outline"
-		extra["size"] = fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1)
-		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.OutlineBody(docURL, body), extra, opts)), nil
-	}
-
-	if cur.Identified() {
-		h.seenRecord(key, cur)
-	}
-	return mcp.NewToolResultText(mcpfmt.FormatWith(result, body, extra, opts)), nil
+	args := marktools.FetchArgs{URL: rawURL, Force: req.GetBool("force", false), Render: mcpfmt.Fetch.Options(&req)}
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Fetch(ctx, args) })
 }
 
-func (h *handler) markList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (h *handler) markList(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-
-	host, path, err := h.resolveURL(rawURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-
-	pageSize, err := mcpListPageSize(&req)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	opts := fetch.ListOptions{
+	args := marktools.ListArgs{
+		URL:             rawURL,
 		IncludeArchived: req.GetBool("include_archived", false),
 		Cursor:          req.GetString("cursor", ""),
-		PageSize:        pageSize,
+		PageSize:        req.GetArguments()["page_size"],
 	}
-	result, err := h.client.ListWithOptions(host, path, h.resolveToken(host), opts)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("list failed: %v", err)), nil
-	}
-	if result.Response.Metadata["complete"] == "false" {
-		next := result.Response.Metadata["next-cursor"]
-		if next == "" || next == opts.Cursor {
-			return mcp.NewToolResultError("list failed: continuation cursor is missing or did not advance"), nil
-		}
-	}
-
-	return mcp.NewToolResultText(mcpfmt.Full(result, "modified")), nil
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.List(ctx, args) })
 }
 
-func mcpListPageSize(req *mcp.CallToolRequest) (int, error) {
-	raw, ok := req.GetArguments()["page_size"]
-	if !ok {
-		return 0, nil
-	}
-	var size int
-	switch value := raw.(type) {
-	case int:
-		size = value
-	case float64:
-		if value != math.Trunc(value) {
-			return 0, errors.New("page_size must be an integer")
-		}
-		size = int(value)
-	default:
-		return 0, errors.New("page_size must be an integer")
-	}
-	if size < 1 || size > protocol.MaxListPageSize {
-		return 0, fmt.Errorf("page_size must be between 1 and %d", protocol.MaxListPageSize)
-	}
-	return size, nil
-}
-
-func (h *handler) markVersions(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (h *handler) markVersions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-
-	host, path, err := h.resolveURL(rawURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-
-	result, err := h.client.Versions(host, path, h.resolveToken(host))
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("versions failed: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(mcpfmt.Full(result, "total", "current", "chain-valid", "chain-error")), nil
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Versions(ctx, rawURL) })
 }
 
 func (h *handler) markLookup(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -584,41 +414,16 @@ func (h *handler) markLookup(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if err != nil {
 		return mcp.NewToolResultError("query is required"), nil
 	}
-
-	host, scope, err := h.resolveURL(rawURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-
-	opts := fetch.LookupOptions{
+	args := marktools.LookupArgs{
+		URL:    rawURL,
+		Query:  query,
 		Filter: req.GetString("filter", ""),
 		Limit:  req.GetInt("limit", 0),
 		Match:  req.GetString("match", ""),
+		Budget: lookupexpand.Budget(&req),
+		Render: mcpfmt.Lookup.Options(&req),
 	}
-	result, err := h.client.Lookup(host, scope, query, h.resolveToken(host), opts)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("lookup failed: %v", err)), nil
-	}
-	render := mcpfmt.Lookup.Options(&req)
-	text := mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(opts, result)
-	if budget := lookupexpand.Budget(&req); budget > 0 && result.Response.Status == protocol.StatusOK {
-		token := h.resolveToken(host)
-		text += lookupexpand.Expand(ctx, result.Response.Body, query, budget, func(ctx context.Context, path string) (string, error) {
-			return fetchBody(h.client.FetchContext(ctx, host, path, token))
-		})
-	}
-	return mcp.NewToolResultText(text), nil
-}
-
-// fetchBody adapts a fetch result to the expansion's body-or-error contract.
-func fetchBody(r fetch.Result, err error) (string, error) {
-	if err != nil {
-		return "", err
-	}
-	if r.Response.Status != protocol.StatusOK {
-		return "", errors.New(r.Response.Status)
-	}
-	return r.Response.Body, nil
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Lookup(ctx, args) })
 }
 
 func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -631,192 +436,21 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 	if err != nil {
 		return mcp.NewToolResultError("body is required"), nil
 	}
-
-	host, path, err := h.resolveURL(rawURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
+	args := marktools.PublishArgs{URL: rawURL, Body: body, OnConflict: req.GetString("on_conflict", "")}
+	// A missing or mistyped expected_version stays nil; the tool refuses it after authorization.
+	if version, err := req.RequireInt("expected_version"); err == nil {
+		args.ExpectedVersion = &version
 	}
-
-	token := h.resolveToken(host)
-	if token == "" {
-		return mcp.NewToolResultError("publish requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
-	}
-
-	expectedVersion, err := req.RequireInt("expected_version")
-	if err != nil {
-		return mcp.NewToolResultError("expected_version is required"), nil
-	}
-	// Validate before the on_conflict switch so both branches (merge and
-	// fail) reject invalid input the same way and surface a clear local
-	// error rather than forwarding it to the server.
-	if expectedVersion < 0 {
-		return mcp.NewToolResultError("expected_version must be >= 0"), nil
-	}
-
-	onConflict, err := merge.ParseOnConflict(req.GetString("on_conflict", ""))
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	meta := publisherMeta(ctx, req.GetArguments())
-	// Warn-only narrowing gate, run after a write that landed.
-	gate := func(status string) string {
-		if !protocol.IsWriteSuccess(status) {
-			return ""
-		}
-		note, gateErr := metaguard.Gate(ctx, expectedVersion, meta, func(ctx context.Context) (fetch.Result, error) {
-			return h.client.FetchContext(ctx, host, index.VersionPath(path, expectedVersion), token)
-		})
-		if gateErr != nil {
-			log.Printf("warning: publish metadata check mark://%s%s: %v", host, path, gateErr)
-		}
-		return note
-	}
-	if onConflict == merge.OnConflictMerge {
-		adapter := &mergeClientAdapter{inner: h.client, host: host, token: token}
-		outcome, mErr := merge.Candidate(adapter, path, body, expectedVersion, meta)
-		if mErr != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", mErr)), nil
-		}
-		return mcp.NewToolResultText(formatOutcome(&outcome) + gate(outcome.Publish.Status)), nil
-	}
-
-	result, err := h.client.Publish(host, path, body, token, expectedVersion, meta)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
-	}
-	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version") + gate(result.Response.Status)), nil
+	args.Metadata, _ = req.GetArguments()["metadata"].(map[string]any)
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Publish(ctx, args) })
 }
 
-// mergeClientAdapter exposes the markClient interface as a merge.Client. It
-// turns versioned fetches into the path/vN suffix the server understands and
-// extracts version metadata from the protocol response.
-type mergeClientAdapter struct {
-	inner markClient
-	host  string
-	token string
-}
-
-// FetchVersion fetches a specific historical version via the /path/vN route.
-func (a *mergeClientAdapter) FetchVersion(path string, version int) (merge.Doc, error) {
-	versionedPath := strings.TrimRight(path, "/") + "/v" + strconv.Itoa(version)
-	r, err := a.inner.Fetch(a.host, versionedPath, a.token)
-	if err != nil {
-		return merge.Doc{}, err
-	}
-	return docFromResponse(r)
-}
-
-// FetchCurrent fetches the current head version of path.
-func (a *mergeClientAdapter) FetchCurrent(path string) (merge.Doc, error) {
-	r, err := a.inner.Fetch(a.host, path, a.token)
-	if err != nil {
-		return merge.Doc{}, err
-	}
-	return docFromResponse(r)
-}
-
-// Publish forwards to the underlying client and lifts the protocol response
-// into a merge.PublishResult, parsing version and server-version metadata.
-func (a *mergeClientAdapter) Publish(path, body string, expectedVersion int, meta map[string]string) (merge.PublishResult, error) {
-	r, err := a.inner.Publish(a.host, path, body, a.token, expectedVersion, meta)
-	if err != nil {
-		return merge.PublishResult{}, err
-	}
-	v, err := optionalInt(r.Response.Metadata, "version")
-	if err != nil {
-		return merge.PublishResult{}, err
-	}
-	sv, err := optionalInt(r.Response.Metadata, "server-version")
-	if err != nil {
-		return merge.PublishResult{}, err
-	}
-	return merge.PublishResult{
-		Status:        r.Response.Status,
-		Version:       v,
-		ServerVersion: sv,
-		Metadata:      r.Response.Metadata,
-	}, nil
-}
-
-// docFromResponse converts a fetch.Result into the merge package's Doc type,
-// extracting the integer version from response metadata.
-func docFromResponse(r fetch.Result) (merge.Doc, error) {
-	v, err := optionalInt(r.Response.Metadata, "version")
-	if err != nil {
-		return merge.Doc{}, err
-	}
-	return merge.Doc{
-		Status:   r.Response.Status,
-		Body:     r.Response.Body,
-		Version:  v,
-		Metadata: r.Response.Metadata,
-	}, nil
-}
-
-// optionalInt parses metadata[key] as an int. A missing or empty value
-// returns 0 with no error (the natural sentinel for absent versions). A
-// present but malformed value returns a wrapped parse error so the caller
-// surfaces server-side corruption rather than silently treating it as 0.
-func optionalInt(meta map[string]string, key string) (int, error) {
-	s, ok := meta[key]
-	if !ok || s == "" {
-		return 0, nil
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 0, fmt.Errorf("response metadata %q = %q: %w", key, s, err)
-	}
-	return n, nil
-}
-
-// formatOutcome renders a merge outcome in the tool text shape. OutcomeOK is
-// byte-identical to a plain mark_publish; OutcomeCandidate carries the merge
-// metadata then the candidate body.
-func formatOutcome(o *merge.Outcome) string {
-	switch o.Status {
-	case merge.OutcomeOK:
-		return mcpfmt.Full(fetch.Result{
-			Response: protocol.Response{
-				Status:   o.Publish.Status,
-				Metadata: o.Publish.Metadata,
-			},
-		}, "version", "modified", "server-version")
-	case merge.OutcomeCandidate:
-		var b strings.Builder
-		b.WriteString("status: merge-candidate\n")
-		fmt.Fprintf(&b, "your-version: %d\n", o.BaseVersion)
-		fmt.Fprintf(&b, "current-version: %d\n", o.TheirVersion)
-		fmt.Fprintf(&b, "publish-at-version: %d\n", o.PublishAtVersion)
-		fmt.Fprintf(&b, "has-markers: %t\n", o.HasMarkers)
-		b.WriteString("\n")
-		b.WriteString(o.Body)
-		return b.String()
-	}
-	return ""
-}
-
-func (h *handler) markArchive(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (h *handler) markArchive(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	rawURL, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-
-	host, path, err := h.resolveURL(rawURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-
-	token := h.resolveToken(host)
-	if token == "" {
-		return mcp.NewToolResultError("archive requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
-	}
-
-	result, err := h.client.Archive(host, path, token)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("archive failed: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(mcpfmt.Full(result, "version")), nil
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Archive(ctx, rawURL) })
 }
 
 func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -829,187 +463,23 @@ func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if err != nil {
 		return mcp.NewToolResultError("body is required"), nil
 	}
-
-	host, path, err := h.resolveURL(rawURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-
-	token := h.resolveToken(host)
-	if token == "" {
-		return mcp.NewToolResultError("append requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
-	}
-
-	expectedVersion := req.GetInt("expected_version", 0)
-	if expectedVersion < 0 {
-		return mcp.NewToolResultError("expected_version must be >= 0"), nil
-	}
-	if expectedVersion == 0 {
-		// Auto-resolve via VERSIONS.
-		vResult, vErr := h.client.Versions(host, path, h.resolveToken(host))
-		if vErr != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("could not resolve version: %v", vErr)), nil
-		}
-		if vResult.Response.Status != protocol.StatusOK {
-			return mcp.NewToolResultError(fmt.Sprintf("could not resolve version: %s", vResult.Response.Status)), nil
-		}
-		cur, ok := vResult.Response.Metadata["current"]
-		if !ok {
-			return mcp.NewToolResultError("could not resolve version: no current version in response"), nil
-		}
-		expectedVersion, err = strconv.Atoi(cur)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("could not resolve version: invalid current version %q", cur)), nil
-		}
-	}
-
-	result, err := h.client.Append(host, path, body, token, expectedVersion, agentMeta(ctx))
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("append failed: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "server-version")), nil
+	args := marktools.AppendArgs{URL: rawURL, Body: body, ExpectedVersion: req.GetInt("expected_version", 0)}
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Append(ctx, args) })
 }
 
-func (h *handler) markDiscover(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, _ := req.RequireString("url")
-
-	var host, path string
-	var err error
-	if rawURL != "" {
-		host, _, err = h.resolveURL(rawURL)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-		}
-		path = protocol.WellKnownManifestPath
-	} else {
-		if h.defaultHost == "" {
-			return mcp.NewToolResultError("no server specified: provide a URL or set -host"), nil
-		}
-		host, path, err = fetch.ParseMarkURL(h.defaultHost + protocol.WellKnownManifestPath)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("invalid host: %v", err)), nil
-		}
-	}
-
-	result, err := h.client.Fetch(host, path, "")
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("discover failed: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified")), nil
+func (h *handler) markDiscover(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	// url is optional: without one the tool reads the -host server's manifest.
+	rawURL := req.GetString("url", "")
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Discover(ctx, rawURL) })
 }
 
-func (h *handler) markResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (h *handler) markResolve(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	hash, err := req.RequireString("hash")
 	if err != nil {
 		return mcp.NewToolResultError("hash is required"), nil
 	}
-	cleanHash, ok := protocol.IsHashPath(hash)
-	if !ok {
-		return mcp.NewToolResultError("invalid hash format: expected sha256-<64 lowercase hex characters>"), nil
-	}
-	hash = cleanHash
-
-	indexURL, err := req.RequireString("index")
-	if err != nil {
-		return mcp.NewToolResultError("index is required"), nil
-	}
-
-	indexHost, indexPath, err := h.resolveURL(indexURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid index URL: %v", err)), nil
-	}
-
-	// Fetch the index document.
-	indexResult, err := h.client.Fetch(indexHost, indexPath, h.resolveToken(indexHost))
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to fetch index: %v", err)), nil
-	}
-	if indexResult.Response.Status != protocol.StatusOK {
-		return mcp.NewToolResultError(fmt.Sprintf("index fetch returned: %s", indexResult.Response.Status)), nil
-	}
-
-	// V2 manifests fetch only matching prefix shards; legacy indexes stay inline.
-	matches, err := index.EntriesForHash(indexPath, indexResult.Response.Body, hash, func(shardPath string) (protocol.Response, error) {
-		result, err := h.client.Fetch(indexHost, shardPath, h.resolveToken(indexHost))
-		return result.Response, err
-	})
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid index: %v", err)), nil
-	}
-	if len(matches) == 0 {
-		return mcp.NewToolResultError(fmt.Sprintf("hash %s not found in index", hash)), nil
-	}
-
-	// Try each matching server.
-	var lastErr string
-	for _, m := range matches {
-		serverHost, _, err := fetch.ParseMarkURL(m.Server + "/")
-		if err != nil {
-			lastErr = fmt.Sprintf("invalid server URL %s: %v", m.Server, err)
-			continue
-		}
-		result, err := h.client.Fetch(serverHost, "/"+hash, h.resolveToken(serverHost))
-		if err != nil {
-			lastErr = fmt.Sprintf("%s: %v", m.Server, err)
-			continue
-		}
-		if result.Response.Status != protocol.StatusOK {
-			lastErr = fmt.Sprintf("%s: %s", m.Server, result.Response.Status)
-			continue
-		}
-		// Verify content hash matches.
-		if got := result.Response.Metadata["content-hash"]; got != hash {
-			lastErr = fmt.Sprintf("%s: hash mismatch (got %s)", m.Server, got)
-			continue
-		}
-		return mcp.NewToolResultText(mcpfmt.Full(result, "version", "modified", "content-hash")), nil
-	}
-
-	return mcp.NewToolResultError(fmt.Sprintf("could not resolve hash from any server: %s", lastErr)), nil
-}
-
-const maxIndexDocuments = 1000
-
-// errIndexTruncated is returned by walkDir when the document limit is reached.
-var errIndexTruncated = errors.New("document limit reached, index is truncated")
-
-// checkManifests verifies agent manifests on source and target servers.
-// Returns warnings, a tool error result (if blocked), or nil to proceed.
-func (h *handler) checkManifests(sourceHost, targetHost string, dryRun, force bool) (warnings []string, block *mcp.CallToolResult) {
-	// An unread manifest is not a missing one: the source only warns, and
-	// force overrides a missing target manifest, never an unreachable target.
-	srcManifest, err := h.client.Fetch(sourceHost, protocol.WellKnownManifestPath, "")
-	switch {
-	case err != nil:
-		warnings = append(warnings, fmt.Sprintf("warning: could not check source agent manifest: %v", err))
-	case srcManifest.Response.Status != protocol.StatusOK:
-		warnings = append(warnings, "warning: source server has no agent manifest")
-	}
-	if dryRun {
-		return warnings, nil
-	}
-
-	tgtManifest, err := h.client.Fetch(targetHost, protocol.WellKnownManifestPath, "")
-	if err != nil {
-		return warnings, mcp.NewToolResultError(fmt.Sprintf("could not check target agent manifest: %v", err))
-	}
-	switch tgtManifest.Response.Status {
-	case protocol.StatusOK:
-	case protocol.StatusNotFound:
-		if !force {
-			return warnings, mcp.NewToolResultError(
-				"target server has no agent manifest; cannot verify it accepts index publications. " +
-					"Use force=true to override, or publish a manifest at /.well-known/agent-manifest.md on the target.",
-			)
-		}
-		warnings = append(warnings, "warning: target server has no agent manifest (force=true override)")
-	default:
-		// Unauthorized or a server fault says nothing about the manifest.
-		return warnings, mcp.NewToolResultError("could not check target agent manifest: status " + tgtManifest.Response.Status)
-	}
-	return warnings, nil
+	args := marktools.ResolveArgs{Hash: hash, Index: req.GetString("index", "")}
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.ResolveHash(ctx, args) })
 }
 
 func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -1021,162 +491,13 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if err != nil {
 		return mcp.NewToolResultError("target is required"), nil
 	}
-
-	sourceHost, sourcePath, err := h.resolveURL(sourceURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid source URL: %v", err)), nil
+	args := marktools.IndexArgs{
+		Source: sourceURL, Target: targetURL,
+		DryRun:          req.GetBool("dry_run", false),
+		Force:           req.GetBool("force", false),
+		ExpectedVersion: req.GetInt("expected_version", 0),
 	}
-	if sourcePath == "" {
-		sourcePath = "/"
-	}
-	targetHost, targetPath, err := h.resolveURL(targetURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid target URL: %v", err)), nil
-	}
-
-	dryRun := req.GetBool("dry_run", false)
-	force := req.GetBool("force", false)
-	expectedVersion := req.GetInt("expected_version", 0)
-	if expectedVersion < 0 {
-		return mcp.NewToolResultError("expected_version must be non-negative"), nil
-	}
-
-	warnings, block := h.checkManifests(sourceHost, targetHost, dryRun, force)
-	if block != nil {
-		return block, nil
-	}
-
-	// Crawl source server.
-	sourceScheme := "mark://" + sourceHost
-	entries, crawlWarnings, err := h.collectEntries(ctx, sourceHost, sourcePath, h.resolveToken(sourceHost))
-	warnings = append(warnings, crawlWarnings...)
-	if err != nil && !errors.Is(err, errIndexTruncated) {
-		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
-	} else if errors.Is(err, errIndexTruncated) {
-		warnings = append(warnings, fmt.Sprintf("warning: index truncated at %d documents, some content may not be indexed", maxIndexDocuments))
-	}
-
-	indexedAt := timeNow()
-	body := index.Build(sourceScheme, indexedAt, entries)
-
-	if dryRun {
-		var b strings.Builder
-		for _, w := range warnings {
-			b.WriteString(w + "\n")
-		}
-		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, logical entry preview only; publication writes a v2 manifest and shards)\n\n", len(entries), sourceScheme)
-		b.WriteString(body)
-		return mcp.NewToolResultText(b.String()), nil
-	}
-	if errors.Is(err, errIndexTruncated) || len(crawlWarnings) > 0 {
-		return mcp.NewToolResultError("crawl incomplete; refusing to publish an authoritative index"), nil
-	}
-
-	token := h.resolveToken(targetHost)
-	if token == "" {
-		return mcp.NewToolResultError("publishing requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
-	}
-
-	manifestSource := sourceScheme
-	logicalEntries := entries
-	// Merge with an existing legacy index or verified sharded generation.
-	if expectedVersion > 0 {
-		existing, err := h.client.FetchContext(ctx, targetHost, targetPath, h.resolveToken(targetHost))
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %v", err)), nil
-		}
-		if existing.Response.Status != protocol.StatusOK {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %s", existing.Response.Status)), nil
-		}
-		existingEntries, err := index.LoadEntries(targetPath, existing.Response.Body, func(shardPath string) (protocol.Response, error) {
-			result, err := h.client.FetchContext(ctx, targetHost, shardPath, h.resolveToken(targetHost))
-			return result.Response, err
-		})
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to read existing index: %v", err)), nil
-		}
-		logicalEntries = index.Merge(existingEntries, sourceScheme, entries)
-		manifestSource = "mark://" + targetHost
-	}
-
-	publishResult, err := index.PublishGeneration(ctx, index.PublishOptions{
-		ManifestPath:            targetPath,
-		Source:                  manifestSource,
-		Indexed:                 indexedAt,
-		Entries:                 logicalEntries,
-		ExpectedManifestVersion: &expectedVersion,
-	}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
-		result, err := h.client.FetchContext(ioCtx, targetHost, docPath, h.resolveToken(targetHost))
-		return result.Response, err
-	}, func(ioCtx context.Context, docPath, body string, expected int) (protocol.Response, error) {
-		result, err := h.client.PublishContext(ioCtx, targetHost, docPath, body, token, expected, agentMeta(ctx))
-		return result.Response, err
-	})
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
-	}
-
-	var b strings.Builder
-	for _, w := range warnings {
-		b.WriteString(w + "\n")
-	}
-	fmt.Fprintf(&b, "Indexed %d documents from %s\n", len(entries), sourceScheme)
-	fmt.Fprintf(&b, "status: ok\nversion: %d\nshards-published: %d\nshards-reused: %d\n",
-		publishResult.ManifestVersion, publishResult.ShardsPublished, publishResult.ShardsReused)
-	return mcp.NewToolResultText(b.String()), nil
-}
-
-// collectEntries walks the listings and fetches each document, collecting
-// content-hash index entries. Skips come back as warnings (a partial index is
-// never a silent success); errIndexTruncated caps at maxIndexDocuments.
-func (h *handler) collectEntries(ctx context.Context, host, dirPath, token string) ([]index.Entry, []string, error) {
-	var entries []index.Entry
-	var warnings []string
-	attempts := 0
-	w := listwalk.Walker{
-		Client: h.client,
-		Host:   host,
-		Token:  token,
-		OnSkip: func(p, reason string) {
-			warnings = append(warnings, fmt.Sprintf("warning: skipped %s: %s", p, reason))
-		},
-	}
-	err := w.Walk(dirPath, func(fullPath string) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if attempts >= maxIndexDocuments {
-			return errIndexTruncated
-		}
-		attempts++
-
-		// Fetch and collect content-hash.
-		doc, err := h.client.Fetch(host, fullPath, token)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("warning: skipped %s: %v", fullPath, err))
-			return nil
-		}
-		if doc.Response.Status != protocol.StatusOK {
-			warnings = append(warnings, fmt.Sprintf("warning: skipped %s: %s", fullPath, doc.Response.Status))
-			return nil
-		}
-		contentHash, ok := doc.Response.Metadata["content-hash"]
-		if _, valid := protocol.IsHashPath(contentHash); !ok || !valid {
-			warnings = append(warnings, fmt.Sprintf("warning: skipped %s: missing or invalid content-hash", fullPath))
-			return nil
-		}
-		entries = append(entries, index.Entry{
-			Hash:   contentHash,
-			Server: "mark://" + host,
-			Path:   fullPath,
-		})
-		return nil
-	})
-	if errors.Is(err, listwalk.ErrListBudget) {
-		warnings = append(warnings, "warning: directory budget exhausted, index is incomplete")
-		err = nil
-	}
-	return entries, warnings, err
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Index(ctx, args) })
 }
 
 // timeNow is a variable for testing.
@@ -1187,42 +508,8 @@ func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-
-	depth := max(1, min(req.GetInt("depth", 2), 5))
-
-	host, path, err := h.resolveURL(rawURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-	// Node identity omits the default port (ADR 0005), so crawled rows share
-	// the key form of the hub's /graph.md aggregate and backlink lookups.
-	startURL := links.NodeURL(host, path)
-
-	if h.graphStore == nil {
-		return mcp.NewToolResultError("graph store not available"), nil
-	}
-
-	// Seed before crawling so depth-limited crawls still benefit from hub context.
-	h.seedGraph(ctx, host)
-
-	g, err := h.graphStore.CrawlAndPersist(ctx, startURL, h.graphFetch, fetch.ParseMarkURL, graphstore.CrawlOptions{
-		MaxDepth: depth,
-		MaxNodes: 200,
-		Workers:  5,
-	})
-	if err != nil && g == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", err)), nil
-	}
-	text := formatGraph(g, startURL)
-	if warning := graph.CrawlWarning(err, g.Outcome); warning != nil {
-		text += fmt.Sprintf("\nwarning: %v\n", warning)
-	}
-	return mcp.NewToolResultText(text), nil
-}
-
-// formatGraph renders a graph as a plain-text summary for LLM consumption.
-func formatGraph(g *graph.Graph, startURL string) string {
-	return graph.Summary(g, startURL)
+	args := marktools.GraphArgs{URL: rawURL, Depth: req.GetInt("depth", 2)}
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Graph(ctx, args) })
 }
 
 func (h *handler) markBacklinks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -1230,41 +517,7 @@ func (h *handler) markBacklinks(ctx context.Context, req mcp.CallToolRequest) (*
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-
-	// Key on node identity, which omits the default port (ADR 0005), so the
-	// lookup matches both crawled and seeded rows.
-	host, path, err := h.resolveURL(rawURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-	fullURL := links.NodeURL(host, path)
-
-	if h.graphStore == nil {
-		return mcp.NewToolResultError("graph store not available"), nil
-	}
-
-	h.seedGraph(ctx, host)
-
-	freshness := h.revalidateBacklinks(ctx, fullURL)
-	backlinks := h.graphStore.BacklinksEnriched(fullURL)
-	if len(backlinks) == 0 {
-		return mcp.NewToolResultText(
-			freshness + fmt.Sprintf("No backlinks found for %s\nRun mark_graph to populate the graph store.", fullURL),
-		), nil
-	}
-
-	var b strings.Builder
-	b.WriteString(freshness)
-	fmt.Fprintf(&b, "Backlinks for %s (%d):\n\n", fullURL, len(backlinks))
-	for _, bl := range backlinks {
-		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count) + bl.Observation.Annotation()
-		if bl.Title != "" {
-			fmt.Fprintf(&b, "- [%s](%s)%s\n", bl.Title, bl.URL, ann)
-		} else {
-			fmt.Fprintf(&b, "- %s%s\n", bl.URL, ann)
-		}
-	}
-	return mcp.NewToolResultText(b.String()), nil
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Backlinks(ctx, rawURL) })
 }
 
 // defaultGraphRetention bounds the published graph's version history: it is a
@@ -1272,62 +525,15 @@ func (h *handler) markBacklinks(ctx context.Context, req mcp.CallToolRequest) (*
 // versions), and 20 versions is enough to debug a bad crawl.
 const defaultGraphRetention = 20
 
-func (h *handler) markGraphExport(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	if h.graphStore == nil {
-		return mcp.NewToolResultError("graph store not available"), nil
-	}
-
-	md := h.graphStore.Export()
-	return mcp.NewToolResultText(md), nil
+func (h *handler) markGraphExport(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.GraphExport(ctx) })
 }
 
 func (h *handler) markGraphPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	if h.graphStore == nil {
-		return mcp.NewToolResultError("graph store not available"), nil
+	// The store is checked before the arguments: without one there is nothing to publish.
+	args := marktools.GraphPublishArgs{URL: req.GetString("url", ""), Retention: req.GetInt("retention", defaultGraphRetention)}
+	if version, err := req.RequireInt("expected_version"); err == nil {
+		args.ExpectedVersion = &version
 	}
-
-	rawURL, err := req.RequireString("url")
-	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
-	}
-
-	host, path, err := h.resolveURL(rawURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-
-	token := h.resolveToken(host)
-	if token == "" {
-		return mcp.NewToolResultError("publish requires a token (-token flag, DEMARKUS_AUTH env var, or stored via 'demarkus token add')"), nil
-	}
-
-	expectedVersion, err := req.RequireInt("expected_version")
-	if err != nil {
-		return mcp.NewToolResultError("expected_version is required"), nil
-	}
-	if expectedVersion < 0 {
-		return mcp.NewToolResultError("expected_version must be >= 0"), nil
-	}
-
-	retention := req.GetInt("retention", defaultGraphRetention)
-	if retention < 0 {
-		return mcp.NewToolResultError("retention must be >= 0 (0 keeps every version)"), nil
-	}
-
-	md := h.graphStore.Export()
-
-	meta := agentMeta(ctx)
-	if retention > 0 {
-		meta["retention"] = strconv.Itoa(retention)
-	}
-	result, err := h.client.Publish(host, path, md, token, expectedVersion, meta)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("publish failed: %v", err)), nil
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "Published graph (%d nodes, %d edges) to mark://%s%s\n",
-		h.graphStore.NodeCount(), h.graphStore.EdgeCount(), host, path)
-	b.WriteString(mcpfmt.Full(result, "version", "modified", "server-version"))
-	return mcp.NewToolResultText(b.String()), nil
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.GraphPublish(ctx, args) })
 }

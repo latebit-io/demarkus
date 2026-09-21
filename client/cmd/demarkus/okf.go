@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -8,14 +9,15 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/internal/listwalk"
 	"github.com/latebit-io/demarkus/client/internal/okf"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
+	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/listwalk"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
 // okfMain dispatches `demarkus okf <subcommand>`.
-func okfMain(args []string) {
+func okfMain(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		okfUsage()
 		os.Exit(2)
@@ -24,9 +26,9 @@ func okfMain(args []string) {
 	case "validate":
 		okfValidateMain(args[1:])
 	case "import":
-		okfImportMain(args[1:])
+		okfImportMain(ctx, args[1:])
 	case "export":
-		okfExportMain(args[1:])
+		okfExportMain(ctx, args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "okf: unknown subcommand %q\n", args[0])
 		okfUsage()
@@ -77,7 +79,7 @@ func okfValidateMain(args []string) {
 // bundle-absolute links under the target prefix, and publishes. Documents are
 // upserted (no version check); re-importing an unchanged bundle creates no new
 // versions thanks to the store's content-hash dedup.
-func okfImportMain(args []string) {
+func okfImportMain(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("okf import", flag.ExitOnError)
 	authToken := fs.String("auth", "", "auth token for publishing (env: DEMARKUS_AUTH)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
@@ -88,11 +90,12 @@ func okfImportMain(args []string) {
 		os.Exit(2)
 	}
 
-	host, prefix, err := fetch.ParseMarkURL(fs.Arg(1))
+	target, err := links.ParseMark(fs.Arg(1))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "okf import: %v\n", err)
+		fmt.Fprintf(os.Stderr, "okf import: invalid URL: %v\n", err)
 		os.Exit(2)
 	}
+	host, prefix := target.DialHost(), target.Path
 	items, err := okf.BuildImport(fs.Arg(0), prefix)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "okf import: %v\n", err)
@@ -115,10 +118,19 @@ func okfImportMain(args []string) {
 	defer client.Close()
 
 	published, failed := 0, 0
-	for _, it := range items {
+	for i, it := range items {
+		// Interrupted: count the rest as failed instead of sending each to fail.
+		if ctx.Err() != nil {
+			fmt.Fprintf(os.Stderr, "error: interrupted, %d documents not published\n", len(items)-i)
+			failed += len(items) - i
+			break
+		}
 		// expectedVersion -1 skips the optimistic-concurrency check: import is
 		// an upsert of the bundle as the source of truth.
-		result, err := client.Publish(host, it.Path, it.Body, token, -1, it.Metadata)
+		result, err := client.Publish(ctx, fetch.WriteRequest{
+			Host: host, Path: it.Path, Token: token,
+			Body: it.Body, ExpectedVersion: -1, Metadata: it.Metadata,
+		})
 		switch {
 		case err != nil:
 			fmt.Fprintf(os.Stderr, "error: %s: %v\n", it.Path, err)
@@ -140,7 +152,7 @@ func okfImportMain(args []string) {
 // okfExportMain renders a world subtree into an OKF bundle under <out-dir>:
 // LIST the subtree, fetch each document, reattach frontmatter from metadata,
 // strip the world prefix from paths and links.
-func okfExportMain(args []string) {
+func okfExportMain(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("okf export", flag.ExitOnError)
 	authToken := fs.String("auth", "", "auth token for reads on private paths (env: DEMARKUS_AUTH)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
@@ -150,11 +162,12 @@ func okfExportMain(args []string) {
 		os.Exit(2)
 	}
 
-	host, prefix, err := fetch.ParseMarkURL(fs.Arg(0))
+	target, err := links.ParseMark(fs.Arg(0))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "okf export: %v\n", err)
+		fmt.Fprintf(os.Stderr, "okf export: invalid URL: %v\n", err)
 		os.Exit(2)
 	}
+	host, prefix := target.DialHost(), target.Path
 	outDir := fs.Arg(1)
 
 	token := tokens.Resolve(tokens.Credential{Explicit: *authToken, Origin: host}, host, tokens.LoadDefault())
@@ -165,7 +178,9 @@ func okfExportMain(args []string) {
 	if root == "" {
 		root = "/"
 	}
-	paths, err := enumerateDocs(client, host, root, token)
+	// No OnProblem: an export that silently lacks a subtree is worse than none.
+	walker := listwalk.Walker{Client: client, Host: host, Token: token}
+	paths, err := enumerateDocs(ctx, &walker, root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "okf export: %v\n", err)
 		os.Exit(1)
@@ -173,7 +188,7 @@ func okfExportMain(args []string) {
 
 	docs := make([]okf.ExportDoc, 0, len(paths))
 	for _, p := range paths {
-		result, err := client.Fetch(host, p, token)
+		result, err := client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: p, Token: token})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "okf export: fetch %s: %v\n", p, err)
 			os.Exit(1)
@@ -223,10 +238,9 @@ func publisherMeta(respMeta map[string]string) map[string]string {
 // enumerateDocs recursively LISTs dir and returns the mark paths of every ".md"
 // document beneath it, skipping the server's own version directories (already
 // filtered server-side).
-func enumerateDocs(client *fetch.Client, host, dir, token string) ([]string, error) {
+func enumerateDocs(ctx context.Context, w *listwalk.Walker, dir string) ([]string, error) {
 	var docs []string
-	w := listwalk.Walker{Client: client, Host: host, Token: token, Strict: true}
-	err := w.Walk(dir, func(docPath string) error {
+	err := w.Walk(ctx, dir, func(docPath string) error {
 		if strings.HasSuffix(docPath, ".md") {
 			docs = append(docs, docPath)
 		}

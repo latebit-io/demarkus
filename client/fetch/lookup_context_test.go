@@ -23,7 +23,7 @@ func TestLookupContextCancelsBlockedResponse(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.LookupContext(ctx, host, "/", "auth", "", LookupOptions{})
+		_, err := c.Lookup(ctx, LookupRequest{Host: host, Scope: "/", Query: "auth"})
 		done <- err
 	}()
 	<-received

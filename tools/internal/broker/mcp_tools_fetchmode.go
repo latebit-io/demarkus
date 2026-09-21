@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchdedup"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/mdoutline"
@@ -154,7 +155,7 @@ func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolReques
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	result, err := g.dispatcher.Fetch(worldName, path, "")
+	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: path})
 	if err != nil {
 		return g.toolErrorFor("fetch", worldName, err), nil
 	}

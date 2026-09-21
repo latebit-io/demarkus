@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -67,7 +68,7 @@ func (r *memoryIndexRemote) publish(_ context.Context, path, body string, expect
 	}
 	stored := protocol.Response{
 		Status: protocol.StatusOK, Body: body,
-		Metadata: map[string]string{"version": strconv.Itoa(version), "content-hash": BodyHash(body)},
+		Metadata: map[string]string{"version": strconv.Itoa(version), "content-hash": generation.BodyHash(body)},
 	}
 	r.docs[path] = stored
 	if r.history[path] == nil {
@@ -101,7 +102,7 @@ func TestPublishGenerationCreatesAndVerifiesManifestLast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishGeneration: %v", err)
 	}
-	if result.Manifest.ActiveSlot != SlotA || result.ManifestVersion != 1 || result.ShardsPublished != 1 {
+	if result.Manifest.ActiveSlot != generation.SlotA || result.ManifestVersion != 1 || result.ShardsPublished != 1 {
 		t.Fatalf("result = %+v", result)
 	}
 	if got := remote.publishes[len(remote.publishes)-1]; got != "/index.md" {
@@ -132,7 +133,7 @@ func TestPublishGenerationAlternatesSlotsAndReusesShard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Manifest.ActiveSlot != SlotA || second.Manifest.ActiveSlot != SlotB || third.Manifest.ActiveSlot != SlotA {
+	if first.Manifest.ActiveSlot != generation.SlotA || second.Manifest.ActiveSlot != generation.SlotB || third.Manifest.ActiveSlot != generation.SlotA {
 		t.Fatalf("slots = %s, %s, %s", first.Manifest.ActiveSlot, second.Manifest.ActiveSlot, third.Manifest.ActiveSlot)
 	}
 	if third.ShardsReused != 1 || third.ShardsPublished != 0 {
@@ -197,7 +198,7 @@ func TestPublishGenerationHonorsManifestCAS(t *testing.T) {
 	legacy := Build("legacy", time.Now(), []Entry{{Hash: testHashA, Server: "mark://a", Path: "/a.md"}})
 	remote.docs["/index.md"] = protocol.Response{
 		Status: protocol.StatusOK, Body: legacy,
-		Metadata: map[string]string{"version": "4", "content-hash": BodyHash(legacy)},
+		Metadata: map[string]string{"version": "4", "content-hash": generation.BodyHash(legacy)},
 	}
 	remote.history["/index.md"] = map[int]protocol.Response{4: remote.docs["/index.md"]}
 	expected := 3
@@ -312,7 +313,7 @@ func TestPublishGenerationPreservesPublishAndReconcileErrors(t *testing.T) {
 		}
 		if strings.Contains(docPath, ".shards/") {
 			return protocol.Response{Status: protocol.StatusOK, Body: "wrong", Metadata: map[string]string{
-				"version": "1", "content-hash": BodyHash("wrong"),
+				"version": "1", "content-hash": generation.BodyHash("wrong"),
 			}}, nil
 		}
 		return protocol.Response{Status: protocol.StatusNotFound}, nil

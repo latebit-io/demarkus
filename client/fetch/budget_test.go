@@ -36,7 +36,7 @@ func TestFetchContextResponseBudget(t *testing.T) {
 	c := NewClient(Options{Insecure: true})
 	defer c.Close()
 	ctx, budget := WithResponseBudget(t.Context(), 100)
-	_, err := c.FetchContext(ctx, host, "/doc.md", "")
+	_, err := c.Fetch(ctx, FetchRequest{Host: host, Path: "/doc.md"})
 	if !errors.Is(err, ErrResponseBudget) || budget.BytesRead() != 100 || isTransientError(err) {
 		t.Fatalf("budget read = %d, err = %v", budget.BytesRead(), err)
 	}
@@ -57,7 +57,7 @@ func TestFetchContextCancelsBlockedResponse(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.FetchContext(ctx, host, "/doc.md", "")
+		_, err := c.Fetch(ctx, FetchRequest{Host: host, Path: "/doc.md"})
 		done <- err
 	}()
 	select {

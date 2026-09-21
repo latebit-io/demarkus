@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
@@ -29,14 +30,15 @@ func worldGraphBody() string {
 }
 
 // seedingDispatcher scripts /graph.md on team-a with the given etag.
-func unavailableSeedSource(_, _, _ string) (fetch.Result, error) {
+func unavailableSeedSource(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 	return fetch.Result{}, fmt.Errorf("source unavailable during seed contract test")
 }
 
 func seedingDispatcher(etag string) *fakeDispatcher {
 	return &fakeDispatcher{
 		FetchFn: unavailableSeedSource,
-		FetchCondFn: func(_, path, _, sentEtag string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path, sentEtag := r.Path, r.IfNoneMatch
 			if path != "/graph.md" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 			}
@@ -66,7 +68,7 @@ func brokerSnapshot(t *testing.T) (protocol.Response, map[string]protocol.Respon
 func brokerSnapshotRows(t *testing.T, nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) (protocol.Response, map[string]protocol.Response) { //nolint:gocritic // fixture returns manifest and shard set
 	t.Helper()
 	exported := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
-	artifacts, err := graphstore.BuildSnapshotShards(graphstore.SnapshotManifestPath, graphstore.SnapshotSlotA, nodes, edges, 0)
+	artifacts, err := graphstore.BuildSnapshotShards(graphstore.SnapshotManifestPath, generation.SlotA, nodes, edges, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,34 +76,36 @@ func brokerSnapshotRows(t *testing.T, nodes []graphstore.StoredNode, edges []gra
 	shards := make(map[string]protocol.Response, len(artifacts))
 	for i, artifact := range artifacts {
 		refs[i] = artifact.Ref(i + 1)
-		shards[graphstore.SnapshotVersionPath(artifact.Path, i+1)] = protocol.Response{
+		shards[generation.VersionPath(artifact.Path, i+1)] = protocol.Response{
 			Status: protocol.StatusOK, Body: artifact.Body,
 			Metadata: map[string]string{"version": strconv.Itoa(i + 1), "content-hash": artifact.ContentHash},
 		}
 	}
 	manifest, err := graphstore.BuildSnapshotManifest(graphstore.SnapshotManifestPath, graphstore.SnapshotManifest{
 		Exported: exported, Complete: true, Nodes: len(nodes), Edges: len(edges),
-		ActiveSlot: graphstore.SnapshotSlotA, Shards: refs,
+		ActiveSlot: generation.SlotA, Shards: refs,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return protocol.Response{Status: protocol.StatusOK, Body: manifest, Metadata: map[string]string{
-		"etag": "snapshot-etag-1", "content-hash": graphstore.SnapshotBodyHash(manifest),
+		"etag": "snapshot-etag-1", "content-hash": generation.BodyHash(manifest),
 	}}, shards
 }
 
 func TestSeedWorldGraphPrefersAtomicSnapshot(t *testing.T) {
 	manifest, shards := brokerSnapshot(t)
 	d := &fakeDispatcher{
-		FetchCondFn: func(_, path, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
 			if path == graphstore.SnapshotManifestPath {
 				return fetch.Result{Response: manifest}, nil
 			}
 			t.Fatalf("legacy path fetched despite snapshot: %s", path)
 			return fetch.Result{}, nil
 		},
-		FetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
 			return fetch.Result{Response: shards[path]}, nil
 		},
 	}
@@ -143,7 +147,8 @@ func TestSeedConsumesAgentExportContract(t *testing.T) {
 	body := agentContractGolden(t)
 	d := &fakeDispatcher{
 		FetchFn: unavailableSeedSource,
-		FetchCondFn: func(worldName, path, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			worldName, path := r.Host, r.Path
 			if worldName == "hub" && path == "/graph.md" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body}}, nil
 			}
@@ -202,7 +207,8 @@ func internalAddrGraphBody() string {
 func TestSeedTranslatesInternalAddressesToWorldNames(t *testing.T) {
 	d := &fakeDispatcher{
 		FetchFn: unavailableSeedSource,
-		FetchCondFn: func(_, path, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
 			if path != "/graph.md" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 			}
@@ -240,7 +246,8 @@ func TestSeedFindsAggregateOnAnotherWorld(t *testing.T) {
 	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "hub", Namespace: "hub", TokensSecret: "hub-tokens"})
 	d := &fakeDispatcher{
 		FetchFn: unavailableSeedSource,
-		FetchCondFn: func(worldName, path, _, _ string) (fetch.Result, error) {
+		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			worldName, path := r.Host, r.Path
 			if worldName == "hub" && path == "/graph.md" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: internalAddrGraphBody()}}, nil
 			}
@@ -261,7 +268,7 @@ func TestSeedFindsAggregateOnAnotherWorld(t *testing.T) {
 	d.Lock()
 	defer d.Unlock()
 	probed := map[string]int{}
-	for _, c := range d.FetchCondCalls {
+	for _, c := range d.SeedCalls {
 		if c.Path != graphstore.SnapshotManifestPath && c.Path != "/graph.md" {
 			t.Errorf("seed probed unexpected path %q", c.Path)
 		}
@@ -297,8 +304,8 @@ func TestHandleMarkBacklinksColdPodSeedsFromWorldGraph(t *testing.T) {
 	if len(d.FetchCalls) != 1 {
 		t.Errorf("source revalidation fetches = %d, want 1", len(d.FetchCalls))
 	}
-	if len(d.FetchCondCalls) != 2 || d.FetchCondCalls[0].Path != graphstore.SnapshotManifestPath || d.FetchCondCalls[1].Path != "/graph.md" {
-		t.Errorf("fetchCondCalls = %+v, want snapshot then legacy checks", d.FetchCondCalls)
+	if len(d.SeedCalls) != 2 || d.SeedCalls[0].Path != graphstore.SnapshotManifestPath || d.SeedCalls[1].Path != "/graph.md" {
+		t.Errorf("fetchCondCalls = %+v, want snapshot then legacy checks", d.SeedCalls)
 	}
 }
 
@@ -306,7 +313,8 @@ func TestHandleMarkBacklinksColdPodSeedsFromWorldGraph(t *testing.T) {
 // and the crawl's view of a source replaces the seeded edges.
 func TestHandleMarkGraphCrawlBeatsSeed(t *testing.T) {
 	d := seedingDispatcher("hub-etag-1")
-	d.FetchFn = func(_, path, _ string) (fetch.Result, error) {
+	d.FetchFn = func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		path := r.Path
 		if path == "/a.md" {
 			// Locally, a.md now links to c.md, not b.md.
 			return fetch.Result{Response: protocol.Response{
@@ -360,8 +368,8 @@ func TestSeedWorldGraphThrottledWithinWindow(t *testing.T) {
 	}
 	d.Lock()
 	defer d.Unlock()
-	if len(d.FetchCondCalls) != 2 {
-		t.Errorf("seed checks = %d, want one snapshot/legacy pair (throttled)", len(d.FetchCondCalls))
+	if len(d.SeedCalls) != 2 {
+		t.Errorf("seed checks = %d, want one snapshot/legacy pair (throttled)", len(d.SeedCalls))
 	}
 }
 
@@ -387,9 +395,9 @@ func TestSeedWorldGraphEtagRoundTrip(t *testing.T) {
 	}
 
 	d.Lock()
-	calls := slices.Clone(d.FetchCondCalls)
+	calls := slices.Clone(d.SeedCalls)
 	d.Unlock()
-	if len(calls) != 4 || calls[0].Etag != "" || calls[1].Etag != "" || calls[2].Etag != "hub-etag-1" || calls[3].Etag != "hub-etag-1" {
+	if len(calls) != 4 || calls[0].IfNoneMatch != "" || calls[1].IfNoneMatch != "" || calls[2].IfNoneMatch != "hub-etag-1" || calls[3].IfNoneMatch != "hub-etag-1" {
 		t.Errorf("etags sent = %+v, want empty then stored etag for each snapshot/legacy pair", calls)
 	}
 	// not-modified keeps the seeded rows.
@@ -401,7 +409,8 @@ func TestSeedWorldGraphEtagRoundTrip(t *testing.T) {
 // Default explore backlinks use the same per-world seed.
 func TestHandleMarkExploreBacklinksSeeded(t *testing.T) {
 	d := seedingDispatcher("hub-etag-1")
-	d.FetchFn = func(_, path, _ string) (fetch.Result, error) {
+	d.FetchFn = func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		path := r.Path
 		if path == "/a.md" {
 			return fetch.Result{}, fmt.Errorf("source unavailable")
 		}
@@ -424,7 +433,7 @@ func TestHandleMarkExploreBacklinksSeeded(t *testing.T) {
 func TestSeedWorldGraphFailureBacksOff(t *testing.T) {
 	d := &fakeDispatcher{
 		FetchFn: unavailableSeedSource,
-		FetchCondFn: func(_, _, _, _ string) (fetch.Result, error) {
+		SeedFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
 			return fetch.Result{}, fmt.Errorf("world unreachable")
 		},
 	}
@@ -439,7 +448,7 @@ func TestSeedWorldGraphFailureBacksOff(t *testing.T) {
 	}
 	d.Lock()
 	defer d.Unlock()
-	if len(d.FetchCondCalls) != 1 {
-		t.Fatalf("seed probes = %d, want 1: a failed seed backs off for the check interval", len(d.FetchCondCalls))
+	if len(d.SeedCalls) != 1 {
+		t.Fatalf("seed probes = %d, want 1: a failed seed backs off for the check interval", len(d.SeedCalls))
 	}
 }

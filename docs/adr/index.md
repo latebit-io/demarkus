@@ -21,3 +21,5 @@ Decision records binding the protocol, spec, and repo; git is canonical, and eac
 | [0015](0015-backend-contract-context-and-views.md) | The backend contract takes a context per call and reads through views | accepted 2026-09-21 |
 | [0016](0016-write-policy-as-a-commit-precondition.md) | The publish policy is enforced above the store, inside its commit | accepted 2026-09-21 |
 | [0017](0017-archive-precondition-closed-views-and-seeding.md) | Archive preconditions, closed views, and seeding above the store | accepted 2026-09-21 |
+| [0018](0018-one-mark-url-parser-and-lowercase-host-identity.md) | One mark URL parser, and host case is not identity | accepted 2026-09-21 |
+| [0019](0019-shared-tool-bodies-and-one-write-contract.md) | Tool bodies and the write contract live in shared packages | accepted 2026-09-21 |

@@ -23,7 +23,8 @@ func TestHandleMarkLookupAllMergesReadableWorlds(t *testing.T) {
 		WorldConfig{Name: "offline", Namespace: "offline"},
 	)
 	d := &fakeDispatcher{
-		LookupFn: func(world, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+			world := r.Host
 			switch world {
 			case "team-a":
 				return lookupResult(
@@ -91,8 +92,8 @@ func TestHandleMarkLookupAllMergesReadableWorlds(t *testing.T) {
 		if call.Scope != "/docs/" || call.Query != "auth" || call.Token != "" {
 			t.Errorf("dispatch = %+v", call)
 		}
-		if call.Opts.Filter != "tag=auth" || call.Opts.Limit != 3 {
-			t.Errorf("dispatch opts = %+v, want filter=tag=auth limit=3", call.Opts)
+		if call.Filter != "tag=auth" || call.Limit != 3 {
+			t.Errorf("dispatch opts = %+v, want filter=tag=auth limit=3", call)
 		}
 	}
 }
@@ -101,7 +102,8 @@ func TestHandleMarkLookupAllReportsTotalFailure(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "team-b", Namespace: "team-b"})
 	d := &fakeDispatcher{
-		LookupFn: func(world, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+			world := r.Host
 			return fetch.Result{}, errors.New("unreachable " + world)
 		},
 	}
@@ -152,7 +154,7 @@ func TestHandleMarkLookupAllReturnsOnCancellation(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	d := &fakeDispatcher{
-		LookupCtxFn: func(ctx context.Context, _, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(ctx context.Context, _ fetch.LookupRequest) (fetch.Result, error) {
 			close(started)
 			select {
 			case <-release:
@@ -197,7 +199,7 @@ func TestHandleMarkLookupAllBoundsFanout(t *testing.T) {
 	started := make(chan struct{}, len(cfg.Worlds))
 	release := make(chan struct{})
 	d := &fakeDispatcher{
-		LookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(context.Context, fetch.LookupRequest) (fetch.Result, error) {
 			started <- struct{}{}
 			<-release
 			return lookupResult(), nil
@@ -252,8 +254,8 @@ func TestHandleMarkLookupAllAppliesGlobalLimitBounds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var got int
 			d := &fakeDispatcher{
-				LookupFn: func(_, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
-					got = opts.Limit
+				LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+					got = r.Limit
 					return lookupResult(), nil
 				},
 			}
@@ -322,11 +324,12 @@ func TestHandleMarkLookupAllBodyMatchMergesAndFlagsCatalogWorlds(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "team-b", Namespace: "team-b"})
 	var mu sync.Mutex
-	var seen []fetch.LookupOptions
+	var seen []fetch.LookupRequest
 	d := &fakeDispatcher{
-		LookupFn: func(world, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+			world := r.Host
 			mu.Lock()
-			seen = append(seen, opts)
+			seen = append(seen, r)
 			mu.Unlock()
 			if world == "team-a" {
 				return bodyLookupResult(render.LookupRow{
@@ -370,7 +373,7 @@ func TestHandleMarkLookupAllCapsTagsUnlessVerbose(t *testing.T) {
 	cfg := mcpTestConfig()
 	many := []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12"}
 	d := &fakeDispatcher{
-		LookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(context.Context, fetch.LookupRequest) (fetch.Result, error) {
 			return lookupResult(render.LookupRow{Path: "/a.md", Importance: 0.9, Title: "A", Tags: many}), nil
 		},
 	}

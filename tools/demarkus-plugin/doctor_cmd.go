@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/doctor"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
@@ -90,7 +91,7 @@ func resolveStore(id string) (*doctor.ClientStore, error) {
 	if ep.Broker {
 		return nil, errors.New("store '" + id + "' is a broker store; the doctor audits local and direct-QUIC stores only")
 	}
-	hostPort, _, err := fetch.ParseMarkURL(ep.Host)
+	hostPort, err := links.DialHost(ep.Host)
 	if err != nil {
 		return nil, fmt.Errorf("store '%s' host: %w", id, err)
 	}

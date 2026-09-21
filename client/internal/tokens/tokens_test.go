@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/latebit-io/demarkus/client/fetch"
 )
 
 func TestLoad_NewFile(t *testing.T) {
@@ -187,6 +189,11 @@ func TestResolve(t *testing.T) {
 			got := Resolve(tt.cred, tt.host, tt.store)
 			if got != tt.want {
 				t.Errorf("Resolve() = %q, want %q", got, tt.want)
+			}
+			// The resolver the client hands to crawls must follow the same rule.
+			var resolver fetch.TokenResolver = Resolver{Credential: tt.cred, Store: tt.store}
+			if got := resolver.Token(tt.host); got != tt.want {
+				t.Errorf("Resolver.Token() = %q, want %q", got, tt.want)
 			}
 		})
 	}

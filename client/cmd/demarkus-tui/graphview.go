@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
@@ -74,14 +73,14 @@ func (m model) startCrawl(ctx context.Context, url string) tea.Cmd {
 	cred := tokens.Credential{Origin: m.authOrigin}
 	return func() tea.Msg {
 		store := tokens.LoadDefault()
-		g, err := gs.CrawlAndPersist(ctx, url, graphstore.NewFetchFunc(client, store, cred), fetch.ParseMarkURL, graphstore.CrawlOptions{
+		g, err := gs.CrawlAndPersist(ctx, url, graphstore.NewFetchFunc(client, tokens.Resolver{Credential: cred, Store: store}), graphstore.CrawlOptions{
 			MaxDepth: 10,
 			MaxNodes: maxCrawlNodes,
 			Workers:  5,
 		})
 		if gs != nil && ctx.Err() == nil {
 			if sources := gs.Backlinks(url); len(sources) > 0 {
-				_, validationErr := gs.Revalidate(ctx, sources, graphstore.NewFetchFunc(client, store, cred), fetch.ParseMarkURL)
+				_, validationErr := gs.Revalidate(ctx, sources, graphstore.NewFetchFunc(client, tokens.Resolver{Credential: cred, Store: store}))
 				err = errors.Join(err, validationErr)
 			}
 		}
@@ -99,7 +98,7 @@ func (m *model) cancelCrawl() {
 }
 
 func (m model) handleRelationsToggle() (tea.Model, tea.Cmd) {
-	url := m.addressBar.Value()
+	url := m.currentURL
 	if url == "" {
 		return m, nil
 	}
@@ -140,7 +139,7 @@ func (m model) startRelationRefresh(ctx context.Context, url string) tea.Cmd {
 		if len(urls) == 0 {
 			return relationRefreshResult{url: url, seq: seq}
 		}
-		result, err := store.Revalidate(ctx, urls, graphstore.NewFetchFunc(client, tokens.LoadDefault(), cred), fetch.ParseMarkURL)
+		result, err := store.Revalidate(ctx, urls, graphstore.NewFetchFunc(client, tokens.Resolver{Credential: cred, Store: tokens.LoadDefault()}))
 		return relationRefreshResult{url: url, summary: graphstore.ValidationSummary(result, err), seq: seq}
 	}
 }
@@ -537,8 +536,8 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.viewMode = viewDocument
 			m.addressBar.SetValue(target)
 			m.loading = true
-			m.fetchSeq++
-			return m, m.doFetch(target)
+			cmd := m.startFetch(target) // before the return: it changes m
+			return m, cmd
 		}
 		return m, nil
 	}
@@ -551,7 +550,7 @@ func (m model) handleRelationsPageKey(key string) (tea.Model, tea.Cmd) {
 	}
 	if key == "]" && m.graphPageNext != "" {
 		current, next := m.graphPageCursor, m.graphPageNext
-		if err := m.loadRelationsPage(m.addressBar.Value(), next); err != nil {
+		if err := m.loadRelationsPage(m.currentURL, next); err != nil {
 			m.graphWarning = "query relations: " + err.Error()
 		} else {
 			m.graphPageBack = append(m.graphPageBack, current)
@@ -560,7 +559,7 @@ func (m model) handleRelationsPageKey(key string) (tea.Model, tea.Cmd) {
 	if key == "[" && len(m.graphPageBack) > 0 {
 		last := len(m.graphPageBack) - 1
 		previous := m.graphPageBack[last]
-		if err := m.loadRelationsPage(m.addressBar.Value(), previous); err != nil {
+		if err := m.loadRelationsPage(m.currentURL, previous); err != nil {
 			m.graphWarning = "query relations: " + err.Error()
 		} else {
 			m.graphPageBack = m.graphPageBack[:last]

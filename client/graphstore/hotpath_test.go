@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/links"
 )
 
 func TestRevalidateSavesOnce(t *testing.T) {
@@ -38,14 +38,15 @@ func TestRevalidateSavesOnce(t *testing.T) {
 		return revisions
 	}
 	fetches := 0
-	fetchFn := func(_ context.Context, _, path string) (graph.FetchResult, error) {
+	fetchFn := func(_ context.Context, target links.Target) (graph.FetchResult, error) {
+		path := target.Path
 		fetches++
 		if fetches == 3 && slices.Contains(persistedRevisions(), 2) {
 			t.Fatal("an earlier attempt was persisted before the pass finished")
 		}
 		return graph.FetchResult{Status: "ok", Body: "# " + path, Metadata: map[string]string{"version": "2"}}, nil
 	}
-	result, err := store.Revalidate(t.Context(), nil, fetchFn, fetch.ParseMarkURL)
+	result, err := store.Revalidate(t.Context(), nil, fetchFn)
 	if err != nil || result.Attempts != 3 || result.Fetches != 3 {
 		t.Fatalf("revalidation: %+v, %v", result, err)
 	}
@@ -102,10 +103,10 @@ func TestSeedRecordCacheFollowsOwnerWrites(t *testing.T) {
 func TestRevalidateCanonicalizesRequestedSources(t *testing.T) {
 	store := New()
 	store.ReplaceSeed("owner", []StoredNode{{URL: "mark://host/a.md", Status: "ok"}}, nil)
-	fetchFn := func(_ context.Context, _, _ string) (graph.FetchResult, error) {
+	fetchFn := func(_ context.Context, _ links.Target) (graph.FetchResult, error) {
 		return graph.FetchResult{Status: "ok", Body: "# A", Metadata: map[string]string{"version": "2"}}, nil
 	}
-	result, err := store.Revalidate(t.Context(), []string{"mark://host:6309/a.md"}, fetchFn, fetch.ParseMarkURL)
+	result, err := store.Revalidate(t.Context(), []string{"mark://host:6309/a.md"}, fetchFn)
 	if err != nil || result.Attempts != 1 || result.Fetches != 1 {
 		t.Fatalf("dial-address source skipped: %+v, %v", result, err)
 	}

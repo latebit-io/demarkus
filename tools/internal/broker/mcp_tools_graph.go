@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"path"
 	"slices"
 	"strconv"
@@ -23,27 +22,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// Crawl links may carry sections/queries; fetch only the document.
-// Agent-supplied root URLs still pass strict parseToolURL validation.
-func brokerCrawlParseURL(raw string) (worldName, urlPath string, err error) {
-	u, parseErr := url.Parse(raw)
-	if parseErr != nil {
-		return "", "", parseErr
-	}
-	if u.Scheme != "mark" {
-		return "", "", fmt.Errorf("not mark://: %s", u.Scheme)
-	}
-	worldName = u.Hostname()
-	if worldName == "" {
-		return "", "", fmt.Errorf("missing world name in %q", raw)
-	}
-	urlPath = u.Path
-	if urlPath == "" {
-		urlPath = "/"
-	}
-	return worldName, urlPath, nil
-}
-
 // crawlFetchFn returns graphstore.CrawlAndPersist's best-effort fetchFunc
 // (per-fetch failures mark the node "error"). In tenant mode the crawl
 // never leaves the caller's world; a foreign link errors instead of fetching.
@@ -54,13 +32,14 @@ func (g *mcpGateway) crawlFetchFn(ctx context.Context) graphstore.FetchFunc {
 		if err != nil {
 			// The tenantGate already denied unresolvable identities;
 			// deny every fetch rather than crawl unscoped.
-			return func(context.Context, string, string) (graph.FetchResult, error) {
+			return func(context.Context, links.Target) (graph.FetchResult, error) {
 				return graph.FetchResult{}, ErrNotAuthorized
 			}
 		}
 		tenant = w.Name
 	}
-	return func(ctx context.Context, worldName, path string) (graph.FetchResult, error) {
+	return func(ctx context.Context, target links.Target) (graph.FetchResult, error) {
+		worldName := target.Hostname()
 		if tenant != "" && worldName != tenant {
 			return graph.FetchResult{}, fmt.Errorf("world %q is outside your world %q", worldName, tenant)
 		}
@@ -68,12 +47,12 @@ func (g *mcpGateway) crawlFetchFn(ctx context.Context) graphstore.FetchFunc {
 		if !ok {
 			return graph.FetchResult{}, fmt.Errorf("unknown graph source world %q", worldName)
 		}
-		result, derr := g.dispatcher.FetchContext(ctx, worldName, path, "")
+		result, derr := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: target.Path})
 		if derr != nil {
 			return graph.FetchResult{}, derr
 		}
 		return graph.FetchResult{
-			Source:   links.NodeURL(resolveWorldAddress(&world), path),
+			Source:   links.NodeURL(resolveWorldAddress(&world), target.Path),
 			Status:   result.Response.Status,
 			Body:     result.Response.Body,
 			Metadata: result.Response.Metadata,
@@ -106,7 +85,7 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, wo
 // seedPass reports whether the world's published graph was current, refreshed or absent.
 func (g *mcpGateway) seedPass(ctx context.Context, state *gatewayGraph, worldName string) bool { //nolint:gocyclo // snapshot-first fallback has explicit terminal states
 	etag := state.graphStore.SeedEtag(worldName)
-	result, err := g.dispatcher.FetchConditionalContext(ctx, worldName, graphstore.SnapshotManifestPath, "", etag)
+	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: graphstore.SnapshotManifestPath, IfNoneMatch: etag})
 	if err != nil {
 		g.log.Warn("graph seed fetch failed", "world", worldName, "err", err)
 		return false
@@ -116,7 +95,7 @@ func (g *mcpGateway) seedPass(ctx context.Context, state *gatewayGraph, worldNam
 	}
 	if result.Response.Status == protocol.StatusOK {
 		nodes, edges, loadErr := graphstore.LoadSnapshot(graphstore.SnapshotManifestPath, result.Response, func(shardPath string) (protocol.Response, error) {
-			shard, fetchErr := g.dispatcher.FetchContext(ctx, worldName, shardPath, "")
+			shard, fetchErr := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: shardPath})
 			return shard.Response, fetchErr
 		})
 		if loadErr != nil {
@@ -135,7 +114,7 @@ func (g *mcpGateway) seedPass(ctx context.Context, state *gatewayGraph, worldNam
 		return false
 	}
 
-	result, err = g.dispatcher.FetchConditionalContext(ctx, worldName, "/graph.md", "", etag)
+	result, err = g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: graphstore.LegacyExportPath, IfNoneMatch: etag})
 	if err != nil {
 		g.log.Warn("legacy graph seed fetch failed", "world", worldName, "err", err)
 		return false
@@ -276,7 +255,6 @@ func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolReques
 		ctx,
 		raw,
 		g.crawlFetchFn(ctx),
-		brokerCrawlParseURL,
 		graphstore.CrawlOptions{
 			MaxDepth: depth,
 			MaxNodes: 200,
@@ -353,7 +331,10 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 		meta["retention"] = strconv.Itoa(retention)
 	}
 	result, err := g.dispatchWithWriteAuth(ctx, worldName, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Publish(worldName, urlPath, body, token, expectedVersion, meta)
+		return g.dispatcher.Publish(ctx, fetch.WriteRequest{
+			Host: worldName, Path: urlPath, Body: body, Token: token,
+			ExpectedVersion: expectedVersion, Metadata: meta,
+		})
 	})
 	if err != nil {
 		return g.toolErrorFor("graph publish", worldName, err), nil
@@ -418,7 +399,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 
 	// Manifest safeguards. Source warning is informational;
 	// target absence is a hard block unless force or dry_run.
-	warnings, block := g.checkIndexManifests(sourceWorld, targetWorld, dryRun, force)
+	warnings, block := g.checkIndexManifests(ctx, manifestCheck{sourceWorld: sourceWorld, targetWorld: targetWorld, dryRun: dryRun, force: force})
 	if block != nil {
 		return block, nil
 	}
@@ -470,7 +451,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 	logicalEntries := entries
 	// Merge with an existing legacy index or verified sharded generation.
 	if expectedVersion > 0 {
-		existing, fetchErr := g.dispatcher.FetchContext(ctx, targetWorld, targetPath, "")
+		existing, fetchErr := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: targetWorld, Path: targetPath})
 		if fetchErr != nil {
 			return g.toolErrorFor("index (fetch existing)", targetWorld, fetchErr), nil
 		}
@@ -478,7 +459,7 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %s", existing.Response.Status)), nil
 		}
 		existingEntries, loadErr := index.LoadEntries(targetPath, existing.Response.Body, func(shardPath string) (protocol.Response, error) {
-			shard, err := g.dispatcher.FetchContext(ctx, targetWorld, shardPath, "")
+			shard, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: targetWorld, Path: shardPath})
 			return shard.Response, err
 		})
 		if loadErr != nil {
@@ -497,10 +478,13 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 			Entries:                 logicalEntries,
 			ExpectedManifestVersion: &expectedVersion,
 		}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
-			fetched, fetchErr := g.dispatcher.FetchContext(ioCtx, targetWorld, docPath, "")
+			fetched, fetchErr := g.dispatcher.Fetch(ioCtx, fetch.FetchRequest{Host: targetWorld, Path: docPath})
 			return fetched.Response, fetchErr
 		}, func(ioCtx context.Context, docPath, docBody string, expected int) (protocol.Response, error) {
-			publishedDoc, publishDocErr := g.dispatcher.PublishContext(ioCtx, targetWorld, docPath, docBody, token, expected, meta)
+			publishedDoc, publishDocErr := g.dispatcher.Publish(ioCtx, fetch.WriteRequest{
+				Host: targetWorld, Path: docPath, Body: docBody, Token: token,
+				ExpectedVersion: expected, Metadata: meta,
+			})
 			if publishDocErr == nil && publishedDoc.Response.Status == protocol.StatusUnauthorized {
 				return publishedDoc.Response, errIndexPublishUnauthorized
 			}
@@ -534,19 +518,20 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 	return mcp.NewToolResultText(out.String()), nil
 }
 
-// checkIndexManifests applies the same source-warn / target-block
-// semantics the local demarkus-mcp does: a source world without
-// a manifest is a warning (the index may still be useful even if
-// the source doesn't advertise itself), a target without a
-// manifest is a block (the agent shouldn't write an index to a
-// world that hasn't said "yes, accept index publications") —
-// force=true bypasses the block with a recorded warning so an
-// operator who intends the publish anyway can opt in.
-func (g *mcpGateway) checkIndexManifests(sourceWorld, targetWorld string, dryRun, force bool) ([]string, *mcp.CallToolResult) {
+// manifestCheck is one mark_index manifest check.
+type manifestCheck struct {
+	sourceWorld, targetWorld string
+	dryRun, force            bool
+}
+
+// checkIndexManifests, as the local demarkus-mcp does: a source without an
+// agent manifest warns, a target without one blocks unless force is set.
+func (g *mcpGateway) checkIndexManifests(ctx context.Context, check manifestCheck) ([]string, *mcp.CallToolResult) {
+	sourceWorld, targetWorld, dryRun, force := check.sourceWorld, check.targetWorld, check.dryRun, check.force
 	var warnings []string
 	// An unread manifest is not a missing one: the source only warns, and
 	// force overrides a missing target manifest, never an unreachable target.
-	srcManifest, err := g.dispatcher.Fetch(sourceWorld, protocol.WellKnownManifestPath, "")
+	srcManifest, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: sourceWorld, Path: protocol.WellKnownManifestPath})
 	switch {
 	case err != nil:
 		warnings = append(warnings, fmt.Sprintf("warning: could not check source agent manifest: %v", err))
@@ -557,7 +542,7 @@ func (g *mcpGateway) checkIndexManifests(sourceWorld, targetWorld string, dryRun
 		return warnings, nil
 	}
 
-	tgtManifest, err := g.dispatcher.Fetch(targetWorld, protocol.WellKnownManifestPath, "")
+	tgtManifest, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: targetWorld, Path: protocol.WellKnownManifestPath})
 	if err != nil {
 		return warnings, mcp.NewToolResultError(fmt.Sprintf("could not check target agent manifest: %v", err))
 	}
@@ -623,7 +608,8 @@ func (iw *indexWalk) walk(ctx context.Context, dirPath string, depth int) error 
 			return errIndexTruncated
 		}
 		iw.lists++
-		listResult, err := iw.g.dispatcher.List(iw.worldName, dirPath, "", fetch.ListOptions{
+		listResult, err := iw.g.dispatcher.List(ctx, fetch.ListRequest{
+			Host: iw.worldName, Path: dirPath,
 			Cursor:   cursor,
 			PageSize: protocol.MaxListPageSize,
 		})
@@ -694,13 +680,13 @@ func (iw *indexWalk) walkEntries(ctx context.Context, entries []listing.Entry, d
 			return errIndexTruncated
 		}
 		iw.fetches++
-		iw.addDocument(canonical)
+		iw.addDocument(ctx, canonical)
 	}
 	return nil
 }
 
-func (iw *indexWalk) addDocument(canonical string) {
-	doc, err := iw.g.dispatcher.Fetch(iw.worldName, canonical, "")
+func (iw *indexWalk) addDocument(ctx context.Context, canonical string) {
+	doc, err := iw.g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: iw.worldName, Path: canonical})
 	if err != nil {
 		iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "err", err)
 		iw.incomplete = append(iw.incomplete, canonical+": "+err.Error())

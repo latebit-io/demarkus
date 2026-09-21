@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -13,7 +14,7 @@ const testHashA = "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const testHashB = "sha256-abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 func TestShardedManifestRoundTrip(t *testing.T) {
-	artifacts, err := BuildShards("/index.md", SlotA, []Entry{
+	artifacts, err := BuildShards("/index.md", generation.SlotA, []Entry{
 		{Hash: testHashB, Server: "mark://b", Path: "/b.md"},
 		{Hash: testHashA, Server: "mark://a", Path: "/\ta|one.md\u00a0 "},
 	}, 0)
@@ -26,7 +27,7 @@ func TestShardedManifestRoundTrip(t *testing.T) {
 	}
 	m := Manifest{
 		Source: "aggregated", Indexed: time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC),
-		Complete: true, Documents: 2, ActiveSlot: SlotA, Shards: refs,
+		Complete: true, Documents: 2, ActiveSlot: generation.SlotA, Shards: refs,
 	}
 	body, err := BuildManifest("/index.md", m)
 	if err != nil {
@@ -36,7 +37,7 @@ func TestShardedManifestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseManifest: %v", err)
 	}
-	if got.Source != m.Source || got.Documents != 2 || got.ActiveSlot != SlotA || len(got.Shards) != 2 {
+	if got.Source != m.Source || got.Documents != 2 || got.ActiveSlot != generation.SlotA || len(got.Shards) != 2 {
 		t.Fatalf("manifest = %+v", got)
 	}
 	if !strings.Contains(body, "/index.shards/a/aa-000.md") || !strings.Contains(body, "/index.shards/a/ab-000.md") {
@@ -56,11 +57,11 @@ func TestBuildShardsDeterministicOverflow(t *testing.T) {
 	for i := range entries {
 		entries[i] = Entry{Hash: testHashA, Server: "mark://server", Path: fmt.Sprintf("/doc-%02d.md", 7-i)}
 	}
-	one, err := BuildShards("/indexes/all.md", SlotB, entries, 330)
+	one, err := BuildShards("/indexes/all.md", generation.SlotB, entries, 330)
 	if err != nil {
 		t.Fatalf("BuildShards: %v", err)
 	}
-	two, err := BuildShards("/indexes/all.md", SlotB, entries, 330)
+	two, err := BuildShards("/indexes/all.md", generation.SlotB, entries, 330)
 	if err != nil {
 		t.Fatalf("BuildShards repeat: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestBuildShardsDeterministicOverflow(t *testing.T) {
 }
 
 func TestEntriesForHashFetchesOnlyMatchingVerifiedShards(t *testing.T) {
-	artifacts, err := BuildShards("/index.md", SlotA, []Entry{
+	artifacts, err := BuildShards("/index.md", generation.SlotA, []Entry{
 		{Hash: testHashA, Server: "mark://a", Path: "/a.md"},
 		{Hash: testHashB, Server: "mark://b", Path: "/b.md"},
 	}, 0)
@@ -89,13 +90,13 @@ func TestEntriesForHashFetchesOnlyMatchingVerifiedShards(t *testing.T) {
 	responses := make(map[string]protocol.Response)
 	for i, artifact := range artifacts {
 		refs[i] = artifact.Ref(i + 1)
-		responses[VersionPath(artifact.Path, i+1)] = protocol.Response{Status: protocol.StatusOK, Body: artifact.Body, Metadata: map[string]string{
+		responses[generation.VersionPath(artifact.Path, i+1)] = protocol.Response{Status: protocol.StatusOK, Body: artifact.Body, Metadata: map[string]string{
 			"version": strconvI(i + 1), "content-hash": artifact.ContentHash,
 		}}
 	}
 	manifestBody, err := BuildManifest("/index.md", Manifest{
 		Source: "aggregated", Indexed: time.Now(), Complete: true,
-		Documents: 2, ActiveSlot: SlotA, Shards: refs,
+		Documents: 2, ActiveSlot: generation.SlotA, Shards: refs,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +115,7 @@ func TestEntriesForHashFetchesOnlyMatchingVerifiedShards(t *testing.T) {
 }
 
 func TestLoadEntriesReadsFullGenerationAndRejectsShortShard(t *testing.T) {
-	artifacts, err := BuildShards("/index.md", SlotA, []Entry{
+	artifacts, err := BuildShards("/index.md", generation.SlotA, []Entry{
 		{Hash: testHashA, Server: "mark://a", Path: "/a.md"},
 		{Hash: testHashB, Server: "mark://b", Path: "/b.md"},
 	}, 0)
@@ -125,7 +126,7 @@ func TestLoadEntriesReadsFullGenerationAndRejectsShortShard(t *testing.T) {
 	responses := make(map[string]protocol.Response, len(artifacts))
 	for i, artifact := range artifacts {
 		refs[i] = artifact.Ref(i + 1)
-		responses[VersionPath(artifact.Path, i+1)] = protocol.Response{
+		responses[generation.VersionPath(artifact.Path, i+1)] = protocol.Response{
 			Status: protocol.StatusOK, Body: artifact.Body,
 			Metadata: map[string]string{"version": strconvI(i + 1), "content-hash": artifact.ContentHash},
 		}
@@ -133,7 +134,7 @@ func TestLoadEntriesReadsFullGenerationAndRejectsShortShard(t *testing.T) {
 	buildManifest := func(shardRefs []ShardRef) string {
 		body, buildErr := BuildManifest("/index.md", Manifest{
 			Source: "aggregated", Indexed: time.Now(), Complete: true,
-			Documents: 2, ActiveSlot: SlotA, Shards: shardRefs,
+			Documents: 2, ActiveSlot: generation.SlotA, Shards: shardRefs,
 		})
 		if buildErr != nil {
 			t.Fatal(buildErr)
@@ -152,8 +153,8 @@ func TestLoadEntriesReadsFullGenerationAndRejectsShortShard(t *testing.T) {
 
 	shortBody := strings.Replace(artifacts[0].Body, "| "+testHashA+" | mark://a | /a.md |\n", "", 1)
 	refs[0].Bytes = len(shortBody)
-	refs[0].ContentHash = BodyHash(shortBody)
-	responses[VersionPath(refs[0].Path, refs[0].Version)] = protocol.Response{
+	refs[0].ContentHash = generation.BodyHash(shortBody)
+	responses[generation.VersionPath(refs[0].Path, refs[0].Version)] = protocol.Response{
 		Status: protocol.StatusOK, Body: shortBody,
 		Metadata: map[string]string{"version": strconvI(refs[0].Version), "content-hash": refs[0].ContentHash},
 	}
@@ -163,7 +164,7 @@ func TestLoadEntriesReadsFullGenerationAndRejectsShortShard(t *testing.T) {
 }
 
 func TestVerifyShardRejectsDrift(t *testing.T) {
-	artifacts, err := BuildShards("/index.md", SlotA, []Entry{{Hash: testHashA, Server: "mark://a", Path: "/a.md"}}, 0)
+	artifacts, err := BuildShards("/index.md", generation.SlotA, []Entry{{Hash: testHashA, Server: "mark://a", Path: "/a.md"}}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,13 +183,13 @@ func TestVerifyShardRejectsDrift(t *testing.T) {
 }
 
 func TestVerifyShardRejectsPartPathMismatch(t *testing.T) {
-	artifacts, err := BuildShards("/index.md", SlotA, []Entry{{Hash: testHashA, Server: "mark://a", Path: "/a.md"}}, 0)
+	artifacts, err := BuildShards("/index.md", generation.SlotA, []Entry{{Hash: testHashA, Server: "mark://a", Path: "/a.md"}}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := strings.Replace(artifacts[0].Body, "> Part: 0", "> Part: 1", 1)
 	ref := artifacts[0].Ref(1)
-	ref.ContentHash = BodyHash(body)
+	ref.ContentHash = generation.BodyHash(body)
 	ref.Bytes = len(body)
 	resp := protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: map[string]string{
 		"version": "1", "content-hash": ref.ContentHash,
@@ -200,14 +201,14 @@ func TestVerifyShardRejectsPartPathMismatch(t *testing.T) {
 
 func TestBuildShardsExactTargetBoundary(t *testing.T) {
 	entry := []Entry{{Hash: testHashA, Server: "mark://a", Path: "/a.md"}}
-	base, err := BuildShards("/index.md", SlotA, entry, 0)
+	base, err := BuildShards("/index.md", generation.SlotA, entry, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := BuildShards("/index.md", SlotA, entry, base[0].Bytes); err != nil {
+	if _, err := BuildShards("/index.md", generation.SlotA, entry, base[0].Bytes); err != nil {
 		t.Fatalf("exact boundary rejected: %v", err)
 	}
-	if _, err := BuildShards("/index.md", SlotA, entry, base[0].Bytes-1); err == nil {
+	if _, err := BuildShards("/index.md", generation.SlotA, entry, base[0].Bytes-1); err == nil {
 		t.Fatal("oversized single row accepted")
 	}
 }
@@ -226,7 +227,7 @@ func TestEntriesForHashReadsLegacyIndex(t *testing.T) {
 func TestBuildShardsRejectsUnsafeManifestPath(t *testing.T) {
 	entry := []Entry{{Hash: testHashA, Server: "mark://a", Path: "/a.md"}}
 	for _, manifestPath := range []string{"index.md", "/a/../index.md", "/"} {
-		if _, err := BuildShards(manifestPath, SlotA, entry, 0); err == nil {
+		if _, err := BuildShards(manifestPath, generation.SlotA, entry, 0); err == nil {
 			t.Errorf("BuildShards accepted %q", manifestPath)
 		}
 	}
@@ -239,7 +240,7 @@ func TestParseManifestRejectsMissingPart(t *testing.T) {
 		{Prefix: "aa", Path: "/index.shards/a/aa-002.md", Version: 1, ContentHash: testHashB, Rows: 1, Bytes: 100},
 	}
 	if _, err := BuildManifest("/index.md", Manifest{
-		Source: "aggregated", Indexed: indexed, Complete: true, Documents: 2, ActiveSlot: SlotA, Shards: refs,
+		Source: "aggregated", Indexed: indexed, Complete: true, Documents: 2, ActiveSlot: generation.SlotA, Shards: refs,
 	}); err == nil {
 		t.Fatal("BuildManifest accepted missing overflow part")
 	}
@@ -296,7 +297,7 @@ func TestBuildShardsRejectsInvalidLocations(t *testing.T) {
 		{Hash: testHashA, Server: "mark://host:70000", Path: "/a.md"},
 		{Hash: testHashA, Server: "mark://host", Path: "/a.md\nnext"},
 	} {
-		if _, err := BuildShards("/index.md", SlotA, []Entry{entry}, 0); err == nil {
+		if _, err := BuildShards("/index.md", generation.SlotA, []Entry{entry}, 0); err == nil {
 			t.Errorf("BuildShards accepted %+v", entry)
 		}
 	}
@@ -306,7 +307,7 @@ func mustManifestBody(t *testing.T) string {
 	t.Helper()
 	body, err := BuildManifest("/index.md", Manifest{
 		Source: "aggregated", Indexed: time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC),
-		Complete: true, Documents: 0, ActiveSlot: SlotA,
+		Complete: true, Documents: 0, ActiveSlot: generation.SlotA,
 	})
 	if err != nil {
 		t.Fatal(err)

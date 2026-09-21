@@ -10,11 +10,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
+	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/graphstore"
-	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -59,10 +61,10 @@ func newMockClient() *mockClient {
 
 func TestMockClientRejectsStaleManifestVersion(t *testing.T) {
 	client := newMockClient()
-	if result, err := client.Publish("hub:6309", "/index.md", "first", "", 0, nil); err != nil || result.Response.Status != protocol.StatusCreated {
+	if result, err := client.Publish(t.Context(), fetch.WriteRequest{Host: "hub:6309", Path: "/index.md", Body: "first"}); err != nil || result.Response.Status != protocol.StatusCreated {
 		t.Fatalf("initial publish = %+v, %v", result.Response, err)
 	}
-	result, err := client.Publish("hub:6309", "/index.md", "stale", "", 0, nil)
+	result, err := client.Publish(t.Context(), fetch.WriteRequest{Host: "hub:6309", Path: "/index.md", Body: "stale"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +73,11 @@ func TestMockClientRejectsStaleManifestVersion(t *testing.T) {
 	}
 }
 
-func (m *mockClient) Publish(host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
+func (m *mockClient) Publish(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	host, path, body, token, expectedVersion, meta := r.Host, r.Path, r.Body, r.Token, r.ExpectedVersion, r.Metadata
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, "PUBLISH "+host+path)
@@ -102,18 +108,11 @@ func (m *mockClient) Publish(host, path, body, token string, expectedVersion int
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusConflict}}, nil
 	}
 	version := currentVersion + 1
-	metadata := map[string]string{"version": strconv.Itoa(version), "content-hash": index.BodyHash(body)}
+	metadata := map[string]string{"version": strconv.Itoa(version), "content-hash": generation.BodyHash(body)}
 	stored := mockPage{status: protocol.StatusOK, body: body, metadata: metadata}
 	m.pages[host+path] = stored
-	m.pages[host+index.VersionPath(path, version)] = stored
+	m.pages[host+generation.VersionPath(path, version)] = stored
 	return fetch.Result{Response: protocol.Response{Status: status, Metadata: map[string]string{"version": strconv.Itoa(version)}}}, nil
-}
-
-func (m *mockClient) PublishContext(ctx context.Context, host, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
-	if err := ctx.Err(); err != nil {
-		return fetch.Result{}, err
-	}
-	return m.Publish(host, path, body, token, expectedVersion, meta)
 }
 
 func (m *mockClient) addDoc(host, path, body, hash string) {
@@ -139,13 +138,26 @@ func (m *mockClient) addList(host, path string, names ...string) {
 	m.addListPage(host, path, "", "", names...)
 }
 
+// listKey names one LIST page. As the server does, a directory reads the same
+// with or without its trailing slash.
+func listKey(host, dir, cursor string) string {
+	if len(dir) > 1 {
+		dir = strings.TrimSuffix(dir, "/")
+	}
+	return host + dir + "\x00" + cursor
+}
+
 // addListPage stores the server's own rendering of one page of names.
 func (m *mockClient) addListPage(host, path, cursor, next string, names ...string) {
 	page := fetchtest.ListPage(path, next, names...).Response
-	m.lists[host+path+"\x00"+cursor] = mockPage{status: page.Status, body: page.Body, metadata: page.Metadata}
+	m.lists[listKey(host, path, cursor)] = mockPage{status: page.Status, body: page.Body, metadata: page.Metadata}
 }
 
-func (m *mockClient) Fetch(host, path, _ string) (fetch.Result, error) {
+func (m *mockClient) Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
+	host, path := r.Host, r.Path
 	m.mu.Lock()
 	m.calls = append(m.calls, "FETCH "+host+path)
 	m.mu.Unlock()
@@ -161,14 +173,11 @@ func (m *mockClient) Fetch(host, path, _ string) (fetch.Result, error) {
 	}}, nil
 }
 
-func (m *mockClient) FetchContext(ctx context.Context, host, path, token string) (fetch.Result, error) {
+func (m *mockClient) List(ctx context.Context, r fetch.ListRequest) (fetch.Result, error) {
 	if err := ctx.Err(); err != nil {
 		return fetch.Result{}, err
 	}
-	return m.Fetch(host, path, token)
-}
-
-func (m *mockClient) ListWithOptions(host, path, _ string, opts fetch.ListOptions) (fetch.Result, error) {
+	host, path := r.Host, r.Path
 	m.mu.Lock()
 	m.calls = append(m.calls, "LIST "+host+path)
 	m.mu.Unlock()
@@ -176,7 +185,7 @@ func (m *mockClient) ListWithOptions(host, path, _ string, opts fetch.ListOption
 		m.onList()
 	}
 
-	p, ok := m.lists[host+path+"\x00"+opts.Cursor]
+	p, ok := m.lists[listKey(host, path, r.Cursor)]
 	if !ok {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 	}
@@ -681,6 +690,51 @@ func TestCrawlerCancellationDuringRun(t *testing.T) {
 	}
 }
 
+// A politeness delay must end with the context: a shutdown otherwise waits out
+// one delay per worker. Fake time makes the wait exact: one delay, never two.
+func TestCrawlerPolitenessDelayEndsWithContext(t *testing.T) {
+	tests := []struct {
+		name      string
+		cancel    func(client *mockClient, cancel context.CancelFunc)
+		wantWait  time.Duration
+		wantCalls string
+	}{
+		{"during the delay before the first list", func(_ *mockClient, cancel context.CancelFunc) {
+			time.AfterFunc(time.Second, cancel)
+		}, time.Second, ""},
+		{"during the delay before the first fetch", func(client *mockClient, cancel context.CancelFunc) {
+			client.onList = func() { time.AfterFunc(time.Second, cancel) }
+		}, time.Minute + time.Second, "LIST example.com:6309/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				cfg := DefaultConfig()
+				cfg.Seeds = []string{"mark://example.com"}
+				cfg.Politeness.RequestDelay = time.Minute
+				client := newMockClient()
+				client.addList("example.com:6309", "/", "index.md")
+				client.addDoc("example.com:6309", "/index.md", "Content.", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				tt.cancel(client, cancel)
+
+				start := time.Now()
+				_, err := NewCrawler(cfg, client, nil, nil).Run(ctx)
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("Run error = %v, want context.Canceled", err)
+				}
+				if waited := time.Since(start); waited != tt.wantWait {
+					t.Errorf("Run waited %v, want %v: a delay outlived its context", waited, tt.wantWait)
+				}
+				if calls := strings.Join(client.calls, ","); calls != tt.wantCalls {
+					t.Errorf("requests = %q, want %q", calls, tt.wantCalls)
+				}
+			})
+		})
+	}
+}
+
 func TestCrawlerSubdirectories(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://example.com"}
@@ -901,10 +955,25 @@ func TestPublishToHubs(t *testing.T) {
 		if len(client.publishes) != 4 {
 			t.Fatalf("expected two shards + two manifests, got %d", len(client.publishes))
 		}
+		var published strings.Builder
 		for i, call := range client.publishes {
 			if call.ExpectedVersion != 0 {
 				t.Errorf("publishes[%d].ExpectedVersion = %d, want 0", i, call.ExpectedVersion)
 			}
+			published.WriteString(call.Body)
+		}
+		// Servers are named by identity, never by dial address (ADR 0005, ADR 0018).
+		for _, want := range []string{
+			"| mark://a.example.com |", "> Source: mark://a.example.com\n",
+			"| mark://b.example.com |", "> Source: mark://b.example.com\n",
+		} {
+			if !strings.Contains(published.String(), want) {
+				t.Errorf("published indexes missing %q:\n%s", want, published.String())
+			}
+		}
+		// The per server document path still carries the dial host; only names are identity.
+		if strings.Contains(published.String(), "mark://a.example.com:6309") || strings.Contains(published.String(), "mark://b.example.com:6309") {
+			t.Errorf("dial port leaked into a server name:\n%s", published.String())
 		}
 	})
 }

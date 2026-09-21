@@ -9,6 +9,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
+	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -58,7 +59,8 @@ func TestReadResource_Section(t *testing.T) {
 }
 
 func TestReadResource_EscapedFilename(t *testing.T) {
-	client := &stubClient{FetchFn: func(_, path, _ string) (fetch.Result, error) {
+	client := &stubClient{FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		path := r.Path
 		if path != "/what?#%.md" {
 			t.Fatalf("path = %q", path)
 		}
@@ -84,7 +86,7 @@ func TestReadResource_LargeDocIsNotOutlined(t *testing.T) {
 func TestReadResource_Errors(t *testing.T) {
 	tests := []struct {
 		name    string
-		client  markClient
+		client  marktools.Backend
 		uri     string
 		wantErr string
 	}{
@@ -96,7 +98,7 @@ func TestReadResource_Errors(t *testing.T) {
 		},
 		{
 			"non-ok status surfaces",
-			&stubClient{FetchFn: func(_, _, _ string) (fetch.Result, error) {
+			&stubClient{FetchFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 			}},
 			"mark://example.com/missing.md",
@@ -104,7 +106,7 @@ func TestReadResource_Errors(t *testing.T) {
 		},
 		{
 			"transport error surfaces",
-			&stubClient{FetchFn: func(_, _, _ string) (fetch.Result, error) {
+			&stubClient{FetchFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 				return fetch.Result{}, fmt.Errorf("boom")
 			}},
 			"mark://example.com/doc.md",
@@ -135,14 +137,14 @@ func TestReadResource_Errors(t *testing.T) {
 
 func TestRegisterListedResources(t *testing.T) {
 	sc := &stubClient{
-		ListFn: func(_, _, _ string) (fetch.Result, error) {
+		ListFn: func(_ context.Context, _ fetch.ListRequest) (fetch.Result, error) {
 			return fetchtest.ListPage("/", "", "image.png", "index.md", "journal/", "notes.md", "patterns.md", "what?#%.md"), nil
 		},
 	}
 	h := &handler{client: sc, defaultHost: "mark://example.com"}
 	s := mcpserver.NewMCPServer("test", "0", mcpserver.WithResourceCapabilities(false, true))
 
-	registerListedResources(s, h, "mark://example.com")
+	registerListedResources(t.Context(), s, h, "mark://example.com")
 
 	// The registered resources are observable through a resources/list
 	// round-trip on the server.
@@ -161,14 +163,14 @@ func TestRegisterListedResources(t *testing.T) {
 
 func TestRegisterListedResources_HostDownIsQuiet(t *testing.T) {
 	sc := &stubClient{
-		ListFn: func(_, _, _ string) (fetch.Result, error) {
+		ListFn: func(_ context.Context, _ fetch.ListRequest) (fetch.Result, error) {
 			return fetch.Result{}, fmt.Errorf("dial: connection refused")
 		},
 	}
 	h := &handler{client: sc, defaultHost: "mark://example.com"}
 	s := mcpserver.NewMCPServer("test", "0", mcpserver.WithResourceCapabilities(false, true))
 
-	registerListedResources(s, h, "mark://example.com") // must not panic or register anything
+	registerListedResources(t.Context(), s, h, "mark://example.com") // must not panic or register anything
 	if got := listResourceURIs(t, s); len(got) != 0 {
 		t.Errorf("down host should register nothing, got %v", got)
 	}
@@ -176,7 +178,7 @@ func TestRegisterListedResources_HostDownIsQuiet(t *testing.T) {
 
 func TestRegisterListedResourcesBoundsListCalls(t *testing.T) {
 	calls := 0
-	sc := &stubClient{ListOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+	sc := &stubClient{ListFn: func(_ context.Context, _ fetch.ListRequest) (fetch.Result, error) {
 		calls++
 		name := fmt.Sprintf("dir-%03d/", calls)
 		return fetchtest.ListPage("/", strconv.Itoa(calls), name), nil
@@ -184,7 +186,7 @@ func TestRegisterListedResourcesBoundsListCalls(t *testing.T) {
 	h := &handler{client: sc, defaultHost: "mark://example.com"}
 	s := mcpserver.NewMCPServer("test", "0", mcpserver.WithResourceCapabilities(false, true))
 
-	registerListedResources(s, h, "mark://example.com")
+	registerListedResources(t.Context(), s, h, "mark://example.com")
 
 	if calls != maxResourceListCalls {
 		t.Fatalf("LIST calls = %d, want %d", calls, maxResourceListCalls)

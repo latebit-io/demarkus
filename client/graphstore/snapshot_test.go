@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -24,16 +25,16 @@ func TestGraphSnapshotRoundTripAndIntegrity(t *testing.T) {
 		{From: "mark://b/b.md", To: "mark://a/a.md", Count: 1},
 		{From: "mark://a/a.md", To: "mark://b/b.md", Rel: "related", Label: "B", Count: 2},
 	}
-	one, err := BuildSnapshotShards(SnapshotManifestPath, SnapshotSlotA, nodes[:1], nil, 0)
+	one, err := BuildSnapshotShards(SnapshotManifestPath, generation.SlotA, nodes[:1], nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	oneEdge, err := BuildSnapshotShards(SnapshotManifestPath, SnapshotSlotA, nil, edges[1:], 0)
+	oneEdge, err := BuildSnapshotShards(SnapshotManifestPath, generation.SlotA, nil, edges[1:], 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	target := max(one[0].Bytes, oneEdge[0].Bytes)
-	artifacts, err := BuildSnapshotShards(SnapshotManifestPath, SnapshotSlotA, nodes, edges, target)
+	artifacts, err := BuildSnapshotShards(SnapshotManifestPath, generation.SlotA, nodes, edges, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,20 +45,20 @@ func TestGraphSnapshotRoundTripAndIntegrity(t *testing.T) {
 	responses := make(map[string]protocol.Response, len(artifacts))
 	for i, artifact := range artifacts {
 		refs[i] = artifact.Ref(i + 1)
-		responses[SnapshotVersionPath(artifact.Path, i+1)] = protocol.Response{
+		responses[generation.VersionPath(artifact.Path, i+1)] = protocol.Response{
 			Status: protocol.StatusOK, Body: artifact.Body,
 			Metadata: map[string]string{"version": strconv.Itoa(i + 1), "content-hash": artifact.ContentHash},
 		}
 	}
 	manifestBody, err := BuildSnapshotManifest(SnapshotManifestPath, SnapshotManifest{
 		Exported: exported, Complete: true, Nodes: len(nodes), Edges: len(edges),
-		ActiveSlot: SnapshotSlotA, Shards: refs,
+		ActiveSlot: generation.SlotA, Shards: refs,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	manifestResponse := protocol.Response{Status: protocol.StatusOK, Body: manifestBody, Metadata: map[string]string{
-		"content-hash": SnapshotBodyHash(manifestBody),
+		"content-hash": generation.BodyHash(manifestBody),
 	}}
 	loadedNodes, loadedEdges, err := LoadSnapshot(SnapshotManifestPath, manifestResponse, func(path string) (protocol.Response, error) {
 		return responses[path], nil
@@ -69,7 +70,7 @@ func TestGraphSnapshotRoundTripAndIntegrity(t *testing.T) {
 		t.Fatalf("loaded nodes=%+v edges=%+v", loadedNodes, loadedEdges)
 	}
 
-	corruptPath := SnapshotVersionPath(refs[0].Path, refs[0].Version)
+	corruptPath := generation.VersionPath(refs[0].Path, refs[0].Version)
 	missingVersion := responses[corruptPath]
 	missingVersion.Metadata = maps.Clone(missingVersion.Metadata)
 	delete(missingVersion.Metadata, "version")
@@ -87,14 +88,14 @@ func TestGraphSnapshotRoundTripAndIntegrity(t *testing.T) {
 }
 
 func TestGraphSnapshotRejectsAliasesAndMalformedGeneratedContent(t *testing.T) {
-	if _, err := BuildSnapshotShards(SnapshotManifestPath, SnapshotSlotA, []StoredNode{
+	if _, err := BuildSnapshotShards(SnapshotManifestPath, generation.SlotA, []StoredNode{
 		{URL: "mark://host/a.md"},
 		{URL: "mark://host:6309/a.md"},
 	}, nil, 0); err == nil || !strings.Contains(err.Error(), "duplicate graph node") {
 		t.Fatalf("alias error = %v", err)
 	}
 	manifest, err := BuildSnapshotManifest(SnapshotManifestPath, SnapshotManifest{
-		Exported: time.Now(), Complete: true, ActiveSlot: SnapshotSlotA,
+		Exported: time.Now(), Complete: true, ActiveSlot: generation.SlotA,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -113,23 +114,23 @@ func TestGraphSnapshotRejectsUnrepresentableManifestValues(t *testing.T) {
 		t.Fatalf("SnapshotShardRoot = %q", got)
 	}
 	if _, err := BuildSnapshotManifest("/graph/man|ifest.md", SnapshotManifest{
-		Exported: time.Now(), Complete: true, ActiveSlot: SnapshotSlotA,
+		Exported: time.Now(), Complete: true, ActiveSlot: generation.SlotA,
 	}); err == nil {
 		t.Fatal("manifest path containing table delimiter accepted")
 	}
 	for _, manifestPath := range []string{"/graph/v2", "/graph/manifest", "/sha256-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"} {
 		if _, err := BuildSnapshotManifest(manifestPath, SnapshotManifest{
-			Exported: time.Now(), Complete: true, ActiveSlot: SnapshotSlotA,
+			Exported: time.Now(), Complete: true, ActiveSlot: generation.SlotA,
 		}); err == nil {
 			t.Fatalf("special fetch path %q accepted", manifestPath)
 		}
 	}
 	if _, err := BuildSnapshotManifest(SnapshotManifestPath, SnapshotManifest{
-		Exported: time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), Complete: true, ActiveSlot: SnapshotSlotA,
+		Exported: time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), Complete: true, ActiveSlot: generation.SlotA,
 	}); err == nil {
 		t.Fatal("year zero accepted")
 	}
-	artifacts, err := BuildSnapshotShards(SnapshotManifestPath, SnapshotSlotA,
+	artifacts, err := BuildSnapshotShards(SnapshotManifestPath, generation.SlotA,
 		[]StoredNode{{URL: "mark://a/a.md", Status: "ok"}}, nil, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +138,7 @@ func TestGraphSnapshotRejectsUnrepresentableManifestValues(t *testing.T) {
 	ref := artifacts[0].Ref(1)
 	ref.Bytes = protocol.MaxBodyLength + 1
 	if _, err := BuildSnapshotManifest(SnapshotManifestPath, SnapshotManifest{
-		Exported: time.Now(), Complete: true, Nodes: 1, ActiveSlot: SnapshotSlotA, Shards: []SnapshotShardRef{ref},
+		Exported: time.Now(), Complete: true, Nodes: 1, ActiveSlot: generation.SlotA, Shards: []SnapshotShardRef{ref},
 	}); err == nil {
 		t.Fatal("oversized shard descriptor accepted")
 	}
@@ -189,7 +190,7 @@ func (r *snapshotRemote) publish(_ context.Context, docPath, body string, expect
 	}
 	version := currentVersion + 1
 	stored := protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: map[string]string{
-		"version": strconv.Itoa(version), "content-hash": SnapshotBodyHash(body),
+		"version": strconv.Itoa(version), "content-hash": generation.BodyHash(body),
 	}}
 	r.docs[docPath] = stored
 	if r.history[docPath] == nil {
@@ -216,7 +217,7 @@ func TestPublishGraphSnapshotCommitsManifestLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ManifestVersion != 1 || result.Manifest.ActiveSlot != SnapshotSlotA || result.ShardsPublished != 2 {
+	if result.ManifestVersion != 1 || result.Manifest.ActiveSlot != generation.SlotA || result.ShardsPublished != 2 {
 		t.Fatalf("result = %+v", result)
 	}
 	if got := remote.publishes[len(remote.publishes)-1]; got != SnapshotManifestPath {
@@ -274,7 +275,7 @@ func TestPublishGraphSnapshotAlternatesAndReusesSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Manifest.ActiveSlot != SnapshotSlotA || second.Manifest.ActiveSlot != SnapshotSlotB || third.Manifest.ActiveSlot != SnapshotSlotA {
+	if first.Manifest.ActiveSlot != generation.SlotA || second.Manifest.ActiveSlot != generation.SlotB || third.Manifest.ActiveSlot != generation.SlotA {
 		t.Fatalf("slots = %s, %s, %s", first.Manifest.ActiveSlot, second.Manifest.ActiveSlot, third.Manifest.ActiveSlot)
 	}
 	if third.ShardsReused != 1 || third.ShardsPublished != 0 {

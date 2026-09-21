@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -86,7 +87,7 @@ func (g *mcpGateway) readResource(ctx context.Context, req mcp.ReadResourceReque
 			return nil, fmt.Errorf("access denied: this memory service serves only your world %q", w.Name)
 		}
 	}
-	result, err := g.dispatcher.Fetch(worldName, path, "")
+	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: path})
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", docURL, err)
 	}

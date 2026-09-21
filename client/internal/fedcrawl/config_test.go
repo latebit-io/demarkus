@@ -193,7 +193,7 @@ func TestValidate(t *testing.T) {
 		if err := cfg.Validate(); err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Seeds[0] != "mark://world:6309" || cfg.Hubs[0] != "mark://root:6309" {
+		if cfg.Seeds[0] != "mark://world" || cfg.Hubs[0] != "mark://root" {
 			t.Errorf("normalized servers = seeds %v hubs %v", cfg.Seeds, cfg.Hubs)
 		}
 	})

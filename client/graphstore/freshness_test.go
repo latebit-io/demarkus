@@ -11,8 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -160,10 +161,10 @@ func TestRevalidationMetadataOnlyAndLegacy(t *testing.T) {
 	if got := store.GetNode(freshnessSource).Observation.Freshness(); got != "unknown" {
 		t.Fatalf("legacy freshness = %s", got)
 	}
-	fetchFn := func(context.Context, string, string) (graph.FetchResult, error) {
+	fetchFn := func(context.Context, links.Target) (graph.FetchResult, error) {
 		return graph.FetchResult{Status: "ok", Body: "# unchanged", Metadata: map[string]string{"version": "2", "etag": "new-metadata", "content-hash": "same-body", "rel-related": "/new"}}, nil
 	}
-	result, err := store.Revalidate(t.Context(), nil, fetchFn, fetch.ParseMarkURL)
+	result, err := store.Revalidate(t.Context(), nil, fetchFn)
 	if err != nil || result.Fetches != 1 {
 		t.Fatalf("revalidation: %+v, %v", result, err)
 	}
@@ -175,7 +176,7 @@ func TestRevalidationMetadataOnlyAndLegacy(t *testing.T) {
 	if edges[0].Rel != "related" {
 		t.Fatal("metadata-only typed relation lost")
 	}
-	result, err = store.Revalidate(t.Context(), nil, fetchFn, fetch.ParseMarkURL)
+	result, err = store.Revalidate(t.Context(), nil, fetchFn)
 	if err != nil || result.Fetches != 0 {
 		t.Fatalf("revalidation cooldown: %+v, %v", result, err)
 	}
@@ -273,11 +274,11 @@ func TestRevalidationBoundsAndLastGood(t *testing.T) {
 	}
 	var calls atomic.Int32
 	failure := errors.New("peer unavailable")
-	failed := func(context.Context, string, string) (graph.FetchResult, error) {
+	failed := func(context.Context, links.Target) (graph.FetchResult, error) {
 		calls.Add(1)
 		return graph.FetchResult{}, failure
 	}
-	result, err := store.Revalidate(t.Context(), nil, failed, fetch.ParseMarkURL)
+	result, err := store.Revalidate(t.Context(), nil, failed)
 	if err == nil || result.Fetches != RevalidationLimit || result.Remaining != 3 || store.EdgeCount() != RevalidationLimit+3 {
 		t.Fatalf("failed bounded revalidation = %+v, %v, edges=%d", result, err, store.EdgeCount())
 	}
@@ -287,17 +288,17 @@ func TestRevalidationBoundsAndLastGood(t *testing.T) {
 			t.Fatal("last-good occurrence count changed")
 		}
 	}
-	result, err = store.Revalidate(t.Context(), nil, failed, fetch.ParseMarkURL)
+	result, err = store.Revalidate(t.Context(), nil, failed)
 	if err == nil || result.Fetches != 3 {
 		t.Fatalf("cooldown did not advance to remaining sources: %+v, %v", result, err)
 	}
-	result, err = store.Revalidate(t.Context(), nil, failed, fetch.ParseMarkURL)
+	result, err = store.Revalidate(t.Context(), nil, failed)
 	if err != nil || result.Fetches != 0 || calls.Load() != RevalidationLimit+3 {
 		t.Fatalf("failed-source cooldown: %+v, %v", result, err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	result, err = store.Revalidate(ctx, nil, failed, fetch.ParseMarkURL)
+	result, err = store.Revalidate(ctx, nil, failed)
 	if !errors.Is(err, context.Canceled) || result.Fetches != 0 {
 		t.Fatalf("cancelled revalidation: %+v, %v", result, err)
 	}
@@ -336,7 +337,7 @@ func TestFreshnessProducerConsumerCompatibility(t *testing.T) {
 	if err != nil || oldNodes[0].Observation.Freshness() != "unknown" || len(oldEdges) != 1 {
 		t.Fatalf("legacy compatibility: %v", err)
 	}
-	artifacts, err := BuildSnapshotShards(SnapshotManifestPath, SnapshotSlotA, nodes, edges, 0)
+	artifacts, err := BuildSnapshotShards(SnapshotManifestPath, generation.SlotA, nodes, edges, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,15 +357,15 @@ func BenchmarkSourceFreshnessRevalidation(b *testing.B) {
 	for b.Loop() {
 		store := New()
 		store.ReplaceSeed("legacy", []StoredNode{{URL: freshnessSource, Status: "ok"}}, nil)
-		result, err := store.Revalidate(b.Context(), nil, func(context.Context, string, string) (graph.FetchResult, error) {
+		result, err := store.Revalidate(b.Context(), nil, func(context.Context, links.Target) (graph.FetchResult, error) {
 			return graph.FetchResult{Status: "ok", Body: "# source", Metadata: map[string]string{"version": "2", "etag": "source-etag", "rel-related": "/target"}}, nil
-		}, fetch.ParseMarkURL)
+		})
 		if err != nil {
 			b.Fatal(err)
 		}
 		b.ReportMetric(float64(result.Fetches), "fetches/op")
 		b.ReportMetric(float64(result.Bytes), "decoded-bytes/op")
-		cached, err := store.Revalidate(b.Context(), nil, nil, fetch.ParseMarkURL)
+		cached, err := store.Revalidate(b.Context(), nil, nil)
 		if err != nil || cached.Fetches != 0 {
 			b.Fatalf("cooldown = %+v, %v", cached, err)
 		}

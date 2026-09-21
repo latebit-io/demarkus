@@ -22,7 +22,6 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
-	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
 )
 
@@ -663,7 +662,7 @@ func (s *Store) ToGraph() *graph.Graph {
 
 // FetchFunc fetches a document and returns its status, body, and publisher
 // metadata; the etag rides in Metadata["etag"].
-type FetchFunc func(ctx context.Context, host, path string) (graph.FetchResult, error)
+type FetchFunc func(ctx context.Context, target links.Target) (graph.FetchResult, error)
 
 // EtagFetcher wraps a FetchFunc and implements graph.Fetcher while collecting
 // etags concurrently. Use Etags() to retrieve them after crawling.
@@ -682,14 +681,13 @@ func NewEtagFetcher(fetchFunc FetchFunc) *EtagFetcher {
 }
 
 // Fetch implements graph.Fetcher.
-func (f *EtagFetcher) Fetch(ctx context.Context, host, path string) (graph.FetchResult, error) {
-	res, err := f.fetchFunc(ctx, host, path)
+func (f *EtagFetcher) Fetch(ctx context.Context, target links.Target) (graph.FetchResult, error) {
+	res, err := f.fetchFunc(ctx, target)
 	if err != nil {
 		return graph.FetchResult{}, err
 	}
 	if etag := res.Metadata["etag"]; etag != "" {
-		// host carries the dial port; the etag map is keyed by node identity.
-		url := links.NodeURL(host, path)
+		url := target.NodeURL()
 		f.mu.Lock()
 		f.etags[url] = etag
 		f.mu.Unlock()
@@ -709,11 +707,17 @@ func (f *EtagFetcher) Etags() map[string]string {
 // CrawlOptions uses the same admission and resource limits as transient crawls.
 type CrawlOptions = graph.CrawlOptions
 
-// NewFetchFunc creates a FetchFunc for CrawlAndPersist that resolves tokens per
-// host; cred reaches its origin only, never hosts the crawl discovers.
-func NewFetchFunc(client *fetch.Client, tokenStore *tokens.Store, cred tokens.Credential) FetchFunc {
-	return func(ctx context.Context, host, path string) (graph.FetchResult, error) {
-		r, fetchErr := client.FetchContext(ctx, host, path, tokens.Resolve(cred, host, tokenStore))
+// DocumentFetcher is the one verb a crawl needs; *fetch.Client is one.
+type DocumentFetcher interface {
+	Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error)
+}
+
+// NewFetchFunc creates a FetchFunc for CrawlAndPersist that asks resolver for a
+// token per dial host, so a credential reaches only the host it belongs to.
+func NewFetchFunc(client DocumentFetcher, resolver fetch.TokenResolver) FetchFunc {
+	return func(ctx context.Context, target links.Target) (graph.FetchResult, error) {
+		host := target.DialHost()
+		r, fetchErr := client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: target.Path, Token: resolver.Token(host)})
 		if fetchErr != nil {
 			return graph.FetchResult{}, fetchErr
 		}
@@ -726,16 +730,15 @@ func NewFetchFunc(client *fetch.Client, tokenStore *tokens.Store, cred tokens.Cr
 }
 
 // CrawlAndPersist crawls from startURL, merges the result into the store, and
-// saves; a nil store crawls without persisting. parseURL splits mark:// URLs
-// and canonicalizes startURL, so any address form the user typed is accepted.
+// saves; a nil store crawls without persisting. Any address form of startURL
+// is accepted; identity is canonicalized by the crawl.
 func (s *Store) CrawlAndPersist(
 	ctx context.Context,
 	startURL string,
 	fetchFunc FetchFunc,
-	parseURL func(string) (string, string, error),
 	opts CrawlOptions,
 ) (*graph.Graph, error) {
-	g, etags, err := crawlGraph(ctx, startURL, fetchFunc, parseURL, opts)
+	g, etags, err := crawlGraph(ctx, startURL, fetchFunc, opts)
 	if s == nil || (err != nil && !errors.Is(err, graph.ErrIncomplete)) {
 		return g, err
 	}
@@ -751,18 +754,14 @@ func crawlGraph(
 	ctx context.Context,
 	startURL string,
 	fetchFunc FetchFunc,
-	parseURL func(string) (string, string, error),
 	opts CrawlOptions,
 ) (*graph.Graph, map[string]string, error) {
 	// Validate before wrapping a nil fetch function in a non-nil interface.
-	if strings.HasPrefix(startURL, "mark://") && parseURL == nil {
-		return nil, nil, fmt.Errorf("crawl %s: parseURL is required for mark:// URLs", startURL)
-	}
 	if strings.HasPrefix(startURL, "mark://") && fetchFunc == nil {
 		return nil, nil, fmt.Errorf("crawl %s: fetchFunc is required", startURL)
 	}
 	fetcher := NewEtagFetcher(fetchFunc)
-	g, err := graph.Crawl(ctx, startURL, fetcher, parseURL, opts)
+	g, err := graph.Crawl(ctx, startURL, fetcher, opts)
 	return g, fetcher.Etags(), err
 }
 

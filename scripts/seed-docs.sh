@@ -38,7 +38,8 @@ fi
 publish() {
   local path="$1"
   local file="$2"
-  local args=(-X PUBLISH)
+  # -force: seeding overwrites whatever a previous run left.
+  local args=(-X PUBLISH -force)
   # Only skip TLS verification for localhost development
   if [[ "${HOST}" == localhost* ]] || [[ "${HOST}" == 127.0.0.1* ]]; then
     args+=(-insecure)

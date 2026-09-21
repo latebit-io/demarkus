@@ -18,7 +18,8 @@ func TestBrokerCrawlPartialResults(t *testing.T) {
 			ctx, cancel := context.WithCancel(withAliceClaims(t.Context()))
 			defer cancel()
 			started := make(chan struct{})
-			d := &fakeDispatcher{FetchCtxFn: func(ctx context.Context, _, path, _ string) (fetch.Result, error) {
+			d := &fakeDispatcher{FetchFn: func(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+				path := r.Path
 				if mode == "pre-cancelled" {
 					t.Error("pre-cancelled crawl fetched a document")
 				}

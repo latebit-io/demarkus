@@ -157,7 +157,7 @@ func (g *mcpGateway) dispatchWithWriteAuth(ctx context.Context, worldName string
 // operation is granted to any token), so an empty bearer flows through
 // and the listing is returned. No token, no mint, no propagation-race
 // retry — that machinery exists solely for writes.
-func (g *mcpGateway) handleMarkList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (g *mcpGateway) handleMarkList(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -170,18 +170,19 @@ func (g *mcpGateway) handleMarkList(_ context.Context, req mcp.CallToolRequest) 
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	opts := fetch.ListOptions{
+	list := fetch.ListRequest{
+		Host: worldName, Path: path,
 		IncludeArchived: req.GetBool("include_archived", false),
 		Cursor:          req.GetString("cursor", ""),
 		PageSize:        pageSize,
 	}
-	result, err := g.dispatcher.List(worldName, path, "", opts)
+	result, err := g.dispatcher.List(ctx, list)
 	if err != nil {
 		return g.toolErrorFor("list", worldName, err), nil
 	}
 	if result.Response.Metadata["complete"] == "false" {
 		next := result.Response.Metadata["next-cursor"]
-		if next == "" || next == opts.Cursor {
+		if next == "" || next == list.Cursor {
 			return mcp.NewToolResultError("list failed: continuation cursor is missing or did not advance"), nil
 		}
 	}
@@ -213,7 +214,7 @@ func brokerListPageSize(req *mcp.CallToolRequest) (int, error) {
 
 // handleMarkVersions implements the mark_versions tool. Reads
 // dispatch unauthenticated; see handleMarkFetch for the rationale.
-func (g *mcpGateway) handleMarkVersions(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+func (g *mcpGateway) handleMarkVersions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
@@ -222,7 +223,7 @@ func (g *mcpGateway) handleMarkVersions(_ context.Context, req mcp.CallToolReque
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	result, err := g.dispatcher.Versions(worldName, path, "")
+	result, err := g.dispatcher.Versions(ctx, fetch.VersionsRequest{Host: worldName, Path: path})
 	if err != nil {
 		return g.toolErrorFor("versions", worldName, err), nil
 	}
@@ -247,17 +248,18 @@ func (g *mcpGateway) handleMarkLookup(ctx context.Context, req mcp.CallToolReque
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
 	}
-	opts := fetch.LookupOptions{
+	lookup := fetch.LookupRequest{
+		Host: worldName, Scope: scope, Query: query,
 		Filter: req.GetString("filter", ""),
 		Limit:  req.GetInt("limit", 0),
 		Match:  req.GetString("match", ""),
 	}
-	result, err := g.dispatcher.Lookup(worldName, scope, query, "", opts)
+	result, err := g.dispatcher.Lookup(ctx, lookup)
 	if err != nil {
 		return g.toolErrorFor("lookup", worldName, err), nil
 	}
 	render := mcpfmt.Lookup.Options(&req)
-	text := mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(opts, result)
+	text := mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(lookup, result)
 	if budget := lookupexpand.Budget(&req); budget > 0 && result.Response.Status == protocol.StatusOK {
 		text += lookupexpand.Expand(ctx, result.Response.Body, query, budget, func(ctx context.Context, path string) (string, error) {
 			return g.bodyFor(ctx, worldName, path)
@@ -269,7 +271,7 @@ func (g *mcpGateway) handleMarkLookup(ctx context.Context, req mcp.CallToolReque
 // bodyFor fetches one document for a lookup expansion; a non-ok status is
 // the error the expansion notes.
 func (g *mcpGateway) bodyFor(ctx context.Context, worldName, path string) (string, error) {
-	r, err := g.dispatcher.FetchContext(ctx, worldName, path, "")
+	r, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: path})
 	if err != nil {
 		return "", err
 	}

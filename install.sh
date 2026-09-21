@@ -2184,9 +2184,9 @@ do_install() {
     echo ""
     log_info "Publish your first document:"
     if [ -n "$domain" ] && [ "$no_tls" = false ]; then
-      echo "  demarkus -X PUBLISH -auth \$TOKEN -body \"# Hello World\" mark://${domain}/index.md"
+      echo "  demarkus -X PUBLISH -expected-version 0 -auth \$TOKEN -body \"# Hello World\" mark://${domain}/index.md"
     else
-      echo "  demarkus --insecure -X PUBLISH -auth \$TOKEN -body \"# Hello World\" mark://localhost:6309/index.md"
+      echo "  demarkus --insecure -X PUBLISH -expected-version 0 -auth \$TOKEN -body \"# Hello World\" mark://localhost:6309/index.md"
     fi
 
     # Ready-to-paste join line: one string carries host + token.

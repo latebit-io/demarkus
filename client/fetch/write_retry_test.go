@@ -28,18 +28,10 @@ func TestWritesAreNotResentAfterTheRequestIsSent(t *testing.T) {
 	c := NewClient(Options{Insecure: true, RequestTimeout: 150 * time.Millisecond})
 	t.Cleanup(c.Close)
 
-	tests := []struct {
-		name string
-		call func() error
-	}{
-		{"publish", func() error { _, err := c.Publish(addr, "/a.md", "body", "", 0, nil); return err }},
-		{"append", func() error { _, err := c.Append(addr, "/a.md", "more", "", 1, nil); return err }},
-		{"archive", func() error { _, err := c.Archive(addr, "/a.md", ""); return err }},
-	}
-	for _, tt := range tests {
+	for _, tt := range writeVerbs(c, addr) {
 		t.Run(tt.name, func(t *testing.T) {
 			before := writes.Load()
-			err := tt.call()
+			err := tt.call(t.Context())
 			if !errors.Is(err, ErrOutcomeUnknown) {
 				t.Fatalf("error = %v, want ErrOutcomeUnknown", err)
 			}
@@ -49,11 +41,30 @@ func TestWritesAreNotResentAfterTheRequestIsSent(t *testing.T) {
 		})
 	}
 
-	if _, err := c.Fetch(addr, "/a.md", ""); err == nil {
+	if _, err := c.Fetch(t.Context(), FetchRequest{Host: addr, Path: "/a.md"}); err == nil {
 		t.Fatal("fetch against a silent server returned no error")
 	}
 	if got := reads.Load(); got < 2 {
 		t.Fatalf("server saw %d fetch attempts, want reads to keep retrying", got)
+	}
+}
+
+// writeVerbs is every non idempotent verb, each taking the caller's context.
+func writeVerbs(c *Client, addr string) []struct {
+	name string
+	call func(context.Context) error
+} {
+	write := WriteRequest{Host: addr, Path: "/a.md", Body: "body", ExpectedVersion: 1}
+	return []struct {
+		name string
+		call func(context.Context) error
+	}{
+		{"publish", func(ctx context.Context) error { _, err := c.Publish(ctx, write); return err }},
+		{"append", func(ctx context.Context) error { _, err := c.Append(ctx, write); return err }},
+		{"archive", func(ctx context.Context) error {
+			_, err := c.Archive(ctx, ArchiveRequest{Host: addr, Path: "/a.md"})
+			return err
+		}},
 	}
 }
 
@@ -71,16 +82,66 @@ func TestCancelAfterSendStaysOutcomeUnknown(t *testing.T) {
 	c := NewClient(Options{Insecure: true, RequestTimeout: 5 * time.Second})
 	t.Cleanup(c.Close)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		<-received
-		cancel()
-	}()
-	_, err := c.PublishContext(ctx, addr, "/a.md", "body", "", 0, nil)
-	if !errors.Is(err, ErrOutcomeUnknown) {
-		t.Fatalf("error = %v, want ErrOutcomeUnknown", err)
+	for _, tt := range writeVerbs(c, addr) {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			go func() {
+				<-received
+				cancel()
+			}()
+			err := tt.call(ctx)
+			if !errors.Is(err, ErrOutcomeUnknown) {
+				t.Fatalf("error = %v, want ErrOutcomeUnknown", err)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("error = %v, want it to still unwrap to context.Canceled", err)
+			}
+		})
 	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("error = %v, want it to still unwrap to context.Canceled", err)
+}
+
+// A context that is already done sends nothing, for every verb: a write that
+// never left is a definite failure, not an unknown outcome.
+func TestDoneContextSendsNothing(t *testing.T) {
+	var requests atomic.Int32
+	addr := startTestServer(t, func(protocol.Request) protocol.Response {
+		requests.Add(1)
+		return protocol.Response{Status: protocol.StatusOK}
+	})
+	c := NewClient(Options{Insecure: true})
+	t.Cleanup(c.Close)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	calls := writeVerbs(c, addr)
+	calls = append(calls, []struct {
+		name string
+		call func(context.Context) error
+	}{
+		{"fetch", func(ctx context.Context) error {
+			_, err := c.Fetch(ctx, FetchRequest{Host: addr, Path: "/a.md"})
+			return err
+		}},
+		{"list", func(ctx context.Context) error { _, err := c.List(ctx, ListRequest{Host: addr, Path: "/"}); return err }},
+		{"versions", func(ctx context.Context) error {
+			_, err := c.Versions(ctx, VersionsRequest{Host: addr, Path: "/a.md"})
+			return err
+		}},
+		{"lookup", func(ctx context.Context) error {
+			_, err := c.Lookup(ctx, LookupRequest{Host: addr, Scope: "/", Query: "q"})
+			return err
+		}},
+	}...)
+	for _, tt := range calls {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call(ctx)
+			if !errors.Is(err, context.Canceled) || errors.Is(err, ErrOutcomeUnknown) {
+				t.Fatalf("error = %v, want a plain context.Canceled", err)
+			}
+		})
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("server saw %d requests, want none", got)
 	}
 }

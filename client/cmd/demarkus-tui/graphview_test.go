@@ -375,7 +375,7 @@ func TestFlushGraphStorePersistsPendingGeneration(t *testing.T) {
 func TestRelationsToLinksStartsFreshCrawl(t *testing.T) {
 	address := textinput.New()
 	address.SetValue("mark://h/target.md")
-	m := model{graphStore: newTestStore(t), addressBar: address, viewMode: viewGraph, graphSubView: subViewBacklinks}
+	m := model{graphStore: newTestStore(t), addressBar: address, currentURL: address.Value(), viewMode: viewGraph, graphSubView: subViewBacklinks}
 	updated, cmd := m.handleGraphKey(tea.KeyPressMsg{Code: 'd'})
 	got := updated.(model)
 	if cmd == nil || !got.crawling || got.graphSubView != subViewLinks {
@@ -389,7 +389,7 @@ func TestRelationsToggleUsesCacheWithoutCrawl(t *testing.T) {
 	store.ReplaceSeed("hub", nil, []graphstore.StoredEdge{{From: "mark://h/source.md", To: "mark://h/target.md", Rel: "depends-on", Count: 1}})
 	address := textinput.New()
 	address.SetValue("mark://h/target.md")
-	m := model{graphStore: store, addressBar: address}
+	m := model{graphStore: store, addressBar: address, currentURL: address.Value()}
 	updated, cmd := m.handleRelationsToggle()
 	got := updated.(model)
 	if cmd != nil || got.crawling || got.viewMode != viewGraph || got.graphSubView != subViewBacklinks {
@@ -405,6 +405,7 @@ func TestRelationsToggleClearsPreviousPageState(t *testing.T) {
 	address.SetValue("mark://h/target.md")
 	m := model{
 		addressBar:      address,
+		currentURL:      address.Value(),
 		graphNodes:      []graphListItem{{url: "mark://h/stale.md"}},
 		graphPageCursor: "stale-cursor",
 		graphPageNext:   "stale-next",

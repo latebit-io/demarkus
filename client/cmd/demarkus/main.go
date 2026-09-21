@@ -3,15 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"golang.org/x/term"
@@ -34,16 +33,18 @@ func main() {
 	if err := suppressQUICBufferWarning(); err != nil {
 		log.Fatal(err)
 	}
+	ctx, stop := interruptContext()
+	defer stop()
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "edit":
-			editMain(os.Args[2:])
+			editMain(ctx, os.Args[2:])
 			return
 		case "graph":
-			graphMain(os.Args[2:])
+			graphMain(ctx, os.Args[2:])
 			return
 		case "info":
-			infoMain(os.Args[2:])
+			infoMain(ctx, os.Args[2:])
 			return
 		case "token":
 			tokenMain(os.Args[2:])
@@ -52,17 +53,25 @@ func main() {
 			joinMain(os.Args[2:])
 			return
 		case "bookmark":
-			bookmarkMain(os.Args[2:])
+			bookmarkMain(ctx, os.Args[2:])
 			return
 		case "lookup":
-			lookupMain(os.Args[2:])
+			lookupMain(ctx, os.Args[2:])
 			return
 		case "okf":
-			okfMain(os.Args[2:])
+			okfMain(ctx, os.Args[2:])
 			return
 		}
 	}
-	requestMain()
+	requestMain(ctx)
+}
+
+// interruptContext ends on Ctrl-C so an in flight request is cancelled, not
+// abandoned. A second Ctrl-C gets the default disposition and kills the process.
+func interruptContext() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	context.AfterFunc(ctx, stop)
+	return ctx, stop
 }
 
 // Short-lived CLI processes cannot tune host sysctls and would emit quic-go's
@@ -77,11 +86,13 @@ func suppressQUICBufferWarning() error {
 	return nil
 }
 
-func requestMain() {
+func requestMain(ctx context.Context) {
 	verb := flag.String("X", protocol.VerbFetch, "request verb (FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)")
 	body := flag.String("body", "", "request body (for PUBLISH/APPEND); reads stdin if omitted")
 	authToken := flag.String("auth", "", "auth token for all requests including reads on private paths (env: DEMARKUS_AUTH)")
-	expectedVersion := flag.Int("expected-version", -1, "version check: -1 skip (default), 0 create-only, >0 require match; required (>0) for APPEND")
+	expectedVersion := flag.Int("expected-version", 0, "version check: 0 create-only, N replace version N; required for PUBLISH unless -force; APPEND resolves it when omitted")
+	force := flag.Bool("force", false, "PUBLISH only: overwrite whatever version is there, without a version check")
+	onConflict := flag.String("on-conflict", "", "PUBLISH only: merge (default) prints a merged candidate to review, fail reports the bare conflict")
 	meta := metaFlag{}
 	flag.Var(meta, "meta", "publisher metadata key=value for PUBLISH/APPEND (repeatable); e.g. -meta tags=go,auth -meta importance=0.9")
 	yes := flag.Bool("yes", false, "skip the confirmation prompt for destructive metadata (retention)")
@@ -114,10 +125,8 @@ func requestMain() {
 		log.Fatal(err)
 	}
 
-	host, path, err := fetch.ParseMarkURL(flag.Arg(0))
-	if err != nil {
-		log.Fatal(err)
-	}
+	target := mustTarget(flag.Arg(0))
+	host, path := target.DialHost(), target.Path
 
 	opts := fetch.Options{Insecure: *insecure}
 	if !*noCache {
@@ -135,36 +144,43 @@ func requestMain() {
 		}
 	}
 	reqBody := resolveBody(*verb, *body)
-	if *verb == protocol.VerbAppend {
-		if reqBody == "" {
-			log.Fatal("APPEND requires a body: use -body or pipe content via stdin")
-		}
-		if *expectedVersion < 1 {
-			log.Fatal("APPEND requires -expected-version >= 1")
-		}
-	}
 
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
-	var result fetch.Result
+	if isWriteVerb(*verb) {
+		outcome, err := runWrite(ctx, &cliWrite{
+			verb: *verb, doc: directDoc(client, host, path, token), body: reqBody,
+			expectedVersion: givenInt("expected-version", expectedVersion),
+			force:           *force, onConflict: *onConflict, meta: metaMap(meta),
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+		outcome.print(*verbose)
+		if outcome.code != 0 {
+			client.Close()
+			os.Exit(outcome.code)
+		}
+		return
+	}
+
+	var (
+		result fetch.Result
+		err    error
+	)
 	switch *verb {
 	case protocol.VerbFetch:
-		result, err = client.Fetch(host, path, token)
+		result, err = client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: path, Token: token})
 	case protocol.VerbList:
-		result, err = client.ListWithOptions(host, path, token, fetch.ListOptions{
+		result, err = client.List(ctx, fetch.ListRequest{
+			Host: host, Path: path, Token: token,
 			IncludeArchived: *includeArchived,
 			Cursor:          *listCursor,
 			PageSize:        *listPageSize,
 		})
 	case protocol.VerbVersions:
-		result, err = client.Versions(host, path, token)
-	case protocol.VerbPublish:
-		result, err = client.Publish(host, path, reqBody, token, *expectedVersion, metaMap(meta))
-	case protocol.VerbArchive:
-		result, err = client.Archive(host, path, token)
-	case protocol.VerbAppend:
-		result, err = client.Append(host, path, reqBody, token, *expectedVersion, metaMap(meta))
+		result, err = client.Versions(ctx, fetch.VersionsRequest{Host: host, Path: path, Token: token})
 	case protocol.VerbLookup:
 		log.Fatal("use 'demarkus lookup -query SUBJECT mark://host/scope/' for LOOKUP requests")
 	}
@@ -175,7 +191,7 @@ func requestMain() {
 	printResult(result, *verbose)
 }
 
-func editMain(args []string) {
+func editMain(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("edit", flag.ExitOnError)
 	authToken := fs.String("auth", "", "auth token (env: DEMARKUS_AUTH)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
@@ -194,10 +210,8 @@ func editMain(args []string) {
 		os.Exit(1)
 	}
 
-	host, path, err := fetch.ParseMarkURL(fs.Arg(0))
-	if err != nil {
-		log.Fatal(err)
-	}
+	target := mustTarget(fs.Arg(0))
+	host, path := target.DialHost(), target.Path
 
 	editorEnv := os.Getenv("EDITOR")
 	editorFields := strings.Fields(editorEnv)
@@ -214,27 +228,18 @@ func editMain(args []string) {
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
-	// Fetch the current document content and version for conflict detection.
-	// Default to -1 (no check) so a missing/malformed version doesn't cause
-	// a false create-only conflict on an existing document.
-	var original string
-	fetchedVersion := -1
-	result, err := client.Fetch(host, path, token)
+	result, err := client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: path, Token: token})
 	if err != nil {
 		log.Fatal(err)
 	}
-	switch result.Response.Status {
-	case protocol.StatusOK:
-		original = result.Response.Body
-		if v, err := strconv.Atoi(result.Response.Metadata["version"]); err == nil {
-			fetchedVersion = v
-		}
-	case protocol.StatusNotFound:
-		// New document — start with empty content; 0 means create-only.
-		fetchedVersion = 0
+	// Checked before the editor opens, so a document that cannot be edited costs no typing.
+	if _, err := editedFrom(result.Response, ""); err != nil {
+		log.Fatal(err)
+	}
+	original := result.Response.Body
+	if result.Response.Status == protocol.StatusNotFound {
+		original = ""
 		fmt.Fprintf(os.Stderr, "Document not found, creating new document.\n")
-	default:
-		log.Fatalf("fetch failed: %s", result.Response.Status)
 	}
 
 	// Write content to a temp file for editing.
@@ -279,46 +284,12 @@ func editMain(args []string) {
 		return
 	}
 
-	// Publish the edited content with optimistic concurrency check.
-	result, err = client.Publish(host, path, newBody, token, fetchedVersion, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if result.Response.Status == protocol.StatusConflict {
-		// Save the user's edits so they aren't lost. Use CreateTemp for
-		// safe file creation (avoids symlink attacks on predictable names).
-		safeName := strings.ReplaceAll(strings.TrimLeft(path, "/"), "/", "-")
-		f, writeErr := os.CreateTemp("", "demarkus-conflict-"+safeName+"-*.md")
-		if writeErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to save edits: %v\n", writeErr)
-			os.Exit(1)
-		}
-		conflictFile := f.Name()
-		// A failed close can lose buffered bytes, so it counts as a failed save.
-		_, writeErr = f.WriteString(newBody)
-		if writeErr = errors.Join(writeErr, f.Close()); writeErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to save edits: %v\n", writeErr)
-			os.Exit(1)
-		}
-		serverVersion := result.Response.Metadata["server-version"]
-		fmt.Fprintf(os.Stderr, "Conflict: document updated to version %s since you fetched version %d.\n", serverVersion, fetchedVersion)
-		fmt.Fprintf(os.Stderr, "Your edits saved to %s\n", conflictFile)
-		fmt.Fprintf(os.Stderr, "Re-fetch and reapply your changes.\n")
-		os.Exit(1)
-	}
-
-	fmt.Printf("[%s]", result.Response.Status)
-	for k, v := range result.Response.Metadata {
-		fmt.Printf(" %s=%s", k, v)
-	}
-	fmt.Println()
-	if result.Response.Body != "" {
-		fmt.Print(result.Response.Body)
+	if code := saveEdit(directDoc(client, host, path, token), result.Response, newBody); code != 0 {
+		os.Exit(code)
 	}
 }
 
-func graphMain(args []string) {
+func graphMain(ctx context.Context, args []string) {
 	// Handle "graph export" subcommand before flag parsing.
 	if len(args) > 0 && args[0] == "export" {
 		graphExportMain(args[1:])
@@ -353,8 +324,10 @@ func graphMain(args []string) {
 
 	ts := tokens.LoadDefault()
 	// A bad URL leaves the origin empty; the crawl reports the parse error itself.
-	origin, _, _ := fetch.ParseMarkURL(rawURL) //nolint:errcheck // see above
-	cred := tokens.Credential{Origin: origin}
+	cred := tokens.Credential{}
+	if target, parseErr := links.ParseMark(rawURL); parseErr == nil {
+		cred.Origin = target.DialHost()
+	}
 
 	gs, err := graphstore.Load(graphstore.DefaultPath())
 	if err != nil {
@@ -363,7 +336,7 @@ func graphMain(args []string) {
 
 	fmt.Printf("Crawling %s (depth %d)...\n", rawURL, *depth)
 
-	g, err := gs.CrawlAndPersist(context.Background(), rawURL, graphstore.NewFetchFunc(client, ts, cred), fetch.ParseMarkURL, graphstore.CrawlOptions{
+	g, err := gs.CrawlAndPersist(ctx, rawURL, graphstore.NewFetchFunc(client, tokens.Resolver{Credential: cred, Store: ts}), graphstore.CrawlOptions{
 		MaxDepth: *depth,
 		OnNode: func(n *graph.Node) {
 			title := n.Title
@@ -427,7 +400,7 @@ func graphExportMain(args []string) {
 	}
 }
 
-func infoMain(args []string) {
+func infoMain(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("info", flag.ExitOnError)
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	fs.Usage = func() {
@@ -442,7 +415,7 @@ func infoMain(args []string) {
 		os.Exit(1)
 	}
 
-	host, _, err := fetch.ParseMarkURL(fs.Arg(0))
+	host, err := links.DialHost(fs.Arg(0))
 	if err != nil {
 		log.Fatalf("invalid URL: %v", err)
 	}
@@ -450,7 +423,7 @@ func infoMain(args []string) {
 	client := fetch.NewClient(fetch.Options{Insecure: *insecure})
 	defer client.Close()
 
-	result, err := client.Fetch(host, protocol.WellKnownManifestPath, "")
+	result, err := client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: protocol.WellKnownManifestPath})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -487,7 +460,7 @@ func tokenMain(args []string) {
 		if len(args) < 3 {
 			log.Fatal("usage: demarkus token add mark://host:port <token>")
 		}
-		host, _, err := fetch.ParseMarkURL(args[1])
+		host, err := links.DialHost(args[1])
 		if err != nil {
 			log.Fatalf("invalid URL: %v", err)
 		}
@@ -500,7 +473,7 @@ func tokenMain(args []string) {
 		if len(args) < 2 {
 			log.Fatal("usage: demarkus token remove mark://host:port")
 		}
-		host, _, err := fetch.ParseMarkURL(args[1])
+		host, err := links.DialHost(args[1])
 		if err != nil {
 			log.Fatalf("invalid URL: %v", err)
 		}
@@ -539,7 +512,7 @@ func joinMain(args []string) {
 	if j.Token == "" {
 		log.Fatal("join URL carries no token; nothing to store (did the shell strip the #fragment? quote the URL)")
 	}
-	host, _, err := fetch.ParseMarkURL("mark://" + j.Host)
+	host, err := links.DialHost("mark://" + j.Host)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -554,7 +527,7 @@ func joinMain(args []string) {
 	fmt.Fprintf(os.Stderr, "Try: demarkus mark://%s/index.md\n", host)
 }
 
-func bookmarkMain(args []string) {
+func bookmarkMain(ctx context.Context, args []string) {
 	if len(args) < 1 {
 		fmt.Fprintf(os.Stderr, "usage: demarkus bookmark <add|list|remove>\n")
 		fmt.Fprintf(os.Stderr, "  add    [-insecure] mark://host:port/path  Bookmark a document\n")
@@ -572,17 +545,19 @@ func bookmarkMain(args []string) {
 			log.Fatal("usage: demarkus bookmark add [-insecure] mark://host:port/path")
 		}
 		rawURL := fs.Arg(0)
-		host, path, err := fetch.ParseMarkURL(rawURL)
+		target, err := links.ParseMark(rawURL)
 		if err != nil {
 			log.Fatalf("invalid URL: %v", err)
 		}
+		host, path := target.DialHost(), target.Path
 
 		// Fetch the document to extract the title.
 		title := path
 		client := fetch.NewClient(fetch.Options{Insecure: *insecure})
 		defer client.Close()
 
-		result, err := client.Fetch(host, path, tokens.Resolve(tokens.Credential{Origin: host}, host, tokens.LoadDefault()))
+		token := tokens.Resolve(tokens.Credential{Origin: host}, host, tokens.LoadDefault())
+		result, err := client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: path, Token: token})
 		if err == nil && result.Response.Status == protocol.StatusOK {
 			if t := links.ExtractTitle(result.Response.Body); t != "" {
 				title = t
@@ -687,7 +662,7 @@ func editorCommand(fields []string, file string) (name string, args []string) {
 	return fields[0], args
 }
 
-func lookupMain(args []string) {
+func lookupMain(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("lookup", flag.ExitOnError)
 	query := fs.String("query", "", "subject to look up; matched against document tags and titles (required)")
 	filter := fs.String("filter", "", "comma-separated key=value predicates (e.g. project=broker,modified-after=2025-01-01)")
@@ -713,22 +688,23 @@ func lookupMain(args []string) {
 		log.Fatal("lookup requires -query")
 	}
 
-	host, scope, err := fetch.ParseMarkURL(fs.Arg(0))
-	if err != nil {
-		log.Fatal(err)
-	}
+	target := mustTarget(fs.Arg(0))
+	host, scope := target.DialHost(), target.Path
 
 	token := tokens.Resolve(tokens.Credential{Explicit: *authToken, Origin: host}, host, tokens.LoadDefault())
 
 	client := fetch.NewClient(fetch.Options{Insecure: *insecure})
 	defer client.Close()
 
-	opts := fetch.LookupOptions{Filter: *filter, Limit: *limit, Match: *match}
-	result, err := client.Lookup(host, scope, *query, token, opts)
+	req := fetch.LookupRequest{
+		Host: host, Scope: scope, Token: token,
+		Query: *query, Filter: *filter, Limit: *limit, Match: *match,
+	}
+	result, err := client.Lookup(ctx, req)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if fetch.AnsweredFromCatalog(opts, result) {
+	if fetch.AnsweredFromCatalog(req, result) {
 		fmt.Fprintln(os.Stderr, "note: "+fetch.CatalogFallbackNote)
 	}
 
@@ -749,14 +725,11 @@ func exitCodeForStatus(status string) int {
 // zero for a refused request.
 func printResult(result fetch.Result, verbose bool) {
 	if verbose {
-		fmt.Fprintf(os.Stderr, "[%s]", result.Response.Status)
-		for k, v := range result.Response.Metadata {
-			fmt.Fprintf(os.Stderr, " %s=%s", k, v)
-		}
+		line := statusLine(result.Response.Status, result.Response.Metadata)
 		if result.FromCache {
-			fmt.Fprint(os.Stderr, " (cached)")
+			line += " (cached)"
 		}
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, line)
 	}
 	fmt.Print(result.Response.Body)
 	exitOnFailedStatus(result.Response.Status)
@@ -845,4 +818,13 @@ func validateVerb(verb string) error {
 		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)", verb)
 	}
 	return nil
+}
+
+// mustTarget parses the URL argument or exits.
+func mustTarget(raw string) links.Target {
+	target, err := links.ParseMark(raw)
+	if err != nil {
+		log.Fatalf("invalid URL: %v", err)
+	}
+	return target
 }
