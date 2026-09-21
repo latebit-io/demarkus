@@ -44,7 +44,7 @@ func TestSnapshotRefresh(t *testing.T) {
 		memory := initializedMemory(t)
 		commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A\n")})
 		observed := newObservedBlobStore(memory)
-		store, err := Open(context.Background(), observed, Options{WorldID: testWorldID})
+		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -83,7 +83,7 @@ func TestSnapshotRefresh(t *testing.T) {
 		}
 		commitReadDocuments(t, memory, initial)
 		observed := newObservedBlobStore(memory)
-		store, err := Open(context.Background(), observed, Options{WorldID: testWorldID, ShardWorkers: 3})
+		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, ShardWorkers: 3})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -130,7 +130,7 @@ func TestSnapshotRefresh(t *testing.T) {
 	t.Run("corrupt changed head never serves cache", func(t *testing.T) {
 		memory := initializedMemory(t)
 		commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A\n")})
-		store, err := Open(context.Background(), memory, Options{WorldID: testWorldID})
+		store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -158,7 +158,7 @@ func TestSnapshotRefresh(t *testing.T) {
 		base := newReadDocument("/docs/a.md", "# A v1\n")
 		commitReadDocuments(t, memory, []readDocumentSpec{base})
 		delayed := newDelayedHeadStore(memory)
-		store, err := Open(context.Background(), delayed, Options{WorldID: testWorldID})
+		store, err := Open(context.Background(), delayed, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -208,7 +208,7 @@ func TestSnapshotRefresh(t *testing.T) {
 	t.Run("replayed sequence never replaces cache", func(t *testing.T) {
 		memory := initializedMemory(t)
 		commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A\n")})
-		store, err := Open(context.Background(), memory, Options{WorldID: testWorldID})
+		store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -229,7 +229,7 @@ func TestSnapshotRefresh(t *testing.T) {
 		base := newReadDocument("/docs/a.md", "# A v1\n")
 		commitReadDocuments(t, memory, []readDocumentSpec{base})
 		interleaved := newInterleavingBlobStore(memory)
-		store, err := Open(context.Background(), interleaved, Options{WorldID: testWorldID, RequestTimeout: 5 * time.Second})
+		store, err := Open(context.Background(), interleaved, Options{Logger: discardLogger, WorldID: testWorldID, RequestTimeout: 5 * time.Second})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -277,7 +277,7 @@ func TestReadViewContextAndSnapshot(t *testing.T) {
 	first.Metadata[0] = readMetadata("A", "before", "context")
 	commitReadDocuments(t, memory, []readDocumentSpec{first})
 	observed := newObservedBlobStore(memory)
-	store, err := Open(context.Background(), observed, Options{WorldID: testWorldID, RequestTimeout: 2 * time.Second})
+	store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, RequestTimeout: 2 * time.Second})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -373,7 +373,7 @@ func TestReadSemantics(t *testing.T) {
 	}
 	commit := commitReadDocuments(t, memory, documents)
 	observed := newObservedBlobStore(memory)
-	store, err := Open(context.Background(), observed, Options{WorldID: testWorldID})
+	store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -687,7 +687,7 @@ func TestReferencedObjectIntegrity(t *testing.T) {
 			memory := initializedMemory(t)
 			commit := commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A v1\n", "# A v2\n")})
 			test.mutate(t, memory, &commit)
-			store, err := Open(context.Background(), memory, Options{WorldID: testWorldID})
+			store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
 			if err != nil {
 				t.Fatalf("open: %v", err)
 			}
@@ -764,7 +764,7 @@ func TestReadIntegrityNormalization(t *testing.T) {
 			t.Run(surfaceName+" "+operation.name, func(t *testing.T) {
 				memory := initializedMemory(t)
 				commit := commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A\n")})
-				store, err := Open(context.Background(), memory, Options{WorldID: testWorldID})
+				store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
 				if err != nil {
 					t.Fatalf("open: %v", err)
 				}
@@ -828,7 +828,7 @@ func TestVerifyChainErrors(t *testing.T) {
 		memory := initializedMemory(t)
 		commit := commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "one", "two", "three")})
 		observed := newObservedBlobStore(memory)
-		store, err := Open(context.Background(), observed, Options{WorldID: testWorldID})
+		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -861,7 +861,7 @@ func TestVerifyChainErrors(t *testing.T) {
 func TestReadViewTimeout(t *testing.T) {
 	memory := initializedMemory(t)
 	commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A\n")})
-	store, err := Open(context.Background(), memory, Options{WorldID: testWorldID, RequestTimeout: 25 * time.Millisecond})
+	store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID, RequestTimeout: 25 * time.Millisecond})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -1235,7 +1235,7 @@ func removePreviousHash(t *testing.T, raw []byte) []byte {
 
 func openTestReadView(t *testing.T, memory blob.Store) *readView {
 	t.Helper()
-	store, err := Open(context.Background(), memory, Options{WorldID: testWorldID})
+	store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("open test store: %v", err)
 	}

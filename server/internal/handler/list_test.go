@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
+	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 )
 
 func TestListCursorRoundTripAndScope(t *testing.T) {
@@ -46,7 +49,7 @@ func TestBuildDirectoryPage(t *testing.T) {
 		{Name: "b", IsDir: true},
 		{Name: "c.md"},
 	}
-	first, err := buildDirectoryPage("/docs", entries, "", 2)
+	first, err := buildDirectoryPage("/docs", entries, 2)
 	if err != nil {
 		t.Fatalf("first page: %v", err)
 	}
@@ -55,7 +58,7 @@ func TestBuildDirectoryPage(t *testing.T) {
 		!strings.Contains(first.Body, "truncated") {
 		t.Fatalf("first page = %+v\n%s", first, first.Body)
 	}
-	second, err := buildDirectoryPage("/docs", entries, first.LastName, 2)
+	second, err := buildDirectoryPage("/docs", entries[2:], 2)
 	if err != nil {
 		t.Fatalf("second page: %v", err)
 	}
@@ -70,7 +73,7 @@ func TestBuildDirectoryPageBoundsBody(t *testing.T) {
 	for i := range entries {
 		entries[i].Name = strings.Repeat("[]", 2000) + string(rune(0x1000+i))
 	}
-	page, err := buildDirectoryPage("/", entries, "", 1000)
+	page, err := buildDirectoryPage("/", entries, 1000)
 	if err != nil {
 		t.Fatalf("buildDirectoryPage: %v", err)
 	}
@@ -83,8 +86,50 @@ func TestBuildDirectoryPageBoundsBody(t *testing.T) {
 }
 
 func TestBuildDirectoryPageRejectsOrderingDrift(t *testing.T) {
-	_, err := buildDirectoryPage("/", []storefmt.DirEntry{{Name: "b"}, {Name: "a"}}, "", 10)
+	_, err := buildDirectoryPage("/", []storefmt.DirEntry{{Name: "b"}, {Name: "a"}}, 10)
 	if err == nil || errors.Is(err, errListPageCannotProgress) {
 		t.Fatalf("ordering error = %v", err)
+	}
+}
+
+// windowRecorder notes every listing window the handler asks a view for.
+type windowRecorder struct {
+	storagebackend.ReadView
+	windows *[]storefmt.ListOptions
+}
+
+func (v *windowRecorder) ListEntries(ctx context.Context, reqPath string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {
+	*v.windows = append(*v.windows, opts)
+	return v.ReadView.ListEntries(ctx, reqPath, opts)
+}
+
+// A page asks the backend for page-size plus one entries past the cursor,
+// never for the whole directory.
+func TestListReadsOnlyTheWindow(t *testing.T) {
+	b := fileBackend(t)
+	seedBackend(t, b, map[string]string{
+		"docs/a.md": "# A\n", "docs/b.md": "# B\n", "docs/c.md": "# C\n", "docs/d.md": "# D\n", "docs/e.md": "# E\n",
+	})
+	var windows []storefmt.ListOptions
+	b.Store = &viewStore{DocumentStore: b.Store, wrap: func(view storagebackend.ReadView) storagebackend.ReadView {
+		return &windowRecorder{ReadView: view, windows: &windows}
+	}}
+	h := newHandler(b, nil)
+
+	first := newMockStream("LIST /docs/\n---\npage-size: 2\n---\n")
+	h.HandleStream(context.Background(), first)
+	firstResp, err := protocol.ParseResponse(&first.output)
+	if err != nil {
+		t.Fatalf("parse first response: %v", err)
+	}
+	if firstResp.Metadata["entries"] != "2" || firstResp.Metadata["complete"] != "false" {
+		t.Fatalf("first page metadata = %+v", firstResp.Metadata)
+	}
+	second := newMockStream("LIST /docs/\n---\npage-size: 2\ncursor: " + firstResp.Metadata["next-cursor"] + "\n---\n")
+	h.HandleStream(context.Background(), second)
+
+	want := []storefmt.ListOptions{{Limit: 3}, {After: "b.md", Limit: 3}}
+	if !slices.Equal(windows, want) {
+		t.Errorf("windows = %+v, want %+v", windows, want)
 	}
 }

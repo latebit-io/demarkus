@@ -18,6 +18,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 func TestInitializeGenesis(t *testing.T) {
@@ -71,7 +72,7 @@ func TestInitializeGenesis(t *testing.T) {
 	})
 
 	t.Run("open defaults", func(t *testing.T) {
-		store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+		store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -107,19 +108,18 @@ func TestInitializeGenesis(t *testing.T) {
 	})
 }
 
-func TestOpenRequiresValidPolicy(t *testing.T) {
+func TestValidatePolicyOnBucketStore(t *testing.T) {
 	objects := initializedMemory(t)
-	if _, err := Open(context.Background(), objects, Options{WorldID: testWorldID, RequirePolicy: true}); !errors.Is(err, ErrInvalidPolicy) {
-		t.Fatalf("Open without policy error = %v, want ErrInvalidPolicy", err)
-	}
-
-	store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	if err := writepolicy.Validate(context.Background(), store); !errors.Is(err, writepolicy.ErrInvalidPolicy) {
+		t.Fatalf("Validate without policy = %v, want ErrInvalidPolicy", err)
+	}
 	seedPolicy(t, store, "strictness: block\n", 0)
-	if _, err := Open(context.Background(), objects, Options{WorldID: testWorldID, RequirePolicy: true}); err != nil {
-		t.Fatalf("Open with policy: %v", err)
+	if err := writepolicy.Validate(context.Background(), store); err != nil {
+		t.Fatalf("Validate with policy: %v", err)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestSeparateBucketsAreIndependent(t *testing.T) {
 		if err := Initialize(context.Background(), objects, worldID); err != nil {
 			t.Fatalf("initialize %s: %v", worldID, err)
 		}
-		store, err := Open(context.Background(), objects, Options{WorldID: worldID})
+		store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: worldID})
 		if err != nil {
 			t.Fatalf("open %s: %v", worldID, err)
 		}
@@ -175,7 +175,7 @@ func TestInitializeReconciliation(t *testing.T) {
 		if err := Initialize(context.Background(), objects, testWorldID); err != nil {
 			t.Fatalf("initialize with ambiguous creates: %v", err)
 		}
-		if _, err := Open(context.Background(), memory, Options{WorldID: testWorldID}); err != nil {
+		if _, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID}); err != nil {
 			t.Fatalf("open reconciled world: %v", err)
 		}
 	})
@@ -238,7 +238,7 @@ func TestInitializeReconciliation(t *testing.T) {
 
 func TestOpenValidation(t *testing.T) {
 	t.Run("missing head", func(t *testing.T) {
-		store, err := Open(context.Background(), newTestMemory(t), Options{WorldID: testWorldID})
+		store, err := Open(context.Background(), newTestMemory(t), Options{Logger: discardLogger, WorldID: testWorldID})
 		if store != nil || !errors.Is(err, blob.ErrNotFound) || errors.Is(err, blob.ErrIntegrity) {
 			t.Fatalf("Open() = (%v, %v), want nil clear not-found", store, err)
 		}
@@ -246,7 +246,7 @@ func TestOpenValidation(t *testing.T) {
 
 	t.Run("wrong world", func(t *testing.T) {
 		objects := initializedMemory(t)
-		store, err := Open(context.Background(), objects, Options{WorldID: otherWorldID})
+		store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: otherWorldID})
 		if store != nil || !errors.Is(err, blob.ErrPrecondition) {
 			t.Fatalf("Open() = (%v, %v), want world precondition", store, err)
 		}
@@ -263,15 +263,23 @@ func TestOpenValidation(t *testing.T) {
 			name string
 			open func() (*Store, error)
 		}{
-			{name: "nil context", open: func() (*Store, error) { return Open(nilContext, memory, Options{WorldID: testWorldID}) }},
-			{name: "nil store", open: func() (*Store, error) { return Open(context.Background(), nil, Options{WorldID: testWorldID}) }},
-			{name: "typed nil store", open: func() (*Store, error) { return Open(context.Background(), typedNil, Options{WorldID: testWorldID}) }},
-			{name: "invalid world", open: func() (*Store, error) { return Open(context.Background(), memory, Options{WorldID: "bad"}) }},
+			{name: "nil context", open: func() (*Store, error) {
+				return Open(nilContext, memory, Options{Logger: discardLogger, WorldID: testWorldID})
+			}},
+			{name: "nil store", open: func() (*Store, error) {
+				return Open(context.Background(), nil, Options{Logger: discardLogger, WorldID: testWorldID})
+			}},
+			{name: "typed nil store", open: func() (*Store, error) {
+				return Open(context.Background(), typedNil, Options{Logger: discardLogger, WorldID: testWorldID})
+			}},
+			{name: "invalid world", open: func() (*Store, error) {
+				return Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: "bad"})
+			}},
 			{name: "negative timeout", open: func() (*Store, error) {
-				return Open(context.Background(), memory, Options{WorldID: testWorldID, RequestTimeout: -time.Second})
+				return Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID, RequestTimeout: -time.Second})
 			}},
 			{name: "negative workers", open: func() (*Store, error) {
-				return Open(context.Background(), memory, Options{WorldID: testWorldID, ShardWorkers: -1})
+				return Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID, ShardWorkers: -1})
 			}},
 		}
 		for _, test := range tests {
@@ -290,7 +298,7 @@ func TestOpenValidation(t *testing.T) {
 		if err := Initialize(ctx, newTestMemory(t), testWorldID); !errors.Is(err, context.Canceled) {
 			t.Errorf("Initialize() error = %v, want canceled", err)
 		}
-		store, err := Open(ctx, initializedMemory(t), Options{WorldID: testWorldID})
+		store, err := Open(ctx, initializedMemory(t), Options{Logger: discardLogger, WorldID: testWorldID})
 		if store != nil || !errors.Is(err, context.Canceled) {
 			t.Errorf("Open() = (%v, %v), want nil canceled", store, err)
 		}
@@ -328,7 +336,7 @@ func TestOpenRejectsMalformedHead(t *testing.T) {
 			objects := initializedMemory(t)
 			head := getObject(t, objects, headObjectKey)
 			replaceObject(t, objects, headObjectKey, head.Attributes.Generation, test.mutate(head.Data))
-			store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
 				t.Fatalf("Open() = (%v, %v), want nil integrity", store, err)
 			}
@@ -359,7 +367,7 @@ func TestOpenRejectsMissingOrCorruptReferences(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			objects := initializedMemory(t)
 			test.mutate(t, objects)
-			store, err := Open(context.Background(), objects, Options{WorldID: testWorldID, ShardWorkers: 4})
+			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID, ShardWorkers: 4})
 			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
 				t.Fatalf("Open() = (%v, %v), want nil integrity", store, err)
 			}
@@ -387,7 +395,7 @@ func TestOpenRejectsRootInvariants(t *testing.T) {
 			_, root := readHeadAndRoot(t, objects)
 			test.mutate(&root)
 			installRoot(t, objects, root)
-			store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
 				t.Fatalf("Open() = (%v, %v), want nil integrity", store, err)
 			}
@@ -429,7 +437,7 @@ func TestOpenRejectsShardInvariants(t *testing.T) {
 				shard.Entries[0].PathHash = strings.Repeat("0", 64)
 			}
 			installShard(t, objects, shardIndex, shard, test.count)
-			store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
 				t.Fatalf("Open() = (%v, %v), want nil integrity", store, err)
 			}
@@ -442,7 +450,7 @@ func TestOpenRejectsShardInvariants(t *testing.T) {
 			testEntry("/a.md", false, ""),
 			testEntry("/a.md/b.md", false, ""),
 		})
-		store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+		store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 		if store != nil || !errors.Is(err, blob.ErrIntegrity) {
 			t.Fatalf("Open() = (%v, %v), want topology integrity", store, err)
 		}
@@ -459,7 +467,7 @@ func TestDerivedSnapshotLiveAndArchived(t *testing.T) {
 		testEntry("/docs/archived.md", true, sharedHash),
 		testEntry("/archive/only.md", true, archivedHash),
 	})
-	store, err := Open(context.Background(), objects, Options{WorldID: testWorldID, ShardWorkers: 7})
+	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID, ShardWorkers: 7})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -519,7 +527,7 @@ func TestShardWorkerTimeout(t *testing.T) {
 	objects := initializedMemory(t)
 	blocking := &blockingShardStore{Store: objects}
 	store, err := Open(context.Background(), blocking, Options{
-		WorldID:        testWorldID,
+		Logger: discardLogger, WorldID: testWorldID,
 		RequestTimeout: 100 * time.Millisecond,
 		ShardWorkers:   5,
 	})

@@ -56,7 +56,7 @@ func testHandlerPathCollision(t *testing.T, b LookupBackend) {
 
 // RejectionFactories open backends that refuse writes a client can correct.
 type RejectionFactories struct {
-	// Quota caps the backend at two documents.
+	// Quota caps the backend at two documents; nil for a backend without quotas.
 	Quota LookupFactory
 	// Policy blocks a publish that lacks a domain tag.
 	Policy LookupFactory
@@ -65,7 +65,9 @@ type RejectionFactories struct {
 // RunRejectionConformance holds a backend that enforces a quota or a publish
 // policy to the shared sentinels and to the statuses the handler maps them to.
 func RunRejectionConformance(t *testing.T, factories RejectionFactories) {
-	t.Run("QuotaIsNotPermitted", func(t *testing.T) { testQuotaRejection(t, factories.Quota(t)) })
+	if factories.Quota != nil {
+		t.Run("QuotaIsNotPermitted", func(t *testing.T) { testQuotaRejection(t, factories.Quota(t)) })
+	}
 	t.Run("PolicyIsBadRequest", func(t *testing.T) { testPolicyRejection(t, factories.Policy(t)) })
 }
 

@@ -454,8 +454,8 @@ func (s *Store) Get(reqPath string, version int) (*storefmt.Document, error) {
 
 // ListEntries returns the backend-neutral directory listing used by the
 // server's DocumentStore contract. It applies the same filtering as ListDir.
-func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]storefmt.DirEntry, error) {
-	entries, err := s.listDir(reqPath, includeArchived)
+func (s *Store) ListEntries(reqPath string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {
+	entries, err := s.listDir(reqPath, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -469,7 +469,8 @@ func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]storefmt.Di
 // listDir returns entries at reqPath, excluding dot-files, versions/, and
 // non-documents (SPEC 9.8/11.9). includeArchived=false also omits archived
 // docs and document-free subtrees; true is the recovery/audit view.
-func (s *Store) listDir(reqPath string, includeArchived bool) ([]os.DirEntry, error) {
+func (s *Store) listDir(reqPath string, opts storefmt.ListOptions) ([]os.DirEntry, error) {
+	includeArchived := opts.IncludeArchived
 	dirPath, err := s.resolve(reqPath)
 	if err != nil {
 		return nil, err
@@ -502,7 +503,16 @@ func (s *Store) listDir(reqPath string, includeArchived bool) ([]os.DirEntry, er
 	}
 	dc := s.docCandidates(dirPath)
 	filtered := entries[:0]
-	for _, e := range entries {
+	// ReadDir sorts by name, so the window is a search and an early stop, both
+	// ahead of the per entry disk checks.
+	start := 0
+	if opts.After != "" {
+		start = sort.Search(len(entries), func(i int) bool { return entries[i].Name() > opts.After })
+	}
+	for _, e := range entries[start:] {
+		if opts.Limit > 0 && len(filtered) == opts.Limit {
+			break
+		}
 		name := e.Name()
 		if isHiddenEntry(name) {
 			continue
@@ -1096,7 +1106,7 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	if err := storefmt.ValidateWrite(content, meta); err != nil {
 		return nil, err
 	}
-	return s.write(reqPath, content, meta)
+	return s.write(reqPath, content, meta, nil)
 }
 
 // syncFile and syncDir are the durability calls; tests replace them.
@@ -1262,7 +1272,7 @@ func removeIfPresent(name string) error {
 }
 
 // write is the validated core shared by Write and WriteVersion.
-func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*storefmt.Document, error) {
+func (s *Store) write(reqPath string, content []byte, meta map[string]string, check storefmt.WriteCheck) (*storefmt.Document, error) {
 	loc, err := s.locate(reqPath)
 	if err != nil {
 		return nil, err
@@ -1304,12 +1314,6 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 		}
 	}
 
-	// Create per-document subdirectory for new documents.
-	docDir := loc.docDir
-	if err := s.mkdirAllDurable(docDir); err != nil {
-		return nil, fmt.Errorf("create per-doc versions dir: %w", err)
-	}
-
 	vFile := loc.versionFile(next)
 
 	stored, err := buildVersionFile(versionsDir, base, next, content, meta)
@@ -1320,6 +1324,20 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 	// Validate stored size after prepending frontmatter.
 	if int64(len(stored)) > int64(protocol.MaxBodyLength+storefmt.MaxStoreFrontmatter) {
 		return nil, storefmt.ErrSizeLimit
+	}
+	// The persisted form, not the request map: tags are normalized on the way in.
+	persisted := storefmt.ExtractMetadata(stored)
+	if check != nil {
+		prepared := storefmt.PreparedWrite{Path: storefmt.CanonicalPath(reqPath), Content: content, Metadata: persisted}
+		if err := check(prepared); err != nil {
+			return nil, err
+		}
+	}
+
+	// Create per-document subdirectory for new documents.
+	docDir := loc.docDir
+	if err := s.mkdirAllDurable(docDir); err != nil {
+		return nil, fmt.Errorf("create per-doc versions dir: %w", err)
 	}
 
 	if err := createVersionFile(vFile, stored, next); err != nil {
@@ -1348,7 +1366,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  next,
 		Archived: false,
-		Metadata: storefmt.ExtractMetadata(stored),
+		Metadata: persisted,
 		ETag:     storefmt.StoredETag(stored),
 	}
 	if keep := storefmt.RetentionValue(meta); keep > 0 {
@@ -1448,6 +1466,12 @@ func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content [
 //
 // Returns ErrConflict if the expectation is violated.
 func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*storefmt.Document, error) {
+	return s.WriteChecked(&storefmt.WriteSpec{Path: reqPath, ExpectedVersion: expectedVersion, Content: content, Metadata: meta})
+}
+
+// WriteChecked is WriteVersion with an optional check run inside the write.
+func (s *Store) WriteChecked(spec *storefmt.WriteSpec) (*storefmt.Document, error) {
+	reqPath, expectedVersion, content, meta := spec.Path, spec.ExpectedVersion, spec.Content, spec.Metadata
 	// Request-shaped checks come before any state read so an invalid write
 	// never masquerades as a conflict; every backend must order checks this way.
 	if err := storefmt.ValidateWrite(content, meta); err != nil {
@@ -1457,7 +1481,7 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 		return nil, os.ErrNotExist
 	}
 	if expectedVersion < 0 {
-		return s.write(reqPath, content, meta)
+		return s.write(reqPath, content, meta, spec.Check)
 	}
 
 	current, err := s.CurrentVersionResult(reqPath)
@@ -1468,7 +1492,7 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 		return &storefmt.Document{Version: current}, storefmt.ErrConflict
 	}
 
-	doc, err := s.write(reqPath, content, meta)
+	doc, err := s.write(reqPath, content, meta, spec.Check)
 	if err != nil {
 		if errors.Is(err, storefmt.ErrVersionExists) {
 			// Lost the O_EXCL race: another writer created the expected
@@ -1511,6 +1535,12 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 // The document must already exist. expectedVersion must be >= 1.
 // Returns ErrConflict if expectedVersion does not match the current version.
 func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*storefmt.Document, error) {
+	return s.AppendChecked(&storefmt.WriteSpec{Path: reqPath, ExpectedVersion: expectedVersion, Content: content, Metadata: meta})
+}
+
+// AppendChecked is Append with an optional check run on the joined write.
+func (s *Store) AppendChecked(spec *storefmt.WriteSpec) (*storefmt.Document, error) {
+	reqPath, expectedVersion, content, meta := spec.Path, spec.ExpectedVersion, spec.Content, spec.Metadata
 	if expectedVersion < 1 {
 		return nil, fmt.Errorf("APPEND requires expected-version >= 1, got %d", expectedVersion)
 	}
@@ -1547,7 +1577,10 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 
 	// Write validates the merged map: both sides pass the caps individually,
 	// their union need not.
-	return s.WriteVersion(reqPath, expectedVersion, combined, storefmt.PrepareAppendMeta(reqPath, baseDoc.Metadata, meta))
+	return s.WriteChecked(&storefmt.WriteSpec{
+		Path: reqPath, ExpectedVersion: expectedVersion, Content: combined,
+		Metadata: storefmt.PrepareAppendMeta(reqPath, baseDoc.Metadata, meta), Check: spec.Check,
+	})
 }
 
 // VerifyChain checks the hash chain integrity for a document.

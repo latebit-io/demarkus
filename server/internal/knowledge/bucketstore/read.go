@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -70,8 +71,8 @@ func (view *snapshotView) Get(ctx context.Context, reqPath string, version int) 
 	return viewRead(ctx, view, func(r *readView) (*storefmt.Document, error) { return r.Get(reqPath, version) })
 }
 
-func (view *snapshotView) ListEntries(ctx context.Context, reqPath string, includeArchived bool) ([]storefmt.DirEntry, error) {
-	return viewRead(ctx, view, func(r *readView) ([]storefmt.DirEntry, error) { return r.ListEntries(reqPath, includeArchived) })
+func (view *snapshotView) ListEntries(ctx context.Context, reqPath string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {
+	return viewRead(ctx, view, func(r *readView) ([]storefmt.DirEntry, error) { return r.listPage(reqPath, opts) })
 }
 
 func (view *snapshotView) IsDir(ctx context.Context, reqPath string) (bool, error) {
@@ -93,6 +94,16 @@ func (view *snapshotView) VerifyChain(ctx context.Context, reqPath string) error
 
 func (view *snapshotView) Lookup(ctx context.Context, query string, options catalog.Options) ([]catalog.Result, error) {
 	return viewRead(ctx, view, func(r *readView) ([]catalog.Result, error) { return r.Lookup(query, options) })
+}
+
+// attemptView lends a commit attempt's snapshot to a precondition as an
+// ordinary contract view, bounded by the attempt's own deadline.
+func attemptView(view *readView) *snapshotView {
+	deadline, ok := view.ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(defaultRequestTimeout)
+	}
+	return &snapshotView{objects: view.objects, snapshot: view.snapshot, deadline: deadline}
 }
 
 // readView reads one snapshot for one operation, under that operation's context.
@@ -164,7 +175,10 @@ func (view *readView) get(reqPath string, version int) (*storefmt.Document, erro
 	}, nil
 }
 
-func (view *readView) ListEntries(reqPath string, includeArchived bool) ([]storefmt.DirEntry, error) {
+// listPage windows the derived directory; Children are sorted by name, so
+// After is a binary search and Limit an early stop.
+func (view *readView) listPage(reqPath string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {
+	includeArchived := opts.IncludeArchived
 	logicalPath, err := view.logicalPath(reqPath)
 	if err != nil {
 		return nil, err
@@ -176,8 +190,25 @@ func (view *readView) ListEntries(reqPath string, includeArchived bool) ([]store
 	if !exists {
 		return nil, backend.ErrNotFound
 	}
-	entries := make([]storefmt.DirEntry, 0, len(directory.Children))
-	for _, child := range directory.Children {
+	children := directory.Children
+	if opts.After != "" {
+		start, found := slices.BinarySearchFunc(children, opts.After, func(child directoryChild, after string) int {
+			return strings.Compare(child.Name, after)
+		})
+		if found {
+			start++
+		}
+		children = children[start:]
+	}
+	capacity := len(children)
+	if opts.Limit > 0 {
+		capacity = min(capacity, opts.Limit)
+	}
+	entries := make([]storefmt.DirEntry, 0, capacity)
+	for _, child := range children {
+		if opts.Limit > 0 && len(entries) == opts.Limit {
+			break
+		}
 		if hiddenLogicalName(child.Name) || (includeArchived && !child.Visible) || (!includeArchived && !child.Live) {
 			continue
 		}

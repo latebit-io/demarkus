@@ -73,7 +73,7 @@ func New(config *Config) (*Runtime, error) {
 	}
 	logger := config.Logger
 	if logger == nil {
-		logger = slog.Default()
+		return nil, errors.New("world runtime: logger is nil")
 	}
 	if config.Name != "" {
 		logger = logger.With("world", config.Name)

@@ -2,11 +2,13 @@ package bucketstore
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 // The methods below let a test name one operation per line; each goes through
@@ -84,3 +86,14 @@ func (store *Store) openReadView() (*readView, error) {
 }
 
 func (*readView) Close() error { return nil }
+
+var discardLogger = slog.New(slog.DiscardHandler)
+
+// enforced puts the policy decorator over a store, as the knowledge server does.
+func enforced(store *Store, require bool) backendtest.Direct {
+	return backendtest.Direct{Store: writepolicy.Enforce(store, writepolicy.Options{Require: require})}
+}
+
+func (view *readView) ListEntries(reqPath string, includeArchived bool) ([]storefmt.DirEntry, error) {
+	return view.listPage(reqPath, storefmt.ListOptions{IncludeArchived: includeArchived})
+}

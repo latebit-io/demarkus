@@ -18,6 +18,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/snirouter"
 	"github.com/latebit-io/demarkus/server/internal/worldruntime"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 // worldAddTimeout bounds one world's open (GCS dial, genesis, head load).
@@ -216,17 +217,25 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	}
 	store, err := bucketstore.Open(ctx, objects, bucketstore.Options{
 		WorldID:        world.Bucket.WorldID,
+		Logger:         m.logger.With("world", world.Name),
 		RequestTimeout: time.Duration(world.Limits.RequestTimeout),
-		RequirePolicy:  !world.Bootstrap,
 		PolicySeed:     seed,
 		MaxDocuments:   world.Limits.MaxDocuments,
 	})
 	if err != nil {
 		return fmt.Errorf("bucket: %w", err)
 	}
+	// A provisioned world gets its policy from the broker later; every other
+	// world must hold a usable one before it serves a write.
+	requirePolicy := !world.Bootstrap
+	if requirePolicy {
+		if err := writepolicy.Validate(ctx, store); err != nil {
+			return fmt.Errorf("policy: %w", err)
+		}
+	}
 	runtime, err := worldruntime.New(&worldruntime.Config{
 		Name:              world.Name,
-		Store:             store,
+		Store:             writepolicy.Enforce(store, writepolicy.Options{Require: requirePolicy}),
 		TokensFile:        world.Auth.TokensFile,
 		DisableTokenWatch: true, // the coordinator owns reloads
 		ReadOnly:          world.ReadOnly,

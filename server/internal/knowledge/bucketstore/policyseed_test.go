@@ -22,7 +22,7 @@ func TestOpenSeedsMissingPolicy(t *testing.T) {
 	objects := initializedMemory(t)
 	seed := defaultSeed()
 	store, err := Open(context.Background(), objects, Options{
-		WorldID: testWorldID, RequirePolicy: true, PolicySeed: &seed,
+		Logger: discardLogger, WorldID: testWorldID, PolicySeed: &seed,
 	})
 	if err != nil {
 		t.Fatalf("Open with seed: %v", err)
@@ -34,17 +34,13 @@ func TestOpenSeedsMissingPolicy(t *testing.T) {
 	if !bytes.Equal(document.Content, seed.Body) || document.Version != 1 {
 		t.Fatalf("seeded policy = version %d %q", document.Version, document.Content)
 	}
-	// Enforcement must be live on the store the seeding open returned.
-	if !store.requirePolicy {
-		t.Error("store opened without enforcing the policy it seeded")
-	}
 }
 
 func TestOpenLeavesCuratedPolicyInPlace(t *testing.T) {
 	objects := initializedMemory(t)
 	seed := defaultSeed()
 	store, err := Open(context.Background(), objects, Options{
-		WorldID: testWorldID, RequirePolicy: true, PolicySeed: &seed,
+		Logger: discardLogger, WorldID: testWorldID, PolicySeed: &seed,
 	})
 	if err != nil {
 		t.Fatalf("first open: %v", err)
@@ -56,7 +52,7 @@ func TestOpenLeavesCuratedPolicyInPlace(t *testing.T) {
 	seedPolicy(t, store, curated, 1)
 
 	restarted, err := Open(context.Background(), objects, Options{
-		WorldID: testWorldID, RequirePolicy: true, PolicySeed: &seed,
+		Logger: discardLogger, WorldID: testWorldID, PolicySeed: &seed,
 	})
 	if err != nil {
 		t.Fatalf("restart with seed: %v", err)
@@ -72,7 +68,7 @@ func TestOpenLeavesCuratedPolicyInPlace(t *testing.T) {
 
 func TestSeedPolicyRejectsInvalidSeed(t *testing.T) {
 	objects := initializedMemory(t)
-	store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -95,7 +91,7 @@ func TestEnsureWorld(t *testing.T) {
 		if !created {
 			t.Error("created = false for an empty bucket")
 		}
-		if _, err := Open(context.Background(), objects, Options{WorldID: testWorldID}); err != nil {
+		if _, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID}); err != nil {
 			t.Fatalf("open created world: %v", err)
 		}
 	})
@@ -130,9 +126,9 @@ func TestEnsureWorld(t *testing.T) {
 	})
 }
 
-func TestEnsurePolicyRefusesCanceledContext(t *testing.T) {
+func TestSeedPolicyRefusesCanceledContext(t *testing.T) {
 	objects := initializedMemory(t)
-	store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -141,8 +137,8 @@ func TestEnsurePolicyRefusesCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	seed := defaultSeed()
-	if err := store.ensurePolicy(ctx, &seed); !errors.Is(err, context.Canceled) {
-		t.Fatalf("ensurePolicy error = %v, want context canceled", err)
+	if err := store.seedPolicy(ctx, seed); !errors.Is(err, context.Canceled) {
+		t.Fatalf("seedPolicy error = %v, want context canceled", err)
 	}
 	if _, err := store.Get(publishpolicy.DocumentPath, 0); err == nil {
 		t.Error("canceled open seeded a policy anyway")

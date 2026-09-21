@@ -131,16 +131,41 @@ func collectReadPaths(tokens map[string]Token) []string {
 	return paths
 }
 
-// RequiresReadAuth reports whether any read token covers the given path.
-// If true, the caller must authorize the request with a valid read token.
-// If false, the path is public.
-func (ts *TokenStore) RequiresReadAuth(reqPath string) bool {
-	// This probe and handler.checkReadAuth's retry are coupled: removing this
-	// exposes /private; removing the retry denies authorized /private access.
+// IsUnauthenticated reports a denial a fresh token could fix: none sent, not
+// recognized, or expired.
+func IsUnauthenticated(err error) bool {
+	return errors.Is(err, ErrNoToken) || errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrTokenExpired)
+}
+
+// IsDenial reports any authorization verdict, as opposed to an internal failure.
+func IsDenial(err error) bool {
+	return IsUnauthenticated(err) || errors.Is(err, ErrNotPermitted)
+}
+
+// requiresReadAuth reports whether any read token covers the path; otherwise
+// it is public. A pattern for "/private/" also protects the bare "/private".
+func (ts *TokenStore) requiresReadAuth(reqPath string) bool {
 	if matchesAnyPath(ts.readPaths, reqPath) {
 		return true
 	}
 	return !strings.HasSuffix(reqPath, "/") && matchesAnyPath(ts.readPaths, reqPath+"/")
+}
+
+// AuthorizeRead decides a read of a canonical path: nil when the path is
+// public or the token covers it, otherwise one of Authorize's sentinels. A nil
+// store has no auth configured, so everything is public.
+func (ts *TokenStore) AuthorizeRead(token, reqPath string) error {
+	if ts == nil || reqPath == protocol.WellKnownManifestPath || !ts.requiresReadAuth(reqPath) {
+		return nil
+	}
+	_, err := ts.Authorize(token, reqPath, "read")
+	if errors.Is(err, ErrNotPermitted) && !strings.HasSuffix(reqPath, "/") {
+		// The mirror of requiresReadAuth: a directory pattern grants the bare name.
+		if _, directoryErr := ts.Authorize(token, reqPath+"/", "read"); directoryErr == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // Authorize checks whether the given raw token is allowed to perform the given

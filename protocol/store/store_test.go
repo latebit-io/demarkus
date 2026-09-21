@@ -99,7 +99,7 @@ func TestTraversalReturnsNotExist(t *testing.T) {
 		{"CurrentVersion", func() error { _, err := s.CurrentVersionResult("/../outside.md"); return err }},
 		{"Get", func() error { _, err := s.Get("/../outside.md", 0); return err }},
 		{"Archive", func() error { _, _, err := s.ArchiveResult("/../outside.md", true); return err }},
-		{"write", func() error { _, err := s.write("/../outside.md", []byte("body"), nil); return err }},
+		{"write", func() error { _, err := s.write("/../outside.md", []byte("body"), nil, nil); return err }},
 		{"WriteVersion", func() error { _, err := s.WriteVersion("/../outside.md", 0, []byte("body"), nil); return err }},
 		{"Append", func() error { _, err := s.Append("/../outside.md", 1, []byte("body"), nil); return err }},
 	}
@@ -185,7 +185,7 @@ func TestListDir(t *testing.T) {
 	}
 
 	for _, includeArchived := range []bool{false, true} {
-		entries, err := s.listDir("/", includeArchived)
+		entries, err := s.listDir("/", storefmt.ListOptions{IncludeArchived: includeArchived})
 		if err != nil {
 			t.Fatalf("ListDir(includeArchived=%v): %v", includeArchived, err)
 		}
@@ -241,7 +241,7 @@ func TestListDir_HidesArchived(t *testing.T) {
 
 	// Default (hide archived): live.md stays; gone.md is hidden; attic/ is
 	// pruned because its only document is archived.
-	hidden, err := s.listDir("/", false)
+	hidden, err := s.listDir("/", storefmt.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListDir hide: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestListDir_HidesArchived(t *testing.T) {
 
 	// include-archived: every document is listed, including attic/; a
 	// document-free directory stays excluded even in the audit view.
-	shown, err := s.listDir("/", true)
+	shown, err := s.listDir("/", storefmt.ListOptions{IncludeArchived: true})
 	if err != nil {
 		t.Fatalf("ListDir show: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestListDir_HidesArchived(t *testing.T) {
 	// Non-canonical request paths must behave identically — the index fast
 	// path canonicalizes before prefix-matching pathIdx's canonical keys.
 	for _, p := range []string{"//", "/."} {
-		nc, err := s.listDir(p, false)
+		nc, err := s.listDir(p, storefmt.ListOptions{})
 		if err != nil {
 			t.Fatalf("ListDir %q: %v", p, err)
 		}
@@ -319,10 +319,10 @@ func TestListDirRejectsInvalidArchiveState(t *testing.T) {
 				if unarchive && filepath.Dir(rel) != "." {
 					listPath = "/" + filepath.ToSlash(filepath.Dir(rel))
 				}
-				if _, err := s.listDir(listPath, false); !errors.Is(err, storefmt.ErrIntegrity) {
+				if _, err := s.listDir(listPath, storefmt.ListOptions{}); !errors.Is(err, storefmt.ErrIntegrity) {
 					t.Fatalf("ListDir hidden error = %v, want ErrIntegrity", err)
 				}
-				if _, err := s.listDir(listPath, true); err != nil {
+				if _, err := s.listDir(listPath, storefmt.ListOptions{IncludeArchived: true}); err != nil {
 					t.Fatalf("ListDir audit view: %v", err)
 				}
 			})
@@ -394,7 +394,7 @@ func TestListDir_DotNamedDocDoesNotKeepShellDir(t *testing.T) {
 	if _, err := s.Write("/work/.scratch.md", []byte("# hidden\n"), nil); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	entries, err := s.listDir("/", false)
+	entries, err := s.listDir("/", storefmt.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListDir: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestListDir_DotNamedDocDoesNotKeepShellDir(t *testing.T) {
 			t.Errorf("want work/ pruned (only content is a hidden dot-file), got listed")
 		}
 	}
-	inner, err := s.listDir("/work", false)
+	inner, err := s.listDir("/work", storefmt.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListDir /work: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestListDir_NotADirectory(t *testing.T) {
 	}
 	s := New(root)
 
-	_, err := s.listDir("/file.md", false)
+	_, err := s.listDir("/file.md", storefmt.ListOptions{})
 	if err == nil {
 		t.Fatal("expected error for file")
 	}
@@ -1125,7 +1125,7 @@ func TestArchive(t *testing.T) {
 		if _, err := s.LookupHashResult(storefmt.ContentHash([]byte("# Hello\n"))); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("legacy archived hash lookup err = %v, want ErrNotExist", err)
 		}
-		entries, err := s.listDir("/", false)
+		entries, err := s.listDir("/", storefmt.ListOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1156,7 +1156,7 @@ func TestArchive(t *testing.T) {
 		if path, err := s.LookupHashResult(storefmt.ContentHash([]byte("# Hello\n"))); err != nil || path != "/doc.md" {
 			t.Errorf("unarchived hash lookup = (%q, %v), want /doc.md", path, err)
 		}
-		entries, err = s.listDir("/", false)
+		entries, err = s.listDir("/", storefmt.ListOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1307,7 +1307,7 @@ func TestListDir_LegacyLayoutVisibility(t *testing.T) {
 		return m
 	}
 
-	preMigrate, err := s.listDir("/", false)
+	preMigrate, err := s.listDir("/", storefmt.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListDir / before migration: %v", err)
 	}
@@ -1317,14 +1317,14 @@ func TestListDir_LegacyLayoutVisibility(t *testing.T) {
 	if err := s.migrateLegacyLayout(); err != nil {
 		t.Fatalf("migrateLegacyLayout: %v", err)
 	}
-	inLegacy, err := s.listDir("/legacy", false)
+	inLegacy, err := s.listDir("/legacy", storefmt.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListDir /legacy: %v", err)
 	}
 	if l := names(inLegacy); !l["old.md"] {
 		t.Errorf("migrated legacy-layout doc not listed: %v", l)
 	}
-	atRoot, err := s.listDir("/", false)
+	atRoot, err := s.listDir("/", storefmt.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListDir / after migration: %v", err)
 	}

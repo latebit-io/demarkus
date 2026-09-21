@@ -63,6 +63,7 @@ func TestWriteRejectionStatusMapping(t *testing.T) {
 		{verb: "PUBLISH", request: "PUBLISH /a.md\n---\n" + authBlock + "expected-version: 0\n---\n# A\n"},
 		{verb: "APPEND", request: "APPEND /a.md\n---\n" + authBlock + "expected-version: 1\n---\nmore\n"},
 		{verb: "ARCHIVE", request: "ARCHIVE /a.md\n---\n" + authBlock + "---\n"},
+		{verb: "UNARCHIVE", request: "PUBLISH /a.md\n---\n" + authBlock + "---\n"},
 	}
 	for _, e := range errs {
 		for _, r := range requests {

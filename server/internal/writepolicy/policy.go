@@ -1,6 +1,9 @@
-package bucketstore
+// Package writepolicy enforces a world's publish policy above any backend. The
+// verdict runs as a write precondition, inside the backend's own commit.
+package writepolicy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,15 +22,7 @@ var (
 	ErrInvalidPolicy = errors.New("invalid publish policy")
 )
 
-// MutationResult carries knowledge-only policy output beside a store mutation.
-type MutationResult struct {
-	Document   *storefmt.Document
-	Changed    bool
-	Strictness publishpolicy.Strictness
-	Policy     publishpolicy.Result
-}
-
-// PolicyError preserves deterministic violations for the knowledge handler.
+// PolicyError carries the violations so the handler can list them.
 type PolicyError struct {
 	Strictness publishpolicy.Strictness
 	Result     publishpolicy.Result
@@ -58,20 +53,20 @@ func (err *PolicyError) RejectionMessage() string {
 	return b.String()
 }
 
-func (view *readView) currentPolicy(require bool) (publishpolicy.Policy, error) {
-	entry, exists := view.snapshot.Paths[publishpolicy.DocumentPath]
-	if !exists {
+// Current loads and validates the policy document from reader. With require
+// false a world without one has the empty policy.
+func Current(ctx context.Context, reader backend.Reader, require bool) (publishpolicy.Policy, error) {
+	document, err := reader.Get(ctx, publishpolicy.DocumentPath, 0)
+	switch {
+	case errors.Is(err, backend.ErrNotFound):
 		if require {
 			return publishpolicy.Policy{}, fmt.Errorf("%w: %s is missing", ErrInvalidPolicy, publishpolicy.DocumentPath)
 		}
 		return publishpolicy.Policy{}, nil
-	}
-	if entry.Archived {
-		return publishpolicy.Policy{}, fmt.Errorf("%w: %s is archived", ErrInvalidPolicy, publishpolicy.DocumentPath)
-	}
-	document, err := view.Get(publishpolicy.DocumentPath, 0)
-	if err != nil {
+	case err != nil:
 		return publishpolicy.Policy{}, fmt.Errorf("load current policy: %w", err)
+	case document.Archived:
+		return publishpolicy.Policy{}, fmt.Errorf("%w: %s is archived", ErrInvalidPolicy, publishpolicy.DocumentPath)
 	}
 	policy := publishpolicy.Parse(string(document.Content))
 	if err := policy.Validate(); err != nil {
@@ -83,31 +78,26 @@ func (view *readView) currentPolicy(require bool) (publishpolicy.Policy, error) 
 	return policy, nil
 }
 
-func evaluateMutationPolicy(
-	view *readView,
-	require bool,
-	path string,
-	metadata map[string]string,
-	body []byte,
-) (publishpolicy.Strictness, publishpolicy.Result, error) {
-	if path == publishpolicy.DocumentPath {
-		candidate := publishpolicy.Parse(string(body))
-		if err := candidate.Validate(); err != nil {
-			return "", publishpolicy.Result{}, fmt.Errorf("%w: %w: candidate policy: %v", backend.ErrRejected, ErrInvalidPolicy, err)
+// evaluate judges one prepared write against the policy it commits under. A
+// write of the policy document must itself be an enforceable policy.
+func evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite, require bool) error {
+	if write.Path == publishpolicy.DocumentPath {
+		if err := publishpolicy.Parse(string(write.Content)).Validate(); err != nil {
+			return fmt.Errorf("%w: %w: candidate policy: %v", backend.ErrRejected, ErrInvalidPolicy, err)
 		}
 	}
-	policy, err := view.currentPolicy(require)
+	policy, err := Current(ctx, state, require)
 	if err != nil {
-		return "", publishpolicy.Result{}, err
+		return err
 	}
-	values := make(map[string]any, len(metadata))
-	for key, value := range metadata {
+	values := make(map[string]any, len(write.Metadata))
+	for key, value := range write.Metadata {
 		values[key] = value
 	}
-	result := publishpolicy.Evaluate(policy, path, values)
+	result := publishpolicy.Evaluate(policy, write.Path, values)
 	strictness := policy.EffectiveStrictness()
 	if result.Compliant() || strictness == publishpolicy.Warn {
-		return strictness, result, nil
+		return nil
 	}
-	return strictness, result, &PolicyError{Strictness: strictness, Result: result}
+	return &PolicyError{Strictness: strictness, Result: result}
 }

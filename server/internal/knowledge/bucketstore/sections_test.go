@@ -37,7 +37,7 @@ func TestSectionIndexAcrossSnapshots(t *testing.T) {
 		t.Fatalf("writer body rows = %q", got)
 	}
 
-	reader, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+	reader, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("open reader: %v", err)
 	}

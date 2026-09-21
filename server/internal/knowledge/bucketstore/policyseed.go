@@ -37,8 +37,7 @@ func ValidatePolicySeed(seed PolicySeed) error {
 // reports whether it created one. Create-only, so a restart never reverts
 // a policy that replaced an earlier seed.
 func (store *Store) createPolicy(ctx context.Context, seed PolicySeed) (bool, error) {
-	// The installed snapshot is the same freshness currentPolicy trusts,
-	// and an archived entry counts as present so no seed overwrites it.
+	// An archived entry counts as present so no seed overwrites it.
 	if _, exists := store.snapshot.Load().Paths[publishpolicy.DocumentPath]; exists {
 		return false, nil
 	}
@@ -87,23 +86,15 @@ func EnsureWorld(ctx context.Context, objects blob.Store, worldID string) (bool,
 	return true, nil
 }
 
-// ensurePolicy makes the stored policy usable before enforcement starts:
-// seed it when absent and a seed is configured, then validate whatever
-// the world actually holds.
-func (store *Store) ensurePolicy(ctx context.Context, seed *PolicySeed) error {
-	if seed != nil {
-		created, err := store.createPolicy(ctx, *seed)
-		if err != nil {
-			return err
-		}
-		if created {
-			store.logger.Info("seeded the initial write policy",
-				"world", store.worldID, "path", publishpolicy.DocumentPath)
-		}
+// seedPolicy publishes the seed when the world has no policy document.
+func (store *Store) seedPolicy(ctx context.Context, seed PolicySeed) error {
+	created, err := store.createPolicy(ctx, seed)
+	if err != nil {
+		return err
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
-	defer cancel()
-	view := &readView{ctx: requestCtx, objects: store.objects, snapshot: store.snapshot.Load()}
-	_, err := view.currentPolicy(true)
-	return err
+	if created {
+		store.logger.Info("seeded the initial write policy",
+			"world", store.worldID, "path", publishpolicy.DocumentPath)
+	}
+	return nil
 }

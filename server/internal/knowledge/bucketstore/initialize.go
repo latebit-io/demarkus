@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 )
@@ -168,7 +169,9 @@ func createGenesisHead(ctx context.Context, objects blob.Store, worldID string, 
 }
 
 func validateExistingWorld(ctx context.Context, objects blob.Store, worldID string) error {
-	if _, err := Open(ctx, objects, Options{WorldID: worldID}); err != nil {
+	// Only the verdict matters here; the caller opens the world again to serve
+	// it, with its own logger, and any warning repeats there.
+	if _, err := Open(ctx, objects, Options{WorldID: worldID, Logger: slog.New(slog.DiscardHandler)}); err != nil {
 		return fmt.Errorf("validate existing world: %w", err)
 	}
 	return nil

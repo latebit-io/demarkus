@@ -178,12 +178,12 @@ func (h *worldsTestHarness) objects(t *testing.T, world string) *blob.Memory {
 	return store
 }
 
-// seededPolicy reopens the world with enforcement on and returns its policy,
+// seededPolicy reopens the world and returns its policy,
 // which only exists if the manager seeded one.
 func (h *worldsTestHarness) seededPolicy(t *testing.T, world string) *storefmt.Document {
 	t.Helper()
 	store, err := bucketstore.Open(context.Background(), h.objects(t, world), bucketstore.Options{
-		WorldID: testWorldID, RequirePolicy: true,
+		Logger: slog.New(slog.DiscardHandler), WorldID: testWorldID,
 	})
 	if err != nil {
 		t.Fatalf("reopen seeded world: %v", err)

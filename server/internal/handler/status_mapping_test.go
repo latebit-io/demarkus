@@ -29,7 +29,7 @@ func TestRequestErrorStatusMapping(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stream := &mockStream{Reader: strings.NewReader(tt.request)}
-			(&Handler{}).HandleStream(context.Background(), stream)
+			(&Handler{Logger: discardLogger}).HandleStream(context.Background(), stream)
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
 				t.Fatalf("parse response: %v", err)

@@ -37,12 +37,24 @@ func call[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 	return value, backend.FromNotExist(err)
 }
 
+// writeSpec carries the request into the file store. Its precondition runs
+// under the write lock, reading the same state the write commits against.
+func (s *Store) writeSpec(ctx context.Context, req *backend.WriteRequest) *storefmt.WriteSpec {
+	spec := &storefmt.WriteSpec{Path: req.Path, ExpectedVersion: req.ExpectedVersion, Content: req.Content, Metadata: req.Metadata}
+	if req.Precondition != nil {
+		spec.Check = func(write storefmt.PreparedWrite) error {
+			return req.Precondition(ctx, &readView{store: s}, write)
+		}
+	}
+	return spec
+}
+
 // Publish commits document and catalog state under one lock.
 func (s *Store) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
 	return call(ctx, func() (*storefmt.Document, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		document, err := s.documents.WriteVersion(req.Path, req.ExpectedVersion, req.Content, req.Metadata)
+		document, err := s.documents.WriteChecked(s.writeSpec(ctx, &req))
 		if err == nil {
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
 		}
@@ -55,7 +67,7 @@ func (s *Store) Append(ctx context.Context, req backend.WriteRequest) (*storefmt
 	return call(ctx, func() (*storefmt.Document, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		document, err := s.documents.Append(req.Path, req.ExpectedVersion, req.Content, req.Metadata)
+		document, err := s.documents.AppendChecked(s.writeSpec(ctx, &req))
 		if err == nil {
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
 		}
@@ -98,8 +110,8 @@ func (view *readView) Get(ctx context.Context, path string, version int) (*store
 	return call(ctx, func() (*storefmt.Document, error) { return view.store.documents.Get(path, version) })
 }
 
-func (view *readView) ListEntries(ctx context.Context, path string, includeArchived bool) ([]storefmt.DirEntry, error) {
-	return call(ctx, func() ([]storefmt.DirEntry, error) { return view.store.documents.ListEntries(path, includeArchived) })
+func (view *readView) ListEntries(ctx context.Context, path string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {
+	return call(ctx, func() ([]storefmt.DirEntry, error) { return view.store.documents.ListEntries(path, opts) })
 }
 
 func (view *readView) IsDir(ctx context.Context, path string) (bool, error) {

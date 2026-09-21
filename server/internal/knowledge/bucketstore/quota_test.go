@@ -18,7 +18,7 @@ func newQuotaStore(t *testing.T, maxDocuments int) *Store {
 	if err := Initialize(context.Background(), objects, testWorldID); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
-	store, err := Open(context.Background(), objects, Options{WorldID: testWorldID, MaxDocuments: maxDocuments})
+	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID, MaxDocuments: maxDocuments})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

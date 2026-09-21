@@ -118,3 +118,33 @@ type DirEntry struct {
 	Name  string
 	IsDir bool
 }
+
+// ListOptions selects a window of a directory listing. Entries are ordered by
+// name; After skips names up to and including it, Limit 0 means no limit.
+type ListOptions struct {
+	IncludeArchived bool
+	After           string
+	Limit           int
+}
+
+// PreparedWrite is a write as it would be stored: canonical path, final body,
+// persisted metadata.
+type PreparedWrite struct {
+	Path     string
+	Content  []byte
+	Metadata map[string]string
+}
+
+// WriteCheck judges a prepared write after the conflict, archive and no-op
+// checks and before anything is stored; its error refuses the write.
+type WriteCheck func(PreparedWrite) error
+
+// WriteSpec is one versioned write. A negative ExpectedVersion skips the
+// version check; Check may be nil.
+type WriteSpec struct {
+	Path            string
+	ExpectedVersion int
+	Content         []byte
+	Metadata        map[string]string
+	Check           WriteCheck
+}

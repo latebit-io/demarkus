@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
@@ -30,6 +29,12 @@ type candidateMutation struct {
 	result      MutationResult
 	operationID string
 	prepared    *snapshot
+}
+
+// MutationResult is a committed or refused mutation.
+type MutationResult struct {
+	Document *storefmt.Document
+	Changed  bool
 }
 
 type mutationBuilder func(context.Context, *readView, string) (*candidateMutation, MutationResult, error)
@@ -53,7 +58,7 @@ func (store *Store) publish(ctx context.Context, req backend.WriteRequest) (Muta
 	body := bytes.Clone(content)
 	meta := maps.Clone(metadata)
 	blindBase := -1
-	return store.runMutation(ctx, func(_ context.Context, view *readView, operationID string) (*candidateMutation, MutationResult, error) {
+	return store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, MutationResult, error) {
 		if _, exists := view.snapshot.Paths[canonical]; !exists {
 			if err := store.checkDocumentQuota(view); err != nil {
 				return nil, MutationResult{}, err
@@ -70,7 +75,8 @@ func (store *Store) publish(ctx context.Context, req backend.WriteRequest) (Muta
 				return nil, conflictResult(current), storefmt.ErrConflict
 			}
 		}
-		return store.buildWriteCandidate(view, operationID, canonical, expected, body, meta)
+		write := writeCandidate{path: canonical, expected: expected, body: body, metadata: meta, precondition: req.Precondition}
+		return store.buildWriteCandidate(ctx, view, operationID, &write)
 	})
 }
 
@@ -114,7 +120,7 @@ func (store *Store) appendVersion(ctx context.Context, req backend.WriteRequest)
 	}
 	addition := bytes.Clone(content)
 	meta := maps.Clone(metadata)
-	return store.runMutation(ctx, func(_ context.Context, view *readView, operationID string) (*candidateMutation, MutationResult, error) {
+	return store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, MutationResult, error) {
 		entry, exists := view.snapshot.Paths[canonical]
 		if !exists {
 			return nil, MutationResult{}, backend.ErrNotFound
@@ -134,7 +140,8 @@ func (store *Store) appendVersion(ctx context.Context, req backend.WriteRequest)
 		if err := storefmt.ValidateWrite(combined, merged); err != nil {
 			return nil, MutationResult{}, err
 		}
-		return store.buildWriteCandidate(view, operationID, canonical, expected, combined, merged)
+		write := writeCandidate{path: canonical, expected: expected, body: combined, metadata: merged, precondition: req.Precondition}
+		return store.buildWriteCandidate(ctx, view, operationID, &write)
 	})
 }
 
@@ -167,13 +174,66 @@ func conflictResult(version int) MutationResult {
 	return MutationResult{Document: &storefmt.Document{Version: version}}
 }
 
+// writeCandidate is one prepared PUBLISH or APPEND inside a commit attempt.
+type writeCandidate struct {
+	path         string
+	expected     int
+	body         []byte
+	metadata     map[string]string
+	precondition backend.Precondition
+}
+
+// checkWritable refuses what no version check can fix: an archived document,
+// a new path that collides with the topology, a spent version range.
+func checkWritable(loaded *snapshot, path string) error {
+	entry, exists := loaded.Paths[path]
+	switch {
+	case !exists:
+		return validateNewPathTopology(loaded, path)
+	case entry.Archived:
+		return storefmt.ErrArchived
+	case entry.Current >= storefmt.MaxVersionNumber:
+		return fmt.Errorf("version limit %d reached", storefmt.MaxVersionNumber)
+	}
+	return nil
+}
+
+// writeBase is what a write to an existing document builds on. unchanged is
+// set when the write would repeat the tip, body and metadata both.
+type writeBase struct {
+	history     retainedHistory
+	previousRaw []byte
+	unchanged   *storefmt.Document
+}
+
+func loadWriteBase(view *readView, entry *snapshotEntry, write *writeCandidate) (writeBase, error) {
+	history, err := view.loadHistory(entry)
+	if err != nil {
+		return writeBase{}, err
+	}
+	tip := history.versions[len(history.versions)-1]
+	previousRaw, err := view.loadBlob(tip.entry.Blob)
+	if err != nil {
+		return writeBase{}, err
+	}
+	storedTip, err := validateStoredDocument(previousRaw, &tip)
+	if err != nil {
+		return writeBase{}, err
+	}
+	base := writeBase{history: history, previousRaw: previousRaw}
+	if bytes.Equal(storedTip.body, write.body) && storefmt.MetaEqual(storedTip.metadata, storefmt.NormalizeMetadata(write.metadata)) {
+		base.unchanged = documentFromRetained(previousRaw, &tip, &storedTip, false)
+	}
+	return base, nil
+}
+
 func (store *Store) buildWriteCandidate(
+	ctx context.Context,
 	view *readView,
-	operationID, path string,
-	expected int,
-	body []byte,
-	metadata map[string]string,
+	operationID string,
+	write *writeCandidate,
 ) (*candidateMutation, MutationResult, error) {
+	path, expected, body, metadata := write.path, write.expected, write.body, write.metadata
 	entry, exists := view.snapshot.Paths[path]
 	current := 0
 	if exists {
@@ -182,40 +242,21 @@ func (store *Store) buildWriteCandidate(
 	if expected >= 0 && current != expected {
 		return nil, conflictResult(current), storefmt.ErrConflict
 	}
-	if exists && entry.Archived {
-		return nil, MutationResult{}, storefmt.ErrArchived
-	}
-	if !exists {
-		if err := validateNewPathTopology(view.snapshot, path); err != nil {
-			return nil, MutationResult{}, err
-		}
-	}
-	if current >= storefmt.MaxVersionNumber {
-		return nil, MutationResult{}, fmt.Errorf("version limit %d reached", storefmt.MaxVersionNumber)
+	if err := checkWritable(view.snapshot, path); err != nil {
+		return nil, MutationResult{}, err
 	}
 
-	var history retainedHistory
-	var previousRaw []byte
+	var base writeBase
 	if exists {
 		var err error
-		history, err = view.loadHistory(&entry)
-		if err != nil {
+		if base, err = loadWriteBase(view, &entry, write); err != nil {
 			return nil, MutationResult{}, err
 		}
-		tip := history.versions[len(history.versions)-1]
-		previousRaw, err = view.loadBlob(tip.entry.Blob)
-		if err != nil {
-			return nil, MutationResult{}, err
-		}
-		storedTip, err := validateStoredDocument(previousRaw, &tip)
-		if err != nil {
-			return nil, MutationResult{}, err
-		}
-		if bytes.Equal(storedTip.body, body) && storefmt.MetaEqual(storedTip.metadata, storefmt.NormalizeMetadata(metadata)) {
-			document := documentFromRetained(previousRaw, &tip, &storedTip, false)
-			return nil, MutationResult{Document: document}, storefmt.ErrNotModified
+		if base.unchanged != nil {
+			return nil, MutationResult{Document: base.unchanged}, storefmt.ErrNotModified
 		}
 	}
+	history, previousRaw := base.history, base.previousRaw
 
 	next := current + 1
 	stored, err := storefmt.SerializeVersion(next, previousRaw, body, metadata)
@@ -224,9 +265,12 @@ func (store *Store) buildWriteCandidate(
 	}
 	modified := store.now().UTC().Truncate(time.Second)
 	persisted := storefmt.ExtractMetadata(stored)
-	strictness, policyResult, err := evaluateMutationPolicy(view, store.requirePolicy, path, persisted, body)
-	if err != nil {
-		return nil, MutationResult{Strictness: strictness, Policy: policyResult}, err
+	if write.precondition != nil {
+		// Each commit attempt judges the write against the snapshot it rebased on.
+		prepared := storefmt.PreparedWrite{Path: path, Content: body, Metadata: persisted}
+		if err := write.precondition(ctx, attemptView(view), prepared); err != nil {
+			return nil, MutationResult{}, err
+		}
 	}
 
 	blobHash := hashHex(stored)
@@ -281,7 +325,7 @@ func (store *Store) buildWriteCandidate(
 	objects = append(objects, modelObject{Key: versionEntry.Blob.Key, Data: bytes.Clone(stored)})
 	objects = append(objects, historyObjects...)
 	objects = append(objects, manifestModel)
-	result := MutationResult{Document: document, Changed: true, Strictness: strictness, Policy: policyResult}
+	result := MutationResult{Document: document, Changed: true}
 	return store.buildNamespaceCandidate(view.ctx, view.snapshot, operationID, &newEntry, !exists, objects, result, body)
 }
 
@@ -293,9 +337,6 @@ func (store *Store) buildArchiveCandidate(
 	entry, exists := view.snapshot.Paths[path]
 	if !exists {
 		return nil, MutationResult{}, backend.ErrNotFound
-	}
-	if archived && store.requirePolicy && path == publishpolicy.DocumentPath {
-		return nil, MutationResult{}, fmt.Errorf("%w: %w: required policy cannot be archived", backend.ErrRejected, ErrInvalidPolicy)
 	}
 	history, err := view.loadHistory(&entry)
 	if err != nil {

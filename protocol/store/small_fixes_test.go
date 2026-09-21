@@ -1,6 +1,8 @@
 package store
 
 import (
+	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -58,5 +60,37 @@ func TestApplyOKFTypeDefaultAlwaysCopies(t *testing.T) {
 	}
 	if got := storefmt.ApplyOKFTypeDefault("/index.md", nil); got != nil {
 		t.Errorf("nil metadata on a reserved file = %v, want nil", got)
+	}
+}
+
+// A write check sees the persisted form, and its refusal leaves no version and
+// no per document directory behind.
+func TestWriteCheckedRefusalLeavesNothing(t *testing.T) {
+	s := New(t.TempDir())
+	errRefused := errors.New("refused")
+	var seen storefmt.PreparedWrite
+	spec := &storefmt.WriteSpec{
+		Path: "/notes/doc.md", Content: []byte("# Doc\n"), Metadata: map[string]string{"tags": "b, a"},
+		Check: func(write storefmt.PreparedWrite) error { seen = write; return errRefused },
+	}
+	if _, err := s.WriteChecked(spec); !errors.Is(err, errRefused) {
+		t.Fatalf("WriteChecked: %v, want the check's error", err)
+	}
+	if seen.Path != "/notes/doc.md" || seen.Metadata["tags"] != "b,a" || string(seen.Content) != "# Doc\n" {
+		t.Errorf("check saw %+v", seen)
+	}
+	if version, err := s.CurrentVersionResult("/notes/doc.md"); err != nil || version != 0 {
+		t.Errorf("version after refusal = %d, %v", version, err)
+	}
+	loc, err := s.locate("/notes/doc.md")
+	if err != nil {
+		t.Fatalf("locate: %v", err)
+	}
+	if _, err := os.Stat(loc.docDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("per document directory after refusal: %v, want absent", err)
+	}
+	spec.Check = nil
+	if doc, err := s.WriteChecked(spec); err != nil || doc.Version != 1 {
+		t.Errorf("unchecked write = %+v, %v", doc, err)
 	}
 }

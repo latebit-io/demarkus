@@ -126,19 +126,9 @@ func (s *worldWriteTokenStore) Provision(ctx context.Context, worldName string) 
 			}
 			return existing, nil
 		}
-		// Operations is hardcoded to "publish" and deliberately is
-		// NOT a config knob (defaultToken carries paths only). The
-		// server recognizes "publish" for every write verb (PUBLISH /
-		// APPEND / ARCHIVE all call Authorize with "publish"), so
-		// nothing else is useful here. The deeper reason it isn't
-		// configurable: if "read" ever landed in this list, the
-		// server's `RequiresReadAuth` would flip on for every path
-		// this token matches (`/**` in the default config) and every
-		// open-bearer read would start returning unauthorized — one
-		// char of config drift silently breaking the open-reads
-		// invariant the whole broker simplification rests on. Path
-		// stays configurable (worlds[].defaultToken.paths) — narrowing
-		// the write surface to e.g. /team-a/** is a legitimate knob.
+		// "publish" only, and not configurable: it covers every write verb, and a
+		// stray "read" would switch on the server's read auth (AuthorizeRead) for
+		// every path this token matches, breaking open reads. Paths stay configurable.
 		minted, mErr := token.Generate(label, world.DefaultToken.Paths, []string{"publish"})
 		if mErr != nil {
 			return nil, fmt.Errorf("generate write token: %w", mErr)

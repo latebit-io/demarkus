@@ -10,11 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/handler"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 // TestFileStoreConformance runs the suite against the filestore backend that
@@ -117,4 +119,21 @@ func TestFileStoreImportRefusesOrphanedVersionDir(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Error("orphaned version file modified by refused import")
 	}
+}
+
+// TestFileStoreRejectionConformance: with the policy decorator above it the
+// file backend refuses exactly as the bucket backend does. It has no quota.
+func TestFileStoreRejectionConformance(t *testing.T) {
+	RunRejectionConformance(t, RejectionFactories{
+		Policy: func(t *testing.T) LookupBackend {
+			b := FileBackend(t)
+			policy := []byte("# Write Policy\n\nCurated.\n\nstrictness: block\nrequire_tags: domain\n")
+			meta := map[string]string{"tags": "category:governance", "type": "Policy"}
+			if _, err := b.direct().WriteVersion(publishpolicy.DocumentPath, 0, policy, meta); err != nil {
+				t.Fatalf("seed policy: %v", err)
+			}
+			b.Store = writepolicy.Enforce(b.Store, writepolicy.Options{Require: true})
+			return b
+		},
+	})
 }

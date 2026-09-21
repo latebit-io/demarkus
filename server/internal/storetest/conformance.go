@@ -67,6 +67,8 @@ func RunConformance(t *testing.T, factory Factory, tamper Tamper) {
 		{"BodySizeLimit", testBodySizeLimit},
 		{"InvalidMetadata", testInvalidMetadata},
 		{"CanceledContext", testCanceledContext},
+		{"ListPaging", testListPaging},
+		{"Precondition", testPrecondition},
 		{"VerifyChainTampered", func(t *testing.T, s Direct) { testVerifyChainTampered(t, s, tamper) }},
 		{"VerifyChainTamperedTip", func(t *testing.T, s Direct) { testVerifyChainTamperedTip(t, s, tamper) }},
 	}
@@ -879,5 +881,115 @@ func testCanceledContext(t *testing.T, s Direct) {
 	}
 	if got := currentVersion(t, s, "/ctx.md"); got != 1 {
 		t.Errorf("version after refused writes = %d, want 1", got)
+	}
+}
+
+// testListPaging: After and Limit select a window of the same ordered listing
+// the unpaged call returns, with archived entries never counted against Limit.
+func testListPaging(t *testing.T, s Direct) {
+	for _, name := range []string{"a.md", "b.md", "c.md", "d.md", "e.md"} {
+		mustWrite(t, s, "/page/"+name, 0, "# "+name+"\n")
+	}
+	mustWrite(t, s, "/page/sub/x.md", 0, "# x\n")
+	if _, err := s.Archive("/page/b.md", true); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	tests := []struct {
+		name string
+		opts storefmt.ListOptions
+		want []string
+	}{
+		{name: "unpaged", want: []string{"a.md", "c.md", "d.md", "e.md", "sub"}},
+		{name: "limit", opts: storefmt.ListOptions{Limit: 2}, want: []string{"a.md", "c.md"}},
+		{name: "after", opts: storefmt.ListOptions{After: "c.md"}, want: []string{"d.md", "e.md", "sub"}},
+		{name: "after and limit", opts: storefmt.ListOptions{After: "a.md", Limit: 2}, want: []string{"c.md", "d.md"}},
+		{name: "after an archived name", opts: storefmt.ListOptions{After: "b.md", Limit: 1}, want: []string{"c.md"}},
+		{name: "after a name that is not an entry", opts: storefmt.ListOptions{After: "cc", Limit: 1}, want: []string{"d.md"}},
+		{name: "after the last entry", opts: storefmt.ListOptions{After: "sub"}, want: []string{}},
+		{name: "limit past the end", opts: storefmt.ListOptions{After: "e.md", Limit: 9}, want: []string{"sub"}},
+		{name: "archived included", opts: storefmt.ListOptions{IncludeArchived: true, Limit: 2}, want: []string{"a.md", "b.md"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries, err := s.ListPage("/page", tt.opts)
+			if err != nil {
+				t.Fatalf("ListPage: %v", err)
+			}
+			got := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				got = append(got, entry.Name)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("entries = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// testPrecondition: a write's precondition runs inside the commit, after the
+// conflict and no-op checks, sees the write as it would be stored and the state
+// it commits against, and its error refuses the write whole.
+func testPrecondition(t *testing.T, s Direct) {
+	ctx := context.Background()
+	mustWrite(t, s, "/pre.md", 0, "one\n")
+	errRefused := errors.New("refused by precondition")
+	var seen []storefmt.PreparedWrite
+	record := func(verdict error) backend.Precondition {
+		return func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
+			current, err := state.Get(ctx, "/pre.md", 0)
+			if err != nil {
+				return fmt.Errorf("precondition read: %w", err)
+			}
+			if string(current.Content) != "one\n" {
+				return fmt.Errorf("precondition saw body %q, want the committed state", current.Content)
+			}
+			seen = append(seen, write)
+			return verdict
+		}
+	}
+
+	publish := backend.WriteRequest{
+		Path: "/pre.md", ExpectedVersion: 1, Content: []byte("two\n"),
+		Metadata: map[string]string{"tags": "b, a"}, Precondition: record(errRefused),
+	}
+	if _, err := s.Publish(ctx, publish); !errors.Is(err, errRefused) {
+		t.Fatalf("refused publish: %v, want the precondition error", err)
+	}
+	appended := backend.WriteRequest{Path: "/pre.md", ExpectedVersion: 1, Content: []byte("more\n"), Precondition: record(errRefused)}
+	if _, err := s.Append(ctx, appended); !errors.Is(err, errRefused) {
+		t.Fatalf("refused append: %v, want the precondition error", err)
+	}
+	if got := currentVersion(t, s, "/pre.md"); got != 1 {
+		t.Fatalf("version after refused writes = %d, want 1", got)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("precondition ran %d times, want 2", len(seen))
+	}
+	if seen[0].Path != "/pre.md" || string(seen[0].Content) != "two\n" || seen[0].Metadata["tags"] != "b,a" {
+		t.Errorf("publish prepared as %+v, want the persisted form", seen[0])
+	}
+	if string(seen[1].Content) != "one\nmore\n" {
+		t.Errorf("append prepared body %q, want the joined body", seen[1].Content)
+	}
+
+	// Conflicts and no-op writes are decided before the precondition.
+	seen = nil
+	stale := publish
+	stale.ExpectedVersion = 7
+	if _, err := s.Publish(ctx, stale); !errors.Is(err, storefmt.ErrConflict) {
+		t.Errorf("stale publish: %v, want conflict", err)
+	}
+	same := backend.WriteRequest{Path: "/pre.md", ExpectedVersion: 1, Content: []byte("one\n"), Precondition: record(errRefused)}
+	if _, err := s.Publish(ctx, same); !errors.Is(err, storefmt.ErrNotModified) {
+		t.Errorf("unchanged publish: %v, want not modified", err)
+	}
+	if len(seen) != 0 {
+		t.Errorf("precondition ran %d times for writes decided earlier", len(seen))
+	}
+
+	accepted := publish
+	accepted.Precondition = record(nil)
+	if doc, err := s.Publish(ctx, accepted); err != nil || doc.Version != 2 {
+		t.Fatalf("accepted publish = %+v, %v", doc, err)
 	}
 }

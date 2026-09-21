@@ -39,7 +39,14 @@ func (d Direct) Get(reqPath string, version int) (*storefmt.Document, error) {
 // ListEntries lists one directory through a fresh view.
 func (d Direct) ListEntries(reqPath string, includeArchived bool) ([]storefmt.DirEntry, error) {
 	return read(d, func(ctx context.Context, view backend.ReadView) ([]storefmt.DirEntry, error) {
-		return view.ListEntries(ctx, reqPath, includeArchived)
+		return view.ListEntries(ctx, reqPath, storefmt.ListOptions{IncludeArchived: includeArchived})
+	})
+}
+
+// ListPage lists one window of a directory through a fresh view.
+func (d Direct) ListPage(reqPath string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {
+	return read(d, func(ctx context.Context, view backend.ReadView) ([]storefmt.DirEntry, error) {
+		return view.ListEntries(ctx, reqPath, opts)
 	})
 }
 

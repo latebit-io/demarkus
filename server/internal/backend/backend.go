@@ -40,8 +40,9 @@ func FromNotExist(err error) error {
 // Reader exposes one committed document-store snapshot.
 type Reader interface {
 	Get(ctx context.Context, reqPath string, version int) (*storefmt.Document, error)
-	// ListEntries returns unique immediate children in strictly increasing Name order.
-	ListEntries(ctx context.Context, reqPath string, includeArchived bool) ([]storefmt.DirEntry, error)
+	// ListEntries returns unique immediate children in strictly increasing Name
+	// order, windowed by opts before any per entry work.
+	ListEntries(ctx context.Context, reqPath string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error)
 	IsDir(ctx context.Context, reqPath string) (bool, error)
 	Versions(ctx context.Context, reqPath string) ([]storefmt.VersionInfo, error)
 	LookupHash(ctx context.Context, hash string) (string, error)
@@ -55,7 +56,14 @@ type WriteRequest struct {
 	ExpectedVersion int
 	Content         []byte
 	Metadata        map[string]string
+	// Precondition, when set, judges the write inside the commit.
+	Precondition Precondition
 }
+
+// Precondition runs after the conflict, archive and no-op checks and before
+// anything is stored. state is what the write commits against. Its error refuses
+// the write and is returned as is; a retried commit runs it again.
+type Precondition func(ctx context.Context, state Reader, write storefmt.PreparedWrite) error
 
 // ArchiveResult is the document after an archive transition; Changed is false
 // when it already had the requested state.

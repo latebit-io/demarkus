@@ -8,6 +8,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/handler"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 	"github.com/latebit-io/demarkus/server/internal/storetest"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 func TestStoreConformance(t *testing.T) {
@@ -42,7 +43,7 @@ func TestRejectionConformance(t *testing.T) {
 	open := func(t *testing.T, options Options) storetest.LookupBackend {
 		t.Helper()
 		objects := initializedMemory(t)
-		options.WorldID = testWorldID
+		options.WorldID, options.Logger = testWorldID, discardLogger
 		store, err := Open(context.Background(), objects, options)
 		if err != nil {
 			t.Fatalf("open: %v", err)
@@ -57,7 +58,9 @@ func TestRejectionConformance(t *testing.T) {
 				Body:     []byte("# Write Policy\n\nCurated.\n\nstrictness: block\nrequire_tags: domain\n"),
 				Metadata: policyMetadata(),
 			}
-			return open(t, Options{RequirePolicy: true, PolicySeed: &seed})
+			b := open(t, Options{PolicySeed: &seed})
+			b.Store = writepolicy.Enforce(b.Store, writepolicy.Options{Require: true})
+			return b
 		},
 	})
 }
@@ -90,7 +93,7 @@ func newWritableStore(t testing.TB) (*Store, *blob.Memory) {
 	if err := Initialize(context.Background(), objects, testWorldID); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
-	store, err := Open(context.Background(), objects, Options{WorldID: testWorldID})
+	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

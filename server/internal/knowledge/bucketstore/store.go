@@ -30,9 +30,8 @@ type Options struct {
 	WorldID        string
 	RequestTimeout time.Duration
 	ShardWorkers   int
-	RequirePolicy  bool
-	// PolicySeed is published create-only when RequirePolicy is set and
-	// the world holds no policy yet; nil makes a missing policy fatal.
+	// PolicySeed is published create-only when the world holds no policy yet.
+	// The store itself enforces no policy; see the writepolicy package.
 	PolicySeed *PolicySeed
 	// MaxDocuments caps distinct document paths (0 = unlimited); a new
 	// path beyond the cap is rejected. Approximate under concurrency:
@@ -48,7 +47,6 @@ type Store struct {
 	worldID        string
 	requestTimeout time.Duration
 	shardWorkers   int
-	requirePolicy  bool
 	logger         *slog.Logger
 	maxDocuments   int
 	snapshot       atomic.Pointer[snapshot]
@@ -102,6 +100,9 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	if ctx == nil {
 		return nil, fmt.Errorf("open bucket store: %w: context is nil", blob.ErrPrecondition)
 	}
+	if options.Logger == nil {
+		return nil, fmt.Errorf("open bucket store: %w: logger is nil", blob.ErrPrecondition)
+	}
 	if nilStore(objects) {
 		return nil, fmt.Errorf("open bucket store: %w: blob store is nil", blob.ErrPrecondition)
 	}
@@ -143,9 +144,6 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	requestCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
 	store.refreshMu.Lock()
-	if store.logger == nil {
-		store.logger = slog.Default()
-	}
 	loaded, err := loadRootSnapshot(requestCtx, store.objects, store.worldID, store.shardWorkers)
 	if err != nil {
 		store.refreshMu.Unlock()
@@ -159,13 +157,10 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	}
 	store.snapshot.Store(loaded)
 	store.refreshMu.Unlock()
-	if options.RequirePolicy {
-		if err := store.ensurePolicy(ctx, options.PolicySeed); err != nil {
+	if options.PolicySeed != nil {
+		if err := store.seedPolicy(ctx, *options.PolicySeed); err != nil {
 			return nil, fmt.Errorf("open bucket store: %w", err)
 		}
-		// Enforcement switches on only here: a seeding write must not be
-		// gated by the policy it creates, and no caller holds the store yet.
-		store.requirePolicy = true
 	}
 	return store, nil
 }

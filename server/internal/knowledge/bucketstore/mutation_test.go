@@ -15,6 +15,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 func TestConcurrentCASMutations(t *testing.T) {
@@ -136,7 +137,7 @@ func TestDelayedHeadReplaceAllowsChangedGenerationRead(t *testing.T) {
 	_, memory := newWritableStore(t)
 	delayed := newDelayedHeadReplaceStore(memory)
 	defer delayed.releaseResponse()
-	writer, err := Open(context.Background(), delayed, Options{WorldID: testWorldID})
+	writer, err := Open(context.Background(), delayed, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("open writer: %v", err)
 	}
@@ -173,12 +174,12 @@ func TestDelayedHeadReplaceDoesNotOverwriteNewerSnapshot(t *testing.T) {
 	_, memory := newWritableStore(t)
 	delayed := newDelayedHeadReplaceStore(memory)
 	defer delayed.releaseResponse()
-	writer, err := Open(context.Background(), delayed, Options{WorldID: testWorldID})
+	writer, err := Open(context.Background(), delayed, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("open writer: %v", err)
 	}
 	writer.commitInterval = 0
-	peer, err := Open(context.Background(), memory, Options{WorldID: testWorldID})
+	peer, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("open peer: %v", err)
 	}
@@ -249,12 +250,12 @@ func TestArchiveRebaseReturnsCommittedVersion(t *testing.T) {
 		blocked: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	archiver, err := Open(context.Background(), blocking, Options{WorldID: testWorldID})
+	archiver, err := Open(context.Background(), blocking, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("open archiver: %v", err)
 	}
 	archiver.commitInterval = 0
-	writer, err := Open(context.Background(), memory, Options{WorldID: testWorldID})
+	writer, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("open writer: %v", err)
 	}
@@ -351,22 +352,22 @@ func TestPublishPolicyCAS(t *testing.T) {
 	t.Run("warn block and ask", func(t *testing.T) {
 		store, _ := newWritableStore(t)
 		seedPolicy(t, store, "strictness: warn\nrequire_tags: domain\nrequire_fields: title\n", 0)
-		warned, err := store.WriteVersionResult("/warned", 0, []byte("body"), nil)
-		if err != nil || warned.Strictness != publishpolicy.Warn || warned.Policy.Compliant() {
-			t.Fatalf("warn result = (%+v, %v)", warned, err)
+		if _, err := enforced(store, false).WriteVersion("/warned", 0, []byte("body"), nil); err != nil {
+			t.Fatalf("warn must let a noncompliant write through: %v", err)
 		}
 		seedPolicy(t, store, "strictness: block\nrequire_tags: domain\nrequire_fields: title\n", 1)
-		blocked, err := store.WriteVersionResult("/blocked", 0, []byte("body"), nil)
-		if !errors.Is(err, ErrPolicyBlocked) || blocked.Policy.Compliant() {
-			t.Fatalf("block result = (%+v, %v)", blocked, err)
+		_, err := enforced(store, false).WriteVersion("/blocked", 0, []byte("body"), nil)
+		var policyErr *writepolicy.PolicyError
+		if !errors.Is(err, writepolicy.ErrPolicyBlocked) || !errors.As(err, &policyErr) || policyErr.Result.Compliant() {
+			t.Fatalf("block error = %v", err)
 		}
 		compliant := map[string]string{"tags": "domain:storage", "title": "Allowed"}
-		if _, err := store.WriteVersion("/allowed", 0, []byte("body"), compliant); err != nil {
+		if _, err := enforced(store, false).WriteVersion("/allowed", 0, []byte("body"), compliant); err != nil {
 			t.Fatalf("compliant write: %v", err)
 		}
 		seedPolicy(t, store, "strictness: ask\nrequire_tags: domain\nrequire_fields: title\n", 2)
-		_, err = store.WriteVersion("/asked", 0, []byte("body"), nil)
-		if !errors.Is(err, ErrPolicyApprovalRequired) {
+		_, err = enforced(store, false).WriteVersion("/asked", 0, []byte("body"), nil)
+		if !errors.Is(err, writepolicy.ErrPolicyApprovalRequired) {
 			t.Fatalf("ask error = %v", err)
 		}
 	})
@@ -375,24 +376,24 @@ func TestPublishPolicyCAS(t *testing.T) {
 		store, _ := newWritableStore(t)
 		seedPolicy(t, store, "strictness: block\nrequire_tags: domain\nrequire_fields: title\n", 0)
 		meta := map[string]string{"tags": "domain:storage", "title": "Log"}
-		if _, err := store.WriteVersion("/log", 0, []byte("one"), meta); err != nil {
+		gated := enforced(store, false)
+		if _, err := gated.WriteVersion("/log", 0, []byte("one"), meta); err != nil {
 			t.Fatalf("seed document: %v", err)
 		}
-		if _, err := store.AppendVersion("/log", 1, []byte("two"), nil); err != nil {
+		if _, err := gated.AppendVersion("/log", 1, []byte("two"), nil); err != nil {
 			t.Fatalf("inherited append: %v", err)
 		}
-		if _, err := store.AppendVersion("/log", 2, []byte("three"), map[string]string{"tags": "other:value"}); !errors.Is(err, ErrPolicyBlocked) {
+		if _, err := gated.AppendVersion("/log", 2, []byte("three"), map[string]string{"tags": "other:value"}); !errors.Is(err, writepolicy.ErrPolicyBlocked) {
 			t.Fatalf("noncompliant append error = %v", err)
 		}
 	})
 
 	t.Run("invalid and required policy", func(t *testing.T) {
 		store, _ := newWritableStore(t)
-		if _, err := store.WriteVersion(publishpolicy.DocumentPath, 0, []byte("strictness: invalid\n"), policyMetadata()); !errors.Is(err, ErrInvalidPolicy) {
+		if _, err := enforced(store, false).WriteVersion(publishpolicy.DocumentPath, 0, []byte("strictness: invalid\n"), policyMetadata()); !errors.Is(err, writepolicy.ErrInvalidPolicy) {
 			t.Fatalf("invalid candidate policy error = %v", err)
 		}
-		store.requirePolicy = true
-		if _, err := store.WriteVersion("/doc", 0, []byte("body"), policyMetadata()); !errors.Is(err, ErrInvalidPolicy) {
+		if _, err := enforced(store, true).WriteVersion("/doc", 0, []byte("body"), policyMetadata()); !errors.Is(err, writepolicy.ErrInvalidPolicy) {
 			t.Fatalf("required missing policy error = %v", err)
 		}
 	})
@@ -405,19 +406,19 @@ func TestPublishPolicyCAS(t *testing.T) {
 			blocked: make(chan struct{}),
 			release: make(chan struct{}),
 		}
-		writer, err := Open(context.Background(), blocking, Options{WorldID: testWorldID})
+		writer, err := Open(context.Background(), blocking, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open writer: %v", err)
 		}
 		writer.commitInterval = 0
-		policyWriter, err := Open(context.Background(), memory, Options{WorldID: testWorldID})
+		policyWriter, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open policy writer: %v", err)
 		}
 		policyWriter.commitInterval = 0
 		result := make(chan error, 1)
 		go func() {
-			_, err := writer.WriteVersion("/doc", 0, []byte("body"), nil)
+			_, err := enforced(writer, false).WriteVersion("/doc", 0, []byte("body"), nil)
 			result <- err
 		}()
 		waitForTestSignal(t, blocking.blocked, "blocked document CAS")
@@ -425,7 +426,7 @@ func TestPublishPolicyCAS(t *testing.T) {
 		close(blocking.release)
 		select {
 		case err := <-result:
-			if !errors.Is(err, ErrPolicyBlocked) {
+			if !errors.Is(err, writepolicy.ErrPolicyBlocked) {
 				t.Fatalf("rebased write error = %v, want policy block", err)
 			}
 		case <-time.After(5 * time.Second):
@@ -776,7 +777,7 @@ func concurrentStoresOn(t *testing.T, memory blob.Store) (left, right *Store, ba
 	t.Helper()
 	barrier = &replaceBarrierStore{Store: memory, arrived: make(chan struct{}, 2), release: make(chan struct{})}
 	open := func() *Store {
-		store, err := Open(context.Background(), barrier, Options{WorldID: testWorldID})
+		store, err := Open(context.Background(), barrier, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open concurrent store: %v", err)
 		}

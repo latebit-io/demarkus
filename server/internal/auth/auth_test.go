@@ -445,9 +445,9 @@ func TestRequiresReadAuth(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ts := NewTokenStore(tt.tokens)
-			got := ts.RequiresReadAuth(tt.path)
+			got := ts.requiresReadAuth(tt.path)
 			if got != tt.want {
-				t.Errorf("RequiresReadAuth(%q): got %v, want %v", tt.path, got, tt.want)
+				t.Errorf("requiresReadAuth(%q): got %v, want %v", tt.path, got, tt.want)
 			}
 		})
 	}
