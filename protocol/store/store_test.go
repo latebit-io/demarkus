@@ -1297,6 +1297,17 @@ func TestVersionFilePath(t *testing.T) {
 }
 
 // TODO(v1): remove this test with migrateLegacyLayout.
+// storedVersion is a version file as the writer produces it, so a fixture
+// placed on disk by hand cannot drift from the stored format.
+func storedVersion(t *testing.T, version int, previous []byte, content string) []byte {
+	t.Helper()
+	stored, err := SerializeVersion(version, previous, []byte(content), nil)
+	if err != nil {
+		t.Fatalf("serialize v%d: %v", version, err)
+	}
+	return stored
+}
+
 func TestListDir_LegacyLayoutVisibility(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
@@ -1308,7 +1319,7 @@ func TestListDir_LegacyLayoutVisibility(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(legacyDir, "versions"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	v1 := []byte("---\nversion: 1\narchived: false\n---\n# legacy\n")
+	v1 := storedVersion(t, 1, nil, "# legacy\n")
 	if err := os.WriteFile(filepath.Join(legacyDir, "versions", "old.md.v1"), v1, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1359,13 +1370,12 @@ func TestMigrateLegacyLayout(t *testing.T) {
 	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	v1Content := []byte("---\nversion: 1\narchived: false\n---\n# V1\n")
+	v1Content := storedVersion(t, 1, nil, "# V1\n")
 	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v1"), v1Content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	h := sha256.Sum256(v1Content)
-	v2Content := fmt.Appendf(nil, "---\nversion: 2\narchived: false\nprevious-hash: sha256-%x\n---\n# V2\n", h)
+	v2Content := storedVersion(t, 2, v1Content, "# V2\n")
 	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v2"), v2Content, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1450,7 +1460,7 @@ func TestOpen_MigratesLegacyLayout(t *testing.T) {
 	// A leading-zero name parses to the same version number but must be
 	// moved under its on-disk name — a reconstructed "doc.md.v1" would
 	// ENOENT and block Open on every start.
-	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v01"), []byte("---\nversion: 1\n---\n# v1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(versionsDir, "doc.md.v01"), storedVersion(t, 1, nil, "# v1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1481,7 +1491,7 @@ func TestMigrateLegacyLayout_HiddenDirDocuments(t *testing.T) {
 	}
 	// FETCH serves explicit hidden paths (the agent manifest), so legacy
 	// versions under hidden directories must migrate like any other.
-	if err := os.WriteFile(filepath.Join(wkDir, "agent-manifest.md.v1"), []byte("---\nversion: 1\n---\n# manifest\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(wkDir, "agent-manifest.md.v1"), storedVersion(t, 1, nil, "# manifest\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join("versions", "agent-manifest.md.v1"), filepath.Join(root, ".well-known", "agent-manifest.md")); err != nil {
@@ -1525,7 +1535,7 @@ func TestMigrateLegacyLayout_SkipsStrayFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(versionsDir, "real.md.v1"), []byte("---\nversion: 1\n---\n# real\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(versionsDir, "real.md.v1"), storedVersion(t, 1, nil, "# real\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1708,7 +1718,7 @@ func TestMigrateLegacyLayout_Subdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v1Content := []byte("---\nversion: 1\narchived: false\n---\n# Guide\n")
+	v1Content := storedVersion(t, 1, nil, "# Guide\n")
 	if err := os.WriteFile(filepath.Join(versionsDir, "setup.md.v1"), v1Content, 0o644); err != nil {
 		t.Fatal(err)
 	}

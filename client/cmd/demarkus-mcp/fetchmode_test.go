@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/render"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -15,7 +17,7 @@ import (
 // metadata, counting fetches.
 func fetchStub(body, version, etag string, calls *int) *stubClient {
 	return &stubClient{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			if calls != nil {
 				*calls++
 			}
@@ -216,7 +218,7 @@ func TestHandlerMarkFetch_SectionFetchBypassesDedup(t *testing.T) {
 func TestHandlerMarkFetch_ChangedDocNoted(t *testing.T) {
 	version, etag := "3", "abc"
 	sc := &stubClient{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": version, "etag": etag},
@@ -264,7 +266,7 @@ func TestHandlerMarkFetch_NoIdentityNoDedup(t *testing.T) {
 func TestHandlerMarkFetch_EtagOnlyChangeNoted(t *testing.T) {
 	etag := "abc"
 	sc := &stubClient{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "3", "etag": etag},
@@ -299,7 +301,7 @@ func TestHandlerMarkFetch_IdentityLostNoNote(t *testing.T) {
 	// comes back with no note (and no dedup).
 	version, etag := "3", "abc"
 	sc := &stubClient{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": version, "etag": etag},
@@ -342,7 +344,7 @@ func TestHandlerMarkFetch_OutlineDoesNotRecordSeen(t *testing.T) {
 
 func TestHandlerMarkFetch_NonOKStatusPassthrough(t *testing.T) {
 	sc := &stubClient{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusNotFound,
 				Metadata: map[string]string{},
@@ -357,7 +359,7 @@ func TestHandlerMarkFetch_NonOKStatusPassthrough(t *testing.T) {
 }
 
 func TestHandlerMarkFetch_LeanEnvelopeAndVerbose(t *testing.T) {
-	h := &handler{client: &stubClient{fetchFn: func(_, _, _ string) (fetch.Result, error) {
+	h := &handler{client: &stubClient{FetchFn: func(_, _, _ string) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK,
 			Metadata: map[string]string{"version": "3", "modified": "2026-07-04T00:00:00Z", "etag": "abc",
@@ -382,10 +384,10 @@ func TestHandlerMarkFetch_LeanEnvelopeAndVerbose(t *testing.T) {
 }
 
 func TestHandlerMarkLookup_TagCapAndVerbose(t *testing.T) {
-	many := "t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12"
-	table := "# Lookup matches for \"x\" in /\n\n| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n| /a.md | 0.90 | A | " + many + " |\n"
-	h := &handler{client: &stubClient{lookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"matches": "1"}, Body: table}}, nil
+	many := []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12"}
+	answer := fetchtest.Lookup("x", "/", "", render.LookupRow{Path: "/a.md", Importance: 0.9, Title: "A", Tags: many})
+	h := &handler{client: &stubClient{LookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		return answer, nil
 	}}}
 	call := func(args map[string]any) string {
 		t.Helper()
@@ -400,7 +402,7 @@ func TestHandlerMarkLookup_TagCapAndVerbose(t *testing.T) {
 		t.Fatalf("lean lookup not capped:\n%s", lean)
 	}
 	verbose := call(map[string]any{"url": "mark://example.com/", "query": "x", "verbose": true})
-	if verbose != "status: ok\nmatches: 1\n\n"+table {
+	if verbose != "status: ok\nmatches: 1\n\n"+answer.Response.Body {
 		t.Fatalf("verbose lookup:\n%s", verbose)
 	}
 }
@@ -413,16 +415,16 @@ func TestHandlerMarkPublish_NarrowingNote(t *testing.T) {
 		current := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK,
 			Metadata: map[string]string{"version": "3", "etag": "e", "tags": "a,b,c", "type": "Note", "title": "T"}, Body: "x"}}
 		sc := &stubClient{
-			published: map[string]fetch.Result{
+			Published: map[string]fetch.Result{
 				"example.com:6309/doc.md":                            current,
 				"example.com:6309" + index.VersionPath("/doc.md", 3): current,
 			},
-			publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+			PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "4"}}}, nil
 			},
 		}
 		if version == 0 {
-			sc.published = nil
+			sc.Published = nil
 		}
 		h := &handler{client: sc, defaultHost: "mark://example.com", token: "test"}
 		result, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{

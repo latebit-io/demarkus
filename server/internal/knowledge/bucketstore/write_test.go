@@ -31,6 +31,45 @@ func TestLookupHandlerConformance(t *testing.T) {
 	})
 }
 
+func TestHandlerConformance(t *testing.T) {
+	storetest.RunHandlerConformance(t, func(t *testing.T) storetest.LookupBackend {
+		store, _ := newWritableStore(t)
+		return storetest.LookupBackend{Store: store, Catalog: store, Views: store}
+	})
+}
+
+func TestRejectionConformance(t *testing.T) {
+	open := func(t *testing.T, options Options) storetest.LookupBackend {
+		t.Helper()
+		objects := initializedMemory(t)
+		options.WorldID = testWorldID
+		store, err := Open(context.Background(), objects, options)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		store.commitInterval = 0
+		return storetest.LookupBackend{Store: store, Catalog: store, Views: store}
+	}
+	storetest.RunRejectionConformance(t, storetest.RejectionFactories{
+		Quota: func(t *testing.T) storetest.LookupBackend { return open(t, Options{MaxDocuments: 2}) },
+		Policy: func(t *testing.T) storetest.LookupBackend {
+			seed := PolicySeed{
+				Body:     []byte("# Write Policy\n\nCurated.\n\nstrictness: block\nrequire_tags: domain\n"),
+				Metadata: policyMetadata(),
+			}
+			return open(t, Options{RequirePolicy: true, PolicySeed: &seed})
+		},
+	})
+}
+
+// TestWireGoldens holds the bucket backend to the wire fixtures the file
+// backend emits; regenerate them from storetest, never from here.
+func TestWireGoldens(t *testing.T) {
+	store, _ := newWritableStore(t)
+	backend := storetest.LookupBackend{Store: store, Catalog: store, Views: store}
+	storetest.RunWireGoldens(t, backend, "../../../../protocol/wiretest/testdata", false)
+}
+
 func TestFileDifferential(t *testing.T) {
 	storetest.RunDifferential(t,
 		func(t *testing.T) storetest.LookupBackend { return storetest.FileBackend(t) },

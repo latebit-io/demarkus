@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
@@ -59,7 +60,7 @@ func newMemoryGateway(t testing.TB, cfg *Config, d worldDispatcher) *mcpGateway 
 // path and tests do not see seed publishes unless they want them.
 func seededDispatcher() *fakeDispatcher {
 	return &fakeDispatcher{
-		published: map[string]fetch.Result{
+		Published: map[string]fetch.Result{
 			"alice-w/index.md": {Response: protocol.Response{Status: protocol.StatusOK, Body: "# Memory"}},
 			"bob-w/index.md":   {Response: protocol.Response{Status: protocol.StatusOK, Body: "# Memory"}},
 		},
@@ -181,46 +182,30 @@ func TestTenantGateDeniesCrossTenantEveryTool(t *testing.T) {
 // assertNoWorldTraffic fails if any recorded dispatch touched world.
 func assertNoWorldTraffic(t *testing.T, d *fakeDispatcher, world string) {
 	t.Helper()
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, c := range d.fetchCalls {
-		if c.worldName == world {
-			t.Errorf("fetch dispatched to %s%s", world, c.path)
+	calls := d.Calls()
+	reads := map[string][]fetchtest.Call{"fetch": calls.Fetch, "list": calls.List, "versions": calls.Versions, "archive": calls.Archive}
+	for verb, recorded := range reads {
+		for _, c := range recorded {
+			if c.Host == world {
+				t.Errorf("%s dispatched to %s%s", verb, world, c.Path)
+			}
 		}
 	}
-	for _, c := range d.fetchCondCalls {
-		if c.worldName == world {
-			t.Errorf("conditional fetch dispatched to %s%s", world, c.path)
+	for _, c := range calls.FetchCond {
+		if c.Host == world {
+			t.Errorf("conditional fetch dispatched to %s%s", world, c.Path)
 		}
 	}
-	for _, c := range d.listCalls {
-		if c.worldName == world {
-			t.Errorf("list dispatched to %s%s", world, c.path)
-		}
-	}
-	for _, c := range d.versionsCalls {
-		if c.worldName == world {
-			t.Errorf("versions dispatched to %s%s", world, c.path)
-		}
-	}
-	for _, c := range d.lookupCalls {
-		if c.worldName == world {
+	for _, c := range calls.Lookup {
+		if c.Host == world {
 			t.Errorf("lookup dispatched to %s", world)
 		}
 	}
-	for _, c := range d.publishCalls {
-		if c.worldName == world {
-			t.Errorf("publish dispatched to %s%s", world, c.path)
-		}
-	}
-	for _, c := range d.appendCalls {
-		if c.worldName == world {
-			t.Errorf("append dispatched to %s%s", world, c.path)
-		}
-	}
-	for _, c := range d.archiveCalls {
-		if c.worldName == world {
-			t.Errorf("archive dispatched to %s%s", world, c.path)
+	for verb, recorded := range map[string][]fetchtest.WriteCall{"publish": calls.Publish, "append": calls.Append} {
+		for _, c := range recorded {
+			if c.Host == world {
+				t.Errorf("%s dispatched to %s%s", verb, world, c.Path)
+			}
 		}
 	}
 }
@@ -343,7 +328,7 @@ func TestMemoryResourceReadCrossTenantDenied(t *testing.T) {
 // another tenant's world must not cause the crawler to fetch it.
 func TestMemoryCrawlNeverLeavesTenantWorld(t *testing.T) {
 	d := seededDispatcher()
-	d.published["alice-w/notes.md"] = fetch.Result{Response: protocol.Response{
+	d.Published["alice-w/notes.md"] = fetch.Result{Response: protocol.Response{
 		Status: protocol.StatusOK,
 		Body:   "# Notes\n\n[leak](mark://bob-w/secret.md)\n[own](mark://alice-w/index.md)\n",
 	}}
@@ -413,7 +398,7 @@ func TestMemoryGraphSourcesIsolated(t *testing.T) {
 		t.Run(strings.Join(order, "-"), func(t *testing.T) {
 			d := seededDispatcher()
 			for _, tenant := range order {
-				d.published[tenant+"-w/source.md"] = fetch.Result{Response: protocol.Response{
+				d.Published[tenant+"-w/source.md"] = fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
 					Body:   "# " + tenant + "_TITLE\n## " + tenant + "_ANCHOR\n[" + tenant + "_LABEL](mark://alice-w/index.md)\n[" + tenant + "_LABEL](mark://bob-w/index.md)\n",
 				}}
@@ -473,10 +458,10 @@ func testMemoryGraphSeedSources(t *testing.T, format string) {
 				manifest, shards := brokerSnapshotRows(t, nodes, edges)
 				responses[tenant+"-w"+graphstore.SnapshotManifestPath] = manifest
 				for path, shard := range shards {
-					d.published[tenant+"-w"+path] = fetch.Result{Response: shard}
+					d.Published[tenant+"-w"+path] = fetch.Result{Response: shard}
 				}
 			}
-			d.fetchCondFn = func(world, path, _, _ string) (fetch.Result, error) {
+			d.FetchCondFn = func(world, path, _, _ string) (fetch.Result, error) {
 				response, ok := responses[world+path]
 				if !ok {
 					return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
@@ -506,7 +491,7 @@ func TestMemoryGraphScopeTransitions(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			cfg := memoryTestConfig()
 			d := seededDispatcher()
-			d.published["alice-w/source.md"] = fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# old secret\n[old](mark://alice-w/index.md)"}}
+			d.Published["alice-w/source.md"] = fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# old secret\n[old](mark://alice-w/index.md)"}}
 			g := newMemoryGateway(t, cfg, d)
 			tenantGraphCall(t, g, "alice", "mark_graph", "/source.md")
 			ctx := withAliceClaims(t.Context())
@@ -568,7 +553,7 @@ func testMemoryGraphReauthorization(t *testing.T, failure, entrypoint string) {
 	}
 	d := seededDispatcher()
 	for _, tenant := range []string{"alice", "bob"} {
-		d.published[tenant+"-w/source.md"] = fetch.Result{Response: protocol.Response{
+		d.Published[tenant+"-w/source.md"] = fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK, Body: "# " + tenant + "_TITLE\n[" + tenant + "_LABEL](mark://" + tenant + "-w/index.md)",
 		}}
 	}
@@ -622,7 +607,7 @@ func testMemoryGraphReauthorization(t *testing.T, failure, entrypoint string) {
 func TestMemoryGraphSeedRefreshIsScoped(t *testing.T) {
 	d := seededDispatcher()
 	empty := false
-	d.fetchCondFn = func(world, path, _, etag string) (fetch.Result, error) {
+	d.FetchCondFn = func(world, path, _, etag string) (fetch.Result, error) {
 		if path != "/graph.md" {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		}
@@ -657,7 +642,7 @@ func TestMemoryGraphSeedRefreshIsScoped(t *testing.T) {
 func TestMemoryGraphRefreshDoesNotBlockAnotherTenant(t *testing.T) {
 	d := seededDispatcher()
 	started, release := make(chan struct{}), make(chan struct{})
-	d.fetchCondFn = func(world, path, _, _ string) (fetch.Result, error) {
+	d.FetchCondFn = func(world, path, _, _ string) (fetch.Result, error) {
 		if world == "alice-w" && path == graphstore.SnapshotManifestPath {
 			close(started)
 			<-release
@@ -698,16 +683,16 @@ func TestMemoryGraphRefreshDoesNotBlockAnotherTenant(t *testing.T) {
 
 func TestMemoryGraphRetiredRefreshCannotPopulateNewScope(t *testing.T) {
 	d := seededDispatcher()
-	d.published["alice-w/source.md"] = fetch.Result{Response: protocol.Response{Status: protocol.StatusServerError}}
+	d.Published["alice-w/source.md"] = fetch.Result{Response: protocol.Response{Status: protocol.StatusServerError}}
 	manifest, shards := brokerSnapshotRows(t,
 		[]graphstore.StoredNode{{URL: "mark://alice-w/source.md", Title: "old private source", Status: "ok"}},
 		[]graphstore.StoredEdge{{From: "mark://alice-w/source.md", To: "mark://alice-w/index.md", Count: 1}})
 	for path, shard := range shards {
-		d.published["alice-w"+path] = fetch.Result{Response: shard}
+		d.Published["alice-w"+path] = fetch.Result{Response: shard}
 	}
 	started, release := make(chan struct{}), make(chan struct{})
 	var first atomic.Bool
-	d.fetchCondFn = func(_, path, _, _ string) (fetch.Result, error) {
+	d.FetchCondFn = func(_, path, _, _ string) (fetch.Result, error) {
 		if path == graphstore.SnapshotManifestPath && !first.Swap(true) {
 			close(started)
 			<-release
@@ -921,7 +906,7 @@ func TestTenantGateEmailChangeResolvesSameWorld(t *testing.T) {
 func TestTenantGateProvisioningNotReadyMessage(t *testing.T) {
 	cfg := provisioningTestConfig(ProvisionOpen)
 	d := &fakeDispatcher{
-		fetchFn: func(worldName, _, _ string) (fetch.Result, error) {
+		FetchFn: func(worldName, _, _ string) (fetch.Result, error) {
 			if strings.HasPrefix(worldName, "eve-adams-") {
 				return fetch.Result{}, errors.New("dial: no route to world")
 			}

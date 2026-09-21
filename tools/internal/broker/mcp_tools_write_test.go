@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/protocol"
 	"k8s.io/client-go/kubernetes/fake"
@@ -23,10 +24,10 @@ import (
 func TestHandleMarkPublishHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		published: map[string]fetch.Result{
+		Published: map[string]fetch.Result{
 			"team-a/foo.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "3"}}},
 		},
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Metadata: map[string]string{
@@ -55,31 +56,31 @@ func TestHandleMarkPublishHappyPath(t *testing.T) {
 			t.Errorf("response missing %q\nfull:\n%s", want, text)
 		}
 	}
-	if len(d.publishCalls) != 1 {
-		t.Fatalf("publish dispatch count = %d, want 1", len(d.publishCalls))
+	if len(d.PublishCalls) != 1 {
+		t.Fatalf("publish dispatch count = %d, want 1", len(d.PublishCalls))
 	}
-	call := d.publishCalls[0]
-	if call.worldName != "team-a" {
-		t.Errorf("worldName = %q, want team-a", call.worldName)
+	call := d.PublishCalls[0]
+	if call.Host != "team-a" {
+		t.Errorf("worldName = %q, want team-a", call.Host)
 	}
-	if call.path != "/foo.md" {
-		t.Errorf("path = %q, want /foo.md", call.path)
+	if call.Path != "/foo.md" {
+		t.Errorf("path = %q, want /foo.md", call.Path)
 	}
-	if call.body != "# new content\n" {
-		t.Errorf("body = %q, want forwarded verbatim", call.body)
+	if call.Body != "# new content\n" {
+		t.Errorf("body = %q, want forwarded verbatim", call.Body)
 	}
-	if call.expectedVersion != 3 {
-		t.Errorf("expectedVersion = %d, want 3", call.expectedVersion)
+	if call.ExpectedVersion != 3 {
+		t.Errorf("expectedVersion = %d, want 3", call.ExpectedVersion)
 	}
-	if call.meta["agent"] != "alice@example.com" {
-		t.Errorf("publisher meta agent = %q, want canonical email", call.meta["agent"])
+	if call.Meta["agent"] != "alice@example.com" {
+		t.Errorf("publisher meta agent = %q, want canonical email", call.Meta["agent"])
 	}
 }
 
 func TestHandleMarkPublishForwardsMetadata(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "1"},
@@ -100,10 +101,10 @@ func TestHandleMarkPublishForwardsMetadata(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("isError = true: %s", toolResultText(t, res))
 	}
-	if len(d.publishCalls) != 1 {
-		t.Fatalf("publish dispatch count = %d, want 1", len(d.publishCalls))
+	if len(d.PublishCalls) != 1 {
+		t.Fatalf("publish dispatch count = %d, want 1", len(d.PublishCalls))
 	}
-	m := d.publishCalls[0].meta
+	m := d.PublishCalls[0].Meta
 	if m["tags"] != "go,auth" {
 		t.Errorf("forwarded tags = %q, want go,auth", m["tags"])
 	}
@@ -145,8 +146,8 @@ func TestHandleMarkPublishDeniesNonWriter(t *testing.T) {
 	if text := toolResultText(t, res); !strings.Contains(text, "write access denied") {
 		t.Errorf("tool error = %q, want it to name the writer-allow rejection", text)
 	}
-	if len(d.publishCalls) != 0 {
-		t.Errorf("dispatcher.Publish called %d times for denied write, want 0", len(d.publishCalls))
+	if len(d.PublishCalls) != 0 {
+		t.Errorf("dispatcher.Publish called %d times for denied write, want 0", len(d.PublishCalls))
 	}
 }
 
@@ -193,10 +194,10 @@ func TestHandleMarkPublishNegativeExpectedVersion(t *testing.T) {
 func TestHandleMarkPublishMergeCleanOutcomeOK(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		published: map[string]fetch.Result{
+		Published: map[string]fetch.Result{
 			"team-a/foo.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "4"}}},
 		},
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Metadata: map[string]string{
@@ -239,7 +240,7 @@ func TestHandleMarkPublishMergeCleanOutcomeOK(t *testing.T) {
 func TestHandleMarkPublishMergeCandidateWithoutMarkers(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			// First publish: conflict.
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusConflict,
@@ -249,7 +250,7 @@ func TestHandleMarkPublishMergeCandidateWithoutMarkers(t *testing.T) {
 				},
 			}}, nil
 		},
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			switch path {
 			case "/foo.md/v3":
 				// Base: four-line document. Ours edits line 1,
@@ -313,13 +314,13 @@ func TestHandleMarkPublishMergeCandidateWithoutMarkers(t *testing.T) {
 func TestHandleMarkPublishMergeCandidateWithMarkers(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusConflict,
 				Metadata: map[string]string{"version": "5", "server-version": "5"},
 			}}, nil
 		},
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			switch path {
 			case "/foo.md/v3":
 				return fetch.Result{Response: protocol.Response{
@@ -366,7 +367,7 @@ func TestHandleMarkPublishMergeUsesTokenOnlyForPublish(t *testing.T) {
 	var publishTokens, fetchTokens []string
 	var mu sync.Mutex
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, token string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, token string, _ int, _ map[string]string) (fetch.Result, error) {
 			mu.Lock()
 			publishTokens = append(publishTokens, token)
 			mu.Unlock()
@@ -375,7 +376,7 @@ func TestHandleMarkPublishMergeUsesTokenOnlyForPublish(t *testing.T) {
 				Metadata: map[string]string{"version": "4", "server-version": "4"},
 			}}, nil
 		},
-		fetchFn: func(_, _, token string) (fetch.Result, error) {
+		FetchFn: func(_, _, token string) (fetch.Result, error) {
 			mu.Lock()
 			fetchTokens = append(fetchTokens, token)
 			mu.Unlock()
@@ -422,13 +423,13 @@ func TestHandleMarkPublishMergeUsesTokenOnlyForPublish(t *testing.T) {
 func TestHandleMarkPublishDefaultOnConflictIsMerge(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusConflict,
 				Metadata: map[string]string{"version": "3", "server-version": "3"},
 			}}, nil
 		},
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "3"},
@@ -462,13 +463,13 @@ func TestHandleMarkPublishEmptyOnConflictNormalizesToMerge(t *testing.T) {
 	// demarkus-mcp's surface.
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusConflict,
 				Metadata: map[string]string{"version": "2", "server-version": "2"},
 			}}, nil
 		},
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "2"},
@@ -504,13 +505,13 @@ func TestHandleMarkPublishMergeBaseVersionZero(t *testing.T) {
 	cfg := mcpTestConfig()
 	var versionedFetch atomic.Bool
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusConflict,
 				Metadata: map[string]string{"version": "1", "server-version": "1"},
 			}}, nil
 		},
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			// merge.Candidate with expected_version=0 must NOT
 			// issue a FetchVersion — the local merge package's
 			// contract says base="" in that case. A request to
@@ -556,7 +557,7 @@ func TestHandleMarkPublishFailConflictForwardsVerbatim(t *testing.T) {
 	// pins the still-supported opt-out behavior.
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusConflict,
 				Metadata: map[string]string{
@@ -613,7 +614,7 @@ func TestHandleMarkPublishNotPermittedSurfacesAsToolError(t *testing.T) {
 	// "status: not-permitted" in the formatted text). Pin that.
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusNotPermitted,
 			}}, nil
@@ -644,7 +645,7 @@ func TestHandleMarkPublishTransportErrorFailsLoud(t *testing.T) {
 	// the world." Pin the distinction.
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{}, errors.New("dial team-a.team-a.svc.cluster.local:6309: connection refused")
 		},
 	}
@@ -680,10 +681,10 @@ func TestFakeDispatcherSnapshotsMetaOnCapture(t *testing.T) {
 	meta["agent"] = "mallory@evil.example"
 	meta["injected"] = "should-not-appear"
 
-	if got := d.publishCalls[0].meta["agent"]; got != "alice@example.com" {
+	if got := d.PublishCalls[0].Meta["agent"]; got != "alice@example.com" {
 		t.Errorf("recorded meta[agent] = %q, want alice@example.com (mutation after Publish leaked into history)", got)
 	}
-	if _, ok := d.publishCalls[0].meta["injected"]; ok {
+	if _, ok := d.PublishCalls[0].Meta["injected"]; ok {
 		t.Error("recorded meta inherited a key added after Publish — snapshot broken")
 	}
 }
@@ -694,7 +695,7 @@ func TestFakeDispatcherSnapshotsMetaOnCapture(t *testing.T) {
 func TestHandleMarkAppendHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		appendFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		AppendFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Metadata: map[string]string{
@@ -717,13 +718,13 @@ func TestHandleMarkAppendHappyPath(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("isError = true: %s", toolResultText(t, res))
 	}
-	if len(d.appendCalls) != 1 {
-		t.Fatalf("append calls = %d, want 1", len(d.appendCalls))
+	if len(d.AppendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(d.AppendCalls))
 	}
-	if got := d.appendCalls[0].expectedVersion; got != 7 {
+	if got := d.AppendCalls[0].ExpectedVersion; got != 7 {
 		t.Errorf("dispatcher saw expectedVersion=%d, want 7", got)
 	}
-	if got := d.appendCalls[0].body; got != "## new entry\n" {
+	if got := d.AppendCalls[0].Body; got != "## new entry\n" {
 		t.Errorf("dispatcher saw body=%q, want forwarded verbatim", got)
 	}
 }
@@ -735,20 +736,14 @@ func TestHandleMarkAppendAutoResolvesViaVersions(t *testing.T) {
 	cfg := mcpTestConfig()
 	var versionsHits, appendHits int32
 	d := &fakeDispatcher{
-		versionsFn: func(_, _, token string) (fetch.Result, error) {
+		VersionsFn: func(_, _, token string) (fetch.Result, error) {
 			atomic.AddInt32(&versionsHits, 1)
 			if token != "" {
 				t.Errorf("VERSIONS used token %q, want public read", token)
 			}
-			return fetch.Result{Response: protocol.Response{
-				Status: protocol.StatusOK,
-				Metadata: map[string]string{
-					"total":   "12",
-					"current": "12",
-				},
-			}}, nil
+			return fetchtest.Versions("/journal.md", 12), nil
 		},
-		appendFn: func(_, _, _, token string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
+		AppendFn: func(_, _, _, token string, expectedVersion int, _ map[string]string) (fetch.Result, error) {
 			atomic.AddInt32(&appendHits, 1)
 			if token == "" {
 				t.Error("APPEND dispatched without a publish token")
@@ -794,7 +789,7 @@ func TestHandleMarkAppendVersionsFailureBubbles(t *testing.T) {
 	// version.
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		versionsFn: func(_, _, _ string) (fetch.Result, error) {
+		VersionsFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
 	}
@@ -809,8 +804,8 @@ func TestHandleMarkAppendVersionsFailureBubbles(t *testing.T) {
 	if !res.IsError {
 		t.Error("isError = false when VERSIONS auto-resolve returns not-found, want true")
 	}
-	if len(d.appendCalls) != 0 {
-		t.Errorf("append dispatched %d times after VERSIONS failure, want 0", len(d.appendCalls))
+	if len(d.AppendCalls) != 0 {
+		t.Errorf("append dispatched %d times after VERSIONS failure, want 0", len(d.AppendCalls))
 	}
 }
 
@@ -831,7 +826,7 @@ func TestHandleMarkAppendMissingBody(t *testing.T) {
 func TestHandleMarkArchiveHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		archiveFn: func(_, _, _ string) (fetch.Result, error) {
+		ArchiveFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusArchived,
 				Metadata: map[string]string{"version": "9"},
@@ -855,8 +850,8 @@ func TestHandleMarkArchiveHappyPath(t *testing.T) {
 	if !strings.Contains(text, "version: 9") {
 		t.Errorf("expected version: 9 in output, got:\n%s", text)
 	}
-	if len(d.archiveCalls) != 1 {
-		t.Errorf("archive dispatch count = %d, want 1", len(d.archiveCalls))
+	if len(d.ArchiveCalls) != 1 {
+		t.Errorf("archive dispatch count = %d, want 1", len(d.ArchiveCalls))
 	}
 }
 
@@ -912,7 +907,7 @@ func TestWriteHandlersInheritPropagationRaceRetry(t *testing.T) {
 
 	var attempts int32
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			n := atomic.AddInt32(&attempts, 1)
 			if n == 1 {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
@@ -951,7 +946,7 @@ func TestWriteDispatchRecoversFromRotatedWorldSecret(t *testing.T) {
 
 	var attempts int32
 	d := &fakeDispatcher{
-		publishFn: func(_, _, _, token string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, token string, _ int, _ map[string]string) (fetch.Result, error) {
 			atomic.AddInt32(&attempts, 1)
 			if token == "stale-rotated-away" {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
@@ -992,7 +987,7 @@ func TestWriteDispatchRecoversFromRotatedWorldSecret(t *testing.T) {
 func TestMCPGatewayMarkPublishEndToEnd(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		publishFn: func(_, _, body, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, body, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			if body != "## entry via gateway\n" {
 				t.Errorf("dispatcher saw body=%q, want forwarded verbatim", body)
 			}
@@ -1062,12 +1057,12 @@ func TestMCPGatewayMarkPublishEndToEnd(t *testing.T) {
 func TestHandleMarkPublishNarrowingNote(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		published: map[string]fetch.Result{
+		Published: map[string]fetch.Result{
 			"team-a/foo.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "3"}}},
 			"team-a" + index.VersionPath("/foo.md", 3): {Response: protocol.Response{Status: protocol.StatusOK,
 				Metadata: map[string]string{"version": "3", "tags": "a,b", "rel-related": "/x.md"}, Body: "x"}},
 		},
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "4"}}}, nil
 		},
 	}

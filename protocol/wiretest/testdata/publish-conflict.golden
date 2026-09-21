@@ -1,0 +1,13 @@
+---
+server-version: "2"
+status: conflict
+your-version: "1"
+---
+# Version Conflict
+
+The document has been modified since you last fetched it.
+
+Your version: 1
+Server version: 2
+
+Please fetch the latest version and reapply your edits.

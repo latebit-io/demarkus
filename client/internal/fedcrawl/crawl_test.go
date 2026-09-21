@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,10 +12,10 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -134,25 +133,15 @@ func (m *mockClient) addDocWithMeta(host, path, body, hash string, extra map[str
 	}
 }
 
-func (m *mockClient) addList(host, path, entries string) {
-	lines := strings.Split(strings.TrimSuffix(entries, "\n"), "\n")
-	sort.Strings(lines)
-	m.addListPage(host, path, "", strings.Join(lines, "\n")+"\n", "")
+// addList stores one complete LIST page; a trailing slash names a directory.
+func (m *mockClient) addList(host, path string, names ...string) {
+	sort.Strings(names)
+	m.addListPage(host, path, "", "", names...)
 }
 
-// addListPage stores the server's own rendering of the named entries; the
-// entries string is only a terse way to name them.
-func (m *mockClient) addListPage(host, path, cursor, entries, next string) {
-	dests := links.Extract(entries)
-	rows := make([]listing.Entry, 0, len(dests))
-	for _, dest := range dests {
-		name, err := url.PathUnescape(dest)
-		if err != nil {
-			name = dest
-		}
-		rows = append(rows, listing.Entry{Name: strings.TrimSuffix(name, "/"), IsDir: strings.HasSuffix(name, "/")})
-	}
-	page := listing.RenderPage(path, rows, next)
+// addListPage stores the server's own rendering of one page of names.
+func (m *mockClient) addListPage(host, path, cursor, next string, names ...string) {
+	page := fetchtest.ListPage(path, next, names...).Response
 	m.lists[host+path+"\x00"+cursor] = mockPage{status: page.Status, body: page.Body, metadata: page.Metadata}
 }
 
@@ -204,7 +193,7 @@ func TestCrawlerSingleServer(t *testing.T) {
 	cfg.Crawl.MaxDocuments = 100
 
 	client := newMockClient()
-	client.addList("example.com:6309", "/", "- [index.md](index.md)\n- [about.md](about.md)\n")
+	client.addList("example.com:6309", "/", "index.md", "about.md")
 	client.addDoc("example.com:6309", "/index.md", "# Home\n\nContent.", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	client.addDoc("example.com:6309", "/about.md", "# About\n\nInfo.", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
@@ -239,8 +228,8 @@ func TestCrawlerFollowsListPages(t *testing.T) {
 	cfg.Crawl.MaxDocuments = 100
 
 	client := newMockClient()
-	client.addListPage("example.com:6309", "/", "", "- [a.md](a.md)\n- [b.md](b.md)\n", "next")
-	client.addListPage("example.com:6309", "/", "next", "- [c.md](c.md)\n", "")
+	client.addListPage("example.com:6309", "/", "", "next", "a.md", "b.md")
+	client.addListPage("example.com:6309", "/", "next", "", "c.md")
 	for _, name := range []string{"a", "b", "c"} {
 		client.addDoc("example.com:6309", "/"+name+".md", "# "+name, "sha256-"+strings.Repeat(name, 64))
 	}
@@ -299,14 +288,14 @@ func TestCrawlerMarksIncompleteResponses(t *testing.T) {
 		{
 			name: "FETCH status",
 			setup: func(client *mockClient) {
-				client.addList("example.com:6309", "/", "- [a.md](a.md)\n")
+				client.addList("example.com:6309", "/", "a.md")
 				client.pages["example.com:6309/a.md"] = mockPage{status: protocol.StatusNotFound}
 			},
 		},
 		{
 			name: "missing content hash",
 			setup: func(client *mockClient) {
-				client.addList("example.com:6309", "/", "- [a.md](a.md)\n")
+				client.addList("example.com:6309", "/", "a.md")
 				client.addDoc("example.com:6309", "/a.md", "# A", "")
 			},
 		},
@@ -333,7 +322,7 @@ func TestCrawlerInvalidListEntryMarksInventoryIncomplete(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://example.com"}
 	client := newMockClient()
-	client.addList("example.com:6309", "/", "- [escape](../escape.md)\n")
+	client.addList("example.com:6309", "/", "../escape.md")
 
 	result, err := NewCrawler(cfg, client, nil, nil).Run(t.Context())
 	if err != nil {
@@ -352,11 +341,11 @@ func TestCrawlerMultiServer(t *testing.T) {
 	client := newMockClient()
 
 	// Server 1 has a link to server 2.
-	client.addList("server1.com:6309", "/", "- [index.md](index.md)\n")
+	client.addList("server1.com:6309", "/", "index.md")
 	client.addDoc("server1.com:6309", "/index.md", "# Home\n\nSee [other](mark://server2.com/other.md).", "sha256-1111111111111111111111111111111111111111111111111111111111111111")
 
 	// Server 2.
-	client.addList("server2.com:6309", "/", "- [other.md](other.md)\n")
+	client.addList("server2.com:6309", "/", "other.md")
 	client.addDoc("server2.com:6309", "/other.md", "# Other\n\nBack to [home](mark://server1.com/index.md).", "sha256-2222222222222222222222222222222222222222222222222222222222222222")
 	cfg.Crawl.MaxServers = 2
 
@@ -384,7 +373,7 @@ func TestCrawlerDiscoversServerFromTypedRelation(t *testing.T) {
 	cfg.Crawl.MaxServers = 2
 
 	client := newMockClient()
-	client.addList("server1.com:6309", "/", "- [source.md](source.md)\n")
+	client.addList("server1.com:6309", "/", "source.md")
 	client.addDocWithMeta(
 		"server1.com:6309",
 		"/source.md",
@@ -392,7 +381,7 @@ func TestCrawlerDiscoversServerFromTypedRelation(t *testing.T) {
 		"sha256-1111111111111111111111111111111111111111111111111111111111111111",
 		map[string]string{"rel-related": "mark://server2.com:6309/target.md"},
 	)
-	client.addList("server2.com:6309", "/", "- [target.md](target.md)\n")
+	client.addList("server2.com:6309", "/", "target.md")
 	client.addDoc("server2.com:6309", "/target.md", "# Target\n", "sha256-2222222222222222222222222222222222222222222222222222222222222222")
 
 	crawler := NewCrawler(cfg, client, nil, nil)
@@ -414,10 +403,10 @@ func TestCrawlerDoesNotDiscoverPublishOnlyHub(t *testing.T) {
 	cfg.Hubs = []string{"mark://root"}
 
 	client := newMockClient()
-	client.addList("content:6309", "/", "- [index.md](index.md)\n")
+	client.addList("content:6309", "/", "index.md")
 	client.addDoc("content:6309", "/index.md", "See [root](mark://root/index.md).", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	// A queued hub would be observable as another discovered server.
-	client.addList("root:6309", "/", "- [index.md](index.md)\n")
+	client.addList("root:6309", "/", "index.md")
 	client.addDoc("root:6309", "/index.md", "# Root", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 	crawler := NewCrawler(cfg, client, nil, nil)
@@ -439,9 +428,9 @@ func TestCrawlerCrawlsHubWhenExplicitlySeeded(t *testing.T) {
 	cfg.Hubs = []string{"mark://root"}
 
 	client := newMockClient()
-	client.addList("content:6309", "/", "- [index.md](index.md)\n")
+	client.addList("content:6309", "/", "index.md")
 	client.addDoc("content:6309", "/index.md", "# Content", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	client.addList("root:6309", "/", "- [index.md](index.md)\n")
+	client.addList("root:6309", "/", "index.md")
 	client.addDoc("root:6309", "/index.md", "# Root", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 	crawler := NewCrawler(cfg, client, nil, nil)
@@ -473,15 +462,15 @@ func TestCrawlerHashesGraphExportWithoutRecrawlingIt(t *testing.T) {
 	cfg.Seeds = []string{"mark://content"}
 
 	client := newMockClient()
-	client.addListPage("content:6309", "/", "", "- [graph/](graph/)\n- [graph.md](graph.md)\n- [index.md](index.md)\n", "")
-	client.addList("content:6309", "/graph/", "- [manifest.md](manifest.md)\n- [shards/](shards/)\n")
-	client.addList("content:6309", "/graph/shards/", "- [a/](a/)\n")
-	client.addList("content:6309", "/graph/shards/a/", "- [nodes-000.md](nodes-000.md)\n")
+	client.addListPage("content:6309", "/", "", "", "graph/", "graph.md", "index.md")
+	client.addList("content:6309", "/graph/", "manifest.md", "shards/")
+	client.addList("content:6309", "/graph/shards/", "a/")
+	client.addList("content:6309", "/graph/shards/a/", "nodes-000.md")
 	client.addDoc("content:6309", "/index.md", "# Content", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	client.addDoc("content:6309", "/graph.md", "# Document Graph\n\n[projected](mark://projected/index.md)", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	client.addDoc("content:6309", "/graph/manifest.md", "# Graph Snapshot Manifest\n\n[projected](mark://projected/manifest.md)", "sha256-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
 	client.addDoc("content:6309", "/graph/shards/a/nodes-000.md", "# Graph Snapshot Shard\n\n[projected](mark://projected/shard.md)", "sha256-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
-	client.addList("projected:6309", "/", "- [index.md](index.md)\n")
+	client.addList("projected:6309", "/", "index.md")
 	client.addDoc("projected:6309", "/index.md", "# Projected", "sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 
 	crawler := NewCrawler(cfg, client, nil, nil)
@@ -516,7 +505,7 @@ func TestCrawlerMaxDocuments(t *testing.T) {
 		cfg.Crawl.MaxDocuments = 1
 
 		client := newMockClient()
-		client.addList("example.com:6309", "/", "- [a.md](a.md)\n- [b.md](b.md)\n")
+		client.addList("example.com:6309", "/", "a.md", "b.md")
 		client.addDoc("example.com:6309", "/a.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 		client.addDoc("example.com:6309", "/b.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
@@ -541,9 +530,9 @@ func TestCrawlerMaxDocuments(t *testing.T) {
 		cfg.Crawl.Workers = 2 // Multiple workers to test concurrent cap
 
 		client := newMockClient()
-		client.addList("server1.com:6309", "/", "- [a.md](a.md)\n")
+		client.addList("server1.com:6309", "/", "a.md")
 		client.addDoc("server1.com:6309", "/a.md", "Link to [server2](mark://server2.com/b.md).", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-		client.addList("server2.com:6309", "/", "- [b.md](b.md)\n")
+		client.addList("server2.com:6309", "/", "b.md")
 		client.addDoc("server2.com:6309", "/b.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 		crawler := NewCrawler(cfg, client, nil, nil)
@@ -565,7 +554,7 @@ func TestCrawlerMaxDocuments(t *testing.T) {
 		cfg.Seeds = []string{"mark://example.com"}
 		cfg.Crawl.MaxDocuments = 2
 		client := newMockClient()
-		client.addList("example.com:6309", "/", "- [a.md](a.md)\n- [b.md](b.md)\n- [c.md](c.md)\n")
+		client.addList("example.com:6309", "/", "a.md", "b.md", "c.md")
 
 		result, err := NewCrawler(cfg, client, nil, nil).Run(t.Context())
 		if err != nil {
@@ -590,9 +579,9 @@ func TestCrawlerMaxServers(t *testing.T) {
 		cfg.Crawl.MaxServers = 1
 
 		client := newMockClient()
-		client.addList("server1.com:6309", "/", "- [index.md](index.md)\n")
+		client.addList("server1.com:6309", "/", "index.md")
 		client.addDoc("server1.com:6309", "/index.md", "See [other](mark://server2.com/other.md).", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-		client.addList("server2.com:6309", "/", "- [other.md](other.md)\n")
+		client.addList("server2.com:6309", "/", "other.md")
 		client.addDoc("server2.com:6309", "/other.md", "Content.", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 		crawler := NewCrawler(cfg, client, nil, nil)
@@ -615,9 +604,9 @@ func TestCrawlerMaxServers(t *testing.T) {
 		cfg.Crawl.MaxServers = 1
 
 		client := newMockClient()
-		client.addList("server1.com:6309", "/", "- [index.md](index.md)\n")
+		client.addList("server1.com:6309", "/", "index.md")
 		client.addDoc("server1.com:6309", "/index.md", "Content.", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-		client.addList("server2.com:6309", "/", "- [index.md](index.md)\n")
+		client.addList("server2.com:6309", "/", "index.md")
 		client.addDoc("server2.com:6309", "/index.md", "Content.", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 		crawler := NewCrawler(cfg, client, nil, nil)
@@ -639,7 +628,7 @@ func TestCrawlerMaxServers(t *testing.T) {
 		cfg.Seeds = []string{"mark://server1.com", "mark://server1.com"}
 		cfg.Crawl.MaxServers = 1
 		client := newMockClient()
-		client.addList("server1.com:6309", "/", "- [index.md](index.md)\n")
+		client.addList("server1.com:6309", "/", "index.md")
 		client.addDoc("server1.com:6309", "/index.md", "Content.", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 		result, err := NewCrawler(cfg, client, nil, nil).Run(t.Context())
@@ -658,7 +647,7 @@ func TestCrawlerCancellation(t *testing.T) {
 	cfg.Crawl.MaxDocuments = 1000 // High limit
 
 	client := newMockClient()
-	client.addList("example.com:6309", "/", "- [index.md](index.md)\n")
+	client.addList("example.com:6309", "/", "index.md")
 	client.addDoc("example.com:6309", "/index.md", "Content.", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -678,7 +667,7 @@ func TestCrawlerCancellationDuringRun(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://example.com"}
 	client := newMockClient()
-	client.addList("example.com:6309", "/", "- [index.md](index.md)\n")
+	client.addList("example.com:6309", "/", "index.md")
 	client.addDoc("example.com:6309", "/index.md", "Content.", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	ctx, cancel := context.WithCancel(t.Context())
 	client.onList = cancel
@@ -698,8 +687,8 @@ func TestCrawlerSubdirectories(t *testing.T) {
 	cfg.Crawl.MaxDocuments = 100
 
 	client := newMockClient()
-	client.addList("example.com:6309", "/", "- [docs/](docs/)\n- [index.md](index.md)\n")
-	client.addList("example.com:6309", "/docs/", "- [a.md](a.md)\n- [b.md](b.md)\n")
+	client.addList("example.com:6309", "/", "docs/", "index.md")
+	client.addList("example.com:6309", "/docs/", "a.md", "b.md")
 	client.addDoc("example.com:6309", "/index.md", "# Home", "sha256-0000000000000000000000000000000000000000000000000000000000000000")
 	client.addDoc("example.com:6309", "/docs/a.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	client.addDoc("example.com:6309", "/docs/b.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
@@ -724,7 +713,7 @@ func TestCrawlerWithState(t *testing.T) {
 	cfg.Crawl.MaxDocuments = 100
 
 	client := newMockClient()
-	client.addList("example.com:6309", "/", "- [index.md](index.md)\n")
+	client.addList("example.com:6309", "/", "index.md")
 	client.addDoc("example.com:6309", "/index.md", "# Home", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	state, err := LoadState("/nonexistent/state.json")
@@ -865,7 +854,7 @@ func TestPublishToHubs(t *testing.T) {
 		cfg.Hubs = []string{"mark://hub.example.com"}
 
 		client := newMockClient()
-		client.addList("example.com:6309", "/", "- [a.md](a.md)\n")
+		client.addList("example.com:6309", "/", "a.md")
 		client.addDoc("example.com:6309", "/a.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 		crawler := NewCrawler(cfg, client, nil, nil)
@@ -893,9 +882,9 @@ func TestPublishToHubs(t *testing.T) {
 		cfg.Hubs = []string{"mark://hub.example.com"}
 
 		client := newMockClient()
-		client.addList("a.example.com:6309", "/", "- [doc.md](doc.md)\n")
+		client.addList("a.example.com:6309", "/", "doc.md")
 		client.addDoc("a.example.com:6309", "/doc.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-		client.addList("b.example.com:6309", "/", "- [doc.md](doc.md)\n")
+		client.addList("b.example.com:6309", "/", "doc.md")
 		client.addDoc("b.example.com:6309", "/doc.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 		crawler := NewCrawler(cfg, client, nil, nil)
@@ -927,14 +916,14 @@ func TestCrawlerGraphExportAndPublish(t *testing.T) {
 	cfg.Crawl.MaxDocuments = 100
 
 	client := newMockClient()
-	client.addList("a.example.com:6309", "/", "- [index.md](index.md)\n- [notes.md](notes.md)\n")
+	client.addList("a.example.com:6309", "/", "index.md", "notes.md")
 	// index.md links to a sibling and to a doc on another server.
 	client.addDoc("a.example.com:6309", "/index.md",
 		"# A\n[notes](notes.md) and [cross](mark://b.example.com:6309/page.md)",
 		"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	client.addDoc("a.example.com:6309", "/notes.md", "# Notes",
 		"sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
-	client.addList("b.example.com:6309", "/", "- [page.md](page.md)\n")
+	client.addList("b.example.com:6309", "/", "page.md")
 	client.addDoc("b.example.com:6309", "/page.md", "# B",
 		"sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
@@ -1018,7 +1007,7 @@ func TestPublishGraphToHubsAttemptsSnapshotAndLegacyIndependently(t *testing.T) 
 			cfg.Seeds = []string{"mark://content.example.com"}
 			cfg.Hubs = []string{"mark://hub.example.com"}
 			client := newMockClient()
-			client.addList("content.example.com:6309", "/", "")
+			client.addList("content.example.com:6309", "/")
 			client.publishStatuses["hub.example.com:6309"+test.failPath] = protocol.StatusServerError
 			crawler := NewCrawler(cfg, client, nil, nil)
 			if _, err := crawler.Run(context.Background()); err != nil {
@@ -1060,7 +1049,7 @@ func TestCrawlerGraphExportFiltersLoopbackAndNormalizesPorts(t *testing.T) {
 	cfg.Crawl.MaxDocuments = 100
 
 	client := newMockClient()
-	client.addList("a.example.com:6309", "/", "- [index.md](index.md)\n")
+	client.addList("a.example.com:6309", "/", "index.md")
 	// The doc links to IPv4 loopback, IPv6 loopback, localhost (dev artifacts)
 	// and a port-less external world.
 	client.addDoc("a.example.com:6309", "/index.md",
@@ -1125,7 +1114,7 @@ func TestPublishRetentionMeta(t *testing.T) {
 		cfg.Hubs = []string{"mark://hub.example.com"}
 		cfg.Publish.Retention = retention
 		client := newMockClient()
-		client.addList("a.example.com:6309", "/", "- [index.md](index.md)\n")
+		client.addList("a.example.com:6309", "/", "index.md")
 		client.addDoc("a.example.com:6309", "/index.md", "# A",
 			"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 		crawler := NewCrawler(cfg, client, nil, nil)
@@ -1201,7 +1190,7 @@ func TestCrawlerRecordsTypedAndProvenancedEdges(t *testing.T) {
 	cfg.Crawl.MaxDocuments = 100
 
 	client := newMockClient()
-	client.addList("a.example.com:6309", "/", "- [index.md](index.md)\n- [notes.md](notes.md)\n")
+	client.addList("a.example.com:6309", "/", "index.md", "notes.md")
 	client.addDocWithMeta("a.example.com:6309", "/index.md",
 		"# A\n\n## Guide\n\nSee [the notes](notes.md).",
 		"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -1240,7 +1229,7 @@ func TestRecordEdgesTitlePrecedence(t *testing.T) {
 	cfg.Politeness.RequestDelay = 0
 
 	client := newMockClient()
-	client.addList("example.com:6309", "/", "- [declared.md](declared.md)\n- [heading.md](heading.md)\n- [bare.md](bare.md)\n")
+	client.addList("example.com:6309", "/", "declared.md", "heading.md", "bare.md")
 	client.addDocWithMeta("example.com:6309", "/declared.md", "# Heading Title\n", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", map[string]string{"title": "Declared Title"})
 	client.addDocWithMeta("example.com:6309", "/heading.md", "# Heading Only\n", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", nil)
 	client.addDocWithMeta("example.com:6309", "/bare.md", "no heading at all\n", "sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", nil)
@@ -1281,10 +1270,10 @@ func TestCrawlerListingCycle(t *testing.T) {
 	// A self-referencing listing served at EVERY depth mints ever-deeper
 	// distinct paths; termination is demonstrated by MaxDepth, not by the
 	// visited set or a missing mock response.
-	client.addList("example.com:6309", "/", "- [a.md](a.md)\n- [loop/](loop/)\n")
+	client.addList("example.com:6309", "/", "a.md", "loop/")
 	dir := "/loop/"
 	for range 8 {
-		client.addList("example.com:6309", dir, "- [loop/](loop/)\n- [b.md](b.md)\n")
+		client.addList("example.com:6309", dir, "loop/", "b.md")
 		dir += "loop/"
 	}
 	client.addDoc("example.com:6309", "/a.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -1309,9 +1298,9 @@ func TestCrawlerMaxDepth(t *testing.T) {
 	cfg.Politeness.RequestDelay = 0
 
 	client := newMockClient()
-	client.addList("example.com:6309", "/", "- [top.md](top.md)\n- [d1/](d1/)\n")
-	client.addList("example.com:6309", "/d1/", "- [mid.md](mid.md)\n- [d2/](d2/)\n")
-	client.addList("example.com:6309", "/d1/d2/", "- [deep.md](deep.md)\n")
+	client.addList("example.com:6309", "/", "top.md", "d1/")
+	client.addList("example.com:6309", "/d1/", "mid.md", "d2/")
+	client.addList("example.com:6309", "/d1/d2/", "deep.md")
 	client.addDoc("example.com:6309", "/top.md", "# Top", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	client.addDoc("example.com:6309", "/d1/mid.md", "# Mid", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	client.addDoc("example.com:6309", "/d1/d2/deep.md", "# Deep", "sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")

@@ -1,0 +1,21 @@
+---
+content-hash: sha256-050018a246d303b7fd8806eb84e88535b6cc8510e829715f87b7337158e05919
+etag: 693067c46c892c9ff8b035c8b3848fb3a8b74a1f5787f5bc960688ce678573dd
+importance: "0.7"
+modified: "2026-01-01T00:00:00Z"
+status: ok
+tags: alpha,wire
+type: Note
+version: "3"
+---
+# Alpha
+
+Second body.
+
+## Details
+
+See [beta](b.md).
+
+## Appended
+
+More.

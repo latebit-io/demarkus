@@ -23,7 +23,7 @@ func TestCheckManifestsTransportFailure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sc := &stubClient{fetchFn: func(host, _, _ string) (fetch.Result, error) {
+			sc := &stubClient{FetchFn: func(host, _, _ string) (fetch.Result, error) {
 				if host == tt.failHost {
 					return fetch.Result{}, errors.New("dial timeout")
 				}
@@ -58,7 +58,7 @@ func TestCheckManifestsForceOnlyOverridesNotFound(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.status, func(t *testing.T) {
-			sc := &stubClient{fetchFn: func(host, _, _ string) (fetch.Result, error) {
+			sc := &stubClient{FetchFn: func(host, _, _ string) (fetch.Result, error) {
 				if host == "hub.com:6309" {
 					return fetch.Result{Response: protocol.Response{Status: tt.status}}, nil
 				}

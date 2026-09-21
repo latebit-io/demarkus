@@ -14,7 +14,7 @@ import (
 // not-found until published (the fake's published map then serves it).
 func freshWorldDispatcher() *fakeDispatcher {
 	return &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
 	}
@@ -27,9 +27,7 @@ func TestEnsureMemorySeedSeedsFreshWorld(t *testing.T) {
 
 	g.ensureMemorySeed(withAliceClaims(context.Background()), w)
 
-	d.mu.Lock()
-	calls := append([]writeCall(nil), d.publishCalls...)
-	d.mu.Unlock()
+	calls := d.Calls().Publish
 	wantOrder := []string{
 		"/.well-known/demarkus/policy.md",
 		"/.well-known/demarkus/template.md",
@@ -39,37 +37,35 @@ func TestEnsureMemorySeedSeedsFreshWorld(t *testing.T) {
 		t.Fatalf("seed published %d docs, want %d: %+v", len(calls), len(wantOrder), calls)
 	}
 	for i, c := range calls {
-		if c.worldName != "alice-w" {
-			t.Errorf("seed publish %d went to world %q, want alice-w", i, c.worldName)
+		if c.Host != "alice-w" {
+			t.Errorf("seed publish %d went to world %q, want alice-w", i, c.Host)
 		}
 		// /index.md is the seeded sentinel, so it must land last: a
 		// crash mid-seed must leave the world retryable, not
 		// half-seeded-but-marked-done.
-		if c.path != wantOrder[i] {
-			t.Errorf("seed publish %d path = %q, want %q", i, c.path, wantOrder[i])
+		if c.Path != wantOrder[i] {
+			t.Errorf("seed publish %d path = %q, want %q", i, c.Path, wantOrder[i])
 		}
-		if c.expectedVersion != 0 {
-			t.Errorf("seed publish %d expectedVersion = %d, want 0 (create-only)", i, c.expectedVersion)
+		if c.ExpectedVersion != 0 {
+			t.Errorf("seed publish %d expectedVersion = %d, want 0 (create-only)", i, c.ExpectedVersion)
 		}
-		if c.meta["tags"] == "" {
+		if c.Meta["tags"] == "" {
 			t.Errorf("seed publish %d has no tags", i)
 		}
-		if c.meta["agent"] != "demarkus-memory-broker" {
-			t.Errorf("seed publish %d agent = %q, want demarkus-memory-broker", i, c.meta["agent"])
+		if c.Meta["agent"] != "demarkus-memory-broker" {
+			t.Errorf("seed publish %d agent = %q, want demarkus-memory-broker", i, c.Meta["agent"])
 		}
-		if strings.HasPrefix(c.body, "---") {
+		if strings.HasPrefix(c.Body, "---") {
 			t.Errorf("seed publish %d body opens with a frontmatter fence", i)
 		}
-		if !strings.HasPrefix(c.body, "# ") {
+		if !strings.HasPrefix(c.Body, "# ") {
 			t.Errorf("seed publish %d body does not open with an H1", i)
 		}
 	}
 
 	// Second call: seeded fast path, no further traffic.
 	g.ensureMemorySeed(withAliceClaims(context.Background()), w)
-	d.mu.Lock()
-	after := len(d.publishCalls)
-	d.mu.Unlock()
+	after := len(d.Calls().Publish)
 	if after != len(wantOrder) {
 		t.Errorf("second ensureMemorySeed published again (%d calls total)", after)
 	}
@@ -79,10 +75,8 @@ func TestEnsureMemorySeedSkipsSeededWorld(t *testing.T) {
 	d := seededDispatcher()
 	g := newMemoryGateway(t, memoryTestConfig(), d)
 	g.ensureMemorySeed(withAliceClaims(context.Background()), &g.srv.cfg.Worlds[0])
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(d.publishCalls) != 0 {
-		t.Errorf("seeding published %d docs into an already-seeded world", len(d.publishCalls))
+	if published := d.Calls().Publish; len(published) != 0 {
+		t.Errorf("seeding published %d docs into an already-seeded world", len(published))
 	}
 }
 
@@ -111,10 +105,10 @@ func TestTenantGateSeedsOnFirstCall(t *testing.T) {
 func TestEnsureMemorySeedRetriesAfterFailure(t *testing.T) {
 	fail := true
 	d := &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			if fail {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusServerError}}, nil
 			}
@@ -134,13 +128,9 @@ func TestEnsureMemorySeedRetriesAfterFailure(t *testing.T) {
 
 	// Within the throttle window a re-attempt is skipped entirely.
 	fail = false
-	d.mu.Lock()
-	before := len(d.fetchCalls)
-	d.mu.Unlock()
+	before := d.FetchCallCount()
 	g.ensureMemorySeed(withAliceClaims(context.Background()), w)
-	d.mu.Lock()
-	after := len(d.fetchCalls)
-	d.mu.Unlock()
+	after := d.FetchCallCount()
 	if after != before {
 		t.Fatalf("throttled window re-attempted seeding (%d new fetches)", after-before)
 	}

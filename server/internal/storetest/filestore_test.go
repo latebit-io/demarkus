@@ -6,10 +6,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
@@ -19,6 +22,26 @@ func TestFileStoreConformance(t *testing.T) {
 	RunConformance(t, func(t *testing.T) handler.DocumentStore {
 		return store.New(t.TempDir())
 	}, FileTamper)
+}
+
+// TestFileStoreWrapperConformance runs the same suite against the filestore
+// wrapper, which is what production serves; tampering reaches under it.
+func TestFileStoreWrapperConformance(t *testing.T) {
+	var mu sync.Mutex
+	documents := map[handler.DocumentStore]*store.Store{}
+	RunConformance(t, func(t *testing.T) handler.DocumentStore {
+		raw := store.New(t.TempDir())
+		wrapped := filestore.New(raw, catalog.New())
+		mu.Lock()
+		documents[wrapped] = raw
+		mu.Unlock()
+		return wrapped
+	}, func(t testing.TB, s handler.DocumentStore, path string, version int, stored []byte) {
+		mu.Lock()
+		raw := documents[s]
+		mu.Unlock()
+		FileTamper(t, raw, path, version, stored)
+	})
 }
 
 // TestFileStoreLookupConformance runs the LOOKUP conformance suite against
@@ -32,6 +55,11 @@ func TestFileStoreLookupConformance(t *testing.T) {
 // the match key on the file backend.
 func TestFileStoreLookupHandlerConformance(t *testing.T) {
 	RunLookupHandlerConformance(t, func(t *testing.T) LookupBackend { return FileBackend(t) })
+}
+
+// TestFileStoreHandlerConformance pins backend dependent wire behavior.
+func TestFileStoreHandlerConformance(t *testing.T) {
+	RunHandlerConformance(t, func(t *testing.T) LookupBackend { return FileBackend(t) })
 }
 
 // TestFileStoreDifferentialSelf runs the differential harness with the file

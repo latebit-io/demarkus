@@ -126,11 +126,11 @@ func (f *fakeStore) Versions(_ context.Context, docPath string) (protocol.Respon
 	if !ok {
 		return protocol.Response{Status: protocol.StatusNotFound}, nil
 	}
-	meta := map[string]string{"total": strconv.Itoa(len(d.Versions) + 1), "current": strconv.Itoa(len(d.Versions) + 1), "chain-valid": "true"}
-	if d.Meta["chain-valid"] == "false" {
-		meta["chain-valid"], meta["chain-error"] = "false", "chain integrity check failed"
+	history := make([]render.VersionEntry, 0, len(d.Versions)+1)
+	for v := len(d.Versions) + 1; v >= 1; v-- {
+		history = append(history, render.VersionEntry{Version: v})
 	}
-	return protocol.Response{Status: protocol.StatusOK, Metadata: meta}, nil
+	return render.VersionsResponse(docPath, history, d.Meta["chain-valid"] != "false"), nil
 }
 
 func tagged(body string) fakeDoc {

@@ -500,26 +500,21 @@ func buildDirectoryIndex(reqPath string, entries []store.DirEntry) (body string,
 	return page.Body, page.EntryCount, err
 }
 
-// buildLookupResults renders LOOKUP matches as a markdown table, cells
-// escaped so they cannot break it. Body mode adds #anchor to the path, the
-// heading to the title, and a Snippet column; catalog mode is unchanged.
-func buildLookupResults(query, scope string, rows []catalog.Result, mode catalog.Mode) string {
-	body := mode == catalog.MatchBody
-	var sb strings.Builder
-	sb.WriteString(render.LookupHeading(query, scope))
-	sb.WriteString(render.LookupHeader(body))
-	for i := range rows {
-		r := &rows[i]
-		sb.WriteString(render.LookupRowLine(&render.LookupRow{
+// lookupRows converts catalog results into the rows protocol/render draws.
+func lookupRows(results []catalog.Result) []render.LookupRow {
+	rows := make([]render.LookupRow, 0, len(results))
+	for i := range results {
+		r := &results[i]
+		rows = append(rows, render.LookupRow{
 			Path:       r.Path,
 			Anchor:     r.Anchor,
 			Importance: r.Importance,
 			Title:      r.DisplayTitle(),
 			Tags:       r.Tags,
 			Snippet:    r.Snippet,
-		}, body))
+		})
 	}
-	return sb.String()
+	return rows
 }
 
 func (h *Handler) handleFetchDirectory(w io.Writer, req protocol.Request, reader storagebackend.Reader) {
@@ -642,18 +637,8 @@ func (h *Handler) handleVersions(w io.Writer, req protocol.Request, reader stora
 		return
 	}
 
-	var body strings.Builder
-	body.WriteString(render.VersionsHeading(reqPath))
-	for _, v := range versions {
-		body.WriteString(render.VersionLine(reqPath, v.Version, v.Modified))
-	}
-
-	meta := map[string]string{
-		"total":   fmt.Sprintf("%d", len(versions)),
-		"current": fmt.Sprintf("%d", versions[0].Version),
-	}
-
 	// Verify hash chain integrity and report result.
+	chainValid := true
 	if err := reader.VerifyChain(reqPath); err != nil {
 		if !errors.Is(err, store.ErrIntegrity) {
 			h.logger().Error("chain verification failed", "path", sanitize(reqPath), "error", err)
@@ -661,18 +646,14 @@ func (h *Handler) handleVersions(w io.Writer, req protocol.Request, reader stora
 			return
 		}
 		h.logger().Warn("chain verification failed", "path", sanitize(reqPath), "error", err)
-		meta["chain-valid"] = "false"
-		meta["chain-error"] = "chain integrity check failed"
-	} else {
-		meta["chain-valid"] = "true"
+		chainValid = false
 	}
 
-	resp := protocol.Response{
-		Status:   protocol.StatusOK,
-		Metadata: meta,
-		Body:     body.String(),
+	rows := make([]render.VersionEntry, 0, len(versions))
+	for _, v := range versions {
+		rows = append(rows, render.VersionEntry{Version: v.Version, Modified: v.Modified})
 	}
-	h.writeResponse(w, resp)
+	h.writeResponse(w, render.VersionsResponse(reqPath, rows, chainValid))
 }
 
 func (h *Handler) handleLookup(w io.Writer, req protocol.Request, reader storagebackend.Reader, lookup storagebackend.CatalogReader) {
@@ -763,18 +744,13 @@ func (h *Handler) handleLookup(w io.Writer, req protocol.Request, reader storage
 		}
 	}
 
-	meta := map[string]string{"matches": strconv.Itoa(len(rows))}
+	// Echo match only when asked, so a request without it gets the
+	// response it always got, byte for byte.
+	echo := ""
 	if matchCarried {
-		// Echo only when asked, so a request without match gets the
-		// response it always got, byte for byte.
-		meta["match"] = string(mode)
+		echo = string(mode)
 	}
-	resp := protocol.Response{
-		Status:   protocol.StatusOK,
-		Metadata: meta,
-		Body:     buildLookupResults(query, req.Path, rows, mode),
-	}
-	h.writeResponse(w, resp)
+	h.writeResponse(w, render.LookupResponse(query, req.Path, lookupRows(rows), echo))
 }
 
 // catalogPut adds or replaces the LOOKUP catalog entry for a document. body is

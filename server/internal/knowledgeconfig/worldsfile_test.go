@@ -126,9 +126,20 @@ func TestParsesBrokerRenderedFragment(t *testing.T) {
 	if len(worlds) != 1 {
 		t.Fatalf("worlds = %d, want 1", len(worlds))
 	}
+	// Every field the broker writes must arrive; a dropped one parses cleanly.
 	w := &worlds[0]
 	if !w.Bootstrap || w.Limits.MaxDocuments != 500 || len(w.Authorities) != 1 {
 		t.Errorf("parsed fragment world = %+v", w)
+	}
+	for field, got := range map[string]string{
+		"name":            w.Name,
+		"authority":       w.Authorities[0],
+		"bucket.url":      w.Bucket.URL,
+		"auth.tokensFile": w.Auth.TokensFile,
+	} {
+		if !strings.Contains(got, "eve-adams-998d03fa") {
+			t.Errorf("fragment %s = %q, want the tenant slug in it", field, got)
+		}
 	}
 	if !ValidWorldID(w.Bucket.WorldID) {
 		t.Errorf("broker-derived worldID %q is not canonical", w.Bucket.WorldID)

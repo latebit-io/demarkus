@@ -1,0 +1,12 @@
+---
+chain-valid: "true"
+current: "3"
+status: ok
+total: "3"
+---
+
+# Version History: /docs/a.md
+
+- [v3](%2Fdocs%2Fa.md/v3) - 2026-01-01T00:00:00Z
+- [v2](%2Fdocs%2Fa.md/v2) - 2026-01-01T00:00:00Z
+- [v1](%2Fdocs%2Fa.md/v1) - 2026-01-01T00:00:00Z

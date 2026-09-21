@@ -2,310 +2,22 @@ package broker
 
 import (
 	"context"
-	"fmt"
-	"maps"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/index"
-	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/render"
 	"github.com/mark3labs/mcp-go/mcp"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-// fakeDispatcher records dispatch calls and returns scripted
-// fetch.Results. Wired into the gateway via Server.MCPGatewayWith
-// so handler tests don't need a real demarkus-server / QUIC stack.
-type fakeDispatcher struct {
-	mu sync.Mutex
-
-	fetchFn     func(worldName, path, token string) (fetch.Result, error)
-	fetchCtxFn  func(context.Context, string, string, string) (fetch.Result, error)
-	fetchCondFn func(worldName, path, token, etag string) (fetch.Result, error)
-	listFn      func(worldName, path, token string) (fetch.Result, error)
-	listOptsFn  func(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error)
-	versionsFn  func(worldName, path, token string) (fetch.Result, error)
-	lookupFn    func(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
-	lookupCtxFn func(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error)
-	publishFn   func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	appendFn    func(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error)
-	archiveFn   func(worldName, path, token string) (fetch.Result, error)
-	published   map[string]fetch.Result
-
-	fetchCalls     []dispatchCall
-	fetchCondCalls []condCall
-	listCalls      []dispatchCall
-	listOpts       []fetch.ListOptions
-	versionsCalls  []dispatchCall
-	lookupCalls    []lookupCall
-	publishCalls   []writeCall
-	appendCalls    []writeCall
-	archiveCalls   []dispatchCall
-}
-
-// lookupCall records a LOOKUP dispatch for assertions.
-type lookupCall struct {
-	worldName string
-	scope     string
-	query     string
-	token     string
-	opts      fetch.LookupOptions
-}
-
-type dispatchCall struct {
-	worldName string
-	path      string
-	token     string
-}
-
-// condCall records a FetchConditional dispatch (the graph seeder's
-// /graph.md checks) with the if-none-match etag it carried.
-type condCall struct {
-	worldName string
-	path      string
-	token     string
-	etag      string
-}
-
-// writeCall records a Publish/Append invocation. Captures the
-// body + expected_version + meta so tests can assert what the
-// broker forwarded to the world.
-type writeCall struct {
-	worldName       string
-	path            string
-	body            string
-	token           string
-	expectedVersion int
-	meta            map[string]string
-}
-
-func (f *fakeDispatcher) Fetch(worldName, path, token string) (fetch.Result, error) {
-	f.mu.Lock()
-	f.fetchCalls = append(f.fetchCalls, dispatchCall{worldName, path, token})
-	stored, ok := f.published[worldName+path]
-	fn := f.fetchFn
-	f.mu.Unlock()
-	if ok {
-		return stored, nil
-	}
-	if fn == nil {
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
-	}
-	return fn(worldName, path, token)
-}
-
-func (f *fakeDispatcher) FetchContext(ctx context.Context, worldName, path, token string) (fetch.Result, error) {
-	if f.fetchCtxFn != nil {
-		return f.fetchCtxFn(ctx, worldName, path, token)
-	}
-	if err := ctx.Err(); err != nil {
-		return fetch.Result{}, err
-	}
-	return f.Fetch(worldName, path, token)
-}
-
-func (f *fakeDispatcher) FetchConditional(worldName, path, token, etag string) (fetch.Result, error) {
-	f.mu.Lock()
-	f.fetchCondCalls = append(f.fetchCondCalls, condCall{worldName, path, token, etag})
-	fn := f.fetchCondFn
-	f.mu.Unlock()
-	if fn == nil {
-		// Seed fetches against a fake with no /graph.md behave like a
-		// missing doc so graph tests stay unseeded unless they opt in.
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-	}
-	return fn(worldName, path, token, etag)
-}
-
-func (f *fakeDispatcher) FetchConditionalContext(ctx context.Context, worldName, path, token, etag string) (fetch.Result, error) {
-	if err := ctx.Err(); err != nil {
-		return fetch.Result{}, err
-	}
-	return f.FetchConditional(worldName, path, token, etag)
-}
-
-func (f *fakeDispatcher) List(worldName, path, token string, opts fetch.ListOptions) (fetch.Result, error) {
-	f.mu.Lock()
-	f.listCalls = append(f.listCalls, dispatchCall{worldName, path, token})
-	f.listOpts = append(f.listOpts, opts)
-	fn := f.listFn
-	optsFn := f.listOptsFn
-	f.mu.Unlock()
-	if optsFn != nil {
-		return optsFn(worldName, path, token, opts)
-	}
-	if fn == nil {
-		return fetch.Result{Response: protocol.Response{
-			Status:   protocol.StatusOK,
-			Metadata: map[string]string{"entries": "0", "complete": "true"},
-		}}, nil
-	}
-	result, err := fn(worldName, path, token)
-	if err == nil && result.Response.Status == protocol.StatusOK && result.Response.Metadata["complete"] == "" {
-		if result.Response.Metadata == nil {
-			result.Response.Metadata = make(map[string]string)
-		}
-		result.Response.Metadata["entries"] = strconv.Itoa(len(links.Extract(result.Response.Body)))
-		result.Response.Metadata["complete"] = "true"
-	}
-	return result, err
-}
-
-func (f *fakeDispatcher) Versions(worldName, path, token string) (fetch.Result, error) {
-	f.mu.Lock()
-	f.versionsCalls = append(f.versionsCalls, dispatchCall{worldName, path, token})
-	fn := f.versionsFn
-	f.mu.Unlock()
-	if fn == nil {
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
-	}
-	return fn(worldName, path, token)
-}
-
-func (f *fakeDispatcher) Lookup(worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error) {
-	return f.lookup(context.Background(), worldName, scope, query, token, opts, false)
-}
-
-func (f *fakeDispatcher) LookupContext(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error) {
-	return f.lookup(ctx, worldName, scope, query, token, opts, true)
-}
-
-func (f *fakeDispatcher) lookup(ctx context.Context, worldName, scope, query, token string, opts fetch.LookupOptions, contextAware bool) (fetch.Result, error) {
-	f.mu.Lock()
-	f.lookupCalls = append(f.lookupCalls, lookupCall{worldName, scope, query, token, opts})
-	fn := f.lookupFn
-	ctxFn := f.lookupCtxFn
-	f.mu.Unlock()
-	if contextAware && ctxFn != nil {
-		return ctxFn(ctx, worldName, scope, query, token, opts)
-	}
-	if fn == nil {
-		return fetch.Result{Response: protocol.Response{
-			Status:   protocol.StatusOK,
-			Metadata: map[string]string{"matches": "0"},
-		}}, nil
-	}
-	return fn(worldName, scope, query, token, opts)
-}
-
-func (f *fakeDispatcher) Publish(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
-	f.mu.Lock()
-	f.publishCalls = append(f.publishCalls, writeCall{worldName, path, body, token, expectedVersion, cloneMeta(meta)})
-	fn := f.publishFn
-	f.mu.Unlock()
-	var result fetch.Result
-	var err error
-	if fn == nil {
-		result = fetch.Result{Response: protocol.Response{
-			Status:   protocol.StatusOK,
-			Metadata: map[string]string{"version": "1"},
-		}}
-	} else {
-		result, err = fn(worldName, path, body, token, expectedVersion, meta)
-	}
-	if err != nil || (result.Response.Status != protocol.StatusOK && result.Response.Status != protocol.StatusCreated) {
-		return result, err
-	}
-	version, versionErr := strconv.Atoi(result.Response.Metadata["version"])
-	if versionErr == nil && version > 0 {
-		metadata := map[string]string{
-			"version":      strconv.Itoa(version),
-			"content-hash": index.BodyHash(body),
-		}
-		stored := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: metadata}}
-		f.mu.Lock()
-		currentVersion := 0
-		current, exists := f.published[worldName+path]
-		if exists {
-			currentVersion, versionErr = strconv.Atoi(current.Response.Metadata["version"])
-			if versionErr != nil {
-				f.mu.Unlock()
-				return fetch.Result{}, fmt.Errorf("invalid fake version: %w", versionErr)
-			}
-		}
-		if expectedVersion >= 0 && expectedVersion != currentVersion {
-			f.mu.Unlock()
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusConflict}}, nil
-		}
-		if f.published == nil {
-			f.published = make(map[string]fetch.Result)
-		}
-		f.published[worldName+path] = stored
-		f.published[worldName+index.VersionPath(path, version)] = stored
-		f.mu.Unlock()
-	}
-	return result, nil
-}
-
-func (f *fakeDispatcher) PublishContext(ctx context.Context, worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
-	if err := ctx.Err(); err != nil {
-		return fetch.Result{}, err
-	}
-	return f.Publish(worldName, path, body, token, expectedVersion, meta)
-}
-
-func (f *fakeDispatcher) Append(worldName, path, body, token string, expectedVersion int, meta map[string]string) (fetch.Result, error) {
-	f.mu.Lock()
-	f.appendCalls = append(f.appendCalls, writeCall{worldName, path, body, token, expectedVersion, cloneMeta(meta)})
-	fn := f.appendFn
-	f.mu.Unlock()
-	if fn == nil {
-		return fetch.Result{Response: protocol.Response{
-			Status:   protocol.StatusOK,
-			Metadata: map[string]string{"version": "2"},
-		}}, nil
-	}
-	return fn(worldName, path, body, token, expectedVersion, meta)
-}
-
-// cloneMeta snapshots a publisher-metadata map so writeCall
-// records an immutable copy. PR #147 review (CodeRabbit): the
-// fakeDispatcher stored caller-owned maps by reference, so a
-// post-call mutation of the same map (legal under fetch.Client's
-// Publish signature — the client copies before sending, but a
-// future broker handler that reused a map between calls would
-// retroactively change recorded test history) could silently
-// invalidate assertions written against the captured value.
-// Cloning here is a test-only guard; production code paths still
-// pass the original map down to fetch.Client.
-func cloneMeta(meta map[string]string) map[string]string {
-	if meta == nil {
-		return nil
-	}
-	out := make(map[string]string, len(meta))
-	maps.Copy(out, meta)
-	return out
-}
-
-func (f *fakeDispatcher) Archive(worldName, path, token string) (fetch.Result, error) {
-	f.mu.Lock()
-	f.archiveCalls = append(f.archiveCalls, dispatchCall{worldName, path, token})
-	fn := f.archiveFn
-	f.mu.Unlock()
-	if fn == nil {
-		return fetch.Result{Response: protocol.Response{
-			Status:   protocol.StatusArchived,
-			Metadata: map[string]string{"version": "3"},
-		}}, nil
-	}
-	return fn(worldName, path, token)
-}
-
-// fetchCallCount returns the number of Fetch calls recorded so
-// far. Exposed for tests that assert mint coalescing and retry
-// counts.
-func (f *fakeDispatcher) fetchCallCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.fetchCalls)
-}
+// fakeDispatcher is the shared scriptable client; see client/fetchtest.
+type fakeDispatcher = fetchtest.Dispatcher
 
 func TestParseToolURLDoubleSlashShape(t *testing.T) {
 	world, path, err := parseToolURL("mark://team-a/foo.md")
@@ -474,7 +186,7 @@ func withAliceClaims(ctx context.Context) context.Context {
 func TestHandleMarkFetchHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Metadata: map[string]string{
@@ -526,33 +238,30 @@ func TestHandleMarkFetchHappyPath(t *testing.T) {
 	}
 	// Dispatcher must have seen the worldName + path resolved
 	// from the tool URL.
-	if d.fetchCallCount() != 2 {
-		t.Errorf("fetch dispatch count = %d, want 2", d.fetchCallCount())
+	if d.FetchCallCount() != 2 {
+		t.Errorf("fetch dispatch count = %d, want 2", d.FetchCallCount())
 	}
-	call := d.fetchCalls[0]
-	if call.worldName != "team-a" {
-		t.Errorf("dispatcher saw worldName=%q, want team-a", call.worldName)
+	call := d.FetchCalls[0]
+	if call.Host != "team-a" {
+		t.Errorf("dispatcher saw worldName=%q, want team-a", call.Host)
 	}
-	if call.path != "/foo.md" {
-		t.Errorf("dispatcher saw path=%q, want /foo.md", call.path)
+	if call.Path != "/foo.md" {
+		t.Errorf("dispatcher saw path=%q, want /foo.md", call.Path)
 	}
 	// Reads dispatch unauthenticated — the world's tokens.toml is
 	// write-only in the knowledge-system flow, so the empty bearer
 	// flows through and the document is returned.
-	if call.token != "" {
-		t.Errorf("dispatcher saw token=%q, want empty (reads are open)", call.token)
+	if call.Token != "" {
+		t.Errorf("dispatcher saw token=%q, want empty (reads are open)", call.Token)
 	}
 }
 
 func TestHandleMarkLookupHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		lookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"matches": "1"},
-				Body:     "| Path | Importance | Title | Tags |\n| /docs/auth.md | 0.90 | Auth | auth |\n",
-			}}, nil
+		LookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+			row := render.LookupRow{Path: "/docs/auth.md", Importance: 0.9, Title: "Auth", Tags: []string{"auth"}}
+			return fetchtest.Lookup("auth", "/docs/", "", row), nil
 		},
 	}
 	g := newGatewayWithDispatcher(t, cfg, d)
@@ -575,19 +284,19 @@ func TestHandleMarkLookupHappyPath(t *testing.T) {
 			t.Errorf("response missing %q\nfull:\n%s", want, text)
 		}
 	}
-	if len(d.lookupCalls) != 1 {
-		t.Fatalf("lookup dispatch count = %d, want 1", len(d.lookupCalls))
+	if len(d.LookupCalls) != 1 {
+		t.Fatalf("lookup dispatch count = %d, want 1", len(d.LookupCalls))
 	}
-	call := d.lookupCalls[0]
-	if call.worldName != "team-a" || call.scope != "/docs/" || call.query != "auth" {
-		t.Errorf("dispatcher saw worldName=%q scope=%q query=%q", call.worldName, call.scope, call.query)
+	call := d.LookupCalls[0]
+	if call.Host != "team-a" || call.Scope != "/docs/" || call.Query != "auth" {
+		t.Errorf("dispatcher saw worldName=%q scope=%q query=%q", call.Host, call.Scope, call.Query)
 	}
-	if call.opts.Filter != "project=broker" || call.opts.Limit != 5 {
-		t.Errorf("dispatcher saw opts=%+v, want {Filter:project=broker Limit:5}", call.opts)
+	if call.Opts.Filter != "project=broker" || call.Opts.Limit != 5 {
+		t.Errorf("dispatcher saw opts=%+v, want {Filter:project=broker Limit:5}", call.Opts)
 	}
 	// Reads dispatch unauthenticated — the empty bearer flows through.
-	if call.token != "" {
-		t.Errorf("dispatcher saw token=%q, want empty (reads are open)", call.token)
+	if call.Token != "" {
+		t.Errorf("dispatcher saw token=%q, want empty (reads are open)", call.Token)
 	}
 }
 
@@ -607,12 +316,10 @@ func TestHandleMarkLookupRequiresQuery(t *testing.T) {
 func TestHandleMarkListHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		listFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"modified": "2026-05-21T10:00:00Z"},
-				Body:     "foo.md\nbar.md\n",
-			}}, nil
+		ListFn: func(_, _, _ string) (fetch.Result, error) {
+			page := fetchtest.ListPage("/", "", "bar.md", "foo.md")
+			page.Response.Metadata["modified"] = "2026-05-21T10:00:00Z"
+			return page, nil
 		},
 	}
 	g := newGatewayWithDispatcher(t, cfg, d)
@@ -634,8 +341,8 @@ func TestHandleMarkListHappyPath(t *testing.T) {
 			t.Errorf("response missing %q\nfull:\n%s", want, text)
 		}
 	}
-	if len(d.listOpts) != 1 || d.listOpts[0] != (fetch.ListOptions{IncludeArchived: true, Cursor: "next", PageSize: 25}) {
-		t.Errorf("LIST options = %+v", d.listOpts)
+	if len(d.ListOpts) != 1 || d.ListOpts[0] != (fetch.ListOptions{IncludeArchived: true, Cursor: "next", PageSize: 25}) {
+		t.Errorf("LIST options = %+v", d.ListOpts)
 	}
 }
 
@@ -651,7 +358,7 @@ func TestHandleMarkListRejectsFractionalPageSize(t *testing.T) {
 }
 
 func TestHandleMarkListRejectsRepeatedCursor(t *testing.T) {
-	d := &fakeDispatcher{listOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+	d := &fakeDispatcher{ListOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK,
 			Metadata: map[string]string{
@@ -672,7 +379,7 @@ func TestHandleMarkListRejectsRepeatedCursor(t *testing.T) {
 }
 
 func TestHandleMarkListRejectsMissingContinuationCursor(t *testing.T) {
-	d := &fakeDispatcher{listOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+	d := &fakeDispatcher{ListOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK,
 			Metadata: map[string]string{
@@ -695,16 +402,8 @@ func TestHandleMarkListRejectsMissingContinuationCursor(t *testing.T) {
 func TestHandleMarkVersionsHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		versionsFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{
-				Status: protocol.StatusOK,
-				Metadata: map[string]string{
-					"total":       "3",
-					"current":     "3",
-					"chain-valid": "true",
-				},
-				Body: "v1: 2026-05-19T10:00:00Z\nv2: 2026-05-20T10:00:00Z\nv3: 2026-05-21T10:00:00Z\n",
-			}}, nil
+		VersionsFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetchtest.Golden(t, "versions"), nil
 		},
 	}
 	g := newGatewayWithDispatcher(t, cfg, d)
@@ -794,7 +493,7 @@ func toolResultText(t testing.TB, res *mcp.CallToolResult) string {
 func TestMCPGatewayMarkFetchEndToEnd(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Metadata: map[string]string{
@@ -861,13 +560,9 @@ func TestHandleMarkLookupBodyMatchFallbackNote(t *testing.T) {
 	cfg := mcpTestConfig()
 	var seen fetch.LookupOptions
 	d := &fakeDispatcher{
-		lookupFn: func(_, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(_, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
 			seen = opts
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"matches": "0"},
-				Body:     "| Path | Importance | Title | Tags |\n",
-			}}, nil
+			return fetchtest.Lookup("hairpin", "/", ""), nil
 		},
 	}
 	g := newGatewayWithDispatcher(t, cfg, d)

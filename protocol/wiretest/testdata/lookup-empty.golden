@@ -1,0 +1,9 @@
+---
+matches: "0"
+status: ok
+---
+
+# Lookup matches for "zzznothing" in /
+
+| Path | Importance | Title | Tags |
+|------|------------|-------|------|

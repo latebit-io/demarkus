@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 func TestEscapeRoundTrip(t *testing.T) {
@@ -68,5 +70,63 @@ func TestVersionsShapes(t *testing.T) {
 	}
 	if got, want := VersionsHeading("/a_b.md"), "\n# Version History: /a\\_b.md\n\n"; got != want {
 		t.Errorf("VersionsHeading = %q, want %q", got, want)
+	}
+}
+
+func TestLookupResponse(t *testing.T) {
+	row := LookupRow{Path: "/a.md", Importance: 0.5, Title: "A | b", Tags: []string{"x", "y"}, Snippet: "line\nbreak"}
+	tests := []struct {
+		name      string
+		match     string
+		anchor    string
+		wantMatch bool
+		wantLine  string
+	}{
+		{"match not carried", "", "", false, "| /a.md | 0.50 | A \\| b | x, y |\n"},
+		{"catalog echoed", protocol.MatchCatalog, "", true, "| /a.md | 0.50 | A \\| b | x, y |\n"},
+		{"body table", protocol.MatchBody, "sec", true, "| /a.md#sec | 0.50 | A \\| b | x, y | line break |\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			row.Anchor = tt.anchor
+			resp := LookupResponse("q", "/", []LookupRow{row}, tt.match)
+			if _, ok := resp.Metadata["match"]; ok != tt.wantMatch || resp.Metadata["matches"] != "1" {
+				t.Errorf("metadata = %v", resp.Metadata)
+			}
+			if !strings.HasSuffix(resp.Body, tt.wantLine) {
+				t.Errorf("body = %q, want suffix %q", resp.Body, tt.wantLine)
+			}
+		})
+	}
+}
+
+func TestVersionsResponse(t *testing.T) {
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	history := []VersionEntry{{Version: 2, Modified: when}, {Version: 1, Modified: when}}
+	tests := []struct {
+		name       string
+		versions   []VersionEntry
+		chainValid bool
+		want       map[string]string
+	}{
+		{"valid chain", history, true, map[string]string{"total": "2", "current": "2", "chain-valid": "true"}},
+		{"broken chain", history, false, map[string]string{"total": "2", "current": "2", "chain-valid": "false", "chain-error": ChainErrorMessage}},
+		{"no versions", nil, true, map[string]string{"total": "0", "current": "0", "chain-valid": "true"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := VersionsResponse("/doc.md", tt.versions, tt.chainValid)
+			if len(resp.Metadata) != len(tt.want) {
+				t.Errorf("metadata = %v, want %v", resp.Metadata, tt.want)
+			}
+			for k, v := range tt.want {
+				if resp.Metadata[k] != v {
+					t.Errorf("metadata[%q] = %q, want %q", k, resp.Metadata[k], v)
+				}
+			}
+			if got := strings.Count(resp.Body, "\n- [v"); got != len(tt.versions) {
+				t.Errorf("body lists %d versions, want %d:\n%s", got, len(tt.versions), resp.Body)
+			}
+		})
 	}
 }

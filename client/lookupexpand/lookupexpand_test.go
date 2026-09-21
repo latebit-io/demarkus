@@ -8,13 +8,16 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/mdoutline"
+	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/render"
 )
 
-const table = "| Path | Importance | Title | Tags | Snippet |\n|---|---|---|---|---|\n" +
-	"| /a.md#two | 0.9 | A › Two | a | snippet |\n" +
-	"| /b.md | 0.8 | B | b | |\n" +
-	"| /a.md#three | 0.7 | A › Three | a | snippet |\n" +
-	"| /missing.md#x | 0.5 | M | m | |\n"
+var table = render.LookupResponse("text", "/", []render.LookupRow{
+	{Path: "/a.md", Anchor: "two", Importance: 0.9, Title: "A › Two", Tags: []string{"a"}, Snippet: "snippet"},
+	{Path: "/b.md", Importance: 0.8, Title: "B", Tags: []string{"b"}},
+	{Path: "/a.md", Anchor: "three", Importance: 0.7, Title: "A › Three", Tags: []string{"a"}, Snippet: "snippet"},
+	{Path: "/missing.md", Anchor: "x", Importance: 0.5, Title: "M", Tags: []string{"m"}},
+}, protocol.MatchBody).Body
 
 var docs = map[string]string{
 	"/a.md": "# A\n\nIntro.\n\n## One\n\none text\n\n## Two\n\ntwo text\n\n## Three\n\n" + strings.Repeat("three text ", 30) + "\n",
@@ -33,14 +36,14 @@ func fakeFetch(calls *[]string) Fetch {
 	}
 }
 
-// rowTable renders a catalog-shaped table with the given locations.
-func rowTable(paths ...string) string {
-	var b strings.Builder
-	b.WriteString("| Path | Importance | Title | Tags |\n|---|---|---|---|\n")
-	for _, p := range paths {
-		fmt.Fprintf(&b, "| %s | 0.9 | T | t |\n", p)
+// rowTable is the server's catalog table for the given locations.
+func rowTable(locations ...string) string {
+	rows := make([]render.LookupRow, 0, len(locations))
+	for _, location := range locations {
+		docPath, anchor, _ := strings.Cut(location, "#")
+		rows = append(rows, render.LookupRow{Path: docPath, Anchor: anchor, Importance: 0.9, Title: "T", Tags: []string{"t"}})
 	}
-	return b.String()
+	return render.LookupResponse("q", "/", rows, "").Body
 }
 
 func TestExpandSectionsInOrderWithinBudget(t *testing.T) {

@@ -19,7 +19,7 @@ func TestMarkGraphPartialResults(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			started := make(chan struct{})
-			sc := &stubClient{fetchCtxFn: func(ctx context.Context, _, path, _ string) (fetch.Result, error) {
+			sc := &stubClient{FetchCtxFn: func(ctx context.Context, _, path, _ string) (fetch.Result, error) {
 				if mode == "pre-cancelled" {
 					t.Error("pre-cancelled crawl fetched a document")
 				}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -57,7 +58,7 @@ func TestReadResource_Section(t *testing.T) {
 }
 
 func TestReadResource_EscapedFilename(t *testing.T) {
-	client := &stubClient{fetchFn: func(_, path, _ string) (fetch.Result, error) {
+	client := &stubClient{FetchFn: func(_, path, _ string) (fetch.Result, error) {
 		if path != "/what?#%.md" {
 			t.Fatalf("path = %q", path)
 		}
@@ -95,7 +96,7 @@ func TestReadResource_Errors(t *testing.T) {
 		},
 		{
 			"non-ok status surfaces",
-			&stubClient{fetchFn: func(_, _, _ string) (fetch.Result, error) {
+			&stubClient{FetchFn: func(_, _, _ string) (fetch.Result, error) {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 			}},
 			"mark://example.com/missing.md",
@@ -103,7 +104,7 @@ func TestReadResource_Errors(t *testing.T) {
 		},
 		{
 			"transport error surfaces",
-			&stubClient{fetchFn: func(_, _, _ string) (fetch.Result, error) {
+			&stubClient{FetchFn: func(_, _, _ string) (fetch.Result, error) {
 				return fetch.Result{}, fmt.Errorf("boom")
 			}},
 			"mark://example.com/doc.md",
@@ -133,10 +134,9 @@ func TestReadResource_Errors(t *testing.T) {
 }
 
 func TestRegisterListedResources(t *testing.T) {
-	listing := "- [image.png](image.png)\n- [index.md](index.md)\n- [journal/](journal/)\n- [notes.md](notes.md)\n- [patterns.md](patterns.md)\n- [what?#%.md](what%3F%23%25.md)\n"
 	sc := &stubClient{
-		listFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: listing}}, nil
+		ListFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetchtest.ListPage("/", "", "image.png", "index.md", "journal/", "notes.md", "patterns.md", "what?#%.md"), nil
 		},
 	}
 	h := &handler{client: sc, defaultHost: "mark://example.com"}
@@ -161,7 +161,7 @@ func TestRegisterListedResources(t *testing.T) {
 
 func TestRegisterListedResources_HostDownIsQuiet(t *testing.T) {
 	sc := &stubClient{
-		listFn: func(_, _, _ string) (fetch.Result, error) {
+		ListFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{}, fmt.Errorf("dial: connection refused")
 		},
 	}
@@ -176,16 +176,10 @@ func TestRegisterListedResources_HostDownIsQuiet(t *testing.T) {
 
 func TestRegisterListedResourcesBoundsListCalls(t *testing.T) {
 	calls := 0
-	sc := &stubClient{listOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
+	sc := &stubClient{ListOptsFn: func(_, _, _ string, _ fetch.ListOptions) (fetch.Result, error) {
 		calls++
 		name := fmt.Sprintf("dir-%03d/", calls)
-		return fetch.Result{Response: protocol.Response{
-			Status: protocol.StatusOK,
-			Metadata: map[string]string{
-				"entries": "1", "complete": "false", "next-cursor": strconv.Itoa(calls),
-			},
-			Body: fmt.Sprintf("- [%s](%s)\n", name, name),
-		}}, nil
+		return fetchtest.ListPage("/", strconv.Itoa(calls), name), nil
 	}}
 	h := &handler{client: sc, defaultHost: "mark://example.com"}
 	s := mcpserver.NewMCPServer("test", "0", mcpserver.WithResourceCapabilities(false, true))

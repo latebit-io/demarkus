@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/render"
 )
 
 func TestPutAndGet(t *testing.T) {
@@ -65,11 +66,7 @@ func TestListAndFetchSeparate(t *testing.T) {
 		Metadata: map[string]string{"version": "1"},
 		Body:     "# Index\n",
 	}
-	listResp := protocol.Response{
-		Status:   protocol.StatusOK,
-		Metadata: map[string]string{"entries": "3"},
-		Body:     "# Index of /\n\n- [a.md](a.md)\n",
-	}
+	listResp := render.ListResponse("/", []render.ListEntry{{Name: "a.md"}}, "")
 
 	if err := c.Put("localhost:6309", "/", protocol.VerbFetch, fetchResp); err != nil {
 		t.Fatalf("put fetch: %v", err)
@@ -93,7 +90,7 @@ func TestListAndFetchSeparate(t *testing.T) {
 	if fetchEntry.Response.Body != "# Index\n" {
 		t.Errorf("fetch body: got %q", fetchEntry.Response.Body)
 	}
-	if listEntry.Response.Body != "# Index of /\n\n- [a.md](a.md)\n" {
+	if listEntry.Response.Body != listResp.Body {
 		t.Errorf("list body: got %q", listEntry.Response.Body)
 	}
 }

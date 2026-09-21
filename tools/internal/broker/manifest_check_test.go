@@ -23,7 +23,7 @@ func TestCheckIndexManifestsTransportFailure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := &fakeDispatcher{fetchFn: func(world, _, _ string) (fetch.Result, error) {
+			d := &fakeDispatcher{FetchFn: func(world, _, _ string) (fetch.Result, error) {
 				if world == tt.failWorld {
 					return fetch.Result{}, errors.New("dial timeout")
 				}
@@ -60,7 +60,7 @@ func TestCheckIndexManifestsForceOnlyOverridesNotFound(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.status, func(t *testing.T) {
-			d := &fakeDispatcher{fetchFn: func(world, _, _ string) (fetch.Result, error) {
+			d := &fakeDispatcher{FetchFn: func(world, _, _ string) (fetch.Result, error) {
 				if world == "hub" {
 					return fetch.Result{Response: protocol.Response{Status: tt.status}}, nil
 				}

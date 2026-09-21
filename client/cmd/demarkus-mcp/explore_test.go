@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
@@ -31,26 +32,19 @@ The hub links everything together.
 See [Alpha](/alpha.md) again (deduped).
 `
 
-const exploreListing = `- [alpha.md](alpha.md)
-- [docs/](docs/)
-- [hub.md](hub.md)
-- [notes.md](notes.md)
-`
+var exploreListing = []string{"alpha.md", "docs/", "hub.md", "notes.md"}
 
 func exploreStub() *stubClient {
 	return &stubClient{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "2", "modified": "2026-07-04T00:00:00Z", "etag": "xyz"},
 				Body:     exploreDoc,
 			}}, nil
 		},
-		listFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{
-				Status: protocol.StatusOK,
-				Body:   exploreListing,
-			}}, nil
+		ListFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetchtest.ListPage("/", "", exploreListing...), nil
 		},
 	}
 }
@@ -141,7 +135,7 @@ func TestHandlerMarkExplore_OrdinaryReadCachesTypedRelations(t *testing.T) {
 		t.Fatal(err)
 	}
 	sc := exploreStub()
-	sc.fetchFn = func(_, _, _ string) (fetch.Result, error) {
+	sc.FetchFn = func(_, _, _ string) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK,
 			Metadata: map[string]string{
@@ -184,7 +178,7 @@ func TestHandlerMarkExplore_RelationPagination(t *testing.T) {
 		fmt.Fprintf(&body, "[%02d](/%02d.md)\n", i, i)
 	}
 	sc := exploreStub()
-	sc.fetchFn = func(_, _, _ string) (fetch.Result, error) {
+	sc.FetchFn = func(_, _, _ string) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "1"}, Body: body.String()}}, nil
 	}
 	h := &handler{client: sc, graphStore: graphstore.New()}
@@ -228,15 +222,15 @@ func TestHandlerMarkExplore_SectionCaps(t *testing.T) {
 		fmt.Fprintf(&body, "- [Doc %d](/doc-%d.md)\n\n", i, i)
 	}
 	sc := &stubClient{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "1"},
 				Body:     body.String(),
 			}}, nil
 		},
-		listFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: ""}}, nil
+		ListFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetchtest.ListPage("/", ""), nil
 		},
 	}
 	h := &handler{client: sc}
@@ -255,7 +249,7 @@ func TestHandlerMarkExplore_SectionCaps(t *testing.T) {
 
 func TestHandlerMarkExplore_ListFailureDegrades(t *testing.T) {
 	sc := exploreStub()
-	sc.listFn = func(_, _, _ string) (fetch.Result, error) {
+	sc.ListFn = func(_, _, _ string) (fetch.Result, error) {
 		return fetch.Result{}, fmt.Errorf("boom")
 	}
 	h := &handler{client: sc}
@@ -274,7 +268,7 @@ func TestHandlerMarkExplore_NonOKPassthrough(t *testing.T) {
 		Status: "ok", Body: "# Old\n\n[target](/target.md)", Metadata: map[string]string{"version": "1"},
 	})
 	sc := &stubClient{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusNotFound,
 				Metadata: map[string]string{"version": "2"},
@@ -294,7 +288,7 @@ func TestHandlerMarkExplore_NonOKPassthrough(t *testing.T) {
 func TestHandlerMarkExplore_BinaryNotice(t *testing.T) {
 	gs := graphstore.New()
 	sc := &stubClient{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "1", "modified": "2026-07-04T00:00:00Z", "etag": "abc"},
@@ -332,7 +326,7 @@ func TestHandlerMarkExplore_BinarySurfacesGraphSaveFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	sc := &stubClient{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK, Metadata: map[string]string{"version": "1"}, Body: "\x89PNG\xff",
 			}}, nil
@@ -377,8 +371,8 @@ func staleBacklinkStore(t *testing.T) *graphstore.Store {
 func TestHandlerMarkExplore_DefaultSkipsRevalidation(t *testing.T) {
 	sc := exploreStub()
 	var fetched []string
-	base := sc.fetchFn
-	sc.fetchFn = func(host, path, token string) (fetch.Result, error) {
+	base := sc.FetchFn
+	sc.FetchFn = func(host, path, token string) (fetch.Result, error) {
 		fetched = append(fetched, path)
 		return base(host, path, token)
 	}

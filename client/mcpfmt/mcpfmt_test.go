@@ -6,6 +6,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
+	wire "github.com/latebit-io/demarkus/protocol/render"
 )
 
 func fullDoc() fetch.Result {
@@ -108,21 +109,18 @@ func TestCapTags(t *testing.T) {
 }
 
 func TestCapTableTags(t *testing.T) {
-	many := "t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12"
-	table := "# Lookup matches for \"x\" in /\n\n" +
-		"| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n" +
-		"| /a.md | 0.90 | A \\| B | " + many + " |\n" +
-		"| /b.md | 0.50 | B | one, two |\n"
-	got := CapTableTags(table)
-	want := "# Lookup matches for \"x\" in /\n\n" +
-		"| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n" +
-		"| /a.md | 0.90 | A \\| B | t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, +2 more |\n" +
-		"| /b.md | 0.50 | B | one, two |\n"
-	if got != want {
+	many := []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12"}
+	joined, capped := strings.Join(many, ", "), "t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, +2 more"
+	table := wire.LookupResponse("x", "/", []wire.LookupRow{
+		{Path: "/a.md", Importance: 0.9, Title: "A | B", Tags: many},
+		{Path: "/b.md", Importance: 0.5, Title: "B", Tags: []string{"one", "two"}},
+	}, "").Body
+	if got, want := CapTableTags(table), strings.Replace(table, joined, capped, 1); got != want || got == table {
 		t.Fatalf("capped table:\n%q\nwant\n%q", got, want)
 	}
-	body := "| Path | Importance | Title | Tags | Snippet |\n|------|------------|-------|------|---------|\n" +
-		"| /a.md#intro | 0.90 | A › Intro | " + many + " | snippet text |\n"
+	body := wire.LookupResponse("x", "/", []wire.LookupRow{
+		{Path: "/a.md", Anchor: "intro", Importance: 0.9, Title: "A › Intro", Tags: many, Snippet: "snippet text"},
+	}, protocol.MatchBody).Body
 	if got := CapTableTags(body); !strings.Contains(got, "t10, +2 more | snippet text |") {
 		t.Fatalf("body table not capped: %q", got)
 	}

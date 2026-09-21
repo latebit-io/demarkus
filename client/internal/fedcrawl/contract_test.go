@@ -26,8 +26,8 @@ func TestGraphExportContract(t *testing.T) {
 	const host = "team-a.team-a.svc.cluster.local:6309"
 
 	client := newMockClient()
-	client.addList(host, "/", "- [index.md](index.md)\n- [docs/](docs/)\n")
-	client.addList(host, "/docs/", "- [a.md](a.md)\n- [b.md](b.md)\n")
+	client.addList(host, "/", "index.md", "docs/")
+	client.addList(host, "/docs/", "a.md", "b.md")
 	client.addDocWithMeta(host, "/index.md",
 		"# Team A hub\n\n## Services\n\n- [Applications](/docs/a.md)\n",
 		"sha256-"+strings.Repeat("1", 64), map[string]string{"title": "Team A hub", "version": "4"})

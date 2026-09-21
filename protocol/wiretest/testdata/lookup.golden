@@ -1,0 +1,11 @@
+---
+matches: "2"
+status: ok
+---
+
+# Lookup matches for "alpha beta" in /
+
+| Path | Importance | Title | Tags |
+|------|------------|-------|------|
+| /docs/a.md | 0.70 | Alpha | alpha, wire |
+| /docs/b.md | 0.40 | Beta \| piped | beta |

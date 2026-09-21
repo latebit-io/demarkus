@@ -5,25 +5,17 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/render"
 )
 
 func TestParseListPageMetadata(t *testing.T) {
-	page, err := ParseListPageMetadata(protocol.Response{
-		Status: protocol.StatusOK,
-		Metadata: map[string]string{
-			"entries":     "2",
-			"complete":    "false",
-			"next-cursor": "next",
-		},
-	})
+	entries := []render.ListEntry{{Name: "a.md"}, {Name: "sub", IsDir: true}}
+	page, err := ParseListPageMetadata(render.ListResponse("/", entries, "next"))
 	if err != nil || page != (ListPageMetadata{Entries: 2, NextCursor: "next"}) {
 		t.Fatalf("page = (%+v, %v)", page, err)
 	}
 
-	page, err = ParseListPageMetadata(protocol.Response{
-		Status:   protocol.StatusOK,
-		Metadata: map[string]string{"entries": "0", "complete": "true"},
-	})
+	page, err = ParseListPageMetadata(render.ListResponse("/", nil, ""))
 	if err != nil || !page.Complete || page.Entries != 0 {
 		t.Fatalf("terminal page = (%+v, %v)", page, err)
 	}
@@ -61,10 +53,7 @@ func TestListWithOptionsWritesPaginationMetadata(t *testing.T) {
 	requests := make(chan protocol.Request, 1)
 	host := startTestServer(t, func(req protocol.Request) protocol.Response {
 		requests <- req
-		return protocol.Response{
-			Status:   protocol.StatusOK,
-			Metadata: map[string]string{"entries": "0", "complete": "true"},
-		}
+		return render.ListResponse("/docs", nil, "")
 	})
 	client := NewClient(Options{Insecure: true})
 	defer client.Close()

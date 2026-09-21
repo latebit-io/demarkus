@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
@@ -27,26 +28,19 @@ The hub links everything together.
 See [Alpha](/alpha.md) again (deduped).
 `
 
-const exploreTestListing = `- [alpha.md](alpha.md)
-- [docs/](docs/)
-- [hub.md](hub.md)
-- [notes.md](notes.md)
-`
+var exploreTestListing = []string{"alpha.md", "docs/", "hub.md", "notes.md"}
 
 func exploreDispatcher() *fakeDispatcher {
 	return &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "2", "modified": "2026-07-05T00:00:00Z", "etag": "xyz"},
 				Body:     exploreTestDoc,
 			}}, nil
 		},
-		listFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{
-				Status: protocol.StatusOK,
-				Body:   exploreTestListing,
-			}}, nil
+		ListFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetchtest.ListPage("/", "", exploreTestListing...), nil
 		},
 	}
 }
@@ -122,7 +116,7 @@ func TestHandleMarkExploreBacklinksFromGraphStore(t *testing.T) {
 
 func TestHandleMarkExploreOrdinaryReadCachesTypedRelations(t *testing.T) {
 	d := exploreDispatcher()
-	d.fetchFn = func(_, _, _ string) (fetch.Result, error) {
+	d.FetchFn = func(_, _, _ string) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status:   protocol.StatusOK,
 			Metadata: map[string]string{"version": "4", "rel-supersedes": "/old.md"},
@@ -152,15 +146,15 @@ func TestHandleMarkExploreSectionCaps(t *testing.T) {
 		fmt.Fprintf(&body, "- [Doc %d](/doc-%d.md)\n\n", i, i)
 	}
 	d := &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "1"},
 				Body:     body.String(),
 			}}, nil
 		},
-		listFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: ""}}, nil
+		ListFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetchtest.ListPage("/", ""), nil
 		},
 	}
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
@@ -176,7 +170,7 @@ func TestHandleMarkExploreSectionCaps(t *testing.T) {
 
 func TestHandleMarkExploreListFailureDegrades(t *testing.T) {
 	d := exploreDispatcher()
-	d.listFn = func(_, _, _ string) (fetch.Result, error) {
+	d.ListFn = func(_, _, _ string) (fetch.Result, error) {
 		return fetch.Result{}, fmt.Errorf("boom")
 	}
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
@@ -204,7 +198,7 @@ func TestHandleMarkExploreInvalidURL(t *testing.T) {
 
 func TestHandleMarkExploreConfirmedAbsenceClearsAdjacency(t *testing.T) {
 	d := exploreDispatcher()
-	d.fetchFn = func(_, _, _ string) (fetch.Result, error) {
+	d.FetchFn = func(_, _, _ string) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound, Metadata: map[string]string{"version": "2"}}}, nil
 	}
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
@@ -229,7 +223,7 @@ func TestHandleMarkExploreConfirmedAbsenceClearsAdjacency(t *testing.T) {
 
 func TestHandleMarkExploreBinaryNotice(t *testing.T) {
 	d := exploreDispatcher()
-	d.fetchFn = func(_, _, _ string) (fetch.Result, error) {
+	d.FetchFn = func(_, _, _ string) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK, Metadata: map[string]string{"version": "1", "etag": "abc"},
 			Body: "[false relation](/false.md)\xff",
@@ -268,11 +262,11 @@ func TestHandleMarkExploreDefaultSkipsRevalidation(t *testing.T) {
 	if strings.Contains(text, "revalidation:") {
 		t.Fatalf("default explore must not revalidate sources:\n%s", text)
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, call := range d.fetchCalls {
-		if call.path == "/a.md" {
-			t.Fatalf("default explore fetched a backlink source: %+v", d.fetchCalls)
+	d.Lock()
+	defer d.Unlock()
+	for _, call := range d.FetchCalls {
+		if call.Path == "/a.md" {
+			t.Fatalf("default explore fetched a backlink source: %+v", d.FetchCalls)
 		}
 	}
 }

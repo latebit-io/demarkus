@@ -1,0 +1,11 @@
+---
+complete: "true"
+entries: "3"
+status: ok
+---
+
+# Index of /docs/
+
+- [a.md](a.md)
+- [b.md](b.md)
+- [sub/](sub/)

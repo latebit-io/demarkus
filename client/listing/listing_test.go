@@ -8,15 +8,7 @@ import (
 )
 
 func TestParsePage(t *testing.T) {
-	page, err := ParsePage("/docs", protocol.Response{
-		Status: protocol.StatusOK,
-		Metadata: map[string]string{
-			"entries":     "2",
-			"complete":    "false",
-			"next-cursor": "next",
-		},
-		Body: "- [a.md](a.md)\n- [sub/](sub/)\n",
-	}, "")
+	page, err := ParsePage("/docs", RenderPage("/docs", []Entry{{Name: "a.md"}, {Name: "sub", IsDir: true}}, "next"), "")
 	if err != nil || len(page.Entries) != 2 || page.LastName != "sub" || page.Complete || page.NextCursor != "next" {
 		t.Fatalf("page = (%+v, %v)", page, err)
 	}

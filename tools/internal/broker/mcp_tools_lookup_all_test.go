@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/render"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -21,17 +23,17 @@ func TestHandleMarkLookupAllMergesReadableWorlds(t *testing.T) {
 		WorldConfig{Name: "offline", Namespace: "offline"},
 	)
 	d := &fakeDispatcher{
-		lookupFn: func(world, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(world, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
 			switch world {
 			case "team-a":
 				return lookupResult(
-					"| /auth\\|guide.md | 0.40 | Auth \\[Guide\\] | auth, guide |",
-					"| /architecture.md | 0.99 | Architecture | design |",
+					render.LookupRow{Path: "/auth|guide.md", Importance: 0.4, Title: "Auth [Guide]", Tags: []string{"auth", "guide"}},
+					render.LookupRow{Path: "/architecture.md", Importance: 0.99, Title: "Architecture", Tags: []string{"design"}},
 				), nil
 			case "team-b":
 				return lookupResult(
-					"| /identity.md | 0.90 | Identity | auth |",
-					"| /sessions.md | 0.20 | Sessions | auth |",
+					render.LookupRow{Path: "/identity.md", Importance: 0.9, Title: "Identity", Tags: []string{"auth"}},
+					render.LookupRow{Path: "/sessions.md", Importance: 0.2, Title: "Sessions", Tags: []string{"auth"}},
 				), nil
 			default:
 				return fetch.Result{}, errors.New("dial timeout")
@@ -82,15 +84,15 @@ func TestHandleMarkLookupAllMergesReadableWorlds(t *testing.T) {
 		t.Errorf("global limit did not truncate fourth result:\n%s", text)
 	}
 
-	if len(d.lookupCalls) != 3 {
-		t.Fatalf("lookup dispatch count = %d, want 3", len(d.lookupCalls))
+	if len(d.LookupCalls) != 3 {
+		t.Fatalf("lookup dispatch count = %d, want 3", len(d.LookupCalls))
 	}
-	for _, call := range d.lookupCalls {
-		if call.scope != "/docs/" || call.query != "auth" || call.token != "" {
+	for _, call := range d.LookupCalls {
+		if call.Scope != "/docs/" || call.Query != "auth" || call.Token != "" {
 			t.Errorf("dispatch = %+v", call)
 		}
-		if call.opts.Filter != "tag=auth" || call.opts.Limit != 3 {
-			t.Errorf("dispatch opts = %+v, want filter=tag=auth limit=3", call.opts)
+		if call.Opts.Filter != "tag=auth" || call.Opts.Limit != 3 {
+			t.Errorf("dispatch opts = %+v, want filter=tag=auth limit=3", call.Opts)
 		}
 	}
 }
@@ -99,7 +101,7 @@ func TestHandleMarkLookupAllReportsTotalFailure(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, WorldConfig{Name: "team-b", Namespace: "team-b"})
 	d := &fakeDispatcher{
-		lookupFn: func(world, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(world, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
 			return fetch.Result{}, errors.New("unreachable " + world)
 		},
 	}
@@ -150,7 +152,7 @@ func TestHandleMarkLookupAllReturnsOnCancellation(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	d := &fakeDispatcher{
-		lookupCtxFn: func(ctx context.Context, _, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		LookupCtxFn: func(ctx context.Context, _, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
 			close(started)
 			select {
 			case <-release:
@@ -195,7 +197,7 @@ func TestHandleMarkLookupAllBoundsFanout(t *testing.T) {
 	started := make(chan struct{}, len(cfg.Worlds))
 	release := make(chan struct{})
 	d := &fakeDispatcher{
-		lookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
 			started <- struct{}{}
 			<-release
 			return lookupResult(), nil
@@ -250,7 +252,7 @@ func TestHandleMarkLookupAllAppliesGlobalLimitBounds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var got int
 			d := &fakeDispatcher{
-				lookupFn: func(_, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+				LookupFn: func(_, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
 					got = opts.Limit
 					return lookupResult(), nil
 				},
@@ -268,7 +270,7 @@ func TestHandleMarkLookupAllAppliesGlobalLimitBounds(t *testing.T) {
 }
 
 func TestParseLookupAllMatchesRejectsMetadataDrift(t *testing.T) {
-	result := lookupResult("| /auth.md | 0.90 | Auth | auth |")
+	result := lookupResult(authRow)
 	result.Response.Metadata["matches"] = "2"
 	if _, err := parseLookupAllMatches("team-a", result); err == nil {
 		t.Fatal("expected malformed response error")
@@ -276,7 +278,8 @@ func TestParseLookupAllMatchesRejectsMetadataDrift(t *testing.T) {
 }
 
 func TestParseLookupAllMatchesRejectsOutOfRangeImportance(t *testing.T) {
-	result := lookupResult("| /auth.md | 1.10 | Auth | auth |")
+	result := lookupResult(authRow)
+	result.Response.Body = strings.Replace(result.Response.Body, "| 0.90 |", "| 1.10 |", 1)
 	if _, err := parseLookupAllMatches("team-a", result); err == nil {
 		t.Fatal("expected malformed response error")
 	}
@@ -289,26 +292,16 @@ func TestQualifiedLookupURLEncodesReservedPathBytes(t *testing.T) {
 	}
 }
 
-func lookupResult(rows ...string) fetch.Result {
-	body := "\n# Lookup matches\n\n| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n"
-	if len(rows) > 0 {
-		body += strings.Join(rows, "\n") + "\n"
-	}
-	return fetch.Result{Response: protocol.Response{
-		Status:   protocol.StatusOK,
-		Metadata: map[string]string{"matches": strconv.Itoa(len(rows))},
-		Body:     body,
-	}}
+var authRow = render.LookupRow{Path: "/auth.md", Importance: 0.9, Title: "Auth", Tags: []string{"auth"}}
+
+// lookupResult is the server's catalog answer for rows, match not carried.
+func lookupResult(rows ...render.LookupRow) fetch.Result {
+	return fetchtest.Lookup("q", "/", "", rows...)
 }
 
-// bodyLookupResult is lookupResult with the Snippet column and the echo.
-func bodyLookupResult(rows ...string) fetch.Result {
-	r := lookupResult(rows...)
-	r.Response.Metadata["match"] = "body"
-	r.Response.Body = strings.Replace(r.Response.Body,
-		"| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n",
-		"| Path | Importance | Title | Tags | Snippet |\n|------|------------|-------|------|---------|\n", 1)
-	return r
+// bodyLookupResult is the server's body match answer, echo included.
+func bodyLookupResult(rows ...render.LookupRow) fetch.Result {
+	return fetchtest.Lookup("q", "/", protocol.MatchBody, rows...)
 }
 
 func TestHandleMarkLookupAllRejectsUnknownMatchBeforeFanOut(t *testing.T) {
@@ -320,8 +313,8 @@ func TestHandleMarkLookupAllRejectsUnknownMatchBeforeFanOut(t *testing.T) {
 	if err != nil || !res.IsError {
 		t.Fatalf("err %v res %+v, want tool error", err, res)
 	}
-	if len(d.lookupCalls) != 0 {
-		t.Errorf("dispatched %d lookups for an invalid match", len(d.lookupCalls))
+	if len(d.LookupCalls) != 0 {
+		t.Errorf("dispatched %d lookups for an invalid match", len(d.LookupCalls))
 	}
 }
 
@@ -331,17 +324,18 @@ func TestHandleMarkLookupAllBodyMatchMergesAndFlagsCatalogWorlds(t *testing.T) {
 	var mu sync.Mutex
 	var seen []fetch.LookupOptions
 	d := &fakeDispatcher{
-		lookupFn: func(world, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
+		LookupFn: func(world, _, _, _ string, opts fetch.LookupOptions) (fetch.Result, error) {
 			mu.Lock()
 			seen = append(seen, opts)
 			mu.Unlock()
 			if world == "team-a" {
-				return bodyLookupResult(
-					"| /debugging.md#hairpin-nat | 0.70 | Debugging › Hairpin NAT | net | same host \\| hairpin |",
-				), nil
+				return bodyLookupResult(render.LookupRow{
+					Path: "/debugging.md", Anchor: "hairpin-nat", Importance: 0.7,
+					Title: "Debugging › Hairpin NAT", Tags: []string{"net"}, Snippet: "same host | hairpin",
+				}), nil
 			}
 			// team-b predates body match: catalog answer, no echo.
-			return lookupResult("| /legacy.md | 0.90 | Legacy | net |"), nil
+			return lookupResult(render.LookupRow{Path: "/legacy.md", Importance: 0.9, Title: "Legacy", Tags: []string{"net"}}), nil
 		},
 	}
 	g := newGatewayWithDispatcher(t, cfg, d)
@@ -374,10 +368,10 @@ func TestHandleMarkLookupAllBodyMatchMergesAndFlagsCatalogWorlds(t *testing.T) {
 
 func TestHandleMarkLookupAllCapsTagsUnlessVerbose(t *testing.T) {
 	cfg := mcpTestConfig()
-	many := "t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12"
+	many := []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12"}
 	d := &fakeDispatcher{
-		lookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
-			return lookupResult("| /a.md | 0.90 | A | " + many + " |"), nil
+		LookupFn: func(_, _, _, _ string, _ fetch.LookupOptions) (fetch.Result, error) {
+			return lookupResult(render.LookupRow{Path: "/a.md", Importance: 0.9, Title: "A", Tags: many}), nil
 		},
 	}
 	g := newGatewayWithDispatcher(t, cfg, d)
@@ -394,7 +388,7 @@ func TestHandleMarkLookupAllCapsTagsUnlessVerbose(t *testing.T) {
 		t.Errorf("lean rows not capped:\n%s", lean)
 	}
 	verbose := call(map[string]any{"query": "a", "verbose": true})
-	if !strings.Contains(verbose, "| "+many+" |") {
+	if !strings.Contains(verbose, "| "+strings.Join(many, ", ")+" |") {
 		t.Errorf("verbose rows capped:\n%s", verbose)
 	}
 }

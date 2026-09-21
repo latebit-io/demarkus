@@ -5,12 +5,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/protocol"
@@ -52,7 +54,7 @@ func TestHandleMarkBacklinksEmptyStoreHintsAtMarkGraph(t *testing.T) {
 
 func TestKnowledgeGraphPreservesCrossWorldSources(t *testing.T) {
 	d := seededDispatcher()
-	d.published["bob-w/source.md"] = fetch.Result{Response: protocol.Response{
+	d.Published["bob-w/source.md"] = fetch.Result{Response: protocol.Response{
 		Status: protocol.StatusOK, Body: "# Shared source\n[reference](mark://alice-w/index.md)",
 	}}
 	g := newGatewayWithDispatcher(t, memoryTestConfig(), d)
@@ -104,7 +106,7 @@ func TestHandleMarkBacklinksInvalidURL(t *testing.T) {
 func TestHandleMarkBacklinksAfterCrawlReturnsLinkedDocs(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			switch path {
 			case "/index.md":
 				return fetch.Result{Response: protocol.Response{
@@ -159,7 +161,7 @@ func TestHandleMarkBacklinksAfterCrawlReturnsLinkedDocs(t *testing.T) {
 func TestEphemeralGraphStoreResetsAcrossGatewayInstances(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Body:   crawlBody("only", "/other.md"),
@@ -222,7 +224,7 @@ func TestHandleMarkGraphDepthClamping(t *testing.T) {
 	// depth=5 reaches everything (4 crawled nodes, 3 edges).
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			switch path {
 			case "/seed.md":
 				return fetch.Result{Response: protocol.Response{
@@ -316,7 +318,7 @@ func TestHandleMarkIndexBoundsOnDirectoryCycle(t *testing.T) {
 	})
 	var listCalls atomic.Int32
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
 				return fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
@@ -325,7 +327,7 @@ func TestHandleMarkIndexBoundsOnDirectoryCycle(t *testing.T) {
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
-		listFn: func(_, _, _ string) (fetch.Result, error) {
+		ListFn: func(_, _, _ string) (fetch.Result, error) {
 			n := listCalls.Add(1)
 			// Sanity cap: if the fix is broken, this will fire
 			// thousands of times before any test timeout. Fail
@@ -339,11 +341,12 @@ func TestHandleMarkIndexBoundsOnDirectoryCycle(t *testing.T) {
 			// points back to the parent. Without cycle
 			// detection this would recurse indefinitely.
 			return fetch.Result{Response: protocol.Response{
-				Status: protocol.StatusOK,
-				Body:   "- [self](./)\n- [parent](../)\n",
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"entries": "2", "complete": "true"},
+				Body:     "- [self](./)\n- [parent](../)\n",
 			}}, nil
 		},
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
 				Metadata: map[string]string{"version": "1"},
@@ -395,7 +398,7 @@ func TestHandleMarkGraphExportEmptyStore(t *testing.T) {
 func TestHandleMarkGraphExportAfterCrawlIncludesCrawledNodes(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			switch path {
 			case "/a.md":
 				return fetch.Result{Response: protocol.Response{
@@ -447,7 +450,7 @@ func TestHandleMarkGraphPublishForwardsThroughWriteAuth(t *testing.T) {
 	cfg := mcpTestConfig()
 	var publishedBody string
 	d := &fakeDispatcher{
-		publishFn: func(_, _, body, token string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, body, token string, _ int, _ map[string]string) (fetch.Result, error) {
 			publishedBody = body
 			if token == "" {
 				t.Error("graph publish dispatched without a publish token")
@@ -524,7 +527,7 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 	var publishCalled atomic.Bool
 	var publishAttempts atomic.Int32
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, token string) (fetch.Result, error) {
+		FetchFn: func(_, path, token string) (fetch.Result, error) {
 			if token != "" {
 				t.Errorf("index helper fetch %q used token %q, want public read", path, token)
 			}
@@ -549,28 +552,22 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
-		listOptsFn: func(_, path, token string, opts fetch.ListOptions) (fetch.Result, error) {
+		ListOptsFn: func(_, path, token string, opts fetch.ListOptions) (fetch.Result, error) {
 			if token != "" {
 				t.Errorf("index helper list %q used token %q, want public read", path, token)
 			}
 			if path == "/" {
-				body := "- [bar](bar.md)\n"
-				metadata := map[string]string{"entries": "1", "complete": "false", "next-cursor": "next"}
-				if opts.Cursor == "next" {
-					body = "- [foo](foo.md)\n"
-					metadata = map[string]string{"entries": "1", "complete": "true"}
-				} else if opts.Cursor != "" {
-					t.Fatalf("unexpected LIST cursor %q", opts.Cursor)
+				switch opts.Cursor {
+				case "":
+					return fetchtest.ListPage("/", "next", "bar.md"), nil
+				case "next":
+					return fetchtest.ListPage("/", "", "foo.md"), nil
 				}
-				return fetch.Result{Response: protocol.Response{
-					Status:   protocol.StatusOK,
-					Metadata: metadata,
-					Body:     body,
-				}}, nil
+				t.Fatalf("unexpected LIST cursor %q", opts.Cursor)
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
-		publishFn: func(_, _, _, token string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, token string, _ int, _ map[string]string) (fetch.Result, error) {
 			publishCalled.Store(true)
 			if token == "" {
 				t.Error("index publish dispatched without a publish token")
@@ -598,18 +595,18 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 	if !publishCalled.Load() {
 		t.Error("publish was not called; expected the index doc to be written to target")
 	}
-	d.mu.Lock()
-	publishCalls := append([]writeCall(nil), d.publishCalls...)
-	d.mu.Unlock()
+	d.Lock()
+	publishCalls := slices.Clone(d.PublishCalls)
+	d.Unlock()
 	if len(publishCalls) != 4 {
 		t.Fatalf("publish calls = %d, want rejected shard + two shards + manifest", len(publishCalls))
 	}
-	if publishCalls[3].path != "/index.md" {
-		t.Fatalf("last publish path = %q, want manifest /index.md", publishCalls[3].path)
+	if publishCalls[3].Path != "/index.md" {
+		t.Fatalf("last publish path = %q, want manifest /index.md", publishCalls[3].Path)
 	}
 	for i, call := range publishCalls {
-		if call.expectedVersion != 0 {
-			t.Errorf("publish call %d expected_version = %d, want 0", i, call.expectedVersion)
+		if call.ExpectedVersion != 0 {
+			t.Errorf("publish call %d expected_version = %d, want 0", i, call.ExpectedVersion)
 		}
 	}
 	text := toolResultText(t, res)
@@ -630,7 +627,7 @@ func TestHandleMarkIndexBlocksWhenTargetHasNoManifest(t *testing.T) {
 		},
 	})
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			// All manifest fetches return not-found.
 			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
@@ -668,16 +665,16 @@ func TestHandleMarkIndexForceOverridesManifestBlock(t *testing.T) {
 	})
 	var publishCalled atomic.Bool
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
-		listFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: ""}}, nil
+		ListFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetchtest.ListPage("/", ""), nil
 		},
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			publishCalled.Store(true)
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
@@ -719,7 +716,7 @@ func TestHandleMarkIndexDryRunReturnsBodyWithoutPublishing(t *testing.T) {
 	})
 	var publishCalled atomic.Bool
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
 				return fetch.Result{Response: protocol.Response{
 					Status: protocol.StatusOK,
@@ -728,10 +725,10 @@ func TestHandleMarkIndexDryRunReturnsBodyWithoutPublishing(t *testing.T) {
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
-		listFn: func(_, _, _ string) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: ""}}, nil
+		ListFn: func(_, _, _ string) (fetch.Result, error) {
+			return fetchtest.ListPage("/", ""), nil
 		},
-		publishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
+		PublishFn: func(_, _, _, _ string, _ int, _ map[string]string) (fetch.Result, error) {
 			publishCalled.Store(true)
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
 		},
@@ -779,7 +776,7 @@ func TestHandleMarkIndexNegativeExpectedVersion(t *testing.T) {
 func TestMCPGatewayMarkGraphEndToEnd(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Body:   crawlBody("seed", "/other.md"),
@@ -882,7 +879,7 @@ func TestHandleMarkGraphPublishRetention(t *testing.T) {
 	newGateway := func(t *testing.T, capture *map[string]string) *mcpGateway {
 		t.Helper()
 		return newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{
-			publishFn: func(_, _, _, _ string, _ int, meta map[string]string) (fetch.Result, error) {
+			PublishFn: func(_, _, _, _ string, _ int, meta map[string]string) (fetch.Result, error) {
 				*capture = meta
 				return fetch.Result{Response: protocol.Response{
 					Status:   protocol.StatusOK,
@@ -1016,8 +1013,8 @@ func TestGraphWriteHandlersDenyNonWriter(t *testing.T) {
 
 	// Denied writes must produce no dispatcher activity at all: no
 	// publishes, and no pre-gate reads (manifest checks, crawl).
-	if n := len(d.publishCalls) + len(d.fetchCalls) + len(d.fetchCondCalls) + len(d.listCalls); n != 0 {
+	if n := len(d.PublishCalls) + len(d.FetchCalls) + len(d.FetchCondCalls) + len(d.ListCalls); n != 0 {
 		t.Errorf("dispatcher saw %d calls for denied writes, want 0 (publish=%d fetch=%d fetchCond=%d list=%d)",
-			n, len(d.publishCalls), len(d.fetchCalls), len(d.fetchCondCalls), len(d.listCalls))
+			n, len(d.PublishCalls), len(d.FetchCalls), len(d.FetchCondCalls), len(d.ListCalls))
 	}
 }

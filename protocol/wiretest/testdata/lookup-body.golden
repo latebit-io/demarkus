@@ -1,0 +1,11 @@
+---
+match: body
+matches: "1"
+status: ok
+---
+
+# Lookup matches for "appended" in /
+
+| Path | Importance | Title | Tags | Snippet |
+|------|------------|-------|------|---------|
+| /docs/a.md#appended | 0.70 | Alpha › Appended | alpha, wire | More. |

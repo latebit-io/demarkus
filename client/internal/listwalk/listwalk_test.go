@@ -3,19 +3,16 @@ package listwalk
 import (
 	"errors"
 	"fmt"
-	"net/url"
-	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/listing"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
 type stubLister struct {
-	listings map[string]string // dir -> body
-	statuses map[string]string // dir -> non-OK status
+	listings map[string][]string // dir -> entry names, trailing slash for a directory
+	statuses map[string]string   // dir -> non-OK status
 	pages    map[string]fetch.Result
 }
 
@@ -26,33 +23,18 @@ func (s *stubLister) ListWithOptions(_, dir, _ string, opts fetch.ListOptions) (
 	if status, ok := s.statuses[dir]; ok {
 		return fetch.Result{Response: protocol.Response{Status: status}}, nil
 	}
-	body, ok := s.listings[dir]
+	names, ok := s.listings[dir]
 	if !ok {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 	}
-	return listPage(dir, body, ""), nil
-}
-
-// listPage serves the server's own rendering of the named entries; body is
-// only a terse way to name them ("- [a.md](a.md)", a trailing slash for a directory).
-func listPage(dir, body, next string) fetch.Result {
-	dests := links.Extract(body)
-	entries := make([]listing.Entry, 0, len(dests))
-	for _, dest := range dests {
-		name, err := url.PathUnescape(dest)
-		if err != nil {
-			name = dest
-		}
-		entries = append(entries, listing.Entry{Name: strings.TrimSuffix(name, "/"), IsDir: strings.HasSuffix(name, "/")})
-	}
-	return fetch.Result{Response: listing.RenderPage(dir, entries, next)}
+	return fetchtest.ListPage(dir, "", names...), nil
 }
 
 func TestWalk(t *testing.T) {
 	t.Run("collects files across subdirectories", func(t *testing.T) {
-		l := &stubLister{listings: map[string]string{
-			"/":    "- [a.md](a.md)\n- [sub/](sub/)\n",
-			"/sub": "- [b.md](b.md)\n",
+		l := &stubLister{listings: map[string][]string{
+			"/":    {"a.md", "sub/"},
+			"/sub": {"b.md"},
 		}}
 		var got []string
 		w := Walker{Client: l, Host: "h", Strict: true}
@@ -67,8 +49,8 @@ func TestWalk(t *testing.T) {
 
 	t.Run("collects every page before completing directory", func(t *testing.T) {
 		l := &stubLister{pages: map[string]fetch.Result{
-			"/\x00":     listPage("/", "- [a.md](a.md)\n- [b.md](b.md)\n", "next"),
-			"/\x00next": listPage("/", "- [c.md](c.md)\n", ""),
+			"/\x00":     fetchtest.ListPage("/", "next", "a.md", "b.md"),
+			"/\x00next": fetchtest.ListPage("/", "", "c.md"),
 		}}
 		var got []string
 		w := Walker{Client: l, Host: "h", Strict: true}
@@ -97,7 +79,7 @@ func TestWalk(t *testing.T) {
 
 	t.Run("page budget counts continuations", func(t *testing.T) {
 		l := &stubLister{pages: map[string]fetch.Result{
-			"/\x00": listPage("/", "- [a.md](a.md)\n", "next"),
+			"/\x00": fetchtest.ListPage("/", "next", "a.md"),
 		}}
 		err := (&Walker{Client: l, Host: "h", MaxLists: 1}).Walk("/", func(string) error { return nil })
 		if !errors.Is(err, ErrListBudget) {
@@ -107,8 +89,8 @@ func TestWalk(t *testing.T) {
 
 	t.Run("rejects cross-page ordering drift", func(t *testing.T) {
 		l := &stubLister{pages: map[string]fetch.Result{
-			"/\x00":     listPage("/", "- [b.md](b.md)\n", "next"),
-			"/\x00next": listPage("/", "- [a.md](a.md)\n", ""),
+			"/\x00":     fetchtest.ListPage("/", "next", "b.md"),
+			"/\x00next": fetchtest.ListPage("/", "", "a.md"),
 		}}
 		if err := (&Walker{Client: l, Host: "h"}).Walk("/", func(string) error { return nil }); err == nil {
 			t.Fatal("ordering drift accepted")
@@ -118,10 +100,10 @@ func TestWalk(t *testing.T) {
 	t.Run("self-referencing listing terminates at MaxDepth", func(t *testing.T) {
 		// A hostile server serving a self-listing at every depth mints
 		// ever-deeper distinct paths; only MaxDepth stops it.
-		listings := map[string]string{"/": "- [a.md](a.md)\n- [loop/](loop/)\n"}
+		listings := map[string][]string{"/": {"a.md", "loop/"}}
 		dir := "/loop"
 		for range 6 {
-			listings[dir] = "- [b.md](b.md)\n- [loop/](loop/)\n"
+			listings[dir] = []string{"b.md", "loop/"}
 			dir += "/loop"
 		}
 		l := &stubLister{listings: listings}
@@ -137,10 +119,10 @@ func TestWalk(t *testing.T) {
 	})
 
 	t.Run("strict walk reports depth truncation", func(t *testing.T) {
-		l := &stubLister{listings: map[string]string{
-			"/":         "- [sub/](sub/)\n",
-			"/sub":      "- [deep/](deep/)\n",
-			"/sub/deep": "- [x.md](x.md)\n",
+		l := &stubLister{listings: map[string][]string{
+			"/":         {"sub/"},
+			"/sub":      {"deep/"},
+			"/sub/deep": {"x.md"},
 		}}
 		err := (&Walker{Client: l, Host: "h", Strict: true, MaxDepth: 1}).Walk("/", func(string) error { return nil })
 		if !errors.Is(err, ErrDepthBudget) {
@@ -149,10 +131,10 @@ func TestWalk(t *testing.T) {
 	})
 
 	t.Run("list budget returns ErrListBudget", func(t *testing.T) {
-		listings := map[string]string{"/": "- [d0/](d0/)\n"}
+		listings := map[string][]string{"/": {"d0/"}}
 		dir := "/d0"
 		for i := range 6 {
-			listings[dir] = fmt.Sprintf("- [d%d/](d%d/)\n", i+1, i+1)
+			listings[dir] = []string{fmt.Sprintf("d%d/", i+1)}
 			dir += fmt.Sprintf("/d%d", i+1)
 		}
 		l := &stubLister{listings: listings}
@@ -164,7 +146,7 @@ func TestWalk(t *testing.T) {
 
 	t.Run("OnSkip observes lenient skips", func(t *testing.T) {
 		l := &stubLister{
-			listings: map[string]string{"/": "- [a.md](a.md)\n- [bad](/etc/passwd)\n- [sub/](sub/)\n"},
+			listings: map[string][]string{"/": {"a.md", "/etc/passwd", "sub/"}},
 			statuses: map[string]string{"/sub": protocol.StatusUnauthorized},
 		}
 		var skips []string
@@ -178,8 +160,8 @@ func TestWalk(t *testing.T) {
 	})
 
 	t.Run("escaped entry names are decoded", func(t *testing.T) {
-		l := &stubLister{listings: map[string]string{
-			"/": "- [my doc.md](my%20doc.md)\n",
+		l := &stubLister{listings: map[string][]string{
+			"/": {"my doc.md"},
 		}}
 		var got []string
 		w := Walker{Client: l, Host: "h"}
@@ -193,7 +175,7 @@ func TestWalk(t *testing.T) {
 
 	t.Run("strict errors on non-OK listing", func(t *testing.T) {
 		l := &stubLister{
-			listings: map[string]string{"/": "- [sub/](sub/)\n"},
+			listings: map[string][]string{"/": {"sub/"}},
 			statuses: map[string]string{"/sub": protocol.StatusUnauthorized},
 		}
 		w := Walker{Client: l, Host: "h", Strict: true}
@@ -204,7 +186,7 @@ func TestWalk(t *testing.T) {
 
 	t.Run("lenient skips non-OK listing", func(t *testing.T) {
 		l := &stubLister{
-			listings: map[string]string{"/": "- [a.md](a.md)\n- [sub/](sub/)\n"},
+			listings: map[string][]string{"/": {"a.md", "sub/"}},
 			statuses: map[string]string{"/sub": protocol.StatusUnauthorized},
 		}
 		var got []string
@@ -218,8 +200,8 @@ func TestWalk(t *testing.T) {
 	})
 
 	t.Run("escaping entries are skipped", func(t *testing.T) {
-		l := &stubLister{listings: map[string]string{
-			"/docs": "- [ok.md](ok.md)\n- [esc](../secret.md)\n- [abs](/etc/passwd)\n- [url](mark://evil.com/x.md)\n",
+		l := &stubLister{listings: map[string][]string{
+			"/docs": {"ok.md", "../secret.md", "/etc/passwd", "mark://evil.com/x.md"},
 		}}
 		var got []string
 		w := Walker{Client: l, Host: "h"}
@@ -232,8 +214,8 @@ func TestWalk(t *testing.T) {
 	})
 
 	t.Run("strict errors on escaping entry", func(t *testing.T) {
-		l := &stubLister{listings: map[string]string{
-			"/docs": "- [esc](../secret.md)\n",
+		l := &stubLister{listings: map[string][]string{
+			"/docs": {"../secret.md"},
 		}}
 		w := Walker{Client: l, Host: "h", Strict: true}
 		err := w.Walk("/docs", func(string) error {
@@ -246,8 +228,8 @@ func TestWalk(t *testing.T) {
 	})
 
 	t.Run("visit error aborts", func(t *testing.T) {
-		l := &stubLister{listings: map[string]string{
-			"/": "- [a.md](a.md)\n- [b.md](b.md)\n",
+		l := &stubLister{listings: map[string][]string{
+			"/": {"a.md", "b.md"},
 		}}
 		sentinel := errors.New("stop")
 		w := Walker{Client: l, Host: "h"}

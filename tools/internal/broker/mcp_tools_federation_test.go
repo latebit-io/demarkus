@@ -24,7 +24,7 @@ import (
 func TestHandleMarkDiscoverHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			if path != protocol.WellKnownManifestPath {
 				t.Errorf("dispatcher saw path=%q, want %q (broker must rewrite to well-known)", path, protocol.WellKnownManifestPath)
 			}
@@ -74,7 +74,7 @@ func TestHandleMarkDiscoverNotFoundForwardsVerbatim(t *testing.T) {
 	// proxy contract.
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
 	}
@@ -124,7 +124,7 @@ const (
 func TestHandleMarkResolveHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			switch path {
 			case "/hub/index.md":
 				return fetch.Result{Response: protocol.Response{
@@ -192,7 +192,7 @@ func TestHandleMarkResolveShardedManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	var shardFetches atomic.Int32
-	d := &fakeDispatcher{fetchFn: func(_, path, _ string) (fetch.Result, error) {
+	d := &fakeDispatcher{FetchFn: func(_, path, _ string) (fetch.Result, error) {
 		if path == "/hub/index.md" {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: manifest}}, nil
 		}
@@ -254,7 +254,7 @@ func TestHandleMarkResolveMissingArgs(t *testing.T) {
 func TestHandleMarkResolveIndexFetchFailureBubbles(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{}, errors.New("dial team-a.team-a.svc.cluster.local:6309: connection refused")
 		},
 	}
@@ -274,7 +274,7 @@ func TestHandleMarkResolveIndexFetchFailureBubbles(t *testing.T) {
 func TestHandleMarkResolveIndexNonOKStatus(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
 	}
@@ -298,7 +298,7 @@ func TestHandleMarkResolveHashNotInIndex(t *testing.T) {
 	// Index has entries, none match the requested hash.
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, _, _ string) (fetch.Result, error) {
+		FetchFn: func(_, _, _ string) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
 				Body: indexBody(
@@ -338,7 +338,7 @@ func TestHandleMarkResolveContentHashMismatchSkipsCandidate(t *testing.T) {
 		},
 	})
 	d := &fakeDispatcher{
-		fetchFn: func(worldName, path, _ string) (fetch.Result, error) {
+		FetchFn: func(worldName, path, _ string) (fetch.Result, error) {
 			switch {
 			case path == "/hub/index.md":
 				return fetch.Result{Response: protocol.Response{
@@ -399,7 +399,7 @@ func TestHandleMarkResolveCrossOrgCandidateSurfacesAsSkippedReason(t *testing.T)
 	// errWorldNotFound surface for the cross-org server. The
 	// fake records every dispatch in fetchCalls; we keep it
 	// simple by handling only the index path.
-	d.fetchFn = func(worldName, path, _ string) (fetch.Result, error) {
+	d.FetchFn = func(worldName, path, _ string) (fetch.Result, error) {
 		if worldName == "team-a" && path == "/hub/index.md" {
 			return fetch.Result{Response: protocol.Response{
 				Status: protocol.StatusOK,
@@ -446,7 +446,7 @@ func TestHandleMarkResolveAllCandidatesFailReportsLast(t *testing.T) {
 		},
 	})
 	d := &fakeDispatcher{
-		fetchFn: func(worldName, path, _ string) (fetch.Result, error) {
+		FetchFn: func(worldName, path, _ string) (fetch.Result, error) {
 			switch {
 			case path == "/hub/index.md":
 				return fetch.Result{Response: protocol.Response{
@@ -492,7 +492,7 @@ func TestHandleMarkResolveReadsDispatchUnauthenticated(t *testing.T) {
 
 	var calls int32
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, token string) (fetch.Result, error) {
+		FetchFn: func(_, path, token string) (fetch.Result, error) {
 			if token != "" {
 				t.Errorf("read dispatched with token %q, want empty bearer", token)
 			}
@@ -542,7 +542,7 @@ func TestHandleMarkResolveReadsDispatchUnauthenticated(t *testing.T) {
 func TestMCPGatewayMarkDiscoverEndToEnd(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
-		fetchFn: func(_, path, _ string) (fetch.Result, error) {
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
 			if path != protocol.WellKnownManifestPath {
 				t.Errorf("dispatcher saw path=%q, want well-known manifest", path)
 			}
