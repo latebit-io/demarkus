@@ -4,7 +4,6 @@ package filestore
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -44,7 +43,7 @@ func (s *Store) writeSpec(ctx context.Context, req *backend.WriteRequest) *store
 	spec := &storefmt.WriteSpec{Path: req.Path, ExpectedVersion: req.ExpectedVersion, Content: req.Content, Metadata: req.Metadata}
 	if req.Precondition != nil {
 		spec.Check = func(write storefmt.PreparedWrite) error {
-			return req.Precondition(ctx, &readView{store: s}, write)
+			return req.Precondition(ctx, reader{store: s}, write)
 		}
 	}
 	return spec
@@ -85,7 +84,7 @@ func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (ba
 		if req.Precondition != nil {
 			// Under the write lock, reading the state the change commits against.
 			spec.Check = func(change storefmt.ArchiveChange) error {
-				return req.Precondition(ctx, &readView{store: s}, change)
+				return req.Precondition(ctx, reader{store: s}, change)
 			}
 		}
 		document, changed, err := s.documents.ArchiveChecked(spec)
@@ -106,57 +105,97 @@ func (s *Store) OpenReadView(ctx context.Context) (backend.ReadView, error) {
 		return nil, err
 	}
 	s.mu.RLock()
-	return &readView{store: s}, nil
+	return &readView{reader: reader{store: s}}, nil
 }
 
+// reader reads the store under a lock its caller holds. It has no Close, so a
+// precondition lent one under the write lock cannot release anything.
+type reader struct{ store *Store }
+
+func (r reader) Get(ctx context.Context, path string, version int) (*storefmt.Document, error) {
+	return call(ctx, func() (*storefmt.Document, error) { return r.store.documents.Get(path, version) })
+}
+
+func (r reader) ListEntries(ctx context.Context, path string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {
+	return call(ctx, func() ([]storefmt.DirEntry, error) { return r.store.documents.ListEntries(path, opts) })
+}
+
+func (r reader) IsDir(ctx context.Context, path string) (bool, error) {
+	return call(ctx, func() (bool, error) { return r.store.documents.IsDir(path) })
+}
+
+func (r reader) Versions(ctx context.Context, path string) ([]storefmt.VersionInfo, error) {
+	return call(ctx, func() ([]storefmt.VersionInfo, error) { return r.store.documents.Versions(path) })
+}
+
+func (r reader) LookupHash(ctx context.Context, hash string) (string, error) {
+	return call(ctx, func() (string, error) { return r.store.documents.LookupHashResult(hash) })
+}
+
+func (r reader) VerifyChain(ctx context.Context, path string) error {
+	_, err := call(ctx, func() (struct{}, error) { return struct{}{}, r.store.documents.VerifyChain(path) })
+	return err
+}
+
+func (r reader) Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error) {
+	return call(ctx, func() ([]catalog.Result, error) { return r.store.catalog.Lookup(query, opts) })
+}
+
+// readView owns the store's read lock until Close. gate lets Close wait for
+// reads already admitted, so none runs after the lock is gone.
 type readView struct {
-	store  *Store
-	once   sync.Once
-	closed atomic.Bool
+	reader reader
+	gate   sync.RWMutex
+	closed bool
 }
 
-// read runs one view call; a closed view no longer holds the read lock.
-func read[T any](ctx context.Context, view *readView, fn func() (T, error)) (T, error) {
-	if view.closed.Load() {
+// admit runs one read while the view is open.
+func admit[T any](view *readView, fn func(reader) (T, error)) (T, error) {
+	view.gate.RLock()
+	defer view.gate.RUnlock()
+	if view.closed {
 		var zero T
 		return zero, backend.ErrViewClosed
 	}
-	return call(ctx, fn)
+	return fn(view.reader)
 }
 
 func (view *readView) Get(ctx context.Context, path string, version int) (*storefmt.Document, error) {
-	return read(ctx, view, func() (*storefmt.Document, error) { return view.store.documents.Get(path, version) })
+	return admit(view, func(r reader) (*storefmt.Document, error) { return r.Get(ctx, path, version) })
 }
 
 func (view *readView) ListEntries(ctx context.Context, path string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {
-	return read(ctx, view, func() ([]storefmt.DirEntry, error) { return view.store.documents.ListEntries(path, opts) })
+	return admit(view, func(r reader) ([]storefmt.DirEntry, error) { return r.ListEntries(ctx, path, opts) })
 }
 
 func (view *readView) IsDir(ctx context.Context, path string) (bool, error) {
-	return read(ctx, view, func() (bool, error) { return view.store.documents.IsDir(path) })
+	return admit(view, func(r reader) (bool, error) { return r.IsDir(ctx, path) })
 }
 
 func (view *readView) Versions(ctx context.Context, path string) ([]storefmt.VersionInfo, error) {
-	return read(ctx, view, func() ([]storefmt.VersionInfo, error) { return view.store.documents.Versions(path) })
+	return admit(view, func(r reader) ([]storefmt.VersionInfo, error) { return r.Versions(ctx, path) })
 }
 
 func (view *readView) LookupHash(ctx context.Context, hash string) (string, error) {
-	return read(ctx, view, func() (string, error) { return view.store.documents.LookupHashResult(hash) })
+	return admit(view, func(r reader) (string, error) { return r.LookupHash(ctx, hash) })
 }
 
 func (view *readView) VerifyChain(ctx context.Context, path string) error {
-	_, err := read(ctx, view, func() (struct{}, error) { return struct{}{}, view.store.documents.VerifyChain(path) })
+	_, err := admit(view, func(r reader) (struct{}, error) { return struct{}{}, r.VerifyChain(ctx, path) })
 	return err
 }
 
 func (view *readView) Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error) {
-	return read(ctx, view, func() ([]catalog.Result, error) { return view.store.catalog.Lookup(query, opts) })
+	return admit(view, func(r reader) ([]catalog.Result, error) { return r.Lookup(ctx, query, opts) })
 }
 
+// Close releases the read lock once, after the last admitted read returns.
 func (view *readView) Close() error {
-	view.once.Do(func() {
-		view.closed.Store(true)
-		view.store.mu.RUnlock()
-	})
+	view.gate.Lock()
+	defer view.gate.Unlock()
+	if !view.closed {
+		view.closed = true
+		view.reader.store.mu.RUnlock()
+	}
 	return nil
 }

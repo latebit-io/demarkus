@@ -14,6 +14,7 @@ HEALTH_PORT=${SMOKE_HEALTH_PORT:-18181}
 GCS_PORT=${SMOKE_GCS_PORT:-14443}
 GCS_IMAGE=${SMOKE_GCS_IMAGE:-fsouza/fake-gcs-server:latest}
 GCS_NAME="demarkus-smoke-gcs-$$"
+STEP_LIMIT=${SMOKE_STEP_LIMIT:-15}
 WORLD_ID=52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
 POLICY=/.well-known/demarkus/policy.md
 
@@ -37,18 +38,36 @@ C=(client/bin/demarkus -insecure -no-cache -v)
 pass=0
 fail=0
 
+# bounded command...: kill it after STEP_LIMIT seconds, so one stalled QUIC
+# request or curl call cannot hang the run. macOS ships no timeout(1).
+bounded() {
+  local pid dog status
+  "$@" &
+  pid=$!
+  # Detached from stdout, or a command substitution would wait out the sleep.
+  (sleep "$STEP_LIMIT" && kill "$pid" 2>/dev/null) >/dev/null 2>&1 &
+  dog=$!
+  wait "$pid"
+  status=$?
+  kill "$dog" 2>/dev/null
+  wait "$dog" 2>/dev/null
+  return $status
+}
+
 # check <want|avoid> <label> <pattern> -- command...
+# avoid also needs the command to succeed: a crash must not read as "absent".
 check() {
-  local mode=$1 label=$2 pattern=$3 out found=avoid
+  local mode=$1 label=$2 pattern=$3 out status found=avoid
   shift 4
-  out=$("$@" 2>&1 </dev/null)
+  out=$(bounded "$@" 2>&1 </dev/null)
+  status=$?
   if printf '%s' "$out" | grep -qE -- "$pattern"; then found=want; fi
-  if [ "$found" = "$mode" ]; then
+  if [ "$found" = "$mode" ] && { [ "$mode" = want ] || [ "$status" -eq 0 ]; }; then
     pass=$((pass + 1))
     echo "PASS  $label"
   else
     fail=$((fail + 1))
-    echo "FAIL  $label ($mode /$pattern/)"
+    echo "FAIL  $label ($mode /$pattern/, exit $status)"
     printf '%s\n' "$out" | head -8 | sed 's/^/      /'
   fi
 }
@@ -64,7 +83,7 @@ mint() {
 retry() {
   local what=$1 tries=0
   shift
-  until "$@" >/dev/null 2>&1 </dev/null; do
+  until bounded "$@" >/dev/null 2>&1 </dev/null; do
     tries=$((tries + 1))
     if [ "$tries" -ge 50 ]; then
       echo "FAIL  $what never came up"
@@ -73,6 +92,13 @@ retry() {
     fi
     sleep 0.2
   done
+}
+
+# setup_failed <step>: a setup step that fails must fail the run.
+setup_failed() {
+  fail=$((fail + 1))
+  echo "FAIL  setup: $1"
+  return 1
 }
 
 healthy() { "${C[@]}" "$1/health" 2>&1 | grep -q '^\[ok\]'; }
@@ -104,7 +130,7 @@ verbs() {
   expect "publish with a read-only token is not permitted" 'not-permitted' -- "${C[@]}" -X PUBLISH -auth "$R" -body "# A" "$U/docs/a.md"
   expect "publish creates v1" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=smoke,alpha -body $'# A\none' "$U/docs/a.md"
   for n in b c d e; do
-    "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=smoke -body "# $n" "$U/docs/$n.md" >/dev/null 2>&1 </dev/null
+    expect "publish creates $n.md" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=smoke -body "# $n" "$U/docs/$n.md"
   done
   expect "stale expected-version conflicts" 'conflict' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 7 -body "# A2" "$U/docs/a.md"
   expect "create-only on an existing doc conflicts" 'conflict' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -body "# A2" "$U/docs/a.md"
@@ -134,7 +160,7 @@ verbs() {
   expect "publish to an archived doc is refused" 'archived' -- "${C[@]}" -X PUBLISH -auth "$W" -body "# E2" "$U/docs/e.md"
   expect "unarchive with an empty body" '^\[ok\]' -- "${C[@]}" -X PUBLISH -auth "$W" -body "" "$U/docs/e.md"
   expect "unarchived doc is listed again" 'entries=5' -- "${C[@]}" -X LIST "$U/docs/"
-  "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -body "# Secret" "$U/private/s.md" >/dev/null 2>&1 </dev/null
+  expect "publish creates the private doc" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -body "# Secret" "$U/private/s.md"
   expect "private read without token is unauthorized" 'unauthorized' -- "${C[@]}" "$U/private/s.md"
   expect "private read with the reader token" '# Secret' -- "${C[@]}" -auth "$R" "$U/private/s.md"
   refute "private dir hidden from an anonymous root listing" 'private' -- "${C[@]}" -X LIST "$U/"
@@ -186,18 +212,14 @@ smoke_file() {
 smoke_knowledge() {
   local U="mark://localhost:$KNOWLEDGE_PORT" first_lines status
   echo "== knowledge server"
-  if ! docker info >/dev/null 2>&1; then
-    echo "FAIL  docker is not available"
-    fail=$((fail + 1))
-    return 1
-  fi
+  docker info >/dev/null 2>&1 || { setup_failed "docker is not available"; return 1; }
   docker run -d --rm --name "$GCS_NAME" -p "$GCS_PORT:4443" "$GCS_IMAGE" \
-    -scheme http -public-host "localhost:$GCS_PORT" >/dev/null || return 1
+    -scheme http -public-host "localhost:$GCS_PORT" >/dev/null || { setup_failed "start fake-gcs-server"; return 1; }
   retry "fake-gcs-server bucket" curl -fsS -X POST -H 'Content-Type: application/json' \
     -d '{"name":"smoke-world"}' "http://localhost:$GCS_PORT/storage/v1/b" || return 1
   openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
     -addext subjectAltName=DNS:localhost \
-    -keyout "$WORK/key.pem" -out "$WORK/cert.pem" >/dev/null 2>&1 || return 1
+    -keyout "$WORK/key.pem" -out "$WORK/cert.pem" >/dev/null 2>&1 || { setup_failed "generate the localhost certificate"; return 1; }
   cat >"$WORK/knowledge.yaml" <<EOF
 version: 1
 listen:
@@ -243,6 +265,10 @@ EOF
 chmod 600 "$WORK/tokens.toml"
 W=$(mint writer '/**' publish)
 R=$(mint reader '/private/**' read)
+if [ -z "$W" ] || [ -z "$R" ]; then
+  echo "FAIL  setup: mint tokens" >&2
+  exit 1
+fi
 
 case "$MODE" in
 file) smoke_file ;;

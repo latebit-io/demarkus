@@ -199,3 +199,30 @@ func TestEnsureMemorySeedKeepsCuratedPolicy(t *testing.T) {
 		})
 	}
 }
+
+// A server upgraded before its broker: the old broker's create-only policy
+// publish conflicted with the server's seed, yet the hub still landed.
+func TestEnsureMemorySeedReplacesServerSeedInSeededWorld(t *testing.T) {
+	d := &fakeDispatcher{
+		FetchFn: func(_, path, _ string) (fetch.Result, error) {
+			meta := map[string]string{"version": "1"}
+			if path == publishpolicy.DocumentPath {
+				meta["agent"] = publishpolicy.SeedAgent
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: "# Doc\n"}}, nil
+		},
+	}
+	g := newMemoryGateway(t, memoryTestConfig(), d)
+	w := &g.srv.cfg.Worlds[0]
+	g.ensureMemorySeed(withAliceClaims(context.Background()), w)
+
+	calls := d.Calls().Publish
+	if len(calls) != 1 || calls[0].Path != publishpolicy.DocumentPath || calls[0].ExpectedVersion != 1 {
+		t.Fatalf("publishes into a seeded world = %+v, want only the policy at expected version 1", calls)
+	}
+	// Marked done: the next call adds no traffic.
+	g.ensureMemorySeed(withAliceClaims(context.Background()), w)
+	if got := len(d.Calls().Publish); got != 1 {
+		t.Errorf("second call published again (%d total)", got)
+	}
+}

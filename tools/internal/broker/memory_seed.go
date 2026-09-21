@@ -139,18 +139,21 @@ func (g *mcpGateway) ensureMemorySeed(ctx context.Context, w *WorldConfig) {
 	s.mu.Unlock()
 }
 
-// seedMemoryWorld checks for the /index.md sentinel and publishes the seed
-// set when the world is empty. Returns true when the world is verified
-// seeded (already or now); false keeps the world eligible for retry.
+// seedMemoryWorld seeds a world that lacks the /index.md sentinel; one that has
+// it is still checked for a server policy seed an older broker left in place.
+// True means verified seeded; false keeps the world eligible for retry.
 func (g *mcpGateway) seedMemoryWorld(ctx context.Context, w *WorldConfig) bool {
 	result, err := g.dispatcher.FetchContext(ctx, w.Name, "/index.md", "")
 	if err != nil {
 		g.log.Warn("memory seed check failed", "world", w.Name, "err", err)
 		return false
 	}
+	seeded := false
 	switch result.Response.Status {
-	case protocol.StatusOK, protocol.StatusArchived:
-		return true // already seeded (archived counts as a deliberate act)
+	case protocol.StatusOK:
+		seeded = true
+	case protocol.StatusArchived:
+		return true // archived counts as a deliberate act
 	case protocol.StatusNotFound:
 		// fresh world; seed below
 	default:
@@ -158,11 +161,16 @@ func (g *mcpGateway) seedMemoryWorld(ctx context.Context, w *WorldConfig) bool {
 		return false
 	}
 	for _, doc := range memorySeedDocs() {
-		if !g.publishMemorySeedDoc(ctx, w, &doc) {
+		if seeded && !doc.overServerSeed {
+			continue
+		}
+		if !g.publishMemorySeedDoc(ctx, w, &doc, seeded) {
 			return false
 		}
 	}
-	g.log.Info("memory template seeded", "world", w.Name)
+	if !seeded {
+		g.log.Info("memory template seeded", "world", w.Name)
+	}
 	return true
 }
 
@@ -212,13 +220,14 @@ func (g *mcpGateway) memorySeedAction(ctx context.Context, w *WorldConfig, doc *
 }
 
 // publishMemorySeedDoc publishes one seed document and reports whether the
-// world may still be marked seeded.
-func (g *mcpGateway) publishMemorySeedDoc(ctx context.Context, w *WorldConfig, doc *memorySeedDoc) bool {
+// world may still be marked seeded. replaceOnly is for a world that already
+// holds the template: nothing is created there, only a server seed replaced.
+func (g *mcpGateway) publishMemorySeedDoc(ctx context.Context, w *WorldConfig, doc *memorySeedDoc, replaceOnly bool) bool {
 	action := g.memorySeedAction(ctx, w, doc)
-	switch action {
-	case seedFailed:
+	switch {
+	case action == seedFailed:
 		return false
-	case seedKeep:
+	case action == seedKeep, replaceOnly && action != seedReplace:
 		return true
 	}
 	body, readErr := memorySeedFS.ReadFile("memoryseed/" + doc.embedName)
