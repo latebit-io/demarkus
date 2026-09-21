@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 )
 
@@ -21,7 +21,7 @@ var (
 
 // MutationResult carries knowledge-only policy output beside a store mutation.
 type MutationResult struct {
-	Document   *protocolstore.Document
+	Document   *storefmt.Document
 	Changed    bool
 	Strictness publishpolicy.Strictness
 	Policy     publishpolicy.Result
@@ -76,7 +76,7 @@ func (view *readView) currentPolicy(require bool) (publishpolicy.Policy, error) 
 	policy := publishpolicy.Parse(string(document.Content))
 	if err := policy.Validate(); err != nil {
 		return publishpolicy.Policy{}, errors.Join(
-			protocolstore.ErrIntegrity,
+			storefmt.ErrIntegrity,
 			fmt.Errorf("%w: current policy: %v", ErrInvalidPolicy, err),
 		)
 	}

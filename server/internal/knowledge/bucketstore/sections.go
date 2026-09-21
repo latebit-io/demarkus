@@ -28,7 +28,7 @@ func (store *Store) indexSections(ctx context.Context, loaded, previous *snapsho
 		pending = append(pending, path)
 	}
 	return runParallel(ctx, workers, pending, func(ctx context.Context, path string) error {
-		view := &readView{ctx: ctx, cancel: func() {}, objects: store.objects, snapshot: loaded}
+		view := &readView{ctx: ctx, objects: store.objects, snapshot: loaded}
 		document, err := view.get(path, 0)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

@@ -25,7 +25,7 @@ import (
 	"github.com/latebit-io/demarkus/client/joinurl"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 const quicBufferWarningEnv = "QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING"
@@ -819,7 +819,7 @@ func confirmRetention(meta map[string]string, yes bool, in *os.File, out io.Writ
 	// warning here would be misleading — let the server report the precise
 	// bad-request error instead. store.ParseRetention is the same predicate
 	// the server enforces.
-	if _, ok := store.ParseRetention(r); !ok {
+	if _, ok := storefmt.ParseRetention(r); !ok {
 		return nil
 	}
 	if !term.IsTerminal(int(in.Fd())) {

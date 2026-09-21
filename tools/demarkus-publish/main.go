@@ -20,6 +20,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 func main() {
@@ -95,7 +96,7 @@ func main() {
 	}
 	doc, err := s.Write(*path, content, nil)
 	if err != nil {
-		if errors.Is(err, store.ErrNotModified) {
+		if errors.Is(err, storefmt.ErrNotModified) {
 			if doc != nil {
 				fmt.Fprintf(os.Stderr, "unchanged (v%d)\n", doc.Version)
 			} else {

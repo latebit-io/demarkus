@@ -11,7 +11,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/render"
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 const (
@@ -99,7 +99,7 @@ func decodeListCursor(encoded, reqPath string, includeArchived bool) (string, er
 	return after, nil
 }
 
-func buildDirectoryPage(reqPath string, entries []store.DirEntry, after string, pageSize int) (directoryPage, error) {
+func buildDirectoryPage(reqPath string, entries []storefmt.DirEntry, after string, pageSize int) (directoryPage, error) {
 	for i := 1; i < len(entries); i++ {
 		if entries[i-1].Name >= entries[i].Name {
 			return directoryPage{}, errors.New("LIST entries are not strictly ordered")

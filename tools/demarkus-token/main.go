@@ -21,7 +21,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/joinurl"
-	"github.com/latebit-io/demarkus/protocol/token"
+	"github.com/latebit-io/demarkus/tools/internal/token"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".

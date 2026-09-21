@@ -17,7 +17,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/token"
+	"github.com/latebit-io/demarkus/tools/internal/token"
 )
 
 // TestDetectPlatform checks the OS_arch mapping produces a sane release suffix on

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/latebit-io/demarkus/protocol/token"
+	"github.com/latebit-io/demarkus/tools/internal/token"
 )
 
 // worldWriteTokenSecretKey is the data key in the broker's

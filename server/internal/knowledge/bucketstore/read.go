@@ -6,138 +6,100 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
-	"sync"
+	"sync/atomic"
 	"time"
 
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 )
 
 // OpenReadView validates the current head and pins one immutable snapshot.
-func (store *Store) OpenReadView() (backend.ReadView, error) {
-	view, err := store.openReadView()
+// Reads on the view share the request timeout that started here.
+func (store *Store) OpenReadView(ctx context.Context) (backend.ReadView, error) {
+	deadline := time.Now().Add(store.requestTimeout)
+	openCtx, cancel := boundedBy(ctx, deadline)
+	defer cancel()
+	loaded, err := store.refreshSnapshot(openCtx)
 	if err != nil {
-		return nil, err
-	}
-	return view, nil
-}
-
-func (store *Store) openReadView() (*readView, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), store.requestTimeout)
-	loaded, err := store.refreshSnapshot(ctx)
-	if err != nil {
-		cancel()
 		return nil, fmt.Errorf("open read view: %w", normalizeReadIntegrity(err))
 	}
-	return &readView{ctx: ctx, cancel: cancel, objects: store.objects, snapshot: loaded}, nil
+	return &snapshotView{objects: store.objects, snapshot: loaded, deadline: deadline}, nil
 }
 
-type readView struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
+// boundedBy derives a context only when ctx would outlive the deadline; a
+// request context usually carries an earlier one already.
+func boundedBy(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	if current, ok := ctx.Deadline(); ok && !current.After(deadline) {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, deadline)
+}
+
+// snapshotView is the contract view: one pinned snapshot, a context per call.
+type snapshotView struct {
 	objects  blob.Store
 	snapshot *snapshot
-	close    sync.Once
+	deadline time.Time
+	closed   atomic.Bool
 }
 
-var _ backend.ReadView = (*readView)(nil)
+var _ backend.ReadView = (*snapshotView)(nil)
 
-func (view *readView) Close() error {
-	view.close.Do(view.cancel)
+// Close ends the view; the immutable snapshot itself needs no release.
+func (view *snapshotView) Close() error {
+	view.closed.Store(true)
 	return nil
 }
 
-// Get reads one exact version from a freshly validated snapshot.
-func (store *Store) Get(reqPath string, version int) (*protocolstore.Document, error) {
-	view, err := store.openReadView()
-	if err != nil {
-		return nil, err
+// viewRead runs one read against the pinned snapshot under the call's context.
+// A closed view reads as canceled.
+func viewRead[T any](ctx context.Context, view *snapshotView, fn func(*readView) (T, error)) (T, error) {
+	if view.closed.Load() {
+		var zero T
+		return zero, context.Canceled
 	}
-	document, readErr := view.Get(reqPath, version)
-	return document, readResultError(readErr, view.Close())
+	callCtx, cancel := boundedBy(ctx, view.deadline)
+	defer cancel()
+	return fn(&readView{ctx: callCtx, objects: view.objects, snapshot: view.snapshot})
 }
 
-// ListEntries reads one derived directory from a freshly validated snapshot.
-func (store *Store) ListEntries(reqPath string, includeArchived bool) ([]protocolstore.DirEntry, error) {
-	view, err := store.openReadView()
-	if err != nil {
-		return nil, err
-	}
-	entries, readErr := view.ListEntries(reqPath, includeArchived)
-	return entries, readResultError(readErr, view.Close())
+func (view *snapshotView) Get(ctx context.Context, reqPath string, version int) (*storefmt.Document, error) {
+	return viewRead(ctx, view, func(r *readView) (*storefmt.Document, error) { return r.Get(reqPath, version) })
 }
 
-// IsDir checks derived topology in a freshly validated snapshot.
-func (store *Store) IsDir(reqPath string) (bool, error) {
-	view, err := store.openReadView()
-	if err != nil {
-		return false, err
-	}
-	isDirectory, readErr := view.IsDir(reqPath)
-	return isDirectory, readResultError(readErr, view.Close())
+func (view *snapshotView) ListEntries(ctx context.Context, reqPath string, includeArchived bool) ([]storefmt.DirEntry, error) {
+	return viewRead(ctx, view, func(r *readView) ([]storefmt.DirEntry, error) { return r.ListEntries(reqPath, includeArchived) })
 }
 
-// Versions reads retained history from a freshly validated snapshot.
-func (store *Store) Versions(reqPath string) ([]protocolstore.VersionInfo, error) {
-	view, err := store.openReadView()
-	if err != nil {
-		return nil, err
-	}
-	versions, readErr := view.Versions(reqPath)
-	return versions, readResultError(readErr, view.Close())
+func (view *snapshotView) IsDir(ctx context.Context, reqPath string) (bool, error) {
+	return viewRead(ctx, view, func(r *readView) (bool, error) { return r.IsDir(reqPath) })
 }
 
-// LookupHashResult resolves a live body hash in a validated snapshot.
-func (store *Store) LookupHashResult(hash string) (string, error) {
-	view, err := store.openReadView()
-	if err != nil {
-		return "", err
-	}
-	path, readErr := view.LookupHashResult(hash)
-	return path, readResultError(readErr, view.Close())
+func (view *snapshotView) Versions(ctx context.Context, reqPath string) ([]storefmt.VersionInfo, error) {
+	return viewRead(ctx, view, func(r *readView) ([]storefmt.VersionInfo, error) { return r.Versions(reqPath) })
 }
 
-// VerifyChain checks retained blobs from a freshly validated snapshot.
-func (store *Store) VerifyChain(reqPath string) error {
-	view, err := store.openReadView()
-	if err != nil {
-		return err
-	}
-	return readResultError(view.VerifyChain(reqPath), view.Close())
+func (view *snapshotView) LookupHash(ctx context.Context, hash string) (string, error) {
+	return viewRead(ctx, view, func(r *readView) (string, error) { return r.LookupHash(hash) })
 }
 
-// Lookup queries the live catalog in a freshly validated snapshot.
-func (store *Store) Lookup(query string, options catalog.Options) ([]catalog.Result, error) {
-	view, err := store.openReadView()
-	if err != nil {
-		return nil, err
-	}
-	results, readErr := view.Lookup(query, options)
-	return results, readResultError(readErr, view.Close())
+func (view *snapshotView) VerifyChain(ctx context.Context, reqPath string) error {
+	_, err := viewRead(ctx, view, func(r *readView) (struct{}, error) { return struct{}{}, r.VerifyChain(reqPath) })
+	return err
 }
 
-// CurrentVersionResult returns the version from a validated snapshot.
-func (store *Store) CurrentVersionResult(reqPath string) (int, error) {
-	view, err := store.openReadView()
-	if err != nil {
-		return 0, err
-	}
-	version, readErr := view.currentVersion(reqPath)
-	return version, readResultError(readErr, view.Close())
+func (view *snapshotView) Lookup(ctx context.Context, query string, options catalog.Options) ([]catalog.Result, error) {
+	return viewRead(ctx, view, func(r *readView) ([]catalog.Result, error) { return r.Lookup(query, options) })
 }
 
-func readResultError(readErr, closeErr error) error {
-	if readErr == nil {
-		return closeErr
-	}
-	if closeErr == nil {
-		return readErr
-	}
-	return errors.Join(readErr, closeErr)
+// readView reads one snapshot for one operation, under that operation's context.
+type readView struct {
+	ctx      context.Context
+	objects  blob.Store
+	snapshot *snapshot
 }
 
 type retainedVersion struct {
@@ -155,18 +117,18 @@ type storedDocument struct {
 	metadata map[string]string
 }
 
-func (view *readView) Get(reqPath string, version int) (*protocolstore.Document, error) {
+func (view *readView) Get(reqPath string, version int) (*storefmt.Document, error) {
 	document, err := view.get(reqPath, version)
 	return document, normalizeReadIntegrity(err)
 }
 
-func (view *readView) get(reqPath string, version int) (*protocolstore.Document, error) {
+func (view *readView) get(reqPath string, version int) (*storefmt.Document, error) {
 	entry, err := view.documentEntry(reqPath)
 	if err != nil {
 		return nil, err
 	}
 	if version < 0 {
-		return nil, os.ErrNotExist
+		return nil, backend.ErrNotFound
 	}
 	history, err := view.loadHistory(&entry)
 	if err != nil {
@@ -179,7 +141,7 @@ func (view *readView) get(reqPath string, version int) (*protocolstore.Document,
 	}
 	retained, ok := retainedAt(history.versions, requested)
 	if !ok {
-		return nil, os.ErrNotExist
+		return nil, backend.ErrNotFound
 	}
 	raw, err := view.loadBlob(retained.entry.Blob)
 	if err != nil {
@@ -192,34 +154,34 @@ func (view *readView) get(reqPath string, version int) (*protocolstore.Document,
 	if err := view.ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &protocolstore.Document{
+	return &storefmt.Document{
 		Content:  bytes.Clone(stored.body),
 		Modified: retained.modified,
 		Version:  retained.entry.Version,
 		Archived: current && entry.Archived,
 		Metadata: maps.Clone(stored.metadata),
-		ETag:     protocolstore.StoredETag(raw),
+		ETag:     storefmt.StoredETag(raw),
 	}, nil
 }
 
-func (view *readView) ListEntries(reqPath string, includeArchived bool) ([]protocolstore.DirEntry, error) {
+func (view *readView) ListEntries(reqPath string, includeArchived bool) ([]storefmt.DirEntry, error) {
 	logicalPath, err := view.logicalPath(reqPath)
 	if err != nil {
 		return nil, err
 	}
 	if _, isDocument := view.snapshot.Paths[logicalPath]; isDocument {
-		return nil, os.ErrNotExist
+		return nil, backend.ErrNotFound
 	}
 	directory, exists := view.snapshot.Directories[logicalPath]
 	if !exists {
-		return nil, os.ErrNotExist
+		return nil, backend.ErrNotFound
 	}
-	entries := make([]protocolstore.DirEntry, 0, len(directory.Children))
+	entries := make([]storefmt.DirEntry, 0, len(directory.Children))
 	for _, child := range directory.Children {
 		if hiddenLogicalName(child.Name) || (includeArchived && !child.Visible) || (!includeArchived && !child.Live) {
 			continue
 		}
-		entries = append(entries, protocolstore.DirEntry{Name: child.Name, IsDir: child.IsDir})
+		entries = append(entries, storefmt.DirEntry{Name: child.Name, IsDir: child.IsDir})
 	}
 	if err := view.ctx.Err(); err != nil {
 		return nil, err
@@ -238,15 +200,15 @@ func (view *readView) IsDir(reqPath string) (bool, error) {
 	if _, exists := view.snapshot.Paths[logicalPath]; exists {
 		return false, nil
 	}
-	return false, os.ErrNotExist
+	return false, backend.ErrNotFound
 }
 
-func (view *readView) Versions(reqPath string) ([]protocolstore.VersionInfo, error) {
+func (view *readView) Versions(reqPath string) ([]storefmt.VersionInfo, error) {
 	versions, err := view.versions(reqPath)
 	return versions, normalizeReadIntegrity(err)
 }
 
-func (view *readView) versions(reqPath string) ([]protocolstore.VersionInfo, error) {
+func (view *readView) versions(reqPath string) ([]storefmt.VersionInfo, error) {
 	entry, err := view.documentEntry(reqPath)
 	if err != nil {
 		return nil, err
@@ -255,9 +217,9 @@ func (view *readView) versions(reqPath string) ([]protocolstore.VersionInfo, err
 	if err != nil {
 		return nil, err
 	}
-	versions := make([]protocolstore.VersionInfo, 0, len(history.versions))
+	versions := make([]storefmt.VersionInfo, 0, len(history.versions))
 	for _, retained := range slices.Backward(history.versions) {
-		versions = append(versions, protocolstore.VersionInfo{
+		versions = append(versions, storefmt.VersionInfo{
 			Version:  retained.entry.Version,
 			Modified: retained.modified,
 		})
@@ -268,13 +230,13 @@ func (view *readView) versions(reqPath string) ([]protocolstore.VersionInfo, err
 	return versions, nil
 }
 
-func (view *readView) LookupHashResult(hash string) (string, error) {
+func (view *readView) LookupHash(hash string) (string, error) {
 	if err := view.ctx.Err(); err != nil {
 		return "", err
 	}
 	path, exists := view.snapshot.BodyHashes[hash]
 	if !exists {
-		return "", os.ErrNotExist
+		return "", backend.ErrNotFound
 	}
 	return path, nil
 }
@@ -284,8 +246,8 @@ func (view *readView) VerifyChain(reqPath string) error {
 }
 
 func normalizeReadIntegrity(err error) error {
-	if err != nil && errors.Is(err, blob.ErrIntegrity) && !errors.Is(err, protocolstore.ErrIntegrity) {
-		return errors.Join(protocolstore.ErrIntegrity, err)
+	if err != nil && errors.Is(err, blob.ErrIntegrity) && !errors.Is(err, storefmt.ErrIntegrity) {
+		return errors.Join(storefmt.ErrIntegrity, err)
 	}
 	return err
 }
@@ -309,11 +271,11 @@ func (view *readView) verifyChain(reqPath string) error {
 		if err != nil {
 			return fmt.Errorf("read v%d: %w", current.entry.Version, err)
 		}
-		recorded := protocolstore.ExtractPreviousHash(currentRaw)
+		recorded := storefmt.ExtractPreviousHash(currentRaw)
 		if recorded == "" {
 			return fmt.Errorf("%w: v%d missing previous-hash", blob.ErrIntegrity, current.entry.Version)
 		}
-		expected := "sha256-" + protocolstore.StoredETag(previousRaw)
+		expected := "sha256-" + storefmt.StoredETag(previousRaw)
 		if recorded != expected {
 			return fmt.Errorf("%w: v%d chain broken: previous-hash mismatch (want %s, got %s)",
 				blob.ErrIntegrity, current.entry.Version, expected, recorded)
@@ -377,7 +339,7 @@ func (view *readView) documentEntry(reqPath string) (snapshotEntry, error) {
 	}
 	entry, exists := view.snapshot.Paths[logicalPath]
 	if !exists {
-		return snapshotEntry{}, os.ErrNotExist
+		return snapshotEntry{}, backend.ErrNotFound
 	}
 	return entry, nil
 }
@@ -386,9 +348,9 @@ func (view *readView) logicalPath(reqPath string) (string, error) {
 	if err := view.ctx.Err(); err != nil {
 		return "", err
 	}
-	relative, err := protocolstore.RelPath(reqPath)
+	relative, err := storefmt.RelPath(reqPath)
 	if err != nil {
-		return "", err
+		return "", backend.FromNotExist(err)
 	}
 	if relative == "" {
 		return "/", nil
@@ -484,7 +446,7 @@ func retainedAt(versions []retainedVersion, version int) (retainedVersion, bool)
 }
 
 func validateStoredDocument(raw []byte, retained *retainedVersion) (storedDocument, error) {
-	header, err := protocolstore.InspectStoredVersion(raw)
+	header, err := storefmt.InspectStoredVersion(raw)
 	if err != nil {
 		return storedDocument{}, fmt.Errorf("%w: v%d stored version: %v", blob.ErrIntegrity, retained.entry.Version, err)
 	}
@@ -492,12 +454,12 @@ func validateStoredDocument(raw []byte, retained *retainedVersion) (storedDocume
 	if version != retained.entry.Version {
 		return storedDocument{}, fmt.Errorf("%w: stored version is %d, history says %d", blob.ErrIntegrity, version, retained.entry.Version)
 	}
-	body := protocolstore.ExtractBody(raw)
-	if bodyHash := protocolstore.ContentHash(body); bodyHash != retained.entry.BodyHash {
+	body := storefmt.ExtractBody(raw)
+	if bodyHash := storefmt.ContentHash(body); bodyHash != retained.entry.BodyHash {
 		return storedDocument{}, fmt.Errorf("%w: v%d body hash is %s, history says %s", blob.ErrIntegrity, version, bodyHash, retained.entry.BodyHash)
 	}
-	metadata := protocolstore.ExtractMetadata(raw)
-	if err := protocolstore.ValidateWrite(body, metadata); err != nil {
+	metadata := storefmt.ExtractMetadata(raw)
+	if err := storefmt.ValidateWrite(body, metadata); err != nil {
 		return storedDocument{}, fmt.Errorf("%w: v%d stored data: %v", blob.ErrIntegrity, version, err)
 	}
 	return storedDocument{body: body, metadata: metadata}, nil

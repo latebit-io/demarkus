@@ -15,7 +15,8 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
@@ -179,7 +180,7 @@ func (h *worldsTestHarness) objects(t *testing.T, world string) *blob.Memory {
 
 // seededPolicy reopens the world with enforcement on and returns its policy,
 // which only exists if the manager seeded one.
-func (h *worldsTestHarness) seededPolicy(t *testing.T, world string) *protocolstore.Document {
+func (h *worldsTestHarness) seededPolicy(t *testing.T, world string) *storefmt.Document {
 	t.Helper()
 	store, err := bucketstore.Open(context.Background(), h.objects(t, world), bucketstore.Options{
 		WorldID: testWorldID, RequirePolicy: true,
@@ -187,7 +188,7 @@ func (h *worldsTestHarness) seededPolicy(t *testing.T, world string) *protocolst
 	if err != nil {
 		t.Fatalf("reopen seeded world: %v", err)
 	}
-	document, err := store.Get(publishpolicy.DocumentPath, 0)
+	document, err := backendtest.Direct{Store: store}.Get(publishpolicy.DocumentPath, 0)
 	if err != nil {
 		t.Fatalf("get seeded policy: %v", err)
 	}

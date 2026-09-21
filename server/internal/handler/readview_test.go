@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -9,19 +10,19 @@ import (
 )
 
 type trackingViewProvider struct {
-	delegate storagebackend.ViewProvider
+	DocumentStore
 	openErr  error
 	closeErr error
 	opens    int
 	closes   int
 }
 
-func (p *trackingViewProvider) OpenReadView() (storagebackend.ReadView, error) {
+func (p *trackingViewProvider) OpenReadView(ctx context.Context) (storagebackend.ReadView, error) {
 	p.opens++
 	if p.openErr != nil {
 		return nil, p.openErr
 	}
-	view, err := p.delegate.OpenReadView()
+	view, err := p.DocumentStore.OpenReadView(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -44,12 +45,12 @@ func (v *trackingReadView) Close() error {
 func TestHandleReadViewLifecycle(t *testing.T) {
 	b := fileBackend(t)
 	seedBackend(t, b, map[string]string{"hello.md": "# Hello\n"})
-	provider := &trackingViewProvider{delegate: b.Views}
+	provider := &trackingViewProvider{DocumentStore: b.Store}
 	h := newHandler(b, nil)
-	h.Views = provider
+	h.Store = provider
 
 	stream := newMockStream("FETCH /hello.md\n")
-	h.HandleStream(stream)
+	h.HandleStream(context.Background(), stream)
 	response, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
 		t.Fatalf("parse response: %v", err)
@@ -64,12 +65,12 @@ func TestHandleReadViewLifecycle(t *testing.T) {
 
 func TestHandleReadViewOpenError(t *testing.T) {
 	b := fileBackend(t)
-	provider := &trackingViewProvider{delegate: b.Views, openErr: errors.New("snapshot unavailable")}
+	provider := &trackingViewProvider{DocumentStore: b.Store, openErr: errors.New("snapshot unavailable")}
 	h := newHandler(b, nil)
-	h.Views = provider
+	h.Store = provider
 
 	stream := newMockStream("FETCH /hello.md\n")
-	h.HandleStream(stream)
+	h.HandleStream(context.Background(), stream)
 	response, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
 		t.Fatalf("parse response: %v", err)
@@ -85,12 +86,12 @@ func TestHandleReadViewOpenError(t *testing.T) {
 func TestHandleReadViewCloseErrorDoesNotReplaceResponse(t *testing.T) {
 	b := fileBackend(t)
 	seedBackend(t, b, map[string]string{"hello.md": "# Hello\n"})
-	provider := &trackingViewProvider{delegate: b.Views, closeErr: errors.New("close failed")}
+	provider := &trackingViewProvider{DocumentStore: b.Store, closeErr: errors.New("close failed")}
 	h := newHandler(b, nil)
-	h.Views = provider
+	h.Store = provider
 
 	stream := newMockStream("FETCH /hello.md\n")
-	h.HandleStream(stream)
+	h.HandleStream(context.Background(), stream)
 	response, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
 		t.Fatalf("parse response: %v", err)

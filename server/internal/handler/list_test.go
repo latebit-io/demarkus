@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 func TestListCursorRoundTripAndScope(t *testing.T) {
@@ -41,7 +41,7 @@ func TestParseListPageSize(t *testing.T) {
 }
 
 func TestBuildDirectoryPage(t *testing.T) {
-	entries := []store.DirEntry{
+	entries := []storefmt.DirEntry{
 		{Name: "a.md"},
 		{Name: "b", IsDir: true},
 		{Name: "c.md"},
@@ -66,7 +66,7 @@ func TestBuildDirectoryPage(t *testing.T) {
 }
 
 func TestBuildDirectoryPageBoundsBody(t *testing.T) {
-	entries := make([]store.DirEntry, 1000)
+	entries := make([]storefmt.DirEntry, 1000)
 	for i := range entries {
 		entries[i].Name = strings.Repeat("[]", 2000) + string(rune(0x1000+i))
 	}
@@ -83,7 +83,7 @@ func TestBuildDirectoryPageBoundsBody(t *testing.T) {
 }
 
 func TestBuildDirectoryPageRejectsOrderingDrift(t *testing.T) {
-	_, err := buildDirectoryPage("/", []store.DirEntry{{Name: "b"}, {Name: "a"}}, "", 10)
+	_, err := buildDirectoryPage("/", []storefmt.DirEntry{{Name: "b"}, {Name: "a"}}, "", 10)
 	if err == nil || errors.Is(err, errListPageCannotProgress) {
 		t.Fatalf("ordering error = %v", err)
 	}

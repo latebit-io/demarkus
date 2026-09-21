@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	pathpkg "path"
 	"slices"
 	"sort"
@@ -15,7 +14,8 @@ import (
 	"testing"
 	"time"
 
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 )
@@ -160,10 +160,10 @@ func TestSeparateBucketsAreIndependent(t *testing.T) {
 	if err != nil || rightDocument.Version != 1 || rightDocument.Archived || !bytes.Equal(rightDocument.Content, body) {
 		t.Fatalf("right document = (%+v, %v), want active v1", rightDocument, err)
 	}
-	if _, err := left.LookupHashResult(protocolstore.ContentHash(body)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := left.LookupHash(storefmt.ContentHash(body)); !errors.Is(err, backend.ErrNotFound) {
 		t.Fatalf("left shared hash error = %v, want ErrNotExist", err)
 	}
-	if path, err := right.LookupHashResult(protocolstore.ContentHash(body)); err != nil || path != "/same" {
+	if path, err := right.LookupHash(storefmt.ContentHash(body)); err != nil || path != "/same" {
 		t.Fatalf("right shared hash = (%q, %v), want /same", path, err)
 	}
 }
@@ -451,8 +451,8 @@ func TestOpenRejectsShardInvariants(t *testing.T) {
 
 func TestDerivedSnapshotLiveAndArchived(t *testing.T) {
 	objects := initializedMemory(t)
-	sharedHash := protocolstore.ContentHash([]byte("shared"))
-	archivedHash := protocolstore.ContentHash([]byte("archived"))
+	sharedHash := storefmt.ContentHash([]byte("shared"))
+	archivedHash := storefmt.ContentHash([]byte("archived"))
 	installEntries(t, objects, []shardEntry{
 		testEntry("/docs/z.md", false, sharedHash),
 		testEntry("/docs/a.md", false, sharedHash),
@@ -732,7 +732,7 @@ func testEntry(path string, archived bool, bodyHash string) shardEntry {
 	pathSum := pathHash(path)
 	manifestSum := hashHex([]byte("manifest:" + path))
 	if bodyHash == "" {
-		bodyHash = protocolstore.ContentHash([]byte(path))
+		bodyHash = storefmt.ContentHash([]byte(path))
 	}
 	title := pathpkg.Base(path)
 	metadata := map[string]string{

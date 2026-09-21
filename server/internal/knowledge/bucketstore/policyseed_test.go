@@ -77,7 +77,7 @@ func TestSeedPolicyRejectsInvalidSeed(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	seed := PolicySeed{Body: []byte("strictness: nonsense\n"), Metadata: map[string]string{"tags": "category:governance"}}
-	if _, err := store.createPolicy(seed); err == nil {
+	if _, err := store.createPolicy(context.Background(), seed); err == nil {
 		t.Fatal("createPolicy accepted an unenforceable policy")
 	}
 	if _, err := store.Get(publishpolicy.DocumentPath, 0); err == nil {

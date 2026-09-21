@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // ExportDoc is a document fetched from a demarkus world, ready to render back
@@ -93,7 +93,7 @@ func renderConcept(meta map[string]string, body, modified string) string {
 			continue // already written
 		case "tags":
 			if v := meta["tags"]; v != "" {
-				b.WriteString("tags: " + store.FormatTagsList(v) + "\n")
+				b.WriteString("tags: " + storefmt.FormatTagsList(v) + "\n")
 			}
 		case "timestamp":
 			if ts := normalizeTimestamp(meta["timestamp"], modified); ts != "" {

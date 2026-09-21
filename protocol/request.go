@@ -31,27 +31,8 @@ const MaxRequestFrontmatterLength = 65536 // 64KB
 // MaxBodyLength is the maximum allowed size for a document body (1 MiB).
 const MaxBodyLength = 1 * 1024 * 1024
 
-// Frontmatter delimiters as they appear on the wire. Parser and serializer
-// share these so the two sides of the wire format cannot drift.
-const (
-	// frontmatterFence is the bare fence line that opens and closes a
-	// YAML frontmatter block on the wire.
-	frontmatterFence = "---\n"
-	// frontmatterOpen is the opening delimiter at the start of a request
-	// payload (no leading newline).
-	frontmatterOpen = frontmatterFence
-	// frontmatterClose is the closing delimiter with a body following
-	// (leading newline from prior content + fence).
-	frontmatterClose = "\n" + frontmatterFence
-	// frontmatterTrim matches a closing "---" at end-of-input, no trailing newline.
-	frontmatterTrim = "\n---"
-)
-
-// requestWireOverhead is generous slack allowed above the frontmatter and body
-// limits when reading the request payload, so we get a clean
-// "payload exceeds limit" error rather than truncating mid-read. The real
-// budgets are MaxRequestFrontmatterLength and MaxBodyLength; this covers
-// delimiter bytes plus any trailing bytes the client may send.
+// requestWireOverhead is slack above the frontmatter and body budgets, so an
+// oversized payload fails with a clean limit error instead of a truncated read.
 const requestWireOverhead = 64
 
 // ParseRequest reads a request from r.
@@ -75,10 +56,11 @@ func ParseRequest(r io.Reader) (Request, error) {
 		return req, nil
 	}
 
-	fm, body, err := splitFrontmatterAndBody(rest)
+	split, err := splitFrontmatterAndBody(rest)
 	if err != nil {
 		return Request{}, err
 	}
+	fm, body := split.Block, split.Body
 
 	if len(fm) > 0 {
 		meta, err := decodeFrontmatter(fm)
@@ -163,36 +145,17 @@ func readBounded(r io.Reader, limit int64, what string) ([]byte, error) {
 	return data, nil
 }
 
-// splitFrontmatterAndBody separates a request payload into its frontmatter and
-// body components. When no frontmatter is present the whole payload is the body.
-// The frontmatter length is checked against MaxRequestFrontmatterLength here;
-// the body length is checked by the caller against MaxBodyLength.
-func splitFrontmatterAndBody(data []byte) (fm, body []byte, err error) {
-	if !bytes.HasPrefix(data, []byte(frontmatterOpen)) {
-		return nil, data, nil
+// splitFrontmatterAndBody splits a request payload and checks the frontmatter
+// against MaxRequestFrontmatterLength; the caller checks the body length.
+func splitFrontmatterAndBody(data []byte) (Frontmatter, error) {
+	split, err := SplitFrontmatter(data)
+	if err != nil {
+		return Frontmatter{}, fmt.Errorf("%w: %w", ErrMalformedRequest, err)
 	}
-
-	inner := data[len(frontmatterOpen):]
-
-	// Closing form 1: "\n---\n" with possibly more bytes after (the body).
-	// Closing form 2: "\n---" at end of input, no body.
-	var fmEnd, bodyStart int
-	if idx := bytes.Index(inner, []byte(frontmatterClose)); idx >= 0 {
-		fmEnd = idx
-		bodyStart = idx + len(frontmatterClose)
-	} else if bytes.HasSuffix(inner, []byte(frontmatterTrim)) {
-		fmEnd = len(inner) - len(frontmatterTrim)
-		bodyStart = len(inner)
-	} else {
-		return nil, nil, fmt.Errorf("%w: unclosed frontmatter", ErrMalformedRequest)
+	if len(split.Block) > MaxRequestFrontmatterLength {
+		return Frontmatter{}, fmt.Errorf("request metadata exceeds limit: %d > %d bytes", len(split.Block), MaxRequestFrontmatterLength)
 	}
-
-	fm = inner[:fmEnd]
-	if len(fm) > MaxRequestFrontmatterLength {
-		return nil, nil, fmt.Errorf("request metadata exceeds limit: %d > %d bytes", len(fm), MaxRequestFrontmatterLength)
-	}
-	body = inner[bodyStart:]
-	return fm, body, nil
+	return split, nil
 }
 
 // decodeFrontmatter parses a YAML frontmatter block into a string-to-string map.
@@ -244,12 +207,12 @@ func (req Request) WriteTo(w io.Writer) (int64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("encoding request metadata: %w", err)
 		}
-		buf.WriteString(frontmatterFence)
+		buf.WriteString(FrontmatterFence)
 		buf.Write(yamlBytes)
-		buf.WriteString(frontmatterFence)
-	} else if strings.HasPrefix(req.Body, frontmatterOpen) {
+		buf.WriteString(FrontmatterFence)
+	} else if strings.HasPrefix(req.Body, FrontmatterFence) {
 		// Empty block first, or the parser reads the body's own fence as metadata.
-		buf.WriteString(frontmatterOpen + frontmatterClose)
+		buf.WriteString(FrontmatterFence + frontmatterClose)
 	}
 
 	if req.Body != "" {

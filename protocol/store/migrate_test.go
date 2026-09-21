@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 func TestMigrationPreservesArchiveStateSeparately(t *testing.T) {
@@ -28,8 +30,8 @@ func TestMigrationPreservesArchiveStateSeparately(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		exported := make(map[string]StoredDocument)
-		if err := source.ExportDocs(context.Background(), func(path string, document StoredDocument) error {
+		exported := make(map[string]storefmt.StoredDocument)
+		if err := source.ExportDocs(context.Background(), func(path string, document storefmt.StoredDocument) error {
 			exported[path] = document
 			return nil
 		}); err != nil {
@@ -57,22 +59,22 @@ func TestMigrationPreservesArchiveStateSeparately(t *testing.T) {
 		if err != nil || pinned.Archived {
 			t.Fatalf("pinned = %+v (err %v), want unarchived", pinned, err)
 		}
-		if _, err := destination.LookupHashResult(ContentHash([]byte("# Body\n"))); !errors.Is(err, os.ErrNotExist) {
+		if _, err := destination.LookupHashResult(storefmt.ContentHash([]byte("# Body\n"))); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("archived imported hash lookup err = %v, want ErrNotExist", err)
 		}
 	})
 
 	t.Run("explicit false overrides legacy tip", func(t *testing.T) {
-		stored, err := SerializeVersion(1, nil, []byte("# Legacy\n"), nil)
+		stored, err := storefmt.SerializeVersion(1, nil, []byte("# Legacy\n"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		stored, err = SetArchived(stored, true)
+		stored, err = storefmt.SetArchived(stored, true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		document := StoredDocument{
-			Versions: []StoredVersion{{Version: 1, Stored: stored, Modified: time.Now()}},
+		document := storefmt.StoredDocument{
+			Versions: []storefmt.StoredVersion{{Version: 1, Stored: stored, Modified: time.Now()}},
 			Archived: false,
 		}
 		root := t.TempDir()
@@ -96,28 +98,28 @@ func TestMigrationPreservesArchiveStateSeparately(t *testing.T) {
 		if err != nil || !bytes.Equal(imported, stored) {
 			t.Errorf("imported bytes equal = %v (err %v), want true", bytes.Equal(imported, stored), err)
 		}
-		if path, err := destination.LookupHashResult(ContentHash([]byte("# Legacy\n"))); err != nil || path != "/legacy.md" {
+		if path, err := destination.LookupHashResult(storefmt.ContentHash([]byte("# Legacy\n"))); err != nil || path != "/legacy.md" {
 			t.Errorf("active imported hash lookup = (%q, %v), want /legacy.md", path, err)
 		}
 
-		exported := make(map[string]StoredDocument)
-		if err := destination.ExportDocs(context.Background(), func(path string, document StoredDocument) error {
+		exported := make(map[string]storefmt.StoredDocument)
+		if err := destination.ExportDocs(context.Background(), func(path string, document storefmt.StoredDocument) error {
 			exported[path] = document
 			return nil
 		}); err != nil {
 			t.Fatalf("ExportDocs: %v", err)
 		}
-		if err := DiffExports(map[string]StoredDocument{"/legacy.md": document}, exported); err != nil {
+		if err := storefmt.DiffExports(map[string]storefmt.StoredDocument{"/legacy.md": document}, exported); err != nil {
 			t.Fatalf("DiffExports: %v", err)
 		}
 	})
 }
 
 func TestDiffExportsComparesArchiveState(t *testing.T) {
-	version := StoredVersion{Version: 1, Stored: []byte("stored"), Modified: time.Now()}
-	want := map[string]StoredDocument{"/doc.md": {Versions: []StoredVersion{version}, Archived: true}}
-	got := map[string]StoredDocument{"/doc.md": {Versions: []StoredVersion{version}, Archived: false}}
-	if err := DiffExports(want, got); err == nil {
+	version := storefmt.StoredVersion{Version: 1, Stored: []byte("stored"), Modified: time.Now()}
+	want := map[string]storefmt.StoredDocument{"/doc.md": {Versions: []storefmt.StoredVersion{version}, Archived: true}}
+	got := map[string]storefmt.StoredDocument{"/doc.md": {Versions: []storefmt.StoredVersion{version}, Archived: false}}
+	if err := storefmt.DiffExports(want, got); err == nil {
 		t.Fatal("DiffExports accepted different archive state")
 	}
 }

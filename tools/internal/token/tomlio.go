@@ -189,56 +189,56 @@ func WriteFile(path string, file File) error {
 	})
 }
 
-// writeAtomic publishes a file at path by writing to a sibling temp file
-// and renaming it into place. Callers supply fn, which receives an
-// io.Writer pointing at the temp file. The temp file is removed on any
-// failure path; on success only the destination remains.
-//
-// The publish is both atomic (concurrent readers see either the old file
-// or the new one, never a partial write) and durable (an fsync(2) on the
-// data file before close plus an fsync(2) on the containing directory
-// after rename ensures the update survives an OS-level crash immediately
-// after the call returns). Both are properties operators expect from
-// `demarkus-token revoke` and the broker's issuance loop.
-//
-// Callers are expected to hold the appropriate advisory lock via
-// withLockedFile. writeAtomic itself does not lock — locking and
-// atomic-publish are separate concerns combined at the call sites.
+// writeAtomic publishes through a temp file and a rename, with an fsync of the
+// file and of its directory, so readers never see a partial file and a revoke
+// survives a crash. Callers hold the lock from withLockedFile.
 func writeAtomic(path string, fn func(io.Writer) error) error {
 	tmp := path + ".tmp"
+	if err := writeTemp(tmp, fn); err != nil {
+		return errors.Join(err, removeTemp(tmp))
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return errors.Join(fmt.Errorf("rename %q to %q: %w", tmp, path, err), removeTemp(tmp))
+	}
+	return syncParentDir(path)
+}
+
+// writeTemp writes, syncs and closes the temp file; a close error is reported
+// even when an earlier step already failed.
+func writeTemp(tmp string, fn func(io.Writer) error) error {
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("open temp tokens file %q: %w", tmp, err)
 	}
 	if err := fn(f); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("fsync temp tokens file %q: %w", tmp, err)
+		return errors.Join(fmt.Errorf("fsync temp tokens file %q: %w", tmp, err), f.Close())
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("close temp tokens file %q: %w", tmp, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename %q to %q: %w", tmp, path, err)
+	return nil
+}
+
+// removeTemp deletes a failed temp file; one that never appeared is not an error.
+func removeTemp(tmp string) error {
+	if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove temp tokens file %q: %w", tmp, err)
 	}
-	// fsync the containing directory so the rename's directory-entry
-	// update is durable. Without this, an OS crash immediately after
-	// Rename returns can leave the destination missing or pointing at
-	// the old inode after recovery — fatal for revoke confirmations.
+	return nil
+}
+
+// syncParentDir makes the rename durable; without it a crash right after the
+// rename can bring back the old file, which is fatal for a revoke.
+func syncParentDir(path string) error {
 	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return fmt.Errorf("open parent dir of %q for fsync: %w", path, err)
 	}
 	if err := dir.Sync(); err != nil {
-		_ = dir.Close()
-		return fmt.Errorf("fsync parent dir of %q: %w", path, err)
+		return errors.Join(fmt.Errorf("fsync parent dir of %q: %w", path, err), dir.Close())
 	}
 	if err := dir.Close(); err != nil {
 		return fmt.Errorf("close parent dir of %q: %w", path, err)
@@ -246,17 +246,19 @@ func writeAtomic(path string, fn func(io.Writer) error) error {
 	return nil
 }
 
-// withLockedFile holds an exclusive advisory lock on a sidecar `<path>.lock`
-// while fn runs, serializing AppendEntry/WriteFile across processes on the
-// same host. The sidecar is preferred over locking the data file directly
-// so the data file is never created as a side effect of acquiring the lock.
-func withLockedFile(path string, fn func() error) error {
+// withLockedFile runs fn under an exclusive advisory lock on `<path>.lock`. A
+// sidecar, so taking the lock never creates the data file.
+func withLockedFile(path string, fn func() error) (err error) {
 	lockPath := path + ".lock"
 	lf, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return fmt.Errorf("open lock file %q: %w", lockPath, err)
 	}
-	defer func() { _ = lf.Close() }()
+	defer func() {
+		if cerr := lf.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("close lock file %q: %w", lockPath, cerr))
+		}
+	}()
 	if err := lockExclusive(lf); err != nil {
 		return fmt.Errorf("acquire lock on %q: %w", lockPath, err)
 	}

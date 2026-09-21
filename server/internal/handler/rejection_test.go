@@ -1,13 +1,14 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 )
@@ -18,16 +19,16 @@ type refusingStore struct {
 	err error
 }
 
-func (s *refusingStore) WriteVersion(string, int, []byte, map[string]string) (*store.Document, error) {
+func (s *refusingStore) Publish(context.Context, storagebackend.WriteRequest) (*storefmt.Document, error) {
 	return nil, s.err
 }
 
-func (s *refusingStore) Append(string, int, []byte, map[string]string) (*store.Document, error) {
+func (s *refusingStore) Append(context.Context, storagebackend.WriteRequest) (*storefmt.Document, error) {
 	return nil, s.err
 }
 
-func (s *refusingStore) ArchiveResult(string, bool) (*store.Document, bool, error) {
-	return nil, false, s.err
+func (s *refusingStore) SetArchived(context.Context, string, bool) (storagebackend.ArchiveResult, error) {
+	return storagebackend.ArchiveResult{}, s.err
 }
 
 type violationsError struct{}
@@ -50,7 +51,7 @@ func TestWriteRejectionStatusMapping(t *testing.T) {
 		status   string
 		contains string
 	}{
-		{name: "path collision", err: fmt.Errorf("cannot publish /a.md: %w", store.ErrPathCollision), status: protocol.StatusBadRequest, contains: "cannot publish"},
+		{name: "path collision", err: fmt.Errorf("cannot publish /a.md: %w", storefmt.ErrPathCollision), status: protocol.StatusBadRequest, contains: "cannot publish"},
 		{name: "quota", err: fmt.Errorf("document %w: limit 10", storagebackend.ErrQuota), status: protocol.StatusNotPermitted, contains: "quota"},
 		{name: "policy violations", err: violationsError{}, status: protocol.StatusBadRequest, contains: "missing-tags"},
 		{name: "unclassified", err: errors.New("bucket unreachable"), status: protocol.StatusServerError, contains: "internal error"},
@@ -72,7 +73,7 @@ func TestWriteRejectionStatusMapping(t *testing.T) {
 				h.Store = &refusingStore{DocumentStore: b.Store, err: e.err}
 
 				stream := newMockStream(r.request)
-				h.HandleStream(stream)
+				h.HandleStream(context.Background(), stream)
 				resp, err := protocol.ParseResponse(&stream.output)
 				if err != nil {
 					t.Fatalf("parse response: %v", err)

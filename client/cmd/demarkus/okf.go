@@ -213,7 +213,7 @@ func okfExportMain(args []string) {
 func publisherMeta(respMeta map[string]string) map[string]string {
 	out := make(map[string]string, len(respMeta))
 	for k, v := range respMeta {
-		if !protocol.ReservedMetadataKeys[k] {
+		if !protocol.IsReservedMetadataKey(k) {
 			out[k] = v
 		}
 	}

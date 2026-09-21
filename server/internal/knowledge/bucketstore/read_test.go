@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	pathpkg "path"
 	"slices"
 	"sort"
@@ -17,18 +16,28 @@ import (
 	"testing"
 	"time"
 
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 )
 
-var (
-	_ backend.Reader        = (*Store)(nil)
-	_ backend.CatalogReader = (*Store)(nil)
-	_ backend.ViewProvider  = (*Store)(nil)
-	_ backend.ReadView      = (*readView)(nil)
-)
+var _ backend.Store = (*Store)(nil)
+
+// pinnedSurface reads one contract view without naming a context per call.
+type pinnedSurface struct{ view backend.ReadView }
+
+func (p pinnedSurface) Get(reqPath string, version int) (*storefmt.Document, error) {
+	return p.view.Get(context.Background(), reqPath, version)
+}
+
+func (p pinnedSurface) Versions(reqPath string) ([]storefmt.VersionInfo, error) {
+	return p.view.Versions(context.Background(), reqPath)
+}
+
+func (p pinnedSurface) VerifyChain(reqPath string) error {
+	return p.view.VerifyChain(context.Background(), reqPath)
+}
 
 func TestSnapshotRefresh(t *testing.T) {
 	t.Run("unchanged head uses Head and reuses snapshot", func(t *testing.T) {
@@ -129,14 +138,14 @@ func TestSnapshotRefresh(t *testing.T) {
 		head := getObject(t, memory, headObjectKey)
 		replaceObject(t, memory, headObjectKey, head.Attributes.Generation, []byte("{"))
 
-		view, err := store.OpenReadView()
-		if view != nil || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, protocolstore.ErrIntegrity) {
+		view, err := store.OpenReadView(context.Background())
+		if view != nil || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, storefmt.ErrIntegrity) {
 			t.Fatalf("OpenReadView() = (%v, %v), want integrity", view, err)
 		}
 		if store.snapshot.Load() != cached {
 			t.Error("failed refresh replaced cached snapshot")
 		}
-		if _, err := store.Get("/docs/a.md", 0); !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, protocolstore.ErrIntegrity) {
+		if _, err := store.Get("/docs/a.md", 0); !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, storefmt.ErrIntegrity) {
 			t.Errorf("direct Get error = %v, want integrity instead of stale data", err)
 		}
 		if got, err := store.CurrentVersionResult("/docs/a.md"); got != 0 || !errors.Is(err, blob.ErrIntegrity) {
@@ -206,8 +215,8 @@ func TestSnapshotRefresh(t *testing.T) {
 		cached := store.snapshot.Load()
 		head := getObject(t, memory, headObjectKey)
 		replaceObject(t, memory, headObjectKey, head.Attributes.Generation, head.Data)
-		view, err := store.OpenReadView()
-		if view != nil || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, protocolstore.ErrIntegrity) {
+		view, err := store.OpenReadView(context.Background())
+		if view != nil || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, storefmt.ErrIntegrity) {
 			t.Fatalf("OpenReadView() = (%v, %v), want sequence integrity", view, err)
 		}
 		if store.snapshot.Load() != cached {
@@ -277,10 +286,15 @@ func TestReadViewContextAndSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open old view: %v", err)
 	}
-	deadline, ok := old.ctx.Deadline()
-	if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 2*time.Second {
+	contractView, err := store.OpenReadView(context.Background())
+	if err != nil {
+		t.Fatalf("open contract view: %v", err)
+	}
+	deadline := contractView.(*snapshotView).deadline
+	if time.Until(deadline) <= 0 || time.Until(deadline) > 2*time.Second {
 		t.Fatalf("view deadline = %v, want active two-second bound", deadline)
 	}
+	observed.reset()
 
 	second := first
 	second.Bodies = append(second.Bodies, []byte("# A v2\n"))
@@ -290,7 +304,7 @@ func TestReadViewContextAndSnapshot(t *testing.T) {
 		body:          "# A v1\n",
 		version:       1,
 		versions:      []int{1},
-		entries:       []protocolstore.DirEntry{{Name: "a.md"}},
+		entries:       []storefmt.DirEntry{{Name: "a.md"}},
 		lookup:        "before",
 		missingLookup: "after",
 		missingBody:   "# A v2\n",
@@ -309,7 +323,7 @@ func TestReadViewContextAndSnapshot(t *testing.T) {
 		body:          "# A v2\n",
 		version:       2,
 		versions:      []int{2, 1},
-		entries:       []protocolstore.DirEntry{{Name: "a.md"}, {Name: "new.md"}},
+		entries:       []storefmt.DirEntry{{Name: "a.md"}, {Name: "new.md"}},
 		lookup:        "after",
 		missingLookup: "before",
 		missingBody:   "# A v1\n",
@@ -321,10 +335,10 @@ func TestReadViewContextAndSnapshot(t *testing.T) {
 	if err := old.Close(); err != nil {
 		t.Fatalf("second close old: %v", err)
 	}
-	if !errors.Is(old.ctx.Err(), context.Canceled) {
-		t.Errorf("closed context error = %v, want canceled", old.ctx.Err())
+	if err := contractView.Close(); err != nil {
+		t.Fatalf("close contract view: %v", err)
 	}
-	if _, err := old.IsDir("/"); !errors.Is(err, context.Canceled) {
+	if _, err := contractView.IsDir(context.Background(), "/"); !errors.Is(err, context.Canceled) {
 		t.Errorf("read after close error = %v, want canceled", err)
 	}
 }
@@ -382,7 +396,7 @@ func TestReadSemantics(t *testing.T) {
 		if !document.Modified.Equal(wantModified) || document.Modified.Location() != time.UTC || document.Modified.Nanosecond() != 0 {
 			t.Errorf("modified = %v, want UTC seconds %v", document.Modified, wantModified)
 		}
-		if document.ETag != protocolstore.StoredETag(wantRaw) || document.Metadata["tags"] != "after,common" {
+		if document.ETag != storefmt.StoredETag(wantRaw) || document.Metadata["tags"] != "after,common" {
 			t.Errorf("etag/meta = %q %v", document.ETag, document.Metadata)
 		}
 		document.Content[0] = 'X'
@@ -423,13 +437,13 @@ func TestReadSemantics(t *testing.T) {
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
-				if _, err := view.Get(test.path, test.version); !errors.Is(err, os.ErrNotExist) {
+				if _, err := view.Get(test.path, test.version); !errors.Is(err, backend.ErrNotFound) {
 					t.Errorf("Get() error = %v, want not-exist", err)
 				}
 			})
 		}
-		if _, err := store.Get("/missing.md", 0); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("direct Get error = %v, want exact os.ErrNotExist", err)
+		if _, err := store.Get("/missing.md", 0); !errors.Is(err, backend.ErrNotFound) {
+			t.Errorf("direct Get error = %v, want exact backend.ErrNotFound", err)
 		}
 	})
 
@@ -453,7 +467,7 @@ func TestReadSemantics(t *testing.T) {
 		if err != nil || len(prunedVersions) != 1 || prunedVersions[0].Version != 3 {
 			t.Errorf("pruned versions = (%v, %v)", prunedVersions, err)
 		}
-		if _, err := view.Versions("/missing.md"); !errors.Is(err, os.ErrNotExist) {
+		if _, err := view.Versions("/missing.md"); !errors.Is(err, backend.ErrNotFound) {
 			t.Errorf("missing Versions error = %v", err)
 		}
 	})
@@ -465,28 +479,28 @@ func TestReadSemantics(t *testing.T) {
 		if err := view.VerifyChain(pruned.Path); err != nil {
 			t.Errorf("pruned chain: %v", err)
 		}
-		if err := view.VerifyChain("/missing.md"); !errors.Is(err, os.ErrNotExist) {
+		if err := view.VerifyChain("/missing.md"); !errors.Is(err, backend.ErrNotFound) {
 			t.Errorf("missing chain error = %v", err)
 		}
 	})
 
 	t.Run("directory topology", func(t *testing.T) {
-		assertEntries(t, view, "/", false, []protocolstore.DirEntry{{Name: "docs", IsDir: true}})
-		assertEntries(t, view, "/", true, []protocolstore.DirEntry{{Name: "archive", IsDir: true}, {Name: "docs", IsDir: true}})
-		assertEntries(t, view, "/docs", false, []protocolstore.DirEntry{
+		assertEntries(t, view, "/", false, []storefmt.DirEntry{{Name: "docs", IsDir: true}})
+		assertEntries(t, view, "/", true, []storefmt.DirEntry{{Name: "archive", IsDir: true}, {Name: "docs", IsDir: true}})
+		assertEntries(t, view, "/docs", false, []storefmt.DirEntry{
 			{Name: "live.md"},
 			{Name: "pruned.md"},
 			{Name: "shared-a.md"},
 			{Name: "shared-z.md"},
 		})
-		assertEntries(t, view, "/archive", false, []protocolstore.DirEntry{})
-		if _, err := view.ListEntries(live.Path, false); !errors.Is(err, os.ErrNotExist) {
+		assertEntries(t, view, "/archive", false, []storefmt.DirEntry{})
+		if _, err := view.ListEntries(live.Path, false); !errors.Is(err, backend.ErrNotFound) {
 			t.Errorf("list document error = %v", err)
 		}
-		if _, err := view.ListEntries("/missing", false); !errors.Is(err, os.ErrNotExist) {
+		if _, err := view.ListEntries("/missing", false); !errors.Is(err, backend.ErrNotFound) {
 			t.Errorf("list missing error = %v", err)
 		}
-		if _, err := view.ListEntries("/../docs", false); !errors.Is(err, os.ErrNotExist) {
+		if _, err := view.ListEntries("/../docs", false); !errors.Is(err, backend.ErrNotFound) {
 			t.Errorf("list dot-dot error = %v", err)
 		}
 
@@ -504,19 +518,19 @@ func TestReadSemantics(t *testing.T) {
 		}
 		for _, check := range checks {
 			isDirectory, err := view.IsDir(check.path)
-			if isDirectory != check.want || errors.Is(err, os.ErrNotExist) != check.wantErr {
+			if isDirectory != check.want || errors.Is(err, backend.ErrNotFound) != check.wantErr {
 				t.Errorf("IsDir(%q) = (%v, %v), want (%v, not-exist=%v)", check.path, isDirectory, err, check.want, check.wantErr)
 			}
 		}
 	})
 
 	t.Run("hash and catalog", func(t *testing.T) {
-		sharedHash := protocolstore.ContentHash([]byte("same"))
-		path, err := view.LookupHashResult(sharedHash)
+		sharedHash := storefmt.ContentHash([]byte("same"))
+		path, err := view.LookupHash(sharedHash)
 		if err != nil || path != sharedA.Path {
 			t.Errorf("LookupHash = (%q, %v), want %q", path, err, sharedA.Path)
 		}
-		if _, err := view.LookupHashResult(protocolstore.ContentHash([]byte("# Archived\n"))); !errors.Is(err, os.ErrNotExist) {
+		if _, err := view.LookupHash(storefmt.ContentHash([]byte("# Archived\n"))); !errors.Is(err, backend.ErrNotFound) {
 			t.Errorf("archived hash error = %v", err)
 		}
 		results, err := view.Lookup("after", catalog.Options{Scope: "/docs"})
@@ -653,7 +667,7 @@ func TestReferencedObjectIntegrity(t *testing.T) {
 			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
 				document := commit.documents["/docs/a.md"]
 				entry := document.entry
-				entry.BodyHash = protocolstore.ContentHash([]byte("other"))
+				entry.BodyHash = storefmt.ContentHash([]byte("other"))
 				installSnapshotEntry(t, memory, &entry)
 			},
 		},
@@ -683,7 +697,7 @@ func TestReferencedObjectIntegrity(t *testing.T) {
 			}
 			defer closeTestReadView(t, view)
 			_, err = view.Get("/docs/a.md", test.version)
-			if !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, protocolstore.ErrIntegrity) {
+			if !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, storefmt.ErrIntegrity) {
 				t.Fatalf("Get error = %v, want integrity", err)
 			}
 			if test.wantCause != nil && !errors.Is(err, test.wantCause) {
@@ -713,7 +727,7 @@ func TestStoredArchiveHeaderIsLegacyOnly(t *testing.T) {
 		if resolved == 0 {
 			resolved = 2
 		}
-		wantETag := protocolstore.StoredETag(commit.documents[document.Path].versions[resolved].raw)
+		wantETag := storefmt.StoredETag(commit.documents[document.Path].versions[resolved].raw)
 		if stored.ETag != wantETag {
 			t.Errorf("Get(v%d) ETag = %q, want %q", version, stored.ETag, wantETag)
 		}
@@ -725,8 +739,8 @@ func TestStoredArchiveHeaderIsLegacyOnly(t *testing.T) {
 
 func TestReadIntegrityNormalization(t *testing.T) {
 	type readSurface interface {
-		Get(string, int) (*protocolstore.Document, error)
-		Versions(string) ([]protocolstore.VersionInfo, error)
+		Get(string, int) (*storefmt.Document, error)
+		Versions(string) ([]storefmt.VersionInfo, error)
 		VerifyChain(string) error
 	}
 	operations := []struct {
@@ -757,7 +771,7 @@ func TestReadIntegrityNormalization(t *testing.T) {
 				var surface readSurface = store
 				var view backend.ReadView
 				if surfaceName == "request view" {
-					view, err = store.OpenReadView()
+					view, err = store.OpenReadView(context.Background())
 					if err != nil {
 						t.Fatalf("open request view: %v", err)
 					}
@@ -766,11 +780,11 @@ func TestReadIntegrityNormalization(t *testing.T) {
 							t.Errorf("close request view: %v", err)
 						}
 					}()
-					surface = view
+					surface = pinnedSurface{view: view}
 				}
 				deleteObject(t, memory, commit.documents["/docs/a.md"].entry.Manifest.Key)
 				err = operation.read(surface)
-				if !errors.Is(err, protocolstore.ErrIntegrity) || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, blob.ErrNotFound) {
+				if !errors.Is(err, storefmt.ErrIntegrity) || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, blob.ErrNotFound) {
 					t.Fatalf("read error = %v, want protocol integrity with blob integrity and not-found causes", err)
 				}
 			})
@@ -797,7 +811,7 @@ func TestVerifyChainErrors(t *testing.T) {
 		memory := initializedMemory(t)
 		commit := commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "one", "two")})
 		document := commit.documents["/docs/a.md"]
-		raw, err := protocolstore.SerializeVersion(1, nil, []byte("changed"), document.versions[1].metadata)
+		raw, err := storefmt.SerializeVersion(1, nil, []byte("changed"), document.versions[1].metadata)
 		if err != nil {
 			t.Fatalf("serialize changed v1: %v", err)
 		}
@@ -852,7 +866,7 @@ func TestReadViewTimeout(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	store.objects = &blockingHeadStore{Store: memory}
-	view, err := store.OpenReadView()
+	view, err := store.OpenReadView(context.Background())
 	if view != nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("OpenReadView() = (%v, %v), want deadline", view, err)
 	}
@@ -984,12 +998,12 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 	retained := make([]historyEntry, 0, len(spec.Bodies)-spec.RetainFrom+1)
 	for index, body := range spec.Bodies {
 		version := index + 1
-		raw, err := protocolstore.SerializeVersion(version, previousRaw, body, spec.Metadata[index])
+		raw, err := storefmt.SerializeVersion(version, previousRaw, body, spec.Metadata[index])
 		if err != nil {
 			t.Fatalf("serialize %s v%d: %v", spec.Path, version, err)
 		}
 		if spec.StoredArchived[version] {
-			raw, err = protocolstore.SetArchived(raw, true)
+			raw, err = storefmt.SetArchived(raw, true)
 			if err != nil {
 				t.Fatalf("archive %s v%d: %v", spec.Path, version, err)
 			}
@@ -998,7 +1012,7 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 		modified := readVersionModified(version)
 		entry := historyEntry{
 			Version:  version,
-			BodyHash: protocolstore.ContentHash(body),
+			BodyHash: storefmt.ContentHash(body),
 			Modified: modified.Format(time.RFC3339),
 		}
 		if version >= spec.RetainFrom {
@@ -1049,7 +1063,7 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 	createReadObject(t, memory, manifestModel)
 
 	tip := document.versions[len(spec.Bodies)]
-	metadata := protocolstore.ExtractMetadata(tip.raw)
+	metadata := storefmt.ExtractMetadata(tip.raw)
 	catalogEntry := catalog.FromDocument(spec.Path, metadata, spec.Bodies[len(spec.Bodies)-1], tip.modified)
 	tags := slices.Clone(catalogEntry.Tags)
 	if tags == nil {
@@ -1147,7 +1161,7 @@ func installRawMutation(
 	ref := objectRef{Key: blobKey(blobHash), Hash: blobHash}
 	createReadObject(t, memory, modelObject{Key: ref.Key, Data: raw})
 	history.Entries[index].Blob = ref
-	history.Entries[index].BodyHash = protocolstore.ContentHash(protocolstore.ExtractBody(raw))
+	history.Entries[index].BodyHash = storefmt.ContentHash(storefmt.ExtractBody(raw))
 	installHistoryMutation(t, memory, document, history, true)
 }
 
@@ -1256,7 +1270,7 @@ type pinnedReadWant struct {
 	body          string
 	version       int
 	versions      []int
-	entries       []protocolstore.DirEntry
+	entries       []storefmt.DirEntry
 	lookup        string
 	missingLookup string
 	missingBody   string
@@ -1284,11 +1298,11 @@ func assertPinnedReadView(t *testing.T, view *readView, want *pinnedReadWant) {
 			t.Errorf("Versions = %v, want %v", got, want.versions)
 		}
 	}
-	hash := protocolstore.ContentHash([]byte(want.body))
-	if path, err := view.LookupHashResult(hash); err != nil || path != "/docs/a.md" {
+	hash := storefmt.ContentHash([]byte(want.body))
+	if path, err := view.LookupHash(hash); err != nil || path != "/docs/a.md" {
 		t.Errorf("LookupHash = (%q, %v)", path, err)
 	}
-	if _, err := view.LookupHashResult(protocolstore.ContentHash([]byte(want.missingBody))); !errors.Is(err, os.ErrNotExist) {
+	if _, err := view.LookupHash(storefmt.ContentHash([]byte(want.missingBody))); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("missing LookupHash error = %v", err)
 	}
 	results, err := view.Lookup(want.lookup, catalog.Options{Scope: "/docs"})
@@ -1304,7 +1318,7 @@ func assertPinnedReadView(t *testing.T, view *readView, want *pinnedReadWant) {
 	}
 }
 
-func assertEntries(t *testing.T, view *readView, requestPath string, includeArchived bool, want []protocolstore.DirEntry) {
+func assertEntries(t *testing.T, view *readView, requestPath string, includeArchived bool, want []storefmt.DirEntry) {
 	t.Helper()
 	entries, err := view.ListEntries(requestPath, includeArchived)
 	if err != nil {

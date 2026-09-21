@@ -5,6 +5,7 @@ package storetest
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
@@ -26,13 +29,9 @@ type Factory func(t *testing.T) handler.DocumentStore
 // corruption on every backend.
 type Tamper func(t testing.TB, s handler.DocumentStore, path string, version int, stored []byte)
 
-// FileTamper is the file store's Tamper: it rewrites the version file.
-func FileTamper(t testing.TB, s handler.DocumentStore, path string, version int, stored []byte) {
+// FileTamper rewrites one version file of the raw file store under a backend.
+func FileTamper(t testing.TB, fs *store.Store, path string, version int, stored []byte) {
 	t.Helper()
-	fs, ok := s.(*store.Store)
-	if !ok {
-		t.Fatalf("FileTamper: store is %T, want *store.Store", s)
-	}
 	file, err := fs.VersionFilePath(path, version)
 	if err != nil {
 		t.Fatalf("FileTamper: %v", err)
@@ -48,7 +47,7 @@ func FileTamper(t testing.TB, s handler.DocumentStore, path string, version int,
 func RunConformance(t *testing.T, factory Factory, tamper Tamper) {
 	subtests := []struct {
 		name string
-		fn   func(t *testing.T, s handler.DocumentStore)
+		fn   func(t *testing.T, s Direct)
 	}{
 		{"WriteGetRoundtrip", testWriteGetRoundtrip},
 		{"DocumentOwnedFrontmatter", testDocumentOwnedFrontmatter},
@@ -67,17 +66,18 @@ func RunConformance(t *testing.T, factory Factory, tamper Tamper) {
 		{"SharedBodyHash", testSharedBodyHash},
 		{"BodySizeLimit", testBodySizeLimit},
 		{"InvalidMetadata", testInvalidMetadata},
-		{"VerifyChainTampered", func(t *testing.T, s handler.DocumentStore) { testVerifyChainTampered(t, s, tamper) }},
-		{"VerifyChainTamperedTip", func(t *testing.T, s handler.DocumentStore) { testVerifyChainTamperedTip(t, s, tamper) }},
+		{"CanceledContext", testCanceledContext},
+		{"VerifyChainTampered", func(t *testing.T, s Direct) { testVerifyChainTampered(t, s, tamper) }},
+		{"VerifyChainTamperedTip", func(t *testing.T, s Direct) { testVerifyChainTamperedTip(t, s, tamper) }},
 	}
 	for _, st := range subtests {
 		t.Run(st.name, func(t *testing.T) {
-			st.fn(t, factory(t))
+			st.fn(t, Direct{Store: factory(t)})
 		})
 	}
 }
 
-func testWriteGetRoundtrip(t *testing.T, s handler.DocumentStore) {
+func testWriteGetRoundtrip(t *testing.T, s Direct) {
 	meta := map[string]string{"tags": "a, b", "importance": "0.5"}
 	doc, err := s.WriteVersion("/notes/first.md", 0, []byte("# First\n"), meta)
 	if err != nil {
@@ -90,11 +90,11 @@ func testWriteGetRoundtrip(t *testing.T, s handler.DocumentStore) {
 	if !bytes.Equal(doc.Content, []byte("# First\n")) {
 		t.Errorf("write-returned body = %q, want %q", doc.Content, "# First\n")
 	}
-	stored, err := store.SerializeVersion(1, nil, []byte("# First\n"), meta)
+	stored, err := storefmt.SerializeVersion(1, nil, []byte("# First\n"), meta)
 	if err != nil {
 		t.Fatalf("serialize expected stored bytes: %v", err)
 	}
-	wantETag := store.StoredETag(stored)
+	wantETag := storefmt.StoredETag(stored)
 	if doc.ETag != wantETag {
 		t.Errorf("write ETag = %q, want raw stored-byte hash %q", doc.ETag, wantETag)
 	}
@@ -131,7 +131,7 @@ func testWriteGetRoundtrip(t *testing.T, s handler.DocumentStore) {
 // testDocumentOwnedFrontmatter pins that a body beginning with its own YAML
 // fence survives byte-exact: only the store's frontmatter may be stripped,
 // never the document's (a second ExtractBody would eat it).
-func testDocumentOwnedFrontmatter(t *testing.T, s handler.DocumentStore) {
+func testDocumentOwnedFrontmatter(t *testing.T, s Direct) {
 	body := []byte("---\ntitle: mine\n---\n# Doc\n")
 	doc, err := s.WriteVersion("/fm.md", 0, body, nil)
 	if err != nil {
@@ -149,7 +149,7 @@ func testDocumentOwnedFrontmatter(t *testing.T, s handler.DocumentStore) {
 	}
 }
 
-func testVersionHistory(t *testing.T, s handler.DocumentStore) {
+func testVersionHistory(t *testing.T, s Direct) {
 	first := mustWrite(t, s, "/doc.md", 0, "v1")
 	mustWrite(t, s, "/doc.md", 1, "v2")
 	mustWrite(t, s, "/doc.md", 2, "v3")
@@ -179,12 +179,12 @@ func testVersionHistory(t *testing.T, s handler.DocumentStore) {
 	}
 }
 
-func testConflictSemantics(t *testing.T, s handler.DocumentStore) {
+func testConflictSemantics(t *testing.T, s Direct) {
 	mustWrite(t, s, "/c.md", 0, "v1")
 
 	// Create-only on an existing document.
 	doc, err := s.WriteVersion("/c.md", 0, []byte("x"), nil)
-	if !errors.Is(err, store.ErrConflict) {
+	if !errors.Is(err, storefmt.ErrConflict) {
 		t.Fatalf("create-only on existing: err = %v, want ErrConflict", err)
 	}
 	if doc == nil || doc.Version != 1 {
@@ -194,7 +194,7 @@ func testConflictSemantics(t *testing.T, s handler.DocumentStore) {
 	// Stale expected version.
 	mustWrite(t, s, "/c.md", 1, "v2")
 	doc, err = s.WriteVersion("/c.md", 1, []byte("x"), nil)
-	if !errors.Is(err, store.ErrConflict) {
+	if !errors.Is(err, storefmt.ErrConflict) {
 		t.Fatalf("stale expected: err = %v, want ErrConflict", err)
 	}
 	if doc == nil || doc.Version != 2 {
@@ -208,14 +208,14 @@ func testConflictSemantics(t *testing.T, s handler.DocumentStore) {
 	}
 }
 
-func testNotModifiedDedup(t *testing.T, s handler.DocumentStore) {
+func testNotModifiedDedup(t *testing.T, s Direct) {
 	meta := map[string]string{"tags": "same"}
 	first, err := s.WriteVersion("/dup.md", 0, []byte("body"), meta)
 	if err != nil || first == nil {
 		t.Fatalf("create = (%+v, %v), want document", first, err)
 	}
 	doc, err := s.WriteVersion("/dup.md", 1, []byte("body"), meta)
-	if !errors.Is(err, store.ErrNotModified) {
+	if !errors.Is(err, storefmt.ErrNotModified) {
 		t.Fatalf("identical rewrite: err = %v, want ErrNotModified", err)
 	}
 	if doc == nil || doc.Version != 1 {
@@ -255,7 +255,7 @@ func testNotModifiedDedup(t *testing.T, s handler.DocumentStore) {
 		t.Fatalf("normalized create = (%+v, %v), want document", normalized, err)
 	}
 	repeated, err := s.WriteVersion("/normalized.md", 1, []byte("body"), map[string]string{"tags": " alpha,beta "})
-	if !errors.Is(err, store.ErrNotModified) || repeated == nil {
+	if !errors.Is(err, storefmt.ErrNotModified) || repeated == nil {
 		t.Fatalf("normalized rewrite = (%+v, %v), want ErrNotModified", repeated, err)
 	}
 	if repeated.Version != 1 || repeated.ETag != normalized.ETag || repeated.Metadata["tags"] != "alpha,beta" {
@@ -263,11 +263,11 @@ func testNotModifiedDedup(t *testing.T, s handler.DocumentStore) {
 	}
 }
 
-func testArchiveLifecycle(t *testing.T, s handler.DocumentStore) {
+func testArchiveLifecycle(t *testing.T, s Direct) {
 	initial := mustWrite(t, s, "/arch.md", 0, "content")
-	hash := store.ContentHash([]byte("content"))
+	hash := storefmt.ContentHash([]byte("content"))
 
-	if p, err := s.LookupHashResult(hash); err != nil || p != "/arch.md" {
+	if p, err := s.LookupHash(hash); err != nil || p != "/arch.md" {
 		t.Errorf("LookupHash before archive = (%q, %v), want (/arch.md, nil)", p, err)
 	}
 	archivedDoc := mustArchiveTransition(t, s, "/arch.md", true)
@@ -275,14 +275,15 @@ func testArchiveLifecycle(t *testing.T, s handler.DocumentStore) {
 		t.Errorf("archive changed immutable version identity: got %+v, want v1 etag=%q modified=%v", archivedDoc, initial.ETag, initial.Modified)
 	}
 	assertArchiveState(t, s, "/arch.md", initial, true)
-	unchangedDoc, changed, err := s.ArchiveResult("/arch.md", true)
+	unchanged, err := s.Archive("/arch.md", true)
+	unchangedDoc, changed := unchanged.Document, unchanged.Changed
 	if err != nil || changed || unchangedDoc == nil || unchangedDoc.ETag != archivedDoc.ETag || !unchangedDoc.Modified.Equal(archivedDoc.Modified) {
 		t.Errorf("archive no-op = (%+v, changed=%v, err=%v), want unchanged committed document", unchangedDoc, changed, err)
 	}
-	if _, err := s.LookupHashResult(hash); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.LookupHash(hash); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("LookupHash after archive: err = %v, want ErrNotExist", err)
 	}
-	if _, err := s.WriteVersion("/arch.md", 1, []byte("new"), nil); !errors.Is(err, store.ErrArchived) {
+	if _, err := s.WriteVersion("/arch.md", 1, []byte("new"), nil); !errors.Is(err, storefmt.ErrArchived) {
 		t.Errorf("write to archived: err = %v, want ErrArchived", err)
 	}
 	if err := s.VerifyChain("/arch.md"); err != nil {
@@ -293,7 +294,7 @@ func testArchiveLifecycle(t *testing.T, s handler.DocumentStore) {
 		t.Errorf("unarchive changed immutable version identity: got %+v, want v1 etag=%q modified=%v", unarchivedDoc, initial.ETag, initial.Modified)
 	}
 	assertArchiveState(t, s, "/arch.md", initial, false)
-	if p, err := s.LookupHashResult(hash); err != nil || p != "/arch.md" {
+	if p, err := s.LookupHash(hash); err != nil || p != "/arch.md" {
 		t.Errorf("LookupHash after unarchive = (%q, %v), want (/arch.md, nil)", p, err)
 	}
 	if doc, err := s.WriteVersion("/arch.md", 1, []byte("new"), nil); err != nil || doc.Version != 2 {
@@ -302,12 +303,12 @@ func testArchiveLifecycle(t *testing.T, s handler.DocumentStore) {
 	if err := s.VerifyChain("/arch.md"); err != nil {
 		t.Errorf("VerifyChain after v2 write: %v", err)
 	}
-	if _, _, err := s.ArchiveResult("/missing.md", true); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.Archive("/missing.md", true); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("archive missing: err = %v, want ErrNotExist", err)
 	}
 }
 
-func assertArchiveState(t *testing.T, s handler.DocumentStore, path string, initial *store.Document, archived bool) {
+func assertArchiveState(t *testing.T, s Direct, path string, initial *storefmt.Document, archived bool) {
 	t.Helper()
 	current, err := s.Get(path, 0)
 	if err != nil {
@@ -332,9 +333,10 @@ func assertArchiveState(t *testing.T, s handler.DocumentStore, path string, init
 	}
 }
 
-func mustArchiveTransition(t *testing.T, s handler.DocumentStore, path string, archived bool) *store.Document {
+func mustArchiveTransition(t *testing.T, s Direct, path string, archived bool) *storefmt.Document {
 	t.Helper()
-	document, changed, err := s.ArchiveResult(path, archived)
+	result, err := s.Archive(path, archived)
+	document, changed := result.Document, result.Changed
 	if err != nil {
 		t.Fatalf("Archive(%q, %v): %v", path, archived, err)
 	}
@@ -344,10 +346,10 @@ func mustArchiveTransition(t *testing.T, s handler.DocumentStore, path string, a
 	return document
 }
 
-func testAppendSemantics(t *testing.T, s handler.DocumentStore) {
+func testAppendSemantics(t *testing.T, s Direct) {
 	mustWrite(t, s, "/log.md", 0, "line1")
 
-	doc, err := s.Append("/log.md", 1, []byte("line2"), nil)
+	doc, err := s.AppendVersion("/log.md", 1, []byte("line2"), nil)
 	if err != nil || doc.Version != 2 {
 		t.Fatalf("append = (%+v, %v), want v2", doc, err)
 	}
@@ -363,14 +365,14 @@ func testAppendSemantics(t *testing.T, s handler.DocumentStore) {
 		t.Errorf("appended body = %q, want %q", body, "line1\nline2")
 	}
 
-	doc, err = s.Append("/log.md", 1, []byte("stale"), nil)
-	if !errors.Is(err, store.ErrConflict) {
+	doc, err = s.AppendVersion("/log.md", 1, []byte("stale"), nil)
+	if !errors.Is(err, storefmt.ErrConflict) {
 		t.Fatalf("stale append: err = %v, want ErrConflict", err)
 	}
 	if doc == nil || doc.Version != 2 {
 		t.Errorf("stale append doc = %+v, want Version 2", doc)
 	}
-	if _, err := s.Append("/nope.md", 1, []byte("x"), nil); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.AppendVersion("/nope.md", 1, []byte("x"), nil); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("append missing: err = %v, want ErrNotExist", err)
 	}
 }
@@ -378,7 +380,7 @@ func testAppendSemantics(t *testing.T, s handler.DocumentStore) {
 // testAppendMetadataMerge covers SPEC 6.6: an append inherits the base
 // version's publisher metadata, request keys winning. Without the merge the
 // document loses its tags and falls out of LOOKUP.
-func testAppendMetadataMerge(t *testing.T, s handler.DocumentStore) {
+func testAppendMetadataMerge(t *testing.T, s Direct) {
 	seed := map[string]string{"tags": "alpha, beta", "importance": "0.9", "type": "Plan", "title": "Kept"}
 	if _, err := s.WriteVersion("/tagged.md", 0, []byte("# Kept\n"), seed); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -431,17 +433,17 @@ func testAppendMetadataMerge(t *testing.T, s handler.DocumentStore) {
 	if _, err := s.WriteVersion("/wide.md", 0, []byte("v1"), wide); err != nil {
 		t.Fatalf("seed wide: %v", err)
 	}
-	_, err := s.Append("/wide.md", 1, []byte("v2"), map[string]string{"title": strings.Repeat("y", 64)})
-	if !errors.Is(err, store.ErrInvalidMeta) {
+	_, err := s.AppendVersion("/wide.md", 1, []byte("v2"), map[string]string{"title": strings.Repeat("y", 64)})
+	if !errors.Is(err, storefmt.ErrInvalidMeta) {
 		t.Errorf("over-cap merge: err = %v, want ErrInvalidMeta", err)
 	}
 }
 
 // appendMeta appends to a document and returns the stored metadata of the
 // version the append produced.
-func appendMeta(t *testing.T, s handler.DocumentStore, path string, expected int, meta map[string]string) map[string]string {
+func appendMeta(t *testing.T, s Direct, path string, expected int, meta map[string]string) map[string]string {
 	t.Helper()
-	if _, err := s.Append(path, expected, []byte("more"), meta); err != nil {
+	if _, err := s.AppendVersion(path, expected, []byte("more"), meta); err != nil {
 		t.Fatalf("append %s v%d: %v", path, expected, err)
 	}
 	doc, err := s.Get(path, 0)
@@ -451,17 +453,17 @@ func appendMeta(t *testing.T, s handler.DocumentStore, path string, expected int
 	return doc.Metadata
 }
 
-func testListDirSemantics(t *testing.T, s handler.DocumentStore) {
+func testListDirSemantics(t *testing.T, s Direct) {
 	mustWrite(t, s, "/live.md", 0, "live")
 	mustWrite(t, s, "/gone.md", 0, "gone")
 	mustWrite(t, s, "/attic/old.md", 0, "old")
 	mustWrite(t, s, "/nested/a/b/keep.md", 0, "keep")
 	mustWrite(t, s, "/.hidden.md", 0, "hidden")
 	mustWrite(t, s, "/work/.scratch.md", 0, "scratch")
-	if _, _, err := s.ArchiveResult("/gone.md", true); err != nil {
+	if _, err := s.Archive("/gone.md", true); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.ArchiveResult("/attic/old.md", true); err != nil {
+	if _, err := s.Archive("/attic/old.md", true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -497,15 +499,15 @@ func testListDirSemantics(t *testing.T, s handler.DocumentStore) {
 	if err != nil || len(entries) != 1 || entries[0].Name != "a" || !entries[0].IsDir {
 		t.Errorf("nested list = (%+v, %v), want single dir 'a'", entries, err)
 	}
-	if _, err := s.ListEntries("/does-not-exist", false); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.ListEntries("/does-not-exist", false); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("missing dir: err = %v, want ErrNotExist", err)
 	}
-	if _, err := s.ListEntries("/live.md", false); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.ListEntries("/live.md", false); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("doc path list: err = %v, want ErrNotExist", err)
 	}
 }
 
-func testIsDirSemantics(t *testing.T, s handler.DocumentStore) {
+func testIsDirSemantics(t *testing.T, s Direct) {
 	mustWrite(t, s, "/dir/doc.md", 0, "x")
 
 	if ok, err := s.IsDir("/"); err != nil || !ok {
@@ -517,7 +519,7 @@ func testIsDirSemantics(t *testing.T, s handler.DocumentStore) {
 	if ok, err := s.IsDir("/dir/doc.md"); err != nil || ok {
 		t.Errorf("IsDir(doc) = (%v, %v), want false", ok, err)
 	}
-	if _, err := s.IsDir("/missing"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.IsDir("/missing"); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("IsDir(missing): err = %v, want ErrNotExist", err)
 	}
 }
@@ -525,7 +527,7 @@ func testIsDirSemantics(t *testing.T, s handler.DocumentStore) {
 // testRetention pins retention: the window is applied on the write that
 // carries it, numbering continues past pruned history, an unretained write
 // stops pruning, and a window wider than the history is a no-op.
-func testRetention(t *testing.T, s handler.DocumentStore) {
+func testRetention(t *testing.T, s Direct) {
 	doc := writeN(t, s, "/r.md", 4, map[string]string{"retention": "2"})
 	if doc.Prune == nil || doc.Prune.From != 1 || doc.Prune.To != 2 || doc.Prune.Err != nil {
 		t.Errorf("prune = %+v, want From 1 To 2 Err nil", doc.Prune)
@@ -536,7 +538,7 @@ func testRetention(t *testing.T, s handler.DocumentStore) {
 	if err := s.VerifyChain("/r.md"); err != nil {
 		t.Errorf("VerifyChain after prune: %v", err)
 	}
-	if _, err := s.Get("/r.md", 1); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.Get("/r.md", 1); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("pruned version get: err = %v, want ErrNotExist", err)
 	}
 	if cur, err := s.Get("/r.md", 0); err != nil || cur.Version != 4 {
@@ -570,29 +572,29 @@ func testRetention(t *testing.T, s handler.DocumentStore) {
 	}
 }
 
-func testMissingDocument(t *testing.T, s handler.DocumentStore) {
-	if _, err := s.Get("/none.md", 0); !errors.Is(err, os.ErrNotExist) {
+func testMissingDocument(t *testing.T, s Direct) {
+	if _, err := s.Get("/none.md", 0); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("Get missing: err = %v, want ErrNotExist", err)
 	}
-	if _, err := s.Versions("/none.md"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.Versions("/none.md"); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("Versions missing: err = %v, want ErrNotExist", err)
 	}
 	if cur := currentVersion(t, s, "/none.md"); cur != 0 {
 		t.Errorf("CurrentVersion missing = %d, want 0", cur)
 	}
 	mustWrite(t, s, "/one.md", 0, "x")
-	if _, err := s.Get("/one.md", 9); !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.Get("/one.md", 9); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("Get absent version: err = %v, want ErrNotExist", err)
 	}
 }
 
-func testPathCollisions(t *testing.T, s handler.DocumentStore) {
+func testPathCollisions(t *testing.T, s Direct) {
 	mustWrite(t, s, "/col/doc.md", 0, "x")
 
 	// A document cannot be created where a directory exists. Both backends
 	// must reject the write before persisting anything: no fetchable
 	// document and no version state may remain.
-	if _, err := s.WriteVersion("/col", 0, []byte("x"), nil); !errors.Is(err, store.ErrPathCollision) {
+	if _, err := s.WriteVersion("/col", 0, []byte("x"), nil); !errors.Is(err, storefmt.ErrPathCollision) {
 		t.Errorf("writing document over existing directory /col: err = %v, want ErrPathCollision", err)
 	}
 	if _, err := s.Get("/col", 0); err == nil {
@@ -603,7 +605,7 @@ func testPathCollisions(t *testing.T, s handler.DocumentStore) {
 	}
 
 	// A document cannot be created beneath an existing document.
-	if _, err := s.WriteVersion("/col/doc.md/child.md", 0, []byte("x"), nil); !errors.Is(err, store.ErrPathCollision) {
+	if _, err := s.WriteVersion("/col/doc.md/child.md", 0, []byte("x"), nil); !errors.Is(err, storefmt.ErrPathCollision) {
 		t.Errorf("writing document under existing document /col/doc.md: err = %v, want ErrPathCollision", err)
 	}
 	if _, err := s.Get("/col/doc.md/child.md", 0); err == nil {
@@ -614,12 +616,12 @@ func testPathCollisions(t *testing.T, s handler.DocumentStore) {
 	}
 }
 
-func testRejectsBinaryBody(t *testing.T, s handler.DocumentStore) {
+func testRejectsBinaryBody(t *testing.T, s Direct) {
 	// A document body is markdown text; every backend must refuse to persist
 	// non-UTF-8, even when called outside the network path.
 	binary := []byte{0x89, 'P', 'N', 'G', 0xff, 0xfe, 0x00}
 
-	if _, err := s.WriteVersion("/bin.md", 0, binary, nil); !errors.Is(err, store.ErrInvalidContent) {
+	if _, err := s.WriteVersion("/bin.md", 0, binary, nil); !errors.Is(err, storefmt.ErrInvalidContent) {
 		t.Errorf("WriteVersion binary body: err = %v, want ErrInvalidContent", err)
 	}
 	if _, err := s.Get("/bin.md", 0); err == nil {
@@ -632,7 +634,7 @@ func testRejectsBinaryBody(t *testing.T, s handler.DocumentStore) {
 	// An append that would introduce binary must be rejected too, leaving the
 	// existing text version untouched.
 	mustWrite(t, s, "/doc.md", 0, "# Text\n")
-	if _, err := s.Append("/doc.md", 1, binary, nil); !errors.Is(err, store.ErrInvalidContent) {
+	if _, err := s.AppendVersion("/doc.md", 1, binary, nil); !errors.Is(err, storefmt.ErrInvalidContent) {
 		t.Errorf("Append binary body: err = %v, want ErrInvalidContent", err)
 	}
 	if cur := currentVersion(t, s, "/doc.md"); cur != 1 {
@@ -643,31 +645,31 @@ func testRejectsBinaryBody(t *testing.T, s handler.DocumentStore) {
 // testSharedBodyHash pins LookupHash when several live documents share a
 // body: the smallest path wins, and updating or archiving one never drops
 // the others.
-func testSharedBodyHash(t *testing.T, s handler.DocumentStore) {
-	hash := store.ContentHash([]byte("same"))
+func testSharedBodyHash(t *testing.T, s Direct) {
+	hash := storefmt.ContentHash([]byte("same"))
 	mustWrite(t, s, "/b.md", 0, "same")
 	mustWrite(t, s, "/a.md", 0, "same")
 	mustWrite(t, s, "/c.md", 0, "same")
-	if p, err := s.LookupHashResult(hash); err != nil || p != "/a.md" {
+	if p, err := s.LookupHash(hash); err != nil || p != "/a.md" {
 		t.Errorf("LookupHash shared = (%q, %v), want (/a.md, nil)", p, err)
 	}
-	if _, _, err := s.ArchiveResult("/a.md", true); err != nil {
+	if _, err := s.Archive("/a.md", true); err != nil {
 		t.Fatal(err)
 	}
-	if p, err := s.LookupHashResult(hash); err != nil || p != "/b.md" {
+	if p, err := s.LookupHash(hash); err != nil || p != "/b.md" {
 		t.Errorf("LookupHash after archiving /a.md = (%q, %v), want (/b.md, nil)", p, err)
 	}
 	mustWrite(t, s, "/b.md", 1, "changed")
-	if p, err := s.LookupHashResult(hash); err != nil || p != "/c.md" {
+	if p, err := s.LookupHash(hash); err != nil || p != "/c.md" {
 		t.Errorf("LookupHash after rewriting /b.md = (%q, %v), want (/c.md, nil)", p, err)
 	}
-	if p, err := s.LookupHashResult(store.ContentHash([]byte("changed"))); err != nil || p != "/b.md" {
+	if p, err := s.LookupHash(storefmt.ContentHash([]byte("changed"))); err != nil || p != "/b.md" {
 		t.Errorf("LookupHash new body = (%q, %v), want (/b.md, nil)", p, err)
 	}
-	if _, _, err := s.ArchiveResult("/a.md", false); err != nil {
+	if _, err := s.Archive("/a.md", false); err != nil {
 		t.Fatal(err)
 	}
-	if p, err := s.LookupHashResult(hash); err != nil || p != "/a.md" {
+	if p, err := s.LookupHash(hash); err != nil || p != "/a.md" {
 		t.Errorf("LookupHash after unarchiving /a.md = (%q, %v), want (/a.md, nil)", p, err)
 	}
 }
@@ -675,18 +677,18 @@ func testSharedBodyHash(t *testing.T, s handler.DocumentStore) {
 // testBodySizeLimit pins the body boundary: exactly MaxBodyLength is stored,
 // one byte more is ErrSizeLimit, and an append whose joined content crosses
 // the limit is rejected without advancing the version.
-func testBodySizeLimit(t *testing.T, s handler.DocumentStore) {
+func testBodySizeLimit(t *testing.T, s Direct) {
 	atLimit := bytes.Repeat([]byte("x"), protocol.MaxBodyLength)
 	if _, err := s.WriteVersion("/max.md", 0, atLimit, nil); err != nil {
 		t.Fatalf("write at limit: %v", err)
 	}
-	if _, err := s.WriteVersion("/over.md", 0, append(atLimit, 'x'), nil); !errors.Is(err, store.ErrSizeLimit) {
+	if _, err := s.WriteVersion("/over.md", 0, append(atLimit, 'x'), nil); !errors.Is(err, storefmt.ErrSizeLimit) {
 		t.Errorf("write over limit: err = %v, want ErrSizeLimit", err)
 	}
 	if cur := currentVersion(t, s, "/over.md"); cur != 0 {
 		t.Errorf("over-limit write left version %d", cur)
 	}
-	if _, err := s.Append("/max.md", 1, []byte("y"), nil); !errors.Is(err, store.ErrSizeLimit) {
+	if _, err := s.AppendVersion("/max.md", 1, []byte("y"), nil); !errors.Is(err, storefmt.ErrSizeLimit) {
 		t.Errorf("append crossing limit: err = %v, want ErrSizeLimit", err)
 	}
 	if cur := currentVersion(t, s, "/max.md"); cur != 1 {
@@ -697,9 +699,9 @@ func testBodySizeLimit(t *testing.T, s handler.DocumentStore) {
 // testInvalidMetadata pins the metadata rejections applied before anything is
 // stored: reserved keys, malformed keys and values, bad retention values, and
 // tags whose serialized form overflows although the comma-separated value fits.
-func testInvalidMetadata(t *testing.T, s handler.DocumentStore) {
+func testInvalidMetadata(t *testing.T, s Direct) {
 	bigTags := strings.Repeat("a,", 399) + "a"
-	if len("tags")+len(bigTags) > protocol.MaxMetaBytes || store.SerializedMetaSize("tags", bigTags) <= protocol.MaxMetaBytes {
+	if len("tags")+len(bigTags) > protocol.MaxMetaBytes || storefmt.SerializedMetaSize("tags", bigTags) <= protocol.MaxMetaBytes {
 		t.Fatalf("test setup: tags must fit as csv and overflow serialized")
 	}
 	cases := []struct {
@@ -723,10 +725,10 @@ func testInvalidMetadata(t *testing.T, s handler.DocumentStore) {
 	mustWrite(t, s, "/base.md", 0, "# Base\n")
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := s.WriteVersion("/inv.md", 0, []byte("# Hi\n"), c.meta); !errors.Is(err, store.ErrInvalidMeta) {
+			if _, err := s.WriteVersion("/inv.md", 0, []byte("# Hi\n"), c.meta); !errors.Is(err, storefmt.ErrInvalidMeta) {
 				t.Errorf("write: err = %v, want ErrInvalidMeta", err)
 			}
-			if _, err := s.Append("/base.md", 1, []byte("x"), c.meta); !errors.Is(err, store.ErrInvalidMeta) {
+			if _, err := s.AppendVersion("/base.md", 1, []byte("x"), c.meta); !errors.Is(err, storefmt.ErrInvalidMeta) {
 				t.Errorf("append: err = %v, want ErrInvalidMeta", err)
 			}
 		})
@@ -749,9 +751,9 @@ func testInvalidMetadata(t *testing.T, s handler.DocumentStore) {
 // testVerifyChainTamperedTip corrupts the newest version itself. Its stored
 // bytes carry the previous-hash link, so a backend that trusted a recorded
 // hash instead of the bytes would miss this.
-func testVerifyChainTamperedTip(t *testing.T, s handler.DocumentStore, tamper Tamper) {
+func testVerifyChainTamperedTip(t *testing.T, s Direct, tamper Tamper) {
 	writeN(t, s, "/dir/tip.md", 2, nil)
-	tamper(t, s, "/dir/tip.md", 2, []byte("# TAMPERED\n"))
+	tamper(t, s.Store, "/dir/tip.md", 2, []byte("# TAMPERED\n"))
 	err := s.VerifyChain("/dir/tip.md")
 	if err == nil || !strings.Contains(err.Error(), "missing previous-hash") {
 		t.Errorf("VerifyChain after tip tamper: err = %v, want missing previous-hash", err)
@@ -760,12 +762,12 @@ func testVerifyChainTamperedTip(t *testing.T, s handler.DocumentStore, tamper Ta
 
 // testVerifyChainTampered corrupts v1 after v2 links to it: VerifyChain must
 // report a broken chain while Versions still lists both.
-func testVerifyChainTampered(t *testing.T, s handler.DocumentStore, tamper Tamper) {
+func testVerifyChainTampered(t *testing.T, s Direct, tamper Tamper) {
 	writeN(t, s, "/dir/t.md", 2, nil)
 	if err := s.VerifyChain("/dir/t.md"); err != nil {
 		t.Fatalf("VerifyChain before tamper: %v", err)
 	}
-	tamper(t, s, "/dir/t.md", 1, []byte("# TAMPERED\n"))
+	tamper(t, s.Store, "/dir/t.md", 1, []byte("# TAMPERED\n"))
 	err := s.VerifyChain("/dir/t.md")
 	if err == nil || !strings.Contains(err.Error(), "chain broken") {
 		t.Errorf("VerifyChain after tamper: err = %v, want chain broken", err)
@@ -777,9 +779,9 @@ func testVerifyChainTampered(t *testing.T, s handler.DocumentStore, tamper Tampe
 
 // writeN writes n versions of path, passing meta only on the last write,
 // and returns the final document.
-func writeN(t *testing.T, s handler.DocumentStore, path string, n int, finalMeta map[string]string) *store.Document {
+func writeN(t *testing.T, s Direct, path string, n int, finalMeta map[string]string) *storefmt.Document {
 	t.Helper()
-	var doc *store.Document
+	var doc *storefmt.Document
 	for i := 1; i <= n; i++ {
 		var meta map[string]string
 		if i == n {
@@ -794,7 +796,7 @@ func writeN(t *testing.T, s handler.DocumentStore, path string, n int, finalMeta
 }
 
 // versionNums returns the surviving version numbers, newest first.
-func versionNums(t *testing.T, s handler.DocumentStore, path string) []int {
+func versionNums(t *testing.T, s Direct, path string) []int {
 	t.Helper()
 	infos, err := s.Versions(path)
 	if err != nil {
@@ -807,7 +809,7 @@ func versionNums(t *testing.T, s handler.DocumentStore, path string) []int {
 	return nums
 }
 
-func mustWrite(t *testing.T, s handler.DocumentStore, path string, expected int, body string) *store.Document {
+func mustWrite(t *testing.T, s Direct, path string, expected int, body string) *storefmt.Document {
 	t.Helper()
 	doc, err := s.WriteVersion(path, expected, []byte(body), nil)
 	if err != nil {
@@ -816,16 +818,16 @@ func mustWrite(t *testing.T, s handler.DocumentStore, path string, expected int,
 	return doc
 }
 
-func currentVersion(t testing.TB, s handler.DocumentStore, path string) int {
+func currentVersion(t testing.TB, s Direct, path string) int {
 	t.Helper()
-	version, err := s.CurrentVersionResult(path)
+	version, err := s.CurrentVersion(path)
 	if err != nil {
 		t.Fatalf("CurrentVersion(%s): %v", path, err)
 	}
 	return version
 }
 
-func entryNames(t *testing.T, s handler.DocumentStore, path string, includeArchived bool) map[string]bool {
+func entryNames(t *testing.T, s Direct, path string, includeArchived bool) map[string]bool {
 	t.Helper()
 	entries, err := s.ListEntries(path, includeArchived)
 	if err != nil {
@@ -836,4 +838,46 @@ func entryNames(t *testing.T, s handler.DocumentStore, path string, includeArchi
 		m[e.Name] = true
 	}
 	return m
+}
+
+// testCanceledContext: a done context stops every contract call, and a refused
+// write leaves nothing behind.
+func testCanceledContext(t *testing.T, s Direct) {
+	mustWrite(t, s, "/ctx.md", 0, "# v1\n")
+	live, err := s.OpenReadView(context.Background())
+	if err != nil {
+		t.Fatalf("open view: %v", err)
+	}
+	defer func() {
+		if err := live.Close(); err != nil {
+			t.Errorf("close view: %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := live.Get(ctx, "/ctx.md", 0); !errors.Is(err, context.Canceled) {
+		t.Errorf("Get on a live view with a done context: %v, want canceled", err)
+	}
+	if view, err := s.OpenReadView(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("OpenReadView: %v, want canceled", err)
+		if err == nil {
+			if closeErr := view.Close(); closeErr != nil {
+				t.Errorf("close unexpected view: %v", closeErr)
+			}
+		}
+	}
+	request := backend.WriteRequest{Path: "/ctx.md", ExpectedVersion: 1, Content: []byte("# v2\n")}
+	if _, err := s.Publish(ctx, request); !errors.Is(err, context.Canceled) {
+		t.Errorf("Publish: %v, want canceled", err)
+	}
+	if _, err := s.Append(ctx, request); !errors.Is(err, context.Canceled) {
+		t.Errorf("Append: %v, want canceled", err)
+	}
+	if _, err := s.SetArchived(ctx, "/ctx.md", true); !errors.Is(err, context.Canceled) {
+		t.Errorf("SetArchived: %v, want canceled", err)
+	}
+	if got := currentVersion(t, s, "/ctx.md"); got != 1 {
+		t.Errorf("version after refused writes = %d, want 1", got)
+	}
 }

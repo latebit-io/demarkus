@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -46,40 +45,28 @@ func ParseResponse(r io.Reader) (Response, error) {
 		return Response{}, err
 	}
 
-	content := string(data)
 	resp := Response{Metadata: make(map[string]string)}
 
-	if strings.HasPrefix(content, "---\n") {
-		end := strings.Index(content[4:], "\n---\n")
-		if end == -1 {
-			return Response{}, fmt.Errorf("malformed frontmatter: missing closing ---")
+	split, err := SplitFrontmatter(data)
+	if err != nil {
+		return Response{}, fmt.Errorf("malformed frontmatter: missing closing ---: %w", err)
+	}
+	resp.Body = string(split.Body)
+	if !split.Found || len(bytes.TrimSpace(split.Block)) == 0 {
+		return resp, nil
+	}
+
+	// Parse as map[string]string to avoid YAML interpreting timestamps, numbers, etc.
+	var raw map[string]string
+	if err := yaml.Unmarshal(split.Block, &raw); err != nil {
+		return Response{}, fmt.Errorf("parsing frontmatter: %w", err)
+	}
+	for k, v := range raw {
+		if k == "status" {
+			resp.Status = v
+		} else {
+			resp.Metadata[k] = v
 		}
-
-		fmData := content[4 : 4+end]
-
-		// Handle empty frontmatter gracefully
-		if strings.TrimSpace(fmData) == "" {
-			resp.Body = content[4+end+5:]
-			return resp, nil
-		}
-
-		// Parse as map[string]string to avoid YAML interpreting timestamps, numbers, etc.
-		var raw map[string]string
-		if err := yaml.Unmarshal([]byte(fmData), &raw); err != nil {
-			return Response{}, fmt.Errorf("parsing frontmatter: %w", err)
-		}
-
-		for k, v := range raw {
-			if k == "status" {
-				resp.Status = v
-			} else {
-				resp.Metadata[k] = v
-			}
-		}
-
-		resp.Body = content[4+end+5:] // skip past "\n---\n"
-	} else {
-		resp.Body = content
 	}
 
 	return resp, nil
@@ -98,9 +85,9 @@ func (resp Response) WriteTo(w io.Writer) (int64, error) {
 		return 0, fmt.Errorf("encoding frontmatter: %w", err)
 	}
 
-	buf.WriteString("---\n")
+	buf.WriteString(FrontmatterFence)
 	buf.Write(yamlBytes)
-	buf.WriteString("---\n")
+	buf.WriteString(FrontmatterFence)
 
 	if resp.Body != "" {
 		buf.WriteString(resp.Body)

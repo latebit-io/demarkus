@@ -2,10 +2,11 @@
 package filestore
 
 import (
+	"context"
 	"sync"
-	"time"
 
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
@@ -17,113 +18,73 @@ type Store struct {
 	catalog   *catalog.Catalog
 }
 
+var _ backend.Store = (*Store)(nil)
+
 // New wraps one file store and its derived catalog.
 func New(documents *protocolstore.Store, lookup *catalog.Catalog) *Store {
 	return &Store{documents: documents, catalog: lookup}
 }
 
-// Get reads one document version under a short-lived snapshot lock.
-func (s *Store) Get(path string, version int) (*protocolstore.Document, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.documents.Get(path, version)
-}
-
-// ListEntries reads one directory under a short-lived snapshot lock.
-func (s *Store) ListEntries(path string, includeArchived bool) ([]protocolstore.DirEntry, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.documents.ListEntries(path, includeArchived)
-}
-
-// IsDir checks path topology under a short-lived snapshot lock.
-func (s *Store) IsDir(path string) (bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.documents.IsDir(path)
-}
-
-// Versions reads retained history under a short-lived snapshot lock.
-func (s *Store) Versions(path string) ([]protocolstore.VersionInfo, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.documents.Versions(path)
-}
-
-// CurrentVersionResult reads the current version under a snapshot lock.
-func (s *Store) CurrentVersionResult(path string) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.documents.CurrentVersionResult(path)
-}
-
-// LookupHashResult resolves a body hash under a snapshot lock.
-func (s *Store) LookupHashResult(hash string) (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.documents.LookupHashResult(hash)
-}
-
-// VerifyChain checks retained history under a short-lived snapshot lock.
-func (s *Store) VerifyChain(path string) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.documents.VerifyChain(path)
-}
-
-// Lookup reads the catalog under a short-lived snapshot lock.
-func (s *Store) Lookup(query string, opts catalog.Options) ([]catalog.Result, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.catalog.Lookup(query, opts)
-}
-
-// WriteVersion commits document and catalog state under one lock.
-func (s *Store) WriteVersion(path string, expected int, body []byte, meta map[string]string) (*protocolstore.Document, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	document, err := s.documents.WriteVersion(path, expected, body, meta)
-	if err == nil {
-		s.catalog.Put(path, document.Metadata, document.Content, document.Modified)
+// call runs one store operation unless ctx is already done, and reports a
+// missing file as the contract's not found. Local disk reads cannot be
+// interrupted, so a context only stops a call before it starts.
+func call[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	if err := ctx.Err(); err != nil {
+		var zero T
+		return zero, err
 	}
-	return document, err
+	value, err := fn()
+	return value, backend.FromNotExist(err)
+}
+
+// Publish commits document and catalog state under one lock.
+func (s *Store) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
+	return call(ctx, func() (*storefmt.Document, error) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		document, err := s.documents.WriteVersion(req.Path, req.ExpectedVersion, req.Content, req.Metadata)
+		if err == nil {
+			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
+		}
+		return document, err
+	})
 }
 
 // Append commits document and catalog state under one lock.
-func (s *Store) Append(path string, expected int, body []byte, meta map[string]string) (*protocolstore.Document, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	document, err := s.documents.Append(path, expected, body, meta)
-	if err == nil {
-		s.catalog.Put(path, document.Metadata, document.Content, document.Modified)
-	}
-	return document, err
+func (s *Store) Append(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
+	return call(ctx, func() (*storefmt.Document, error) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		document, err := s.documents.Append(req.Path, req.ExpectedVersion, req.Content, req.Metadata)
+		if err == nil {
+			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
+		}
+		return document, err
+	})
 }
 
-// ArchiveResult commits archive and catalog state under one lock.
-func (s *Store) ArchiveResult(path string, archived bool) (*protocolstore.Document, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	document, changed, err := s.documents.ArchiveResult(path, archived)
-	if !changed {
-		return document, changed, err
-	}
-	if archived {
-		s.catalog.Remove(path)
-		return document, true, err
-	}
-	s.catalog.Put(path, document.Metadata, document.Content, document.Modified)
-	return document, true, err
+// SetArchived commits archive and catalog state under one lock.
+func (s *Store) SetArchived(ctx context.Context, path string, archived bool) (backend.ArchiveResult, error) {
+	return call(ctx, func() (backend.ArchiveResult, error) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		document, changed, err := s.documents.ArchiveResult(path, archived)
+		switch {
+		case !changed:
+		case archived:
+			s.catalog.Remove(path)
+		default:
+			s.catalog.Put(path, document.Metadata, document.Content, document.Modified)
+		}
+		return backend.ArchiveResult{Document: document, Changed: changed}, err
+	})
 }
-
-// Put is a no-op because mutation methods update the catalog atomically.
-func (s *Store) Put(string, map[string]string, []byte, time.Time) {}
-
-// Remove is a no-op because Archive updates the catalog atomically.
-func (s *Store) Remove(string) {}
 
 // OpenReadView holds a read lock until the request closes the view.
-func (s *Store) OpenReadView() (backend.ReadView, error) {
+func (s *Store) OpenReadView(ctx context.Context) (backend.ReadView, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	return &readView{store: s}, nil
 }
@@ -133,32 +94,33 @@ type readView struct {
 	once  sync.Once
 }
 
-func (view *readView) Get(path string, version int) (*protocolstore.Document, error) {
-	return view.store.documents.Get(path, version)
+func (view *readView) Get(ctx context.Context, path string, version int) (*storefmt.Document, error) {
+	return call(ctx, func() (*storefmt.Document, error) { return view.store.documents.Get(path, version) })
 }
 
-func (view *readView) ListEntries(path string, includeArchived bool) ([]protocolstore.DirEntry, error) {
-	return view.store.documents.ListEntries(path, includeArchived)
+func (view *readView) ListEntries(ctx context.Context, path string, includeArchived bool) ([]storefmt.DirEntry, error) {
+	return call(ctx, func() ([]storefmt.DirEntry, error) { return view.store.documents.ListEntries(path, includeArchived) })
 }
 
-func (view *readView) IsDir(path string) (bool, error) {
-	return view.store.documents.IsDir(path)
+func (view *readView) IsDir(ctx context.Context, path string) (bool, error) {
+	return call(ctx, func() (bool, error) { return view.store.documents.IsDir(path) })
 }
 
-func (view *readView) Versions(path string) ([]protocolstore.VersionInfo, error) {
-	return view.store.documents.Versions(path)
+func (view *readView) Versions(ctx context.Context, path string) ([]storefmt.VersionInfo, error) {
+	return call(ctx, func() ([]storefmt.VersionInfo, error) { return view.store.documents.Versions(path) })
 }
 
-func (view *readView) LookupHashResult(hash string) (string, error) {
-	return view.store.documents.LookupHashResult(hash)
+func (view *readView) LookupHash(ctx context.Context, hash string) (string, error) {
+	return call(ctx, func() (string, error) { return view.store.documents.LookupHashResult(hash) })
 }
 
-func (view *readView) VerifyChain(path string) error {
-	return view.store.documents.VerifyChain(path)
+func (view *readView) VerifyChain(ctx context.Context, path string) error {
+	_, err := call(ctx, func() (struct{}, error) { return struct{}{}, view.store.documents.VerifyChain(path) })
+	return err
 }
 
-func (view *readView) Lookup(query string, opts catalog.Options) ([]catalog.Result, error) {
-	return view.store.catalog.Lookup(query, opts)
+func (view *readView) Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error) {
+	return call(ctx, func() ([]catalog.Result, error) { return view.store.catalog.Lookup(query, opts) })
 }
 
 func (view *readView) Close() error {

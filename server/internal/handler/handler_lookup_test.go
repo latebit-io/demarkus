@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -19,7 +20,7 @@ func lookupReq(scope string, metaLines ...string) string {
 func sendLookup(t *testing.T, h *Handler, request string) protocol.Response {
 	t.Helper()
 	stream := newMockStream(request)
-	h.HandleStream(stream)
+	h.HandleStream(context.Background(), stream)
 	resp, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
 		t.Fatalf("parse response: %v", err)
@@ -34,17 +35,13 @@ type seedDoc struct {
 	meta map[string]string
 }
 
-// lookupHandler returns a handler over b with docs published through the
-// store and registered in the catalog the way the handler's PUBLISH path
-// does, so the test means the same thing on every backend.
+// lookupHandler returns a handler over b with docs published through the store.
 func lookupHandler(t *testing.T, b backend, docs ...seedDoc) *Handler {
 	t.Helper()
 	for _, d := range docs {
-		doc, err := b.Store.WriteVersion(d.path, -1, []byte("# "+d.path+"\n"), d.meta)
-		if err != nil {
+		if _, err := direct(b).WriteVersion(d.path, -1, []byte("# "+d.path+"\n"), d.meta); err != nil {
 			t.Fatalf("seed %s: %v", d.path, err)
 		}
-		b.Catalog.Put(d.path, doc.Metadata, doc.Content, doc.Modified)
 	}
 	return newHandler(b, nil)
 }
@@ -142,22 +139,6 @@ func testHandleLookupScopeNotFound(t *testing.T, newBackend backendFactory) {
 	resp := sendLookup(t, h, lookupReq("/nope/", "query: go"))
 	if resp.Status != protocol.StatusNotFound {
 		t.Errorf("status = %q, want not-found", resp.Status)
-	}
-}
-
-func TestHandleLookupNotConfigured(t *testing.T) {
-	b := fileBackend(t)
-	for _, views := range []bool{false, true} {
-		t.Run(fmt.Sprintf("views=%t", views), func(t *testing.T) {
-			h := &Handler{Store: b.Store, Logger: discardLogger}
-			if views {
-				h.Views = b.Views
-			}
-			resp := sendLookup(t, h, lookupReq("/", "query: go"))
-			if resp.Status != protocol.StatusServerError {
-				t.Errorf("status = %q, want server-error", resp.Status)
-			}
-		})
 	}
 }
 
@@ -276,7 +257,6 @@ func catalogHandler(t *testing.T, b backend) (h *Handler, secret string) {
 	})
 	return &Handler{
 		Store:         b.Store,
-		Catalog:       b.Catalog,
 		Logger:        discardLogger,
 		GetTokenStore: func() *auth.TokenStore { return ts },
 	}, secret
@@ -296,7 +276,7 @@ func testHandleLookupCatalogUpdates(t *testing.T, newBackend backendFactory) {
 
 	// PUBLISH adds it to the catalog.
 	pub := newMockStream("PUBLISH /auth.md\n---\nauth: " + secret + "\ntags: middleware,go\n---\n# Auth Middleware\n")
-	h.HandleStream(pub)
+	h.HandleStream(context.Background(), pub)
 	if status := mustStatus(t, &pub.output); status != protocol.StatusCreated {
 		t.Fatalf("publish status = %q, want created", status)
 	}
@@ -316,7 +296,7 @@ func testHandleLookupCatalogUpdates(t *testing.T, newBackend backendFactory) {
 
 	// ARCHIVE removes it from the catalog.
 	arch := newMockStream("ARCHIVE /auth.md\n---\nauth: " + secret + "\n---\n")
-	h.HandleStream(arch)
+	h.HandleStream(context.Background(), arch)
 	if status := mustStatus(t, &arch.output); status != protocol.StatusOK {
 		t.Fatalf("archive status = %q, want ok", status)
 	}
@@ -338,13 +318,13 @@ func testHandleLookupCatalogSurvivesAppend(t *testing.T, newBackend backendFacto
 	// "rbac" appears only in the tags, never in the H1: a title-matching query
 	// would pass through the catalog's H1 fallback even with every tag gone.
 	pub := newMockStream("PUBLISH /auth.md\n---\nauth: " + secret + "\ntags: rbac,go\nimportance: 0.9\n---\n# Auth Middleware\n")
-	h.HandleStream(pub)
+	h.HandleStream(context.Background(), pub)
 	if status := mustStatus(t, &pub.output); status != protocol.StatusCreated {
 		t.Fatalf("publish status = %q, want created", status)
 	}
 
 	app := newMockStream("APPEND /auth.md\n---\nauth: " + secret + "\nexpected-version: 1\nagent: claude\n---\n\n## More\n")
-	h.HandleStream(app)
+	h.HandleStream(context.Background(), app)
 	if status := mustStatus(t, &app.output); status != protocol.StatusCreated {
 		t.Fatalf("append status = %q, want created", status)
 	}
@@ -358,7 +338,7 @@ func testHandleLookupCatalogSurvivesAppend(t *testing.T, newBackend backendFacto
 	}
 
 	fetch := newMockStream("FETCH /auth.md\n")
-	h.HandleStream(fetch)
+	h.HandleStream(context.Background(), fetch)
 	got, err := protocol.ParseResponse(&fetch.output)
 	if err != nil {
 		t.Fatalf("parse fetch: %v", err)

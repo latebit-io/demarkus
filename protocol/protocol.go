@@ -26,9 +26,9 @@ func IsWriteSuccess(status string) bool {
 	return status == StatusOK || status == StatusCreated
 }
 
-// ReservedMetadataKeys are server-owned response metadata keys; publishers
+// reservedMetadataKeys are server-owned response metadata keys; publishers
 // cannot set them and clients never treat them as publisher metadata.
-var ReservedMetadataKeys = map[string]bool{
+var reservedMetadataKeys = map[string]bool{
 	"version":         true,
 	"modified":        true,
 	"etag":            true,
@@ -45,6 +45,11 @@ var ReservedMetadataKeys = map[string]bool{
 	"matches":         true,
 	"match":           true,
 	"status":          true,
+}
+
+// IsReservedMetadataKey reports a server-owned response metadata key.
+func IsReservedMetadataKey(key string) bool {
+	return reservedMetadataKeys[key]
 }
 
 const (

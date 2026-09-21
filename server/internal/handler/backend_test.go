@@ -1,24 +1,23 @@
 package handler
 
 import (
+	"context"
 	"os"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
+	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 )
 
-// backend is one DocumentStore plus its LookupCatalog, wired as main.go does.
-// Tamper overwrites one version's stored bytes behind the store's back so
+// backend is one DocumentStore, wired as main.go does. Tamper overwrites one version's stored bytes behind the store's back so
 // chain verification can be proven on every backend.
 type backend struct {
-	Store   DocumentStore
-	Catalog LookupCatalog
-	Views   storagebackend.ViewProvider
-	Tamper  func(t testing.TB, path string, version int, stored []byte)
+	Store  DocumentStore
+	Tamper func(t testing.TB, path string, version int, stored []byte)
 }
 
 // backendFactory returns a fresh, empty backend.
@@ -40,8 +39,7 @@ func fileBackendAt(dir string) backend {
 			t.Fatalf("tamper %s v%d: %v", path, version, err)
 		}
 	}
-	wrapped := filestore.New(s, catalog.New())
-	return backend{Store: wrapped, Catalog: wrapped, Views: wrapped, Tamper: tamper}
+	return backend{Store: filestore.New(s, catalog.New()), Tamper: tamper}
 }
 
 // forEachBackend runs fn per backend; only the file store remains, and the
@@ -61,7 +59,7 @@ func seedBackend(t testing.TB, b backend, files map[string]string) {
 // mustWrite writes the next version of path through the store.
 func mustWrite(t testing.TB, b backend, path string, body []byte, meta map[string]string) {
 	t.Helper()
-	if _, err := b.Store.WriteVersion(path, -1, body, meta); err != nil {
+	if _, err := direct(b).WriteVersion(path, -1, body, meta); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
@@ -69,9 +67,26 @@ func mustWrite(t testing.TB, b backend, path string, body []byte, meta map[strin
 // newHandler wires a backend into a Handler as main.go does; ts may be nil
 // for read-only tests.
 func newHandler(b backend, ts *auth.TokenStore) *Handler {
-	h := &Handler{Store: b.Store, Catalog: b.Catalog, Views: b.Views, Logger: discardLogger}
+	h := &Handler{Store: b.Store, Logger: discardLogger}
 	if ts != nil {
 		h.GetTokenStore = func() *auth.TokenStore { return ts }
 	}
 	return h
 }
+
+// viewStore wraps every view a store opens, so a test can replace one read.
+type viewStore struct {
+	DocumentStore
+	wrap func(storagebackend.ReadView) storagebackend.ReadView
+}
+
+func (s *viewStore) OpenReadView(ctx context.Context) (storagebackend.ReadView, error) {
+	view, err := s.DocumentStore.OpenReadView(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.wrap(view), nil
+}
+
+// direct reaches under the handler to seed and inspect the store.
+func direct(b backend) backendtest.Direct { return backendtest.Direct{Store: b.Store} }

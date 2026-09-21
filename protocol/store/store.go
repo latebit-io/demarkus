@@ -25,14 +25,10 @@ package store
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
-	slashpath "path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -40,137 +36,12 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
-// Document holds a document's content and metadata. Content is always the
-// body only — store frontmatter is stripped on every path (Get, Write,
-// WriteVersion, Append); operational state travels in the dedicated fields.
-type Document struct {
-	Content  []byte
-	Modified time.Time
-	Version  int
-	Archived bool
-	Metadata map[string]string
-	ETag     string
-	// Prune reports retention pruning performed by the write that produced
-	// this document, or nil when no pruning ran. Callers on the network path
-	// audit-log it so version deletions are always attributable.
-	Prune *PruneResult
-}
-
-// PruneResult describes the contiguous range of oldest versions deleted by
-// retention pruning after a successful write. From/To are zero when a
-// deletion failure stopped pruning before anything was removed. Err is
-// non-nil when pruning stopped early; versions From..To were already deleted
-// and the rest remain a contiguous suffix, so the hash chain stays
-// verifiable.
-type PruneResult struct {
-	From int
-	To   int
-	Err  error
-}
-
-// VersionInfo describes a single version of a document.
-type VersionInfo struct {
-	Version  int
-	Modified time.Time
-}
-
-// ErrArchived is returned by Write when the document is archived.
-var ErrArchived = fmt.Errorf("document is archived")
-
-// ErrNotModified is returned by Write when the content is identical
-// to the current version, making the publish a no-op.
-var ErrNotModified = fmt.Errorf("content not modified")
-
-// ErrConflict is returned by WriteVersion when the expected version
-// does not match the current version (optimistic concurrency check).
-var ErrConflict = fmt.Errorf("version conflict")
-
-// ErrVersionExists is returned by Write when the computed next version
-// file already exists (O_EXCL race with a concurrent writer).
-var ErrVersionExists = fmt.Errorf("version already exists")
-
-// ErrSizeLimit is returned when combined content exceeds protocol.MaxBodyLength.
-var ErrSizeLimit = fmt.Errorf("combined content exceeds size limit")
-
-// ErrInvalidPath is returned when a publish path does not end in .md. The
-// protocol serves markdown documents; a non-.md path is not a document (SPEC 2.3).
-var ErrInvalidPath = fmt.Errorf("publish path must end in .md")
-
-// ErrInvalidContent is returned when a document body is not valid UTF-8.
-// Markdown is UTF-8 text; binary content is not a markdown document (SPEC 2.3, 4.4).
-var ErrInvalidContent = fmt.Errorf("document body must be valid UTF-8 text")
-
-// ErrInvalidMeta is returned when publisher metadata breaks the key, value,
-// count, or size rules. Writes surface it past a caller's pre-check, since
-// APPEND's merge (SPEC 6.6) can breach caps both sides satisfied alone.
-var ErrInvalidMeta = fmt.Errorf("invalid publisher metadata")
-
-// ErrPathCollision means the path is taken by the other kind: a document where
-// a directory exists, or a document beneath another document.
-var ErrPathCollision = errors.New("path collision")
-
-// ErrIntegrity marks verified stored state whose bytes or hash chain are corrupt.
-var ErrIntegrity = fmt.Errorf("stored version integrity failure")
-
-// maxStoreFrontmatter is the maximum overhead the store-managed frontmatter
-// adds to a version file (version, archived, previous-hash, publisher
-// metadata, and delimiters). It must cover MaxMetaBytes of publisher metadata
-// plus the operational fields and per-line serialization overhead.
-const maxStoreFrontmatter = 2048
-
-// metaPrefix is the key prefix for non-spec publisher metadata in store
-// frontmatter. On disk: "meta.importance: 0.8". Stripped when returned to
-// clients. Keys recognized by the Open Knowledge Format (see okfKeys) are
-// written bare instead, so the store frontmatter matches the OKF spec for the
-// fields it defines.
-const metaPrefix = "meta."
-
 const archiveStateName = "archive-state"
-
-// okfKeys are the publisher metadata keys recognized by the Open Knowledge
-// Format (OKF) spec. They serialize as bare frontmatter fields (e.g. "tags:")
-// to conform to the spec; every other publisher key keeps the metaPrefix. The
-// in-memory metadata map is bare-keyed either way — only on-disk serialization
-// differs.
-var okfKeys = map[string]bool{
-	"type":        true,
-	"title":       true,
-	"description": true,
-	"resource":    true,
-	"tags":        true,
-	"timestamp":   true,
-}
-
-// retentionKey is the publisher metadata key that bounds a document's version
-// history. When the just-written version carries it, the write prunes the
-// oldest versions so at most that many remain (current included). It is
-// publisher metadata, not a reserved store field: any writer with publish
-// capability may set it, the same trust level that can archive the document.
-// Absent retention means keep every version — the default is unchanged.
-const retentionKey = "retention"
-
-// reservedMetaKeys are bare frontmatter fields owned by the store. Publishers
-// may not set them (validateMeta rejects them) and extractMetadata never
-// surfaces them as publisher metadata, preventing a publisher from forging
-// store state such as version or archival.
-var reservedMetaKeys = map[string]bool{
-	"version":       true,
-	"previous-hash": true,
-	"archived":      true,
-}
-
-// IsReservedMetaKey reports whether a publisher metadata key is reserved by the
-// store and would be rejected on publish. Callers that build metadata from
-// untrusted sources (e.g. importing external documents) use this to drop or
-// rename colliding keys before publishing.
-func IsReservedMetaKey(key string) bool {
-	return reservedMetaKeys[key]
-}
 
 // newVersionFilePath returns the absolute path for a new version file,
 // always using the per-document subdirectory layout.
@@ -188,7 +59,7 @@ func readArchiveState(docDir string) (archived, exists bool, err error) {
 		return false, false, fmt.Errorf("stat archive state: %w", err)
 	}
 	if !info.Mode().IsRegular() || (info.Size() != int64(len("true\n")) && info.Size() != int64(len("false\n"))) {
-		return false, false, fmt.Errorf("%w: invalid archive state file", ErrIntegrity)
+		return false, false, fmt.Errorf("%w: invalid archive state file", storefmt.ErrIntegrity)
 	}
 	data, err := os.ReadFile(statePath)
 	if err != nil {
@@ -200,7 +71,7 @@ func readArchiveState(docDir string) (archived, exists bool, err error) {
 	case "false\n":
 		return false, true, nil
 	default:
-		return false, false, fmt.Errorf("%w: invalid archive state %q", ErrIntegrity, data)
+		return false, false, fmt.Errorf("%w: invalid archive state %q", storefmt.ErrIntegrity, data)
 	}
 }
 
@@ -212,7 +83,7 @@ func effectiveArchived(docDir string, tipStored []byte) (bool, error) {
 	if exists {
 		return archived, nil
 	}
-	return isArchived(tipStored), nil
+	return storefmt.IsArchived(tipStored), nil
 }
 
 // writeArchiveState commits through a synced sibling temp file. committed is
@@ -289,16 +160,10 @@ func wrapError(action string, err error) error {
 	return fmt.Errorf("%s: %w", action, err)
 }
 
-// versionRelPath is the root-relative location of one version of rel:
-// <dir>/versions/<base>/vN.
-func versionRelPath(rel string, version int) string {
-	return filepath.Join(filepath.Dir(rel), "versions", filepath.Base(rel), fmt.Sprintf("v%d", version))
-}
-
 // newVersionSymlinkTarget returns the relative symlink target for a new version,
 // always using the per-document subdirectory layout.
 func newVersionSymlinkTarget(base string, version int) string {
-	return filepath.Join("versions", base, fmt.Sprintf("v%d", version))
+	return filepath.Join(versionsDirName, base, fmt.Sprintf("v%d", version))
 }
 
 // Store provides read access to a versioned document directory.
@@ -340,18 +205,9 @@ func Open(root string) (*Store, error) {
 	return s, nil
 }
 
-// contentHash computes the sha256 content hash for a document body.
-func contentHash(body []byte) string {
-	h := sha256.Sum256(body)
-	return "sha256-" + hex.EncodeToString(h[:])
-}
-
-// walkCurrentFiles walks the content root and calls fn for each current,
-// non-archived document version. It follows current-version symlinks, skips
-// the versions/ directory, and skips archived, oversized, or unreadable files.
-// data is the raw on-disk bytes (including store frontmatter). This is the
-// shared traversal used by both BuildHashIndex and WalkCurrent so the skip and
-// containment rules live in one place.
+// walkCurrentFiles calls fn with the raw stored bytes of each current, live
+// document. BuildHashIndex and WalkCurrent share it so the skip and containment
+// rules live in one place.
 func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified time.Time) error) error {
 	absRoot, err := s.resolvedRoot()
 	if err != nil {
@@ -361,11 +217,11 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 	// Entries that cannot be indexed are skipped, never fatal: one broken
 	// symlink must not take the server down. They are reported as a
 	// PartialWalkError so the caller can surface the degradation.
-	partial := &PartialWalkError{}
+	partial := &storefmt.PartialWalkError{}
 	skip := func(path string, err error) error {
 		partial.Total++
-		if len(partial.Skipped) < maxSkippedSample {
-			partial.Skipped = append(partial.Skipped, SkippedEntry{Path: path, Err: err})
+		if len(partial.Skipped) < storefmt.MaxSkippedSample {
+			partial.Skipped = append(partial.Skipped, storefmt.SkippedEntry{Path: path, Err: err})
 		}
 		return nil
 	}
@@ -378,7 +234,7 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 			return skip(path, err)
 		}
 		if d.IsDir() {
-			if d.Name() == "versions" {
+			if d.Name() == versionsDirName {
 				return filepath.SkipDir
 			}
 			return nil
@@ -399,8 +255,8 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 		if err != nil {
 			return skip(path, err)
 		}
-		if info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
-			return skip(path, ErrSizeLimit)
+		if info.Size() > int64(protocol.MaxBodyLength+storefmt.MaxStoreFrontmatter) {
+			return skip(path, storefmt.ErrSizeLimit)
 		}
 		data, err := os.ReadFile(resolved)
 		if err != nil {
@@ -428,32 +284,7 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 	return nil
 }
 
-// maxSkippedSample bounds the entries a PartialWalkError retains; a badly
-// damaged root must not exhaust memory during startup.
-const maxSkippedSample = 32
-
 var errSymlinkEscapes = errors.New("current-version symlink escapes the content root")
-
-// SkippedEntry is a content-root entry a walk could not index.
-type SkippedEntry struct {
-	Path string
-	Err  error
-}
-
-// PartialWalkError reports a walk that completed but skipped entries: the
-// derived index is missing them. Callers log it rather than treating the
-// build as whole or aborting. Skipped holds at most maxSkippedSample entries.
-type PartialWalkError struct {
-	Total   int
-	Skipped []SkippedEntry
-}
-
-func (e *PartialWalkError) Error() string {
-	if len(e.Skipped) == 0 {
-		return fmt.Sprintf("walk skipped %d entries", e.Total)
-	}
-	return fmt.Sprintf("walk skipped %d entries (first %s: %v)", e.Total, e.Skipped[0].Path, e.Skipped[0].Err)
-}
 
 // BuildHashIndex walks the content root and indexes current versions by content hash.
 // Skips versions/ directories and archived documents.
@@ -466,7 +297,7 @@ func (s *Store) BuildHashIndex() error {
 	s.hashErr = nil
 
 	err := s.walkCurrentFiles(func(reqPath string, data []byte, _ time.Time) error {
-		s.indexLocked(reqPath, contentHash(extractBody(data)))
+		s.indexLocked(reqPath, storefmt.ContentHash(storefmt.ExtractBody(data)))
 		return nil
 	})
 	s.hashErr = err
@@ -501,38 +332,17 @@ func (s *Store) unindexLocked(reqPath string) {
 	}
 }
 
-// CurrentDoc describes a current, non-archived document version surfaced by
-// WalkCurrent. Body is the markdown content with store frontmatter stripped;
-// Metadata is the publisher metadata as a bare-keyed map (see extractMetadata).
-type CurrentDoc struct {
-	Path     string
-	Body     []byte
-	Metadata map[string]string
-	Modified time.Time
-}
-
-// WalkCurrent visits every current, non-archived document version and calls fn
-// for each. It mirrors BuildHashIndex's traversal: it follows current-version
-// symlinks, skips the versions/ directory, and skips archived, oversized, or
-// unreadable files. This lets a caller (e.g. the LOOKUP catalog) build its own
-// derived index from the same source of truth without re-implementing the walk.
-func (s *Store) WalkCurrent(fn func(CurrentDoc) error) error {
+// WalkCurrent visits every current, non-archived document, with the same skip
+// rules as BuildHashIndex, so a derived index reads the same source of truth.
+func (s *Store) WalkCurrent(fn func(storefmt.CurrentDoc) error) error {
 	return s.walkCurrentFiles(func(reqPath string, data []byte, modified time.Time) error {
-		return fn(CurrentDoc{
+		return fn(storefmt.CurrentDoc{
 			Path:     reqPath,
-			Body:     extractBody(data),
-			Metadata: extractMetadata(data),
+			Body:     storefmt.ExtractBody(data),
+			Metadata: storefmt.ExtractMetadata(data),
 			Modified: modified,
 		})
 	})
-}
-
-// LookupHash returns a live request path and whether one exists.
-//
-// Deprecated: use LookupHashResult to distinguish misses from index errors.
-func (s *Store) LookupHash(hash string) (string, bool) {
-	path, err := s.LookupHashResult(hash)
-	return path, err == nil
 }
 
 // LookupHashResult returns the smallest live request path for a content hash.
@@ -555,14 +365,14 @@ func (s *Store) LookupHashResult(hash string) (string, error) {
 func (s *Store) UpdateHashIndex(reqPath string, body []byte) {
 	s.hashMu.Lock()
 	defer s.hashMu.Unlock()
-	s.indexLocked(CanonicalPath(reqPath), contentHash(body))
+	s.indexLocked(storefmt.CanonicalPath(reqPath), storefmt.ContentHash(body))
 }
 
 // RemoveHashEntry removes the hash index entry for a given request path.
 func (s *Store) RemoveHashEntry(reqPath string) {
 	s.hashMu.Lock()
 	defer s.hashMu.Unlock()
-	s.unindexLocked(CanonicalPath(reqPath))
+	s.unindexLocked(storefmt.CanonicalPath(reqPath))
 }
 
 // HashIndexSize returns the number of indexed documents.
@@ -581,20 +391,17 @@ func (s *Store) Root() string {
 // tools and tests that touch the layout directly. It does not check that
 // the file exists or follow symlinks.
 func (s *Store) VersionFilePath(reqPath string, version int) (string, error) {
-	rel, err := RelPath(reqPath)
+	loc, err := s.locateContained(reqPath)
 	if err != nil {
 		return "", err
 	}
-	if err := s.containDoc(rel); err != nil {
-		return "", err
-	}
-	return filepath.Join(s.root, versionRelPath(rel, version)), nil
+	return loc.versionFile(version), nil
 }
 
 // Get retrieves a document at the given path. If version is 0, returns the
 // current version. Only serves documents with a versions directory — flat files
 // without version history are treated as non-existent.
-func (s *Store) Get(reqPath string, version int) (*Document, error) {
+func (s *Store) Get(reqPath string, version int) (*storefmt.Document, error) {
 	if version > 0 {
 		return s.getVersion(reqPath, version)
 	}
@@ -611,7 +418,7 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 	if info.IsDir() {
 		return nil, os.ErrNotExist
 	}
-	if info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
+	if info.Size() > int64(protocol.MaxBodyLength+storefmt.MaxStoreFrontmatter) {
 		return nil, fmt.Errorf("file exceeds size limit")
 	}
 
@@ -635,41 +442,34 @@ func (s *Store) Get(reqPath string, version int) (*Document, error) {
 		return nil, err
 	}
 
-	return &Document{
-		Content:  extractBody(data),
+	return &storefmt.Document{
+		Content:  storefmt.ExtractBody(data),
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  ver,
 		Archived: archived,
-		Metadata: extractMetadata(data),
-		ETag:     StoredETag(data),
+		Metadata: storefmt.ExtractMetadata(data),
+		ETag:     storefmt.StoredETag(data),
 	}, nil
-}
-
-// DirEntry is one entry in a directory listing. It is backend-neutral: a
-// store implementation that is not a filesystem can still produce it.
-type DirEntry struct {
-	Name  string
-	IsDir bool
 }
 
 // ListEntries returns the backend-neutral directory listing used by the
 // server's DocumentStore contract. It applies the same filtering as ListDir.
-func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]DirEntry, error) {
-	entries, err := s.ListDir(reqPath, includeArchived)
+func (s *Store) ListEntries(reqPath string, includeArchived bool) ([]storefmt.DirEntry, error) {
+	entries, err := s.listDir(reqPath, includeArchived)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]DirEntry, 0, len(entries))
+	out := make([]storefmt.DirEntry, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, DirEntry{Name: e.Name(), IsDir: e.IsDir()})
+		out = append(out, storefmt.DirEntry{Name: e.Name(), IsDir: e.IsDir()})
 	}
 	return out, nil
 }
 
-// ListDir returns entries at reqPath, excluding dot-files, versions/, and
+// listDir returns entries at reqPath, excluding dot-files, versions/, and
 // non-documents (SPEC 9.8/11.9). includeArchived=false also omits archived
 // docs and document-free subtrees; true is the recovery/audit view.
-func (s *Store) ListDir(reqPath string, includeArchived bool) ([]os.DirEntry, error) {
+func (s *Store) listDir(reqPath string, includeArchived bool) ([]os.DirEntry, error) {
 	dirPath, err := s.resolve(reqPath)
 	if err != nil {
 		return nil, err
@@ -770,7 +570,7 @@ func (dc *docCandidates) isDocument(name string) bool {
 		// A failed ReadDir leaves an empty set: an inaccessible versions/
 		// hides its documents rather than serving them broken (same
 		// trade-off as dirHasDocument and highestPerDocVersion).
-		entries, err := os.ReadDir(filepath.Join(dc.dirAbs, "versions"))
+		entries, err := os.ReadDir(filepath.Join(dc.dirAbs, versionsDirName))
 		if err != nil {
 			return false
 		}
@@ -781,14 +581,14 @@ func (dc *docCandidates) isDocument(name string) bool {
 			}
 		}
 	}
-	return dc.bases[name] && highestPerDocVersion(filepath.Join(dc.dirAbs, "versions"), name) > 0
+	return dc.bases[name] && highestPerDocVersion(filepath.Join(dc.dirAbs, versionsDirName), name) > 0
 }
 
 // isHiddenEntry reports whether a directory entry name is always excluded from
 // a listing, regardless of archival: dot-files and the per-document versions/
 // directory. Shared by ListDir so the exclusion list lives in one place.
 func isHiddenEntry(name string) bool {
-	return strings.HasPrefix(name, ".") || name == "versions"
+	return strings.HasPrefix(name, ".") || name == versionsDirName
 }
 
 // liveChildren names the immediate children of a listed directory that the
@@ -813,7 +613,7 @@ type liveChildren struct {
 // though the index tracks them: a listing never shows them, so counting one
 // as live would keep its parent visible as an empty shell.
 func (s *Store) liveChildren(dirReq string) liveChildren {
-	canon := CanonicalPath(dirReq)
+	canon := storefmt.CanonicalPath(dirReq)
 	prefix := strings.TrimRight(canon, "/") + "/"
 	out := liveChildren{files: make(map[string]struct{}), dirs: make(map[string]struct{})}
 	s.hashMu.RLock()
@@ -922,7 +722,7 @@ func entryArchived(childPath, absRoot string) (bool, error) {
 	}
 	// maxStoreFrontmatter bounds the frontmatter block, so this prefix is
 	// guaranteed to contain the closing fence; the slack covers the fences.
-	buf := make([]byte, maxStoreFrontmatter+256)
+	buf := make([]byte, storefmt.MaxStoreFrontmatter+256)
 	n, readErr := io.ReadFull(f, buf)
 	closeErr := f.Close()
 	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
@@ -949,7 +749,7 @@ func (s *Store) IsDir(reqPath string) (bool, error) {
 
 // Versions returns the version history for a document, newest first.
 // Returns os.ErrNotExist if the document has no version history.
-func (s *Store) Versions(reqPath string) ([]VersionInfo, error) {
+func (s *Store) Versions(reqPath string) ([]storefmt.VersionInfo, error) {
 	filePath, err := s.resolve(reqPath)
 	if err != nil {
 		return nil, err
@@ -994,46 +794,35 @@ func isContained(absPath, absRoot string) bool {
 // resolve validates and resolves a request path to an absolute filesystem path
 // within the content directory. Returns os.ErrNotExist for invalid paths.
 func (s *Store) resolve(reqPath string) (string, error) {
-	cleaned := filepath.Clean(reqPath)
-	cleaned = strings.TrimLeft(cleaned, "/")
-
-	// Reject paths that contain .. segments. filepath.Clean collapses traversal
-	// attempts into valid-looking paths (e.g., /../etc/passwd → etc/passwd), so
-	// we check the original path for traversal intent as defense-in-depth.
-	if ContainsDotDot(reqPath) {
-		return "", os.ErrNotExist
+	// RelPath refuses ".." before cleaning, which would otherwise turn
+	// /../etc/passwd into a valid looking etc/passwd.
+	rel, err := storefmt.RelPath(reqPath)
+	if err != nil {
+		return "", err
 	}
-
-	return s.contain(filepath.Join(s.root, cleaned))
+	return s.contain(filepath.Join(s.root, filepath.FromSlash(rel)))
 }
 
 // containWrite keeps a write inside the root: the document path and its
 // versions tree, which can be a planted symlink even when the path is not.
-func (s *Store) containWrite(reqPath, rel string) error {
+func (s *Store) containWrite(reqPath string, loc *docLocation) error {
 	if _, err := s.resolve(reqPath); err != nil {
 		if errors.Is(err, errUnderDocument) {
 			// Topology collision, same class as writing over a directory.
-			return fmt.Errorf("cannot publish %s: a document exists at an ancestor: %w", reqPath, ErrPathCollision)
+			return fmt.Errorf("cannot publish %s: a document exists at an ancestor: %w", reqPath, storefmt.ErrPathCollision)
 		}
 		if errors.Is(err, os.ErrNotExist) {
 			return os.ErrNotExist
 		}
 		return fmt.Errorf("resolve path: %w", err)
 	}
-	if err := s.containDoc(rel); err != nil {
+	if _, err := s.contain(loc.docDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return os.ErrNotExist
 		}
 		return fmt.Errorf("resolve version tree: %w", err)
 	}
 	return nil
-}
-
-// containDoc rejects a document whose versions directory resolves outside the
-// root. Callers keep building paths from s.root; this is the check, not the path.
-func (s *Store) containDoc(rel string) error {
-	_, err := s.contain(filepath.Join(s.root, filepath.Dir(rel), "versions", filepath.Base(rel)))
-	return err
 }
 
 // contain resolves symlinks in a path under the root and returns os.ErrNotExist
@@ -1068,29 +857,25 @@ func (s *Store) contain(joined string) (string, error) {
 	return absPath, nil
 }
 
-// CurrentVersion returns the latest version number, or 0 when none exists.
-//
-// Deprecated: use CurrentVersionResult to surface invalid paths.
-func (s *Store) CurrentVersion(reqPath string) int {
-	version, _ := s.CurrentVersionResult(reqPath)
-	return version
-}
-
 // CurrentVersionResult returns the latest version number and path errors.
 func (s *Store) CurrentVersionResult(reqPath string) (int, error) {
-	cleaned, err := RelPath(reqPath)
+	loc, err := s.locate(reqPath)
 	if err != nil {
 		return 0, err
 	}
-	if err := s.containDoc(cleaned); err != nil {
+	return s.currentVersion(&loc)
+}
+
+// currentVersion is CurrentVersionResult for an already derived location.
+func (s *Store) currentVersion(loc *docLocation) (int, error) {
+	if _, err := s.contain(loc.docDir); err != nil {
 		// Escaping or beneath a document: no versions here, not a path error.
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil
 		}
 		return 0, err
 	}
-	versionsDir := filepath.Join(s.root, filepath.Dir(cleaned), "versions")
-	return highestPerDocVersion(versionsDir, filepath.Base(cleaned)), nil
+	return highestPerDocVersion(loc.versionsDir, loc.base), nil
 }
 
 // highestPerDocVersion returns the highest version in base's per-doc dir,
@@ -1131,28 +916,24 @@ func perDocVersionNumber(e os.DirEntry) int {
 // findVersions looks for versioned files in the versions directory
 // (per-document subdirectory layout, versions/{base}/v{N}).
 // Returns nil if no versions directory or no matching files exist.
-func (s *Store) findVersions(reqPath string) []VersionInfo {
-	cleaned := filepath.Clean(reqPath)
-	cleaned = strings.TrimLeft(cleaned, "/")
-	base := filepath.Base(cleaned)
-
+func (s *Store) findVersions(reqPath string) []storefmt.VersionInfo {
 	// An escaping document has no versions here; readers see it as absent.
-	if s.containDoc(cleaned) != nil {
+	loc, err := s.locateContained(reqPath)
+	if err != nil {
 		return nil
 	}
-	versionsDir := filepath.Join(s.root, filepath.Dir(cleaned), "versions")
-	return s.findVersionsPerDoc(versionsDir, base)
+	return s.findVersionsPerDoc(loc.versionsDir, loc.base)
 }
 
 // findVersionsPerDoc reads versions from the per-document subdirectory layout.
-func (s *Store) findVersionsPerDoc(versionsDir, base string) []VersionInfo {
+func (s *Store) findVersionsPerDoc(versionsDir, base string) []storefmt.VersionInfo {
 	docDir := filepath.Join(versionsDir, base)
 	entries, err := os.ReadDir(docDir)
 	if err != nil {
 		return nil
 	}
 
-	var versions []VersionInfo
+	var versions []storefmt.VersionInfo
 	for _, e := range entries {
 		num := perDocVersionNumber(e)
 		if num == 0 {
@@ -1162,7 +943,7 @@ func (s *Store) findVersionsPerDoc(versionsDir, base string) []VersionInfo {
 		if err != nil {
 			continue
 		}
-		versions = append(versions, VersionInfo{
+		versions = append(versions, storefmt.VersionInfo{
 			Version:  num,
 			Modified: info.ModTime().UTC().Truncate(time.Second),
 		})
@@ -1172,25 +953,25 @@ func (s *Store) findVersionsPerDoc(versionsDir, base string) []VersionInfo {
 
 // getVersion retrieves a specific version of a document from the versions directory.
 // Uses resolve() for path validation — same security as all other path access.
-func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
-	cleaned, err := RelPath(reqPath)
+func (s *Store) getVersion(reqPath string, version int) (*storefmt.Document, error) {
+	loc, err := s.locate(reqPath)
 	if err != nil {
 		return nil, err
 	}
-	filePath, err := s.resolve("/" + versionRelPath(cleaned, version))
+	filePath, err := s.resolve(loc.versionReqPath(version))
 	if err != nil {
 		return nil, err
 	}
 
 	// Lstat the unresolved name: a planted symlink is never a version.
-	info, err := os.Lstat(filepath.Join(s.root, versionRelPath(cleaned, version)))
+	info, err := os.Lstat(loc.versionFile(version))
 	if err != nil {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
 		return nil, os.ErrNotExist
 	}
-	if info.Size() > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
+	if info.Size() > int64(protocol.MaxBodyLength+storefmt.MaxStoreFrontmatter) {
 		return nil, fmt.Errorf("file exceeds size limit")
 	}
 
@@ -1199,26 +980,18 @@ func (s *Store) getVersion(reqPath string, version int) (*Document, error) {
 		return nil, err
 	}
 
-	return &Document{
-		Content:  extractBody(data),
+	return &storefmt.Document{
+		Content:  storefmt.ExtractBody(data),
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  version,
 		Archived: false,
-		Metadata: extractMetadata(data),
-		ETag:     StoredETag(data),
+		Metadata: storefmt.ExtractMetadata(data),
+		ETag:     storefmt.StoredETag(data),
 	}, nil
 }
 
-// Archive changes operational archive state without modifying version bytes.
-//
-// Deprecated: use ArchiveResult to inspect the resulting document and change.
-func (s *Store) Archive(reqPath string, archived bool) error {
-	_, _, err := s.ArchiveResult(reqPath, archived)
-	return err
-}
-
 // ArchiveResult changes archive state and returns its committed result.
-func (s *Store) ArchiveResult(reqPath string, archived bool) (*Document, bool, error) {
+func (s *Store) ArchiveResult(reqPath string, archived bool) (*storefmt.Document, bool, error) {
 	if _, err := s.resolve(reqPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, false, os.ErrNotExist
@@ -1226,12 +999,11 @@ func (s *Store) ArchiveResult(reqPath string, archived bool) (*Document, bool, e
 		return nil, false, fmt.Errorf("resolve path: %w", err)
 	}
 
-	cleaned := filepath.Clean(reqPath)
-	cleaned = strings.TrimLeft(cleaned, "/")
-	base := filepath.Base(cleaned)
-	dir := filepath.Dir(cleaned)
-
-	currentVersion, err := s.CurrentVersionResult(reqPath)
+	loc, err := s.locate(reqPath)
+	if err != nil {
+		return nil, false, err
+	}
+	currentVersion, err := s.currentVersion(&loc)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1239,13 +1011,7 @@ func (s *Store) ArchiveResult(reqPath string, archived bool) (*Document, bool, e
 		return nil, false, os.ErrNotExist
 	}
 
-	versionsDir := filepath.Join(s.root, dir, "versions")
-	resolvedFile := newVersionFilePath(versionsDir, base, currentVersion)
-	rel, err := filepath.Rel(s.root, resolvedFile)
-	if err != nil {
-		return nil, false, fmt.Errorf("resolve version path: %w", err)
-	}
-	versionFile, err := s.resolve("/" + filepath.ToSlash(rel))
+	versionFile, err := s.resolve(loc.versionReqPath(currentVersion))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, false, os.ErrNotExist
@@ -1296,17 +1062,17 @@ func (s *Store) updateArchiveIndex(reqPath string, stored []byte, archived bool)
 		s.RemoveHashEntry(reqPath)
 		return
 	}
-	s.UpdateHashIndex(reqPath, extractBody(stored))
+	s.UpdateHashIndex(reqPath, storefmt.ExtractBody(stored))
 }
 
-func documentFromStored(data []byte, modified time.Time, version int, archived bool) *Document {
-	return &Document{
-		Content:  extractBody(data),
+func documentFromStored(data []byte, modified time.Time, version int, archived bool) *storefmt.Document {
+	return &storefmt.Document{
+		Content:  storefmt.ExtractBody(data),
 		Modified: modified.UTC().Truncate(time.Second),
 		Version:  version,
 		Archived: archived,
-		Metadata: extractMetadata(data),
-		ETag:     StoredETag(data),
+		Metadata: storefmt.ExtractMetadata(data),
+		ETag:     storefmt.StoredETag(data),
 	}
 }
 
@@ -1326,8 +1092,8 @@ func documentFromStored(data []byte, modified time.Time, version int, archived b
 //
 // The previous-hash is the SHA-256 of the raw on-disk bytes of version N-1,
 // forming a hash chain that allows chain integrity to be verified later.
-func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*Document, error) {
-	if err := validateWrite(content, meta); err != nil {
+func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*storefmt.Document, error) {
+	if err := storefmt.ValidateWrite(content, meta); err != nil {
 		return nil, err
 	}
 	return s.write(reqPath, content, meta)
@@ -1449,7 +1215,7 @@ func createVersionFile(vFile string, stored []byte, version int) error {
 	f, err := os.OpenFile(vFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
-			return fmt.Errorf("version %d: %w", version, ErrVersionExists)
+			return fmt.Errorf("version %d: %w", version, storefmt.ErrVersionExists)
 		}
 		return fmt.Errorf("create version file: %w", err)
 	}
@@ -1496,26 +1262,22 @@ func removeIfPresent(name string) error {
 }
 
 // write is the validated core shared by Write and WriteVersion.
-func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*Document, error) {
-	cleaned, err := RelPath(reqPath)
+func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*storefmt.Document, error) {
+	loc, err := s.locate(reqPath)
 	if err != nil {
 		return nil, err
 	}
-	base := filepath.Base(cleaned)
-	dir := filepath.Dir(cleaned)
-
-	if err := s.containWrite(reqPath, filepath.Join(dir, base)); err != nil {
+	if err := s.containWrite(reqPath, &loc); err != nil {
 		return nil, err
 	}
+	base, versionsDir, currentFile := loc.base, loc.versionsDir, loc.current
 
-	versionsDir := filepath.Join(s.root, dir, "versions")
 	if err := s.mkdirAllDurable(versionsDir); err != nil {
 		return nil, fmt.Errorf("create versions dir: %w", err)
 	}
 
 	// Determine the next version number. For a truly new document (no current
 	// file on disk), start at 1. Otherwise increment from the current version.
-	currentFile := filepath.Join(s.root, dir, base)
 	var next int
 	if info, err := os.Stat(currentFile); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1527,13 +1289,10 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 		// Reject the document/directory collision before any version file is
 		// written; failing later on the current-pointer rename would leave a
 		// dangling version file behind.
-		return nil, fmt.Errorf("cannot publish %s: a directory exists at this path: %w", reqPath, ErrPathCollision)
+		return nil, fmt.Errorf("cannot publish %s: a directory exists at this path: %w", reqPath, storefmt.ErrPathCollision)
 	} else {
-		current, err := s.CurrentVersionResult(reqPath)
-		if err != nil {
-			return nil, err
-		}
-		next = current + 1
+		// containWrite already held the versions tree inside the root.
+		next = highestPerDocVersion(versionsDir, base) + 1
 	}
 
 	// For existing documents: reject writes to archived documents (closes
@@ -1546,12 +1305,12 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 	}
 
 	// Create per-document subdirectory for new documents.
-	docDir := filepath.Join(versionsDir, base)
+	docDir := loc.docDir
 	if err := s.mkdirAllDurable(docDir); err != nil {
 		return nil, fmt.Errorf("create per-doc versions dir: %w", err)
 	}
 
-	vFile := newVersionFilePath(versionsDir, base, next)
+	vFile := loc.versionFile(next)
 
 	stored, err := buildVersionFile(versionsDir, base, next, content, meta)
 	if err != nil {
@@ -1559,8 +1318,8 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 	}
 
 	// Validate stored size after prepending frontmatter.
-	if int64(len(stored)) > int64(protocol.MaxBodyLength+maxStoreFrontmatter) {
-		return nil, ErrSizeLimit
+	if int64(len(stored)) > int64(protocol.MaxBodyLength+storefmt.MaxStoreFrontmatter) {
+		return nil, storefmt.ErrSizeLimit
 	}
 
 	if err := createVersionFile(vFile, stored, next); err != nil {
@@ -1584,82 +1343,36 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string) (*
 	// Metadata is the persisted form (what Get returns), not the request
 	// map: "alpha, beta" is stored as a tags list and reads back "alpha,beta",
 	// and the catalog must see one spelling whichever path populated it.
-	doc := &Document{
+	doc := &storefmt.Document{
 		Content:  content,
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  next,
 		Archived: false,
-		Metadata: extractMetadata(stored),
-		ETag:     StoredETag(stored),
+		Metadata: storefmt.ExtractMetadata(stored),
+		ETag:     storefmt.StoredETag(stored),
 	}
-	if keep := retentionValue(meta); keep > 0 {
+	if keep := storefmt.RetentionValue(meta); keep > 0 {
 		doc.Prune = s.pruneVersions(versionsDir, base, next, keep)
 	}
 	return doc, nil
 }
 
-// ParseRetention parses a retention metadata value. ok is true only for a
-// positive integer — the only form that prunes; validateMeta rejects every
-// other value. Exported so clients gating destructive-confirmation UX (the
-// CLI prompt) share the exact predicate the server enforces instead of
-// re-implementing it and drifting.
-func ParseRetention(v string) (n int, ok bool) {
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 {
-		return 0, false
-	}
-	return n, true
-}
-
-// retentionValue returns the retention count declared in publisher metadata,
-// or 0 when absent. validateMeta has already rejected non-integer or < 1
-// values, so a parse failure here means the map bypassed validation — treat
-// it as no retention rather than pruning on a value that was never vetted.
-func retentionValue(meta map[string]string) int {
-	v, ok := meta[retentionKey]
-	if !ok {
-		return 0
-	}
-	n, ok := ParseRetention(v)
-	if !ok {
-		return 0
-	}
-	return n
-}
-
-// pruneVersions deletes the oldest versions of a document so at most keep
-// versions remain, the just-written current version included. Deletion runs
-// oldest-first and stops at the first failure so the surviving versions are
-// always a contiguous suffix — VerifyChain never sees a gap. It runs only
-// after a successful write, which has already migrated the document to the
-// per-doc layout, so only versions/{base}/v{N} files are ever touched.
-//
-// Deletion is the store's only destructive operation, so it takes no chances
-// with the filesystem: version numbers come from ReadDir (never from input),
-// filenames are reconstructed as v{N}, and every removal goes through an
-// os.Root anchored at the store root. os.Root resolves the whole path inside
-// the root at delete time, so a planted symlink (e.g. versions/{base}
-// pointing outside the store) or a directory swapped in mid-prune cannot
-// redirect a delete to a file outside the store, and a version file that is
-// itself a symlink is unlinked, never followed. Returns nil when there was
-// nothing to delete.
-//
-// Deletion is deliberately unbounded per write: the first retained write on a
-// long history prunes the whole backlog inline (that is the upgrade path for
-// documents that accumulated hundreds of versions before retention existed).
-// Steady state deletes one version per write.
-func (s *Store) pruneVersions(versionsDir, base string, current, keep int) *PruneResult {
+// pruneVersions keeps the newest keep versions, deleting oldest first and
+// stopping at the first failure so survivors stay a contiguous suffix. Removals
+// go through an os.Root at the store root; a planted symlink cannot redirect one.
+func (s *Store) pruneVersions(versionsDir, base string, current, keep int) *storefmt.PruneResult {
+	// Unbounded on purpose: the first retained write prunes the whole backlog.
 	cutoff := current - keep // delete versions <= cutoff
 	if cutoff < 1 {
 		return nil
 	}
 	relDocDir, err := filepath.Rel(s.root, filepath.Join(versionsDir, base))
 	if err != nil || !filepath.IsLocal(relDocDir) {
-		return &PruneResult{Err: fmt.Errorf("prune: doc dir escapes store root: %q", relDocDir)}
+		return &storefmt.PruneResult{Err: fmt.Errorf("prune: doc dir escapes store root: %q", relDocDir)}
 	}
 	rootFS, err := os.OpenRoot(s.root)
 	if err != nil {
-		return &PruneResult{Err: fmt.Errorf("prune: open store root: %w", err)}
+		return &storefmt.PruneResult{Err: fmt.Errorf("prune: open store root: %w", err)}
 	}
 	// Read-only directory handle; nothing actionable on close failure.
 	defer func() { _ = rootFS.Close() }()
@@ -1668,20 +1381,20 @@ func (s *Store) pruneVersions(versionsDir, base string, current, keep int) *Prun
 	sort.Slice(versions, func(i, j int) bool {
 		return versions[i].Version < versions[j].Version
 	})
-	var res *PruneResult
+	var res *storefmt.PruneResult
 	for _, v := range versions {
 		if v.Version > cutoff {
 			break
 		}
 		if err := rootFS.Remove(filepath.Join(relDocDir, fmt.Sprintf("v%d", v.Version))); err != nil {
 			if res == nil {
-				res = &PruneResult{}
+				res = &storefmt.PruneResult{}
 			}
 			res.Err = fmt.Errorf("prune v%d: %w", v.Version, err)
 			break
 		}
 		if res == nil {
-			res = &PruneResult{From: v.Version}
+			res = &storefmt.PruneResult{From: v.Version}
 		}
 		res.To = v.Version
 	}
@@ -1690,13 +1403,13 @@ func (s *Store) pruneVersions(versionsDir, base string, current, keep int) *Prun
 
 // prepareExistingDoc rejects archived documents and returns ErrNotModified
 // on unchanged content; (nil, nil) means proceed with a new version.
-func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content []byte, meta map[string]string) (*Document, error) {
+func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content []byte, meta map[string]string) (*storefmt.Document, error) {
 	archived, err := s.isCurrentArchived(versionsDir, base, next-1)
 	if err != nil {
 		return nil, err
 	}
 	if archived {
-		return nil, ErrArchived
+		return nil, storefmt.ErrArchived
 	}
 
 	// Skip creating a new version if content and metadata are identical.
@@ -1709,20 +1422,20 @@ func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content [
 		// File doesn't exist — proceed with writing the new version.
 		return nil, nil
 	}
-	storedMeta := extractMetadata(prevData)
-	if bytes.Equal(extractBody(prevData), content) && metaEqual(storedMeta, NormalizeMetadata(meta)) {
+	storedMeta := storefmt.ExtractMetadata(prevData)
+	if bytes.Equal(storefmt.ExtractBody(prevData), content) && storefmt.MetaEqual(storedMeta, storefmt.NormalizeMetadata(meta)) {
 		info, err := os.Stat(prevFile)
 		if err != nil {
 			return nil, fmt.Errorf("stat current version: %w", err)
 		}
-		return &Document{
+		return &storefmt.Document{
 			Content:  content,
 			Modified: info.ModTime().UTC().Truncate(time.Second),
 			Version:  next - 1,
 			Archived: false,
 			Metadata: storedMeta,
-			ETag:     StoredETag(prevData),
-		}, ErrNotModified
+			ETag:     storefmt.StoredETag(prevData),
+		}, storefmt.ErrNotModified
 	}
 	return nil, nil
 }
@@ -1734,13 +1447,13 @@ func (s *Store) prepareExistingDoc(versionsDir, base string, next int, content [
 //   - > 0: expect this specific version (update-only)
 //
 // Returns ErrConflict if the expectation is violated.
-func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*Document, error) {
+func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*storefmt.Document, error) {
 	// Request-shaped checks come before any state read so an invalid write
 	// never masquerades as a conflict; every backend must order checks this way.
-	if err := validateWrite(content, meta); err != nil {
+	if err := storefmt.ValidateWrite(content, meta); err != nil {
 		return nil, err
 	}
-	if ContainsDotDot(reqPath) {
+	if storefmt.ContainsDotDot(reqPath) {
 		return nil, os.ErrNotExist
 	}
 	if expectedVersion < 0 {
@@ -1752,27 +1465,27 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 		return nil, err
 	}
 	if current != expectedVersion {
-		return &Document{Version: current}, ErrConflict
+		return &storefmt.Document{Version: current}, storefmt.ErrConflict
 	}
 
 	doc, err := s.write(reqPath, content, meta)
 	if err != nil {
-		if errors.Is(err, ErrVersionExists) {
+		if errors.Is(err, storefmt.ErrVersionExists) {
 			// Lost the O_EXCL race: another writer created the expected
 			// next version between our check and the file create.
 			current, currentErr := s.CurrentVersionResult(reqPath)
 			if currentErr != nil {
 				return nil, currentErr
 			}
-			return &Document{Version: current}, ErrConflict
+			return &storefmt.Document{Version: current}, storefmt.ErrConflict
 		}
-		if errors.Is(err, ErrNotModified) && doc != nil {
+		if errors.Is(err, storefmt.ErrNotModified) && doc != nil {
 			// Content matches current version — but if a concurrent writer
 			// created intervening versions, the "current" version may have
 			// moved past expectedVersion+1. Allow not-modified only when
 			// the version is what we'd expect.
 			if doc.Version != expectedVersion && doc.Version != expectedVersion+1 {
-				return &Document{Version: doc.Version}, ErrConflict
+				return &storefmt.Document{Version: doc.Version}, storefmt.ErrConflict
 			}
 		}
 		return doc, err
@@ -1787,7 +1500,7 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 	// result is preserved: the write pruned regardless of the conflict,
 	// and callers must still be able to audit-log the deletion.
 	if doc.Version != expectedVersion+1 {
-		return &Document{Version: doc.Version, Prune: doc.Prune}, ErrConflict
+		return &storefmt.Document{Version: doc.Version, Prune: doc.Prune}, storefmt.ErrConflict
 	}
 
 	return doc, nil
@@ -1797,17 +1510,17 @@ func (s *Store) WriteVersion(reqPath string, expectedVersion int, content []byte
 // (separated by a newline), and writes the result as a new version.
 // The document must already exist. expectedVersion must be >= 1.
 // Returns ErrConflict if expectedVersion does not match the current version.
-func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*Document, error) {
+func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*storefmt.Document, error) {
 	if expectedVersion < 1 {
 		return nil, fmt.Errorf("APPEND requires expected-version >= 1, got %d", expectedVersion)
 	}
 	if len(content) == 0 {
 		return nil, fmt.Errorf("APPEND requires non-empty content")
 	}
-	if err := validateMeta(meta); err != nil {
+	if err := storefmt.ValidateMeta(meta); err != nil {
 		return nil, err
 	}
-	if ContainsDotDot(reqPath) {
+	if storefmt.ContainsDotDot(reqPath) {
 		return nil, os.ErrNotExist
 	}
 
@@ -1822,19 +1535,19 @@ func (s *Store) Append(reqPath string, expectedVersion int, content []byte, meta
 			return nil, currentErr
 		}
 		if current > 0 && current != expectedVersion {
-			return &Document{Version: current}, ErrConflict
+			return &storefmt.Document{Version: current}, storefmt.ErrConflict
 		}
 		return nil, err
 	}
 
-	combined, err := joinContent(baseDoc.Content, content)
+	combined, err := storefmt.JoinContent(baseDoc.Content, content)
 	if err != nil {
 		return nil, err
 	}
 
 	// Write validates the merged map: both sides pass the caps individually,
 	// their union need not.
-	return s.WriteVersion(reqPath, expectedVersion, combined, PrepareAppendMeta(reqPath, baseDoc.Metadata, meta))
+	return s.WriteVersion(reqPath, expectedVersion, combined, storefmt.PrepareAppendMeta(reqPath, baseDoc.Metadata, meta))
 }
 
 // VerifyChain checks the hash chain integrity for a document.
@@ -1851,40 +1564,36 @@ func (s *Store) VerifyChain(reqPath string) error {
 		return versions[i].Version < versions[j].Version
 	})
 
-	cleaned := filepath.Clean(reqPath)
-	cleaned = strings.TrimLeft(cleaned, "/")
-	base := filepath.Base(cleaned)
-	dir := filepath.Dir(cleaned)
-	if err := s.containDoc(cleaned); err != nil {
+	loc, err := s.locateContained(reqPath)
+	if err != nil {
 		return fmt.Errorf("verify chain %s: %w", reqPath, err)
 	}
-	versionsDir := filepath.Join(s.root, dir, "versions")
 
 	var previousData []byte
 	// Delay chain errors until all files are read so missing files retain precedence.
 	var chainErr, formatErr error
 	for index, current := range versions {
-		currentFile := newVersionFilePath(versionsDir, base, current.Version)
+		currentFile := loc.versionFile(current.Version)
 		currentData, err := os.ReadFile(currentFile)
 		if err != nil {
 			return fmt.Errorf("read v%d: %w", current.Version, err)
 		}
 		if index > 0 && chainErr == nil {
-			recorded := extractPreviousHash(currentData)
+			recorded := storefmt.ExtractPreviousHash(currentData)
 			if recorded == "" {
-				chainErr = fmt.Errorf("%w: v%d missing previous-hash", ErrIntegrity, current.Version)
-			} else if expected := "sha256-" + StoredETag(previousData); recorded != expected {
+				chainErr = fmt.Errorf("%w: v%d missing previous-hash", storefmt.ErrIntegrity, current.Version)
+			} else if expected := "sha256-" + storefmt.StoredETag(previousData); recorded != expected {
 				chainErr = fmt.Errorf("%w: v%d chain broken: previous-hash mismatch (want %s, got %s)",
-					ErrIntegrity, current.Version, expected, recorded)
+					storefmt.ErrIntegrity, current.Version, expected, recorded)
 			}
 		}
 		if formatErr == nil {
-			header, inspectErr := InspectStoredVersion(currentData)
+			header, inspectErr := storefmt.InspectStoredVersion(currentData)
 			switch {
 			case inspectErr != nil:
-				formatErr = fmt.Errorf("%w: v%d: %v", ErrIntegrity, current.Version, inspectErr)
+				formatErr = fmt.Errorf("%w: v%d: %v", storefmt.ErrIntegrity, current.Version, inspectErr)
 			case header.Version != current.Version:
-				formatErr = fmt.Errorf("%w: v%d stored version is %d", ErrIntegrity, current.Version, header.Version)
+				formatErr = fmt.Errorf("%w: v%d stored version is %d", storefmt.ErrIntegrity, current.Version, header.Version)
 			}
 		}
 		previousData = currentData
@@ -1932,101 +1641,6 @@ func resolveNonExistent(path string) (string, error) {
 // write maps it to the topology collision error.
 var errUnderDocument = fmt.Errorf("%w: path is beneath a document", os.ErrNotExist)
 
-// CanonicalPath is the one spelling of a request path shared by every index
-// keyed on paths (hash index, catalog): slash-cleaned, single leading
-// slash, root is "/". Callers reject traversal via ContainsDotDot.
-func CanonicalPath(reqPath string) string {
-	return slashpath.Clean("/" + reqPath)
-}
-
-// RelPath is the storage-relative form of a request path: CanonicalPath
-// without the leading slash, "" for the root. ".." is rejected with
-// os.ErrNotExist so traversal never reaches a backend.
-func RelPath(reqPath string) (string, error) {
-	if ContainsDotDot(reqPath) {
-		return "", os.ErrNotExist
-	}
-	return strings.TrimPrefix(CanonicalPath(reqPath), "/"), nil
-}
-
-// ContainsDotDot reports whether the path contains a ".." segment. Every
-// backend rejects such paths with os.ErrNotExist; exported so they share one
-// definition of traversal.
-func ContainsDotDot(path string) bool {
-	for seg := range strings.SplitSeq(path, "/") {
-		if seg == ".." {
-			return true
-		}
-	}
-	return false
-}
-
-// extractPreviousHash parses the store frontmatter from raw version file bytes
-// and returns the value of the previous-hash field, or "" if absent.
-func extractPreviousHash(data []byte) string {
-	content := string(data)
-	if !strings.HasPrefix(content, "---\n") {
-		return ""
-	}
-	end := strings.Index(content[4:], "\n---\n")
-	if end == -1 {
-		return ""
-	}
-	block := content[4 : 4+end]
-	for line := range strings.SplitSeq(block, "\n") {
-		key, val, ok := strings.Cut(line, ": ")
-		if ok && strings.TrimSpace(key) == "previous-hash" {
-			return strings.TrimSpace(val)
-		}
-	}
-	return ""
-}
-
-// isArchived checks if a version file is marked as archived in its frontmatter.
-func isArchived(data []byte) bool {
-	content := string(data)
-	if !strings.HasPrefix(content, "---\n") {
-		return false
-	}
-	end := strings.Index(content[4:], "\n---\n")
-	if end == -1 {
-		return false
-	}
-	block := content[4 : 4+end]
-	for line := range strings.SplitSeq(block, "\n") {
-		key, val, ok := strings.Cut(line, ": ")
-		if ok && strings.TrimSpace(key) == "archived" {
-			return strings.TrimSpace(val) == "true"
-		}
-	}
-	return false
-}
-
-// joinContent concatenates existing and new content with a newline separator.
-// A separator is only added when existing content is non-empty and does not
-// already end with a newline. Returns ErrSizeLimit if the result exceeds
-// protocol.MaxBodyLength.
-func joinContent(existing, content []byte) ([]byte, error) {
-	if len(content) == 0 {
-		return existing, nil
-	}
-	sep := 0
-	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
-		sep = 1
-	}
-	n := int64(len(existing)) + int64(sep) + int64(len(content))
-	if n > protocol.MaxBodyLength {
-		return nil, ErrSizeLimit
-	}
-	combined := make([]byte, 0, int(n))
-	combined = append(combined, existing...)
-	if sep == 1 {
-		combined = append(combined, '\n')
-	}
-	combined = append(combined, content...)
-	return combined, nil
-}
-
 // buildVersionFile constructs the on-disk bytes for a version file:
 // store frontmatter (version, archived, previous-hash, publisher metadata)
 // followed by the document content.
@@ -2040,218 +1654,7 @@ func buildVersionFile(versionsDir, base string, version int, content []byte, met
 			return nil, fmt.Errorf("read previous version for hashing: %w", err)
 		}
 	}
-	return SerializeVersion(version, prevData, content, meta)
-}
-
-// ValidateMeta checks publisher metadata against the store's key, value, count,
-// and size rules. It is exported so a caller that mutates metadata after the
-// handler's initial validation (e.g. injecting a default OKF type) can re-check
-// before the write and surface a precise error rather than a generic failure.
-func ValidateMeta(meta map[string]string) error { return validateMeta(meta) }
-
-// mergeAppendMeta layers an APPEND's metadata over the base version's, request
-// keys winning (SPEC 6.6); without it an append drops the doc out of LOOKUP.
-// retention is never inherited: pruning belongs to the write declaring it.
-func mergeAppendMeta(base, req map[string]string) map[string]string {
-	if len(base) == 0 && len(req) == 0 {
-		return nil
-	}
-	merged := make(map[string]string, len(base)+len(req))
-	maps.Copy(merged, base)
-	delete(merged, retentionKey)
-	maps.Copy(merged, req)
-	return merged
-}
-
-// ApplyOKFTypeDefault types every written concept document (SPEC 6.4), leaving
-// a declared type and the reserved OKF files alone. Copies rather than stamping
-// the caller's map, which may belong to a fetched Document.
-func ApplyOKFTypeDefault(reqPath string, meta map[string]string) map[string]string {
-	switch slashpath.Base(reqPath) {
-	case "index.md", "log.md":
-		return meta
-	}
-	if strings.TrimSpace(meta["type"]) != "" {
-		return meta
-	}
-	typed := make(map[string]string, len(meta)+1)
-	maps.Copy(typed, meta)
-	typed["type"] = protocol.OKFDefaultType
-	return typed
-}
-
-// ValidateDocumentContent enforces the document contract for PUBLISH/APPEND: a
-// .md path with a UTF-8 body. Callers map the errors to bad-request.
-func ValidateDocumentContent(reqPath string, content []byte) error {
-	if !strings.HasSuffix(reqPath, ".md") {
-		return ErrInvalidPath
-	}
-	return ValidateBody(content)
-}
-
-// ValidateBody checks a body is UTF-8 text. Each backend's Write calls it as
-// defense in depth. No .md check here: the store is deliberately path-agnostic.
-func ValidateBody(content []byte) error {
-	if !utf8.Valid(content) {
-		return ErrInvalidContent
-	}
-	return nil
-}
-
-// validateWrite checks the size, metadata, and encoding of a write request.
-func validateWrite(content []byte, meta map[string]string) error {
-	if int64(len(content)) > protocol.MaxBodyLength {
-		return ErrSizeLimit
-	}
-	if err := validateMeta(meta); err != nil {
-		return err
-	}
-	return ValidateBody(content)
-}
-
-// validateMeta checks metadata is safe for frontmatter serialization. Defense
-// in depth: the handler validates too, but the store is callable off the
-// network path. Failures wrap ErrInvalidMeta so callers can classify them.
-func validateMeta(meta map[string]string) error {
-	size := 0
-	for k, v := range meta {
-		if reservedMetaKeys[k] {
-			return fmt.Errorf("%w: key %q is reserved by the store", ErrInvalidMeta, k)
-		}
-		if !protocol.IsValidMetaKey(k) {
-			return fmt.Errorf("%w: key %q contains invalid characters", ErrInvalidMeta, k)
-		}
-		if !protocol.IsValidMetaValue(v) {
-			return fmt.Errorf("%w: value for key %q is not valid single-line UTF-8", ErrInvalidMeta, k)
-		}
-		if k == retentionKey {
-			if _, ok := ParseRetention(v); !ok {
-				return fmt.Errorf("%w: key %q must be a positive integer, got %q", ErrInvalidMeta, retentionKey, v)
-			}
-		}
-		size += SerializedMetaSize(k, v)
-	}
-	if len(meta) > protocol.MaxMetaKeys {
-		return fmt.Errorf("%w: too many metadata keys (max %d)", ErrInvalidMeta, protocol.MaxMetaKeys)
-	}
-	if size > protocol.MaxMetaBytes {
-		return fmt.Errorf("%w: metadata too large (max %d bytes)", ErrInvalidMeta, protocol.MaxMetaBytes)
-	}
-	return nil
-}
-
-// extractMetadata parses publisher metadata from store frontmatter, returning a
-// bare-keyed map (or nil if none found). Two on-disk forms are recognized:
-// recognized OKF fields written bare (okfKeys, "tags" parsed from its YAML
-// list), and every other publisher key carried under metaPrefix (stripped
-// here). Reserved store fields (reservedMetaKeys) and any other bare key are
-// ignored, so operational state never surfaces as publisher metadata. An older
-// "meta."-prefixed tags value is read as-is, keeping prior writes readable.
-func extractMetadata(data []byte) map[string]string {
-	if len(data) < 4 || !bytes.HasPrefix(data, []byte("---\n")) {
-		return nil
-	}
-	end := bytes.Index(data[4:], []byte("\n---\n"))
-	if end == -1 {
-		return nil
-	}
-	block := string(data[4 : 4+end])
-	var meta map[string]string
-	set := func(k, v string) {
-		if meta == nil {
-			meta = make(map[string]string)
-		}
-		meta[k] = v
-	}
-	for line := range strings.SplitSeq(block, "\n") {
-		key, val, ok := strings.Cut(line, ": ")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		val = strings.TrimRight(val, "\r")
-		switch {
-		case reservedMetaKeys[key]:
-			// Operational field — never publisher metadata.
-		case strings.HasPrefix(key, metaPrefix):
-			// Re-check the unprefixed key so a stored "meta.archived" cannot
-			// resurrect a reserved operational field as publisher metadata.
-			if k := key[len(metaPrefix):]; !reservedMetaKeys[k] {
-				set(k, val)
-			}
-		case key == "tags":
-			set(key, parseTagsList(val))
-		case okfKeys[key]:
-			set(key, val)
-		}
-	}
-	return meta
-}
-
-// SerializedMetaSize returns the byte size a publisher key/value pair counts
-// against MaxMetaBytes: the key length plus the value length as actually
-// serialized on disk. The OKF "tags" field is stored as a YAML flow list, which
-// is longer than its comma-separated map form, so counting the raw value would
-// undercount the on-disk size and let a tag-heavy document slip past the budget
-// only to overflow the frontmatter. Per-line delimiters and the "meta." prefix
-// are fixed, bounded overhead covered by maxStoreFrontmatter, not counted here.
-func SerializedMetaSize(key, value string) int {
-	if key == "tags" {
-		return len(key) + len(formatTagsList(value))
-	}
-	return len(key) + len(value)
-}
-
-// FormatTagsList serializes a comma-separated tag string as an OKF YAML flow
-// list. It is exported for the OKF export codec so a bundle's on-disk tags
-// representation matches the store's exactly (a single source of truth for the
-// serialized form that SerializedMetaSize accounts for).
-func FormatTagsList(csv string) string { return formatTagsList(csv) }
-
-// formatTagsList serializes a comma-separated tag string as an OKF YAML flow
-// list, e.g. "sales,revenue" → "[sales, revenue]". Empty input yields "[]".
-func formatTagsList(csv string) string {
-	return "[" + strings.Join(protocol.SplitTags(csv), ", ") + "]"
-}
-
-// parseTagsList parses a tags value back to the comma-separated form held in the
-// metadata map. It accepts both the OKF YAML flow list ("[sales, revenue]") and
-// a bare comma-separated string (older "meta.tags" writes), so prior versions
-// stay readable.
-func parseTagsList(v string) string {
-	v = strings.TrimSpace(v)
-	if strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]") {
-		v = v[1 : len(v)-1]
-	}
-	return strings.Join(protocol.SplitTags(v), ",")
-}
-
-// metaEqual reports whether two metadata maps are equal.
-// Treats nil and empty maps as equal.
-func metaEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
-// extractBody returns the content after the store frontmatter.
-// If no frontmatter is found, the entire data is returned.
-func extractBody(data []byte) []byte {
-	delim := []byte("---\n")
-	if !bytes.HasPrefix(data, delim) {
-		return data
-	}
-	end := bytes.Index(data[4:], []byte("\n---\n"))
-	if end == -1 {
-		return data
-	}
-	return data[4+end+5:]
+	return storefmt.SerializeVersion(version, prevData, content, meta)
 }
 
 // migrateLegacyLayout moves legacy versions/{base}.v{N} files to the
@@ -2268,7 +1671,7 @@ func (s *Store) migrateLegacyLayout() error {
 		// Hidden directories are walked too: FETCH serves explicit hidden
 		// paths (/.well-known/agent-manifest.md), so their legacy versions
 		// must migrate; skipping them broke the manifest on soul.demarkus.io.
-		if d.Name() != "versions" {
+		if d.Name() != versionsDirName {
 			return nil
 		}
 		if merr := s.migrateLegacyVersionsDir(path); merr != nil {

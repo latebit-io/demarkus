@@ -3,6 +3,8 @@ package store
 import (
 	"strings"
 	"testing"
+
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // A directory whose name merely starts with two dots is inside the root.
@@ -28,8 +30,33 @@ func TestPruneUnderDotDotPrefixedDirectory(t *testing.T) {
 }
 
 func TestPartialWalkErrorZeroValue(t *testing.T) {
-	var e PartialWalkError
+	var e storefmt.PartialWalkError
 	if got := e.Error(); !strings.Contains(got, "0 entries") {
 		t.Errorf("Error() = %q", got)
+	}
+}
+
+// ApplyOKFTypeDefault never hands back the caller's map, whichever branch runs.
+func TestApplyOKFTypeDefaultAlwaysCopies(t *testing.T) {
+	tests := []struct {
+		name    string
+		reqPath string
+		meta    map[string]string
+	}{
+		{name: "reserved file", reqPath: "/index.md", meta: map[string]string{"tags": "a"}},
+		{name: "declared type", reqPath: "/doc.md", meta: map[string]string{"type": "Decision"}},
+		{name: "defaulted", reqPath: "/doc.md", meta: map[string]string{"tags": "a"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := storefmt.ApplyOKFTypeDefault(tt.reqPath, tt.meta)
+			got["probe"] = "x"
+			if _, leaked := tt.meta["probe"]; leaked {
+				t.Error("result aliases the caller's map")
+			}
+		})
+	}
+	if got := storefmt.ApplyOKFTypeDefault("/index.md", nil); got != nil {
+		t.Errorf("nil metadata on a reserved file = %v, want nil", got)
 	}
 }

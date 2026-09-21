@@ -17,3 +17,5 @@ Decision records binding the protocol, spec, and repo; git is canonical, and eac
 | [0011](0011-native-scheme-redirect-allowlist.md) | Allowlisted private-use scheme redirects for MCP hosts | accepted 2026-09-07 |
 | [0012](0012-lookup-body-match.md) | Body match is an optional mode of LOOKUP | proposed 2026-09-07 |
 | [0013](0013-graph-source-freshness.md) | Graph freshness follows source revisions | proposed 2026-09-13 |
+| [0014](0014-protocol-module-is-wire-and-stored-format.md) | The protocol module is wire and stored format only | accepted 2026-09-21 |
+| [0015](0015-backend-contract-context-and-views.md) | The backend contract takes a context per call and reads through views | accepted 2026-09-21 |

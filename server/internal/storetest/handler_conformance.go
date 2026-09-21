@@ -74,7 +74,7 @@ func testQuotaRejection(t *testing.T, b LookupBackend) {
 	publishDoc(t, h, "/a.md", "# A\n", nil)
 	publishDoc(t, h, "/b.md", "# B\n", nil)
 
-	_, err := b.Store.WriteVersion("/c.md", 0, []byte("# C\n"), nil)
+	_, err := b.direct().WriteVersion("/c.md", 0, []byte("# C\n"), nil)
 	if !errors.Is(err, storagebackend.ErrQuota) {
 		t.Fatalf("third document err = %v, want backend.ErrQuota", err)
 	}
@@ -90,7 +90,7 @@ func testQuotaRejection(t *testing.T, b LookupBackend) {
 }
 
 func testPolicyRejection(t *testing.T, b LookupBackend) {
-	_, err := b.Store.WriteVersion("/untagged.md", 0, []byte("# Untagged\n"), nil)
+	_, err := b.direct().WriteVersion("/untagged.md", 0, []byte("# Untagged\n"), nil)
 	if !errors.Is(err, storagebackend.ErrRejected) {
 		t.Fatalf("untagged publish err = %v, want backend.ErrRejected", err)
 	}

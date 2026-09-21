@@ -8,6 +8,7 @@ replace github.com/latebit-io/demarkus/client => ../client
 
 require (
 	cloud.google.com/go/storage v1.66.0
+	github.com/BurntSushi/toml v1.6.0
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/latebit-io/demarkus/client v0.0.0-00010101000000-000000000000
@@ -32,7 +33,6 @@ require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/iam v1.11.0 // indirect
 	cloud.google.com/go/monitoring v1.29.0 // indirect
-	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.33.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.57.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.57.0 // indirect

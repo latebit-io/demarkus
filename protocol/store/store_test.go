@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 func TestGet_FlatFileRejected(t *testing.T) {
@@ -184,7 +185,7 @@ func TestListDir(t *testing.T) {
 	}
 
 	for _, includeArchived := range []bool{false, true} {
-		entries, err := s.ListDir("/", includeArchived)
+		entries, err := s.listDir("/", includeArchived)
 		if err != nil {
 			t.Fatalf("ListDir(includeArchived=%v): %v", includeArchived, err)
 		}
@@ -240,7 +241,7 @@ func TestListDir_HidesArchived(t *testing.T) {
 
 	// Default (hide archived): live.md stays; gone.md is hidden; attic/ is
 	// pruned because its only document is archived.
-	hidden, err := s.ListDir("/", false)
+	hidden, err := s.listDir("/", false)
 	if err != nil {
 		t.Fatalf("ListDir hide: %v", err)
 	}
@@ -263,7 +264,7 @@ func TestListDir_HidesArchived(t *testing.T) {
 
 	// include-archived: every document is listed, including attic/; a
 	// document-free directory stays excluded even in the audit view.
-	shown, err := s.ListDir("/", true)
+	shown, err := s.listDir("/", true)
 	if err != nil {
 		t.Fatalf("ListDir show: %v", err)
 	}
@@ -280,7 +281,7 @@ func TestListDir_HidesArchived(t *testing.T) {
 	// Non-canonical request paths must behave identically — the index fast
 	// path canonicalizes before prefix-matching pathIdx's canonical keys.
 	for _, p := range []string{"//", "/."} {
-		nc, err := s.ListDir(p, false)
+		nc, err := s.listDir(p, false)
 		if err != nil {
 			t.Fatalf("ListDir %q: %v", p, err)
 		}
@@ -318,10 +319,10 @@ func TestListDirRejectsInvalidArchiveState(t *testing.T) {
 				if unarchive && filepath.Dir(rel) != "." {
 					listPath = "/" + filepath.ToSlash(filepath.Dir(rel))
 				}
-				if _, err := s.ListDir(listPath, false); !errors.Is(err, ErrIntegrity) {
+				if _, err := s.listDir(listPath, false); !errors.Is(err, storefmt.ErrIntegrity) {
 					t.Fatalf("ListDir hidden error = %v, want ErrIntegrity", err)
 				}
-				if _, err := s.ListDir(listPath, true); err != nil {
+				if _, err := s.listDir(listPath, true); err != nil {
 					t.Fatalf("ListDir audit view: %v", err)
 				}
 			})
@@ -393,7 +394,7 @@ func TestListDir_DotNamedDocDoesNotKeepShellDir(t *testing.T) {
 	if _, err := s.Write("/work/.scratch.md", []byte("# hidden\n"), nil); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	entries, err := s.ListDir("/", false)
+	entries, err := s.listDir("/", false)
 	if err != nil {
 		t.Fatalf("ListDir: %v", err)
 	}
@@ -402,7 +403,7 @@ func TestListDir_DotNamedDocDoesNotKeepShellDir(t *testing.T) {
 			t.Errorf("want work/ pruned (only content is a hidden dot-file), got listed")
 		}
 	}
-	inner, err := s.ListDir("/work", false)
+	inner, err := s.listDir("/work", false)
 	if err != nil {
 		t.Fatalf("ListDir /work: %v", err)
 	}
@@ -418,7 +419,7 @@ func TestListDir_NotADirectory(t *testing.T) {
 	}
 	s := New(root)
 
-	_, err := s.ListDir("/file.md", false)
+	_, err := s.listDir("/file.md", false)
 	if err == nil {
 		t.Fatal("expected error for file")
 	}
@@ -682,7 +683,7 @@ func TestWrite_ImmutabilityGuard(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error: version 1 already exists")
 	}
-	if !errors.Is(err, ErrVersionExists) {
+	if !errors.Is(err, storefmt.ErrVersionExists) {
 		t.Errorf("expected ErrVersionExists, got: %v", err)
 	}
 }
@@ -739,7 +740,7 @@ func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
 
 	// Publishing identical content should return ErrNotModified.
 	doc2, err := s.Write("/doc.md", content, nil)
-	if !errors.Is(err, ErrNotModified) {
+	if !errors.Is(err, storefmt.ErrNotModified) {
 		t.Fatalf("expected ErrNotModified, got: %v", err)
 	}
 	if doc2.Version != 1 {
@@ -766,7 +767,7 @@ func TestWrite_DuplicateContentIsNoOp(t *testing.T) {
 
 	// Publishing the v2 content again should be a no-op.
 	doc4, err := s.Write("/doc.md", []byte("# Updated\n"), nil)
-	if !errors.Is(err, ErrNotModified) {
+	if !errors.Is(err, storefmt.ErrNotModified) {
 		t.Fatalf("expected ErrNotModified, got: %v", err)
 	}
 	if doc4.Version != 2 {
@@ -804,7 +805,7 @@ func TestWriteVersion(t *testing.T) {
 		}
 
 		doc, err := s.WriteVersion("/doc.md", 1, []byte("# stale edit\n"), nil)
-		if !errors.Is(err, ErrConflict) {
+		if !errors.Is(err, storefmt.ErrConflict) {
 			t.Fatalf("expected ErrConflict, got: %v", err)
 		}
 		if doc.Version != 2 {
@@ -851,7 +852,7 @@ func TestWriteVersion(t *testing.T) {
 		}
 
 		doc, err := s.WriteVersion("/doc.md", 0, []byte("# should conflict\n"), nil)
-		if !errors.Is(err, ErrConflict) {
+		if !errors.Is(err, storefmt.ErrConflict) {
 			t.Fatalf("expected ErrConflict, got: %v", err)
 		}
 		if doc.Version != 1 {
@@ -885,7 +886,7 @@ func TestWriteVersion(t *testing.T) {
 
 		// Writer B arrives with stale expectedVersion=0.
 		doc, err = s.WriteVersion("/doc.md", 0, []byte("# writer B\n"), nil)
-		if !errors.Is(err, ErrConflict) {
+		if !errors.Is(err, storefmt.ErrConflict) {
 			t.Fatalf("writer B: expected ErrConflict, got: %v", err)
 		}
 		if doc.Version != 1 {
@@ -905,42 +906,13 @@ func TestWriteVersion(t *testing.T) {
 		// Publishing identical content with correct expectedVersion
 		// should return ErrNotModified (not ErrConflict).
 		doc, err := s.WriteVersion("/doc.md", 1, content, nil)
-		if !errors.Is(err, ErrNotModified) {
+		if !errors.Is(err, storefmt.ErrNotModified) {
 			t.Fatalf("expected ErrNotModified, got: %v", err)
 		}
 		if doc.Version != 1 {
 			t.Errorf("version = %d, want 1", doc.Version)
 		}
 	})
-}
-
-func TestLegacyExportedMethodContracts(t *testing.T) {
-	s := New(t.TempDir())
-	lookup := s.LookupHash
-	current := s.CurrentVersion
-	archive := s.Archive
-
-	if _, err := s.Write("/doc.md", []byte("body"), nil); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if path, ok := lookup(ContentHash([]byte("body"))); !ok || path != "/doc.md" {
-		t.Fatalf("LookupHash = (%q, %t), want /doc.md, true", path, ok)
-	}
-	if version := current("/doc.md"); version != 1 {
-		t.Fatalf("CurrentVersion = %d, want 1", version)
-	}
-	if version := current("/../invalid.md"); version != 0 {
-		t.Fatalf("CurrentVersion invalid path = %d, want 0", version)
-	}
-	if err := archive("/doc.md", true); err != nil {
-		t.Fatalf("Archive: %v", err)
-	}
-	if _, ok := lookup(ContentHash([]byte("body"))); ok {
-		t.Fatal("LookupHash found archived document")
-	}
-	if err := archive("/missing.md", true); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Archive missing error = %v, want ErrNotExist", err)
-	}
 }
 
 func TestArchive(t *testing.T) {
@@ -1136,7 +1108,7 @@ func TestArchive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		legacyArchived, err := SetArchived(stored, true)
+		legacyArchived, err := storefmt.SetArchived(stored, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1150,10 +1122,10 @@ func TestArchive(t *testing.T) {
 		if err := s.BuildHashIndex(); err != nil {
 			t.Fatalf("BuildHashIndex: %v", err)
 		}
-		if _, err := s.LookupHashResult(ContentHash([]byte("# Hello\n"))); !errors.Is(err, os.ErrNotExist) {
+		if _, err := s.LookupHashResult(storefmt.ContentHash([]byte("# Hello\n"))); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("legacy archived hash lookup err = %v, want ErrNotExist", err)
 		}
-		entries, err := s.ListDir("/", false)
+		entries, err := s.listDir("/", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1181,10 +1153,10 @@ func TestArchive(t *testing.T) {
 		if err != nil || current.Archived {
 			t.Fatalf("overridden current = %+v (err %v), want active", current, err)
 		}
-		if path, err := s.LookupHashResult(ContentHash([]byte("# Hello\n"))); err != nil || path != "/doc.md" {
+		if path, err := s.LookupHashResult(storefmt.ContentHash([]byte("# Hello\n"))); err != nil || path != "/doc.md" {
 			t.Errorf("unarchived hash lookup = (%q, %v), want /doc.md", path, err)
 		}
-		entries, err = s.ListDir("/", false)
+		entries, err = s.listDir("/", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1199,7 +1171,7 @@ func TestArchive(t *testing.T) {
 			t.Fatalf("Archive: %v", err)
 		}
 		_, err := s.Write("/doc.md", []byte("# New content\n"), nil)
-		if !errors.Is(err, ErrArchived) {
+		if !errors.Is(err, storefmt.ErrArchived) {
 			t.Errorf("expected ErrArchived, got: %v", err)
 		}
 	})
@@ -1211,15 +1183,15 @@ func TestVerifyChainAcceptsLegacyArchivedNonTip(t *testing.T) {
 	if err := os.MkdirAll(docDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	v1, err := SerializeVersion(1, nil, []byte("# V1\n"), nil)
+	v1, err := storefmt.SerializeVersion(1, nil, []byte("# V1\n"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	v1, err = SetArchived(v1, true)
+	v1, err = storefmt.SetArchived(v1, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	v2, err := SerializeVersion(2, v1, []byte("# V2\n"), nil)
+	v2, err := storefmt.SerializeVersion(2, v1, []byte("# V2\n"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1301,7 +1273,7 @@ func TestVersionFilePath(t *testing.T) {
 // placed on disk by hand cannot drift from the stored format.
 func storedVersion(t *testing.T, version int, previous []byte, content string) []byte {
 	t.Helper()
-	stored, err := SerializeVersion(version, previous, []byte(content), nil)
+	stored, err := storefmt.SerializeVersion(version, previous, []byte(content), nil)
 	if err != nil {
 		t.Fatalf("serialize v%d: %v", version, err)
 	}
@@ -1335,7 +1307,7 @@ func TestListDir_LegacyLayoutVisibility(t *testing.T) {
 		return m
 	}
 
-	preMigrate, err := s.ListDir("/", false)
+	preMigrate, err := s.listDir("/", false)
 	if err != nil {
 		t.Fatalf("ListDir / before migration: %v", err)
 	}
@@ -1345,14 +1317,14 @@ func TestListDir_LegacyLayoutVisibility(t *testing.T) {
 	if err := s.migrateLegacyLayout(); err != nil {
 		t.Fatalf("migrateLegacyLayout: %v", err)
 	}
-	inLegacy, err := s.ListDir("/legacy", false)
+	inLegacy, err := s.listDir("/legacy", false)
 	if err != nil {
 		t.Fatalf("ListDir /legacy: %v", err)
 	}
 	if l := names(inLegacy); !l["old.md"] {
 		t.Errorf("migrated legacy-layout doc not listed: %v", l)
 	}
-	atRoot, err := s.ListDir("/", false)
+	atRoot, err := s.listDir("/", false)
 	if err != nil {
 		t.Fatalf("ListDir / after migration: %v", err)
 	}
@@ -1818,7 +1790,7 @@ func TestAppend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(extractBody(got.Content))
+	body := string(storefmt.ExtractBody(got.Content))
 	if body != "# Hello\nMore text." {
 		t.Errorf("body: got %q, want %q", body, "# Hello\nMore text.")
 	}
@@ -1842,7 +1814,7 @@ func TestAppend_TrailingNewline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(extractBody(got.Content))
+	body := string(storefmt.ExtractBody(got.Content))
 	want := "# Hello\nMore text."
 	if body != want {
 		t.Errorf("body: got %q, want %q", body, want)
@@ -1872,7 +1844,7 @@ func TestAppend_Archived(t *testing.T) {
 	}
 
 	_, err = s.Append("/doc.md", 1, []byte("More text."), nil)
-	if !errors.Is(err, ErrArchived) {
+	if !errors.Is(err, storefmt.ErrArchived) {
 		t.Fatalf("expected ErrArchived, got: %v", err)
 	}
 }
@@ -1894,7 +1866,7 @@ func TestAppend_ExceedsMaxBody(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for combined content exceeding size limit")
 	}
-	if !errors.Is(err, ErrSizeLimit) {
+	if !errors.Is(err, storefmt.ErrSizeLimit) {
 		t.Errorf("expected ErrSizeLimit, got: %v", err)
 	}
 }
@@ -1915,7 +1887,7 @@ func TestAppend_Conflict(t *testing.T) {
 
 	// Append with stale version.
 	_, err = s.Append("/doc.md", 1, []byte("Late."), nil)
-	if !errors.Is(err, ErrConflict) {
+	if !errors.Is(err, storefmt.ErrConflict) {
 		t.Fatalf("expected ErrConflict, got: %v", err)
 	}
 }
@@ -1987,8 +1959,8 @@ func TestExtractMetadata_LegacyMetaPrefix(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractMetadata([]byte(tt.data))
-			if !metaEqual(got, tt.want) {
+			got := storefmt.ExtractMetadata([]byte(tt.data))
+			if !storefmt.MetaEqual(got, tt.want) {
 				t.Errorf("extractMetadata = %v, want %v", got, tt.want)
 			}
 		})
@@ -2091,7 +2063,7 @@ func TestExtractMetadata(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractMetadata([]byte(tt.data))
+			got := storefmt.ExtractMetadata([]byte(tt.data))
 			if tt.want == nil && got != nil {
 				t.Errorf("got %v, want nil", got)
 				return
@@ -2288,7 +2260,7 @@ func TestValidateMeta_Retention(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMeta(map[string]string{"retention": tt.value})
+			err := storefmt.ValidateMeta(map[string]string{"retention": tt.value})
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateMeta(retention=%q) error = %v, wantErr %v", tt.value, err, tt.wantErr)
 			}
@@ -2298,9 +2270,9 @@ func TestValidateMeta_Retention(t *testing.T) {
 
 // writeSequence writes n versions of /doc.md, passing meta only on the final
 // write, and returns the final document.
-func writeSequence(t *testing.T, s *Store, n int, finalMeta map[string]string) *Document {
+func writeSequence(t *testing.T, s *Store, n int, finalMeta map[string]string) *storefmt.Document {
 	t.Helper()
-	var doc *Document
+	var doc *storefmt.Document
 	var err error
 	for i := range n {
 		var meta map[string]string
@@ -2500,17 +2472,17 @@ func TestValidateDocumentContent(t *testing.T) {
 		{"empty body at .md", "/doc.md", []byte(""), nil},
 		{"utf8 multibyte at .md", "/doc.md", []byte("# café ☕\n"), nil},
 		{"nested .md path", "/a/b/c.md", []byte("x"), nil},
-		{"png bytes at .png", "/img.png", png, ErrInvalidPath},
-		{"text at .txt", "/notes.txt", []byte("plain"), ErrInvalidPath},
-		{"no extension", "/README", []byte("x"), ErrInvalidPath},
-		{"uppercase .MD rejected", "/doc.MD", []byte("x"), ErrInvalidPath},
-		{"png bytes smuggled into .md", "/sneaky.md", png, ErrInvalidContent},
-		{"invalid utf8 in .md", "/doc.md", []byte{0xff, 0xfe}, ErrInvalidContent},
-		{"path checked before content", "/img.png", png, ErrInvalidPath},
+		{"png bytes at .png", "/img.png", png, storefmt.ErrInvalidPath},
+		{"text at .txt", "/notes.txt", []byte("plain"), storefmt.ErrInvalidPath},
+		{"no extension", "/README", []byte("x"), storefmt.ErrInvalidPath},
+		{"uppercase .MD rejected", "/doc.MD", []byte("x"), storefmt.ErrInvalidPath},
+		{"png bytes smuggled into .md", "/sneaky.md", png, storefmt.ErrInvalidContent},
+		{"invalid utf8 in .md", "/doc.md", []byte{0xff, 0xfe}, storefmt.ErrInvalidContent},
+		{"path checked before content", "/img.png", png, storefmt.ErrInvalidPath},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateDocumentContent(tt.path, tt.content)
+			err := storefmt.ValidateDocumentContent(tt.path, tt.content)
 			if !errors.Is(err, tt.want) {
 				t.Errorf("ValidateDocumentContent(%q, %d bytes) = %v, want %v", tt.path, len(tt.content), err, tt.want)
 			}

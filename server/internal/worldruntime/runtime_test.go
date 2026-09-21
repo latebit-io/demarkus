@@ -294,8 +294,6 @@ func newTestRuntime(t *testing.T, config *Config) *Runtime {
 	lookup := catalog.New()
 	store := filestore.New(documents, lookup)
 	config.Store = store
-	config.Catalog = store
-	config.Views = store
 	config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	runtime, err := New(config)
 	if err != nil {

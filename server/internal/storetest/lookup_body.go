@@ -121,7 +121,7 @@ func testBodyLimit(t *testing.T, b LookupBackend) {
 
 func testBodyUnknownModeRejected(t *testing.T, b LookupBackend) {
 	catalogPublish(t, b, "/a.md", "# A\n\nfig\n", map[string]string{"tags": "go"})
-	if _, err := b.Catalog.Lookup("go", catalog.Options{Match: "bogus"}); err == nil {
+	if _, err := b.direct().Lookup("go", catalog.Options{Match: "bogus"}); err == nil {
 		t.Error("unknown mode accepted, want error")
 	}
 	// The empty mode and the explicit catalog mode are the same lookup.

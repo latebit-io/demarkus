@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // Entry is a single document's catalog record.
@@ -123,7 +123,7 @@ func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modif
 // prepare canonicalizes the path and derives what body match consults (tag
 // and title terms, path demotion); every entry passes through here first.
 func (e *Entry) prepare() {
-	e.Path = store.CanonicalPath(e.Path)
+	e.Path = storefmt.CanonicalPath(e.Path)
 	e.terms = termSet(append(append([]string(nil), e.Tags...), e.Title))
 	e.demote = 1
 	if slices.Contains(strings.Split(strings.Trim(e.Path, "/"), "/"), "journal") {
@@ -134,7 +134,7 @@ func (e *Entry) prepare() {
 // SetSections installs a prebuilt section index for a document, for stores
 // that carry indexes across snapshots. nil removes the index.
 func (c *Catalog) SetSections(docPath string, doc *DocSections) {
-	path := store.CanonicalPath(docPath)
+	path := storefmt.CanonicalPath(docPath)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if doc == nil {
@@ -148,12 +148,12 @@ func (c *Catalog) SetSections(docPath string, doc *DocSections) {
 func (c *Catalog) Sections(docPath string) *DocSections {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.sections[store.CanonicalPath(docPath)]
+	return c.sections[storefmt.CanonicalPath(docPath)]
 }
 
 // Remove deletes the entry and section index for the given path, if present.
 func (c *Catalog) Remove(docPath string) {
-	path := store.CanonicalPath(docPath)
+	path := storefmt.CanonicalPath(docPath)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.entries, path)

@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/handler"
@@ -37,8 +38,6 @@ func newHandlerWithTokens(b LookupBackend, extra map[string]auth.Token) *handler
 	ts := auth.NewTokenStore(tokens)
 	return &handler.Handler{
 		Store:         b.Store,
-		Catalog:       b.Catalog,
-		Views:         b.Views,
 		GetTokenStore: func() *auth.TokenStore { return ts },
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -66,7 +65,7 @@ func Send(t testing.TB, h *handler.Handler, req protocol.Request) protocol.Respo
 func SendRaw(t testing.TB, h *handler.Handler, wire string) protocol.Response {
 	t.Helper()
 	stream := &mockStream{Reader: strings.NewReader(wire)}
-	h.HandleStream(stream)
+	h.HandleStream(context.Background(), stream)
 	resp, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
 		t.Fatalf("parse response: %v", err)
@@ -265,7 +264,7 @@ func handlerSnapshot(t *testing.T, h *handler.Handler, currents map[string]int) 
 		add("list-archived "+dir, request(protocol.VerbList, dir, map[string]string{"include-archived": "true"}, ""))
 	}
 	for i, body := range diffBodies {
-		add(fmt.Sprintf("hash body=%d", i), request(protocol.VerbFetch, "/"+store.ContentHash(body), nil, ""))
+		add(fmt.Sprintf("hash body=%d", i), request(protocol.VerbFetch, "/"+storefmt.ContentHash(body), nil, ""))
 	}
 	for _, q := range diffQueries {
 		for _, scope := range diffScopes {

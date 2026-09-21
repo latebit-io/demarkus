@@ -227,8 +227,6 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	runtime, err := worldruntime.New(&worldruntime.Config{
 		Name:              world.Name,
 		Store:             store,
-		Catalog:           store,
-		Views:             store,
 		TokensFile:        world.Auth.TokensFile,
 		DisableTokenWatch: true, // the coordinator owns reloads
 		ReadOnly:          world.ReadOnly,

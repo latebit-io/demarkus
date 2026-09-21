@@ -194,14 +194,15 @@ vuln:
 		(cd $$mod && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...) || exit 1; \
 	done
 
-# Short fuzz pass over the protocol parsers; seeds alone run under `make test`
+# Short fuzz pass over the parsers of untrusted bytes; seeds alone run under `make test`
 FUZZTIME ?= 20s
 fuzz:
 	@cd protocol && for t in .:FuzzParseRequest .:FuzzParseResponse .:FuzzRequestRoundTrip \
-		./store:FuzzStoredVersionRoundTrip ./store:FuzzInspectStoredVersion \
-		./token:FuzzParseBytes ./mdoutline:FuzzHeadings; do \
+		./storefmt:FuzzStoredVersionRoundTrip ./storefmt:FuzzInspectStoredVersion \
+		./mdoutline:FuzzHeadings; do \
 		go test -run '^$$' -fuzz "^$${t#*:}\$$" -fuzztime $(FUZZTIME) "$${t%%:*}" || exit 1; \
 	done
+	@cd tools && go test -run '^$$' -fuzz '^FuzzParseBytes$$' -fuzztime $(FUZZTIME) ./internal/token
 
 # Update dependencies
 deps:

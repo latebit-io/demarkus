@@ -241,7 +241,7 @@ func (c *Client) store(host, path, body string, req storeRequest) (fetch.Result,
 	// As the server does: publisher keys survive, server owned keys are its own.
 	metadata := make(map[string]string, len(req.meta)+2)
 	for key, value := range req.meta {
-		if !protocol.ReservedMetadataKeys[key] {
+		if !protocol.IsReservedMetadataKey(key) {
 			metadata[key] = value
 		}
 	}

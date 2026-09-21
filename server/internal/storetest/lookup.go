@@ -5,19 +5,18 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/store"
-	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
-// LookupBackend pairs a DocumentStore with the LookupCatalog observing it,
-// e.g. file store + in-memory catalog.
+// LookupBackend is one backend under test; LOOKUP reads go through its views.
 type LookupBackend struct {
-	Store   handler.DocumentStore
-	Catalog handler.LookupCatalog
-	Views   storagebackend.ViewProvider
+	Store handler.DocumentStore
 }
+
+func (b LookupBackend) direct() Direct { return Direct{Store: b.Store} }
 
 // LookupFactory returns a fresh, empty backend for one conformance subtest.
 type LookupFactory func(t *testing.T) LookupBackend
@@ -230,46 +229,29 @@ func testLookupMaxCap(t *testing.T, b LookupBackend) {
 // reference backend every other one is compared against.
 func FileBackend(t testing.TB) LookupBackend {
 	documents := store.New(t.TempDir())
-	wrapped := filestore.New(documents, catalog.New())
-	return LookupBackend{Store: wrapped, Catalog: wrapped, Views: wrapped}
+	return LookupBackend{Store: filestore.New(documents, catalog.New())}
 }
 
-// The *Into helpers drive a backend exactly as the handler's write paths do
-// (store op, then catalog maintenance) and return the store's error; the
-// conformance and differential suites share them so they cannot drift.
+// The *Into helpers name the handler's write paths; both suites share them.
+// The backend keeps its catalog current inside each write.
 
-func publishInto(b LookupBackend, path string, expected int, body []byte, meta map[string]string) (*store.Document, error) {
-	doc, err := b.Store.WriteVersion(path, expected, body, meta)
-	if err == nil {
-		b.Catalog.Put(path, doc.Metadata, doc.Content, doc.Modified)
-	}
-	return doc, err
+func publishInto(b LookupBackend, path string, expected int, body []byte, meta map[string]string) (*storefmt.Document, error) {
+	return b.direct().WriteVersion(path, expected, body, meta)
 }
 
-func appendInto(b LookupBackend, path string, expected int, body []byte, meta map[string]string) (*store.Document, error) {
-	doc, err := b.Store.Append(path, expected, body, meta)
-	if err == nil {
-		b.Catalog.Put(path, doc.Metadata, doc.Content, doc.Modified)
-	}
-	return doc, err
+func appendInto(b LookupBackend, path string, expected int, body []byte, meta map[string]string) (*storefmt.Document, error) {
+	return b.direct().AppendVersion(path, expected, body, meta)
 }
 
 func archiveInto(b LookupBackend, path string) error {
-	if _, _, err := b.Store.ArchiveResult(path, true); err != nil {
-		return err
-	}
-	b.Catalog.Remove(path)
-	return nil
+	_, err := b.direct().Archive(path, true)
+	return err
 }
 
 // unarchiveInto mirrors the handler's empty-body PUBLISH path.
 func unarchiveInto(b LookupBackend, path string) error {
-	doc, _, err := b.Store.ArchiveResult(path, false)
-	if err != nil {
-		return err
-	}
-	b.Catalog.Put(path, doc.Metadata, doc.Content, doc.Modified)
-	return nil
+	_, err := b.direct().Archive(path, false)
+	return err
 }
 
 func catalogPublish(t *testing.T, b LookupBackend, path, body string, meta map[string]string) {
@@ -296,7 +278,7 @@ func catalogUnarchive(t *testing.T, b LookupBackend, path string) {
 // mustLookup runs a lookup, failing the test on error.
 func mustLookup(t *testing.T, b LookupBackend, query string, opts catalog.Options) []catalog.Result {
 	t.Helper()
-	rs, err := b.Catalog.Lookup(query, opts)
+	rs, err := b.direct().Lookup(query, opts)
 	if err != nil {
 		t.Fatalf("lookup %q: %v", query, err)
 	}
@@ -336,7 +318,7 @@ func mustParseFilter(t *testing.T, s string) []catalog.Predicate {
 // modifiedOf returns a document's current modification time.
 func modifiedOf(t *testing.T, b LookupBackend, path string) time.Time {
 	t.Helper()
-	doc, err := b.Store.Get(path, 0)
+	doc, err := b.direct().Get(path, 0)
 	if err != nil {
 		t.Fatalf("get %s: %v", path, err)
 	}

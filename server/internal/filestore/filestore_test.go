@@ -3,24 +3,26 @@ package filestore
 import (
 	"bytes"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
 func TestReadViewPinsFileAndCatalogState(t *testing.T) {
+	ctx := t.Context()
 	raw := protocolstore.New(t.TempDir())
 	store := New(raw, catalog.New())
 	firstBody := []byte("# First\n")
 	secondBody := []byte("# Second\n")
-	if _, err := store.WriteVersion("/docs/doc.md", 0, firstBody, map[string]string{"tags": "first"}); err != nil {
+	if _, err := store.Publish(ctx, backend.WriteRequest{Path: "/docs/doc.md", Content: firstBody, Metadata: map[string]string{"tags": "first"}}); err != nil {
 		t.Fatalf("write v1: %v", err)
 	}
 
-	view, err := store.OpenReadView()
+	view, err := store.OpenReadView(ctx)
 	if err != nil {
 		t.Fatalf("open view: %v", err)
 	}
@@ -28,7 +30,7 @@ func TestReadViewPinsFileAndCatalogState(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		close(started)
-		_, err := store.WriteVersion("/docs/doc.md", 1, secondBody, map[string]string{"tags": "second"})
+		_, err := store.Publish(ctx, backend.WriteRequest{Path: "/docs/doc.md", ExpectedVersion: 1, Content: secondBody, Metadata: map[string]string{"tags": "second"}})
 		done <- err
 	}()
 	<-started
@@ -54,7 +56,7 @@ func TestReadViewPinsFileAndCatalogState(t *testing.T) {
 		t.Fatal("write remained blocked after view close")
 	}
 
-	fresh, err := store.OpenReadView()
+	fresh, err := store.OpenReadView(ctx)
 	if err != nil {
 		t.Fatalf("open fresh view: %v", err)
 	}
@@ -66,23 +68,20 @@ func TestReadViewPinsFileAndCatalogState(t *testing.T) {
 	assertFileView(t, fresh, secondBody, "second")
 }
 
-func assertFileView(t *testing.T, view interface {
-	Get(string, int) (*protocolstore.Document, error)
-	LookupHashResult(string) (string, error)
-	Lookup(string, catalog.Options) ([]catalog.Result, error)
-}, body []byte, tag string) {
+func assertFileView(t *testing.T, view backend.ReadView, body []byte, tag string) {
 	t.Helper()
-	document, err := view.Get("/docs/doc.md", 0)
+	ctx := t.Context()
+	document, err := view.Get(ctx, "/docs/doc.md", 0)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if !bytes.Equal(document.Content, body) {
 		t.Errorf("body = %q, want %q", document.Content, body)
 	}
-	if path, err := view.LookupHashResult(protocolstore.ContentHash(body)); err != nil || path != "/docs/doc.md" {
+	if path, err := view.LookupHash(ctx, storefmt.ContentHash(body)); err != nil || path != "/docs/doc.md" {
 		t.Errorf("hash lookup = %q, %v", path, err)
 	}
-	results, err := view.Lookup(tag, catalog.Options{})
+	results, err := view.Lookup(ctx, tag, catalog.Options{})
 	if err != nil {
 		t.Fatalf("lookup: %v", err)
 	}
@@ -90,7 +89,7 @@ func assertFileView(t *testing.T, view interface {
 		t.Errorf("lookup results = %+v", results)
 	}
 	other := firstOrSecondBody(tag)
-	if _, err := view.LookupHashResult(protocolstore.ContentHash(other)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := view.LookupHash(ctx, storefmt.ContentHash(other)); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("other hash error = %v, want not-found", err)
 	}
 }

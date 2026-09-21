@@ -4,13 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"os"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
@@ -90,8 +90,8 @@ func (d *diffRun) run(ops int, apply func(op), snapshot func()) {
 // currentBoth returns the shared current version of path. Matching error
 // classes use version zero so invalid-path operations still reach both stores.
 func (d *diffRun) currentBoth(ref, cand LookupBackend, path string) (int, bool) {
-	refCur, refErr := ref.Store.CurrentVersionResult(path)
-	candCur, candErr := cand.Store.CurrentVersionResult(path)
+	refCur, refErr := ref.direct().CurrentVersion(path)
+	candCur, candErr := cand.direct().CurrentVersion(path)
 	refClass, candClass := errClass(refErr), errClass(candErr)
 	if refClass != candClass {
 		d.fail("CurrentVersion(%s) error classes differ: ref=%s (%v) cand=%s (%v)", path, refClass, refErr, candClass, candErr)
@@ -281,7 +281,7 @@ func bodyFor(o op) []byte {
 func metaFor(o op) map[string]string {
 	m := diffMetas[o.meta]
 	if o.okf {
-		return store.ApplyOKFTypeDefault(o.path, m)
+		return storefmt.ApplyOKFTypeDefault(o.path, m)
 	}
 	return m
 }
@@ -321,19 +321,19 @@ func errClass(err error) string {
 	switch {
 	case err == nil:
 		return "ok"
-	case errors.Is(err, store.ErrConflict):
+	case errors.Is(err, storefmt.ErrConflict):
 		return "conflict"
-	case errors.Is(err, store.ErrNotModified):
+	case errors.Is(err, storefmt.ErrNotModified):
 		return "not-modified"
-	case errors.Is(err, store.ErrArchived):
+	case errors.Is(err, storefmt.ErrArchived):
 		return "archived"
-	case errors.Is(err, store.ErrInvalidMeta):
+	case errors.Is(err, storefmt.ErrInvalidMeta):
 		return "invalid-meta"
-	case errors.Is(err, store.ErrInvalidContent):
+	case errors.Is(err, storefmt.ErrInvalidContent):
 		return "invalid-content"
-	case errors.Is(err, store.ErrSizeLimit):
+	case errors.Is(err, storefmt.ErrSizeLimit):
 		return "size-limit"
-	case errors.Is(err, os.ErrNotExist):
+	case errors.Is(err, backend.ErrNotFound):
 		return "not-exist"
 	default:
 		return "error"
@@ -343,7 +343,7 @@ func errClass(err error) string {
 // describeDoc renders the backend-neutral parts of a Document. Modified is
 // wall-clock and differs between backends by construction, so only its
 // presence is compared.
-func describeDoc(doc *store.Document) string {
+func describeDoc(doc *storefmt.Document) string {
 	if doc == nil {
 		return "<nil>"
 	}
@@ -372,34 +372,34 @@ func snapshot(b LookupBackend) []string {
 	add := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
 
 	for _, p := range diffDocPaths {
-		cur, curErr := b.Store.CurrentVersionResult(p)
+		cur, curErr := b.direct().CurrentVersion(p)
 		add("current %s = %d %s", p, cur, errClass(curErr))
-		doc, err := b.Store.Get(p, 0)
+		doc, err := b.direct().Get(p, 0)
 		add("get %s = %s %s", p, errClass(err), describeDoc(doc))
-		vs, err := b.Store.Versions(p)
+		vs, err := b.direct().Versions(p)
 		nums := make([]int, len(vs))
 		for i, v := range vs {
 			nums[i] = v.Version
 		}
 		add("versions %s = %s %v", p, errClass(err), nums)
 		for _, v := range nums {
-			vd, err := b.Store.Get(p, v)
+			vd, err := b.direct().Get(p, v)
 			add("get %s@%d = %s %s", p, v, errClass(err), describeDoc(vd))
 		}
-		_, err = b.Store.Get(p, cur+1)
+		_, err = b.direct().Get(p, cur+1)
 		add("get %s@next = %s", p, errClass(err))
-		add("chain %s = %s", p, errClass(b.Store.VerifyChain(p)))
+		add("chain %s = %s", p, errClass(b.direct().VerifyChain(p)))
 	}
 	for _, dir := range diffDirPaths {
-		ok, err := b.Store.IsDir(dir)
+		ok, err := b.direct().IsDir(dir)
 		add("isdir %q = %v %s", dir, ok, errClass(err))
 		for _, includeArchived := range []bool{false, true} {
-			entries, err := b.Store.ListEntries(dir, includeArchived)
+			entries, err := b.direct().ListEntries(dir, includeArchived)
 			add("list %q archived=%v = %s %v", dir, includeArchived, errClass(err), entries)
 		}
 	}
 	for i, body := range diffBodies {
-		p, err := b.Store.LookupHashResult(store.ContentHash(body))
+		p, err := b.direct().LookupHash(storefmt.ContentHash(body))
 		add("hash body=%d = %q %s", i, p, errClass(err))
 	}
 	// Queries x scopes unfiltered, then filters on the match-all query: the
@@ -411,7 +411,7 @@ func snapshot(b LookupBackend) []string {
 			add("filter %q parse error", filter)
 			return
 		}
-		rs, err := b.Catalog.Lookup(q, catalog.Options{Scope: scope, Filter: preds, Match: mode})
+		rs, err := b.direct().Lookup(q, catalog.Options{Scope: scope, Filter: preds, Match: mode})
 		add("%s q=%q scope=%q filter=%q = %s %s", label, q, scope, filter, errClass(err), describe(rs))
 	}
 	for _, q := range diffQueries {

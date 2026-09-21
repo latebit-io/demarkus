@@ -62,7 +62,6 @@ type Store struct {
 
 var (
 	_ backend.Store        = (*Store)(nil)
-	_ backend.Catalog      = (*Store)(nil)
 	_ backend.ViewProvider = (*Store)(nil)
 )
 

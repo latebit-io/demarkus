@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -13,7 +12,8 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 )
 
@@ -260,7 +260,7 @@ func TestArchiveRebaseReturnsCommittedVersion(t *testing.T) {
 	}
 	writer.commitInterval = 0
 	type archiveOutcome struct {
-		document *protocolstore.Document
+		document *storefmt.Document
 		changed  bool
 		err      error
 	}
@@ -378,10 +378,10 @@ func TestPublishPolicyCAS(t *testing.T) {
 		if _, err := store.WriteVersion("/log", 0, []byte("one"), meta); err != nil {
 			t.Fatalf("seed document: %v", err)
 		}
-		if _, err := store.Append("/log", 1, []byte("two"), nil); err != nil {
+		if _, err := store.AppendVersion("/log", 1, []byte("two"), nil); err != nil {
 			t.Fatalf("inherited append: %v", err)
 		}
-		if _, err := store.Append("/log", 2, []byte("three"), map[string]string{"tags": "other:value"}); !errors.Is(err, ErrPolicyBlocked) {
+		if _, err := store.AppendVersion("/log", 2, []byte("three"), map[string]string{"tags": "other:value"}); !errors.Is(err, ErrPolicyBlocked) {
 			t.Fatalf("noncompliant append error = %v", err)
 		}
 	})
@@ -437,7 +437,7 @@ func TestPublishPolicyCAS(t *testing.T) {
 
 func TestHistoryBlockRolloverAndRetention(t *testing.T) {
 	store, _ := newWritableStore(t)
-	var document *protocolstore.Document
+	var document *storefmt.Document
 	for version := 1; version <= 256; version++ {
 		var err error
 		document, err = store.WriteVersion("/history", version-1, fmt.Appendf(nil, "v%d", version), nil)
@@ -519,7 +519,7 @@ func TestHeadOutcomeReconciliation(t *testing.T) {
 					t.Fatalf("write = (%+v, %v), want v1", document, err)
 				}
 				assertCurrentVersion(t, store, "/doc", 1)
-				if _, err := store.Get("/missing", 0); !errors.Is(err, os.ErrNotExist) {
+				if _, err := store.Get("/missing", 0); !errors.Is(err, backend.ErrNotFound) {
 					t.Fatalf("missing read error = %v, want ErrNotExist", err)
 				}
 				return
@@ -591,7 +591,7 @@ func TestMutationFailureAndPacing(t *testing.T) {
 }
 
 type writeOutcome struct {
-	document *protocolstore.Document
+	document *storefmt.Document
 	err      error
 }
 
@@ -643,7 +643,7 @@ func assertOneConflict(t *testing.T, outcomes []writeOutcome) {
 		switch {
 		case outcome.err == nil:
 			succeeded++
-		case errors.Is(outcome.err, protocolstore.ErrConflict):
+		case errors.Is(outcome.err, storefmt.ErrConflict):
 			conflicted++
 		default:
 			t.Errorf("unexpected write error: %v", outcome.err)
@@ -685,7 +685,7 @@ func currentRetainedHistory(t *testing.T, store *Store, path string) retainedHis
 	if !exists {
 		t.Fatalf("path %s is missing", path)
 	}
-	view := &readView{ctx: context.Background(), cancel: func() {}, objects: store.objects, snapshot: loaded}
+	view := &readView{ctx: context.Background(), objects: store.objects, snapshot: loaded}
 	history, err := view.loadHistory(&entry)
 	if err != nil {
 		t.Fatalf("load manifest %s: %v", path, err)

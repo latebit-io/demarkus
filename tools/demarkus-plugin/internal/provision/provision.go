@@ -30,9 +30,9 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/token"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
+	"github.com/latebit-io/demarkus/tools/internal/token"
 )
 
 // Version pins for the SEPARATE server/client modules (their own release

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
@@ -171,7 +171,7 @@ func validateShardObject(shard *shardObject, expectedShard string) error {
 }
 
 func validateShardEntry(entry *shardEntry, shardIndex int) error {
-	if entry.Path == "/" || protocol.ValidateRequestPath(entry.Path) != nil || protocolstore.ContainsDotDot(entry.Path) || protocolstore.CanonicalPath(entry.Path) != entry.Path {
+	if entry.Path == "/" || protocol.ValidateRequestPath(entry.Path) != nil || storefmt.ContainsDotDot(entry.Path) || storefmt.CanonicalPath(entry.Path) != entry.Path {
 		return fmt.Errorf("path %q is not a canonical document path", entry.Path)
 	}
 	expectedPathHash := pathHash(entry.Path)
@@ -185,8 +185,8 @@ func validateShardEntry(entry *shardEntry, shardIndex int) error {
 	if err := verifyRef(entry.Manifest, manifestKey(entry.PathHash, entry.Manifest.Hash)); err != nil {
 		return fmt.Errorf("manifest reference: %w", err)
 	}
-	if entry.Current < 1 || entry.Current > protocolstore.MaxVersionNumber {
-		return fmt.Errorf("current version is outside [1,%d]", protocolstore.MaxVersionNumber)
+	if entry.Current < 1 || entry.Current > storefmt.MaxVersionNumber {
+		return fmt.Errorf("current version is outside [1,%d]", storefmt.MaxVersionNumber)
 	}
 	if !validBodyHash(entry.BodyHash) {
 		return fmt.Errorf("invalid body hash %q", entry.BodyHash)
@@ -216,7 +216,7 @@ func validateCatalogRecord(record *catalogRecord, expectedPath, expectedModified
 	if record.Metadata == nil {
 		return fmt.Errorf("metadata must be an object")
 	}
-	if err := protocolstore.ValidateMeta(record.Metadata); err != nil {
+	if err := storefmt.ValidateMeta(record.Metadata); err != nil {
 		return fmt.Errorf("metadata: %w", err)
 	}
 	if record.Title == "" {
@@ -280,8 +280,8 @@ func validateManifestObject(manifest *manifestObject) error {
 	if !validHash(manifest.PathHash) {
 		return fmt.Errorf("invalid path hash %q", manifest.PathHash)
 	}
-	if manifest.Current < 1 || manifest.Current > protocolstore.MaxVersionNumber {
-		return fmt.Errorf("current version is outside [1,%d]", protocolstore.MaxVersionNumber)
+	if manifest.Current < 1 || manifest.Current > storefmt.MaxVersionNumber {
+		return fmt.Errorf("current version is outside [1,%d]", storefmt.MaxVersionNumber)
 	}
 	if manifest.History == nil {
 		return fmt.Errorf("history must be an array")
@@ -315,7 +315,7 @@ func validateManifestObject(manifest *manifestObject) error {
 }
 
 func validateHistoryRange(first, last int) error {
-	if first < 1 || last < first || last > protocolstore.MaxVersionNumber {
+	if first < 1 || last < first || last > storefmt.MaxVersionNumber {
 		return fmt.Errorf("invalid history range %d-%d", first, last)
 	}
 	if (first-1)/historyBlockSize != (last-1)/historyBlockSize {

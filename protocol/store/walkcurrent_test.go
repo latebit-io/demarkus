@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 func TestWalkCurrent(t *testing.T) {
@@ -32,7 +34,7 @@ func TestWalkCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyStored, err = SetArchived(legacyStored, true)
+	legacyStored, err = storefmt.SetArchived(legacyStored, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +42,8 @@ func TestWalkCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := make(map[string]CurrentDoc)
-	if err := s.WalkCurrent(func(d CurrentDoc) error {
+	got := make(map[string]storefmt.CurrentDoc)
+	if err := s.WalkCurrent(func(d storefmt.CurrentDoc) error {
 		got[d.Path] = d
 		return nil
 	}); err != nil {
@@ -75,8 +77,8 @@ func TestWalkCurrent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "versions", "legacy.md", archiveStateName), []byte("false\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got = make(map[string]CurrentDoc)
-	if err := s.WalkCurrent(func(d CurrentDoc) error {
+	got = make(map[string]storefmt.CurrentDoc)
+	if err := s.WalkCurrent(func(d storefmt.CurrentDoc) error {
 		got[d.Path] = d
 		return nil
 	}); err != nil {
@@ -87,7 +89,7 @@ func TestWalkCurrent(t *testing.T) {
 	}
 }
 
-func keysOf(m map[string]CurrentDoc) []string {
+func keysOf(m map[string]storefmt.CurrentDoc) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
@@ -109,18 +111,18 @@ func TestBuildHashIndex_ReportsSkippedEntries(t *testing.T) {
 	}
 
 	err := s.BuildHashIndex()
-	var partial *PartialWalkError
+	var partial *storefmt.PartialWalkError
 	if !errors.As(err, &partial) {
 		t.Fatalf("BuildHashIndex err = %v, want *PartialWalkError", err)
 	}
 	if len(partial.Skipped) != 1 || filepath.Base(partial.Skipped[0].Path) != "dangling.md" {
 		t.Errorf("skipped = %+v, want the dangling symlink", partial.Skipped)
 	}
-	if p, err := s.LookupHashResult(ContentHash([]byte("good"))); err != nil || p != "/good.md" {
+	if p, err := s.LookupHashResult(storefmt.ContentHash([]byte("good"))); err != nil || p != "/good.md" {
 		t.Errorf("LookupHash hit after partial walk = (%q, %v), want (/good.md, nil)", p, err)
 	}
-	_, err = s.LookupHashResult(ContentHash([]byte("missing")))
-	var lookupPartial *PartialWalkError
+	_, err = s.LookupHashResult(storefmt.ContentHash([]byte("missing")))
+	var lookupPartial *storefmt.PartialWalkError
 	if !errors.As(err, &lookupPartial) {
 		t.Errorf("LookupHash miss after partial walk err = %v, want *PartialWalkError", err)
 	}
@@ -144,7 +146,7 @@ func TestBuildHashIndex_RootFailureIsFatal(t *testing.T) {
 	assertFatal := func(t *testing.T, s *Store) {
 		t.Helper()
 		err := s.BuildHashIndex()
-		var partial *PartialWalkError
+		var partial *storefmt.PartialWalkError
 		if err == nil || errors.As(err, &partial) {
 			t.Fatalf("BuildHashIndex err = %v, want a non-partial error", err)
 		}

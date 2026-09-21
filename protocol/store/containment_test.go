@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // outsideDoc builds a valid document in a second store and links its parent
@@ -47,11 +49,11 @@ func TestImportDocRefusesEscapingDirectory(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
-	stored, err := SerializeVersion(1, nil, []byte("# Imported\n"), nil)
+	stored, err := storefmt.SerializeVersion(1, nil, []byte("# Imported\n"), nil)
 	if err != nil {
 		t.Fatalf("SerializeVersion: %v", err)
 	}
-	doc := StoredDocument{Versions: []StoredVersion{{Version: 1, Stored: stored, Modified: time.Now()}}}
+	doc := storefmt.StoredDocument{Versions: []storefmt.StoredVersion{{Version: 1, Stored: stored, Modified: time.Now()}}}
 
 	if err := s.ImportDoc(context.Background(), "/linked/new.md", doc); err == nil {
 		t.Error("ImportDoc wrote through an escaping symlink")

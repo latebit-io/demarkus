@@ -11,7 +11,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // PublishItem is a single document ready to publish into a demarkus world.
@@ -121,10 +121,10 @@ func mapMetadata(fm map[string]string) (meta map[string]string, warnings []strin
 			continue // bundle-level marker, not a document field
 		}
 		key := k
-		if store.IsReservedMetaKey(key) || !protocol.IsValidMetaKey(key) {
+		if storefmt.IsReservedMetaKey(key) || !protocol.IsValidMetaKey(key) {
 			sk := sanitizeKey(key)
 			switch {
-			case sk == "" || store.IsReservedMetaKey(sk) || !protocol.IsValidMetaKey(sk):
+			case sk == "" || storefmt.IsReservedMetaKey(sk) || !protocol.IsValidMetaKey(sk):
 				warns = append(warns, fmt.Sprintf("dropped metadata key %q (cannot be made a valid demarkus key)", k))
 				continue
 			case keyPresent(meta, sk):
@@ -165,7 +165,7 @@ func enforceCaps(meta map[string]string) (capped map[string]string, warnings []s
 func metaSize(meta map[string]string) int {
 	n := 0
 	for k, v := range meta {
-		n += store.SerializedMetaSize(k, v)
+		n += storefmt.SerializedMetaSize(k, v)
 	}
 	return n
 }

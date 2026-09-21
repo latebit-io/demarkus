@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
@@ -80,11 +80,11 @@ func prunableRetention(md map[string]any) (string, bool) {
 	}
 	switch x := v.(type) {
 	case string:
-		if n, ok := store.ParseRetention(strings.TrimSpace(x)); ok {
+		if n, ok := storefmt.ParseRetention(strings.TrimSpace(x)); ok {
 			return strconv.Itoa(n), true
 		}
 	case json.Number:
-		if n, ok := store.ParseRetention(x.String()); ok {
+		if n, ok := storefmt.ParseRetention(x.String()); ok {
 			return strconv.Itoa(n), true
 		}
 	case float64:

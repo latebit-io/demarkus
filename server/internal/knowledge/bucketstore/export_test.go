@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 func TestExportDocsPreservesPinnedStoredDocuments(t *testing.T) {
@@ -24,18 +24,18 @@ func TestExportDocsPreservesPinnedStoredDocuments(t *testing.T) {
 		newReadDocument("/docs/topic/detail.md", "# Detail\n"),
 	}
 	commit := commitReadDocuments(t, memory, specs)
-	want := make(map[string]protocolstore.StoredDocument, len(specs))
+	want := make(map[string]storefmt.StoredDocument, len(specs))
 	for _, spec := range specs {
-		versions := make([]protocolstore.StoredVersion, 0, len(spec.Bodies)-spec.RetainFrom+1)
+		versions := make([]storefmt.StoredVersion, 0, len(spec.Bodies)-spec.RetainFrom+1)
 		for version := spec.RetainFrom; version <= len(spec.Bodies); version++ {
 			stored := commit.documents[spec.Path].versions[version]
-			versions = append(versions, protocolstore.StoredVersion{Version: version, Stored: slices.Clone(stored.raw), Modified: stored.modified})
+			versions = append(versions, storefmt.StoredVersion{Version: version, Stored: slices.Clone(stored.raw), Modified: stored.modified})
 		}
-		want[spec.Path] = protocolstore.StoredDocument{Versions: versions, Archived: spec.Archived}
+		want[spec.Path] = storefmt.StoredDocument{Versions: versions, Archived: spec.Archived}
 	}
-	got := make(map[string]protocolstore.StoredDocument)
+	got := make(map[string]storefmt.StoredDocument)
 	var paths []string
-	if err := ExportDocs(t.Context(), memory, testWorldID, 2, func(path string, document protocolstore.StoredDocument) error {
+	if err := ExportDocs(t.Context(), memory, testWorldID, 2, func(path string, document storefmt.StoredDocument) error {
 		paths = append(paths, path)
 		got[path] = document
 		return nil
@@ -46,7 +46,7 @@ func TestExportDocsPreservesPinnedStoredDocuments(t *testing.T) {
 	if !slices.Equal(paths, wantPaths) {
 		t.Fatalf("export paths = %v, want store traversal order %v", paths, wantPaths)
 	}
-	if err := protocolstore.DiffExports(want, got); err != nil {
+	if err := storefmt.DiffExports(want, got); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -57,7 +57,7 @@ func TestExportDocsPinsRootBeforeCallbacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var paths []string
-	if err := ExportDocs(t.Context(), memory, testWorldID, 1, func(path string, _ protocolstore.StoredDocument) error {
+	if err := ExportDocs(t.Context(), memory, testWorldID, 1, func(path string, _ storefmt.StoredDocument) error {
 		paths = append(paths, path)
 		if _, err := writer.WriteVersion("/later.md", 0, []byte("# Later\n"), nil); err != nil {
 			return err
@@ -76,11 +76,11 @@ func TestExportDocsSurfacesCancellationAndCallbackFailure(t *testing.T) {
 	commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/doc.md", "# Doc\n")})
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := ExportDocs(ctx, memory, testWorldID, 1, func(string, protocolstore.StoredDocument) error { return nil }); !errors.Is(err, context.Canceled) {
+	if err := ExportDocs(ctx, memory, testWorldID, 1, func(string, storefmt.StoredDocument) error { return nil }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled export error=%v", err)
 	}
 	want := errors.New("stop export")
-	if err := ExportDocs(t.Context(), memory, testWorldID, 1, func(string, protocolstore.StoredDocument) error { return want }); !errors.Is(err, want) {
+	if err := ExportDocs(t.Context(), memory, testWorldID, 1, func(string, storefmt.StoredDocument) error { return want }); !errors.Is(err, want) {
 		t.Fatalf("callback error=%v", err)
 	}
 }

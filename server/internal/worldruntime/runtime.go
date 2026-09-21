@@ -25,8 +25,6 @@ const maxRateWaitBudget = 10 * time.Second
 type Config struct {
 	Name              string
 	Store             backend.Store
-	Catalog           backend.Catalog
-	Views             backend.ViewProvider
 	CloseBackend      func() error
 	TokensFile        string
 	DisableTokenWatch bool
@@ -93,8 +91,6 @@ func New(config *Config) (*Runtime, error) {
 	}
 	runtime.handler = &handler.Handler{
 		Store:         config.Store,
-		Catalog:       config.Catalog,
-		Views:         config.Views,
 		GetTokenStore: tokens.Current,
 		Logger:        logger,
 		ReadOnly:      config.ReadOnly,
@@ -169,10 +165,14 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 			return
 		}
 	}
+	requestCtx := ctx
 	if r.requestTimeout > 0 {
 		// The write bound keeps a client that stops reading from pinning the
-		// read view and a concurrency slot.
+		// read view and a concurrency slot; store calls share the deadline.
 		deadline := time.Now().Add(r.requestTimeout)
+		var cancel context.CancelFunc
+		requestCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
 		if err := stream.SetReadDeadline(deadline); err != nil {
 			logger.Debug("setting stream read deadline", "error", err)
 		}
@@ -182,7 +182,7 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 	}
 	requestHandler := *r.handler
 	requestHandler.Logger = logger
-	requestHandler.HandleStream(stream)
+	requestHandler.HandleStream(requestCtx, stream)
 }
 
 func (r *Runtime) acquire(ctx context.Context, remote net.Addr, stream quicserve.Stream, logger *slog.Logger) bool {

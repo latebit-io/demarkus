@@ -11,22 +11,15 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
-// TestFileStoreConformance runs the conformance suite against the file
-// store, pinning the reference behavior every other backend must match.
+// TestFileStoreConformance runs the suite against the filestore backend that
+// production serves; tampering reaches the raw store under it.
 func TestFileStoreConformance(t *testing.T) {
-	RunConformance(t, func(t *testing.T) handler.DocumentStore {
-		return store.New(t.TempDir())
-	}, FileTamper)
-}
-
-// TestFileStoreWrapperConformance runs the same suite against the filestore
-// wrapper, which is what production serves; tampering reaches under it.
-func TestFileStoreWrapperConformance(t *testing.T) {
 	var mu sync.Mutex
 	documents := map[handler.DocumentStore]*store.Store{}
 	RunConformance(t, func(t *testing.T) handler.DocumentStore {
@@ -82,7 +75,7 @@ func TestFileStoreHandlerDifferentialSelf(t *testing.T) {
 func TestFileStoreMigrationRoundTrip(t *testing.T) {
 	RunMigrationRoundTrip(t, func(t *testing.T) MigrationBackend {
 		s := store.New(t.TempDir())
-		return MigrationBackend{Migrator: s, Store: s}
+		return MigrationBackend{Migrator: s, Store: filestore.New(s, catalog.New())}
 	})
 }
 
@@ -111,7 +104,7 @@ func TestFileStoreImportRefusesOrphanedVersionDir(t *testing.T) {
 		t.Fatalf("orphan: %v", err)
 	}
 
-	err = s.ImportDoc(context.Background(), "/x.md", store.StoredDocument{Versions: []store.StoredVersion{{
+	err = s.ImportDoc(context.Background(), "/x.md", storefmt.StoredDocument{Versions: []storefmt.StoredVersion{{
 		Version: 1, Stored: []byte("# other\n"), Modified: time.Now(),
 	}}})
 	if !errors.Is(err, os.ErrExist) {

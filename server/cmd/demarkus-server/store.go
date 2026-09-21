@@ -7,19 +7,16 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/store"
-	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/config"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
-// backend is an opened document store plus the LOOKUP index that belongs to
-// it. Close is nil when the backend owns no resources.
+// backend is an opened document store. Close is nil when the backend owns no
+// resources.
 type backend struct {
-	Store   handler.DocumentStore
-	Catalog handler.LookupCatalog
-	Views   storagebackend.ViewProvider
-	Close   func() error
+	Store handler.DocumentStore
+	Close func() error
 }
 
 // storeOpeners holds one opener per compiled-in backend, keyed by the value
@@ -69,6 +66,5 @@ func openFileStore(cfg *config.Config, logger *slog.Logger) (backend, error) {
 		return backend{}, fmt.Errorf("hash index build failed: %w", err)
 	}
 	logger.Info("content hash index built", "entries", s.HashIndexSize())
-	wrapped := filestore.New(s, buildCatalog(s, logger))
-	return backend{Store: wrapped, Catalog: wrapped, Views: wrapped}, nil
+	return backend{Store: filestore.New(s, buildCatalog(s, logger))}, nil
 }

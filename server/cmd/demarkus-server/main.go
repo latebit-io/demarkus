@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/config"
 	"github.com/latebit-io/demarkus/server/internal/logging"
@@ -27,7 +27,7 @@ import (
 
 // currentWalker is the slice of a document store the catalog build needs.
 type currentWalker interface {
-	WalkCurrent(fn func(store.CurrentDoc) error) error
+	WalkCurrent(fn func(storefmt.CurrentDoc) error) error
 }
 
 type tokenReloader interface {
@@ -39,7 +39,7 @@ type tokenReloader interface {
 // own. A failed walk leaves an empty catalog rather than aborting startup.
 func buildCatalog(s currentWalker, logger *slog.Logger) *catalog.Catalog {
 	cat := catalog.New()
-	err := s.WalkCurrent(func(d store.CurrentDoc) error {
+	err := s.WalkCurrent(func(d storefmt.CurrentDoc) error {
 		cat.Put(d.Path, d.Metadata, d.Body, d.Modified)
 		return nil
 	})
@@ -54,7 +54,7 @@ func buildCatalog(s currentWalker, logger *slog.Logger) *catalog.Catalog {
 // logPartialWalk reports each entry a completed walk skipped and returns
 // true; any other error returns false for the caller to handle.
 func logPartialWalk(logger *slog.Logger, what string, err error) bool {
-	var partial *store.PartialWalkError
+	var partial *storefmt.PartialWalkError
 	if !errors.As(err, &partial) {
 		return false
 	}
@@ -196,8 +196,6 @@ func run() error {
 
 	runtime, err := worldruntime.New(&worldruntime.Config{
 		Store:          b.Store,
-		Catalog:        b.Catalog,
-		Views:          b.Views,
 		CloseBackend:   b.Close,
 		TokensFile:     cfg.TokensFile,
 		ReadOnly:       cfg.ReadOnly,

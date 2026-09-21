@@ -43,7 +43,7 @@ func TestMaxDocumentsRejectsNewPathBeyondQuota(t *testing.T) {
 	if _, err := store.WriteVersion("/one.md", 1, []byte("# One v2\n"), meta); err != nil {
 		t.Fatalf("update at quota: %v", err)
 	}
-	if _, err := store.Append("/two.md", 1, []byte("\nmore\n"), nil); err != nil {
+	if _, err := store.AppendVersion("/two.md", 1, []byte("\nmore\n"), nil); err != nil {
 		t.Fatalf("append at quota: %v", err)
 	}
 }

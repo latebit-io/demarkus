@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -15,7 +16,11 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/auth"
+	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
+	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/filestore"
 )
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -60,7 +65,7 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 
 	t.Run("existing file", func(t *testing.T) {
 		stream := newMockStream("FETCH /hello.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -82,7 +87,7 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 
 	t.Run("content-hash in response", func(t *testing.T) {
 		stream := newMockStream("FETCH /hello.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -101,7 +106,7 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 		// Both backends index the body hash on write; no rebuild needed.
 		// First fetch to get the content-hash
 		stream := newMockStream("FETCH /hello.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -110,7 +115,7 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 
 		// Now fetch by hash
 		stream2 := newMockStream("FETCH /" + contentHash + "\n")
-		h.HandleStream(stream2)
+		h.HandleStream(context.Background(), stream2)
 		resp2, err := protocol.ParseResponse(&stream2.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -125,7 +130,7 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 
 	t.Run("fetch by unknown hash", func(t *testing.T) {
 		stream := newMockStream("FETCH /sha256-0000000000000000000000000000000000000000000000000000000000000000\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -140,10 +145,10 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 		flatDir := setupContentDir(t, map[string]string{
 			"flat.md": "# Flat\n",
 		})
-		flatH := &Handler{Store: store.New(flatDir), Logger: discardLogger}
+		flatH := &Handler{Store: filestore.New(store.New(flatDir), catalog.New()), Logger: discardLogger}
 
 		stream := newMockStream("FETCH /flat.md\n")
-		flatH.HandleStream(stream)
+		flatH.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -156,7 +161,7 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 
 	t.Run("not found", func(t *testing.T) {
 		stream := newMockStream("FETCH /nonexistent.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -169,7 +174,7 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 
 	t.Run("path traversal blocked", func(t *testing.T) {
 		stream := newMockStream("FETCH /../../etc/passwd\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -182,7 +187,7 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 
 	t.Run("unsupported verb", func(t *testing.T) {
 		stream := newMockStream("DELETE /hello.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -204,7 +209,7 @@ func testHealthCheck(t *testing.T, newBackend backendFactory) {
 	h := newHandler(b, nil)
 
 	stream := newMockStream("FETCH /health\n")
-	h.HandleStream(stream)
+	h.HandleStream(context.Background(), stream)
 
 	resp, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
@@ -229,17 +234,17 @@ func testEtagInResponse(t *testing.T, newBackend backendFactory) {
 	h := newHandler(b, nil)
 
 	stream := newMockStream("FETCH /hello.md\n")
-	h.HandleStream(stream)
+	h.HandleStream(context.Background(), stream)
 
 	resp, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
 		t.Fatalf("parse response: %v", err)
 	}
-	stored, err := store.SerializeVersion(1, nil, body, nil)
+	stored, err := storefmt.SerializeVersion(1, nil, body, nil)
 	if err != nil {
 		t.Fatalf("serialize expected stored bytes: %v", err)
 	}
-	want := store.StoredETag(stored)
+	want := storefmt.StoredETag(stored)
 	if resp.Metadata["etag"] != want {
 		t.Errorf("etag = %q, want stored-byte hash %q", resp.Metadata["etag"], want)
 	}
@@ -256,7 +261,7 @@ func testConditionalFetch(t *testing.T, newBackend backendFactory) {
 
 	// First fetch to get etag and modified time.
 	stream := newMockStream("FETCH /hello.md\n")
-	h.HandleStream(stream)
+	h.HandleStream(context.Background(), stream)
 
 	resp, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
@@ -268,7 +273,7 @@ func testConditionalFetch(t *testing.T, newBackend backendFactory) {
 	t.Run("if-none-match hit", func(t *testing.T) {
 		req := "FETCH /hello.md\n---\nif-none-match: " + etag + "\n---\n"
 		stream := newMockStream(req)
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -285,7 +290,7 @@ func testConditionalFetch(t *testing.T, newBackend backendFactory) {
 	t.Run("if-none-match miss", func(t *testing.T) {
 		req := "FETCH /hello.md\n---\nif-none-match: stale-etag\n---\n"
 		stream := newMockStream(req)
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -302,7 +307,7 @@ func testConditionalFetch(t *testing.T, newBackend backendFactory) {
 	t.Run("if-modified-since not modified", func(t *testing.T) {
 		req := "FETCH /hello.md\n---\nif-modified-since: " + modified + "\n---\n"
 		stream := newMockStream(req)
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -316,7 +321,7 @@ func testConditionalFetch(t *testing.T, newBackend backendFactory) {
 	t.Run("if-modified-since stale", func(t *testing.T) {
 		req := "FETCH /hello.md\n---\nif-modified-since: 2000-01-01T00:00:00Z\n---\n"
 		stream := newMockStream(req)
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -335,11 +340,11 @@ func TestConditionalFetchMetadataChange(t *testing.T) {
 func testConditionalFetchMetadataChange(t *testing.T, newBackend backendFactory) {
 	b := newBackend(t)
 	body := []byte("# Same Body\n")
-	first, err := b.Store.WriteVersion("/doc.md", 0, body, map[string]string{"tags": "first"})
+	first, err := direct(b).WriteVersion("/doc.md", 0, body, map[string]string{"tags": "first"})
 	if err != nil {
 		t.Fatalf("write v1: %v", err)
 	}
-	second, err := b.Store.WriteVersion("/doc.md", 1, body, map[string]string{"tags": "second"})
+	second, err := direct(b).WriteVersion("/doc.md", 1, body, map[string]string{"tags": "second"})
 	if err != nil {
 		t.Fatalf("write v2: %v", err)
 	}
@@ -349,7 +354,7 @@ func testConditionalFetchMetadataChange(t *testing.T, newBackend backendFactory)
 
 	h := newHandler(b, nil)
 	stream := newMockStream("FETCH /doc.md\n---\nif-none-match: " + first.ETag + "\n---\n")
-	h.HandleStream(stream)
+	h.HandleStream(context.Background(), stream)
 	resp, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
 		t.Fatalf("parse response: %v", err)
@@ -358,8 +363,8 @@ func testConditionalFetchMetadataChange(t *testing.T, newBackend backendFactory)
 		t.Errorf("metadata update response status=%q etag=%q version=%q, want ok/%q/2",
 			resp.Status, resp.Metadata["etag"], resp.Metadata["version"], second.ETag)
 	}
-	if resp.Metadata["content-hash"] != store.ContentHash(body) {
-		t.Errorf("content hash = %q, want unchanged %q", resp.Metadata["content-hash"], store.ContentHash(body))
+	if resp.Metadata["content-hash"] != storefmt.ContentHash(body) {
+		t.Errorf("content hash = %q, want unchanged %q", resp.Metadata["content-hash"], storefmt.ContentHash(body))
 	}
 }
 
@@ -386,7 +391,7 @@ func TestSymlinkEscape(t *testing.T) {
 
 	t.Run("symlink escape blocked", func(t *testing.T) {
 		stream := newMockStream("FETCH /evil.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -408,7 +413,7 @@ func TestSymlinkEscape(t *testing.T) {
 		}
 
 		stream := newMockStream("LIST /escaped/\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -437,7 +442,7 @@ func testHandleList(t *testing.T, newBackend backendFactory) {
 
 	t.Run("list root directory", func(t *testing.T) {
 		stream := newMockStream("LIST /\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -462,7 +467,7 @@ func testHandleList(t *testing.T, newBackend backendFactory) {
 
 	t.Run("list subdirectory", func(t *testing.T) {
 		stream := newMockStream("LIST /docs/\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -487,7 +492,7 @@ func testHandleList(t *testing.T, newBackend backendFactory) {
 
 	t.Run("paginate authorized directory", func(t *testing.T) {
 		first := newMockStream("LIST /\n---\npage-size: 2\n---\n")
-		h.HandleStream(first)
+		h.HandleStream(context.Background(), first)
 		firstResp, err := protocol.ParseResponse(&first.output)
 		if err != nil {
 			t.Fatalf("parse first response: %v", err)
@@ -501,7 +506,7 @@ func testHandleList(t *testing.T, newBackend backendFactory) {
 		}
 
 		second := newMockStream("LIST /\n---\npage-size: 2\ncursor: " + cursor + "\n---\n")
-		h.HandleStream(second)
+		h.HandleStream(context.Background(), second)
 		secondResp, err := protocol.ParseResponse(&second.output)
 		if err != nil {
 			t.Fatalf("parse second response: %v", err)
@@ -519,7 +524,7 @@ func testHandleList(t *testing.T, newBackend backendFactory) {
 			"LIST /\n---\ninclude-archived: yes\n---\n",
 		} {
 			stream := newMockStream(request)
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
 				t.Fatalf("parse response: %v", err)
@@ -532,7 +537,7 @@ func testHandleList(t *testing.T, newBackend backendFactory) {
 
 	t.Run("list nonexistent directory", func(t *testing.T) {
 		stream := newMockStream("LIST /nope/\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -545,7 +550,7 @@ func testHandleList(t *testing.T, newBackend backendFactory) {
 
 	t.Run("list a file not a directory", func(t *testing.T) {
 		stream := newMockStream("LIST /index.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -559,7 +564,7 @@ func testHandleList(t *testing.T, newBackend backendFactory) {
 	t.Run("path traversal blocked in list", func(t *testing.T) {
 		// Paths with .. segments are rejected outright as defense-in-depth.
 		stream := newMockStream("LIST /../../\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -589,7 +594,7 @@ func testFetchDirectory(t *testing.T, newBackend backendFactory) {
 
 	t.Run("directory with index.md serves document", func(t *testing.T) {
 		stream := newMockStream("FETCH /docs/\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -610,11 +615,11 @@ func testFetchDirectory(t *testing.T, newBackend backendFactory) {
 	})
 
 	t.Run("directory with archived index.md falls back to listing", func(t *testing.T) {
-		if _, _, err := b.Store.ArchiveResult("/docs/index.md", true); err != nil {
+		if _, err := direct(b).Archive("/docs/index.md", true); err != nil {
 			t.Fatalf("archive index.md: %v", err)
 		}
 		stream := newMockStream("FETCH /docs/\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -636,7 +641,7 @@ func testFetchDirectory(t *testing.T, newBackend backendFactory) {
 		}
 		// The archived index.md itself still fetches as a tombstone.
 		docStream := newMockStream("FETCH /docs/index.md\n")
-		h.HandleStream(docStream)
+		h.HandleStream(context.Background(), docStream)
 		docResp, err := protocol.ParseResponse(&docStream.output)
 		if err != nil {
 			t.Fatalf("parse doc response: %v", err)
@@ -645,14 +650,14 @@ func testFetchDirectory(t *testing.T, newBackend backendFactory) {
 			t.Errorf("doc status: got %q, want %q", docResp.Status, protocol.StatusArchived)
 		}
 		// Unarchive to avoid affecting subsequent tests
-		if _, _, err := b.Store.ArchiveResult("/docs/index.md", false); err != nil {
+		if _, err := direct(b).Archive("/docs/index.md", false); err != nil {
 			t.Fatalf("unarchive index.md: %v", err)
 		}
 	})
 
 	t.Run("directory without index.md generates listing", func(t *testing.T) {
 		stream := newMockStream("FETCH /api/\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -680,7 +685,7 @@ func testFetchDirectory(t *testing.T, newBackend backendFactory) {
 
 	t.Run("directory without trailing slash generates listing", func(t *testing.T) {
 		stream := newMockStream("FETCH /api\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -695,7 +700,7 @@ func testFetchDirectory(t *testing.T, newBackend backendFactory) {
 
 	t.Run("nonexistent directory returns not-found", func(t *testing.T) {
 		stream := newMockStream("FETCH /nope/\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -708,7 +713,7 @@ func testFetchDirectory(t *testing.T, newBackend backendFactory) {
 
 	t.Run("root directory generates listing", func(t *testing.T) {
 		stream := newMockStream("FETCH /\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -738,7 +743,7 @@ func testMultipleLeadingSlashes(t *testing.T, newBackend backendFactory) {
 	for _, p := range fetchPaths {
 		t.Run("FETCH "+p, func(t *testing.T) {
 			stream := newMockStream("FETCH " + p + "\n")
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
@@ -754,7 +759,7 @@ func testMultipleLeadingSlashes(t *testing.T, newBackend backendFactory) {
 	for _, p := range listPaths {
 		t.Run("LIST "+p, func(t *testing.T) {
 			stream := newMockStream("LIST " + p + "\n")
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
@@ -784,7 +789,7 @@ func testDeeplyNestedTraversal(t *testing.T, newBackend backendFactory) {
 	for _, p := range paths {
 		t.Run("FETCH "+p, func(t *testing.T) {
 			stream := newMockStream("FETCH " + p + "\n")
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
@@ -796,7 +801,7 @@ func testDeeplyNestedTraversal(t *testing.T, newBackend backendFactory) {
 		})
 		t.Run("LIST "+p, func(t *testing.T) {
 			stream := newMockStream("LIST " + p + "\n")
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
@@ -835,11 +840,11 @@ func TestRelativeContentDir(t *testing.T) {
 	}
 
 	relStore := store.New("./site")
-	h := &Handler{Store: relStore, Logger: discardLogger}
+	h := &Handler{Store: filestore.New(relStore, catalog.New()), Logger: discardLogger}
 
 	t.Run("fetch works with relative content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /page.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -852,7 +857,7 @@ func TestRelativeContentDir(t *testing.T) {
 
 	t.Run("traversal blocked with relative content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /../../etc/passwd\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -865,7 +870,7 @@ func TestRelativeContentDir(t *testing.T) {
 
 	t.Run("list works with relative content dir", func(t *testing.T) {
 		stream := newMockStream("LIST /docs/\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -878,7 +883,7 @@ func TestRelativeContentDir(t *testing.T) {
 
 	t.Run("list traversal blocked with relative content dir", func(t *testing.T) {
 		stream := newMockStream("LIST /../../\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -912,11 +917,11 @@ func TestContentDirAsSymlink(t *testing.T) {
 	}
 
 	symlinkStore := store.New(symlinkDir)
-	h := &Handler{Store: symlinkStore, Logger: discardLogger}
+	h := &Handler{Store: filestore.New(symlinkStore, catalog.New()), Logger: discardLogger}
 
 	t.Run("fetch through symlinked content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /file.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -929,7 +934,7 @@ func TestContentDirAsSymlink(t *testing.T) {
 
 	t.Run("traversal blocked with symlinked content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /../../../etc/passwd\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -942,7 +947,7 @@ func TestContentDirAsSymlink(t *testing.T) {
 
 	t.Run("list through symlinked content dir", func(t *testing.T) {
 		stream := newMockStream("LIST /docs/\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -955,7 +960,7 @@ func TestContentDirAsSymlink(t *testing.T) {
 
 	t.Run("list traversal blocked with symlinked content dir", func(t *testing.T) {
 		stream := newMockStream("LIST /../../../\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -983,7 +988,7 @@ func testHandleVersions(t *testing.T, newBackend backendFactory) {
 
 	t.Run("version history", func(t *testing.T) {
 		stream := newMockStream("VERSIONS /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1011,10 +1016,10 @@ func testHandleVersions(t *testing.T, newBackend backendFactory) {
 			"flat.md": "# Flat\n",
 		})
 		// File-only: raw flat file fixture.
-		flatH := &Handler{Store: store.New(flatDir), Logger: discardLogger}
+		flatH := &Handler{Store: filestore.New(store.New(flatDir), catalog.New()), Logger: discardLogger}
 
 		stream := newMockStream("VERSIONS /flat.md\n")
-		flatH.HandleStream(stream)
+		flatH.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1027,7 +1032,7 @@ func testHandleVersions(t *testing.T, newBackend backendFactory) {
 
 	t.Run("not found", func(t *testing.T) {
 		stream := newMockStream("VERSIONS /missing.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1042,7 +1047,7 @@ func testHandleVersions(t *testing.T, newBackend backendFactory) {
 		noStoreH := &Handler{Logger: discardLogger}
 
 		stream := newMockStream("VERSIONS /doc.md\n")
-		noStoreH.HandleStream(stream)
+		noStoreH.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1064,14 +1069,14 @@ func testFetchVersion(t *testing.T, newBackend backendFactory) {
 	mustWrite(t, b, "/doc.md", []byte("# Version Two\n"), nil)
 
 	h := newHandler(b, nil)
-	first, err := b.Store.Get("/doc.md", 1)
+	first, err := direct(b).Get("/doc.md", 1)
 	if err != nil {
 		t.Fatalf("get v1: %v", err)
 	}
 
 	t.Run("fetch specific version", func(t *testing.T) {
 		stream := newMockStream("FETCH /doc.md/v1\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1096,7 +1101,7 @@ func testFetchVersion(t *testing.T, newBackend backendFactory) {
 
 	t.Run("conditional fetch specific version", func(t *testing.T) {
 		stream := newMockStream("FETCH /doc.md/v1\n---\nif-none-match: " + first.ETag + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -1108,7 +1113,7 @@ func testFetchVersion(t *testing.T, newBackend backendFactory) {
 
 	t.Run("fetch nonexistent version", func(t *testing.T) {
 		stream := newMockStream("FETCH /doc.md/v99\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1121,7 +1126,7 @@ func testFetchVersion(t *testing.T, newBackend backendFactory) {
 
 	t.Run("fetch version of nonexistent doc", func(t *testing.T) {
 		stream := newMockStream("FETCH /missing.md/v1\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1138,11 +1143,12 @@ func TestVersionsChainValid(t *testing.T) { forEachBackend(t, testVersionsChainV
 func TestVersionsChainOperationalFailure(t *testing.T) {
 	b := fileBackend(t)
 	seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
-	b.Store = &verifyErrorStore{DocumentStore: b.Store, err: errors.New("backend unavailable")}
-	b.Views = nil
+	b.Store = &viewStore{DocumentStore: b.Store, wrap: func(view storagebackend.ReadView) storagebackend.ReadView {
+		return &verifyErrorView{ReadView: view, err: errors.New("backend unavailable")}
+	}}
 	h := newHandler(b, nil)
 	stream := newMockStream("VERSIONS /doc.md\n")
-	h.HandleStream(stream)
+	h.HandleStream(context.Background(), stream)
 	response, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
 		t.Fatalf("parse response: %v", err)
@@ -1152,12 +1158,12 @@ func TestVersionsChainOperationalFailure(t *testing.T) {
 	}
 }
 
-type verifyErrorStore struct {
-	DocumentStore
+type verifyErrorView struct {
+	storagebackend.ReadView
 	err error
 }
 
-func (backend *verifyErrorStore) VerifyChain(string) error { return backend.err }
+func (view *verifyErrorView) VerifyChain(context.Context, string) error { return view.err }
 
 func testVersionsChainValid(t *testing.T, newBackend backendFactory) {
 	b := newBackend(t)
@@ -1170,7 +1176,7 @@ func testVersionsChainValid(t *testing.T, newBackend backendFactory) {
 
 	t.Run("valid chain", func(t *testing.T) {
 		stream := newMockStream("VERSIONS /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1185,7 +1191,7 @@ func testVersionsChainValid(t *testing.T, newBackend backendFactory) {
 		b.Tamper(t, "/doc.md", 1, []byte("# TAMPERED\n"))
 
 		stream := newMockStream("VERSIONS /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1218,7 +1224,7 @@ func testHandlePublish(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /new.md\n" + authMeta + "# Hello\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1241,7 +1247,7 @@ func testHandlePublish(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# Updated\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1259,7 +1265,7 @@ func testHandlePublish(t *testing.T, newBackend backendFactory) {
 		h := &Handler{Logger: discardLogger, GetTokenStore: func() *auth.TokenStore { return publishTokenStore }}
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# New\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1278,7 +1284,7 @@ func testHandlePublish(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# Same\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1297,7 +1303,7 @@ func testHandlePublish(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /../../etc/passwd\n" + authMeta + "# evil\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1315,7 +1321,7 @@ func testHandlePublish(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n# stale edit\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1335,7 +1341,7 @@ func testHandlePublish(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n# v2\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1355,7 +1361,7 @@ func testHandlePublish(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, publishTokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n" + authMeta + "# v2 no check\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1372,7 +1378,7 @@ func testHandlePublish(t *testing.T, newBackend backendFactory) {
 
 		for _, ev := range []string{"abc", "-1", "1.5"} {
 			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"" + ev + "\"\n---\n# content\n")
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
@@ -1418,7 +1424,7 @@ func testHandleWrite_RejectsNonMarkdown(t *testing.T, newBackend backendFactory)
 			h := newHandler(b, ts)
 
 			stream := newMockStream(tt.req)
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
@@ -1434,7 +1440,7 @@ func testHandleWrite_RejectsNonMarkdown(t *testing.T, newBackend backendFactory)
 		b := newBackend(t)
 		h := newHandler(b, ts)
 		stream := newMockStream("PUBLISH /ok.md\n" + authMeta + "# Good\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -1470,7 +1476,7 @@ func testHandlePublishAuth(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, nil)
 
 		stream := newMockStream("PUBLISH /doc.md\n# Hello\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1486,7 +1492,7 @@ func testHandlePublishAuth(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /docs/test.md\n# Hello\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1502,7 +1508,7 @@ func testHandlePublishAuth(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: wrong-secret\n---\n# Hello\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1518,7 +1524,7 @@ func testHandlePublishAuth(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /private/secret.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1534,7 +1540,7 @@ func testHandlePublishAuth(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: " + readonlySecret + "\n---\n# Hello\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1550,7 +1556,7 @@ func testHandlePublishAuth(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /docs/test.md\n---\nauth: " + writerSecret + "\n---\n# Hello\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1619,7 +1625,7 @@ func TestArchiveUsesCommittedResult(t *testing.T) {
 	b := fileBackend(t)
 	spy := &archiveResultStore{
 		DocumentStore: b.Store,
-		document:      &store.Document{Version: 2, Archived: true},
+		document:      &storefmt.Document{Version: 2, Archived: true},
 		changed:       true,
 	}
 	b.Store = spy
@@ -1627,7 +1633,7 @@ func TestArchiveUsesCommittedResult(t *testing.T) {
 		protocol.HashToken(secret): {Paths: []string{"/*"}, Operations: []string{"publish"}},
 	}))
 	stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + secret + "\n---\n")
-	h.HandleStream(stream)
+	h.HandleStream(context.Background(), stream)
 	response, err := protocol.ParseResponse(&stream.output)
 	if err != nil {
 		t.Fatalf("parse response: %v", err)
@@ -1635,28 +1641,28 @@ func TestArchiveUsesCommittedResult(t *testing.T) {
 	if response.Status != protocol.StatusOK || response.Metadata["version"] != "2" {
 		t.Errorf("archive response = status %q version %q", response.Status, response.Metadata["version"])
 	}
-	if spy.getCalls != 0 || spy.archiveCalls != 1 {
-		t.Errorf("store calls = Get %d Archive %d, want 0/1", spy.getCalls, spy.archiveCalls)
+	if spy.viewsOpened != 0 || spy.archiveCalls != 1 {
+		t.Errorf("store calls = views %d Archive %d, want 0/1", spy.viewsOpened, spy.archiveCalls)
 	}
 }
 
 type archiveResultStore struct {
 	DocumentStore
-	document     *store.Document
+	document     *storefmt.Document
 	changed      bool
 	err          error
-	getCalls     int
+	viewsOpened  int
 	archiveCalls int
 }
 
-func (spy *archiveResultStore) Get(path string, version int) (*store.Document, error) {
-	spy.getCalls++
-	return spy.DocumentStore.Get(path, version)
+func (spy *archiveResultStore) OpenReadView(ctx context.Context) (storagebackend.ReadView, error) {
+	spy.viewsOpened++
+	return spy.DocumentStore.OpenReadView(ctx)
 }
 
-func (spy *archiveResultStore) ArchiveResult(string, bool) (*store.Document, bool, error) {
+func (spy *archiveResultStore) SetArchived(context.Context, string, bool) (storagebackend.ArchiveResult, error) {
 	spy.archiveCalls++
-	return spy.document, spy.changed, spy.err
+	return storagebackend.ArchiveResult{Document: spy.document, Changed: spy.changed}, spy.err
 }
 
 func testHandleArchive(t *testing.T, newBackend backendFactory) {
@@ -1673,7 +1679,7 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, ts)
 
 		stream := newMockStream("ARCHIVE /missing.md\n---\nauth: " + writerSecret + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1690,7 +1696,7 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, ts)
 
 		stream := newMockStream("ARCHIVE /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1707,7 +1713,7 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, ts)
 
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1728,11 +1734,11 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		// Try to fetch it
 		stream = newMockStream("FETCH /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1750,11 +1756,11 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		// Try to publish to archived document
 		stream = newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n# New Content\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1772,11 +1778,11 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		// Publish with empty body to unarchive
 		stream = newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1788,7 +1794,7 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 
 		// Now FETCH should succeed
 		stream = newMockStream("FETCH /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err = protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1803,18 +1809,18 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 		b := newBackend(t)
 		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
 		h := newHandler(b, ts)
-		first, err := b.Store.Get("/doc.md", 1)
+		first, err := direct(b).Get("/doc.md", 1)
 		if err != nil {
 			t.Fatalf("get v1: %v", err)
 		}
 
 		// Archive the document
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		// Fetch specific version should still work
 		stream = newMockStream("FETCH /doc.md/v1\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1828,7 +1834,7 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 		}
 
 		stream = newMockStream("FETCH /doc.md/v1\n---\nif-none-match: " + first.ETag + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err = protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse conditional response: %v", err)
@@ -1844,7 +1850,7 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n# New Content\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1864,7 +1870,7 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, ts)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + writerSecret + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1897,7 +1903,7 @@ func testHandleAppend(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + "More text.")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1916,7 +1922,7 @@ func testHandleAppend(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /missing.md\n" + authMetaV1 + "content")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1933,7 +1939,7 @@ func testHandleAppend(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1950,7 +1956,7 @@ func testHandleAppend(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\n---\nMore text.")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1967,7 +1973,7 @@ func testHandleAppend(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nexpected-version: \"1\"\n---\nMore text.")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1985,7 +1991,7 @@ func testHandleAppend(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: \"1\"\n---\nLate append.")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -1999,13 +2005,13 @@ func testHandleAppend(t *testing.T, newBackend backendFactory) {
 	t.Run("archived document rejected", func(t *testing.T) {
 		b := newBackend(t)
 		mustWrite(t, b, "/doc.md", []byte("# Content"), nil)
-		if _, _, err := b.Store.ArchiveResult("/doc.md", true); err != nil {
+		if _, err := direct(b).Archive("/doc.md", true); err != nil {
 			t.Fatal(err)
 		}
 		h := newHandler(b, appendTokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + "More.")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2027,7 +2033,7 @@ func testHandleAppend(t *testing.T, newBackend backendFactory) {
 
 		appendBody := strings.Repeat("y", 200)
 		stream := newMockStream("APPEND /doc.md\n" + authMetaV1 + appendBody)
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2056,7 +2062,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 
 		// Publish with publisher metadata.
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\ntype: journal\nauthor: claude\n---\n# Hello\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2068,7 +2074,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 
 		// Fetch and verify metadata appears in response.
 		stream = newMockStream("FETCH /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err = protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2090,7 +2096,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 0\ntype: note\n---\n# Hello\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2102,7 +2108,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 
 		// Fetch back — auth and expected-version should not be in response.
 		stream = newMockStream("FETCH /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err = protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2134,7 +2140,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		fm.WriteString("---\n# Content\n")
 
 		stream := newMockStream("PUBLISH /doc.md\n" + fm.String())
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2151,7 +2157,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 
 		for _, key := range []string{"version", "modified", "etag", "current-version", "server-version", "matches", "match"} {
 			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n" + key + ": evil\n---\n# Content\n")
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
@@ -2169,7 +2175,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 
 		for _, key := range []string{"UPPER", "under_score", "dot.key", "slash/key"} {
 			stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n" + key + ": val\n---\n# Content\n")
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
@@ -2187,7 +2193,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 1\ntype: journal\n---\nMore content.\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2199,7 +2205,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 
 		// Fetch current version — should have the append's metadata.
 		stream = newMockStream("FETCH /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err = protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2216,7 +2222,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("FETCH /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2245,10 +2251,10 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\ntitle: Untyped\n---\n# Content\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		stream = newMockStream("FETCH /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse fetch: %v", err)
@@ -2263,7 +2269,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("PUBLISH /index.md\n---\nauth: " + testSecret + "\n---\n# Hub\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse publish: %v", err)
@@ -2273,7 +2279,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		}
 
 		stream = newMockStream("FETCH /index.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err = protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse fetch: %v", err)
@@ -2291,10 +2297,10 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\ntype: Metric\n---\n# Content\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		stream = newMockStream("FETCH /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse fetch: %v", err)
@@ -2310,7 +2316,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 1\n---\nMore.\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse append: %v", err)
@@ -2320,7 +2326,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		}
 
 		stream = newMockStream("FETCH /doc.md\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err = protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse fetch: %v", err)
@@ -2345,7 +2351,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 		fm.WriteString("---\n# Content\n")
 
 		stream := newMockStream("PUBLISH /doc.md\n" + fm.String())
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -2363,7 +2369,7 @@ func testPublisherMetadata(t *testing.T, newBackend backendFactory) {
 
 		// Fetch v1 — should have its own metadata.
 		stream := newMockStream("FETCH /doc.md/v1\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2402,7 +2408,6 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 
 	h := &Handler{
 		Store:         b.Store,
-		Catalog:       b.Catalog,
 		GetTokenStore: func() *auth.TokenStore { return tokenStore },
 		Logger:        discardLogger,
 	}
@@ -2482,7 +2487,7 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stream := newMockStream(tt.request)
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
@@ -2497,7 +2502,7 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 	t.Run("no token store means all reads public", func(t *testing.T) {
 		noAuth := newHandler(b, nil)
 		stream := newMockStream("FETCH /private/secret.md\n")
-		noAuth.HandleStream(stream)
+		noAuth.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2511,7 +2516,7 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 	t.Run("FETCH by hash protected path without token", func(t *testing.T) {
 		// First fetch the doc with auth to get its content hash.
 		stream := newMockStream("FETCH /private/secret.md\n---\nauth: " + readSecret + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -2523,7 +2528,7 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 
 		// Now try fetching by hash without auth — should be denied.
 		stream = newMockStream("FETCH /" + hash + "\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err = protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -2535,7 +2540,7 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 
 	t.Run("FETCH by hash protected path with valid token", func(t *testing.T) {
 		stream := newMockStream("FETCH /private/secret.md\n---\nauth: " + readSecret + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -2543,7 +2548,7 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 		hash := resp.Metadata["content-hash"]
 
 		stream = newMockStream("FETCH /" + hash + "\n---\nauth: " + readSecret + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		resp, err = protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
@@ -2579,7 +2584,7 @@ func testListPaginationFiltersBeforePageBoundary(t *testing.T, newBackend backen
 	h := newHandler(b, tokenStore)
 
 	first := newMockStream("LIST /docs/\n---\npage-size: 1\n---\n")
-	h.HandleStream(first)
+	h.HandleStream(context.Background(), first)
 	firstResp, err := protocol.ParseResponse(&first.output)
 	if err != nil {
 		t.Fatalf("parse first response: %v", err)
@@ -2594,7 +2599,7 @@ func testListPaginationFiltersBeforePageBoundary(t *testing.T, newBackend backen
 	}
 
 	second := newMockStream("LIST /docs/\n---\npage-size: 1\ncursor: " + cursor + "\n---\n")
-	h.HandleStream(second)
+	h.HandleStream(context.Background(), second)
 	secondResp, err := protocol.ParseResponse(&second.output)
 	if err != nil {
 		t.Fatalf("parse second response: %v", err)
@@ -2604,7 +2609,7 @@ func testListPaginationFiltersBeforePageBoundary(t *testing.T, newBackend backen
 	}
 
 	authed := newMockStream("LIST /docs/\n---\npage-size: 1\ncursor: " + cursor + "\nauth: " + readSecret + "\n---\n")
-	h.HandleStream(authed)
+	h.HandleStream(context.Background(), authed)
 	authedResp, err := protocol.ParseResponse(&authed.output)
 	if err != nil {
 		t.Fatalf("parse authed response: %v", err)
@@ -2648,7 +2653,7 @@ func testDirectoryReadAuthFiltering(t *testing.T, newBackend backendFactory) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			stream := newMockStream(test.request)
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
 				t.Fatalf("parse response: %v", err)
@@ -2675,13 +2680,13 @@ func testDirectoryReadAuthFiltering(t *testing.T, newBackend backendFactory) {
 
 	t.Run("generated index supports conditional fetch", func(t *testing.T) {
 		stream := newMockStream("FETCH /mixed/\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		first, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse initial response: %v", err)
 		}
 		stream = newMockStream("FETCH /mixed/\n---\nif-none-match: " + first.Metadata["etag"] + "\n---\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 		conditional, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse conditional response: %v", err)
@@ -2692,14 +2697,14 @@ func testDirectoryReadAuthFiltering(t *testing.T, newBackend backendFactory) {
 	})
 }
 
-type hashResultStore struct {
-	DocumentStore
+type hashResultView struct {
+	storagebackend.ReadView
 	path string
 	err  error
 }
 
-func (s *hashResultStore) LookupHashResult(string) (string, error) {
-	return s.path, s.err
+func (v *hashResultView) LookupHash(context.Context, string) (string, error) {
+	return v.path, v.err
 }
 
 func TestFetchHashLookupFailure(t *testing.T) {
@@ -2721,10 +2726,11 @@ func testFetchHashLookupFailure(t *testing.T, newBackend backendFactory) {
 		t.Run(test.name, func(t *testing.T) {
 			b := newBackend(t)
 			h := newHandler(b, nil)
-			h.Store = &hashResultStore{DocumentStore: b.Store, path: test.path, err: test.err}
-			h.Views = nil
+			h.Store = &viewStore{DocumentStore: b.Store, wrap: func(view storagebackend.ReadView) storagebackend.ReadView {
+				return &hashResultView{ReadView: view, path: test.path, err: test.err}
+			}}
 			stream := newMockStream("FETCH " + hashPath + "\n")
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
 				t.Fatalf("parse response: %v", err)
@@ -2745,7 +2751,6 @@ func testReadOnlyMode(t *testing.T, newBackend backendFactory) {
 	})
 	h := &Handler{
 		Store:    b.Store,
-		Catalog:  b.Catalog,
 		Logger:   discardLogger,
 		ReadOnly: true,
 		GetTokenStore: func() *auth.TokenStore {
@@ -2759,7 +2764,7 @@ func testReadOnlyMode(t *testing.T, newBackend backendFactory) {
 	for _, verb := range []string{"PUBLISH", "APPEND", "ARCHIVE"} {
 		t.Run(verb+" rejected", func(t *testing.T) {
 			stream := newMockStream(verb + " /doc.md\n" + authMeta + "# Content\n")
-			h.HandleStream(stream)
+			h.HandleStream(context.Background(), stream)
 
 			resp, err := protocol.ParseResponse(&stream.output)
 			if err != nil {
@@ -2776,7 +2781,7 @@ func testReadOnlyMode(t *testing.T, newBackend backendFactory) {
 
 	t.Run("FETCH still works", func(t *testing.T) {
 		stream := newMockStream("FETCH /doc.md\n\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2789,7 +2794,7 @@ func testReadOnlyMode(t *testing.T, newBackend backendFactory) {
 
 	t.Run("LIST still works", func(t *testing.T) {
 		stream := newMockStream("LIST /\n\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2802,7 +2807,7 @@ func testReadOnlyMode(t *testing.T, newBackend backendFactory) {
 
 	t.Run("VERSIONS still works", func(t *testing.T) {
 		stream := newMockStream("VERSIONS /doc.md\n\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2831,10 +2836,10 @@ func testHandlePublish_Retention(t *testing.T, newBackend backendFactory) {
 			mustWrite(t, b, "/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil)
 		}
 		var logBuf bytes.Buffer
-		h := &Handler{Store: b.Store, Catalog: b.Catalog, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := &Handler{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nretention: 2\n---\n# Version 6\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2843,7 +2848,7 @@ func testHandlePublish_Retention(t *testing.T, newBackend backendFactory) {
 		if resp.Status != protocol.StatusCreated {
 			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
 		}
-		versions, err := b.Store.Versions("/doc.md")
+		versions, err := direct(b).Versions("/doc.md")
 		if err != nil {
 			t.Fatalf("Versions: %v", err)
 		}
@@ -2865,7 +2870,7 @@ func testHandlePublish_Retention(t *testing.T, newBackend backendFactory) {
 				h := newHandler(b, tokenStore)
 
 				stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\nretention: " + value + "\n---\n# Hello\n")
-				h.HandleStream(stream)
+				h.HandleStream(context.Background(), stream)
 
 				resp, err := protocol.ParseResponse(&stream.output)
 				if err != nil {
@@ -2884,10 +2889,10 @@ func testHandlePublish_Retention(t *testing.T, newBackend backendFactory) {
 			mustWrite(t, b, "/doc.md", []byte("# Version "+strconv.Itoa(i+1)), nil)
 		}
 		var logBuf bytes.Buffer
-		h := &Handler{Store: b.Store, Catalog: b.Catalog, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := &Handler{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
 
 		stream := newMockStream("PUBLISH /doc.md\n---\nauth: " + testSecret + "\n---\n# Version 4\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2896,7 +2901,7 @@ func testHandlePublish_Retention(t *testing.T, newBackend backendFactory) {
 		if resp.Status != protocol.StatusCreated {
 			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
 		}
-		versions, err := b.Store.Versions("/doc.md")
+		versions, err := direct(b).Versions("/doc.md")
 		if err != nil {
 			t.Fatalf("Versions: %v", err)
 		}
@@ -2932,10 +2937,10 @@ func testHandleAppend_Retention(t *testing.T, newBackend backendFactory) {
 		b := newBackend(t)
 		seedDoc(t, b, 5)
 		var logBuf bytes.Buffer
-		h := &Handler{Store: b.Store, Catalog: b.Catalog, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := &Handler{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 5\nretention: 2\n---\nappended line\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2944,7 +2949,7 @@ func testHandleAppend_Retention(t *testing.T, newBackend backendFactory) {
 		if resp.Status != protocol.StatusCreated {
 			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
 		}
-		versions, err := b.Store.Versions("/doc.md")
+		versions, err := direct(b).Versions("/doc.md")
 		if err != nil {
 			t.Fatalf("Versions: %v", err)
 		}
@@ -2965,7 +2970,7 @@ func testHandleAppend_Retention(t *testing.T, newBackend backendFactory) {
 		h := newHandler(b, tokenStore)
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 1\nretention: 0\n---\nappended line\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2974,7 +2979,7 @@ func testHandleAppend_Retention(t *testing.T, newBackend backendFactory) {
 		if resp.Status != protocol.StatusBadRequest {
 			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusBadRequest)
 		}
-		if versions, err := b.Store.Versions("/doc.md"); err != nil || len(versions) != 1 {
+		if versions, err := direct(b).Versions("/doc.md"); err != nil || len(versions) != 1 {
 			t.Errorf("versions = %d (err %v), want 1 untouched", len(versions), err)
 		}
 	})
@@ -2983,10 +2988,10 @@ func testHandleAppend_Retention(t *testing.T, newBackend backendFactory) {
 		b := newBackend(t)
 		seedDoc(t, b, 3)
 		var logBuf bytes.Buffer
-		h := &Handler{Store: b.Store, Catalog: b.Catalog, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
+		h := &Handler{Store: b.Store, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }}
 
 		stream := newMockStream("APPEND /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 3\n---\nappended line\n")
-		h.HandleStream(stream)
+		h.HandleStream(context.Background(), stream)
 
 		resp, err := protocol.ParseResponse(&stream.output)
 		if err != nil {
@@ -2995,7 +3000,7 @@ func testHandleAppend_Retention(t *testing.T, newBackend backendFactory) {
 		if resp.Status != protocol.StatusCreated {
 			t.Fatalf("status: got %q, want %q", resp.Status, protocol.StatusCreated)
 		}
-		if versions, err := b.Store.Versions("/doc.md"); err != nil || len(versions) != 4 {
+		if versions, err := direct(b).Versions("/doc.md"); err != nil || len(versions) != 4 {
 			t.Errorf("versions = %d (err %v), want all 4", len(versions), err)
 		}
 		if strings.Contains(logBuf.String(), "msg=prune") {

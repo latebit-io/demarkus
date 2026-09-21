@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 func TestParse(t *testing.T) {
@@ -197,7 +197,7 @@ func TestValidatedMinimumMetadataPassesStoreValidation(t *testing.T) {
 		if err := policy.Validate(); err != nil {
 			t.Fatalf("Validate(%#v): %v", policy, err)
 		}
-		if err := store.ValidateMeta(minimumMetadata(policy)); err != nil {
+		if err := storefmt.ValidateMeta(minimumMetadata(policy)); err != nil {
 			t.Fatalf("minimum metadata for %#v: %v", policy, err)
 		}
 	}

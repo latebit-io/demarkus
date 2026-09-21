@@ -2,10 +2,12 @@
 package backend
 
 import (
+	"context"
 	"errors"
-	"time"
+	"fmt"
+	"io/fs"
 
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
@@ -23,36 +25,57 @@ type Rejection interface {
 	RejectionMessage() string
 }
 
-// Reader exposes one committed document-store snapshot.
-type Reader interface {
-	Get(reqPath string, version int) (*protocolstore.Document, error)
-	// ListEntries returns unique immediate children in strictly increasing Name order.
-	ListEntries(reqPath string, includeArchived bool) ([]protocolstore.DirEntry, error)
-	IsDir(reqPath string) (bool, error)
-	Versions(reqPath string) ([]protocolstore.VersionInfo, error)
-	LookupHashResult(hash string) (string, error)
-	VerifyChain(reqPath string) error
+// ErrNotFound means the path, version or hash names nothing a reader may see.
+var ErrNotFound = errors.New("not found")
+
+// FromNotExist marks a backend's own missing-file error as ErrNotFound, keeping
+// the cause in the chain.
+func FromNotExist(err error) error {
+	if err != nil && errors.Is(err, fs.ErrNotExist) && !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("%w: %w", ErrNotFound, err)
+	}
+	return err
 }
 
-// Store is the mutable document-store contract.
+// Reader exposes one committed document-store snapshot.
+type Reader interface {
+	Get(ctx context.Context, reqPath string, version int) (*storefmt.Document, error)
+	// ListEntries returns unique immediate children in strictly increasing Name order.
+	ListEntries(ctx context.Context, reqPath string, includeArchived bool) ([]storefmt.DirEntry, error)
+	IsDir(ctx context.Context, reqPath string) (bool, error)
+	Versions(ctx context.Context, reqPath string) ([]storefmt.VersionInfo, error)
+	LookupHash(ctx context.Context, hash string) (string, error)
+	VerifyChain(ctx context.Context, reqPath string) error
+}
+
+// WriteRequest is one PUBLISH or APPEND. ExpectedVersion is the version the
+// writer last saw; a negative value skips the check.
+type WriteRequest struct {
+	Path            string
+	ExpectedVersion int
+	Content         []byte
+	Metadata        map[string]string
+}
+
+// ArchiveResult is the document after an archive transition; Changed is false
+// when it already had the requested state.
+type ArchiveResult struct {
+	Document *storefmt.Document
+	Changed  bool
+}
+
+// Store is the document-store contract: reads go through a view, writes are
+// atomic and keep the LOOKUP catalog current.
 type Store interface {
-	Reader
-	CurrentVersionResult(reqPath string) (int, error)
-	WriteVersion(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*protocolstore.Document, error)
-	Append(reqPath string, expectedVersion int, content []byte, meta map[string]string) (*protocolstore.Document, error)
-	ArchiveResult(reqPath string, archived bool) (*protocolstore.Document, bool, error)
+	ViewProvider
+	Publish(ctx context.Context, req WriteRequest) (*storefmt.Document, error)
+	Append(ctx context.Context, req WriteRequest) (*storefmt.Document, error)
+	SetArchived(ctx context.Context, reqPath string, archived bool) (ArchiveResult, error)
 }
 
 // CatalogReader exposes LOOKUP against the same snapshot as Reader.
 type CatalogReader interface {
-	Lookup(query string, opts catalog.Options) ([]catalog.Result, error)
-}
-
-// Catalog is the mutable LOOKUP contract.
-type Catalog interface {
-	CatalogReader
-	Put(docPath string, meta map[string]string, body []byte, modified time.Time)
-	Remove(docPath string)
+	Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error)
 }
 
 // ReadView pins all read surfaces to one committed backend snapshot.
@@ -62,7 +85,7 @@ type ReadView interface {
 	Close() error
 }
 
-// ViewProvider opens one request-scoped snapshot.
+// ViewProvider opens one request-scoped snapshot; ctx bounds acquiring it.
 type ViewProvider interface {
-	OpenReadView() (ReadView, error)
+	OpenReadView(ctx context.Context) (ReadView, error)
 }
