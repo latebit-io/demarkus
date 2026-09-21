@@ -129,7 +129,7 @@ func TestParsesBrokerRenderedFragment(t *testing.T) {
 	// Every field the broker writes must arrive; a dropped one parses cleanly.
 	w := &worlds[0]
 	if !w.Bootstrap || w.Limits.MaxDocuments != 500 || len(w.Authorities) != 1 {
-		t.Errorf("parsed fragment world = %+v", w)
+		t.Fatalf("parsed fragment world = %+v", w)
 	}
 	for field, got := range map[string]string{
 		"name":            w.Name,

@@ -8,7 +8,7 @@ import (
 )
 
 func TestEveryGoldenParses(t *testing.T) {
-	names := Names()
+	names := Names(t)
 	for _, verb := range []string{"fetch", "list", "versions", "lookup", "publish-created", "append", "archive"} {
 		if !slices.Contains(names, verb) {
 			t.Errorf("no golden named %q; have %v", verb, names)

@@ -21,7 +21,7 @@ func Response(t testing.TB, name string) protocol.Response {
 	t.Helper()
 	wire, err := goldens.ReadFile("testdata/" + name + ".golden")
 	if err != nil {
-		t.Fatalf("wire golden %q: %v (known: %s)", name, err, strings.Join(Names(), ", "))
+		t.Fatalf("wire golden %q: %v (known: %s)", name, err, strings.Join(Names(t), ", "))
 	}
 	resp, err := protocol.ParseResponse(bytes.NewReader(wire))
 	if err != nil {
@@ -31,10 +31,11 @@ func Response(t testing.TB, name string) protocol.Response {
 }
 
 // Names lists every golden, sorted.
-func Names() []string {
+func Names(t testing.TB) []string {
+	t.Helper()
 	entries, err := goldens.ReadDir("testdata")
 	if err != nil {
-		return nil
+		t.Fatalf("read embedded wire goldens: %v", err)
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {

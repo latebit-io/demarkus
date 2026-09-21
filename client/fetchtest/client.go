@@ -103,11 +103,11 @@ func (c *Client) Fetch(host, path, token string) (fetch.Result, error) {
 
 // FetchContext is Fetch, failing first when ctx is done.
 func (c *Client) FetchContext(ctx context.Context, host, path, token string) (fetch.Result, error) {
-	if c.FetchCtxFn != nil {
-		return c.FetchCtxFn(ctx, host, path, token)
-	}
 	if err := ctx.Err(); err != nil {
 		return fetch.Result{}, err
+	}
+	if c.FetchCtxFn != nil {
+		return c.FetchCtxFn(ctx, host, path, token)
 	}
 	return c.Fetch(host, path, token)
 }
@@ -175,6 +175,9 @@ func (c *Client) Lookup(host, scope, query, token string, opts fetch.LookupOptio
 
 // LookupContext is Lookup, failing first when ctx is done.
 func (c *Client) LookupContext(ctx context.Context, host, scope, query, token string, opts fetch.LookupOptions) (fetch.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return fetch.Result{}, err
+	}
 	return c.lookup(ctx, &LookupCall{host, scope, query, token, opts}, true)
 }
 
@@ -212,11 +215,12 @@ func (c *Client) Publish(host, path, body, token string, expectedVersion int, me
 	if err != nil || version <= 0 {
 		return result, nil
 	}
-	return c.store(host, path, body, storeRequest{expected: expectedVersion, version: version, result: result})
+	return c.store(host, path, body, storeRequest{expected: expectedVersion, version: version, meta: meta, result: result})
 }
 
 type storeRequest struct {
 	expected, version int
+	meta              map[string]string
 	result            fetch.Result
 }
 
@@ -234,11 +238,16 @@ func (c *Client) store(host, path, body string, req storeRequest) (fetch.Result,
 	if req.expected >= 0 && req.expected != current {
 		return status(protocol.StatusConflict, nil), nil
 	}
-	stored := fetch.Result{Response: protocol.Response{
-		Status:   protocol.StatusOK,
-		Body:     body,
-		Metadata: map[string]string{"version": strconv.Itoa(req.version), "content-hash": index.BodyHash(body)},
-	}}
+	// As the server does: publisher keys survive, server owned keys are its own.
+	metadata := make(map[string]string, len(req.meta)+2)
+	for key, value := range req.meta {
+		if !protocol.ReservedMetadataKeys[key] {
+			metadata[key] = value
+		}
+	}
+	metadata["version"] = strconv.Itoa(req.version)
+	metadata["content-hash"] = index.BodyHash(body)
+	stored := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: metadata}}
 	if c.Published == nil {
 		c.Published = make(map[string]fetch.Result)
 	}
