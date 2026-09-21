@@ -1376,7 +1376,8 @@ func (d *dirSyncDebt) settle() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for dir := range d.owed {
-		if err := syncDir(dir); err != nil {
+		// A directory the rollback removed has no entries left to make durable.
+		if err := syncDir(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("settle owed directory sync: %w", err)
 		}
 		delete(d.owed, dir)

@@ -218,3 +218,38 @@ func TestWriteRetrySettlesSyncsOwedAfterFailedRollback(t *testing.T) {
 		}
 	}
 }
+
+// A partial rollback can remove a directory whose sync is owed. The missing
+// directory has nothing left to sync and must not block every later write.
+func TestWriteSettlesDebtForDirectoryRemovedByRollback(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	failing := true
+	syncDir = func(dir string) error {
+		if failing && dir == root {
+			// The stray file keeps notes; the rollback still removes sub.
+			if err := os.WriteFile(filepath.Join(root, "notes", "stray"), nil, 0o600); err != nil {
+				t.Fatalf("plant stray file: %v", err)
+			}
+			return errors.New("disk gone")
+		}
+		return syncDirectory(dir)
+	}
+	t.Cleanup(func() { syncDir = syncDirectory })
+
+	if _, err := s.Write("/notes/sub/a.md", []byte("# A\n"), nil); err == nil {
+		t.Fatal("write: want the sync error")
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes", "sub")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("test setup: sub should be gone after the partial rollback: %v", err)
+	}
+
+	failing = false
+	if _, err := s.Write("/other.md", []byte("# O\n"), nil); err != nil {
+		t.Fatalf("unrelated write blocked by stale debt: %v", err)
+	}
+	if _, err := s.Write("/notes/sub/a.md", []byte("# A\n"), nil); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+}
