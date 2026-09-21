@@ -36,7 +36,7 @@ func TestResolveSharedManifest(t *testing.T) {
 	for i, artifact := range artifacts {
 		version := i + 1
 		refs[i] = artifact.Ref(version)
-		shards[generation.VersionPath(artifact.Path, version)] = fetch.Result{Response: protocol.Response{
+		shards[protocol.VersionPath(artifact.Path, version)] = fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK, Body: artifact.Body,
 			Metadata: map[string]string{"version": strconv.Itoa(version), "content-hash": artifact.ContentHash},
 		}}

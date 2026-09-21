@@ -23,3 +23,5 @@ Decision records binding the protocol, spec, and repo; git is canonical, and eac
 | [0017](0017-archive-precondition-closed-views-and-seeding.md) | Archive preconditions, closed views, and seeding above the store | accepted 2026-09-21 |
 | [0018](0018-one-mark-url-parser-and-lowercase-host-identity.md) | One mark URL parser, and host case is not identity | accepted 2026-09-21 |
 | [0019](0019-shared-tool-bodies-and-one-write-contract.md) | Tool bodies and the write contract live in shared packages | accepted 2026-09-21 |
+| [0020](0020-one-reconcile-owner-and-check-order.md) | One reconcile owner, and arguments before authorization | accepted 2026-09-21 |
+| [0021](0021-world-registry-names-and-one-tenant-door.md) | A world registry that announces drops, DNS label world names, one tenant door | accepted 2026-09-21 |

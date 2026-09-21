@@ -25,69 +25,230 @@ func versionOf(r docwrite.Result) int { //nolint:gocritic // a test reads one re
 	return v
 }
 
+func answer(status string, meta map[string]string) func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+	return func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{Status: status, Metadata: meta}}, nil
+	}
+}
+
+var conflictAt6 = answer(protocol.StatusConflict, map[string]string{"server-version": "6"})
+
+// history serves the head, and base at /doc.md/v<baseVersion>; any other
+// version is not found.
+func history(baseVersion int, base string, head fetch.Result) func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
+	return func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		switch r.Path {
+		case "/doc.md":
+			return head, nil
+		case protocol.VersionPath("/doc.md", baseVersion):
+			return fetchtest.Head(base, baseVersion, nil), nil
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}
+}
+
 func TestPublishModes(t *testing.T) {
-	conflict := func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusConflict, Metadata: map[string]string{"server-version": "6"}}}, nil
-	}
-	backend := &fetchtest.Client{
-		PublishFn: conflict,
-		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			if r.Path == "/doc.md/v5" {
-				return fetchtest.Head("a\nb\nc\n", 5, nil), nil
-			}
-			return fetchtest.Head("a\nb\nC\n", 6, nil), nil
-		},
-	}
-	w := merge.Write{Path: "/doc.md", Body: "a\nB\nc\n", ExpectedVersion: 5}
+	backend := &fetchtest.Client{PublishFn: conflictAt6, FetchFn: history(5, "a\nb\nc\n", fetchtest.Head("a\nb\nC\n", 6, nil))}
+	w := docwrite.Write{Body: "a\nB\nc\n", ExpectedVersion: 5, Metadata: map[string]string{"tags": "x"}}
 
 	merged, err := doc(backend).Publish(t.Context(), w, merge.OnConflictMerge)
-	if err != nil || merged.Status != merge.OutcomeCandidate || merged.Body != "a\nB\nC\n" || merged.PublishAtVersion != 6 {
-		t.Fatalf("merge mode = %+v, %v", merged, err)
+	if err != nil || merged.Candidate == nil {
+		t.Fatalf("merge mode = %+v, %v, want a candidate", merged, err)
+	}
+	if c := merged.Candidate; c.Body != "a\nB\nC\n" || c.HasMarkers || c.BaseVersion != 5 || c.TheirVersion != 6 || c.PublishAtVersion != 6 {
+		t.Errorf("candidate = %+v", c)
 	}
 	failed, err := doc(backend).Publish(t.Context(), w, merge.OnConflictFail)
-	if err != nil || failed.Status != merge.OutcomeOK || failed.Publish.Status != protocol.StatusConflict || failed.Publish.ServerVersion != 6 {
+	if err != nil || failed.Candidate != nil || failed.Response.Status != protocol.StatusConflict || failed.Response.Metadata["server-version"] != "6" {
 		t.Fatalf("fail mode = %+v, %v, want the conflict reported as is", failed, err)
 	}
 	sent := backend.PublishCalls[0]
-	if sent.Host != "host:6309" || sent.Token != "write-token" || backend.FetchCalls[0].Token != "read-token" {
+	if sent.Host != "host:6309" || sent.Path != "/doc.md" || sent.Token != "write-token" || sent.Metadata["tags"] != "x" || backend.FetchCalls[0].Token != "read-token" {
 		t.Errorf("publish = %+v, first read = %+v", sent, backend.FetchCalls[0])
+	}
+	// A candidate is offered, never published: one attempt per call.
+	if len(backend.PublishCalls) != 2 {
+		t.Errorf("publishes = %d, want one per call", len(backend.PublishCalls))
+	}
+}
+
+func TestPublishCandidates(t *testing.T) {
+	tests := []struct {
+		name        string
+		w           docwrite.Write
+		fetch       func(context.Context, fetch.FetchRequest) (fetch.Result, error)
+		wantBody    string
+		wantMarkers bool
+		wantErr     string
+	}{
+		{name: "overlapping edits keep both sides in markers",
+			w: docwrite.Write{Body: "a\nMINE\nc\n", ExpectedVersion: 5}, fetch: history(5, "a\nb\nc\n", fetchtest.Head("a\nTHEIRS\nc\n", 6, nil)),
+			wantBody: "a\n<<<<<<< ours\nMINE\n=======\nTHEIRS\n>>>>>>> theirs\nc\n", wantMarkers: true},
+		{name: "create only conflict merges against an empty base",
+			w: docwrite.Write{Body: "mine\n", ExpectedVersion: 0}, fetch: history(0, "", fetchtest.Head("theirs\n", 1, nil)),
+			wantBody: "<<<<<<< ours\nmine\n=======\ntheirs\n>>>>>>> theirs\n", wantMarkers: true},
+		{name: "a head without a version cannot be republished at",
+			w: docwrite.Write{Body: "x", ExpectedVersion: 5}, fetch: history(5, "base", fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "theirs"}}),
+			wantErr: "fetch current: missing or invalid version metadata"},
+		{name: "a head that cannot be read",
+			w: docwrite.Write{Body: "x", ExpectedVersion: 5}, fetch: history(5, "base", fetch.Result{Response: protocol.Response{Status: protocol.StatusServerError}}),
+			wantErr: "fetch current: status server-error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &fetchtest.Client{PublishFn: conflictAt6, FetchFn: tt.fetch}
+			got, err := doc(backend).Publish(t.Context(), tt.w, merge.OnConflictMerge)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || got.Candidate == nil || got.Candidate.Body != tt.wantBody || got.Candidate.HasMarkers != tt.wantMarkers {
+				t.Fatalf("got %+v, %v\nwant body %q markers=%v", got.Candidate, err, tt.wantBody, tt.wantMarkers)
+			}
+		})
+	}
+}
+
+func TestPublishBaseFetchFailureIsTheError(t *testing.T) {
+	boom := errors.New("boom")
+	backend := &fetchtest.Client{PublishFn: conflictAt6, FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		if r.Path != "/doc.md" {
+			return fetch.Result{}, boom
+		}
+		return fetchtest.Head("theirs", 6, nil), nil
+	}}
+	_, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: "x", ExpectedVersion: 5}, merge.OnConflictMerge)
+	if !errors.Is(err, boom) || err.Error() != "fetch base v5: boom" {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// Without the version the writer started from there is nothing to merge
+// against: it never existed, or retention pruned it. The conflict is the answer.
+func TestPublishWithoutABaseReportsTheConflict(t *testing.T) {
+	backend := &fetchtest.Client{PublishFn: conflictAt6, FetchFn: history(5, "base", fetchtest.Head("theirs", 6, nil))}
+	got, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: "mine", ExpectedVersion: 9}, merge.OnConflictMerge)
+	if err != nil || got.Candidate != nil || got.Response.Status != protocol.StatusConflict || got.Response.Metadata["server-version"] != "6" {
+		t.Errorf("got %+v, %v, want the server's conflict passed through", got, err)
+	}
+}
+
+func TestNegativeVersionsAreRefusedUnsent(t *testing.T) {
+	backend := &fetchtest.Client{}
+	_, errPublish := doc(backend).Publish(t.Context(), docwrite.Write{ExpectedVersion: -1}, merge.OnConflictMerge)
+	_, errAppend := doc(backend).Append(t.Context(), docwrite.AppendRequest{Body: "x", ExpectedVersion: -1})
+	if !errors.Is(errPublish, docwrite.ErrInvalidExpectedVersion) || !errors.Is(errAppend, docwrite.ErrInvalidExpectedVersion) {
+		t.Errorf("publish err = %v, append err = %v", errPublish, errAppend)
+	}
+	if len(backend.PublishCalls)+len(backend.AppendCalls) != 0 {
+		t.Error("a refused write reached the backend")
+	}
+}
+
+// An agent that republishes the reviewed candidate at the version it names succeeds.
+func TestRepublishingTheCandidateLands(t *testing.T) {
+	published := 0
+	backend := &fetchtest.Client{
+		PublishFn: func(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+			published++
+			if published == 1 {
+				return conflictAt6(ctx, r)
+			}
+			return answer(protocol.StatusOK, map[string]string{"version": "7"})(ctx, r)
+		},
+		FetchFn: history(5, "a\nb\nc\n", fetchtest.Head("a\nb\nC\n", 6, nil)),
+		// The fake checks versions like the server: it holds v6 when we republish.
+		Published: map[string]fetch.Result{"host:6309/doc.md": fetchtest.Head("a\nb\nC\n", 6, nil)},
+	}
+	first, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: "a\nB\nc\n", ExpectedVersion: 5}, merge.OnConflictMerge)
+	if err != nil || first.Candidate == nil {
+		t.Fatalf("first = %+v, %v", first, err)
+	}
+	second, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: first.Candidate.Body, ExpectedVersion: first.Candidate.PublishAtVersion}, merge.OnConflictMerge)
+	if err != nil || second.Candidate != nil || versionOf(second) != 7 || backend.PublishCalls[1].ExpectedVersion != 6 {
+		t.Errorf("second = %+v, %v, sent = %+v", second, err, backend.PublishCalls[1])
+	}
+}
+
+// What counts as "our write is at the head": the body at the next version under
+// every metadata key that was sent. Both modes and the conflict path agree.
+func TestPublishRecognizesItsOwnWrite(t *testing.T) {
+	tags := map[string]string{"tags": "a,b"}
+	tests := []struct {
+		name      string
+		meta      map[string]string
+		publish   func(context.Context, fetch.WriteRequest) (fetch.Result, error)
+		head      fetch.Result
+		wantOurs  bool
+		wantError bool
+	}{
+		{name: "lost response, write landed", head: fetchtest.Head("mine", 4, nil), wantOurs: true},
+		{name: "lost response, write did not land", head: fetchtest.Head("old", 3, nil), wantError: true},
+		{name: "lost response, someone else wrote", head: fetchtest.Head("theirs", 4, nil), wantError: true},
+		{name: "lost response, our metadata landed", meta: tags, head: fetchtest.Head("mine", 4, tags), wantOurs: true},
+		{name: "lost response, someone else's metadata", meta: tags, head: fetchtest.Head("mine", 4, map[string]string{"tags": "z"}), wantError: true},
+		{name: "lost response, empty value sent, key absent", meta: map[string]string{"tags": ""}, head: fetchtest.Head("mine", 4, nil), wantError: true},
+		{name: "conflict with our own attempt", publish: conflictAt6, head: fetchtest.Head("mine", 4, nil), wantOurs: true},
+		{name: "conflict with another writer", publish: conflictAt6, head: fetchtest.Head("theirs", 4, nil)},
+		{name: "conflict, same body, someone else's metadata", meta: tags, publish: conflictAt6, head: fetchtest.Head("mine", 4, nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			publish := tt.publish
+			if publish == nil {
+				publish = func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+					return fetch.Result{}, fetchtest.LostResponse()
+				}
+			}
+			backend := &fetchtest.Client{PublishFn: publish, FetchFn: history(3, "old", tt.head)}
+			got, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: "mine", ExpectedVersion: 3, Metadata: tt.meta}, merge.OnConflictMerge)
+			switch {
+			case tt.wantError:
+				if !errors.Is(err, fetch.ErrOutcomeUnknown) {
+					t.Fatalf("err = %v, want the unknown outcome to stand", err)
+				}
+			case tt.wantOurs:
+				if err != nil || !got.Reconciled || got.Response.Status != protocol.StatusOK || versionOf(got) != 4 {
+					t.Fatalf("got %+v, %v, want our write found at v4", got, err)
+				}
+			default:
+				if err != nil || got.Candidate == nil {
+					t.Fatalf("got %+v, %v, want a candidate", got, err)
+				}
+			}
+			if len(backend.PublishCalls) != 1 {
+				t.Errorf("publishes = %d, want exactly one: never resend", len(backend.PublishCalls))
+			}
+		})
 	}
 }
 
 // A write whose response was lost may have landed: look at the head, never resend.
 func TestWritesReconcileAnUnknownOutcome(t *testing.T) {
 	meta := map[string]string{"agent": "me"}
+	publish := func(d *docwrite.Doc) (docwrite.Result, error) {
+		return d.Publish(t.Context(), docwrite.Write{Body: "mine", ExpectedVersion: 3, Metadata: meta}, merge.OnConflictFail)
+	}
+	appendMore := func(d *docwrite.Doc) (docwrite.Result, error) {
+		return d.Append(t.Context(), docwrite.AppendRequest{Body: "more", ExpectedVersion: 3, Metadata: meta})
+	}
+	archive := func(d *docwrite.Doc) (docwrite.Result, error) { return d.Archive(t.Context()) }
+	archived := fetch.Result{Response: protocol.Response{Status: protocol.StatusArchived, Metadata: map[string]string{"version": "4"}}}
 	tests := []struct {
-		name        string
-		call        func(*docwrite.Doc) (string, int, error)
-		head        fetch.Result
-		wantStatus  string
-		wantVersion int
+		name   string
+		call   func(*docwrite.Doc) (docwrite.Result, error)
+		head   fetch.Result
+		landed bool
 	}{
-		{"publish landed", func(d *docwrite.Doc) (string, int, error) {
-			o, err := d.Publish(t.Context(), merge.Write{Path: "/doc.md", Body: "mine", ExpectedVersion: 3, Metadata: meta}, merge.OnConflictFail)
-			return o.Publish.Status, o.Publish.Version, err
-		}, fetchtest.Head("mine", 4, meta), protocol.StatusOK, 4},
-		{"publish not landed", func(d *docwrite.Doc) (string, int, error) {
-			o, err := d.Publish(t.Context(), merge.Write{Path: "/doc.md", Body: "mine", ExpectedVersion: 3, Metadata: meta}, merge.OnConflictFail)
-			return o.Publish.Status, o.Publish.Version, err
-		}, fetchtest.Head("theirs", 4, nil), "", 0},
-		{"append landed", func(d *docwrite.Doc) (string, int, error) {
-			r, err := d.Append(t.Context(), docwrite.AppendRequest{Body: "more", ExpectedVersion: 3, Metadata: meta})
-			return r.Response.Status, versionOf(r), err
-		}, fetchtest.Head("old\nmore", 4, meta), protocol.StatusOK, 4},
-		{"append by someone else", func(d *docwrite.Doc) (string, int, error) {
-			r, err := d.Append(t.Context(), docwrite.AppendRequest{Body: "more", ExpectedVersion: 3, Metadata: meta})
-			return r.Response.Status, versionOf(r), err
-		}, fetchtest.Head("old\nmore", 4, map[string]string{"agent": "other"}), "", 0},
-		{"archive landed", func(d *docwrite.Doc) (string, int, error) {
-			r, err := d.Archive(t.Context())
-			return r.Response.Status, versionOf(r), err
-		}, fetch.Result{Response: protocol.Response{Status: protocol.StatusArchived, Metadata: map[string]string{"version": "4"}}}, protocol.StatusOK, 4},
-		{"archive still live", func(d *docwrite.Doc) (string, int, error) {
-			r, err := d.Archive(t.Context())
-			return r.Response.Status, versionOf(r), err
-		}, fetchtest.Head("live", 3, nil), "", 0},
+		{"publish landed", publish, fetchtest.Head("mine", 4, meta), true},
+		{"publish not landed", publish, fetchtest.Head("theirs", 4, nil), false},
+		{"append landed", appendMore, fetchtest.Head("old\nmore", 4, meta), true},
+		{"append by someone else", appendMore, fetchtest.Head("old\nmore", 4, map[string]string{"agent": "other"}), false},
+		{"append without the key it sent", appendMore, fetchtest.Head("old\nmore", 4, nil), false},
+		{"archive landed", archive, archived, true},
+		{"archive still live", archive, fetchtest.Head("live", 3, nil), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -101,13 +262,13 @@ func TestWritesReconcileAnUnknownOutcome(t *testing.T) {
 				},
 				FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) { return tt.head, nil },
 			}
-			status, version, err := tt.call(doc(backend))
-			if tt.wantStatus == "" {
+			got, err := tt.call(doc(backend))
+			if !tt.landed {
 				if !errors.Is(err, fetch.ErrOutcomeUnknown) {
 					t.Fatalf("err = %v, want the unknown outcome to stand", err)
 				}
-			} else if err != nil || status != tt.wantStatus || version != tt.wantVersion {
-				t.Fatalf("got %q v%d, %v; want %q v%d reconciled", status, version, err, tt.wantStatus, tt.wantVersion)
+			} else if err != nil || !got.Reconciled || got.Response.Status != protocol.StatusOK || versionOf(got) != 4 {
+				t.Fatalf("got %+v, %v; want ok v4 reconciled", got, err)
 			}
 			if n := len(backend.PublishCalls) + len(backend.AppendCalls) + len(backend.ArchiveCalls); n != 1 {
 				t.Errorf("writes sent = %d, want exactly one", n)
@@ -116,7 +277,7 @@ func TestWritesReconcileAnUnknownOutcome(t *testing.T) {
 	}
 }
 
-// A write that never left has a known outcome and costs no probe.
+// A write that never left has a known outcome and costs no probe, in either mode.
 func TestDefiniteFailuresDoNotProbe(t *testing.T) {
 	refused := errors.New("dial refused")
 	backend := &fetchtest.Client{
@@ -125,16 +286,52 @@ func TestDefiniteFailuresDoNotProbe(t *testing.T) {
 		ArchiveFn: func(context.Context, fetch.ArchiveRequest) (fetch.Result, error) { return fetch.Result{}, refused },
 	}
 	d := doc(backend)
-	_, errPublish := d.Publish(t.Context(), merge.Write{Path: "/doc.md", Body: "x", ExpectedVersion: 3}, merge.OnConflictFail)
+	_, errMerge := d.Publish(t.Context(), docwrite.Write{Body: "x", ExpectedVersion: 3}, merge.OnConflictMerge)
+	_, errFail := d.Publish(t.Context(), docwrite.Write{Body: "x", ExpectedVersion: 3}, merge.OnConflictFail)
 	_, errAppend := d.Append(t.Context(), docwrite.AppendRequest{Body: "x", ExpectedVersion: 3})
 	_, errArchive := d.Archive(t.Context())
-	for name, err := range map[string]error{"publish": errPublish, "append": errAppend, "archive": errArchive} {
+	for name, err := range map[string]error{"publish merge": errMerge, "publish fail": errFail, "append": errAppend, "archive": errArchive} {
 		if !errors.Is(err, refused) {
 			t.Errorf("%s err = %v", name, err)
 		}
 	}
+	// Tool text in merge mode has always named the step.
+	if errMerge.Error() != "publish: dial refused" || errFail.Error() != "dial refused" {
+		t.Errorf("merge = %q, fail = %q", errMerge, errFail)
+	}
 	if len(backend.FetchCalls) != 0 {
 		t.Errorf("head probes = %+v, want none", backend.FetchCalls)
+	}
+}
+
+// Every call a publish makes, the conflict path's two reads included, runs
+// under the caller's context, so a cancelled tool call stops.
+func TestPublishPassesItsContextToEveryCall(t *testing.T) {
+	type key struct{}
+	ctx := context.WithValue(t.Context(), key{}, "caller")
+	calls := 0
+	check := func(ctx context.Context) {
+		calls++
+		if ctx.Value(key{}) != "caller" {
+			t.Errorf("call %d ran under a context that is not the caller's", calls)
+		}
+	}
+	inner := history(5, "a\nb\nc\n", fetchtest.Head("a\nb\nC\n", 6, nil))
+	backend := &fetchtest.Client{
+		PublishFn: func(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+			check(ctx)
+			return conflictAt6(ctx, r)
+		},
+		FetchFn: func(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			check(ctx)
+			return inner(ctx, r)
+		},
+	}
+	if got, err := doc(backend).Publish(ctx, docwrite.Write{Body: "a\nB\nc\n", ExpectedVersion: 5}, merge.OnConflictMerge); err != nil || got.Candidate == nil {
+		t.Fatalf("Publish = %+v, %v", got, err)
+	}
+	if calls != 3 {
+		t.Errorf("calls = %d, want publish, fetch current, fetch base", calls)
 	}
 }
 
@@ -168,9 +365,34 @@ func TestPublishKeepsTheServersExplanation(t *testing.T) {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusBadRequest, Body: why}}, nil
 	}}
 	for _, mode := range []string{merge.OnConflictMerge, merge.OnConflictFail} {
-		got, err := doc(backend).Publish(t.Context(), merge.Write{Path: "/doc.md", Body: "x", ExpectedVersion: 1}, mode)
-		if err != nil || got.Publish.Status != protocol.StatusBadRequest || got.Publish.Body != why {
-			t.Errorf("%s mode = %+v, %v, want the refusal with its body", mode, got.Publish, err)
+		got, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: "x", ExpectedVersion: 1}, mode)
+		if err != nil || got.Response.Status != protocol.StatusBadRequest || got.Response.Body != why {
+			t.Errorf("%s mode = %+v, %v, want the refusal with its body", mode, got.Response, err)
 		}
+	}
+}
+
+// An answered write is reported as answered, whatever its metadata looks like:
+// calling it a failure would invite a resend of a write that landed.
+func TestAnAnsweredWriteIsPassedOnAsWritten(t *testing.T) {
+	backend := &fetchtest.Client{PublishFn: answer(protocol.StatusOK, map[string]string{"version": "seven"})}
+	got, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: "x", ExpectedVersion: 1}, merge.OnConflictFail)
+	if err != nil || got.Response.Metadata["version"] != "seven" {
+		t.Errorf("got %+v, %v", got, err)
+	}
+}
+
+// The head is different: its version decides whether a write landed.
+func TestAHeadWithAMalformedVersionSettlesNothing(t *testing.T) {
+	backend := &fetchtest.Client{
+		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+			return fetch.Result{}, fetchtest.LostResponse()
+		},
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "x", Metadata: map[string]string{"version": "seven"}}}, nil
+		},
+	}
+	if _, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: "x", ExpectedVersion: 1}, merge.OnConflictFail); !errors.Is(err, fetch.ErrOutcomeUnknown) {
+		t.Errorf("err = %v, want the unknown outcome to stand", err)
 	}
 }

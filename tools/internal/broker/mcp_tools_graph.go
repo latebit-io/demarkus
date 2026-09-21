@@ -2,24 +2,17 @@ package broker
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"path"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
-	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/listing"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 // crawlFetchFn returns graphstore.CrawlAndPersist's best-effort fetchFunc
@@ -43,7 +36,7 @@ func (g *mcpGateway) crawlFetchFn(ctx context.Context) graphstore.FetchFunc {
 		if tenant != "" && worldName != tenant {
 			return graph.FetchResult{}, fmt.Errorf("world %q is outside your world %q", worldName, tenant)
 		}
-		world, ok := g.srv.cfg.FindWorld(worldName)
+		source, ok := g.worldSource(worldName, target.Path)
 		if !ok {
 			return graph.FetchResult{}, fmt.Errorf("unknown graph source world %q", worldName)
 		}
@@ -52,7 +45,7 @@ func (g *mcpGateway) crawlFetchFn(ctx context.Context) graphstore.FetchFunc {
 			return graph.FetchResult{}, derr
 		}
 		return graph.FetchResult{
-			Source:   links.NodeURL(resolveWorldAddress(&world), target.Path),
+			Source:   source,
 			Status:   result.Response.Status,
 			Body:     result.Response.Body,
 			Metadata: result.Response.Metadata,
@@ -71,89 +64,38 @@ func (g *mcpGateway) seedGraphStore(ctx context.Context, state *gatewayGraph) {
 	}
 }
 
-// Cold pods seed snapshots; source revisions select adjacency.
+// seedWorldGraph seeds one world's published graph into the caller's scope.
+// Rows are translated to world names, then filtered to the tenant's own.
 func (g *mcpGateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, worldName string) {
-	state.seedGate.Run(ctx, worldName, func(ctx context.Context) bool {
-		if g.seedPass(ctx, state, worldName) {
-			return true
-		}
-		state.graphStore.MarkSeedFailure(worldName)
-		return false
+	state.graphStore.Seed(ctx, graphstore.SeedSource{
+		Owner: worldName,
+		Fetch: func(ctx context.Context, path, ifNoneMatch string) (protocol.Response, error) {
+			result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: path, IfNoneMatch: ifNoneMatch})
+			return result.Response, err
+		},
+		Rewrite: func(nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) ([]graphstore.StoredNode, []graphstore.StoredEdge) {
+			g.translateSeedURLs(nodes, edges)
+			return state.ownedRows(nodes, edges)
+		},
+		Problem: func(p graphstore.SeedProblem) {
+			g.log.Warn("graph seed failed", "world", p.Owner, "step", p.Step, "path", p.Path, "status", p.Status, "err", p.Err)
+		},
 	})
-}
-
-// seedPass reports whether the world's published graph was current, refreshed or absent.
-func (g *mcpGateway) seedPass(ctx context.Context, state *gatewayGraph, worldName string) bool { //nolint:gocyclo // snapshot-first fallback has explicit terminal states
-	etag := state.graphStore.SeedEtag(worldName)
-	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: graphstore.SnapshotManifestPath, IfNoneMatch: etag})
-	if err != nil {
-		g.log.Warn("graph seed fetch failed", "world", worldName, "err", err)
-		return false
-	}
-	if result.Response.Status == protocol.StatusNotModified {
-		return true
-	}
-	if result.Response.Status == protocol.StatusOK {
-		nodes, edges, loadErr := graphstore.LoadSnapshot(graphstore.SnapshotManifestPath, result.Response, func(shardPath string) (protocol.Response, error) {
-			shard, fetchErr := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: shardPath})
-			return shard.Response, fetchErr
-		})
-		if loadErr != nil {
-			g.log.Warn("graph snapshot load failed", "world", worldName, "err", loadErr)
-			return false
-		}
-		g.translateSeedURLs(nodes, edges)
-		state.replaceSeed(worldName, nodes, edges)
-		if snapshotEtag := result.Response.Metadata["etag"]; snapshotEtag != "" {
-			state.graphStore.SetSeedEtag(worldName, snapshotEtag)
-		}
-		return true
-	}
-	if result.Response.Status != protocol.StatusNotFound {
-		g.log.Warn("graph snapshot fetch returned unexpected status", "world", worldName, "status", result.Response.Status)
-		return false
-	}
-
-	result, err = g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: graphstore.LegacyExportPath, IfNoneMatch: etag})
-	if err != nil {
-		g.log.Warn("legacy graph seed fetch failed", "world", worldName, "err", err)
-		return false
-	}
-	if result.Response.Status == protocol.StatusNotFound {
-		return true
-	}
-	if result.Response.Status == protocol.StatusNotModified {
-		return true
-	}
-	if result.Response.Status != protocol.StatusOK {
-		g.log.Warn("legacy graph seed fetch returned unexpected status", "world", worldName, "status", result.Response.Status)
-		return false
-	}
-	nodes, edges, parseErr := graphstore.ParseExportStrict(result.Response.Body)
-	if parseErr != nil {
-		g.log.Warn("legacy graph seed parse failed", "world", worldName, "err", parseErr)
-		return false
-	}
-	g.translateSeedURLs(nodes, edges)
-	state.replaceSeed(worldName, nodes, edges)
-	if e := result.Response.Metadata["etag"]; e != "" {
-		state.graphStore.SetSeedEtag(worldName, e)
-	}
-	return true
 }
 
 // A tenant snapshot cannot introduce another world's source rows, even if
 // it aggregates several worlds. Destinations remain labels from owned sources.
-func (state *gatewayGraph) replaceSeed(owner string, nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) {
-	if state.tenant != "" {
-		owned := func(raw string) bool {
-			world, _, err := parseToolURL(links.CanonicalURL(raw))
-			return err == nil && world == state.tenant
-		}
-		nodes = slices.DeleteFunc(nodes, func(n graphstore.StoredNode) bool { return !owned(n.URL) })
-		edges = slices.DeleteFunc(edges, func(e graphstore.StoredEdge) bool { return !owned(e.From) })
+func (state *gatewayGraph) ownedRows(nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) ([]graphstore.StoredNode, []graphstore.StoredEdge) {
+	if state.tenant == "" {
+		return nodes, edges
 	}
-	state.graphStore.ReplaceSeed(owner, nodes, edges)
+	owned := func(raw string) bool {
+		world, _, err := parseToolURL(links.CanonicalURL(raw))
+		return err == nil && world == state.tenant
+	}
+	nodes = slices.DeleteFunc(nodes, func(n graphstore.StoredNode) bool { return !owned(n.URL) })
+	edges = slices.DeleteFunc(edges, func(e graphstore.StoredEdge) bool { return !owned(e.From) })
+	return nodes, edges
 }
 
 // translateSeedURLs rewrites world dial addresses to mark://{worldName}/...;
@@ -193,97 +135,26 @@ func (g *mcpGateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []gr
 	}
 }
 
-// Seed before querying so cold pods can answer without a local crawl.
 func (g *mcpGateway) handleMarkBacklinks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-	// Validate the URL shape so an agent typo doesn't silently
-	// produce "no backlinks" against a malformed lookup key.
-	if _, _, perr := parseToolURL(raw); perr != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", perr)), nil
-	}
-	state, err := g.graphFor(ctx)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("graph scope: %v", err)), nil
-	}
-	g.seedGraphStore(ctx, state)
-	freshness := g.revalidateBacklinks(ctx, state, raw)
-	backlinks := state.graphStore.BacklinksEnriched(raw)
-	if len(backlinks) == 0 {
-		return mcp.NewToolResultText(
-			freshness + fmt.Sprintf("No backlinks found for %s\nRun mark_graph to populate the broker's graph store. (Note: the broker's graph store is ephemeral; it resets on broker restart.)", raw),
-		), nil
-	}
-	var b strings.Builder
-	b.WriteString(freshness)
-	fmt.Fprintf(&b, "Backlinks for %s (%d):\n\n", raw, len(backlinks))
-	for _, bl := range backlinks {
-		ann := graph.EdgeAnnotation(bl.Rel, bl.Label, bl.Anchor, bl.Count) + bl.Observation.Annotation()
-		if bl.Title != "" {
-			fmt.Fprintf(&b, "- [%s](%s)%s\n", bl.Title, bl.URL, ann)
-		} else {
-			fmt.Fprintf(&b, "- %s%s\n", bl.URL, ann)
-		}
-	}
-	return mcp.NewToolResultText(b.String()), nil
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.Backlinks(ctx, raw) })
 }
 
-// handleMarkGraph crawls a seed URL into the broker's ephemeral graph
-// store. Depth defaults to 2, capped at 5; MaxNodes=200 (both the local
-// demarkus-mcp's conventions). Crawl fetches dispatch unauthenticated.
 func (g *mcpGateway) handleMarkGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-	if _, _, perr := parseToolURL(raw); perr != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", perr)), nil
-	}
-	depth := max(1, min(req.GetInt("depth", 2), 5))
-	state, err := g.graphFor(ctx)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("graph scope: %v", err)), nil
-	}
-
-	// Seed before crawling so depth-limited crawls still benefit from
-	// hub context.
-	g.seedGraphStore(ctx, state)
-
-	crawled, crawlErr := state.graphStore.CrawlAndPersist(
-		ctx,
-		raw,
-		g.crawlFetchFn(ctx),
-		graphstore.CrawlOptions{
-			MaxDepth: depth,
-			MaxNodes: 200,
-			Workers:  5,
-		},
-	)
-	if crawlErr != nil && crawled == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", crawlErr)), nil
-	}
-	text := formatGraphSummary(crawled, raw)
-	if warning := graph.CrawlWarning(crawlErr, crawled.Outcome); warning != nil {
-		text += fmt.Sprintf("\nwarning: %v\n", warning)
-	}
-	return mcp.NewToolResultText(text), nil
+	// An explicit 0 is the shallowest crawl here, not the default depth.
+	args := marktools.GraphArgs{URL: raw, Depth: max(1, req.GetInt("depth", 2))}
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.Graph(ctx, args) })
 }
 
-func formatGraphSummary(gr *graph.Graph, startURL string) string {
-	return graph.Summary(gr, startURL)
-}
-
-// handleMarkGraphExport returns the broker's ephemeral graph
-// store as a publishable markdown document. Pure local read.
-// Empty store → empty document (still valid markdown).
 func (g *mcpGateway) handleMarkGraphExport(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	state, err := g.graphFor(ctx)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("graph scope: %v", err)), nil
-	}
-	return mcp.NewToolResultText(state.graphStore.Export()), nil
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.GraphExport(ctx) })
 }
 
 // defaultGraphRetention bounds the published graph document's version
@@ -298,69 +169,16 @@ func (g *mcpGateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToo
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-	worldName, urlPath, err := parseToolURL(raw)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
+	args := marktools.GraphPublishArgs{URL: raw, Retention: req.GetInt("retention", defaultGraphRetention)}
+	if version, err := req.RequireInt("expected_version"); err == nil {
+		args.ExpectedVersion = &version
 	}
-	expectedVersion, err := req.RequireInt("expected_version")
-	if err != nil {
-		return mcp.NewToolResultError("expected_version is required"), nil
-	}
-	if expectedVersion < 0 {
-		return mcp.NewToolResultError("expected_version must be >= 0"), nil
-	}
-	retention := req.GetInt("retention", defaultGraphRetention)
-	if retention < 0 {
-		return mcp.NewToolResultError("retention must be >= 0 (0 keeps every version)"), nil
-	}
-	claims, ok := claimsFromCtx(ctx)
-	if !ok {
-		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
-	}
-	// Same writer-allow gate every other write verb enforces.
-	if _, errRes := g.gateWrite(claims, worldName); errRes != nil {
-		return errRes, nil
-	}
-	state, err := g.graphFor(ctx)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("graph scope: %v", err)), nil
-	}
-	body := state.graphStore.Export()
-	meta := agentMetaFromClaims(claims)
-	if retention > 0 {
-		meta["retention"] = strconv.Itoa(retention)
-	}
-	result, err := g.dispatchWithWriteAuth(ctx, worldName, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Publish(ctx, fetch.WriteRequest{
-			Host: worldName, Path: urlPath, Body: body, Token: token,
-			ExpectedVersion: expectedVersion, Metadata: meta,
-		})
-	})
-	if err != nil {
-		return g.toolErrorFor("graph publish", worldName, err), nil
-	}
-	var out strings.Builder
-	fmt.Fprintf(&out, "Published graph (%d nodes, %d edges) to %s\n", state.graphStore.NodeCount(), state.graphStore.EdgeCount(), raw)
-	out.WriteString(mcpfmt.Full(result, "version", "modified", "server-version"))
-	return mcp.NewToolResultText(out.String()), nil
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.GraphPublish(ctx, args) })
 }
 
-// maxIndexDocuments caps FETCH attempts so failed peers cannot bypass the
-// work bound. Large worlds can index disjoint subtrees separately.
-const maxIndexDocuments = 1000
-
-// errIndexTruncated is sentinel-returned by walkDir to short-
-// circuit the recursion when maxIndexDocuments is reached.
-var errIndexTruncated = errors.New("document limit reached, index is truncated")
-var errIndexPublishUnauthorized = errors.New("index publish unauthorized")
-
-// handleMarkIndex crawls a source world, collects content
-// hashes, and either returns the index document (dry_run) or
-// publishes it to a target world. Mirrors the local
-// demarkus-mcp's mark_index behavior, including the manifest
-// safeguards: target world must have an agent manifest or
-// force=true must be passed to override.
-func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic,gocyclo // MCP signature; validation and publication stay one flow
+// handleMarkIndex answers mark_index. The shared body authorizes the publish
+// target before the first request of the crawl; a dry run asks nobody.
+func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	sourceURL, err := req.RequireString("source")
 	if err != nil {
 		return mcp.NewToolResultError("source is required"), nil
@@ -369,351 +187,11 @@ func (g *mcpGateway) handleMarkIndex(ctx context.Context, req mcp.CallToolReques
 	if err != nil {
 		return mcp.NewToolResultError("target is required"), nil
 	}
-	sourceWorld, sourcePath, err := parseToolURL(sourceURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid source URL: %v", err)), nil
+	args := marktools.IndexArgs{
+		Source: sourceURL, Target: targetURL,
+		DryRun:          req.GetBool("dry_run", false),
+		Force:           req.GetBool("force", false),
+		ExpectedVersion: req.GetInt("expected_version", 0),
 	}
-	if sourcePath == "" {
-		sourcePath = "/"
-	}
-	targetWorld, targetPath, err := parseToolURL(targetURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid target URL: %v", err)), nil
-	}
-	dryRun := req.GetBool("dry_run", false)
-	force := req.GetBool("force", false)
-	expectedVersion := req.GetInt("expected_version", 0)
-	if expectedVersion < 0 {
-		return mcp.NewToolResultError("expected_version must be non-negative"), nil
-	}
-	claims, ok := claimsFromCtx(ctx)
-	if !ok {
-		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
-	}
-	// Writer-allow gate on the publish target; dry_run writes nothing.
-	if !dryRun {
-		if _, errRes := g.gateWrite(claims, targetWorld); errRes != nil {
-			return errRes, nil
-		}
-	}
-
-	// Manifest safeguards. Source warning is informational;
-	// target absence is a hard block unless force or dry_run.
-	warnings, block := g.checkIndexManifests(ctx, manifestCheck{sourceWorld: sourceWorld, targetWorld: targetWorld, dryRun: dryRun, force: force})
-	if block != nil {
-		return block, nil
-	}
-
-	// Crawl source world. sourceRoot bounds every destination (no "../"
-	// escapes); visited is seeded with the root so a listing entry
-	// resolving back to it cannot re-walk the tree.
-	sourceScheme := "mark://" + sourceWorld
-	sourceRoot := path.Clean(sourcePath)
-	if !strings.HasSuffix(sourceRoot, "/") {
-		sourceRoot += "/"
-	}
-	iw := &indexWalk{
-		g:            g,
-		worldName:    sourceWorld,
-		sourceScheme: sourceScheme,
-		sourceRoot:   sourceRoot,
-		visited:      map[string]struct{}{sourceRoot: {}},
-	}
-	walkErr := iw.walk(ctx, sourcePath, 0)
-	entries := iw.entries
-	if walkErr != nil && !errors.Is(walkErr, errIndexTruncated) {
-		return mcp.NewToolResultError(fmt.Sprintf("crawl failed: %v", walkErr)), nil
-	}
-	if errors.Is(walkErr, errIndexTruncated) {
-		warnings = append(warnings, "warning: crawl bounds reached, some content may not be indexed")
-	}
-	if len(iw.incomplete) > 0 {
-		warnings = append(warnings, fmt.Sprintf("warning: crawl skipped %d entries, index is incomplete", len(iw.incomplete)))
-	}
-
-	indexedAt := time.Now()
-	body := index.Build(sourceScheme, indexedAt, entries)
-
-	if dryRun {
-		var b strings.Builder
-		for _, w := range warnings {
-			b.WriteString(w + "\n")
-		}
-		fmt.Fprintf(&b, "Indexed %d documents from %s (dry run, logical entry preview only; publication writes a v2 manifest and shards)\n\n", len(entries), sourceScheme)
-		b.WriteString(body)
-		return mcp.NewToolResultText(b.String()), nil
-	}
-	if errors.Is(walkErr, errIndexTruncated) || len(iw.incomplete) > 0 {
-		return mcp.NewToolResultError("crawl incomplete; refusing to publish an authoritative index"), nil
-	}
-
-	manifestSource := sourceScheme
-	logicalEntries := entries
-	// Merge with an existing legacy index or verified sharded generation.
-	if expectedVersion > 0 {
-		existing, fetchErr := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: targetWorld, Path: targetPath})
-		if fetchErr != nil {
-			return g.toolErrorFor("index (fetch existing)", targetWorld, fetchErr), nil
-		}
-		if existing.Response.Status != protocol.StatusOK {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to fetch existing index: %s", existing.Response.Status)), nil
-		}
-		existingEntries, loadErr := index.LoadEntries(targetPath, existing.Response.Body, func(shardPath string) (protocol.Response, error) {
-			shard, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: targetWorld, Path: shardPath})
-			return shard.Response, err
-		})
-		if loadErr != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to read existing index: %v", loadErr)), nil
-		}
-		logicalEntries = index.Merge(existingEntries, sourceScheme, entries)
-		manifestSource = "mark://" + targetWorld
-	}
-
-	meta := agentMetaFromClaims(claims)
-	result, err := g.dispatchWithWriteAuth(ctx, targetWorld, func(token string) (fetch.Result, error) {
-		published, publishErr := index.PublishGeneration(ctx, index.PublishOptions{
-			ManifestPath:            targetPath,
-			Source:                  manifestSource,
-			Indexed:                 indexedAt,
-			Entries:                 logicalEntries,
-			ExpectedManifestVersion: &expectedVersion,
-		}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
-			fetched, fetchErr := g.dispatcher.Fetch(ioCtx, fetch.FetchRequest{Host: targetWorld, Path: docPath})
-			return fetched.Response, fetchErr
-		}, func(ioCtx context.Context, docPath, docBody string, expected int) (protocol.Response, error) {
-			publishedDoc, publishDocErr := g.dispatcher.Publish(ioCtx, fetch.WriteRequest{
-				Host: targetWorld, Path: docPath, Body: docBody, Token: token,
-				ExpectedVersion: expected, Metadata: meta,
-			})
-			if publishDocErr == nil && publishedDoc.Response.Status == protocol.StatusUnauthorized {
-				return publishedDoc.Response, errIndexPublishUnauthorized
-			}
-			return publishedDoc.Response, publishDocErr
-		})
-		if publishErr != nil {
-			if errors.Is(publishErr, errIndexPublishUnauthorized) {
-				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
-			}
-			return fetch.Result{}, publishErr
-		}
-		return fetch.Result{Response: protocol.Response{
-			Status: protocol.StatusOK,
-			Metadata: map[string]string{
-				"version":          strconv.Itoa(published.ManifestVersion),
-				"shards-published": strconv.Itoa(published.ShardsPublished),
-				"shards-reused":    strconv.Itoa(published.ShardsReused),
-			},
-		}}, nil
-	})
-	if err != nil {
-		return g.toolErrorFor("index (publish)", targetWorld, err), nil
-	}
-
-	var out strings.Builder
-	for _, w := range warnings {
-		out.WriteString(w + "\n")
-	}
-	fmt.Fprintf(&out, "Indexed %d documents from %s\n", len(entries), sourceScheme)
-	out.WriteString(mcpfmt.Full(result, "version", "shards-published", "shards-reused"))
-	return mcp.NewToolResultText(out.String()), nil
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.Index(ctx, args) })
 }
-
-// manifestCheck is one mark_index manifest check.
-type manifestCheck struct {
-	sourceWorld, targetWorld string
-	dryRun, force            bool
-}
-
-// checkIndexManifests, as the local demarkus-mcp does: a source without an
-// agent manifest warns, a target without one blocks unless force is set.
-func (g *mcpGateway) checkIndexManifests(ctx context.Context, check manifestCheck) ([]string, *mcp.CallToolResult) {
-	sourceWorld, targetWorld, dryRun, force := check.sourceWorld, check.targetWorld, check.dryRun, check.force
-	var warnings []string
-	// An unread manifest is not a missing one: the source only warns, and
-	// force overrides a missing target manifest, never an unreachable target.
-	srcManifest, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: sourceWorld, Path: protocol.WellKnownManifestPath})
-	switch {
-	case err != nil:
-		warnings = append(warnings, fmt.Sprintf("warning: could not check source agent manifest: %v", err))
-	case srcManifest.Response.Status != protocol.StatusOK:
-		warnings = append(warnings, "warning: source server has no agent manifest")
-	}
-	if dryRun {
-		return warnings, nil
-	}
-
-	tgtManifest, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: targetWorld, Path: protocol.WellKnownManifestPath})
-	if err != nil {
-		return warnings, mcp.NewToolResultError(fmt.Sprintf("could not check target agent manifest: %v", err))
-	}
-	switch tgtManifest.Response.Status {
-	case protocol.StatusOK:
-	case protocol.StatusNotFound:
-		if !force {
-			return warnings, mcp.NewToolResultError(
-				"target server has no agent manifest; cannot verify it accepts index publications. " +
-					"Use force=true to override, or publish a manifest at /.well-known/agent-manifest.md on the target.",
-			)
-		}
-		warnings = append(warnings, "warning: target server has no agent manifest (force=true override)")
-	default:
-		// Unauthorized or a server fault says nothing about the manifest.
-		return warnings, mcp.NewToolResultError("could not check target agent manifest: status " + tgtManifest.Response.Status)
-	}
-	return warnings, nil
-}
-
-// mark_index traversal bounds, independent of maxIndexDocuments: depth is
-// the cycle-safety valve (self-referencing listings mint ever-deeper paths
-// visited cannot catch), the LIST budget bounds breadth and fileless chains.
-const (
-	maxIndexDepth = 16
-	maxIndexLists = 4096
-)
-
-// indexWalk carries mark_index's crawl state. visited keys on canonical
-// directory paths; sourceRoot bounds every directory AND file destination
-// (escape via "../" in a LIST entry is skipped).
-type indexWalk struct {
-	g            *mcpGateway
-	worldName    string
-	sourceScheme string
-	sourceRoot   string
-	entries      []index.Entry
-	visited      map[string]struct{}
-	lists        int
-	fetches      int
-	incomplete   []string
-}
-
-// walk LISTs the tree and FETCHes each file for its content-hash. Bound
-// violations return errIndexTruncated (a handler warning); skipped
-// directories/documents are warn-logged, never a silent success.
-func (iw *indexWalk) walk(ctx context.Context, dirPath string, depth int) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if iw.fetches >= maxIndexDocuments || iw.lists >= maxIndexLists {
-		return errIndexTruncated
-	}
-	if depth > maxIndexDepth {
-		iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", dirPath, "reason", "max depth reached")
-		return errIndexTruncated
-	}
-	cursor := ""
-	seenCursors := make(map[string]struct{})
-	lastName := ""
-	for {
-		if iw.lists >= maxIndexLists {
-			return errIndexTruncated
-		}
-		iw.lists++
-		listResult, err := iw.g.dispatcher.List(ctx, fetch.ListRequest{
-			Host: iw.worldName, Path: dirPath,
-			Cursor:   cursor,
-			PageSize: protocol.MaxListPageSize,
-		})
-		if err != nil {
-			return fmt.Errorf("list %s: %w", dirPath, err)
-		}
-		if listResult.Response.Status != protocol.StatusOK {
-			// Skipped, not fatal: other subtrees still index.
-			iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", dirPath, "status", listResult.Response.Status)
-			iw.incomplete = append(iw.incomplete, dirPath+": status "+listResult.Response.Status)
-			return nil
-		}
-		page, err := listing.ParsePage(dirPath, listResult.Response, lastName)
-		if err != nil {
-			return fmt.Errorf("list %s: %w", dirPath, err)
-		}
-		for _, dest := range page.Invalid {
-			iw.g.log.Warn("mark_index: entry skipped", "world", iw.worldName, "dir", dirPath, "entry", dest, "reason", "invalid listing entry")
-			iw.incomplete = append(iw.incomplete, dirPath+": invalid entry "+dest)
-		}
-		lastName = page.LastName
-		if err := iw.walkEntries(ctx, page.Entries, depth); err != nil {
-			return err
-		}
-		if page.Complete {
-			return nil
-		}
-		if _, duplicate := seenCursors[page.NextCursor]; duplicate || page.NextCursor == cursor {
-			return fmt.Errorf("list %s: continuation cursor did not advance", dirPath)
-		}
-		seenCursors[page.NextCursor] = struct{}{}
-		cursor = page.NextCursor
-	}
-}
-
-func (iw *indexWalk) walkEntries(ctx context.Context, entries []listing.Entry, depth int) error {
-	for _, listedEntry := range entries {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		canonical := listedEntry.Path
-		if listedEntry.IsDir {
-			if !strings.HasSuffix(canonical, "/") {
-				canonical += "/"
-			}
-			if !strings.HasPrefix(canonical, iw.sourceRoot) {
-				iw.g.log.Warn("mark_index: directory skipped", "world", iw.worldName, "dir", canonical, "reason", "escapes source root")
-				iw.incomplete = append(iw.incomplete, canonical+": escapes source root")
-				continue
-			}
-			if _, seen := iw.visited[canonical]; seen {
-				continue
-			}
-			iw.visited[canonical] = struct{}{}
-			// Recurse on the canonical form so the peer sees normalized
-			// paths (child/../sibling/ never goes out on the wire).
-			if recErr := iw.walk(ctx, canonical, depth+1); recErr != nil {
-				return recErr
-			}
-			continue
-		}
-		if !strings.HasPrefix(canonical, iw.sourceRoot) {
-			iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "reason", "escapes source root")
-			iw.incomplete = append(iw.incomplete, canonical+": escapes source root")
-			continue
-		}
-		if iw.fetches >= maxIndexDocuments {
-			return errIndexTruncated
-		}
-		iw.fetches++
-		iw.addDocument(ctx, canonical)
-	}
-	return nil
-}
-
-func (iw *indexWalk) addDocument(ctx context.Context, canonical string) {
-	doc, err := iw.g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: iw.worldName, Path: canonical})
-	if err != nil {
-		iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "err", err)
-		iw.incomplete = append(iw.incomplete, canonical+": "+err.Error())
-		return
-	}
-	if doc.Response.Status != protocol.StatusOK {
-		iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "status", doc.Response.Status)
-		iw.incomplete = append(iw.incomplete, canonical+": status "+doc.Response.Status)
-		return
-	}
-	contentHash := doc.Response.Metadata["content-hash"]
-	if _, valid := protocol.IsHashPath(contentHash); !valid || contentHash == "" {
-		iw.g.log.Warn("mark_index: document skipped", "world", iw.worldName, "path", canonical, "reason", "missing or invalid content-hash")
-		iw.incomplete = append(iw.incomplete, canonical+": missing or invalid content-hash")
-		return
-	}
-	iw.entries = append(iw.entries, index.Entry{
-		Hash:   contentHash,
-		Server: iw.sourceScheme,
-		Path:   canonical,
-	})
-}
-
-// Compile-time guards: every handler conforms to mcp-go's
-// ToolHandlerFunc shape. Same pattern as Slices 3 + 4a.
-var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkBacklinks
-var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkGraph
-var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkGraphExport
-var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkGraphPublish
-var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkIndex

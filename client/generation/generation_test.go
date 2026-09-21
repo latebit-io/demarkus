@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -17,6 +18,7 @@ type docs struct {
 	current  map[string]int
 	bodies   map[string]string // path and path/vN
 	writes   []string
+	reads    []string
 	failOn   string // publish of this path fails after...
 	landsOn  bool   // ...the write landed (a lost response) or did not
 	failWith error
@@ -42,7 +44,10 @@ func (d *docs) response(path string) protocol.Response {
 
 func (d *docs) io() generation.IO {
 	return generation.IO{
-		Fetch: func(_ context.Context, path string) (protocol.Response, error) { return d.response(path), nil },
+		Fetch: func(_ context.Context, path string) (protocol.Response, error) {
+			d.reads = append(d.reads, path)
+			return d.response(path), nil
+		},
 		Publish: func(_ context.Context, path, body string, expected int) (protocol.Response, error) {
 			if path == d.failOn && !d.landsOn {
 				return protocol.Response{}, d.failWith
@@ -52,7 +57,7 @@ func (d *docs) io() generation.IO {
 			}
 			d.current[path]++
 			d.bodies[path] = body
-			d.bodies[generation.VersionPath(path, d.current[path])] = body
+			d.bodies[protocol.VersionPath(path, d.current[path])] = body
 			d.writes = append(d.writes, path)
 			if path == d.failOn {
 				return protocol.Response{}, d.failWith
@@ -145,7 +150,7 @@ func TestPublishRefusesAStaleManifestVersion(t *testing.T) {
 }
 
 func TestPublishReconcilesALostResponseAndStopsOnARealFailure(t *testing.T) {
-	lost := errors.New("response lost")
+	lost := fmt.Errorf("read response: %w", fetch.ErrOutcomeUnknown)
 	landed := newDocs()
 	landed.failOn, landed.landsOn, landed.failWith = "/gen.shards/a/alpha.md", true, lost
 	got, err := generation.Publish(t.Context(), spec("alpha"), landed.io())
@@ -161,5 +166,16 @@ func TestPublishReconcilesALostResponseAndStopsOnARealFailure(t *testing.T) {
 	}
 	if len(failed.writes) != 0 {
 		t.Errorf("writes = %v, want nothing after the failed shard, the manifest least of all", failed.writes)
+	}
+
+	// A write that never left cannot have landed: no look at the head.
+	refused := newDocs()
+	refused.failOn, refused.failWith = "/gen.shards/a/alpha.md", errors.New("dial refused")
+	_, err = generation.Publish(t.Context(), spec("alpha"), refused.io())
+	if err == nil || strings.Contains(err.Error(), "reconcile:") {
+		t.Fatalf("err = %v, want the failure as it is", err)
+	}
+	if n := len(refused.reads); n != 2 {
+		t.Errorf("reads = %v, want the manifest and the shard's slot, then none", refused.reads)
 	}
 }

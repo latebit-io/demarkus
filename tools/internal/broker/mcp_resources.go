@@ -2,12 +2,9 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
 
-	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/mdoutline"
-	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -26,11 +23,9 @@ import (
 // outline or an "unchanged" notice where a document was requested would
 // be the wrong surprise. #anchor URIs are the section-sized attach.
 
-// registerResources wires the resources surface: a URI template covering
-// every document in every world, plus each configured world's index hub
-// so the picker shows real entry points. The world set is config-static
-// per pod (worlds[] changes roll the broker), so construction-time
-// registration is complete — no dynamic listing needed.
+// registerResources wires a URI template for every document, plus each
+// world's index hub so the picker shows real entry points. Only the knowledge
+// profile lists worlds, and its set is static per pod: once is complete.
 func (g *mcpGateway) registerResources() {
 	if g.profile.TenantScoped {
 		// Per-world hub resources would leak every tenant's world name
@@ -67,58 +62,38 @@ func (g *mcpGateway) registerResources() {
 // sections, for both the concrete per-world hubs and the URI template.
 func (g *mcpGateway) readResource(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 	raw := req.Params.URI
-	// The fragment is the section selector, cut before URL validation —
-	// parseToolURL rejects fragments because elsewhere they would be
-	// silently dropped; here the fragment has defined meaning.
-	docURL, anchor, _ := strings.Cut(raw, "#")
-
-	worldName, path, err := parseToolURL(docURL)
+	ctx, err := g.admitResourceRead(ctx, raw)
 	if err != nil {
-		return nil, fmt.Errorf("invalid resource URI %q: %w", raw, err)
+		return nil, err
 	}
-	// Resource reads bypass the tool middleware, so tenant mode gates
-	// here too: same identity = world rule as tenantGate.
-	if g.profile.TenantScoped {
-		w, terr := g.tenantWorld(ctx)
-		if terr != nil {
-			return nil, fmt.Errorf("not authorized: %w", terr)
-		}
-		if worldName != w.Name {
-			return nil, fmt.Errorf("access denied: this memory service serves only your world %q", w.Name)
-		}
+	if g.tools == nil {
+		return nil, errors.New("internal: tool bodies unavailable")
 	}
-	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: path})
+	resource, err := g.tools.ReadResource(ctx, raw)
 	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", docURL, err)
+		return nil, err
 	}
-	if result.Response.Status != protocol.StatusOK {
-		return nil, fmt.Errorf("%s: %s", docURL, result.Response.Status)
-	}
+	return []mcp.ResourceContents{mcp.TextResourceContents{URI: raw, MIMEType: resource.MIMEType, Text: resource.Text}}, nil
+}
 
-	body := result.Response.Body
-	// Binary/non-UTF-8 body: return a plain-text notice, not mojibake.
-	if mdoutline.BinaryBody(body) {
-		return []mcp.ResourceContents{mcp.TextResourceContents{
-			URI:      raw,
-			MIMEType: "text/plain",
-			Text:     mdoutline.NonMarkdownNotice(len(body)),
-		}}, nil
+// admitResourceRead is tenantGate for resource reads, which bypass the tool
+// middleware: the same door, then the same one world rule.
+func (g *mcpGateway) admitResourceRead(ctx context.Context, raw string) (context.Context, error) {
+	if !g.profile.TenantScoped {
+		return ctx, nil
 	}
-	if anchor != "" {
-		section, ok := mdoutline.Section(body, anchor)
-		if !ok {
-			available := strings.Join(mdoutline.Anchors(body), ", ")
-			if available == "" {
-				available = "(document has no headings)"
-			}
-			return nil, fmt.Errorf("section #%s not found in %s; available anchors: %s", anchor, docURL, available)
-		}
-		body = section
+	ctx, w, err := g.admitTenant(ctx)
+	if err != nil {
+		return ctx, err
 	}
-
-	return []mcp.ResourceContents{mcp.TextResourceContents{
-		URI:      raw,
-		MIMEType: "text/markdown",
-		Text:     body,
-	}}, nil
+	owns, parseErr := tenantOwns(&w, raw)
+	if parseErr != nil {
+		return ctx, fmt.Errorf("invalid resource URI %q: %w", raw, parseErr)
+	}
+	if !owns {
+		g.log.Warn("resource read denied cross-tenant access", "world", w.Name)
+		return ctx, crossTenantDenial(&w)
+	}
+	g.seedTenant(ctx, &w)
+	return ctx, nil
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
@@ -114,10 +115,36 @@ func TestGraphPublishNamesTheTargetByIdentity(t *testing.T) {
 	}{
 		"missing version":    {marktools.GraphPublishArgs{URL: "/graph.md"}, "expected_version is required"},
 		"negative version":   {marktools.GraphPublishArgs{URL: "/graph.md", ExpectedVersion: new(-1)}, "expected_version must be >= 0"},
-		"negative retention": {marktools.GraphPublishArgs{URL: "/graph.md", ExpectedVersion: new(0), Retention: -1}, "retention must be >= 0 (0 keeps every version)"},
+		"negative retention": {marktools.GraphPublishArgs{URL: "/locked.md", ExpectedVersion: new(0), Retention: -1}, "retention must be >= 0 (0 keeps every version)"},
+		"then authorization": {marktools.GraphPublishArgs{URL: "/locked.md", ExpectedVersion: new(0)}, "publish requires a token"},
 	} {
 		if got := tools.GraphPublish(t.Context(), tt.args); !got.IsError || got.Text != tt.want {
 			t.Errorf("%s: got %+v, want %q", name, got, tt.want)
 		}
+	}
+}
+
+// The graph document is a write like any other: a lost response is looked for
+// at the head, never resent.
+func TestGraphPublishReconcilesALostResponse(t *testing.T) {
+	store := linkedStore()
+	// /graph.md is the fake's seed path and never reaches FetchFn.
+	var landed fetch.WriteRequest // the export is stamped, so the head echoes what was sent
+	backend := &fetchtest.Client{
+		PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+			landed = r
+			return fetch.Result{}, fetchtest.LostResponse()
+		},
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
+			return fetchtest.Head(landed.Body, 4, landed.Metadata), nil
+		},
+	}
+	var seeded []string
+	got := newTools(t, backend, graphHooks(store, &seeded)).GraphPublish(t.Context(), marktools.GraphPublishArgs{URL: "/maps/site.md", ExpectedVersion: new(3), Retention: 20})
+	if got.IsError || got.Text != "Published graph (2 nodes, 1 edges) to mark://host/maps/site.md\nstatus: ok\nversion: 4\n" {
+		t.Errorf("GraphPublish = %+v", got)
+	}
+	if len(backend.PublishCalls) != 1 {
+		t.Errorf("publishes = %d, want exactly one", len(backend.PublishCalls))
 	}
 }

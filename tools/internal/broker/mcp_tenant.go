@@ -72,86 +72,126 @@ func (g *mcpGateway) tenantWorld(ctx context.Context) (WorldConfig, error) {
 	return w, nil
 }
 
-// resolveOrProvision resolves the caller's world, provisioning one on
-// first arrival when the broker runs with dynamic provisioning. The
-// second return is a ready-to-return tool error when resolution fails.
-func (g *mcpGateway) resolveOrProvision(ctx context.Context) (WorldConfig, *mcp.CallToolResult) {
+// admitTenant is the one door into tenant mode, for tool calls and resource
+// reads: the caller's world, provisioned on first arrival, carried on ctx.
+// The error is client text; causes are logged (world names name tenants).
+func (g *mcpGateway) admitTenant(ctx context.Context) (context.Context, WorldConfig, error) {
+	w, err := g.resolveOrProvision(ctx)
+	if err != nil {
+		return ctx, WorldConfig{}, err
+	}
+	ctx = ctxWithTenantWorld(ctx, &w)
+	return ctx, w, nil
+}
+
+// seedTenant gives a fresh world its memory template. It runs after the one
+// world rule, so a refused call writes nothing.
+func (g *mcpGateway) seedTenant(ctx context.Context, w *WorldConfig) {
+	if g.profile.SeedMemory {
+		g.ensureMemorySeed(ctx, w)
+	}
+}
+
+// resolveOrProvision resolves the caller's world, provisioning one on first
+// arrival when the broker provisions dynamically.
+func (g *mcpGateway) resolveOrProvision(ctx context.Context) (WorldConfig, error) {
 	w, err := g.tenantWorld(ctx)
 	if err == nil {
 		return w, nil
 	}
 	if !errors.Is(err, ErrNotAuthorized) || g.srv.provisioner == nil {
-		return WorldConfig{}, mcp.NewToolResultError(fmt.Sprintf("not authorized: %v", err))
+		return WorldConfig{}, fmt.Errorf("not authorized: %w", err)
 	}
 	claims, ok := claimsFromCtx(ctx)
 	if !ok {
-		return WorldConfig{}, mcp.NewToolResultError("internal: missing identity on tool-call context")
+		return WorldConfig{}, errors.New("internal: missing identity on tool-call context")
+	}
+	identity := identityKey(g.srv.cfg.OIDC.Issuer, claims.Subject)
+	if refusal := g.refusals.recent(identity, g.srv.clock()); refusal != nil {
+		return WorldConfig{}, refusal
 	}
 	w, perr := g.srv.provisioner.EnsureTenant(ctx, claims)
-	switch {
-	case perr == nil:
+	if perr == nil {
 		// The knowledge server picks the new world up asynchronously;
 		// give the caller a clear retry message until it answers.
 		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		_, ferr := g.dispatcher.Fetch(probeCtx, fetch.FetchRequest{Host: w.Name, Path: "/index.md"})
 		cancel()
 		if ferr != nil {
-			return WorldConfig{}, mcp.NewToolResultError("your memory world is being provisioned; try again in about a minute")
+			return WorldConfig{}, errors.New("your memory world is being provisioned; try again in about a minute")
 		}
 		return w, nil
-	case errors.Is(perr, ErrProvisioningDenied):
-		g.log.Warn("tenant provisioning denied by gate", "subject", hashSubject(claims.Subject))
-		return WorldConfig{}, mcp.NewToolResultError("not authorized: this memory service does not admit your identity; contact the operator")
-	case errors.Is(perr, ErrTenantDeprovisioning):
-		g.log.Warn("tool call denied for tombstoned tenant", "subject", hashSubject(claims.Subject))
-		return WorldConfig{}, mcp.NewToolResultError("your memory world is being removed; contact the operator if this persists")
-	case errors.Is(perr, ErrTenantCapacity):
-		g.log.Warn("tenant provisioning denied at capacity", "subject", hashSubject(claims.Subject))
-		return WorldConfig{}, mcp.NewToolResultError("this memory service is at capacity; contact the operator")
-	default:
-		g.log.Warn("tenant provisioning failed", "subject", hashSubject(claims.Subject), "err", perr)
-		return WorldConfig{}, mcp.NewToolResultError("provisioning your memory world failed; try again shortly")
 	}
+	remember, refusal := g.provisioningRefusal(claims, perr)
+	if remember {
+		g.refusals.remember(identity, refusal, g.srv.clock())
+	}
+	return WorldConfig{}, refusal
 }
 
-// tenantGate (tenant-scoped profiles only) resolves the caller's world,
-// checks every world-bearing argument against it, and seeds the memory
-// template before the first handler runs against a fresh world.
+// provisioningRefusal words a failed provisioning for the client and logs its
+// cause. remember is true for an answer that will not change within a minute;
+// a transient failure is retried on the next call.
+func (g *mcpGateway) provisioningRefusal(claims *Claims, err error) (remember bool, refusal error) {
+	subject := hashSubject(claims.Subject)
+	switch {
+	case errors.Is(err, ErrProvisioningDenied):
+		g.log.Warn("tenant provisioning denied by gate", "subject", subject)
+		return true, errors.New("not authorized: this memory service does not admit your identity; contact the operator")
+	case errors.Is(err, ErrTenantDeprovisioning):
+		g.log.Warn("tool call denied for tombstoned tenant", "subject", subject)
+		return true, errors.New("your memory world is being removed; contact the operator if this persists")
+	case errors.Is(err, ErrTenantCapacity):
+		g.log.Warn("tenant provisioning denied at capacity", "subject", subject)
+		return true, errors.New("this memory service is at capacity; contact the operator")
+	}
+	g.log.Warn("tenant provisioning failed", "subject", subject, "err", err)
+	return false, errors.New("provisioning your memory world failed; try again shortly")
+}
+
+// tenantOwns is whether raw addresses the tenant's own world. A url that does
+// not parse is the handler's to report, in its own words.
+func tenantOwns(w *WorldConfig, raw string) (owns bool, parseErr error) {
+	docURL, _, _ := strings.Cut(raw, "#") // section aware handlers cut it too
+	worldName, _, err := parseToolURL(docURL)
+	if err != nil {
+		return false, err
+	}
+	return worldName == w.Name, nil
+}
+
+func crossTenantDenial(w *WorldConfig) error {
+	return fmt.Errorf("access denied: this memory service serves only your world %q", w.Name)
+}
+
+// tenantGate (tenant-scoped profiles only) admits the caller, then checks every
+// world-bearing argument against the caller's world before the handler runs.
 func (g *mcpGateway) tenantGate(next mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		w, errRes := g.resolveOrProvision(ctx)
-		if errRes != nil {
-			return errRes, nil
-		}
 		args, known := tenantWorldArgs[req.Params.Name]
 		if !known {
-			// Deny closed: an unclassified tool must never dispatch in
-			// tenant mode.
-			g.log.Warn("tenant gate denied unclassified tool", "tool", req.Params.Name, "world", w.Name)
+			// Deny closed, and before admission: a tool that does not
+			// exist here must not provision a world on its way out.
+			g.log.Warn("tenant gate denied unclassified tool", "tool", req.Params.Name)
 			return mcp.NewToolResultError(fmt.Sprintf("tool %q is not available on this memory broker", req.Params.Name)), nil
+		}
+		ctx, w, err := g.admitTenant(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 		for _, name := range args {
 			raw := strings.TrimSpace(req.GetString(name, ""))
 			if raw == "" {
 				continue // the handler's own required-arg check reports it
 			}
-			// Section-aware handlers strip fragments before fetching the document.
-			docURL, _, _ := strings.Cut(raw, "#")
-			worldName, _, perr := parseToolURL(docURL)
-			if perr != nil {
-				continue // the handler's own URL validation reports it
-			}
-			if worldName != w.Name {
+			if owns, parseErr := tenantOwns(&w, raw); parseErr == nil && !owns {
 				// Cross-tenant attempts are the security signal; the
 				// target world stays out of the log too.
 				g.log.Warn("tenant gate denied cross-tenant access", "tool", req.Params.Name, "world", w.Name)
-				return mcp.NewToolResultError(fmt.Sprintf("access denied: this memory service serves only your world %q", w.Name)), nil
+				return mcp.NewToolResultError(crossTenantDenial(&w).Error()), nil
 			}
 		}
-		ctx = ctxWithTenantWorld(ctx, &w)
-		if g.profile.SeedMemory {
-			g.ensureMemorySeed(ctx, &w)
-		}
+		g.seedTenant(ctx, &w)
 		return next(ctx, req)
 	}
 }

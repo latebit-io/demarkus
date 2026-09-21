@@ -261,7 +261,7 @@ func LoadSnapshot(manifestPath string, response protocol.Response, fetchShard fu
 	seenNodes := make(map[string]struct{}, manifest.Nodes)
 	seenEdges := make(map[edgeKey]struct{}, manifest.Edges)
 	for _, ref := range manifest.Shards {
-		shard, err := fetchShard(generation.VersionPath(ref.Path, ref.Version))
+		shard, err := fetchShard(protocol.VersionPath(ref.Path, ref.Version))
 		if err != nil {
 			return nil, nil, fmt.Errorf("fetch graph shard %s: %w", ref.Path, err)
 		}
@@ -603,7 +603,7 @@ func validateSnapshotManifestPath(manifestPath string) error {
 		return fmt.Errorf("snapshot manifest path conflicts with immutable fetch syntax %q", manifestPath)
 	}
 	generated := snapshotShardPath(manifestPath, generation.SlotA, snapshotShardKindNodes, MaxSnapshotShards-1)
-	if err := protocol.ValidateRequestPath(generation.VersionPath(generated, math.MaxInt)); err != nil {
+	if err := protocol.ValidateRequestPath(protocol.VersionPath(generated, math.MaxInt)); err != nil {
 		return fmt.Errorf("snapshot path cannot produce valid shards: %w", err)
 	}
 	return nil

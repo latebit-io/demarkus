@@ -553,7 +553,7 @@ func testMemoryGraphReauthorization(t *testing.T, failure, entrypoint string) {
 	identities := map[string]string{identityKey(cfg.OIDC.Issuer, "google|alice"): aliceWorld.Name}
 	if failure == "deprovision" {
 		cfg.Worlds = cfg.Worlds[1:]
-		cfg.SetDynamicWorlds([]WorldConfig{aliceWorld}, identities)
+		cfg.worlds().SetDynamic([]WorldConfig{aliceWorld}, identities)
 	}
 	d := seededDispatcher()
 	for _, tenant := range []string{"alice", "bob"} {
@@ -571,7 +571,7 @@ func testMemoryGraphReauthorization(t *testing.T, failure, entrypoint string) {
 	}
 	old.graphStore.SetSeedEtag("alice-w", "retired-etag")
 	if failure == "deprovision" {
-		cfg.SetDynamicWorlds(nil, nil)
+		cfg.worlds().SetDynamic(nil, nil)
 	} else {
 		cfg.Worlds[0].Allow.Emails = []string{"replacement@example.com"}
 	}
@@ -589,7 +589,7 @@ func testMemoryGraphReauthorization(t *testing.T, failure, entrypoint string) {
 		t.Error("authorization failure retained Alice's cached graph")
 	}
 	if failure == "deprovision" {
-		cfg.SetDynamicWorlds([]WorldConfig{aliceWorld}, identities)
+		cfg.worlds().SetDynamic([]WorldConfig{aliceWorld}, identities)
 	} else {
 		cfg.Worlds[0] = aliceWorld
 	}
@@ -631,7 +631,7 @@ func TestMemoryGraphSeedRefreshIsScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.seedGate.Expire("alice-w")
+	state.graphStore.ExpireSeedCheck("alice-w")
 	empty = true
 	for _, tool := range []string{"mark_backlinks", "mark_explore"} {
 		if text := tenantGraphCall(t, g, "alice", tool, "/index.md"); strings.Contains(text, "source.md") {
@@ -1041,6 +1041,83 @@ func TestMemoryGraphScopeCapsTenants(t *testing.T) {
 }
 
 func seedChecked(state *gatewayGraph, world string) bool {
-	_, checked := state.seedGate.LastCheck(world)
+	_, checked := state.graphStore.LastSeedCheck(world)
 	return checked
+}
+
+// A first read through the resource picker is a first arrival like any tool
+// call: the world is provisioned, and another tenant's stays out of reach.
+func TestResourceReadProvisionsFirstArrival(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionOpen)
+	d := seededDispatcher()
+	g, buckets := memoryGatewayWithProvisioning(t, cfg, d)
+	eveCtx := ctxWithClaims(context.Background(), eveClaims())
+
+	_, err := g.readResource(eveCtx, mcp.ReadResourceRequest{Params: mcp.ReadResourceParams{URI: "mark://alice-w/index.md"}})
+	if err == nil || !strings.Contains(err.Error(), "access denied") {
+		t.Fatalf("cross-tenant read err = %v, want access denied", err)
+	}
+	if len(buckets.created) != 1 {
+		t.Fatalf("buckets created = %v, want the first arrival provisioned", buckets.created)
+	}
+	worlds := g.scopedWorlds(eveCtx)
+	if len(worlds) != 1 || !strings.HasPrefix(worlds[0].Name, "eve-adams-") {
+		t.Errorf("worlds = %+v, want eve's own", worlds)
+	}
+}
+
+// countingStore counts reads of the broker's Secrets.
+type countingStore struct {
+	SecretStore
+	mutates int
+}
+
+func (c *countingStore) Mutate(ctx context.Context, ref SecretRef, mutate func([]byte) ([]byte, error)) error {
+	c.mutates++
+	return c.SecretStore.Mutate(ctx, ref, mutate)
+}
+
+// An identity the service does not admit is told so once a minute, not by a
+// registry round trip under the provisioner's lock on every call.
+func TestDeniedIdentityIsRememberedBriefly(t *testing.T) {
+	cfg := provisioningTestConfig(ProvisionAllowlisted)
+	cfg.Provisioning.Allow = AllowConfig{Domains: []string{"other.org"}}
+	g, _ := memoryGatewayWithProvisioning(t, cfg, seededDispatcher())
+	store := &countingStore{SecretStore: g.srv.provisioner.store}
+	g.srv.provisioner.store = store
+	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	g.srv.clock = func() time.Time { return now }
+	h := g.tenantGate(g.toolHandlers()["mark_worlds"])
+	call := func() string {
+		res, err := h(ctxWithClaims(context.Background(), eveClaims()), callToolReq("mark_worlds", nil))
+		if err != nil || !res.IsError {
+			t.Fatalf("gate = (%+v, %v), want a denial", res, err)
+		}
+		return toolResultText(t, res)
+	}
+	first := call()
+	if second := call(); second != first || store.mutates != 1 {
+		t.Errorf("second = %q (first %q), registry reads = %d, want the same answer from memory", second, first, store.mutates)
+	}
+	now = now.Add(2 * time.Minute)
+	call()
+	if store.mutates != 2 {
+		t.Errorf("registry reads = %d, want a fresh check after the denial expired", store.mutates)
+	}
+}
+
+// A tool the gate does not know is refused before anything is provisioned.
+func TestTenantGateRefusesUnclassifiedToolBeforeProvisioning(t *testing.T) {
+	g, buckets := memoryGatewayWithProvisioning(t, provisioningTestConfig(ProvisionOpen), seededDispatcher())
+	h := g.tenantGate(func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		t.Fatal("an unclassified tool reached its handler")
+		return nil, nil
+	})
+	res, err := h(ctxWithClaims(context.Background(), eveClaims()), callToolReq("mark_mystery", nil))
+	if err != nil || !res.IsError || !strings.Contains(toolResultText(t, res), "not available") {
+		t.Fatalf("gate = (%+v, %v)", res, err)
+	}
+	if len(buckets.created) != 0 {
+		t.Errorf("buckets created = %v for a tool that does not exist", buckets.created)
+	}
 }

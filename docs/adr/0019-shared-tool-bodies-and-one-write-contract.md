@@ -66,3 +66,12 @@ publish policy lists its violations.
   decided then.
 - Behavior shared by surfaces is tested at the owning layer; a surface keeps
   argument, hook and one happy path test per tool.
+
+## Amendment (2026-09-21)
+
+The broker adopted `marktools` and `docwrite` the same day, so the two
+consequences about its copies and about six wording differences no longer
+hold. What replaced them, including the order of checks and who owns a lost
+response, is [ADR 0020](0020-one-reconcile-owner-and-check-order.md). The
+"does not depend on mcp-go" claim holds for direct imports only: `mcpfmt`
+still reaches it, which the package split is to fix.

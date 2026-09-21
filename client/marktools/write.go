@@ -59,10 +59,7 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 	if bad != nil {
 		return *bad
 	}
-	write, bad := t.writer(ctx, target, "publish")
-	if bad != nil {
-		return *bad
-	}
+	// Arguments, then authorization, then the network: on every write tool.
 	expected, bad := requireVersion(args.ExpectedVersion)
 	if bad != nil {
 		return *bad
@@ -71,13 +68,17 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 	if err != nil {
 		return failure("%v", err)
 	}
+	write, bad := t.writer(ctx, target, "publish")
+	if bad != nil {
+		return *bad
+	}
 	doc := t.doc(ctx, target, write)
-	w := merge.Write{Path: target.Path, Body: args.Body, ExpectedVersion: expected, Metadata: t.publisherMeta(ctx, args.Metadata)}
-	outcome, err := doc.Publish(ctx, w, mode)
+	w := docwrite.Write{Body: args.Body, ExpectedVersion: expected, Metadata: t.publisherMeta(ctx, args.Metadata)}
+	result, err := doc.Publish(ctx, w, mode)
 	if err != nil {
 		return t.failed(SitePublish, target.Host, err)
 	}
-	return text(formatOutcome(&outcome) + t.narrowingNote(ctx, doc, w, outcome.Publish.Status))
+	return text(formatResult(&result, writeFields...) + t.narrowingNote(ctx, doc, w, result.Response.Status))
 }
 
 // publisherMeta is the caller's metadata under the surface's identity: a
@@ -127,31 +128,27 @@ func (t *Tools) agentMeta(ctx context.Context) map[string]string {
 	return meta
 }
 
-// formatResult renders a write; a reconciled one reads like an answered one.
+// formatResult renders a write; a reconciled one reads like an answered one. A
+// candidate carries the merge facts, then the body to review.
 func formatResult(r *docwrite.Result, fields ...string) string {
-	return mcpfmt.Full(fetch.Result{Response: r.Response}, fields...)
-}
-
-// formatOutcome renders a merge outcome. OutcomeOK reads exactly like a plain
-// publish; a candidate carries the merge facts, then the body to review.
-func formatOutcome(o *merge.Outcome) string {
-	if o.Status != merge.OutcomeCandidate {
-		return mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: o.Publish.Status, Metadata: o.Publish.Metadata, Body: o.Publish.Body}}, writeFields...)
+	c := r.Candidate
+	if c == nil {
+		return mcpfmt.Full(fetch.Result{Response: r.Response}, fields...)
 	}
 	var b strings.Builder
-	b.WriteString("status: merge-candidate\n")
-	fmt.Fprintf(&b, "your-version: %d\n", o.BaseVersion)
-	fmt.Fprintf(&b, "current-version: %d\n", o.TheirVersion)
-	fmt.Fprintf(&b, "publish-at-version: %d\n", o.PublishAtVersion)
-	fmt.Fprintf(&b, "has-markers: %t\n", o.HasMarkers)
+	b.WriteString("status: " + docwrite.StatusCandidate + "\n")
+	fmt.Fprintf(&b, "your-version: %d\n", c.BaseVersion)
+	fmt.Fprintf(&b, "current-version: %d\n", c.TheirVersion)
+	fmt.Fprintf(&b, "publish-at-version: %d\n", c.PublishAtVersion)
+	fmt.Fprintf(&b, "has-markers: %t\n", c.HasMarkers)
 	b.WriteString("\n")
-	b.WriteString(o.Body)
+	b.WriteString(c.Body)
 	return b.String()
 }
 
 // narrowingNote warns, after a write that landed, when it dropped tags or keys
 // the replaced version had. A failed check is logged and never fails the write.
-func (t *Tools) narrowingNote(ctx context.Context, doc *docwrite.Doc, w merge.Write, status string) string {
+func (t *Tools) narrowingNote(ctx context.Context, doc *docwrite.Doc, w docwrite.Write, status string) string {
 	if !protocol.IsWriteSuccess(status) {
 		return ""
 	}
@@ -159,7 +156,7 @@ func (t *Tools) narrowingNote(ctx context.Context, doc *docwrite.Doc, w merge.Wr
 		return doc.FetchVersion(ctx, w.ExpectedVersion)
 	})
 	if err != nil {
-		t.warnf("warning: publish metadata check mark://%s%s: %v", doc.Host, w.Path, err)
+		t.warnf("warning: publish metadata check mark://%s%s: %v", doc.Host, doc.Path, err)
 	}
 	return note
 }
@@ -177,12 +174,12 @@ func (t *Tools) Append(ctx context.Context, args AppendArgs) Result {
 	if bad != nil {
 		return *bad
 	}
+	if args.ExpectedVersion < 0 {
+		return failure("expected_version must be >= 0")
+	}
 	write, bad := t.writer(ctx, target, "append")
 	if bad != nil {
 		return *bad
-	}
-	if args.ExpectedVersion < 0 {
-		return failure("expected_version must be >= 0")
 	}
 	result, err := t.doc(ctx, target, write).Append(ctx, docwrite.AppendRequest{
 		Body: args.Body, ExpectedVersion: args.ExpectedVersion, Metadata: t.agentMeta(ctx),

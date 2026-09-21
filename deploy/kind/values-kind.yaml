@@ -10,3 +10,11 @@ storage:
 # tls block intentionally left at chart defaults — neither existingSecret nor
 # certManager.enabled is set, so the server auto-generates a self-signed dev
 # cert at startup. Clients verify with `demarkus -insecure`.
+
+# The broker reads worlds without a token, so a world behind it grants `read`
+# to nobody: any token holding `read` on a path makes that path private. The
+# chart's default admin token holds it on /**, which would make every brokered
+# read answer unauthorized.
+tokens:
+  admin:
+    operations: ["publish"]

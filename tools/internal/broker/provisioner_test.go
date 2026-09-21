@@ -870,3 +870,13 @@ func TestDeprovisionTenantRemovesEverything(t *testing.T) {
 		t.Error("rerun reported the deprovisioned tenant as found")
 	}
 }
+
+// A provisioned world is addressed like a configured one, so its name obeys
+// the same rule, whatever the email looks like.
+func TestTenantSlugIsAlwaysAValidWorldName(t *testing.T) {
+	for _, email := range []string{"Eve.Adams+x@example.com", "___@example.com", "", "-lead-@example.com", strings.Repeat("a", 80) + "@example.com", "日本@example.com"} {
+		if slug := tenantSlug("https://issuer", "sub", email); !worldNameRE.MatchString(slug) {
+			t.Errorf("tenantSlug(%q) = %q, not a valid world name", email, slug)
+		}
+	}
+}

@@ -76,9 +76,9 @@ func (t Target) DialHost() string {
 	return net.JoinHostPort(strings.ToLower(t.hostname), strconv.Itoa(t.port))
 }
 
-// Hostname is the host as written, without port or IPv6 brackets. The broker
-// routes it as a world name, which it matches case sensitively.
-func (t Target) Hostname() string { return t.hostname }
+// Hostname is the lowercase host without port or IPv6 brackets. The broker
+// routes it as a world name.
+func (t Target) Hostname() string { return strings.ToLower(t.hostname) }
 
 // AuthorityURL is the identity of the server: mark://host in lowercase, with
 // a port only when it is not the default (ADR 0005, ADR 0018).

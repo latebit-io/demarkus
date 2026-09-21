@@ -87,3 +87,17 @@ func TestFormatExploreBacklinksKeepsEvidenceAndCapsRows(t *testing.T) {
 		t.Fatalf("empty graph claimed absence: %q", empty)
 	}
 }
+
+// The store keys by identity; a caller may name the document as it was typed.
+// Direction must not depend on the spelling.
+func TestFormatNeighborhoodDirectionIgnoresHowTheCenterWasSpelled(t *testing.T) {
+	page := graphstore.NeighborhoodPage{TotalRows: 1, Rows: []graphstore.NeighborhoodRow{{
+		Node:  graphstore.StoredNode{URL: "mark://team-a/src.md"},
+		Edges: []graphstore.NeighborhoodEdge{{Edge: graph.Edge{From: "mark://team-a/src.md", To: "mark://team-a/x.md"}}},
+	}}}
+	for _, center := range []string{"mark://team-a/x.md", "mark://Team-A/x.md", "mark://team-a:6309/x.md"} {
+		if got := FormatNeighborhood(center, page); !strings.Contains(got, "incoming") || strings.Contains(got, "outgoing") {
+			t.Errorf("center %q:\n%s\nwant the edge into the document read as incoming", center, got)
+		}
+	}
+}

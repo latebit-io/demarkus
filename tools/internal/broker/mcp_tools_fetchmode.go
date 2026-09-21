@@ -2,29 +2,19 @@ package broker
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchdedup"
+	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
-	"github.com/latebit-io/demarkus/client/mdoutline"
-	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// Port of demarkus-mcp markFetch (outline, #section, dedup); rendering and
-// notices are shared through client/mcpfmt and client/fetchdedup. Dedup is
-// keyed by MCP session since the broker is multi-tenant; no session, no dedup.
-
-// outlineThreshold is the body size (bytes) above which mark_fetch
-// returns an outline instead of the full body, unless force=true or a
-// #section is requested. Matches client/cmd/demarkus-mcp.
-const outlineThreshold = mdoutline.OutlineThreshold
+// mark_fetch's body is shared (client/marktools). What is the gateway's own is
+// the dedup scope: one MCP session, since a pod serves many agents.
 
 // sessionSeen is the per-session fetch dedup state: MCP session ID →
 // (world+path → identity of the version whose full body that session
@@ -125,8 +115,23 @@ func (s *sessionSeen) drop(sessionID string) {
 	delete(s.byID, sessionID)
 }
 
-// sessionIDFromContext returns the MCP session ID for the request, or ""
-// when the context carries no session (dedup is then skipped entirely).
+// Lookup and Record make sessionSeen the shared fetch body's seen store. A call
+// outside an MCP session has nothing to dedup against and records nothing.
+func (s *sessionSeen) Lookup(ctx context.Context, key string) (fetchdedup.Doc, bool) {
+	sessionID := sessionIDFromContext(ctx)
+	if sessionID == "" {
+		return fetchdedup.Doc{}, false
+	}
+	return s.lookup(sessionID, key)
+}
+
+func (s *sessionSeen) Record(ctx context.Context, key string, d fetchdedup.Doc) {
+	if sessionID := sessionIDFromContext(ctx); sessionID != "" {
+		s.record(sessionID, key, d)
+	}
+}
+
+// sessionIDFromContext is "" when the context carries no MCP session.
 func sessionIDFromContext(ctx context.Context) string {
 	if session := mcpserver.ClientSessionFromContext(ctx); session != nil {
 		return session.SessionID()
@@ -134,93 +139,12 @@ func sessionIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// handleMarkFetch implements the mark_fetch tool against the brokered
-// world with the shared fetch ergonomics: full body under 8KB, outline
-// above, url#anchor section slicing at any size, force override, and
-// session-scoped unchanged dedup. Reads are open to any SSO-authenticated
-// caller; see the pre-ergonomics rationale on handleMarkList.
+// handleMarkFetch answers mark_fetch; dedup is scoped to the MCP session.
 func (g *mcpGateway) handleMarkFetch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-	// The fragment is the section selector, cut before URL validation —
-	// parseToolURL rejects fragments because the other verbs would
-	// silently drop them; here it has defined meaning.
-	docURL, anchor, _ := strings.Cut(raw, "#")
-	force := req.GetBool("force", false)
-	opts := mcpfmt.Fetch.Options(&req)
-
-	worldName, path, err := parseToolURL(docURL)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: path})
-	if err != nil {
-		return g.toolErrorFor("fetch", worldName, err), nil
-	}
-	if result.Response.Status != protocol.StatusOK {
-		return mcp.NewToolResultText(mcpfmt.Format(result, opts)), nil
-	}
-
-	body := result.Response.Body
-	version := result.Response.Metadata["version"]
-	etag := result.Response.Metadata["etag"]
-	key := worldName + path
-
-	// Binary/non-UTF-8 body: always a notice, never bytes. MCP text can't
-	// carry binary faithfully (JSON mangles it). Matches the local client.
-	if mdoutline.BinaryBody(body) {
-		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.NonMarkdownNotice(len(body)),
-			map[string]string{"mode": "binary"}, opts)), nil
-	}
-
-	// #section slice: works at any size and bypasses dedup — the agent
-	// is asking for content it has not necessarily seen.
-	if anchor != "" {
-		section, ok := mdoutline.Section(body, anchor)
-		if !ok {
-			available := strings.Join(mdoutline.Anchors(body), ", ")
-			if available == "" {
-				available = "(document has no headings)"
-			}
-			return mcp.NewToolResultError(fmt.Sprintf("section #%s not found in %s; available anchors: %s", anchor, docURL, available)), nil
-		}
-		return mcp.NewToolResultText(mcpfmt.FormatWith(result, section,
-			map[string]string{"section": "#" + anchor}, opts)), nil
-	}
-
-	// Dedup needs at least one identity field: with version and etag
-	// both absent, two different bodies would compare equal and a
-	// changed document would be silently reported as unchanged.
-	cur := fetchdedup.Doc{Version: version, Etag: etag}
-	sessionID := sessionIDFromContext(ctx)
-
-	var prev fetchdedup.Doc
-	seenBefore := false
-	if sessionID != "" {
-		prev, seenBefore = g.fetchSeen.lookup(sessionID, key)
-	}
-	if seenBefore && !force && cur.Identified() && prev == cur {
-		return mcp.NewToolResultText(fetchdedup.UnchangedNotice(cur, opts.Verbose)), nil
-	}
-
-	extra := map[string]string{}
-	// cur.Identified() also gates the note: a response that lost both
-	// identity fields has nothing truthful to say about what changed.
-	if seenBefore && cur.Identified() && prev != cur {
-		extra["note"] = fetchdedup.ChangedNote(prev, cur)
-	}
-
-	// Size gate: large documents return an outline unless forced.
-	if !force && len(body) >= outlineThreshold {
-		extra["mode"] = "outline"
-		extra["size"] = fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1)
-		return mcp.NewToolResultText(mcpfmt.FormatWith(result, mdoutline.OutlineBody(docURL, body), extra, opts)), nil
-	}
-
-	if sessionID != "" && cur.Identified() {
-		g.fetchSeen.record(sessionID, key, cur)
-	}
-	return mcp.NewToolResultText(mcpfmt.FormatWith(result, body, extra, opts)), nil
+	args := marktools.FetchArgs{URL: raw, Force: req.GetBool("force", false), Render: mcpfmt.Fetch.Options(&req)}
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.Fetch(ctx, args) })
 }

@@ -24,3 +24,9 @@ func TestIsHashPath(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionPath(t *testing.T) {
+	if got := VersionPath("/docs/a.md", 3); got != "/docs/a.md/v3" {
+		t.Errorf("VersionPath = %q", got)
+	}
+}

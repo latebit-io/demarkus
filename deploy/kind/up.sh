@@ -578,12 +578,15 @@ echo "OK: POST /mcp 401 + WWW-Authenticate"
     AUTHCODE_CHALLENGE="$(printf '%s' "$AUTHCODE_VERIFIER" \
       | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
 
-    echo "--- driving auth-code + PKCE flow from an ephemeral curl pod"
+    # The one world values-broker.yaml configures; the tool calls below use it.
+    MCP_SMOKE_WORLD="world-default"
+    echo "--- driving auth-code + PKCE flow, then MCP tool calls, from an ephemeral curl pod"
     BROKER_OAUTH_URL="http://$BROKER_RELEASE-demarkus-knowledge-broker.$NAMESPACE.svc.cluster.local:8080"
     kubectl run -n "$NAMESPACE" authcode-smoke --rm -i --restart=Never \
       --image="$MINT_CURL_IMAGE" --command -- sh -c '
 set -eu
 BROKER='"$BROKER_OAUTH_URL"'
+BROKER_MCP='"$BROKER_MCP_URL"'
 CLIENT_ID='"$AUTHCODE_CLIENT_ID"'
 REDIRECT_URI='"$AUTHCODE_REDIRECT_URI"'
 CLIENT_STATE='"$AUTHCODE_CLIENT_STATE"'
@@ -679,8 +682,119 @@ HTTP=$($CURL -o /tmp/replay.json -w "%{http_code}" -X POST "$BROKER/device/token
 [ "$HTTP" = "400" ] || { echo "FAIL: consumed code replay did not 400 (got $HTTP)"; cat /tmp/replay.json; exit 1; }
 echo "OK: authorization code is one-shot (replay rejected)"
 echo "OK: auth-code + PKCE flow end-to-end"
+
+# 7. TOOL CALLS — the Bearer minted above drives the MCP gateway, so the
+#    smoke covers what an agent does after joining: read, write, and the
+#    refusals. The token is read from the file and never echoed.
+TOKEN=$(sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p" /tmp/tok.json)
+[ -n "$TOKEN" ] || { echo "FAIL: could not read the access token for tool calls"; exit 1; }
+WORLD='"$MCP_SMOKE_WORLD"'
+DOC="mark://$WORLD/smoke/tools-$CLIENT_STATE.md"
+printf "Authorization: Bearer %s\nContent-Type: application/json\nAccept: application/json, text/event-stream\n" "$TOKEN" > /tmp/mcp.hdrs
+
+# rpc posts the JSON-RPC request on stdin; the answer lands in /tmp/rpc.out
+# (plain JSON or one SSE data line, both are grepped the same way).
+rpc() {
+  cat > /tmp/req.json
+  $CURL -X POST "$BROKER_MCP/mcp" -H @/tmp/mcp.hdrs -D /tmp/rpc.h -o /tmp/rpc.out -d @/tmp/req.json
+}
+# tool <name> <arguments json>
+tool() {
+  RPC_ID=$((RPC_ID + 1))
+  rpc <<EOF
+{"jsonrpc":"2.0","id":$RPC_ID,"method":"tools/call","params":{"name":"$1","arguments":$2}}
+EOF
+}
+# want <label> <pattern>: the last answer is a tool success holding pattern.
+want() {
+  if grep -q "\"isError\":true" /tmp/rpc.out || ! grep -q "$2" /tmp/rpc.out; then
+    echo "FAIL: $1"; cat /tmp/rpc.out; exit 1
+  fi
+  echo "OK: $1"
+}
+# refused <label> <pattern>: the last answer is a tool error holding pattern.
+refused() {
+  if ! grep -q "\"isError\":true" /tmp/rpc.out || ! grep -q "$2" /tmp/rpc.out; then
+    echo "FAIL: $1"; cat /tmp/rpc.out; exit 1
+  fi
+  echo "OK: $1"
+}
+RPC_ID=0
+
+rpc <<EOF
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"kind-smoke","version":"0"}}}
+EOF
+SESSION=$(awk "tolower(\$1)==\"mcp-session-id:\"{print \$2}" /tmp/rpc.h | tr -d "\r")
+[ -n "$SESSION" ] || { echo "FAIL: initialize returned no Mcp-Session-Id"; cat /tmp/rpc.h /tmp/rpc.out; exit 1; }
+printf "Mcp-Session-Id: %s\n" "$SESSION" >> /tmp/mcp.hdrs
+rpc <<EOF
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+EOF
+echo "OK: MCP session initialized with the minted Bearer"
+
+RPC_ID=$((RPC_ID + 1))
+rpc <<EOF
+{"jsonrpc":"2.0","id":$RPC_ID,"method":"tools/list","params":{}}
+EOF
+for name in mark_fetch mark_publish mark_worlds mark_lookup_all; do
+  grep -q "\"name\":\"$name\"" /tmp/rpc.out || { echo "FAIL: tools/list is missing $name"; exit 1; }
+done
+echo "OK: tools/list names the read, write and directory tools"
+
+tool mark_worlds "{}"
+want "mark_worlds lists the configured world" "$WORLD"
+# A fresh kind world has no agent manifest, so the world answers not-found:
+# any protocol status proves the broker dialed it over QUIC.
+tool mark_discover "{\"url\":\"mark://$WORLD/\"}"
+want "mark_discover reaches the world over QUIC" "status: "
+
+# Write path: the broker provisions the world write token on first use and
+# absorbs its propagation lag, which no unit test can show.
+# On a fresh cluster the kubelet takes longer to project the token Secret into
+# the world pod than the broker waits (about 8s), and the broker says so. An
+# agent retries; so does this. Only 401s happened, so nothing landed.
+for attempt in $(seq 1 12); do
+  tool mark_publish "{\"url\":\"$DOC\",\"body\":\"# Smoke\\n\\nfirst line\\n\",\"expected_version\":0,\"metadata\":{\"tags\":\"smoke\"}}"
+  grep -q "token propagation lag" /tmp/rpc.out || break
+  echo "... write token not projected into the world pod yet (attempt $attempt)"
+  sleep 10
+done
+want "mark_publish creates a document" "version: 1"
+tool mark_fetch "{\"url\":\"$DOC\"}"
+want "mark_fetch returns what was published" "first line"
+tool mark_append "{\"url\":\"$DOC\",\"body\":\"second line\\n\"}"
+want "mark_append resolves the version itself" "version: 2"
+tool mark_versions "{\"url\":\"$DOC\"}"
+want "mark_versions shows both versions" "current: 2"
+tool mark_list "{\"url\":\"mark://$WORLD/smoke/\"}"
+want "mark_list shows the document" "tools-$CLIENT_STATE.md"
+tool mark_explore "{\"url\":\"$DOC\"}"
+want "mark_explore returns the card" "## Outline"
+tool mark_lookup "{\"url\":\"mark://$WORLD/\",\"query\":\"smoke\"}"
+want "mark_lookup answers from the catalog" "status: ok"
+
+# Host case is not identity: the world is reached however its name is typed.
+UPPER=$(printf "%s" "$WORLD" | tr "a-z" "A-Z")
+tool mark_fetch "{\"url\":\"mark://$UPPER/smoke/tools-$CLIENT_STATE.md\",\"force\":true}"
+want "a world name is case insensitive in a tool URL" "second line"
+
+# A stale version offers a merge candidate and publishes nothing.
+tool mark_publish "{\"url\":\"$DOC\",\"body\":\"# Smoke\\n\\nfirst line, edited\\n\",\"expected_version\":1}"
+want "a stale publish returns a merge candidate" "status: merge-candidate"
+
+# Refusals, in the words an agent sees.
+tool mark_fetch "{\"url\":\"mark://no-such-world/x.md\"}"
+refused "an unknown world is named as such" "unknown world"
+tool mark_publish "{\"url\":\"$DOC\",\"body\":\"x\"}"
+refused "a publish without a version is refused" "expected_version is required"
+tool mark_publish "{\"url\":\"$DOC\",\"body\":\"x\",\"expected_version\":2,\"metadata\":\"tags: smoke\"}"
+refused "metadata that is not an object is refused" "metadata must be an object"
+
+tool mark_archive "{\"url\":\"$DOC\"}"
+want "mark_archive retires the smoke document" "archived: true"
+echo "OK: MCP tool calls end-to-end through the gateway"
 '
-    echo "--- auth-code + PKCE flow passed"
+    echo "--- auth-code + PKCE flow and MCP tool calls passed"
 
     # Confidential web-client flow (phase-1b web SSO). Proves the chart's
     # webClients rendering reached the broker AND the broker enforces the

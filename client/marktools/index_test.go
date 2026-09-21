@@ -110,6 +110,23 @@ func TestIndexRefusals(t *testing.T) {
 	}
 }
 
+// A caller who may not publish is refused before the crawl, not after it.
+func TestIndexAuthorizesBeforeAnyNetworkWork(t *testing.T) {
+	backend := sourceBackend()
+	var verbs []string
+	hooks := indexHooks(&verbs)
+	hooks.Writer = func(context.Context, marktools.Target, string) (marktools.WriteFunc, error) {
+		return nil, errors.New("publishing requires a token")
+	}
+	got := newTools(t, backend, hooks).Index(t.Context(), marktools.IndexArgs{Source: "mark://source", Target: "mark://hub/i.md"})
+	if !got.IsError || got.Text != "publishing requires a token" {
+		t.Errorf("Index = %+v", got)
+	}
+	if n := len(backend.FetchCalls) + len(backend.ListCalls) + len(backend.PublishCalls); n != 0 {
+		t.Errorf("backend calls = %d, want none for a refused caller", n)
+	}
+}
+
 // manifestBackend is sourceBackend with one server's manifest answer replaced.
 func manifestBackend(host string, answer func() (fetch.Result, error)) *fetchtest.Client {
 	backend := sourceBackend()

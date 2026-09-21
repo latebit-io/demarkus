@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -303,7 +304,8 @@ func TestPublishGenerationCancelsInFlightFetch(t *testing.T) {
 }
 
 func TestPublishGenerationPreservesPublishAndReconcileErrors(t *testing.T) {
-	publishFailure := errors.New("publish transport failed")
+	// Only a lost response is reconciled; a write that never left is not probed.
+	publishFailure := fmt.Errorf("publish response lost: %w", fetch.ErrOutcomeUnknown)
 	_, err := PublishGeneration(t.Context(), PublishOptions{
 		ManifestPath: "/index.md", Source: "aggregated", Indexed: time.Now(),
 		Entries: []Entry{{Hash: testHashA, Server: "mark://a", Path: "/a.md"}},

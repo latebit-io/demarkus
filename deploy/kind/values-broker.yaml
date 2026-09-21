@@ -42,6 +42,9 @@ worlds:
   - name: world-default
     namespace: demarkus
     tokensSecret: world-default-demarkus-server-tokens
+    # The server chart names its Service after the release, not the world,
+    # so the broker's default <name>.<namespace> address does not resolve.
+    internalAddress: "world-default-demarkus-server.demarkus.svc.cluster.local:6309"
     allow:
       emails: ["alice@example.com"]
     defaultToken:
@@ -70,3 +73,8 @@ podDisruptionBudget:
 
 ingress:
   enabled: false
+
+# The kind world serves a self-signed certificate and there is no shared CA;
+# the MCP tool-call smoke dials it, so verification is off here and only here.
+worldDialer:
+  insecureSkipVerify: true

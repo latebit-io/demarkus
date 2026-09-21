@@ -51,8 +51,8 @@ func TestParseMarkLowercasesHost(t *testing.T) {
 	if got := target.DialHost(); got != "world.example:6309" {
 		t.Errorf("DialHost = %q, want world.example:6309", got)
 	}
-	if got := target.Hostname(); got != "WORLD.Example" {
-		t.Errorf("Hostname = %q, want it as written", got)
+	if got := target.Hostname(); got != "world.example" {
+		t.Errorf("Hostname = %q, want it lowercase: host case is not identity", got)
 	}
 	if got := target.AuthorityURL(); got != "mark://world.example" {
 		t.Errorf("AuthorityURL = %q, want mark://world.example", got)

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -31,78 +32,22 @@ type Config struct {
 	WorldDialer  WorldDialerConfig  `yaml:"worldDialer"`
 	Provisioning ProvisioningConfig `yaml:"provisioning"`
 
-	// dynamicWorlds is the runtime tenant set (memory broker Phase 3),
-	// swapped whole from the provisioning registry; every world consumer
-	// goes through AllWorlds / FindWorld so both sets are visible.
-	dynamicMu     sync.RWMutex
-	dynamicWorlds []WorldConfig
-	// dynamicTenants maps identityKey(issuer, subject) to the pinned
-	// slug, so tenant resolution survives email changes.
-	dynamicTenants map[string]string
+	// registry is the live world set, built from Worlds on first use.
+	registryOnce sync.Once
+	registry     *worldRegistry
 }
 
-// AllWorlds returns a snapshot of static plus dynamic worlds. The
-// returned slice is the caller's to keep; entries are copies.
-func (c *Config) AllWorlds() []WorldConfig {
-	c.dynamicMu.RLock()
-	defer c.dynamicMu.RUnlock()
-	out := make([]WorldConfig, 0, len(c.Worlds)+len(c.dynamicWorlds))
-	out = append(out, c.Worlds...)
-	out = append(out, c.dynamicWorlds...)
-	return out
+// worlds is the live world set: Worlds as loaded, plus what provisioning adds.
+func (c *Config) worlds() *worldRegistry {
+	c.registryOnce.Do(func() { c.registry = newWorldRegistry(c.Worlds) })
+	return c.registry
 }
+
+// AllWorlds returns a snapshot of static plus dynamic worlds.
+func (c *Config) AllWorlds() []WorldConfig { return c.worlds().All() }
 
 // FindWorld returns a copy of the named world, static or dynamic.
-func (c *Config) FindWorld(name string) (WorldConfig, bool) {
-	for j := range c.Worlds {
-		if c.Worlds[j].Name == name {
-			return c.Worlds[j], true
-		}
-	}
-	c.dynamicMu.RLock()
-	defer c.dynamicMu.RUnlock()
-	for j := range c.dynamicWorlds {
-		if c.dynamicWorlds[j].Name == name {
-			return c.dynamicWorlds[j], true
-		}
-	}
-	return WorldConfig{}, false
-}
-
-// SetDynamicWorlds replaces the dynamic tenant set and its identity
-// index (identityKey -> slug). Static names win on collision: a
-// registry entry shadowing a static world is dropped from both.
-func (c *Config) SetDynamicWorlds(worlds []WorldConfig, tenants map[string]string) {
-	static := make(map[string]bool, len(c.Worlds))
-	for j := range c.Worlds {
-		static[c.Worlds[j].Name] = true
-	}
-	filtered := make([]WorldConfig, 0, len(worlds))
-	for j := range worlds {
-		if !static[worlds[j].Name] {
-			filtered = append(filtered, worlds[j])
-		}
-	}
-	index := make(map[string]string, len(tenants))
-	for key, slug := range tenants {
-		if !static[slug] {
-			index[key] = slug
-		}
-	}
-	c.dynamicMu.Lock()
-	c.dynamicWorlds = filtered
-	c.dynamicTenants = index
-	c.dynamicMu.Unlock()
-}
-
-// tenantSlugForIdentity resolves a provisioned identity to its pinned
-// world slug via the dynamic tenant index.
-func (c *Config) tenantSlugForIdentity(key string) (string, bool) {
-	c.dynamicMu.RLock()
-	defer c.dynamicMu.RUnlock()
-	slug, ok := c.dynamicTenants[key]
-	return slug, ok
-}
+func (c *Config) FindWorld(name string) (WorldConfig, bool) { return c.worlds().Find(name) }
 
 // StorageConfig selects the credential-persistence backend. "kubernetes"
 // (the default) stores everything in Secrets; "file" is single-host mode:
@@ -460,6 +405,9 @@ type OIDCConfig struct {
 // mint tokens for. Authorization is per-world; an OIDC identity may
 // qualify for some worlds and not others depending on Allow.
 type WorldConfig struct {
+	// generation tells one provisioning of a name from the next, so state
+	// cached for a deprovisioned world is not reused by its successor.
+	generation string
 	// Name is the world's logical name; the MCP gateway keys tool
 	// calls and the per-world write-token store on it.
 	Name string `yaml:"name"`
@@ -1020,15 +968,19 @@ func (r *RateLimitConfig) applyDefaultsAndValidate() error {
 // expect "expires" to mean.
 const maxSweeperInterval = 24 * time.Hour
 
-// validateWorld enforces the per-world invariants and normalizes the
-// AllowConfig string lists in place. Split out of validate() so the
-// gocyclo budget on each function stays inside the linter threshold;
-// the outer loop owns cross-world checks (duplicates), the helper owns
-// single-world checks.
+// worldNameRE is a DNS label. A world name is the host of every tool URL, a
+// graph key (hosts compare lowercase) and part of a Secret name, so nothing
+// looser works everywhere. Rejected, never normalized: that would rename Secrets.
+var worldNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// validateWorld owns the checks on one world and normalizes its allow lists
+// in place; the caller owns the checks across worlds, such as duplicates.
 func validateWorld(i int, w *WorldConfig, fileMode bool) error {
 	switch {
 	case w.Name == "":
 		return fmt.Errorf("worlds[%d]: name is required", i)
+	case !worldNameRE.MatchString(w.Name):
+		return fmt.Errorf("worlds[%d]: name %q must be a DNS label: lowercase letters, digits and hyphens, at most 63, no hyphen at either end", i, w.Name)
 	case len(w.DefaultToken.Paths) == 0:
 		return fmt.Errorf("worlds[%d] (%s): defaultToken.paths is required", i, w.Name)
 	}

@@ -117,7 +117,7 @@ func tenantWorldFor(cfg *Config, claims *Claims) (WorldConfig, error) {
 	// Identity index first: a provisioned tenant owns its pinned slug. A
 	// hit whose Allow rejects the caller means the record's email is
 	// stale; fail so EnsureTenant's slow path refreshes it.
-	if slug, ok := cfg.tenantSlugForIdentity(identityKey(cfg.OIDC.Issuer, claims.Subject)); ok {
+	if slug, ok := cfg.worlds().SlugForIdentity(identityKey(cfg.OIDC.Issuer, claims.Subject)); ok {
 		if w, found := cfg.FindWorld(slug); found && worldAllows(&w.Allow, claims) {
 			return w, nil
 		}

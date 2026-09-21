@@ -7,7 +7,6 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
-	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
@@ -404,8 +403,8 @@ func TestPublish_NarrowingNote(t *testing.T) {
 			Metadata: map[string]string{"version": "3", "etag": "e", "tags": "a,b,c", "type": "Note", "title": "T"}, Body: "x"}}
 		backend := &fetchtest.Client{
 			Published: map[string]fetch.Result{
-				"example.com:6309/doc.md":                                 current,
-				"example.com:6309" + generation.VersionPath("/doc.md", 3): current,
+				"example.com:6309/doc.md":                               current,
+				"example.com:6309" + protocol.VersionPath("/doc.md", 3): current,
 			},
 			PublishFn: func(_ context.Context, _ fetch.WriteRequest) (fetch.Result, error) {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "4"}}}, nil

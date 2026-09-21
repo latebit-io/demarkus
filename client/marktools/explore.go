@@ -43,7 +43,7 @@ func (t *Tools) Explore(ctx context.Context, args ExploreArgs) Result { //nolint
 	doc := fetch.FetchRequest{Host: target.Host, Path: target.Path, Token: t.readToken(ctx, target.Host)}
 	result, err := t.backend.Fetch(ctx, doc)
 	if err != nil {
-		return t.failed(SiteFetch, target.Host, err)
+		return t.failed(SiteExplore, target.Host, err)
 	}
 	body := result.Response.Body
 	binary := mdoutline.BinaryBody(body)
@@ -52,14 +52,10 @@ func (t *Tools) Explore(ctx context.Context, args ExploreArgs) Result { //nolint
 		observed.Response.Body = ""
 	}
 	// No store is not a failure here: the card says so in its graph section.
-	var store *graphstore.Store
 	scope, _ := t.graphScope(ctx)
-	if scope != nil {
-		store = scope.Store
-	}
 	if result.Response.Status != protocol.StatusOK {
 		out := mcpfmt.Format(result, args.Render)
-		if warning := observe(store, target.NodeURL, observed); warning != "" {
+		if warning := observe(scope, &target, observed); warning != "" {
 			out += mcpfmt.Note(strings.TrimSuffix(warning, "\n"))
 		}
 		return text(out)
@@ -67,7 +63,7 @@ func (t *Tools) Explore(ctx context.Context, args ExploreArgs) Result { //nolint
 	if scope != nil {
 		scope.seed(ctx, target)
 	}
-	cacheWarning := observe(store, target.NodeURL, observed)
+	cacheWarning := observe(scope, &target, observed)
 
 	// An outline over a binary body is garbage; say what it is instead.
 	if binary {
@@ -94,9 +90,17 @@ func (t *Tools) Explore(ctx context.Context, args ExploreArgs) Result { //nolint
 
 // observe records what the fetch saw in the graph store and saves it; the
 // string is a warning for the card when the save failed.
-func observe(store *graphstore.Store, nodeURL string, result fetch.Result) string {
-	if store == nil || !store.ObserveDocument(nodeURL, graph.FetchResult{
-		Status: result.Response.Status, Body: result.Response.Body, Metadata: result.Response.Metadata,
+func observe(scope *GraphScope, target *Target, result fetch.Result) string {
+	if scope == nil {
+		return ""
+	}
+	source := ""
+	if scope.Source != nil {
+		source = scope.Source(*target)
+	}
+	store := scope.Store
+	if !store.ObserveDocument(target.NodeURL, graph.FetchResult{
+		Source: source, Status: result.Response.Status, Body: result.Response.Body, Metadata: result.Response.Metadata,
 	}) {
 		return ""
 	}

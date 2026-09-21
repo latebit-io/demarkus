@@ -81,6 +81,8 @@ type seedGraphData struct {
 
 // Store is the persistent graph state.
 type Store struct {
+	// seedChecks single-flights and throttles seed passes per owner.
+	seedChecks      SeedGate
 	path            string
 	mu              sync.RWMutex
 	saveMu          sync.Mutex

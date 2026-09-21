@@ -73,23 +73,20 @@ func publishFromCLI(ctx context.Context, w *cliWrite) (writeOutcome, error) {
 	if err != nil {
 		return writeOutcome{}, err
 	}
-	outcome, err := w.doc.Publish(ctx, merge.Write{Path: w.doc.Path, Body: w.body, ExpectedVersion: *w.expectedVersion, Metadata: w.meta}, mode)
-	if err != nil {
-		return writeOutcome{}, unknownOutcomeAdvice(err)
+	result, err := w.doc.Publish(ctx, docwrite.Write{Body: w.body, ExpectedVersion: *w.expectedVersion, Metadata: w.meta}, mode)
+	if err == nil && result.Candidate != nil {
+		return candidateOutcome(result.Candidate), nil
 	}
-	if outcome.Status == merge.OutcomeCandidate {
-		return candidateOutcome(&outcome), nil
-	}
-	return responseOutcome(outcome.Publish.Status, outcome.Publish.Metadata, outcome.Publish.Body), nil
+	return answeredOutcome(result, err)
 }
 
 // candidateOutcome hands the merged body to stdout so it can be redirected,
 // and the facts needed to republish it to stderr.
-func candidateOutcome(o *merge.Outcome) writeOutcome {
+func candidateOutcome(o *docwrite.Candidate) writeOutcome {
 	notice := fmt.Sprintf("[merge-candidate] your-version=%d current-version=%d publish-at-version=%d has-markers=%t\n"+
 		"demarkus: conflict; the merged candidate is on stdout: review it, then publish it with -expected-version %d\n",
 		o.BaseVersion, o.TheirVersion, o.PublishAtVersion, o.HasMarkers, o.PublishAtVersion)
-	return writeOutcome{status: string(merge.OutcomeCandidate), stdout: o.Body, notice: notice, code: 1}
+	return writeOutcome{status: docwrite.StatusCandidate, stdout: o.Body, notice: notice, code: 1}
 }
 
 func answeredOutcome(result docwrite.Result, err error) (writeOutcome, error) { //nolint:gocritic // takes the call's two results as they come
@@ -156,21 +153,21 @@ type editedDoc struct {
 // disk and the notice says where: a merged candidate on a conflict, the edits
 // themselves on any other failure.
 func finishEdit(ctx context.Context, doc *docwrite.Doc, edited editedDoc) writeOutcome { //nolint:gocritic // one edit, passed once
-	outcome, err := doc.Publish(ctx, merge.Write{Path: doc.Path, Body: edited.body, ExpectedVersion: edited.fetchedVersion, Metadata: edited.meta}, merge.OnConflictMerge)
+	result, err := doc.Publish(ctx, docwrite.Write{Body: edited.body, ExpectedVersion: edited.fetchedVersion, Metadata: edited.meta}, merge.OnConflictMerge)
 	if err != nil {
 		return savedOutcome(doc.Path, edited.body, fmt.Sprintf("publish failed: %v", unknownOutcomeAdvice(err)))
 	}
-	if outcome.Status == merge.OutcomeCandidate {
+	if c := result.Candidate; c != nil {
 		markers := "it merged cleanly"
-		if outcome.HasMarkers {
+		if c.HasMarkers {
 			markers = "it holds conflict markers to resolve"
 		}
-		return savedOutcome(doc.Path, outcome.Body, fmt.Sprintf(
+		return savedOutcome(doc.Path, c.Body, fmt.Sprintf(
 			"Conflict: the document is at version %d, you edited version %d.\nA merged candidate was written; %s.\n"+
 				"Review it, then publish it with -expected-version %d.",
-			outcome.TheirVersion, outcome.BaseVersion, markers, outcome.PublishAtVersion))
+			c.TheirVersion, c.BaseVersion, markers, c.PublishAtVersion))
 	}
-	return responseOutcome(outcome.Publish.Status, outcome.Publish.Metadata, outcome.Publish.Body)
+	return responseOutcome(result.Response.Status, result.Response.Metadata, result.Response.Body)
 }
 
 // savedOutcome writes body to a fresh temp file and reports why and where.

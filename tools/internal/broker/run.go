@@ -316,10 +316,27 @@ func newSecretStore(cfg *Config, kubeconfigPath string) (SecretStore, kubernetes
 	return NewK8sSecretStore(k8s), k8s, nil
 }
 
-// RunDeprovision is the operator deprovision flow, owned here so its
-// wiring (validators, store, buckets) can never drift from Run's.
-func RunDeprovision(configPath, kubeconfigPath, slug string, deleteBucket bool, log *slog.Logger) (found bool, err error) {
-	cfg, err := LoadConfig(configPath)
+// DeprovisionOptions names one tenant world to remove.
+type DeprovisionOptions struct {
+	ConfigPath, KubeconfigPath string
+	Slug                       string
+	DeleteBucket               bool
+	Log                        *slog.Logger
+}
+
+// deprovisionTimeout bounds one run. Emptying a large bucket is slow, and a
+// run that is cut short converges when it is run again.
+const deprovisionTimeout = 15 * time.Minute
+
+// RunDeprovision is the operator deprovision flow, owned here so its wiring
+// (validators, store, buckets) can never drift from Run's. It stops on
+// SIGINT or SIGTERM, leaving the tombstone for the rerun to finish.
+func RunDeprovision(ctx context.Context, opts DeprovisionOptions) (found bool, err error) {
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, deprovisionTimeout)
+	defer cancel()
+	cfg, err := LoadConfig(opts.ConfigPath)
 	if err != nil {
 		return false, err
 	}
@@ -332,19 +349,19 @@ func RunDeprovision(configPath, kubeconfigPath, slug string, deleteBucket bool, 
 	if !cfg.Provisioning.Enabled() {
 		return false, fmt.Errorf("deprovisioning requires provisioning enabled (mode %q)", cfg.Provisioning.Mode)
 	}
-	store, _, err := newSecretStore(cfg, kubeconfigPath)
+	store, _, err := newSecretStore(cfg, opts.KubeconfigPath)
 	if err != nil {
 		return false, err
 	}
 	// Secret-only cleanup must not depend on GCS reachability.
 	var buckets BucketCreator
-	if deleteBucket {
-		gcsBuckets, cleanup, bucketsErr := NewGCSBuckets(cfg, log)
+	if opts.DeleteBucket {
+		gcsBuckets, cleanup, bucketsErr := NewGCSBuckets(cfg, opts.Log)
 		if bucketsErr != nil {
 			return false, bucketsErr
 		}
 		defer cleanup()
 		buckets = gcsBuckets
 	}
-	return newProvisioner(cfg, store, buckets, log).DeprovisionTenant(context.Background(), slug, deleteBucket)
+	return newProvisioner(cfg, store, buckets, opts.Log).DeprovisionTenant(ctx, opts.Slug, opts.DeleteBucket)
 }

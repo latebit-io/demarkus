@@ -2,7 +2,6 @@ package broker
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -13,9 +12,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
-	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/graph"
-	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/protocol"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -493,30 +490,6 @@ func TestHandleMarkGraphPublishForwardsThroughWriteAuth(t *testing.T) {
 // can return when the test wants to satisfy the manifest check.
 const indexManifestBody = "# Agent Manifest\n\nThis world accepts index publications.\n"
 
-func TestIndexUnauthorizedReconcileDoesNotMaskLaterManifestFailure(t *testing.T) {
-	var shard protocol.Response
-	_, err := index.PublishGeneration(t.Context(), index.PublishOptions{
-		ManifestPath: "/index.md", Source: "mark://team-a", Indexed: time.Now(),
-		Entries: []index.Entry{{Hash: "sha256-" + strings.Repeat("a", 64), Server: "mark://team-a", Path: "/a.md"}},
-	}, func(_ context.Context, path string) (protocol.Response, error) {
-		if strings.Contains(path, ".shards/") && shard.Status != "" {
-			return shard, nil
-		}
-		return protocol.Response{Status: protocol.StatusNotFound}, nil
-	}, func(_ context.Context, path, body string, _ int) (protocol.Response, error) {
-		if strings.Contains(path, ".shards/") {
-			shard = protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: map[string]string{
-				"version": "1", "content-hash": generation.BodyHash(body),
-			}}
-			return protocol.Response{Status: protocol.StatusUnauthorized}, errIndexPublishUnauthorized
-		}
-		return protocol.Response{Status: protocol.StatusConflict}, nil
-	})
-	if err == nil || errors.Is(err, errIndexPublishUnauthorized) {
-		t.Fatalf("manifest failure = %v, want non-auth error", err)
-	}
-}
-
 func TestHandleMarkIndexHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Server.MCP.FirstMintMaxAttempts = 3
@@ -921,26 +894,6 @@ func TestHandleMarkGraphPublishRetention(t *testing.T) {
 			t.Errorf("error text = %q, want it to mention 'retention must be >= 0'", text)
 		}
 	})
-}
-
-// TestFormatGraphSummaryEdgeAnnotationFidelity pins the exact edge-annotation
-// literals against the client's TestFormatGraphEdgeAnnotations so a format
-// drift on either side fails a build.
-func TestFormatGraphSummaryEdgeAnnotationFidelity(t *testing.T) {
-	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://w/a.md", Status: "ok"})
-	g.AddEdgeInfo(graph.Edge{From: "mark://w/a.md", To: "mark://w/b.md", Rel: "supersedes"})
-	g.AddEdgeInfo(graph.Edge{From: "mark://w/a.md", To: "mark://w/c.md", Label: "Getting started", Anchor: "intro", Count: 3})
-
-	out := formatGraphSummary(g, "mark://w/a.md")
-	for _, want := range []string{
-		"  mark://w/a.md -> mark://w/b.md [supersedes]",
-		"  mark://w/a.md -> mark://w/c.md (\"Getting started\", #intro, x3)",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("formatGraphSummary missing %q\n---\n%s", want, out)
-		}
-	}
 }
 
 func TestGraphWriteHandlersDenyNonWriter(t *testing.T) {

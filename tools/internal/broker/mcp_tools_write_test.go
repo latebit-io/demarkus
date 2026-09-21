@@ -12,7 +12,6 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
-	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/protocol"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -1064,7 +1063,7 @@ func TestHandleMarkPublishNarrowingNote(t *testing.T) {
 	d := &fakeDispatcher{
 		Published: map[string]fetch.Result{
 			"team-a/foo.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "3"}}},
-			"team-a" + generation.VersionPath("/foo.md", 3): {Response: protocol.Response{Status: protocol.StatusOK,
+			"team-a" + protocol.VersionPath("/foo.md", 3): {Response: protocol.Response{Status: protocol.StatusOK,
 				Metadata: map[string]string{"version": "3", "tags": "a,b", "rel-related": "/x.md"}, Body: "x"}},
 		},
 		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {

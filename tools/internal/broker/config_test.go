@@ -169,6 +169,26 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: `duplicate tokens Secret reference "team-a/team-a-tokens"`,
 		},
 		{
+			name:    "uppercase world name",
+			body:    strings.Replace(validConfig, "name: team-a", "name: Team-A", 1),
+			wantErr: `worlds[0]: name "Team-A" must be a DNS label`,
+		},
+		{
+			name:    "world name with a dot",
+			body:    strings.Replace(validConfig, "name: team-a", "name: team.a", 1),
+			wantErr: `must be a DNS label`,
+		},
+		{
+			name:    "world name with a port",
+			body:    strings.Replace(validConfig, "name: team-a", `name: "team-a:7000"`, 1),
+			wantErr: `must be a DNS label`,
+		},
+		{
+			name:    "world name ending in a hyphen",
+			body:    strings.Replace(validConfig, "name: team-a", "name: team-", 1),
+			wantErr: `must be a DNS label`,
+		},
+		{
 			name:    "whitespace-only world namespace",
 			body:    strings.Replace(validConfig, "namespace: team-a", `namespace: "   "`, 1),
 			wantErr: "namespace is required",

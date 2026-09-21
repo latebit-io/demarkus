@@ -90,7 +90,7 @@ func TestEntriesForHashFetchesOnlyMatchingVerifiedShards(t *testing.T) {
 	responses := make(map[string]protocol.Response)
 	for i, artifact := range artifacts {
 		refs[i] = artifact.Ref(i + 1)
-		responses[generation.VersionPath(artifact.Path, i+1)] = protocol.Response{Status: protocol.StatusOK, Body: artifact.Body, Metadata: map[string]string{
+		responses[protocol.VersionPath(artifact.Path, i+1)] = protocol.Response{Status: protocol.StatusOK, Body: artifact.Body, Metadata: map[string]string{
 			"version": strconvI(i + 1), "content-hash": artifact.ContentHash,
 		}}
 	}
@@ -126,7 +126,7 @@ func TestLoadEntriesReadsFullGenerationAndRejectsShortShard(t *testing.T) {
 	responses := make(map[string]protocol.Response, len(artifacts))
 	for i, artifact := range artifacts {
 		refs[i] = artifact.Ref(i + 1)
-		responses[generation.VersionPath(artifact.Path, i+1)] = protocol.Response{
+		responses[protocol.VersionPath(artifact.Path, i+1)] = protocol.Response{
 			Status: protocol.StatusOK, Body: artifact.Body,
 			Metadata: map[string]string{"version": strconvI(i + 1), "content-hash": artifact.ContentHash},
 		}
@@ -154,7 +154,7 @@ func TestLoadEntriesReadsFullGenerationAndRejectsShortShard(t *testing.T) {
 	shortBody := strings.Replace(artifacts[0].Body, "| "+testHashA+" | mark://a | /a.md |\n", "", 1)
 	refs[0].Bytes = len(shortBody)
 	refs[0].ContentHash = generation.BodyHash(shortBody)
-	responses[generation.VersionPath(refs[0].Path, refs[0].Version)] = protocol.Response{
+	responses[protocol.VersionPath(refs[0].Path, refs[0].Version)] = protocol.Response{
 		Status: protocol.StatusOK, Body: shortBody,
 		Metadata: map[string]string{"version": strconvI(refs[0].Version), "content-hash": refs[0].ContentHash},
 	}

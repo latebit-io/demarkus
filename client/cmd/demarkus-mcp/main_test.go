@@ -265,8 +265,9 @@ func TestHandlerMarkPublish_NoToken(t *testing.T) {
 	ctx := context.Background()
 
 	result, err := h.markPublish(ctx, newCallToolRequest(map[string]any{
-		"url":  "mark://example.com/doc.md",
-		"body": "# Hello",
+		"url":              "mark://example.com/doc.md",
+		"body":             "# Hello",
+		"expected_version": float64(0), // arguments are checked before authorization
 	}))
 	if err != nil {
 		t.Fatalf("unexpected Go error: %v", err)

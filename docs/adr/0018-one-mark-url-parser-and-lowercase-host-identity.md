@@ -75,3 +75,10 @@ the broker wrote the same server as `mark://world`.
   free of the markdown parser `links` links in.
 - `joinurl` keeps its own host check. A join URL allows only DNS characters
   and no IPv6 literal, which is a narrower contract than a mark URL.
+
+## Amendment (2026-09-21)
+
+`Hostname()` is lowercase now, like every other identity accessor. The broker
+was the reason it kept the host as written; since
+[ADR 0021](0021-world-registry-names-and-one-tenant-door.md) a world name must
+be a lowercase DNS label, and tool URLs treat it as case insensitive.

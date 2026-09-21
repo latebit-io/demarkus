@@ -70,7 +70,7 @@ func (t *Tools) fetchByHash(ctx context.Context, server, hash string) (fetch.Res
 	}
 	result, err := t.fetch(ctx, at, "/"+hash)
 	if err != nil {
-		return fetch.Result{}, fmt.Errorf("%s: %v", server, err)
+		return fetch.Result{}, fmt.Errorf("%s: %s", server, t.errText(SiteResolveCandidate, at.Host, err))
 	}
 	if result.Response.Status != protocol.StatusOK {
 		return fetch.Result{}, fmt.Errorf("%s: %s", server, result.Response.Status)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -84,6 +85,8 @@ func NeighborhoodOptions(req *mcp.CallToolRequest) graphstore.NeighborhoodOption
 
 // FormatNeighborhood renders grouped relation rows with source evidence.
 func FormatNeighborhood(center string, page graphstore.NeighborhoodPage) string {
+	// Edges are keyed by identity; the caller may have the url as it was typed.
+	center = links.CanonicalURL(center)
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Relations (%d documents)\n", page.TotalRows)
 	if len(page.Rows) == 0 {

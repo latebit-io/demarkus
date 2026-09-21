@@ -10,6 +10,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -33,6 +34,11 @@ type mcpGateway struct {
 	fetchSeen *sessionSeen
 	// memorySeed tracks per-world memory-template seeding (memory profile).
 	memorySeed memorySeeder
+	// refusals spares a refused identity a registry round trip on every call.
+	refusals tenantRefusals
+	// tools are the shared mark_* bodies bound to this gateway; nil only if
+	// the gateway was built without a dispatcher, which run reports.
+	tools *marktools.Tools
 }
 
 // gatewayGraph keeps graph data and refresh state in the same isolation scope.
@@ -40,8 +46,6 @@ type mcpGateway struct {
 type gatewayGraph struct {
 	graphStore *graphstore.Store
 	tenant     string // empty for the organizational graph
-	// seedGate single-flights and throttles published graph checks per world.
-	seedGate graphstore.SeedGate
 }
 
 type tenantGraph struct {
@@ -128,6 +132,15 @@ func (g *mcpGateway) evictTenantGraphs(identity string) {
 	}
 }
 
+// dropWorld forgets what this gateway cached for a world that left the
+// registry, so a world provisioned later under its name starts clean.
+func (g *mcpGateway) dropWorld(name string) {
+	g.memorySeed.forget(name)
+	g.tenantGraphsMu.Lock()
+	delete(g.tenantGraphs, name)
+	g.tenantGraphsMu.Unlock()
+}
+
 // newMCPGateway registers the profile's tools and wraps them in Streamable
 // HTTP. Production supplies *worldPool; tests inject a dispatcher fake.
 func newMCPGateway(s *Server, version string, dispatcher worldDispatcher, profile *GatewayProfile) *mcpGateway {
@@ -152,6 +165,12 @@ func newMCPGateway(s *Server, version string, dispatcher worldDispatcher, profil
 		tenantGraphs:   make(map[string]*tenantGraph),
 		fetchSeen:      fetchSeen,
 	}
+	s.cfg.worlds().OnDrop(g.dropWorld)
+	tools, err := g.toolBodies()
+	if err != nil {
+		s.log.Error("mcp gateway: tool bodies unavailable", "err", err)
+	}
+	g.tools = tools
 	opts := []mcpserver.ServerOption{
 		// listChanged=false: the tool set is static across a session,
 		// so we never send notifications/tools/list_changed.

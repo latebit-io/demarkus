@@ -46,7 +46,7 @@ func hubSnapshot(t *testing.T) (protocol.Response, map[string]protocol.Response)
 	shards := make(map[string]protocol.Response, len(artifacts))
 	for i, artifact := range artifacts {
 		refs[i] = artifact.Ref(i + 1)
-		shards[generation.VersionPath(artifact.Path, i+1)] = protocol.Response{
+		shards[protocol.VersionPath(artifact.Path, i+1)] = protocol.Response{
 			Status: protocol.StatusOK, Body: artifact.Body,
 			Metadata: map[string]string{"version": strconv.Itoa(i + 1), "content-hash": artifact.ContentHash},
 		}
@@ -458,7 +458,7 @@ func TestSeedGraph_EtagRoundTrip(t *testing.T) {
 	}
 
 	// Expire the throttle so the second call re-checks with the stored etag.
-	h.seedGate.Expire("host:6309")
+	h.graphStore.ExpireSeedCheck("host:6309")
 
 	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"}))
 	if err != nil {

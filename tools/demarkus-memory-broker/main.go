@@ -38,7 +38,10 @@ func main() {
 	slog.SetDefault(log)
 
 	if *deprovision != "" {
-		found, err := broker.RunDeprovision(*configPath, *kubeconfig, *deprovision, *deleteBucket, log)
+		found, err := broker.RunDeprovision(context.Background(), broker.DeprovisionOptions{
+			ConfigPath: *configPath, KubeconfigPath: *kubeconfig,
+			Slug: *deprovision, DeleteBucket: *deleteBucket, Log: log,
+		})
 		if err != nil {
 			log.Error("deprovision failed", "world", *deprovision, "err", err)
 			os.Exit(1)

@@ -130,9 +130,6 @@ type handler struct {
 	// broker MCP gateway so the two surfaces answer identically.
 	seenMu sync.Mutex
 	seen   map[string]fetchdedup.Doc
-
-	// seedGate single-flights and throttles published graph checks per host.
-	seedGate graphstore.SeedGate
 }
 
 // profileEnv lets a launcher select the profile without a flag an older
@@ -201,87 +198,21 @@ func (h *handler) seenRecord(key string, d fetchdedup.Doc) {
 	h.seen[key] = d
 }
 
-// seedGraph refreshes from the published graph so cold backlink queries work.
-// Source revisions select adjacency; failures preserve last-good observations.
+// seedGraph refreshes from the host's published graph so cold backlink
+// queries work. Failures keep the last good seed and are logged.
 func (h *handler) seedGraph(ctx context.Context, host string) {
 	if h.graphStore == nil || h.client == nil || host == "" {
 		return
 	}
-	h.seedGate.Run(ctx, host, func(ctx context.Context) bool {
-		if h.seedPass(ctx, host) {
-			return true
-		}
-		h.graphStore.MarkSeedFailure(host)
-		if err := h.graphStore.Save(); err != nil {
-			log.Printf("warning: graph seed failure save: %v", err)
-		}
-		return false
-	})
-}
-
-// seedPass reports whether the published graph was current, refreshed or absent.
-func (h *handler) seedPass(ctx context.Context, host string) bool { //nolint:gocyclo // snapshot-first fallback has explicit terminal states
 	token := h.resolveToken(host)
-	etag := h.graphStore.SeedEtag(host)
-	result, err := h.client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: graphstore.SnapshotManifestPath, Token: token, IfNoneMatch: etag})
-	if err != nil {
-		log.Printf("warning: graph snapshot fetch mark://%s%s: %v", host, graphstore.SnapshotManifestPath, err)
-		return false
-	}
-	if result.Response.Status == protocol.StatusNotModified {
-		return true
-	}
-	if result.Response.Status == protocol.StatusOK {
-		nodes, edges, loadErr := graphstore.LoadSnapshot(graphstore.SnapshotManifestPath, result.Response, func(shardPath string) (protocol.Response, error) {
-			shard, fetchErr := h.client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: shardPath, Token: token})
-			return shard.Response, fetchErr
-		})
-		if loadErr != nil {
-			log.Printf("warning: graph snapshot load mark://%s%s: %v", host, graphstore.SnapshotManifestPath, loadErr)
-			return false
-		}
-		h.graphStore.ReplaceSeed(host, nodes, edges)
-		if snapshotEtag := result.Response.Metadata["etag"]; snapshotEtag != "" {
-			h.graphStore.SetSeedEtag(host, snapshotEtag)
-		}
-		if err := h.graphStore.Save(); err != nil {
-			log.Printf("warning: graph seed save: %v", err)
-		}
-		return true
-	}
-	if result.Response.Status != protocol.StatusNotFound {
-		log.Printf("warning: graph snapshot mark://%s%s returned %s", host, graphstore.SnapshotManifestPath, result.Response.Status)
-		return false
-	}
-
-	result, err = h.client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: graphstore.LegacyExportPath, Token: token, IfNoneMatch: etag})
-	if err != nil {
-		log.Printf("warning: graph seed fetch mark://%s%s: %v", host, graphstore.LegacyExportPath, err)
-		return false
-	}
-	if result.Response.Status == protocol.StatusNotFound {
-		return true
-	}
-	if result.Response.Status == protocol.StatusNotModified {
-		return true
-	}
-	if result.Response.Status != protocol.StatusOK {
-		log.Printf("warning: legacy graph seed mark://%s%s returned %s", host, graphstore.LegacyExportPath, result.Response.Status)
-		return false
-	}
-	nodes, edges, parseErr := graphstore.ParseExportStrict(result.Response.Body)
-	if parseErr != nil {
-		log.Printf("warning: legacy graph seed parse mark://%s%s: %v", host, graphstore.LegacyExportPath, parseErr)
-		return false
-	}
-	h.graphStore.ReplaceSeed(host, nodes, edges)
-	if etag := result.Response.Metadata["etag"]; etag != "" {
-		h.graphStore.SetSeedEtag(host, etag)
-	}
-	if err := h.graphStore.Save(); err != nil {
-		log.Printf("warning: graph seed save: %v", err)
-	}
-	return true
+	h.graphStore.Seed(ctx, graphstore.SeedSource{
+		Owner: host,
+		Fetch: func(ctx context.Context, path, ifNoneMatch string) (protocol.Response, error) {
+			result, err := h.client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: path, Token: token, IfNoneMatch: ifNoneMatch})
+			return result.Response, err
+		},
+		Problem: func(p graphstore.SeedProblem) { log.Printf("warning: %v", p) },
+	})
 }
 
 // resolveToken scopes the -token flag and DEMARKUS_AUTH to the default host;
@@ -437,7 +368,7 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("body is required"), nil
 	}
 	args := marktools.PublishArgs{URL: rawURL, Body: body, OnConflict: req.GetString("on_conflict", "")}
-	// A missing or mistyped expected_version stays nil; the tool refuses it after authorization.
+	// A missing or mistyped expected_version stays nil; the tool refuses it.
 	if version, err := req.RequireInt("expected_version"); err == nil {
 		args.ExpectedVersion = &version
 	}
@@ -532,7 +463,6 @@ func (h *handler) markGraphExport(ctx context.Context, _ mcp.CallToolRequest) (*
 }
 
 func (h *handler) markGraphPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	// The store is checked before the arguments: without one there is nothing to publish.
 	args := marktools.GraphPublishArgs{URL: req.GetString("url", ""), Retention: req.GetInt("retention", defaultGraphRetention)}
 	if version, err := req.RequireInt("expected_version"); err == nil {
 		args.ExpectedVersion = &version

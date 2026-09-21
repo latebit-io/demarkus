@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -221,6 +222,11 @@ func (req Request) WriteTo(w io.Writer) (int64, error) {
 
 	n, err := w.Write(buf.Bytes())
 	return int64(n), err
+}
+
+// VersionPath is the immutable FETCH path of one document version.
+func VersionPath(docPath string, version int) string {
+	return docPath + "/v" + strconv.Itoa(version)
 }
 
 // IsHashPath checks if path matches the content-addressed fetch format (sha256-<64hex>).

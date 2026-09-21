@@ -13,10 +13,10 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/lookuptable"
+	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 const (
@@ -71,7 +71,9 @@ func (g *mcpGateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolRe
 		limit = maxLookupAllResults
 	}
 
-	worlds := readableWorlds(g.srv.cfg)
+	// The tenant gate already refuses this tool in tenant mode; scoping here
+	// too means a gate mistake cannot turn it into a cross-tenant search.
+	worlds := g.scopedWorlds(ctx)
 	lookup := fetch.LookupRequest{
 		Scope: scope, Query: query,
 		Filter: req.GetString("filter", ""),
@@ -116,7 +118,7 @@ func (g *mcpGateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolRe
 			if err != nil {
 				return "", err
 			}
-			return g.bodyFor(ctx, worldName, path)
+			return marktools.FetchBody(g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: path}))
 		})
 	}
 	return mcp.NewToolResultText(text), nil
@@ -330,5 +332,3 @@ func lookupFailureDetail(body string) string {
 	}
 	return ": " + detail
 }
-
-var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkLookupAll

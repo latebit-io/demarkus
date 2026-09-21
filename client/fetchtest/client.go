@@ -186,7 +186,7 @@ func (c *Client) store(r fetch.WriteRequest, version int, result fetch.Result) (
 		c.Published = make(map[string]fetch.Result)
 	}
 	c.Published[r.Host+r.Path] = stored
-	c.Published[r.Host+generation.VersionPath(r.Path, version)] = stored
+	c.Published[r.Host+protocol.VersionPath(r.Path, version)] = stored
 	return result, nil
 }
 

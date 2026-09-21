@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/merge"
 )
 
 // GraphScope is the graph a call works on: one store for a stdio server, the
@@ -19,6 +19,9 @@ type GraphScope struct {
 	// Fetch reads documents for crawls and revalidation, under the surface's
 	// own routing and scoping rules.
 	Fetch graphstore.FetchFunc
+	// Source is where a document really lives when its NodeURL is a routing
+	// alias; observations record it, as the crawl's Fetch does. Nil is NodeURL.
+	Source func(target Target) string
 	// Seed refreshes the store from published graphs before a query; nil skips.
 	Seed func(ctx context.Context, target Target)
 	// EmptyHint follows "No backlinks found": how this surface fills its store.
@@ -133,20 +136,11 @@ type GraphPublishArgs struct {
 
 // GraphPublish answers mark_graph_publish: the export, published as a document.
 func (t *Tools) GraphPublish(ctx context.Context, args GraphPublishArgs) Result {
-	scope, bad := t.graphScope(ctx)
-	if bad != nil {
-		return *bad
-	}
-	// Checked here, after the store: an empty url would otherwise resolve to the
-	// surface's default server.
+	// An empty url would otherwise resolve to the surface's default server.
 	if args.URL == "" {
 		return failure("url is required")
 	}
 	target, bad := t.resolve(ctx, args.URL)
-	if bad != nil {
-		return *bad
-	}
-	write, bad := t.writer(ctx, target, "publish")
 	if bad != nil {
 		return *bad
 	}
@@ -157,22 +151,27 @@ func (t *Tools) GraphPublish(ctx context.Context, args GraphPublishArgs) Result 
 	if args.Retention < 0 {
 		return failure("retention must be >= 0 (0 keeps every version)")
 	}
+	write, bad := t.writer(ctx, target, "publish")
+	if bad != nil {
+		return *bad
+	}
+	scope, bad := t.graphScope(ctx)
+	if bad != nil {
+		return *bad
+	}
 	meta := t.agentMeta(ctx)
 	if args.Retention > 0 {
 		meta["retention"] = strconv.Itoa(args.Retention)
 	}
-	body := scope.Store.Export()
-	result, err := write(ctx, func(token string) (fetch.Result, error) {
-		return t.backend.Publish(ctx, fetch.WriteRequest{
-			Host: target.Host, Path: target.Path, Token: token,
-			Body: body, ExpectedVersion: expected, Metadata: meta,
-		})
-	})
+	// Single writer, so a conflict is reported, never merged.
+	result, err := t.doc(ctx, target, write).Publish(ctx, docwrite.Write{
+		Body: scope.Store.Export(), ExpectedVersion: expected, Metadata: meta,
+	}, merge.OnConflictFail)
 	if err != nil {
-		return t.failed(SitePublish, target.Host, err)
+		return t.failed(SiteGraphPublish, target.Host, err)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Published graph (%d nodes, %d edges) to %s\n", scope.Store.NodeCount(), scope.Store.EdgeCount(), target.NodeURL)
-	b.WriteString(mcpfmt.Full(result, writeFields...))
+	b.WriteString(formatResult(&result, writeFields...))
 	return text(b.String())
 }

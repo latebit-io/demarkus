@@ -6,9 +6,11 @@ package generation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
+	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
@@ -25,11 +27,6 @@ func InactiveSlot(active string) string {
 		return SlotB
 	}
 	return SlotA
-}
-
-// VersionPath is the immutable FETCH path of one document version.
-func VersionPath(docPath string, version int) string {
-	return fmt.Sprintf("%s/v%d", docPath, version)
 }
 
 // BodyHash is the protocol content hash of body.
@@ -192,10 +189,15 @@ func stage[R any](ctx context.Context, p *publisher, shard *Shard[R], verify fun
 	return ref, true, verify(ref, verified)
 }
 
-// publishVerified writes doc once and reads it back at its version. A failed
-// publish is reconciled against the head, never resent: it may have landed.
+// publishVerified writes doc once and reads it back at its version. A refusal,
+// or a response that was lost, is settled by content: the head may already be
+// this exact document. It is never resent.
 func (p *publisher) publishVerified(ctx context.Context, doc document) (protocol.Response, int, error) {
 	published, publishErr := p.io.Publish(ctx, doc.path, doc.body, doc.expected)
+	// A write that never left cannot have landed.
+	if publishErr != nil && !errors.Is(publishErr, fetch.ErrOutcomeUnknown) {
+		return protocol.Response{}, 0, fmt.Errorf("publish %s: %w", doc.path, publishErr)
+	}
 	if publishErr == nil && !protocol.IsWriteSuccess(published.Status) {
 		publishErr = fmt.Errorf("publish returned %s", published.Status)
 	}
@@ -212,7 +214,7 @@ func (p *publisher) publishVerified(ctx context.Context, doc document) (protocol
 			return protocol.Response{}, 0, fmt.Errorf("publish %s: %w; reconcile: %w", doc.path, publishErr, err)
 		}
 	}
-	versioned := VersionPath(doc.path, version)
+	versioned := protocol.VersionPath(doc.path, version)
 	verified, err := p.io.Fetch(ctx, versioned)
 	if err != nil {
 		return protocol.Response{}, 0, fmt.Errorf("verify %s: %w", versioned, err)

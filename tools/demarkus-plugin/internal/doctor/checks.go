@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/gate"
 )
@@ -340,9 +339,9 @@ func (a *audit) checkLostMetadata(ctx context.Context) {
 		}
 		found := false
 		for v := current - 1; v >= 1 && current-v <= MaxVersionsPerDoc && spend(p); v-- {
-			resp, err := a.store.Fetch(ctx, generation.VersionPath(p, v))
+			resp, err := a.store.Fetch(ctx, protocol.VersionPath(p, v))
 			if err != nil || resp.Status != protocol.StatusOK {
-				a.note("fetch %s: %s", generation.VersionPath(p, v), statusOrErr(resp.Status, err))
+				a.note("fetch %s: %s", protocol.VersionPath(p, v), statusOrErr(resp.Status, err))
 				break
 			}
 			if strings.TrimSpace(resp.Metadata["tags"]) == "" {

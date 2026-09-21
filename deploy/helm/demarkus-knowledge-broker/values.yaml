@@ -258,6 +258,9 @@ oidc:
 # the world's namespace (RBAC slice) granting the broker SA get/patch on
 # the named tokens Secret.
 worlds: []
+  # name is the host of every mark://<name>/ tool URL and part of a Secret
+  # name, so it must be a DNS label: lowercase letters, digits and hyphens,
+  # at most 63, no hyphen at either end. Anything else fails config load.
   # - name: team-a
   #   namespace: team-a
   #   tokensSecret: team-a-tokens

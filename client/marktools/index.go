@@ -43,6 +43,15 @@ func (t *Tools) Index(ctx context.Context, args IndexArgs) Result {
 	if args.ExpectedVersion < 0 {
 		return failure("expected_version must be non-negative")
 	}
+	// A dry run publishes nothing, so it asks nobody; anything else is
+	// authorized here, before the first request of the crawl.
+	var write WriteFunc
+	if !args.DryRun {
+		var refused *Result
+		if write, refused = t.writer(ctx, target, "publishing"); refused != nil {
+			return *refused
+		}
+	}
 	warnings, bad := t.checkManifests(ctx, &manifestCheck{source: source, target: target, dryRun: args.DryRun, force: args.Force})
 	if bad != nil {
 		return *bad
@@ -71,7 +80,7 @@ func (t *Tools) Index(ctx context.Context, args IndexArgs) Result {
 	if truncated || len(crawlWarnings) > 0 {
 		return failure("crawl incomplete; refusing to publish an authoritative index")
 	}
-	published, bad := t.publishIndex(ctx, &indexRun{source: source, target: target, entries: entries, indexedAt: indexedAt, expectedVersion: args.ExpectedVersion})
+	published, bad := t.publishIndex(ctx, &indexRun{source: source, target: target, entries: entries, indexedAt: indexedAt, expectedVersion: args.ExpectedVersion, write: write})
 	if bad != nil {
 		return *bad
 	}
@@ -87,15 +96,12 @@ type indexRun struct {
 	entries         []index.Entry
 	indexedAt       time.Time
 	expectedVersion int
+	write           WriteFunc
 }
 
-// publishIndex authorizes after the crawl, merges into an existing index when
-// asked, and publishes one generation.
+// publishIndex merges into an existing index when asked, and publishes one
+// generation.
 func (t *Tools) publishIndex(ctx context.Context, run *indexRun) (index.PublishResult, *Result) {
-	write, bad := t.writer(ctx, run.target, "publishing")
-	if bad != nil {
-		return index.PublishResult{}, bad
-	}
 	read := func(ctx context.Context, path string) (protocol.Response, error) {
 		result, err := t.fetch(ctx, run.target, path)
 		return result.Response, err
@@ -104,7 +110,7 @@ func (t *Tools) publishIndex(ctx context.Context, run *indexRun) (index.PublishR
 	if run.expectedVersion > 0 {
 		existing, err := read(ctx, run.target.Path)
 		if err != nil {
-			bad := failure("failed to fetch existing index: %v", err)
+			bad := t.failed(SiteIndexExisting, run.target.Host, err)
 			return index.PublishResult{}, &bad
 		}
 		if existing.Status != protocol.StatusOK {
@@ -129,7 +135,7 @@ func (t *Tools) publishIndex(ctx context.Context, run *indexRun) (index.PublishR
 		Entries:                 entries,
 		ExpectedManifestVersion: &run.expectedVersion,
 	}, read, func(ioCtx context.Context, docPath, body string, expected int) (protocol.Response, error) {
-		result, err := write(ioCtx, func(token string) (fetch.Result, error) {
+		result, err := run.write(ioCtx, func(token string) (fetch.Result, error) {
 			return t.backend.Publish(ioCtx, fetch.WriteRequest{
 				Host: run.target.Host, Path: docPath, Token: token,
 				Body: body, ExpectedVersion: expected, Metadata: meta,
@@ -138,7 +144,7 @@ func (t *Tools) publishIndex(ctx context.Context, run *indexRun) (index.PublishR
 		return result.Response, err
 	})
 	if err != nil {
-		bad := t.failed(SitePublish, run.target.Host, err)
+		bad := t.failed(SiteIndexPublish, run.target.Host, err)
 		return index.PublishResult{}, &bad
 	}
 	return published, nil

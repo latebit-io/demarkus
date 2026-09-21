@@ -60,12 +60,15 @@ type worldWriteTokenStore struct {
 }
 
 func newWorldWriteTokenStore(cfg *Config, store SecretStore) *worldWriteTokenStore {
-	return &worldWriteTokenStore{
+	s := &worldWriteTokenStore{
 		cfg:   cfg,
 		store: store,
 		clock: time.Now,
 		cache: make(map[string]string),
 	}
+	// A dropped world's token record is deleted with it; the cached copy is stale.
+	cfg.worlds().OnDrop(s.Invalidate)
+	return s
 }
 
 // Get returns the cached raw write token for worldName, or ok=false

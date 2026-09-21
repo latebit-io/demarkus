@@ -45,7 +45,7 @@ func TestGraphSnapshotRoundTripAndIntegrity(t *testing.T) {
 	responses := make(map[string]protocol.Response, len(artifacts))
 	for i, artifact := range artifacts {
 		refs[i] = artifact.Ref(i + 1)
-		responses[generation.VersionPath(artifact.Path, i+1)] = protocol.Response{
+		responses[protocol.VersionPath(artifact.Path, i+1)] = protocol.Response{
 			Status: protocol.StatusOK, Body: artifact.Body,
 			Metadata: map[string]string{"version": strconv.Itoa(i + 1), "content-hash": artifact.ContentHash},
 		}
@@ -70,7 +70,7 @@ func TestGraphSnapshotRoundTripAndIntegrity(t *testing.T) {
 		t.Fatalf("loaded nodes=%+v edges=%+v", loadedNodes, loadedEdges)
 	}
 
-	corruptPath := generation.VersionPath(refs[0].Path, refs[0].Version)
+	corruptPath := protocol.VersionPath(refs[0].Path, refs[0].Version)
 	missingVersion := responses[corruptPath]
 	missingVersion.Metadata = maps.Clone(missingVersion.Metadata)
 	delete(missingVersion.Metadata, "version")

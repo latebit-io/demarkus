@@ -203,7 +203,11 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 // applySnapshot publishes a registry snapshot to this pod's world set
 // and identity index.
 func (p *Provisioner) applySnapshot(registry *tenantRegistry) {
-	p.cfg.SetDynamicWorlds(p.worldsFromRegistry(registry), tenantIndexFromRegistry(registry))
+	rejected := p.cfg.worlds().SetDynamic(p.worldsFromRegistry(registry), tenantIndexFromRegistry(registry))
+	if len(rejected) > 0 {
+		// Written by hand or by an older build: no tool URL can name them.
+		p.log.Error("tenant registry holds world names that are not DNS labels; not served", "worlds", rejected)
+	}
 }
 
 // tenantIndexFromRegistry projects live records to identityKey -> slug.
@@ -536,7 +540,9 @@ func (p *Provisioner) worldsFromRegistry(registry *tenantRegistry) []WorldConfig
 		if registry.Tenants[slug].Deleting {
 			continue // tombstoned: out of service until cleanup finishes
 		}
-		worlds = append(worlds, p.cfg.Provisioning.tenantWorld(slug, registry.Tenants[slug].Email))
+		world := p.cfg.Provisioning.tenantWorld(slug, registry.Tenants[slug].Email)
+		world.generation = registry.Tenants[slug].Created
+		worlds = append(worlds, world)
 	}
 	return worlds
 }

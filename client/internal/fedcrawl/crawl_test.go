@@ -111,7 +111,7 @@ func (m *mockClient) Publish(ctx context.Context, r fetch.WriteRequest) (fetch.R
 	metadata := map[string]string{"version": strconv.Itoa(version), "content-hash": generation.BodyHash(body)}
 	stored := mockPage{status: protocol.StatusOK, body: body, metadata: metadata}
 	m.pages[host+path] = stored
-	m.pages[host+generation.VersionPath(path, version)] = stored
+	m.pages[host+protocol.VersionPath(path, version)] = stored
 	return fetch.Result{Response: protocol.Response{Status: status, Metadata: map[string]string{"version": strconv.Itoa(version)}}}, nil
 }
 

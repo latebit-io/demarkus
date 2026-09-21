@@ -95,6 +95,14 @@ func (s *memorySeeder) stateFor(world string) *memorySeedState {
 	return state
 }
 
+// forget drops a world's seeding state: a world of that name provisioned later
+// is a new, empty one. A seed still in flight finishes on its orphaned state.
+func (s *memorySeeder) forget(world string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.worlds, world)
+}
+
 // ensureMemorySeed makes sure w carries the memory template, seeding it when
 // absent. Best-effort: failures warn and the tool call proceeds; the next
 // call retries because only a verified seed marks the world done.

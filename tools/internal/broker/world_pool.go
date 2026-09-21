@@ -52,10 +52,25 @@ type worldPool struct {
 // newWorldPool builds an empty pool; clients are created on first use. opts
 // is the template every per world client inherits (TLS posture, timeouts).
 func newWorldPool(cfg *Config, opts fetch.Options) *worldPool {
-	return &worldPool{
+	p := &worldPool{
 		cfg:     cfg,
 		clients: make(map[string]pooledWorld, len(cfg.Worlds)),
 		opts:    opts,
+	}
+	cfg.worlds().OnDrop(p.drop)
+	return p
+}
+
+// drop forgets a world that left the registry. Its client closes outside the
+// lock; a request still in flight on it fails, which is right for a world
+// that no longer exists.
+func (p *worldPool) drop(worldName string) {
+	p.mu.Lock()
+	pooled, ok := p.clients[worldName]
+	delete(p.clients, worldName)
+	p.mu.Unlock()
+	if ok {
+		pooled.client.Close()
 	}
 }
 

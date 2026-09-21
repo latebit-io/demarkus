@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 // handleMarkWorlds lists every world the identity may read (the SSO org gate
@@ -50,4 +49,3 @@ func yesNo(v bool) string {
 }
 
 // compile-time check that the handler matches mcp-go's expected shape.
-var _ mcpserver.ToolHandlerFunc = (*mcpGateway)(nil).handleMarkWorlds

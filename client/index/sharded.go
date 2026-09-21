@@ -281,7 +281,7 @@ func EntriesForHash(manifestPath, body, hash string, fetchShard func(string) (pr
 		if ref.Prefix != prefix {
 			continue
 		}
-		resp, err := fetchShard(generation.VersionPath(ref.Path, ref.Version))
+		resp, err := fetchShard(protocol.VersionPath(ref.Path, ref.Version))
 		if err != nil {
 			return nil, fmt.Errorf("fetch shard %s: %w", ref.Path, err)
 		}
@@ -315,7 +315,7 @@ func LoadEntries(manifestPath, body string, fetchShard func(string) (protocol.Re
 	}
 	var entries []Entry
 	for _, ref := range m.Shards {
-		resp, err := fetchShard(generation.VersionPath(ref.Path, ref.Version))
+		resp, err := fetchShard(protocol.VersionPath(ref.Path, ref.Version))
 		if err != nil {
 			return nil, fmt.Errorf("fetch shard %s: %w", ref.Path, err)
 		}
@@ -671,7 +671,7 @@ func validateManifestPath(manifestPath string) error {
 	if err := protocol.ValidateRequestPath(generated); err != nil {
 		return fmt.Errorf("manifest path cannot produce valid shard paths: %w", err)
 	}
-	if err := protocol.ValidateRequestPath(generation.VersionPath(generated, math.MaxInt)); err != nil {
+	if err := protocol.ValidateRequestPath(protocol.VersionPath(generated, math.MaxInt)); err != nil {
 		return fmt.Errorf("manifest path cannot produce versioned shard paths: %w", err)
 	}
 	return nil

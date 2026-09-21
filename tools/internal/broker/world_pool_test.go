@@ -110,3 +110,29 @@ func TestWorldPoolDispatchesUnknownWorldThroughTopLevelMethods(t *testing.T) {
 		})
 	}
 }
+
+// A deprovisioned world stops being dialable at once, and the same name
+// provisioned again gets a fresh client, not the old world's connections.
+func TestWorldPoolLetsGoOfADroppedWorld(t *testing.T) {
+	cfg := &Config{}
+	pool := newWorldPool(cfg, fetch.Options{})
+	defer pool.Close()
+	eve := WorldConfig{Name: "eve-1", InternalAddress: "127.0.0.1:1", generation: "t1"}
+	cfg.worlds().SetDynamic([]WorldConfig{eve}, nil)
+	first, _, err := pool.clientFor("eve-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg.worlds().SetDynamic(nil, nil)
+	var notFound *errWorldNotFound
+	if _, _, err := pool.clientFor("eve-1"); !errors.As(err, &notFound) {
+		t.Fatalf("err = %v, want the dropped world unknown, not served from the cache", err)
+	}
+
+	eve.generation = "t2"
+	cfg.worlds().SetDynamic([]WorldConfig{eve}, nil)
+	if second, _, err := pool.clientFor("eve-1"); err != nil || second == first {
+		t.Errorf("client after reprovisioning = %p (first %p), %v; want a new one", second, first, err)
+	}
+}

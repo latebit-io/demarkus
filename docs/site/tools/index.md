@@ -22,6 +22,8 @@ demarkus-agent daemon -config fedcrawl.toml -insecure
 
 The broker is the front door of a knowledge system: it authenticates people and agents with OIDC, mints per-world capability tokens, and exposes every world through one MCP-over-HTTPS gateway that agents join with `/knowledge-join`. On top of the per-world tool surface it adds `mark_worlds` (the world directory, with per-world write access) and `mark_lookup_all` (system-wide catalog lookup with a single merged, globally limited result).
 
+A world's `name` in the broker config is the host of every `mark://<name>/<path>` tool URL and part of a Secret name, so it must be a DNS label: lowercase letters, digits and hyphens, at most 63 characters, no hyphen at either end. The broker refuses to start on anything else and never rewrites a name, because that would rename the Secrets behind it. In tool URLs the world name is case insensitive: `mark://Team-A/x` reaches `team-a`.
+
 See `tools/demarkus-knowledge-broker/MCP-API.md` for the full tool contract and the Helm chart README (`deploy/helm/demarkus-knowledge-broker/`) for deployment.
 
 ## Memory Broker (`demarkus-memory-broker`)

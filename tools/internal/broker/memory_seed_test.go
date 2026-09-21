@@ -228,3 +228,30 @@ func TestEnsureMemorySeedReplacesServerSeedInSeededWorld(t *testing.T) {
 		t.Errorf("second call published again (%d total)", got)
 	}
 }
+
+// The same identity provisioned again gets the same world name and an empty
+// bucket. A pod that remembered "seeded" for that name would never seed it.
+func TestReprovisionedWorldIsSeededAgain(t *testing.T) {
+	cfg := memoryTestConfig()
+	eve := WorldConfig{Name: "eve-1", Namespace: "memory", Allow: AllowConfig{Emails: []string{"alice@example.com"}}, generation: "t1"}
+	cfg.worlds().SetDynamic([]WorldConfig{eve}, nil)
+	d := freshWorldDispatcher()
+	g := newMemoryGateway(t, cfg, d)
+	ctx := withAliceClaims(context.Background())
+
+	g.ensureMemorySeed(ctx, &eve)
+	seededOnce := len(d.Calls().Publish)
+	g.ensureMemorySeed(ctx, &eve)
+	if seededOnce == 0 || len(d.Calls().Publish) != seededOnce {
+		t.Fatalf("publishes = %d then %d, want one seeding", seededOnce, len(d.Calls().Publish))
+	}
+
+	cfg.worlds().SetDynamic(nil, nil) // deprovisioned
+	d.Published = nil                 // its bucket went with it
+	eve.generation = "t2"
+	cfg.worlds().SetDynamic([]WorldConfig{eve}, nil)
+	g.ensureMemorySeed(ctx, &eve)
+	if got := len(d.Calls().Publish); got != 2*seededOnce {
+		t.Errorf("publishes = %d, want the new world seeded too (%d)", got, 2*seededOnce)
+	}
+}

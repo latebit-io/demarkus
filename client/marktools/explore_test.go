@@ -84,3 +84,27 @@ func TestExploreSiblingsSayWhenThereAreMore(t *testing.T) {
 		t.Errorf("ten siblings shown of twelve, with no sign of the rest:\n%s", siblings)
 	}
 }
+
+// A surface that routes by alias says where the document really lives, so the
+// observation agrees with what a crawl and a published snapshot record.
+func TestExploreObservesUnderTheScopesSource(t *testing.T) {
+	store := graphstore.New()
+	var seeded []string
+	hooks := graphHooks(store, &seeded)
+	hooks.Resolve = func(_ context.Context, raw string) (marktools.Target, error) {
+		return marktools.Target{Host: "team-a", Path: raw, NodeURL: "mark://team-a" + raw}, nil
+	}
+	graphOf := hooks.Graph
+	hooks.Graph = func(ctx context.Context) (*marktools.GraphScope, error) {
+		scope, err := graphOf(ctx)
+		scope.Source = func(target marktools.Target) string { return "mark://" + target.Host + ".svc:6309" + target.Path }
+		return scope, err
+	}
+	if got := newTools(t, hubBackend(), hooks).Explore(t.Context(), exploreArgs("/hub.md")); got.IsError {
+		t.Fatalf("Explore = %+v", got)
+	}
+	node := store.GetNode("mark://team-a/hub.md")
+	if node == nil || node.Observation.Source != "mark://team-a.svc/hub.md" {
+		t.Errorf("node = %+v, want the observation sourced at the real address", node)
+	}
+}

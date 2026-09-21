@@ -39,7 +39,8 @@ type Target struct {
 	Authority string
 }
 
-// Site names the call that failed, for ErrText.
+// Site names the call that failed, for ErrText. A surface that words failures
+// itself may print the name as the verb; the default wording does not.
 type Site string
 
 // Sites, one per backend call a tool makes.
@@ -52,8 +53,15 @@ const (
 	SiteFetch    Site = "fetch"
 	SitePublish  Site = "publish"
 	SiteAppend   Site = "append"
-	// SiteResolveIndex is mark_resolve reading its index.
-	SiteResolveIndex Site = "resolve index"
+	// SiteResolveIndex is mark_resolve reading its index, SiteResolveCandidate
+	// its read of one candidate server.
+	SiteResolveIndex     Site = "resolve (index fetch)"
+	SiteResolveCandidate Site = "resolve candidate"
+	SiteExplore          Site = "explore"
+	SiteGraphPublish     Site = "graph publish"
+	// SiteIndexExisting is mark_index reading the index it merges into.
+	SiteIndexExisting Site = "index (fetch existing)"
+	SiteIndexPublish  Site = "index (publish)"
 )
 
 // Hooks are what differs between surfaces. Resolve is required.
@@ -142,17 +150,35 @@ func (t *Tools) fetch(ctx context.Context, at Target, path string) (fetch.Result
 // failed words a backend error. A write that was sent may have landed, so its
 // failure says so: a blind resend conflicts with the first attempt.
 func (t *Tools) failed(site Site, host string, err error) Result {
-	msg := fmt.Sprintf("%s failed: %v", site, err)
-	if site == SiteResolveIndex {
-		msg = fmt.Sprintf("failed to fetch index: %v", err)
-	}
-	if t.hooks.ErrText != nil {
-		msg = t.hooks.ErrText(site, host, err)
-	}
+	msg := t.errText(site, host, err)
 	if errors.Is(err, fetch.ErrOutcomeUnknown) {
 		msg += "; it may have landed: fetch the document before retrying"
 	}
 	return Result{Text: msg, IsError: true}
+}
+
+func (t *Tools) errText(site Site, host string, err error) string {
+	if t.hooks.ErrText != nil {
+		return t.hooks.ErrText(site, host, err)
+	}
+	return defaultErrText(site, err)
+}
+
+// defaultErrText words a failure by the verb sent, not by the tool that sent it.
+func defaultErrText(site Site, err error) string {
+	switch site {
+	case SiteResolveIndex:
+		return fmt.Sprintf("failed to fetch index: %v", err)
+	case SiteIndexExisting:
+		return fmt.Sprintf("failed to fetch existing index: %v", err)
+	case SiteResolveCandidate:
+		return err.Error()
+	case SiteExplore:
+		site = SiteFetch
+	case SiteGraphPublish, SiteIndexPublish:
+		site = SitePublish
+	}
+	return fmt.Sprintf("%s failed: %v", site, err)
 }
 
 // writeFailed is failed for a write: a version that could not be resolved is

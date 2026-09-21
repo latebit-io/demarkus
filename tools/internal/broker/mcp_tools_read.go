@@ -2,14 +2,14 @@ package broker
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"math"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/lookupexpand"
+	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -36,22 +36,10 @@ func parseToolURL(raw string) (worldName, path string, err error) {
 	if u.Scheme != "mark" {
 		return "", "", fmt.Errorf("unsupported scheme %q (expected mark://)", u.Scheme)
 	}
-	// The supported shape is `mark://{worldName}/{path}` —
-	// double-slash, world name in the Host position. A triple
-	// slash (`mark:///foo`) leaves Host="" and Path="/foo" and
-	// must be rejected: there is no world name, and silently
-	// re-interpreting the first path segment as a world would
-	// surprise agents who typo'd the URL.
-	//
-	// Hostname() strips port + userinfo. We do NOT want to
-	// silently swallow either: `mark://team-a:7000/foo` and
-	// `mark://eve@team-a/foo` are operator typos or, worse, an
-	// agent embedding credentials in a URL that the broker
-	// would then drop on the floor while still issuing the
-	// request as `team-a`. The broker addresses worlds by name
-	// only — there is no port in this URL shape — so reject
-	// outright.
-	worldName = u.Hostname()
+	// The shape is mark://{worldName}/{path}. A port or userinfo is refused
+	// below, never dropped: credentials in a URL must not pass silently.
+	// Host case is not identity (ADR 0018); world names are lowercase by rule.
+	worldName = strings.ToLower(u.Hostname())
 	path = u.Path
 	if worldName == "" {
 		// Also handles rootless forms (mark:/team-a/foo) which
@@ -94,7 +82,7 @@ func (g *mcpGateway) dispatchWithWriteAuth(ctx context.Context, worldName string
 	if !ok {
 		return fetch.Result{}, ErrNotAuthorized
 	}
-	if _, denied := g.gateWrite(claims, worldName); denied != nil {
+	if g.writeRefusal(claims, worldName) != nil {
 		return fetch.Result{}, ErrNotAuthorized
 	}
 	mcpCfg := g.srv.cfg.Server.MCP
@@ -149,92 +137,32 @@ func (g *mcpGateway) dispatchWithWriteAuth(ctx context.Context, worldName string
 	return fetch.Result{}, fmt.Errorf("broker: world %s rejected write token after %d attempts (token propagation lag exceeded broker deadline)", worldName, maxAttempts)
 }
 
-// handleMarkFetch lives in mcp_tools_fetchmode.go together with the
-// outline/section/dedup ergonomics it carries.
-
-// handleMarkList implements the mark_list tool. Reads dispatch
-// unauthenticated: the world's tokens.toml is write-only (no `read`
-// operation is granted to any token), so an empty bearer flows through
-// and the listing is returned. No token, no mint, no propagation-race
-// retry — that machinery exists solely for writes.
+// handleMarkList answers mark_list. Reads carry no token: a world grants read
+// to no token, so none is minted for one.
 func (g *mcpGateway) handleMarkList(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-	worldName, path, err := parseToolURL(raw)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-	pageSize, err := brokerListPageSize(&req)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	list := fetch.ListRequest{
-		Host: worldName, Path: path,
+	args := marktools.ListArgs{
+		URL:             raw,
 		IncludeArchived: req.GetBool("include_archived", false),
 		Cursor:          req.GetString("cursor", ""),
-		PageSize:        pageSize,
+		PageSize:        req.GetArguments()["page_size"],
 	}
-	result, err := g.dispatcher.List(ctx, list)
-	if err != nil {
-		return g.toolErrorFor("list", worldName, err), nil
-	}
-	if result.Response.Metadata["complete"] == "false" {
-		next := result.Response.Metadata["next-cursor"]
-		if next == "" || next == list.Cursor {
-			return mcp.NewToolResultError("list failed: continuation cursor is missing or did not advance"), nil
-		}
-	}
-	return mcp.NewToolResultText(mcpfmt.Full(result, "modified")), nil
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.List(ctx, args) })
 }
 
-func brokerListPageSize(req *mcp.CallToolRequest) (int, error) {
-	raw, ok := req.GetArguments()["page_size"]
-	if !ok {
-		return 0, nil
-	}
-	var size int
-	switch value := raw.(type) {
-	case int:
-		size = value
-	case float64:
-		if value != math.Trunc(value) {
-			return 0, errors.New("page_size must be an integer")
-		}
-		size = int(value)
-	default:
-		return 0, errors.New("page_size must be an integer")
-	}
-	if size < 1 || size > protocol.MaxListPageSize {
-		return 0, fmt.Errorf("page_size must be between 1 and %d", protocol.MaxListPageSize)
-	}
-	return size, nil
-}
-
-// handleMarkVersions implements the mark_versions tool. Reads
-// dispatch unauthenticated; see handleMarkFetch for the rationale.
+// handleMarkVersions answers mark_versions.
 func (g *mcpGateway) handleMarkVersions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
 		return mcp.NewToolResultError("url is required"), nil
 	}
-	worldName, path, err := parseToolURL(raw)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-	result, err := g.dispatcher.Versions(ctx, fetch.VersionsRequest{Host: worldName, Path: path})
-	if err != nil {
-		return g.toolErrorFor("versions", worldName, err), nil
-	}
-	return mcp.NewToolResultText(mcpfmt.Full(result, "total", "current", "chain-valid", "chain-error")), nil
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.Versions(ctx, raw) })
 }
 
-// handleMarkLookup implements the mark_lookup tool. Like the other
-// reads it dispatches unauthenticated (see handleMarkFetch); the
-// world ranks and filters, and the broker forwards the importance-
-// ranked table verbatim. query is required; filter and limit are
-// optional and passed through to the world.
+// handleMarkLookup answers mark_lookup.
 func (g *mcpGateway) handleMarkLookup(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	raw, err := req.RequireString("url")
 	if err != nil {
@@ -244,58 +172,13 @@ func (g *mcpGateway) handleMarkLookup(ctx context.Context, req mcp.CallToolReque
 	if err != nil {
 		return mcp.NewToolResultError("query is required"), nil
 	}
-	worldName, scope, err := parseToolURL(raw)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid URL: %v", err)), nil
-	}
-	lookup := fetch.LookupRequest{
-		Host: worldName, Scope: scope, Query: query,
+	args := marktools.LookupArgs{
+		URL: raw, Query: query,
 		Filter: req.GetString("filter", ""),
 		Limit:  req.GetInt("limit", 0),
 		Match:  req.GetString("match", ""),
+		Budget: lookupexpand.Budget(&req),
+		Render: mcpfmt.Lookup.Options(&req),
 	}
-	result, err := g.dispatcher.Lookup(ctx, lookup)
-	if err != nil {
-		return g.toolErrorFor("lookup", worldName, err), nil
-	}
-	render := mcpfmt.Lookup.Options(&req)
-	text := mcpfmt.Format(result, render) + mcpfmt.CatalogFallback(lookup, result)
-	if budget := lookupexpand.Budget(&req); budget > 0 && result.Response.Status == protocol.StatusOK {
-		text += lookupexpand.Expand(ctx, result.Response.Body, query, budget, func(ctx context.Context, path string) (string, error) {
-			return g.bodyFor(ctx, worldName, path)
-		})
-	}
-	return mcp.NewToolResultText(text), nil
-}
-
-// bodyFor fetches one document for a lookup expansion; a non-ok status is
-// the error the expansion notes.
-func (g *mcpGateway) bodyFor(ctx context.Context, worldName, path string) (string, error) {
-	r, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: path})
-	if err != nil {
-		return "", err
-	}
-	if r.Response.Status != protocol.StatusOK {
-		return "", errors.New(r.Response.Status)
-	}
-	return r.Response.Body, nil
-}
-
-// toolErrorFor renders a tool-error envelope from a dispatcher
-// failure. errWorldNotFound and ErrNotAuthorized /
-// ErrEmailUnverified are surfaced with descriptive messages so
-// the agent sees the cause; other errors fall through to a
-// generic "verb failed" wrapper.
-func (g *mcpGateway) toolErrorFor(verb, worldName string, err error) *mcp.CallToolResult {
-	var notFound *errWorldNotFound
-	if errors.As(err, &notFound) {
-		return mcp.NewToolResultError(notFound.Error())
-	}
-	if errors.Is(err, ErrNotAuthorized) {
-		return mcp.NewToolResultError(fmt.Sprintf("not authorized for world %q", worldName))
-	}
-	if errors.Is(err, ErrEmailUnverified) {
-		return mcp.NewToolResultError("identity email is not verified")
-	}
-	return mcp.NewToolResultError(fmt.Sprintf("%s failed: %v", verb, err))
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.Lookup(ctx, args) })
 }

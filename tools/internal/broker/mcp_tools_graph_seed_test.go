@@ -76,7 +76,7 @@ func brokerSnapshotRows(t *testing.T, nodes []graphstore.StoredNode, edges []gra
 	shards := make(map[string]protocol.Response, len(artifacts))
 	for i, artifact := range artifacts {
 		refs[i] = artifact.Ref(i + 1)
-		shards[generation.VersionPath(artifact.Path, i+1)] = protocol.Response{
+		shards[protocol.VersionPath(artifact.Path, i+1)] = protocol.Response{
 			Status: protocol.StatusOK, Body: artifact.Body,
 			Metadata: map[string]string{"version": strconv.Itoa(i + 1), "content-hash": artifact.ContentHash},
 		}
@@ -385,7 +385,7 @@ func TestSeedWorldGraphEtagRoundTrip(t *testing.T) {
 	}
 
 	// Expire the throttle so the next call re-checks with the stored etag.
-	g.knowledgeGraph.seedGate.Expire("team-a")
+	g.knowledgeGraph.graphStore.ExpireSeedCheck("team-a")
 
 	res, err := g.handleMarkBacklinks(ctx, callToolReq("mark_backlinks", map[string]any{
 		"url": "mark://team-a/b.md",
