@@ -222,8 +222,11 @@ func (s *spawned) awaitReady(memoryDir string) error {
 // startupFailure clears the bookkeeping of a server that died before it bound
 // its port and names the port with the log tail.
 func (s *spawned) startupFailure() error {
-	_ = os.Remove(s.pidFile)
-	_ = os.Remove(s.versionFile)
+	for _, f := range []string{s.pidFile, s.versionFile} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			progress.Warnf("could not clear stale bookkeeping file %s: %v", f, err)
+		}
+	}
 	tailInfo := ""
 	if t := tailFile(s.logFile, 5); t != "" {
 		tailInfo = "\nrecent log:\n" + t
