@@ -164,42 +164,71 @@ func Ensure(memoryDir string, port int) error {
 		_ = os.Remove(versionFile)
 		return err
 	}
-	// Reaped by this process while it lives: kill 0 reports an unreaped child
-	// as alive, so without Wait a server that died at startup would read as spawned.
+	return (&spawned{cmd: cmd, pidFile: pidFile, versionFile: versionFile, logFile: logFile, port: port}).awaitReady(memoryDir)
+}
+
+// spawned is a just started managed server and the bookkeeping written for it.
+type spawned struct {
+	cmd                           *exec.Cmd
+	pidFile, versionFile, logFile string
+	port                          int
+}
+
+// awaitReady polls until the server binds its port or dies. Reaped by this
+// process while it lives: kill 0 reports an unreaped child as alive, so
+// without Wait a server that died at startup would read as spawned.
+func (s *spawned) awaitReady(memoryDir string) error {
+	pid := s.cmd.Process.Pid
 	exited := make(chan struct{})
 	go func() {
 		defer close(exited)
-		if err := cmd.Wait(); err != nil {
+		if err := s.cmd.Wait(); err != nil {
 			var exit *exec.ExitError
 			if !errors.As(err, &exit) {
 				progress.Warnf("wait for demarkus-server (pid=%d): %v", pid, err)
 			}
 		}
 	}()
+	hasExited := func() bool {
+		select {
+		case <-exited:
+			return true
+		default:
+			return false
+		}
+	}
 
 	// Bounded poll: fail fast if the process died (bind/startup error), succeed
 	// once the port is observed bound, or accept once the attempt cap is reached
 	// with the process still alive (permissive when the port probe is unavailable).
 	const maxAttempts = 20 // ~2s at 100ms
 	for range maxAttempts {
-		select {
-		case <-exited:
-			_ = os.Remove(pidFile)
-			_ = os.Remove(versionFile)
-			tailInfo := ""
-			if t := tailFile(logFile, 5); t != "" {
-				tailInfo = "\nrecent log:\n" + t
-			}
-			return fmt.Errorf("demarkus-server failed to start (port %d may be in use; re-run /soul-init)%s", port, tailInfo)
-		default:
+		if hasExited() {
+			return s.startupFailure()
 		}
-		if !procscan.PortIsFree(port) {
+		if !procscan.PortIsFree(s.port) {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	progress.Logf("spawned demarkus-server (pid=%d, port=%d, root=%s)", pid, port, memoryDir)
+	// An exit during the last sleep must not read as a spawn.
+	if hasExited() {
+		return s.startupFailure()
+	}
+	progress.Logf("spawned demarkus-server (pid=%d, port=%d, root=%s)", pid, s.port, memoryDir)
 	return nil
+}
+
+// startupFailure clears the bookkeeping of a server that died before it bound
+// its port and names the port with the log tail.
+func (s *spawned) startupFailure() error {
+	_ = os.Remove(s.pidFile)
+	_ = os.Remove(s.versionFile)
+	tailInfo := ""
+	if t := tailFile(s.logFile, 5); t != "" {
+		tailInfo = "\nrecent log:\n" + t
+	}
+	return fmt.Errorf("demarkus-server failed to start (port %d may be in use; re-run /soul-init)%s", s.port, tailInfo)
 }
 
 // tailFile returns the last n lines of a file, or "" on error.

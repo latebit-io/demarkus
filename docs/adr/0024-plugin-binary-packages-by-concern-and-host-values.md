@@ -12,7 +12,9 @@ in `main`, three semver comparators and no test over the lifecycle functions
 that had produced the last two regressions (findings T3 and T4). The
 architecture quality plan (track 3e, findings T6 to T12, T18, T21, T22) asked
 for the split, one host package and the seams the tests need, behaviour
-preserved: plugin output, hook output, state files and log text byte identical.
+preserved: plugin output, hook output, state files and log text byte identical,
+with one exception the tests forced and the consequences describe, the report
+of a server that dies at startup.
 
 ## Decision
 
@@ -62,8 +64,8 @@ preserved: plugin output, hook output, state files and log text byte identical.
 
 ## Consequences
 
-- Plugin output, hook output, state files and log text are unchanged; the
-  hook shapes are pinned by `host`'s tests. Two edge cases moved with the
+- Plugin output, hook output, state files and log text are unchanged, except
+  the startup death report below; the hook shapes are pinned by `host`'s tests. Two edge cases moved with the
   dedup and are recorded in the debt ledger: the memory-default listing
   normalizes a hand corrupted catalog row, and the update check reads a
   prerelease suffixed version as unparseable.
