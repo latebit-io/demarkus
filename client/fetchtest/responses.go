@@ -60,3 +60,9 @@ func History(docPath string, meta map[string]string, bodies ...string) func(cont
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 	}
 }
+
+// Archived is a FETCH of an archived document as the server answers it: the
+// status and nothing else, no version (see the fetch-archived wire golden).
+func Archived() fetch.Result {
+	return fetch.Result{Response: protocol.Response{Status: protocol.StatusArchived}}
+}

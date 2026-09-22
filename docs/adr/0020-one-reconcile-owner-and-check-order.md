@@ -37,6 +37,8 @@ after `fetch.ErrOutcomeUnknown`, the generation publisher after any error, and
   competing write at the same version may end in the same words. A base that
   retention has pruned proves nothing, so nothing is claimed. ARCHIVE is a
   state of the head: it landed when the head is archived, whoever archived it.
+  An archived document answers a FETCH without a version, so a reconciled
+  ARCHIVE reports none; a version is given only when the probe learned one.
 - An answered write is passed on as the server wrote it. Refusing one over
   malformed metadata would report a write that landed as a failure and invite
   the resend this contract exists to prevent. What a probe reads is validated,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
@@ -11,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 func doc(backend docwrite.Backend) *docwrite.Doc {
@@ -240,20 +242,21 @@ func TestWritesReconcileAnUnknownOutcome(t *testing.T) {
 		return d.Append(t.Context(), docwrite.AppendRequest{Body: "more", ExpectedVersion: 3, Metadata: meta})
 	}
 	archive := func(d *docwrite.Doc) (docwrite.Result, error) { return d.Archive(t.Context()) }
-	archived := fetch.Result{Response: protocol.Response{Status: protocol.StatusArchived, Metadata: map[string]string{"version": "4"}}}
+	archived := fetchtest.Archived()
 	tests := []struct {
-		name   string
-		call   func(*docwrite.Doc) (docwrite.Result, error)
-		head   fetch.Result
-		landed bool
+		name        string
+		call        func(*docwrite.Doc) (docwrite.Result, error)
+		head        fetch.Result
+		landed      bool
+		wantVersion string
 	}{
-		{"publish landed", publish, fetchtest.Head("mine", 4, meta), true},
-		{"publish not landed", publish, fetchtest.Head("theirs", 4, nil), false},
-		{"append landed", appendMore, fetchtest.Head("old\nmore", 4, meta), true},
-		{"append by someone else", appendMore, fetchtest.Head("old\nmore", 4, map[string]string{"agent": "other"}), false},
-		{"append without the key it sent", appendMore, fetchtest.Head("old\nmore", 4, nil), false},
-		{"archive landed", archive, archived, true},
-		{"archive still live", archive, fetchtest.Head("live", 3, nil), false},
+		{"publish landed", publish, fetchtest.Head("mine", 4, meta), true, "4"},
+		{"publish not landed", publish, fetchtest.Head("theirs", 4, nil), false, ""},
+		{"append landed", appendMore, fetchtest.Head("old\nmore", 4, meta), true, "4"},
+		{"append by someone else", appendMore, fetchtest.Head("old\nmore", 4, map[string]string{"agent": "other"}), false, ""},
+		{"append without the key it sent", appendMore, fetchtest.Head("old\nmore", 4, nil), false, ""},
+		{"archive landed", archive, archived, true, ""},
+		{"archive still live", archive, fetchtest.Head("live", 3, nil), false, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -277,8 +280,11 @@ func TestWritesReconcileAnUnknownOutcome(t *testing.T) {
 				if !errors.Is(err, fetch.ErrOutcomeUnknown) {
 					t.Fatalf("err = %v, want the unknown outcome to stand", err)
 				}
-			} else if err != nil || !got.Reconciled || got.Response.Status != protocol.StatusOK || versionOf(got) != 4 {
-				t.Fatalf("got %+v, %v; want ok v4 reconciled", got, err)
+			} else if err != nil || !got.Reconciled || got.Response.Status != protocol.StatusOK {
+				t.Fatalf("got %+v, %v; want ok reconciled", got, err)
+			} else if version, claimed := got.Response.Metadata["version"]; claimed != (tt.wantVersion != "") || version != tt.wantVersion {
+				// An archived head has no version: the result must not invent one.
+				t.Errorf("version = %q (claimed %v), want %q", version, claimed, tt.wantVersion)
 			}
 			if n := len(backend.PublishCalls) + len(backend.AppendCalls) + len(backend.ArchiveCalls); n != 1 {
 				t.Errorf("writes sent = %d, want exactly one", n)
@@ -474,10 +480,14 @@ func TestReconcileLooksAtTheVersionItWroteNotTheHead(t *testing.T) {
 			if err != nil || !got.Reconciled || versionOf(got) != 4 {
 				t.Fatalf("got %+v, %v; want our write found at v4", got, err)
 			}
-			// The version written first; an append then reads its base. Never the head.
+			// The version written, then for an append its base. Never the head, never more.
+			wantReads := []string{"/doc.md/v4", "/doc.md/v3"}
+			if len(backend.FetchCalls) > len(wantReads) {
+				t.Fatalf("reads = %+v, want at most %v", backend.FetchCalls, wantReads)
+			}
 			for i, read := range backend.FetchCalls {
-				if (i == 0 && read.Path != "/doc.md/v4") || read.Path == "/doc.md" {
-					t.Errorf("read %d = %s, want the version written, then at most its base", i, read.Path)
+				if read.Path != wantReads[i] {
+					t.Errorf("read %d = %s, want %s", i, read.Path, wantReads[i])
 				}
 			}
 		})
@@ -518,5 +528,22 @@ func TestAppendIsRecognizedByTheWholeDocumentNotItsSuffix(t *testing.T) {
 	}
 	if _, err := appendMore(pruned); !errors.Is(err, fetch.ErrOutcomeUnknown) {
 		t.Errorf("pruned base: err = %v, want the unknown outcome to stand", err)
+	}
+}
+
+// An addition that cannot be joined to the base cannot have been accepted. Why
+// the comparison stopped is said beside the unknown outcome, not dropped.
+func TestAnAppendThatCannotBeJoinedIsReported(t *testing.T) {
+	meta := map[string]string{"agent": "me"}
+	full := strings.Repeat("a", protocol.MaxBodyLength)
+	backend := &fetchtest.Client{
+		AppendFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+			return fetch.Result{}, fetchtest.LostResponse()
+		},
+		FetchFn: fetchtest.History("/doc.md", meta, "a", "b", full, "someone else's, ending in more"),
+	}
+	_, err := doc(backend).Append(t.Context(), docwrite.AppendRequest{Body: "more", ExpectedVersion: 3, Metadata: meta})
+	if !errors.Is(err, fetch.ErrOutcomeUnknown) || !errors.Is(err, storefmt.ErrSizeLimit) {
+		t.Errorf("err = %v, want the unknown outcome and the size limit", err)
 	}
 }

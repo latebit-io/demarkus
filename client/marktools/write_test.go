@@ -160,10 +160,11 @@ func TestWritesReconcileAfterAnUnknownOutcome(t *testing.T) {
 			wantText: "append failed: read response: request sent but outcome unknown; it may have landed: fetch the document before retrying",
 		},
 		{
-			name:     "archive, landed",
-			call:     func(tools *marktools.Tools) marktools.Result { return tools.Archive(t.Context(), "/doc.md") },
-			head:     fetch.Result{Response: protocol.Response{Status: protocol.StatusArchived, Metadata: map[string]string{"version": "4"}}},
-			wantText: "status: ok\nversion: 4\narchived: true\n",
+			name: "archive, landed",
+			call: func(tools *marktools.Tools) marktools.Result { return tools.Archive(t.Context(), "/doc.md") },
+			head: fetchtest.Archived(),
+			// An archived document answers without a version, so none is claimed.
+			wantText: "status: ok\narchived: true\n",
 		},
 		{
 			name: "archive, still live",

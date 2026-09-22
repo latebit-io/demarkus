@@ -206,11 +206,15 @@ func TestArchiveExitsZero(t *testing.T) {
 			return fetch.Result{}, fetchtest.LostResponse()
 		},
 		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusArchived, Metadata: map[string]string{"version": "4"}}}, nil
+			return fetchtest.Archived(), nil
 		},
 	}
 	got, err := runWrite(t.Context(), &cliWrite{verb: protocol.VerbArchive, doc: cliDoc(backend)})
-	if err != nil || got.code != 0 || got.metadata["reconciled"] != "true" || got.metadata["version"] != "4" {
+	if err != nil || got.code != 0 || got.metadata["reconciled"] != "true" || got.metadata["archived"] != "true" {
 		t.Fatalf("reconciled = %+v, %v", got, err)
+	}
+	// The archived head carries no version, so the outcome invents none.
+	if version, claimed := got.metadata["version"]; claimed {
+		t.Errorf("version = %q, want none claimed", version)
 	}
 }

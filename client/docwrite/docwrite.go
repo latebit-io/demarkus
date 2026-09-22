@@ -266,16 +266,20 @@ func (d *Doc) isAppendOf(ctx context.Context, written *headDoc, baseVersion int,
 	}
 	want, err := storefmt.JoinContent([]byte(base.body), []byte(addition))
 	if err != nil {
-		return false, nil //nolint:nilerr // too large to have been accepted, so it did not land
+		return false, fmt.Errorf("join append content: %w", err)
 	}
 	return written.body == string(want), nil
 }
 
-// reconciledAt answers as the server would have: a landed write is ok.
+// reconciledAt answers as the server would have: a landed write is ok. The
+// version is given only when the probe learned one: an archived document
+// answers a FETCH without it, and an invented 0 would be a lie.
 func reconciledAt(version int) Result {
-	return Result{Reconciled: true, Response: protocol.Response{
-		Status: protocol.StatusOK, Metadata: map[string]string{"version": strconv.Itoa(version)},
-	}}
+	meta := map[string]string{}
+	if version > 0 {
+		meta["version"] = strconv.Itoa(version)
+	}
+	return Result{Reconciled: true, Response: protocol.Response{Status: protocol.StatusOK, Metadata: meta}}
 }
 
 // CurrentVersion asks VERSIONS for the head, as a direct client would by hand.
