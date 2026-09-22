@@ -13,7 +13,8 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
 )
 
 // States of the resolved store binding.
@@ -42,7 +43,7 @@ type Resolution struct {
 // relative dir is made absolute before the lookup.
 func Resolve(dir string) (Resolution, error) {
 	if dir == "" {
-		dir = config.HarnessProjectDir()
+		dir = host.ProjectDir()
 	}
 	if dir == "" {
 		return Resolution{}, ErrNoDir
@@ -63,7 +64,7 @@ func Resolve(dir string) (Resolution, error) {
 	if bound == "" {
 		return r, nil
 	}
-	joined, err := registry.IsCatalogMemory(bound)
+	joined, err := catalog.IsMemory(bound)
 	if err != nil {
 		return Resolution{}, err
 	}

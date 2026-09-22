@@ -80,7 +80,9 @@ function runBin<T>(args: string[], payload?: unknown, allowEmpty = false, bin = 
         resolve(null);
       }
     });
-    if (payload !== undefined && child.stdin) child.stdin.end(JSON.stringify(payload));
+    if (payload !== undefined && child.stdin) {
+      child.stdin.end(JSON.stringify(payload));
+    }
   });
 }
 

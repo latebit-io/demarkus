@@ -3,8 +3,8 @@
 # Resolve the latest released server/client/tools versions and update the demarkus
 # plugins' binary pins to match. The pins live in:
 #
-#   1. tools/demarkus-plugin/internal/provision/provision.go — serverVersion /
-#      clientVersion (the server & mcp binaries provision downloads) and
+#   1. tools/demarkus-plugin/internal/provision/release/release.go — ServerVersion /
+#      ClientVersion (the server & mcp binaries provision downloads) and
 #      fallbackToolsVersion (the tools release a DEV build pulls demarkus-token
 #      from; a real build uses its own ldflags version).
 #   2. plugins/*/scripts/bootstrap.sh — TOOLS_VERSION (the chicken-and-egg pin
@@ -30,7 +30,7 @@
 set -euo pipefail
 
 repo="${GH_REPO:-latebit-io/demarkus}"
-provision="tools/demarkus-plugin/internal/provision/provision.go"
+provision="tools/demarkus-plugin/internal/provision/release/release.go"
 marketplace=".claude-plugin/marketplace.json"
 cursor_marketplace=".cursor-plugin/marketplace.json"
 
@@ -41,7 +41,7 @@ latest() {
     | sed "s#$1/v##" | sort -V | tail -1
 }
 
-# goconst <NAME> -> current value of `NAME = "..."` in provision.go. Exits non-
+# goconst <NAME> -> current value of `NAME = "..."` in release.go. Exits non-
 # zero if the const is missing or not a semver, so a parse failure can't silently
 # leave the canonical pin stale while the rest of the bump proceeds.
 goconst() {
@@ -76,7 +76,7 @@ set_goconst() {
 
 # set_bootstrap_tools <value> — update TOOLS_VERSION in every plugin bootstrap.
 # Fails if the glob matches nothing or any rewrite leaves TOOLS_VERSION != value,
-# so a moved/renamed bootstrap can't drift out of lockstep with provision.go.
+# so a moved/renamed bootstrap can't drift out of lockstep with release.go.
 set_bootstrap_tools() {
   local f tmp updated
   local bootstraps=(plugins/*/scripts/bootstrap.sh)
@@ -138,11 +138,11 @@ if [[ -z "$new_server" || -z "$new_client" || -z "$new_tools" ]]; then
   exit 1
 fi
 
-cur_server=$(goconst serverVersion)
-cur_client=$(goconst clientVersion)
+cur_server=$(goconst ServerVersion)
+cur_client=$(goconst ClientVersion)
 # The bootstrap TOOLS_VERSION is the real pin (see header); fallbackToolsVersion
 # is dev-only and deliberately NOT the currency signal: using it here would
-# force a provision.go edit on every tools release, which cuts another tools
+# force a release.go edit on every tools release, which cuts another tools
 # release, which reopens this PR, forever. Sample EVERY bootstrap and use the
 # lowest pin, so a partially-bumped tree reads as changed and self-heals (the
 # update path rewrites all bootstraps to the same value) instead of hiding
@@ -173,11 +173,11 @@ if [[ "$new_server" == "$cur_server" && "$new_client" == "$cur_client" && "$new_
 fi
 
 # Update the Go consts and every bootstrap's TOOLS_VERSION. fallbackToolsVersion
-# rides along only when provision.go is already changing for a real pin: it is
+# rides along only when release.go is already changing for a real pin: it is
 # read only by dev builds, and letting it be the sole tools/ change would cut a
 # junk tools release and loop this workflow (release -> bump PR -> release).
-set_goconst serverVersion "$new_server"
-set_goconst clientVersion "$new_client"
+set_goconst ServerVersion "$new_server"
+set_goconst ClientVersion "$new_client"
 if [[ "$new_server" != "$cur_server" || "$new_client" != "$cur_client" ]]; then
   set_goconst fallbackToolsVersion "$new_tools"
 fi

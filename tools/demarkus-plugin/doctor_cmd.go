@@ -15,7 +15,7 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/doctor"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
 )
 
 // cmdDoctor audits a store and prints the hygiene report. Exit 1 only when
@@ -84,7 +84,7 @@ func addTokenDrift(report *doctor.Report) {
 // resolveStore maps a catalog id to a client. Broker stores need the
 // harness's OAuth session and are refused.
 func resolveStore(id string) (*doctor.ClientStore, error) {
-	ep, err := registry.MemoryEndpoint(id)
+	ep, err := catalog.Resolve(id)
 	if err != nil {
 		return nil, err
 	}

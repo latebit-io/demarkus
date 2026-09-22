@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # bootstrap.sh — the ONE bash script the demarkus plugins retain. It ensures the
-# shared demarkus-plugin binary is installed at the pinned version, then exits.
+# shared demarkus-plugin binary is at the pinned version or newer, then exits.
 # Everything else (provisioning the server, gates, nudges, guidance, registry)
 # lives in that binary. A harness's session-start runs this, then calls
 # `demarkus-plugin provision` (memory) / `demarkus-plugin guidance` (knowledge).
@@ -15,8 +15,8 @@ TOOLS_VERSION="0.42.1"   # demarkus-plugin ships in the tools/ release
 BIN_DIR="${HOME}/.demarkus/bin"
 BIN="${BIN_DIR}/demarkus-plugin"
 
-# Multiple OpenCode adapters may bootstrap concurrently. Never let an older
-# installed plugin downgrade a helper that already satisfies its minimum.
+# The binary is shared by every installed demarkus plugin. The pin is a minimum:
+# an older plugin must never downgrade a helper a newer one installed.
 version_at_least() {
   local have_major have_minor have_patch need_major need_minor need_patch
   IFS=. read -r have_major have_minor have_patch <<<"$1"

@@ -3,7 +3,6 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -65,8 +64,12 @@ func readTrimmed(p string) (string, error) {
 	return strings.TrimSpace(s), err
 }
 
-// records returns non-blank, non-comment, trimmed lines.
-func records(p string) ([]string, error) {
+// Records returns the non-blank, non-comment, trimmed lines of a state file.
+func Records(name string) ([]string, error) {
+	p, err := path(name)
+	if err != nil {
+		return nil, err
+	}
 	s, err := readRaw(p)
 	if err != nil {
 		return nil, err
@@ -82,7 +85,7 @@ func records(p string) ([]string, error) {
 	return out, nil
 }
 
-func fileExists(name string) (bool, error) {
+func stateExists(name string) (bool, error) {
 	p, err := path(name)
 	if err != nil {
 		return false, err
@@ -328,56 +331,88 @@ func legacyKnowledgePolicy(slug string) (publishpolicy.Policy, error) {
 // --- registries ---------------------------------------------------------------
 
 // LocalMemoryPresent the local managed memory is configured (plugin-memory.conf).
-func LocalMemoryPresent() (bool, error) { return fileExists("plugin-memory.conf") }
+func LocalMemoryPresent() (bool, error) { return stateExists("plugin-memory.conf") }
 
 // MemoryConfigured is an alias used by the knowledge surface for the memory↔system note.
-func MemoryConfigured() (bool, error) { return fileExists("plugin-memory.conf") }
+func MemoryConfigured() (bool, error) { return stateExists("plugin-memory.conf") }
 
 // ListKnowledgeSystems registered knowledge-system slugs.
-func ListKnowledgeSystems() ([]string, error) {
-	p, err := path("knowledge-systems")
-	if err != nil {
-		return nil, err
-	}
-	return records(p)
+func ListKnowledgeSystems() ([]string, error) { return Records("knowledge-systems") }
+
+// MemoryRow is one record of the remote memory catalog (the `souls` file):
+// "<slug>\t<host>\t<insecure>\t<tokenFile>".
+type MemoryRow struct {
+	Slug      string
+	Host      string
+	Insecure  bool
+	TokenFile string // "-" (or "") when the row has none
 }
 
-// ListRemoteMemories registered remote-memory slugs (field 1 of each tab-separated row).
-func ListRemoteMemories() ([]string, error) {
-	p, err := path("souls")
+// ParseMemoryRow decodes a catalog record; fields after the slug may be absent.
+func ParseMemoryRow(record string) MemoryRow {
+	f := strings.Split(record, "\t")
+	row := MemoryRow{Slug: f[0]}
+	if len(f) >= 2 {
+		row.Host = f[1]
+	}
+	if len(f) >= 3 {
+		row.Insecure = f[2] == "1"
+	}
+	if len(f) >= 4 {
+		row.TokenFile = f[3]
+	}
+	return row
+}
+
+// Record encodes the row as the catalog stores it.
+func (r MemoryRow) Record() string {
+	ins := "0"
+	if r.Insecure {
+		ins = "1"
+	}
+	return strings.Join([]string{r.Slug, r.Host, ins, r.TokenFile}, "\t")
+}
+
+// IsBroker reports whether the row names an HTTPS memory broker.
+func (r MemoryRow) IsBroker() bool { return IsBrokerHost(r.Host) }
+
+// IsBrokerHost reports whether a memory host is an HTTPS memory-broker
+// endpoint (OAuth in the MCP client; never served by mcp-serve).
+func IsBrokerHost(host string) bool {
+	low := strings.ToLower(host)
+	return strings.HasPrefix(low, "https://") || strings.HasPrefix(low, "http://")
+}
+
+// RemoteMemoryRows is the catalog, one row per registered remote memory.
+func RemoteMemoryRows() ([]MemoryRow, error) {
+	records, err := Records("souls")
 	if err != nil {
 		return nil, err
 	}
-	rows, err := records(p)
+	rows := make([]MemoryRow, 0, len(records))
+	for _, r := range records {
+		rows = append(rows, ParseMemoryRow(r))
+	}
+	return rows, nil
+}
+
+// ListRemoteMemories registered remote-memory slugs.
+func ListRemoteMemories() ([]string, error) {
+	rows, err := RemoteMemoryRows()
 	if err != nil {
 		return nil, err
 	}
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, strings.SplitN(r, "\t", 2)[0])
+		out = append(out, r.Slug)
 	}
 	return out, nil
-}
-
-// HarnessProjectDir is the project directory the host exports for hooks, or
-// "" when no host variable is set.
-func HarnessProjectDir() string {
-	for _, key := range []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"} {
-		if v := os.Getenv(key); v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // ProjectBinding the catalog slug bound to DIR, checking DIR then its ancestors
 // (nearest wins). "" when unbound.
 func ProjectBinding(dir string) (string, error) {
-	p, err := path("project-souls")
-	if err != nil {
-		return "", err
-	}
-	rows, err := records(p)
+	rows, err := Records("project-souls")
 	if err != nil {
 		return "", err
 	}
@@ -568,13 +603,7 @@ func KnowledgePresent() (bool, error) {
 }
 
 // PromoteTargets registered plain remote promote targets (one per line).
-func PromoteTargets() ([]string, error) {
-	p, err := path("promote-targets")
-	if err != nil {
-		return nil, err
-	}
-	return records(p)
-}
+func PromoteTargets() ([]string, error) { return Records("promote-targets") }
 
 // PromoteDestinationPresent any promote destination exists — a brokered
 // knowledge system OR a plain remote target. With none, promote is dormant.
@@ -662,32 +691,3 @@ func unquoteShell(v string) string {
 // StatePath returns the absolute path of a file under ~/.demarkus (e.g. a
 // sentinel). Exported so the guidance command can manage one-time markers.
 func StatePath(name string) (string, error) { return path(name) }
-
-// NormalizeCall unwraps the pi-mcp-adapter "mcp" proxy: when the tool is the
-// literal "mcp", the real tool name is input.tool and the real args are
-// input.args (a JSON string or an object). Direct calls pass through unchanged.
-// Shared by the gate and nudge commands so the unwrap lives in one place.
-func NormalizeCall(tool string, input map[string]any) (name string, args map[string]any) {
-	if input == nil {
-		input = map[string]any{}
-	}
-	if tool != "mcp" {
-		return tool, input
-	}
-	t, ok := input["tool"].(string)
-	if !ok || t == "" {
-		return tool, input
-	}
-	switch raw := input["args"].(type) {
-	case string:
-		var parsed map[string]any
-		if json.Unmarshal([]byte(raw), &parsed) == nil {
-			return t, parsed
-		}
-		return t, map[string]any{}
-	case map[string]any:
-		return t, raw
-	default:
-		return t, map[string]any{}
-	}
-}

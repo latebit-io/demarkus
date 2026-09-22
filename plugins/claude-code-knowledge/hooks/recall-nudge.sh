@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# UserPromptSubmit adapter (knowledge). The shared demarkus-plugin binary decides
-# the recall reminder for the knowledge surface (only when a knowledge system is
-# joined and the prompt reads like an org/shared recall), so this just pipes the
-# payload through. Fails open when the binary isn't installed.
+# UserPromptSubmit adapter. The shared demarkus-plugin binary decides the recall
+# reminder for this surface (it reads its own config and only nudges when the
+# prompt reads like recall), so this just pipes the hook payload through.
+# Fails open (no output) when the binary isn't installed yet.
 set -uo pipefail
 BIN="${HOME}/.demarkus/bin/demarkus-plugin"
 [ -x "${BIN}" ] || exit 0

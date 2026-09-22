@@ -12,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 )
 
 // Input accepts native {tool,input,cwd}, Claude, and Cursor hook payloads.
@@ -145,7 +146,7 @@ func Evaluate(in *Input) (Decision, error) {
 		in.Input = in.ToolInput
 	}
 	in.Tool = config.QualifyTool(in.Tool, in.McpServerName)
-	tool, args := config.NormalizeCall(in.Tool, in.Input)
+	tool, args := host.NormalizeCall(in.Tool, in.Input)
 	pt, ok := config.ParseTool(tool)
 	if !ok {
 		return allow(), nil
@@ -188,7 +189,7 @@ func projectDir(roots []string) (cwd, ambiguous string, err error) {
 	}
 	switch len(found) {
 	case 0:
-		return config.HarnessProjectDir(), "", nil
+		return host.ProjectDir(), "", nil
 	case 1:
 		return found[0], "", nil
 	}

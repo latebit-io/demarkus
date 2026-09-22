@@ -53,7 +53,7 @@ jobs:
           # Pins live in the Go consts + every plugin's bootstrap; versions in the
           # plugin manifests + marketplace. Stage all of them (the bump script only
           # touches these paths).
-          git add tools/demarkus-plugin/internal/provision/provision.go \
+          git add tools/demarkus-plugin/internal/provision/release/release.go \
                   plugins/*/scripts/bootstrap.sh \
                   plugins/claude-code/.claude-plugin/plugin.json \
                   plugins/claude-code-knowledge/.claude-plugin/plugin.json \
@@ -71,7 +71,7 @@ jobs:
 
           title="chore(plugins): bump managed binaries (server ${SERVER})"
           body=$(printf '%s\n' \
-            "Automated bump of the demarkus plugins' managed-binary pins (Go consts in provision.go + every bootstrap's TOOLS_VERSION) to the latest releases:" \
+            "Automated bump of the demarkus plugins' managed-binary pins (Go consts in release.go + every bootstrap's TOOLS_VERSION) to the latest releases:" \
             "" \
             "- server \`${SERVER}\`" \
             "- client \`${CLIENT}\`" \

@@ -1,4 +1,6 @@
-package registry
+// Package mcpconfig edits the MCP server config file of a harness that reads
+// one on load (pi-mcp-adapter, Cursor); the others register servers themselves.
+package mcpconfig
 
 import (
 	"encoding/json"
@@ -7,42 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/statefile"
+
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 )
-
-// McpHarness selects whose MCP config the mcp commands edit: "" (pi-mcp-adapter,
-// ~/.config/mcp/mcp.json) or "cursor" (~/.cursor/mcp.json). Claude Code and
-// OpenCode never route through here (claude mcp add; opencode.json on load).
-var McpHarness = ""
-
-// SetMcpHarness validates and selects the harness for later mcp calls.
-func SetMcpHarness(h string) error {
-	switch h {
-	case "", "pi", "cursor":
-		McpHarness = h
-		return nil
-	}
-	return errors.New("unknown MCP harness '" + h + "' (use pi or cursor)")
-}
-
-func mcpConfigPath() (string, error) {
-	h, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	if McpHarness == "cursor" {
-		return filepath.Join(h, ".cursor", "mcp.json"), nil
-	}
-	return filepath.Join(h, ".config", "mcp", "mcp.json"), nil
-}
-
-// httpEntry is the harness's shape for a remote server. Cursor discovers OAuth
-// from the endpoint; pi-mcp-adapter needs the explicit auth marker.
-func httpEntry(url string) map[string]any {
-	if McpHarness == "cursor" {
-		return map[string]any{"url": url}
-	}
-	return map[string]any{"url": url, "auth": "oauth"}
-}
 
 // loadMcp reads ~/.config/mcp/mcp.json, normalizing to a {mcpServers:{}} object.
 // Array-shaped JSON (a top-level [] or array mcpServers) is rejected to an empty
@@ -96,18 +67,18 @@ func saveMcp(path string, m map[string]any) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat %s: %w", target, err)
 	}
-	return atomicWritePerm(target, append(out, '\n'), perm)
+	return statefile.WriteFile(target, append(out, '\n'), perm)
 }
 
 func servers(m map[string]any) map[string]any { return m["mcpServers"].(map[string]any) }
 
-// McpAdd registers a stdio MCP server (a command + optional args).
-func McpAdd(name, command string, args []string) error {
-	path, err := mcpConfigPath()
+// Add registers a stdio MCP server (a command + optional args) in h's config.
+func Add(h host.Host, name, command string, args []string) error {
+	path, err := h.McpConfigPath()
 	if err != nil {
 		return err
 	}
-	return withLock(path, func() error {
+	return statefile.WithLock(path, func() error {
 		m, err := loadMcp(path)
 		if err != nil {
 			return err
@@ -121,30 +92,30 @@ func McpAdd(name, command string, args []string) error {
 	})
 }
 
-// McpAddHTTP registers an HTTP/broker MCP server by URL (OAuth auto-detected).
-func McpAddHTTP(name, url string) error {
-	path, err := mcpConfigPath()
+// AddHTTP registers an HTTP/broker MCP server by URL (OAuth auto-detected).
+func AddHTTP(h host.Host, name, url string) error {
+	path, err := h.McpConfigPath()
 	if err != nil {
 		return err
 	}
-	return withLock(path, func() error {
+	return statefile.WithLock(path, func() error {
 		m, err := loadMcp(path)
 		if err != nil {
 			return err
 		}
-		servers(m)[name] = httpEntry(url)
+		servers(m)[name] = h.HTTPEntry(url)
 		return saveMcp(path, m)
 	})
 }
 
-// McpRemove deletes a server entry; reports whether it existed.
-func McpRemove(name string) (bool, error) {
-	path, err := mcpConfigPath()
+// Remove deletes a server entry; reports whether it existed.
+func Remove(h host.Host, name string) (bool, error) {
+	path, err := h.McpConfigPath()
 	if err != nil {
 		return false, err
 	}
 	existed := false
-	err = withLock(path, func() error {
+	err = statefile.WithLock(path, func() error {
 		m, err := loadMcp(path)
 		if err != nil {
 			return err
@@ -160,9 +131,9 @@ func McpRemove(name string) (bool, error) {
 	return existed, err
 }
 
-// McpList returns the configured server names (sorted).
-func McpList() ([]string, error) {
-	path, err := mcpConfigPath()
+// List returns the configured server names (sorted).
+func List(h host.Host) ([]string, error) {
+	path, err := h.McpConfigPath()
 	if err != nil {
 		return nil, err
 	}

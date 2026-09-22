@@ -24,6 +24,7 @@ import (
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/gate"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/guidance"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/nudge"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/update"
 )
@@ -127,10 +128,10 @@ func cmdNudge() {
 		in.MemoryWrite = *memoryWrite
 	}
 
-	// Claude's Stop fires at every turn end and the nudge blocks a turn, so it
-	// fires once per session: a sentinel keyed on session_id in the temp dir.
+	h, hosted := host.ForHook(*format)
+	// A once-per-session nudge is a sentinel keyed on session_id in the temp dir.
 	var sentinel string
-	if *format == "claude" && in.Event == "session-end" && in.SessionID != "" {
+	if hosted && h.NudgeOnce && in.Event == "session-end" && in.SessionID != "" {
 		sentinel = filepath.Join(os.TempDir(), "demarkus-memory-nudge-"+sentinelSafeRe.ReplaceAllString(in.SessionID, "_"))
 		if _, err := os.Stat(sentinel); err == nil {
 			return
@@ -157,28 +158,8 @@ func cmdNudge() {
 			fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: sentinel close: "+err.Error())
 		}
 	}
-	if *format == "cursor" {
-		switch in.Event {
-		case "session-end":
-			printJSON(map[string]any{"followup_message": out.Nudge})
-		default: // promote (recall has no injection channel on Cursor)
-			printJSON(map[string]any{"permission": "allow", "agent_message": out.Nudge})
-		}
-		return
-	}
-	if *format == "claude" {
-		switch in.Event {
-		case "session-end":
-			printJSON(map[string]any{"decision": "block", "reason": out.Nudge})
-		case "promote":
-			printJSON(map[string]any{"hookSpecificOutput": map[string]any{
-				"hookEventName": "PostToolUse", "additionalContext": out.Nudge,
-			}})
-		default: // recall
-			printJSON(map[string]any{"hookSpecificOutput": map[string]any{
-				"hookEventName": "UserPromptSubmit", "additionalContext": out.Nudge,
-			}})
-		}
+	if hosted {
+		printJSON(h.Nudge(in.Event, out.Nudge))
 		return
 	}
 	printJSON(out)
@@ -230,16 +211,11 @@ func cmdGuidance() {
 	if out.Context == "" {
 		return
 	}
-	switch *format {
-	case "claude":
-		printJSON(map[string]any{"hookSpecificOutput": map[string]any{
-			"hookEventName": "SessionStart", "additionalContext": out.Context,
-		}})
-	case "cursor":
-		printJSON(map[string]any{"additional_context": out.Context})
-	default:
-		printJSON(out)
+	if h, ok := host.ForHook(*format); ok {
+		printJSON(h.Guidance(out.Context))
+		return
 	}
+	printJSON(out)
 }
 
 // cmdGate reads a tool call (native {tool,input,cwd}, Claude, or Cursor hook
@@ -276,42 +252,13 @@ func cmdGate() {
 }
 
 func emitDecision(d gate.Decision, format string) {
-	switch format {
-	case "claude-pre":
-		// Block/ask are enforced before the call; warn is deferred to PostToolUse.
-		var pd string
-		switch d.Decision {
-		case "block":
-			pd = "deny"
-		case "ask":
-			pd = "ask"
-		default:
-			return // allow/warn → no Pre output
-		}
-		printJSON(map[string]any{"hookSpecificOutput": map[string]any{
-			"hookEventName": "PreToolUse", "permissionDecision": pd, "permissionDecisionReason": d.Reason,
-		}})
-	case "claude-post":
-		if d.Decision != "warn" {
-			return // block/ask already handled Pre; allow → nothing
-		}
-		printJSON(map[string]any{"hookSpecificOutput": map[string]any{
-			"hookEventName": "PostToolUse", "additionalContext": "⚠️ " + d.Reason,
-		}})
-	case "cursor":
-		// One pre-call hook carries every verdict; warn is advice on an allow.
-		switch d.Decision {
-		case "block":
-			printJSON(map[string]any{"permission": "deny", "user_message": d.Reason, "agent_message": d.Reason})
-		case "ask":
-			printJSON(map[string]any{"permission": "ask", "user_message": d.Reason, "agent_message": d.Reason})
-		case "warn":
-			printJSON(map[string]any{"permission": "allow", "agent_message": "⚠️ " + d.Reason})
-		default:
-			printJSON(map[string]any{"permission": "allow"})
-		}
-	default: // json
-		printJSON(d)
+	h, phase, ok := host.ForGate(format)
+	if !ok {
+		printJSON(d) // json
+		return
+	}
+	if out, emit := h.Gate(phase, d.Decision, d.Reason); emit {
+		printJSON(out)
 	}
 }
 

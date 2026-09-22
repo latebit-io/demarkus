@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 )
 
 // Input is the union of fields the three nudge events need; an adapter fills the
@@ -101,7 +102,7 @@ func recall(in *Input) (Output, error) {
 }
 
 func promote(in *Input) (Output, error) {
-	tool, args := config.NormalizeCall(in.Tool, in.Input)
+	tool, args := host.NormalizeCall(in.Tool, in.Input)
 	pt, ok := config.ParseTool(tool)
 	if !ok || pt.Verb != "publish" {
 		return Output{}, nil

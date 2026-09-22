@@ -6,23 +6,29 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/release"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/broker"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/join"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/knowledge"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/mcpconfig"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/promote"
 )
 
 // cmdProvision runs the server lifecycle (binary install, config, managed server,
 // token, seed). Replaces setup.sh / provision.sh / the lib.sh lifecycle.
 func cmdProvision(args []string) {
-	// Hand the binary's own release version to provision so it fetches the token
-	// from the tools release it shipped in (and never re-downloads itself).
-	provision.Version = version
+	// Hand the binary's own release version to the installer so it fetches the
+	// token from the tools release it shipped in (and never re-downloads itself).
+	release.PluginVersion = version
 	if len(args) == 0 {
 		if err := provision.Provision(); err != nil {
 			fail(err.Error())
@@ -133,7 +139,7 @@ func cmdRegistry(args []string) {
 		if len(args) != 2 {
 			fail("knowledge-register: usage: registry knowledge-register <slug>")
 		}
-		if err := registry.KnowledgeRegister(args[1]); err != nil {
+		if err := knowledge.Register(args[1]); err != nil {
 			fail(err.Error())
 		}
 		fmt.Println("OK: registered knowledge system '" + args[1] + "'")
@@ -149,7 +155,7 @@ func cmdRegistry(args []string) {
 		if len(args) != 2 {
 			fail("knowledge-unregister: usage: registry knowledge-unregister <slug>")
 		}
-		existed, err := registry.KnowledgeUnregister(args[1])
+		existed, err := knowledge.Unregister(args[1])
 		if err != nil {
 			fail(err.Error())
 		}
@@ -166,14 +172,14 @@ func cmdRegistry(args []string) {
 		if err != nil {
 			fail("policy-mirror: read stdin: " + err.Error()) // never mirror a partial read — it would clear enforcement
 		}
-		if err := registry.PolicyMirror(args[1], string(body)); err != nil {
+		if err := knowledge.MirrorPolicy(args[1], string(body)); err != nil {
 			fail(err.Error())
 		}
 		fmt.Println("OK: mirrored policy for '" + args[1] + "'")
 	case "promote-target":
 		registryPromoteTarget(args[1:])
 	case "detect-promote":
-		rows, err := registry.DetectPromote()
+		rows, err := promote.Detect()
 		if err != nil {
 			fail(err.Error())
 		}
@@ -213,7 +219,8 @@ func registryMcp(args []string) {
 	if err != nil {
 		fail(err.Error())
 	}
-	if err := registry.SetMcpHarness(harness); err != nil {
+	h, err := host.ForMcp(harness)
+	if err != nil {
 		fail(err.Error())
 	}
 	if len(args) == 0 {
@@ -224,7 +231,7 @@ func registryMcp(args []string) {
 		if len(args) < 3 {
 			fail("mcp add: usage: registry mcp add <name> <command> [args...]")
 		}
-		if err := registry.McpAdd(args[1], args[2], args[3:]); err != nil {
+		if err := mcpconfig.Add(h, args[1], args[2], args[3:]); err != nil {
 			fail(err.Error())
 		}
 		fmt.Println("OK: registered MCP server '" + args[1] + "'")
@@ -232,7 +239,7 @@ func registryMcp(args []string) {
 		if len(args) != 3 {
 			fail("mcp add-http: usage: registry mcp add-http <name> <url>")
 		}
-		if err := registry.McpAddHTTP(args[1], args[2]); err != nil {
+		if err := mcpconfig.AddHTTP(h, args[1], args[2]); err != nil {
 			fail(err.Error())
 		}
 		fmt.Println("OK: registered HTTP MCP server '" + args[1] + "'")
@@ -240,7 +247,7 @@ func registryMcp(args []string) {
 		if len(args) != 2 {
 			fail("mcp remove: usage: registry mcp remove <name>")
 		}
-		existed, err := registry.McpRemove(args[1])
+		existed, err := mcpconfig.Remove(h, args[1])
 		if err != nil {
 			fail(err.Error())
 		}
@@ -250,7 +257,7 @@ func registryMcp(args []string) {
 			fmt.Println("OK: no MCP server named '" + args[1] + "' (nothing to remove)")
 		}
 	case "list":
-		names, err := registry.McpList()
+		names, err := mcpconfig.List(h)
 		if err != nil {
 			fail(err.Error())
 		}
@@ -269,7 +276,7 @@ func registryMemoryJoin(args []string) {
 	if err != nil {
 		fail(err.Error())
 	}
-	res, err := registry.MemoryJoin(opts.host, opts.token, opts.insecure, opts.bind)
+	res, err := join.Memory(opts.host, opts.token, opts.insecure, opts.bind)
 	if err != nil {
 		fail(err.Error())
 	}
@@ -416,7 +423,7 @@ func registryMemoryDefault(args []string) {
 	}
 	switch {
 	case *list:
-		cat, err := registry.MemoryCatalog()
+		cat, err := catalog.Listing()
 		if err != nil {
 			fail(err.Error())
 		}
@@ -424,7 +431,7 @@ func registryMemoryDefault(args []string) {
 			fail("memory-default: write listing: " + err.Error())
 		}
 	case *set != "":
-		if err := registry.ProjectBindSet(*bind, *set); err != nil {
+		if err := catalog.BindProject(*bind, *set); err != nil {
 			fail(err.Error())
 		}
 		fmt.Println("OK " + *set)
@@ -480,7 +487,7 @@ func registryKnowledgeJoin(args []string) {
 	if len(args) != 1 {
 		fail("knowledge-join: usage: registry knowledge-join <broker-url>")
 	}
-	res, err := registry.ValidateBrokerEndpoint(args[0])
+	res, err := broker.Validate(args[0])
 	if err != nil {
 		fail(err.Error())
 	}
@@ -496,7 +503,7 @@ func registryPromoteTarget(args []string) {
 	}
 	switch args[0] {
 	case "list":
-		rows, err := registry.PromoteTargetList()
+		rows, err := config.PromoteTargets()
 		if err != nil {
 			fail(err.Error())
 		}
@@ -506,7 +513,7 @@ func registryPromoteTarget(args []string) {
 			fail("promote-target add: usage: registry promote-target add <slug> <path> [label]")
 		}
 		label := strings.Join(args[3:], " ")
-		path, err := registry.PromoteTargetAdd(args[1], args[2], label)
+		path, err := promote.AddTarget(args[1], args[2], label)
 		if err != nil {
 			fail(err.Error())
 		}
@@ -559,12 +566,11 @@ func cmdMcpServe(args []string) {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: -name applies to the local managed memory only")
 		os.Exit(2)
 	}
-	binDir, err := config.StatePath("bin")
+	mcpBin, err := config.BinPath("demarkus-mcp")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: "+err.Error())
 		os.Exit(1)
 	}
-	mcpBin := filepath.Join(binDir, "demarkus-mcp")
 	if _, err := os.Stat(mcpBin); err != nil {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: demarkus-mcp not installed at "+mcpBin+"; run /soul-init")
 		os.Exit(1)
@@ -574,7 +580,7 @@ func cmdMcpServe(args []string) {
 	if id == "" {
 		id = config.LocalMemoryID
 	}
-	ep, err := registry.MemoryEndpoint(id)
+	ep, err := catalog.Resolve(id)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: "+err.Error())
 		os.Exit(1)
@@ -583,11 +589,9 @@ func cmdMcpServe(args []string) {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: memory '"+id+"' is a broker memory served over HTTP MCP; register it with `claude mcp add --transport http` instead of mcp-serve")
 		os.Exit(1)
 	}
-	host, insecure := ep.Host, ep.Insecure
-
 	env := mcpServeEnv(os.Environ(), ep.Token)
-	argv := []string{mcpBin, "-host", host}
-	if insecure {
+	argv := []string{mcpBin, "-host", ep.Host}
+	if ep.Insecure {
 		argv = append(argv, "-insecure")
 	}
 	argv = append(argv, fs.Args()...) // forward any extra args the harness appends
@@ -605,7 +609,7 @@ func cmdMcpServe(args []string) {
 		// An unbranded start with no alias on disk touches nothing: the default
 		// name needs no record, and the write path stays off for plain installs.
 		if recorded = *name != "" || alias != ""; recorded {
-			if previous, token, err = registry.SetLocalMemoryAlias(*name); err != nil {
+			if previous, token, err = catalog.SetLocalAlias(*name); err != nil {
 				fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: record local memory alias: "+err.Error())
 				os.Exit(1)
 			}
@@ -615,7 +619,7 @@ func cmdMcpServe(args []string) {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: exec failed: "+err.Error())
 		if recorded {
 			// Only while our write is still the stored one: a later mcp-serve may have started.
-			if rerr := registry.RestoreLocalMemoryAlias(previous, token); rerr != nil {
+			if rerr := catalog.RestoreLocalAlias(previous, token); rerr != nil {
 				fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: restore local memory alias: "+rerr.Error())
 			}
 		}

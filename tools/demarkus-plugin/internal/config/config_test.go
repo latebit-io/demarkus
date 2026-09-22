@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,5 +205,55 @@ func TestKnowledgePolicyFallbackWaitsForMirror(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("policy read did not complete after mirror lock released")
+	}
+}
+
+// TestMemoryRowCodec pins the catalog record shape every reader and writer share.
+func TestMemoryRowCodec(t *testing.T) {
+	full := MemoryRow{Slug: "soul", Host: "mark://soul.example", Insecure: true, TokenFile: "/t"}
+	if got := full.Record(); got != "soul\tmark://soul.example\t1\t/t" {
+		t.Errorf("Record() = %q", got)
+	}
+	if got := ParseMemoryRow(full.Record()); got != full {
+		t.Errorf("round trip = %+v, want %+v", got, full)
+	}
+	if got := ParseMemoryRow("bare"); got != (MemoryRow{Slug: "bare"}) {
+		t.Errorf("short record = %+v", got)
+	}
+	if got := ParseMemoryRow("s\thttps://b\t0\t-"); !got.IsBroker() || got.Insecure || got.TokenFile != "-" {
+		t.Errorf("broker record = %+v", got)
+	}
+	setupConfigHome(t, map[string]string{"souls": "# comment\n\n" + full.Record() + "\n" + "team\thttps://b\t0\t-\n"})
+	slugs, err := ListRemoteMemories()
+	if err != nil || strings.Join(slugs, ",") != "soul,team" {
+		t.Errorf("ListRemoteMemories = %v, %v", slugs, err)
+	}
+	rows, err := RemoteMemoryRows()
+	if err != nil || len(rows) != 2 || rows[0] != full {
+		t.Errorf("RemoteMemoryRows = %+v, %v", rows, err)
+	}
+}
+
+func TestSaveConfigRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// A space and a quote exercise the shell quoting unquoteShell reverses.
+	for _, memory := range []string{"/plain/path", "/path with space", "/path/with'quote", "/Users/x/.demarkus/memory"} {
+		if err := SaveConfig(memory, 16312, "isolated", ""); err != nil {
+			t.Fatalf("SaveConfig(%q): %v", memory, err)
+		}
+		cfg, err := LoadConfig()
+		if err != nil || cfg == nil {
+			t.Fatalf("LoadConfig(%q): %v", memory, err)
+		}
+		if cfg.MemoryDir != memory || cfg.Port != "16312" || cfg.Mode != "isolated" || cfg.TokensTOML != "" {
+			t.Errorf("round trip %q -> %+v", memory, cfg)
+		}
+	}
+	if err := SaveConfig("/root", 6310, "reuse", "/etc/tokens.toml"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig()
+	if err != nil || cfg == nil || cfg.TokensTOML != "/etc/tokens.toml" || cfg.Mode != "reuse" {
+		t.Fatalf("reuse config = %+v, %v", cfg, err)
 	}
 }

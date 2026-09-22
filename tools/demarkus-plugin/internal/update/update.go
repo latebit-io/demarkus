@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/semver"
 )
 
 // Input is the calling plugin's release identity plus the version it runs.
@@ -153,22 +154,10 @@ func latestVersion(url string) (string, error) {
 	return manifest.Version, nil
 }
 
-// isNewer compares major.minor.patch numerically; the plugin line never ships
+// isNewer compares release versions numerically; the plugin line never ships
 // prereleases, and an unparseable version compares as 0.0.0.
 func isNewer(latest, installed string) bool {
-	a, b := parts(latest), parts(installed)
-	for i := range a {
-		if a[i] != b[i] {
-			return a[i] > b[i]
-		}
-	}
-	return false
-}
-
-func parts(v string) [3]int {
-	var out [3]int
-	if _, err := fmt.Sscanf(strings.TrimSpace(v), "%d.%d.%d", &out[0], &out[1], &out[2]); err != nil {
-		return [3]int{}
-	}
-	return out
+	l, _ := semver.Parse(strings.TrimSpace(latest))
+	i, _ := semver.Parse(strings.TrimSpace(installed))
+	return i.Less(l)
 }
