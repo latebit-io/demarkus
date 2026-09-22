@@ -331,8 +331,8 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *core.Claims) (co
 }
 
 // refuse logs a refusal and remembers gate and capacity ones under p.mu; they
-// hold until the registry changes, so the identity's next calls skip the lock.
-// A tombstone can clear before this pod syncs, so it is answered live.
+// expire after refusalTTL or when the registry changes. Deprovisioning refusals
+// stay uncached because a tombstone can clear before this pod syncs.
 func (p *Provisioner) refuse(identity, subject string, err error) {
 	switch {
 	case errors.Is(err, ErrProvisioningDenied):
