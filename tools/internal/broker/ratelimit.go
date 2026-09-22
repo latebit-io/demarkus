@@ -1,7 +1,7 @@
 package broker
 
 import (
-	"context"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -13,83 +13,9 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// ctxKey scopes context-stash keys to this package so callers outside the
-// broker can't accidentally collide with our keys.
-type ctxKey int
-
-const (
-	// ctxClaimsKey holds the verified OIDC Claims for an authed request,
-	// populated by requireAuth and read by handlers + subjectRateLimit.
-	// Using a typed key (rather than the bare string) is the standard
-	// idiom for in-package context propagation; nothing outside this
-	// package can read or write the value.
-	ctxClaimsKey ctxKey = iota
-)
-
-// ctxWithClaims returns ctx with the verified claims attached. Called from
-// requireAuth before dispatching to the next handler in the chain so all
-// downstream code (subjectRateLimit, the actual handler) shares one
-// authentication result rather than re-verifying the bearer token.
-func ctxWithClaims(ctx context.Context, c *Claims) context.Context {
-	return context.WithValue(ctx, ctxClaimsKey, c)
-}
-
-// claimsFromCtx pulls the verified claims out of ctx. Returns nil and
-// false if the context did not pass through requireAuth — the caller
-// must treat that as a programming error since the middleware chain
-// should make it impossible for an authed handler to be reached
-// without claims set. The pointer return matches the in-context
-// storage shape (Claims grew past gocritic's hugeParam threshold;
-// passing by pointer keeps the handlers off the slow path).
-func claimsFromCtx(ctx context.Context) (*Claims, bool) {
-	c, ok := ctx.Value(ctxClaimsKey).(*Claims)
-	return c, ok
-}
-
-// rateLimitRegistry keeps one *rate.Limiter per key (subject hash for the
-// authed /me/install route, source IP for /auth/login). A sync.Map fits the
-// shape: lookups dominate writes, and key creation is one-time-per-key.
-//
-// Per-replica only by design: in a multi-replica broker each pod has its
-// own registry, so the effective rate seen by an abusive client is up to
-// N× the configured value (N = replica count). The plan §6.2 Slice C.4
-// accepts this as a Phase-7+ follow-up; a cluster-shared rate limiter
-// (memcached / Redis / k8s Lease-coordinated tokens) is the eventual fix
-// when an operator's deployment actually needs it.
-//
-// No idle-key GC for Slice C.4. The two registries are bounded by:
-//
-//   - subjectReg keys are hashSubject(claims.Subject). A request only
-//     reaches subjectRateLimit after requireAuth has validated a real
-//     OIDC bearer, so growth is bounded by the IdP's user count (the
-//     attacker cannot inflate the keyspace without first holding valid
-//     IdP-issued tokens, which is itself rate-limited by the IdP).
-//   - loginReg keys come from s.clientIP(r). With trustForwardedFor=false
-//     (default we ship) the key is r.RemoteAddr — bounded by clients
-//     that can actually reach the broker's listener. With
-//     trustForwardedFor=true (chart-side §6.3 flips this on once the
-//     broker sits behind an Ingress that strips spoofed XFF), the key
-//     is the leftmost XFF entry, which a correctly-configured ingress
-//     caps to real client IPs.
-//
-// The unbounded-growth concern is real only when trustForwardedFor=true
-// AND the broker is internet-exposed without a trusted proxy in front —
-// i.e., a deployment misconfiguration the §6.3 chart docs call out. TTL
-// eviction does NOT fix that posture: under active attack an attacker
-// who rotates keys faster than the TTL gets fresh buckets indefinitely
-// (effective rate-limit disappears), and an LRU cap evicts legitimate
-// users' older buckets first while the attacker's freshly-created
-// buckets stay in the map. The defense at the right layer is upstream
-// (cluster-shared rate limiter at the broker pod set, or per-IP
-// rate-limit annotations at the ingress controller); Phase-7+ work.
-//
-// Realistic worst-case sizing for sized-up healthy deployments: a
-// long-running broker pod with ~10k distinct authenticated subjects
-// holds ~10k limiters at ~50 bytes each, ~500KB total. That's not a
-// memory-DoS-shaped quantity. If a customer's broker outgrows that,
-// idle-key GC (scan the sync.Map periodically, evict entries whose
-// token bucket is full + has not seen activity for a TTL) is a clean
-// additive change.
+// rateLimitRegistry keeps one *rate.Limiter per key (subject hash or client
+// IP). Per replica and without eviction by design; the sizing and the
+// trustForwardedFor caveat are in docs/site/deployment/kubernetes.md.
 type rateLimitRegistry struct {
 	mu        sync.Map // key string → *rate.Limiter
 	perMinute int
@@ -184,36 +110,34 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// subjectRateLimit enforces per-subject rate limiting on authed routes.
-// Must be composed AFTER requireAuth: it reads the verified claims off
-// the request context and keys on hashSubject(claims.Subject) so a
-// rotating client IP or multiple sessions for the same identity share
-// one bucket. When s.subjectReg is nil (rate limit disabled in config),
-// returns next unchanged so the route is free of measurement overhead.
-//
-// /me/install is the only subject-rate-limited route, so there is no
-// cross-route bucket-sharing to reason about here — the per-subject
-// limiter simply caps how fast one identity can hit /me/install. Plan
-// §6.2 C.4 decision.
-func (s *Server) subjectRateLimit(next http.Handler) http.Handler {
-	if s.subjectReg == nil {
+// newRateLimits builds the two registries from config; nil when the limiter
+// is disabled or a rate is zero, and the middleware then passes through.
+func newRateLimits(cfg *RateLimitConfig) (subject, login *rateLimitRegistry) {
+	if cfg.Disabled {
+		return nil, nil
+	}
+	return newRateLimitRegistry(cfg.Tokens.PerMinute, cfg.Tokens.Burst),
+		newRateLimitRegistry(cfg.Login.PerMinute, cfg.Login.Burst)
+}
+
+// subjectRateLimit limits an authenticated route per subject, so rotating
+// IPs or several sessions of one identity share a bucket. It runs after the
+// auth middleware and fails closed when the claims are missing.
+func subjectRateLimit(reg *rateLimitRegistry, log *slog.Logger, next http.Handler) http.Handler {
+	if reg == nil {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := claimsFromCtx(r.Context())
 		if !ok {
-			// Programming error: subjectRateLimit composed without
-			// requireAuth upstream. Fail closed with 500 so the
-			// regression surfaces immediately rather than silently
-			// disabling rate-limiting on the route.
-			s.log.ErrorContext(r.Context(), "broker: subjectRateLimit missing claims in context; middleware miswired")
+			log.ErrorContext(r.Context(), "broker: subjectRateLimit missing claims in context; middleware miswired")
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		key := hashSubject(claims.Subject)
-		allowed, retryAfter := s.subjectReg.reserve(key)
+		allowed, retryAfter := reg.reserve(key)
 		if !allowed {
-			s.log.WarnContext(r.Context(), "broker: rate limit exceeded",
+			log.WarnContext(r.Context(), "broker: rate limit exceeded",
 				"route", r.URL.Path, "subject", key, "retryAfter", retryAfter)
 			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)

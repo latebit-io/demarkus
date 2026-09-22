@@ -46,7 +46,7 @@ func TestResolveWorldAddressInternalAddressOverride(t *testing.T) {
 
 func TestWorldPoolClientForUnknownWorldReturnsErrWorldNotFound(t *testing.T) {
 	cfg := &Config{Worlds: []WorldConfig{{Name: "team-a", Namespace: "team-a"}}}
-	pool := newWorldPool(cfg, fetch.Options{})
+	pool := newWorldPool(cfg.worlds(), fetch.Options{})
 	_, _, err := pool.clientFor("team-b")
 	var notFound *errWorldNotFound
 	if !errors.As(err, &notFound) {
@@ -59,7 +59,7 @@ func TestWorldPoolClientForUnknownWorldReturnsErrWorldNotFound(t *testing.T) {
 
 func TestWorldPoolReusesClientForSameWorld(t *testing.T) {
 	cfg := &Config{Worlds: []WorldConfig{{Name: "team-a", Namespace: "team-a"}}}
-	pool := newWorldPool(cfg, fetch.Options{})
+	pool := newWorldPool(cfg.worlds(), fetch.Options{})
 	t.Cleanup(pool.Close)
 
 	c1, host1, err := pool.clientFor("team-a")
@@ -84,7 +84,7 @@ func TestWorldPoolDispatchesUnknownWorldThroughTopLevelMethods(t *testing.T) {
 	// handlers depend on the error type to render a useful tool
 	// error envelope.
 	cfg := &Config{Worlds: []WorldConfig{{Name: "team-a", Namespace: "team-a"}}}
-	pool := newWorldPool(cfg, fetch.Options{})
+	pool := newWorldPool(cfg.worlds(), fetch.Options{})
 	t.Cleanup(pool.Close)
 
 	for _, tc := range []struct {
@@ -115,7 +115,7 @@ func TestWorldPoolDispatchesUnknownWorldThroughTopLevelMethods(t *testing.T) {
 // provisioned again gets a fresh client, not the old world's connections.
 func TestWorldPoolLetsGoOfADroppedWorld(t *testing.T) {
 	cfg := &Config{}
-	pool := newWorldPool(cfg, fetch.Options{})
+	pool := newWorldPool(cfg.worlds(), fetch.Options{})
 	defer pool.Close()
 	eve := WorldConfig{Name: "eve-1", InternalAddress: "127.0.0.1:1", generation: "t1"}
 	cfg.worlds().SetDynamic([]WorldConfig{eve}, nil)

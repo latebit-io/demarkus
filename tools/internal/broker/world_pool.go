@@ -43,7 +43,7 @@ type pooledWorld struct {
 // connection pool) per world, resolved to a cluster-internal host:port
 // via resolveWorldAddress; the mark:// scheme is implicit.
 type worldPool struct {
-	cfg     *Config
+	worlds  *worldRegistry
 	mu      sync.Mutex
 	clients map[string]pooledWorld
 	opts    fetch.Options
@@ -51,13 +51,13 @@ type worldPool struct {
 
 // newWorldPool builds an empty pool; clients are created on first use. opts
 // is the template every per world client inherits (TLS posture, timeouts).
-func newWorldPool(cfg *Config, opts fetch.Options) *worldPool {
+func newWorldPool(worlds *worldRegistry, opts fetch.Options) *worldPool {
 	p := &worldPool{
-		cfg:     cfg,
-		clients: make(map[string]pooledWorld, len(cfg.Worlds)),
+		worlds:  worlds,
+		clients: make(map[string]pooledWorld),
 		opts:    opts,
 	}
-	cfg.worlds().OnDrop(p.drop)
+	worlds.OnDrop(p.drop)
 	return p
 }
 
@@ -179,7 +179,7 @@ func (p *worldPool) clientFor(worldName string) (*fetch.Client, string, error) {
 	}
 	p.mu.Unlock()
 
-	w, ok := p.cfg.FindWorld(worldName)
+	w, ok := p.worlds.Find(worldName)
 	if !ok {
 		return nil, "", &errWorldNotFound{worldName: worldName}
 	}

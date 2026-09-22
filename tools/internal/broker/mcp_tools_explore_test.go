@@ -202,7 +202,7 @@ func TestHandleMarkExploreConfirmedAbsenceClearsAdjacency(t *testing.T) {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound, Metadata: map[string]string{"version": "2"}}}, nil
 	}
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
-	world, ok := g.srv.cfg.FindWorld("team-a")
+	world, ok := g.deps.Worlds.Find("team-a")
 	if !ok {
 		t.Fatal("team-a world missing")
 	}

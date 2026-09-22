@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,59 +16,16 @@ import (
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
-	"k8s.io/client-go/kubernetes/fake"
 )
 
 // The memory broker's authorization invariant: identity = world, reads
 // AND writes locked to the caller's own world. This file enforces it
 // across every registered tool, the resource surface, and the crawler.
 
-// memoryTestConfig provisions two static tenants: alice owns alice-w,
-// bob owns bob-w.
-func memoryTestConfig() *Config {
-	cfg := testConfig()
-	cfg.Server.MCP = MCPConfig{Addr: ":0", PublicURL: "https://memory.example.com"}
-	cfg.Worlds = []WorldConfig{
-		{
-			Name: "alice-w", Namespace: "alice-w", TokensSecret: "alice-w-tokens",
-			Allow: AllowConfig{Emails: []string{"alice@example.com"}},
-		},
-		{
-			Name: "bob-w", Namespace: "bob-w", TokensSecret: "bob-w-tokens",
-			Allow: AllowConfig{Emails: []string{"bob@example.com"}},
-		},
-	}
-	return cfg
-}
-
-// newMemoryGateway builds a memory-profile gateway around a fake
-// dispatcher, mirroring newGatewayWithDispatcher.
-func newMemoryGateway(t testing.TB, cfg *Config, d worldDispatcher) *mcpGateway {
-	t.Helper()
-	signer := newTestSigner(t)
-	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
-	k8s := fake.NewSimpleClientset()
-	srv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	srv.clock = func() time.Time { return time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC) }
-	return newMCPGateway(srv, "test", d, MemoryGatewayProfile())
-}
-
-// seededDispatcher returns a fakeDispatcher whose worlds already carry
-// /index.md, so tenantGate's memory seeding takes the already-seeded fast
-// path and tests do not see seed publishes unless they want them.
-func seededDispatcher() *fakeDispatcher {
-	return &fakeDispatcher{
-		Published: map[string]fetch.Result{
-			"alice-w/index.md": {Response: protocol.Response{Status: protocol.StatusOK, Body: "# Memory"}},
-			"bob-w/index.md":   {Response: protocol.Response{Status: protocol.StatusOK, Body: "# Memory"}},
-		},
-	}
-}
-
 func TestTenantWorldFor(t *testing.T) {
 	cfg := memoryTestConfig()
 	alice := &Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}
-	w, err := tenantWorldFor(cfg, alice)
+	w, err := tenantWorldFor(cfg.worlds(), cfg.OIDC.Issuer, alice)
 	if err != nil {
 		t.Fatalf("tenantWorldFor(alice): %v", err)
 	}
@@ -78,14 +34,14 @@ func TestTenantWorldFor(t *testing.T) {
 	}
 
 	stranger := &Claims{Subject: "google|eve", Email: "eve@example.com", EmailVerified: true}
-	if _, err := tenantWorldFor(cfg, stranger); !errors.Is(err, ErrNotAuthorized) {
+	if _, err := tenantWorldFor(cfg.worlds(), cfg.OIDC.Issuer, stranger); !errors.Is(err, ErrNotAuthorized) {
 		t.Errorf("tenantWorldFor(stranger) err = %v, want ErrNotAuthorized", err)
 	}
 
 	// Ambiguity denies closed; error text stays opaque (world names
 	// identify tenants) while names ride the typed error for the log.
 	cfg.Worlds[1].Allow.Emails = []string{"alice@example.com"}
-	_, err = tenantWorldFor(cfg, alice)
+	_, err = tenantWorldFor(cfg.worlds(), cfg.OIDC.Issuer, alice)
 	if err == nil || errors.Is(err, ErrNotAuthorized) {
 		t.Fatalf("tenantWorldFor(ambiguous) err = %v, want a distinct ambiguity error", err)
 	}
@@ -755,13 +711,7 @@ func TestMemoryGraphRetiredRefreshCannotPopulateNewScope(t *testing.T) {
 // initialize carries instructions plus the server name, tools/list is
 // exactly the memory surface, and a cross-tenant call is denied at the wire.
 func TestMemoryGatewayEndToEnd(t *testing.T) {
-	cfg := memoryTestConfig()
-	signer := newTestSigner(t)
-	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
-	k8s := fake.NewSimpleClientset()
-	srv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	ts := httptest.NewServer(srv.MCPGatewayWith("test", seededDispatcher(), MemoryGatewayProfile()))
-	t.Cleanup(ts.Close)
+	ts := newGatewayFixture(t, memoryTestConfig(), &fakeVerifier{claims: aliceClaims()}, MemoryGatewayProfile()).serve(t, seededDispatcher())
 
 	resp := mcpRequest(t, ts.URL, "alice-token", "", initializeRequest(1))
 	if resp.HTTPStatus != http.StatusOK || resp.Error != nil {
@@ -819,16 +769,6 @@ func TestMemoryGatewayEndToEnd(t *testing.T) {
 	if isErr, _ := callResp.Result["isError"].(bool); !isErr {
 		t.Fatalf("cross-tenant mark_fetch over the wire was not denied: %+v", callResp.Result)
 	}
-}
-
-// memoryGatewayWithProvisioning wires a memory gateway whose server has
-// dynamic provisioning enabled over the k8s fake Secret store.
-func memoryGatewayWithProvisioning(t *testing.T, cfg *Config, d worldDispatcher) (*mcpGateway, *fakeBuckets) {
-	t.Helper()
-	g := newMemoryGateway(t, cfg, d)
-	buckets := &fakeBuckets{}
-	g.srv.EnableProvisioning(buckets)
-	return g, buckets
 }
 
 // TestTenantGateProvisionsFirstArrival: an admitted identity with no
@@ -963,14 +903,14 @@ func TestInstallableWorldsTenantScoped(t *testing.T) {
 	cfg.Worlds[1].PublicURL = "mark://bob-w.example:6309"
 	alice := &Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}
 
-	scoped, err := installableWorlds(cfg, alice, true)
+	scoped, err := installableWorlds(cfg.worlds(), cfg.OIDC.Issuer, alice, true)
 	if err != nil {
 		t.Fatalf("tenant-scoped listing: %v", err)
 	}
 	if len(scoped) != 1 || scoped[0].Name != "alice-w" {
 		t.Errorf("tenant-scoped install worlds = %+v, want only alice-w", scoped)
 	}
-	open, err := installableWorlds(cfg, alice, false)
+	open, err := installableWorlds(cfg.worlds(), cfg.OIDC.Issuer, alice, false)
 	if err != nil {
 		t.Fatalf("org-open listing: %v", err)
 	}
@@ -980,7 +920,7 @@ func TestInstallableWorldsTenantScoped(t *testing.T) {
 
 	// An ambiguous mapping denies closed with a surfaced error.
 	cfg.Worlds[1].Allow.Emails = []string{"alice@example.com"}
-	got, err := installableWorlds(cfg, alice, true)
+	got, err := installableWorlds(cfg.worlds(), cfg.OIDC.Issuer, alice, true)
 	if len(got) != 0 {
 		t.Errorf("ambiguous tenant mapping listed worlds: %+v", got)
 	}
@@ -991,9 +931,8 @@ func TestInstallableWorldsTenantScoped(t *testing.T) {
 }
 
 func TestMemoryGraphScopeRetiresIdleTenants(t *testing.T) {
-	g := newMemoryGateway(t, memoryTestConfig(), seededDispatcher())
-	now := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
-	g.srv.clock = func() time.Time { return now }
+	f := newGatewayFixture(t, memoryTestConfig(), &fakeVerifier{claims: aliceClaims()}, MemoryGatewayProfile())
+	g := f.gateway(seededDispatcher())
 	alice := withAliceClaims(t.Context())
 	bob := ctxWithClaims(t.Context(), &Claims{Subject: "google|bob", Email: "bob@example.com", EmailVerified: true})
 
@@ -1001,11 +940,11 @@ func TestMemoryGraphScopeRetiresIdleTenants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(tenantGraphTTL / 2)
+	f.clock.Advance(tenantGraphTTL / 2)
 	if again, err := g.graphFor(alice); err != nil || again != first {
 		t.Fatalf("scope within TTL must persist: err=%v same=%v", err, again == first)
 	}
-	now = now.Add(tenantGraphTTL + time.Minute)
+	f.clock.Advance(tenantGraphTTL + time.Minute)
 	if _, err := g.graphFor(bob); err != nil {
 		t.Fatal(err)
 	}
@@ -1019,8 +958,7 @@ func TestMemoryGraphScopeRetiresIdleTenants(t *testing.T) {
 
 func TestMemoryGraphScopeCapsTenants(t *testing.T) {
 	g := newMemoryGateway(t, memoryTestConfig(), seededDispatcher())
-	now := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
-	g.srv.clock = func() time.Time { return now }
+	now := fixedTestTime
 	for i := range maxTenantGraphs {
 		g.tenantGraphs[fmt.Sprintf("w%d", i)] = &tenantGraph{
 			graph: &gatewayGraph{graphStore: graphstore.New()}, lastUsed: now.Add(time.Duration(i) * time.Second),
@@ -1082,11 +1020,12 @@ func (c *countingStore) Mutate(ctx context.Context, ref SecretRef, mutate func([
 func TestDeniedIdentityIsRememberedBriefly(t *testing.T) {
 	cfg := provisioningTestConfig(ProvisionAllowlisted)
 	cfg.Provisioning.Allow = AllowConfig{Domains: []string{"other.org"}}
-	g, _ := memoryGatewayWithProvisioning(t, cfg, seededDispatcher())
-	store := &countingStore{SecretStore: g.srv.provisioner.store}
-	g.srv.provisioner.store = store
-	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
-	g.srv.clock = func() time.Time { return now }
+	f := newGatewayFixture(t, cfg, &fakeVerifier{claims: aliceClaims()}, MemoryGatewayProfile())
+	store := &countingStore{SecretStore: f.store}
+	f.store = store
+	f.enableProvisioning(&fakeBuckets{})
+	f.clock.Set(time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC))
+	g := f.gateway(seededDispatcher())
 	h := g.tenantGate(g.toolHandlers()["mark_worlds"])
 	call := func() string {
 		res, err := h(ctxWithClaims(context.Background(), eveClaims()), callToolReq("mark_worlds", nil))
@@ -1099,7 +1038,7 @@ func TestDeniedIdentityIsRememberedBriefly(t *testing.T) {
 	if second := call(); second != first || store.mutates != 1 {
 		t.Errorf("second = %q (first %q), registry reads = %d, want the same answer from memory", second, first, store.mutates)
 	}
-	now = now.Add(2 * time.Minute)
+	f.clock.Advance(2 * time.Minute)
 	call()
 	if store.mutates != 2 {
 		t.Errorf("registry reads = %d, want a fresh check after the denial expired", store.mutates)

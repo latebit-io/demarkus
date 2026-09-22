@@ -12,7 +12,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log/slog"
 	"os"
 
@@ -68,7 +67,7 @@ func main() {
 			(*broker.Config).ValidateTenantWorlds,
 			(*broker.Config).ValidateProvisioning,
 		},
-		Setup:          setupProvisioning,
+		Buckets:        broker.NewGCSBuckets,
 		Version:        version,
 		KubeconfigPath: *kubeconfig,
 	}, log)
@@ -76,23 +75,4 @@ func main() {
 		log.Error("memory broker exited with error", "err", err)
 		os.Exit(1)
 	}
-}
-
-// setupProvisioning wires the GCS bucket creator and dynamic tenant
-// provisioning when the config asks for it: the registry sync keeps this
-// replica converged with tenants provisioned by its siblings.
-func setupProvisioning(cfg *broker.Config, srv *broker.Server, log *slog.Logger) (background []func(context.Context), cleanup func(), err error) {
-	if !cfg.Provisioning.Enabled() {
-		return nil, func() {}, nil
-	}
-	buckets, closeClient, err := broker.NewGCSBuckets(cfg, log)
-	if err != nil {
-		return nil, nil, fmt.Errorf("provisioning enabled: %w", err)
-	}
-	provisioner := srv.EnableProvisioning(buckets)
-	log.Info("memory broker: provisioning enabled",
-		"mode", cfg.Provisioning.Mode,
-		"maxTenants", cfg.Provisioning.MaxTenants,
-		"authorityDomain", cfg.Provisioning.AuthorityDomain)
-	return []func(context.Context){provisioner.RunRegistrySync}, closeClient, nil
 }

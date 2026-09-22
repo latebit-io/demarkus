@@ -8,20 +8,43 @@ import (
 	"sync"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
+// gatewayDeps is what the MCP gateway needs from the rest of the broker.
+// Run fills it once for both listeners; tests fill it from a fixture.
+type gatewayDeps struct {
+	Worlds *worldRegistry
+	// Issuer is the configured IdP issuer, the first half of every identity key.
+	Issuer string
+	// PublicURL is the authorization server the gateway names to clients.
+	PublicURL string
+	// MCP carries the gateway's own URL and the first mint retry knobs.
+	MCP MCPConfig
+	// Realm names the product in the 401 challenge.
+	Realm string
+	// Verifier is the same composed verifier the management API uses;
+	// AllowDomains is the broker wide hosted domain gate.
+	Verifier     Verifier
+	AllowDomains []string
+	// SubjectLimiter is shared with /me/install; nil passes through.
+	SubjectLimiter *rateLimitRegistry
+	Clock          func() time.Time
+	Log            *slog.Logger
+	WriteTokens    *worldWriteTokenStore
+	// Provisioner creates tenant worlds on first arrival; nil in static mode.
+	Provisioner *Provisioner
+}
+
 // mcpGateway serves 17 MCP-over-HTTPS tools. Reads use broker SSO;
-// writes also provision per-world tokens through worldWriteTokens.
+// writes also provision per-world tokens through deps.WriteTokens.
 type mcpGateway struct {
-	srv        *Server
+	deps       *gatewayDeps
 	mcpServer  *mcpserver.MCPServer
 	transport  *mcpserver.StreamableHTTPServer
-	log        *slog.Logger
 	dispatcher worldDispatcher
 	// profile selects the product surface (knowledge vs memory):
 	// tool set, instructions, tenant scoping, memory seeding.
@@ -77,9 +100,9 @@ func (g *mcpGateway) graphFor(ctx context.Context) (*gatewayGraph, error) {
 	if !ok {
 		return nil, ErrNotAuthorized
 	}
-	identity := identityKey(g.srv.cfg.OIDC.Issuer, claims.Subject)
+	identity := identityKey(g.deps.Issuer, claims.Subject)
 	address := resolveWorldAddress(&w)
-	now := g.srv.clock()
+	now := g.deps.Clock()
 	g.tenantGraphsMu.Lock()
 	defer g.tenantGraphsMu.Unlock()
 	g.retireIdleTenantGraphsLocked(now, w.Name)
@@ -143,32 +166,28 @@ func (g *mcpGateway) dropWorld(name string) {
 
 // newMCPGateway registers the profile's tools and wraps them in Streamable
 // HTTP. Production supplies *worldPool; tests inject a dispatcher fake.
-func newMCPGateway(s *Server, version string, dispatcher worldDispatcher, profile *GatewayProfile) *mcpGateway {
+func newMCPGateway(deps *gatewayDeps, version string, dispatcher worldDispatcher, profile *GatewayProfile) *mcpGateway {
 	// Session-end eviction for the fetch dedup state. The store is
 	// constructed before the MCPServer because the hook closes over it.
-	fetchSeen := newSessionSeen(s.log, s.clock)
+	fetchSeen := newSessionSeen(deps.Log, deps.Clock)
 	hooks := &mcpserver.Hooks{}
 	hooks.AddOnUnregisterSession(func(_ context.Context, session mcpserver.ClientSession) {
 		if session != nil {
 			fetchSeen.drop(session.SessionID())
 		}
 	})
-	// The Server shares the profile so the management API's tenant
-	// scoping can never diverge from the gateway's.
-	s.profile = profile
 	g := &mcpGateway{
-		srv:            s,
-		log:            s.log,
+		deps:           deps,
 		dispatcher:     dispatcher,
 		profile:        profile,
 		knowledgeGraph: &gatewayGraph{graphStore: graphstore.New()},
 		tenantGraphs:   make(map[string]*tenantGraph),
 		fetchSeen:      fetchSeen,
 	}
-	s.cfg.worlds().OnDrop(g.dropWorld)
+	deps.Worlds.OnDrop(g.dropWorld)
 	tools, err := g.toolBodies()
 	if err != nil {
-		s.log.Error("mcp gateway: tool bodies unavailable", "err", err)
+		deps.Log.Error("mcp gateway: tool bodies unavailable", "err", err)
 	}
 	g.tools = tools
 	opts := []mcpserver.ServerOption{
@@ -258,45 +277,10 @@ func (g *mcpGateway) Routes() http.Handler {
 	// /mcp accepts both POST (request/notification) and GET (SSE
 	// listen channel) per the Streamable HTTP spec. No method filter
 	// on the route so mcp-go's transport sees every request type.
-	mux.Handle(mcpPath, g.srv.gatewayAuth(g.srv.subjectRateLimit(g.transport)))
+	mux.Handle(mcpPath, g.gatewayAuth(subjectRateLimit(g.deps.SubjectLimiter, g.deps.Log, g.transport)))
 	mux.HandleFunc("GET "+prmPath, g.oauthProtectedResource)
 	// prmPath+mcpPath is RFC 9728 §3.1's path-inserted form for a
 	// resource URL that carries a path. Same document.
 	mux.HandleFunc("GET "+prmPath+mcpPath, g.oauthProtectedResource)
 	return mux
-}
-
-// MCPGateway returns the gateway handler for the given profile with the
-// production worldPool as dispatcher; CloseMCPGateway drains its pooled
-// QUIC connections at shutdown. Tests inject via MCPGatewayWith.
-func (s *Server) MCPGateway(version string, profile *GatewayProfile) http.Handler {
-	// WorldDialer.InsecureSkipVerify propagates into fetch.Options.Insecure
-	// so the QUIC client skips TLS chain + hostname verification on
-	// dial. Required today for in-cluster deployments using per-world
-	// self-signed certs (no shared CA the broker can trust); the flag
-	// stays opt-in so the secure-by-default posture is preserved.
-	// See WorldDialerConfig doc for the trust-model rationale.
-	pool := newWorldPool(s.cfg, fetch.Options{
-		Insecure: s.cfg.WorldDialer.InsecureSkipVerify,
-	})
-	s.mcpPool = pool
-	return newMCPGateway(s, version, pool, profile).Routes()
-}
-
-// MCPGatewayWith returns the gateway handler for the given profile with
-// an injected dispatcher: the test seam (no QUIC listener needed). The
-// production path is MCPGateway, which owns the worldPool lifecycle.
-func (s *Server) MCPGatewayWith(version string, dispatcher worldDispatcher, profile *GatewayProfile) http.Handler {
-	return newMCPGateway(s, version, dispatcher, profile).Routes()
-}
-
-// CloseMCPGateway closes the production worldPool wired by
-// MCPGateway, releasing pooled QUIC connections. No-op when called
-// against a Server that never built a production gateway (tests use
-// MCPGatewayWith and own their fake dispatcher's lifecycle directly).
-func (s *Server) CloseMCPGateway() {
-	if s.mcpPool != nil {
-		s.mcpPool.Close()
-		s.mcpPool = nil
-	}
 }

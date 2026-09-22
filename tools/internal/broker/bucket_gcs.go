@@ -25,7 +25,7 @@ type GCSBucketCreator struct {
 // NewGCSBuckets opens a GCS client and wires the bucket creator from
 // provisioning config; the returned cleanup closes the client. The one
 // wiring site for serving setup and the deprovision flow.
-func NewGCSBuckets(cfg *Config, log *slog.Logger) (BucketCreator, func(), error) {
+func NewGCSBuckets(cfg *ProvisioningConfig, log *slog.Logger) (BucketCreator, func(), error) {
 	gcsClient, err := storage.NewClient(context.Background())
 	if err != nil {
 		return nil, nil, fmt.Errorf("GCS client unavailable: %w", err)
@@ -35,7 +35,7 @@ func NewGCSBuckets(cfg *Config, log *slog.Logger) (BucketCreator, func(), error)
 			log.Warn("GCS client close failed", "err", closeErr)
 		}
 	}
-	buckets, err := newGCSBucketCreator(gcsClient, cfg.Provisioning.BucketProject, cfg.Provisioning.BucketLocation, log)
+	buckets, err := newGCSBucketCreator(gcsClient, cfg.BucketProject, cfg.BucketLocation, log)
 	if err != nil {
 		cleanup()
 		return nil, nil, err

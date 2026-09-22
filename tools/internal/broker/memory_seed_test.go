@@ -24,7 +24,7 @@ func freshWorldDispatcher() *fakeDispatcher {
 func TestEnsureMemorySeedSeedsFreshWorld(t *testing.T) {
 	d := freshWorldDispatcher()
 	g := newMemoryGateway(t, memoryTestConfig(), d)
-	w := &g.srv.cfg.Worlds[0] // alice-w
+	w := &g.deps.Worlds.All()[0] // alice-w
 
 	g.ensureMemorySeed(withAliceClaims(context.Background()), w)
 
@@ -75,7 +75,7 @@ func TestEnsureMemorySeedSeedsFreshWorld(t *testing.T) {
 func TestEnsureMemorySeedSkipsSeededWorld(t *testing.T) {
 	d := seededDispatcher()
 	g := newMemoryGateway(t, memoryTestConfig(), d)
-	g.ensureMemorySeed(withAliceClaims(context.Background()), &g.srv.cfg.Worlds[0])
+	g.ensureMemorySeed(withAliceClaims(context.Background()), &g.deps.Worlds.All()[0])
 	if published := d.Calls().Publish; len(published) != 0 {
 		t.Errorf("seeding published %d docs into an already-seeded world", len(published))
 	}
@@ -117,7 +117,7 @@ func TestEnsureMemorySeedRetriesAfterFailure(t *testing.T) {
 		},
 	}
 	g := newMemoryGateway(t, memoryTestConfig(), d)
-	w := &g.srv.cfg.Worlds[0]
+	w := &g.deps.Worlds.All()[0]
 
 	g.ensureMemorySeed(withAliceClaims(context.Background()), w)
 	g.memorySeed.mu.Lock()
@@ -165,7 +165,7 @@ func policyDispatcher(policyMeta map[string]string) *fakeDispatcher {
 func TestEnsureMemorySeedReplacesServerSeededPolicy(t *testing.T) {
 	d := policyDispatcher(map[string]string{"version": "1", "agent": publishpolicy.SeedAgent})
 	g := newMemoryGateway(t, memoryTestConfig(), d)
-	g.ensureMemorySeed(withAliceClaims(context.Background()), &g.srv.cfg.Worlds[0])
+	g.ensureMemorySeed(withAliceClaims(context.Background()), &g.deps.Worlds.All()[0])
 
 	calls := d.Calls().Publish
 	if len(calls) != 3 || calls[0].Path != publishpolicy.DocumentPath {
@@ -188,7 +188,7 @@ func TestEnsureMemorySeedKeepsCuratedPolicy(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			d := policyDispatcher(meta)
 			g := newMemoryGateway(t, memoryTestConfig(), d)
-			g.ensureMemorySeed(withAliceClaims(context.Background()), &g.srv.cfg.Worlds[0])
+			g.ensureMemorySeed(withAliceClaims(context.Background()), &g.deps.Worlds.All()[0])
 			for _, call := range d.Calls().Publish {
 				if call.Path == publishpolicy.DocumentPath {
 					t.Errorf("policy republished at expected version %d", call.ExpectedVersion)
@@ -215,7 +215,7 @@ func TestEnsureMemorySeedReplacesServerSeedInSeededWorld(t *testing.T) {
 		},
 	}
 	g := newMemoryGateway(t, memoryTestConfig(), d)
-	w := &g.srv.cfg.Worlds[0]
+	w := &g.deps.Worlds.All()[0]
 	g.ensureMemorySeed(withAliceClaims(context.Background()), w)
 
 	calls := d.Calls().Publish

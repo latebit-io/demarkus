@@ -13,48 +13,6 @@ import (
 	"time"
 )
 
-// generateTestSigningKey produces a fresh ECDSA P-256 private key
-// encoded as PKCS#8 PEM. Used across every test that needs a
-// broker-side signer; ephemeral per test so failures don't leak
-// fixture key material into other tests.
-func generateTestSigningKey(t *testing.T) []byte {
-	t.Helper()
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatalf("marshal PKCS8: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-}
-
-// generateTestSigningKeySEC1 produces the same key in the legacy
-// SEC1 ("EC PRIVATE KEY") PEM shape — exercises the alternative
-// branch of NewIDTokenSigner that accepts both PKCS#8 and SEC1.
-func generateTestSigningKeySEC1(t *testing.T) []byte {
-	t.Helper()
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-	der, err := x509.MarshalECPrivateKey(priv)
-	if err != nil {
-		t.Fatalf("marshal SEC1: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
-}
-
-func newTestIDTokenSigner(t *testing.T) *IDTokenSigner {
-	t.Helper()
-	s, err := NewIDTokenSigner(generateTestSigningKey(t))
-	if err != nil {
-		t.Fatalf("NewIDTokenSigner: %v", err)
-	}
-	return s
-}
-
 func TestIDTokenSignerSignVerifyRoundTrip(t *testing.T) {
 	s := newTestIDTokenSigner(t)
 	brokerURL := "https://broker.example.com"

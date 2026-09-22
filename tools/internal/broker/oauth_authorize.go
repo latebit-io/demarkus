@@ -57,17 +57,16 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	// redirect_uri is now trusted. All subsequent errors redirect.
 	clientState := params.Get("state")
+	reply := &authorizeReply{w: w, r: r, redirectURI: redirectURI, clientState: clientState}
 
 	responseType := strings.TrimSpace(params.Get("response_type"))
 	if responseType != "code" {
-		redirectAuthorizeError(w, r, redirectURI, clientState, "unsupported_response_type",
-			"only response_type=code is supported")
+		reply.fail("unsupported_response_type", "only response_type=code is supported")
 		return
 	}
 	codeChallenge := strings.TrimSpace(params.Get("code_challenge"))
 	if codeChallenge == "" {
-		redirectAuthorizeError(w, r, redirectURI, clientState, "invalid_request",
-			"code_challenge required")
+		reply.fail("invalid_request", "code_challenge required")
 		return
 	}
 	codeChallengeMethod := strings.TrimSpace(params.Get("code_challenge_method"))
@@ -77,13 +76,11 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		// explicitly so the SDK gets a helpful error code rather
 		// than the broker silently treating it as plain and then
 		// failing PKCE at the /token leg.
-		redirectAuthorizeError(w, r, redirectURI, clientState, "invalid_request",
-			"code_challenge_method required (only S256 is supported)")
+		reply.fail("invalid_request", "code_challenge_method required (only S256 is supported)")
 		return
 	}
 	if codeChallengeMethod != "S256" {
-		redirectAuthorizeError(w, r, redirectURI, clientState, "invalid_request",
-			"only code_challenge_method=S256 is supported")
+		reply.fail("invalid_request", "only code_challenge_method=S256 is supported")
 		return
 	}
 
@@ -98,7 +95,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: auth code begin failed", "err", err)
 		code, description := authorizeBeginError(err)
-		redirectAuthorizeError(w, r, redirectURI, clientState, code, description)
+		reply.fail(code, description)
 		return
 	}
 
@@ -107,7 +104,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		// No callback can ever present this id; do not let it hold a slot until the sweep.
 		s.authCodeStore.Cancel(authCodeID)
 		s.log.ErrorContext(r.Context(), "broker: auth code state", "err", err)
-		redirectAuthorizeError(w, r, redirectURI, clientState, "server_error", "internal error")
+		reply.fail("server_error", "internal error")
 		return
 	}
 	http.Redirect(w, r, s.verifier.AuthCodeURL(nonce), http.StatusFound)
@@ -177,20 +174,19 @@ func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCo
 		return
 	}
 
+	reply := &authorizeReply{w: w, r: r, redirectURI: pending.RedirectURI, clientState: pending.ClientState}
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		s.log.InfoContext(r.Context(), "broker: auth code callback denied by idp", "err", errParam)
 		// The IdP error code may not match the OAuth 2.0
 		// client-facing set; map to access_denied as the closest
 		// safe equivalent. Real failure detail stays in the log.
-		redirectAuthorizeError(w, r, pending.RedirectURI, pending.ClientState,
-			"access_denied", "identity provider denied the request")
+		reply.fail("access_denied", "identity provider denied the request")
 		return
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		s.log.WarnContext(r.Context(), "broker: auth code callback missing code param")
-		redirectAuthorizeError(w, r, pending.RedirectURI, pending.ClientState,
-			"server_error", "missing authorization code from identity provider")
+		reply.fail("server_error", "missing authorization code from identity provider")
 		return
 	}
 
@@ -200,16 +196,14 @@ func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCo
 		// Do NOT translate to access_denied — same rationale as
 		// deviceCallback. A transient IdP failure is not a user
 		// denial.
-		redirectAuthorizeError(w, r, pending.RedirectURI, pending.ClientState,
-			"server_error", "identity provider exchange failed")
+		reply.fail("server_error", "identity provider exchange failed")
 		return
 	}
 
 	if err := gateIdentity(s.cfg.OIDC.AllowDomains, &exchange.Claims); err != nil {
 		s.log.InfoContext(r.Context(), "broker: auth code identity rejected", "err", err,
 			"subject", hashSubject(exchange.Claims.Subject), "hd", exchange.Claims.HD)
-		redirectAuthorizeError(w, r, pending.RedirectURI, pending.ClientState,
-			"access_denied", strings.TrimPrefix(err.Error(), "broker: "))
+		reply.fail("access_denied", strings.TrimPrefix(err.Error(), "broker: "))
 		return
 	}
 
@@ -217,15 +211,14 @@ func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCo
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: auth code bind failed",
 			"err", err, "subject", hashSubject(exchange.Claims.Subject))
-		redirectAuthorizeError(w, r, pending.RedirectURI, pending.ClientState,
-			"server_error", "authorization session expired")
+		reply.fail("server_error", "authorization session expired")
 		return
 	}
 
 	s.log.InfoContext(r.Context(), "broker: auth code bind succeeded",
 		"subject", hashSubject(exchange.Claims.Subject))
 
-	redirectAuthorizeSuccess(w, r, pending.RedirectURI, pending.ClientState, authCode, s.cfg.Server.PublicURL)
+	reply.succeed(authCode, s.cfg.Server.PublicURL)
 }
 
 // authorizeBeginError maps a Begin failure to its RFC 6749 error code; a full
@@ -247,54 +240,51 @@ func writeAuthorizeJSONError(w http.ResponseWriter, code, description string) {
 	})
 }
 
-// redirectAuthorizeError 302s to the client's redirect_uri with
-// `error=<code>&error_description=<desc>&state=<client_state>` per
-// RFC 6749 §4.1.2.1. Caller MUST have validated that redirectURI
-// is a loopback URI (or otherwise trusted) before invoking — this
-// helper does not re-check.
-func redirectAuthorizeError(w http.ResponseWriter, r *http.Request, redirectURI, clientState, code, description string) {
-	u, err := url.Parse(redirectURI)
-	if err != nil {
-		// Unreachable in practice — caller validated. Falling back
-		// to a JSON 400 keeps the failure surfaced rather than
-		// generating a malformed Location header.
-		writeAuthorizeJSONError(w, "server_error", "invalid redirect_uri")
-		return
-	}
-	q := u.Query()
-	q.Set("error", code)
-	if description != "" {
-		q.Set("error_description", description)
-	}
-	if clientState != "" {
-		q.Set("state", clientState)
-	}
-	u.RawQuery = q.Encode()
-	http.Redirect(w, r, u.String(), http.StatusFound)
+// authorizeReply answers an authorize leg at the client's redirect_uri,
+// echoing its state. The caller has validated the URI as loopback or
+// registered; this type does not re-check.
+type authorizeReply struct {
+	w           http.ResponseWriter
+	r           *http.Request
+	redirectURI string
+	clientState string
 }
 
-// redirectAuthorizeSuccess 302s to the client's redirect_uri with
-// `code=<authCode>&state=<client_state>&iss=<brokerURL>`. The `iss`
-// parameter (RFC 9207) lets a defensive SDK confirm the redirect
-// came from the broker it expected, defending against authorization-
-// response mix-up attacks. Cheap to emit even if a given SDK ignores
-// it.
-func redirectAuthorizeSuccess(w http.ResponseWriter, r *http.Request, redirectURI, clientState, authCode, brokerURL string) {
-	u, err := url.Parse(redirectURI)
+// fail 302s with error and error_description per RFC 6749 4.1.2.1.
+func (a *authorizeReply) fail(code, description string) {
+	a.redirect(func(q url.Values) {
+		q.Set("error", code)
+		if description != "" {
+			q.Set("error_description", description)
+		}
+	})
+}
+
+// succeed 302s with the code and, per RFC 9207, iss, so a defensive SDK
+// can tell the redirect came from the broker it expected.
+func (a *authorizeReply) succeed(authCode, brokerURL string) {
+	a.redirect(func(q url.Values) {
+		q.Set("code", authCode)
+		if brokerURL != "" {
+			q.Set("iss", brokerURL)
+		}
+	})
+}
+
+func (a *authorizeReply) redirect(set func(url.Values)) {
+	u, err := url.Parse(a.redirectURI)
 	if err != nil {
-		writeAuthorizeJSONError(w, "server_error", "invalid redirect_uri")
+		// The caller validated the URI; a JSON 400 still beats a malformed Location.
+		writeAuthorizeJSONError(a.w, "server_error", "invalid redirect_uri")
 		return
 	}
 	q := u.Query()
-	q.Set("code", authCode)
-	if clientState != "" {
-		q.Set("state", clientState)
-	}
-	if brokerURL != "" {
-		q.Set("iss", brokerURL)
+	set(q)
+	if a.clientState != "" {
+		q.Set("state", a.clientState)
 	}
 	u.RawQuery = q.Encode()
-	http.Redirect(w, r, u.String(), http.StatusFound)
+	http.Redirect(a.w, a.r, u.String(), http.StatusFound)
 }
 
 // isLoopbackRedirectURI returns true iff raw parses as

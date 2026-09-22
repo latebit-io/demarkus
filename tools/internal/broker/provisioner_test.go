@@ -161,18 +161,18 @@ func TestEnsureTenantProvisionsAndConverges(t *testing.T) {
 		t.Errorf("buckets created = %v", buckets.created)
 	}
 	// Tokens key exists and is non-empty.
-	if len(store.get(cfg.worldTokensRef(&world))) == 0 {
+	if len(store.get(worldTokensRef(&world))) == 0 {
 		t.Error("tokens key was not seeded")
 	}
 	// Fragment rendered with the world, bootstrap on.
-	fragment := string(store.get(cfg.worldsFragmentRef()))
+	fragment := string(store.get(worldsFragmentRef(cfg)))
 	for _, want := range []string{"name: " + world.Name, "bootstrap: true", "gs://memory-" + world.Name, world.Name + ".toml", world.Name + ".memory-worlds.svc.cluster.local"} {
 		if !strings.Contains(fragment, want) {
 			t.Errorf("fragment missing %q:\n%s", want, fragment)
 		}
 	}
 	// Dynamic world visible to this pod's config immediately.
-	if _, ok := cfg.FindWorld(world.Name); !ok {
+	if _, ok := cfg.worlds().Find(world.Name); !ok {
 		t.Error("provisioned world not in dynamic set")
 	}
 
@@ -185,7 +185,7 @@ func TestEnsureTenantProvisionsAndConverges(t *testing.T) {
 	if again.Name != world.Name {
 		t.Errorf("second EnsureTenant world = %q, want %q", again.Name, world.Name)
 	}
-	registry := string(store.get(cfg.registryRef()))
+	registry := string(store.get(registryRef(cfg)))
 	if strings.Count(registry, `"email"`) != 1 {
 		t.Errorf("registry has duplicate tenants:\n%s", registry)
 	}
@@ -238,19 +238,19 @@ func TestEnsureTenantEmailChangeKeepsWorld(t *testing.T) {
 		t.Errorf("returned world allow = %+v, want the new canonical email", world.Allow)
 	}
 
-	registry := string(store.get(cfg.registryRef()))
+	registry := string(store.get(registryRef(cfg)))
 	if strings.Count(registry, `"email"`) != 1 {
 		t.Errorf("email change duplicated the tenant:\n%s", registry)
 	}
 	if !strings.Contains(registry, "eve.moved@elsewhere.io") || strings.Contains(registry, "eve.adams@example.com") {
 		t.Errorf("record email not refreshed:\n%s", registry)
 	}
-	fragment := string(store.get(cfg.worldsFragmentRef()))
+	fragment := string(store.get(worldsFragmentRef(cfg)))
 	if strings.Count(fragment, "name: ") != 1 {
 		t.Errorf("email change grew the fragment:\n%s", fragment)
 	}
 	// Dynamic world set converged on the new email for this pod.
-	w, ok := cfg.FindWorld(original.Name)
+	w, ok := cfg.worlds().Find(original.Name)
 	if !ok {
 		t.Fatal("original world missing from dynamic set")
 	}
@@ -272,7 +272,7 @@ func TestEnsureTenantEmailRefreshOnceThenFastPath(t *testing.T) {
 
 	// Stale record: identity index hits but Allow rejects the new email,
 	// denying so the slow path runs once and refreshes.
-	if _, err := tenantWorldFor(cfg, movedEveClaims()); !errors.Is(err, ErrNotAuthorized) {
+	if _, err := tenantWorldFor(cfg.worlds(), cfg.OIDC.Issuer, movedEveClaims()); !errors.Is(err, ErrNotAuthorized) {
 		t.Fatalf("pre-refresh tenantWorldFor err = %v, want ErrNotAuthorized", err)
 	}
 
@@ -286,7 +286,7 @@ func TestEnsureTenantEmailRefreshOnceThenFastPath(t *testing.T) {
 	}
 
 	// Fast path: the resolver answers by identity index, no provisioner.
-	w, err := tenantWorldFor(cfg, movedEveClaims())
+	w, err := tenantWorldFor(cfg.worlds(), cfg.OIDC.Issuer, movedEveClaims())
 	if err != nil {
 		t.Fatalf("post-refresh tenantWorldFor: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestEnsureTenantSharedLocalPartDistinctWorlds(t *testing.T) {
 	if twinWorld.Name == eveWorld.Name {
 		t.Fatalf("shared local part collapsed two identities into %q", eveWorld.Name)
 	}
-	w, err := tenantWorldFor(cfg, twin)
+	w, err := tenantWorldFor(cfg.worlds(), cfg.OIDC.Issuer, twin)
 	if err != nil {
 		t.Fatalf("tenantWorldFor(twin): %v", err)
 	}
@@ -337,7 +337,7 @@ func TestEnsureTenantSharedLocalPartDistinctWorlds(t *testing.T) {
 func TestEnsureTenantRaceEmailChangeConverges(t *testing.T) {
 	cfg := provisioningTestConfig(ProvisionOpen)
 	raw := newProvisionerStore()
-	hooked := &hookedStore{SecretStore: raw, ref: cfg.registryRef()}
+	hooked := &hookedStore{SecretStore: raw, ref: registryRef(cfg)}
 	p := newTestProvisioner(cfg, hooked, &fakeBuckets{})
 	sibling := newTestProvisioner(provisioningTestConfig(ProvisionOpen), raw, &fakeBuckets{})
 
@@ -357,7 +357,7 @@ func TestEnsureTenantRaceEmailChangeConverges(t *testing.T) {
 	if world.Name != originalWorld.Name {
 		t.Errorf("race produced two slugs: %q vs %q", world.Name, originalWorld.Name)
 	}
-	registry := string(raw.get(cfg.registryRef()))
+	registry := string(raw.get(registryRef(cfg)))
 	if strings.Count(registry, `"email"`) != 1 {
 		t.Errorf("race duplicated the tenant:\n%s", registry)
 	}
@@ -371,7 +371,7 @@ func TestEnsureTenantRaceEmailChangeConverges(t *testing.T) {
 func TestEnsureTenantTombstonedDeniedAfterEmailChange(t *testing.T) {
 	cfg := provisioningTestConfig(ProvisionOpen)
 	raw := newProvisionerStore()
-	failing := &hookedStore{SecretStore: raw, ref: cfg.worldsFragmentRef()}
+	failing := &hookedStore{SecretStore: raw, ref: worldsFragmentRef(cfg)}
 	p := newTestProvisioner(cfg, failing, &fakeBuckets{})
 	world, err := p.EnsureTenant(context.Background(), eveClaims())
 	if err != nil {
@@ -407,7 +407,7 @@ func TestLegacyDuplicateIdentityResolvesDeterministically(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.Mutate(context.Background(), cfg.registryRef(), func([]byte) ([]byte, error) {
+		if err := store.Mutate(context.Background(), registryRef(cfg), func([]byte) ([]byte, error) {
 			return encoded, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -432,7 +432,7 @@ func TestLegacyDuplicateIdentityResolvesDeterministically(t *testing.T) {
 	if world.Name != "a-eve-0000" {
 		t.Errorf("EnsureTenant resolved %q, want the first sorted slug a-eve-0000", world.Name)
 	}
-	w, err := tenantWorldFor(cfg, eveClaims())
+	w, err := tenantWorldFor(cfg.worlds(), cfg.OIDC.Issuer, eveClaims())
 	if err != nil {
 		t.Fatalf("tenantWorldFor: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestLegacyDuplicateIdentityResolvesDeterministically(t *testing.T) {
 	if world.Name != "b-eve-1111" {
 		t.Errorf("EnsureTenant with tombstoned duplicate resolved %q, want b-eve-1111", world.Name)
 	}
-	w, err = tenantWorldFor(cfg, eveClaims())
+	w, err = tenantWorldFor(cfg.worlds(), cfg.OIDC.Issuer, eveClaims())
 	if err != nil {
 		t.Fatalf("tenantWorldFor with tombstoned duplicate: %v", err)
 	}
@@ -533,10 +533,10 @@ func TestEnsureTenantBucketFailureRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retry after bucket failure: %v", err)
 	}
-	if len(store.get(cfg.worldsFragmentRef())) == 0 {
+	if len(store.get(worldsFragmentRef(cfg))) == 0 {
 		t.Error("fragment missing after converged retry")
 	}
-	if _, ok := cfg.FindWorld(world.Name); !ok {
+	if _, ok := cfg.worlds().Find(world.Name); !ok {
 		t.Error("world not visible after converged retry")
 	}
 }
@@ -556,7 +556,7 @@ func TestSyncRegistryPublishesDynamicWorlds(t *testing.T) {
 		t.Fatalf("SyncRegistry: %v", err)
 	}
 	slug := tenantSlug(cfg.OIDC.Issuer, "google|eve-123", "eve.adams@example.com")
-	if _, ok := sibling.FindWorld(slug); !ok {
+	if _, ok := sibling.worlds().Find(slug); !ok {
 		t.Errorf("sibling did not converge on tenant %q", slug)
 	}
 }
@@ -569,7 +569,7 @@ func TestFragmentRendersDocumentQuota(t *testing.T) {
 	if _, err := p.EnsureTenant(context.Background(), eveClaims()); err != nil {
 		t.Fatal(err)
 	}
-	fragment := string(store.get(cfg.worldsFragmentRef()))
+	fragment := string(store.get(worldsFragmentRef(cfg)))
 	if !strings.Contains(fragment, "maxDocuments: 500") {
 		t.Errorf("fragment missing per-tenant quota:\n%s", fragment)
 	}
@@ -586,7 +586,7 @@ func TestWorldsFragmentGolden(t *testing.T) {
 	if _, err := p.EnsureTenant(context.Background(), eveClaims()); err != nil {
 		t.Fatal(err)
 	}
-	rendered := store.get(cfg.worldsFragmentRef())
+	rendered := store.get(worldsFragmentRef(cfg))
 
 	golden := filepath.Join("testdata", "worlds-fragment.golden.yaml")
 	if os.Getenv("UPDATE_GOLDEN") == "1" {
@@ -644,7 +644,7 @@ func TestFragmentUnionSurvivesStaleSnapshot(t *testing.T) {
 	stale := &tenantRegistry{Tenants: map[string]tenantRecord{
 		eveWorld.Name: {Email: "eve.adams@example.com", WorldID: tenantWorldID(cfg.OIDC.Issuer, "google|eve-123")},
 	}}
-	merged, err := p.renderWorldsFragmentUnion(stale, store.get(cfg.worldsFragmentRef()))
+	merged, err := p.renderWorldsFragmentUnion(stale, store.get(worldsFragmentRef(cfg)))
 	if err != nil {
 		t.Fatalf("union render: %v", err)
 	}
@@ -702,7 +702,7 @@ func (h *hookedStore) Mutate(ctx context.Context, ref SecretRef, fn func([]byte)
 func TestDeprovisionPreservesRacingFragmentEntry(t *testing.T) {
 	cfg := provisioningTestConfig(ProvisionOpen)
 	raw := newProvisionerStore()
-	hooked := &hookedStore{SecretStore: raw, ref: cfg.worldsFragmentRef()}
+	hooked := &hookedStore{SecretStore: raw, ref: worldsFragmentRef(cfg)}
 	p := newTestProvisioner(cfg, hooked, &fakeBuckets{})
 	eveWorld, err := p.EnsureTenant(context.Background(), eveClaims())
 	if err != nil {
@@ -728,7 +728,7 @@ func TestDeprovisionPreservesRacingFragmentEntry(t *testing.T) {
 	if _, err := p.DeprovisionTenant(context.Background(), eveWorld.Name, false); err != nil {
 		t.Fatalf("DeprovisionTenant: %v", err)
 	}
-	fragment := string(raw.get(cfg.worldsFragmentRef()))
+	fragment := string(raw.get(worldsFragmentRef(cfg)))
 	if strings.Contains(fragment, "name: "+eveWorld.Name) {
 		t.Errorf("deprovisioned world survived the fragment rewrite:\n%s", fragment)
 	}
@@ -748,7 +748,7 @@ func TestSyncRemovesTombstonedWorld(t *testing.T) {
 	raw := newProvisionerStore()
 	// Crash simulation: fail the tombstone's fragment rewrite so
 	// DeprovisionTenant exits after phase 1.
-	failing := &hookedStore{SecretStore: raw, ref: cfg.worldsFragmentRef()}
+	failing := &hookedStore{SecretStore: raw, ref: worldsFragmentRef(cfg)}
 	p := newTestProvisioner(cfg, failing, &fakeBuckets{})
 	world, err := p.EnsureTenant(context.Background(), eveClaims())
 	if err != nil {
@@ -767,11 +767,11 @@ func TestSyncRemovesTombstonedWorld(t *testing.T) {
 	if err := q.SyncRegistry(context.Background()); err != nil {
 		t.Fatalf("SyncRegistry: %v", err)
 	}
-	fragment := string(raw.get(cfg.worldsFragmentRef()))
+	fragment := string(raw.get(worldsFragmentRef(cfg)))
 	if strings.Contains(fragment, "name: "+world.Name) {
 		t.Errorf("sync kept a tombstoned world in the fragment:\n%s", fragment)
 	}
-	if _, ok := sibling.FindWorld(world.Name); ok {
+	if _, ok := sibling.worlds().Find(world.Name); ok {
 		t.Error("sync kept a tombstoned world resolvable")
 	}
 }
@@ -791,7 +791,7 @@ func TestSyncRegistryConvergesFragment(t *testing.T) {
 
 	// Simulate the stale drop: empty the fragment while the registry
 	// still holds the tenant.
-	if err := p.store.Mutate(context.Background(), cfg.worldsFragmentRef(), func([]byte) ([]byte, error) {
+	if err := p.store.Mutate(context.Background(), worldsFragmentRef(cfg), func([]byte) ([]byte, error) {
 		return []byte("worlds: []\n"), nil
 	}); err != nil {
 		t.Fatal(err)
@@ -802,7 +802,7 @@ func TestSyncRegistryConvergesFragment(t *testing.T) {
 	if err := q.SyncRegistry(context.Background()); err != nil {
 		t.Fatalf("SyncRegistry: %v", err)
 	}
-	fragment := string(store.get(cfg.worldsFragmentRef()))
+	fragment := string(store.get(worldsFragmentRef(cfg)))
 	if !strings.Contains(fragment, "name: "+world.Name) {
 		t.Errorf("sync did not restore the dropped world:\n%s", fragment)
 	}
@@ -833,20 +833,20 @@ func TestDeprovisionTenantRemovesEverything(t *testing.T) {
 	}
 
 	// Registry no longer holds eve; frank survives.
-	registry := string(store.get(cfg.registryRef()))
+	registry := string(store.get(registryRef(cfg)))
 	if strings.Contains(registry, world.Name) || !strings.Contains(registry, frankWorld.Name) {
 		t.Errorf("registry after deprovision:\n%s", registry)
 	}
 	// Fragment rewrite dropped eve's world (the one flow allowed to).
-	fragment := string(store.get(cfg.worldsFragmentRef()))
+	fragment := string(store.get(worldsFragmentRef(cfg)))
 	if strings.Contains(fragment, "name: "+world.Name) || !strings.Contains(fragment, "name: "+frankWorld.Name) {
 		t.Errorf("fragment after deprovision:\n%s", fragment)
 	}
 	// Tokens key and write-token record deleted.
-	if got := store.get(cfg.worldTokensRef(&world)); len(got) != 0 {
+	if got := store.get(worldTokensRef(&world)); len(got) != 0 {
 		t.Errorf("tokens key survived deprovision: %q", got)
 	}
-	if got := store.get(cfg.worldWriteTokenRef(world.Name)); len(got) != 0 {
+	if got := store.get(worldWriteTokenRef(cfg, world.Name)); len(got) != 0 {
 		t.Errorf("write-token record survived deprovision: %q", got)
 	}
 	// Bucket deleted on request.
@@ -857,7 +857,7 @@ func TestDeprovisionTenantRemovesEverything(t *testing.T) {
 		t.Errorf("deleted buckets = %v", deleted)
 	}
 	// Dynamic world set no longer resolves eve.
-	if _, ok := cfg.FindWorld(world.Name); ok {
+	if _, ok := cfg.worlds().Find(world.Name); ok {
 		t.Error("deprovisioned world still resolvable")
 	}
 

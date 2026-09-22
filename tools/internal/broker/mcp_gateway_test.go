@@ -3,125 +3,11 @@ package broker
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
-
-	"k8s.io/client-go/kubernetes/fake"
 )
-
-// mcpTestConfig returns a Config like testConfig() but with the MCP
-// gateway configured. Setting MCP.Addr is the on-switch. The two
-// PublicURLs are deliberately distinct (split-host topology) so tests
-// catch any handler building a URL from the wrong one.
-func mcpTestConfig() *Config {
-	cfg := testConfig()
-	cfg.Server.PublicURL = "https://broker.example.com"
-	cfg.Server.MCP = MCPConfig{Addr: ":0", PublicURL: "https://gateway.example.com"}
-	return cfg
-}
-
-// newTestMCPGateway builds a Server and returns an httptest.Server
-// hosting the gateway's Routes (NOT the management API). Mirrors the
-// newTestServer / newTestServerWithSigner shape so a single helper
-// covers the integration tests in this file plus the focused tests
-// in mcp_auth_test.go / mcp_oauth_test.go.
-func newTestMCPGateway(t *testing.T, cfg *Config, verifier Verifier) *httptest.Server {
-	t.Helper()
-	signer := newTestSigner(t)
-	k8s := fake.NewSimpleClientset()
-	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	ts := httptest.NewServer(brokerSrv.MCPGateway("test", KnowledgeGatewayProfile()))
-	t.Cleanup(ts.Close)
-	return ts
-}
-
-// mcpRequest fires a JSON-RPC 2.0 request at the gateway's /mcp
-// endpoint and returns the parsed response (or the raw HTTP status +
-// body when the response is non-200). bearer is the value of the
-// Authorization header — pass "" to omit it (for unauth tests).
-type mcpResponse struct {
-	HTTPStatus int
-	RawBody    []byte
-	JSONRPC    string                     `json:"jsonrpc"`
-	ID         json.Number                `json:"id"`
-	Result     map[string]any             `json:"result,omitempty"`
-	Error      map[string]any             `json:"error,omitempty"`
-	Headers    map[string]string          `json:"-"`
-	Extras     map[string]json.RawMessage `json:",omitempty"`
-}
-
-// mcpSessionHeader is the HTTP header MCP's Streamable HTTP transport
-// uses to carry the session ID across requests. The server returns it
-// in the initialize response; clients echo it on every subsequent
-// non-initialize call. Hard-coded literal here instead of importing
-// mcpserver.HeaderKeySessionID to keep this test file's imports lean.
-const mcpSessionHeader = "Mcp-Session-Id"
-
-func mcpRequest(t *testing.T, base, bearer, sessionID string, body map[string]any) mcpResponse {
-	t.Helper()
-	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	req, err := http.NewRequest(http.MethodPost, base+"/mcp", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	if sessionID != "" {
-		req.Header.Set(mcpSessionHeader, sessionID)
-	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("POST /mcp: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	rawBody, _ := io.ReadAll(resp.Body)
-	out := mcpResponse{
-		HTTPStatus: resp.StatusCode,
-		RawBody:    rawBody,
-		Headers:    map[string]string{},
-	}
-	for k, v := range resp.Header {
-		if len(v) > 0 {
-			out.Headers[k] = v[0]
-		}
-	}
-	if resp.StatusCode == http.StatusOK && len(rawBody) > 0 {
-		if err := json.Unmarshal(rawBody, &out); err != nil {
-			t.Fatalf("decode JSON-RPC response: %v\nbody: %s", err, rawBody)
-		}
-	}
-	return out
-}
-
-// initializeRequest is the standard MCP initialize payload. Kept as a
-// helper so every test that needs an initialize handshake builds the
-// same shape (and a future protocol-version bump is one edit).
-func initializeRequest(id int) map[string]any {
-	return map[string]any{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"method":  "initialize",
-		"params": map[string]any{
-			"protocolVersion": "2025-03-26",
-			"capabilities":    map[string]any{},
-			"clientInfo": map[string]any{
-				"name":    "broker-mcp-test",
-				"version": "test",
-			},
-		},
-	}
-}
 
 func TestMCPGatewayInitializeHandshake(t *testing.T) {
 	v := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
@@ -236,11 +122,7 @@ func TestMCPGatewayToolsListMatchesAdvertisedNames(t *testing.T) {
 // to mcpToolNames without a matching handlers map entry fails
 // here, not at runtime.
 func TestMCPGatewayEveryAdvertisedToolHasAHandler(t *testing.T) {
-	signer := newTestSigner(t)
-	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
-	k8s := fake.NewSimpleClientset()
-	srv := NewServer(mcpTestConfig(), signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	gw := newMCPGateway(srv, "test", &fakeDispatcher{}, KnowledgeGatewayProfile())
+	gw := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
 
 	handlers := gw.toolHandlers()
 	for _, name := range mcpToolNames {

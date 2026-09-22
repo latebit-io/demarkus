@@ -185,8 +185,9 @@ func TestSubjectRateLimitMissingClaimsIs500(t *testing.T) {
 	// as 500 + an error log rather than silently disabling the limit
 	// (which would be the worst-of-both: production looks fine, but
 	// a misbehaving caller gets unbounded throughput).
-	srv := NewServer(testConfigWithRateLimit(), newTestSigner(t), &fakeVerifier{}, NewK8sSecretStore(fake.NewSimpleClientset()), nil, nil, nil)
-	h := srv.subjectRateLimit(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	cfg := testConfigWithRateLimit()
+	srv := NewServer(cfg, testServerDeps(t, cfg, &fakeVerifier{}, fake.NewSimpleClientset()))
+	h := subjectRateLimit(srv.subjectReg, srv.log, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler reached despite missing claims")
 		w.WriteHeader(http.StatusOK)
 	}))

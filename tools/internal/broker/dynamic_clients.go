@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"time"
 )
@@ -12,13 +11,6 @@ import (
 // RFC 7591 dynamic client registrations with persisted redirect URIs:
 // MCP hosts register their https callbacks and the authorize leg
 // trusts exactly what was recorded here.
-
-// defaultDynamicClientsSecret names the broker-namespace Secret
-// holding the registration map when the operator does not override it.
-const defaultDynamicClientsSecret = "demarkus-broker-dynamic-clients"
-
-// DynamicClientsSecretKey is the data key inside the Secret.
-const DynamicClientsSecretKey = "dynamic-clients.json"
 
 // maxDynamicClients caps the registration map. Registration is
 // anonymous-open (RFC 7591 §2), so without a cap the Secret is an
@@ -83,7 +75,7 @@ func decodeDynamicClients(existing []byte) (map[string]dynamicClientRecord, erro
 // Register persists a new registration under clientID.
 func (s *DynamicClientStore) Register(ctx context.Context, clientID string, redirectURIs []string, name string) error {
 	now := s.clock().UTC()
-	return s.store.Mutate(ctx, s.cfg.dynamicClientsRef(), func(existing []byte) ([]byte, error) {
+	return s.store.Mutate(ctx, dynamicClientsRef(s.cfg), func(existing []byte) ([]byte, error) {
 		clients, err := decodeDynamicClients(existing)
 		if err != nil {
 			return nil, err
@@ -133,7 +125,7 @@ func (s *DynamicClientStore) Register(ctx context.Context, clientID string, redi
 func (s *DynamicClientStore) Lookup(ctx context.Context, clientID string) (dynamicClientRecord, bool, error) {
 	var record dynamicClientRecord
 	found := false
-	err := s.store.Mutate(ctx, s.cfg.dynamicClientsRef(), func(existing []byte) ([]byte, error) {
+	err := s.store.Mutate(ctx, dynamicClientsRef(s.cfg), func(existing []byte) ([]byte, error) {
 		clients, decodeErr := decodeDynamicClients(existing)
 		if decodeErr != nil {
 			return nil, decodeErr
@@ -169,16 +161,4 @@ func validateClientRedirectURI(raw string) error {
 		return nil
 	}
 	return validateWebRedirectURI(raw)
-}
-
-func (c *Config) dynamicClientsRef() SecretRef {
-	ref := SecretRef{
-		Namespace: c.Server.BrokerNamespace,
-		Name:      c.Server.DynamicClientsSecret,
-		Key:       DynamicClientsSecretKey,
-	}
-	if c.fileBackend() {
-		ref.Path = filepath.Join(c.Storage.Dir, DynamicClientsSecretKey)
-	}
-	return ref
 }

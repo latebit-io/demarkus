@@ -82,11 +82,6 @@ func newTestDiscovery(t *testing.T, idp *fakeDiscoveryIdP, ttl time.Duration) (*
 	return d, clk
 }
 
-type fakeClock struct{ now time.Time }
-
-func (c *fakeClock) Now() time.Time          { return c.now }
-func (c *fakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
-
 func TestNewDiscoveryRequiresBrokerURL(t *testing.T) {
 	_, err := NewDiscovery(context.Background(), DiscoveryConfig{IdPIssuer: "https://idp"})
 	if err == nil || !strings.Contains(err.Error(), "brokerURL is required") {

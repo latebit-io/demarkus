@@ -46,7 +46,7 @@ func (g *mcpGateway) registerResources() {
 		mcp.WithTemplateMIMEType("text/markdown"),
 	), g.readResource)
 
-	worlds := readableWorlds(g.srv.cfg)
+	worlds := readableWorlds(g.deps.Worlds)
 	for j := range worlds {
 		w := &worlds[j]
 		g.mcpServer.AddResource(mcp.NewResource(
@@ -91,7 +91,7 @@ func (g *mcpGateway) admitResourceRead(ctx context.Context, raw string) (context
 		return ctx, fmt.Errorf("invalid resource URI %q: %w", raw, parseErr)
 	}
 	if !owns {
-		g.log.Warn("resource read denied cross-tenant access", "world", w.Name)
+		g.deps.Log.Warn("resource read denied cross-tenant access", "world", w.Name)
 		return ctx, crossTenantDenial(&w)
 	}
 	g.seedTenant(ctx, &w)

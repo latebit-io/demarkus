@@ -7,11 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"golang.org/x/oauth2"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
 // fakeIdP serves the minimum OIDC discovery surface NewVerifier touches:
@@ -100,48 +101,6 @@ func TestNewVerifierRejectsNilConfig(t *testing.T) {
 	if !strings.Contains(err.Error(), "oidc config is required") {
 		t.Errorf("err = %v, want 'oidc config is required'", err)
 	}
-}
-
-// fakeVerifier is the test double issuer/server tests use. It implements
-// the Verifier interface with predetermined claims and is not coupled to
-// the OIDC library.
-type fakeVerifier struct {
-	authURL     string
-	claims      Claims
-	rawIDToken  string
-	accessToken string
-	expiry      time.Time
-	exchErr     error
-	verifyFn    func(raw string) (Claims, error) // optional per-token behavior for VerifyIDToken
-}
-
-func (f *fakeVerifier) AuthCodeURL(state string) string {
-	if f.authURL == "" {
-		return "https://idp.example.com/authorize?state=" + url.QueryEscape(state)
-	}
-	if strings.Contains(f.authURL, "?") {
-		return f.authURL + "&state=" + url.QueryEscape(state)
-	}
-	return f.authURL + "?state=" + url.QueryEscape(state)
-}
-
-func (f *fakeVerifier) Exchange(_ context.Context, _ string) (ExchangeResult, error) {
-	if f.exchErr != nil {
-		return ExchangeResult{}, f.exchErr
-	}
-	return ExchangeResult{
-		Claims:      f.claims,
-		RawIDToken:  f.rawIDToken,
-		AccessToken: f.accessToken,
-		Expiry:      f.expiry,
-	}, nil
-}
-
-func (f *fakeVerifier) VerifyIDToken(_ context.Context, raw string) (Claims, error) {
-	if f.verifyFn != nil {
-		return f.verifyFn(raw)
-	}
-	return f.claims, nil
 }
 
 func TestCompositeVerifierPassThroughAuthAndExchange(t *testing.T) {

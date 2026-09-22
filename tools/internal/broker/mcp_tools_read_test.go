@@ -3,21 +3,15 @@ package broker
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/render"
 	"github.com/mark3labs/mcp-go/mcp"
-	"k8s.io/client-go/kubernetes/fake"
 )
-
-// fakeDispatcher is the shared scriptable client; see client/fetchtest.
-type fakeDispatcher = fetchtest.Client
 
 func TestParseToolURLDoubleSlashShape(t *testing.T) {
 	world, path, err := parseToolURL("mark://team-a/foo.md")
@@ -144,43 +138,6 @@ func TestParseToolURLDeepPath(t *testing.T) {
 	if path != "/docs/architecture/index.md" {
 		t.Errorf("path = %q, want /docs/architecture/index.md", path)
 	}
-}
-
-// newGatewayWithDispatcher builds an mcpGateway with the supplied
-// dispatcher, bypassing the HTTP layer. Used for unit tests that
-// drive handlers directly through their Go signatures. The server's
-// clock is pinned to a fixed instant so any time-dependent assertion
-// stays deterministic across runs.
-func newGatewayWithDispatcher(t *testing.T, cfg *Config, d worldDispatcher) *mcpGateway {
-	t.Helper()
-	signer := newTestSigner(t)
-	verifier := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
-	k8s := fake.NewSimpleClientset()
-	srv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	srv.clock = func() time.Time { return time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC) }
-	return newMCPGateway(srv, "test", d, KnowledgeGatewayProfile())
-}
-
-// callToolReq builds a mcp.CallToolRequest with the given
-// arguments. Mirrors the shape mcp-go's transport produces so
-// handler tests exercise the same code path real traffic does.
-func callToolReq(name string, args map[string]any) mcp.CallToolRequest {
-	return mcp.CallToolRequest{
-		Params: mcp.CallToolParams{
-			Name:      name,
-			Arguments: args,
-		},
-	}
-}
-
-// withAliceClaims returns ctx with verified claims attached,
-// matching what gatewayAuth installs in production traffic.
-func withAliceClaims(ctx context.Context) context.Context {
-	return ctxWithClaims(ctx, &Claims{
-		Subject:       "google|alice",
-		Email:         "alice@example.com",
-		EmailVerified: true,
-	})
 }
 
 func TestHandleMarkFetchHappyPath(t *testing.T) {
@@ -455,7 +412,7 @@ func TestHandleMarkFetchUnknownWorld(t *testing.T) {
 	// single world named team-a; targeting team-b must surface
 	// errWorldNotFound through the handler.
 	cfg := mcpTestConfig()
-	pool := newWorldPool(cfg, fetch.Options{})
+	pool := newWorldPool(cfg.worlds(), fetch.Options{})
 	g := newGatewayWithDispatcher(t, cfg, pool)
 	res, err := g.handleMarkFetch(withAliceClaims(context.Background()), callToolReq("mark_fetch", map[string]any{
 		"url": "mark://team-b/foo.md",
@@ -507,14 +464,7 @@ func TestMCPGatewayMarkFetchEndToEnd(t *testing.T) {
 			}}, nil
 		},
 	}
-	verifier := &fakeVerifier{claims: Claims{
-		Subject: "google|alice", Email: "alice@example.com", EmailVerified: true,
-	}}
-	signer := newTestSigner(t)
-	k8s := fake.NewSimpleClientset()
-	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d, KnowledgeGatewayProfile()))
-	t.Cleanup(ts.Close)
+	ts := newTestMCPGatewayWith(t, cfg, &fakeVerifier{claims: aliceClaims()}, d)
 
 	initR := mcpRequest(t, ts.URL, "alice-token", "", initializeRequest(1))
 	if initR.HTTPStatus != http.StatusOK {

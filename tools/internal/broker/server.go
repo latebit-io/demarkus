@@ -1,9 +1,7 @@
 package broker
 
 import (
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -18,10 +16,9 @@ import (
 // (defense against login-CSRF / IdP-mixup).
 const stateCookieName = "broker_oidc_state"
 
-// Server is the broker's HTTP layer. It depends on the Verifier plus a
-// kubernetes client for the Secret-backed stores; tests pass a
-// fakeVerifier and a fake clientset and exercise every route end-to-end
-// without network or kube.
+// Server is the broker's HTTP layer: the OAuth surface and the management
+// API. Tests pass a fake Verifier and a fake clientset and exercise every
+// route end-to-end without network or kube.
 type Server struct {
 	cfg       *Config
 	signer    *Signer
@@ -30,121 +27,87 @@ type Server struct {
 	log       *slog.Logger
 	clock     func() time.Time
 
-	// deviceStore holds in-flight RFC 8628 device-flow grants. Created
-	// lazily by NewServer (single-broker invariant per plan §"Single
-	// broker only for now"); state lives in process memory and a
-	// broker restart drops it. The handlers in device.go own the
-	// HTTP surface; the store owns the state machine.
-	deviceStore *deviceStore
-
-	// authCodeStore holds in-flight RFC 6749 authorization-code grants
-	// for MCP clients that do not pivot to device flow (Claude Code's
-	// MCP SDK as of 2026-05). Same single-broker invariant as
-	// deviceStore — process-memory only, dropped on restart. The
-	// handlers in oauth_authorize.go own the HTTP surface; the store
-	// owns the pending → code → exchange state machine.
-	authCodeStore *authCodeStore
-
-	// refreshStore owns the persisted map of sha256(refresh_token) →
-	// record; survives broker restarts unlike deviceStore. NewServer
-	// injects one SecretStore shared with the write-token store.
-	refreshStore *RefreshStore
-
-	// dynamicClients persists RFC 7591 registrations so the authorize
-	// leg can trust an MCP host's registered https redirect URIs.
+	// deviceStore and authCodeStore hold in-flight grants in process memory;
+	// a restart drops them (single broker invariant). refreshStore and
+	// dynamicClients persist through the SecretStore.
+	deviceStore    *deviceStore
+	authCodeStore  *authCodeStore
+	refreshStore   *RefreshStore
 	dynamicClients *DynamicClientStore
 
-	// idTokenSigner mints broker-signed id_tokens on the
-	// /device/token refresh-grant path and serves its public key at
-	// /.well-known/jwks.json. May be nil in tests that don't
-	// exercise the refresh-grant surface; production wiring always
-	// supplies one (NewServer.LoadConfig validates the PEM at
-	// startup). Same signer satisfies both sign and verify (broker
-	// is the only relying party for its own tokens).
+	// idTokenSigner signs broker id_tokens on the refresh grant path and
+	// serves its key at /.well-known/jwks.json; jwks is nil without it.
 	idTokenSigner *IDTokenSigner
+	jwks          *jwksHandler
 
-	// jwks holds the pre-rendered JWKS body served at
-	// /.well-known/jwks.json. Nil when idTokenSigner is nil;
-	// Routes() skips the registration in that case so existing
-	// tests that pass nil signers behave unchanged.
-	jwks *jwksHandler
+	// tenantScoped mirrors the gateway profile so /me/install and
+	// /auth/callback list worlds the way the gateway scopes them.
+	tenantScoped bool
 
-	// worldWriteTokens owns the per-world write-token Secrets the
-	// MCP gateway dispatches writes with. One long-lived token per
-	// world, shared across all writers — SSO + WorldConfig.Allow at
-	// the broker is the writer gate; the world only ever sees one
-	// token-per-world in its tokens.toml.
-	worldWriteTokens *worldWriteTokenStore
-
-	// mcpPool is the production worldPool wired by MCPGateway, held
-	// here so CloseMCPGateway can drain pooled QUIC connections at
-	// shutdown. Nil for tests that go through MCPGatewayWith (they
-	// own their fake dispatcher's lifecycle).
-	mcpPool *worldPool
-
-	// provisioner is the dynamic-tenant creator (memory broker with
-	// provisioning enabled); nil everywhere else. tenantGate consults it
-	// when an authenticated identity resolves to no world.
-	provisioner *Provisioner
-
-	// profile is the gateway profile, held so the management API
-	// (/me/install, /auth/callback) shares the gateway's tenant scoping
-	// from one source of truth. Nil in tests that skip Run.
-	profile *GatewayProfile
-
-	// subjectReg is the per-subject limiter for /me/install; loginReg
-	// is the per-IP limiter for /auth/login.
-	// Either may be nil (Slice C.4 RateLimitConfig.Disabled, or a test
-	// that constructs Config{} without rate-limit fields set), in
-	// which case the corresponding middleware is a no-op passthrough.
+	// subjectReg limits /me/install per subject, loginReg /auth/login per
+	// IP; nil when the limiter is disabled, and the middleware passes through.
 	subjectReg *rateLimitRegistry
 	loginReg   *rateLimitRegistry
-	// trustForwardedFor mirrors RateLimitConfig.TrustForwardedFor; the
-	// flag is hoisted onto Server so the ipRateLimit middleware can
-	// read it without re-reaching into Config on every request.
+	// trustForwardedFor is hoisted so ipRateLimit does not reach into Config.
 	trustForwardedFor bool
 }
 
-// NewServer wires a Server. The caller is responsible for constructing
-// the Signer, Verifier, kubernetes client, Discovery, and (optionally)
-// IDTokenSigner in advance — keeps this constructor cheap enough for
-// tests to call directly. discovery and idTokenSigner are optional:
-// tests that don't exercise those surfaces pass nil and Routes() skips
-// the corresponding registrations.
-//
-// When idTokenSigner is non-nil, NewServer composes the supplied
-// Verifier with the broker-key verification leg (see
-// compositeVerifier in oidc.go) — callers don't have to wrap
-// manually, and tests that pass &fakeVerifier{} get broker-signed
-// verification "for free" against the supplied signer.
-func NewServer(cfg *Config, signer *Signer, verifier Verifier, store SecretStore, discovery *Discovery, idTokenSigner *IDTokenSigner, log *slog.Logger) *Server {
+// ServerDeps is what NewServer needs built in advance, so the constructor
+// stays cheap enough for tests to call directly. Discovery and IDTokenSigner
+// are optional; Routes skips their registrations when absent.
+type ServerDeps struct {
+	Signer *Signer
+	// Verifier is the composed verifier (verifierWith) when an id_token
+	// signer is wired; the gateway verifies with the same one.
+	Verifier Verifier
+	Store    SecretStore
+	// Discovery requires IDTokenSigner: the document advertises jwks_uri.
+	Discovery     *Discovery
+	IDTokenSigner *IDTokenSigner
+	Log           *slog.Logger
+	Clock         func() time.Time
+	// SubjectLimiter is shared with the gateway, so one identity has one
+	// bucket across /me/install and /mcp. LoginLimiter is this listener's.
+	SubjectLimiter, LoginLimiter *rateLimitRegistry
+	// TenantScoped is the gateway profile's scoping, shared so the
+	// management API's world listings can never diverge from the gateway's.
+	TenantScoped bool
+}
+
+// verifierWith composes the IdP verifier with the broker key leg when a
+// signer is wired. Run and the fixtures call it once for both listeners.
+func verifierWith(primary Verifier, signer *IDTokenSigner, brokerURL string) Verifier {
+	if signer == nil {
+		return primary
+	}
+	return newCompositeVerifier(primary, signer, brokerURL)
+}
+
+// NewServer wires a Server from its dependencies.
+func NewServer(cfg *Config, deps ServerDeps) *Server {
+	log := deps.Log
 	if log == nil {
 		log = slog.Default()
 	}
-	// Discovery overrides jwks_uri to the broker (PR4); a discovery
-	// doc that advertises /.well-known/jwks.json with no handler
-	// mounted is a broken-by-construction surface — strict OIDC
-	// clients will fail at key-discovery time. Production wiring
-	// guarantees both are present (LoadConfig requires
-	// BrokerSigningKey when validate runs), so this guard is for
-	// programming errors at construction. Panic rather than return
-	// an error because NewServer's signature is error-less and the
-	// invariant is impossible to recover from at runtime.
-	if discovery != nil && idTokenSigner == nil {
+	clock := deps.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	// A discovery document advertising jwks_uri at an unregistered route
+	// breaks strict OIDC clients at key discovery; a programming error,
+	// not a runtime state, hence the panic.
+	if deps.Discovery != nil && deps.IDTokenSigner == nil {
 		panic("broker: NewServer with discovery != nil requires idTokenSigner; otherwise the well-known doc would advertise jwks_uri at a route that is not registered")
 	}
-	// Device-flow knobs default at construction time so tests that
-	// build Config{} directly (skipping LoadConfig validation) still
-	// get usable values — keeps the in-process httptest path symmetric
-	// with the LoadConfig-validated production path. Same shape for
-	// refresh-flow knobs (PR4).
+	// Knobs default here too so tests that build Config{} without
+	// LoadConfig get the same values the validated path resolves.
 	deviceTTL := cfg.Server.DeviceCodeTTL
 	if deviceTTL <= 0 {
-		deviceTTL = 10 * time.Minute
+		deviceTTL = defaultDeviceCodeTTL
 	}
 	pollInterval := cfg.Server.DevicePollInterval
 	if pollInterval <= 0 {
-		pollInterval = 5 * time.Second
+		pollInterval = defaultDevicePollInterval
 	}
 	if cfg.Server.RefreshTokensSecret == "" {
 		cfg.Server.RefreshTokensSecret = defaultRefreshTokensSecret
@@ -158,30 +121,25 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, store SecretStore
 	if cfg.Server.IDTokenTTL <= 0 {
 		cfg.Server.IDTokenTTL = defaultIDTokenTTL
 	}
-	// Wrap the supplied Verifier with the broker-key leg whenever a
-	// signer is wired. Callers never see the wrapping — Server.verifier
-	// is the composite under the same Verifier interface.
-	if idTokenSigner != nil {
-		verifier = newCompositeVerifier(verifier, idTokenSigner, cfg.Server.PublicURL)
-	}
-	clock := time.Now
 	s := &Server{
 		cfg:               cfg,
-		signer:            signer,
-		verifier:          verifier,
-		discovery:         discovery,
-		idTokenSigner:     idTokenSigner,
+		signer:            deps.Signer,
+		verifier:          deps.Verifier,
+		discovery:         deps.Discovery,
+		idTokenSigner:     deps.IDTokenSigner,
 		log:               log,
 		clock:             clock,
 		deviceStore:       newDeviceStore(clock, deviceTTL, pollInterval),
 		authCodeStore:     newAuthCodeStore(clock, defaultPendingAuthCodeTTL, defaultAuthCodeTTL),
-		refreshStore:      NewRefreshStore(cfg, store),
-		dynamicClients:    NewDynamicClientStore(cfg, store),
-		worldWriteTokens:  newWorldWriteTokenStore(cfg, store),
+		refreshStore:      NewRefreshStore(cfg, deps.Store),
+		dynamicClients:    NewDynamicClientStore(cfg, deps.Store),
+		subjectReg:        deps.SubjectLimiter,
+		loginReg:          deps.LoginLimiter,
+		tenantScoped:      deps.TenantScoped,
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
-	if idTokenSigner != nil {
-		jwks, err := newJWKSHandler(idTokenSigner)
+	if deps.IDTokenSigner != nil {
+		jwks, err := newJWKSHandler(deps.IDTokenSigner)
 		if err != nil {
 			// Marshal failure is purely a programming error — the
 			// JWK struct cannot legitimately fail to serialize.
@@ -191,15 +149,6 @@ func NewServer(cfg *Config, signer *Signer, verifier Verifier, store SecretStore
 			panic(fmt.Sprintf("broker: render JWKS at startup: %v", err))
 		}
 		s.jwks = jwks
-	}
-	// Build the registries unless the operator disabled the limiter
-	// entirely. newRateLimitRegistry returns nil for zero/negative
-	// inputs, so tests that construct Config{} without RateLimit set
-	// get registry=nil and the middleware passes through cleanly —
-	// matching the pre-Slice-C.4 behavior of those tests.
-	if !cfg.RateLimit.Disabled {
-		s.subjectReg = newRateLimitRegistry(cfg.RateLimit.Tokens.PerMinute, cfg.RateLimit.Tokens.Burst)
-		s.loginReg = newRateLimitRegistry(cfg.RateLimit.Login.PerMinute, cfg.RateLimit.Login.Burst)
 	}
 	return s
 }
@@ -273,15 +222,12 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /token/revoke", s.ipRateLimit(limitForm(http.HandlerFunc(s.tokenRevoke))))
 	// /me/install verifies the bearer, rate-limits by subject, and lists
 	// readable worlds without token material.
-	mux.Handle("GET /me/install", s.requireAuth(s.subjectRateLimit(http.HandlerFunc(s.meInstall))))
+	mux.Handle("GET /me/install", s.requireAuth(subjectRateLimit(s.subjectReg, s.log, http.HandlerFunc(s.meInstall))))
 	return mux
 }
 
-// RefreshStore exposes the broker's refresh-token store so the
-// Sweeper (constructed in main.go) can share a single instance.
-// Returns nil only if NewServer somehow skipped construction — not a
-// production path. Kept as a method (not a public field) so the
-// lifecycle remains "Server owns construction; callers borrow."
+// RefreshStore exposes the refresh token store so the Sweeper shares the
+// one instance; the Server owns construction, callers borrow.
 func (s *Server) RefreshStore() *RefreshStore { return s.refreshStore }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
@@ -452,18 +398,4 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
-}
-
-// hashSubject returns a short, stable, non-reversible identifier suitable
-// for log correlation without exposing the raw OIDC subject (which often
-// embeds the user's email or external IdP ID). 8 hex chars of SHA-256 is
-// enough to disambiguate users in a single broker's audit trail while
-// keeping aggregated log stores PII-light. Logs only need a fingerprint,
-// not the raw subject.
-func hashSubject(subject string) string {
-	if subject == "" {
-		return ""
-	}
-	h := sha256.Sum256([]byte(subject))
-	return "sha256-" + hex.EncodeToString(h[:4])
 }

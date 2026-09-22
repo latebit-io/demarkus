@@ -78,7 +78,7 @@ func (g *mcpGateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, wo
 			return state.ownedRows(nodes, edges)
 		},
 		Problem: func(p graphstore.SeedProblem) {
-			g.log.Warn("graph seed failed", "world", p.Owner, "step", p.Step, "path", p.Path, "status", p.Status, "err", p.Err)
+			g.deps.Log.Warn("graph seed failed", "world", p.Owner, "step", p.Step, "path", p.Path, "status", p.Status, "err", p.Err)
 		},
 	})
 }
@@ -102,7 +102,7 @@ func (state *gatewayGraph) ownedRows(nodes []graphstore.StoredNode, edges []grap
 // gateway queries key on world names, so untranslated rows are unreachable.
 // Unknown hosts stay as labels. Both sides canonicalize (ADR 0005).
 func (g *mcpGateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) {
-	worlds := g.srv.cfg.AllWorlds()
+	worlds := g.deps.Worlds.All()
 	byAddr := make(map[string]string, len(worlds))
 	for i := range worlds {
 		// CanonicalURL normalizes an empty path to "/"; the prefix match wants a

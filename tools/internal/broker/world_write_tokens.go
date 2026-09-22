@@ -11,21 +11,8 @@ import (
 	"github.com/latebit-io/demarkus/tools/internal/token"
 )
 
-// worldWriteTokenSecretKey is the data key in the broker's
-// per-world Secret that holds the JSON-encoded write token entry.
-const worldWriteTokenSecretKey = "write-token.json"
-
-// Per-world write-token Secret name (per-world RBAC). Legacy
-// "demarkus-broker" prefix pinned: worlds read these Secrets by name.
-func worldWriteTokenSecretName(worldName string) string {
-	return "demarkus-broker-write-token-" + worldName
-}
-
-// worldWriteTokenLabel is the stable label the broker uses for its
-// entry in the world's tokens.toml. Encoding the world name makes
-// the entry obvious to an operator inspecting the world Secret;
-// keeping it stable means re-provisioning hits the same entry
-// instead of accumulating dead labels.
+// worldWriteTokenLabel names the broker's entry in a world's tokens.toml.
+// Stable, so re-provisioning hits the same entry instead of piling up dead ones.
 func worldWriteTokenLabel(worldName string) string {
 	return "broker-write-" + worldName
 }
@@ -107,7 +94,7 @@ func (s *worldWriteTokenStore) Provision(ctx context.Context, worldName string) 
 	if tok, ok := s.Get(worldName); ok {
 		return tok, nil
 	}
-	world := lookupWorld(s.cfg, worldName)
+	world := lookupWorld(s.cfg.worlds(), worldName)
 	if world == nil {
 		// Same sentinel the worldPool returns so callers
 		// (notably federation/graph) can treat "no broker config
@@ -122,7 +109,7 @@ func (s *worldWriteTokenStore) Provision(ctx context.Context, worldName string) 
 	// Invariant: concurrent provisioners converge on the first committed
 	// token; the closure returns existing data unchanged when present.
 	var finalRecord writeTokenRecord
-	err := s.store.Mutate(ctx, s.cfg.worldWriteTokenRef(worldName), func(existing []byte) ([]byte, error) {
+	err := s.store.Mutate(ctx, worldWriteTokenRef(s.cfg, worldName), func(existing []byte) ([]byte, error) {
 		if len(existing) > 0 {
 			if err := json.Unmarshal(existing, &finalRecord); err != nil {
 				return nil, fmt.Errorf("decode write token record: %w", err)
@@ -175,7 +162,7 @@ func (s *worldWriteTokenStore) Provision(ctx context.Context, worldName string) 
 // never authorize and every write would burn the propagation-race
 // budget pretending kubelet was lagging.
 func (s *worldWriteTokenStore) syncWorldHash(ctx context.Context, world *WorldConfig, label string, entry *token.Entry) error {
-	return s.store.Mutate(ctx, s.cfg.worldTokensRef(world), func(existing []byte) ([]byte, error) {
+	return s.store.Mutate(ctx, worldTokensRef(world), func(existing []byte) ([]byte, error) {
 		next, err := token.AppendBytes(existing, label, entry)
 		if err == nil {
 			return next, nil

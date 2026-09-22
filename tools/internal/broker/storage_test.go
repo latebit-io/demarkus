@@ -167,19 +167,19 @@ func TestConfigRefsFileMode(t *testing.T) {
 	}
 	world := &WorldConfig{Name: "memory", TokensFile: "/etc/demarkus/tokens.toml"}
 
-	if got := cfg.refreshTokensRef().Path; got != testStorageDir+"/"+RefreshTokensSecretKey {
+	if got := refreshTokensRef(cfg).Path; got != testStorageDir+"/"+RefreshTokensSecretKey {
 		t.Errorf("refresh ref path = %q", got)
 	}
-	if got := cfg.worldWriteTokenRef("memory").Path; got != testStorageDir+"/demarkus-broker-write-token-memory.json" {
+	if got := worldWriteTokenRef(cfg, "memory").Path; got != testStorageDir+"/demarkus-broker-write-token-memory.json" {
 		t.Errorf("write-token ref path = %q", got)
 	}
-	if got := cfg.worldTokensRef(world).Path; got != "/etc/demarkus/tokens.toml" {
+	if got := worldTokensRef(world).Path; got != "/etc/demarkus/tokens.toml" {
 		t.Errorf("world tokens ref path = %q", got)
 	}
 
 	// kubernetes mode: no file paths on broker-state refs.
 	cfg.Storage = StorageConfig{}
-	if got := cfg.refreshTokensRef().Path; got != "" {
+	if got := refreshTokensRef(cfg).Path; got != "" {
 		t.Errorf("k8s-mode refresh ref path = %q, want empty", got)
 	}
 }

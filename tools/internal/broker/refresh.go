@@ -11,21 +11,8 @@ import (
 	"time"
 )
 
-// RefreshTokensSecretKey is the key inside the broker-namespace
-// refresh-tokens Secret holding the JSON map of sha256(refresh_token)
-// → record. Stable so operators can grep the rendered Secret without
-// chasing a version-specific key name.
-const RefreshTokensSecretKey = "refresh_tokens.json"
-
-// defaultRefreshTokensSecret applies when ServerConfig.RefreshTokensSecret
-// is omitted. Legacy "demarkus-broker" prefix pinned deliberately: renaming
-// it would orphan live Secrets on in-place upgrades.
-const defaultRefreshTokensSecret = "demarkus-broker-refresh-tokens"
-
-// defaultRefreshTokenTTL is the production-safe lifetime applied
-// when ServerConfig.RefreshTokenTTL is omitted. 90 days matches the
-// industry-standard refresh lifetime (Google / Auth0 / Okta defaults
-// sit in the 60-180d range). Operators tighten via config.
+// defaultRefreshTokenTTL is 90 days, within the 60 to 180 day range Google,
+// Auth0 and Okta default to.
 const defaultRefreshTokenTTL = 90 * 24 * time.Hour
 
 // refreshTokenBytes is the raw entropy size of an opaque refresh
@@ -148,7 +135,7 @@ func (s *RefreshStore) Issue(ctx context.Context, claims *Claims, clientID strin
 		ExpiresAt: now.Add(ttl),
 		ClientID:  clientID,
 	}
-	err := s.store.Mutate(ctx, s.cfg.refreshTokensRef(), func(existing []byte) ([]byte, error) {
+	err := s.store.Mutate(ctx, refreshTokensRef(s.cfg), func(existing []byte) ([]byte, error) {
 		store, err := decodeRefreshTokens(existing)
 		if err != nil {
 			return nil, err
@@ -181,7 +168,7 @@ func (s *RefreshStore) Refresh(ctx context.Context, rawToken string) (refreshTok
 	}
 	keyHash := hashRefreshToken(rawToken)
 	var out refreshTokenRecord
-	err := s.store.Mutate(ctx, s.cfg.refreshTokensRef(), func(existing []byte) ([]byte, error) {
+	err := s.store.Mutate(ctx, refreshTokensRef(s.cfg), func(existing []byte) ([]byte, error) {
 		// Reset on each retry — a conflict-driven re-run must not
 		// leak state from the prior closure invocation.
 		out = refreshTokenRecord{}
@@ -216,7 +203,7 @@ func (s *RefreshStore) Revoke(ctx context.Context, rawToken string) error {
 		return nil
 	}
 	keyHash := hashRefreshToken(rawToken)
-	return s.store.Mutate(ctx, s.cfg.refreshTokensRef(), func(existing []byte) ([]byte, error) {
+	return s.store.Mutate(ctx, refreshTokensRef(s.cfg), func(existing []byte) ([]byte, error) {
 		if len(existing) == 0 {
 			return existing, nil
 		}
@@ -238,7 +225,7 @@ func (s *RefreshStore) Revoke(ctx context.Context, rawToken string) error {
 // per-tick loop, which is refresh-token-only — Step 5 wires it.
 func (s *RefreshStore) Sweep(ctx context.Context) (int, error) {
 	var swept int
-	err := s.store.Mutate(ctx, s.cfg.refreshTokensRef(), func(existing []byte) ([]byte, error) {
+	err := s.store.Mutate(ctx, refreshTokensRef(s.cfg), func(existing []byte) ([]byte, error) {
 		// Reset on each retry — same rationale as Refresh.
 		swept = 0
 		if len(existing) == 0 {

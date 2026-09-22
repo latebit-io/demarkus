@@ -43,14 +43,8 @@ func installTestConfigTwoWorlds() *Config {
 	return cfg
 }
 
-func aliceClaims() Claims {
-	return Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|alice"}
-}
-
-// installReq constructs an authenticated GET /me/install request
-// against the supplied test server. The fakeVerifier under the default
-// newTestServer ignores the bearer's contents and returns its preset
-// claims; any non-empty string works.
+// installReq is an authenticated GET /me/install; the fakeVerifier returns
+// its preset claims for any non-empty bearer.
 func installReq(t *testing.T, srv *httptest.Server, bearer string) *http.Response {
 	t.Helper()
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/me/install", http.NoBody)

@@ -16,24 +16,6 @@ import (
 // would otherwise be caught only by callers, several files away.
 var _ Verifier = (*compositeVerifier)(nil)
 
-// Claims is the subset of OIDC ID-token claims the broker actually consumes.
-// Subject + Email + EmailVerified are required to mint. Groups is optional
-// and used by the per-world group allowlist (Slice C.1); IdPs that don't
-// surface groups in the ID token (or aren't configured to) leave it nil
-// and the operator falls back to AllowDomains or per-email carve-outs.
-// HD is Google's Workspace hosted-domain claim — set by Google from the
-// Workspace tenant binding (the user cannot influence it), empty for
-// consumer Gmail accounts. The broker-global OIDC.AllowDomains gate keys
-// on HD because email-domain parsing can be confused by aliases /
-// unverified secondaries, while HD is asserted by Google's signature.
-type Claims struct {
-	Subject       string
-	Email         string
-	EmailVerified bool
-	Groups        []string
-	HD            string
-}
-
 // ExchangeResult carries verified claims and IdP tokens from a completed
 // OAuth2 code exchange into browser and device-flow responses.
 type ExchangeResult struct {

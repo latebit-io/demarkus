@@ -153,7 +153,7 @@ func (g *mcpGateway) ensureMemorySeed(ctx context.Context, w *WorldConfig) {
 func (g *mcpGateway) seedMemoryWorld(ctx context.Context, w *WorldConfig) bool {
 	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: w.Name, Path: "/index.md"})
 	if err != nil {
-		g.log.Warn("memory seed check failed", "world", w.Name, "err", err)
+		g.deps.Log.Warn("memory seed check failed", "world", w.Name, "err", err)
 		return false
 	}
 	seeded := false
@@ -165,7 +165,7 @@ func (g *mcpGateway) seedMemoryWorld(ctx context.Context, w *WorldConfig) bool {
 	case protocol.StatusNotFound:
 		// fresh world; seed below
 	default:
-		g.log.Warn("memory seed check returned unexpected status", "world", w.Name, "status", result.Response.Status)
+		g.deps.Log.Warn("memory seed check returned unexpected status", "world", w.Name, "status", result.Response.Status)
 		return false
 	}
 	for _, doc := range memorySeedDocs() {
@@ -177,7 +177,7 @@ func (g *mcpGateway) seedMemoryWorld(ctx context.Context, w *WorldConfig) bool {
 		}
 	}
 	if !seeded {
-		g.log.Info("memory template seeded", "world", w.Name)
+		g.deps.Log.Info("memory template seeded", "world", w.Name)
 	}
 	return true
 }
@@ -208,7 +208,7 @@ func (g *mcpGateway) memorySeedAction(ctx context.Context, w *WorldConfig, doc *
 	}
 	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: w.Name, Path: doc.path})
 	if err != nil {
-		g.log.Warn("memory seed policy check failed", "world", w.Name, "path", doc.path, "err", err)
+		g.deps.Log.Warn("memory seed policy check failed", "world", w.Name, "path", doc.path, "err", err)
 		return seedFailed
 	}
 	meta := result.Response.Metadata
@@ -223,7 +223,7 @@ func (g *mcpGateway) memorySeedAction(ctx context.Context, w *WorldConfig, doc *
 	case protocol.StatusArchived:
 		return seedKeep // archived counts as a deliberate act
 	}
-	g.log.Warn("memory seed policy check returned unexpected status", "world", w.Name, "path", doc.path, "status", result.Response.Status)
+	g.deps.Log.Warn("memory seed policy check returned unexpected status", "world", w.Name, "path", doc.path, "status", result.Response.Status)
 	return seedFailed
 }
 
@@ -241,7 +241,7 @@ func (g *mcpGateway) publishMemorySeedDoc(ctx context.Context, w *WorldConfig, d
 	body, readErr := memorySeedFS.ReadFile("memoryseed/" + doc.embedName)
 	if readErr != nil {
 		// Broken embed is a build defect; surface loudly but keep the tool call alive.
-		g.log.Error("memory seed embed unreadable", "name", doc.embedName, "err", readErr)
+		g.deps.Log.Error("memory seed embed unreadable", "name", doc.embedName, "err", readErr)
 		return false
 	}
 	// dispatchWithWriteAuth provisions the world write token and absorbs
@@ -253,13 +253,13 @@ func (g *mcpGateway) publishMemorySeedDoc(ctx context.Context, w *WorldConfig, d
 		})
 	})
 	if pubErr != nil {
-		g.log.Warn("memory seed publish failed", "world", w.Name, "path", doc.path, "err", pubErr)
+		g.deps.Log.Warn("memory seed publish failed", "world", w.Name, "path", doc.path, "err", pubErr)
 		return false
 	}
 	switch pres.Response.Status {
 	case protocol.StatusCreated, protocol.StatusOK, protocol.StatusConflict:
 		return true // conflict = another replica or the user won the race; fine
 	}
-	g.log.Warn("memory seed publish returned unexpected status", "world", w.Name, "path", doc.path, "status", pres.Response.Status)
+	g.deps.Log.Warn("memory seed publish returned unexpected status", "world", w.Name, "path", doc.path, "status", pres.Response.Status)
 	return false
 }

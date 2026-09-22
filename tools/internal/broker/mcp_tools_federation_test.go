@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,7 +14,6 @@ import (
 	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/protocol"
-	"k8s.io/client-go/kubernetes/fake"
 )
 
 // TestHandleMarkDiscoverHappyPath drives the simplest discover:
@@ -562,14 +560,7 @@ func TestMCPGatewayMarkDiscoverEndToEnd(t *testing.T) {
 			}}, nil
 		},
 	}
-	verifier := &fakeVerifier{claims: Claims{
-		Subject: "google|alice", Email: "alice@example.com", EmailVerified: true,
-	}}
-	signer := newTestSigner(t)
-	k8s := fake.NewSimpleClientset()
-	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d, KnowledgeGatewayProfile()))
-	t.Cleanup(ts.Close)
+	ts := newTestMCPGatewayWith(t, cfg, &fakeVerifier{claims: aliceClaims()}, d)
 
 	initR := mcpRequest(t, ts.URL, "alice-token", "", initializeRequest(1))
 	if initR.HTTPStatus != http.StatusOK {

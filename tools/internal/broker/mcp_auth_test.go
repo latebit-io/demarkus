@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"k8s.io/client-go/kubernetes/fake"
 )
 
 // resourceMetadataRE pulls the resource_metadata="..." parameter out
@@ -160,9 +158,7 @@ func TestGatewayAuthValidBearerStashesClaimsOnContext(t *testing.T) {
 	wantSubject := "google|alice"
 	v := &fakeVerifier{claims: Claims{Subject: wantSubject, Email: "alice@example.com", EmailVerified: true}}
 
-	signer := newTestSigner(t)
-	k8s := fake.NewSimpleClientset()
-	brokerSrv := NewServer(cfg, signer, v, NewK8sSecretStore(k8s), nil, nil, nil)
+	g := newGatewayFixture(t, cfg, v, KnowledgeGatewayProfile()).gateway(&fakeDispatcher{})
 
 	var seen *Claims
 	var sawClaims bool
@@ -170,7 +166,7 @@ func TestGatewayAuthValidBearerStashesClaimsOnContext(t *testing.T) {
 		seen, sawClaims = claimsFromCtx(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := brokerSrv.gatewayAuth(recorder)
+	handler := g.gatewayAuth(recorder)
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", http.NoBody).WithContext(context.Background())
 	req.Header.Set("Authorization", "Bearer good-token")
@@ -191,20 +187,20 @@ func TestGatewayAuthValidBearerStashesClaimsOnContext(t *testing.T) {
 func TestBearerAuthEnforcesAllowDomains(t *testing.T) {
 	tests := []struct {
 		name         string
-		wrap         func(*Server, http.Handler) http.Handler
+		wrap         func(*gatewayFixture, http.Handler) http.Handler
 		mcpChallenge bool
 		brokerSigned bool
 		hd           string
 		wantStatus   int
 	}{
-		{"requireAuth accepts direct IdP bearer", (*Server).requireAuth, false, false, "latebit.io", http.StatusNoContent},
-		{"requireAuth rejects direct IdP bearer", (*Server).requireAuth, false, false, "outside.example", http.StatusUnauthorized},
-		{"requireAuth accepts refreshed bearer", (*Server).requireAuth, false, true, "latebit.io", http.StatusNoContent},
-		{"requireAuth rejects refreshed bearer", (*Server).requireAuth, false, true, "outside.example", http.StatusUnauthorized},
-		{"gatewayAuth accepts direct IdP bearer", (*Server).gatewayAuth, true, false, "latebit.io", http.StatusNoContent},
-		{"gatewayAuth rejects direct IdP bearer", (*Server).gatewayAuth, true, false, "outside.example", http.StatusUnauthorized},
-		{"gatewayAuth accepts refreshed bearer", (*Server).gatewayAuth, true, true, "latebit.io", http.StatusNoContent},
-		{"gatewayAuth rejects refreshed bearer", (*Server).gatewayAuth, true, true, "outside.example", http.StatusUnauthorized},
+		{"requireAuth accepts direct IdP bearer", requireAuthOf, false, false, "latebit.io", http.StatusNoContent},
+		{"requireAuth rejects direct IdP bearer", requireAuthOf, false, false, "outside.example", http.StatusUnauthorized},
+		{"requireAuth accepts refreshed bearer", requireAuthOf, false, true, "latebit.io", http.StatusNoContent},
+		{"requireAuth rejects refreshed bearer", requireAuthOf, false, true, "outside.example", http.StatusUnauthorized},
+		{"gatewayAuth accepts direct IdP bearer", gatewayAuthOf, true, false, "latebit.io", http.StatusNoContent},
+		{"gatewayAuth rejects direct IdP bearer", gatewayAuthOf, true, false, "outside.example", http.StatusUnauthorized},
+		{"gatewayAuth accepts refreshed bearer", gatewayAuthOf, true, true, "latebit.io", http.StatusNoContent},
+		{"gatewayAuth rejects refreshed bearer", gatewayAuthOf, true, true, "outside.example", http.StatusUnauthorized},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -222,7 +218,7 @@ func TestBearerAuthEnforcesAllowDomains(t *testing.T) {
 					HD:            tt.hd,
 				}, nil
 			}}
-			srv := NewServer(cfg, newTestSigner(t), primary, NewK8sSecretStore(fake.NewSimpleClientset()), nil, idTokenSigner, nil)
+			f := gatewayFixtureFor(t, cfg, ServerDeps{Verifier: primary}.signed(cfg, idTokenSigner), KnowledgeGatewayProfile())
 
 			raw := "idp-token"
 			if tt.brokerSigned {
@@ -244,7 +240,7 @@ func TestBearerAuthEnforcesAllowDomains(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 			req.Header.Set("Authorization", "Bearer "+raw)
 			rec := httptest.NewRecorder()
-			tt.wrap(srv, next).ServeHTTP(rec, req)
+			tt.wrap(f, next).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
@@ -259,4 +255,14 @@ func TestBearerAuthEnforcesAllowDomains(t *testing.T) {
 			}
 		})
 	}
+}
+
+// requireAuthOf and gatewayAuthOf are the two bearer gates over one fixture,
+// for the table that pins they admit and refuse the same identities.
+func requireAuthOf(f *gatewayFixture, next http.Handler) http.Handler {
+	return f.srv.requireAuth(next)
+}
+
+func gatewayAuthOf(f *gatewayFixture, next http.Handler) http.Handler {
+	return f.gateway(&fakeDispatcher{}).gatewayAuth(next)
 }

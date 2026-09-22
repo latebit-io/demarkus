@@ -21,13 +21,6 @@ import (
 // registry Secret is the source of truth; broker world set and server
 // fragment are projections, so a crash between steps converges on retry.
 
-// registrySecretKey is the data key holding the tenant registry JSON.
-const registrySecretKey = "registry.json"
-
-// worldsFragmentKey is the data key holding the knowledge-server worlds
-// fragment the server mounts and hot-reloads.
-const worldsFragmentKey = "worlds.yaml"
-
 // registrySyncInterval paces the background registry poll that keeps
 // every replica's dynamic world set converged with provisioning done
 // elsewhere.
@@ -75,9 +68,8 @@ type tenantRegistry struct {
 	Tenants map[string]tenantRecord `json:"tenants"`
 }
 
-// Provisioner creates tenant worlds on first arrival. Owned by Server
-// (EnableProvisioning); nil on the knowledge broker and on memory
-// brokers running static mode.
+// Provisioner creates tenant worlds on first arrival. Run wires one into
+// the gateway when provisioning is enabled; static mode has none.
 type Provisioner struct {
 	cfg     *Config
 	store   SecretStore
@@ -93,22 +85,22 @@ type Provisioner struct {
 	lastSync [32]byte
 }
 
-// newProvisioner builds a standalone Provisioner (RunDeprovision, or
-// any flow without a Server).
-func newProvisioner(cfg *Config, store SecretStore, buckets BucketCreator, log *slog.Logger) *Provisioner {
-	if log == nil {
-		log = slog.Default()
-	}
-	return &Provisioner{cfg: cfg, store: store, buckets: buckets, log: log, clock: time.Now}
+// provisionerDeps is what a Provisioner needs; Log and Clock default.
+type provisionerDeps struct {
+	Store   SecretStore
+	Buckets BucketCreator
+	Log     *slog.Logger
+	Clock   func() time.Time
 }
 
-// EnableProvisioning wires a Provisioner onto the Server. Called by the
-// memory-broker binary when cfg.Provisioning is enabled.
-func (s *Server) EnableProvisioning(buckets BucketCreator) *Provisioner {
-	p := newProvisioner(s.cfg, s.worldWriteTokens.store, buckets, s.log)
-	p.clock = s.clock
-	s.provisioner = p
-	return p
+func newProvisioner(cfg *Config, deps provisionerDeps) *Provisioner {
+	if deps.Log == nil {
+		deps.Log = slog.Default()
+	}
+	if deps.Clock == nil {
+		deps.Clock = time.Now
+	}
+	return &Provisioner{cfg: cfg, store: deps.Store, buckets: deps.Buckets, log: deps.Log, clock: deps.Clock}
 }
 
 // DeprovisionTenant removes slug: registry entry, fragment entry (the
@@ -131,7 +123,7 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 	// and every projection drops the world; a crash mid-cleanup leaves
 	// the tombstone, so a rerun converges and re-provision never races.
 	var snapshot tenantRegistry
-	err = p.store.Mutate(ctx, p.cfg.registryRef(), func(existing []byte) ([]byte, error) {
+	err = p.store.Mutate(ctx, registryRef(p.cfg), func(existing []byte) ([]byte, error) {
 		registry, decodeErr := decodeRegistry(existing)
 		if decodeErr != nil {
 			return nil, decodeErr
@@ -155,17 +147,17 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 
 	// Union minus the target: only slug leaves the fragment, so tenants
 	// provisioned concurrently by other pods survive.
-	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func(existing []byte) ([]byte, error) {
+	if err := p.store.Mutate(ctx, worldsFragmentRef(p.cfg), func(existing []byte) ([]byte, error) {
 		return p.renderWorldsFragmentUnion(&snapshot, existing, slug)
 	}); err != nil {
 		return found, fmt.Errorf("rewrite worlds fragment: %w", err)
 	}
 
 	world := p.cfg.Provisioning.tenantWorld(slug, "")
-	if err := p.store.Delete(ctx, p.cfg.worldTokensRef(&world)); err != nil {
+	if err := p.store.Delete(ctx, worldTokensRef(&world)); err != nil {
 		return found, fmt.Errorf("delete tokens key for %q: %w", slug, err)
 	}
-	if err := p.store.Delete(ctx, p.cfg.worldWriteTokenRef(slug)); err != nil {
+	if err := p.store.Delete(ctx, worldWriteTokenRef(p.cfg, slug)); err != nil {
 		return found, fmt.Errorf("delete write-token record for %q: %w", slug, err)
 	}
 
@@ -176,7 +168,7 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 	}
 
 	// Phase 2: cleanup done; clear the tombstone so the slug is free.
-	err = p.store.Mutate(ctx, p.cfg.registryRef(), func(existing []byte) ([]byte, error) {
+	err = p.store.Mutate(ctx, registryRef(p.cfg), func(existing []byte) ([]byte, error) {
 		registry, decodeErr := decodeRegistry(existing)
 		if decodeErr != nil {
 			return nil, decodeErr
@@ -249,29 +241,6 @@ func findTenantByIdentity(registry *tenantRegistry, issuer, subject string) (str
 		return slug, record, true
 	}
 	return tombSlug, tombRecord, tombFound
-}
-
-func (c *Config) registryRef() SecretRef {
-	return SecretRef{
-		Namespace: c.Server.BrokerNamespace,
-		Name:      c.Provisioning.RegistrySecret,
-		Key:       registrySecretKey,
-	}
-}
-
-func (c *Config) worldsFragmentRef() SecretRef {
-	return SecretRef{
-		Namespace: c.Provisioning.ServerNamespace,
-		Name:      c.Provisioning.WorldsSecret,
-		Key:       worldsFragmentKey,
-	}
-}
-
-// identityKey is the stable provisioning identity: the CONFIGURED IdP
-// issuer plus token subject (a token's own iss varies between IdP-signed
-// and broker-signed paths; email is display identity and may change).
-func identityKey(issuer, subject string) string {
-	return issuer + "|" + subject
 }
 
 // tenantSlug derives the world name: sanitized email local part plus a
@@ -357,7 +326,7 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 	var snapshot tenantRegistry
 	var slug string
 	created := false
-	err := p.store.Mutate(ctx, p.cfg.registryRef(), func(existing []byte) ([]byte, error) {
+	err := p.store.Mutate(ctx, registryRef(p.cfg), func(existing []byte) ([]byte, error) {
 		registry, decodeErr := decodeRegistry(existing)
 		if decodeErr != nil {
 			return nil, decodeErr
@@ -420,7 +389,7 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 	// Step 4: worlds fragment, rendered as a UNION with the existing
 	// fragment so a stale snapshot never drops a sibling's tenant;
 	// removal is a deliberate future flow rewriting from the registry.
-	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func(existing []byte) ([]byte, error) {
+	if err := p.store.Mutate(ctx, worldsFragmentRef(p.cfg), func(existing []byte) ([]byte, error) {
 		return p.renderWorldsFragmentUnion(&snapshot, existing)
 	}); err != nil {
 		return WorldConfig{}, fmt.Errorf("write worlds fragment: %w", err)
@@ -436,7 +405,7 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *Claims) (WorldCo
 }
 
 func (p *Provisioner) ensureTokensKey(ctx context.Context, world *WorldConfig, slug string) error {
-	return p.store.Mutate(ctx, p.cfg.worldTokensRef(world), func(existing []byte) ([]byte, error) {
+	return p.store.Mutate(ctx, worldTokensRef(world), func(existing []byte) ([]byte, error) {
 		if len(existing) > 0 {
 			return existing, nil
 		}
@@ -561,7 +530,7 @@ func (p *Provisioner) SyncRegistry(ctx context.Context) error {
 	defer p.mu.Unlock()
 	var snapshot tenantRegistry
 	var payload [32]byte
-	err := p.store.Mutate(ctx, p.cfg.registryRef(), func(existing []byte) ([]byte, error) {
+	err := p.store.Mutate(ctx, registryRef(p.cfg), func(existing []byte) ([]byte, error) {
 		registry, decodeErr := decodeRegistry(existing)
 		if decodeErr != nil {
 			return nil, decodeErr
@@ -580,7 +549,7 @@ func (p *Provisioner) SyncRegistry(ctx context.Context) error {
 	// Converge the fragment toward the registry: a union re-adds any
 	// world a stale deprovision rewrite dropped (Mutate skips the write
 	// when nothing changed, so steady state costs one read).
-	if err := p.store.Mutate(ctx, p.cfg.worldsFragmentRef(), func(existing []byte) ([]byte, error) {
+	if err := p.store.Mutate(ctx, worldsFragmentRef(p.cfg), func(existing []byte) ([]byte, error) {
 		return p.renderWorldsFragmentUnion(&snapshot, existing)
 	}); err != nil {
 		// lastSync stays behind so the next tick retries the converge.

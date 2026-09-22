@@ -85,14 +85,14 @@ func (g *mcpGateway) dispatchWithWriteAuth(ctx context.Context, worldName string
 	if g.writeRefusal(claims, worldName) != nil {
 		return fetch.Result{}, ErrNotAuthorized
 	}
-	mcpCfg := g.srv.cfg.Server.MCP
+	mcpCfg := g.deps.MCP
 	maxAttempts := mcpCfg.FirstMintMaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
 	backoff := mcpCfg.FirstMintInitialBackoff
 
-	tok, err := g.srv.worldWriteTokens.Provision(ctx, worldName)
+	tok, err := g.deps.WriteTokens.Provision(ctx, worldName)
 	if err != nil {
 		return fetch.Result{}, err
 	}
@@ -128,8 +128,8 @@ func (g *mcpGateway) dispatchWithWriteAuth(ctx context.Context, worldName string
 		// re-provisioning would re-read the same token at 2 round trips a retry.
 		if !reprovisioned {
 			reprovisioned = true
-			g.srv.worldWriteTokens.Invalidate(worldName)
-			if tok, err = g.srv.worldWriteTokens.Provision(ctx, worldName); err != nil {
+			g.deps.WriteTokens.Invalidate(worldName)
+			if tok, err = g.deps.WriteTokens.Provision(ctx, worldName); err != nil {
 				return fetch.Result{}, err
 			}
 		}

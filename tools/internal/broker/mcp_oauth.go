@@ -33,8 +33,8 @@ import (
 // uniformly.
 func (g *mcpGateway) oauthProtectedResource(w http.ResponseWriter, _ *http.Request) {
 	body := map[string]any{
-		"resource":                 g.srv.cfg.Server.MCP.PublicURL + mcpPath,
-		"authorization_servers":    []string{g.srv.cfg.Server.PublicURL},
+		"resource":                 g.deps.MCP.PublicURL + mcpPath,
+		"authorization_servers":    []string{g.deps.PublicURL},
 		"bearer_methods_supported": []string{"header"},
 		"scopes_supported":         []string{"mark.read", "mark.write"},
 	}

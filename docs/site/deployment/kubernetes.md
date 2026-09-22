@@ -66,7 +66,14 @@ See `deploy/helm/demarkus-knowledge-server/README.md` for the full surface (limi
 ## Broker and agent
 
 - `demarkus-knowledge-broker`: OIDC issuer config, per-world routing, and the MCP gateway that agents join with `/knowledge-join`; defaults to 2 replicas with a Lease-based leader election for the token sweeper only.
+
 - `demarkus-agent`: crawl seeds, hubs, schedule, and per-authority endpoint overrides (`config.endpoints`).
+
+### Broker rate limits
+
+The broker limits `/me/install` per subject and `/auth/login` per client IP, with one in-memory bucket registry per replica. A caller therefore sees up to N times the configured rate across N replicas; a cluster-shared limiter is future work, and per-IP limits at the ingress controller are the defense for an internet-exposed broker today.
+
+The registries have no eviction. Subject keys are bounded by the IdP's user count, since only a verified bearer reaches the subject limiter; IP keys are bounded by the clients that can reach the listener, or by the ingress's real client IPs once `rateLimit.trustForwardedFor` is on. Set `trustForwardedFor` only behind an ingress that strips spoofed `X-Forwarded-For`: with it on and no trusted proxy in front, an attacker mints fresh buckets by rotating the header, and TTL or LRU eviction would only evict legitimate users first. Ten thousand subjects hold about 500 KB of limiters.
 
 ## Dev harness (kind)
 

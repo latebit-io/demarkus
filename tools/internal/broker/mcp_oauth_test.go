@@ -4,11 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
-
-	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestOAuthProtectedResourceMetadata(t *testing.T) {
@@ -70,10 +67,9 @@ func TestOAuthAuthorizationServerNeverOnGateway(t *testing.T) {
 	// gateway must 404 even with Discovery wired (the state that used to
 	// mount the alias).
 	d, _ := newTestDiscovery(t, newFakeDiscoveryIdP(t), time.Minute)
-	brokerSrv := NewServer(mcpTestConfig(), newTestSigner(t), &fakeVerifier{},
-		NewK8sSecretStore(fake.NewSimpleClientset()), d, newTestIDTokenSigner(t), nil)
-	ts := httptest.NewServer(brokerSrv.MCPGateway("test", KnowledgeGatewayProfile()))
-	t.Cleanup(ts.Close)
+	cfg := mcpTestConfig()
+	deps := ServerDeps{Verifier: &fakeVerifier{}, Discovery: d}.signed(cfg, newTestIDTokenSigner(t))
+	ts := gatewayFixtureFor(t, cfg, deps, KnowledgeGatewayProfile()).serve(t, &fakeDispatcher{})
 
 	resp, err := http.Get(ts.URL + "/.well-known/oauth-authorization-server")
 	if err != nil {

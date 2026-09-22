@@ -22,7 +22,7 @@ func (g *mcpGateway) writeRefusal(claims *Claims, worldName string) error {
 	if canonical.Email == "" {
 		return errors.New("identity has no email claim")
 	}
-	worldCfg := lookupWorld(g.srv.cfg, worldName)
+	worldCfg := lookupWorld(g.deps.Worlds, worldName)
 	if worldCfg == nil {
 		return fmt.Errorf("world %q is not configured", worldName)
 	}

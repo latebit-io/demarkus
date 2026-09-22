@@ -16,60 +16,6 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-// testHTTPTimeout caps every test request against the in-process broker so
-// a deadlocked handler fails the offending test in seconds instead of
-// hanging until Go's overall test timeout (10m by default) and obscuring
-// which case actually broke. Five seconds is generous — every handler is
-// purely in-memory and should complete in microseconds.
-const testHTTPTimeout = 5 * time.Second
-
-// testClient returns an HTTP client that trusts the test server's
-// self-signed certificate and has the test timeout applied. We work on a
-// shallow copy because httptest.Server.Client() returns the same instance
-// across calls; per-test mutations to Jar / CheckRedirect would otherwise
-// leak between tests.
-func testClient(srv *httptest.Server) *http.Client {
-	base := srv.Client()
-	c := *base
-	c.Timeout = testHTTPTimeout
-	return &c
-}
-
-func newTestServer(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clientset) (testSrv *httptest.Server, brokerSrv *Server) {
-	t.Helper()
-	signer := newTestSigner(t)
-	// Default: no id-token signer wired. Refresh-grant tests use
-	// newTestServerWithSigner so existing tests don't acquire an
-	// extra (unobservable) construction cost they don't care about.
-	// Leave the server's clock at the default time.Now — pinning it to
-	// a fixed date would expire the OIDC state cookie under any real
-	// wall-clock that is later than that date, breaking the callback
-	// tests.
-	brokerSrv = NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	// NewTLSServer (not NewServer): the state cookie is set with
-	// Secure=true and Path=/auth/callback, attributes only enforceable
-	// over HTTPS. Without TLS we'd be relying on manual AddCookie calls
-	// in tests, which bypass jar policy and mask regressions where the
-	// cookie scope was accidentally widened.
-	testSrv = httptest.NewTLSServer(brokerSrv.Routes())
-	t.Cleanup(testSrv.Close)
-	return testSrv, brokerSrv
-}
-
-// newTestServerWithSigner is the test helper for refresh-grant /
-// JWKS / broker-signed verification tests. Identical shape to
-// newTestServer but wires an ephemeral IDTokenSigner so /device/token
-// refresh, /.well-known/jwks.json, and the composite-verifier
-// broker-leg are all live.
-func newTestServerWithSigner(t *testing.T, cfg *Config, verifier Verifier, k8s *fake.Clientset, signer *IDTokenSigner) (testSrv *httptest.Server, brokerSrv *Server) {
-	t.Helper()
-	cookieSigner := newTestSigner(t)
-	brokerSrv = NewServer(cfg, cookieSigner, verifier, NewK8sSecretStore(k8s), nil, signer, nil)
-	testSrv = httptest.NewTLSServer(brokerSrv.Routes())
-	t.Cleanup(testSrv.Close)
-	return testSrv, brokerSrv
-}
-
 func TestHealthAndReady(t *testing.T) {
 	srv, _ := newTestServer(t, testConfig(), &fakeVerifier{}, fake.NewSimpleClientset())
 
@@ -111,7 +57,9 @@ func TestNewServerPanicsOnDiscoveryWithoutSigner(t *testing.T) {
 			t.Fatal("expected panic for discovery != nil + idTokenSigner == nil")
 		}
 	}()
-	NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewK8sSecretStore(fake.NewSimpleClientset()), d, nil, nil)
+	deps := testServerDeps(t, cfg, &fakeVerifier{}, fake.NewSimpleClientset())
+	deps.Discovery = d
+	NewServer(cfg, deps)
 }
 
 // TestWellKnownDiscoveryRouteRegistered guards Routes() composition: with
@@ -138,7 +86,9 @@ func TestWellKnownDiscoveryRouteRegistered(t *testing.T) {
 	// IDTokenSigner so the jwks_uri override the discovery doc
 	// advertises actually has a handler mounted. NewServer panics
 	// otherwise.
-	srv := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewK8sSecretStore(fake.NewSimpleClientset()), d, newTestIDTokenSigner(t), nil)
+	deps := testServerDeps(t, cfg, &fakeVerifier{}, fake.NewSimpleClientset()).signed(cfg, newTestIDTokenSigner(t))
+	deps.Discovery = d
+	srv := NewServer(cfg, deps)
 	tsrv := httptest.NewServer(srv.Routes())
 	t.Cleanup(tsrv.Close)
 
@@ -479,13 +429,13 @@ func TestAuthCallbackUnauthorizedDomain(t *testing.T) {
 	}
 }
 
-// Sanity guard so the clock override on Server is exercised at least once.
-func TestServerClockExposed(t *testing.T) {
+// The clock is injected, so tests never patch the Server after construction.
+func TestServerClockInjected(t *testing.T) {
 	cfg := testConfig()
-	s := NewServer(cfg, newTestSigner(t), &fakeVerifier{}, NewK8sSecretStore(fake.NewSimpleClientset()), nil, nil, nil)
 	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	s.clock = func() time.Time { return fixed }
-	if !s.clock().Equal(fixed) {
-		t.Error("clock override not honored")
+	deps := testServerDeps(t, cfg, &fakeVerifier{}, fake.NewSimpleClientset())
+	deps.Clock = func() time.Time { return fixed }
+	if s := NewServer(cfg, deps); !s.clock().Equal(fixed) {
+		t.Error("injected clock not honored")
 	}
 }

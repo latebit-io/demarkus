@@ -21,7 +21,7 @@ func (g *mcpGateway) toolBodies() (*marktools.Tools, error) {
 		Writer:  g.toolWriter,
 		Agent:   toolAgent,
 		Graph:   g.toolGraph,
-		Warnf:   func(format string, args ...any) { g.log.Warn(fmt.Sprintf(format, args...)) },
+		Warnf:   func(format string, args ...any) { g.deps.Log.Warn(fmt.Sprintf(format, args...)) },
 		ErrText: toolSiteErrorText,
 	})
 }
@@ -39,7 +39,7 @@ func resolveToolTarget(_ context.Context, raw string) (marktools.Target, error) 
 // worldSource is where a world's document really lives. Observations, crawls
 // and published snapshots all record it, so the three agree on a source.
 func (g *mcpGateway) worldSource(worldName, path string) (string, bool) {
-	world, ok := g.srv.cfg.FindWorld(worldName)
+	world, ok := g.deps.Worlds.Find(worldName)
 	if !ok {
 		return "", false
 	}

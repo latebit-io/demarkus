@@ -3,7 +3,6 @@ package broker
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -14,7 +13,6 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/protocol"
-	"k8s.io/client-go/kubernetes/fake"
 )
 
 // crawlBody helps tests script doc bodies the graph crawler will
@@ -768,15 +766,7 @@ func TestMCPGatewayMarkGraphEndToEnd(t *testing.T) {
 			}}, nil
 		},
 	}
-	verifier := &fakeVerifier{claims: Claims{
-		Subject: "google|alice", Email: "alice@example.com", EmailVerified: true,
-	}}
-	signer := newTestSigner(t)
-	k8s := fake.NewSimpleClientset()
-	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	brokerSrv.clock = func() time.Time { return time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC) }
-	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d, KnowledgeGatewayProfile()))
-	t.Cleanup(ts.Close)
+	ts := newTestMCPGatewayWith(t, cfg, &fakeVerifier{claims: aliceClaims()}, d)
 
 	initR := mcpRequest(t, ts.URL, "alice-token", "", initializeRequest(1))
 	if initR.HTTPStatus != http.StatusOK {

@@ -7,22 +7,8 @@ import (
 	"strings"
 )
 
-const (
-	// TokensSecretKey is the key in a world's tokens Secret holding the
-	// tokens.toml payload the world server reads.
-	TokensSecretKey = "tokens.toml"
-
-	// maxConflictRetries bounds the read-modify-write loop on Secret
-	// resourceVersion conflicts. Five gives multi-replica brokers plenty
-	// of room to converge under any realistic contention while still
-	// failing the request promptly on a stuck conflict.
-	maxConflictRetries = 5
-)
-
-// ErrNotAuthorized indicates the identity matched zero worlds during
-// authorization, or the addressed world's Allow predicate rejected the
-// caller. The MCP federation/read handlers surface it with a
-// descriptive tool-error message.
+// ErrNotAuthorized means the identity matched no world, or the addressed world's
+// Allow rejected it. Tool handlers surface it as a descriptive tool error.
 var ErrNotAuthorized = errors.New("broker: identity not authorized for any world")
 
 // oidcDomainAllowed reports whether the IdP-issued identity satisfies
@@ -75,8 +61,8 @@ func gateIdentity(allowDomains []string, claims *Claims) error {
 // SSO org gate alone, not Allow (a world's tokens.toml grants no read op), so
 // filtering the world LIST by the writer allowlist wrongly hides readable
 // worlds from non-writers. Use readableWorlds for that.
-func authorizedWorlds(cfg *Config, claims *Claims) []WorldConfig {
-	worlds := cfg.AllWorlds()
+func authorizedWorlds(reg *worldRegistry, claims *Claims) []WorldConfig {
+	worlds := reg.All()
 	out := make([]WorldConfig, 0, len(worlds))
 	for j := range worlds {
 		if worldAllows(&worlds[j].Allow, claims) {
@@ -95,8 +81,8 @@ func authorizedWorlds(cfg *Config, claims *Claims) []WorldConfig {
 // expressible: opening reads here never widens writes. Per-world READ
 // restrictions (Phase 2 restricted collections) would filter here, on a
 // dedicated read predicate, never on the write Allow.
-func readableWorlds(cfg *Config) []WorldConfig {
-	return cfg.AllWorlds()
+func readableWorlds(reg *worldRegistry) []WorldConfig {
+	return reg.All()
 }
 
 // errAmbiguousTenant is the deny-closed provisioning error for an identity
@@ -113,18 +99,18 @@ func (errAmbiguousTenant) Error() string {
 // tenantWorldFor resolves the single world a memory-broker identity owns
 // (identity = world): zero matches is ErrNotAuthorized, two or more is a
 // provisioning error and denies closed rather than guessing.
-func tenantWorldFor(cfg *Config, claims *Claims) (WorldConfig, error) {
+func tenantWorldFor(reg *worldRegistry, issuer string, claims *Claims) (WorldConfig, error) {
 	// Identity index first: a provisioned tenant owns its pinned slug. A
 	// hit whose Allow rejects the caller means the record's email is
 	// stale; fail so EnsureTenant's slow path refreshes it.
-	if slug, ok := cfg.worlds().SlugForIdentity(identityKey(cfg.OIDC.Issuer, claims.Subject)); ok {
-		if w, found := cfg.FindWorld(slug); found && worldAllows(&w.Allow, claims) {
+	if slug, ok := reg.SlugForIdentity(identityKey(issuer, claims.Subject)); ok {
+		if w, found := reg.Find(slug); found && worldAllows(&w.Allow, claims) {
 			return w, nil
 		}
 		return WorldConfig{}, ErrNotAuthorized
 	}
 	var match *WorldConfig
-	worlds := cfg.AllWorlds()
+	worlds := reg.All()
 	for j := range worlds {
 		w := &worlds[j]
 		if !worldAllows(&w.Allow, claims) {
@@ -157,8 +143,8 @@ func (c *Config) ValidateTenantWorlds() error {
 // lookupWorld returns the configured world (static or dynamic) with the
 // given name, or nil when none matches. Shared by the MCP write gate and
 // the per-world write-token store so both resolve names identically.
-func lookupWorld(cfg *Config, name string) *WorldConfig {
-	if w, ok := cfg.FindWorld(name); ok {
+func lookupWorld(reg *worldRegistry, name string) *WorldConfig {
+	if w, ok := reg.Find(name); ok {
 		return &w
 	}
 	return nil
@@ -196,8 +182,7 @@ func emailMatches(email string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return false
 	}
-	want := strings.ToLower(strings.TrimSpace(email))
-	return slices.Contains(allowed, want)
+	return slices.Contains(allowed, canonicalEmail(email))
 }
 
 // domainMatches reports whether the identity email's domain part is in

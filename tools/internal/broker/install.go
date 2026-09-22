@@ -67,17 +67,11 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// tenantScopedInstall reports whether management-API world listings are
-// tenant-scoped, from the same profile that scopes the gateway.
-func (s *Server) tenantScopedInstall() bool {
-	return s.profile != nil && s.profile.TenantScoped
-}
-
 // listInstallableWorlds is the one fail-closed policy site for the
 // management API: resolution errors log (redacted) and yield an empty
 // listing, never a leak.
 func (s *Server) listInstallableWorlds(ctx context.Context, claims *Claims) []installWorld {
-	out, err := installableWorlds(s.cfg, claims, s.tenantScopedInstall())
+	out, err := installableWorlds(s.cfg.worlds(), s.cfg.OIDC.Issuer, claims, s.tenantScoped)
 	if err != nil {
 		s.log.WarnContext(ctx, "broker: world listing denied",
 			"subject", hashSubject(claims.Subject), "err", err)
@@ -89,16 +83,16 @@ func (s *Server) listInstallableWorlds(ctx context.Context, claims *Claims) []in
 // installableWorlds lists the worlds a client can be wired at (no
 // PublicURL = uninstallable); tenant scoping uses the canonical
 // resolver, denying closed with an error the caller logs.
-func installableWorlds(cfg *Config, claims *Claims, tenantScoped bool) ([]installWorld, error) {
+func installableWorlds(reg *worldRegistry, issuer string, claims *Claims, tenantScoped bool) ([]installWorld, error) {
 	var worlds []WorldConfig
 	if tenantScoped {
-		w, err := tenantWorldFor(cfg, claims)
+		w, err := tenantWorldFor(reg, issuer, claims)
 		if err != nil {
 			return []installWorld{}, err
 		}
 		worlds = []WorldConfig{w}
 	} else {
-		worlds = readableWorlds(cfg)
+		worlds = readableWorlds(reg)
 	}
 	out := make([]installWorld, 0, len(worlds))
 	for j := range worlds {

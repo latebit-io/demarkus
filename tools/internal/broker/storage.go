@@ -15,6 +15,11 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// maxConflictRetries bounds the read-modify-write loop on Secret
+// resourceVersion conflicts; five converges under realistic contention
+// while a stuck conflict still fails promptly.
+const maxConflictRetries = 5
+
 // SecretRef names one credential document in both backends: the k8s
 // (Namespace, Name, Key) Secret tuple and the file backend's Path. Refs are
 // built by the Config helpers so every call site resolves locations one way.
@@ -316,44 +321,4 @@ func syncDir(dir string) error {
 		return fmt.Errorf("close dir %s: %w", dir, closeErr)
 	}
 	return nil
-}
-
-// Ref builders: one place resolves every credential document's location for
-// both backends. Path fields are populated only in file-backend mode.
-
-func (c *Config) refreshTokensRef() SecretRef {
-	ref := SecretRef{
-		Namespace: c.Server.BrokerNamespace,
-		Name:      c.Server.RefreshTokensSecret,
-		Key:       RefreshTokensSecretKey,
-	}
-	if c.fileBackend() {
-		ref.Path = filepath.Join(c.Storage.Dir, RefreshTokensSecretKey)
-	}
-	return ref
-}
-
-func (c *Config) worldWriteTokenRef(worldName string) SecretRef {
-	ref := SecretRef{
-		Namespace: c.Server.BrokerNamespace,
-		Name:      worldWriteTokenSecretName(worldName),
-		Key:       worldWriteTokenSecretKey,
-	}
-	if c.fileBackend() {
-		ref.Path = filepath.Join(c.Storage.Dir, worldWriteTokenSecretName(worldName)+".json")
-	}
-	return ref
-}
-
-func (c *Config) worldTokensRef(world *WorldConfig) SecretRef {
-	key := world.TokensSecretKey
-	if key == "" {
-		key = TokensSecretKey
-	}
-	return SecretRef{
-		Namespace: world.Namespace,
-		Name:      world.TokensSecret,
-		Key:       key,
-		Path:      world.TokensFile,
-	}
 }

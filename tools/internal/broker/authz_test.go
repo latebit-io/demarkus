@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -16,44 +15,9 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-const (
-	testBrokerNS = "broker-ns"
-	// testIssuancesNS names the broker-namespace Secret that the
-	// removed issuance subsystem used to write. The broker no longer
-	// mints per-user tokens, so this Secret must never appear; several
-	// tests (install, sweeper) assert its absence as a no-write guard.
-	testIssuancesNS = "broker-issuances"
-)
-
-func testConfig() *Config {
-	return &Config{
-		Server: ServerConfig{
-			Addr:            ":0",
-			CookieKey:       "dGVzdC1rZXktMTIzNDU2Nzg5MGFi",
-			BrokerNamespace: testBrokerNS,
-			StateTTL:        5 * time.Minute,
-		},
-		OIDC: OIDCConfig{
-			Issuer: "https://idp", ClientID: "c", ClientSecret: "s", RedirectURL: "r",
-		},
-		Worlds: []WorldConfig{
-			{
-				Name:         "team-a",
-				Namespace:    "team-a",
-				TokensSecret: "team-a-tokens",
-				Allow:        AllowConfig{Domains: []string{"example.com"}},
-				DefaultToken: TokenScope{
-					Paths: []string{"/team-a/*"},
-				},
-			},
-		},
-	}
-}
-
-// TestReadableWorldsIgnoresWriterAllow pins the read/write split: reads are
-// gated by the broker SSO org gate alone, so readableWorlds returns every
-// configured world regardless of its writer Allow. (authorizedWorlds — the
-// writer set — is tested via TestWorldAllowsPredicate.)
+// TestReadableWorldsIgnoresWriterAllow pins the read/write split: reads pass
+// the SSO org gate alone, so every world is readable whatever its writer
+// Allow. The writer set is TestWorldAllowsPredicate.
 func TestReadableWorldsIgnoresWriterAllow(t *testing.T) {
 	cfg := testConfig() // team-a: Allow domains=example.com
 	cfg.Worlds = append(cfg.Worlds, WorldConfig{
@@ -62,7 +26,7 @@ func TestReadableWorldsIgnoresWriterAllow(t *testing.T) {
 		TokensSecret: "locked-tokens",
 		Allow:        AllowConfig{Emails: []string{"only-admin@nowhere.test"}},
 	})
-	got := readableWorlds(cfg)
+	got := readableWorlds(cfg.worlds())
 	if len(got) != 2 {
 		t.Fatalf("readableWorlds = %d, want 2 (a restrictive writer Allow must not hide a world from readers)", len(got))
 	}
@@ -234,7 +198,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 			Namespace: "team-b",
 			Allow:     AllowConfig{Domains: []string{"other.example"}},
 		})
-		got := authorizedWorlds(cfg, &Claims{Email: "alice@example.com", EmailVerified: true})
+		got := authorizedWorlds(cfg.worlds(), &Claims{Email: "alice@example.com", EmailVerified: true})
 		if len(got) != 1 || got[0].Name != "team-a" {
 			names := make([]string, len(got))
 			for i, w := range got {
@@ -251,7 +215,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 		// AllowConfig non-empty switches into restricted mode.
 		cfg := testConfig()
 		cfg.Worlds[0].Allow = AllowConfig{}
-		got := authorizedWorlds(cfg, &Claims{Email: "anyone@anywhere.test", EmailVerified: true})
+		got := authorizedWorlds(cfg.worlds(), &Claims{Email: "anyone@anywhere.test", EmailVerified: true})
 		if len(got) != 1 || got[0].Name != "team-a" {
 			t.Errorf("authorizedWorlds = %+v, want team-a admitted on empty allowlist", got)
 		}
@@ -259,7 +223,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 
 	t.Run("unauthorized_identity_gets_none", func(t *testing.T) {
 		cfg := testConfig()
-		got := authorizedWorlds(cfg, &Claims{Email: "mallory@evil.example", EmailVerified: true})
+		got := authorizedWorlds(cfg.worlds(), &Claims{Email: "mallory@evil.example", EmailVerified: true})
 		if len(got) != 0 {
 			t.Errorf("authorizedWorlds = %+v, want empty for unauthorized domain", got)
 		}
@@ -274,7 +238,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 			Namespace: "team-b",
 			Allow:     AllowConfig{Domains: []string{"example.com"}},
 		})
-		got := authorizedWorlds(cfg, &Claims{Email: "alice@example.com", EmailVerified: true})
+		got := authorizedWorlds(cfg.worlds(), &Claims{Email: "alice@example.com", EmailVerified: true})
 		if len(got) != 2 || got[0].Name != "team-a" || got[1].Name != "team-b" {
 			t.Errorf("authorizedWorlds order = %+v, want [team-a, team-b]", got)
 		}
@@ -285,10 +249,10 @@ func TestAuthorizedWorlds(t *testing.T) {
 // and the per-world write-token store: exact-name match or nil.
 func TestLookupWorld(t *testing.T) {
 	cfg := testConfig()
-	if w := lookupWorld(cfg, "team-a"); w == nil || w.Name != "team-a" {
+	if w := lookupWorld(cfg.worlds(), "team-a"); w == nil || w.Name != "team-a" {
 		t.Errorf("lookupWorld(team-a) = %+v, want team-a", w)
 	}
-	if w := lookupWorld(cfg, "nope"); w != nil {
+	if w := lookupWorld(cfg.worlds(), "nope"); w != nil {
 		t.Errorf("lookupWorld(nope) = %+v, want nil", w)
 	}
 }

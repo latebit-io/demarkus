@@ -628,7 +628,7 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 func (s *Server) RunDeviceJanitor(ctx context.Context) {
 	ttl := s.cfg.Server.DeviceCodeTTL
 	if ttl <= 0 {
-		ttl = 10 * time.Minute
+		ttl = defaultDeviceCodeTTL
 	}
 	tick := max(ttl/2, time.Second)
 	t := time.NewTicker(tick)

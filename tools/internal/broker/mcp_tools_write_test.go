@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,7 +12,6 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/protocol"
-	"k8s.io/client-go/kubernetes/fake"
 )
 
 // TestHandleMarkPublishHappyPath drives the simplest publish:
@@ -859,7 +857,7 @@ func TestHandleMarkArchiveHappyPath(t *testing.T) {
 
 func TestHandleMarkArchiveUnknownWorldSurfacesAsToolError(t *testing.T) {
 	cfg := mcpTestConfig()
-	pool := newWorldPool(cfg, fetch.Options{})
+	pool := newWorldPool(cfg.worlds(), fetch.Options{})
 	g := newGatewayWithDispatcher(t, cfg, pool)
 	res, err := g.handleMarkArchive(withAliceClaims(context.Background()), callToolReq("mark_archive", map[string]any{
 		"url": "mark://team-b/foo.md",
@@ -963,9 +961,9 @@ func TestWriteDispatchRecoversFromRotatedWorldSecret(t *testing.T) {
 	g := newGatewayWithDispatcher(t, cfg, d)
 	// Simulate the stale cache a rotation leaves behind: the pod still
 	// holds a token the world no longer recognizes.
-	g.srv.worldWriteTokens.mu.Lock()
-	g.srv.worldWriteTokens.cache["team-a"] = "stale-rotated-away"
-	g.srv.worldWriteTokens.mu.Unlock()
+	g.deps.WriteTokens.mu.Lock()
+	g.deps.WriteTokens.cache["team-a"] = "stale-rotated-away"
+	g.deps.WriteTokens.mu.Unlock()
 
 	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
 		"url":              "mark://team-a/foo.md",
@@ -1004,14 +1002,7 @@ func TestMCPGatewayMarkPublishEndToEnd(t *testing.T) {
 			}}, nil
 		},
 	}
-	verifier := &fakeVerifier{claims: Claims{
-		Subject: "google|alice", Email: "alice@example.com", EmailVerified: true,
-	}}
-	signer := newTestSigner(t)
-	k8s := fake.NewSimpleClientset()
-	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d, KnowledgeGatewayProfile()))
-	t.Cleanup(ts.Close)
+	ts := newTestMCPGatewayWith(t, cfg, &fakeVerifier{claims: aliceClaims()}, d)
 
 	initR := mcpRequest(t, ts.URL, "alice-token", "", initializeRequest(1))
 	if initR.HTTPStatus != http.StatusOK {

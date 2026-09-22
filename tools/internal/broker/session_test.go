@@ -8,16 +8,6 @@ import (
 	"time"
 )
 
-func newTestSigner(t testing.TB) *Signer {
-	t.Helper()
-	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
-	s, err := NewSigner(key)
-	if err != nil {
-		t.Fatalf("NewSigner: %v", err)
-	}
-	return s
-}
-
 func TestSignerRoundTrip(t *testing.T) {
 	s := newTestSigner(t)
 	nonce, err := NewNonce()

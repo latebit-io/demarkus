@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchdedup"
 	"github.com/latebit-io/demarkus/protocol"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-	"k8s.io/client-go/kubernetes/fake"
 )
 
 const fetchModeDoc = "# Doc\n\nIntro paragraph.\n\n## Setup\n\nSetup body.\n\n## Usage\n\nUsage body.\n"
@@ -261,23 +259,9 @@ func TestSessionSeenCaps(t *testing.T) {
 // identity flips) is pinned once in client/fetchdedup's tests — both the
 // broker gateway and the local demarkus-mcp render through that package.
 
-// newTestMCPGatewayWith is newTestMCPGateway with an injected
-// dispatcher, for HTTP-level tests that need scripted world responses.
-func newTestMCPGatewayWith(t *testing.T, cfg *Config, verifier Verifier, d worldDispatcher) *httptest.Server {
-	t.Helper()
-	signer := newTestSigner(t)
-	k8s := fake.NewSimpleClientset()
-	brokerSrv := NewServer(cfg, signer, verifier, NewK8sSecretStore(k8s), nil, nil, nil)
-	ts := httptest.NewServer(brokerSrv.MCPGatewayWith("test", d, KnowledgeGatewayProfile()))
-	t.Cleanup(ts.Close)
-	return ts
-}
-
-// TestMCPGatewayFetchDedupOverHTTP proves the session scoping works
-// through the real Streamable HTTP transport, not just with a session
-// hand-attached to the context: the Mcp-Session-Id issued at initialize
-// is what keys the dedup, and a second initialize (new session) starts
-// clean.
+// TestMCPGatewayFetchDedupOverHTTP: the Mcp-Session-Id issued at initialize
+// keys the dedup through the real transport, and a second initialize (a new
+// session) starts clean.
 func TestMCPGatewayFetchDedupOverHTTP(t *testing.T) {
 	v := &fakeVerifier{claims: Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}}
 	ts := newTestMCPGatewayWith(t, mcpTestConfig(), v, fetchModeDispatcher(fetchModeDoc, "3", "abc"))
