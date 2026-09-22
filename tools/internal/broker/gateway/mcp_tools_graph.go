@@ -11,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/marktools"
+	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/tools/internal/broker/core"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -137,20 +138,20 @@ func (g *Gateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []graph
 }
 
 func (g *Gateway) handleMarkBacklinks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
-	raw, err := req.RequireString("url")
+	raw, err := mcpbind.URL(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.Backlinks(ctx, raw) })
 }
 
 func (g *Gateway) handleMarkGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	raw, err := req.RequireString("url")
+	args, err := mcpbind.Graph(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
 	// An explicit 0 is the shallowest crawl here, not the default depth.
-	args := marktools.GraphArgs{URL: raw, Depth: max(1, req.GetInt("depth", 2))}
+	args.Depth = max(1, args.Depth)
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.Graph(ctx, args) })
 }
 
@@ -158,41 +159,18 @@ func (g *Gateway) handleMarkGraphExport(ctx context.Context, _ mcp.CallToolReque
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.GraphExport(ctx) })
 }
 
-// defaultGraphRetention bounds the published graph document's version
-// history — mirrors the local demarkus-mcp default. The graph is a generated
-// artifact republished wholesale on every run, so unbounded history is pure
-// growth; 20 versions is enough to debug a bad crawl.
-const defaultGraphRetention = 20
-
 // Graph publication is single-writer: version conflicts surface without merging.
 func (g *Gateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	raw, err := req.RequireString("url")
-	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
-	}
-	args := marktools.GraphPublishArgs{URL: raw, Retention: req.GetInt("retention", defaultGraphRetention)}
-	if version, err := req.RequireInt("expected_version"); err == nil {
-		args.ExpectedVersion = &version
-	}
+	args := mcpbind.GraphPublish(&req)
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.GraphPublish(ctx, args) })
 }
 
 // handleMarkIndex answers mark_index. The shared body authorizes the publish
 // target before the first request of the crawl; a dry run asks nobody.
 func (g *Gateway) handleMarkIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	sourceURL, err := req.RequireString("source")
+	args, err := mcpbind.Index(&req)
 	if err != nil {
-		return mcp.NewToolResultError("source is required"), nil
-	}
-	targetURL, err := req.RequireString("target")
-	if err != nil {
-		return mcp.NewToolResultError("target is required"), nil
-	}
-	args := marktools.IndexArgs{
-		Source: sourceURL, Target: targetURL,
-		DryRun:          req.GetBool("dry_run", false),
-		Force:           req.GetBool("force", false),
-		ExpectedVersion: req.GetInt("expected_version", 0),
+		return mcpbind.Refused(err), nil
 	}
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.Index(ctx, args) })
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/latebit-io/demarkus/client/marktools"
+	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/tools/internal/broker/core"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -33,46 +34,29 @@ func (g *Gateway) writeRefusal(claims *core.Claims, worldName string) error {
 	return nil
 }
 
-// The write tools keep argument parsing here; marktools checks, authorizes
-// through the Writer hook, and sends through docwrite.
+// The write tools bind their arguments through mcpbind; marktools checks,
+// authorizes through the Writer hook, and sends through docwrite.
 
 func (g *Gateway) handleMarkPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
-	raw, err := req.RequireString("url")
+	args, err := mcpbind.Publish(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
-	}
-	body, err := req.RequireString("body")
-	if err != nil {
-		return mcp.NewToolResultError("body is required"), nil
-	}
-	args := marktools.PublishArgs{URL: raw, Body: body, OnConflict: req.GetString("on_conflict", "")}
-	// A missing or mistyped expected_version stays nil; the tool refuses it.
-	if version, err := req.RequireInt("expected_version"); err == nil {
-		args.ExpectedVersion = &version
-	}
-	if args.Metadata, err = marktools.MetadataArg(req.GetArguments()); err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return mcpbind.Refused(err), nil
 	}
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.Publish(ctx, args) })
 }
 
 func (g *Gateway) handleMarkAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	raw, err := req.RequireString("url")
+	args, err := mcpbind.Append(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
-	body, err := req.RequireString("body")
-	if err != nil {
-		return mcp.NewToolResultError("body is required"), nil
-	}
-	args := marktools.AppendArgs{URL: raw, Body: body, ExpectedVersion: req.GetInt("expected_version", 0)}
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.Append(ctx, args) })
 }
 
 func (g *Gateway) handleMarkArchive(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	raw, err := req.RequireString("url")
+	raw, err := mcpbind.URL(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.Archive(ctx, raw) })
 }

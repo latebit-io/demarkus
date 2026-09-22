@@ -129,7 +129,7 @@ func (c *Client) Lookup(ctx context.Context, r LookupRequest) (Result, error) {
 }
 
 // Publish creates or replaces a document. It is sent at most once: a failure
-// after the first byte answers ErrOutcomeUnknown.
+// after the first byte answers protocol.ErrOutcomeUnknown.
 func (c *Client) Publish(ctx context.Context, r WriteRequest) (Result, error) {
 	req := newRequest(protocol.VerbPublish, r.Path, r.Token, r.Metadata)
 	req.Body = r.Body

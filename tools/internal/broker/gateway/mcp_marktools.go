@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/marktools"
+	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/tools/internal/broker/core"
 )
 
@@ -101,11 +102,7 @@ func (g *Gateway) run(call func(*marktools.Tools) marktools.Result) (*mcp.CallTo
 	if g.tools == nil {
 		return mcp.NewToolResultError("internal: tool bodies unavailable"), nil
 	}
-	result := call(g.tools)
-	if result.IsError {
-		return mcp.NewToolResultError(result.Text), nil
-	}
-	return mcp.NewToolResultText(result.Text), nil
+	return mcpbind.Result(call(g.tools)), nil
 }
 
 // toolSiteErrorText names the cause an agent can act on: an unknown world or

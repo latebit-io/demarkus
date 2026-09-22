@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
@@ -32,7 +31,9 @@ func InactiveSlot(active string) string {
 // BodyHash is the protocol content hash of body.
 func BodyHash(body string) string { return storefmt.ContentHash([]byte(body)) }
 
-// IO reads and writes generated documents by absolute path.
+// IO reads and writes generated documents by absolute path. Publish must
+// wrap a lost answer with %w so errors.Is finds protocol.ErrOutcomeUnknown;
+// a %v wrap turns the reconcile off and the lost write reads as a failure.
 type IO struct {
 	Fetch   func(ctx context.Context, path string) (protocol.Response, error)
 	Publish func(ctx context.Context, path, body string, expectedVersion int) (protocol.Response, error)
@@ -195,7 +196,7 @@ func stage[R any](ctx context.Context, p *publisher, shard *Shard[R], verify fun
 func (p *publisher) publishVerified(ctx context.Context, doc document) (protocol.Response, int, error) {
 	published, publishErr := p.io.Publish(ctx, doc.path, doc.body, doc.expected)
 	// A write that never left cannot have landed.
-	if publishErr != nil && !errors.Is(publishErr, fetch.ErrOutcomeUnknown) {
+	if publishErr != nil && !errors.Is(publishErr, protocol.ErrOutcomeUnknown) {
 		return protocol.Response{}, 0, fmt.Errorf("publish %s: %w", doc.path, publishErr)
 	}
 	if publishErr == nil && !protocol.IsWriteSuccess(published.Status) {

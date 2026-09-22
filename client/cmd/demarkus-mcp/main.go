@@ -21,8 +21,8 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/cache"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/marktools"
+	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -302,133 +302,83 @@ func agentName(ctx context.Context) string {
 	return "unknown"
 }
 
-// Tool handlers.
+// Tool handlers bind a call to a shared body; mcpbind reads the arguments.
 // Handler signatures are dictated by mcp-go's ToolHandlerFunc type.
 
 func (h *handler) markFetch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := req.RequireString("url")
+	args, err := mcpbind.Fetch(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
-	args := marktools.FetchArgs{URL: rawURL, Force: req.GetBool("force", false), Render: mcpfmt.Fetch.Options(&req)}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Fetch(ctx, args) })
 }
 
 func (h *handler) markList(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := req.RequireString("url")
+	args, err := mcpbind.List(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
-	}
-	args := marktools.ListArgs{
-		URL:             rawURL,
-		IncludeArchived: req.GetBool("include_archived", false),
-		Cursor:          req.GetString("cursor", ""),
-		PageSize:        req.GetArguments()["page_size"],
+		return mcpbind.Refused(err), nil
 	}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.List(ctx, args) })
 }
 
 func (h *handler) markVersions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := req.RequireString("url")
+	rawURL, err := mcpbind.URL(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Versions(ctx, rawURL) })
 }
 
 func (h *handler) markLookup(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := req.RequireString("url")
+	args, err := mcpbind.Lookup(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
-	}
-	query, err := req.RequireString("query")
-	if err != nil {
-		return mcp.NewToolResultError("query is required"), nil
-	}
-	args := marktools.LookupArgs{
-		URL:    rawURL,
-		Query:  query,
-		Filter: req.GetString("filter", ""),
-		Limit:  req.GetInt("limit", 0),
-		Match:  req.GetString("match", ""),
-		Budget: lookupexpand.Budget(&req),
-		Render: mcpfmt.Lookup.Options(&req),
+		return mcpbind.Refused(err), nil
 	}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Lookup(ctx, args) })
 }
 
 func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := req.RequireString("url")
+	args, err := mcpbind.Publish(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
-	}
-
-	body, err := req.RequireString("body")
-	if err != nil {
-		return mcp.NewToolResultError("body is required"), nil
-	}
-	args := marktools.PublishArgs{URL: rawURL, Body: body, OnConflict: req.GetString("on_conflict", "")}
-	// A missing or mistyped expected_version stays nil; the tool refuses it.
-	if version, err := req.RequireInt("expected_version"); err == nil {
-		args.ExpectedVersion = &version
-	}
-	if args.Metadata, err = marktools.MetadataArg(req.GetArguments()); err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return mcpbind.Refused(err), nil
 	}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Publish(ctx, args) })
 }
 
 func (h *handler) markArchive(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := req.RequireString("url")
+	rawURL, err := mcpbind.URL(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Archive(ctx, rawURL) })
 }
 
 func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := req.RequireString("url")
+	args, err := mcpbind.Append(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
-
-	body, err := req.RequireString("body")
-	if err != nil {
-		return mcp.NewToolResultError("body is required"), nil
-	}
-	args := marktools.AppendArgs{URL: rawURL, Body: body, ExpectedVersion: req.GetInt("expected_version", 0)}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Append(ctx, args) })
 }
 
 func (h *handler) markDiscover(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	// url is optional: without one the tool reads the -host server's manifest.
-	rawURL := req.GetString("url", "")
+	rawURL := mcpbind.OptionalURL(&req)
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Discover(ctx, rawURL) })
 }
 
 func (h *handler) markResolve(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	hash, err := req.RequireString("hash")
+	args, err := mcpbind.Resolve(&req)
 	if err != nil {
-		return mcp.NewToolResultError("hash is required"), nil
+		return mcpbind.Refused(err), nil
 	}
-	args := marktools.ResolveArgs{Hash: hash, Index: req.GetString("index", "")}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.ResolveHash(ctx, args) })
 }
 
 func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	sourceURL, err := req.RequireString("source")
+	args, err := mcpbind.Index(&req)
 	if err != nil {
-		return mcp.NewToolResultError("source is required"), nil
-	}
-	targetURL, err := req.RequireString("target")
-	if err != nil {
-		return mcp.NewToolResultError("target is required"), nil
-	}
-	args := marktools.IndexArgs{
-		Source: sourceURL, Target: targetURL,
-		DryRun:          req.GetBool("dry_run", false),
-		Force:           req.GetBool("force", false),
-		ExpectedVersion: req.GetInt("expected_version", 0),
+		return mcpbind.Refused(err), nil
 	}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Index(ctx, args) })
 }
@@ -437,35 +387,26 @@ func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 var timeNow = time.Now
 
 func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := req.RequireString("url")
+	args, err := mcpbind.Graph(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
-	args := marktools.GraphArgs{URL: rawURL, Depth: req.GetInt("depth", 2)}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Graph(ctx, args) })
 }
 
 func (h *handler) markBacklinks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := req.RequireString("url")
+	rawURL, err := mcpbind.URL(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Backlinks(ctx, rawURL) })
 }
-
-// defaultGraphRetention bounds the published graph's version history: it is a
-// generated artifact republished wholesale (one live document reached 545
-// versions), and 20 versions is enough to debug a bad crawl.
-const defaultGraphRetention = 20
 
 func (h *handler) markGraphExport(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.GraphExport(ctx) })
 }
 
 func (h *handler) markGraphPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	args := marktools.GraphPublishArgs{URL: req.GetString("url", ""), Retention: req.GetInt("retention", defaultGraphRetention)}
-	if version, err := req.RequireInt("expected_version"); err == nil {
-		args.ExpectedVersion = &version
-	}
+	args := mcpbind.GraphPublish(&req)
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.GraphPublish(ctx, args) })
 }

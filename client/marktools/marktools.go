@@ -12,6 +12,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // Backend is the protocol client every tool runs on. Host in a request is
@@ -151,7 +152,7 @@ func (t *Tools) fetch(ctx context.Context, at Target, path string) (fetch.Result
 // failure says so: a blind resend conflicts with the first attempt.
 func (t *Tools) failed(site Site, host string, err error) Result {
 	msg := t.errText(site, host, err)
-	if errors.Is(err, fetch.ErrOutcomeUnknown) {
+	if errors.Is(err, protocol.ErrOutcomeUnknown) {
 		msg += "; it may have landed: fetch the document before retrying"
 	}
 	return Result{Text: msg, IsError: true}

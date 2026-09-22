@@ -14,6 +14,7 @@ import (
 	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/lookuptable"
 	"github.com/latebit-io/demarkus/client/marktools"
+	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/tools/internal/broker/core"
@@ -56,9 +57,9 @@ func (g *Gateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolReque
 	if _, ok := core.ClaimsFromCtx(ctx); !ok {
 		return mcp.NewToolResultError("internal: missing identity on tool-call context"), nil
 	}
-	query, err := req.RequireString("query")
+	query, err := mcpbind.Required(&req, "query")
 	if err != nil {
-		return mcp.NewToolResultError("query is required"), nil
+		return mcpbind.Refused(err), nil
 	}
 	scope := req.GetString("scope", "/")
 	if err := protocol.ValidateRequestPath(scope); err != nil {

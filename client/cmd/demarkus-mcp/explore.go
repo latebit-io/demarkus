@@ -4,21 +4,14 @@ import (
 	"context"
 
 	"github.com/latebit-io/demarkus/client/marktools"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 func (h *handler) markExplore(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := req.RequireString("url")
+	args, err := mcpbind.Explore(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
-	}
-	args := marktools.ExploreArgs{URL: rawURL, Render: mcpfmt.Fetch.Options(&req)}
-	if mcpfmt.NeighborhoodRequested(&req) {
-		args.Relations = &marktools.RelationsArgs{
-			Options:    mcpfmt.NeighborhoodOptions(&req),
-			Revalidate: mcpfmt.RevalidatesBacklinks(&req),
-		}
+		return mcpbind.Refused(err), nil
 	}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Explore(ctx, args) })
 }

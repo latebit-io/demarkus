@@ -14,6 +14,7 @@ import (
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/marktools"
+	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -83,11 +84,7 @@ func (h *handler) run(call func(*marktools.Tools) marktools.Result) (*mcp.CallTo
 	if err != nil {
 		return mcp.NewToolResultError("internal: " + err.Error()), nil
 	}
-	result := call(tools)
-	if result.IsError {
-		return mcp.NewToolResultError(result.Text), nil
-	}
-	return mcp.NewToolResultText(result.Text), nil
+	return mcpbind.Result(call(tools)), nil
 }
 
 // processSeen is this server's seen store: one agent per stdio process.

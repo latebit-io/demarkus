@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -150,7 +149,7 @@ func TestPublishRefusesAStaleManifestVersion(t *testing.T) {
 }
 
 func TestPublishReconcilesALostResponseAndStopsOnARealFailure(t *testing.T) {
-	lost := fmt.Errorf("read response: %w", fetch.ErrOutcomeUnknown)
+	lost := fmt.Errorf("read response: %w", protocol.ErrOutcomeUnknown)
 	landed := newDocs()
 	landed.failOn, landed.landsOn, landed.failWith = "/gen.shards/a/alpha.md", true, lost
 	got, err := generation.Publish(t.Context(), spec("alpha"), landed.io())

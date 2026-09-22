@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,17 +54,6 @@ func seedingDispatcher(etag string) *fakeDispatcher {
 	}
 }
 
-func brokerSnapshot(t *testing.T) (protocol.Response, map[string]protocol.Response) { //nolint:gocritic // fixture returns manifest and shard set
-	t.Helper()
-	const base = "mark://team-a.team-a.svc.cluster.local:6309"
-	nodes := []graphstore.StoredNode{
-		{URL: base + "/a.md", Title: "Page A", Status: "ok", LinkCount: 1},
-		{URL: base + "/b.md", Title: "Page B", Status: "ok"},
-	}
-	edges := []graphstore.StoredEdge{{From: base + "/a.md", To: base + "/b.md", Count: 1}}
-	return brokerSnapshotRows(t, nodes, edges)
-}
-
 func brokerSnapshotRows(t *testing.T, nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) (protocol.Response, map[string]protocol.Response) { //nolint:gocritic // fixture returns manifest and shard set
 	t.Helper()
 	exported := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
@@ -92,37 +80,6 @@ func brokerSnapshotRows(t *testing.T, nodes []graphstore.StoredNode, edges []gra
 	return protocol.Response{Status: protocol.StatusOK, Body: manifest, Metadata: map[string]string{
 		"etag": "snapshot-etag-1", "content-hash": generation.BodyHash(manifest),
 	}}, shards
-}
-
-func TestSeedWorldGraphPrefersAtomicSnapshot(t *testing.T) {
-	manifest, shards := brokerSnapshot(t)
-	d := &fakeDispatcher{
-		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			path := r.Path
-			if path == graphstore.SnapshotManifestPath {
-				return fetch.Result{Response: manifest}, nil
-			}
-			t.Fatalf("legacy path fetched despite snapshot: %s", path)
-			return fetch.Result{}, nil
-		},
-		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			path := r.Path
-			return fetch.Result{Response: shards[path]}, nil
-		},
-	}
-	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
-	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
-		"url": "mark://team-a/b.md",
-	}))
-	if err != nil || res.IsError {
-		t.Fatalf("handleMarkBacklinks err=%v result=%+v", err, res)
-	}
-	if text := toolResultText(t, res); !strings.Contains(text, "mark://team-a/a.md") {
-		t.Fatalf("translated snapshot backlink missing: %s", text)
-	}
-	if got := g.knowledgeGraph.graphStore.SeedEtag("team-a"); got != "snapshot-etag-1" {
-		t.Fatalf("seed etag = %q", got)
-	}
 }
 
 // agentContractGoldenPath is the real agent's in-cluster /graph.md, pinned
@@ -310,103 +267,6 @@ func TestHandleMarkBacklinksColdPodSeedsFromWorldGraph(t *testing.T) {
 	}
 }
 
-// TestHandleMarkGraphCrawlBeatsSeed: the seed runs before the crawl,
-// and the crawl's view of a source replaces the seeded edges.
-func TestHandleMarkGraphCrawlBeatsSeed(t *testing.T) {
-	d := seedingDispatcher("hub-etag-1")
-	d.FetchFn = func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-		path := r.Path
-		if path == "/a.md" {
-			// Locally, a.md now links to c.md, not b.md.
-			return fetch.Result{Response: protocol.Response{
-				Status: protocol.StatusOK,
-				Body:   crawlBody("Page A", "/c.md"),
-			}}, nil
-		}
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: crawlBody("Doc")}}, nil
-	}
-	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
-	ctx := withAliceClaims(context.Background())
-
-	if res, err := g.handleMarkGraph(ctx, callToolReq("mark_graph", map[string]any{
-		"url": "mark://team-a/a.md",
-	})); err != nil || res.IsError {
-		t.Fatalf("mark_graph: err=%v text=%s", err, toolResultText(t, res))
-	}
-
-	res, err := g.handleMarkBacklinks(ctx, callToolReq("mark_backlinks", map[string]any{
-		"url": "mark://team-a/b.md",
-	}))
-	if err != nil {
-		t.Fatalf("handleMarkBacklinks: %v", err)
-	}
-	if text := toolResultText(t, res); !strings.Contains(text, "No backlinks") {
-		t.Errorf("stale seeded edge survived the crawl:\n%s", text)
-	}
-
-	res, err = g.handleMarkBacklinks(ctx, callToolReq("mark_backlinks", map[string]any{
-		"url": "mark://team-a/c.md",
-	}))
-	if err != nil {
-		t.Fatalf("handleMarkBacklinks: %v", err)
-	}
-	if text := toolResultText(t, res); !strings.Contains(text, "mark://team-a/a.md") {
-		t.Errorf("crawled edge missing:\n%s", text)
-	}
-}
-
-func TestSeedWorldGraphThrottledWithinWindow(t *testing.T) {
-	d := seedingDispatcher("hub-etag-1")
-	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
-	ctx := withAliceClaims(context.Background())
-
-	for range 3 {
-		if _, err := g.handleMarkBacklinks(ctx, callToolReq("mark_backlinks", map[string]any{
-			"url": "mark://team-a/b.md",
-		})); err != nil {
-			t.Fatalf("handleMarkBacklinks: %v", err)
-		}
-	}
-	d.Lock()
-	defer d.Unlock()
-	if len(d.SeedCalls) != 2 {
-		t.Errorf("seed checks = %d, want one snapshot/legacy pair (throttled)", len(d.SeedCalls))
-	}
-}
-
-func TestSeedWorldGraphEtagRoundTrip(t *testing.T) {
-	d := seedingDispatcher("hub-etag-1")
-	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
-	ctx := withAliceClaims(context.Background())
-
-	if _, err := g.handleMarkBacklinks(ctx, callToolReq("mark_backlinks", map[string]any{
-		"url": "mark://team-a/b.md",
-	})); err != nil {
-		t.Fatalf("handleMarkBacklinks: %v", err)
-	}
-
-	// Expire the throttle so the next call re-checks with the stored etag.
-	g.knowledgeGraph.graphStore.ExpireSeedCheck("team-a")
-
-	res, err := g.handleMarkBacklinks(ctx, callToolReq("mark_backlinks", map[string]any{
-		"url": "mark://team-a/b.md",
-	}))
-	if err != nil {
-		t.Fatalf("handleMarkBacklinks: %v", err)
-	}
-
-	d.Lock()
-	calls := slices.Clone(d.SeedCalls)
-	d.Unlock()
-	if len(calls) != 4 || calls[0].IfNoneMatch != "" || calls[1].IfNoneMatch != "" || calls[2].IfNoneMatch != "hub-etag-1" || calls[3].IfNoneMatch != "hub-etag-1" {
-		t.Errorf("etags sent = %+v, want empty then stored etag for each snapshot/legacy pair", calls)
-	}
-	// not-modified keeps the seeded rows.
-	if text := toolResultText(t, res); !strings.Contains(text, "Page A") {
-		t.Errorf("seeded backlink lost after not-modified refresh:\n%s", text)
-	}
-}
-
 // Default explore backlinks use the same per-world seed.
 func TestHandleMarkExploreBacklinksSeeded(t *testing.T) {
 	d := seedingDispatcher("hub-etag-1")
@@ -428,28 +288,5 @@ func TestHandleMarkExploreBacklinksSeeded(t *testing.T) {
 	text := toolResultText(t, res)
 	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "Page A") {
 		t.Errorf("explore backlinks not seeded:\n%s", text)
-	}
-}
-
-func TestSeedWorldGraphFailureBacksOff(t *testing.T) {
-	d := &fakeDispatcher{
-		FetchFn: unavailableSeedSource,
-		SeedFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
-			return fetch.Result{}, fmt.Errorf("world unreachable")
-		},
-	}
-	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
-	for range 2 {
-		res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
-			"url": "mark://team-a/b.md",
-		}))
-		if err != nil || res.IsError {
-			t.Fatalf("handleMarkBacklinks: err=%v result=%+v", err, res)
-		}
-	}
-	d.Lock()
-	defer d.Unlock()
-	if len(d.SeedCalls) != 1 {
-		t.Fatalf("seed probes = %d, want 1: a failed seed backs off for the check interval", len(d.SeedCalls))
 	}
 }

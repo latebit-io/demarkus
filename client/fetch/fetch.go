@@ -285,16 +285,12 @@ func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req 
 	return Result{Response: resp}, nil
 }
 
-// ErrOutcomeUnknown marks a write that failed after its request was sent: it
-// may or may not have landed. Callers reconcile against the head, never resend.
-var ErrOutcomeUnknown = errors.New("request sent but outcome unknown")
-
 // sentError wraps a failure that happened after request bytes left the client.
 type sentError struct{ cause error }
 
 func (e *sentError) Error() string   { return e.cause.Error() }
 func (e *sentError) Unwrap() error   { return e.cause }
-func (e *sentError) Is(t error) bool { return t == ErrOutcomeUnknown }
+func (e *sentError) Is(t error) bool { return t == protocol.ErrOutcomeUnknown }
 
 // doWriteContext is doWithRetryContext for non idempotent verbs: dial and
 // open stream failures retry, anything after the request was sent does not.
@@ -329,7 +325,7 @@ func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(co
 		}
 
 		result, err := fn(conn)
-		unknown := !resend && errors.Is(err, ErrOutcomeUnknown)
+		unknown := !resend && errors.Is(err, protocol.ErrOutcomeUnknown)
 		if err != nil && (unknown || isTransientError(err)) {
 			c.evict(host, conn)
 		}

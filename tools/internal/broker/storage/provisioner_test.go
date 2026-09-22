@@ -46,13 +46,11 @@ func (s *provisionerStore) get(ref core.SecretRef) []byte {
 }
 
 func newTestProvisioner(cfg *core.Config, store core.SecretStore, buckets BucketCreator) *Provisioner {
-	return &Provisioner{
-		cfg:     cfg,
-		store:   store,
-		buckets: buckets,
-		log:     slog.Default(),
-		clock:   func() time.Time { return time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC) },
-	}
+	return newTestProvisionerAt(cfg, store, buckets, func() time.Time { return time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC) })
+}
+
+func newTestProvisionerAt(cfg *core.Config, store core.SecretStore, buckets BucketCreator, clock func() time.Time) *Provisioner {
+	return NewProvisioner(cfg, ProvisionerDeps{Store: store, Buckets: buckets, Log: slog.Default(), Clock: clock})
 }
 
 func TestTenantSlugShape(t *testing.T) {
@@ -832,4 +830,67 @@ func TestValidateProvisioningTrimsMode(t *testing.T) {
 	if err := cfg.ValidateProvisioning(); err == nil {
 		t.Error("padded open mode bypassed the maxTenants requirement")
 	}
+}
+
+// A refusal the gate decided is answered from memory until the TTL passes,
+// so a refused identity's calls do not queue on the provisioner's lock.
+func TestEnsureTenantRemembersRefusal(t *testing.T) {
+	cfg := brokertest.NewProvisioningConfig(core.ProvisionStatic)
+	clk := brokertest.NewFakeClock(time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC))
+	p := newTestProvisionerAt(cfg, newProvisionerStore(), &brokertest.FakeBuckets{}, clk.Now)
+	if _, err := p.EnsureTenant(context.Background(), brokertest.EveClaims()); !errors.Is(err, ErrProvisioningDenied) {
+		t.Fatalf("err = %v, want ErrProvisioningDenied", err)
+	}
+	cfg.Provisioning.Mode = core.ProvisionOpen
+	if _, err := p.EnsureTenant(context.Background(), brokertest.EveClaims()); !errors.Is(err, ErrProvisioningDenied) {
+		t.Fatalf("within the TTL err = %v, want the remembered refusal", err)
+	}
+	clk.Advance(refusalTTL)
+	if _, err := p.EnsureTenant(context.Background(), brokertest.EveClaims()); err != nil {
+		t.Fatalf("after the TTL: %v, want the gate consulted again", err)
+	}
+}
+
+// A registry change may admit a refused identity, so a finished deprovision
+// and a sync that saw a change both clear the memory at once.
+func TestRegistryChangesClearRememberedRefusals(t *testing.T) {
+	bob := &core.Claims{Subject: "google|bob-1", Email: "bob@example.com", EmailVerified: true}
+	t.Run("deprovision frees capacity", func(t *testing.T) {
+		cfg := brokertest.NewProvisioningConfig(core.ProvisionOpen)
+		cfg.Provisioning.MaxTenants = 1
+		store := newProvisionerStore()
+		p := newTestProvisioner(cfg, store, &brokertest.FakeBuckets{})
+		eve, err := p.EnsureTenant(context.Background(), brokertest.EveClaims())
+		if err != nil {
+			t.Fatalf("provision eve: %v", err)
+		}
+		if _, err := p.EnsureTenant(context.Background(), bob); !errors.Is(err, ErrTenantCapacity) {
+			t.Fatalf("bob err = %v, want ErrTenantCapacity", err)
+		}
+		if _, err := p.DeprovisionTenant(context.Background(), eve.Name, false); err != nil {
+			t.Fatalf("deprovision eve: %v", err)
+		}
+		if _, err := p.EnsureTenant(context.Background(), bob); err != nil {
+			t.Fatalf("bob after deprovision: %v, want admitted at once", err)
+		}
+	})
+	t.Run("sync sees a sibling's change", func(t *testing.T) {
+		cfg := brokertest.NewProvisioningConfig(core.ProvisionStatic)
+		store := newProvisionerStore()
+		p := newTestProvisioner(cfg, store, &brokertest.FakeBuckets{})
+		if _, err := p.EnsureTenant(context.Background(), brokertest.EveClaims()); !errors.Is(err, ErrProvisioningDenied) {
+			t.Fatalf("err = %v, want ErrProvisioningDenied", err)
+		}
+		cfg.Provisioning.Mode = core.ProvisionOpen
+		sibling := newTestProvisioner(brokertest.NewProvisioningConfig(core.ProvisionOpen), store, &brokertest.FakeBuckets{})
+		if _, err := sibling.EnsureTenant(context.Background(), bob); err != nil {
+			t.Fatalf("sibling provisions bob: %v", err)
+		}
+		if err := p.SyncRegistry(context.Background()); err != nil {
+			t.Fatalf("SyncRegistry: %v", err)
+		}
+		if _, err := p.EnsureTenant(context.Background(), brokertest.EveClaims()); err != nil {
+			t.Fatalf("eve after the sync: %v, want the gate consulted again", err)
+		}
+	})
 }

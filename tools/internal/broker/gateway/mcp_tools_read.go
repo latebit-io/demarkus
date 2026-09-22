@@ -8,9 +8,8 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/marktools"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/tools/internal/broker/core"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -131,45 +130,27 @@ func (g *Gateway) dispatchWithWriteAuth(ctx context.Context, worldName string, o
 // handleMarkList answers mark_list. Reads carry no token: a world grants read
 // to no token, so none is minted for one.
 func (g *Gateway) handleMarkList(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	raw, err := req.RequireString("url")
+	args, err := mcpbind.List(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
-	}
-	args := marktools.ListArgs{
-		URL:             raw,
-		IncludeArchived: req.GetBool("include_archived", false),
-		Cursor:          req.GetString("cursor", ""),
-		PageSize:        req.GetArguments()["page_size"],
+		return mcpbind.Refused(err), nil
 	}
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.List(ctx, args) })
 }
 
 // handleMarkVersions answers mark_versions.
 func (g *Gateway) handleMarkVersions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	raw, err := req.RequireString("url")
+	raw, err := mcpbind.URL(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.Versions(ctx, raw) })
 }
 
 // handleMarkLookup answers mark_lookup.
 func (g *Gateway) handleMarkLookup(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	raw, err := req.RequireString("url")
+	args, err := mcpbind.Lookup(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
-	}
-	query, err := req.RequireString("query")
-	if err != nil {
-		return mcp.NewToolResultError("query is required"), nil
-	}
-	args := marktools.LookupArgs{
-		URL: raw, Query: query,
-		Filter: req.GetString("filter", ""),
-		Limit:  req.GetInt("limit", 0),
-		Match:  req.GetString("match", ""),
-		Budget: lookupexpand.Budget(&req),
-		Render: mcpfmt.Lookup.Options(&req),
+		return mcpbind.Refused(err), nil
 	}
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.Lookup(ctx, args) })
 }

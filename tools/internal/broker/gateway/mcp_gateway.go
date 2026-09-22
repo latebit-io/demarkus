@@ -71,8 +71,6 @@ type Gateway struct {
 	fetchSeen *sessionSeen
 	// memorySeed tracks per-world memory-template seeding (memory profile).
 	memorySeed memorySeeder
-	// refusals spares a refused identity a registry round trip on every call.
-	refusals tenantRefusals
 	// tools are the shared mark_* bodies bound to this gateway; nil only if
 	// the gateway was built without a dispatcher, which run reports.
 	tools *marktools.Tools

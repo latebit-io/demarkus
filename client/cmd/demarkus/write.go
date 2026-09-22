@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
-	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -107,7 +106,7 @@ func responseOutcome(status string, meta map[string]string, body string) writeOu
 // unknownOutcomeAdvice keeps a lost response from reading like a plain
 // failure: resending a write that landed conflicts with itself.
 func unknownOutcomeAdvice(err error) error {
-	if errors.Is(err, fetch.ErrOutcomeUnknown) {
+	if errors.Is(err, protocol.ErrOutcomeUnknown) {
 		return fmt.Errorf("%w; the write may have landed: fetch the document before retrying", err)
 	}
 	return err

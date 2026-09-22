@@ -1,4 +1,4 @@
-package gateway
+package storage
 
 import (
 	"sync"
@@ -6,14 +6,15 @@ import (
 )
 
 // refusalTTL is how long a provisioning refusal is repeated from memory. Long
-// enough to take a refused identity's calls off the provisioner's lock, short
-// enough that an operator who admits it is not kept waiting.
+// enough to take a refused identity's calls off the provisioner's lock; a
+// registry change clears it early, so an admitted identity never waits it out.
 const refusalTTL = time.Minute
 
 // maxRememberedRefusals bounds the memory a flood of refused identities costs.
 const maxRememberedRefusals = 4096
 
-// tenantRefusals remembers, per identity, the last provisioning refusal.
+// tenantRefusals remembers, per identity, a gate or capacity refusal, which
+// holds until the registry changes.
 type tenantRefusals struct {
 	mu   sync.Mutex
 	byID map[string]rememberedRefusal
@@ -53,4 +54,12 @@ func (r *tenantRefusals) remember(identity string, refusal error, now time.Time)
 		}
 	}
 	r.byID[identity] = rememberedRefusal{err: refusal, until: now.Add(refusalTTL)}
+}
+
+// clear forgets every refusal: the registry changed, so any of them may now
+// be admitted.
+func (r *tenantRefusals) clear() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	clear(r.byID)
 }

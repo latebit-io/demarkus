@@ -236,7 +236,7 @@ func (d *Doc) send(ctx context.Context, op func(token string) (fetch.Result, err
 		// Answered is answered: the response is passed on as the server wrote it.
 		return Result{Response: r.Response}, nil
 	}
-	if errors.Is(err, fetch.ErrOutcomeUnknown) {
+	if errors.Is(err, protocol.ErrOutcomeUnknown) {
 		found, probeErr := d.head(ctx, look.path)
 		if probeErr != nil {
 			// The outcome stays unknown; why the look did not help is said too.

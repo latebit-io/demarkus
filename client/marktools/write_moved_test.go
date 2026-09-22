@@ -17,54 +17,6 @@ func mvWriter(token string) *clientSurface {
 	return &clientSurface{DefaultHost: "mark://example.com", Token: token}
 }
 
-func TestAppendAutoResolveVersion(t *testing.T) {
-	var capturedVersion int
-	backend := &fetchtest.Client{
-		VersionsFn: func(_ context.Context, _ fetch.VersionsRequest) (fetch.Result, error) {
-			return fetchtest.Versions("/doc.md", 7), nil
-		},
-		AppendFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
-			capturedVersion = r.ExpectedVersion
-			return fetch.Result{
-				Response: protocol.Response{
-					Status:   "created",
-					Metadata: map[string]string{"version": "8", "modified": "2026-03-07T00:00:00Z"},
-				},
-			}, nil
-		},
-	}
-	tools := mvWriter("test-token").tools(t, backend)
-	got := tools.Append(t.Context(), marktools.AppendArgs{URL: "mark://example.com/journal.md", Body: "new entry"})
-	if got.IsError {
-		t.Fatalf("unexpected tool error: %v", got.Text)
-	}
-	if capturedVersion != 7 {
-		t.Errorf("expected_version passed to Append = %d, want 7", capturedVersion)
-	}
-}
-
-func TestAppendAutoResolveVersionNotFound(t *testing.T) {
-	backend := &fetchtest.Client{
-		VersionsFn: func(_ context.Context, _ fetch.VersionsRequest) (fetch.Result, error) {
-			return fetch.Result{
-				Response: protocol.Response{
-					Status:   "not-found",
-					Metadata: map[string]string{},
-				},
-			}, nil
-		},
-	}
-	tools := mvWriter("test-token").tools(t, backend)
-	got := tools.Append(t.Context(), marktools.AppendArgs{URL: "mark://example.com/missing.md", Body: "new entry"})
-	mvAssertError(t, got, "not-found")
-}
-
-func TestAppendNegativeVersion(t *testing.T) {
-	tools := mvWriter("test-token").tools(t, &fetchtest.Client{})
-	got := tools.Append(t.Context(), marktools.AppendArgs{URL: "mark://example.com/doc.md", Body: "appended content", ExpectedVersion: -1})
-	mvAssertError(t, got, "expected_version must be >= 0")
-}
-
 // mvConflictBackend is a document at v6 whose v5 the agent edited: every
 // publish conflicts, and theirs is the v6 body.
 func mvConflictBackend(theirs string, publishCalls *int) *fetchtest.Client {
@@ -98,35 +50,6 @@ func mvConflictBackend(theirs string, publishCalls *int) *fetchtest.Client {
 	}
 }
 
-// Agent edited base v5 ("a\nb\nc\n") into "a\nB\nc\n"; latest is v6
-// ("a\nb\nC\n"). The tool returns a clean diff3 candidate at v6 and does NOT
-// publish it: the agent verifies semantically and republishes.
-func TestPublishOnConflictMergeDisjoint(t *testing.T) {
-	var publishCalls int
-	tools := mvWriter("test").tools(t, mvConflictBackend("a\nb\nC\n", &publishCalls))
-	got := tools.Publish(t.Context(), marktools.PublishArgs{
-		URL: "mark://example.com/doc.md", Body: "a\nB\nc\n", ExpectedVersion: new(5), OnConflict: "merge",
-	})
-	if got.IsError {
-		t.Fatalf("unexpected tool error: %v", got.Text)
-	}
-	if publishCalls != 1 {
-		t.Errorf("want exactly 1 publish call (no auto-publish), got %d", publishCalls)
-	}
-	for _, want := range []string{
-		"status: merge-candidate",
-		"your-version: 5",
-		"current-version: 6",
-		"publish-at-version: 6",
-		"has-markers: false",
-		"a\nB\nC\n",
-	} {
-		if !strings.Contains(got.Text, want) {
-			t.Errorf("response missing %q\n%s", want, got.Text)
-		}
-	}
-}
-
 // Latest is v6 ("a\nXX\nc\n"), overlapping the agent's edit: diff3 marks it.
 func TestPublishOnConflictMergeOverlap(t *testing.T) {
 	tools := mvWriter("test").tools(t, mvConflictBackend("a\nXX\nc\n", nil))
@@ -151,14 +74,6 @@ func TestPublishOnConflictMergeOverlap(t *testing.T) {
 			t.Errorf("response missing %q\n%s", want, got.Text)
 		}
 	}
-}
-
-func TestPublishOnConflictInvalid(t *testing.T) {
-	tools := mvWriter("test").tools(t, &fetchtest.Client{})
-	got := tools.Publish(t.Context(), marktools.PublishArgs{
-		URL: "mark://example.com/doc.md", Body: "x", ExpectedVersion: new(1), OnConflict: "bogus",
-	})
-	mvAssertError(t, got, "invalid on_conflict")
 }
 
 // A negative expected_version is refused the same way on the merge path and on
@@ -197,20 +112,6 @@ func TestPublishBlankOnConflictUsesDefault(t *testing.T) {
 				t.Fatalf("blank on_conflict should not error; got: %v", got.Text)
 			}
 		})
-	}
-}
-
-// Omitting on_conflict follows the merge path: protective behavior by default.
-func TestPublishDefaultIsMerge(t *testing.T) {
-	tools := mvWriter("test").tools(t, mvConflictBackend("a\nb\nC\n", nil))
-	got := tools.Publish(t.Context(), marktools.PublishArgs{
-		URL: "mark://example.com/doc.md", Body: "a\nB\nc\n", ExpectedVersion: new(5),
-	})
-	if got.IsError {
-		t.Fatalf("unexpected tool error: %v", got.Text)
-	}
-	if !strings.Contains(got.Text, "status: merge-candidate") {
-		t.Errorf("default behavior should be merge, got:\n%s", got.Text)
 	}
 }
 
@@ -257,24 +158,6 @@ func mvPublishedAtV5(accepted map[string]string) *fetchtest.Client {
 		PublishFn: func(_ context.Context, _ fetch.WriteRequest) (fetch.Result, error) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated, Metadata: accepted}}, nil
 		},
-	}
-}
-
-// A first publish that succeeds is a plain success: no candidate, no diff3.
-func TestPublishOnConflictMergeFirstTrySuccess(t *testing.T) {
-	backend := mvPublishedAtV5(map[string]string{"version": "6", "modified": "2026-05-05T00:00:00Z"})
-	tools := mvWriter("test").tools(t, backend)
-	got := tools.Publish(t.Context(), marktools.PublishArgs{
-		URL: "mark://example.com/doc.md", Body: "x", ExpectedVersion: new(5), OnConflict: "merge",
-	})
-	if got.IsError {
-		t.Fatalf("unexpected tool error: %v", got.Text)
-	}
-	if !strings.Contains(got.Text, "status: created") || !strings.Contains(got.Text, "version: 6") {
-		t.Errorf("response missing expected fields\n%s", got.Text)
-	}
-	if strings.Contains(got.Text, "merge-candidate") {
-		t.Errorf("first-try success should not produce a candidate\n%s", got.Text)
 	}
 }
 

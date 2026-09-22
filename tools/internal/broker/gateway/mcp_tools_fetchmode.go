@@ -8,7 +8,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetchdedup"
 	"github.com/latebit-io/demarkus/client/marktools"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -141,10 +141,9 @@ func sessionIDFromContext(ctx context.Context) string {
 
 // handleMarkFetch answers mark_fetch; dedup is scoped to the MCP session.
 func (g *Gateway) handleMarkFetch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
-	raw, err := req.RequireString("url")
+	args, err := mcpbind.Fetch(&req)
 	if err != nil {
-		return mcp.NewToolResultError("url is required"), nil
+		return mcpbind.Refused(err), nil
 	}
-	args := marktools.FetchArgs{URL: raw, Force: req.GetBool("force", false), Render: mcpfmt.Fetch.Options(&req)}
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.Fetch(ctx, args) })
 }

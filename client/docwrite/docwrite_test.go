@@ -213,7 +213,7 @@ func TestPublishRecognizesItsOwnWrite(t *testing.T) {
 			got, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: "mine", ExpectedVersion: 3, Metadata: tt.meta}, merge.OnConflictMerge)
 			switch {
 			case tt.wantError:
-				if !errors.Is(err, fetch.ErrOutcomeUnknown) {
+				if !errors.Is(err, protocol.ErrOutcomeUnknown) {
 					t.Fatalf("err = %v, want the unknown outcome to stand", err)
 				}
 			case tt.wantOurs:
@@ -277,7 +277,7 @@ func TestWritesReconcileAnUnknownOutcome(t *testing.T) {
 			}
 			got, err := tt.call(doc(backend))
 			if !tt.landed {
-				if !errors.Is(err, fetch.ErrOutcomeUnknown) {
+				if !errors.Is(err, protocol.ErrOutcomeUnknown) {
 					t.Fatalf("err = %v, want the unknown outcome to stand", err)
 				}
 			} else if err != nil || !got.Reconciled || got.Response.Status != protocol.StatusOK {
@@ -408,7 +408,7 @@ func TestAHeadWithAMalformedVersionSettlesNothing(t *testing.T) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "x", Metadata: map[string]string{"version": "seven"}}}, nil
 		},
 	}
-	if _, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: "x", ExpectedVersion: 1}, merge.OnConflictFail); !errors.Is(err, fetch.ErrOutcomeUnknown) {
+	if _, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: "x", ExpectedVersion: 1}, merge.OnConflictFail); !errors.Is(err, protocol.ErrOutcomeUnknown) {
 		t.Errorf("err = %v, want the unknown outcome to stand", err)
 	}
 }
@@ -424,7 +424,7 @@ func TestAFailedHeadProbeIsReported(t *testing.T) {
 		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) { return fetch.Result{}, probeFailed },
 	}
 	_, err := doc(backend).Append(t.Context(), docwrite.AppendRequest{Body: "x", ExpectedVersion: 3})
-	if !errors.Is(err, fetch.ErrOutcomeUnknown) || !errors.Is(err, probeFailed) {
+	if !errors.Is(err, protocol.ErrOutcomeUnknown) || !errors.Is(err, probeFailed) {
 		t.Fatalf("err = %v, want the unknown outcome and the probe failure", err)
 	}
 	if want := "read response: request sent but outcome unknown; reconcile: dial refused"; err.Error() != want {
@@ -472,7 +472,7 @@ func TestReconcileLooksAtTheVersionItWroteNotTheHead(t *testing.T) {
 			}
 			got, err := tt.call(doc(backend))
 			if !tt.want {
-				if !errors.Is(err, fetch.ErrOutcomeUnknown) {
+				if !errors.Is(err, protocol.ErrOutcomeUnknown) {
 					t.Fatalf("err = %v, want the unknown outcome to stand", err)
 				}
 				return
@@ -516,7 +516,7 @@ func TestAppendIsRecognizedByTheWholeDocumentNotItsSuffix(t *testing.T) {
 	if err != nil || !got.Reconciled {
 		t.Errorf("base with a trailing newline = %+v, %v", got, err)
 	}
-	if _, err := appendMore(fetchtest.History("/doc.md", meta, "a", "b", "old", "someone rewrote it\nmore")); !errors.Is(err, fetch.ErrOutcomeUnknown) {
+	if _, err := appendMore(fetchtest.History("/doc.md", meta, "a", "b", "old", "someone rewrote it\nmore")); !errors.Is(err, protocol.ErrOutcomeUnknown) {
 		t.Errorf("a competing write ending in the same words: err = %v, want the unknown outcome to stand", err)
 	}
 	// Retention pruned the base: nothing to compare against, so nothing is claimed.
@@ -526,7 +526,7 @@ func TestAppendIsRecognizedByTheWholeDocumentNotItsSuffix(t *testing.T) {
 		}
 		return fetchtest.History("/doc.md", meta, "a", "b", "old", "old\nmore")(ctx, r)
 	}
-	if _, err := appendMore(pruned); !errors.Is(err, fetch.ErrOutcomeUnknown) {
+	if _, err := appendMore(pruned); !errors.Is(err, protocol.ErrOutcomeUnknown) {
 		t.Errorf("pruned base: err = %v, want the unknown outcome to stand", err)
 	}
 }
@@ -543,7 +543,7 @@ func TestAnAppendThatCannotBeJoinedIsReported(t *testing.T) {
 		FetchFn: fetchtest.History("/doc.md", meta, "a", "b", full, "someone else's, ending in more"),
 	}
 	_, err := doc(backend).Append(t.Context(), docwrite.AppendRequest{Body: "more", ExpectedVersion: 3, Metadata: meta})
-	if !errors.Is(err, fetch.ErrOutcomeUnknown) || !errors.Is(err, storefmt.ErrSizeLimit) {
+	if !errors.Is(err, protocol.ErrOutcomeUnknown) || !errors.Is(err, storefmt.ErrSizeLimit) {
 		t.Errorf("err = %v, want the unknown outcome and the size limit", err)
 	}
 }

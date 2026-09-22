@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -158,37 +157,6 @@ func TestSeedGraph_EmptyLegacyGenerationClearsSeed(t *testing.T) {
 	}
 }
 
-func TestSeedGraph_PrefersAtomicSnapshot(t *testing.T) {
-	manifest, shards := hubSnapshot(t)
-	sc := &stubClient{
-		SnapshotFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			path := r.Path
-			if path != graphstore.SnapshotManifestPath {
-				t.Fatalf("snapshot path = %q", path)
-			}
-			return fetch.Result{Response: manifest}, nil
-		},
-		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
-			t.Fatal("legacy graph should not be fetched when snapshot exists")
-			return fetch.Result{}, nil
-		},
-		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			return fetch.Result{Response: shards[r.Path]}, nil
-		},
-	}
-	h := &handler{client: legacySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
-	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"}))
-	if err != nil || res.IsError {
-		t.Fatalf("markBacklinks err=%v result=%+v", err, res)
-	}
-	if text := resultText(t, res); !strings.Contains(text, "Page A") {
-		t.Fatalf("snapshot backlink missing: %s", text)
-	}
-	if got := h.graphStore.SeedEtag("host:6309"); got != "snapshot-etag-1" {
-		t.Fatalf("seed etag = %q", got)
-	}
-}
-
 func TestSeedGraph_SnapshotShardFetchHonorsCancellation(t *testing.T) {
 	manifest, shards := hubSnapshot(t)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -259,23 +227,6 @@ func TestSeedGraph_SeedsResolvedHostNotDefault(t *testing.T) {
 	}
 }
 
-func TestSeedGraph_NotFoundDegrades(t *testing.T) {
-	sc := &stubClient{
-		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-		},
-	}
-	h := &handler{client: legacySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
-
-	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"}))
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	if !strings.Contains(resultText(t, res), "No backlinks found") {
-		t.Errorf("expected empty-store hint, got: %s", resultText(t, res))
-	}
-}
-
 func TestSeedGraph_FetchErrorDegrades(t *testing.T) {
 	sc := &stubClient{
 		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
@@ -293,183 +244,6 @@ func TestSeedGraph_FetchErrorDegrades(t *testing.T) {
 	}
 	if !strings.Contains(resultText(t, res), "No backlinks found") {
 		t.Errorf("expected empty-store hint, got: %s", resultText(t, res))
-	}
-}
-
-func TestSeedGraph_FailurePersistsLastGoodDiagnostics(t *testing.T) {
-	for _, failure := range []string{"snapshot", "legacy"} {
-		t.Run(failure, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "graph.json")
-			store, err := graphstore.Load(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			observation := graph.Observe("mark://host/a.md", map[string]string{"version": "3", "etag": "source-etag"})
-			observation.Complete = true
-			store.ReplaceSeed("host:6309", []graphstore.StoredNode{{URL: "mark://host/a.md", Title: "Last good", Status: "ok", Observation: observation}},
-				[]graphstore.StoredEdge{{From: "mark://host/a.md", To: "mark://host/b.md", Count: 2}})
-			store.SetSeedEtag("host:6309", "last-good-export")
-			if err := store.Save(); err != nil {
-				t.Fatal(err)
-			}
-			sc := &stubClient{
-				SnapshotFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
-					if failure == "snapshot" {
-						return fetch.Result{}, errors.New("snapshot unavailable")
-					}
-					return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-				},
-				SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
-					return fetch.Result{}, errors.New("legacy export unavailable")
-				},
-			}
-			h := &handler{client: legacySeed{sc}, graphStore: store}
-			h.seedGraph(t.Context(), "host:6309")
-			reloaded, err := graphstore.Load(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			node := reloaded.GetNode("mark://host/a.md")
-			if node == nil || node.Title != "Last good" || node.Observation.Problem != "seed-refresh-failed" || node.Observation.Freshness() != "stale" {
-				t.Fatalf("failed seed diagnostic lost after reload: %+v", node)
-			}
-			if node.Observation.Revision != 3 || node.Observation.Etag != "source-etag" || !node.Observation.ObservedAt.Equal(observation.ObservedAt) {
-				t.Fatalf("last-good observation changed: %+v", node.Observation)
-			}
-			backlinks := reloaded.BacklinksEnriched("mark://host/b.md")
-			if len(backlinks) != 1 || backlinks[0].Count != 2 || reloaded.SeedEtag("host:6309") != "last-good-export" {
-				t.Fatalf("last-good graph changed: %+v", backlinks)
-			}
-		})
-	}
-}
-
-func TestSeedGraph_LocalCrawlWins(t *testing.T) {
-	gs := emptyGraphStore(t)
-	// Local crawl observed a.md linking only to c.md.
-	g := graph.New()
-	g.AddNode(&graph.Node{URL: "mark://host:6309/a.md", Title: "Local A", Status: "ok", LinkCount: 1})
-	g.AddEdgeInfo(graph.Edge{From: "mark://host:6309/a.md", To: "mark://host:6309/c.md"})
-	gs.Merge(g, nil)
-
-	sc := &stubClient{
-		FetchFn: unavailableSeedSource,
-		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
-			// Hub still claims a.md links to b.md.
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
-		},
-	}
-	h := &handler{client: legacySeed{sc}, defaultHost: "mark://host:6309", graphStore: gs}
-
-	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"}))
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	if !strings.Contains(resultText(t, res), "No backlinks found") {
-		t.Errorf("seed row for authoritative source must not win: %s", resultText(t, res))
-	}
-
-	res, err = h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/c.md"}))
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	if !strings.Contains(resultText(t, res), "Local A") {
-		t.Errorf("local edge lost after seeding: %s", resultText(t, res))
-	}
-}
-
-func TestSeedGraph_ThrottledWithinWindow(t *testing.T) {
-	calls := 0
-	sc := &stubClient{
-		SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
-			calls++
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
-		},
-	}
-	h := &handler{client: legacySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
-
-	for range 3 {
-		if _, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"})); err != nil {
-			t.Fatalf("unexpected Go error: %v", err)
-		}
-	}
-	if calls != 1 {
-		t.Errorf("seed fetches = %d, want 1 (throttled)", calls)
-	}
-}
-
-func TestSeedGraph_RefreshIsSingleFlight(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var calls atomic.Int32
-	sc := &stubClient{SeedFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
-		if calls.Add(1) == 1 {
-			close(started)
-		}
-		<-release
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-	}}
-	h := &handler{client: legacySeed{sc}, graphStore: emptyGraphStore(t)}
-	done := make(chan struct{})
-	go func() {
-		h.seedGraph(t.Context(), "host:6309")
-		close(done)
-	}()
-	<-started
-	follower := make(chan struct{})
-	go func() {
-		h.seedGraph(t.Context(), "host:6309")
-		close(follower)
-	}()
-	select {
-	case <-follower:
-		t.Fatal("follower returned before active refresh completed")
-	case <-time.After(20 * time.Millisecond):
-	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("concurrent seed fetches = %d, want 1", got)
-	}
-	close(release)
-	<-done
-	<-follower
-}
-
-func TestSeedGraph_EtagRoundTrip(t *testing.T) {
-	var gotEtags []string
-	sc := &stubClient{
-		FetchFn: unavailableSeedSource,
-		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			etag := r.IfNoneMatch
-			gotEtags = append(gotEtags, etag)
-			if etag == "hub-etag-1" {
-				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotModified}}, nil
-			}
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"etag": "hub-etag-1"},
-				Body:     hubGraphBody(),
-			}}, nil
-		},
-	}
-	h := &handler{client: legacySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
-
-	if _, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"})); err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-
-	// Expire the throttle so the second call re-checks with the stored etag.
-	h.graphStore.ExpireSeedCheck("host:6309")
-
-	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"}))
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	if len(gotEtags) != 2 || gotEtags[0] != "" || gotEtags[1] != "hub-etag-1" {
-		t.Errorf("etags sent = %v, want [\"\" hub-etag-1]", gotEtags)
-	}
-	// not-modified keeps the seeded rows.
-	if !strings.Contains(resultText(t, res), "Page A") {
-		t.Errorf("seeded backlink lost after not-modified refresh: %s", resultText(t, res))
 	}
 }
 
@@ -522,21 +296,5 @@ func TestSeedGraph_MarkGraphSeeds(t *testing.T) {
 	// Hub context is present alongside the crawl result.
 	if n := h.graphStore.GetNode("mark://host:6309/a.md"); n == nil {
 		t.Error("seeded hub node missing after mark_graph")
-	}
-}
-
-func TestSeedGraph_FailureBacksOff(t *testing.T) {
-	var calls atomic.Int32
-	sc := &stubClient{
-		SnapshotFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
-			calls.Add(1)
-			return fetch.Result{}, errors.New("world unreachable")
-		},
-	}
-	h := &handler{client: legacySeed{sc}, graphStore: emptyGraphStore(t)}
-	h.seedGraph(t.Context(), "host:6309")
-	h.seedGraph(t.Context(), "host:6309")
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("snapshot probes = %d, want 1: a failed seed backs off for the check interval", got)
 	}
 }

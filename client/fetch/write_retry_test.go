@@ -32,7 +32,7 @@ func TestWritesAreNotResentAfterTheRequestIsSent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			before := writes.Load()
 			err := tt.call(t.Context())
-			if !errors.Is(err, ErrOutcomeUnknown) {
+			if !errors.Is(err, protocol.ErrOutcomeUnknown) {
 				t.Fatalf("error = %v, want ErrOutcomeUnknown", err)
 			}
 			if sent := writes.Load() - before; sent != 1 {
@@ -91,7 +91,7 @@ func TestCancelAfterSendStaysOutcomeUnknown(t *testing.T) {
 				cancel()
 			}()
 			err := tt.call(ctx)
-			if !errors.Is(err, ErrOutcomeUnknown) {
+			if !errors.Is(err, protocol.ErrOutcomeUnknown) {
 				t.Fatalf("error = %v, want ErrOutcomeUnknown", err)
 			}
 			if !errors.Is(err, context.Canceled) {
@@ -136,7 +136,7 @@ func TestDoneContextSendsNothing(t *testing.T) {
 	for _, tt := range calls {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.call(ctx)
-			if !errors.Is(err, context.Canceled) || errors.Is(err, ErrOutcomeUnknown) {
+			if !errors.Is(err, context.Canceled) || errors.Is(err, protocol.ErrOutcomeUnknown) {
 				t.Fatalf("error = %v, want a plain context.Canceled", err)
 			}
 		})

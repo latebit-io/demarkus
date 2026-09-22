@@ -99,7 +99,7 @@ func TestAppendResolvesItsVersion(t *testing.T) {
 }
 
 func TestAnUnknownOutcomeSaysDoNotResend(t *testing.T) {
-	lost := fmt.Errorf("read response: %w", fetch.ErrOutcomeUnknown)
+	lost := fmt.Errorf("read response: %w", protocol.ErrOutcomeUnknown)
 	backend := &fetchtest.Client{
 		ArchiveFn: func(context.Context, fetch.ArchiveRequest) (fetch.Result, error) { return fetch.Result{}, lost },
 		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
@@ -107,7 +107,7 @@ func TestAnUnknownOutcomeSaysDoNotResend(t *testing.T) {
 		},
 	}
 	_, err := runWrite(t.Context(), &cliWrite{verb: protocol.VerbArchive, doc: cliDoc(backend)})
-	if !errors.Is(err, fetch.ErrOutcomeUnknown) || !strings.Contains(err.Error(), "may have landed") {
+	if !errors.Is(err, protocol.ErrOutcomeUnknown) || !strings.Contains(err.Error(), "may have landed") {
 		t.Fatalf("err = %v, want the unknown outcome with the advice", err)
 	}
 }

@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -23,6 +24,11 @@ const (
 	StatusServerError  = "server-error"
 	StatusRateLimited  = "rate-limited"
 )
+
+// ErrOutcomeUnknown marks a write whose request was sent and whose answer was
+// lost: it may or may not have landed. A caller reconciles against the head,
+// never resends. Wrap it with %w so errors.Is still finds it.
+var ErrOutcomeUnknown = errors.New("request sent but outcome unknown")
 
 // MaxResponseLength bounds a response read so a misbehaving server cannot
 // OOM the client. Sized to hold a merge-conflict body carrying two full

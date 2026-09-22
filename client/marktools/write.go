@@ -2,7 +2,6 @@ package marktools
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -91,20 +90,6 @@ func (t *Tools) publisherMeta(ctx context.Context, raw map[string]any) map[strin
 		}
 	}
 	return meta
-}
-
-// MetadataArg is a tool call's optional "metadata" object. PUBLISH replaces the
-// metadata map, so a mistyped argument is refused, never read as none.
-func MetadataArg(args map[string]any) (map[string]any, error) {
-	raw, given := args["metadata"]
-	if !given || raw == nil {
-		return nil, nil
-	}
-	meta, ok := raw.(map[string]any)
-	if !ok {
-		return nil, errors.New("metadata must be an object of key/value pairs")
-	}
-	return meta, nil
 }
 
 // requireVersion is the check every version checked publish makes.

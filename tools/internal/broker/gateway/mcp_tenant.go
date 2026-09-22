@@ -108,10 +108,6 @@ func (g *Gateway) resolveOrProvision(ctx context.Context) (core.WorldConfig, err
 	if !ok {
 		return core.WorldConfig{}, errors.New("internal: missing identity on tool-call context")
 	}
-	identity := core.IdentityKey(g.deps.Issuer, claims.Subject)
-	if refusal := g.refusals.recent(identity, g.deps.Clock()); refusal != nil {
-		return core.WorldConfig{}, refusal
-	}
 	w, perr := g.deps.Provisioner.EnsureTenant(ctx, claims)
 	if perr == nil {
 		// The knowledge server picks the new world up asynchronously;
@@ -124,31 +120,31 @@ func (g *Gateway) resolveOrProvision(ctx context.Context) (core.WorldConfig, err
 		}
 		return w, nil
 	}
-	remember, refusal := g.provisioningRefusal(claims, perr)
-	if remember {
-		g.refusals.remember(identity, refusal, g.deps.Clock())
-	}
-	return core.WorldConfig{}, refusal
+	return core.WorldConfig{}, g.provisioningRefusal(claims, perr)
 }
 
-// provisioningRefusal words a failed provisioning for the client and logs its
-// cause. remember is true for an answer that will not change within a minute;
-// a transient failure is retried on the next call.
-func (g *Gateway) provisioningRefusal(claims *core.Claims, err error) (remember bool, refusal error) {
-	subject := core.HashSubject(claims.Subject)
+// The provisioner's refusals in the client's words.
+var (
+	errNotAdmitted     = errors.New("not authorized: this memory service does not admit your identity; contact the operator")
+	errBeingRemoved    = errors.New("your memory world is being removed; contact the operator if this persists")
+	errAtCapacity      = errors.New("this memory service is at capacity; contact the operator")
+	errProvisionFailed = errors.New("provisioning your memory world failed; try again shortly")
+)
+
+// provisioningRefusal words a failed provisioning for the client. The
+// provisioner logs and remembers the refusals that will not change; a
+// transient failure is logged here and retried on the next call.
+func (g *Gateway) provisioningRefusal(claims *core.Claims, err error) error {
 	switch {
 	case errors.Is(err, storage.ErrProvisioningDenied):
-		g.deps.Log.Warn("tenant provisioning denied by gate", "subject", subject)
-		return true, errors.New("not authorized: this memory service does not admit your identity; contact the operator")
+		return errNotAdmitted
 	case errors.Is(err, storage.ErrTenantDeprovisioning):
-		g.deps.Log.Warn("tool call denied for tombstoned tenant", "subject", subject)
-		return true, errors.New("your memory world is being removed; contact the operator if this persists")
+		return errBeingRemoved
 	case errors.Is(err, storage.ErrTenantCapacity):
-		g.deps.Log.Warn("tenant provisioning denied at capacity", "subject", subject)
-		return true, errors.New("this memory service is at capacity; contact the operator")
+		return errAtCapacity
 	}
-	g.deps.Log.Warn("tenant provisioning failed", "subject", subject, "err", err)
-	return false, errors.New("provisioning your memory world failed; try again shortly")
+	g.deps.Log.Warn("tenant provisioning failed", "subject", core.HashSubject(claims.Subject), "err", err)
+	return errProvisionFailed
 }
 
 // tenantOwns is whether raw addresses the tenant's own world. A url that does

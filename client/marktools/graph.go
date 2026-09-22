@@ -80,7 +80,10 @@ func (t *Tools) Backlinks(ctx context.Context, rawURL string) Result {
 	return text(b.String())
 }
 
-// GraphArgs are mark_graph's arguments; Depth is clamped to 1..5, zero is 2.
+// DefaultGraphDepth is the crawl depth when none is given.
+const DefaultGraphDepth = 2
+
+// GraphArgs are mark_graph's arguments; Depth is clamped to 1..5, zero is the default.
 type GraphArgs struct {
 	URL   string
 	Depth int
@@ -98,7 +101,7 @@ func (t *Tools) Graph(ctx context.Context, args GraphArgs) Result {
 	}
 	depth := args.Depth
 	if depth == 0 {
-		depth = 2
+		depth = DefaultGraphDepth
 	}
 	// Seeded first, so a depth limited crawl still has the hub's context.
 	scope.seed(ctx, target)

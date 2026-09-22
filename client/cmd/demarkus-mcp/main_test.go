@@ -106,6 +106,13 @@ func TestToolDefinitions(t *testing.T) {
 			wantDesc:     "Fetch a document",
 		},
 		{
+			name:         "mark_backlinks",
+			tool:         mcpfmt.BacklinksTool(urlDesc(""), ""),
+			wantName:     "mark_backlinks",
+			wantRequired: []string{"url"},
+			wantDesc:     "Documents linking to a URL",
+		},
+		{
 			name:         "mark_fetch without host",
 			tool:         mcpfmt.FetchTool(urlDesc(""), ""),
 			wantName:     "mark_fetch",
@@ -218,17 +225,6 @@ func TestHandlerMarkFetch_InvalidURL(t *testing.T) {
 	assertIsToolError(t, result, "requires -host flag")
 }
 
-func TestHandlerMarkList_InvalidURL(t *testing.T) {
-	h := &handler{client: &stubClient{}}
-	ctx := context.Background()
-
-	result, err := h.markList(ctx, newCallToolRequest(map[string]any{"url": "/bare-path"}))
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	assertIsToolError(t, result, "requires -host flag")
-}
-
 func TestHandlerMarkListForwardsPagination(t *testing.T) {
 	var got fetch.ListRequest
 	h := &handler{client: &stubClient{
@@ -273,50 +269,6 @@ func TestHandlerMarkPublish_NoToken(t *testing.T) {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
 	assertIsToolError(t, result, "requires a token")
-}
-
-func TestHandlerMarkFetch_MissingURL(t *testing.T) {
-	h := &handler{client: &stubClient{}}
-	ctx := context.Background()
-
-	result, err := h.markFetch(ctx, newCallToolRequest(map[string]any{}))
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	assertIsToolError(t, result, "url is required")
-}
-
-func TestHandlerMarkVersions_InvalidURL(t *testing.T) {
-	h := &handler{client: &stubClient{}}
-	ctx := context.Background()
-
-	result, err := h.markVersions(ctx, newCallToolRequest(map[string]any{"url": "/bare-path"}))
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	assertIsToolError(t, result, "requires -host flag")
-}
-
-func TestHandlerMarkVersions_MissingURL(t *testing.T) {
-	h := &handler{client: &stubClient{}}
-	ctx := context.Background()
-
-	result, err := h.markVersions(ctx, newCallToolRequest(map[string]any{}))
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	assertIsToolError(t, result, "url is required")
-}
-
-func TestHandlerMarkGraph_InvalidURL(t *testing.T) {
-	h := &handler{client: &stubClient{}}
-	ctx := context.Background()
-
-	result, err := h.markGraph(ctx, newCallToolRequest(map[string]any{"url": "/bare-path"}))
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	assertIsToolError(t, result, "requires -host flag")
 }
 
 func TestAgentName(t *testing.T) {
@@ -485,17 +437,6 @@ func TestHandlerMarkLookup(t *testing.T) {
 	if gotOpts.Filter != "project=broker" || gotOpts.Limit != 5 {
 		t.Errorf("opts = %+v, want {Filter:project=broker Limit:5}", gotOpts)
 	}
-}
-
-func TestHandlerMarkLookup_RequiresQuery(t *testing.T) {
-	h := &handler{client: &stubClient{}, defaultHost: "mark://example.com", token: "test-token"}
-	result, err := h.markLookup(context.Background(), newCallToolRequest(map[string]any{
-		"url": "mark://example.com/",
-	}))
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	assertIsToolError(t, result, "query")
 }
 
 func TestHandlerMarkAppend_ExplicitVersion(t *testing.T) {
@@ -689,17 +630,6 @@ func TestToolDefinition_MarkIndex(t *testing.T) {
 	}
 	if slices.Contains(tool.InputSchema.Required, "force") {
 		t.Error("force should not be required")
-	}
-}
-
-func TestMarkBacklinksTool_URLRequired(t *testing.T) {
-	tool := mcpfmt.BacklinksTool(urlDesc("mark://localhost:6309"), "")
-	props := tool.InputSchema.Properties
-	if _, ok := props["url"]; !ok {
-		t.Fatal("expected url property")
-	}
-	if !slices.Contains(tool.InputSchema.Required, "url") {
-		t.Error("url should be required")
 	}
 }
 
@@ -915,61 +845,6 @@ func assertIsToolError(t *testing.T, result *mcp.CallToolResult, substr string) 
 	}
 }
 
-// The retention argument and its default of 20 are read here; what the tool
-// does with the value is tested in client/marktools.
-func TestHandlerMarkGraphPublish_Retention(t *testing.T) {
-	newGraphHandler := func(t *testing.T, capture *map[string]string) *handler {
-		t.Helper()
-		gs, err := graphstore.Load(filepath.Join(t.TempDir(), "graph.json"))
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		sc := &stubClient{
-			PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
-				*capture = r.Metadata
-				return fetch.Result{Response: protocol.Response{
-					Status:   "created",
-					Metadata: map[string]string{"version": "1", "modified": "2026-03-08T12:00:00Z"},
-				}}, nil
-			},
-		}
-		return &handler{client: sc, graphStore: gs, defaultHost: "mark://target.com", token: "test-token"}
-	}
-
-	tests := []struct {
-		name          string
-		args          map[string]any
-		wantRetention string
-	}{
-		{
-			name:          "defaults to 20",
-			args:          map[string]any{"url": "mark://target.com/graph.md", "expected_version": float64(0)},
-			wantRetention: "20",
-		},
-		{
-			name:          "explicit override",
-			args:          map[string]any{"url": "mark://target.com/graph.md", "expected_version": float64(0), "retention": float64(5)},
-			wantRetention: "5",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var meta map[string]string
-			h := newGraphHandler(t, &meta)
-			result, err := h.markGraphPublish(context.Background(), newCallToolRequest(tt.args))
-			if err != nil {
-				t.Fatalf("unexpected Go error: %v", err)
-			}
-			if result.IsError {
-				t.Fatalf("unexpected tool error: %v", result.Content)
-			}
-			if got := meta["retention"]; got != tt.wantRetention {
-				t.Errorf("retention meta = %q, want %q", got, tt.wantRetention)
-			}
-		})
-	}
-}
-
 func TestResolveToken_ScopedToDefaultHost(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("DEMARKUS_AUTH", "env-token")
@@ -1084,18 +959,4 @@ func TestHandlersReachTheirBodies(t *testing.T) {
 			t.Errorf("graph text = %q, node stored = %v", got, gs.GetNode("mark://host/index.md") != nil)
 		}
 	})
-}
-
-func TestHandlerMarkPublish_RefusesMetadataThatIsNotAnObject(t *testing.T) {
-	sc := &stubClient{}
-	h := &handler{client: sc, defaultHost: "mark://example.com", token: "test-token"}
-	res, err := h.markPublish(context.Background(), newCallToolRequest(map[string]any{
-		"url": "/doc.md", "body": "# Doc", "expected_version": float64(1), "metadata": "tags: go",
-	}))
-	if err != nil || !res.IsError || !strings.Contains(resultText(t, res), "metadata must be an object") {
-		t.Fatalf("markPublish = (%+v, %v), want the argument refused", res, err)
-	}
-	if len(sc.PublishCalls) != 0 {
-		t.Errorf("published %d times with its metadata dropped", len(sc.PublishCalls))
-	}
 }

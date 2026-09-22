@@ -44,7 +44,7 @@ func Head(body string, version int, meta map[string]string) fetch.Result {
 }
 
 // LostResponse is a write that was sent and never answered.
-func LostResponse() error { return fmt.Errorf("read response: %w", fetch.ErrOutcomeUnknown) }
+func LostResponse() error { return fmt.Errorf("read response: %w", protocol.ErrOutcomeUnknown) }
 
 // History answers FETCH for a document with the given versions, oldest first:
 // docPath is the newest, docPath/vN is version N, anything else is not found.
