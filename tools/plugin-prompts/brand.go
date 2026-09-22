@@ -195,7 +195,7 @@ func validateWebURL(field, raw string) error {
 		return nil
 	}
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return fmt.Errorf("%s %q must be an absolute http(s) URL", field, raw)
 	}
 	return nil

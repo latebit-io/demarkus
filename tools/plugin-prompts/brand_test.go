@@ -448,6 +448,7 @@ func TestValidateBrandIdentity(t *testing.T) {
 		{name: "author url relative", b: brand{Author: &brandAuthor{Name: "Acme", URL: "acme.test"}}, want: "author.url"},
 		{name: "homepage scheme", b: brand{Homepage: "ftp://acme.test"}, want: "homepage"},
 		{name: "repository no host", b: brand{Repository: "https://"}, want: "repository"},
+		{name: "homepage port only", b: brand{Homepage: "https://:443"}, want: "homepage"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
