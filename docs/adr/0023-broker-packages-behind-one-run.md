@@ -18,7 +18,7 @@ reach `Run` without an import cycle. And the sweeper took the OAuth server's
 
 ## Decision
 
-- `tools/internal/broker` is five packages. `core` holds what every package
+- `tools/internal/broker` is four packages and a test fixture package. `core` holds what every package
   shares: the config and its validation, the world registry, claims and
   authorization, the Secret locations and the `SecretStore` contract, the
   OIDC verifier and id_token signer, the rate limit registry and the subject
