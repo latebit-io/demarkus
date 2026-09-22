@@ -164,14 +164,26 @@ func Ensure(memoryDir string, port int) error {
 		_ = os.Remove(versionFile)
 		return err
 	}
-	_ = cmd.Process.Release() // fully detach; don't reap
+	// Reaped by this process while it lives: kill 0 reports an unreaped child
+	// as alive, so without Wait a server that died at startup would read as spawned.
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		if err := cmd.Wait(); err != nil {
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) {
+				progress.Warnf("wait for demarkus-server (pid=%d): %v", pid, err)
+			}
+		}
+	}()
 
 	// Bounded poll: fail fast if the process died (bind/startup error), succeed
 	// once the port is observed bound, or accept once the attempt cap is reached
 	// with the process still alive (permissive when the port probe is unavailable).
 	const maxAttempts = 20 // ~2s at 100ms
 	for range maxAttempts {
-		if !lockdir.PidAlive(pid) {
+		select {
+		case <-exited:
 			_ = os.Remove(pidFile)
 			_ = os.Remove(versionFile)
 			tailInfo := ""
@@ -179,6 +191,7 @@ func Ensure(memoryDir string, port int) error {
 				tailInfo = "\nrecent log:\n" + t
 			}
 			return fmt.Errorf("demarkus-server failed to start (port %d may be in use; re-run /soul-init)%s", port, tailInfo)
+		default:
 		}
 		if !procscan.PortIsFree(port) {
 			break

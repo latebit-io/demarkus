@@ -203,8 +203,8 @@ func managedPID(t *testing.T, memory string) int {
 	return pid
 }
 
-// killAndReap ends a detached server and reaps it, as init would once the
-// plugin process is gone; unreaped, it would read as alive.
+// killAndReap ends a spawned server and waits for its exit, so the next probe
+// cannot see it as a live process.
 func killAndReap(pid int) {
 	_ = procscan.Signal(pid, syscall.SIGKILL)
 	if p, err := os.FindProcess(pid); err == nil {

@@ -70,10 +70,10 @@ preserved: plugin output, hook output, state files and log text byte identical.
 - The lifecycle has tests for `EnsureBinaries`, `server.Ensure`, `Init` in
   all three modes, `provisionLocked`, `VerifyAuth` and `HealthWarning`; the
   T3 probe regression is pinned in `procscan` and `server`, T4 in `main`.
-- Writing those tests showed that a managed server which dies at startup is
-  reported as spawned: the plugin process never reaps its detached child, so
-  the exited process reads as alive to `kill 0`. Recorded as debt, not fixed
-  here, because the fix changes the failure path's output.
+- Writing those tests showed that a managed server which dies at startup was
+  reported as spawned: the plugin process never reaped its detached child, so
+  the exited process read as alive to `kill 0`. `server.Ensure` now waits on
+  the child while the poll runs and reports the exit with the log tail.
 - The pin bump workflow reads `release.go` (`ServerVersion`, `ClientVersion`).
 - The lint ratchet shrinks by the join's argument and result limit entries
   and the paths move.

@@ -92,7 +92,6 @@
 1 tools/demarkus-plugin/internal/provision/release/release.go: G115: integer overflow conversion int64 -> uint32 (gosec)
 3 tools/demarkus-plugin/internal/provision/release/release.go: G301: Expect directory permissions to be 0750 or less (gosec)
 2 tools/demarkus-plugin/internal/provision/server/server.go: Error return value of `cmd.Process.Kill` is not checked (errcheck)
-1 tools/demarkus-plugin/internal/provision/server/server.go: Error return value of `cmd.Process.Release` is not checked (errcheck)
 1 tools/demarkus-plugin/internal/provision/server/server.go: Error return value of `lf.Close` is not checked (errcheck)
 5 tools/demarkus-plugin/internal/provision/server/server.go: Error return value of `os.Remove` is not checked (errcheck)
 1 tools/demarkus-plugin/internal/provision/server/server.go: G204: Subprocess launched with variable (gosec)

@@ -3,7 +3,6 @@ package server
 import (
 	"strings"
 	"syscall"
-	"time"
 
 	"os"
 	"path/filepath"
@@ -48,17 +47,6 @@ func TestEnsure(t *testing.T) {
 			_ = procscan.Signal(pid, syscall.SIGKILL)
 		}
 	})
-	// Ensure detaches the server without waiting; in production the plugin
-	// process exits and init reaps it, here the test process must, or a killed
-	// server lingers as a zombie that reads as alive.
-	reap := func(pid int) {
-		go func() {
-			if p, err := os.FindProcess(pid); err == nil {
-				_, _ = p.Wait()
-			}
-		}()
-	}
-
 	if err := Ensure(memory, port); err != nil {
 		t.Fatalf("first Ensure: %v", err)
 	}
@@ -66,7 +54,6 @@ func TestEnsure(t *testing.T) {
 	if pid <= 0 {
 		t.Fatal("no pid recorded after spawn")
 	}
-	reap(pid)
 	if got, err := os.ReadFile(versionFile); err != nil || string(got) != release.ServerVersion+"\n" {
 		t.Fatalf("version stamp = %q, %v; want the pin", got, err)
 	}
@@ -91,36 +78,20 @@ func TestEnsure(t *testing.T) {
 	if fresh == pid || fresh <= 0 {
 		t.Fatalf("stale server not restarted: pid %d -> %d", pid, fresh)
 	}
-	reap(fresh)
 	if lockdir.PidAlive(pid) {
 		t.Errorf("stale server pid %d still alive after restart", pid)
 	}
 
 	// A binary that dies at startup is reported with its log and leaves no
-	// bookkeeping behind. Reaped here because the poll reads an unreaped child
-	// as alive (kill 0 succeeds on a zombie); see the debt entry from 3e.
+	// bookkeeping behind. Nothing reaps it here: Ensure must see the exit
+	// itself, since kill 0 reports an unreaped child as alive.
 	provisiontest.WriteBinary(t, home, "demarkus-server", []byte("#!/bin/sh\necho boom >&2\nexit 1\n"))
 	other := filepath.Join(home, "other")
-	go reapChildren(t)
 	err := Ensure(other, provisiontest.FreePort(t))
 	if err == nil || !strings.Contains(err.Error(), "failed to start") || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("Ensure with a dying binary = %v, want a start failure quoting the log", err)
 	}
 	if _, err := os.Stat(filepath.Join(other, ".pid")); !os.IsNotExist(err) {
 		t.Errorf("pid file left behind after a failed spawn: %v", err)
-	}
-}
-
-// reapChildren waits for any child that exits, as init would once the plugin
-// process is gone, so a dead spawn stops reading as alive.
-func reapChildren(t *testing.T) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		var status syscall.WaitStatus
-		if pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil); err == nil && pid > 0 {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }

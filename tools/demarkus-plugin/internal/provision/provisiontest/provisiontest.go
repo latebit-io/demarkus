@@ -193,7 +193,9 @@ func InstallBinary(t *testing.T, home, name, exe string) string {
 	return WriteBinary(t, home, name, body)
 }
 
-// WriteBinary writes body executable at $HOME/.demarkus/bin/<name>.
+// WriteBinary installs body executable at $HOME/.demarkus/bin/<name> by temp
+// file and rename, as the installer does: Linux refuses to rewrite a running
+// executable in place (ETXTBSY), and a test may replace a live stub.
 func WriteBinary(t *testing.T, home, name string, body []byte) string {
 	t.Helper()
 	binDir := filepath.Join(home, ".demarkus", "bin")
@@ -201,7 +203,10 @@ func WriteBinary(t *testing.T, home, name string, body []byte) string {
 		t.Fatal(err)
 	}
 	p := filepath.Join(binDir, name)
-	if err := os.WriteFile(p, body, 0o700); err != nil { //nolint:gosec // executable stub
+	if err := os.WriteFile(p+".tmp", body, 0o700); err != nil { //nolint:gosec // executable stub
+		t.Fatal(err)
+	}
+	if err := os.Rename(p+".tmp", p); err != nil {
 		t.Fatal(err)
 	}
 	return p
