@@ -105,8 +105,8 @@ func TestDefaults(t *testing.T) {
 		t.Errorf("Graph = %+v, %v; want depth %d", graph, err, marktools.DefaultGraphDepth)
 	}
 	graph, err = Graph(call(map[string]any{"url": "/i.md", "depth": float64(0)}))
-	if err != nil || graph.Depth != 0 {
-		t.Errorf("Graph = %+v, %v; an explicit 0 is the surface's to clamp", graph, err)
+	if err != nil || graph.Depth != 1 {
+		t.Errorf("Graph = %+v, %v; an explicit 0 is the shallowest crawl on both surfaces", graph, err)
 	}
 	publish := GraphPublish(call(nil))
 	if publish.URL != "" || publish.Retention != defaultGraphRetention || publish.ExpectedVersion != nil {

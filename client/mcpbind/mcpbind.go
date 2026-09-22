@@ -174,13 +174,15 @@ func Index(req *mcp.CallToolRequest) (marktools.IndexArgs, error) {
 	}, nil
 }
 
-// Graph binds mark_graph; the depth is as given, the body's default when absent.
+// Graph binds mark_graph; the depth is the body's default when absent, and
+// an explicit 0 is the shallowest crawl, not the default.
 func Graph(req *mcp.CallToolRequest) (marktools.GraphArgs, error) {
 	url, err := Required(req, "url")
 	if err != nil {
 		return marktools.GraphArgs{}, err
 	}
-	return marktools.GraphArgs{URL: url, Depth: req.GetInt("depth", marktools.DefaultGraphDepth)}, nil
+	depth := req.GetInt("depth", marktools.DefaultGraphDepth)
+	return marktools.GraphArgs{URL: url, Depth: max(1, depth)}, nil
 }
 
 // GraphPublish binds mark_graph_publish; the url is read as given and the

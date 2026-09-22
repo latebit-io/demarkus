@@ -150,8 +150,6 @@ func (g *Gateway) handleMarkGraph(ctx context.Context, req mcp.CallToolRequest) 
 	if err != nil {
 		return mcpbind.Refused(err), nil
 	}
-	// An explicit 0 is the shallowest crawl here, not the default depth.
-	args.Depth = max(1, args.Depth)
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.Graph(ctx, args) })
 }
 

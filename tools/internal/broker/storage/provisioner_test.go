@@ -874,6 +874,44 @@ func TestRegistryChangesClearRememberedRefusals(t *testing.T) {
 			t.Fatalf("bob after deprovision: %v, want admitted at once", err)
 		}
 	})
+	t.Run("sync during the refusal cannot be outrun", func(t *testing.T) {
+		// Order: p refuses eve under its lock; before that refusal is
+		// remembered, a sibling provisions eve and p's sync clears the
+		// memory. The refusal must be remembered before the sync runs.
+		cfg := brokertest.NewProvisioningConfig(core.ProvisionStatic)
+		store := newProvisionerStore()
+		sibling := newTestProvisioner(brokertest.NewProvisioningConfig(core.ProvisionOpen), store, &brokertest.FakeBuckets{})
+		var p *Provisioner
+		calls := 0
+		synced := make(chan error, 1)
+		clock := func() time.Time {
+			calls++
+			// Call 1 checks the memory, call 2 remembers the refusal.
+			if calls != 2 {
+				return time.Now()
+			}
+			if _, err := sibling.EnsureTenant(context.Background(), brokertest.EveClaims()); err != nil {
+				t.Errorf("sibling provisions eve: %v", err)
+			}
+			go func() { synced <- p.SyncRegistry(context.Background()) }()
+			select {
+			case err := <-synced:
+				synced <- err // the sync outran the memory; the next call sees the stale refusal
+			case <-time.After(100 * time.Millisecond):
+			}
+			return time.Now()
+		}
+		p = newTestProvisionerAt(cfg, store, &brokertest.FakeBuckets{}, clock)
+		if _, err := p.EnsureTenant(context.Background(), brokertest.EveClaims()); !errors.Is(err, ErrProvisioningDenied) {
+			t.Fatalf("err = %v, want ErrProvisioningDenied", err)
+		}
+		if err := <-synced; err != nil {
+			t.Fatalf("SyncRegistry: %v", err)
+		}
+		if _, err := p.EnsureTenant(context.Background(), brokertest.EveClaims()); err != nil {
+			t.Fatalf("eve after the sync: %v, want the sibling's record honoured", err)
+		}
+	})
 	t.Run("sync sees a sibling's change", func(t *testing.T) {
 		cfg := brokertest.NewProvisioningConfig(core.ProvisionStatic)
 		store := newProvisionerStore()

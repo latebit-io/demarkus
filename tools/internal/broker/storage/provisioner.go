@@ -319,16 +319,20 @@ func (p *Provisioner) EnsureTenant(ctx context.Context, claims *core.Claims) (co
 	if refusal := p.refusals.recent(identity, p.clock()); refusal != nil {
 		return core.WorldConfig{}, refusal
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	world, err := p.ensureTenant(ctx, claims)
 	if err != nil {
+		// Still under p.mu: a registry sync cannot clear the memory
+		// between this refusal and its remembering.
 		p.refuse(identity, claims.Subject, err)
 	}
 	return world, err
 }
 
-// refuse logs a refusal and remembers gate and capacity ones, which hold
-// until the registry changes, so the identity's next calls skip the lock. A
-// tombstone can clear before this pod syncs, so it is answered live.
+// refuse logs a refusal and remembers gate and capacity ones under p.mu; they
+// hold until the registry changes, so the identity's next calls skip the lock.
+// A tombstone can clear before this pod syncs, so it is answered live.
 func (p *Provisioner) refuse(identity, subject string, err error) {
 	switch {
 	case errors.Is(err, ErrProvisioningDenied):
@@ -344,10 +348,8 @@ func (p *Provisioner) refuse(identity, subject string, err error) {
 	p.refusals.remember(identity, err, p.clock())
 }
 
-// ensureTenant is EnsureTenant under the lock.
+// ensureTenant is EnsureTenant's body; the caller holds p.mu.
 func (p *Provisioner) ensureTenant(ctx context.Context, claims *core.Claims) (core.WorldConfig, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	// The lock queue can outlive the request; do no remote work for a
 	// caller that already went away.
 	if err := ctx.Err(); err != nil {

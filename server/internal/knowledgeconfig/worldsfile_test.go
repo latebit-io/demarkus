@@ -115,7 +115,7 @@ func TestParseWorldsFragmentRejectsUnknownFields(t *testing.T) {
 // contract: the broker's TestWorldsFragmentGolden renders this fixture
 // and the server must parse it (hand-written lookalikes drift silently).
 func TestParsesBrokerRenderedFragment(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "tools", "internal", "broker", "testdata", "worlds-fragment.golden.yaml"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "tools", "internal", "broker", "storage", "testdata", "worlds-fragment.golden.yaml"))
 	if err != nil {
 		t.Fatalf("read broker golden fixture: %v", err)
 	}
