@@ -8,6 +8,6 @@ SCRIPTS_DIR="${HOOK_DIR}/../scripts"
 GUIDANCE_FILE="${HOOK_DIR}/../context/session-guidance.md"
 BIN="${HOME}/.demarkus/bin/demarkus-plugin"
 
-bash "${SCRIPTS_DIR}/bootstrap.sh" >&2 || echo "[demarkus-knowledge] bootstrap failed; gates and guidance are unavailable this session" >&2
+bash "${SCRIPTS_DIR}/bootstrap.sh" >&2 || echo "[demarkus] bootstrap failed; gates and guidance are unavailable this session" >&2
 [[ -x "${BIN}" ]] || exit 0
-"${BIN}" guidance --surface knowledge --guidance-file "${GUIDANCE_FILE}" --format claude || { echo "[demarkus-knowledge] guidance exited $?; no guidance injected" >&2; exit 0; }
+"${BIN}" guidance --surface knowledge --guidance-file "${GUIDANCE_FILE}" --format claude || { echo "[demarkus] guidance exited $?; no guidance injected" >&2; exit 0; }

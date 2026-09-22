@@ -15,7 +15,7 @@ BIN="${BIN_DIR}/demarkus-plugin"
 # only a failure against a live group is logged.
 killgroup() {
   kill -0 -- "-$2" 2>/dev/null || return 0
-  kill "-$1" -- "-$2" || echo "[demarkus-memory] kill -$1 of process group $2 failed" >&2
+  kill "-$1" -- "-$2" || echo "[demarkus] kill -$1 of process group $2 failed" >&2
 }
 
 bounded() {
@@ -36,12 +36,12 @@ bounded() {
   return "${rc}"
 }
 
-bounded 300 bash "${SCRIPTS_DIR}/bootstrap.sh" 1>&2 || echo "[demarkus-memory] bootstrap failed or timed out; trying the installed binary" >&2
-[[ -x "${BIN}" ]] || { echo "[demarkus-memory] ${BIN} not installed; run /soul-init" >&2; exit 1; }
+bounded 300 bash "${SCRIPTS_DIR}/bootstrap.sh" 1>&2 || echo "[demarkus] bootstrap failed or timed out; trying the installed binary" >&2
+[[ -x "${BIN}" ]] || { echo "[demarkus] ${BIN} not installed; run /soul-init" >&2; exit 1; }
 
 # mcp-serve needs the pinned demarkus-mcp and the token, which only provision
 # installs. Its cross-process lock serializes this with the hook's run. Not
 # fatal: a failed upgrade (offline) must not take down an installed memory.
-bounded 300 "${BIN}" provision 1>&2 || echo "[demarkus-memory] provision failed or timed out; mcp-serve will report what is missing" >&2
+bounded 300 "${BIN}" provision 1>&2 || echo "[demarkus] provision failed or timed out; mcp-serve will report what is missing" >&2
 
 exec "${BIN}" "$@"

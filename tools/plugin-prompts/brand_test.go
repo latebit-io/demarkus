@@ -428,3 +428,147 @@ func TestStoreDefaultsAndBrandNoun(t *testing.T) {
 		t.Fatalf("singular-only override = %q %q %q", bt.Store, bt.Stores, bt.StoreTitle)
 	}
 }
+
+func TestDecodeBrandsFileRejectsUnknownAuthorField(t *testing.T) {
+	raw := `{"brands": [{"name": "acme", "author": {"name": "Acme", "email": "x@acme.test"}}]}`
+	if _, err := decodeBrandsFile([]byte(raw)); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestValidateBrandIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		b    brand
+		want string
+	}{
+		{name: "unset"},
+		{name: "full", b: brand{Author: &brandAuthor{Name: "Acme", URL: "https://acme.test"}, Homepage: "https://acme.test/plugins", Repository: "https://github.com/acme/plugins"}},
+		{name: "author without name", b: brand{Author: &brandAuthor{URL: "https://acme.test"}}, want: "author.name is required"},
+		{name: "author url relative", b: brand{Author: &brandAuthor{Name: "Acme", URL: "acme.test"}}, want: "author.url"},
+		{name: "homepage scheme", b: brand{Homepage: "ftp://acme.test"}, want: "homepage"},
+		{name: "repository no host", b: brand{Repository: "https://"}, want: "repository"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBrandIdentity(&tt.b)
+			if tt.want == "" && err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+const identityManifest = `{
+  "name": "demarkus-memory",
+  "version": "0.1.0",
+  "description": "base",
+  "author": {
+    "name": "latebit",
+    "url": "https://github.com/latebit-io"
+  },
+  "homepage": "https://github.com/latebit-io/demarkus",
+  "license": "MIT",
+  "hooks": {}
+}
+`
+
+func writeManifest(t *testing.T, text string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "plugin.json")
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestBrandPluginJSONIdentityFields(t *testing.T) {
+	b := &brand{
+		PluginName: "acme-brain", Description: "Acme.",
+		Author:   &brandAuthor{Name: "Acme"},
+		Homepage: "https://acme.test/plugins", Repository: "https://github.com/acme/plugins",
+	}
+	got, err := brandPluginJSON(writeManifest(t, identityManifest), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{
+  "name": "acme-brain",
+  "version": "0.1.0",
+  "description": "Acme.",
+  "author": {
+    "name": "Acme"
+  },
+  "homepage": "https://acme.test/plugins",
+  "repository": "https://github.com/acme/plugins",
+  "license": "MIT",
+  "hooks": {}
+}
+`
+	if string(got) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestBrandPluginJSONKeepsBaseIdentityWhenUnset(t *testing.T) {
+	got, err := brandPluginJSON(writeManifest(t, identityManifest), &brand{PluginName: "acme-brain", Description: "Acme."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, want := range []string{`"name": "latebit"`, `"homepage": "https://github.com/latebit-io/demarkus"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("base identity dropped, missing %s in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "repository") {
+		t.Fatalf("repository invented:\n%s", text)
+	}
+}
+
+func TestBrandPluginJSONRejectsUnsupportedLayout(t *testing.T) {
+	tests := map[string]string{
+		"inline author":  "{\n  \"name\": \"demarkus-memory\",\n  \"description\": \"base\",\n  \"author\": {\"name\": \"latebit\"},\n  \"hooks\": {}\n}\n",
+		"repeated field": "{\n  \"name\": \"demarkus-memory\",\n  \"description\": \"base\",\n  \"homepage\": \"https://a.test\",\n  \"homepage\": \"https://b.test\",\n  \"hooks\": {}\n}\n",
+	}
+	b := &brand{PluginName: "acme-brain", Description: "Acme.", Author: &brandAuthor{Name: "Acme"}, Homepage: "https://acme.test"}
+	for name, text := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := brandPluginJSON(writeManifest(t, text), b); err == nil || !strings.Contains(err.Error(), "not one single- or block-formatted entry") {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
+func TestBrandReadmeMentionsMCPKeyForMemoryOnly(t *testing.T) {
+	b := &brand{PluginName: "acme-brain", Description: "Acme."}
+	memory := &target{Surface: "memory", PluginName: "demarkus-memory", Output: "plugins/claude-code"}
+	if text := brandReadme(b, memory, brandTarget(b, memory)); !strings.Contains(text, `MCP server key "demarkus-memory"`) {
+		t.Fatalf("memory README lacks the server key:\n%s", text)
+	}
+	knowledge := &target{Surface: "knowledge", PluginName: "demarkus-knowledge", Output: "plugins/claude-code-knowledge"}
+	text := brandReadme(b, knowledge, brandTarget(b, knowledge))
+	if strings.Contains(text, "MCP server key") || strings.Contains(text, "local memory") {
+		t.Fatalf("knowledge README claims a local memory:\n%s", text)
+	}
+	if strings.Contains(text, "cd tools") {
+		t.Fatalf("README regen line assumes the demarkus checkout is the cwd:\n%s", text)
+	}
+}
+
+func TestBrandPluginJSONInsertsAfterNearestPredecessor(t *testing.T) {
+	base := "{\n  \"name\": \"demarkus-memory\",\n  \"description\": \"base\",\n  \"homepage\": \"https://a.test\",\n  \"license\": \"MIT\"\n}\n"
+	b := &brand{PluginName: "acme-brain", Description: "Acme.", Author: &brandAuthor{Name: "Acme"}, Repository: "https://github.com/acme/plugins"}
+	got, err := brandPluginJSON(writeManifest(t, base), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\n  \"name\": \"acme-brain\",\n  \"description\": \"Acme.\",\n  \"author\": {\n    \"name\": \"Acme\"\n  },\n  \"homepage\": \"https://a.test\",\n  \"repository\": \"https://github.com/acme/plugins\",\n  \"license\": \"MIT\"\n}\n"
+	if string(got) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}

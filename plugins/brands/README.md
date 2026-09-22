@@ -31,7 +31,10 @@ One entry per plugin you want generated; delete the entries you do not need. Thi
       "plugin_name": "acme-brain",
       "knowledge_plugin_name": "acme-knowledge",
       "mcp_server_key": "memory",
-      "description": "Acme Brain: local, versioned memory for Claude Code, powered by demarkus."
+      "description": "Acme Brain: local, versioned memory for Claude Code, powered by demarkus.",
+      "author": { "name": "Acme", "url": "https://github.com/acme" },
+      "homepage": "https://github.com/acme/plugins",
+      "repository": "https://github.com/acme/plugins"
     },
     {
       "name": "acme-knowledge",
@@ -61,7 +64,7 @@ One entry per plugin you want generated; delete the entries you do not need. Thi
 }
 ```
 
-Fields: `name` and `output` are unique per entry; `output` must live under `plugins/brands/` of the demarkus checkout; `plugin_name` is lowercase letters, digits, and hyphens, becomes the `/<plugin_name>:` command prefix, and may repeat across harnesses since each harness has its own marketplace; `memory_plugin_name` and `knowledge_plugin_name` name the sibling plugin on the same harness when you brand both surfaces; `store_noun` and `store_noun_plural` replace the word "soul" in the prompts; `mcp_server_key` (memory bases only) renames the MCP server as described above. Unknown fields are rejected.
+Fields: `name` and `output` are unique per entry; `output` must live under `plugins/brands/` of the demarkus checkout; `plugin_name` is lowercase letters, digits, and hyphens, becomes the `/<plugin_name>:` command prefix, and may repeat across harnesses since each harness has its own marketplace; `memory_plugin_name` and `knowledge_plugin_name` name the sibling plugin on the same harness when you brand both surfaces; `store_noun` and `store_noun_plural` replace the word "soul" in the prompts; `mcp_server_key` (memory bases only) renames the MCP server as described above; `author` (`name` required, `url` optional), `homepage` and `repository` replace the manifest's identity fields, which otherwise keep the demarkus values (URLs must be absolute http(s)). Unknown fields are rejected.
 
 Rendering:
 
@@ -71,7 +74,7 @@ cd tools && go run ./plugin-prompts write --brands /path/to/brands.json \
          && go run ./plugin-prompts check --brands /path/to/brands.json
 ```
 
-`write` renders the prompts with your names, copies `hooks/` and `scripts/` plus the MCP config of a memory base from the base plugin, rewrites the name and description in the plugin manifest (`.claude-plugin/plugin.json` or `.cursor-plugin/plugin.json`; version and hooks untouched), and writes a README into each `output`. A base missing any of those files fails the render. Every directory under `plugins/brands/` is managed: `write` deletes files and directories no configured brand produces, including the whole directory of a brand removed from the file, and `check` reports them as drift. Both need the full checkout, since the copied files come from the base plugin.
+`write` renders the prompts with your names, copies `hooks/` and `scripts/` plus the MCP config of a memory base from the base plugin, rewrites the name, description and any set identity fields in the plugin manifest (`.claude-plugin/plugin.json` or `.cursor-plugin/plugin.json`; version and hooks untouched), and writes a README into each `output`. A base missing any of those files fails the render. Every directory under `plugins/brands/` is managed: `write` deletes files and directories no configured brand produces, including the whole directory of a brand removed from the file, and `check` reports them as drift. Both need the full checkout, since the copied files come from the base plugin.
 
 ## Publishing from your own repository
 

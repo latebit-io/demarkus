@@ -1,5 +1,5 @@
 ---
-description: Show the demarkus-memory plugin's connection state and verify it's healthy
+description: Show the {{.PluginName}} plugin's connection state and verify it's healthy
 ---
 
 Diagnose the plugin's setup: configured mode, {{.Store}} path, port, server process, installed binaries, connectivity.
@@ -42,7 +42,7 @@ Diagnose the plugin's setup: configured mode, {{.Store}} path, port, server proc
 5. **Render a compact status report.** Shape:
 
    ```text
-   ## demarkus-memory status
+   ## {{.PluginName}} status
 
    - **Mode:** <default | isolated | reuse>
    - **Memory:** <memory directory>

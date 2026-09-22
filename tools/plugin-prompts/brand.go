@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,6 +30,17 @@ type brand struct {
 	// MCPServerKey renames the memory MCP server (default "demarkus-memory"), so
 	// tools read mcp__plugin_<brand>_<key>__mark_*; mcp-serve --name tells the gates.
 	MCPServerKey string `json:"mcp_server_key"`
+	// Manifest identity; each replaces the base plugin.json field when set and
+	// keeps the base's when not.
+	Author     *brandAuthor `json:"author"`
+	Homepage   string       `json:"homepage"`
+	Repository string       `json:"repository"`
+}
+
+// brandAuthor is the plugin manifest's author object.
+type brandAuthor struct {
+	Name string `json:"name"`
+	URL  string `json:"url,omitempty"`
 }
 
 const defaultMCPServerKey = "demarkus-memory"
@@ -138,6 +150,9 @@ func validateBrands(spec *manifest) error {
 				return fmt.Errorf("brand %q: mcp_server_key must be lowercase letters, digits, and hyphens, other than %q", b.Name, defaultMCPServerKey)
 			}
 		}
+		if err := validateBrandIdentity(b); err != nil {
+			return fmt.Errorf("brand %q: %w", b.Name, err)
+		}
 		if !strings.HasPrefix(b.Output, brandOutputPrefix) || hasParentTraversal(b.Output) {
 			return fmt.Errorf("brand %q: output must live under %s", b.Name, brandOutputPrefix)
 		}
@@ -154,6 +169,34 @@ func validateBrands(spec *manifest) error {
 		names[b.Name] = struct{}{}
 		outputs[b.Output] = struct{}{}
 		pluginNames[pluginKey] = struct{}{}
+	}
+	return nil
+}
+
+// validateBrandIdentity checks the optional manifest identity fields.
+func validateBrandIdentity(b *brand) error {
+	if b.Author != nil {
+		if b.Author.Name == "" {
+			return errors.New("author.name is required when author is set")
+		}
+		if err := validateWebURL("author.url", b.Author.URL); err != nil {
+			return err
+		}
+	}
+	if err := validateWebURL("homepage", b.Homepage); err != nil {
+		return err
+	}
+	return validateWebURL("repository", b.Repository)
+}
+
+// validateWebURL accepts an empty value or an absolute http(s) URL.
+func validateWebURL(field, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%s %q must be an absolute http(s) URL", field, raw)
 	}
 	return nil
 }
@@ -238,7 +281,7 @@ func brandArtifacts(root string, b *brand, base, t *target) ([]artifact, error) 
 		out[i].Content = content
 	}
 	manifest := filepath.FromSlash(layout.Manifest)
-	pluginJSON, err := brandPluginJSON(filepath.Join(baseDir, manifest), base.PluginName, b)
+	pluginJSON, err := brandPluginJSON(filepath.Join(baseDir, manifest), b)
 	if err != nil {
 		return nil, fmt.Errorf("brand %s: %w", b.Name, err)
 	}
@@ -277,45 +320,157 @@ func brandMCPConfig(raw []byte, key string) ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
+// manifestField is one rewritable top-level entry of plugin.json. line matches
+// the whole entry, trailing comma and newline included, so a replacement or an
+// insertion keeps the hand-formatted file intact; key finds any spelling of it.
+type manifestField struct {
+	name string
+	key  *regexp.Regexp
+	line *regexp.Regexp
+}
+
+func scalarField(name string) manifestField {
+	return manifestField{
+		name: name,
+		key:  regexp.MustCompile(`(?m)^ {2}"` + name + `":`),
+		line: regexp.MustCompile(`(?m)^ {2}"` + name + `": "(?:[^"\\]|\\.)*",\n`),
+	}
+}
+
+func objectField(name string) manifestField {
+	return manifestField{
+		name: name,
+		key:  regexp.MustCompile(`(?m)^ {2}"` + name + `":`),
+		line: regexp.MustCompile(`(?m)^ {2}"` + name + `": \{\n(?: {4}.*\n)* {2}\},\n`),
+	}
+}
+
 var (
-	nameFieldRE = regexp.MustCompile(`(?m)^ {2}"name": "(?:[^"\\]|\\.)*",$`)
-	descFieldRE = regexp.MustCompile(`(?m)^ {2}"description": "(?:[^"\\]|\\.)*",$`)
+	nameField        = scalarField("name")
+	descriptionField = scalarField("description")
+	// Identity fields: a brand value replaces the base entry or, when the base
+	// lacks it, is inserted after the nearest present predecessor.
+	authorField     = objectField("author")
+	homepageField   = scalarField("homepage")
+	repositoryField = scalarField("repository")
 )
 
-// brandPluginJSON rewrites the base plugin.json's top-level name and
-// description in place, keeping every other field (hooks, version) verbatim.
-func brandPluginJSON(basePath, baseName string, b *brand) ([]byte, error) {
+// render returns the entry line for value, indented as a top-level field.
+func (f manifestField) render(value any) (string, error) {
+	encoded, err := json.MarshalIndent(value, "  ", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode %s: %w", f.name, err)
+	}
+	return `  "` + f.name + `": ` + string(encoded) + ",\n", nil
+}
+
+// replace rewrites the entry for f in text with value or, when the base has
+// none, inserts it after the last present anchor (canonical predecessors).
+func (f manifestField) replace(text string, value any, anchors []manifestField) (string, error) {
+	rendered, err := f.render(value)
+	if err != nil {
+		return "", err
+	}
+	switch keys, lines := len(f.key.FindAllStringIndex(text, -1)), len(f.line.FindAllStringIndex(text, -1)); {
+	case keys == 1 && lines == 1:
+		return f.line.ReplaceAllLiteralString(text, rendered), nil
+	case keys == 0:
+		at := -1
+		for _, anchor := range anchors {
+			if loc := anchor.line.FindStringIndex(text); loc != nil {
+				at = loc[1]
+			}
+		}
+		if at < 0 {
+			return "", fmt.Errorf("no entry to insert %s after", f.name)
+		}
+		return text[:at] + rendered + text[at:], nil
+	default:
+		return "", fmt.Errorf("top-level %s is not one single- or block-formatted entry", f.name)
+	}
+}
+
+// brandPluginJSON rewrites the base plugin.json in place: name and description
+// always, author/homepage/repository when the brand sets them; every other
+// field (hooks, version, license) stays verbatim.
+func brandPluginJSON(basePath string, b *brand) ([]byte, error) {
 	raw, err := os.ReadFile(basePath)
 	if err != nil {
 		return nil, err
 	}
 	text := string(raw)
-	if !nameFieldRE.MatchString(text) || !descFieldRE.MatchString(text) {
+	if !nameField.line.MatchString(text) || !descriptionField.line.MatchString(text) {
 		return nil, fmt.Errorf("%s: expected top-level name and description lines", basePath)
 	}
-	name, _ := json.Marshal(b.PluginName)
-	desc, _ := json.Marshal(b.Description)
-	text = nameFieldRE.ReplaceAllLiteralString(text, `  "name": `+string(name)+",")
-	text = descFieldRE.ReplaceAllLiteralString(text, `  "description": `+string(desc)+",")
-	if !json.Valid([]byte(text)) || !strings.Contains(text, string(name)) || strings.Contains(text, `"name": "`+baseName+`"`) {
-		return nil, fmt.Errorf("%s: branded plugin.json did not rewrite cleanly", basePath)
+	fields := []manifestField{nameField, descriptionField, authorField, homepageField, repositoryField}
+	values := []struct {
+		value any
+		set   bool
+	}{
+		{b.PluginName, true},
+		{b.Description, true},
+		{b.Author, b.Author != nil},
+		{b.Homepage, b.Homepage != ""},
+		{b.Repository, b.Repository != ""},
+	}
+	for i, v := range values {
+		if !v.set {
+			continue
+		}
+		if text, err = fields[i].replace(text, v.value, fields[:i]); err != nil {
+			return nil, fmt.Errorf("%s: %w", basePath, err)
+		}
+	}
+	if err := checkBrandedManifest([]byte(text), b); err != nil {
+		return nil, fmt.Errorf("%s: branded plugin.json did not rewrite cleanly: %w", basePath, err)
 	}
 	return []byte(text), nil
 }
 
+// checkBrandedManifest decodes the rewritten manifest and confirms every
+// field the brand sets reads back as its value.
+func checkBrandedManifest(raw []byte, b *brand) error {
+	var doc struct {
+		Name        string       `json:"name"`
+		Description string       `json:"description"`
+		Author      *brandAuthor `json:"author"`
+		Homepage    string       `json:"homepage"`
+		Repository  string       `json:"repository"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return err
+	}
+	switch {
+	case doc.Name != b.PluginName:
+		return fmt.Errorf("name is %q", doc.Name)
+	case doc.Description != b.Description:
+		return errors.New("description differs")
+	case b.Author != nil && (doc.Author == nil || *doc.Author != *b.Author):
+		return errors.New("author differs")
+	case b.Homepage != "" && doc.Homepage != b.Homepage:
+		return errors.New("homepage differs")
+	case b.Repository != "" && doc.Repository != b.Repository:
+		return errors.New("repository differs")
+	}
+	return nil
+}
+
 func brandReadme(b *brand, base, t *target) string {
+	shared := "the demarkus-plugin binary and the ~/.demarkus state"
+	if base.Surface == "memory" {
+		shared = fmt.Sprintf("the demarkus-plugin binary, the local memory (MCP server key %q), and the ~/.demarkus state", t.MCPServerKey)
+	}
 	return fmt.Sprintf(`# %s
 
 %s
 
 This plugin is generated from the %s plugin in the demarkus repository
 (source: %s). Prompts, hooks, and scripts are identical apart from the plugin
-name; it shares the demarkus-plugin binary, the local memory (MCP server key
-%q), and the ~/.demarkus state, so install it instead of, not alongside, %s.
+name; it shares %s, so install it instead of, not alongside, %s.
 
-Regenerate from a demarkus checkout after editing the templates, the base
-plugin, or the brand entry:
+Regenerate after editing the templates, the base plugin, or the brand entry,
+from the tools/ directory of a demarkus checkout:
 
-    cd tools && go run ./plugin-prompts write [--brands <file>]
-`, b.PluginName, b.Description, base.PluginName, base.Output, t.MCPServerKey, base.PluginName)
+    go run ./plugin-prompts write [--brands <file>]
+`, b.PluginName, b.Description, base.PluginName, base.Output, shared, base.PluginName)
 }

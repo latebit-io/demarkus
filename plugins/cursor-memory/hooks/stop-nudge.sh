@@ -22,7 +22,7 @@ memory_write=false; [[ -e "${dir}/memory-write" ]] && memory_write=true
 status=0
 out="$("${BIN}" nudge --event session-end --changed-files="${changed}" --memory-write="${memory_write}" --format cursor < /dev/null)" || status=$?
 if [[ "${status}" -ne 0 ]]; then
-  echo "[demarkus-memory] session-end nudge failed (exit ${status}); skipping" >&2
+  echo "[demarkus] session-end nudge failed (exit ${status}); skipping" >&2
   exit 0
 fi
 if [[ -n "${out}" ]]; then

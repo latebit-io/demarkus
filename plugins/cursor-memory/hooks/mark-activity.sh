@@ -10,7 +10,7 @@ cid="$(field conversation_id)"
 [[ -n "${cid}" ]] || exit 0
 dir="${TMPDIR:-/tmp}/demarkus-memory-cursor-${cid//[^A-Za-z0-9_-]/_}"
 mark() {
-  mkdir -p "${dir}" && : > "${dir}/$1" || echo "[demarkus-memory] could not record the $1 sentinel in ${dir}; the stop nudge may miss it" >&2
+  mkdir -p "${dir}" && : > "${dir}/$1" || echo "[demarkus] could not record the $1 sentinel in ${dir}; the stop nudge may miss it" >&2
 }
 case "$(field hook_event_name)" in
   afterFileEdit) mark changed ;;
@@ -19,6 +19,6 @@ case "$(field hook_event_name)" in
       *mark_publish|*mark_append) mark memory-write ;;
     esac ;;
   sessionEnd)
-    rm -rf "${dir}" || echo "[demarkus-memory] could not clear ${dir}; stale sentinels may linger" >&2 ;;
+    rm -rf "${dir}" || echo "[demarkus] could not clear ${dir}; stale sentinels may linger" >&2 ;;
 esac
 exit 0

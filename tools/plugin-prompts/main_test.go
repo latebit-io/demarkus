@@ -464,7 +464,7 @@ func TestBrandPluginJSONRewritesNameAndDescription(t *testing.T) {
 	if err := os.WriteFile(basePath, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := brandPluginJSON(basePath, "demarkus-memory", &brand{PluginName: "acme-brain", Description: "Acme \"brain\""})
+	got, err := brandPluginJSON(basePath, &brand{PluginName: "acme-brain", Description: "Acme \"brain\""})
 	if err != nil {
 		t.Fatal(err)
 	}

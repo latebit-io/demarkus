@@ -7,6 +7,6 @@ set -uo pipefail
 BIN="${HOME}/.demarkus/bin/demarkus-plugin"
 [ -x "${BIN}" ] || exit 0
 "${BIN}" nudge --event session-end --format claude || {
-  echo "[demarkus-memory] session-end nudge failed (exit $?); skipping" >&2
+  echo "[demarkus] session-end nudge failed (exit $?); skipping" >&2
 }
 exit 0
