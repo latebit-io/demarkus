@@ -406,8 +406,15 @@ func mcpRequest(t *testing.T, base, bearer, sessionID string, body map[string]an
 	if err != nil {
 		t.Fatalf("POST /mcp: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	rawBody, _ := io.ReadAll(resp.Body)
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	}()
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
 	out := mcpResponse{
 		HTTPStatus: resp.StatusCode,
 		RawBody:    rawBody,
