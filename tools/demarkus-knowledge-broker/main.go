@@ -36,7 +36,7 @@ func main() {
 	err := broker.Run(*configPath, &broker.RunOptions{
 		LogName:        "broker",
 		Realm:          "demarkus-knowledge-broker",
-		Profile:        broker.KnowledgeGatewayProfile(),
+		Profile:        broker.KnowledgeProfile(),
 		Version:        version,
 		KubeconfigPath: *kubeconfig,
 	}, log)

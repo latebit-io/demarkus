@@ -1,0 +1,195 @@
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/latebit-io/demarkus/tools/internal/broker/core"
+	"github.com/latebit-io/demarkus/tools/internal/token"
+)
+
+// worldWriteTokenLabel names the broker's entry in a world's tokens.toml.
+// Stable, so re-provisioning hits the same entry instead of piling up dead ones.
+func worldWriteTokenLabel(worldName string) string {
+	return "broker-write-" + worldName
+}
+
+// writeTokenRecord is the JSON shape persisted in the broker's
+// per-world write-token Secret. The raw token is at rest here so
+// any broker pod can recover it and dispatch writes consistently;
+// the world Secret only ever sees the hash (Entry.Hash).
+type writeTokenRecord struct {
+	Label    string      `json:"label"`
+	RawToken string      `json:"rawToken"`
+	Entry    token.Entry `json:"entry"`
+}
+
+// WorldWriteTokenStore provisions and caches one long lived write token per
+// world: the hash goes into the world's tokens.toml, the raw token into a
+// per world broker Secret so every pod converges on the same value.
+type WorldWriteTokenStore struct {
+	cfg   *core.Config
+	store core.SecretStore
+	clock func() time.Time
+
+	mu    sync.Mutex
+	cache map[string]string // worldName → raw token
+}
+
+func newWorldWriteTokenStore(cfg *core.Config, store core.SecretStore) *WorldWriteTokenStore {
+	s := &WorldWriteTokenStore{
+		cfg:   cfg,
+		store: store,
+		clock: time.Now,
+		cache: make(map[string]string),
+	}
+	// A dropped world's token record is deleted with it; the cached copy is stale.
+	cfg.Registry().OnDrop(s.Invalidate)
+	return s
+}
+
+// Get returns the cached raw write token for worldName, or ok=false
+// if this broker pod has not provisioned the world yet. Callers
+// that need the token MUST fall through to Provision on miss —
+// Get is a fast-path read for hot dispatch loops.
+func (s *WorldWriteTokenStore) Get(worldName string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tok, ok := s.cache[worldName]
+	return tok, ok
+}
+
+// Invalidate drops the cached token so the next Provision re-reads the
+// broker Secret and reconciles the world's tokens.toml (syncWorldHash).
+// Called on 401: the world's tokens Secret may have been reset or rotated.
+func (s *WorldWriteTokenStore) Invalidate(worldName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.cache, worldName)
+}
+
+// Provision returns the raw write token for worldName, minting and
+// persisting one if no broker pod has done it yet. Idempotent and
+// safe across concurrent broker pods: the broker-namespace
+// per-world Secret holds the canonical record, and mutateSecret's
+// resourceVersion-based optimistic concurrency converges
+// concurrent provisioners on the first commit's token.
+//
+// After the broker Secret holds a token, Provision ensures the
+// world's tokens.toml has the matching hash under the stable
+// label. The world write is idempotent for the same label+hash
+// pair, so a re-provision after a partial failure converges
+// without leaving an orphan entry.
+func (s *WorldWriteTokenStore) Provision(ctx context.Context, worldName string) (string, error) {
+	if tok, ok := s.Get(worldName); ok {
+		return tok, nil
+	}
+	world := core.LookupWorld(s.cfg.Registry(), worldName)
+	if world == nil {
+		// The WorldPool's sentinel, so federation and graph treat an
+		// unknown world the same at dispatch and at provision.
+		return "", &errWorldNotFound{worldName: worldName}
+	}
+
+	label := worldWriteTokenLabel(worldName)
+
+	// Invariant: concurrent provisioners converge on the first committed
+	// token; the closure returns existing data unchanged when present.
+	var finalRecord writeTokenRecord
+	err := s.store.Mutate(ctx, core.WorldWriteTokenRef(s.cfg, worldName), func(existing []byte) ([]byte, error) {
+		if len(existing) > 0 {
+			if err := json.Unmarshal(existing, &finalRecord); err != nil {
+				return nil, fmt.Errorf("decode write token record: %w", err)
+			}
+			return existing, nil
+		}
+		// "publish" only, and not configurable: it covers every write verb, and a
+		// stray "read" would switch on the server's read auth (AuthorizeRead) for
+		// every path this token matches, breaking open reads. Paths stay configurable.
+		minted, mErr := token.Generate(label, world.DefaultToken.Paths, []string{"publish"})
+		if mErr != nil {
+			return nil, fmt.Errorf("generate write token: %w", mErr)
+		}
+		// Long-lived: explicitly leave Expires empty. The world's
+		// tokens.toml treats an empty Expires as "no expiry" which
+		// is the contract this design depends on.
+		minted.Entry.Expires = ""
+		finalRecord = writeTokenRecord{Label: label, RawToken: minted.Raw, Entry: minted.Entry}
+		encoded, encErr := json.Marshal(finalRecord)
+		if encErr != nil {
+			return nil, fmt.Errorf("encode write token record: %w", encErr)
+		}
+		return encoded, nil
+	})
+	if err != nil {
+		return "", err
+	}
+
+	// Sync the world's tokens.toml with the canonical entry.
+	// AppendBytes returns ErrLabelExists when the label is already
+	// present, which is the steady-state on re-provision — treat
+	// it as success since the existing hash matches our raw token.
+	if syncErr := s.syncWorldHash(ctx, world, finalRecord.Label, &finalRecord.Entry); syncErr != nil {
+		return "", syncErr
+	}
+
+	s.mu.Lock()
+	s.cache[worldName] = finalRecord.RawToken
+	s.mu.Unlock()
+	return finalRecord.RawToken, nil
+}
+
+// syncWorldHash brings the world's tokens.toml in line with the
+// broker's canonical write-token entry under the stable label.
+// Idempotent for the matching-hash case (the typical state after
+// the first provision); reconciling for the mismatched-hash case
+// (the broker Secret was recreated under us while the world Secret
+// retained the old `broker-write-*` entry). Without the hash check
+// the latter case would silently cache a token the world will
+// never authorize and every write would burn the propagation-race
+// budget pretending kubelet was lagging.
+func (s *WorldWriteTokenStore) syncWorldHash(ctx context.Context, world *core.WorldConfig, label string, entry *token.Entry) error {
+	return s.store.Mutate(ctx, core.WorldTokensRef(world), func(existing []byte) ([]byte, error) {
+		next, err := token.AppendBytes(existing, label, entry)
+		if err == nil {
+			return next, nil
+		}
+		if !errors.Is(err, token.ErrLabelExists) {
+			return nil, err
+		}
+		// Label already present. Compare on-disk hash to decide
+		// whether this is the steady-state no-op or a stale entry
+		// we need to rewrite.
+		current, parseErr := token.ParseBytes(existing)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse existing tokens.toml: %w", parseErr)
+		}
+		existingEntry, ok := current.Tokens[label]
+		if !ok {
+			// AppendBytes claims the label exists but ParseBytes
+			// disagrees. Shouldn't be reachable since both share
+			// the same TOML decoder; surface as an error rather
+			// than overwrite — the right next step is diagnosing
+			// the divergence, not papering over it.
+			return nil, fmt.Errorf("syncWorldHash: AppendBytes reported %q exists but ParseBytes did not find it", label)
+		}
+		if existingEntry.Hash == entry.Hash {
+			return existing, nil
+		}
+		// Hash drift: replace the stale entry so the world
+		// recognizes the broker's current canonical token.
+		stripped, removeErr := token.RemoveBytes(existing, label)
+		if removeErr != nil {
+			return nil, fmt.Errorf("remove stale tokens.toml entry %q: %w", label, removeErr)
+		}
+		rewritten, appendErr := token.AppendBytes(stripped, label, entry)
+		if appendErr != nil {
+			return nil, fmt.Errorf("rewrite tokens.toml entry %q: %w", label, appendErr)
+		}
+		return rewritten, nil
+	})
+}

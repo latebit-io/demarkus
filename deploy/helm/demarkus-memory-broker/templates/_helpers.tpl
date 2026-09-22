@@ -75,7 +75,7 @@ Names for the chart-managed Secrets.
 Per-world write-token Secret name. The broker provisions one of
 these lazily on the first write to each world (see
 worldWriteTokenStore.Provision in
-tools/internal/broker/world_write_tokens.go). The
+tools/internal/broker/gateway/world_write_tokens.go). The
 prefix is hardcoded in the Go side — keep this helper byte-for-byte
 in sync; a drift here surfaces at runtime as a "forbidden" on the
 broker's first write attempt and is exactly the kind of silent

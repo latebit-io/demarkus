@@ -209,7 +209,7 @@ oidc:
   # Keying on `hd` (not the email domain) is the spoof-resistant
   # choice: `hd` is set by Google from the Workspace tenant binding
   # and the user cannot influence it. See
-  # /tools/internal/broker/authz.go `oidcDomainAllowed`.
+  # /tools/internal/broker/core/authz.go `OIDCDomainAllowed`.
   #
   # Entries are lowercased+trimmed at broker startup. Set multiple
   # to admit more than one org (Google's `hd` query param does not

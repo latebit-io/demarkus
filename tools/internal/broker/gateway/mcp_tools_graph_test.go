@@ -1,0 +1,938 @@
+package gateway
+
+import (
+	"context"
+	"net/http"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
+	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/tools/internal/broker/brokertest"
+	"github.com/latebit-io/demarkus/tools/internal/broker/core"
+)
+
+// crawlBody helps tests script doc bodies the graph crawler will
+// follow links from. Returns markdown with a title + a list of
+// links, matching what the links package extracts.
+func crawlBody(title string, dests ...string) string {
+	var b strings.Builder
+	if title != "" {
+		b.WriteString("# " + title + "\n\n")
+	}
+	for _, d := range dests {
+		b.WriteString("- [link](" + d + ")\n")
+	}
+	return b.String()
+}
+
+func TestHandleMarkBacklinksEmptyStoreHintsAtMarkGraph(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
+	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
+		"url": "mark://team-a/foo.md",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkBacklinks: %v", err)
+	}
+	if res.IsError {
+		t.Errorf("isError = true on empty store (should be a textual hint, not an error): %s", toolResultText(t, res))
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{"No backlinks", "mark_graph", "ephemeral"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("hint text missing %q\nfull:\n%s", want, text)
+		}
+	}
+}
+
+func TestKnowledgeGraphPreservesCrossWorldSources(t *testing.T) {
+	d := seededDispatcher()
+	d.Published["bob-w/source.md"] = fetch.Result{Response: protocol.Response{
+		Status: protocol.StatusOK, Body: "# Shared source\n[reference](mark://alice-w/index.md)",
+	}}
+	g := newGatewayWithDispatcher(t, brokertest.NewMemoryConfig(), d)
+	ctx := withAliceClaims(t.Context())
+	res, err := g.handleMarkGraph(ctx, callToolReq("mark_graph", map[string]any{"url": "mark://bob-w/source.md"}))
+	if err != nil || res == nil || res.IsError {
+		t.Fatalf("cross-world crawl: err=%v result=%v", err, res)
+	}
+	for _, tool := range []string{"mark_backlinks", "mark_explore", "mark_graph_export"} {
+		res, err := g.toolHandlers()[tool](ctx, callToolReq(tool, map[string]any{"url": "mark://alice-w/index.md"}))
+		if err != nil || res == nil || res.IsError {
+			t.Fatalf("%s: err=%v result=%v", tool, err, res)
+		}
+		if text := toolResultText(t, res); !strings.Contains(text, "bob-w/source.md") || !strings.Contains(text, "Shared source") {
+			t.Errorf("%s lost authorized cross-world source: %s", tool, text)
+		}
+	}
+}
+
+func TestHandleMarkBacklinksMissingURL(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
+	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", nil))
+	if err != nil {
+		t.Fatalf("handleMarkBacklinks: %v", err)
+	}
+	if !res.IsError {
+		t.Error("isError = false on missing url, want true")
+	}
+}
+
+func TestHandleMarkBacklinksInvalidURL(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
+	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
+		"url": "https://wrong-scheme/foo",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkBacklinks: %v", err)
+	}
+	if !res.IsError {
+		t.Error("isError = false on https:// URL, want true")
+	}
+}
+
+// TestHandleMarkBacklinksAfterCrawlReturnsLinkedDocs runs a real
+// crawl through mark_graph, then queries backlinks on a doc the
+// crawl discovered — exercises the full graph store path:
+// CrawlAndPersist writes to the broker's ephemeral store,
+// BacklinksEnriched reads it.
+func TestHandleMarkBacklinksAfterCrawlReturnsLinkedDocs(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
+			switch path {
+			case "/index.md":
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody("Index", "/about.md", "/contact.md"),
+				}}, nil
+			case "/about.md", "/contact.md":
+				// Both link back to /index.md — that's the
+				// backlink the test asserts on.
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody(strings.TrimPrefix(path, "/"), "/index.md"),
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	ctx := withAliceClaims(context.Background())
+
+	// Populate the ephemeral store.
+	if res, err := g.handleMarkGraph(ctx, callToolReq("mark_graph", map[string]any{
+		"url": "mark://team-a/index.md",
+	})); err != nil || res.IsError {
+		t.Fatalf("mark_graph: err=%v isError=%v text=%s", err, res.IsError, toolResultText(t, res))
+	}
+
+	// Query backlinks for /index.md — should find /about.md
+	// and /contact.md.
+	res, err := g.handleMarkBacklinks(ctx, callToolReq("mark_backlinks", map[string]any{
+		"url": "mark://team-a/index.md",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkBacklinks: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("backlinks isError after crawl: %s", toolResultText(t, res))
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{"about.md", "contact.md", "Backlinks for mark://team-a/index.md"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("backlinks text missing %q\nfull:\n%s", want, text)
+		}
+	}
+}
+
+// TestEphemeralGraphStoreResetsAcrossGatewayInstances pins the ephemeral
+// design: a new Gateway starts with an empty store, as a pod restart does.
+func TestEphemeralGraphStoreResetsAcrossGatewayInstances(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status: protocol.StatusOK,
+				Body:   crawlBody("only", "/other.md"),
+			}}, nil
+		},
+	}
+
+	g1 := newGatewayWithDispatcher(t, cfg, d)
+	if res, err := g1.handleMarkGraph(withAliceClaims(context.Background()), callToolReq("mark_graph", map[string]any{
+		"url": "mark://team-a/seed.md",
+	})); err != nil || res.IsError {
+		t.Fatalf("first crawl: %v %v", err, res.IsError)
+	}
+	if g1.knowledgeGraph.graphStore.NodeCount() == 0 {
+		t.Fatal("first crawl produced an empty graph; cannot exercise the reset property")
+	}
+
+	// Fresh gateway — simulates a broker pod restart. Even
+	// using the SAME server config, the new Gateway
+	// instance must have an empty graph store.
+	g2 := newGatewayWithDispatcher(t, cfg, d)
+	if got := g2.knowledgeGraph.graphStore.NodeCount(); got != 0 {
+		t.Errorf("new gateway's graph store has %d nodes, want 0 (ephemeral semantics broken)", got)
+	}
+
+	// Backlinks query on the new gateway returns the empty
+	// hint, NOT the result from the previous gateway.
+	res, err := g2.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
+		"url": "mark://team-a/seed.md",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("second-gateway backlinks: %v %v", err, res.IsError)
+	}
+	if !strings.Contains(toolResultText(t, res), "No backlinks") {
+		t.Errorf("expected empty-store hint after restart; got:\n%s", toolResultText(t, res))
+	}
+}
+
+func TestHandleMarkGraphMissingURL(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
+	res, err := g.handleMarkGraph(withAliceClaims(context.Background()), callToolReq("mark_graph", nil))
+	if err != nil {
+		t.Fatalf("handleMarkGraph: %v", err)
+	}
+	if !res.IsError {
+		t.Error("isError = false on missing url, want true")
+	}
+}
+
+func TestHandleMarkGraphDepthClamping(t *testing.T) {
+	// Plan: depth clamps to [1, 5]. depth=0 clamps to 1 (only
+	// the seed + its direct neighbors crawl); depth=99 clamps to
+	// 5 (the deeper graph crawls). Multi-hop graph is required
+	// to actually observe the clamp — without it, the test
+	// would pass even if depth were silently ignored.
+	//
+	// Graph shape: seed.md → child.md → grandchild.md →
+	//              greatgrandchild.md
+	// depth=1 reaches seed + child (2 crawled nodes, 1 edge).
+	// depth=5 reaches everything (4 crawled nodes, 3 edges).
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
+			switch path {
+			case "/seed.md":
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody("seed", "/child.md"),
+				}}, nil
+			case "/child.md":
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody("child", "/grandchild.md"),
+				}}, nil
+			case "/grandchild.md":
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody("grandchild", "/greatgrandchild.md"),
+				}}, nil
+			case "/greatgrandchild.md":
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody("greatgrandchild"),
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+	}
+
+	// depth=0 clamps to 1 — seed + its direct neighbors crawl.
+	// The crawler records EDGES to deeper targets (child → grandchild)
+	// even though grandchild itself is never fetched, so a
+	// string-presence test on the output is misleading. The
+	// load-bearing property is node count: how many docs did we
+	// actually fetch and walk into the graph store?
+	gShallow := newGatewayWithDispatcher(t, cfg, d)
+	if shallowRes, sherr := gShallow.handleMarkGraph(withAliceClaims(context.Background()), callToolReq("mark_graph", map[string]any{
+		"url":   "mark://team-a/seed.md",
+		"depth": float64(0),
+	})); sherr != nil || shallowRes.IsError {
+		t.Fatalf("shallow crawl: err=%v isError=%v", sherr, shallowRes.IsError)
+	}
+
+	// depth=99 clamps to 5 — full 4-node chain crawls.
+	gDeep := newGatewayWithDispatcher(t, cfg, d)
+	if deepRes, dherr := gDeep.handleMarkGraph(withAliceClaims(context.Background()), callToolReq("mark_graph", map[string]any{
+		"url":   "mark://team-a/seed.md",
+		"depth": float64(99),
+	})); dherr != nil || deepRes.IsError {
+		t.Fatalf("deep crawl: err=%v isError=%v", dherr, deepRes.IsError)
+	}
+
+	// The crawler creates nodes for every URL it touches, whether
+	// it fetches them or just records them as edge destinations.
+	// graph.Crawl with MaxDepth=N enqueues children of depth-(N-1)
+	// nodes but doesn't enqueue deeper. So:
+	//   shallow (MaxDepth=1): seed (depth 0) crawls; child (depth 1)
+	//   added as a node but not enqueued. → 2 nodes total.
+	//   deep (MaxDepth=5):   all 4 of the chain crawl, plus the
+	//   greatgrandchild's "no link" body adds no extras. → 4 nodes.
+	//
+	// If depth were silently ignored both gateways would produce
+	// the same NodeCount (likely the deep count since the full
+	// chain would be reachable). The strict inequality is what
+	// pins the clamp behavior.
+	if gShallow.knowledgeGraph.graphStore.NodeCount() == gDeep.knowledgeGraph.graphStore.NodeCount() {
+		t.Errorf("shallow node count (%d) == deep node count (%d) — depth not producing different traversal scopes",
+			gShallow.knowledgeGraph.graphStore.NodeCount(), gDeep.knowledgeGraph.graphStore.NodeCount())
+	}
+	if gShallow.knowledgeGraph.graphStore.NodeCount() >= gDeep.knowledgeGraph.graphStore.NodeCount() {
+		t.Errorf("shallow node count (%d) should be < deep node count (%d)",
+			gShallow.knowledgeGraph.graphStore.NodeCount(), gDeep.knowledgeGraph.graphStore.NodeCount())
+	}
+}
+
+// TestHandleMarkIndexBoundsOnDirectoryCycle pins the cycle-
+// detection guard in walkIndexDir. PR #149 review surfaced the
+// DoS shape: a LIST that links a subdirectory back to its
+// ancestor would have recursed forever before this fix.
+// maxIndexDocuments caps file appends but not the directory
+// traversal itself, so without visited-set protection an
+// adversarial (or buggy) world could pin the broker on a
+// single index call.
+func TestHandleMarkIndexBoundsOnDirectoryCycle(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
+		Name:         "hub",
+		Namespace:    "hub",
+		TokensSecret: "hub-tokens",
+		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		DefaultToken: core.TokenScope{
+			Paths: []string{"/**"},
+		},
+	})
+	var listCalls atomic.Int32
+	d := &fakeDispatcher{
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
+			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   indexManifestBody,
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+		ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
+			n := listCalls.Add(1)
+			// Sanity cap: if the fix is broken, this will fire
+			// thousands of times before any test timeout. Fail
+			// loud at 100 LIST calls so the test fails in
+			// seconds rather than hanging.
+			if n > 100 {
+				t.Errorf("walkIndexDir called LIST %d times on a cyclic graph — cycle detection regressed", n)
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+			}
+			// Pathological LIST body: a subdirectory link that
+			// points back to the parent. Without cycle
+			// detection this would recurse indefinitely.
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"entries": "2", "complete": "true"},
+				Body:     "- [self](./)\n- [parent](../)\n",
+			}}, nil
+		},
+		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "1"},
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
+		"source": "mark://team-a/",
+		"target": "mark://hub/index.md",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkIndex: %v", err)
+	}
+	if res.IsError {
+		// Acceptable if the cycle scenario produces an error
+		// envelope, as long as we didn't recurse indefinitely.
+		// What's NOT acceptable is a hang or runaway LIST count.
+		t.Logf("index returned tool error (acceptable for cycle scenario): %s", toolResultText(t, res))
+	}
+	// Two source LISTs are reasonable: one for the initial
+	// dirPath, plus possibly the "./" entry recursing once into
+	// the canonicalized same path (which then dedupes). The
+	// "../" entry should be rejected by the path-escape guard
+	// without ever LIST-ing. The sanity cap above catches any
+	// regression that lets recursion run free.
+	if n := listCalls.Load(); n > 5 {
+		t.Errorf("LIST called %d times on a cyclic source — cycle/escape guard not bounding recursion tightly enough", n)
+	}
+}
+
+func TestHandleMarkGraphExportEmptyStore(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
+	res, err := g.handleMarkGraphExport(withAliceClaims(context.Background()), callToolReq("mark_graph_export", nil))
+	if err != nil {
+		t.Fatalf("handleMarkGraphExport: %v", err)
+	}
+	if res.IsError {
+		t.Errorf("export on empty store should not be an error: %s", toolResultText(t, res))
+	}
+	// Empty store still produces a valid markdown export
+	// (likely a header + zero rows). Just assert non-empty
+	// output exists.
+	if toolResultText(t, res) == "" {
+		t.Error("empty-store export produced empty output")
+	}
+}
+
+func TestHandleMarkGraphExportAfterCrawlIncludesCrawledNodes(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
+			switch path {
+			case "/a.md":
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody("a", "/b.md"),
+				}}, nil
+			case "/b.md":
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   crawlBody("b"),
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	if res, err := g.handleMarkGraph(withAliceClaims(context.Background()), callToolReq("mark_graph", map[string]any{
+		"url": "mark://team-a/a.md",
+	})); err != nil || res.IsError {
+		t.Fatalf("seed crawl: %v %v", err, res.IsError)
+	}
+	res, err := g.handleMarkGraphExport(withAliceClaims(context.Background()), callToolReq("mark_graph_export", nil))
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{"a.md", "b.md"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("export missing %q\nfull:\n%s", want, text)
+		}
+	}
+}
+
+func TestHandleMarkGraphPublishMissingArgs(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
+	res, err := g.handleMarkGraphPublish(withAliceClaims(context.Background()), callToolReq("mark_graph_publish", map[string]any{
+		"url": "mark://team-a/graph.md",
+		// expected_version intentionally missing
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkGraphPublish: %v", err)
+	}
+	if !res.IsError {
+		t.Error("isError = false on missing expected_version, want true")
+	}
+}
+
+func TestHandleMarkGraphPublishForwardsThroughWriteAuth(t *testing.T) {
+	cfg := mcpTestConfig()
+	var publishedBody string
+	d := &fakeDispatcher{
+		PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+			body, token := r.Body, r.Token
+			publishedBody = body
+			if token == "" {
+				t.Error("graph publish dispatched without a publish token")
+			}
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "1", "modified": "2026-05-22T10:00:00Z"},
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkGraphPublish(withAliceClaims(context.Background()), callToolReq("mark_graph_publish", map[string]any{
+		"url":              "mark://team-a/graph.md",
+		"expected_version": float64(0),
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkGraphPublish: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true: %s", toolResultText(t, res))
+	}
+	if publishedBody == "" {
+		t.Error("dispatcher saw empty body — graph publish should forward graphstore.Export() output")
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{"Published graph", "status: ok", "version: 1"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("response missing %q\nfull:\n%s", want, text)
+		}
+	}
+}
+
+// indexManifestBody builds a minimal agent manifest the dispatcher
+// can return when the test wants to satisfy the manifest check.
+const indexManifestBody = "# Agent Manifest\n\nThis world accepts index publications.\n"
+
+func TestHandleMarkIndexHappyPath(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Server.MCP.FirstMintMaxAttempts = 3
+	cfg.Server.MCP.FirstMintInitialBackoff = time.Nanosecond
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
+		Name:         "hub",
+		Namespace:    "hub",
+		TokensSecret: "hub-tokens",
+		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		DefaultToken: core.TokenScope{
+			Paths: []string{"/**"},
+		},
+	})
+	var publishCalled atomic.Bool
+	var publishAttempts atomic.Int32
+	d := &fakeDispatcher{
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path, token := r.Path, r.Token
+			if token != "" {
+				t.Errorf("index helper fetch %q used token %q, want public read", path, token)
+			}
+			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   indexManifestBody,
+				}}, nil
+			}
+			if path == "/bar.md" || path == "/foo.md" {
+				hashChar := "a"
+				if path == "/bar.md" {
+					hashChar = "b"
+				}
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Metadata: map[string]string{
+						"content-hash": "sha256-" + strings.Repeat(hashChar, 64),
+					},
+					Body: "doc body",
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+		ListFn: func(_ context.Context, r fetch.ListRequest) (fetch.Result, error) {
+			path, token := r.Path, r.Token
+			if token != "" {
+				t.Errorf("index helper list %q used token %q, want public read", path, token)
+			}
+			if path == "/" {
+				switch r.Cursor {
+				case "":
+					return fetchtest.ListPage("/", "next", "bar.md"), nil
+				case "next":
+					return fetchtest.ListPage("/", "", "foo.md"), nil
+				}
+				t.Fatalf("unexpected LIST cursor %q", r.Cursor)
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+		PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+			token := r.Token
+			publishCalled.Store(true)
+			if token == "" {
+				t.Error("index publish dispatched without a publish token")
+			}
+			if publishAttempts.Add(1) == 1 {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "1", "modified": "2026-05-22T11:00:00Z"},
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
+		"source": "mark://team-a/",
+		"target": "mark://hub/index.md",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkIndex: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true: %s", toolResultText(t, res))
+	}
+	if !publishCalled.Load() {
+		t.Error("publish was not called; expected the index doc to be written to target")
+	}
+	d.Lock()
+	publishCalls := slices.Clone(d.PublishCalls)
+	d.Unlock()
+	if len(publishCalls) != 4 {
+		t.Fatalf("publish calls = %d, want rejected shard + two shards + manifest", len(publishCalls))
+	}
+	if publishCalls[3].Path != "/index.md" {
+		t.Fatalf("last publish path = %q, want manifest /index.md", publishCalls[3].Path)
+	}
+	for i, call := range publishCalls {
+		if call.ExpectedVersion != 0 {
+			t.Errorf("publish call %d expected_version = %d, want 0", i, call.ExpectedVersion)
+		}
+	}
+	text := toolResultText(t, res)
+	if !strings.Contains(text, "Indexed 2 documents") {
+		t.Errorf("expected indexed-count line, got:\n%s", text)
+	}
+}
+
+func TestHandleMarkIndexBlocksWhenTargetHasNoManifest(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
+		Name:         "hub",
+		Namespace:    "hub",
+		TokensSecret: "hub-tokens",
+		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		DefaultToken: core.TokenScope{
+			Paths: []string{"/**"},
+		},
+	})
+	d := &fakeDispatcher{
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
+			// All manifest fetches return not-found.
+			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
+		"source": "mark://team-a/",
+		"target": "mark://hub/index.md",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkIndex: %v", err)
+	}
+	if !res.IsError {
+		t.Error("expected manifest-block tool error when target has no manifest")
+	}
+	text := toolResultText(t, res)
+	if !strings.Contains(text, "no agent manifest") {
+		t.Errorf("expected manifest message; got:\n%s", text)
+	}
+}
+
+func TestHandleMarkIndexForceOverridesManifestBlock(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
+		Name:         "hub",
+		Namespace:    "hub",
+		TokensSecret: "hub-tokens",
+		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		DefaultToken: core.TokenScope{
+			Paths: []string{"/**"},
+		},
+	})
+	var publishCalled atomic.Bool
+	d := &fakeDispatcher{
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
+			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+		ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
+			return fetchtest.ListPage("/", ""), nil
+		},
+		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+			publishCalled.Store(true)
+			return fetch.Result{Response: protocol.Response{
+				Status:   protocol.StatusOK,
+				Metadata: map[string]string{"version": "1"},
+			}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
+		"source": "mark://team-a/",
+		"target": "mark://hub/index.md",
+		"force":  true,
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkIndex: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("force=true should have bypassed the manifest block: %s", toolResultText(t, res))
+	}
+	if !publishCalled.Load() {
+		t.Error("force=true should still publish")
+	}
+	text := toolResultText(t, res)
+	if !strings.Contains(text, "force=true override") {
+		t.Errorf("expected force-override warning; got:\n%s", text)
+	}
+}
+
+func TestHandleMarkIndexDryRunReturnsBodyWithoutPublishing(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
+		Name:         "hub",
+		Namespace:    "hub",
+		TokensSecret: "hub-tokens",
+		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		DefaultToken: core.TokenScope{
+			Paths: []string{"/**"},
+		},
+	})
+	var publishCalled atomic.Bool
+	d := &fakeDispatcher{
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			path := r.Path
+			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
+				return fetch.Result{Response: protocol.Response{
+					Status: protocol.StatusOK,
+					Body:   indexManifestBody,
+				}}, nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+		ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
+			return fetchtest.ListPage("/", ""), nil
+		},
+		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+			publishCalled.Store(true)
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
+		"source":  "mark://team-a/",
+		"target":  "mark://hub/index.md",
+		"dry_run": true,
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkIndex: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError = true: %s", toolResultText(t, res))
+	}
+	if publishCalled.Load() {
+		t.Error("dry_run should NOT publish")
+	}
+	text := toolResultText(t, res)
+	if !strings.Contains(text, "dry run") {
+		t.Errorf("expected dry-run marker in output; got:\n%s", text)
+	}
+}
+
+func TestHandleMarkIndexNegativeExpectedVersion(t *testing.T) {
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
+	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
+		"source":           "mark://team-a/",
+		"target":           "mark://team-a/index.md",
+		"expected_version": float64(-1),
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkIndex: %v", err)
+	}
+	if !res.IsError {
+		t.Error("isError = false on negative expected_version, want true")
+	}
+}
+
+// TestMCPGatewayMarkGraphEndToEnd drives mark_graph through the
+// full Streamable HTTP transport. One end-to-end test per slice
+// pins the wire-shape contract; the unit tests above cover the
+// dispatch logic with finer granularity.
+func TestMCPGatewayMarkGraphEndToEnd(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{
+				Status: protocol.StatusOK,
+				Body:   crawlBody("seed", "/other.md"),
+			}}, nil
+		},
+	}
+	ts := newTestMCPGatewayWith(t, cfg, &brokertest.FakeVerifier{Claims: brokertest.AliceClaims()}, d)
+
+	initR := mcpRequest(t, ts.URL, "alice-token", "", initializeRequest(1))
+	if initR.HTTPStatus != http.StatusOK {
+		t.Fatalf("initialize: status = %d", initR.HTTPStatus)
+	}
+	sessionID := initR.Headers[mcpSessionHeader]
+	if sessionID == "" {
+		t.Fatalf("initialize response missing %s header — session negotiation regressed", mcpSessionHeader)
+	}
+
+	resp := mcpRequest(t, ts.URL, "alice-token", sessionID, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "mark_graph",
+			"arguments": map[string]any{
+				"url": "mark://team-a/seed.md",
+			},
+		},
+	})
+	if resp.HTTPStatus != http.StatusOK {
+		t.Fatalf("tools/call: status = %d, body = %s", resp.HTTPStatus, resp.RawBody)
+	}
+	if resp.Error != nil {
+		t.Fatalf("tools/call JSON-RPC error: %+v", resp.Error)
+	}
+	isErr, _ := resp.Result["isError"].(bool)
+	if isErr {
+		t.Fatalf("tools/call isError = true: %+v", resp.Result)
+	}
+	contents, _ := resp.Result["content"].([]any)
+	if len(contents) == 0 {
+		t.Fatalf("content empty")
+	}
+	first, _ := contents[0].(map[string]any)
+	text, _ := first["text"].(string)
+	if !strings.Contains(text, "Crawled") {
+		t.Errorf("end-to-end graph output missing 'Crawled' header; got:\n%s", text)
+	}
+}
+
+// silenceGraphTestNoise keeps go vet happy when the test
+// imports the graph package without obviously using it.
+var _ = graph.New
+
+func TestHandleMarkGraphPublishRetention(t *testing.T) {
+	newGateway := func(t *testing.T, capture *map[string]string) *Gateway {
+		t.Helper()
+		return newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{
+			PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+				meta := r.Metadata
+				*capture = meta
+				return fetch.Result{Response: protocol.Response{
+					Status:   protocol.StatusOK,
+					Metadata: map[string]string{"version": "1", "modified": "2026-05-22T10:00:00Z"},
+				}}, nil
+			},
+		})
+	}
+
+	tests := []struct {
+		name          string
+		args          map[string]any
+		wantRetention string
+	}{
+		{
+			name:          "defaults to 20",
+			args:          map[string]any{"url": "mark://team-a/graph.md", "expected_version": float64(0)},
+			wantRetention: "20",
+		},
+		{
+			name:          "explicit override",
+			args:          map[string]any{"url": "mark://team-a/graph.md", "expected_version": float64(0), "retention": float64(5)},
+			wantRetention: "5",
+		},
+		{
+			name:          "zero disables retention",
+			args:          map[string]any{"url": "mark://team-a/graph.md", "expected_version": float64(0), "retention": float64(0)},
+			wantRetention: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var meta map[string]string
+			g := newGateway(t, &meta)
+			res, err := g.handleMarkGraphPublish(withAliceClaims(context.Background()), callToolReq("mark_graph_publish", tt.args))
+			if err != nil {
+				t.Fatalf("handleMarkGraphPublish: %v", err)
+			}
+			if res.IsError {
+				t.Fatalf("isError = true: %s", toolResultText(t, res))
+			}
+			if got := meta["retention"]; got != tt.wantRetention {
+				t.Errorf("retention meta = %q, want %q", got, tt.wantRetention)
+			}
+		})
+	}
+
+	t.Run("negative rejected", func(t *testing.T) {
+		var meta map[string]string
+		g := newGateway(t, &meta)
+		res, err := g.handleMarkGraphPublish(withAliceClaims(context.Background()), callToolReq("mark_graph_publish", map[string]any{
+			"url":              "mark://team-a/graph.md",
+			"expected_version": float64(0),
+			"retention":        float64(-1),
+		}))
+		if err != nil {
+			t.Fatalf("handleMarkGraphPublish: %v", err)
+		}
+		if !res.IsError {
+			t.Error("isError = false on negative retention, want true")
+		}
+		if text := toolResultText(t, res); !strings.Contains(text, "retention must be >= 0") {
+			t.Errorf("error text = %q, want it to mention 'retention must be >= 0'", text)
+		}
+	})
+}
+
+func TestGraphWriteHandlersDenyNonWriter(t *testing.T) {
+	// mark_graph_publish and mark_index (publishing) enforce the same
+	// writer-allow gate as every other write verb.
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	ctx := core.CtxWithClaims(context.Background(), &core.Claims{
+		Subject:       "google|carol",
+		Email:         "carol@otherco.test", // not in example.com domain
+		EmailVerified: true,
+	})
+
+	t.Run("mark_graph_publish", func(t *testing.T) {
+		res, err := g.handleMarkGraphPublish(ctx, callToolReq("mark_graph_publish", map[string]any{
+			"url":              "mark://team-a/graph.md",
+			"expected_version": float64(0),
+		}))
+		if err != nil {
+			t.Fatalf("handleMarkGraphPublish: %v", err)
+		}
+		if !res.IsError {
+			t.Fatal("isError = false for non-writer identity, want true")
+		}
+		if text := toolResultText(t, res); !strings.Contains(text, "write access denied") {
+			t.Errorf("tool error = %q, want writer-allow rejection", text)
+		}
+	})
+
+	t.Run("mark_index", func(t *testing.T) {
+		res, err := g.handleMarkIndex(ctx, callToolReq("mark_index", map[string]any{
+			"source": "mark://team-a/",
+			"target": "mark://team-a/index.md",
+		}))
+		if err != nil {
+			t.Fatalf("handleMarkIndex: %v", err)
+		}
+		if !res.IsError {
+			t.Fatal("isError = false for non-writer identity, want true")
+		}
+		if text := toolResultText(t, res); !strings.Contains(text, "write access denied") {
+			t.Errorf("tool error = %q, want writer-allow rejection", text)
+		}
+	})
+
+	// Denied writes must produce no dispatcher activity at all: no
+	// publishes, and no pre-gate reads (manifest checks, crawl).
+	if n := len(d.PublishCalls) + len(d.FetchCalls) + len(d.SeedCalls) + len(d.ListCalls); n != 0 {
+		t.Errorf("dispatcher saw %d calls for denied writes, want 0 (publish=%d fetch=%d fetchCond=%d list=%d)",
+			n, len(d.PublishCalls), len(d.FetchCalls), len(d.SeedCalls), len(d.ListCalls))
+	}
+}

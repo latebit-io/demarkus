@@ -1,0 +1,110 @@
+package oauthsrv
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/latebit-io/demarkus/tools/internal/broker/core"
+)
+
+// installResponse confirms identity and lists readable worlds without
+// returning credentials. Publish tokens remain broker-internal.
+type installResponse struct {
+	Email  string         `json:"email"`
+	Worlds []installWorld `json:"worlds"`
+}
+
+// installWorld is one row of the install bundle. PublicURL is the
+// caller-facing address of the world's broker gateway; worlds without
+// one are omitted from the response.
+type installWorld struct {
+	Name      string `json:"name"`
+	PublicURL string `json:"publicURL"`
+}
+
+// meInstall returns identity and readable, installable worlds without
+// writing Secrets. No installable PublicURL produces 200 with worlds: [].
+func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
+	claims, ok := core.ClaimsFromCtx(r.Context())
+	if !ok {
+		// Programming error: route registered without requireAuth
+		// upstream. Fail closed with 500 so a future route-table
+		// edit that drops requireAuth surfaces immediately rather
+		// than serving a bundle to anonymous callers.
+		s.log.ErrorContext(r.Context(), "broker: meInstall missing claims in context; middleware miswired")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	// Defense in depth: requireAuth's bearer-validation layer is the
+	// primary gate against unverified identities. Catch it again here
+	// so a future Verifier impl or test double that admits an
+	// unverified identity does not slip an install bundle past.
+	if !claims.EmailVerified {
+		s.log.InfoContext(r.Context(), "broker: /me/install rejected unverified identity",
+			"subject", core.HashSubject(claims.Subject))
+		http.Error(w, "email not verified", http.StatusForbidden)
+		return
+	}
+	// A copy: the request context owns the verified claims.
+	canonical := *claims
+	canonical.Email = core.CanonicalEmail(claims.Email)
+	claims = &canonical
+
+	// no-store + no-cache: today the body carries only identity + URLs,
+	// but the headers are set before writeJSON so a future addition of
+	// any credential material to the response inherits the same posture
+	// without having to re-discover the OAuth2 §5.1 no-store rule.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+
+	out := []installWorld{}
+	if claims.Email != "" {
+		out = s.listInstallableWorlds(r.Context(), claims)
+	}
+	s.log.InfoContext(r.Context(), "broker: /me/install succeeded",
+		"subject", core.HashSubject(claims.Subject), "worlds", len(out))
+	writeJSON(w, http.StatusOK, installResponse{
+		Email:  claims.Email,
+		Worlds: out,
+	})
+}
+
+// listInstallableWorlds is the one fail-closed policy site for the
+// management API: resolution errors log (redacted) and yield an empty
+// listing, never a leak.
+func (s *Server) listInstallableWorlds(ctx context.Context, claims *core.Claims) []installWorld {
+	out, err := installableWorlds(s.cfg.Registry(), s.cfg.OIDC.Issuer, claims, s.tenantScoped)
+	if err != nil {
+		s.log.WarnContext(ctx, "broker: world listing denied",
+			"subject", core.HashSubject(claims.Subject), "err", err)
+		return []installWorld{}
+	}
+	return out
+}
+
+// installableWorlds lists the worlds a client can be wired at (no
+// PublicURL = uninstallable); tenant scoping uses the canonical
+// resolver, denying closed with an error the caller logs.
+func installableWorlds(reg *core.WorldRegistry, issuer string, claims *core.Claims, tenantScoped bool) ([]installWorld, error) {
+	var worlds []core.WorldConfig
+	if tenantScoped {
+		w, err := core.TenantWorldFor(reg, issuer, claims)
+		if err != nil {
+			return []installWorld{}, err
+		}
+		worlds = []core.WorldConfig{w}
+	} else {
+		worlds = core.ReadableWorlds(reg)
+	}
+	out := make([]installWorld, 0, len(worlds))
+	for j := range worlds {
+		if worlds[j].PublicURL == "" {
+			continue
+		}
+		out = append(out, installWorld{
+			Name:      worlds[j].Name,
+			PublicURL: worlds[j].PublicURL,
+		})
+	}
+	return out, nil
+}

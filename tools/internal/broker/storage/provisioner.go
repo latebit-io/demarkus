@@ -1,0 +1,582 @@
+package storage
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/latebit-io/demarkus/tools/internal/broker/core"
+	"gopkg.in/yaml.v3"
+)
+
+// Dynamic tenant provisioning (memory-broker plan Phase 3). One
+// registry Secret is the source of truth; broker world set and server
+// fragment are projections, so a crash between steps converges on retry.
+
+// registrySyncInterval paces the background registry poll that keeps
+// every replica's dynamic world set converged with provisioning done
+// elsewhere.
+const registrySyncInterval = 10 * time.Second
+
+// ErrProvisioningDenied is returned when the provisioning gate rejects
+// the identity (mode static, allowlist miss, or capacity).
+var ErrProvisioningDenied = errors.New("broker: provisioning denied")
+
+// ErrTenantCapacity is returned when maxTenants is reached.
+var ErrTenantCapacity = errors.New("broker: tenant capacity reached")
+
+// ErrTenantDeprovisioning is returned when the slug is tombstoned: a
+// deprovision is (or crashed) mid-cleanup and must finish first.
+var ErrTenantDeprovisioning = errors.New("broker: tenant is being deprovisioned")
+
+// BucketCreator ensures tenant buckets exist AND carry the locked-down
+// tenant posture; implementations must refuse to adopt a pre-existing
+// bucket with looser access. Production wraps GCS; tests fake it.
+type BucketCreator interface {
+	EnsureBucket(ctx context.Context, bucket string) error
+}
+
+// BucketDeleter is the optional destructive sibling used only by the
+// explicit deprovision flow.
+type BucketDeleter interface {
+	DeleteBucket(ctx context.Context, bucket string) error
+}
+
+// tenantRecord is one provisioned tenant in the registry.
+type tenantRecord struct {
+	Email   string `json:"email"`
+	Issuer  string `json:"issuer"`
+	Subject string `json:"subject"`
+	WorldID string `json:"worldID"`
+	Created string `json:"created"`
+	// Deleting tombstones a tenant mid-deprovision: provisioning the
+	// slug is blocked and every projection drops the world until the
+	// cleanup finishes and removes the record.
+	Deleting bool `json:"deleting,omitempty"`
+}
+
+// tenantRegistry is the registry document shape.
+type tenantRegistry struct {
+	Tenants map[string]tenantRecord `json:"tenants"`
+}
+
+// Provisioner creates tenant worlds on first arrival. Run wires one into
+// the gateway when provisioning is enabled; static mode has none.
+type Provisioner struct {
+	cfg     *core.Config
+	store   core.SecretStore
+	buckets BucketCreator
+	log     *slog.Logger
+	clock   func() time.Time
+
+	// mu single-flights provisioning within one pod; cross-pod
+	// convergence rides the registry Secret's optimistic concurrency.
+	mu sync.Mutex
+	// lastSync is the registry payload hash of the last applied sync,
+	// so the 10s poll skips rebuilding an unchanged world set.
+	lastSync [32]byte
+}
+
+// ProvisionerDeps is what a Provisioner needs.
+type ProvisionerDeps struct {
+	Store   core.SecretStore
+	Buckets BucketCreator
+	Log     *slog.Logger
+	Clock   func() time.Time
+}
+
+// NewProvisioner builds a Provisioner; nil Log and Clock take defaults.
+func NewProvisioner(cfg *core.Config, deps ProvisionerDeps) *Provisioner {
+	if deps.Log == nil {
+		deps.Log = slog.Default()
+	}
+	if deps.Clock == nil {
+		deps.Clock = time.Now
+	}
+	return &Provisioner{cfg: cfg, store: deps.Store, buckets: deps.Buckets, log: deps.Log, clock: deps.Clock}
+}
+
+// DeprovisionTenant removes slug: registry entry, fragment entry (the
+// ONE flow allowed to drop a world), tokens key, write-token record,
+// and optionally the bucket. Idempotent; operator-invoked only.
+func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, deleteBucket bool) (found bool, err error) {
+	// Resolve the deleter BEFORE any destructive round trip: failing
+	// after the registry rewrite would leave a half-removed tenant.
+	var deleter BucketDeleter
+	if deleteBucket {
+		var ok bool
+		if deleter, ok = p.buckets.(BucketDeleter); !ok {
+			return false, errors.New("broker: bucket deletion requested but the bucket backend cannot delete")
+		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Phase 1: tombstone the record. Provisioning the slug is blocked
+	// and every projection drops the world; a crash mid-cleanup leaves
+	// the tombstone, so a rerun converges and re-provision never races.
+	var snapshot tenantRegistry
+	err = p.store.Mutate(ctx, core.RegistryRef(p.cfg), func(existing []byte) ([]byte, error) {
+		registry, decodeErr := decodeRegistry(existing)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		record, ok := registry.Tenants[slug]
+		found = ok
+		if ok {
+			record.Deleting = true
+			registry.Tenants[slug] = record
+		}
+		snapshot = registry
+		encoded, encErr := json.Marshal(&registry)
+		if encErr != nil {
+			return nil, fmt.Errorf("encode tenant registry: %w", encErr)
+		}
+		return encoded, nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	// Union minus the target: only slug leaves the fragment, so tenants
+	// provisioned concurrently by other pods survive.
+	if err := p.store.Mutate(ctx, core.WorldsFragmentRef(p.cfg), func(existing []byte) ([]byte, error) {
+		return p.renderWorldsFragmentUnion(&snapshot, existing, slug)
+	}); err != nil {
+		return found, fmt.Errorf("rewrite worlds fragment: %w", err)
+	}
+
+	world := p.cfg.Provisioning.TenantWorld(slug, "")
+	if err := p.store.Delete(ctx, core.WorldTokensRef(&world)); err != nil {
+		return found, fmt.Errorf("delete tokens key for %q: %w", slug, err)
+	}
+	if err := p.store.Delete(ctx, core.WorldWriteTokenRef(p.cfg, slug)); err != nil {
+		return found, fmt.Errorf("delete write-token record for %q: %w", slug, err)
+	}
+
+	if deleter != nil {
+		if err := deleter.DeleteBucket(ctx, p.bucketName(slug)); err != nil {
+			return found, err
+		}
+	}
+
+	// Phase 2: cleanup done; clear the tombstone so the slug is free.
+	err = p.store.Mutate(ctx, core.RegistryRef(p.cfg), func(existing []byte) ([]byte, error) {
+		registry, decodeErr := decodeRegistry(existing)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		delete(registry.Tenants, slug)
+		snapshot = registry
+		encoded, encErr := json.Marshal(&registry)
+		if encErr != nil {
+			return nil, fmt.Errorf("encode tenant registry: %w", encErr)
+		}
+		return encoded, nil
+	})
+	if err != nil {
+		return found, fmt.Errorf("clear tombstone for %q: %w", slug, err)
+	}
+
+	p.applySnapshot(&snapshot)
+	if found {
+		p.log.Info("tenant deprovisioned", "world", slug, "bucketDeleted", deleteBucket)
+	}
+	return found, nil
+}
+
+// applySnapshot publishes a registry snapshot to this pod's world set
+// and identity index.
+func (p *Provisioner) applySnapshot(registry *tenantRegistry) {
+	rejected := p.cfg.Registry().SetDynamic(p.worldsFromRegistry(registry), tenantIndexFromRegistry(registry))
+	if len(rejected) > 0 {
+		// Written by hand or by an older build: no tool URL can name them.
+		p.log.Error("tenant registry holds world names that are not DNS labels; not served", "worlds", rejected)
+	}
+}
+
+// tenantIndexFromRegistry projects live records to identityKey -> slug.
+// First live slug in sorted order wins (matches findTenantByIdentity);
+// tombstoned records stay out so a deprovision denies via the slow path.
+func tenantIndexFromRegistry(registry *tenantRegistry) map[string]string {
+	index := make(map[string]string, len(registry.Tenants))
+	for _, slug := range sortedSlugs(registry) {
+		record := registry.Tenants[slug]
+		if record.Deleting {
+			continue
+		}
+		key := core.IdentityKey(record.Issuer, record.Subject)
+		if _, ok := index[key]; !ok {
+			index[key] = slug
+		}
+	}
+	return index
+}
+
+// findTenantByIdentity resolves a registry record by stable identity;
+// the slug is the world name pinned at provision time. First sorted
+// live slug wins (matches the index); tombstoned only when none live.
+func findTenantByIdentity(registry *tenantRegistry, issuer, subject string) (string, tenantRecord, bool) {
+	var tombSlug string
+	var tombRecord tenantRecord
+	tombFound := false
+	for _, slug := range sortedSlugs(registry) {
+		record := registry.Tenants[slug]
+		if record.Issuer != issuer || record.Subject != subject {
+			continue
+		}
+		if record.Deleting {
+			if !tombFound {
+				tombSlug, tombRecord, tombFound = slug, record, true
+			}
+			continue
+		}
+		return slug, record, true
+	}
+	return tombSlug, tombRecord, tombFound
+}
+
+// TenantSlug derives the world name: sanitized email local part plus a
+// short identity hash. Readable in every mark:// URL, collision-free
+// via the suffix, stable because the suffix depends on issuer|sub only.
+func TenantSlug(issuer, subject, email string) string {
+	local, _, _ := strings.Cut(email, "@")
+	local = strings.ToLower(local)
+	var b strings.Builder
+	lastHyphen := true // suppress leading hyphens
+	for _, r := range local {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastHyphen = false
+		case !lastHyphen:
+			b.WriteByte('-')
+			lastHyphen = true
+		}
+	}
+	cleaned := strings.TrimRight(b.String(), "-")
+	if len(cleaned) > 20 {
+		cleaned = strings.TrimRight(cleaned[:20], "-")
+	}
+	if cleaned == "" {
+		cleaned = "soul"
+	}
+	sum := sha256.Sum256([]byte(core.IdentityKey(issuer, subject)))
+	return cleaned + "-" + hex.EncodeToString(sum[:4])
+}
+
+// tenantWorldID derives a deterministic canonical UUID (version 4
+// shape, RFC 4122 variant) from the identity, so concurrent
+// provisioners mint the same worldID without coordination.
+func tenantWorldID(issuer, subject string) string {
+	sum := sha256.Sum256([]byte("worldid|" + core.IdentityKey(issuer, subject)))
+	b := sum[:16]
+	b[6] = 0x40 | (b[6] & 0x0f)
+	b[8] = 0x80 | (b[8] & 0x3f)
+	h := hex.EncodeToString(b)
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
+func (p *Provisioner) bucketName(slug string) string {
+	return strings.TrimPrefix(p.cfg.Provisioning.BucketPrefix, "gs://") + slug
+}
+
+// admits applies the provisioning gate to a new identity. Existing
+// tenants (already in the registry) bypass it so tightening the
+// allowlist later never locks out provisioned users.
+func (p *Provisioner) admits(claims *core.Claims) error {
+	switch p.cfg.Provisioning.Mode {
+	case core.ProvisionOpen:
+		return nil
+	case core.ProvisionAllowlisted:
+		if core.WorldAllows(&p.cfg.Provisioning.Allow, claims) {
+			return nil
+		}
+		return ErrProvisioningDenied
+	default:
+		return ErrProvisioningDenied
+	}
+}
+
+// EnsureTenant provisions (or converges) the caller's world and returns
+// its broker-side WorldConfig. Every step is idempotent and keyed by
+// the slug pinned in the registry; any replica can re-run it safely.
+func (p *Provisioner) EnsureTenant(ctx context.Context, claims *core.Claims) (core.WorldConfig, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// The lock queue can outlive the request; do no remote work for a
+	// caller that already went away.
+	if err := ctx.Err(); err != nil {
+		return core.WorldConfig{}, err
+	}
+
+	email := core.CanonicalEmail(claims.Email)
+	issuer := p.cfg.OIDC.Issuer
+
+	// Step 1: registry entry, under the Secret's optimistic concurrency.
+	// Lookup is by identity, never the recomputed slug: an email change
+	// refreshes the record instead of orphaning the world.
+	var snapshot tenantRegistry
+	var slug string
+	created := false
+	err := p.store.Mutate(ctx, core.RegistryRef(p.cfg), func(existing []byte) ([]byte, error) {
+		registry, decodeErr := decodeRegistry(existing)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		created = false
+		if found, record, ok := findTenantByIdentity(&registry, issuer, claims.Subject); ok {
+			if record.Deleting {
+				return nil, ErrTenantDeprovisioning
+			}
+			slug = found
+			if record.Email != email {
+				record.Email = email
+				registry.Tenants[slug] = record
+			}
+		} else {
+			if gateErr := p.admits(claims); gateErr != nil {
+				return nil, gateErr
+			}
+			maxTenants := p.cfg.Provisioning.MaxTenants
+			if maxTenants > 0 && len(registry.Tenants) >= maxTenants {
+				return nil, ErrTenantCapacity
+			}
+			slug = TenantSlug(issuer, claims.Subject, email)
+			registry.Tenants[slug] = tenantRecord{
+				Email:   email,
+				Issuer:  issuer,
+				Subject: claims.Subject,
+				WorldID: tenantWorldID(issuer, claims.Subject),
+				Created: p.clock().UTC().Format(time.RFC3339),
+			}
+			created = true
+		}
+		snapshot = registry
+		encoded, encErr := json.Marshal(&registry)
+		if encErr != nil {
+			return nil, fmt.Errorf("encode tenant registry: %w", encErr)
+		}
+		return encoded, nil
+	})
+	if err != nil {
+		return core.WorldConfig{}, err
+	}
+
+	// No already-provisioned fast path here: the registry sync can
+	// publish a world whose bucket/fragment ensure crashed mid-way, so
+	// every EnsureTenant re-runs the idempotent steps to converge.
+
+	// Step 2: backend storage. EnsureBucket is idempotent.
+	if err := p.buckets.EnsureBucket(ctx, p.bucketName(slug)); err != nil {
+		return core.WorldConfig{}, fmt.Errorf("ensure bucket for %q: %w", slug, err)
+	}
+
+	// Step 3: tokens key, BEFORE the fragment: the server opens the
+	// world only once its tokens file exists in the shared mount.
+	world := p.cfg.Provisioning.TenantWorld(slug, email)
+	if err := p.ensureTokensKey(ctx, &world, slug); err != nil {
+		return core.WorldConfig{}, err
+	}
+
+	// Step 4: worlds fragment, rendered as a UNION with the existing
+	// fragment so a stale snapshot never drops a sibling's tenant;
+	// removal is a deliberate future flow rewriting from the registry.
+	if err := p.store.Mutate(ctx, core.WorldsFragmentRef(p.cfg), func(existing []byte) ([]byte, error) {
+		return p.renderWorldsFragmentUnion(&snapshot, existing)
+	}); err != nil {
+		return core.WorldConfig{}, fmt.Errorf("write worlds fragment: %w", err)
+	}
+
+	// Step 5: make the tenant visible to this pod immediately; other
+	// replicas converge via the registry sync loop.
+	p.applySnapshot(&snapshot)
+	if created {
+		p.log.Info("tenant provisioned", "world", slug, "subject", core.HashSubject(claims.Subject))
+	}
+	return world, nil
+}
+
+func (p *Provisioner) ensureTokensKey(ctx context.Context, world *core.WorldConfig, slug string) error {
+	return p.store.Mutate(ctx, core.WorldTokensRef(world), func(existing []byte) ([]byte, error) {
+		if len(existing) > 0 {
+			return existing, nil
+		}
+		// Non-empty placeholder: the store contract skips empty writes,
+		// and the server needs the file present to open the world.
+		return []byte("# demarkus world tokens for " + slug + "\n"), nil
+	})
+}
+
+func decodeRegistry(existing []byte) (tenantRegistry, error) {
+	registry := tenantRegistry{Tenants: map[string]tenantRecord{}}
+	if len(existing) == 0 {
+		return registry, nil
+	}
+	if err := json.Unmarshal(existing, &registry); err != nil {
+		return tenantRegistry{}, fmt.Errorf("decode tenant registry: %w", err)
+	}
+	if registry.Tenants == nil {
+		registry.Tenants = map[string]tenantRecord{}
+	}
+	return registry, nil
+}
+
+// fragmentWorld is the knowledge-server worlds-fragment YAML shape
+// (mirrors knowledgeconfig's rawWorldConfig subset the server parses;
+// the kind harness's producer-consumer test pins the contract).
+type fragmentLimits struct {
+	MaxDocuments int `yaml:"maxDocuments"`
+}
+
+// worldsFragmentDoc is the fragment's on-disk document shape.
+type worldsFragmentDoc struct {
+	Worlds []fragmentWorld `yaml:"worlds"`
+}
+
+type fragmentWorld struct {
+	Name        string   `yaml:"name"`
+	Authorities []string `yaml:"authorities"`
+	Bucket      struct {
+		URL     string `yaml:"url"`
+		WorldID string `yaml:"worldID"`
+	} `yaml:"bucket"`
+	Auth struct {
+		TokensFile string `yaml:"tokensFile"`
+	} `yaml:"auth"`
+	Limits    *fragmentLimits `yaml:"limits,omitempty"`
+	Bootstrap bool            `yaml:"bootstrap"`
+}
+
+// renderWorldsFragmentUnion renders the union of the existing fragment
+// and the registry snapshot (snapshot wins per slug), sorted by slug:
+// a stale snapshot can never drop a sibling's tenant.
+func (p *Provisioner) renderWorldsFragmentUnion(registry *tenantRegistry, existing []byte, exclude ...string) ([]byte, error) {
+	worlds := map[string]fragmentWorld{}
+	if len(existing) > 0 {
+		var current worldsFragmentDoc
+		if err := yaml.Unmarshal(existing, &current); err != nil {
+			return nil, fmt.Errorf("parse existing worlds fragment: %w", err)
+		}
+		for _, world := range current.Worlds {
+			worlds[world.Name] = world
+		}
+	}
+	for slug, record := range registry.Tenants {
+		if record.Deleting {
+			// Tombstoned: drop from both sources so the sync loop also
+			// removes a crashed deprovision's leftover entry.
+			delete(worlds, slug)
+			continue
+		}
+		world := fragmentWorld{
+			Name:        slug,
+			Authorities: []string{slug + "." + p.cfg.Provisioning.AuthorityDomain},
+			Bootstrap:   true,
+		}
+		world.Bucket.URL = "gs://" + p.bucketName(slug)
+		world.Bucket.WorldID = record.WorldID
+		world.Auth.TokensFile = strings.TrimRight(p.cfg.Provisioning.TokensMountPath, "/") + "/" + slug + ".toml"
+		if quota := p.cfg.Provisioning.MaxDocumentsPerTenant; quota > 0 {
+			world.Limits = &fragmentLimits{MaxDocuments: quota}
+		}
+		worlds[slug] = world
+	}
+	// exclude wins over both sources: deprovision's target must not
+	// survive via the snapshot or a racing fragment entry.
+	for _, slug := range exclude {
+		delete(worlds, slug)
+	}
+	doc := worldsFragmentDoc{Worlds: make([]fragmentWorld, 0, len(worlds))}
+	for _, name := range slices.Sorted(maps.Keys(worlds)) {
+		doc.Worlds = append(doc.Worlds, worlds[name])
+	}
+	return yaml.Marshal(doc)
+}
+
+// worldsFromRegistry renders the broker-side dynamic world set.
+func (p *Provisioner) worldsFromRegistry(registry *tenantRegistry) []core.WorldConfig {
+	slugs := sortedSlugs(registry)
+	worlds := make([]core.WorldConfig, 0, len(slugs))
+	for _, slug := range slugs {
+		if registry.Tenants[slug].Deleting {
+			continue // tombstoned: out of service until cleanup finishes
+		}
+		world := p.cfg.Provisioning.TenantWorld(slug, registry.Tenants[slug].Email)
+		world.Generation = registry.Tenants[slug].Created
+		worlds = append(worlds, world)
+	}
+	return worlds
+}
+
+// sortedSlugs is the one ordering rule for registry projections (the
+// fragment golden fixture depends on it).
+func sortedSlugs(registry *tenantRegistry) []string {
+	return slices.Sorted(maps.Keys(registry.Tenants))
+}
+
+// SyncRegistry reads the registry and republishes the dynamic world
+// set (skipping unchanged payloads), entirely under p.mu so a stale
+// snapshot can never overwrite a concurrent local mutation's state.
+func (p *Provisioner) SyncRegistry(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var snapshot tenantRegistry
+	var payload [32]byte
+	err := p.store.Mutate(ctx, core.RegistryRef(p.cfg), func(existing []byte) ([]byte, error) {
+		registry, decodeErr := decodeRegistry(existing)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		snapshot = registry
+		payload = sha256.Sum256(existing)
+		return existing, nil // read-only pass; unchanged data is not rewritten
+	})
+	if err != nil {
+		return err
+	}
+	if payload == p.lastSync {
+		return nil
+	}
+	p.applySnapshot(&snapshot)
+	// Converge the fragment toward the registry: a union re-adds any
+	// world a stale deprovision rewrite dropped (Mutate skips the write
+	// when nothing changed, so steady state costs one read).
+	if err := p.store.Mutate(ctx, core.WorldsFragmentRef(p.cfg), func(existing []byte) ([]byte, error) {
+		return p.renderWorldsFragmentUnion(&snapshot, existing)
+	}); err != nil {
+		// lastSync stays behind so the next tick retries the converge.
+		return fmt.Errorf("converge worlds fragment: %w", err)
+	}
+	p.lastSync = payload
+	return nil
+}
+
+// RunRegistrySync polls the registry so every replica converges on
+// tenants provisioned elsewhere. Blocks until ctx ends.
+func (p *Provisioner) RunRegistrySync(ctx context.Context) {
+	ticker := time.NewTicker(registrySyncInterval)
+	defer ticker.Stop()
+	if err := p.SyncRegistry(ctx); err != nil {
+		p.log.Warn("tenant registry sync failed", "err", err)
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := p.SyncRegistry(ctx); err != nil {
+				p.log.Warn("tenant registry sync failed", "err", err)
+			}
+		}
+	}
+}

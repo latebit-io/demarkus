@@ -26,3 +26,4 @@ Decision records binding the protocol, spec, and repo; git is canonical, and eac
 | [0020](0020-one-reconcile-owner-and-check-order.md) | One reconcile owner, and arguments before authorization | accepted 2026-09-21 |
 | [0021](0021-world-registry-names-and-one-tenant-door.md) | A world registry that announces drops, DNS label world names, one tenant door | accepted 2026-09-21 |
 | [0022](0022-gateway-dependencies-not-the-server.md) | The gateway takes its dependencies, not the Server | accepted 2026-09-21 |
+| [0023](0023-broker-packages-behind-one-run.md) | The broker is four packages behind one Run | accepted 2026-09-22 |

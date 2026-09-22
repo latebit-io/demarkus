@@ -110,7 +110,7 @@ reviews:
           any growth in WithDescription / mcp.Description text; rationale
           belongs in session guidance or the skill, not the schema
 
-    - path: "tools/internal/broker/mcp_tools_list.go"
+    - path: "tools/internal/broker/gateway/mcp_tools_list.go"
       instructions: >
         Broker MCP gateway tool list; every joined knowledge system ships
         these schemas on every request in eager-loading hosts. Same rule as

@@ -14,6 +14,10 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/tools/internal/broker/core"
+	"github.com/latebit-io/demarkus/tools/internal/broker/gateway"
+	"github.com/latebit-io/demarkus/tools/internal/broker/oauthsrv"
+	"github.com/latebit-io/demarkus/tools/internal/broker/storage"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -29,13 +33,13 @@ type RunOptions struct {
 	// config leaves Server.Realm blank.
 	Realm string
 	// Profile selects the MCP gateway surface.
-	Profile *GatewayProfile
+	Profile *gateway.Profile
 	// Validate runs extra config checks after LoadConfig.
-	Validate []func(*Config) error
+	Validate []func(*core.Config) error
 	// Buckets builds the tenant bucket backend; set by the memory broker
 	// only. Provisioning is wired when it is set and the config enables it.
 	// The cleanup runs once on every exit path.
-	Buckets func(cfg *ProvisioningConfig, log *slog.Logger) (buckets BucketCreator, cleanup func(), err error)
+	Buckets func(cfg *core.ProvisioningConfig, log *slog.Logger) (buckets storage.BucketCreator, cleanup func(), err error)
 	// Version is the binary's build version (initialize response).
 	Version string
 	// KubeconfigPath selects an out-of-cluster kubeconfig; empty uses
@@ -43,8 +47,23 @@ type RunOptions struct {
 	KubeconfigPath string
 }
 
+// Config is the broker configuration the binaries validate through
+// RunOptions.Validate.
+type Config = core.Config
+
+// KnowledgeProfile is the knowledge broker's gateway surface.
+func KnowledgeProfile() *gateway.Profile { return gateway.KnowledgeProfile() }
+
+// MemoryProfile is the memory broker's gateway surface.
+func MemoryProfile() *gateway.Profile { return gateway.MemoryProfile() }
+
+// NewGCSBuckets is the memory broker's bucket backend, for RunOptions.Buckets.
+func NewGCSBuckets(cfg *core.ProvisioningConfig, log *slog.Logger) (storage.BucketCreator, func(), error) {
+	return storage.NewGCSBuckets(cfg, log)
+}
+
 // gatewayProfile is the product profile narrowed to the configured tool surface.
-func (o *RunOptions) gatewayProfile(cfg *Config) *GatewayProfile {
+func (o *RunOptions) gatewayProfile(cfg *core.Config) *gateway.Profile {
 	profile := *o.Profile
 	profile.Tools = mcpfmt.ProfileTools(cfg.Server.MCP.ToolProfile, profile.Tools)
 	return &profile
@@ -57,7 +76,7 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 	if opts.Profile == nil {
 		return errors.New("broker: RunOptions.Profile is required")
 	}
-	cfg, err := LoadConfig(configPath)
+	cfg, err := core.LoadConfig(configPath)
 	if err != nil {
 		return err
 	}
@@ -86,7 +105,7 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	srv := NewServer(cfg, deps)
+	srv := oauthsrv.NewServer(cfg, deps)
 	provisioner, closeBuckets, err := enableProvisioning(cfg, opts, store, log)
 	if err != nil {
 		return err
@@ -120,9 +139,9 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 	// MCP gateway on its own listener; distinct Addr lets the chart
 	// route the two surfaces through different Ingress hosts or paths
 	// (SSE responses are write-side, untouched by the read timeouts).
-	pool := newWorldPool(cfg.worlds(), fetch.Options{Insecure: cfg.WorldDialer.InsecureSkipVerify})
-	gateway := newMCPGateway(gatewayDepsFor(cfg, &deps, store, provisioner), opts.Version, pool, opts.gatewayProfile(cfg))
-	mcpSrv := newHardenedServer(cfg.Server.MCP.Addr, gateway.Routes())
+	pool := gateway.NewWorldPool(cfg.Registry(), fetch.Options{Insecure: cfg.WorldDialer.InsecureSkipVerify})
+	gw := gateway.New(gateway.DepsFor(cfg, deps.SharedDeps, store, provisioner), opts.Version, pool, opts.gatewayProfile(cfg))
+	mcpSrv := newHardenedServer(cfg.Server.MCP.Addr, gw.Routes())
 	mcpErrs := make(chan error, 1)
 	mcpTLS := cfg.Server.MCP.TLS
 	go func() {
@@ -142,7 +161,7 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 	defer cancelSweep()
 	var sweepWG sync.WaitGroup
 	if !cfg.Sweeper.Disabled {
-		sweeper := NewSweeper(k8s, srv.RefreshStore(), cfg.Sweeper.Interval, log)
+		sweeper := storage.NewSweeper(k8s, srv.RefreshStore(), cfg.Sweeper.Interval, log)
 		if cfg.FileBackend() {
 			log.Info(opts.LogName+": starting sweeper (single-host)", "interval", cfg.Sweeper.Interval)
 			sweepWG.Go(func() {
@@ -265,18 +284,18 @@ func newKubeClient(kubeconfigPath string) (kubernetes.Interface, error) {
 // buildServerDeps constructs the auth machinery both listeners share:
 // signer, verifier, discovery, the broker-side id_token signer and the rate
 // limiters, each failing fast on misconfiguration.
-func buildServerDeps(cfg *Config, opts *RunOptions, store SecretStore, log *slog.Logger) (ServerDeps, error) {
-	signer, err := NewSigner(cfg.Server.CookieKey)
+func buildServerDeps(cfg *core.Config, opts *RunOptions, store core.SecretStore, log *slog.Logger) (oauthsrv.ServerDeps, error) {
+	signer, err := oauthsrv.NewSigner(cfg.Server.CookieKey)
 	if err != nil {
-		return ServerDeps{}, err
+		return oauthsrv.ServerDeps{}, err
 	}
 
 	// OIDC discovery is eager so a misconfigured broker fails to start
 	// rather than failing the first user login. coreos/go-oidc builds
 	// its own background context for JWKS refresh, so Background is fine.
-	verifier, err := NewVerifier(context.Background(), &cfg.OIDC)
+	verifier, err := core.NewVerifier(context.Background(), &cfg.OIDC)
 	if err != nil {
-		return ServerDeps{}, err
+		return oauthsrv.ServerDeps{}, err
 	}
 	if cfg.FileBackend() {
 		log.Info(opts.LogName+": file storage backend", "dir", cfg.Storage.Dir)
@@ -284,41 +303,44 @@ func buildServerDeps(cfg *Config, opts *RunOptions, store SecretStore, log *slog
 
 	// Same eager-failure posture as NewVerifier; 5-minute TTL bounds
 	// IdP key-rotation propagation.
-	discovery, err := NewDiscovery(context.Background(), DiscoveryConfig{
+	discovery, err := oauthsrv.NewDiscovery(context.Background(), oauthsrv.DiscoveryConfig{
 		BrokerURL: cfg.Server.PublicURL,
 		IdPIssuer: cfg.OIDC.Issuer,
 		Log:       log,
 	})
 	if err != nil {
-		return ServerDeps{}, err
+		return oauthsrv.ServerDeps{}, err
 	}
 
 	// Broker-side ECDSA signer for the refresh-grant path; an invalid
 	// PEM fails the pod fast rather than the first refresh.
-	idTokenSigner, err := NewIDTokenSigner([]byte(cfg.OIDC.BrokerSigningKey))
+	idTokenSigner, err := core.NewIDTokenSigner([]byte(cfg.OIDC.BrokerSigningKey))
 	if err != nil {
-		return ServerDeps{}, err
+		return oauthsrv.ServerDeps{}, err
 	}
 	log.Info(opts.LogName+": id_token signer ready", "kid", idTokenSigner.KeyID())
 
-	subject, login := newRateLimits(&cfg.RateLimit)
-	return ServerDeps{
-		Signer:         signer,
-		Verifier:       verifierWith(verifier, idTokenSigner, cfg.Server.PublicURL),
-		Store:          store,
-		Discovery:      discovery,
-		IDTokenSigner:  idTokenSigner,
-		Log:            log,
-		Clock:          time.Now,
-		SubjectLimiter: subject, LoginLimiter: login,
-		TenantScoped: opts.Profile.TenantScoped,
+	subject, login := core.NewRateLimits(&cfg.RateLimit)
+	return oauthsrv.ServerDeps{
+		SharedDeps: core.SharedDeps{
+			Verifier:       core.VerifierWith(verifier, idTokenSigner, cfg.Server.PublicURL),
+			SubjectLimiter: subject,
+			Clock:          time.Now,
+			Log:            log,
+		},
+		Signer:        signer,
+		Store:         store,
+		Discovery:     discovery,
+		IDTokenSigner: idTokenSigner,
+		LoginLimiter:  login,
+		TenantScoped:  opts.Profile.TenantScoped,
 	}, nil
 }
 
 // enableProvisioning builds the tenant provisioner when the binary supplies a
 // bucket backend and the config enables provisioning; nil otherwise. The
 // cleanup releases the bucket client and is safe to call either way.
-func enableProvisioning(cfg *Config, opts *RunOptions, store SecretStore, log *slog.Logger) (*Provisioner, func(), error) {
+func enableProvisioning(cfg *core.Config, opts *RunOptions, store core.SecretStore, log *slog.Logger) (*storage.Provisioner, func(), error) {
 	if opts.Buckets == nil || !cfg.Provisioning.Enabled() {
 		return nil, func() {}, nil
 	}
@@ -330,40 +352,20 @@ func enableProvisioning(cfg *Config, opts *RunOptions, store SecretStore, log *s
 		"mode", cfg.Provisioning.Mode,
 		"maxTenants", cfg.Provisioning.MaxTenants,
 		"authorityDomain", cfg.Provisioning.AuthorityDomain)
-	return newProvisioner(cfg, provisionerDeps{Store: store, Buckets: buckets, Log: log}), closeBuckets, nil
-}
-
-// gatewayDepsFor shares the verifier, clock, log and subject limiter with the
-// management API and gives the gateway its own write token store over the
-// shared Secret store.
-func gatewayDepsFor(cfg *Config, srv *ServerDeps, store SecretStore, provisioner *Provisioner) *gatewayDeps {
-	return &gatewayDeps{
-		Worlds:         cfg.worlds(),
-		Issuer:         cfg.OIDC.Issuer,
-		PublicURL:      cfg.Server.PublicURL,
-		MCP:            cfg.Server.MCP,
-		Realm:          cfg.Server.Realm,
-		Verifier:       srv.Verifier,
-		AllowDomains:   cfg.OIDC.AllowDomains,
-		SubjectLimiter: srv.SubjectLimiter,
-		Clock:          srv.Clock,
-		Log:            srv.Log,
-		WriteTokens:    newWorldWriteTokenStore(cfg, store),
-		Provisioner:    provisioner,
-	}
+	return storage.NewProvisioner(cfg, storage.ProvisionerDeps{Store: store, Buckets: buckets, Log: log}), closeBuckets, nil
 }
 
 // newSecretStore selects the credential backend from config: file mode
 // for single-host, otherwise Secrets via a kubernetes client.
-func newSecretStore(cfg *Config, kubeconfigPath string) (SecretStore, kubernetes.Interface, error) {
+func newSecretStore(cfg *core.Config, kubeconfigPath string) (core.SecretStore, kubernetes.Interface, error) {
 	if cfg.FileBackend() {
-		return NewFileSecretStore(), nil, nil
+		return storage.NewFileSecretStore(), nil, nil
 	}
 	k8s, err := newKubeClient(kubeconfigPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	return NewK8sSecretStore(k8s), k8s, nil
+	return storage.NewK8sSecretStore(k8s), k8s, nil
 }
 
 // DeprovisionOptions names one tenant world to remove.
@@ -386,7 +388,7 @@ func RunDeprovision(ctx context.Context, opts DeprovisionOptions) (found bool, e
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, deprovisionTimeout)
 	defer cancel()
-	cfg, err := LoadConfig(opts.ConfigPath)
+	cfg, err := core.LoadConfig(opts.ConfigPath)
 	if err != nil {
 		return false, err
 	}
@@ -404,14 +406,14 @@ func RunDeprovision(ctx context.Context, opts DeprovisionOptions) (found bool, e
 		return false, err
 	}
 	// Secret-only cleanup must not depend on GCS reachability.
-	var buckets BucketCreator
+	var buckets storage.BucketCreator
 	if opts.DeleteBucket {
-		gcsBuckets, cleanup, bucketsErr := NewGCSBuckets(&cfg.Provisioning, opts.Log)
+		gcsBuckets, cleanup, bucketsErr := storage.NewGCSBuckets(&cfg.Provisioning, opts.Log)
 		if bucketsErr != nil {
 			return false, bucketsErr
 		}
 		defer cleanup()
 		buckets = gcsBuckets
 	}
-	return newProvisioner(cfg, provisionerDeps{Store: store, Buckets: buckets, Log: opts.Log}).DeprovisionTenant(ctx, opts.Slug, opts.DeleteBucket)
+	return storage.NewProvisioner(cfg, storage.ProvisionerDeps{Store: store, Buckets: buckets, Log: opts.Log}).DeprovisionTenant(ctx, opts.Slug, opts.DeleteBucket)
 }

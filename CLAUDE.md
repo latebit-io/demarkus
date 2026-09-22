@@ -65,7 +65,7 @@ in the soul; preserve raw evidence under ignored benchmark artifacts.
 ## Prompt and tool-description token budget
 
 Everything under `plugins/prompt-source/` and every MCP tool description
-(`client/cmd/demarkus-mcp`, `tools/internal/broker/mcp_tools_list.go`) is
+(`client/cmd/demarkus-mcp`, `tools/internal/broker/gateway/mcp_tools_list.go`) is
 paid in tokens on every session, invocation, or request. Write terse:
 fragments, no filler, no rationale the step implies. Keep behavior intact,
 nothing volatile, no em dashes. See `plugins/prompt-source/README.md`.

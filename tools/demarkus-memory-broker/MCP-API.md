@@ -28,7 +28,7 @@ tool-handler middleware (every world-bearing argument must address the
 caller's world), MCP resource reads, and the graph crawler (a link
 into a foreign world errors that node instead of fetching it). The
 invariant is test-enforced across every registered tool
-(`tools/internal/broker/mcp_tenant_test.go`).
+(`tools/internal/broker/gateway/mcp_tenant_test.go`).
 
 ## Tool surface (12)
 

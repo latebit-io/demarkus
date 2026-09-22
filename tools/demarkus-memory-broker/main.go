@@ -59,7 +59,7 @@ func main() {
 	err := broker.Run(*configPath, &broker.RunOptions{
 		LogName: "memory broker",
 		Realm:   "demarkus-memory-broker",
-		Profile: broker.MemoryGatewayProfile(),
+		Profile: broker.MemoryProfile(),
 		// Memory-broker invariants on top of the shared validation:
 		// every static world names its tenant, and the provisioning
 		// block, when enabled, is complete.
