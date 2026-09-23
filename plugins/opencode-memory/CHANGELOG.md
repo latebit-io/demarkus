@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.143
+
+`/soul-archive` runs the checkout-identity check before its first read, like every other command that writes to the soul: a new project has nothing to archive, an unknown identity stops, and a target outside the project's subtree needs the user's confirmation.
+
 ## 0.13.140
 
 New `/soul-archive <path or dir/>`: archives one document or every live document under a directory (history kept, hidden from lists and lookup) and drops the hub bullets that linked them, behind a human gate. `mark_archive` joins the lean tool profile so the plugin's MCP server exposes it. `/soul-doctor` skips archived documents in its hygiene checks, reports a link to an archived document as broken with the fix "drop the link", and names `/soul-archive` as the other fix for an orphan.
