@@ -29,6 +29,6 @@ Slug and bound soul: the session header `Project slug: ... Bound store: ...`. He
 
 4. **Gate.** Approval on the exact proposal; a directory target names the directory and the document count in the question. Declined: stop, nothing written.
 
-5. **Archive.** `mark_archive` each path in order, keep the version; failure: report, continue. Unlink: per linking document `mark_fetch` with `force: true` and `verbose: true` (outline-only or failure: skip, report); drop the approved lines only; `mark_publish` at that version, every metadata key from the fetch minus unrequested `retention`, `on_conflict: "fail"`. Conflict: refetch, retry once; then report, link stays.
+5. **Archive.** `mark_archive` each path in order, keep the version; failure: report, continue. Unlink only lines whose target archived (a directory line: every collected path archived); a failed target keeps its lines. Per linking document `mark_fetch` with `force: true` and `verbose: true` (outline-only or failure: skip, report); drop those lines only; `mark_publish` at that version, every metadata key from the fetch minus unrequested `retention`, `on_conflict: "fail"`. Conflict: refetch, retry once; then report, link stays.
 
 6. **Report.** Paths with archived versions, failures, lines dropped, links left.
