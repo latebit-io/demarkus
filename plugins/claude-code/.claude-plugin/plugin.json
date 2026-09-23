@@ -1,6 +1,6 @@
 {
   "name": "demarkus-memory",
-  "version": "0.13.143",
+  "version": "0.13.144",
   "description": "Local, versioned memory for Claude Code via demarkus. Zero-config install: spawns a local demarkus-server, auto-generates a token, wires MCP tools for fetch/publish/append/graph/lookup, injects standing guidance so sessions self-document to your soul, and enforces a publish tag-gate so documents stay findable via lookup.",
   "author": {
     "name": "latebit",
@@ -14,7 +14,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/session-start.sh",
             "timeout": 900
           }
         ]
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gate-pre.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/gate-pre.sh",
             "timeout": 20
           }
         ]
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gate-post.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/gate-post.sh",
             "timeout": 20
           }
         ]
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/promote-nudge.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/promote-nudge.sh",
             "timeout": 10
           }
         ]
@@ -59,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-journal-nudge.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/session-journal-nudge.sh",
             "timeout": 10
           }
         ]
@@ -70,7 +70,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/recall-nudge.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/recall-nudge.sh",
             "timeout": 10
           }
         ]

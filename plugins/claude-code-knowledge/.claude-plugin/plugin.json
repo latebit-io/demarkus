@@ -1,6 +1,6 @@
 {
   "name": "demarkus-knowledge",
-  "version": "0.5.143",
+  "version": "0.5.144",
   "description": "Join an organizational demarkus knowledge system from Claude Code. Registers the broker as an OAuth MCP server, steers sessions to the shared catalog, and enforces publishing policy. Runs no local server; a shared helper binary provides gates and guidance.",
   "author": {
     "name": "latebit",
@@ -14,7 +14,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/session-start.sh",
             "timeout": 600
           }
         ]
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gate-pre.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/gate-pre.sh",
             "timeout": 20
           }
         ]
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gate-post.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/gate-post.sh",
             "timeout": 20
           }
         ]
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/recall-nudge.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/recall-nudge.sh",
             "timeout": 10
           }
         ]

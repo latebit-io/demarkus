@@ -93,6 +93,8 @@ jobs:
         run: bash scripts/check-identical-copies.sh
       - name: Session start hooks report failures
         run: bash scripts/test-session-start-hooks.sh
+      - name: Hook commands start under a spaced plugin root
+        run: bash scripts/test-hook-commands.sh
       - name: Comment length
         run: |
           git branch -f main origin/main 2>/dev/null || true
