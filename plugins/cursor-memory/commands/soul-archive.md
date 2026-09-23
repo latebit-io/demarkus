@@ -23,7 +23,7 @@ A slug never proves identity. Before the first read or write, `mark_fetch /<slug
 
 ## Steps
 
-1. **Confirm the project** from the identity check above: new project: nothing to archive, say so, stop; subtree without a hub: note it, continue; identity unknown: stop. Target outside `/<slug>/`: the user confirms it, else stop.
+1. **Confirm the project** from the identity check above: identity unknown: stop. Target outside `/<slug>/`: the user confirms it, else stop. Target inside: new project: nothing to archive, say so, stop; subtree without a hub: note it, continue.
 
 2. **Collect.** Document: `mark_fetch`; `ok` collects; `archived` or `not-found`: say so, stop; other failure: surface, stop. Directory: `mark_list`, `next-cursor` as `cursor` until `complete: true`, recurse into subdirectories, every incomplete page a new unseen cursor; over 100 list calls or 500 documents, cursor or listing failure: surface, stop. `not-found` or no live documents: say so, stop.
 

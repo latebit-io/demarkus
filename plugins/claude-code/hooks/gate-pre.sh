@@ -35,7 +35,8 @@ bounded() {
   killgroup TERM "${dog}"
   # Leader died by signal: sweep group members that ignored the TERM.
   [[ "${rc}" -le 128 ]] || killgroup KILL "${pid}"
-  [[ "${rc}" -le 128 && $((SECONDS - start)) -lt "${secs}" ]] || timed_out=1
+  # Elapsed time alone classifies a timeout; a signal exit before the bound is a crash.
+  (( SECONDS - start < secs )) || timed_out=1
   return "${rc}"
 }
 

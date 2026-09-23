@@ -2,7 +2,7 @@
 
 ## 0.13.143
 
-`/soul-archive` runs the checkout-identity check before its first read, like every other command that writes to the soul: a new project has nothing to archive, an unknown identity stops, and a target outside the project's subtree needs the user's confirmation.
+`/soul-archive` runs the checkout-identity check before its first read: a new project has nothing to archive, an unknown identity stops, and a target outside the project's subtree needs the user's confirmation.
 
 ## 0.13.140
 
