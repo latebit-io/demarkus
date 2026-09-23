@@ -196,9 +196,9 @@ const (
 )
 
 // AdvancedTools are absent from the lean profile. The plugin-prompts check
-// fails when a prompt template references one of them.
+// fails when a prompt template references one of them. mark_archive stays
+// in lean: /soul-archive is the only archive path a plugin user has.
 var AdvancedTools = map[string]bool{
-	"mark_archive":       true,
 	"mark_discover":      true,
 	"mark_resolve":       true,
 	"mark_index":         true,

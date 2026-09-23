@@ -11,7 +11,7 @@ import (
 // about 4.1 bytes per token (2026-09-17). Raise only with a measured offset.
 const (
 	fullSchemaBudgetBytes = 10700
-	leanSchemaBudgetBytes = 7400
+	leanSchemaBudgetBytes = 7800
 )
 
 func profileSchemas(profile string) []mcp.Tool {

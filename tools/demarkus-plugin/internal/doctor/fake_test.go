@@ -37,7 +37,7 @@ func newFake(docs map[string]fakeDoc) *fakeStore {
 	return &fakeStore{docs: docs, pageSize: 2, listStatus: map[string]string{}, missing: map[string]string{}}
 }
 
-func (f *fakeStore) List(_ context.Context, dir string, _ bool, cursor string) (protocol.Response, error) {
+func (f *fakeStore) List(_ context.Context, dir string, includeArchived bool, cursor string) (protocol.Response, error) {
 	f.listCalls++
 	// As the server does, a directory reads the same without its trailing slash.
 	if !strings.HasSuffix(dir, "/") {
@@ -47,8 +47,8 @@ func (f *fakeStore) List(_ context.Context, dir string, _ bool, cursor string) (
 		return protocol.Response{Status: st}, nil
 	}
 	names := map[string]bool{}
-	for p := range f.docs {
-		if !strings.HasPrefix(p, dir) {
+	for p, d := range f.docs {
+		if !strings.HasPrefix(p, dir) || (!includeArchived && d.Status == protocol.StatusArchived) {
 			continue
 		}
 		rest := strings.TrimPrefix(p, dir)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.140
+
+New `/soul-archive <path or dir/>`: archives one document or every live document under a directory (history kept, hidden from lists and lookup) and drops the hub bullets that linked them, behind a human gate. `mark_archive` joins the lean tool profile so the plugin's MCP server exposes it. `/soul-doctor` skips archived documents in its hygiene checks, reports a link to an archived document as broken with the fix "drop the link", and names `/soul-archive` as the other fix for an orphan.
+
 ## 0.13.129
 
 /soul-doctor runs as one `demarkus-plugin doctor` call: the binary reads the scope once and derives every hygiene check (links, orphans, hubs, metadata, shape, style, ADR sequence and references, write-auth drift), exact within stated bounds; the prompt shrinks to the command and how to present the report.

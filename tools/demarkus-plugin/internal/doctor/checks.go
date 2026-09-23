@@ -42,9 +42,9 @@ var CheckOrder = []string{
 	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckReferences, CheckLostMetadata, CheckTokenDrift,
 }
 
-// checkLinks: a target absent from the inventory is broken only when a fetch
-// says not-found; a target that fetches (outside the scope) is fine, any other
-// status is unresolved, and targets past the budget go to Coverage.
+// checkLinks: a target absent from the live inventory is broken when a fetch
+// says not-found or archived, fine when it serves (outside the scope), any
+// other status is unresolved, and targets past the budget go to Coverage.
 func (a *audit) checkLinks(ctx context.Context) {
 	confirmed := map[string]string{}
 	var unconfirmed []string
@@ -62,14 +62,12 @@ func (a *audit) checkLinks(ctx context.Context) {
 				status = a.confirm(ctx, target)
 				confirmed[target] = status
 			}
-			fix := "fix the link or restore the target"
 			switch {
-			case readableStatus(status):
+			case live(status):
+			case status == protocol.StatusArchived:
+				a.brokenLink(p, target, status, "drop the link")
 			case status == protocol.StatusNotFound:
-				a.add(CheckBrokenLinks, p, "-> "+target+" (fetch: not-found)", fix)
-				if path.Base(p) == "index.md" {
-					a.add(CheckStaleIndex, p, "-> "+target+" (hub links a missing document)", fix)
-				}
+				a.brokenLink(p, target, status, "fix the link or restore the target")
 			default:
 				a.add(CheckUnresolved, p, "-> "+target+" (fetch: "+status+")", "check access or the server, then re-run")
 			}
@@ -90,7 +88,19 @@ func (a *audit) confirm(ctx context.Context, target string) string {
 	return resp.Status
 }
 
-// checkOrphans: a readable document nothing in scope links to, the hub
+// brokenLink: a hub's broken link is also a stale index entry.
+func (a *audit) brokenLink(p, target, status, fix string) {
+	a.add(CheckBrokenLinks, p, "-> "+target+" (fetch: "+status+")", fix)
+	if path.Base(p) == "index.md" {
+		word := "missing"
+		if status == protocol.StatusArchived {
+			word = "archived"
+		}
+		a.add(CheckStaleIndex, p, "-> "+target+" (hub links a "+word+" document)", fix)
+	}
+}
+
+// checkOrphans: a live document nothing in scope links to, the hub
 // excepted. A link to a directory reaches every document directly in it, so
 // a hub that links /journal/ covers each dated entry.
 func (a *audit) checkOrphans() {
@@ -106,10 +116,10 @@ func (a *audit) checkOrphans() {
 	hub := a.hub()
 	for _, p := range a.order {
 		d := a.docs[p]
-		if p == hub || !readableStatus(d.status) || inbound[p] || reachedDirs[path.Dir(p)+"/"] {
+		if p == hub || !live(d.status) || inbound[p] || reachedDirs[path.Dir(p)+"/"] {
 			continue
 		}
-		a.add(CheckOrphans, p, "no inbound link from any document in scope", "link it from its hub")
+		a.add(CheckOrphans, p, "no inbound link from any document in scope", "link it from its hub, or /soul-archive it")
 	}
 }
 
@@ -137,7 +147,7 @@ func (a *audit) checkHubs() {
 
 func (a *audit) checkTitles() {
 	for _, p := range a.order {
-		if d := a.docs[p]; readableStatus(d.status) && title(d) == "" {
+		if d := a.docs[p]; live(d.status) && title(d) == "" {
 			a.add(CheckUntitled, p, "no H1 and no title metadata", "add a # H1")
 		}
 	}
@@ -190,7 +200,7 @@ func (a *audit) checkADRSequence() {
 func (a *audit) checkMetadata() {
 	for _, p := range a.order {
 		d := a.docs[p]
-		if !readableStatus(d.status) {
+		if !live(d.status) {
 			continue
 		}
 		if strings.TrimSpace(d.meta["tags"]) == "" {
@@ -212,7 +222,7 @@ func (a *audit) checkMetadata() {
 func (a *audit) checkDuplicates() {
 	byHash := map[string][]string{}
 	for _, p := range a.order {
-		if d := a.docs[p]; readableStatus(d.status) && d.meta["content-hash"] != "" {
+		if d := a.docs[p]; live(d.status) && d.meta["content-hash"] != "" {
 			byHash[d.meta["content-hash"]] = append(byHash[d.meta["content-hash"]], p)
 		}
 	}
@@ -230,7 +240,7 @@ func (a *audit) checkDuplicates() {
 func (a *audit) checkShape() {
 	for _, p := range a.order {
 		d := a.docs[p]
-		if !readableStatus(d.status) {
+		if !live(d.status) {
 			continue
 		}
 		hub := gate.HubProblems(p, d.body)
@@ -261,7 +271,7 @@ func (a *audit) checkReferences() {
 	byDir := a.adrIndex()
 	for _, p := range a.order {
 		d := a.docs[p]
-		if !readableStatus(d.status) {
+		if !live(d.status) {
 			continue
 		}
 		mentions := adrReferenceRe.FindAllStringSubmatch(stripFences(d.body), -1)
@@ -319,7 +329,7 @@ func (a *audit) checkLostMetadata(ctx context.Context) {
 	}
 	for _, p := range a.order {
 		d := a.docs[p]
-		if !readableStatus(d.status) || strings.TrimSpace(d.meta["tags"]) != "" {
+		if !live(d.status) || strings.TrimSpace(d.meta["tags"]) != "" {
 			continue
 		}
 		// A missing or unparsable version leaves nothing to walk; the

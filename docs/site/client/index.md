@@ -144,7 +144,7 @@ demarkus-mcp -host mark://localhost:6309 -insecure
 
 When `-host` is provided, tools accept bare paths (e.g. `/index.md`) instead of full URLs.
 
-`-profile lean` omits the operator and federation tools (`mark_archive`, `mark_discover`, `mark_resolve`, `mark_index`, `mark_graph_export`, `mark_graph_publish`) so hosts that load every schema on every turn pay less; the plugin launcher uses it. The default `full` keeps all 15.
+`-profile lean` omits the operator and federation tools (`mark_discover`, `mark_resolve`, `mark_index`, `mark_graph_export`, `mark_graph_publish`) so hosts that load every schema on every turn pay less; the plugin launcher uses it. The default `full` keeps all 15.
 
 The 15 registered tools are `mark_fetch`, `mark_list`, `mark_explore`, `mark_versions`, `mark_lookup`, `mark_publish`, `mark_append`, `mark_archive`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`, `mark_index`, and `mark_resolve`. Brokered knowledge systems add `mark_worlds` (the world directory) and `mark_lookup_all` (system-wide catalog lookup), for 17 in total. `mark_list` returns one bounded page; when `complete` is false, pass `next-cursor` back as `cursor`. `mark_lookup` looks up documents by subject against the server's catalog (declared tags + title, ranked by importance); with `match: "body"` it also matches section text and returns `path#anchor` rows with a snippet, so the next call is one section fetch. The `mark_graph` tool crawls and persists the document graph; `mark_backlinks` queries it for reverse links. `mark_graph_export` renders the graph as publishable markdown; `mark_graph_publish` exports and publishes in one step so other agents can discover the topology without recrawling.
 

@@ -170,7 +170,7 @@ func (a *audit) fetchAll(ctx context.Context) error {
 		if resp.Status == protocol.StatusUnauthorized {
 			return fmt.Errorf("fetch %s returned unauthorized", p)
 		}
-		if !readableStatus(resp.Status) {
+		if !live(resp.Status) {
 			a.note("fetch %s returned %s", p, resp.Status)
 			continue
 		}
@@ -221,9 +221,7 @@ func title(d *document) string {
 	return ""
 }
 
-func readableStatus(status string) bool {
-	return status == protocol.StatusOK || status == protocol.StatusArchived
-}
+func live(status string) bool { return status == protocol.StatusOK }
 
 func (a *audit) hub() string {
 	return path.Join(a.opts.Scope, "index.md")

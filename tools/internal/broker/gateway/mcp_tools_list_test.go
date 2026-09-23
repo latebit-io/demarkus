@@ -53,7 +53,7 @@ const (
 	knowledgeFullSchemaBudgetBytes = 12550
 	knowledgeLeanSchemaBudgetBytes = 9400
 	memoryFullSchemaBudgetBytes    = 8900
-	memoryLeanSchemaBudgetBytes    = 8100
+	memoryLeanSchemaBudgetBytes    = 8550
 )
 
 func TestGatewayToolProfilesAndBudget(t *testing.T) {

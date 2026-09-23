@@ -64,7 +64,8 @@ func TestRunEnforcesDocumentBound(t *testing.T) {
 
 func TestLinkChecks(t *testing.T) {
 	f := newFake(map[string]fakeDoc{
-		"/index.md":         tagged("# Hub\n\n- [a](/a.md)\n- [gone](/gone.md)\n- [journal](/journal/)\n- [other](mark://other.example/x.md)\n"),
+		"/index.md":         tagged("# Hub\n\n- [a](/a.md)\n- [gone](/gone.md)\n- [old](/old.md)\n- [journal](/journal/)\n- [other](mark://other.example/x.md)\n"),
+		"/old.md":           {Status: protocol.StatusArchived},
 		"/a.md":             tagged("# A\n\nSummary.\n\n[b](b.md) [outside](/outside.md) [flaky](/flaky.md)\n"),
 		"/b.md":             tagged("# B\n\nSummary.\n"),
 		"/lonely.md":        tagged("# L\n\nSummary.\n"),
@@ -79,17 +80,22 @@ func TestLinkChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := findings(r, CheckBrokenLinks); len(got) != 1 || !strings.Contains(got[0], "/index.md: -> /gone.md") {
-		t.Fatalf("broken links: %v", got)
+	if got := findings(r, CheckBrokenLinks); len(got) != 2 || !strings.Contains(got[0], "/index.md: -> /gone.md") || !strings.Contains(got[1], "/index.md: -> /old.md (fetch: archived)") {
+		t.Fatalf("broken links: missing and archived targets: %v", got)
 	}
-	if got := findings(r, CheckStaleIndex); len(got) != 1 {
-		t.Fatalf("a hub's broken link is a stale index entry: %v", got)
+	if got := findings(r, CheckStaleIndex); len(got) != 2 {
+		t.Fatalf("a hub's missing or archived link is a stale index entry: %v", got)
 	}
 	if got := findings(r, CheckUnresolved); len(got) != 1 || !strings.Contains(got[0], "/flaky.md (fetch: server-error)") {
 		t.Fatalf("a non not-found failure is unresolved: %v", got)
 	}
 	if got := findings(r, CheckOrphans); len(got) != 2 || !strings.Contains(got[0], "/lonely.md") || !strings.Contains(got[1], "/proj/index.md") {
 		t.Fatalf("orphans must exclude the root hub, linked documents and directory-linked journal entries: %v", got)
+	}
+	for _, f := range r.Findings {
+		if f.Path == "/old.md" {
+			t.Fatalf("an archived document is out of scope for every check: %+v", f)
+		}
 	}
 	if got := findings(r, CheckMissingHub); len(got) != 1 || !strings.HasPrefix(got[0], "/journal/:") {
 		t.Fatalf("missing hub: %v", got)
