@@ -87,7 +87,8 @@ func LoadDefault() *Store {
 	s, err := Load(path)
 	if err != nil {
 		warnf("tokens: no stored tokens in use: %v", err)
-		return &Store{path: path, tokens: make(map[string]entry)}
+		// A broken tokens.toml must not drop projected tokens.d entries.
+		return &Store{path: path, tokens: make(map[string]entry), dir: loadDir(DirPath(path))}
 	}
 	return s
 }

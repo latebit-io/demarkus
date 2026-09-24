@@ -46,10 +46,12 @@ agent stays `Pending`. Mint an agent entry into that world's `tokens.toml`
 Secret and store its raw value yourself (the server hot-reloads the file):
 
 ```bash
+umask 077 && work=$(mktemp -d) && cd "$work"
 kubectl get secret team-a-tokens -o jsonpath='{.data.tokens\.toml}' | base64 -d > tokens.toml
 demarkus-token generate -label agent -tokens tokens.toml > raw.txt
 kubectl create secret generic team-a-tokens --from-file=tokens.toml --dry-run=client -o yaml | kubectl apply -f -
 kubectl create secret generic team-a-token-values --from-file=agent=raw.txt
+cd - && rm -rf "$work"
 ```
 
 then set `key: agent` on that entry. Existing hashes have no recoverable raw

@@ -388,6 +388,27 @@ func TestLoadReadsSiblingTokensDir(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultKeepsDirWhenFileBroken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".mark", "tokens.d")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "team-a:6309"), []byte("raw-a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".mark", "tokens.toml"), []byte("not [valid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	warnf = func(string, ...any) {}
+	t.Cleanup(func() { warnf = log.Printf })
+
+	if got := LoadDefault().Get("team-a:6309"); got != "raw-a" {
+		t.Errorf("broken tokens.toml dropped tokens.d entry: got %q", got)
+	}
+}
+
 func TestLoadDirMissingIsSilent(t *testing.T) {
 	var logged []string
 	warnf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
