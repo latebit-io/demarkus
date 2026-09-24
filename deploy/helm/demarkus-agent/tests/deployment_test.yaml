@@ -226,3 +226,81 @@ tests:
           content:
             name: HOME
             value: /home/demarkus
+
+  - it: tokens volume is a projected Secret with only the tokens.toml source by default
+    template: deployment.yaml
+    set:
+      config.seeds:
+        - mark://team-a:6309
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources[0].secret.name
+          value: RELEASE-NAME-demarkus-agent-tokens
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources[0].secret.optional
+          value: true
+      - lengthEqual:
+          path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources
+          count: 1
+
+  - it: fromWorldSecrets project raw world tokens to tokens.d/<hostPort> and are not optional
+    template: deployment.yaml
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      tokens.fromWorldSecrets:
+        - hostPort: "team-a:6309"
+          secret: team-a-token-values
+        - hostPort: "root:6309"
+          secret: root-token-values
+          key: publisher
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources
+          count: 3
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources[1].secret.name
+          value: team-a-token-values
+      - notExists:
+          path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources[1].secret.optional
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources[1].secret.items[0].key
+          value: admin
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources[1].secret.items[0].path
+          value: tokens.d/team-a:6309
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources[2].secret.items[0].key
+          value: publisher
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources[2].secret.items[0].path
+          value: tokens.d/root:6309
+
+  - it: fromWorldSecrets entry without secret fails render
+    template: deployment.yaml
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      tokens.fromWorldSecrets:
+        - hostPort: "team-a:6309"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tokens.fromWorldSecrets\[0\].secret is required'
+
+  - it: fromWorldSecrets hostPort with a path separator fails render
+    template: deployment.yaml
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      tokens.fromWorldSecrets:
+        - hostPort: "../etc"
+          secret: x
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be a bare host:port'

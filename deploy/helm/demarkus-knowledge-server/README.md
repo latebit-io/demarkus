@@ -20,7 +20,8 @@ pre-install/pre-upgrade bootstrap Job (`tokens.bootstrap`, enabled by
 default) creates any missing `<world>.tokenSecret` with a publish-only
 admin entry and hands off; existing Secrets are left untouched. With
 `tokens.emitRawValues: true` it also writes the raw token to a
-`<world>-token-values` Secret. Disable `tokens.bootstrap.enabled` to
+`<world>-token-values` Secret, which the demarkus-agent chart consumes
+directly through `tokens.fromWorldSecrets`. Disable `tokens.bootstrap.enabled` to
 provision token Secrets some other way. The Job's `tokens.bootstrap.image`
 defaults to kubectl 1.35, which supports API servers 1.34–1.36; override it
 to match older clusters (kubectl's skew policy is ±1 minor).

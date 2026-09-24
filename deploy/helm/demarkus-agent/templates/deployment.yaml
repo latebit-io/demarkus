@@ -85,9 +85,24 @@ spec:
           configMap:
             name: {{ include "demarkus-agent.fullname" . }}-config
         - name: tokens
-          secret:
-            secretName: {{ include "demarkus-agent.tokensSecretName" . }}
-            optional: true
+          projected:
+            sources:
+              - secret:
+                  name: {{ include "demarkus-agent.tokensSecretName" . }}
+                  optional: true
+              {{- range $i, $w := .Values.tokens.fromWorldSecrets }}
+              {{- $hostPort := required (printf "tokens.fromWorldSecrets[%d].hostPort is required" $i) $w.hostPort }}
+              {{- if or (contains "/" $hostPort) (hasPrefix "." $hostPort) }}
+              {{- fail (printf "tokens.fromWorldSecrets[%d].hostPort %q must be a bare host:port" $i $hostPort) }}
+              {{- end }}
+              # Not optional: a missing world Secret keeps the pod Pending
+              # until the server chart's bootstrap Job has minted it.
+              - secret:
+                  name: {{ required (printf "tokens.fromWorldSecrets[%d].secret is required" $i) $w.secret | quote }}
+                  items:
+                    - key: {{ $w.key | default "admin" | quote }}
+                      path: {{ printf "tokens.d/%s" $hostPort | quote }}
+              {{- end }}
         - name: tmp
           emptyDir: {}
         {{- if .Values.state.persistent }}

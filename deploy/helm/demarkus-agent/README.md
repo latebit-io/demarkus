@@ -15,6 +15,30 @@ helm install agent ./deploy/helm/demarkus-agent \
 
 For private seeds (read-auth enabled), add a token entry for that host as well.
 
+### One-step install next to demarkus-knowledge-server
+
+The server chart's bootstrap Job mints a raw publish token per world into
+`<world>-token-values` (`tokens.emitRawValues`, on by default). Point the agent
+at those Secrets instead of copying tokens by hand:
+
+```yaml
+config:
+  seeds: [mark://team-a]
+  hubs: [mark://root]
+tokens:
+  fromWorldSecrets:
+    - hostPort: "team-a:6309"
+      secret: team-a-token-values
+    - hostPort: "root:6309"
+      secret: root-token-values
+```
+
+Both charts can go in one `helm install` (or one umbrella chart): the agent pod
+stays `Pending` until every named Secret exists, then starts with the tokens in
+place. Same namespace only; `key` defaults to `admin`, the server chart's
+`tokens.admin.label`. Needs an agent image with `tokens.d` support (see
+"How auth is wired").
+
 ## Values
 
 | Key | Type | Default | Description |
@@ -37,6 +61,7 @@ For private seeds (read-auth enabled), add a token entry for that host as well.
 | `insecure` | bool | `false` | Skip TLS cert verification (self-signed dev clusters only) |
 | `tokens.existingSecret` | string | `""` | Name of an existing Secret with key `tokens.toml`. Takes precedence over `tokens.inline` |
 | `tokens.inline` | map | `{}` | Inline `host:port → token` map. Generates `<release>-tokens` Secret |
+| `tokens.fromWorldSecrets` | list | `[]` | `{hostPort, secret, key?}` entries projecting a raw token Secret key to `~/.mark/tokens.d/<hostPort>`. Not optional: pod waits for the Secret. `key` defaults to `admin` |
 | `state.persistent` | bool | `false` | If true, mount a PVC for the crawl-politeness state file |
 | `state.storageClassName` | string | `""` | StorageClass for the state PVC |
 | `state.size` | string | `1Gi` | PVC size |
@@ -71,7 +96,9 @@ Token files must therefore use logical authority keys.
 
 ## How auth is wired
 
-The agent uses the protocol-client tokens convention. On startup it calls `tokens.LoadDefault()` which reads `~/.mark/tokens.toml`. The chart mounts the tokens Secret at `/home/demarkus/.mark/tokens.toml` and sets `HOME=/home/demarkus`, so the existing code path Just Works.
+The agent uses the protocol-client tokens convention. On startup it calls `tokens.LoadDefault()` which reads `~/.mark/tokens.toml` and every file under `~/.mark/tokens.d/` (file name = `host:port`, content = raw token; `tokens.toml` wins on conflict). The chart mounts one projected volume at `/home/demarkus/.mark` holding the `tokens.toml` Secret plus one `tokens.d/<hostPort>` file per `tokens.fromWorldSecrets` entry, and sets `HOME=/home/demarkus`.
+
+Tokens are read once at startup. A rotated Secret takes effect on the next pod restart.
 
 For a single hub with a single token, you can also set the `DEMARKUS_AUTH` env var by patching the Deployment container `env`: but the file path is preferred for multi-host setups.
 

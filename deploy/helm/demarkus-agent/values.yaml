@@ -67,8 +67,9 @@ publishGraph: false
 insecure: false
 
 # Tokens for publishing to hubs / reading private servers.
-# Mounted as ~/.mark/tokens.toml inside the container.
-# Provide either an existing Secret name OR an inline tokens map.
+# Mounted under ~/.mark inside the container: tokens.toml from existingSecret
+# or inline, and one file per entry of fromWorldSecrets at tokens.d/<hostPort>.
+# tokens.toml wins over tokens.d for the same hostPort.
 tokens:
   # Name of an existing Secret with a "tokens.toml" key. If set, takes precedence.
   existingSecret: ""
@@ -77,6 +78,17 @@ tokens:
   # Format: hostPort -> raw token.
   inline: {}
   #   "hub.example.com:6309": "abc123..."
+
+  # Raw tokens the demarkus-knowledge-server chart mints into
+  # <world>-token-values (tokens.emitRawValues). Each entry projects one
+  # Secret key to ~/.mark/tokens.d/<hostPort>; the pod stays Pending until
+  # every named Secret exists, so server and agent install in one step.
+  # Same namespace only. The agent reads tokens at startup: rotate by
+  # restarting the pod.
+  fromWorldSecrets: []
+  #  - hostPort: "team-a:6309"       # logical authority, matches config keys
+  #    secret: team-a-token-values   # <world>-token-values from the server chart
+  #    key: admin                    # defaults to "admin" (the server chart's tokens.admin.label)
 
 # Persist the crawl-politeness state file across pod restarts.
 # Losing it just means a fresh crawl on next tick — no data loss on the hub.

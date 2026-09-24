@@ -11,6 +11,9 @@
 //
 //	["demarkus.latebit.io:6309"]
 //	token = "def456..."
+//
+// A sibling ~/.mark/tokens.d/ directory holds one raw token per file named
+// by host:port; mounted Secrets land there without a TOML render step.
 package tokens
 
 import (
@@ -20,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -32,6 +36,8 @@ type entry struct {
 type Store struct {
 	path   string
 	tokens map[string]entry
+	// dir holds tokens.d entries; read only, never written back to tokens.toml.
+	dir map[string]string
 }
 
 // DefaultPath returns the default tokens file path (~/.mark/tokens.toml).
@@ -69,16 +75,70 @@ func Load(path string) (*Store, error) {
 // warnf reports a tokens file that could not be used; tests replace it.
 var warnf = log.Printf
 
-// LoadDefault loads tokens from the default path (~/.mark/tokens.toml).
+// DefaultDir returns the default tokens directory (~/.mark/tokens.d).
+func DefaultDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".mark", "tokens.d")
+}
+
+// LoadDefault loads tokens from ~/.mark/tokens.toml and ~/.mark/tokens.d/.
 // A broken file is reported and reads as empty, so requests go out unauthenticated.
 func LoadDefault() *Store {
 	path := DefaultPath()
 	s, err := Load(path)
 	if err != nil {
 		warnf("tokens: no stored tokens in use: %v", err)
-		return &Store{path: path, tokens: make(map[string]entry)}
+		s = &Store{path: path, tokens: make(map[string]entry)}
 	}
+	s.dir = loadDir(DefaultDir())
 	return s
+}
+
+// loadDir reads one raw token per regular file in dir, keyed by file name.
+// Dotfiles are skipped: kubelet keeps ..data and timestamped dirs beside
+// the projected files. Unreadable entries are reported and skipped.
+func loadDir(dir string) map[string]string {
+	out := make(map[string]string)
+	if dir == "" {
+		return out
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			warnf("tokens: skipping tokens directory %q: %v", dir, err)
+		}
+		return out
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		full := filepath.Join(dir, name)
+		info, err := os.Stat(full) // follows the projected-volume symlink
+		if err != nil {
+			warnf("tokens: skipping %q: %v", full, err)
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			warnf("tokens: skipping %q: %v", full, err)
+			continue
+		}
+		tok := strings.TrimSpace(string(data))
+		if tok == "" {
+			warnf("tokens: skipping %q: empty token", full)
+			continue
+		}
+		out[name] = tok
+	}
+	return out
 }
 
 // Credential is a flag or DEMARKUS_AUTH token bound to the one host it was issued for.
@@ -102,17 +162,16 @@ func Resolve(cred Credential, host string, store *Store) string {
 	return store.Get(host)
 }
 
-// Get returns the raw token for the given host:port, or empty string if not found.
-// Safe to call on a nil Store.
+// Get returns the raw token for the given host:port, or empty string if not
+// found. tokens.toml wins over tokens.d for the same host. Safe on a nil Store.
 func (s *Store) Get(host string) string {
 	if s == nil {
 		return ""
 	}
-	e, ok := s.tokens[host]
-	if !ok {
-		return ""
+	if e, ok := s.tokens[host]; ok {
+		return e.Token
 	}
-	return e.Token
+	return s.dir[host]
 }
 
 // Set stores a token for the given host:port and writes to disk.
@@ -127,10 +186,17 @@ func (s *Store) Remove(host string) error {
 	return s.save()
 }
 
-// Hosts returns a sorted list of all stored host:port entries.
+// Hosts returns a sorted list of all host:port entries across both sources.
 func (s *Store) Hosts() []string {
-	hosts := make([]string, 0, len(s.tokens))
+	seen := make(map[string]struct{}, len(s.tokens)+len(s.dir))
 	for h := range s.tokens {
+		seen[h] = struct{}{}
+	}
+	for h := range s.dir {
+		seen[h] = struct{}{}
+	}
+	hosts := make([]string, 0, len(seen))
+	for h := range seen {
 		hosts = append(hosts, h)
 	}
 	sort.Strings(hosts)
