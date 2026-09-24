@@ -366,6 +366,28 @@ func TestLoadDefaultReadsTokensDir(t *testing.T) {
 	}
 }
 
+func TestLoadReadsSiblingTokensDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tokens.toml")
+	if err := os.MkdirAll(DirPath(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(DirPath(path), "team-a:6309"), []byte("raw-a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// No tokens.toml at all: `demarkus token list` must still see tokens.d hosts.
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := s.Hosts(); len(got) != 1 || got[0] != "team-a:6309" {
+		t.Errorf("Hosts: got %v", got)
+	}
+	if got := s.Get("team-a:6309"); got != "raw-a" {
+		t.Errorf("Get: got %q", got)
+	}
+}
+
 func TestLoadDirMissingIsSilent(t *testing.T) {
 	var logged []string
 	warnf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }

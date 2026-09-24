@@ -49,13 +49,13 @@ func DefaultPath() string {
 	return filepath.Join(home, ".mark", "tokens.toml")
 }
 
-// Load reads a tokens file from disk. Returns an empty store if the file
-// does not exist yet. Returns an error if path is empty.
+// Load reads a tokens file and its sibling tokens.d/ directory. Returns an
+// empty store if neither exists yet. Returns an error if path is empty.
 func Load(path string) (*Store, error) {
 	if path == "" {
 		return nil, fmt.Errorf("tokens file path is empty (could not determine home directory)")
 	}
-	s := &Store{path: path, tokens: make(map[string]entry)}
+	s := &Store{path: path, tokens: make(map[string]entry), dir: loadDir(DirPath(path))}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -72,17 +72,13 @@ func Load(path string) (*Store, error) {
 	return s, nil
 }
 
+// DirPath returns the tokens.d directory beside a tokens file.
+func DirPath(tokensFile string) string {
+	return filepath.Join(filepath.Dir(tokensFile), "tokens.d")
+}
+
 // warnf reports a tokens file that could not be used; tests replace it.
 var warnf = log.Printf
-
-// DefaultDir returns the default tokens directory (~/.mark/tokens.d).
-func DefaultDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".mark", "tokens.d")
-}
 
 // LoadDefault loads tokens from ~/.mark/tokens.toml and ~/.mark/tokens.d/.
 // A broken file is reported and reads as empty, so requests go out unauthenticated.
@@ -91,9 +87,8 @@ func LoadDefault() *Store {
 	s, err := Load(path)
 	if err != nil {
 		warnf("tokens: no stored tokens in use: %v", err)
-		s = &Store{path: path, tokens: make(map[string]entry)}
+		return &Store{path: path, tokens: make(map[string]entry)}
 	}
-	s.dir = loadDir(DefaultDir())
 	return s
 }
 
@@ -102,9 +97,6 @@ func LoadDefault() *Store {
 // the projected files. Unreadable entries are reported and skipped.
 func loadDir(dir string) map[string]string {
 	out := make(map[string]string)
-	if dir == "" {
-		return out
-	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {

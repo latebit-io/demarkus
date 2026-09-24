@@ -304,3 +304,17 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'must be a bare host:port'
+
+  - it: duplicate fromWorldSecrets hostPort fails render
+    template: deployment.yaml
+    set:
+      config.seeds:
+        - mark://team-a:6309
+      tokens.fromWorldSecrets:
+        - hostPort: "team-a:6309"
+          secret: a
+        - hostPort: "team-a:6309"
+          secret: b
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tokens.fromWorldSecrets\[1\].hostPort "team-a:6309" is duplicated'

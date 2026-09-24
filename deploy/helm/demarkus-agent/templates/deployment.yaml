@@ -90,11 +90,17 @@ spec:
               - secret:
                   name: {{ include "demarkus-agent.tokensSecretName" . }}
                   optional: true
+              {{- $seenHostPorts := dict }}
               {{- range $i, $w := .Values.tokens.fromWorldSecrets }}
               {{- $hostPort := required (printf "tokens.fromWorldSecrets[%d].hostPort is required" $i) $w.hostPort }}
               {{- if or (contains "/" $hostPort) (hasPrefix "." $hostPort) }}
               {{- fail (printf "tokens.fromWorldSecrets[%d].hostPort %q must be a bare host:port" $i $hostPort) }}
               {{- end }}
+              {{- /* Same hostPort = same projected path; kubelet rejects the pod. */}}
+              {{- if hasKey $seenHostPorts $hostPort }}
+              {{- fail (printf "tokens.fromWorldSecrets[%d].hostPort %q is duplicated" $i $hostPort) }}
+              {{- end }}
+              {{- $_ := set $seenHostPorts $hostPort true }}
               # Not optional: a missing world Secret keeps the pod Pending
               # until the server chart's bootstrap Job has minted it.
               - secret:
