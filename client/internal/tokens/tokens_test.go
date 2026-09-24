@@ -409,6 +409,15 @@ func TestLoadDefaultKeepsDirWhenFileBroken(t *testing.T) {
 	}
 }
 
+func TestDirPathEmpty(t *testing.T) {
+	if got := DirPath(""); got != "" {
+		t.Errorf("DirPath(\"\") = %q, want empty", got)
+	}
+	if got := loadDir(""); len(got) != 0 {
+		t.Errorf("loadDir(\"\") = %v, want empty", got)
+	}
+}
+
 func TestLoadDirMissingIsSilent(t *testing.T) {
 	var logged []string
 	warnf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }

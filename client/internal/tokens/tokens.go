@@ -72,8 +72,11 @@ func Load(path string) (*Store, error) {
 	return s, nil
 }
 
-// DirPath returns the tokens.d directory beside a tokens file.
+// DirPath returns the tokens.d directory beside a tokens file; empty in, empty out.
 func DirPath(tokensFile string) string {
+	if tokensFile == "" {
+		return ""
+	}
 	return filepath.Join(filepath.Dir(tokensFile), "tokens.d")
 }
 
@@ -98,6 +101,10 @@ func LoadDefault() *Store {
 // the projected files. Unreadable entries are reported and skipped.
 func loadDir(dir string) map[string]string {
 	out := make(map[string]string)
+	if dir == "" {
+		// No home dir: never fall back to a relative ./tokens.d.
+		return out
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {

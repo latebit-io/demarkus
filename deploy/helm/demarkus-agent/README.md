@@ -18,8 +18,9 @@ For private seeds (read-auth enabled), add a token entry for that host as well.
 ### One-step install next to demarkus-knowledge-server
 
 The server chart's bootstrap Job mints a raw publish token per world into
-`<world>-token-values` (`tokens.emitRawValues`, on by default). Point the agent
-at those Secrets instead of copying tokens by hand:
+`<world>-token-values` (`tokens.emitRawValues`, on by default) under the key
+`tokens.admin.label` (default `admin`). Point the agent at those Secrets
+instead of copying tokens by hand:
 
 ```yaml
 config:
@@ -33,29 +34,33 @@ tokens:
       secret: root-token-values
 ```
 
-Both charts can go in one `helm install` (or one umbrella chart): the agent pod
-stays `Pending` until every named Secret exists, then starts with the tokens in
-place. Same namespace only; `key` defaults to `admin`, the server chart's
-`tokens.admin.label`. Needs an agent image with `tokens.d` support (see
-"How auth is wired").
+Both charts can go in one `helm install` or one umbrella chart. The world
+Secret sources are not `optional`, so the agent container does not start until
+every named Secret exists (the pod sits in `ContainerCreating` with a
+"secret not found" event), then comes up with the tokens in place. Same
+namespace only. Needs an agent image that reads `tokens.d`; older images ignore
+the directory and publish unauthenticated.
 
-This holds for worlds the bootstrap Job creates. For a world whose `tokens.toml`
+The Job only creates Secrets that are missing. A world whose `tokens.toml`
 Secret already existed (bootstrapped before `emitRawValues`, or provisioned
-another way) the Job is a no-op and never writes `<world>-token-values`, so the
-agent stays `Pending`. Mint an agent entry into that world's `tokens.toml`
-Secret and store its raw value yourself (the server hot-reloads the file):
+another way) gets no `<world>-token-values`, and the agent never starts. Mint an
+agent entry into that world's `tokens.toml` Secret and store its raw value
+yourself; the server hot-reloads the file. Run under Bash:
 
 ```bash
-umask 077 && work=$(mktemp -d) && cd "$work"
-kubectl get secret team-a-tokens -o jsonpath='{.data.tokens\.toml}' | base64 -d > tokens.toml
-demarkus-token generate -label agent -tokens tokens.toml > raw.txt
-kubectl create secret generic team-a-tokens --from-file=tokens.toml --dry-run=client -o yaml | kubectl apply -f -
-kubectl create secret generic team-a-token-values --from-file=agent=raw.txt
-cd - && rm -rf "$work"
+set -euo pipefail
+umask 077
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+kubectl get secret team-a-tokens -o jsonpath='{.data.tokens\.toml}' | base64 -d > "$work/tokens.toml"
+demarkus-token generate -label agent -tokens "$work/tokens.toml" > "$work/raw.txt"
+kubectl create secret generic team-a-tokens --from-file=tokens.toml="$work/tokens.toml" --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret generic team-a-token-values --from-file=agent="$work/raw.txt"
 ```
 
-then set `key: agent` on that entry. Existing hashes have no recoverable raw
-value, so a fresh entry is the only path.
+Then set `key: agent` on that world's `fromWorldSecrets` entry. `team-a-tokens`
+is the world's `tokenSecret.name` in the server chart values. The broker also
+appends to that Secret, so re-apply promptly after reading it.
 
 ## Values
 
