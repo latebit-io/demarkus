@@ -616,6 +616,20 @@ func TestLoadConfig(t *testing.T) {
 			},
 		},
 		{
+			// A blank cookie key is generated at startup (EnsureSecretValue),
+			// so load succeeds and the store name gets its default.
+			name: "cookieKey optional, cookieKeySecret defaults",
+			body: strings.Replace(validConfig, "  cookieKey: \"dGVzdC1rZXk=\"\n", "", 1),
+			validate: func(t *testing.T, c *Config) {
+				if c.Server.CookieKey != "" {
+					t.Errorf("CookieKey = %q, want blank", c.Server.CookieKey)
+				}
+				if c.Server.CookieKeySecret != DefaultCookieKeySecret {
+					t.Errorf("CookieKeySecret = %q, want %q", c.Server.CookieKeySecret, DefaultCookieKeySecret)
+				}
+			},
+		},
+		{
 			// A blank key is generated at startup (EnsureSigningKey), so
 			// load succeeds and the store name gets its default.
 			name: "brokerSigningKey optional, signingKeySecret defaults",

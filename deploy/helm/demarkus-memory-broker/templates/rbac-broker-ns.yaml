@@ -16,12 +16,10 @@
      get/update pinned to the configured lease name; create gets
      its own rule (namespace-wide).
 
-   - secrets (refresh-tokens): chart-seeded at install time
-     (secret-refresh-tokens.yaml), so the broker only needs
-     get/update — never create. The resource-policy: keep
-     annotation means helm upgrade never re-templates it, so the
-     broker SA's update verb is the only path that mutates it
-     after install.
+   - secrets (refresh-tokens, dynamic-clients, cookie-key): runtime
+     state the broker creates on first write (never templated, so a
+     GitOps render cannot reset it); get/update pinned by name,
+     create through the namespace-wide rule.
 
    - secrets (per-world write-token): the broker provisions these
      lazily on the first write to each configured world. get/update
@@ -51,6 +49,7 @@ rules:
     resourceNames:
       - {{ include "demarkus-memory-broker.refreshTokensSecretName" . | quote }}
       - {{ include "demarkus-memory-broker.dynamicClientsSecretName" . | quote }}
+      - {{ include "demarkus-memory-broker.cookieKeySecretName" . | quote }}
     verbs: ["get", "update"]
   {{- if ne (include "demarkus-memory-broker.provisioningMode" .) "static" }}
   {{- /* Dynamic provisioning: runtime-created Secret names cannot be
@@ -59,7 +58,8 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "update", "create"]
-  {{- else if .Values.worlds }}
+  {{- else }}
+  {{- if .Values.worlds }}
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames:
@@ -67,6 +67,7 @@ rules:
       - {{ include "demarkus-memory-broker.writeTokenSecretName" (dict "worldName" .name) | quote }}
       {{- end }}
     verbs: ["get", "update"]
+  {{- end }}
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]

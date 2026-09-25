@@ -10,8 +10,11 @@ Secrets.
   (default `RollingUpdate`, `maxUnavailable: 0`, `maxSurge: 1`, so even a
   single replica rolls without a serving gap) and `PodDisruptionBudget`
   (`minAvailable: 1`).
-- Chart-managed broker config Secret with auto-generated cookie HMAC key
-  preserved across `helm upgrade` via `lookup`.
+- Chart-managed broker config Secret, rendered deterministically (no
+  `lookup`, no random values) so GitOps controllers see a stable manifest.
+- Runtime Secrets the broker creates itself on first use, create-only and
+  never templated: refresh tokens, dynamic client registrations, the
+  state-cookie key (when `server.cookieKey` is blank) and the signing key.
 - Per-world `Role` + `RoleBinding` in each world's namespace
   (`get/update` on the world's tokens Secret) plus broker-namespace
   `Role` covering the sweeper Lease, the refresh-tokens Secret, and
@@ -497,13 +500,40 @@ first upgrade:
   NetworkPolicy that matched `app.kubernetes.io/name: demarkus-broker`
   (the knowledge-server chart's default now matches the new name).
 
-## Cookie key preservation
+## Runtime Secrets
 
-The signed-state-cookie HMAC key is generated on first install and
-preserved across `helm upgrade` via a `lookup` of the live config
-Secret. To rotate the key, set `server.cookieKey` to a new
-base64-encoded value and restart the broker. Any in-flight OIDC login
-is invalidated by rotation, which is the intended behavior.
+The broker owns its runtime state and creates each Secret on first use
+through a create-only read-modify-write, so every replica converges on one
+value and no chart render can reset it:
+
+- `<fullname>-refresh-tokens`: refresh-token records
+- `<fullname>-dynamic-clients`: RFC 7591 client registrations
+- `<fullname>-cookie-key`: the signed-state-cookie key, when
+  `server.cookieKey` is blank. Rotate by deleting it and running
+  `kubectl rollout restart` on the Deployment; logins in flight fail once.
+
+Set `server.cookieKey` to manage the key yourself instead.
+
+### Upgrading from a chart that templated them
+
+Charts before this change rendered the refresh-tokens and dynamic-clients
+Secrets with `helm.sh/resource-policy: keep` and derived the cookie key
+through `lookup`.
+
+- **Helm:** the upgrade drops the two Secrets from the release and keeps
+  them, data included. The cookie key is regenerated once.
+- **Argo CD:** Argo maps `resource-policy: keep` to `Delete=false`, which
+  does not stop a sync prune. Before syncing the new chart, detach the two
+  live Secrets from the Application, or Argo deletes every session and
+  registration:
+
+  ```sh
+  kubectl -n <namespace> annotate secret <fullname>-refresh-tokens <fullname>-dynamic-clients \
+    argocd.argoproj.io/tracking-id-
+  ```
+
+  With label tracking, remove the instance label instead. The stale
+  `cookie-key` field in the config Secret disappears on the same sync.
 
 ## Resource names
 

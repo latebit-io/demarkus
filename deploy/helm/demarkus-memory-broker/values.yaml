@@ -36,12 +36,14 @@ server:
   # containerPort from this value.
   port: 8080
 
-  # Signed-state-cookie HMAC key, base64-encoded. When empty the chart
-  # generates a fresh 32-byte key on first install and preserves it across
-  # `helm upgrade` via `lookup` on the existing config Secret. Override only
-  # if you want to manage the key out-of-band (rotate by setting a new value
-  # and bouncing the broker; any in-flight login is invalidated).
+  # Signed-state-cookie HMAC key, base64-encoded. When empty the broker
+  # generates a 32-byte key on first start and persists it in the
+  # cookieKeySecret Secret (create-only, shared by every replica). Rotate by
+  # deleting that Secret and restarting the Deployment; logins in flight are
+  # invalidated.
   cookieKey: ""
+  # Secret holding the generated cookie key. Default <fullname>-cookie-key.
+  cookieKeySecret: ""
 
   # State cookie TTL. Long enough for a real user to complete the OIDC
   # redirect, short enough that a stale cookie cannot be replayed.

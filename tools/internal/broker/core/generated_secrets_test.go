@@ -1,7 +1,9 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"testing"
 )
@@ -114,5 +116,35 @@ func TestEnsureSigningKeyReportsFinalAttempt(t *testing.T) {
 	}
 	if got.Signer.KeyID() != want.KeyID() {
 		t.Error("signer is not the key the store kept")
+	}
+}
+
+func TestEnsureSecretValueCookieKeyGeneratesOnceAndDecodes(t *testing.T) {
+	store := &memStore{data: map[string][]byte{}}
+	cfg := &Config{Server: ServerConfig{BrokerNamespace: "ns", CookieKeySecret: DefaultCookieKeySecret}}
+	ref := CookieKeyRef(cfg)
+
+	first, err := EnsureSecretValue(context.Background(), store, ref, GenerateCookieKey)
+	if err != nil || !first.Generated {
+		t.Fatalf("first: generated=%v err=%v", first.Generated, err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(string(first.Value))
+	if err != nil || len(raw) != 32 {
+		t.Fatalf("cookie key must be base64 of 32 bytes: len=%d err=%v", len(raw), err)
+	}
+	second, err := EnsureSecretValue(context.Background(), store, ref, GenerateCookieKey)
+	if err != nil || second.Generated || !bytes.Equal(second.Value, first.Value) {
+		t.Fatalf("second call must reuse the stored key: generated=%v err=%v", second.Generated, err)
+	}
+}
+
+func TestCookieKeyRef(t *testing.T) {
+	cfg := &Config{Server: ServerConfig{BrokerNamespace: "ns", CookieKeySecret: "ck"}}
+	if got := CookieKeyRef(cfg); got.Namespace != "ns" || got.Name != "ck" || got.Key != CookieKeySecretKey || got.Path != "" {
+		t.Errorf("kubernetes ref = %+v", got)
+	}
+	cfg.Storage = StorageConfig{Backend: StorageBackendFile, Dir: "/state"}
+	if got := CookieKeyRef(cfg).Path; got != "/state/cookie-key" {
+		t.Errorf("file path = %q", got)
 	}
 }

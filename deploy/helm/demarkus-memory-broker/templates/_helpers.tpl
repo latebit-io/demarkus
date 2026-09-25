@@ -137,31 +137,9 @@ on bind.
 {{- $portInt -}}
 {{- end -}}
 
-{{/*
-Cookie key resolution. Order of precedence:
-  1. .Values.server.cookieKey (operator-supplied literal)
-  2. Existing config Secret (preserves the key across helm upgrades)
-  3. Freshly generated 32-byte key, base64-encoded
-
-Generated only ONCE on first install; subsequent helm-upgrades read the
-existing Secret via `lookup` so the cookie key — and therefore in-flight
-state cookies — survive chart updates.
-
-NOTE: `lookup` returns nil during `helm template` (no cluster context),
-so a fresh `randAlphaNum` runs on every offline render. Tests should not
-assert on exact key values, only on structure.
-*/}}
-{{- define "demarkus-memory-broker.resolveCookieKey" -}}
-{{- if .Values.server.cookieKey -}}
-{{- .Values.server.cookieKey -}}
-{{- else -}}
-{{- $existing := lookup "v1" "Secret" .Release.Namespace (include "demarkus-memory-broker.configSecretName" .) -}}
-{{- if and $existing (index $existing.data "cookie-key") -}}
-{{- index $existing.data "cookie-key" | b64dec -}}
-{{- else -}}
-{{- randAlphaNum 32 | b64enc -}}
-{{- end -}}
-{{- end -}}
+{{/* Cookie-key Secret: the broker generates and persists its state-cookie key here on first start when server.cookieKey is blank. */}}
+{{- define "demarkus-memory-broker.cookieKeySecretName" -}}
+{{- default (printf "%s-cookie-key" (include "demarkus-memory-broker.fullname" .)) .Values.server.cookieKeySecret -}}
 {{- end -}}
 
 {{- /* One validation seam for provisioning.mode; normalization (trim)

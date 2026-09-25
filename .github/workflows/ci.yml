@@ -459,22 +459,22 @@ jobs:
             demarkus-server-tokens \
             broker-minted-test \
             ZmFrZS10b2tlbi1oYXNo
-      - name: Upgrade-wipe regression — demarkus-knowledge-broker
+      - name: Runtime Secret migration — demarkus-knowledge-broker
         run: |
-          # Broker requires a parseable ECDSA P-256 PEM for
-          # oidc.brokerSigningKey — OIDCConfig.validate now parses
-          # the key at LoadConfig (parse-at-validate). Generate an
-          # ephemeral key per run, hand it to helm via --set-file
-          # so the multi-line value travels through a file instead
-          # of the shell, and let the trap rm it. The PEM never
-          # lives in the repo or shell history.
-          # (Avoid the literal GitHub-Actions expression marker in
-          # this comment — the workflow parser scans `run:` blocks
-          # for expressions and rejects an unmatched opener.)
+          # The chart no longer templates the refresh-tokens Secret; the
+          # broker creates it. Install the last chart revision that did
+          # (pinned by SHA so it never ages out of a registry), seed data,
+          # upgrade to this checkout, and assert the Secret and data survive
+          # upgrade and uninstall. Ephemeral signing key via --set-file.
+          OLD_REV=72ac5702b2c7f4ef2ce5a3b6f4c749ac3113a805
+          OLD_DIR="$(mktemp -d)"
           SIGNING_KEY_FILE="$(mktemp)"
-          trap 'rm -f "$SIGNING_KEY_FILE"' EXIT
+          trap 'rm -rf "$OLD_DIR" "$SIGNING_KEY_FILE"' EXIT
+          git fetch --no-tags --depth=1 origin "$OLD_REV"
+          git archive "$OLD_REV" deploy/helm/demarkus-knowledge-broker | tar -x -C "$OLD_DIR"
           openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$SIGNING_KEY_FILE"
-          bash deploy/helm/test-upgrade-wipe.sh \
+          bash deploy/helm/test-runtime-secret-migration.sh \
+            "$OLD_DIR/deploy/helm/demarkus-knowledge-broker" \
             deploy/helm/demarkus-knowledge-broker \
             demarkus-knowledge-broker \
             test-broker \

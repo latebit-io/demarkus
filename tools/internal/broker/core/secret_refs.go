@@ -13,6 +13,8 @@ const (
 	DynamicClientsSecretKey = "dynamic-clients.json"
 	// SigningKeySecretKey holds the generated id_token signing key PEM.
 	SigningKeySecretKey = "signing-key.pem"
+	// CookieKeySecretKey holds the generated base64 cookie key.
+	CookieKeySecretKey = "cookie-key"
 	// worldWriteTokenSecretKey holds one world's JSON write token entry.
 	worldWriteTokenSecretKey = "write-token.json"
 	// registrySecretKey holds the tenant registry JSON.
@@ -23,6 +25,7 @@ const (
 	DefaultRefreshTokensSecret  = "demarkus-broker-refresh-tokens"
 	DefaultDynamicClientsSecret = "demarkus-broker-dynamic-clients"
 	DefaultSigningKeySecret     = "demarkus-broker-signing-key"
+	DefaultCookieKeySecret      = "demarkus-broker-cookie-key"
 )
 
 // worldWriteTokenSecretName is the per world write token Secret, one per
@@ -49,6 +52,11 @@ func RefreshTokensRef(cfg *Config) SecretRef {
 // DynamicClientsRef locates the RFC 7591 registration map.
 func DynamicClientsRef(cfg *Config) SecretRef {
 	return brokerSecretRef(cfg, cfg.Server.DynamicClientsSecret, DynamicClientsSecretKey)
+}
+
+// CookieKeyRef locates the generated state-cookie key.
+func CookieKeyRef(cfg *Config) SecretRef {
+	return brokerSecretRef(cfg, cfg.Server.CookieKeySecret, CookieKeySecretKey)
 }
 
 // SigningKeyRef locates the generated id_token signing key.

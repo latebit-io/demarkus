@@ -114,7 +114,8 @@ type WorldDialerConfig struct {
 type ServerConfig struct {
 	// Addr is the listen address, e.g. ":8080". HTTPS terminates at the Ingress.
 	Addr string `yaml:"addr"`
-	// CookieKey is the base64 HMAC key signing the OIDC state cookie. Rotating
+	// CookieKey is the base64 HMAC key signing the OIDC state cookie; blank
+	// generates one into CookieKeySecret on first start. Rotating
 	// it invalidates in-flight logins, which is the wanted effect.
 	CookieKey string `yaml:"cookieKey"`
 	// StateTTL caps the signed state cookie. Default 5m.
@@ -137,6 +138,9 @@ type ServerConfig struct {
 	// SigningKeySecret holds the generated id_token signing key when
 	// OIDC.BrokerSigningKey is blank. Default "demarkus-broker-signing-key".
 	SigningKeySecret string `yaml:"signingKeySecret"`
+	// CookieKeySecret holds the generated cookie key when CookieKey is blank.
+	// Default "demarkus-broker-cookie-key".
+	CookieKeySecret string `yaml:"cookieKeySecret"`
 	// DynamicClientsSecret holds the RFC 7591 registration map.
 	DynamicClientsSecret string `yaml:"dynamicClientsSecret"`
 	// RefreshTokenTTL is the lifetime of a new refresh token. Default 90 days.

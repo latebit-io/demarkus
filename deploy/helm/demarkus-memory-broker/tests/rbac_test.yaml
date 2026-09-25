@@ -93,6 +93,7 @@ tests:
           value:
             - "RELEASE-NAME-demarkus-memory-broker-refresh-tokens"
             - "RELEASE-NAME-demarkus-memory-broker-dynamic-clients"
+            - "RELEASE-NAME-demarkus-memory-broker-cookie-key"
       - equal:
           path: rules[2].verbs
           value: ["get", "update"]
@@ -179,16 +180,17 @@ tests:
           # rule landing un-restricted.
           path: rules[4].resourceNames
 
-  - it: broker-ns Role omits both worlds rules entirely when worlds[] is empty
+  - it: broker-ns Role keeps only the secrets create rule when worlds[] is empty
     template: rbac-broker-ns.yaml
     documentIndex: 0
     set:
       worlds: []
     asserts:
-      # Only the two leases rules + the chart-seeded-secrets rule
-      # render; no rules[3] or [4] are emitted without worlds.
-      - notExists:
-          path: rules[3]
+      # Two leases rules, the pinned runtime-secrets rule, and the create
+      # rule the broker needs for the Secrets it now creates itself.
+      - equal:
+          path: rules[3].verbs
+          value: ["create"]
       - notExists:
           path: rules[4]
 

@@ -92,6 +92,7 @@ tests:
           value:
             - "RELEASE-NAME-refresh-tokens"
             - "RELEASE-NAME-dynamic-clients"
+            - "RELEASE-NAME-cookie-key"
             - "RELEASE-NAME-signing-key"
       - equal:
           path: rules[2].verbs

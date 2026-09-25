@@ -69,7 +69,7 @@ helm upgrade --install demarkus oci://ghcr.io/latebit-io/charts/demarkus-knowled
 
 Two Secrets, both yours: the IdP client secret and the library's client
 secret (the broker hashes it at load, so it is shared, not duplicated). The
-broker generates and persists its own signing key on first start, the
+broker generates and persists its own signing key and cookie key on first start, the
 knowledge server bootstraps one tokens Secret per world, and the agent
 projects the hub's raw token from there. Buckets and the GSA are the only
 out-of-cluster prerequisites.

@@ -285,7 +285,17 @@ func newKubeClient(kubeconfigPath string) (kubernetes.Interface, error) {
 // signer, verifier, discovery, the broker-side id_token signer and the rate
 // limiters, each failing fast on misconfiguration.
 func buildServerDeps(cfg *core.Config, opts *RunOptions, store core.SecretStore, log *slog.Logger) (oauthsrv.ServerDeps, error) {
-	signer, err := oauthsrv.NewSigner(cfg.Server.CookieKey)
+	cookieKey := cfg.Server.CookieKey
+	if cookieKey == "" {
+		ref := core.CookieKeyRef(cfg)
+		key, err := core.EnsureSecretValue(context.Background(), store, ref, core.GenerateCookieKey)
+		if err != nil {
+			return oauthsrv.ServerDeps{}, err
+		}
+		cookieKey = string(key.Value)
+		log.Info(opts.LogName+": cookie key from store", "ref", ref.String(), "generated", key.Generated)
+	}
+	signer, err := oauthsrv.NewSigner(cookieKey)
 	if err != nil {
 		return oauthsrv.ServerDeps{}, err
 	}

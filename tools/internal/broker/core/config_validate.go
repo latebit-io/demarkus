@@ -24,9 +24,6 @@ func (c *Config) validate() error {
 	if c.Server.Addr == "" {
 		return fmt.Errorf("server.addr is required")
 	}
-	if c.Server.CookieKey == "" {
-		return fmt.Errorf("server.cookieKey is required")
-	}
 	if err := c.validateStorage(); err != nil {
 		return err
 	}
@@ -128,6 +125,7 @@ func (c *Config) validateFilePaths() error {
 		filepath.Clean(RefreshTokensRef(c).Path):  "storage.dir refresh-tokens state",
 		filepath.Clean(DynamicClientsRef(c).Path): "storage.dir dynamic-clients state",
 		filepath.Clean(SigningKeyRef(c).Path):     "storage.dir signing-key state",
+		filepath.Clean(CookieKeyRef(c).Path):      "storage.dir cookie-key state",
 	}
 	for i := range c.Worlds {
 		w := &c.Worlds[i]
