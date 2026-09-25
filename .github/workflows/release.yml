@@ -822,7 +822,9 @@ jobs:
         # Each sub-chart publishes with --version/--app-version from its own
         # tag stream; the committed Chart.yaml values are only local-render
         # placeholders. Mirror the published numbers so the vendored copies
-        # default to the same image tags.
+        # default to the same image tags. A component job tags before it
+        # pushes, so a tag alone does not prove a release: require the
+        # component chart (pushed last, after its image) to exist on ghcr.
         run: |
           set -euo pipefail
           latest() { git tag --list "$1/v*" --sort=-v:refname | head -n1 | sed "s#^$1/v##"; }
@@ -832,6 +834,10 @@ jobs:
             ver="$(latest "$stream")"
             if [ -z "$ver" ]; then
               echo "no $stream/v* tag found" >&2
+              exit 1
+            fi
+            if ! helm show chart "oci://ghcr.io/latebit-io/charts/$chart" --version "$ver" >/dev/null; then
+              echo "::error::$stream/v$ver is tagged but $chart $ver is not on ghcr; that release did not finish" >&2
               exit 1
             fi
             yq -i ".version = \"$ver\" | .appVersion = \"$ver\"" "deploy/helm/$chart/Chart.yaml"
