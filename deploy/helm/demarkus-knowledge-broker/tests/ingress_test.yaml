@@ -71,10 +71,10 @@ tests:
           of: Certificate
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-demarkus-knowledge-broker-tls
+          value: RELEASE-NAME-tls
       - equal:
           path: spec.secretName
-          value: RELEASE-NAME-demarkus-knowledge-broker-tls
+          value: RELEASE-NAME-tls
       - equal:
           path: spec.dnsNames[0]
           value: broker.example.com
@@ -94,7 +94,7 @@ tests:
     asserts:
       - equal:
           path: spec.tls[0].secretName
-          value: RELEASE-NAME-demarkus-knowledge-broker-tls
+          value: RELEASE-NAME-tls
 
   - it: ingress.className override propagates to ingressClassName
     template: ingress.yaml

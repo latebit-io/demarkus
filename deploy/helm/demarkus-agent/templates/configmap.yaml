@@ -6,9 +6,12 @@ metadata:
     {{- include "demarkus-agent.labels" . | nindent 4 }}
 data:
   agent.toml: |
-    {{- if .Values.config.seeds }}
+    {{- $seeds := include "demarkus-agent.seeds" . | fromYamlArray }}
+    {{- $hubs := include "demarkus-agent.hubs" . | fromYamlArray }}
+    {{- $endpoints := include "demarkus-agent.endpoints" . | fromYaml }}
+    {{- if $seeds }}
     seeds = [
-      {{- range .Values.config.seeds }}
+      {{- range $seeds }}
       {{ . | quote }},
       {{- end }}
     ]
@@ -16,9 +19,9 @@ data:
     seeds = []
     {{- end }}
 
-    {{- if .Values.config.hubs }}
+    {{- if $hubs }}
     hubs = [
-      {{- range .Values.config.hubs }}
+      {{- range $hubs }}
       {{ . | quote }},
       {{- end }}
     ]
@@ -26,7 +29,7 @@ data:
     hubs = []
     {{- end }}
 
-    {{- range $authority, $endpoint := .Values.config.endpoints }}
+    {{- range $authority, $endpoint := $endpoints }}
     [endpoints.{{ $authority | quote }}]
     dial_address = {{ $endpoint.dialAddress | quote }}
     {{- if $endpoint.serverName }}

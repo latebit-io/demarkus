@@ -313,10 +313,21 @@ func buildServerDeps(cfg *core.Config, opts *RunOptions, store core.SecretStore,
 	}
 
 	// Broker-side ECDSA signer for the refresh-grant path; an invalid
-	// PEM fails the pod fast rather than the first refresh.
-	idTokenSigner, err := core.NewIDTokenSigner([]byte(cfg.OIDC.BrokerSigningKey))
-	if err != nil {
-		return oauthsrv.ServerDeps{}, err
+	// PEM fails the pod fast rather than the first refresh. No configured
+	// key means one is generated and persisted on first start.
+	var idTokenSigner *core.IDTokenSigner
+	if cfg.OIDC.BrokerSigningKey != "" {
+		if idTokenSigner, err = core.NewIDTokenSigner([]byte(cfg.OIDC.BrokerSigningKey)); err != nil {
+			return oauthsrv.ServerDeps{}, err
+		}
+	} else {
+		ref := core.SigningKeyRef(cfg)
+		key, err := core.EnsureSigningKey(context.Background(), store, ref)
+		if err != nil {
+			return oauthsrv.ServerDeps{}, err
+		}
+		idTokenSigner = key.Signer
+		log.Info(opts.LogName+": signing key from store", "ref", ref.String(), "generated", key.Generated)
 	}
 	log.Info(opts.LogName+": id_token signer ready", "kid", idTokenSigner.KeyID())
 

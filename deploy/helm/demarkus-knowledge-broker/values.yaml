@@ -94,6 +94,10 @@ server:
   # chart lifecycle events never invalidate live refresh tokens.
   refreshTokensSecret: ""
 
+  # Secret the broker persists its generated signing key in (mode 1 of
+  # oidc.brokerSigningKey). Default <fullname>-signing-key.
+  signingKeySecret: ""
+
   # RFC 7591 dynamic-client registration map (kept Secret, like
   # refreshTokensSecret). Renaming it after install orphans existing
   # registrations; connected MCP hosts must then re-register.
@@ -221,99 +225,98 @@ oidc:
   #   allowDomains: ["example.com", "acme.test"]    # multi-org
   allowDomains: []
 
-  # Broker-side ECDSA P-256 private key (PR4). The broker signs
-  # id_tokens on /device/token refresh-grant responses with this key
-  # and serves the matching public key at /.well-known/jwks.json. Two
-  # modes — exactly the same shape as clientSecret:
-  #
-  #   1. Cleartext via brokerSigningKey: a multi-line PEM literal
-  #      (PKCS#8 `-----BEGIN PRIVATE KEY-----` or SEC1
-  #      `-----BEGIN EC PRIVATE KEY-----`). Easiest install path; the
-  #      value lives in helm release history. Only acceptable for dev /
-  #      kind clusters.
-  #
-  #   2. existingSigningKeyRef — production path. Chart leaves the
-  #      field blank in the config Secret and mounts the PEM into the
-  #      broker pod from an externally-managed Kubernetes Secret
-  #      (External Secrets Operator, Sealed Secrets, kubectl-created).
-  #
-  # Generate a fresh key with:
+  # Broker-side ECDSA P-256 private key signing broker id_tokens and served
+  # at /.well-known/jwks.json. Three modes:
+  #   1. Blank (default): the broker generates a key on first start and
+  #      persists it in the server.signingKeySecret Secret (create-only, so
+  #      replicas and restarts share it). Rotate by deleting the Secret and
+  #      restarting; in-flight broker-signed id_tokens are invalidated.
+  #   2. brokerSigningKey: a multi-line PEM literal (PKCS#8 or SEC1). Lives
+  #      in helm release history; dev only.
+  #   3. existingSigningKeyRef: an operator-managed Secret holding the PEM.
+  # Generate a key yourself with:
   #   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256
-  #
-  # Rotation: swap the value and bounce the broker. Every refresh
-  # token minted by the prior key still verifies (refreshStore is
-  # opaque-token-only — the key signs the id_token, not the refresh
-  # token), but every broker-signed id_token in flight is invalidated.
-  # Cleaner rotation (overlapping keys + JWKS rollover) is deferred to
-  # a future PR.
   brokerSigningKey: ""
   existingSigningKeyRef:
-    # Name of the operator-managed Secret holding the PEM. Empty
-    # disables this mode.
     name: ""
-    # Data key inside the Secret holding the PEM.
     key: signing-key.pem
 
 # Per-world authorization. Each entry produces one Role + RoleBinding in
-# the world's namespace (RBAC slice) granting the broker SA get/patch on
-# the named tokens Secret.
+# the world's namespace granting the broker SA get/update on the world's
+# tokens Secret. Empty is valid when the umbrella supplies global.worlds.
+#
+# Only name is required. Everything else derives from worldDefaults (or the
+# umbrella's global.*):
+#   namespace:        worldDefaults.namespace, else the release namespace
+#   tokensSecret:     <name>-tokens
+#   internalAddress:  <name>.<authorityDomain>:6309 when an authorityDomain
+#                     is set, else the broker's <name>.<namespace> Service default
+#   dialAddress:      worldDefaults.dialAddress (one shared knowledge Service)
+#   allow, defaultToken: worldDefaults, merged key by key
 worlds: []
   # name is the host of every mark://<name>/ tool URL and part of a Secret
   # name, so it must be a DNS label: lowercase letters, digits and hyphens,
   # at most 63, no hyphen at either end. Anything else fails config load.
   # - name: team-a
-  #   namespace: team-a
-  #   tokensSecret: team-a-tokens
-  #   # Reachable address handed to clients via /me/install during user
-  #   # onboarding (mark://host:port). Optional: worlds without a publicURL
-  #   # are excluded from /me/install responses,
-  #   # because there is no address to wire the client to. Typically the
-  #   # VPN-reachable hostname or in-cluster Service when the user's
-  #   # network can route to it; see docs/deployment/security-topology.md.
-  #   publicURL: "mark://world-a.cluster.internal:6309"
-  #   # Cluster-internal address the MCP gateway uses to route
-  #   # `mark://{worldName}/{path}` tool calls to this world.
-  #   # Optional: when blank, the gateway resolves via the standard
-  #   # `<name>.<namespace>.svc.cluster.local:6309` Service-DNS
-  #   # convention (the demarkus-server chart's default keeps Service
-  #   # name == world name, so most deployments leave this blank).
-  #   # Override when the Service name diverges from the world's
-  #   # logical name. Host:port only — the `mark://` scheme is
-  #   # implicit.
-  #   # internalAddress: "team-a-mark.team-a:6309"
+  # - name: root
+  #   allow:
+  #     groups: ["platform"]
+  # - name: legacy
+  #   namespace: legacy
+  #   tokensSecret: legacy-demarkus-server-tokens
+  #   # Reachable address handed to clients via /me/install (mark://host:port).
+  #   # Worlds without one are excluded from /me/install.
+  #   publicURL: "mark://legacy.cluster.internal:6309"
+  #   # Logical authority the gateway routes mark://legacy/ calls to and the
+  #   # TLS SNI it presents. Host:port, scheme implicit.
+  #   internalAddress: "legacy-mark.legacy:6309"
+  #   # Socket the connection is opened to when it differs from the
+  #   # authority (one shared listener serving several authorities).
+  #   dialAddress: "knowledge.demarkus-knowledge.svc.cluster.local:6309"
   #   allow:
   #     domains: ["example.com"]
   #     groups: ["engineering"]
   #     emails: ["alice@example.com"]
   #   defaultToken:
-  #     # Path glob scoping the broker's per-world write token. Use
-  #     # the recursive `/**` glob for "write anywhere in this
-  #     # world" — `/*` only matches top-level entries because
-  #     # path.Match doesn't cross `/`, so a single-star glob would
-  #     # refuse writes to anything in a subdirectory (e.g.
-  #     # /team-a/foo.md). Narrow the scope only if you have a
-  #     # specific reason to forbid writes to certain subtrees;
-  #     # otherwise leave at /** so writers can publish anywhere
-  #     # under the world.
+  #     # Path glob of the broker's per-world write token. /** is recursive;
+  #     # /* matches top-level entries only. Operations are always
+  #     # ["publish"] and the token never expires.
   #     paths: ["/**"]
-  #     # paths is the only knob. The write token's operations are
-  #     # always ["publish"] (hardcoded in worldWriteTokenStore.Provision
-  #     # so an open-reads regression can't slip in via config) and the
-  #     # token never expires, so there is no operations/expiresAfter
-  #     # field to set.
+
+# Defaults applied to every world before its own fields.
+worldDefaults:
+  # Namespace of the world token Secrets. Empty: the release namespace.
+  namespace: ""
+  # Suffix for derived internalAddress (<name>.<authorityDomain>:6309); must
+  # match the knowledge-server chart's authorityDomain so SNI verifies.
+  # Empty: global.authorityDomain, else <global.knowledgeService>.<namespace>
+  # .svc.cluster.local, else no derivation.
+  authorityDomain: ""
+  # Shared socket address (host:port) for every derived world, e.g.
+  # knowledge.demarkus-knowledge.svc.cluster.local:6309. Empty:
+  # <global.knowledgeService>.<namespace>.svc.cluster.local:6309, else none.
+  dialAddress: ""
+  # Authorization predicate every world starts from; all lists empty admits
+  # any verified identity.
+  allow: {}
+  defaultToken:
+    paths: ["/**"]
 
 # Registered confidential web clients (RFC 6749 §2.1) — server-side
 # apps (e.g. the Universe Library) that authenticate with a client
 # secret and receive the authorization-code redirect at a real https
 # URL instead of a native-app loopback. Explicit operator-curated
 # registry, NOT open dynamic registration. Native/CLI agents never
-# appear here. Store only the sha256-hex of the secret; the plaintext
-# lives in the web app's own deployment.
+# appear here. Each entry sets exactly one of clientSecret (cleartext,
+# hashed by the broker at load), clientSecretHash (sha256-hex) or
+# existingSecretRef (the same Secret the web app mounts).
 webClients: []
   # - clientID: library-web
-  #   # sha256-hex of the client secret, e.g.
-  #   #   printf '%s' "$SECRET" | sha256sum | cut -d' ' -f1
-  #   clientSecretHash: "0123…64 hex chars…cdef"
+  #   existingSecretRef:
+  #     name: library-oauth
+  #     key: clientSecret   # default
+  #   # clientSecretHash: "0123…64 hex chars…cdef"   # printf '%s' "$SECRET" | sha256sum
+  #   # clientSecret: ""                            # cleartext, lives in release history
   #   # Exact-match https redirect allowlist — no wildcards, no
   #   # loopback. The broker rejects any redirect_uri not listed here.
   #   redirectURIs:
@@ -415,10 +418,10 @@ rbac:
   # fails when it tries to persist a world's write token.
   create: true
 
-# NetworkPolicy ships in the RBAC slice. Schema declared here so values
-# structure is stable.
+# Off by default: renders nothing on clusters without an enforcing CNI, and
+# the ingress namespace below must match your controller before it is safe.
 networkPolicy:
-  enabled: true
+  enabled: false
   # Mark Protocol egress ports are derived from worlds[].internalAddress;
   # UDP 6309 remains allowed for worlds using default Service discovery.
   # Ingress controller namespace selector — broker accepts inbound HTTP
@@ -545,3 +548,7 @@ tolerations: []
 affinity: {}
 podAnnotations: {}
 podLabels: {}
+
+nameOverride: ""
+# Resource names default to the release name.
+fullnameOverride: ""

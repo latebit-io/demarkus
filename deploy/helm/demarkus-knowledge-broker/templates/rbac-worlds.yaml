@@ -15,7 +15,7 @@
 {{- $saName := include "demarkus-knowledge-broker.serviceAccountName" . -}}
 {{- $saNamespace := .Release.Namespace -}}
 {{- $labels := include "demarkus-knowledge-broker.labels" . -}}
-{{- range .Values.worlds }}
+{{- range include "demarkus-knowledge-broker.worlds" . | fromYamlArray }}
 {{- $name := printf "%s-world-%s" $fullname .name }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

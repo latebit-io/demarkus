@@ -11,6 +11,8 @@ const (
 	RefreshTokensSecretKey = "refresh_tokens.json"
 	// DynamicClientsSecretKey holds the RFC 7591 registration map.
 	DynamicClientsSecretKey = "dynamic-clients.json"
+	// SigningKeySecretKey holds the generated id_token signing key PEM.
+	SigningKeySecretKey = "signing-key.pem"
 	// worldWriteTokenSecretKey holds one world's JSON write token entry.
 	worldWriteTokenSecretKey = "write-token.json"
 	// registrySecretKey holds the tenant registry JSON.
@@ -20,6 +22,7 @@ const (
 
 	DefaultRefreshTokensSecret  = "demarkus-broker-refresh-tokens"
 	DefaultDynamicClientsSecret = "demarkus-broker-dynamic-clients"
+	DefaultSigningKeySecret     = "demarkus-broker-signing-key"
 )
 
 // worldWriteTokenSecretName is the per world write token Secret, one per
@@ -28,31 +31,29 @@ func worldWriteTokenSecretName(worldName string) string {
 	return "demarkus-broker-write-token-" + worldName
 }
 
-// RefreshTokensRef locates the refresh token map. Every Ref builder resolves
-// a document for both backends; Path is set only in file mode.
-func RefreshTokensRef(cfg *Config) SecretRef {
-	ref := SecretRef{
-		Namespace: cfg.Server.BrokerNamespace,
-		Name:      cfg.Server.RefreshTokensSecret,
-		Key:       RefreshTokensSecretKey,
-	}
+// brokerSecretRef locates a broker-owned document in both backends: a Secret
+// in the broker namespace, or a file named by key under storage.dir.
+func brokerSecretRef(cfg *Config, name, key string) SecretRef {
+	ref := SecretRef{Namespace: cfg.Server.BrokerNamespace, Name: name, Key: key}
 	if cfg.fileBackend() {
-		ref.Path = filepath.Join(cfg.Storage.Dir, RefreshTokensSecretKey)
+		ref.Path = filepath.Join(cfg.Storage.Dir, key)
 	}
 	return ref
 }
 
+// RefreshTokensRef locates the refresh token map.
+func RefreshTokensRef(cfg *Config) SecretRef {
+	return brokerSecretRef(cfg, cfg.Server.RefreshTokensSecret, RefreshTokensSecretKey)
+}
+
 // DynamicClientsRef locates the RFC 7591 registration map.
 func DynamicClientsRef(cfg *Config) SecretRef {
-	ref := SecretRef{
-		Namespace: cfg.Server.BrokerNamespace,
-		Name:      cfg.Server.DynamicClientsSecret,
-		Key:       DynamicClientsSecretKey,
-	}
-	if cfg.fileBackend() {
-		ref.Path = filepath.Join(cfg.Storage.Dir, DynamicClientsSecretKey)
-	}
-	return ref
+	return brokerSecretRef(cfg, cfg.Server.DynamicClientsSecret, DynamicClientsSecretKey)
+}
+
+// SigningKeyRef locates the generated id_token signing key.
+func SigningKeyRef(cfg *Config) SecretRef {
+	return brokerSecretRef(cfg, cfg.Server.SigningKeySecret, SigningKeySecretKey)
 }
 
 // WorldWriteTokenRef locates the broker's copy of one world's write token.

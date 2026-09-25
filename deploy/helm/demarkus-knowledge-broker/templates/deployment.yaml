@@ -82,6 +82,16 @@ spec:
                   name: {{ . | quote }}
                   key: {{ $.Values.oidc.existingSigningKeyRef.key | quote }}
             {{- end }}
+            {{- range $i, $wc := .Values.webClients }}
+            {{- $ref := default dict $wc.existingSecretRef }}
+            {{- if $ref.name }}
+            - name: {{ include "demarkus-knowledge-broker.webClientSecretEnv" $i }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ref.name | quote }}
+                  key: {{ default "clientSecret" $ref.key | quote }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: http
               protocol: TCP

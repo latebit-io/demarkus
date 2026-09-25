@@ -116,3 +116,22 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: reads derived token Secret names and keys
+    set:
+      worldDefaults.bucketPrefix: gs://deployment-
+      worlds:
+        - name: team-a
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+        - name: team-b
+          worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49
+          tokenSecret: {name: custom-tokens}
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[5].value
+          value: |-
+            team-a team-a-tokens tokens.toml
+            team-b custom-tokens tokens.toml

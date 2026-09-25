@@ -1,5 +1,6 @@
 {{- include "demarkus-knowledge-server.validate" . -}}
-{{- if and .Values.tokens.bootstrap.enabled .Values.worlds }}
+{{- $worlds := include "demarkus-knowledge-server.worlds" . | fromYamlArray -}}
+{{- if and .Values.tokens.bootstrap.enabled $worlds }}
 {{- /* Token Secrets are runtime-owned: the broker appends to tokens.toml and
        the admin hash must match the raw value, so a reconciler must never
        template them; this Job creates missing ones and hands off. */}}
@@ -39,7 +40,7 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "patch"]
     resourceNames:
-      {{- range .Values.worlds }}
+      {{- range $worlds }}
       - {{ .tokenSecret.name | quote }}
       {{- if $.Values.tokens.emitRawValues }}
       - {{ printf "%s-token-values" .name | quote }}
@@ -128,7 +129,7 @@ spec:
             # One "<world> <tokensSecret> <tomlKey>" triple per line.
             - name: WORLDS
               value: |-
-                {{- range .Values.worlds }}
+                {{- range $worlds }}
                 {{ .name }} {{ .tokenSecret.name }} {{ .tokenSecret.key }}
                 {{- end }}
           command: ["/bin/sh", "-eu", "-c"]

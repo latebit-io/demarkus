@@ -127,6 +127,7 @@ func (c *Config) validateFilePaths() error {
 	seen := map[string]string{
 		filepath.Clean(RefreshTokensRef(c).Path):  "storage.dir refresh-tokens state",
 		filepath.Clean(DynamicClientsRef(c).Path): "storage.dir dynamic-clients state",
+		filepath.Clean(SigningKeyRef(c).Path):     "storage.dir signing-key state",
 	}
 	for i := range c.Worlds {
 		w := &c.Worlds[i]
@@ -146,9 +147,9 @@ func (c *Config) validateFilePaths() error {
 	return nil
 }
 
-// validate requires every IdP field. The signing key is parsed, not only
-// checked for presence, so a malformed PEM fails here with its field name
-// instead of after discovery and kube setup have already run.
+// validate requires every IdP field. A configured signing key is parsed so a
+// malformed PEM fails here with its field name, not after discovery and kube
+// setup; a blank key is generated at startup (EnsureSigningKey).
 func (o *OIDCConfig) validate() error {
 	switch {
 	case o.Issuer == "":
@@ -159,11 +160,11 @@ func (o *OIDCConfig) validate() error {
 		return fmt.Errorf("oidc.clientSecret is required")
 	case o.RedirectURL == "":
 		return fmt.Errorf("oidc.redirectURL is required")
-	case o.BrokerSigningKey == "":
-		return fmt.Errorf("oidc.brokerSigningKey is required")
 	}
-	if _, err := NewIDTokenSigner([]byte(o.BrokerSigningKey)); err != nil {
-		return fmt.Errorf("oidc.brokerSigningKey is invalid: %w", err)
+	if o.BrokerSigningKey != "" {
+		if _, err := NewIDTokenSigner([]byte(o.BrokerSigningKey)); err != nil {
+			return fmt.Errorf("oidc.brokerSigningKey is invalid: %w", err)
+		}
 	}
 	return normalizeList("oidc.allowDomains", o.AllowDomains)
 }
@@ -290,8 +291,8 @@ func validateWorld(i int, w *WorldConfig, fileMode bool) error {
 }
 
 // validateWebClients enforces the confidential client registry and normalizes
-// secret hashes. A half registered client would present as a confusing
-// runtime auth failure instead of a startup error.
+// secret hashes; a cleartext secret is hashed and cleared. A half registered
+// client would surface as a runtime auth failure instead of a startup error.
 func validateWebClients(clients []WebClientConfig) error {
 	seen := make(map[string]bool, len(clients))
 	for i := range clients {
@@ -303,10 +304,19 @@ func validateWebClients(clients []WebClientConfig) error {
 			return fmt.Errorf("webClients[%d]: duplicate clientID %q", i, wc.ClientID)
 		}
 		seen[wc.ClientID] = true
+		if wc.ClientSecret != "" {
+			if wc.ClientSecretHash != "" {
+				return fmt.Errorf("webClients[%d] (%s): clientSecret and clientSecretHash are mutually exclusive", i, wc.ClientID)
+			}
+			wc.ClientSecretHash = HashClientSecret(wc.ClientSecret)
+			wc.ClientSecret = ""
+		} else if wc.ClientSecretEnv != "" && wc.ClientSecretHash == "" {
+			return fmt.Errorf("webClients[%d] (%s): clientSecretEnv %s is unset or empty", i, wc.ClientID, wc.ClientSecretEnv)
+		}
 		// Lowercased so the constant time compare never misses an uppercase paste.
 		wc.ClientSecretHash = strings.ToLower(strings.TrimSpace(wc.ClientSecretHash))
 		if !isSHA256Hex(wc.ClientSecretHash) {
-			return fmt.Errorf("webClients[%d] (%s): clientSecretHash must be 64 hex chars (sha256 of the client secret)", i, wc.ClientID)
+			return fmt.Errorf("webClients[%d] (%s): clientSecret or clientSecretHash (64 hex chars, sha256 of the secret) is required", i, wc.ClientID)
 		}
 		if len(wc.RedirectURIs) == 0 {
 			return fmt.Errorf("webClients[%d] (%s): at least one redirectURI is required", i, wc.ClientID)

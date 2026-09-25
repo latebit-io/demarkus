@@ -23,7 +23,7 @@ tests:
           of: Deployment
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-demarkus-agent
+          value: RELEASE-NAME
       - equal:
           path: spec.replicas
           value: 1
@@ -238,7 +238,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources[0].secret.name
-          value: RELEASE-NAME-demarkus-agent-tokens
+          value: RELEASE-NAME-tokens
       - equal:
           path: spec.template.spec.volumes[?(@.name=="tokens")].projected.sources[0].secret.optional
           value: true
@@ -318,3 +318,31 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'tokens.fromWorldSecrets\[1\].hostPort "team-a:6309" is duplicated'
+
+  - it: derives the hub token Secret and --publish from hub
+    template: deployment.yaml
+    set:
+      worlds: [root, team-a]
+      hub: root
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --publish
+      - equal:
+          path: spec.template.spec.volumes[1].projected.sources[1].secret
+          value:
+            name: root-token-values
+            items:
+              - key: admin
+                path: tokens.d/root:6309
+
+  - it: does not derive the hub token when another token source is set
+    template: deployment.yaml
+    set:
+      worlds: [root, team-a]
+      hub: root
+      tokens.inline:
+        "root:6309": tok
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes[1].projected.sources[1]

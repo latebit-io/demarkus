@@ -1,0 +1,25 @@
+suite: self-signed issuer
+templates:
+  - issuer.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: is omitted by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a namespaced self-signed Issuer when requested
+    set:
+      tls.existingSecret: ""
+      tls.certManager.enabled: true
+      tls.certManager.selfSigned.create: true
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-selfsigned
+      - equal:
+          path: spec.selfSigned
+          value: {}

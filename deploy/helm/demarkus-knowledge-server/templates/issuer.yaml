@@ -1,0 +1,12 @@
+{{- if and .Values.tls.certManager.enabled .Values.tls.certManager.selfSigned.create }}
+{{- /* Worlds carry self-signed certs with no shared CA; clients dial with
+       insecure until a CA issuer replaces this. */}}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "demarkus-knowledge-server.selfSignedIssuerName" . }}
+  labels:
+    {{- include "demarkus-knowledge-server.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+{{- end }}

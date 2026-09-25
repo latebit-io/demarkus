@@ -19,7 +19,7 @@ tests:
           of: Certificate
       - equal:
           path: spec.secretName
-          value: RELEASE-NAME-demarkus-knowledge-server-tls
+          value: RELEASE-NAME-tls
       - equal:
           path: spec.issuerRef
           value:
@@ -57,7 +57,19 @@ tests:
     asserts:
       - contains:
           path: spec.dnsNames
-          content: "RELEASE-NAME-demarkus-knowledge-server.NAMESPACE.svc.cluster.local"
+          content: "RELEASE-NAME.NAMESPACE.svc.cluster.local"
       - contains:
           path: spec.dnsNames
-          content: "*.RELEASE-NAME-demarkus-knowledge-server.NAMESPACE.svc.cluster.local"
+          content: "*.RELEASE-NAME.NAMESPACE.svc.cluster.local"
+
+  - it: points at the chart-rendered self-signed Issuer
+    set:
+      tls.existingSecret: ""
+      tls.certManager.enabled: true
+      tls.certManager.selfSigned.create: true
+    asserts:
+      - equal:
+          path: spec.issuerRef
+          value:
+            kind: Issuer
+            name: RELEASE-NAME-selfsigned

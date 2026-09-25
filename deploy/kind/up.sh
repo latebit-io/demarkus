@@ -291,7 +291,7 @@ if [[ "$WITH_ARGO" == "true" ]]; then
       --image="$MINT_CURL_IMAGE" --command -- sh -c '
 set -eu
 
-BROKER=http://'"$BROKER_RELEASE"'-demarkus-knowledge-broker.'"$NAMESPACE"'.svc.cluster.local:8080
+BROKER=http://'"$BROKER_RELEASE"'.'"$NAMESPACE"'.svc.cluster.local:8080
 
 # Hard timeouts so a DNS or TCP stall fails the smoke test in seconds
 # instead of pinning the kubectl-run pod open until cluster cleanup.
@@ -365,7 +365,7 @@ inspect minted tokens in each world (decoded TOML):
 
 re-run the mint flow (handy for poking at logs):
   kubectl run -n $NAMESPACE mint-replay --rm -i --restart=Never \\
-    --image=$MINT_CURL_IMAGE -- curl -sS http://$BROKER_RELEASE-demarkus-knowledge-broker:8080/healthz
+    --image=$MINT_CURL_IMAGE -- curl -sS http://$BROKER_RELEASE:8080/healthz
 
 tear down:
   $SCRIPT_DIR/down.sh
@@ -513,8 +513,8 @@ if [[ "$WITH_BROKER" == "true" ]]; then
     # end-to-end against the broker's :8080 OAuth surface in a second pod
     # below (broker-auth-code-grant plan, PR3).
     echo "--- driving MCP gateway smoke checks from an ephemeral curl pod"
-    BROKER_MCP_URL="http://$BROKER_RELEASE-demarkus-knowledge-broker.$NAMESPACE.svc.cluster.local:8081"
-    BROKER_MGMT_URL="http://$BROKER_RELEASE-demarkus-knowledge-broker.$NAMESPACE.svc.cluster.local:8080"
+    BROKER_MCP_URL="http://$BROKER_RELEASE.$NAMESPACE.svc.cluster.local:8081"
+    BROKER_MGMT_URL="http://$BROKER_RELEASE.$NAMESPACE.svc.cluster.local:8080"
     kubectl run -n "$NAMESPACE" mcp-smoke --rm -i --restart=Never \
       --image="$MINT_CURL_IMAGE" --command -- sh -c '
 set -eu
@@ -584,7 +584,7 @@ echo "OK: POST /mcp 401 + WWW-Authenticate"
     # The one world values-broker.yaml configures; the tool calls below use it.
     MCP_SMOKE_WORLD="world-default"
     echo "--- driving auth-code + PKCE flow, then MCP tool calls, from an ephemeral curl pod"
-    BROKER_OAUTH_URL="http://$BROKER_RELEASE-demarkus-knowledge-broker.$NAMESPACE.svc.cluster.local:8080"
+    BROKER_OAUTH_URL="http://$BROKER_RELEASE.$NAMESPACE.svc.cluster.local:8080"
     kubectl run -n "$NAMESPACE" authcode-smoke --rm -i --restart=Never \
       --image="$MINT_CURL_IMAGE" --command -- sh -c '
 set -eu
@@ -941,17 +941,17 @@ server release: $RELEASE
 broker release: $BROKER_RELEASE
 broker pod:     $BROKER_POD
 server svc:     $RELEASE-demarkus-server.$NAMESPACE.svc.cluster.local:6309 (UDP)
-broker svc:     $BROKER_RELEASE-demarkus-knowledge-broker.$NAMESPACE.svc.cluster.local:8080 (HTTP)
-broker MCP svc: $BROKER_RELEASE-demarkus-knowledge-broker.$NAMESPACE.svc.cluster.local:8081 (HTTP)
+broker svc:     $BROKER_RELEASE.$NAMESPACE.svc.cluster.local:8080 (HTTP)
+broker MCP svc: $BROKER_RELEASE.$NAMESPACE.svc.cluster.local:8081 (HTTP)
 mock OIDC:      mock-oauth2-server.$NAMESPACE.svc.cluster.local:8080/default
 
 probe the broker (from another shell):
-  kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE-demarkus-knowledge-broker 8080:8080
+  kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE 8080:8080
   curl http://localhost:8080/healthz
   curl http://localhost:8080/readyz
 
 probe the MCP gateway:
-  kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE-demarkus-knowledge-broker 8081:8081
+  kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE 8081:8081
   curl http://localhost:8081/.well-known/oauth-protected-resource
   # RFC 8414 auth-server metadata is on the management listener (:8080), not here
 

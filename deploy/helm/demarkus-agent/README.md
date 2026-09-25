@@ -62,15 +62,39 @@ Then set `key: agent` on that world's `fromWorldSecrets` entry. `team-a-tokens`
 is the world's `tokenSecret.name` in the server chart values. The broker also
 appends to that Secret, so re-apply promptly after reading it.
 
+## Derived topology
+
+Name the worlds and the hub once and the chart derives the crawl lists:
+
+```yaml
+worlds: [root, team-a, team-b]
+hub: root
+dialAddress: knowledge.demarkus-knowledge.svc.cluster.local:6309
+authorityDomain: knowledge.demarkus-knowledge.svc.cluster.local
+```
+
+gives `config.seeds` (every non-hub world as `mark://<name>`), `config.hubs`
+(`mark://root`), one `config.endpoints` entry per world (`dial_address` plus
+`server_name: <name>.<authorityDomain>`, matching the knowledge-server
+chart's certificate) and `tokens.fromWorldSecrets` for the hub's
+`root-token-values` Secret. Every explicit `config.*` or `tokens.*` entry
+overrides its derived list. Under the `demarkus-knowledge-system` umbrella
+these come from `global.worlds` (the entry flagged `hub: true`),
+`global.knowledgeService` and `global.authorityDomain`.
+
 ## Values
 
 | Key | Type | Default | Description |
 |---|---|---|---|
+| `worlds` | list | `[]` | World names to derive seeds and endpoints from |
+| `hub` | string | `""` | Hub world; derives `config.hubs` and the publish token |
+| `dialAddress` | string | `""` | Shared knowledge Service `host:port` every world is dialed at |
+| `authorityDomain` | string | `""` | SNI suffix for derived endpoints |
 | `image.repository` | string | `ghcr.io/latebit-io/demarkus-agent` | Container image |
 | `image.tag` | string | `""` (uses `.Chart.AppVersion`) | Image tag |
 | `image.pullPolicy` | string | `IfNotPresent` | |
 | `replicaCount` | int | `1` | Keep at 1; multiple replicas re-do the same crawl |
-| `config.seeds` | list | `[]` | `mark://` URLs to crawl. **Required.** |
+| `config.seeds` | list | `[]` | `mark://` URLs to crawl. Required unless derived from `worlds` |
 | `config.hubs` | list | `[]` | `mark://` URLs to publish indexes to. Empty = crawl-only mode |
 | `config.endpoints` | map | `{}` | Logical authority to explicit `dialAddress` and optional `serverName` transport route |
 | `config.crawl.maxDepth` | int | `2` | Max link hops per server |

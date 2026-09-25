@@ -65,15 +65,11 @@ func (f *fakeVerifier) VerifyIDToken(_ context.Context, raw string) (Claims, err
 // generateTestSigningKey is a fresh ECDSA P-256 key as PKCS#8 PEM.
 func generateTestSigningKey(t *testing.T) []byte {
 	t.Helper()
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	pemBytes, err := GenerateSigningKeyPEM()
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatalf("marshal PKCS8: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	return pemBytes
 }
 
 // generateTestSigningKeySEC1 is the same key in the legacy SEC1 shape.

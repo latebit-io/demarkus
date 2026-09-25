@@ -51,8 +51,8 @@ spec:
         - protocol: TCP
           port: 443
     {{- $worldPorts := dict "6309" true }}
-    {{- range .Values.worlds }}
-      {{- $portSuffix := regexFind ":[0-9]+$" (default "" .internalAddress) }}
+    {{- range include "demarkus-knowledge-broker.worlds" . | fromYamlArray }}
+      {{- $portSuffix := regexFind ":[0-9]+$" (default (default "" .internalAddress) .dialAddress) }}
       {{- if $portSuffix }}
         {{- $_ := set $worldPorts (trimPrefix ":" $portSuffix) true }}
       {{- end }}

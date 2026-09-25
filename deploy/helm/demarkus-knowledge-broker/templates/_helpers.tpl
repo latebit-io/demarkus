@@ -5,20 +5,9 @@ Expand the name of the chart.
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/*
-Fully qualified app name.
-*/}}
+{{/* Release name unless overridden; the umbrella pins "broker". */}}
 {{- define "demarkus-knowledge-broker.fullname" -}}
-{{- if .Values.fullnameOverride -}}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- $name := default .Chart.Name .Values.nameOverride -}}
-{{- if contains $name .Release.Name -}}
-{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-{{- end -}}
+{{- default .Release.Name .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "demarkus-knowledge-broker.chart" -}}
@@ -64,6 +53,16 @@ Names for the chart-managed Secrets.
 
 {{- define "demarkus-knowledge-broker.refreshTokensSecretName" -}}
 {{- default (printf "%s-refresh-tokens" (include "demarkus-knowledge-broker.fullname" .)) .Values.server.refreshTokensSecret -}}
+{{- end -}}
+
+{{/* Signing-key Secret: the broker generates and persists its ECDSA key here on first start when no key is configured. */}}
+{{- define "demarkus-knowledge-broker.signingKeySecretName" -}}
+{{- default (printf "%s-signing-key" (include "demarkus-knowledge-broker.fullname" .)) .Values.server.signingKeySecret -}}
+{{- end -}}
+
+{{/* Env var carrying webClients[i]'s secret; rendered into the config and the pod alike. */}}
+{{- define "demarkus-knowledge-broker.webClientSecretEnv" -}}
+{{- printf "WEB_CLIENT_SECRET_%d" (int .) -}}
 {{- end -}}
 
 {{/* Dynamic-clients Secret: RFC 7591 registrations (client_id -> redirect URIs). */}}
@@ -162,4 +161,67 @@ assert on exact key values, only on structure.
 {{- randAlphaNum 32 | b64enc -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/* Namespace of the world token Secrets when a world sets none. */}}
+{{- define "demarkus-knowledge-broker.worldsNamespace" -}}
+{{- default .Release.Namespace .Values.worldDefaults.namespace -}}
+{{- end -}}
+
+{{/*
+Socket address every derived world is dialed at (host:port), or empty when
+each world resolves its own Service: worldDefaults.dialAddress, else the
+umbrella's global.knowledgeService Service in the worlds namespace.
+*/}}
+{{- define "demarkus-knowledge-broker.dialAddress" -}}
+{{- $global := default dict .Values.global -}}
+{{- if .Values.worldDefaults.dialAddress -}}
+{{- .Values.worldDefaults.dialAddress -}}
+{{- else if $global.knowledgeService -}}
+{{- printf "%s.%s.svc.cluster.local:6309" $global.knowledgeService (include "demarkus-knowledge-broker.worldsNamespace" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Authority suffix for derived internalAddress (<name>.<authorityDomain>:6309),
+or empty to leave the broker's <name>.<namespace>.svc.cluster.local default.
+Mirrors the knowledge-server chart's default so SNI matches its certificate.
+*/}}
+{{- define "demarkus-knowledge-broker.authorityDomain" -}}
+{{- $global := default dict .Values.global -}}
+{{- if .Values.worldDefaults.authorityDomain -}}
+{{- .Values.worldDefaults.authorityDomain -}}
+{{- else if $global.authorityDomain -}}
+{{- $global.authorityDomain -}}
+{{- else if $global.knowledgeService -}}
+{{- printf "%s.%s.svc.cluster.local" $global.knowledgeService (include "demarkus-knowledge-broker.worldsNamespace" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Resolved world list as YAML. Source is .Values.worlds, else global.worlds
+(umbrella). Each entry is merged over worldDefaults, then namespace,
+tokensSecret (<name>-tokens), internalAddress and dialAddress are filled.
+Consumers read named fields: include ... | fromYamlArray.
+*/}}
+{{- define "demarkus-knowledge-broker.worlds" -}}
+{{- $global := default dict .Values.global -}}
+{{- $source := .Values.worlds -}}
+{{- if empty $source -}}{{- $source = default list $global.worlds -}}{{- end -}}
+{{- $namespace := include "demarkus-knowledge-broker.worldsNamespace" . -}}
+{{- $dialAddress := include "demarkus-knowledge-broker.dialAddress" . -}}
+{{- $authorityDomain := include "demarkus-knowledge-broker.authorityDomain" . -}}
+{{- $worlds := list -}}
+{{- range $configured := $source -}}
+{{- $world := mergeOverwrite (deepCopy $.Values.worldDefaults) (deepCopy (default dict $configured)) -}}
+{{- $name := default "" $world.name -}}
+{{- if empty $world.namespace -}}{{- $_ := set $world "namespace" $namespace -}}{{- end -}}
+{{- if empty $world.tokensSecret -}}{{- $_ := set $world "tokensSecret" (printf "%s-tokens" $name) -}}{{- end -}}
+{{- if and (empty $world.internalAddress) $authorityDomain -}}
+{{- $_ := set $world "internalAddress" (printf "%s.%s:6309" $name $authorityDomain) -}}
+{{- end -}}
+{{- if and (empty $world.dialAddress) $dialAddress -}}{{- $_ := set $world "dialAddress" $dialAddress -}}{{- end -}}
+{{- $worlds = append $worlds $world -}}
+{{- end -}}
+{{- toYaml $worlds -}}
 {{- end -}}

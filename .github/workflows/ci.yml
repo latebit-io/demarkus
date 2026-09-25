@@ -412,12 +412,22 @@ jobs:
         run: helm lint deploy/helm/demarkus-agent
       - name: Lint demarkus-knowledge-server chart
         run: helm lint deploy/helm/demarkus-knowledge-server -f deploy/helm/demarkus-knowledge-server/tests/fixtures/valid-values.yaml
+      # The umbrella vendors the three local charts (file://) and the
+      # library chart from ghcr.
+      - name: Lint demarkus-knowledge-system umbrella chart
+        run: |
+          helm dependency update deploy/helm/demarkus-knowledge-system
+          helm lint deploy/helm/demarkus-knowledge-system -f deploy/helm/demarkus-knowledge-system/tests/fixtures/values.yaml
       - name: Unit test demarkus-server chart
         run: helm unittest deploy/helm/demarkus-server
       - name: Unit test demarkus-knowledge-broker chart
         run: helm unittest deploy/helm/demarkus-knowledge-broker
       - name: Unit test demarkus-knowledge-server chart
         run: helm unittest deploy/helm/demarkus-knowledge-server
+      - name: Unit test demarkus-agent chart
+        run: helm unittest deploy/helm/demarkus-agent
+      - name: Unit test demarkus-knowledge-system umbrella chart
+        run: helm unittest deploy/helm/demarkus-knowledge-system
 
   test-charts-kind:
     needs: detect-changes

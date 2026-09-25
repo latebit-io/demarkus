@@ -15,7 +15,7 @@ tests:
           of: PodDisruptionBudget
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-demarkus-knowledge-broker
+          value: RELEASE-NAME
       - equal:
           path: spec.minAvailable
           value: 1

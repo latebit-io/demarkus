@@ -1,0 +1,16 @@
+demarkus-knowledge-system installed as release {{ .Release.Name | quote }} in namespace {{ .Release.Namespace | quote }}.
+
+== Worlds ({{ len .Values.global.worlds }}) ==
+{{- range .Values.global.worlds }}
+  - {{ .name }}{{ if .hub }} (hub){{ end }}: authority {{ .name }}.{{ default (printf "%s.%s.svc.cluster.local" $.Values.global.knowledgeService $.Release.Namespace) $.Values.global.authorityDomain }}, tokens Secret {{ .name }}-tokens
+{{- end }}
+
+== Components ==
+  knowledge server: {{ if .Values.knowledge.enabled }}{{ .Values.global.knowledgeService }}.{{ .Release.Namespace }}.svc.cluster.local:6309 (UDP){{ else }}disabled{{ end }}
+  broker:           {{ if .Values.broker.enabled }}{{ .Values.broker.fullnameOverride }} ({{ .Values.broker.server.publicURL }}){{ else }}disabled{{ end }}
+  agent:            {{ if .Values.agent.enabled }}{{ .Values.agent.fullnameOverride }}{{ else }}disabled{{ end }}
+  library:          {{ if .Values.library.enabled }}{{ .Values.library.fullnameOverride }}{{ else }}disabled{{ end }}
+
+The knowledge server's bootstrap Job creates each <world>-tokens Secret on
+first sync; the broker mints its signing key into {{ .Values.broker.fullnameOverride }}-signing-key on
+first start. Join from a client with the broker's public URL.

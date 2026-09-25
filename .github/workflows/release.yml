@@ -17,6 +17,7 @@ jobs:
       server: ${{ steps.filter.outputs.server }}
       client: ${{ steps.filter.outputs.client }}
       tools: ${{ steps.filter.outputs.tools }}
+      knowledge_system: ${{ steps.filter.outputs.knowledge_system }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -41,6 +42,11 @@ jobs:
               - 'protocol/**'
               - 'client/**'
               - 'deploy/helm/demarkus-knowledge-broker/**'
+            knowledge_system:
+              - 'deploy/helm/demarkus-knowledge-system/**'
+              - 'deploy/helm/demarkus-knowledge-server/**'
+              - 'deploy/helm/demarkus-knowledge-broker/**'
+              - 'deploy/helm/demarkus-agent/**'
 
   test-protocol:
     needs: detect-changes
@@ -258,6 +264,40 @@ jobs:
         id: check
         run: |
           TAG="broker/v${{ steps.semver.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Version: ${{ steps.semver.outputs.version }}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
+
+  # The umbrella chart releases on its own stream (knowledge-system/v). It
+  # vendors the three local charts, so any of their changes bumps it too;
+  # the release job re-versions them to their latest tags before packaging.
+  semver-knowledge-system:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.knowledge_system == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.semver.outputs.version }}
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: PaulHatch/semantic-version@v5.3.0
+        id: semver
+        with:
+          tag_prefix: "knowledge-system/v"
+          major_pattern: "BREAKING CHANGE:"
+          minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
+          change_path: "deploy/helm/demarkus-knowledge-system/ deploy/helm/demarkus-knowledge-server/ deploy/helm/demarkus-knowledge-broker/ deploy/helm/demarkus-agent/"
+          bump_each_commit: false
+          search_commit_body: true
+      - name: Check if version changed
+        id: check
+        run: |
+          TAG="knowledge-system/v${{ steps.semver.outputs.version }}"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           else
@@ -752,6 +792,71 @@ jobs:
           VER="${{ needs.semver-memory-broker.outputs.new_version }}"
           helm package deploy/helm/demarkus-memory-broker --version "$VER" --app-version "$VER" --destination /tmp/charts
           helm push "/tmp/charts/demarkus-memory-broker-${VER}.tgz" oci://ghcr.io/latebit-io/charts
+
+  # Runs after the sub-chart releases so the vendored charts and their image
+  # tags point at releases that exist. Skipped sub-chart releases are fine;
+  # a failed one blocks the umbrella.
+  release-knowledge-system:
+    needs: [semver-knowledge-system, release-server, release-client, release-broker]
+    if: ${{ always() && !cancelled() && needs.semver-knowledge-system.outputs.should_release == 'true' && needs.release-server.result != 'failure' && needs.release-client.result != 'failure' && needs.release-broker.result != 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create chart tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = 'knowledge-system/v${{ needs.semver-knowledge-system.outputs.new_version }}';
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/${tag}`,
+              sha: context.sha
+            });
+            console.log(`Created tag: ${tag}`);
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.13.2
+
+      - name: Re-version vendored charts to their latest release tags
+        # Each sub-chart publishes with --version/--app-version from its own
+        # tag stream; the committed Chart.yaml values are only local-render
+        # placeholders. Mirror the published numbers so the vendored copies
+        # default to the same image tags.
+        run: |
+          set -euo pipefail
+          latest() { git tag --list "$1/v*" --sort=-v:refname | head -n1 | sed "s#^$1/v##"; }
+          for pair in server:demarkus-knowledge-server client:demarkus-agent broker:demarkus-knowledge-broker; do
+            stream="${pair%%:*}"
+            chart="${pair##*:}"
+            ver="$(latest "$stream")"
+            if [ -z "$ver" ]; then
+              echo "no $stream/v* tag found" >&2
+              exit 1
+            fi
+            yq -i ".version = \"$ver\" | .appVersion = \"$ver\"" "deploy/helm/$chart/Chart.yaml"
+            echo "$chart -> $ver"
+          done
+
+      - name: Package + push demarkus-knowledge-system chart
+        run: |
+          VER="${{ needs.semver-knowledge-system.outputs.new_version }}"
+          helm dependency update deploy/helm/demarkus-knowledge-system
+          helm package deploy/helm/demarkus-knowledge-system --version "$VER" --app-version "$VER" --destination /tmp/charts
+          helm push "/tmp/charts/demarkus-knowledge-system-${VER}.tgz" oci://ghcr.io/latebit-io/charts
 
   # Dispatch the pin-bump workflow after any binary release. The bump
   # workflow's own release trigger never fires: GoReleaser publishes with

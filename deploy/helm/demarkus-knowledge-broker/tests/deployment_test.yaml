@@ -22,7 +22,7 @@ tests:
           of: Deployment
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-demarkus-knowledge-broker
+          value: RELEASE-NAME
       - equal:
           path: spec.replicas
           value: 2
@@ -226,3 +226,29 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: /etc/demarkus-knowledge-broker/config.yaml
+
+  - it: mounts each webClients existingSecretRef as WEB_CLIENT_SECRET_<index>
+    template: deployment.yaml
+    set:
+      oidc.clientSecret: shh
+      webClients:
+        - clientID: hashed
+          clientSecretHash: "0000000000000000000000000000000000000000000000000000000000000000"
+          redirectURIs: ["https://a.example.com/cb"]
+        - clientID: library-web
+          existingSecretRef: {name: library-oauth}
+          redirectURIs: ["https://library.example.com/auth/callback"]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WEB_CLIENT_SECRET_1
+            valueFrom:
+              secretKeyRef:
+                name: library-oauth
+                key: clientSecret
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WEB_CLIENT_SECRET_0
+          any: true

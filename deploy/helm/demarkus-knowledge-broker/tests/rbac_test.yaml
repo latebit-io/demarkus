@@ -90,8 +90,9 @@ tests:
       - equal:
           path: rules[2].resourceNames
           value:
-            - "RELEASE-NAME-demarkus-knowledge-broker-refresh-tokens"
-            - "RELEASE-NAME-demarkus-knowledge-broker-dynamic-clients"
+            - "RELEASE-NAME-refresh-tokens"
+            - "RELEASE-NAME-dynamic-clients"
+            - "RELEASE-NAME-signing-key"
       - equal:
           path: rules[2].verbs
           value: ["get", "update"]
@@ -178,16 +179,19 @@ tests:
           # rule landing un-restricted.
           path: rules[4].resourceNames
 
-  - it: broker-ns Role omits both worlds rules entirely when worlds[] is empty
+  - it: broker-ns Role keeps only the secrets create rule when worlds[] is empty
     template: rbac-broker-ns.yaml
     documentIndex: 0
     set:
       worlds: []
     asserts:
-      # Only the two leases rules + the chart-seeded-secrets rule
-      # render; no rules[3] or [4] are emitted without worlds.
+      # Two leases rules, the chart-seeded-secrets rule, and the create
+      # rule the generated signing key needs; no per-world rule.
+      - equal:
+          path: rules[3].verbs
+          value: ["create"]
       - notExists:
-          path: rules[3]
+          path: rules[4]
 
   - it: per-world template emits 2 Roles + 2 RoleBindings for two worlds
     template: rbac-worlds.yaml
@@ -275,7 +279,7 @@ tests:
           value: ServiceAccount
       - equal:
           path: subjects[0].name
-          value: RELEASE-NAME-demarkus-knowledge-broker
+          value: RELEASE-NAME
       - equal:
           path: subjects[0].namespace
           value: broker-ns
@@ -295,3 +299,21 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: per-world Roles use the derived namespace and tokens Secret
+    template: rbac-worlds.yaml
+    set:
+      worldDefaults.namespace: demarkus-knowledge
+      worlds:
+        - name: root
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        equal:
+          path: metadata.namespace
+          value: demarkus-knowledge
+      - documentIndex: 0
+        equal:
+          path: rules[0].resourceNames
+          value: ["root-tokens"]

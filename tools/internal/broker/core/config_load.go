@@ -28,14 +28,23 @@ func LoadConfig(path string) (*Config, error) {
 	return &c, nil
 }
 
-// applyEnvOverrides takes the two secrets from the environment when set, so
-// they can come from a secretKeyRef instead of the rendered config. An empty
-// variable is unset, so a cleared variable cannot blank a file value.
+// applyEnvOverrides takes secrets from the environment when set (secretKeyRef
+// instead of rendered config); an empty variable is unset. Each web client
+// names its own variable in clientSecretEnv.
 func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("OIDC_CLIENT_SECRET"); v != "" {
 		c.OIDC.ClientSecret = v
 	}
 	if v := os.Getenv("BROKER_SIGNING_KEY"); v != "" {
 		c.OIDC.BrokerSigningKey = v
+	}
+	for i := range c.WebClients {
+		wc := &c.WebClients[i]
+		if wc.ClientSecretEnv == "" {
+			continue
+		}
+		if v := os.Getenv(wc.ClientSecretEnv); v != "" {
+			wc.ClientSecret = v
+		}
 	}
 }

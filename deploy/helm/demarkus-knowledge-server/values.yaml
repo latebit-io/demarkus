@@ -12,10 +12,25 @@ server:
   maxIncomingStreams: 128
   idleTimeout: 30s
 
-# Static worlds; empty is valid only with dynamicWorlds below. An existing
-# empty bucket is initialized and seeded on first start; token Secrets are
-# bootstrapped per world by the pre-install Job (tokens.bootstrap).
+# Static worlds; empty is valid only with dynamicWorlds below, or when the
+# umbrella supplies global.worlds. An existing empty bucket is initialized and
+# seeded on first start; token Secrets are bootstrapped per world by the
+# pre-install Job (tokens.bootstrap).
+#
+# Only name and worldID are required. Everything else derives from
+# worldDefaults (or the umbrella's global.*):
+#   authorities:  [<name>.<authorityDomain>]
+#   bucket.url:   <bucketPrefix><name>
+#   tokenSecret:  {name: <name>-tokens, key: tokens.toml}
+# Any field set on a world overrides the derived value.
 worlds: []
+  # - name: team-a
+  #   worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+  # - name: team-b
+  #   worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49
+  #   authorities: [team-b.example.com]
+  #   bucket: {url: gs://other-bucket}
+  #   readOnly: true
 
 tokens:
   admin:
@@ -55,6 +70,13 @@ dynamicWorlds:
   tokensSecret: memory-worlds-tokens
 
 worldDefaults:
+  # Suffix for derived authorities (<name>.<authorityDomain>); also the SNI
+  # the broker and agent dial with. Falls back to global.authorityDomain,
+  # then <fullname>.<namespace>.svc.cluster.local. Need not resolve in DNS.
+  authorityDomain: ""
+  # Prefix for derived bucket URLs, e.g. gs://my-project-demarkus-. Falls
+  # back to global.bucketPrefix; empty means every world sets bucket.url.
+  bucketPrefix: ""
   readOnly: false
   # Seeded as version 1 of /.well-known/demarkus/policy.md when the world is
   # created; empty uses the embedded warn-level default, and a world that has
@@ -75,6 +97,10 @@ tls:
     issuerRef:
       kind: ClusterIssuer
       name: ""
+    # Render a namespaced self-signed Issuer and use it instead of issuerRef.
+    # Clients then need insecure dialing until a CA issuer replaces it.
+    selfSigned:
+      create: false
     annotations: {}
 
 service:
@@ -117,8 +143,10 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
+# Off by default: renders nothing on clusters without an enforcing CNI and
+# needs the broker and agent selectors below to be right before it is safe.
 networkPolicy:
-  enabled: true
+  enabled: false
   # Standard NetworkPolicy cannot restrict GCS by FQDN. Explicitly accept
   # unrestricted TCP/443, or disable this policy and supply CNI/proxy controls.
   allowUnrestrictedHTTPS: false
@@ -162,4 +190,6 @@ affinity: {}
 podAnnotations: {}
 podLabels: {}
 nameOverride: ""
+# Resource names default to the release name (global.knowledgeService under
+# the umbrella).
 fullnameOverride: ""

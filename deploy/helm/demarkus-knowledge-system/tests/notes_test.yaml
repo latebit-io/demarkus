@@ -1,0 +1,10 @@
+suite: install notes
+values:
+  - fixtures/values.yaml
+templates:
+  - NOTES.txt
+tests:
+  - it: names the knowledge server Service from global.knowledgeService
+    asserts:
+      - matchRegexRaw:
+          pattern: 'knowledge server: knowledge\.NAMESPACE\.svc\.cluster\.local:6309 \(UDP\)'

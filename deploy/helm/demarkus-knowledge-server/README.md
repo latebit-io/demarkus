@@ -74,21 +74,32 @@ serviceAccount:
   workloadIdentity:
     gsa: demarkus-knowledge@project.iam.gserviceaccount.com
 
-networkPolicy:
-  allowUnrestrictedHTTPS: true
+worldDefaults:
+  bucketPrefix: gs://deployment-
 
 worlds:
   - name: team-a
+    worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+  - name: team-b
+    worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49
     authorities:
-      - team-a.example.com
-      - team-a.knowledge.svc.cluster.local
+      - team-b.example.com
     bucket:
-      url: gs://deployment-team-a
-      worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
-    tokenSecret:
-      name: team-a-tokens
-      key: tokens.toml
+      url: gs://other-bucket
 ```
+
+Only `name` and `worldID` are required. Each world derives
+`authorities: [<name>.<authorityDomain>]`, `bucket.url: <bucketPrefix><name>`
+and `tokenSecret: {name: <name>-tokens, key: tokens.toml}`; a field set on the
+world wins. `worldDefaults.authorityDomain` defaults to
+`<fullname>.<namespace>.svc.cluster.local`, the same suffix the broker and
+agent charts derive, so the three agree without ExternalName aliases.
+Under the `demarkus-knowledge-system` umbrella the list and the defaults
+come from `global.worlds`, `global.bucketPrefix` and `global.authorityDomain`.
+
+`tls.certManager.selfSigned.create: true` renders a namespaced self-signed
+`Issuer` and points the Certificate at it, for clusters without a CA issuer;
+clients then dial with verification off.
 
 ```sh
 helm upgrade --install knowledge ./deploy/helm/demarkus-knowledge-server \
@@ -112,8 +123,9 @@ and requires a restart with the new assignment.
 ## Security
 
 Health endpoints listen on the private pod port only. No health Service is
-created. NetworkPolicy permits UDP ingress only from configured broker and agent
-namespace/pod selectors and optional `externalCIDRs`. A LoadBalancer remains
+created. The NetworkPolicy is off by default; when enabled it permits UDP
+ingress only from configured broker and agent namespace/pod selectors and
+optional `externalCIDRs`. A LoadBalancer remains
 blocked from direct clients until those CIDRs are set. Egress permits cluster
 DNS, TCP 443 for GCS, and GKE metadata-server endpoints.
 
@@ -129,8 +141,8 @@ topology spread, rolling updates, and a default PDB.
 
 ## Validation
 
-Template rendering fails for missing TLS, Workload Identity, world identity,
-authority, bucket, or token Secret values. It also rejects fewer than two
+Template rendering fails for missing TLS, Workload Identity, world name or
+ID, or a bucket that neither the world nor a prefix supplies. It also rejects fewer than two
 replicas, an `initialPolicy` on a read-only world, and duplicate world names,
 normalized authorities, buckets, world IDs, or token Secret names.
 
@@ -140,3 +152,9 @@ helm unittest ./deploy/helm/demarkus-knowledge-server
 helm template knowledge ./deploy/helm/demarkus-knowledge-server \
   --namespace demarkus-knowledge --values production.yaml
 ```
+
+## Resource names
+
+Resources are named after the release (`fullnameOverride` still wins). A
+release whose name did not contain the chart name and set no override is
+renamed on upgrade; set `fullnameOverride` to the old fullname to keep it.

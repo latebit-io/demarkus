@@ -180,7 +180,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.serviceAccountName
-          value: RELEASE-NAME-demarkus-knowledge-server
+          value: RELEASE-NAME
       - equal:
           path: spec.template.spec.terminationGracePeriodSeconds
           value: 30

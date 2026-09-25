@@ -1,4 +1,5 @@
 {{- include "demarkus-knowledge-server.validate" . -}}
+{{- $worlds := include "demarkus-knowledge-server.worlds" . | fromYamlArray -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -21,8 +22,7 @@ data:
     worldsFile: /run/demarkus/dynamic-worlds/worlds.yaml
     {{- end }}
     worlds:
-      {{- range $index, $configuredWorld := .Values.worlds }}
-      {{- $world := mergeOverwrite (deepCopy $.Values.worldDefaults) (deepCopy $configuredWorld) }}
+      {{- range $world := $worlds }}
       - name: {{ $world.name | quote }}
         authorities:
           {{- range $world.authorities }}
@@ -45,8 +45,7 @@ data:
           requestsPerSecond: {{ $world.limits.requestsPerSecond }}
           burst: {{ $world.limits.burst }}
       {{- end }}
-{{- range $configuredWorld := .Values.worlds }}
-{{- $world := mergeOverwrite (deepCopy $.Values.worldDefaults) (deepCopy $configuredWorld) }}
+{{- range $world := $worlds }}
 {{- if $world.initialPolicy }}
   {{ include "demarkus-knowledge-server.policyKey" $world.name }}: |
     {{- $world.initialPolicy | nindent 4 }}

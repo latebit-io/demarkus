@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-st
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | sudo bash -s -- --domain yourdomain.com
 ```
 
-Kubernetes deployments use the Helm charts in [`deploy/helm/`](deploy/helm/) (server, broker, agent, knowledge server).
+Kubernetes deployments use the Helm charts in [`deploy/helm/`](deploy/helm/) (server, broker, agent, knowledge server). The [`demarkus-knowledge-system`](deploy/helm/demarkus-knowledge-system/) umbrella installs a whole knowledge system from one values file that declares each world once.
 
 See [full install docs](https://www.demarkus.io/install/) for platform-specific guides and other options.
 

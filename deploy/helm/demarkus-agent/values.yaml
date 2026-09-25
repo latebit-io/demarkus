@@ -21,10 +21,32 @@ logFormat: json
 # multiple replicas would duplicate work. Keep at 1.
 replicaCount: 1
 
+# Derived topology: name the worlds and the hub once and the chart derives
+# config.seeds (every non-hub world), config.hubs, config.endpoints (when a
+# shared dial address is known) and tokens.fromWorldSecrets (the hub's
+# <hub>-token-values from the knowledge-server chart). Under the umbrella
+# these come from global.worlds, global.knowledgeService and
+# global.authorityDomain. Any explicit config.* or tokens.* entry below
+# overrides its derived list.
+worlds: []
+  # - root
+  # - team-a
+# World that receives the published index. Else the global world flagged
+# hub: true.
+hub: ""
+# Shared knowledge Service host:port every world is dialed at. Else
+# <global.knowledgeService>.<release namespace>.svc.cluster.local:6309.
+dialAddress: ""
+# SNI suffix for derived endpoints (<name>.<authorityDomain>); must match
+# the knowledge-server chart's authorityDomain. Else global.authorityDomain,
+# else <global.knowledgeService>.<release namespace>.svc.cluster.local.
+authorityDomain: ""
+
 # Crawler config. Becomes the contents of /etc/demarkus/agent.toml.
 # See client/internal/fedcrawl/config.go for the full schema.
 config:
-  # mark:// URLs of servers to crawl from on each tick. Required.
+  # mark:// URLs of servers to crawl from on each tick. Required unless
+  # derived from worlds above.
   seeds: []
   #  - mark://team-a.example.com:6309
   #  - mark://team-b.example.com:6309
@@ -106,6 +128,10 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
+
+nameOverride: ""
+# Resource names default to the release name.
+fullnameOverride: ""
 
 # Pod-level overrides.
 nodeSelector: {}

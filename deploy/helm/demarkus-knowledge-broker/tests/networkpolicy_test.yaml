@@ -6,8 +6,16 @@ set:
   oidc.clientID: broker-app
   oidc.clientSecret: shh
   oidc.redirectURL: https://broker.example.com/auth/callback
+  networkPolicy.enabled: true
 tests:
-  - it: NetworkPolicy renders by default (chart-side opt-out, not opt-in)
+  - it: NetworkPolicy is omitted by default
+    set:
+      networkPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: NetworkPolicy renders when enabled
     asserts:
       - hasDocuments:
           count: 1
@@ -15,7 +23,7 @@ tests:
           of: NetworkPolicy
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-demarkus-knowledge-broker
+          value: RELEASE-NAME
 
   - it: policyTypes includes Ingress AND Egress (no implicit allow-all in either direction)
     asserts:

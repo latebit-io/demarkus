@@ -70,3 +70,69 @@ tests:
       - notMatchRegex:
           path: data["agent.toml"]
           pattern: '\[endpoints\.'
+
+  - it: derives seeds, hubs and endpoints from worlds, hub and dialAddress
+    set:
+      worlds: [root, team-a, team-b]
+      hub: root
+      dialAddress: knowledge.demarkus-knowledge.svc.cluster.local:6309
+      authorityDomain: knowledge.demarkus-knowledge.svc.cluster.local
+    asserts:
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'seeds = \[\n\s+"mark://team-a",\n\s+"mark://team-b",\n\]'
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'hubs = \[\n\s+"mark://root",\n\]'
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: '\[endpoints\."root"\]\ndial_address = "knowledge.demarkus-knowledge.svc.cluster.local:6309"\nserver_name = "root.knowledge.demarkus-knowledge.svc.cluster.local"'
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: '\[endpoints\."team-b"\]\ndial_address = "knowledge.demarkus-knowledge.svc.cluster.local:6309"\nserver_name = "team-b.knowledge.demarkus-knowledge.svc.cluster.local"'
+
+  - it: derives the topology from the umbrella globals
+    set:
+      global:
+        knowledgeService: knowledge
+        worlds:
+          - name: root
+            hub: true
+          - name: team-a
+    asserts:
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'seeds = \[\n\s+"mark://team-a",\n\]'
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'hubs = \[\n\s+"mark://root",\n\]'
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: '\[endpoints\."team-a"\]\ndial_address = "knowledge.NAMESPACE.svc.cluster.local:6309"\nserver_name = "team-a.knowledge.NAMESPACE.svc.cluster.local"'
+
+  - it: omits endpoints when no dial address is known
+    set:
+      worlds: [root, team-a]
+      hub: root
+    asserts:
+      - notMatchRegex:
+          path: data["agent.toml"]
+          pattern: 'endpoints'
+
+  - it: explicit config lists override the derived ones
+    set:
+      worlds: [root, team-a]
+      hub: root
+      dialAddress: knowledge.ns.svc.cluster.local:6309
+      config.seeds: [mark://other]
+      config.endpoints.team-a.dialAddress: custom.internal:6309
+    asserts:
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'seeds = \[\n\s+"mark://other",\n\]'
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: '\[endpoints\."team-a"\]\ndial_address = "custom.internal:6309"'
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: '\[endpoints\."root"\]\ndial_address = "knowledge.ns.svc.cluster.local:6309"'

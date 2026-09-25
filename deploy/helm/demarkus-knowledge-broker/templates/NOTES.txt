@@ -19,14 +19,15 @@ demarkus-knowledge-broker installed as release {{ .Release.Name | quote }} in na
     kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "demarkus-knowledge-broker.fullname" . }} {{ .Values.server.port }}:{{ .Values.server.port }}
 {{- end }}
 
-== Configured worlds ({{ len .Values.worlds }}) ==
-{{- range .Values.worlds }}
-  - {{ .name }} → secret {{ .namespace }}/{{ .tokensSecret }}
+{{- $worlds := include "demarkus-knowledge-broker.worlds" . | fromYamlArray }}
+== Configured worlds ({{ len $worlds }}) ==
+{{- range $worlds }}
+  - {{ .name }} -> secret {{ .namespace }}/{{ .tokensSecret }}{{ with .dialAddress }} via {{ . }}{{ end }}
 {{- end }}
 
 == Prerequisites the chart does NOT enforce ==
 - Each world's namespace listed above must already exist; chart does not create them.
-- Each world's tokens Secret must already exist; demarkus-server chart's bootstrap Job creates it.
+- Each world's tokens Secret must already exist; the demarkus-server or demarkus-knowledge-server chart's bootstrap Job creates it.
 {{- if .Values.rbac.create }}
 - The install-time ServiceAccount needs Role/RoleBinding create rights in every world's namespace (the chart created them per-world).
 {{- else }}

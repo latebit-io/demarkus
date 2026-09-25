@@ -46,7 +46,7 @@ spec:
             - /etc/demarkus/agent.toml
             - --state
             - /var/lib/demarkus/state.json
-            {{- if .Values.config.hubs }}
+            {{- if include "demarkus-agent.hubs" . | fromYamlArray }}
             - --publish
             {{- end }}
             {{- if .Values.perServer }}
@@ -91,7 +91,7 @@ spec:
                   name: {{ include "demarkus-agent.tokensSecretName" . }}
                   optional: true
               {{- $seenHostPorts := dict }}
-              {{- range $i, $w := .Values.tokens.fromWorldSecrets }}
+              {{- range $i, $w := include "demarkus-agent.fromWorldSecrets" . | fromYamlArray }}
               {{- $hostPort := required (printf "tokens.fromWorldSecrets[%d].hostPort is required" $i) $w.hostPort }}
               {{- if or (contains "/" $hostPort) (hasPrefix "." $hostPort) }}
               {{- fail (printf "tokens.fromWorldSecrets[%d].hostPort %q must be a bare host:port" $i $hostPort) }}

@@ -61,7 +61,7 @@ tests:
       tls.certManager.enabled: true
     asserts:
       - failedTemplate:
-          errorMessage: tls.certManager.issuerRef.name is required when cert-manager is enabled
+          errorMessage: tls.certManager.issuerRef.name is required when cert-manager is enabled (or set tls.certManager.selfSigned.create)
 
   - it: requires Workload Identity on a created service account
     set:
@@ -93,7 +93,7 @@ tests:
       worlds: []
     asserts:
       - failedTemplate:
-          errorMessage: worlds must contain at least one world (or enable dynamicWorlds)
+          errorMessage: worlds (or global.worlds) must contain at least one world, or enable dynamicWorlds
 
   - it: rejects duplicate world names
     set:
@@ -149,7 +149,7 @@ tests:
           tokenSecret: {name: team-b-tokens, key: tokens.toml}
     asserts:
       - failedTemplate:
-          errorMessage: 'worlds[1].bucket.worldID "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48" is duplicated'
+          errorMessage: 'worlds[1].worldID "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48" is duplicated'
 
   - it: rejects duplicate token Secrets
     set:
@@ -166,16 +166,33 @@ tests:
       - failedTemplate:
           errorMessage: 'worlds[1].tokenSecret.name "team-a-tokens" is duplicated'
 
-  - it: requires each identity and token value
+  - it: requires a bucket when no prefix derives one
     set:
       worlds:
         - name: team-a
-          authorities: [team-a.example.com]
-          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
-          tokenSecret: {name: team-a-tokens, key: ""}
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
     asserts:
       - failedTemplate:
-          errorMessage: worlds[0].tokenSecret.key is required
+          errorMessage: worlds[0].bucket.url is required (or set worldDefaults.bucketPrefix / global.bucketPrefix)
+
+  - it: requires a world ID
+    set:
+      worldDefaults.bucketPrefix: gs://deployment-
+      worlds:
+        - name: team-a
+    asserts:
+      - failedTemplate:
+          errorMessage: worlds[0].worldID is required
+
+  - it: rejects an issuerRef next to the self-signed issuer
+    set:
+      tls.existingSecret: ""
+      tls.certManager.enabled: true
+      tls.certManager.issuerRef.name: internal-ca
+      tls.certManager.selfSigned.create: true
+    asserts:
+      - failedTemplate:
+          errorMessage: tls.certManager.selfSigned.create and tls.certManager.issuerRef.name are mutually exclusive; set exactly one
 
   - it: rejects world names unsafe for Kubernetes mount paths
     set:
@@ -248,7 +265,7 @@ tests:
           tokenSecret: {name: team-a-tokens, key: tokens.toml}
     asserts:
       - failedTemplate:
-          errorMessage: 'worlds[0].bucket.worldID "52B471F7-8D38-4C89-B44A-6F4F8B1A4F48" must be a canonical lowercase UUID with RFC 4122 variant'
+          errorMessage: 'worlds[0].worldID "52B471F7-8D38-4C89-B44A-6F4F8B1A4F48" must be a canonical lowercase UUID with RFC 4122 variant'
 
   - it: rejects UUIDs without the RFC 4122 variant
     set:
@@ -259,7 +276,7 @@ tests:
           tokenSecret: {name: team-a-tokens, key: tokens.toml}
     asserts:
       - failedTemplate:
-          errorMessage: 'worlds[0].bucket.worldID "52b471f7-8d38-4c89-744a-6f4f8b1a4f48" must be a canonical lowercase UUID with RFC 4122 variant'
+          errorMessage: 'worlds[0].worldID "52b471f7-8d38-4c89-744a-6f4f8b1a4f48" must be a canonical lowercase UUID with RFC 4122 variant'
 
   - it: rejects an initial policy on a read-only world
     set:
@@ -273,3 +290,94 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: worlds[0].initialPolicy must not be set on a read-only world, which is never seeded
+
+  - it: derives authorities, bucket and token Secret from name and worldID
+    set:
+      worldDefaults.bucketPrefix: gs://deployment-
+      worlds:
+        - name: team-a
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+    asserts:
+      - template: configmap.yaml
+        matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "team-a"\n\s+authorities:\n\s+- "team-a.release-name.namespace.svc.cluster.local"\n\s+bucket:\n\s+url: "gs://deployment-team-a"\n\s+worldID: "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48"'
+
+  - it: derives authorities from worldDefaults.authorityDomain
+    set:
+      worldDefaults.authorityDomain: knowledge.example.internal
+      worlds:
+        - name: team-a
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+          bucket: {url: gs://deployment-team-a}
+    asserts:
+      - template: configmap.yaml
+        matchRegex:
+          path: data["config.yaml"]
+          pattern: '- "team-a.knowledge.example.internal"'
+
+  - it: takes the world list and defaults from the umbrella globals
+    set:
+      worlds: []
+      global:
+        authorityDomain: knowledge.example.internal
+        bucketPrefix: gs://deployment-
+        worlds:
+          - name: root
+            worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+            hub: true
+            allow: {domains: [example.com]}
+          - name: team-b
+            worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49
+            readOnly: true
+    asserts:
+      - template: configmap.yaml
+        matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "root"\n\s+authorities:\n\s+- "root.knowledge.example.internal"\n\s+bucket:\n\s+url: "gs://deployment-root"'
+      - template: configmap.yaml
+        matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "team-b"[\s\S]*readOnly: true'
+      - template: configmap.yaml
+        notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'hub|allow'
+      - template: configmap.yaml
+        equal:
+          path: metadata.name
+          value: RELEASE-NAME-config
+
+  - it: names itself after global.knowledgeService so the broker and agent find it
+    set:
+      worlds: []
+      global:
+        knowledgeService: knowledge
+        bucketPrefix: gs://deployment-
+        worlds:
+          - name: root
+            worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+    asserts:
+      - template: configmap.yaml
+        equal:
+          path: metadata.name
+          value: knowledge-config
+      - template: configmap.yaml
+        matchRegex:
+          path: data["config.yaml"]
+          pattern: '- "root.knowledge.namespace.svc.cluster.local"'
+
+  - it: lets a world override every derived field
+    set:
+      worldDefaults.bucketPrefix: gs://deployment-
+      worlds:
+        - name: team-a
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+          authorities: [team-a.example.com]
+          bucket: {url: gs://custom-bucket}
+          tokenSecret: {name: custom-tokens, key: custom.toml}
+    asserts:
+      - template: configmap.yaml
+        matchRegex:
+          path: data["config.yaml"]
+          pattern: 'authorities:\n\s+- "team-a.example.com"\n\s+bucket:\n\s+url: "gs://custom-bucket"'

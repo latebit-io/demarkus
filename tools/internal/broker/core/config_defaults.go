@@ -25,6 +25,9 @@ func (s *ServerConfig) applyRefreshDefaults() error {
 	if s.DynamicClientsSecret == "" {
 		s.DynamicClientsSecret = DefaultDynamicClientsSecret
 	}
+	if s.SigningKeySecret == "" {
+		s.SigningKeySecret = DefaultSigningKeySecret
+	}
 	if s.RefreshTokenTTL == 0 {
 		s.RefreshTokenTTL = DefaultRefreshTokenTTL
 	}

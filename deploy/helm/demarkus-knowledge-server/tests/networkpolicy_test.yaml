@@ -4,7 +4,14 @@ templates:
 values:
   - fixtures/valid-values.yaml
 tests:
-  - it: isolates ingress and egress by default
+  - it: is omitted unless enabled
+    set:
+      networkPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: isolates ingress and egress when enabled
     asserts:
       - isKind:
           of: NetworkPolicy

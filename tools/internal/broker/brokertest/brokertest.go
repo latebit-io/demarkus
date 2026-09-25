@@ -2,11 +2,6 @@ package brokertest
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -156,19 +151,14 @@ func AliceClaims() core.Claims {
 	return core.Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}
 }
 
-// generateTestSigningKey is a fresh ECDSA P-256 key as PKCS#8 PEM,
-// ephemeral per test.
+// generateTestSigningKey is a fresh ECDSA P-256 key as PKCS#8 PEM.
 func generateTestSigningKey(t *testing.T) []byte {
 	t.Helper()
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	pemBytes, err := core.GenerateSigningKeyPEM()
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatalf("marshal PKCS8: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	return pemBytes
 }
 
 // NewTestIDTokenSigner is a broker signer over a fresh ephemeral key.

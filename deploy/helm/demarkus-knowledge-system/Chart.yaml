@@ -1,0 +1,45 @@
+apiVersion: v2
+name: demarkus-knowledge-system
+description: |
+  One-values-file install of a demarkus knowledge system: the multi-world
+  knowledge server, the OIDC broker with its MCP gateway, the federation
+  agent, and optionally the library reading room. Worlds are declared once
+  under global.worlds and every sub-chart derives its own entries.
+type: application
+# version + appVersion are set at publish time by the release workflow
+# (knowledge-system/v<X>); the vendored sub-charts are re-versioned to
+# their latest release tags in the same step. Committed values only serve
+# local renders and unit tests.
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  - name: demarkus-knowledge-server
+    alias: knowledge
+    version: ">=0.0.0-0"
+    repository: file://../demarkus-knowledge-server
+    condition: knowledge.enabled
+  - name: demarkus-knowledge-broker
+    alias: broker
+    version: ">=0.0.0-0"
+    repository: file://../demarkus-knowledge-broker
+    condition: broker.enabled
+  - name: demarkus-agent
+    alias: agent
+    version: ">=0.0.0-0"
+    repository: file://../demarkus-agent
+    condition: agent.enabled
+  - name: demarkus-library
+    alias: library
+    version: "0.29.0"
+    repository: oci://ghcr.io/latebit-io/charts
+    condition: library.enabled
+keywords:
+  - demarkus
+  - mark-protocol
+  - knowledge-system
+home: https://demarkus.io
+sources:
+  - https://github.com/latebit-io/demarkus
+maintainers:
+  - name: latebit-io
+    url: https://github.com/latebit-io

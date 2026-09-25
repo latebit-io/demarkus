@@ -61,6 +61,12 @@ func (c *Config) FileBackend() bool { return c.fileBackend() }
 type WebClientConfig struct {
 	// ClientID is presented on /oauth/authorize and the token endpoint.
 	ClientID string `yaml:"clientID"`
+	// ClientSecret is the cleartext secret, hashed into ClientSecretHash at
+	// load and cleared. Set this, ClientSecretHash, or ClientSecretEnv.
+	ClientSecret string `yaml:"clientSecret"`
+	// ClientSecretEnv names an environment variable holding the cleartext
+	// secret (a secretKeyRef), read at load into ClientSecret.
+	ClientSecretEnv string `yaml:"clientSecretEnv"`
 	// ClientSecretHash is the lowercase sha256 hex of the client secret. sha256
 	// suffices because the secret is operator generated randomness, not a password.
 	ClientSecretHash string `yaml:"clientSecretHash"`
@@ -128,6 +134,9 @@ type ServerConfig struct {
 	DevicePollInterval time.Duration `yaml:"devicePollInterval"`
 	// RefreshTokensSecret holds the sha256(refresh_token) to record map.
 	RefreshTokensSecret string `yaml:"refreshTokensSecret"`
+	// SigningKeySecret holds the generated id_token signing key when
+	// OIDC.BrokerSigningKey is blank. Default "demarkus-broker-signing-key".
+	SigningKeySecret string `yaml:"signingKeySecret"`
 	// DynamicClientsSecret holds the RFC 7591 registration map.
 	DynamicClientsSecret string `yaml:"dynamicClientsSecret"`
 	// RefreshTokenTTL is the lifetime of a new refresh token. Default 90 days.
@@ -182,7 +191,8 @@ type OIDCConfig struct {
 	// RedirectURL is the public URL of /auth/callback, as registered at the IdP.
 	RedirectURL string `yaml:"redirectURL"`
 	// BrokerSigningKey is the PEM ECDSA P-256 key (PKCS#8 or SEC1) signing
-	// broker id_tokens. Supplied through a Secret, never helm values.
+	// broker id_tokens. Blank makes the broker generate one on first start
+	// and persist it in Server.SigningKeySecret.
 	BrokerSigningKey string `yaml:"brokerSigningKey"`
 	// AllowDomains is the Google Workspace hosted domain allowlist, checked on
 	// every IdP exchange before any code or token is issued. Keyed on the `hd`

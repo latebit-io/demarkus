@@ -1,0 +1,100 @@
+# demarkus-knowledge-system: declare each world once; the sub-charts derive
+# the rest. Sub-chart values live under their alias (knowledge, broker,
+# agent, library) and accept everything the sub-chart's own values.yaml does.
+
+global:
+  # One entry per world. name and worldID are required; hub marks the world
+  # the agent publishes its index into; allow is the broker's per-world
+  # predicate; readOnly and initialPolicy go to the knowledge server.
+  worlds: []
+    # - name: root
+    #   worldID: 1bb83179-7275-41a2-9519-a3410a7ac5dd
+    #   hub: true
+    # - name: team-a
+    #   worldID: d7867876-1369-4b39-a33d-b175a4320acf
+    #   allow:
+    #     groups: ["team-a"]
+  # Name of the knowledge server's resources and Service; the broker and
+  # agent dial <knowledgeService>.<namespace>.svc.cluster.local:6309.
+  knowledgeService: knowledge
+  # Suffix of every world authority (<name>.<authorityDomain>): the SNI the
+  # knowledge server certificate carries and the broker and agent present.
+  # Empty derives <knowledgeService>.<namespace>.svc.cluster.local. It never
+  # has to resolve in DNS.
+  authorityDomain: ""
+  # Prefix of every world bucket (<bucketPrefix><name>), e.g.
+  # gs://my-project-demarkus-. A world may set bucket.url instead.
+  bucketPrefix: ""
+
+# nameOverride keeps each sub-chart's app.kubernetes.io/name label (helm
+# otherwise uses the alias), which the NetworkPolicy selectors match on.
+knowledge:
+  enabled: true
+  nameOverride: demarkus-knowledge-server
+  # Self-signed in-cluster certificate; clients dial with insecure below.
+  tls:
+    certManager:
+      enabled: true
+      selfSigned:
+        create: true
+  serviceAccount:
+    workloadIdentity:
+      # GSA with storage access to every world bucket. Required.
+      gsa: ""
+
+broker:
+  enabled: true
+  nameOverride: demarkus-knowledge-broker
+  fullnameOverride: broker
+  # Worlds carry the self-signed certificate above.
+  worldDialer:
+    insecureSkipVerify: true
+  server:
+    # Externally reachable base URL, e.g. https://broker.example.com. Required.
+    publicURL: ""
+  # The signing key is generated on first start; only the IdP client
+  # credentials are yours to supply.
+  oidc:
+    issuer: ""
+    clientID: ""
+    # One of clientSecret or existingSecretRef.name.
+    clientSecret: ""
+    existingSecretRef:
+      name: ""
+    redirectURL: ""
+  # Register the library here; point both at the same Secret.
+  webClients: []
+    # - clientID: library-web
+    #   existingSecretRef:
+    #     name: library-oauth
+    #   redirectURIs:
+    #     - https://library.example.com/auth/callback
+
+agent:
+  enabled: true
+  nameOverride: demarkus-agent
+  fullnameOverride: agent
+  # Self-signed world certificates, same as the broker.
+  insecure: true
+  publishGraph: true
+
+# The library chart lives in its own repository and has no global
+# derivation; set its broker wiring explicitly.
+library:
+  enabled: false
+  nameOverride: demarkus-library
+  fullnameOverride: library
+  library:
+    transport: broker
+    # Usually the hub world.
+    hub: root
+    broker:
+      url: ""
+      clientID: library-web
+      existingSecretRef:
+        name: library-oauth
+      redirectURI: ""
+      world: root
+  # The library chart defaults this on; the others default off.
+  networkPolicy:
+    enabled: false

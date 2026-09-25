@@ -116,6 +116,8 @@ tests:
 
   - it: NetworkPolicy admits MCP port alongside management API port
     template: networkpolicy.yaml
+    set:
+      networkPolicy.enabled: true
     asserts:
       - contains:
           path: spec.ingress[0].ports
@@ -343,7 +345,7 @@ tests:
           value: mcp.broker.example.com
       - equal:
           path: spec.tls[0].secretName
-          value: RELEASE-NAME-demarkus-knowledge-broker-mcp-tls
+          value: RELEASE-NAME-mcp-tls
 
   - it: fail-render when both ingress.mcp.tls.existingSecret and certManager.enabled set
     template: ingress.yaml
@@ -392,10 +394,10 @@ tests:
           count: 1
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-demarkus-knowledge-broker-mcp-tls
+          value: RELEASE-NAME-mcp-tls
       - equal:
           path: spec.secretName
-          value: RELEASE-NAME-demarkus-knowledge-broker-mcp-tls
+          value: RELEASE-NAME-mcp-tls
       - equal:
           path: spec.dnsNames[0]
           value: mcp.broker.example.com
@@ -418,5 +420,5 @@ tests:
           count: 1
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-demarkus-knowledge-broker-tls
+          value: RELEASE-NAME-tls
           documentIndex: 0

@@ -1,11 +1,6 @@
 package core
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -52,15 +47,10 @@ var (
 )
 
 func init() {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	pemBytes, err := GenerateSigningKeyPEM()
 	if err != nil {
 		panic("config_test: generate test signing key: " + err.Error())
 	}
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		panic("config_test: marshal test signing key: " + err.Error())
-	}
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 	// YAML literal block inside the `oidc:` map: brokerSigningKey
 	// header at 2-space indent, PEM body at 4-space indent.
 	var b strings.Builder
@@ -626,16 +616,18 @@ func TestLoadConfig(t *testing.T) {
 			},
 		},
 		{
-			// PR4: brokerSigningKey is required so a refresh-grant
-			// request never falls through to a "feature missing"
-			// runtime error. validate() now parses the PEM too
-			// (see OIDCConfig.validate doc), but missing-field
-			// short-circuits before parse so the error message
-			// matches the "is required" surface, not the parse
-			// error.
-			name:    "brokerSigningKey required",
-			body:    validConfigNoSigningKey,
-			wantErr: "oidc.brokerSigningKey is required",
+			// A blank key is generated at startup (EnsureSigningKey), so
+			// load succeeds and the store name gets its default.
+			name: "brokerSigningKey optional, signingKeySecret defaults",
+			body: validConfigNoSigningKey,
+			validate: func(t *testing.T, c *Config) {
+				if c.OIDC.BrokerSigningKey != "" {
+					t.Errorf("BrokerSigningKey = %q, want blank", c.OIDC.BrokerSigningKey)
+				}
+				if c.Server.SigningKeySecret != DefaultSigningKeySecret {
+					t.Errorf("SigningKeySecret = %q, want %q", c.Server.SigningKeySecret, DefaultSigningKeySecret)
+				}
+			},
 		},
 		{
 			// PR4 review: malformed PEM is now caught at LoadConfig

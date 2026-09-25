@@ -4,6 +4,7 @@ serviceAccount:
   workloadIdentity:
     gsa: knowledge@project.iam.gserviceaccount.com
 networkPolicy:
+  enabled: true
   allowUnrestrictedHTTPS: true
 worlds:
   - name: team-a

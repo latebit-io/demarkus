@@ -2,17 +2,13 @@
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+Release name unless overridden. The umbrella's global.knowledgeService names
+this Service for the broker and agent, so it names these resources too.
+*/}}
 {{- define "demarkus-knowledge-server.fullname" -}}
-{{- if .Values.fullnameOverride -}}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- $name := default .Chart.Name .Values.nameOverride -}}
-{{- if contains $name .Release.Name -}}
-{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-{{- end -}}
+{{- $global := default dict .Values.global -}}
+{{- default (default .Release.Name $global.knowledgeService) .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "demarkus-knowledge-server.chart" -}}
@@ -53,8 +49,70 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{/* Name of the chart-rendered self-signed Issuer. */}}
+{{- define "demarkus-knowledge-server.selfSignedIssuerName" -}}
+{{- printf "%s-selfsigned" (include "demarkus-knowledge-server.fullname" . | trunc 52 | trimSuffix "-") -}}
+{{- end -}}
+
 {{- define "demarkus-knowledge-server.policyKey" -}}
 {{- printf "policy-%s.md" . -}}
+{{- end -}}
+
+{{/*
+Authority suffix for derived world authorities: worldDefaults.authorityDomain,
+else global.authorityDomain, else this Service's cluster DNS name (the same
+suffix the dynamic-worlds wildcard certificate covers).
+*/}}
+{{- define "demarkus-knowledge-server.authorityDomain" -}}
+{{- $global := default dict .Values.global -}}
+{{- $configured := default (default "" $global.authorityDomain) .Values.worldDefaults.authorityDomain -}}
+{{- default (printf "%s.%s.svc.cluster.local" (include "demarkus-knowledge-server.fullname" .) .Release.Namespace) $configured -}}
+{{- end -}}
+
+{{- define "demarkus-knowledge-server.bucketPrefix" -}}
+{{- $global := default dict .Values.global -}}
+{{- default (default "" $global.bucketPrefix) .Values.worldDefaults.bucketPrefix -}}
+{{- end -}}
+
+{{/*
+Resolved world list as YAML. Source is .Values.worlds, else global.worlds
+(umbrella). Each entry is merged over worldDefaults, then the derivable
+fields are filled: authorities [<name>.<authorityDomain>], bucket.url
+<bucketPrefix><name>, bucket.worldID from a top-level worldID, tokenSecret
+<name>-tokens / tokens.toml. Consumers read named fields: include ... | fromYamlArray.
+*/}}
+{{- define "demarkus-knowledge-server.worlds" -}}
+{{- $global := default dict .Values.global -}}
+{{- $source := .Values.worlds -}}
+{{- if empty $source -}}{{- $source = default list $global.worlds -}}{{- end -}}
+{{- $authorityDomain := include "demarkus-knowledge-server.authorityDomain" . -}}
+{{- $bucketPrefix := include "demarkus-knowledge-server.bucketPrefix" . -}}
+{{- $worlds := list -}}
+{{- range $configured := $source -}}
+{{- $world := mergeOverwrite (deepCopy $.Values.worldDefaults) (deepCopy (default dict $configured)) -}}
+{{- $name := default "" $world.name -}}
+{{- if empty $world.authorities -}}
+{{- $_ := set $world "authorities" (list (printf "%s.%s" $name $authorityDomain)) -}}
+{{- end -}}
+{{- $bucket := default dict $world.bucket -}}
+{{- if and (empty $bucket.url) $bucketPrefix $name -}}
+{{- $_ := set $bucket "url" (printf "%s%s" $bucketPrefix $name) -}}
+{{- end -}}
+{{- if and (empty $bucket.worldID) $world.worldID -}}
+{{- $_ := set $bucket "worldID" $world.worldID -}}
+{{- end -}}
+{{- $_ := set $world "bucket" $bucket -}}
+{{- $tokenSecret := default dict $world.tokenSecret -}}
+{{- if empty $tokenSecret.name -}}
+{{- $_ := set $tokenSecret "name" (printf "%s-tokens" $name) -}}
+{{- end -}}
+{{- if empty $tokenSecret.key -}}
+{{- $_ := set $tokenSecret "key" "tokens.toml" -}}
+{{- end -}}
+{{- $_ := set $world "tokenSecret" $tokenSecret -}}
+{{- $worlds = append $worlds $world -}}
+{{- end -}}
+{{- toYaml $worlds -}}
 {{- end -}}
 
 {{- define "demarkus-knowledge-server.validate" -}}
@@ -81,8 +139,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if not (or .Values.tls.existingSecret .Values.tls.certManager.enabled) -}}
 {{- fail "tls.existingSecret or tls.certManager.enabled is required" -}}
 {{- end -}}
-{{- if and .Values.tls.certManager.enabled (empty .Values.tls.certManager.issuerRef.name) -}}
-{{- fail "tls.certManager.issuerRef.name is required when cert-manager is enabled" -}}
+{{- if .Values.tls.certManager.enabled -}}
+{{- if and .Values.tls.certManager.selfSigned.create .Values.tls.certManager.issuerRef.name -}}
+{{- fail "tls.certManager.selfSigned.create and tls.certManager.issuerRef.name are mutually exclusive; set exactly one" -}}
+{{- end -}}
+{{- if not (or .Values.tls.certManager.selfSigned.create .Values.tls.certManager.issuerRef.name) -}}
+{{- fail "tls.certManager.issuerRef.name is required when cert-manager is enabled (or set tls.certManager.selfSigned.create)" -}}
+{{- end -}}
 {{- end -}}
 {{- if .Values.serviceAccount.create -}}
 {{- if empty .Values.serviceAccount.workloadIdentity.gsa -}}
@@ -105,16 +168,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail "service.externalTrafficPolicy must be Local when networkPolicy.externalCIDRs is set" -}}
 {{- end -}}
 {{- end -}}
-{{- if and (empty .Values.worlds) (not .Values.dynamicWorlds.enabled) -}}
-{{- fail "worlds must contain at least one world (or enable dynamicWorlds)" -}}
+{{- $worlds := include "demarkus-knowledge-server.worlds" . | fromYamlArray -}}
+{{- if and (empty $worlds) (not .Values.dynamicWorlds.enabled) -}}
+{{- fail "worlds (or global.worlds) must contain at least one world, or enable dynamicWorlds" -}}
 {{- end -}}
 {{- $names := dict -}}
 {{- $authorities := dict -}}
 {{- $buckets := dict -}}
 {{- $worldIDs := dict -}}
 {{- $tokenSecrets := dict -}}
-{{- range $index, $configuredWorld := .Values.worlds -}}
-{{- $world := mergeOverwrite (deepCopy $.Values.worldDefaults) (deepCopy (default dict $configuredWorld)) -}}
+{{- range $index, $world := $worlds -}}
 {{- $bucket := default dict $world.bucket -}}
 {{- $tokenSecret := default dict $world.tokenSecret -}}
 {{- $location := printf "worlds[%d]" $index -}}
@@ -128,9 +191,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail (printf "%s.name %q is duplicated" $location $world.name) -}}
 {{- end -}}
 {{- $_ := set $names $world.name true -}}
-{{- if empty $world.authorities -}}
-{{- fail (printf "%s.authorities must contain at least one authority" $location) -}}
-{{- end -}}
 {{- range $authorityIndex, $authority := $world.authorities -}}
 {{- if empty $authority -}}
 {{- fail (printf "%s.authorities[%d] is required" $location $authorityIndex) -}}
@@ -150,7 +210,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $_ := set $authorities $normalized true -}}
 {{- end -}}
 {{- if empty $bucket.url -}}
-{{- fail (printf "%s.bucket.url is required" $location) -}}
+{{- fail (printf "%s.bucket.url is required (or set worldDefaults.bucketPrefix / global.bucketPrefix)" $location) -}}
 {{- end -}}
 {{- $bucketName := trimPrefix "gs://" $bucket.url -}}
 {{- $maximumBucketLength := 63 -}}
@@ -185,25 +245,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- $_ := set $buckets $bucket.url true -}}
 {{- if empty $bucket.worldID -}}
-{{- fail (printf "%s.bucket.worldID is required" $location) -}}
+{{- fail (printf "%s.worldID is required" $location) -}}
 {{- end -}}
 {{- if not (regexMatch "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" $bucket.worldID) -}}
-{{- fail (printf "%s.bucket.worldID %q must be a canonical lowercase UUID with RFC 4122 variant" $location $bucket.worldID) -}}
+{{- fail (printf "%s.worldID %q must be a canonical lowercase UUID with RFC 4122 variant" $location $bucket.worldID) -}}
 {{- end -}}
 {{- if hasKey $worldIDs $bucket.worldID -}}
-{{- fail (printf "%s.bucket.worldID %q is duplicated" $location $bucket.worldID) -}}
+{{- fail (printf "%s.worldID %q is duplicated" $location $bucket.worldID) -}}
 {{- end -}}
 {{- $_ := set $worldIDs $bucket.worldID true -}}
-{{- if empty $tokenSecret.name -}}
-{{- fail (printf "%s.tokenSecret.name is required" $location) -}}
-{{- end -}}
 {{- if hasKey $tokenSecrets $tokenSecret.name -}}
 {{- fail (printf "%s.tokenSecret.name %q is duplicated" $location $tokenSecret.name) -}}
 {{- end -}}
 {{- $_ := set $tokenSecrets $tokenSecret.name true -}}
-{{- if empty $tokenSecret.key -}}
-{{- fail (printf "%s.tokenSecret.key is required" $location) -}}
-{{- end -}}
 {{- /* A world that is never seeded would take the policy body silently. */ -}}
 {{- if and $world.initialPolicy $world.readOnly -}}
 {{- fail (printf "%s.initialPolicy must not be set on a read-only world, which is never seeded" $location) -}}
@@ -221,7 +275,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Values.tls.existingSecret -}}
 {{- $_ := set $reserved .Values.tls.existingSecret "tls.existingSecret" -}}
 {{- end -}}
-{{- range $index, $world := .Values.worlds -}}
+{{- range $index, $world := $worlds -}}
 {{- $rawName := printf "%s-token-values" $world.name -}}
 {{- if hasKey $tokenSecrets $rawName -}}
 {{- fail (printf "worlds[%d]: generated raw Secret name %q collides with a tokenSecret.name" $index $rawName) -}}

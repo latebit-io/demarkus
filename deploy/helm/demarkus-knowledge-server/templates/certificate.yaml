@@ -12,10 +12,15 @@ metadata:
 spec:
   secretName: {{ include "demarkus-knowledge-server.tlsSecretName" . }}
   issuerRef:
+    {{- if .Values.tls.certManager.selfSigned.create }}
+    kind: Issuer
+    name: {{ include "demarkus-knowledge-server.selfSignedIssuerName" . }}
+    {{- else }}
     kind: {{ .Values.tls.certManager.issuerRef.kind }}
     name: {{ .Values.tls.certManager.issuerRef.name }}
+    {{- end }}
   dnsNames:
-    {{- range .Values.worlds }}
+    {{- range include "demarkus-knowledge-server.worlds" . | fromYamlArray }}
     {{- range .authorities }}
     - {{ lower . | quote }}
     {{- end }}
