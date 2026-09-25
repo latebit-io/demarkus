@@ -15,6 +15,10 @@ spec:
     {{- if .Values.tls.certManager.selfSigned.create }}
     kind: Issuer
     name: {{ include "demarkus-knowledge-server.selfSignedIssuerName" . }}
+  {{- /* A self-signed cert's issuer DN is its subject; empty violates RFC 5280. */}}
+  subject:
+    organizations:
+      - demarkus
     {{- else }}
     kind: {{ .Values.tls.certManager.issuerRef.kind }}
     name: {{ .Values.tls.certManager.issuerRef.name }}

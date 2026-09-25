@@ -24,6 +24,8 @@ func EnsureSigningKey(ctx context.Context, store SecretStore, ref SecretRef) (Si
 	var pemBytes []byte
 	generated := false
 	err := store.Mutate(ctx, ref, func(current []byte) ([]byte, error) {
+		// Mutate retries on conflict; only the final attempt's outcome counts.
+		pemBytes, generated = nil, false
 		if len(current) > 0 {
 			pemBytes = current
 			return current, nil

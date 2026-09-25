@@ -116,6 +116,10 @@ fields are filled: authorities [<name>.<authorityDomain>], bucket.url
 {{- end -}}
 
 {{- define "demarkus-knowledge-server.validate" -}}
+{{- $global := default dict .Values.global -}}
+{{- if and $global.knowledgeService .Values.fullnameOverride (ne $global.knowledgeService .Values.fullnameOverride) -}}
+{{- fail (printf "fullnameOverride %q differs from global.knowledgeService %q; the broker and agent dial the latter" .Values.fullnameOverride $global.knowledgeService) -}}
+{{- end -}}
 {{- if lt (int .Values.replicaCount) 2 -}}
 {{- fail "replicaCount must be at least 2 for production availability" -}}
 {{- end -}}

@@ -81,3 +81,38 @@ func TestSigningKeyRefFileBackend(t *testing.T) {
 		t.Errorf("Path = %q", got)
 	}
 }
+
+// racingStore replays Mutate the way a create conflict does: the first
+// attempt sees nothing, the retry sees the key another replica wrote.
+type racingStore struct{ winner []byte }
+
+func (r *racingStore) Mutate(_ context.Context, _ SecretRef, mutate func([]byte) ([]byte, error)) error {
+	if _, err := mutate(nil); err != nil {
+		return err
+	}
+	_, err := mutate(r.winner)
+	return err
+}
+
+func (r *racingStore) Delete(context.Context, SecretRef) error { return nil }
+
+func TestEnsureSigningKeyReportsFinalAttempt(t *testing.T) {
+	winner, err := GenerateSigningKeyPEM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := NewIDTokenSigner(winner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := EnsureSigningKey(context.Background(), &racingStore{winner: winner}, SecretRef{Name: "signing"})
+	if err != nil {
+		t.Fatalf("EnsureSigningKey: %v", err)
+	}
+	if got.Generated {
+		t.Error("Generated = true, but the retry adopted another replica's key")
+	}
+	if got.Signer.KeyID() != want.KeyID() {
+		t.Error("signer is not the key the store kept")
+	}
+}

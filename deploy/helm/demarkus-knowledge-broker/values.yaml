@@ -230,7 +230,8 @@ oidc:
   #   1. Blank (default): the broker generates a key on first start and
   #      persists it in the server.signingKeySecret Secret (create-only, so
   #      replicas and restarts share it). Rotate by deleting the Secret and
-  #      restarting; in-flight broker-signed id_tokens are invalidated.
+  #      `kubectl rollout restart` of the whole Deployment (each replica
+  #      loads the key once); in-flight broker-signed id_tokens are invalidated.
   #   2. brokerSigningKey: a multi-line PEM literal (PKCS#8 or SEC1). Lives
   #      in helm release history; dev only.
   #   3. existingSigningKeyRef: an operator-managed Secret holding the PEM.
@@ -418,10 +419,10 @@ rbac:
   # fails when it tries to persist a world's write token.
   create: true
 
-# Off by default: renders nothing on clusters without an enforcing CNI, and
-# the ingress namespace below must match your controller before it is safe.
+# NetworkPolicy ships in the RBAC slice. Schema declared here so values
+# structure is stable.
 networkPolicy:
-  enabled: false
+  enabled: true
   # Mark Protocol egress ports are derived from worlds[].internalAddress;
   # UDP 6309 remains allowed for worlds using default Service discovery.
   # Ingress controller namespace selector — broker accepts inbound HTTP

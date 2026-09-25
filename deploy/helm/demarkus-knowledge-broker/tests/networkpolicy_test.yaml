@@ -8,7 +8,7 @@ set:
   oidc.redirectURL: https://broker.example.com/auth/callback
   networkPolicy.enabled: true
 tests:
-  - it: NetworkPolicy is omitted by default
+  - it: NetworkPolicy is omitted when disabled
     set:
       networkPolicy.enabled: false
     asserts:
@@ -116,3 +116,10 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: NetworkPolicy renders by default so existing releases keep isolation
+    set:
+      networkPolicy: {}
+    asserts:
+      - hasDocuments:
+          count: 1

@@ -81,7 +81,12 @@ explicit config.* or tokens.* entry overrides its derived list.
 {{- if .Values.hub -}}
 {{- .Values.hub -}}
 {{- else -}}
-{{- range default list $global.worlds }}{{ if .hub }}{{ .name }}{{ end }}{{ end -}}
+{{- $flagged := list -}}
+{{- range default list $global.worlds }}{{ if .hub }}{{ $flagged = append $flagged .name }}{{ end }}{{ end -}}
+{{- if gt (len $flagged) 1 -}}
+{{- fail (printf "global.worlds flags %d hubs (%s); exactly one world may set hub: true" (len $flagged) (join ", " $flagged)) -}}
+{{- end -}}
+{{- first $flagged | default "" -}}
 {{- end -}}
 {{- end -}}
 
@@ -120,12 +125,20 @@ explicit config.* or tokens.* entry overrides its derived list.
 {{- toYaml $seeds -}}
 {{- end -}}
 
-{{/* Hubs: config.hubs, else mark://<hub>. */}}
+{{/*
+Hubs: config.hubs when set (an explicit [] is crawl-only), else mark://<hub>.
+Topology from global.worlds must name a hub.
+*/}}
 {{- define "demarkus-agent.hubs" -}}
 {{- $hubs := .Values.config.hubs -}}
-{{- if empty $hubs -}}
+{{- if kindIs "invalid" $hubs -}}
 {{- $hubs = list -}}
-{{- with include "demarkus-agent.hub" . }}{{ $hubs = append $hubs (printf "mark://%s" .) }}{{ end -}}
+{{- $hub := include "demarkus-agent.hub" . -}}
+{{- if $hub -}}
+{{- $hubs = append $hubs (printf "mark://%s" $hub) -}}
+{{- else if and (empty .Values.worlds) (default dict .Values.global).worlds -}}
+{{- fail "global.worlds needs one world with hub: true (or set agent.config.hubs: [] for crawl-only)" -}}
+{{- end -}}
 {{- end -}}
 {{- toYaml $hubs -}}
 {{- end -}}
@@ -133,7 +146,7 @@ explicit config.* or tokens.* entry overrides its derived list.
 {{/*
 Endpoints: one per world (hub included) when a shared dial address is
 known, with the SNI the knowledge server certificate carries;
-config.endpoints entries win per authority.
+a config.endpoints entry replaces its authority's derived entry whole.
 */}}
 {{- define "demarkus-agent.endpoints" -}}
 {{- $endpoints := dict -}}
@@ -146,21 +159,24 @@ config.endpoints entries win per authority.
 {{- $_ := set $endpoints . $endpoint -}}
 {{- end -}}
 {{- end -}}
-{{- $endpoints = mergeOverwrite $endpoints (deepCopy (default dict .Values.config.endpoints)) -}}
+{{- range $authority, $endpoint := default dict .Values.config.endpoints -}}
+{{- $_ := set $endpoints $authority $endpoint -}}
+{{- end -}}
 {{- toYaml $endpoints -}}
 {{- end -}}
 
 {{/*
 World token Secrets: tokens.fromWorldSecrets, else the hub's
-<hub>-token-values (the knowledge-server chart's raw admin token) when no
-other token source is configured.
+<hub>-token-values (the knowledge-server chart's raw admin token) unless
+tokens.existingSecret is set or tokens.inline already holds <hub>:6309.
 */}}
 {{- define "demarkus-agent.fromWorldSecrets" -}}
 {{- $sources := .Values.tokens.fromWorldSecrets -}}
-{{- if and (empty $sources) (empty .Values.tokens.existingSecret) (empty .Values.tokens.inline) -}}
-{{- $sources = list -}}
-{{- with include "demarkus-agent.hub" . -}}
-{{- $sources = append $sources (dict "hostPort" (printf "%s:6309" .) "secret" (printf "%s-token-values" .) "key" "admin") -}}
+{{- $hub := include "demarkus-agent.hub" . -}}
+{{- if and (empty $sources) $hub (empty .Values.tokens.existingSecret) -}}
+{{- $hostPort := printf "%s:6309" $hub -}}
+{{- if not (hasKey (default dict .Values.tokens.inline) $hostPort) -}}
+{{- $sources = list (dict "hostPort" $hostPort "secret" (printf "%s-token-values" $hub) "key" "admin") -}}
 {{- end -}}
 {{- end -}}
 {{- toYaml (default list $sources) -}}

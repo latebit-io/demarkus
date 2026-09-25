@@ -51,8 +51,9 @@ config:
   #  - mark://team-a.example.com:6309
   #  - mark://team-b.example.com:6309
 
-  # mark:// URLs of hubs to publish indexes to. Empty means crawl only.
-  hubs: []
+  # mark:// URLs of hubs to publish indexes to. Unset derives mark://<hub>
+  # from hub or global.worlds; an explicit [] means crawl only.
+  hubs: ~
   #  - mark://hub.example.com:6309
 
   # Optional logical-authority transport overrides. Keys match authorities in

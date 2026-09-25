@@ -109,7 +109,8 @@ entry.
 - The knowledge server renders a self-signed cert-manager `Issuer`; the
   broker (`worldDialer.insecureSkipVerify`) and agent (`insecure`) skip
   verification. Replace with a CA issuer and flip both once one exists.
-- NetworkPolicies are off. Enabling the knowledge server's policy under
+- NetworkPolicies are off (the standalone charts default them on). Enabling
+  the knowledge server's policy under
   the umbrella also needs `knowledge.networkPolicy.broker.namespace` and
   `agent.namespace` set to the release namespace; pod labels already match.
 - The knowledge server runs two replicas and refuses fewer.

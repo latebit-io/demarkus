@@ -143,10 +143,8 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
-# Off by default: renders nothing on clusters without an enforcing CNI and
-# needs the broker and agent selectors below to be right before it is safe.
 networkPolicy:
-  enabled: false
+  enabled: true
   # Standard NetworkPolicy cannot restrict GCS by FQDN. Explicitly accept
   # unrestricted TCP/443, or disable this policy and supply CNI/proxy controls.
   allowUnrestrictedHTTPS: false

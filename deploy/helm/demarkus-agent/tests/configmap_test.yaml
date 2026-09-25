@@ -136,3 +136,47 @@ tests:
       - matchRegex:
           path: data["agent.toml"]
           pattern: '\[endpoints\."root"\]\ndial_address = "knowledge.ns.svc.cluster.local:6309"'
+
+  - it: an explicit empty config.hubs keeps crawl-only mode
+    set:
+      worlds: [root, team-a]
+      hub: root
+      config.hubs: []
+    asserts:
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: 'hubs = \[\]'
+
+  - it: an explicit endpoint replaces the derived one whole
+    set:
+      worlds: [root, team-a]
+      hub: root
+      dialAddress: knowledge.ns.svc.cluster.local:6309
+      authorityDomain: knowledge.ns.svc.cluster.local
+      config.endpoints.team-a.dialAddress: custom.internal:6309
+    asserts:
+      - matchRegex:
+          path: data["agent.toml"]
+          pattern: '\[endpoints\."team-a"\]\ndial_address = "custom.internal:6309"\n\[crawl\]'
+      - notMatchRegex:
+          path: data["agent.toml"]
+          pattern: 'server_name = "team-a\.'
+
+  - it: rejects more than one flagged hub in global.worlds
+    set:
+      global:
+        worlds:
+          - {name: root, hub: true}
+          - {name: team-a, hub: true}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'global.worlds flags 2 hubs (root, team-a); exactly one world may set hub: true'
+
+  - it: rejects global.worlds without a hub unless crawl-only is explicit
+    set:
+      global:
+        worlds:
+          - {name: root}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'global.worlds needs one world with hub: true (or set agent.config.hubs: [] for crawl-only)'

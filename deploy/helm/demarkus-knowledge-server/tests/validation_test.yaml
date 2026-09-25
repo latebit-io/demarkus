@@ -381,3 +381,11 @@ tests:
         matchRegex:
           path: data["config.yaml"]
           pattern: 'authorities:\n\s+- "team-a.example.com"\n\s+bucket:\n\s+url: "gs://custom-bucket"'
+
+  - it: rejects a fullnameOverride that differs from global.knowledgeService
+    set:
+      fullnameOverride: other
+      global.knowledgeService: knowledge
+    asserts:
+      - failedTemplate:
+          errorMessage: 'fullnameOverride "other" differs from global.knowledgeService "knowledge"; the broker and agent dial the latter'

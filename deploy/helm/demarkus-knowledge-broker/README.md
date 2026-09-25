@@ -17,9 +17,9 @@ Secrets.
   `Role` covering the sweeper Lease, the refresh-tokens Secret, and
   `create` + per-world `get/update` on the write-token Secrets the
   broker provisions on first write.
-- Optional `NetworkPolicy` (off by default) restricting ingress to the
-  configured Ingress controller namespace and egress to DNS, TCP 443, and
-  each configured world UDP port (6309 by default).
+- Default-on `NetworkPolicy` restricting ingress to the configured
+  Ingress controller namespace and egress to DNS, TCP 443, and each
+  configured world UDP port (6309 by default).
 - Locked-down pod security context: nonroot UID, read-only root
   filesystem, all capabilities dropped, seccomp RuntimeDefault.
 - Optional `Ingress` (default `ingressClassName: nginx`) with optional
@@ -352,7 +352,9 @@ Broker-signed id_tokens use an ECDSA P-256 key served at
 `oidc.existingSigningKeyRef` both blank (the default) the broker generates
 one on first start and stores it in the `server.signingKeySecret` Secret
 (`<fullname>-signing-key`); the write is create-only, so every replica and
-restart shares it. Rotate by deleting the Secret and restarting. Supply
+restart shares it. Rotate by deleting the Secret and running
+`kubectl rollout restart deployment/<fullname>`: every replica loads the key
+once at startup, so restarting only some would serve two JWKS. Supply
 your own through `existingSigningKeyRef` when key custody lives elsewhere.
 
 ## Web clients
@@ -439,15 +441,15 @@ termination is the Ingress controller's job. Two paths:
   `ingress.tls.certManager.issuerRef` for staging-issuers or
   internal CAs.
 
-### 4. Enable and review the NetworkPolicy
+### 4. Review the default NetworkPolicy constraints
 
-The NetworkPolicy is off by default. It relies on the automatic
+The default NetworkPolicy relies on the automatic
 `kubernetes.io/metadata.name` namespace label from Kubernetes 1.21+.
 Older clusters must label the ingress-controller and `kube-system`
 namespaces explicitly. OIDC and Kubernetes API egress is limited to
 TCP 443. Mark Protocol egress includes UDP 6309 and custom ports parsed
-from `worlds[].internalAddress` or `dialAddress`. Deployments using other OIDC or API ports must keep
-`networkPolicy.enabled` off and supply an equivalent custom policy.
+from `worlds[].internalAddress` or `dialAddress`. Deployments using other OIDC or API ports must disable
+`networkPolicy.enabled` and supply an equivalent custom policy.
 
 ### 5. Confirm the install-time RBAC works for your cluster
 
@@ -507,8 +509,15 @@ is invalidated by rotation, which is the intended behavior.
 
 Resources are named after the release (`fullnameOverride` still wins). A
 release whose name did not contain the chart name and set no override is
-renamed on upgrade, which orphans the kept refresh-tokens Secret; set
-`fullnameOverride` to the old fullname before upgrading to keep sessions.
+renamed on upgrade. The kept Secrets change name with it:
+
+- refresh tokens: every session must log in again;
+- dynamic clients: RFC 7591 registrations are lost and connected MCP hosts
+  must register again;
+- signing key: the broker generates a new key, invalidating broker-signed
+  id_tokens in flight.
+
+Set `fullnameOverride` to the old fullname before upgrading to keep all three.
 
 ## Values
 

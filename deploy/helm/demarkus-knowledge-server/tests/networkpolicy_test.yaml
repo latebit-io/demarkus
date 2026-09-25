@@ -4,7 +4,7 @@ templates:
 values:
   - fixtures/valid-values.yaml
 tests:
-  - it: is omitted unless enabled
+  - it: is omitted when disabled
     set:
       networkPolicy.enabled: false
     asserts:

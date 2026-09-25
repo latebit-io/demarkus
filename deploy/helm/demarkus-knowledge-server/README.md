@@ -123,9 +123,8 @@ and requires a restart with the new assignment.
 ## Security
 
 Health endpoints listen on the private pod port only. No health Service is
-created. The NetworkPolicy is off by default; when enabled it permits UDP
-ingress only from configured broker and agent namespace/pod selectors and
-optional `externalCIDRs`. A LoadBalancer remains
+created. NetworkPolicy permits UDP ingress only from configured broker and agent
+namespace/pod selectors and optional `externalCIDRs`. A LoadBalancer remains
 blocked from direct clients until those CIDRs are set. Egress permits cluster
 DNS, TCP 443 for GCS, and GKE metadata-server endpoints.
 

@@ -267,6 +267,7 @@ if [[ "$WITH_ARGO" == "true" ]]; then
     # also runs at install time — a failure here means the cross-namespace
     # Role/RoleBinding pattern broke under multi-world.
     helm upgrade --install "$BROKER_RELEASE" "$BROKER_CHART" \
+      --set "fullnameOverride=$BROKER_RELEASE" \
       --version "$BROKER_CHART_VERSION" \
       --namespace "$NAMESPACE" --create-namespace \
       --values "$BROKER_ARGO_VALUES_FILE" \
@@ -490,6 +491,7 @@ if [[ "$WITH_BROKER" == "true" ]]; then
     # against the mock issuer have completed, so a successful install here
     # already proves discovery works end-to-end.
     helm upgrade --install "$BROKER_RELEASE" "$BROKER_CHART" \
+      --set "fullnameOverride=$BROKER_RELEASE" \
       --version "$BROKER_CHART_VERSION" \
       --namespace "$NAMESPACE" --create-namespace \
       --values "$BROKER_VALUES_FILE" \

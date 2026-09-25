@@ -336,7 +336,7 @@ tests:
               - key: admin
                 path: tokens.d/root:6309
 
-  - it: does not derive the hub token when another token source is set
+  - it: does not derive the hub token when inline tokens cover the hub
     template: deployment.yaml
     set:
       worlds: [root, team-a]
@@ -346,3 +346,15 @@ tests:
     asserts:
       - notExists:
           path: spec.template.spec.volumes[1].projected.sources[1]
+
+  - it: a seed-only inline token does not suppress the derived hub token
+    template: deployment.yaml
+    set:
+      worlds: [root, team-a]
+      hub: root
+      tokens.inline:
+        "team-a:6309": tok
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[1].projected.sources[1].secret.name
+          value: root-token-values

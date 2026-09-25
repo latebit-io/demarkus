@@ -41,6 +41,9 @@ knowledge:
     workloadIdentity:
       # GSA with storage access to every world bucket. Required.
       gsa: ""
+  # Off so a bare cluster installs; see the README before enabling.
+  networkPolicy:
+    enabled: false
 
 broker:
   enabled: true
@@ -69,6 +72,8 @@ broker:
     #     name: library-oauth
     #   redirectURIs:
     #     - https://library.example.com/auth/callback
+  networkPolicy:
+    enabled: false
 
 agent:
   enabled: true
@@ -95,6 +100,5 @@ library:
         name: library-oauth
       redirectURI: ""
       world: root
-  # The library chart defaults this on; the others default off.
   networkPolicy:
     enabled: false

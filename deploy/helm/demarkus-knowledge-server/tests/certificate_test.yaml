@@ -73,3 +73,15 @@ tests:
           value:
             kind: Issuer
             name: RELEASE-NAME-selfsigned
+      - equal:
+          path: spec.subject.organizations
+          value: [demarkus]
+
+  - it: sets no subject for an external issuer
+    set:
+      tls.existingSecret: ""
+      tls.certManager.enabled: true
+      tls.certManager.issuerRef.name: internal-ca
+    asserts:
+      - notExists:
+          path: spec.subject
