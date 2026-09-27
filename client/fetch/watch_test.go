@@ -24,6 +24,7 @@ type feed struct {
 	endStatus  string   // terminal status for open streams
 	endGen     int
 	dropConn   bool
+	ended      int // subscribed streams that have ended, however
 	address    string
 }
 
@@ -80,6 +81,18 @@ func (f *feed) sinces() []string {
 	return append([]string(nil), f.subscribes...)
 }
 
+func (f *feed) endedStreams() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ended
+}
+
+func (f *feed) streamEnded() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ended++
+}
+
 func (f *feed) serve(conn *quic.Conn, stream *quic.Stream) {
 	req, err := protocol.ParseRequest(stream)
 	if err != nil {
@@ -119,6 +132,7 @@ func (f *feed) serve(conn *quic.Conn, stream *quic.Stream) {
 	if _, err := protocol.WatchControl(protocol.StatusOK, start).WriteTo(stream); err != nil {
 		return
 	}
+	defer f.streamEnded()
 	// delivered is the last position written, which closing and heartbeats
 	// carry; only resync carries the head, as the real server does.
 	delivered := start
@@ -330,7 +344,7 @@ func TestWatchSlowConsumerLosesNothing(t *testing.T) {
 	for i := 1; i <= total; i++ {
 		f.publish("/n/" + strconv.Itoa(i) + ".md")
 	}
-	time.Sleep(300 * time.Millisecond)
+	waitOverflow(t, f)
 	for i := 1; i <= total; i++ {
 		got := expectEvent(t, w, "/n/"+strconv.Itoa(i)+".md")
 		if got.Cursor.Seq != uint64(i) {
@@ -342,16 +356,29 @@ func TestWatchSlowConsumerLosesNothing(t *testing.T) {
 	}
 }
 
-// waitSubscribes blocks until the feed has seen n subscribes.
-func waitSubscribes(t *testing.T, f *feed, n int) {
+// waitFor polls until cond holds, failing after five seconds.
+func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for len(f.sinces()) < n {
+	for !cond() {
 		if time.Now().After(deadline) {
-			t.Fatalf("subscribes = %v, want %d", f.sinces(), n)
+			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// waitSubscribes blocks until the feed has seen n subscribes.
+func waitSubscribes(t *testing.T, f *feed, n int) {
+	t.Helper()
+	waitFor(t, fmt.Sprintf("%d subscribes (have %v)", n, f.sinces()), func() bool { return len(f.sinces()) >= n })
+}
+
+// waitOverflow blocks until the client has cancelled its stream over a full
+// queue, which the feed sees as its stream ending.
+func waitOverflow(t *testing.T, f *feed) {
+	t.Helper()
+	waitFor(t, "the overflow to cancel the stream", func() bool { return f.endedStreams() >= 1 })
 }
 
 // A retry-later refusal on reopen keeps the watch alive on the backoff.
@@ -380,9 +407,9 @@ func TestWatchCloseWithAFullQueueOnResync(t *testing.T) {
 	for i := range watchQueueSize + 1 {
 		f.publish("/" + strconv.Itoa(i) + ".md")
 	}
-	// Let the overflow cancel the stream; the next subscribe is the reopen,
-	// which the feed answers with resync while the queue is still full.
-	time.Sleep(300 * time.Millisecond)
+	// Once the overflow cancelled the stream, the next subscribe is the
+	// reopen, which the feed answers with resync while the queue is full.
+	waitOverflow(t, f)
 	f.setRefuse(protocol.StatusResync)
 	expectEvent(t, w, "/0.md")
 	waitSubscribes(t, f, 2)
@@ -416,13 +443,7 @@ func TestCursorFollowsConsumption(t *testing.T) {
 		f.publish("/" + strconv.Itoa(i) + ".md")
 	}
 	first := expectEvent(t, w, "/1.md")
-	deadline := time.Now().Add(5 * time.Second)
-	for len(w.notices) < 2 {
-		if time.Now().After(deadline) {
-			t.Fatal("the pump did not queue the remaining events")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitFor(t, "the pump to queue the remaining events", func() bool { return len(w.notices) == 2 })
 	if got := w.Cursor(); got != first.Cursor {
 		t.Fatalf("cursor = %v, want the consumed %v (stream is at %v)", got, first.Cursor, w.streamCursor())
 	}
