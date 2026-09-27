@@ -20,6 +20,7 @@ type feed struct {
 	events     []protocol.WatchEvent
 	notify     chan struct{}
 	subscribes []string // the since each subscribe carried
+	answers    []string // the first block's status per subscribe
 	refuse     string   // status to answer instead of subscribing
 	endStatus  string   // terminal status for open streams
 	endGen     int
@@ -81,6 +82,12 @@ func (f *feed) sinces() []string {
 	return append([]string(nil), f.subscribes...)
 }
 
+func (f *feed) answered() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.answers...)
+}
+
 func (f *feed) endedStreams() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -105,6 +112,7 @@ func (f *feed) serve(conn *quic.Conn, stream *quic.Stream) {
 	f.mu.Lock()
 	f.subscribes = append(f.subscribes, req.Metadata["since"])
 	if refuse := f.refuse; refuse != "" {
+		f.answers = append(f.answers, refuse)
 		f.mu.Unlock()
 		if refuse == protocol.StatusResync {
 			_, _ = protocol.WatchControl(refuse, f.head()).WriteTo(stream)
@@ -119,6 +127,7 @@ func (f *feed) serve(conn *quic.Conn, stream *quic.Stream) {
 	if raw := req.Metadata["since"]; raw != "" {
 		since, err := protocol.ParseCursor(raw)
 		if err != nil || since.Epoch != feedEpoch {
+			f.answers = append(f.answers, protocol.StatusResync)
 			f.mu.Unlock()
 			_, _ = protocol.WatchControl(protocol.StatusResync, start).WriteTo(stream)
 			_ = stream.Close()
@@ -128,6 +137,7 @@ func (f *feed) serve(conn *quic.Conn, stream *quic.Stream) {
 		start = since
 	}
 	gen := f.endGen
+	f.answers = append(f.answers, protocol.StatusOK)
 	f.mu.Unlock()
 	if _, err := protocol.WatchControl(protocol.StatusOK, start).WriteTo(stream); err != nil {
 		return
@@ -404,15 +414,18 @@ func TestWatchCloseWithAFullQueueOnResync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
+	// Every subscribe from now on, so the reopen after the overflow, is
+	// answered with resync while the queue is still full.
+	f.setRefuse(protocol.StatusResync)
 	for i := range watchQueueSize + 1 {
 		f.publish("/" + strconv.Itoa(i) + ".md")
 	}
-	// Once the overflow cancelled the stream, the next subscribe is the
-	// reopen, which the feed answers with resync while the queue is full.
 	waitOverflow(t, f)
-	f.setRefuse(protocol.StatusResync)
 	expectEvent(t, w, "/0.md")
 	waitSubscribes(t, f, 2)
+	if a := f.answered(); a[1] != protocol.StatusResync {
+		t.Fatalf("reopen answered %q, want resync", a[1])
+	}
 	closed := make(chan struct{})
 	go func() {
 		w.Close()
