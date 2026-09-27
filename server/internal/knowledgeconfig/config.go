@@ -141,6 +141,8 @@ type LimitsConfig struct {
 	RequestTimeout        Duration `yaml:"requestTimeout"`
 	RequestsPerSecond     float64  `yaml:"requestsPerSecond"`
 	Burst                 int      `yaml:"burst"`
+	// MaxWatches caps open WATCH streams in the world.
+	MaxWatches int `yaml:"maxWatches"`
 	// MaxDocuments caps distinct document paths in the world (per-tenant
 	// quota). 0 = unlimited.
 	MaxDocuments int `yaml:"maxDocuments"`
@@ -186,6 +188,7 @@ type rawLimitsConfig struct {
 	RequestTimeout        *Duration `yaml:"requestTimeout"`
 	RequestsPerSecond     *float64  `yaml:"requestsPerSecond"`
 	Burst                 *int      `yaml:"burst"`
+	MaxWatches            *int      `yaml:"maxWatches"`
 	MaxDocuments          *int      `yaml:"maxDocuments"`
 }
 
@@ -333,6 +336,7 @@ func worldFromRaw(world *rawWorldConfig) WorldConfig {
 			RequestTimeout:        valueOr(world.Limits.RequestTimeout, Duration(10*time.Second)),
 			RequestsPerSecond:     valueOr(world.Limits.RequestsPerSecond, 50.0),
 			Burst:                 valueOr(world.Limits.Burst, 100),
+			MaxWatches:            valueOr(world.Limits.MaxWatches, 1024),
 			MaxDocuments:          valueOr(world.Limits.MaxDocuments, 0),
 		},
 		Bootstrap: world.Bootstrap,
@@ -619,6 +623,9 @@ func validateLimits(location string, limits *LimitsConfig) error {
 	}
 	if limits.MaxConcurrentRequests <= 0 {
 		return fmt.Errorf("%s.limits.maxConcurrentRequests must be positive (got %d)", location, limits.MaxConcurrentRequests)
+	}
+	if limits.MaxWatches <= 0 {
+		return fmt.Errorf("%s.limits.maxWatches must be positive (got %d)", location, limits.MaxWatches)
 	}
 	if limits.RequestTimeout < 0 {
 		return fmt.Errorf("%s.limits.requestTimeout must not be negative (got %s)", location, time.Duration(limits.RequestTimeout))

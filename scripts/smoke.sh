@@ -33,7 +33,9 @@ done
 
 WORK=$(mktemp -d)
 SERVER_PID=""
+WATCH_PID=""
 cleanup() {
+  [ -n "$WATCH_PID" ] && kill "$WATCH_PID" 2>/dev/null
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
   docker rm -f "$GCS_NAME" >/dev/null 2>&1
   if [ "${SMOKE_KEEP:-}" = 1 ]; then echo "kept $WORK"; else rm -rf "$WORK"; fi
@@ -183,6 +185,56 @@ verbs() {
   expect "fetch by content hash" '# b' -- "${C[@]}" "$U/$hash"
 }
 
+# start_watch <url>: a background `demarkus watch` on /watched/, one line per
+# change into $WORK/watch.out. It reconnects on its own across a restart.
+start_watch() {
+  : >"$WORK/watch.out"
+  client/bin/demarkus watch -insecure "$1/watched/" >"$WORK/watch.out" 2>"$WORK/watch.err" </dev/null &
+  WATCH_PID=$!
+  sleep 1
+}
+
+# stop_watch: Ctrl-C ends the watch with exit 0.
+stop_watch() {
+  [ -z "$WATCH_PID" ] && return 0
+  kill -INT "$WATCH_PID" 2>/dev/null
+  wait "$WATCH_PID" 2>/dev/null
+  local status=$?
+  WATCH_PID=""
+  expect "watch exits cleanly on interrupt" '^0$' -- echo "$status"
+  refute "watch printed no error" '.' -- cat "$WORK/watch.err"
+}
+
+# watch_lines <n>: waits up to STEP_LIMIT seconds for n lines of watch output.
+watch_lines() {
+  local tries=0
+  until [ "$(wc -l <"$WORK/watch.out")" -ge "$1" ]; do
+    tries=$((tries + 1))
+    [ "$tries" -ge $((STEP_LIMIT * 10)) ] && return 0
+    sleep 0.1
+  done
+}
+
+# watch_stream <url>: the watch sees a publish, an append and an archive under
+# its prefix, nothing beside it, and the append's hash fetches the body.
+watch_stream() {
+  local U=$1 hash
+  expect "watched publish creates v1" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=domain:smoke -meta agent=smoke -body "# W" "$U/watched/w.md"
+  expect "watched append makes v2" 'created' -- "${C[@]}" -X APPEND -auth "$W" -body "more" "$U/watched/w.md"
+  expect "publish beside the watched prefix" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=domain:smoke -body "# Beside" "$U/beside/b.md"
+  watch_lines 2
+  expect "watch printed the publish" $'\tpublish\t/watched/w\.md\t1\tsha256-[0-9a-f]{64}\tsmoke$' -- cat "$WORK/watch.out"
+  expect "watch printed the append" $'\tappend\t/watched/w\.md\t2\tsha256-[0-9a-f]{64}\tsmoke$' -- cat "$WORK/watch.out"
+  # Hints carry no content: the hash in the line fetches it. Before the
+  # archive, since the hash index serves current documents only.
+  hash=$(grep -E $'\tappend\t' "$WORK/watch.out" | head -1 | cut -f5)
+  expect "the append's hash fetches the joined body" '^more$' -- "${C[@]}" "$U/$hash"
+  expect "watched archive" '^\[ok\]' -- "${C[@]}" -X ARCHIVE -auth "$W" "$U/watched/w.md"
+  watch_lines 3
+  expect "watch printed the archive" $'\tarchive\t/watched/w\.md\t2\t' -- cat "$WORK/watch.out"
+  refute "watch printed nothing beside its prefix" 'beside' -- cat "$WORK/watch.out"
+}
+
 # policy <url>: the write policy as the knowledge server enforces it.
 policy() {
   local U=$1
@@ -248,11 +300,20 @@ smoke_file() {
   start_file || return 1
   verbs "$U"
   mcp_tools "$U"
+  start_watch "$U"
+  watch_stream "$U"
   stop_server
+  expect "drain with an open watch completes" 'all connections drained' -- tail -n 8 "$WORK/file.log"
   start_file || return 1
-  expect "restart rebuilds the lookup catalog" 'lookup catalog built.*entries=[1-9]' -- tail -n 8 "$WORK/file.log"
+  expect "restart rebuilds the lookup catalog" 'lookup catalog built.*entries=[1-9]' -- tail -n 12 "$WORK/file.log"
   expect "restart serves the same data" 'version=2' -- "${C[@]}" "$U/docs/a.md"
   expect "restart keeps a valid chain" 'chain-valid=true' -- "${C[@]}" -X VERSIONS "$U/docs/a.md"
+  # The watch outlives the restart: one resync, then it delivers again.
+  expect "publish after the restart" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -body "# Again" "$U/watched/again.md"
+  watch_lines 5
+  expect "watch resynced across the restart" $'\tresync\t' -- cat "$WORK/watch.out"
+  expect "watch delivers after the restart" $'\tpublish\t/watched/again\.md\t1\t' -- cat "$WORK/watch.out"
+  stop_watch
   stop_server
   no_errors "file server" "$WORK/file.log"
 }
@@ -297,6 +358,9 @@ EOF
   expect "the policy seed is logged" 'seeded the initial write policy' -- cat "$WORK/knowledge.log"
   verbs "$U"
   policy "$U"
+  start_watch "$U"
+  watch_stream "$U"
+  stop_watch
   stop_server
   status=$?
   expect "SIGTERM exits cleanly" '^0$' -- echo "$status"

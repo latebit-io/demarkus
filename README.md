@@ -143,7 +143,7 @@ modified: 2026-01-15T10:30:00Z
 # Hello World
 ```
 
-**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `LOOKUP` · `PUBLISH` · `APPEND` · `ARCHIVE`
+**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `LOOKUP` · `PUBLISH` · `APPEND` · `ARCHIVE` · `WATCH`
 
 **Open Knowledge Format**: A demarkus document is content-compatible with [Google's Open Knowledge Format (OKF) v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog): recognized OKF fields (`type`, `title`, `description`, `resource`, `tags`, `timestamp`) are stored as plain frontmatter, and the server types every document by default. At the system level demarkus is a superset, layering versioning, hash-chain integrity, QUIC transport, and capability auth around an OKF-compatible document. The `demarkus okf` subcommand validates, imports, and exports OKF bundles. See [SPEC §14](docs/SPEC.md).
 

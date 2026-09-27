@@ -88,7 +88,7 @@ worlds:
 	if world.Policy.File != "" {
 		t.Errorf("policy file: got %q, want unset", world.Policy.File)
 	}
-	wantLimits := LimitsConfig{MaxConcurrentRequests: 32, RequestTimeout: Duration(10 * time.Second), RequestsPerSecond: 50, Burst: 100}
+	wantLimits := LimitsConfig{MaxConcurrentRequests: 32, RequestTimeout: Duration(10 * time.Second), RequestsPerSecond: 50, Burst: 100, MaxWatches: 1024}
 	if world.Limits != wantLimits {
 		t.Errorf("limits defaults: got %+v, want %+v", world.Limits, wantLimits)
 	}
@@ -317,6 +317,7 @@ func secondWorld() WorldConfig {
 			RequestTimeout:        Duration(10 * time.Second),
 			RequestsPerSecond:     50,
 			Burst:                 100,
+			MaxWatches:            1024,
 		},
 	}
 }

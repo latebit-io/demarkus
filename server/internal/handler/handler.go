@@ -20,6 +20,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
 // MaxDirectoryEntries is the maximum number of entries returned by LIST.
@@ -55,6 +56,11 @@ type Config struct {
 	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied
 	Logger        *slog.Logger
 	ReadOnly      bool // reject all write operations
+	// Changes serves WATCH; nil answers the verb bad-request, as a server
+	// without it does.
+	Changes *changefeed.Hub
+	// HeartbeatInterval paces idle WATCH heartbeats; zero is the protocol's.
+	HeartbeatInterval time.Duration
 }
 
 // Handler serves the Mark protocol over a DocumentStore. Build it with New.
@@ -63,6 +69,8 @@ type Handler struct {
 	getTokenStore func() *auth.TokenStore
 	logger        *slog.Logger
 	readOnly      bool
+	changes       *changefeed.Hub
+	heartbeat     time.Duration
 }
 
 // New refuses a config without a store or a logger, so neither can be missing
@@ -74,11 +82,17 @@ func New(config Config) (*Handler, error) {
 	if config.Logger == nil {
 		return nil, errors.New("handler: logger is nil")
 	}
+	heartbeat := config.HeartbeatInterval
+	if heartbeat <= 0 {
+		heartbeat = protocol.WatchHeartbeatInterval
+	}
 	return &Handler{
 		store:         config.Store,
 		getTokenStore: config.GetTokenStore,
 		logger:        config.Logger,
 		readOnly:      config.ReadOnly,
+		changes:       config.Changes,
+		heartbeat:     heartbeat,
 	}, nil
 }
 
@@ -103,17 +117,32 @@ type Stream interface {
 }
 
 // HandleStream reads a request from the stream and writes a response. ctx
-// bounds every store call the request makes.
+// bounds every store call the request makes; a WATCH runs until it ends.
 func (h *Handler) HandleStream(ctx context.Context, stream Stream) {
 	// The response is already written or failed; a close error changes nothing.
 	defer func() { _ = stream.Close() }()
 
+	req, ok := h.ReadRequest(stream)
+	if !ok {
+		return
+	}
+	h.Serve(ctx, stream, req, WatchOptions{})
+}
+
+// ReadRequest parses the request on stream and answers a malformed one
+// itself; ok is false when nothing further is to be served.
+func (h *Handler) ReadRequest(stream io.ReadWriter) (req protocol.Request, ok bool) {
 	req, err := protocol.ParseRequest(stream)
 	if err != nil {
 		h.writeParseError(stream, err)
-		return
+		return protocol.Request{}, false
 	}
+	return req, true
+}
 
+// Serve answers one parsed request on stream. ctx bounds every store call;
+// for WATCH it bounds the stream's life and watch says how it is managed.
+func (h *Handler) Serve(ctx context.Context, stream io.Writer, req protocol.Request, watch WatchOptions) {
 	// Reject path traversal attempts before any handler logic (including auth)
 	// to prevent scope bypass via paths like /allowed/../secret.md.
 	if storefmt.ContainsDotDot(req.Path) {
@@ -121,7 +150,19 @@ func (h *Handler) HandleStream(ctx context.Context, stream Stream) {
 		h.writeError(stream, protocol.StatusNotFound, req.Path+" not found")
 		return
 	}
+	prefix := strings.HasSuffix(req.Path, "/")
 	req.Path = storefmt.CanonicalPath(req.Path)
+
+	if req.Verb == protocol.VerbWatch {
+		scope := req.Path
+		if prefix && scope != "/" {
+			scope += "/"
+		}
+		// Not pinned to one token store: a watch outlives reloads and
+		// rechecks every event against the current one.
+		h.serveWatch(ctx, &watchCall{w: stream, req: req, scope: scope, opts: watch})
+		return
+	}
 
 	// Token reloads take effect between requests, never midway through one.
 	pinned := *h

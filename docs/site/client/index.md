@@ -12,7 +12,7 @@ If you're new, start with the CLI and confirm you can fetch a document.
 
 ## CLI (`demarkus`)
 
-The CLI supports the read/write verbs (`FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `APPEND`, `ARCHIVE`) plus `edit`, `graph`, `lookup`, and `okf` subcommands.
+The CLI supports the read/write verbs (`FETCH`, `LIST`, `VERSIONS`, `PUBLISH`, `APPEND`, `ARCHIVE`) plus `edit`, `graph`, `lookup`, `watch`, and `okf` subcommands.
 
 ### Common commands
 
@@ -41,6 +41,18 @@ demarkus --insecure mark://localhost:6309/hello.md/v1
 ```
 
 The exit code is 0 for `ok`, `created` and `not-modified`. Any other status, a conflict or a missing document for example, still prints the response body and exits 1, so scripts can detect a refused request.
+
+### Watch for changes
+
+```bash
+# One line per change under a prefix: cursor, op, path, version, hash, agent
+demarkus watch --insecure mark://localhost:6309/agents/me/inbox/
+
+# Resume after the last cursor you processed
+demarkus watch --insecure -since 3f9a1c2b4d5e:42 mark://localhost:6309/agents/me/inbox/
+```
+
+A watch prints hints, not content: fetch the path (or the hash) for the body. It reconnects on its own after a server restart or a lost connection; a line whose op is `resync` means the server could not resume from the cursor and anything derived from earlier lines is stale. The prefix need not exist yet, so an agent can watch its inbox before the first message.
 
 ### Writes are version checked
 

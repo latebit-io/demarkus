@@ -166,11 +166,7 @@ func run(arguments []string) error {
 	runErr := waitForStop(signalChannel, quicResult, healthResult, certificates, tokens, logger)
 
 	health.SetReady(false)
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	if err := quicServer.Shutdown(shutdownCtx); err != nil {
-		logger.Warn("QUIC shutdown incomplete", "error", err)
-	}
-	cancel()
+	drainQUIC(quicServer, worlds, logger)
 	health.SetLive(false)
 	healthCtx, healthCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := healthServer.Shutdown(healthCtx); err != nil {
@@ -179,6 +175,17 @@ func run(arguments []string) error {
 	healthCancel()
 	logger.Info("knowledge server stopped")
 	return runErr
+}
+
+// drainQUIC ends watches with closing, then drains the listener; without
+// the first step the drain would wait on every open watch.
+func drainQUIC(quicServer *quicserve.Server, worlds *worldManager, logger *slog.Logger) {
+	worlds.Drain()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := quicServer.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("QUIC shutdown incomplete", "error", err)
+	}
 }
 
 func configuredAuthorities(config *knowledgeconfig.Config) []string {

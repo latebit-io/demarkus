@@ -81,6 +81,10 @@ const (
 	// returning an importance-ranked list of matches.
 	VerbLookup = "LOOKUP"
 
+	// VerbWatch subscribes to change hints under a path prefix (§6.8). The
+	// response is a stream of blocks, see watch.go.
+	VerbWatch = "WATCH"
+
 	// WellKnownManifestPath is the conventional path for agent manifest discovery.
 	WellKnownManifestPath = "/.well-known/agent-manifest.md"
 

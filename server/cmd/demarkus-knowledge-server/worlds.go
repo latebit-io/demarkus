@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
@@ -37,9 +38,11 @@ type worldManager struct {
 	configFile string
 	newStore   func(ctx context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error)
 	logger     *slog.Logger
-	certs      *certsource.Source
-	router     *snirouter.Dynamic
-	tokens     *tokenCoordinator
+	// watchesPerConn leaves half a connection's streams for requests.
+	watchesPerConn int
+	certs          *certsource.Source
+	router         *snirouter.Dynamic
+	tokens         *tokenCoordinator
 
 	watchCtx context.Context
 	group    *sync.WaitGroup
@@ -68,6 +71,8 @@ type worldManager struct {
 type worldEntry struct {
 	config  knowledgeconfig.WorldConfig
 	runtime *worldruntime.Runtime
+	// stopPoll ends the world's change poll.
+	stopPoll context.CancelFunc
 	// published is set once a router publish carried this runtime; until
 	// then nothing routes to it and it can close at once.
 	published bool
@@ -86,16 +91,17 @@ func newWorldManager(
 	logger *slog.Logger,
 ) (*worldManager, error) {
 	m := &worldManager{
-		configFile: configFile,
-		newStore:   newStore,
-		logger:     logger,
-		certs:      certs,
-		watchCtx:   watchCtx,
-		group:      group,
-		entries:    make(map[string]*worldEntry),
-		tokenDirs:  make(map[string]*dirWatch),
-		pending:    make(map[string]knowledgeconfig.WorldConfig),
-		resilient:  config.WorldsFile != "",
+		configFile:     configFile,
+		newStore:       newStore,
+		logger:         logger,
+		watchesPerConn: max(1, int(config.Listen.MaxIncomingStreams/2)),
+		certs:          certs,
+		watchCtx:       watchCtx,
+		group:          group,
+		entries:        make(map[string]*worldEntry),
+		tokenDirs:      make(map[string]*dirWatch),
+		pending:        make(map[string]knowledgeconfig.WorldConfig),
+		resilient:      config.WorldsFile != "",
 	}
 	router, err := snirouter.NewDynamic(nil)
 	if err != nil {
@@ -217,12 +223,17 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	if err := m.ensureGenesis(ctx, objects, world); err != nil {
 		return fmt.Errorf("genesis: %w", err)
 	}
+	// The epoch is per process until replicas share a sequence, so a restart
+	// tells every watcher to resync. The store reports its own commits and,
+	// through the poll below, its peers'.
+	changes := changefeed.New("", 0)
 	store, err := bucketstore.Open(ctx, objects, bucketstore.Options{
 		WorldID:        world.Bucket.WorldID,
 		Logger:         m.logger.With("world", world.Name),
 		RequestTimeout: time.Duration(world.Limits.RequestTimeout),
 		MaxDocuments:   world.Limits.MaxDocuments,
 		ReadOnly:       world.ReadOnly,
+		Changes:        changes,
 	})
 	if err != nil {
 		return fmt.Errorf("bucket: %w", err)
@@ -237,10 +248,13 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 		m.logger.Info("seeded the initial write policy", "world", world.Name, "path", publishpolicy.DocumentPath)
 	}
 	runtime, err := worldruntime.New(&worldruntime.Config{
-		Name:             world.Name,
-		Store:            writepolicy.Enforce(store, writepolicy.Options{Require: true}),
-		TokensFile:       world.Auth.TokensFile,
-		StaticTokensFile: world.Auth.StaticTokensFile,
+		Name:              world.Name,
+		Store:             writepolicy.Enforce(store, writepolicy.Options{Require: true}),
+		Changes:           changes,
+		MaxWatches:        world.Limits.MaxWatches,
+		MaxWatchesPerConn: m.watchesPerConn,
+		TokensFile:        world.Auth.TokensFile,
+		StaticTokensFile:  world.Auth.StaticTokensFile,
 		// Knowledge worlds are public-read, so a tokens Secret that lands
 		// after the open only delays writes; the watcher reloads it.
 		OptionalTokensFiles: true,
@@ -261,11 +275,37 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 				"world", world.Name, "authority", authority, "err", err)
 		}
 	}
-	entry := &worldEntry{config: *world, runtime: runtime}
+	pollCtx, stopPoll := context.WithCancel(m.watchCtx)
+	entry := &worldEntry{config: *world, runtime: runtime, stopPoll: stopPoll}
 	m.entries[world.Name] = entry
+	m.group.Go(func() { pollChanges(pollCtx, store, runtime, m.logger.With("world", world.Name)) })
 	m.acquireTokenWatchLocked(tokenFiles(world))
 	m.logger.Info("world opened", "world", world.Name)
 	return nil
+}
+
+// changePollInterval bounds how late a watcher on this replica learns of a
+// peer replica's write: the backstop until replicas push commit hints.
+const changePollInterval = 5 * time.Second
+
+// pollChanges polls the bucket head while the world has watchers, so their
+// hints include what other replicas commit.
+func pollChanges(ctx context.Context, store *bucketstore.Store, runtime *worldruntime.Runtime, logger *slog.Logger) {
+	ticker := time.NewTicker(changePollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if runtime.Watches() == 0 {
+			continue
+		}
+		if err := store.Poll(ctx); err != nil && ctx.Err() == nil {
+			logger.Warn("change poll failed", "error", err)
+		}
+	}
 }
 
 // policySeed picks the world's initial policy: the operator's file when
@@ -393,6 +433,9 @@ func (m *worldManager) retireEntryLocked(name string, entry *worldEntry) {
 		m.beforeRetire(name)
 	}
 	m.releaseTokenWatchLocked(tokenFiles(&entry.config))
+	if entry.stopPoll != nil {
+		entry.stopPoll()
+	}
 	if err := entry.runtime.Close(); err != nil {
 		m.logger.Warn("world runtime close failed", "world", name, "error", err)
 	}
@@ -504,6 +547,18 @@ func (m *worldManager) WorldCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.entries)
+}
+
+// Drain tells every world's open watches closing ahead of a listener drain.
+func (m *worldManager) Drain() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, entry := range m.entries {
+		entry.runtime.Drain()
+	}
+	for _, retired := range m.retiring {
+		retired.entry.runtime.Drain()
+	}
 }
 
 // Close closes every live world through the one teardown path.

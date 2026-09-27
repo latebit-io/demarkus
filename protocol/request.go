@@ -182,7 +182,7 @@ func readLineLimited(br *bufio.Reader, maxBytes int) (string, error) {
 	for {
 		fragment, isPrefix, err := br.ReadLine()
 		if len(line)+len(fragment) > maxBytes {
-			return "", fmt.Errorf("request line exceeds limit: %d > %d bytes", len(line)+len(fragment), maxBytes)
+			return "", fmt.Errorf("line exceeds limit: %d > %d bytes", len(line)+len(fragment), maxBytes)
 		}
 		line = append(line, fragment...)
 		if err != nil {
@@ -247,7 +247,7 @@ func IsHashPath(path string) (hash string, ok bool) {
 // IsValidVerb returns true if verb is a known Mark Protocol verb.
 func IsValidVerb(verb string) bool {
 	switch verb {
-	case VerbFetch, VerbList, VerbVersions, VerbPublish, VerbArchive, VerbAppend, VerbLookup:
+	case VerbFetch, VerbList, VerbVersions, VerbPublish, VerbArchive, VerbAppend, VerbLookup, VerbWatch:
 		return true
 	default:
 		return false

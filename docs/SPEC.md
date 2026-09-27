@@ -163,6 +163,8 @@ All responses MUST include frontmatter. The frontmatter MUST include a `status` 
 
 All frontmatter values are strings. Implementations MUST parse frontmatter as `map[string]string` to prevent YAML type coercion of timestamps, numbers, and booleans.
 
+Clients SHOULD ignore frontmatter keys they do not recognise, so a server can add response fields without a new protocol version; for WATCH blocks (§6.8) this is a MUST.
+
 ### 5.3. Response Body
 
 The body is everything following the closing frontmatter delimiter. It is markdown-formatted text.
@@ -599,6 +601,96 @@ Servers that implement body match SHOULD list `lookup-match: catalog, body` unde
 
 A valid LOOKUP over an existing scope with no matching documents MUST return `ok` with `matches: 0` and a header-only table, not `not-found`.
 
+### 6.8. WATCH
+
+Subscribes to change hints for one document or for every document under a directory prefix. WATCH is the one verb whose response is a stream: the server keeps the QUIC stream open and writes a frontmatter block per change, so a client learns of a write within the server's latency budget instead of on its next poll. Events are hints, not content: a block names the path, the new version and its content hash, and the client FETCHes what it needs, by hash (§12) when it wants exactly that version.
+
+The store holds no durable subscriber state. A watch lives exactly as long as its stream; the server MAY end it at any time with a terminal block, and the client resumes by opening a new stream with the last cursor it saw. Level 3 realtime (concurrent editing, presence, cursors) is out of scope for the store; the block format leaves room for it through the unknown-key rule below.
+
+**Request**:
+
+```text
+WATCH /agents/me/inbox/\n
+---\n
+since: <cursor>\n
+auth: <raw-token>\n
+---\n
+```
+
+- The path is a document path (events for that document) or a directory prefix ending in `/` (events for every document under it, at any depth). `WATCH /` covers the whole server. The path need not exist: a watch on a document or prefix that does not exist yet delivers its creation.
+- `since` (OPTIONAL): the cursor of the last event the client processed. Delivery resumes with the first event after it. Absent, the watch starts at the current head and delivers later changes only.
+- `auth` (OPTIONAL): a token, required when the path is under read authorisation (§11.8).
+
+**Response**: a sequence of frontmatter blocks, each opened and closed by a `---` line, with no body between blocks. A block that carries `status` is a control block; a block without `status` is an event.
+
+Acknowledgement, the first block of a subscribed stream:
+
+```text
+---
+status: ok
+cursor: <cursor>
+---
+```
+
+`cursor` is the position the stream continues from: the head for a new watch, the client's `since` for a resumed one. A request that fails before subscription is answered with an ordinary response (§5) in place of the acknowledgement; a client MUST treat a first block whose status is not `ok` as the end of the stream and MAY read the remainder as the error body.
+
+Event:
+
+```text
+---
+cursor: <cursor>
+path: /agents/me/inbox/01HZX.md
+version: 3
+hash: sha256-<64-char hex>
+op: publish
+agent: <agent id>
+---
+```
+
+- `cursor` (REQUIRED): this event's position. A later `since` set to it resumes with the events after it.
+- `path` (REQUIRED): the document's server-relative path.
+- `version` (REQUIRED): the version the write created; for an archive, the current version.
+- `op` (REQUIRED): `publish`, `append` or `archive`.
+- `hash` (OPTIONAL): the `content-hash` (§6.1) of the version the event names.
+- `agent` (OPTIONAL): the `agent` metadata the write carried, when it carried one.
+
+Heartbeat, while no event is due (every 20 seconds RECOMMENDED):
+
+```text
+---
+status: ok
+cursor: <cursor>
+---
+```
+
+A heartbeat's cursor is the latest position the client may resume from. A client that sees neither an event nor a heartbeat for three intervals SHOULD treat the stream as stalled and reopen it.
+
+Terminal, the last block of the stream:
+
+- `resync`: the server cannot deliver from the client's cursor: another epoch, older than the server retains, or the server fell too far behind for this subscriber. `cursor` is the head to resume from. The client MUST rebuild whatever it derived from the stream (from LIST, VERSIONS and FETCH) before resuming.
+- `closing`: the server is draining. `cursor` is the last delivered position; the client resumes from it on another connection or after a delay.
+- `unauthorized` or `not-permitted`: the token was revoked, expired, or no longer covers the path while the stream was open. `cursor` is the last delivered position.
+
+`resync` MAY be the first block, in place of the acknowledgement, when `since` cannot be honoured.
+
+**Rules**:
+
+- One block, fences included, MUST NOT exceed **8192 bytes**. A client MUST reject a longer block as malformed and reopen the stream. Block values follow the metadata grammar (§4.3): no line breaks.
+- A client MUST ignore keys it does not recognise in any block and MUST skip an event whose `op` it does not recognise, so a server or an intermediary can add keys and operations without a new verb.
+- A cursor is an opaque string of the form `<epoch>:<seq>`: the epoch is 1 to 64 characters of letters, digits, `.`, `_` and `-`; the sequence is a decimal integer without leading zeros. The server changes the epoch whenever its sequence restarts. A client uses a cursor only by passing it back; it MUST NOT infer a gap from cursor values, since events it may not read are omitted silently. A gap is signalled only by `resync`.
+- Delivery is at least once and in order within an epoch. Events MUST NOT be reordered. A server MAY deliver only the latest of several consecutive changes to one path; every version remains reachable through VERSIONS.
+- The write that produced an event is committed before the event is emitted, so a FETCH of the event's version succeeds unless the document was archived or pruned since.
+- A server that learns of a change from a peer replica rather than from the write itself MAY report an append as `publish`; the version and hash are exact either way.
+- Read authorisation (§11.8): the token MUST grant `read` on the request path at subscription, and every event MUST be checked against the token before it is sent; an event on a path the token does not cover is omitted. A server that reloads its token store MUST recheck open watches and end those no longer authorised with `unauthorized`.
+- A watch occupies one QUIC stream for its lifetime. Servers SHOULD cap open watches per connection and per server below their stream limits, exempt an open watch from the per-request deadline, and count it once against rate limits at subscription.
+
+**Errors** (as an ordinary response in place of the acknowledgement):
+
+- `bad-request`: an invalid path or a malformed `since`. A server that predates WATCH answers every WATCH this way; a client MUST take that as the verb being unsupported and fall back to polling.
+- `unauthorized`, `not-permitted`: as §11.8.
+- `rate-limited`: the server's watch limit is reached.
+- `server-error`: internal error.
+
 ## 7. Status Values
 
 Status values are text strings. There are no numeric status codes.
@@ -615,6 +707,9 @@ Status values are text strings. There are no numeric status codes.
 | `conflict` | Version conflict; `expected-version` did not match the current version. |
 | `bad-request` | Malformed request, or a document that violates the content contract (non-`.md` path, non-UTF-8 body). |
 | `server-error` | The server encountered an error processing the request. |
+| `rate-limited` | The server refused the request under a rate or concurrency limit; retry later. |
+| `resync` | WATCH only (§6.8): the stream cannot continue from the client's cursor. Terminal; the block carries the cursor to resume from. |
+| `closing` | WATCH only (§6.8): the server is draining. Terminal; the block carries the last delivered cursor. |
 
 ### 7.1. Future Status Values
 
@@ -633,7 +728,7 @@ The following status values are reserved for future use:
 |---|---|---|---|
 | `if-none-match` | FETCH | 64-char hex string | ETag from a previous response. Enables conditional fetch. |
 | `if-modified-since` | FETCH | RFC 3339 timestamp | Timestamp from a previous response. Enables conditional fetch. |
-| `auth` | PUBLISH, ARCHIVE, APPEND | String | Raw authentication token. The server hashes this with SHA-256 and looks up the hash in its token store. |
+| `auth` | PUBLISH, ARCHIVE, APPEND; any verb on a path under read authorisation (§11.8) | String | Raw authentication token. The server hashes this with SHA-256 and looks up the hash in its token store. |
 | `expected-version` | PUBLISH (optional), APPEND (required) | Decimal integer | Expected current version for optimistic concurrency. If present and does not match the server's current version, the server returns `conflict`. APPEND requires this field (>= 1). |
 | `query` | LOOKUP | String | Subject text matched against each document's `tags` and title. REQUIRED; minimum 2 characters. |
 | `filter` | LOOKUP | Comma-separated `key=value` | Predicates applied before ranking. Exact match on declared metadata, plus built-ins `modified-after` / `modified-before`. |
@@ -642,6 +737,7 @@ The following status values are reserved for future use:
 | `page-size` | LIST | Decimal integer | Maximum entries in this page. Default and hard maximum 1000. |
 | `cursor` | LIST | Opaque string | Continuation from the preceding page of the same directory and archive mode. |
 | `include-archived` | LIST | `true` or `false` | Include archived documents and directories containing only archived documents. Default false. |
+| `since` | WATCH | Cursor (§6.8) | The last cursor the client processed; delivery resumes after it. Absent starts at the head. |
 | `tags` | PUBLISH, APPEND | Comma-separated string | Subject labels for the document. Interpreted by the server: matched by LOOKUP `query` and `filter`. |
 | `importance` | PUBLISH, APPEND | Decimal in [0,1] | Ranking weight used by LOOKUP. Interpreted by the server. Absent or invalid is treated as 0.5. |
 | `title` | PUBLISH | String | One-line title shown in LOOKUP results and matched by `query`. Defaults to the first level-1 heading, then the path base name. |
@@ -654,7 +750,7 @@ Beyond the interpreted fields above, a PUBLISH request MAY carry additional publ
 |---|---|---|---|
 | `modified` | FETCH, PUBLISH, APPEND | RFC 3339 timestamp | Document modification time (UTC, second precision). |
 | `etag` | FETCH | 64-char lowercase hex | SHA-256 hash of the selected raw stored version bytes (§9.4). |
-| `version` | FETCH, PUBLISH, APPEND | Decimal integer | Version number of the returned or created document. |
+| `version` | FETCH, PUBLISH, APPEND, WATCH (event block) | Decimal integer | Version number of the returned, created, or changed document. |
 | `your-version` | PUBLISH, APPEND (conflict) | Decimal integer | The `expected-version` the client sent. Present only in `conflict` responses. |
 | `server-version` | PUBLISH, APPEND (conflict) | Decimal integer | The current version on the server. Present only in `conflict` responses. |
 | `current-version` | FETCH (version access) | Decimal integer | Highest available version number. |
@@ -668,6 +764,11 @@ Beyond the interpreted fields above, a PUBLISH request MAY carry additional publ
 | `content-hash` | FETCH | `sha256-` + 64-char lowercase hex | SHA-256 hash of the response body (stripped of store frontmatter). Enables content-addressed retrieval. |
 | `matches` | LOOKUP | Decimal integer | Number of rows returned in the table body: documents in catalog mode, sections in body mode. |
 | `match` | LOOKUP | `catalog` or `body` | The mode the server answered in. Present exactly when the request carried `match`. |
+| `cursor` | WATCH (every block) | `<epoch>:<seq>` | Position to resume from (§6.8). |
+| `path` | WATCH (event block) | Server-relative path | The changed document. |
+| `op` | WATCH (event block) | `publish`, `append` or `archive` | What changed. Clients skip an unknown value. |
+| `hash` | WATCH (event block) | `sha256-` + 64-char lowercase hex | `content-hash` of the version the event names. |
+| `agent` | WATCH (event block) | String | The `agent` metadata the write carried. |
 
 ## 9. Versioning
 
@@ -863,6 +964,7 @@ Servers MUST enforce the following limits:
 | Document size (read and publish) | 1 MB (RECOMMENDED) |
 | Directory listing entries | 1000 per page |
 | Generated directory listing body | 1 MiB per page |
+| WATCH block (fences included) | 8192 bytes |
 
 ### 11.4. No Tracking
 
@@ -894,7 +996,7 @@ The Mark Protocol uses capability-based token authentication. Tokens grant speci
 
 **Read authentication**: Tokens with the `read` operation protect specific paths. When any token grants `read` on a path pattern, requests to matching paths require a valid read token. Paths not covered by any read token remain public. This enables private intranets (protect `/**`) and mixed public/private servers (protect `/internal/**` while leaving the rest open).
 
-Servers MUST enforce read auth on FETCH, LIST, and VERSIONS operations. Content-addressed FETCH (by hash) MUST resolve the hash to a path and check read auth on that path. Versioned paths (e.g., `/doc.md/v2`) MUST check auth on the base path (`/doc.md`). The well-known manifest path (`/.well-known/agent-manifest.md`) is always public.
+Servers MUST enforce read auth on FETCH, LIST, VERSIONS, LOOKUP (§6.7) and WATCH (§6.8) operations. Content-addressed FETCH (by hash) MUST resolve the hash to a path and check read auth on that path. Versioned paths (e.g., `/doc.md/v2`) MUST check auth on the base path (`/doc.md`). The well-known manifest path (`/.well-known/agent-manifest.md`) is always public.
 
 **Token storage**: The server stores SHA-256 hashes of tokens, never the raw tokens themselves. The token store is a TOML file:
 
@@ -1028,7 +1130,6 @@ Manifest retention does not permit shard retention while a retained manifest can
 The following features are planned but not part of this specification:
 
 - **Federation**: Cross-server content mirroring and discovery.
-- **Subscriptions**: Notification of document changes.
 - **OKF interop**: An import/export codec that reads and emits [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundles. demarkus already aligns its persisted document metadata with OKF field names (§9.4), so a single document's content model is OKF-compatible; the planned codec adds bundle-level round-tripping (frontmatter on the served document, `index.md`/`log.md` conventions, bundle-relative links), validated against the OKF reference sample bundles. demarkus remains a superset at the system level; it layers versioning, a hash chain, QUIC transport, capability auth, and LOOKUP discovery on top of an OKF-compatible document.
 
 These will be specified in future versions of this document.
@@ -1048,6 +1149,8 @@ These will be specified in future versions of this document.
 | Default LOOKUP limit | 10 |
 | Recommended max LOOKUP results | 1000 |
 | Max LOOKUP snippet | 240 bytes |
+| Max WATCH block | 8192 bytes |
+| WATCH heartbeat interval | 20 s (RECOMMENDED) |
 | Hash algorithm | SHA-256 |
 | Hash format | `sha256-<64 lowercase hex chars>` |
 | Default OKF type | `Document` |

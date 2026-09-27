@@ -23,6 +23,11 @@ const (
 	StatusBadRequest   = "bad-request"
 	StatusServerError  = "server-error"
 	StatusRateLimited  = "rate-limited"
+
+	// WATCH terminal statuses (§6.8): the cursor cannot be resumed from, or the
+	// server is draining. Both end the stream.
+	StatusResync  = "resync"
+	StatusClosing = "closing"
 )
 
 // ErrOutcomeUnknown marks a write whose request was sent and whose answer was

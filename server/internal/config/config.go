@@ -17,6 +17,7 @@ type Config struct {
 	Port           int
 	ContentDir     string
 	MaxStreams     int
+	MaxWatches     int           // Open WATCH streams per server (0 = runtime default)
 	IdleTimeout    time.Duration // Timeout for idle connections
 	RequestTimeout time.Duration // Timeout for handling a single request
 	TLSCert        string        // Path to TLS certificate PEM file (empty = dev mode)
@@ -40,6 +41,7 @@ func NewConfig() (*Config, error) {
 	config.Port = getEnvAsInt("DEMARKUS_PORT", protocol.DefaultPort, &errs)
 	config.ContentDir = getEnv("DEMARKUS_ROOT", "")
 	config.MaxStreams = getEnvAsInt("DEMARKUS_MAX_STREAMS", 10, &errs)
+	config.MaxWatches = getEnvAsInt("DEMARKUS_MAX_WATCHES", 0, &errs)
 	config.IdleTimeout = getEnvAsDuration("DEMARKUS_IDLE_TIMEOUT", 30*time.Second, &errs)
 	config.RequestTimeout = getEnvAsDuration("DEMARKUS_REQUEST_TIMEOUT", 10*time.Second, &errs)
 	config.TLSCert = getEnv("DEMARKUS_TLS_CERT", "")
@@ -76,6 +78,9 @@ func (c *Config) Validate() error {
 	// IdleTimeout 0 = quic-go's default idle timeout.
 	if c.IdleTimeout < 0 {
 		errs = append(errs, fmt.Errorf("idle timeout must be non-negative (got %v)", c.IdleTimeout))
+	}
+	if c.MaxWatches < 0 {
+		errs = append(errs, fmt.Errorf("max watches must be non-negative (got %d)", c.MaxWatches))
 	}
 	if c.RequestTimeout < 0 {
 		errs = append(errs, fmt.Errorf("request timeout must be non-negative (got %v)", c.RequestTimeout))

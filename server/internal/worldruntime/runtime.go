@@ -14,6 +14,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/backend"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 	"github.com/latebit-io/demarkus/server/internal/quicserve"
@@ -21,6 +22,13 @@ import (
 )
 
 const maxRateWaitBudget = 10 * time.Second
+
+// Watch limits when the config leaves them zero. The per connection cap
+// stays under a server's stream limit so requests still get streams.
+const (
+	defaultMaxWatches        = 1024
+	defaultMaxWatchesPerConn = 4
+)
 
 // Config defines one runtime and transfers backend ownership on success.
 type Config struct {
@@ -40,6 +48,13 @@ type Config struct {
 	RateLimit           float64
 	RateBurst           int
 	Logger              *slog.Logger
+	// Changes serves WATCH and is closed with the runtime; nil leaves the
+	// verb unsupported.
+	Changes *changefeed.Hub
+	// MaxWatches caps open watches per world, MaxWatchesPerConn per
+	// connection; zero takes the defaults.
+	MaxWatches        int
+	MaxWatchesPerConn int
 }
 
 // Runtime serves one world's streams with isolated auth and rate state.
@@ -51,12 +66,16 @@ type Runtime struct {
 	limiter        *ratelimit.Limiter
 	logger         *slog.Logger
 	closeBackend   func() error
+	changes        *changefeed.Hub
+	watchLimit     int
+	watchPerConn   int
 
 	watchCancel context.CancelFunc
 	watchDone   sync.WaitGroup
 
 	mu      sync.Mutex
 	closing bool
+	watches int
 	active  sync.WaitGroup
 
 	closeOnce sync.Once
@@ -76,6 +95,9 @@ func New(config *Config) (*Runtime, error) {
 	}
 	if config.MaxConcurrent < 0 {
 		return nil, fmt.Errorf("world runtime: max concurrent requests must not be negative: %d", config.MaxConcurrent)
+	}
+	if config.MaxWatches < 0 || config.MaxWatchesPerConn < 0 {
+		return nil, fmt.Errorf("world runtime: watch limits must not be negative: %d, %d", config.MaxWatches, config.MaxWatchesPerConn)
 	}
 	logger := config.Logger
 	if logger == nil {
@@ -104,12 +126,22 @@ func New(config *Config) (*Runtime, error) {
 		requestTimeout: config.RequestTimeout,
 		logger:         logger,
 		closeBackend:   config.CloseBackend,
+		changes:        config.Changes,
+		watchLimit:     config.MaxWatches,
+		watchPerConn:   config.MaxWatchesPerConn,
+	}
+	if runtime.watchLimit == 0 {
+		runtime.watchLimit = defaultMaxWatches
+	}
+	if runtime.watchPerConn == 0 {
+		runtime.watchPerConn = defaultMaxWatchesPerConn
 	}
 	runtime.handler, err = handler.New(handler.Config{
 		Store:         config.Store,
 		GetTokenStore: tokens.Current,
 		Logger:        logger,
 		ReadOnly:      config.ReadOnly,
+		Changes:       config.Changes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("world runtime: %w", err)
@@ -157,12 +189,21 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 		return
 	}
 	defer r.active.Done()
+	// The response is written or failed by then; a close error changes nothing.
+	defer func() {
+		if err := stream.Close(); err != nil {
+			logger.Debug("closing stream", "error", err)
+		}
+	}()
 
+	releaseSlot := func() {}
 	if r.concurrent != nil {
 		if !r.acquire(ctx, remote, stream, logger) {
 			return
 		}
-		defer func() { <-r.concurrent }()
+		var once sync.Once
+		releaseSlot = func() { once.Do(func() { <-r.concurrent }) }
+		defer releaseSlot()
 	}
 	if r.limiter != nil {
 		budget := r.requestTimeout
@@ -198,7 +239,76 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 			logger.Debug("setting stream write deadline", "error", err)
 		}
 	}
-	r.handler.WithLogger(logger).HandleStream(requestCtx, stream)
+	h := r.handler.WithLogger(logger)
+	req, ok := h.ReadRequest(stream)
+	if !ok {
+		return
+	}
+	if req.Verb == protocol.VerbWatch && r.changes != nil {
+		if !r.admitWatch(ctx, remote, stream, logger) {
+			return
+		}
+		defer r.releaseWatch(ctx)
+		// A watch lives as long as the connection, not the request deadline;
+		// each block write is bounded on its own and the slot is released
+		// once the stream is subscribed.
+		h.Serve(ctx, stream, req, handler.WatchOptions{Subscribed: releaseSlot, WriteTimeout: r.writeBudget()})
+		return
+	}
+	h.Serve(requestCtx, stream, req, handler.WatchOptions{})
+}
+
+// writeBudget bounds one write so a peer that stops reading cannot hold a
+// stream open.
+func (r *Runtime) writeBudget() time.Duration {
+	if r.requestTimeout > 0 {
+		return r.requestTimeout
+	}
+	return maxRateWaitBudget
+}
+
+// admitWatch takes one watch slot for the world and the connection, or
+// refuses the stream with rate-limited while ordinary requests still pass.
+func (r *Runtime) admitWatch(ctx context.Context, remote net.Addr, stream quicserve.Stream, logger *slog.Logger) bool {
+	conn := quicserve.ConnStateFromContext(ctx)
+	r.mu.Lock()
+	admitted := r.watches < r.watchLimit
+	if admitted {
+		r.watches++
+	}
+	r.mu.Unlock()
+	limit := "world"
+	if admitted && conn != nil && int(conn.Watches.Add(1)) > r.watchPerConn {
+		conn.Watches.Add(-1)
+		r.mu.Lock()
+		r.watches--
+		r.mu.Unlock()
+		admitted, limit = false, "connection"
+	}
+	if admitted {
+		return true
+	}
+	logger.Warn("watch limit reached", "limit", limit, "ip", ratelimit.ExtractIP(remote))
+	if err := r.writeRateLimited(stream); err != nil {
+		logger.Warn("writing watch-limited response", "ip", ratelimit.ExtractIP(remote), "error", err)
+	}
+	return false
+}
+
+func (r *Runtime) releaseWatch(ctx context.Context) {
+	r.mu.Lock()
+	r.watches--
+	r.mu.Unlock()
+	if conn := quicserve.ConnStateFromContext(ctx); conn != nil {
+		conn.Watches.Add(-1)
+	}
+}
+
+// Watches reports the world's open watches.
+func (r *Runtime) Watches() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.watches
 }
 
 func (r *Runtime) acquire(ctx context.Context, remote net.Addr, stream quicserve.Stream, logger *slog.Logger) bool {
@@ -263,6 +373,14 @@ func (r *Runtime) Tokens() *auth.TokenStore {
 	return r.tokens.Current()
 }
 
+// Drain tells every open watch closing, so a listener shutdown that waits
+// for streams is not held by subscriptions. Requests are still served.
+func (r *Runtime) Drain() {
+	if r.changes != nil {
+		r.changes.Close()
+	}
+}
+
 // Close stops runtime-local workers, drains streams, then closes the backend.
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
@@ -273,6 +391,7 @@ func (r *Runtime) Close() error {
 			r.watchCancel()
 		}
 		r.watchDone.Wait()
+		r.Drain()
 		r.active.Wait()
 		if r.limiter != nil {
 			r.limiter.Stop()

@@ -23,6 +23,7 @@ All settings are via environment variables; flags override for dev use:
 | `DEMARKUS_TOKENS` | `-tokens` | *(none; writes disabled)* | Path to TOML tokens file |
 | `DEMARKUS_READ_ONLY` | `-read-only` | *(disabled)* | Reject all write operations (`1`, `true`, or `yes`) |
 | `DEMARKUS_MAX_STREAMS` | - | `10` | Max concurrent streams per connection |
+| `DEMARKUS_MAX_WATCHES` | - | `1024` | Open WATCH streams per server; each connection may hold half its streams as watches |
 | `DEMARKUS_IDLE_TIMEOUT` | - | `30s` | Idle connection timeout |
 | `DEMARKUS_REQUEST_TIMEOUT` | - | `10s` | Per-request deadline |
 | `DEMARKUS_LOG_FORMAT` | - | `text` | Log output format (`text` or `json`) |
@@ -62,6 +63,7 @@ worlds:                         # one or more
     readOnly: false
     limits:
       maxConcurrentRequests: 32 # default
+      maxWatches: 1024 # default; open WATCH streams in the world
       requestTimeout: "10s"     # default
       requestsPerSecond: 50     # default
       burst: 100                # default

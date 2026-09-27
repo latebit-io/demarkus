@@ -220,10 +220,10 @@ The standard is itself published on `root` under `.well-known/demarkus/`.
 
 ## Why QUIC?
 
-- Encryption is mandatory: TLS 1.3 built in, no plaintext fallback.
-- Fast multiplexed streams, one per request.
-- No HTTP layer: no cookies, tracking headers, or query strings. Seven text verbs instead.
-- The broker fronts worlds over HTTPS, so clients need no direct QUIC access.
+- Realtime: a watch is one stream; many share a connection without head-of-line blocking and survive network changes.
+- Fan-out: a broker holds one upstream watch and relays it to many watchers.
+- Encryption is mandatory (TLS 1.3, no plaintext fallback) and there is no HTTP layer, but TLS over TCP would give both; they are not the reason for QUIC.
+- Clients that cannot use UDP reach the knowledge system through the HTTPS broker. Souls, the CLI, and native clients dial QUIC directly.
 
 ## What is the auth and security model?
 

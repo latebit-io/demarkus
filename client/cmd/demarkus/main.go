@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -61,6 +62,9 @@ func main() {
 		case "okf":
 			okfMain(ctx, os.Args[2:])
 			return
+		case "watch":
+			watchMain(ctx, os.Args[2:])
+			return
 		}
 	}
 	requestMain(ctx)
@@ -110,6 +114,7 @@ func requestMain(ctx context.Context) {
 		fmt.Fprintf(os.Stderr, "       demarkus info [-insecure] mark://host:port\n")
 		fmt.Fprintf(os.Stderr, "       demarkus bookmark <add|list|remove>\n")
 		fmt.Fprintf(os.Stderr, "       demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-match body] mark://host:port/scope/\n")
+		fmt.Fprintf(os.Stderr, "       demarkus watch [-since CURSOR] [-auth TOKEN] mark://host:port/prefix/\n")
 		fmt.Fprintf(os.Stderr, "       demarkus token <add|remove|list>\n\n")
 		flag.PrintDefaults()
 	}
@@ -181,8 +186,6 @@ func requestMain(ctx context.Context) {
 		})
 	case protocol.VerbVersions:
 		result, err = client.Versions(ctx, fetch.VersionsRequest{Host: host, Path: path, Token: token})
-	case protocol.VerbLookup:
-		log.Fatal("use 'demarkus lookup -query SUBJECT mark://host/scope/' for LOOKUP requests")
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -813,7 +816,14 @@ func confirmRetention(meta map[string]string, yes bool, in *os.File, out io.Writ
 	}
 }
 
+// validateVerb accepts the verbs -X sends; LOOKUP and WATCH have subcommands.
 func validateVerb(verb string) error {
+	switch verb {
+	case protocol.VerbLookup:
+		return errors.New("use 'demarkus lookup -query SUBJECT mark://host/scope/' for LOOKUP requests")
+	case protocol.VerbWatch:
+		return errors.New("use 'demarkus watch mark://host/prefix/' for WATCH requests")
+	}
 	if !protocol.IsValidVerb(verb) {
 		return fmt.Errorf("unsupported verb: %s (valid: FETCH, LIST, VERSIONS, PUBLISH, ARCHIVE, APPEND)", verb)
 	}

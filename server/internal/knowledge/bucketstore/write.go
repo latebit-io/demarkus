@@ -42,6 +42,9 @@ type mutationBuilder func(context.Context, *readView, string) (*candidateMutatio
 // Publish commits one version.
 func (store *Store) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
 	result, err := store.publish(ctx, req)
+	if err == nil {
+		store.reportLocal(protocol.OpPublish, req.Path, result.Document.Metadata["agent"])
+	}
 	return result.Document, err
 }
 
@@ -99,6 +102,9 @@ func (store *Store) checkDocumentQuota(view *readView) error {
 // Append commits content on the exact expected version.
 func (store *Store) Append(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
 	result, err := store.appendVersion(ctx, req)
+	if err == nil {
+		store.reportLocal(protocol.OpAppend, req.Path, result.Document.Metadata["agent"])
+	}
 	return result.Document, err
 }
 
@@ -158,6 +164,15 @@ func (store *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest)
 	result, err := store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
 		return store.buildArchiveCandidate(ctx, view, operationID, &archive)
 	})
+	if err == nil && result.Changed {
+		// An unarchive shows the document again at its current version,
+		// which is what a watcher must refetch: a publish.
+		op := protocol.OpPublish
+		if req.Archived {
+			op = protocol.OpArchive
+		}
+		store.reportLocal(op, req.Path, result.Document.Metadata["agent"])
+	}
 	return backend.ArchiveResult(result), err
 }
 

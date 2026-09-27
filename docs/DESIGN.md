@@ -31,11 +31,15 @@ Demarkus reimagines the web around markdown as the primary content format, with 
 
 ### Why QUIC?
 
-- Encryption by default (TLS 1.3)
-- Connection migration (good for mobile clients)
-- Multiplexed streams (efficient for following links)
-- 0-RTT resumption (with security constraints)
-- Modern transport layer without HTTP baggage
+Owning the wire protocol is what keeps demarkus infrastructure rather than a web service; QUIC is the transport because of what that protocol is heading toward:
+
+- Realtime subscriptions: one stream per watch, many on one connection without head-of-line blocking, cancelled by stream reset, opened by the client so subscribers need no public address
+- Connection migration keeps long-lived subscriptions alive across network changes
+- Relay fan-out: a broker can hold one upstream subscription and serve many watchers
+- One UDP 443 listener can serve both `mark` and `h3` by ALPN
+- 0-RTT resumption for reads (planned, with the security constraints below)
+
+TLS 1.3 and the absence of HTTP are not reasons on their own: TLS over TCP gives both. For plain request and response traffic the transport is rarely the bottleneck. If measurement shows no gain, a TLS over TCP binding for direct clients is the fallback.
 
 ### Request Format
 
@@ -1000,17 +1004,9 @@ lock: none
 
 Servers can provide hints about concurrent editing (but don't enforce).
 
-### WebSub-style Subscriptions
+### Subscriptions
 
-```
-SUBSCRIBE /docs/*
-
----
-callback: mark://subscriber.com:6309/updates
----
-```
-
-Server notifies subscriber when content changes.
+WATCH (SPEC §6.8, ADR 0025) replaced the earlier WebSub-style `SUBSCRIBE` with a callback URL: the subscriber opens a QUIC stream and keeps it, so agents need no public address. Events are hints (path, version, hash, op); content is fetched.
 
 ## Agent-Native Protocol
 

@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +24,31 @@ func startTestServer(t *testing.T, handle func(protocol.Request) protocol.Respon
 }
 
 func startTestServerWithSNI(t *testing.T, observed chan<- string, handle func(protocol.Request) protocol.Response) string {
+	t.Helper()
+	srv := serveStreams(t, observed, func(_ *quic.Conn, stream *quic.Stream) {
+		defer func() { _ = stream.Close() }()
+		req, err := protocol.ParseRequest(stream)
+		if err != nil {
+			return
+		}
+		resp := handle(req)
+		// Ignore write errors; the client side of the test fails on the
+		// missing response.
+		_, _ = resp.WriteTo(stream)
+	})
+	return srv.Addr
+}
+
+// testServer is an in-process QUIC server: the address to dial and how many
+// connections it has accepted.
+type testServer struct {
+	Addr  string
+	Conns atomic.Int32
+}
+
+// serveStreams runs handle on every stream of every accepted connection, so a
+// test can answer, reset the stream, or close the connection as it likes.
+func serveStreams(t *testing.T, observed chan<- string, handle func(conn *quic.Conn, stream *quic.Stream)) *testServer {
 	t.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -57,35 +83,27 @@ func startTestServerWithSNI(t *testing.T, observed chan<- string, handle func(pr
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 
+	srv := &testServer{Addr: ln.Addr().String()}
 	go func() {
 		for {
 			conn, err := ln.Accept(context.Background())
 			if err != nil {
 				return
 			}
+			srv.Conns.Add(1)
 			go func() {
 				for {
 					stream, err := conn.AcceptStream(context.Background())
 					if err != nil {
 						return
 					}
-					go func() {
-						defer func() { _ = stream.Close() }()
-						req, err := protocol.ParseRequest(stream)
-						if err != nil {
-							return
-						}
-						resp := handle(req)
-						// Ignore write errors; the client side of the test
-						// fails on the missing response.
-						_, _ = resp.WriteTo(stream)
-					}()
+					go handle(conn, stream)
 				}
 			}()
 		}
 	}()
 
-	return ln.Addr().String()
+	return srv
 }
 
 func TestEndpointOverridesKeepLogicalConnectionsSeparate(t *testing.T) {

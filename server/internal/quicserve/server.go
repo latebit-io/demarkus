@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -23,6 +24,28 @@ type Stream interface {
 	io.ReadWriteCloser
 	SetReadDeadline(time.Time) error
 	SetWriteDeadline(time.Time) error
+}
+
+// ConnState is what stream handlers share per connection, reached through
+// the stream context.
+type ConnState struct {
+	// Watches counts the connection's open WATCH streams.
+	Watches atomic.Int32
+}
+
+type connStateKey struct{}
+
+// WithConnState attaches a fresh ConnState to ctx; Serve does it per
+// connection, tests do it in its place.
+func WithConnState(ctx context.Context) context.Context {
+	return context.WithValue(ctx, connStateKey{}, &ConnState{})
+}
+
+// ConnStateFromContext returns the connection's state, or nil when the
+// stream is not served under a connection.
+func ConnStateFromContext(ctx context.Context) *ConnState {
+	state, _ := ctx.Value(connStateKey{}).(*ConnState)
+	return state
 }
 
 // Endpoint handles streams for one accepted connection.
@@ -128,7 +151,7 @@ func (s *Server) Serve(ctx context.Context, selector Selector) error {
 			return errors.Join(acceptErr, s.stop())
 		}
 
-		handlerCtx, cancelHandler := context.WithCancel(context.WithoutCancel(ctx))
+		handlerCtx, cancelHandler := context.WithCancel(WithConnState(context.WithoutCancel(ctx)))
 		tracked := &trackedConnection{
 			connection: connection,
 			server:     s,
