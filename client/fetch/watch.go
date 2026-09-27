@@ -60,9 +60,11 @@ type Watch struct {
 	done    chan struct{}
 	cancel  context.CancelFunc
 
-	mu     sync.Mutex
-	cursor protocol.Cursor
-	err    error
+	mu sync.Mutex
+	// stream is where the next stream reopens from; consumed is the cursor
+	// of the last notice Next returned, which may lag behind what is queued.
+	stream, consumed protocol.Cursor
+	err              error
 }
 
 // Watch subscribes and returns once the server has acknowledged, or with the
@@ -72,10 +74,14 @@ func (c *Client) Watch(ctx context.Context, r WatchRequest) (*Watch, error) {
 	if r.Path == "" {
 		return nil, errors.New("WATCH requires a path")
 	}
-	w := &Watch{client: c, req: r, notices: make(chan Notice, watchQueueSize), done: make(chan struct{}), cursor: r.Since}
+	w := &Watch{client: c, req: r, notices: make(chan Notice, watchQueueSize), done: make(chan struct{}), stream: r.Since, consumed: r.Since}
 	stream, err := w.open(ctx, r.Since)
 	if err != nil {
 		return nil, err
+	}
+	if len(w.notices) == 0 {
+		// No resync to consume: the acknowledgement is where a caller resumes.
+		w.consumed = w.stream
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
@@ -87,12 +93,12 @@ func (c *Client) Watch(ctx context.Context, r WatchRequest) (*Watch, error) {
 func (w *Watch) Next(ctx context.Context) (Notice, error) {
 	select {
 	case n := <-w.notices:
-		return n, nil
+		return w.consume(n), nil
 	default:
 	}
 	select {
 	case n := <-w.notices:
-		return n, nil
+		return w.consume(n), nil
 	case <-w.done:
 		return Notice{}, w.Err()
 	case <-ctx.Done():
@@ -100,11 +106,28 @@ func (w *Watch) Next(ctx context.Context) (Notice, error) {
 	}
 }
 
-// Cursor is the position the watch resumes from.
+func (w *Watch) consume(n Notice) Notice {
+	w.mu.Lock()
+	w.consumed = n.Event.Cursor
+	w.mu.Unlock()
+	return n
+}
+
+// Cursor is where a later watch resumes without missing anything: the
+// cursor of the last notice Next returned. Notices still queued are after
+// it, so a caller that persists it and restarts sees them again.
 func (w *Watch) Cursor() protocol.Cursor {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.cursor
+	return w.consumed
+}
+
+// streamCursor is where the watch reopens its own stream: everything before
+// it is queued or consumed.
+func (w *Watch) streamCursor() protocol.Cursor {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.stream
 }
 
 // Err is why the watch ended, once Next has reported it.
@@ -122,7 +145,7 @@ func (w *Watch) Close() {
 
 func (w *Watch) setCursor(c protocol.Cursor) {
 	w.mu.Lock()
-	w.cursor = c
+	w.stream = c
 	w.mu.Unlock()
 }
 
@@ -162,7 +185,7 @@ func (w *Watch) open(ctx context.Context, since protocol.Cursor) (*watchStream, 
 		case err == nil:
 			return stream, nil
 		case errors.Is(err, errResyncFirst):
-			since = w.Cursor()
+			since = w.streamCursor()
 		case attempt == maxRetries-1 || !isRetryable(err):
 			return nil, err
 		default:
@@ -267,7 +290,7 @@ func (w *Watch) run(ctx context.Context, stream *watchStream) {
 		}
 		for {
 			var openErr error
-			stream, openErr = w.open(ctx, w.Cursor())
+			stream, openErr = w.open(ctx, w.streamCursor())
 			if openErr == nil {
 				backoff = retryDelay
 				break

@@ -400,3 +400,39 @@ func TestWatchCloseWithAFullQueueOnResync(t *testing.T) {
 		t.Fatalf("Err() = %v", w.Err())
 	}
 }
+
+// Cursor is the last notice consumed, not the last block read: a caller
+// that persists it and restarts sees what was still queued.
+func TestCursorFollowsConsumption(t *testing.T) {
+	f, _, c := startFeed(t)
+	w, err := c.Watch(t.Context(), WatchRequest{Host: f.addr(t), Path: "/"})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	if got := w.Cursor(); got != f.head() {
+		t.Fatalf("cursor before any notice = %v, want the acknowledgement %v", got, f.head())
+	}
+	for i := 1; i <= 3; i++ {
+		f.publish("/" + strconv.Itoa(i) + ".md")
+	}
+	first := expectEvent(t, w, "/1.md")
+	deadline := time.Now().Add(5 * time.Second)
+	for len(w.notices) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("the pump did not queue the remaining events")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := w.Cursor(); got != first.Cursor {
+		t.Fatalf("cursor = %v, want the consumed %v (stream is at %v)", got, first.Cursor, w.streamCursor())
+	}
+	w.Close()
+
+	resumed, err := c.Watch(t.Context(), WatchRequest{Host: f.addr(t), Path: "/", Since: w.Cursor()})
+	if err != nil {
+		t.Fatalf("Watch from the consumed cursor: %v", err)
+	}
+	defer resumed.Close()
+	expectEvent(t, resumed, "/2.md")
+	expectEvent(t, resumed, "/3.md")
+}
