@@ -93,7 +93,11 @@ func (f *feed) serve(conn *quic.Conn, stream *quic.Stream) {
 	f.subscribes = append(f.subscribes, req.Metadata["since"])
 	if refuse := f.refuse; refuse != "" {
 		f.mu.Unlock()
-		_, _ = protocol.Response{Status: refuse, Body: "# refused\n"}.WriteTo(stream)
+		if refuse == protocol.StatusResync {
+			_, _ = protocol.WatchControl(refuse, f.head()).WriteTo(stream)
+		} else {
+			_, _ = protocol.Response{Status: refuse, Body: "# refused\n"}.WriteTo(stream)
+		}
 		_ = stream.Close()
 		return
 	}
@@ -335,5 +339,64 @@ func TestWatchSlowConsumerLosesNothing(t *testing.T) {
 	}
 	if len(f.sinces()) < 2 {
 		t.Fatalf("subscribes = %v, want the watch to have reopened from its cursor", f.sinces())
+	}
+}
+
+// waitSubscribes blocks until the feed has seen n subscribes.
+func waitSubscribes(t *testing.T, f *feed, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(f.sinces()) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("subscribes = %v, want %d", f.sinces(), n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A retry-later refusal on reopen keeps the watch alive on the backoff.
+func TestWatchRetriesARateLimitedReopen(t *testing.T) {
+	f, _, c := startFeed(t)
+	w, err := c.Watch(t.Context(), WatchRequest{Host: f.addr(t), Path: "/"})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer w.Close()
+	f.setRefuse(protocol.StatusRateLimited)
+	f.end(protocol.StatusClosing)
+	waitSubscribes(t, f, 3)
+	f.setRefuse("")
+	f.publish("/a.md")
+	expectEvent(t, w, "/a.md")
+}
+
+// Close returns while the queue is full and the reopen answers resync.
+func TestWatchCloseWithAFullQueueOnResync(t *testing.T) {
+	f, _, c := startFeed(t)
+	w, err := c.Watch(t.Context(), WatchRequest{Host: f.addr(t), Path: "/"})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	for i := range watchQueueSize + 1 {
+		f.publish("/" + strconv.Itoa(i) + ".md")
+	}
+	// Let the overflow cancel the stream; the next subscribe is the reopen,
+	// which the feed answers with resync while the queue is still full.
+	time.Sleep(300 * time.Millisecond)
+	f.setRefuse(protocol.StatusResync)
+	expectEvent(t, w, "/0.md")
+	waitSubscribes(t, f, 2)
+	closed := make(chan struct{})
+	go func() {
+		w.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung")
+	}
+	if !errors.Is(w.Err(), context.Canceled) {
+		t.Fatalf("Err() = %v", w.Err())
 	}
 }

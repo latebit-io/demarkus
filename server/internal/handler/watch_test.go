@@ -330,3 +330,60 @@ func TestWatchAnswersBadRequestWithoutAHub(t *testing.T) {
 		}
 	})
 }
+
+// Events the token may not read are omitted, but they must not silence the
+// heartbeat: the revocation recheck rides on it.
+func TestWatchHeartbeatsThroughOmittedEvents(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, newBackend backendFactory) {
+		hub := changefeed.New("w", 0)
+		ts := writeTokens(map[string]auth.Token{
+			protocol.HashToken("read-a"): {Paths: []string{"/a/**"}, Operations: []string{"read"}},
+			protocol.HashToken("read-b"): {Paths: []string{"/b/**"}, Operations: []string{"read"}},
+		})
+		h := watchHandler(t, newBackend, hub, ts)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		reader, _ := startWatch(ctx, t, h, "WATCH /\n---\nauth: read-a\n---\n")
+		if ack := nextBlock(t, reader); ack.Status != protocol.StatusOK {
+			t.Fatalf("ack status = %q", ack.Status)
+		}
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				case <-time.After(time.Millisecond):
+					hub.Publish(changefeed.Event{Path: "/b/noise.md", Version: 1, Op: protocol.OpPublish})
+				}
+			}
+		}()
+		if beat := nextBlock(t, reader); beat.Status != protocol.StatusOK {
+			t.Fatalf("first block under unreadable events = %+v, want a heartbeat", beat)
+		}
+	})
+}
+
+// An agent value too long for a block is dropped rather than ending the
+// stream, which would replay the event forever.
+func TestWatchDropsAnOversizeAgent(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, newBackend backendFactory) {
+		hub := changefeed.New("w", 0)
+		h := watchHandler(t, newBackend, hub, nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		reader, _ := startWatch(ctx, t, h, "WATCH /\n")
+		if ack := nextBlock(t, reader); ack.Status != protocol.StatusOK {
+			t.Fatalf("ack status = %q", ack.Status)
+		}
+		hub.Publish(changefeed.Event{Path: "/big.md", Version: 1, Op: protocol.OpPublish, Agent: strings.Repeat("a", protocol.MaxWatchBlockLength)})
+		hub.Publish(changefeed.Event{Path: "/next.md", Version: 1, Op: protocol.OpPublish, Agent: "fits"})
+		if ev := nextEvent(t, reader); ev.Path != "/big.md" || ev.Agent != "" {
+			t.Fatalf("oversize event = %+v, want /big.md without agent", ev)
+		}
+		if ev := nextEvent(t, reader); ev.Path != "/next.md" || ev.Agent != "fits" {
+			t.Fatalf("event after it = %+v", ev)
+		}
+	})
+}

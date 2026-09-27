@@ -8,7 +8,7 @@ There is no client library. `client/fetch` is the de facto Go client: internal, 
 
 demarkus-library is MIT ([ADR 0009](0009-license-split-core-agpl-plugins-mit.md)) yet imports AGPL `client/fetch`, `protocol`, `client/mdoutline` and `client/graphstore`, so its binary carries AGPL obligations. Any third-party Go application hits the same wall. WATCH (ADR 0025) is only useful if applications can subscribe from their own code.
 
-An authorship check on 2026-09-25, repeated on 2026-09-27 with `git log --format=%an` per file, shows one author (Fritz Seitz, under two author strings) for every file listed below. The copyright holder can relicense them.
+An authorship check on 2026-09-25, repeated on 2026-09-27 with `git log --format=%an` per file, shows one author (Fritz Seitz, under two author strings) for every file listed below. Git metadata is the inventory, not the proof of rights: the sole author holds the copyright, has accepted no contribution from anyone else and confirms in this ADR that they may relicense these files. A file that gains another author before the move needs that author's written consent or stays in core.
 
 Two questions were open in the plan: MIT or Apache-2.0, and whether the SDK follows the monorepo's 1.0 lockstep version or its own semver.
 
@@ -24,20 +24,22 @@ Two questions were open in the plan: MIT or Apache-2.0, and whether the SDK foll
 
   Moved to the SDK and deleted from core in phase 3:
 
-  - `client/fetch/`: `budget.go`, `budget_test.go`, `cache_test.go`, `classify_test.go`, `conditional_test.go`, `evict_test.go`, `fetch.go`, `list_test.go`, `lookup_context_test.go`, `lookup_match_test.go`, `requests.go`, `write_retry_test.go`
+  - `client/fetch/`: `budget.go`, `budget_test.go`, `cache_test.go`, `classify_test.go`, `conditional_test.go`, `evict_test.go`, `fetch.go`, `list_test.go`, `lookup_context_test.go`, `lookup_match_test.go`, `requests.go`, `stream_error_test.go`, `watch.go`, `watch_test.go`, `write_retry_test.go`
   - `client/listing/`: `listing.go`, `listing_test.go`
   - `client/lookuptable/`: `lookuptable.go`, `lookuptable_test.go`, `parse.go`, `parse_test.go`
   - `client/docwrite/`: `docwrite.go`, `docwrite_test.go`, in part: append version resolution and the look at the head after a lost response move; the merge candidate, which depends on `client/merge`, stays in core
 
   Copied into the SDK under MIT; the core copy stays AGPL for the server:
 
-  - `protocol/`: `protocol.go`, `request.go`, `response.go`, `frontmatter.go`, `frontmatter_test.go`, `request_test.go`, `response_test.go`, `fuzz_test.go`, `metadata_test.go`, `reserved_test.go`, `hashpath_test.go`
+  - `protocol/`: `protocol.go`, `request.go`, `response.go`, `frontmatter.go`, `watch.go`, `frontmatter_test.go`, `request_test.go`, `response_test.go`, `watch_test.go`, `fuzz_test.go`, `metadata_test.go`, `reserved_test.go`, `hashpath_test.go`
+
+  `protocol/watch.go` carries both directions of the WATCH block codec; the SDK copy keeps the decoder and the cursor type, the core copy keeps the encoder the server writes with. The WATCH wire forms pinned in `protocol/watch_test.go` become CC0 fixtures beside the existing goldens, so both codecs are tested against the same blocks.
 
   Relicensed to CC0-1.0 as fixtures:
 
   - `protocol/wiretest/testdata/*.golden`
 
-  About 4,400 lines including tests.
+  About 6,000 lines including tests.
 
 ## Consequences
 

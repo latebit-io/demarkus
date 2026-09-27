@@ -149,3 +149,28 @@ func TestPollReportsPeerWrites(t *testing.T) {
 		t.Fatalf("a's hint for c's write = %+v", ev)
 	}
 }
+
+// A poll that took its snapshot before a local commit must not announce the
+// path's older state after the commit's own hint.
+func TestStaleSnapshotDoesNotRepeatALocalWrite(t *testing.T) {
+	objects := initializedMemory(t)
+	ctx := context.Background()
+	a := openReplica(t, objects, "a")
+	if _, err := a.store.Publish(ctx, backend.WriteRequest{Path: "/docs/one.md", ExpectedVersion: -1, Content: []byte("# One\n")}); err != nil {
+		t.Fatal(err)
+	}
+	a.next(t)
+	before := a.store.snapshot.Load()
+	if _, err := a.store.Publish(ctx, backend.WriteRequest{Path: "/docs/one.md", ExpectedVersion: 1, Content: []byte("# Two\n")}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := a.next(t); ev.Version != 2 {
+		t.Fatalf("local hint = %+v", ev)
+	}
+	a.store.report(before)
+	a.quiet(t)
+	if err := a.store.Poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a.quiet(t)
+}

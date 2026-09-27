@@ -35,6 +35,7 @@ type candidateMutation struct {
 type mutationResult struct {
 	Document *storefmt.Document
 	Changed  bool
+	Sequence int64 // head sequence of the commit, once it succeeded
 }
 
 type mutationBuilder func(context.Context, *readView, string) (*candidateMutation, mutationResult, error)
@@ -43,7 +44,7 @@ type mutationBuilder func(context.Context, *readView, string) (*candidateMutatio
 func (store *Store) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
 	result, err := store.publish(ctx, req)
 	if err == nil {
-		store.reportLocal(protocol.OpPublish, req.Path, result.Document.Metadata["agent"])
+		store.reportLocal(protocol.OpPublish, req.Path, result)
 	}
 	return result.Document, err
 }
@@ -103,7 +104,7 @@ func (store *Store) checkDocumentQuota(view *readView) error {
 func (store *Store) Append(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
 	result, err := store.appendVersion(ctx, req)
 	if err == nil {
-		store.reportLocal(protocol.OpAppend, req.Path, result.Document.Metadata["agent"])
+		store.reportLocal(protocol.OpAppend, req.Path, result)
 	}
 	return result.Document, err
 }
@@ -171,9 +172,9 @@ func (store *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest)
 		if req.Archived {
 			op = protocol.OpArchive
 		}
-		store.reportLocal(op, req.Path, result.Document.Metadata["agent"])
+		store.reportLocal(op, req.Path, result)
 	}
-	return backend.ArchiveResult(result), err
+	return backend.ArchiveResult{Document: result.Document, Changed: result.Changed}, err
 }
 
 func canonicalMutationPath(path string) (string, error) {

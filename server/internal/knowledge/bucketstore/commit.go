@@ -63,6 +63,7 @@ func (store *Store) runMutation(ctx context.Context, build mutationBuilder) (mut
 			return result, fmt.Errorf("operation %s commit: %w", operationID, err)
 		}
 		if outcome == commitSucceeded {
+			candidate.result.Sequence = candidate.head.Sequence
 			return candidate.result, nil
 		}
 		if attempt == maximumMutationAttempts-1 {

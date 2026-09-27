@@ -192,7 +192,7 @@ func (w *Watch) subscribe(ctx context.Context, since protocol.Cursor) (*watchStr
 		c.release(conn)
 		return nil, err
 	}
-	if err := w.accept(first); err != nil {
+	if err := w.accept(ctx, first); err != nil {
 		ws.close(c)
 		return nil, err
 	}
@@ -239,7 +239,7 @@ func (w *Watch) subscribeOn(ctx context.Context, conn *quic.Conn, since protocol
 
 // accept applies the first block: ok continues, resync is surfaced and
 // reported as errResyncFirst, anything else refuses the watch.
-func (w *Watch) accept(first protocol.WatchBlock) error {
+func (w *Watch) accept(ctx context.Context, first protocol.WatchBlock) error {
 	switch first.Status {
 	case protocol.StatusOK:
 		cursor, err := first.Cursor()
@@ -254,8 +254,14 @@ func (w *Watch) accept(first protocol.WatchBlock) error {
 			return fmt.Errorf("resync: %w", err)
 		}
 		w.setCursor(cursor)
-		w.notices <- Notice{Resync: true, Cursor: cursor}
-		return errResyncFirst
+		// The queue may be full on a reopen; a plain send would park run
+		// and hang Close.
+		select {
+		case w.notices <- Notice{Resync: true, Cursor: cursor}:
+			return errResyncFirst
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	default:
 		return &StatusError{Status: first.Status, Message: first.Metadata["message"]}
 	}
@@ -288,8 +294,7 @@ func (w *Watch) run(ctx context.Context, stream *watchStream) {
 				backoff = 100 * time.Millisecond
 				break
 			}
-			var refused *StatusError
-			if errors.As(openErr, &refused) || ctx.Err() != nil {
+			if ctx.Err() != nil || !reopenable(openErr) {
 				w.finish(openErr)
 				return
 			}
@@ -300,6 +305,16 @@ func (w *Watch) run(ctx context.Context, stream *watchStream) {
 			backoff = min(backoff*2, 5*time.Second)
 		}
 	}
+}
+
+// reopenable is whether a failed reopen is worth another try: a refusal is
+// final unless it is a retry-later status (SPEC §7).
+func reopenable(err error) bool {
+	var refused *StatusError
+	if !errors.As(err, &refused) {
+		return true
+	}
+	return refused.Status == protocol.StatusRateLimited || refused.Status == protocol.StatusServerError
 }
 
 // pump delivers one stream's blocks. It returns a non nil reopen delay when

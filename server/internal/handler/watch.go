@@ -84,8 +84,11 @@ func (h *Handler) serveWatch(ctx context.Context, call *watchCall) {
 // heartbeat rechecks the scope, so a revoked token ends an idle watch too.
 func (h *Handler) pumpWatch(ctx context.Context, call *watchCall) {
 	sub, scope, token := call.sub, call.scope, call.token()
+	// The heartbeat is due a fixed time after the last block written, not
+	// after the last event seen: omitted events must not silence it.
+	nextBeat := time.Now().Add(h.heartbeat)
 	for {
-		waitCtx, cancel := context.WithTimeout(ctx, h.heartbeat)
+		waitCtx, cancel := context.WithDeadline(ctx, nextBeat)
 		ev, err := sub.Next(waitCtx)
 		cancel()
 		switch {
@@ -93,17 +96,14 @@ func (h *Handler) pumpWatch(ctx context.Context, call *watchCall) {
 			if h.tokenStore().AuthorizeRead(token, ev.Path) != nil {
 				continue
 			}
-			event := protocol.WatchEvent{
-				Cursor:  protocol.Cursor{Epoch: h.changes.Epoch(), Seq: ev.Seq},
-				Path:    ev.Path,
-				Version: ev.Version,
-				Hash:    ev.Hash,
-				Op:      ev.Op,
-				Agent:   ev.Agent,
+			block, ok := h.eventBlock(scope, ev)
+			if !ok {
+				continue
 			}
-			if !h.writeBlock(call, event.Block()) {
+			if !h.writeBlock(call, block) {
 				return
 			}
+			nextBeat = time.Now().Add(h.heartbeat)
 		case ctx.Err() != nil:
 			h.logger.Debug("watch ended", "path", sanitize(scope), "error", ctx.Err())
 			return
@@ -120,6 +120,7 @@ func (h *Handler) pumpWatch(ctx context.Context, call *watchCall) {
 			if !h.writeBlock(call, protocol.WatchControl(protocol.StatusOK, sub.Cursor())) {
 				return
 			}
+			nextBeat = time.Now().Add(h.heartbeat)
 		case errors.Is(err, changefeed.ErrResync):
 			h.logger.Info("watch resync", "path", sanitize(scope), "error", err)
 			h.writeBlock(call, protocol.WatchControl(protocol.StatusResync, h.changes.Head()))
@@ -132,6 +133,29 @@ func (h *Handler) pumpWatch(ctx context.Context, call *watchCall) {
 			return
 		}
 	}
+}
+
+// eventBlock encodes ev, dropping the publisher-supplied agent when it
+// alone breaks the block limit; false skips an event that still cannot be
+// encoded, since replaying it would only end the stream again.
+func (h *Handler) eventBlock(scope string, ev changefeed.Event) (protocol.WatchBlock, bool) {
+	event := protocol.WatchEvent{
+		Cursor:  protocol.Cursor{Epoch: h.changes.Epoch(), Seq: ev.Seq},
+		Path:    ev.Path,
+		Version: ev.Version,
+		Hash:    ev.Hash,
+		Op:      ev.Op,
+		Agent:   ev.Agent,
+	}
+	if _, err := event.Block().WriteTo(io.Discard); err == nil {
+		return event.Block(), true
+	}
+	event.Agent = ""
+	if _, err := event.Block().WriteTo(io.Discard); err != nil {
+		h.logger.Warn("watch event skipped", "path", sanitize(scope), "event", sanitize(ev.Path), "error", err)
+		return protocol.WatchBlock{}, false
+	}
+	return event.Block(), true
 }
 
 // writeBlock writes one block under the write timeout; false means the peer

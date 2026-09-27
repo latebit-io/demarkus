@@ -61,11 +61,12 @@ type Store struct {
 	now            func() time.Time
 	newOperationID func() (string, error)
 
-	changes     *changefeed.Hub
-	seenMu      sync.Mutex
-	seen        map[string]pathState
-	reportedSeq int64
-	baselined   bool
+	changes        *changefeed.Hub
+	seenMu         sync.Mutex
+	seen           map[string]pathState
+	reportedShards [shardCount]shardRef
+	reportedSeq    int64
+	baselined      bool
 }
 
 var (
@@ -170,7 +171,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	}
 	store.snapshot.Store(loaded)
 	store.refreshMu.Unlock()
-	store.report(loaded, nil)
+	store.report(loaded)
 	return store, nil
 }
 
