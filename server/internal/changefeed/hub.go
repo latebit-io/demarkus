@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"sort"
 	"strings"
 	"sync"
 
@@ -37,18 +36,15 @@ type Event struct {
 }
 
 // Hub holds a world's recent events and wakes subscribers on each publish.
+// Seq doubles as the ring position, so the ring holds the last len(buf) seqs.
 type Hub struct {
 	epoch string
 
 	mu      sync.Mutex
 	buf     []Event
-	written int // events appended since the hub was made
 	lastSeq uint64
-	// lastDropped is the Seq of the newest event the ring overwrote; a cursor
-	// below it may be missing events and gets resync.
-	lastDropped uint64
-	notify      chan struct{}
-	closed      bool
+	notify  chan struct{}
+	closed  bool
 }
 
 // New makes a hub. An empty epoch gets a random one, which is right for a
@@ -95,32 +91,21 @@ func (h *Hub) Publish(ev Event) protocol.Cursor {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	ev.Seq = h.lastSeq + 1
-	h.append(ev)
-	return h.cursor(ev.Seq)
-}
-
-// PublishAt appends ev under its own Seq, which must exceed the last one; a
-// replica feeding events from a shared sequence uses it.
-func (h *Hub) PublishAt(ev Event) (protocol.Cursor, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if ev.Seq <= h.lastSeq {
-		return protocol.Cursor{}, errors.New("changefeed: sequence must increase")
-	}
-	h.append(ev)
-	return h.cursor(ev.Seq), nil
-}
-
-func (h *Hub) append(ev Event) {
-	n := len(h.buf)
-	if h.written >= n {
-		h.lastDropped = h.buf[h.written%n].Seq
-	}
-	h.buf[h.written%n] = ev
-	h.written++
+	h.buf[h.slot(ev.Seq)] = ev
 	h.lastSeq = ev.Seq
 	close(h.notify)
 	h.notify = make(chan struct{})
+	return h.cursor(ev.Seq)
+}
+
+func (h *Hub) slot(seq uint64) uint64 { return seq % uint64(len(h.buf)) }
+
+// oldest is the Seq of the oldest event still in the ring.
+func (h *Hub) oldest() uint64 {
+	if n := uint64(len(h.buf)); h.lastSeq > n {
+		return h.lastSeq - n + 1
+	}
+	return 1
 }
 
 // Close ends every subscriber with ErrClosed. Later publishes still append,
@@ -138,10 +123,9 @@ func (h *Hub) Close() {
 
 // Subscription reads one scope's events from the hub in order.
 type Subscription struct {
-	hub    *Hub
-	scope  string
-	pos    int // ring position of the next event to read
-	cursor protocol.Cursor
+	hub   *Hub
+	scope string
+	next  uint64 // Seq of the next event to read
 }
 
 // Subscribe starts a subscription over scope ("/" for everything, a prefix
@@ -150,36 +134,21 @@ type Subscription struct {
 func (h *Hub) Subscribe(scope string, since protocol.Cursor) (*Subscription, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	s := &Subscription{hub: h, scope: scope}
 	if since.IsZero() {
-		s.pos = h.written
-		s.cursor = h.cursor(h.lastSeq)
-		return s, nil
+		return &Subscription{hub: h, scope: scope, next: h.lastSeq + 1}, nil
 	}
-	if since.Epoch != h.epoch || since.Seq > h.lastSeq || since.Seq < h.lastDropped {
+	if since.Epoch != h.epoch || since.Seq > h.lastSeq || since.Seq+1 < h.oldest() {
 		return nil, ErrResync
 	}
-	oldest := h.oldestPos()
-	// Retained events are sorted by Seq; find the first one after since.
-	i := sort.Search(h.written-oldest, func(i int) bool {
-		return h.buf[(oldest+i)%len(h.buf)].Seq > since.Seq
-	})
-	s.pos = oldest + i
-	s.cursor = since
-	return s, nil
+	return &Subscription{hub: h, scope: scope, next: since.Seq + 1}, nil
 }
 
-// oldestPos is the ring position of the oldest retained event.
-func (h *Hub) oldestPos() int {
-	if n := len(h.buf); h.written > n {
-		return h.written - n
-	}
-	return 0
-}
+// Scope is what the subscription was opened over.
+func (s *Subscription) Scope() string { return s.scope }
 
 // Cursor is the position to resume from: the last event consumed, matching
 // or not, so a resume replays as little as possible.
-func (s *Subscription) Cursor() protocol.Cursor { return s.cursor }
+func (s *Subscription) Cursor() protocol.Cursor { return s.hub.cursor(s.next - 1) }
 
 // Next returns the next event in scope, waiting for one. It returns
 // ErrResync once the ring has overwritten unread events, ErrClosed after
@@ -188,14 +157,13 @@ func (s *Subscription) Next(ctx context.Context) (Event, error) {
 	h := s.hub
 	for {
 		h.mu.Lock()
-		if s.pos < h.oldestPos() {
+		if s.next < h.oldest() {
 			h.mu.Unlock()
 			return Event{}, ErrResync
 		}
-		for s.pos < h.written {
-			ev := h.buf[s.pos%len(h.buf)]
-			s.pos++
-			s.cursor = h.cursor(ev.Seq)
+		for s.next <= h.lastSeq {
+			ev := h.buf[h.slot(s.next)]
+			s.next++
 			if inScope(s.scope, ev.Path) {
 				h.mu.Unlock()
 				return ev, nil

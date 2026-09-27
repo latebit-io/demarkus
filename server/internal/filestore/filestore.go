@@ -5,10 +5,12 @@ import (
 	"context"
 	"sync"
 
+	"github.com/latebit-io/demarkus/protocol"
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
 // Store keeps file data, hash state, and catalog state behind one lock.
@@ -16,13 +18,22 @@ type Store struct {
 	mu        sync.RWMutex
 	documents *protocolstore.Store
 	catalog   *catalog.Catalog
+	changes   *changefeed.Hub
 }
 
 var _ backend.Store = (*Store)(nil)
 
-// New wraps one file store and its derived catalog.
-func New(documents *protocolstore.Store, lookup *catalog.Catalog) *Store {
-	return &Store{documents: documents, catalog: lookup}
+// New wraps one file store and its derived catalog. changes, if not nil,
+// gets a hint for every commit under the write lock, so hints follow
+// commit order.
+func New(documents *protocolstore.Store, lookup *catalog.Catalog, changes *changefeed.Hub) *Store {
+	return &Store{documents: documents, catalog: lookup, changes: changes}
+}
+
+func (s *Store) hint(path string, doc *storefmt.Document, op string) {
+	if s.changes != nil {
+		s.changes.Publish(changefeed.DocumentEvent(path, doc, op))
+	}
 }
 
 // call runs one store operation unless ctx is already done, and reports a
@@ -57,6 +68,7 @@ func (s *Store) Publish(ctx context.Context, req backend.WriteRequest) (*storefm
 		document, err := s.documents.WriteChecked(s.writeSpec(ctx, &req))
 		if err == nil {
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
+			s.hint(req.Path, document, protocol.OpPublish)
 		}
 		return document, err
 	})
@@ -70,6 +82,7 @@ func (s *Store) Append(ctx context.Context, req backend.WriteRequest) (*storefmt
 		document, err := s.documents.AppendChecked(s.writeSpec(ctx, &req))
 		if err == nil {
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
+			s.hint(req.Path, document, protocol.OpAppend)
 		}
 		return document, err
 	})
@@ -94,6 +107,9 @@ func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (ba
 			s.catalog.Remove(req.Path)
 		default:
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
+		}
+		if changed && err == nil {
+			s.hint(req.Path, document, changefeed.ArchiveOp(req.Archived))
 		}
 		return backend.ArchiveResult{Document: document, Changed: changed}, err
 	})

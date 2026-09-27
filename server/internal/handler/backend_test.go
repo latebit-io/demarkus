@@ -10,24 +10,26 @@ import (
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 )
 
 // backend is one DocumentStore, wired as main.go does. Tamper overwrites one version's stored bytes behind the store's back so
 // chain verification can be proven on every backend.
 type backend struct {
-	Store  DocumentStore
-	Tamper func(t testing.TB, path string, version int, stored []byte)
+	Store   DocumentStore
+	Changes *changefeed.Hub // fed by the store's commits
+	Tamper  func(t testing.TB, path string, version int, stored []byte)
 }
 
 // backendFactory returns a fresh, empty backend.
 type backendFactory func(t testing.TB) backend
 
 // fileBackend is the file store over a temp root with the in-memory catalog.
-func fileBackend(t testing.TB) backend { return fileBackendAt(t.TempDir()) }
+func fileBackend(t testing.TB) backend { return fileBackendAt(t.TempDir(), changefeed.New("w", 0)) }
 
 // fileBackendAt roots the file store at dir, for tests that touch the disk.
-func fileBackendAt(dir string) backend {
+func fileBackendAt(dir string, changes *changefeed.Hub) backend {
 	s := store.New(dir)
 	tamper := func(t testing.TB, path string, version int, stored []byte) {
 		t.Helper()
@@ -39,7 +41,7 @@ func fileBackendAt(dir string) backend {
 			t.Fatalf("tamper %s v%d: %v", path, version, err)
 		}
 	}
-	return backend{Store: filestore.New(s, catalog.New()), Tamper: tamper}
+	return backend{Store: filestore.New(s, catalog.New(), changes), Changes: changes, Tamper: tamper}
 }
 
 // forEachBackend runs fn per backend; only the file store remains, and the

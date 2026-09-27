@@ -23,12 +23,8 @@ import (
 
 const maxRateWaitBudget = 10 * time.Second
 
-// Watch limits when the config leaves them zero. The per connection cap
-// stays under a server's stream limit so requests still get streams.
-const (
-	defaultMaxWatches        = 1024
-	defaultMaxWatchesPerConn = 4
-)
+// defaultMaxWatches caps a world's open watches when the config leaves it zero.
+const defaultMaxWatches = 1024
 
 // Config defines one runtime and transfers backend ownership on success.
 type Config struct {
@@ -51,10 +47,12 @@ type Config struct {
 	// Changes serves WATCH and is closed with the runtime; nil leaves the
 	// verb unsupported.
 	Changes *changefeed.Hub
-	// MaxWatches caps open watches per world, MaxWatchesPerConn per
-	// connection; zero takes the defaults.
+	// MaxWatches caps open watches per world; zero takes the default.
+	// MaxWatchesPerConn caps them per connection; zero leaves half of
+	// MaxStreams, the connection's stream limit, to requests.
 	MaxWatches        int
 	MaxWatchesPerConn int
+	MaxStreams        int
 }
 
 // Runtime serves one world's streams with isolated auth and rate state.
@@ -134,7 +132,7 @@ func New(config *Config) (*Runtime, error) {
 		runtime.watchLimit = defaultMaxWatches
 	}
 	if runtime.watchPerConn == 0 {
-		runtime.watchPerConn = defaultMaxWatchesPerConn
+		runtime.watchPerConn = max(1, config.MaxStreams/2)
 	}
 	runtime.handler, err = handler.New(handler.Config{
 		Store:         config.Store,
@@ -196,21 +194,13 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 		}
 	}()
 
-	releaseSlot := func() {}
-	if r.concurrent != nil {
-		if !r.acquire(ctx, remote, stream, logger) {
-			return
-		}
-		var once sync.Once
-		releaseSlot = func() { once.Do(func() { <-r.concurrent }) }
-		defer releaseSlot()
+	if r.concurrent != nil && !r.acquire(ctx, remote, stream, logger) {
+		return
 	}
+	held := slot{ch: r.concurrent}
+	defer held.release()
 	if r.limiter != nil {
-		budget := r.requestTimeout
-		if budget <= 0 {
-			budget = maxRateWaitBudget
-		}
-		waitCtx, cancel := context.WithTimeout(ctx, budget)
+		waitCtx, cancel := context.WithTimeout(ctx, r.budget())
 		err := r.limiter.Wait(waitCtx, ratelimit.ExtractIP(remote))
 		cancel()
 		if err != nil {
@@ -245,22 +235,46 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 		return
 	}
 	if req.Verb == protocol.VerbWatch && r.changes != nil {
+		// A watch is admitted under its own caps, not the request slots, and
+		// lives as long as the connection; each block write is bounded on its own.
+		held.release()
 		if !r.admitWatch(ctx, remote, stream, logger) {
 			return
 		}
 		defer r.releaseWatch(ctx)
-		// A watch lives as long as the connection, not the request deadline;
-		// each block write is bounded on its own and the slot is released
-		// once the stream is subscribed.
-		h.Serve(ctx, stream, req, handler.WatchOptions{Subscribed: releaseSlot, WriteTimeout: r.writeBudget()})
+		h.Serve(ctx, boundedWriter{stream: stream, budget: r.budget()}, req)
 		return
 	}
-	h.Serve(requestCtx, stream, req, handler.WatchOptions{})
+	h.Serve(requestCtx, stream, req)
 }
 
-// writeBudget bounds one write so a peer that stops reading cannot hold a
-// stream open.
-func (r *Runtime) writeBudget() time.Duration {
+// slot is one concurrency slot, released at most once; a nil channel is no
+// limit.
+type slot struct{ ch chan struct{} }
+
+func (s *slot) release() {
+	if s.ch != nil {
+		<-s.ch
+		s.ch = nil
+	}
+}
+
+// boundedWriter gives every write its own deadline.
+type boundedWriter struct {
+	stream quicserve.Stream
+	budget time.Duration
+}
+
+func (w boundedWriter) Write(p []byte) (int, error) {
+	if err := w.stream.SetWriteDeadline(time.Now().Add(w.budget)); err != nil {
+		return 0, fmt.Errorf("set write deadline: %w", err)
+	}
+	return w.stream.Write(p)
+}
+
+// budget bounds one wait or write: the request timeout, or a fixed one when
+// requests are unbounded, so a peer that stops reading cannot hold a stream.
+func (r *Runtime) budget() time.Duration {
 	if r.requestTimeout > 0 {
 		return r.requestTimeout
 	}
@@ -312,11 +326,7 @@ func (r *Runtime) Watches() int {
 }
 
 func (r *Runtime) acquire(ctx context.Context, remote net.Addr, stream quicserve.Stream, logger *slog.Logger) bool {
-	budget := r.requestTimeout
-	if budget <= 0 {
-		budget = maxRateWaitBudget
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, budget)
+	waitCtx, cancel := context.WithTimeout(ctx, r.budget())
 	defer cancel()
 	select {
 	case r.concurrent <- struct{}{}:
@@ -406,11 +416,7 @@ func (r *Runtime) Close() error {
 // writeRateLimited refuses before the request deadlines exist, so it bounds
 // its own write: a peer that stops reading must not hold the stream open.
 func (r *Runtime) writeRateLimited(stream quicserve.Stream) error {
-	budget := r.requestTimeout
-	if budget <= 0 {
-		budget = maxRateWaitBudget
-	}
-	if err := stream.SetWriteDeadline(time.Now().Add(budget)); err != nil {
+	if err := stream.SetWriteDeadline(time.Now().Add(r.budget())); err != nil {
 		return fmt.Errorf("set write deadline: %w", err)
 	}
 	_, err := protocol.Response{Status: protocol.StatusRateLimited}.WriteTo(stream)

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -57,27 +56,20 @@ func watchMain(ctx context.Context, args []string) {
 	}
 	defer watch.Close()
 
-	out := bufio.NewWriter(os.Stdout)
 	for {
 		notice, err := watch.Next(ctx)
 		if err != nil {
-			if flushErr := out.Flush(); flushErr != nil {
-				log.Print(flushErr)
-			}
 			if errors.Is(err, context.Canceled) {
 				return
 			}
 			log.Fatal(err)
 		}
-		line := notice.Cursor.String() + "\tresync\t\t\t\t"
+		e := notice.Event
+		line := e.Cursor.String() + "\tresync\t\t\t\t"
 		if !notice.Resync {
-			e := notice.Event
 			line = fmt.Sprintf("%s\t%s\t%s\t%d\t%s\t%s", e.Cursor, e.Op, e.Path, e.Version, e.Hash, e.Agent)
 		}
-		if _, err := out.WriteString(line + "\n"); err != nil {
-			log.Fatal(err)
-		}
-		if err := out.Flush(); err != nil {
+		if _, err := fmt.Fprintln(os.Stdout, line); err != nil {
 			log.Fatal(err)
 		}
 	}

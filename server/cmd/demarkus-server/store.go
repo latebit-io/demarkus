@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/store"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/config"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/handler"
@@ -17,17 +18,20 @@ import (
 type backend struct {
 	Store handler.DocumentStore
 	Close func() error
+	// Changes is the hub the store's commits feed. Its epoch is per process:
+	// a local store keeps no sequence, so a restart tells watchers to resync.
+	Changes *changefeed.Hub
 }
 
 // storeOpeners holds one opener per compiled-in backend, keyed by the value
 // of -store. Every backend registers the same way, so a build carries only
 // the backends compiled into it.
-var storeOpeners = map[string]func(*config.Config, *slog.Logger) (backend, error){}
+var storeOpeners = map[string]func(*config.Config, *changefeed.Hub, *slog.Logger) (backend, error){}
 
 func init() { registerStore("file", openFileStore) }
 
 // registerStore adds a backend. Called from init().
-func registerStore(name string, open func(*config.Config, *slog.Logger) (backend, error)) {
+func registerStore(name string, open func(*config.Config, *changefeed.Hub, *slog.Logger) (backend, error)) {
 	storeOpeners[name] = open
 }
 
@@ -49,11 +53,11 @@ func openStore(cfg *config.Config, logger *slog.Logger) (backend, error) {
 		return backend{}, fmt.Errorf("store backend %q is not available in this build (have: %s)",
 			cfg.StoreBackend, strings.Join(storeNames(), ", "))
 	}
-	return open(cfg, logger)
+	return open(cfg, changefeed.New("", 0), logger)
 }
 
 // openFileStore serves documents from versioned files under the content dir.
-func openFileStore(cfg *config.Config, logger *slog.Logger) (backend, error) {
+func openFileStore(cfg *config.Config, changes *changefeed.Hub, logger *slog.Logger) (backend, error) {
 	// Open migrates any legacy-layout version files; serving an unmigrated
 	// root would hide every legacy document, so failure is fatal.
 	s, err := store.Open(cfg.ContentDir)
@@ -66,5 +70,5 @@ func openFileStore(cfg *config.Config, logger *slog.Logger) (backend, error) {
 		return backend{}, fmt.Errorf("hash index build failed: %w", err)
 	}
 	logger.Info("content hash index built", "entries", s.HashIndexSize())
-	return backend{Store: filestore.New(s, buildCatalog(s, logger))}, nil
+	return backend{Store: filestore.New(s, buildCatalog(s, logger), changes), Changes: changes}, nil
 }

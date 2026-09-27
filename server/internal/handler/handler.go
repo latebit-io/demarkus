@@ -126,7 +126,7 @@ func (h *Handler) HandleStream(ctx context.Context, stream Stream) {
 	if !ok {
 		return
 	}
-	h.Serve(ctx, stream, req, WatchOptions{})
+	h.Serve(ctx, stream, req)
 }
 
 // ReadRequest parses the request on stream and answers a malformed one
@@ -141,8 +141,8 @@ func (h *Handler) ReadRequest(stream io.ReadWriter) (req protocol.Request, ok bo
 }
 
 // Serve answers one parsed request on stream. ctx bounds every store call;
-// for WATCH it bounds the stream's life and watch says how it is managed.
-func (h *Handler) Serve(ctx context.Context, stream io.Writer, req protocol.Request, watch WatchOptions) {
+// for WATCH it bounds the stream's life.
+func (h *Handler) Serve(ctx context.Context, stream io.Writer, req protocol.Request) {
 	// Reject path traversal attempts before any handler logic (including auth)
 	// to prevent scope bypass via paths like /allowed/../secret.md.
 	if storefmt.ContainsDotDot(req.Path) {
@@ -150,19 +150,13 @@ func (h *Handler) Serve(ctx context.Context, stream io.Writer, req protocol.Requ
 		h.writeError(stream, protocol.StatusNotFound, req.Path+" not found")
 		return
 	}
-	prefix := strings.HasSuffix(req.Path, "/")
-	req.Path = storefmt.CanonicalPath(req.Path)
-
 	if req.Verb == protocol.VerbWatch {
-		scope := req.Path
-		if prefix && scope != "/" {
-			scope += "/"
-		}
 		// Not pinned to one token store: a watch outlives reloads and
 		// rechecks every event against the current one.
-		h.serveWatch(ctx, &watchCall{w: stream, req: req, scope: scope, opts: watch})
+		h.serveWatch(ctx, stream, req)
 		return
 	}
+	req.Path = storefmt.CanonicalPath(req.Path)
 
 	// Token reloads take effect between requests, never midway through one.
 	pinned := *h
@@ -244,8 +238,7 @@ func (h *Handler) serveWrite(ctx context.Context, w io.Writer, req protocol.Requ
 		h.writeError(w, protocol.StatusNotPermitted, "server is read-only")
 		return
 	}
-	if _, ok := protocol.IsHashPath(req.Path); ok {
-		h.writeError(w, protocol.StatusBadRequest, "paths matching /sha256-<hash> are reserved")
+	if h.refuseHashPath(w, req.Path) {
 		return
 	}
 	if int64(len(req.Body)) > protocol.MaxBodyLength {
@@ -384,27 +377,40 @@ func (h *Handler) authorizeRead(w io.Writer, req protocol.Request) bool {
 	return true
 }
 
-// writeAuthDenied answers a failed authorization: a missing, unknown or
-// expired token is unauthorized, anything else is not permitted.
+// writeAuthDenied answers a failed authorization.
 func (h *Handler) writeAuthDenied(w io.Writer, req protocol.Request, err error) {
-	if auth.IsUnauthenticated(err) {
-		h.logger.Warn("unauthorized", "operation", req.Verb, "path", sanitize(req.Path))
-		h.writeError(w, protocol.StatusUnauthorized, "authentication required")
+	status := authStatus(err)
+	h.logger.Warn(status, "operation", req.Verb, "path", sanitize(req.Path))
+	if status == protocol.StatusUnauthorized {
+		h.writeError(w, status, "authentication required")
 		return
 	}
-	h.logger.Warn("not permitted", "operation", req.Verb, "path", sanitize(req.Path))
-	h.writeError(w, protocol.StatusNotPermitted, "insufficient permissions")
+	h.writeError(w, status, "insufficient permissions")
+}
+
+// authStatus maps an auth verdict to its status: a missing, unknown or
+// expired token is unauthorized, anything else is not permitted.
+func authStatus(err error) string {
+	if auth.IsUnauthenticated(err) {
+		return protocol.StatusUnauthorized
+	}
+	return protocol.StatusNotPermitted
 }
 
 // checkReadAuth decides a read without writing a response: nil when allowed,
 // otherwise the auth verdict.
 func (h *Handler) checkReadAuth(reqPath, token string) error {
-	directoryPath := strings.HasSuffix(reqPath, "/")
-	reqPath = storefmt.CanonicalPath(reqPath)
-	if directoryPath && reqPath != "/" {
-		reqPath += "/"
+	return h.tokenStore().AuthorizeRead(token, scopePath(reqPath))
+}
+
+// scopePath is the canonical path with a trailing slash kept: "/" or a
+// prefix ending in "/" names a subtree, anything else one document.
+func scopePath(reqPath string) string {
+	scope := storefmt.CanonicalPath(reqPath)
+	if strings.HasSuffix(reqPath, "/") && scope != "/" {
+		scope += "/"
 	}
-	return h.tokenStore().AuthorizeRead(token, reqPath)
+	return scope
 }
 
 func (h *Handler) handleFetch(ctx context.Context, call *readCall) {

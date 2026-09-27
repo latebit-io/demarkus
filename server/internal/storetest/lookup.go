@@ -229,7 +229,7 @@ func testLookupMaxCap(t *testing.T, b LookupBackend) {
 // reference backend every other one is compared against.
 func FileBackend(t testing.TB) LookupBackend {
 	documents := store.New(t.TempDir())
-	return LookupBackend{Store: filestore.New(documents, catalog.New())}
+	return LookupBackend{Store: filestore.New(documents, catalog.New(), nil)}
 }
 
 // The *Into helpers name the handler's write paths; both suites share them.

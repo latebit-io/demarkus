@@ -270,6 +270,20 @@ func (s *Server) stopError() error {
 	return s.stopErr
 }
 
+// ShutdownAfter runs drain, which must end every long-lived stream, then
+// Shutdown under timeout, logging the outcome: a drain that waits on open
+// watches would never end.
+func (s *Server) ShutdownAfter(drain func(), timeout time.Duration) {
+	drain()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		s.logger.Warn("quicserve: shutdown incomplete", "error", err)
+		return
+	}
+	s.logger.Info("quicserve: all connections drained")
+}
+
 // Shutdown stops acceptance and waits for accepted stream handlers to drain.
 func (s *Server) Shutdown(ctx context.Context) error {
 	stopErr := s.stop()

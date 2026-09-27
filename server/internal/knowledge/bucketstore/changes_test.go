@@ -2,6 +2,8 @@ package bucketstore
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -171,6 +173,34 @@ func TestStaleSnapshotDoesNotRepeatALocalWrite(t *testing.T) {
 	a.quiet(t)
 	if err := a.store.Poll(ctx); err != nil {
 		t.Fatal(err)
+	}
+	a.quiet(t)
+}
+
+// Hints leave in commit order even when writers race, since each is
+// published before the commit token goes back.
+func TestLocalHintsFollowCommitOrder(t *testing.T) {
+	objects := initializedMemory(t)
+	ctx := context.Background()
+	a := openReplica(t, objects, "a")
+	const writers, each = 8, 5
+	var wg sync.WaitGroup
+	for w := range writers {
+		wg.Go(func() {
+			for i := range each {
+				body := fmt.Appendf(nil, "# writer %d, write %d\n", w, i)
+				if _, err := a.store.Publish(ctx, backend.WriteRequest{Path: "/docs/race.md", ExpectedVersion: -1, Content: body}); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	for want := 1; want <= writers*each; want++ {
+		if ev := a.next(t); ev.Version != want || ev.Op != protocol.OpPublish {
+			t.Fatalf("hint %d = %+v", want, ev)
+		}
 	}
 	a.quiet(t)
 }

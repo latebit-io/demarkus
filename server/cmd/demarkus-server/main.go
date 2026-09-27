@@ -17,7 +17,6 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
-	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/config"
 	"github.com/latebit-io/demarkus/server/internal/logging"
 	"github.com/latebit-io/demarkus/server/internal/quicserve"
@@ -68,36 +67,21 @@ func logPartialWalk(logger *slog.Logger, what string, err error) bool {
 	return true
 }
 
-// gracefulShutdown ends watches with closing, then drains the listener;
-// without the first step the drain would wait on every open watch.
-func gracefulShutdown(server *quicserve.Server, runtime *worldruntime.Runtime, logger *slog.Logger) {
-	runtime.Drain()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Warn("server shutdown incomplete", "error", err)
-		return
-	}
-	logger.Info("all connections drained")
-}
-
-// runtimeConfig wires the store into the one world runtime with its change
-// hub. The hub's epoch is per process: a local store keeps no sequence, so a
-// restart tells every watcher to resync.
+// runtimeConfig wires the store into the one world runtime with the change
+// hub its commits feed.
 func runtimeConfig(cfg *config.Config, b backend, logger *slog.Logger) *worldruntime.Config {
-	changes := changefeed.New("", 0)
 	return &worldruntime.Config{
-		Store:             changefeed.Emit(b.Store, changes),
-		CloseBackend:      b.Close,
-		TokensFile:        cfg.TokensFile,
-		ReadOnly:          cfg.ReadOnly,
-		RequestTimeout:    cfg.RequestTimeout,
-		RateLimit:         cfg.RateLimit,
-		RateBurst:         cfg.RateBurst,
-		Logger:            logger,
-		Changes:           changes,
-		MaxWatches:        cfg.MaxWatches,
-		MaxWatchesPerConn: max(1, cfg.MaxStreams/2), // half the streams stay for requests
+		Store:          b.Store,
+		CloseBackend:   b.Close,
+		TokensFile:     cfg.TokensFile,
+		ReadOnly:       cfg.ReadOnly,
+		RequestTimeout: cfg.RequestTimeout,
+		RateLimit:      cfg.RateLimit,
+		RateBurst:      cfg.RateBurst,
+		Logger:         logger,
+		Changes:        b.Changes,
+		MaxWatches:     cfg.MaxWatches,
+		MaxStreams:     cfg.MaxStreams,
 	}
 }
 
@@ -293,7 +277,7 @@ func run() error {
 	select {
 	case sig := <-sigChan:
 		logger.Info("received signal, initiating graceful shutdown", "signal", sig.String())
-		gracefulShutdown(server, runtime, logger)
+		server.ShutdownAfter(runtime.Drain, 10*time.Second)
 		serveErr = <-serveResult
 	case serveErr = <-serveResult:
 		if !errors.Is(serveErr, quicserve.ErrServerClosed) {

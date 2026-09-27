@@ -16,6 +16,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
 type candidateMutation struct {
@@ -35,7 +36,9 @@ type candidateMutation struct {
 type mutationResult struct {
 	Document *storefmt.Document
 	Changed  bool
-	Sequence int64 // head sequence of the commit, once it succeeded
+	// What the change hint reports: set by the builder, Sequence by the commit.
+	Path, Op, BodyHash string
+	Sequence           int64
 }
 
 type mutationBuilder func(context.Context, *readView, string) (*candidateMutation, mutationResult, error)
@@ -43,9 +46,6 @@ type mutationBuilder func(context.Context, *readView, string) (*candidateMutatio
 // Publish commits one version.
 func (store *Store) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
 	result, err := store.publish(ctx, req)
-	if err == nil {
-		store.reportLocal(protocol.OpPublish, req.Path, result)
-	}
 	return result.Document, err
 }
 
@@ -79,7 +79,7 @@ func (store *Store) publish(ctx context.Context, req backend.WriteRequest) (muta
 				return nil, conflictResult(current), storefmt.ErrConflict
 			}
 		}
-		write := writeCandidate{path: canonical, expected: expected, body: body, metadata: meta, precondition: req.Precondition}
+		write := writeCandidate{path: canonical, op: protocol.OpPublish, expected: expected, body: body, metadata: meta, precondition: req.Precondition}
 		return store.buildWriteCandidate(ctx, view, operationID, &write)
 	})
 }
@@ -103,9 +103,6 @@ func (store *Store) checkDocumentQuota(view *readView) error {
 // Append commits content on the exact expected version.
 func (store *Store) Append(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
 	result, err := store.appendVersion(ctx, req)
-	if err == nil {
-		store.reportLocal(protocol.OpAppend, req.Path, result)
-	}
 	return result.Document, err
 }
 
@@ -147,7 +144,7 @@ func (store *Store) appendVersion(ctx context.Context, req backend.WriteRequest)
 		if err := storefmt.ValidateWrite(combined, merged); err != nil {
 			return nil, mutationResult{}, err
 		}
-		write := writeCandidate{path: canonical, expected: expected, body: combined, metadata: merged, precondition: req.Precondition}
+		write := writeCandidate{path: canonical, op: protocol.OpAppend, expected: expected, body: combined, metadata: merged, precondition: req.Precondition}
 		return store.buildWriteCandidate(ctx, view, operationID, &write)
 	})
 }
@@ -165,15 +162,6 @@ func (store *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest)
 	result, err := store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
 		return store.buildArchiveCandidate(ctx, view, operationID, &archive)
 	})
-	if err == nil && result.Changed {
-		// An unarchive shows the document again at its current version,
-		// which is what a watcher must refetch: a publish.
-		op := protocol.OpPublish
-		if req.Archived {
-			op = protocol.OpArchive
-		}
-		store.reportLocal(op, req.Path, result)
-	}
 	return backend.ArchiveResult{Document: result.Document, Changed: result.Changed}, err
 }
 
@@ -196,7 +184,7 @@ func conflictResult(version int) mutationResult {
 
 // writeCandidate is one prepared PUBLISH or APPEND inside a commit attempt.
 type writeCandidate struct {
-	path         string
+	path, op     string
 	expected     int
 	body         []byte
 	metadata     map[string]string
@@ -345,7 +333,7 @@ func (store *Store) buildWriteCandidate(
 	objects = append(objects, modelObject{Key: versionEntry.Blob.Key, Data: bytes.Clone(stored)})
 	objects = append(objects, historyObjects...)
 	objects = append(objects, manifestModel)
-	result := mutationResult{Document: document, Changed: true}
+	result := mutationResult{Document: document, Changed: true, Path: path, Op: write.op, BodyHash: versionEntry.BodyHash}
 	return store.buildNamespaceCandidate(ctx, view.snapshot, &namespaceChange{
 		operationID: operationID, entry: &newEntry, created: !exists, objects: objects, result: result, body: body,
 	})
@@ -405,7 +393,7 @@ func (store *Store) buildArchiveCandidate(
 	oldEntry.Archived = archived
 	objects := []modelObject{manifestModel}
 	document := documentFromRetained(raw, &tip, &storedTip, archived)
-	result := mutationResult{Document: document, Changed: true}
+	result := mutationResult{Document: document, Changed: true, Path: path, Op: changefeed.ArchiveOp(archived), BodyHash: oldEntry.BodyHash}
 	return store.buildNamespaceCandidate(ctx, view.snapshot, &namespaceChange{
 		operationID: operationID, entry: &oldEntry, objects: objects, result: result,
 	})

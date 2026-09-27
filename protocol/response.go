@@ -67,43 +67,59 @@ func ParseResponse(r io.Reader) (Response, error) {
 		return resp, nil
 	}
 
-	// Parse as map[string]string to avoid YAML interpreting timestamps, numbers, etc.
-	var raw map[string]string
-	if err := yaml.Unmarshal(split.Block, &raw); err != nil {
+	status, meta, err := decodeStatusBlock(split.Block)
+	if err != nil {
 		return Response{}, fmt.Errorf("parsing frontmatter: %w", err)
 	}
-	for k, v := range raw {
-		if k == "status" {
-			resp.Status = v
-		} else {
-			resp.Metadata[k] = v
-		}
-	}
-
+	resp.Status, resp.Metadata = status, meta
 	return resp, nil
 }
 
 // WriteTo writes the response to w in wire format.
 func (resp Response) WriteTo(w io.Writer) (int64, error) {
-	var buf bytes.Buffer
-
-	fm := make(map[string]string, len(resp.Metadata)+1)
-	maps.Copy(fm, resp.Metadata)
-	fm["status"] = resp.Status
-
-	yamlBytes, err := yaml.Marshal(fm)
+	block, err := encodeStatusBlock(resp.Status, resp.Metadata)
 	if err != nil {
 		return 0, fmt.Errorf("encoding frontmatter: %w", err)
 	}
-
-	buf.WriteString(FrontmatterFence)
-	buf.Write(yamlBytes)
-	buf.WriteString(FrontmatterFence)
-
-	if resp.Body != "" {
-		buf.WriteString(resp.Body)
-	}
-
-	n, err := w.Write(buf.Bytes())
+	n, err := w.Write(append(block, resp.Body...))
 	return int64(n), err
+}
+
+// encodeStatusBlock is a fenced frontmatter block of meta plus status; an
+// empty status is left out. Response and WATCH blocks share it.
+func encodeStatusBlock(status string, meta map[string]string) ([]byte, error) {
+	fm := make(map[string]string, len(meta)+1)
+	maps.Copy(fm, meta)
+	if status != "" {
+		fm["status"] = status
+	}
+	var buf bytes.Buffer
+	buf.WriteString(FrontmatterFence)
+	if len(fm) > 0 {
+		yamlBytes, err := yaml.Marshal(fm)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(yamlBytes)
+	}
+	buf.WriteString(FrontmatterFence)
+	return buf.Bytes(), nil
+}
+
+// decodeStatusBlock parses the text between the fences into the status and
+// the other keys, as strings so YAML reads no timestamps or numbers.
+func decodeStatusBlock(block []byte) (status string, meta map[string]string, err error) {
+	var raw map[string]string
+	if err := yaml.Unmarshal(block, &raw); err != nil {
+		return "", nil, err
+	}
+	meta = make(map[string]string, len(raw))
+	for k, v := range raw {
+		if k == "status" {
+			status = v
+		} else {
+			meta[k] = v
+		}
+	}
+	return status, meta, nil
 }

@@ -145,7 +145,7 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 		flatDir := setupContentDir(t, map[string]string{
 			"flat.md": "# Flat\n",
 		})
-		flatH := mustNew(Config{Store: filestore.New(store.New(flatDir), catalog.New()), Logger: discardLogger})
+		flatH := mustNew(Config{Store: filestore.New(store.New(flatDir), catalog.New(), nil), Logger: discardLogger})
 
 		stream := newMockStream("FETCH /flat.md\n")
 		flatH.HandleStream(context.Background(), stream)
@@ -378,7 +378,7 @@ func TestSymlinkEscape(t *testing.T) {
 
 	// File-only: plants a symlink inside the content root.
 	dir := t.TempDir()
-	b := fileBackendAt(dir)
+	b := fileBackendAt(dir, nil)
 	seedBackend(t, b, map[string]string{
 		"public.md": "# Public\n",
 	})
@@ -840,7 +840,7 @@ func TestRelativeContentDir(t *testing.T) {
 	}
 
 	relStore := store.New("./site")
-	h := mustNew(Config{Store: filestore.New(relStore, catalog.New()), Logger: discardLogger})
+	h := mustNew(Config{Store: filestore.New(relStore, catalog.New(), nil), Logger: discardLogger})
 
 	t.Run("fetch works with relative content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /page.md\n")
@@ -917,7 +917,7 @@ func TestContentDirAsSymlink(t *testing.T) {
 	}
 
 	symlinkStore := store.New(symlinkDir)
-	h := mustNew(Config{Store: filestore.New(symlinkStore, catalog.New()), Logger: discardLogger})
+	h := mustNew(Config{Store: filestore.New(symlinkStore, catalog.New(), nil), Logger: discardLogger})
 
 	t.Run("fetch through symlinked content dir", func(t *testing.T) {
 		stream := newMockStream("FETCH /file.md\n")
@@ -1016,7 +1016,7 @@ func testHandleVersions(t *testing.T, newBackend backendFactory) {
 			"flat.md": "# Flat\n",
 		})
 		// File-only: raw flat file fixture.
-		flatH := mustNew(Config{Store: filestore.New(store.New(flatDir), catalog.New()), Logger: discardLogger})
+		flatH := mustNew(Config{Store: filestore.New(store.New(flatDir), catalog.New(), nil), Logger: discardLogger})
 
 		stream := newMockStream("VERSIONS /flat.md\n")
 		flatH.HandleStream(context.Background(), stream)

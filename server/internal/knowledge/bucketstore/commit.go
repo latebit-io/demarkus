@@ -64,6 +64,9 @@ func (store *Store) runMutation(ctx context.Context, build mutationBuilder) (mut
 		}
 		if outcome == commitSucceeded {
 			candidate.result.Sequence = candidate.head.Sequence
+			// Reported before the commit token goes back, so hints follow
+			// commit order.
+			store.reportLocal(candidate.result)
 			return candidate.result, nil
 		}
 		if attempt == maximumMutationAttempts-1 {

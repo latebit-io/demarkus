@@ -38,11 +38,10 @@ func (s *watchStream) Close() error {
 	return nil
 }
 
-// watchHandler is a handler over a fresh backend whose writes feed hub.
-func watchHandler(t *testing.T, newBackend backendFactory, hub *changefeed.Hub, ts *auth.TokenStore) *Handler {
+// watchHandler serves b with WATCH over the hub its writes feed.
+func watchHandler(t *testing.T, b backend, ts *auth.TokenStore) *Handler {
 	t.Helper()
-	b := newBackend(t)
-	config := Config{Store: changefeed.Emit(b.Store, hub), Logger: discardLogger, Changes: hub, HeartbeatInterval: 20 * time.Millisecond}
+	config := Config{Store: b.Store, Logger: discardLogger, Changes: b.Changes, HeartbeatInterval: 20 * time.Millisecond}
 	if ts != nil {
 		config.GetTokenStore = func() *auth.TokenStore { return ts }
 	}
@@ -122,8 +121,8 @@ func writeTokens(extra map[string]auth.Token) *auth.TokenStore {
 
 func TestWatchDeliversAfterPublish(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, newBackend backendFactory) {
-		hub := changefeed.New("w", 0)
-		h := watchHandler(t, newBackend, hub, writeTokens(nil))
+		b := newBackend(t)
+		hub, h := b.Changes, watchHandler(t, b, writeTokens(nil))
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		// The inbox directory does not exist yet: a watch on it still subscribes.
@@ -180,12 +179,11 @@ func TestWatchDeliversAfterPublish(t *testing.T) {
 // A token scoped to /a/** watching / sees /a/ and public events, never /b/.
 func TestWatchOmitsEventsTheTokenMayNotRead(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, newBackend backendFactory) {
-		hub := changefeed.New("w", 0)
 		ts := writeTokens(map[string]auth.Token{
 			protocol.HashToken("read-a"): {Paths: []string{"/a/**"}, Operations: []string{"read"}},
 			protocol.HashToken("read-b"): {Paths: []string{"/b/**"}, Operations: []string{"read"}},
 		})
-		h := watchHandler(t, newBackend, hub, ts)
+		h := watchHandler(t, newBackend(t), ts)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		reader, _ := startWatch(ctx, t, h, "WATCH /\n---\nauth: read-a\n---\n")
@@ -215,14 +213,13 @@ func TestWatchOmitsEventsTheTokenMayNotRead(t *testing.T) {
 
 func TestWatchEndsWhenTheTokenIsRevoked(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, newBackend backendFactory) {
-		hub := changefeed.New("w", 0)
 		var mu sync.Mutex
 		current := writeTokens(map[string]auth.Token{
 			protocol.HashToken("read-a"): {Paths: []string{"/a/**"}, Operations: []string{"read"}},
 		})
 		b := newBackend(t)
 		h := mustNew(Config{
-			Store: changefeed.Emit(b.Store, hub), Logger: discardLogger, Changes: hub, HeartbeatInterval: 20 * time.Millisecond,
+			Store: b.Store, Logger: discardLogger, Changes: b.Changes, HeartbeatInterval: 20 * time.Millisecond,
 			GetTokenStore: func() *auth.TokenStore { mu.Lock(); defer mu.Unlock(); return current },
 		})
 		ctx, cancel := context.WithCancel(context.Background())
@@ -253,8 +250,8 @@ func TestWatchEndsWhenTheTokenIsRevoked(t *testing.T) {
 
 func TestWatchResumeAndResync(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, newBackend backendFactory) {
-		hub := changefeed.New("w", 0)
-		h := watchHandler(t, newBackend, hub, writeTokens(nil))
+		b := newBackend(t)
+		hub, h := b.Changes, watchHandler(t, b, writeTokens(nil))
 		publishVia(t, h, "/a.md", "# 1\n")
 		first := hub.Head()
 		publishVia(t, h, "/a.md", "# 2\n")
@@ -289,34 +286,25 @@ func TestWatchResumeAndResync(t *testing.T) {
 
 // A watch that falls behind the ring is told to resync and ends.
 func TestWatchResyncsWhenLapped(t *testing.T) {
-	forEachBackend(t, func(t *testing.T, newBackend backendFactory) {
-		hub := changefeed.New("w", 4)
-		h := watchHandler(t, newBackend, hub, writeTokens(nil))
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		stream, reader := newWatchStream(t, "WATCH /\n")
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			h.HandleStream(ctx, stream)
-		}()
-		if ack := nextBlock(t, reader); ack.Status != protocol.StatusOK {
-			t.Fatalf("ack status = %q", ack.Status)
-		}
-		// The pipe has no buffer: the handler blocks on the first event write
-		// while the ring wraps twice behind it.
-		for i := range 12 {
-			publishVia(t, h, "/a.md", "# "+strings.Repeat("x", i+1)+"\n")
-		}
-		var last protocol.WatchBlock
-		for last.Status != protocol.StatusResync {
-			last = nextBlock(t, reader)
-		}
-		if c, _ := last.Cursor(); c != hub.Head() {
-			t.Fatalf("resync cursor = %v, want head %v", c, hub.Head())
-		}
-		<-done
-	})
+	b := fileBackendAt(t.TempDir(), changefeed.New("w", 4))
+	hub, h := b.Changes, watchHandler(t, b, writeTokens(nil))
+	reader, done := startWatch(t.Context(), t, h, "WATCH /\n")
+	if ack := nextBlock(t, reader); ack.Status != protocol.StatusOK {
+		t.Fatalf("ack status = %q", ack.Status)
+	}
+	// The pipe has no buffer: the handler blocks on the first event write
+	// while the ring wraps twice behind it.
+	for i := range 12 {
+		publishVia(t, h, "/a.md", "# "+strings.Repeat("x", i+1)+"\n")
+	}
+	var last protocol.WatchBlock
+	for last.Status != protocol.StatusResync {
+		last = nextBlock(t, reader)
+	}
+	if c, _ := last.Cursor(); c != hub.Head() {
+		t.Fatalf("resync cursor = %v, want head %v", c, hub.Head())
+	}
+	<-done
 }
 
 // WATCH parses as a verb, so a server without a change hub answers
@@ -335,12 +323,12 @@ func TestWatchAnswersBadRequestWithoutAHub(t *testing.T) {
 // heartbeat: the revocation recheck rides on it.
 func TestWatchHeartbeatsThroughOmittedEvents(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, newBackend backendFactory) {
-		hub := changefeed.New("w", 0)
 		ts := writeTokens(map[string]auth.Token{
 			protocol.HashToken("read-a"): {Paths: []string{"/a/**"}, Operations: []string{"read"}},
 			protocol.HashToken("read-b"): {Paths: []string{"/b/**"}, Operations: []string{"read"}},
 		})
-		h := watchHandler(t, newBackend, hub, ts)
+		b := newBackend(t)
+		hub, h := b.Changes, watchHandler(t, b, ts)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		reader, _ := startWatch(ctx, t, h, "WATCH /\n---\nauth: read-a\n---\n")
@@ -365,12 +353,13 @@ func TestWatchHeartbeatsThroughOmittedEvents(t *testing.T) {
 	})
 }
 
-// An agent value too long for a block is dropped rather than ending the
-// stream, which would replay the event forever.
-func TestWatchDropsAnOversizeAgent(t *testing.T) {
+// A block the codec refuses is skipped rather than ending the stream,
+// which would replay the same event forever. Stores bound every field
+// below the block limit; only a hub fed directly can produce one.
+func TestWatchSkipsAnUnencodableEvent(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, newBackend backendFactory) {
-		hub := changefeed.New("w", 0)
-		h := watchHandler(t, newBackend, hub, nil)
+		b := newBackend(t)
+		hub, h := b.Changes, watchHandler(t, b, nil)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		reader, _ := startWatch(ctx, t, h, "WATCH /\n")
@@ -379,11 +368,8 @@ func TestWatchDropsAnOversizeAgent(t *testing.T) {
 		}
 		hub.Publish(changefeed.Event{Path: "/big.md", Version: 1, Op: protocol.OpPublish, Agent: strings.Repeat("a", protocol.MaxWatchBlockLength)})
 		hub.Publish(changefeed.Event{Path: "/next.md", Version: 1, Op: protocol.OpPublish, Agent: "fits"})
-		if ev := nextEvent(t, reader); ev.Path != "/big.md" || ev.Agent != "" {
-			t.Fatalf("oversize event = %+v, want /big.md without agent", ev)
-		}
 		if ev := nextEvent(t, reader); ev.Path != "/next.md" || ev.Agent != "fits" {
-			t.Fatalf("event after it = %+v", ev)
+			t.Fatalf("event after the oversize one = %+v, want /next.md", ev)
 		}
 	})
 }

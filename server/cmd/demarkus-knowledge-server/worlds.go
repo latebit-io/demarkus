@@ -38,11 +38,12 @@ type worldManager struct {
 	configFile string
 	newStore   func(ctx context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error)
 	logger     *slog.Logger
-	// watchesPerConn leaves half a connection's streams for requests.
-	watchesPerConn int
-	certs          *certsource.Source
-	router         *snirouter.Dynamic
-	tokens         *tokenCoordinator
+	// maxStreams is the listener's per connection stream limit; runtimes
+	// cap watches under it.
+	maxStreams int
+	certs      *certsource.Source
+	router     *snirouter.Dynamic
+	tokens     *tokenCoordinator
 
 	watchCtx context.Context
 	group    *sync.WaitGroup
@@ -91,17 +92,17 @@ func newWorldManager(
 	logger *slog.Logger,
 ) (*worldManager, error) {
 	m := &worldManager{
-		configFile:     configFile,
-		newStore:       newStore,
-		logger:         logger,
-		watchesPerConn: max(1, int(config.Listen.MaxIncomingStreams/2)),
-		certs:          certs,
-		watchCtx:       watchCtx,
-		group:          group,
-		entries:        make(map[string]*worldEntry),
-		tokenDirs:      make(map[string]*dirWatch),
-		pending:        make(map[string]knowledgeconfig.WorldConfig),
-		resilient:      config.WorldsFile != "",
+		configFile: configFile,
+		newStore:   newStore,
+		logger:     logger,
+		maxStreams: int(config.Listen.MaxIncomingStreams),
+		certs:      certs,
+		watchCtx:   watchCtx,
+		group:      group,
+		entries:    make(map[string]*worldEntry),
+		tokenDirs:  make(map[string]*dirWatch),
+		pending:    make(map[string]knowledgeconfig.WorldConfig),
+		resilient:  config.WorldsFile != "",
 	}
 	router, err := snirouter.NewDynamic(nil)
 	if err != nil {
@@ -252,7 +253,7 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 		Store:             writepolicy.Enforce(store, writepolicy.Options{Require: true}),
 		Changes:           changes,
 		MaxWatches:        world.Limits.MaxWatches,
-		MaxWatchesPerConn: m.watchesPerConn,
+		MaxStreams:        m.maxStreams,
 		TokensFile:        world.Auth.TokensFile,
 		StaticTokensFile:  world.Auth.StaticTokensFile,
 		// Knowledge worlds are public-read, so a tokens Secret that lands

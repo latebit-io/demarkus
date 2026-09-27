@@ -17,7 +17,7 @@ import (
 // release a read lock nobody took, which would be a fatal unlock.
 func TestPreconditionReaderCloseIsHarmless(t *testing.T) {
 	ctx := context.Background()
-	s := New(store.New(t.TempDir()), catalog.New())
+	s := New(store.New(t.TempDir()), catalog.New(), nil)
 	closeLent := func(state backend.Reader) error {
 		if closer, ok := state.(io.Closer); ok {
 			if err := closer.Close(); err != nil {
@@ -55,7 +55,7 @@ func TestPreconditionReaderCloseIsHarmless(t *testing.T) {
 // read runs after the store lock is gone.
 func TestCloseWaitsForAdmittedRead(t *testing.T) {
 	ctx := context.Background()
-	s := New(store.New(t.TempDir()), catalog.New())
+	s := New(store.New(t.TempDir()), catalog.New(), nil)
 	opened, err := s.OpenReadView(ctx)
 	if err != nil {
 		t.Fatalf("open view: %v", err)

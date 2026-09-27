@@ -184,7 +184,7 @@ func TestScopeFilterAndCursorAdvance(t *testing.T) {
 	}
 }
 
-func TestCloseEndsSubscribersAndPublishAtOrders(t *testing.T) {
+func TestCloseEndsSubscribers(t *testing.T) {
 	hub := New("w", 0)
 	sub, _ := hub.Subscribe("/", protocol.Cursor{})
 	done := make(chan error, 1)
@@ -203,25 +203,6 @@ func TestCloseEndsSubscribersAndPublishAtOrders(t *testing.T) {
 		t.Fatal("Close did not wake the subscriber")
 	}
 	hub.Close() // idempotent
-
-	other := New("w", 0)
-	if _, err := other.PublishAt(Event{Seq: 10, Path: "/a.md", Version: 1, Op: protocol.OpPublish}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := other.PublishAt(Event{Seq: 10, Path: "/a.md", Version: 2, Op: protocol.OpPublish}); err == nil {
-		t.Fatal("PublishAt accepted a repeated sequence")
-	}
-	if c := other.Publish(Event{Path: "/a.md", Version: 2, Op: protocol.OpPublish}); c.Seq != 11 {
-		t.Fatalf("Publish after PublishAt(10) got seq %d, want 11", c.Seq)
-	}
-	// A resume across the gap works: 10 was delivered, 11 follows.
-	resumed, err := other.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := next(t, resumed).Seq; got != 11 {
-		t.Fatalf("seq after gap = %d, want 11", got)
-	}
 }
 
 func TestNewEpochFitsTheCursorGrammar(t *testing.T) {

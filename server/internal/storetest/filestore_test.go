@@ -26,7 +26,7 @@ func TestFileStoreConformance(t *testing.T) {
 	documents := map[handler.DocumentStore]*store.Store{}
 	RunConformance(t, func(t *testing.T) handler.DocumentStore {
 		raw := store.New(t.TempDir())
-		wrapped := filestore.New(raw, catalog.New())
+		wrapped := filestore.New(raw, catalog.New(), nil)
 		mu.Lock()
 		documents[wrapped] = raw
 		mu.Unlock()
@@ -77,7 +77,7 @@ func TestFileStoreHandlerDifferentialSelf(t *testing.T) {
 func TestFileStoreMigrationRoundTrip(t *testing.T) {
 	RunMigrationRoundTrip(t, func(t *testing.T) MigrationBackend {
 		s := store.New(t.TempDir())
-		return MigrationBackend{Migrator: s, Store: filestore.New(s, catalog.New())}
+		return MigrationBackend{Migrator: s, Store: filestore.New(s, catalog.New(), nil)}
 	})
 }
 

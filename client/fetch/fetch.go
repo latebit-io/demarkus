@@ -249,28 +249,8 @@ func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req 
 		stream.CancelWrite(0)
 	})
 	defer stopCancel()
-
-	// From the first written byte on, the server may have acted on the request.
-	if n, err := req.WriteTo(stream); err != nil {
-		stream.CancelWrite(0)
-		stream.CancelRead(0)
-		if ctx.Err() != nil {
-			err = ctx.Err()
-		} else {
-			err = fmt.Errorf("send request: %w", err)
-		}
-		// The request goes out in one write; zero accepted bytes means nothing was sent.
-		if n == 0 {
-			return Result{}, err
-		}
-		return Result{}, &sentError{cause: err}
-	}
-	if err := stream.Close(); err != nil {
-		stream.CancelRead(0)
-		if ctx.Err() != nil {
-			return Result{}, &sentError{cause: ctx.Err()}
-		}
-		return Result{}, &sentError{cause: fmt.Errorf("close request stream: %w", err)}
+	if err := sendRequest(ctx, stream, req); err != nil {
+		return Result{}, err
 	}
 
 	resp, err := protocol.ParseResponse(responseReader(ctx, stream))
@@ -283,6 +263,34 @@ func (c *Client) requestOnConnContext(ctx context.Context, conn *quic.Conn, req 
 	}
 
 	return Result{Response: resp}, nil
+}
+
+// sendRequest writes req and closes the send side. From the first written
+// byte on, the server may have acted on the request, so a failure after it
+// is a sentError.
+func sendRequest(ctx context.Context, stream *quic.Stream, req protocol.Request) error {
+	if n, err := req.WriteTo(stream); err != nil {
+		stream.CancelWrite(0)
+		stream.CancelRead(0)
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		} else {
+			err = fmt.Errorf("send request: %w", err)
+		}
+		// The request goes out in one write; zero accepted bytes means nothing was sent.
+		if n == 0 {
+			return err
+		}
+		return &sentError{cause: err}
+	}
+	if err := stream.Close(); err != nil {
+		stream.CancelRead(0)
+		if ctx.Err() != nil {
+			return &sentError{cause: ctx.Err()}
+		}
+		return &sentError{cause: fmt.Errorf("close request stream: %w", err)}
+	}
+	return nil
 }
 
 // sentError wraps a failure that happened after request bytes left the client.
@@ -298,15 +306,19 @@ func (c *Client) doWriteContext(ctx context.Context, host string, fn func(conn *
 	return c.retry(ctx, host, false, fn)
 }
 
-// doWithRetryContext retries transient failures up to 5 times with a fixed 100ms delay.
+// doWithRetryContext retries transient failures up to maxRetries times with
+// a fixed delay.
 func (c *Client) doWithRetryContext(ctx context.Context, host string, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
 	return c.retry(ctx, host, true, fn)
 }
 
-func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
-	const maxRetries = 5
-	const retryDelay = 100 * time.Millisecond
+// Transient failures are retried this often, this far apart.
+const (
+	maxRetries = 5
+	retryDelay = 100 * time.Millisecond
+)
 
+func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(conn *quic.Conn) (Result, error)) (Result, error) {
 	var lastErr error
 	for attempt := range maxRetries {
 		if err := ctx.Err(); err != nil {
@@ -326,11 +338,7 @@ func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(co
 
 		result, err := fn(conn)
 		unknown := !resend && errors.Is(err, protocol.ErrOutcomeUnknown)
-		// A stream failure keeps the connection unless it died meanwhile.
-		if err != nil && (isConnectionError(err) || conn.Context().Err() != nil) {
-			c.evict(host, conn)
-		}
-		c.release(conn)
+		c.dispose(host, conn, err)
 		if err == nil {
 			return result, nil
 		}
@@ -355,6 +363,15 @@ func (c *Client) retry(ctx context.Context, host string, resend bool, fn func(co
 	}
 
 	return Result{}, lastErr
+}
+
+// dispose hands conn back after a call that ended with err: a stream
+// failure keeps the connection unless it died meanwhile.
+func (c *Client) dispose(host string, conn *quic.Conn, err error) {
+	if err != nil && (isConnectionError(err) || conn.Context().Err() != nil) {
+		c.evict(host, conn)
+	}
+	c.release(conn)
 }
 
 func waitForRetry(ctx context.Context, delay time.Duration) error {

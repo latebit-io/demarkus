@@ -1,4 +1,4 @@
-package changefeed
+package filestore
 
 import (
 	"context"
@@ -10,19 +10,22 @@ import (
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
-	"github.com/latebit-io/demarkus/server/internal/filestore"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
 // Every committed write, and only a committed one, becomes a hint with the
-// stored version's hash.
-func TestEmitPublishesCommittedWrites(t *testing.T) {
+// stored version's hash, in commit order.
+func TestCommitsPublishHints(t *testing.T) {
 	documents, err := protocolstore.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub := New("w", 0)
-	store := Emit(filestore.New(documents, catalog.New()), hub)
-	sub, _ := hub.Subscribe("/", protocol.Cursor{})
+	hub := changefeed.New("w", 0)
+	store := New(documents, catalog.New(), hub)
+	sub, err := hub.Subscribe("/", protocol.Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 
 	doc, err := store.Publish(ctx, backend.WriteRequest{Path: "/a.md", ExpectedVersion: -1, Content: []byte("# A\n"), Metadata: map[string]string{"agent": "claude-code"}})
@@ -46,11 +49,12 @@ func TestEmitPublishesCommittedWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []Event{
+	hash := storefmt.ContentHash(appended.Content)
+	want := []changefeed.Event{
 		{Seq: 1, Path: "/a.md", Version: 1, Hash: storefmt.ContentHash([]byte("# A\n")), Op: protocol.OpPublish, Agent: "claude-code"},
-		{Seq: 2, Path: "/a.md", Version: 2, Hash: storefmt.ContentHash(appended.Content), Op: protocol.OpAppend, Agent: "claude-code"},
-		{Seq: 3, Path: "/a.md", Version: 2, Hash: storefmt.ContentHash(appended.Content), Op: protocol.OpArchive, Agent: "claude-code"},
-		{Seq: 4, Path: "/a.md", Version: 2, Hash: storefmt.ContentHash(appended.Content), Op: protocol.OpPublish, Agent: "claude-code"},
+		{Seq: 2, Path: "/a.md", Version: 2, Hash: hash, Op: protocol.OpAppend, Agent: "claude-code"},
+		{Seq: 3, Path: "/a.md", Version: 2, Hash: hash, Op: protocol.OpArchive, Agent: "claude-code"},
+		{Seq: 4, Path: "/a.md", Version: 2, Hash: hash, Op: protocol.OpPublish, Agent: "claude-code"},
 	}
 	for _, w := range want {
 		ctx, cancel := context.WithTimeout(ctx, time.Second)

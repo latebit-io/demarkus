@@ -251,7 +251,7 @@ func TestWatchSurfacesResyncAndContinues(t *testing.T) {
 		t.Fatalf("Watch with a stale cursor: %v", err)
 	}
 	defer w.Close()
-	if n := nextNotice(t, w); !n.Resync || n.Cursor != f.head() {
+	if n := nextNotice(t, w); !n.Resync || n.Event.Cursor != f.head() {
 		t.Fatalf("first notice = %+v, want resync at the head", n)
 	}
 	f.publish("/a.md")

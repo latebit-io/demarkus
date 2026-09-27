@@ -353,7 +353,7 @@ func newTestRuntime(t *testing.T, config *Config) *Runtime {
 		t.Fatalf("open store: %v", err)
 	}
 	lookup := catalog.New()
-	store := filestore.New(documents, lookup)
+	store := filestore.New(documents, lookup, config.Changes)
 	config.Store = store
 	config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	runtime, err := New(config)
@@ -372,13 +372,7 @@ func tokenConfig(hash string) string {
 
 func serveStatus(t *testing.T, runtime *Runtime, request string) string {
 	t.Helper()
-	stream := newTestStream(request)
-	runtime.ServeStream(context.Background(), testAddr("127.0.0.1:1234"), stream)
-	response, err := protocol.ParseResponse(&stream.output)
-	if err != nil {
-		t.Fatalf("parse response: %v", err)
-	}
-	return response.Status
+	return serveStatusIn(context.Background(), t, runtime, request)
 }
 
 func writeFile(t *testing.T, path, content string) {

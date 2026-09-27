@@ -2,16 +2,12 @@ package protocol
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"strconv"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 // A WATCH stream (§6.8) is a sequence of frontmatter blocks with no bodies:
@@ -66,11 +62,8 @@ type Cursor struct {
 // without leading zeros, so the wire form round-trips byte for byte.
 func ParseCursor(s string) (Cursor, error) {
 	epoch, seq, ok := strings.Cut(s, ":")
-	if !ok || !isValidEpoch(epoch) || !isCanonicalDecimal(seq) {
-		return Cursor{}, fmt.Errorf("%w: %q", ErrInvalidCursor, s)
-	}
 	n, err := strconv.ParseUint(seq, 10, 64)
-	if err != nil {
+	if !ok || !isValidEpoch(epoch) || err != nil || strconv.FormatUint(n, 10) != seq {
 		return Cursor{}, fmt.Errorf("%w: %q", ErrInvalidCursor, s)
 	}
 	return Cursor{Epoch: epoch, Seq: n}, nil
@@ -93,18 +86,6 @@ func isValidEpoch(s string) bool {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 		case r == '.', r == '_', r == '-':
 		default:
-			return false
-		}
-	}
-	return true
-}
-
-func isCanonicalDecimal(s string) bool {
-	if s == "" || (len(s) > 1 && s[0] == '0') {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
 			return false
 		}
 	}
@@ -138,30 +119,19 @@ func (b WatchBlock) Cursor() (Cursor, error) {
 // and values must satisfy the metadata grammar, so the line reader on the
 // other side never meets a fence inside a value.
 func (b WatchBlock) WriteTo(w io.Writer) (int64, error) {
-	fm := make(map[string]string, len(b.Metadata)+1)
-	maps.Copy(fm, b.Metadata)
-	if b.Status != "" {
-		fm["status"] = b.Status
-	}
-	for k, v := range fm {
+	for k, v := range b.Metadata {
 		if !IsValidMetaKey(k) || !IsValidMetaValue(v) {
 			return 0, fmt.Errorf("%w: key %q", ErrMalformedWatchBlock, k)
 		}
 	}
-	var buf bytes.Buffer
-	buf.WriteString(FrontmatterFence)
-	if len(fm) > 0 {
-		yamlBytes, err := yaml.Marshal(fm)
-		if err != nil {
-			return 0, fmt.Errorf("encoding watch block: %w", err)
-		}
-		buf.Write(yamlBytes)
+	block, err := encodeStatusBlock(b.Status, b.Metadata)
+	if err != nil {
+		return 0, fmt.Errorf("encoding watch block: %w", err)
 	}
-	buf.WriteString(FrontmatterFence)
-	if buf.Len() > MaxWatchBlockLength {
-		return 0, fmt.Errorf("%w: %d > %d bytes", ErrMalformedWatchBlock, buf.Len(), MaxWatchBlockLength)
+	if len(block) > MaxWatchBlockLength {
+		return 0, fmt.Errorf("%w: %d > %d bytes", ErrMalformedWatchBlock, len(block), MaxWatchBlockLength)
 	}
-	n, err := w.Write(buf.Bytes())
+	n, err := w.Write(block)
 	return int64(n), err
 }
 
@@ -215,19 +185,11 @@ func (r *WatchReader) Next() (WatchBlock, error) {
 
 // decodeWatchBlock parses the text between the fences.
 func decodeWatchBlock(block []byte) (WatchBlock, error) {
-	var raw map[string]string
-	if err := yaml.Unmarshal(block, &raw); err != nil {
+	status, meta, err := decodeStatusBlock(block)
+	if err != nil {
 		return WatchBlock{}, fmt.Errorf("%w: %w", ErrMalformedWatchBlock, err)
 	}
-	b := WatchBlock{Metadata: make(map[string]string, len(raw))}
-	for k, v := range raw {
-		if k == "status" {
-			b.Status = v
-		} else {
-			b.Metadata[k] = v
-		}
-	}
-	return b, nil
+	return WatchBlock{Status: status, Metadata: meta}, nil
 }
 
 // WatchEvent is one change hint: what changed and the cursor to resume from.

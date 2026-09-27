@@ -19,11 +19,11 @@ type WatchRequest struct {
 }
 
 // Notice is one item from a watch: an event, or a resync telling the
-// consumer to rebuild what it derived and continue from Cursor.
+// consumer to rebuild what it derived. Event.Cursor is where the watch
+// continues from; on a resync the rest of Event is empty.
 type Notice struct {
 	Resync bool
-	Event  protocol.WatchEvent // set unless Resync
-	Cursor protocol.Cursor     // where the watch continues from
+	Event  protocol.WatchEvent
 }
 
 // StatusError is a server refusal that ends a watch: the status and body of
@@ -153,29 +153,25 @@ var errResyncFirst = errors.New("resync in place of the acknowledgement")
 // refusal is a StatusError; a resync first block is surfaced as a Notice and
 // the subscription is retried from the cursor it carried.
 func (w *Watch) open(ctx context.Context, since protocol.Cursor) (*watchStream, error) {
-	const maxAttempts = 5
-	var lastErr error
-	for attempt := range maxAttempts {
+	for attempt := range maxRetries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		stream, err := w.subscribe(ctx, since)
-		if err == nil {
+		switch {
+		case err == nil:
 			return stream, nil
-		}
-		if errors.Is(err, errResyncFirst) {
+		case errors.Is(err, errResyncFirst):
 			since = w.Cursor()
-			continue
-		}
-		lastErr = err
-		if attempt == maxAttempts-1 || !isRetryable(err) {
+		case attempt == maxRetries-1 || !isRetryable(err):
 			return nil, err
-		}
-		if err := waitForRetry(ctx, 100*time.Millisecond); err != nil {
-			return nil, err
+		default:
+			if err := waitForRetry(ctx, retryDelay); err != nil {
+				return nil, err
+			}
 		}
 	}
-	return nil, lastErr
+	return nil, fmt.Errorf("%w %d times", errResyncFirst, maxRetries)
 }
 
 func (w *Watch) subscribe(ctx context.Context, since protocol.Cursor) (*watchStream, error) {
@@ -186,10 +182,7 @@ func (w *Watch) subscribe(ctx context.Context, since protocol.Cursor) (*watchStr
 	}
 	ws, first, err := w.subscribeOn(ctx, conn, since)
 	if err != nil {
-		if isConnectionError(err) || conn.Context().Err() != nil {
-			c.evict(w.req.Host, conn)
-		}
-		c.release(conn)
+		c.dispose(w.req.Host, conn, err)
 		return nil, err
 	}
 	if err := w.accept(ctx, first); err != nil {
@@ -209,24 +202,19 @@ func (w *Watch) subscribeOn(ctx context.Context, conn *quic.Conn, since protocol
 	if err != nil {
 		return nil, protocol.WatchBlock{}, fmt.Errorf("open stream: %w", err)
 	}
+	// Stopped before the handshake context ends on success, so the stream
+	// outlives it.
+	stop := context.AfterFunc(handshake, func() {
+		stream.CancelRead(0)
+		stream.CancelWrite(0)
+	})
+	defer stop()
 	meta := map[string]string{}
 	if !since.IsZero() {
 		meta["since"] = since.String()
 	}
-	req := newRequest(protocol.VerbWatch, w.req.Path, w.req.Token, meta)
-	if _, err := req.WriteTo(stream); err != nil {
-		stream.CancelRead(0)
-		stream.CancelWrite(0)
-		return nil, protocol.WatchBlock{}, fmt.Errorf("send request: %w", err)
-	}
-	if err := stream.Close(); err != nil {
-		stream.CancelRead(0)
-		return nil, protocol.WatchBlock{}, &sentError{cause: fmt.Errorf("close request stream: %w", err)}
-	}
-	deadline, _ := handshake.Deadline()
-	if err := stream.SetReadDeadline(deadline); err != nil {
-		stream.CancelRead(0)
-		return nil, protocol.WatchBlock{}, fmt.Errorf("set read deadline: %w", err)
+	if err := sendRequest(handshake, stream, newRequest(protocol.VerbWatch, w.req.Path, w.req.Token, meta)); err != nil {
+		return nil, protocol.WatchBlock{}, err
 	}
 	ws := &watchStream{conn: conn, stream: stream, reader: protocol.NewWatchReader(stream)}
 	first, err := ws.reader.Next()
@@ -240,30 +228,24 @@ func (w *Watch) subscribeOn(ctx context.Context, conn *quic.Conn, since protocol
 // accept applies the first block: ok continues, resync is surfaced and
 // reported as errResyncFirst, anything else refuses the watch.
 func (w *Watch) accept(ctx context.Context, first protocol.WatchBlock) error {
-	switch first.Status {
-	case protocol.StatusOK:
-		cursor, err := first.Cursor()
-		if err != nil {
-			return fmt.Errorf("acknowledgement: %w", err)
-		}
-		w.setCursor(cursor)
-		return nil
-	case protocol.StatusResync:
-		cursor, err := first.Cursor()
-		if err != nil {
-			return fmt.Errorf("resync: %w", err)
-		}
-		w.setCursor(cursor)
-		// The queue may be full on a reopen; a plain send would park run
-		// and hang Close.
-		select {
-		case w.notices <- Notice{Resync: true, Cursor: cursor}:
-			return errResyncFirst
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	default:
+	if first.Status != protocol.StatusOK && first.Status != protocol.StatusResync {
 		return &StatusError{Status: first.Status, Message: first.Metadata["message"]}
+	}
+	cursor, err := first.Cursor()
+	if err != nil {
+		return fmt.Errorf("%s: %w", first.Status, err)
+	}
+	w.setCursor(cursor)
+	if first.Status == protocol.StatusOK {
+		return nil
+	}
+	// The queue may be full on a reopen; a plain send would park run and
+	// hang Close.
+	select {
+	case w.notices <- Notice{Resync: true, Event: protocol.WatchEvent{Cursor: cursor}}:
+		return errResyncFirst
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -271,27 +253,23 @@ func (w *Watch) accept(ctx context.Context, first protocol.WatchBlock) error {
 // cursor whenever it can.
 func (w *Watch) run(ctx context.Context, stream *watchStream) {
 	defer w.cancel()
-	backoff := 100 * time.Millisecond
+	backoff := retryDelay
 	for {
-		reopen, err := w.pump(ctx, stream)
+		delay, err := w.pump(ctx, stream)
 		stream.close(w.client)
 		if err != nil {
 			w.finish(err)
 			return
 		}
-		if reopen != nil {
-			// Not a fault: the server said closing, or the stream was
-			// wedged by a queue we could not fill. Reopen after a pause.
-			if err := waitForRetry(ctx, reopen()); err != nil {
-				w.finish(err)
-				return
-			}
+		if err := waitForRetry(ctx, delay); err != nil {
+			w.finish(err)
+			return
 		}
 		for {
 			var openErr error
 			stream, openErr = w.open(ctx, w.Cursor())
 			if openErr == nil {
-				backoff = 100 * time.Millisecond
+				backoff = retryDelay
 				break
 			}
 			if ctx.Err() != nil || !reopenable(openErr) {
@@ -317,58 +295,51 @@ func reopenable(err error) bool {
 	return refused.Status == protocol.StatusRateLimited || refused.Status == protocol.StatusServerError
 }
 
-// pump delivers one stream's blocks. It returns a non nil reopen delay when
-// the stream ended in a way the watch survives, an error when it does not.
-func (w *Watch) pump(ctx context.Context, s *watchStream) (reopen func() time.Duration, err error) {
+// pump delivers one stream's blocks until it ends. A nil error means the
+// watch survives and reopens after delay: the server said closing, the
+// stream was cut or stalled, or the queue wedged it.
+func (w *Watch) pump(ctx context.Context, s *watchStream) (delay time.Duration, err error) {
 	stop := context.AfterFunc(ctx, func() { s.stream.CancelRead(0) })
 	defer stop()
-	instant := func() time.Duration { return 0 }
 	for {
 		if err := s.stream.SetReadDeadline(time.Now().Add(watchStall)); err != nil {
-			return instant, nil
+			return 0, nil
 		}
 		block, err := s.reader.Next()
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return 0, ctx.Err()
 		}
 		if err != nil {
 			// A cut stream, a stall or a malformed block: resume from the cursor.
-			return instant, nil
+			return 0, nil
 		}
 		if block.Status == "" {
 			ev, err := block.Event()
 			if err != nil {
-				return instant, nil
+				return 0, nil
 			}
 			w.setCursor(ev.Cursor)
-			if !protocol.IsKnownOp(ev.Op) {
-				continue
-			}
-			if !w.deliver(ctx, s, &Notice{Event: ev, Cursor: ev.Cursor}) {
-				return instant, nil
+			if protocol.IsKnownOp(ev.Op) && !w.deliver(ctx, s, &Notice{Event: ev}) {
+				return 0, nil
 			}
 			continue
 		}
 		cursor, cursorErr := block.Cursor()
+		if cursorErr == nil {
+			w.setCursor(cursor)
+		}
 		switch block.Status {
 		case protocol.StatusOK:
-			if cursorErr == nil {
-				w.setCursor(cursor)
-			}
 		case protocol.StatusResync:
 			if cursorErr != nil {
-				return instant, nil
+				return 0, nil
 			}
-			w.setCursor(cursor)
-			w.deliver(ctx, s, &Notice{Resync: true, Cursor: cursor})
-			return instant, nil
+			w.deliver(ctx, s, &Notice{Resync: true, Event: protocol.WatchEvent{Cursor: cursor}})
+			return 0, nil
 		case protocol.StatusClosing:
-			if cursorErr == nil {
-				w.setCursor(cursor)
-			}
-			return func() time.Duration { return 500 * time.Millisecond }, nil
+			return 500 * time.Millisecond, nil
 		default:
-			return nil, &StatusError{Status: block.Status}
+			return 0, &StatusError{Status: block.Status}
 		}
 	}
 }

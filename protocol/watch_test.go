@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"math"
 	"strings"
 	"testing"
 )
@@ -349,4 +350,33 @@ func FuzzParseCursor(f *testing.F) {
 			t.Fatalf("ParseCursor(%q).String() = %q", s, c.String())
 		}
 	})
+}
+
+// Every field a store can commit fits one block: the request path and
+// metadata limits compose below the block limit, so a server never has to
+// truncate an event.
+func TestWatchBlockFitsEveryStoredField(t *testing.T) {
+	event := WatchEvent{
+		Cursor:  Cursor{Epoch: strings.Repeat("e", maxCursorEpochLength), Seq: math.MaxUint64},
+		Path:    "/" + strings.Repeat("p", MaxRequestPathLength-1),
+		Version: math.MaxInt,
+		Hash:    "sha256-" + strings.Repeat("f", 64),
+		Op:      OpPublish,
+		Agent:   strings.Repeat("a", MaxMetaBytes),
+	}
+	var buf bytes.Buffer
+	if _, err := event.Block().WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	block, err := NewWatchReader(&buf).Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	got, err := block.Event()
+	if err != nil {
+		t.Fatalf("Event: %v", err)
+	}
+	if got != event {
+		t.Fatalf("round trip changed the event:\n got %+v\nwant %+v", got, event)
+	}
 }
