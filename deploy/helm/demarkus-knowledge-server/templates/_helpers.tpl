@@ -128,8 +128,15 @@ tokens.toml. Consumers read named fields: include ... | fromYamlArray.
 {{- end -}}
 {{- $udpPort := int .Values.server.udpPort -}}
 {{- $healthPort := int .Values.server.healthPort -}}
+{{- $peerPort := int .Values.server.peerPort -}}
 {{- if or (lt $udpPort 1) (gt $udpPort 65535) -}}
 {{- fail "server.udpPort must be between 1 and 65535" -}}
+{{- end -}}
+{{- if or (lt $peerPort 1) (gt $peerPort 65535) -}}
+{{- fail "server.peerPort must be between 1 and 65535" -}}
+{{- end -}}
+{{- if eq $peerPort $udpPort -}}
+{{- fail "server.peerPort must differ from server.udpPort" -}}
 {{- end -}}
 {{- if or (lt $healthPort 1) (gt $healthPort 65535) -}}
 {{- fail "server.healthPort must be between 1 and 65535" -}}

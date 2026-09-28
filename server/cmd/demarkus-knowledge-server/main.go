@@ -81,11 +81,7 @@ func run(arguments []string) error {
 		logger.Error("GCS client unavailable", "error", err)
 		return err
 	}
-	defer func() {
-		if err := client.Close(); err != nil {
-			logger.Warn("GCS client close failed", "error", err)
-		}
-	}()
+	defer closeGCS(client, logger)
 
 	watchCtx, stopWatchers := context.WithCancel(context.Background())
 	var watcherGroup sync.WaitGroup
@@ -97,7 +93,15 @@ func run(arguments []string) error {
 	newStore := func(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
 		return gcs.New(client, world.Bucket.Name(), maxObjectBytes)
 	}
-	worlds, err := newWorldManager(watchCtx, &watcherGroup, *configFile, config, newStore, certificates, logger)
+	peers, err := openPeers(config.Peers, certificates, logger)
+	if err != nil {
+		logger.Error("peer hints unavailable", "error", err)
+		return err
+	}
+	defer peers.close(logger)
+	worlds, err := newWorldManager(watchCtx, &watcherGroup, worldManagerConfig{
+		configFile: *configFile, config: config, newStore: newStore, certs: certificates, peers: peers, logger: logger,
+	})
 	if err != nil {
 		logger.Error("world startup failed", "error", err)
 		return err
@@ -132,44 +136,33 @@ func run(arguments []string) error {
 		}
 	}()
 
-	healthListener, err := net.Listen("tcp", config.Health.Address)
+	health, err := openHealth(config.Health.Address)
 	if err != nil {
 		logger.Error("health listen failed", "error", err)
 		return err
 	}
-	health := &management.Health{}
-	healthServer := &http.Server{
-		Handler:           health.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      5 * time.Second,
-		IdleTimeout:       30 * time.Second,
-	}
-	defer func() {
-		if err := healthServer.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Warn("health server close failed", "error", err)
-		}
-	}()
+	defer health.close(logger)
 
 	startConfigWatchers(watchCtx, &watcherGroup, *configFile, config, worlds, logger)
 
 	quicResult := make(chan error, 1)
 	go func() { quicResult <- quicServer.Serve(context.Background(), router.Selector()) }()
 	healthResult := make(chan error, 1)
-	go func() { healthResult <- healthServer.Serve(healthListener) }()
-	health.SetLive(true)
-	health.SetReady(true)
-	logger.Info("knowledge server started", "quic_addr", quicServer.Addr(), "health_addr", healthListener.Addr(), "worlds", worlds.WorldCount())
+	go func() { healthResult <- health.server.Serve(health.listener) }()
+	health.status.SetLive(true)
+	health.status.SetReady(true)
+	logger.Info("knowledge server started", "quic_addr", quicServer.Addr(), "health_addr", health.listener.Addr(), "worlds", worlds.WorldCount())
 
 	signalChannel := make(chan os.Signal, 1)
 	signal.Notify(signalChannel, processSignals()...)
 	defer signal.Stop(signalChannel)
 	runErr := waitForStop(signalChannel, quicResult, healthResult, certificates, tokens, logger)
 
-	health.SetReady(false)
+	health.status.SetReady(false)
 	quicServer.ShutdownAfter(worlds.Drain, shutdownTimeout)
-	health.SetLive(false)
+	health.status.SetLive(false)
 	healthCtx, healthCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := healthServer.Shutdown(healthCtx); err != nil {
+	if err := health.server.Shutdown(healthCtx); err != nil {
 		logger.Warn("health shutdown incomplete", "error", err)
 	}
 	healthCancel()
@@ -252,5 +245,39 @@ func startConfigWatchers(
 				logger.Warn("config watcher exited", "target", target, "error", err)
 			}
 		})
+	}
+}
+
+func closeGCS(client *storage.Client, logger *slog.Logger) {
+	if err := client.Close(); err != nil {
+		logger.Warn("GCS client close failed", "error", err)
+	}
+}
+
+// healthEndpoint is the private management listener and its state.
+type healthEndpoint struct {
+	listener net.Listener
+	server   *http.Server
+	status   *management.Health
+}
+
+func openHealth(address string) (*healthEndpoint, error) {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	status := &management.Health{}
+	server := &http.Server{
+		Handler:           status.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      5 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+	return &healthEndpoint{listener: listener, server: server, status: status}, nil
+}
+
+func (h *healthEndpoint) close(logger *slog.Logger) {
+	if err := h.server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Warn("health server close failed", "error", err)
 	}
 }

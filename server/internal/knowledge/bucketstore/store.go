@@ -39,9 +39,13 @@ type Options struct {
 	MaxDocuments int
 	// Logger receives section-index warnings; nil uses slog.Default.
 	Logger *slog.Logger
-	// Changes receives a hint for every committed change: this replica's
-	// own at commit, a peer's when Poll finds it. Nil reports nothing.
+	// Changes receives a hint for every commit the head's receipts name,
+	// under the head sequence, whenever a snapshot is installed. Nil
+	// reports nothing.
 	Changes *changefeed.Hub
+	// Committed runs after each of this replica's own commits with its head
+	// sequence, outside every lock; nil for none.
+	Committed func(sequence int64)
 }
 
 // Store owns a validated immutable snapshot for one world.
@@ -61,11 +65,8 @@ type Store struct {
 	now            func() time.Time
 	newOperationID func() (string, error)
 
-	changes        *changefeed.Hub
-	seenMu         sync.Mutex
-	seen           map[string]pathState
-	reportedShards [shardCount]shardRef
-	reportedSeq    int64
+	changes   *changefeed.Hub
+	committed func(sequence int64)
 }
 
 var (
@@ -151,7 +152,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		now:            time.Now,
 		newOperationID: randomOperationID,
 		changes:        options.Changes,
-		seen:           make(map[string]pathState),
+		committed:      options.Committed,
 	}
 	store.commitToken <- struct{}{}
 	requestCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
@@ -169,8 +170,8 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		return nil, fmt.Errorf("open bucket store: %w", err)
 	}
 	store.snapshot.Store(loaded)
+	store.report(loaded)
 	store.refreshMu.Unlock()
-	store.baseline(loaded)
 	return store, nil
 }
 
@@ -291,6 +292,7 @@ func (store *Store) refreshSnapshot(ctx context.Context) (*snapshot, error) {
 		return nil, err
 	}
 	store.snapshot.Store(loaded)
+	store.report(loaded)
 	return loaded, nil
 }
 

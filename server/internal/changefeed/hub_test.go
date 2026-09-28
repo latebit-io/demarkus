@@ -214,3 +214,60 @@ func TestNewEpochFitsTheCursorGrammar(t *testing.T) {
 		t.Fatal("two hubs share an epoch")
 	}
 }
+
+// A caller's own sequence may leave gaps, which readers step over; a Skip
+// makes what lies before it unresumable.
+func TestPublishAtAndSkip(t *testing.T) {
+	hub := New("w", 0)
+	if !hub.PublishAt(Event{Seq: 5, Path: "/a.md", Version: 1, Op: protocol.OpPublish}) {
+		t.Fatal("PublishAt(5) on an empty hub was dropped")
+	}
+	if hub.PublishAt(Event{Seq: 3, Path: "/a.md", Version: 1, Op: protocol.OpPublish}) {
+		t.Fatal("PublishAt(3) behind the head was accepted")
+	}
+	resumed, err := hub.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub.PublishAt(Event{Seq: 7, Path: "/b.md", Version: 1, Op: protocol.OpPublish})
+	if got := next(t, resumed); got.Seq != 7 || got.Path != "/b.md" {
+		t.Fatalf("after the gap got %+v, want seq 7", got)
+	}
+	if resumed.Cursor().Seq != 7 {
+		t.Fatalf("cursor = %v", resumed.Cursor())
+	}
+
+	hub.Skip(20)
+	if head := hub.Head(); head.Seq != 20 {
+		t.Fatalf("head after Skip = %v", head)
+	}
+	if err := nextErr(t, resumed); !errors.Is(err, ErrResync) {
+		t.Fatalf("subscriber behind a skip got %v, want ErrResync", err)
+	}
+	if _, err := hub.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 19}); !errors.Is(err, ErrResync) {
+		t.Fatalf("resume before the skip: %v, want ErrResync", err)
+	}
+	at, err := hub.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 20})
+	if err != nil {
+		t.Fatalf("resume at the skip: %v", err)
+	}
+	hub.PublishAt(Event{Seq: 21, Path: "/c.md", Version: 1, Op: protocol.OpPublish})
+	if got := next(t, at); got.Seq != 21 {
+		t.Fatalf("after the skip got %+v, want seq 21", got)
+	}
+
+	// A gap wider than the ring evicts what came before it.
+	small := New("w", 4)
+	small.PublishAt(Event{Seq: 1, Path: "/a.md", Version: 1, Op: protocol.OpPublish})
+	small.PublishAt(Event{Seq: 10, Path: "/a.md", Version: 2, Op: protocol.OpPublish})
+	if _, err := small.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 1}); !errors.Is(err, ErrResync) {
+		t.Fatalf("resume across a ring-wide gap: %v, want ErrResync", err)
+	}
+	late, err := small.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, late).Seq; got != 10 {
+		t.Fatalf("seq after a wide gap = %d, want 10", got)
+	}
+}

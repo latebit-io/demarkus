@@ -15,6 +15,9 @@ data:
       idleTimeout: {{ .Values.server.idleTimeout | quote }}
     health:
       address: {{ printf ":%d" (int .Values.server.healthPort) | quote }}
+    peers:
+      listen: {{ printf ":%d" (int .Values.server.peerPort) | quote }}
+      service: {{ printf "%s-peers.%s.svc" (include "demarkus-knowledge-server.fullname" .) .Release.Namespace | quote }}
     tls:
       certFile: /run/demarkus/tls/tls.crt
       keyFile: /run/demarkus/tls/tls.key

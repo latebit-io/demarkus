@@ -25,7 +25,8 @@ var ErrResync = errors.New("changefeed: cursor cannot be resumed")
 // ErrClosed means the hub was closed under a subscriber.
 var ErrClosed = errors.New("changefeed: hub closed")
 
-// Event is one committed change. Seq is assigned by the hub on Publish.
+// Event is one committed change. Seq is assigned by the hub on Publish, or
+// by the caller on PublishAt.
 type Event struct {
 	Seq     uint64
 	Path    string
@@ -36,13 +37,15 @@ type Event struct {
 }
 
 // Hub holds a world's recent events and wakes subscribers on each publish.
-// Seq doubles as the ring position, so the ring holds the last len(buf) seqs.
+// Seq doubles as the ring position, so the ring holds the last len(buf) seqs;
+// a seq nobody published leaves a stale slot that readers skip.
 type Hub struct {
 	epoch string
 
 	mu      sync.Mutex
 	buf     []Event
 	lastSeq uint64
+	floor   uint64 // seqs at or below it cannot be resumed from: see Skip
 	notify  chan struct{}
 	closed  bool
 }
@@ -91,21 +94,59 @@ func (h *Hub) Publish(ev Event) protocol.Cursor {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	ev.Seq = h.lastSeq + 1
+	h.append(ev)
+	return h.cursor(ev.Seq)
+}
+
+// PublishAt appends ev under its own Seq, for a store whose commits carry a
+// shared sequence. A Seq the hub already passed is dropped, reported false:
+// the same commit reached the hub twice.
+func (h *Hub) PublishAt(ev Event) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if ev.Seq <= h.lastSeq {
+		return false
+	}
+	h.append(ev)
+	return true
+}
+
+// Skip moves the head to seq without events for what lies between: a
+// subscriber behind it, and a cursor before it, get resync.
+func (h *Hub) Skip(seq uint64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if seq <= h.floor {
+		return
+	}
+	h.floor = seq
+	if seq > h.lastSeq {
+		h.lastSeq = seq
+	}
+	h.wake()
+}
+
+func (h *Hub) append(ev Event) {
 	h.buf[h.slot(ev.Seq)] = ev
 	h.lastSeq = ev.Seq
+	h.wake()
+}
+
+func (h *Hub) wake() {
 	close(h.notify)
 	h.notify = make(chan struct{})
-	return h.cursor(ev.Seq)
 }
 
 func (h *Hub) slot(seq uint64) uint64 { return seq % uint64(len(h.buf)) }
 
-// oldest is the Seq of the oldest event still in the ring.
+// oldest is the Seq of the oldest event still in the ring, or the first
+// after a skip.
 func (h *Hub) oldest() uint64 {
+	oldest := uint64(1)
 	if n := uint64(len(h.buf)); h.lastSeq > n {
-		return h.lastSeq - n + 1
+		oldest = h.lastSeq - n + 1
 	}
-	return 1
+	return max(oldest, h.floor+1)
 }
 
 // Close ends every subscriber with ErrClosed. Later publishes still append,
@@ -164,7 +205,8 @@ func (s *Subscription) Next(ctx context.Context) (Event, error) {
 		for s.next <= h.lastSeq {
 			ev := h.buf[h.slot(s.next)]
 			s.next++
-			if inScope(s.scope, ev.Path) {
+			// A stale slot is a seq nobody published under.
+			if ev.Seq == s.next-1 && inScope(s.scope, ev.Path) {
 				h.mu.Unlock()
 				return ev, nil
 			}

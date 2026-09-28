@@ -50,6 +50,9 @@ spec:
             - name: health
               protocol: TCP
               containerPort: {{ .Values.server.healthPort }}
+            - name: peer
+              protocol: UDP
+              containerPort: {{ .Values.server.peerPort }}
           startupProbe:
             httpGet:
               path: /readyz

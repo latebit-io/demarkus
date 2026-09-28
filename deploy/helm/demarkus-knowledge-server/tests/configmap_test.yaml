@@ -19,6 +19,9 @@ tests:
           pattern: 'health:\n  address: ":8081"'
       - matchRegex:
           path: data["config.yaml"]
+          pattern: 'peers:\n  listen: ":6310"\n  service: "RELEASE-NAME-peers.NAMESPACE.svc"'
+      - matchRegex:
+          path: data["config.yaml"]
           pattern: 'certFile: /run/demarkus/tls/tls.crt\n  keyFile: /run/demarkus/tls/tls.key'
 
   - it: normalizes authorities and renders fixed isolated token paths

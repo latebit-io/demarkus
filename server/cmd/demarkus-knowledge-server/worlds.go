@@ -19,6 +19,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/knowledgeseed"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
+	"github.com/latebit-io/demarkus/server/internal/peerhint"
 	"github.com/latebit-io/demarkus/server/internal/snirouter"
 	"github.com/latebit-io/demarkus/server/internal/worldruntime"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
@@ -37,7 +38,9 @@ const worldRetryInterval = 15 * time.Second
 type worldManager struct {
 	configFile string
 	newStore   func(ctx context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error)
-	logger     *slog.Logger
+	// hint tells peer replicas a world's head moved; nil without peers.
+	hint   func(worldID string, sequence int64)
+	logger *slog.Logger
 	// maxStreams is the listener's per connection stream limit; runtimes
 	// cap watches under it.
 	maxStreams int
@@ -72,31 +75,38 @@ type worldManager struct {
 type worldEntry struct {
 	config  knowledgeconfig.WorldConfig
 	runtime *worldruntime.Runtime
-	// stopPoll ends the world's change poll.
+	store   *bucketstore.Store
+	// stopPoll ends the world's change poll; kick asks for one now.
 	stopPoll context.CancelFunc
+	kick     chan struct{}
 	// published is set once a router publish carried this runtime; until
 	// then nothing routes to it and it can close at once.
 	published bool
 }
 
+// worldManagerConfig is what a world manager is built from.
+type worldManagerConfig struct {
+	configFile string
+	config     *knowledgeconfig.Config
+	newStore   func(ctx context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error)
+	certs      *certsource.Source
+	// peers carries commit hints to and from the other replicas.
+	peers  *peerLinks
+	logger *slog.Logger
+}
+
 // newWorldManager opens the initial world set. In static mode (no
 // worldsFile) any open failure is fatal, preserving the pre-dynamic
 // startup contract; in dynamic mode failures go to pending.
-func newWorldManager(
-	watchCtx context.Context,
-	group *sync.WaitGroup,
-	configFile string,
-	config *knowledgeconfig.Config,
-	newStore func(ctx context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error),
-	certs *certsource.Source,
-	logger *slog.Logger,
-) (*worldManager, error) {
+func newWorldManager(watchCtx context.Context, group *sync.WaitGroup, cfg worldManagerConfig) (*worldManager, error) {
+	config := cfg.config
 	m := &worldManager{
-		configFile: configFile,
-		newStore:   newStore,
-		logger:     logger,
+		configFile: cfg.configFile,
+		newStore:   cfg.newStore,
+		hint:       cfg.peers.hint,
+		logger:     cfg.logger,
 		maxStreams: int(config.Listen.MaxIncomingStreams),
-		certs:      certs,
+		certs:      cfg.certs,
 		watchCtx:   watchCtx,
 		group:      group,
 		entries:    make(map[string]*worldEntry),
@@ -118,6 +128,7 @@ func newWorldManager(
 		m.Close()
 		return nil, err
 	}
+	cfg.peers.deliverTo(m.Hint)
 	group.Go(func() { m.retryLoop(watchCtx) })
 	return m, nil
 }
@@ -224,17 +235,19 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	if err := m.ensureGenesis(ctx, objects, world); err != nil {
 		return fmt.Errorf("genesis: %w", err)
 	}
-	// The epoch is per process until replicas share a sequence, so a restart
-	// tells every watcher to resync. The store reports its own commits and,
-	// through the poll below, its peers'.
-	changes := changefeed.New("", 0)
+	// Epoch = world ID, sequence = head sequence: a cursor resumes on any
+	// replica and across a restart. The store reports every replica's
+	// commits from the head's receipts; hints and the poll make it look.
+	worldID := world.Bucket.WorldID
+	changes := changefeed.New(worldID, 0)
 	store, err := bucketstore.Open(ctx, objects, bucketstore.Options{
-		WorldID:        world.Bucket.WorldID,
+		WorldID:        worldID,
 		Logger:         m.logger.With("world", world.Name),
 		RequestTimeout: time.Duration(world.Limits.RequestTimeout),
 		MaxDocuments:   world.Limits.MaxDocuments,
 		ReadOnly:       world.ReadOnly,
 		Changes:        changes,
+		Committed:      m.committed(worldID),
 	})
 	if err != nil {
 		return fmt.Errorf("bucket: %w", err)
@@ -249,13 +262,13 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 		m.logger.Info("seeded the initial write policy", "world", world.Name, "path", publishpolicy.DocumentPath)
 	}
 	runtime, err := worldruntime.New(&worldruntime.Config{
-		Name:              world.Name,
-		Store:             writepolicy.Enforce(store, writepolicy.Options{Require: true}),
-		Changes:           changes,
-		MaxWatches:        world.Limits.MaxWatches,
-		MaxStreams:        m.maxStreams,
-		TokensFile:        world.Auth.TokensFile,
-		StaticTokensFile:  world.Auth.StaticTokensFile,
+		Name:             world.Name,
+		Store:            writepolicy.Enforce(store, writepolicy.Options{Require: true}),
+		Changes:          changes,
+		MaxWatches:       world.Limits.MaxWatches,
+		MaxStreams:       m.maxStreams,
+		TokensFile:       world.Auth.TokensFile,
+		StaticTokensFile: world.Auth.StaticTokensFile,
 		// Knowledge worlds are public-read, so a tokens Secret that lands
 		// after the open only delays writes; the watcher reloads it.
 		OptionalTokensFiles: true,
@@ -277,33 +290,60 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 		}
 	}
 	pollCtx, stopPoll := context.WithCancel(m.watchCtx)
-	entry := &worldEntry{config: *world, runtime: runtime, stopPoll: stopPoll}
+	entry := &worldEntry{config: *world, runtime: runtime, store: store, stopPoll: stopPoll, kick: make(chan struct{}, 1)}
 	m.entries[world.Name] = entry
-	m.group.Go(func() { pollChanges(pollCtx, store, runtime, m.logger.With("world", world.Name)) })
+	m.group.Go(func() { pollChanges(pollCtx, entry, m.logger.With("world", world.Name)) })
 	m.acquireTokenWatchLocked(tokenFiles(world))
 	m.logger.Info("world opened", "world", world.Name)
 	return nil
 }
 
+// committed is the store hook that hints peers about this replica's commits.
+func (m *worldManager) committed(worldID string) func(sequence int64) {
+	if m.hint == nil {
+		return nil
+	}
+	return func(sequence int64) { m.hint(worldID, sequence) }
+}
+
+// Hint is a peer replica saying a world's head moved: its world polls now
+// unless it already serves that sequence.
+func (m *worldManager) Hint(hint peerhint.Hint) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, entry := range m.entries {
+		if entry.config.Bucket.WorldID != hint.WorldID || entry.store.HeadSequence() >= hint.Sequence {
+			continue
+		}
+		select {
+		case entry.kick <- struct{}{}:
+			m.logger.Info("peer hint", "world", entry.config.Name, "sequence", hint.Sequence)
+		default:
+		}
+	}
+}
+
 // changePollInterval bounds how late a watcher on this replica learns of a
-// peer replica's write: the backstop until replicas push commit hints.
+// peer replica's write when its hint was lost: the backstop.
 const changePollInterval = 5 * time.Second
 
-// pollChanges polls the bucket head while the world has watchers, so their
-// hints include what other replicas commit.
-func pollChanges(ctx context.Context, store *bucketstore.Store, runtime *worldruntime.Runtime, logger *slog.Logger) {
+// pollChanges polls the bucket head on every peer hint, and on a timer
+// while the world has watchers, so their hints include what other
+// replicas commit.
+func pollChanges(ctx context.Context, entry *worldEntry, logger *slog.Logger) {
 	ticker := time.NewTicker(changePollInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-entry.kick:
 		case <-ticker.C:
+			if entry.runtime.Watches() == 0 {
+				continue
+			}
 		}
-		if runtime.Watches() == 0 {
-			continue
-		}
-		if err := store.Poll(ctx); err != nil && ctx.Err() == nil {
+		if err := entry.store.Poll(ctx); err != nil && ctx.Err() == nil {
 			logger.Warn("change poll failed", "error", err)
 		}
 	}

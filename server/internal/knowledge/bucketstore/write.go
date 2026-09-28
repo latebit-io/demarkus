@@ -36,9 +36,7 @@ type candidateMutation struct {
 type mutationResult struct {
 	Document *storefmt.Document
 	Changed  bool
-	// What the change hint reports: set by the builder, Sequence by the commit.
-	Path, Op, BodyHash string
-	Sequence           int64
+	Sequence int64 // head sequence of the commit, once it succeeded
 }
 
 type mutationBuilder func(context.Context, *readView, string) (*candidateMutation, mutationResult, error)
@@ -333,9 +331,9 @@ func (store *Store) buildWriteCandidate(
 	objects = append(objects, modelObject{Key: versionEntry.Blob.Key, Data: bytes.Clone(stored)})
 	objects = append(objects, historyObjects...)
 	objects = append(objects, manifestModel)
-	result := mutationResult{Document: document, Changed: true, Path: path, Op: write.op, BodyHash: versionEntry.BodyHash}
 	return store.buildNamespaceCandidate(ctx, view.snapshot, &namespaceChange{
-		operationID: operationID, entry: &newEntry, created: !exists, objects: objects, result: result, body: body,
+		operationID: operationID, entry: &newEntry, created: !exists, objects: objects, body: body,
+		result: mutationResult{Document: document, Changed: true}, op: write.op, agent: persisted["agent"],
 	})
 }
 
@@ -393,9 +391,10 @@ func (store *Store) buildArchiveCandidate(
 	oldEntry.Archived = archived
 	objects := []modelObject{manifestModel}
 	document := documentFromRetained(raw, &tip, &storedTip, archived)
-	result := mutationResult{Document: document, Changed: true, Path: path, Op: changefeed.ArchiveOp(archived), BodyHash: oldEntry.BodyHash}
+	result := mutationResult{Document: document, Changed: true}
 	return store.buildNamespaceCandidate(ctx, view.snapshot, &namespaceChange{
 		operationID: operationID, entry: &oldEntry, objects: objects, result: result,
+		op: changefeed.ArchiveOp(archived), agent: document.Metadata["agent"],
 	})
 }
 
@@ -542,6 +541,7 @@ type namespaceChange struct {
 	objects     []modelObject
 	result      mutationResult
 	body        []byte
+	op, agent   string // what the head receipt names
 }
 
 // buildNamespaceCandidate derives the committed snapshot from base plus one
@@ -593,7 +593,7 @@ func (store *Store) buildNamespaceCandidate(
 	}
 	objects = append(objects, rootModel)
 
-	head := nextHead(&base.Head, rootRef, change.operationID)
+	head := nextHead(&base.Head, rootRef, change)
 	if err := validateHeadObject(&head); err != nil {
 		return nil, mutationResult{}, fmt.Errorf("build head: %w", err)
 	}
@@ -631,12 +631,15 @@ func (store *Store) buildNamespaceCandidate(
 	}, change.result, nil
 }
 
-func nextHead(current *headObject, root objectRef, operationID string) headObject {
+func nextHead(current *headObject, root objectRef, change *namespaceChange) headObject {
 	sequence := current.Sequence + 1
 	receipts := append(slices.Clone(current.Receipts), operationReceipt{
-		OperationID: operationID,
+		OperationID: change.operationID,
 		Sequence:    sequence,
 		Result:      "committed",
+		Path:        change.entry.Path,
+		Op:          change.op,
+		Agent:       change.agent,
 	})
 	if len(receipts) > maximumReceipts {
 		receipts = slices.Clone(receipts[len(receipts)-maximumReceipts:])

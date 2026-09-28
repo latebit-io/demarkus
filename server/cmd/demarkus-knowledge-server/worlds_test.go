@@ -18,12 +18,14 @@ import (
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/auth"
+	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/knowledgeseed"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
+	"github.com/latebit-io/demarkus/server/internal/peerhint"
 )
 
 // worldsTestHarness runs a worldManager over in-memory blob stores and a
@@ -143,7 +145,7 @@ tls:
 	}
 	watchCtx, cancel := context.WithCancel(context.Background())
 	group := &sync.WaitGroup{}
-	manager, err := newWorldManager(watchCtx, group, configFile, config, newStore, certs, slog.Default())
+	manager, err := newWorldManager(watchCtx, group, worldManagerConfig{configFile: configFile, config: config, newStore: newStore, certs: certs, peers: &peerLinks{}, logger: slog.Default()})
 	if err != nil {
 		cancel()
 		group.Wait()
@@ -651,5 +653,36 @@ func TestWorldManagerSeedsProvisionedWorld(t *testing.T) {
 	if document.Version != 1 || document.Metadata["agent"] != publishpolicy.SeedAgent {
 		t.Errorf("provisioned world policy = version %d agent %q, want the marked seed at v1",
 			document.Version, document.Metadata["agent"])
+	}
+}
+
+// A peer's hint makes the world poll at once, so a commit on another
+// replica reaches this one without a watcher or the 5 s timer.
+func TestWorldManagerHintPollsTheWorld(t *testing.T) {
+	tokensDir := t.TempDir()
+	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, writeTokens(t, tokensDir, "alice"), true))
+	h.manager.mu.Lock()
+	entry := h.manager.entries["alice"]
+	h.manager.mu.Unlock()
+	before := entry.store.HeadSequence()
+
+	// Another replica's commit: a second store over the same bucket.
+	peer, err := bucketstore.Open(context.Background(), h.objects(t, "alice"), bucketstore.Options{Logger: slog.Default(), WorldID: testWorldID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peer.Publish(context.Background(), backend.WriteRequest{Path: "/docs/peer.md", ExpectedVersion: -1, Content: []byte("# Peer\n")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := entry.store.HeadSequence(); got != before {
+		t.Fatalf("head moved to %d without a hint or a read", got)
+	}
+	h.manager.Hint(peerhint.Hint{WorldID: testWorldID, Sequence: before + 1})
+	deadline := time.Now().Add(5 * time.Second)
+	for entry.store.HeadSequence() != before+1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("head = %d after the hint, want %d", entry.store.HeadSequence(), before+1)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

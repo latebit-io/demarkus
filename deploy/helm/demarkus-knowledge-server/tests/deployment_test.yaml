@@ -51,6 +51,12 @@ tests:
             name: health
             protocol: TCP
             containerPort: 8081
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: peer
+            protocol: UDP
+            containerPort: 6310
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.httpGet.path
           value: /livez

@@ -1,0 +1,19 @@
+# Headless: resolves to every replica, ready or not, so peers find each
+# other from the first commit.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "demarkus-knowledge-server.fullname" . }}-peers
+  labels:
+    {{- include "demarkus-knowledge-server.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "demarkus-knowledge-server.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: peer
+      protocol: UDP
+      port: {{ .Values.server.peerPort }}
+      targetPort: peer

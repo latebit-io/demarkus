@@ -1,6 +1,7 @@
 package bucketstore
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -110,6 +111,27 @@ func validateHeadObject(head *headObject) error {
 			return fmt.Errorf("receipt %d duplicates operation ID %q", index, receipt.OperationID)
 		}
 		seen[receipt.OperationID] = struct{}{}
+		if err := validateReceiptChange(&receipt); err != nil {
+			return fmt.Errorf("receipt %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+// validateReceiptChange checks the change a receipt names; a receipt from
+// before change hints names none.
+func validateReceiptChange(receipt *operationReceipt) error {
+	if receipt.Path == "" && receipt.Op == "" && receipt.Agent == "" {
+		return nil
+	}
+	if err := protocol.ValidateRequestPath(receipt.Path); err != nil {
+		return fmt.Errorf("path %q: %w", receipt.Path, err)
+	}
+	if !protocol.IsKnownOp(receipt.Op) {
+		return fmt.Errorf("unknown op %q", receipt.Op)
+	}
+	if !protocol.IsValidMetaValue(receipt.Agent) {
+		return errors.New("agent is not a valid metadata value")
 	}
 	return nil
 }

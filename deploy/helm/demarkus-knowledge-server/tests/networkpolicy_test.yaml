@@ -20,12 +20,33 @@ tests:
           value: [Ingress, Egress]
       - lengthEqual:
           path: spec.ingress
-          count: 1
+          count: 2
       - equal:
           path: spec.ingress[0].ports[0]
           value:
             protocol: UDP
             port: 6309
+
+  - it: admits peer hints only from this chart's own pods
+    asserts:
+      - equal:
+          path: spec.ingress[1].from[0].podSelector.matchLabels["app.kubernetes.io/name"]
+          value: demarkus-knowledge-server
+      - notExists:
+          path: spec.ingress[1].from[0].namespaceSelector
+      - equal:
+          path: spec.ingress[1].ports[0]
+          value:
+            protocol: UDP
+            port: 6310
+      - equal:
+          path: spec.egress[-1].to[0].podSelector.matchLabels["app.kubernetes.io/name"]
+          value: demarkus-knowledge-server
+      - equal:
+          path: spec.egress[-1].ports[0]
+          value:
+            protocol: UDP
+            port: 6310
 
   - it: admits only labeled broker and agent pods from configured namespaces
     asserts:
@@ -92,7 +113,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.egress
-          count: 3
+          count: 4
       - equal:
           path: spec.egress[1].to[0].ipBlock.cidr
           value: 169.254.169.254/32

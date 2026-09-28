@@ -11,6 +11,11 @@ server:
   healthPort: 8081
   maxIncomingStreams: 128
   idleTimeout: 30s
+  # Replicas tell each other about commits on this port (ALPN mark-peer),
+  # so a WATCH on one replica sees another's write at once instead of on
+  # the 5 s poll. Reached only through the headless peers Service and
+  # admitted only from this chart's pods by the NetworkPolicy.
+  peerPort: 6310
 
 # Static worlds; empty is valid only with dynamicWorlds below, or when the
 # umbrella supplies global.worlds. An existing empty bucket is initialized and

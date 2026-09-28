@@ -143,6 +143,10 @@ func TestValidateRequiredAndLimitFields(t *testing.T) {
 		{"health address", func(config *Config) { config.Health.Address = "" }, "health.address must not be empty"},
 		{"TLS certificate", func(config *Config) { config.TLS.CertFile = "" }, "tls.certFile is required"},
 		{"TLS key", func(config *Config) { config.TLS.KeyFile = "" }, "tls.keyFile is required"},
+		{"peers without listen", func(config *Config) { config.Peers.Service = "peers" }, "peers.listen must be set"},
+		{"peers listen without port", func(config *Config) { config.Peers = PeersConfig{Listen: "localhost", Service: "peers"} }, "peers.listen \"localhost\""},
+		{"peers without anyone to hint", func(config *Config) { config.Peers = PeersConfig{Listen: ":6310"} }, "peers.service or peers.addresses"},
+		{"peer address without port", func(config *Config) { config.Peers = PeersConfig{Listen: ":6310", Addresses: []string{"replica-b"}} }, "peers.addresses \"replica-b\""},
 		{"worlds", func(config *Config) { config.Worlds = nil }, "worlds must contain at least one"},
 		{"world name", func(config *Config) { config.Worlds[0].Name = "" }, "worlds[0].name is required"},
 		{"authorities", func(config *Config) { config.Worlds[0].Authorities = nil }, "authorities must contain at least one"},
@@ -319,5 +323,26 @@ func secondWorld() WorldConfig {
 			Burst:                 100,
 			MaxWatches:            1024,
 		},
+	}
+}
+
+func TestParsePeers(t *testing.T) {
+	body := strings.Replace(validConfig, "health:", "peers:\n  listen: \":6310\"\n  service: knowledge-peers\n  addresses: [\"10.0.0.2:6310\"]\nhealth:", 1)
+	config, err := Parse([]byte(body))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !config.Peers.Enabled() || config.Peers.Service != "knowledge-peers" || len(config.Peers.Addresses) != 1 {
+		t.Fatalf("peers = %+v", config.Peers)
+	}
+	if port, err := config.Peers.Port(); err != nil || port != 6310 {
+		t.Fatalf("port = %d, %v", port, err)
+	}
+	plain, err := Parse([]byte(validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Peers.Enabled() {
+		t.Fatalf("peers enabled without a section: %+v", plain.Peers)
 	}
 }

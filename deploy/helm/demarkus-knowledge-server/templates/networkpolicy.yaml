@@ -31,6 +31,14 @@ spec:
       ports:
         - protocol: UDP
           port: {{ .Values.server.udpPort }}
+    # Commit hints between this chart's own replicas.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "demarkus-knowledge-server.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: {{ .Values.server.peerPort }}
   egress:
     - to:
         - namespaceSelector:
@@ -66,4 +74,12 @@ spec:
           port: 988
         - protocol: TCP
           port: 987
+    # Commit hints to this chart's own replicas.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "demarkus-knowledge-server.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: {{ .Values.server.peerPort }}
 {{- end }}

@@ -11,6 +11,11 @@ MODE=${1:-all}
 FILE_PORT=${SMOKE_FILE_PORT:-16409}
 KNOWLEDGE_PORT=${SMOKE_KNOWLEDGE_PORT:-16410}
 HEALTH_PORT=${SMOKE_HEALTH_PORT:-18181}
+# A second knowledge replica over the same bucket, hinted by the first.
+KNOWLEDGE_PORT_B=${SMOKE_KNOWLEDGE_PORT_B:-16411}
+HEALTH_PORT_B=${SMOKE_HEALTH_PORT_B:-18182}
+PEER_PORT=${SMOKE_PEER_PORT:-16420}
+PEER_PORT_B=${SMOKE_PEER_PORT_B:-16421}
 GCS_PORT=${SMOKE_GCS_PORT:-14443}
 GCS_IMAGE=${SMOKE_GCS_IMAGE:-fsouza/fake-gcs-server:latest}
 GCS_NAME="demarkus-smoke-gcs-$$"
@@ -34,9 +39,11 @@ done
 WORK=$(mktemp -d)
 SERVER_PID=""
 WATCH_PID=""
+REPLICA_PID=""
 cleanup() {
   [ -n "$WATCH_PID" ] && kill "$WATCH_PID" 2>/dev/null
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
+  [ -n "$REPLICA_PID" ] && kill "$REPLICA_PID" 2>/dev/null
   docker rm -f "$GCS_NAME" >/dev/null 2>&1
   if [ "${SMOKE_KEEP:-}" = 1 ]; then echo "kept $WORK"; else rm -rf "$WORK"; fi
 }
@@ -235,6 +242,41 @@ watch_stream() {
   refute "watch printed nothing beside its prefix" 'beside' -- cat "$WORK/watch.out"
 }
 
+# replica_pair <url A> <url B>: with A running, a second replica B over the
+# same bucket. A watch on B sees a write through A by A's hint, and after B
+# restarts the watch resumes from its cursor without a resync.
+replica_pair() {
+  local A=$1 B=$2 lines
+  start_replica_b() {
+    env STORAGE_EMULATOR_HOST="localhost:$GCS_PORT" server/bin/demarkus-knowledge-server -config "$WORK/knowledge-b.yaml" >>"$WORK/knowledge-b.log" 2>&1 </dev/null &
+    REPLICA_PID=$!
+    retry "replica B at $B" healthy "$B"
+  }
+  start_replica_b || return 1
+  expect "replica B enabled peer hints" 'peer hints enabled' -- cat "$WORK/knowledge-b.log"
+  start_watch "$B"
+  expect "publish through A" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=domain:smoke -meta agent=smoke -body "# Via A" "$A/watched/via-a.md"
+  watch_lines 1
+  expect "B's watch printed A's publish" $'\tpublish\t/watched/via-a\.md\t1\t' -- cat "$WORK/watch.out"
+  expect "A's hint reached B" 'peer hint' -- cat "$WORK/knowledge-b.log"
+  # Restart B under the open watch: the cursor is the world's, so B resumes
+  # it from the receipt window rather than answering resync.
+  kill -TERM "$REPLICA_PID" 2>/dev/null
+  wait "$REPLICA_PID" 2>/dev/null
+  REPLICA_PID=""
+  start_replica_b || return 1
+  expect "publish through A after B restarted" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=domain:smoke -body "# Again" "$A/watched/again.md"
+  watch_lines 2
+  expect "B's restarted watch printed the next publish" $'\tpublish\t/watched/again\.md\t1\t' -- cat "$WORK/watch.out"
+  refute "no resync across B's restart" 'resync' -- cat "$WORK/watch.out"
+  lines=$(wc -l <"$WORK/watch.out" | tr -d ' ')
+  expect "exactly the two publishes reached B's watch" '^2$' -- echo "$lines"
+  stop_watch
+  kill -TERM "$REPLICA_PID" 2>/dev/null
+  wait "$REPLICA_PID" 2>/dev/null
+  REPLICA_PID=""
+}
+
 # policy <url>: the write policy as the knowledge server enforces it.
 policy() {
   local U=$1
@@ -290,7 +332,7 @@ no_errors() {
 }
 
 smoke_file() {
-  local U="mark://localhost:$FILE_PORT"
+  local U="mark://localhost:$FILE_PORT" before_restart
   echo "== file server"
   mkdir -p "$WORK/root"
   start_file() {
@@ -304,11 +346,14 @@ smoke_file() {
   watch_stream "$U"
   stop_server
   expect "drain with an open watch completes" 'all connections drained' -- tail -n 8 "$WORK/file.log"
+  before_restart=$(wc -l <"$WORK/file.log")
   start_file || return 1
   expect "restart rebuilds the lookup catalog" 'lookup catalog built.*entries=[1-9]' -- tail -n 12 "$WORK/file.log"
   expect "restart serves the same data" 'version=2' -- "${C[@]}" "$U/docs/a.md"
   expect "restart keeps a valid chain" 'chain-valid=true' -- "${C[@]}" -X VERSIONS "$U/docs/a.md"
-  # The watch outlives the restart: one resync, then it delivers again.
+  # The watch outlives the restart: one resync, then it delivers again. The
+  # publish waits for the reconnect, since a resync hands out the head.
+  retry "watch reconnected after the restart" sh -c "tail -n +$((before_restart + 1)) '$WORK/file.log' | grep -q 'msg=watch '"
   expect "publish after the restart" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -body "# Again" "$U/watched/again.md"
   watch_lines 5
   expect "watch resynced across the restart" $'\tresync\t' -- cat "$WORK/watch.out"
@@ -329,12 +374,18 @@ smoke_knowledge() {
   openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
     -addext subjectAltName=DNS:localhost \
     -keyout "$WORK/key.pem" -out "$WORK/cert.pem" >/dev/null 2>&1 || { setup_failed "generate the localhost certificate"; return 1; }
-  cat >"$WORK/knowledge.yaml" <<EOF
+  # knowledge_config <file> <port> <health port> <peer port> <peer's port>:
+  # one replica's config; the two share the bucket and hint each other.
+  knowledge_config() {
+    cat >"$1" <<EOF
 version: 1
 listen:
-  address: ":$KNOWLEDGE_PORT"
+  address: ":$2"
 health:
-  address: ":$HEALTH_PORT"
+  address: ":$3"
+peers:
+  listen: "127.0.0.1:$4"
+  addresses: ["127.0.0.1:$5"]
 tls:
   certFile: $WORK/cert.pem
   keyFile: $WORK/key.pem
@@ -349,6 +400,9 @@ worlds:
     limits:
       requestTimeout: 10s
 EOF
+  }
+  knowledge_config "$WORK/knowledge.yaml" "$KNOWLEDGE_PORT" "$HEALTH_PORT" "$PEER_PORT" "$PEER_PORT_B"
+  knowledge_config "$WORK/knowledge-b.yaml" "$KNOWLEDGE_PORT_B" "$HEALTH_PORT_B" "$PEER_PORT_B" "$PEER_PORT"
   start_knowledge() {
     start_server "$U" "$WORK/knowledge.log" env STORAGE_EMULATOR_HOST="localhost:$GCS_PORT" \
       server/bin/demarkus-knowledge-server -config "$WORK/knowledge.yaml"
@@ -369,6 +423,7 @@ EOF
   refute "restart does not reseed" 'seeded the initial write policy' -- tail -n "+$((first_lines + 1))" "$WORK/knowledge.log"
   expect "restart serves the curated policy" 'require_tags: domain' -- "${C[@]}" "$U$POLICY"
   expect "restart keeps a valid chain" 'chain-valid=true' -- "${C[@]}" -X VERSIONS "$U/docs/a.md"
+  replica_pair "$U" "mark://localhost:$KNOWLEDGE_PORT_B"
   stop_server
   no_errors "knowledge server" "$WORK/knowledge.log"
 }
