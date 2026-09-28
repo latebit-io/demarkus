@@ -246,8 +246,10 @@ watch_stream() {
 # same bucket. A watch on B sees a write through A by A's hint, and after B
 # restarts the watch resumes from its cursor without a resync.
 replica_pair() {
-  local A=$1 B=$2 lines
+  local A=$1 B=$2 lines run_start=0
+  # Both runs append to one log: run_start scopes each check to its own run.
   start_replica_b() {
+    run_start=$( { wc -l <"$WORK/knowledge-b.log"; } 2>/dev/null || echo 0)
     env STORAGE_EMULATOR_HOST="localhost:$GCS_PORT" server/bin/demarkus-knowledge-server -config "$WORK/knowledge-b.yaml" >>"$WORK/knowledge-b.log" 2>&1 </dev/null &
     REPLICA_PID=$!
     retry "replica B at $B" healthy "$B"
@@ -257,7 +259,7 @@ replica_pair() {
     kill -TERM "$REPLICA_PID" 2>/dev/null
     wait "$REPLICA_PID" 2>/dev/null
     REPLICA_PID=""
-    expect "replica B drained its connections" 'all connections drained' -- tail -n 8 "$WORK/knowledge-b.log"
+    expect "replica B drained its connections" 'all connections drained' -- tail -n "+$((run_start + 1))" "$WORK/knowledge-b.log"
   }
   start_replica_b || return 1
   expect "replica B enabled peer hints" 'peer hints enabled' -- cat "$WORK/knowledge-b.log"
