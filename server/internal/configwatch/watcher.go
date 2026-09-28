@@ -29,10 +29,12 @@ const defaultDebounce = 150 * time.Millisecond
 // momentarily unresolvable before the new contents are linked in.
 const retryDelay = 75 * time.Millisecond
 
-// Watcher invokes Reload whenever the directory holding Target sees any
+// Watcher invokes Reload whenever the directory holding Targets sees any
 // change, after coalescing events through Debounce.
 type Watcher struct {
-	Target   string
+	// Targets are files in one directory; a write to any of them reloads,
+	// as does any structural change in that directory.
+	Targets  []string
 	Reload   func() error
 	Debounce time.Duration
 	Logger   *slog.Logger
@@ -42,7 +44,7 @@ type Watcher struct {
 // goroutine. Reload errors are logged and do not terminate the loop; only a
 // failure to set up the underlying watcher returns an error.
 func (w *Watcher) Run(ctx context.Context) error {
-	if w.Target == "" {
+	if len(w.Targets) == 0 || w.Targets[0] == "" {
 		return errors.New("configwatch: target is empty")
 	}
 	if w.Reload == nil {
@@ -56,15 +58,21 @@ func (w *Watcher) Run(ctx context.Context) error {
 		debounce = defaultDebounce
 	}
 
-	dir := filepath.Dir(w.Target)
-	cleanTarget := filepath.Clean(w.Target)
+	dir := filepath.Dir(w.Targets[0])
+	targets := make(map[string]bool, len(w.Targets))
+	for _, target := range w.Targets {
+		if filepath.Dir(target) != dir {
+			return fmt.Errorf("configwatch: target %s is outside %s", target, dir)
+		}
+		targets[filepath.Clean(target)] = true
+	}
 	fw, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("configwatch: create watcher: %w", err)
 	}
 	defer func() {
 		if err := fw.Close(); err != nil {
-			w.Logger.Warn("configwatch: close watcher failed", "target", w.Target, "error", err)
+			w.Logger.Warn("configwatch: close watcher failed", "target", w.Targets[0], "error", err)
 		}
 	}()
 
@@ -72,7 +80,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		return fmt.Errorf("configwatch: watch %s: %w", dir, err)
 	}
 
-	w.Logger.Info("configwatch: watching", "target", w.Target, "dir", dir, "debounce", debounce)
+	w.Logger.Info("configwatch: watching", "targets", w.Targets, "dir", dir, "debounce", debounce)
 
 	timer := time.NewTimer(debounce)
 	if !timer.Stop() {
@@ -89,12 +97,12 @@ func (w *Watcher) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			w.Logger.Warn("configwatch: error", "target", w.Target, "error", err)
+			w.Logger.Warn("configwatch: error", "target", w.Targets[0], "error", err)
 		case ev, ok := <-fw.Events:
 			if !ok {
 				return nil
 			}
-			if !eventRelevant(ev, cleanTarget) {
+			if !eventRelevant(ev, targets) {
 				continue
 			}
 			if armed && !timer.Stop() {
@@ -108,19 +116,19 @@ func (w *Watcher) Run(ctx context.Context) error {
 		case <-timer.C:
 			armed = false
 			if err := reloadWithRetry(w.Reload); err != nil {
-				w.Logger.Warn("configwatch: reload failed", "target", w.Target, "error", err)
+				w.Logger.Warn("configwatch: reload failed", "target", w.Targets[0], "error", err)
 			} else {
-				w.Logger.Info("configwatch: reloaded", "target", w.Target)
+				w.Logger.Info("configwatch: reloaded", "target", w.Targets[0])
 			}
 		}
 	}
 }
 
 // eventRelevant drops Write/Chmod events on sibling files (a co-located log
-// once fed the watcher its own "reloaded" lines forever, #289). The target
-// itself and structural ops (create/rename/remove: swaps) still reload.
-func eventRelevant(ev fsnotify.Event, cleanTarget string) bool {
-	if ev.Name == "" || filepath.Clean(ev.Name) == cleanTarget {
+// once fed the watcher its own "reloaded" lines forever, #289). The targets
+// themselves and structural ops (create/rename/remove: swaps) still reload.
+func eventRelevant(ev fsnotify.Event, targets map[string]bool) bool {
+	if ev.Name == "" || targets[filepath.Clean(ev.Name)] {
 		return true
 	}
 	return ev.Op&(fsnotify.Create|fsnotify.Rename|fsnotify.Remove) != 0

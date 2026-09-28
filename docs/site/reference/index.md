@@ -54,7 +54,8 @@ worlds:                         # one or more
       url: gs://<bucket>        # exact form
       worldID: <uuid>           # canonical lowercase RFC 4122, unique
     auth:
-      tokensFile: <path>        # required, hot-reloaded
+      tokensFile: <path>        # required; the broker appends to it
+      staticTokensFile: <path>  # optional; operator-owned entries merged in
     policy:
       path: /.well-known/demarkus/policy.md   # only supported value
       file: /etc/demarkus/policy-acme.md      # optional: body seeded as version 1

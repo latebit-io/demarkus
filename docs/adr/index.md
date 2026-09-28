@@ -28,3 +28,4 @@ Decision records binding the protocol, spec, and repo; git is canonical, and eac
 | [0022](0022-gateway-dependencies-not-the-server.md) | The gateway takes its dependencies, not the Server | accepted 2026-09-21 |
 | [0023](0023-broker-packages-behind-one-run.md) | The broker is four packages behind one Run | accepted 2026-09-22 |
 | [0024](0024-plugin-binary-packages-by-concern-and-host-values.md) | The plugin binary is packages by concern, and a harness is a value | accepted 2026-09-22 |
+| [0027](0027-world-token-files-optional-and-split.md) | World token files are optional at open and split into runtime and static | proposed 2026-09-28 |

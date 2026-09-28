@@ -27,6 +27,7 @@ worlds:
       worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
     auth:
       tokensFile: /run/demarkus/world-a/tokens.toml
+      staticTokensFile: /run/demarkus/world-a/static-tokens.toml
     policy:
       path: /.well-known/demarkus/policy.md
     readOnly: false
@@ -50,6 +51,9 @@ func TestParseValidConfig(t *testing.T) {
 	}
 	if config.Worlds[0].Limits.RequestTimeout != Duration(10*time.Second) {
 		t.Fatalf("request timeout: got %s", time.Duration(config.Worlds[0].Limits.RequestTimeout))
+	}
+	if got := config.Worlds[0].Auth.StaticTokensFile; got != "/run/demarkus/world-a/static-tokens.toml" {
+		t.Fatalf("static tokens file: got %q", got)
 	}
 }
 
@@ -255,6 +259,12 @@ func TestValidateDuplicateWorldIdentities(t *testing.T) {
 		{"clean token file", func(_, second *WorldConfig) {
 			second.Auth.TokensFile = "/run/demarkus/world-b/../world-a/tokens.toml"
 		}, "duplicates worlds[0].auth.tokensFile"},
+		{"static token file of another world", func(first, second *WorldConfig) {
+			second.Auth.StaticTokensFile = first.Auth.TokensFile
+		}, "worlds[1].auth.staticTokensFile \"/run/demarkus/world-a/tokens.toml\" duplicates worlds[0].auth.tokensFile"},
+		{"static token file of the same world", func(_, second *WorldConfig) {
+			second.Auth.StaticTokensFile = second.Auth.TokensFile
+		}, "duplicates worlds[1].auth.tokensFile"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -10,6 +10,15 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
+// loadTokens opens path as a strict single-file source.
+func loadTokens(path string) (*TokenStore, error) {
+	source, err := OpenSource(SourceConfig{TokensFile: path})
+	if err != nil {
+		return nil, err
+	}
+	return source.Current(), nil
+}
+
 func TestLoadTokens(t *testing.T) {
 	t.Run("valid file", func(t *testing.T) {
 		dir := t.TempDir()
@@ -28,7 +37,7 @@ operations = ["read"]
 			t.Fatal(err)
 		}
 
-		ts, err := LoadTokens(path)
+		ts, err := loadTokens(path)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -52,7 +61,7 @@ operations = ["read"]
 			t.Fatal(err)
 		}
 
-		ts, err := LoadTokens(path)
+		ts, err := loadTokens(path)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -62,7 +71,7 @@ operations = ["read"]
 	})
 
 	t.Run("missing file", func(t *testing.T) {
-		_, err := LoadTokens("/nonexistent/tokens.toml")
+		_, err := loadTokens("/nonexistent/tokens.toml")
 		if err == nil {
 			t.Fatal("expected error for missing file")
 		}
@@ -75,7 +84,7 @@ operations = ["read"]
 			t.Fatal(err)
 		}
 
-		_, err := LoadTokens(path)
+		_, err := loadTokens(path)
 		if err == nil {
 			t.Fatal("expected error for invalid TOML")
 		}
@@ -94,7 +103,7 @@ expires = "2026-12-31T23:59:59Z"
 			t.Fatal(err)
 		}
 
-		ts, err := LoadTokens(path)
+		ts, err := loadTokens(path)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -119,7 +128,7 @@ operations = ["publish"]
 			t.Fatal(err)
 		}
 
-		_, err := LoadTokens(path)
+		_, err := loadTokens(path)
 		if err == nil {
 			t.Fatal("expected error for invalid path pattern")
 		}
@@ -137,7 +146,7 @@ operations = ["publish"]
 			t.Fatal(err)
 		}
 
-		_, err := LoadTokens(path)
+		_, err := loadTokens(path)
 		if err == nil {
 			t.Fatal("expected error for bare ** without slash delimiters")
 		}
@@ -155,7 +164,7 @@ operations = ["publish"]
 			t.Fatal(err)
 		}
 
-		_, err := LoadTokens(path)
+		_, err := loadTokens(path)
 		if err == nil {
 			t.Fatal("expected error for multiple ** wildcards")
 		}
@@ -174,7 +183,7 @@ expires = "not-a-date"
 			t.Fatal(err)
 		}
 
-		_, err := LoadTokens(path)
+		_, err := loadTokens(path)
 		if err == nil {
 			t.Fatal("expected error for invalid expires format")
 		}

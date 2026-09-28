@@ -14,14 +14,15 @@ server:
 
 # Static worlds; empty is valid only with dynamicWorlds below, or when the
 # umbrella supplies global.worlds. An existing empty bucket is initialized and
-# seeded on first start; token Secrets are bootstrapped per world by the
-# pre-install Job (tokens.bootstrap).
+# seeded on first start. Both token Secrets mount optional: a world opens
+# without them and reloads as they appear (ownership in the README).
 #
 # Only name and worldID are required. Everything else derives from
 # worldDefaults (or the umbrella's global.*):
-#   authorities:  [<name>.<authorityDomain>]
-#   bucket.url:   <bucketPrefix><name>
-#   tokenSecret:  {name: <name>-tokens, key: tokens.toml}
+#   authorities:        [<name>.<authorityDomain>]
+#   bucket.url:         <bucketPrefix><name>
+#   tokenSecret:        {name: <name>-tokens, key: tokens.toml}
+#   staticTokenSecret:  {name: <name>-static-tokens, key: tokens.toml}
 # Any field set on a world overrides the derived value.
 worlds: []
   # - name: team-a
@@ -50,7 +51,7 @@ tokens:
 
   # Token Secrets are runtime-owned (the broker appends to tokens.toml), so a
   # pre-install Job creates any missing ones out-of-band and the chart never
-  # templates them. Disable only if tokens are provisioned some other way.
+  # templates them. Disable for GitOps installs; see the README.
   bootstrap:
     enabled: true
     # Needs kubectl + sh + coreutils. kubectl supports only ±1 minor of the

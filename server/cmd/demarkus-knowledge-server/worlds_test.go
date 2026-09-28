@@ -16,6 +16,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
@@ -63,10 +64,16 @@ func worldFragment(name, worldID, tokensFile string, bootstrap bool) string {
     bucket:
       url: gs://memory-%s
       worldID: %s
+    bootstrap: %t
     auth:
       tokensFile: %s
-    bootstrap: %t
-`, name, name, name, worldID, tokensFile, bootstrap)
+`, name, name, name, worldID, bootstrap, tokensFile)
+}
+
+// worldStaticFragment renders a provisioned world with a static tokens file
+// beside its runtime one.
+func worldStaticFragment(name, worldID, tokensFile, staticFile string) string {
+	return worldFragment(name, worldID, tokensFile, true) + "      staticTokensFile: " + staticFile + "\n"
 }
 
 // worldPolicyFragment renders a statically configured world whose initial
@@ -156,6 +163,27 @@ func (h *worldsTestHarness) writeFragment(t *testing.T, fragment string) {
 	if err := os.WriteFile(filepath.Join(h.dir, "worlds.yaml"), []byte(fragment), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// writeTokenEntry writes a publish-anywhere entry for raw at path.
+func writeTokenEntry(t *testing.T, path, raw string) {
+	t.Helper()
+	body := "[tokens." + raw + "]\nhash = \"" + protocol.HashToken(raw) + "\"\npaths = [\"/**\"]\noperations = [\"publish\"]\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// tokens returns a live world's current token store.
+func (h *worldsTestHarness) tokens(t *testing.T, world string) *auth.TokenStore {
+	t.Helper()
+	h.manager.mu.Lock()
+	defer h.manager.mu.Unlock()
+	entry := h.manager.entries[world]
+	if entry == nil {
+		t.Fatalf("world %s is not live", world)
+	}
+	return entry.runtime.Tokens()
 }
 
 func writeTokens(t *testing.T, dir, name string) string {
@@ -342,34 +370,59 @@ func TestWorldManagerRefusesBucketWithForeignObjects(t *testing.T) {
 	}
 }
 
-func TestWorldManagerPendingRetryOnMissingTokens(t *testing.T) {
+func TestWorldManagerOpensWorldWithoutTokensFile(t *testing.T) {
 	tokensDir := t.TempDir()
 	tokensA := writeTokens(t, tokensDir, "alice")
 	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, tokensA, true))
 
-	// A world whose tokens file has not propagated yet: open fails,
-	// world parks in pending, others stay live.
+	// A world whose tokens Secret has not been created yet opens with no
+	// tokens: reads serve, writes wait for the file.
 	missing := filepath.Join(tokensDir, "carol.toml")
 	h.writeFragment(t, "worlds:\n"+
 		worldFragment("alice", testWorldID, tokensA, true)+
 		worldFragment("carol", testWorldIDB, missing, true))
 	if err := h.manager.Reload(); err != nil {
-		t.Fatalf("reload with missing tokens: %v (resilient mode must not fail)", err)
+		t.Fatalf("reload with missing tokens: %v", err)
 	}
-	if got := h.manager.WorldCount(); got != 1 {
-		t.Fatalf("worlds = %d, want 1 (carol pending)", got)
-	}
-
-	// Tokens file appears; a retry pass brings the world up.
-	if err := os.WriteFile(missing, []byte(""), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h.manager.retryPending()
 	if got := h.manager.WorldCount(); got != 2 {
-		t.Fatalf("worlds after retry = %d, want 2", got)
+		t.Fatalf("worlds = %d, want 2", got)
 	}
 	if !h.routes("carol.memory.svc.cluster.local") {
-		t.Fatal("recovered world does not route")
+		t.Fatal("world without a tokens file does not route")
+	}
+	if got := h.tokens(t, "carol").Hashes(); len(got) != 0 {
+		t.Fatalf("tokens before the file exists = %v, want none", got)
+	}
+
+	// The file lands (the broker minted its first token); the coordinator
+	// pass the directory watcher triggers picks it up.
+	writeTokenEntry(t, missing, "minted")
+	if err := h.manager.Tokens().Reload(); err != nil {
+		t.Fatalf("token reload: %v", err)
+	}
+	if _, err := h.tokens(t, "carol").Authorize("minted", "/doc.md", "publish"); err != nil {
+		t.Fatalf("minted token after reload: %v", err)
+	}
+}
+
+func TestWorldManagerStaticTokensFileAuthorizesBeforeRuntimeFile(t *testing.T) {
+	tokensDir := t.TempDir()
+	runtimeFile := filepath.Join(tokensDir, "alice.toml")
+	staticFile := filepath.Join(tokensDir, "alice-static.toml")
+	writeTokenEntry(t, staticFile, "agent")
+	h := newWorldsHarness(t, "worlds:\n"+worldStaticFragment("alice", testWorldID, runtimeFile, staticFile))
+
+	if _, err := h.tokens(t, "alice").Authorize("agent", "/doc.md", "publish"); err != nil {
+		t.Fatalf("static token at open: %v", err)
+	}
+	writeTokenEntry(t, runtimeFile, "minted")
+	if err := h.manager.Tokens().Reload(); err != nil {
+		t.Fatalf("token reload: %v", err)
+	}
+	for _, raw := range []string{"agent", "minted"} {
+		if _, err := h.tokens(t, "alice").Authorize(raw, "/doc.md", "publish"); err != nil {
+			t.Fatalf("token %q after the runtime file appeared: %v", raw, err)
+		}
 	}
 }
 

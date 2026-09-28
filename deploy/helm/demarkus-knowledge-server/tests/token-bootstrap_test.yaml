@@ -71,7 +71,7 @@ tests:
           tokenSecret: {name: team-a-token-values, key: tokens.toml}
     asserts:
       - failedTemplate:
-          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with a tokenSecret.name'
+          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with a tokenSecret.name or staticTokenSecret.name'
 
   - it: rejects a raw secret name colliding with dynamic-worlds secrets
     set:

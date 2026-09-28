@@ -29,6 +29,9 @@ tests:
       - matchRegex:
           path: data["config.yaml"]
           pattern: 'tokensFile: "/run/demarkus/worlds/team-b/tokens.toml"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'staticTokensFile: "/run/demarkus/worlds/team-a/static-tokens.toml"'
       - notMatchRegex:
           path: data["config.yaml"]
           pattern: 'tokenSecret'

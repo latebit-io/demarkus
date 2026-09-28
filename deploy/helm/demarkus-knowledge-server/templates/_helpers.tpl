@@ -79,7 +79,8 @@ Resolved world list as YAML. Source is .Values.worlds, else global.worlds
 (umbrella). Each entry is merged over worldDefaults, then the derivable
 fields are filled: authorities [<name>.<authorityDomain>], bucket.url
 <bucketPrefix><name>, bucket.worldID from a top-level worldID, tokenSecret
-<name>-tokens / tokens.toml. Consumers read named fields: include ... | fromYamlArray.
+<name>-tokens / tokens.toml, staticTokenSecret <name>-static-tokens /
+tokens.toml. Consumers read named fields: include ... | fromYamlArray.
 */}}
 {{- define "demarkus-knowledge-server.worlds" -}}
 {{- $global := default dict .Values.global -}}
@@ -102,14 +103,16 @@ fields are filled: authorities [<name>.<authorityDomain>], bucket.url
 {{- $_ := set $bucket "worldID" $world.worldID -}}
 {{- end -}}
 {{- $_ := set $world "bucket" $bucket -}}
-{{- $tokenSecret := default dict $world.tokenSecret -}}
-{{- if empty $tokenSecret.name -}}
-{{- $_ := set $tokenSecret "name" (printf "%s-tokens" $name) -}}
+{{- range $field, $suffix := dict "tokenSecret" "-tokens" "staticTokenSecret" "-static-tokens" -}}
+{{- $secret := default dict (get $world $field) -}}
+{{- if empty $secret.name -}}
+{{- $_ := set $secret "name" (printf "%s%s" $name $suffix) -}}
 {{- end -}}
-{{- if empty $tokenSecret.key -}}
-{{- $_ := set $tokenSecret "key" "tokens.toml" -}}
+{{- if empty $secret.key -}}
+{{- $_ := set $secret "key" "tokens.toml" -}}
 {{- end -}}
-{{- $_ := set $world "tokenSecret" $tokenSecret -}}
+{{- $_ := set $world $field $secret -}}
+{{- end -}}
 {{- $worlds = append $worlds $world -}}
 {{- end -}}
 {{- toYaml $worlds -}}
@@ -183,7 +186,6 @@ fields are filled: authorities [<name>.<authorityDomain>], bucket.url
 {{- $tokenSecrets := dict -}}
 {{- range $index, $world := $worlds -}}
 {{- $bucket := default dict $world.bucket -}}
-{{- $tokenSecret := default dict $world.tokenSecret -}}
 {{- $location := printf "worlds[%d]" $index -}}
 {{- if empty $world.name -}}
 {{- fail (printf "%s.name is required" $location) -}}
@@ -258,10 +260,15 @@ fields are filled: authorities [<name>.<authorityDomain>], bucket.url
 {{- fail (printf "%s.worldID %q is duplicated" $location $bucket.worldID) -}}
 {{- end -}}
 {{- $_ := set $worldIDs $bucket.worldID true -}}
-{{- if hasKey $tokenSecrets $tokenSecret.name -}}
-{{- fail (printf "%s.tokenSecret.name %q is duplicated" $location $tokenSecret.name) -}}
+{{- /* One namespace for both: the static Secret is merged with the runtime
+       one, so a shared name would load the same entries twice. */ -}}
+{{- range $field := list "tokenSecret" "staticTokenSecret" -}}
+{{- $secretName := (get $world $field).name -}}
+{{- if hasKey $tokenSecrets $secretName -}}
+{{- fail (printf "%s.%s.name %q is duplicated" $location $field $secretName) -}}
 {{- end -}}
-{{- $_ := set $tokenSecrets $tokenSecret.name true -}}
+{{- $_ := set $tokenSecrets $secretName true -}}
+{{- end -}}
 {{- /* A world that is never seeded would take the policy body silently. */ -}}
 {{- if and $world.initialPolicy $world.readOnly -}}
 {{- fail (printf "%s.initialPolicy must not be set on a read-only world, which is never seeded" $location) -}}
@@ -282,7 +289,7 @@ fields are filled: authorities [<name>.<authorityDomain>], bucket.url
 {{- range $index, $world := $worlds -}}
 {{- $rawName := printf "%s-token-values" $world.name -}}
 {{- if hasKey $tokenSecrets $rawName -}}
-{{- fail (printf "worlds[%d]: generated raw Secret name %q collides with a tokenSecret.name" $index $rawName) -}}
+{{- fail (printf "worlds[%d]: generated raw Secret name %q collides with a tokenSecret.name or staticTokenSecret.name" $index $rawName) -}}
 {{- end -}}
 {{- if hasKey $reserved $rawName -}}
 {{- fail (printf "worlds[%d]: generated raw Secret name %q collides with %s" $index $rawName (get $reserved $rawName)) -}}

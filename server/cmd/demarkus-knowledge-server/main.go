@@ -250,10 +250,10 @@ func startConfigWatchers(
 		targets = append(targets, fragment)
 	}
 	for _, target := range targets {
-		watcher := &configwatch.Watcher{Target: target, Reload: worlds.Reload, Logger: logger}
+		watcher := &configwatch.Watcher{Targets: []string{target}, Reload: worlds.Reload, Logger: logger}
 		group.Go(func() {
 			if err := watcher.Run(ctx); err != nil {
-				logger.Warn("config watcher exited", "target", watcher.Target, "error", err)
+				logger.Warn("config watcher exited", "target", target, "error", err)
 			}
 		})
 	}

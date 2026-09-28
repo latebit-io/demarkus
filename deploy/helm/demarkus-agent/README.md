@@ -41,26 +41,10 @@ every named Secret exists (the pod sits in `ContainerCreating` with a
 namespace only. Needs an agent image that reads `tokens.d`; older images ignore
 the directory and publish unauthenticated.
 
-The Job only creates Secrets that are missing. A world whose `tokens.toml`
-Secret already existed (bootstrapped before `emitRawValues`, or provisioned
-another way) gets no `<world>-token-values`, and the agent never starts. Mint an
-agent entry into that world's `tokens.toml` Secret and store its raw value
-yourself; the server hot-reloads the file. Run under Bash:
-
-```bash
-set -euo pipefail
-umask 077
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-kubectl get secret team-a-tokens -o jsonpath='{.data.tokens\.toml}' | base64 -d > "$work/tokens.toml"
-demarkus-token generate -label agent -tokens "$work/tokens.toml" > "$work/raw.txt"
-kubectl create secret generic team-a-tokens --from-file=tokens.toml="$work/tokens.toml" --dry-run=client -o yaml | kubectl apply -f -
-kubectl create secret generic team-a-token-values --from-file=agent="$work/raw.txt"
-```
-
-Then set `key: agent` on that world's `fromWorldSecrets` entry. `team-a-tokens`
-is the world's `tokenSecret.name` in the server chart values. The broker also
-appends to that Secret, so re-apply promptly after reading it.
+The Job only creates Secrets that are missing, and a GitOps install runs no
+Job at all. In both cases supply the token yourself through the server
+chart's static token Secret and the raw Secret this entry names; the server
+chart README's GitOps section has the commands.
 
 ## Derived topology
 

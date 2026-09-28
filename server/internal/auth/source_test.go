@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ import (
 
 func TestSource(t *testing.T) {
 	t.Run("empty source", func(t *testing.T) {
-		source, err := OpenSource("")
+		source, err := OpenSource(SourceConfig{})
 		if err != nil {
 			t.Fatalf("OpenSource: %v", err)
 		}
@@ -36,7 +37,7 @@ func TestSource(t *testing.T) {
 		filePath := filepath.Join(t.TempDir(), "tokens.toml")
 		writeTokenFile(t, filePath, "sha256-b", "sha256-a")
 
-		source, err := OpenSource(filePath)
+		source, err := OpenSource(SourceConfig{TokensFile: filePath})
 		if err != nil {
 			t.Fatalf("OpenSource: %v", err)
 		}
@@ -54,7 +55,7 @@ func TestSource(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		source, err := OpenSource(filePath)
+		source, err := OpenSource(SourceConfig{TokensFile: filePath})
 		if err == nil {
 			t.Fatal("OpenSource: got nil error, want malformed file error")
 		}
@@ -66,7 +67,7 @@ func TestSource(t *testing.T) {
 	t.Run("valid reload", func(t *testing.T) {
 		filePath := filepath.Join(t.TempDir(), "tokens.toml")
 		writeTokenFile(t, filePath, "sha256-old")
-		source, err := OpenSource(filePath)
+		source, err := OpenSource(SourceConfig{TokensFile: filePath})
 		if err != nil {
 			t.Fatalf("OpenSource: %v", err)
 		}
@@ -83,7 +84,7 @@ func TestSource(t *testing.T) {
 	t.Run("staged load", func(t *testing.T) {
 		filePath := filepath.Join(t.TempDir(), "tokens.toml")
 		writeTokenFile(t, filePath, "sha256-old")
-		source, err := OpenSource(filePath)
+		source, err := OpenSource(SourceConfig{TokensFile: filePath})
 		if err != nil {
 			t.Fatalf("OpenSource: %v", err)
 		}
@@ -113,7 +114,7 @@ func TestSource(t *testing.T) {
 	t.Run("malformed reload preserves current store", func(t *testing.T) {
 		filePath := filepath.Join(t.TempDir(), "tokens.toml")
 		writeTokenFile(t, filePath, "sha256-good")
-		source, err := OpenSource(filePath)
+		source, err := OpenSource(SourceConfig{TokensFile: filePath})
 		if err != nil {
 			t.Fatalf("OpenSource: %v", err)
 		}
@@ -134,7 +135,7 @@ func TestSource(t *testing.T) {
 		dir := t.TempDir()
 		filePath := filepath.Join(dir, "tokens.toml")
 		writeTokenFile(t, filePath, "sha256-old")
-		source, err := OpenSource(filePath)
+		source, err := OpenSource(SourceConfig{TokensFile: filePath})
 		if err != nil {
 			t.Fatalf("OpenSource: %v", err)
 		}
@@ -185,7 +186,7 @@ func TestSourceConcurrentCurrentReload(t *testing.T) {
 		dir := t.TempDir()
 		filePath := filepath.Join(dir, "tokens.toml")
 		writeTokenFile(t, filePath, "sha256-a")
-		source, err := OpenSource(filePath)
+		source, err := OpenSource(SourceConfig{TokensFile: filePath})
 		if err != nil {
 			t.Fatalf("OpenSource: %v", err)
 		}
@@ -264,4 +265,106 @@ func tokenFile(hashes ...string) []byte {
 		data.WriteString("operations = [\"read\"]\n")
 	}
 	return []byte(data.String())
+}
+
+func TestOptionalSource(t *testing.T) {
+	t.Run("missing file is a load error unless optional", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "tokens.toml")
+		if _, err := OpenSource(SourceConfig{TokensFile: missing}); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("OpenSource: got %v, want os.ErrNotExist", err)
+		}
+	})
+
+	t.Run("missing optional file opens empty and loads once it appears", func(t *testing.T) {
+		filePath := filepath.Join(t.TempDir(), "tokens.toml")
+		source, err := OpenSource(SourceConfig{TokensFile: filePath, Optional: true})
+		if err != nil {
+			t.Fatalf("OpenSource: %v", err)
+		}
+		if got := source.Current().Hashes(); len(got) != 0 {
+			t.Fatalf("Hashes before the file exists: got %v, want none", got)
+		}
+		if _, err := source.Current().Authorize("raw", "/doc.md", "publish"); !errors.Is(err, ErrInvalidToken) {
+			t.Fatalf("Authorize with no tokens: got %v, want ErrInvalidToken", err)
+		}
+
+		writeTokenFile(t, filePath, "sha256-a")
+		if err := source.Reload(); err != nil {
+			t.Fatalf("Reload: %v", err)
+		}
+		if got, want := source.Current().Hashes(), []string{"sha256-a"}; !slices.Equal(got, want) {
+			t.Errorf("Hashes after the file appeared: got %v, want %v", got, want)
+		}
+
+		// The store mirrors the disk: a removed file revokes its tokens.
+		if err := os.Remove(filePath); err != nil {
+			t.Fatal(err)
+		}
+		if err := source.Reload(); err != nil {
+			t.Fatalf("Reload after removal: %v", err)
+		}
+		if got := source.Current().Hashes(); len(got) != 0 {
+			t.Errorf("Hashes after removal: got %v, want none", got)
+		}
+	})
+
+	t.Run("malformed optional file still fails", func(t *testing.T) {
+		filePath := filepath.Join(t.TempDir(), "tokens.toml")
+		if err := os.WriteFile(filePath, []byte("invalid {{{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := OpenSource(SourceConfig{TokensFile: filePath, Optional: true}); err == nil {
+			t.Fatal("OpenSource: got nil error, want malformed file error")
+		}
+	})
+}
+
+func TestStaticTokensFile(t *testing.T) {
+	t.Run("merges with the runtime file", func(t *testing.T) {
+		dir := t.TempDir()
+		runtimeFile := filepath.Join(dir, "tokens.toml")
+		staticFile := filepath.Join(dir, "static-tokens.toml")
+		writeTokenFile(t, runtimeFile, "sha256-runtime")
+		writeTokenFile(t, staticFile, "sha256-static")
+		source, err := OpenSource(SourceConfig{TokensFile: runtimeFile, StaticTokensFile: staticFile})
+		if err != nil {
+			t.Fatalf("OpenSource: %v", err)
+		}
+		if got, want := source.Current().Hashes(), []string{"sha256-runtime", "sha256-static"}; !slices.Equal(got, want) {
+			t.Errorf("Hashes: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("static only while the runtime file is missing", func(t *testing.T) {
+		dir := t.TempDir()
+		runtimeFile := filepath.Join(dir, "tokens.toml")
+		staticFile := filepath.Join(dir, "static-tokens.toml")
+		writeTokenFile(t, staticFile, "sha256-static")
+		source, err := OpenSource(SourceConfig{TokensFile: runtimeFile, StaticTokensFile: staticFile, Optional: true})
+		if err != nil {
+			t.Fatalf("OpenSource: %v", err)
+		}
+		if got, want := source.Current().Hashes(), []string{"sha256-static"}; !slices.Equal(got, want) {
+			t.Errorf("Hashes: got %v, want %v", got, want)
+		}
+		writeTokenFile(t, runtimeFile, "sha256-runtime")
+		if err := source.Reload(); err != nil {
+			t.Fatalf("Reload: %v", err)
+		}
+		if got, want := source.Current().Hashes(), []string{"sha256-runtime", "sha256-static"}; !slices.Equal(got, want) {
+			t.Errorf("Hashes after the runtime file appeared: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("hash in both files is a load error", func(t *testing.T) {
+		dir := t.TempDir()
+		runtimeFile := filepath.Join(dir, "tokens.toml")
+		staticFile := filepath.Join(dir, "static-tokens.toml")
+		writeTokenFile(t, runtimeFile, "sha256-shared")
+		writeTokenFile(t, staticFile, "sha256-shared")
+		_, err := OpenSource(SourceConfig{TokensFile: runtimeFile, StaticTokensFile: staticFile})
+		if err == nil || !strings.Contains(err.Error(), "across tokens files") {
+			t.Fatalf("OpenSource: got %v, want duplicate hash error", err)
+		}
+	})
 }

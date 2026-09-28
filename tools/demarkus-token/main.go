@@ -1,6 +1,6 @@
 // demarkus-token mints, lists, and revokes capability tokens for a Mark
 // Protocol server. The TOML file it writes is consumed by the server's
-// auth.LoadTokens at startup (and on SIGHUP).
+// auth.OpenSource at startup (and on SIGHUP).
 //
 // Usage:
 //

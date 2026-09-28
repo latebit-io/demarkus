@@ -112,27 +112,45 @@ tests:
             - key: policy-team-a.md
               path: policy-team-a.md
 
-  - it: projects exactly one distinct token volume per world
+  - it: projects one optional runtime and static token Secret pair per world
     template: deployment.yaml
     asserts:
       - equal:
           path: spec.template.spec.volumes[2]
           value:
             name: world-token-0
-            secret:
-              secretName: team-a-tokens
-              items:
-                - key: tokens.toml
-                  path: tokens.toml
+            projected:
+              sources:
+                - secret:
+                    name: team-a-tokens
+                    optional: true
+                    items:
+                      - key: tokens.toml
+                        path: tokens.toml
+                - secret:
+                    name: team-a-static-tokens
+                    optional: true
+                    items:
+                      - key: tokens.toml
+                        path: static-tokens.toml
       - equal:
           path: spec.template.spec.volumes[3]
           value:
             name: world-token-1
-            secret:
-              secretName: team-b-tokens
-              items:
-                - key: tokens.toml
-                  path: tokens.toml
+            projected:
+              sources:
+                - secret:
+                    name: team-b-tokens
+                    optional: true
+                    items:
+                      - key: tokens.toml
+                        path: tokens.toml
+                - secret:
+                    name: team-b-static-tokens
+                    optional: true
+                    items:
+                      - key: tokens.toml
+                        path: static-tokens.toml
       - equal:
           path: spec.template.spec.containers[0].volumeMounts[2].mountPath
           value: /run/demarkus/worlds/team-a

@@ -166,6 +166,28 @@ tests:
       - failedTemplate:
           errorMessage: 'worlds[1].tokenSecret.name "team-a-tokens" is duplicated'
 
+  - it: rejects a static token Secret named like a token Secret
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          staticTokenSecret: {name: team-a-tokens}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0].staticTokenSecret.name "team-a-tokens" is duplicated'
+
+  - it: rejects a generated raw Secret name that a static token Secret already uses
+    set:
+      worlds:
+        - name: team-a
+          authorities: [team-a.example.com]
+          bucket: {url: gs://deployment-team-a, worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+          staticTokenSecret: {name: team-a-token-values}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with a tokenSecret.name or staticTokenSecret.name'
+
   - it: requires a bucket when no prefix derives one
     set:
       worlds:

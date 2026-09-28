@@ -118,12 +118,24 @@ spec:
               - key: tls.key
                 path: tls.key
         {{- range $index, $world := $worlds }}
+        {{- /* Both optional: the broker creates the runtime Secret on its
+               first mint, the static one is the operator's; the server opens
+               the world without either and reloads as they are projected. */}}
         - name: {{ printf "world-token-%d" $index }}
-          secret:
-            secretName: {{ $world.tokenSecret.name | quote }}
-            items:
-              - key: {{ $world.tokenSecret.key | quote }}
-                path: tokens.toml
+          projected:
+            sources:
+              - secret:
+                  name: {{ $world.tokenSecret.name | quote }}
+                  optional: true
+                  items:
+                    - key: {{ $world.tokenSecret.key | quote }}
+                      path: tokens.toml
+              - secret:
+                  name: {{ $world.staticTokenSecret.name | quote }}
+                  optional: true
+                  items:
+                    - key: {{ $world.staticTokenSecret.key | quote }}
+                      path: static-tokens.toml
         {{- end }}
         {{- if .Values.dynamicWorlds.enabled }}
         {{- /* optional: the broker creates both Secrets on the first

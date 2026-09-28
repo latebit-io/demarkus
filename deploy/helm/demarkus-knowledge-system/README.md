@@ -74,11 +74,15 @@ knowledge server bootstraps one tokens Secret per world, and the agent
 projects the hub's raw token from there. Buckets and the GSA are the only
 out-of-cluster prerequisites.
 
+Under Argo CD or Flux set `knowledge.tokens.bootstrap.enabled: false` and
+supply the agent's token yourself; the knowledge-server chart README's GitOps
+section has the commands.
+
 ## What derives from `global`
 
 | Global | Knowledge server | Broker | Agent |
 | --- | --- | --- | --- |
-| `worlds[].name` | world, `<name>-tokens` Secret | world, per-world RBAC, `<name>-tokens` | seed (`mark://<name>`) |
+| `worlds[].name` | world, `<name>-tokens` and `<name>-static-tokens` Secrets | world, per-world RBAC, `<name>-tokens` | seed (`mark://<name>`) |
 | `worlds[].worldID` | `bucket.worldID` | | |
 | `worlds[].hub` | | | hub target, `<hub>-token-values` publish token |
 | `worlds[].allow` | | per-world predicate | |

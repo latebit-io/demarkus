@@ -110,9 +110,20 @@ func ValidWorldID(worldID string) bool {
 	return validWorldID(worldID)
 }
 
-// AuthConfig identifies the world-local capability token file.
+// tokenFileRef locates a token file field for duplicate-path errors.
+type tokenFileRef struct {
+	world int
+	field string
+}
+
+// AuthConfig identifies the world-local capability token files. Both may be
+// absent on disk: the world opens without them and reloads once they appear.
 type AuthConfig struct {
+	// TokensFile is the runtime file a broker appends minted hashes to.
 	TokensFile string `yaml:"tokensFile"`
+	// StaticTokensFile holds operator-owned entries (an agent's publish
+	// token) merged with TokensFile; a reconciler can own it. Optional.
+	StaticTokensFile string `yaml:"staticTokensFile"`
 }
 
 // PolicyConfig identifies the world-local policy document.
@@ -376,7 +387,7 @@ func (config *Config) validateWorlds() error {
 	authorities := make(map[string]int)
 	bucketURLs := make(map[string]int, len(config.Worlds))
 	worldIDs := make(map[string]int, len(config.Worlds))
-	tokenFiles := make(map[string]int, len(config.Worlds))
+	tokenFiles := make(map[string]tokenFileRef, len(config.Worlds))
 	for worldIndex := range config.Worlds {
 		world := &config.Worlds[worldIndex]
 		location := fmt.Sprintf("worlds[%d]", worldIndex)
@@ -421,11 +432,19 @@ func (config *Config) validateWorlds() error {
 		if strings.TrimSpace(world.Auth.TokensFile) == "" {
 			return fmt.Errorf("%s.auth.tokensFile is required", location)
 		}
-		cleanTokensFile := filepath.Clean(world.Auth.TokensFile)
-		if previous, exists := tokenFiles[cleanTokensFile]; exists {
-			return fmt.Errorf("%s.auth.tokensFile %q duplicates worlds[%d].auth.tokensFile", location, world.Auth.TokensFile, previous)
+		for _, file := range []struct{ field, path string }{
+			{"tokensFile", world.Auth.TokensFile},
+			{"staticTokensFile", world.Auth.StaticTokensFile},
+		} {
+			if file.path == "" {
+				continue
+			}
+			clean := filepath.Clean(file.path)
+			if previous, exists := tokenFiles[clean]; exists {
+				return fmt.Errorf("%s.auth.%s %q duplicates worlds[%d].auth.%s", location, file.field, file.path, previous.world, previous.field)
+			}
+			tokenFiles[clean] = tokenFileRef{world: worldIndex, field: file.field}
 		}
-		tokenFiles[cleanTokensFile] = worldIndex
 
 		if err := validatePolicyPath(world.Policy.Path); err != nil {
 			return fmt.Errorf("%s.policy.path: %w", location, err)

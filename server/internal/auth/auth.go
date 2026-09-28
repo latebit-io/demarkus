@@ -58,20 +58,12 @@ var (
 	ErrTokenExpired = errors.New("token has expired")
 )
 
-// LoadTokens reads a TOML tokens file and returns a TokenStore.
-// The file uses labeled entries where the key is a human-readable label:
-//
-//	[tokens.fritz-laptop]
-//	hash = "sha256-abc123..."
-//	paths = ["/docs/*"]
-//	operations = ["publish"]
-func LoadTokens(filePath string) (*TokenStore, error) {
+// loadTokenFile parses one tokens file (format in the package doc) into a
+// map keyed by hash. A missing file wraps os.ErrNotExist.
+func loadTokenFile(filePath string) (map[string]Token, error) {
 	var tf tokensFile
 	if _, err := toml.DecodeFile(filePath, &tf); err != nil {
 		return nil, fmt.Errorf("load tokens file %q: %w", filePath, err)
-	}
-	if tf.Tokens == nil {
-		tf.Tokens = make(map[string]Token)
 	}
 	// Re-key from label → token to hash → token for fast authorize lookups.
 	byHash := make(map[string]Token, len(tf.Tokens))
@@ -97,7 +89,7 @@ func LoadTokens(filePath string) (*TokenStore, error) {
 		}
 		byHash[tok.Hash] = tok
 	}
-	return &TokenStore{tokens: byHash, readPaths: collectReadPaths(byHash), now: time.Now}, nil
+	return byHash, nil
 }
 
 // NewTokenStore creates a TokenStore from an in-memory token map keyed by hash.

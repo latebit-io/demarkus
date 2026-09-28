@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
@@ -26,7 +27,7 @@ import (
 const worldAddTimeout = time.Minute
 
 // worldRetryInterval paces re-attempts for worlds whose open failed
-// (missing tokens file still propagating, transient GCS errors).
+// (transient GCS errors, an unreadable policy file).
 const worldRetryInterval = 15 * time.Second
 
 // worldManager owns the live world set: it opens/closes/replaces worlds
@@ -236,16 +237,20 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 		m.logger.Info("seeded the initial write policy", "world", world.Name, "path", publishpolicy.DocumentPath)
 	}
 	runtime, err := worldruntime.New(&worldruntime.Config{
-		Name:              world.Name,
-		Store:             writepolicy.Enforce(store, writepolicy.Options{Require: true}),
-		TokensFile:        world.Auth.TokensFile,
-		DisableTokenWatch: true, // the coordinator owns reloads
-		ReadOnly:          world.ReadOnly,
-		RequestTimeout:    time.Duration(world.Limits.RequestTimeout),
-		MaxConcurrent:     world.Limits.MaxConcurrentRequests,
-		RateLimit:         world.Limits.RequestsPerSecond,
-		RateBurst:         world.Limits.Burst,
-		Logger:            m.logger,
+		Name:             world.Name,
+		Store:            writepolicy.Enforce(store, writepolicy.Options{Require: true}),
+		TokensFile:       world.Auth.TokensFile,
+		StaticTokensFile: world.Auth.StaticTokensFile,
+		// Knowledge worlds are public-read, so a tokens Secret that lands
+		// after the open only delays writes; the watcher reloads it.
+		OptionalTokensFiles: true,
+		DisableTokenWatch:   true, // the coordinator owns reloads
+		ReadOnly:            world.ReadOnly,
+		RequestTimeout:      time.Duration(world.Limits.RequestTimeout),
+		MaxConcurrent:       world.Limits.MaxConcurrentRequests,
+		RateLimit:           world.Limits.RequestsPerSecond,
+		RateBurst:           world.Limits.Burst,
+		Logger:              m.logger,
 	})
 	if err != nil {
 		return fmt.Errorf("runtime: %w", err)
@@ -258,7 +263,7 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	}
 	entry := &worldEntry{config: *world, runtime: runtime}
 	m.entries[world.Name] = entry
-	m.acquireTokenWatchLocked(world.Auth.TokensFile)
+	m.acquireTokenWatchLocked(tokenFiles(world))
 	m.logger.Info("world opened", "world", world.Name)
 	return nil
 }
@@ -303,27 +308,33 @@ type dirWatch struct {
 	cancel context.CancelFunc
 }
 
-// acquireTokenWatchLocked starts (or shares) the watcher for the tokens
-// file's parent directory. The reload is the global coordinator pass, so
+// tokenFiles lists a world's configured token files. The chart projects
+// both into one directory, which the watcher below relies on.
+func tokenFiles(world *knowledgeconfig.WorldConfig) []string {
+	return auth.SourceConfig{TokensFile: world.Auth.TokensFile, StaticTokensFile: world.Auth.StaticTokensFile}.Files()
+}
+
+// acquireTokenWatchLocked starts (or shares) the watcher for the token
+// files' parent directory. The reload is the global coordinator pass, so
 // one watcher per directory is exactly as fresh as one per world.
-func (m *worldManager) acquireTokenWatchLocked(tokensFile string) {
-	dir := filepath.Dir(tokensFile)
+func (m *worldManager) acquireTokenWatchLocked(files []string) {
+	dir := filepath.Dir(files[0])
 	if watch, ok := m.tokenDirs[dir]; ok {
 		watch.count++
 		return
 	}
 	watchCtx, cancel := context.WithCancel(m.watchCtx)
 	m.tokenDirs[dir] = &dirWatch{count: 1, cancel: cancel}
-	watcher := &configwatch.Watcher{Target: tokensFile, Reload: m.tokens.Reload, Logger: m.logger}
+	watcher := &configwatch.Watcher{Targets: files, Reload: m.tokens.Reload, Logger: m.logger}
 	m.group.Go(func() {
 		if err := watcher.Run(watchCtx); err != nil {
-			m.logger.Warn("token watcher exited", "target", watcher.Target, "error", err)
+			m.logger.Warn("token watcher exited", "dir", dir, "error", err)
 		}
 	})
 }
 
-func (m *worldManager) releaseTokenWatchLocked(tokensFile string) {
-	dir := filepath.Dir(tokensFile)
+func (m *worldManager) releaseTokenWatchLocked(files []string) {
+	dir := filepath.Dir(files[0])
 	watch, ok := m.tokenDirs[dir]
 	if !ok {
 		return
@@ -349,7 +360,7 @@ func (m *worldManager) retireEntryLocked(name string, entry *worldEntry) {
 	if m.beforeRetire != nil {
 		m.beforeRetire(name)
 	}
-	m.releaseTokenWatchLocked(entry.config.Auth.TokensFile)
+	m.releaseTokenWatchLocked(tokenFiles(&entry.config))
 	if err := entry.runtime.Close(); err != nil {
 		m.logger.Warn("world runtime close failed", "world", name, "error", err)
 	}

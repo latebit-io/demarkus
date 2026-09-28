@@ -149,6 +149,7 @@ worlds:
       worldID: <uuid>
     auth:
       tokensFile: /run/demarkus/worlds/acme/tokens.toml
+      staticTokensFile: /run/demarkus/worlds/acme/static-tokens.toml  # optional
     policy:
       path: /.well-known/demarkus/policy.md
       file: /etc/demarkus/policy-acme.md   # optional: seeds version 1
@@ -158,6 +159,7 @@ Operational notes:
 
 - `/livez` and `/readyz` are served as plain HTTP on the health address.
 - `SIGHUP` reloads TLS certificates and token files; token files also hot-reload on change.
+- Token files may be absent when a world opens: it serves reads with no tokens and loads a file once it appears. `staticTokensFile` holds operator-owned entries merged with the broker-owned `tokensFile`; a hash may appear in only one of them.
 - GCS credentials come from Application Default Credentials (Workload Identity on GKE); there are no credential flags or env vars.
 - The bucket must exist, but needs no out-of-band initialization: an existing empty one is initialized and seeded on first start, and a bucket holding objects but no world head is refused.
 - `policy.file` names a local file whose body seeds the world's first policy version instead of the embedded default. Seeding is create-only, so a world that already holds a policy keeps it, but the file is still read and validated on every open and must stay present and parseable.
