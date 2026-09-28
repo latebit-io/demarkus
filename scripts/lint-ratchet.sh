@@ -22,8 +22,9 @@ for mod in protocol server client tools; do
   # A module the linter could not compile (a proxy fetch that failed, a
   # bad build) reports typecheck errors and none of its findings: that is
   # not a ratchet change, so say so instead of printing a misleading diff.
-  if printf '%s\n' "$out" | grep -q ' (typecheck)$'; then
-    printf '%s\n' "$out" | grep ' (typecheck)$' >&2
+  typecheck="$(printf '%s\n' "$out" | grep ' (typecheck)$' || true)"
+  if [ -n "$typecheck" ]; then
+    printf '%s\n' "$typecheck" >&2
     echo "lint-ratchet: golangci-lint could not compile $mod; fix the build or retry" >&2
     exit 2
   fi

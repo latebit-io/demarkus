@@ -640,6 +640,8 @@ func nextHead(current *headObject, root objectRef, change *namespaceChange) head
 		Path:        change.entry.Path,
 		Op:          change.op,
 		Agent:       change.agent,
+		Version:     change.entry.Current,
+		Hash:        change.entry.BodyHash,
 	})
 	if len(receipts) > maximumReceipts {
 		receipts = slices.Clone(receipts[len(receipts)-maximumReceipts:])

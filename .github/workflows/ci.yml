@@ -113,8 +113,29 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+          # Four modules and no root go.sum: without this the module cache
+          # never restores and every run refetches everything.
+          cache-dependency-path: "**/go.sum"
+      # Two downloads from github.com, checksum verified. `go install` was
+      # ~200 proxy fetches plus sumdb checks per run and failed on hiccups twice.
       - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.9.0
+        run: |
+          v=2.9.0
+          base="https://github.com/golangci/golangci-lint/releases/download/v$v"
+          cd "$RUNNER_TEMP"
+          curl -sSfLO "$base/golangci-lint-$v-linux-amd64.tar.gz"
+          curl -sSfLO "$base/golangci-lint-$v-checksums.txt"
+          grep " golangci-lint-$v-linux-amd64.tar.gz$" "golangci-lint-$v-checksums.txt" | sha256sum -c -
+          tar -xzf "golangci-lint-$v-linux-amd64.tar.gz" --strip-components=1 \
+            -C "$(go env GOPATH)/bin" "golangci-lint-$v-linux-amd64/golangci-lint"
+          golangci-lint --version
+      # Fetch modules up front so a proxy hiccup fails here, once retried,
+      # instead of surfacing as typecheck errors inside the ratchet.
+      - name: Download modules
+        run: |
+          for mod in protocol server client tools; do
+            (cd "$mod" && go mod download) || { sleep 15; (cd "$mod" && go mod download); }
+          done
       - name: Lint ratchet
         run: bash scripts/lint-ratchet.sh
 

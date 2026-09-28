@@ -20,7 +20,17 @@ const (
 	commitRebase
 )
 
+// runMutation commits one mutation, then runs the Committed hook with the
+// commit token released: a hook that reenters the store must not deadlock.
 func (store *Store) runMutation(ctx context.Context, build mutationBuilder) (mutationResult, error) {
+	result, err := store.commitMutation(ctx, build)
+	if err == nil && result.Sequence != 0 && store.committed != nil {
+		store.committed(result.Sequence)
+	}
+	return result, err
+}
+
+func (store *Store) commitMutation(ctx context.Context, build mutationBuilder) (mutationResult, error) {
 	if store.readOnly {
 		return mutationResult{}, backend.ErrReadOnly
 	}
@@ -64,9 +74,6 @@ func (store *Store) runMutation(ctx context.Context, build mutationBuilder) (mut
 		}
 		if outcome == commitSucceeded {
 			candidate.result.Sequence = candidate.head.Sequence
-			if store.committed != nil {
-				store.committed(candidate.head.Sequence)
-			}
 			return candidate.result, nil
 		}
 		if attempt == maximumMutationAttempts-1 {

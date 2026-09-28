@@ -34,8 +34,7 @@ func (store *Store) report(snap *snapshot) {
 			hub.Skip(seq)
 			continue
 		}
-		entry := snap.Paths[receipt.Path]
-		hub.PublishAt(changefeed.Event{Seq: seq, Path: receipt.Path, Version: entry.Current, Hash: entry.BodyHash, Op: receipt.Op, Agent: receipt.Agent})
+		hub.PublishAt(changefeed.Event{Seq: seq, Path: receipt.Path, Version: receipt.Version, Hash: receipt.Hash, Op: receipt.Op, Agent: receipt.Agent})
 	}
 }
 

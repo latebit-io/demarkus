@@ -3,6 +3,7 @@ package peerhint
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"log/slog"
 	"slices"
@@ -43,10 +44,18 @@ func listen(t *testing.T) *peer {
 		p.got = append(p.got, h)
 		p.mu.Unlock()
 	}}
+	served := make(chan error, 1)
 	go func() {
-		_ = server.Serve(context.Background(), func(*quic.Conn) (quicserve.Endpoint, error) { return endpoint, nil })
+		served <- server.Serve(context.Background(), func(*quic.Conn) (quicserve.Endpoint, error) { return endpoint, nil })
 	}()
-	t.Cleanup(func() { _ = server.Close() })
+	t.Cleanup(func() {
+		if err := server.Close(); err != nil {
+			t.Errorf("close peer: %v", err)
+		}
+		if err := <-served; !errors.Is(err, quicserve.ErrServerClosed) {
+			t.Errorf("serve peer: %v", err)
+		}
+	})
 	return p
 }
 

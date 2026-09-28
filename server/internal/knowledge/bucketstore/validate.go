@@ -121,7 +121,7 @@ func validateHeadObject(head *headObject) error {
 // validateReceiptChange checks the change a receipt names; a receipt from
 // before change hints names none.
 func validateReceiptChange(receipt *operationReceipt) error {
-	if receipt.Path == "" && receipt.Op == "" && receipt.Agent == "" {
+	if receipt.Path == "" && receipt.Op == "" && receipt.Agent == "" && receipt.Version == 0 && receipt.Hash == "" {
 		return nil
 	}
 	if err := protocol.ValidateRequestPath(receipt.Path); err != nil {
@@ -132,6 +132,12 @@ func validateReceiptChange(receipt *operationReceipt) error {
 	}
 	if !protocol.IsValidMetaValue(receipt.Agent) {
 		return errors.New("agent is not a valid metadata value")
+	}
+	if receipt.Version < 1 {
+		return fmt.Errorf("version %d is not positive", receipt.Version)
+	}
+	if !validBodyHash(receipt.Hash) {
+		return fmt.Errorf("invalid body hash %q", receipt.Hash)
 	}
 	return nil
 }

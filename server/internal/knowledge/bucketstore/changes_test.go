@@ -211,9 +211,8 @@ func TestUnnamedReceiptSkips(t *testing.T) {
 	store.report(&snapshot{
 		Head: headObject{Sequence: 3, Receipts: []operationReceipt{
 			{Sequence: 2, Result: "committed"},
-			{Sequence: 3, Result: "committed", Path: "/a.md", Op: protocol.OpPublish},
+			{Sequence: 3, Result: "committed", Path: "/a.md", Op: protocol.OpPublish, Version: 1, Hash: "sha256-x"},
 		}},
-		Paths: map[string]snapshotEntry{"/a.md": {Current: 1, BodyHash: "sha256-x"}},
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -226,6 +225,32 @@ func TestUnnamedReceiptSkips(t *testing.T) {
 	}
 	if ev, err := resumed.Next(ctx); err != nil || ev.Seq != 3 || ev.Path != "/a.md" || ev.Version != 1 {
 		t.Fatalf("named receipt = %+v, %v", ev, err)
+	}
+}
+
+// A receipt carries its own commit's version and hash: a replica that
+// catches up on two commits to one path reports each as it was, not both as
+// the path is now.
+func TestReceiptsKeepTheirCommit(t *testing.T) {
+	objects := initializedMemory(t)
+	ctx := context.Background()
+	a := openReplica(t, objects)
+	b := openReplica(t, objects)
+	first := []byte("# One\n")
+	doc, err := a.store.Publish(ctx, backend.WriteRequest{Path: "/docs/one.md", ExpectedVersion: -1, Content: first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := a.store.Append(ctx, backend.WriteRequest{Path: "/docs/one.md", ExpectedVersion: doc.Version, Content: []byte("more\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.poll(t)
+	if ev := b.next(t); ev.Version != 1 || ev.Hash != storefmt.ContentHash(first) {
+		t.Fatalf("first hint = %+v, want version 1 with its own hash", ev)
+	}
+	if ev := b.next(t); ev.Version != 2 || ev.Hash != storefmt.ContentHash(second.Content) {
+		t.Fatalf("second hint = %+v, want version 2 with its own hash", ev)
 	}
 }
 

@@ -252,18 +252,23 @@ replica_pair() {
     REPLICA_PID=$!
     retry "replica B at $B" healthy "$B"
   }
+  # A forced drain exits 0 too: the log line proves the watch stream ended.
+  stop_replica_b() {
+    kill -TERM "$REPLICA_PID" 2>/dev/null
+    wait "$REPLICA_PID" 2>/dev/null
+    REPLICA_PID=""
+    expect "replica B drained its connections" 'all connections drained' -- tail -n 8 "$WORK/knowledge-b.log"
+  }
   start_replica_b || return 1
   expect "replica B enabled peer hints" 'peer hints enabled' -- cat "$WORK/knowledge-b.log"
   start_watch "$B"
   expect "publish through A" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=domain:smoke -meta agent=smoke -body "# Via A" "$A/watched/via-a.md"
   watch_lines 1
   expect "B's watch printed A's publish" $'\tpublish\t/watched/via-a\.md\t1\t' -- cat "$WORK/watch.out"
-  expect "A's hint reached B" 'peer hint' -- cat "$WORK/knowledge-b.log"
+  expect "A's hint reached B" '"msg":"peer hint"' -- cat "$WORK/knowledge-b.log"
   # Restart B under the open watch: the cursor is the world's, so B resumes
   # it from the receipt window rather than answering resync.
-  kill -TERM "$REPLICA_PID" 2>/dev/null
-  wait "$REPLICA_PID" 2>/dev/null
-  REPLICA_PID=""
+  stop_replica_b
   start_replica_b || return 1
   expect "publish through A after B restarted" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=domain:smoke -body "# Again" "$A/watched/again.md"
   watch_lines 2
@@ -272,9 +277,7 @@ replica_pair() {
   lines=$(wc -l <"$WORK/watch.out" | tr -d ' ')
   expect "exactly the two publishes reached B's watch" '^2$' -- echo "$lines"
   stop_watch
-  kill -TERM "$REPLICA_PID" 2>/dev/null
-  wait "$REPLICA_PID" 2>/dev/null
-  REPLICA_PID=""
+  stop_replica_b
 }
 
 # policy <url>: the write policy as the knowledge server enforces it.

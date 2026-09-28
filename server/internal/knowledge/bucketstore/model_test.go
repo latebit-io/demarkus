@@ -334,6 +334,15 @@ func TestReceiptWindowValidation(t *testing.T) {
 			*head = makeHead(4)
 			head.Receipts[1].Sequence++
 		}, wantErr: true},
+		{name: "named receipt", mutate: func(head *headObject) {
+			*head = makeHead(2)
+			head.Receipts[0].Path, head.Receipts[0].Op = "/a.md", "publish"
+			head.Receipts[0].Version, head.Receipts[0].Hash = 1, "sha256-"+strings.Repeat("b", 64)
+		}},
+		{name: "named receipt without its commit", mutate: func(head *headObject) {
+			*head = makeHead(2)
+			head.Receipts[0].Path, head.Receipts[0].Op = "/a.md", "publish"
+		}, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

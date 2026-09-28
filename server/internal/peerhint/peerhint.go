@@ -148,7 +148,9 @@ func (s *Sender) Run(ctx context.Context) {
 		}
 		for _, peer := range peers {
 			for _, hint := range batch {
-				s.send(ctx, peer, hint)
+				if !s.send(ctx, peer, hint) {
+					break // one timeout per unreachable peer, not one per hint
+				}
 			}
 		}
 	}
@@ -166,12 +168,13 @@ func (s *Sender) take() []Hint {
 }
 
 // send opens one stream for the hint and closes it without waiting for an
-// answer. A failure drops the connection so the next hint redials.
-func (s *Sender) send(ctx context.Context, peer string, hint Hint) {
+// answer, reporting whether it went. A failure drops the connection so the
+// next hint redials.
+func (s *Sender) send(ctx context.Context, peer string, hint Hint) bool {
 	conn, err := s.conn(ctx, peer)
 	if err != nil {
 		s.config.Logger.Debug("peerhint: dialing peer", "peer", peer, "error", err)
-		return
+		return false
 	}
 	openCtx, cancel := context.WithTimeout(ctx, streamTimeout)
 	defer cancel()
@@ -183,7 +186,9 @@ func (s *Sender) send(ctx context.Context, peer string, hint Hint) {
 	if err != nil {
 		s.config.Logger.Debug("peerhint: sending hint", "peer", peer, "error", err)
 		s.drop(peer, conn)
+		return false
 	}
+	return true
 }
 
 func (s *Sender) conn(ctx context.Context, peer string) (*quic.Conn, error) {

@@ -862,7 +862,7 @@ func (store *evictingHeadStore) Replace(ctx context.Context, key string, generat
 	current := attributes
 	for index := range maximumReceipts + 1 {
 		operationID := fmt.Sprintf("00000000-0000-4000-8001-%012x", index+1)
-		head = nextHead(&head, head.Root, &namespaceChange{operationID: operationID, entry: &shardEntry{Path: "/a.md"}, op: protocol.OpPublish})
+		head = nextHead(&head, head.Root, &namespaceChange{operationID: operationID, entry: &shardEntry{Path: "/a.md", Current: 1, BodyHash: "sha256-" + strings.Repeat("a", 64)}, op: protocol.OpPublish})
 		encoded, err := marshalImmutable(head)
 		if err != nil {
 			return blob.Attributes{}, err
