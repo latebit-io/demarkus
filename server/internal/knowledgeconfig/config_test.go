@@ -260,11 +260,15 @@ func TestValidateDuplicateWorldIdentities(t *testing.T) {
 			second.Auth.TokensFile = "/run/demarkus/world-b/../world-a/tokens.toml"
 		}, "duplicates worlds[0].auth.tokensFile"},
 		{"static token file of another world", func(first, second *WorldConfig) {
+			second.Auth.TokensFile = "/run/demarkus/world-a/world-b.toml"
 			second.Auth.StaticTokensFile = first.Auth.TokensFile
 		}, "worlds[1].auth.staticTokensFile \"/run/demarkus/world-a/tokens.toml\" duplicates worlds[0].auth.tokensFile"},
 		{"static token file of the same world", func(_, second *WorldConfig) {
 			second.Auth.StaticTokensFile = second.Auth.TokensFile
 		}, "duplicates worlds[1].auth.tokensFile"},
+		{"static token file outside the tokens directory", func(_, second *WorldConfig) {
+			second.Auth.StaticTokensFile = "/run/demarkus/static/world-b.toml"
+		}, "worlds[1].auth.staticTokensFile \"/run/demarkus/static/world-b.toml\" must share the directory of auth.tokensFile"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

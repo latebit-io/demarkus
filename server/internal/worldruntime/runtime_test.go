@@ -145,6 +145,31 @@ func TestRuntimeOpensWithoutTokensFileAndWatchesForIt(t *testing.T) {
 	}
 }
 
+func TestRuntimeRejectsStaticTokensFileOutsideTokensDirectory(t *testing.T) {
+	tokensFile := t.TempDir() + "/tokens.toml"
+	staticFile := t.TempDir() + "/static-tokens.toml"
+	writeFile(t, tokensFile, tokenConfig("runtime"))
+	writeFile(t, staticFile, tokenConfig("static"))
+	_, err := New(&Config{
+		Store:            filestore.New(mustOpenStore(t), catalog.New()),
+		TokensFile:       tokensFile,
+		StaticTokensFile: staticFile,
+		Logger:           slog.New(slog.DiscardHandler),
+	})
+	if err == nil || !strings.Contains(err.Error(), "must share the directory") {
+		t.Fatalf("New: got %v, want directory mismatch error", err)
+	}
+}
+
+func mustOpenStore(t *testing.T) *protocolstore.Store {
+	t.Helper()
+	documents, err := protocolstore.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	return documents
+}
+
 func TestRuntimesIsolateTokensAndDocuments(t *testing.T) {
 	firstTokens := t.TempDir() + "/tokens.toml"
 	secondTokens := t.TempDir() + "/tokens.toml"

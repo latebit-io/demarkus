@@ -167,8 +167,13 @@ stringData:
     paths = ["/**"]
     operations = ["publish"]
 MANIFEST
+kubectl -n demarkus apply -f root-static-tokens.yaml   # or commit it for the reconciler
 kubectl -n demarkus create secret generic root-token-values --from-literal=admin="$TOKEN"
 ```
+
+The static Secret must reach the cluster before the agent publishes, either
+applied by hand as above or committed next to the Application so the
+reconciler creates it.
 
 Keep static entries publish-only: any `read` operation flips the world into
 read-auth mode and breaks the broker's open reads. A hash may appear in only

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -82,6 +83,11 @@ func New(config *Config) (*Runtime, error) {
 	}
 	if config.Name != "" {
 		logger = logger.With("world", config.Name)
+	}
+	// Every caller watches by directory, so a split pair would silently
+	// stop reloading after the watcher exits.
+	if config.StaticTokensFile != "" && filepath.Dir(config.StaticTokensFile) != filepath.Dir(config.TokensFile) {
+		return nil, fmt.Errorf("world runtime: static tokens file %q must share the directory of %q", config.StaticTokensFile, config.TokensFile)
 	}
 	sourceConfig := auth.SourceConfig{
 		TokensFile:       config.TokensFile,

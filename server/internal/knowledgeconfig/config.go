@@ -432,6 +432,10 @@ func (config *Config) validateWorlds() error {
 		if strings.TrimSpace(world.Auth.TokensFile) == "" {
 			return fmt.Errorf("%s.auth.tokensFile is required", location)
 		}
+		// One directory watcher covers both files.
+		if static := world.Auth.StaticTokensFile; static != "" && filepath.Dir(filepath.Clean(static)) != filepath.Dir(filepath.Clean(world.Auth.TokensFile)) {
+			return fmt.Errorf("%s.auth.staticTokensFile %q must share the directory of auth.tokensFile %q", location, static, world.Auth.TokensFile)
+		}
 		for _, file := range []struct{ field, path string }{
 			{"tokensFile", world.Auth.TokensFile},
 			{"staticTokensFile", world.Auth.StaticTokensFile},
