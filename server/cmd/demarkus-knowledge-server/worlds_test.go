@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
@@ -402,6 +403,35 @@ func TestWorldManagerOpensWorldWithoutTokensFile(t *testing.T) {
 	}
 	if _, err := h.tokens(t, "carol").Authorize("minted", "/doc.md", "publish"); err != nil {
 		t.Fatalf("minted token after reload: %v", err)
+	}
+}
+
+func TestWorldManagerSharedDirWatcherCoversLaterWorlds(t *testing.T) {
+	tokensDir := t.TempDir()
+	tokensA := writeTokens(t, tokensDir, "alice")
+	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, tokensA, true))
+
+	// bob joins alice's directory after its watcher started.
+	tokensB := writeTokens(t, tokensDir, "bob")
+	h.writeFragment(t, "worlds:\n"+
+		worldFragment("alice", testWorldID, tokensA, true)+
+		worldFragment("bob", testWorldIDB, tokensB, true))
+	if err := h.manager.Reload(); err != nil {
+		t.Fatalf("reload after add: %v", err)
+	}
+
+	// An in-place write to bob's file is a Write event on a sibling of the
+	// watcher's first target; only the shared file set makes it relevant.
+	writeTokenEntry(t, tokensB, "bob-minted")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := h.tokens(t, "bob").Authorize("bob-minted", "/doc.md", "publish"); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("in-place write to a later world's tokens file never reloaded")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

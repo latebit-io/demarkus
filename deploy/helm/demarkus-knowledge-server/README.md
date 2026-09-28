@@ -22,10 +22,13 @@ broker creates on its first mint, and `staticTokenSecret` (default
 touches. A world opens with either or both absent and reloads as they are
 projected. By default a pre-install/pre-upgrade bootstrap Job
 (`tokens.bootstrap`) seeds any missing `tokenSecret` with a publish-only
-admin entry and hands off; existing Secrets are left untouched. With
-`tokens.emitRawValues: true` it also writes the raw token to a
-`<world>-token-values` Secret, which the demarkus-agent chart consumes
-directly through `tokens.fromWorldSecrets`. The Job's `tokens.bootstrap.image`
+admin entry and hands off; existing Secrets are left untouched. When it
+creates one and `tokens.emitRawValues: true`, it also writes the raw token
+to a `<world>-token-values` Secret, which the demarkus-agent chart consumes
+directly through `tokens.fromWorldSecrets`. A world whose `tokenSecret`
+already existed is skipped entirely, raw Secret included: supply the agent's
+token through `staticTokenSecret` and a raw Secret of your own, as in the
+GitOps section, before enabling the agent. The Job's `tokens.bootstrap.image`
 defaults to kubectl 1.35, which supports API servers 1.34–1.36; override it
 to match older clusters (kubectl's skew policy is ±1 minor). For a GitOps
 install, disable the Job; see [GitOps install](#gitops-install-without-the-bootstrap-job).

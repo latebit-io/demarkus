@@ -304,8 +304,39 @@ func (m *worldManager) ensureGenesis(
 // dirWatch is one refcounted configwatch watcher covering every world
 // whose tokens file lives in the same directory.
 type dirWatch struct {
-	count  int
 	cancel context.CancelFunc
+	// files refcounts every token file in the directory across worlds; the
+	// watcher consults it per event, so a world added later is covered.
+	mu    sync.Mutex
+	files map[string]int
+}
+
+func (watch *dirWatch) add(files []string) {
+	watch.mu.Lock()
+	defer watch.mu.Unlock()
+	for _, file := range files {
+		watch.files[filepath.Clean(file)]++
+	}
+}
+
+// remove drops files and reports whether the directory has none left.
+func (watch *dirWatch) remove(files []string) bool {
+	watch.mu.Lock()
+	defer watch.mu.Unlock()
+	for _, file := range files {
+		clean := filepath.Clean(file)
+		watch.files[clean]--
+		if watch.files[clean] <= 0 {
+			delete(watch.files, clean)
+		}
+	}
+	return len(watch.files) == 0
+}
+
+func (watch *dirWatch) has(cleanPath string) bool {
+	watch.mu.Lock()
+	defer watch.mu.Unlock()
+	return watch.files[cleanPath] > 0
 }
 
 // tokenFiles lists a world's configured token files. The chart projects
@@ -320,12 +351,14 @@ func tokenFiles(world *knowledgeconfig.WorldConfig) []string {
 func (m *worldManager) acquireTokenWatchLocked(files []string) {
 	dir := filepath.Dir(files[0])
 	if watch, ok := m.tokenDirs[dir]; ok {
-		watch.count++
+		watch.add(files)
 		return
 	}
 	watchCtx, cancel := context.WithCancel(m.watchCtx)
-	m.tokenDirs[dir] = &dirWatch{count: 1, cancel: cancel}
-	watcher := &configwatch.Watcher{Targets: files, Reload: m.tokens.Reload, Logger: m.logger}
+	watch := &dirWatch{cancel: cancel, files: make(map[string]int, len(files))}
+	watch.add(files)
+	m.tokenDirs[dir] = watch
+	watcher := &configwatch.Watcher{Targets: files[:1], Relevant: watch.has, Reload: m.tokens.Reload, Logger: m.logger}
 	m.group.Go(func() {
 		if err := watcher.Run(watchCtx); err != nil {
 			m.logger.Warn("token watcher exited", "dir", dir, "error", err)
@@ -339,8 +372,7 @@ func (m *worldManager) releaseTokenWatchLocked(files []string) {
 	if !ok {
 		return
 	}
-	watch.count--
-	if watch.count > 0 {
+	if !watch.remove(files) {
 		return
 	}
 	// No join: waiting under m.mu would stall every reload behind a

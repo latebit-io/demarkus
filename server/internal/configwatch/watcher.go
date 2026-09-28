@@ -34,7 +34,10 @@ const retryDelay = 75 * time.Millisecond
 type Watcher struct {
 	// Targets are files in one directory; a write to any of them reloads,
 	// as does any structural change in that directory.
-	Targets  []string
+	Targets []string
+	// Relevant extends Targets with a dynamic set: a write to a path it
+	// accepts also reloads. Nil means Targets only. Called per event.
+	Relevant func(cleanPath string) bool
 	Reload   func() error
 	Debounce time.Duration
 	Logger   *slog.Logger
@@ -102,7 +105,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			if !eventRelevant(ev, targets) {
+			if !eventRelevant(ev, targets, w.Relevant) {
 				continue
 			}
 			if armed && !timer.Stop() {
@@ -127,8 +130,11 @@ func (w *Watcher) Run(ctx context.Context) error {
 // eventRelevant drops Write/Chmod events on sibling files (a co-located log
 // once fed the watcher its own "reloaded" lines forever, #289). The targets
 // themselves and structural ops (create/rename/remove: swaps) still reload.
-func eventRelevant(ev fsnotify.Event, targets map[string]bool) bool {
-	if ev.Name == "" || targets[filepath.Clean(ev.Name)] {
+func eventRelevant(ev fsnotify.Event, targets map[string]bool, relevant func(string) bool) bool {
+	if ev.Name == "" {
+		return true
+	}
+	if clean := filepath.Clean(ev.Name); targets[clean] || relevant != nil && relevant(clean) {
 		return true
 	}
 	return ev.Op&(fsnotify.Create|fsnotify.Rename|fsnotify.Remove) != 0
