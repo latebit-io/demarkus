@@ -846,10 +846,12 @@ func TestVerifyChainErrors(t *testing.T) {
 func TestReadViewTimeout(t *testing.T) {
 	memory := initializedMemory(t)
 	commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A\n")})
-	store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID, RequestTimeout: 25 * time.Millisecond})
+	store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	// Tighten after the open so a slow runner cannot time out the open itself.
+	store.requestTimeout = 25 * time.Millisecond
 	store.objects = &blockingHeadStore{Store: memory}
 	view, err := store.OpenReadView(context.Background())
 	if view != nil || !errors.Is(err, context.DeadlineExceeded) {

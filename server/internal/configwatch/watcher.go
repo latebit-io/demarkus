@@ -43,9 +43,9 @@ type Watcher struct {
 	Logger   *slog.Logger
 }
 
-// Run blocks until ctx is canceled. It is intended to run in its own
-// goroutine. Reload errors are logged and do not terminate the loop; only a
-// failure to set up the underlying watcher returns an error.
+// Run blocks until ctx is canceled, reloading once after the watch is
+// established and then on events. Reload errors are logged and do not end
+// the loop; only a failure to set up the underlying watcher returns an error.
 func (w *Watcher) Run(ctx context.Context) error {
 	if len(w.Targets) == 0 || w.Targets[0] == "" {
 		return errors.New("configwatch: target is empty")
@@ -85,11 +85,10 @@ func (w *Watcher) Run(ctx context.Context) error {
 
 	w.Logger.Info("configwatch: watching", "targets", w.Targets, "dir", dir, "debounce", debounce)
 
+	// Armed from the start: a file that landed between the caller's initial
+	// load and fw.Add produced no event, so the first tick catches it.
 	timer := time.NewTimer(debounce)
-	if !timer.Stop() {
-		<-timer.C
-	}
-	armed := false
+	armed := true
 	defer timer.Stop()
 
 	for {

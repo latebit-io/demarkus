@@ -96,6 +96,22 @@ func TestRunValidatesInputs(t *testing.T) {
 	}
 }
 
+func TestReloadsOnceAfterWatchEstablished(t *testing.T) {
+	dir := t.TempDir()
+	var calls atomic.Int32
+	w := Watcher{
+		Targets:  []string{filepath.Join(dir, "tokens.toml")},
+		Reload:   func() error { calls.Add(1); return nil },
+		Debounce: 20 * time.Millisecond,
+		Logger:   discardLogger(),
+	}
+	runInBackground(t, &w)
+	// No file event at all: the startup tick alone must reload.
+	if got := waitForCount(&calls, 1, 2*time.Second); got < 1 {
+		t.Fatalf("expected the startup reload, got %d calls", got)
+	}
+}
+
 func TestInPlaceWriteTriggersReload(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "tokens.toml")
