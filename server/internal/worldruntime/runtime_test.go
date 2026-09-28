@@ -151,7 +151,7 @@ func TestRuntimeRejectsStaticTokensFileOutsideTokensDirectory(t *testing.T) {
 	writeFile(t, tokensFile, tokenConfig("runtime"))
 	writeFile(t, staticFile, tokenConfig("static"))
 	_, err := New(&Config{
-		Store:            filestore.New(mustOpenStore(t), catalog.New()),
+		Store:            filestore.New(mustOpenStore(t), catalog.New(), nil),
 		TokensFile:       tokensFile,
 		StaticTokensFile: staticFile,
 		Logger:           slog.New(slog.DiscardHandler),
