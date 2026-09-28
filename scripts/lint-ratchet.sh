@@ -19,6 +19,14 @@ for mod in protocol server client tools; do
       exit "$rc"
     fi
   }
+  # A module the linter could not compile (a proxy fetch that failed, a
+  # bad build) reports typecheck errors and none of its findings: that is
+  # not a ratchet change, so say so instead of printing a misleading diff.
+  if printf '%s\n' "$out" | grep -q ' (typecheck)$'; then
+    printf '%s\n' "$out" | grep ' (typecheck)$' >&2
+    echo "lint-ratchet: golangci-lint could not compile $mod; fix the build or retry" >&2
+    exit 2
+  fi
   # Keys drop line and column so unrelated edits do not move entries.
   printf '%s\n' "$out" | grep -E '^[^ ]+\.go:[0-9]+' |
     sed -E 's/^([^:]+\.go):[0-9]+(:[0-9]+)?: /\1: /' >>"$current" || true
