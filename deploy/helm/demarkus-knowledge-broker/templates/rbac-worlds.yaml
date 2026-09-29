@@ -1,41 +1,48 @@
 {{- if .Values.rbac.create }}
-{{- /* Per-world RBAC: one Role + RoleBinding per worlds[] entry, each
-   scoped to a single Secret in that world's namespace. The world's
-   tokens Secret must already exist (created by the demarkus-server
-   chart's bootstrap Job in §6.1) — the broker only needs get/update,
-   never create. If the Secret is missing at first mint the broker
-   returns a clear "Secret not found" error rather than silently
-   bootstrapping into a namespace it shouldn't own.
-
-   The chart's install-time ServiceAccount must already have permission
-   to create Roles + RoleBindings in each world's namespace. Operators
-   that manage RBAC out of band (Argo CD AppProject, OPA, etc.) should
-   set `rbac.create: false` and provision these Roles separately. */ -}}
+{{- /* World RBAC: one Role + RoleBinding per world namespace, get/update
+   pinned to each world's tokens Secret and agent token Secret there. The
+   broker creates either when missing; outside the broker namespace that
+   needs a create rule, since resourceNames cannot restrict create. With
+   rbac.create false, provision these Roles out of band. */ -}}
 {{- $fullname := include "demarkus-knowledge-broker.fullname" . -}}
+{{- $name := printf "%s-worlds" $fullname -}}
 {{- $saName := include "demarkus-knowledge-broker.serviceAccountName" . -}}
 {{- $saNamespace := .Release.Namespace -}}
 {{- $labels := include "demarkus-knowledge-broker.labels" . -}}
+{{- $brokerNs := include "demarkus-knowledge-broker.brokerNamespace" . -}}
+{{- $agentTokens := include "demarkus-knowledge-broker.agentTokens" . | fromYamlArray -}}
+{{- $secretsByNs := dict -}}
 {{- range include "demarkus-knowledge-broker.worlds" . | fromYamlArray }}
-{{- $name := printf "%s-world-%s" $fullname .name }}
+{{- $secrets := append (default list (get $secretsByNs .namespace)) .tokensSecret }}
+{{- $worldName := .name }}
+{{- range $agentTokens }}{{ if eq .world $worldName }}{{ $secrets = append $secrets .secret }}{{ end }}{{ end }}
+{{- $_ := set $secretsByNs .namespace $secrets }}
+{{- end }}
+{{- range $namespace, $secrets := $secretsByNs }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ $name }}
-  namespace: {{ .namespace }}
+  namespace: {{ $namespace }}
   labels:
     {{- $labels | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: [{{ .tokensSecret | quote }}]
+    resourceNames: {{ toJson $secrets }}
     verbs: ["get", "update"]
+  {{- if ne $namespace $brokerNs }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ $name }}
-  namespace: {{ .namespace }}
+  namespace: {{ $namespace }}
   labels:
     {{- $labels | nindent 4 }}
 subjects:

@@ -28,6 +28,9 @@ func (s *ServerConfig) applyRefreshDefaults() error {
 	if s.SigningKeySecret == "" {
 		s.SigningKeySecret = DefaultSigningKeySecret
 	}
+	if s.CookieKeySecret == "" {
+		s.CookieKeySecret = DefaultCookieKeySecret
+	}
 	if s.RefreshTokenTTL == 0 {
 		s.RefreshTokenTTL = DefaultRefreshTokenTTL
 	}

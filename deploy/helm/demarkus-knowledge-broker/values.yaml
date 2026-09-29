@@ -36,12 +36,21 @@ server:
   # containerPort from this value.
   port: 8080
 
-  # Signed-state-cookie HMAC key, base64-encoded. When empty the chart
-  # generates a fresh 32-byte key on first install and preserves it across
-  # `helm upgrade` via `lookup` on the existing config Secret. Override only
-  # if you want to manage the key out-of-band (rotate by setting a new value
-  # and bouncing the broker; any in-flight login is invalidated).
+  # Signed-state-cookie HMAC key, base64-encoded, in one of three modes:
+  #   1. blank (default): the broker generates a key on first start and
+  #      persists it in the cookieKeySecret Secret; the render stays
+  #      deterministic under `helm template` (Argo CD, Flux). A key an older
+  #      chart rendered is kept on `helm upgrade`.
+  #   2. cookieKey: a literal, in plaintext in your values.
+  #   3. existingCookieKeyRef: an operator-managed Secret (SealedSecret,
+  #      ExternalSecret), read through BROKER_COOKIE_KEY.
+  # Rotating invalidates in-flight logins.
   cookieKey: ""
+  existingCookieKeyRef:
+    name: ""
+    key: cookie-key
+  # Secret holding the generated key. Default <fullname>-cookie-key.
+  cookieKeySecret: ""
 
   # State cookie TTL. Long enough for a real user to complete the OIDC
   # redirect, short enough that a stale cookie cannot be replayed.
@@ -242,13 +251,14 @@ oidc:
     name: ""
     key: signing-key.pem
 
-# Per-world authorization. Each entry produces one Role + RoleBinding in
-# the world's namespace granting the broker SA get/update on the world's
-# tokens Secret. Empty is valid when the umbrella supplies global.worlds.
+# Worlds the broker authorizes. Each world namespace gets one Role +
+# RoleBinding granting the broker SA get/update on its worlds' token
+# Secrets. Empty is valid when the umbrella supplies global.worlds.
 #
 # Only name is required. Everything else derives from worldDefaults (or the
 # umbrella's global.*):
-#   namespace:        worldDefaults.namespace, else the release namespace
+#   namespace:        worldDefaults.namespace, else the release namespace;
+#                     knowledge-server worlds all share the server's
 #   tokensSecret:     <name>-tokens
 #   internalAddress:  <name>.<authorityDomain>:6309 when an authorityDomain
 #                     is set, else the broker's <name>.<namespace> Service default
@@ -302,6 +312,18 @@ worldDefaults:
   allow: {}
   defaultToken:
     paths: ["/**"]
+
+# Federation agent tokens the broker issues and keeps current: a publish-only
+# token per entry, its hash in the world's tokens Secret, the raw value in
+# secret[key] in the world's namespace. Unset derives one entry per hub world
+# (worlds[].hub or global.worlds[].hub) matching the agent chart's default
+# mount; [] turns it off. A Secret the broker did not create is left alone.
+agentTokens: ~
+  # - world: root
+  #   secret: root-token-values
+  #   key: admin
+  #   # Default ["/**"].
+  #   paths: ["/**"]
 
 # Registered confidential web clients (RFC 6749 §2.1) — server-side
 # apps (e.g. the Universe Library) that authenticate with a client

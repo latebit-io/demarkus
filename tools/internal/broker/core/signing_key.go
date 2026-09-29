@@ -21,22 +21,7 @@ type SigningKeyResult struct {
 // a fresh ECDSA P-256 PKCS#8 PEM when absent. Create-only through the store's
 // read-modify-write, so racing replicas converge; rotation is delete + restart.
 func EnsureSigningKey(ctx context.Context, store SecretStore, ref SecretRef) (SigningKeyResult, error) {
-	var pemBytes []byte
-	generated := false
-	err := store.Mutate(ctx, ref, func(current []byte) ([]byte, error) {
-		// Mutate retries on conflict; only the final attempt's outcome counts.
-		pemBytes, generated = nil, false
-		if len(current) > 0 {
-			pemBytes = current
-			return current, nil
-		}
-		fresh, err := GenerateSigningKeyPEM()
-		if err != nil {
-			return nil, err
-		}
-		pemBytes, generated = fresh, true
-		return fresh, nil
-	})
+	pemBytes, generated, err := EnsureCreated(ctx, store, ref, GenerateSigningKeyPEM)
 	if err != nil {
 		return SigningKeyResult{}, fmt.Errorf("ensure signing key %s: %w", ref, err)
 	}

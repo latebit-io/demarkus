@@ -13,8 +13,12 @@ const (
 	DynamicClientsSecretKey = "dynamic-clients.json"
 	// SigningKeySecretKey holds the generated id_token signing key PEM.
 	SigningKeySecretKey = "signing-key.pem"
+	// CookieKeySecretKey holds the generated base64 state cookie key.
+	CookieKeySecretKey = "cookie-key"
 	// worldWriteTokenSecretKey holds one world's JSON write token entry.
 	worldWriteTokenSecretKey = "write-token.json"
+	// agentTokenSecretKey holds one world's JSON agent token record.
+	agentTokenSecretKey = "agent-token.json"
 	// registrySecretKey holds the tenant registry JSON.
 	registrySecretKey = "registry.json"
 	// worldsFragmentKey holds the worlds fragment the knowledge server mounts.
@@ -23,12 +27,19 @@ const (
 	DefaultRefreshTokensSecret  = "demarkus-broker-refresh-tokens"
 	DefaultDynamicClientsSecret = "demarkus-broker-dynamic-clients"
 	DefaultSigningKeySecret     = "demarkus-broker-signing-key"
+	DefaultCookieKeySecret      = "demarkus-broker-cookie-key"
 )
 
 // worldWriteTokenSecretName is the per world write token Secret, one per
 // world so RBAC can be scoped per world.
 func worldWriteTokenSecretName(worldName string) string {
 	return "demarkus-broker-write-token-" + worldName
+}
+
+// agentTokenSecretName is the broker's per world agent token record; its
+// presence marks the agent's Secret as broker-managed.
+func agentTokenSecretName(worldName string) string {
+	return "demarkus-broker-agent-token-" + worldName
 }
 
 // brokerSecretRef locates a broker-owned document in both backends: a Secret
@@ -56,6 +67,11 @@ func SigningKeyRef(cfg *Config) SecretRef {
 	return brokerSecretRef(cfg, cfg.Server.SigningKeySecret, SigningKeySecretKey)
 }
 
+// CookieKeyRef locates the generated state cookie key.
+func CookieKeyRef(cfg *Config) SecretRef {
+	return brokerSecretRef(cfg, cfg.Server.CookieKeySecret, CookieKeySecretKey)
+}
+
 // WorldWriteTokenRef locates the broker's copy of one world's write token.
 func WorldWriteTokenRef(cfg *Config, worldName string) SecretRef {
 	ref := SecretRef{
@@ -67,6 +83,20 @@ func WorldWriteTokenRef(cfg *Config, worldName string) SecretRef {
 		ref.Path = filepath.Join(cfg.Storage.Dir, worldWriteTokenSecretName(worldName)+".json")
 	}
 	return ref
+}
+
+// AgentTokenRecordRef locates the broker's record of one world's agent token.
+func AgentTokenRecordRef(cfg *Config, worldName string) SecretRef {
+	return SecretRef{
+		Namespace: cfg.Server.BrokerNamespace,
+		Name:      agentTokenSecretName(worldName),
+		Key:       agentTokenSecretKey,
+	}
+}
+
+// AgentTokenRef locates the raw agent token the agent mounts.
+func AgentTokenRef(world *WorldConfig, spec *AgentTokenConfig) SecretRef {
+	return SecretRef{Namespace: world.Namespace, Name: spec.Secret, Key: spec.Key}
 }
 
 // WorldTokensRef locates the world's own tokens.toml.

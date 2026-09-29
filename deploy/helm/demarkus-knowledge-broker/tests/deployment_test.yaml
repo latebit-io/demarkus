@@ -252,3 +252,26 @@ tests:
           content:
             name: WEB_CLIENT_SECRET_0
           any: true
+
+  - it: BROKER_COOKIE_KEY env mounted via secretKeyRef when existingCookieKeyRef.name set
+    template: deployment.yaml
+    set:
+      server.existingCookieKeyRef.name: broker-cookie
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BROKER_COOKIE_KEY
+            valueFrom:
+              secretKeyRef:
+                name: broker-cookie
+                key: cookie-key
+
+  - it: BROKER_COOKIE_KEY env absent by default
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: BROKER_COOKIE_KEY

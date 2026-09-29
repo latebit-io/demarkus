@@ -113,7 +113,7 @@ func (g *Gateway) dispatchWithWriteAuth(ctx context.Context, worldName string, o
 		if result.Response.Status != protocol.StatusUnauthorized {
 			return result, nil
 		}
-		// First 401 only: invalidate + re-provision (syncWorldHash reconciles a
+		// First 401 only: invalidate + re-provision (storage.SyncWorldHash reconciles a
 		// rotated world Secret). Later 401s are kubelet propagation lag, where
 		// re-provisioning would re-read the same token at 2 round trips a retry.
 		if !reprovisioned {

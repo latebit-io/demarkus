@@ -117,6 +117,6 @@
 1 tools/internal/broker/oauthsrv/jwks.go: Error return value of `w.Write` is not checked (errcheck)
 1 tools/internal/broker/oauthsrv/server.go: Error return value of `(*encoding/json.Encoder).Encode` is not checked (errcheck)
 2 tools/internal/broker/oauthsrv/server.go: Error return value of `w.Write` is not checked (errcheck)
-1 tools/internal/broker/run.go: Function 'Run' has too many statements (68 > 60) (funlen)
+1 tools/internal/broker/run.go: Function 'Run' has too many statements (61 > 60) (funlen)
 4 tools/internal/broker/storage/storage.go: Error return value of `tmp.Close` is not checked (errcheck)
 1 tools/plugin-prompts/main.go: G301: Expect directory permissions to be 0750 or less (gosec)

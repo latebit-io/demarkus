@@ -8,6 +8,8 @@ templates:
   - charts/agent/templates/deployment.yaml
   # Rendered only because deployment.yaml includes it for a checksum.
   - charts/agent/templates/secret.yaml
+  - charts/knowledge/templates/token-bootstrap.yaml
+  - templates/validate.yaml
 tests:
   - it: knowledge server derives authorities, buckets and token Secrets
     template: charts/knowledge/templates/configmap.yaml
@@ -51,7 +53,7 @@ tests:
           path: data["agent.toml"]
           pattern: '\[endpoints\."root"\]\ndial_address = "knowledge.NAMESPACE.svc.cluster.local:6309"\nserver_name = "root.knowledge.NAMESPACE.svc.cluster.local"'
 
-  - it: agent projects the hub token the knowledge server bootstraps
+  - it: agent projects the hub token the broker issues
     template: charts/agent/templates/deployment.yaml
     asserts:
       - equal:
@@ -70,3 +72,28 @@ tests:
       - equal:
           path: spec.template.metadata.labels["app.kubernetes.io/name"]
           value: demarkus-agent
+
+  - it: broker issues the agent's hub token into the Secret the agent projects
+    template: charts/broker/templates/secret-config.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'agentTokens:\n\s+- world: "root"\n\s+secret: "root-token-values"\n\s+key: "admin"'
+
+  - it: knowledge server runs no token bootstrap Job
+    template: charts/knowledge/templates/token-bootstrap.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: rejects a per-world namespace; worlds share the knowledge server's
+    template: templates/validate.yaml
+    set:
+      global.worlds:
+        - name: root
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+          hub: true
+          namespace: elsewhere
+    asserts:
+      - failedTemplate:
+          errorPattern: 'global.worlds\[root\].namespace is not supported'

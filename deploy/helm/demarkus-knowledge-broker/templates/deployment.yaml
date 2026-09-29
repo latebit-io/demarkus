@@ -82,6 +82,13 @@ spec:
                   name: {{ . | quote }}
                   key: {{ $.Values.oidc.existingSigningKeyRef.key | quote }}
             {{- end }}
+            {{- with .Values.server.existingCookieKeyRef.name }}
+            - name: BROKER_COOKIE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $.Values.server.existingCookieKeyRef.key | quote }}
+            {{- end }}
             {{- range $i, $wc := .Values.webClients }}
             {{- $ref := default dict $wc.existingSecretRef }}
             {{- if $ref.name }}

@@ -154,45 +154,12 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 		mcpErrs <- filterServerClosed(mcpSrv.ListenAndServe())
 	}()
 
-	// Sweeper runs leader-elected across replicas (single-host file mode
-	// skips the election); the device janitor is per-replica state. One
-	// cancel tears down every background task before HTTP shutdown.
+	// One cancel tears down every background task before HTTP shutdown.
 	sweepCtx, cancelSweep := context.WithCancel(context.Background())
 	defer cancelSweep()
 	var sweepWG sync.WaitGroup
-	if !cfg.Sweeper.Disabled {
-		sweeper := storage.NewSweeper(k8s, srv.RefreshStore(), cfg.Sweeper.Interval, log)
-		if cfg.FileBackend() {
-			log.Info(opts.LogName+": starting sweeper (single-host)", "interval", cfg.Sweeper.Interval)
-			sweepWG.Go(func() {
-				sweeper.Run(sweepCtx)
-			})
-		} else {
-			identity := brokerIdentity()
-			log.Info(opts.LogName+": starting sweeper",
-				"interval", cfg.Sweeper.Interval, "leaseName", cfg.Sweeper.LeaseName,
-				"namespace", cfg.Server.BrokerNamespace, "identity", identity)
-			sweepWG.Go(func() {
-				sweeper.RunLeaderElected(sweepCtx, cfg.Sweeper.LeaseName, cfg.Server.BrokerNamespace, identity)
-			})
-		}
-	} else {
-		log.Info(opts.LogName + ": sweeper disabled (sweeper.disabled=true)")
-	}
-
-	log.Info(opts.LogName+": starting device-store janitor",
-		"deviceCodeTTL", cfg.Server.DeviceCodeTTL,
-		"devicePollInterval", cfg.Server.DevicePollInterval)
-	sweepWG.Go(func() {
-		srv.RunDeviceJanitor(sweepCtx)
-	})
-	if provisioner != nil {
-		// The registry sync keeps this replica converged with tenants
-		// provisioned by its siblings.
-		sweepWG.Go(func() {
-			provisioner.RunRegistrySync(sweepCtx)
-		})
-	}
+	tasks := &backgroundTasks{cfg: cfg, opts: opts, log: log, store: store, k8s: k8s, srv: srv, provisioner: provisioner}
+	tasks.start(sweepCtx, &sweepWG)
 
 	select {
 	case sig := <-stop:
@@ -281,11 +248,90 @@ func newKubeClient(kubeconfigPath string) (kubernetes.Interface, error) {
 	return kubernetes.NewForConfig(cfg)
 }
 
+// backgroundTasks are the per-replica loops that run until shutdown.
+type backgroundTasks struct {
+	cfg         *core.Config
+	opts        *RunOptions
+	log         *slog.Logger
+	store       core.SecretStore
+	k8s         kubernetes.Interface
+	srv         *oauthsrv.Server
+	provisioner *storage.Provisioner
+}
+
+// start launches the refresh token sweeper (leader-elected unless single-host),
+// the device janitor, the agent token reconciler when agentTokens is set, and
+// the registry sync when provisioning is on.
+func (b *backgroundTasks) start(ctx context.Context, wg *sync.WaitGroup) {
+	b.startSweeper(ctx, wg)
+	b.log.Info(b.opts.LogName+": starting device-store janitor",
+		"deviceCodeTTL", b.cfg.Server.DeviceCodeTTL,
+		"devicePollInterval", b.cfg.Server.DevicePollInterval)
+	wg.Go(func() {
+		b.srv.RunDeviceJanitor(ctx)
+	})
+	if len(b.cfg.AgentTokens) > 0 {
+		agentTokens := storage.NewAgentTokens(b.cfg, b.store, b.log)
+		b.log.Info(b.opts.LogName+": starting agent token reconciler", "worlds", len(b.cfg.AgentTokens))
+		wg.Go(func() {
+			agentTokens.Run(ctx)
+		})
+	}
+	if b.provisioner != nil {
+		// Keeps this replica converged with tenants its siblings provisioned.
+		wg.Go(func() {
+			b.provisioner.RunRegistrySync(ctx)
+		})
+	}
+}
+
+func (b *backgroundTasks) startSweeper(ctx context.Context, wg *sync.WaitGroup) {
+	cfg := b.cfg
+	if cfg.Sweeper.Disabled {
+		b.log.Info(b.opts.LogName + ": sweeper disabled (sweeper.disabled=true)")
+		return
+	}
+	sweeper := storage.NewSweeper(b.k8s, b.srv.RefreshStore(), cfg.Sweeper.Interval, b.log)
+	if cfg.FileBackend() {
+		b.log.Info(b.opts.LogName+": starting sweeper (single-host)", "interval", cfg.Sweeper.Interval)
+		wg.Go(func() {
+			sweeper.Run(ctx)
+		})
+		return
+	}
+	identity := brokerIdentity()
+	b.log.Info(b.opts.LogName+": starting sweeper",
+		"interval", cfg.Sweeper.Interval, "leaseName", cfg.Sweeper.LeaseName,
+		"namespace", cfg.Server.BrokerNamespace, "identity", identity)
+	wg.Go(func() {
+		sweeper.RunLeaderElected(ctx, cfg.Sweeper.LeaseName, cfg.Server.BrokerNamespace, identity)
+	})
+}
+
+// stateCookieKey is server.cookieKey when configured, else the key persisted
+// in the store and generated on first start.
+func stateCookieKey(cfg *core.Config, opts *RunOptions, store core.SecretStore, log *slog.Logger) (string, error) {
+	if cfg.Server.CookieKey != "" {
+		return cfg.Server.CookieKey, nil
+	}
+	ref := core.CookieKeyRef(cfg)
+	key, err := core.EnsureCookieKey(context.Background(), store, ref)
+	if err != nil {
+		return "", err
+	}
+	log.Info(opts.LogName+": state cookie key from store", "ref", ref.String(), "generated", key.Generated)
+	return key.Key, nil
+}
+
 // buildServerDeps constructs the auth machinery both listeners share:
 // signer, verifier, discovery, the broker-side id_token signer and the rate
 // limiters, each failing fast on misconfiguration.
 func buildServerDeps(cfg *core.Config, opts *RunOptions, store core.SecretStore, log *slog.Logger) (oauthsrv.ServerDeps, error) {
-	signer, err := oauthsrv.NewSigner(cfg.Server.CookieKey)
+	cookieKey, err := stateCookieKey(cfg, opts, store, log)
+	if err != nil {
+		return oauthsrv.ServerDeps{}, err
+	}
+	signer, err := oauthsrv.NewSigner(cookieKey)
 	if err != nil {
 		return oauthsrv.ServerDeps{}, err
 	}

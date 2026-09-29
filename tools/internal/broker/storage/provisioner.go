@@ -567,20 +567,15 @@ func sortedSlugs(registry *tenantRegistry) []string {
 func (p *Provisioner) SyncRegistry(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var snapshot tenantRegistry
-	var payload [32]byte
-	err := p.store.Mutate(ctx, core.RegistryRef(p.cfg), func(existing []byte) ([]byte, error) {
-		registry, decodeErr := decodeRegistry(existing)
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		snapshot = registry
-		payload = sha256.Sum256(existing)
-		return existing, nil // read-only pass; unchanged data is not rewritten
-	})
+	existing, err := core.ReadSecret(ctx, p.store, core.RegistryRef(p.cfg))
 	if err != nil {
 		return err
 	}
+	snapshot, err := decodeRegistry(existing)
+	if err != nil {
+		return err
+	}
+	payload := sha256.Sum256(existing)
 	if payload == p.lastSync {
 		return nil
 	}

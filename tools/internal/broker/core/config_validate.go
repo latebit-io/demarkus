@@ -20,12 +20,14 @@ const maxSweeperInterval = 24 * time.Hour
 // looser works everywhere. Rejected, never normalized: that would rename Secrets.
 var WorldNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
+var (
+	secretNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
+	secretKeyRE  = regexp.MustCompile(`^[-._a-zA-Z0-9]{1,253}$`)
+)
+
 func (c *Config) validate() error {
 	if c.Server.Addr == "" {
 		return fmt.Errorf("server.addr is required")
-	}
-	if c.Server.CookieKey == "" {
-		return fmt.Errorf("server.cookieKey is required")
 	}
 	if err := c.validateStorage(); err != nil {
 		return err
@@ -79,6 +81,9 @@ func (c *Config) validate() error {
 			seenSecretRefs[ref] = w.Name
 		}
 	}
+	if err := c.validateAgentTokens(seenSecretRefs); err != nil {
+		return err
+	}
 	if err := validateWebClients(c.WebClients); err != nil {
 		return err
 	}
@@ -97,6 +102,51 @@ func (c *Config) validate() error {
 		c.Sweeper.LeaseName = "demarkus-broker-sweeper"
 	}
 	return c.RateLimit.applyDefaultsAndValidate()
+}
+
+// validateAgentTokens requires each entry to name a distinct static world and
+// a Secret no world reads its tokens.toml from (tokenSecrets: namespace and
+// name to world); paths default to ["/**"].
+func (c *Config) validateAgentTokens(tokenSecrets map[[2]string]string) error {
+	if len(c.AgentTokens) == 0 {
+		return nil
+	}
+	if c.fileBackend() {
+		return fmt.Errorf("agentTokens requires storage.backend %q", StorageBackendKubernetes)
+	}
+	worlds := make(map[string]*WorldConfig, len(c.Worlds))
+	for i := range c.Worlds {
+		worlds[c.Worlds[i].Name] = &c.Worlds[i]
+	}
+	seen := make(map[string]bool, len(c.AgentTokens))
+	seenRefs := make(map[[3]string]string, len(c.AgentTokens))
+	for i := range c.AgentTokens {
+		spec := &c.AgentTokens[i]
+		world, ok := worlds[spec.World]
+		switch {
+		case !ok:
+			return fmt.Errorf("agentTokens[%d]: world %q is not a configured worlds[] entry", i, spec.World)
+		case seen[spec.World]:
+			return fmt.Errorf("agentTokens[%d]: duplicate world %q", i, spec.World)
+		case !secretNameRE.MatchString(spec.Secret):
+			return fmt.Errorf("agentTokens[%d] (%s): secret %q must be a lowercase DNS subdomain", i, spec.World, spec.Secret)
+		case !secretKeyRE.MatchString(spec.Key):
+			return fmt.Errorf("agentTokens[%d] (%s): key %q must be letters, digits, '-', '_' or '.'", i, spec.World, spec.Key)
+		}
+		if other, ok := tokenSecrets[[2]string{world.Namespace, spec.Secret}]; ok {
+			return fmt.Errorf("agentTokens[%d] (%s): secret %q is the tokens Secret of world %q", i, spec.World, spec.Secret, other)
+		}
+		ref := [3]string{world.Namespace, spec.Secret, spec.Key}
+		if other, ok := seenRefs[ref]; ok {
+			return fmt.Errorf("agentTokens[%d] (%s): %s/%s[%s] is also the agent token of world %q", i, spec.World, ref[0], ref[1], ref[2], other)
+		}
+		seenRefs[ref] = spec.World
+		seen[spec.World] = true
+		if len(spec.Paths) == 0 {
+			spec.Paths = []string{"/**"}
+		}
+	}
+	return nil
 }
 
 // validateStorage normalizes the backend selection and enforces what each
@@ -128,6 +178,7 @@ func (c *Config) validateFilePaths() error {
 		filepath.Clean(RefreshTokensRef(c).Path):  "storage.dir refresh-tokens state",
 		filepath.Clean(DynamicClientsRef(c).Path): "storage.dir dynamic-clients state",
 		filepath.Clean(SigningKeyRef(c).Path):     "storage.dir signing-key state",
+		filepath.Clean(CookieKeyRef(c).Path):      "storage.dir cookie-key state",
 	}
 	for i := range c.Worlds {
 		w := &c.Worlds[i]

@@ -47,7 +47,7 @@ func TestWorldWriteTokenStoreProvisionIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get broker write-token Secret: %v", err)
 	}
-	var record writeTokenRecord
+	var record storage.TokenRecord
 	if err := json.Unmarshal(brokerSecret.Data[core.WorldWriteTokenRef(cfg, "team-a").Key], &record); err != nil {
 		t.Fatalf("decode write token record: %v", err)
 	}
@@ -117,14 +117,8 @@ func TestWorldWriteTokenStoreProvisionRecoversAcrossStores(t *testing.T) {
 }
 
 func TestWorldWriteTokenStoreRewritesStaleWorldEntry(t *testing.T) {
-	// Recovery scenario: an operator (or a disaster recovery flow)
-	// deleted the broker's per-world write-token Secret while the
-	// world's tokens.toml retained the old `broker-write-*` entry
-	// under the stable label. Without a hash check in syncWorldHash,
-	// the next Provision would mint a fresh raw token, see the label
-	// already present, treat it as a no-op, and cache a token the
-	// world will never authorize — every write would burn the
-	// propagation-race budget on a doomed token.
+	// Broker record deleted while the world kept the old hash under the label:
+	// without the hash check, Provision would cache a token the world rejects.
 	cfg := brokertest.NewConfig()
 	label := worldWriteTokenLabel("team-a")
 	stale := token.Entry{
@@ -195,7 +189,7 @@ func TestWorldWriteTokenStoreProvisionIgnoresConfiguredOperations(t *testing.T) 
 	if err != nil {
 		t.Fatalf("get broker write-token Secret: %v", err)
 	}
-	var record writeTokenRecord
+	var record storage.TokenRecord
 	if err := json.Unmarshal(brokerSecret.Data[core.WorldWriteTokenRef(cfg, "team-a").Key], &record); err != nil {
 		t.Fatalf("decode write token record: %v", err)
 	}

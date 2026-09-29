@@ -55,6 +55,11 @@ Names for the chart-managed Secrets.
 {{- default (printf "%s-refresh-tokens" (include "demarkus-knowledge-broker.fullname" .)) .Values.server.refreshTokensSecret -}}
 {{- end -}}
 
+{{/* Cookie-key Secret: the broker generates and persists its state cookie key here when none is configured. */}}
+{{- define "demarkus-knowledge-broker.cookieKeySecretName" -}}
+{{- default (printf "%s-cookie-key" (include "demarkus-knowledge-broker.fullname" .)) .Values.server.cookieKeySecret -}}
+{{- end -}}
+
 {{/* Signing-key Secret: the broker generates and persists its ECDSA key here on first start when no key is configured. */}}
 {{- define "demarkus-knowledge-broker.signingKeySecretName" -}}
 {{- default (printf "%s-signing-key" (include "demarkus-knowledge-broker.fullname" .)) .Values.server.signingKeySecret -}}
@@ -82,6 +87,28 @@ misconfig RBAC is supposed to catch up front.
 */}}
 {{- define "demarkus-knowledge-broker.writeTokenSecretName" -}}
 {{- printf "demarkus-broker-write-token-%s" .worldName -}}
+{{- end -}}
+
+{{/* Broker record of a world's agent token; pinned to agentTokenSecretName in core/secret_refs.go. */}}
+{{- define "demarkus-knowledge-broker.agentTokenSecretName" -}}
+{{- printf "demarkus-broker-agent-token-%s" .worldName -}}
+{{- end -}}
+
+{{/*
+Resolved agentTokens as YAML: .Values.agentTokens, or when unset one entry
+per hub world matching the agent chart's default <hub>-token-values[admin].
+*/}}
+{{- define "demarkus-knowledge-broker.agentTokens" -}}
+{{- $tokens := .Values.agentTokens -}}
+{{- if kindIs "invalid" $tokens -}}
+{{- $tokens = list -}}
+{{- range include "demarkus-knowledge-broker.worlds" . | fromYamlArray -}}
+{{- if .hub -}}
+{{- $tokens = append $tokens (dict "world" .name "secret" (printf "%s-token-values" .name) "key" "admin") -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $tokens -}}
 {{- end -}}
 
 {{/*
@@ -137,28 +164,19 @@ on bind.
 {{- end -}}
 
 {{/*
-Cookie key resolution. Order of precedence:
-  1. .Values.server.cookieKey (operator-supplied literal)
-  2. Existing config Secret (preserves the key across helm upgrades)
-  3. Freshly generated 32-byte key, base64-encoded
-
-Generated only ONCE on first install; subsequent helm-upgrades read the
-existing Secret via `lookup` so the cookie key — and therefore in-flight
-state cookies — survive chart updates.
-
-NOTE: `lookup` returns nil during `helm template` (no cluster context),
-so a fresh `randAlphaNum` runs on every offline render. Tests should not
-assert on exact key values, only on structure.
+Cookie key rendered into the config, or empty to let the broker generate
+and persist one in cookieKeySecret: server.cookieKey, else the key an
+earlier chart rendered into the live config Secret (found only by `helm
+upgrade`; `helm template` renders empty, so the output is deterministic).
+Empty with existingCookieKeyRef, which the broker reads from the env.
 */}}
 {{- define "demarkus-knowledge-broker.resolveCookieKey" -}}
 {{- if .Values.server.cookieKey -}}
 {{- .Values.server.cookieKey -}}
-{{- else -}}
+{{- else if not .Values.server.existingCookieKeyRef.name -}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "demarkus-knowledge-broker.configSecretName" .) -}}
-{{- if and $existing (index $existing.data "cookie-key") -}}
+{{- if and $existing (index (default dict $existing.data) "cookie-key") -}}
 {{- index $existing.data "cookie-key" | b64dec -}}
-{{- else -}}
-{{- randAlphaNum 32 | b64enc -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

@@ -94,3 +94,12 @@ func newTestIDTokenSigner(t *testing.T) *IDTokenSigner {
 	}
 	return s
 }
+
+// clearConfigEnv blanks the env overrides LoadConfig applies, so a value
+// exported by the runner cannot mask a YAML-level case.
+func clearConfigEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"BROKER_SIGNING_KEY", "OIDC_CLIENT_SECRET", "BROKER_COOKIE_KEY"} {
+		t.Setenv(name, "")
+	}
+}

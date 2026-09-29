@@ -42,9 +42,11 @@ namespace only. Needs an agent image that reads `tokens.d`; older images ignore
 the directory and publish unauthenticated.
 
 The Job only creates Secrets that are missing, and a GitOps install runs no
-Job at all. In both cases supply the token yourself through the server
-chart's static token Secret and the raw Secret this entry names; the server
-chart README's GitOps section has the commands.
+Job at all. With the demarkus-knowledge-broker chart the broker issues the
+hub's `<hub>-token-values` instead (its `agentTokens`, derived for `hub: true`
+worlds under the umbrella); otherwise supply the token yourself through the
+server chart's static token Secret and the raw Secret this entry names, as in
+the server chart README's GitOps section.
 
 ## Derived topology
 

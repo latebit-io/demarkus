@@ -10,10 +10,10 @@ Secrets.
   (default `RollingUpdate`, `maxUnavailable: 0`, `maxSurge: 1`, so even a
   single replica rolls without a serving gap) and `PodDisruptionBudget`
   (`minAvailable: 1`).
-- Chart-managed broker config Secret with auto-generated cookie HMAC key
-  preserved across `helm upgrade` via `lookup`.
-- Per-world `Role` + `RoleBinding` in each world's namespace
-  (`get/update` on the world's tokens Secret) plus broker-namespace
+- Chart-managed broker config Secret, rendered deterministically: the
+  broker generates and persists its own cookie HMAC key.
+- One `Role` + `RoleBinding` (`<fullname>-worlds`) per world namespace
+  (`get/update` on each world's tokens and agent token Secrets) plus broker-namespace
   `Role` covering the sweeper Lease, the refresh-tokens Secret, and
   `create` + per-world `get/update` on the write-token Secrets the
   broker provisions on first write.
@@ -293,7 +293,7 @@ listener silently:
 - No new RBAC to enable the gateway: the broker-namespace `Role`
   already grants the write path everything it needs: `create` +
   per-world `get/update` on the write-token Secrets (broker namespace)
-  and `get/update` on each world's tokens Secret (per-world `Role`).
+  and `get/update` on each world's tokens Secret (world namespace `Role`).
   See "What this chart ships" above; nothing extra to provision.
 - Worlds[] entries get an `internalAddress: ""` field. Empty string
   preserves the default `<name>.<namespace>.svc.cluster.local:6309`
@@ -345,6 +345,12 @@ Under the `demarkus-knowledge-system` umbrella the list comes from
 `global.worlds`, and `global.knowledgeService` and `global.authorityDomain`
 set the defaults.
 
+Worlds served by the knowledge server share its namespace: the server pod
+mounts every world's token Secrets, and a pod mounts Secrets from its own
+namespace only. Set that namespace once through `worldDefaults.namespace`.
+A per-world `namespace` is kept for the older one-server-per-world layout
+only; under the umbrella it is rejected.
+
 ## Signing key
 
 Broker-signed id_tokens use an ECDSA P-256 key served at
@@ -356,6 +362,22 @@ restart shares it. Rotate by deleting the Secret and running
 `kubectl rollout restart deployment/<fullname>`: every replica loads the key
 once at startup, so restarting only some would serve two JWKS. Supply
 your own through `existingSigningKeyRef` when key custody lives elsewhere.
+
+## Agent tokens
+
+The broker issues the federation agent's publish token for each
+`agentTokens` entry. Unset (the default), one entry is derived per world
+flagged `hub: true`, matching the agent chart's default mount:
+`<hub>-token-values`, key `admin`. `[]` turns it off.
+
+For each entry the broker mints a publish-only, non-expiring token under the
+label `agent-<world>`, keeps its record in `demarkus-broker-agent-token-<world>`
+in the broker namespace, adds the hash to the world's tokens Secret and writes
+the raw value to the named Secret in the world's namespace. It runs at startup
+and every minute on every replica, so a deleted agent Secret comes back with
+the same token and a reset tokens Secret gets the hash back. An agent Secret
+that exists without a broker record (the knowledge-server chart's bootstrap
+Job, or one you sealed) is left alone; delete it to hand it to the broker.
 
 ## Web clients
 
@@ -453,18 +475,19 @@ from `worlds[].internalAddress` or `dialAddress`. Deployments using other OIDC o
 
 ### 5. Confirm the install-time RBAC works for your cluster
 
-With `rbac.create: true` (default) the chart creates per-world
-`Role` + `RoleBinding` in every world's namespace. The
+With `rbac.create: true` (default) the chart creates one
+`Role` + `RoleBinding` in each world namespace. The
 ServiceAccount running `helm install` needs `Role`/`RoleBinding`
 create rights in each of those namespaces.
 
 On managed Kubernetes that typically means cluster-admin, or a custom
 install-time `ClusterRoleBinding` granting RBAC create in the world
 namespaces. If your cluster restricts cross-namespace RBAC
-management, set `rbac.create: false` and provision the per-world
-`Role`s out of band; every world entry needs `secrets`
-`get/update` on its `tokensSecret`, plus the broker-namespace `Role`
-covering `coordination.k8s.io/leases` + the refresh-tokens Secret.
+management, set `rbac.create: false` and provision the world
+`Role`s out of band: `secrets` `get/update` on every world's
+`tokensSecret` and agent token Secret, plus `create` when the world
+namespace is not the broker's, and the broker-namespace
+`Role` covering `coordination.k8s.io/leases` + the broker's own Secrets.
 
 ### 6. Set sensible resource limits and confirm the PDB
 
@@ -497,13 +520,22 @@ first upgrade:
   NetworkPolicy that matched `app.kubernetes.io/name: demarkus-broker`
   (the knowledge-server chart's default now matches the new name).
 
-## Cookie key preservation
+## Cookie key
 
-The signed-state-cookie HMAC key is generated on first install and
-preserved across `helm upgrade` via a `lookup` of the live config
-Secret. To rotate the key, set `server.cookieKey` to a new
-base64-encoded value and restart the broker. Any in-flight OIDC login
-is invalidated by rotation, which is the intended behavior.
+The signed-state-cookie HMAC key never comes from the render, so two
+`helm template` runs are byte-identical and an Argo CD sync after an
+unrelated commit does not roll the broker. With `server.cookieKey` and
+`server.existingCookieKeyRef.name` blank (the default) the broker generates
+a key on first start and stores it in the `server.cookieKeySecret` Secret
+(`<fullname>-cookie-key`); the write is create-only, so every replica and
+restart shares it. An install whose config Secret already carries a key an
+older chart rendered keeps it on `helm upgrade`. To own the key yourself,
+point `server.existingCookieKeyRef` at a Secret (SealedSecret,
+ExternalSecret); `server.cookieKey` also works but puts the key in your
+values in plaintext.
+
+Rotate by deleting the Secret (or changing yours) and restarting every
+replica. Rotation invalidates in-flight OIDC logins, which is intended.
 
 ## Resource names
 

@@ -93,6 +93,7 @@ tests:
             - "RELEASE-NAME-refresh-tokens"
             - "RELEASE-NAME-dynamic-clients"
             - "RELEASE-NAME-signing-key"
+            - "RELEASE-NAME-cookie-key"
       - equal:
           path: rules[2].verbs
           value: ["get", "update"]
@@ -193,7 +194,7 @@ tests:
       - notExists:
           path: rules[4]
 
-  - it: per-world template emits 2 Roles + 2 RoleBindings for two worlds
+  - it: world template emits 2 Roles + 2 RoleBindings for worlds in two namespaces
     template: rbac-worlds.yaml
     set:
       worlds:
@@ -317,3 +318,85 @@ tests:
         equal:
           path: rules[0].resourceNames
           value: ["root-tokens"]
+
+  - it: per-world Role adds the hub's agent token Secret and no create in the broker namespace
+    template: rbac-worlds.yaml
+    set:
+      worlds:
+        - name: root
+          hub: true
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value: ["root-tokens", "root-token-values"]
+      - lengthEqual:
+          path: rules
+          count: 1
+
+  - it: per-world Role outside the broker namespace gets a namespace-wide create rule
+    template: rbac-worlds.yaml
+    set:
+      worlds:
+        - name: root
+          namespace: worlds
+          hub: true
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[1].verbs
+          value: ["create"]
+      - notExists:
+          path: rules[1].resourceNames
+
+  - it: broker-ns Role pins get/update on each agent token record
+    template: rbac-broker-ns.yaml
+    documentIndex: 0
+    set:
+      worlds:
+        - name: root
+          hub: true
+        - name: team-a
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames:
+              - demarkus-broker-write-token-root
+              - demarkus-broker-write-token-team-a
+              - demarkus-broker-agent-token-root
+            verbs: ["get", "update"]
+
+  - it: worlds sharing a namespace get one Role listing every Secret
+    template: rbac-worlds.yaml
+    set:
+      worldDefaults.namespace: knowledge
+      worlds:
+        - name: root
+          hub: true
+        - name: team-a
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: RELEASE-NAME-worlds
+      - documentIndex: 0
+        equal:
+          path: rules[0].resourceNames
+          value: ["root-tokens", "root-token-values", "team-a-tokens"]
+      - documentIndex: 0
+        equal:
+          path: rules[1].verbs
+          value: ["create"]
+      - documentIndex: 1
+        equal:
+          path: roleRef.name
+          value: RELEASE-NAME-worlds

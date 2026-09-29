@@ -69,14 +69,16 @@ helm upgrade --install demarkus oci://ghcr.io/latebit-io/charts/demarkus-knowled
 
 Two Secrets, both yours: the IdP client secret and the library's client
 secret (the broker hashes it at load, so it is shared, not duplicated). The
-broker generates and persists its own signing key on first start, the
-knowledge server bootstraps one tokens Secret per world, and the agent
-projects the hub's raw token from there. Buckets and the GSA are the only
-out-of-cluster prerequisites.
+broker generates and persists its own signing key on first start, creates
+each world's tokens Secret on its first write, and issues the agent's hub
+token into `<hub>-token-values` (`broker.agentTokens`), which the agent
+projects. Buckets and the GSA are the only out-of-cluster prerequisites.
 
-Under Argo CD or Flux set `knowledge.tokens.bootstrap.enabled: false` and
-supply the agent's token yourself; the knowledge-server chart README's GitOps
-section has the commands.
+The render is the same under Argo CD or Flux: the knowledge server's
+bootstrap Job is off (`knowledge.tokens.bootstrap.enabled: false`), so no
+hook, no kubectl image and no token Secret to seal. An install that ran the
+Job keeps its `<hub>-token-values`; the broker leaves a Secret it did not
+create alone. Delete that Secret to hand the token over to the broker.
 
 ## What derives from `global`
 
@@ -84,7 +86,7 @@ section has the commands.
 | --- | --- | --- | --- |
 | `worlds[].name` | world, `<name>-tokens` and `<name>-static-tokens` Secrets | world, per-world RBAC, `<name>-tokens` | seed (`mark://<name>`) |
 | `worlds[].worldID` | `bucket.worldID` | | |
-| `worlds[].hub` | | | hub target, `<hub>-token-values` publish token |
+| `worlds[].hub` | | `agentTokens` entry writing `<hub>-token-values` | hub target, `<hub>-token-values` publish token |
 | `worlds[].allow` | | per-world predicate | |
 | `worlds[].readOnly`, `initialPolicy`, `limits` | as is | | |
 | `bucketPrefix` | `bucket.url = <prefix><name>` | | |
@@ -110,6 +112,9 @@ entry.
 
 - Sub-chart resources are named `knowledge` (from `global.knowledgeService`),
   `broker`, `agent` and `library` (through `fullnameOverride`).
+- Every world lives in the release namespace, next to the knowledge server
+  that mounts its token Secrets; a `namespace` on a `global.worlds` entry
+  fails the render.
 - The knowledge server renders a self-signed cert-manager `Issuer`; the
   broker (`worldDialer.insecureSkipVerify`) and agent (`insecure`) skip
   verification. Replace with a CA issuer and flip both once one exists.

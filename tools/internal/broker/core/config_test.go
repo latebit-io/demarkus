@@ -85,14 +85,7 @@ func mustReplace(t *testing.T, s, old, replacement string) string {
 }
 
 func TestLoadConfig(t *testing.T) {
-	// applyEnvOverrides reads BROKER_SIGNING_KEY and
-	// OIDC_CLIENT_SECRET from the process environment. Without
-	// clearing them, a CI runner that exports either var (or a
-	// developer who set them locally) silently masks YAML-missing
-	// test cases. t.Setenv restores the prior value at test end so
-	// peer tests that DO want a real env value still work.
-	t.Setenv("BROKER_SIGNING_KEY", "")
-	t.Setenv("OIDC_CLIENT_SECRET", "")
+	clearConfigEnv(t)
 	tests := []struct {
 		name     string
 		body     string
@@ -900,8 +893,7 @@ func TestLoadConfigMCPBlockValidatesAtLoad(t *testing.T) {
 	// hook is actually called from Config.validate() — a unit test on
 	// MCPConfig.validate alone wouldn't catch a missing hook in the
 	// outer validation chain.
-	t.Setenv("BROKER_SIGNING_KEY", "")
-	t.Setenv("OIDC_CLIENT_SECRET", "")
+	clearConfigEnv(t)
 	body := strings.Replace(validConfig,
 		`publicURL: "https://broker.example.com"`,
 		"publicURL: \"https://broker.example.com\"\n  mcp:\n    addr: \":8081\"\n    tls:\n      certFile: \"/etc/tls/cert.pem\"",
@@ -920,8 +912,7 @@ func TestLoadConfigRejectsMatchingMgmtAndMCPAddrs(t *testing.T) {
 	// the second http.Server's Listen with EADDRINUSE — catch the
 	// typo at config load so the operator sees a clear message
 	// instead of a noisy bind error in logs.
-	t.Setenv("BROKER_SIGNING_KEY", "")
-	t.Setenv("OIDC_CLIENT_SECRET", "")
+	clearConfigEnv(t)
 	body := strings.Replace(validConfig,
 		`publicURL: "https://broker.example.com"`,
 		"publicURL: \"https://broker.example.com\"\n  mcp:\n    addr: \":8080\"",
@@ -940,8 +931,7 @@ func TestLoadConfigMCPDefaultsAppliedWhenBlockOmitted(t *testing.T) {
 	// they predate the gateway plan. Upgrading to a broker with
 	// always-on MCP must default Addr so those configs load without
 	// modification.
-	t.Setenv("BROKER_SIGNING_KEY", "")
-	t.Setenv("OIDC_CLIENT_SECRET", "")
+	clearConfigEnv(t)
 	cfg, err := LoadConfig(writeConfig(t, validConfig))
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)

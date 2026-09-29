@@ -44,6 +44,11 @@ knowledge:
   # Off so a bare cluster installs; see the README before enabling.
   networkPolicy:
     enabled: false
+  # The broker issues the agent's hub token (broker.agentTokens), so the
+  # imperative bootstrap Job is not needed.
+  tokens:
+    bootstrap:
+      enabled: false
 
 broker:
   enabled: true

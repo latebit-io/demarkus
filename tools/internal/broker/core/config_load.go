@@ -38,6 +38,9 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("BROKER_SIGNING_KEY"); v != "" {
 		c.OIDC.BrokerSigningKey = v
 	}
+	if v := os.Getenv("BROKER_COOKIE_KEY"); v != "" {
+		c.Server.CookieKey = v
+	}
 	for i := range c.WebClients {
 		wc := &c.WebClients[i]
 		if wc.ClientSecretEnv == "" {

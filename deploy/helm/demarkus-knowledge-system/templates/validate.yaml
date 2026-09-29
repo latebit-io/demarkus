@@ -1,0 +1,8 @@
+{{- /* Renders nothing; fails the install on values the sub-charts cannot honour.
+       The knowledge server mounts every world's Secrets, and a pod mounts
+       Secrets from its own namespace only, so no world may name another. */ -}}
+{{- range .Values.global.worlds -}}
+{{- if (default dict .).namespace -}}
+{{- fail (printf "global.worlds[%s].namespace is not supported: every world lives in the knowledge server's namespace" (default "" .name)) -}}
+{{- end -}}
+{{- end -}}

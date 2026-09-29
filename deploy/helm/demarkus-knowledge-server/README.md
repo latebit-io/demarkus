@@ -15,7 +15,9 @@ The chart never creates buckets, PVCs, or TLS Secrets. The optional
 `Certificate` asks cert-manager to populate the referenced TLS Secret.
 
 Token Secrets are runtime-owned (the broker appends minted hashes to
-`tokens.toml`), so the chart never templates them either. Each world mounts
+`tokens.toml`), so the chart never templates them either. They live in the
+release namespace, since the server pod mounts them: point the broker's
+`worldDefaults.namespace` here. Each world mounts
 two optional Secrets: `tokenSecret` (default `<name>-tokens`), which the
 broker creates on its first mint, and `staticTokenSecret` (default
 `<name>-static-tokens`), which holds entries you own and the broker never
@@ -146,13 +148,18 @@ accepts writes as soon as a Secret lands; no restart, no `SIGHUP`:
 - `<name>-tokens` is the broker's. It creates the Secret on its first mint
   and appends afterwards. Never template it: a reconciler would reset the
   broker's entries on every sync.
-- `<name>-static-tokens` is yours: entries the broker never touches, such as
-  the agent's publish token. It holds hashes only, so a plain Secret manifest
-  in git is fine.
+- `<name>-static-tokens` is yours: entries the broker never touches. It
+  holds hashes only, so a plain Secret manifest in git is fine.
 
-Mint the agent's token for the hub world. The hash goes into the static
-Secret, the raw value into `<hub>-token-values`, which the agent chart
-projects by default (`tokens.fromWorldSecrets`). Keep the raw Secret out of
+The agent's publish token for the hub world needs nothing from you when the
+demarkus-knowledge-broker chart runs alongside: its `agentTokens` (derived
+for every `hub: true` world) has the broker mint the token, add the hash to
+`<hub>-tokens` and write the raw value to `<hub>-token-values`, which the
+agent chart projects by default (`tokens.fromWorldSecrets`). The broker
+leaves a `<hub>-token-values` it did not create alone.
+
+Without the broker, mint the token yourself. The hash goes into the static
+Secret, the raw value into `<hub>-token-values`. Keep the raw Secret out of
 git (an ExternalSecret, a SealedSecret, or SOPS):
 
 ```bash

@@ -21,6 +21,7 @@ type Config struct {
 	RateLimit    RateLimitConfig    `yaml:"rateLimit"`
 	WorldDialer  WorldDialerConfig  `yaml:"worldDialer"`
 	Provisioning ProvisioningConfig `yaml:"provisioning"`
+	AgentTokens  []AgentTokenConfig `yaml:"agentTokens"`
 
 	// registry is the live world set, built from Worlds on first use.
 	registryOnce sync.Once
@@ -115,8 +116,12 @@ type ServerConfig struct {
 	// Addr is the listen address, e.g. ":8080". HTTPS terminates at the Ingress.
 	Addr string `yaml:"addr"`
 	// CookieKey is the base64 HMAC key signing the OIDC state cookie. Rotating
-	// it invalidates in-flight logins, which is the wanted effect.
+	// it invalidates in-flight logins. Blank makes the broker generate one on
+	// first start and persist it in CookieKeySecret.
 	CookieKey string `yaml:"cookieKey"`
+	// CookieKeySecret holds the generated state cookie key. Default
+	// "demarkus-broker-cookie-key".
+	CookieKeySecret string `yaml:"cookieKeySecret"`
 	// StateTTL caps the signed state cookie. Default 5m.
 	StateTTL time.Duration `yaml:"stateTTL"`
 	// BrokerNamespace is where the broker's own Secrets live.
@@ -279,6 +284,18 @@ type RateLimitConfig struct {
 type RateLimitRouteConfig struct {
 	PerMinute int `yaml:"perMinute"`
 	Burst     int `yaml:"burst"`
+}
+
+// AgentTokenConfig has the broker issue a federation agent's publish token for
+// World and keep the raw value in Secret[Key], in the world's namespace.
+type AgentTokenConfig struct {
+	// World names a static worlds[] entry, the only world the token is valid in.
+	World string `yaml:"world"`
+	// Secret and Key locate the raw token the agent mounts.
+	Secret string `yaml:"secret"`
+	Key    string `yaml:"key"`
+	// Paths scopes the token. Default ["/**"].
+	Paths []string `yaml:"paths"`
 }
 
 // TokenScope is the path scope of the broker's write token for a world. The
