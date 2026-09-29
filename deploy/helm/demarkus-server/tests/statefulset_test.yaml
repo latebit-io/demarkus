@@ -144,7 +144,7 @@ tests:
       - notExists:
           path: spec.template.spec.containers[0].readinessProbe
 
-  - it: probes use demarkus CLI fetching agent-manifest
+  - it: probes use demarkus ping so an empty world is healthy
     template: statefulset.yaml
     asserts:
       - contains:
@@ -152,17 +152,17 @@ tests:
           content: "/demarkus"
       - contains:
           path: spec.template.spec.containers[0].livenessProbe.exec.command
-          content: "-no-cache"
+          content: "ping"
       - contains:
           path: spec.template.spec.containers[0].livenessProbe.exec.command
-          content: "mark://localhost:6309/.well-known/agent-manifest.md"
+          content: "mark://localhost:6309"
 
   - it: startup probe gates liveness with a first-boot budget
     template: statefulset.yaml
     asserts:
       - contains:
           path: spec.template.spec.containers[0].startupProbe.exec.command
-          content: "mark://localhost:6309/.well-known/agent-manifest.md"
+          content: "mark://localhost:6309"
       - equal:
           path: spec.template.spec.containers[0].startupProbe.periodSeconds
           value: 10

@@ -65,6 +65,9 @@ func main() {
 		case "watch":
 			watchMain(ctx, os.Args[2:])
 			return
+		case "ping":
+			pingMain(ctx, os.Args[2:])
+			return
 		}
 	}
 	requestMain(ctx)
@@ -114,7 +117,7 @@ func requestMain(ctx context.Context) {
 		fmt.Fprintf(os.Stderr, "       demarkus info [-insecure] mark://host:port\n")
 		fmt.Fprintf(os.Stderr, "       demarkus bookmark <add|list|remove>\n")
 		fmt.Fprintf(os.Stderr, "       demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-match body] mark://host:port/scope/\n")
-		fmt.Fprintf(os.Stderr, "       demarkus watch [-since CURSOR] [-auth TOKEN] mark://host:port/prefix/\n")
+		fmt.Fprintf(os.Stderr, "       demarkus watch [-since CURSOR] [-auth TOKEN] mark://host:port/prefix/\n       demarkus ping [-insecure] mark://host:port\n")
 		fmt.Fprintf(os.Stderr, "       demarkus token <add|remove|list>\n\n")
 		flag.PrintDefaults()
 	}

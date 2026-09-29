@@ -97,7 +97,7 @@ On `helm upgrade`, the chart uses `lookup` to read the existing `-token-values` 
 
 ### Probes
 
-Startup, liveness, and readiness all exec `demarkus -insecure -no-cache mark://localhost:<port>/.well-known/agent-manifest.md`. The manifest is always public per `/architecture.md`. Probe disabled root-fs writes via `-no-cache`. The image must include the `demarkus` CLI binary.
+Startup, liveness, and readiness all exec `demarkus ping -insecure mark://localhost:<port>`, which fetches the always-public `/.well-known/agent-manifest.md` and exits 0 once the server answers, manifest or not: a fresh world has none, and the CLI's ordinary `not-found` exit would keep it unready forever. `ping` never touches the cache, so the read-only root fs is fine. The image must include the `demarkus` CLI binary.
 
 The startup probe (default 30 × 10s, `probes.startup`) holds liveness off until the server answers its first request. The server serves nothing until store init completes (it walks the world to build its hash index and catalog), so without the startup probe a slow first boot would eat into the liveness failure threshold and could be restart-looped.
 

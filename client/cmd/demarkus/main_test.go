@@ -213,6 +213,25 @@ func TestConfirmRetention(t *testing.T) {
 	}
 }
 
+func TestPingExitCode(t *testing.T) {
+	tests := []struct {
+		status string
+		want   int
+	}{
+		{protocol.StatusOK, 0},
+		{protocol.StatusNotModified, 0},
+		{protocol.StatusNotFound, 0},
+		{protocol.StatusUnauthorized, 1},
+		{protocol.StatusServerError, 1},
+		{protocol.StatusRateLimited, 1},
+	}
+	for _, tt := range tests {
+		if got := pingExitCode(tt.status); got != tt.want {
+			t.Errorf("pingExitCode(%q) = %d, want %d", tt.status, got, tt.want)
+		}
+	}
+}
+
 func TestExitCodeForStatus(t *testing.T) {
 	tests := []struct {
 		status string

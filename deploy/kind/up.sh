@@ -245,7 +245,7 @@ if [[ "$WITH_ARGO" == "true" ]]; then
       exit 1
     fi
     kubectl -n "$world" exec "$WORLD_POD" -- \
-      /demarkus -insecure -no-cache "mark://localhost:6309/.well-known/agent-manifest.md"
+      /demarkus ping -insecure "mark://localhost:6309"
   done
 
   # Stage 4: layer the broker on top of the Argo-managed worlds and drive
@@ -421,9 +421,9 @@ fi
 echo "--- waiting for pod $POD"
 kubectl -n "$NAMESPACE" wait --for=condition=ready "pod/$POD" --timeout=120s
 
-echo "--- smoke test: fetch /.well-known/agent-manifest.md from inside the pod"
+echo "--- smoke test: ping the server from inside the pod"
 kubectl -n "$NAMESPACE" exec "$POD" -- \
-  /demarkus -insecure -no-cache "mark://localhost:6309/.well-known/agent-manifest.md"
+  /demarkus ping -insecure "mark://localhost:6309"
 
 # The chart emits two Secrets when emitRawValues=true (default):
 #   <release>-demarkus-server-tokens         server-mounted, hash-only TOML

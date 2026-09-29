@@ -108,8 +108,8 @@ resources:
     cpu: 1000m
     memory: 512Mi
 
-# Probes exec the demarkus CLI against /.well-known/agent-manifest.md (always
-# public; -no-cache spares the read-only root fs). The startup probe covers
+# Probes exec `demarkus ping`, which answers 0 once the server serves a request
+# (manifest published or not, never touching the cache). The startup probe covers
 # world walks and catalog backfill so a slow first boot is not restart-looped.
 probes:
   enabled: true

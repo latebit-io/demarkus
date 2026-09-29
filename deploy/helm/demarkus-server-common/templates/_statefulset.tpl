@@ -1,9 +1,10 @@
-{{/* One definition for all three probes: a CLI fetch of the manifest. */}}
+{{/* One definition for all three probes: `demarkus ping` answers 0 once the
+server serves a request, whether or not a manifest was published. */}}
 {{- define "demarkus-server.probeCommand" -}}
 - /demarkus
+- ping
 - -insecure
-- -no-cache
-- {{ printf "mark://localhost:%d/.well-known/agent-manifest.md" (int .Values.server.udpPort) | quote }}
+- {{ printf "mark://localhost:%d" (int .Values.server.udpPort) | quote }}
 {{- end -}}
 
 {{- define "demarkus-server.statefulset" -}}
