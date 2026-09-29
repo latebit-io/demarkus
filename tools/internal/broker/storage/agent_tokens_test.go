@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -203,20 +202,19 @@ func TestAgentTokensOneFailureDoesNotStopOthers(t *testing.T) {
 }
 
 // hangingStore blocks every call until its context ends, like a stuck API
-// request, and records the time left before the first call's deadline.
+// request, and records when its first call arrived and that call's deadline.
 type hangingStore struct {
-	once     sync.Once
-	deadline chan time.Duration
+	called      bool
+	calledAt    time.Time
+	hasDeadline bool
+	deadline    time.Time
 }
 
 func (h *hangingStore) Mutate(ctx context.Context, _ core.SecretRef, _ func([]byte) ([]byte, error)) error {
-	h.once.Do(func() {
-		left := time.Duration(-1)
-		if deadline, ok := ctx.Deadline(); ok {
-			left = time.Until(deadline)
-		}
-		h.deadline <- left
-	})
+	if !h.called {
+		h.called, h.calledAt = true, time.Now()
+		h.deadline, h.hasDeadline = ctx.Deadline()
+	}
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -226,10 +224,15 @@ func (h *hangingStore) Delete(ctx context.Context, _ core.SecretRef) error {
 	return ctx.Err()
 }
 
+// runOnce sets the deadline at some start between before and the store call,
+// so start+interval/2 is bounded on both sides without timing tolerances.
 func TestAgentTokensPassIsBoundedByHalfInterval(t *testing.T) {
-	store := &hangingStore{deadline: make(chan time.Duration, 1)}
+	store := &hangingStore{}
 	a := NewAgentTokens(agentTokensConfig(), store, slog.New(slog.DiscardHandler))
-	a.interval = 400 * time.Millisecond
+	a.interval = 200 * time.Millisecond
+	half := a.interval / 2
+
+	before := time.Now()
 	done := make(chan struct{})
 	go func() {
 		a.runOnce(context.Background())
@@ -240,8 +243,13 @@ func TestAgentTokensPassIsBoundedByHalfInterval(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("a hung store call stalled the pass past its timeout")
 	}
-	half := a.interval / 2
-	if left := <-store.deadline; left <= half/2 || left > half {
-		t.Errorf("pass deadline %v away, want about %v (interval/2)", left, half)
+
+	// close(done) orders the store's writes before these reads.
+	if !store.called || !store.hasDeadline {
+		t.Fatalf("store called=%v with deadline=%v, want a bounded call", store.called, store.hasDeadline)
+	}
+	if store.deadline.Before(before.Add(half)) || store.deadline.After(store.calledAt.Add(half)) {
+		t.Errorf("pass deadline %v outside [%v, %v]: want start + interval/2",
+			store.deadline, before.Add(half), store.calledAt.Add(half))
 	}
 }
