@@ -5,7 +5,6 @@ package memtest
 import (
 	"fmt"
 	"runtime"
-	"strings"
 )
 
 // Retained runs build between two post-GC heap readings and returns the
@@ -30,14 +29,12 @@ func liveHeap() uint64 {
 // plus one spaceless JSON line whose nanosecond timestamps are new for
 // every cycle, the shape that leaked through the section index.
 func AgentGraphBody(cycle int) []byte {
-	var b strings.Builder
-	b.WriteString("# Document Graph\n\n## Nodes\n\n| URL | Status |\n|---|---|\n| mark://w/a.md | ok |\n\n## Source observations\n\n```json\n[")
+	body := []byte("# Document Graph\n\n## Nodes\n\n| URL | Status |\n|---|---|\n| mark://w/a.md | ok |\n\n## Source observations\n\n```json\n[")
 	for i := range 2000 {
 		if i > 0 {
-			b.WriteByte(',')
+			body = append(body, ',')
 		}
-		fmt.Fprintf(&b, `{"url":"mark://w/doc-%d.md","observed_at":"2026-09-29T15:58:33.%09dZ"}`, i, cycle*2000+i)
+		body = fmt.Appendf(body, `{"url":"mark://w/doc-%d.md","observed_at":"2026-09-29T15:58:33.%09dZ"}`, i, cycle*2000+i)
 	}
-	b.WriteString("]\n```\n")
-	return []byte(b.String())
+	return append(body, "]\n```\n"...)
 }
