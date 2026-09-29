@@ -30,7 +30,8 @@ const (
 type bodyCandidate struct {
 	entry   *Entry
 	sec     *section
-	catalog bool // tags or title carry every term: one boosted bare-path row
+	ids     []termID // the query terms in this document's vocabulary
+	catalog bool     // tags or title carry every term: one boosted bare-path row
 	score   float64
 }
 
@@ -53,19 +54,11 @@ func (c *Catalog) lookupBody(words []string, scope string, opts Options) []Resul
 	if len(words) == 0 {
 		return nil
 	}
-	terms := make([]term, len(words))
-	for i, w := range words {
-		id, known := lookupTerm(w)
-		if !known {
-			return nil // never indexed anywhere, so no section holds it
-		}
-		terms[i] = id
-	}
-	scan := c.scanBody(terms, scope, opts.Filter)
+	scan := c.scanBody(words, scope, opts.Filter)
 	if len(scan.found) == 0 {
 		return nil
 	}
-	rankBody(scan, terms)
+	rankBody(scan, words)
 	found := scan.found
 	if opts.Max > 0 && len(found) > opts.Max {
 		found = found[:opts.Max]
@@ -82,7 +75,7 @@ func (c *Catalog) lookupBody(words []string, scope string, opts Options) []Resul
 	return results
 }
 
-func (c *Catalog) scanBody(terms []term, scope string, filter []Predicate) *bodyScan {
+func (c *Catalog) scanBody(terms []string, scope string, filter []Predicate) *bodyScan {
 	scan := &bodyScan{df: make([]int, len(terms))}
 	totalLength := 0
 	docHas := make([]bool, len(terms))
@@ -94,24 +87,25 @@ func (c *Catalog) scanBody(terms []term, scope string, filter []Predicate) *body
 		if doc == nil {
 			continue
 		}
+		ids := doc.ids(terms)
 		docMatches := true
 		for i, t := range terms {
-			docHas[i] = hasTerm(e.terms, t)
+			docHas[i] = e.terms.has(t)
 			docMatches = docMatches && docHas[i]
 		}
 		if docMatches {
 			// The catalog answer: tags or title carry every term, so the
 			// document is the row, as in catalog mode.
-			scan.found = append(scan.found, bodyCandidate{entry: e, sec: &bareSection, catalog: true})
+			scan.found = append(scan.found, bodyCandidate{entry: e, sec: &bareSection, catalog: true, ids: ids})
 		}
 		for i := range doc.sections {
 			sec := &doc.sections[i]
 			scan.sections++
 			totalLength += int(sec.length)
 			matched, hits := true, 0
-			for j, t := range terms {
-				inText := hasTerm(sec.tokens, t)
-				inTrail := hasTerm(sec.trail, t)
+			for j, id := range ids {
+				inText := hasTerm(sec.tokens, id)
+				inTrail := hasTerm(sec.trail, id)
 				if inText || inTrail {
 					scan.df[j]++
 					hits++
@@ -121,7 +115,7 @@ func (c *Catalog) scanBody(terms []term, scope string, filter []Predicate) *body
 				}
 			}
 			if !docMatches && matched && hits > 0 {
-				scan.found = append(scan.found, bodyCandidate{entry: e, sec: sec})
+				scan.found = append(scan.found, bodyCandidate{entry: e, sec: sec, ids: ids})
 			}
 		}
 	}
@@ -133,7 +127,7 @@ func (c *Catalog) scanBody(terms []term, scope string, filter []Predicate) *body
 
 // rankBody scores (catalog rows boosted), normalizes by the best, applies
 // the prior, and sorts by score, then the spec's path-then-anchor tiebreak.
-func rankBody(scan *bodyScan, terms []term) {
+func rankBody(scan *bodyScan, terms []string) {
 	found := scan.found
 	idf := idfs(scan, len(terms))
 	maxScore := 0.0
@@ -182,18 +176,18 @@ func idfs(scan *bodyScan, n int) []float64 {
 
 // bm25 scores one candidate: the text part per term plus the trail and
 // document weights when the term was found there; idf is per term.
-func bm25(cand *bodyCandidate, terms []term, idf []float64, avgLength float64) float64 {
+func bm25(cand *bodyCandidate, terms []string, idf []float64, avgLength float64) float64 {
 	score := 0.0
 	lengthNorm := 1 - bm25B + bm25B*float64(cand.sec.length)/max(avgLength, 1)
 	for j, t := range terms {
-		if i, ok := termIndex(cand.sec.tokens, t); ok {
+		if i, ok := termIndex(cand.sec.tokens, cand.ids[j]); ok {
 			tf := float64(cand.sec.tf[i])
 			score += idf[j] * tf * (bm25K1 + 1) / (tf + bm25K1*lengthNorm)
 		}
-		if hasTerm(cand.sec.trail, t) {
+		if hasTerm(cand.sec.trail, cand.ids[j]) {
 			score += idf[j] * trailWeight
 		}
-		if hasTerm(cand.entry.terms, t) {
+		if cand.entry.terms.has(t) {
 			score += idf[j] * docWeight
 		}
 	}

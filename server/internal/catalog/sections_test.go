@@ -1,16 +1,17 @@
 package catalog
 
 import (
+	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
-// hasWord resolves a word through the vocabulary and checks the set.
-func hasWord(set []term, word string) bool {
-	id, ok := lookupTerm(word)
-	return ok && hasTerm(set, id)
+// hasWord resolves a word through the document's vocabulary and checks the set.
+func hasWord(doc *DocSections, set []termID, word string) bool {
+	return hasTerm(set, doc.vocab.id(word))
 }
 
 func collectTokens(field string) []string {
@@ -78,10 +79,10 @@ func TestIndexSections(t *testing.T) {
 	if s[1].anchor != "setext-title" || s[1].text != "under setext" {
 		t.Errorf("setext section = anchor %q text %q, want underline dropped", s[1].anchor, s[1].text)
 	}
-	if !hasWord(s[3].trail, "child") || !hasWord(s[3].trail, "setext") || !hasWord(s[3].trail, "grandchild") {
+	if !hasWord(doc, s[3].trail, "child") || !hasWord(doc, s[3].trail, "setext") || !hasWord(doc, s[3].trail, "grandchild") {
 		t.Errorf("grandchild trail lacks ancestors: %v", s[3].trail)
 	}
-	if hasWord(s[3].tokens, "child") || !hasWord(s[3].tokens, "deep") {
+	if hasWord(doc, s[3].tokens, "child") || !hasWord(doc, s[3].tokens, "deep") {
 		t.Errorf("grandchild tokens should be its own text only")
 	}
 	if s[4].text != "" || s[4].heading != "Sibling" {
@@ -132,5 +133,49 @@ func TestBodyLookupDocTermsAndArchive(t *testing.T) {
 	c.Remove("/a.md")
 	if c.Sections("/a.md") != nil || len(mustLookup(t, c, "gate", Options{Match: MatchBody})) != 0 {
 		t.Error("Remove left the section index behind")
+	}
+}
+
+// agentGraphBody mimics the federation agent's /graph.md: prose plus one
+// spaceless JSON line whose nanosecond timestamps are new every cycle.
+func agentGraphBody(cycle int) []byte {
+	var b strings.Builder
+	b.WriteString("# Document Graph\n\n## Nodes\n\n| URL | Status |\n|---|---|\n| mark://w/a.md | ok |\n\n## Source observations\n\n```json\n[")
+	for i := range 2000 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"url":"mark://w/doc-%d.md","observed_at":"2026-09-29T15:58:33.%09dZ"}`, i, cycle*2000+i)
+	}
+	b.WriteString("]\n```\n")
+	return []byte(b.String())
+}
+
+func liveHeap() uint64 {
+	runtime.GC()
+	runtime.GC()
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	return stats.HeapAlloc
+}
+
+// Republishing one path must keep only the live index: a process-wide
+// vocabulary once kept every token, each pinning its whole source line.
+func TestRepublishKeepsIndexBounded(t *testing.T) {
+	c := New()
+	modified := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	c.Put("/graph.md", nil, agentGraphBody(0), modified)
+	before := liveHeap()
+	const cycles = 60
+	for cycle := 1; cycle <= cycles; cycle++ {
+		c.Put("/graph.md", nil, agentGraphBody(cycle), modified)
+	}
+	growth := int64(liveHeap()) - int64(before)
+	bodyBytes := int64(len(agentGraphBody(0)))
+	if growth > 2*bodyBytes {
+		t.Errorf("heap grew %d bytes over %d republishes of a %d-byte body, want under %d", growth, cycles, bodyBytes, 2*bodyBytes)
+	}
+	if got := mustLookup(t, c, "observations", Options{Match: MatchBody}); len(got) != 1 {
+		t.Errorf("body lookup after republish = %d rows, want 1", len(got))
 	}
 }

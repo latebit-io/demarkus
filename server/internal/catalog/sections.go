@@ -1,104 +1,92 @@
 package catalog
 
 import (
-	"log/slog"
+	"iter"
+	"maps"
+	"math"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
-// term is a token id in the process-wide vocabulary, so a DocSections built
-// for one snapshot is valid in the next and each token string is stored once.
-type term = uint32
-
 // maxTokenBytes drops hashes, long URLs, and similar one-off strings that
 // nobody types as a query; their word runs are still indexed.
 const maxTokenBytes = 32
 
-// maxVocabulary caps distinct tokens process-wide (about 100 MB at the cap);
-// tokens past it are not indexed, trading recall for bounded memory.
-const maxVocabulary = 1 << 20
-
-// unknownTerm is the id of a token the vocabulary refused; sets drop it.
-const unknownTerm term = 0
-
-// vocabulary interns token strings process-wide so an index carries across
-// snapshots. Entries are never removed; maxVocabulary bounds them.
-var vocabulary = struct {
-	mu     sync.RWMutex
-	ids    map[string]term
-	next   term // next id to hand out; unknownTerm is never handed out
-	warned bool
-}{ids: make(map[string]term), next: unknownTerm + 1}
-
-// internTerms resolves tokens to ids, adding unknown ones. Rebuilds and
-// refreshes mostly see known tokens, so the read lock is tried first.
-func internTerms(tokens []string) []term {
-	ids := make([]term, len(tokens))
-	vocabulary.mu.RLock()
-	missing := 0
-	for i, tok := range tokens {
-		id, ok := vocabulary.ids[tok]
-		if !ok {
-			missing++
-		}
-		ids[i] = id
-	}
-	vocabulary.mu.RUnlock()
-	if missing == 0 {
-		return ids
-	}
-	vocabulary.mu.Lock()
-	defer vocabulary.mu.Unlock()
-	for i, tok := range tokens {
-		if ids[i] != unknownTerm {
-			continue
-		}
-		id, ok := vocabulary.ids[tok]
-		if !ok && vocabulary.next < maxVocabulary {
-			id = vocabulary.next
-			vocabulary.next++
-			vocabulary.ids[tok] = id
-			ok = true
-		}
-		if !ok && !vocabulary.warned {
-			vocabulary.warned = true
-			slog.Warn("section index vocabulary full; new tokens are not indexed", "cap", maxVocabulary)
-		}
-		ids[i] = id
-	}
-	return ids
+// termSet is an immutable sorted set of distinct tokens packed into one
+// string. It never pins the text its tokens were cut from.
+type termSet struct {
+	packed string
+	ends   []uint32 // token i is packed[ends[i-1]:ends[i]]
 }
 
-// lookupTerm resolves a query token without adding it; a token the
-// vocabulary has never seen cannot be in any section.
-func lookupTerm(tok string) (term, bool) {
-	vocabulary.mu.RLock()
-	defer vocabulary.mu.RUnlock()
-	id, ok := vocabulary.ids[tok]
-	return id, ok
+// newTermSet packs distinct tokens; it sorts tokens in place. Tokens past
+// 4 GiB are dropped, which a 1 MiB body cannot reach.
+func newTermSet(tokens []string) termSet {
+	if len(tokens) == 0 {
+		return termSet{}
+	}
+	slices.Sort(tokens)
+	var packed strings.Builder
+	ends := make([]uint32, 0, len(tokens))
+	for _, tok := range tokens {
+		end := packed.Len() + len(tok)
+		if end >= math.MaxUint32 {
+			break
+		}
+		packed.WriteString(tok)
+		ends = append(ends, uint32(end)) //nolint:gosec // bounded by the check above
+	}
+	return termSet{packed: packed.String(), ends: ends}
 }
+
+func (s termSet) at(i int) string {
+	start := uint32(0)
+	if i > 0 {
+		start = s.ends[i-1]
+	}
+	return s.packed[start:s.ends[i]]
+}
+
+// id returns tok's position in the set, or absentTerm.
+func (s termSet) id(tok string) termID {
+	i := sort.Search(len(s.ends), func(i int) bool { return s.at(i) >= tok })
+	if i >= len(s.ends) || i >= math.MaxUint32 || s.at(i) != tok {
+		return absentTerm
+	}
+	return termID(i) //nolint:gosec // bounded by the check above
+}
+
+func (s termSet) has(tok string) bool { return s.id(tok) != absentTerm }
+
+// termID is a token's position in its document's vocabulary. Ids are
+// document-scoped: a process-wide vocabulary would keep every token ever
+// indexed, and churned bodies (timestamps, hashes) grow it without bound.
+type termID = uint32
+
+// absentTerm is the id of a token the document lacks; no set holds it.
+const absentTerm termID = math.MaxUint32
 
 // section is one indexed section: its own text, not its subtree.
 type section struct {
 	anchor  string
 	heading string
-	text    string  // markup-stripped own text, one line per source line
-	tokens  []term  // distinct own-text tokens, sorted by id
-	tf      []uint8 // occurrences (capped), parallel to tokens
-	length  int32   // own-text token count
-	trail   []term  // distinct heading-trail tokens, sorted by id
+	text    string   // markup-stripped own text, one line per source line
+	tokens  []termID // distinct own-text tokens, sorted
+	tf      []uint8  // occurrences (capped), parallel to tokens
+	length  int32    // own-text token count
+	trail   []termID // distinct heading-trail tokens, sorted
 }
 
 // DocSections is the section index of one body. It depends on the body
 // alone, so a store may carry it across snapshots keyed by body hash.
 type DocSections struct {
+	vocab    termSet // every token in the sections' text and trails
 	sections []section
 }
 
@@ -110,19 +98,35 @@ func (d *DocSections) Len() int {
 	return len(d.sections)
 }
 
+// ids resolves query terms against the document's vocabulary.
+func (d *DocSections) ids(terms []string) []termID {
+	ids := make([]termID, len(terms))
+	for i, t := range terms {
+		ids[i] = d.vocab.id(t)
+	}
+	return ids
+}
+
+// rawSection is a section before its tokens have document ids.
+type rawSection struct {
+	section
+	counts map[string]int
+	trail  map[string]struct{}
+}
+
 // IndexSections splits body by the shared mdoutline rule and tokenizes each
 // section's own text and heading trail. Text before the first heading, or a
 // body with no headings, is one bare section (empty anchor).
 func IndexSections(body []byte) *DocSections {
 	src := string(body)
 	hs := mdoutline.Headings(src)
-	doc := &DocSections{}
+	var raws []rawSection
 	preambleEnd := len(src)
 	if len(hs) > 0 {
 		preambleEnd = hs[0].Start
 	}
 	if s, ok := newSection("", "", src[:preambleEnd], nil); ok {
-		doc.sections = append(doc.sections, s)
+		raws = append(raws, s)
 	}
 	var stack []mdoutline.Heading // ancestors of the current heading
 	for i, h := range hs {
@@ -141,10 +145,50 @@ func IndexSections(body []byte) *DocSections {
 			own = src[headingLineEnd(src, h.Start):hs[i+1].Start]
 		}
 		if s, ok := newSection(h.Anchor, h.Text, own, trail); ok {
-			doc.sections = append(doc.sections, s)
+			raws = append(raws, s)
 		}
 	}
+	return assignIDs(raws)
+}
+
+// assignIDs builds the document vocabulary and gives each section its
+// tokens as sorted ids.
+func assignIDs(raws []rawSection) *DocSections {
+	all := make(map[string]struct{})
+	for i := range raws {
+		for tok := range raws[i].counts {
+			all[tok] = struct{}{}
+		}
+		for tok := range raws[i].trail {
+			all[tok] = struct{}{}
+		}
+	}
+	doc := &DocSections{vocab: newTermSet(slices.Collect(maps.Keys(all))), sections: make([]section, len(raws))}
+	for i := range raws {
+		raw := &raws[i]
+		s := raw.section
+		s.tokens = vocabIDs(doc.vocab, maps.Keys(raw.counts))
+		s.tf = make([]uint8, len(s.tokens))
+		for j, id := range s.tokens {
+			s.tf[j] = uint8(min(raw.counts[doc.vocab.at(int(id))], 255))
+		}
+		s.trail = vocabIDs(doc.vocab, maps.Keys(raw.trail))
+		doc.sections[i] = s
+	}
 	return doc
+}
+
+// vocabIDs returns the sorted ids of tokens, skipping any the vocabulary
+// dropped.
+func vocabIDs(vocab termSet, tokens iter.Seq[string]) []termID {
+	var ids []termID
+	for tok := range tokens {
+		if id := vocab.id(tok); id != absentTerm {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 // headingLineEnd returns the offset just past the heading's first line.
@@ -157,10 +201,10 @@ func headingLineEnd(src string, start int) int {
 
 // newSection strips markup and tokenizes own text. A heading with no text of
 // its own is still a section: its trail alone can match.
-func newSection(anchor, heading, raw string, trail []string) (section, bool) {
+func newSection(anchor, heading, raw string, trail []string) (rawSection, bool) {
 	text := stripMarkup(raw)
 	if text == "" && heading == "" {
-		return section{}, false
+		return rawSection{}, false
 	}
 	counts := make(map[string]int)
 	total := 0
@@ -171,62 +215,32 @@ func newSection(anchor, heading, raw string, trail []string) (section, bool) {
 		})
 	}
 	s := section{anchor: anchor, heading: heading, text: text, length: int32(min(total, 1<<30))}
-	s.tokens, s.tf = sortedTerms(counts)
-	s.trail = termSet(trail)
-	return s, true
+	return rawSection{section: s, counts: counts, trail: fieldTokenSet(trail)}, true
 }
 
-// sortedTerms interns the tokens and returns them sorted by id with their
-// capped counts alongside.
-func sortedTerms(counts map[string]int) (ids []term, tf []uint8) {
-	keys := make([]string, 0, len(counts))
-	for k := range counts {
-		keys = append(keys, k)
-	}
-	interned := internTerms(keys)
-	order := make([]int, 0, len(keys))
-	for i := range keys {
-		if interned[i] != unknownTerm {
-			order = append(order, i)
-		}
-	}
-	sort.Slice(order, func(a, b int) bool { return interned[order[a]] < interned[order[b]] })
-	ids = make([]term, len(order))
-	tf = make([]uint8, len(order))
-	for i, k := range order {
-		ids[i] = interned[k]
-		tf[i] = uint8(min(counts[keys[k]], 255))
-	}
-	return ids, tf
-}
-
-// termSet tokenizes fields (headings, tags, a title) into an id-sorted set.
-func termSet(fields []string) []term {
+// fieldTokenSet tokenizes fields (headings, tags, a title) into a set.
+func fieldTokenSet(fields []string) map[string]struct{} {
 	seen := make(map[string]struct{})
 	for _, f := range fields {
 		for field := range strings.FieldsSeq(f) {
 			fieldTokens(field, func(tok string) { seen[tok] = struct{}{} })
 		}
 	}
-	if len(seen) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(seen))
-	for k := range seen {
-		keys = append(keys, k)
-	}
-	ids := slices.DeleteFunc(internTerms(keys), func(id term) bool { return id == unknownTerm })
-	slices.Sort(ids)
-	return ids
+	return seen
 }
 
-// hasTerm reports whether the id-sorted set contains id.
-func hasTerm(set []term, id term) bool {
+// fieldTerms packs the tokens of fields (tags and a title).
+func fieldTerms(fields []string) termSet {
+	return newTermSet(slices.Collect(maps.Keys(fieldTokenSet(fields))))
+}
+
+// hasTerm reports whether the sorted id set contains id.
+func hasTerm(set []termID, id termID) bool {
 	_, ok := termIndex(set, id)
 	return ok
 }
 
-func termIndex(set []term, id term) (int, bool) {
+func termIndex(set []termID, id termID) (int, bool) {
 	i := sort.Search(len(set), func(i int) bool { return set[i] >= id })
 	return i, i < len(set) && set[i] == id
 }

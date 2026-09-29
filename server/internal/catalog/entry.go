@@ -83,7 +83,8 @@ func firstH1(body []byte) string {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "# ") {
-			return strings.TrimSpace(trimmed[2:])
+			// A substring would pin the whole body for the entry's lifetime.
+			return strings.Clone(strings.TrimSpace(trimmed[2:]))
 		}
 	}
 	return ""
