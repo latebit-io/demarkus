@@ -8,3 +8,21 @@ tests:
     asserts:
       - matchRegexRaw:
           pattern: 'knowledge server: knowledge\.NAMESPACE\.svc\.cluster\.local:6309 \(UDP\)'
+
+  - it: says the broker, not a Job, creates token Secrets and the agent token
+    asserts:
+      - matchRegexRaw:
+          pattern: 'The broker creates each <world>-tokens Secret on its first write'
+      - matchRegexRaw:
+          pattern: "issues the agent's hub token into root-token-values"
+      - matchRegexRaw:
+          pattern: 'state cookie key into broker-cookie-key'
+      - notMatchRegexRaw:
+          pattern: 'bootstrap Job'
+
+  - it: names the Job when bootstrap is re-enabled
+    set:
+      knowledge.tokens.bootstrap.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: 'bootstrap Job creates each missing <world>-tokens Secret'

@@ -86,6 +86,30 @@ func TestEnsureWorld(t *testing.T) {
 		}
 	})
 
+	t.Run("finishes a genesis another replica left without a head", func(t *testing.T) {
+		objects := newTestMemory(t)
+		createGenesisPrefix(t, objects, 10)
+		created, err := EnsureWorld(context.Background(), objects, testWorldID)
+		if err != nil || !created {
+			t.Fatalf("EnsureWorld = (%v, %v), want the genesis finished", created, err)
+		}
+		if _, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID}); err != nil {
+			t.Fatalf("open finished world: %v", err)
+		}
+	})
+
+	t.Run("refuses genesis objects mixed with a foreign one", func(t *testing.T) {
+		objects := newTestMemory(t)
+		createGenesisPrefix(t, objects, 10)
+		if _, err := objects.Create(context.Background(), "someone-elses-data.json", []byte("{}")); err != nil {
+			t.Fatalf("seed foreign object: %v", err)
+		}
+		_, err := EnsureWorld(context.Background(), objects, testWorldID)
+		if !errors.Is(err, blob.ErrPrecondition) || !strings.Contains(err.Error(), "someone-elses-data.json") {
+			t.Fatalf("EnsureWorld error = %v, want ErrPrecondition naming the foreign object", err)
+		}
+	})
+
 	t.Run("refuses a non-empty bucket with no head", func(t *testing.T) {
 		objects := newTestMemory(t)
 		if _, err := objects.Create(context.Background(), "someone-elses-data.json", []byte("{}")); err != nil {
@@ -149,5 +173,20 @@ func TestReadOnlyStoreRefusesEveryWrite(t *testing.T) {
 	document, err := store.Get("/kept.md", 0)
 	if err != nil || document.Version != 1 || document.Archived {
 		t.Errorf("fixture after refused writes = %+v, %v", document, err)
+	}
+}
+
+// createGenesisPrefix writes the first n genesis objects and no head, the
+// bucket a replica sees while another is mid-genesis.
+func createGenesisPrefix(t *testing.T, objects blob.Store, n int) {
+	t.Helper()
+	model, err := buildGenesis(testWorldID)
+	if err != nil {
+		t.Fatalf("buildGenesis: %v", err)
+	}
+	for _, object := range model[:n] {
+		if _, err := objects.Create(context.Background(), object.Key, object.Data); err != nil {
+			t.Fatalf("create %s: %v", object.Key, err)
+		}
 	}
 }
