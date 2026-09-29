@@ -1,12 +1,13 @@
 package catalog
 
 import (
-	"fmt"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/server/internal/memtest"
 )
 
 // hasWord resolves a word through the document's vocabulary and checks the set.
@@ -136,42 +137,19 @@ func TestBodyLookupDocTermsAndArchive(t *testing.T) {
 	}
 }
 
-// agentGraphBody mimics the federation agent's /graph.md: prose plus one
-// spaceless JSON line whose nanosecond timestamps are new every cycle.
-func agentGraphBody(cycle int) []byte {
-	var b strings.Builder
-	b.WriteString("# Document Graph\n\n## Nodes\n\n| URL | Status |\n|---|---|\n| mark://w/a.md | ok |\n\n## Source observations\n\n```json\n[")
-	for i := range 2000 {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		fmt.Fprintf(&b, `{"url":"mark://w/doc-%d.md","observed_at":"2026-09-29T15:58:33.%09dZ"}`, i, cycle*2000+i)
-	}
-	b.WriteString("]\n```\n")
-	return []byte(b.String())
-}
-
-func liveHeap() uint64 {
-	runtime.GC()
-	runtime.GC()
-	var stats runtime.MemStats
-	runtime.ReadMemStats(&stats)
-	return stats.HeapAlloc
-}
-
 // Republishing one path must keep only the live index, however many unseen
 // tokens each version brings.
 func TestRepublishKeepsIndexBounded(t *testing.T) {
 	c := New()
 	modified := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
-	c.Put("/graph.md", nil, agentGraphBody(0), modified)
-	before := liveHeap()
+	c.Put("/graph.md", nil, memtest.AgentGraphBody(0), modified)
 	const cycles = 60
-	for cycle := 1; cycle <= cycles; cycle++ {
-		c.Put("/graph.md", nil, agentGraphBody(cycle), modified)
-	}
-	growth := int64(liveHeap()) - int64(before)
-	bodyBytes := int64(len(agentGraphBody(0)))
+	growth := memtest.Retained(func() {
+		for cycle := 1; cycle <= cycles; cycle++ {
+			c.Put("/graph.md", nil, memtest.AgentGraphBody(cycle), modified)
+		}
+	})
+	bodyBytes := int64(len(memtest.AgentGraphBody(0)))
 	if growth > 2*bodyBytes {
 		t.Errorf("heap grew %d bytes over %d republishes of a %d-byte body, want under %d", growth, cycles, bodyBytes, 2*bodyBytes)
 	}
@@ -183,12 +161,12 @@ func TestRepublishKeepsIndexBounded(t *testing.T) {
 // A section whose own text is one line must not keep the body alive.
 func TestIndexSectionsReleasesBody(t *testing.T) {
 	body := []byte("## Status\n\nok\n\n" + strings.Repeat("----------\n", 1<<16))
-	before := liveHeap()
 	docs := make([]*DocSections, 8)
-	for i := range docs {
-		docs[i] = IndexSections(body)
-	}
-	growth := int64(liveHeap()) - int64(before)
+	growth := memtest.Retained(func() {
+		for i := range docs {
+			docs[i] = IndexSections(body)
+		}
+	})
 	if growth > int64(len(body)) {
 		t.Errorf("heap grew %d bytes holding %d indexes of a %d-byte body, want under %d", growth, len(docs), len(body), len(body))
 	}

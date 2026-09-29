@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/server/internal/memtest"
 )
 
 func TestParseImportance(t *testing.T) {
@@ -124,12 +126,12 @@ func TestFromDocument(t *testing.T) {
 // A derived title must not keep the body it was read from alive.
 func TestFromDocumentTitleReleasesBody(t *testing.T) {
 	body := []byte("# Title\n\n" + strings.Repeat("body text ", 1<<17))
-	before := liveHeap()
 	entries := make([]*Entry, 8)
-	for i := range entries {
-		entries[i] = FromDocument("/doc.md", nil, body, time.Time{})
-	}
-	growth := int64(liveHeap()) - int64(before)
+	growth := memtest.Retained(func() {
+		for i := range entries {
+			entries[i] = FromDocument("/doc.md", nil, body, time.Time{})
+		}
+	})
 	if growth > int64(len(body)) {
 		t.Errorf("heap grew %d bytes holding %d titles of a %d-byte body, want under %d", growth, len(entries), len(body), len(body))
 	}

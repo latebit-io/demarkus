@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/memtest"
 )
 
 // TestSectionIndexMemory pins the plan's budget: the catalog with its
@@ -90,14 +91,14 @@ func measureIndex(t *testing.T, docs []CorpusDoc) (float64, *catalog.Catalog) {
 		total += len(bodies[i])
 	}
 	entriesOnly := catalog.New()
-	catalogBytes := retainedBy(func() {
+	catalogBytes := memtest.Retained(func() {
 		for i := range docs {
 			entriesOnly.Set(catalog.FromDocument(docs[i].Path, docs[i].Meta, bodies[i], time.Now()))
 		}
 	})
 	start := time.Now()
 	cat := catalog.New()
-	withIndex := retainedBy(func() {
+	withIndex := memtest.Retained(func() {
 		for i := range docs {
 			cat.Put(docs[i].Path, docs[i].Meta, bodies[i], time.Now())
 		}
@@ -111,16 +112,4 @@ func measureIndex(t *testing.T, docs []CorpusDoc) (float64, *catalog.Catalog) {
 	index := withIndex - catalogBytes
 	t.Logf("indexed %d docs in %s: catalog entries %d bytes, section index %d bytes", len(docs), elapsed, catalogBytes, index)
 	return float64(index) / float64(max(total, 1)), cat
-}
-
-// retainedBy runs build between two post-GC heap readings.
-func retainedBy(build func()) int64 {
-	runtime.GC()
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
-	build()
-	runtime.GC()
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-	return int64(after.HeapAlloc) - int64(before.HeapAlloc)
 }

@@ -10,7 +10,12 @@ demarkus-memory plugin; this file carries only what's specific to demarkus.
 - No sycophancy — on code or ideas. Critically review before presenting: layering
   violations, missing edge cases, state desync, stale references, channel blocking,
   rune vs byte vs cell-width confusion, silent error paths, leaky abstractions,
-  wrong architectural layer.
+  wrong architectural layer, unbounded long-lived state, substrings or subslices
+  that pin a larger buffer.
+- Memory tracks live data, not history. Long-lived state (globals, caches,
+  indexes, snapshots) dies with its owner or evicts; a cap is not eviction.
+  Clone what you keep from a larger buffer. New long-lived state ships with a
+  `memtest.Retained` test on production-shaped data. Rules: `/guidelines.md#memory`.
 - Challenge ideas before agreeing: what's the downside? what breaks? what's the
   simpler alternative? is this the right problem? Push back when something doesn't
   hold up — disagreement backed by reasoning is expected.
