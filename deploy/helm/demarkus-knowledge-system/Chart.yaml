@@ -30,7 +30,7 @@ dependencies:
     condition: agent.enabled
   - name: demarkus-library
     alias: library
-    version: "0.29.0"
+    version: "0.33.0"
     repository: oci://ghcr.io/latebit-io/charts
     condition: library.enabled
 keywords:
