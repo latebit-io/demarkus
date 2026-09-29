@@ -34,6 +34,9 @@ type journal struct {
 	file     *os.File
 	tail     []changefeed.Event
 	appended int
+	// down is set once a rewrite failed and logged; appends keep retrying
+	// the rewrite quietly until one succeeds.
+	down bool
 }
 
 // openJournal restores the journal at dir. Missing, unreadable, recorded
@@ -77,10 +80,13 @@ func openJournal(dir, fingerprint string, ring int, logger *slog.Logger) (*journ
 // logged, never surfaced: the commit stands, and the fingerprint check at
 // the next open turns a missing entry into a resync.
 func (j *journal) append(ev changefeed.Event, fingerprint string) {
+	if j.file == nil && !j.recover(fingerprint) {
+		return
+	}
 	block := ev.Block(j.epoch)
 	block.Metadata[treeKey] = fingerprint
 	if _, err := block.WriteTo(j.file); err != nil {
-		j.logger.Error("change journal append failed; watchers resync at the next restart", "path", ev.Path, "error", err)
+		j.fail("change journal append failed", err)
 		return
 	}
 	j.tail = append(j.tail, ev)
@@ -90,9 +96,30 @@ func (j *journal) append(ev changefeed.Event, fingerprint string) {
 	j.appended++
 	if j.appended > j.ring {
 		if err := j.rewrite(fingerprint); err != nil {
-			j.logger.Error("change journal compaction failed", "error", err)
+			j.fail("change journal compaction failed", err)
 		}
 	}
+}
+
+// recover retries the rewrite a failed one left half done, so an outage
+// ends with the disk coming back rather than at the next restart.
+func (j *journal) recover(fingerprint string) bool {
+	if err := j.rewrite(fingerprint); err != nil {
+		j.fail("change journal rewrite failed", err)
+		return false
+	}
+	j.down = false
+	j.logger.Info("change journal recovered", "epoch", j.epoch)
+	return true
+}
+
+// fail logs one outage notice; later failures stay quiet until recovery.
+func (j *journal) fail(what string, err error) {
+	if j.down {
+		return
+	}
+	j.down = true
+	j.logger.Error(what+"; journal off until it recovers, watchers resync at the next restart", "error", err)
 }
 
 func (j *journal) close() error {

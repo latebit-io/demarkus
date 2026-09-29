@@ -149,3 +149,19 @@ func TestOutOfBandArchiveStartsNewEpoch(t *testing.T) {
 		t.Fatalf("resume after an out-of-band archive: err = %v, want ErrResync", err)
 	}
 }
+
+// Close ends the watch and refuses later writes.
+func TestCloseEndsWatchAndRefusesWrites(t *testing.T) {
+	store, hub := openWatched(t, t.TempDir(), 8)
+	sub, err := hub.Subscribe("/", protocol.Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeStore(t, store)
+	if _, err := sub.Next(context.Background()); !errors.Is(err, changefeed.ErrClosed) {
+		t.Fatalf("Next after Close: err = %v, want ErrClosed", err)
+	}
+	if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/late.md", Content: []byte("# late\n")}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Publish after Close: err = %v, want ErrClosed", err)
+	}
+}

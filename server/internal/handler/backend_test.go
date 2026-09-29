@@ -50,6 +50,11 @@ func fileBackendAt(t testing.TB, dir string, ring int) backend {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := fs.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	return backend{Store: fs, Changes: fs.Changes(), Tamper: tamper}
 }
 

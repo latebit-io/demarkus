@@ -3,6 +3,7 @@ package filestore
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 
@@ -14,11 +15,15 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
+// ErrClosed means a write reached the store after Close.
+var ErrClosed = errors.New("filestore: store is closed")
+
 // Store keeps file data, hash state, and catalog state behind one lock.
 type Store struct {
 	mu        sync.RWMutex
 	documents *protocolstore.Store
 	catalog   *catalog.Catalog
+	closed    bool
 
 	// WATCH state, fixed at Open: the hub, the journal that makes its
 	// sequence durable, and the last sequence assigned (under mu).
@@ -74,13 +79,16 @@ func Open(documents *protocolstore.Store, lookup *catalog.Catalog, opts Options)
 // Changes is the hub Open created, or nil when WATCH is off.
 func (s *Store) Changes() *changefeed.Hub { return s.changes }
 
-// Close releases the change journal; the documents need no close.
+// Close ends every watch, releases the change journal and refuses later
+// writes; the documents need no close.
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.journal == nil {
+	s.closed = true
+	if s.changes == nil {
 		return nil
 	}
+	s.changes.Close()
 	return s.journal.close()
 }
 
@@ -126,6 +134,9 @@ func (s *Store) Publish(ctx context.Context, req backend.WriteRequest) (*storefm
 	return call(ctx, func() (*storefmt.Document, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.closed {
+			return nil, ErrClosed
+		}
 		document, err := s.documents.WriteChecked(s.writeSpec(ctx, &req))
 		if err == nil {
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
@@ -140,6 +151,9 @@ func (s *Store) Append(ctx context.Context, req backend.WriteRequest) (*storefmt
 	return call(ctx, func() (*storefmt.Document, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.closed {
+			return nil, ErrClosed
+		}
 		document, err := s.documents.AppendChecked(s.writeSpec(ctx, &req))
 		if err == nil {
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
@@ -154,6 +168,9 @@ func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (ba
 	return call(ctx, func() (backend.ArchiveResult, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.closed {
+			return backend.ArchiveResult{}, ErrClosed
+		}
 		spec := &storefmt.ArchiveSpec{ArchiveChange: storefmt.ArchiveChange{Path: req.Path, Archived: req.Archived}}
 		if req.Precondition != nil {
 			// Under the write lock, reading the state the change commits against.
@@ -169,7 +186,9 @@ func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (ba
 		default:
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
 		}
-		if changed && err == nil {
+		// changed with an error is a committed change whose directory sync
+		// failed: watchers still learn of it.
+		if changed {
 			s.hint(req.Path, document, changefeed.ArchiveOp(req.Archived))
 		}
 		return backend.ArchiveResult{Document: document, Changed: changed}, err

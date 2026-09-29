@@ -101,6 +101,9 @@ func writeArchiveState(docDir string, archived bool) (committed bool, err error)
 // its directory entry not yet known durable.
 func WriteFileAtomic(path string, mode os.FileMode, write func(w io.Writer) error) (committed bool, retErr error) {
 	dir, base := filepath.Split(path)
+	if dir == "" {
+		dir = "." // a bare name: keep the temp on the same filesystem
+	}
 	f, err := os.CreateTemp(dir, "."+base+"-*")
 	if err != nil {
 		return false, fmt.Errorf("create temp %s: %w", base, err)
