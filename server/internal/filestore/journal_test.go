@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
@@ -45,14 +46,15 @@ func publishN(t *testing.T, store *Store, n int) {
 	}
 }
 
-// readTail parses the journal on disk.
-func readTail(t *testing.T, root string) []changefeed.Event {
+// readJournal parses the journal on disk.
+func readJournal(t *testing.T, root string) (j *journal, clean bool) {
 	t.Helper()
-	j := &journal{path: filepath.Join(root, journalName), logger: testLogger}
-	if _, _, err := j.read(); err != nil {
+	j = &journal{path: filepath.Join(root, journalName), logger: testLogger}
+	_, clean, err := j.read()
+	if err != nil {
 		t.Fatal(err)
 	}
-	return j.tail
+	return j, clean
 }
 
 func closeStore(t *testing.T, store *Store) {
@@ -71,8 +73,8 @@ func TestJournalCompactsToTheRing(t *testing.T) {
 	epoch := hub.Epoch()
 	closeStore(t, store)
 
-	tail := readTail(t, root)
-	if len(tail) != 4 || tail[0].Seq != 7 || tail[3].Seq != 10 {
+	j, _ := readJournal(t, root)
+	if tail := j.tail; len(tail) != 4 || tail[0].Seq != 7 || tail[3].Seq != 10 {
 		t.Fatalf("journal holds %d entries from seq %d; want 4 from 7", len(tail), tail[0].Seq)
 	}
 
@@ -110,17 +112,16 @@ func TestJournalTornTailStartsNewEpoch(t *testing.T) {
 	if err := os.WriteFile(path, data[:len(data)-20], 0o644); err != nil {
 		t.Fatal(err)
 	}
-	torn := &journal{path: path, logger: testLogger}
-	if _, clean, err := torn.read(); err != nil || clean || torn.epoch != epoch || len(torn.tail) != 2 {
-		t.Fatalf("torn journal read: epoch %q, %d entries, clean %v, err %v; want %q, 2, false, nil", torn.epoch, len(torn.tail), clean, err, epoch)
+	if torn, clean := readJournal(t, root); clean || torn.epoch != epoch || len(torn.tail) != 2 {
+		t.Fatalf("torn journal read: epoch %q, %d entries, clean %v; want %q, 2, false", torn.epoch, len(torn.tail), clean, epoch)
 	}
 
 	_, reopened := openWatched(t, root, 8)
 	if reopened.Epoch() == epoch {
 		t.Fatal("epoch kept although the last commit is missing from the journal")
 	}
-	if _, clean, err := (&journal{path: path, logger: testLogger}).read(); err != nil || !clean {
-		t.Fatalf("journal not rewritten clean: clean %v, err %v", clean, err)
+	if _, clean := readJournal(t, root); !clean {
+		t.Fatal("journal not rewritten clean")
 	}
 }
 
@@ -163,5 +164,31 @@ func TestCloseEndsWatchAndRefusesWrites(t *testing.T) {
 	}
 	if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/late.md", Content: []byte("# late\n")}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Publish after Close: err = %v, want ErrClosed", err)
+	}
+}
+
+// A journal whose file was lost recovers on the next append by rewriting the
+// whole tail, pending event included: the epoch and every event survive a
+// reopen.
+func TestJournalRecoversAfterLostFile(t *testing.T) {
+	root := t.TempDir()
+	store, hub := openWatched(t, root, 8)
+	publishN(t, store, 1)
+	epoch := hub.Epoch()
+	store.journal.lose("test", errors.New("disk gone"))
+	store.journal.retryAt = time.Time{}
+	for _, path := range []string{"/r/two.md", "/r/three.md"} {
+		if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: path, Content: []byte("# r\n")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	closeStore(t, store)
+
+	_, reopened := openWatched(t, root, 8)
+	if reopened.Epoch() != epoch {
+		t.Fatalf("epoch changed after recovery: %q -> %q", epoch, reopened.Epoch())
+	}
+	if j, _ := readJournal(t, root); len(j.tail) != 3 || j.tail[2].Seq != 3 {
+		t.Fatalf("journal holds %d entries; want the 3 commits", len(j.tail))
 	}
 }

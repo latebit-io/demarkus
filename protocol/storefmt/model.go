@@ -46,6 +46,18 @@ var ErrArchived = fmt.Errorf("document is archived")
 // to the current version, making the publish a no-op.
 var ErrNotModified = fmt.Errorf("content not modified")
 
+// ErrCommittedNotSynced is returned with the written document when the new
+// version is current but a directory sync after the pointer swap failed:
+// the write happened, its durability is not confirmed.
+var ErrCommittedNotSynced = errors.New("version committed, directory sync failed")
+
+// Committed reports a write that landed, durable or not: no error, or
+// ErrCommittedNotSynced. Callers publish and index such a write and still
+// return its error.
+func Committed(err error) bool {
+	return err == nil || errors.Is(err, ErrCommittedNotSynced)
+}
+
 // ErrConflict is returned by WriteVersion when the expected version
 // does not match the current version (optimistic concurrency check).
 var ErrConflict = fmt.Errorf("version conflict")

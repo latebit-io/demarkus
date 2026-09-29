@@ -109,17 +109,14 @@ func WriteFileAtomic(path string, mode os.FileMode, write func(w io.Writer) erro
 		return false, fmt.Errorf("create temp %s: %w", base, err)
 	}
 	tmpPath := f.Name()
-	closed := false
+	// After success the file is closed and renamed; both cleanups then
+	// report the state they find and are skipped.
 	defer func() {
-		if !closed {
-			if closeErr := f.Close(); closeErr != nil {
-				retErr = errors.Join(retErr, fmt.Errorf("close temp %s: %w", base, closeErr))
-			}
+		if err := f.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			retErr = errors.Join(retErr, fmt.Errorf("close temp %s: %w", base, err))
 		}
-		if tmpPath != "" {
-			if removeErr := os.Remove(tmpPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				retErr = errors.Join(retErr, fmt.Errorf("remove temp %s: %w", base, removeErr))
-			}
+		if err := os.Remove(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			retErr = errors.Join(retErr, fmt.Errorf("remove temp %s: %w", base, err))
 		}
 	}()
 	if err := f.Chmod(mode); err != nil {
@@ -131,24 +128,16 @@ func WriteFileAtomic(path string, mode os.FileMode, write func(w io.Writer) erro
 	if err := syncFile(f); err != nil {
 		return false, fmt.Errorf("sync temp %s: %w", base, err)
 	}
-	closed = true
 	if err := f.Close(); err != nil {
 		return false, fmt.Errorf("close temp %s: %w", base, err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return false, fmt.Errorf("rename %s: %w", base, err)
 	}
-	tmpPath = ""
 	if err := syncDir(filepath.Dir(path)); err != nil {
 		return true, fmt.Errorf("sync directory of %s: %w", base, err)
 	}
 	return true, nil
-}
-
-// syncArchiveStateDir syncs a document's version directory after its
-// archive state is known to be in place.
-func syncArchiveStateDir(docDir string) error {
-	return syncDir(docDir)
 }
 
 // newVersionSymlinkTarget returns the relative symlink target for a new version,
@@ -165,12 +154,12 @@ type Store struct {
 	// body has that hash. LookupHash answers the smallest so any backend and
 	// a rebuilt index agree on shared bodies.
 	hashIdx map[string][]string
-	// pathIdx: canonical request path → content hash. liveChildren also reads
+	// pathIdx: canonical request path → its index entry. liveChildren also reads
 	// membership as "current, non-archived doc" for ListDir filtering, so
 	// keep membership semantics exact; a miss only degrades to a disk scan.
-	pathIdx map[string]string
-	// digest folds every (path, hash) pair with XOR, so it updates per entry
-	// and equals any other index over the same current documents. Meaningful
+	pathIdx map[string]indexEntry
+	// digest is the XOR of every entry's fold, so it updates per entry and
+	// equals any other index over the same current documents. Meaningful
 	// only once indexed is set by BuildHashIndex. hashMu.
 	digest  [digestLen]byte
 	indexed bool
@@ -186,7 +175,7 @@ func New(root string) *Store {
 	return &Store{
 		root:    root,
 		hashIdx: make(map[string][]string),
-		pathIdx: make(map[string]string),
+		pathIdx: make(map[string]indexEntry),
 	}
 }
 
@@ -289,13 +278,13 @@ func (s *Store) BuildHashIndex() error {
 	defer s.hashMu.Unlock()
 
 	s.hashIdx = make(map[string][]string)
-	s.pathIdx = make(map[string]string)
+	s.pathIdx = make(map[string]indexEntry)
 	s.digest = [digestLen]byte{}
 	s.indexed = true
 	s.hashErr = nil
 
 	err := s.walkCurrentFiles(func(reqPath string, data []byte, _ time.Time) error {
-		s.indexLocked(reqPath, storefmt.ContentHash(storefmt.ExtractBody(data)))
+		s.indexLocked(reqPath, storefmt.ContentHash(storefmt.ExtractBody(data)), indexVersion(data))
 		return nil
 	})
 	s.hashErr = err
@@ -304,23 +293,25 @@ func (s *Store) BuildHashIndex() error {
 
 // indexLocked records reqPath (already canonical) under hash, dropping any
 // earlier hash it was indexed under. Caller holds hashMu.
-func (s *Store) indexLocked(reqPath, hash string) {
+func (s *Store) indexLocked(reqPath, hash string, version int) {
 	s.unindexLocked(reqPath)
 	paths := s.hashIdx[hash]
 	i, _ := slices.BinarySearch(paths, reqPath)
 	s.hashIdx[hash] = slices.Insert(paths, i, reqPath)
-	s.pathIdx[reqPath] = hash
-	s.foldDigest(reqPath, hash)
+	entry := indexEntry{hash: hash, fold: fold(reqPath, version, hash)}
+	s.pathIdx[reqPath] = entry
+	s.xorDigest(entry.fold)
 }
 
 // unindexLocked removes reqPath from both maps. Caller holds hashMu.
 func (s *Store) unindexLocked(reqPath string) {
-	hash, ok := s.pathIdx[reqPath]
+	entry, ok := s.pathIdx[reqPath]
 	if !ok {
 		return
 	}
 	delete(s.pathIdx, reqPath)
-	s.foldDigest(reqPath, hash)
+	s.xorDigest(entry.fold)
+	hash := entry.hash
 	paths := s.hashIdx[hash]
 	if i, found := slices.BinarySearch(paths, reqPath); found {
 		paths = slices.Delete(paths, i, i+1)
@@ -359,13 +350,13 @@ func (s *Store) LookupHashResult(hash string) (string, error) {
 	return "", os.ErrNotExist
 }
 
-// UpdateHashIndex adds or updates the hash index entry for a document.
-// Keys are canonical so "/d/e/" and "/d/e" index one document, as
-// BuildHashIndex derives from the walk.
-func (s *Store) UpdateHashIndex(reqPath string, body []byte) {
+// UpdateHashIndex indexes the current version of a document by body and
+// version number. Keys are canonical so "/d/e/" and "/d/e" index one
+// document, as BuildHashIndex derives from the walk.
+func (s *Store) UpdateHashIndex(reqPath string, body []byte, version int) {
 	s.hashMu.Lock()
 	defer s.hashMu.Unlock()
-	s.indexLocked(storefmt.CanonicalPath(reqPath), storefmt.ContentHash(body))
+	s.indexLocked(storefmt.CanonicalPath(reqPath), storefmt.ContentHash(body), version)
 }
 
 // RemoveHashEntry removes the hash index entry for a given request path.
@@ -385,18 +376,41 @@ func (s *Store) HashIndexSize() int {
 // digestLen is the fingerprint width: change detection, not a security bound.
 const digestLen = 16
 
-// foldDigest toggles one (path, hash) pair in the digest. XOR is its own
-// inverse, so adding and removing an entry are the same operation.
-func (s *Store) foldDigest(reqPath, hash string) {
-	sum := sha256.Sum256([]byte(reqPath + "\x00" + hash))
-	for i := range digestLen {
-		s.digest[i] ^= sum[i]
+// indexEntry is one current document: its content hash, and its fold, the
+// digest contribution the entry is removed with.
+type indexEntry struct {
+	hash string
+	fold [digestLen]byte
+}
+
+// fold is an entry's digest contribution. The version is in it so a new
+// version with the same body still moves the fingerprint.
+func fold(reqPath string, version int, hash string) (out [digestLen]byte) {
+	sum := sha256.Sum256([]byte(reqPath + "\x00" + strconv.Itoa(version) + "\x00" + hash))
+	copy(out[:], sum[:digestLen])
+	return out
+}
+
+// xorDigest toggles one fold in the digest; XOR is its own inverse.
+func (s *Store) xorDigest(f [digestLen]byte) {
+	for i, b := range f {
+		s.digest[i] ^= b
 	}
 }
 
-// Fingerprint identifies the set of current, live documents by path and
-// content hash, in any indexing order: two stores over one tree agree, and
-// every publish, archive or unarchive changes it. Empty until BuildHashIndex.
+// indexVersion is a stored file's version for the index; a header the
+// parser refuses folds as 0, and VerifyChain reports that file's corruption.
+func indexVersion(stored []byte) int {
+	version, err := storefmt.StoredVersionNumber(stored)
+	if err != nil {
+		return 0
+	}
+	return version
+}
+
+// Fingerprint identifies the current, live documents by path, version and
+// content hash, in any indexing order; every write, archive or unarchive
+// changes it. Empty until BuildHashIndex.
 func (s *Store) Fingerprint() string {
 	s.hashMu.RLock()
 	defer s.hashMu.RUnlock()
@@ -1075,13 +1089,13 @@ func (s *Store) ArchiveChecked(spec *storefmt.ArchiveSpec) (*storefmt.Document, 
 	doc := documentFromStored(data, info.ModTime(), currentVersion, archived)
 	if currentArchived == archived {
 		if _, err := os.Stat(filepath.Join(filepath.Dir(versionFile), archiveStateName)); err == nil {
-			if err := syncArchiveStateDir(filepath.Dir(versionFile)); err != nil {
-				return doc, false, err
+			if err := syncDir(filepath.Dir(versionFile)); err != nil {
+				return doc, false, fmt.Errorf("%w: %w", storefmt.ErrCommittedNotSynced, err)
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return doc, false, fmt.Errorf("stat archive state: %w", err)
 		}
-		s.updateArchiveIndex(reqPath, data, archived)
+		s.updateArchiveIndex(reqPath, data, currentVersion, archived)
 		return doc, false, nil
 	}
 	if spec.Check != nil {
@@ -1095,20 +1109,20 @@ func (s *Store) ArchiveChecked(spec *storefmt.ArchiveSpec) (*storefmt.Document, 
 		return nil, false, stateErr
 	}
 
-	s.updateArchiveIndex(reqPath, data, archived)
+	s.updateArchiveIndex(reqPath, data, currentVersion, archived)
 
 	if stateErr != nil {
-		return doc, true, stateErr
+		return doc, true, fmt.Errorf("%w: %w", storefmt.ErrCommittedNotSynced, stateErr)
 	}
 	return doc, true, nil
 }
 
-func (s *Store) updateArchiveIndex(reqPath string, stored []byte, archived bool) {
+func (s *Store) updateArchiveIndex(reqPath string, stored []byte, version int, archived bool) {
 	if archived {
 		s.RemoveHashEntry(reqPath)
 		return
 	}
-	s.UpdateHashIndex(reqPath, storefmt.ExtractBody(stored))
+	s.UpdateHashIndex(reqPath, storefmt.ExtractBody(stored), version)
 }
 
 func documentFromStored(data []byte, modified time.Time, version int, archived bool) *storefmt.Document {
@@ -1280,24 +1294,21 @@ func createVersionFile(vFile string, stored []byte, version int) error {
 	return nil
 }
 
-// errSwapNotApplied marks a swap that failed before the pointer moved, so the
-// new version file is unreferenced and safe to remove.
-var errSwapNotApplied = errors.New("current pointer not updated")
-
 // swapCurrent points the current file at relTarget by renaming a temp symlink
-// over it, so readers never see it missing. Relative, so the root can move.
-func swapCurrent(currentFile, relTarget string) error {
+// over it, so readers never see it missing (relative, so the root can move).
+// applied false means the pointer did not move and the version is unreferenced.
+func swapCurrent(currentFile, relTarget string) (applied bool, err error) {
 	tmpLink := currentFile + ".tmp"
 	if err := removeIfPresent(tmpLink); err != nil {
-		return fmt.Errorf("clear stale temp link: %w: %w", errSwapNotApplied, err)
+		return false, fmt.Errorf("clear stale temp link: %w", err)
 	}
 	if err := os.Symlink(relTarget, tmpLink); err != nil {
-		return fmt.Errorf("symlink current file: %w: %w", errSwapNotApplied, err)
+		return false, fmt.Errorf("symlink current file: %w", err)
 	}
 	if err := os.Rename(tmpLink, currentFile); err != nil {
-		return errors.Join(fmt.Errorf("rename current file: %w: %w", errSwapNotApplied, err), removeIfPresent(tmpLink))
+		return false, errors.Join(fmt.Errorf("rename current file: %w", err), removeIfPresent(tmpLink))
 	}
-	return syncDir(filepath.Dir(currentFile))
+	return true, syncDir(filepath.Dir(currentFile))
 }
 
 func removeIfPresent(name string) error {
@@ -1379,12 +1390,14 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 	if err := createVersionFile(vFile, stored, next); err != nil {
 		return nil, err
 	}
-	if err := swapCurrent(currentFile, newVersionSymlinkTarget(base, next)); err != nil {
-		// An unreferenced version would fail every later write with O_EXCL.
-		if errors.Is(err, errSwapNotApplied) {
-			err = errors.Join(err, removeIfPresent(vFile))
+	var unsynced error
+	if applied, err := swapCurrent(currentFile, newVersionSymlinkTarget(base, next)); err != nil {
+		if !applied {
+			// An unreferenced version would fail every later write with O_EXCL.
+			return nil, errors.Join(err, removeIfPresent(vFile))
 		}
-		return nil, err
+		// The pointer moved: the version is current and readers see it.
+		unsynced = fmt.Errorf("%w: %w", storefmt.ErrCommittedNotSynced, err)
 	}
 
 	info, err := os.Stat(vFile)
@@ -1392,7 +1405,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 		return nil, fmt.Errorf("stat version file: %w", err)
 	}
 
-	s.UpdateHashIndex(reqPath, content)
+	s.UpdateHashIndex(reqPath, content, next)
 
 	// Metadata is the persisted form (what Get returns), not the request
 	// map: "alpha, beta" is stored as a tags list and reads back "alpha,beta",
@@ -1408,7 +1421,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 	if keep := storefmt.RetentionValue(meta); keep > 0 {
 		doc.Prune = s.pruneVersions(versionsDir, base, next, keep)
 	}
-	return doc, nil
+	return doc, unsynced
 }
 
 // pruneVersions keeps the newest keep versions, deleting oldest first and
@@ -1529,7 +1542,7 @@ func (s *Store) WriteChecked(spec *storefmt.WriteSpec) (*storefmt.Document, erro
 	}
 
 	doc, err := s.write(reqPath, content, meta, spec.Check)
-	if err != nil {
+	if !storefmt.Committed(err) {
 		if errors.Is(err, storefmt.ErrVersionExists) {
 			// Lost the O_EXCL race: another writer created the expected
 			// next version between our check and the file create.
@@ -1560,10 +1573,10 @@ func (s *Store) WriteChecked(spec *storefmt.WriteSpec) (*storefmt.Document, erro
 	// result is preserved: the write pruned regardless of the conflict,
 	// and callers must still be able to audit-log the deletion.
 	if doc.Version != expectedVersion+1 {
-		return &storefmt.Document{Version: doc.Version, Prune: doc.Prune}, storefmt.ErrConflict
+		return &storefmt.Document{Version: doc.Version, Prune: doc.Prune}, errors.Join(storefmt.ErrConflict, err)
 	}
 
-	return doc, nil
+	return doc, err
 }
 
 // Append reads the document at expectedVersion, appends content to the end

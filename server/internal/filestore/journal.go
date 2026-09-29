@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
@@ -22,6 +23,10 @@ const journalName = ".changes"
 // block, so a reopen can tell whether the tree changed behind the journal.
 const treeKey = "tree"
 
+// retryAfter spaces rewrite attempts while the file is lost, so a failing
+// disk does not add a rewrite to every commit.
+const retryAfter = time.Second
+
 // journal is the durable tail of a file store's change sequence in the WATCH
 // block codec: a header naming the epoch, then one event block per commit.
 // It keeps one ring's worth, rewritten when torn and every ring of appends.
@@ -31,12 +36,13 @@ type journal struct {
 	ring   int
 	logger *slog.Logger
 
+	// file is nil while the journal is lost (a torn append) until a rewrite
+	// brings it back, and after close.
 	file     *os.File
+	closed   bool
+	retryAt  time.Time
 	tail     []changefeed.Event
 	appended int
-	// down is set once a rewrite failed and logged; appends keep retrying
-	// the rewrite quietly until one succeeds.
-	down bool
 }
 
 // openJournal restores the journal at dir. Missing, unreadable, recorded
@@ -44,30 +50,35 @@ type journal struct {
 // check, it starts a new epoch: a resumed watcher then resyncs.
 func openJournal(dir, fingerprint string, ring int, logger *slog.Logger) (*journal, error) {
 	j := &journal{path: filepath.Join(dir, journalName), ring: ring, logger: logger}
-	recorded, clean, err := j.read()
 	var reason string
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		reason = "no change journal"
-	case err != nil:
-		reason = "change journal unreadable: " + err.Error()
-	case fingerprint == "":
+	clean := false
+	if fingerprint == "" {
 		reason = "hash index not built"
-	case recorded != fingerprint:
-		reason = "content changed behind the change journal"
+	} else {
+		var recorded string
+		var err error
+		recorded, clean, err = j.read()
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			reason = "no change journal"
+		case err != nil:
+			reason = "change journal unreadable: " + err.Error()
+		case recorded != fingerprint:
+			reason = "content changed behind the change journal"
+		}
 	}
-	trimmed := len(j.tail) > ring
-	switch {
-	case reason != "":
+	if reason != "" {
 		j.epoch, j.tail = changefeed.NewEpoch(), nil
 		logger.Info("change journal starts a new epoch", "reason", reason, "epoch", j.epoch)
+	}
+	if len(j.tail) > ring {
+		j.trim()
+		clean = false
+	}
+	var err error
+	if reason != "" || !clean {
 		err = j.rewrite(fingerprint)
-	case trimmed || !clean:
-		if trimmed {
-			j.tail = j.tail[len(j.tail)-ring:]
-		}
-		err = j.rewrite(fingerprint)
-	default:
+	} else {
 		err = j.openForAppend()
 	}
 	if err != nil {
@@ -80,49 +91,54 @@ func openJournal(dir, fingerprint string, ring int, logger *slog.Logger) (*journ
 // logged, never surfaced: the commit stands, and the fingerprint check at
 // the next open turns a missing entry into a resync.
 func (j *journal) append(ev changefeed.Event, fingerprint string) {
-	if j.file == nil && !j.recover(fingerprint) {
-		return
-	}
-	block := ev.Block(j.epoch)
-	block.Metadata[treeKey] = fingerprint
-	if _, err := block.WriteTo(j.file); err != nil {
-		j.fail("change journal append failed", err)
+	if j.closed {
 		return
 	}
 	j.tail = append(j.tail, ev)
-	if len(j.tail) > j.ring {
-		j.tail = j.tail[1:]
-	}
-	j.appended++
-	if j.appended > j.ring {
-		if err := j.rewrite(fingerprint); err != nil {
-			j.fail("change journal compaction failed", err)
+	j.trim()
+	if j.file != nil {
+		block := ev.Block(j.epoch)
+		block.Metadata[treeKey] = fingerprint
+		if _, err := block.WriteTo(j.file); err != nil {
+			j.lose("change journal append failed", err)
+		} else {
+			j.appended++
+			if j.appended <= j.ring {
+				return
+			}
 		}
 	}
-}
-
-// recover retries the rewrite a failed one left half done, so an outage
-// ends with the disk coming back rather than at the next restart.
-func (j *journal) recover(fingerprint string) bool {
-	if err := j.rewrite(fingerprint); err != nil {
-		j.fail("change journal rewrite failed", err)
-		return false
-	}
-	j.down = false
-	j.logger.Info("change journal recovered", "epoch", j.epoch)
-	return true
-}
-
-// fail logs one outage notice; later failures stay quiet until recovery.
-func (j *journal) fail(what string, err error) {
-	if j.down {
+	// Lost, or a ring of appends since the last rewrite: the whole tail,
+	// pending event included, goes down under the current fingerprint.
+	if time.Now().Before(j.retryAt) {
 		return
 	}
-	j.down = true
-	j.logger.Error(what+"; journal off until it recovers, watchers resync at the next restart", "error", err)
+	if err := j.rewrite(fingerprint); err != nil {
+		j.lose("change journal rewrite failed", err)
+	}
+}
+
+// lose drops the file handle after a failure and logs once per outage;
+// later appends retry the rewrite on a backoff.
+func (j *journal) lose(what string, err error) {
+	if j.file != nil {
+		j.logger.Error(what+"; watchers resync at the next restart unless the journal recovers", "error", err)
+		if closeErr := j.file.Close(); closeErr != nil {
+			j.logger.Debug("closing lost change journal", "error", closeErr)
+		}
+		j.file = nil
+	}
+	j.retryAt = time.Now().Add(retryAfter)
+}
+
+func (j *journal) trim() {
+	if len(j.tail) > j.ring {
+		j.tail = j.tail[len(j.tail)-j.ring:]
+	}
 }
 
 func (j *journal) close() error {
+	j.closed = true
 	if j.file == nil {
 		return nil
 	}
@@ -132,12 +148,9 @@ func (j *journal) close() error {
 }
 
 // rewrite replaces the file with the header and the retained tail, then
-// reopens it for appends. fingerprint goes on the header, which is what a
-// reopen checks when no event follows it.
+// reopens it for appends. The old handle stays usable until the new file is
+// in place, so a failed compaction costs nothing.
 func (j *journal) rewrite(fingerprint string) error {
-	if err := j.close(); err != nil {
-		return fmt.Errorf("close change journal: %w", err)
-	}
 	if _, err := protocolstore.WriteFileAtomic(j.path, 0o600, func(w io.Writer) error {
 		buffered := bufio.NewWriter(w)
 		header := protocol.WatchControl(protocol.StatusOK, protocol.Cursor{Epoch: j.epoch})
@@ -154,7 +167,20 @@ func (j *journal) rewrite(fingerprint string) error {
 	}); err != nil {
 		return fmt.Errorf("rewrite change journal: %w", err)
 	}
-	return j.openForAppend()
+	if j.file != nil {
+		if err := j.file.Close(); err != nil {
+			j.logger.Debug("closing replaced change journal", "error", err)
+		}
+		j.file = nil
+	}
+	if err := j.openForAppend(); err != nil {
+		return err
+	}
+	if !j.retryAt.IsZero() {
+		j.retryAt = time.Time{}
+		j.logger.Info("change journal recovered", "epoch", j.epoch)
+	}
+	return nil
 }
 
 func (j *journal) openForAppend() error {

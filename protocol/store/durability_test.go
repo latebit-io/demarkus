@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 func TestWriteSyncsFileAndDirectories(t *testing.T) {
@@ -98,8 +100,9 @@ func TestWriteFailedSyncAfterSwapKeepsVersion(t *testing.T) {
 	}
 	t.Cleanup(func() { syncDir = syncDirectory })
 
-	if _, err := s.Write("/a.md", []byte("# A\n"), nil); err == nil {
-		t.Fatal("write: want the sync error")
+	doc, err := s.Write("/a.md", []byte("# A\n"), nil)
+	if !errors.Is(err, storefmt.ErrCommittedNotSynced) || doc == nil || doc.Version != 1 {
+		t.Fatalf("write = %+v, %v; want the document with ErrCommittedNotSynced", doc, err)
 	}
 	if _, err := s.Get("/a.md", 0); err != nil {
 		t.Errorf("current pointer dangles after a late sync failure: %v", err)

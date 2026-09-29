@@ -2144,12 +2144,12 @@ func TestHashIndex(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
-		s.UpdateHashIndex("/doc.md", []byte("old"))
+		s.UpdateHashIndex("/doc.md", []byte("old"), 1)
 		if _, err := s.LookupHashResult(wantHash("old")); err != nil {
 			t.Fatalf("expected old hash to exist: %v", err)
 		}
 
-		s.UpdateHashIndex("/doc.md", []byte("new"))
+		s.UpdateHashIndex("/doc.md", []byte("new"), 2)
 		if _, err := s.LookupHashResult(wantHash("old")); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("old hash lookup: err = %v, want ErrNotExist", err)
 		}
@@ -2163,7 +2163,7 @@ func TestHashIndex(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
-		s.UpdateHashIndex("/doc.md", []byte("content"))
+		s.UpdateHashIndex("/doc.md", []byte("content"), 1)
 		s.RemoveHashEntry("/doc.md")
 		if _, err := s.LookupHashResult(wantHash("content")); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("removed entry lookup: err = %v, want ErrNotExist", err)
@@ -2523,6 +2523,14 @@ func TestFingerprint(t *testing.T) {
 	write(t, a, "/x.md", "# x2\n")
 	if a.Fingerprint() == before {
 		t.Fatal("a new version left the fingerprint unchanged")
+	}
+	// A version that changes only metadata is a version too.
+	sameBody := a.Fingerprint()
+	if _, err := a.WriteChecked(&storefmt.WriteSpec{Path: "/x.md", ExpectedVersion: -1, Content: []byte("# x2\n"), Metadata: map[string]string{"tags": "t"}}); err != nil {
+		t.Fatal(err)
+	}
+	if a.Fingerprint() == sameBody {
+		t.Fatal("a metadata-only version left the fingerprint unchanged")
 	}
 	if _, _, err := a.ArchiveChecked(&storefmt.ArchiveSpec{ArchiveChange: storefmt.ArchiveChange{Path: "/y.md", Archived: true}}); err != nil {
 		t.Fatal(err)

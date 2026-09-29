@@ -25,11 +25,10 @@ type Store struct {
 	catalog   *catalog.Catalog
 	closed    bool
 
-	// WATCH state, fixed at Open: the hub, the journal that makes its
-	// sequence durable, and the last sequence assigned (under mu).
+	// WATCH state, fixed at Open: the hub and the journal that makes its
+	// sequence durable. The hub's head is the last sequence assigned.
 	changes *changefeed.Hub
 	journal *journal
-	seq     uint64
 }
 
 var _ backend.Store = (*Store)(nil)
@@ -68,11 +67,8 @@ func Open(documents *protocolstore.Store, lookup *catalog.Catalog, opts Options)
 	for _, ev := range journal.tail {
 		hub.PublishAt(ev)
 	}
-	if n := len(journal.tail); n > 0 {
-		s.seq = journal.tail[n-1].Seq
-	}
 	s.changes, s.journal = hub, journal
-	logger.Info("change journal restored", "epoch", hub.Epoch(), "events", len(journal.tail), "head", s.seq)
+	logger.Info("change journal restored", "epoch", hub.Epoch(), "events", len(journal.tail), "head", hub.Head().Seq)
 	return s, nil
 }
 
@@ -98,9 +94,8 @@ func (s *Store) hint(path string, doc *storefmt.Document, op string) {
 	if s.changes == nil {
 		return
 	}
-	s.seq++
 	ev := changefeed.DocumentEvent(path, doc, op)
-	ev.Seq = s.seq
+	ev.Seq = s.changes.Head().Seq + 1
 	s.journal.append(ev, s.documents.Fingerprint())
 	s.changes.PublishAt(ev)
 }
@@ -131,33 +126,27 @@ func (s *Store) writeSpec(ctx context.Context, req *backend.WriteRequest) *store
 
 // Publish commits document and catalog state under one lock.
 func (s *Store) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
-	return call(ctx, func() (*storefmt.Document, error) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.closed {
-			return nil, ErrClosed
-		}
-		document, err := s.documents.WriteChecked(s.writeSpec(ctx, &req))
-		if err == nil {
-			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
-			s.hint(req.Path, document, protocol.OpPublish)
-		}
-		return document, err
-	})
+	return s.commit(ctx, &req, protocol.OpPublish, s.documents.WriteChecked)
 }
 
 // Append commits document and catalog state under one lock.
 func (s *Store) Append(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
+	return s.commit(ctx, &req, protocol.OpAppend, s.documents.AppendChecked)
+}
+
+// commit runs one write under the lock; a version that landed, durable or
+// not, reaches the catalog and the watchers before its error is returned.
+func (s *Store) commit(ctx context.Context, req *backend.WriteRequest, op string, write func(*storefmt.WriteSpec) (*storefmt.Document, error)) (*storefmt.Document, error) {
 	return call(ctx, func() (*storefmt.Document, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.closed {
 			return nil, ErrClosed
 		}
-		document, err := s.documents.AppendChecked(s.writeSpec(ctx, &req))
-		if err == nil {
+		document, err := write(s.writeSpec(ctx, req))
+		if storefmt.Committed(err) {
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
-			s.hint(req.Path, document, protocol.OpAppend)
+			s.hint(req.Path, document, op)
 		}
 		return document, err
 	})
@@ -186,8 +175,6 @@ func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (ba
 		default:
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
 		}
-		// changed with an error is a committed change whose directory sync
-		// failed: watchers still learn of it.
 		if changed {
 			s.hint(req.Path, document, changefeed.ArchiveOp(req.Archived))
 		}

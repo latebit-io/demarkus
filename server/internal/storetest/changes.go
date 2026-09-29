@@ -228,29 +228,10 @@ func testEventsFollowCommits(t *testing.T, site ChangeSite) {
 func testContiguousUnderConcurrentWriters(t *testing.T, site ChangeSite) {
 	s := openChanges(t, site, protocol.Cursor{})
 	defer s.close(t)
+	// 48 events in flight: below every site's in-process ring, so they are
+	// drained after the writers finish. Publishing never waits on a reader
+	// (proven in changefeed); this case proves the store numbers in order.
 	const writers, each = 8, 6
-	// Drain while writing: the ring must never lap a reader that keeps up,
-	// and publishing must never wait on one. The collector reports rather
-	// than fails: t.Fatalf off the test goroutine would only hang the test.
-	type drained struct {
-		events []changefeed.Event
-		err    error
-	}
-	collected := make(chan drained, 1)
-	go func() {
-		var d drained
-		for range writers * each {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			ev, err := s.sub.Next(ctx)
-			cancel()
-			if err != nil {
-				d.err = err
-				break
-			}
-			d.events = append(d.events, ev)
-		}
-		collected <- d
-	}()
 	var wg sync.WaitGroup
 	for w := range writers {
 		wg.Go(func() {
@@ -262,11 +243,7 @@ func testContiguousUnderConcurrentWriters(t *testing.T, site ChangeSite) {
 		})
 	}
 	wg.Wait()
-	d := <-collected
-	if d.err != nil {
-		t.Fatalf("collector stopped after %d of %d events: %v", len(d.events), writers*each, d.err)
-	}
-	events := d.events
+	events := s.nextIn(t, writers*each)
 	assertContiguous(t, events)
 	seen := map[string]bool{}
 	for _, ev := range events {
