@@ -57,7 +57,10 @@ The spec fixes recall and leaves order to the implementation:
 
 The index lives in `server/internal/catalog` beside the catalog, in memory,
 rebuilt with the catalog at load and updated per write. No persistence and no
-library. Memory stays under three times body bytes. Servers that implement it
+library. Memory stays under three times body bytes. Token ids are scoped to
+one document's index and nothing kept aliases the body: a process-wide
+intern table never evicted and grew without bound (knowledge writer memory
+growth, 2026-09-29). Servers that implement it
 list `lookup-match: catalog, body` under `## Capabilities` in their agent
 manifest, which is advisory: the manifest is author-published, so the
 response echo is the authoritative signal.

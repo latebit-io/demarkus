@@ -180,7 +180,7 @@ func bm25(cand *bodyCandidate, terms []string, idf []float64, avgLength float64)
 	score := 0.0
 	lengthNorm := 1 - bm25B + bm25B*float64(cand.sec.length)/max(avgLength, 1)
 	for j, t := range terms {
-		if i, ok := termIndex(cand.sec.tokens, cand.ids[j]); ok {
+		if i, ok := slices.BinarySearch(cand.sec.tokens, cand.ids[j]); ok {
 			tf := float64(cand.sec.tf[i])
 			score += idf[j] * tf * (bm25K1 + 1) / (tf + bm25K1*lengthNorm)
 		}

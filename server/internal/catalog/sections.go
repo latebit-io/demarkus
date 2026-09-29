@@ -1,7 +1,6 @@
 package catalog
 
 import (
-	"iter"
 	"maps"
 	"math"
 	"regexp"
@@ -25,22 +24,19 @@ type termSet struct {
 	ends   []uint32 // token i is packed[ends[i-1]:ends[i]]
 }
 
-// newTermSet packs distinct tokens; it sorts tokens in place. Tokens past
-// 4 GiB are dropped, which a 1 MiB body cannot reach.
-func newTermSet(tokens []string) termSet {
-	if len(tokens) == 0 {
-		return termSet{}
+// newTermSet packs the keys of tokens in sorted order.
+func newTermSet[V any](tokens map[string]V) termSet {
+	keys := slices.Sorted(maps.Keys(tokens))
+	size := 0
+	for _, tok := range keys {
+		size += len(tok)
 	}
-	slices.Sort(tokens)
 	var packed strings.Builder
-	ends := make([]uint32, 0, len(tokens))
-	for _, tok := range tokens {
-		end := packed.Len() + len(tok)
-		if end >= math.MaxUint32 {
-			break
-		}
+	packed.Grow(size)
+	ends := make([]uint32, len(keys))
+	for i, tok := range keys {
 		packed.WriteString(tok)
-		ends = append(ends, uint32(end)) //nolint:gosec // bounded by the check above
+		ends[i] = uint32(packed.Len()) //nolint:gosec // bodies are capped at protocol.MaxBodyLength
 	}
 	return termSet{packed: packed.String(), ends: ends}
 }
@@ -55,11 +51,11 @@ func (s termSet) at(i int) string {
 
 // id returns tok's position in the set, or absentTerm.
 func (s termSet) id(tok string) termID {
-	i := sort.Search(len(s.ends), func(i int) bool { return s.at(i) >= tok })
-	if i >= len(s.ends) || i >= math.MaxUint32 || s.at(i) != tok {
+	i, found := sort.Find(len(s.ends), func(i int) int { return strings.Compare(tok, s.at(i)) })
+	if !found {
 		return absentTerm
 	}
-	return termID(i) //nolint:gosec // bounded by the check above
+	return termID(i) //nolint:gosec // bodies are capped at protocol.MaxBodyLength
 }
 
 func (s termSet) has(tok string) bool { return s.id(tok) != absentTerm }
@@ -107,9 +103,9 @@ func (d *DocSections) ids(terms []string) []termID {
 	return ids
 }
 
-// rawSection is a section before its tokens have document ids.
+// rawSection is a section with its tokens still as strings.
 type rawSection struct {
-	section
+	sec    section
 	counts map[string]int
 	trail  map[string]struct{}
 }
@@ -151,44 +147,41 @@ func IndexSections(body []byte) *DocSections {
 	return assignIDs(raws)
 }
 
-// assignIDs builds the document vocabulary and gives each section its
-// tokens as sorted ids.
+// assignIDs builds the document vocabulary and converts each section's
+// tokens to ids. The vocabulary is sorted, so an id is the token's rank and
+// a section's tokens sorted as strings are sorted as ids.
 func assignIDs(raws []rawSection) *DocSections {
-	all := make(map[string]struct{})
+	ids := make(map[string]termID)
 	for i := range raws {
 		for tok := range raws[i].counts {
-			all[tok] = struct{}{}
+			ids[tok] = 0
 		}
 		for tok := range raws[i].trail {
-			all[tok] = struct{}{}
+			ids[tok] = 0
 		}
 	}
-	doc := &DocSections{vocab: newTermSet(slices.Collect(maps.Keys(all))), sections: make([]section, len(raws))}
+	doc := &DocSections{vocab: newTermSet(ids), sections: make([]section, len(raws))}
+	var rank termID
+	for i := range doc.vocab.ends {
+		ids[doc.vocab.at(i)] = rank
+		rank++
+	}
 	for i := range raws {
 		raw := &raws[i]
-		s := raw.section
-		s.tokens = vocabIDs(doc.vocab, maps.Keys(raw.counts))
-		s.tf = make([]uint8, len(s.tokens))
-		for j, id := range s.tokens {
-			s.tf[j] = uint8(min(raw.counts[doc.vocab.at(int(id))], 255))
+		s := raw.sec
+		s.tokens = make([]termID, 0, len(raw.counts))
+		s.tf = make([]uint8, 0, len(raw.counts))
+		for _, tok := range slices.Sorted(maps.Keys(raw.counts)) {
+			s.tokens = append(s.tokens, ids[tok])
+			s.tf = append(s.tf, uint8(min(raw.counts[tok], 255)))
 		}
-		s.trail = vocabIDs(doc.vocab, maps.Keys(raw.trail))
+		s.trail = make([]termID, 0, len(raw.trail))
+		for _, tok := range slices.Sorted(maps.Keys(raw.trail)) {
+			s.trail = append(s.trail, ids[tok])
+		}
 		doc.sections[i] = s
 	}
 	return doc
-}
-
-// vocabIDs returns the sorted ids of tokens, skipping any the vocabulary
-// dropped.
-func vocabIDs(vocab termSet, tokens iter.Seq[string]) []termID {
-	var ids []termID
-	for tok := range tokens {
-		if id := vocab.id(tok); id != absentTerm {
-			ids = append(ids, id)
-		}
-	}
-	slices.Sort(ids)
-	return ids
 }
 
 // headingLineEnd returns the offset just past the heading's first line.
@@ -214,8 +207,10 @@ func newSection(anchor, heading, raw string, trail []string) (rawSection, bool) 
 			total++
 		})
 	}
-	s := section{anchor: anchor, heading: heading, text: text, length: int32(min(total, 1<<30))}
-	return rawSection{section: s, counts: counts, trail: fieldTokenSet(trail)}, true
+	// Single-line text can be a substring of the body; the clone keeps the
+	// index from pinning the whole body.
+	s := section{anchor: anchor, heading: heading, text: strings.Clone(text), length: int32(min(total, 1<<30))}
+	return rawSection{sec: s, counts: counts, trail: fieldTokenSet(trail)}, true
 }
 
 // fieldTokenSet tokenizes fields (headings, tags, a title) into a set.
@@ -229,20 +224,13 @@ func fieldTokenSet(fields []string) map[string]struct{} {
 	return seen
 }
 
-// fieldTerms packs the tokens of fields (tags and a title).
-func fieldTerms(fields []string) termSet {
-	return newTermSet(slices.Collect(maps.Keys(fieldTokenSet(fields))))
-}
-
 // hasTerm reports whether the sorted id set contains id.
 func hasTerm(set []termID, id termID) bool {
-	_, ok := termIndex(set, id)
+	if id == absentTerm {
+		return false
+	}
+	_, ok := slices.BinarySearch(set, id)
 	return ok
-}
-
-func termIndex(set []termID, id termID) (int, bool) {
-	i := sort.Search(len(set), func(i int) bool { return set[i] >= id })
-	return i, i < len(set) && set[i] == id
 }
 
 func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_' }

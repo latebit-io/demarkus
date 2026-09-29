@@ -159,8 +159,8 @@ func liveHeap() uint64 {
 	return stats.HeapAlloc
 }
 
-// Republishing one path must keep only the live index: a process-wide
-// vocabulary once kept every token, each pinning its whole source line.
+// Republishing one path must keep only the live index, however many unseen
+// tokens each version brings.
 func TestRepublishKeepsIndexBounded(t *testing.T) {
 	c := New()
 	modified := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
@@ -178,4 +178,22 @@ func TestRepublishKeepsIndexBounded(t *testing.T) {
 	if got := mustLookup(t, c, "observations", Options{Match: MatchBody}); len(got) != 1 {
 		t.Errorf("body lookup after republish = %d rows, want 1", len(got))
 	}
+}
+
+// A section whose own text is one line must not keep the body alive.
+func TestIndexSectionsReleasesBody(t *testing.T) {
+	body := []byte("## Status\n\nok\n\n" + strings.Repeat("----------\n", 1<<16))
+	before := liveHeap()
+	docs := make([]*DocSections, 8)
+	for i := range docs {
+		docs[i] = IndexSections(body)
+	}
+	growth := int64(liveHeap()) - int64(before)
+	if growth > int64(len(body)) {
+		t.Errorf("heap grew %d bytes holding %d indexes of a %d-byte body, want under %d", growth, len(docs), len(body), len(body))
+	}
+	if docs[0].Len() != 1 || docs[0].sections[0].text != "ok" {
+		t.Fatalf("sections = %+v, want one section with text ok", docs[0].sections)
+	}
+	runtime.KeepAlive(docs)
 }

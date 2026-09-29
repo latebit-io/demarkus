@@ -124,7 +124,7 @@ func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modif
 // and title terms, path demotion); every entry passes through here first.
 func (e *Entry) prepare() {
 	e.Path = storefmt.CanonicalPath(e.Path)
-	e.terms = fieldTerms(append(append([]string(nil), e.Tags...), e.Title))
+	e.terms = newTermSet(fieldTokenSet(append(append([]string(nil), e.Tags...), e.Title)))
 	e.demote = 1
 	if slices.Contains(strings.Split(strings.Trim(e.Path, "/"), "/"), "journal") {
 		e.demote = journalDemote
