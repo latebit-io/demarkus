@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -201,22 +202,34 @@ func TestAgentTokensOneFailureDoesNotStopOthers(t *testing.T) {
 	}
 }
 
-// hangingStore blocks every call until its context ends, like a stuck API request.
-type hangingStore struct{}
+// hangingStore blocks every call until its context ends, like a stuck API
+// request, and records the time left before the first call's deadline.
+type hangingStore struct {
+	once     sync.Once
+	deadline chan time.Duration
+}
 
-func (hangingStore) Mutate(ctx context.Context, _ core.SecretRef, _ func([]byte) ([]byte, error)) error {
+func (h *hangingStore) Mutate(ctx context.Context, _ core.SecretRef, _ func([]byte) ([]byte, error)) error {
+	h.once.Do(func() {
+		left := time.Duration(-1)
+		if deadline, ok := ctx.Deadline(); ok {
+			left = time.Until(deadline)
+		}
+		h.deadline <- left
+	})
 	<-ctx.Done()
 	return ctx.Err()
 }
 
-func (hangingStore) Delete(ctx context.Context, _ core.SecretRef) error {
+func (h *hangingStore) Delete(ctx context.Context, _ core.SecretRef) error {
 	<-ctx.Done()
 	return ctx.Err()
 }
 
-func TestAgentTokensPassIsBoundedByInterval(t *testing.T) {
-	a := NewAgentTokens(agentTokensConfig(), hangingStore{}, slog.New(slog.DiscardHandler))
-	a.interval = 20 * time.Millisecond
+func TestAgentTokensPassIsBoundedByHalfInterval(t *testing.T) {
+	store := &hangingStore{deadline: make(chan time.Duration, 1)}
+	a := NewAgentTokens(agentTokensConfig(), store, slog.New(slog.DiscardHandler))
+	a.interval = 400 * time.Millisecond
 	done := make(chan struct{})
 	go func() {
 		a.runOnce(context.Background())
@@ -226,5 +239,9 @@ func TestAgentTokensPassIsBoundedByInterval(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("a hung store call stalled the pass past its timeout")
+	}
+	half := a.interval / 2
+	if left := <-store.deadline; left <= half/2 || left > half {
+		t.Errorf("pass deadline %v away, want about %v (interval/2)", left, half)
 	}
 }
