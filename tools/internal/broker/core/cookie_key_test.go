@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -53,5 +54,21 @@ func TestCookieKeyRefFileBackend(t *testing.T) {
 	cfg := &Config{Storage: StorageConfig{Backend: StorageBackendFile, Dir: "/state"}, Server: ServerConfig{CookieKeySecret: "x"}}
 	if got := CookieKeyRef(cfg).Path; got != "/state/cookie-key" {
 		t.Errorf("Path = %q", got)
+	}
+}
+
+func TestEnsureCookieKeyRejectsInvalidStoredKey(t *testing.T) {
+	ref := SecretRef{Namespace: "ns", Name: "cookie", Key: CookieKeySecretKey}
+	for name, stored := range map[string]string{
+		"not base64": "not base64!",
+		"too short":  base64.StdEncoding.EncodeToString([]byte("short")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &memStore{data: map[string][]byte{ref.String(): []byte(stored)}}
+			_, err := EnsureCookieKey(context.Background(), store, ref)
+			if err == nil || !strings.Contains(err.Error(), ref.String()) {
+				t.Fatalf("err = %v, want an error naming %s", err, ref)
+			}
+		})
 	}
 }

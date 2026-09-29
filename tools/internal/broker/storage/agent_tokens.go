@@ -51,8 +51,11 @@ func (a *AgentTokens) Run(ctx context.Context) {
 	}
 }
 
+// runOnce bounds the pass so a hung API request cannot stall the loop.
 func (a *AgentTokens) runOnce(ctx context.Context) {
-	if err := a.Reconcile(ctx); err != nil && ctx.Err() == nil {
+	passCtx, cancel := context.WithTimeout(ctx, a.interval/2)
+	defer cancel()
+	if err := a.Reconcile(passCtx); err != nil && ctx.Err() == nil {
 		a.log.ErrorContext(ctx, "broker: agent token reconcile failed", "err", err)
 	}
 }

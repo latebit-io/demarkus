@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/tools/internal/broker/brokertest"
@@ -197,5 +198,33 @@ func TestAgentTokensOneFailureDoesNotStopOthers(t *testing.T) {
 	}
 	if raw := getSecretKey(t, k8s, "team-a", agentSecret, agentKey); len(raw) == 0 {
 		t.Error("team-a was skipped after team-b failed")
+	}
+}
+
+// hangingStore blocks every call until its context ends, like a stuck API request.
+type hangingStore struct{}
+
+func (hangingStore) Mutate(ctx context.Context, _ core.SecretRef, _ func([]byte) ([]byte, error)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (hangingStore) Delete(ctx context.Context, _ core.SecretRef) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestAgentTokensPassIsBoundedByInterval(t *testing.T) {
+	a := NewAgentTokens(agentTokensConfig(), hangingStore{}, slog.New(slog.DiscardHandler))
+	a.interval = 20 * time.Millisecond
+	done := make(chan struct{})
+	go func() {
+		a.runOnce(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a hung store call stalled the pass past its timeout")
 	}
 }

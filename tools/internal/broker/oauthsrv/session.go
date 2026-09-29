@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/latebit-io/demarkus/tools/internal/broker/core"
 )
 
 // State is the HMAC-signed OIDC state cookie payload: CSRF nonce, server-side
@@ -29,16 +31,11 @@ type Signer struct {
 	key []byte
 }
 
-// NewSigner builds a Signer from a base64-encoded HMAC key. Returns an
-// error if the key is not valid base64 or is shorter than 16 bytes (which
-// would make the HMAC trivially brute-forceable).
+// NewSigner builds a Signer from a base64-encoded HMAC key (core.DecodeCookieKey).
 func NewSigner(b64Key string) (*Signer, error) {
-	key, err := base64.StdEncoding.DecodeString(b64Key)
+	key, err := core.DecodeCookieKey(b64Key)
 	if err != nil {
-		return nil, fmt.Errorf("broker: decode cookie key: %w", err)
-	}
-	if len(key) < 16 {
-		return nil, fmt.Errorf("broker: cookie key too short (%d bytes, need ≥16)", len(key))
+		return nil, fmt.Errorf("broker: %w", err)
 	}
 	return &Signer{key: key}, nil
 }
