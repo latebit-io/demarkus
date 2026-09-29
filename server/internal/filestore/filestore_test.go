@@ -15,7 +15,7 @@ import (
 func TestReadViewPinsFileAndCatalogState(t *testing.T) {
 	ctx := t.Context()
 	raw := protocolstore.New(t.TempDir())
-	store := New(raw, catalog.New(), nil)
+	store := New(raw, catalog.New())
 	firstBody := []byte("# First\n")
 	secondBody := []byte("# Second\n")
 	if _, err := store.Publish(ctx, backend.WriteRequest{Path: "/docs/doc.md", Content: firstBody, Metadata: map[string]string{"tags": "first"}}); err != nil {

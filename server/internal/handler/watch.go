@@ -108,14 +108,7 @@ func (h *Handler) pumpUntilBeat(ctx context.Context, w io.Writer, token string, 
 }
 
 func (h *Handler) eventBlock(ev changefeed.Event) protocol.WatchBlock {
-	return protocol.WatchEvent{
-		Cursor:  protocol.Cursor{Epoch: h.changes.Epoch(), Seq: ev.Seq},
-		Path:    ev.Path,
-		Version: ev.Version,
-		Hash:    ev.Hash,
-		Op:      ev.Op,
-		Agent:   ev.Agent,
-	}.Block()
+	return ev.Block(h.changes.Epoch())
 }
 
 // writeBlock writes one block; false means the peer is gone and the watch

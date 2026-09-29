@@ -39,10 +39,10 @@ type Options struct {
 	MaxDocuments int
 	// Logger receives section-index warnings; nil uses slog.Default.
 	Logger *slog.Logger
-	// Changes receives a hint for every commit the head's receipts name,
-	// under the head sequence, whenever a snapshot is installed. Nil
-	// reports nothing.
-	Changes *changefeed.Hub
+	// ChangeRing enables WATCH: the hub keeps this many events, fed with a
+	// hint for every commit the head's receipts name, under the head
+	// sequence, whenever a snapshot is installed. Zero leaves WATCH off.
+	ChangeRing int
 	// Committed runs after each of this replica's own commits with its head
 	// sequence, outside every lock; nil for none.
 	Committed func(sequence int64)
@@ -151,7 +151,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		commitInterval: defaultCommitInterval,
 		now:            time.Now,
 		newOperationID: randomOperationID,
-		changes:        options.Changes,
+		changes:        newHub(options),
 		committed:      options.Committed,
 	}
 	store.commitToken <- struct{}{}
@@ -570,3 +570,16 @@ func nilStore(objects blob.Store) bool {
 		return false
 	}
 }
+
+// newHub is the world's change hub: epoch is the world ID and every event's
+// sequence is a head sequence, so cursors agree on every replica and across
+// a restart (backend.ChangeSource). Nil when WATCH is off.
+func newHub(options Options) *changefeed.Hub {
+	if options.ChangeRing <= 0 {
+		return nil
+	}
+	return changefeed.New(options.WorldID, options.ChangeRing)
+}
+
+// Changes is the hub this store feeds, or nil when WATCH is off.
+func (store *Store) Changes() *changefeed.Hub { return store.changes }

@@ -25,6 +25,8 @@ package store
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -86,78 +88,64 @@ func effectiveArchived(docDir string, tipStored []byte) (bool, error) {
 	return storefmt.IsArchived(tipStored), nil
 }
 
-// writeArchiveState commits through a synced sibling temp file. committed is
-// true when rename succeeded, even if the following directory sync failed.
-func writeArchiveState(docDir string, archived bool) (committed bool, retErr error) {
-	f, err := os.CreateTemp(docDir, ".archive-state-*")
+// writeArchiveState commits the archive flag through WriteFileAtomic.
+func writeArchiveState(docDir string, archived bool) (committed bool, err error) {
+	return WriteFileAtomic(filepath.Join(docDir, archiveStateName), 0o644, func(w io.Writer) error {
+		_, err := io.WriteString(w, strconv.FormatBool(archived)+"\n")
+		return err
+	})
+}
+
+// WriteFileAtomic replaces path through a synced sibling temp file, a rename
+// and a directory sync. committed true with an error: the file is in place,
+// its directory entry not yet known durable.
+func WriteFileAtomic(path string, mode os.FileMode, write func(w io.Writer) error) (committed bool, retErr error) {
+	dir, base := filepath.Split(path)
+	f, err := os.CreateTemp(dir, "."+base+"-*")
 	if err != nil {
-		return false, fmt.Errorf("create temp archive state: %w", err)
+		return false, fmt.Errorf("create temp %s: %w", base, err)
 	}
 	tmpPath := f.Name()
 	closed := false
 	defer func() {
 		if !closed {
 			if closeErr := f.Close(); closeErr != nil {
-				retErr = errors.Join(retErr, fmt.Errorf("close temp archive state: %w", closeErr))
+				retErr = errors.Join(retErr, fmt.Errorf("close temp %s: %w", base, closeErr))
 			}
 		}
 		if tmpPath != "" {
 			if removeErr := os.Remove(tmpPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				retErr = errors.Join(retErr, fmt.Errorf("remove temp archive state: %w", removeErr))
+				retErr = errors.Join(retErr, fmt.Errorf("remove temp %s: %w", base, removeErr))
 			}
 		}
 	}()
-
-	if err := f.Chmod(0o644); err != nil {
-		return false, fmt.Errorf("chmod temp archive state: %w", err)
+	if err := f.Chmod(mode); err != nil {
+		return false, fmt.Errorf("chmod temp %s: %w", base, err)
 	}
-	state := strconv.FormatBool(archived) + "\n"
-	if _, err := f.WriteString(state); err != nil {
-		return false, fmt.Errorf("write temp archive state: %w", err)
+	if err := write(f); err != nil {
+		return false, fmt.Errorf("write temp %s: %w", base, err)
 	}
-	if err := f.Sync(); err != nil {
-		return false, fmt.Errorf("sync temp archive state: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		closed = true
-		return false, fmt.Errorf("close temp archive state: %w", err)
+	if err := syncFile(f); err != nil {
+		return false, fmt.Errorf("sync temp %s: %w", base, err)
 	}
 	closed = true
-
-	statePath := filepath.Join(docDir, archiveStateName)
-	if err := os.Rename(tmpPath, statePath); err != nil {
-		return false, fmt.Errorf("rename archive state: %w", err)
+	if err := f.Close(); err != nil {
+		return false, fmt.Errorf("close temp %s: %w", base, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return false, fmt.Errorf("rename %s: %w", base, err)
 	}
 	tmpPath = ""
-	committed = true
-
-	if err := syncArchiveStateDir(docDir); err != nil {
-		return true, err
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return true, fmt.Errorf("sync directory of %s: %w", base, err)
 	}
 	return true, nil
 }
 
+// syncArchiveStateDir syncs a document's version directory after its
+// archive state is known to be in place.
 func syncArchiveStateDir(docDir string) error {
-	dir, err := os.Open(docDir)
-	if err != nil {
-		return fmt.Errorf("open archive state directory: %w", err)
-	}
-	syncErr := dir.Sync()
-	closeErr := dir.Close()
-	if syncErr != nil || closeErr != nil {
-		return errors.Join(
-			wrapError("sync archive state directory", syncErr),
-			wrapError("close archive state directory", closeErr),
-		)
-	}
-	return nil
-}
-
-func wrapError(action string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s: %w", action, err)
+	return syncDir(docDir)
 }
 
 // newVersionSymlinkTarget returns the relative symlink target for a new version,
@@ -178,6 +166,11 @@ type Store struct {
 	// membership as "current, non-archived doc" for ListDir filtering, so
 	// keep membership semantics exact; a miss only degrades to a disk scan.
 	pathIdx map[string]string
+	// digest folds every (path, hash) pair with XOR, so it updates per entry
+	// and equals any other index over the same current documents. Meaningful
+	// only once indexed is set by BuildHashIndex. hashMu.
+	digest  [digestLen]byte
+	indexed bool
 	// hashErr records an incomplete index build. Hits remain valid, but misses
 	// cannot be reported as confirmed absence until a clean rebuild succeeds.
 	hashErr error
@@ -294,6 +287,8 @@ func (s *Store) BuildHashIndex() error {
 
 	s.hashIdx = make(map[string][]string)
 	s.pathIdx = make(map[string]string)
+	s.digest = [digestLen]byte{}
+	s.indexed = true
 	s.hashErr = nil
 
 	err := s.walkCurrentFiles(func(reqPath string, data []byte, _ time.Time) error {
@@ -312,6 +307,7 @@ func (s *Store) indexLocked(reqPath, hash string) {
 	i, _ := slices.BinarySearch(paths, reqPath)
 	s.hashIdx[hash] = slices.Insert(paths, i, reqPath)
 	s.pathIdx[reqPath] = hash
+	s.foldDigest(reqPath, hash)
 }
 
 // unindexLocked removes reqPath from both maps. Caller holds hashMu.
@@ -321,6 +317,7 @@ func (s *Store) unindexLocked(reqPath string) {
 		return
 	}
 	delete(s.pathIdx, reqPath)
+	s.foldDigest(reqPath, hash)
 	paths := s.hashIdx[hash]
 	if i, found := slices.BinarySearch(paths, reqPath); found {
 		paths = slices.Delete(paths, i, i+1)
@@ -380,6 +377,30 @@ func (s *Store) HashIndexSize() int {
 	s.hashMu.RLock()
 	defer s.hashMu.RUnlock()
 	return len(s.pathIdx)
+}
+
+// digestLen is the fingerprint width: change detection, not a security bound.
+const digestLen = 16
+
+// foldDigest toggles one (path, hash) pair in the digest. XOR is its own
+// inverse, so adding and removing an entry are the same operation.
+func (s *Store) foldDigest(reqPath, hash string) {
+	sum := sha256.Sum256([]byte(reqPath + "\x00" + hash))
+	for i := range digestLen {
+		s.digest[i] ^= sum[i]
+	}
+}
+
+// Fingerprint identifies the set of current, live documents by path and
+// content hash, in any indexing order: two stores over one tree agree, and
+// every publish, archive or unarchive changes it. Empty until BuildHashIndex.
+func (s *Store) Fingerprint() string {
+	s.hashMu.RLock()
+	defer s.hashMu.RUnlock()
+	if !s.indexed {
+		return ""
+	}
+	return hex.EncodeToString(s.digest[:])
 }
 
 // Root returns the content directory path.

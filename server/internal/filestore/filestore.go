@@ -3,6 +3,7 @@ package filestore
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
 	"github.com/latebit-io/demarkus/protocol"
@@ -18,22 +19,82 @@ type Store struct {
 	mu        sync.RWMutex
 	documents *protocolstore.Store
 	catalog   *catalog.Catalog
-	changes   *changefeed.Hub
+
+	// WATCH state, fixed at Open: the hub, the journal that makes its
+	// sequence durable, and the last sequence assigned (under mu).
+	changes *changefeed.Hub
+	journal *journal
+	seq     uint64
 }
 
 var _ backend.Store = (*Store)(nil)
 
-// New wraps one file store and its derived catalog. changes, if not nil,
-// gets a hint for every commit under the write lock, so hints follow
-// commit order.
-func New(documents *protocolstore.Store, lookup *catalog.Catalog, changes *changefeed.Hub) *Store {
-	return &Store{documents: documents, catalog: lookup, changes: changes}
+// Options configures WATCH on a file store.
+type Options struct {
+	// ChangeRing enables WATCH with a hub of this many events; zero leaves
+	// WATCH off.
+	ChangeRing int
+	// Logger receives change journal notices; nil uses slog.Default.
+	Logger *slog.Logger
 }
 
-func (s *Store) hint(path string, doc *storefmt.Document, op string) {
-	if s.changes != nil {
-		s.changes.Publish(changefeed.DocumentEvent(path, doc, op))
+// New wraps one file store and its derived catalog, without WATCH.
+func New(documents *protocolstore.Store, lookup *catalog.Catalog) *Store {
+	return &Store{documents: documents, catalog: lookup}
+}
+
+// Open is New plus WATCH (backend.ChangeSource): the change journal beside
+// the documents is restored against the hash index's fingerprint, so build
+// the index first or every open starts a new epoch.
+func Open(documents *protocolstore.Store, lookup *catalog.Catalog, opts Options) (*Store, error) {
+	s := New(documents, lookup)
+	if opts.ChangeRing <= 0 {
+		return s, nil
 	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	journal, err := openJournal(documents.Root(), documents.Fingerprint(), opts.ChangeRing, logger)
+	if err != nil {
+		return nil, err
+	}
+	hub := changefeed.New(journal.epoch, opts.ChangeRing)
+	for _, ev := range journal.tail {
+		hub.PublishAt(ev)
+	}
+	if n := len(journal.tail); n > 0 {
+		s.seq = journal.tail[n-1].Seq
+	}
+	s.changes, s.journal = hub, journal
+	logger.Info("change journal restored", "epoch", hub.Epoch(), "events", len(journal.tail), "head", s.seq)
+	return s, nil
+}
+
+// Changes is the hub Open created, or nil when WATCH is off.
+func (s *Store) Changes() *changefeed.Hub { return s.changes }
+
+// Close releases the change journal; the documents need no close.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.journal == nil {
+		return nil
+	}
+	return s.journal.close()
+}
+
+// hint numbers and publishes one commit under the caller's write lock,
+// journal first.
+func (s *Store) hint(path string, doc *storefmt.Document, op string) {
+	if s.changes == nil {
+		return
+	}
+	s.seq++
+	ev := changefeed.DocumentEvent(path, doc, op)
+	ev.Seq = s.seq
+	s.journal.append(ev, s.documents.Fingerprint())
+	s.changes.PublishAt(ev)
 }
 
 // call runs one store operation unless ctx is already done, and reports a

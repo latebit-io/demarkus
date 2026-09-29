@@ -16,6 +16,24 @@ func DocumentEvent(path string, doc *storefmt.Document, op string) Event {
 	}
 }
 
+// Block encodes the event as a WATCH block under epoch.
+func (ev Event) Block(epoch string) protocol.WatchBlock {
+	return protocol.WatchEvent{
+		Cursor:  protocol.Cursor{Epoch: epoch, Seq: ev.Seq},
+		Path:    ev.Path,
+		Version: ev.Version,
+		Hash:    ev.Hash,
+		Op:      ev.Op,
+		Agent:   ev.Agent,
+	}.Block()
+}
+
+// EventOf is the event a decoded WATCH block carries; the epoch is the
+// caller's to check.
+func EventOf(wire protocol.WatchEvent) Event {
+	return Event{Seq: wire.Cursor.Seq, Path: wire.Path, Version: wire.Version, Hash: wire.Hash, Op: wire.Op, Agent: wire.Agent}
+}
+
 // ArchiveOp is what an archive change reports: an unarchive shows the
 // document again at its current version, which a watcher refetches like a
 // publish.

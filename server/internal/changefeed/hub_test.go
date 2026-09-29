@@ -10,6 +10,21 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
+// stamper numbers events the way a store does: under its commit lock, so
+// sequences reach the hub in order. The hub takes only committed sequences.
+type stamper struct {
+	mu   sync.Mutex
+	last uint64
+}
+
+func (s *stamper) publish(hub *Hub, ev Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.last++
+	ev.Seq = s.last
+	hub.PublishAt(ev)
+}
+
 func next(t *testing.T, s *Subscription) Event {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -33,6 +48,7 @@ func nextErr(t *testing.T, s *Subscription) error {
 // started first sees every event in order.
 func TestContiguousSequenceUnderConcurrentPublishers(t *testing.T) {
 	hub := New("", 0)
+	var st stamper
 	sub, err := hub.Subscribe("/", protocol.Cursor{})
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +58,7 @@ func TestContiguousSequenceUnderConcurrentPublishers(t *testing.T) {
 	for p := range publishers {
 		wg.Go(func() {
 			for i := range each {
-				hub.Publish(Event{Path: "/a.md", Version: p*each + i + 1, Op: protocol.OpPublish})
+				st.publish(hub, Event{Path: "/a.md", Version: p*each + i + 1, Op: protocol.OpPublish})
 			}
 		})
 	}
@@ -64,10 +80,11 @@ func TestContiguousSequenceUnderConcurrentPublishers(t *testing.T) {
 // and publishing never waited on either.
 func TestSlowSubscriberResyncsWhileFastOneContinues(t *testing.T) {
 	hub := New("", 8)
+	var st stamper
 	fast, _ := hub.Subscribe("/", protocol.Cursor{})
 	slow, _ := hub.Subscribe("/", protocol.Cursor{})
 	for i := range 4 {
-		hub.Publish(Event{Path: "/a.md", Version: i + 1, Op: protocol.OpPublish})
+		st.publish(hub, Event{Path: "/a.md", Version: i + 1, Op: protocol.OpPublish})
 	}
 	for i := range 4 {
 		if got := next(t, fast).Version; got != i+1 {
@@ -76,7 +93,7 @@ func TestSlowSubscriberResyncsWhileFastOneContinues(t *testing.T) {
 	}
 	start := time.Now()
 	for i := 4; i < 20; i++ {
-		hub.Publish(Event{Path: "/a.md", Version: i + 1, Op: protocol.OpPublish})
+		st.publish(hub, Event{Path: "/a.md", Version: i + 1, Op: protocol.OpPublish})
 	}
 	if time.Since(start) > 100*time.Millisecond {
 		t.Fatal("publishing waited on a subscriber")
@@ -90,7 +107,7 @@ func TestSlowSubscriberResyncsWhileFastOneContinues(t *testing.T) {
 	}
 	// Resumed from the head, it keeps receiving.
 	fast, _ = hub.Subscribe("/", protocol.Cursor{})
-	hub.Publish(Event{Path: "/a.md", Version: 21, Op: protocol.OpPublish})
+	st.publish(hub, Event{Path: "/a.md", Version: 21, Op: protocol.OpPublish})
 	if got := next(t, fast).Version; got != 21 {
 		t.Fatalf("resumed fast subscriber read version %d, want 21", got)
 	}
@@ -101,8 +118,9 @@ func TestResumeFromCursor(t *testing.T) {
 	// resumable, everything after it is retained. 5 is not.
 	fresh := func() *Hub {
 		hub := New("w", 4)
+		var st stamper
 		for i := 1; i <= 10; i++ {
-			hub.Publish(Event{Path: "/a.md", Version: i, Op: protocol.OpPublish})
+			st.publish(hub, Event{Path: "/a.md", Version: i, Op: protocol.OpPublish})
 		}
 		return hub
 	}
@@ -135,7 +153,7 @@ func TestResumeFromCursor(t *testing.T) {
 				t.Fatalf("cursor = %v, want the since cursor %v", sub.Cursor(), tt.since)
 			}
 			if tt.want > 10 {
-				hub.Publish(Event{Path: "/a.md", Version: 11, Op: protocol.OpPublish})
+				hub.PublishAt(Event{Seq: 11, Path: "/a.md", Version: 11, Op: protocol.OpPublish})
 			}
 			if got := next(t, sub).Seq; got != tt.want {
 				t.Fatalf("first seq = %d, want %d", got, tt.want)
@@ -146,14 +164,15 @@ func TestResumeFromCursor(t *testing.T) {
 
 func TestScopeFilterAndCursorAdvance(t *testing.T) {
 	hub := New("w", 0)
+	var st stamper
 	doc, _ := hub.Subscribe("/a/b.md", protocol.Cursor{})
 	tree, _ := hub.Subscribe("/a/", protocol.Cursor{})
 	all, _ := hub.Subscribe("/", protocol.Cursor{})
-	hub.Publish(Event{Path: "/a/b.md", Version: 1, Op: protocol.OpPublish})     // 1
-	hub.Publish(Event{Path: "/a/c.md", Version: 1, Op: protocol.OpPublish})     // 2
-	hub.Publish(Event{Path: "/ab.md", Version: 1, Op: protocol.OpPublish})      // 3
-	hub.Publish(Event{Path: "/a/b.md/x.md", Version: 1, Op: protocol.OpAppend}) // 4
-	hub.Publish(Event{Path: "/a/b.md", Version: 2, Op: protocol.OpArchive})     // 5
+	st.publish(hub, Event{Path: "/a/b.md", Version: 1, Op: protocol.OpPublish})     // 1
+	st.publish(hub, Event{Path: "/a/c.md", Version: 1, Op: protocol.OpPublish})     // 2
+	st.publish(hub, Event{Path: "/ab.md", Version: 1, Op: protocol.OpPublish})      // 3
+	st.publish(hub, Event{Path: "/a/b.md/x.md", Version: 1, Op: protocol.OpAppend}) // 4
+	st.publish(hub, Event{Path: "/a/b.md", Version: 2, Op: protocol.OpArchive})     // 5
 
 	if got := next(t, doc).Seq; got != 1 {
 		t.Fatalf("document scope first seq = %d", got)
@@ -175,7 +194,7 @@ func TestScopeFilterAndCursorAdvance(t *testing.T) {
 		}
 	}
 	// Skipped events still advance the resume cursor.
-	hub.Publish(Event{Path: "/zzz.md", Version: 1, Op: protocol.OpPublish}) // 6
+	st.publish(hub, Event{Path: "/zzz.md", Version: 1, Op: protocol.OpPublish}) // 6
 	if err := nextErr(t, doc); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want the wait deadline", err)
 	}
@@ -215,8 +234,8 @@ func TestNewEpochFitsTheCursorGrammar(t *testing.T) {
 	}
 }
 
-// A caller's own sequence may leave gaps, which readers step over; a Skip
-// makes what lies before it unresumable.
+// A gap in the caller's sequence is unresumable, like a Skip: nothing before
+// the gap can be named, so a cursor or a reader inside it gets resync.
 func TestPublishAtAndSkip(t *testing.T) {
 	hub := New("w", 0)
 	if !hub.PublishAt(Event{Seq: 5, Path: "/a.md", Version: 1, Op: protocol.OpPublish}) {
@@ -225,16 +244,23 @@ func TestPublishAtAndSkip(t *testing.T) {
 	if hub.PublishAt(Event{Seq: 3, Path: "/a.md", Version: 1, Op: protocol.OpPublish}) {
 		t.Fatal("PublishAt(3) behind the head was accepted")
 	}
+	if _, err := hub.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 3}); !errors.Is(err, ErrResync) {
+		t.Fatalf("resume before the first gap: err = %v, want ErrResync", err)
+	}
 	resumed, err := hub.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
 	hub.PublishAt(Event{Seq: 7, Path: "/b.md", Version: 1, Op: protocol.OpPublish})
-	if got := next(t, resumed); got.Seq != 7 || got.Path != "/b.md" {
-		t.Fatalf("after the gap got %+v, want seq 7", got)
+	if err := nextErr(t, resumed); !errors.Is(err, ErrResync) {
+		t.Fatalf("reader inside the gap: err = %v, want ErrResync", err)
 	}
-	if resumed.Cursor().Seq != 7 {
-		t.Fatalf("cursor = %v", resumed.Cursor())
+	after, err := hub.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 6})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, after).Seq; got != 7 {
+		t.Fatalf("after the gap got seq %d, want 7", got)
 	}
 
 	hub.Skip(20)
@@ -256,18 +282,20 @@ func TestPublishAtAndSkip(t *testing.T) {
 		t.Fatalf("after the skip got %+v, want seq 21", got)
 	}
 
-	// A gap wider than the ring evicts what came before it.
+	// Only the gap's far edge resumes, whatever the ring holds.
 	small := New("w", 4)
 	small.PublishAt(Event{Seq: 1, Path: "/a.md", Version: 1, Op: protocol.OpPublish})
 	small.PublishAt(Event{Seq: 10, Path: "/a.md", Version: 2, Op: protocol.OpPublish})
-	if _, err := small.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 1}); !errors.Is(err, ErrResync) {
-		t.Fatalf("resume across a ring-wide gap: %v, want ErrResync", err)
+	for _, seq := range []uint64{1, 8} {
+		if _, err := small.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: seq}); !errors.Is(err, ErrResync) {
+			t.Fatalf("resume at %d inside a gap: %v, want ErrResync", seq, err)
+		}
 	}
-	late, err := small.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 8})
+	late, err := small.Subscribe("/", protocol.Cursor{Epoch: "w", Seq: 9})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := next(t, late).Seq; got != 10 {
-		t.Fatalf("seq after a wide gap = %d, want 10", got)
+		t.Fatalf("seq after the gap = %d, want 10", got)
 	}
 }

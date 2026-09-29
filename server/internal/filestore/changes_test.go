@@ -6,22 +6,15 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
-	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
 // Every committed write, and only a committed one, becomes a hint with the
 // stored version's hash, in commit order.
 func TestCommitsPublishHints(t *testing.T) {
-	documents, err := protocolstore.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	hub := changefeed.New("w", 0)
-	store := New(documents, catalog.New(), hub)
+	store, hub := openWatched(t, t.TempDir(), changefeed.DefaultRingSize)
 	sub, err := hub.Subscribe("/", protocol.Cursor{})
 	if err != nil {
 		t.Fatal(err)

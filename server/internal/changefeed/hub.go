@@ -25,8 +25,7 @@ var ErrResync = errors.New("changefeed: cursor cannot be resumed")
 // ErrClosed means the hub was closed under a subscriber.
 var ErrClosed = errors.New("changefeed: hub closed")
 
-// Event is one committed change. Seq is assigned by the hub on Publish, or
-// by the caller on PublishAt.
+// Event is one committed change under the store's sequence.
 type Event struct {
 	Seq     uint64
 	Path    string
@@ -88,24 +87,17 @@ func (h *Hub) cursor(seq uint64) protocol.Cursor {
 	return protocol.Cursor{Epoch: h.epoch, Seq: seq}
 }
 
-// Publish appends ev with the next sequence number and wakes subscribers.
-// It never blocks on a reader. Returns the event's cursor.
-func (h *Hub) Publish(ev Event) protocol.Cursor {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	ev.Seq = h.lastSeq + 1
-	h.append(ev)
-	return h.cursor(ev.Seq)
-}
-
-// PublishAt appends ev under its own Seq, for a store whose commits carry a
-// shared sequence. A Seq the hub already passed is dropped, reported false:
-// the same commit reached the hub twice.
+// PublishAt appends ev under the store's own Seq (backend.ChangeSource); it
+// never blocks on a reader. A Seq already passed is dropped (false); a Seq
+// past the next leaves a gap nobody can name, unresumable as after Skip.
 func (h *Hub) PublishAt(ev Event) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if ev.Seq <= h.lastSeq {
 		return false
+	}
+	if ev.Seq > h.lastSeq+1 {
+		h.floor = max(h.floor, ev.Seq-1)
 	}
 	h.append(ev)
 	return true

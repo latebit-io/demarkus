@@ -21,7 +21,7 @@ var policyMeta = map[string]string{"tags": "category:governance", "type": "Polic
 
 func newStore(t *testing.T) backend.Store {
 	t.Helper()
-	return filestore.New(protocolstore.New(t.TempDir()), catalog.New(), nil)
+	return filestore.New(protocolstore.New(t.TempDir()), catalog.New())
 }
 
 func TestEnforce(t *testing.T) {

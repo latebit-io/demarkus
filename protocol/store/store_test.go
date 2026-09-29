@@ -2489,3 +2489,54 @@ func TestValidateDocumentContent(t *testing.T) {
 		})
 	}
 }
+
+// Fingerprint names the set of current documents by path and content, not
+// the order they were written or indexed in, and moves on every change to
+// that set.
+func TestFingerprint(t *testing.T) {
+	write := func(t *testing.T, s *Store, path, body string) {
+		t.Helper()
+		if _, err := s.WriteChecked(&storefmt.WriteSpec{Path: path, ExpectedVersion: -1, Content: []byte(body)}); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	a, b := New(t.TempDir()), New(t.TempDir())
+	if a.Fingerprint() != "" {
+		t.Fatal("a fingerprint before the index is built")
+	}
+	for _, s := range []*Store{a, b} {
+		if err := s.BuildHashIndex(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a.Fingerprint() != b.Fingerprint() {
+		t.Fatal("two empty stores differ")
+	}
+	write(t, a, "/x.md", "# x\n")
+	write(t, a, "/y.md", "# y\n")
+	write(t, b, "/y.md", "# y\n")
+	write(t, b, "/x.md", "# x\n")
+	if a.Fingerprint() != b.Fingerprint() {
+		t.Fatal("same documents in another order differ")
+	}
+	before := a.Fingerprint()
+	write(t, a, "/x.md", "# x2\n")
+	if a.Fingerprint() == before {
+		t.Fatal("a new version left the fingerprint unchanged")
+	}
+	if _, _, err := a.ArchiveChecked(&storefmt.ArchiveSpec{ArchiveChange: storefmt.ArchiveChange{Path: "/y.md", Archived: true}}); err != nil {
+		t.Fatal(err)
+	}
+	archived := a.Fingerprint()
+	if archived == before {
+		t.Fatal("an archive left the fingerprint unchanged")
+	}
+	// A rebuilt index over the same tree agrees with the incremental value.
+	reopened := New(a.Root())
+	if err := reopened.BuildHashIndex(); err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Fingerprint() != archived {
+		t.Fatalf("rebuilt fingerprint %s != incremental %s", reopened.Fingerprint(), archived)
+	}
+}

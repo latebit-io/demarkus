@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
+	"github.com/latebit-io/demarkus/server/internal/storetest"
 )
 
 // replica is one store over the shared bucket with its own hub, under the
@@ -25,12 +26,12 @@ type replica struct {
 
 func openReplica(t *testing.T, objects blob.Store) replica {
 	t.Helper()
-	hub := changefeed.New(testWorldID, 0)
-	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID, Changes: hub})
+	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: changefeed.DefaultRingSize})
 	if err != nil {
 		t.Fatalf("open replica: %v", err)
 	}
 	store.commitInterval = 0
+	hub := store.Changes()
 	sub, err := hub.Subscribe("/", protocol.Cursor{})
 	if err != nil {
 		t.Fatal(err)
@@ -38,25 +39,9 @@ func openReplica(t *testing.T, objects blob.Store) replica {
 	return replica{store: store, hub: hub, sub: sub}
 }
 
-func (r replica) next(t *testing.T) changefeed.Event {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	ev, err := r.sub.Next(ctx)
-	if err != nil {
-		t.Fatalf("Next: %v", err)
-	}
-	return ev
-}
+func (r replica) next(t *testing.T) changefeed.Event { return storetest.NextEvent(t, r.sub) }
 
-func (r replica) quiet(t *testing.T) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if ev, err := r.sub.Next(ctx); err == nil {
-		t.Fatalf("unexpected event %+v", ev)
-	}
-}
+func (r replica) quiet(t *testing.T) { storetest.Quiet(t, r.sub) }
 
 func (r replica) poll(t *testing.T) {
 	t.Helper()
@@ -280,4 +265,38 @@ func TestLocalHintsFollowCommitOrder(t *testing.T) {
 		}
 	}
 	a.quiet(t)
+}
+
+// bucketSite is one bucket. Tamper commits through a second store with no
+// hub, as a peer replica does; the head's receipts name it on reopen.
+type bucketSite struct{ objects *blob.Memory }
+
+func (s *bucketSite) open(t *testing.T, ring int) *Store {
+	t.Helper()
+	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	store.commitInterval = 0
+	return store
+}
+
+func (s *bucketSite) Open(t *testing.T) storetest.ChangeBackend {
+	return storetest.ChangeBackend{Store: s.open(t, changefeed.DefaultRingSize)}
+}
+
+func (s *bucketSite) Tamper(t *testing.T, path string) {
+	t.Helper()
+	if _, err := s.open(t, 0).Publish(context.Background(), backend.WriteRequest{Path: path, Content: []byte("# peer\n")}); err != nil {
+		t.Fatalf("tamper %s: %v", path, err)
+	}
+}
+
+// Window is the receipt window: what a reopened replica can name.
+func (s *bucketSite) Window() int { return maximumReceipts }
+
+func TestChangeConformance(t *testing.T) {
+	storetest.RunChangeConformance(t, func(t *testing.T) storetest.ChangeSite {
+		return &bucketSite{objects: initializedMemory(t)}
+	})
 }
