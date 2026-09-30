@@ -546,12 +546,12 @@ as such instead of a CrashLoopBackOff.
 {{- end -}}
 {{- end -}}
 
-{{/* Distinct Ingress hosts in a stable order: management, MCP, memory. */}}
+{{/* Distinct lowercase Ingress hosts in a stable order: management, MCP, memory. */}}
 {{- define "demarkus-knowledge-server.ingressHosts" -}}
-{{- $hosts := list .Values.ingress.host -}}
+{{- $hosts := list (lower .Values.ingress.host) -}}
 {{- range $host := list .Values.ingress.mcp.host .Values.ingress.memory.host -}}
-{{- if and $host (not (has $host $hosts)) -}}
-{{- $hosts = append $hosts $host -}}
+{{- if and $host (not (has (lower $host) $hosts)) -}}
+{{- $hosts = append $hosts (lower $host) -}}
 {{- end -}}
 {{- end -}}
 {{- toJson $hosts -}}

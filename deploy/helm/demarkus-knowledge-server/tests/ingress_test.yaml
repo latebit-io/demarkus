@@ -70,12 +70,12 @@ tests:
           path: spec.rules[2].http.paths[0].backend.service.port.name
           value: http
 
-  - it: lets the MCP host be the management host
+  - it: lets the MCP host be the management host, whatever its case
     template: ingress.yaml
     set:
       ingress.enabled: true
       ingress.host: broker.example.com
-      ingress.mcp.host: broker.example.com
+      ingress.mcp.host: Broker.example.com
     asserts:
       - lengthEqual:
           path: spec.rules
@@ -115,6 +115,15 @@ tests:
       - lengthEqual:
           path: spec.rules
           count: 3
+      - equal:
+          path: spec.rules[0].host
+          value: broker.example.com
+      - equal:
+          path: spec.rules[1].host
+          value: mcp.example.com
+      - equal:
+          path: spec.rules[2].host
+          value: memory.example.com
 
   - it: requires a memory host once the memory gateway is configured
     template: ingress.yaml
