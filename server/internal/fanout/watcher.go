@@ -116,11 +116,11 @@ func (f *Fanout) attach(ctx context.Context, req Request) (*watcher, error) {
 			return nil, err
 		}
 	}
-	w := &watcher{fanout: f, conn: conn, coalesce: req.Coalesce, tick: r.tick, group: f.joinLocked(groupKey{scope: req.Scope, token: token})}
+	w := &watcher{fanout: f, conn: conn, coalesce: req.Coalesce, tick: r.tick, group: f.joinLocked(groupKey{scope: req.Scope, token: token}, r.next)}
 	f.watchers++
 	// The ack is the head for a new watch, the client's since for a resume.
 	w.index, w.ack = r.next, req.Since
-	inRing := !req.Since.IsZero() && req.Since.Epoch == f.hub.Epoch() && req.Since.Seq+1 >= r.oldest() && req.Since.Seq < r.next
+	inRing := !req.Since.IsZero() && req.Since.Epoch == f.hub.Epoch() && req.Since.Seq+1 >= max(r.oldest(), w.group.from) && req.Since.Seq < r.next
 	if inRing {
 		w.index = req.Since.Seq + 1
 	}

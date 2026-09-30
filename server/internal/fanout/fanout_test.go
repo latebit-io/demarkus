@@ -369,6 +369,29 @@ func TestResumeCatchesUpThroughTheHub(t *testing.T) {
 	}
 }
 
+// A resume into a group that did not exist while the ring filled goes
+// through the hub: ring entries never named the new group.
+func TestResumeIntoANewGroupCatchesUp(t *testing.T) {
+	hub := changefeed.New("w", 0)
+	f := newFanout(t, hub, Config{})
+	keeper := serve(t, f, Request{Scope: "/"})
+	keeper.ack(t)
+	gone := serve(t, f, Request{Scope: "/x/"})
+	since := gone.ack(t)
+	gone.stop()
+	publish(hub, "/x/while-away.md")
+	keeper.event(t)
+	back := serve(t, f, Request{Scope: "/x/", Since: since})
+	back.ack(t)
+	if got := back.event(t).Path; got != "/x/while-away.md" {
+		t.Fatalf("resumed watcher saw %s", got)
+	}
+	publish(hub, "/x/live.md")
+	if got := back.event(t).Path; got != "/x/live.md" {
+		t.Fatalf("live event after the resume = %s", got)
+	}
+}
+
 // Coalescing a resume: 100 edits to one path and one to another are two
 // events, newest versions, in order.
 func TestCoalescedResumeReplaysTwoEvents(t *testing.T) {

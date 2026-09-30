@@ -115,6 +115,9 @@ type group struct {
 	key      groupKey
 	watchers int
 	notify   chan struct{}
+	// from is the first seq matched against this group; entries before it
+	// never name it, so a resume from earlier goes through the hub.
+	from uint64
 	// denied is set by the sweep when the token no longer covers the
 	// scope; its watchers end with that verdict.
 	denied error
@@ -167,7 +170,9 @@ func (f *Fanout) startLocked() (*run, error) {
 		cancel()
 		return nil, err
 	}
-	head := f.hub.Head().Seq
+	// The subscription's own position, not a second Head read: a write in
+	// between would put the run ahead of the events the reader delivers.
+	head := sub.Cursor().Seq
 	r := &run{cancel: cancel, buf: make([]entry, f.hub.RingSize()), next: head + 1, floor: head}
 	f.run = r
 	r.done.Add(2)
@@ -205,7 +210,7 @@ func (f *Fanout) read(ctx context.Context, r *run, sub *changefeed.Subscription)
 			return
 		case errors.Is(err, changefeed.ErrResync):
 			if sub, err = f.hub.Subscribe(ctx, "/", protocol.Cursor{}); err == nil {
-				f.rejoin(r)
+				f.rejoin(r, sub.Cursor().Seq)
 				continue
 			}
 			f.logger.Error("watch fan-out lost the hub", "error", err)
@@ -217,8 +222,7 @@ func (f *Fanout) read(ctx context.Context, r *run, sub *changefeed.Subscription)
 	}
 }
 
-func (f *Fanout) rejoin(r *run) {
-	head := f.hub.Head().Seq
+func (f *Fanout) rejoin(r *run, head uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.run == r {
@@ -326,12 +330,13 @@ func (f *Fanout) sweep(ctx context.Context, r *run) {
 	}
 }
 
-// joinLocked adds a watcher to its group, creating it on first use.
-func (f *Fanout) joinLocked(key groupKey) *group {
+// joinLocked adds a watcher to its group, creating it on first use at the
+// ring's next seq.
+func (f *Fanout) joinLocked(key groupKey, next uint64) *group {
 	g := f.groups[key]
 	if g == nil {
 		f.lastID++
-		g = &group{id: f.lastID, key: key, notify: make(chan struct{})}
+		g = &group{id: f.lastID, key: key, notify: make(chan struct{}), from: next}
 		f.groups[key] = g
 		f.byScope[key.scope] = append(f.byScope[key.scope], g)
 	}
