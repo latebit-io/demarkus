@@ -23,4 +23,7 @@ func TestLoadConfigAcceptsTheChartRendering(t *testing.T) {
 	if got := cfg.Server.Gateway(ProfileKnowledge).PublicURL; got != cfg.Server.PublicURL {
 		t.Fatalf("knowledge gateway URL = %q, want the issuer", got)
 	}
+	if got := cfg.Server.BearerAddr; got != ":8443" {
+		t.Fatalf("bearerAddr = %q, want the chart's bearer port", got)
+	}
 }

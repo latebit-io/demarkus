@@ -60,7 +60,7 @@ Each request-response exchange takes place on a single bidirectional QUIC stream
 
 ### 3.2. Port
 
-The default port for Mark Protocol servers is **6309** (UDP). Servers MAY listen on alternative ports. Clients MUST support specifying a non-default port in the URI.
+The default port for Mark Protocol servers is **6309** (UDP). Servers MAY listen on alternative ports. Clients MUST support specifying a non-default port in the URI. UDP 443 is the conventional alternative for a bearer listener (§11.8), since networks that block other UDP ports usually pass QUIC there.
 
 ### 3.3. TLS
 
@@ -86,7 +86,7 @@ The Application-Layer Protocol Negotiation (ALPN) identifier for the Mark Protoc
 mark
 ```
 
-Servers MUST include `"mark"` in their TLS ALPN extension. Clients MUST request `"mark"` in the ALPN negotiation.
+Servers MUST include `"mark"` in their TLS ALPN extension. Clients MUST request `"mark"` in the ALPN negotiation. A listener that also serves another protocol over QUIC (for example `h3`) selects the protocol per connection by the negotiated ALPN value.
 
 ## 4. Request Format
 
@@ -729,7 +729,7 @@ The following status values are reserved for future use:
 |---|---|---|---|
 | `if-none-match` | FETCH | 64-char hex string | ETag from a previous response. Enables conditional fetch. |
 | `if-modified-since` | FETCH | RFC 3339 timestamp | Timestamp from a previous response. Enables conditional fetch. |
-| `auth` | PUBLISH, ARCHIVE, APPEND; any verb on a path under read authorisation (§11.8) | String | Raw authentication token. The server hashes this with SHA-256 and looks up the hash in its token store. |
+| `auth` | PUBLISH, ARCHIVE, APPEND; any verb on a path under read authorisation (§11.8); every verb on a bearer listener | String | Raw authentication token. The server hashes a capability token with SHA-256 and looks up the hash in its token store; on a bearer listener it carries an identity bearer instead (§11.8). |
 | `expected-version` | PUBLISH (optional), APPEND (required) | Decimal integer | Expected current version for optimistic concurrency. If present and does not match the server's current version, the server returns `conflict`. APPEND requires this field (>= 1). |
 | `query` | LOOKUP | String | Subject text matched against each document's `tags` and title. REQUIRED; minimum 2 characters. |
 | `filter` | LOOKUP | Comma-separated `key=value` | Predicates applied before ranking. Exact match on declared metadata, plus built-ins `modified-after` / `modified-before`. |
@@ -991,7 +991,7 @@ When the content directory or any document path involves symbolic links, the ser
 
 ### 11.8. Authentication
 
-The Mark Protocol uses capability-based token authentication. Tokens grant specific operations on specific path patterns; they do not identify users.
+The Mark Protocol uses capability-based token authentication. Tokens grant specific operations on specific path patterns; they do not identify users. A server that authenticates users does so on a separate bearer listener (below).
 
 **Secure by default**: Servers MUST deny all publish operations when no token store is configured. Reads are public by default: read authentication is opt-in per path.
 
@@ -1023,6 +1023,15 @@ Servers MUST enforce read auth on FETCH, LIST, VERSIONS, LOOKUP (§6.7) and WATC
 6. If authorised: proceed with the request.
 
 **Token generation**: The `demarkus-token generate` tool creates cryptographically random tokens and appends their hashed entries to the token store file. The raw token is printed once and never stored by the server.
+
+**Bearer listeners**: A server MAY run a separate listener on which the `auth` field carries an identity bearer (an OpenID Connect ID token, or a token its own authorization server signed) instead of a capability token. Each listener accepts one credential kind: a bearer listener MUST NOT honour a capability token, and a capability listener MUST NOT honour a bearer. On a bearer listener:
+
+1. Every request MUST carry a bearer; a request without one, or with one that fails verification (signature, issuer, audience, expiry), is answered `unauthorized`.
+2. The server authorises by identity: which worlds an identity may read, and on which paths it may publish, is the server's policy, not the token's. A verified identity the addressed server does not admit is answered `not-permitted`; a write outside the identity's scope is `not-permitted`.
+3. The bearer MUST NOT be checked against the capability token store, so a path under read authorisation (above) stays closed on a bearer listener.
+4. A WATCH (§6.8) ends with `unauthorized` and the last delivered cursor when the bearer expires; the client resumes with a fresh bearer.
+
+A bearer identifies a user; unlike a capability token it is not a secret the server stores, and servers MUST NOT log it.
 
 ### 11.9. Versioned-Only Serving
 

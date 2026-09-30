@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
+	"time"
 )
 
 // Claims is the subset of OIDC id_token claims the broker consumes. Groups
@@ -19,6 +20,8 @@ type Claims struct {
 	// Resource is the RFC 8707 indicator a broker token is bound to; blank
 	// is unbound, valid at every gateway. IdP tokens are unbound.
 	Resource string `json:",omitempty"`
+	// Expiry is the verified token's exp, never stored with a record.
+	Expiry time.Time `json:"-"`
 }
 
 // BoundTo returns the claims bound to resource, for the tokens minted from them.

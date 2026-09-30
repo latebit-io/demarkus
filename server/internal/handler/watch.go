@@ -33,6 +33,13 @@ func (h *Handler) serveWatch(ctx context.Context, w io.Writer, req protocol.Requ
 		h.writeError(w, protocol.StatusBadRequest, "unsupported coalesce: "+coalesce)
 		return
 	}
+	// A bearer's watch ends when the bearer lapses; the client resumes from
+	// the terminal cursor with a fresh one.
+	if grant, ok := protocol.GrantFrom(ctx); ok && !grant.Expires.IsZero() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadlineCause(ctx, grant.Expires, auth.ErrTokenExpired)
+		defer cancel()
+	}
 	scope := scopePath(req.Path)
 	err := h.watches.Serve(ctx, fanout.Request{Scope: scope, Token: req.Metadata["auth"], Since: since, Coalesce: coalesce != ""}, w)
 	var limited *fanout.LimitError
@@ -41,7 +48,7 @@ func (h *Handler) serveWatch(ctx context.Context, w io.Writer, req protocol.Requ
 		h.logger.Warn("watch limit reached", "limit", limited.Limit)
 		h.writeError(w, protocol.StatusRateLimited, err.Error())
 	case auth.IsDenial(err):
-		h.writeAuthDenied(w, req, err)
+		h.Deny(w, req, err)
 	case err != nil:
 		h.logger.Error("watch failed", "path", sanitize(scope), "error", err)
 		h.writeError(w, protocol.StatusServerError, "watch failed")

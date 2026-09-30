@@ -93,6 +93,9 @@ spec:
             - name: peer
               protocol: UDP
               containerPort: {{ .Values.server.peerPort }}
+            - name: bearer
+              protocol: UDP
+              containerPort: {{ .Values.server.bearerPort }}
           {{- /* The broker's /readyz answers only once OIDC discovery and every
                  world are up, and drops first on shutdown so the load balancer
                  stops sending sessions; the server's /livez is the liveness. */}}

@@ -4,13 +4,13 @@ templates:
 values:
   - fixtures/valid-values.yaml
 tests:
-  - it: exposes the QUIC and HTTP ports and no health port
+  - it: exposes the QUIC, HTTP and bearer ports and no health port
     asserts:
       - isKind:
           of: Service
       - lengthEqual:
           path: spec.ports
-          count: 2
+          count: 3
       - equal:
           path: spec.ports[0]
           value:
@@ -26,8 +26,27 @@ tests:
             port: 8080
             targetPort: http
       - equal:
+          path: spec.ports[2]
+          value:
+            name: bearer
+            protocol: UDP
+            port: 443
+            targetPort: bearer
+      - equal:
           path: spec.type
           value: ClusterIP
+
+  - it: carries the bearer listener on the configured Service port
+    set:
+      service.bearerPort: 7443
+      server.bearerPort: 9443
+    asserts:
+      - equal:
+          path: spec.ports[2].port
+          value: 7443
+      - equal:
+          path: spec.ports[2].targetPort
+          value: bearer
 
   - it: propagates service settings
     set:

@@ -5,17 +5,30 @@ import (
 	"errors"
 	"path"
 	"strings"
+	"time"
 )
 
-// Grant is publish capability a caller in the server's own process has
-// verified for a writer: it rides the request context in place of a token
-// and never crosses the wire. A stream from the network carries none.
+// Grant is what a caller in the server's own process verified for an
+// identity: it rides the request context in place of a token and never
+// crosses the wire, so no request from the network can put one there.
 type Grant struct {
 	// Label names the writer in the audit log, as a token's label would.
 	Label string
-	// Paths is the glob scope, in the token file's pattern language.
+	// Paths is the glob scope, in the token file's pattern language; none
+	// grants no write.
 	Paths []string
+	// Expires is when the credential behind the grant lapses: a WATCH
+	// served under it ends unauthorized then. Zero never lapses.
+	Expires time.Time
 }
+
+// Gate admits one request a bearer listener read: the grant to serve it
+// under, or a refusal (ErrNotPermitted, else unauthorized).
+type Gate func(ctx context.Context, req Request) (Grant, error)
+
+// ErrNotPermitted is a gate's refusal of a verified caller the world does
+// not admit, answered not-permitted; any other refusal is unauthorized.
+var ErrNotPermitted = errors.New("not permitted on this world")
 
 type grantKey struct{}
 

@@ -52,6 +52,9 @@ func TestIDTokenSignerSignVerifyRoundTrip(t *testing.T) {
 	if got.HD != claims.HD {
 		t.Errorf("HD = %q, want %q", got.HD, claims.HD)
 	}
+	if want := now.Add(15 * time.Minute); !got.Expiry.Equal(want) {
+		t.Errorf("Expiry = %v, want the signed exp %v", got.Expiry, want)
+	}
 }
 
 func TestIDTokenSignerSignRejectsZeroTTL(t *testing.T) {

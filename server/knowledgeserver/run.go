@@ -23,6 +23,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/logging"
 	"github.com/latebit-io/demarkus/server/internal/management"
 	"github.com/latebit-io/demarkus/server/internal/quicserve"
+	"github.com/latebit-io/demarkus/server/internal/worldruntime"
 	"github.com/quic-go/quic-go"
 )
 
@@ -52,9 +53,26 @@ type Server struct {
 	watcherGroup sync.WaitGroup
 	peers        *peerLinks
 	worlds       *worldManager
-	quicServer   *quicserve.Server
-	health       *healthEndpoint
-	closeOnce    sync.Once
+	// listeners are the QUIC listeners: 6309 first, then the bearer
+	// listener once opened.
+	listeners []quicListener
+	health    *healthEndpoint
+	closeOnce sync.Once
+}
+
+// quicListener is one QUIC listener and the selector its connections go through.
+type quicListener struct {
+	name     string
+	server   *quicserve.Server
+	selector quicserve.Selector
+}
+
+// serve runs the listener; a stop by Shutdown or Close is nil.
+func (l quicListener) serve() error {
+	if err := l.server.Serve(context.Background(), l.selector); !errors.Is(err, quicserve.ErrServerClosed) {
+		return fmt.Errorf("%s stopped: %w", l.name, err)
+	}
+	return nil
 }
 
 // Run is the knowledge server main: flags, Open, signals and Serve. Blocks
@@ -173,27 +191,12 @@ func (s *Server) open() error {
 	}
 	s.worlds = worlds
 
-	tlsConfig := s.certificates.TLSConfig(protocol.ALPN)
-	handshakeHook, err := worlds.Router().HandshakeHook(tlsConfig)
-	if err != nil {
-		return err
-	}
-	tlsConfig.GetConfigForClient = handshakeHook
-	quicServer, err := quicserve.Listen(quicserve.Config{
-		Address:   s.config.Listen.Address,
-		TLSConfig: tlsConfig,
-		QUICConfig: &quic.Config{
-			MaxIncomingStreams:    s.config.Listen.MaxIncomingStreams,
-			MaxIncomingUniStreams: 0,
-			MaxIdleTimeout:        time.Duration(s.config.Listen.IdleTimeout),
-		},
-		Logger: s.logger,
-	})
+	quicServer, err := s.listenQUIC(s.config.Listen.Address)
 	if err != nil {
 		s.logger.Error("QUIC listen failed", "error", err)
 		return err
 	}
-	s.quicServer = quicServer
+	s.listeners = append(s.listeners, quicListener{name: "QUIC server", server: quicServer, selector: worlds.Router().Selector()})
 
 	health, err := openHealth(s.config.Health.Address)
 	if err != nil {
@@ -204,27 +207,85 @@ func (s *Server) open() error {
 	return nil
 }
 
+// listenQUIC opens a mark listener on address: the worlds' certificate,
+// strict SNI routing, the configured stream and idle limits.
+func (s *Server) listenQUIC(address string) (*quicserve.Server, error) {
+	tlsConfig := s.certificates.TLSConfig(protocol.ALPN)
+	handshakeHook, err := s.worlds.Router().HandshakeHook(tlsConfig)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig.GetConfigForClient = handshakeHook
+	return quicserve.Listen(quicserve.Config{
+		Address:   address,
+		TLSConfig: tlsConfig,
+		QUICConfig: &quic.Config{
+			MaxIncomingStreams:    s.config.Listen.MaxIncomingStreams,
+			MaxIncomingUniStreams: 0,
+			MaxIdleTimeout:        time.Duration(s.config.Listen.IdleTimeout),
+		},
+		Logger: s.logger,
+	})
+}
+
+// Gates builds each bearer connection's protocol.Gate from its authority.
+type Gates = worldruntime.Gates
+
+// OpenBearerListener listens on address for mark clients with an identity
+// bearer in the auth field; each connection's gate admits every request,
+// and the handler never sees the bearer. Call before Serve, which runs it.
+func (s *Server) OpenBearerListener(address string, gates Gates) error {
+	if len(s.listeners) > 1 {
+		return errors.New("bearer listener already open")
+	}
+	if gates == nil {
+		return errors.New("bearer listener needs gates")
+	}
+	listener, err := s.listenQUIC(address)
+	if err != nil {
+		return fmt.Errorf("bearer listener: %w", err)
+	}
+	s.listeners = append(s.listeners, quicListener{name: "bearer listener", server: listener, selector: gatedSelector(s.worlds.Router().Selector(), gates)})
+	s.logger.Info("bearer listener open", "addr", listener.Addr())
+	return nil
+}
+
+// gatedSelector pins each connection to its world's endpoint behind the
+// gate gates builds for the connection.
+func gatedSelector(route quicserve.Selector, gates Gates) quicserve.Selector {
+	return func(conn *quic.Conn) (quicserve.Endpoint, error) {
+		endpoint, err := route(conn)
+		if err != nil {
+			return nil, err
+		}
+		gatable, ok := endpoint.(worldruntime.Gatable)
+		if !ok {
+			return nil, fmt.Errorf("endpoint %T serves no bearer connections", endpoint)
+		}
+		return gatable.Gated(gates)
+	}
+}
+
 // Serve starts the config watchers and serves QUIC and health until ctx
 // ends or a listener fails, then drains the worlds and stops the
 // listeners. Close still has to run afterwards.
 func (s *Server) Serve(ctx context.Context) error {
 	startConfigWatchers(s.watchCtx, &s.watcherGroup, s.configFile, s.config, s.worlds, s.logger)
 
-	quicResult := make(chan error, 1)
-	go func() { quicResult <- s.quicServer.Serve(context.Background(), s.worlds.Router().Selector()) }()
+	quicResult := make(chan error, len(s.listeners))
+	for _, listener := range s.listeners {
+		go func() { quicResult <- listener.serve() }()
+	}
 	healthResult := make(chan error, 1)
 	go func() { healthResult <- s.health.server.Serve(s.health.listener) }()
 	s.health.status.SetLive(true)
 	s.health.status.SetReady(true)
-	s.logger.Info("knowledge server started", "quic_addr", s.quicServer.Addr(), "health_addr", s.health.listener.Addr(), "worlds", s.worlds.WorldCount())
+	s.logger.Info("knowledge server started", "quic_addr", s.listeners[0].server.Addr(), "health_addr", s.health.listener.Addr(), "worlds", s.worlds.WorldCount())
 
 	var runErr error
 	select {
 	case <-ctx.Done():
-	case err := <-quicResult:
-		if !errors.Is(err, quicserve.ErrServerClosed) {
-			runErr = fmt.Errorf("QUIC server stopped: %w", err)
-		}
+	case runErr = <-quicResult:
 	case err := <-healthResult:
 		if !errors.Is(err, http.ErrServerClosed) {
 			runErr = fmt.Errorf("health server stopped: %w", err)
@@ -232,7 +293,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 
 	s.health.status.SetReady(false)
-	s.quicServer.ShutdownAfter(s.worlds.Drain, shutdownTimeout)
+	s.shutdownListeners()
 	s.health.status.SetLive(false)
 	healthCtx, healthCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := s.health.server.Shutdown(healthCtx); err != nil {
@@ -241,6 +302,17 @@ func (s *Server) Serve(ctx context.Context) error {
 	healthCancel()
 	s.logger.Info("knowledge server stopped")
 	return runErr
+}
+
+// shutdownListeners drains the worlds once, which ends every watch, then
+// stops the QUIC listeners together, each under the shutdown timeout.
+func (s *Server) shutdownListeners() {
+	s.worlds.Drain()
+	var group sync.WaitGroup
+	for _, listener := range s.listeners {
+		group.Go(func() { listener.server.ShutdownAfter(func() {}, shutdownTimeout) })
+	}
+	group.Wait()
 }
 
 // Reload re-reads the TLS certificate and every world's token files; the
@@ -277,9 +349,9 @@ func (s *Server) Close() {
 		if s.worlds != nil {
 			s.worlds.Close()
 		}
-		if s.quicServer != nil {
-			if err := s.quicServer.Close(); err != nil {
-				s.logger.Warn("QUIC close failed", "error", err)
+		for _, listener := range s.listeners {
+			if err := listener.server.Close(); err != nil {
+				s.logger.Warn(listener.name+" close failed", "error", err)
 			}
 		}
 		if s.health != nil {

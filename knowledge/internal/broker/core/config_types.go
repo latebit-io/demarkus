@@ -9,6 +9,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // Config is the broker's YAML configuration: its own runtime knobs, the OIDC
@@ -107,6 +110,10 @@ type WorldDialerConfig struct {
 type ServerConfig struct {
 	// Addr is the listen address, e.g. ":8080". HTTPS terminates at the Ingress.
 	Addr string `yaml:"addr"`
+	// BearerAddr is the UDP address of the knowledge server's bearer
+	// listener, mark requests with an identity bearer in the auth field
+	// (ADR 0033). Blank opens none.
+	BearerAddr string `yaml:"bearerAddr"`
 	// CookieKey is the base64 HMAC key signing the OIDC state cookie. Rotating
 	// it invalidates in-flight logins. Blank makes the broker generate one on
 	// first start and persist it in CookieKeySecret.
@@ -264,6 +271,21 @@ type WorldConfig struct {
 	Allow AllowConfig `yaml:"allow"`
 	// WriteScope is the path scope the gateway may write in this world.
 	WriteScope WriteScope `yaml:"writeScope"`
+}
+
+// Address is the world's host:port: InternalAddress when set, else the
+// Kubernetes Service DNS name on the protocol's default port.
+func (w *WorldConfig) Address() string {
+	if w.InternalAddress != "" {
+		return w.InternalAddress
+	}
+	return fmt.Sprintf("%s.%s.svc.cluster.local:%d", w.Name, w.Namespace, protocol.DefaultPort)
+}
+
+// Authority is the host of Address, the SNI a QUIC client presents and the
+// key a server in this process routes a local world by.
+func (w *WorldConfig) Authority() string {
+	return fetch.AuthorityHostname(w.Address())
 }
 
 // AllowConfig is the per world predicate: all lists empty admits any verified

@@ -120,6 +120,15 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "server.addr is required",
 		},
 		{
+			name: "server.bearerAddr",
+			body: strings.Replace(validConfig, `addr: ":8080"`, "addr: \":8080\"\n  bearerAddr: \":8443\"", 1),
+			validate: func(t *testing.T, c *Config) {
+				if c.Server.BearerAddr != ":8443" {
+					t.Errorf("bearerAddr = %q, want :8443", c.Server.BearerAddr)
+				}
+			},
+		},
+		{
 			name:    "missing oidc.clientID",
 			body:    strings.Replace(validConfig, `clientID: client-abc`, `clientID: ""`, 1),
 			wantErr: "oidc.clientID is required",

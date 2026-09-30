@@ -131,20 +131,24 @@ fromYamlArray.
 {{- $udpPort := int .Values.server.udpPort -}}
 {{- $healthPort := int .Values.server.healthPort -}}
 {{- $peerPort := int .Values.server.peerPort -}}
-{{- if or (lt $udpPort 1) (gt $udpPort 65535) -}}
-{{- fail "server.udpPort must be between 1 and 65535" -}}
+{{- $httpPort := int .Values.server.httpPort -}}
+{{- $bearerPort := int .Values.server.bearerPort -}}
+{{- range $name, $port := dict "server.udpPort" $udpPort "server.healthPort" $healthPort "server.peerPort" $peerPort "server.httpPort" $httpPort "server.bearerPort" $bearerPort "service.bearerPort" (int .Values.service.bearerPort) -}}
+{{- if or (lt $port 1) (gt $port 65535) -}}
+{{- fail (printf "%s must be between 1 and 65535" $name) -}}
 {{- end -}}
-{{- if or (lt $peerPort 1) (gt $peerPort 65535) -}}
-{{- fail "server.peerPort must be between 1 and 65535" -}}
 {{- end -}}
 {{- if eq $peerPort $udpPort -}}
 {{- fail "server.peerPort must differ from server.udpPort" -}}
 {{- end -}}
-{{- if or (lt $healthPort 1) (gt $healthPort 65535) -}}
-{{- fail "server.healthPort must be between 1 and 65535" -}}
-{{- end -}}
 {{- if eq $udpPort $healthPort -}}
 {{- fail "server.healthPort must differ from server.udpPort" -}}
+{{- end -}}
+{{- if or (eq $bearerPort $udpPort) (eq $bearerPort $peerPort) -}}
+{{- fail "server.bearerPort must differ from server.udpPort and server.peerPort" -}}
+{{- end -}}
+{{- if eq (int .Values.service.bearerPort) $udpPort -}}
+{{- fail "service.bearerPort must differ from server.udpPort" -}}
 {{- end -}}
 {{- if lt (int .Values.server.maxIncomingStreams) 1 -}}
 {{- fail "server.maxIncomingStreams must be positive" -}}
@@ -183,10 +187,6 @@ fromYamlArray.
 {{- if and .Values.networkPolicy.externalCIDRs (ne .Values.service.externalTrafficPolicy "Local") -}}
 {{- fail "service.externalTrafficPolicy must be Local when networkPolicy.externalCIDRs is set" -}}
 {{- end -}}
-{{- end -}}
-{{- $httpPort := int .Values.server.httpPort -}}
-{{- if or (lt $httpPort 1) (gt $httpPort 65535) -}}
-{{- fail "server.httpPort must be between 1 and 65535" -}}
 {{- end -}}
 {{- if or (eq $httpPort $healthPort) (eq $httpPort $udpPort) -}}
 {{- fail "server.httpPort must differ from server.healthPort and server.udpPort" -}}

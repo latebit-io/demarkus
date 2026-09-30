@@ -27,3 +27,7 @@ spec:
       protocol: TCP
       port: {{ .Values.server.httpPort }}
       targetPort: http
+    - name: bearer
+      protocol: UDP
+      port: {{ .Values.service.bearerPort }}
+      targetPort: bearer

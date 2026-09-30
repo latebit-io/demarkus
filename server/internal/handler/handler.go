@@ -259,7 +259,7 @@ func (h *Handler) serveWrite(ctx context.Context, w io.Writer, req protocol.Requ
 func (h *Handler) authorizeWrite(ctx context.Context, w io.Writer, req protocol.Request) (tokenLabel string, ok bool) {
 	if grant, granted := protocol.GrantFrom(ctx); granted {
 		if !auth.Permits(&grant, req.Path) {
-			h.writeAuthDenied(w, req, auth.ErrNotPermitted)
+			h.Deny(w, req, auth.ErrNotPermitted)
 			return "", false
 		}
 		return grant.Label, true
@@ -271,7 +271,7 @@ func (h *Handler) authorizeWrite(ctx context.Context, w io.Writer, req protocol.
 	}
 	tokenLabel, err := ts.Authorize(req.Metadata["auth"], req.Path, "publish")
 	if err != nil {
-		h.writeAuthDenied(w, req, err)
+		h.Deny(w, req, err)
 		return "", false
 	}
 	return tokenLabel, true
@@ -371,14 +371,15 @@ func (h *Handler) handleFetchByHash(ctx context.Context, call *readCall, hash st
 // error response if auth is required but missing or invalid.
 func (h *Handler) authorizeRead(w io.Writer, req protocol.Request) bool {
 	if err := h.checkReadAuth(req.Path, req.Metadata["auth"]); err != nil {
-		h.writeAuthDenied(w, req, err)
+		h.Deny(w, req, err)
 		return false
 	}
 	return true
 }
 
-// writeAuthDenied answers a failed authorization.
-func (h *Handler) writeAuthDenied(w io.Writer, req protocol.Request, err error) {
+// Deny answers a failed authorization, err being an auth package sentinel;
+// a caller that refused req before Serve answers through it too.
+func (h *Handler) Deny(w io.Writer, req protocol.Request, err error) {
 	status := auth.DenialStatus(err)
 	h.logger.Warn(status, "operation", req.Verb, "path", sanitize(req.Path))
 	if status == protocol.StatusUnauthorized {

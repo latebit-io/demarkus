@@ -2,6 +2,7 @@ package core
 
 import (
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -109,6 +110,26 @@ func (r *WorldRegistry) Find(name string) (WorldConfig, bool) {
 		return r.dynamic[i], true
 	}
 	return WorldConfig{}, false
+}
+
+// LocalName is the name of the local world whose authority is authority. A
+// scan without copies; the bearer listener runs it once per connection.
+func (r *WorldRegistry) LocalName(authority string) (string, bool) {
+	if name, ok := localNamed(r.static, authority); ok {
+		return name, true
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return localNamed(r.dynamic, authority)
+}
+
+func localNamed(worlds []WorldConfig, authority string) (string, bool) {
+	for i := range worlds {
+		if w := &worlds[i]; w.Local && strings.EqualFold(w.Authority(), authority) {
+			return w.Name, true
+		}
+	}
+	return "", false
 }
 
 // SlugForIdentity resolves a provisioned identity to its pinned world.

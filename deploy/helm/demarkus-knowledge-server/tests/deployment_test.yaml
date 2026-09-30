@@ -124,7 +124,7 @@ tests:
           path: spec.template.spec.containers[0].volumeMounts[3].mountPath
           value: /run/demarkus/tenant-worlds
 
-  - it: exposes QUIC, HTTP, health and peer ports at the pod and probes both halves
+  - it: exposes QUIC, HTTP, health, peer and bearer ports at the pod and probes both halves
     template: deployment.yaml
     asserts:
       - contains:
@@ -151,6 +151,12 @@ tests:
             name: peer
             protocol: UDP
             containerPort: 6310
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: bearer
+            protocol: UDP
+            containerPort: 8443
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.httpGet.path
           value: /livez

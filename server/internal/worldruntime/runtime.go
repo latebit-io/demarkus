@@ -175,15 +175,25 @@ func New(config *Config) (*Runtime, error) {
 
 // ServeStream applies world-local controls and dispatches one request.
 func (r *Runtime) ServeStream(ctx context.Context, remote net.Addr, stream quicserve.Stream) {
-	r.serveStream(ctx, remote, stream, r.logger)
+	r.serveStream(ctx, remote, stream, &runtimeEndpoint{runtime: r, logger: r.logger})
 }
 
 // Endpoint binds one routed authority to request logs.
 func (r *Runtime) Endpoint(authority string) quicserve.Endpoint {
-	return &runtimeEndpoint{runtime: r, logger: r.logger.With("authority", authority)}
+	return &runtimeEndpoint{runtime: r, logger: r.logger.With("authority", authority), authority: authority}
 }
 
-func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quicserve.Stream, logger *slog.Logger) {
+// Gates builds the gate of a bearer connection to authority, once per
+// connection; an error refuses the connection.
+type Gates = func(authority string) (protocol.Gate, error)
+
+// Gatable is a routed endpoint that also serves bearer connections.
+type Gatable interface {
+	Gated(gates Gates) (quicserve.Endpoint, error)
+}
+
+func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quicserve.Stream, endpoint *runtimeEndpoint) {
+	logger := endpoint.logger
 	if !r.beginStream() {
 		if err := stream.Close(); err != nil {
 			logger.Debug("closing rejected stream", "error", err)
@@ -225,6 +235,16 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 	req, ok := h.ReadRequest(stream)
 	if !ok {
 		return
+	}
+	if endpoint.gate != nil {
+		grant, err := endpoint.gate(requestCtx, req)
+		// The bearer is not a capability token; the handler never sees it.
+		delete(req.Metadata, "auth")
+		if err != nil {
+			h.Deny(stream, req, gateDenial(err))
+			return
+		}
+		ctx, requestCtx = protocol.WithGrant(ctx, grant), protocol.WithGrant(requestCtx, grant)
 	}
 	if req.Verb == protocol.VerbWatch && r.watches != nil {
 		// A watch is admitted under the fan-out's caps, not the request slots,
@@ -347,12 +367,35 @@ type Exchanger interface {
 }
 
 type runtimeEndpoint struct {
-	runtime *Runtime
-	logger  *slog.Logger
+	runtime   *Runtime
+	logger    *slog.Logger
+	authority string
+	// gate is set on a bearer connection's copy only.
+	gate protocol.Gate
 }
 
 func (endpoint *runtimeEndpoint) ServeStream(ctx context.Context, remote net.Addr, stream quicserve.Stream) {
-	endpoint.runtime.serveStream(ctx, remote, stream, endpoint.logger)
+	endpoint.runtime.serveStream(ctx, remote, stream, endpoint)
+}
+
+// Gated is this endpoint for one bearer connection: every request passes
+// the gate gates builds for the endpoint's authority.
+func (endpoint *runtimeEndpoint) Gated(gates Gates) (quicserve.Endpoint, error) {
+	gate, err := gates(endpoint.authority)
+	if err != nil {
+		return nil, err
+	}
+	gated := *endpoint
+	gated.gate = gate
+	return &gated, nil
+}
+
+// gateDenial names a gate's refusal in the handler's terms.
+func gateDenial(err error) error {
+	if errors.Is(err, protocol.ErrNotPermitted) {
+		return auth.ErrNotPermitted
+	}
+	return auth.ErrInvalidToken
 }
 
 func (endpoint *runtimeEndpoint) Exchange(ctx context.Context, remote net.Addr, req protocol.Request) (protocol.Response, error) {
@@ -432,4 +475,5 @@ func (r *Runtime) writeRateLimited(stream quicserve.Stream) error {
 var (
 	_ quicserve.Endpoint = (*Runtime)(nil)
 	_ Exchanger          = (*runtimeEndpoint)(nil)
+	_ Gatable            = (*runtimeEndpoint)(nil)
 )

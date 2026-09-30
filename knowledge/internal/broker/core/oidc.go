@@ -156,6 +156,7 @@ func (v *oidcVerifier) VerifyIDToken(ctx context.Context, rawIDToken string) (Cl
 		EmailVerified: raw.EmailVerified,
 		Groups:        raw.Groups,
 		HD:            raw.HD,
+		Expiry:        idTok.Expiry,
 	}, nil
 }
 

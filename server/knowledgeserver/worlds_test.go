@@ -33,6 +33,8 @@ import (
 // production hot-reload uses.
 type worldsTestHarness struct {
 	dir     string
+	config  *knowledgeconfig.Config
+	certs   *certsource.Source
 	manager *worldManager
 	// storesMu guards stores: the manager's retry loop and the test
 	// goroutine both drive newStore.
@@ -127,7 +129,7 @@ tls:
 	if err != nil {
 		t.Fatalf("certsource: %v", err)
 	}
-	h := &worldsTestHarness{dir: dir, stores: map[string]*blob.Memory{}}
+	h := &worldsTestHarness{dir: dir, config: config, certs: certs, stores: map[string]*blob.Memory{}}
 	if newStore == nil {
 		newStore = func(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
 			h.storesMu.Lock()

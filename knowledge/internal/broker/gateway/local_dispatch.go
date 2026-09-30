@@ -49,7 +49,7 @@ func CheckLocal(worlds *core.WorldRegistry, local LocalWorlds) error {
 		if local == nil {
 			return fmt.Errorf("world %q is local but no knowledge server runs in this process", w.Name)
 		}
-		if authority := fetch.AuthorityHostname(resolveWorldAddress(w)); !local.Routes(authority) {
+		if authority := w.Authority(); !local.Routes(authority) {
 			return fmt.Errorf("local world %q: the knowledge server in this process does not serve %q", w.Name, authority)
 		}
 	}
@@ -71,7 +71,7 @@ func (c *Composite) exchange(ctx context.Context, worldName string, encode func(
 	if err != nil {
 		return fetch.Result{}, err
 	}
-	resp, err := c.local.Exchange(ctx, fetch.AuthorityHostname(resolveWorldAddress(&w)), req)
+	resp, err := c.local.Exchange(ctx, w.Authority(), req)
 	if err != nil {
 		return fetch.Result{}, err
 	}

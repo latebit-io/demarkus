@@ -46,7 +46,7 @@ func (g *Gateway) worldSource(worldName, path string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return links.NodeURL(resolveWorldAddress(&world), path), true
+	return links.NodeURL(world.Address(), path), true
 }
 
 // toolWriter refuses a caller who may not write to the world, in words. The

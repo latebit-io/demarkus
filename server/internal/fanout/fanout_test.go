@@ -482,6 +482,30 @@ func TestSweepEndsRevokedGroups(t *testing.T) {
 	}
 }
 
+// A credential that lapses ends its own watch with unauthorized at its
+// cursor; the group's other watchers keep going.
+func TestLapsedCredentialEndsItsWatchAlone(t *testing.T) {
+	hub := changefeed.New("w", 0)
+	f := newFanout(t, hub, Config{})
+	ctx, cancel := context.WithDeadlineCause(context.Background(), time.Now().Add(150*time.Millisecond), auth.ErrTokenExpired)
+	defer cancel()
+	lapsing := serveIn(ctx, t, f, Request{Scope: "/"})
+	kept := serve(t, f, Request{Scope: "/"})
+	lapsing.ack(t)
+	kept.ack(t)
+	publish(hub, "/x.md")
+	lapsing.event(t)
+	kept.event(t)
+	last := lapsing.terminal(t)
+	if c, _ := last.Cursor(); last.Status != protocol.StatusUnauthorized || c != hub.Head() {
+		t.Fatalf("end = %+v, want unauthorized at %v", last, hub.Head())
+	}
+	publish(hub, "/y.md")
+	if got := kept.event(t).Path; got != "/y.md" {
+		t.Fatalf("kept watcher saw %s", got)
+	}
+}
+
 // A closed hub ends every watcher with closing at its own cursor.
 func TestHubCloseEndsWatchersWithClosing(t *testing.T) {
 	hub := changefeed.New("w", 0)

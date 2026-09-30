@@ -23,6 +23,11 @@ server:
   # the 5 s poll. Reached only through the headless peers Service and
   # admitted only from this chart's pods by the NetworkPolicy.
   peerPort: 6310
+  # The bearer listener (UDP, ALPN mark): clients signed in at the IdP put
+  # their bearer in the auth field instead of a capability token, and the
+  # broker admits every request (ADR 0033). The NetworkPolicy admits it from
+  # anywhere; the Service carries it on service.bearerPort.
+  bearerPort: 8443
 
 # Static worlds; empty is valid only with provisioning enabled below, or when
 # the umbrella supplies global.worlds. An existing empty bucket is initialized
@@ -337,6 +342,9 @@ ingress:
 
 service:
   type: ClusterIP
+  # Service port of the bearer listener: 443 is the UDP port networks that
+  # block 6309 still pass.
+  bearerPort: 443
   annotations: {}
   loadBalancerIP: ""
   externalTrafficPolicy: Local

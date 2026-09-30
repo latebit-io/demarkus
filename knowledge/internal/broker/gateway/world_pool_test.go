@@ -8,43 +8,6 @@ import (
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 )
 
-func TestResolveWorldAddressDefaultDNSPattern(t *testing.T) {
-	w := &core.WorldConfig{Name: "team-a", Namespace: "team-a"}
-	got := resolveWorldAddress(w)
-	want := "team-a.team-a.svc.cluster.local:6309"
-	if got != want {
-		t.Errorf("resolveWorldAddress = %q, want %q", got, want)
-	}
-}
-
-func TestResolveWorldAddressNamespaceDiffersFromName(t *testing.T) {
-	// When operators deploy multiple worlds in a shared
-	// namespace, the chart's default Service-DNS form still
-	// applies because the Service name equals the world's Name.
-	w := &core.WorldConfig{Name: "team-b", Namespace: "shared-worlds"}
-	got := resolveWorldAddress(w)
-	want := "team-b.shared-worlds.svc.cluster.local:6309"
-	if got != want {
-		t.Errorf("resolveWorldAddress = %q, want %q", got, want)
-	}
-}
-
-func TestResolveWorldAddressInternalAddressOverride(t *testing.T) {
-	// The plan v3 escape hatch: when an operator's Service name
-	// diverges from the world's Name (rare; the chart keeps them
-	// aligned by default), InternalAddress wins outright.
-	w := &core.WorldConfig{
-		Name:            "team-c",
-		Namespace:       "team-c",
-		InternalAddress: "team-c-mark.platform:7000",
-	}
-	got := resolveWorldAddress(w)
-	want := "team-c-mark.platform:7000"
-	if got != want {
-		t.Errorf("resolveWorldAddress with override = %q, want %q", got, want)
-	}
-}
-
 func TestWorldPoolClientForUnknownWorldReturnsErrWorldNotFound(t *testing.T) {
 	cfg := &core.Config{Worlds: []core.WorldConfig{{Name: "team-a", Namespace: "team-a"}}}
 	pool := NewWorldPool(cfg.Registry(), fetch.Options{})

@@ -13,6 +13,7 @@ demarkus-knowledge-server installed as release {{ .Release.Name | quote }} in na
 == Listeners ==
   worlds (QUIC): {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.udpPort }}
   broker (HTTP): {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.httpPort }}
+  bearers (QUIC): {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.bearerPort }}, a world's authority as SNI
 {{- if .Values.ingress.enabled }}
   management:    https://{{ .Values.ingress.host }}/
   knowledge MCP: {{ include "demarkus-knowledge-server.knowledgeGatewayURL" . }}/mcp

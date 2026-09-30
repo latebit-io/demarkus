@@ -7,7 +7,6 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
-	"github.com/latebit-io/demarkus/protocol"
 )
 
 // WorldDispatcher is how the MCP tool handlers reach worlds; tests inject a
@@ -42,7 +41,7 @@ type pooledWorld struct {
 
 // WorldPool keeps one lazily created *fetch.Client (with its own QUIC
 // connection pool) per world, resolved to a cluster-internal host:port
-// via resolveWorldAddress; the mark:// scheme is implicit.
+// via WorldConfig.Address; the mark:// scheme is implicit.
 type WorldPool struct {
 	worlds  *core.WorldRegistry
 	mu      sync.Mutex
@@ -73,15 +72,6 @@ func (p *WorldPool) drop(worldName string) {
 	if ok {
 		pooled.client.Close()
 	}
-}
-
-// resolveWorldAddress: InternalAddress wins when set, else the Kubernetes
-// Service DNS name on the protocol's default port.
-func resolveWorldAddress(w *core.WorldConfig) string {
-	if w.InternalAddress != "" {
-		return w.InternalAddress
-	}
-	return fmt.Sprintf("%s.%s.svc.cluster.local:%d", w.Name, w.Namespace, protocol.DefaultPort)
 }
 
 // Every verb is a byte for byte proxy: the world name in r.Host is swapped for
@@ -184,7 +174,7 @@ func (p *WorldPool) clientFor(worldName string) (*fetch.Client, string, error) {
 	if !ok {
 		return nil, "", &errWorldNotFound{worldName: worldName}
 	}
-	host := resolveWorldAddress(&w)
+	host := w.Address()
 	opts := p.opts
 	if w.DialAddress != "" {
 		// ServerName stays unset: fetch derives SNI from the authority

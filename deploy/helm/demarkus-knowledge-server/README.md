@@ -220,9 +220,10 @@ in the rendered manifests names it.
 
 ## Broker and MCP gateways
 
-The process listens twice: UDP `server.udpPort` for QUIC (direct clients
-with capability tokens, the agent, other clusters) and TCP `server.httpPort`
-for plain HTTP behind the Ingress. One mux serves the management API (OIDC
+The process listens three times: UDP `server.udpPort` for QUIC (direct
+clients with capability tokens, the agent, other clusters), UDP
+`server.bearerPort` for QUIC clients signed in at the IdP (below), and TCP
+`server.httpPort` for plain HTTP behind the Ingress. One mux serves the management API (OIDC
 login, RFC 8628 device flow, RFC 7591 registration, `/me/install`, the
 discovery documents) and both MCP gateways; the gateway a request reaches
 is chosen by its `Host`: `broker.memory.publicURL`'s hostname selects the
@@ -262,6 +263,26 @@ process, with no token. Static worlds carry `profile: knowledge`; a
 `profile: memory` world names its single tenant in `allow`. Worlds served
 in another cluster go under `broker.remoteWorlds` and are read over QUIC
 (`broker.worldDialer`), never written.
+
+### Bearer listener
+
+`server.bearerPort` (8443 in the pod, `service.bearerPort` 443 on the
+Service) serves the mark protocol to clients that hold an IdP or broker
+token instead of a capability token: the token goes in the request's `auth`
+field, and the broker admits each request by the same rules as the
+gateways (ADR 0033 on the soul). Every verb needs a token; reads pass the
+org gate, writes need the world's `allow` and land in its `writeScope`, a
+memory world admits its tenant alone, and a token bound to one gateway
+works on that gateway's worlds. A watch ends with `unauthorized` when its
+token expires; the client resumes from the cursor with a fresh one. The
+connection's SNI is the world's authority, as on 6309, so the certificate
+and DNS are the ones the worlds already have:
+
+```bash
+demarkus -auth "$TOKEN" mark://team-a.example.com:443/index.md
+```
+
+Paths guarded by a `read` capability token stay closed on this listener.
 
 Provisioning (`provisioning.mode: allowlisted | open`) creates a memory
 tenant on first arrival: bucket `gs://<bucketPrefix><slug>` in
@@ -308,9 +329,11 @@ gateway sessions.
 
 Health endpoints listen on the private pod port only. No health Service is
 created. NetworkPolicy admits the HTTP listener from the Ingress controller
-namespace only, and UDP ingress only from the configured agent namespace and
-pod selector and optional `externalCIDRs`. A LoadBalancer remains blocked
-from direct clients until those CIDRs are set. Egress permits cluster DNS,
+namespace only, UDP ingress on the QUIC port only from the configured agent
+namespace and pod selector and optional `externalCIDRs`, and the bearer port
+from any source, since every request there carries a verified token. A
+LoadBalancer remains blocked from capability token clients until those CIDRs
+are set. Egress permits cluster DNS,
 TCP 443 (GCS, the OIDC issuer, the API server), GKE metadata-server
 endpoints, and the UDP ports of `broker.remoteWorlds`.
 

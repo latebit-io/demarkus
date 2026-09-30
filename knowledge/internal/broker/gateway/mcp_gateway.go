@@ -114,7 +114,7 @@ func (g *Gateway) graphFor(ctx context.Context) (*gatewayGraph, error) {
 		return nil, core.ErrNotAuthorized
 	}
 	identity := core.IdentityKey(g.deps.Issuer, claims.Subject)
-	address := resolveWorldAddress(&w)
+	address := w.Address()
 	now := g.deps.Clock()
 	g.tenantGraphsMu.Lock()
 	defer g.tenantGraphsMu.Unlock()

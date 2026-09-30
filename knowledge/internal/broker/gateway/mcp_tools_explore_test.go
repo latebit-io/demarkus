@@ -207,7 +207,7 @@ func TestHandleMarkExploreConfirmedAbsenceClearsAdjacency(t *testing.T) {
 		t.Fatal("team-a world missing")
 	}
 	g.knowledgeGraph.graphStore.ObserveDocument("mark://team-a/missing.md", graph.FetchResult{
-		Source: links.NodeURL(resolveWorldAddress(&world), "/missing.md"), Status: "ok", Body: "# Old\n\n[target](/target.md)",
+		Source: links.NodeURL(world.Address(), "/missing.md"), Status: "ok", Body: "# Old\n\n[target](/target.md)",
 		Metadata: map[string]string{"version": "1"},
 	})
 	res, err := g.handleMarkExplore(withAliceClaims(context.Background()), callToolReq("mark_explore", map[string]any{

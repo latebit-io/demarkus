@@ -1,9 +1,13 @@
 package core
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // ErrNotAuthorized means the identity matched no world, or the addressed world's
@@ -104,6 +108,50 @@ func TenantWorldFor(reg *WorldView, issuer string, claims *Claims) (WorldConfig,
 		return WorldConfig{}, ErrNotAuthorized
 	}
 	return *match, nil
+}
+
+// ErrBoundElsewhere refuses a token bound by RFC 8707 to another resource.
+var ErrBoundElsewhere = errors.New("broker: token is bound to another resource")
+
+// BearerCheck is the one admission of a bearer, shared by the MCP gateways
+// and the bearer listener: the verifier and the broker wide org gate.
+type BearerCheck struct {
+	Verifier     Verifier
+	AllowDomains []string
+}
+
+// Authenticate verifies raw for resource: the verifier's error, then
+// ErrBoundElsewhere, then GateIdentity's. The claims come back on a refusal
+// too, for the caller's log; on success their email is canonical.
+func (c BearerCheck) Authenticate(ctx context.Context, resource, raw string) (Claims, error) {
+	claims, err := c.Verifier.VerifyIDToken(ctx, raw)
+	if err != nil {
+		return claims, err
+	}
+	if !ResourceAllows(claims.Resource, resource) {
+		return claims, ErrBoundElsewhere
+	}
+	err = GateIdentity(c.AllowDomains, &claims)
+	return claims, err
+}
+
+// WriteGrant is what claims may write in w: the canonical email as the
+// audit label and w's write scope, or why nothing. The MCP write gate and
+// the bearer gate both decide here; the email checks repeat GateIdentity's.
+func WriteGrant(w *WorldConfig, claims *Claims) (protocol.Grant, error) {
+	if !claims.EmailVerified {
+		return protocol.Grant{}, errors.New("identity email is not verified")
+	}
+	// A copy: the claims may hang off a context concurrent calls share.
+	canonical := *claims
+	canonical.Email = CanonicalEmail(claims.Email)
+	if canonical.Email == "" {
+		return protocol.Grant{}, errors.New("identity has no email claim")
+	}
+	if !WorldAllows(&w.Allow, &canonical) {
+		return protocol.Grant{}, fmt.Errorf("write access denied for world %q", w.Name)
+	}
+	return protocol.Grant{Label: canonical.Email, Paths: w.WriteScope.Paths, Expires: claims.Expiry}, nil
 }
 
 // ResourceAllows reports whether a token may be used at resource: an

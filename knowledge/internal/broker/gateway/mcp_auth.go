@@ -9,10 +9,11 @@ import (
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 )
 
-// gatewayAuth is the gateway's bearer gate: the same verification as
-// requireAuth, but the 401 carries the RFC 6750 and RFC 9728 challenge a
-// compliant MCP client discovers the OAuth flow from.
+// gatewayAuth is the gateway's bearer gate: the bearer check every surface
+// shares, with the RFC 6750 and RFC 9728 challenge a compliant MCP client
+// discovers the OAuth flow from.
 func (g *Gateway) gatewayAuth(next http.Handler) http.Handler {
+	check := core.BearerCheck{Verifier: g.deps.Verifier, AllowDomains: g.deps.AllowDomains}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw := core.BearerToken(r)
 		if raw == "" {
@@ -20,20 +21,16 @@ func (g *Gateway) gatewayAuth(next http.Handler) http.Handler {
 			g.writeMCPAuthChallenge(w, "invalid_request", "Authorization: Bearer <id_token> required")
 			return
 		}
-		claims, err := g.deps.Verifier.VerifyIDToken(r.Context(), raw)
-		if err != nil {
-			g.deps.Log.WarnContext(r.Context(), "broker: mcp gateway id_token verification failed", "err", err)
-			g.writeMCPAuthChallenge(w, "invalid_token", "invalid bearer token")
-			return
-		}
-		if !core.ResourceAllows(claims.Resource, g.resource) {
+		claims, err := check.Authenticate(r.Context(), g.resource, raw)
+		switch {
+		case err == nil:
+			next.ServeHTTP(w, r.WithContext(core.CtxWithClaims(r.Context(), &claims)))
+		case errors.Is(err, core.ErrBoundElsewhere):
 			// RFC 8707: a token bound to the other gateway's resource stops here.
 			g.deps.Log.InfoContext(r.Context(), "broker: mcp gateway token bound to another resource",
 				"subject", core.HashSubject(claims.Subject), "resource", claims.Resource)
 			g.writeMCPAuthChallenge(w, "invalid_token", "token is bound to another resource")
-			return
-		}
-		if err := core.GateIdentity(g.deps.AllowDomains, &claims); err != nil {
+		case errors.Is(err, core.ErrIdentityUnverified), errors.Is(err, core.ErrIdentityDomain), errors.Is(err, core.ErrIdentityNoEmail):
 			g.deps.Log.InfoContext(r.Context(), "broker: mcp gateway identity rejected", "err", err,
 				"subject", core.HashSubject(claims.Subject), "hd", claims.HD)
 			description := strings.TrimPrefix(err.Error(), "broker: ")
@@ -42,9 +39,10 @@ func (g *Gateway) gatewayAuth(next http.Handler) http.Handler {
 				description = "invalid bearer token"
 			}
 			g.writeMCPAuthChallenge(w, "invalid_token", description)
-			return
+		default:
+			g.deps.Log.WarnContext(r.Context(), "broker: mcp gateway id_token verification failed", "err", err)
+			g.writeMCPAuthChallenge(w, "invalid_token", "invalid bearer token")
 		}
-		next.ServeHTTP(w, r.WithContext(core.CtxWithClaims(r.Context(), &claims)))
 	})
 }
 

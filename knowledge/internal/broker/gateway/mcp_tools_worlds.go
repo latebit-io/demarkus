@@ -31,7 +31,7 @@ func (g *Gateway) handleMarkWorlds(ctx context.Context, _ mcp.CallToolRequest) (
 		for j := range worlds {
 			w := &worlds[j]
 			fmt.Fprintf(&b, "| %s | %s | mark://%s | %s |\n",
-				w.Name, w.PublicURL, resolveWorldAddress(w), yesNo(core.WorldAllows(&w.Allow, claims)))
+				w.Name, w.PublicURL, w.Address(), yesNo(core.WorldAllows(&w.Allow, claims)))
 		}
 	}
 	return mcp.NewToolResultText(b.String()), nil

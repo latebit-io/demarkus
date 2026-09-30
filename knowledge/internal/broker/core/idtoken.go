@@ -195,6 +195,9 @@ func (s *IDTokenSigner) VerifyIDToken(raw, brokerURL string, audiences []string,
 	if !c.Audience.Contains(brokerURL) {
 		claims.Resource = c.Audience[0]
 	}
+	if c.Expiry != nil {
+		claims.Expiry = c.Expiry.Time()
+	}
 	return claims, nil
 }
 

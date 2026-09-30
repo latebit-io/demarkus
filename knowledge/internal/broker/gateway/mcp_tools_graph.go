@@ -109,7 +109,7 @@ func (g *Gateway) translateSeedURLs(nodes []graphstore.StoredNode, edges []graph
 	for i := range worlds {
 		// CanonicalURL normalizes an empty path to "/"; the prefix match wants a
 		// bare authority, so trim it back off.
-		addr := strings.TrimSuffix(links.CanonicalURL("mark://"+resolveWorldAddress(&worlds[i])), "/")
+		addr := strings.TrimSuffix(links.CanonicalURL("mark://"+worlds[i].Address()), "/")
 		byAddr[addr] = "mark://" + worlds[i].Name
 	}
 	translate := func(rawURL string) string {

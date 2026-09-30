@@ -18,6 +18,27 @@ tests:
       - failedTemplate:
           errorMessage: server.healthPort must differ from server.udpPort
 
+  - it: rejects a port outside 1 to 65535
+    set:
+      service.bearerPort: 70000
+    asserts:
+      - failedTemplate:
+          errorMessage: service.bearerPort must be between 1 and 65535
+
+  - it: rejects a bearer port colliding with a UDP listener
+    set:
+      server.bearerPort: 6310
+    asserts:
+      - failedTemplate:
+          errorMessage: server.bearerPort must differ from server.udpPort and server.peerPort
+
+  - it: rejects a bearer Service port colliding with the QUIC port
+    set:
+      service.bearerPort: 6309
+    asserts:
+      - failedTemplate:
+          errorMessage: service.bearerPort must differ from server.udpPort
+
   - it: requires the Ingress controller namespace when NetworkPolicy is enabled
     set:
       networkPolicy.ingressFromNamespace: ""

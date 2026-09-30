@@ -43,6 +43,11 @@ spec:
       ports:
         - protocol: UDP
           port: {{ .Values.server.peerPort }}
+    # The bearer listener is the public door: every request carries a
+    # bearer the broker verifies, so any source may reach it.
+    - ports:
+        - protocol: UDP
+          port: {{ .Values.server.bearerPort }}
   egress:
     - to:
         - namespaceSelector:

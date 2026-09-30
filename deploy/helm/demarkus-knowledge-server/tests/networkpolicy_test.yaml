@@ -20,7 +20,7 @@ tests:
           value: [Ingress, Egress]
       - lengthEqual:
           path: spec.ingress
-          count: 3
+          count: 4
       - equal:
           path: spec.ingress[0].ports[0]
           value:
@@ -42,6 +42,16 @@ tests:
       - lengthEqual:
           path: spec.ingress[0].from
           count: 1
+
+  - it: admits the bearer listener from any source
+    asserts:
+      - notExists:
+          path: spec.ingress[3].from
+      - equal:
+          path: spec.ingress[3].ports
+          value:
+            - protocol: UDP
+              port: 8443
 
   - it: admits peer hints only from this chart's own pods
     asserts:

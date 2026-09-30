@@ -17,6 +17,7 @@ import (
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/gateway"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/oauthsrv"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/storage"
+	"github.com/latebit-io/demarkus/protocol"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -36,10 +37,12 @@ type RunOptions struct {
 }
 
 // LocalServer is the knowledge server the composed binary hosts: it
-// dispatches its worlds in process and applies the provisioner's worlds.
+// dispatches its worlds in process, applies the provisioner's worlds and
+// opens the bearer listener the broker's gate admits requests on.
 type LocalServer interface {
 	gateway.LocalWorlds
 	storage.WorldsApplier
+	OpenBearerListener(address string, gates func(authority string) (protocol.Gate, error)) error
 }
 
 // Broker is an opened broker: config, auth machinery and the listeners
@@ -106,6 +109,11 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 	}
 
 	if err := gateway.CheckLocal(cfg.Registry(), opts.LocalWorlds); err != nil {
+		closeBuckets()
+		return nil, err
+	}
+	if err := openBearerListener(cfg, opts.LocalWorlds, deps.Verifier, log); err != nil {
+		closeBuckets()
 		return nil, err
 	}
 	pool := gateway.NewWorldPool(cfg.Registry(), fetch.Options{Insecure: cfg.WorldDialer.InsecureSkipVerify})
@@ -189,6 +197,18 @@ func (b *Broker) Close() {
 		b.pool.Close()
 		b.closeBucket()
 	})
+}
+
+// openBearerListener has the server in this process listen for identity
+// bearers on server.bearerAddr, admitted by the broker's gate.
+func openBearerListener(cfg *core.Config, local LocalServer, verifier core.Verifier, log *slog.Logger) error {
+	if cfg.Server.BearerAddr == "" {
+		return nil
+	}
+	if local == nil {
+		return errors.New("server.bearerAddr needs a knowledge server in this process")
+	}
+	return local.OpenBearerListener(cfg.Server.BearerAddr, core.NewBearerGate(cfg, verifier, log).For)
 }
 
 // newHardenedServer is the one timeout policy for every broker listener:

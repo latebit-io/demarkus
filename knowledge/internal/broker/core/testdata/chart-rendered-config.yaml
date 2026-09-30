@@ -1,5 +1,6 @@
 server:
   addr: ":8080"
+  bearerAddr: ":8443"
   cookieKeySecret: "knowledge-cookie-key"
   stateTTL: "5m"
   brokerNamespace: "demarkus"

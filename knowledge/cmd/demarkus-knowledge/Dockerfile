@@ -9,4 +9,5 @@ USER 65532:65532
 EXPOSE 6309/udp
 EXPOSE 8080/tcp
 EXPOSE 8081/tcp
+EXPOSE 8443/udp
 ENTRYPOINT ["/demarkus-knowledge"]

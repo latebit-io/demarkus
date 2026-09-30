@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/latebit-io/demarkus/client/marktools"
@@ -14,25 +13,13 @@ import (
 
 // writeGrantFor is the grant claims earn on the world, or why they may not
 // write to it. It runs before the dispatcher, so an unauthorized caller never
-// reaches a world. The email check repeats the bearer layer's on purpose.
+// reaches a world.
 func (g *Gateway) writeGrantFor(claims *core.Claims, worldName string) (protocol.Grant, error) {
-	if !claims.EmailVerified {
-		return protocol.Grant{}, errors.New("identity email is not verified")
-	}
-	// A copy: the claims hang off a context concurrent tool calls share.
-	canonical := *claims
-	canonical.Email = core.CanonicalEmail(claims.Email)
-	if canonical.Email == "" {
-		return protocol.Grant{}, errors.New("identity has no email claim")
-	}
 	worldCfg := core.LookupWorld(g.deps.Worlds, worldName)
 	if worldCfg == nil {
 		return protocol.Grant{}, fmt.Errorf("world %q is not configured", worldName)
 	}
-	if !core.WorldAllows(&worldCfg.Allow, &canonical) {
-		return protocol.Grant{}, fmt.Errorf("write access denied for world %q", worldName)
-	}
-	return protocol.Grant{Label: canonical.Email, Paths: worldCfg.WriteScope.Paths}, nil
+	return core.WriteGrant(worldCfg, claims)
 }
 
 // The write tools bind their arguments through mcpbind; marktools checks,

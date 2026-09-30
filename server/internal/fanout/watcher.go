@@ -167,8 +167,8 @@ func (w *watcher) detach() {
 }
 
 // pump writes events and heartbeats to out until the watch ends, and
-// returns the terminal block to write. A write that fails means the peer
-// is gone: an empty end.
+// returns the terminal block to write. A write that fails, or ctx ending
+// without an auth verdict as its cause, means the peer is gone: an empty end.
 func (w *watcher) pump(ctx context.Context, out io.Writer) end {
 	if w.backlog != nil {
 		if e := w.catchUp(); e.status != "" {
@@ -194,6 +194,10 @@ func (w *watcher) pump(ctx context.Context, out io.Writer) end {
 		select {
 		case <-wait:
 		case <-ctx.Done():
+			// A credential that lapses mid-watch ends it with its verdict.
+			if cause := context.Cause(ctx); auth.IsDenial(cause) {
+				return end{status: auth.DenialStatus(cause), cursor: w.cursor()}
+			}
 			return end{}
 		}
 	}
