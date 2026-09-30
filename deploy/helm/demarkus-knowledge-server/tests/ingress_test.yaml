@@ -81,6 +81,41 @@ tests:
           path: spec.rules
           count: 1
 
+  - it: requires each Ingress host to be its gateway's hostname
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.memory.host: mem.example.com
+      broker.memory.publicURL: https://memory.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress.memory.host must be the hostname of broker.memory.publicURL; the mux selects the memory gateway by Host
+
+  - it: requires the knowledge gateway host to be routed
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      broker.mcp.publicURL: https://mcp.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: the knowledge gateway's hostname (broker.mcp.publicURL, else broker.publicURL) must be ingress.host or ingress.mcp.host
+
+  - it: accepts the gateway hosts on the Ingress case-insensitively
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: Broker.example.com
+      ingress.mcp.host: MCP.example.com
+      ingress.memory.host: memory.example.com
+      broker.mcp.publicURL: https://mcp.example.com
+      broker.memory.publicURL: https://Memory.example.com
+    asserts:
+      - lengthEqual:
+          path: spec.rules
+          count: 3
+
   - it: requires a memory host once the memory gateway is configured
     template: ingress.yaml
     set:

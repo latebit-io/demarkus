@@ -532,14 +532,17 @@ func (p *Provisioner) writeWorldsFragment(ctx context.Context, registry *tenantR
 }
 
 // pushWorlds hands the fragment the Secret now holds to the server in this
-// process, ahead of the mount. A failed push is logged: the mount still converges.
-func (p *Provisioner) pushWorlds(fragment []byte) {
+// process, ahead of the mount, and reports whether it took. A failed push is
+// logged: the mount still converges.
+func (p *Provisioner) pushWorlds(fragment []byte) bool {
 	if p.worlds == nil {
-		return
+		return true
 	}
 	if err := p.worlds.ApplyWorldsFragment(fragment); err != nil {
 		p.log.Warn("in-process worlds push failed; the mounted fragment will catch up", "err", err)
+		return false
 	}
+	return true
 }
 
 // worldsFromRegistry renders the broker-side dynamic world set.
@@ -590,8 +593,11 @@ func (p *Provisioner) SyncRegistry(ctx context.Context) error {
 		// lastSync stays behind so the next tick retries the converge.
 		return fmt.Errorf("converge worlds fragment: %w", err)
 	}
-	p.pushWorlds(fragment)
-	p.lastSync = payload
+	// A refused push leaves lastSync behind so the next tick pushes again;
+	// the Secret projection converges the world meanwhile.
+	if p.pushWorlds(fragment) {
+		p.lastSync = payload
+	}
 	return nil
 }
 

@@ -1174,6 +1174,19 @@ migrate() {
 LIBRARY_SERVICE="demarkus-library"
 LIBRARY_CONFIG_DIR="/etc/demarkus-library"
 LIBRARY_REPO="latebit-io/demarkus-library"
+# Retired single-host broker installs (both names it shipped under): no
+# longer installed or updated, still torn down by uninstall.
+LEGACY_BROKER_SERVICES="demarkus-knowledge-broker demarkus-broker"
+
+# legacy_broker_units prints the retired broker units present on this host.
+legacy_broker_units() {
+  local svc
+  for svc in $LEGACY_BROKER_SERVICES; do
+    if [ "$PLATFORM" = "linux" ] && $SUDO test -f "${SYSTEMD_DIR}/${svc}.service"; then
+      printf '%s\n' "$svc"
+    fi
+  done
+}
 
 # fetch_library_binary downloads, verifies and installs demarkus-library,
 # leaving the resolved version in _LIBRARY_VERSION. Shared with the update path
@@ -1907,6 +1920,11 @@ do_update() {
     fi
   fi
 
+  local legacy
+  for legacy in $(legacy_broker_units); do
+    log_warn "The single-host broker (${legacy}) is retired and no longer updated; the knowledge system now runs on Kubernetes. 'demarkus-install uninstall' removes it."
+  done
+
   if [ "$current_version" = "$version" ]; then
     log_info "Server already at v${version}; checking stack components."
     # _TMPDIR, not a local: fetch_library_binary exits on a fatal download or
@@ -2254,6 +2272,17 @@ do_uninstall() {
       $SUDO systemctl disable "$LIBRARY_SERVICE" 2>/dev/null || true
       remove_path "${SYSTEMD_DIR}/${LIBRARY_SERVICE}.service" && log_info "Removed ${LIBRARY_SERVICE} service"
     fi
+    # A retired single-host broker: stop it and drop its unit, binary, config
+    # (OIDC client secret) and state so nothing keeps running unpatched.
+    local legacy
+    for legacy in $(legacy_broker_units); do
+      $SUDO systemctl stop "$legacy" 2>/dev/null || true
+      $SUDO systemctl disable "$legacy" 2>/dev/null || true
+      remove_path "${SYSTEMD_DIR}/${legacy}.service" && log_info "Removed retired ${legacy} service"
+      remove_path "${INSTALL_DIR}/${legacy}"
+      remove_path "/etc/${legacy}"
+      remove_path "/var/lib/${legacy}"
+    done
     $SUDO systemctl daemon-reload 2>/dev/null || true
     log_info "Removed systemd service"
   elif [ "$PLATFORM" = "darwin" ]; then
@@ -2296,9 +2325,9 @@ do_uninstall() {
     fi
   fi
 
-  # Remove system users (Linux only).
+  # Remove system users (Linux only), the retired broker's included.
   if [ "$PLATFORM" = "linux" ]; then
-    for u in "$LIBRARY_SERVICE" "$SERVICE_NAME"; do
+    for u in $LEGACY_BROKER_SERVICES "$LIBRARY_SERVICE" "$SERVICE_NAME"; do
       if id "$u" >/dev/null 2>&1; then
         if $SUDO userdel "$u" 2>/dev/null; then
           log_info "Removed system user '${u}'"

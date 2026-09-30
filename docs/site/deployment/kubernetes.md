@@ -47,9 +47,8 @@ worlds:
     bucket:
       url: gs://acme-world
       worldID: 6f1c9c2e-6e2a-4b7d-9f1e-3f2a1b4c5d6e
-    tokenSecret:
-      name: acme-world-tokens
-      key: tokens.toml
+    allow:
+      domains: ["example.com"]
 tls:
   certManager:
     enabled: true
@@ -59,6 +58,20 @@ serviceAccount:
     gsa: demarkus-knowledge@project.iam.gserviceaccount.com
 networkPolicy:
   allowUnrestrictedHTTPS: true
+broker:
+  publicURL: https://broker.example.com
+  oidc:
+    issuer: https://accounts.google.com
+    clientID: YOUR_CLIENT_ID
+    existingSecretRef:
+      name: broker-oidc
+    redirectURL: https://broker.example.com/auth/callback
+ingress:
+  enabled: true
+  host: broker.example.com
+  tls:
+    certManager:
+      enabled: true
 ```
 
 See `deploy/helm/demarkus-knowledge-server/README.md` for the full surface (limits, world defaults, probes, service, spread).

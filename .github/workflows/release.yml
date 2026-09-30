@@ -261,7 +261,7 @@ jobs:
     if: always() && needs.test-knowledge.result == 'success'
     runs-on: ubuntu-latest
     outputs:
-      new_version: ${{ steps.semver.outputs.version }}
+      new_version: ${{ steps.check.outputs.version }}
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -281,13 +281,23 @@ jobs:
       - name: Check if version changed
         id: check
         run: |
-          TAG="knowledge/v${{ steps.semver.outputs.version }}"
+          VERSION="${{ steps.semver.outputs.version }}"
+          # The demarkus-knowledge-server chart published on server/v until
+          # the broker fold, so the first knowledge/v release must sort above
+          # the last server/v chart or `helm install` without --version keeps
+          # picking the old one: seed it as the next minor of that tag.
+          if [ -z "$(git tag --list 'knowledge/v*')" ]; then
+            last_server="$(git tag --list 'server/v*' --sort=-v:refname | head -n1 | sed 's#^server/v##')"
+            VERSION="$(printf '%s' "$last_server" | cut -d. -f1).$(( $(printf '%s' "$last_server" | cut -d. -f2) + 1 )).0"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          TAG="knowledge/v${VERSION}"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           else
             echo "should_release=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "Version: ${{ steps.semver.outputs.version }}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
+          echo "Version: ${VERSION}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
 
   # The umbrella chart releases on its own stream (knowledge-system/v). It
   # vendors the two local charts, so any of their changes bumps it too;

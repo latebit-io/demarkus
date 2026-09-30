@@ -535,6 +535,14 @@ as such instead of a CrashLoopBackOff.
 {{- if and $b.memory.publicURL (empty .Values.ingress.memory.host) -}}
 {{- fail "ingress.memory.host is required when the memory gateway is configured and the Ingress is enabled" -}}
 {{- end -}}
+{{- /* The mux picks a gateway by Host, so each Ingress host must be the
+       hostname its gateway URL carries or requests land on the wrong one. */ -}}
+{{- if and $b.memory.publicURL (ne (lower .Values.ingress.memory.host) (include "demarkus-knowledge-server.urlHost" $b.memory.publicURL)) -}}
+{{- fail "ingress.memory.host must be the hostname of broker.memory.publicURL; the mux selects the memory gateway by Host" -}}
+{{- end -}}
+{{- if not (has $knowledgeHost (list (lower .Values.ingress.host) (lower (default "" .Values.ingress.mcp.host)))) -}}
+{{- fail "the knowledge gateway's hostname (broker.mcp.publicURL, else broker.publicURL) must be ingress.host or ingress.mcp.host" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

@@ -960,4 +960,7 @@ func TestProvisionerPushesWorldsInProcess(t *testing.T) {
 	if err := q.SyncRegistry(context.Background()); err != nil {
 		t.Fatalf("SyncRegistry with a refusing server: %v", err)
 	}
+	if q.lastSync != [32]byte{} {
+		t.Fatal("a refused push marked the registry payload synced; the next tick would not retry it")
+	}
 }
