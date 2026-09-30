@@ -2708,6 +2708,37 @@ func testFetchHashLookupFailure(t *testing.T, newBackend backendFactory) {
 	}
 }
 
+func TestGrantAuthorizesWrite(t *testing.T) { forEachBackend(t, testGrantAuthorizesWrite) }
+
+// A grant on the context decides a write alone: no token store, no token.
+func testGrantAuthorizesWrite(t *testing.T, newBackend backendFactory) {
+	b := newBackend(t)
+	h := mustNew(Config{Store: b.Store, Logger: discardLogger})
+	granted := protocol.WithGrant(context.Background(), protocol.Grant{Label: "alice@example.com", Paths: []string{"/notes/**"}})
+	tests := []struct {
+		name, request string
+		ctx           context.Context
+		want          string
+	}{
+		{"no grant and no token store", "PUBLISH /notes/a.md\n\n# A\n", context.Background(), protocol.StatusNotPermitted},
+		{"grant in scope", "PUBLISH /notes/a.md\n\n# A\n", granted, protocol.StatusCreated},
+		{"grant out of scope", "PUBLISH /private/a.md\n\n# A\n", granted, protocol.StatusNotPermitted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := newMockStream(tt.request)
+			h.HandleStream(tt.ctx, stream)
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if resp.Status != tt.want {
+				t.Errorf("status = %q, want %q (body %q)", resp.Status, tt.want, resp.Body)
+			}
+		})
+	}
+}
+
 func TestReadOnlyMode(t *testing.T) { forEachBackend(t, testReadOnlyMode) }
 
 func testReadOnlyMode(t *testing.T, newBackend backendFactory) {

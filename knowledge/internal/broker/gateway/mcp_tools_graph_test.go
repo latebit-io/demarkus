@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
@@ -309,7 +308,7 @@ func TestHandleMarkIndexBoundsOnDirectoryCycle(t *testing.T) {
 		Namespace:    "hub",
 		TokensSecret: "hub-tokens",
 		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
-		DefaultToken: core.TokenScope{
+		WriteScope: core.WriteScope{
 			Paths: []string{"/**"},
 		},
 	})
@@ -449,11 +448,10 @@ func TestHandleMarkGraphPublishForwardsThroughWriteAuth(t *testing.T) {
 	cfg := mcpTestConfig()
 	var publishedBody string
 	d := &fakeDispatcher{
-		PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
-			body, token := r.Body, r.Token
-			publishedBody = body
-			if token == "" {
-				t.Error("graph publish dispatched without a publish token")
+		PublishFn: func(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+			publishedBody = r.Body
+			if _, ok := protocol.GrantFrom(ctx); !ok {
+				t.Error("graph publish dispatched without a write grant")
 			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
@@ -489,19 +487,16 @@ const indexManifestBody = "# Agent Manifest\n\nThis world accepts index publicat
 
 func TestHandleMarkIndexHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
-	cfg.Server.MCP.FirstMintMaxAttempts = 3
-	cfg.Server.MCP.FirstMintInitialBackoff = time.Nanosecond
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
 		Name:         "hub",
 		Namespace:    "hub",
 		TokensSecret: "hub-tokens",
 		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
-		DefaultToken: core.TokenScope{
+		WriteScope: core.WriteScope{
 			Paths: []string{"/**"},
 		},
 	})
 	var publishCalled atomic.Bool
-	var publishAttempts atomic.Int32
 	d := &fakeDispatcher{
 		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
 			path, token := r.Path, r.Token
@@ -545,14 +540,10 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 		},
-		PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
-			token := r.Token
+		PublishFn: func(ctx context.Context, _ fetch.WriteRequest) (fetch.Result, error) {
 			publishCalled.Store(true)
-			if token == "" {
-				t.Error("index publish dispatched without a publish token")
-			}
-			if publishAttempts.Add(1) == 1 {
-				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
+			if _, ok := protocol.GrantFrom(ctx); !ok {
+				t.Error("index publish dispatched without a write grant")
 			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusOK,
@@ -577,11 +568,11 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 	d.Lock()
 	publishCalls := slices.Clone(d.PublishCalls)
 	d.Unlock()
-	if len(publishCalls) != 4 {
-		t.Fatalf("publish calls = %d, want rejected shard + two shards + manifest", len(publishCalls))
+	if len(publishCalls) != 3 {
+		t.Fatalf("publish calls = %d, want two shards + manifest", len(publishCalls))
 	}
-	if publishCalls[3].Path != "/index.md" {
-		t.Fatalf("last publish path = %q, want manifest /index.md", publishCalls[3].Path)
+	if publishCalls[2].Path != "/index.md" {
+		t.Fatalf("last publish path = %q, want manifest /index.md", publishCalls[2].Path)
 	}
 	for i, call := range publishCalls {
 		if call.ExpectedVersion != 0 {
@@ -601,7 +592,7 @@ func TestHandleMarkIndexBlocksWhenTargetHasNoManifest(t *testing.T) {
 		Namespace:    "hub",
 		TokensSecret: "hub-tokens",
 		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
-		DefaultToken: core.TokenScope{
+		WriteScope: core.WriteScope{
 			Paths: []string{"/**"},
 		},
 	})
@@ -639,7 +630,7 @@ func TestHandleMarkIndexForceOverridesManifestBlock(t *testing.T) {
 		Namespace:    "hub",
 		TokensSecret: "hub-tokens",
 		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
-		DefaultToken: core.TokenScope{
+		WriteScope: core.WriteScope{
 			Paths: []string{"/**"},
 		},
 	})
@@ -691,7 +682,7 @@ func TestHandleMarkIndexDryRunReturnsBodyWithoutPublishing(t *testing.T) {
 		Namespace:    "hub",
 		TokensSecret: "hub-tokens",
 		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
-		DefaultToken: core.TokenScope{
+		WriteScope: core.WriteScope{
 			Paths: []string{"/**"},
 		},
 	})

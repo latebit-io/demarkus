@@ -31,7 +31,7 @@ func testConfig() *Config {
 				Namespace:    "team-a",
 				TokensSecret: "team-a-tokens",
 				Allow:        AllowConfig{Domains: []string{"example.com"}},
-				DefaultToken: TokenScope{
+				WriteScope: WriteScope{
 					Paths: []string{"/team-a/*"},
 				},
 			},

@@ -38,7 +38,7 @@ func installTestConfigTwoWorlds() *core.Config {
 		TokensSecret: "team-b-tokens",
 		PublicURL:    "mark://team-b.cluster.local:6309",
 		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
-		DefaultToken: core.TokenScope{
+		WriteScope: core.WriteScope{
 			Paths: []string{"/team-b/*"},
 		},
 	})

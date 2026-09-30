@@ -8,30 +8,31 @@ import (
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// writeRefusal is why claims may not write to the world, nil when they may. It
-// runs before the dispatcher, so an unauthorized caller never reaches a world.
-// The email check repeats the bearer layer's on purpose (defense in depth).
-func (g *Gateway) writeRefusal(claims *core.Claims, worldName string) error {
+// writeGrantFor is the grant claims earn on the world, or why they may not
+// write to it. It runs before the dispatcher, so an unauthorized caller never
+// reaches a world. The email check repeats the bearer layer's on purpose.
+func (g *Gateway) writeGrantFor(claims *core.Claims, worldName string) (protocol.Grant, error) {
 	if !claims.EmailVerified {
-		return errors.New("identity email is not verified")
+		return protocol.Grant{}, errors.New("identity email is not verified")
 	}
 	// A copy: the claims hang off a context concurrent tool calls share.
 	canonical := *claims
 	canonical.Email = core.CanonicalEmail(claims.Email)
 	if canonical.Email == "" {
-		return errors.New("identity has no email claim")
+		return protocol.Grant{}, errors.New("identity has no email claim")
 	}
 	worldCfg := core.LookupWorld(g.deps.Worlds, worldName)
 	if worldCfg == nil {
-		return fmt.Errorf("world %q is not configured", worldName)
+		return protocol.Grant{}, fmt.Errorf("world %q is not configured", worldName)
 	}
 	if !core.WorldAllows(&worldCfg.Allow, &canonical) {
-		return fmt.Errorf("write access denied for world %q", worldName)
+		return protocol.Grant{}, fmt.Errorf("write access denied for world %q", worldName)
 	}
-	return nil
+	return protocol.Grant{Label: canonical.Email, Paths: worldCfg.WriteScope.Paths}, nil
 }
 
 // The write tools bind their arguments through mcpbind; marktools checks,

@@ -178,7 +178,7 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 	if opts.LocalWorlds != nil {
 		dispatcher = gateway.NewComposite(cfg.Registry(), opts.LocalWorlds, pool)
 	}
-	gw := gateway.New(gateway.DepsFor(cfg, deps.SharedDeps, store, provisioner), opts.Version, dispatcher, opts.gatewayProfile(cfg))
+	gw := gateway.New(gateway.DepsFor(cfg, deps.SharedDeps, provisioner), opts.Version, dispatcher, opts.gatewayProfile(cfg))
 	return &Broker{
 		cfg:         cfg,
 		opts:        opts,
@@ -219,22 +219,23 @@ func (b *Broker) Serve(ctx context.Context) error {
 	var sweepWG sync.WaitGroup
 	b.tasks.start(sweepCtx, &sweepWG)
 
+	// A failed listener still takes the common path, so the other one is
+	// drained before the caller's Close releases what it serves from.
+	var runErr error
 	select {
 	case <-ctx.Done():
 	case err := <-errs:
 		if err != nil {
-			cancelSweep()
-			sweepWG.Wait()
-			return err
+			runErr = fmt.Errorf("management listener: %w", err)
+		} else {
+			log.Warn(opts.LogName + ": management listener stopped, shutting down")
 		}
-		log.Warn(opts.LogName + ": management listener stopped, shutting down")
 	case err := <-mcpErrs:
 		if err != nil {
-			cancelSweep()
-			sweepWG.Wait()
-			return err
+			runErr = fmt.Errorf("mcp gateway listener: %w", err)
+		} else {
+			log.Warn(opts.LogName + ": mcp gateway listener stopped, shutting down")
 		}
-		log.Warn(opts.LogName + ": mcp gateway listener stopped, shutting down")
 	}
 
 	cancelSweep()
@@ -253,13 +254,18 @@ func (b *Broker) Serve(ctx context.Context) error {
 	b.pool.Close()
 	mgmtShutdownCtx, cancelMgmtShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelMgmtShutdown()
-	return b.httpSrv.Shutdown(mgmtShutdownCtx)
+	return errors.Join(runErr, b.httpSrv.Shutdown(mgmtShutdownCtx))
 }
 
-// Close releases the tenant bucket backend and the world pool; safe after
-// Serve and more than once.
+// Close stops both listeners outright, then releases the world pool and
+// the tenant bucket backend; safe after Serve and more than once.
 func (b *Broker) Close() {
 	b.closeOnce.Do(func() {
+		for name, srv := range map[string]*http.Server{"mcp gateway": b.mcpSrv, "management": b.httpSrv} {
+			if err := filterServerClosed(srv.Close()); err != nil {
+				b.log.Warn(b.opts.LogName+": "+name+" close error", "err", err)
+			}
+		}
 		b.pool.Close()
 		b.closeBucket()
 	})

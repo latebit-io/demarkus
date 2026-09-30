@@ -13,8 +13,11 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
-// WriteFunc runs a write with a token; see docwrite.WriteFunc.
+// WriteFunc runs a WriteOp under the surface's authorization; see docwrite.
 type WriteFunc = docwrite.WriteFunc
+
+// WriteOp is one write, sent with the ctx and token it is given.
+type WriteOp = docwrite.WriteOp
 
 // writer asks the surface to authorize verb on target; its refusal is the
 // tool's answer, word for word.

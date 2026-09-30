@@ -21,8 +21,12 @@ func TestGateWriteDoesNotMutateClaims(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			if err := g.writeRefusal(claims, "team-a"); err != nil {
+			grant, err := g.writeGrantFor(claims, "team-a")
+			if err != nil {
 				t.Errorf("a canonically allowed writer was refused: %v", err)
+			}
+			if grant.Label != "alice@example.com" {
+				t.Errorf("grant label = %q, want the canonical email", grant.Label)
 			}
 		})
 	}

@@ -135,8 +135,8 @@ func (t *Tools) publishIndex(ctx context.Context, run *indexRun) (index.PublishR
 		Entries:                 entries,
 		ExpectedManifestVersion: &run.expectedVersion,
 	}, read, func(ioCtx context.Context, docPath, body string, expected int) (protocol.Response, error) {
-		result, err := run.write(ioCtx, func(token string) (fetch.Result, error) {
-			return t.backend.Publish(ioCtx, fetch.WriteRequest{
+		result, err := run.write(ioCtx, func(ctx context.Context, token string) (fetch.Result, error) {
+			return t.backend.Publish(ctx, fetch.WriteRequest{
 				Host: run.target.Host, Path: docPath, Token: token,
 				Body: body, ExpectedVersion: expected, Metadata: meta,
 			})

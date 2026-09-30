@@ -149,16 +149,20 @@ func TestHandleMarkPublishDeniesNonWriter(t *testing.T) {
 	}
 }
 
-func TestHandleMarkPublishMergeUsesTokenOnlyForPublish(t *testing.T) {
+func TestHandleMarkPublishMergeGrantsOnlyThePublish(t *testing.T) {
 	cfg := mcpTestConfig()
-	var publishTokens, fetchTokens []string
+	var publishGrants []protocol.Grant
+	var fetchTokens []string
 	var mu sync.Mutex
 	d := &fakeDispatcher{
-		PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
-			token := r.Token
+		PublishFn: func(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+			grant, _ := protocol.GrantFrom(ctx)
 			mu.Lock()
-			publishTokens = append(publishTokens, token)
+			publishGrants = append(publishGrants, grant)
 			mu.Unlock()
+			if r.Token != "" {
+				t.Errorf("publish carried token %q, want none", r.Token)
+			}
 			return fetch.Result{Response: protocol.Response{
 				Status:   protocol.StatusConflict,
 				Metadata: map[string]string{"version": "4", "server-version": "4"},
@@ -186,14 +190,14 @@ func TestHandleMarkPublishMergeUsesTokenOnlyForPublish(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(publishTokens) != 1 {
-		t.Errorf("publish dispatched %d times, want 1", len(publishTokens))
+	if len(publishGrants) != 1 {
+		t.Errorf("publish dispatched %d times, want 1", len(publishGrants))
 	}
 	if len(fetchTokens) != 2 {
 		t.Errorf("fetch dispatched %d times, want 2 (base + current)", len(fetchTokens))
 	}
-	if len(publishTokens) == 1 && publishTokens[0] == "" {
-		t.Error("publish dispatched without a publish token")
+	if len(publishGrants) == 1 && (publishGrants[0].Label != "alice@example.com" || len(publishGrants[0].Paths) == 0) {
+		t.Errorf("publish grant = %+v, want alice on the world's write scope", publishGrants[0])
 	}
 	for i, token := range fetchTokens {
 		if token != "" {
@@ -311,7 +315,7 @@ func TestHandleMarkArchiveUnknownWorldSurfacesAsToolError(t *testing.T) {
 	}
 }
 
-func TestDispatchWithWriteAuthFailsClosed(t *testing.T) {
+func TestWriteContextFailsClosed(t *testing.T) {
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
 	contexts := map[string]context.Context{
 		"missing identity": context.Background(),
@@ -322,90 +326,27 @@ func TestDispatchWithWriteAuthFailsClosed(t *testing.T) {
 	}
 	for name, ctx := range contexts {
 		t.Run(name, func(t *testing.T) {
-			called := false
-			_, err := g.dispatchWithWriteAuth(ctx, "team-a", func(string) (fetch.Result, error) {
-				called = true
-				return fetch.Result{}, nil
-			})
+			granted, err := g.writeContext(ctx, "team-a")
 			if !errors.Is(err, core.ErrNotAuthorized) {
 				t.Fatalf("error = %v, want ErrNotAuthorized", err)
 			}
-			if called {
-				t.Error("write operation reached dispatcher despite failed authorization")
+			if granted != nil {
+				t.Error("a context was granted despite failed authorization")
 			}
 		})
 	}
 }
 
-// TestWriteHandlersInheritPropagationRaceRetry pins publish-token
-// propagation retry with an explicit 401 followed by success.
-func TestWriteHandlersInheritPropagationRaceRetry(t *testing.T) {
-	cfg := mcpTestConfig()
-	// Tight retry knobs so the test runs fast.
-	cfg.Server.MCP.FirstMintMaxAttempts = 3
-	cfg.Server.MCP.FirstMintInitialBackoff = 1
-	cfg.Server.MCP.FirstMintMaxBackoff = 2
-
+// A refused world answer is the answer: nothing re-provisions or retries.
+func TestWriteHandlersDoNotRetryARefusal(t *testing.T) {
 	var attempts int32
 	d := &fakeDispatcher{
 		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
-			n := atomic.AddInt32(&attempts, 1)
-			if n == 1 {
-				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
-			}
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"version": "1"},
-			}}, nil
-		},
-	}
-	g := newGatewayWithDispatcher(t, cfg, d)
-	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
-		"url":              "mark://team-a/foo.md",
-		"body":             "hello",
-		"expected_version": float64(0),
-	}))
-	if err != nil {
-		t.Fatalf("handleMarkPublish: %v", err)
-	}
-	if res.IsError {
-		t.Fatalf("isError = true after retry should have succeeded: %s", toolResultText(t, res))
-	}
-	if got := atomic.LoadInt32(&attempts); got != 2 {
-		t.Errorf("publish attempts = %d, want 2 (one 401 then ok)", got)
-	}
-}
-
-// TestWriteDispatchRecoversFromRotatedWorldSecret pins the 401 invalidation
-// path: a cached token the world no longer accepts is re-provisioned
-// mid-dispatch, so a rotated world Secret recovers within one call.
-func TestWriteDispatchRecoversFromRotatedWorldSecret(t *testing.T) {
-	cfg := mcpTestConfig()
-	cfg.Server.MCP.FirstMintMaxAttempts = 3
-	cfg.Server.MCP.FirstMintInitialBackoff = 1
-	cfg.Server.MCP.FirstMintMaxBackoff = 2
-
-	var attempts int32
-	d := &fakeDispatcher{
-		PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
-			token := r.Token
 			atomic.AddInt32(&attempts, 1)
-			if token == "stale-rotated-away" {
-				return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
-			}
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"version": "1"},
-			}}, nil
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
 		},
 	}
-	g := newGatewayWithDispatcher(t, cfg, d)
-	// Simulate the stale cache a rotation leaves behind: the pod still
-	// holds a token the world no longer recognizes.
-	g.deps.WriteTokens.mu.Lock()
-	g.deps.WriteTokens.cache["team-a"] = "stale-rotated-away"
-	g.deps.WriteTokens.mu.Unlock()
-
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
 	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
 		"url":              "mark://team-a/foo.md",
 		"body":             "hello",
@@ -414,11 +355,11 @@ func TestWriteDispatchRecoversFromRotatedWorldSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleMarkPublish: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("isError = true, want recovery after re-provision: %s", toolResultText(t, res))
+	if text := toolResultText(t, res); !strings.Contains(text, protocol.StatusUnauthorized) {
+		t.Fatalf("result = %q, want the world's refusal forwarded", text)
 	}
-	if got := atomic.LoadInt32(&attempts); got != 2 {
-		t.Errorf("publish attempts = %d, want 2 (stale 401, fresh ok)", got)
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("publish attempts = %d, want 1", got)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // toolBodies binds the shared tool bodies to the gateway: a url names a world,
@@ -49,19 +50,18 @@ func (g *Gateway) worldSource(worldName, path string) (string, bool) {
 }
 
 // toolWriter refuses a caller who may not write to the world, in words. The
-// write it returns is gated again and carries the world's write token, with
-// the retry that absorbs token propagation lag.
+// write it returns runs under the grant the caller earned, with no token.
 func (g *Gateway) toolWriter(ctx context.Context, target marktools.Target, _ string) (marktools.WriteFunc, error) {
 	claims, ok := core.ClaimsFromCtx(ctx)
 	if !ok {
 		return nil, errors.New("internal: missing identity on tool-call context")
 	}
-	if err := g.writeRefusal(claims, target.Host); err != nil {
+	grant, err := g.writeGrantFor(claims, target.Host)
+	if err != nil {
 		return nil, err
 	}
-	world := target.Host
-	return func(ctx context.Context, op func(token string) (fetch.Result, error)) (fetch.Result, error) {
-		return g.dispatchWithWriteAuth(ctx, world, op)
+	return func(ctx context.Context, op marktools.WriteOp) (fetch.Result, error) {
+		return op(protocol.WithGrant(ctx, grant), "")
 	}, nil
 }
 

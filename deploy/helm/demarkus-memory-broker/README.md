@@ -32,8 +32,8 @@ Secrets, hot-reloads the fragment, and bootstraps the world. See
 - Per-world `Role` + `RoleBinding` in each world's namespace
   (`get/update` on the world's tokens Secret) plus broker-namespace
   `Role` covering the sweeper Lease, the refresh-tokens Secret, and
-  `create` + per-world `get/update` on the write-token Secrets the
-  broker provisions on first write.
+  `create` + `get/update` on the broker's own Secrets. The per-world
+  write-token rule is a leftover; nothing creates those Secrets now.
 - Default-on `NetworkPolicy` restricting ingress to the configured
   Ingress controller namespace and egress to DNS, TCP 443, and each
   configured world UDP port (6309 by default).
@@ -84,7 +84,7 @@ entry per world the verified identity is authorized for AND that has
 a non-empty `publicURL` configured. The endpoint mints no world
 tokens and returns no raw token material; world access is mediated
 entirely by the MCP gateway (reads are open to any SSO-authed
-identity, writes use a broker-held per-world write token).
+identity, writes run under the identity's grant in process).
 
 ```http
 GET /me/install
@@ -282,24 +282,12 @@ bucket-store-backed persistent graph is on the radar for the
 post-broker design window (see `/thoughts.md` § "On Bucket Stores")
 but is not part of the chart today.
 
-### Write-token provisioning + propagation retries
+### Writes
 
-The broker keeps one long-lived write token per world. The raw token
-is stored canonically in a broker-namespace Secret and cached
-in-process; there is no per-email, in-memory session cache.
-
-The `firstMintMax*` / `firstMintInitialBackoff` / `firstMintMaxBackoff`
-knobs govern a broker-side retry loop that absorbs the kubelet →
-world-Secret projection lag. When the broker first provisions a
-world's write token, the world's projected `tokens.toml` volume may
-not refresh before the next tool call, and the world will 401. The
-retry loop re-dispatches the same token with exponential backoff
-(default 6 attempts, 250ms → 8s) only on `unauthorized` responses
-right after a world's write token is first provisioned. Writer
-authorization is enforced at the broker before dispatch, so a
-fresh-provision 401 is propagation lag, not a real denial. Defaults
-sit well under the typical kubelet sync period; tune up only for
-slow-kubelet clusters.
+A write runs under the caller's verified identity: the broker checks the
+world's `allow` predicate, then the world grants publish on the
+`defaultToken.paths` scope in process. No per-world write token is minted,
+stored or retried; `server.mcp.firstMint*` no longer exists.
 
 `server.mcp.toolProfile` selects the tool surface, `full` (default) or
 `lean`; see "Tool profiles" in `knowledge/cmd/demarkus-knowledge-broker/MCP-API.md`.
@@ -327,10 +315,8 @@ listener silently:
   management API.
 - The rendered `config.yaml` carries the MCP block; existing
   deployments without operator overrides get the chart defaults.
-- No new RBAC to enable the gateway: the broker-namespace `Role`
-  already grants the write path everything it needs: `create` +
-  per-world `get/update` on the write-token Secrets (broker namespace)
-  and `get/update` on each world's tokens Secret (per-world `Role`).
+- No new RBAC to enable the gateway: writes need no Secret, and the
+  agent token reconciler already has `get/update` on each world's tokens Secret (per-world `Role`).
   See "What this chart ships" above; nothing extra to provision.
 - Worlds[] entries get an `internalAddress: ""` field. Empty string
   preserves the default `<name>.<namespace>.svc.cluster.local:6309`
@@ -504,8 +490,8 @@ GCS bucket creation.
 Requirements the chart wires for you when provisioning is enabled:
 
 - Broker-namespace RBAC widens to namespace-wide secrets
-  get/update/create (per-tenant write-token Secret names are
-  runtime-derived, so `resourceNames` pinning is impossible).
+  get/update/create (per-tenant Secret names are runtime-derived,
+  so `resourceNames` pinning is impossible).
 - A Role/RoleBinding in `provisioning.serverNamespace` lets the broker
   write the worlds fragment and tokens Secrets the server mounts.
 
@@ -535,8 +521,8 @@ demarkus-memory-broker -config /etc/demarkus-memory-broker/config.yaml \
 
 It tombstones the registry entry (blocking any re-provision of the slug
 while cleanup runs), rewrites the worlds fragment (the knowledge server
-drops the world live), deletes the shared tokens key and the broker's
-write-token record, with `-delete-bucket` destroys the tenant's GCS
+drops the world live), deletes the shared tokens key, with
+`-delete-bucket` destroys the tenant's GCS
 bucket and data, then clears the tombstone. Idempotent; a crashed run
 leaves the tombstone, which keeps the world out of service (the sync
 loop drops it from every projection) until a rerun finishes the cleanup.

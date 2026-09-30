@@ -246,7 +246,7 @@ func (h *Handler) serveWrite(ctx context.Context, w io.Writer, req protocol.Requ
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
 		return
 	}
-	tokenLabel, ok := h.authorizeWrite(w, req)
+	tokenLabel, ok := h.authorizeWrite(ctx, w, req)
 	if !ok {
 		return
 	}
@@ -262,8 +262,16 @@ func (h *Handler) serveWrite(ctx context.Context, w io.Writer, req protocol.Requ
 }
 
 // authorizeWrite checks the publish capability every write verb needs and
-// answers the denial itself. Without a token store no write is allowed.
-func (h *Handler) authorizeWrite(w io.Writer, req protocol.Request) (tokenLabel string, ok bool) {
+// answers the denial itself: a grant on ctx decides alone, else the token.
+// Without a grant or a token store no write is allowed.
+func (h *Handler) authorizeWrite(ctx context.Context, w io.Writer, req protocol.Request) (tokenLabel string, ok bool) {
+	if grant, granted := protocol.GrantFrom(ctx); granted {
+		if !auth.Permits(&grant, req.Path) {
+			h.writeAuthDenied(w, req, auth.ErrNotPermitted)
+			return "", false
+		}
+		return grant.Label, true
+	}
 	ts := h.tokenStore()
 	if ts == nil {
 		h.writeError(w, protocol.StatusNotPermitted, writeActivity[req.Verb]+" requires auth configuration")

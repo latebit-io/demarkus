@@ -121,8 +121,8 @@ func (c *Config) ValidateTenantWorlds() error {
 }
 
 // LookupWorld returns the configured world (static or dynamic) with the
-// given name, or nil when none matches. Shared by the MCP write gate and
-// the per-world write-token store so both resolve names identically.
+// given name, or nil when none matches. The MCP write gate and the agent
+// token reconciler resolve names here so both agree.
 func LookupWorld(reg *WorldRegistry, name string) *WorldConfig {
 	if w, ok := reg.Find(name); ok {
 		return &w

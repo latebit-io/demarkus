@@ -18,9 +18,6 @@ func TestConfigRefsFileMode(t *testing.T) {
 	if got := RefreshTokensRef(cfg).Path; got != testStorageDir+"/"+RefreshTokensSecretKey {
 		t.Errorf("refresh ref path = %q", got)
 	}
-	if got := WorldWriteTokenRef(cfg, "memory").Path; got != testStorageDir+"/demarkus-broker-write-token-memory.json" {
-		t.Errorf("write-token ref path = %q", got)
-	}
 	if got := WorldTokensRef(world).Path; got != "/etc/demarkus/tokens.toml" {
 		t.Errorf("world tokens ref path = %q", got)
 	}
@@ -100,7 +97,7 @@ func TestValidateFileBackendPathCollisions(t *testing.T) {
 		tokensFile string
 	}{
 		{"aliases refresh state", testStorageDir + "/refresh_tokens.json"},
-		{"aliases write-token state", testStorageDir + "/demarkus-broker-write-token-team-a.json"},
+		{"aliases signing-key state", testStorageDir + "/" + SigningKeySecretKey},
 		{"aliases via non-clean path", testStorageDir + "/../demarkus-knowledge-broker/refresh_tokens.json"},
 	}
 	for _, tt := range tests {

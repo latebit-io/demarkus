@@ -8,14 +8,6 @@ import (
 // defaultMCPAddr keeps the gateway off the management API's usual :8080.
 const defaultMCPAddr = ":8081"
 
-// First mint retry defaults: about 16s across 6 attempts, under the typical
-// kubelet Secret propagation window without holding a tool call open longer.
-const (
-	defaultFirstMintMaxAttempts    = 6
-	defaultFirstMintInitialBackoff = 250 * time.Millisecond
-	defaultFirstMintMaxBackoff     = 8 * time.Second
-)
-
 // applyRefreshDefaults fills the refresh flow knobs and rejects degenerate
 // values. Applied to the config itself so every consumer sees resolved values.
 func (s *ServerConfig) applyRefreshDefaults() error {

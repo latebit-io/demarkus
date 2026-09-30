@@ -129,6 +129,6 @@ func (p *ProvisioningConfig) TenantWorld(slug, email string) WorldConfig {
 		InternalAddress: p.tenantAuthority(slug),
 		DialAddress:     p.DialAddress,
 		Allow:           AllowConfig{Emails: []string{email}},
-		DefaultToken:    TokenScope{Paths: []string{"/**"}},
+		WriteScope:      WriteScope{Paths: []string{"/**"}},
 	}
 }

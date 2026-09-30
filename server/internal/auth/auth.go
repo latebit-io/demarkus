@@ -80,7 +80,7 @@ func loadTokenFile(filePath string) (map[string]Token, error) {
 			tok.expiresAt = t
 		}
 		for _, p := range tok.Paths {
-			if err := validatePattern(p); err != nil {
+			if err := protocol.ValidatePathPattern(p); err != nil {
 				return nil, fmt.Errorf("token %q has invalid path pattern %q: %w", label, p, err)
 			}
 		}
@@ -217,11 +217,9 @@ func matchesAnyPath(patterns []string, reqPath string) bool {
 	return false
 }
 
-// matchPath checks a single pattern against a path. It handles ** globs
-// by splitting on /**/ and checking prefix + suffix, falling back to
-// path.Match for patterns without **.
-// Patterns are validated at load time by validatePattern, so path.Match
-// errors are unreachable here and safely ignored.
+// matchPath handles ** by splitting on /**/ into prefix and suffix, else
+// path.Match. Patterns pass protocol.ValidatePathPattern at load, so a
+// path.Match error is unreachable and ignored.
 func matchPath(pattern, reqPath string) bool {
 	if !strings.Contains(pattern, "**") {
 		matched, _ := path.Match(pattern, reqPath)
@@ -256,22 +254,8 @@ func matchPath(pattern, reqPath string) bool {
 	return false
 }
 
-// validatePattern checks that a glob pattern has valid syntax. At most one
-// ** wildcard is supported, and it must appear as /** (trailing) or /**/
-// (infix). Bare ** without surrounding slashes is rejected.
-func validatePattern(pattern string) error {
-	if n := strings.Count(pattern, "**"); n > 1 {
-		return fmt.Errorf("only one ** wildcard is supported per pattern")
-	} else if n == 1 {
-		// The single ** must be slash-delimited: /**/ or /**.
-		stripped := strings.ReplaceAll(pattern, "/**/", "/")
-		stripped = strings.TrimSuffix(stripped, "/**")
-		if strings.Contains(stripped, "**") {
-			return fmt.Errorf("** must be delimited by slashes (use /** or /**/)")
-		}
-	}
-	// Validate the non-** portions with path.Match.
-	clean := strings.ReplaceAll(pattern, "**", "placeholder")
-	_, err := path.Match(clean, clean)
-	return err
+// Permits reports whether the grant covers reqPath. A malformed pattern
+// never matches, so a bad scope fails closed.
+func Permits(g *protocol.Grant, reqPath string) bool {
+	return matchesAnyPath(g.Paths, reqPath)
 }

@@ -170,12 +170,6 @@ type MCPConfig struct {
 	ToolProfile string `yaml:"toolProfile"`
 	// TLS terminates HTTPS at the broker when both files are set.
 	TLS MCPTLSConfig `yaml:"tls"`
-	// FirstMint* tune the retry loop that absorbs kubelet Secret propagation
-	// lag after a lazy token mint, when a dispatch on the new token answers
-	// unauthorized. Backoff doubles from Initial up to Max.
-	FirstMintMaxAttempts    int           `yaml:"firstMintMaxAttempts"`
-	FirstMintInitialBackoff time.Duration `yaml:"firstMintInitialBackoff"`
-	FirstMintMaxBackoff     time.Duration `yaml:"firstMintMaxBackoff"`
 }
 
 // MCPTLSConfig is the optional cert and key pair for the gateway listener.
@@ -211,7 +205,7 @@ type WorldConfig struct {
 	// Generation tells one provisioning of a name from the next, so state
 	// cached for a deprovisioned world is not reused by its successor.
 	Generation string `yaml:"-"`
-	// Name keys tool calls and the write token store.
+	// Name keys tool calls and the write grant.
 	Name string `yaml:"name"`
 	// Namespace is where TokensSecret lives.
 	Namespace string `yaml:"namespace"`
@@ -235,8 +229,9 @@ type WorldConfig struct {
 	// Allow is the per world authorization predicate; all lists empty admits
 	// any verified identity.
 	Allow AllowConfig `yaml:"allow"`
-	// DefaultToken is the path scope of the broker's write token for this world.
-	DefaultToken TokenScope `yaml:"defaultToken"`
+	// WriteScope is the path scope the gateway may write in this world. The
+	// yaml key is the operator surface from the write token days; it stays.
+	WriteScope WriteScope `yaml:"defaultToken"`
 }
 
 // AllowConfig is the per world predicate: all lists empty admits any verified
@@ -298,9 +293,10 @@ type AgentTokenConfig struct {
 	Paths []string `yaml:"paths"`
 }
 
-// TokenScope is the path scope of the broker's write token for a world. The
-// operations are always ["publish"], hardcoded so config cannot open reads.
-type TokenScope struct {
-	// Paths is the glob list, e.g. ["/team-a/*"]. At least one entry is required.
+// WriteScope is the path scope the gateway may write in a world; an identity
+// the world allows publishes there and nowhere else. Reads are never scoped.
+type WriteScope struct {
+	// Paths is the glob list in the token file's pattern language, e.g.
+	// ["/team-a/*"]. At least one entry is required.
 	Paths []string `yaml:"paths"`
 }

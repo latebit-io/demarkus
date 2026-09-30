@@ -135,7 +135,7 @@ tests:
     asserts:
       - matchRegex:
           path: stringData["config.yaml"]
-          pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*firstMintMaxAttempts: 6\s*\n\s*firstMintInitialBackoff: "250ms"\s*\n\s*firstMintMaxBackoff: "8s"'
+          pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*toolProfile: "full"'
 
   - it: config.yaml omits mcp.publicURL when unset (falls back to server.publicURL in the broker)
     template: secret-config.yaml
@@ -172,29 +172,12 @@ tests:
           path: stringData["config.yaml"]
           pattern: 'tls:\s*\n\s*certFile: "/etc/demarkus-memory-broker/tls/mcp/tls.crt"\s*\n\s*keyFile: "/etc/demarkus-memory-broker/tls/mcp/tls.key"'
 
-  - it: mcp.firstMint* knobs all override into the rendered config
-    template: secret-config.yaml
-    set:
-      server.mcp.firstMintMaxAttempts: 3
-      server.mcp.firstMintInitialBackoff: 100ms
-      server.mcp.firstMintMaxBackoff: 1s
-    asserts:
-      - matchRegex:
-          path: stringData["config.yaml"]
-          pattern: 'firstMintMaxAttempts: 3'
-      - matchRegex:
-          path: stringData["config.yaml"]
-          pattern: 'firstMintInitialBackoff: "100ms"'
-      - matchRegex:
-          path: stringData["config.yaml"]
-          pattern: 'firstMintMaxBackoff: "1s"'
-
   - it: config.yaml renders the default full tool profile
     template: secret-config.yaml
     asserts:
       - matchRegex:
           path: stringData["config.yaml"]
-          pattern: 'firstMintMaxBackoff: "8s"\s*\n\s*toolProfile: "full"'
+          pattern: 'toolProfile: "full"'
 
   - it: mcp.toolProfile lean overrides into the rendered config
     template: secret-config.yaml

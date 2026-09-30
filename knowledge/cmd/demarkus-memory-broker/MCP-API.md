@@ -5,7 +5,7 @@ the demarkus-memory-broker's `/mcp` endpoint. Eleven tools mirror the
 local `client/cmd/demarkus-mcp` stdio server, scoped to the caller's
 own world; `mark_worlds` is a broker-only self-discovery operation.
 Transport, OAuth metadata, bearer handling, rate limiting, and the
-write-token propagation retry are identical to the knowledge broker;
+write grant are identical to the knowledge broker;
 see `knowledge/cmd/demarkus-knowledge-broker/MCP-API.md` for those mechanics
 and `deploy/helm/demarkus-memory-broker/README.md` for deployment.
 

@@ -22,8 +22,8 @@ func (s *Server) Routes(authority string) bool {
 }
 
 // Exchange answers req through the world that routes authority, in process,
-// exactly as a QUIC stream with that SNI: admission, rate limits, auth and
-// the handler included. ctx bounds it; stream deadlines are no-ops here.
+// as a QUIC stream with that SNI would be served, plus any protocol.Grant on
+// ctx. It returns when ctx ends, as a cancelled QUIC client would.
 func (s *Server) Exchange(ctx context.Context, authority string, req protocol.Request) (protocol.Response, error) {
 	if err := ctx.Err(); err != nil {
 		return protocol.Response{}, err
@@ -32,16 +32,22 @@ func (s *Server) Exchange(ctx context.Context, authority string, req protocol.Re
 	if err != nil {
 		return protocol.Response{}, err
 	}
-	// The request is one buffer the handler reads to EOF and the response
-	// one write, so nothing blocks: no pipe, no goroutine.
 	var request bytes.Buffer
 	if _, err := req.WriteTo(&request); err != nil {
 		return protocol.Response{}, fmt.Errorf("encode request: %w", err)
 	}
+	// Buffers on both sides, so the only wait is the world's own work; a
+	// commit keeps sealing past cancellation and must not hold the caller.
 	stream := &localStream{Reader: &request}
-	endpoint.ServeStream(ctx, localAddr{}, stream)
-	if err := ctx.Err(); err != nil {
-		return protocol.Response{}, err
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		endpoint.ServeStream(ctx, localAddr{}, stream)
+	}()
+	select {
+	case <-ctx.Done():
+		return protocol.Response{}, ctx.Err()
+	case <-served:
 	}
 	resp, err := protocol.ParseResponse(&stream.response)
 	if err != nil {

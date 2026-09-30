@@ -51,19 +51,11 @@ follows:
   `tokens.toml` grants no `read` operation to any token, so reads are
   open to any SSO-authenticated identity.
 - **Writes** (`mark_publish`, `mark_append`, `mark_archive`, and the
-  federation writes) dispatch with a single long-lived, per-world
-  write token the broker provisions on first write and holds in
-  process memory. SSO is the org gate; `WorldConfig.Allow` is the
-  per-world writer allowlist enforced at the broker before dispatch.
-  There is no per-user mint, no session cache, and no singleflight.
-
-The per-world write token is shared across all authorized writers, so
-the world only ever sees one token per world in its `tokens.toml`. Raw
-tokens are never persisted by the broker except as the broker-namespace
-per-world write-token Secret (the canonical record across pods); their
-hashes land in the per-world `tokens.toml` Secret the demarkus-server
-already manages. A broker restart drops the in-memory cache; the next
-write re-reads the broker Secret rather than re-minting.
+  federation writes) dispatch with no token. SSO is the org gate;
+  `WorldConfig.Allow` is the per-world writer allowlist enforced at
+  the broker before dispatch, and the world served in this process
+  grants publish on `defaultToken.paths` to that identity. A world
+  served elsewhere refuses the write. Nothing is minted or cached.
 
 ## URL form
 
@@ -374,8 +366,8 @@ the store itself; run `mark_graph`, `mark_backlinks`, or `mark_explore` first.
 
 The broker returns errors via the MCP tool-error envelope (`isError:
 true` in the `CallToolResult`) for genuine tool failures: malformed
-URL, unknown world, transport failure to the world, exhausted
-first-mint retry budget, or failure of every world in `mark_lookup_all`.
+URL, unknown world, transport failure to the world, or failure of
+every world in `mark_lookup_all`.
 Partial `mark_lookup_all` failures return `status: partial` with the
 successful matches and an explicit failure table. World-side `conflict`, `archived`, and
 `not-permitted` responses are forwarded **verbatim** with `isError:
@@ -387,14 +379,11 @@ A few non-obvious categories worth pinning:
 - **Unverified-email id_token** → `401` from `gatewayAuth` with the
   standard RFC 6750 + RFC 9728 `WWW-Authenticate` challenge. Same
   shape as a missing or expired bearer.
-- **World-side `unauthorized` after first provision** → retried by
-  the broker with exponential backoff (`firstMint*` knobs) up to the
-  configured attempts, against the same long-lived per-world write
-  token. The Kubelet projects refreshed Secret volumes on a sync
-  cycle, so a just-provisioned token can briefly 401 at the world
-  before propagation completes. The retry loop is invisible to the
-  agent; once the retry budget is exhausted the world's
-  `unauthorized` envelope surfaces.
+- **World-side `unauthorized` or `not-permitted` on a write** → the
+  world's answer, forwarded as is. Writes carry no token: the broker
+  checks the world's `allow` predicate and the world honours the
+  identity's grant in process, so a refusal is a refusal, never
+  retried.
 - **Cross-org candidate in `mark_resolve`** → the candidate is
   skipped with a logged reason; if all candidates skip or fail, the
   last failure surfaces in the tool response.

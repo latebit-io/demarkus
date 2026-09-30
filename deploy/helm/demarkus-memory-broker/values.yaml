@@ -144,27 +144,6 @@ server:
         # Name of the kubernetes.io/tls Secret in the release
         # namespace. Empty disables broker-side TLS.
         name: ""
-    # World-token TTL is NOT a chart knob. The broker provisions one
-    # long-lived write token per world (no expiry) and holds it; reads
-    # dispatch with no token at all. There is nothing to time out, so
-    # there is no broker-side TTL to tune.
-    #
-    # First-write retry loop knobs. The first write to a world makes the
-    # broker provision that world's write token; the world's
-    # projected-Secret-volume refresh has a kubelet-bounded propagation
-    # lag, so the freshly-written token can 401 at the world for up to
-    # ~kubeletSyncPeriod (default ~1 min). The retry loop re-dispatches
-    # the same token with backoff only on `unauthorized` responses,
-    # distinguishing the propagation race from a genuine denial.
-    #
-    # Defaults (6 attempts, 250ms → 8s exponential) sum to ~16s of
-    # waiting across attempts, well under the typical worst-case
-    # propagation window. Tune up for slow-kubelet clusters; tune
-    # down for development setups where retry latency masks
-    # genuine misconfiguration.
-    firstMintMaxAttempts: 6
-    firstMintInitialBackoff: 250ms
-    firstMintMaxBackoff: 8s
     # Tool surface: "full" (default) or "lean"; see MCP-API.md "Tool profiles".
     toolProfile: "full"
 
@@ -289,21 +268,9 @@ worlds: []
   #   allow:
   #     emails: ["fritz@example.com"]
   #   defaultToken:
-  #     # Path glob scoping the broker's per-world write token. Use
-  #     # the recursive `/**` glob for "write anywhere in this
-  #     # world" — `/*` only matches top-level entries because
-  #     # path.Match doesn't cross `/`, so a single-star glob would
-  #     # refuse writes to anything in a subdirectory (e.g.
-  #     # /team-a/foo.md). Narrow the scope only if you have a
-  #     # specific reason to forbid writes to certain subtrees;
-  #     # otherwise leave at /** so writers can publish anywhere
-  #     # under the world.
+  #     # Path glob the gateway may write in this world. /** is recursive;
+  #     # /* matches top-level entries only. Reads are never scoped.
   #     paths: ["/**"]
-  #     # paths is the only knob. The write token's operations are
-  #     # always ["publish"] (hardcoded in worldWriteTokenStore.Provision
-  #     # so an open-reads regression can't slip in via config) and the
-  #     # token never expires, so there is no operations/expiresAfter
-  #     # field to set.
 
 # Dynamic tenant provisioning (memory-broker plan Phase 3): static
 # disables it, allowlisted gates on provisioning.allow, open admits any
@@ -448,12 +415,10 @@ serviceAccount:
 rbac:
   # When true (default), the chart creates per-world Role + RoleBinding
   # in each world's namespace plus a broker-namespace Role for the
-  # sweeper Lease, the refresh-tokens Secret, and create/update on the
-  # per-world write-token Secrets the broker provisions on first write.
-  # Flip to false ONLY if your cluster manages RBAC out-of-band
-  # (operator policies, GitOps Roles); you must then grant the broker
-  # those same broker-namespace permissions yourself, or the write path
-  # fails when it tries to persist a world's write token.
+  # sweeper Lease and the broker's own Secrets. Flip to false ONLY if
+  # your cluster manages RBAC out-of-band (operator policies, GitOps
+  # Roles); you must then grant the broker those same broker-namespace
+  # permissions yourself.
   create: true
 
 # NetworkPolicy ships in the RBAC slice. Schema declared here so values

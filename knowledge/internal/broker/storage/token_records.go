@@ -10,7 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 )
 
-// TokenRecord is a broker-issued world token at rest in a broker Secret. The
+// TokenRecord is a broker-issued agent token at rest in a broker Secret. The
 // raw value lives here so every pod converges on it; the world sees the hash.
 type TokenRecord struct {
 	Label    string      `json:"label"`

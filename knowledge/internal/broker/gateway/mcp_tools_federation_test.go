@@ -337,7 +337,7 @@ func TestHandleMarkResolveContentHashMismatchSkipsCandidate(t *testing.T) {
 		Namespace:    "team-b",
 		TokensSecret: "team-b-tokens",
 		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
-		DefaultToken: core.TokenScope{
+		WriteScope: core.WriteScope{
 			Paths: []string{"/*"},
 		},
 	})
@@ -441,7 +441,7 @@ func TestHandleMarkResolveAllCandidatesFailReportsLast(t *testing.T) {
 		Namespace:    "team-b",
 		TokensSecret: "team-b-tokens",
 		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
-		DefaultToken: core.TokenScope{
+		WriteScope: core.WriteScope{
 			Paths: []string{"/*"},
 		},
 	})
@@ -488,7 +488,7 @@ func TestHandleMarkResolveAllCandidatesFailReportsLast(t *testing.T) {
 
 func TestHandleMarkResolveReadsDispatchUnauthenticated(t *testing.T) {
 	// Resolve is a read: every fetch dispatches once with an empty bearer
-	// (no write-token provisioning, no auth retry); a 401 candidate is a skip.
+	// and no grant; a 401 candidate is a skip.
 	cfg := mcpTestConfig()
 
 	var calls int32

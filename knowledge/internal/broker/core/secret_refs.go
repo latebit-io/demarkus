@@ -3,7 +3,7 @@ package core
 import "path/filepath"
 
 // Secret layout. Names and keys are pinned: renaming one would orphan live
-// Secrets on an in-place upgrade, and worlds read the write token Secrets by name.
+// Secrets on an in-place upgrade.
 const (
 	// TokensSecretKey is the default data key holding a world's tokens.toml.
 	TokensSecretKey = "tokens.toml"
@@ -15,8 +15,6 @@ const (
 	SigningKeySecretKey = "signing-key.pem"
 	// CookieKeySecretKey holds the generated base64 state cookie key.
 	CookieKeySecretKey = "cookie-key"
-	// worldWriteTokenSecretKey holds one world's JSON write token entry.
-	worldWriteTokenSecretKey = "write-token.json"
 	// agentTokenSecretKey holds one world's JSON agent token record.
 	agentTokenSecretKey = "agent-token.json"
 	// registrySecretKey holds the tenant registry JSON.
@@ -29,12 +27,6 @@ const (
 	DefaultSigningKeySecret     = "demarkus-broker-signing-key"
 	DefaultCookieKeySecret      = "demarkus-broker-cookie-key"
 )
-
-// worldWriteTokenSecretName is the per world write token Secret, one per
-// world so RBAC can be scoped per world.
-func worldWriteTokenSecretName(worldName string) string {
-	return "demarkus-broker-write-token-" + worldName
-}
 
 // agentTokenSecretName is the broker's per world agent token record; its
 // presence marks the agent's Secret as broker-managed.
@@ -70,19 +62,6 @@ func SigningKeyRef(cfg *Config) SecretRef {
 // CookieKeyRef locates the generated state cookie key.
 func CookieKeyRef(cfg *Config) SecretRef {
 	return brokerSecretRef(cfg, cfg.Server.CookieKeySecret, CookieKeySecretKey)
-}
-
-// WorldWriteTokenRef locates the broker's copy of one world's write token.
-func WorldWriteTokenRef(cfg *Config, worldName string) SecretRef {
-	ref := SecretRef{
-		Namespace: cfg.Server.BrokerNamespace,
-		Name:      worldWriteTokenSecretName(worldName),
-		Key:       worldWriteTokenSecretKey,
-	}
-	if cfg.fileBackend() {
-		ref.Path = filepath.Join(cfg.Storage.Dir, worldWriteTokenSecretName(worldName)+".json")
-	}
-	return ref
 }
 
 // AgentTokenRecordRef locates the broker's record of one world's agent token.

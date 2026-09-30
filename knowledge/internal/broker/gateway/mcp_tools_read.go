@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"time"
 
-	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
@@ -62,69 +60,18 @@ func parseToolURL(raw string) (worldName, path string, err error) {
 	return worldName, path, nil
 }
 
-// worldOp captures one publish operation for token-aware retry.
-type worldOp func(token string) (fetch.Result, error)
-
-// dispatchWithWriteAuth centrally enforces writer access, provisions a publish
-// token, and absorbs propagation lag. Handler gates provide precise errors.
-func (g *Gateway) dispatchWithWriteAuth(ctx context.Context, worldName string, op worldOp) (fetch.Result, error) {
+// writeContext is ctx carrying the grant the caller's identity earns on the
+// world, or ErrNotAuthorized. A write sent under it needs no token.
+func (g *Gateway) writeContext(ctx context.Context, worldName string) (context.Context, error) {
 	claims, ok := core.ClaimsFromCtx(ctx)
 	if !ok {
-		return fetch.Result{}, core.ErrNotAuthorized
+		return nil, core.ErrNotAuthorized
 	}
-	if g.writeRefusal(claims, worldName) != nil {
-		return fetch.Result{}, core.ErrNotAuthorized
-	}
-	mcpCfg := g.deps.MCP
-	maxAttempts := mcpCfg.FirstMintMaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = 1
-	}
-	backoff := mcpCfg.FirstMintInitialBackoff
-
-	tok, err := g.deps.WriteTokens.Provision(ctx, worldName)
+	grant, err := g.writeGrantFor(claims, worldName)
 	if err != nil {
-		return fetch.Result{}, err
+		return nil, core.ErrNotAuthorized
 	}
-
-	reprovisioned := false
-	for attempt := range maxAttempts {
-		if attempt > 0 {
-			// Backoff before the retry, not before the first attempt.
-			// Context cancellation short-circuits so a client hangup
-			// doesn't keep the broker spinning.
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
-				return fetch.Result{}, ctx.Err()
-			}
-			backoff *= 2
-			if backoff > mcpCfg.FirstMintMaxBackoff {
-				backoff = mcpCfg.FirstMintMaxBackoff
-			}
-		}
-		result, opErr := op(tok)
-		if opErr != nil {
-			// Transport-level failure — no auth race semantics
-			// apply. Return immediately; the caller maps it to an
-			// MCP tool error.
-			return fetch.Result{}, opErr
-		}
-		if result.Response.Status != protocol.StatusUnauthorized {
-			return result, nil
-		}
-		// First 401 only: invalidate + re-provision (storage.SyncWorldHash reconciles a
-		// rotated world Secret). Later 401s are kubelet propagation lag, where
-		// re-provisioning would re-read the same token at 2 round trips a retry.
-		if !reprovisioned {
-			reprovisioned = true
-			g.deps.WriteTokens.Invalidate(worldName)
-			if tok, err = g.deps.WriteTokens.Provision(ctx, worldName); err != nil {
-				return fetch.Result{}, err
-			}
-		}
-	}
-	return fetch.Result{}, fmt.Errorf("broker: world %s rejected write token after %d attempts (token propagation lag exceeded broker deadline)", worldName, maxAttempts)
+	return protocol.WithGrant(ctx, grant), nil
 }
 
 // handleMarkList answers mark_list. Reads carry no token: a world grants read

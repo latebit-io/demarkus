@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // maxSweeperInterval is the short lived token lifetime; a longer sweep leaves
@@ -182,10 +183,6 @@ func (c *Config) validateFilePaths() error {
 	}
 	for i := range c.Worlds {
 		w := &c.Worlds[i]
-		seen[filepath.Clean(WorldWriteTokenRef(c, w.Name).Path)] = fmt.Sprintf("storage.dir write-token state for world %q", w.Name)
-	}
-	for i := range c.Worlds {
-		w := &c.Worlds[i]
 		if w.TokensFile == "" {
 			continue
 		}
@@ -274,27 +271,6 @@ func (m *MCPConfig) validate() error {
 	if hasCert != hasKey {
 		return fmt.Errorf("server.mcp.tls.certFile and server.mcp.tls.keyFile must be set together")
 	}
-	if m.FirstMintMaxAttempts == 0 {
-		m.FirstMintMaxAttempts = defaultFirstMintMaxAttempts
-	}
-	if m.FirstMintMaxAttempts < 0 {
-		return fmt.Errorf("server.mcp.firstMintMaxAttempts must be > 0 (got %d)", m.FirstMintMaxAttempts)
-	}
-	if m.FirstMintInitialBackoff == 0 {
-		m.FirstMintInitialBackoff = defaultFirstMintInitialBackoff
-	}
-	if m.FirstMintInitialBackoff < 0 {
-		return fmt.Errorf("server.mcp.firstMintInitialBackoff must be > 0 (got %s)", m.FirstMintInitialBackoff)
-	}
-	if m.FirstMintMaxBackoff == 0 {
-		m.FirstMintMaxBackoff = defaultFirstMintMaxBackoff
-	}
-	if m.FirstMintMaxBackoff < 0 {
-		return fmt.Errorf("server.mcp.firstMintMaxBackoff must be > 0 (got %s)", m.FirstMintMaxBackoff)
-	}
-	if m.FirstMintInitialBackoff > m.FirstMintMaxBackoff {
-		return fmt.Errorf("server.mcp.firstMintInitialBackoff (%s) must be <= firstMintMaxBackoff (%s)", m.FirstMintInitialBackoff, m.FirstMintMaxBackoff)
-	}
 	return nil
 }
 
@@ -306,8 +282,13 @@ func validateWorld(i int, w *WorldConfig, fileMode bool) error {
 		return fmt.Errorf("worlds[%d]: name is required", i)
 	case !WorldNameRE.MatchString(w.Name):
 		return fmt.Errorf("worlds[%d]: name %q must be a DNS label: lowercase letters, digits and hyphens, at most 63, no hyphen at either end", i, w.Name)
-	case len(w.DefaultToken.Paths) == 0:
+	case len(w.WriteScope.Paths) == 0:
 		return fmt.Errorf("worlds[%d] (%s): defaultToken.paths is required", i, w.Name)
+	}
+	for _, pattern := range w.WriteScope.Paths {
+		if err := protocol.ValidatePathPattern(pattern); err != nil {
+			return fmt.Errorf("worlds[%d] (%s): defaultToken.paths %q: %w", i, w.Name, pattern, err)
+		}
 	}
 	// Kubernetes worlds live in a namespace with a tokens Secret; file mode
 	// worlds need a local tokens.toml and an explicit address, since the

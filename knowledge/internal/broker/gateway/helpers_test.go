@@ -60,7 +60,7 @@ func (f *gatewayFixture) enableProvisioning(buckets storage.BucketCreator) *stor
 
 // gateway builds the gateway around d, for tests that call handlers directly.
 func (f *gatewayFixture) gateway(d WorldDispatcher) *Gateway {
-	return New(DepsFor(f.cfg, f.shared, f.store, f.provisioner), "test", d, f.profile)
+	return New(DepsFor(f.cfg, f.shared, f.provisioner), "test", d, f.profile)
 }
 
 // serve hosts the gateway's routes, for tests that drive the HTTP transport.

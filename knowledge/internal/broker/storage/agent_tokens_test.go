@@ -181,7 +181,7 @@ func TestAgentTokensOneFailureDoesNotStopOthers(t *testing.T) {
 	cfg := agentTokensConfig()
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
 		Name: "team-b", Namespace: "team-b", TokensSecret: "team-b-tokens",
-		DefaultToken: core.TokenScope{Paths: []string{"/b"}},
+		WriteScope: core.WriteScope{Paths: []string{"/b"}},
 	})
 	cfg.AgentTokens = append([]core.AgentTokenConfig{{World: "team-b", Secret: "team-b-token-values", Key: agentKey, Paths: []string{"/**"}}}, cfg.AgentTokens...)
 	k8s := fake.NewSimpleClientset()

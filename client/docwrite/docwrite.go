@@ -26,9 +26,13 @@ type Backend interface {
 	Archive(ctx context.Context, r fetch.ArchiveRequest) (fetch.Result, error)
 }
 
-// WriteFunc runs op with a write token. A surface that mints tokens may run it
-// again with a fresh one when the server refuses the first.
-type WriteFunc func(ctx context.Context, op func(token string) (fetch.Result, error)) (fetch.Result, error)
+// WriteOp is one write, sent with the ctx and token it is given.
+type WriteOp = func(ctx context.Context, token string) (fetch.Result, error)
+
+// WriteFunc runs op under the surface's authorization: a token, or a context
+// that carries what the surface granted. The ctx op receives is the one to
+// send with; a gateway attaches its grant there.
+type WriteFunc func(ctx context.Context, op WriteOp) (fetch.Result, error)
 
 // Doc is one document on one server: where reads and writes for it go.
 type Doc struct {
@@ -74,8 +78,8 @@ var ErrInvalidExpectedVersion = errors.New("expected_version must be >= 0")
 
 // SendOnce is the WriteFunc of a surface with one fixed token and no retry.
 func SendOnce(token string) WriteFunc {
-	return func(_ context.Context, op func(token string) (fetch.Result, error)) (fetch.Result, error) {
-		return op(token)
+	return func(ctx context.Context, op WriteOp) (fetch.Result, error) {
+		return op(ctx, token)
 	}
 }
 
@@ -85,7 +89,7 @@ func (d *Doc) Publish(ctx context.Context, w Write, mode string) (Result, error)
 	if w.ExpectedVersion < 0 {
 		return Result{}, ErrInvalidExpectedVersion
 	}
-	result, err := d.send(ctx, func(token string) (fetch.Result, error) {
+	result, err := d.send(ctx, func(ctx context.Context, token string) (fetch.Result, error) {
 		return d.Backend.Publish(ctx, fetch.WriteRequest{
 			Host: d.Host, Path: d.Path, Token: token,
 			Body: w.Body, ExpectedVersion: w.ExpectedVersion, Metadata: w.Metadata,
@@ -157,7 +161,7 @@ func (w *Write) landedAt(head *headDoc) bool {
 // PublishUnchecked replaces the document whatever its version: the caller has
 // said it does not care what is there. Nothing to merge, nothing to reconcile.
 func (d *Doc) PublishUnchecked(ctx context.Context, body string, meta map[string]string) (Result, error) {
-	r, err := d.Write(ctx, func(token string) (fetch.Result, error) {
+	r, err := d.Write(ctx, func(ctx context.Context, token string) (fetch.Result, error) {
 		return d.Backend.Publish(ctx, fetch.WriteRequest{
 			Host: d.Host, Path: d.Path, Token: token, Body: body, ExpectedVersion: -1, Metadata: meta,
 		})
@@ -191,7 +195,7 @@ func (d *Doc) Append(ctx context.Context, req AppendRequest) (Result, error) {
 			return Result{}, err
 		}
 	}
-	return d.send(ctx, func(token string) (fetch.Result, error) {
+	return d.send(ctx, func(ctx context.Context, token string) (fetch.Result, error) {
 		return d.Backend.Append(ctx, fetch.WriteRequest{
 			Host: d.Host, Path: d.Path, Token: token,
 			Body: req.Body, ExpectedVersion: expected, Metadata: req.Metadata,
@@ -209,7 +213,7 @@ func (d *Doc) Append(ctx context.Context, req AppendRequest) (Result, error) {
 // Archive archives the document. Archived is a state, not an event, so an
 // archived head settles a lost response whoever archived it.
 func (d *Doc) Archive(ctx context.Context) (Result, error) {
-	result, err := d.send(ctx, func(token string) (fetch.Result, error) {
+	result, err := d.send(ctx, func(ctx context.Context, token string) (fetch.Result, error) {
 		return d.Backend.Archive(ctx, fetch.ArchiveRequest{Host: d.Host, Path: d.Path, Token: token})
 	}, probe{path: d.Path, landed: func(head *headDoc) (bool, error) {
 		return head.status == protocol.StatusArchived, nil
@@ -230,7 +234,7 @@ type probe struct {
 
 // send runs one write through the surface's WriteFunc, once. When its response
 // is lost the write may have landed, so it is looked for, never resent.
-func (d *Doc) send(ctx context.Context, op func(token string) (fetch.Result, error), look probe) (Result, error) {
+func (d *Doc) send(ctx context.Context, op WriteOp, look probe) (Result, error) {
 	r, err := d.Write(ctx, op)
 	if err == nil {
 		// Answered is answered: the response is passed on as the server wrote it.

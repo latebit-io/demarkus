@@ -23,7 +23,7 @@ type Deps struct {
 	Issuer string
 	// PublicURL is the authorization server the gateway names to clients.
 	PublicURL string
-	// MCP carries the gateway's own URL and the first mint retry knobs.
+	// MCP carries the gateway's own URL.
 	MCP core.MCPConfig
 	// Realm names the product in the 401 challenge.
 	Realm string
@@ -31,15 +31,13 @@ type Deps struct {
 	// management API uses too; AllowDomains is the broker wide domain gate.
 	core.SharedDeps
 	AllowDomains []string
-	WriteTokens  *WorldWriteTokenStore
 	// Provisioner creates tenant worlds on first arrival; nil in static mode.
 	Provisioner *storage.Provisioner
 }
 
-// DepsFor takes what the management API shares and gives the gateway its
-// own write token store over the shared Secret store. Run and the fixtures
-// both build deps here.
-func DepsFor(cfg *core.Config, shared core.SharedDeps, store core.SecretStore, provisioner *storage.Provisioner) *Deps {
+// DepsFor builds the gateway's deps from what the management API shares.
+// Run and the fixtures both build deps here.
+func DepsFor(cfg *core.Config, shared core.SharedDeps, provisioner *storage.Provisioner) *Deps {
 	return &Deps{
 		Worlds:       cfg.Registry(),
 		Issuer:       cfg.OIDC.Issuer,
@@ -48,13 +46,12 @@ func DepsFor(cfg *core.Config, shared core.SharedDeps, store core.SecretStore, p
 		Realm:        cfg.Server.Realm,
 		SharedDeps:   shared,
 		AllowDomains: cfg.OIDC.AllowDomains,
-		WriteTokens:  newWorldWriteTokenStore(cfg, store),
 		Provisioner:  provisioner,
 	}
 }
 
-// Gateway serves 17 MCP-over-HTTPS tools. Reads use broker SSO;
-// writes also provision per-world tokens through deps.WriteTokens.
+// Gateway serves 17 MCP-over-HTTPS tools behind broker SSO. Writes run
+// under the identity's grant on the world; no world token is involved.
 type Gateway struct {
 	deps       *Deps
 	mcpServer  *mcpserver.MCPServer

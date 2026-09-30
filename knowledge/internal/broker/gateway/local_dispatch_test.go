@@ -7,6 +7,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -14,6 +15,7 @@ import (
 type fakeLocal struct {
 	served map[string]protocol.Response
 	calls  []protocol.Request
+	grants []protocol.Grant
 	err    error
 }
 
@@ -22,8 +24,11 @@ func (f *fakeLocal) Routes(authority string) bool {
 	return ok || f.err != nil
 }
 
-func (f *fakeLocal) Exchange(_ context.Context, authority string, req protocol.Request) (protocol.Response, error) {
+func (f *fakeLocal) Exchange(ctx context.Context, authority string, req protocol.Request) (protocol.Response, error) {
 	f.calls = append(f.calls, req)
+	if grant, ok := protocol.GrantFrom(ctx); ok {
+		f.grants = append(f.grants, grant)
+	}
 	if f.err != nil {
 		return protocol.Response{}, f.err
 	}
@@ -81,7 +86,7 @@ func TestCompositeDoesNotRetryLocalFailureRemotely(t *testing.T) {
 	remote := &fakeDispatcher{}
 	c := NewComposite(cfg.Registry(), local, remote)
 
-	_, err := c.Publish(context.Background(), fetch.WriteRequest{Host: "team-a", Path: "/a.md", Body: "x"})
+	_, err := c.Publish(granted(), fetch.WriteRequest{Host: "team-a", Path: "/a.md", Body: "x"})
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want the local failure", err)
 	}
@@ -99,10 +104,54 @@ func TestCompositeRefusesUnknownWorldAndBadRequests(t *testing.T) {
 	if _, err := c.Fetch(context.Background(), fetch.FetchRequest{Host: "nowhere", Path: "/"}); !errors.As(err, &notFound) {
 		t.Fatalf("unknown world err = %v, want errWorldNotFound", err)
 	}
-	if _, err := c.Append(context.Background(), fetch.WriteRequest{Host: "team-a", Path: "/a.md"}); err == nil {
+	if _, err := c.Append(granted(), fetch.WriteRequest{Host: "team-a", Path: "/a.md"}); err == nil {
 		t.Fatal("append without body or version was dispatched")
 	}
 	if _, err := c.Lookup(context.Background(), fetch.LookupRequest{Host: "team-a", Scope: "/"}); err == nil {
 		t.Fatal("lookup without query was dispatched")
+	}
+}
+
+// granted is a context the write gate has marked, as toolWriter does.
+func granted() context.Context {
+	return protocol.WithGrant(context.Background(), protocol.Grant{Label: "alice@example.com", Paths: []string{"/**"}})
+}
+
+func TestCompositeWritesLocalWorldUnderTheGrant(t *testing.T) {
+	cfg := brokertest.NewConfig()
+	local := &fakeLocal{served: map[string]protocol.Response{
+		"team-a.team-a.svc.cluster.local": {Status: protocol.StatusCreated},
+	}}
+	c := NewComposite(cfg.Registry(), local, &fakeDispatcher{})
+
+	res, err := c.Publish(granted(), fetch.WriteRequest{Host: "team-a", Path: "/a.md", Body: "x"})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if res.Response.Status != protocol.StatusCreated {
+		t.Fatalf("status = %q, want created", res.Response.Status)
+	}
+	if len(local.grants) != 1 || local.grants[0].Label != "alice@example.com" || len(local.grants[0].Paths) != 1 || local.grants[0].Paths[0] != "/**" {
+		t.Fatalf("grants reaching the world = %+v, want alice on /**", local.grants)
+	}
+	if req := local.calls[0]; req.Verb != protocol.VerbPublish || req.Metadata["auth"] != "" {
+		t.Fatalf("wire request = %+v, want a tokenless PUBLISH", req)
+	}
+}
+
+func TestCompositeRefusesWritesWithoutGrantOrLocalWorld(t *testing.T) {
+	cfg := brokertest.NewConfig()
+	local := &fakeLocal{}
+	remote := &fakeDispatcher{}
+	c := NewComposite(cfg.Registry(), local, remote)
+
+	if _, err := c.Archive(context.Background(), fetch.ArchiveRequest{Host: "team-a", Path: "/a.md"}); !errors.Is(err, core.ErrNotAuthorized) {
+		t.Fatalf("ungranted write err = %v, want ErrNotAuthorized", err)
+	}
+	if _, err := c.Publish(granted(), fetch.WriteRequest{Host: "team-a", Path: "/a.md", Body: "x"}); !errors.Is(err, errWorldNotLocal) {
+		t.Fatalf("remote world write err = %v, want errWorldNotLocal", err)
+	}
+	if len(local.calls) != 0 || len(remote.PublishCalls) != 0 {
+		t.Fatal("a refused write reached a world")
 	}
 }

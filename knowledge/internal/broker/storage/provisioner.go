@@ -108,8 +108,8 @@ func NewProvisioner(cfg *core.Config, deps ProvisionerDeps) *Provisioner {
 }
 
 // DeprovisionTenant removes slug: registry entry, fragment entry (the
-// ONE flow allowed to drop a world), tokens key, write-token record,
-// and optionally the bucket. Idempotent; operator-invoked only.
+// ONE flow allowed to drop a world), tokens key, and optionally the
+// bucket. Idempotent; operator-invoked only.
 func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, deleteBucket bool) (found bool, err error) {
 	// Resolve the deleter BEFORE any destructive round trip: failing
 	// after the registry rewrite would leave a half-removed tenant.
@@ -160,9 +160,6 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 	world := p.cfg.Provisioning.TenantWorld(slug, "")
 	if err := p.store.Delete(ctx, core.WorldTokensRef(&world)); err != nil {
 		return found, fmt.Errorf("delete tokens key for %q: %w", slug, err)
-	}
-	if err := p.store.Delete(ctx, core.WorldWriteTokenRef(p.cfg, slug)); err != nil {
-		return found, fmt.Errorf("delete write-token record for %q: %w", slug, err)
 	}
 
 	if deleter != nil {

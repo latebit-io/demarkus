@@ -169,11 +169,16 @@ func (g *Gateway) seedMemoryWorld(ctx context.Context, w *core.WorldConfig) bool
 		g.deps.Log.Warn("memory seed check returned unexpected status", "world", w.Name, "status", result.Response.Status)
 		return false
 	}
+	granted, err := g.writeContext(ctx, w.Name)
+	if err != nil {
+		g.deps.Log.Warn("memory seed refused", "world", w.Name, "err", err)
+		return false
+	}
 	for _, doc := range memorySeedDocs() {
 		if seeded && !doc.overServerSeed {
 			continue
 		}
-		if !g.publishMemorySeedDoc(ctx, w, &doc, seeded) {
+		if !g.publishMemorySeedDoc(granted, w, &doc, seeded) {
 			return false
 		}
 	}
@@ -228,9 +233,9 @@ func (g *Gateway) memorySeedAction(ctx context.Context, w *core.WorldConfig, doc
 	return seedFailed
 }
 
-// publishMemorySeedDoc publishes one seed document and reports whether the
-// world may still be marked seeded. replaceOnly is for a world that already
-// holds the template: nothing is created there, only a server seed replaced.
+// publishMemorySeedDoc publishes one seed document under ctx's grant and
+// reports whether the world may still be marked seeded. replaceOnly is for a
+// world holding the template: nothing is created, only a server seed replaced.
 func (g *Gateway) publishMemorySeedDoc(ctx context.Context, w *core.WorldConfig, doc *memorySeedDoc, replaceOnly bool) bool {
 	action := g.memorySeedAction(ctx, w, doc)
 	switch {
@@ -245,13 +250,9 @@ func (g *Gateway) publishMemorySeedDoc(ctx context.Context, w *core.WorldConfig,
 		g.deps.Log.Error("memory seed embed unreadable", "name", doc.embedName, "err", readErr)
 		return false
 	}
-	// dispatchWithWriteAuth provisions the world write token and absorbs
-	// first-mint Secret propagation lag, which a fresh world's first write hits.
-	pres, pubErr := g.dispatchWithWriteAuth(ctx, w.Name, func(token string) (fetch.Result, error) {
-		return g.dispatcher.Publish(ctx, fetch.WriteRequest{
-			Host: w.Name, Path: doc.path, Body: string(body), Token: token,
-			ExpectedVersion: action.expectedVersion(), Metadata: doc.meta,
-		})
+	pres, pubErr := g.dispatcher.Publish(ctx, fetch.WriteRequest{
+		Host: w.Name, Path: doc.path, Body: string(body),
+		ExpectedVersion: action.expectedVersion(), Metadata: doc.meta,
 	})
 	if pubErr != nil {
 		g.deps.Log.Warn("memory seed publish failed", "world", w.Name, "path", doc.path, "err", pubErr)

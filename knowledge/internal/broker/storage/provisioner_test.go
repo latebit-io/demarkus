@@ -779,12 +779,9 @@ func TestDeprovisionTenantRemovesEverything(t *testing.T) {
 	if strings.Contains(fragment, "name: "+world.Name) || !strings.Contains(fragment, "name: "+frankWorld.Name) {
 		t.Errorf("fragment after deprovision:\n%s", fragment)
 	}
-	// Tokens key and write-token record deleted.
+	// Tokens key deleted.
 	if got := store.get(core.WorldTokensRef(&world)); len(got) != 0 {
 		t.Errorf("tokens key survived deprovision: %q", got)
-	}
-	if got := store.get(core.WorldWriteTokenRef(cfg, world.Name)); len(got) != 0 {
-		t.Errorf("write-token record survived deprovision: %q", got)
 	}
 	// Bucket deleted on request.
 	deleted := buckets.DeletedBuckets()

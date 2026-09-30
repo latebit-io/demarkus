@@ -43,7 +43,7 @@ func NewConfig() *core.Config {
 				Namespace:    "team-a",
 				TokensSecret: "team-a-tokens",
 				Allow:        core.AllowConfig{Domains: []string{"example.com"}},
-				DefaultToken: core.TokenScope{
+				WriteScope: core.WriteScope{
 					Paths: []string{"/team-a/*"},
 				},
 			},
