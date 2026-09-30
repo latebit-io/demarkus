@@ -23,6 +23,10 @@ import (
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
+// exitNotSynced is the status for a publish that is current but whose
+// directory sync failed.
+const exitNotSynced = 2
+
 func main() {
 	root := flag.String("root", "", "content directory (same as DEMARKUS_ROOT)")
 	path := flag.String("path", "", "document path (e.g. /index.md)")
@@ -31,6 +35,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: demarkus-publish [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Publish a document directly to the versioned store on disk.\n")
 		fmt.Fprintf(os.Stderr, "Reads from stdin if -body is not provided.\n\n")
+		fmt.Fprintf(os.Stderr, "Exit status: 0 published or unchanged, 1 failed, %d published but the\n", exitNotSynced)
+		fmt.Fprintf(os.Stderr, "directory sync failed (the version is current; its durability is unconfirmed).\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -96,9 +102,11 @@ func main() {
 	}
 	doc, err := s.Write(*path, content, nil)
 	if errors.Is(err, storefmt.ErrCommittedNotSynced) {
-		// The version is current; only its directory sync failed.
+		// The version is current; only its directory sync failed, which
+		// the exit status reports so scripts can tell.
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
-		err = nil
+		fmt.Fprintf(os.Stderr, "published %s v%d\n", *path, doc.Version)
+		os.Exit(exitNotSynced)
 	}
 	if err != nil {
 		if errors.Is(err, storefmt.ErrNotModified) {
