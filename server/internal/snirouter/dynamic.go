@@ -64,16 +64,18 @@ func (d *Dynamic) Select(connection *quic.Conn) (quicserve.Endpoint, error) {
 	if connection == nil {
 		return nil, errors.New("snirouter: QUIC connection is nil")
 	}
-	return d.lookup(connection.ConnectionState().TLS.ServerName)
+	return d.Lookup(connection.ConnectionState().TLS.ServerName)
 }
 
 // HandshakeHook mirrors Router.HandshakeHook against the current set.
 func (d *Dynamic) HandshakeHook(config *tls.Config) (func(*tls.ClientHelloInfo) (*tls.Config, error), error) {
-	return handshakeHook(config, d.lookup)
+	return handshakeHook(config, d.Lookup)
 }
 
-// lookup routes against the mapping set current at call time.
-func (d *Dynamic) lookup(serverName string) (quicserve.Endpoint, error) {
+// Lookup routes serverName against the mapping set current at call time;
+// an in-process caller reaches a world's endpoint through it without a
+// connection.
+func (d *Dynamic) Lookup(serverName string) (quicserve.Endpoint, error) {
 	router := d.current.Load()
 	if router == nil {
 		return nil, errors.New("snirouter: no mappings published")

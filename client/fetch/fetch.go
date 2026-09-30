@@ -182,22 +182,14 @@ const (
 // and the server answered from the catalog instead.
 const CatalogFallbackNote = "server answered from the catalog (no body match); an empty table is not evidence of absence"
 
-// readRequest is one cacheable read: FETCH or LIST.
-type readRequest struct {
-	host, path, token, verb string
-	extra                   map[string]string // request options; any of them bypasses the cache
-}
-
-// cachedRead serves a read through the response cache when it may.
-func (c *Client) cachedRead(ctx context.Context, r readRequest) (Result, error) {
-	host, path, token, verb, extra := r.host, r.path, r.token, r.verb, r.extra
+// cachedRead serves a read through the response cache when it may: only a
+// request without metadata, since a token would persist private content
+// to disk and an option is not part of the cache key.
+func (c *Client) cachedRead(ctx context.Context, host string, encoded protocol.Request) (Result, error) {
+	path, verb := encoded.Path, encoded.Verb
+	useCache := c.opts.Cache != nil && len(encoded.Metadata) == 0
 	return c.doWithRetryContext(ctx, host, func(conn *quic.Conn) (Result, error) {
-		req := newRequest(verb, path, token, extra)
-
-		// Skip cache for authenticated requests (to avoid persisting private
-		// content to disk) and for option-bearing requests (the cache key does
-		// not encode the extra metadata).
-		useCache := c.opts.Cache != nil && token == "" && len(extra) == 0
+		req := encoded
 
 		var cached *CachedResponse
 		if useCache {
@@ -207,6 +199,8 @@ func (c *Client) cachedRead(ctx context.Context, r readRequest) (Result, error) 
 				log.Printf("[WARN] cache read %s %s%s: %v", verb, host, path, cacheErr)
 			}
 			if cached != nil {
+				// Each attempt adds its validators to its own copy.
+				req.Metadata = maps.Clone(encoded.Metadata)
 				if etag := cached.Response.Metadata["etag"]; etag != "" {
 					req.Metadata["if-none-match"] = etag
 				}
@@ -410,7 +404,7 @@ func (c *Client) getConnContext(ctx context.Context, host string) (*quic.Conn, e
 	tlsConf := c.tlsConf.Clone()
 	tlsConf.ServerName = endpoint.ServerName
 	if tlsConf.ServerName == "" {
-		tlsConf.ServerName = authorityHostname(host)
+		tlsConf.ServerName = AuthorityHostname(host)
 	}
 	conn, err := quic.DialAddr(ctx, endpoint.DialAddress, tlsConf, c.quicConf)
 	if err != nil {
@@ -434,7 +428,10 @@ func (c *Client) getConnContext(ctx context.Context, host string) (*quic.Conn, e
 	return conn, nil
 }
 
-func authorityHostname(authority string) string {
+// AuthorityHostname is the TLS server name for a mark authority: its host,
+// the whole string when it carries no port. Anything that must agree with
+// the SNI this client presents derives it here.
+func AuthorityHostname(authority string) string {
 	if host, _, err := net.SplitHostPort(authority); err == nil {
 		return host
 	}

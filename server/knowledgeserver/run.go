@@ -31,8 +31,33 @@ const (
 	shutdownTimeout = 10 * time.Second
 )
 
-// Run is the knowledge server main: flags, config, TLS, worlds, peers, the
-// QUIC and health listeners, signals and the two-phase shutdown. Blocks
+// Options configures Open.
+type Options struct {
+	// ConfigFile is the strict multi-world YAML configuration.
+	ConfigFile string
+	// Logger defaults to JSON at info.
+	Logger *slog.Logger
+}
+
+// Server is an opened knowledge server: worlds, peers and listeners, served
+// by Serve and torn down by Close.
+type Server struct {
+	config       *knowledgeconfig.Config
+	configFile   string
+	logger       *slog.Logger
+	certificates *certsource.Source
+	gcs          *storage.Client
+	watchCtx     context.Context
+	stopWatchers context.CancelFunc
+	watcherGroup sync.WaitGroup
+	peers        *peerLinks
+	worlds       *worldManager
+	quicServer   *quicserve.Server
+	health       *healthEndpoint
+	closeOnce    sync.Once
+}
+
+// Run is the knowledge server main: flags, Open, signals and Serve. Blocks
 // until shutdown completes. version is the binary's build version.
 func Run(arguments []string, version string) error {
 	flags := flag.NewFlagSet("demarkus-knowledge-server", flag.ContinueOnError)
@@ -48,12 +73,54 @@ func Run(arguments []string, version string) error {
 	if *configFile == "" {
 		return errors.New("-config is required")
 	}
+	server, err := Open(Options{ConfigFile: *configFile})
+	if err != nil {
+		return err
+	}
+	defer server.Close()
+	ctx, stop := server.WatchSignals(context.Background())
+	defer stop()
+	return server.Serve(ctx)
+}
 
-	logger := logging.New("json", "info", nil)
-	config, err := knowledgeconfig.Load(*configFile)
+// WatchSignals returns a context that ends on a shutdown signal, and
+// reloads the server on the platform's reload signal. stop releases the
+// handler; a composed binary shares it with the server.
+func (s *Server) WatchSignals(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, processSignals()...)
+	go func() {
+		defer signal.Stop(signals)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case received := <-signals:
+				if isReloadSignal(received) {
+					s.Reload()
+					continue
+				}
+				s.logger.Info("received shutdown signal", "signal", received.String())
+				cancel()
+				return
+			}
+		}
+	}()
+	return ctx, cancel
+}
+
+// Open loads the configuration and opens TLS, the bucket client, peers,
+// every world and both listeners. Nothing is served until Serve.
+func Open(opts Options) (*Server, error) {
+	logger := opts.Logger
+	if logger == nil {
+		logger = logging.New("json", "info", nil)
+	}
+	config, err := knowledgeconfig.Load(opts.ConfigFile)
 	if err != nil {
 		logger.Error("configuration invalid", "error", err)
-		return err
+		return nil, err
 	}
 	// Dynamic mode (worldsFile set) skips authority pinning on the cert:
 	// tenant worlds come and go at runtime, so coverage is checked
@@ -65,103 +132,159 @@ func Run(arguments []string, version string) error {
 	certificates, err := certsource.Open(config.TLS.CertFile, config.TLS.KeyFile, authorities)
 	if err != nil {
 		logger.Error("TLS setup failed", "error", err)
-		return err
+		return nil, err
 	}
+	s := &Server{config: config, configFile: opts.ConfigFile, logger: logger, certificates: certificates}
+	s.watchCtx, s.stopWatchers = context.WithCancel(context.Background())
+	if err := s.open(); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
+}
 
+// open fills in everything after TLS; Close on the partial Server undoes
+// whatever it reached.
+func (s *Server) open() error {
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer startupCancel()
 	client, err := storage.NewClient(startupCtx)
 	if err != nil {
-		logger.Error("GCS client unavailable", "error", err)
+		s.logger.Error("GCS client unavailable", "error", err)
 		return err
 	}
-	defer closeGCS(client, logger)
-
-	watchCtx, stopWatchers := context.WithCancel(context.Background())
-	var watcherGroup sync.WaitGroup
-	defer func() {
-		stopWatchers()
-		watcherGroup.Wait()
-	}()
+	s.gcs = client
 
 	newStore := func(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
 		return gcs.New(client, world.Bucket.Name(), maxObjectBytes)
 	}
-	peers, err := openPeers(config.Peers, certificates, logger)
+	peers, err := openPeers(s.config.Peers, s.certificates, s.logger)
 	if err != nil {
-		logger.Error("peer hints unavailable", "error", err)
+		s.logger.Error("peer hints unavailable", "error", err)
 		return err
 	}
-	defer peers.close(logger)
-	worlds, err := newWorldManager(watchCtx, &watcherGroup, worldManagerConfig{
-		configFile: *configFile, config: config, newStore: newStore, certs: certificates, peers: peers, logger: logger,
+	s.peers = peers
+	worlds, err := newWorldManager(s.watchCtx, &s.watcherGroup, worldManagerConfig{
+		configFile: s.configFile, config: s.config, newStore: newStore, certs: s.certificates, peers: peers, logger: s.logger,
 	})
 	if err != nil {
-		logger.Error("world startup failed", "error", err)
+		s.logger.Error("world startup failed", "error", err)
 		return err
 	}
-	defer worlds.Close()
-	tokens := worlds.Tokens()
-	router := worlds.Router()
-	tlsConfig := certificates.TLSConfig(protocol.ALPN)
-	handshakeHook, err := router.HandshakeHook(tlsConfig)
+	s.worlds = worlds
+
+	tlsConfig := s.certificates.TLSConfig(protocol.ALPN)
+	handshakeHook, err := worlds.Router().HandshakeHook(tlsConfig)
 	if err != nil {
 		return err
 	}
 	tlsConfig.GetConfigForClient = handshakeHook
-
 	quicServer, err := quicserve.Listen(quicserve.Config{
-		Address:   config.Listen.Address,
+		Address:   s.config.Listen.Address,
 		TLSConfig: tlsConfig,
 		QUICConfig: &quic.Config{
-			MaxIncomingStreams:    config.Listen.MaxIncomingStreams,
+			MaxIncomingStreams:    s.config.Listen.MaxIncomingStreams,
 			MaxIncomingUniStreams: 0,
-			MaxIdleTimeout:        time.Duration(config.Listen.IdleTimeout),
+			MaxIdleTimeout:        time.Duration(s.config.Listen.IdleTimeout),
 		},
-		Logger: logger,
+		Logger: s.logger,
 	})
 	if err != nil {
-		logger.Error("QUIC listen failed", "error", err)
+		s.logger.Error("QUIC listen failed", "error", err)
 		return err
 	}
-	defer func() {
-		if err := quicServer.Close(); err != nil {
-			logger.Warn("QUIC close failed", "error", err)
-		}
-	}()
+	s.quicServer = quicServer
 
-	health, err := openHealth(config.Health.Address)
+	health, err := openHealth(s.config.Health.Address)
 	if err != nil {
-		logger.Error("health listen failed", "error", err)
+		s.logger.Error("health listen failed", "error", err)
 		return err
 	}
-	defer health.close(logger)
+	s.health = health
+	return nil
+}
 
-	startConfigWatchers(watchCtx, &watcherGroup, *configFile, config, worlds, logger)
+// Serve starts the config watchers and serves QUIC and health until ctx
+// ends or a listener fails, then drains the worlds and stops the
+// listeners. Close still has to run afterwards.
+func (s *Server) Serve(ctx context.Context) error {
+	startConfigWatchers(s.watchCtx, &s.watcherGroup, s.configFile, s.config, s.worlds, s.logger)
 
 	quicResult := make(chan error, 1)
-	go func() { quicResult <- quicServer.Serve(context.Background(), router.Selector()) }()
+	go func() { quicResult <- s.quicServer.Serve(context.Background(), s.worlds.Router().Selector()) }()
 	healthResult := make(chan error, 1)
-	go func() { healthResult <- health.server.Serve(health.listener) }()
-	health.status.SetLive(true)
-	health.status.SetReady(true)
-	logger.Info("knowledge server started", "quic_addr", quicServer.Addr(), "health_addr", health.listener.Addr(), "worlds", worlds.WorldCount())
+	go func() { healthResult <- s.health.server.Serve(s.health.listener) }()
+	s.health.status.SetLive(true)
+	s.health.status.SetReady(true)
+	s.logger.Info("knowledge server started", "quic_addr", s.quicServer.Addr(), "health_addr", s.health.listener.Addr(), "worlds", s.worlds.WorldCount())
 
-	signalChannel := make(chan os.Signal, 1)
-	signal.Notify(signalChannel, processSignals()...)
-	defer signal.Stop(signalChannel)
-	runErr := waitForStop(signalChannel, quicResult, healthResult, certificates, tokens, logger)
+	var runErr error
+	select {
+	case <-ctx.Done():
+	case err := <-quicResult:
+		if !errors.Is(err, quicserve.ErrServerClosed) {
+			runErr = fmt.Errorf("QUIC server stopped: %w", err)
+		}
+	case err := <-healthResult:
+		if !errors.Is(err, http.ErrServerClosed) {
+			runErr = fmt.Errorf("health server stopped: %w", err)
+		}
+	}
 
-	health.status.SetReady(false)
-	quicServer.ShutdownAfter(worlds.Drain, shutdownTimeout)
-	health.status.SetLive(false)
+	s.health.status.SetReady(false)
+	s.quicServer.ShutdownAfter(s.worlds.Drain, shutdownTimeout)
+	s.health.status.SetLive(false)
 	healthCtx, healthCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := health.server.Shutdown(healthCtx); err != nil {
-		logger.Warn("health shutdown incomplete", "error", err)
+	if err := s.health.server.Shutdown(healthCtx); err != nil {
+		s.logger.Warn("health shutdown incomplete", "error", err)
 	}
 	healthCancel()
-	logger.Info("knowledge server stopped")
+	s.logger.Info("knowledge server stopped")
 	return runErr
+}
+
+// Reload re-reads the TLS certificate and every world's token files; the
+// SIGHUP path. Failures are logged, the previous state stays live.
+func (s *Server) Reload() {
+	if err := s.certificates.Reload(); err != nil {
+		s.logger.Error("TLS certificate reload failed", "error", err)
+	} else {
+		s.logger.Info("TLS certificate reloaded")
+	}
+	if err := s.worlds.Tokens().Reload(); err != nil {
+		s.logger.Error("token reload failed", "error", err)
+	} else {
+		s.logger.Info("tokens reloaded")
+	}
+}
+
+// Close tears down in reverse: reloaders and the retry loop first, then
+// peers, so nothing reopens or hints a world while it closes; then the
+// listeners and the bucket client. Safe after Serve and on a partial open.
+func (s *Server) Close() {
+	s.closeOnce.Do(func() {
+		s.stopWatchers()
+		s.watcherGroup.Wait()
+		if s.peers != nil {
+			s.peers.close(s.logger)
+		}
+		if s.worlds != nil {
+			s.worlds.Close()
+		}
+		if s.quicServer != nil {
+			if err := s.quicServer.Close(); err != nil {
+				s.logger.Warn("QUIC close failed", "error", err)
+			}
+		}
+		if s.health != nil {
+			s.health.close(s.logger)
+		}
+		if s.gcs != nil {
+			if err := s.gcs.Close(); err != nil {
+				s.logger.Warn("GCS client close failed", "error", err)
+			}
+		}
+	})
 }
 
 func configuredAuthorities(config *knowledgeconfig.Config) []string {
@@ -175,46 +298,6 @@ func configuredAuthorities(config *knowledgeconfig.Config) []string {
 		authorities = append(authorities, world.Authorities...)
 	}
 	return authorities
-}
-
-func waitForStop(
-	signals <-chan os.Signal,
-	quicResult <-chan error,
-	healthResult <-chan error,
-	certificates *certsource.Source,
-	tokens *tokenCoordinator,
-	logger *slog.Logger,
-) error {
-	for {
-		select {
-		case received := <-signals:
-			if isReloadSignal(received) {
-				if err := certificates.Reload(); err != nil {
-					logger.Error("TLS certificate reload failed", "error", err)
-				} else {
-					logger.Info("TLS certificate reloaded")
-				}
-				if err := tokens.Reload(); err != nil {
-					logger.Error("token reload failed", "error", err)
-				} else {
-					logger.Info("tokens reloaded")
-				}
-				continue
-			}
-			logger.Info("received shutdown signal", "signal", received.String())
-			return nil
-		case err := <-quicResult:
-			if errors.Is(err, quicserve.ErrServerClosed) {
-				return nil
-			}
-			return fmt.Errorf("QUIC server stopped: %w", err)
-		case err := <-healthResult:
-			if errors.Is(err, http.ErrServerClosed) {
-				return nil
-			}
-			return fmt.Errorf("health server stopped: %w", err)
-		}
-	}
 }
 
 // startConfigWatchers reloads the world set when the main config or the
@@ -239,12 +322,6 @@ func startConfigWatchers(
 				logger.Warn("config watcher exited", "target", target, "error", err)
 			}
 		})
-	}
-}
-
-func closeGCS(client *storage.Client, logger *slog.Logger) {
-	if err := client.Close(); err != nil {
-		logger.Warn("GCS client close failed", "error", err)
 	}
 }
 

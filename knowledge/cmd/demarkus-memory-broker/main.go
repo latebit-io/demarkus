@@ -56,21 +56,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	err := broker.Run(*configPath, &broker.RunOptions{
-		LogName: "memory broker",
-		Realm:   "demarkus-memory-broker",
-		Profile: broker.MemoryProfile(),
-		// Memory-broker invariants on top of the shared validation:
-		// every static world names its tenant, and the provisioning
-		// block, when enabled, is complete.
-		Validate: []func(*broker.Config) error{
-			(*broker.Config).ValidateTenantWorlds,
-			(*broker.Config).ValidateProvisioning,
-		},
-		Buckets:        broker.NewGCSBuckets,
-		Version:        version,
-		KubeconfigPath: *kubeconfig,
-	}, log)
+	err := broker.Run(*configPath, broker.MemoryOptions(version, *kubeconfig), log)
 	if err != nil {
 		log.Error("memory broker exited with error", "err", err)
 		os.Exit(1)

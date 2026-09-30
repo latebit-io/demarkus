@@ -17,7 +17,7 @@ help:
 	@echo "  knowledge-server - Build demarkus-knowledge-server (multi-world GCS backend)"
 	@echo "  client    - Build demarkus TUI client"
 	@echo "  tools     - Build token, publish (tools/bin/)"
-	@echo "  knowledge - Build the knowledge and memory brokers (knowledge/bin/)"
+	@echo "  knowledge - Build the brokers and the composed demarkus-knowledge (knowledge/bin/)"
 	@echo "  image     - Build runtime container images (TAG overridable)"
 	@echo "  image-knowledge-server - Build the multi-world knowledge server image"
 	@echo "  test      - Run all tests"
@@ -69,7 +69,8 @@ knowledge: protocol
 	@echo "Building knowledge brokers..."
 	cd knowledge && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-knowledge-broker ./cmd/demarkus-knowledge-broker
 	cd knowledge && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-memory-broker ./cmd/demarkus-memory-broker
-	@echo "✓ Knowledge built: knowledge/bin/{demarkus-knowledge-broker, demarkus-memory-broker}"
+	cd knowledge && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-knowledge ./cmd/demarkus-knowledge
+	@echo "✓ Knowledge built: knowledge/bin/{demarkus-knowledge-broker, demarkus-memory-broker, demarkus-knowledge}"
 
 # Build container images. One image per deployable service so each pod
 # carries only the binaries it needs at runtime. Admin CLIs are NOT

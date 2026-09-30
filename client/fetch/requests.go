@@ -65,20 +65,20 @@ type ArchiveRequest struct {
 	Host, Path, Token string
 }
 
-// Fetch retrieves a document. An unconditional, tokenless read is served
-// through the response cache when one is configured.
-func (c *Client) Fetch(ctx context.Context, r FetchRequest) (Result, error) {
+// Request is the FETCH this read encodes.
+func (r FetchRequest) Request() (protocol.Request, error) {
 	var extra map[string]string
 	if r.IfNoneMatch != "" {
 		extra = map[string]string{"if-none-match": r.IfNoneMatch}
 	}
-	return c.cachedRead(ctx, readRequest{host: r.Host, path: r.Path, token: r.Token, verb: protocol.VerbFetch, extra: extra})
+	return newRequest(protocol.VerbFetch, r.Path, r.Token, extra), nil
 }
 
-// List retrieves one page of a directory listing.
-func (c *Client) List(ctx context.Context, r ListRequest) (Result, error) {
+// Request is the LIST this read encodes; it refuses a page size the
+// protocol does not allow.
+func (r ListRequest) Request() (protocol.Request, error) {
 	if r.PageSize < 0 || r.PageSize > protocol.MaxListPageSize {
-		return Result{}, fmt.Errorf("LIST page size must be between 1 and %d, or 0 for the server default", protocol.MaxListPageSize)
+		return protocol.Request{}, fmt.Errorf("LIST page size must be between 1 and %d, or 0 for the server default", protocol.MaxListPageSize)
 	}
 	extra := make(map[string]string)
 	if r.IncludeArchived {
@@ -90,28 +90,23 @@ func (c *Client) List(ctx context.Context, r ListRequest) (Result, error) {
 	if r.PageSize > 0 {
 		extra["page-size"] = strconv.Itoa(r.PageSize)
 	}
-	if len(extra) == 0 {
-		extra = nil
-	}
-	return c.cachedRead(ctx, readRequest{host: r.Host, path: r.Path, token: r.Token, verb: protocol.VerbList, extra: extra})
+	return newRequest(protocol.VerbList, r.Path, r.Token, extra), nil
 }
 
-// Versions retrieves the version history of a document.
-func (c *Client) Versions(ctx context.Context, r VersionsRequest) (Result, error) {
-	req := newRequest(protocol.VerbVersions, r.Path, r.Token, nil)
-	return c.doWithRetryContext(ctx, r.Host, func(conn *quic.Conn) (Result, error) {
-		return c.requestOnConnContext(ctx, conn, req)
-	})
+// Request is the VERSIONS this read encodes.
+func (r VersionsRequest) Request() (protocol.Request, error) {
+	return newRequest(protocol.VerbVersions, r.Path, r.Token, nil), nil
 }
 
-// Lookup queries a server's catalog and returns an importance ranked table.
-func (c *Client) Lookup(ctx context.Context, r LookupRequest) (Result, error) {
+// Request is the LOOKUP this query encodes; an empty query or an unknown
+// match mode is refused here once for every surface, not relayed back as a
+// bad-request body.
+func (r LookupRequest) Request() (protocol.Request, error) {
 	if r.Query == "" {
-		return Result{}, errors.New("LOOKUP requires a non-empty query")
+		return protocol.Request{}, errors.New("LOOKUP requires a non-empty query")
 	}
-	// Refused here once for every surface, not relayed back as a bad-request body.
 	if _, err := protocol.ParseMatch(r.Match); err != nil {
-		return Result{}, err
+		return protocol.Request{}, err
 	}
 	req := newRequest(protocol.VerbLookup, r.Scope, r.Token, map[string]string{"query": r.Query})
 	if r.Filter != "" {
@@ -123,18 +118,82 @@ func (c *Client) Lookup(ctx context.Context, r LookupRequest) (Result, error) {
 	if r.Match != "" {
 		req.Metadata["match"] = r.Match
 	}
-	return c.doWithRetryContext(ctx, r.Host, func(conn *quic.Conn) (Result, error) {
-		return c.requestOnConnContext(ctx, conn, req)
-	})
+	return req, nil
+}
+
+// PublishRequest is the PUBLISH this write encodes.
+func (r WriteRequest) PublishRequest() (protocol.Request, error) {
+	req := newRequest(protocol.VerbPublish, r.Path, r.Token, r.Metadata)
+	req.Body = r.Body
+	if r.ExpectedVersion >= 0 {
+		req.Metadata["expected-version"] = strconv.Itoa(r.ExpectedVersion)
+	}
+	return req, nil
+}
+
+// AppendRequest is the APPEND this write encodes; it needs a body and an
+// expected version of at least 1.
+func (r WriteRequest) AppendRequest() (protocol.Request, error) {
+	if r.ExpectedVersion < 1 {
+		return protocol.Request{}, fmt.Errorf("APPEND requires expected-version >= 1, got %d", r.ExpectedVersion)
+	}
+	if r.Body == "" {
+		return protocol.Request{}, errors.New("APPEND requires a non-empty body")
+	}
+	req := newRequest(protocol.VerbAppend, r.Path, r.Token, r.Metadata)
+	req.Body = r.Body
+	req.Metadata["expected-version"] = strconv.Itoa(r.ExpectedVersion)
+	return req, nil
+}
+
+// Request is the ARCHIVE this encodes.
+func (r ArchiveRequest) Request() (protocol.Request, error) {
+	return newRequest(protocol.VerbArchive, r.Path, r.Token, nil), nil
+}
+
+// Fetch retrieves a document. An unconditional, tokenless read is served
+// through the response cache when one is configured.
+func (c *Client) Fetch(ctx context.Context, r FetchRequest) (Result, error) {
+	req, err := r.Request()
+	if err != nil {
+		return Result{}, err
+	}
+	return c.cachedRead(ctx, r.Host, req)
+}
+
+// List retrieves one page of a directory listing.
+func (c *Client) List(ctx context.Context, r ListRequest) (Result, error) {
+	req, err := r.Request()
+	if err != nil {
+		return Result{}, err
+	}
+	return c.cachedRead(ctx, r.Host, req)
+}
+
+// Versions retrieves the version history of a document.
+func (c *Client) Versions(ctx context.Context, r VersionsRequest) (Result, error) {
+	req, err := r.Request()
+	if err != nil {
+		return Result{}, err
+	}
+	return c.read(ctx, r.Host, req)
+}
+
+// Lookup queries a server's catalog and returns an importance ranked table.
+func (c *Client) Lookup(ctx context.Context, r LookupRequest) (Result, error) {
+	req, err := r.Request()
+	if err != nil {
+		return Result{}, err
+	}
+	return c.read(ctx, r.Host, req)
 }
 
 // Publish creates or replaces a document. It is sent at most once: a failure
 // after the first byte answers protocol.ErrOutcomeUnknown.
 func (c *Client) Publish(ctx context.Context, r WriteRequest) (Result, error) {
-	req := newRequest(protocol.VerbPublish, r.Path, r.Token, r.Metadata)
-	req.Body = r.Body
-	if r.ExpectedVersion >= 0 {
-		req.Metadata["expected-version"] = strconv.Itoa(r.ExpectedVersion)
+	req, err := r.PublishRequest()
+	if err != nil {
+		return Result{}, err
 	}
 	return c.write(ctx, r.Host, req)
 }
@@ -142,21 +201,20 @@ func (c *Client) Publish(ctx context.Context, r WriteRequest) (Result, error) {
 // Append adds Body to the end of an existing document, so ExpectedVersion
 // must be at least 1. Sent at most once, like Publish.
 func (c *Client) Append(ctx context.Context, r WriteRequest) (Result, error) {
-	if r.ExpectedVersion < 1 {
-		return Result{}, fmt.Errorf("APPEND requires expected-version >= 1, got %d", r.ExpectedVersion)
+	req, err := r.AppendRequest()
+	if err != nil {
+		return Result{}, err
 	}
-	if r.Body == "" {
-		return Result{}, errors.New("APPEND requires a non-empty body")
-	}
-	req := newRequest(protocol.VerbAppend, r.Path, r.Token, r.Metadata)
-	req.Body = r.Body
-	req.Metadata["expected-version"] = strconv.Itoa(r.ExpectedVersion)
 	return c.write(ctx, r.Host, req)
 }
 
 // Archive marks a document as archived. Sent at most once, like Publish.
 func (c *Client) Archive(ctx context.Context, r ArchiveRequest) (Result, error) {
-	return c.write(ctx, r.Host, newRequest(protocol.VerbArchive, r.Path, r.Token, nil))
+	req, err := r.Request()
+	if err != nil {
+		return Result{}, err
+	}
+	return c.write(ctx, r.Host, req)
 }
 
 // newRequest copies meta, so the caller's map is never modified, then adds auth.
@@ -171,6 +229,13 @@ func newRequest(verb, path, token string, meta map[string]string) protocol.Reque
 
 func (c *Client) write(ctx context.Context, host string, req protocol.Request) (Result, error) {
 	return c.doWriteContext(ctx, host, func(conn *quic.Conn) (Result, error) {
+		return c.requestOnConnContext(ctx, conn, req)
+	})
+}
+
+// read sends an uncached read with retries.
+func (c *Client) read(ctx context.Context, host string, req protocol.Request) (Result, error) {
+	return c.doWithRetryContext(ctx, host, func(conn *quic.Conn) (Result, error) {
 		return c.requestOnConnContext(ctx, conn, req)
 	})
 }

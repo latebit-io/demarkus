@@ -12,6 +12,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/latebit-io/demarkus/client v0.0.0-00010101000000-000000000000
 	github.com/latebit-io/demarkus/protocol v0.0.0
+	github.com/latebit-io/demarkus/server v0.0.0
 	github.com/mark3labs/mcp-go v0.44.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0
@@ -44,6 +45,7 @@ require (
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
+	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -103,3 +105,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/latebit-io/demarkus/server => ../server

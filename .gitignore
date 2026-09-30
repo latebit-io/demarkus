@@ -52,6 +52,7 @@ tools/demarkus-token/demarkus-token
 tools/demarkus-publish/demarkus-publish
 knowledge/cmd/demarkus-knowledge-broker/demarkus-knowledge-broker
 knowledge/cmd/demarkus-memory-broker/demarkus-memory-broker
+knowledge/cmd/demarkus-knowledge/demarkus-knowledge
 
 # OS files
 .DS_Store
