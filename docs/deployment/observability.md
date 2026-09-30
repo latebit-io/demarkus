@@ -11,7 +11,7 @@ All four services write to stdout/stderr via Go's `log/slog`:
 | Service | Default format | Override |
 |---|---|---|
 | `demarkus-server` | `json` (chart default) | `server.logFormat` in values; `DEMARKUS_LOG_FORMAT` env var |
-| `demarkus-knowledge-server` | `json` (hardcoded in binary) | not exposed; `server/cmd/demarkus-knowledge-server/main.go` |
+| `demarkus-knowledge-server` | `json` (hardcoded in binary) | not exposed; `server/knowledgeserver/run.go` |
 | `demarkus-knowledge-broker` | `json` (hardcoded in binary) | not exposed; `knowledge/cmd/demarkus-knowledge-broker/main.go` |
 | `demarkus-agent` | `json` (chart default) | `logFormat` in values; `DEMARKUS_LOG_FORMAT` env var |
 

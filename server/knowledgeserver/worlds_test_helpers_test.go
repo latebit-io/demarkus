@@ -1,4 +1,4 @@
-package main
+package knowledgeserver
 
 import (
 	"crypto/ecdsa"
