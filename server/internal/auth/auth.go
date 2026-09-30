@@ -134,9 +134,13 @@ func IsDenial(err error) bool {
 	return IsUnauthenticated(err) || errors.Is(err, ErrNotPermitted)
 }
 
-// requiresReadAuth reports whether any read token covers the path; otherwise
-// it is public. A pattern for "/private/" also protects the bare "/private".
-func (ts *TokenStore) requiresReadAuth(reqPath string) bool {
+// RequiresReadAuth reports whether a read of the path needs a token: some
+// read token covers it and it is not the manifest. A pattern for
+// "/private/" also protects the bare "/private". A nil store is all public.
+func (ts *TokenStore) RequiresReadAuth(reqPath string) bool {
+	if ts == nil || reqPath == protocol.WellKnownManifestPath {
+		return false
+	}
 	if matchesAnyPath(ts.readPaths, reqPath) {
 		return true
 	}
@@ -147,17 +151,40 @@ func (ts *TokenStore) requiresReadAuth(reqPath string) bool {
 // public or the token covers it, otherwise one of Authorize's sentinels. A nil
 // store has no auth configured, so everything is public.
 func (ts *TokenStore) AuthorizeRead(token, reqPath string) error {
-	if ts == nil || reqPath == protocol.WellKnownManifestPath || !ts.requiresReadAuth(reqPath) {
+	return ts.AuthorizeReadHashed(HashToken(token), reqPath)
+}
+
+// HashToken is the store's key for a raw token; an empty token stays empty,
+// so a caller that checks many paths hashes once.
+func HashToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	return protocol.HashToken(token)
+}
+
+// AuthorizeReadHashed is AuthorizeRead for a token already hashed.
+func (ts *TokenStore) AuthorizeReadHashed(hashed, reqPath string) error {
+	if !ts.RequiresReadAuth(reqPath) {
 		return nil
 	}
-	_, err := ts.Authorize(token, reqPath, "read")
+	_, err := ts.authorizeHashed(hashed, reqPath, "read")
 	if errors.Is(err, ErrNotPermitted) && !strings.HasSuffix(reqPath, "/") {
 		// The mirror of requiresReadAuth: a directory pattern grants the bare name.
-		if _, directoryErr := ts.Authorize(token, reqPath+"/", "read"); directoryErr == nil {
+		if _, directoryErr := ts.authorizeHashed(hashed, reqPath+"/", "read"); directoryErr == nil {
 			return nil
 		}
 	}
 	return err
+}
+
+// DenialStatus maps an auth verdict to its status: a missing, unknown or
+// expired token is unauthorized, anything else is not permitted.
+func DenialStatus(err error) string {
+	if IsUnauthenticated(err) {
+		return protocol.StatusUnauthorized
+	}
+	return protocol.StatusNotPermitted
 }
 
 // Authorize checks whether the given raw token is allowed to perform the given
@@ -173,10 +200,13 @@ func (ts *TokenStore) AuthorizeRead(token, reqPath string) error {
 // TODO: per-document ACLs (.mark-acl files).
 // TODO: rate limiting for public-facing servers.
 func (ts *TokenStore) Authorize(token, reqPath, operation string) (string, error) {
-	if token == "" {
+	return ts.authorizeHashed(HashToken(token), reqPath, operation)
+}
+
+func (ts *TokenStore) authorizeHashed(hashed, reqPath, operation string) (string, error) {
+	if hashed == "" {
 		return "", ErrNoToken
 	}
-	hashed := protocol.HashToken(token)
 	t, ok := ts.tokens[hashed]
 	if !ok {
 		return "", ErrInvalidToken

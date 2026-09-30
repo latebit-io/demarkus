@@ -92,6 +92,9 @@ func NewEpoch() string {
 // Epoch is the cursor epoch every event of this hub carries.
 func (h *Hub) Epoch() string { return h.epoch }
 
+// RingSize is how many events the hub retains for resume.
+func (h *Hub) RingSize() int { return len(h.buf) }
+
 // Head is the cursor of the newest event, or seq 0 before any.
 func (h *Hub) Head() protocol.Cursor {
 	h.mu.Lock()
@@ -261,42 +264,61 @@ func (s *Subscription) Cursor() protocol.Cursor {
 // ErrResync once the ring has overwritten unread events, ErrClosed after
 // Close, or ctx's error.
 func (s *Subscription) Next(ctx context.Context) (Event, error) {
-	if len(s.backlog) > 0 {
-		ev := s.backlog[0]
-		s.backlog = s.backlog[1:]
-		if len(s.backlog) == 0 {
-			s.backlog = nil // release the loaded array
-		}
-		return ev, nil
-	}
-	h := s.hub
 	for {
-		h.mu.Lock()
-		if s.next < h.oldest() {
-			h.mu.Unlock()
-			return Event{}, ErrResync
+		ev, wait, err := s.pending()
+		if err != nil || wait == nil {
+			return ev, err
 		}
-		for s.next <= h.lastSeq {
-			ev := h.buf[h.slot(s.next)]
-			s.next++
-			// A stale slot is a seq nobody published under.
-			if ev.Seq == s.next-1 && inScope(s.scope, ev.Path) {
-				h.mu.Unlock()
-				return ev, nil
-			}
-		}
-		if h.closed {
-			h.mu.Unlock()
-			return Event{}, ErrClosed
-		}
-		wait := h.notify
-		h.mu.Unlock()
 		select {
 		case <-wait:
 		case <-ctx.Done():
 			return Event{}, ctx.Err()
 		}
 	}
+}
+
+// TryNext is Next without the wait: ErrIdle when nothing in scope is
+// published yet.
+func (s *Subscription) TryNext() (Event, error) {
+	ev, wait, err := s.pending()
+	if err == nil && wait != nil {
+		return Event{}, ErrIdle
+	}
+	return ev, err
+}
+
+// ErrIdle is TryNext's answer when the subscription is at the head.
+var ErrIdle = errors.New("changefeed: no event pending")
+
+// pending returns the next event in scope, or the channel a publish closes
+// when there is none yet.
+func (s *Subscription) pending() (Event, <-chan struct{}, error) {
+	if len(s.backlog) > 0 {
+		ev := s.backlog[0]
+		s.backlog = s.backlog[1:]
+		if len(s.backlog) == 0 {
+			s.backlog = nil // release the loaded array
+		}
+		return ev, nil, nil
+	}
+	h := s.hub
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if s.next < h.oldest() {
+		return Event{}, nil, ErrResync
+	}
+	for s.next <= h.lastSeq {
+		ev := h.buf[h.slot(s.next)]
+		s.next++
+		// A stale slot is a seq nobody published under.
+		if ev.Seq == s.next-1 && inScope(s.scope, ev.Path) {
+			return ev, nil, nil
+		}
+	}
+	if h.closed {
+		return Event{}, nil, ErrClosed
+	}
+	return Event{}, h.notify, nil
 }
 
 // inScope reports whether path is under scope.

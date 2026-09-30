@@ -2,6 +2,7 @@
 package worldruntime
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
+	"github.com/latebit-io/demarkus/server/internal/fanout"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 	"github.com/latebit-io/demarkus/server/internal/quicserve"
 	"github.com/latebit-io/demarkus/server/internal/ratelimit"
@@ -23,8 +25,8 @@ import (
 
 const maxRateWaitBudget = 10 * time.Second
 
-// defaultMaxWatches caps a world's open watches when the config leaves it zero.
-const defaultMaxWatches = 1024
+// ErrClosing is Exchange's answer once the runtime is closing.
+var ErrClosing = errors.New("world runtime: closing")
 
 // Config defines one runtime and transfers backend ownership on success.
 type Config struct {
@@ -65,15 +67,13 @@ type Runtime struct {
 	logger         *slog.Logger
 	closeBackend   func() error
 	changes        *changefeed.Hub
-	watchLimit     int
-	watchPerConn   int
+	watches        *fanout.Fanout
 
 	watchCancel context.CancelFunc
 	watchDone   sync.WaitGroup
 
 	mu      sync.Mutex
 	closing bool
-	watches int
 	active  sync.WaitGroup
 
 	closeOnce sync.Once
@@ -125,21 +125,25 @@ func New(config *Config) (*Runtime, error) {
 		logger:         logger,
 		closeBackend:   config.CloseBackend,
 		changes:        config.Changes,
-		watchLimit:     config.MaxWatches,
-		watchPerConn:   config.MaxWatchesPerConn,
 	}
-	if runtime.watchLimit == 0 {
-		runtime.watchLimit = defaultMaxWatches
-	}
-	if runtime.watchPerConn == 0 {
-		runtime.watchPerConn = max(1, config.MaxStreams/2)
+	if config.Changes != nil {
+		perConn := config.MaxWatchesPerConn
+		if perConn == 0 {
+			perConn = max(1, config.MaxStreams/2)
+		}
+		runtime.watches, err = fanout.New(fanout.Config{
+			Hub: config.Changes, Tokens: tokens.Current, Logger: logger, MaxWatches: config.MaxWatches, MaxWatchesPerConn: perConn,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("world runtime: %w", err)
+		}
 	}
 	runtime.handler, err = handler.New(handler.Config{
 		Store:         config.Store,
 		GetTokenStore: tokens.Current,
 		Logger:        logger,
 		ReadOnly:      config.ReadOnly,
-		Changes:       config.Changes,
+		Watches:       runtime.watches,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("world runtime: %w", err)
@@ -194,26 +198,14 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 		}
 	}()
 
-	if r.concurrent != nil && !r.acquire(ctx, remote, stream, logger) {
+	held, admitted := r.admit(ctx, remote, logger)
+	if !admitted {
+		if err := r.writeRateLimited(stream); err != nil {
+			logger.Warn("writing rate-limited response", "ip", ratelimit.ExtractIP(remote), "error", err)
+		}
 		return
 	}
-	held := slot{ch: r.concurrent}
 	defer held.release()
-	if r.limiter != nil {
-		waitCtx, cancel := context.WithTimeout(ctx, r.budget())
-		err := r.limiter.Wait(waitCtx, ratelimit.ExtractIP(remote))
-		cancel()
-		if err != nil {
-			logger.Warn("rate limited", "ip", ratelimit.ExtractIP(remote), "error", err)
-			if writeErr := r.writeRateLimited(stream); writeErr != nil {
-				logger.Warn("writing rate-limited response", "ip", ratelimit.ExtractIP(remote), "error", writeErr)
-			}
-			if closeErr := stream.Close(); closeErr != nil {
-				logger.Debug("closing rate-limited stream", "error", closeErr)
-			}
-			return
-		}
-	}
 	requestCtx := ctx
 	if r.requestTimeout > 0 {
 		// The write bound keeps a client that stops reading from pinning the
@@ -234,18 +226,66 @@ func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quics
 	if !ok {
 		return
 	}
-	if req.Verb == protocol.VerbWatch && r.changes != nil {
-		// A watch is admitted under its own caps, not the request slots, and
-		// lives as long as the connection; each block write is bounded on its own.
+	if req.Verb == protocol.VerbWatch && r.watches != nil {
+		// A watch is admitted under the fan-out's caps, not the request slots,
+		// and lives as long as the connection; each block write is bounded on its own.
 		held.release()
-		if !r.admitWatch(ctx, remote, stream, logger) {
-			return
-		}
-		defer r.releaseWatch(ctx)
 		h.Serve(ctx, boundedWriter{stream: stream, budget: r.budget()}, req)
 		return
 	}
 	h.Serve(requestCtx, stream, req)
+}
+
+// exchange answers one request in process under the same controls as a
+// stream: the closing gate, the concurrency slot, the rate limit and the
+// request deadline. WATCH needs a stream and is answered bad-request.
+func (r *Runtime) exchange(ctx context.Context, remote net.Addr, req protocol.Request, logger *slog.Logger) (protocol.Response, error) {
+	if req.Verb == protocol.VerbWatch {
+		return protocol.Response{Status: protocol.StatusBadRequest, Body: "WATCH needs a stream"}, nil
+	}
+	if !r.beginStream() {
+		return protocol.Response{}, ErrClosing
+	}
+	defer r.active.Done()
+	held, admitted := r.admit(ctx, remote, logger)
+	if !admitted {
+		return protocol.Response{Status: protocol.StatusRateLimited}, nil
+	}
+	defer held.release()
+	requestCtx := ctx
+	if r.requestTimeout > 0 {
+		var cancel context.CancelFunc
+		requestCtx, cancel = context.WithTimeout(ctx, r.requestTimeout)
+		defer cancel()
+	}
+	var out bytes.Buffer
+	r.handler.WithLogger(logger).Serve(requestCtx, &out, req)
+	resp, err := protocol.ParseResponse(&out)
+	if err != nil {
+		return protocol.Response{}, fmt.Errorf("read response: %w", err)
+	}
+	return resp, nil
+}
+
+// admit takes the concurrency slot and the rate-limit token for one
+// request, or refuses it with nothing held.
+func (r *Runtime) admit(ctx context.Context, remote net.Addr, logger *slog.Logger) (held slot, admitted bool) {
+	if r.concurrent != nil && !r.acquire(ctx, remote, logger) {
+		return slot{}, false
+	}
+	held = slot{ch: r.concurrent}
+	if r.limiter == nil {
+		return held, true
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, r.budget())
+	err := r.limiter.Wait(waitCtx, ratelimit.ExtractIP(remote))
+	cancel()
+	if err != nil {
+		held.release()
+		logger.Warn("rate limited", "ip", ratelimit.ExtractIP(remote), "error", err)
+		return slot{}, false
+	}
+	return held, true
 }
 
 // slot is one concurrency slot, released at most once; a nil channel is no
@@ -281,67 +321,29 @@ func (r *Runtime) budget() time.Duration {
 	return maxRateWaitBudget
 }
 
-// admitWatch takes one watch slot for the world and the connection, or
-// refuses the stream with rate-limited while ordinary requests still pass.
-func (r *Runtime) admitWatch(ctx context.Context, remote net.Addr, stream quicserve.Stream, logger *slog.Logger) bool {
-	conn := quicserve.ConnStateFromContext(ctx)
-	r.mu.Lock()
-	admitted := r.watches < r.watchLimit
-	if admitted {
-		r.watches++
-	}
-	r.mu.Unlock()
-	limit := "world"
-	if admitted && conn != nil && int(conn.Watches.Add(1)) > r.watchPerConn {
-		conn.Watches.Add(-1)
-		r.mu.Lock()
-		r.watches--
-		r.mu.Unlock()
-		admitted, limit = false, "connection"
-	}
-	if admitted {
-		return true
-	}
-	logger.Warn("watch limit reached", "limit", limit, "ip", ratelimit.ExtractIP(remote))
-	if err := r.writeRateLimited(stream); err != nil {
-		logger.Warn("writing watch-limited response", "ip", ratelimit.ExtractIP(remote), "error", err)
-	}
-	return false
-}
-
-func (r *Runtime) releaseWatch(ctx context.Context) {
-	r.mu.Lock()
-	r.watches--
-	r.mu.Unlock()
-	if conn := quicserve.ConnStateFromContext(ctx); conn != nil {
-		conn.Watches.Add(-1)
-	}
-}
-
 // Watches reports the world's open watches.
 func (r *Runtime) Watches() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.watches
+	if r.watches == nil {
+		return 0
+	}
+	return r.watches.Watches()
 }
 
-func (r *Runtime) acquire(ctx context.Context, remote net.Addr, stream quicserve.Stream, logger *slog.Logger) bool {
+func (r *Runtime) acquire(ctx context.Context, remote net.Addr, logger *slog.Logger) bool {
 	waitCtx, cancel := context.WithTimeout(ctx, r.budget())
 	defer cancel()
 	select {
 	case r.concurrent <- struct{}{}:
 		return true
 	case <-waitCtx.Done():
-		ip := ratelimit.ExtractIP(remote)
-		logger.Warn("concurrency limited", "ip", ip, "error", waitCtx.Err())
-		if err := r.writeRateLimited(stream); err != nil {
-			logger.Warn("writing concurrency-limited response", "ip", ip, "error", err)
-		}
-		if err := stream.Close(); err != nil {
-			logger.Debug("closing concurrency-limited stream", "error", err)
-		}
+		logger.Warn("concurrency limited", "ip", ratelimit.ExtractIP(remote), "error", waitCtx.Err())
 		return false
 	}
+}
+
+// Exchanger answers a request in process; every routed endpoint is one.
+type Exchanger interface {
+	Exchange(ctx context.Context, remote net.Addr, req protocol.Request) (protocol.Response, error)
 }
 
 type runtimeEndpoint struct {
@@ -351,6 +353,10 @@ type runtimeEndpoint struct {
 
 func (endpoint *runtimeEndpoint) ServeStream(ctx context.Context, remote net.Addr, stream quicserve.Stream) {
 	endpoint.runtime.serveStream(ctx, remote, stream, endpoint.logger)
+}
+
+func (endpoint *runtimeEndpoint) Exchange(ctx context.Context, remote net.Addr, req protocol.Request) (protocol.Response, error) {
+	return endpoint.runtime.exchange(ctx, remote, req, endpoint.logger)
 }
 
 func (r *Runtime) beginStream() bool {
@@ -423,4 +429,7 @@ func (r *Runtime) writeRateLimited(stream quicserve.Stream) error {
 	return err
 }
 
-var _ quicserve.Endpoint = (*Runtime)(nil)
+var (
+	_ quicserve.Endpoint = (*Runtime)(nil)
+	_ Exchanger          = (*runtimeEndpoint)(nil)
+)

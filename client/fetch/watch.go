@@ -13,9 +13,11 @@ import (
 
 // WatchRequest subscribes to change hints under Path: a prefix ending in "/"
 // or one document. Since resumes after a cursor from an earlier watch.
+// Coalesce asks for the newest event per path only when the watch lags.
 type WatchRequest struct {
 	Host, Path, Token string
 	Since             protocol.Cursor
+	Coalesce          bool
 }
 
 // Notice is one item from a watch: an event, or a resync telling the
@@ -235,6 +237,9 @@ func (w *Watch) subscribeOn(ctx context.Context, conn *quic.Conn, since protocol
 	meta := map[string]string{}
 	if !since.IsZero() {
 		meta["since"] = since.String()
+	}
+	if w.req.Coalesce {
+		meta["coalesce"] = "path"
 	}
 	if err := sendRequest(handshake, stream, newRequest(protocol.VerbWatch, w.req.Path, w.req.Token, meta)); err != nil {
 		return nil, protocol.WatchBlock{}, err

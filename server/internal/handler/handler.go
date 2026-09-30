@@ -20,7 +20,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
-	"github.com/latebit-io/demarkus/server/internal/changefeed"
+	"github.com/latebit-io/demarkus/server/internal/fanout"
 )
 
 // MaxDirectoryEntries is the maximum number of entries returned by LIST.
@@ -56,11 +56,9 @@ type Config struct {
 	GetTokenStore func() *auth.TokenStore // nil callback or nil return means writes are denied
 	Logger        *slog.Logger
 	ReadOnly      bool // reject all write operations
-	// Changes serves WATCH; nil answers the verb bad-request, as a server
+	// Watches serves WATCH; nil answers the verb bad-request, as a server
 	// without it does.
-	Changes *changefeed.Hub
-	// HeartbeatInterval paces idle WATCH heartbeats; zero is the protocol's.
-	HeartbeatInterval time.Duration
+	Watches *fanout.Fanout
 }
 
 // Handler serves the Mark protocol over a DocumentStore. Build it with New.
@@ -69,8 +67,7 @@ type Handler struct {
 	getTokenStore func() *auth.TokenStore
 	logger        *slog.Logger
 	readOnly      bool
-	changes       *changefeed.Hub
-	heartbeat     time.Duration
+	watches       *fanout.Fanout
 }
 
 // New refuses a config without a store or a logger, so neither can be missing
@@ -82,17 +79,12 @@ func New(config Config) (*Handler, error) {
 	if config.Logger == nil {
 		return nil, errors.New("handler: logger is nil")
 	}
-	heartbeat := config.HeartbeatInterval
-	if heartbeat <= 0 {
-		heartbeat = protocol.WatchHeartbeatInterval
-	}
 	return &Handler{
 		store:         config.Store,
 		getTokenStore: config.GetTokenStore,
 		logger:        config.Logger,
 		readOnly:      config.ReadOnly,
-		changes:       config.Changes,
-		heartbeat:     heartbeat,
+		watches:       config.Watches,
 	}, nil
 }
 
@@ -387,22 +379,13 @@ func (h *Handler) authorizeRead(w io.Writer, req protocol.Request) bool {
 
 // writeAuthDenied answers a failed authorization.
 func (h *Handler) writeAuthDenied(w io.Writer, req protocol.Request, err error) {
-	status := authStatus(err)
+	status := auth.DenialStatus(err)
 	h.logger.Warn(status, "operation", req.Verb, "path", sanitize(req.Path))
 	if status == protocol.StatusUnauthorized {
 		h.writeError(w, status, "authentication required")
 		return
 	}
 	h.writeError(w, status, "insufficient permissions")
-}
-
-// authStatus maps an auth verdict to its status: a missing, unknown or
-// expired token is unauthorized, anything else is not permitted.
-func authStatus(err error) string {
-	if auth.IsUnauthenticated(err) {
-		return protocol.StatusUnauthorized
-	}
-	return protocol.StatusNotPermitted
 }
 
 // checkReadAuth decides a read without writing a response: nil when allowed,

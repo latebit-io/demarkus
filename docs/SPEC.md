@@ -620,6 +620,7 @@ auth: <raw-token>\n
 - The path is a document path (events for that document) or a directory prefix ending in `/` (events for every document under it, at any depth). `WATCH /` covers the whole server. The path need not exist: a watch on a document or prefix that does not exist yet delivers its creation.
 - `since` (OPTIONAL): the cursor of the last event the client processed. Delivery resumes with the first event after it. Absent, the watch starts at the current head and delivers later changes only.
 - `auth` (OPTIONAL): a token, required when the path is under read authorisation (§11.8).
+- `coalesce` (OPTIONAL): `path` asks the server to deliver, of the events pending for this watch at any moment (a resume backlog, or events that queued while the client lagged), only the newest per path, in sequence order. A server MAY ignore it; any other value is `bad-request`. Absent, every event is delivered.
 
 **Response**: a sequence of frontmatter blocks, each opened and closed by a `---` line, with no body between blocks. A block that carries `status` is a control block; a block without `status` is an event.
 

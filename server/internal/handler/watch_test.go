@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
+	"github.com/latebit-io/demarkus/server/internal/fanout"
 )
 
 // watchStream feeds one request in and hands every written byte to a pipe
@@ -41,11 +42,17 @@ func (s *watchStream) Close() error {
 // watchHandler serves b with WATCH over the hub its writes feed.
 func watchHandler(t *testing.T, b backend, ts *auth.TokenStore) *Handler {
 	t.Helper()
-	config := Config{Store: b.Store, Logger: discardLogger, Changes: b.Changes, HeartbeatInterval: 20 * time.Millisecond}
-	if ts != nil {
-		config.GetTokenStore = func() *auth.TokenStore { return ts }
+	return watchHandlerWith(t, b, func() *auth.TokenStore { return ts })
+}
+
+// watchHandlerWith is watchHandler over a token store the test may swap.
+func watchHandlerWith(t *testing.T, b backend, tokens func() *auth.TokenStore) *Handler {
+	t.Helper()
+	watches, err := fanout.New(fanout.Config{Hub: b.Changes, Tokens: tokens, Logger: discardLogger, Heartbeat: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("fanout: %v", err)
 	}
-	return mustNew(config)
+	return mustNew(Config{Store: b.Store, Logger: discardLogger, GetTokenStore: tokens, Watches: watches})
 }
 
 // startWatch serves request on its own goroutine and returns the block reader.
@@ -218,10 +225,7 @@ func TestWatchEndsWhenTheTokenIsRevoked(t *testing.T) {
 			protocol.HashToken("read-a"): {Paths: []string{"/a/**"}, Operations: []string{"read"}},
 		})
 		b := newBackend(t)
-		h := mustNew(Config{
-			Store: b.Store, Logger: discardLogger, Changes: b.Changes, HeartbeatInterval: 20 * time.Millisecond,
-			GetTokenStore: func() *auth.TokenStore { mu.Lock(); defer mu.Unlock(); return current },
-		})
+		h := watchHandlerWith(t, b, func() *auth.TokenStore { mu.Lock(); defer mu.Unlock(); return current })
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		reader, done := startWatch(ctx, t, h, "WATCH /a/\n---\nauth: read-a\n---\n")

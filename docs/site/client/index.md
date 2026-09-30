@@ -50,6 +50,9 @@ demarkus watch --insecure mark://localhost:6309/agents/me/inbox/
 
 # Resume after the last cursor you processed
 demarkus watch --insecure -since 3f9a1c2b4d5e:42 mark://localhost:6309/agents/me/inbox/
+
+# A live view wants current state, not history: when behind, take the newest change per path
+demarkus watch --insecure -coalesce mark://localhost:6309/agents/me/inbox/
 ```
 
 A watch prints hints, not content: fetch the path (or the hash) for the body. It reconnects on its own after a server restart or a lost connection; a line whose op is `resync` means the server could not resume from the cursor and anything derived from earlier lines is stale. The prefix need not exist yet, so an agent can watch its inbox before the first message.
