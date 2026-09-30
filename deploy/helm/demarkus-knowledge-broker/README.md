@@ -15,8 +15,7 @@ Secrets.
 - One `Role` + `RoleBinding` (`<fullname>-worlds`) per world namespace
   (`get/update` on each world's tokens and agent token Secrets) plus broker-namespace
   `Role` covering the sweeper Lease, the refresh-tokens Secret, and
-  `create` + `get/update` on the broker's own Secrets. The per-world
-  write-token rule is a leftover; nothing creates those Secrets now.
+  `create` + `get/update` on the broker's own Secrets.
 - Default-on `NetworkPolicy` restricting ingress to the configured
   Ingress controller namespace and egress to DNS, TCP 443, and each
   configured world UDP port (6309 by default).
@@ -28,7 +27,7 @@ Secrets.
   the demarkus tool surface to plugin-style agents over JSON-RPC
   over Streamable HTTP. Identity is the company SSO `id_token` bearer;
   reads dispatch with no token (open to any SSO-authed identity) and
-  writes use a long-lived per-world token the broker holds. See
+  writes run under the identity's grant, no token involved. See
   [MCP gateway](#mcp-gateway).
 - TopologySpreadConstraints to keep replicas off the same node.
 

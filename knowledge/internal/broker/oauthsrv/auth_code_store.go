@@ -93,6 +93,9 @@ type AuthCodeRequest struct {
 	Scope               string
 	CodeChallenge       string
 	CodeChallengeMethod string
+	// Resource is the canonical RFC 8707 indicator the client asked for;
+	// blank mints unbound tokens.
+	Resource string
 }
 
 // PendingAuthCode is what LookupPending returns: the original
@@ -236,12 +239,16 @@ func (s *authCodeStore) Bind(id string, exchange *core.ExchangeResult) (string, 
 	if err != nil {
 		return "", PendingAuthCode{}, fmt.Errorf("auth code: %w", err)
 	}
+	// The binding rides on the claims so the token endpoint and the
+	// refresh record mint for the same resource.
+	bound := *exchange
+	bound.Claims = exchange.Claims.BoundTo(p.Resource)
 	s.codes[code] = &authCodeEntry{
 		ClientID:            p.ClientID,
 		RedirectURI:         p.RedirectURI,
 		CodeChallenge:       p.CodeChallenge,
 		CodeChallengeMethod: p.CodeChallengeMethod,
-		Exchange:            *exchange,
+		Exchange:            bound,
 		ExpiresAt:           now.Add(s.codeTTL),
 	}
 	out := *p

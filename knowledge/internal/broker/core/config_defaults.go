@@ -5,9 +5,6 @@ import (
 	"time"
 )
 
-// defaultMCPAddr keeps the gateway off the management API's usual :8080.
-const defaultMCPAddr = ":8081"
-
 // applyRefreshDefaults fills the refresh flow knobs and rejects degenerate
 // values. Applied to the config itself so every consumer sees resolved values.
 func (s *ServerConfig) applyRefreshDefaults() error {

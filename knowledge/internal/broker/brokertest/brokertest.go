@@ -40,6 +40,7 @@ func NewConfig() *core.Config {
 		Worlds: []core.WorldConfig{
 			{
 				Name:         "team-a",
+				Profile:      core.ProfileKnowledge,
 				Namespace:    "team-a",
 				TokensSecret: "team-a-tokens",
 				Allow:        core.AllowConfig{Domains: []string{"example.com"}},
@@ -51,18 +52,18 @@ func NewConfig() *core.Config {
 	}
 }
 
-// NewMemoryConfig provisions two static tenants: alice owns alice-w,
-// bob owns bob-w.
+// NewMemoryConfig provisions two static tenants on the memory gateway at
+// memory.example.com: alice owns alice-w, bob owns bob-w.
 func NewMemoryConfig() *core.Config {
 	cfg := NewConfig()
-	cfg.Server.MCP = core.MCPConfig{Addr: ":0", PublicURL: "https://memory.example.com"}
+	cfg.Server.Memory = core.GatewayConfig{PublicURL: "https://memory.example.com"}
 	cfg.Worlds = []core.WorldConfig{
 		{
-			Name: "alice-w", Namespace: "alice-w", TokensSecret: "alice-w-tokens",
+			Name: "alice-w", Profile: core.ProfileMemory, Namespace: "alice-w", TokensSecret: "alice-w-tokens",
 			Allow: core.AllowConfig{Emails: []string{"alice@example.com"}},
 		},
 		{
-			Name: "bob-w", Namespace: "bob-w", TokensSecret: "bob-w-tokens",
+			Name: "bob-w", Profile: core.ProfileMemory, Namespace: "bob-w", TokensSecret: "bob-w-tokens",
 			Allow: core.AllowConfig{Emails: []string{"bob@example.com"}},
 		},
 	}

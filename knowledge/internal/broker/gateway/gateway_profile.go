@@ -1,13 +1,19 @@
 package gateway
 
-import "github.com/mark3labs/mcp-go/mcp"
+import (
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/mark3labs/mcp-go/mcp"
+)
 
 // Profile selects which product the shared MCP gateway serves:
 // the knowledge broker's full multi-world surface with org-open reads,
 // or the memory broker's tenant-scoped memory surface.
 type Profile struct {
-	// ServerName is the MCP server name reported in the initialize
-	// result (e.g. "demarkus-knowledge-broker").
+	// Name is the config profile (core.ProfileKnowledge or ProfileMemory):
+	// it selects the gateway's world view and its GatewayConfig.
+	Name string
+	// ServerName is the MCP server name reported in the initialize result
+	// and the WWW-Authenticate realm when the config sets none.
 	ServerName string
 	// Instructions is the server-instructions text returned in the
 	// initialize result. Hosts without a demarkus plugin (Claude
@@ -28,6 +34,7 @@ type Profile struct {
 // all 17 tools, org-open reads, per-world Allow writes.
 func KnowledgeProfile() *Profile {
 	return &Profile{
+		Name:         core.ProfileKnowledge,
 		ServerName:   "demarkus-knowledge-broker",
 		Instructions: knowledgeInstructions,
 		Tools:        mcpTools(),
@@ -39,6 +46,7 @@ func KnowledgeProfile() *Profile {
 // and minus whole-store graph exports, which would leak cross-tenant edges.
 func MemoryProfile() *Profile {
 	return &Profile{
+		Name:         core.ProfileMemory,
 		ServerName:   "demarkus-memory-broker",
 		Instructions: memoryInstructions,
 		TenantScoped: true,

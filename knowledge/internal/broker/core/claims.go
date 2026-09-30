@@ -16,6 +16,16 @@ type Claims struct {
 	EmailVerified bool
 	Groups        []string
 	HD            string
+	// Resource is the RFC 8707 indicator a broker token is bound to; blank
+	// is unbound, valid at every gateway. IdP tokens are unbound.
+	Resource string `json:",omitempty"`
+}
+
+// BoundTo returns the claims bound to resource, for the tokens minted from them.
+func (c *Claims) BoundTo(resource string) Claims {
+	out := *c
+	out.Resource = resource
+	return out
 }
 
 // ctxKey scopes context keys to this package.

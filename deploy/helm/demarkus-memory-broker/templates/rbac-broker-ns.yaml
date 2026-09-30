@@ -23,12 +23,8 @@
      broker SA's update verb is the only path that mutates it
      after install.
 
-   - secrets (per-world write-token): the broker provisions these
-     lazily on the first write to each configured world. get/update
-     pinned per-world; create gets its own rule (namespace-wide).
-     Names are pinned per world via resourceNames so a compromised
-     broker SA cannot read or update any other Secret in the broker
-     namespace. */ -}}
+   - secrets (dynamic provisioning): tenant Secrets are named at
+     runtime, so that mode gets a namespace-wide rule below. */ -}}
 {{- $brokerNs := include "demarkus-memory-broker.brokerNamespace" . -}}
 {{- $name := include "demarkus-memory-broker.fullname" . -}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -59,17 +55,6 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "update", "create"]
-  {{- else if .Values.worlds }}
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames:
-      {{- range .Values.worlds }}
-      - {{ include "demarkus-memory-broker.writeTokenSecretName" (dict "worldName" .name) | quote }}
-      {{- end }}
-    verbs: ["get", "update"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["create"]
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

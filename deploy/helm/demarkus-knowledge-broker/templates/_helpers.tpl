@@ -75,20 +75,6 @@ Names for the chart-managed Secrets.
 {{- default (printf "%s-dynamic-clients" (include "demarkus-knowledge-broker.fullname" .)) .Values.server.dynamicClientsSecret -}}
 {{- end -}}
 
-{{/*
-Per-world write-token Secret name. The broker provisions one of
-these lazily on the first write to each world (see
-worldWriteTokenStore.Provision in
-knowledge/internal/broker/gateway/world_write_tokens.go). The
-prefix is hardcoded in the Go side — keep this helper byte-for-byte
-in sync; a drift here surfaces at runtime as a "forbidden" on the
-broker's first write attempt and is exactly the kind of silent
-misconfig RBAC is supposed to catch up front.
-*/}}
-{{- define "demarkus-knowledge-broker.writeTokenSecretName" -}}
-{{- printf "demarkus-broker-write-token-%s" .worldName -}}
-{{- end -}}
-
 {{/* Broker record of a world's agent token; pinned to agentTokenSecretName in core/secret_refs.go. */}}
 {{- define "demarkus-knowledge-broker.agentTokenSecretName" -}}
 {{- printf "demarkus-broker-agent-token-%s" .worldName -}}

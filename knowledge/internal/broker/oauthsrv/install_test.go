@@ -306,37 +306,26 @@ func TestMeInstallAcceptsBrokerSignedBearer(t *testing.T) {
 	}
 }
 
-// TestInstallableWorldsTenantScoped: the management API's world listing
-// must not leak other tenants' world names on the memory broker.
-func TestInstallableWorldsTenantScoped(t *testing.T) {
+// TestListInstallableWorldsSpansBothProfiles: the listing is every knowledge
+// world plus the caller's own memory world, never another tenant's.
+func TestListInstallableWorldsSpansBothProfiles(t *testing.T) {
 	cfg := brokertest.NewMemoryConfig()
 	cfg.Worlds[0].PublicURL = "mark://alice-w.example:6309"
 	cfg.Worlds[1].PublicURL = "mark://bob-w.example:6309"
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "team-a", Profile: core.ProfileKnowledge, PublicURL: "mark://team-a.example:6309"})
 	alice := &core.Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}
+	srv := NewServer(cfg, testServerDeps(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset()))
 
-	scoped, err := installableWorlds(cfg.Registry(), cfg.OIDC.Issuer, alice, true)
-	if err != nil {
-		t.Fatalf("tenant-scoped listing: %v", err)
-	}
-	if len(scoped) != 1 || scoped[0].Name != "alice-w" {
-		t.Errorf("tenant-scoped install worlds = %+v, want only alice-w", scoped)
-	}
-	open, err := installableWorlds(cfg.Registry(), cfg.OIDC.Issuer, alice, false)
-	if err != nil {
-		t.Fatalf("org-open listing: %v", err)
-	}
-	if len(open) != 2 {
-		t.Errorf("org-open install worlds = %+v, want both", open)
+	got := srv.listInstallableWorlds(context.Background(), alice)
+	if len(got) != 2 || got[0].Name != "team-a" || got[1].Name != "alice-w" {
+		t.Errorf("install worlds = %+v, want team-a then alice-w", got)
 	}
 
-	// An ambiguous mapping denies closed with a surfaced error.
+	// An ambiguous memory mapping denies the memory row closed; the
+	// knowledge worlds still list.
 	cfg.Worlds[1].Allow.Emails = []string{"alice@example.com"}
-	got, err := installableWorlds(cfg.Registry(), cfg.OIDC.Issuer, alice, true)
-	if len(got) != 0 {
-		t.Errorf("ambiguous tenant mapping listed worlds: %+v", got)
-	}
-	var ambiguous core.AmbiguousTenantError
-	if !errors.As(err, &ambiguous) {
-		t.Errorf("ambiguous mapping err = %v, want errAmbiguousTenant for the caller's log", err)
+	got = srv.listInstallableWorlds(context.Background(), alice)
+	if len(got) != 1 || got[0].Name != "team-a" {
+		t.Errorf("ambiguous tenant mapping listed %+v, want team-a alone", got)
 	}
 }

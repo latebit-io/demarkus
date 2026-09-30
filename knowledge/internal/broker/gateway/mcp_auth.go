@@ -26,6 +26,13 @@ func (g *Gateway) gatewayAuth(next http.Handler) http.Handler {
 			g.writeMCPAuthChallenge(w, "invalid_token", "invalid bearer token")
 			return
 		}
+		if !core.ResourceAllows(claims.Resource, g.resource) {
+			// RFC 8707: a token bound to the other gateway's resource stops here.
+			g.deps.Log.InfoContext(r.Context(), "broker: mcp gateway token bound to another resource",
+				"subject", core.HashSubject(claims.Subject), "resource", claims.Resource)
+			g.writeMCPAuthChallenge(w, "invalid_token", "token is bound to another resource")
+			return
+		}
 		if err := core.GateIdentity(g.deps.AllowDomains, &claims); err != nil {
 			g.deps.Log.InfoContext(r.Context(), "broker: mcp gateway identity rejected", "err", err,
 				"subject", core.HashSubject(claims.Subject), "hd", claims.HD)
@@ -47,10 +54,10 @@ func (g *Gateway) gatewayAuth(next http.Handler) http.Handler {
 func (g *Gateway) writeMCPAuthChallenge(w http.ResponseWriter, errCode, body string) {
 	// Built from the gateway's own host: the metadata path only exists on
 	// the MCP listener, not the issuer host.
-	metadataURL := g.deps.MCP.PublicURL + prmPath
+	metadataURL := g.deps.Gateway.PublicURL + prmPath
 	realm := g.deps.Realm
 	if realm == "" {
-		realm = "demarkus-knowledge-broker"
+		realm = g.profile.ServerName
 	}
 	challenge := fmt.Sprintf(`Bearer realm=%q, error=%q, resource_metadata=%q`, realm, errCode, metadataURL)
 	w.Header().Set("WWW-Authenticate", challenge)

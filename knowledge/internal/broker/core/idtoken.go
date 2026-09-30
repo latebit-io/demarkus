@@ -129,24 +129,22 @@ func NewIDTokenSigner(pemBytes []byte) (*IDTokenSigner, error) {
 	}, nil
 }
 
-// Sign produces a fresh broker-signed id_token for the given claims.
-// The token's iss + aud are the broker's PublicURL (the issuer the
-// /.well-known/openid-configuration override advertises) so a
-// strict client validates iss against the discovery doc and aud
-// against itself. ttl must be > 0; callers pass
-// ServerConfig.IDTokenTTL.
-//
-// Returns the compact JWS serialization (three base64url segments
-// separated by dots) — the standard JWT wire format.
+// Sign produces a broker-signed id_token: iss is the broker's PublicURL, aud
+// is claims.Resource (RFC 8707) or, unbound, the broker URL.
+// ttl must be > 0; callers pass ServerConfig.IDTokenTTL.
 func (s *IDTokenSigner) Sign(claims *Claims, brokerURL string, ttl time.Duration, now time.Time) (string, error) {
 	if ttl <= 0 {
 		return "", fmt.Errorf("broker: id_token ttl must be > 0 (got %s)", ttl)
+	}
+	aud := jwt.Audience{brokerURL}
+	if claims.Resource != "" {
+		aud = jwt.Audience{claims.Resource}
 	}
 	c := brokerIDTokenClaims{
 		Claims: jwt.Claims{
 			Issuer:   brokerURL,
 			Subject:  claims.Subject,
-			Audience: jwt.Audience{brokerURL},
+			Audience: aud,
 			Expiry:   jwt.NewNumericDate(now.Add(ttl)),
 			IssuedAt: jwt.NewNumericDate(now),
 		},
@@ -162,26 +160,10 @@ func (s *IDTokenSigner) Sign(claims *Claims, brokerURL string, ttl time.Duration
 	return raw, nil
 }
 
-// VerifyIDToken validates a broker-signed JWT against the broker's
-// public key and standard claim invariants (iss == brokerURL, aud
-// includes brokerURL, exp not in the past).
-//
-// Dispatch policy (consumed by compositeVerifier):
-//
-//   - Any failure BEFORE we confirm the broker kid match returns
-//     ErrIDTokenKidUnknown — parse failure, missing headers, wrong
-//     algorithm, kid mismatch. Those are all "not a broker-shaped
-//     JWT" signals that should defer to the IdP-signed path.
-//
-//   - Any failure AFTER kid match is terminal — bad signature, bad
-//     claims, expired. A kid-matching token that fails later checks
-//     is either tampered or stale; falling through to the IdP path
-//     would mask a real failure and let a forged token through if
-//     the IdP's verifier was permissive.
-//
-// `now` is taken from a clock so tests can pin expiry behavior; the
-// callers in compositeVerifier supply the wall clock.
-func (s *IDTokenSigner) VerifyIDToken(raw, brokerURL string, now time.Time) (Claims, error) {
+// VerifyIDToken checks a broker-signed JWT: key, iss, one of audiences, exp.
+// An aud other than the broker URL comes back as Claims.Resource. Failures
+// before the kid matches are ErrIDTokenKidUnknown (defer to the IdP); after, terminal.
+func (s *IDTokenSigner) VerifyIDToken(raw, brokerURL string, audiences []string, now time.Time) (Claims, error) {
 	parsed, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{IDTokenSignatureAlgorithm})
 	if err != nil {
 		// Malformed JWS, wrong algorithm, or just a non-JWT string —
@@ -197,19 +179,23 @@ func (s *IDTokenSigner) VerifyIDToken(raw, brokerURL string, now time.Time) (Cla
 	}
 	err = c.ValidateWithLeeway(jwt.Expected{
 		Issuer:      brokerURL,
-		AnyAudience: jwt.Audience{brokerURL},
+		AnyAudience: jwt.Audience(audiences),
 		Time:        now,
 	}, jwt.DefaultLeeway)
 	if err != nil {
 		return Claims{}, fmt.Errorf("broker: validate id_token claims: %w", err)
 	}
-	return Claims{
+	claims := Claims{
 		Subject:       c.Subject,
 		Email:         c.Email,
 		EmailVerified: c.EmailVerified,
 		Groups:        c.Groups,
 		HD:            c.HD,
-	}, nil
+	}
+	if !c.Audience.Contains(brokerURL) {
+		claims.Resource = c.Audience[0]
+	}
+	return claims, nil
 }
 
 // PublicJWK returns the JSON Web Key the broker advertises at

@@ -17,14 +17,21 @@ For deployment instructions, TLS, and Ingress topology, see
 
 - **Protocol**: MCP over Streamable HTTP (the MCP spec's preferred
   remote transport).
-- **Endpoint**: `POST /mcp` on the broker's MCP listener (default
-  `:8081`; typically fronted at `https://mcp.broker.<org>/mcp` by an
-  Ingress).
+- **Endpoint**: `POST /mcp` on the broker's HTTP listener, typically
+  fronted at `https://mcp.broker.<org>/mcp` by an Ingress. One mux
+  serves the management API and both gateways: the memory gateway
+  answers its own hostname (`server.memory.publicURL`), the knowledge
+  gateway every other host. `server.mcp.addr` adds a second listener
+  on the same mux for charts that route the MCP host to its own port.
 - **Auth**: `Authorization: Bearer <id_token>` on every request.
   The broker accepts both broker-signed id_tokens (from the
   device-flow refresh grant, PR4) and IdP-signed id_tokens (from
   the device-flow completion, PR3). Unverified-email tokens are
-  rejected at the gateway boundary.
+  rejected at the gateway boundary. A client that sends RFC 8707
+  `resource` (the PRM `resource`, `<gateway>/mcp`) on the authorize,
+  device or token request gets a token with that `aud`, valid at that
+  gateway only; an unknown resource is `invalid_target`. A client that
+  sends none gets a token valid at every gateway, as before.
 - **OAuth metadata**: standard discovery via RFC 9728
   (`/.well-known/oauth-protected-resource`, bare and path-inserted
   `/mcp` forms, on the gateway listener) and RFC 8414
@@ -54,7 +61,8 @@ follows:
   federation writes) dispatch with no token. SSO is the org gate;
   `WorldConfig.Allow` is the per-world writer allowlist enforced at
   the broker before dispatch, and the world served in this process
-  grants publish on `defaultToken.paths` to that identity. A world
+  grants publish on `writeScope.paths` (`defaultToken` still accepted) to
+  that identity. A world
   served elsewhere refuses the write. Nothing is minted or cached.
 
 ## URL form

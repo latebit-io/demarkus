@@ -1,7 +1,7 @@
 // demarkus-knowledge is the knowledge server and the broker in one process:
-// the worlds it serves are dispatched to the MCP gateway in process, every
-// other configured world over QUIC. The two configurations stay separate
-// until they merge; the profile picks the knowledge or the memory surface.
+// the worlds it serves are dispatched to the MCP gateways in process, every
+// other configured world over QUIC. The server config describes the world
+// runtimes, the broker config the gateways, identity and tenancy.
 package main
 
 import (
@@ -29,7 +29,6 @@ func run(arguments []string) error {
 	flags := flag.NewFlagSet("demarkus-knowledge", flag.ContinueOnError)
 	serverConfig := flags.String("server-config", "", "path to the knowledge server's multi-world YAML configuration")
 	brokerConfig := flags.String("broker-config", "", "path to the broker YAML configuration")
-	profile := flags.String("profile", "knowledge", "gateway surface: knowledge or memory")
 	kubeconfig := flags.String("kubeconfig", "", "path to kubeconfig (default: in-cluster config)")
 	showVersion := flags.Bool("version", false, "print version and exit")
 	if err := flags.Parse(arguments); err != nil {
@@ -42,10 +41,7 @@ func run(arguments []string) error {
 	if *serverConfig == "" || *brokerConfig == "" {
 		return errors.New("-server-config and -broker-config are required")
 	}
-	opts, err := brokerOptions(*profile, *kubeconfig)
-	if err != nil {
-		return err
-	}
+	opts := broker.Options(version, *kubeconfig)
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
@@ -80,16 +76,4 @@ func run(arguments []string) error {
 	stopServer()
 	serverErr := <-serverDone
 	return errors.Join(brokerErr, serverErr)
-}
-
-// brokerOptions is the product surface, selected by profile.
-func brokerOptions(profile, kubeconfig string) (*broker.RunOptions, error) {
-	switch profile {
-	case "knowledge":
-		return broker.KnowledgeOptions(version, kubeconfig), nil
-	case "memory":
-		return broker.MemoryOptions(version, kubeconfig), nil
-	default:
-		return nil, fmt.Errorf("unknown profile %q: want knowledge or memory", profile)
-	}
 }

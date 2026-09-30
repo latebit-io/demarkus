@@ -14,6 +14,7 @@ set:
   # when targeting the signing-key surface specifically.
   oidc.brokerSigningKey: "test-pem-placeholder"
   server.publicURL: https://broker.example.com
+  server.mcp.publicURL: https://memory.example.com
 tests:
   - it: renders a Deployment with two replicas and rolling update strategy
     template: deployment.yaml

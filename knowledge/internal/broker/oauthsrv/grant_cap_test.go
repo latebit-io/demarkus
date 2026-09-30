@@ -18,11 +18,11 @@ func TestPendingGrantStoresAreCapped(t *testing.T) {
 		s := newDeviceStore(nil, time.Minute, time.Second)
 		s.maxPending = 3
 		for i := range 3 {
-			if _, _, _, err := s.Authorize(); err != nil {
+			if _, _, _, err := s.Authorize(""); err != nil {
 				t.Fatalf("Authorize %d: %v", i, err)
 			}
 		}
-		if _, _, _, err := s.Authorize(); !errors.Is(err, errGrantStoreFull) {
+		if _, _, _, err := s.Authorize(""); !errors.Is(err, errGrantStoreFull) {
 			t.Fatalf("Authorize past cap = %v, want errGrantStoreFull", err)
 		}
 		if len(s.codes) != 3 {

@@ -39,6 +39,13 @@ func TestLoadConfigAgentTokens(t *testing.T) {
 			wantErr: `world "nope" is not a configured worlds[] entry`,
 		},
 		{
+			name: "memory world",
+			body: strings.Replace(validConfig, `publicURL: "https://broker.example.com"`,
+				"publicURL: \"https://broker.example.com\"\n  memory:\n    publicURL: \"https://memory.example.com\"", 1) +
+				"    profile: knowledge\n  - name: mem\n    profile: memory\n    namespace: mem\n    tokensSecret: mem-tokens\n    allow:\n      emails: [\"a@example.com\"]\n    writeScope:\n      paths: [\"/**\"]\nagentTokens:\n  - world: mem\n    secret: v\n    key: admin\n",
+			wantErr: `world "mem" is a memory world`,
+		},
+		{
 			name:    "duplicate world",
 			body:    validConfig + "agentTokens:\n  - world: team-a\n    secret: v\n    key: admin\n  - world: team-a\n    secret: w\n    key: admin\n",
 			wantErr: `duplicate world "team-a"`,

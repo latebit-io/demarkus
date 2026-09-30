@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/gateway"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/oauthsrv"
@@ -23,23 +22,10 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// RunOptions parameterizes the shared broker lifecycle: everything the
-// two product binaries do not share (profile, validation, provisioning)
-// is injected here so lifecycle fixes land once.
+// RunOptions parameterizes the broker lifecycle for the binary that hosts it.
 type RunOptions struct {
-	// LogName prefixes every lifecycle log line ("broker", "memory broker").
+	// LogName prefixes every lifecycle log line.
 	LogName string
-	// Realm is the default WWW-Authenticate realm applied when the
-	// config leaves Server.Realm blank.
-	Realm string
-	// Profile selects the MCP gateway surface.
-	Profile *gateway.Profile
-	// Validate runs extra config checks after LoadConfig.
-	Validate []func(*core.Config) error
-	// Buckets builds the tenant bucket backend; set by the memory broker
-	// only. Provisioning is wired when it is set and the config enables it.
-	// The cleanup runs once on every exit path.
-	Buckets func(cfg *core.ProvisioningConfig, log *slog.Logger) (buckets storage.BucketCreator, cleanup func(), err error)
 	// Version is the binary's build version (initialize response).
 	Version string
 	// KubeconfigPath selects an out-of-cluster kubeconfig; empty uses
@@ -50,20 +36,16 @@ type RunOptions struct {
 	LocalWorlds gateway.LocalWorlds
 }
 
-// gatewayProfile is the product profile narrowed to the configured tool surface.
-func (o *RunOptions) gatewayProfile(cfg *core.Config) *gateway.Profile {
-	profile := *o.Profile
-	profile.Tools = mcpfmt.ProfileTools(cfg.Server.MCP.ToolProfile, profile.Tools)
-	return &profile
-}
-
-// Broker is an opened broker: config, auth machinery and both HTTP
-// listeners built; Serve runs them, Close releases the rest.
+// Broker is an opened broker: config, auth machinery and the listeners
+// built; Serve runs them, Close releases the rest.
 type Broker struct {
-	cfg         *core.Config
-	opts        *RunOptions
-	log         *slog.Logger
-	pool        *gateway.WorldPool
+	cfg  *core.Config
+	opts *RunOptions
+	log  *slog.Logger
+	pool *gateway.WorldPool
+	srv  *oauthsrv.Server
+	// httpSrv is the management listener; mcpSrv the extra one the charts
+	// route the knowledge host to until the fold. Both serve the one mux.
 	httpSrv     *http.Server
 	mcpSrv      *http.Server
 	tasks       *backgroundTasks
@@ -89,57 +71,28 @@ func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
 	return err
 }
 
-// KnowledgeOptions is the knowledge broker's product surface.
-func KnowledgeOptions(version, kubeconfigPath string) *RunOptions {
+// Options is the broker's product surface: both gateway profiles from one
+// config, tenant buckets on GCS when provisioning is enabled.
+func Options(version, kubeconfigPath string) *RunOptions {
 	return &RunOptions{
 		LogName:        "broker",
-		Realm:          "demarkus-knowledge-broker",
-		Profile:        gateway.KnowledgeProfile(),
-		Version:        version,
-		KubeconfigPath: kubeconfigPath,
-	}
-}
-
-// MemoryOptions is the memory broker's product surface: every static world
-// names its tenant, the provisioning block is complete when enabled, and
-// tenant buckets are GCS.
-func MemoryOptions(version, kubeconfigPath string) *RunOptions {
-	return &RunOptions{
-		LogName: "memory broker",
-		Realm:   "demarkus-memory-broker",
-		Profile: gateway.MemoryProfile(),
-		Validate: []func(*core.Config) error{
-			(*core.Config).ValidateTenantWorlds,
-			(*core.Config).ValidateProvisioning,
-		},
-		Buckets:        storage.NewGCSBuckets,
 		Version:        version,
 		KubeconfigPath: kubeconfigPath,
 	}
 }
 
 // Open loads the config, builds the auth machinery, the OAuth server, the
-// MCP gateway and both listeners. Nothing listens until Serve.
+// gateways and the listeners. Nothing listens until Serve.
 func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error) {
-	if opts.Profile == nil {
-		return nil, errors.New("broker: RunOptions.Profile is required")
-	}
 	cfg, err := core.LoadConfig(configPath)
 	if err != nil {
 		return nil, err
-	}
-	for _, validate := range opts.Validate {
-		if err := validate(cfg); err != nil {
-			return nil, err
-		}
-	}
-	if cfg.Server.Realm == "" {
-		cfg.Server.Realm = opts.Realm
 	}
 	log.Info(opts.LogName+": config loaded",
 		"addr", cfg.Server.Addr,
 		"oidcIssuer", cfg.OIDC.Issuer,
 		"worlds", len(cfg.Worlds),
+		"memoryGateway", cfg.Server.Memory.Enabled(),
 		"version", opts.Version,
 	)
 
@@ -170,48 +123,58 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 			"trustForwardedFor", cfg.RateLimit.TrustForwardedFor)
 	}
 
-	// MCP gateway on its own listener; distinct Addr lets the chart
-	// route the two surfaces through different Ingress hosts or paths
-	// (SSE responses are write-side, untouched by the read timeouts).
+	// One mux: the management API, the knowledge gateway on every host it
+	// does not claim, the memory gateway on its own hostname.
 	pool := gateway.NewWorldPool(cfg.Registry(), fetch.Options{Insecure: cfg.WorldDialer.InsecureSkipVerify})
 	var dispatcher gateway.WorldDispatcher = pool
 	if opts.LocalWorlds != nil {
 		dispatcher = gateway.NewComposite(cfg.Registry(), opts.LocalWorlds, pool)
 	}
-	gw := gateway.New(gateway.DepsFor(cfg, deps.SharedDeps, provisioner), opts.Version, dispatcher, opts.gatewayProfile(cfg))
-	return &Broker{
+	mux := http.NewServeMux()
+	srv.Register(mux)
+	knowledge := gateway.KnowledgeProfile()
+	gateway.New(gateway.DepsFor(cfg, knowledge, deps.SharedDeps, nil), opts.Version, dispatcher, knowledge).Register(mux, "")
+	if cfg.Server.Memory.Enabled() {
+		memory := gateway.MemoryProfile()
+		gateway.New(gateway.DepsFor(cfg, memory, deps.SharedDeps, provisioner), opts.Version, dispatcher, memory).Register(mux, cfg.Server.Memory.Host())
+	}
+	b := &Broker{
 		cfg:         cfg,
 		opts:        opts,
 		log:         log,
 		pool:        pool,
-		httpSrv:     newHardenedServer(cfg.Server.Addr, srv.Routes()),
-		mcpSrv:      newHardenedServer(cfg.Server.MCP.Addr, gw.Routes()),
+		srv:         srv,
+		httpSrv:     newHardenedServer(cfg.Server.Addr, mux),
 		tasks:       &backgroundTasks{cfg: cfg, opts: opts, log: log, store: store, k8s: k8s, srv: srv, provisioner: provisioner},
 		closeBucket: closeBuckets,
-	}, nil
+	}
+	if cfg.Server.MCP.Addr != "" {
+		b.mcpSrv = newHardenedServer(cfg.Server.MCP.Addr, mux)
+	}
+	return b, nil
 }
 
-// Serve runs both listeners and the background tasks until ctx ends or a
-// listener fails, then drains MCP, the world pool and last the management
-// API, the liveness signal. Close still has to run afterwards.
+// Serve runs the listeners and the background tasks until ctx ends or a
+// listener fails, then flips readiness, drains the mux and the world pool.
+// Close still has to run afterwards.
 func (b *Broker) Serve(ctx context.Context) error {
 	cfg, opts, log := b.cfg, b.opts, b.log
-	errs := make(chan error, 1)
+	errs := make(chan error, 2)
 	go func() {
 		log.Info(opts.LogName+": listening", "addr", cfg.Server.Addr)
 		errs <- filterServerClosed(b.httpSrv.ListenAndServe())
 	}()
-	mcpErrs := make(chan error, 1)
-	mcpTLS := cfg.Server.MCP.TLS
-	go func() {
-		log.Info(opts.LogName+": mcp gateway listening",
-			"addr", cfg.Server.MCP.Addr, "tls", mcpTLS.CertFile != "")
-		if mcpTLS.CertFile != "" {
-			mcpErrs <- filterServerClosed(b.mcpSrv.ListenAndServeTLS(mcpTLS.CertFile, mcpTLS.KeyFile))
-			return
-		}
-		mcpErrs <- filterServerClosed(b.mcpSrv.ListenAndServe())
-	}()
+	if b.mcpSrv != nil {
+		mcpTLS := cfg.Server.MCP.TLS
+		go func() {
+			log.Info(opts.LogName+": mcp listener", "addr", cfg.Server.MCP.Addr, "tls", mcpTLS.CertFile != "")
+			if mcpTLS.CertFile != "" {
+				errs <- filterServerClosed(b.mcpSrv.ListenAndServeTLS(mcpTLS.CertFile, mcpTLS.KeyFile))
+				return
+			}
+			errs <- filterServerClosed(b.mcpSrv.ListenAndServe())
+		}()
+	}
 
 	// One cancel tears down every background task before HTTP shutdown.
 	sweepCtx, cancelSweep := context.WithCancel(context.Background())
@@ -226,44 +189,45 @@ func (b *Broker) Serve(ctx context.Context) error {
 	case <-ctx.Done():
 	case err := <-errs:
 		if err != nil {
-			runErr = fmt.Errorf("management listener: %w", err)
+			runErr = fmt.Errorf("listener: %w", err)
 		} else {
-			log.Warn(opts.LogName + ": management listener stopped, shutting down")
-		}
-	case err := <-mcpErrs:
-		if err != nil {
-			runErr = fmt.Errorf("mcp gateway listener: %w", err)
-		} else {
-			log.Warn(opts.LogName + ": mcp gateway listener stopped, shutting down")
+			log.Warn(opts.LogName + ": listener stopped, shutting down")
 		}
 	}
 
+	// Readiness drops first so the load balancer stops sending sessions;
+	// the tasks stop before the listeners so nothing writes into a drain.
+	b.srv.BeginDrain()
 	cancelSweep()
 	sweepWG.Wait()
-
-	// Separate shutdown contexts per surface so a slow MCP drain never
-	// burns the management-API deadline; the management API's outcome is
-	// the authoritative liveness signal.
-	mcpShutdownCtx, cancelMCPShutdown := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelMCPShutdown()
-	if err := b.mcpSrv.Shutdown(mcpShutdownCtx); err != nil {
-		log.Warn(opts.LogName+": mcp gateway shutdown error", "err", err)
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelShutdown()
+	var shutdownErr error
+	for _, srv := range b.listeners() {
+		shutdownErr = errors.Join(shutdownErr, srv.Shutdown(shutdownCtx))
 	}
 	// Drain pooled QUIC connections after http.Shutdown so in-flight
 	// tool calls have already returned.
 	b.pool.Close()
-	mgmtShutdownCtx, cancelMgmtShutdown := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelMgmtShutdown()
-	return errors.Join(runErr, b.httpSrv.Shutdown(mgmtShutdownCtx))
+	return errors.Join(runErr, shutdownErr)
 }
 
-// Close stops both listeners outright, then releases the world pool and
+// listeners is every http.Server this broker runs.
+func (b *Broker) listeners() []*http.Server {
+	out := []*http.Server{b.httpSrv}
+	if b.mcpSrv != nil {
+		out = append(out, b.mcpSrv)
+	}
+	return out
+}
+
+// Close stops the listeners outright, then releases the world pool and
 // the tenant bucket backend; safe after Serve and more than once.
 func (b *Broker) Close() {
 	b.closeOnce.Do(func() {
-		for name, srv := range map[string]*http.Server{"mcp gateway": b.mcpSrv, "management": b.httpSrv} {
+		for _, srv := range b.listeners() {
 			if err := filterServerClosed(srv.Close()); err != nil {
-				b.log.Warn(b.opts.LogName+": "+name+" close error", "err", err)
+				b.log.Warn(b.opts.LogName+": listener close error", "addr", srv.Addr, "err", err)
 			}
 		}
 		b.pool.Close()
@@ -452,7 +416,7 @@ func buildServerDeps(cfg *core.Config, opts *RunOptions, store core.SecretStore,
 	subject, login := core.NewRateLimits(&cfg.RateLimit)
 	return oauthsrv.ServerDeps{
 		SharedDeps: core.SharedDeps{
-			Verifier:       core.VerifierWith(verifier, idTokenSigner, cfg.Server.PublicURL),
+			Verifier:       core.VerifierWith(verifier, idTokenSigner, cfg.Server.PublicURL, cfg.Server.Resources()),
 			SubjectLimiter: subject,
 			Clock:          time.Now,
 			Log:            log,
@@ -462,18 +426,17 @@ func buildServerDeps(cfg *core.Config, opts *RunOptions, store core.SecretStore,
 		Discovery:     discovery,
 		IDTokenSigner: idTokenSigner,
 		LoginLimiter:  login,
-		TenantScoped:  opts.Profile.TenantScoped,
 	}, nil
 }
 
-// enableProvisioning builds the tenant provisioner when the binary supplies a
-// bucket backend and the config enables provisioning; nil otherwise. The
-// cleanup releases the bucket client and is safe to call either way.
+// enableProvisioning builds the tenant provisioner when the config enables
+// provisioning; nil otherwise. The cleanup releases the bucket client and is
+// safe to call either way.
 func enableProvisioning(cfg *core.Config, opts *RunOptions, store core.SecretStore, log *slog.Logger) (*storage.Provisioner, func(), error) {
-	if opts.Buckets == nil || !cfg.Provisioning.Enabled() {
+	if !cfg.Provisioning.Enabled() {
 		return nil, func() {}, nil
 	}
-	buckets, closeBuckets, err := opts.Buckets(&cfg.Provisioning, log)
+	buckets, closeBuckets, err := storage.NewGCSBuckets(&cfg.Provisioning, log)
 	if err != nil {
 		return nil, nil, fmt.Errorf("provisioning enabled: %w", err)
 	}
@@ -519,12 +482,6 @@ func RunDeprovision(ctx context.Context, opts DeprovisionOptions) (found bool, e
 	defer cancel()
 	cfg, err := core.LoadConfig(opts.ConfigPath)
 	if err != nil {
-		return false, err
-	}
-	if err := cfg.ValidateTenantWorlds(); err != nil {
-		return false, err
-	}
-	if err := cfg.ValidateProvisioning(); err != nil {
 		return false, err
 	}
 	if !cfg.Provisioning.Enabled() {

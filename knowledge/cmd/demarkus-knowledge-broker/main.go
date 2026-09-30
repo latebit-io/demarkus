@@ -33,7 +33,7 @@ func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
 
-	err := broker.Run(*configPath, broker.KnowledgeOptions(version, *kubeconfig), log)
+	err := broker.Run(*configPath, broker.Options(version, *kubeconfig), log)
 	if err != nil {
 		log.Error("broker exited with error", "err", err)
 		os.Exit(1)

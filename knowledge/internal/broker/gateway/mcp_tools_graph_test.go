@@ -54,7 +54,12 @@ func TestKnowledgeGraphPreservesCrossWorldSources(t *testing.T) {
 	d.Published["bob-w/source.md"] = fetch.Result{Response: protocol.Response{
 		Status: protocol.StatusOK, Body: "# Shared source\n[reference](mark://alice-w/index.md)",
 	}}
-	g := newGatewayWithDispatcher(t, brokertest.NewMemoryConfig(), d)
+	// Both worlds on the knowledge gateway: the org graph spans them.
+	cfg := brokertest.NewMemoryConfig()
+	for i := range cfg.Worlds {
+		cfg.Worlds[i].Profile = core.ProfileKnowledge
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
 	ctx := withAliceClaims(t.Context())
 	res, err := g.handleMarkGraph(ctx, callToolReq("mark_graph", map[string]any{"url": "mark://bob-w/source.md"}))
 	if err != nil || res == nil || res.IsError {

@@ -7,7 +7,10 @@ own world; `mark_worlds` is a broker-only self-discovery operation.
 Transport, OAuth metadata, bearer handling, rate limiting, and the
 write grant are identical to the knowledge broker;
 see `knowledge/cmd/demarkus-knowledge-broker/MCP-API.md` for those mechanics
-and `deploy/helm/demarkus-memory-broker/README.md` for deployment.
+and `deploy/helm/demarkus-memory-broker/README.md` for deployment. One
+broker config carries both gateways: the memory gateway is on when
+`server.memory.publicURL` is set and serves the worlds marked
+`profile: memory` plus the provisioned tenants, on its own hostname.
 
 ## Identity + access model (differs from the knowledge broker)
 

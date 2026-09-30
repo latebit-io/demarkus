@@ -107,49 +107,6 @@ tests:
           path: rules[2].verbs
           content: list
 
-  - it: broker-ns Role per-world write-token rule pins get/update to each configured world's Secret
-    template: rbac-broker-ns.yaml
-    documentIndex: 0
-    set:
-      worlds:
-        - name: team-a
-          namespace: team-a
-          tokensSecret: team-a-tokens
-          allow: {}
-          defaultToken:
-            paths: ["/team-a/*"]
-            operations: ["publish"]
-            expiresAfter: 24h
-        - name: team-b
-          namespace: team-b
-          tokensSecret: team-b-tokens
-          allow: {}
-          defaultToken:
-            paths: ["/team-b/*"]
-            operations: ["publish"]
-            expiresAfter: 24h
-    asserts:
-      - equal:
-          path: rules[3].apiGroups
-          value: [""]
-      - equal:
-          path: rules[3].resources
-          value: ["secrets"]
-      - equal:
-          path: rules[3].resourceNames
-          value:
-            - "demarkus-broker-write-token-team-a"
-            - "demarkus-broker-write-token-team-b"
-      - equal:
-          path: rules[3].verbs
-          value: ["get", "update"]
-      - notContains:
-          path: rules[3].verbs
-          content: create
-      - notContains:
-          path: rules[3].verbs
-          content: delete
-
   - it: broker-ns Role secrets create rule is namespace-wide (resourceNames is unsupported for create)
     template: rbac-broker-ns.yaml
     documentIndex: 0
@@ -165,29 +122,29 @@ tests:
             expiresAfter: 24h
     asserts:
       - equal:
-          path: rules[4].apiGroups
+          path: rules[3].apiGroups
           value: [""]
       - equal:
-          path: rules[4].resources
+          path: rules[3].resources
           value: ["secrets"]
       - equal:
-          path: rules[4].verbs
+          path: rules[3].verbs
           value: ["create"]
       - notExists:
           # Same hard k8s RBAC constraint as the leases create rule:
           # resourceNames on a create rule silently denies create.
-          # The per-world write-token bootstrap depends on this
+          # The generated signing and cookie keys depend on this
           # rule landing un-restricted.
-          path: rules[4].resourceNames
+          path: rules[3].resourceNames
 
-  - it: broker-ns Role keeps only the secrets create rule when worlds[] is empty
+  - it: broker-ns Role keeps only the secrets create rule without agent tokens
     template: rbac-broker-ns.yaml
     documentIndex: 0
     set:
       worlds: []
     asserts:
       # Two leases rules, the chart-seeded-secrets rule, and the create
-      # rule the generated signing key needs; no per-world rule.
+      # rule the generated signing key needs; no agent token rule.
       - equal:
           path: rules[3].verbs
           value: ["create"]
@@ -368,8 +325,6 @@ tests:
             apiGroups: [""]
             resources: ["secrets"]
             resourceNames:
-              - demarkus-broker-write-token-root
-              - demarkus-broker-write-token-team-a
               - demarkus-broker-agent-token-root
             verbs: ["get", "update"]
 

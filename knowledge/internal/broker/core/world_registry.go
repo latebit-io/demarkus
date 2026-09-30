@@ -22,7 +22,33 @@ type WorldRegistry struct {
 }
 
 func newWorldRegistry(static []WorldConfig) *WorldRegistry {
+	defaultProfiles(static)
 	return &WorldRegistry{static: static, staticIndex: indexByName(static)}
+}
+
+// defaultProfiles settles a blank profile as knowledge at registry ingress,
+// the config default, so every lookup compares profiles by equality.
+func defaultProfiles(worlds []WorldConfig) {
+	for i := range worlds {
+		if worlds[i].Profile == "" {
+			worlds[i].Profile = ProfileKnowledge
+		}
+	}
+}
+
+// allOf is a snapshot of one profile's worlds, sized once under the lock.
+func (r *WorldRegistry) allOf(profile string) []WorldConfig {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []WorldConfig
+	for _, list := range [][]WorldConfig{r.static, r.dynamic} {
+		for i := range list {
+			if list[i].Profile == profile {
+				out = append(out, list[i])
+			}
+		}
+	}
+	return out
 }
 
 func indexByName(worlds []WorldConfig) map[string]int {
@@ -40,6 +66,37 @@ func (r *WorldRegistry) All() []WorldConfig {
 	out := make([]WorldConfig, 0, len(r.static)+len(r.dynamic))
 	return append(append(out, r.static...), r.dynamic...)
 }
+
+// View is the registry as one gateway sees it: the worlds of its profile.
+func (r *WorldRegistry) View(profile string) *WorldView {
+	return &WorldView{reg: r, profile: profile}
+}
+
+// WorldView is a gateway's window on the shared registry. Names are unique
+// across profiles, so a lookup that lands in the other profile is a miss.
+type WorldView struct {
+	reg     *WorldRegistry
+	profile string
+}
+
+// All is a snapshot of the profile's worlds; the slice is the caller's.
+func (v *WorldView) All() []WorldConfig { return v.reg.allOf(v.profile) }
+
+// Find returns a copy of the named world when it belongs to the profile.
+func (v *WorldView) Find(name string) (WorldConfig, bool) {
+	w, ok := v.reg.Find(name)
+	if !ok || w.Profile != v.profile {
+		return WorldConfig{}, false
+	}
+	return w, true
+}
+
+// SlugForIdentity resolves a provisioned identity to its pinned slug; Find
+// then decides whether the profile serves it.
+func (v *WorldView) SlugForIdentity(key string) (string, bool) { return v.reg.SlugForIdentity(key) }
+
+// OnDrop registers a listener for worlds that leave the registry, any profile.
+func (v *WorldView) OnDrop(listener func(name string)) { v.reg.OnDrop(listener) }
 
 // Find returns a copy of the named world.
 func (r *WorldRegistry) Find(name string) (WorldConfig, bool) {
@@ -75,6 +132,7 @@ func (r *WorldRegistry) OnDrop(listener func(name string)) {
 // world is dropped when its name left or now belongs to a newer provisioning.
 // It returns the names it refused because no tool URL could address them.
 func (r *WorldRegistry) SetDynamic(worlds []WorldConfig, tenants map[string]string) (rejected []string) {
+	defaultProfiles(worlds)
 	next := make([]WorldConfig, 0, len(worlds))
 	for i := range worlds {
 		name := worlds[i].Name

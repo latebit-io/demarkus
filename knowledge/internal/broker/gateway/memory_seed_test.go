@@ -235,7 +235,7 @@ func TestEnsureMemorySeedReplacesServerSeedInSeededWorld(t *testing.T) {
 // bucket. A pod that remembered "seeded" for that name would never seed it.
 func TestReprovisionedWorldIsSeededAgain(t *testing.T) {
 	cfg := brokertest.NewMemoryConfig()
-	eve := core.WorldConfig{Name: "eve-1", Namespace: "memory", Allow: core.AllowConfig{Emails: []string{"alice@example.com"}}, Generation: "t1"}
+	eve := core.WorldConfig{Name: "eve-1", Profile: core.ProfileMemory, Namespace: "memory", Allow: core.AllowConfig{Emails: []string{"alice@example.com"}}, Generation: "t1"}
 	cfg.Registry().SetDynamic([]core.WorldConfig{eve}, nil)
 	d := freshWorldDispatcher()
 	g := newMemoryGateway(t, cfg, d)

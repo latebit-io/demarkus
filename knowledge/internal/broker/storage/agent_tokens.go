@@ -75,7 +75,7 @@ func (a *AgentTokens) Reconcile(ctx context.Context) error {
 // reconcileOne writes record, then world hash, then agent Secret, so the world
 // usually knows the hash before the agent's pod can start on the raw value.
 func (a *AgentTokens) reconcileOne(ctx context.Context, spec *core.AgentTokenConfig) error {
-	world := core.LookupWorld(a.cfg.Registry(), spec.World)
+	world := core.LookupWorld(a.cfg.Registry().View(core.ProfileKnowledge), spec.World)
 	if world == nil {
 		return fmt.Errorf("world %q not found", spec.World)
 	}

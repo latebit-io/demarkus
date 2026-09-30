@@ -28,7 +28,7 @@ import (
 func TestTenantWorldFor(t *testing.T) {
 	cfg := brokertest.NewMemoryConfig()
 	alice := &core.Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}
-	w, err := core.TenantWorldFor(cfg.Registry(), cfg.OIDC.Issuer, alice)
+	w, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, alice)
 	if err != nil {
 		t.Fatalf("tenantWorldFor(alice): %v", err)
 	}
@@ -37,14 +37,14 @@ func TestTenantWorldFor(t *testing.T) {
 	}
 
 	stranger := &core.Claims{Subject: "google|eve", Email: "eve@example.com", EmailVerified: true}
-	if _, err := core.TenantWorldFor(cfg.Registry(), cfg.OIDC.Issuer, stranger); !errors.Is(err, core.ErrNotAuthorized) {
+	if _, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, stranger); !errors.Is(err, core.ErrNotAuthorized) {
 		t.Errorf("tenantWorldFor(stranger) err = %v, want ErrNotAuthorized", err)
 	}
 
 	// Ambiguity denies closed; error text stays opaque (world names
 	// identify tenants) while names ride the typed error for the log.
 	cfg.Worlds[1].Allow.Emails = []string{"alice@example.com"}
-	_, err = core.TenantWorldFor(cfg.Registry(), cfg.OIDC.Issuer, alice)
+	_, err = core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, alice)
 	if err == nil || errors.Is(err, core.ErrNotAuthorized) {
 		t.Fatalf("tenantWorldFor(ambiguous) err = %v, want a distinct ambiguity error", err)
 	}
@@ -57,21 +57,6 @@ func TestTenantWorldFor(t *testing.T) {
 	}
 	if ambiguous.First != "alice-w" || ambiguous.Second != "bob-w" {
 		t.Errorf("ambiguity fields = %q/%q, want alice-w/bob-w", ambiguous.First, ambiguous.Second)
-	}
-}
-
-func TestValidateTenantWorldsRejectsEmptyAllow(t *testing.T) {
-	cfg := brokertest.NewMemoryConfig()
-	if err := cfg.ValidateTenantWorlds(); err != nil {
-		t.Fatalf("ValidateTenantWorlds on valid config: %v", err)
-	}
-	cfg.Worlds[1].Allow = core.AllowConfig{}
-	err := cfg.ValidateTenantWorlds()
-	if err == nil {
-		t.Fatal("ValidateTenantWorlds accepted a world with an empty allow block (would match every identity)")
-	}
-	if !strings.Contains(err.Error(), "bob-w") {
-		t.Errorf("err = %v, want the offending world named", err)
 	}
 }
 

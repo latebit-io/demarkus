@@ -33,7 +33,7 @@ func TestIDTokenSignerSignVerifyRoundTrip(t *testing.T) {
 		t.Errorf("token = %q has %d dots, want 2", raw, got)
 	}
 
-	got, err := s.VerifyIDToken(raw, brokerURL, now.Add(time.Minute))
+	got, err := s.VerifyIDToken(raw, brokerURL, []string{brokerURL}, now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("VerifyIDToken: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestIDTokenSignerVerifyRejectsExpired(t *testing.T) {
 	}
 	// 10 minutes after exp + the default 1-minute leeway should
 	// reliably trip ErrExpired.
-	_, err = s.VerifyIDToken(raw, "https://b", now.Add(10*time.Minute))
+	_, err = s.VerifyIDToken(raw, "https://b", []string{"https://b"}, now.Add(10*time.Minute))
 	if err == nil {
 		t.Fatalf("expired token verified ok, want error")
 	}
@@ -86,7 +86,7 @@ func TestIDTokenSignerVerifyRejectsWrongIssuer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	if _, err := s.VerifyIDToken(raw, "https://b2.example.com", now); err == nil {
+	if _, err := s.VerifyIDToken(raw, "https://b2.example.com", []string{"https://b2.example.com"}, now); err == nil {
 		t.Fatalf("wrong issuer accepted")
 	}
 }
@@ -105,7 +105,7 @@ func TestIDTokenSignerVerifyRejectsForeignKid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign on A: %v", err)
 	}
-	_, err = b.VerifyIDToken(raw, "https://b", now)
+	_, err = b.VerifyIDToken(raw, "https://b", []string{"https://b"}, now)
 	if !errors.Is(err, ErrIDTokenKidUnknown) {
 		t.Fatalf("err = %v, want ErrIDTokenKidUnknown", err)
 	}
@@ -132,7 +132,7 @@ func TestIDTokenSignerVerifyRejectsBadSignature(t *testing.T) {
 		tampered[0] = 'A'
 	}
 	bad := parts[0] + "." + parts[1] + "." + string(tampered)
-	if _, err := s.VerifyIDToken(bad, "https://b", now); err == nil {
+	if _, err := s.VerifyIDToken(bad, "https://b", []string{"https://b"}, now); err == nil {
 		t.Fatalf("tampered signature accepted")
 	}
 }
@@ -218,4 +218,37 @@ func p384TestKeyPEM(t *testing.T) []byte {
 		t.Fatalf("marshal P-384: %v", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+}
+
+func TestIDTokenSignerBindsAudienceToTheResource(t *testing.T) {
+	s := newTestIDTokenSigner(t)
+	now := time.Now()
+	const broker, resource = "https://broker.example.com", "https://mcp.example.com/mcp"
+	claims := Claims{Subject: "u", Email: "u@example.com", EmailVerified: true}
+	bound := claims.BoundTo(resource)
+	raw, err := s.Sign(&bound, broker, time.Minute, now)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	got, err := s.VerifyIDToken(raw, broker, []string{broker, resource}, now)
+	if err != nil {
+		t.Fatalf("VerifyIDToken with the resource accepted: %v", err)
+	}
+	if got.Resource != resource {
+		t.Errorf("Resource = %q, want %q", got.Resource, resource)
+	}
+	if _, err := s.VerifyIDToken(raw, broker, []string{broker}, now); err == nil {
+		t.Fatal("a bound token verified against the broker URL alone")
+	}
+	unbound, err := s.Sign(&claims, broker, time.Minute, now)
+	if err != nil {
+		t.Fatalf("Sign unbound: %v", err)
+	}
+	got, err = s.VerifyIDToken(unbound, broker, []string{broker}, now)
+	if err != nil {
+		t.Fatalf("VerifyIDToken unbound: %v", err)
+	}
+	if got.Resource != "" {
+		t.Errorf("unbound Resource = %q, want blank", got.Resource)
+	}
 }

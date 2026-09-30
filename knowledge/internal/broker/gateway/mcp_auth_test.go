@@ -194,7 +194,7 @@ func TestGatewayAuthEnforcesAllowDomains(t *testing.T) {
 			cfg.OIDC.AllowDomains = []string{"latebit.io"}
 			idTokenSigner := brokertest.NewTestIDTokenSigner(t)
 			primary := brokertest.AllowDomainsVerifier(tt.HD)
-			shared := core.SharedDeps{Verifier: core.VerifierWith(primary, idTokenSigner, cfg.Server.PublicURL)}
+			shared := core.SharedDeps{Verifier: core.VerifierWith(primary, idTokenSigner, cfg.Server.PublicURL, cfg.Server.Resources())}
 			g := gatewayFixtureFor(t, cfg, shared, KnowledgeProfile()).gateway(&fakeDispatcher{})
 
 			rec := httptest.NewRecorder()
@@ -215,5 +215,48 @@ func TestGatewayAuthEnforcesAllowDomains(t *testing.T) {
 				t.Errorf("WWW-Authenticate = %q, want empty", challenge)
 			}
 		})
+	}
+}
+
+func TestGatewayAuthHonoursTheResourceBinding(t *testing.T) {
+	cfg := brokertest.NewMemoryConfig()
+	cfg.Server.PublicURL = "https://broker.example.com"
+	cfg.Server.MCP.PublicURL = "https://gateway.example.com"
+	signer := brokertest.NewTestIDTokenSigner(t)
+	shared := core.SharedDeps{Verifier: core.VerifierWith(&brokertest.FakeVerifier{}, signer, cfg.Server.PublicURL, cfg.Server.Resources())}
+	knowledge := gatewayFixtureFor(t, cfg, shared, KnowledgeProfile()).gateway(&fakeDispatcher{})
+	memory := gatewayFixtureFor(t, cfg, shared, MemoryProfile()).gateway(&fakeDispatcher{})
+
+	bearer := func(resource string) string {
+		alice := brokertest.AliceClaims()
+		claims := alice.BoundTo(resource)
+		raw, err := signer.Sign(&claims, cfg.Server.PublicURL, time.Hour, time.Now())
+		if err != nil {
+			t.Fatalf("Sign: %v", err)
+		}
+		return raw
+	}
+	cases := []struct {
+		name     string
+		gateway  *Gateway
+		resource string
+		want     int
+	}{
+		{"unbound token at knowledge", knowledge, "", http.StatusNoContent},
+		{"unbound token at memory", memory, "", http.StatusNoContent},
+		{"knowledge token at knowledge", knowledge, "https://gateway.example.com/mcp", http.StatusNoContent},
+		{"memory token at memory", memory, "https://memory.example.com/mcp", http.StatusNoContent},
+		{"memory token at knowledge", knowledge, "https://memory.example.com/mcp", http.StatusUnauthorized},
+		{"knowledge token at memory", memory, "https://gateway.example.com/mcp", http.StatusUnauthorized},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		tc.gateway.gatewayAuth(brokertest.NoContent()).ServeHTTP(rec, brokertest.BearerRequest(bearer(tc.resource)))
+		if rec.Code != tc.want {
+			t.Errorf("%s: status = %d, want %d", tc.name, rec.Code, tc.want)
+		}
+		if tc.want == http.StatusUnauthorized && !strings.Contains(rec.Header().Get("WWW-Authenticate"), `error="invalid_token"`) {
+			t.Errorf("%s: WWW-Authenticate = %q, want invalid_token", tc.name, rec.Header().Get("WWW-Authenticate"))
+		}
 	}
 }

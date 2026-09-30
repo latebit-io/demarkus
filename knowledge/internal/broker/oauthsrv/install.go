@@ -69,33 +69,26 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// listInstallableWorlds is the one fail-closed policy site for the
-// management API: resolution errors log (redacted) and yield an empty
-// listing, never a leak.
+// listInstallableWorlds is the management API's one fail-closed policy site:
+// every knowledge world plus the caller's own memory world. A memory
+// resolution error logs (redacted) and yields no memory row, never a leak.
 func (s *Server) listInstallableWorlds(ctx context.Context, claims *core.Claims) []installWorld {
-	out, err := installableWorlds(s.cfg.Registry(), s.cfg.OIDC.Issuer, claims, s.tenantScoped)
-	if err != nil {
-		s.log.WarnContext(ctx, "broker: world listing denied",
-			"subject", core.HashSubject(claims.Subject), "err", err)
-		return []installWorld{}
+	worlds := core.ReadableWorlds(s.cfg.Registry().View(core.ProfileKnowledge))
+	if s.cfg.Server.Memory.Enabled() {
+		w, err := core.TenantWorldFor(s.cfg.Registry().View(core.ProfileMemory), s.cfg.OIDC.Issuer, claims)
+		if err != nil {
+			s.log.WarnContext(ctx, "broker: memory world listing denied",
+				"subject", core.HashSubject(claims.Subject), "err", err)
+		} else {
+			worlds = append(worlds, w)
+		}
 	}
-	return out
+	return installableWorlds(worlds)
 }
 
-// installableWorlds lists the worlds a client can be wired at (no
-// PublicURL = uninstallable); tenant scoping uses the canonical
-// resolver, denying closed with an error the caller logs.
-func installableWorlds(reg *core.WorldRegistry, issuer string, claims *core.Claims, tenantScoped bool) ([]installWorld, error) {
-	var worlds []core.WorldConfig
-	if tenantScoped {
-		w, err := core.TenantWorldFor(reg, issuer, claims)
-		if err != nil {
-			return []installWorld{}, err
-		}
-		worlds = []core.WorldConfig{w}
-	} else {
-		worlds = core.ReadableWorlds(reg)
-	}
+// installableWorlds keeps the worlds a client can be wired at: no PublicURL
+// is uninstallable.
+func installableWorlds(worlds []core.WorldConfig) []installWorld {
 	out := make([]installWorld, 0, len(worlds))
 	for j := range worlds {
 		if worlds[j].PublicURL == "" {
@@ -106,5 +99,5 @@ func installableWorlds(reg *core.WorldRegistry, issuer string, claims *core.Clai
 			PublicURL: worlds[j].PublicURL,
 		})
 	}
-	return out, nil
+	return out
 }

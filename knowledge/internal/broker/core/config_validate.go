@@ -48,61 +48,108 @@ func (c *Config) validate() error {
 	if err := c.Server.applyRefreshDefaults(); err != nil {
 		return err
 	}
-	if err := c.Server.MCP.validate(); err != nil {
+	if err := c.Server.validateGateways(); err != nil {
 		return err
-	}
-	// Caught here so the typo reads as such, not as a bind error at startup.
-	if c.Server.MCP.Addr == c.Server.Addr {
-		return fmt.Errorf("server.mcp.addr must differ from server.addr (both are %q)", c.Server.Addr)
 	}
 	if err := c.OIDC.validate(); err != nil {
 		return err
 	}
-	// Zero static worlds is legal when provisioning is enabled: the
-	// whole world set then arrives dynamically via the registry.
+	if err := c.Provisioning.validate(c.fileBackend()); err != nil {
+		return err
+	}
+	if c.Provisioning.Enabled() && !c.Server.Memory.Enabled() {
+		return fmt.Errorf("provisioning.mode %q needs the memory gateway (server.memory.publicURL)", c.Provisioning.Mode)
+	}
+	tokenSecrets, err := c.validateWorlds()
+	if err != nil {
+		return err
+	}
+	if err := c.validateAgentTokens(tokenSecrets); err != nil {
+		return err
+	}
+	if err := validateWebClients(c.WebClients); err != nil {
+		return err
+	}
+	if err := c.Sweeper.applyDefaultsAndValidate(); err != nil {
+		return err
+	}
+	return c.RateLimit.applyDefaultsAndValidate()
+}
+
+// validateWorlds checks every static world and the set as a whole; it
+// returns the tokens Secret references (namespace and name to world) the
+// agent token check needs. Zero worlds is legal with provisioning on.
+func (c *Config) validateWorlds() (map[[2]string]string, error) {
 	if len(c.Worlds) == 0 && !c.Provisioning.Enabled() {
-		return fmt.Errorf("at least one world is required (or enable provisioning)")
+		return nil, fmt.Errorf("at least one world is required (or enable provisioning)")
 	}
 	seen := make(map[string]bool, len(c.Worlds))
 	seenSecretRefs := make(map[[2]string]string, len(c.Worlds))
 	for i := range c.Worlds {
 		w := &c.Worlds[i]
 		if err := validateWorld(i, w, c.fileBackend()); err != nil {
-			return err
+			return nil, err
+		}
+		if err := c.validateWorldProfile(i, w); err != nil {
+			return nil, err
 		}
 		if seen[w.Name] {
-			return fmt.Errorf("worlds[%d]: duplicate name %q", i, w.Name)
+			return nil, fmt.Errorf("worlds[%d]: duplicate name %q", i, w.Name)
 		}
 		seen[w.Name] = true
 		if !c.fileBackend() {
 			ref := [2]string{w.Namespace, w.TokensSecret}
 			if other, ok := seenSecretRefs[ref]; ok {
-				return fmt.Errorf("worlds[%d] (%s): duplicate tokens Secret reference %q (also used by world %q)", i, w.Name, fmt.Sprintf("%s/%s", ref[0], ref[1]), other)
+				return nil, fmt.Errorf("worlds[%d] (%s): duplicate tokens Secret reference %q (also used by world %q)", i, w.Name, fmt.Sprintf("%s/%s", ref[0], ref[1]), other)
 			}
 			seenSecretRefs[ref] = w.Name
 		}
 	}
-	if err := c.validateAgentTokens(seenSecretRefs); err != nil {
-		return err
+	return seenSecretRefs, nil
+}
+
+// applyDefaultsAndValidate fills the sweeper knobs and bounds the interval.
+func (s *SweeperConfig) applyDefaultsAndValidate() error {
+	if s.Interval == 0 {
+		s.Interval = 5 * time.Minute
 	}
-	if err := validateWebClients(c.WebClients); err != nil {
-		return err
+	if s.Interval < 0 {
+		return fmt.Errorf("sweeper.interval must be > 0 (got %s)", s.Interval)
 	}
-	if c.Sweeper.Interval == 0 {
-		c.Sweeper.Interval = 5 * time.Minute
+	if s.Interval > maxSweeperInterval {
+		return fmt.Errorf("sweeper.interval must be <= %s (got %s); intervals longer than a token lifetime defeat expiry-driven revocation", maxSweeperInterval, s.Interval)
 	}
-	if c.Sweeper.Interval < 0 {
-		return fmt.Errorf("sweeper.interval must be > 0 (got %s)", c.Sweeper.Interval)
-	}
-	if c.Sweeper.Interval > maxSweeperInterval {
-		return fmt.Errorf("sweeper.interval must be <= %s (got %s); intervals longer than a token lifetime defeat expiry-driven revocation", maxSweeperInterval, c.Sweeper.Interval)
-	}
-	if c.Sweeper.LeaseName == "" {
+	if s.LeaseName == "" {
 		// Legacy name pinned: a renamed Lease would briefly dual-run
 		// sweepers across an in-place upgrade.
-		c.Sweeper.LeaseName = "demarkus-broker-sweeper"
+		s.LeaseName = "demarkus-broker-sweeper"
 	}
-	return c.RateLimit.applyDefaultsAndValidate()
+	return nil
+}
+
+// validateWorldProfile settles which gateway serves the world. A memory world
+// names its tenant, or identity = world resolution is ambiguous; a mixed
+// deployment states every profile so a tenant world cannot default to org reads.
+func (c *Config) validateWorldProfile(i int, w *WorldConfig) error {
+	w.Profile = strings.ToLower(strings.TrimSpace(w.Profile))
+	switch w.Profile {
+	case "":
+		if c.Server.Memory.Enabled() {
+			return fmt.Errorf("worlds[%d] (%s): profile is required (knowledge or memory) when server.memory is configured", i, w.Name)
+		}
+		w.Profile = ProfileKnowledge
+	case ProfileKnowledge:
+	case ProfileMemory:
+		if !c.Server.Memory.Enabled() {
+			return fmt.Errorf("worlds[%d] (%s): profile memory needs the memory gateway (server.memory.publicURL)", i, w.Name)
+		}
+		if w.Allow.Empty() {
+			return fmt.Errorf("worlds[%d] (%s): allow must not be empty in a memory world; each is provisioned for one identity", i, w.Name)
+		}
+	default:
+		return fmt.Errorf("worlds[%d] (%s): profile must be %q or %q (got %q)", i, w.Name, ProfileKnowledge, ProfileMemory, w.Profile)
+	}
+	return nil
 }
 
 // validateAgentTokens requires each entry to name a distinct static world and
@@ -127,6 +174,8 @@ func (c *Config) validateAgentTokens(tokenSecrets map[[2]string]string) error {
 		switch {
 		case !ok:
 			return fmt.Errorf("agentTokens[%d]: world %q is not a configured worlds[] entry", i, spec.World)
+		case world.Profile != ProfileKnowledge:
+			return fmt.Errorf("agentTokens[%d]: world %q is a memory world; agent tokens serve knowledge worlds", i, spec.World)
 		case seen[spec.World]:
 			return fmt.Errorf("agentTokens[%d]: duplicate world %q", i, spec.World)
 		case !secretNameRE.MatchString(spec.Secret):
@@ -217,9 +266,9 @@ func (o *OIDCConfig) validate() error {
 	return normalizeList("oidc.allowDomains", o.AllowDomains)
 }
 
-// normalizePublicURL trims whitespace + trailing slash and enforces
-// absolute-URL shape with no query/fragment — a bad value renders broken
-// URLs into discovery metadata. Empty passes through; required is the caller's rule.
+// normalizePublicURL trims whitespace + trailing slash, lowercases scheme
+// and host, and enforces absolute-URL shape with no query/fragment — a bad
+// value renders broken URLs into discovery metadata. Empty passes through.
 func normalizePublicURL(field, raw string) (string, error) {
 	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
 	if trimmed == "" {
@@ -232,11 +281,14 @@ func normalizePublicURL(field, raw string) (string, error) {
 	if u.RawQuery != "" || u.Fragment != "" {
 		return "", fmt.Errorf("%s must not carry a query or fragment (got %q)", field, trimmed)
 	}
-	return trimmed, nil
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	return u.String(), nil
 }
 
 // normalizePublicURLs canonicalizes the advertised base URLs at load.
-// publicURL is required (the issuer); mcp.publicURL falls back to it.
+// publicURL is required (the issuer); mcp.publicURL falls back to it in
+// ServerConfig.Gateway; memory.publicURL stays blank when the gateway is off.
 func (s *ServerConfig) normalizePublicURLs() error {
 	var err error
 	if s.PublicURL, err = normalizePublicURL("server.publicURL", s.PublicURL); err != nil {
@@ -248,23 +300,48 @@ func (s *ServerConfig) normalizePublicURLs() error {
 	if s.MCP.PublicURL, err = normalizePublicURL("server.mcp.publicURL", s.MCP.PublicURL); err != nil {
 		return err
 	}
-	if s.MCP.PublicURL == "" {
-		s.MCP.PublicURL = s.PublicURL
+	s.Memory.PublicURL, err = normalizePublicURL("server.memory.publicURL", s.Memory.PublicURL)
+	return err
+}
+
+// validateGateways fills both gateways' defaults. The memory gateway is
+// selected by Host, so its hostname must differ from the knowledge gateway's.
+func (s *ServerConfig) validateGateways() error {
+	if err := s.MCP.validate(); err != nil {
+		return err
+	}
+	if s.MCP.Addr != "" && s.MCP.Addr == s.Addr {
+		// Caught here so the typo reads as such, not as a bind error at startup.
+		return fmt.Errorf("server.mcp.addr must differ from server.addr (both are %q)", s.Addr)
+	}
+	if !s.Memory.Enabled() {
+		return nil
+	}
+	if err := s.Memory.validate("server.memory"); err != nil {
+		return err
+	}
+	if knowledge := s.Gateway(ProfileKnowledge); s.Memory.Host() == knowledge.Host() {
+		return fmt.Errorf("server.memory.publicURL must be on a different host than server.mcp.publicURL (both are %q)", s.Memory.Host())
 	}
 	return nil
 }
 
-// validate fills the gateway defaults and rejects a half set TLS pair, which
-// would otherwise fail at listen or silently serve plain HTTP.
+// validate fills the tool profile default and rejects an unknown one.
+func (g *GatewayConfig) validate(field string) error {
+	if g.ToolProfile == "" {
+		g.ToolProfile = mcpfmt.ProfileFull
+	}
+	if err := mcpfmt.ValidProfile(g.ToolProfile); err != nil {
+		return fmt.Errorf("%s.toolProfile: %w", field, err)
+	}
+	return nil
+}
+
+// validate rejects a half set TLS pair, which would otherwise fail at
+// listen or silently serve plain HTTP.
 func (m *MCPConfig) validate() error {
-	if m.Addr == "" {
-		m.Addr = defaultMCPAddr
-	}
-	if m.ToolProfile == "" {
-		m.ToolProfile = mcpfmt.ProfileFull
-	}
-	if err := mcpfmt.ValidProfile(m.ToolProfile); err != nil {
-		return fmt.Errorf("server.mcp.toolProfile: %w", err)
+	if err := m.GatewayConfig.validate("server.mcp"); err != nil {
+		return err
 	}
 	hasCert := m.TLS.CertFile != ""
 	hasKey := m.TLS.KeyFile != ""
@@ -282,12 +359,18 @@ func validateWorld(i int, w *WorldConfig, fileMode bool) error {
 		return fmt.Errorf("worlds[%d]: name is required", i)
 	case !WorldNameRE.MatchString(w.Name):
 		return fmt.Errorf("worlds[%d]: name %q must be a DNS label: lowercase letters, digits and hyphens, at most 63, no hyphen at either end", i, w.Name)
-	case len(w.WriteScope.Paths) == 0:
-		return fmt.Errorf("worlds[%d] (%s): defaultToken.paths is required", i, w.Name)
+	case len(w.WriteScope.Paths) > 0 && len(w.LegacyWriteScope.Paths) > 0:
+		return fmt.Errorf("worlds[%d] (%s): writeScope and defaultToken are the same setting; set one", i, w.Name)
+	}
+	if len(w.WriteScope.Paths) == 0 {
+		w.WriteScope, w.LegacyWriteScope = w.LegacyWriteScope, WriteScope{}
+	}
+	if len(w.WriteScope.Paths) == 0 {
+		return fmt.Errorf("worlds[%d] (%s): writeScope.paths is required", i, w.Name)
 	}
 	for _, pattern := range w.WriteScope.Paths {
 		if err := protocol.ValidatePathPattern(pattern); err != nil {
-			return fmt.Errorf("worlds[%d] (%s): defaultToken.paths %q: %w", i, w.Name, pattern, err)
+			return fmt.Errorf("worlds[%d] (%s): writeScope.paths %q: %w", i, w.Name, pattern, err)
 		}
 	}
 	// Kubernetes worlds live in a namespace with a tokens Secret; file mode

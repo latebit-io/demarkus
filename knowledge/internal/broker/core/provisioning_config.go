@@ -68,9 +68,8 @@ func (p *ProvisioningConfig) Enabled() bool {
 	return p.Mode == ProvisionAllowlisted || p.Mode == ProvisionOpen
 }
 
-// validate normalizes and checks the provisioning block. Called from
-// the memory broker's startup (alongside ValidateTenantWorlds); the
-// knowledge broker never enables provisioning.
+// validate normalizes and checks the provisioning block; the caller
+// requires the memory gateway when it is enabled.
 func (p *ProvisioningConfig) validate(fileBackend bool) error {
 	p.Mode = strings.TrimSpace(p.Mode)
 	switch p.Mode {
@@ -108,12 +107,6 @@ func (p *ProvisioningConfig) validate(fileBackend bool) error {
 	return nil
 }
 
-// ValidateProvisioning is the exported startup hook for the memory
-// broker binary.
-func (c *Config) ValidateProvisioning() error {
-	return c.Provisioning.validate(c.fileBackend())
-}
-
 // tenantAuthority renders a tenant world's logical authority host:port.
 func (p *ProvisioningConfig) tenantAuthority(slug string) string {
 	return fmt.Sprintf("%s.%s:%d", slug, p.AuthorityDomain, protocol.DefaultPort)
@@ -123,6 +116,7 @@ func (p *ProvisioningConfig) tenantAuthority(slug string) string {
 func (p *ProvisioningConfig) TenantWorld(slug, email string) WorldConfig {
 	return WorldConfig{
 		Name:            slug,
+		Profile:         ProfileMemory,
 		Namespace:       p.ServerNamespace,
 		TokensSecret:    p.TokensSecret,
 		TokensSecretKey: slug + ".toml",

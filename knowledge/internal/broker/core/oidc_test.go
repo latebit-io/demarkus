@@ -109,7 +109,7 @@ func TestCompositeVerifierPassThroughAuthAndExchange(t *testing.T) {
 		Claims:     Claims{Email: "alice@x.com", EmailVerified: true, Subject: "g|alice"},
 		RawIDToken: "primary-raw",
 	}
-	c := newCompositeVerifier(primary, newTestIDTokenSigner(t), "https://broker.example.com")
+	c := newCompositeVerifier(primary, newTestIDTokenSigner(t), "https://broker.example.com", nil)
 
 	if got := c.AuthCodeURL("nonce-1"); !strings.Contains(got, "nonce-1") {
 		t.Errorf("AuthCodeURL = %q, want primary's URL with state", got)
@@ -128,7 +128,7 @@ func TestCompositeVerifierVerifiesBrokerSigned(t *testing.T) {
 		return Claims{}, fmt.Errorf("primary should not be invoked for broker-signed tokens")
 	}}
 	signer := newTestIDTokenSigner(t)
-	c := newCompositeVerifier(primary, signer, "https://broker.example.com")
+	c := newCompositeVerifier(primary, signer, "https://broker.example.com", nil)
 	c.clock = func() time.Time { return time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC) }
 
 	raw, err := signer.Sign(&Claims{
@@ -160,7 +160,7 @@ func TestCompositeVerifierFallsThroughOnUnknownKid(t *testing.T) {
 		return Claims{Email: "from-primary@x.com", EmailVerified: true}, nil
 	}}
 	brokerSigner := newTestIDTokenSigner(t)
-	c := newCompositeVerifier(primary, brokerSigner, "https://broker.example.com")
+	c := newCompositeVerifier(primary, brokerSigner, "https://broker.example.com", nil)
 
 	claims, err := c.VerifyIDToken(context.Background(), raw)
 	if err != nil {
@@ -203,7 +203,7 @@ func TestCompositeVerifierDoesNotFallThroughOnBrokerSignatureFail(t *testing.T) 
 		t.Fatal("primary must not be invoked on broker-side signature failure")
 		return Claims{}, nil
 	}}
-	c := newCompositeVerifier(primary, signer, "https://broker.example.com")
+	c := newCompositeVerifier(primary, signer, "https://broker.example.com", nil)
 	if _, err := c.VerifyIDToken(context.Background(), bad); err == nil {
 		t.Fatalf("tampered broker-signed token accepted")
 	}
@@ -213,7 +213,7 @@ func TestCompositeVerifierNilSignerIsPassThrough(t *testing.T) {
 	primary := &fakeVerifier{VerifyFn: func(string) (Claims, error) {
 		return Claims{Email: "from-primary@x.com"}, nil
 	}}
-	c := newCompositeVerifier(primary, nil, "https://broker.example.com")
+	c := newCompositeVerifier(primary, nil, "https://broker.example.com", nil)
 	claims, err := c.VerifyIDToken(context.Background(), "any-token")
 	if err != nil {
 		t.Fatalf("VerifyIDToken: %v", err)

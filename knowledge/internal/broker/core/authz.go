@@ -2,7 +2,6 @@ package core
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 )
@@ -47,7 +46,7 @@ func GateIdentity(allowDomains []string, claims *Claims) error {
 // authorizedWorlds is the writer set: the worlds whose Allow admits claims.
 // Never use it for read discovery; reads pass the org gate alone
 // (ReadableWorlds), and filtering by Allow would hide worlds from readers.
-func authorizedWorlds(reg *WorldRegistry, claims *Claims) []WorldConfig {
+func authorizedWorlds(reg *WorldView, claims *Claims) []WorldConfig {
 	worlds := reg.All()
 	out := make([]WorldConfig, 0, len(worlds))
 	for j := range worlds {
@@ -61,7 +60,7 @@ func authorizedWorlds(reg *WorldRegistry, claims *Claims) []WorldConfig {
 // ReadableWorlds is every world: reads pass the org gate alone, and the
 // per world Allow is the writer list. A read restriction would filter here,
 // never on Allow.
-func ReadableWorlds(reg *WorldRegistry) []WorldConfig {
+func ReadableWorlds(reg *WorldView) []WorldConfig {
 	return reg.All()
 }
 
@@ -79,7 +78,7 @@ func (AmbiguousTenantError) Error() string {
 // TenantWorldFor resolves the single world a memory-broker identity owns
 // (identity = world): zero matches is ErrNotAuthorized, two or more is a
 // provisioning error and denies closed rather than guessing.
-func TenantWorldFor(reg *WorldRegistry, issuer string, claims *Claims) (WorldConfig, error) {
+func TenantWorldFor(reg *WorldView, issuer string, claims *Claims) (WorldConfig, error) {
 	// Identity index first: a provisioned tenant owns its pinned slug. A
 	// hit whose Allow rejects the caller means the record's email is
 	// stale; fail so EnsureTenant's slow path refreshes it.
@@ -107,23 +106,16 @@ func TenantWorldFor(reg *WorldRegistry, issuer string, claims *Claims) (WorldCon
 	return *match, nil
 }
 
-// ValidateTenantWorlds (memory broker, called after LoadConfig) requires
-// every world to name its tenant: an empty Allow admits every identity,
-// which in identity-=-world mode makes tenant resolution ambiguous.
-func (c *Config) ValidateTenantWorlds() error {
-	for i := range c.Worlds {
-		a := &c.Worlds[i].Allow
-		if len(a.Domains) == 0 && len(a.Groups) == 0 && len(a.Emails) == 0 {
-			return fmt.Errorf("worlds[%d] (%s): allow must not be empty in a memory broker; each world is provisioned for one identity", i, c.Worlds[i].Name)
-		}
-	}
-	return nil
+// ResourceAllows reports whether a token may be used at resource: an
+// unbound token anywhere, a bound token only at its own resource.
+func ResourceAllows(bound, resource string) bool {
+	return bound == "" || bound == resource
 }
 
 // LookupWorld returns the configured world (static or dynamic) with the
 // given name, or nil when none matches. The MCP write gate and the agent
 // token reconciler resolve names here so both agree.
-func LookupWorld(reg *WorldRegistry, name string) *WorldConfig {
+func LookupWorld(reg *WorldView, name string) *WorldConfig {
 	if w, ok := reg.Find(name); ok {
 		return &w
 	}
@@ -134,7 +126,7 @@ func LookupWorld(reg *WorldRegistry, name string) *WorldConfig {
 // listed email always passes, otherwise domains and groups both apply
 // (an empty one is no restriction) and an emails only list refuses the rest.
 func WorldAllows(a *AllowConfig, claims *Claims) bool {
-	if len(a.Domains) == 0 && len(a.Groups) == 0 && len(a.Emails) == 0 {
+	if a.Empty() {
 		return true
 	}
 	if emailMatches(claims.Email, a.Emails) {

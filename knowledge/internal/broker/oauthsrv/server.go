@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
@@ -42,9 +44,9 @@ type Server struct {
 	idTokenSigner *core.IDTokenSigner
 	jwks          *jwksHandler
 
-	// tenantScoped mirrors the gateway profile so /me/install and
-	// /auth/callback list worlds the way the gateway scopes them.
-	tenantScoped bool
+	// draining flips /readyz to 503 before shutdown so the load balancer
+	// stops routing new sessions to this pod.
+	draining atomic.Bool
 
 	// subjectReg limits /me/install per subject, loginReg /auth/login per
 	// IP; nil when the limiter is disabled, and the middleware passes through.
@@ -68,9 +70,6 @@ type ServerDeps struct {
 	IDTokenSigner *core.IDTokenSigner
 	// LoginLimiter is this listener's own, keyed by client IP.
 	LoginLimiter *core.RateLimitRegistry
-	// TenantScoped is the gateway profile's scoping, shared so the
-	// management API's world listings can never diverge from the gateway's.
-	TenantScoped bool
 }
 
 // NewServer wires a Server from its dependencies.
@@ -125,7 +124,6 @@ func NewServer(cfg *core.Config, deps ServerDeps) *Server {
 		dynamicClients:    NewDynamicClientStore(cfg, deps.Store),
 		subjectReg:        deps.SubjectLimiter,
 		loginReg:          deps.LoginLimiter,
-		tenantScoped:      deps.TenantScoped,
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
 	if deps.IDTokenSigner != nil {
@@ -143,11 +141,17 @@ func NewServer(cfg *core.Config, deps ServerDeps) *Server {
 	return s
 }
 
-// Routes mounts the management API. Probes and /auth/callback run bare (the
-// state cookie is the callback's gate), /auth/login behind the IP limiter,
-// /me/install behind requireAuth then the shared subject limiter.
+// Routes is the management API alone on a mux, for tests.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	s.Register(mux)
+	return mux
+}
+
+// Register mounts the management API on a shared mux. Probes and
+// /auth/callback run bare (the state cookie is the callback's gate),
+// /auth/login behind the IP limiter, /me/install behind requireAuth and the subject limiter.
+func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
 	// Discovery is public and unrate-limited (fetched once per join, cached via
@@ -202,8 +206,11 @@ func (s *Server) Routes() http.Handler {
 	// /me/install verifies the bearer, rate-limits by subject, and lists
 	// readable worlds without token material.
 	mux.Handle("GET /me/install", s.requireAuth(core.SubjectRateLimit(s.subjectReg, s.log, http.HandlerFunc(s.meInstall))))
-	return mux
 }
+
+// BeginDrain makes /readyz answer 503 from now on; the caller shuts the
+// listeners down afterwards.
+func (s *Server) BeginDrain() { s.draining.Store(true) }
 
 // RefreshStore exposes the refresh token store so the Sweeper shares the
 // one instance; the Server owns construction, callers borrow.
@@ -214,12 +221,42 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
+// readyz is "process is up and not draining"; dependency probes can join later.
 func (s *Server) readyz(w http.ResponseWriter, _ *http.Request) {
-	// Slice B: readiness is just "process is up". Slice C/D wires
-	// downstream-dependency probes (k8s API reach, OIDC discovery cache
-	// still warm, etc.) once the surface is richer.
+	if s.draining.Load() {
+		http.Error(w, "draining", http.StatusServiceUnavailable)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ready"))
+}
+
+// resourceParam reads an RFC 8707 `resource`: blank when absent, canonical
+// when it names a configured gateway, else an error for invalid_target.
+func (s *Server) resourceParam(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	resource, err := core.CanonicalResource(raw)
+	if err != nil {
+		return "", err
+	}
+	if !slices.Contains(s.cfg.Server.Resources(), resource) {
+		return "", fmt.Errorf("resource %q is not served by this broker", resource)
+	}
+	return resource, nil
+}
+
+// bindResource settles the resource a grant mints for: the request's when it
+// names one (it must match a bound grant), else the grant's own binding.
+func bindResource(claims *core.Claims, requested string) (core.Claims, error) {
+	if requested == "" {
+		return *claims, nil
+	}
+	if claims.Resource != "" && claims.Resource != requested {
+		return core.Claims{}, fmt.Errorf("resource %q differs from the grant's", requested)
+	}
+	return claims.BoundTo(requested), nil
 }
 
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {

@@ -9,23 +9,25 @@ import (
 
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/marktools"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/storage"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// Deps is what the MCP gateway needs from the rest of the broker.
-// Run fills it once for both listeners; tests fill it from a fixture.
+// Deps is what one MCP gateway needs from the rest of the broker.
+// Run fills it per profile; tests fill it from a fixture.
 type Deps struct {
-	Worlds *core.WorldRegistry
+	// Worlds is the registry as this gateway's profile sees it.
+	Worlds *core.WorldView
 	// Issuer is the configured IdP issuer, the first half of every identity key.
 	Issuer string
 	// PublicURL is the authorization server the gateway names to clients.
 	PublicURL string
-	// MCP carries the gateway's own URL.
-	MCP core.MCPConfig
-	// Realm names the product in the 401 challenge.
+	// Gateway carries the gateway's own URL and tool profile.
+	Gateway core.GatewayConfig
+	// Realm names the product in the 401 challenge; blank takes the profile's.
 	Realm string
 	// SharedDeps is the verifier, subject limiter, clock and log the
 	// management API uses too; AllowDomains is the broker wide domain gate.
@@ -35,14 +37,14 @@ type Deps struct {
 	Provisioner *storage.Provisioner
 }
 
-// DepsFor builds the gateway's deps from what the management API shares.
-// Run and the fixtures both build deps here.
-func DepsFor(cfg *core.Config, shared core.SharedDeps, provisioner *storage.Provisioner) *Deps {
+// DepsFor builds one profile's gateway deps from what the management API
+// shares. Run and the fixtures both build deps here.
+func DepsFor(cfg *core.Config, profile *Profile, shared core.SharedDeps, provisioner *storage.Provisioner) *Deps {
 	return &Deps{
-		Worlds:       cfg.Registry(),
+		Worlds:       cfg.Registry().View(profile.Name),
 		Issuer:       cfg.OIDC.Issuer,
 		PublicURL:    cfg.Server.PublicURL,
-		MCP:          cfg.Server.MCP,
+		Gateway:      cfg.Server.Gateway(profile.Name),
 		Realm:        cfg.Server.Realm,
 		SharedDeps:   shared,
 		AllowDomains: cfg.OIDC.AllowDomains,
@@ -57,6 +59,8 @@ type Gateway struct {
 	mcpServer  *mcpserver.MCPServer
 	transport  *mcpserver.StreamableHTTPServer
 	dispatcher WorldDispatcher
+	// resource is this gateway's RFC 8707 indicator, the PRM `resource`.
+	resource string
 	// profile selects the product surface (knowledge vs memory):
 	// tool set, instructions, tenant scoping, memory seeding.
 	profile *Profile
@@ -173,9 +177,13 @@ func (g *Gateway) dropWorld(name string) {
 	g.tenantGraphsMu.Unlock()
 }
 
-// New registers the profile's tools and wraps them in Streamable
-// HTTP. Production supplies *WorldPool; tests inject a dispatcher fake.
+// New narrows the profile's tools to the configured tool profile, registers
+// them and wraps them in Streamable HTTP. Production supplies *WorldPool;
+// tests inject a dispatcher fake.
 func New(deps *Deps, version string, dispatcher WorldDispatcher, profile *Profile) *Gateway {
+	narrowed := *profile
+	narrowed.Tools = mcpfmt.ProfileTools(deps.Gateway.ToolProfile, profile.Tools)
+	profile = &narrowed
 	// Session-end eviction for the fetch dedup state. The store is
 	// constructed before the MCPServer because the hook closes over it.
 	fetchSeen := newSessionSeen(deps.Log, deps.Clock)
@@ -188,6 +196,7 @@ func New(deps *Deps, version string, dispatcher WorldDispatcher, profile *Profil
 	g := &Gateway{
 		deps:           deps,
 		dispatcher:     dispatcher,
+		resource:       deps.Gateway.Resource(),
 		profile:        profile,
 		knowledgeGraph: &gatewayGraph{graphStore: graphstore.New()},
 		tenantGraphs:   make(map[string]*tenantGraph),
@@ -270,26 +279,26 @@ func (g *Gateway) notImplementedHandler(_ context.Context, req mcp.CallToolReque
 	return mcp.NewToolResultError(fmt.Sprintf("tool %q not yet implemented (Slice 1 gateway foundation)", req.Params.Name)), nil
 }
 
-// mcpPath is the gateway's JSON-RPC endpoint path. The RFC 9728
-// `resource` field and the path-inserted metadata route derive from
-// it so the three can never drift apart.
-const (
-	mcpPath = "/mcp"
-	prmPath = "/.well-known/oauth-protected-resource"
-)
+// prmPath is the RFC 9728 metadata route; core.MCPPath is the endpoint.
+const prmPath = "/.well-known/oauth-protected-resource"
 
-// Routes returns the http.Handler for the MCP listener. Metadata routes
-// are unauthenticated by design (RFC 9728/8414 discovery). AS metadata is
-// NOT served here: RFC 8414 §3.3 wants the issuer's origin, not the gateway's.
-func (g *Gateway) Routes() http.Handler {
-	mux := http.NewServeMux()
+// Register mounts the gateway on a shared mux: a host binds the routes to
+// that hostname, blank answers every host the mux does not route elsewhere.
+// Metadata is unauthenticated (RFC 9728); AS metadata stays on the issuer (RFC 8414 §3.3).
+func (g *Gateway) Register(mux *http.ServeMux, host string) {
 	// /mcp accepts both POST (request/notification) and GET (SSE
 	// listen channel) per the Streamable HTTP spec. No method filter
 	// on the route so mcp-go's transport sees every request type.
-	mux.Handle(mcpPath, g.gatewayAuth(core.SubjectRateLimit(g.deps.SubjectLimiter, g.deps.Log, g.transport)))
-	mux.HandleFunc("GET "+prmPath, g.oauthProtectedResource)
-	// prmPath+mcpPath is RFC 9728 §3.1's path-inserted form for a
+	mux.Handle(host+core.MCPPath, g.gatewayAuth(core.SubjectRateLimit(g.deps.SubjectLimiter, g.deps.Log, g.transport)))
+	mux.HandleFunc("GET "+host+prmPath, g.oauthProtectedResource)
+	// prmPath+MCPPath is RFC 9728 §3.1's path-inserted form for a
 	// resource URL that carries a path. Same document.
-	mux.HandleFunc("GET "+prmPath+mcpPath, g.oauthProtectedResource)
+	mux.HandleFunc("GET "+host+prmPath+core.MCPPath, g.oauthProtectedResource)
+}
+
+// Routes is the gateway alone on a mux, for tests and single-gateway hosts.
+func (g *Gateway) Routes() http.Handler {
+	mux := http.NewServeMux()
+	g.Register(mux, "")
 	return mux
 }

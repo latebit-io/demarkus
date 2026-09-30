@@ -254,8 +254,13 @@ func matchPath(pattern, reqPath string) bool {
 	return false
 }
 
-// Permits reports whether the grant covers reqPath. A malformed pattern
-// never matches, so a bad scope fails closed.
+// Permits reports whether the grant covers reqPath. A grant has no load
+// step, so its patterns are validated here; a malformed one fails closed.
 func Permits(g *protocol.Grant, reqPath string) bool {
+	for _, pattern := range g.Paths {
+		if protocol.ValidatePathPattern(pattern) != nil {
+			return false
+		}
+	}
 	return matchesAnyPath(g.Paths, reqPath)
 }

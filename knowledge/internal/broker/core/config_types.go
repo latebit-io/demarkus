@@ -3,14 +3,17 @@ package core
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
 
 // Config is the broker's YAML configuration: its own runtime knobs, the OIDC
-// provider it trusts and the worlds it mints tokens for. World Tokens Secrets
-// live in each world's namespace; the broker's own state in its namespace.
+// provider it trusts and the worlds of both gateway profiles. World Tokens
+// Secrets live in each world's namespace; the broker's own state in its namespace.
 type Config struct {
 	Server       ServerConfig       `yaml:"server"`
 	OIDC         OIDCConfig         `yaml:"oidc"`
@@ -28,11 +31,23 @@ type Config struct {
 	registry     *WorldRegistry
 }
 
-// Registry is the live world set: Worlds as loaded, plus what provisioning adds.
+// Registry is the live world set of both profiles: Worlds as loaded, plus
+// what provisioning adds. Each gateway reads its own View of it.
 func (c *Config) Registry() *WorldRegistry {
 	c.registryOnce.Do(func() { c.registry = newWorldRegistry(c.Worlds) })
 	return c.registry
 }
+
+// Gateway profiles: the knowledge surface (org open reads, per world Allow
+// writes) and the memory surface (identity = world).
+const (
+	ProfileKnowledge = "knowledge"
+	ProfileMemory    = "memory"
+)
+
+// MCPPath is the JSON-RPC endpoint of every gateway; the RFC 8707 resource
+// indicator and the RFC 9728 path-inserted metadata route derive from it.
+const MCPPath = "/mcp"
 
 // StorageConfig.Backend values.
 const (
@@ -148,28 +163,86 @@ type ServerConfig struct {
 	RefreshTokenTTL time.Duration `yaml:"refreshTokenTTL"`
 	// IDTokenTTL is the lifetime of a broker signed id_token. Default 15m.
 	IDTokenTTL time.Duration `yaml:"idTokenTTL"`
-	// Realm names the product in the gateway's WWW-Authenticate challenge;
-	// each binary defaults its own before NewServer.
+	// Realm names the product in the gateways' WWW-Authenticate challenge;
+	// blank lets each profile name itself.
 	Realm string `yaml:"realm"`
-	// MCP is the gateway listener, on its own Addr, sharing the auth and
-	// rate limit machinery with the management API.
+	// MCP is the knowledge gateway. It answers /mcp on every host the memory
+	// gateway does not claim, and on its own listener when Addr is set.
 	MCP MCPConfig `yaml:"mcp"`
+	// Memory is the memory gateway, on when PublicURL is set; requests whose
+	// Host is its hostname reach it.
+	Memory GatewayConfig `yaml:"memory"`
 }
 
-// MCPConfig governs the MCP over HTTPS gateway listener. Reads dispatch with
-// an empty bearer; writes use a per world token minted on first write.
-type MCPConfig struct {
-	// Addr is the gateway listen address, default ":8081". Must differ from
-	// Server.Addr; the chart routes the two surfaces separately.
-	Addr string `yaml:"addr"`
-	// PublicURL is the gateway's base URL when split-host ingress gives it a
-	// hostname other than the issuer's. Feeds the RFC 9728 resource metadata.
+// GatewayConfig is one gateway's public identity and tool surface.
+type GatewayConfig struct {
+	// PublicURL is the gateway's base URL, the hostname requests carry and
+	// the RFC 9728 resource metadata. The knowledge gateway defaults it to
+	// Server.PublicURL; the memory gateway is off without one.
 	PublicURL string `yaml:"publicURL"`
 	// ToolProfile selects the tool surface: "lean" omits operator and
 	// federation tools; "full" (default) keeps every tool.
 	ToolProfile string `yaml:"toolProfile"`
-	// TLS terminates HTTPS at the broker when both files are set.
+}
+
+// Enabled reports whether the gateway is configured at all.
+func (g GatewayConfig) Enabled() bool { return g.PublicURL != "" }
+
+// Resource is the RFC 8707 resource indicator tokens for this gateway carry.
+func (g GatewayConfig) Resource() string { return g.PublicURL + MCPPath }
+
+// Host is the hostname the mux selects this gateway by, without a port.
+func (g GatewayConfig) Host() string {
+	u, err := url.Parse(g.PublicURL)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+// MCPConfig is the knowledge gateway plus the listener the charts still
+// route its host to; both listeners serve the same mux.
+type MCPConfig struct {
+	GatewayConfig `yaml:",inline"`
+	// Addr is the extra listen address; blank means the management listener
+	// alone. When set it must differ from Server.Addr.
+	Addr string `yaml:"addr"`
+	// TLS terminates HTTPS on the extra listener when both files are set.
 	TLS MCPTLSConfig `yaml:"tls"`
+}
+
+// Gateway is the profile's gateway config. The knowledge gateway defaults
+// its URL to the issuer here, the one place, so configs built without the
+// loader resolve the same URL.
+func (s *ServerConfig) Gateway(profile string) GatewayConfig {
+	if profile == ProfileMemory {
+		return s.Memory
+	}
+	gw := s.MCP.GatewayConfig
+	if gw.PublicURL == "" {
+		gw.PublicURL = s.PublicURL
+	}
+	return gw
+}
+
+// Resources are the RFC 8707 resource indicators this broker issues tokens
+// for: one per configured gateway, canonical.
+func (s *ServerConfig) Resources() []string {
+	out := []string{s.Gateway(ProfileKnowledge).Resource()}
+	if s.Memory.Enabled() {
+		out = append(out, s.Memory.Resource())
+	}
+	return out
+}
+
+// CanonicalResource normalizes a resource indicator the way public URLs are
+// normalized at load, so a client's spelling compares to Resources.
+func CanonicalResource(raw string) (string, error) {
+	resource, err := normalizePublicURL("resource", raw)
+	if err == nil && resource == "" {
+		return "", fmt.Errorf("resource must be an absolute URL")
+	}
+	return resource, err
 }
 
 // MCPTLSConfig is the optional cert and key pair for the gateway listener.
@@ -199,14 +272,17 @@ type OIDCConfig struct {
 	AllowDomains []string `yaml:"allowDomains"`
 }
 
-// WorldConfig describes one world the broker mints tokens for.
-// Authorization is per world through Allow.
+// WorldConfig describes one world a gateway serves. Authorization is per
+// world through Allow.
 type WorldConfig struct {
 	// Generation tells one provisioning of a name from the next, so state
 	// cached for a deprovisioned world is not reused by its successor.
 	Generation string `yaml:"-"`
 	// Name keys tool calls and the write grant.
 	Name string `yaml:"name"`
+	// Profile is the gateway that serves the world, knowledge or memory.
+	// Required on every world once the memory gateway is configured.
+	Profile string `yaml:"profile"`
 	// Namespace is where TokensSecret lives.
 	Namespace string `yaml:"namespace"`
 	// TokensSecret is the world's tokens.toml Secret; the broker needs get and patch.
@@ -229,9 +305,11 @@ type WorldConfig struct {
 	// Allow is the per world authorization predicate; all lists empty admits
 	// any verified identity.
 	Allow AllowConfig `yaml:"allow"`
-	// WriteScope is the path scope the gateway may write in this world. The
-	// yaml key is the operator surface from the write token days; it stays.
-	WriteScope WriteScope `yaml:"defaultToken"`
+	// WriteScope is the path scope the gateway may write in this world.
+	WriteScope WriteScope `yaml:"writeScope"`
+	// LegacyWriteScope is the same scope under the write token era's key,
+	// accepted until the charts render writeScope; the loader folds it in.
+	LegacyWriteScope WriteScope `yaml:"defaultToken"`
 }
 
 // AllowConfig is the per world predicate: all lists empty admits any verified
@@ -245,6 +323,11 @@ type AllowConfig struct {
 	Groups []string `yaml:"groups"`
 	// Emails is the per user carve out, for IdPs that surface no groups.
 	Emails []string `yaml:"emails"`
+}
+
+// Empty reports an Allow with no lists, which admits every verified identity.
+func (a *AllowConfig) Empty() bool {
+	return len(a.Domains) == 0 && len(a.Groups) == 0 && len(a.Emails) == 0
 }
 
 // SweeperConfig tunes the refresh token expiry janitor. Leader election

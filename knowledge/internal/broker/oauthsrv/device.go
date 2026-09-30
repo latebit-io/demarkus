@@ -118,7 +118,12 @@ func (s *Server) deviceAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.DebugContext(r.Context(), "broker: device authorize", "client_id", clientID)
-	deviceCode, userCode, expiresAt, err := s.deviceStore.Authorize()
+	resource, err := s.resourceParam(r.PostFormValue("resource"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
+		return
+	}
+	deviceCode, userCode, expiresAt, err := s.deviceStore.Authorize(resource)
 	if errors.Is(err, errGrantStoreFull) {
 		s.log.WarnContext(r.Context(), "broker: device authorize refused", "err", err)
 		w.Header().Set("Retry-After", "60")
@@ -229,6 +234,18 @@ func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "unsupported_grant_type"})
 	}
+}
+
+// mintClaims applies the token request's RFC 8707 `resource` to the grant's
+// claims; a resource outside the broker or the grant is the caller's
+// invalid_target.
+func (s *Server) mintClaims(r *http.Request, grant *core.Claims) (core.Claims, error) {
+	requested, err := s.resourceParam(r.PostFormValue("resource"))
+	if err == nil {
+		return bindResource(grant, requested)
+	}
+	s.log.DebugContext(r.Context(), "broker: token resource refused", "err", err)
+	return core.Claims{}, err
 }
 
 // deviceTokenDeviceFlow handles the RFC 8628 §3.4 device-code poll.
@@ -362,8 +379,13 @@ func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
 		return
 	}
+	claims, err := s.mintClaims(r, &record.Claims)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
+		return
+	}
 	now := s.clock()
-	idToken, err := s.idTokenSigner.Sign(&record.Claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
+	idToken, err := s.idTokenSigner.Sign(&claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: refresh sign id_token failed",
 			"err", err, "subject", core.HashSubject(record.Claims.Subject))
@@ -471,8 +493,14 @@ func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
 		return
 	}
+	claims, err := s.mintClaims(r, &exchange.Claims)
+	if err != nil {
+		// The code is spent; the client restarts from /oauth/authorize.
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
+		return
+	}
 
-	rawRefresh, err := s.refreshStore.Issue(r.Context(), &exchange.Claims, boundClientID, s.cfg.Server.RefreshTokenTTL)
+	rawRefresh, err := s.refreshStore.Issue(r.Context(), &claims, boundClientID, s.cfg.Server.RefreshTokenTTL)
 	if err != nil {
 		// Code is already consumed by Redeem (one-shot). The user
 		// has to retry from /oauth/authorize; that's acceptable
@@ -486,7 +514,7 @@ func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := s.clock()
-	idToken, err := s.idTokenSigner.Sign(&exchange.Claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
+	idToken, err := s.idTokenSigner.Sign(&claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: auth code sign id_token failed",
 			"err", err, "subject", core.HashSubject(exchange.Claims.Subject))
@@ -549,7 +577,8 @@ func (s *Server) renderDeviceDone(w http.ResponseWriter, r *http.Request) {
 // the polling client sees RFC 8628 access_denied rather than timing
 // out with expired_token (plan §Open Question 1 lean: cleaner UX).
 func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCode string) {
-	if _, ok := s.deviceStore.LookupByDeviceCode(deviceCode); !ok {
+	state, ok := s.deviceStore.LookupByDeviceCode(deviceCode)
+	if !ok {
 		// State carried a device_code the store doesn't recognize —
 		// could be post-restart memory loss, post-expiry sweep, or
 		// the grant was already resolved. The polling client (if any)
@@ -595,7 +624,8 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 	// Mint before Bind so a Secret-side failure keeps the grant pending rather
 	// than completing it without a refresh token; an orphaned mint ages out on
 	// Sweep. Device-flow clients are public, so tokens are never client-bound.
-	rawRefresh, err := s.refreshStore.Issue(r.Context(), &exchange.Claims, "", s.cfg.Server.RefreshTokenTTL)
+	bound := exchange.Claims.BoundTo(state.Resource)
+	rawRefresh, err := s.refreshStore.Issue(r.Context(), &bound, "", s.cfg.Server.RefreshTokenTTL)
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: device callback refresh mint failed",
 			"err", err, "subject", core.HashSubject(exchange.Claims.Subject))

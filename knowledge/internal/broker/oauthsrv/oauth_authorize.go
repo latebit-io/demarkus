@@ -85,6 +85,12 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		reply.fail("invalid_request", "only code_challenge_method=S256 is supported")
 		return
 	}
+	resource, err := s.resourceParam(params.Get("resource"))
+	if err != nil {
+		// RFC 8707 §2: an unknown resource is invalid_target.
+		reply.fail("invalid_target", err.Error())
+		return
+	}
 
 	authCodeID, err := s.authCodeStore.Begin(&AuthCodeRequest{
 		ClientID:            clientID,
@@ -93,6 +99,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		Scope:               params.Get("scope"),
 		CodeChallenge:       codeChallenge,
 		CodeChallengeMethod: codeChallengeMethod,
+		Resource:            resource,
 	})
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: auth code begin failed", "err", err)

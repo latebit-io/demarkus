@@ -16,7 +16,7 @@ func TestReadableWorldsIgnoresWriterAllow(t *testing.T) {
 		TokensSecret: "locked-tokens",
 		Allow:        AllowConfig{Emails: []string{"only-admin@nowhere.test"}},
 	})
-	got := ReadableWorlds(cfg.Registry())
+	got := ReadableWorlds(cfg.Registry().View(ProfileKnowledge))
 	if len(got) != 2 {
 		t.Fatalf("ReadableWorlds = %d, want 2 (a restrictive writer Allow must not hide a world from readers)", len(got))
 	}
@@ -180,7 +180,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 			Namespace: "team-b",
 			Allow:     AllowConfig{Domains: []string{"other.example"}},
 		})
-		got := authorizedWorlds(cfg.Registry(), &Claims{Email: "alice@example.com", EmailVerified: true})
+		got := authorizedWorlds(cfg.Registry().View(ProfileKnowledge), &Claims{Email: "alice@example.com", EmailVerified: true})
 		if len(got) != 1 || got[0].Name != "team-a" {
 			names := make([]string, len(got))
 			for i, w := range got {
@@ -197,7 +197,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 		// AllowConfig non-empty switches into restricted mode.
 		cfg := testConfig()
 		cfg.Worlds[0].Allow = AllowConfig{}
-		got := authorizedWorlds(cfg.Registry(), &Claims{Email: "anyone@anywhere.test", EmailVerified: true})
+		got := authorizedWorlds(cfg.Registry().View(ProfileKnowledge), &Claims{Email: "anyone@anywhere.test", EmailVerified: true})
 		if len(got) != 1 || got[0].Name != "team-a" {
 			t.Errorf("authorizedWorlds = %+v, want team-a admitted on empty allowlist", got)
 		}
@@ -205,7 +205,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 
 	t.Run("unauthorized_identity_gets_none", func(t *testing.T) {
 		cfg := testConfig()
-		got := authorizedWorlds(cfg.Registry(), &Claims{Email: "mallory@evil.example", EmailVerified: true})
+		got := authorizedWorlds(cfg.Registry().View(ProfileKnowledge), &Claims{Email: "mallory@evil.example", EmailVerified: true})
 		if len(got) != 0 {
 			t.Errorf("authorizedWorlds = %+v, want empty for unauthorized domain", got)
 		}
@@ -220,7 +220,7 @@ func TestAuthorizedWorlds(t *testing.T) {
 			Namespace: "team-b",
 			Allow:     AllowConfig{Domains: []string{"example.com"}},
 		})
-		got := authorizedWorlds(cfg.Registry(), &Claims{Email: "alice@example.com", EmailVerified: true})
+		got := authorizedWorlds(cfg.Registry().View(ProfileKnowledge), &Claims{Email: "alice@example.com", EmailVerified: true})
 		if len(got) != 2 || got[0].Name != "team-a" || got[1].Name != "team-b" {
 			t.Errorf("authorizedWorlds order = %+v, want [team-a, team-b]", got)
 		}
@@ -231,10 +231,10 @@ func TestAuthorizedWorlds(t *testing.T) {
 // and the per-world write-token store: exact-name match or nil.
 func TestLookupWorld(t *testing.T) {
 	cfg := testConfig()
-	if w := LookupWorld(cfg.Registry(), "team-a"); w == nil || w.Name != "team-a" {
+	if w := LookupWorld(cfg.Registry().View(ProfileKnowledge), "team-a"); w == nil || w.Name != "team-a" {
 		t.Errorf("LookupWorld(team-a) = %+v, want team-a", w)
 	}
-	if w := LookupWorld(cfg.Registry(), "nope"); w != nil {
+	if w := LookupWorld(cfg.Registry().View(ProfileKnowledge), "nope"); w != nil {
 		t.Errorf("LookupWorld(nope) = %+v, want nil", w)
 	}
 }
@@ -296,5 +296,15 @@ func TestGateIdentity(t *testing.T) {
 				t.Errorf("email = %q, want canonical %q", claims.Email, tt.wantEmail)
 			}
 		})
+	}
+}
+
+func TestResourceAllows(t *testing.T) {
+	const knowledge, memory = "https://mcp.example.com/mcp", "https://memory.example.com/mcp"
+	if !ResourceAllows("", knowledge) || !ResourceAllows(knowledge, knowledge) {
+		t.Error("an unbound token or one bound here was refused")
+	}
+	if ResourceAllows(memory, knowledge) {
+		t.Error("a token bound to the other gateway was accepted")
 	}
 }

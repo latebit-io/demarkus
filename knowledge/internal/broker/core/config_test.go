@@ -84,6 +84,13 @@ func mustReplace(t *testing.T, s, old, replacement string) string {
 	return strings.Replace(s, old, replacement, 1)
 }
 
+// withMemoryGateway turns the memory gateway on at its own host.
+func withMemoryGateway(t *testing.T, body string) string {
+	t.Helper()
+	return mustReplace(t, body, `publicURL: "https://broker.example.com"`,
+		"publicURL: \"https://broker.example.com\"\n  memory:\n    publicURL: \"https://memory.example.com\"")
+}
+
 func TestLoadConfig(t *testing.T) {
 	clearConfigEnv(t)
 	tests := []struct {
@@ -124,8 +131,55 @@ func TestLoadConfig(t *testing.T) {
 		},
 		{
 			name: "no worlds is legal with provisioning enabled",
+			body: mustReplace(t, withMemoryGateway(t, validConfig), validWorldBlock,
+				"worlds: []\nprovisioning:\n  mode: open\n  maxTenants: 10\n  authorityDomain: memory.svc\n  dialAddress: memory.svc:6309\n  bucketPrefix: p-\n  bucketProject: p\n  serverNamespace: ns\n  worldsSecret: worlds\n  tokensSecret: tokens\n  tokensMountPath: /etc/tokens\n"),
+		},
+		{
+			name: "writeScope is the new key for the write scope",
+			body: mustReplace(t, validConfig, "    defaultToken:\n      paths: [\"/team-a/*\"]\n", "    writeScope:\n      paths: [\"/team-a/*\"]\n"),
+		},
+		{
+			name:    "writeScope and defaultToken together",
+			body:    mustReplace(t, validConfig, "    defaultToken:\n", "    writeScope:\n      paths: [\"/x\"]\n    defaultToken:\n"),
+			wantErr: "writeScope and defaultToken are the same setting",
+		},
+		{
+			name:    "write scope is required",
+			body:    mustReplace(t, validConfig, "    defaultToken:\n      paths: [\"/team-a/*\"]\n", ""),
+			wantErr: "writeScope.paths is required",
+		},
+		{
+			name: "provisioning needs the memory gateway",
 			body: mustReplace(t, validConfig, validWorldBlock,
-				"worlds: []\nprovisioning:\n  mode: open\n  maxTenants: 10\n  authorityDomain: memory.svc\n  dialAddress: memory.svc:6309\n  bucketPrefix: p-\n  bucketProject: p\n  serverNamespace: ns\n"),
+				"worlds: []\nprovisioning:\n  mode: open\n  maxTenants: 10\n  authorityDomain: memory.svc\n  dialAddress: memory.svc:6309\n  bucketPrefix: p-\n  bucketProject: p\n  serverNamespace: ns\n  worldsSecret: worlds\n  tokensSecret: tokens\n  tokensMountPath: /etc/tokens\n"),
+			wantErr: "needs the memory gateway",
+		},
+		{
+			name:    "profile is required once the memory gateway is configured",
+			body:    withMemoryGateway(t, validConfig),
+			wantErr: "worlds[0] (team-a): profile is required",
+		},
+		{
+			name: "memory world names its tenant",
+			body: mustReplace(t, mustReplace(t, withMemoryGateway(t, validConfig), "name: team-a\n", "name: team-a\n    profile: memory\n"),
+				"    allow:\n      domains: [\"example.com\"]\n", ""),
+			wantErr: "allow must not be empty in a memory world",
+		},
+		{
+			name:    "memory world needs the memory gateway",
+			body:    mustReplace(t, validConfig, "name: team-a\n", "name: team-a\n    profile: memory\n"),
+			wantErr: "profile memory needs the memory gateway",
+		},
+		{
+			name:    "unknown profile",
+			body:    mustReplace(t, validConfig, "name: team-a\n", "name: team-a\n    profile: soul\n"),
+			wantErr: `profile must be "knowledge" or "memory"`,
+		},
+		{
+			name: "memory gateway host must differ from the knowledge gateway's",
+			body: mustReplace(t, validConfig, `publicURL: "https://broker.example.com"`,
+				"publicURL: \"https://broker.example.com\"\n  memory:\n    publicURL: \"https://Broker.example.com/\""),
+			wantErr: "server.memory.publicURL must be on a different host",
 		},
 		{
 			name:    "duplicate world name",
@@ -533,8 +587,8 @@ func TestLoadConfig(t *testing.T) {
 			name: "server.mcp.publicURL defaults to server.publicURL",
 			body: validConfig,
 			validate: func(t *testing.T, c *Config) {
-				if c.Server.MCP.PublicURL != c.Server.PublicURL {
-					t.Errorf("MCP.PublicURL = %q, want fallback to %q", c.Server.MCP.PublicURL, c.Server.PublicURL)
+				if got := c.Server.Gateway(ProfileKnowledge).PublicURL; got != c.Server.PublicURL {
+					t.Errorf("knowledge gateway URL = %q, want fallback to %q", got, c.Server.PublicURL)
 				}
 			},
 		},
@@ -824,9 +878,9 @@ func TestMCPConfigValidate(t *testing.T) {
 		wantProfile string
 	}{
 		{
-			name:     "zero value gets default addr",
+			name:     "zero value has no extra listener",
 			mcp:      MCPConfig{},
-			wantAddr: defaultMCPAddr,
+			wantAddr: "",
 		},
 		{
 			name:     "explicit addr preserved",
@@ -846,13 +900,13 @@ func TestMCPConfigValidate(t *testing.T) {
 		},
 		{
 			name:        "lean tool profile accepted",
-			mcp:         MCPConfig{Addr: ":8081", ToolProfile: "lean"},
+			mcp:         MCPConfig{Addr: ":8081", GatewayConfig: GatewayConfig{ToolProfile: "lean"}},
 			wantAddr:    ":8081",
 			wantProfile: mcpfmt.ProfileLean,
 		},
 		{
 			name:    "unknown tool profile rejected",
-			mcp:     MCPConfig{Addr: ":8081", ToolProfile: "wide"},
+			mcp:     MCPConfig{Addr: ":8081", GatewayConfig: GatewayConfig{ToolProfile: "wide"}},
 			wantErr: "server.mcp.toolProfile: unknown tool profile",
 		},
 		{
@@ -927,17 +981,24 @@ func TestLoadConfigRejectsMatchingMgmtAndMCPAddrs(t *testing.T) {
 }
 
 func TestLoadConfigMCPDefaultsAppliedWhenBlockOmitted(t *testing.T) {
-	// Existing universe-onboarding configs have no `mcp:` block —
-	// they predate the gateway plan. Upgrading to a broker with
-	// always-on MCP must default Addr so those configs load without
-	// modification.
+	// Configs without an `mcp:` block keep working: the knowledge gateway
+	// answers on the management listener at the issuer's URL.
 	clearConfigEnv(t)
 	cfg, err := LoadConfig(writeConfig(t, validConfig))
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.Server.MCP.Addr != defaultMCPAddr {
-		t.Errorf("MCP.Addr = %q, want default %q so existing configs upgrade silently", cfg.Server.MCP.Addr, defaultMCPAddr)
+	if cfg.Server.MCP.Addr != "" {
+		t.Errorf("MCP.Addr = %q, want no extra listener", cfg.Server.MCP.Addr)
+	}
+	if got := cfg.Server.Gateway(ProfileKnowledge).PublicURL; got != cfg.Server.PublicURL {
+		t.Errorf("knowledge gateway URL = %q, want the issuer %q", got, cfg.Server.PublicURL)
+	}
+	if got := cfg.Server.Resources(); len(got) != 1 || got[0] != cfg.Server.PublicURL+MCPPath {
+		t.Errorf("Resources = %v, want the knowledge gateway alone", got)
+	}
+	if cfg.Worlds[0].Profile != ProfileKnowledge {
+		t.Errorf("worlds[0].Profile = %q, want the knowledge default", cfg.Worlds[0].Profile)
 	}
 }
 
@@ -956,4 +1017,39 @@ func writeConfig(t *testing.T, body string) string {
 // boilerplate. The 0o600 mode matches what protocol/token writes elsewhere.
 func writeFile(path, body string) error {
 	return os.WriteFile(path, []byte(body), 0o600)
+}
+
+func TestCanonicalResource(t *testing.T) {
+	cases := map[string]string{
+		"https://MCP.Example.com/mcp":   "https://mcp.example.com/mcp",
+		"HTTPS://mcp.example.com/mcp/":  "https://mcp.example.com/mcp",
+		"https://mcp.example.com:8443/": "https://mcp.example.com:8443",
+	}
+	for raw, want := range cases {
+		got, err := CanonicalResource(raw)
+		if err != nil || got != want {
+			t.Errorf("CanonicalResource(%q) = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{"", "mcp.example.com/mcp", "https://mcp.example.com/mcp#frag", "https://mcp.example.com/mcp?x=1"} {
+		if _, err := CanonicalResource(raw); err == nil {
+			t.Errorf("CanonicalResource(%q) accepted", raw)
+		}
+	}
+}
+
+func TestServerConfigResourcesNameEveryGateway(t *testing.T) {
+	s := ServerConfig{PublicURL: "https://broker.example.com"}
+	if got := s.Resources(); len(got) != 1 || got[0] != "https://broker.example.com/mcp" {
+		t.Fatalf("Resources = %v, want the issuer's /mcp", got)
+	}
+	s.MCP.PublicURL = "https://mcp.example.com"
+	s.Memory.PublicURL = "https://memory.example.com"
+	got := s.Resources()
+	if len(got) != 2 || got[0] != "https://mcp.example.com/mcp" || got[1] != "https://memory.example.com/mcp" {
+		t.Fatalf("Resources = %v, want both gateways", got)
+	}
+	if s.Memory.Host() != "memory.example.com" {
+		t.Errorf("Memory.Host = %q", s.Memory.Host())
+	}
 }

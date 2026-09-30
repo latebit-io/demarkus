@@ -56,7 +56,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	err := broker.Run(*configPath, broker.MemoryOptions(version, *kubeconfig), log)
+	opts := broker.Options(version, *kubeconfig)
+	opts.LogName = "memory broker"
+	err := broker.Run(*configPath, opts, log)
 	if err != nil {
 		log.Error("memory broker exited with error", "err", err)
 		os.Exit(1)

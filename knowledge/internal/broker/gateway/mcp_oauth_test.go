@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 )
 
 func TestOAuthProtectedResourceMetadata(t *testing.T) {
@@ -14,7 +17,7 @@ func TestOAuthProtectedResourceMetadata(t *testing.T) {
 	ts := newTestMCPGateway(t, cfg, &brokertest.FakeVerifier{})
 
 	// Bare and RFC 9728 §3.1 path-inserted forms serve the same doc.
-	for _, path := range []string{prmPath, prmPath + mcpPath} {
+	for _, path := range []string{prmPath, prmPath + core.MCPPath} {
 		t.Run(path, func(t *testing.T) {
 			resp, err := http.Get(ts.URL + path)
 			if err != nil {
@@ -40,7 +43,7 @@ func TestOAuthProtectedResourceMetadata(t *testing.T) {
 			if err := json.Unmarshal(body, &doc); err != nil {
 				t.Fatalf("decode metadata: %v\nbody: %s", err, body)
 			}
-			wantResource := cfg.Server.MCP.PublicURL + mcpPath
+			wantResource := cfg.Server.MCP.PublicURL + core.MCPPath
 			if got, _ := doc["resource"].(string); got != wantResource {
 				t.Errorf("resource = %q, want %q (gateway host, not issuer host)", got, wantResource)
 			}
@@ -76,5 +79,51 @@ func TestOAuthAuthorizationServerNeverOnGateway(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 (AS metadata belongs on the issuer host only)", resp.StatusCode)
+	}
+}
+
+// TestRegisterSelectsTheGatewayByHost: on one mux the memory gateway answers
+// its hostname and the knowledge gateway every other host.
+func TestRegisterSelectsTheGatewayByHost(t *testing.T) {
+	cfg := brokertest.NewMemoryConfig()
+	cfg.Server.PublicURL = "https://broker.example.com"
+	cfg.Server.MCP.PublicURL = "https://gateway.example.com"
+	verifier := &brokertest.FakeVerifier{Claims: brokertest.AliceClaims()}
+	mux := http.NewServeMux()
+	newGatewayFixture(t, cfg, verifier, KnowledgeProfile()).gateway(&fakeDispatcher{}).Register(mux, "")
+	newGatewayFixture(t, cfg, verifier, MemoryProfile()).gateway(&fakeDispatcher{}).Register(mux, cfg.Server.Memory.Host())
+
+	resourceFor := func(host string) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource"+core.MCPPath, http.NoBody)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("host %q: status = %d", host, rec.Code)
+		}
+		var doc struct {
+			Resource string `json:"resource"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+			t.Fatalf("host %q: decode: %v", host, err)
+		}
+		return doc.Resource
+	}
+	if got := resourceFor("memory.example.com:443"); got != "https://memory.example.com/mcp" {
+		t.Errorf("memory host resource = %q", got)
+	}
+	for _, host := range []string{"gateway.example.com", "broker.example.com", "10.0.0.7:8080"} {
+		if got := resourceFor(host); got != "https://gateway.example.com/mcp" {
+			t.Errorf("host %q resource = %q, want the knowledge gateway", host, got)
+		}
+	}
+	// The memory host's /mcp is the memory gateway's challenge, not the knowledge one's.
+	req := httptest.NewRequest(http.MethodPost, core.MCPPath, http.NoBody)
+	req.Host = "memory.example.com"
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get("WWW-Authenticate"), "https://memory.example.com/.well-known") {
+		t.Errorf("memory host /mcp = %d %q, want the memory gateway's challenge", rec.Code, rec.Header().Get("WWW-Authenticate"))
 	}
 }

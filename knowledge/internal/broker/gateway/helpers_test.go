@@ -60,7 +60,7 @@ func (f *gatewayFixture) enableProvisioning(buckets storage.BucketCreator) *stor
 
 // gateway builds the gateway around d, for tests that call handlers directly.
 func (f *gatewayFixture) gateway(d WorldDispatcher) *Gateway {
-	return New(DepsFor(f.cfg, f.shared, f.provisioner), "test", d, f.profile)
+	return New(DepsFor(f.cfg, f.profile, f.shared, f.provisioner), "test", d, f.profile)
 }
 
 // serve hosts the gateway's routes, for tests that drive the HTTP transport.
@@ -116,7 +116,7 @@ type fakeDispatcher = fetchtest.Client
 func mcpTestConfig() *core.Config {
 	cfg := brokertest.NewConfig()
 	cfg.Server.PublicURL = "https://broker.example.com"
-	cfg.Server.MCP = core.MCPConfig{Addr: ":0", PublicURL: "https://gateway.example.com"}
+	cfg.Server.MCP = core.MCPConfig{GatewayConfig: core.GatewayConfig{PublicURL: "https://gateway.example.com"}}
 	return cfg
 }
 

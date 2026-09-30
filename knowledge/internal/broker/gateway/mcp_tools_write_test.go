@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -196,7 +197,7 @@ func TestHandleMarkPublishMergeGrantsOnlyThePublish(t *testing.T) {
 	if len(fetchTokens) != 2 {
 		t.Errorf("fetch dispatched %d times, want 2 (base + current)", len(fetchTokens))
 	}
-	if len(publishGrants) == 1 && (publishGrants[0].Label != "alice@example.com" || len(publishGrants[0].Paths) == 0) {
+	if len(publishGrants) == 1 && (publishGrants[0].Label != "alice@example.com" || !slices.Equal(publishGrants[0].Paths, []string{"/team-a/*"})) {
 		t.Errorf("publish grant = %+v, want alice on the world's write scope", publishGrants[0])
 	}
 	for i, token := range fetchTokens {

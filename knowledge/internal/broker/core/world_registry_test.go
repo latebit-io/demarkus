@@ -69,3 +69,34 @@ func TestWorldRegistryRefusesUnaddressableProvisionedNames(t *testing.T) {
 		t.Error("the valid world went with it")
 	}
 }
+
+func TestWorldViewServesOneProfile(t *testing.T) {
+	reg := newWorldRegistry([]WorldConfig{
+		{Name: "team-a"},
+		{Name: "team-b", Profile: ProfileKnowledge},
+		{Name: "alice-w", Profile: ProfileMemory},
+	})
+	reg.SetDynamic([]WorldConfig{{Name: "eve-1", Profile: ProfileMemory}}, map[string]string{"idp|eve": "eve-1"})
+
+	knowledge := reg.View(ProfileKnowledge)
+	if got := knowledge.All(); len(got) != 2 || got[0].Name != "team-a" || got[1].Name != "team-b" {
+		t.Fatalf("knowledge view = %+v, want team-a (blank profile) and team-b", got)
+	}
+	if _, ok := knowledge.Find("alice-w"); ok {
+		t.Fatal("knowledge view found a memory world")
+	}
+	if slug, _ := knowledge.SlugForIdentity("idp|eve"); slug != "eve-1" {
+		t.Fatalf("SlugForIdentity = %q, want the pinned slug from any view", slug)
+	}
+
+	memory := reg.View(ProfileMemory)
+	if got := memory.All(); len(got) != 2 || got[0].Name != "alice-w" || got[1].Name != "eve-1" {
+		t.Fatalf("memory view = %+v, want alice-w and eve-1", got)
+	}
+	if _, ok := memory.Find("team-a"); ok {
+		t.Fatal("memory view found a knowledge world")
+	}
+	if slug, ok := memory.SlugForIdentity("idp|eve"); !ok || slug != "eve-1" {
+		t.Fatalf("memory view SlugForIdentity = %q, %v; want eve-1", slug, ok)
+	}
+}

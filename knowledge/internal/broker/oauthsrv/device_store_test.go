@@ -25,7 +25,7 @@ func TestDeviceStoreAuthorize(t *testing.T) {
 	t.Run("populates state and returns formatted user code", func(t *testing.T) {
 		store, clock := newTestDeviceStore(t)
 
-		deviceCode, userCode, expiresAt, err := store.Authorize()
+		deviceCode, userCode, expiresAt, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -57,7 +57,7 @@ func TestDeviceStoreAuthorize(t *testing.T) {
 		seenDevice := make(map[string]bool)
 		seenUser := make(map[string]bool)
 		for range 50 {
-			deviceCode, userCode, _, err := store.Authorize()
+			deviceCode, userCode, _, err := store.Authorize("")
 			if err != nil {
 				t.Fatalf("Authorize: %v", err)
 			}
@@ -76,7 +76,7 @@ func TestDeviceStoreAuthorize(t *testing.T) {
 func TestDeviceStoreLookupByUserCode(t *testing.T) {
 	t.Run("accepts canonical, hyphenated, and whitespace forms", func(t *testing.T) {
 		store, _ := newTestDeviceStore(t)
-		deviceCode, userCode, _, err := store.Authorize()
+		deviceCode, userCode, _, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -123,7 +123,7 @@ func TestDeviceStoreLookupByUserCode(t *testing.T) {
 
 	t.Run("misses after expiry without sweep", func(t *testing.T) {
 		store, clock := newTestDeviceStore(t)
-		_, userCode, _, err := store.Authorize()
+		_, userCode, _, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -135,7 +135,7 @@ func TestDeviceStoreLookupByUserCode(t *testing.T) {
 
 	t.Run("misses after Bind", func(t *testing.T) {
 		store, _ := newTestDeviceStore(t)
-		deviceCode, userCode, _, err := store.Authorize()
+		deviceCode, userCode, _, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -151,7 +151,7 @@ func TestDeviceStoreLookupByUserCode(t *testing.T) {
 func TestDeviceStoreBind(t *testing.T) {
 	t.Run("transitions pending to complete with result", func(t *testing.T) {
 		store, _ := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize()
+		deviceCode, _, _, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -188,7 +188,7 @@ func TestDeviceStoreBind(t *testing.T) {
 
 	t.Run("rejects rebind on terminal state", func(t *testing.T) {
 		store, _ := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize()
+		deviceCode, _, _, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -208,7 +208,7 @@ func TestDeviceStoreBind(t *testing.T) {
 
 	t.Run("expired pending is rejected at Bind", func(t *testing.T) {
 		store, clock := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize()
+		deviceCode, _, _, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -223,7 +223,7 @@ func TestDeviceStoreBind(t *testing.T) {
 func TestDeviceStoreDeny(t *testing.T) {
 	t.Run("transitions pending to denied", func(t *testing.T) {
 		store, _ := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize()
+		deviceCode, _, _, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -238,7 +238,7 @@ func TestDeviceStoreDeny(t *testing.T) {
 
 	t.Run("Deny after Bind is rejected", func(t *testing.T) {
 		store, _ := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize()
+		deviceCode, _, _, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -255,7 +255,7 @@ func TestDeviceStoreDeny(t *testing.T) {
 func TestDeviceStorePoll(t *testing.T) {
 	t.Run("pending then complete", func(t *testing.T) {
 		store, _ := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize()
+		deviceCode, _, _, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -276,7 +276,7 @@ func TestDeviceStorePoll(t *testing.T) {
 
 	t.Run("slow_down enforces minimum interval", func(t *testing.T) {
 		store, clock := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize()
+		deviceCode, _, _, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -301,7 +301,7 @@ func TestDeviceStorePoll(t *testing.T) {
 
 	t.Run("expiry transitions on poll", func(t *testing.T) {
 		store, clock := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize()
+		deviceCode, _, _, err := store.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -327,7 +327,7 @@ func TestDeviceStorePoll(t *testing.T) {
 
 func TestDeviceStoreSweep(t *testing.T) {
 	store, clock := newTestDeviceStore(t)
-	deviceCode, userCode, _, err := store.Authorize()
+	deviceCode, userCode, _, err := store.Authorize("")
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}

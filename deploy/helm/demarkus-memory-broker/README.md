@@ -32,8 +32,7 @@ Secrets, hot-reloads the fragment, and bootstraps the world. See
 - Per-world `Role` + `RoleBinding` in each world's namespace
   (`get/update` on the world's tokens Secret) plus broker-namespace
   `Role` covering the sweeper Lease, the refresh-tokens Secret, and
-  `create` + `get/update` on the broker's own Secrets. The per-world
-  write-token rule is a leftover; nothing creates those Secrets now.
+  `get/update` on the broker's own Secrets.
 - Default-on `NetworkPolicy` restricting ingress to the configured
   Ingress controller namespace and egress to DNS, TCP 443, and each
   configured world UDP port (6309 by default).
@@ -45,8 +44,8 @@ Secrets, hot-reloads the fragment, and bootstraps the world. See
   the tenant-scoped mark_* surface (no federation or multi-world tools;
   `mark_worlds` returns only the caller's world) over JSON-RPC over
   Streamable HTTP. Identity is the OIDC `id_token` bearer; every read
-  and write is locked to the caller's own world, dispatched with the
-  per-world token the broker holds. See [MCP gateway](#mcp-gateway).
+  and write is locked to the caller's own world; writes run under the
+  identity's grant, no token involved. See [MCP gateway](#mcp-gateway).
 - TopologySpreadConstraints to keep replicas off the same node.
 
 ## Endpoint surface
@@ -171,11 +170,12 @@ management API (the issuer origin) serves
 the issuer's origin per §3.3, strict clients validate issuer ==
 fetch origin) and `/.well-known/jwks.json`, while the MCP gateway
 serves only `/.well-known/oauth-protected-resource` (RFC 9728,
-bare and path-inserted `/mcp` forms). Set `server.mcp.publicURL`
-to the gateway host so the `resource` field and the 401
-`resource_metadata` link name the gateway, not the issuer. Two
-hostnames, two TLS contexts, no path-routing fragility, and
-operators rotate certs on either side independently.
+bare and path-inserted `/mcp` forms). `server.mcp.publicURL` is
+required: the memory gateway answers requests for that hostname, which
+must differ from the issuer's, and it is the `resource` field and the
+401 `resource_metadata` link. Two hostnames, two TLS contexts, no
+path-routing fragility, and operators rotate certs on either side
+independently.
 
 ### TLS termination
 

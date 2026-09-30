@@ -102,7 +102,7 @@ func TestDeviceAuthorizeRequiresClientID(t *testing.T) {
 
 func TestDeviceTokenSuccessIsNonCacheable(t *testing.T) {
 	srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-	deviceCode, _, _, err := broker.deviceStore.Authorize()
+	deviceCode, _, _, err := broker.deviceStore.Authorize("")
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestDeviceFormPostSuccessSetsCookieAndRedirects(t *testing.T) {
 	// Pre-seed a pending grant directly via the store so the test
 	// doesn't have to round-trip through /device/authorize. Keeps
 	// this test focused on the form-submit handler.
-	deviceCode, userCode, _, err := broker.deviceStore.Authorize()
+	deviceCode, userCode, _, err := broker.deviceStore.Authorize("")
 	if err != nil {
 		t.Fatalf("seed Authorize: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestDeviceFormPostSuccessSetsCookieAndRedirects(t *testing.T) {
 // before any cookie is set.
 func TestDeviceFormPostRejectsCrossOriginCSRF(t *testing.T) {
 	srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-	_, userCode, _, err := broker.deviceStore.Authorize()
+	_, userCode, _, err := broker.deviceStore.Authorize("")
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestDeviceFormPostRejectsCrossOriginCSRF(t *testing.T) {
 // browser submits and asserts the request proceeds normally.
 func TestDeviceFormPostAcceptsSameOriginPost(t *testing.T) {
 	srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-	deviceCode, userCode, _, err := broker.deviceStore.Authorize()
+	deviceCode, userCode, _, err := broker.deviceStore.Authorize("")
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestDeviceFormPostSecureMatchesInsecureCookiesFlag(t *testing.T) {
 			cfg := deviceTestConfig()
 			cfg.Server.InsecureCookies = tt.insecureCookies
 			srv, broker := newTestServer(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-			_, userCode, _, err := broker.deviceStore.Authorize()
+			_, userCode, _, err := broker.deviceStore.Authorize("")
 			if err != nil {
 				t.Fatalf("Authorize: %v", err)
 			}
@@ -407,7 +407,7 @@ func TestDeviceFormPostSecureMatchesInsecureCookiesFlag(t *testing.T) {
 func TestDeviceTokenStates(t *testing.T) {
 	t.Run("pending returns authorization_pending", func(t *testing.T) {
 		srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize()
+		deviceCode, _, _, err := broker.deviceStore.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -419,7 +419,7 @@ func TestDeviceTokenStates(t *testing.T) {
 
 	t.Run("slow_down on rapid repeat poll", func(t *testing.T) {
 		srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize()
+		deviceCode, _, _, err := broker.deviceStore.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -436,7 +436,7 @@ func TestDeviceTokenStates(t *testing.T) {
 	t.Run("expired after TTL", func(t *testing.T) {
 		cfg := deviceTestConfig()
 		srv, broker := newTestServer(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize()
+		deviceCode, _, _, err := broker.deviceStore.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -453,7 +453,7 @@ func TestDeviceTokenStates(t *testing.T) {
 
 	t.Run("denied after Deny", func(t *testing.T) {
 		srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize()
+		deviceCode, _, _, err := broker.deviceStore.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -467,7 +467,7 @@ func TestDeviceTokenStates(t *testing.T) {
 
 	t.Run("complete returns tokens", func(t *testing.T) {
 		srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize()
+		deviceCode, _, _, err := broker.deviceStore.Authorize("")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -597,7 +597,7 @@ func TestStaleDeviceCookieDoesNotHijackBrowserCallback(t *testing.T) {
 	// user gave up before completing the OIDC dance. Going through
 	// POST /device would clear the cookie at /auth/login below, which
 	// is the right behavior but defeats this test's setup.
-	deviceCode, _, _, err := broker.deviceStore.Authorize()
+	deviceCode, _, _, err := broker.deviceStore.Authorize("")
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -944,7 +944,7 @@ func TestDeviceTokenRefreshGrant(t *testing.T) {
 	// Complete a device flow up to Bind by driving the store
 	// directly — the full /auth/callback dance is covered by
 	// TestDeviceFlowIntegrationHappyPath.
-	deviceCode, _, _, err := broker.deviceStore.Authorize()
+	deviceCode, _, _, err := broker.deviceStore.Authorize("")
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -999,7 +999,7 @@ func TestDeviceTokenRefreshGrant(t *testing.T) {
 
 	// Verify the broker-signed id_token round-trips through the
 	// broker's own signer with the original claims intact.
-	gotClaims, err := signer.VerifyIDToken(out.IDToken, cfg.Server.PublicURL, time.Now())
+	gotClaims, err := signer.VerifyIDToken(out.IDToken, cfg.Server.PublicURL, []string{cfg.Server.PublicURL}, time.Now())
 	if err != nil {
 		t.Fatalf("VerifyIDToken: %v", err)
 	}
@@ -1125,7 +1125,7 @@ func TestDeviceTokenRefreshCrossGrantIsolation(t *testing.T) {
 	}
 
 	// And the reverse: device_code on the refresh branch.
-	deviceCode, _, _, err := broker.deviceStore.Authorize()
+	deviceCode, _, _, err := broker.deviceStore.Authorize("")
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}

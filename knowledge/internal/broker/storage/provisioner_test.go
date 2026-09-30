@@ -232,7 +232,7 @@ func TestEnsureTenantEmailRefreshOnceThenFastPath(t *testing.T) {
 
 	// Stale record: identity index hits but Allow rejects the new email,
 	// denying so the slow path runs once and refreshes.
-	if _, err := core.TenantWorldFor(cfg.Registry(), cfg.OIDC.Issuer, movedEveClaims()); !errors.Is(err, core.ErrNotAuthorized) {
+	if _, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, movedEveClaims()); !errors.Is(err, core.ErrNotAuthorized) {
 		t.Fatalf("pre-refresh tenantWorldFor err = %v, want ErrNotAuthorized", err)
 	}
 
@@ -246,7 +246,7 @@ func TestEnsureTenantEmailRefreshOnceThenFastPath(t *testing.T) {
 	}
 
 	// Fast path: the resolver answers by identity index, no provisioner.
-	w, err := core.TenantWorldFor(cfg.Registry(), cfg.OIDC.Issuer, movedEveClaims())
+	w, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, movedEveClaims())
 	if err != nil {
 		t.Fatalf("post-refresh tenantWorldFor: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestEnsureTenantSharedLocalPartDistinctWorlds(t *testing.T) {
 	if twinWorld.Name == eveWorld.Name {
 		t.Fatalf("shared local part collapsed two identities into %q", eveWorld.Name)
 	}
-	w, err := core.TenantWorldFor(cfg.Registry(), cfg.OIDC.Issuer, twin)
+	w, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, twin)
 	if err != nil {
 		t.Fatalf("tenantWorldFor(twin): %v", err)
 	}
@@ -392,7 +392,7 @@ func TestLegacyDuplicateIdentityResolvesDeterministically(t *testing.T) {
 	if world.Name != "a-eve-0000" {
 		t.Errorf("EnsureTenant resolved %q, want the first sorted slug a-eve-0000", world.Name)
 	}
-	w, err := core.TenantWorldFor(cfg.Registry(), cfg.OIDC.Issuer, brokertest.EveClaims())
+	w, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, brokertest.EveClaims())
 	if err != nil {
 		t.Fatalf("tenantWorldFor: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestLegacyDuplicateIdentityResolvesDeterministically(t *testing.T) {
 	if world.Name != "b-eve-1111" {
 		t.Errorf("EnsureTenant with tombstoned duplicate resolved %q, want b-eve-1111", world.Name)
 	}
-	w, err = core.TenantWorldFor(cfg.Registry(), cfg.OIDC.Issuer, brokertest.EveClaims())
+	w, err = core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, brokertest.EveClaims())
 	if err != nil {
 		t.Fatalf("tenantWorldFor with tombstoned duplicate: %v", err)
 	}
@@ -810,22 +810,6 @@ func TestTenantSlugIsAlwaysAValidWorldName(t *testing.T) {
 		if slug := TenantSlug("https://issuer", "sub", email); !core.WorldNameRE.MatchString(slug) {
 			t.Errorf("tenantSlug(%q) = %q, not a valid world name", email, slug)
 		}
-	}
-}
-
-func TestValidateProvisioningTrimsMode(t *testing.T) {
-	cfg := brokertest.NewProvisioningConfig("open ")
-	if err := cfg.ValidateProvisioning(); err != nil {
-		t.Fatalf("ValidateProvisioning: %v", err)
-	}
-	if cfg.Provisioning.Mode != core.ProvisionOpen {
-		t.Errorf("mode = %q, want normalized %q (Enabled and the open-mode cap key on it)", cfg.Provisioning.Mode, core.ProvisionOpen)
-	}
-
-	cfg = brokertest.NewProvisioningConfig("open ")
-	cfg.Provisioning.MaxTenants = 0
-	if err := cfg.ValidateProvisioning(); err == nil {
-		t.Error("padded open mode bypassed the maxTenants requirement")
 	}
 }
 

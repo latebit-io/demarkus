@@ -67,6 +67,9 @@ type deviceCodeState struct {
 	ExpiresAt    time.Time
 	LastPolledAt time.Time // zero until first /device/token poll
 
+	// Resource is the canonical RFC 8707 indicator the client asked for at
+	// /device/authorize; it binds the refresh token minted at Bind.
+	Resource string
 	// Populated by Bind on successful IdP exchange; consumed by Poll
 	// to build the statusComplete response. Zero values otherwise.
 	Result core.ExchangeResult
@@ -165,7 +168,7 @@ func newDeviceStore(clock func() time.Time, expiresIn, pollInterval time.Duratio
 // load); we retry up to deviceCodeGenAttempts times and surface an
 // error on the unlikely third collision rather than allow a silent
 // overwrite of an in-flight code.
-func (s *deviceStore) Authorize() (deviceCode, userCode string, expiresAt time.Time, err error) {
+func (s *deviceStore) Authorize(resource string) (deviceCode, userCode string, expiresAt time.Time, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.codes) >= s.maxPending {
@@ -197,6 +200,7 @@ func (s *deviceStore) Authorize() (deviceCode, userCode string, expiresAt time.T
 	s.codes[deviceCode] = &deviceCodeState{
 		DeviceCode: deviceCode,
 		UserCode:   canonical,
+		Resource:   resource,
 		Status:     statusPending,
 		CreatedAt:  now,
 		ExpiresAt:  expiresAt,

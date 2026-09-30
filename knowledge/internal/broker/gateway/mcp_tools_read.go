@@ -69,7 +69,7 @@ func (g *Gateway) writeContext(ctx context.Context, worldName string) (context.C
 	}
 	grant, err := g.writeGrantFor(claims, worldName)
 	if err != nil {
-		return nil, core.ErrNotAuthorized
+		return nil, fmt.Errorf("%w: %w", core.ErrNotAuthorized, err)
 	}
 	return protocol.WithGrant(ctx, grant), nil
 }

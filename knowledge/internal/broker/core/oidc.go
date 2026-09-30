@@ -182,18 +182,21 @@ type compositeVerifier struct {
 	primary       Verifier
 	idTokenSigner *IDTokenSigner
 	brokerURL     string
-	clock         func() time.Time
+	// audiences are the aud values a broker token may carry: the broker
+	// URL (unbound) and every gateway's resource indicator.
+	audiences []string
+	clock     func() time.Time
 }
 
-// newCompositeVerifier wraps an existing Verifier (the IdP-backed
-// one) with the broker's own signer. brokerURL is the iss + aud the
-// broker emits on its tokens; the verifier checks them on the
-// broker-leg path.
-func newCompositeVerifier(primary Verifier, signer *IDTokenSigner, brokerURL string) *compositeVerifier {
+// newCompositeVerifier wraps an existing Verifier (the IdP-backed one) with
+// the broker's own signer. brokerURL is the iss the broker emits; resources
+// are the RFC 8707 indicators it binds tokens to.
+func newCompositeVerifier(primary Verifier, signer *IDTokenSigner, brokerURL string, resources []string) *compositeVerifier {
 	return &compositeVerifier{
 		primary:       primary,
 		idTokenSigner: signer,
 		brokerURL:     brokerURL,
+		audiences:     append([]string{brokerURL}, resources...),
 		clock:         time.Now,
 	}
 }
@@ -208,7 +211,7 @@ func (c *compositeVerifier) Exchange(ctx context.Context, code string) (Exchange
 
 func (c *compositeVerifier) VerifyIDToken(ctx context.Context, raw string) (Claims, error) {
 	if c.idTokenSigner != nil {
-		claims, err := c.idTokenSigner.VerifyIDToken(raw, c.brokerURL, c.clock())
+		claims, err := c.idTokenSigner.VerifyIDToken(raw, c.brokerURL, c.audiences, c.clock())
 		if err == nil {
 			return claims, nil
 		}
@@ -224,12 +227,12 @@ func (c *compositeVerifier) VerifyIDToken(ctx context.Context, raw string) (Clai
 }
 
 // VerifierWith composes the IdP verifier with the broker key leg when a
-// signer is wired. Run and the fixtures call it once for both listeners.
-func VerifierWith(primary Verifier, signer *IDTokenSigner, brokerURL string) Verifier {
+// signer is wired. Run and the fixtures call it once for every surface.
+func VerifierWith(primary Verifier, signer *IDTokenSigner, brokerURL string, resources []string) Verifier {
 	if signer == nil {
 		return primary
 	}
-	return newCompositeVerifier(primary, signer, brokerURL)
+	return newCompositeVerifier(primary, signer, brokerURL, resources)
 }
 
 // DiscoveryHTTPTimeout caps each upstream IdP fetch; startup blocks on the

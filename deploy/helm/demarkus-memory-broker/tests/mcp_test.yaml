@@ -15,6 +15,7 @@ set:
   oidc.redirectURL: https://broker.example.com/auth/callback
   oidc.brokerSigningKey: "test-pem-placeholder"
   server.publicURL: https://broker.example.com
+  server.mcp.publicURL: https://memory.example.com
 tests:
   # Deployment: always-on MCP containerPort + optional TLS volume.
 
@@ -130,28 +131,34 @@ tests:
 
   # Secret-config: the rendered config.yaml carries the MCP block.
 
-  - it: config.yaml renders the mcp block with defaults
+  - it: config.yaml renders the extra listener and the memory gateway at its host
     template: secret-config.yaml
     asserts:
       - matchRegex:
           path: stringData["config.yaml"]
-          pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*toolProfile: "full"'
+          pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*memory:\s*\n\s*publicURL: "https://memory.example.com"\s*\n\s*toolProfile: "full"'
 
-  - it: config.yaml omits mcp.publicURL when unset (falls back to server.publicURL in the broker)
-    template: secret-config.yaml
-    asserts:
-      - notMatchRegex:
-          path: stringData["config.yaml"]
-          pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*publicURL:'
-
-  - it: server.mcp.publicURL renders into the mcp block (split-host ingress)
+  - it: every world is marked for the memory gateway
     template: secret-config.yaml
     set:
-      server.mcp.publicURL: https://memory.example.com
+      worlds:
+        - name: alice-w
+          namespace: alice-w
+          tokensSecret: alice-w-tokens
+          allow:
+            emails: ["alice@example.com"]
     asserts:
       - matchRegex:
           path: stringData["config.yaml"]
-          pattern: 'mcp:\s*\n\s*addr: ":8081"\s*\n\s*publicURL: "https://memory.example.com"'
+          pattern: '- name: "alice-w"\s*\n\s*profile: memory'
+
+  - it: server.mcp.publicURL is required for the memory gateway
+    template: secret-config.yaml
+    set:
+      server.mcp.publicURL: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "server.mcp.publicURL is required: the memory gateway answers its own hostname"
 
   - it: config.yaml omits mcp.tls block when no existingSecretRef set
     template: secret-config.yaml

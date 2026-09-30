@@ -35,7 +35,7 @@ func testServerDeps(t testing.TB, cfg *core.Config, verifier core.Verifier, k8s 
 // the refresh grant, JWKS and the broker signed bearer leg are live.
 func (d ServerDeps) signed(cfg *core.Config, signer *core.IDTokenSigner) ServerDeps {
 	d.IDTokenSigner = signer
-	d.Verifier = core.VerifierWith(d.Verifier, signer, cfg.Server.PublicURL)
+	d.Verifier = core.VerifierWith(d.Verifier, signer, cfg.Server.PublicURL, cfg.Server.Resources())
 	return d
 }
 
