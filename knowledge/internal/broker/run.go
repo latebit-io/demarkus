@@ -31,9 +31,16 @@ type RunOptions struct {
 	// KubeconfigPath selects an out-of-cluster kubeconfig; empty uses
 	// the in-cluster service-account config.
 	KubeconfigPath string
-	// LocalWorlds, when set, serves the worlds it routes in process; the
-	// world pool dials the rest.
-	LocalWorlds gateway.LocalWorlds
+	// LocalWorlds, when set, serves the worlds it routes in process and
+	// takes provisioned tenants directly; the world pool dials the rest.
+	LocalWorlds LocalServer
+}
+
+// LocalServer is the knowledge server the composed binary hosts: it
+// dispatches its worlds in process and applies the provisioner's worlds.
+type LocalServer interface {
+	gateway.LocalWorlds
+	storage.WorldsApplier
 }
 
 // Broker is an opened broker: config, auth machinery and the listeners
@@ -444,7 +451,8 @@ func enableProvisioning(cfg *core.Config, opts *RunOptions, store core.SecretSto
 		"mode", cfg.Provisioning.Mode,
 		"maxTenants", cfg.Provisioning.MaxTenants,
 		"authorityDomain", cfg.Provisioning.AuthorityDomain)
-	return storage.NewProvisioner(cfg, storage.ProvisionerDeps{Store: store, Buckets: buckets, Log: log}), closeBuckets, nil
+	deps := storage.ProvisionerDeps{Store: store, Buckets: buckets, Worlds: opts.LocalWorlds, Log: log}
+	return storage.NewProvisioner(cfg, deps), closeBuckets, nil
 }
 
 // newSecretStore selects the credential backend from config: file mode

@@ -227,6 +227,26 @@ type rawLimitsConfig struct {
 // merging the worldsFile fragment (relative to the config's directory).
 // A missing or empty fragment contributes zero worlds.
 func Load(filename string) (*Config, error) {
+	return load(filename, readWorldsFile)
+}
+
+// LoadWithFragment is Load with fragment in place of the worldsFile's
+// contents: an in-process provisioner's dynamic worlds, ahead of the mounted
+// file. A config without a worldsFile ignores it, as it ignores the file.
+func LoadWithFragment(filename string, fragment []byte) (*Config, error) {
+	return load(filename, func(string) ([]byte, error) { return fragment, nil })
+}
+
+// readWorldsFile reads the fragment on disk; absent is not yet provisioned.
+func readWorldsFile(fragmentPath string) ([]byte, error) {
+	fragment, err := os.ReadFile(fragmentPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return fragment, err
+}
+
+func load(filename string, readFragment func(fragmentPath string) ([]byte, error)) (*Config, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("knowledge config: read %q: %w", filename, err)
@@ -239,12 +259,9 @@ func Load(filename string) (*Config, error) {
 		return config, nil
 	}
 	fragmentPath := config.WorldsFilePath(filename)
-	fragment, err := os.ReadFile(fragmentPath)
+	fragment, err := readFragment(fragmentPath)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("knowledge config: read worlds file %q: %w", fragmentPath, err)
-		}
-		fragment = nil
+		return nil, fmt.Errorf("knowledge config: read worlds file %q: %w", fragmentPath, err)
 	}
 	worlds, err := ParseWorldsFragment(fragment)
 	if err != nil {

@@ -70,6 +70,10 @@ type worldManager struct {
 	// resilient marks dynamic deployments (worldsFile set): a failed
 	// world open degrades to pending instead of failing the process.
 	resilient bool
+	// reloadMu orders load-then-apply, so a file reload racing a push can
+	// never apply a pre-push world set after it; dynamic lives under it.
+	reloadMu sync.Mutex
+	dynamic  []byte
 }
 
 type worldEntry struct {
@@ -133,14 +137,43 @@ func newWorldManager(watchCtx context.Context, group *sync.WaitGroup, cfg worldM
 	return m, nil
 }
 
-// Reload re-reads the merged configuration and applies the world set.
+// Reload re-reads the merged configuration and applies the world set. A
+// fragment set through SetDynamicWorlds stands in for the worldsFile.
 // Listener, TLS, and health changes require a restart and are logged.
 func (m *worldManager) Reload() error {
-	config, err := knowledgeconfig.Load(m.configFile)
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	var config *knowledgeconfig.Config
+	var err error
+	if m.dynamic != nil {
+		config, err = knowledgeconfig.LoadWithFragment(m.configFile, m.dynamic)
+	} else {
+		config, err = knowledgeconfig.Load(m.configFile)
+	}
 	if err != nil {
 		return err
 	}
 	return m.apply(config.Worlds)
+}
+
+// SetDynamicWorlds applies a worlds fragment ahead of the mounted worldsFile:
+// the in-process provisioner's registry projection. It stays in force across
+// file reloads; the file remains what a restart reads, so one is required.
+func (m *worldManager) SetDynamicWorlds(fragment []byte) error {
+	if !m.resilient {
+		return errors.New("no worldsFile configured; dynamic worlds would not survive a restart")
+	}
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	config, err := knowledgeconfig.LoadWithFragment(m.configFile, fragment)
+	if err != nil {
+		return err
+	}
+	if err := m.apply(config.Worlds); err != nil {
+		return err
+	}
+	m.dynamic = fragment
+	return nil
 }
 
 // retiredWorld is a runtime out of m.entries that the router may still reach.

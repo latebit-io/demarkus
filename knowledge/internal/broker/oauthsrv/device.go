@@ -263,6 +263,12 @@ func (s *Server) deviceTokenDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	out := s.deviceStore.Poll(deviceCode)
 	switch {
 	case out.Status == statusComplete:
+		// The id_token is the IdP's and cannot be rebound, but a resource
+		// outside the broker or the grant's binding is still invalid_target.
+		if _, err := s.mintClaims(r, &out.Result.Claims); err != nil {
+			writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
+			return
+		}
 		now := s.clock()
 		expiresIn := 0
 		if !out.Result.Expiry.IsZero() {
@@ -624,8 +630,8 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 	// Mint before Bind so a Secret-side failure keeps the grant pending rather
 	// than completing it without a refresh token; an orphaned mint ages out on
 	// Sweep. Device-flow clients are public, so tokens are never client-bound.
-	bound := exchange.Claims.BoundTo(state.Resource)
-	rawRefresh, err := s.refreshStore.Issue(r.Context(), &bound, "", s.cfg.Server.RefreshTokenTTL)
+	exchange.Claims = exchange.Claims.BoundTo(state.Resource)
+	rawRefresh, err := s.refreshStore.Issue(r.Context(), &exchange.Claims, "", s.cfg.Server.RefreshTokenTTL)
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: device callback refresh mint failed",
 			"err", err, "subject", core.HashSubject(exchange.Claims.Subject))

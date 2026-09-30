@@ -53,6 +53,11 @@ func newTestProvisionerAt(cfg *core.Config, store core.SecretStore, buckets Buck
 	return NewProvisioner(cfg, ProvisionerDeps{Store: store, Buckets: buckets, Log: slog.Default(), Clock: clock})
 }
 
+// newTestProvisionerWith is newTestProvisioner with an in-process server.
+func newTestProvisionerWith(cfg *core.Config, store core.SecretStore, worlds WorldsApplier) *Provisioner {
+	return NewProvisioner(cfg, ProvisionerDeps{Store: store, Buckets: &brokertest.FakeBuckets{}, Worlds: worlds, Log: slog.Default()})
+}
+
 func TestTenantSlugShape(t *testing.T) {
 	slug := TenantSlug("https://idp", "google|eve-123", "eve.adams@example.com")
 	if !strings.HasPrefix(slug, "eve-adams-") {
@@ -912,4 +917,55 @@ func TestRegistryChangesClearRememberedRefusals(t *testing.T) {
 			t.Fatalf("eve after the sync: %v, want the gate consulted again", err)
 		}
 	})
+}
+
+// fakeWorlds records every fragment pushed to the in-process server.
+type fakeWorlds struct {
+	fragments []string
+	fail      bool
+}
+
+func (f *fakeWorlds) ApplyWorldsFragment(fragment []byte) error {
+	if f.fail {
+		return errors.New("server refused the fragment")
+	}
+	f.fragments = append(f.fragments, string(fragment))
+	return nil
+}
+
+// TestProvisionerPushesWorldsInProcess: every registry change reaches the
+// server in this process at once, and a refused push never fails the flow.
+func TestProvisionerPushesWorldsInProcess(t *testing.T) {
+	cfg := brokertest.NewProvisioningConfig(core.ProvisionOpen)
+	store := newProvisionerStore()
+	worlds := &fakeWorlds{}
+	p := newTestProvisionerWith(cfg, store, worlds)
+
+	world, err := p.EnsureTenant(context.Background(), brokertest.EveClaims())
+	if err != nil {
+		t.Fatalf("EnsureTenant: %v", err)
+	}
+	if len(worlds.fragments) != 1 || !strings.Contains(worlds.fragments[0], "name: "+world.Name) {
+		t.Fatalf("pushed fragments after provisioning = %q, want one naming %s", worlds.fragments, world.Name)
+	}
+	if got := string(store.get(core.WorldsFragmentRef(cfg))); got != worlds.fragments[0] {
+		t.Errorf("pushed fragment differs from the durable one:\n%s\n---\n%s", worlds.fragments[0], got)
+	}
+
+	if _, err := p.DeprovisionTenant(context.Background(), world.Name, false); err != nil {
+		t.Fatalf("DeprovisionTenant: %v", err)
+	}
+	if last := worlds.fragments[len(worlds.fragments)-1]; strings.Contains(last, world.Name) {
+		t.Errorf("deprovision push still names the world:\n%s", last)
+	}
+
+	// A sibling with a refusing server keeps converging through the Secret.
+	sibling := brokertest.NewProvisioningConfig(core.ProvisionOpen)
+	q := newTestProvisionerWith(sibling, store, &fakeWorlds{fail: true})
+	if _, err := q.EnsureTenant(context.Background(), brokertest.EveClaims()); err != nil {
+		t.Fatalf("EnsureTenant with a refusing server: %v", err)
+	}
+	if err := q.SyncRegistry(context.Background()); err != nil {
+		t.Fatalf("SyncRegistry with a refusing server: %v", err)
+	}
 }

@@ -258,6 +258,12 @@ func (s *Server) Reload() {
 	}
 }
 
+// ApplyWorldsFragment puts a worlds fragment in force ahead of the mounted
+// worldsFile, so a tenant provisioned in this process serves at once.
+func (s *Server) ApplyWorldsFragment(fragment []byte) error {
+	return s.worlds.SetDynamicWorlds(fragment)
+}
+
 // Close tears down in reverse: reloaders and the retry loop first, then
 // peers, so nothing reopens or hints a world while it closes; then the
 // listeners and the bucket client. Safe after Serve and on a partial open.

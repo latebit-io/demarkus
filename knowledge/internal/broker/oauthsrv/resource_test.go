@@ -141,6 +141,42 @@ func TestAuthorizeRefusesAnUnknownResource(t *testing.T) {
 	}
 }
 
+func TestDeviceGrantChecksTheResourceAtRedemption(t *testing.T) {
+	cfg := twoGatewayConfig()
+	verifier := &brokertest.FakeVerifier{Claims: brokertest.AliceClaims()}
+	srv, broker := newTestServerWithSigner(t, cfg, verifier, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
+	knowledge, memory := cfg.Server.Resources()[0], cfg.Server.Resources()[1]
+	deviceCode, _, _, err := broker.deviceStore.Authorize(knowledge)
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	// The callback binds the claims to the grant's resource before Bind.
+	alice := brokertest.AliceClaims()
+	if err := broker.deviceStore.Bind(deviceCode, &core.ExchangeResult{Claims: alice.BoundTo(knowledge), RawIDToken: "idp"}, "refresh"); err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	poll := func(resource string) (int, string) {
+		form := url.Values{"grant_type": {deviceGrantType}, "device_code": {deviceCode}}
+		if resource != "" {
+			form.Set("resource", resource)
+		}
+		status, _, bad := postToken(t, srv, form)
+		return status, bad.Error
+	}
+	if status, code := poll(memory); status != http.StatusBadRequest || code != "invalid_target" {
+		t.Fatalf("other gateway's resource = %d %q, want 400 invalid_target", status, code)
+	}
+	if status, code := poll("https://elsewhere.example/mcp"); status != http.StatusBadRequest || code != "invalid_target" {
+		t.Fatalf("unknown resource = %d %q, want 400 invalid_target", status, code)
+	}
+	if status, _ := poll(knowledge); status != http.StatusOK {
+		t.Fatalf("the grant's resource = %d, want 200", status)
+	}
+	if status, _ := poll(""); status != http.StatusOK {
+		t.Fatalf("no resource = %d, want 200", status)
+	}
+}
+
 func TestReadyzDropsOnDrain(t *testing.T) {
 	cfg := brokertest.NewConfig()
 	srv, broker := newTestServer(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset())

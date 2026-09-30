@@ -51,6 +51,12 @@ type BucketDeleter interface {
 	DeleteBucket(ctx context.Context, bucket string) error
 }
 
+// WorldsApplier is a knowledge server in this process that takes the
+// rendered worlds fragment directly, ahead of the mounted Secret.
+type WorldsApplier interface {
+	ApplyWorldsFragment(fragment []byte) error
+}
+
 // tenantRecord is one provisioned tenant in the registry.
 type tenantRecord struct {
 	Email   string `json:"email"`
@@ -75,6 +81,7 @@ type Provisioner struct {
 	cfg     *core.Config
 	store   core.SecretStore
 	buckets BucketCreator
+	worlds  WorldsApplier
 	log     *slog.Logger
 	clock   func() time.Time
 
@@ -92,8 +99,10 @@ type Provisioner struct {
 type ProvisionerDeps struct {
 	Store   core.SecretStore
 	Buckets BucketCreator
-	Log     *slog.Logger
-	Clock   func() time.Time
+	// Worlds is the in-process server; nil when the worlds run elsewhere.
+	Worlds WorldsApplier
+	Log    *slog.Logger
+	Clock  func() time.Time
 }
 
 // NewProvisioner builds a Provisioner; nil Log and Clock take defaults.
@@ -104,7 +113,7 @@ func NewProvisioner(cfg *core.Config, deps ProvisionerDeps) *Provisioner {
 	if deps.Clock == nil {
 		deps.Clock = time.Now
 	}
-	return &Provisioner{cfg: cfg, store: deps.Store, buckets: deps.Buckets, log: deps.Log, clock: deps.Clock}
+	return &Provisioner{cfg: cfg, store: deps.Store, buckets: deps.Buckets, worlds: deps.Worlds, log: deps.Log, clock: deps.Clock}
 }
 
 // DeprovisionTenant removes slug: registry entry, fragment entry (the
@@ -151,11 +160,11 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 
 	// Union minus the target: only slug leaves the fragment, so tenants
 	// provisioned concurrently by other pods survive.
-	if err := p.store.Mutate(ctx, core.WorldsFragmentRef(p.cfg), func(existing []byte) ([]byte, error) {
-		return p.renderWorldsFragmentUnion(&snapshot, existing, slug)
-	}); err != nil {
+	fragment, err := p.writeWorldsFragment(ctx, &snapshot, slug)
+	if err != nil {
 		return found, fmt.Errorf("rewrite worlds fragment: %w", err)
 	}
+	p.pushWorlds(fragment)
 
 	world := p.cfg.Provisioning.TenantWorld(slug, "")
 	if err := p.store.Delete(ctx, core.WorldTokensRef(&world)); err != nil {
@@ -425,15 +434,15 @@ func (p *Provisioner) ensureTenant(ctx context.Context, claims *core.Claims) (co
 	// Step 4: worlds fragment, rendered as a UNION with the existing
 	// fragment so a stale snapshot never drops a sibling's tenant;
 	// removal is a deliberate future flow rewriting from the registry.
-	if err := p.store.Mutate(ctx, core.WorldsFragmentRef(p.cfg), func(existing []byte) ([]byte, error) {
-		return p.renderWorldsFragmentUnion(&snapshot, existing)
-	}); err != nil {
+	fragment, err := p.writeWorldsFragment(ctx, &snapshot)
+	if err != nil {
 		return core.WorldConfig{}, fmt.Errorf("write worlds fragment: %w", err)
 	}
 
 	// Step 5: make the tenant visible to this pod immediately; other
 	// replicas converge via the registry sync loop.
 	p.applySnapshot(&snapshot)
+	p.pushWorlds(fragment)
 	if created {
 		p.log.Info("tenant provisioned", "world", slug, "subject", core.HashSubject(claims.Subject))
 	}
@@ -537,6 +546,29 @@ func (p *Provisioner) renderWorldsFragmentUnion(registry *tenantRegistry, existi
 	return yaml.Marshal(doc)
 }
 
+// writeWorldsFragment converges the fragment Secret toward registry (a union
+// with what is there, minus exclude) and returns the bytes it now holds.
+func (p *Provisioner) writeWorldsFragment(ctx context.Context, registry *tenantRegistry, exclude ...string) ([]byte, error) {
+	var rendered []byte
+	err := p.store.Mutate(ctx, core.WorldsFragmentRef(p.cfg), func(existing []byte) ([]byte, error) {
+		var renderErr error
+		rendered, renderErr = p.renderWorldsFragmentUnion(registry, existing, exclude...)
+		return rendered, renderErr
+	})
+	return rendered, err
+}
+
+// pushWorlds hands the fragment the Secret now holds to the server in this
+// process, ahead of the mount. A failed push is logged: the mount still converges.
+func (p *Provisioner) pushWorlds(fragment []byte) {
+	if p.worlds == nil {
+		return
+	}
+	if err := p.worlds.ApplyWorldsFragment(fragment); err != nil {
+		p.log.Warn("in-process worlds push failed; the mounted fragment will catch up", "err", err)
+	}
+}
+
 // worldsFromRegistry renders the broker-side dynamic world set.
 func (p *Provisioner) worldsFromRegistry(registry *tenantRegistry) []core.WorldConfig {
 	slugs := sortedSlugs(registry)
@@ -580,12 +612,12 @@ func (p *Provisioner) SyncRegistry(ctx context.Context) error {
 	// Converge the fragment toward the registry: a union re-adds any
 	// world a stale deprovision rewrite dropped (Mutate skips the write
 	// when nothing changed, so steady state costs one read).
-	if err := p.store.Mutate(ctx, core.WorldsFragmentRef(p.cfg), func(existing []byte) ([]byte, error) {
-		return p.renderWorldsFragmentUnion(&snapshot, existing)
-	}); err != nil {
+	fragment, err := p.writeWorldsFragment(ctx, &snapshot)
+	if err != nil {
 		// lastSync stays behind so the next tick retries the converge.
 		return fmt.Errorf("converge worlds fragment: %w", err)
 	}
+	p.pushWorlds(fragment)
 	p.lastSync = payload
 	return nil
 }

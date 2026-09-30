@@ -686,3 +686,43 @@ func TestWorldManagerHintPollsTheWorld(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// TestWorldManagerDynamicFragmentLeadsTheFile: a fragment pushed in process
+// opens worlds before the mounted file catches up, survives a file reload,
+// and an empty push retires them.
+func TestWorldManagerDynamicFragmentLeadsTheFile(t *testing.T) {
+	tokensDir := t.TempDir()
+	tokensA := writeTokens(t, tokensDir, "alice")
+	h := newWorldsHarness(t, "worlds: []\n")
+
+	if err := h.manager.SetDynamicWorlds([]byte("worlds:\n" + worldFragment("alice", testWorldID, tokensA, true))); err != nil {
+		t.Fatalf("SetDynamicWorlds: %v", err)
+	}
+	if !h.routes("alice.memory.svc.cluster.local") {
+		t.Fatal("pushed world does not route")
+	}
+	// The mounted file still says nothing; a file reload keeps the push.
+	if err := h.manager.Reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !h.routes("alice.memory.svc.cluster.local") {
+		t.Fatal("file reload dropped the pushed world")
+	}
+	if err := h.manager.SetDynamicWorlds([]byte("worlds: []\n")); err != nil {
+		t.Fatalf("SetDynamicWorlds empty: %v", err)
+	}
+	if h.routes("alice.memory.svc.cluster.local") {
+		t.Fatal("retired world still routes")
+	}
+	if err := h.manager.SetDynamicWorlds([]byte("worlds:\n  - nonsense: true\n")); err == nil {
+		t.Fatal("an invalid fragment was accepted")
+	}
+	// Without a worldsFile there is no home for dynamic worlds.
+	static, err := openHarness(t, t.TempDir(), "worlds:\n"+worldFragment("alice", testWorldID, tokensA, true), nil)
+	if err != nil {
+		t.Fatalf("static harness: %v", err)
+	}
+	if err := static.manager.SetDynamicWorlds([]byte("worlds: []\n")); err == nil {
+		t.Fatal("a static server accepted a dynamic fragment")
+	}
+}

@@ -110,8 +110,8 @@ func (g *Gateway) resolveOrProvision(ctx context.Context) (core.WorldConfig, err
 	}
 	w, perr := g.deps.Provisioner.EnsureTenant(ctx, claims)
 	if perr == nil {
-		// The knowledge server picks the new world up asynchronously;
-		// give the caller a clear retry message until it answers.
+		// In process the push has opened the world already; a server that
+		// mounts the fragment picks it up later. Either way, probe it.
 		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		_, ferr := g.dispatcher.Fetch(probeCtx, fetch.FetchRequest{Host: w.Name, Path: "/index.md"})
 		cancel()

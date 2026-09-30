@@ -145,3 +145,20 @@ func TestParsesBrokerRenderedFragment(t *testing.T) {
 		t.Errorf("broker-derived worldID %q is not canonical", w.Bucket.WorldID)
 	}
 }
+
+func TestLoadWithFragmentStandsInForTheFile(t *testing.T) {
+	dir := writeConfigDir(t, dynamicBase, "")
+	config, err := LoadWithFragment(filepath.Join(dir, "config.yaml"), []byte(worldsFragment))
+	if err != nil {
+		t.Fatalf("LoadWithFragment: %v", err)
+	}
+	if len(config.Worlds) != 1 || config.Worlds[0].Name != "fritz-3a9f" {
+		t.Fatalf("worlds = %+v, want the pushed fragment's world", config.Worlds)
+	}
+	// An empty push means no dynamic worlds, whatever the file says.
+	dir = writeConfigDir(t, dynamicBase, worldsFragment)
+	config, err = LoadWithFragment(filepath.Join(dir, "config.yaml"), nil)
+	if err != nil || len(config.Worlds) != 0 {
+		t.Fatalf("empty push: worlds = %d, err = %v; want none", len(config.Worlds), err)
+	}
+}
