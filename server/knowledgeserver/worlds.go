@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
@@ -71,9 +72,12 @@ type worldManager struct {
 	// world open degrades to pending instead of failing the process.
 	resilient bool
 	// reloadMu orders load-then-apply, so a file reload racing a push can
-	// never apply a pre-push world set after it; dynamic lives under it.
+	// never apply a pre-push world set after it; the push state lives under it.
 	reloadMu sync.Mutex
-	dynamic  []byte
+	// dynamic is a private copy of the last accepted push, in force once
+	// dynamicSet; an empty push is a push, not an absence.
+	dynamic    []byte
+	dynamicSet bool
 }
 
 type worldEntry struct {
@@ -145,7 +149,7 @@ func (m *worldManager) Reload() error {
 	defer m.reloadMu.Unlock()
 	var config *knowledgeconfig.Config
 	var err error
-	if m.dynamic != nil {
+	if m.dynamicSet {
 		config, err = knowledgeconfig.LoadWithFragment(m.configFile, m.dynamic)
 	} else {
 		config, err = knowledgeconfig.Load(m.configFile)
@@ -172,7 +176,7 @@ func (m *worldManager) SetDynamicWorlds(fragment []byte) error {
 	if err := m.apply(config.Worlds); err != nil {
 		return err
 	}
-	m.dynamic = fragment
+	m.dynamic, m.dynamicSet = slices.Clone(fragment), true
 	return nil
 }
 

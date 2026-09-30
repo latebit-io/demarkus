@@ -29,9 +29,11 @@ For deployment instructions, TLS, and Ingress topology, see
   the device-flow completion, PR3). Unverified-email tokens are
   rejected at the gateway boundary. A client that sends RFC 8707
   `resource` (the PRM `resource`, `<gateway>/mcp`) on the authorize,
-  device or token request gets a token with that `aud`, valid at that
-  gateway only; an unknown resource is `invalid_target`. A client that
-  sends none gets a token valid at every gateway, as before.
+  device or token request gets a broker-signed token with that `aud`,
+  valid at that gateway only (the device flow then answers with the
+  broker's token instead of the IdP's); an unknown resource is
+  `invalid_target`. A client that sends none gets a token valid at
+  every gateway, as before.
 - **OAuth metadata**: standard discovery via RFC 9728
   (`/.well-known/oauth-protected-resource`, bare and path-inserted
   `/mcp` forms, on the gateway listener) and RFC 8414

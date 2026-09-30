@@ -236,6 +236,35 @@ func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// deviceGrantSuccess is the completed grant's token response. An unbound
+// grant hands out the IdP's tokens as before; a bound one needs a token
+// that carries the resource, which only the broker's signer can mint.
+func (s *Server) deviceGrantSuccess(out *pollResult, claims *core.Claims) (deviceTokenSuccess, error) {
+	now := s.clock()
+	success := deviceTokenSuccess{
+		AccessToken:  out.Result.AccessToken,
+		IDToken:      out.Result.RawIDToken,
+		RefreshToken: out.RefreshToken,
+		TokenType:    "Bearer",
+	}
+	if !out.Result.Expiry.IsZero() {
+		success.ExpiresIn = max(int(out.Result.Expiry.Sub(now).Seconds()), 0)
+	}
+	if claims.Resource == "" {
+		return success, nil
+	}
+	if s.idTokenSigner == nil {
+		return deviceTokenSuccess{}, errors.New("id_token signer not wired")
+	}
+	idToken, err := s.idTokenSigner.Sign(claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
+	if err != nil {
+		return deviceTokenSuccess{}, err
+	}
+	success.AccessToken, success.IDToken = idToken, idToken
+	success.ExpiresIn = max(int(s.cfg.Server.IDTokenTTL.Seconds()), 0)
+	return success, nil
+}
+
 // mintClaims applies the token request's RFC 8707 `resource` to the grant's
 // claims; a resource outside the broker or the grant is the caller's
 // invalid_target.
@@ -248,12 +277,9 @@ func (s *Server) mintClaims(r *http.Request, grant *core.Claims) (core.Claims, e
 	return core.Claims{}, err
 }
 
-// deviceTokenDeviceFlow handles the RFC 8628 §3.4 device-code poll.
-// The polling client sends the same device_code on each call; the
-// broker responds with authorization_pending until /auth/callback
-// runs the OAuth exchange and Binds the result, then returns the
-// success payload (raw IdP id_token + access_token + broker-minted
-// refresh_token) on the next poll.
+// deviceTokenDeviceFlow handles the RFC 8628 §3.4 device-code poll:
+// authorization_pending until /auth/callback binds the IdP exchange, then
+// the success payload (deviceGrantSuccess) on every later poll.
 func (s *Server) deviceTokenDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	deviceCode := r.PostFormValue("device_code")
 	if deviceCode == "" {
@@ -263,16 +289,17 @@ func (s *Server) deviceTokenDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	out := s.deviceStore.Poll(deviceCode)
 	switch {
 	case out.Status == statusComplete:
-		// The id_token is the IdP's and cannot be rebound, but a resource
-		// outside the broker or the grant's binding is still invalid_target.
-		if _, err := s.mintClaims(r, &out.Result.Claims); err != nil {
+		claims, err := s.mintClaims(r, &out.Result.Claims)
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
 			return
 		}
-		now := s.clock()
-		expiresIn := 0
-		if !out.Result.Expiry.IsZero() {
-			expiresIn = max(int(out.Result.Expiry.Sub(now).Seconds()), 0)
+		success, err := s.deviceGrantSuccess(&out, &claims)
+		if err != nil {
+			s.log.ErrorContext(r.Context(), "broker: device grant sign id_token failed",
+				"err", err, "subject", core.HashSubject(claims.Subject))
+			writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+			return
 		}
 		// Tokens are bearer credentials — any intermediary that
 		// caches this response is a credential-leak vector. Set the
@@ -280,13 +307,7 @@ func (s *Server) deviceTokenDeviceFlow(w http.ResponseWriter, r *http.Request) {
 		// fires WriteHeader so they actually land in the response.
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Pragma", "no-cache")
-		writeJSON(w, http.StatusOK, deviceTokenSuccess{
-			AccessToken:  out.Result.AccessToken,
-			IDToken:      out.Result.RawIDToken,
-			RefreshToken: out.RefreshToken,
-			TokenType:    "Bearer",
-			ExpiresIn:    expiresIn,
-		})
+		writeJSON(w, http.StatusOK, success)
 	case out.Status == statusExpired:
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "expired_token"})
 	case out.Status == statusDenied:

@@ -708,8 +708,16 @@ func TestWorldManagerDynamicFragmentLeadsTheFile(t *testing.T) {
 	if !h.routes("alice.memory.svc.cluster.local") {
 		t.Fatal("file reload dropped the pushed world")
 	}
-	if err := h.manager.SetDynamicWorlds([]byte("worlds: []\n")); err != nil {
+	// The mount catches up with the old set; an empty push still wins, and
+	// the caller's buffer is not what the manager keeps.
+	h.writeFragment(t, "worlds:\n"+worldFragment("alice", testWorldID, tokensA, true))
+	empty := []byte("worlds: []\n")
+	if err := h.manager.SetDynamicWorlds(empty[:0]); err != nil {
 		t.Fatalf("SetDynamicWorlds empty: %v", err)
+	}
+	copy(empty, "worlds:\n  - nonsense: true\n"[:len(empty)])
+	if err := h.manager.Reload(); err != nil {
+		t.Fatalf("reload after empty push: %v", err)
 	}
 	if h.routes("alice.memory.svc.cluster.local") {
 		t.Fatal("retired world still routes")
