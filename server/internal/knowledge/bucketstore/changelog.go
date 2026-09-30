@@ -1,11 +1,13 @@
 package bucketstore
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math"
+	"sync"
 
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
@@ -93,19 +95,69 @@ func (store *Store) sealChanges(ctx context.Context) {
 	}
 }
 
-// changeLog is the world's sealed blocks as the hub's backlog.
+// changeLog is the world's sealed blocks as the hub's backlog. Blocks are
+// immutable, so a ring's worth of recently read ones stay cached (LRU): a
+// burst of resumes, honest or not, costs the bucket one read per block.
 type changeLog struct {
 	objects blob.Store
 	worldID string
 	workers int
 	logger  *slog.Logger
+
+	mu     sync.Mutex
+	limit  int
+	recent *list.List // front is the most recently used *cachedBlock
+	blocks map[int64]*list.Element
 }
 
-var _ changefeed.Backlog = changeLog{}
+type cachedBlock struct {
+	index int64
+	block changeBlock
+}
+
+var _ changefeed.Backlog = (*changeLog)(nil)
+
+func newChangeLog(store *Store, ring int) *changeLog {
+	return &changeLog{
+		objects: store.objects,
+		worldID: store.worldID,
+		workers: store.shardWorkers,
+		logger:  store.logger,
+		limit:   max(ring/changeBlockSize, 1),
+		recent:  list.New(),
+		blocks:  make(map[int64]*list.Element),
+	}
+}
+
+func (backlog *changeLog) cached(index int64) (changeBlock, bool) {
+	backlog.mu.Lock()
+	defer backlog.mu.Unlock()
+	element, ok := backlog.blocks[index]
+	if !ok {
+		return changeBlock{}, false
+	}
+	backlog.recent.MoveToFront(element)
+	return element.Value.(*cachedBlock).block, true
+}
+
+func (backlog *changeLog) remember(index int64, block changeBlock) {
+	backlog.mu.Lock()
+	defer backlog.mu.Unlock()
+	if element, ok := backlog.blocks[index]; ok {
+		backlog.recent.MoveToFront(element)
+		return
+	}
+	backlog.blocks[index] = backlog.recent.PushFront(&cachedBlock{index: index, block: block})
+	for backlog.recent.Len() > backlog.limit {
+		oldest := backlog.recent.Back()
+		delete(backlog.blocks, oldest.Value.(*cachedBlock).index)
+		backlog.recent.Remove(oldest)
+	}
+}
 
 // Events reads the blocks holding (after, through]. A block not yet sealed,
 // or a receipt that names no change, fails the read: the watcher resyncs.
-func (backlog changeLog) Events(ctx context.Context, after, through uint64) ([]changefeed.Event, error) {
+func (backlog *changeLog) Events(ctx context.Context, after, through uint64) ([]changefeed.Event, error) {
 	if through <= after {
 		return nil, nil
 	}
@@ -118,15 +170,23 @@ func (backlog changeLog) Events(ctx context.Context, after, through uint64) ([]c
 		return nil, err
 	}
 	firstBlock, lastBlock := blockOf(first), blockOf(last)
-	indexes := make([]int64, 0, lastBlock-firstBlock+1)
+	blocks := make([]changeBlock, lastBlock-firstBlock+1)
+	var missing []int64
 	for index := firstBlock; index <= lastBlock; index++ {
-		indexes = append(indexes, index)
+		if block, ok := backlog.cached(index); ok {
+			blocks[index-firstBlock] = block
+		} else {
+			missing = append(missing, index)
+		}
 	}
-	blocks := make([]changeBlock, len(indexes))
-	err = runParallel(ctx, backlog.workers, indexes, func(ctx context.Context, index int64) error {
+	err = runParallel(ctx, backlog.workers, missing, func(ctx context.Context, index int64) error {
 		block, err := backlog.load(ctx, index)
+		if err != nil {
+			return err
+		}
+		backlog.remember(index, block)
 		blocks[index-firstBlock] = block
-		return err
+		return nil
 	})
 	if err != nil {
 		level := slog.LevelWarn
@@ -156,7 +216,7 @@ func (backlog changeLog) Events(ctx context.Context, after, through uint64) ([]c
 	return events, nil
 }
 
-func (backlog changeLog) load(ctx context.Context, index int64) (changeBlock, error) {
+func (backlog *changeLog) load(ctx context.Context, index int64) (changeBlock, error) {
 	block, _, err := getValidated(ctx, backlog.objects, changeBlockKey(index), func(block *changeBlock) error {
 		return validateChangeBlock(block, backlog.worldID, index)
 	})

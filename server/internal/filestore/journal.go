@@ -172,6 +172,7 @@ func (j *journal) rewrite(fingerprint string, events []changefeed.Event) error {
 	if err := j.openForAppend(); err != nil {
 		return err
 	}
+	j.appended = 0
 	if !j.retryAt.IsZero() {
 		j.retryAt = time.Time{}
 		j.logger.Info("change journal recovered", "epoch", j.epoch)
@@ -184,7 +185,7 @@ func (j *journal) openForAppend() error {
 	if err != nil {
 		return fmt.Errorf("open change journal: %w", err)
 	}
-	j.file, j.appended = file, 0
+	j.file = file
 	return nil
 }
 

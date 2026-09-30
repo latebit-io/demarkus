@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
@@ -133,4 +135,45 @@ func rewriteBlock(t *testing.T, objects blob.Store, index int64, edit func(*chan
 		t.Fatal(err)
 	}
 	replaceObject(t, objects, changeBlockKey(index), generation, data)
+}
+
+// blockReads counts bucket reads of sealed change blocks.
+type blockReads struct {
+	blob.Store
+	reads atomic.Int64
+}
+
+func (s *blockReads) Get(ctx context.Context, key string) (blob.Object, error) {
+	if strings.HasPrefix(key, objectPrefix+"changes/") {
+		s.reads.Add(1)
+	}
+	return s.Store.Get(ctx, key)
+}
+
+// Sealed blocks are immutable, so resumes share them: a second resume over
+// the same range costs the bucket nothing, and the cache stays within a
+// ring's worth of blocks.
+func TestBacklogCachesSealedBlocks(t *testing.T) {
+	objects := &blockReads{Store: initializedMemory(t)}
+	publishSeq(t, openReplica(t, objects).store, 5*changeBlockSize)
+	const ring = 4 * changeBlockSize
+	reader := (&bucketSite{objects: objects}).open(t, ring)
+	resume := func(since uint64) {
+		t.Helper()
+		sub, err := reader.Changes().Subscribe(t.Context(), "/", protocol.Cursor{Epoch: testWorldID, Seq: since})
+		if err != nil {
+			t.Fatalf("resume at %d: %v", since, err)
+		}
+		storetest.NextEvent(t, sub)
+	}
+	// The receipts cover 25 to 40, so a resume from 16 needs block 2 only.
+	resume(2 * changeBlockSize)
+	resume(2 * changeBlockSize)
+	if n := objects.reads.Load(); n != 1 {
+		t.Fatalf("two resumes over one block read the bucket %d times, want 1", n)
+	}
+	backlog := reader.backlog
+	if backlog.recent.Len() != 1 || backlog.limit != ring/changeBlockSize {
+		t.Fatalf("cache holds %d blocks with limit %d, want 1 and %d", backlog.recent.Len(), backlog.limit, ring/changeBlockSize)
+	}
 }

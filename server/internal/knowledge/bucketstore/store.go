@@ -66,6 +66,7 @@ type Store struct {
 	newOperationID func() (string, error)
 
 	changes   *changefeed.Hub
+	backlog   *changeLog
 	committed func(sequence int64)
 	// sealedThrough is the last sequence this store has sealed into a change
 	// block; below it sealChanges skips without I/O.
@@ -156,7 +157,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		newOperationID: randomOperationID,
 		committed:      options.Committed,
 	}
-	store.changes = newHub(store, options.ChangeRing)
+	store.changes, store.backlog = newHub(store, options.ChangeRing)
 	store.commitToken <- struct{}{}
 	requestCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
@@ -587,12 +588,12 @@ func nilStore(objects blob.Store) bool {
 // newHub is the world's change hub under the world ID and head sequences,
 // so cursors agree across replicas and restarts (backend.ChangeSource);
 // sealed change blocks reach back a ring. Nil when WATCH is off.
-func newHub(store *Store, ring int) *changefeed.Hub {
+func newHub(store *Store, ring int) (*changefeed.Hub, *changeLog) {
 	if ring <= 0 {
-		return nil
+		return nil, nil
 	}
-	backlog := changeLog{objects: store.objects, worldID: store.worldID, workers: store.shardWorkers, logger: store.logger}
-	return changefeed.NewWithBacklog(store.worldID, ring, backlog)
+	backlog := newChangeLog(store, ring)
+	return changefeed.NewWithBacklog(store.worldID, ring, backlog), backlog
 }
 
 // Changes is the hub this store feeds, or nil when WATCH is off.

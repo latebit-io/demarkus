@@ -51,11 +51,16 @@ var ErrNotModified = fmt.Errorf("content not modified")
 // the write happened, its durability is not confirmed.
 var ErrCommittedNotSynced = errors.New("version committed, directory sync failed")
 
-// Committed reports a write that landed, durable or not: no error, or
-// ErrCommittedNotSynced. Callers publish and index such a write and still
-// return its error.
+// ErrCommittedStale is joined with ErrConflict when the version landed and
+// is current, but past the expected version: another writer slipped in
+// between the check and the write, and the caller's precondition failed.
+var ErrCommittedStale = errors.New("version committed past the expected version")
+
+// Committed reports a write that landed, durable or not, wanted or not: no
+// error, ErrCommittedNotSynced or ErrCommittedStale. Callers publish and
+// index such a write and still return its error.
 func Committed(err error) bool {
-	return err == nil || errors.Is(err, ErrCommittedNotSynced)
+	return err == nil || errors.Is(err, ErrCommittedNotSynced) || errors.Is(err, ErrCommittedStale)
 }
 
 // ErrConflict is returned by WriteVersion when the expected version

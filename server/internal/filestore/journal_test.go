@@ -3,6 +3,7 @@ package filestore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -190,5 +191,25 @@ func TestJournalRecoversAfterLostFile(t *testing.T) {
 	}
 	if j, _ := readJournal(t, root); len(j.tail) != 3 || j.tail[2].Seq != 3 {
 		t.Fatalf("journal holds %d entries; want the 3 commits", len(j.tail))
+	}
+}
+
+// Short sessions never reach a ring of appends, so the carried count must
+// survive the reopen or the file grows by every session's writes forever.
+func TestJournalStaysBoundedAcrossRestarts(t *testing.T) {
+	root := t.TempDir()
+	const ring, sessions, each = 4, 6, 3
+	for session := range sessions {
+		store, _ := openWatched(t, root, ring)
+		for i := range each {
+			path := fmt.Sprintf("/s/%d-%d.md", session, i)
+			if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: path, Content: []byte("# s\n")}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		closeStore(t, store)
+		if j, _ := readJournal(t, root); len(j.tail) > 2*ring {
+			t.Fatalf("after session %d the journal holds %d entries; want at most %d", session+1, len(j.tail), 2*ring)
+		}
 	}
 }

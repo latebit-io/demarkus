@@ -95,7 +95,7 @@ func main() {
 		os.Exit(1)
 	}
 	doc, err := s.Write(*path, content, nil)
-	if err != nil && storefmt.Committed(err) {
+	if errors.Is(err, storefmt.ErrCommittedNotSynced) {
 		// The version is current; only its directory sync failed.
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		err = nil

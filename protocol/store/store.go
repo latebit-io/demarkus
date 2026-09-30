@@ -1570,16 +1570,11 @@ func (s *Store) WriteChecked(spec *storefmt.WriteSpec) (*storefmt.Document, erro
 		return doc, err
 	}
 
-	// Post-check: if a concurrent writer slipped in between our pre-check
-	// and Write's internal version computation, Write may have created a
-	// version beyond expectedVersion+1 (e.g. v3 instead of v2). Detect
-	// this and treat it as a conflict. The written version file is kept
-	// to avoid leaving a dangling symlink — it's a valid version with a
-	// correct hash chain, just created under stale assumptions. The prune
-	// result is preserved: the write pruned regardless of the conflict,
-	// and callers must still be able to audit-log the deletion.
+	// A writer slipping in between the pre-check and the version computation
+	// lands this version past expectedVersion+1. It is current with a valid
+	// chain, so the whole document goes back under a conflict.
 	if doc.Version != expectedVersion+1 {
-		return &storefmt.Document{Version: doc.Version, Prune: doc.Prune}, errors.Join(storefmt.ErrConflict, err)
+		return doc, errors.Join(storefmt.ErrConflict, storefmt.ErrCommittedStale, err)
 	}
 
 	return doc, err
