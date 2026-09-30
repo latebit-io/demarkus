@@ -286,7 +286,7 @@ func TestWatchResumeAndResync(t *testing.T) {
 
 // A watch that falls behind the ring is told to resync and ends.
 func TestWatchResyncsWhenLapped(t *testing.T) {
-	b := fileBackendAt(t.TempDir(), changefeed.New("w", 4))
+	b := fileBackendAt(t, t.TempDir(), 4)
 	hub, h := b.Changes, watchHandler(t, b, writeTokens(nil))
 	reader, done := startWatch(t.Context(), t, h, "WATCH /\n")
 	if ack := nextBlock(t, reader); ack.Status != protocol.StatusOK {
@@ -343,7 +343,7 @@ func TestWatchHeartbeatsThroughOmittedEvents(t *testing.T) {
 				case <-stop:
 					return
 				case <-time.After(time.Millisecond):
-					hub.Publish(changefeed.Event{Path: "/b/noise.md", Version: 1, Op: protocol.OpPublish})
+					hub.PublishAt(changefeed.Event{Seq: hub.Head().Seq + 1, Path: "/b/noise.md", Version: 1, Op: protocol.OpPublish})
 				}
 			}
 		}()
@@ -366,8 +366,8 @@ func TestWatchSkipsAnUnencodableEvent(t *testing.T) {
 		if ack := nextBlock(t, reader); ack.Status != protocol.StatusOK {
 			t.Fatalf("ack status = %q", ack.Status)
 		}
-		hub.Publish(changefeed.Event{Path: "/big.md", Version: 1, Op: protocol.OpPublish, Agent: strings.Repeat("a", protocol.MaxWatchBlockLength)})
-		hub.Publish(changefeed.Event{Path: "/next.md", Version: 1, Op: protocol.OpPublish, Agent: "fits"})
+		hub.PublishAt(changefeed.Event{Seq: hub.Head().Seq + 1, Path: "/big.md", Version: 1, Op: protocol.OpPublish, Agent: strings.Repeat("a", protocol.MaxWatchBlockLength)})
+		hub.PublishAt(changefeed.Event{Seq: hub.Head().Seq + 1, Path: "/next.md", Version: 1, Op: protocol.OpPublish, Agent: "fits"})
 		if ev := nextEvent(t, reader); ev.Path != "/next.md" || ev.Agent != "fits" {
 			t.Fatalf("event after the oversize one = %+v, want /next.md", ev)
 		}

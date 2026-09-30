@@ -11,10 +11,22 @@ import (
 )
 
 // Versions live on disk, so an agent-shaped publish-and-prune loop must leave
-// heap tracking the live documents, not the writes.
+// heap tracking the live documents, not the writes. The WATCH ring is small
+// so warmup fills it: the journal tail and hub must evict, not accumulate.
 func TestPublishPruneHeapTracksLiveData(t *testing.T) {
+	t.Run("plain", func(t *testing.T) {
+		checkPublishPruneHeap(t, New(protocolstore.New(t.TempDir()), catalog.New()))
+	})
+	t.Run("watch", func(t *testing.T) {
+		store, _ := openWatched(t, t.TempDir(), 8)
+		t.Cleanup(func() { closeStore(t, store) })
+		checkPublishPruneHeap(t, store)
+	})
+}
+
+func checkPublishPruneHeap(t *testing.T, store *Store) {
+	t.Helper()
 	ctx := t.Context()
-	store := New(protocolstore.New(t.TempDir()), catalog.New(), nil)
 	meta := map[string]string{"retention": "20", "agent": "federation"}
 	version := 0
 	publish := func(n int) {

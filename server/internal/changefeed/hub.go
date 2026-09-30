@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -25,8 +26,7 @@ var ErrResync = errors.New("changefeed: cursor cannot be resumed")
 // ErrClosed means the hub was closed under a subscriber.
 var ErrClosed = errors.New("changefeed: hub closed")
 
-// Event is one committed change. Seq is assigned by the hub on Publish, or
-// by the caller on PublishAt.
+// Event is one committed change under the store's sequence.
 type Event struct {
 	Seq     uint64
 	Path    string
@@ -44,23 +44,38 @@ type Hub struct {
 
 	mu      sync.Mutex
 	buf     []Event
+	backlog Backlog
 	lastSeq uint64
 	floor   uint64 // seqs at or below it cannot be resumed from: see Skip
 	notify  chan struct{}
 	closed  bool
 }
 
+// Backlog is a store's durable record of events older than the ring.
+type Backlog interface {
+	// Events returns every event with after < Seq <= through, in order, or
+	// an error when it cannot name them all.
+	Events(ctx context.Context, after, through uint64) ([]Event, error)
+}
+
 // New makes a hub. An empty epoch gets a random one, which is right for a
 // store whose sequence restarts with the process. ringSize <= 0 takes the
 // default.
 func New(epoch string, ringSize int) *Hub {
+	return NewWithBacklog(epoch, ringSize, nil)
+}
+
+// NewWithBacklog is New for a store that keeps events past the ring: a
+// resume the ring cannot serve, within a ring's length of the head, reads
+// the rest from backlog. Nil is New.
+func NewWithBacklog(epoch string, ringSize int, backlog Backlog) *Hub {
 	if epoch == "" {
 		epoch = NewEpoch()
 	}
 	if ringSize <= 0 {
 		ringSize = DefaultRingSize
 	}
-	return &Hub{epoch: epoch, buf: make([]Event, ringSize), notify: make(chan struct{})}
+	return &Hub{epoch: epoch, buf: make([]Event, ringSize), backlog: backlog, notify: make(chan struct{})}
 }
 
 // NewEpoch returns a random epoch in the cursor grammar.
@@ -88,24 +103,30 @@ func (h *Hub) cursor(seq uint64) protocol.Cursor {
 	return protocol.Cursor{Epoch: h.epoch, Seq: seq}
 }
 
-// Publish appends ev with the next sequence number and wakes subscribers.
-// It never blocks on a reader. Returns the event's cursor.
-func (h *Hub) Publish(ev Event) protocol.Cursor {
+// Retained copies the events the ring holds, oldest first.
+func (h *Hub) Retained() []Event {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	ev.Seq = h.lastSeq + 1
-	h.append(ev)
-	return h.cursor(ev.Seq)
+	events := make([]Event, 0, h.lastSeq+1-h.oldest())
+	for seq := h.oldest(); seq <= h.lastSeq; seq++ {
+		if ev := h.buf[h.slot(seq)]; ev.Seq == seq {
+			events = append(events, ev)
+		}
+	}
+	return events
 }
 
-// PublishAt appends ev under its own Seq, for a store whose commits carry a
-// shared sequence. A Seq the hub already passed is dropped, reported false:
-// the same commit reached the hub twice.
+// PublishAt appends ev under the store's own Seq (backend.ChangeSource); it
+// never blocks on a reader. A Seq already passed is dropped (false); a Seq
+// past the next leaves a gap nobody can name, unresumable as after Skip.
 func (h *Hub) PublishAt(ev Event) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if ev.Seq <= h.lastSeq {
 		return false
+	}
+	if ev.Seq > h.lastSeq+1 {
+		h.floor = max(h.floor, ev.Seq-1)
 	}
 	h.append(ev)
 	return true
@@ -162,39 +183,92 @@ func (h *Hub) Close() {
 	h.notify = make(chan struct{})
 }
 
-// Subscription reads one scope's events from the hub in order.
+// Subscription reads one scope's events from the hub in order: first any
+// backlog loaded at Subscribe, then the ring.
 type Subscription struct {
-	hub   *Hub
-	scope string
-	next  uint64 // Seq of the next event to read
+	hub     *Hub
+	scope   string
+	backlog []Event // unread in-scope events older than the ring, in order
+	next    uint64  // Seq of the next event to read from the ring
 }
 
 // Subscribe starts a subscription over scope ("/" for everything, a prefix
-// ending in "/" for a subtree, else one document). A zero cursor starts at
-// the head; otherwise delivery resumes after since, or ErrResync.
-func (h *Hub) Subscribe(scope string, since protocol.Cursor) (*Subscription, error) {
+// ending in "/" for a subtree, else one document) at the head, or after
+// since, or ErrResync. Only a resume older than the ring does backlog I/O.
+func (h *Hub) Subscribe(ctx context.Context, scope string, since protocol.Cursor) (*Subscription, error) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if since.IsZero() {
-		return &Subscription{hub: h, scope: scope, next: h.lastSeq + 1}, nil
-	}
-	if since.Epoch != h.epoch || since.Seq > h.lastSeq || since.Seq+1 < h.oldest() {
+	head, oldest := h.lastSeq, h.oldest()
+	h.mu.Unlock()
+	switch {
+	case since.IsZero():
+		return &Subscription{hub: h, scope: scope, next: head + 1}, nil
+	case since.Epoch != h.epoch || since.Seq > head:
+		return nil, ErrResync
+	case since.Seq+1 >= oldest:
+		// Next resyncs if the ring passes since before the first read.
+		return &Subscription{hub: h, scope: scope, next: since.Seq + 1}, nil
+	case h.backlog == nil || head-since.Seq > uint64(len(h.buf)):
 		return nil, ErrResync
 	}
-	return &Subscription{hub: h, scope: scope, next: since.Seq + 1}, nil
+	return h.resume(ctx, scope, since.Seq, oldest-1)
+}
+
+// resume loads (after, through] from the backlog outside the lock, then
+// joins the ring at through+1 unless the ring moved past it meanwhile.
+func (h *Hub) resume(ctx context.Context, scope string, after, through uint64) (*Subscription, error) {
+	events, err := h.backlog.Events(ctx, after, through)
+	if err != nil {
+		return nil, fmt.Errorf("%w: backlog: %w", ErrResync, err)
+	}
+	want := after
+	for _, ev := range events {
+		want++
+		if ev.Seq != want {
+			return nil, fmt.Errorf("%w: backlog event has seq %d, want %d", ErrResync, ev.Seq, want)
+		}
+	}
+	if want != through {
+		return nil, fmt.Errorf("%w: backlog ended at seq %d, want %d", ErrResync, want, through)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if through+1 < h.oldest() {
+		return nil, fmt.Errorf("%w: ring passed seq %d during the backlog read", ErrResync, through+1)
+	}
+	// A fresh slice, so an idle narrow watch holds only its own events.
+	var kept []Event
+	for _, ev := range events {
+		if inScope(scope, ev.Path) {
+			kept = append(kept, ev)
+		}
+	}
+	return &Subscription{hub: h, scope: scope, backlog: kept, next: through + 1}, nil
 }
 
 // Scope is what the subscription was opened over.
 func (s *Subscription) Scope() string { return s.scope }
 
-// Cursor is the position to resume from: the last event consumed, matching
-// or not, so a resume replays as little as possible.
-func (s *Subscription) Cursor() protocol.Cursor { return s.hub.cursor(s.next - 1) }
+// Cursor is the position to resume from: just before the next event in
+// scope, so a resume replays as little as possible.
+func (s *Subscription) Cursor() protocol.Cursor {
+	if len(s.backlog) > 0 {
+		return s.hub.cursor(s.backlog[0].Seq - 1)
+	}
+	return s.hub.cursor(s.next - 1)
+}
 
 // Next returns the next event in scope, waiting for one. It returns
 // ErrResync once the ring has overwritten unread events, ErrClosed after
 // Close, or ctx's error.
 func (s *Subscription) Next(ctx context.Context) (Event, error) {
+	if len(s.backlog) > 0 {
+		ev := s.backlog[0]
+		s.backlog = s.backlog[1:]
+		if len(s.backlog) == 0 {
+			s.backlog = nil // release the loaded array
+		}
+		return ev, nil
+	}
 	h := s.hub
 	for {
 		h.mu.Lock()

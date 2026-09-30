@@ -26,10 +26,12 @@ type backend struct {
 type backendFactory func(t testing.TB) backend
 
 // fileBackend is the file store over a temp root with the in-memory catalog.
-func fileBackend(t testing.TB) backend { return fileBackendAt(t.TempDir(), changefeed.New("w", 0)) }
+func fileBackend(t testing.TB) backend { return fileBackendAt(t, t.TempDir(), 0) }
 
-// fileBackendAt roots the file store at dir, for tests that touch the disk.
-func fileBackendAt(dir string, changes *changefeed.Hub) backend {
+// fileBackendAt roots the file store at dir, for tests that touch the disk,
+// with WATCH on over a hub of ring events (0 for the default).
+func fileBackendAt(t testing.TB, dir string, ring int) backend {
+	t.Helper()
 	s := store.New(dir)
 	tamper := func(t testing.TB, path string, version int, stored []byte) {
 		t.Helper()
@@ -41,7 +43,19 @@ func fileBackendAt(dir string, changes *changefeed.Hub) backend {
 			t.Fatalf("tamper %s v%d: %v", path, version, err)
 		}
 	}
-	return backend{Store: filestore.New(s, catalog.New(), changes), Changes: changes, Tamper: tamper}
+	if ring <= 0 {
+		ring = changefeed.DefaultRingSize
+	}
+	fs, err := filestore.Open(s, catalog.New(), filestore.Options{ChangeRing: ring, Logger: discardLogger})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := fs.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+	return backend{Store: fs, Changes: fs.Changes(), Tamper: tamper}
 }
 
 // forEachBackend runs fn per backend; only the file store remains, and the

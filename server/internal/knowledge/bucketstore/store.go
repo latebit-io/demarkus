@@ -39,10 +39,10 @@ type Options struct {
 	MaxDocuments int
 	// Logger receives section-index warnings; nil uses slog.Default.
 	Logger *slog.Logger
-	// Changes receives a hint for every commit the head's receipts name,
-	// under the head sequence, whenever a snapshot is installed. Nil
-	// reports nothing.
-	Changes *changefeed.Hub
+	// ChangeRing enables WATCH: the hub keeps this many events, fed with a
+	// hint for every commit the head's receipts name, under the head
+	// sequence, whenever a snapshot is installed. Zero leaves WATCH off.
+	ChangeRing int
 	// Committed runs after each of this replica's own commits with its head
 	// sequence, outside every lock; nil for none.
 	Committed func(sequence int64)
@@ -67,6 +67,9 @@ type Store struct {
 
 	changes   *changefeed.Hub
 	committed func(sequence int64)
+	// sealedThrough is the last sequence this store has sealed into a change
+	// block; below it sealChanges skips without I/O.
+	sealedThrough atomic.Int64
 }
 
 var (
@@ -151,9 +154,9 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		commitInterval: defaultCommitInterval,
 		now:            time.Now,
 		newOperationID: randomOperationID,
-		changes:        options.Changes,
 		committed:      options.Committed,
 	}
+	store.changes = newHub(store, options.ChangeRing)
 	store.commitToken <- struct{}{}
 	requestCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
@@ -205,24 +208,34 @@ func loadRootSnapshot(ctx context.Context, objects blob.Store, worldID string, w
 }
 
 func loadHeadObject(ctx context.Context, objects blob.Store, worldID string) (headObject, blob.Attributes, error) {
-	var head headObject
-	headValue, err := objects.Get(ctx, headObjectKey)
+	head, attributes, err := getValidated(ctx, objects, headObjectKey, validateHeadObject)
 	if err != nil {
-		return head, blob.Attributes{}, fmt.Errorf("read head: %w", err)
-	}
-	if err := validateReadObject(headObjectKey, &headValue); err != nil {
 		return head, blob.Attributes{}, err
-	}
-	if err := decodeImmutable(headValue.Data, &head); err != nil {
-		return head, blob.Attributes{}, fmt.Errorf("%w: decode head: %v", blob.ErrIntegrity, err)
-	}
-	if err := validateHeadObject(&head); err != nil {
-		return head, blob.Attributes{}, fmt.Errorf("%w: validate head: %v", blob.ErrIntegrity, err)
 	}
 	if head.WorldID != worldID {
 		return head, blob.Attributes{}, fmt.Errorf("%w: configured world ID %q does not match head world ID %q", blob.ErrPrecondition, worldID, head.WorldID)
 	}
-	return head, headValue.Attributes, nil
+	return head, attributes, nil
+}
+
+// getValidated reads the object at a fixed key; a defect in its encoding
+// or content is an integrity failure.
+func getValidated[T any](ctx context.Context, objects blob.Store, key string, validate func(*T) error) (T, blob.Attributes, error) {
+	var value T
+	object, err := objects.Get(ctx, key)
+	if err != nil {
+		return value, blob.Attributes{}, fmt.Errorf("read %q: %w", key, err)
+	}
+	if err := validateReadObject(key, &object); err != nil {
+		return value, blob.Attributes{}, err
+	}
+	if err := decodeImmutable(object.Data, &value); err != nil {
+		return value, blob.Attributes{}, fmt.Errorf("%w: decode %q: %v", blob.ErrIntegrity, key, err)
+	}
+	if err := validate(&value); err != nil {
+		return value, blob.Attributes{}, fmt.Errorf("%w: validate %q: %v", blob.ErrIntegrity, key, err)
+	}
+	return value, object.Attributes, nil
 }
 
 func (store *Store) refreshSnapshot(ctx context.Context) (*snapshot, error) {
@@ -570,3 +583,17 @@ func nilStore(objects blob.Store) bool {
 		return false
 	}
 }
+
+// newHub is the world's change hub under the world ID and head sequences,
+// so cursors agree across replicas and restarts (backend.ChangeSource);
+// sealed change blocks reach back a ring. Nil when WATCH is off.
+func newHub(store *Store, ring int) *changefeed.Hub {
+	if ring <= 0 {
+		return nil
+	}
+	backlog := changeLog{objects: store.objects, worldID: store.worldID, workers: store.shardWorkers, logger: store.logger}
+	return changefeed.NewWithBacklog(store.worldID, ring, backlog)
+}
+
+// Changes is the hub this store feeds, or nil when WATCH is off.
+func (store *Store) Changes() *changefeed.Hub { return store.changes }

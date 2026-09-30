@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,6 +147,7 @@ func (s *Sender) Run(ctx context.Context) {
 			s.config.Logger.Warn("peerhint: resolving peers; hints dropped", "error", err)
 			continue
 		}
+		s.forgetGone(peers)
 		for _, peer := range peers {
 			for _, hint := range batch {
 				if !s.send(ctx, peer, hint) {
@@ -218,6 +220,22 @@ func (s *Sender) drop(peer string, conn *quic.Conn) {
 	s.mu.Unlock()
 	if err := conn.CloseWithError(0, "hint failed"); err != nil {
 		s.config.Logger.Debug("peerhint: closing peer connection", "peer", peer, "error", err)
+	}
+}
+
+// forgetGone closes connections to peers no longer resolved. Pods move to
+// new addresses on every rollout, so without this the map only grows.
+func (s *Sender) forgetGone(peers []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for peer, conn := range s.conns {
+		if slices.Contains(peers, peer) {
+			continue
+		}
+		delete(s.conns, peer)
+		if err := conn.CloseWithError(0, "peer gone"); err != nil {
+			s.config.Logger.Debug("peerhint: closing departed peer connection", "peer", peer, "error", err)
+		}
 	}
 }
 

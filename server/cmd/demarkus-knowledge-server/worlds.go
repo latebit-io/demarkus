@@ -239,19 +239,19 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	// replica and across a restart. The store reports every replica's
 	// commits from the head's receipts; hints and the poll make it look.
 	worldID := world.Bucket.WorldID
-	changes := changefeed.New(worldID, 0)
 	store, err := bucketstore.Open(ctx, objects, bucketstore.Options{
 		WorldID:        worldID,
 		Logger:         m.logger.With("world", world.Name),
 		RequestTimeout: time.Duration(world.Limits.RequestTimeout),
 		MaxDocuments:   world.Limits.MaxDocuments,
 		ReadOnly:       world.ReadOnly,
-		Changes:        changes,
+		ChangeRing:     changefeed.DefaultRingSize,
 		Committed:      m.committed(worldID),
 	})
 	if err != nil {
 		return fmt.Errorf("bucket: %w", err)
 	}
+	changes := store.Changes()
 	// Every world holds a usable policy before it serves a write. A provisioned
 	// world's broker replaces the marked seed with its own as version two.
 	created, err := writepolicy.Ensure(ctx, store, seed)

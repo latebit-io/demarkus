@@ -34,8 +34,13 @@ func (store *Store) report(snap *snapshot) {
 			hub.Skip(seq)
 			continue
 		}
-		hub.PublishAt(changefeed.Event{Seq: seq, Path: receipt.Path, Version: receipt.Version, Hash: receipt.Hash, Op: receipt.Op, Agent: receipt.Agent})
+		hub.PublishAt(receiptEvent(receipt))
 	}
+}
+
+// receiptEvent is the change hint a receipt names.
+func receiptEvent(receipt *operationReceipt) changefeed.Event {
+	return changefeed.Event{Seq: hubSeq(receipt.Sequence), Path: receipt.Path, Version: receipt.Version, Hash: receipt.Hash, Op: receipt.Op, Agent: receipt.Agent}
 }
 
 // hubSeq is a head sequence as a cursor sequence; heads are validated

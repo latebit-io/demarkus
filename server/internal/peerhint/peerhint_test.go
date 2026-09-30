@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -157,3 +158,38 @@ func (memStream) Write(p []byte) (int, error)      { return len(p), nil }
 func (memStream) Close() error                     { return nil }
 func (memStream) SetReadDeadline(time.Time) error  { return nil }
 func (memStream) SetWriteDeadline(time.Time) error { return nil }
+
+// A rollout moves every peer to a new address; the sender must let go of
+// connections to the old ones, or its map grows with every rollout.
+func TestSenderForgetsDepartedPeers(t *testing.T) {
+	a := listen(t)
+	var current atomic.Pointer[[]string]
+	current.Store(&[]string{a.addr})
+	sender := NewSender(SenderConfig{
+		Peers:  func(context.Context) ([]string, error) { return *current.Load(), nil },
+		TLS:    ClientTLS(ownCertificate(a.cert)),
+		Logger: discardLogger,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); sender.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	sender.Hint("world-1", 1)
+	a.waitFor(t, 1)
+	current.Store(&[]string{})
+	sender.Hint("world-1", 2)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		sender.mu.Lock()
+		held := len(sender.conns)
+		sender.mu.Unlock()
+		if held == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the sender still holds %d connections to departed peers", held)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

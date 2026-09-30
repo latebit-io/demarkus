@@ -95,9 +95,15 @@ func validateHeadObject(head *headObject) error {
 	if err := verifyRef(head.Root, rootKey(head.Root.Hash)); err != nil {
 		return fmt.Errorf("root reference: %w", err)
 	}
-	seen := make(map[string]struct{}, len(head.Receipts))
-	for index, receipt := range head.Receipts {
-		expectedSequence := head.Sequence - int64(len(head.Receipts)) + int64(index) + 1
+	return validateReceipts(head.Receipts, head.Sequence-int64(len(head.Receipts))+1)
+}
+
+// validateReceipts checks a run of committed receipts starting at first,
+// as the head and a change block hold them.
+func validateReceipts(receipts []operationReceipt, first int64) error {
+	seen := make(map[string]struct{}, len(receipts))
+	for index, receipt := range receipts {
+		expectedSequence := first + int64(index)
 		if !validWorldID(receipt.OperationID) {
 			return fmt.Errorf("receipt %d has invalid operation ID %q", index, receipt.OperationID)
 		}

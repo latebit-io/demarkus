@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
+	"github.com/latebit-io/demarkus/server/internal/storetest"
 )
 
 // replica is one store over the shared bucket with its own hub, under the
@@ -25,38 +26,18 @@ type replica struct {
 
 func openReplica(t *testing.T, objects blob.Store) replica {
 	t.Helper()
-	hub := changefeed.New(testWorldID, 0)
-	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID, Changes: hub})
-	if err != nil {
-		t.Fatalf("open replica: %v", err)
-	}
-	store.commitInterval = 0
-	sub, err := hub.Subscribe("/", protocol.Cursor{})
+	store := (&bucketSite{objects: objects}).open(t, changefeed.DefaultRingSize)
+	hub := store.Changes()
+	sub, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return replica{store: store, hub: hub, sub: sub}
 }
 
-func (r replica) next(t *testing.T) changefeed.Event {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	ev, err := r.sub.Next(ctx)
-	if err != nil {
-		t.Fatalf("Next: %v", err)
-	}
-	return ev
-}
+func (r replica) next(t *testing.T) changefeed.Event { return storetest.NextEvent(t, r.sub) }
 
-func (r replica) quiet(t *testing.T) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if ev, err := r.sub.Next(ctx); err == nil {
-		t.Fatalf("unexpected event %+v", ev)
-	}
-}
+func (r replica) quiet(t *testing.T) { storetest.Quiet(t, r.sub) }
 
 func (r replica) poll(t *testing.T) {
 	t.Helper()
@@ -133,7 +114,7 @@ func TestReplicasShareOneSequence(t *testing.T) {
 	if c.hub.Head() != a.hub.Head() {
 		t.Fatalf("late replica head = %v, want %v", c.hub.Head(), a.hub.Head())
 	}
-	moved, err := c.hub.Subscribe("/", protocol.Cursor{Epoch: testWorldID, Seq: 3})
+	moved, err := c.hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: testWorldID, Seq: 3})
 	if err != nil {
 		t.Fatalf("resume on the late replica: %v", err)
 	}
@@ -189,7 +170,7 @@ func TestGapBeyondReceiptsResyncs(t *testing.T) {
 	if b.hub.Head() != a.hub.Head() {
 		t.Fatalf("heads differ after the gap: %v vs %v", b.hub.Head(), a.hub.Head())
 	}
-	fresh, err := b.hub.Subscribe("/", b.hub.Head())
+	fresh, err := b.hub.Subscribe(t.Context(), "/", b.hub.Head())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +188,7 @@ func TestGapBeyondReceiptsResyncs(t *testing.T) {
 func TestUnnamedReceiptSkips(t *testing.T) {
 	hub := changefeed.New(testWorldID, 0)
 	store := &Store{changes: hub}
-	sub, _ := hub.Subscribe("/", protocol.Cursor{})
+	sub, _ := hub.Subscribe(t.Context(), "/", protocol.Cursor{})
 	store.report(&snapshot{
 		Head: headObject{Sequence: 3, Receipts: []operationReceipt{
 			{Sequence: 2, Result: "committed"},
@@ -219,7 +200,7 @@ func TestUnnamedReceiptSkips(t *testing.T) {
 	if _, err := sub.Next(ctx); !errors.Is(err, changefeed.ErrResync) {
 		t.Fatalf("across the unnamed receipt got %v, want ErrResync", err)
 	}
-	resumed, err := hub.Subscribe("/", protocol.Cursor{Epoch: testWorldID, Seq: 2})
+	resumed, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: testWorldID, Seq: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,4 +261,42 @@ func TestLocalHintsFollowCommitOrder(t *testing.T) {
 		}
 	}
 	a.quiet(t)
+}
+
+// bucketSite is one bucket. Tamper commits through a second store with no
+// hub, as a peer replica does; the head's receipts name it on reopen.
+type bucketSite struct{ objects blob.Store }
+
+func (s *bucketSite) open(t *testing.T, ring int) *Store {
+	t.Helper()
+	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	store.commitInterval = 0
+	return store
+}
+
+// siteRing holds the suite's 48 concurrent events, and a resume across
+// reopen reaches past the receipts into sealed change blocks.
+const siteRing = 4 * maximumReceipts
+
+func (s *bucketSite) Open(t *testing.T) storetest.ChangeBackend {
+	return storetest.ChangeBackend{Store: s.open(t, siteRing)}
+}
+
+func (s *bucketSite) Tamper(t *testing.T, path string) {
+	t.Helper()
+	if _, err := s.open(t, 0).Publish(context.Background(), backend.WriteRequest{Path: path, Content: []byte("# peer\n")}); err != nil {
+		t.Fatalf("tamper %s: %v", path, err)
+	}
+}
+
+// Window is the ring: receipts, then sealed blocks, name the rest.
+func (s *bucketSite) Window() int { return siteRing }
+
+func TestChangeConformance(t *testing.T) {
+	storetest.RunChangeConformance(t, func(t *testing.T) storetest.ChangeSite {
+		return &bucketSite{objects: initializedMemory(t)}
+	})
 }

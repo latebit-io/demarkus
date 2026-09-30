@@ -2144,12 +2144,12 @@ func TestHashIndex(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
-		s.UpdateHashIndex("/doc.md", []byte("old"))
+		s.UpdateHashIndex("/doc.md", []byte("old"), 1)
 		if _, err := s.LookupHashResult(wantHash("old")); err != nil {
 			t.Fatalf("expected old hash to exist: %v", err)
 		}
 
-		s.UpdateHashIndex("/doc.md", []byte("new"))
+		s.UpdateHashIndex("/doc.md", []byte("new"), 2)
 		if _, err := s.LookupHashResult(wantHash("old")); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("old hash lookup: err = %v, want ErrNotExist", err)
 		}
@@ -2163,7 +2163,7 @@ func TestHashIndex(t *testing.T) {
 		root := t.TempDir()
 		s := New(root)
 
-		s.UpdateHashIndex("/doc.md", []byte("content"))
+		s.UpdateHashIndex("/doc.md", []byte("content"), 1)
 		s.RemoveHashEntry("/doc.md")
 		if _, err := s.LookupHashResult(wantHash("content")); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("removed entry lookup: err = %v, want ErrNotExist", err)
@@ -2487,5 +2487,64 @@ func TestValidateDocumentContent(t *testing.T) {
 				t.Errorf("ValidateDocumentContent(%q, %d bytes) = %v, want %v", tt.path, len(tt.content), err, tt.want)
 			}
 		})
+	}
+}
+
+// Fingerprint names the set of current documents by path and content, not
+// the order they were written or indexed in, and moves on every change to
+// that set.
+func TestFingerprint(t *testing.T) {
+	write := func(t *testing.T, s *Store, path, body string) {
+		t.Helper()
+		if _, err := s.WriteChecked(&storefmt.WriteSpec{Path: path, ExpectedVersion: -1, Content: []byte(body)}); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	a, b := New(t.TempDir()), New(t.TempDir())
+	if a.Fingerprint() != "" {
+		t.Fatal("a fingerprint before the index is built")
+	}
+	for _, s := range []*Store{a, b} {
+		if err := s.BuildHashIndex(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a.Fingerprint() != b.Fingerprint() {
+		t.Fatal("two empty stores differ")
+	}
+	write(t, a, "/x.md", "# x\n")
+	write(t, a, "/y.md", "# y\n")
+	write(t, b, "/y.md", "# y\n")
+	write(t, b, "/x.md", "# x\n")
+	if a.Fingerprint() != b.Fingerprint() {
+		t.Fatal("same documents in another order differ")
+	}
+	before := a.Fingerprint()
+	write(t, a, "/x.md", "# x2\n")
+	if a.Fingerprint() == before {
+		t.Fatal("a new version left the fingerprint unchanged")
+	}
+	// A version that changes only metadata is a version too.
+	sameBody := a.Fingerprint()
+	if _, err := a.WriteChecked(&storefmt.WriteSpec{Path: "/x.md", ExpectedVersion: -1, Content: []byte("# x2\n"), Metadata: map[string]string{"tags": "t"}}); err != nil {
+		t.Fatal(err)
+	}
+	if a.Fingerprint() == sameBody {
+		t.Fatal("a metadata-only version left the fingerprint unchanged")
+	}
+	if _, _, err := a.ArchiveChecked(&storefmt.ArchiveSpec{ArchiveChange: storefmt.ArchiveChange{Path: "/y.md", Archived: true}}); err != nil {
+		t.Fatal(err)
+	}
+	archived := a.Fingerprint()
+	if archived == before {
+		t.Fatal("an archive left the fingerprint unchanged")
+	}
+	// A rebuilt index over the same tree agrees with the incremental value.
+	reopened := New(a.Root())
+	if err := reopened.BuildHashIndex(); err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Fingerprint() != archived {
+		t.Fatalf("rebuilt fingerprint %s != incremental %s", reopened.Fingerprint(), archived)
 	}
 }

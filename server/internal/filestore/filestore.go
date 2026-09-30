@@ -3,6 +3,8 @@ package filestore
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"sync"
 
 	"github.com/latebit-io/demarkus/protocol"
@@ -13,27 +15,91 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
+// ErrClosed means a write reached the store after Close.
+var ErrClosed = errors.New("filestore: store is closed")
+
 // Store keeps file data, hash state, and catalog state behind one lock.
 type Store struct {
 	mu        sync.RWMutex
 	documents *protocolstore.Store
 	catalog   *catalog.Catalog
-	changes   *changefeed.Hub
+	closed    bool
+
+	// WATCH state, fixed at Open: the hub and the journal that makes its
+	// sequence durable. The hub's head is the last sequence assigned.
+	changes *changefeed.Hub
+	journal *journal
 }
 
 var _ backend.Store = (*Store)(nil)
 
-// New wraps one file store and its derived catalog. changes, if not nil,
-// gets a hint for every commit under the write lock, so hints follow
-// commit order.
-func New(documents *protocolstore.Store, lookup *catalog.Catalog, changes *changefeed.Hub) *Store {
-	return &Store{documents: documents, catalog: lookup, changes: changes}
+// Options configures WATCH on a file store.
+type Options struct {
+	// ChangeRing enables WATCH with a hub of this many events; zero leaves
+	// WATCH off.
+	ChangeRing int
+	// Logger receives change journal notices; nil uses slog.Default.
+	Logger *slog.Logger
 }
 
-func (s *Store) hint(path string, doc *storefmt.Document, op string) {
-	if s.changes != nil {
-		s.changes.Publish(changefeed.DocumentEvent(path, doc, op))
+// New wraps one file store and its derived catalog, without WATCH.
+func New(documents *protocolstore.Store, lookup *catalog.Catalog) *Store {
+	return &Store{documents: documents, catalog: lookup}
+}
+
+// Open is New plus WATCH (backend.ChangeSource): the change journal beside
+// the documents is restored against the hash index's fingerprint, so build
+// the index first or every open starts a new epoch.
+func Open(documents *protocolstore.Store, lookup *catalog.Catalog, opts Options) (*Store, error) {
+	s := New(documents, lookup)
+	if opts.ChangeRing <= 0 {
+		return s, nil
 	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	journal, err := openJournal(documents.Root(), documents.Fingerprint(), opts.ChangeRing, logger)
+	if err != nil {
+		return nil, err
+	}
+	hub := changefeed.New(journal.epoch, opts.ChangeRing)
+	for _, ev := range journal.tail {
+		hub.PublishAt(ev)
+	}
+	restored := len(journal.tail)
+	journal.tail, journal.retained = nil, hub.Retained
+	s.changes, s.journal = hub, journal
+	logger.Info("change journal restored", "epoch", hub.Epoch(), "events", restored, "head", hub.Head().Seq)
+	return s, nil
+}
+
+// Changes is the hub Open created, or nil when WATCH is off.
+func (s *Store) Changes() *changefeed.Hub { return s.changes }
+
+// Close ends every watch, releases the change journal and refuses later
+// writes; the documents need no close.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	if s.changes == nil {
+		return nil
+	}
+	s.changes.Close()
+	return s.journal.close()
+}
+
+// hint numbers and publishes one commit under the caller's write lock,
+// journal first.
+func (s *Store) hint(path string, doc *storefmt.Document, op string) {
+	if s.changes == nil {
+		return
+	}
+	ev := changefeed.DocumentEvent(path, doc, op)
+	ev.Seq = s.changes.Head().Seq + 1
+	s.journal.append(ev, s.documents.Fingerprint())
+	s.changes.PublishAt(ev)
 }
 
 // call runs one store operation unless ctx is already done, and reports a
@@ -62,27 +128,27 @@ func (s *Store) writeSpec(ctx context.Context, req *backend.WriteRequest) *store
 
 // Publish commits document and catalog state under one lock.
 func (s *Store) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
-	return call(ctx, func() (*storefmt.Document, error) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		document, err := s.documents.WriteChecked(s.writeSpec(ctx, &req))
-		if err == nil {
-			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
-			s.hint(req.Path, document, protocol.OpPublish)
-		}
-		return document, err
-	})
+	return s.commit(ctx, &req, protocol.OpPublish, s.documents.WriteChecked)
 }
 
 // Append commits document and catalog state under one lock.
 func (s *Store) Append(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
+	return s.commit(ctx, &req, protocol.OpAppend, s.documents.AppendChecked)
+}
+
+// commit runs one write under the lock; a version that landed, durable or
+// not, reaches the catalog and the watchers before its error is returned.
+func (s *Store) commit(ctx context.Context, req *backend.WriteRequest, op string, write func(*storefmt.WriteSpec) (*storefmt.Document, error)) (*storefmt.Document, error) {
 	return call(ctx, func() (*storefmt.Document, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		document, err := s.documents.AppendChecked(s.writeSpec(ctx, &req))
-		if err == nil {
+		if s.closed {
+			return nil, ErrClosed
+		}
+		document, err := write(s.writeSpec(ctx, req))
+		if storefmt.Committed(err) {
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
-			s.hint(req.Path, document, protocol.OpAppend)
+			s.hint(req.Path, document, op)
 		}
 		return document, err
 	})
@@ -93,6 +159,9 @@ func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (ba
 	return call(ctx, func() (backend.ArchiveResult, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.closed {
+			return backend.ArchiveResult{}, ErrClosed
+		}
 		spec := &storefmt.ArchiveSpec{ArchiveChange: storefmt.ArchiveChange{Path: req.Path, Archived: req.Archived}}
 		if req.Precondition != nil {
 			// Under the write lock, reading the state the change commits against.
@@ -108,7 +177,7 @@ func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (ba
 		default:
 			s.catalog.Put(req.Path, document.Metadata, document.Content, document.Modified)
 		}
-		if changed && err == nil {
+		if changed {
 			s.hint(req.Path, document, changefeed.ArchiveOp(req.Archived))
 		}
 		return backend.ArchiveResult{Document: document, Changed: changed}, err

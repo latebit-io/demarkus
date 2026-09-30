@@ -20,12 +20,18 @@ const (
 	commitRebase
 )
 
-// runMutation commits one mutation, then runs the Committed hook with the
-// commit token released: a hook that reenters the store must not deadlock.
+// runMutation commits one mutation, then runs the Committed hook and seals
+// change blocks with the commit token released: a hook that reenters the
+// store must not deadlock. The seal outlives a caller that hangs up.
 func (store *Store) runMutation(ctx context.Context, build mutationBuilder) (mutationResult, error) {
 	result, err := store.commitMutation(ctx, build)
-	if err == nil && result.Sequence != 0 && store.committed != nil {
-		store.committed(result.Sequence)
+	if err == nil && result.Sequence != 0 {
+		if store.committed != nil {
+			store.committed(result.Sequence)
+		}
+		sealCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), store.requestTimeout)
+		store.sealChanges(sealCtx)
+		cancel()
 	}
 	return result, err
 }

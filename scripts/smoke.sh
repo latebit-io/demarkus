@@ -356,12 +356,13 @@ smoke_file() {
   expect "restart rebuilds the lookup catalog" 'lookup catalog built.*entries=[1-9]' -- tail -n 12 "$WORK/file.log"
   expect "restart serves the same data" 'version=2' -- "${C[@]}" "$U/docs/a.md"
   expect "restart keeps a valid chain" 'chain-valid=true' -- "${C[@]}" -X VERSIONS "$U/docs/a.md"
-  # The watch outlives the restart: one resync, then it delivers again. The
-  # publish waits for the reconnect, since a resync hands out the head.
+  # The watch outlives the restart without a resync: the change journal
+  # keeps the epoch and sequence, so the cursor resumes where it was.
+  expect "restart restored the change journal" 'msg="change journal restored"' -- tail -n "+$((before_restart + 1))" "$WORK/file.log"
   retry "watch reconnected after the restart" sh -c "tail -n +$((before_restart + 1)) '$WORK/file.log' | grep -q 'msg=watch '"
   expect "publish after the restart" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -body "# Again" "$U/watched/again.md"
-  watch_lines 5
-  expect "watch resynced across the restart" $'\tresync\t' -- cat "$WORK/watch.out"
+  watch_lines 4
+  refute "no resync across the file server restart" 'resync' -- cat "$WORK/watch.out"
   expect "watch delivers after the restart" $'\tpublish\t/watched/again\.md\t1\t' -- cat "$WORK/watch.out"
   stop_watch
   stop_server

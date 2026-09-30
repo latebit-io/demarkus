@@ -34,7 +34,7 @@ func (h *Handler) serveWatch(ctx context.Context, w io.Writer, req protocol.Requ
 		return
 	}
 	scope := scopePath(req.Path)
-	sub, err := h.changes.Subscribe(scope, since)
+	sub, err := h.changes.Subscribe(ctx, scope, since)
 	if err != nil {
 		// Subscribe refuses only a cursor it cannot resume from.
 		h.logger.Info("watch resync", "path", sanitize(scope), "since", since.String(), "error", err)
@@ -85,7 +85,7 @@ func (h *Handler) pumpUntilBeat(ctx context.Context, w io.Writer, token string, 
 			if h.tokenStore().AuthorizeRead(token, ev.Path) != nil {
 				continue
 			}
-			return "", protocol.Cursor{}, !h.writeBlock(w, h.eventBlock(ev))
+			return "", protocol.Cursor{}, !h.writeBlock(w, ev.Block(h.changes.Epoch()))
 		case ctx.Err() != nil:
 			h.logger.Debug("watch ended", "path", sanitize(scope), "error", ctx.Err())
 			return "", protocol.Cursor{}, true
@@ -105,17 +105,6 @@ func (h *Handler) pumpUntilBeat(ctx context.Context, w io.Writer, token string, 
 			return "", protocol.Cursor{}, true
 		}
 	}
-}
-
-func (h *Handler) eventBlock(ev changefeed.Event) protocol.WatchBlock {
-	return protocol.WatchEvent{
-		Cursor:  protocol.Cursor{Epoch: h.changes.Epoch(), Seq: ev.Seq},
-		Path:    ev.Path,
-		Version: ev.Version,
-		Hash:    ev.Hash,
-		Op:      ev.Op,
-		Agent:   ev.Agent,
-	}.Block()
 }
 
 // writeBlock writes one block; false means the peer is gone and the watch

@@ -125,6 +125,7 @@ A healthy server returns:
 - Denies writes when no tokens file is set
 - Enforces path traversal protection
 - Limits file size to 1 MB
+- Keeps a change journal at `<root>/.changes` so WATCH cursors survive a restart; a tree edited while the server was down (for example with `demarkus-publish`) starts a new epoch and watchers resync
 
 ## Multi-World Mode (`demarkus-knowledge-server`)
 
