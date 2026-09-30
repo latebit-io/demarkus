@@ -31,6 +31,8 @@ func run(arguments []string) error {
 	brokerConfig := flags.String("broker-config", "", "path to the broker YAML configuration")
 	kubeconfig := flags.String("kubeconfig", "", "path to kubeconfig (default: in-cluster config)")
 	showVersion := flags.Bool("version", false, "print version and exit")
+	deprovision := flags.String("deprovision-tenant", "", "deprovision the named tenant world and exit (operator flow, run on a user's deletion request)")
+	deleteBucket := flags.Bool("delete-bucket", false, "with -deprovision-tenant: also permanently delete the tenant's GCS bucket and data")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -38,21 +40,50 @@ func run(arguments []string) error {
 		fmt.Println(version)
 		return nil
 	}
-	if *serverConfig == "" || *brokerConfig == "" {
-		return errors.New("-server-config and -broker-config are required")
+	if *brokerConfig == "" {
+		return errors.New("-broker-config is required")
 	}
-	opts := broker.Options(version, *kubeconfig)
-
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
 
-	server, err := knowledgeserver.Open(knowledgeserver.Options{ConfigFile: *serverConfig, Logger: log})
+	if *deprovision != "" {
+		return runDeprovision(broker.DeprovisionOptions{
+			ConfigPath: *brokerConfig, KubeconfigPath: *kubeconfig,
+			Slug: *deprovision, DeleteBucket: *deleteBucket, Log: log,
+		})
+	}
+	if *deleteBucket {
+		return errors.New("-delete-bucket requires -deprovision-tenant")
+	}
+	if *serverConfig == "" {
+		return errors.New("-server-config is required")
+	}
+	return serve(*serverConfig, *brokerConfig, *kubeconfig, log)
+}
+
+// runDeprovision needs the broker config alone: the registry and the
+// fragment Secret are the truth, and the serving pods pick the change up.
+func runDeprovision(opts broker.DeprovisionOptions) error {
+	found, err := broker.RunDeprovision(context.Background(), opts)
+	if err != nil {
+		return fmt.Errorf("deprovision %s: %w", opts.Slug, err)
+	}
+	if !found {
+		// The documented rerun-to-converge path: cleanup completed.
+		opts.Log.Warn("tenant absent from registry; cleanup converged", "world", opts.Slug)
+	}
+	return nil
+}
+
+func serve(serverConfig, brokerConfig, kubeconfig string, log *slog.Logger) error {
+	opts := broker.Options(version, kubeconfig)
+	server, err := knowledgeserver.Open(knowledgeserver.Options{ConfigFile: serverConfig, Logger: log})
 	if err != nil {
 		return err
 	}
 	defer server.Close()
 	opts.LocalWorlds = server
-	b, err := broker.Open(*brokerConfig, opts, log)
+	b, err := broker.Open(brokerConfig, opts, log)
 	if err != nil {
 		return err
 	}

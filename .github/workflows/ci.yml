@@ -44,6 +44,7 @@ jobs:
               - 'protocol/**'
             knowledge:
               - 'knowledge/**'
+              - 'server/**'
               - 'protocol/**'
               - 'client/**'
             tools:
@@ -55,17 +56,14 @@ jobs:
             release_contract:
               - '.github/workflows/release.yml'
               - 'server/.goreleaser.yml'
-              - 'server/Dockerfile.knowledge'
-              - 'knowledge/.goreleaser-broker.yml'
-              - 'knowledge/.goreleaser-memory-broker.yml'
+              - 'knowledge/.goreleaser.yml'
+              - 'knowledge/cmd/demarkus-knowledge/Dockerfile'
             install:
               - 'install.sh'
-              - 'install-stack.sh'
               - 'install-readonly.sh'
               - 'scripts/test-install-checksum.sh'
               - 'scripts/test-install-renewal.sh'
               - 'scripts/test-install-restart.sh'
-              - 'scripts/test-install-stack-tokens.sh'
               - 'scripts/test-install-update-stack.sh'
             agent_plugins:
               - '.claude-plugin/**'
@@ -312,18 +310,12 @@ jobs:
       # error only. The test script is new and held to warning.
       - name: Shellcheck install.sh
         run: shellcheck -S error install.sh
-      - name: Shellcheck install-stack.sh
-        run: shellcheck -S error install-stack.sh
       - name: Shellcheck the renewal test
         run: shellcheck -S warning scripts/test-install-renewal.sh
-      - name: Shellcheck the stack-tokens test
-        run: shellcheck -S warning scripts/test-install-stack-tokens.sh
       - name: Shellcheck the update-stack test
         run: shellcheck -S warning scripts/test-install-update-stack.sh
       - name: Test certbot renewal wiring
         run: bash scripts/test-install-renewal.sh
-      - name: Test stack token rotation
-        run: bash scripts/test-install-stack-tokens.sh
       - name: Test stack component updates
         run: bash scripts/test-install-update-stack.sh
       - name: Test checksum verification fails closed
@@ -417,18 +409,24 @@ jobs:
       - name: Assert the release config builds what the images stage
         run: |
           set -euo pipefail
-          staged="$(sed -n 's/.*for bin in \(.*\); do/\1/p' .github/workflows/release.yml)"
-          test -n "$staged"
-          for id in $staged; do
-            yq -e ".builds[] | select(.id == \"$id\")" server/.goreleaser.yml >/dev/null \
-              || { echo "release.yml stages $id but server/.goreleaser.yml has no such build id" >&2; exit 1; }
+          # Each release job stages the ids its own goreleaser config builds.
+          for pair in release-server:server/.goreleaser.yml release-knowledge:knowledge/.goreleaser.yml; do
+            job="${pair%%:*}"
+            config="${pair##*:}"
+            staged="$(yq -r ".jobs.\"$job\".steps[] | select(.name == \"Stage binaries for Docker build\") | .env.STAGED_BINS" .github/workflows/release.yml)"
+            test -n "$staged"
+            for id in $staged; do
+              yq -e ".builds[] | select(.id == \"$id\")" "$config" >/dev/null \
+                || { echo "release.yml $job stages $id but $config has no such build id" >&2; exit 1; }
+            done
           done
-          test "$(yq -r '.jobs."release-server".steps[] | select(.name == "Build + push demarkus-knowledge-server image") | .with.file' .github/workflows/release.yml)" = "server/Dockerfile.knowledge"
-          yq -e '.jobs."release-server".steps[] | select(.name == "Build + push demarkus-knowledge-server image") | .with.tags | contains("ghcr.io/latebit-io/demarkus-knowledge-server")' .github/workflows/release.yml >/dev/null
-          yq -e '.jobs."release-server".steps[] | select(.name == "Build + push demarkus-knowledge-server image") | .with.tags | contains("needs.semver-server.outputs.new_version")' .github/workflows/release.yml >/dev/null
+          test "$(yq -r '.jobs."release-knowledge".steps[] | select(.name == "Build + push demarkus-knowledge image") | .with.file' .github/workflows/release.yml)" = "knowledge/cmd/demarkus-knowledge/Dockerfile"
+          yq -e '.jobs."release-knowledge".steps[] | select(.name == "Build + push demarkus-knowledge image") | .with.tags | contains("ghcr.io/latebit-io/demarkus-knowledge:")' .github/workflows/release.yml >/dev/null
+          yq -e '.jobs."release-knowledge".steps[] | select(.name == "Build + push demarkus-knowledge image") | .with.tags | contains("needs.semver-knowledge.outputs.new_version")' .github/workflows/release.yml >/dev/null
           yq -e '.jobs.detect-changes.steps[] | select(.id == "filter") | .with.filters | contains("deploy/helm/demarkus-knowledge-server/**")' .github/workflows/release.yml >/dev/null
-          yq -e '.jobs."semver-server".steps[] | select(.id == "semver") | .with.change_path | contains("deploy/helm/demarkus-knowledge-server/")' .github/workflows/release.yml >/dev/null
-          yq -e '.jobs."release-server".steps[] | select(.name == "Package + push server charts") | .run | contains("demarkus-knowledge-server")' .github/workflows/release.yml >/dev/null
+          yq -e '.jobs."semver-knowledge".steps[] | select(.id == "semver") | .with.change_path | contains("deploy/helm/demarkus-knowledge-server/")' .github/workflows/release.yml >/dev/null
+          yq -e '.jobs."semver-knowledge".steps[] | select(.id == "semver") | .with.change_path | contains("server/")' .github/workflows/release.yml >/dev/null
+          yq -e '.jobs."release-knowledge".steps[] | select(.name == "Package + push demarkus-knowledge-server chart") | .run | contains("demarkus-knowledge-server")' .github/workflows/release.yml >/dev/null
 
   test-charts:
     needs: detect-changes
@@ -459,13 +457,11 @@ jobs:
           helm dependency update deploy/helm/demarkus-server
       - name: Lint demarkus-server chart
         run: helm lint deploy/helm/demarkus-server
-      - name: Lint demarkus-knowledge-broker chart
-        run: helm lint deploy/helm/demarkus-knowledge-broker
       - name: Lint demarkus-agent chart
         run: helm lint deploy/helm/demarkus-agent
       - name: Lint demarkus-knowledge-server chart
         run: helm lint deploy/helm/demarkus-knowledge-server -f deploy/helm/demarkus-knowledge-server/tests/fixtures/valid-values.yaml
-      # The umbrella vendors the three local charts (file://) and the
+      # The umbrella vendors the two local charts (file://) and the
       # library chart from ghcr.
       - name: Lint demarkus-knowledge-system umbrella chart
         run: |
@@ -473,8 +469,6 @@ jobs:
           helm lint deploy/helm/demarkus-knowledge-system -f deploy/helm/demarkus-knowledge-system/tests/fixtures/values.yaml
       - name: Unit test demarkus-server chart
         run: helm unittest deploy/helm/demarkus-server
-      - name: Unit test demarkus-knowledge-broker chart
-        run: helm unittest deploy/helm/demarkus-knowledge-broker
       - name: Unit test demarkus-knowledge-server chart
         run: helm unittest deploy/helm/demarkus-knowledge-server
       - name: Unit test demarkus-agent chart
@@ -512,15 +506,13 @@ jobs:
             demarkus-server-tokens \
             broker-minted-test \
             ZmFrZS10b2tlbi1oYXNo
-      - name: Upgrade-wipe regression — demarkus-knowledge-broker
+      - name: Upgrade-wipe regression — demarkus-knowledge-server
         run: |
-          # Broker requires a parseable ECDSA P-256 PEM for
-          # oidc.brokerSigningKey — OIDCConfig.validate now parses
-          # the key at LoadConfig (parse-at-validate). Generate an
-          # ephemeral key per run, hand it to helm via --set-file
-          # so the multi-line value travels through a file instead
-          # of the shell, and let the trap rm it. The PEM never
-          # lives in the repo or shell history.
+          # The broker needs a parseable ECDSA P-256 PEM for
+          # broker.oidc.brokerSigningKey (parsed at config load). Generate
+          # an ephemeral key per run, hand it to helm via --set-file so
+          # the multi-line value travels through a file, and let the trap
+          # rm it. The PEM never lives in the repo or shell history.
           # (Avoid the literal GitHub-Actions expression marker in
           # this comment — the workflow parser scans `run:` blocks
           # for expressions and rejects an unmatched opener.)
@@ -528,15 +520,12 @@ jobs:
           trap 'rm -f "$SIGNING_KEY_FILE"' EXIT
           openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$SIGNING_KEY_FILE"
           bash deploy/helm/test-upgrade-wipe.sh \
-            deploy/helm/demarkus-knowledge-broker \
-            demarkus-knowledge-broker \
-            test-broker \
-            demarkus-knowledge-broker-refresh-tokens \
+            deploy/helm/demarkus-knowledge-server \
+            demarkus-knowledge-server \
+            test-knowledge \
+            demarkus-knowledge-server-refresh-tokens \
             broker-seeded-test \
             ZmFrZS10b2tlbg== \
-            --set oidc.issuer=https://accounts.google.com \
-            --set oidc.clientID=test-client \
-            --set oidc.clientSecret=test-secret \
-            --set oidc.redirectURL=https://broker.example/auth/callback \
-            --set server.publicURL=https://broker.example \
-            --set-file oidc.brokerSigningKey="$SIGNING_KEY_FILE"
+            -f deploy/helm/demarkus-knowledge-server/tests/fixtures/valid-values.yaml \
+            --set tokens.bootstrap.enabled=false \
+            --set-file broker.oidc.brokerSigningKey="$SIGNING_KEY_FILE"

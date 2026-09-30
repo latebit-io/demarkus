@@ -1,6 +1,8 @@
 apiVersion: v2
 name: demarkus-knowledge-server
-description: Multi-world Demarkus knowledge server backed by Google Cloud Storage
+description: |
+  Demarkus knowledge system: the multi-world knowledge server backed by
+  Google Cloud Storage with the OIDC broker and its MCP gateways in one process.
 type: application
 version: 0.1.0
 appVersion: "0.25.0"
@@ -8,6 +10,8 @@ keywords:
   - demarkus
   - mark-protocol
   - knowledge-server
+  - oidc
+  - mcp
   - gcs
   - quic
 home: https://demarkus.io

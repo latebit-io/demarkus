@@ -39,8 +39,8 @@ Because the system is small and open, its easy to control.
 - **Immutable version history**
 - **Agent + human collaboration**
 - **Memory storage engines**: the servers are versioned, hash-chained document stores; brokers add the service tier, agents supply the intelligence
-- **Knowledge system**: multi-world, GCS-backed `demarkus-knowledge-server` behind an OIDC broker
-- **Memory service**: `demarkus-memory-broker` gives each identity a private memory world over MCP OAuth, with dynamic tenant provisioning
+- **Knowledge system**: `demarkus-knowledge`, the multi-world GCS-backed server with the OIDC broker and its MCP gateways in one process
+- **Memory service**: the same process's memory gateway gives each identity a private memory world over MCP OAuth, with dynamic tenant provisioning
 - **Knowledge graph**: persistent link graph with backlinks, exports, and federated snapshots
 
 If you're new, begin with the [Documentation Site](https://www.demarkus.io/).

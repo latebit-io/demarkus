@@ -21,13 +21,13 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 - **local memory**: a memory served by a `demarkus-server` that the memory plugin runs on your machine. Zero configuration.
 - **hosted memory**: a memory provisioned by the memory broker, one world per signed-in identity, reachable over MCP with OAuth from any MCP host.
 - **memory plugin**: the per-host adapter (Claude Code, OpenCode, pi, Cursor) that installs the memory tools, standing guidance, gates, and its slash commands.
-- **memory broker**: `demarkus-memory-broker`, the OIDC-fronted MCP gateway that provisions and serves hosted memories.
+- **memory gateway**: the memory profile of `demarkus-knowledge`, the OIDC-fronted MCP gateway that provisions and serves hosted memories on its own hostname.
 
 ## Knowledge
 
 - **knowledge system**: an organization's shared, versioned knowledge base: many worlds composed behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same catalog. Replaces the older term *universe*.
-- **knowledge server**: `demarkus-knowledge-server`, the production server that hosts many isolated worlds in one process, selected by TLS SNI, each backed by its own object-storage bucket.
-- **knowledge broker**: `demarkus-knowledge-broker`, the OIDC-fronted MCP gateway that composes worlds into a knowledge system and answers system-wide catalog lookups.
+- **knowledge server**: the worlds half of `demarkus-knowledge`: many isolated worlds in one process, selected by TLS SNI, each backed by its own object-storage bucket. `demarkus-knowledge-server` is the same runtime without the broker.
+- **knowledge broker**: the broker half of `demarkus-knowledge`: OIDC login and the MCP gateway that composes worlds into a knowledge system and answers system-wide catalog lookups, in the same process as the worlds.
 - **knowledge plugin**: the per-host adapter that joins a knowledge system with one command and adds knowledge-first guidance and its slash commands.
 - **root**: the conventional system namespace of a brokered knowledge system. `mark://root/.well-known/demarkus/` holds the write policy, the per-world template, and the style guide.
 - **policy**: a world's write rules: strictness and required tag axes, enforced at publish time.
@@ -40,7 +40,6 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 
 ## Operations
 
-- **single-host install**: server, broker, library, identity provider, and HTTPS on one machine from one command. Replaces the older term *appliance*.
 - **catalog**: the per-world index that `LOOKUP` searches: titles, tags, and importance. Not full-text search. A document that was never tagged or titled is not in the catalog.
 - **graph**: the persistent link graph across worlds, built by the agent and queried through backlinks, related documents, and exports.
 - **tenant**: broker-internal record for one hosted memory identity. Operator documentation only; never user-facing.
@@ -50,9 +49,9 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 | Older term | Use instead |
 |---|---|
 | universe | knowledge system |
-| appliance | single-host install |
+| appliance, single-host install | retired with the standalone broker; the knowledge system deploys on Kubernetes |
 | librarian | the library's agent, or simply the agent |
 
 Plugin commands are `/soul-*` and act on your soul. Plugin names, MCP server ids, `demarkus-plugin` registry subcommands (`memory-join`, `memory-default`, `project`), and memory broker prompt names are identifiers and keep the memory form; their `soul-*` aliases remain for one release.
 
-Glossary exceptions, kept on purpose: the single-host installer and its page are still called the appliance until the installer is renamed; the memory subdomain of single-host installs made before the rename stays `soul.<host>` so existing installs work unchanged. `soul.demarkus.io` is the project's own soul.
+`soul.demarkus.io` is the project's own soul.

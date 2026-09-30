@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -21,7 +22,14 @@ type fakeLocal struct {
 
 func (f *fakeLocal) Routes(authority string) bool {
 	_, ok := f.served[authority]
-	return ok || f.err != nil
+	return ok
+}
+
+// localConfig is the test config with team-a marked local.
+func localConfig() *core.Config {
+	cfg := brokertest.NewConfig()
+	cfg.Worlds[0].Local = true
+	return cfg
 }
 
 func (f *fakeLocal) Exchange(ctx context.Context, authority string, req protocol.Request) (protocol.Response, error) {
@@ -36,7 +44,7 @@ func (f *fakeLocal) Exchange(ctx context.Context, authority string, req protocol
 }
 
 func TestCompositeServesLocalWorldWithWireRequest(t *testing.T) {
-	cfg := brokertest.NewConfig()
+	cfg := localConfig()
 	local := &fakeLocal{served: map[string]protocol.Response{
 		"team-a.team-a.svc.cluster.local": {Status: protocol.StatusOK, Body: "local"},
 	}}
@@ -62,9 +70,9 @@ func TestCompositeServesLocalWorldWithWireRequest(t *testing.T) {
 	}
 }
 
-func TestCompositeFallsBackToRemoteForUnroutedAuthority(t *testing.T) {
+func TestCompositeDispatchesRemoteWorldOverTheNetwork(t *testing.T) {
 	cfg := brokertest.NewConfig()
-	local := &fakeLocal{}
+	local := &fakeLocal{served: map[string]protocol.Response{"team-a.team-a.svc.cluster.local": {Status: protocol.StatusOK, Body: "local"}}}
 	remote := &fakeDispatcher{ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "remote"}}, nil
 	}}
@@ -77,10 +85,13 @@ func TestCompositeFallsBackToRemoteForUnroutedAuthority(t *testing.T) {
 	if res.Response.Body != "remote" {
 		t.Fatalf("body = %q, want remote", res.Response.Body)
 	}
+	if len(local.calls) != 0 {
+		t.Fatal("a world not marked local was served in process")
+	}
 }
 
 func TestCompositeDoesNotRetryLocalFailureRemotely(t *testing.T) {
-	cfg := brokertest.NewConfig()
+	cfg := localConfig()
 	boom := errors.New("pipe broke")
 	local := &fakeLocal{err: boom}
 	remote := &fakeDispatcher{}
@@ -96,7 +107,7 @@ func TestCompositeDoesNotRetryLocalFailureRemotely(t *testing.T) {
 }
 
 func TestCompositeRefusesUnknownWorldAndBadRequests(t *testing.T) {
-	cfg := brokertest.NewConfig()
+	cfg := localConfig()
 	local := &fakeLocal{served: map[string]protocol.Response{"team-a.team-a.svc.cluster.local": {Status: protocol.StatusOK}}}
 	c := NewComposite(cfg.Registry(), local, &fakeDispatcher{})
 
@@ -118,7 +129,7 @@ func granted() context.Context {
 }
 
 func TestCompositeWritesLocalWorldUnderTheGrant(t *testing.T) {
-	cfg := brokertest.NewConfig()
+	cfg := localConfig()
 	local := &fakeLocal{served: map[string]protocol.Response{
 		"team-a.team-a.svc.cluster.local": {Status: protocol.StatusCreated},
 	}}
@@ -153,5 +164,23 @@ func TestCompositeRefusesWritesWithoutGrantOrLocalWorld(t *testing.T) {
 	}
 	if len(local.calls) != 0 || len(remote.PublishCalls) != 0 {
 		t.Fatal("a refused write reached a world")
+	}
+}
+
+func TestCheckLocalRequiresTheServerToRouteEveryLocalWorld(t *testing.T) {
+	cfg := localConfig()
+	if err := CheckLocal(cfg.Registry(), nil); err == nil || !strings.Contains(err.Error(), "no knowledge server") {
+		t.Fatalf("no server err = %v, want a local world refused", err)
+	}
+	unrouted := &fakeLocal{}
+	if err := CheckLocal(cfg.Registry(), unrouted); err == nil || !strings.Contains(err.Error(), "team-a.team-a.svc.cluster.local") {
+		t.Fatalf("unrouted err = %v, want the authority named", err)
+	}
+	routed := &fakeLocal{served: map[string]protocol.Response{"team-a.team-a.svc.cluster.local": {}}}
+	if err := CheckLocal(cfg.Registry(), routed); err != nil {
+		t.Fatalf("routed: %v", err)
+	}
+	if err := CheckLocal(brokertest.NewConfig().Registry(), nil); err != nil {
+		t.Fatalf("remote only worlds need no server: %v", err)
 	}
 }

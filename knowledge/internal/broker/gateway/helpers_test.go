@@ -116,7 +116,7 @@ type fakeDispatcher = fetchtest.Client
 func mcpTestConfig() *core.Config {
 	cfg := brokertest.NewConfig()
 	cfg.Server.PublicURL = "https://broker.example.com"
-	cfg.Server.MCP = core.MCPConfig{GatewayConfig: core.GatewayConfig{PublicURL: "https://gateway.example.com"}}
+	cfg.Server.MCP = core.GatewayConfig{PublicURL: "https://gateway.example.com"}
 	return cfg
 }
 

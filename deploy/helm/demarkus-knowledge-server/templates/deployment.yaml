@@ -24,6 +24,7 @@ spec:
         {{- end }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/broker-config: {{ include (print $.Template.BasePath "/secret-broker-config.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -37,26 +38,68 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
-        - name: knowledge-server
+        - name: knowledge
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["-config", "/etc/demarkus/config.yaml"]
+          args:
+            - -server-config
+            - /etc/demarkus/config.yaml
+            - -broker-config
+            - /etc/demarkus/broker/config.yaml
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            # The leader-election holder identity for the sweeper Lease.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- /* Operator-managed Secrets the loader reads from the env. */}}
+            {{- range $env := list
+                  (dict "name" "OIDC_CLIENT_SECRET" "ref" .Values.broker.oidc.existingSecretRef)
+                  (dict "name" "BROKER_SIGNING_KEY" "ref" .Values.broker.oidc.existingSigningKeyRef)
+                  (dict "name" "BROKER_COOKIE_KEY" "ref" .Values.broker.existingCookieKeyRef) }}
+            {{- with $env.ref.name }}
+            - name: {{ $env.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $env.ref.key | quote }}
+            {{- end }}
+            {{- end }}
+            {{- range $i, $wc := .Values.broker.webClients }}
+            {{- $ref := default dict $wc.existingSecretRef }}
+            {{- if $ref.name }}
+            - name: {{ include "demarkus-knowledge-server.webClientSecretEnv" $i }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ref.name | quote }}
+                  key: {{ default "clientSecret" $ref.key | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           ports:
             - name: mark
               protocol: UDP
               containerPort: {{ .Values.server.udpPort }}
+            - name: http
+              protocol: TCP
+              containerPort: {{ .Values.server.httpPort }}
             - name: health
               protocol: TCP
               containerPort: {{ .Values.server.healthPort }}
             - name: peer
               protocol: UDP
               containerPort: {{ .Values.server.peerPort }}
+          {{- /* The broker's /readyz answers only once OIDC discovery and every
+                 world are up, and drops first on shutdown so the load balancer
+                 stops sending sessions; the server's /livez is the liveness. */}}
           startupProbe:
             httpGet:
               path: /readyz
-              port: health
+              port: http
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
@@ -70,13 +113,16 @@ spec:
           readinessProbe:
             httpGet:
               path: /readyz
-              port: health
+              port: http
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
           volumeMounts:
             - name: config
               mountPath: /etc/demarkus
+              readOnly: true
+            - name: broker-config
+              mountPath: /etc/demarkus/broker
               readOnly: true
             - name: tls
               mountPath: /run/demarkus/tls
@@ -86,12 +132,9 @@ spec:
               mountPath: {{ printf "/run/demarkus/worlds/%s" $world.name | quote }}
               readOnly: true
             {{- end }}
-            {{- if .Values.dynamicWorlds.enabled }}
-            - name: dynamic-worlds
-              mountPath: /run/demarkus/dynamic-worlds
-              readOnly: true
-            - name: dynamic-worlds-tokens
-              mountPath: /run/demarkus/worlds-tokens
+            {{- if include "demarkus-knowledge-server.provisioningEnabled" . }}
+            - name: tenant-worlds
+              mountPath: /run/demarkus/tenant-worlds
               readOnly: true
             {{- end }}
             - name: tmp
@@ -112,6 +155,12 @@ spec:
                 path: {{ $key }}
               {{- end }}
               {{- end }}
+        - name: broker-config
+          secret:
+            secretName: {{ include "demarkus-knowledge-server.brokerConfigSecretName" . }}
+            items:
+              - key: config.yaml
+                path: config.yaml
         - name: tls
           secret:
             secretName: {{ include "demarkus-knowledge-server.tlsSecretName" . }}
@@ -122,8 +171,8 @@ spec:
                 path: tls.key
         {{- range $index, $world := $worlds }}
         {{- /* Both optional: the broker creates the runtime Secret on its
-               first mint, the static one is the operator's; the server opens
-               the world without either and reloads as they are projected. */}}
+               first agent token mint, the static one is the operator's; the
+               world opens without either and reloads as they are projected. */}}
         - name: {{ printf "world-token-%d" $index }}
           projected:
             sources:
@@ -140,16 +189,13 @@ spec:
                     - key: {{ $world.staticTokenSecret.key | quote }}
                       path: static-tokens.toml
         {{- end }}
-        {{- if .Values.dynamicWorlds.enabled }}
-        {{- /* optional: the broker creates both Secrets on the first
-               provision, which may happen after install. */}}
-        - name: dynamic-worlds
+        {{- if include "demarkus-knowledge-server.provisioningEnabled" . }}
+        {{- /* Optional: the broker creates it on the first provision, which
+               may happen after install; a provisioned tenant is served in
+               process before the projection lands. */}}
+        - name: tenant-worlds
           secret:
-            secretName: {{ .Values.dynamicWorlds.worldsSecret | quote }}
-            optional: true
-        - name: dynamic-worlds-tokens
-          secret:
-            secretName: {{ .Values.dynamicWorlds.tokensSecret | quote }}
+            secretName: {{ .Values.provisioning.worldsSecret | quote }}
             optional: true
         {{- end }}
         - name: tmp

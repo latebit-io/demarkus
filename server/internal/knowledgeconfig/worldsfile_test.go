@@ -131,11 +131,14 @@ func TestParsesBrokerRenderedFragment(t *testing.T) {
 	if !w.Bootstrap || w.Limits.MaxDocuments != 500 || len(w.Authorities) != 1 {
 		t.Fatalf("parsed fragment world = %+v", w)
 	}
+	// A tenant names no tokens file: the identity grant is its write path.
+	if w.Auth.TokensFile != "" || w.Auth.StaticTokensFile != "" {
+		t.Errorf("fragment auth = %+v, want no token files", w.Auth)
+	}
 	for field, got := range map[string]string{
-		"name":            w.Name,
-		"authority":       w.Authorities[0],
-		"bucket.url":      w.Bucket.URL,
-		"auth.tokensFile": w.Auth.TokensFile,
+		"name":       w.Name,
+		"authority":  w.Authorities[0],
+		"bucket.url": w.Bucket.URL,
 	} {
 		if !strings.Contains(got, "eve-adams-998d03fa") {
 			t.Errorf("fragment %s = %q, want the tenant slug in it", field, got)

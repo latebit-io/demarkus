@@ -2,9 +2,10 @@ apiVersion: v2
 name: demarkus-knowledge-system
 description: |
   One-values-file install of a demarkus knowledge system: the multi-world
-  knowledge server, the OIDC broker with its MCP gateway, the federation
-  agent, and optionally the library reading room. Worlds are declared once
-  under global.worlds and every sub-chart derives its own entries.
+  knowledge server with the OIDC broker and its MCP gateways in one process,
+  the federation agent, and optionally the library reading room. Worlds are
+  declared once under global.worlds and every sub-chart derives its own
+  entries.
 type: application
 # version + appVersion are set at publish time by the release workflow
 # (knowledge-system/v<X>); the vendored sub-charts are re-versioned to
@@ -18,11 +19,6 @@ dependencies:
     version: ">=0.0.0-0"
     repository: file://../demarkus-knowledge-server
     condition: knowledge.enabled
-  - name: demarkus-knowledge-broker
-    alias: broker
-    version: ">=0.0.0-0"
-    repository: file://../demarkus-knowledge-broker
-    condition: broker.enabled
   - name: demarkus-agent
     alias: agent
     version: ">=0.0.0-0"

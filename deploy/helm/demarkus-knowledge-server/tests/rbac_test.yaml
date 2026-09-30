@@ -1,0 +1,101 @@
+suite: rbac
+templates:
+  - rbac.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: is omitted when rbac.create is false
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: pins get and update to the Lease and the broker's own Secrets, create unscoped
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: rules[0]
+          value:
+            apiGroups: ["coordination.k8s.io"]
+            resources: ["leases"]
+            resourceNames: ["demarkus-broker-sweeper"]
+            verbs: ["get", "update"]
+      - equal:
+          path: rules[1]
+          value:
+            apiGroups: ["coordination.k8s.io"]
+            resources: ["leases"]
+            verbs: ["create"]
+      - equal:
+          path: rules[2]
+          value:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames:
+              - RELEASE-NAME-refresh-tokens
+              - RELEASE-NAME-dynamic-clients
+              - RELEASE-NAME-signing-key
+              - RELEASE-NAME-cookie-key
+            verbs: ["get", "update"]
+      - equal:
+          path: rules[3]
+          value:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["create"]
+      - lengthEqual:
+          path: rules
+          count: 4
+
+  - it: adds the agent token record, raw Secret and the hub's tokens Secret per agent token
+    documentIndex: 0
+    set:
+      worlds:
+        - name: root
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+          bucket: {url: gs://deployment-root}
+          hub: true
+    asserts:
+      - equal:
+          path: rules[3].resourceNames
+          value:
+            - demarkus-broker-agent-token-root
+            - root-token-values
+            - root-tokens
+      - equal:
+          path: rules[3].verbs
+          value: ["get", "update"]
+
+  - it: adds the registry and worlds fragment Secrets when provisioning is on
+    documentIndex: 0
+    set:
+      worlds: []
+      worldDefaults.bucketPrefix: gs://deployment-
+      broker.memory.publicURL: https://memory.example.com
+      provisioning.mode: allowlisted
+      provisioning.bucketProject: project
+    asserts:
+      - contains:
+          path: rules[2].resourceNames
+          content: demarkus-memory-broker-registry
+      - contains:
+          path: rules[2].resourceNames
+          content: memory-worlds-config
+
+  - it: binds the Role to the chart's service account in the release namespace
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: subjects[0]
+          value:
+            kind: ServiceAccount
+            name: RELEASE-NAME
+            namespace: NAMESPACE
+      - equal:
+          path: roleRef.name
+          value: RELEASE-NAME

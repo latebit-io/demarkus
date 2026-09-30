@@ -1,0 +1,62 @@
+# demarkus-knowledge-server chart overrides for the kind harness: one world
+# in fake-gcs-server, the broker against the in-cluster mock OIDC issuer.
+# up.sh supplies the image, the TLS Secret and the signing key Secret.
+
+# The chart refuses fewer than two replicas; kind's one node holds both.
+replicaCount: 2
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+worldDefaults:
+  bucketPrefix: gs://kind-
+worlds:
+  - name: world-default
+    worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+    allow:
+      emails: ["alice@example.com"]
+
+# The GCS client follows STORAGE_EMULATOR_HOST to fake-gcs-server.
+extraEnv:
+  - name: STORAGE_EMULATOR_HOST
+    value: fake-gcs-server.demarkus.svc.cluster.local:4443
+
+tls:
+  existingSecret: knowledge-tls
+serviceAccount:
+  workloadIdentity:
+    # Annotation only; nothing in kind reads it.
+    gsa: kind@example.invalid
+tokens:
+  bootstrap:
+    enabled: false
+
+broker:
+  # The broker's LoadConfig requires the issuer URL; localhost mirrors the
+  # redirectURL shape the smoke flows re-target at the in-cluster Service.
+  publicURL: "http://localhost:8080"
+  # DEV-ONLY: curl drives the OIDC state cookie over plain HTTP.
+  insecureCookies: true
+  oidc:
+    issuer: http://mock-oauth2-server.demarkus.svc.cluster.local:8080/default
+    clientID: demarkus-knowledge-kind
+    clientSecret: dev-secret
+    redirectURL: http://localhost:8080/auth/callback
+    # Generated per harness run by up.sh into this Secret.
+    existingSigningKeyRef:
+      name: broker-signing-key
+      key: signing-key.pem
+  # No Ingress in kind, so nothing strips X-Forwarded-For.
+  rateLimit:
+    disabled: true
+
+# Without an Ingress controller the policy would make the pod unreachable;
+# the PDB would block teardown.
+networkPolicy:
+  enabled: false
+podDisruptionBudget:
+  enabled: false

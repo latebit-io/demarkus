@@ -1,0 +1,40 @@
+version: 2
+
+project_name: demarkus-knowledge
+
+monorepo:
+  tag_prefix: knowledge/
+  dir: knowledge
+
+builds:
+  - id: demarkus-knowledge
+    main: ./cmd/demarkus-knowledge
+    binary: demarkus-knowledge
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: darwin
+        goarch: arm
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: demarkus-knowledge
+    ids:
+      - demarkus-knowledge
+    name_template: "demarkus-knowledge_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "demarkus-knowledge_checksums.txt"
+
+changelog:
+  use: github-native

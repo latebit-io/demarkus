@@ -1,6 +1,6 @@
 # Kubernetes & Helm
 
-This page covers deploying Demarkus on Kubernetes with the Helm charts in `deploy/helm/`. Use it for multi-replica production deployments; for a single host, see [Deployment & TLS](index.md) or the [appliance](appliance.md).
+This page covers deploying Demarkus on Kubernetes with the Helm charts in `deploy/helm/`. Use it for multi-replica production deployments; for a single host, see [Deployment & TLS](index.md).
 
 ## Charts
 
@@ -8,15 +8,15 @@ This page covers deploying Demarkus on Kubernetes with the Helm charts in `deplo
 |---|---|---|
 | `demarkus-server` | StatefulSet | Single world over the filesystem store (PVC) |
 | `demarkus-server-common` | library | Shared backend-neutral server templates |
-| `demarkus-knowledge-broker` | Deployment | OIDC broker and MCP-over-HTTPS gateway (defaults to 2 replicas + PDB) |
 | `demarkus-agent` | Deployment | Federation crawler: scheduled crawl, hash indexes, graph snapshots |
-| `demarkus-knowledge-server` | Deployment | Multi-world production server, GCS-backed |
+| `demarkus-knowledge-server` | Deployment | The knowledge system: multi-world GCS-backed server with the OIDC broker and the MCP gateways in one process (defaults to 2 replicas + PDB) |
+| `demarkus-knowledge-system` | umbrella | Knowledge server, agent and optionally the library from one values file |
 
 Each chart's `README.md` under `deploy/helm/<chart>/` documents every value; this page is the map.
 
 ## Knowledge server (`demarkus-knowledge-server`)
 
-One deployment serves every world on one UDP listener; TLS SNI selects the world during the QUIC handshake, and each world keeps its own GCS bucket, tokens, policy, and rate limits.
+One deployment serves every world on one UDP listener; TLS SNI selects the world during the QUIC handshake, and each world keeps its own GCS bucket, tokens, policy, and rate limits. The same process runs the broker: OIDC login, `/me/install`, and the MCP gateways (the knowledge profile on the broker host, the memory profile on its own hostname) on one HTTP listener behind the Ingress. Tool calls reach the worlds in process; an identity the world's `allow` admits writes under its `writeScope` with no token minted.
 
 Prerequisites per world:
 
@@ -65,7 +65,7 @@ See `deploy/helm/demarkus-knowledge-server/README.md` for the full surface (limi
 
 ## Broker and agent
 
-- `demarkus-knowledge-broker`: OIDC issuer config, per-world routing, and the MCP gateway that agents join with `/knowledge-join`; defaults to 2 replicas with a Lease-based leader election for the token sweeper only.
+- The broker half of `demarkus-knowledge-server` (`broker.*` values): the IdP registration, the public URLs of the management host and the two gateways, web clients, agent tokens, and tenant provisioning for the memory gateway (`provisioning.*`). Agents join with `/knowledge-join <broker URL>`; the sweeper is Lease-elected across replicas.
 
 - `demarkus-agent`: crawl seeds, hubs, schedule, and per-authority endpoint overrides (`config.endpoints`).
 
@@ -77,7 +77,7 @@ The registries never remove a key, so a replica's memory grows with every distin
 
 ## Dev harness (kind)
 
-`deploy/kind/up.sh` stands up a local cluster with the server chart, optionally the broker with a mock OIDC issuer (`--with-broker`), ArgoCD ApplicationSets (`--with-argo`), and an MCP auth smoke test (`--with-mcp-smoke`). It does not cover the knowledge server; that path requires real GCS.
+`deploy/kind/up.sh` stands up a local cluster with the server chart, optionally the knowledge system built from the checkout against fake-gcs-server and a mock OIDC issuer (`--with-knowledge`), ArgoCD ApplicationSets (`--with-argo`), and the OAuth, MCP tool-call and web-client smoke flows (`--with-mcp-smoke`).
 
 ## Related
 

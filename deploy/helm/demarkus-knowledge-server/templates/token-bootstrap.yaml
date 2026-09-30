@@ -1,9 +1,9 @@
 {{- include "demarkus-knowledge-server.validate" . -}}
 {{- $worlds := include "demarkus-knowledge-server.worlds" . | fromYamlArray -}}
 {{- if and .Values.tokens.bootstrap.enabled $worlds }}
-{{- /* Token Secrets are runtime-owned: the broker appends to tokens.toml and
-       the admin hash must match the raw value, so a reconciler must never
-       template them; this Job creates missing ones and hands off. */}}
+{{- /* Token Secrets are runtime-owned: the broker appends agent token hashes
+       to tokens.toml and the admin hash must match the raw value, so a
+       reconciler must never template them; this Job creates missing ones. */}}
 {{- $sa := printf "%s-token-bootstrap" (include "demarkus-knowledge-server.fullname" .) -}}
 apiVersion: v1
 kind: ServiceAccount

@@ -1,0 +1,38 @@
+{{- $name := include "demarkus-knowledge-server.fullname" . -}}
+{{- $worlds := include "demarkus-knowledge-server.worlds" . | fromYamlArray -}}
+demarkus-knowledge-server installed as release {{ .Release.Name | quote }} in namespace {{ .Release.Namespace | quote }}.
+
+== Worlds ({{ len $worlds }}) ==
+{{- range $worlds }}
+  - {{ .name }} ({{ .profile }}{{ if .hub }}, hub{{ end }}): authority {{ index .authorities 0 }}, tokens Secret {{ .tokenSecret.name }}
+{{- end }}
+{{- if include "demarkus-knowledge-server.provisioningEnabled" . }}
+  provisioning {{ .Values.provisioning.mode }}: tenants land in {{ .Values.provisioning.worldsSecret }} and {{ include "demarkus-knowledge-server.registrySecretName" . }}
+{{- end }}
+
+== Listeners ==
+  worlds (QUIC): {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.udpPort }}
+  broker (HTTP): {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.httpPort }}
+{{- if .Values.ingress.enabled }}
+  management:    https://{{ .Values.ingress.host }}/
+  knowledge MCP: {{ include "demarkus-knowledge-server.knowledgeGatewayURL" . }}/mcp
+{{- with .Values.broker.memory.publicURL }}
+  memory MCP:    {{ . }}/mcp
+{{- end }}
+{{- else }}
+  Ingress is disabled; port-forward for dev:
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ $name }} {{ .Values.server.httpPort }}:{{ .Values.server.httpPort }}
+{{- end }}
+
+On first start the broker generates its signing key into {{ include "demarkus-knowledge-server.signingKeySecretName" . }}
+and its state cookie key into {{ include "demarkus-knowledge-server.cookieKeySecretName" . }}.
+Configure the IdP to allow the redirect URI {{ .Values.broker.oidc.redirectURL | quote }}.
+Join from a client with the knowledge gateway URL.
+{{- if and .Values.ingress.enabled .Values.broker.rateLimit.trustForwardedFor }}
+rateLimit.trustForwardedFor is on: safe only when IngressClass {{ .Values.ingress.className | quote }}
+strips spoofed X-Forwarded-For (nginx-ingress and Traefik do by default).
+{{- end }}
+{{- if .Values.broker.oidc.clientSecret }}
+broker.oidc.clientSecret is in values (cleartext, in helm release history); use
+broker.oidc.existingSecretRef in production.
+{{- end }}

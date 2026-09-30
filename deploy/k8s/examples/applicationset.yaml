@@ -57,11 +57,11 @@ spec:
       # operationally and prevents Argo from looping on a sync it can never
       # converge.
       #
-      # The world's tokens Secret holds runtime state — the demarkus-knowledge-broker
-      # appends per-mint hash entries to data.tokens.toml. Without ignoring
-      # /data, Argo's selfHeal would revert every mint immediately back to
-      # the chart-rendered admin-only contents (resourceVersion churns, but
-      # the broker's writes never stick). Ignoring /data leaves the chart
+      # The world's tokens Secret holds runtime state: a reconciler such as
+      # demarkus-token appends hash entries to data.tokens.toml. Without
+      # ignoring /data, Argo's selfHeal would revert every append immediately
+      # back to the chart-rendered admin-only contents (resourceVersion
+      # churns, but the writes never stick). Ignoring /data leaves the chart
       # in charge of the Secret's existence + initial admin token while
       # letting the broker own its lifecycle from then on.
       ignoreDifferences:

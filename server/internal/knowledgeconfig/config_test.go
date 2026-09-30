@@ -152,7 +152,6 @@ func TestValidateRequiredAndLimitFields(t *testing.T) {
 		{"authorities", func(config *Config) { config.Worlds[0].Authorities = nil }, "authorities must contain at least one"},
 		{"bucket URL", func(config *Config) { config.Worlds[0].Bucket.URL = "" }, "must be exactly gs://bucket"},
 		{"world ID", func(config *Config) { config.Worlds[0].Bucket.WorldID = "not-a-uuid" }, "canonical lowercase UUID"},
-		{"tokens file", func(config *Config) { config.Worlds[0].Auth.TokensFile = "" }, "auth.tokensFile is required"},
 		{"policy path", func(config *Config) { config.Worlds[0].Policy.Path = "/policy/../policy.md" }, "canonical absolute path"},
 		{"unsupported policy path", func(config *Config) { config.Worlds[0].Policy.Path = "/policy.md" }, "only \"/.well-known/demarkus/policy.md\" is supported"},
 		{"relative policy file", func(config *Config) { config.Worlds[0].Policy.File = "policy.md" }, "policy.file must be a canonical absolute path"},

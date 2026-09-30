@@ -1,0 +1,52 @@
+# fake-gcs-server for the kind harness: the knowledge worlds' buckets. The
+# public host is the in-cluster Service so object URLs the API hands back
+# resolve from the knowledge pods. up.sh creates the buckets.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-gcs-server
+  labels:
+    app.kubernetes.io/name: fake-gcs-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fake-gcs-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fake-gcs-server
+    spec:
+      containers:
+        - name: fake-gcs-server
+          image: fsouza/fake-gcs-server:1.52.2
+          args:
+            - -scheme
+            - http
+            - -port
+            - "4443"
+            - -public-host
+            - fake-gcs-server.demarkus.svc.cluster.local:4443
+          ports:
+            - name: http
+              containerPort: 4443
+          readinessProbe:
+            httpGet:
+              path: /storage/v1/b
+              port: http
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fake-gcs-server
+  labels:
+    app.kubernetes.io/name: fake-gcs-server
+spec:
+  selector:
+    app.kubernetes.io/name: fake-gcs-server
+  ports:
+    - name: http
+      port: 4443
+      targetPort: http

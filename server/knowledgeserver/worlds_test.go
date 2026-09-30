@@ -373,6 +373,29 @@ func TestWorldManagerRefusesBucketWithForeignObjects(t *testing.T) {
 	}
 }
 
+func TestWorldManagerOpensWorldWithNoTokensFileConfigured(t *testing.T) {
+	tokensDir := t.TempDir()
+	tokensA := writeTokens(t, tokensDir, "alice")
+	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, tokensA, true))
+
+	// A provisioned tenant names no tokens file at all: reads are public and
+	// the identity grant is the only write path, so no watcher is needed.
+	noAuth := strings.TrimSuffix(worldFragment("carol", testWorldIDB, "", true), "    auth:\n      tokensFile: \n")
+	h.writeFragment(t, "worlds:\n"+worldFragment("alice", testWorldID, tokensA, true)+noAuth)
+	if err := h.manager.Reload(); err != nil {
+		t.Fatalf("reload without a tokens file: %v", err)
+	}
+	if !h.routes("carol.memory.svc.cluster.local") {
+		t.Fatal("world without a tokens file does not route")
+	}
+	if got := h.tokens(t, "carol").Hashes(); len(got) != 0 {
+		t.Fatalf("tokens = %v, want none", got)
+	}
+	if got := len(h.manager.tokenDirs); got != 1 {
+		t.Fatalf("token directory watchers = %d, want alice's alone", got)
+	}
+}
+
 func TestWorldManagerOpensWorldWithoutTokensFile(t *testing.T) {
 	tokensDir := t.TempDir()
 	tokensA := writeTokens(t, tokensDir, "alice")

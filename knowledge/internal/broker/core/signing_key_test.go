@@ -75,13 +75,6 @@ func TestEnsureSigningKeyPropagatesStoreError(t *testing.T) {
 	}
 }
 
-func TestSigningKeyRefFileBackend(t *testing.T) {
-	cfg := &Config{Storage: StorageConfig{Backend: StorageBackendFile, Dir: "/state"}, Server: ServerConfig{SigningKeySecret: "x"}}
-	if got := SigningKeyRef(cfg).Path; got != "/state/signing-key.pem" {
-		t.Errorf("Path = %q", got)
-	}
-}
-
 // racingStore replays Mutate the way a create conflict does: the first
 // attempt sees nothing, the retry sees the key another replica wrote.
 type racingStore struct{ winner []byte }

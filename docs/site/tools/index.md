@@ -18,17 +18,17 @@ demarkus-agent crawl -seeds "mark://localhost:6309" -insecure -v
 demarkus-agent daemon -config fedcrawl.toml -insecure
 ```
 
-## Broker (`demarkus-knowledge-broker`)
+## Broker (in `demarkus-knowledge`)
 
-The broker is the front door of a knowledge system: it authenticates people and agents with OIDC, mints per-world capability tokens, and exposes every world through one MCP-over-HTTPS gateway that agents join with `/knowledge-join`. On top of the per-world tool surface it adds `mark_worlds` (the world directory, with per-world write access) and `mark_lookup_all` (system-wide catalog lookup with a single merged, globally limited result).
+The broker is the front door of a knowledge system and runs in the same process as the worlds it serves: it authenticates people and agents with OIDC and exposes every world through one MCP-over-HTTPS gateway that agents join with `/knowledge-join`. Writes run under the identity's grant, checked against each world's `allow` and `writeScope`; no per-world token is minted. On top of the per-world tool surface it adds `mark_worlds` (the world directory, with per-world write access) and `mark_lookup_all` (system-wide catalog lookup with a single merged, globally limited result).
 
 A world's `name` in the broker config is the host of every `mark://<name>/<path>` tool URL and part of a Secret name, so it must be a DNS label: lowercase letters, digits and hyphens, at most 63 characters, no hyphen at either end. The broker refuses to start on anything else and never rewrites a name, because that would rename the Secrets behind it. In tool URLs the world name is case insensitive: `mark://Team-A/x` reaches `team-a`.
 
-See `knowledge/cmd/demarkus-knowledge-broker/MCP-API.md` for the full tool contract and the Helm chart README (`deploy/helm/demarkus-knowledge-broker/`) for deployment.
+See `knowledge/cmd/demarkus-knowledge/MCP-API.md` for the full tool contract and the Helm chart README (`deploy/helm/demarkus-knowledge-server/`) for deployment.
 
-## Memory Broker (`demarkus-memory-broker`)
+## Memory gateway (in `demarkus-knowledge`)
 
-The memory broker is the knowledge broker's personal sibling: one OAuth connector URL gives any MCP host (Claude Desktop, Claude Code, Cursor; ChatGPT on a Business, Enterprise, or Edu workspace with admin-authorized Developer mode) a private, versioned memory. Identity maps to exactly one world; reads and writes are locked to it, the memory template is seeded on first access, and dynamic provisioning can create the world itself on first arrival behind a `static | allowlisted | open` gate.
+The memory gateway is the knowledge gateway's personal sibling, served by the same process on its own hostname: one OAuth connector URL gives any MCP host (Claude Desktop, Claude Code, Cursor; ChatGPT on a Business, Enterprise, or Edu workspace with admin-authorized Developer mode) a private, versioned memory. Identity maps to exactly one world; reads and writes are locked to it, the memory template is seeded on first access, and dynamic provisioning can create the world itself on first arrival behind a `static | allowlisted | open` gate.
 
 See [Memory Broker](./memory-broker.md) for connector setup per host.
 

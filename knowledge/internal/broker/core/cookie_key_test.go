@@ -50,13 +50,6 @@ func TestEnsureCookieKeyPropagatesStoreError(t *testing.T) {
 	}
 }
 
-func TestCookieKeyRefFileBackend(t *testing.T) {
-	cfg := &Config{Storage: StorageConfig{Backend: StorageBackendFile, Dir: "/state"}, Server: ServerConfig{CookieKeySecret: "x"}}
-	if got := CookieKeyRef(cfg).Path; got != "/state/cookie-key" {
-		t.Errorf("Path = %q", got)
-	}
-}
-
 func TestEnsureCookieKeyRejectsInvalidStoredKey(t *testing.T) {
 	ref := SecretRef{Namespace: "ns", Name: "cookie", Key: CookieKeySecretKey}
 	for name, stored := range map[string]string{

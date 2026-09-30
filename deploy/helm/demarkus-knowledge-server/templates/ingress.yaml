@@ -1,0 +1,41 @@
+{{- if .Values.ingress.enabled }}
+{{- include "demarkus-knowledge-server.validate" . -}}
+{{- /* One Ingress, one Service port: the process picks the gateway by Host,
+       so every host routes to the same backend and the paths never overlap
+       (the gateways own /mcp and their metadata, the management API the rest). */ -}}
+{{- $hosts := include "demarkus-knowledge-server.ingressHosts" . | fromJsonArray -}}
+{{- $tlsSecret := include "demarkus-knowledge-server.ingressTLSSecretName" . -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "demarkus-knowledge-server.fullname" . }}
+  labels:
+    {{- include "demarkus-knowledge-server.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- if $tlsSecret }}
+  tls:
+    - hosts:
+        {{- range $hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ $tlsSecret }}
+  {{- end }}
+  rules:
+    {{- range $hosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "demarkus-knowledge-server.fullname" $ }}
+                port:
+                  name: http
+    {{- end }}
+{{- end }}

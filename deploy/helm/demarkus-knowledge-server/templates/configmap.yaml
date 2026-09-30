@@ -21,8 +21,8 @@ data:
     tls:
       certFile: /run/demarkus/tls/tls.crt
       keyFile: /run/demarkus/tls/tls.key
-    {{- if .Values.dynamicWorlds.enabled }}
-    worldsFile: /run/demarkus/dynamic-worlds/worlds.yaml
+    {{- if include "demarkus-knowledge-server.provisioningEnabled" . }}
+    worldsFile: /run/demarkus/tenant-worlds/worlds.yaml
     {{- end }}
     worlds:
       {{- range $world := $worlds }}

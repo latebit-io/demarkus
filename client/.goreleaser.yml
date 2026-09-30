@@ -59,8 +59,8 @@ builds:
       - -s -w -X main.version={{ .Version }}
 
   # demarkus-agent ships as a container image (release-client bundles it
-  # into ghcr.io/.../demarkus-agent) AND as a linux tarball for native
-  # single-host installs (install.sh --with-agent).
+  # into ghcr.io/.../demarkus-agent) AND as a linux tarball: the standalone
+  # agent binary for hosts outside Kubernetes.
   - id: demarkus-agent
     main: ./cmd/demarkus-agent
     binary: demarkus-agent

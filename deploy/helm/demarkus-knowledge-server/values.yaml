@@ -1,5 +1,7 @@
+# demarkus-knowledge: the multi-world knowledge server and the OIDC broker
+# with its MCP gateways in one process. HTTP /healthz and /readyz probes.
 image:
-  repository: ghcr.io/latebit-io/demarkus-knowledge-server
+  repository: ghcr.io/latebit-io/demarkus-knowledge
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -8,7 +10,12 @@ replicaCount: 2
 
 server:
   udpPort: 6309
+  # The knowledge server's own liveness and readiness listener.
   healthPort: 8081
+  # The broker's plain HTTP listener: management API (OIDC login, device
+  # flow, /me/install) and both MCP gateways by hostname. The Ingress
+  # terminates TLS.
+  httpPort: 8080
   maxIncomingStreams: 128
   idleTimeout: 30s
   # Replicas tell each other about commits on this port (ALPN mark-peer),
@@ -17,9 +24,9 @@ server:
   # admitted only from this chart's pods by the NetworkPolicy.
   peerPort: 6310
 
-# Static worlds; empty is valid only with dynamicWorlds below, or when the
-# umbrella supplies global.worlds. An existing empty bucket is initialized and
-# seeded on first start. Both token Secrets mount optional: a world opens
+# Static worlds; empty is valid only with provisioning enabled below, or when
+# the umbrella supplies global.worlds. An existing empty bucket is initialized
+# and seeded on first start. Both token Secrets mount optional: a world opens
 # without them and reloads as they appear (ownership in the README).
 #
 # Only name and worldID are required. Everything else derives from
@@ -28,15 +35,24 @@ server:
 #   bucket.url:         <bucketPrefix><name>
 #   tokenSecret:        {name: <name>-tokens, key: tokens.toml}
 #   staticTokenSecret:  {name: <name>-static-tokens, key: tokens.toml}
-# Any field set on a world overrides the derived value.
+#   allow, writeScope:  worldDefaults, merged key by key
+# Any field set on a world overrides the derived value. The same entry
+# configures the gateway: allow is the per world identity predicate,
+# writeScope the paths an allowed identity may write, publicURL the address
+# /me/install hands direct clients (blank omits the world), hub marks the
+# world the agent publishes into, profile picks the gateway (knowledge, or
+# memory for a hand-provisioned tenant whose allow names one identity).
 worlds: []
   # - name: team-a
   #   worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+  #   allow:
+  #     groups: ["team-a"]
   # - name: team-b
   #   worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49
   #   authorities: [team-b.example.com]
   #   bucket: {url: gs://other-bucket}
   #   readOnly: true
+  #   publicURL: "mark://team-b.example.com:6309"
 
 tokens:
   admin:
@@ -51,7 +67,7 @@ tokens:
     token: ""
 
   # When true, also create a <world>-token-values Secret with the raw value.
-  # Required when the broker / federation agent manages the world.
+  # Required when the federation agent takes its hub token from it.
   emitRawValues: true
 
   # Token Secrets are runtime-owned (the broker appends to tokens.toml), so a
@@ -64,16 +80,34 @@ tokens:
     image: docker.io/alpine/k8s:1.35.5
     imagePullPolicy: IfNotPresent
 
-# Dynamic tenant worlds (memory-broker plan Phase 3): the memory broker
-# writes the two Secrets below and the server hot-reloads them at
-# runtime; `worlds: []` is then a legitimate install.
-dynamicWorlds:
-  enabled: false
-  # Secret in this namespace whose worlds.yaml key carries the fragment.
+# Dynamic tenant provisioning for the memory gateway: static disables it,
+# allowlisted gates on provisioning.allow, open admits any verified identity
+# and requires maxTenants. Needs broker.memory.publicURL. A provisioned
+# tenant is served in this process at once and recorded in the two Secrets
+# below, which the pods mount for restarts; `worlds: []` is then a
+# legitimate install. Flow, RBAC and the GCP credential requirement are in
+# the README.
+provisioning:
+  mode: static
+  # Gate for allowlisted mode; same predicate as per-world allow.
+  allow: {}
+    # domains: ["example.com"]
+    # emails: ["alice@example.com"]
+  # Hard cap on dynamic tenants. Required (>0) in open mode.
+  maxTenants: 0
+  # Per-tenant document quota (limits.maxDocuments). 0 = unlimited.
+  maxDocumentsPerTenant: 0
+  # GCP project + location for bucket creation. Tenant buckets are
+  # gs://<bucketPrefix><slug>, from worldDefaults.bucketPrefix or
+  # global.bucketPrefix; tenant authorities are <slug>.<authorityDomain>.
+  bucketProject: ""
+  bucketLocation: ""
+  # Secret in this namespace whose worlds.yaml key carries the tenant
+  # worlds fragment the server mounts.
   worldsSecret: memory-worlds-config
-  # Secret in this namespace holding one <slug>.toml key per tenant,
-  # mounted as a directory.
-  tokensSecret: memory-worlds-tokens
+  # Registry Secret name; blank uses the binary's default
+  # (demarkus-memory-broker-registry) so an upgrade keeps its tenants.
+  registrySecret: ""
 
 worldDefaults:
   # Suffix for derived authorities (<name>.<authorityDomain>); also the SNI
@@ -84,6 +118,13 @@ worldDefaults:
   # back to global.bucketPrefix; empty means every world sets bucket.url.
   bucketPrefix: ""
   readOnly: false
+  # Authorization predicate every world starts from; all lists empty admits
+  # any verified identity.
+  allow: {}
+  # Path globs an allowed identity may write through the gateway. /** is
+  # recursive; /* matches top-level entries only. Reads are never scoped.
+  writeScope:
+    paths: ["/**"]
   # Seeded as version 1 of /.well-known/demarkus/policy.md when the world is
   # created; empty uses the embedded warn-level default, and a world that has
   # a policy keeps it. Prose must never begin a line with a directive name
@@ -95,6 +136,8 @@ worldDefaults:
     requestsPerSecond: 50
     burst: 100
 
+# The QUIC certificate: every world authority as a SAN, plus the tenant
+# wildcard when provisioning is enabled.
 tls:
   # Set exactly one mode. Existing Secrets must contain tls.crt and tls.key.
   existingSecret: ""
@@ -108,6 +151,189 @@ tls:
     selfSigned:
       create: false
     annotations: {}
+
+# The broker half of the process. One HTTP listener serves the management
+# API and both MCP gateways; the gateway a request reaches is chosen by its
+# Host: the memory hostname when configured, the knowledge gateway otherwise.
+broker:
+  # Externally reachable base URL, no trailing slash (e.g.
+  # https://broker.example.com). Required: the issuer of the broker's
+  # discovery document and the default knowledge gateway URL.
+  publicURL: ""
+  # Knowledge gateway: every world with profile knowledge, org-open reads,
+  # writes under each world's allow and writeScope.
+  mcp:
+    # Base URL when the gateway is fronted at its own hostname
+    # (ingress.mcp.host); empty is broker.publicURL. Plugins join with
+    # <publicURL>/mcp.
+    publicURL: ""
+    # Tool surface: "full" (default) or "lean"; see MCP-API.md "Tool profiles".
+    toolProfile: "full"
+  # Memory gateway: one private world per identity, on when publicURL is set.
+  # Its hostname must differ from the knowledge gateway's.
+  memory:
+    publicURL: ""
+    toolProfile: "full"
+
+  # Signed-state-cookie HMAC key, base64-encoded, in one of three modes:
+  #   1. blank (default): the broker generates a key on first start and
+  #      persists it in the cookieKeySecret Secret; the render stays
+  #      deterministic under `helm template` (Argo CD, Flux).
+  #   2. cookieKey: a literal, in plaintext in your values.
+  #   3. existingCookieKeyRef: an operator-managed Secret (SealedSecret,
+  #      ExternalSecret), read through BROKER_COOKIE_KEY.
+  # Rotating invalidates in-flight logins.
+  cookieKey: ""
+  existingCookieKeyRef:
+    name: ""
+    key: cookie-key
+  # Secret holding the generated key. Default <fullname>-cookie-key.
+  cookieKeySecret: ""
+  # State cookie TTL: long enough to complete the OIDC redirect, short
+  # enough that a stale cookie cannot be replayed.
+  stateTTL: 5m
+  # DEV-ONLY: drop the Secure attribute on the OIDC state cookie so a
+  # plain-HTTP harness can replay it. In production it makes the cookie
+  # hijackable; keep false.
+  insecureCookies: false
+  # Refresh-token lifetime. 90 days matches industry defaults.
+  refreshTokenTTL: 2160h
+  # Broker-signed id_token lifetime; must be less than refreshTokenTTL.
+  idTokenTTL: 15m
+  # Broker state Secrets in the release namespace, kept across chart
+  # lifecycle events. Blank derives <fullname>-refresh-tokens,
+  # <fullname>-signing-key and <fullname>-dynamic-clients. Renaming
+  # dynamicClientsSecret after install orphans MCP host registrations.
+  refreshTokensSecret: ""
+  signingKeySecret: ""
+  dynamicClientsSecret: ""
+
+  oidc:
+    # OIDC discovery URL (e.g. https://accounts.google.com).
+    issuer: ""
+    # OAuth client ID registered at the IdP.
+    clientID: ""
+    # OAuth client secret: cleartext here (lives in helm release history) or
+    # an operator-managed Secret read through OIDC_CLIENT_SECRET. Exactly one.
+    clientSecret: ""
+    existingSecretRef:
+      name: ""
+      key: clientSecret
+    # Public URL of /auth/callback, exactly as registered with the IdP.
+    redirectURL: ""
+    # Google Workspace hosted-domain (`hd`) allowlist checked on every IdP
+    # exchange before any code or token is issued; empty admits any verified
+    # identity, then per-world allow applies.
+    allowDomains: []
+    # ECDSA P-256 key signing broker id_tokens, served at /.well-known/jwks.json:
+    #   1. blank (default): generated on first start into signingKeySecret.
+    #      Rotate by deleting the Secret and restarting the Deployment.
+    #   2. brokerSigningKey: a PEM literal (PKCS#8 or SEC1); dev only.
+    #   3. existingSigningKeyRef: an operator-managed Secret holding the PEM.
+    # Generate one with: openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256
+    brokerSigningKey: ""
+    existingSigningKeyRef:
+      name: ""
+      key: signing-key.pem
+
+  # Federation agent tokens the broker issues and keeps current: a
+  # publish-only token per entry, its hash in the world's tokens Secret, the
+  # raw value in secret[key]. Unset derives one entry per hub world matching
+  # the agent chart's default mount; [] turns it off. A Secret the broker did
+  # not create is left alone.
+  agentTokens: ~
+    # - world: root
+    #   secret: root-token-values
+    #   key: admin
+    #   # Default ["/**"].
+    #   paths: ["/**"]
+
+  # Registered confidential web clients (RFC 6749 2.1), such as the library.
+  # Each entry sets exactly one of clientSecret (hashed at load),
+  # clientSecretHash (sha256 hex) or existingSecretRef (the Secret the web
+  # app mounts). Native and CLI agents never appear here.
+  webClients: []
+    # - clientID: library-web
+    #   existingSecretRef:
+    #     name: library-oauth
+    #     key: clientSecret   # default
+    #   redirectURIs:
+    #     - https://library.example.com/auth/callback
+    #   name: Universe Library
+
+  # Worlds served elsewhere (another cluster) the gateway reads over QUIC.
+  # Writes stay local. internalAddress is the authority and SNI, dialAddress
+  # the socket when it differs, publicURL what /me/install hands out;
+  # namespace and tokensSecret (default <name>-tokens here) matter only
+  # when an agent token targets the world.
+  remoteWorlds: []
+    # - name: legacy
+    #   internalAddress: "legacy.other-cluster.example:6309"
+    #   allow:
+    #     groups: ["engineering"]
+  # QUIC dialing for remoteWorlds. insecureSkipVerify trusts the address it
+  # dialed; opt in only where those worlds carry self-signed certificates.
+  worldDialer:
+    insecureSkipVerify: false
+
+  # Refresh token expiry sweeper, leader-elected across replicas. Named
+  # `disabled` so the zero value keeps it on.
+  sweeper:
+    disabled: false
+    interval: 5m
+    leaseName: demarkus-broker-sweeper
+
+  # Per-subject (/me/install) and per-IP (/auth/login) token buckets.
+  # trustForwardedFor is only safe behind an Ingress that strips spoofed
+  # X-Forwarded-For; flip it off without one (dev, port-forward).
+  rateLimit:
+    disabled: false
+    tokens:
+      perMinute: 10
+      burst: 5
+    login:
+      perMinute: 20
+      burst: 5
+    trustForwardedFor: true
+
+# Role and RoleBinding in the release namespace for the broker's state: the
+# sweeper Lease, its own Secrets, each world's tokens Secret (agent token
+# hashes), agent token records, and the tenant registry and worlds fragment
+# when provisioning is on. Flip off only if RBAC is managed out of band.
+rbac:
+  create: true
+
+# Ingress fronting the HTTP listener with TLS at the controller. The
+# management host serves login and /me/install; the optional MCP and memory
+# hosts serve the two gateways at /mcp. Every host may also be the same
+# name: routes never overlap.
+ingress:
+  enabled: false
+  className: nginx
+  # Public hostname of the management API, e.g. broker.example.com.
+  # Required when enabled.
+  host: ""
+  annotations: {}
+  # Knowledge gateway hostname (broker.mcp.publicURL); empty routes the
+  # gateway through the management host.
+  mcp:
+    host: ""
+  # Memory gateway hostname (broker.memory.publicURL). Required when the
+  # memory gateway is configured and the Ingress is on.
+  memory:
+    host: ""
+  # TLS for every host above. Two modes, or neither when the controller
+  # terminates TLS on its own:
+  #   1. existingSecret: a kubernetes.io/tls Secret covering all hosts.
+  #   2. certManager.enabled: one Certificate with every host as a SAN.
+  tls:
+    existingSecret: ""
+    certManager:
+      enabled: false
+      issuerRef:
+        kind: ClusterIssuer
+        name: letsencrypt-prod
+      annotations: {}
 
 service:
   type: ClusterIP
@@ -151,13 +377,12 @@ podDisruptionBudget:
 
 networkPolicy:
   enabled: true
-  # Standard NetworkPolicy cannot restrict GCS by FQDN. Explicitly accept
-  # unrestricted TCP/443, or disable this policy and supply CNI/proxy controls.
+  # Standard NetworkPolicy cannot restrict GCS by FQDN, and the OIDC issuer
+  # and the API server sit behind TCP 443 too. Explicitly accept unrestricted
+  # TCP/443, or disable this policy and supply CNI/proxy controls.
   allowUnrestrictedHTTPS: false
-  broker:
-    namespace: demarkus-knowledge-broker
-    podLabels:
-      app.kubernetes.io/name: demarkus-knowledge-broker
+  # Namespace of the Ingress controller that may reach the HTTP listener.
+  ingressFromNamespace: ingress-nginx
   agent:
     namespace: demarkus-agent
     podLabels:
@@ -187,6 +412,9 @@ topologySpreadConstraints:
     topologyKey: topology.kubernetes.io/zone
     whenUnsatisfiable: ScheduleAnyway
 
+# Extra environment for the container, e.g. STORAGE_EMULATOR_HOST for a
+# GCS emulator in a dev cluster.
+extraEnv: []
 terminationGracePeriodSeconds: 30
 nodeSelector: {}
 tolerations: []

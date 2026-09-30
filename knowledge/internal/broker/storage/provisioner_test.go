@@ -114,7 +114,7 @@ func TestEnsureTenantProvisionsAndConverges(t *testing.T) {
 	if !strings.HasPrefix(world.Name, "eve-adams-") {
 		t.Errorf("world name = %q", world.Name)
 	}
-	if world.DialAddress != cfg.Provisioning.DialAddress || world.TokensSecretKey != world.Name+".toml" {
+	if !world.Local || world.TokensSecret != "" || world.InternalAddress != world.Name+".memory-worlds.svc.cluster.local:6309" {
 		t.Errorf("world template wrong: %+v", world)
 	}
 	if len(world.Allow.Emails) != 1 || world.Allow.Emails[0] != "eve.adams@example.com" {
@@ -125,13 +125,9 @@ func TestEnsureTenantProvisionsAndConverges(t *testing.T) {
 	if len(buckets.Created) != 1 || buckets.Created[0] != "memory-"+world.Name {
 		t.Errorf("buckets created = %v", buckets.Created)
 	}
-	// Tokens key exists and is non-empty.
-	if len(store.get(core.WorldTokensRef(&world))) == 0 {
-		t.Error("tokens key was not seeded")
-	}
 	// Fragment rendered with the world, bootstrap on.
 	fragment := string(store.get(core.WorldsFragmentRef(cfg)))
-	for _, want := range []string{"name: " + world.Name, "bootstrap: true", "gs://memory-" + world.Name, world.Name + ".toml", world.Name + ".memory-worlds.svc.cluster.local"} {
+	for _, want := range []string{"name: " + world.Name, "bootstrap: true", "gs://memory-" + world.Name, world.Name + ".memory-worlds.svc.cluster.local"} {
 		if !strings.Contains(fragment, want) {
 			t.Errorf("fragment missing %q:\n%s", want, fragment)
 		}
@@ -783,10 +779,6 @@ func TestDeprovisionTenantRemovesEverything(t *testing.T) {
 	fragment := string(store.get(core.WorldsFragmentRef(cfg)))
 	if strings.Contains(fragment, "name: "+world.Name) || !strings.Contains(fragment, "name: "+frankWorld.Name) {
 		t.Errorf("fragment after deprovision:\n%s", fragment)
-	}
-	// Tokens key deleted.
-	if got := store.get(core.WorldTokensRef(&world)); len(got) != 0 {
-		t.Errorf("tokens key survived deprovision: %q", got)
 	}
 	// Bucket deleted on request.
 	deleted := buckets.DeletedBuckets()

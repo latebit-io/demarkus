@@ -17,7 +17,6 @@ import (
 type Config struct {
 	Server       ServerConfig       `yaml:"server"`
 	OIDC         OIDCConfig         `yaml:"oidc"`
-	Storage      StorageConfig      `yaml:"storage"`
 	Worlds       []WorldConfig      `yaml:"worlds"`
 	WebClients   []WebClientConfig  `yaml:"webClients"`
 	Sweeper      SweeperConfig      `yaml:"sweeper"`
@@ -48,28 +47,6 @@ const (
 // MCPPath is the JSON-RPC endpoint of every gateway; the RFC 8707 resource
 // indicator and the RFC 9728 path-inserted metadata route derive from it.
 const MCPPath = "/mcp"
-
-// StorageConfig.Backend values.
-const (
-	StorageBackendKubernetes = "kubernetes"
-	StorageBackendFile       = "file"
-)
-
-// StorageConfig selects the credential backend. "kubernetes" (the default)
-// keeps everything in Secrets; "file" is single-host mode, where broker state
-// lives under Dir and world token hashes go into each world's tokensFile.
-type StorageConfig struct {
-	Backend string `yaml:"backend"`
-	// Dir is the broker's state directory in file mode. Required then.
-	Dir string `yaml:"dir"`
-}
-
-func (c *Config) fileBackend() bool {
-	return c.Storage.Backend == StorageBackendFile
-}
-
-// FileBackend reports whether the broker runs in single-host file mode.
-func (c *Config) FileBackend() bool { return c.fileBackend() }
 
 // WebClientConfig registers one confidential web client (RFC 6749 2.1): a
 // server side app with a secret and a real https redirect. The list is operator
@@ -167,8 +144,8 @@ type ServerConfig struct {
 	// blank lets each profile name itself.
 	Realm string `yaml:"realm"`
 	// MCP is the knowledge gateway. It answers /mcp on every host the memory
-	// gateway does not claim, and on its own listener when Addr is set.
-	MCP MCPConfig `yaml:"mcp"`
+	// gateway does not claim.
+	MCP GatewayConfig `yaml:"mcp"`
 	// Memory is the memory gateway, on when PublicURL is set; requests whose
 	// Host is its hostname reach it.
 	Memory GatewayConfig `yaml:"memory"`
@@ -200,17 +177,6 @@ func (g GatewayConfig) Host() string {
 	return strings.ToLower(u.Hostname())
 }
 
-// MCPConfig is the knowledge gateway plus the listener the charts still
-// route its host to; both listeners serve the same mux.
-type MCPConfig struct {
-	GatewayConfig `yaml:",inline"`
-	// Addr is the extra listen address; blank means the management listener
-	// alone. When set it must differ from Server.Addr.
-	Addr string `yaml:"addr"`
-	// TLS terminates HTTPS on the extra listener when both files are set.
-	TLS MCPTLSConfig `yaml:"tls"`
-}
-
 // Gateway is the profile's gateway config. The knowledge gateway defaults
 // its URL to the issuer here, the one place, so configs built without the
 // loader resolve the same URL.
@@ -218,7 +184,7 @@ func (s *ServerConfig) Gateway(profile string) GatewayConfig {
 	if profile == ProfileMemory {
 		return s.Memory
 	}
-	gw := s.MCP.GatewayConfig
+	gw := s.MCP
 	if gw.PublicURL == "" {
 		gw.PublicURL = s.PublicURL
 	}
@@ -243,13 +209,6 @@ func CanonicalResource(raw string) (string, error) {
 		return "", fmt.Errorf("resource must be an absolute URL")
 	}
 	return resource, err
-}
-
-// MCPTLSConfig is the optional cert and key pair for the gateway listener.
-// Set both or neither.
-type MCPTLSConfig struct {
-	CertFile string `yaml:"certFile"`
-	KeyFile  string `yaml:"keyFile"`
 }
 
 // OIDCConfig describes the OIDC client registration at the IdP. Discovery
@@ -297,19 +256,14 @@ type WorldConfig struct {
 	// DialAddress splits the socket target from the logical authority: dial
 	// here, keep SNI and URL identity on InternalAddress.
 	DialAddress string `yaml:"dialAddress"`
-	// TokensSecretKey overrides the data key in TokensSecret (default
-	// "tokens.toml"); dynamic tenants share one Secret with a key per world.
-	TokensSecretKey string `yaml:"tokensSecretKey"`
-	// TokensFile is the world server's tokens.toml path, file backend only.
-	TokensFile string `yaml:"tokensFile"`
+	// Local marks a world the knowledge server in this process serves: tool
+	// calls run in process and the server must route its authority at start.
+	Local bool `yaml:"local"`
 	// Allow is the per world authorization predicate; all lists empty admits
 	// any verified identity.
 	Allow AllowConfig `yaml:"allow"`
 	// WriteScope is the path scope the gateway may write in this world.
 	WriteScope WriteScope `yaml:"writeScope"`
-	// LegacyWriteScope is the same scope under the write token era's key,
-	// accepted until the charts render writeScope; the loader folds it in.
-	LegacyWriteScope WriteScope `yaml:"defaultToken"`
 }
 
 // AllowConfig is the per world predicate: all lists empty admits any verified

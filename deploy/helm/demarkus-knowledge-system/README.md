@@ -1,9 +1,9 @@
 # demarkus-knowledge-system Helm chart
 
-One values file installs a knowledge system: the multi-world
-`demarkus-knowledge-server`, the `demarkus-knowledge-broker` (OIDC login plus
-the MCP gateway), the `demarkus-agent` federation crawler and, optionally,
-the `demarkus-library` reading room. Each world is declared once under
+One values file installs a knowledge system: `demarkus-knowledge-server`
+(the multi-world server with the OIDC broker and its MCP gateways in one
+process), the `demarkus-agent` federation crawler and, optionally, the
+`demarkus-library` reading room. Each world is declared once under
 `global.worlds`; every sub-chart derives its own entries from that list.
 
 ## Install
@@ -25,28 +25,26 @@ knowledge:
   serviceAccount:
     workloadIdentity:
       gsa: demarkus-knowledge@my-project.iam.gserviceaccount.com
-
-broker:
-  server:
+  broker:
     publicURL: https://broker.example.com
-  oidc:
-    issuer: https://accounts.google.com
-    clientID: YOUR_CLIENT_ID
-    existingSecretRef:
-      name: broker-oidc
-    redirectURL: https://broker.example.com/auth/callback
+    oidc:
+      issuer: https://accounts.google.com
+      clientID: YOUR_CLIENT_ID
+      existingSecretRef:
+        name: broker-oidc
+      redirectURL: https://broker.example.com/auth/callback
+    webClients:
+      - clientID: library-web
+        existingSecretRef:
+          name: library-oauth
+        redirectURIs:
+          - https://library.example.com/auth/callback
   ingress:
     enabled: true
     host: broker.example.com
     tls:
       certManager:
         enabled: true
-  webClients:
-    - clientID: library-web
-      existingSecretRef:
-        name: library-oauth
-      redirectURIs:
-        - https://library.example.com/auth/callback
 
 library:
   enabled: true
@@ -69,12 +67,13 @@ helm upgrade --install demarkus oci://ghcr.io/latebit-io/charts/demarkus-knowled
 
 Two Secrets, both yours: the IdP client secret and the library's client
 secret (the broker hashes it at load, so it is shared, not duplicated). The
-broker generates and persists its own signing key on first start, creates
-each world's tokens Secret on its first write, and issues the agent's hub
-token into `<hub>-token-values` (`broker.agentTokens`), which the agent
+broker generates and persists its own signing key on first start, serves
+writes through the gateway under each world's `allow` and `writeScope`
+without any token, and issues the agent's hub token into
+`<hub>-token-values` (`knowledge.broker.agentTokens`), which the agent
 projects. Buckets and the GSA are the only out-of-cluster prerequisites.
 
-The render is the same under Argo CD or Flux: the knowledge server's
+The render is the same under Argo CD or Flux: the knowledge chart's
 bootstrap Job is off (`knowledge.tokens.bootstrap.enabled: false`), so no
 hook, no kubectl image and no token Secret to seal. An install that ran the
 Job keeps its `<hub>-token-values`; the broker leaves a Secret it did not
@@ -82,24 +81,25 @@ create alone. Delete that Secret to hand the token over to the broker.
 
 ## What derives from `global`
 
-| Global | Knowledge server | Broker | Agent |
-| --- | --- | --- | --- |
-| `worlds[].name` | world, `<name>-tokens` and `<name>-static-tokens` Secrets | world, per-world RBAC, `<name>-tokens` | seed (`mark://<name>`) |
-| `worlds[].worldID` | `bucket.worldID` | | |
-| `worlds[].hub` | | `agentTokens` entry writing `<hub>-token-values` | hub target, `<hub>-token-values` publish token |
-| `worlds[].allow` | | per-world predicate | |
-| `worlds[].readOnly`, `initialPolicy`, `limits` | as is | | |
-| `bucketPrefix` | `bucket.url = <prefix><name>` | | |
-| `knowledgeService` | resource and Service name | `dialAddress` | `dial_address` |
-| `authorityDomain` | authorities `<name>.<domain>` (certificate SANs) | `internalAddress` `<name>.<domain>:6309` | `server_name` |
+| Global | Knowledge (worlds and broker) | Agent |
+| --- | --- | --- |
+| `worlds[].name` | world, `<name>-tokens` and `<name>-static-tokens` Secrets, gateway world served in process | seed (`mark://<name>`) |
+| `worlds[].worldID` | `bucket.worldID` | |
+| `worlds[].hub` | `agentTokens` entry writing `<hub>-token-values` | hub target, `<hub>-token-values` publish token |
+| `worlds[].allow`, `writeScope`, `publicURL` | gateway predicate, write scope, `/me/install` address | |
+| `worlds[].readOnly`, `initialPolicy`, `limits` | as is | |
+| `bucketPrefix` | `bucket.url = <prefix><name>`, tenant buckets | |
+| `knowledgeService` | resource and Service name | `dial_address` |
+| `authorityDomain` | authorities `<name>.<domain>` (certificate SANs, gateway SNI) | `server_name` |
 
 `authorityDomain` defaults to `<knowledgeService>.<release namespace>.svc.cluster.local`.
-It only has to agree between the three charts; it never resolves in DNS,
-because the broker and agent dial the shared Service directly and present
-the authority as SNI. No ExternalName alias Services are needed.
+It only has to agree between the two charts; it never resolves in DNS,
+because the agent dials the shared Service directly and presents the
+authority as SNI, and the gateways reach the worlds in process. No
+ExternalName alias Services are needed.
 
 Any field set explicitly on a sub-chart overrides its derived value, so a
-world with a hand-managed bucket or a legacy per-namespace server still fits.
+world with a hand-managed bucket still fits.
 
 ## What does not derive
 
@@ -111,18 +111,21 @@ entry.
 ## Defaults worth knowing
 
 - Sub-chart resources are named `knowledge` (from `global.knowledgeService`),
-  `broker`, `agent` and `library` (through `fullnameOverride`).
-- Every world lives in the release namespace, next to the knowledge server
-  that mounts its token Secrets; a `namespace` on a `global.worlds` entry
-  fails the render.
-- The knowledge server renders a self-signed cert-manager `Issuer`; the
-  broker (`worldDialer.insecureSkipVerify`) and agent (`insecure`) skip
-  verification. Replace with a CA issuer and flip both once one exists.
+  `agent` and `library` (through `fullnameOverride`). The broker's state
+  Secrets follow: `knowledge-refresh-tokens`, `knowledge-signing-key`,
+  `knowledge-cookie-key`, `knowledge-dynamic-clients`.
+- Every world lives in the release namespace, next to the pods that mount
+  its token Secrets; a `namespace` on a `global.worlds` entry fails the
+  render.
+- The knowledge chart renders a self-signed cert-manager `Issuer` for QUIC;
+  the agent (`insecure`) skips verification. Replace with a CA issuer and
+  flip it once one exists. The broker's Ingress TLS is separate
+  (`knowledge.ingress.tls`).
 - NetworkPolicies are off (the standalone charts default them on). Enabling
-  the knowledge server's policy under
-  the umbrella also needs `knowledge.networkPolicy.broker.namespace` and
-  `agent.namespace` set to the release namespace; pod labels already match.
-- The knowledge server runs two replicas and refuses fewer.
+  the knowledge chart's policy under the umbrella also needs
+  `knowledge.networkPolicy.agent.namespace` set to the release namespace and
+  `ingressFromNamespace` to your controller's; pod labels already match.
+- The knowledge deployment runs two replicas and refuses fewer.
 
 ## Tests
 

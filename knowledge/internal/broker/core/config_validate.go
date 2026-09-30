@@ -3,7 +3,6 @@ package core
 import (
 	"fmt"
 	"net/url"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -30,8 +29,8 @@ func (c *Config) validate() error {
 	if c.Server.Addr == "" {
 		return fmt.Errorf("server.addr is required")
 	}
-	if err := c.validateStorage(); err != nil {
-		return err
+	if c.Server.BrokerNamespace == "" {
+		return fmt.Errorf("server.brokerNamespace is required")
 	}
 	if err := c.Server.normalizePublicURLs(); err != nil {
 		return err
@@ -54,7 +53,7 @@ func (c *Config) validate() error {
 	if err := c.OIDC.validate(); err != nil {
 		return err
 	}
-	if err := c.Provisioning.validate(c.fileBackend()); err != nil {
+	if err := c.Provisioning.validate(); err != nil {
 		return err
 	}
 	if c.Provisioning.Enabled() && !c.Server.Memory.Enabled() {
@@ -87,7 +86,7 @@ func (c *Config) validateWorlds() (map[[2]string]string, error) {
 	seenSecretRefs := make(map[[2]string]string, len(c.Worlds))
 	for i := range c.Worlds {
 		w := &c.Worlds[i]
-		if err := validateWorld(i, w, c.fileBackend()); err != nil {
+		if err := validateWorld(i, w); err != nil {
 			return nil, err
 		}
 		if err := c.validateWorldProfile(i, w); err != nil {
@@ -97,13 +96,11 @@ func (c *Config) validateWorlds() (map[[2]string]string, error) {
 			return nil, fmt.Errorf("worlds[%d]: duplicate name %q", i, w.Name)
 		}
 		seen[w.Name] = true
-		if !c.fileBackend() {
-			ref := [2]string{w.Namespace, w.TokensSecret}
-			if other, ok := seenSecretRefs[ref]; ok {
-				return nil, fmt.Errorf("worlds[%d] (%s): duplicate tokens Secret reference %q (also used by world %q)", i, w.Name, fmt.Sprintf("%s/%s", ref[0], ref[1]), other)
-			}
-			seenSecretRefs[ref] = w.Name
+		ref := [2]string{w.Namespace, w.TokensSecret}
+		if other, ok := seenSecretRefs[ref]; ok {
+			return nil, fmt.Errorf("worlds[%d] (%s): duplicate tokens Secret reference %q (also used by world %q)", i, w.Name, fmt.Sprintf("%s/%s", ref[0], ref[1]), other)
 		}
+		seenSecretRefs[ref] = w.Name
 	}
 	return seenSecretRefs, nil
 }
@@ -159,9 +156,6 @@ func (c *Config) validateAgentTokens(tokenSecrets map[[2]string]string) error {
 	if len(c.AgentTokens) == 0 {
 		return nil
 	}
-	if c.fileBackend() {
-		return fmt.Errorf("agentTokens requires storage.backend %q", StorageBackendKubernetes)
-	}
 	worlds := make(map[string]*WorldConfig, len(c.Worlds))
 	for i := range c.Worlds {
 		worlds[c.Worlds[i].Name] = &c.Worlds[i]
@@ -195,51 +189,6 @@ func (c *Config) validateAgentTokens(tokenSecrets map[[2]string]string) error {
 		if len(spec.Paths) == 0 {
 			spec.Paths = []string{"/**"}
 		}
-	}
-	return nil
-}
-
-// validateStorage normalizes the backend selection and enforces what each
-// backend needs: a state dir in file mode, the broker namespace otherwise.
-func (c *Config) validateStorage() error {
-	switch c.Storage.Backend {
-	case "":
-		c.Storage.Backend = StorageBackendKubernetes
-	case StorageBackendKubernetes, StorageBackendFile:
-	default:
-		return fmt.Errorf("storage.backend must be %q or %q (got %q)", StorageBackendKubernetes, StorageBackendFile, c.Storage.Backend)
-	}
-	if c.fileBackend() {
-		if c.Storage.Dir == "" {
-			return fmt.Errorf("storage.dir is required when storage.backend is %q", StorageBackendFile)
-		}
-		return c.validateFilePaths()
-	}
-	if c.Server.BrokerNamespace == "" {
-		return fmt.Errorf("server.brokerNamespace is required")
-	}
-	return nil
-}
-
-// validateFilePaths rejects tokensFile values aliasing each other or a
-// broker-state file: two stores mutating one document corrupts it.
-func (c *Config) validateFilePaths() error {
-	seen := map[string]string{
-		filepath.Clean(RefreshTokensRef(c).Path):  "storage.dir refresh-tokens state",
-		filepath.Clean(DynamicClientsRef(c).Path): "storage.dir dynamic-clients state",
-		filepath.Clean(SigningKeyRef(c).Path):     "storage.dir signing-key state",
-		filepath.Clean(CookieKeyRef(c).Path):      "storage.dir cookie-key state",
-	}
-	for i := range c.Worlds {
-		w := &c.Worlds[i]
-		if w.TokensFile == "" {
-			continue
-		}
-		p := filepath.Clean(w.TokensFile)
-		if other, ok := seen[p]; ok {
-			return fmt.Errorf("worlds[%d] (%s): tokensFile %q collides with %s", i, w.Name, w.TokensFile, other)
-		}
-		seen[p] = fmt.Sprintf("tokensFile of world %q", w.Name)
 	}
 	return nil
 }
@@ -307,12 +256,8 @@ func (s *ServerConfig) normalizePublicURLs() error {
 // validateGateways fills both gateways' defaults. The memory gateway is
 // selected by Host, so its hostname must differ from the knowledge gateway's.
 func (s *ServerConfig) validateGateways() error {
-	if err := s.MCP.validate(); err != nil {
+	if err := s.MCP.validate("server.mcp"); err != nil {
 		return err
-	}
-	if s.MCP.Addr != "" && s.MCP.Addr == s.Addr {
-		// Caught here so the typo reads as such, not as a bind error at startup.
-		return fmt.Errorf("server.mcp.addr must differ from server.addr (both are %q)", s.Addr)
 	}
 	if !s.Memory.Enabled() {
 		return nil
@@ -337,35 +282,15 @@ func (g *GatewayConfig) validate(field string) error {
 	return nil
 }
 
-// validate rejects a half set TLS pair, which would otherwise fail at
-// listen or silently serve plain HTTP.
-func (m *MCPConfig) validate() error {
-	if err := m.GatewayConfig.validate("server.mcp"); err != nil {
-		return err
-	}
-	hasCert := m.TLS.CertFile != ""
-	hasKey := m.TLS.KeyFile != ""
-	if hasCert != hasKey {
-		return fmt.Errorf("server.mcp.tls.certFile and server.mcp.tls.keyFile must be set together")
-	}
-	return nil
-}
-
 // validateWorld owns the checks on one world and normalizes its allow lists
 // in place; the caller owns the checks across worlds, such as duplicates.
-func validateWorld(i int, w *WorldConfig, fileMode bool) error {
+func validateWorld(i int, w *WorldConfig) error {
 	switch {
 	case w.Name == "":
 		return fmt.Errorf("worlds[%d]: name is required", i)
 	case !WorldNameRE.MatchString(w.Name):
 		return fmt.Errorf("worlds[%d]: name %q must be a DNS label: lowercase letters, digits and hyphens, at most 63, no hyphen at either end", i, w.Name)
-	case len(w.WriteScope.Paths) > 0 && len(w.LegacyWriteScope.Paths) > 0:
-		return fmt.Errorf("worlds[%d] (%s): writeScope and defaultToken are the same setting; set one", i, w.Name)
-	}
-	if len(w.WriteScope.Paths) == 0 {
-		w.WriteScope, w.LegacyWriteScope = w.LegacyWriteScope, WriteScope{}
-	}
-	if len(w.WriteScope.Paths) == 0 {
+	case len(w.WriteScope.Paths) == 0:
 		return fmt.Errorf("worlds[%d] (%s): writeScope.paths is required", i, w.Name)
 	}
 	for _, pattern := range w.WriteScope.Paths {
@@ -373,25 +298,13 @@ func validateWorld(i int, w *WorldConfig, fileMode bool) error {
 			return fmt.Errorf("worlds[%d] (%s): writeScope.paths %q: %w", i, w.Name, pattern, err)
 		}
 	}
-	// Kubernetes worlds live in a namespace with a tokens Secret; file mode
-	// worlds need a local tokens.toml and an explicit address, since the
-	// cluster DNS default means nothing off cluster.
-	if fileMode {
-		switch {
-		case w.TokensFile == "":
-			return fmt.Errorf("worlds[%d] (%s): tokensFile is required in file-backend mode", i, w.Name)
-		case w.InternalAddress == "":
-			return fmt.Errorf("worlds[%d] (%s): internalAddress is required in file-backend mode", i, w.Name)
-		}
-	} else {
-		w.Namespace = strings.ToLower(strings.TrimSpace(w.Namespace))
-		w.TokensSecret = strings.ToLower(strings.TrimSpace(w.TokensSecret))
-		switch {
-		case w.Namespace == "":
-			return fmt.Errorf("worlds[%d] (%s): namespace is required", i, w.Name)
-		case w.TokensSecret == "":
-			return fmt.Errorf("worlds[%d] (%s): tokensSecret is required", i, w.Name)
-		}
+	w.Namespace = strings.ToLower(strings.TrimSpace(w.Namespace))
+	w.TokensSecret = strings.ToLower(strings.TrimSpace(w.TokensSecret))
+	switch {
+	case w.Namespace == "":
+		return fmt.Errorf("worlds[%d] (%s): namespace is required", i, w.Name)
+	case w.TokensSecret == "":
+		return fmt.Errorf("worlds[%d] (%s): tokensSecret is required", i, w.Name)
 	}
 	// Lowercased and trimmed at load so authorization is a plain compare.
 	// An empty entry is a typo and surfaces here rather than never matching.

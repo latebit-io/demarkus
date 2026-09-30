@@ -161,18 +161,14 @@ Clients (CLI/TUI/MCP)
 
 The filesystem form needs no database and no background services.
 
-### Brokered knowledge system
+### Knowledge system
 
-`demarkus-knowledge-broker` fronts one or more worlds: it terminates MCP over HTTPS with OIDC auth, mints per-world capability tokens, and speaks QUIC to the worlds behind it. The federation agent (`demarkus-agent`) crawls the worlds on a schedule; with the publish flags set and at least one hub configured it publishes hash indexes and graph snapshots to the hub, skipping publication when a crawl is incomplete.
+`demarkus-knowledge` serves many worlds in one process and fronts them itself: it terminates MCP over HTTPS with OIDC auth, dispatches tool calls to the worlds in process, and authorizes a write by the identity's grant against the world's `allow` and `writeScope`, so no per-world token is minted. The edge is a package boundary, not a process boundary: the store handler still knows no user identity. The federation agent (`demarkus-agent`) crawls the worlds over QUIC on a schedule; with the publish flags set and at least one hub configured it publishes hash indexes and graph snapshots to the hub, skipping publication when a crawl is incomplete.
 
 ```text
-Agents (MCP over HTTPS, OIDC)
-        |
-  demarkus-knowledge-broker ── demarkus-agent (scheduled crawl)
-        |
-   QUIC/TLS (per-world tokens)
-        |
-  worlds (demarkus-server instances)
+Agents (MCP over HTTPS, OIDC)          demarkus-agent (scheduled crawl)
+        |                                       |
+  demarkus-knowledge: gateways ── in process ── worlds (GCS buckets) ── QUIC/TLS (capability tokens)
 ```
 
 ### Multi-world knowledge server

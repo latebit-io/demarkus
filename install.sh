@@ -8,19 +8,11 @@
 #   curl -fsSL ... | bash -s -- --tls-cert /path/cert.pem --tls-key /path/key.pem
 #   curl -fsSL ... | bash -s -- --client-only
 #
-# Single-host stack (server + broker + library on one Linux host):
-#   curl -fsSL ... | sudo bash -s -- --domain example.com --with-broker --with-library \
-#     --broker-public-url https://broker.example.com \
-#     --broker-oidc-issuer https://accounts.google.com \
-#     --broker-oidc-client-id <id> \
-#     --broker-oidc-client-secret-file /root/oidc-secret
-#   The broker binds loopback (:8080 OAuth/API, :8081 MCP); front the
-#   public URL with a TLS reverse proxy. Omit the OIDC flags to scaffold
-#   the broker config for later editing; --with-library alone serves a
-#   read-only reading room: HTTPS on :443 with the world's cert when TLS
-#   is configured (--domain or --tls-cert), else HTTP on :8090. Override
-#   with --library-port; pin the version with --library-version. Pin the
-#   broker with --broker-version.
+# Reading room (--with-library, beside the server on one Linux host):
+#   curl -fsSL ... | sudo bash -s -- --domain example.com --with-library
+#   Serves a read-only reading room: HTTPS on :443 with the world's cert
+#   when TLS is configured (--domain or --tls-cert), else HTTP on :8090.
+#   Override with --library-port; pin the version with --library-version.
 #
 # For private repos, set GITHUB_TOKEN:
 #   curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
@@ -30,7 +22,6 @@
 # After install:
 #   demarkus-install update          # update to latest version
 #                                    #   --library-version pins the reading room
-#                                    #   --broker-version pins the broker
 #   demarkus-install uninstall       # remove everything
 #
 set -euo pipefail
@@ -1178,320 +1169,11 @@ migrate() {
 
 # --- Main flows ---
 
-# --- single-host stack: broker + library beside the server ------------------
+# --- reading room: library beside the server --------------------------------
 
-BROKER_SERVICE="demarkus-knowledge-broker"
-BROKER_CONFIG_DIR="/etc/demarkus-knowledge-broker"
-BROKER_STATE_DIR="/var/lib/demarkus-knowledge-broker"
-# Pre-rename identity, consumed only by migrate_broker_single_host.
-BROKER_LEGACY_SERVICE="demarkus-broker"
-BROKER_LEGACY_CONFIG_DIR="/etc/demarkus-broker"
-BROKER_LEGACY_STATE_DIR="/var/lib/demarkus-broker"
 LIBRARY_SERVICE="demarkus-library"
 LIBRARY_CONFIG_DIR="/etc/demarkus-library"
 LIBRARY_REPO="latebit-io/demarkus-library"
-
-# migrate_broker_single_host renames a pre-rename broker install in place
-# (unit, user, dirs, binary, and every name reference inside the kept config
-# and unit). One-shot; no-op unless the legacy unit exists. Fails closed.
-migrate_broker_single_host() {
-  if [ "$PLATFORM" != "linux" ] || ! $SUDO test -f "${SYSTEMD_DIR}/${BROKER_LEGACY_SERVICE}.service"; then
-    return 0
-  fi
-  log_step "Migrating single-host broker to the ${BROKER_SERVICE} name"
-
-  # A legacy artifact coexisting with its new-name counterpart is not a
-  # partial migration (a prior run would have removed the legacy copy);
-  # it is an independent new-name install. Ambiguous: never merge, abort.
-  local legacy new
-  for legacy in "$BROKER_LEGACY_CONFIG_DIR" "$BROKER_LEGACY_STATE_DIR" "${INSTALL_DIR}/${BROKER_LEGACY_SERVICE}"; do
-    case "$legacy" in
-      "$BROKER_LEGACY_CONFIG_DIR") new="$BROKER_CONFIG_DIR" ;;
-      "$BROKER_LEGACY_STATE_DIR")  new="$BROKER_STATE_DIR" ;;
-      *)                           new="${INSTALL_DIR}/${BROKER_SERVICE}" ;;
-    esac
-    if $SUDO test -e "$legacy" && $SUDO test -e "$new"; then
-      log_error "Both ${legacy} and ${new} exist; resolve manually before migrating"
-      exit 1
-    fi
-  done
-  if $SUDO test -f "${SYSTEMD_DIR}/${BROKER_SERVICE}.service"; then
-    log_error "Both ${BROKER_LEGACY_SERVICE}.service and ${BROKER_SERVICE}.service exist; resolve manually before migrating"
-    exit 1
-  fi
-
-  # is-enabled/is-active exit nonzero for both expected states and probe
-  # errors; only the printed state distinguishes them.
-  local was_enabled=false was_active=false state
-  state=$($SUDO systemctl is-enabled "$BROKER_LEGACY_SERVICE" 2>/dev/null) || true
-  case "$state" in
-    enabled|enabled-runtime) was_enabled=true ;;
-    disabled|static|masked|indirect|linked|alias) : ;;
-    *) log_error "Could not probe ${BROKER_LEGACY_SERVICE} enablement (got '${state}')"; exit 1 ;;
-  esac
-  state=$($SUDO systemctl is-active "$BROKER_LEGACY_SERVICE" 2>/dev/null) || true
-  case "$state" in
-    active|activating) was_active=true ;;
-    inactive|failed|deactivating) : ;;
-    *) log_error "Could not probe ${BROKER_LEGACY_SERVICE} activity (got '${state}')"; exit 1 ;;
-  esac
-  if [ "$was_active" = true ] && ! $SUDO systemctl stop "$BROKER_LEGACY_SERVICE"; then
-    log_error "Could not stop ${BROKER_LEGACY_SERVICE} for migration"
-    exit 1
-  fi
-  if [ "$was_enabled" = true ] && ! $SUDO systemctl disable "$BROKER_LEGACY_SERVICE"; then
-    log_error "Could not disable ${BROKER_LEGACY_SERVICE} for migration"
-    exit 1
-  fi
-  if $SUDO test -d "$BROKER_LEGACY_CONFIG_DIR"; then
-    $SUDO mv "$BROKER_LEGACY_CONFIG_DIR" "$BROKER_CONFIG_DIR" || { log_error "Could not move ${BROKER_LEGACY_CONFIG_DIR} to ${BROKER_CONFIG_DIR}"; exit 1; }
-  fi
-  if $SUDO test -d "$BROKER_LEGACY_STATE_DIR"; then
-    $SUDO mv "$BROKER_LEGACY_STATE_DIR" "$BROKER_STATE_DIR" || { log_error "Could not move ${BROKER_LEGACY_STATE_DIR} to ${BROKER_STATE_DIR}"; exit 1; }
-  fi
-  # Rename the user and group before any chown to the new name. A
-  # pre-existing new-name group would leave groupmod half-applied: abort.
-  if id "$BROKER_LEGACY_SERVICE" >/dev/null 2>&1 && ! id "$BROKER_SERVICE" >/dev/null 2>&1; then
-    if getent group "$BROKER_SERVICE" >/dev/null 2>&1; then
-      log_error "Group ${BROKER_SERVICE} already exists; resolve manually before migrating"
-      exit 1
-    fi
-    if ! $SUDO usermod -l "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE" || ! $SUDO groupmod -n "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE"; then
-      log_error "Could not rename the ${BROKER_LEGACY_SERVICE} system user"
-      exit 1
-    fi
-  fi
-  # The kept config still points storage.dir (and comments) at old paths.
-  # Normalize-then-replace keeps the rewrite idempotent across a rerun;
-  # temp+mv instead of sed -i so ownership is restored explicitly.
-  local rename_expr='s|demarkus-knowledge-broker|demarkus-broker|g; s|demarkus-broker|demarkus-knowledge-broker|g'
-  local cfg="${BROKER_CONFIG_DIR}/config.yaml"
-  if $SUDO test -f "$cfg"; then
-    if ! $SUDO sh -c "sed '$rename_expr' '$cfg' > '${cfg}.tmp'" || ! $SUDO mv "${cfg}.tmp" "$cfg" \
-      || ! $SUDO chown root:"$BROKER_SERVICE" "$cfg" || ! $SUDO chmod 640 "$cfg"; then
-      $SUDO rm -f "${cfg}.tmp"
-      log_error "Could not rewrite ${cfg} for the new broker name"
-      exit 1
-    fi
-  fi
-  # Rename the unit and every reference inside it (User, ExecStart, paths).
-  local unit="${SYSTEMD_DIR}/${BROKER_SERVICE}.service"
-  if ! $SUDO sh -c "sed '$rename_expr' '${SYSTEMD_DIR}/${BROKER_LEGACY_SERVICE}.service' > '$unit'" \
-    || ! $SUDO rm "${SYSTEMD_DIR}/${BROKER_LEGACY_SERVICE}.service"; then
-    log_error "Could not migrate the ${BROKER_LEGACY_SERVICE} systemd unit"
-    exit 1
-  fi
-  if $SUDO test -f "${INSTALL_DIR}/${BROKER_LEGACY_SERVICE}"; then
-    $SUDO mv "${INSTALL_DIR}/${BROKER_LEGACY_SERVICE}" "${INSTALL_DIR}/${BROKER_SERVICE}" || { log_error "Could not rename the broker binary"; exit 1; }
-  fi
-  if ! $SUDO systemctl daemon-reload; then
-    log_error "systemd daemon-reload failed after migrating the broker unit"
-    exit 1
-  fi
-  if [ "$was_enabled" = true ] && ! $SUDO systemctl enable "$BROKER_SERVICE"; then
-    log_error "Could not re-enable ${BROKER_SERVICE} after migration"
-    exit 1
-  fi
-  if [ "$was_active" = true ] && ! $SUDO systemctl restart "$BROKER_SERVICE"; then
-    log_error "Could not restart ${BROKER_SERVICE} after migration"
-    exit 1
-  fi
-  log_info "Broker migrated: unit, user, config, state, and binary now ${BROKER_SERVICE}"
-}
-
-# install_broker deploys demarkus-knowledge-broker in file-backend (single-host) mode:
-# the broker owns tokens.toml writes, the server keeps its read+hot-reload
-# contract, and every credential the broker persists lives in BROKER_STATE_DIR.
-install_broker() {
-  local broker_version="$1"
-  local tokens_file="$2"
-  local domain="$3"
-  local no_tls="$4"
-  local oidc_issuer="$5"
-  local oidc_client_id="$6"
-  local oidc_client_secret="$7"
-  local public_url="$8"
-  local tmpdir="$9"
-
-  if [ "$PLATFORM" != "linux" ]; then
-    log_warn "--with-broker is Linux-only (systemd); skipping broker install"
-    return
-  fi
-
-  # A pre-rename install migrates in place before the fresh-install steps
-  # rerun over it; otherwise this would stand up a second unit beside it.
-  migrate_broker_single_host
-
-  log_step "Installing ${BROKER_SERVICE} (single-host mode)"
-  # The broker ships on its own release stream (broker/v), separate from
-  # the admin-CLI tools stream.
-  download_asset_file "broker/v${broker_version}" "demarkus-broker_checksums.txt" \
-    "${tmpdir}/demarkus-broker_checksums.txt" 2>/dev/null \
-    || { log_error "Could not download broker checksums"; exit 1; }
-  download_and_verify_asset "$BROKER_SERVICE" "$broker_version" "broker" "$tmpdir"
-  # Atomic replace: after a migration the broker may already be running,
-  # and cp onto a live executable fails with ETXTBSY.
-  if ! install_binary_atomic "${tmpdir}/${BROKER_SERVICE}" "${INSTALL_DIR}/${BROKER_SERVICE}"; then
-    log_error "Could not install ${INSTALL_DIR}/${BROKER_SERVICE}"
-    exit 1
-  fi
-  log_info "Installed ${INSTALL_DIR}/${BROKER_SERVICE}"
-
-  if ! id "$BROKER_SERVICE" >/dev/null 2>&1; then
-    useradd --system --no-create-home --shell /usr/sbin/nologin "$BROKER_SERVICE"
-  fi
-  # The broker joins the server group so preserved group ownership on
-  # tokens.toml keeps working, and owns the file so atomic replacement
-  # (temp + rename in the tokens directory) needs no privilege.
-  usermod -aG "$SERVICE_NAME" "$BROKER_SERVICE"
-  mkdir -p "$BROKER_STATE_DIR"
-  chown "$BROKER_SERVICE":"$BROKER_SERVICE" "$BROKER_STATE_DIR"
-  chmod 700 "$BROKER_STATE_DIR"
-  mkdir -p "$BROKER_CONFIG_DIR"
-  chown root:"$BROKER_SERVICE" "$BROKER_CONFIG_DIR"
-  chmod 750 "$BROKER_CONFIG_DIR"
-
-  # Broker writes tokens.toml via temp+rename: it owns the tokens
-  # subdirectory (never CONFIG_DIR itself, which holds the TLS keys);
-  # the server traverses and reads via the shared group.
-  chown "$BROKER_SERVICE":"$SERVICE_NAME" "$tokens_file"
-  chmod 640 "$tokens_file"
-  chown "$BROKER_SERVICE":"$SERVICE_NAME" "$(dirname "$tokens_file")"
-  chmod 750 "$(dirname "$tokens_file")"
-
-  # With verified TLS the dial address must match the certificate's name;
-  # localhost only works when verification is skipped (self-signed).
-  local world_host="localhost:6309"
-  local dial_insecure="true"
-  if [ -n "$domain" ] && [ "$no_tls" = false ]; then
-    dial_insecure="false"
-    world_host="${domain}:6309"
-  fi
-
-  local cookie_key
-  cookie_key=$(head -c 32 /dev/urandom | base64)
-  local signing_key
-  signing_key=$(openssl ecparam -genkey -name prime256v1 -noout 2>/dev/null | openssl pkcs8 -topk8 -nocrypt 2>/dev/null)
-  if [ -z "$signing_key" ]; then
-    log_error "openssl is required to generate the broker signing key"
-    exit 1
-  fi
-
-  local pub="${public_url:-https://EDIT-ME.example.com}"
-  local issuer="${oidc_issuer:-https://accounts.google.com}"
-  local client_id="${oidc_client_id:-EDIT-ME-client-id}"
-
-  local config_kept=false
-  if [ ! -f "${BROKER_CONFIG_DIR}/config.yaml" ]; then
-    {
-      printf 'storage:\n  backend: file\n  dir: %s\n' "$BROKER_STATE_DIR"
-      # Loopback binds: both broker surfaces sit behind a TLS reverse
-      # proxy (publicURL); exposing the plaintext listeners directly
-      # would contradict the advertised https origin.
-      printf 'server:\n  addr: "127.0.0.1:8080"\n  cookieKey: "%s"\n' "$cookie_key"
-      printf '  publicURL: "%s"\n  mcp:\n    addr: "127.0.0.1:8081"\n' "$pub"
-      printf 'oidc:\n  issuer: %s\n  clientID: %s\n' "$issuer" "$client_id"
-      printf '  redirectURL: %s/auth/callback\n' "$pub"
-      printf '  # clientSecret comes from OIDC_CLIENT_SECRET in %s/env\n' "$BROKER_CONFIG_DIR"
-      printf '  brokerSigningKey: |\n'
-      printf '%s\n' "$signing_key" | sed 's/^/    /'
-      printf 'worldDialer:\n  insecureSkipVerify: %s\n' "$dial_insecure"
-      printf 'worlds:\n  - name: soul\n'
-      printf '    tokensFile: %s\n' "$tokens_file"
-      printf '    internalAddress: %s\n' "$world_host"
-      printf '    defaultToken:\n      paths: ["/**"]\n'
-      printf '# Library SSO (register the reading room as a confidential web\n'
-      printf '# client): see https://www.demarkus.io/deployment/single-host/\n'
-    } > "${BROKER_CONFIG_DIR}/config.yaml"
-    chown root:"$BROKER_SERVICE" "${BROKER_CONFIG_DIR}/config.yaml"
-    chmod 640 "${BROKER_CONFIG_DIR}/config.yaml"
-  else
-    config_kept=true
-    log_info "Keeping existing broker config: ${BROKER_CONFIG_DIR}/config.yaml"
-    if [ -n "$oidc_issuer" ] || [ -n "$oidc_client_id" ] || [ -n "$public_url" ]; then
-      log_warn "Broker OIDC flags were given but the existing config was kept; edit ${BROKER_CONFIG_DIR}/config.yaml to apply them"
-    fi
-    # Migrate the managed world's (named soul) legacy /* defaultToken scope to
-    # /**; other worlds untouched. Scan exit 0 = legacy scope, 1 = not; anything
-    # else is an awk/read failure and must abort, not skip.
-    local cfg="${BROKER_CONFIG_DIR}/config.yaml"
-    local legacy_scope='/^  - name: /{soul=($3=="soul")} soul && prev ~ /defaultToken:[[:space:]]*$/ && $0 ~ /^      paths: \["\/\*"\]$/{found=1} {prev=$0} END{exit !found}'
-    local scope_rc=0
-    awk "$legacy_scope" "$cfg" || scope_rc=$?
-    if [ "$scope_rc" -gt 1 ]; then
-      log_error "Could not scan ${cfg} for the legacy world token scope"
-      exit 1
-    fi
-    if [ "$scope_rc" -eq 0 ]; then
-      if ! awk '/^  - name: /{soul=($3=="soul")}
-        { if (soul && prev ~ /defaultToken:[[:space:]]*$/ && $0 ~ /^      paths: \["\/\*"\]$/) $0="      paths: [\"/**\"]"
-          prev=$0; print }' "$cfg" > "${cfg}.tmp" || ! mv "${cfg}.tmp" "$cfg"; then
-        rm -f "${cfg}.tmp"
-        log_error "Could not migrate the world's defaultToken.paths to /** in ${cfg}; edit it manually"
-        exit 1
-      fi
-      if ! chown root:"$BROKER_SERVICE" "$cfg" || ! chmod 640 "$cfg"; then
-        log_error "Could not restore ownership and permissions on ${cfg}"
-        exit 1
-      fi
-      scope_rc=0
-      awk "$legacy_scope" "$cfg" || scope_rc=$?
-      if [ "$scope_rc" -ne 1 ]; then
-        log_error "world defaultToken.paths still \"/*\" (or unverifiable) after migration in ${cfg}; edit it manually"
-        exit 1
-      fi
-      log_info "Migrated the world's defaultToken.paths to the recursive /** scope"
-    fi
-  fi
-
-  if [ ! -f "${BROKER_CONFIG_DIR}/env" ]; then
-    printf 'OIDC_CLIENT_SECRET=%s\n' "${oidc_client_secret:-EDIT-ME}" > "${BROKER_CONFIG_DIR}/env"
-    chown root:"$BROKER_SERVICE" "${BROKER_CONFIG_DIR}/env"
-    chmod 640 "${BROKER_CONFIG_DIR}/env"
-  fi
-
-  cat > "${SYSTEMD_DIR}/${BROKER_SERVICE}.service" << EOF
-[Unit]
-Description=Demarkus Broker (single-host mode)
-After=network.target demarkus.service
-
-[Service]
-Type=simple
-User=${BROKER_SERVICE}
-ExecStart=${INSTALL_DIR}/${BROKER_SERVICE} -config ${BROKER_CONFIG_DIR}/config.yaml
-EnvironmentFile=${BROKER_CONFIG_DIR}/env
-Restart=on-failure
-RestartSec=5
-
-# The broker is a credential-writing service: writable paths are exactly
-# its state dir and the tokens directory it owns.
-ProtectSystem=strict
-ReadWritePaths=${BROKER_STATE_DIR} $(dirname "$tokens_file")
-PrivateTmp=yes
-NoNewPrivileges=yes
-ProtectHome=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictNamespaces=yes
-RestrictSUIDSGID=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  systemctl daemon-reload
-
-  # Enable only alongside a complete configuration: an enabled unit with
-  # placeholder values would come up broken on every boot.
-  if [ "$config_kept" = true ] || { [ -n "$oidc_issuer" ] && [ -n "$oidc_client_id" ] && [ -n "$oidc_client_secret" ] && [ -n "$public_url" ]; }; then
-    systemctl enable "$BROKER_SERVICE"
-    systemctl restart "$BROKER_SERVICE"
-    log_info "Broker started (loopback :8080 OAuth/API, :8081 MCP); front publicURL with a TLS reverse proxy"
-  else
-    log_warn "Broker installed but NOT enabled: OIDC is not configured yet."
-    log_info "Edit ${BROKER_CONFIG_DIR}/config.yaml (publicURL, oidc.clientID) and ${BROKER_CONFIG_DIR}/env (OIDC_CLIENT_SECRET), then: systemctl enable --now ${BROKER_SERVICE}"
-  fi
-}
 
 # fetch_library_binary downloads, verifies and installs demarkus-library,
 # leaving the resolved version in _LIBRARY_VERSION. Shared with the update path
@@ -1630,8 +1312,8 @@ install_library() {
         printf 'DEMARKUS_TLS_CERT=%s\n' "$lib_cert"
         printf 'DEMARKUS_TLS_KEY=%s\n' "$lib_key"
       fi
-      printf '# Broker/SSO mode (per-reader login, browser editing): see\n'
-      printf '# https://www.demarkus.io/deployment/single-host/\n'
+      printf '# Broker/SSO mode (per-reader login, browser editing) needs the knowledge\n'
+      printf '# system on Kubernetes: see https://www.demarkus.io/deployment/kubernetes/\n'
     } > "${LIBRARY_CONFIG_DIR}/env"
     chown root:"$LIBRARY_SERVICE" "${LIBRARY_CONFIG_DIR}/env"
     chmod 640 "${LIBRARY_CONFIG_DIR}/env"
@@ -1708,15 +1390,9 @@ do_install() {
   local no_tls=false
   local tls_cert=""
   local tls_key=""
-  local with_broker=false
   local with_library=false
-  local library_version="" broker_version_pin=""
+  local library_version=""
   local library_port=""
-  local broker_public_url=""
-  local broker_oidc_issuer=""
-  local broker_oidc_client_id=""
-  local broker_oidc_client_secret=""
-  local broker_oidc_client_secret_file=""
 
   # Parse flags
   while [ $# -gt 0 ]; do
@@ -1728,58 +1404,12 @@ do_install() {
       --no-tls)      no_tls=true; shift ;;
       --tls-cert)    tls_cert="$2"; shift 2 ;;
       --tls-key)     tls_key="$2"; shift 2 ;;
-      --with-broker)  with_broker=true; shift ;;
       --with-library) with_library=true; shift ;;
-      --library-version)           library_version="$2"; shift 2 ;;
-      --broker-version)            broker_version_pin="$2"; shift 2 ;;
-      --library-port)              library_port="$2"; shift 2 ;;
-      --broker-public-url)         broker_public_url="$2"; shift 2 ;;
-      --broker-oidc-issuer)        broker_oidc_issuer="$2"; shift 2 ;;
-      --broker-oidc-client-id)     broker_oidc_client_id="$2"; shift 2 ;;
-      --broker-oidc-client-secret) broker_oidc_client_secret="$2"; shift 2 ;;
-      --broker-oidc-client-secret-file) broker_oidc_client_secret_file="$2"; shift 2 ;;
+      --library-version) library_version="$2"; shift 2 ;;
+      --library-port)    library_port="$2"; shift 2 ;;
       *)             log_error "Unknown option: $1"; exit 1 ;;
     esac
   done
-
-  # Prefer the file form for the OIDC secret: an argv secret is visible in
-  # ps and shell history for the install's duration.
-  if [ -n "$broker_oidc_client_secret_file" ]; then
-    if [ -n "$broker_oidc_client_secret" ]; then
-      log_error "--broker-oidc-client-secret and --broker-oidc-client-secret-file are mutually exclusive"
-      exit 1
-    fi
-    # Require a regular file: -r alone accepts FIFOs and devices, and
-    # head would then block the install waiting for input.
-    if [ ! -f "$broker_oidc_client_secret_file" ] || [ ! -r "$broker_oidc_client_secret_file" ]; then
-      log_error "Secret file must be a readable regular file: ${broker_oidc_client_secret_file}"
-      exit 1
-    fi
-    # Refuse a group/world-accessible secret file: another local user could
-    # read the OIDC client secret. stat is GNU (-c) with a BSD (-f) fallback.
-    local secret_mode secret_owner
-    secret_mode=$(stat -c '%a' "$broker_oidc_client_secret_file" 2>/dev/null \
-      || stat -f '%Lp' "$broker_oidc_client_secret_file" 2>/dev/null || echo "")
-    secret_owner=$(stat -c '%u' "$broker_oidc_client_secret_file" 2>/dev/null \
-      || stat -f '%u' "$broker_oidc_client_secret_file" 2>/dev/null || echo "")
-    if [ -z "$secret_mode" ]; then
-      log_error "Could not stat secret file: ${broker_oidc_client_secret_file}"
-      exit 1
-    fi
-    if [ "$(( 8#$secret_mode & 0077 ))" -ne 0 ]; then
-      log_error "Secret file ${broker_oidc_client_secret_file} is group/world-accessible (mode ${secret_mode}); chmod 600 it first"
-      exit 1
-    fi
-    if [ -n "$secret_owner" ] && [ "$secret_owner" != "$(id -u)" ] && [ "$secret_owner" != "0" ]; then
-      log_error "Secret file ${broker_oidc_client_secret_file} must be owned by you or root (owner uid ${secret_owner})"
-      exit 1
-    fi
-    broker_oidc_client_secret=$(head -1 "$broker_oidc_client_secret_file" | tr -d '[:space:]')
-    if [ -z "$broker_oidc_client_secret" ]; then
-      log_error "Secret file is empty: ${broker_oidc_client_secret_file}"
-      exit 1
-    fi
-  fi
 
   if [ -n "$library_port" ]; then
     validate_port "--library-port" "$library_port"
@@ -1973,26 +1603,11 @@ do_install() {
   setup_content_dir "$content_root"
 
   local tokens_file="${CONFIG_DIR}/tokens.toml"
-  # Broker-owned tokens subdir: the broker needs directory write for atomic
-  # replacement, never on CONFIG_DIR (TLS keys live there). Sticky once
-  # created; reinstalls honor it even without --with-broker (else split brain).
+  # A tokens/ subdir left by an earlier install is sticky: the running
+  # service already reads it, and moving it back would split brain.
   if [ -f "${CONFIG_DIR}/tokens/tokens.toml" ]; then
     tokens_file="${CONFIG_DIR}/tokens/tokens.toml"
-    log_info "Using broker-owned tokens layout: ${tokens_file}"
-  elif [ "$with_broker" = true ] && [ "$PLATFORM" = "linux" ]; then
-    local broker_tokens_dir="${CONFIG_DIR}/tokens"
-    # Abort on failure: pointing the server at the new path while the old
-    # file is still in place would leave it reading a missing tokens file.
-    if ! mkdir -p "$broker_tokens_dir"; then
-      log_error "Could not create broker tokens directory ${broker_tokens_dir}"
-      exit 1
-    fi
-    if [ -f "$tokens_file" ] && ! mv "$tokens_file" "${broker_tokens_dir}/tokens.toml"; then
-      log_error "Could not move ${tokens_file} into ${broker_tokens_dir}/"
-      exit 1
-    fi
-    tokens_file="${broker_tokens_dir}/tokens.toml"
-    log_info "Using broker-owned tokens layout: ${tokens_file}"
+    log_info "Using existing tokens layout: ${tokens_file}"
   fi
 
   local raw_token=""
@@ -2065,29 +1680,16 @@ do_install() {
   # Verify the service actually started
   verify_service_running
 
-  # Same-host dialers (broker, library) reach the world by its public name
-  # with verification on; prove that works from this host before installing
-  # them, and pin the name to loopback when hairpin NAT breaks it.
+  # The library dials the world by its public name with verification on;
+  # prove that works from this host before installing it, and pin the name
+  # to loopback when hairpin NAT breaks it.
   if [ "$PLATFORM" = "linux" ] && [ -n "$domain" ] && [ "$no_tls" = false ] \
-    && { [ "$with_broker" = true ] || [ "$with_library" = true ]; }; then
+    && [ "$with_library" = true ]; then
     ensure_self_dial "$domain"
   fi
 
-  # Optional single-host stack components (after the world server is up:
-  # the broker writes its tokens file, the library reads its documents).
-  if [ "$with_broker" = true ]; then
-    local broker_version
-    broker_version="${broker_version_pin:-$(fetch_latest_version "broker")}"
-    if [ -z "$broker_version" ]; then
-      log_error "Could not find a broker release; pin one with --broker-version"
-      exit 1
-    fi
-    install_broker "$broker_version" "$tokens_file" "$domain" "$no_tls" \
-      "$broker_oidc_issuer" "$broker_oidc_client_id" "$broker_oidc_client_secret" \
-      "$broker_public_url" "$_TMPDIR"
-    # Broker listeners are loopback-only; the reverse proxy's HTTPS port
-    # is the operator's to open. No firewall change here.
-  fi
+  # The reading room installs after the world server is up: it reads its
+  # documents over QUIC from the start.
   if [ "$with_library" = true ]; then
     # Default port: standard HTTPS when TLS material exists (the reading room
     # is browser-facing), else unprivileged 8090 plain HTTP. Firewall opening
@@ -2268,14 +1870,13 @@ do_install_client() {
 
 do_update() {
   local version=""
-  local library_version="" broker_version_pin=""
+  local library_version=""
 
   # Parse flags
   while [ $# -gt 0 ]; do
     case "$1" in
       --version)         version="$2"; shift 2 ;;
       --library-version) library_version="$2"; shift 2 ;;
-      --broker-version)  broker_version_pin="$2"; shift 2 ;;
       *)                 log_error "Unknown option: $1"; exit 1 ;;
     esac
   done
@@ -2311,7 +1912,7 @@ do_update() {
     # _TMPDIR, not a local: fetch_library_binary exits on a fatal download or
     # checksum failure, and only the EXIT trap runs then.
     _TMPDIR=$(mktemp -d) || { log_error "Failed to create temporary directory"; exit 1; }
-    update_stack_components "${broker_version_pin:-$(fetch_latest_version "broker")}" "$library_version" "$_TMPDIR"
+    update_stack_components "$library_version" "$_TMPDIR"
     rm -rf "$_TMPDIR"
     _TMPDIR=""
     exit_on_stack_failure
@@ -2339,10 +1940,10 @@ do_update() {
     $SUDO chmod 755 "${INSTALL_DIR}/demarkus-install"
     # Re-execute with the new script for migrations
     exec "${INSTALL_DIR}/demarkus-install" _do_update_inner \
-      --from "$current_version" --to "$version" --library-version "$library_version" --broker-version "$broker_version_pin"
+      --from "$current_version" --to "$version" --library-version "$library_version"
   fi
 
-  _do_update_inner --from "$current_version" --to "$version" --library-version "$library_version" --broker-version "$broker_version_pin"
+  _do_update_inner --from "$current_version" --to "$version" --library-version "$library_version"
 }
 
 # stack_component_installed reports whether an optional component is present,
@@ -2353,34 +1954,22 @@ stack_component_installed() {
   [ -x "${INSTALL_DIR}/${binary}" ] || $SUDO test -f "${SYSTEMD_DIR}/${service}.service"
 }
 
-# update_stack_components refreshes both optional components. Shared by the
+# update_stack_components refreshes the optional reading room. Shared by the
 # upgrade path and the server-already-current path, where a stale library is
 # still worth updating.
 update_stack_components() {
-  local broker_version="$1" library_version="$2" tmpdir="$3"
+  local library_version="$1" tmpdir="$2"
 
-  # These components are systemd services; nothing to refresh elsewhere, and
-  # the checks below would otherwise fail an update on a stray binary.
+  # The library is a systemd service; nothing to refresh elsewhere, and
+  # the installed-check would otherwise fail an update on a stray binary.
   if [ "$PLATFORM" != "linux" ]; then
     return
   fi
 
-  # A pre-rename install must migrate first or the installed-check below
-  # would silently skip it forever.
-  migrate_broker_single_host
-
-  # An empty broker version would otherwise make the broker branch log a skip
-  # and return success, reporting a clean update that never refreshed it.
-  if [ -z "$broker_version" ] && stack_component_installed "demarkus-knowledge-broker" "$BROKER_SERVICE"; then
-    log_error "Could not resolve the broker release; the installed broker cannot be updated"
-    exit 1
-  fi
-
-  update_stack_component "$BROKER_SERVICE" "$BROKER_SERVICE" "$broker_version" "$tmpdir"
   update_stack_component "demarkus-library" "$LIBRARY_SERVICE" "$library_version" "$tmpdir"
 }
 
-# update_stack_component refreshes an installed single-host component in place:
+# update_stack_component refreshes an installed stack component in place:
 # binary only, never its config or unit. Absent components are skipped, so a
 # server-only install is unaffected. version empty means latest, as elsewhere.
 update_stack_component() {
@@ -2398,18 +1987,6 @@ update_stack_component() {
     demarkus-library)
       fetch_library_binary "$version" "$tmpdir"
       log_info "${binary} updated to ${_LIBRARY_VERSION}"
-      ;;
-    "$BROKER_SERVICE")
-      if [ -z "$version" ]; then
-        log_warn "No broker release resolved; skipping ${binary} update"
-        return
-      fi
-      download_asset_file "broker/v${version}" "demarkus-broker_checksums.txt" \
-        "${tmpdir}/demarkus-broker_checksums.txt" 2>/dev/null \
-        || { log_error "Could not download broker checksums"; exit 1; }
-      download_and_verify_asset "$binary" "$version" "broker" "$tmpdir"
-      install_binary_atomic "${tmpdir}/${binary}" "${INSTALL_DIR}/${binary}"
-      log_info "${binary} updated to ${version}"
       ;;
     *)
       if [ -z "$version" ]; then
@@ -2438,13 +2015,12 @@ exit_on_stack_failure() {
 }
 
 _do_update_inner() {
-  local from="" to="" library_version="" broker_version_pin=""
+  local from="" to="" library_version=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --from)            from="$2"; shift 2 ;;
       --to)              to="$2"; shift 2 ;;
       --library-version) library_version="$2"; shift 2 ;;
-      --broker-version)  broker_version_pin="$2"; shift 2 ;;
       *)                 shift ;;
     esac
   done
@@ -2482,10 +2058,9 @@ _do_update_inner() {
     log_warn "Could not find tools release; skipping demarkus-token/demarkus-publish update"
   fi
 
-  # Installed once by install/install-stack and never refreshed here, so a
-  # single-host deployment drifted behind for as long as it ran. The broker
-  # ships on its own release stream.
-  update_stack_components "${broker_version_pin:-$(fetch_latest_version "broker")}" "$library_version" "$_TMPDIR"
+  # Installed once by install and never refreshed here before, so a reading
+  # room drifted behind for as long as it ran.
+  update_stack_components "$library_version" "$_TMPDIR"
 
   # Run migrations before replacing binaries
   migrate "$from" "$to"
@@ -2673,16 +2248,12 @@ do_uninstall() {
     $SUDO systemctl stop demarkus 2>/dev/null || true
     $SUDO systemctl disable demarkus 2>/dev/null || true
     remove_path "${SYSTEMD_DIR}/demarkus.service"
-    # Remove the optional single-host stack components too. Each is a
-    # no-op when it was never installed. demarkus-broker is the broker's
-    # pre-rename identity, still present on never-migrated installs.
-    for svc in "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE" "$LIBRARY_SERVICE"; do
-      if $SUDO test -f "${SYSTEMD_DIR}/${svc}.service"; then
-        $SUDO systemctl stop "$svc" 2>/dev/null || true
-        $SUDO systemctl disable "$svc" 2>/dev/null || true
-        remove_path "${SYSTEMD_DIR}/${svc}.service" && log_info "Removed ${svc} service"
-      fi
-    done
+    # Remove the optional reading room too; a no-op when never installed.
+    if $SUDO test -f "${SYSTEMD_DIR}/${LIBRARY_SERVICE}.service"; then
+      $SUDO systemctl stop "$LIBRARY_SERVICE" 2>/dev/null || true
+      $SUDO systemctl disable "$LIBRARY_SERVICE" 2>/dev/null || true
+      remove_path "${SYSTEMD_DIR}/${LIBRARY_SERVICE}.service" && log_info "Removed ${LIBRARY_SERVICE} service"
+    fi
     $SUDO systemctl daemon-reload 2>/dev/null || true
     log_info "Removed systemd service"
   elif [ "$PLATFORM" = "darwin" ]; then
@@ -2701,14 +2272,13 @@ do_uninstall() {
   fi
 
   # Remove binaries
-  for bin in demarkus-server demarkus-token demarkus-publish demarkus demarkus-tui demarkus-mcp demarkus-install demarkus-knowledge-broker "$BROKER_LEGACY_SERVICE" demarkus-library; do
+  for bin in demarkus-server demarkus-token demarkus-publish demarkus demarkus-tui demarkus-mcp demarkus-install demarkus-library; do
     remove_path "${INSTALL_DIR}/${bin}"
   done
   log_info "Removed binaries from ${INSTALL_DIR}/"
 
-  # Remove config (server, plus broker/library when present — the broker
-  # config and state hold credential-bearing artifacts, so always clear).
-  for d in "$CONFIG_DIR" "$BROKER_CONFIG_DIR" "$BROKER_STATE_DIR" "$BROKER_LEGACY_CONFIG_DIR" "$BROKER_LEGACY_STATE_DIR" "$LIBRARY_CONFIG_DIR"; do
+  # Remove config (server, plus the library's when present).
+  for d in "$CONFIG_DIR" "$LIBRARY_CONFIG_DIR"; do
     if [ -n "$d" ] && $SUDO test -d "$d"; then
       remove_path "$d" && log_info "Removed ${d}/"
     fi
@@ -2726,10 +2296,9 @@ do_uninstall() {
     fi
   fi
 
-  # Remove system users (Linux only). The broker user is removed before
-  # the server user because it is a member of the server group.
+  # Remove system users (Linux only).
   if [ "$PLATFORM" = "linux" ]; then
-    for u in "$BROKER_SERVICE" "$BROKER_LEGACY_SERVICE" "$LIBRARY_SERVICE" "$SERVICE_NAME"; do
+    for u in "$LIBRARY_SERVICE" "$SERVICE_NAME"; do
       if id "$u" >/dev/null 2>&1; then
         if $SUDO userdel "$u" 2>/dev/null; then
           log_info "Removed system user '${u}'"
@@ -2805,14 +2374,12 @@ main() {
       echo "  --root DIR         Content directory (default: platform-specific)"
       echo "  --version X.Y.Z    Install specific version (default: latest)"
       echo "  --library-version X.Y.Z  Reading-room version (default: latest)"
-      echo "  --broker-version X.Y.Z   Broker version (default: latest broker release)"
       echo "  --client-only      Only install the client binary"
       echo "  --no-tls           Skip TLS setup"
       echo ""
       echo "Update options:"
       echo "  --version X.Y.Z    Update to specific version (default: latest)"
       echo "  --library-version X.Y.Z  Reading-room version (default: latest)"
-      echo "  --broker-version X.Y.Z   Broker version (default: latest broker release)"
       echo ""
       echo "Uninstall options:"
       echo "  --keep-data        Don't remove content directory"

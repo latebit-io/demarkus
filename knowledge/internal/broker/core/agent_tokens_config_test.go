@@ -8,7 +8,7 @@ import (
 
 func TestLoadConfigAgentTokens(t *testing.T) {
 	clearConfigEnv(t)
-	const teamB = "  - name: team-b\n    namespace: team-a\n    tokensSecret: team-b-tokens\n    defaultToken:\n      paths: [\"/b\"]\n"
+	const teamB = "  - name: team-b\n    namespace: team-a\n    tokensSecret: team-b-tokens\n    writeScope:\n      paths: [\"/b\"]\n"
 	tests := []struct {
 		name     string
 		body     string
@@ -74,13 +74,6 @@ func TestLoadConfigAgentTokens(t *testing.T) {
 			name:    "shared Secret key across worlds",
 			body:    validConfig + teamB + "agentTokens:\n  - world: team-a\n    secret: v\n    key: admin\n  - world: team-b\n    secret: v\n    key: admin\n",
 			wantErr: `is also the agent token of world "team-a"`,
-		},
-		{
-			name: "file backend",
-			body: fileBackendConfig(func(s string) string {
-				return s + "agentTokens:\n  - world: team-a\n    secret: v\n    key: admin\n"
-			}),
-			wantErr: `agentTokens requires storage.backend "kubernetes"`,
 		},
 	}
 	for _, tt := range tests {

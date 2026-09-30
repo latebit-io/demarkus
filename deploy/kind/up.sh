@@ -1,40 +1,23 @@
 #!/usr/bin/env bash
 # kind harness for demarkus development.
 #
-# Stage 1 (default):                          kind cluster + demarkus-server chart.
-# Stage 2 (--with-broker):                    + mock-oauth2-server + demarkus-knowledge-broker.
-# Stage 3 (--with-argo):                      + Argo CD + ApplicationSet templating two worlds.
-# Stage 4 (--with-argo --with-broker):         + broker against the Argo worlds, then
-#                                              drive a full OIDC mint flow via curl and
-#                                              assert tokens land in BOTH world Secrets.
+# Stage 1 (default):            kind cluster + demarkus-server chart.
+# Stage 2 (--with-knowledge):   + fake-gcs-server + mock-oauth2-server + the
+#                               local demarkus-knowledge-server chart with an
+#                               image built from this checkout: the multi-world
+#                               server and the broker in one process.
+# Stage 3 (--with-argo):        + Argo CD + ApplicationSet templating two worlds
+#                               (replaces the Stage 1 server install).
 #
-# Stage 3 replaces the Stage 1 server install with an Argo-managed
-# ApplicationSet; the worlds are GitOps-shaped from the start. Stage 4 layers
-# the broker on top of Stage 3 and uses deploy/kind/values-broker-argo.yaml
-# (multi-world wiring + server.insecureCookies=true so curl can drive the OIDC
-# state cookie over plain HTTP).
+# --with-mcp-smoke (layered on Stage 2) drives, from curl pods, the RFC 9728
+# and 8414 metadata checks, the RFC 6749 authorization_code + PKCE flow that
+# backs /knowledge-join (with the wrong-verifier and replay refusals), the
+# MCP tool calls an agent makes after joining (read, write under the identity
+# grant, refusals) and the confidential web-client flow (the library's SSO).
 #
 # Verification runs `demarkus` against each server's own QUIC listener via
 # `kubectl exec`, which exercises the full read path without exposing
-# anything to the host. Stage 4 also runs an ephemeral curl pod that drives
-# /auth/login -> /authorize -> /auth/callback and asserts the broker's
-# mint response references both worlds.
-#
-# --with-mcp-smoke (layered on Stage 2) additionally drives the RFC 6749
-# authorization_code + PKCE flow end-to-end from a curl pod:
-# /oauth/authorize -> mock IdP -> /auth/callback -> loopback redirect with a
-# broker-minted code -> /device/token exchange, with negative (wrong
-# verifier -> invalid_grant) and replay (one-shot code) assertions. This is
-# the OAuth surface Claude Code's MCP SDK uses via /knowledge-join.
-# With the Bearer it minted, the same pod then drives the MCP gateway: session,
-# tools/list, the read tools, a publish, append and archive round trip against
-# the world over QUIC, a stale publish, and the refusals an agent can meet.
-#
-# It also drives the CONFIDENTIAL web-client flow (phase-1b web SSO): a
-# webClients registry entry is rendered through the local chart, then the
-# same authorize -> IdP -> callback dance runs against the registered https
-# redirect, the token exchange must present the client secret (Basic), and
-# the minted refresh token is client-bound (refresh without auth -> 401).
+# anything to the host.
 
 set -euo pipefail
 
@@ -43,11 +26,10 @@ NAMESPACE="${NAMESPACE:-demarkus}"
 RELEASE="${RELEASE:-world-default}"
 SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.30.3}"
 SERVER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-server"
-BROKER_RELEASE="${BROKER_RELEASE:-broker}"
-BROKER_CHART_VERSION="${BROKER_CHART_VERSION:-0.24.8}"
-BROKER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-knowledge-broker"
-# Ephemeral curl pod image used by the Stage 4 mint smoke test. Pinned so
-# behavior is reproducible across hosts; busybox sh + curl is all we need.
+KNOWLEDGE_RELEASE="${KNOWLEDGE_RELEASE:-knowledge}"
+KNOWLEDGE_IMAGE="${KNOWLEDGE_IMAGE:-}"
+# Ephemeral curl pod image used by the smoke flows. Pinned so behavior is
+# reproducible across hosts; busybox sh + curl is all we need.
 MINT_CURL_IMAGE="${MINT_CURL_IMAGE:-curlimages/curl:8.11.1}"
 # Hard-coded to match deploy/k8s/examples/applicationset.yaml which pins
 # metadata.namespace: argocd. Making this env-overridable would silently
@@ -64,48 +46,41 @@ ARGO_WORLDS=(world-a world-b)
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." &>/dev/null && pwd)"
 VALUES_FILE="$SCRIPT_DIR/values-kind.yaml"
-BROKER_VALUES_FILE="$SCRIPT_DIR/values-broker.yaml"
-BROKER_ARGO_VALUES_FILE="$SCRIPT_DIR/values-broker-argo.yaml"
+KNOWLEDGE_VALUES_FILE="$SCRIPT_DIR/values-knowledge.yaml"
+KNOWLEDGE_CHART="$REPO_ROOT/deploy/helm/demarkus-knowledge-server"
 ARGO_VALUES_FILE="$SCRIPT_DIR/values-argo.yaml"
 MOCK_OIDC_MANIFEST="$SCRIPT_DIR/mock-oidc.yaml"
+FAKE_GCS_MANIFEST="$SCRIPT_DIR/fake-gcs.yaml"
 KIND_CONFIG="$SCRIPT_DIR/kind-config.yaml"
 APPLICATIONSET_MANIFEST="$REPO_ROOT/deploy/k8s/examples/applicationset.yaml"
 
-WITH_BROKER=false
+WITH_KNOWLEDGE=false
 WITH_ARGO=false
 WITH_MCP_SMOKE=false
 for arg in "$@"; do
   case "$arg" in
-    --with-broker)   WITH_BROKER=true ;;
-    --with-argo)     WITH_ARGO=true ;;
+    --with-knowledge) WITH_KNOWLEDGE=true ;;
+    --with-argo)      WITH_ARGO=true ;;
     --with-mcp-smoke) WITH_MCP_SMOKE=true ;;
     -h|--help)
       cat <<EOF
-usage: up.sh [--with-broker] [--with-argo] [--with-mcp-smoke]
+usage: up.sh [--with-knowledge] [--with-argo] [--with-mcp-smoke]
 
-  --with-broker     install mock-oauth2-server + demarkus-knowledge-broker chart
+  --with-knowledge  build the demarkus-knowledge image from this checkout,
+                    sideload it into kind, and install fake-gcs-server,
+                    mock-oauth2-server and the LOCAL demarkus-knowledge-server
+                    chart (deploy/helm/demarkus-knowledge-server) with it
   --with-argo       install Argo CD + ApplicationSet templating two worlds
                     (replaces the Stage 1 server install)
-  --with-mcp-smoke  rebuild the broker image from this checkout,
-                    sideload it into kind, install the LOCAL broker
-                    chart (deploy/helm/demarkus-knowledge-broker) with that image,
-                    run smoke checks against the MCP gateway listener
-                    (\${BROKER_RELEASE}-...:8081), then drive the RFC 6749
-                    authorization_code + PKCE flow end-to-end against the
-                    broker's :8080 OAuth surface (the surface behind
-                    /knowledge-join). Requires --with-broker; not
-                    compatible with --with-argo (Stage 4 expects the
-                    published chart artifact).
-
-  Combine --with-broker + --with-argo for Stage 4: Argo-managed worlds
-  + broker wired across them. up.sh then drives a full OIDC mint flow
-  via curl and asserts tokens land in BOTH world Secrets.
+  --with-mcp-smoke  drive the OAuth metadata checks, the authorization_code +
+                    PKCE flow behind /knowledge-join, the MCP tool calls and
+                    the confidential web-client flow against the knowledge
+                    Service. Requires --with-knowledge.
 
 env overrides:
-  CLUSTER, NAMESPACE, RELEASE, SERVER_CHART_VERSION,
-  BROKER_RELEASE, BROKER_CHART_VERSION,
-  ARGO_RELEASE, ARGO_CHART_VERSION, ARGO_REPO_URL,
-  MINT_CURL_IMAGE
+  CLUSTER, NAMESPACE, RELEASE, SERVER_CHART_VERSION, KNOWLEDGE_RELEASE,
+  KNOWLEDGE_IMAGE (repository:tag to run instead of building),
+  ARGO_RELEASE, ARGO_CHART_VERSION, ARGO_REPO_URL, MINT_CURL_IMAGE
 EOF
       exit 0
       ;;
@@ -113,20 +88,9 @@ EOF
   esac
 done
 
-if [[ "$WITH_MCP_SMOKE" == "true" ]]; then
-  if [[ "$WITH_BROKER" != "true" ]]; then
-    echo "--with-mcp-smoke requires --with-broker" >&2
-    exit 2
-  fi
-  if [[ "$WITH_ARGO" == "true" ]]; then
-    # Stage 4 pulls the published broker chart from OCI and pins its
-    # version for reproducibility. Mixing in a local-chart/local-image
-    # build would invert that invariant. Run the MCP smoke against
-    # Stage 2 instead, then layer Argo on a separate harness invocation
-    # if both shapes are needed.
-    echo "--with-mcp-smoke is not compatible with --with-argo (Stage 4 pins the OCI chart)" >&2
-    exit 2
-  fi
+if [[ "$WITH_MCP_SMOKE" == "true" && "$WITH_KNOWLEDGE" != "true" ]]; then
+  echo "--with-mcp-smoke requires --with-knowledge" >&2
+  exit 2
 fi
 
 require() {
@@ -136,11 +100,22 @@ require() {
   }
 }
 
+# pod_of <namespace> <label selector> prints the first matching pod or fails.
+pod_of() {
+  local pod
+  pod=$(kubectl -n "$1" get pods -l "$2" -o jsonpath='{.items[0].metadata.name}')
+  if [[ -z "$pod" ]]; then
+    echo "no pod found in namespace $1 for selector: $2" >&2
+    return 1
+  fi
+  printf '%s\n' "$pod"
+}
+
 require kind
 require helm
 require kubectl
 require openssl
-if [[ "$WITH_MCP_SMOKE" == "true" ]]; then
+if [[ "$WITH_KNOWLEDGE" == "true" ]]; then
   require docker
   require make
 fi
@@ -180,6 +155,23 @@ ensure_broker_signing_key() {
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
   kubectl -n "$ns" create secret generic broker-signing-key \
     --from-file=signing-key.pem="$tmpfile" \
+    --dry-run=client -o yaml | kubectl apply -f -
+}
+
+# ensure_knowledge_tls self-signs a certificate for the kind world's
+# authority into the knowledge-tls Secret the chart mounts. Nothing verifies
+# it in kind: the gateway reaches the world in process and the smoke tests
+# dial with -insecure.
+ensure_knowledge_tls() {
+  local ns="$1" authority="$2" tmpdir
+  echo "--- generating a self-signed QUIC certificate for $authority"
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' RETURN
+  openssl req -x509 -newkey rsa:2048 -nodes -days 7 -subj "/CN=$authority" \
+    -addext "subjectAltName=DNS:$authority" \
+    -keyout "$tmpdir/tls.key" -out "$tmpdir/tls.crt" 2>/dev/null
+  kubectl -n "$ns" create secret tls knowledge-tls \
+    --cert="$tmpdir/tls.crt" --key="$tmpdir/tls.key" \
     --dry-run=client -o yaml | kubectl apply -f -
 }
 
@@ -238,141 +230,10 @@ if [[ "$WITH_ARGO" == "true" ]]; then
 
   for world in "${ARGO_WORLDS[@]}"; do
     echo "--- smoke test for world $world"
-    WORLD_POD_SELECTOR="app.kubernetes.io/instance=$world,app.kubernetes.io/name=demarkus-server"
-    WORLD_POD=$(kubectl -n "$world" get pods -l "$WORLD_POD_SELECTOR" -o jsonpath='{.items[0].metadata.name}')
-    if [[ -z "$WORLD_POD" ]]; then
-      echo "no demarkus-server pod found in namespace $world for selector $WORLD_POD_SELECTOR" >&2
-      exit 1
-    fi
+    WORLD_POD=$(pod_of "$world" "app.kubernetes.io/instance=$world,app.kubernetes.io/name=demarkus-server")
     kubectl -n "$world" exec "$WORLD_POD" -- \
       /demarkus ping -insecure "mark://localhost:6309"
   done
-
-  # Stage 4: layer the broker on top of the Argo-managed worlds and drive
-  # a real OIDC mint. The broker is universe-singleton (one per ApplicationSet
-  # multi-world deployment), not per-world, so it installs via helm direct
-  # rather than through Argo — see /journal/2026-05-14.md for why we didn't
-  # template it inside the ApplicationSet.
-  if [[ "$WITH_BROKER" == "true" ]]; then
-    echo "--- applying mock-oauth2-server (OIDC issuer; JSON_CONFIG sets interactiveLogin=false so curl can drive /authorize without an HTML form)"
-    kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-    kubectl -n "$NAMESPACE" apply -f "$MOCK_OIDC_MANIFEST"
-    kubectl -n "$NAMESPACE" rollout status deployment/mock-oauth2-server --timeout=120s
-
-    ensure_broker_signing_key "$NAMESPACE"
-
-    echo "--- installing demarkus-knowledge-broker chart $BROKER_CHART_VERSION (multi-world wiring)"
-    # helm --wait blocks on /readyz, which only flips green after OIDC
-    # discovery succeeds. RBAC fan-out across world-a + world-b namespaces
-    # also runs at install time — a failure here means the cross-namespace
-    # Role/RoleBinding pattern broke under multi-world.
-    helm upgrade --install "$BROKER_RELEASE" "$BROKER_CHART" \
-      --set "fullnameOverride=$BROKER_RELEASE" \
-      --version "$BROKER_CHART_VERSION" \
-      --namespace "$NAMESPACE" --create-namespace \
-      --values "$BROKER_ARGO_VALUES_FILE" \
-      --wait --timeout 5m
-
-    BROKER_POD_SELECTOR="app.kubernetes.io/instance=$BROKER_RELEASE,app.kubernetes.io/name=demarkus-knowledge-broker"
-    BROKER_POD=$(kubectl -n "$NAMESPACE" get pods -l "$BROKER_POD_SELECTOR" -o jsonpath='{.items[0].metadata.name}')
-    if [[ -z "$BROKER_POD" ]]; then
-      echo "no demarkus-knowledge-broker pod found for selector: $BROKER_POD_SELECTOR" >&2
-      exit 1
-    fi
-
-    echo "--- driving OIDC mint flow from an ephemeral curl pod"
-    # We synthesize the redirect chain by hand rather than letting curl
-    # follow -L. The reason: the broker's redirectURL points at localhost
-    # (the cookie's Path=/auth/callback scope only matches if the host
-    # part is the same as the broker we hit), so we have to re-target the
-    # callback URL at the broker's in-cluster Service while preserving the
-    # signed state cookie. -L would chase the redirect to literal
-    # localhost:8080 inside the curl pod, which is itself.
-    kubectl run -n "$NAMESPACE" mint-smoke --rm -i --restart=Never \
-      --image="$MINT_CURL_IMAGE" --command -- sh -c '
-set -eu
-
-BROKER=http://'"$BROKER_RELEASE"'.'"$NAMESPACE"'.svc.cluster.local:8080
-
-# Hard timeouts so a DNS or TCP stall fails the smoke test in seconds
-# instead of pinning the kubectl-run pod open until cluster cleanup.
-CURL="curl -sS --connect-timeout 5 --max-time 15"
-
-# 0. Wait for the broker Service to be reachable. helm --wait returned
-#    on /readyz green, but the Service endpoints object can lag the pod-
-#    Ready transition by a second or two, and curl on a fresh pod that
-#    races that window sees "Failed to connect after 1 ms".
-for attempt in $(seq 1 15); do
-  if $CURL -o /dev/null "$BROKER/healthz"; then
-    break
-  fi
-  sleep 2
-done
-$CURL -f -o /dev/null "$BROKER/healthz" || { echo "FAIL: broker unreachable after retries"; exit 1; }
-
-# 1. /auth/login — broker signs a state cookie (Secure dropped because
-#    server.insecureCookies=true in values-broker-argo.yaml) and 302s
-#    to mock-oauth2-server.
-$CURL -c /tmp/cookies -D /tmp/login.h -o /dev/null "$BROKER/auth/login"
-IDP=$(awk "/^[Ll]ocation:/{print \$2}" /tmp/login.h | tr -d "\r")
-[ -n "$IDP" ] || { echo "FAIL: no Location from /auth/login"; cat /tmp/login.h; exit 1; }
-
-# 2. /authorize — mock-oauth2-server is configured with
-#    interactiveLogin=false so it 302s back with code+state.
-$CURL -D /tmp/idp.h -o /dev/null "$IDP"
-CB=$(awk "/^[Ll]ocation:/{print \$2}" /tmp/idp.h | tr -d "\r")
-[ -n "$CB" ] || { echo "FAIL: no Location from /authorize"; cat /tmp/idp.h; exit 1; }
-
-# 3. Extract code+state from the callback URL the IdP redirected to.
-CODE=$(printf "%s" "$CB" | sed -n "s/.*[?&]code=\([^&]*\).*/\1/p")
-STATE=$(printf "%s" "$CB" | sed -n "s/.*[?&]state=\([^&]*\).*/\1/p")
-[ -n "$CODE" ] && [ -n "$STATE" ] || { echo "FAIL: bad callback URL: $CB"; exit 1; }
-
-# 4. /auth/callback against the broker (not the literal localhost the
-#    IdP redirected to). The state cookie from step 1 replays.
-MINT=$($CURL -b /tmp/cookies "$BROKER/auth/callback?code=$CODE&state=$STATE")
-
-# 5. Print the mint response with the raw bearer tokens redacted. Worlds,
-#    labels, and expiry stay visible for debugging; the secret material
-#    that the broker just minted does NOT land in terminal/CI logs.
-SAFE=$(echo "$MINT" | sed "s/\"token\":\"[^\"]*\"/\"token\":\"REDACTED\"/g")
-echo "mint response: $SAFE"
-
-# 6. Both worlds must appear in the mint response. The broker writes a
-#    token into each world Secret as part of Mint() before returning
-#    200, so this implicitly asserts the cross-namespace RBAC worked.
-echo "$MINT" | grep -q "\"world\":\"world-a\"" || { echo "FAIL: world-a missing from mint response"; exit 1; }
-echo "$MINT" | grep -q "\"world\":\"world-b\"" || { echo "FAIL: world-b missing from mint response"; exit 1; }
-echo "OK: mint succeeded for both worlds"
-'
-
-    cat <<EOF
-
-ready (with argo + broker).
-
-cluster:         kind-$CLUSTER
-argo namespace:  $ARGO_NAMESPACE
-broker ns:       $NAMESPACE
-broker release:  $BROKER_RELEASE
-broker pod:      $BROKER_POD
-worlds:          ${ARGO_WORLDS[*]}
-mock OIDC:       mock-oauth2-server.$NAMESPACE.svc.cluster.local:8080/default
-
-inspect minted tokens in each world (decoded TOML):
-  for w in ${ARGO_WORLDS[*]}; do
-    echo "=== \$w ==="
-    kubectl -n \$w get secret \$w-demarkus-server-tokens -o jsonpath='{.data.tokens\\.toml}' | base64 -d
-  done
-
-re-run the mint flow (handy for poking at logs):
-  kubectl run -n $NAMESPACE mint-replay --rm -i --restart=Never \\
-    --image=$MINT_CURL_IMAGE -- curl -sS http://$BROKER_RELEASE:8080/healthz
-
-tear down:
-  $SCRIPT_DIR/down.sh
-EOF
-    exit 0
-  fi
 
   cat <<EOF
 
@@ -412,12 +273,7 @@ helm upgrade --install "$RELEASE" "$SERVER_CHART" \
   --values "$VALUES_FILE" \
   --wait --timeout 5m
 
-POD_SELECTOR="app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/name=demarkus-server"
-POD=$(kubectl -n "$NAMESPACE" get pods -l "$POD_SELECTOR" -o jsonpath='{.items[0].metadata.name}')
-if [[ -z "$POD" ]]; then
-  echo "no demarkus-server pod found for selector: $POD_SELECTOR" >&2
-  exit 1
-fi
+POD=$(pod_of "$NAMESPACE" "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/name=demarkus-server")
 echo "--- waiting for pod $POD"
 kubectl -n "$NAMESPACE" wait --for=condition=ready "pod/$POD" --timeout=120s
 
@@ -432,91 +288,70 @@ kubectl -n "$NAMESPACE" exec "$POD" -- \
 # ephemeral and the user can pull it on demand with the command shown below.
 TOKEN_SECRET="${RELEASE}-demarkus-server-token-values"
 
-if [[ "$WITH_BROKER" == "true" ]]; then
+if [[ "$WITH_KNOWLEDGE" == "true" ]]; then
+  echo "--- applying fake-gcs-server (the knowledge worlds' buckets)"
+  kubectl -n "$NAMESPACE" apply -f "$FAKE_GCS_MANIFEST"
+  kubectl -n "$NAMESPACE" rollout status deployment/fake-gcs-server --timeout=120s
+  # The chart never creates buckets; the world's bucket is gs://kind-world-default.
+  kubectl run -n "$NAMESPACE" bucket-setup --rm -i --restart=Never \
+    --image="$MINT_CURL_IMAGE" --command -- \
+    curl -sS -f -X POST -H 'Content-Type: application/json' -d '{"name":"kind-world-default"}' \
+    "http://fake-gcs-server.$NAMESPACE.svc.cluster.local:4443/storage/v1/b"
+
   echo "--- applying mock-oauth2-server (OIDC issuer for broker discovery)"
   kubectl -n "$NAMESPACE" apply -f "$MOCK_OIDC_MANIFEST"
   kubectl -n "$NAMESPACE" rollout status deployment/mock-oauth2-server --timeout=120s
 
   ensure_broker_signing_key "$NAMESPACE"
+  ensure_knowledge_tls "$NAMESPACE" "world-default.$KNOWLEDGE_RELEASE.$NAMESPACE.svc.cluster.local"
 
-  if [[ "$WITH_MCP_SMOKE" == "true" ]]; then
-    # --with-mcp-smoke replaces the OCI broker install with a local-chart
-    # + locally-built-image install so the MCP smoke checks below actually
-    # exercise THIS BRANCH's chart wiring (server.mcp.*, the `mcp`
-    # Service port, the NetworkPolicy port admission). Image tag is
-    # ephemeral so subsequent --with-mcp-smoke runs always rebuild from
-    # the current checkout.
-    MCP_SMOKE_IMAGE_REGISTRY=demarkus-mcp-smoke
-    MCP_SMOKE_IMAGE_TAG="local-$(date +%s)"
-    echo "--- building demarkus-knowledge-broker image $MCP_SMOKE_IMAGE_REGISTRY/demarkus-knowledge-broker:$MCP_SMOKE_IMAGE_TAG"
+  # KNOWLEDGE_IMAGE=<repository>:<tag> runs a published or already loaded
+  # image; otherwise the composed image is built from this checkout so the
+  # chart wiring under test is this branch's, tagged fresh so reruns rebuild.
+  if [[ -z "$KNOWLEDGE_IMAGE" ]]; then
+    KNOWLEDGE_IMAGE="demarkus-kind/demarkus-knowledge:local-$(date +%s)"
+    echo "--- building demarkus-knowledge image $KNOWLEDGE_IMAGE"
     ( cd "$REPO_ROOT" && \
-        make image-broker "IMAGE_REGISTRY=$MCP_SMOKE_IMAGE_REGISTRY" "TAG=$MCP_SMOKE_IMAGE_TAG" )
+        make image-knowledge "IMAGE_REGISTRY=${KNOWLEDGE_IMAGE%%/*}" "TAG=${KNOWLEDGE_IMAGE##*:}" )
     echo "--- sideloading image into kind cluster $CLUSTER"
-    kind load docker-image "$MCP_SMOKE_IMAGE_REGISTRY/demarkus-knowledge-broker:$MCP_SMOKE_IMAGE_TAG" --name "$CLUSTER"
-
-    echo "--- installing LOCAL demarkus-knowledge-broker chart from $REPO_ROOT/deploy/helm/demarkus-knowledge-broker"
-    # Confidential web client for the web-SSO smoke below. The secret is
-    # generated per run and only its sha256 enters the rendered config —
-    # same posture as a real deployment. The redirect host is .invalid
-    # (RFC 2606): nothing ever connects to it, the smoke only parses the
-    # broker's 302 Location to recover the authorization code.
-    WEBCLIENT_ID="library-web-smoke"
-    WEBCLIENT_SECRET="$(openssl rand -hex 24)"
-    WEBCLIENT_SECRET_HASH="$(printf '%s' "$WEBCLIENT_SECRET" | openssl dgst -sha256 -hex | awk '{print $NF}')"
-    WEBCLIENT_REDIRECT_URI="https://library.smoke.invalid/auth/callback"
-
-    # server.insecureCookies=true is set here (not in values-broker.yaml) so
-    # only the --with-mcp-smoke install drops the Secure attribute on the
-    # OIDC state cookie. The auth-code smoke below drives /oauth/authorize ->
-    # /auth/callback over plain HTTP inside the curl pod; a Secure cookie
-    # would not replay on the callback leg and the flow would fail at state
-    # validation. The plain Stage 2 install (values-broker.yaml) stays
-    # untouched because it never drives a login flow.
-    helm upgrade --install "$BROKER_RELEASE" "$REPO_ROOT/deploy/helm/demarkus-knowledge-broker" \
-      --namespace "$NAMESPACE" --create-namespace \
-      --values "$BROKER_VALUES_FILE" \
-      --set "server.insecureCookies=true" \
-      --set "image.repository=$MCP_SMOKE_IMAGE_REGISTRY/demarkus-knowledge-broker" \
-      --set "image.tag=$MCP_SMOKE_IMAGE_TAG" \
-      --set "image.pullPolicy=IfNotPresent" \
-      --set "webClients[0].clientID=$WEBCLIENT_ID" \
-      --set-string "webClients[0].clientSecretHash=$WEBCLIENT_SECRET_HASH" \
-      --set "webClients[0].redirectURIs[0]=$WEBCLIENT_REDIRECT_URI" \
-      --set "webClients[0].name=Web SSO smoke client" \
-      --wait --timeout 5m
-  else
-    echo "--- installing demarkus-knowledge-broker chart $BROKER_CHART_VERSION"
-    # helm install --wait blocks on the broker's readiness probe, which hits
-    # /readyz. /readyz only flips green after OIDC discovery + JWKS fetch
-    # against the mock issuer have completed, so a successful install here
-    # already proves discovery works end-to-end.
-    helm upgrade --install "$BROKER_RELEASE" "$BROKER_CHART" \
-      --set "fullnameOverride=$BROKER_RELEASE" \
-      --version "$BROKER_CHART_VERSION" \
-      --namespace "$NAMESPACE" --create-namespace \
-      --values "$BROKER_VALUES_FILE" \
-      --wait --timeout 5m
+    kind load docker-image "$KNOWLEDGE_IMAGE" --name "$CLUSTER"
   fi
 
-  BROKER_POD_SELECTOR="app.kubernetes.io/instance=$BROKER_RELEASE,app.kubernetes.io/name=demarkus-knowledge-broker"
-  BROKER_POD=$(kubectl -n "$NAMESPACE" get pods -l "$BROKER_POD_SELECTOR" -o jsonpath='{.items[0].metadata.name}')
-  if [[ -z "$BROKER_POD" ]]; then
-    echo "no demarkus-knowledge-broker pod found for selector: $BROKER_POD_SELECTOR" >&2
-    exit 1
-  fi
+  # Confidential web client for the web-SSO smoke below. The secret is
+  # generated per run and only its sha256 enters the rendered config, the
+  # same posture as a real deployment. The redirect host is .invalid
+  # (RFC 2606): nothing ever connects to it, the smoke only parses the
+  # broker's 302 Location to recover the authorization code.
+  WEBCLIENT_ID="library-web-smoke"
+  WEBCLIENT_SECRET="$(openssl rand -hex 24)"
+  WEBCLIENT_SECRET_HASH="$(printf '%s' "$WEBCLIENT_SECRET" | openssl dgst -sha256 -hex | awk '{print $NF}')"
+  WEBCLIENT_REDIRECT_URI="https://library.smoke.invalid/auth/callback"
+
+  echo "--- installing LOCAL demarkus-knowledge-server chart from $KNOWLEDGE_CHART"
+  # helm --wait blocks on the broker's /readyz, which only flips green after
+  # OIDC discovery against the mock issuer and every world open in
+  # fake-gcs-server succeeded, so a successful install already proves both.
+  helm upgrade --install "$KNOWLEDGE_RELEASE" "$KNOWLEDGE_CHART" \
+    --namespace "$NAMESPACE" --create-namespace \
+    --values "$KNOWLEDGE_VALUES_FILE" \
+    --set "image.repository=${KNOWLEDGE_IMAGE%:*}" \
+    --set "image.tag=${KNOWLEDGE_IMAGE##*:}" \
+    --set "image.pullPolicy=IfNotPresent" \
+    --set "broker.webClients[0].clientID=$WEBCLIENT_ID" \
+    --set-string "broker.webClients[0].clientSecretHash=$WEBCLIENT_SECRET_HASH" \
+    --set "broker.webClients[0].redirectURIs[0]=$WEBCLIENT_REDIRECT_URI" \
+    --set "broker.webClients[0].name=Web SSO smoke client" \
+    --wait --timeout 5m
+
+  KNOWLEDGE_POD=$(pod_of "$NAMESPACE" "app.kubernetes.io/instance=$KNOWLEDGE_RELEASE,app.kubernetes.io/name=demarkus-knowledge-server")
+  KNOWLEDGE_HTTP_URL="http://$KNOWLEDGE_RELEASE.$NAMESPACE.svc.cluster.local:8080"
 
   if [[ "$WITH_MCP_SMOKE" == "true" ]]; then
-    # MCP gateway smoke checks. These three prove the chart's MCP listener is:
-    #   1. bound (port 8081 reachable through the Service)
-    #   2. serving RFC 9728 OAuth metadata (well-known endpoint)
-    #   3. enforcing auth on /mcp (401 + WWW-Authenticate challenge)
-    # That is the smallest evidence that Slice 7's chart wiring works. The
-    # auth-code + PKCE flow that backs /knowledge-join is then driven
-    # end-to-end against the broker's :8080 OAuth surface in a second pod
-    # below (broker-auth-code-grant plan, PR3).
     echo "--- driving MCP gateway smoke checks from an ephemeral curl pod"
-    BROKER_MCP_URL="http://$BROKER_RELEASE.$NAMESPACE.svc.cluster.local:8081"
-    BROKER_MGMT_URL="http://$BROKER_RELEASE.$NAMESPACE.svc.cluster.local:8080"
+    # One listener serves the management API and the gateway; in kind no
+    # hostname tells them apart, so both URLs are the knowledge Service.
+    BROKER_MCP_URL="$KNOWLEDGE_HTTP_URL"
+    BROKER_MGMT_URL="$KNOWLEDGE_HTTP_URL"
     kubectl run -n "$NAMESPACE" mcp-smoke --rm -i --restart=Never \
       --image="$MINT_CURL_IMAGE" --command -- sh -c '
 set -eu
@@ -539,15 +374,10 @@ META=$($CURL "$BROKER_MCP/.well-known/oauth-protected-resource")
 echo "$META" | grep -q "resource" || { echo "FAIL: oauth-protected-resource missing resource field"; echo "$META"; exit 1; }
 echo "OK: /.well-known/oauth-protected-resource"
 
-# 2. RFC 8414 metadata lives on the ISSUER host (management listener)
-#    only — RFC 8414 s3.3 requires issuer == fetch origin, so the
-#    gateway must NOT serve it (strict clients hard-fail on the copy).
+# 2. RFC 8414 metadata on the issuer origin (the same mux in kind).
 META=$($CURL "$BROKER_MGMT/.well-known/oauth-authorization-server")
 echo "$META" | grep -q "issuer" || { echo "FAIL: oauth-authorization-server missing issuer field on management host"; echo "$META"; exit 1; }
 echo "OK: management /.well-known/oauth-authorization-server"
-HTTP=$($CURL -o /dev/null -w "%{http_code}" "$BROKER_MCP/.well-known/oauth-authorization-server")
-[ "$HTTP" = "404" ] || { echo "FAIL: gateway serves oauth-authorization-server (got $HTTP, want 404)"; exit 1; }
-echo "OK: gateway oauth-authorization-server 404"
 
 # 2b. RFC 9728 s3.1 path-inserted form for resource <host>/mcp.
 META=$($CURL "$BROKER_MCP/.well-known/oauth-protected-resource/mcp")
@@ -583,10 +413,10 @@ echo "OK: POST /mcp 401 + WWW-Authenticate"
     AUTHCODE_CHALLENGE="$(printf '%s' "$AUTHCODE_VERIFIER" \
       | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
 
-    # The one world values-broker.yaml configures; the tool calls below use it.
+    # The one world values-knowledge.yaml configures; the tool calls below use it.
     MCP_SMOKE_WORLD="world-default"
     echo "--- driving auth-code + PKCE flow, then MCP tool calls, from an ephemeral curl pod"
-    BROKER_OAUTH_URL="http://$BROKER_RELEASE.$NAMESPACE.svc.cluster.local:8080"
+    BROKER_OAUTH_URL="$KNOWLEDGE_HTTP_URL"
     kubectl run -n "$NAMESPACE" authcode-smoke --rm -i --restart=Never \
       --image="$MINT_CURL_IMAGE" --command -- sh -c '
 set -eu
@@ -749,22 +579,14 @@ echo "OK: tools/list names the read, write and directory tools"
 tool mark_worlds "{}"
 want "mark_worlds lists the configured world" "$WORLD"
 # A fresh kind world has no agent manifest, so the world answers not-found:
-# any protocol status proves the broker dialed it over QUIC.
+# any protocol status proves the gateway reached the world in process.
 tool mark_discover "{\"url\":\"mark://$WORLD/\"}"
-want "mark_discover reaches the world over QUIC" "status: "
+want "mark_discover reaches the world" "status: "
 
-# Write path: the broker provisions the world write token on first use and
-# absorbs its propagation lag, which no unit test can show.
-# On a fresh cluster the kubelet takes longer to project the token Secret into
-# the world pod than the broker waits (about 8s), and the broker says so. An
-# agent retries; so does this. Only 401s happened, so nothing landed.
-for attempt in $(seq 1 12); do
-  tool mark_publish "{\"url\":\"$DOC\",\"body\":\"# Smoke\\n\\nfirst line\\n\",\"expected_version\":0,\"metadata\":{\"tags\":\"smoke\"}}"
-  grep -q "token propagation lag" /tmp/rpc.out || break
-  echo "... write token not projected into the world pod yet (attempt $attempt)"
-  sleep 10
-done
-want "mark_publish creates a document" "version: 1"
+# Write path: the identity grant reaches the world in process, so the
+# first publish lands with no token minted or projected.
+tool mark_publish "{\"url\":\"$DOC\",\"body\":\"# Smoke\\n\\nfirst line\\n\",\"expected_version\":0,\"metadata\":{\"tags\":\"smoke\"}}"
+want "mark_publish creates a document under the identity grant" "version: 1"
 tool mark_fetch "{\"url\":\"$DOC\"}"
 want "mark_fetch returns what was published" "first line"
 tool mark_append "{\"url\":\"$DOC\",\"body\":\"second line\\n\"}"
@@ -935,27 +757,22 @@ echo "OK: confidential web-client flow end-to-end"
 
   cat <<EOF
 
-ready (with broker).
+ready (with knowledge).
 
-cluster:        kind-$CLUSTER
-namespace:      $NAMESPACE
-server release: $RELEASE
-broker release: $BROKER_RELEASE
-broker pod:     $BROKER_POD
-server svc:     $RELEASE-demarkus-server.$NAMESPACE.svc.cluster.local:6309 (UDP)
-broker svc:     $BROKER_RELEASE.$NAMESPACE.svc.cluster.local:8080 (HTTP)
-broker MCP svc: $BROKER_RELEASE.$NAMESPACE.svc.cluster.local:8081 (HTTP)
-mock OIDC:      mock-oauth2-server.$NAMESPACE.svc.cluster.local:8080/default
+cluster:           kind-$CLUSTER
+namespace:         $NAMESPACE
+server release:    $RELEASE
+knowledge release: $KNOWLEDGE_RELEASE
+knowledge pod:     $KNOWLEDGE_POD
+server svc:        $RELEASE-demarkus-server.$NAMESPACE.svc.cluster.local:6309 (UDP)
+knowledge svc:     $KNOWLEDGE_RELEASE.$NAMESPACE.svc.cluster.local:6309 (UDP), :8080 (HTTP: OAuth + MCP)
+mock OIDC:         mock-oauth2-server.$NAMESPACE.svc.cluster.local:8080/default
+fake GCS:          fake-gcs-server.$NAMESPACE.svc.cluster.local:4443
 
-probe the broker (from another shell):
-  kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE 8080:8080
+probe the broker and the MCP gateway (from another shell):
+  kubectl -n $NAMESPACE port-forward svc/$KNOWLEDGE_RELEASE 8080:8080
   curl http://localhost:8080/healthz
-  curl http://localhost:8080/readyz
-
-probe the MCP gateway:
-  kubectl -n $NAMESPACE port-forward svc/$BROKER_RELEASE 8081:8081
-  curl http://localhost:8081/.well-known/oauth-protected-resource
-  # RFC 8414 auth-server metadata is on the management listener (:8080), not here
+  curl http://localhost:8080/.well-known/oauth-protected-resource
 
 server fetch from inside the cluster:
   kubectl -n $NAMESPACE exec -it $POD -- \\
@@ -986,8 +803,8 @@ interact from inside the cluster:
 retrieve the admin token (when you need it):
   kubectl -n $NAMESPACE get secret $TOKEN_SECRET -o jsonpath='{.data.admin}' | base64 -d
 
-add the broker (next stage):
-  $0 --with-broker
+add the knowledge system (next stage):
+  $0 --with-knowledge --with-mcp-smoke
 
 tear down:
   $SCRIPT_DIR/down.sh

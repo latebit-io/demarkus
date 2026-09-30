@@ -29,9 +29,6 @@ type ProvisioningConfig struct {
 	// AuthorityDomain is the DNS suffix for tenant authorities
 	// (<slug>.<authorityDomain>); must match the server's SNI routing.
 	AuthorityDomain string `yaml:"authorityDomain"`
-	// DialAddress is the shared knowledge-server host:port every tenant
-	// world is dialed at (the authority stays per-tenant via SNI).
-	DialAddress string `yaml:"dialAddress"`
 	// BucketPrefix prefixes each tenant's GCS bucket: gs://<prefix><slug>.
 	BucketPrefix string `yaml:"bucketPrefix"`
 	// BucketProject is the GCP project buckets are created in.
@@ -40,18 +37,9 @@ type ProvisioningConfig struct {
 	// europe-west1). Blank uses the GCS default (US multi-region);
 	// set it explicitly when data residency matters.
 	BucketLocation string `yaml:"bucketLocation"`
-	// ServerNamespace is the k8s namespace holding the knowledge
-	// server's worlds-fragment and shared tokens Secrets.
-	ServerNamespace string `yaml:"serverNamespace"`
 	// WorldsSecret names the Secret whose worlds.yaml key carries the
 	// knowledge-server worlds fragment (the server mounts and watches it).
 	WorldsSecret string `yaml:"worldsSecret"`
-	// TokensSecret names the shared Secret holding one <slug>.toml key
-	// per tenant world (the server mounts it as a directory).
-	TokensSecret string `yaml:"tokensSecret"`
-	// TokensMountPath is the directory the server mounts TokensSecret
-	// at; rendered into each fragment world's auth.tokensFile.
-	TokensMountPath string `yaml:"tokensMountPath"`
 	// RegistrySecret names the broker-namespace Secret holding the
 	// tenant registry (registry.json). Defaulted when blank.
 	RegistrySecret string `yaml:"registrySecret"`
@@ -70,7 +58,7 @@ func (p *ProvisioningConfig) Enabled() bool {
 
 // validate normalizes and checks the provisioning block; the caller
 // requires the memory gateway when it is enabled.
-func (p *ProvisioningConfig) validate(fileBackend bool) error {
+func (p *ProvisioningConfig) validate() error {
 	p.Mode = strings.TrimSpace(p.Mode)
 	switch p.Mode {
 	case "", ProvisionStatic:
@@ -80,21 +68,14 @@ func (p *ProvisioningConfig) validate(fileBackend bool) error {
 	default:
 		return fmt.Errorf("provisioning.mode must be %q, %q, or %q (got %q)", ProvisionStatic, ProvisionAllowlisted, ProvisionOpen, p.Mode)
 	}
-	if fileBackend {
-		return fmt.Errorf("provisioning.mode %q requires the kubernetes storage backend", p.Mode)
-	}
 	if p.Mode == ProvisionOpen && p.MaxTenants <= 0 {
 		return fmt.Errorf("provisioning.maxTenants must be positive in open mode (unbounded open signup is a resource-creation DoS surface)")
 	}
 	required := map[string]string{
 		"provisioning.authorityDomain": p.AuthorityDomain,
-		"provisioning.dialAddress":     p.DialAddress,
 		"provisioning.bucketPrefix":    p.BucketPrefix,
 		"provisioning.bucketProject":   p.BucketProject,
-		"provisioning.serverNamespace": p.ServerNamespace,
 		"provisioning.worldsSecret":    p.WorldsSecret,
-		"provisioning.tokensSecret":    p.TokensSecret,
-		"provisioning.tokensMountPath": p.TokensMountPath,
 	}
 	for field, value := range required {
 		if strings.TrimSpace(value) == "" {
@@ -112,16 +93,15 @@ func (p *ProvisioningConfig) tenantAuthority(slug string) string {
 	return fmt.Sprintf("%s.%s:%d", slug, p.AuthorityDomain, protocol.DefaultPort)
 }
 
-// TenantWorld renders the broker-side WorldConfig for one tenant.
+// TenantWorld renders the broker-side WorldConfig for one tenant. A tenant
+// is served by the server in this process, so it is local and has no
+// tokens Secret or namespace: the identity grant is its only write path.
 func (p *ProvisioningConfig) TenantWorld(slug, email string) WorldConfig {
 	return WorldConfig{
 		Name:            slug,
 		Profile:         ProfileMemory,
-		Namespace:       p.ServerNamespace,
-		TokensSecret:    p.TokensSecret,
-		TokensSecretKey: slug + ".toml",
 		InternalAddress: p.tenantAuthority(slug),
-		DialAddress:     p.DialAddress,
+		Local:           true,
 		Allow:           AllowConfig{Emails: []string{email}},
 		WriteScope:      WriteScope{Paths: []string{"/**"}},
 	}

@@ -1,6 +1,6 @@
 # demarkus-knowledge for Cursor
 
-Connect [Cursor](https://cursor.com) to an **organizational demarkus knowledge system**: a shared, versioned markdown catalog fronted by a demarkus-knowledge-broker over HTTPS. The Cursor port of the Claude Code [`demarkus-knowledge`](../claude-code-knowledge) plugin: same behavior, mapped onto Cursor's plugin, hook, and MCP surfaces. It shares `~/.demarkus` state with the Claude Code, pi, and OpenCode knowledge plugins, so one join covers every harness on the machine.
+Connect [Cursor](https://cursor.com) to an **organizational demarkus knowledge system**: a shared, versioned markdown catalog fronted by a demarkus knowledge gateway over HTTPS. The Cursor port of the Claude Code [`demarkus-knowledge`](../claude-code-knowledge) plugin: same behavior, mapped onto Cursor's plugin, hook, and MCP surfaces. It shares `~/.demarkus` state with the Claude Code, pi, and OpenCode knowledge plugins, so one join covers every harness on the machine.
 
 This is the broker-fronted, multi-writer counterpart to [`demarkus-memory` for Cursor](../cursor-memory), which gives you a personal soul. The two are independent plugins and compose: install both and the soul is your private scratch space while the knowledge system is the shared, authoritative source of truth. Install only this one to work against your org's catalog without running a local server.
 

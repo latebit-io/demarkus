@@ -1,10 +1,10 @@
-# Memory Broker (`demarkus-memory-broker`)
+# Memory gateway
 
-Memory as a service for MCP hosts: one OAuth connector URL gives any MCP host a private, versioned personal memory. The memory broker shares its libraries and deployment profile with the knowledge broker but runs a different authorization model: your identity maps to exactly one world, and reads AND writes are locked to it. Nothing is org-open, and cross-tenant access is denied at the tool, resource, and crawl layers.
+Memory as a service for MCP hosts: one OAuth connector URL gives any MCP host a private, versioned personal memory. The memory gateway is the second profile of the `demarkus-knowledge` process, on its own hostname, with a different authorization model from the knowledge gateway: your identity maps to exactly one world, and reads AND writes are locked to it. Nothing is org-open, and cross-tenant access is denied at the tool, resource, and crawl layers.
 
-On your first authenticated tool call the broker seeds your memory with a template (`/index.md` hub, a low-ceremony write policy, and the memory layout at `/.well-known/demarkus/template.md`). With dynamic provisioning enabled, the first arrival also creates the world itself: bucket, server registration, and tokens, behind a provisioning gate (`static | allowlisted | open`).
+On your first authenticated tool call the gateway seeds your memory with a template (`/index.md` hub, a low-ceremony write policy, and the memory layout at `/.well-known/demarkus/template.md`). With dynamic provisioning enabled, the first arrival also creates the world itself, bucket and server registration, behind a provisioning gate (`static | allowlisted | open`); the world serves in process at once.
 
-See `knowledge/cmd/demarkus-memory-broker/MCP-API.md` for the tool contract and the Helm chart README (`deploy/helm/demarkus-memory-broker/`) for deployment.
+See `knowledge/cmd/demarkus-knowledge/MEMORY-API.md` for the tool contract and the Helm chart README (`deploy/helm/demarkus-knowledge-server/`) for deployment.
 
 ## Connecting a host
 
@@ -38,7 +38,7 @@ Add a remote MCP server with the gateway URL; both support the same streamable H
 2. Call `mark_worlds` once: it returns your world name, the `{worldName}` every other tool addresses as `mark://{worldName}/{path}`.
 3. Recall with `mark_lookup` / `mark_fetch`; record with `mark_publish` / `mark_append`.
 
-With dynamic provisioning, a brand-new identity's first call may answer "your memory world is being provisioned; try again in about a minute" while the backend picks the new world up.
+With dynamic provisioning, a brand-new identity's first call creates the world and serves it in the same process; a replica that has not yet synced the registry answers "your memory world is being provisioned; try again in about a minute" until it has.
 
 ## Getting your data out
 

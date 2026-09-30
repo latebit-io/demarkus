@@ -68,11 +68,6 @@ func (s *Sweeper) RunLeaderElected(ctx context.Context, leaseName, namespace, id
 	})
 }
 
-// Run sweeps without leader election, for single-host file mode.
-func (s *Sweeper) Run(ctx context.Context) {
-	s.runLoop(ctx)
-}
-
 // runLoop sweeps once at start, so a new leader does not wait a full
 // interval after a slow takeover, then every interval until ctx ends.
 func (s *Sweeper) runLoop(ctx context.Context) {

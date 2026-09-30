@@ -34,7 +34,6 @@ jobs:
               - 'client/**'
               - 'deploy/helm/demarkus-server/**'
               - 'deploy/helm/demarkus-server-common/**'
-              - 'deploy/helm/demarkus-knowledge-server/**'
             client:
               - 'client/**'
               - 'protocol/**'
@@ -45,14 +44,13 @@ jobs:
               - 'client/**'
             knowledge:
               - 'knowledge/**'
+              - 'server/**'
               - 'protocol/**'
               - 'client/**'
-              - 'deploy/helm/demarkus-knowledge-broker/**'
-              - 'deploy/helm/demarkus-memory-broker/**'
+              - 'deploy/helm/demarkus-knowledge-server/**'
             knowledge_system:
               - 'deploy/helm/demarkus-knowledge-system/**'
               - 'deploy/helm/demarkus-knowledge-server/**'
-              - 'deploy/helm/demarkus-knowledge-broker/**'
               - 'deploy/helm/demarkus-agent/**'
 
   test-protocol:
@@ -174,7 +172,7 @@ jobs:
           # bump too. protocol/ is compiled in via replace directives, and
           # the image bundles the client CLI for chart exec probes: a fix
           # in either that skips this gate silently never ships (#295).
-          change_path: "server/ protocol/ client/ deploy/helm/demarkus-server/ deploy/helm/demarkus-server-common/ deploy/helm/demarkus-knowledge-server/"
+          change_path: "server/ protocol/ client/ deploy/helm/demarkus-server/ deploy/helm/demarkus-server-common/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -254,10 +252,11 @@ jobs:
           fi
           echo "Version: ${{ steps.semver.outputs.version }}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
 
-  # Broker releases on its own stream (broker/v) so admin-CLI and plugin
-  # binary churn on tools/v never rebuilds the broker image or chart, and
-  # broker changes never trigger the plugin pin-bump chain.
-  semver-broker:
+  # The composed knowledge binary (server plus broker), its image and the
+  # demarkus-knowledge-server chart release together on knowledge/v, so
+  # admin-CLI and plugin churn on tools/v never rebuilds them and knowledge
+  # changes never trigger the plugin pin-bump chain. server/ is compiled in.
+  semver-knowledge:
     needs: test-knowledge
     if: always() && needs.test-knowledge.result == 'success'
     runs-on: ubuntu-latest
@@ -271,18 +270,18 @@ jobs:
       - uses: PaulHatch/semantic-version@8d3552d38408b608e90e76237a2a5ac9fe524d04 # v5.3.0
         id: semver
         with:
-          tag_prefix: "broker/v"
+          tag_prefix: "knowledge/v"
           major_pattern: "BREAKING CHANGE:"
           minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
           # See server's change_path note: chart-only commits must
           # bump the version so the chart actually publishes.
-          change_path: "knowledge/cmd/demarkus-knowledge-broker/ knowledge/internal/ knowledge/go.mod knowledge/go.sum knowledge/.goreleaser-broker.yml protocol/ client/ deploy/helm/demarkus-knowledge-broker/"
+          change_path: "knowledge/ server/ protocol/ client/ deploy/helm/demarkus-knowledge-server/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
         id: check
         run: |
-          TAG="broker/v${{ steps.semver.outputs.version }}"
+          TAG="knowledge/v${{ steps.semver.outputs.version }}"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           else
@@ -291,7 +290,7 @@ jobs:
           echo "Version: ${{ steps.semver.outputs.version }}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
 
   # The umbrella chart releases on its own stream (knowledge-system/v). It
-  # vendors the three local charts, so any of their changes bumps it too;
+  # vendors the two local charts, so any of their changes bumps it too;
   # the release job re-versions them to their latest tags before packaging.
   semver-knowledge-system:
     needs: detect-changes
@@ -313,49 +312,13 @@ jobs:
           tag_prefix: "knowledge-system/v"
           major_pattern: "BREAKING CHANGE:"
           minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
-          change_path: "deploy/helm/demarkus-knowledge-system/ deploy/helm/demarkus-knowledge-server/ deploy/helm/demarkus-knowledge-broker/ deploy/helm/demarkus-agent/"
+          change_path: "deploy/helm/demarkus-knowledge-system/ deploy/helm/demarkus-knowledge-server/ deploy/helm/demarkus-agent/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
         id: check
         run: |
           TAG="knowledge-system/v${{ steps.semver.outputs.version }}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Version: ${{ steps.semver.outputs.version }}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
-
-  # Memory broker releases on its own stream (memory-broker/v), mirroring
-  # the knowledge broker's split: the two binaries share knowledge/internal/
-  # but ship, image, and chart independently.
-  semver-memory-broker:
-    needs: test-knowledge
-    if: always() && needs.test-knowledge.result == 'success'
-    runs-on: ubuntu-latest
-    outputs:
-      new_version: ${{ steps.semver.outputs.version }}
-      should_release: ${{ steps.check.outputs.should_release }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          fetch-depth: 0
-      - uses: PaulHatch/semantic-version@8d3552d38408b608e90e76237a2a5ac9fe524d04 # v5.3.0
-        id: semver
-        with:
-          tag_prefix: "memory-broker/v"
-          major_pattern: "BREAKING CHANGE:"
-          minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
-          # See server's change_path note: chart-only commits must
-          # bump the version so the chart actually publishes.
-          change_path: "knowledge/cmd/demarkus-memory-broker/ knowledge/internal/ knowledge/go.mod knowledge/go.sum knowledge/.goreleaser-memory-broker.yml protocol/ client/ deploy/helm/demarkus-memory-broker/"
-          bump_each_commit: false
-          search_commit_body: true
-      - name: Check if version changed
-        id: check
-        run: |
-          TAG="memory-broker/v${{ steps.semver.outputs.version }}"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           else
@@ -457,12 +420,14 @@ jobs:
       # cross-compile it inline (fast — no QEMU because the runner is
       # amd64 and Go natively cross-compiles to any GOARCH).
       - name: Stage binaries for Docker build
+        env:
+          STAGED_BINS: demarkus-server
         run: |
           set -euxo pipefail
           ls dist/
           mkdir -p dist/docker/amd64 dist/docker/arm64 dist/docker/armv7
 
-          for bin in demarkus-server demarkus-knowledge-server; do
+          for bin in $STAGED_BINS; do
             for arch in amd64:amd64 arm64:arm64 arm_7:armv7; do
               cp dist/${bin}_linux_${arch%%:*}*/"$bin" "dist/docker/${arch##*:}/"
             done
@@ -493,17 +458,6 @@ jobs:
             ghcr.io/latebit-io/demarkus-server:${{ needs.semver-server.outputs.new_version }}
             ghcr.io/latebit-io/demarkus-server:latest
 
-      - name: Build + push demarkus-knowledge-server image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          file: server/Dockerfile.knowledge
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          push: true
-          tags: |
-            ghcr.io/latebit-io/demarkus-knowledge-server:${{ needs.semver-server.outputs.new_version }}
-            ghcr.io/latebit-io/demarkus-knowledge-server:latest
-
       # Chart version + appVersion are pinned 1:1 to the server module
       # version so `helm install ghcr.io/.../charts/demarkus-server --version
       # X` resolves the image at the same tag. Helm 3.13+ reads ~/.docker/
@@ -512,15 +466,13 @@ jobs:
         with:
           version: v3.13.2
 
-      # Dependency updates vendor library charts into each package.
+      # Dependency update vendors the common library chart into the package.
       - name: Package + push server charts
         run: |
           VER="${{ needs.semver-server.outputs.new_version }}"
-          for chart in demarkus-server demarkus-knowledge-server; do
-            helm dependency update "deploy/helm/$chart"
-            helm package "deploy/helm/$chart" --version "$VER" --app-version "$VER" --destination /tmp/charts
-            helm push "/tmp/charts/${chart}-${VER}.tgz" oci://ghcr.io/latebit-io/charts
-          done
+          helm dependency update deploy/helm/demarkus-server
+          helm package deploy/helm/demarkus-server --version "$VER" --app-version "$VER" --destination /tmp/charts
+          helm push "/tmp/charts/demarkus-server-${VER}.tgz" oci://ghcr.io/latebit-io/charts
 
   release-client:
     needs: semver-client
@@ -644,8 +596,8 @@ jobs:
       - name: Fetch tags
         run: git fetch --tags --force
 
-      # Admin CLIs and plugin binaries only; the broker ships on its own
-      # stream via release-broker below.
+      # Admin CLIs and plugin binaries only; the knowledge system ships on
+      # its own stream via release-knowledge below.
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           distribution: goreleaser-pro
@@ -656,9 +608,9 @@ jobs:
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GORELEASER_CURRENT_TAG: "tools/v${{ needs.semver-tools.outputs.new_version }}"
 
-  release-broker:
-    needs: semver-broker
-    if: needs.semver-broker.outputs.should_release == 'true'
+  release-knowledge:
+    needs: semver-knowledge
+    if: needs.semver-knowledge.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -671,12 +623,13 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
+          cache-dependency-path: knowledge/go.sum
 
       - name: Create module tag
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
-            const tag = 'broker/v${{ needs.semver-broker.outputs.new_version }}';
+            const tag = 'knowledge/v${{ needs.semver-knowledge.outputs.new_version }}';
             await github.rest.git.createRef({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -701,143 +654,60 @@ jobs:
         with:
           distribution: goreleaser-pro
           version: latest
-          args: release --clean -f knowledge/.goreleaser-broker.yml
+          args: release --clean -f knowledge/.goreleaser.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-          GORELEASER_CURRENT_TAG: "broker/v${{ needs.semver-broker.outputs.new_version }}"
+          GORELEASER_CURRENT_TAG: "knowledge/v${{ needs.semver-knowledge.outputs.new_version }}"
 
-      # Stage pre-built broker binary (built by knowledge/.goreleaser-broker.yml
-      # above) into dist/docker/<arch>/ so the Dockerfile is COPY-only
-      # and buildx skips QEMU compilation.
+      # Stage the pre-built binary (built by knowledge/.goreleaser.yml above)
+      # into dist/docker/<arch>/ so the Dockerfile is COPY-only and buildx
+      # skips QEMU compilation.
       - name: Stage binaries for Docker build
+        env:
+          STAGED_BINS: demarkus-knowledge
         run: |
           set -euxo pipefail
           ls dist/
           mkdir -p dist/docker/amd64 dist/docker/arm64 dist/docker/armv7
-          cp dist/demarkus-knowledge-broker_linux_amd64*/demarkus-knowledge-broker dist/docker/amd64/
-          cp dist/demarkus-knowledge-broker_linux_arm64*/demarkus-knowledge-broker dist/docker/arm64/
-          cp dist/demarkus-knowledge-broker_linux_arm_7*/demarkus-knowledge-broker dist/docker/armv7/
+          for bin in $STAGED_BINS; do
+            for arch in amd64:amd64 arm64:arm64 arm_7:armv7; do
+              cp dist/${bin}_linux_${arch%%:*}*/"$bin" "dist/docker/${arch##*:}/"
+            done
+          done
 
       # Admin CLIs ship as standalone binary archives on the tools stream
       # and are not bundled into any image (§6.7.A: minimal pod blast radius).
-      - name: Build + push demarkus-knowledge-broker image
+      - name: Build + push demarkus-knowledge image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          file: knowledge/cmd/demarkus-knowledge-broker/Dockerfile
+          file: knowledge/cmd/demarkus-knowledge/Dockerfile
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: |
-            ghcr.io/latebit-io/demarkus-knowledge-broker:${{ needs.semver-broker.outputs.new_version }}
-            ghcr.io/latebit-io/demarkus-knowledge-broker:latest
+            ghcr.io/latebit-io/demarkus-knowledge:${{ needs.semver-knowledge.outputs.new_version }}
+            ghcr.io/latebit-io/demarkus-knowledge:latest
 
-      # Chart version + appVersion pinned 1:1 to the broker stream version so
-      # the broker chart and the broker image released in the same bump
-      # always reference each other.
-      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
-        with:
-          version: v3.13.2
-
-      - name: Package + push demarkus-knowledge-broker chart
-        run: |
-          VER="${{ needs.semver-broker.outputs.new_version }}"
-          helm package deploy/helm/demarkus-knowledge-broker --version "$VER" --app-version "$VER" --destination /tmp/charts
-          helm push "/tmp/charts/demarkus-knowledge-broker-${VER}.tgz" oci://ghcr.io/latebit-io/charts
-
-  release-memory-broker:
-    needs: semver-memory-broker
-    if: needs.semver-memory-broker.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: "1.26"
-
-      - name: Create module tag
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
-        with:
-          script: |
-            const tag = 'memory-broker/v${{ needs.semver-memory-broker.outputs.new_version }}';
-            await github.rest.git.createRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: `refs/tags/${tag}`,
-              sha: context.sha
-            });
-            console.log(`Created tag: ${tag}`);
-
-      - name: Fetch tags
-        run: git fetch --tags --force
-
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
-        with:
-          distribution: goreleaser-pro
-          version: latest
-          args: release --clean -f knowledge/.goreleaser-memory-broker.yml
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-          GORELEASER_CURRENT_TAG: "memory-broker/v${{ needs.semver-memory-broker.outputs.new_version }}"
-
-      # Stage pre-built binary (built by knowledge/.goreleaser-memory-broker.yml
-      # above) into dist/docker/<arch>/ so the Dockerfile is COPY-only
-      # and buildx skips QEMU compilation.
-      - name: Stage binaries for Docker build
-        run: |
-          set -euxo pipefail
-          ls dist/
-          mkdir -p dist/docker/amd64 dist/docker/arm64 dist/docker/armv7
-          cp dist/demarkus-memory-broker_linux_amd64*/demarkus-memory-broker dist/docker/amd64/
-          cp dist/demarkus-memory-broker_linux_arm64*/demarkus-memory-broker dist/docker/arm64/
-          cp dist/demarkus-memory-broker_linux_arm_7*/demarkus-memory-broker dist/docker/armv7/
-
-      - name: Build + push demarkus-memory-broker image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          file: knowledge/cmd/demarkus-memory-broker/Dockerfile
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          push: true
-          tags: |
-            ghcr.io/latebit-io/demarkus-memory-broker:${{ needs.semver-memory-broker.outputs.new_version }}
-            ghcr.io/latebit-io/demarkus-memory-broker:latest
-
-      # Chart version + appVersion pinned 1:1 to the memory-broker stream
-      # version so the chart and image released in the same bump always
+      # Chart version + appVersion pinned 1:1 to the knowledge stream version
+      # so the chart and the image released in the same bump always
       # reference each other.
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.13.2
 
-      - name: Package + push demarkus-memory-broker chart
+      - name: Package + push demarkus-knowledge-server chart
         run: |
-          VER="${{ needs.semver-memory-broker.outputs.new_version }}"
-          helm package deploy/helm/demarkus-memory-broker --version "$VER" --app-version "$VER" --destination /tmp/charts
-          helm push "/tmp/charts/demarkus-memory-broker-${VER}.tgz" oci://ghcr.io/latebit-io/charts
+          VER="${{ needs.semver-knowledge.outputs.new_version }}"
+          helm package deploy/helm/demarkus-knowledge-server --version "$VER" --app-version "$VER" --destination /tmp/charts
+          helm push "/tmp/charts/demarkus-knowledge-server-${VER}.tgz" oci://ghcr.io/latebit-io/charts
 
   # Runs after the sub-chart releases so the vendored charts and their image
   # tags point at releases that exist. Skipped sub-chart releases are fine;
   # a failed one blocks the umbrella.
   release-knowledge-system:
-    needs: [semver-knowledge-system, release-server, release-client, release-broker]
-    if: ${{ always() && !cancelled() && needs.semver-knowledge-system.outputs.should_release == 'true' && needs.release-server.result != 'failure' && needs.release-client.result != 'failure' && needs.release-broker.result != 'failure' }}
+    needs: [semver-knowledge-system, release-knowledge, release-client]
+    if: ${{ always() && !cancelled() && needs.semver-knowledge-system.outputs.should_release == 'true' && needs.release-knowledge.result != 'failure' && needs.release-client.result != 'failure' }}
     runs-on: ubuntu-latest
     # Tag creation needs contents; the chart push and the library pull need packages.
     permissions:
@@ -871,7 +741,7 @@ jobs:
         run: |
           set -euo pipefail
           latest() { git tag --list "$1/v*" --sort=-v:refname | head -n1 | sed "s#^$1/v##"; }
-          for pair in server:demarkus-knowledge-server client:demarkus-agent broker:demarkus-knowledge-broker; do
+          for pair in knowledge:demarkus-knowledge-server client:demarkus-agent; do
             stream="${pair%%:*}"
             chart="${pair##*:}"
             ver="$(latest "$stream")"

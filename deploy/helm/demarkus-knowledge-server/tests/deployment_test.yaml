@@ -2,6 +2,7 @@ suite: deployment
 templates:
   - deployment.yaml
   - configmap.yaml
+  - secret-broker-config.yaml
 values:
   - fixtures/valid-values.yaml
 tests:
@@ -23,20 +24,107 @@ tests:
           path: spec.strategy.rollingUpdate.maxSurge
           value: 1
 
-  - it: uses the knowledge image and strict config argument
+  - it: uses the composed image with both config files
     template: deployment.yaml
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/latebit-io/demarkus-knowledge-server:0.25.0
+          value: ghcr.io/latebit-io/demarkus-knowledge:0.25.0
       - equal:
           path: spec.template.spec.containers[0].args
-          value: ["-config", "/etc/demarkus/config.yaml"]
+          value: ["-server-config", "/etc/demarkus/config.yaml", "-broker-config", "/etc/demarkus/broker/config.yaml"]
       - matchRegex:
           path: spec.template.metadata.annotations["checksum/config"]
           pattern: '^[0-9a-f]{64}$'
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/broker-config"]
+          pattern: '^[0-9a-f]{64}$'
+      - equal:
+          path: spec.template.spec.volumes[1]
+          value:
+            name: broker-config
+            secret:
+              secretName: RELEASE-NAME-broker-config
+              items:
+                - key: config.yaml
+                  path: config.yaml
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[1]
+          value:
+            name: broker-config
+            mountPath: /etc/demarkus/broker
+            readOnly: true
 
-  - it: keeps QUIC public and health private at the pod
+  - it: identifies the pod for the sweeper Lease and mounts operator Secrets into the env
+    template: deployment.yaml
+    set:
+      broker.oidc.clientSecret: ""
+      broker.oidc.existingSecretRef.name: broker-oidc
+      broker.oidc.existingSigningKeyRef.name: broker-key
+      broker.existingCookieKeyRef.name: broker-cookie
+      broker.webClients:
+        - clientID: library-web
+          existingSecretRef: {name: library-oauth}
+          redirectURIs: [https://library.example.com/auth/callback]
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: POD_NAME
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_CLIENT_SECRET
+            valueFrom: {secretKeyRef: {name: broker-oidc, key: clientSecret}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BROKER_SIGNING_KEY
+            valueFrom: {secretKeyRef: {name: broker-key, key: signing-key.pem}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BROKER_COOKIE_KEY
+            valueFrom: {secretKeyRef: {name: broker-cookie, key: cookie-key}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WEB_CLIENT_SECRET_0
+            valueFrom: {secretKeyRef: {name: library-oauth, key: clientSecret}}
+
+  - it: appends extra environment after the chart's own
+    template: deployment.yaml
+    set:
+      extraEnv:
+        - name: STORAGE_EMULATOR_HOST
+          value: fake-gcs:4443
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[-1]
+          value:
+            name: STORAGE_EMULATOR_HOST
+            value: fake-gcs:4443
+
+  - it: mounts the tenant worlds fragment optionally when provisioning is on
+    template: deployment.yaml
+    set:
+      worlds: []
+      worldDefaults.bucketPrefix: gs://deployment-
+      broker.memory.publicURL: https://memory.example.com
+      provisioning.mode: allowlisted
+      provisioning.bucketProject: project
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[3]
+          value:
+            name: tenant-worlds
+            secret:
+              secretName: memory-worlds-config
+              optional: true
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[3].mountPath
+          value: /run/demarkus/tenant-worlds
+
+  - it: exposes QUIC, HTTP, health and peer ports at the pod and probes both halves
     template: deployment.yaml
     asserts:
       - contains:
@@ -45,6 +133,12 @@ tests:
             name: mark
             protocol: UDP
             containerPort: 6309
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: http
+            protocol: TCP
+            containerPort: 8080
       - contains:
           path: spec.template.spec.containers[0].ports
           content:
@@ -65,23 +159,29 @@ tests:
           value: /readyz
       - equal:
           path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: http
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: http
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
           value: health
 
   - it: mounts existing TLS data read-only
     template: deployment.yaml
     asserts:
       - equal:
-          path: spec.template.spec.volumes[1].secret.secretName
+          path: spec.template.spec.volumes[2].secret.secretName
           value: knowledge-tls
       - equal:
-          path: spec.template.spec.volumes[1].secret.items
+          path: spec.template.spec.volumes[2].secret.items
           value:
             - key: tls.crt
               path: tls.crt
             - key: tls.key
               path: tls.key
       - equal:
-          path: spec.template.spec.containers[0].volumeMounts[1]
+          path: spec.template.spec.containers[0].volumeMounts[2]
           value:
             name: tls
             mountPath: /run/demarkus/tls
@@ -122,7 +222,7 @@ tests:
     template: deployment.yaml
     asserts:
       - equal:
-          path: spec.template.spec.volumes[2]
+          path: spec.template.spec.volumes[3]
           value:
             name: world-token-0
             projected:
@@ -140,7 +240,7 @@ tests:
                       - key: tokens.toml
                         path: static-tokens.toml
       - equal:
-          path: spec.template.spec.volumes[3]
+          path: spec.template.spec.volumes[4]
           value:
             name: world-token-1
             projected:
@@ -158,10 +258,10 @@ tests:
                       - key: tokens.toml
                         path: static-tokens.toml
       - equal:
-          path: spec.template.spec.containers[0].volumeMounts[2].mountPath
+          path: spec.template.spec.containers[0].volumeMounts[3].mountPath
           value: /run/demarkus/worlds/team-a
       - equal:
-          path: spec.template.spec.containers[0].volumeMounts[3].mountPath
+          path: spec.template.spec.containers[0].volumeMounts[4].mountPath
           value: /run/demarkus/worlds/team-b
 
   - it: applies pod and container security contexts
@@ -209,6 +309,6 @@ tests:
           path: spec.template.spec.terminationGracePeriodSeconds
           value: 30
       - notExists:
-          path: spec.template.spec.volumes[5]
+          path: spec.template.spec.volumes[6]
       - notExists:
           path: spec.volumeClaimTemplates

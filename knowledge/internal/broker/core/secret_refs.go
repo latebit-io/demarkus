@@ -1,7 +1,5 @@
 package core
 
-import "path/filepath"
-
 // Secret layout. Names and keys are pinned: renaming one would orphan live
 // Secrets on an in-place upgrade.
 const (
@@ -34,14 +32,8 @@ func agentTokenSecretName(worldName string) string {
 	return "demarkus-broker-agent-token-" + worldName
 }
 
-// brokerSecretRef locates a broker-owned document in both backends: a Secret
-// in the broker namespace, or a file named by key under storage.dir.
 func brokerSecretRef(cfg *Config, name, key string) SecretRef {
-	ref := SecretRef{Namespace: cfg.Server.BrokerNamespace, Name: name, Key: key}
-	if cfg.fileBackend() {
-		ref.Path = filepath.Join(cfg.Storage.Dir, key)
-	}
-	return ref
+	return SecretRef{Namespace: cfg.Server.BrokerNamespace, Name: name, Key: key}
 }
 
 // RefreshTokensRef locates the refresh token map.
@@ -80,16 +72,7 @@ func AgentTokenRef(world *WorldConfig, spec *AgentTokenConfig) SecretRef {
 
 // WorldTokensRef locates the world's own tokens.toml.
 func WorldTokensRef(world *WorldConfig) SecretRef {
-	key := world.TokensSecretKey
-	if key == "" {
-		key = TokensSecretKey
-	}
-	return SecretRef{
-		Namespace: world.Namespace,
-		Name:      world.TokensSecret,
-		Key:       key,
-		Path:      world.TokensFile,
-	}
+	return SecretRef{Namespace: world.Namespace, Name: world.TokensSecret, Key: TokensSecretKey}
 }
 
 // RegistryRef locates the tenant registry.
@@ -101,11 +84,8 @@ func RegistryRef(cfg *Config) SecretRef {
 	}
 }
 
-// WorldsFragmentRef locates the worlds fragment the knowledge server mounts.
+// WorldsFragmentRef locates the worlds fragment the knowledge server in
+// this process mounts, beside the broker's own Secrets.
 func WorldsFragmentRef(cfg *Config) SecretRef {
-	return SecretRef{
-		Namespace: cfg.Provisioning.ServerNamespace,
-		Name:      cfg.Provisioning.WorldsSecret,
-		Key:       worldsFragmentKey,
-	}
+	return brokerSecretRef(cfg, cfg.Provisioning.WorldsSecret, worldsFragmentKey)
 }

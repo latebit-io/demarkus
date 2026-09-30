@@ -3,11 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sync"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	corev1 "k8s.io/api/core/v1"
@@ -92,17 +88,6 @@ func (s *k8sSecretStore) Mutate(ctx context.Context, ref core.SecretRef, mutate 
 	return fmt.Errorf("conflict on secret %s/%s after %d retries", ref.Namespace, ref.Name, maxConflictRetries)
 }
 
-// NewFileSecretStore returns the file-backed SecretStore for single-host
-// mode. Writes are atomic (temp file + rename, preserving an existing file's
-// mode) so the world server's tokens-file watcher, which watches the parent
-// directory, sees exactly one complete replacement per mutation. Concurrency
-// is guarded per path within this process; a concurrent out-of-process
-// writer (an operator running demarkus-token by hand) has the same
-// last-write-wins exposure as hand-editing tokens.toml today.
-func NewFileSecretStore() core.SecretStore {
-	return &fileSecretStore{locks: make(map[string]*sync.Mutex)}
-}
-
 // Delete removes ref.Key from the Secret, deleting the Secret itself
 // when no keys remain: per-tenant Secrets would otherwise accumulate
 // as empty husks across deprovisions.
@@ -141,155 +126,4 @@ func (s *k8sSecretStore) Delete(ctx context.Context, ref core.SecretRef) error {
 		return fmt.Errorf("update secret %s/%s: %w", ref.Namespace, ref.Name, updateErr)
 	}
 	return fmt.Errorf("conflict deleting secret %s/%s after %d retries", ref.Namespace, ref.Name, maxConflictRetries)
-}
-
-type fileSecretStore struct {
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
-}
-
-func (s *fileSecretStore) lockFor(path string) *sync.Mutex {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	l, ok := s.locks[path]
-	if !ok {
-		l = &sync.Mutex{}
-		s.locks[path] = l
-	}
-	return l
-}
-
-// Delete removes the backing file; absent is success.
-func (s *fileSecretStore) Delete(_ context.Context, ref core.SecretRef) error {
-	if ref.Path == "" {
-		return fmt.Errorf("file secret store: ref %s has no path (storage.dir or world tokensFile missing)", ref)
-	}
-	l := s.lockFor(ref.Path)
-	l.Lock()
-	defer l.Unlock()
-	if err := os.Remove(ref.Path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove %s: %w", ref.Path, err)
-	}
-	return nil
-}
-
-func (s *fileSecretStore) Mutate(_ context.Context, ref core.SecretRef, mutate func([]byte) ([]byte, error)) error {
-	if ref.Path == "" {
-		return fmt.Errorf("file secret store: ref %s has no path (storage.dir or world tokensFile missing)", ref)
-	}
-	l := s.lockFor(ref.Path)
-	l.Lock()
-	defer l.Unlock()
-
-	existing, readErr := os.ReadFile(ref.Path)
-	absent := false
-	if readErr != nil {
-		if !os.IsNotExist(readErr) {
-			return fmt.Errorf("read %s: %w", ref.Path, readErr)
-		}
-		absent = true
-		existing = nil
-	}
-	next, err := mutate(existing)
-	if err != nil {
-		return err
-	}
-	if absent && len(next) == 0 {
-		return nil
-	}
-	if !absent && bytes.Equal(existing, next) {
-		return nil
-	}
-
-	// Preserve a pre-existing file's mode and ownership: rename would
-	// otherwise re-own it to the broker user, revoking the world server's
-	// group-read on tokens.toml. New files are owner-only.
-	mode := os.FileMode(0o600)
-	var owner *fileOwner
-	if info, statErr := os.Stat(ref.Path); statErr == nil {
-		mode = info.Mode().Perm()
-		owner = ownerOf(info)
-	} else if !os.IsNotExist(statErr) {
-		// A file that exists but cannot be statted must not be replaced
-		// with downgraded metadata.
-		return fmt.Errorf("stat %s: %w", ref.Path, statErr)
-	}
-	dir := filepath.Dir(ref.Path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(ref.Path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp for %s: %w", ref.Path, err)
-	}
-	tmpName := tmp.Name()
-	fail := func(step string, cause error) error {
-		return errors.Join(
-			fmt.Errorf("%s for %s: %w", step, ref.Path, cause),
-			removeIfPresent(tmpName),
-		)
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return fail("chmod temp", err)
-	}
-	if owner != nil {
-		if err := chownPreserving(tmpName, owner); err != nil {
-			_ = tmp.Close()
-			return fail("preserve ownership", err)
-		}
-	}
-	if _, err := tmp.Write(next); err != nil {
-		_ = tmp.Close()
-		return fail("write temp", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fail("sync temp", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fail("close temp", err)
-	}
-	if err := os.Rename(tmpName, ref.Path); err != nil {
-		return fail("replace", err)
-	}
-	// Sync the directory so the rename itself survives a crash: file
-	// contents were fsynced above, but the new directory entry was not.
-	return syncDir(dir)
-}
-
-func removeIfPresent(path string) error {
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("cleanup temp %s: %w", path, err)
-	}
-	return nil
-}
-
-// chownPreserving restores the original owner; when uid restoration needs
-// privilege the gid alone keeps the shared-group read policy, so that
-// degradation is accepted. Any other failure errors rather than re-owning.
-func chownPreserving(path string, owner *fileOwner) error {
-	if err := os.Chown(path, owner.uid, owner.gid); err == nil {
-		return nil
-	}
-	if err := os.Chown(path, -1, owner.gid); err != nil {
-		return fmt.Errorf("cannot preserve owner uid=%d gid=%d (run the broker as the file's owner or a member of its group): %w", owner.uid, owner.gid, err)
-	}
-	return nil
-}
-
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open dir %s for sync: %w", dir, err)
-	}
-	syncErr := d.Sync()
-	closeErr := d.Close()
-	if syncErr != nil {
-		return fmt.Errorf("sync dir %s: %w", dir, syncErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close dir %s: %w", dir, closeErr)
-	}
-	return nil
 }

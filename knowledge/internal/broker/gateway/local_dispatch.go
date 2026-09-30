@@ -11,8 +11,8 @@ import (
 )
 
 // LocalWorlds serves worlds in process, keyed by the SNI their QUIC clients
-// would present; a protocol.Grant on ctx authorizes a write. A world may stop
-// routing between Routes and Exchange; Exchange then errors, nothing retries.
+// would present; a protocol.Grant on ctx authorizes a write. Routes answers
+// the startup check; Exchange on an unrouted authority errors, nothing retries.
 type LocalWorlds interface {
 	Routes(authority string) bool
 	Exchange(ctx context.Context, authority string, req protocol.Request) (protocol.Response, error)
@@ -22,9 +22,9 @@ type LocalWorlds interface {
 // grant never leaves the process, so nothing could authorize it there.
 var errWorldNotLocal = errors.New("not served by this broker; writes need a local world")
 
-// Composite reads from a world served in this process, else over the
-// network, so worlds in other clusters keep working; writes are local only.
-// Every verb sends the same wire request on both paths.
+// Composite serves a local world in this process and every other world over
+// the network, so worlds in other clusters keep working; writes are local
+// only. Every verb sends the same wire request on both paths.
 type Composite struct {
 	worlds *core.WorldRegistry
 	local  LocalWorlds
@@ -36,23 +36,42 @@ func NewComposite(worlds *core.WorldRegistry, local LocalWorlds, remote WorldDis
 	return &Composite{worlds: worlds, local: local, remote: remote}
 }
 
-// exchange serves the encoded request locally when the world routes here,
-// else through remote. A local failure is the answer: the request may have
-// run, so it is not retried over the network.
+// CheckLocal fails when a local world is not routed by local, so a world
+// the server in this process is not serving is a start error, not a slow
+// path over the network to itself.
+func CheckLocal(worlds *core.WorldRegistry, local LocalWorlds) error {
+	all := worlds.All()
+	for i := range all {
+		w := &all[i]
+		if !w.Local {
+			continue
+		}
+		if local == nil {
+			return fmt.Errorf("world %q is local but no knowledge server runs in this process", w.Name)
+		}
+		if authority := fetch.AuthorityHostname(resolveWorldAddress(w)); !local.Routes(authority) {
+			return fmt.Errorf("local world %q: the knowledge server in this process does not serve %q", w.Name, authority)
+		}
+	}
+	return nil
+}
+
+// exchange serves the encoded request locally when the world is local, else
+// through remote. A local failure is the answer: the request may have run,
+// so it is not retried over the network.
 func (c *Composite) exchange(ctx context.Context, worldName string, encode func() (protocol.Request, error), remote func(context.Context) (fetch.Result, error)) (fetch.Result, error) {
 	w, ok := c.worlds.Find(worldName)
 	if !ok {
 		return fetch.Result{}, &errWorldNotFound{worldName: worldName}
 	}
-	authority := fetch.AuthorityHostname(resolveWorldAddress(&w))
-	if !c.local.Routes(authority) {
+	if !w.Local {
 		return remote(ctx)
 	}
 	req, err := encode()
 	if err != nil {
 		return fetch.Result{}, err
 	}
-	resp, err := c.local.Exchange(ctx, authority, req)
+	resp, err := c.local.Exchange(ctx, fetch.AuthorityHostname(resolveWorldAddress(&w)), req)
 	if err != nil {
 		return fetch.Result{}, err
 	}

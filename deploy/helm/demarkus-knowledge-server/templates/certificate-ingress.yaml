@@ -1,0 +1,24 @@
+{{- if and .Values.ingress.enabled .Values.ingress.tls.certManager.enabled }}
+{{- include "demarkus-knowledge-server.validate" . -}}
+{{- /* One certificate for every Ingress host; the QUIC certificate in
+       certificate.yaml is separate. */ -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "demarkus-knowledge-server.ingressTLSSecretName" . }}
+  labels:
+    {{- include "demarkus-knowledge-server.labels" . | nindent 4 }}
+  {{- with .Values.ingress.tls.certManager.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  secretName: {{ include "demarkus-knowledge-server.ingressTLSSecretName" . }}
+  dnsNames:
+    {{- range include "demarkus-knowledge-server.ingressHosts" . | fromJsonArray }}
+    - {{ . | quote }}
+    {{- end }}
+  issuerRef:
+    kind: {{ .Values.ingress.tls.certManager.issuerRef.kind }}
+    name: {{ .Values.ingress.tls.certManager.issuerRef.name }}
+{{- end }}

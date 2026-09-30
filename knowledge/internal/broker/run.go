@@ -24,15 +24,14 @@ import (
 
 // RunOptions parameterizes the broker lifecycle for the binary that hosts it.
 type RunOptions struct {
-	// LogName prefixes every lifecycle log line.
-	LogName string
 	// Version is the binary's build version (initialize response).
 	Version string
 	// KubeconfigPath selects an out-of-cluster kubeconfig; empty uses
 	// the in-cluster service-account config.
 	KubeconfigPath string
-	// LocalWorlds, when set, serves the worlds it routes in process and
-	// takes provisioned tenants directly; the world pool dials the rest.
+	// LocalWorlds serves the worlds marked local in process and takes
+	// provisioned tenants directly; the world pool dials the rest. Every
+	// local world must be routed by it at Open.
 	LocalWorlds LocalServer
 }
 
@@ -47,42 +46,20 @@ type LocalServer interface {
 // built; Serve runs them, Close releases the rest.
 type Broker struct {
 	cfg  *core.Config
-	opts *RunOptions
 	log  *slog.Logger
 	pool *gateway.WorldPool
 	srv  *oauthsrv.Server
-	// httpSrv is the management listener; mcpSrv the extra one the charts
-	// route the knowledge host to until the fold. Both serve the one mux.
+	// httpSrv is the one listener: management API and both gateways.
 	httpSrv     *http.Server
-	mcpSrv      *http.Server
 	tasks       *backgroundTasks
 	closeBucket func()
 	closeOnce   sync.Once
-}
-
-// Run is the shared broker main: Open, Serve until a shutdown signal,
-// Close. The handler is registered before anything listens so a SIGTERM
-// in the startup window still takes the graceful path.
-func Run(configPath string, opts *RunOptions, log *slog.Logger) error {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	b, err := Open(configPath, opts, log)
-	if err != nil {
-		return err
-	}
-	defer b.Close()
-	err = b.Serve(ctx)
-	if ctx.Err() != nil {
-		log.Info(opts.LogName + ": received signal, shut down")
-	}
-	return err
 }
 
 // Options is the broker's product surface: both gateway profiles from one
 // config, tenant buckets on GCS when provisioning is enabled.
 func Options(version, kubeconfigPath string) *RunOptions {
 	return &RunOptions{
-		LogName:        "broker",
 		Version:        version,
 		KubeconfigPath: kubeconfigPath,
 	}
@@ -95,7 +72,7 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 	if err != nil {
 		return nil, err
 	}
-	log.Info(opts.LogName+": config loaded",
+	log.Info("broker: config loaded",
 		"addr", cfg.Server.Addr,
 		"oidcIssuer", cfg.OIDC.Issuer,
 		"worlds", len(cfg.Worlds),
@@ -103,13 +80,11 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 		"version", opts.Version,
 	)
 
-	// Storage backend: kubernetes needs a client; file mode (single-host)
-	// runs with no cluster at all.
-	store, k8s, err := newSecretStore(cfg, opts.KubeconfigPath)
+	store, k8s, err := newSecretStore(opts.KubeconfigPath)
 	if err != nil {
 		return nil, err
 	}
-	deps, err := buildServerDeps(cfg, opts, store, log)
+	deps, err := buildServerDeps(cfg, store, log)
 	if err != nil {
 		return nil, err
 	}
@@ -120,9 +95,9 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 	}
 
 	if cfg.RateLimit.Disabled {
-		log.Info(opts.LogName + ": rate limit disabled (rateLimit.disabled=true)")
+		log.Info("broker: rate limit disabled (rateLimit.disabled=true)")
 	} else {
-		log.Info(opts.LogName+": rate limit enabled",
+		log.Info("broker: rate limit enabled",
 			"tokensPerMin", cfg.RateLimit.Tokens.PerMinute,
 			"tokensBurst", cfg.RateLimit.Tokens.Burst,
 			"loginPerMin", cfg.RateLimit.Login.PerMinute,
@@ -130,13 +105,16 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 			"trustForwardedFor", cfg.RateLimit.TrustForwardedFor)
 	}
 
-	// One mux: the management API, the knowledge gateway on every host it
-	// does not claim, the memory gateway on its own hostname.
+	if err := gateway.CheckLocal(cfg.Registry(), opts.LocalWorlds); err != nil {
+		return nil, err
+	}
 	pool := gateway.NewWorldPool(cfg.Registry(), fetch.Options{Insecure: cfg.WorldDialer.InsecureSkipVerify})
 	var dispatcher gateway.WorldDispatcher = pool
 	if opts.LocalWorlds != nil {
 		dispatcher = gateway.NewComposite(cfg.Registry(), opts.LocalWorlds, pool)
 	}
+	// One mux: the management API, the knowledge gateway on every host it
+	// does not claim, the memory gateway on its own hostname.
 	mux := http.NewServeMux()
 	srv.Register(mux)
 	knowledge := gateway.KnowledgeProfile()
@@ -147,16 +125,12 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 	}
 	b := &Broker{
 		cfg:         cfg,
-		opts:        opts,
 		log:         log,
 		pool:        pool,
 		srv:         srv,
 		httpSrv:     newHardenedServer(cfg.Server.Addr, mux),
-		tasks:       &backgroundTasks{cfg: cfg, opts: opts, log: log, store: store, k8s: k8s, srv: srv, provisioner: provisioner},
+		tasks:       &backgroundTasks{cfg: cfg, log: log, store: store, k8s: k8s, srv: srv, provisioner: provisioner},
 		closeBucket: closeBuckets,
-	}
-	if cfg.Server.MCP.Addr != "" {
-		b.mcpSrv = newHardenedServer(cfg.Server.MCP.Addr, mux)
 	}
 	return b, nil
 }
@@ -165,23 +139,12 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 // listener fails, then flips readiness, drains the mux and the world pool.
 // Close still has to run afterwards.
 func (b *Broker) Serve(ctx context.Context) error {
-	cfg, opts, log := b.cfg, b.opts, b.log
-	errs := make(chan error, 2)
+	cfg, log := b.cfg, b.log
+	errs := make(chan error, 1)
 	go func() {
-		log.Info(opts.LogName+": listening", "addr", cfg.Server.Addr)
+		log.Info("broker: listening", "addr", cfg.Server.Addr)
 		errs <- filterServerClosed(b.httpSrv.ListenAndServe())
 	}()
-	if b.mcpSrv != nil {
-		mcpTLS := cfg.Server.MCP.TLS
-		go func() {
-			log.Info(opts.LogName+": mcp listener", "addr", cfg.Server.MCP.Addr, "tls", mcpTLS.CertFile != "")
-			if mcpTLS.CertFile != "" {
-				errs <- filterServerClosed(b.mcpSrv.ListenAndServeTLS(mcpTLS.CertFile, mcpTLS.KeyFile))
-				return
-			}
-			errs <- filterServerClosed(b.mcpSrv.ListenAndServe())
-		}()
-	}
 
 	// One cancel tears down every background task before HTTP shutdown.
 	sweepCtx, cancelSweep := context.WithCancel(context.Background())
@@ -189,8 +152,8 @@ func (b *Broker) Serve(ctx context.Context) error {
 	var sweepWG sync.WaitGroup
 	b.tasks.start(sweepCtx, &sweepWG)
 
-	// A failed listener still takes the common path, so the other one is
-	// drained before the caller's Close releases what it serves from.
+	// A failed listener still takes the common path, so the tasks stop
+	// before the caller's Close releases what they serve from.
 	var runErr error
 	select {
 	case <-ctx.Done():
@@ -198,7 +161,7 @@ func (b *Broker) Serve(ctx context.Context) error {
 		if err != nil {
 			runErr = fmt.Errorf("listener: %w", err)
 		} else {
-			log.Warn(opts.LogName + ": listener stopped, shutting down")
+			log.Warn("broker: listener stopped, shutting down")
 		}
 	}
 
@@ -209,33 +172,19 @@ func (b *Broker) Serve(ctx context.Context) error {
 	sweepWG.Wait()
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()
-	var shutdownErr error
-	for _, srv := range b.listeners() {
-		shutdownErr = errors.Join(shutdownErr, srv.Shutdown(shutdownCtx))
-	}
+	shutdownErr := b.httpSrv.Shutdown(shutdownCtx)
 	// Drain pooled QUIC connections after http.Shutdown so in-flight
 	// tool calls have already returned.
 	b.pool.Close()
 	return errors.Join(runErr, shutdownErr)
 }
 
-// listeners is every http.Server this broker runs.
-func (b *Broker) listeners() []*http.Server {
-	out := []*http.Server{b.httpSrv}
-	if b.mcpSrv != nil {
-		out = append(out, b.mcpSrv)
-	}
-	return out
-}
-
-// Close stops the listeners outright, then releases the world pool and
+// Close stops the listener outright, then releases the world pool and
 // the tenant bucket backend; safe after Serve and more than once.
 func (b *Broker) Close() {
 	b.closeOnce.Do(func() {
-		for _, srv := range b.listeners() {
-			if err := filterServerClosed(srv.Close()); err != nil {
-				b.log.Warn(b.opts.LogName+": listener close error", "addr", srv.Addr, "err", err)
-			}
+		if err := filterServerClosed(b.httpSrv.Close()); err != nil {
+			b.log.Warn("broker: listener close error", "addr", b.httpSrv.Addr, "err", err)
 		}
 		b.pool.Close()
 		b.closeBucket()
@@ -294,7 +243,6 @@ func newKubeClient(kubeconfigPath string) (kubernetes.Interface, error) {
 // backgroundTasks are the per-replica loops that run until shutdown.
 type backgroundTasks struct {
 	cfg         *core.Config
-	opts        *RunOptions
 	log         *slog.Logger
 	store       core.SecretStore
 	k8s         kubernetes.Interface
@@ -302,12 +250,12 @@ type backgroundTasks struct {
 	provisioner *storage.Provisioner
 }
 
-// start launches the refresh token sweeper (leader-elected unless single-host),
-// the device janitor, the agent token reconciler when agentTokens is set, and
-// the registry sync when provisioning is on.
+// start launches the leader-elected refresh token sweeper, the device
+// janitor, the agent token reconciler when agentTokens is set, and the
+// registry sync when provisioning is on.
 func (b *backgroundTasks) start(ctx context.Context, wg *sync.WaitGroup) {
 	b.startSweeper(ctx, wg)
-	b.log.Info(b.opts.LogName+": starting device-store janitor",
+	b.log.Info("broker: starting device-store janitor",
 		"deviceCodeTTL", b.cfg.Server.DeviceCodeTTL,
 		"devicePollInterval", b.cfg.Server.DevicePollInterval)
 	wg.Go(func() {
@@ -315,7 +263,7 @@ func (b *backgroundTasks) start(ctx context.Context, wg *sync.WaitGroup) {
 	})
 	if len(b.cfg.AgentTokens) > 0 {
 		agentTokens := storage.NewAgentTokens(b.cfg, b.store, b.log)
-		b.log.Info(b.opts.LogName+": starting agent token reconciler", "worlds", len(b.cfg.AgentTokens))
+		b.log.Info("broker: starting agent token reconciler", "worlds", len(b.cfg.AgentTokens))
 		wg.Go(func() {
 			agentTokens.Run(ctx)
 		})
@@ -331,19 +279,12 @@ func (b *backgroundTasks) start(ctx context.Context, wg *sync.WaitGroup) {
 func (b *backgroundTasks) startSweeper(ctx context.Context, wg *sync.WaitGroup) {
 	cfg := b.cfg
 	if cfg.Sweeper.Disabled {
-		b.log.Info(b.opts.LogName + ": sweeper disabled (sweeper.disabled=true)")
+		b.log.Info("broker: sweeper disabled (sweeper.disabled=true)")
 		return
 	}
 	sweeper := storage.NewSweeper(b.k8s, b.srv.RefreshStore(), cfg.Sweeper.Interval, b.log)
-	if cfg.FileBackend() {
-		b.log.Info(b.opts.LogName+": starting sweeper (single-host)", "interval", cfg.Sweeper.Interval)
-		wg.Go(func() {
-			sweeper.Run(ctx)
-		})
-		return
-	}
 	identity := brokerIdentity()
-	b.log.Info(b.opts.LogName+": starting sweeper",
+	b.log.Info("broker: starting sweeper",
 		"interval", cfg.Sweeper.Interval, "leaseName", cfg.Sweeper.LeaseName,
 		"namespace", cfg.Server.BrokerNamespace, "identity", identity)
 	wg.Go(func() {
@@ -353,7 +294,7 @@ func (b *backgroundTasks) startSweeper(ctx context.Context, wg *sync.WaitGroup) 
 
 // stateCookieKey is server.cookieKey when configured, else the key persisted
 // in the store and generated on first start.
-func stateCookieKey(cfg *core.Config, opts *RunOptions, store core.SecretStore, log *slog.Logger) (string, error) {
+func stateCookieKey(cfg *core.Config, store core.SecretStore, log *slog.Logger) (string, error) {
 	if cfg.Server.CookieKey != "" {
 		return cfg.Server.CookieKey, nil
 	}
@@ -362,15 +303,15 @@ func stateCookieKey(cfg *core.Config, opts *RunOptions, store core.SecretStore, 
 	if err != nil {
 		return "", err
 	}
-	log.Info(opts.LogName+": state cookie key from store", "ref", ref.String(), "generated", key.Generated)
+	log.Info("broker: state cookie key from store", "ref", ref.String(), "generated", key.Generated)
 	return key.Key, nil
 }
 
 // buildServerDeps constructs the auth machinery both listeners share:
 // signer, verifier, discovery, the broker-side id_token signer and the rate
 // limiters, each failing fast on misconfiguration.
-func buildServerDeps(cfg *core.Config, opts *RunOptions, store core.SecretStore, log *slog.Logger) (oauthsrv.ServerDeps, error) {
-	cookieKey, err := stateCookieKey(cfg, opts, store, log)
+func buildServerDeps(cfg *core.Config, store core.SecretStore, log *slog.Logger) (oauthsrv.ServerDeps, error) {
+	cookieKey, err := stateCookieKey(cfg, store, log)
 	if err != nil {
 		return oauthsrv.ServerDeps{}, err
 	}
@@ -386,10 +327,6 @@ func buildServerDeps(cfg *core.Config, opts *RunOptions, store core.SecretStore,
 	if err != nil {
 		return oauthsrv.ServerDeps{}, err
 	}
-	if cfg.FileBackend() {
-		log.Info(opts.LogName+": file storage backend", "dir", cfg.Storage.Dir)
-	}
-
 	// Same eager-failure posture as NewVerifier; 5-minute TTL bounds
 	// IdP key-rotation propagation.
 	discovery, err := oauthsrv.NewDiscovery(context.Background(), oauthsrv.DiscoveryConfig{
@@ -416,9 +353,9 @@ func buildServerDeps(cfg *core.Config, opts *RunOptions, store core.SecretStore,
 			return oauthsrv.ServerDeps{}, err
 		}
 		idTokenSigner = key.Signer
-		log.Info(opts.LogName+": signing key from store", "ref", ref.String(), "generated", key.Generated)
+		log.Info("broker: signing key from store", "ref", ref.String(), "generated", key.Generated)
 	}
-	log.Info(opts.LogName+": id_token signer ready", "kid", idTokenSigner.KeyID())
+	log.Info("broker: id_token signer ready", "kid", idTokenSigner.KeyID())
 
 	subject, login := core.NewRateLimits(&cfg.RateLimit)
 	return oauthsrv.ServerDeps{
@@ -447,7 +384,7 @@ func enableProvisioning(cfg *core.Config, opts *RunOptions, store core.SecretSto
 	if err != nil {
 		return nil, nil, fmt.Errorf("provisioning enabled: %w", err)
 	}
-	log.Info(opts.LogName+": provisioning enabled",
+	log.Info("broker: provisioning enabled",
 		"mode", cfg.Provisioning.Mode,
 		"maxTenants", cfg.Provisioning.MaxTenants,
 		"authorityDomain", cfg.Provisioning.AuthorityDomain)
@@ -455,12 +392,9 @@ func enableProvisioning(cfg *core.Config, opts *RunOptions, store core.SecretSto
 	return storage.NewProvisioner(cfg, deps), closeBuckets, nil
 }
 
-// newSecretStore selects the credential backend from config: file mode
-// for single-host, otherwise Secrets via a kubernetes client.
-func newSecretStore(cfg *core.Config, kubeconfigPath string) (core.SecretStore, kubernetes.Interface, error) {
-	if cfg.FileBackend() {
-		return storage.NewFileSecretStore(), nil, nil
-	}
+// newSecretStore is the one place Open and RunDeprovision build the
+// Secret store from, so their wiring cannot drift.
+func newSecretStore(kubeconfigPath string) (core.SecretStore, kubernetes.Interface, error) {
 	k8s, err := newKubeClient(kubeconfigPath)
 	if err != nil {
 		return nil, nil, err
@@ -481,7 +415,7 @@ type DeprovisionOptions struct {
 const deprovisionTimeout = 15 * time.Minute
 
 // RunDeprovision is the operator deprovision flow, owned here so its wiring
-// (validators, store, buckets) can never drift from Run's. It stops on
+// (validators, store, buckets) can never drift from Open's. It stops on
 // SIGINT or SIGTERM, leaving the tombstone for the rerun to finish.
 func RunDeprovision(ctx context.Context, opts DeprovisionOptions) (found bool, err error) {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -495,7 +429,7 @@ func RunDeprovision(ctx context.Context, opts DeprovisionOptions) (found bool, e
 	if !cfg.Provisioning.Enabled() {
 		return false, fmt.Errorf("deprovisioning requires provisioning enabled (mode %q)", cfg.Provisioning.Mode)
 	}
-	store, _, err := newSecretStore(cfg, opts.KubeconfigPath)
+	store, _, err := newSecretStore(opts.KubeconfigPath)
 	if err != nil {
 		return false, err
 	}

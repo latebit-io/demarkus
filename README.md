@@ -72,14 +72,11 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 Other install paths:
 
 ```bash
-# Five-minute appliance: server + broker + library + OIDC + HTTPS on one host
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-stack.sh | sudo bash
-
 # Read-only chrooted server (Linux)
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | sudo bash -s -- --domain yourdomain.com
 ```
 
-Kubernetes deployments use the Helm charts in [`deploy/helm/`](deploy/helm/) (server, broker, agent, knowledge server). The [`demarkus-knowledge-system`](deploy/helm/demarkus-knowledge-system/) umbrella installs a whole knowledge system from one values file that declares each world once.
+Kubernetes deployments use the Helm charts in [`deploy/helm/`](deploy/helm/) (server, agent, knowledge system). The [`demarkus-knowledge-system`](deploy/helm/demarkus-knowledge-system/) umbrella installs a whole knowledge system from one values file that declares each world once.
 
 See [full install docs](https://www.demarkus.io/install/) for platform-specific guides and other options.
 
@@ -117,9 +114,8 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
 | `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
 | `demarkus-agent` | Federation agent: crawls worlds, aggregates the link graph, publishes hub indexes |
-| `demarkus-knowledge-broker` | OIDC-fronted MCP gateway that composes many worlds into one knowledge system, with system-wide catalog lookup (`mark_lookup_all`) |
-| `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private memory world per identity: memory as a service with dynamic tenant provisioning |
-| `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
+| `demarkus-knowledge` | Production knowledge system in one process: many worlds (SNI-routed, GCS-backed) plus the OIDC-fronted MCP gateways for the knowledge profile (system-wide `mark_lookup_all`) and the memory profile (one private world per identity, dynamic tenant provisioning) |
+| `demarkus-knowledge-server` | The multi-world server alone, for capability-token clients without SSO |
 
 ## Protocol at a Glance
 
@@ -189,7 +185,7 @@ See [www.demarkus.io/ecosystem](https://www.demarkus.io/ecosystem/) for the full
 ```bash
 git clone https://github.com/latebit-io/demarkus.git
 cd demarkus
-make all   # protocol, server, client, tools, knowledge (brokers)
+make all   # protocol, server, client, tools, knowledge (demarkus-knowledge)
 make knowledge-server   # demarkus-knowledge-server
 ```
 

@@ -467,6 +467,9 @@ func tokenFiles(world *knowledgeconfig.WorldConfig) []string {
 // files' parent directory. The reload is the global coordinator pass, so
 // one watcher per directory is exactly as fresh as one per world.
 func (m *worldManager) acquireTokenWatchLocked(files []string) {
+	if len(files) == 0 {
+		return
+	}
 	dir := filepath.Dir(files[0])
 	if watch, ok := m.tokenDirs[dir]; ok {
 		watch.add(files)
@@ -485,6 +488,9 @@ func (m *worldManager) acquireTokenWatchLocked(files []string) {
 }
 
 func (m *worldManager) releaseTokenWatchLocked(files []string) {
+	if len(files) == 0 {
+		return
+	}
 	dir := filepath.Dir(files[0])
 	watch, ok := m.tokenDirs[dir]
 	if !ok {
@@ -529,7 +535,11 @@ func (m *worldManager) publishLocked() error {
 		for _, authority := range entry.config.Authorities {
 			mappings = append(mappings, snirouter.Mapping{Authority: authority, Endpoint: entry.runtime.Endpoint(authority)})
 		}
-		worlds = append(worlds, tokenWorld{name: name, runtime: entry.runtime})
+		// A world with no token files has no store to coordinate: reads are
+		// public and writes come through the identity grant.
+		if files := &entry.config.Auth; files.TokensFile != "" || files.StaticTokensFile != "" {
+			worlds = append(worlds, tokenWorld{name: name, runtime: entry.runtime})
+		}
 	}
 	// Prevalidate tokens, then let SwapWith pair routing with the token
 	// commit (it rolls routing back if the commit loses the tiny

@@ -4,18 +4,15 @@ This section covers how to install Demarkus from source or pre-built binaries. I
 
 ## Which install do I want?
 
-Demarkus has four install paths, distinguished by **where it runs and who reaches it**:
+Demarkus has three install paths, distinguished by **where it runs and who reaches it**:
 
 | Path | Runs where | Exposure | Use it for |
 |---|---|---|---|
 | **demarkus-memory plugin** (`/soul-init`) | your laptop | local only, no ports, no TLS | a personal memory for one agent; nothing to operate |
 | **`install.sh`** | any Linux (or macOS) host | local by default; public with `--domain` | one server: a LAN/dev world, or a public server with real TLS |
-| **`install-stack.sh`** (the appliance) | a **public** Linux VPS | public HTTPS on 80/443 **and the world on UDP 6309** | the full self-hosted knowledge system in one command, plus the world as your personal remote memory (see [the five-minute appliance](../deployment/appliance.md)) |
 | **Helm charts** (`deploy/helm/`) | a Kubernetes cluster | cluster-defined | multi-replica production deployments, including the multi-world knowledge server (see [Kubernetes & Helm](../deployment/kubernetes.md)) |
 
-The knowledge server (`demarkus-knowledge-server`) has no install-script path: it deploys via Helm only.
-
-The appliance is **not** a local tool: without `--domain` it serves `library.`, `broker.`, `auth.`, and `memory.<public-ip>.sslip.io` and provisions a Let's Encrypt certificate for each, all of which need a reachable public address. For a single server that also runs fine on a laptop or private network, use `install.sh` without `--domain`. For a personal, zero-exposure memory, use the plugin.
+The knowledge system (`demarkus-knowledge`: the multi-world server with the broker and MCP gateways) has no install-script path: it deploys via Helm only, and single sign-on comes with it. A server from `install.sh` is reached with capability tokens. For a personal, zero-exposure memory, use the plugin.
 
 ## Options
 
@@ -42,8 +39,7 @@ This produces the following binaries:
 | `demarkus-tui` | `client/bin/demarkus-tui` | TUI browser |
 | `demarkus-mcp` | `client/bin/demarkus-mcp` | MCP server |
 | `demarkus-agent` | `client/bin/demarkus-agent` | Federation crawler |
-| `demarkus-knowledge-broker` | `knowledge/bin/demarkus-knowledge-broker` | OIDC broker and MCP gateway |
-| `demarkus-memory-broker` | `knowledge/bin/demarkus-memory-broker` | Memory broker: per-identity worlds behind the same gateway |
+| `demarkus-knowledge` | `knowledge/bin/demarkus-knowledge` | The knowledge system: multi-world server, OIDC broker and both MCP gateways in one process |
 | `demarkus-publish` | `tools/bin/demarkus-publish` | Local publish (bypasses server) |
 
 `make knowledge-server` builds the multi-world GCS server (`server/bin/demarkus-knowledge-server`); it is not part of `make all`.

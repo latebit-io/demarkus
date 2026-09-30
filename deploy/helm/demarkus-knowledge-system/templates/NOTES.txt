@@ -6,23 +6,23 @@ demarkus-knowledge-system installed as release {{ .Release.Name | quote }} in na
 {{- end }}
 
 == Components ==
-  knowledge server: {{ if .Values.knowledge.enabled }}{{ .Values.global.knowledgeService }}.{{ .Release.Namespace }}.svc.cluster.local:6309 (UDP){{ else }}disabled{{ end }}
-  broker:           {{ if .Values.broker.enabled }}{{ .Values.broker.fullnameOverride }} ({{ .Values.broker.server.publicURL }}){{ else }}disabled{{ end }}
-  agent:            {{ if .Values.agent.enabled }}{{ .Values.agent.fullnameOverride }}{{ else }}disabled{{ end }}
-  library:          {{ if .Values.library.enabled }}{{ .Values.library.fullnameOverride }}{{ else }}disabled{{ end }}
+  knowledge: {{ if .Values.knowledge.enabled }}{{ .Values.global.knowledgeService }}.{{ .Release.Namespace }}.svc.cluster.local:6309 (QUIC), broker {{ .Values.knowledge.broker.publicURL }}{{ else }}disabled{{ end }}
+  agent:     {{ if .Values.agent.enabled }}{{ .Values.agent.fullnameOverride }}{{ else }}disabled{{ end }}
+  library:   {{ if .Values.library.enabled }}{{ .Values.library.fullnameOverride }}{{ else }}disabled{{ end }}
 
-{{- $broker := .Values.broker.fullnameOverride }}
+{{- $knowledge := .Values.global.knowledgeService }}
 {{- $hub := "" }}{{ range .Values.global.worlds }}{{ if .hub }}{{ $hub = .name }}{{ end }}{{ end }}
 
 {{ if .Values.knowledge.tokens.bootstrap.enabled -}}
-The knowledge server's bootstrap Job creates each missing <world>-tokens Secret
+The knowledge chart's bootstrap Job creates each missing <world>-tokens Secret
 on install and upgrade.
 {{- else -}}
-The broker creates each <world>-tokens Secret on its first write to that world.
+Identities write through the gateway under each world's allow and writeScope;
+no token Secret is needed for that.
 {{- end }}
 {{- if and .Values.agent.enabled $hub }}
 The broker issues the agent's hub token into {{ $hub }}-token-values.
 {{- end }}
-On first start the broker generates its signing key into {{ $broker }}-signing-key
-and its state cookie key into {{ $broker }}-cookie-key.
-Join from a client with the broker's public URL.
+On first start the broker generates its signing key into {{ $knowledge }}-signing-key
+and its state cookie key into {{ $knowledge }}-cookie-key.
+Join from a client with the knowledge gateway URL ({{ .Values.knowledge.broker.publicURL }}/mcp).

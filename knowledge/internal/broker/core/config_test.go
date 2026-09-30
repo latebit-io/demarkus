@@ -34,7 +34,7 @@ worlds:
     tokensSecret: team-a-tokens
     allow:
       domains: ["example.com"]
-    defaultToken:
+    writeScope:
       paths: ["/team-a/*"]
 `
 
@@ -70,7 +70,7 @@ const validWorldBlock = `worlds:
     tokensSecret: team-a-tokens
     allow:
       domains: ["example.com"]
-    defaultToken:
+    writeScope:
       paths: ["/team-a/*"]
 `
 
@@ -132,26 +132,31 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "no worlds is legal with provisioning enabled",
 			body: mustReplace(t, withMemoryGateway(t, validConfig), validWorldBlock,
-				"worlds: []\nprovisioning:\n  mode: open\n  maxTenants: 10\n  authorityDomain: memory.svc\n  dialAddress: memory.svc:6309\n  bucketPrefix: p-\n  bucketProject: p\n  serverNamespace: ns\n  worldsSecret: worlds\n  tokensSecret: tokens\n  tokensMountPath: /etc/tokens\n"),
-		},
-		{
-			name: "writeScope is the new key for the write scope",
-			body: mustReplace(t, validConfig, "    defaultToken:\n      paths: [\"/team-a/*\"]\n", "    writeScope:\n      paths: [\"/team-a/*\"]\n"),
-		},
-		{
-			name:    "writeScope and defaultToken together",
-			body:    mustReplace(t, validConfig, "    defaultToken:\n", "    writeScope:\n      paths: [\"/x\"]\n    defaultToken:\n"),
-			wantErr: "writeScope and defaultToken are the same setting",
+				"worlds: []\nprovisioning:\n  mode: open\n  maxTenants: 10\n  authorityDomain: memory.svc\n  bucketPrefix: p-\n  bucketProject: p\n  worldsSecret: worlds\n"),
 		},
 		{
 			name:    "write scope is required",
-			body:    mustReplace(t, validConfig, "    defaultToken:\n      paths: [\"/team-a/*\"]\n", ""),
+			body:    mustReplace(t, validConfig, "    writeScope:\n      paths: [\"/team-a/*\"]\n", ""),
 			wantErr: "writeScope.paths is required",
+		},
+		{
+			name:    "defaultToken is no longer accepted",
+			body:    mustReplace(t, validConfig, "    writeScope:\n", "    defaultToken:\n"),
+			wantErr: "field defaultToken not found",
+		},
+		{
+			name: "a local world is served in process",
+			body: mustReplace(t, validConfig, "    writeScope:\n", "    local: true\n    writeScope:\n"),
+		},
+		{
+			name:    "brokerNamespace is required",
+			body:    mustReplace(t, validConfig, "  brokerNamespace: demarkus-knowledge-broker\n", ""),
+			wantErr: "server.brokerNamespace is required",
 		},
 		{
 			name: "provisioning needs the memory gateway",
 			body: mustReplace(t, validConfig, validWorldBlock,
-				"worlds: []\nprovisioning:\n  mode: open\n  maxTenants: 10\n  authorityDomain: memory.svc\n  dialAddress: memory.svc:6309\n  bucketPrefix: p-\n  bucketProject: p\n  serverNamespace: ns\n  worldsSecret: worlds\n  tokensSecret: tokens\n  tokensMountPath: /etc/tokens\n"),
+				"worlds: []\nprovisioning:\n  mode: open\n  maxTenants: 10\n  authorityDomain: memory.svc\n  bucketPrefix: p-\n  bucketProject: p\n  worldsSecret: worlds\n"),
 			wantErr: "needs the memory gateway",
 		},
 		{
@@ -183,17 +188,17 @@ func TestLoadConfig(t *testing.T) {
 		},
 		{
 			name:    "duplicate world name",
-			body:    validConfig + "  - name: team-a\n    namespace: team-a\n    tokensSecret: team-a-tokens\n    defaultToken:\n      paths: [\"/x\"]\n",
+			body:    validConfig + "  - name: team-a\n    namespace: team-a\n    tokensSecret: team-a-tokens\n    writeScope:\n      paths: [\"/x\"]\n",
 			wantErr: `duplicate name "team-a"`,
 		},
 		{
 			name:    "duplicate world tokens Secret reference",
-			body:    validConfig + "  - name: team-b\n    namespace: team-a\n    tokensSecret: team-a-tokens\n    defaultToken:\n      paths: [\"/x\"]\n",
+			body:    validConfig + "  - name: team-b\n    namespace: team-a\n    tokensSecret: team-a-tokens\n    writeScope:\n      paths: [\"/x\"]\n",
 			wantErr: `duplicate tokens Secret reference "team-a/team-a-tokens"`,
 		},
 		{
 			name:    "normalized duplicate world tokens Secret reference",
-			body:    validConfig + "  - name: team-b\n    namespace: \" TEAM-A \"\n    tokensSecret: \" TEAM-A-TOKENS \"\n    defaultToken:\n      paths: [\"/x\"]\n",
+			body:    validConfig + "  - name: team-b\n    namespace: \" TEAM-A \"\n    tokensSecret: \" TEAM-A-TOKENS \"\n    writeScope:\n      paths: [\"/x\"]\n",
 			wantErr: `duplicate tokens Secret reference "team-a/team-a-tokens"`,
 		},
 		{
@@ -228,7 +233,7 @@ func TestLoadConfig(t *testing.T) {
 		},
 		{
 			name: "same tokens Secret name in different namespace",
-			body: validConfig + "  - name: team-b\n    namespace: team-b\n    tokensSecret: team-a-tokens\n    defaultToken:\n      paths: [\"/x\"]\n",
+			body: validConfig + "  - name: team-b\n    namespace: team-b\n    tokensSecret: team-a-tokens\n    writeScope:\n      paths: [\"/x\"]\n",
 			validate: func(t *testing.T, c *Config) {
 				if len(c.Worlds) != 2 {
 					t.Errorf("worlds = %+v", c.Worlds)
@@ -869,69 +874,26 @@ func TestLoadConfigOIDCClientSecretEnvOverride(t *testing.T) {
 	}
 }
 
-func TestMCPConfigValidate(t *testing.T) {
+func TestGatewayConfigValidate(t *testing.T) {
 	tests := []struct {
 		name        string
-		mcp         MCPConfig
+		gateway     GatewayConfig
 		wantErr     string
-		wantAddr    string
 		wantProfile string
 	}{
-		{
-			name:     "zero value has no extra listener",
-			mcp:      MCPConfig{},
-			wantAddr: "",
-		},
-		{
-			name:     "explicit addr preserved",
-			mcp:      MCPConfig{Addr: ":9090"},
-			wantAddr: ":9090",
-		},
-		{
-			name:     "addr + both tls fields — valid",
-			mcp:      MCPConfig{Addr: ":8081", TLS: MCPTLSConfig{CertFile: "/c", KeyFile: "/k"}},
-			wantAddr: ":8081",
-		},
-		{
-			name:        "tool profile defaults to full",
-			mcp:         MCPConfig{Addr: ":8081"},
-			wantAddr:    ":8081",
-			wantProfile: mcpfmt.ProfileFull,
-		},
-		{
-			name:        "lean tool profile accepted",
-			mcp:         MCPConfig{Addr: ":8081", GatewayConfig: GatewayConfig{ToolProfile: "lean"}},
-			wantAddr:    ":8081",
-			wantProfile: mcpfmt.ProfileLean,
-		},
-		{
-			name:    "unknown tool profile rejected",
-			mcp:     MCPConfig{Addr: ":8081", GatewayConfig: GatewayConfig{ToolProfile: "wide"}},
-			wantErr: "server.mcp.toolProfile: unknown tool profile",
-		},
-		{
-			name:    "tls cert without key",
-			mcp:     MCPConfig{Addr: ":8081", TLS: MCPTLSConfig{CertFile: "/c"}},
-			wantErr: "server.mcp.tls.certFile and server.mcp.tls.keyFile must be set together",
-		},
-		{
-			name:    "tls key without cert",
-			mcp:     MCPConfig{Addr: ":8081", TLS: MCPTLSConfig{KeyFile: "/k"}},
-			wantErr: "server.mcp.tls.certFile and server.mcp.tls.keyFile must be set together",
-		},
+		{name: "tool profile defaults to full", wantProfile: mcpfmt.ProfileFull},
+		{name: "lean tool profile accepted", gateway: GatewayConfig{ToolProfile: "lean"}, wantProfile: mcpfmt.ProfileLean},
+		{name: "unknown tool profile rejected", gateway: GatewayConfig{ToolProfile: "wide"}, wantErr: "server.mcp.toolProfile: unknown tool profile"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.mcp.validate()
+			err := tt.gateway.validate("server.mcp")
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Errorf("validate: unexpected error %v", err)
 				}
-				if tt.mcp.Addr != tt.wantAddr {
-					t.Errorf("validate: addr = %q, want %q", tt.mcp.Addr, tt.wantAddr)
-				}
-				if tt.wantProfile != "" && tt.mcp.ToolProfile != tt.wantProfile {
-					t.Errorf("validate: toolProfile = %q, want %q", tt.mcp.ToolProfile, tt.wantProfile)
+				if tt.gateway.ToolProfile != tt.wantProfile {
+					t.Errorf("validate: toolProfile = %q, want %q", tt.gateway.ToolProfile, tt.wantProfile)
 				}
 				return
 			}
@@ -943,40 +905,27 @@ func TestMCPConfigValidate(t *testing.T) {
 }
 
 func TestLoadConfigMCPBlockValidatesAtLoad(t *testing.T) {
-	// One YAML-round-trip case to pin that the new MCPConfig.validate
-	// hook is actually called from Config.validate() — a unit test on
-	// MCPConfig.validate alone wouldn't catch a missing hook in the
-	// outer validation chain.
 	clearConfigEnv(t)
 	body := strings.Replace(validConfig,
 		`publicURL: "https://broker.example.com"`,
-		"publicURL: \"https://broker.example.com\"\n  mcp:\n    addr: \":8081\"\n    tls:\n      certFile: \"/etc/tls/cert.pem\"",
+		"publicURL: \"https://broker.example.com\"\n  mcp:\n    toolProfile: wide",
 		1)
 	_, err := LoadConfig(writeConfig(t, body))
-	if err == nil {
-		t.Fatal("LoadConfig accepted MCP block with TLS cert-without-key — validate hook not wired into outer chain")
-	}
-	if !strings.Contains(err.Error(), "certFile and server.mcp.tls.keyFile must be set together") {
-		t.Errorf("err = %v, want paired-TLS-fields message", err)
+	if err == nil || !strings.Contains(err.Error(), "server.mcp.toolProfile") {
+		t.Fatalf("err = %v, want the gateway block validated at load", err)
 	}
 }
 
-func TestLoadConfigRejectsMatchingMgmtAndMCPAddrs(t *testing.T) {
-	// Same listener for management API and MCP gateway would fail at
-	// the second http.Server's Listen with EADDRINUSE — catch the
-	// typo at config load so the operator sees a clear message
-	// instead of a noisy bind error in logs.
+func TestLoadConfigRejectsTheExtraListener(t *testing.T) {
+	// One listener serves the management API and both gateways; the old
+	// server.mcp.addr must fail loudly rather than be ignored.
 	clearConfigEnv(t)
 	body := strings.Replace(validConfig,
 		`publicURL: "https://broker.example.com"`,
-		"publicURL: \"https://broker.example.com\"\n  mcp:\n    addr: \":8080\"",
+		"publicURL: \"https://broker.example.com\"\n  mcp:\n    addr: \":8081\"",
 		1)
-	_, err := LoadConfig(writeConfig(t, body))
-	if err == nil {
-		t.Fatal("LoadConfig accepted matching server.addr and server.mcp.addr — config-time collision check missing")
-	}
-	if !strings.Contains(err.Error(), "server.mcp.addr must differ from server.addr") {
-		t.Errorf("err = %v, want addr-collision message", err)
+	if _, err := LoadConfig(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), "field addr not found") {
+		t.Fatalf("err = %v, want server.mcp.addr rejected", err)
 	}
 }
 
@@ -987,9 +936,6 @@ func TestLoadConfigMCPDefaultsAppliedWhenBlockOmitted(t *testing.T) {
 	cfg, err := LoadConfig(writeConfig(t, validConfig))
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.Server.MCP.Addr != "" {
-		t.Errorf("MCP.Addr = %q, want no extra listener", cfg.Server.MCP.Addr)
 	}
 	if got := cfg.Server.Gateway(ProfileKnowledge).PublicURL; got != cfg.Server.PublicURL {
 		t.Errorf("knowledge gateway URL = %q, want the issuer %q", got, cfg.Server.PublicURL)

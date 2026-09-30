@@ -48,12 +48,15 @@ tests:
           path: metadata.annotations["example.com/owner"]
           value: platform
 
-  - it: covers dynamic tenant authorities with a service wildcard
+  - it: covers provisioned tenant authorities with an authority domain wildcard
     set:
       tls.existingSecret: ""
       tls.certManager.enabled: true
       worlds: []
-      dynamicWorlds.enabled: true
+      worldDefaults.bucketPrefix: gs://deployment-
+      broker.memory.publicURL: https://memory.example.com
+      provisioning.mode: allowlisted
+      provisioning.bucketProject: project
     asserts:
       - contains:
           path: spec.dnsNames
@@ -61,6 +64,21 @@ tests:
       - contains:
           path: spec.dnsNames
           content: "*.RELEASE-NAME.NAMESPACE.svc.cluster.local"
+
+  - it: follows worldDefaults.authorityDomain for the tenant wildcard
+    set:
+      tls.existingSecret: ""
+      tls.certManager.enabled: true
+      worldDefaults.authorityDomain: knowledge.example.internal
+      worlds: []
+      worldDefaults.bucketPrefix: gs://deployment-
+      broker.memory.publicURL: https://memory.example.com
+      provisioning.mode: allowlisted
+      provisioning.bucketProject: project
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "*.knowledge.example.internal"
 
   - it: points at the chart-rendered self-signed Issuer
     set:

@@ -1,16 +1,16 @@
-suite: UDP service
+suite: service
 templates:
   - service.yaml
 values:
   - fixtures/valid-values.yaml
 tests:
-  - it: exposes exactly one UDP port and no health port
+  - it: exposes the QUIC and HTTP ports and no health port
     asserts:
       - isKind:
           of: Service
       - lengthEqual:
           path: spec.ports
-          count: 1
+          count: 2
       - equal:
           path: spec.ports[0]
           value:
@@ -18,6 +18,13 @@ tests:
             protocol: UDP
             port: 6309
             targetPort: mark
+      - equal:
+          path: spec.ports[1]
+          value:
+            name: http
+            protocol: TCP
+            port: 8080
+            targetPort: http
       - equal:
           path: spec.type
           value: ClusterIP

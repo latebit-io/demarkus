@@ -3,7 +3,7 @@ values:
   - fixtures/values.yaml
 templates:
   - charts/knowledge/templates/configmap.yaml
-  - charts/broker/templates/secret-config.yaml
+  - charts/knowledge/templates/secret-broker-config.yaml
   - charts/agent/templates/configmap.yaml
   - charts/agent/templates/deployment.yaml
   # Rendered only because deployment.yaml includes it for a checksum.
@@ -24,21 +24,21 @@ tests:
           path: data["config.yaml"]
           pattern: 'tokensFile: "/run/demarkus/worlds/team-a/tokens.toml"'
 
-  - it: broker derives namespace, tokens Secret, authority and dial address per world
-    template: charts/broker/templates/secret-config.yaml
+  - it: broker serves every global world locally by its derived authority with its allow list
+    template: charts/knowledge/templates/secret-broker-config.yaml
     asserts:
       - equal:
           path: metadata.name
-          value: broker-config
+          value: knowledge-broker-config
       - matchRegex:
           path: stringData["config.yaml"]
-          pattern: '- name: "team-a"\n\s+namespace: "NAMESPACE"\n\s+tokensSecret: "team-a-tokens"\n\s+publicURL: ""\n\s+internalAddress: "team-a.knowledge.NAMESPACE.svc.cluster.local:6309"\n\s+dialAddress: "knowledge.NAMESPACE.svc.cluster.local:6309"\n\s+allow:\n\s+domains: \[\]\n\s+groups: \["team-a"\]'
+          pattern: '- name: "team-a"\n\s*profile: "knowledge"\n\s*local: true\n\s*namespace: "NAMESPACE"\n\s*tokensSecret: "team-a-tokens"\n\s*publicURL: ""\n\s*internalAddress: "team-a.knowledge.namespace.svc.cluster.local:6309"\n\s*allow:\n\s*domains: \[\]\n\s*groups: \["team-a"\]'
       - matchRegex:
           path: stringData["config.yaml"]
-          pattern: 'signingKeySecret: "broker-signing-key"'
+          pattern: 'signingKeySecret: "knowledge-signing-key"'
       - matchRegex:
           path: stringData["config.yaml"]
-          pattern: 'webClients:\n\s+- clientID: "library-web"\n\s+clientSecretEnv: "WEB_CLIENT_SECRET_0"\n\s+redirectURIs:'
+          pattern: 'webClients:\n\s*- clientID: "library-web"\n\s*clientSecretEnv: "WEB_CLIENT_SECRET_0"\n\s*redirectURIs:'
 
   - it: agent crawls the non-hub worlds and publishes into the hub through the shared Service
     template: charts/agent/templates/configmap.yaml
@@ -74,11 +74,11 @@ tests:
           value: demarkus-agent
 
   - it: broker issues the agent's hub token into the Secret the agent projects
-    template: charts/broker/templates/secret-config.yaml
+    template: charts/knowledge/templates/secret-broker-config.yaml
     asserts:
       - matchRegex:
           path: stringData["config.yaml"]
-          pattern: 'agentTokens:\n\s+- world: "root"\n\s+secret: "root-token-values"\n\s+key: "admin"'
+          pattern: 'agentTokens:\n\s*- world: "root"\n\s*secret: "root-token-values"\n\s*key: "admin"'
 
   - it: knowledge server runs no token bootstrap Job
     template: charts/knowledge/templates/token-bootstrap.yaml

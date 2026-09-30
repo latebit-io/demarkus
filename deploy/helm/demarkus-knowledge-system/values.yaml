@@ -1,11 +1,12 @@
 # demarkus-knowledge-system: declare each world once; the sub-charts derive
-# the rest. Sub-chart values live under their alias (knowledge, broker,
-# agent, library) and accept everything the sub-chart's own values.yaml does.
+# the rest. Sub-chart values live under their alias (knowledge, agent,
+# library) and accept everything the sub-chart's own values.yaml does.
 
 global:
   # One entry per world. name and worldID are required; hub marks the world
-  # the agent publishes its index into; allow is the broker's per-world
-  # predicate; readOnly and initialPolicy go to the knowledge server.
+  # the agent publishes its index into; allow is the gateway's per-world
+  # identity predicate and writeScope the paths it may write; readOnly and
+  # initialPolicy go to the world runtime.
   worlds: []
     # - name: root
     #   worldID: 1bb83179-7275-41a2-9519-a3410a7ac5dd
@@ -14,13 +15,13 @@ global:
     #   worldID: d7867876-1369-4b39-a33d-b175a4320acf
     #   allow:
     #     groups: ["team-a"]
-  # Name of the knowledge server's resources and Service; the broker and
-  # agent dial <knowledgeService>.<namespace>.svc.cluster.local:6309.
+  # Name of the knowledge resources and Service; the agent dials
+  # <knowledgeService>.<namespace>.svc.cluster.local:6309.
   knowledgeService: knowledge
   # Suffix of every world authority (<name>.<authorityDomain>): the SNI the
-  # knowledge server certificate carries and the broker and agent present.
-  # Empty derives <knowledgeService>.<namespace>.svc.cluster.local. It never
-  # has to resolve in DNS.
+  # QUIC certificate carries and the agent presents. Empty derives
+  # <knowledgeService>.<namespace>.svc.cluster.local. It never has to
+  # resolve in DNS.
   authorityDomain: ""
   # Prefix of every world bucket (<bucketPrefix><name>), e.g.
   # gs://my-project-demarkus-. A world may set bucket.url instead.
@@ -31,7 +32,7 @@ global:
 knowledge:
   enabled: true
   nameOverride: demarkus-knowledge-server
-  # Self-signed in-cluster certificate; clients dial with insecure below.
+  # Self-signed in-cluster QUIC certificate; the agent dials with insecure.
   tls:
     certManager:
       enabled: true
@@ -44,47 +45,41 @@ knowledge:
   # Off so a bare cluster installs; see the README before enabling.
   networkPolicy:
     enabled: false
-  # The broker issues the agent's hub token (broker.agentTokens), so the
-  # imperative bootstrap Job is not needed.
+  # The broker issues the agent's hub token (knowledge.broker.agentTokens),
+  # so the imperative bootstrap Job is not needed.
   tokens:
     bootstrap:
       enabled: false
-
-broker:
-  enabled: true
-  nameOverride: demarkus-knowledge-broker
-  fullnameOverride: broker
-  # Worlds carry the self-signed certificate above.
-  worldDialer:
-    insecureSkipVerify: true
-  server:
+  # The broker half: login, /me/install and the MCP gateways. The signing
+  # key is generated on first start; only the IdP client credentials and the
+  # public URLs are yours to supply.
+  broker:
     # Externally reachable base URL, e.g. https://broker.example.com. Required.
     publicURL: ""
-  # The signing key is generated on first start; only the IdP client
-  # credentials are yours to supply.
-  oidc:
-    issuer: ""
-    clientID: ""
-    # One of clientSecret or existingSecretRef.name.
-    clientSecret: ""
-    existingSecretRef:
-      name: ""
-    redirectURL: ""
-  # Register the library here; point both at the same Secret.
-  webClients: []
-    # - clientID: library-web
-    #   existingSecretRef:
-    #     name: library-oauth
-    #   redirectURIs:
-    #     - https://library.example.com/auth/callback
-  networkPolicy:
+    oidc:
+      issuer: ""
+      clientID: ""
+      # One of clientSecret or existingSecretRef.name.
+      clientSecret: ""
+      existingSecretRef:
+        name: ""
+      redirectURL: ""
+    # Register the library here; point both at the same Secret.
+    webClients: []
+      # - clientID: library-web
+      #   existingSecretRef:
+      #     name: library-oauth
+      #   redirectURIs:
+      #     - https://library.example.com/auth/callback
+  # Ingress for the broker hosts (management, MCP, memory).
+  ingress:
     enabled: false
 
 agent:
   enabled: true
   nameOverride: demarkus-agent
   fullnameOverride: agent
-  # Self-signed world certificates, same as the broker.
+  # Self-signed world certificates.
   insecure: true
   publishGraph: true
 

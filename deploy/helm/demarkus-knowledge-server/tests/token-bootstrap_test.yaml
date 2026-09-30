@@ -73,15 +73,23 @@ tests:
       - failedTemplate:
           errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with a tokenSecret.name or staticTokenSecret.name'
 
-  - it: rejects a raw secret name colliding with dynamic-worlds secrets
+  - it: rejects a raw secret name colliding with the tenant worlds Secret
     set:
-      dynamicWorlds:
-        enabled: true
-        worldsSecret: team-a-token-values
-        tokensSecret: memory-worlds-tokens
+      worldDefaults.bucketPrefix: gs://deployment-
+      broker.memory.publicURL: https://memory.example.com
+      provisioning.mode: allowlisted
+      provisioning.bucketProject: project
+      provisioning.worldsSecret: team-a-token-values
     asserts:
       - failedTemplate:
-          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with dynamicWorlds.worldsSecret'
+          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with provisioning.worldsSecret'
+
+  - it: rejects a raw secret name colliding with a broker state Secret
+    set:
+      broker.refreshTokensSecret: team-a-token-values
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with broker.refreshTokensSecret'
 
   - it: rejects a raw secret name colliding with the TLS secret
     set:
@@ -109,10 +117,13 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: is omitted when only dynamic worlds are configured
+  - it: is omitted when only provisioned tenants are configured
     set:
       worlds: []
-      dynamicWorlds.enabled: true
+      worldDefaults.bucketPrefix: gs://deployment-
+      broker.memory.publicURL: https://memory.example.com
+      provisioning.mode: allowlisted
+      provisioning.bucketProject: project
     asserts:
       - hasDocuments:
           count: 0

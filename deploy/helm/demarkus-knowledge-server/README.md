@@ -1,27 +1,33 @@
 # demarkus-knowledge-server
 
-Production Helm chart for the multi-world `demarkus-knowledge-server`. One
-Deployment serves every configured authority over a shared UDP Service and
-stores each world in its own pre-provisioned GCS bucket.
+Production Helm chart for `demarkus-knowledge`: the multi-world knowledge
+server and the OIDC broker with its MCP gateways in one process. One
+Deployment serves every configured authority over a shared UDP Service,
+stores each world in its own pre-provisioned GCS bucket, and fronts the
+worlds with an HTTP listener (login, device flow, `/me/install`, and the
+knowledge and memory MCP gateways at `/mcp`) behind an Ingress. Tool calls
+reach the worlds in process; an identity a world's `allow` admits writes
+under its `writeScope` with no token minted. See
+[Broker and MCP gateways](#broker-and-mcp-gateways).
 
 ## Prerequisites
 
 - Kubernetes 1.25+
 - GKE Workload Identity, or an existing Kubernetes ServiceAccount with equivalent identity
 - One GCS bucket and immutable world ID per world; an empty bucket is created on first start
-- One existing multi-SAN TLS Secret, or cert-manager and a suitable Issuer
+- One existing multi-SAN TLS Secret for QUIC, or cert-manager and a suitable Issuer
+- An OIDC client registered at your IdP (`broker.oidc`) and the broker's public URL
 
 The chart never creates buckets, PVCs, or TLS Secrets. The optional
 `Certificate` asks cert-manager to populate the referenced TLS Secret.
 
-Token Secrets are runtime-owned (the broker appends minted hashes to
-`tokens.toml`), so the chart never templates them either. They live in the
-release namespace, since the server pod mounts them: point the broker's
-`worldDefaults.namespace` here. Each world mounts
-two optional Secrets: `tokenSecret` (default `<name>-tokens`), which the
-broker creates on its first mint, and `staticTokenSecret` (default
+Token Secrets are runtime-owned (the broker appends the agent token hash it
+mints to `tokens.toml`), so the chart never templates them either. They live
+in the release namespace, since the pod mounts them. Each world mounts two
+optional Secrets: `tokenSecret` (default `<name>-tokens`), which the broker
+creates on its first agent token mint, and `staticTokenSecret` (default
 `<name>-static-tokens`), which holds entries you own and the broker never
-touches. A world opens with either or both absent and reloads as they are
+touches. Identities writing through the gateway need neither. A world opens with either or both absent and reloads as they are
 projected. By default a pre-install/pre-upgrade bootstrap Job
 (`tokens.bootstrap`) seeds any missing `tokenSecret` with a publish-only
 admin entry and hands off; existing Secrets are left untouched. When it
@@ -89,23 +95,44 @@ worldDefaults:
 worlds:
   - name: team-a
     worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+    allow:
+      groups: ["team-a"]
   - name: team-b
     worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49
     authorities:
       - team-b.example.com
     bucket:
       url: gs://other-bucket
+
+broker:
+  publicURL: https://broker.example.com
+  oidc:
+    issuer: https://accounts.google.com
+    clientID: YOUR_CLIENT_ID
+    existingSecretRef:
+      name: broker-oidc
+    redirectURL: https://broker.example.com/auth/callback
+
+ingress:
+  enabled: true
+  host: broker.example.com
+  tls:
+    certManager:
+      enabled: true
 ```
 
 Only `name` and `worldID` are required. Each world derives
 `authorities: [<name>.<authorityDomain>]`, `bucket.url: <bucketPrefix><name>`,
-`tokenSecret: {name: <name>-tokens, key: tokens.toml}` and
-`staticTokenSecret: {name: <name>-static-tokens, key: tokens.toml}`; a field
-set on the world wins. `worldDefaults.authorityDomain` defaults to
-`<fullname>.<namespace>.svc.cluster.local`, the same suffix the broker and
-agent charts derive, so the three agree without ExternalName aliases.
-Under the `demarkus-knowledge-system` umbrella the list and the defaults
-come from `global.worlds`, `global.bucketPrefix` and `global.authorityDomain`.
+`tokenSecret: {name: <name>-tokens, key: tokens.toml}`,
+`staticTokenSecret: {name: <name>-static-tokens, key: tokens.toml}` and
+`profile: knowledge`; `allow` and `writeScope` come from `worldDefaults`
+(everyone admitted, `/**`); a field set on the world wins.
+`worldDefaults.authorityDomain` defaults to
+`<fullname>.<namespace>.svc.cluster.local`, the same suffix the agent chart
+derives, so the two agree without ExternalName aliases; it is also the SNI
+the gateway routes each world by. Under the `demarkus-knowledge-system`
+umbrella the list and the defaults come from `global.worlds`,
+`global.bucketPrefix` and `global.authorityDomain`.
 
 `tls.certManager.selfSigned.create: true` renders a namespaced self-signed
 `Issuer` and points the Certificate at it, for clusters without a CA issuer;
@@ -145,20 +172,20 @@ tokens:
 Every world then starts with no token Secret at all, serves reads, and
 accepts writes as soon as a Secret lands; no restart, no `SIGHUP`:
 
-- `<name>-tokens` is the broker's. It creates the Secret on its first mint
-  and appends afterwards. Never template it: a reconciler would reset the
-  broker's entries on every sync.
+- `<name>-tokens` is the broker's. It creates the Secret on its first agent
+  token mint and appends afterwards. Never template it: a reconciler would
+  reset the broker's entries on every sync.
 - `<name>-static-tokens` is yours: entries the broker never touches. It
   holds hashes only, so a plain Secret manifest in git is fine.
 
-The agent's publish token for the hub world needs nothing from you when the
-demarkus-knowledge-broker chart runs alongside: its `agentTokens` (derived
-for every `hub: true` world) has the broker mint the token, add the hash to
-`<hub>-tokens` and write the raw value to `<hub>-token-values`, which the
-agent chart projects by default (`tokens.fromWorldSecrets`). The broker
-leaves a `<hub>-token-values` it did not create alone.
+The agent's publish token for the hub world needs nothing from you:
+`broker.agentTokens` (derived for every `hub: true` world) has the broker
+mint the token, add the hash to `<hub>-tokens` and write the raw value to
+`<hub>-token-values`, which the agent chart projects by default
+(`tokens.fromWorldSecrets`). The broker leaves a `<hub>-token-values` it did
+not create alone.
 
-Without the broker, mint the token yourself. The hash goes into the static
+To mint the token yourself instead (`broker.agentTokens: []`): The hash goes into the static
 Secret, the raw value into `<hub>-token-values`. Keep the raw Secret out of
 git (an ExternalSecret, a SealedSecret, or SOPS):
 
@@ -191,18 +218,113 @@ one world and only one file; the world refuses the load otherwise. Two
 syncs in a row leave `<name>-tokens` as the broker wrote it, because nothing
 in the rendered manifests names it.
 
+## Broker and MCP gateways
+
+The process listens twice: UDP `server.udpPort` for QUIC (direct clients
+with capability tokens, the agent, other clusters) and TCP `server.httpPort`
+for plain HTTP behind the Ingress. One mux serves the management API (OIDC
+login, RFC 8628 device flow, RFC 7591 registration, `/me/install`, the
+discovery documents) and both MCP gateways; the gateway a request reaches
+is chosen by its `Host`: `broker.memory.publicURL`'s hostname selects the
+memory profile, every other host the knowledge profile. The Ingress may
+carry one hostname or three (`ingress.host`, `ingress.mcp.host`,
+`ingress.memory.host`); routes never overlap.
+
+```yaml
+broker:
+  publicURL: https://broker.example.com          # issuer, management host
+  mcp:
+    publicURL: https://mcp.example.com           # optional own hostname
+  memory:
+    publicURL: https://memory.example.com        # turns the memory gateway on
+ingress:
+  enabled: true
+  host: broker.example.com
+  mcp:
+    host: mcp.example.com
+  memory:
+    host: memory.example.com
+  tls:
+    certManager:
+      enabled: true                              # one Certificate, every host
+```
+
+Plugins join with `/knowledge-join <knowledge gateway URL>`; hosts add
+`<publicURL>/mcp` as a remote MCP server and walk the OAuth flow (RFC 9728
+resource metadata on the gateway, RFC 8414 on the issuer host). A client
+that sends an RFC 8707 `resource` gets a token bound to that gateway; one
+that does not gets a token valid at both. The tool contract is in
+`knowledge/cmd/demarkus-knowledge/MCP-API.md` and `MEMORY-API.md`.
+
+Access model: reads are open to any verified identity the world's `allow`
+admits; writes run under that identity's grant on `writeScope.paths`, in
+process, with no token. Static worlds carry `profile: knowledge`; a
+`profile: memory` world names its single tenant in `allow`. Worlds served
+in another cluster go under `broker.remoteWorlds` and are read over QUIC
+(`broker.worldDialer`), never written.
+
+Provisioning (`provisioning.mode: allowlisted | open`) creates a memory
+tenant on first arrival: bucket `gs://<bucketPrefix><slug>` in
+`provisioning.bucketProject`, a registry entry, and a worlds fragment in
+`provisioning.worldsSecret` the pods mount for restarts. The tenant is served
+in this process at once; sibling replicas converge through the registry.
+The pod needs GCP credentials with bucket-create rights (Workload Identity
+and `roles/storage.admin` on the project, or narrower with a bucket name
+condition on the prefix). Deprovisioning is explicit:
+
+```bash
+kubectl -n demarkus exec deploy/knowledge -- \
+  /demarkus-knowledge -broker-config /etc/demarkus/broker/config.yaml \
+  -deprovision-tenant <world> [-delete-bucket]
+```
+
+It tombstones the registry entry, rewrites the fragment (every replica drops
+the world), optionally destroys the bucket, then clears the tombstone; a
+crashed run converges on rerun.
+
+Rate limits: `broker.rateLimit` buckets `/me/install` and the gateways per
+subject and `/auth/login` per IP, per replica. `trustForwardedFor` is on by
+default and is only safe behind an Ingress controller that strips spoofed
+`X-Forwarded-For` (nginx-ingress and Traefik do); turn it off without one.
+
+Broker state lives in kept Secrets the chart seeds empty and never reclaims
+(`<fullname>-refresh-tokens`, `<fullname>-dynamic-clients`) or the broker
+creates on first start (`<fullname>-signing-key`, `<fullname>-cookie-key`).
+The signed-state cookie key never comes from the render, so `helm template`
+is deterministic; own it through `broker.existingCookieKeyRef`. Rotate the
+signing key by deleting its Secret and restarting every replica; in-flight
+broker-signed tokens are invalidated. The graph store behind
+`mark_backlinks`, `mark_graph` and friends is process memory and rebuilds
+after a restart.
+
+Production checklist: `broker.oidc.existingSecretRef` instead of a cleartext
+`clientSecret` (it lives in helm release history); Ingress TLS from
+cert-manager or an existing Secret; verify the `X-Forwarded-For` invariant
+for your controller; keep NetworkPolicy on with `ingressFromNamespace` set
+to the controller's namespace; size `resources` for the sum of worlds and
+gateway sessions.
+
 ## Security
 
 Health endpoints listen on the private pod port only. No health Service is
-created. NetworkPolicy permits UDP ingress only from configured broker and agent
-namespace/pod selectors and optional `externalCIDRs`. A LoadBalancer remains
-blocked from direct clients until those CIDRs are set. Egress permits cluster
-DNS, TCP 443 for GCS, and GKE metadata-server endpoints.
+created. NetworkPolicy admits the HTTP listener from the Ingress controller
+namespace only, and UDP ingress only from the configured agent namespace and
+pod selector and optional `externalCIDRs`. A LoadBalancer remains blocked
+from direct clients until those CIDRs are set. Egress permits cluster DNS,
+TCP 443 (GCS, the OIDC issuer, the API server), GKE metadata-server
+endpoints, and the UDP ports of `broker.remoteWorlds`.
 
 GCS egress cannot be restricted to stable CIDRs with standard Kubernetes
 NetworkPolicy. The built-in policy therefore requires explicit
 `allowUnrestrictedHTTPS: true`. Otherwise disable it and provide an egress proxy
 or CNI FQDN policy.
+
+The broker's Role is scoped to its own state Secrets, the sweeper Lease, the
+agent token records and the tokens Secrets of hub worlds, plus the registry
+and worlds fragment when provisioning is on; `create` is namespace-wide
+because RBAC cannot name a Secret before it exists. Internet-facing OAuth
+and the store share one pod: the mitigation is the hardened HTTP server and
+the pod security context, not a process boundary.
 
 Each world's token Secrets are projected read-only into a distinct path. TLS
 and configuration are also read-only. Pods run as UID/GID 65532 with a read-only
@@ -215,7 +337,11 @@ Template rendering fails for missing TLS, Workload Identity, world name or
 ID, or a bucket that neither the world nor a prefix supplies. It also rejects fewer than two
 replicas, an `initialPolicy` on a read-only world, and duplicate world names,
 normalized authorities, buckets, world IDs, or token Secret names (runtime
-and static together).
+and static together). The broker half fails on a missing `publicURL` or IdP
+registration, two OIDC client secret modes, a memory gateway on the
+knowledge gateway's host, a memory world without a tenant, provisioning
+without the memory gateway, a bucket prefix or a tenant cap in open mode,
+and an Ingress without a host.
 
 ```sh
 helm lint ./deploy/helm/demarkus-knowledge-server --values production.yaml
@@ -229,3 +355,8 @@ helm template knowledge ./deploy/helm/demarkus-knowledge-server \
 Resources are named after the release (`fullnameOverride` still wins). A
 release whose name did not contain the chart name and set no override is
 renamed on upgrade; set `fullnameOverride` to the old fullname to keep it.
+The broker's kept Secrets change name with it: every session logs in again,
+MCP hosts register again, and a new signing key invalidates broker-signed
+tokens in flight. Point `broker.refreshTokensSecret`,
+`broker.dynamicClientsSecret` and `broker.signingKeySecret` at the old names
+to keep them; the tenant registry keeps the binary's default name.

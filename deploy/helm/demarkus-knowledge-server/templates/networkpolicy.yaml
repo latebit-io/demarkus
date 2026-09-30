@@ -11,13 +11,17 @@ spec:
       {{- include "demarkus-knowledge-server.selectorLabels" . | nindent 6 }}
   policyTypes: [Ingress, Egress]
   ingress:
+    # The HTTP listener is reached through the Ingress controller alone.
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.broker.namespace | quote }}
-          podSelector:
-            matchLabels:
-              {{- toYaml .Values.networkPolicy.broker.podLabels | nindent 14 }}
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressFromNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.server.httpPort }}
+    # Direct QUIC clients: the agent and any configured CIDRs. The MCP
+    # gateways reach the worlds in process.
+    - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.agent.namespace | quote }}
@@ -49,9 +53,10 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Standard NetworkPolicy cannot target GCS FQDNs or rotating addresses.
-    # This permits any TCP/443 destination; use an egress proxy or CNI FQDN
-    # policy when destination-level restriction is required.
+    # Standard NetworkPolicy cannot target GCS FQDNs or rotating addresses,
+    # and the OIDC issuer and API server sit behind 443 too. This permits any
+    # TCP/443 destination; use an egress proxy or CNI FQDN policy when
+    # destination-level restriction is required.
     {{- if .Values.networkPolicy.allowUnrestrictedHTTPS }}
     - ports:
         - protocol: TCP
@@ -82,4 +87,18 @@ spec:
       ports:
         - protocol: UDP
           port: {{ .Values.server.peerPort }}
+    {{- /* Worlds served elsewhere: UDP to their ports, which may span
+           namespaces and clusters. */}}
+    {{- if .Values.broker.remoteWorlds }}
+    {{- $ports := dict }}
+    {{- range .Values.broker.remoteWorlds }}
+    {{- $suffix := regexFind ":[0-9]+$" (default .internalAddress .dialAddress) }}
+    {{- $_ := set $ports (default (toString $.Values.server.udpPort) (trimPrefix ":" $suffix)) true }}
+    {{- end }}
+    - ports:
+        {{- range $port := keys $ports | sortAlpha }}
+        - protocol: UDP
+          port: {{ $port }}
+        {{- end }}
+    {{- end }}
 {{- end }}

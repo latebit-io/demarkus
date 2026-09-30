@@ -1,0 +1,69 @@
+{{- if .Values.rbac.create }}
+{{- /* resourceNames never matches a create, so get/update are pinned per
+       Secret and create is a separate namespace-wide rule. Everything the
+       broker writes lives in the release namespace: its own state, each
+       world's tokens Secret (agent token hashes), the agent token records,
+       and with provisioning the registry and the worlds fragment. */ -}}
+{{- $name := include "demarkus-knowledge-server.fullname" . -}}
+{{- $worlds := include "demarkus-knowledge-server.worlds" . | fromYamlArray -}}
+{{- $agentTokens := include "demarkus-knowledge-server.agentTokens" . | fromYamlArray -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "demarkus-knowledge-server.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: [{{ .Values.broker.sweeper.leaseName | quote }}]
+    verbs: ["get", "update"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ include "demarkus-knowledge-server.refreshTokensSecretName" . | quote }}
+      - {{ include "demarkus-knowledge-server.dynamicClientsSecretName" . | quote }}
+      - {{ include "demarkus-knowledge-server.signingKeySecretName" . | quote }}
+      - {{ include "demarkus-knowledge-server.cookieKeySecretName" . | quote }}
+      {{- if include "demarkus-knowledge-server.provisioningEnabled" . }}
+      - {{ include "demarkus-knowledge-server.registrySecretName" . | quote }}
+      - {{ .Values.provisioning.worldsSecret | quote }}
+      {{- end }}
+    verbs: ["get", "update"]
+  {{- if $agentTokens }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- range $spec := $agentTokens }}
+      - {{ include "demarkus-knowledge-server.agentTokenSecretName" (dict "worldName" $spec.world) | quote }}
+      - {{ $spec.secret | quote }}
+      {{- range $worlds }}
+      {{- if eq .name $spec.world }}
+      - {{ .tokenSecret.name | quote }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
+    verbs: ["get", "update"]
+  {{- end }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "demarkus-knowledge-server.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "demarkus-knowledge-server.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+{{- end }}

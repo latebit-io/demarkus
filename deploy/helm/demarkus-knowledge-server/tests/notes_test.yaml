@@ -1,0 +1,32 @@
+suite: install notes
+templates:
+  - NOTES.txt
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: lists worlds, both listeners and the generated keys
+    asserts:
+      - matchRegexRaw:
+          pattern: 'team-a \(knowledge\): authority team-a.example.com, tokens Secret team-a-tokens'
+      - matchRegexRaw:
+          pattern: 'worlds \(QUIC\): RELEASE-NAME\.NAMESPACE\.svc\.cluster\.local:6309'
+      - matchRegexRaw:
+          pattern: 'broker \(HTTP\): RELEASE-NAME\.NAMESPACE\.svc\.cluster\.local:8080'
+      - matchRegexRaw:
+          pattern: 'signing key into RELEASE-NAME-signing-key'
+      - matchRegexRaw:
+          pattern: 'redirect URI "https://broker.example.com/auth/callback"'
+
+  - it: names the gateway URLs when the Ingress is on
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.memory.host: memory.example.com
+      broker.memory.publicURL: https://memory.example.com
+    asserts:
+      - matchRegexRaw:
+          pattern: 'knowledge MCP: https://broker.example.com/mcp'
+      - matchRegexRaw:
+          pattern: 'memory MCP:    https://memory.example.com/mcp'
+      - matchRegexRaw:
+          pattern: 'trustForwardedFor is on'

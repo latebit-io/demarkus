@@ -166,11 +166,6 @@ func (p *Provisioner) DeprovisionTenant(ctx context.Context, slug string, delete
 	}
 	p.pushWorlds(fragment)
 
-	world := p.cfg.Provisioning.TenantWorld(slug, "")
-	if err := p.store.Delete(ctx, core.WorldTokensRef(&world)); err != nil {
-		return found, fmt.Errorf("delete tokens key for %q: %w", slug, err)
-	}
-
 	if deleter != nil {
 		if err := deleter.DeleteBucket(ctx, p.bucketName(slug)); err != nil {
 			return found, err
@@ -424,14 +419,7 @@ func (p *Provisioner) ensureTenant(ctx context.Context, claims *core.Claims) (co
 		return core.WorldConfig{}, fmt.Errorf("ensure bucket for %q: %w", slug, err)
 	}
 
-	// Step 3: tokens key, BEFORE the fragment: the server opens the
-	// world only once its tokens file exists in the shared mount.
-	world := p.cfg.Provisioning.TenantWorld(slug, email)
-	if err := p.ensureTokensKey(ctx, &world, slug); err != nil {
-		return core.WorldConfig{}, err
-	}
-
-	// Step 4: worlds fragment, rendered as a UNION with the existing
+	// Step 3: worlds fragment, rendered as a UNION with the existing
 	// fragment so a stale snapshot never drops a sibling's tenant;
 	// removal is a deliberate future flow rewriting from the registry.
 	fragment, err := p.writeWorldsFragment(ctx, &snapshot)
@@ -439,25 +427,14 @@ func (p *Provisioner) ensureTenant(ctx context.Context, claims *core.Claims) (co
 		return core.WorldConfig{}, fmt.Errorf("write worlds fragment: %w", err)
 	}
 
-	// Step 5: make the tenant visible to this pod immediately; other
+	// Step 4: make the tenant visible to this pod immediately; other
 	// replicas converge via the registry sync loop.
 	p.applySnapshot(&snapshot)
 	p.pushWorlds(fragment)
 	if created {
 		p.log.Info("tenant provisioned", "world", slug, "subject", core.HashSubject(claims.Subject))
 	}
-	return world, nil
-}
-
-func (p *Provisioner) ensureTokensKey(ctx context.Context, world *core.WorldConfig, slug string) error {
-	return p.store.Mutate(ctx, core.WorldTokensRef(world), func(existing []byte) ([]byte, error) {
-		if len(existing) > 0 {
-			return existing, nil
-		}
-		// Non-empty placeholder: the store contract skips empty writes,
-		// and the server needs the file present to open the world.
-		return []byte("# demarkus world tokens for " + slug + "\n"), nil
-	})
+	return p.cfg.Provisioning.TenantWorld(slug, email), nil
 }
 
 func decodeRegistry(existing []byte) (tenantRegistry, error) {
@@ -493,9 +470,6 @@ type fragmentWorld struct {
 		URL     string `yaml:"url"`
 		WorldID string `yaml:"worldID"`
 	} `yaml:"bucket"`
-	Auth struct {
-		TokensFile string `yaml:"tokensFile"`
-	} `yaml:"auth"`
 	Limits    *fragmentLimits `yaml:"limits,omitempty"`
 	Bootstrap bool            `yaml:"bootstrap"`
 }
@@ -528,7 +502,6 @@ func (p *Provisioner) renderWorldsFragmentUnion(registry *tenantRegistry, existi
 		}
 		world.Bucket.URL = "gs://" + p.bucketName(slug)
 		world.Bucket.WorldID = record.WorldID
-		world.Auth.TokensFile = strings.TrimRight(p.cfg.Provisioning.TokensMountPath, "/") + "/" + slug + ".toml"
 		if quota := p.cfg.Provisioning.MaxDocumentsPerTenant; quota > 0 {
 			world.Limits = &fragmentLimits{MaxDocuments: quota}
 		}

@@ -506,11 +506,9 @@ func (config *Config) validateWorlds() error {
 		}
 		worldIDs[world.Bucket.WorldID] = worldIndex
 
-		if strings.TrimSpace(world.Auth.TokensFile) == "" {
-			return fmt.Errorf("%s.auth.tokensFile is required", location)
-		}
-		// One directory watcher covers both files.
-		if static := world.Auth.StaticTokensFile; static != "" && filepath.Dir(filepath.Clean(static)) != filepath.Dir(filepath.Clean(world.Auth.TokensFile)) {
+		// Both files are optional: a world without either serves public reads
+		// and identity-granted writes. One directory watcher covers both.
+		if static, tokens := world.Auth.StaticTokensFile, world.Auth.TokensFile; static != "" && tokens != "" && filepath.Dir(filepath.Clean(static)) != filepath.Dir(filepath.Clean(tokens)) {
 			return fmt.Errorf("%s.auth.staticTokensFile %q must share the directory of auth.tokensFile %q", location, static, world.Auth.TokensFile)
 		}
 		for _, file := range []struct{ field, path string }{

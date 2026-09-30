@@ -4,19 +4,21 @@ values:
 templates:
   - NOTES.txt
 tests:
-  - it: names the knowledge server Service from global.knowledgeService
+  - it: names the knowledge Service and broker URL from the globals
     asserts:
       - matchRegexRaw:
-          pattern: 'knowledge server: knowledge\.NAMESPACE\.svc\.cluster\.local:6309 \(UDP\)'
+          pattern: 'knowledge: knowledge\.NAMESPACE\.svc\.cluster\.local:6309 \(QUIC\), broker https://broker\.example\.com'
 
-  - it: says the broker, not a Job, creates token Secrets and the agent token
+  - it: says writes need no token Secret and names the agent token and keys
     asserts:
       - matchRegexRaw:
-          pattern: 'The broker creates each <world>-tokens Secret on its first write'
+          pattern: 'no token Secret is needed'
       - matchRegexRaw:
           pattern: "issues the agent's hub token into root-token-values"
       - matchRegexRaw:
-          pattern: 'state cookie key into broker-cookie-key'
+          pattern: 'state cookie key into knowledge-cookie-key'
+      - matchRegexRaw:
+          pattern: 'https://broker.example.com/mcp'
       - notMatchRegexRaw:
           pattern: 'bootstrap Job'
 

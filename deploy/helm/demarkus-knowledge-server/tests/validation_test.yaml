@@ -18,12 +18,19 @@ tests:
       - failedTemplate:
           errorMessage: server.healthPort must differ from server.udpPort
 
-  - it: requires broker ingress selectors when NetworkPolicy is enabled
+  - it: requires the Ingress controller namespace when NetworkPolicy is enabled
     set:
-      networkPolicy.broker.namespace: ""
+      networkPolicy.ingressFromNamespace: ""
     asserts:
       - failedTemplate:
-          errorMessage: networkPolicy.broker.namespace and podLabels are required when NetworkPolicy is enabled
+          errorMessage: networkPolicy.ingressFromNamespace is required when NetworkPolicy is enabled
+
+  - it: rejects an HTTP port colliding with the health or QUIC port
+    set:
+      server.httpPort: 8081
+    asserts:
+      - failedTemplate:
+          errorMessage: server.httpPort must differ from server.healthPort and server.udpPort
 
   - it: requires explicit acceptance of unrestricted HTTPS egress
     set:
@@ -78,22 +85,110 @@ tests:
       - failedTemplate:
           errorMessage: serviceAccount.name is required when serviceAccount.create is false
 
-  - it: dynamicWorlds mode renders worldsFile and permits zero static worlds
+  - it: provisioning renders worldsFile and permits zero static worlds
     set:
       worlds: []
-      dynamicWorlds.enabled: true
+      worldDefaults.bucketPrefix: gs://deployment-
+      broker.memory.publicURL: https://memory.example.com
+      provisioning.mode: allowlisted
+      provisioning.bucketProject: project
     asserts:
       - template: configmap.yaml
         matchRegex:
           path: data["config.yaml"]
-          pattern: 'worldsFile: /run/demarkus/dynamic-worlds/worlds.yaml'
+          pattern: 'worldsFile: /run/demarkus/tenant-worlds/worlds.yaml'
+
+  - it: requires the memory gateway for provisioning
+    set:
+      provisioning.mode: allowlisted
+    asserts:
+      - failedTemplate:
+          errorMessage: provisioning needs the memory gateway (broker.memory.publicURL)
+
+  - it: requires a tenant cap in open mode
+    set:
+      worldDefaults.bucketPrefix: gs://deployment-
+      broker.memory.publicURL: https://memory.example.com
+      provisioning.mode: open
+      provisioning.bucketProject: project
+    asserts:
+      - failedTemplate:
+          errorMessage: provisioning.maxTenants must be positive in open mode
+
+  - it: requires a bucket prefix and project for provisioning
+    set:
+      broker.memory.publicURL: https://memory.example.com
+      provisioning.mode: allowlisted
+      provisioning.bucketProject: project
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worldDefaults.bucketPrefix (or global.bucketPrefix) is required when provisioning is enabled: tenant buckets are gs://<prefix><slug>'
+
+  - it: rejects an unknown provisioning mode
+    set:
+      provisioning.mode: sometimes
+    asserts:
+      - failedTemplate:
+          errorMessage: 'provisioning.mode must be static, allowlisted or open (got "sometimes")'
+
+  - it: requires the broker's public URL and IdP registration
+    set:
+      broker.publicURL: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: broker.publicURL is required
+
+  - it: requires exactly one OIDC client secret mode
+    set:
+      broker.oidc.existingSecretRef.name: broker-oidc
+    asserts:
+      - failedTemplate:
+          errorMessage: broker.oidc.clientSecret and broker.oidc.existingSecretRef.name are mutually exclusive; set exactly one
+
+  - it: keeps the memory gateway on its own host
+    set:
+      broker.memory.publicURL: https://broker.example.com/memory
+    asserts:
+      - failedTemplate:
+          errorMessage: broker.memory.publicURL must be on a different host than the knowledge gateway; the mux selects the gateway by Host
+
+  - it: requires a memory world to name its tenant
+    set:
+      broker.memory.publicURL: https://memory.example.com
+      worlds:
+        - name: alice
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+          profile: memory
+          bucket: {url: gs://deployment-alice}
+    asserts:
+      - failedTemplate:
+          errorMessage: worlds[0].allow must name the tenant identity (domains, groups or emails) on a memory world
+
+  - it: rejects a memory world without the memory gateway
+    set:
+      worlds:
+        - name: alice
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+          profile: memory
+          bucket: {url: gs://deployment-alice}
+          allow: {emails: [alice@example.com]}
+    asserts:
+      - failedTemplate:
+          errorMessage: worlds[0].profile memory needs the memory gateway (broker.memory.publicURL)
+
+  - it: requires a write scope on every world
+    set:
+      worldDefaults.writeScope.paths: []
+    asserts:
+      - failedTemplate:
+          errorMessage: worlds[0].writeScope.paths is required (or set worldDefaults.writeScope.paths)
 
   - it: requires at least one world
     set:
       worlds: []
     asserts:
       - failedTemplate:
-          errorMessage: worlds (or global.worlds) must contain at least one world, or enable dynamicWorlds
+          errorMessage: worlds (or global.worlds) must contain at least one world, or enable provisioning
 
   - it: rejects duplicate world names
     set:
@@ -370,7 +465,7 @@ tests:
           path: metadata.name
           value: RELEASE-NAME-config
 
-  - it: names itself after global.knowledgeService so the broker and agent find it
+  - it: names itself after global.knowledgeService so the agent finds it
     set:
       worlds: []
       global:

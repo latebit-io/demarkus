@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -231,13 +230,9 @@ func NewProvisioningConfig(mode string) *core.Config {
 		Mode:            mode,
 		MaxTenants:      10,
 		AuthorityDomain: "memory-worlds.svc.cluster.local",
-		DialAddress:     "demarkus-knowledge-server.memory-worlds.svc.cluster.local:6309",
 		BucketPrefix:    "gs://memory-",
 		BucketProject:   "demarkus-test",
-		ServerNamespace: "memory-worlds",
 		WorldsSecret:    "memory-worlds-config",
-		TokensSecret:    "memory-worlds-tokens",
-		TokensMountPath: "/etc/demarkus/worlds-tokens",
 		RegistrySecret:  "memory-broker-registry",
 	}
 	return cfg
@@ -247,16 +242,6 @@ func NewProvisioningConfig(mode string) *core.Config {
 // not canonical on purpose.
 func EveClaims() *core.Claims {
 	return &core.Claims{Subject: "google|eve-123", Email: "Eve.Adams@example.com", EmailVerified: true}
-}
-
-// MustRead reads path or fails the test.
-func MustRead(t *testing.T, path string) []byte {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
 }
 
 // IdPBearer is the one IdP bearer AllowDomainsVerifier admits.

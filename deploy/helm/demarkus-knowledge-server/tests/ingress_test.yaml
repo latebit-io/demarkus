@@ -1,0 +1,138 @@
+suite: ingress
+templates:
+  - ingress.yaml
+  - certificate-ingress.yaml
+values:
+  - fixtures/valid-values.yaml
+tests:
+  - it: is omitted by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: requires a host when enabled
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress.host is required when ingress.enabled is true
+
+  - it: routes the management host to the http port with no TLS block by default
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+    asserts:
+      - isKind:
+          of: Ingress
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - notExists:
+          path: spec.tls
+      - equal:
+          path: spec.rules
+          value:
+            - host: broker.example.com
+              http:
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: RELEASE-NAME
+                        port:
+                          name: http
+
+  - it: routes the MCP and memory hosts to the same backend and covers every host with one Secret
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.mcp.host: mcp.example.com
+      ingress.memory.host: memory.example.com
+      ingress.tls.existingSecret: broker-tls
+      broker.memory.publicURL: https://memory.example.com
+    asserts:
+      - equal:
+          path: spec.tls
+          value:
+            - hosts: [broker.example.com, mcp.example.com, memory.example.com]
+              secretName: broker-tls
+      - equal:
+          path: spec.rules[1].host
+          value: mcp.example.com
+      - equal:
+          path: spec.rules[2].host
+          value: memory.example.com
+      - equal:
+          path: spec.rules[2].http.paths[0].backend.service.port.name
+          value: http
+
+  - it: lets the MCP host be the management host
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.mcp.host: broker.example.com
+    asserts:
+      - lengthEqual:
+          path: spec.rules
+          count: 1
+
+  - it: requires a memory host once the memory gateway is configured
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      broker.memory.publicURL: https://memory.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress.memory.host is required when the memory gateway is configured and the Ingress is enabled
+
+  - it: rejects both TLS modes
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.tls.existingSecret: broker-tls
+      ingress.tls.certManager.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress.tls.existingSecret and ingress.tls.certManager.enabled are mutually exclusive; set exactly one
+
+  - it: asks cert-manager for one certificate over every host
+    set:
+      ingress.enabled: true
+      ingress.host: broker.example.com
+      ingress.mcp.host: mcp.example.com
+      ingress.tls.certManager.enabled: true
+      ingress.tls.certManager.issuerRef.name: letsencrypt
+      ingress.tls.certManager.annotations: {team: platform}
+    asserts:
+      - template: certificate-ingress.yaml
+        isKind:
+          of: Certificate
+      - template: certificate-ingress.yaml
+        equal:
+          path: metadata.name
+          value: RELEASE-NAME-ingress-tls
+      - template: certificate-ingress.yaml
+        equal:
+          path: metadata.annotations.team
+          value: platform
+      - template: certificate-ingress.yaml
+        equal:
+          path: spec.dnsNames
+          value: [broker.example.com, mcp.example.com]
+      - template: certificate-ingress.yaml
+        equal:
+          path: spec.issuerRef
+          value:
+            kind: ClusterIssuer
+            name: letsencrypt
+      - template: ingress.yaml
+        equal:
+          path: spec.tls[0].secretName
+          value: RELEASE-NAME-ingress-tls
