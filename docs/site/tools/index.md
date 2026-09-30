@@ -24,7 +24,7 @@ The broker is the front door of a knowledge system: it authenticates people and 
 
 A world's `name` in the broker config is the host of every `mark://<name>/<path>` tool URL and part of a Secret name, so it must be a DNS label: lowercase letters, digits and hyphens, at most 63 characters, no hyphen at either end. The broker refuses to start on anything else and never rewrites a name, because that would rename the Secrets behind it. In tool URLs the world name is case insensitive: `mark://Team-A/x` reaches `team-a`.
 
-See `tools/demarkus-knowledge-broker/MCP-API.md` for the full tool contract and the Helm chart README (`deploy/helm/demarkus-knowledge-broker/`) for deployment.
+See `knowledge/cmd/demarkus-knowledge-broker/MCP-API.md` for the full tool contract and the Helm chart README (`deploy/helm/demarkus-knowledge-broker/`) for deployment.
 
 ## Memory Broker (`demarkus-memory-broker`)
 

@@ -42,7 +42,8 @@ This produces the following binaries:
 | `demarkus-tui` | `client/bin/demarkus-tui` | TUI browser |
 | `demarkus-mcp` | `client/bin/demarkus-mcp` | MCP server |
 | `demarkus-agent` | `client/bin/demarkus-agent` | Federation crawler |
-| `demarkus-knowledge-broker` | `tools/bin/demarkus-knowledge-broker` | OIDC broker and MCP gateway |
+| `demarkus-knowledge-broker` | `knowledge/bin/demarkus-knowledge-broker` | OIDC broker and MCP gateway |
+| `demarkus-memory-broker` | `knowledge/bin/demarkus-memory-broker` | Memory broker: per-identity worlds behind the same gateway |
 | `demarkus-publish` | `tools/bin/demarkus-publish` | Local publish (bypasses server) |
 
 `make knowledge-server` builds the multi-world GCS server (`server/bin/demarkus-knowledge-server`); it is not part of `make all`.

@@ -13,9 +13,9 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/provisiontest"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/token"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
-	"github.com/latebit-io/demarkus/tools/internal/token"
 )
 
 func TestScopeStale(t *testing.T) {

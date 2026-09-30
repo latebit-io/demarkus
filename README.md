@@ -189,11 +189,11 @@ See [www.demarkus.io/ecosystem](https://www.demarkus.io/ecosystem/) for the full
 ```bash
 git clone https://github.com/latebit-io/demarkus.git
 cd demarkus
-make all   # protocol, server, client, tools
+make all   # protocol, server, client, tools, knowledge (brokers)
 make knowledge-server   # demarkus-knowledge-server
 ```
 
-Requires Go 1.26+. Binaries land in `server/bin/`, `client/bin/`, and `tools/bin/`.
+Requires Go 1.26+. Binaries land in `server/bin/`, `client/bin/`, `tools/bin/`, and `knowledge/bin/`.
 
 ## Documentation
 

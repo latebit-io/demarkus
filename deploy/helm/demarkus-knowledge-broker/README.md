@@ -271,11 +271,11 @@ sit well under the typical kubelet sync period; tune up only for
 slow-kubelet clusters.
 
 `server.mcp.toolProfile` selects the tool surface, `full` (default) or
-`lean`; see "Tool profiles" in `tools/demarkus-knowledge-broker/MCP-API.md`.
+`lean`; see "Tool profiles" in `knowledge/cmd/demarkus-knowledge-broker/MCP-API.md`.
 
 ### Operator reference: tool surface
 
-See `tools/demarkus-knowledge-broker/MCP-API.md` in the repo for the full
+See `knowledge/cmd/demarkus-knowledge-broker/MCP-API.md` in the repo for the full
 tool reference (names, JSON schemas, semantics).
 
 ### Upgrade notes

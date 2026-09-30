@@ -302,11 +302,11 @@ sit well under the typical kubelet sync period; tune up only for
 slow-kubelet clusters.
 
 `server.mcp.toolProfile` selects the tool surface, `full` (default) or
-`lean`; see "Tool profiles" in `tools/demarkus-knowledge-broker/MCP-API.md`.
+`lean`; see "Tool profiles" in `knowledge/cmd/demarkus-knowledge-broker/MCP-API.md`.
 
 ### Operator reference: tool surface
 
-See `tools/demarkus-memory-broker/MCP-API.md` in the repo for the
+See `knowledge/cmd/demarkus-memory-broker/MCP-API.md` in the repo for the
 tool reference. The surface is the direct-MCP parity set scoped to
 the caller's own world (`mark_fetch`, `mark_explore`, `mark_list`,
 `mark_versions`, `mark_lookup`, `mark_publish`, `mark_append`,

@@ -8,7 +8,9 @@ baseline="$root/lint-ratchet.txt"
 current="$(mktemp)"
 trap 'rm -f "$current"' EXIT
 
-for mod in protocol server client tools; do
+# Every top-level module; nested go.mod files (benchmark artifacts) stay out.
+for modfile in "$root"/*/go.mod; do
+  mod="$(basename "$(dirname "$modfile")")"
   # Exit 1 means findings, which is expected here; anything else is a failure.
   out="$(cd "$root/$mod" && golangci-lint run -c "$root/.golangci-ratchet.yml" \
     --output.text.print-issued-lines=false ./... 2>&1)" || {

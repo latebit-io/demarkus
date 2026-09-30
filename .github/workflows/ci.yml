@@ -22,7 +22,8 @@ jobs:
       protocol: ${{ steps.filter.outputs.protocol }}
       server: ${{ steps.filter.outputs.server }}
       client: ${{ steps.filter.outputs.client }}
-      broker: ${{ steps.filter.outputs.broker }}
+      knowledge: ${{ steps.filter.outputs.knowledge }}
+      tools: ${{ steps.filter.outputs.tools }}
       charts: ${{ steps.filter.outputs.charts }}
       release_contract: ${{ steps.filter.outputs.release_contract }}
       install: ${{ steps.filter.outputs.install }}
@@ -41,15 +42,22 @@ jobs:
             client:
               - 'client/**'
               - 'protocol/**'
-            broker:
+            knowledge:
+              - 'knowledge/**'
+              - 'protocol/**'
+              - 'client/**'
+            tools:
               - 'tools/**'
               - 'protocol/**'
+              - 'client/**'
             charts:
               - 'deploy/helm/**'
             release_contract:
               - '.github/workflows/release.yml'
               - 'server/.goreleaser.yml'
               - 'server/Dockerfile.knowledge'
+              - 'knowledge/.goreleaser-broker.yml'
+              - 'knowledge/.goreleaser-memory-broker.yml'
             install:
               - 'install.sh'
               - 'install-stack.sh'
@@ -106,15 +114,16 @@ jobs:
       needs.detect-changes.outputs.protocol == 'true' ||
       needs.detect-changes.outputs.server == 'true' ||
       needs.detect-changes.outputs.client == 'true' ||
-      needs.detect-changes.outputs.broker == 'true'
+      needs.detect-changes.outputs.tools == 'true' ||
+      needs.detect-changes.outputs.knowledge == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
-          # Four modules and no root go.sum: without this the module cache
-          # never restores and every run refetches everything.
+          # No root go.sum: without this the module cache never restores
+          # and every run refetches everything.
           cache-dependency-path: "**/go.sum"
       # Two downloads from github.com, checksum verified. `go install` was
       # ~200 proxy fetches plus sumdb checks per run and failed on hiccups twice.
@@ -133,7 +142,8 @@ jobs:
       # instead of surfacing as typecheck errors inside the ratchet.
       - name: Download modules
         run: |
-          for mod in protocol server client tools; do
+          for modfile in */go.mod; do
+            mod="${modfile%/go.mod}"
             (cd "$mod" && go mod download) || { sleep 15; (cd "$mod" && go mod download); }
           done
       - name: Lint ratchet
@@ -237,9 +247,9 @@ jobs:
       - name: Build MCP
         run: cd client && go build -o /dev/null ./cmd/demarkus-mcp
 
-  test-broker:
+  test-knowledge:
     needs: detect-changes
-    if: needs.detect-changes.outputs.broker == 'true'
+    if: needs.detect-changes.outputs.knowledge == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -247,9 +257,31 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
-      # The whole tools module is the CI unit: shared packages under
-      # tools/internal serve every binary here, so a curated package list
-      # would silently skip consumers.
+          cache-dependency-path: knowledge/go.sum
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.9.0
+          working-directory: knowledge
+      - name: Test
+        run: cd knowledge && go test -race ./...
+      - name: Vet
+        run: cd knowledge && go vet ./...
+      - name: Vulnerabilities
+        run: cd knowledge && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - name: Build
+        run: cd knowledge && go build ./...
+
+  test-tools:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.tools == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: tools/go.sum
       - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.9.0
@@ -261,7 +293,7 @@ jobs:
       - name: Vulnerabilities
         run: cd tools && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: Build
-        run: cd tools && go build -o /dev/null ./demarkus-knowledge-broker
+        run: cd tools && go build ./...
 
   test-install:
     needs: detect-changes

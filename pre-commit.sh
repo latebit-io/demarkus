@@ -12,16 +12,7 @@ fi
 make vet
 make test
 
-if ! command -v golangci-lint &>/dev/null; then
-  echo "Error: golangci-lint is not installed."
-  echo "Install it: https://golangci-lint.run/welcome/install/"
-  exit 1
-fi
-
-for mod in protocol server client tools; do
-  echo "Linting ${mod}..."
-  (cd "$mod" && golangci-lint run ./...)
-done
+make lint
 
 echo "Checking lint ratchet..."
 bash scripts/lint-ratchet.sh

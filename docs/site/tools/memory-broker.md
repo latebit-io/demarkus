@@ -4,7 +4,7 @@ Memory as a service for MCP hosts: one OAuth connector URL gives any MCP host a 
 
 On your first authenticated tool call the broker seeds your memory with a template (`/index.md` hub, a low-ceremony write policy, and the memory layout at `/.well-known/demarkus/template.md`). With dynamic provisioning enabled, the first arrival also creates the world itself: bucket, server registration, and tokens, behind a provisioning gate (`static | allowlisted | open`).
 
-See `tools/demarkus-memory-broker/MCP-API.md` for the tool contract and the Helm chart README (`deploy/helm/demarkus-memory-broker/`) for deployment.
+See `knowledge/cmd/demarkus-memory-broker/MCP-API.md` for the tool contract and the Helm chart README (`deploy/helm/demarkus-memory-broker/`) for deployment.
 
 ## Connecting a host
 

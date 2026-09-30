@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/token"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/procscan"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/server"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/tokens"
-	"github.com/latebit-io/demarkus/tools/internal/token"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/provisiontest"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/release"

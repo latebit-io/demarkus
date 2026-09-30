@@ -1,19 +1,23 @@
-.PHONY: all protocol server knowledge-server client tools image image-server image-knowledge-server image-broker image-memory-broker image-agent test clean install help lint fmt vet vuln fuzz smoke deps
+.PHONY: all protocol server knowledge-server client tools knowledge image image-server image-knowledge-server image-broker image-memory-broker image-agent test clean install help lint fmt vet vuln fuzz smoke deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
+# Every Go module; per-module targets loop over this list. Build order is `all`.
+MODULES := protocol server client tools knowledge
+
 # Default target
-all: protocol server client tools
+all: protocol server client tools knowledge
 
 # Help target
 help:
 	@echo "Demarkus Build Targets:"
-	@echo "  all       - Build protocol, server, client, and tools"
+	@echo "  all       - Build protocol, server, client, tools, and knowledge"
 	@echo "  protocol  - Build protocol library"
 	@echo "  server    - Build demarkus-server (no external database deps)"
 	@echo "  knowledge-server - Build demarkus-knowledge-server (multi-world GCS backend)"
 	@echo "  client    - Build demarkus TUI client"
-	@echo "  tools     - Build broker, token, publish (tools/bin/)"
+	@echo "  tools     - Build token, publish (tools/bin/)"
+	@echo "  knowledge - Build the knowledge and memory brokers (knowledge/bin/)"
 	@echo "  image     - Build runtime container images (TAG overridable)"
 	@echo "  image-knowledge-server - Build the multi-world knowledge server image"
 	@echo "  test      - Run all tests"
@@ -56,11 +60,16 @@ client: protocol
 # Build tools
 tools: protocol
 	@echo "Building tools..."
-	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-knowledge-broker  ./demarkus-knowledge-broker
-	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-memory-broker ./demarkus-memory-broker
 	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-token   ./demarkus-token
 	cd tools && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-publish ./demarkus-publish
-	@echo "✓ Tools built: tools/bin/{demarkus-knowledge-broker, demarkus-memory-broker, demarkus-token, demarkus-publish}"
+	@echo "✓ Tools built: tools/bin/{demarkus-token, demarkus-publish}"
+
+# Build the brokers
+knowledge: protocol
+	@echo "Building knowledge brokers..."
+	cd knowledge && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-knowledge-broker ./cmd/demarkus-knowledge-broker
+	cd knowledge && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-memory-broker ./cmd/demarkus-memory-broker
+	@echo "✓ Knowledge built: knowledge/bin/{demarkus-knowledge-broker, demarkus-memory-broker}"
 
 # Build container images. One image per deployable service so each pod
 # carries only the binaries it needs at runtime. Admin CLIs are NOT
@@ -94,15 +103,15 @@ image-knowledge-server:
 image-broker:
 	@echo "Building $(IMAGE_REGISTRY)/demarkus-knowledge-broker:$(TAG) for linux/$(HOST_ARCH)..."
 	@mkdir -p dist/docker/$(HOST_ARCH)
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C tools -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-knowledge-broker ./demarkus-knowledge-broker
-	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f tools/demarkus-knowledge-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-knowledge-broker:$(TAG) .
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C knowledge -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-knowledge-broker ./cmd/demarkus-knowledge-broker
+	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f knowledge/cmd/demarkus-knowledge-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-knowledge-broker:$(TAG) .
 	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-knowledge-broker:$(TAG)"
 
 image-memory-broker:
 	@echo "Building $(IMAGE_REGISTRY)/demarkus-memory-broker:$(TAG) for linux/$(HOST_ARCH)..."
 	@mkdir -p dist/docker/$(HOST_ARCH)
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C tools -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-memory-broker ./demarkus-memory-broker
-	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f tools/demarkus-memory-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-memory-broker:$(TAG) .
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C knowledge -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-memory-broker ./cmd/demarkus-memory-broker
+	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f knowledge/cmd/demarkus-memory-broker/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-memory-broker:$(TAG) .
 	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-memory-broker:$(TAG)"
 
 image-agent:
@@ -115,23 +124,20 @@ image-agent:
 # Run tests
 test:
 	@echo "Running tests..."
-	@cd protocol && go test -race ./... && echo "✓ Protocol tests passed"
-	@cd server && go test -race ./... && echo "✓ Server tests passed"
-	@cd client && go test -race ./... && echo "✓ Client tests passed"
-	@cd tools && go test -race ./... && echo "✓ Tools tests passed"
+	@for mod in $(MODULES); do \
+		(cd $$mod && go test -race ./...) || exit 1; \
+		echo "✓ $$mod tests passed"; \
+	done
 
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
-	@rm -rf server/bin client/bin tools/bin dist
-	@cd protocol && go clean
-	@cd server && go clean
-	@cd client && go clean
-	@cd tools && go clean
+	@rm -rf server/bin client/bin tools/bin knowledge/bin dist
+	@for mod in $(MODULES); do (cd $$mod && go clean); done
 	@echo "✓ Clean complete"
 
 # Install binaries
-install: all
+install: server client
 	@echo "Installing binaries..."
 	@cp server/bin/demarkus-server /usr/local/bin/
 	@cp client/bin/demarkus /usr/local/bin/
@@ -163,33 +169,27 @@ lint:
 		exit 1; \
 	fi
 	@echo "Linting code..."
-	@cd protocol && golangci-lint run ./...
-	@cd server && golangci-lint run ./...
-	@cd client && golangci-lint run ./...
-	@cd tools && golangci-lint run ./...
+	@for mod in $(MODULES); do \
+		echo "Linting $$mod..."; \
+		(cd $$mod && golangci-lint run ./...) || exit 1; \
+	done
 	@echo "✓ Code linted"
 
 # Format code
 fmt:
 	@echo "Formatting code..."
-	@cd protocol && go fmt ./...
-	@cd server && go fmt ./...
-	@cd client && go fmt ./...
-	@cd tools && go fmt ./...
+	@for mod in $(MODULES); do (cd $$mod && go fmt ./...) || exit 1; done
 	@echo "✓ Code formatted"
 
 # Vet code
 vet:
 	@echo "Vetting code..."
-	@cd protocol && go vet ./...
-	@cd server && go vet ./...
-	@cd client && go vet ./...
-	@cd tools && go vet ./...
+	@for mod in $(MODULES); do (cd $$mod && go vet ./...) || exit 1; done
 	@echo "✓ Code vetted"
 
 # Report known vulnerabilities reachable from our code
 vuln:
-	@for mod in protocol server client tools; do \
+	@for mod in $(MODULES); do \
 		echo "govulncheck $$mod..."; \
 		(cd $$mod && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...) || exit 1; \
 	done
@@ -202,7 +202,7 @@ fuzz:
 		./mdoutline:FuzzHeadings; do \
 		go test -run '^$$' -fuzz "^$${t#*:}\$$" -fuzztime $(FUZZTIME) "$${t%%:*}" || exit 1; \
 	done
-	@cd tools && go test -run '^$$' -fuzz '^FuzzParseBytes$$' -fuzztime $(FUZZTIME) ./internal/token
+	@cd client && go test -run '^$$' -fuzz '^FuzzParseBytes$$' -fuzztime $(FUZZTIME) ./token
 
 # Built binaries over real QUIC; the knowledge half needs Docker.
 smoke: server knowledge-server client tools
@@ -211,8 +211,5 @@ smoke: server knowledge-server client tools
 # Update dependencies
 deps:
 	@echo "Updating dependencies..."
-	@cd protocol && go mod tidy
-	@cd server && go mod tidy && go mod download
-	@cd client && go mod tidy && go mod download
-	@cd tools && go mod tidy && go mod download
+	@for mod in $(MODULES); do (cd $$mod && go mod tidy && go mod download) || exit 1; done
 	@echo "✓ Dependencies updated"

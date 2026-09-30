@@ -18,6 +18,7 @@ jobs:
       server: ${{ steps.filter.outputs.server }}
       client: ${{ steps.filter.outputs.client }}
       tools: ${{ steps.filter.outputs.tools }}
+      knowledge: ${{ steps.filter.outputs.knowledge }}
       knowledge_system: ${{ steps.filter.outputs.knowledge_system }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -42,7 +43,12 @@ jobs:
               - 'tools/**'
               - 'protocol/**'
               - 'client/**'
+            knowledge:
+              - 'knowledge/**'
+              - 'protocol/**'
+              - 'client/**'
               - 'deploy/helm/demarkus-knowledge-broker/**'
+              - 'deploy/helm/demarkus-memory-broker/**'
             knowledge_system:
               - 'deploy/helm/demarkus-knowledge-system/**'
               - 'deploy/helm/demarkus-knowledge-server/**'
@@ -97,12 +103,24 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
+          cache-dependency-path: tools/go.sum
       - run: cd tools && go test -race ./...
       - run: cd tools && go vet ./...
-      - run: cd tools && go build -o /dev/null ./demarkus-knowledge-broker
-      - run: cd tools && go build -o /dev/null ./demarkus-token
-      - run: cd tools && go build -o /dev/null ./demarkus-publish
-      - run: cd tools && go build -o /dev/null ./demarkus-plugin
+      - run: cd tools && go build ./...
+
+  test-knowledge:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.knowledge == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: knowledge/go.sum
+      - run: cd knowledge && go test -race ./...
+      - run: cd knowledge && go vet ./...
+      - run: cd knowledge && go build ./...
 
   semver-protocol:
     needs: test-protocol
@@ -220,8 +238,8 @@ jobs:
           tag_prefix: "tools/v"
           major_pattern: "BREAKING CHANGE:"
           minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
-          # Enumerated (not tools/) so broker-only changes release on the
-          # broker stream alone; a new tool dir must be added here.
+          # Enumerated (not tools/) so the ignored benchmark tree under
+          # tools/ never cuts a release; a new tool dir must be added here.
           change_path: "tools/demarkus-token/ tools/demarkus-publish/ tools/demarkus-plugin/ tools/plugin-prompts/ tools/tools.go tools/go.mod tools/go.sum protocol/ client/"
           bump_each_commit: false
           search_commit_body: true
@@ -240,8 +258,8 @@ jobs:
   # binary churn on tools/v never rebuilds the broker image or chart, and
   # broker changes never trigger the plugin pin-bump chain.
   semver-broker:
-    needs: test-tools
-    if: always() && needs.test-tools.result == 'success'
+    needs: test-knowledge
+    if: always() && needs.test-knowledge.result == 'success'
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.semver.outputs.version }}
@@ -258,7 +276,7 @@ jobs:
           minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
           # See server's change_path note: chart-only commits must
           # bump the version so the chart actually publishes.
-          change_path: "tools/demarkus-knowledge-broker/ tools/internal/ tools/go.mod tools/go.sum protocol/ client/ deploy/helm/demarkus-knowledge-broker/"
+          change_path: "knowledge/cmd/demarkus-knowledge-broker/ knowledge/internal/ knowledge/go.mod knowledge/go.sum knowledge/.goreleaser-broker.yml protocol/ client/ deploy/helm/demarkus-knowledge-broker/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -310,11 +328,11 @@ jobs:
           echo "Version: ${{ steps.semver.outputs.version }}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
 
   # Memory broker releases on its own stream (memory-broker/v), mirroring
-  # the knowledge broker's split: the two binaries share tools/internal/
+  # the knowledge broker's split: the two binaries share knowledge/internal/
   # but ship, image, and chart independently.
   semver-memory-broker:
-    needs: test-tools
-    if: always() && needs.test-tools.result == 'success'
+    needs: test-knowledge
+    if: always() && needs.test-knowledge.result == 'success'
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.semver.outputs.version }}
@@ -331,7 +349,7 @@ jobs:
           minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
           # See server's change_path note: chart-only commits must
           # bump the version so the chart actually publishes.
-          change_path: "tools/demarkus-memory-broker/ tools/internal/ tools/go.mod tools/go.sum protocol/ client/ deploy/helm/demarkus-memory-broker/"
+          change_path: "knowledge/cmd/demarkus-memory-broker/ knowledge/internal/ knowledge/go.mod knowledge/go.sum knowledge/.goreleaser-memory-broker.yml protocol/ client/ deploy/helm/demarkus-memory-broker/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -683,13 +701,13 @@ jobs:
         with:
           distribution: goreleaser-pro
           version: latest
-          args: release --clean -f tools/.goreleaser-broker.yml
+          args: release --clean -f knowledge/.goreleaser-broker.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GORELEASER_CURRENT_TAG: "broker/v${{ needs.semver-broker.outputs.new_version }}"
 
-      # Stage pre-built broker binary (built by tools/.goreleaser-broker.yml
+      # Stage pre-built broker binary (built by knowledge/.goreleaser-broker.yml
       # above) into dist/docker/<arch>/ so the Dockerfile is COPY-only
       # and buildx skips QEMU compilation.
       - name: Stage binaries for Docker build
@@ -701,14 +719,13 @@ jobs:
           cp dist/demarkus-knowledge-broker_linux_arm64*/demarkus-knowledge-broker dist/docker/arm64/
           cp dist/demarkus-knowledge-broker_linux_arm_7*/demarkus-knowledge-broker dist/docker/armv7/
 
-      # The broker is the only runtime image in tools/. Admin CLIs ship as
-      # standalone binary archives on the tools stream and are not bundled
-      # into any image — see §6.7.A decisions on minimal pod blast radius.
+      # Admin CLIs ship as standalone binary archives on the tools stream
+      # and are not bundled into any image (§6.7.A: minimal pod blast radius).
       - name: Build + push demarkus-knowledge-broker image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          file: tools/demarkus-knowledge-broker/Dockerfile
+          file: knowledge/cmd/demarkus-knowledge-broker/Dockerfile
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: |
@@ -773,13 +790,13 @@ jobs:
         with:
           distribution: goreleaser-pro
           version: latest
-          args: release --clean -f tools/.goreleaser-memory-broker.yml
+          args: release --clean -f knowledge/.goreleaser-memory-broker.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GORELEASER_CURRENT_TAG: "memory-broker/v${{ needs.semver-memory-broker.outputs.new_version }}"
 
-      # Stage pre-built binary (built by tools/.goreleaser-memory-broker.yml
+      # Stage pre-built binary (built by knowledge/.goreleaser-memory-broker.yml
       # above) into dist/docker/<arch>/ so the Dockerfile is COPY-only
       # and buildx skips QEMU compilation.
       - name: Stage binaries for Docker build
@@ -795,7 +812,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          file: tools/demarkus-memory-broker/Dockerfile
+          file: knowledge/cmd/demarkus-memory-broker/Dockerfile
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: |
