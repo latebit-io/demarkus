@@ -228,6 +228,36 @@ func TestRuntimeCloseDrainsActiveStream(t *testing.T) {
 	<-served
 }
 
+// Refused streams log once per window, not once each, and are all refused.
+func TestRuntimeLogsConcurrencyRefusalFloodOnce(t *testing.T) {
+	runtime := newTestRuntime(t, &Config{MaxConcurrent: 1, RequestTimeout: 10 * time.Millisecond})
+	var logs bytes.Buffer
+	runtime.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	reader := &blockingReader{started: make(chan struct{}), release: make(chan struct{})}
+	served := make(chan struct{})
+	go func() {
+		runtime.ServeStream(context.Background(), testAddr("127.0.0.1:1234"), &testStream{Reader: reader})
+		close(served)
+	}()
+	<-reader.started
+	for i := range 5 {
+		refused := newTestStream("FETCH /health\n")
+		runtime.ServeStream(context.Background(), testAddr("127.0.0.1:1234"), refused)
+		response, err := protocol.ParseResponse(&refused.output)
+		if err != nil {
+			t.Fatalf("stream %d: parse response: %v", i, err)
+		}
+		if response.Status != protocol.StatusRateLimited {
+			t.Fatalf("stream %d: status = %q, want %q", i, response.Status, protocol.StatusRateLimited)
+		}
+	}
+	close(reader.release)
+	<-served
+	if got := strings.Count(logs.String(), "concurrency limited"); got != 1 {
+		t.Fatalf("logged %d refusal lines, want 1:\n%s", got, logs.String())
+	}
+}
+
 func TestRuntimeLimitsConcurrentStreams(t *testing.T) {
 	runtime := newTestRuntime(t, &Config{MaxConcurrent: 1, RequestTimeout: 10 * time.Millisecond})
 	reader := &blockingReader{started: make(chan struct{}), release: make(chan struct{})}

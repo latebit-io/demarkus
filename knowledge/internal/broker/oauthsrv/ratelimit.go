@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/server/logthrottle"
 )
 
 // requireAuth verifies the bearer, gates its domain and puts the claims on
@@ -41,12 +42,15 @@ func (s *Server) ipRateLimit(next http.Handler) http.Handler {
 	if s.loginReg == nil {
 		return next
 	}
+	refusals := logthrottle.New(logthrottle.DefaultWindow)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := s.clientIP(r)
 		allowed, retryAfter := s.loginReg.Reserve(key)
 		if !allowed {
-			s.log.WarnContext(r.Context(), "broker: rate limit exceeded",
-				"route", r.URL.Path, "ip", key, "retryAfter", retryAfter)
+			if logIt, suppressed := refusals.Allow(); logIt {
+				s.log.WarnContext(r.Context(), "broker: rate limit exceeded",
+					"route", r.URL.Path, "ip", key, "retryAfter", retryAfter, "suppressed", suppressed)
+			}
 			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return

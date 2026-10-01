@@ -21,6 +21,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/handler"
 	"github.com/latebit-io/demarkus/server/internal/quicserve"
 	"github.com/latebit-io/demarkus/server/internal/ratelimit"
+	"github.com/latebit-io/demarkus/server/logthrottle"
 )
 
 const maxRateWaitBudget = 10 * time.Second
@@ -68,6 +69,10 @@ type Runtime struct {
 	closeBackend   func() error
 	changes        *changefeed.Hub
 	watches        *fanout.Fanout
+
+	// A flood of refusals logs once per window per kind, not per request.
+	rateRefusals        *logthrottle.Throttle
+	concurrencyRefusals *logthrottle.Throttle
 
 	watchCancel context.CancelFunc
 	watchDone   sync.WaitGroup
@@ -150,9 +155,11 @@ func New(config *Config) (*Runtime, error) {
 	}
 	if config.RateLimit > 0 {
 		runtime.limiter = ratelimit.New(config.RateLimit, config.RateBurst)
+		runtime.rateRefusals = logthrottle.New(logthrottle.DefaultWindow)
 	}
 	if config.MaxConcurrent > 0 {
 		runtime.concurrent = make(chan struct{}, config.MaxConcurrent)
+		runtime.concurrencyRefusals = logthrottle.New(logthrottle.DefaultWindow)
 	}
 	files := sourceConfig.Files()
 	if config.DisableTokenWatch || len(files) == 0 {
@@ -302,7 +309,9 @@ func (r *Runtime) admit(ctx context.Context, remote net.Addr, logger *slog.Logge
 	cancel()
 	if err != nil {
 		held.release()
-		logger.Warn("rate limited", "ip", ratelimit.ExtractIP(remote), "error", err)
+		if logIt, suppressed := r.rateRefusals.Allow(); logIt {
+			logger.Warn("rate limited", "ip", ratelimit.ExtractIP(remote), "error", err, "suppressed", suppressed)
+		}
 		return slot{}, false
 	}
 	return held, true
@@ -356,7 +365,9 @@ func (r *Runtime) acquire(ctx context.Context, remote net.Addr, logger *slog.Log
 	case r.concurrent <- struct{}{}:
 		return true
 	case <-waitCtx.Done():
-		logger.Warn("concurrency limited", "ip", ratelimit.ExtractIP(remote), "error", waitCtx.Err())
+		if logIt, suppressed := r.concurrencyRefusals.Allow(); logIt {
+			logger.Warn("concurrency limited", "ip", ratelimit.ExtractIP(remote), "error", waitCtx.Err(), "suppressed", suppressed)
+		}
 		return false
 	}
 }
