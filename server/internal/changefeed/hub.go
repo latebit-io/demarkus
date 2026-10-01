@@ -51,11 +51,15 @@ type Hub struct {
 	closed  bool
 }
 
-// Backlog is a store's durable record of events older than the ring.
+// Backlog is a store's durable record of events, shared by every replica
+// that opens the store, so this hub can lag what peers committed.
 type Backlog interface {
 	// Events returns every event with after < Seq <= through, in order, or
 	// an error when it cannot name them all.
 	Events(ctx context.Context, after, through uint64) ([]Event, error)
+	// CatchUp publishes to the hub what peer replicas committed since this
+	// replica last looked.
+	CatchUp(ctx context.Context) error
 }
 
 // New makes a hub. An empty epoch gets a random one, which is right for a
@@ -199,6 +203,9 @@ type Subscription struct {
 // ending in "/" for a subtree, else one document) at the head, or after
 // since, or ErrResync. Only a resume older than the ring does backlog I/O.
 func (h *Hub) Subscribe(ctx context.Context, scope string, since protocol.Cursor) (*Subscription, error) {
+	if err := h.catchUp(ctx, since); err != nil {
+		return nil, err
+	}
 	h.mu.Lock()
 	head, oldest := h.lastSeq, h.oldest()
 	h.mu.Unlock()
@@ -214,6 +221,24 @@ func (h *Hub) Subscribe(ctx context.Context, scope string, since protocol.Cursor
 		return nil, ErrResync
 	}
 	return h.resume(ctx, scope, since.Seq, oldest-1)
+}
+
+// catchUp asks the store once for peer commits when since is past this
+// hub's head: a resume that moved replicas is not a gap.
+func (h *Hub) catchUp(ctx context.Context, since protocol.Cursor) error {
+	if h.backlog == nil || since.IsZero() || since.Epoch != h.epoch {
+		return nil
+	}
+	h.mu.Lock()
+	behind := since.Seq > h.lastSeq
+	h.mu.Unlock()
+	if !behind {
+		return nil
+	}
+	if err := h.backlog.CatchUp(ctx); err != nil {
+		return fmt.Errorf("%w: catch up: %w", ErrResync, err)
+	}
+	return nil
 }
 
 // resume loads (after, through] from the backlog outside the lock, then

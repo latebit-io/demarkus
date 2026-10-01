@@ -300,3 +300,29 @@ func TestChangeConformance(t *testing.T) {
 		return &bucketSite{objects: initializedMemory(t)}
 	})
 }
+
+// A watcher that moves to a replica which has not polled yet resumes from
+// its cursor: the hub catches up from the bucket instead of resyncing.
+func TestResumeOnALaggingReplicaCatchesUp(t *testing.T) {
+	objects := initializedMemory(t)
+	ctx := context.Background()
+	a := openReplica(t, objects)
+	b := openReplica(t, objects)
+	for _, path := range []string{"/one.md", "/two.md"} {
+		if _, err := a.store.Publish(ctx, backend.WriteRequest{Path: path, ExpectedVersion: -1, Content: []byte("# doc\n")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := a.next(t)
+	a.next(t)
+	if b.hub.Head().Seq >= seen.Seq {
+		t.Fatalf("replica b already at %v; the test needs it behind %d", b.hub.Head(), seen.Seq)
+	}
+	moved, err := b.hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: testWorldID, Seq: seen.Seq})
+	if err != nil {
+		t.Fatalf("resume on the lagging replica: %v", err)
+	}
+	if ev, err := moved.Next(ctx); err != nil || ev.Path != "/two.md" {
+		t.Fatalf("resumed event = %+v, %v; want /two.md", ev, err)
+	}
+}

@@ -138,6 +138,12 @@ func (f *Fanout) attach(ctx context.Context, req Request) (*watcher, error) {
 		w.detach()
 		return nil, err
 	}
+	if req.Since.Seq >= w.index {
+		// Past the ring, which the hub just caught up: nothing to replay,
+		// and the reader appends what follows since.
+		w.index = req.Since.Seq + 1
+		return w, nil
+	}
 	w.backlog = sub
 	return w, nil
 }

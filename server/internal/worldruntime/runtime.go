@@ -372,9 +372,11 @@ func (r *Runtime) acquire(ctx context.Context, remote net.Addr, logger *slog.Log
 	}
 }
 
-// Exchanger answers a request in process; every routed endpoint is one.
+// Exchanger serves requests in process; every routed endpoint is one. Watch
+// writes a WATCH's blocks to stream until the watch ends, then closes it.
 type Exchanger interface {
 	Exchange(ctx context.Context, remote net.Addr, req protocol.Request) (protocol.Response, error)
+	Watch(ctx context.Context, remote net.Addr, req protocol.Request, stream quicserve.Stream)
 }
 
 type runtimeEndpoint struct {
@@ -411,6 +413,30 @@ func gateDenial(err error) error {
 
 func (endpoint *runtimeEndpoint) Exchange(ctx context.Context, remote net.Addr, req protocol.Request) (protocol.Response, error) {
 	return endpoint.runtime.exchange(ctx, remote, req, endpoint.logger)
+}
+
+// Watch serves an in-process WATCH under a stream's controls: the closing
+// gate and admission, then the fan-out's caps, as serveStream's watch branch.
+func (endpoint *runtimeEndpoint) Watch(ctx context.Context, remote net.Addr, req protocol.Request, stream quicserve.Stream) {
+	r, logger := endpoint.runtime, endpoint.logger
+	defer func() {
+		if err := stream.Close(); err != nil {
+			logger.Debug("closing watch stream", "error", err)
+		}
+	}()
+	if !r.beginStream() {
+		return
+	}
+	defer r.active.Done()
+	held, admitted := r.admit(ctx, remote, logger)
+	if !admitted {
+		if err := r.writeRateLimited(stream); err != nil {
+			logger.Warn("writing rate-limited response", "ip", ratelimit.ExtractIP(remote), "error", err)
+		}
+		return
+	}
+	held.release()
+	r.handler.WithLogger(logger).Serve(ctx, boundedWriter{stream: stream, budget: r.budget()}, req)
 }
 
 func (r *Runtime) beginStream() bool {

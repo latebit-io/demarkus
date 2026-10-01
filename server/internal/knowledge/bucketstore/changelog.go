@@ -103,6 +103,7 @@ type changeLog struct {
 	worldID string
 	workers int
 	logger  *slog.Logger
+	poll    func(context.Context) error
 
 	mu     sync.Mutex
 	limit  int
@@ -123,11 +124,15 @@ func newChangeLog(store *Store, ring int) *changeLog {
 		worldID: store.worldID,
 		workers: store.shardWorkers,
 		logger:  store.logger,
+		poll:    store.Poll,
 		limit:   max(ring/changeBlockSize, 1),
 		recent:  list.New(),
 		blocks:  make(map[int64]*list.Element),
 	}
 }
+
+// CatchUp polls the bucket head, which reports what peers committed.
+func (backlog *changeLog) CatchUp(ctx context.Context) error { return backlog.poll(ctx) }
 
 func (backlog *changeLog) cached(index int64) (changeBlock, bool) {
 	backlog.mu.Lock()

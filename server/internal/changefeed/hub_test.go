@@ -307,6 +307,18 @@ type recordBacklog struct {
 	err     error
 	during  func()
 	reads   int
+	// peer runs on CatchUp, as a poll that finds a peer's commits would.
+	peer       func()
+	catchUpErr error
+	catchUps   int
+}
+
+func (b *recordBacklog) CatchUp(context.Context) error {
+	b.catchUps++
+	if b.peer != nil {
+		b.peer()
+	}
+	return b.catchUpErr
 }
 
 func (b *recordBacklog) Events(_ context.Context, after, through uint64) ([]Event, error) {
@@ -415,6 +427,58 @@ func TestResumeBacklogFailuresResync(t *testing.T) {
 			}
 			if backlog.reads != tt.reads {
 				t.Fatalf("backlog reads = %d, want %d", backlog.reads, tt.reads)
+			}
+		})
+	}
+}
+
+// A resume past this replica's head asks the store once for what peers
+// committed before calling it a gap; anything else never asks.
+func TestResumePastTheHeadCatchesUpOnce(t *testing.T) {
+	peerCommits := func(hub *Hub) func() {
+		return func() {
+			for seq := uint64(11); seq <= 12; seq++ {
+				hub.PublishAt(Event{Seq: seq, Path: "/a/x.md", Version: int(seq), Op: protocol.OpPublish})
+			}
+		}
+	}
+	tests := []struct {
+		name     string
+		since    protocol.Cursor
+		setup    func(hub *Hub, backlog *recordBacklog)
+		resync   bool
+		catchUps int
+		next     uint64
+	}{
+		{name: "peer committed past the head", since: protocol.Cursor{Epoch: "w", Seq: 11}, catchUps: 1, next: 12, setup: func(hub *Hub, backlog *recordBacklog) {
+			backlog.peer = peerCommits(hub)
+		}},
+		{name: "still past the head after catching up", since: protocol.Cursor{Epoch: "w", Seq: 13}, resync: true, catchUps: 1, setup: func(hub *Hub, backlog *recordBacklog) {
+			backlog.peer = peerCommits(hub)
+		}},
+		{name: "catching up fails", since: protocol.Cursor{Epoch: "w", Seq: 11}, resync: true, catchUps: 1, setup: func(_ *Hub, backlog *recordBacklog) {
+			backlog.catchUpErr = errors.New("bucket unavailable")
+		}},
+		{name: "at the head", since: protocol.Cursor{Epoch: "w", Seq: 10}},
+		{name: "another epoch", since: protocol.Cursor{Epoch: "other", Seq: 20}, resync: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hub, backlog := backlogHub()
+			if tt.setup != nil {
+				tt.setup(hub, backlog)
+			}
+			sub, err := hub.Subscribe(t.Context(), "/", tt.since)
+			if tt.resync != errors.Is(err, ErrResync) || !tt.resync && err != nil {
+				t.Fatalf("Subscribe: %v, want resync %v", err, tt.resync)
+			}
+			if backlog.catchUps != tt.catchUps {
+				t.Fatalf("catch-ups = %d, want %d", backlog.catchUps, tt.catchUps)
+			}
+			if tt.next != 0 {
+				if got := next(t, sub); got.Seq != tt.next {
+					t.Fatalf("first event = %+v, want seq %d", got, tt.next)
+				}
 			}
 		})
 	}
