@@ -9,6 +9,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchdedup"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpbind"
+	"github.com/latebit-io/demarkus/server/logthrottle"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -20,10 +21,11 @@ import (
 // version each world path's full body was sent at). The unregister hook
 // drops a session on DELETE or the transport's idle sweep; the caps bound the rest.
 type sessionSeen struct {
-	mu   sync.Mutex
-	byID map[string]*sessionEntry
-	log  *slog.Logger
-	now  func() time.Time
+	mu        sync.Mutex
+	byID      map[string]*sessionEntry
+	log       *slog.Logger
+	now       func() time.Time
+	evictions *logthrottle.Throttle // new sessions at the cap warn once per window
 }
 
 // sessionEntry carries one session's dedup state plus the LRU stamp the
@@ -45,7 +47,8 @@ const (
 )
 
 func newSessionSeen(log *slog.Logger, now func() time.Time) *sessionSeen {
-	return &sessionSeen{byID: make(map[string]*sessionEntry), log: log, now: now}
+	return &sessionSeen{byID: make(map[string]*sessionEntry), log: log, now: now,
+		evictions: logthrottle.New(logthrottle.DefaultWindow)}
 }
 
 func (s *sessionSeen) lookup(sessionID, key string) (fetchdedup.Doc, bool) {
@@ -98,8 +101,10 @@ func (s *sessionSeen) evictOldestLocked() {
 		return
 	}
 	delete(s.byID, oldestID)
-	s.log.Warn("mcp fetch dedup: session cap reached; evicted least-recently-used session state (likely leaked sessions from clients that disconnected without a session DELETE)",
-		"cap", maxSeenSessions)
+	if logIt, suppressed := s.evictions.Allow(); logIt {
+		s.log.Warn("mcp fetch dedup: session cap reached; evicted least-recently-used session state",
+			"cap", maxSeenSessions, "suppressed", suppressed)
+	}
 }
 
 func (s *sessionSeen) drop(sessionID string) {

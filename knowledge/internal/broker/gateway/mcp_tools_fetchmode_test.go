@@ -255,6 +255,22 @@ func TestSessionSeenCaps(t *testing.T) {
 			t.Errorf("eviction warning logged %d times, want exactly 1\nlogs:\n%s", got, logs.String())
 		}
 	})
+	t.Run("a burst of new sessions at the cap warns once per window", func(t *testing.T) {
+		s, logs := capturedSessionSeen()
+		for i := range maxSeenSessions + 50 {
+			s.record(fmt.Sprintf("s%d", i), "w/doc.md", fetchdedup.Doc{Version: "1"})
+		}
+		s.mu.Lock()
+		n := len(s.byID)
+		s.mu.Unlock()
+		if n != maxSeenSessions {
+			t.Errorf("session count = %d, want cap %d", n, maxSeenSessions)
+		}
+		// 50 evictions, one line: the rest ride on the next window's count.
+		if got := strings.Count(logs.String(), "session cap reached"); got != 1 {
+			t.Errorf("eviction warning logged %d times, want exactly 1 for 50 evictions", got)
+		}
+	})
 }
 
 // Identity-delta wording (unchanged notice, changed note, asymmetric

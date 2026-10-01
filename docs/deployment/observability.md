@@ -45,7 +45,8 @@ Server logs cover protocol request handling, startup, and TLS/auth lifecycle. Th
 | `chain verification failed` | WARN | `path`, `error` | Hash-chain integrity check failed for a versioned document. Should not occur in normal operation. |
 | `body too large` | ERROR | `path`, `size_bytes` | Inbound write exceeded the body limit. |
 | `hash index stale` | INFO | `hash`, `path` | Content-addressed lookup found a stale index entry. Low-frequency under normal write load. |
-| `rate limited` | WARN | (none) | Request rejected by the rate limiter. |
+| `rate limited` | WARN | `ip`, `error`, `suppressed` | A request waited past its budget for the per-IP rate limiter and was refused. Logged once per minute per world: `suppressed` counts the refusals held back since the previous line. |
+| `concurrency limited` | WARN | `ip`, `error`, `suppressed` | A request found every concurrency slot busy past its budget and was refused. Logged like `rate limited`. |
 | `server started` | INFO | `addr`, `root`, `idle_timeout`, `request_timeout` | Process startup. One per restart. |
 | `auth: loaded tokens` / `auth: tokens reloaded` | INFO | `path` | Token file load on startup or SIGHUP. |
 | `tls: certificate reloaded` | INFO | `path` | TLS cert hot-reload (SIGHUP). |
@@ -75,7 +76,7 @@ Broker logs cover OIDC mint/revoke/rotate, sweeper drift+expiry handling, and ra
 | `broker: config loaded` | INFO | (config keys) | Process startup. |
 | `broker: listening` | INFO | `addr` | HTTP server bound. |
 | `broker: rate limit enabled` / `disabled` | INFO | `tokens_per_min`, `tokens_burst`, `login_per_min`, `login_burst`, `trust_xff` | One per startup; documents the active rate-limit config. |
-| `broker: rate limit exceeded` | WARN | `route`, `subject` or `ip`, `retryAfter` | A 429 response was returned. `subject` is set on `/tokens/*` routes (hashed); `ip` is set on `/auth/login`. |
+| `broker: rate limit exceeded` | WARN | `route`, `subject` or `ip`, `retryAfter`, `suppressed` | A 429 response was returned. `subject` (hashed) is set on `/mcp` and `/me/install`; `ip` on the login, device and token routes. Logged once per minute per route on each replica: the fields name the refusal that opened the window, and `suppressed` counts the 429s held back since the previous line, for any caller. |
 | `broker: mint succeeded` | INFO | `subject` (hashed), `worlds` (count) | OIDC callback minted N tokens for the user across N worlds. The base signal for mint-rate dashboards. |
 | `broker: mint failed` | ERROR | `err`, `subject` (hashed) | Hard mint failure; no tokens issued. |
 | `broker: partial mint` | WARN | `err`, `subject` (hashed), `minted` (count) | Mint succeeded for some worlds but failed on others. Operator-investigable. |
@@ -98,7 +99,7 @@ Broker logs cover OIDC mint/revoke/rotate, sweeper drift+expiry handling, and ra
 
 - Mint rate: `count where msg='broker: mint succeeded'`
 - Authorization-failure rate: `count where msg in ('broker: identity not authorized for any world', 'broker: rejected unverified identity')`
-- Rate-limit pressure: `count by route where msg='broker: rate limit exceeded'`
+- Rate-limit pressure: `sum(1 + suppressed) by route where msg='broker: rate limit exceeded'` (a line's `suppressed` counts refusals held back before it, so the newest window's count arrives with the next line)
 - Sweeper health: `where msg='broker: swept'`; should be one per `sweeper.interval` (default 5m) per leader
 - Leadership churn: `where msg in ('broker: sweeper observing new leader', 'broker: sweeper lost leadership')`
 

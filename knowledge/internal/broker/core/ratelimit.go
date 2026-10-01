@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/latebit-io/demarkus/server/logthrottle"
 	"golang.org/x/time/rate"
 )
 
@@ -80,6 +81,7 @@ func SubjectRateLimit(reg *RateLimitRegistry, log *slog.Logger, next http.Handle
 	if reg == nil {
 		return next
 	}
+	refusals := logthrottle.New(logthrottle.DefaultWindow)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := ClaimsFromCtx(r.Context())
 		if !ok {
@@ -90,8 +92,11 @@ func SubjectRateLimit(reg *RateLimitRegistry, log *slog.Logger, next http.Handle
 		key := HashSubject(claims.Subject)
 		allowed, retryAfter := reg.Reserve(key)
 		if !allowed {
-			log.WarnContext(r.Context(), "broker: rate limit exceeded",
-				"route", r.URL.Path, "subject", key, "retryAfter", retryAfter)
+			// A flood logs once per window with the held-back count, not per refusal.
+			if logIt, suppressed := refusals.Allow(); logIt {
+				log.WarnContext(r.Context(), "broker: rate limit exceeded",
+					"route", r.URL.Path, "subject", key, "retryAfter", retryAfter, "suppressed", suppressed)
+			}
 			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
