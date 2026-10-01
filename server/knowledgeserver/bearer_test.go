@@ -167,6 +167,23 @@ func TestBearerListenerAdmitsEveryRequestThroughTheGate(t *testing.T) {
 	}
 }
 
+func TestBearerListenerOpensOnce(t *testing.T) {
+	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, writeTokens(t, t.TempDir(), "alice"), true))
+	server := &Server{config: h.config, certificates: h.certs, worlds: h.manager, logger: slog.New(slog.DiscardHandler)}
+	gates := (&scriptedGates{}).gates
+	if err := server.OpenBearerListener("127.0.0.1:0", gates); err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := server.listeners[0].server.Close(); err != nil {
+			t.Errorf("close bearer listener: %v", err)
+		}
+	})
+	if err := server.OpenBearerListener("127.0.0.1:0", gates); err == nil {
+		t.Fatal("a second bearer listener opened")
+	}
+}
+
 func TestBearerListenerRefusesAConnectionWithoutAGate(t *testing.T) {
 	conn := dialBearer(t, openBearerListener(t, &scriptedGates{}), otherAuthority)
 	stream, err := send(t, conn, bearerRequest(protocol.VerbFetch, "/index.md", "writer"))

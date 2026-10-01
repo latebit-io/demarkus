@@ -54,6 +54,7 @@ type Broker struct {
 	srv  *oauthsrv.Server
 	// httpSrv is the one listener: management API and both gateways.
 	httpSrv     *http.Server
+	gateways    []*gateway.Gateway
 	tasks       *backgroundTasks
 	closeBucket func()
 	closeOnce   sync.Once
@@ -126,10 +127,12 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 	mux := http.NewServeMux()
 	srv.Register(mux)
 	knowledge := gateway.KnowledgeProfile()
-	gateway.New(gateway.DepsFor(cfg, knowledge, deps.SharedDeps, nil), opts.Version, dispatcher, knowledge).Register(mux, "")
+	gateways := []*gateway.Gateway{gateway.New(gateway.DepsFor(cfg, knowledge, deps.SharedDeps, nil), opts.Version, dispatcher, knowledge)}
+	gateways[0].Register(mux, "")
 	if cfg.Server.Memory.Enabled() {
 		memory := gateway.MemoryProfile()
-		gateway.New(gateway.DepsFor(cfg, memory, deps.SharedDeps, provisioner), opts.Version, dispatcher, memory).Register(mux, cfg.Server.Memory.Host())
+		gateways = append(gateways, gateway.New(gateway.DepsFor(cfg, memory, deps.SharedDeps, provisioner), opts.Version, dispatcher, memory))
+		gateways[1].Register(mux, cfg.Server.Memory.Host())
 	}
 	b := &Broker{
 		cfg:         cfg,
@@ -137,6 +140,7 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 		pool:        pool,
 		srv:         srv,
 		httpSrv:     newHardenedServer(cfg.Server.Addr, mux),
+		gateways:    gateways,
 		tasks:       &backgroundTasks{cfg: cfg, log: log, store: store, k8s: k8s, srv: srv, provisioner: provisioner},
 		closeBucket: closeBuckets,
 	}
@@ -187,12 +191,18 @@ func (b *Broker) Serve(ctx context.Context) error {
 	return errors.Join(runErr, shutdownErr)
 }
 
-// Close stops the listener outright, then releases the world pool and
-// the tenant bucket backend; safe after Serve and more than once.
+// Close stops the listener outright, then the gateways' session sweeps,
+// the world pool and the tenant bucket backend; safe after Serve and more
+// than once.
 func (b *Broker) Close() {
 	b.closeOnce.Do(func() {
 		if err := filterServerClosed(b.httpSrv.Close()); err != nil {
 			b.log.Warn("broker: listener close error", "addr", b.httpSrv.Addr, "err", err)
+		}
+		for _, g := range b.gateways {
+			if err := g.Shutdown(context.Background()); err != nil {
+				b.log.Warn("broker: gateway shutdown error", "err", err)
+			}
 		}
 		b.pool.Close()
 		b.closeBucket()

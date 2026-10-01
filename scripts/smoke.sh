@@ -300,15 +300,29 @@ policy() {
 
 # mcp_call <url> <tool> <json arguments>: one tools/call through the built
 # demarkus-mcp over stdio. HOME is private so the run never touches the user's
-# graph store, cache or tokens.
+# graph store, cache or tokens. Stdin stays open until the call is answered,
+# as a host keeps it: closing stdin ends the session and cancels the call.
 mcp_call() {
-  local url=$1 tool=$2 arguments=$3
+  local url=$1 tool=$2 arguments=$3 answered="$WORK/mcp.answered"
   mkdir -p "$WORK/mcphome"
-  printf '%s\n' \
-    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
-    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$tool\",\"arguments\":$arguments}}" |
-    HOME="$WORK/mcphome" client/bin/demarkus-mcp -host "$url" -token "$W" -insecure -no-cache -profile full 2>>"$WORK/mcp.log" | tail -1
+  rm -f "$answered"
+  {
+    printf '%s\n' \
+      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$tool\",\"arguments\":$arguments}}"
+    waited=0
+    while [ ! -e "$answered" ] && [ "$waited" -lt 300 ]; do
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+  } | HOME="$WORK/mcphome" client/bin/demarkus-mcp -host "$url" -token "$W" -insecure -no-cache -profile full 2>>"$WORK/mcp.log" | {
+    while IFS= read -r line; do
+      case $line in *'"id":2,'*) printf '%s\n' "$line"; break ;; esac
+    done
+    : >"$answered"
+    cat >/dev/null
+  }
 }
 
 # mcp_tools <url>: the MCP surface over real QUIC, after verbs has filled /docs.

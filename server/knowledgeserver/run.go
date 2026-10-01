@@ -55,9 +55,10 @@ type Server struct {
 	worlds       *worldManager
 	// listeners are the QUIC listeners: 6309 first, then the bearer
 	// listener once opened.
-	listeners []quicListener
-	health    *healthEndpoint
-	closeOnce sync.Once
+	listeners  []quicListener
+	bearerOpen bool
+	health     *healthEndpoint
+	closeOnce  sync.Once
 }
 
 // quicListener is one QUIC listener and the selector its connections go through.
@@ -235,7 +236,7 @@ type Gates = worldruntime.Gates
 // bearer in the auth field; each connection's gate admits every request,
 // and the handler never sees the bearer. Call before Serve, which runs it.
 func (s *Server) OpenBearerListener(address string, gates Gates) error {
-	if len(s.listeners) > 1 {
+	if s.bearerOpen {
 		return errors.New("bearer listener already open")
 	}
 	if gates == nil {
@@ -246,6 +247,7 @@ func (s *Server) OpenBearerListener(address string, gates Gates) error {
 		return fmt.Errorf("bearer listener: %w", err)
 	}
 	s.listeners = append(s.listeners, quicListener{name: "bearer listener", server: listener, selector: gatedSelector(s.worlds.Router().Selector(), gates)})
+	s.bearerOpen = true
 	s.logger.Info("bearer listener open", "addr", listener.Addr())
 	return nil
 }

@@ -210,8 +210,8 @@ func listResourceURIs(t *testing.T, s *mcpserver.MCPServer) map[string]bool {
 		t.Fatalf("result is %T, want ListResourcesResult", result.Result)
 	}
 	got := make(map[string]bool, len(list.Resources))
-	for _, r := range list.Resources {
-		got[r.URI] = true
+	for i := range list.Resources {
+		got[list.Resources[i].URI] = true
 	}
 	return got
 }

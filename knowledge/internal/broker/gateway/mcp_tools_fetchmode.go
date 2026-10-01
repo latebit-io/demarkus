@@ -16,16 +16,9 @@ import (
 // mark_fetch's body is shared (client/marktools). What is the gateway's own is
 // the dedup scope: one MCP session, since a pod serves many agents.
 
-// sessionSeen is the per-session fetch dedup state: MCP session ID →
-// (world+path → identity of the version whose full body that session
-// already received). The OnUnregisterSession hook drops a session's
-// state, but mcp-go's Streamable HTTP transport only unregisters on an
-// explicit session DELETE — a client that just drops the connection
-// leaks its entry (mark3labs/mcp-go#723). The caps below therefore WILL
-// be reached on a long-lived pod: the session cap evicts the
-// least-recently-used session (benign — dedup is best-effort, the cost
-// is one extra full read for an evicted-but-live session) and logs so
-// the degradation is observable.
+// sessionSeen is the per-session fetch dedup state (session ID to the
+// version each world path's full body was sent at). The unregister hook
+// drops a session on DELETE or the transport's idle sweep; the caps bound the rest.
 type sessionSeen struct {
 	mu   sync.Mutex
 	byID map[string]*sessionEntry

@@ -79,6 +79,7 @@ func (b *BearerGate) admit(ctx context.Context, worldName, bearer string) (proto
 	grant, err := WriteGrant(&w, &claims)
 	if err != nil {
 		// Knowledge reads pass the org gate alone; outside allow, no paths.
+		b.log.DebugContext(ctx, "broker: bearer reads only", "world", w.Name, "subject", HashSubject(claims.Subject), "err", err)
 		grant = protocol.Grant{Label: claims.Email, Expires: claims.Expiry}
 	}
 	return grant, nil

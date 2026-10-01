@@ -27,6 +27,7 @@ var fixedTestTime = time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
 // gatewayFixture is one SharedDeps wired the way Run wires the gateway, with
 // a fake Secret store and a clock that starts at fixedTestTime.
 type gatewayFixture struct {
+	t           testing.TB
 	cfg         *core.Config
 	shared      core.SharedDeps
 	store       core.SecretStore
@@ -48,7 +49,7 @@ func gatewayFixtureFor(t testing.TB, cfg *core.Config, shared core.SharedDeps, p
 	clock := brokertest.NewFakeClock(fixedTestTime)
 	shared.Log, shared.Clock = slog.Default(), clock.Now
 	shared.SubjectLimiter, _ = core.NewRateLimits(&cfg.RateLimit)
-	return &gatewayFixture{cfg: cfg, shared: shared, store: store, clock: clock, profile: profile}
+	return &gatewayFixture{t: t, cfg: cfg, shared: shared, store: store, clock: clock, profile: profile}
 }
 
 // enableProvisioning wires dynamic tenant provisioning over the fixture's
@@ -58,9 +59,16 @@ func (f *gatewayFixture) enableProvisioning(buckets storage.BucketCreator) *stor
 	return f.provisioner
 }
 
-// gateway builds the gateway around d, for tests that call handlers directly.
+// gateway builds the gateway around d, for tests that call handlers
+// directly; the test's end stops its session sweep.
 func (f *gatewayFixture) gateway(d WorldDispatcher) *Gateway {
-	return New(DepsFor(f.cfg, f.profile, f.shared, f.provisioner), "test", d, f.profile)
+	g := New(DepsFor(f.cfg, f.profile, f.shared, f.provisioner), "test", d, f.profile)
+	f.t.Cleanup(func() {
+		if err := g.Shutdown(context.Background()); err != nil {
+			f.t.Errorf("gateway shutdown: %v", err)
+		}
+	})
+	return g
 }
 
 // serve hosts the gateway's routes, for tests that drive the HTTP transport.

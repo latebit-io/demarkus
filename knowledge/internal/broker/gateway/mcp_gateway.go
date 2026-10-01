@@ -227,8 +227,27 @@ func New(deps *Deps, version string, dispatcher WorldDispatcher, profile *Profil
 	g.registerTools()
 	g.registerResources()
 	g.registerPrompts()
-	g.transport = mcpserver.NewStreamableHTTPServer(g.mcpServer)
+	g.transport = g.newTransport(sessionIdleTTL)
 	return g
+}
+
+// sessionIdleTTL frees a session its client left without a DELETE, which
+// Claude Code never sends; a later call on the swept ID is still served. No
+// heartbeat: each ping's reply would spend the caller's subject rate limit.
+const sessionIdleTTL = 30 * time.Minute
+
+// newTransport is the Streamable HTTP transport with the session sweep and
+// its log lines on the gateway logger.
+func (g *Gateway) newTransport(idleTTL time.Duration) *mcpserver.StreamableHTTPServer {
+	return mcpserver.NewStreamableHTTPServer(g.mcpServer,
+		mcpserver.WithSessionIdleTTL(idleTTL),
+		mcpserver.WithStreamableHTTPLogger(g.deps.Log))
+}
+
+// Shutdown stops the session sweep and closes the open sessions; the HTTP
+// listener that mounted the gateway is the caller's.
+func (g *Gateway) Shutdown(ctx context.Context) error {
+	return g.transport.Shutdown(ctx)
 }
 
 // registerTools wires the profile's definitions to their handlers. Missing
