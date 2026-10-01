@@ -28,7 +28,12 @@ func TestLoadConfigFederation(t *testing.T) {
 		},
 		{name: "unknown hub", body: local + "federation:\n  hub: nope\n", wantErr: `federation.hub "nope" must name a local knowledge world`},
 		{name: "remote hub", body: validConfig + "federation:\n  hub: team-a\n", wantErr: `federation.hub "team-a" must name a local knowledge world`},
-		{name: "negative interval", body: local + "federation:\n  hub: team-a\n  interval: -1s\n", wantErr: "must be > 0"},
+		{name: "negative interval", body: local + "federation:\n  hub: team-a\n  interval: -1s\n", wantErr: "must not be negative"},
+		{
+			name: "zero takes the default",
+			body: local + "federation:\n  hub: team-a\n  quietPeriod: 0s\n",
+			want: FederationConfig{Hub: "team-a", LeaseName: "demarkus-federation", QuietPeriod: 30 * time.Second, Interval: time.Minute},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

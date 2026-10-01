@@ -139,7 +139,7 @@ func (c *Config) validateFederation() error {
 	f.QuietPeriod = cmp.Or(f.QuietPeriod, 30*time.Second)
 	f.Interval = cmp.Or(f.Interval, time.Minute)
 	if f.QuietPeriod < 0 || f.Interval < 0 {
-		return fmt.Errorf("federation.quietPeriod and federation.interval must be > 0 (got %s, %s)", f.QuietPeriod, f.Interval)
+		return fmt.Errorf("federation.quietPeriod and federation.interval must not be negative (got %s, %s); zero takes the default", f.QuietPeriod, f.Interval)
 	}
 	return nil
 }

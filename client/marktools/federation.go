@@ -32,6 +32,9 @@ func (t *Tools) ResolveHash(ctx context.Context, args ResolveArgs) Result {
 			return failure("index is required")
 		}
 		servers := t.hooks.HashSources(ctx)
+		if len(servers) == 0 {
+			return failure("hash %s: no server to ask", hash)
+		}
 		if res, absent := t.firstHolder(ctx, hash, servers); !absent {
 			return res
 		}

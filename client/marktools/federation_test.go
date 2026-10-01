@@ -85,6 +85,11 @@ func TestResolveWithoutAnIndexAsksTheHashSources(t *testing.T) {
 		t.Errorf("asked = %+v, want empty then good", calls)
 	}
 
+	hooks.HashSources = func(context.Context) []string { return nil }
+	if got := newTools(t, backend, hooks).ResolveHash(t.Context(), marktools.ResolveArgs{Hash: resolveHash}); got.Text != "hash "+resolveHash+": no server to ask" {
+		t.Errorf("no sources = %+v", got)
+	}
+
 	// Absent only when every server said not-found; a failure is inconclusive.
 	hooks.HashSources = func(context.Context) []string { return []string{"mark://empty"} }
 	if got := newTools(t, backend, hooks).ResolveHash(t.Context(), marktools.ResolveArgs{Hash: resolveHash}); got.Text != "hash "+resolveHash+" is held by none of the 1 servers asked" {
