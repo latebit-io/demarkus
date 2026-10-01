@@ -27,6 +27,7 @@ type Config struct {
 	WorldDialer  WorldDialerConfig  `yaml:"worldDialer"`
 	Provisioning ProvisioningConfig `yaml:"provisioning"`
 	AgentTokens  []AgentTokenConfig `yaml:"agentTokens"`
+	Federation   FederationConfig   `yaml:"federation"`
 
 	// registry is the live world set, built from Worlds on first use.
 	registryOnce sync.Once
@@ -328,6 +329,34 @@ type SweeperConfig struct {
 	Interval time.Duration `yaml:"interval"`
 	// LeaseName is the Lease replicas race for, in Server.BrokerNamespace.
 	LeaseName string `yaml:"leaseName"`
+}
+
+// FederationConfig has one replica derive the federation graph of the
+// knowledge worlds served in process from their change feeds, checkpointed
+// into Hub. A blank Hub derives nothing.
+type FederationConfig struct {
+	// Hub names the local knowledge world the checkpoints are written to.
+	Hub string `yaml:"hub"`
+	// LeaseName is the Lease replicas race for. Default demarkus-federation.
+	LeaseName string `yaml:"leaseName"`
+	// QuietPeriod is how long a changed world rests before its checkpoint.
+	// Default 30s.
+	QuietPeriod time.Duration `yaml:"quietPeriod"`
+	// Interval is the least time between two checkpoints of one world.
+	// Default 1m.
+	Interval time.Duration `yaml:"interval"`
+}
+
+// FederatedWorlds names the static knowledge worlds served in process: the
+// worlds the federation graph is derived from, one of them its hub.
+func (c *Config) FederatedWorlds() []string {
+	var names []string
+	for i := range c.Worlds {
+		if w := &c.Worlds[i]; w.Local && w.Profile == ProfileKnowledge {
+			names = append(names, w.Name)
+		}
+	}
+	return names
 }
 
 // RateLimitConfig caps per subject and per IP rates. Per replica only: a

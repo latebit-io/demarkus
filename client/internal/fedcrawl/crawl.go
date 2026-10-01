@@ -5,16 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
-
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/index"
@@ -318,19 +316,14 @@ func (s *serverWalk) visit(ctx context.Context, fullPath string) error {
 	}
 
 	// Generated graph exports are data, not authored discovery links.
-	if !isGeneratedGraphPath(fullPath) {
-		edges := c.recordEdges(s.host, fullPath, doc.Response.Body, doc.Response.Metadata)
+	if !graphstore.IsGeneratedGraphPath(fullPath) {
+		edges := c.recordEdges(s.host, fullPath, &doc.Response)
 		c.discoverServers(edges, s.host, s.run.queue, s.run.wg, s.run.recordIncomplete)
 	}
 
 	s.run.docCount.Add(1)
 	s.count++
 	return nil
-}
-
-func isGeneratedGraphPath(docPath string) bool {
-	shardPrefix := graphstore.SnapshotShardRoot(graphstore.SnapshotManifestPath) + "/"
-	return docPath == graphstore.LegacyExportPath || docPath == graphstore.SnapshotManifestPath || strings.HasPrefix(docPath, shardPrefix)
 }
 
 // pause waits out the politeness delay, or stops early when ctx ends: the
@@ -349,23 +342,12 @@ func (c *Crawler) pause(ctx context.Context) error {
 	}
 }
 
-// discoverServers queues foreign mark:// targets retained by graph policy.
-func (c *Crawler) discoverServers(edges []graph.Edge, currentHost string, queue chan<- string, wg *sync.WaitGroup, recordIncomplete func(string, ...any)) {
+// discoverServers queues foreign targets retained by graph policy, which
+// already dropped loopback hosts and everything but mark://.
+func (c *Crawler) discoverServers(edges []graphstore.WorldEdge, currentHost string, queue chan<- string, wg *sync.WaitGroup, recordIncomplete func(string, ...any)) {
 	for _, edge := range edges {
-		if !strings.HasPrefix(edge.To, "mark://") {
-			continue
-		}
-
-		// Parse to extract host.
 		host, err := links.DialHost(edge.To)
 		if err != nil {
-			continue
-		}
-
-		// Don't crawl loopback/localhost — a dev link in a crawled body points
-		// at the crawler's own host, never a real federated world (unreachable
-		// noise + error spam).
-		if isLoopbackHost(host) {
 			continue
 		}
 
@@ -527,31 +509,16 @@ func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perSe
 }
 
 // Federation keeps mark:// topology only; source revisions survive hub export.
-func (c *Crawler) recordEdges(host, docPath, body string, meta map[string]string) []graph.Edge {
+func (c *Crawler) recordEdges(host, docPath string, resp *protocol.Response) []graphstore.WorldEdge {
 	url := links.NodeURL(host, docPath)
-	extracted := graph.ExtractDocumentEdges(url, body, meta)
-	for _, rejected := range extracted.RejectedRels {
-		slog.Warn("relation metadata skipped", "doc", url, "key", rejected.Key, "value", rejected.Value, "reason", rejected.Reason)
+	source, rejected := graphstore.DeriveSource(host, docPath, resp)
+	for _, rel := range rejected {
+		slog.Warn("relation metadata skipped", "doc", url, "key", rel.Key, "value", rel.Value, "reason", rel.Reason)
 	}
-	edges := make([]graph.Edge, 0, len(extracted.Edges))
-	var linkCount int
-	for _, edge := range extracted.Edges {
-		target, ok := c.normalizeTarget(edge.To)
-		if !ok {
-			continue
-		}
-		edge.To = target
-		c.graph.AddEdgeInfo(edge)
-		edges = append(edges, edge)
-		if edge.Rel == "" {
-			linkCount++
-		}
+	for _, edge := range source.Edges {
+		c.graph.AddEdgeInfo(graph.Edge{From: url, To: edge.To, Rel: edge.Rel, Label: edge.Label, Anchor: edge.Anchor, Count: edge.Count})
 	}
-	title := meta["title"]
-	if title == "" {
-		title = links.ExtractTitle(body)
-	}
-	observation := graph.Observe(url, meta)
+	observation := graph.Observe(url, resp.Metadata)
 	observation.View = graph.ViewFederation
 	observation.Complete = true
 	if c.state != nil {
@@ -560,52 +527,8 @@ func (c *Crawler) recordEdges(host, docPath, body string, meta map[string]string
 			observation.Problem = "revision-regression"
 		}
 	}
-	c.graph.AddNode(&graph.Node{URL: url, Title: title, Status: "ok", LinkCount: linkCount, Observation: observation})
-	return edges
-}
-
-// normalizeTarget keeps only mark:// targets with a port-stable host
-// (mark://h and mark://h:6309 are the same node, not two) and drops
-// loopback/localhost so a dev link in a crawled body never becomes a phantom
-// portal node on the reading-room floor. Private and cluster-internal hosts
-// are KEPT; real federated worlds (LAN, or a Kubernetes universe) are
-// addressed by exactly those.
-func (c *Crawler) normalizeTarget(resolved string) (string, bool) {
-	if !strings.HasPrefix(resolved, "mark://") {
-		return "", false
-	}
-	target, err := links.ParseMark(resolved)
-	if err != nil || isLoopbackHost(target.DialHost()) {
-		return "", false
-	}
-	return target.NodeURL(), true
-}
-
-// isLoopbackHost reports whether a mark:// host (host:port or bare) is loopback,
-// "localhost", or the unspecified address — dev artifacts that must not enter
-// the durable federation graph or the crawl frontier. Private and
-// cluster-internal hosts are deliberately NOT included: real federated worlds (a
-// LAN deployment, or a Kubernetes universe addressing worlds by in-cluster
-// service names) are reached by exactly those.
-func isLoopbackHost(host string) bool {
-	h := strings.ToLower(strings.TrimSpace(host))
-	// Strip the port. SplitHostPort handles host:port and [ipv6]:port; an
-	// unbracketed IPv6 with a port (::1:6309) defeats it (the colons are
-	// ambiguous), so fall back to trimming a trailing :port only when the head
-	// is itself a valid IP.
-	if hh, _, err := net.SplitHostPort(h); err == nil {
-		h = hh
-	} else if i := strings.LastIndex(h, ":"); i > 0 && net.ParseIP(h[:i]) != nil {
-		h = h[:i]
-	}
-	h = strings.Trim(h, "[]")
-	if h == "" || h == "localhost" || strings.HasSuffix(h, ".localhost") {
-		return true
-	}
-	if ip := net.ParseIP(h); ip != nil {
-		return ip.IsLoopback() || ip.IsUnspecified()
-	}
-	return false
+	c.graph.AddNode(&graph.Node{URL: url, Title: source.Title, Status: "ok", LinkCount: source.LinkCount(), Observation: observation})
+	return source.Edges
 }
 
 // GraphExport renders the accumulated link graph as a mark_graph_export
@@ -729,15 +652,11 @@ func (c *Crawler) publishShardedIndex(ctx context.Context, client PublishClient,
 }
 
 func (c *Crawler) generatedArtifactMeta(retain bool) map[string]string {
-	meta := map[string]string{
-		"agent": "demarkus-agent",
-		"tags":  "category:federation",
-		"type":  "Reference",
+	retention := 0
+	if retain {
+		retention = c.cfg.Publish.Retention
 	}
-	if retain && c.cfg.Publish.Retention > 0 {
-		meta["retention"] = strconv.Itoa(c.cfg.Publish.Retention)
-	}
-	return meta
+	return generation.ArtifactMetadata("demarkus-agent", retention)
 }
 
 // publishIndex publishes a generated whole document, currently /graph.md.

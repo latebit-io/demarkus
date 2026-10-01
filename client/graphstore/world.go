@@ -6,12 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/links"
@@ -21,7 +18,7 @@ import (
 
 // A world checkpoint is a manifest plus shards that partition the world's
 // sources by a prefix of sha256(path), so one changed document rewrites one
-// shard. Bodies are deterministic and carry no wall-clock field.
+// shard. Bodies are deterministic: readers verify by rebuilding them.
 const (
 	// WorldGraphRoot holds one directory of checkpoint documents per world.
 	WorldGraphRoot = "/graph/worlds"
@@ -35,34 +32,46 @@ const (
 	worldShardTitle      = "# Graph World Shard"
 )
 
+// ErrWorldShardTooLarge is a shard over the body limit: its world needs a
+// longer prefix.
+var ErrWorldShardTooLarge = errors.New("world shard over the body limit")
+
+// ErrWorldUnavailable is a checkpoint the hub could not serve for now: a
+// failed fetch, or a status other than ok or not-found. Any other load
+// failure means the checkpoint is invalid.
+var ErrWorldUnavailable = errors.New("world checkpoint unavailable")
+
 var worldManifestHeader = []string{"Prefix", "Path", "Version", "Content Hash", "Sources", "Edges", "Bytes"}
 
-// worldNameRE is the broker's world name rule, a DNS label.
-var worldNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-
-// WorldSource is one document of a world as derived at Version: its node and
-// the edges it links out with. Links counts body links, the node's LinkCount.
+// WorldSource is one document of a world as derived at Version, with the
+// edges it links out with. Its node's LinkCount is the sum of Count over its
+// edges without Rel.
 type WorldSource struct {
-	Path    string
-	Version int
-	Etag    string
-	Title   string
-	Links   int
-	Edges   []WorldEdge
+	Path    string      `json:"path"`
+	Version int         `json:"version"`
+	Etag    string      `json:"etag,omitempty"`
+	Title   string      `json:"title,omitempty"`
+	Edges   []WorldEdge `json:"edges,omitempty"`
 }
 
 // WorldEdge is one outgoing edge of a source, which is its origin.
 type WorldEdge struct {
-	To, Rel, Label, Anchor string
-	Count                  int
+	To     string `json:"to"`
+	Rel    string `json:"rel,omitempty"`
+	Label  string `json:"label,omitempty"`
+	Anchor string `json:"anchor,omitempty"`
+	Count  int    `json:"count"`
 }
 
-// WorldManifest names one world's checkpoint: every shard pinned at its
-// version, and the change-feed cursor the shards are complete through.
+type worldShardJSON struct {
+	Sources []WorldSource `json:"sources"`
+}
+
+// WorldManifest names one world's checkpoint: every non-empty shard pinned at
+// its version, and the change-feed cursor the shards are complete through.
 type WorldManifest struct {
 	World        string
 	Cursor       protocol.Cursor
-	Derived      time.Time
 	Complete     bool
 	PrefixLength int
 	Sources      int
@@ -81,15 +90,21 @@ type WorldShardRef struct {
 	Bytes       int
 }
 
-// WorldShard is a built shard before its published version is known.
+func (ref *WorldShardRef) pin() generation.Pin {
+	return generation.Pin{Path: ref.Path, Version: ref.Version, ContentHash: ref.ContentHash, Bytes: ref.Bytes}
+}
+
+// WorldShard is a built shard: its ref before the version is known, and body.
 type WorldShard struct {
-	Prefix, Path, Body, ContentHash string
-	Sources, Edges                  int
+	WorldShardRef
+	Body string
 }
 
 // Ref pins the shard at its published version.
 func (s *WorldShard) Ref(version int) WorldShardRef {
-	return WorldShardRef{Prefix: s.Prefix, Path: s.Path, Version: version, ContentHash: s.ContentHash, Sources: s.Sources, Edges: s.Edges, Bytes: len(s.Body)}
+	ref := s.WorldShardRef
+	ref.Version = version
+	return ref
 }
 
 // WorldManifestPath is where world's manifest is published in the hub.
@@ -106,81 +121,95 @@ func SourcePrefix(path string, length int) string {
 	return hex.EncodeToString(sum[:2])[:length]
 }
 
-type worldEdgeJSON struct {
-	To     string `json:"to"`
-	Rel    string `json:"rel,omitempty"`
-	Label  string `json:"label,omitempty"`
-	Anchor string `json:"anchor,omitempty"`
-	Count  int    `json:"count"`
-}
-
-type worldSourceJSON struct {
-	Path    string          `json:"path"`
-	Version int             `json:"version"`
-	Etag    string          `json:"etag,omitempty"`
-	Title   string          `json:"title,omitempty"`
-	Links   int             `json:"links"`
-	Edges   []worldEdgeJSON `json:"edges,omitempty"`
-}
-
-type worldShardJSON struct {
-	Sources []worldSourceJSON `json:"sources"`
-}
-
 // BuildWorldShard renders the shard of world's sources under prefix, sorted
-// so equal sources always render equal bytes.
+// and canonicalized so equal sources always render equal bytes.
 func BuildWorldShard(world, prefix string, sources []WorldSource) (WorldShard, error) {
-	if err := validateWorldName(world); err != nil {
-		return WorldShard{}, err
+	if !protocol.IsWorldName(world) {
+		return WorldShard{}, fmt.Errorf("invalid world name %q", world)
 	}
 	if err := validateWorldPrefix(prefix, len(prefix)); err != nil {
 		return WorldShard{}, err
 	}
-	payload := worldShardJSON{Sources: make([]worldSourceJSON, len(sources))}
-	edges := 0
-	for i := range sources {
-		src := &sources[i]
-		row := worldSourceJSON{Path: src.Path, Version: src.Version, Etag: src.Etag, Title: src.Title, Links: src.Links, Edges: make([]worldEdgeJSON, len(src.Edges))}
-		for j, edge := range src.Edges {
-			row.Edges[j] = worldEdgeJSON{To: links.CanonicalURL(edge.To), Rel: edge.Rel, Label: edge.Label, Anchor: edge.Anchor, Count: max(edge.Count, 1)}
+	rows := append(make([]WorldSource, 0, len(sources)), sources...) // [] when empty, never null
+	for i := range rows {
+		edges := slices.Clone(rows[i].Edges)
+		for j := range edges {
+			target, err := links.ParseMark(edges[j].To)
+			if err != nil {
+				return WorldShard{}, fmt.Errorf("source %q: edge target %q: %w", rows[i].Path, edges[j].To, err)
+			}
+			edges[j].To, edges[j].Count = target.NodeURL(), max(edges[j].Count, 1)
 		}
-		slices.SortFunc(row.Edges, compareWorldEdges)
-		payload.Sources[i] = row
-		edges += len(row.Edges)
+		slices.SortFunc(edges, compareWorldEdges)
+		rows[i].Edges = edges
 	}
-	slices.SortFunc(payload.Sources, func(a, b worldSourceJSON) int { return strings.Compare(a.Path, b.Path) })
-	if err := validateWorldSources(prefix, payload.Sources); err != nil {
+	slices.SortFunc(rows, func(a, b WorldSource) int { return strings.Compare(a.Path, b.Path) })
+	edges, err := validateWorldSources(prefix, rows)
+	if err != nil {
 		return WorldShard{}, err
 	}
-	encoded, err := json.Marshal(payload)
+	encoded, err := json.Marshal(worldShardJSON{Sources: rows})
 	if err != nil {
 		return WorldShard{}, fmt.Errorf("encode world shard %s/%s: %w", world, prefix, err)
 	}
-	body := fmt.Sprintf("%s\n\n> Format: %s\n> World: %s\n> Prefix: %s\n> Sources: %d\n> Edges: %d\n%s%s%s",
-		worldShardTitle, WorldShardFormat, world, prefix, len(payload.Sources), edges, snapshotJSONFence, encoded, snapshotJSONFenceEnd)
+	var b strings.Builder
+	b.Grow(len(encoded) + 256)
+	fmt.Fprintf(&b, "%s\n\n> Format: %s\n> World: %s\n> Prefix: %s\n> Sources: %d\n> Edges: %d\n",
+		worldShardTitle, WorldShardFormat, world, prefix, len(rows), edges)
+	b.WriteString(snapshotJSONFence)
+	b.Write(encoded)
+	b.WriteString(snapshotJSONFenceEnd)
+	body := b.String()
 	if len(body) > protocol.MaxBodyLength {
-		return WorldShard{}, fmt.Errorf("world shard %s/%s is %d bytes, over the body limit: lengthen the prefix", world, prefix, len(body))
+		return WorldShard{}, fmt.Errorf("world shard %s/%s is %d bytes: %w", world, prefix, len(body), ErrWorldShardTooLarge)
 	}
-	return WorldShard{Prefix: prefix, Path: WorldShardPath(world, prefix), Body: body, ContentHash: generation.BodyHash(body), Sources: len(payload.Sources), Edges: edges}, nil
+	ref := WorldShardRef{Prefix: prefix, Path: WorldShardPath(world, prefix), ContentHash: generation.BodyHash(body), Sources: len(rows), Edges: edges, Bytes: len(body)}
+	return WorldShard{WorldShardRef: ref, Body: body}, nil
 }
 
-// BuildWorldManifest renders m with its shards in prefix order.
+// VerifyWorldShard checks a fetched shard against its pin and returns its
+// sources. Only the bytes BuildWorldShard renders for them are accepted.
+func VerifyWorldShard(world string, ref WorldShardRef, resp protocol.Response) ([]WorldSource, error) { //nolint:gocritic // a pin is passed once per shard
+	if err := validateWorldPrefix(ref.Prefix, len(ref.Prefix)); err != nil {
+		return nil, fmt.Errorf("world shard %s: %w", ref.Path, err)
+	}
+	if err := generation.VerifyPinned(ref.pin(), resp); err != nil {
+		return nil, fmt.Errorf("world shard: %w", err)
+	}
+	_, payloadText, err := parseSnapshotDocument(resp.Body, worldShardTitle)
+	if err != nil {
+		return nil, fmt.Errorf("world shard %s: %w", ref.Path, err)
+	}
+	var payload worldShardJSON
+	if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
+		return nil, fmt.Errorf("world shard %s payload: %w", ref.Path, err)
+	}
+	rebuilt, err := BuildWorldShard(world, ref.Prefix, payload.Sources)
+	if err != nil {
+		return nil, fmt.Errorf("world shard %s: %w", ref.Path, err)
+	}
+	if rebuilt.Body != resp.Body || rebuilt.Path != ref.Path || rebuilt.Sources != ref.Sources || rebuilt.Edges != ref.Edges {
+		return nil, fmt.Errorf("world shard %s is not the shard its sources build", ref.Path)
+	}
+	return payload.Sources, nil
+}
+
+// BuildWorldManifest renders m with its shards in prefix order and its
+// totals summed from them.
 func BuildWorldManifest(m WorldManifest) (string, error) { //nolint:gocritic // local copy is sorted without mutating the caller
 	m.Shards = slices.Clone(m.Shards)
 	slices.SortFunc(m.Shards, func(a, b WorldShardRef) int { return strings.Compare(a.Prefix, b.Prefix) })
+	m.Sources, m.Edges = 0, 0
+	for i := range m.Shards {
+		m.Sources += m.Shards[i].Sources
+		m.Edges += m.Shards[i].Edges
+	}
 	if err := validateWorldManifest(&m); err != nil {
 		return "", err
 	}
 	var b strings.Builder
-	b.WriteString(worldManifestTitle + "\n\n")
-	fmt.Fprintf(&b, "> Format: %s\n", WorldManifestFormat)
-	fmt.Fprintf(&b, "> World: %s\n", m.World)
-	fmt.Fprintf(&b, "> Cursor: %s\n", m.Cursor)
-	fmt.Fprintf(&b, "> Derived: %s\n", m.Derived.UTC().Format(time.RFC3339))
-	fmt.Fprintf(&b, "> Complete: %t\n", m.Complete)
-	fmt.Fprintf(&b, "> Prefix-Length: %d\n", m.PrefixLength)
-	fmt.Fprintf(&b, "> Sources: %d\n", m.Sources)
-	fmt.Fprintf(&b, "> Edges: %d\n\n", m.Edges)
+	fmt.Fprintf(&b, "%s\n\n> Format: %s\n> World: %s\n> Cursor: %s\n> Complete: %t\n> Prefix-Length: %d\n> Sources: %d\n> Edges: %d\n\n",
+		worldManifestTitle, WorldManifestFormat, m.World, m.Cursor, m.Complete, m.PrefixLength, m.Sources, m.Edges)
 	b.WriteString("| " + strings.Join(worldManifestHeader, " | ") + " |\n")
 	b.WriteString("|--------|------|---------|--------------|---------|-------|-------|\n")
 	for _, ref := range m.Shards {
@@ -192,7 +221,8 @@ func BuildWorldManifest(m WorldManifest) (string, error) { //nolint:gocritic // 
 	return b.String(), nil
 }
 
-// ParseWorldManifest strictly parses world's manifest.
+// ParseWorldManifest parses world's manifest. Only the bytes
+// BuildWorldManifest renders for what it names are accepted.
 func ParseWorldManifest(world, body string) (WorldManifest, error) {
 	if len(body) > protocol.MaxBodyLength {
 		return WorldManifest{}, fmt.Errorf("world manifest exceeds the body limit: %d", len(body))
@@ -201,50 +231,48 @@ func ParseWorldManifest(world, body string) (WorldManifest, error) {
 	if err != nil {
 		return WorldManifest{}, fmt.Errorf("world manifest %s: %w", world, err)
 	}
-	if err := validateSnapshotMetadataKeys(meta, "Format", "World", "Cursor", "Derived", "Complete", "Prefix-Length", "Sources", "Edges"); err != nil {
-		return WorldManifest{}, fmt.Errorf("world manifest %s: %w", world, err)
-	}
-	if meta["Format"] != WorldManifestFormat || meta["World"] != world {
-		return WorldManifest{}, fmt.Errorf("world manifest %s: format %q of world %q", world, meta["Format"], meta["World"])
-	}
 	m := WorldManifest{World: world}
-	var cursorErr, derivedErr, completeErr, lengthErr, sourcesErr, edgesErr error
+	var cursorErr, completeErr, lengthErr, sourcesErr, edgesErr error
 	m.Cursor, cursorErr = protocol.ParseCursor(meta["Cursor"])
-	m.Derived, derivedErr = time.Parse(time.RFC3339, meta["Derived"])
+	m.Cursor.Epoch = strings.Clone(m.Cursor.Epoch) // not a window on body
 	m.Complete, completeErr = strconv.ParseBool(meta["Complete"])
 	m.PrefixLength, lengthErr = snapshotPositive("Prefix-Length", meta["Prefix-Length"])
 	m.Sources, sourcesErr = snapshotNonNegative("Sources", meta["Sources"])
 	m.Edges, edgesErr = snapshotNonNegative("Edges", meta["Edges"])
 	rows, tableErr := parseSnapshotTable(table, worldManifestHeader)
-	if err := errors.Join(cursorErr, derivedErr, completeErr, lengthErr, sourcesErr, edgesErr, tableErr); err != nil {
+	if err := errors.Join(cursorErr, completeErr, lengthErr, sourcesErr, edgesErr, tableErr); err != nil {
 		return WorldManifest{}, fmt.Errorf("world manifest %s: %w", world, err)
 	}
+	m.Shards = make([]WorldShardRef, 0, len(rows))
 	for _, row := range rows {
-		ref, err := parseWorldShardRow(row)
-		if err != nil {
+		ref := WorldShardRef{Prefix: strings.Clone(row[0]), ContentHash: strings.Clone(row[3])}
+		ref.Path = WorldShardPath(world, ref.Prefix)
+		var versionErr, sourcesErr, edgesErr, bytesErr error
+		ref.Version, versionErr = snapshotPositive("Version", row[2])
+		ref.Sources, sourcesErr = snapshotNonNegative("Sources", row[4])
+		ref.Edges, edgesErr = snapshotNonNegative("Edges", row[5])
+		ref.Bytes, bytesErr = snapshotPositive("Bytes", row[6])
+		if err := errors.Join(versionErr, sourcesErr, edgesErr, bytesErr); err != nil {
 			return WorldManifest{}, fmt.Errorf("world manifest %s: %w", world, err)
 		}
 		m.Shards = append(m.Shards, ref)
 	}
-	if err := validateWorldManifest(&m); err != nil {
+	rebuilt, err := BuildWorldManifest(m)
+	if err != nil {
 		return WorldManifest{}, err
 	}
+	if rebuilt != body {
+		return WorldManifest{}, fmt.Errorf("world manifest %s is not the manifest its pins build", world)
+	}
 	return m, nil
-}
-
-func parseWorldShardRow(row []string) (WorldShardRef, error) {
-	ref := WorldShardRef{Prefix: row[0], Path: row[1], ContentHash: row[3]}
-	var versionErr, sourcesErr, edgesErr, bytesErr error
-	ref.Version, versionErr = snapshotPositive("Version", row[2])
-	ref.Sources, sourcesErr = snapshotNonNegative("Sources", row[4])
-	ref.Edges, edgesErr = snapshotNonNegative("Edges", row[5])
-	ref.Bytes, bytesErr = snapshotPositive("Bytes", row[6])
-	return ref, errors.Join(versionErr, sourcesErr, edgesErr, bytesErr)
 }
 
 // LoadWorld verifies world's manifest and every shard it pins, fetched at
 // its pinned version. An incomplete checkpoint loads too; callers decide.
 func LoadWorld(world string, manifest protocol.Response, fetchShard func(path string) (protocol.Response, error)) (WorldManifest, []WorldSource, error) {
+	if unavailable(manifest) {
+		return WorldManifest{}, nil, fmt.Errorf("%w: world manifest %s returned %s", ErrWorldUnavailable, world, manifest.Status)
+	}
 	if manifest.Status != protocol.StatusOK {
 		return WorldManifest{}, nil, fmt.Errorf("world manifest %s returned %s", world, manifest.Status)
 	}
@@ -259,7 +287,10 @@ func LoadWorld(world string, manifest protocol.Response, fetchShard func(path st
 	for _, ref := range m.Shards {
 		resp, err := fetchShard(protocol.VersionPath(ref.Path, ref.Version))
 		if err != nil {
-			return WorldManifest{}, nil, fmt.Errorf("fetch world shard %s: %w", ref.Path, err)
+			return WorldManifest{}, nil, fmt.Errorf("%w: fetch world shard %s: %w", ErrWorldUnavailable, ref.Path, err)
+		}
+		if unavailable(resp) {
+			return WorldManifest{}, nil, fmt.Errorf("%w: world shard %s returned %s", ErrWorldUnavailable, ref.Path, resp.Status)
 		}
 		shard, err := VerifyWorldShard(world, ref, resp)
 		if err != nil {
@@ -270,108 +301,41 @@ func LoadWorld(world string, manifest protocol.Response, fetchShard func(path st
 	return m, sources, nil
 }
 
-// VerifyWorldShard checks a fetched shard against its pin and returns its
-// sources.
-func VerifyWorldShard(world string, ref WorldShardRef, resp protocol.Response) ([]WorldSource, error) { //nolint:gocritic // a pin is passed once per shard
-	if err := validateWorldName(world); err != nil {
-		return nil, err
-	}
-	if resp.Status != protocol.StatusOK {
-		return nil, fmt.Errorf("world shard %s returned %s", ref.Path, resp.Status)
-	}
-	if version, err := snapshotPositive("version", resp.Metadata["version"]); err != nil || version != ref.Version {
-		return nil, fmt.Errorf("world shard %s is not version %d", ref.Path, ref.Version)
-	}
-	if len(resp.Body) != ref.Bytes || generation.BodyHash(resp.Body) != ref.ContentHash || resp.Metadata["content-hash"] != ref.ContentHash {
-		return nil, fmt.Errorf("world shard %s content mismatch", ref.Path)
-	}
-	meta, payloadText, err := parseSnapshotDocument(resp.Body, worldShardTitle)
-	if err != nil {
-		return nil, fmt.Errorf("world shard %s: %w", ref.Path, err)
-	}
-	if err := validateSnapshotMetadataKeys(meta, "Format", "World", "Prefix", "Sources", "Edges"); err != nil {
-		return nil, fmt.Errorf("world shard %s: %w", ref.Path, err)
-	}
-	if meta["Format"] != WorldShardFormat || meta["World"] != world || meta["Prefix"] != ref.Prefix {
-		return nil, fmt.Errorf("world shard %s identity mismatch", ref.Path)
-	}
-	if err := validateSnapshotJSON(payloadText); err != nil {
-		return nil, fmt.Errorf("world shard %s payload: %w", ref.Path, err)
-	}
-	var payload worldShardJSON
-	decoder := json.NewDecoder(strings.NewReader(payloadText))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&payload); err != nil {
-		return nil, fmt.Errorf("world shard %s payload: %w", ref.Path, err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("world shard %s has trailing JSON", ref.Path)
-	}
-	if err := validateWorldSources(ref.Prefix, payload.Sources); err != nil {
-		return nil, fmt.Errorf("world shard %s: %w", ref.Path, err)
-	}
-	edges := 0
-	sources := make([]WorldSource, len(payload.Sources))
-	for i := range payload.Sources {
-		row := &payload.Sources[i]
-		src := WorldSource{Path: row.Path, Version: row.Version, Etag: row.Etag, Title: row.Title, Links: row.Links, Edges: make([]WorldEdge, len(row.Edges))}
-		for j, edge := range row.Edges {
-			src.Edges[j] = WorldEdge(edge)
-		}
-		edges += len(row.Edges)
-		sources[i] = src
-	}
-	if meta["Sources"] != strconv.Itoa(len(sources)) || meta["Edges"] != strconv.Itoa(edges) || len(sources) != ref.Sources || edges != ref.Edges {
-		return nil, fmt.Errorf("world shard %s count mismatch", ref.Path)
-	}
-	return sources, nil
+// unavailable is a status that says nothing about the document: retry later.
+func unavailable(resp protocol.Response) bool { //nolint:gocritic // a response is read once
+	return resp.Status != protocol.StatusOK && resp.Status != protocol.StatusNotFound
 }
 
-// validateWorldSources holds a shard's rows to the form the builder renders:
-// sorted, unique, canonical, and every source under the shard's prefix.
-func validateWorldSources(prefix string, rows []worldSourceJSON) error {
+// validateWorldSources holds built rows to the shard's rules: sorted, unique,
+// canonical, and every source under prefix. It returns the edge total.
+func validateWorldSources(prefix string, rows []WorldSource) (int, error) {
+	edges := 0
 	for i := range rows {
 		row := &rows[i]
-		if storefmt.CanonicalPath(row.Path) != row.Path || !strings.HasPrefix(row.Path, "/") || strings.ContainsAny(row.Path, "\r\n\t") {
-			return fmt.Errorf("source path %q is not canonical", row.Path)
+		if protocol.ValidateRequestPath(row.Path) != nil || storefmt.CanonicalPath(row.Path) != row.Path {
+			return 0, fmt.Errorf("source path %q is not canonical", row.Path)
 		}
 		if i > 0 && rows[i-1].Path >= row.Path {
-			return fmt.Errorf("source %q is out of order or repeated", row.Path)
+			return 0, fmt.Errorf("source %q is repeated", row.Path)
 		}
 		if SourcePrefix(row.Path, len(prefix)) != prefix {
-			return fmt.Errorf("source %q does not belong under prefix %s", row.Path, prefix)
+			return 0, fmt.Errorf("source %q does not belong under prefix %s", row.Path, prefix)
 		}
-		if row.Version < 1 || row.Links < 0 || strings.ContainsAny(row.Etag+row.Title, "\r\n") {
-			return fmt.Errorf("source %q: invalid version, links, etag or title", row.Path)
+		if row.Version < 1 || !protocol.IsValidMetaValue(row.Etag) || !protocol.IsValidMetaValue(row.Title) {
+			return 0, fmt.Errorf("source %q: invalid version, etag or title", row.Path)
 		}
 		for j := range row.Edges {
-			edge := &row.Edges[j]
-			if err := validateWorldEdgeTarget(edge.To); err != nil {
-				return fmt.Errorf("source %q: %w", row.Path, err)
-			}
-			if edge.Count < 1 {
-				return fmt.Errorf("source %q: edge to %s has count %d", row.Path, edge.To, edge.Count)
-			}
-			if j > 0 && compareWorldEdges(row.Edges[j-1], *edge) >= 0 {
-				return fmt.Errorf("source %q: edge to %s is out of order or repeated", row.Path, edge.To)
+			if j > 0 && compareWorldEdges(row.Edges[j-1], row.Edges[j]) == 0 {
+				return 0, fmt.Errorf("source %q: edge to %s is repeated", row.Path, row.Edges[j].To)
 			}
 		}
+		edges += len(row.Edges)
 	}
-	return nil
-}
-
-func validateWorldEdgeTarget(raw string) error {
-	if err := validateSnapshotURL(raw); err != nil {
-		return err
-	}
-	if !strings.HasPrefix(raw, "mark://") || links.CanonicalURL(raw) != raw {
-		return fmt.Errorf("edge target %q is not a canonical mark URL", raw)
-	}
-	return nil
+	return edges, nil
 }
 
 // compareWorldEdges orders a source's edges by identity, {To, Rel}.
-func compareWorldEdges(a, b worldEdgeJSON) int { //nolint:gocritic // slices.SortFunc signature
+func compareWorldEdges(a, b WorldEdge) int {
 	if order := strings.Compare(a.To, b.To); order != 0 {
 		return order
 	}
@@ -379,38 +343,29 @@ func compareWorldEdges(a, b worldEdgeJSON) int { //nolint:gocritic // slices.Sor
 }
 
 func validateWorldManifest(m *WorldManifest) error {
-	if err := validateWorldName(m.World); err != nil {
-		return err
+	if !protocol.IsWorldName(m.World) {
+		return fmt.Errorf("invalid world name %q", m.World)
 	}
 	if _, err := protocol.ParseCursor(m.Cursor.String()); err != nil {
 		return fmt.Errorf("world manifest %s: cursor: %w", m.World, err)
 	}
-	if m.Derived.IsZero() || m.Derived.Year() > 9999 {
-		return fmt.Errorf("world manifest %s: derived time %v", m.World, m.Derived)
-	}
-	if len(m.Shards) > MaxSnapshotShards || m.Sources > MaxSnapshotNodes || m.Edges > MaxSnapshotEdges {
+	if m.Sources > MaxSnapshotNodes || m.Edges > MaxSnapshotEdges {
 		return fmt.Errorf("world manifest %s exceeds the checkpoint limits", m.World)
 	}
-	sources, edges := 0, 0
 	for i := range m.Shards {
 		ref := &m.Shards[i]
 		if err := validateWorldPrefix(ref.Prefix, m.PrefixLength); err != nil {
 			return fmt.Errorf("world manifest %s: %w", m.World, err)
 		}
-		if i > 0 && m.Shards[i-1].Prefix >= ref.Prefix {
-			return fmt.Errorf("world manifest %s: prefix %s is out of order or repeated", m.World, ref.Prefix)
+		if i > 0 && m.Shards[i-1].Prefix == ref.Prefix {
+			return fmt.Errorf("world manifest %s: prefix %s is repeated", m.World, ref.Prefix)
 		}
 		if ref.Path != WorldShardPath(m.World, ref.Prefix) {
 			return fmt.Errorf("world manifest %s: shard %s is not at %s", m.World, ref.Prefix, WorldShardPath(m.World, ref.Prefix))
 		}
-		if _, ok := protocol.IsHashPath(ref.ContentHash); !ok || ref.Version < 1 || ref.Sources < 1 || ref.Edges < 0 || ref.Bytes < 1 || ref.Bytes > protocol.MaxBodyLength {
+		if hash, ok := protocol.IsHashPath(ref.ContentHash); !ok || hash != ref.ContentHash || ref.Version < 1 || ref.Sources < 1 || ref.Edges < 0 || ref.Bytes < 1 || ref.Bytes > protocol.MaxBodyLength {
 			return fmt.Errorf("world manifest %s: shard %s has an invalid pin", m.World, ref.Prefix)
 		}
-		sources += ref.Sources
-		edges += ref.Edges
-	}
-	if sources != m.Sources || edges != m.Edges {
-		return fmt.Errorf("world manifest %s: totals %d/%d, shards hold %d/%d", m.World, m.Sources, m.Edges, sources, edges)
 	}
 	return nil
 }
@@ -424,13 +379,6 @@ func validateWorldPrefix(prefix string, length int) error {
 		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 			return fmt.Errorf("prefix %q is not lowercase hex", prefix)
 		}
-	}
-	return nil
-}
-
-func validateWorldName(world string) error {
-	if !worldNameRE.MatchString(world) {
-		return fmt.Errorf("invalid world name %q", world)
 	}
 	return nil
 }

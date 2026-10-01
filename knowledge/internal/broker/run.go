@@ -18,6 +18,7 @@ import (
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/gateway"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/oauthsrv"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/storage"
+	"github.com/latebit-io/demarkus/knowledge/internal/federation"
 	"github.com/latebit-io/demarkus/knowledge/internal/leader"
 	"github.com/latebit-io/demarkus/protocol"
 	"k8s.io/client-go/kubernetes"
@@ -134,8 +135,10 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 	}
 	pool := gateway.NewWorldPool(cfg.Registry(), fetch.Options{Insecure: cfg.WorldDialer.InsecureSkipVerify})
 	var dispatcher gateway.WorldDispatcher = pool
+	var composite *gateway.Composite
 	if opts.LocalWorlds != nil {
-		dispatcher = gateway.NewComposite(cfg.Registry(), opts.LocalWorlds, pool)
+		composite = gateway.NewComposite(cfg.Registry(), opts.LocalWorlds, pool)
+		dispatcher = composite
 	}
 	// One mux: the management API, the knowledge gateway on every host it
 	// does not claim, the memory gateway on its own hostname.
@@ -156,7 +159,7 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 		srv:         srv,
 		httpSrv:     newHardenedServer(cfg.Server.Addr, mux),
 		gateways:    gateways,
-		tasks:       &backgroundTasks{cfg: cfg, log: log, store: store, k8s: k8s, srv: srv, provisioner: provisioner},
+		tasks:       &backgroundTasks{cfg: cfg, log: log, store: store, k8s: k8s, srv: srv, provisioner: provisioner, local: composite},
 		closeBucket: closeBuckets,
 	}
 	return b, nil
@@ -309,13 +312,16 @@ type backgroundTasks struct {
 	k8s         kubernetes.Interface
 	srv         *oauthsrv.Server
 	provisioner *storage.Provisioner
+	// local dispatches to the worlds served in process; nil when none are.
+	local *gateway.Composite
 }
 
-// start launches the leader-elected state bucket sweeper, the agent token
-// reconciler when agentTokens is set, and the registry sync when
+// start launches the leader-elected sweeper and federation deriver, the
+// agent token reconciler when agentTokens is set, and the registry sync when
 // provisioning is on. In-flight grants sweep themselves on every write.
 func (b *backgroundTasks) start(ctx context.Context, wg *sync.WaitGroup) {
 	b.startSweeper(ctx, wg)
+	b.startFederation(ctx, wg)
 	if len(b.cfg.AgentTokens) > 0 {
 		agentTokens := storage.NewAgentTokens(b.cfg, b.store, b.log)
 		b.log.Info("broker: starting agent token reconciler", "worlds", len(b.cfg.AgentTokens))
@@ -342,16 +348,44 @@ func (b *backgroundTasks) startSweeper(ctx context.Context, wg *sync.WaitGroup) 
 		{Name: "client registrations", Store: b.srv.DynamicClients()},
 	}, cfg.Sweeper.Interval, b.log)
 	b.log.Info("broker: starting sweeper", "interval", cfg.Sweeper.Interval)
+	b.lead(ctx, wg, leaderTask{name: "sweeper", lease: cfg.Sweeper.LeaseName, run: sweeper.Run})
+}
+
+// startFederation derives the graph of the knowledge worlds served in
+// process into the hub, when federation.hub names one.
+func (b *backgroundTasks) startFederation(ctx context.Context, wg *sync.WaitGroup) {
+	f := b.cfg.Federation
+	if f.Hub == "" {
+		return
+	}
+	worlds := b.cfg.FederatedWorlds()
+	log := b.log.With("task", "federation")
+	log.Info("broker: starting federation", "hub", f.Hub, "worlds", worlds)
+	b.lead(ctx, wg, leaderTask{name: "federation", lease: f.LeaseName, run: func(ctx context.Context) {
+		federation.Run(ctx, federation.Config{
+			Worlds: worlds, Source: b.local, Hub: federation.HubIO(b.local, f.Hub),
+			QuietPeriod: f.QuietPeriod, Interval: f.Interval, Log: log,
+		})
+	}})
+}
+
+// leaderTask is a background task one replica runs at a time, under a Lease.
+type leaderTask struct {
+	name, lease string
+	run         func(context.Context)
+}
+
+func (b *backgroundTasks) lead(ctx context.Context, wg *sync.WaitGroup, task leaderTask) {
 	wg.Go(func() {
 		err := leader.Run(ctx, leader.Election{
 			Leases:    b.k8s.CoordinationV1(),
-			LeaseName: cfg.Sweeper.LeaseName,
-			Namespace: cfg.Server.BrokerNamespace,
+			LeaseName: task.lease,
+			Namespace: b.cfg.Server.BrokerNamespace,
 			Identity:  brokerIdentity(),
-			Log:       b.log.With("task", "sweeper"),
-		}, sweeper.Run)
+			Log:       b.log.With("task", task.name),
+		}, task.run)
 		if err != nil {
-			b.log.Error("broker: sweeper stopped", "err", err)
+			b.log.Error("broker: background task stopped", "task", task.name, "err", err)
 		}
 	})
 }

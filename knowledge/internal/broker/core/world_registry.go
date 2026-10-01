@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // WorldRegistry is the set of worlds a pod serves: the static ones from the
@@ -160,7 +162,7 @@ func (r *WorldRegistry) SetDynamic(worlds []WorldConfig, tenants map[string]stri
 		if _, static := r.staticIndex[name]; static {
 			continue
 		}
-		if !WorldNameRE.MatchString(name) {
+		if !protocol.IsWorldName(name) {
 			rejected = append(rejected, name)
 			continue
 		}

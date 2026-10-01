@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -234,6 +235,27 @@ func (c *Client) watchDialer(host string) WatchDialer {
 		return &quicWatchStream{Stream: stream, client: c, host: host, conn: conn}, nil
 	}
 }
+
+// ConnDialer is a WatchDialer over conns that dial opens with req sent, such
+// as an in-process watch. A conn has no pooled connection to evict.
+func ConnDialer(dial func(ctx context.Context, req protocol.Request) (net.Conn, error)) WatchDialer {
+	return func(ctx context.Context, req protocol.Request) (WatchStream, error) {
+		conn, err := dial(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return connStream{conn}, nil
+	}
+}
+
+// connStream is a conn as a WatchStream: closing it unblocks a read.
+type connStream struct{ net.Conn }
+
+func (s connStream) Abort() {
+	s.Close() //nolint:errcheck,gosec // the stream is dead either way; nothing reads why
+}
+
+func (s connStream) Release(error) { s.Abort() }
 
 // errResyncFirst marks a resync given in place of the acknowledgement: the
 // notice is queued and the watch subscribes again from the server's cursor.

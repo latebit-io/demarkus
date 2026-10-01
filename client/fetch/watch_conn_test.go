@@ -47,23 +47,23 @@ func (f *pipeFeed) dial(_ context.Context, req protocol.Request) (WatchStream, e
 			f.t.Errorf("drain: %v", err)
 		}
 	}()
-	return connStream{Conn: client, t: f.t, released: f.released}, nil
+	return releaseProbe{Conn: client, t: f.t, released: f.released}, nil
 }
 
-// connStream is a net.Conn as a WatchStream: closing it aborts and releases.
-type connStream struct {
+// releaseProbe is a conn stream that reports why each stream was released.
+type releaseProbe struct {
 	net.Conn
 	t        *testing.T
 	released chan<- error
 }
 
-func (s connStream) Abort() {
+func (s releaseProbe) Abort() {
 	if err := s.Close(); err != nil {
 		s.t.Errorf("close pipe: %v", err)
 	}
 }
 
-func (s connStream) Release(err error) {
+func (s releaseProbe) Release(err error) {
 	s.Abort()
 	s.released <- err
 }

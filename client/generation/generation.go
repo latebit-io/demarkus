@@ -1,7 +1,7 @@
-// Package generation publishes a sharded, generated artifact so readers never
-// see half of one: shards go to the slot that is not live, each is verified,
-// and the manifest that flips the slot is committed last. The hash index and
-// the graph snapshot are both published this way.
+// Package generation publishes generated artifacts: single documents written
+// and read back to pin (PublishDocument, VerifyPinned), and sharded ones
+// whose manifest flips between two slots, as the hash index and the graph
+// snapshot are, so readers never see half of one.
 package generation
 
 import (
@@ -26,6 +26,16 @@ func InactiveSlot(active string) string {
 		return SlotB
 	}
 	return SlotA
+}
+
+// ArtifactMetadata is the publisher metadata of a generated document written
+// by agent; retention is set only above zero.
+func ArtifactMetadata(agent string, retention int) map[string]string {
+	meta := map[string]string{"agent": agent, "tags": "category:federation", "type": "Reference"}
+	if retention > 0 {
+		meta["retention"] = strconv.Itoa(retention)
+	}
+	return meta
 }
 
 // BodyHash is the protocol content hash of body.
@@ -115,7 +125,7 @@ func Publish[R any](ctx context.Context, spec Spec[R], io IO) (Result[R], error)
 	if err != nil {
 		return Result[R]{}, err
 	}
-	result.Manifest, result.ManifestVersion, err = p.publishVerified(ctx, document{path: spec.ManifestPath, body: manifest, expected: currentVersion})
+	result.Manifest, result.ManifestVersion, err = io.PublishDocument(ctx, spec.ManifestPath, manifest, currentVersion)
 	if err != nil {
 		return Result[R]{}, err
 	}
@@ -126,12 +136,6 @@ func Publish[R any](ctx context.Context, spec Spec[R], io IO) (Result[R], error)
 type publisher struct {
 	io     IO
 	labels Labels
-}
-
-// document is one write: body at path, over the version it expects to replace.
-type document struct {
-	path, body string
-	expected   int
 }
 
 // currentManifest reads the live manifest: its version and slot, zero and ""
@@ -148,7 +152,7 @@ func (p *publisher) currentManifest(ctx context.Context, path string, activeSlot
 	default:
 		return 0, "", fmt.Errorf("fetch %s %s returned %s", p.labels.Manifest, path, current.Status)
 	}
-	if version, err = responseVersion(path, current); err != nil {
+	if version, err = ResponseVersion(path, current); err != nil {
 		return 0, "", err
 	}
 	if current.Metadata["content-hash"] != BodyHash(current.Body) {
@@ -172,7 +176,7 @@ func stage[R any](ctx context.Context, p *publisher, shard *Shard[R], verify fun
 	switch current.Status {
 	case protocol.StatusNotFound:
 	case protocol.StatusOK:
-		if expected, err = responseVersion(shard.Path, current); err != nil {
+		if expected, err = ResponseVersion(shard.Path, current); err != nil {
 			return none, false, err
 		}
 		if current.Metadata["content-hash"] == shard.ContentHash && current.Body == shard.Body {
@@ -182,7 +186,7 @@ func stage[R any](ctx context.Context, p *publisher, shard *Shard[R], verify fun
 	default:
 		return none, false, fmt.Errorf("fetch %s %s returned %s", p.labels.Shard, shard.Path, current.Status)
 	}
-	verified, version, err := p.publishVerified(ctx, document{path: shard.Path, body: shard.Body, expected: expected})
+	verified, version, err := p.io.PublishDocument(ctx, shard.Path, shard.Body, expected)
 	if err != nil {
 		return none, false, err
 	}
@@ -190,54 +194,81 @@ func stage[R any](ctx context.Context, p *publisher, shard *Shard[R], verify fun
 	return ref, true, verify(ref, verified)
 }
 
-// publishVerified writes doc once and reads it back at its version. A refusal,
-// or a response that was lost, is settled by content: the head may already be
-// this exact document. It is never resent.
-func (p *publisher) publishVerified(ctx context.Context, doc document) (protocol.Response, int, error) {
-	published, publishErr := p.io.Publish(ctx, doc.path, doc.body, doc.expected)
+// PublishDocument writes body at path over expected (below 0 skips the
+// check), then reads it back at its version. A refusal or a lost answer is
+// settled by content, never by resending.
+func (io IO) PublishDocument(ctx context.Context, path, body string, expected int) (protocol.Response, int, error) {
+	published, publishErr := io.Publish(ctx, path, body, expected)
 	// A write that never left cannot have landed.
 	if publishErr != nil && !errors.Is(publishErr, protocol.ErrOutcomeUnknown) {
-		return protocol.Response{}, 0, fmt.Errorf("publish %s: %w", doc.path, publishErr)
+		return protocol.Response{}, 0, fmt.Errorf("publish %s: %w", path, publishErr)
 	}
 	if publishErr == nil && !protocol.IsWriteSuccess(published.Status) {
 		publishErr = fmt.Errorf("publish returned %s", published.Status)
 	}
 	version := 0
 	if publishErr == nil {
-		version, publishErr = responseVersion(doc.path, published)
+		version, publishErr = ResponseVersion(path, published)
 	}
 	if publishErr != nil {
-		head, err := p.io.Fetch(ctx, doc.path)
+		head, err := io.Fetch(ctx, path)
 		if err != nil {
-			return protocol.Response{}, 0, fmt.Errorf("publish %s: %v; reconcile: %w", doc.path, publishErr, err)
+			return protocol.Response{}, 0, fmt.Errorf("publish %s: %v; reconcile: %w", path, publishErr, err)
 		}
-		if version, err = verifyBody(doc, head); err != nil {
-			return protocol.Response{}, 0, fmt.Errorf("publish %s: %w; reconcile: %w", doc.path, publishErr, err)
+		if version, err = verifyBody(path, body, head); err != nil {
+			return protocol.Response{}, 0, fmt.Errorf("publish %s: %w; reconcile: %w", path, publishErr, err)
 		}
 	}
-	versioned := protocol.VersionPath(doc.path, version)
-	verified, err := p.io.Fetch(ctx, versioned)
+	versioned := protocol.VersionPath(path, version)
+	verified, err := io.Fetch(ctx, versioned)
 	if err != nil {
 		return protocol.Response{}, 0, fmt.Errorf("verify %s: %w", versioned, err)
 	}
-	if _, err := verifyBody(doc, verified); err != nil {
+	if _, err := verifyBody(path, body, verified); err != nil {
 		return protocol.Response{}, 0, err
 	}
 	return verified, version, nil
 }
 
-// verifyBody checks that resp is doc as written and returns its version.
-func verifyBody(doc document, resp protocol.Response) (int, error) {
-	if resp.Status != protocol.StatusOK {
-		return 0, fmt.Errorf("verify %s returned %s", doc.path, resp.Status)
-	}
-	if resp.Body != doc.body || resp.Metadata["content-hash"] != BodyHash(doc.body) {
-		return 0, fmt.Errorf("verify %s content mismatch", doc.path)
-	}
-	return responseVersion(doc.path, resp)
+// Pin names one published document exactly, as a manifest pins it.
+type Pin struct {
+	Path        string
+	Version     int
+	ContentHash string
+	Bytes       int
 }
 
-func responseVersion(docPath string, resp protocol.Response) (int, error) {
+// VerifyPinned checks that resp is the document pin names, byte for byte.
+func VerifyPinned(pin Pin, resp protocol.Response) error {
+	if resp.Status != protocol.StatusOK {
+		return fmt.Errorf("%s returned %s", pin.Path, resp.Status)
+	}
+	version, err := ResponseVersion(pin.Path, resp)
+	if err != nil {
+		return err
+	}
+	if version != pin.Version {
+		return fmt.Errorf("%s is version %d, not the pinned %d", pin.Path, version, pin.Version)
+	}
+	if len(resp.Body) != pin.Bytes || BodyHash(resp.Body) != pin.ContentHash || resp.Metadata["content-hash"] != pin.ContentHash {
+		return fmt.Errorf("%s content mismatch", pin.Path)
+	}
+	return nil
+}
+
+// verifyBody checks that resp is body as written to path and returns its version.
+func verifyBody(path, body string, resp protocol.Response) (int, error) {
+	if resp.Status != protocol.StatusOK {
+		return 0, fmt.Errorf("verify %s returned %s", path, resp.Status)
+	}
+	if resp.Body != body || resp.Metadata["content-hash"] != BodyHash(body) {
+		return 0, fmt.Errorf("verify %s content mismatch", path)
+	}
+	return ResponseVersion(path, resp)
+}
+
+// ResponseVersion is the version resp carries for docPath, at least 1.
+func ResponseVersion(docPath string, resp protocol.Response) (int, error) { //nolint:gocritic // a response is read once
 	version, err := strconv.Atoi(resp.Metadata["version"])
 	if err != nil || version < 1 {
 		return 0, fmt.Errorf("document %s has invalid version %q", docPath, resp.Metadata["version"])

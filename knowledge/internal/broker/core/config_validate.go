@@ -1,9 +1,11 @@
 package core
 
 import (
+	"cmp"
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,11 +16,6 @@ import (
 // maxSweeperInterval is the short lived token lifetime; a longer sweep leaves
 // expired tokens accepted for up to a whole cycle.
 const maxSweeperInterval = 24 * time.Hour
-
-// WorldNameRE is a DNS label. A world name is the host of every tool URL, a
-// graph key (hosts compare lowercase) and part of a Secret name, so nothing
-// looser works everywhere. Rejected, never normalized: that would rename Secrets.
-var WorldNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 var (
 	secretNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
@@ -65,6 +62,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateAgentTokens(tokenSecrets); err != nil {
+		return err
+	}
+	if err := c.validateFederation(); err != nil {
 		return err
 	}
 	if err := validateWebClients(c.WebClients); err != nil {
@@ -121,6 +121,25 @@ func (s *SweeperConfig) applyDefaultsAndValidate() error {
 		// Legacy name pinned: a renamed Lease would briefly dual-run
 		// sweepers across an in-place upgrade.
 		s.LeaseName = "demarkus-broker-sweeper"
+	}
+	return nil
+}
+
+// validateFederation fills the federation knobs; the hub must be a static
+// knowledge world served in process, the only place its grant can work.
+func (c *Config) validateFederation() error {
+	f := &c.Federation
+	if f.Hub == "" {
+		return nil
+	}
+	if !slices.Contains(c.FederatedWorlds(), f.Hub) {
+		return fmt.Errorf("federation.hub %q must name a local knowledge world", f.Hub)
+	}
+	f.LeaseName = cmp.Or(f.LeaseName, "demarkus-federation")
+	f.QuietPeriod = cmp.Or(f.QuietPeriod, 30*time.Second)
+	f.Interval = cmp.Or(f.Interval, time.Minute)
+	if f.QuietPeriod < 0 || f.Interval < 0 {
+		return fmt.Errorf("federation.quietPeriod and federation.interval must be > 0 (got %s, %s)", f.QuietPeriod, f.Interval)
 	}
 	return nil
 }
@@ -289,7 +308,7 @@ func validateWorld(i int, w *WorldConfig) error {
 	switch {
 	case w.Name == "":
 		return fmt.Errorf("worlds[%d]: name is required", i)
-	case !WorldNameRE.MatchString(w.Name):
+	case !protocol.IsWorldName(w.Name):
 		return fmt.Errorf("worlds[%d]: name %q must be a DNS label: lowercase letters, digits and hyphens, at most 63, no hyphen at either end", i, w.Name)
 	case len(w.WriteScope.Paths) == 0:
 		return fmt.Errorf("worlds[%d] (%s): writeScope.paths is required", i, w.Name)

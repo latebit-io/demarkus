@@ -459,18 +459,9 @@ func buildSnapshotArtifact(manifestPath, slot, kind string, part int, nodes []St
 }
 
 func verifySnapshotShard(ref SnapshotShardRef, response protocol.Response) ([]StoredNode, []StoredEdge, error) { //nolint:gocyclo,gocritic // verification keeps descriptor checks together
-	if response.Status != protocol.StatusOK {
-		return nil, nil, fmt.Errorf("graph shard %s returned %s", ref.Path, response.Status)
-	}
-	version, err := snapshotPositive("version", response.Metadata["version"])
-	if err != nil {
-		return nil, nil, fmt.Errorf("graph shard %s: %w", ref.Path, err)
-	}
-	if version != ref.Version {
-		return nil, nil, fmt.Errorf("graph shard %s version mismatch", ref.Path)
-	}
-	if len(response.Body) != ref.Bytes || generation.BodyHash(response.Body) != ref.ContentHash || response.Metadata["content-hash"] != ref.ContentHash {
-		return nil, nil, fmt.Errorf("graph shard %s content mismatch", ref.Path)
+	pin := generation.Pin{Path: ref.Path, Version: ref.Version, ContentHash: ref.ContentHash, Bytes: ref.Bytes}
+	if err := generation.VerifyPinned(pin, response); err != nil {
+		return nil, nil, fmt.Errorf("graph shard: %w", err)
 	}
 	meta, payloadText, err := parseSnapshotDocument(response.Body, "# Graph Snapshot Shard")
 	if err != nil {
