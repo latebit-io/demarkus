@@ -26,6 +26,15 @@ func (g *Gateway) toolBodies() (*marktools.Tools, error) {
 		Graph:   g.toolGraph,
 		Warnf:   func(format string, args ...any) { g.deps.Log.Warn(fmt.Sprintf(format, args...)) },
 		ErrText: toolSiteErrorText,
+		// Every world answers FETCH /sha256-... under its own read rules.
+		HashSources: func(ctx context.Context) []string {
+			worlds := g.scopedWorlds(ctx)
+			servers := make([]string, len(worlds))
+			for i := range worlds {
+				servers[i] = "mark://" + worlds[i].Name
+			}
+			return servers
+		},
 	})
 }
 

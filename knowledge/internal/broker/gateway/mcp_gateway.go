@@ -35,12 +35,25 @@ type Deps struct {
 	AllowDomains []string
 	// Provisioner creates tenant worlds on first arrival; nil in static mode.
 	Provisioner *storage.Provisioner
+	// Hub is the world holding the federation checkpoints of the Federated
+	// worlds, whose graphs seed from them; the rest seed from their own.
+	Hub       string
+	Federated map[string]bool
 }
 
 // DepsFor builds one profile's gateway deps from what the management API
 // shares. Run and the fixtures both build deps here.
 func DepsFor(cfg *core.Config, profile *Profile, shared core.SharedDeps, provisioner *storage.Provisioner) *Deps {
+	var federated map[string]bool
+	if cfg.Federation.Hub != "" && !profile.TenantScoped { // a tenant's graph never leaves its own world
+		federated = map[string]bool{}
+		for _, name := range cfg.FederatedWorlds() {
+			federated[name] = true
+		}
+	}
 	return &Deps{
+		Hub:          cfg.Federation.Hub,
+		Federated:    federated,
 		Worlds:       cfg.Registry().View(profile.Name),
 		Issuer:       cfg.OIDC.Issuer,
 		PublicURL:    cfg.Server.PublicURL,

@@ -106,9 +106,9 @@ func markDiscoverTool() mcp.Tool {
 
 func markResolveTool() mcp.Tool {
 	return mcp.NewTool("mark_resolve",
-		mcp.WithDescription(mcpfmt.ResolveDescription),
+		mcp.WithDescription("Resolve content by SHA-256 hash across your worlds, or via a hub index document, and fetch it."),
 		mcp.WithString("hash", mcp.Required(), mcp.Description(mcpfmt.HashDesc)),
-		mcp.WithString("index", mcp.Required(), mcp.Description("hub hash index document, e.g. mark://hub/index.md")),
+		mcp.WithString("index", mcp.Description("hub hash index document, e.g. mark://hub/index.md; omit to ask every world")),
 	)
 }
 

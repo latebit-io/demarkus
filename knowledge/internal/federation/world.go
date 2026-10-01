@@ -87,12 +87,12 @@ func (w *world) load(ctx context.Context) (protocol.Cursor, error) {
 	if err != nil || head.Status == protocol.StatusNotFound {
 		return protocol.Cursor{}, err
 	}
-	m, sources, err := graphstore.LoadWorld(w.name, head, func(shard string) (protocol.Response, error) {
+	load, err := graphstore.LoadWorld(ctx, graphstore.WorldLoadRequest{World: w.name, Manifest: head, Fetch: func(ctx context.Context, shard string) (protocol.Response, error) {
 		if err := w.reads.Wait(ctx); err != nil {
 			return protocol.Response{}, err
 		}
 		return w.Hub.Fetch(ctx, shard)
-	})
+	}})
 	switch {
 	case errors.Is(err, graphstore.ErrWorldUnavailable):
 		return protocol.Cursor{}, err
@@ -100,6 +100,7 @@ func (w *world) load(ctx context.Context) (protocol.Cursor, error) {
 		w.log.Warn("federation: checkpoint does not verify, rebuilding", "err", err)
 		return protocol.Cursor{}, nil
 	}
+	m := &load.Manifest
 	w.prefixLength, w.manifestComplete = m.PrefixLength, m.Complete
 	for _, ref := range m.Shards {
 		w.refs[ref.Prefix] = ref
@@ -108,8 +109,8 @@ func (w *world) load(ctx context.Context) (protocol.Cursor, error) {
 		w.log.Info("federation: checkpoint incomplete, rebuilding")
 		return protocol.Cursor{}, nil
 	}
-	for i := range sources {
-		w.place(graphstore.SourcePrefix(sources[i].Path, w.prefixLength), sources[i])
+	for i := range load.Sources {
+		w.place(graphstore.SourcePrefix(load.Sources[i].Path, w.prefixLength), load.Sources[i])
 	}
 	return m.Cursor, nil
 }

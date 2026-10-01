@@ -1,6 +1,7 @@
 package graphstore
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"golang.org/x/sync/errgroup"
 )
 
 // A world checkpoint is a manifest plus shards that partition the world's
@@ -267,38 +269,93 @@ func ParseWorldManifest(world, body string) (WorldManifest, error) {
 	return m, nil
 }
 
-// LoadWorld verifies world's manifest and every shard it pins, fetched at
-// its pinned version. An incomplete checkpoint loads too; callers decide.
-func LoadWorld(world string, manifest protocol.Response, fetchShard func(path string) (protocol.Response, error)) (WorldManifest, []WorldSource, error) {
+// worldLoadConcurrency bounds the shard fetches one load has in flight.
+const worldLoadConcurrency = 8
+
+// WorldLoadRequest is one world checkpoint to read from the hub.
+type WorldLoadRequest struct {
+	World    string
+	Manifest protocol.Response
+	// Previous is the manifest whose sources the caller holds already, or
+	// nil: a shard it pins identically is not fetched again.
+	Previous *WorldManifest
+	// Fetch reads one pinned shard; it is called concurrently.
+	Fetch func(ctx context.Context, path string) (protocol.Response, error)
+}
+
+// WorldLoad is a verified world checkpoint: the sources of every shard
+// fetched, and the prefixes kept because Previous pinned them identically.
+type WorldLoad struct {
+	Manifest WorldManifest
+	Sources  []WorldSource
+	Kept     map[string]bool
+}
+
+// LoadWorld verifies the manifest and every shard it pins that the caller
+// does not hold yet, fetched at its pinned version. An incomplete
+// checkpoint loads too; callers decide.
+func LoadWorld(ctx context.Context, req WorldLoadRequest) (WorldLoad, error) { //nolint:gocritic // a request is read once
+	world, manifest := req.World, req.Manifest
 	if unavailable(manifest) {
-		return WorldManifest{}, nil, fmt.Errorf("%w: world manifest %s returned %s", ErrWorldUnavailable, world, manifest.Status)
+		return WorldLoad{}, fmt.Errorf("%w: world manifest %s returned %s", ErrWorldUnavailable, world, manifest.Status)
 	}
 	if manifest.Status != protocol.StatusOK {
-		return WorldManifest{}, nil, fmt.Errorf("world manifest %s returned %s", world, manifest.Status)
+		return WorldLoad{}, fmt.Errorf("world manifest %s returned %s", world, manifest.Status)
 	}
 	if manifest.Metadata["content-hash"] != generation.BodyHash(manifest.Body) {
-		return WorldManifest{}, nil, fmt.Errorf("world manifest %s content hash mismatch", world)
+		return WorldLoad{}, fmt.Errorf("world manifest %s content hash mismatch", world)
 	}
 	m, err := ParseWorldManifest(world, manifest.Body)
 	if err != nil {
-		return WorldManifest{}, nil, err
+		return WorldLoad{}, err
 	}
-	sources := make([]WorldSource, 0, m.Sources)
-	for _, ref := range m.Shards {
-		resp, err := fetchShard(protocol.VersionPath(ref.Path, ref.Version))
-		if err != nil {
-			return WorldManifest{}, nil, fmt.Errorf("%w: fetch world shard %s: %w", ErrWorldUnavailable, ref.Path, err)
+	load := WorldLoad{Manifest: m, Kept: keptShards(req.Previous, &m)}
+	fetched := make([][]WorldSource, len(m.Shards))
+	group, ctx := errgroup.WithContext(ctx)
+	group.SetLimit(worldLoadConcurrency)
+	for i := range m.Shards {
+		if load.Kept[m.Shards[i].Prefix] {
+			continue
 		}
-		if unavailable(resp) {
-			return WorldManifest{}, nil, fmt.Errorf("%w: world shard %s returned %s", ErrWorldUnavailable, ref.Path, resp.Status)
-		}
-		shard, err := VerifyWorldShard(world, ref, resp)
-		if err != nil {
-			return WorldManifest{}, nil, err
-		}
-		sources = append(sources, shard...)
+		group.Go(func() (err error) {
+			fetched[i], err = loadWorldShard(ctx, world, &m.Shards[i], req.Fetch)
+			return err
+		})
 	}
-	return m, sources, nil
+	if err := group.Wait(); err != nil {
+		return WorldLoad{}, err
+	}
+	load.Sources = slices.Concat(fetched...)
+	return load, nil
+}
+
+// keptShards is the prefixes next pins exactly as prev does.
+func keptShards(prev, next *WorldManifest) map[string]bool {
+	kept := map[string]bool{}
+	if prev == nil {
+		return kept
+	}
+	pinned := make(map[WorldShardRef]bool, len(prev.Shards))
+	for _, ref := range prev.Shards {
+		pinned[ref] = true
+	}
+	for _, ref := range next.Shards {
+		if pinned[ref] {
+			kept[ref.Prefix] = true
+		}
+	}
+	return kept
+}
+
+func loadWorldShard(ctx context.Context, world string, ref *WorldShardRef, fetch func(context.Context, string) (protocol.Response, error)) ([]WorldSource, error) {
+	resp, err := fetch(ctx, protocol.VersionPath(ref.Path, ref.Version))
+	if err != nil {
+		return nil, fmt.Errorf("%w: fetch world shard %s: %w", ErrWorldUnavailable, ref.Path, err)
+	}
+	if unavailable(resp) {
+		return nil, fmt.Errorf("%w: world shard %s returned %s", ErrWorldUnavailable, ref.Path, resp.Status)
+	}
+	return VerifyWorldShard(world, *ref, resp)
 }
 
 // unavailable is a status that says nothing about the document: retry later.

@@ -93,6 +93,7 @@ type Store struct {
 	outgoing        map[string][]int
 	seedEtags       map[string]string                  // host -> last seen published graph etag
 	seedGraphs      map[string]map[string]sourceRecord // owner -> normalized complete non-authoritative graph
+	worldPins       map[string]*WorldManifest          // owner -> world checkpoint its seed holds the shards of
 	localSources    map[string]sourceRecord
 	representations map[string][sha256.Size]byte
 	validating      map[string]time.Time
@@ -117,6 +118,7 @@ func New() *Store {
 		outgoing:        make(map[string][]int),
 		seedEtags:       make(map[string]string),
 		seedGraphs:      make(map[string]map[string]sourceRecord),
+		worldPins:       make(map[string]*WorldManifest),
 		localSources:    make(map[string]sourceRecord),
 		representations: make(map[string][sha256.Size]byte),
 	}
@@ -138,6 +140,7 @@ func Load(path string) (*Store, error) {
 		outgoing:        make(map[string][]int),
 		seedEtags:       make(map[string]string),
 		seedGraphs:      make(map[string]map[string]sourceRecord),
+		worldPins:       make(map[string]*WorldManifest),
 		localSources:    make(map[string]sourceRecord),
 		representations: make(map[string][sha256.Size]byte),
 	}
@@ -435,11 +438,26 @@ func (s *Store) SeedFromExport(nodes []StoredNode, edges []StoredEdge) int {
 // ReplaceSeed atomically replaces one owner's complete seeded graph.
 // Candidate adjacency is selected whole; overlapping owners never union it.
 func (s *Store) ReplaceSeed(owner string, nodes []StoredNode, edges []StoredEdge) int {
+	return s.replaceSeed(owner, &seedUpdate{nodes: nodes, edges: edges})
+}
+
+// replaceSeed makes u's rows, plus the current records u keeps, the owner's
+// seed, and u's pins the checkpoint it holds.
+func (s *Store) replaceSeed(owner string, u *seedUpdate) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	old := s.seedGraphs[owner]
-	incoming := sourceRecords(nodes, edges)
+	nodes := u.nodes
+	incoming := sourceRecords(nodes, u.edges)
+	if u.keep != nil {
+		for key := range old {
+			if _, replaced := incoming[key]; !replaced && u.keep(key) {
+				incoming[key] = old[key]
+			}
+		}
+	}
+	s.setPinsLocked(owner, u.pins)
 	for key := range incoming {
 		record := incoming[key]
 		if prior, exists := old[key]; exists {
@@ -459,6 +477,14 @@ func (s *Store) ReplaceSeed(owner string, nodes []StoredNode, edges []StoredEdge
 		}
 	}
 	return added
+}
+
+func (s *Store) setPinsLocked(owner string, pins *WorldManifest) {
+	if pins == nil {
+		delete(s.worldPins, owner)
+		return
+	}
+	s.worldPins[owner] = pins
 }
 
 // sourceRecordsLocked snapshots every selected source; Merge reads one key at a time instead.

@@ -598,3 +598,34 @@ func TestMCPGatewayMarkDiscoverEndToEnd(t *testing.T) {
 		}
 	}
 }
+
+// Without an index, mark_resolve asks every world in scope for the hash and
+// answers from the first that really holds it.
+func TestHandleMarkResolveWithoutAnIndexAsksEveryWorld(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "team-b", Namespace: "team-b", TokensSecret: "team-b-tokens"})
+	d := &fakeDispatcher{FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		if r.Host == "team-b" && r.Path == "/"+testHashA {
+			return fetch.Result{Response: protocol.Response{
+				Status: protocol.StatusOK, Body: "# resolved content\n",
+				Metadata: map[string]string{"content-hash": testHashA, "version": "1"},
+			}}, nil
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkResolve(withAliceClaims(t.Context()), callToolReq("mark_resolve", map[string]any{"hash": testHashA}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkResolve = (%+v, %v)", res, err)
+	}
+	if text := toolResultText(t, res); !strings.Contains(text, "resolved content") {
+		t.Errorf("resolved = %q", text)
+	}
+	asked := map[string]bool{}
+	for _, c := range d.FetchCalls {
+		asked[c.Host] = c.Path == "/"+testHashA
+	}
+	if !asked["team-a"] || !asked["team-b"] {
+		t.Errorf("worlds asked = %v, want team-a then team-b", asked)
+	}
+}

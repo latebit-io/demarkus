@@ -66,15 +66,19 @@ func (g *Gateway) seedGraphStore(ctx context.Context, state *gatewayGraph) {
 	}
 }
 
-// seedWorldGraph seeds one world's published graph into the caller's scope.
-// Rows are translated to world names, then filtered to the tenant's own.
+// seedWorldGraph seeds one world's graph into the caller's scope: its
+// federation checkpoint in the hub, else its own published graph. Rows are
+// translated to world names, then filtered to the tenant's own.
 func (g *Gateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, worldName string) {
-	state.graphStore.Seed(ctx, graphstore.SeedSource{
-		Owner: worldName,
-		Fetch: func(ctx context.Context, path, ifNoneMatch string) (protocol.Response, error) {
-			result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: worldName, Path: path, IfNoneMatch: ifNoneMatch})
+	reader := func(world string) func(context.Context, string, string) (protocol.Response, error) {
+		return func(ctx context.Context, path, ifNoneMatch string) (protocol.Response, error) {
+			result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: world, Path: path, IfNoneMatch: ifNoneMatch})
 			return result.Response, err
-		},
+		}
+	}
+	src := graphstore.SeedSource{
+		Owner: worldName,
+		Fetch: reader(worldName),
 		Rewrite: func(nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) ([]graphstore.StoredNode, []graphstore.StoredEdge) {
 			g.translateSeedURLs(nodes, edges)
 			return state.ownedRows(nodes, edges)
@@ -82,7 +86,11 @@ func (g *Gateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, world
 		Problem: func(p graphstore.SeedProblem) {
 			g.deps.Log.Warn("graph seed failed", "world", p.Owner, "step", p.Step, "path", p.Path, "status", p.Status, "err", p.Err)
 		},
-	})
+	}
+	if g.deps.Federated[worldName] {
+		src.Hub = reader(g.deps.Hub)
+	}
+	state.graphStore.Seed(ctx, src)
 }
 
 // A tenant snapshot cannot introduce another world's source rows, even if

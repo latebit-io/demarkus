@@ -90,6 +90,9 @@ type Hooks struct {
 	Now func() time.Time
 	// Warnf reports a best effort step that failed; nil is log.Printf.
 	Warnf func(format string, args ...any)
+	// HashSources are the servers mark_resolve asks, in order, when a call
+	// names no index; nil requires one.
+	HashSources func(ctx context.Context) []string
 }
 
 // Tools runs the mark_* tools over one Backend.

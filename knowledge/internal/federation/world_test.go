@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/graphstore"
-	"github.com/latebit-io/demarkus/protocol"
 	"golang.org/x/time/rate"
 )
 
@@ -86,12 +85,12 @@ func (h *harness) checkpoint() (graphstore.WorldManifest, map[string]graphstore.
 	if err != nil {
 		return graphstore.WorldManifest{}, nil, err
 	}
-	m, sources, err := graphstore.LoadWorld("alpha", head, func(p string) (protocol.Response, error) { return h.hub.fetch(ctx, p) })
+	load, err := graphstore.LoadWorld(ctx, graphstore.WorldLoadRequest{World: "alpha", Manifest: head, Fetch: h.hub.fetch})
 	rows := map[string]graphstore.WorldSource{}
-	for _, source := range sources {
+	for _, source := range load.Sources {
 		rows[source.Path] = source
 	}
-	return m, rows, err
+	return load.Manifest, rows, err
 }
 
 // await polls until alpha's checkpoint satisfies check.

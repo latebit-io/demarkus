@@ -2,8 +2,10 @@ package graphstore
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -114,16 +116,17 @@ func TestWorldCheckpointContract(t *testing.T) {
 	}
 
 	// The consumer half reads the fixture, not the producer's output.
-	m, sources, err := LoadWorld("latebit", published(golden[manifestFile], 9), func(versioned string) (protocol.Response, error) {
+	load, err := LoadWorld(context.Background(), WorldLoadRequest{World: "latebit", Manifest: published(golden[manifestFile], 9), Fetch: func(_ context.Context, versioned string) (protocol.Response, error) {
 		base, version, ok := strings.Cut(versioned, "/v")
 		if !ok || version != "1" {
-			t.Fatalf("shard fetched as %q, want its pinned version 1", versioned)
+			return protocol.Response{}, fmt.Errorf("shard fetched as %q, want its pinned version 1", versioned)
 		}
 		return published(golden[path.Base(base)], 1), nil
-	})
+	}})
 	if err != nil {
 		t.Fatalf("LoadWorld: %v", err)
 	}
+	m, sources := load.Manifest, load.Sources
 	if m.Cursor != worldFixtureCursor || !m.Complete || m.Sources != 5 || m.Edges != 5 || len(m.Shards) != 4 {
 		t.Errorf("manifest = %+v", m)
 	}
@@ -174,13 +177,13 @@ func TestLoadWorldTellsUnavailableFromInvalid(t *testing.T) {
 		{name: "tampered", shard: published(shards[0].Body+"\n", 1)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := LoadWorld("latebit", published(manifest, 1), func(string) (protocol.Response, error) { return tt.shard, tt.err })
+			_, err := LoadWorld(context.Background(), WorldLoadRequest{World: "latebit", Manifest: published(manifest, 1), Fetch: func(context.Context, string) (protocol.Response, error) { return tt.shard, tt.err }})
 			if err == nil || errors.Is(err, ErrWorldUnavailable) != tt.unavailable {
 				t.Errorf("err = %v, unavailable %t", err, tt.unavailable)
 			}
 		})
 	}
-	if _, _, err := LoadWorld("latebit", protocol.Response{Status: protocol.StatusServerError}, nil); !errors.Is(err, ErrWorldUnavailable) {
+	if _, err := LoadWorld(context.Background(), WorldLoadRequest{World: "latebit", Manifest: protocol.Response{Status: protocol.StatusServerError}}); !errors.Is(err, ErrWorldUnavailable) {
 		t.Errorf("manifest server error = %v, want unavailable", err)
 	}
 }
