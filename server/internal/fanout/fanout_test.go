@@ -585,7 +585,7 @@ func TestIdleFanoutHoldsNothing(t *testing.T) {
 // peer's commits this hub has not seen.
 type peerBacklog struct {
 	hub     *changefeed.Hub
-	pending []changefeed.Event
+	pending []string // paths the peer committed, in order
 }
 
 func (b *peerBacklog) Events(context.Context, uint64, uint64) ([]changefeed.Event, error) {
@@ -593,8 +593,8 @@ func (b *peerBacklog) Events(context.Context, uint64, uint64) ([]changefeed.Even
 }
 
 func (b *peerBacklog) CatchUp(context.Context) error {
-	for _, ev := range b.pending {
-		b.hub.PublishAt(ev)
+	for _, path := range b.pending {
+		publish(b.hub, path)
 	}
 	b.pending = nil
 	return nil
@@ -611,10 +611,7 @@ func TestResumeAheadOfTheRingCatchesUpWithoutReplay(t *testing.T) {
 	attached.ack(t)
 	publish(hub, "/local.md")
 	waitAppended(t, f, 1)
-	peer := func(seq uint64, path string) changefeed.Event {
-		return changefeed.Event{Seq: seq, Path: path, Version: 1, Hash: "sha256-" + strings.Repeat("0", 64), Op: protocol.OpPublish}
-	}
-	backlog.pending = []changefeed.Event{peer(2, "/peer-2.md"), peer(3, "/peer-3.md")}
+	backlog.pending = []string{"/peer-2.md", "/peer-3.md"}
 
 	since := protocol.Cursor{Epoch: "w", Seq: 2}
 	moved := serve(t, f, Request{Scope: "/", Since: since})

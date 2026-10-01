@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/snirouter"
@@ -54,7 +53,16 @@ func (s *Server) Watch(ctx context.Context, authority string, req protocol.Reque
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
-		exchanger.Watch(watchCtx, localAddr{}, req, server)
+		defer cancel()
+		// Ending ctx closes the world's end, so a write nobody reads fails at
+		// once instead of holding the world until its write deadline.
+		stop := context.AfterFunc(watchCtx, func() {
+			if err := server.Close(); err != nil {
+				s.logger.Debug("closing in-process watch", "authority", authority, "error", err)
+			}
+		})
+		defer stop()
+		exchanger.ServeRequest(watchCtx, localAddr{}, req, server)
 	}()
 	return &localWatch{Conn: client, cancel: cancel, served: served}, nil
 }
@@ -72,22 +80,18 @@ func (s *Server) exchanger(authority string) (worldruntime.Exchanger, error) {
 }
 
 // localWatch is the reading end of an in-process watch. Close ends the watch
-// and waits for the world to let go of it.
+// at once, not at its next heartbeat, and waits for the world to let go.
 type localWatch struct {
 	net.Conn
 	cancel context.CancelFunc
 	served <-chan struct{}
-	once   sync.Once
-	err    error
 }
 
 func (w *localWatch) Close() error {
-	w.once.Do(func() {
-		w.err = w.Conn.Close()
-		w.cancel()
-		<-w.served
-	})
-	return w.err
+	err := w.Conn.Close()
+	w.cancel()
+	<-w.served
+	return err
 }
 
 // localAddr is the remote of an in-process stream; the rate limiter keys on

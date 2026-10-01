@@ -182,7 +182,7 @@ func New(config *Config) (*Runtime, error) {
 
 // ServeStream applies world-local controls and dispatches one request.
 func (r *Runtime) ServeStream(ctx context.Context, remote net.Addr, stream quicserve.Stream) {
-	r.serveStream(ctx, remote, stream, &runtimeEndpoint{runtime: r, logger: r.logger})
+	(&runtimeEndpoint{runtime: r, logger: r.logger}).serve(ctx, remote, stream, nil)
 }
 
 // Endpoint binds one routed authority to request logs.
@@ -197,70 +197,6 @@ type Gates = func(authority string) (protocol.Gate, error)
 // Gatable is a routed endpoint that also serves bearer connections.
 type Gatable interface {
 	Gated(gates Gates) (quicserve.Endpoint, error)
-}
-
-func (r *Runtime) serveStream(ctx context.Context, remote net.Addr, stream quicserve.Stream, endpoint *runtimeEndpoint) {
-	logger := endpoint.logger
-	if !r.beginStream() {
-		if err := stream.Close(); err != nil {
-			logger.Debug("closing rejected stream", "error", err)
-		}
-		return
-	}
-	defer r.active.Done()
-	// The response is written or failed by then; a close error changes nothing.
-	defer func() {
-		if err := stream.Close(); err != nil {
-			logger.Debug("closing stream", "error", err)
-		}
-	}()
-
-	held, admitted := r.admit(ctx, remote, logger)
-	if !admitted {
-		if err := r.writeRateLimited(stream); err != nil {
-			logger.Warn("writing rate-limited response", "ip", ratelimit.ExtractIP(remote), "error", err)
-		}
-		return
-	}
-	defer held.release()
-	requestCtx := ctx
-	if r.requestTimeout > 0 {
-		// The write bound keeps a client that stops reading from pinning the
-		// read view and a concurrency slot; store calls share the deadline.
-		deadline := time.Now().Add(r.requestTimeout)
-		var cancel context.CancelFunc
-		requestCtx, cancel = context.WithDeadline(ctx, deadline)
-		defer cancel()
-		if err := stream.SetReadDeadline(deadline); err != nil {
-			logger.Debug("setting stream read deadline", "error", err)
-		}
-		if err := stream.SetWriteDeadline(deadline); err != nil {
-			logger.Debug("setting stream write deadline", "error", err)
-		}
-	}
-	h := r.handler.WithLogger(logger)
-	req, ok := h.ReadRequest(stream)
-	if !ok {
-		return
-	}
-	if endpoint.gate != nil {
-		grant, err := endpoint.gate(requestCtx, req)
-		// The bearer is not a capability token; the handler never sees it.
-		delete(req.Metadata, "auth")
-		if err != nil {
-			h.Deny(stream, req, gateDenial(err))
-			return
-		}
-		ctx, requestCtx = protocol.WithGrant(ctx, grant), protocol.WithGrant(requestCtx, grant)
-	}
-	if req.Verb == protocol.VerbWatch && r.watches != nil {
-		// A watch is admitted under the fan-out's caps, not the request slots,
-		// and lives as long as the connection; each block write is bounded on its own.
-		held.release()
-		h.Serve(ctx, boundedWriter{stream: stream, budget: r.budget()}, req)
-		return
-	}
-	h.Serve(requestCtx, stream, req)
 }
 
 // exchange answers one request in process under the same controls as a
@@ -372,11 +308,12 @@ func (r *Runtime) acquire(ctx context.Context, remote net.Addr, logger *slog.Log
 	}
 }
 
-// Exchanger serves requests in process; every routed endpoint is one. Watch
-// writes a WATCH's blocks to stream until the watch ends, then closes it.
+// Exchanger serves requests in process; every routed endpoint is one.
+// ServeRequest answers req on stream as if stream had carried it, then
+// closes stream: the way to serve a WATCH, which outlives one response.
 type Exchanger interface {
 	Exchange(ctx context.Context, remote net.Addr, req protocol.Request) (protocol.Response, error)
-	Watch(ctx context.Context, remote net.Addr, req protocol.Request, stream quicserve.Stream)
+	ServeRequest(ctx context.Context, remote net.Addr, req protocol.Request, stream quicserve.Stream)
 }
 
 type runtimeEndpoint struct {
@@ -387,8 +324,79 @@ type runtimeEndpoint struct {
 	gate protocol.Gate
 }
 
+// serve answers one stream: parsed is its request when the caller already
+// holds one, else the request is read from stream.
+func (endpoint *runtimeEndpoint) serve(ctx context.Context, remote net.Addr, stream quicserve.Stream, parsed *protocol.Request) {
+	r, logger := endpoint.runtime, endpoint.logger
+	if !r.beginStream() {
+		if err := stream.Close(); err != nil {
+			logger.Debug("closing rejected stream", "error", err)
+		}
+		return
+	}
+	defer r.active.Done()
+	// The response is written or failed by then; a close error changes nothing.
+	defer func() {
+		if err := stream.Close(); err != nil {
+			logger.Debug("closing stream", "error", err)
+		}
+	}()
+
+	held, admitted := r.admit(ctx, remote, logger)
+	if !admitted {
+		if err := r.writeRateLimited(stream); err != nil {
+			logger.Warn("writing rate-limited response", "ip", ratelimit.ExtractIP(remote), "error", err)
+		}
+		return
+	}
+	defer held.release()
+	requestCtx := ctx
+	if r.requestTimeout > 0 {
+		// The write bound keeps a client that stops reading from pinning the
+		// read view and a concurrency slot; store calls share the deadline.
+		deadline := time.Now().Add(r.requestTimeout)
+		var cancel context.CancelFunc
+		requestCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+		if err := stream.SetReadDeadline(deadline); err != nil {
+			logger.Debug("setting stream read deadline", "error", err)
+		}
+		if err := stream.SetWriteDeadline(deadline); err != nil {
+			logger.Debug("setting stream write deadline", "error", err)
+		}
+	}
+	h := r.handler.WithLogger(logger)
+	var req protocol.Request
+	if parsed != nil {
+		req = *parsed
+	} else {
+		var ok bool
+		if req, ok = h.ReadRequest(stream); !ok {
+			return
+		}
+	}
+	if endpoint.gate != nil {
+		grant, err := endpoint.gate(requestCtx, req)
+		// The bearer is not a capability token; the handler never sees it.
+		delete(req.Metadata, "auth")
+		if err != nil {
+			h.Deny(stream, req, gateDenial(err))
+			return
+		}
+		ctx, requestCtx = protocol.WithGrant(ctx, grant), protocol.WithGrant(requestCtx, grant)
+	}
+	if req.Verb == protocol.VerbWatch && r.watches != nil {
+		// A watch is admitted under the fan-out's caps, not the request slots,
+		// and lives as long as the connection; each block write is bounded on its own.
+		held.release()
+		h.Serve(ctx, boundedWriter{stream: stream, budget: r.budget()}, req)
+		return
+	}
+	h.Serve(requestCtx, stream, req)
+}
+
 func (endpoint *runtimeEndpoint) ServeStream(ctx context.Context, remote net.Addr, stream quicserve.Stream) {
-	endpoint.runtime.serveStream(ctx, remote, stream, endpoint)
+	endpoint.serve(ctx, remote, stream, nil)
 }
 
 // Gated is this endpoint for one bearer connection: every request passes
@@ -415,28 +423,8 @@ func (endpoint *runtimeEndpoint) Exchange(ctx context.Context, remote net.Addr, 
 	return endpoint.runtime.exchange(ctx, remote, req, endpoint.logger)
 }
 
-// Watch serves an in-process WATCH under a stream's controls: the closing
-// gate and admission, then the fan-out's caps, as serveStream's watch branch.
-func (endpoint *runtimeEndpoint) Watch(ctx context.Context, remote net.Addr, req protocol.Request, stream quicserve.Stream) {
-	r, logger := endpoint.runtime, endpoint.logger
-	defer func() {
-		if err := stream.Close(); err != nil {
-			logger.Debug("closing watch stream", "error", err)
-		}
-	}()
-	if !r.beginStream() {
-		return
-	}
-	defer r.active.Done()
-	held, admitted := r.admit(ctx, remote, logger)
-	if !admitted {
-		if err := r.writeRateLimited(stream); err != nil {
-			logger.Warn("writing rate-limited response", "ip", ratelimit.ExtractIP(remote), "error", err)
-		}
-		return
-	}
-	held.release()
-	r.handler.WithLogger(logger).Serve(ctx, boundedWriter{stream: stream, budget: r.budget()}, req)
+func (endpoint *runtimeEndpoint) ServeRequest(ctx context.Context, remote net.Addr, req protocol.Request, stream quicserve.Stream) {
+	endpoint.serve(ctx, remote, stream, &req)
 }
 
 func (r *Runtime) beginStream() bool {

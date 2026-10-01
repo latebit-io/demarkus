@@ -26,6 +26,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/knowledge/knowledgeseed"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/peerhint"
+	"github.com/latebit-io/demarkus/server/internal/worldruntime"
 )
 
 // worldsTestHarness runs a worldManager over in-memory blob stores and a
@@ -179,8 +180,8 @@ func writeTokenEntry(t *testing.T, path, raw string) {
 	}
 }
 
-// tokens returns a live world's current token store.
-func (h *worldsTestHarness) tokens(t *testing.T, world string) *auth.TokenStore {
+// runtime returns a live world's runtime.
+func (h *worldsTestHarness) runtime(t *testing.T, world string) *worldruntime.Runtime {
 	t.Helper()
 	h.manager.mu.Lock()
 	defer h.manager.mu.Unlock()
@@ -188,7 +189,13 @@ func (h *worldsTestHarness) tokens(t *testing.T, world string) *auth.TokenStore 
 	if entry == nil {
 		t.Fatalf("world %s is not live", world)
 	}
-	return entry.runtime.Tokens()
+	return entry.runtime
+}
+
+// tokens returns a live world's current token store.
+func (h *worldsTestHarness) tokens(t *testing.T, world string) *auth.TokenStore {
+	t.Helper()
+	return h.runtime(t, world).Tokens()
 }
 
 func writeTokens(t *testing.T, dir, name string) string {

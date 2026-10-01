@@ -49,6 +49,14 @@ type Hub struct {
 	floor   uint64 // seqs at or below it cannot be resumed from: see Skip
 	notify  chan struct{}
 	closed  bool
+	// catching is the catch-up in flight; resumes that arrive meanwhile
+	// share it rather than each polling the store.
+	catching *catchUpFlight
+}
+
+type catchUpFlight struct {
+	done chan struct{}
+	err  error
 }
 
 // Backlog is a store's durable record of events, shared by every replica
@@ -199,9 +207,9 @@ type Subscription struct {
 	next    uint64  // Seq of the next event to read from the ring
 }
 
-// Subscribe starts a subscription over scope ("/" for everything, a prefix
-// ending in "/" for a subtree, else one document) at the head, or after
-// since, or ErrResync. Only a resume older than the ring does backlog I/O.
+// Subscribe starts a subscription over scope ("/", a "/"-ended subtree, or
+// one document) at the head, after since, or ErrResync. A resume before the
+// ring reads the backlog; one past the head first catches the hub up.
 func (h *Hub) Subscribe(ctx context.Context, scope string, since protocol.Cursor) (*Subscription, error) {
 	if err := h.catchUp(ctx, since); err != nil {
 		return nil, err
@@ -229,16 +237,38 @@ func (h *Hub) catchUp(ctx context.Context, since protocol.Cursor) error {
 	if h.backlog == nil || since.IsZero() || since.Epoch != h.epoch {
 		return nil
 	}
-	h.mu.Lock()
-	behind := since.Seq > h.lastSeq
-	h.mu.Unlock()
-	if !behind {
-		return nil
+	ran := false
+	for {
+		h.mu.Lock()
+		flight := h.catching
+		switch {
+		case since.Seq <= h.lastSeq, flight == nil && ran:
+			h.mu.Unlock()
+			return nil
+		case flight == nil:
+			// One that started before since was committed may have missed it,
+			// so a waiter still behind runs its own, once.
+			flight = &catchUpFlight{done: make(chan struct{})}
+			h.catching = flight
+			h.mu.Unlock()
+			flight.err = h.backlog.CatchUp(ctx)
+			h.mu.Lock()
+			h.catching = nil
+			h.mu.Unlock()
+			close(flight.done)
+			ran = true
+		default:
+			h.mu.Unlock()
+			select {
+			case <-flight.done:
+			case <-ctx.Done():
+				return fmt.Errorf("%w: catch up: %w", ErrResync, ctx.Err())
+			}
+		}
+		if flight.err != nil {
+			return fmt.Errorf("%w: catch up: %w", ErrResync, flight.err)
+		}
 	}
-	if err := h.backlog.CatchUp(ctx); err != nil {
-		return fmt.Errorf("%w: catch up: %w", ErrResync, err)
-	}
-	return nil
 }
 
 // resume loads (after, through] from the backlog outside the lock, then

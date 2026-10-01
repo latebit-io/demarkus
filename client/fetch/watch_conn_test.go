@@ -13,7 +13,7 @@ import (
 )
 
 // pipeFeed serves each dialed stream from a script over net.Pipe, the shape
-// of an in-process watch.
+// of an in-process watch. Every stream but the last hangs up after its script.
 type pipeFeed struct {
 	t       *testing.T
 	mu      sync.Mutex
@@ -23,9 +23,6 @@ type pipeFeed struct {
 }
 
 func (f *pipeFeed) dial(_ context.Context, req protocol.Request) (WatchStream, error) {
-	if req.Verb != protocol.VerbWatch {
-		return nil, errors.New("not a watch")
-	}
 	f.mu.Lock()
 	n := len(f.sinces)
 	f.sinces = append(f.sinces, req.Metadata["since"])
@@ -38,6 +35,11 @@ func (f *pipeFeed) dial(_ context.Context, req protocol.Request) (WatchStream, e
 		for _, block := range f.scripts[n] {
 			if _, err := block.WriteTo(server); err != nil {
 				return
+			}
+		}
+		if n < len(f.scripts)-1 {
+			if err := server.Close(); err != nil {
+				f.t.Errorf("hang up: %v", err)
 			}
 		}
 		// Hold the stream open until the client end closes it.
@@ -55,14 +57,13 @@ type connStream struct {
 	t *testing.T
 }
 
-func (s connStream) Abort()        { s.close() }
-func (s connStream) Release(error) { s.close() }
-
-func (s connStream) close() {
+func (s connStream) Abort() {
 	if err := s.Close(); err != nil {
 		s.t.Errorf("close pipe: %v", err)
 	}
 }
+
+func (s connStream) Release(error) { s.Abort() }
 
 func (f *pipeFeed) since(i int) string {
 	f.mu.Lock()
@@ -76,7 +77,7 @@ func TestNewWatchOverAConnReopensFromItsCursor(t *testing.T) {
 		return protocol.WatchEvent{Cursor: at(seq), Path: path, Version: 1, Op: protocol.OpPublish}.Block()
 	}
 	f := &pipeFeed{t: t, closed: make(chan struct{}, 2), scripts: [][]protocol.WatchBlock{
-		{protocol.WatchControl(protocol.StatusOK, at(1)), event(2, "/a.md"), protocol.WatchControl(protocol.StatusClosing, at(2))},
+		{protocol.WatchControl(protocol.StatusOK, at(1)), event(2, "/a.md")},
 		{protocol.WatchControl(protocol.StatusOK, at(2)), event(3, "/b.md")},
 	}}
 	w, err := NewWatch(context.Background(), f.dial, WatchRequest{Path: "/"}, 2*time.Second)

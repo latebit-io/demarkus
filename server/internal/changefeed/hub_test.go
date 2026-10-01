@@ -411,11 +411,7 @@ func TestResumeBacklogFailuresResync(t *testing.T) {
 			backlog.history = append(backlog.history[:3:3], backlog.history[4:]...)
 		}},
 		{name: "ring passes the backlog during the read", since: 2, reads: 1, setup: func(hub *Hub, backlog *recordBacklog) {
-			backlog.during = func() {
-				for seq := uint64(11); seq <= 16; seq++ {
-					hub.PublishAt(Event{Seq: seq, Path: "/a/x.md", Version: int(seq), Op: protocol.OpPublish})
-				}
-			}
+			backlog.during = func() { publishThrough(hub, 16) }
 		}},
 	}
 	for _, tt := range tests {
@@ -432,42 +428,37 @@ func TestResumeBacklogFailuresResync(t *testing.T) {
 	}
 }
 
+// publishThrough publishes /a/x.md events after the head through seq, as
+// commits that reach the ring while something else is under way.
+func publishThrough(hub *Hub, seq uint64) {
+	for next := hub.Head().Seq + 1; next <= seq; next++ {
+		hub.PublishAt(Event{Seq: next, Path: "/a/x.md", Version: int(next), Op: protocol.OpPublish})
+	}
+}
+
 // A resume past this replica's head asks the store once for what peers
 // committed before calling it a gap; anything else never asks.
 func TestResumePastTheHeadCatchesUpOnce(t *testing.T) {
-	peerCommits := func(hub *Hub) func() {
-		return func() {
-			for seq := uint64(11); seq <= 12; seq++ {
-				hub.PublishAt(Event{Seq: seq, Path: "/a/x.md", Version: int(seq), Op: protocol.OpPublish})
-			}
-		}
-	}
 	tests := []struct {
-		name     string
-		since    protocol.Cursor
-		setup    func(hub *Hub, backlog *recordBacklog)
-		resync   bool
-		catchUps int
-		next     uint64
+		name       string
+		since      protocol.Cursor
+		peerHead   uint64 // what a catch-up finds the peer committed through
+		catchUpErr error
+		resync     bool
+		catchUps   int
+		next       uint64
 	}{
-		{name: "peer committed past the head", since: protocol.Cursor{Epoch: "w", Seq: 11}, catchUps: 1, next: 12, setup: func(hub *Hub, backlog *recordBacklog) {
-			backlog.peer = peerCommits(hub)
-		}},
-		{name: "still past the head after catching up", since: protocol.Cursor{Epoch: "w", Seq: 13}, resync: true, catchUps: 1, setup: func(hub *Hub, backlog *recordBacklog) {
-			backlog.peer = peerCommits(hub)
-		}},
-		{name: "catching up fails", since: protocol.Cursor{Epoch: "w", Seq: 11}, resync: true, catchUps: 1, setup: func(_ *Hub, backlog *recordBacklog) {
-			backlog.catchUpErr = errors.New("bucket unavailable")
-		}},
+		{name: "peer committed past the head", since: protocol.Cursor{Epoch: "w", Seq: 11}, peerHead: 12, catchUps: 1, next: 12},
+		{name: "still past the head after catching up", since: protocol.Cursor{Epoch: "w", Seq: 13}, peerHead: 12, resync: true, catchUps: 1},
+		{name: "catching up fails", since: protocol.Cursor{Epoch: "w", Seq: 11}, catchUpErr: errors.New("bucket unavailable"), resync: true, catchUps: 1},
 		{name: "at the head", since: protocol.Cursor{Epoch: "w", Seq: 10}},
 		{name: "another epoch", since: protocol.Cursor{Epoch: "other", Seq: 20}, resync: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			hub, backlog := backlogHub()
-			if tt.setup != nil {
-				tt.setup(hub, backlog)
-			}
+			backlog.peer = func() { publishThrough(hub, tt.peerHead) }
+			backlog.catchUpErr = tt.catchUpErr
 			sub, err := hub.Subscribe(t.Context(), "/", tt.since)
 			if tt.resync != errors.Is(err, ErrResync) || !tt.resync && err != nil {
 				t.Fatalf("Subscribe: %v, want resync %v", err, tt.resync)
@@ -481,5 +472,34 @@ func TestResumePastTheHeadCatchesUpOnce(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Resumes that arrive while a catch-up is in flight share it: a failover
+// that moves every watcher at once polls the store once, not per watcher.
+func TestConcurrentResumesShareOneCatchUp(t *testing.T) {
+	hub, backlog := backlogHub()
+	release := make(chan struct{})
+	backlog.peer = func() {
+		<-release
+		publishThrough(hub, 12)
+	}
+	const resumes = 8
+	errs := make(chan error, resumes)
+	for range resumes {
+		go func() {
+			_, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: "w", Seq: 11})
+			errs <- err
+		}()
+	}
+	time.Sleep(20 * time.Millisecond) // let the resumes pile up behind the first
+	close(release)
+	for range resumes {
+		if err := <-errs; err != nil {
+			t.Errorf("Subscribe: %v", err)
+		}
+	}
+	if backlog.catchUps != 1 {
+		t.Fatalf("catch-ups = %d, want 1 shared by every resume", backlog.catchUps)
 	}
 }

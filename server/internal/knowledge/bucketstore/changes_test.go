@@ -322,7 +322,7 @@ func TestResumeOnALaggingReplicaCatchesUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume on the lagging replica: %v", err)
 	}
-	if ev, err := moved.Next(ctx); err != nil || ev.Path != "/two.md" {
-		t.Fatalf("resumed event = %+v, %v; want /two.md", ev, err)
+	if ev := storetest.NextEvent(t, moved); ev.Path != "/two.md" {
+		t.Fatalf("resumed event = %+v, want /two.md", ev)
 	}
 }

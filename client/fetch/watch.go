@@ -59,7 +59,8 @@ type WatchStream interface {
 	SetReadDeadline(time.Time) error
 	// Abort unblocks a pending read at once; the stream is dead after it.
 	Abort()
-	// Release hands the stream back, once; err is why it ended, nil if cleanly.
+	// Release aborts the stream and hands it back, once; err is why it
+	// ended, nil if cleanly.
 	Release(err error)
 }
 
@@ -187,10 +188,7 @@ type watchStream struct {
 	reader *protocol.WatchReader
 }
 
-func (s *watchStream) close() {
-	s.stream.Abort()
-	s.stream.Release(nil)
-}
+func (s *watchStream) close() { s.stream.Release(nil) }
 
 // quicWatchStream is a WATCH stream on a pooled connection.
 type quicWatchStream struct {
@@ -200,8 +198,12 @@ type quicWatchStream struct {
 	conn   *quic.Conn
 }
 
-func (s *quicWatchStream) Abort()            { s.CancelRead(0) }
-func (s *quicWatchStream) Release(err error) { s.client.dispose(s.host, s.conn, err) }
+func (s *quicWatchStream) Abort() { s.CancelRead(0) }
+
+func (s *quicWatchStream) Release(err error) {
+	s.CancelRead(0)
+	s.client.dispose(s.host, s.conn, err)
+}
 
 // watchDialer opens WATCH streams on host's pooled connection.
 func (c *Client) watchDialer(host string) WatchDialer {
@@ -221,9 +223,7 @@ func (c *Client) watchDialer(host string) WatchDialer {
 			stream.CancelWrite(0)
 		})
 		err = sendRequest(ctx, stream, req)
-		if !stop() && err == nil {
-			err = &sentError{cause: ctx.Err()}
-		}
+		stop()
 		if err != nil {
 			c.dispose(host, conn, err)
 			return nil, err
@@ -285,7 +285,6 @@ func (w *Watch) subscribe(ctx context.Context, since protocol.Cursor) (*watchStr
 	ws := &watchStream{stream: stream, reader: protocol.NewWatchReader(stream)}
 	first, err := ws.reader.Next()
 	if err != nil {
-		stream.Abort()
 		err = &sentError{cause: fmt.Errorf("read acknowledgement: %w", err)}
 		stream.Release(err)
 		return nil, err
