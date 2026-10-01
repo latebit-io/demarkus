@@ -18,6 +18,7 @@ import (
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/gateway"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/oauthsrv"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/storage"
+	"github.com/latebit-io/demarkus/knowledge/internal/leader"
 	"github.com/latebit-io/demarkus/protocol"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -336,16 +337,22 @@ func (b *backgroundTasks) startSweeper(ctx context.Context, wg *sync.WaitGroup) 
 		b.log.Info("broker: sweeper disabled (sweeper.disabled=true)")
 		return
 	}
-	sweeper := storage.NewSweeper(b.k8s, []storage.SweptStore{
+	sweeper := storage.NewSweeper([]storage.SweptStore{
 		{Name: "refresh tokens", Store: b.srv.RefreshStore()},
 		{Name: "client registrations", Store: b.srv.DynamicClients()},
 	}, cfg.Sweeper.Interval, b.log)
-	identity := brokerIdentity()
-	b.log.Info("broker: starting sweeper",
-		"interval", cfg.Sweeper.Interval, "leaseName", cfg.Sweeper.LeaseName,
-		"namespace", cfg.Server.BrokerNamespace, "identity", identity)
+	b.log.Info("broker: starting sweeper", "interval", cfg.Sweeper.Interval)
 	wg.Go(func() {
-		sweeper.RunLeaderElected(ctx, cfg.Sweeper.LeaseName, cfg.Server.BrokerNamespace, identity)
+		err := leader.Run(ctx, leader.Election{
+			Leases:    b.k8s.CoordinationV1(),
+			LeaseName: cfg.Sweeper.LeaseName,
+			Namespace: cfg.Server.BrokerNamespace,
+			Identity:  brokerIdentity(),
+			Log:       b.log.With("task", "sweeper"),
+		}, sweeper.Run)
+		if err != nil {
+			b.log.Error("broker: sweeper stopped", "err", err)
+		}
 	})
 }
 
