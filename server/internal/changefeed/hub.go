@@ -66,7 +66,7 @@ type Backlog interface {
 	// an error when it cannot name them all.
 	Events(ctx context.Context, after, through uint64) ([]Event, error)
 	// CatchUp publishes to the hub what peer replicas committed since this
-	// replica last looked.
+	// replica last looked. It bounds its own wait: callers may detach ctx.
 	CatchUp(ctx context.Context) error
 }
 
@@ -240,35 +240,43 @@ func (h *Hub) catchUp(ctx context.Context, since protocol.Cursor) error {
 	ran := false
 	for {
 		h.mu.Lock()
-		flight := h.catching
-		switch {
-		case since.Seq <= h.lastSeq, flight == nil && ran:
+		if since.Seq <= h.lastSeq {
 			h.mu.Unlock()
 			return nil
-		case flight == nil:
+		}
+		flight := h.catching
+		if flight == nil {
 			// One that started before since was committed may have missed it,
-			// so a waiter still behind runs its own, once.
+			// so a waiter still behind starts its own, once.
+			if ran {
+				h.mu.Unlock()
+				return nil
+			}
 			flight = &catchUpFlight{done: make(chan struct{})}
 			h.catching = flight
-			h.mu.Unlock()
-			flight.err = h.backlog.CatchUp(ctx)
-			h.mu.Lock()
-			h.catching = nil
-			h.mu.Unlock()
-			close(flight.done)
+			// Detached, so the caller that started it leaving fails no waiter.
+			go h.fly(context.WithoutCancel(ctx), flight)
 			ran = true
-		default:
-			h.mu.Unlock()
-			select {
-			case <-flight.done:
-			case <-ctx.Done():
-				return fmt.Errorf("%w: catch up: %w", ErrResync, ctx.Err())
-			}
+		}
+		h.mu.Unlock()
+		select {
+		case <-flight.done:
+		case <-ctx.Done():
+			return fmt.Errorf("%w: catch up: %w", ErrResync, ctx.Err())
 		}
 		if flight.err != nil {
 			return fmt.Errorf("%w: catch up: %w", ErrResync, flight.err)
 		}
 	}
+}
+
+// fly runs one shared catch-up and lets its waiters go.
+func (h *Hub) fly(ctx context.Context, flight *catchUpFlight) {
+	flight.err = h.backlog.CatchUp(ctx)
+	h.mu.Lock()
+	h.catching = nil
+	h.mu.Unlock()
+	close(flight.done)
 }
 
 // resume loads (after, through] from the backlog outside the lock, then

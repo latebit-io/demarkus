@@ -186,9 +186,12 @@ func (w *Watch) finish(err error) {
 type watchStream struct {
 	stream WatchStream
 	reader *protocol.WatchReader
+	// ended is the read error that cut the stream, so a dead connection is
+	// evicted on release; nil after a clean end.
+	ended error
 }
 
-func (s *watchStream) close() { s.stream.Release(nil) }
+func (s *watchStream) close() { s.stream.Release(s.ended) }
 
 // quicWatchStream is a WATCH stream on a pooled connection.
 type quicWatchStream struct {
@@ -374,6 +377,7 @@ func (w *Watch) pump(ctx context.Context, s *watchStream) (delay time.Duration, 
 	defer stop()
 	for {
 		if err := s.stream.SetReadDeadline(time.Now().Add(watchStall)); err != nil {
+			s.ended = err
 			return 0, nil
 		}
 		block, err := s.reader.Next()
@@ -382,6 +386,7 @@ func (w *Watch) pump(ctx context.Context, s *watchStream) (delay time.Duration, 
 		}
 		if err != nil {
 			// A cut stream, a stall or a malformed block: resume from the cursor.
+			s.ended = err
 			return 0, nil
 		}
 		if block.Status == "" {

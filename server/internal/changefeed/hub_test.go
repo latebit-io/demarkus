@@ -313,10 +313,13 @@ type recordBacklog struct {
 	catchUps   int
 }
 
-func (b *recordBacklog) CatchUp(context.Context) error {
+func (b *recordBacklog) CatchUp(ctx context.Context) error {
 	b.catchUps++
 	if b.peer != nil {
 		b.peer()
+	}
+	if err := ctx.Err(); err != nil {
+		return err // as a poll under an ended context fails
 	}
 	return b.catchUpErr
 }
@@ -501,5 +504,38 @@ func TestConcurrentResumesShareOneCatchUp(t *testing.T) {
 	}
 	if backlog.catchUps != 1 {
 		t.Fatalf("catch-ups = %d, want 1 shared by every resume", backlog.catchUps)
+	}
+}
+
+// The shared catch-up outlives the resume that started it: that caller
+// leaving fails only itself, never the resumes waiting on the same flight.
+func TestCatchUpOutlivesTheResumeThatStartedIt(t *testing.T) {
+	hub, backlog := backlogHub()
+	started, release := make(chan struct{}), make(chan struct{})
+	backlog.peer = func() {
+		close(started)
+		<-release
+		publishThrough(hub, 12)
+	}
+	since := protocol.Cursor{Epoch: "w", Seq: 11}
+	leaving, leave := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+	go func() {
+		_, err := hub.Subscribe(leaving, "/", since)
+		first <- err
+	}()
+	<-started
+	second := make(chan error, 1)
+	go func() {
+		_, err := hub.Subscribe(t.Context(), "/", since)
+		second <- err
+	}()
+	leave()
+	if err := <-first; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leaving resume: %v, want its own cancellation", err)
+	}
+	close(release)
+	if err := <-second; err != nil {
+		t.Fatalf("waiting resume failed with the leaver: %v", err)
 	}
 }

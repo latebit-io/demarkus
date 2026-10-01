@@ -15,11 +15,11 @@ import (
 // pipeFeed serves each dialed stream from a script over net.Pipe, the shape
 // of an in-process watch. Every stream but the last hangs up after its script.
 type pipeFeed struct {
-	t       *testing.T
-	mu      sync.Mutex
-	sinces  []string
-	scripts [][]protocol.WatchBlock
-	closed  chan struct{} // receives once per stream whose client end closed
+	t        *testing.T
+	mu       sync.Mutex
+	sinces   []string
+	scripts  [][]protocol.WatchBlock
+	released chan error // why each stream the client released ended
 }
 
 func (f *pipeFeed) dial(_ context.Context, req protocol.Request) (WatchStream, error) {
@@ -44,17 +44,17 @@ func (f *pipeFeed) dial(_ context.Context, req protocol.Request) (WatchStream, e
 		}
 		// Hold the stream open until the client end closes it.
 		if _, err := io.Copy(io.Discard, server); err != nil && !errors.Is(err, io.ErrClosedPipe) {
-			return
+			f.t.Errorf("drain: %v", err)
 		}
-		f.closed <- struct{}{}
 	}()
-	return connStream{Conn: client, t: f.t}, nil
+	return connStream{Conn: client, t: f.t, released: f.released}, nil
 }
 
 // connStream is a net.Conn as a WatchStream: closing it aborts and releases.
 type connStream struct {
 	net.Conn
-	t *testing.T
+	t        *testing.T
+	released chan<- error
 }
 
 func (s connStream) Abort() {
@@ -63,7 +63,10 @@ func (s connStream) Abort() {
 	}
 }
 
-func (s connStream) Release(error) { s.Abort() }
+func (s connStream) Release(err error) {
+	s.Abort()
+	s.released <- err
+}
 
 func (f *pipeFeed) since(i int) string {
 	f.mu.Lock()
@@ -76,7 +79,7 @@ func TestNewWatchOverAConnReopensFromItsCursor(t *testing.T) {
 	event := func(seq uint64, path string) protocol.WatchBlock {
 		return protocol.WatchEvent{Cursor: at(seq), Path: path, Version: 1, Op: protocol.OpPublish}.Block()
 	}
-	f := &pipeFeed{t: t, closed: make(chan struct{}, 2), scripts: [][]protocol.WatchBlock{
+	f := &pipeFeed{t: t, released: make(chan error, 2), scripts: [][]protocol.WatchBlock{
 		{protocol.WatchControl(protocol.StatusOK, at(1)), event(2, "/a.md")},
 		{protocol.WatchControl(protocol.StatusOK, at(2)), event(3, "/b.md")},
 	}}
@@ -93,11 +96,16 @@ func TestNewWatchOverAConnReopensFromItsCursor(t *testing.T) {
 		t.Errorf("cursor = %v, want %v", got, at(3))
 	}
 	w.Close()
-	for range 2 {
+	// The cut stream is released with its read error, so a dead connection
+	// could be evicted; the one Close ended is released clean.
+	for i, cut := range []bool{true, false} {
 		select {
-		case <-f.closed:
+		case got := <-f.released:
+			if (got != nil) != cut {
+				t.Errorf("stream %d released with %v, want an error %v", i, got, cut)
+			}
 		case <-time.After(5 * time.Second):
-			t.Fatal("a stream was not released")
+			t.Fatalf("stream %d was not released", i)
 		}
 	}
 }
