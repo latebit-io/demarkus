@@ -50,19 +50,12 @@ func TestTokenResourceBindsTheGrant(t *testing.T) {
 
 	codeVerifier := "test-verifier-must-be-43-to-128-chars-long-1234"
 	sum := sha256.Sum256([]byte(codeVerifier))
-	id, err := broker.authCodeStore.Begin(&AuthCodeRequest{
+	alice := brokertest.AliceClaims()
+	code := issueTestCode(t, broker, &AuthCodeRequest{
 		ClientID: "client-abc", RedirectURI: "http://127.0.0.1:55408/callback",
 		CodeChallenge: base64.RawURLEncoding.EncodeToString(sum[:]), CodeChallengeMethod: "S256",
 		Resource: knowledge,
-	})
-	if err != nil {
-		t.Fatalf("Begin: %v", err)
-	}
-	exchange := core.ExchangeResult{Claims: brokertest.AliceClaims()}
-	code, _, err := broker.authCodeStore.Bind(id, &exchange)
-	if err != nil {
-		t.Fatalf("Bind: %v", err)
-	}
+	}, &alice)
 	form := url.Values{
 		"grant_type": {"authorization_code"}, "code": {code}, "client_id": {"client-abc"},
 		"redirect_uri": {"http://127.0.0.1:55408/callback"}, "code_verifier": {codeVerifier},
@@ -147,15 +140,9 @@ func TestDeviceGrantChecksTheResourceAtRedemption(t *testing.T) {
 	signer := brokertest.NewTestIDTokenSigner(t)
 	srv, broker := newTestServerWithSigner(t, cfg, verifier, fake.NewSimpleClientset(), signer)
 	knowledge, memory := cfg.Server.Resources()[0], cfg.Server.Resources()[1]
-	deviceCode, _, _, err := broker.deviceStore.Authorize(knowledge)
-	if err != nil {
-		t.Fatalf("Authorize: %v", err)
-	}
-	// The callback binds the claims to the grant's resource before Bind.
+	deviceCode, _ := authorizeTestDevice(t, broker, knowledge)
 	alice := brokertest.AliceClaims()
-	if err := broker.deviceStore.Bind(deviceCode, &core.ExchangeResult{Claims: alice.BoundTo(knowledge), RawIDToken: "idp"}, "refresh"); err != nil {
-		t.Fatalf("Bind: %v", err)
-	}
+	bindTestDevice(t, broker, deviceCode, &alice)
 	poll := func(resource string) (int, deviceTokenSuccess, string) {
 		form := url.Values{"grant_type": {deviceGrantType}, "device_code": {deviceCode}}
 		if resource != "" {
@@ -170,33 +157,37 @@ func TestDeviceGrantChecksTheResourceAtRedemption(t *testing.T) {
 	if status, _, code := poll("https://elsewhere.example/mcp"); status != http.StatusBadRequest || code != "invalid_target" {
 		t.Fatalf("unknown resource = %d %q, want 400 invalid_target", status, code)
 	}
-	// A bound grant answers with a broker-signed token carrying the
-	// resource, whether or not the poll names it again.
-	for _, resource := range []string{knowledge, ""} {
-		status, out, code := poll(resource)
-		if status != http.StatusOK {
-			t.Fatalf("poll with resource %q = %d %q, want 200", resource, status, code)
-		}
-		claims, err := signer.VerifyIDToken(out.IDToken, cfg.Server.PublicURL, cfg.Server.Resources(), time.Now())
-		if err != nil || claims.Resource != knowledge || out.AccessToken != out.IDToken {
-			t.Fatalf("poll with resource %q: token resource = %q (err %v), want a broker token bound to the knowledge gateway", resource, claims.Resource, err)
-		}
+	// The refused polls kept the grant; the right one collects a
+	// broker-signed token carrying the resource, once.
+	status, out, code := poll(knowledge)
+	if status != http.StatusOK {
+		t.Fatalf("poll with the grant's resource = %d %q, want 200", status, code)
+	}
+	claims, err := signer.VerifyIDToken(out.IDToken, cfg.Server.PublicURL, cfg.Server.Resources(), time.Now())
+	if err != nil || claims.Resource != knowledge || out.AccessToken != out.IDToken {
+		t.Fatalf("token resource = %q (err %v), want a broker token bound to the knowledge gateway", claims.Resource, err)
+	}
+	if status, _, code := poll(""); status != http.StatusBadRequest || code != "expired_token" {
+		t.Fatalf("second collection = %d %q, want 400 expired_token", status, code)
 	}
 }
 
-func TestDeviceGrantWithoutResourceKeepsTheIdPTokens(t *testing.T) {
+// An unbound grant gets an unbound broker token and a refresh token; the
+// IdP's own tokens never leave the broker.
+func TestDeviceGrantWithoutResourceGetsAnUnboundBrokerToken(t *testing.T) {
 	cfg := twoGatewayConfig()
-	srv, broker := newTestServerWithSigner(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
-	deviceCode, _, _, err := broker.deviceStore.Authorize("")
-	if err != nil {
-		t.Fatalf("Authorize: %v", err)
-	}
-	if err := broker.deviceStore.Bind(deviceCode, &core.ExchangeResult{Claims: brokertest.AliceClaims(), RawIDToken: "idp-id", AccessToken: "idp-access"}, "refresh"); err != nil {
-		t.Fatalf("Bind: %v", err)
-	}
+	signer := brokertest.NewTestIDTokenSigner(t)
+	srv, broker := newTestServerWithSigner(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), signer)
+	deviceCode, _ := authorizeTestDevice(t, broker, "")
+	alice := brokertest.AliceClaims()
+	bindTestDevice(t, broker, deviceCode, &alice)
 	status, out, bad := postToken(t, srv, url.Values{"grant_type": {deviceGrantType}, "device_code": {deviceCode}})
-	if status != http.StatusOK || out.IDToken != "idp-id" || out.AccessToken != "idp-access" {
-		t.Fatalf("unbound grant = %d %q %+v, want the IdP tokens", status, bad.Error, out)
+	if status != http.StatusOK || out.RefreshToken == "" || out.AccessToken != out.IDToken {
+		t.Fatalf("unbound grant = %d %q %+v, want a broker token and a refresh token", status, bad.Error, out)
+	}
+	claims, err := signer.VerifyIDToken(out.IDToken, cfg.Server.PublicURL, append([]string{cfg.Server.PublicURL}, cfg.Server.Resources()...), time.Now())
+	if err != nil || claims.Resource != "" || claims.Email != alice.Email {
+		t.Fatalf("token claims = %+v (err %v), want alice unbound", claims, err)
 	}
 }
 

@@ -32,6 +32,10 @@ func (c *Config) validate() error {
 	if c.Server.BrokerNamespace == "" {
 		return fmt.Errorf("server.brokerNamespace is required")
 	}
+	// The GCS driver validates the name when the broker opens the bucket.
+	if !strings.HasPrefix(c.Server.StateBucket, "gs://") || c.Server.StateBucketName() == "" {
+		return fmt.Errorf("server.stateBucket %q must be a gs:// bucket URL", c.Server.StateBucket)
+	}
 	if err := c.Server.normalizePublicURLs(); err != nil {
 		return err
 	}
@@ -41,10 +45,7 @@ func (c *Config) validate() error {
 	if c.Server.StateTTL < 0 {
 		return fmt.Errorf("server.stateTTL must be > 0 (got %s)", c.Server.StateTTL)
 	}
-	if err := c.Server.applyDeviceFlowDefaults(); err != nil {
-		return err
-	}
-	if err := c.Server.applyRefreshDefaults(); err != nil {
+	if err := c.Server.ApplyDefaults(); err != nil {
 		return err
 	}
 	if err := c.Server.validateGateways(); err != nil {

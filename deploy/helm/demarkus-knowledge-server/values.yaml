@@ -203,15 +203,23 @@ broker:
   insecureCookies: false
   # Refresh-token lifetime. 90 days matches industry defaults.
   refreshTokenTTL: 2160h
+  # Live logins per user; past it the oldest is revoked.
+  maxSessionsPerUser: 20
   # Broker-signed id_token lifetime; must be less than refreshTokenTTL.
   idTokenTTL: 15m
-  # Broker state Secrets in the release namespace, kept across chart
-  # lifecycle events. Blank derives <fullname>-refresh-tokens,
-  # <fullname>-signing-key and <fullname>-dynamic-clients. Renaming
-  # dynamicClientsSecret after install orphans MCP host registrations.
-  refreshTokensSecret: ""
+  # gs:// bucket for refresh token records and MCP host registrations, one
+  # object each. Required; dedicated to the broker, never a world's bucket.
+  # The workload identity needs roles/storage.objectAdmin on it.
+  stateBucket: ""
+  # Generated id_token signing key. Default <fullname>-signing-key.
   signingKeySecret: ""
+  # Where registrations lived before stateBucket; the broker imports them at
+  # start and empties it. Default <fullname>-dynamic-clients.
   dynamicClientsSecret: ""
+  # In-flight authorization codes and device grants, shared by every replica
+  # so a login may cross pods. The broker creates it; entries live minutes.
+  # Default <fullname>-oauth-state.
+  oauthStateSecret: ""
 
   oidc:
     # OIDC discovery URL (e.g. https://accounts.google.com).

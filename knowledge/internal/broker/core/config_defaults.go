@@ -5,14 +5,23 @@ import (
 	"time"
 )
 
+// ApplyDefaults resolves the device and refresh knobs LoadConfig leaves
+// unset and rejects degenerate values; test configs call it too.
+func (s *ServerConfig) ApplyDefaults() error {
+	if err := s.applyDeviceFlowDefaults(); err != nil {
+		return err
+	}
+	return s.applyRefreshDefaults()
+}
+
 // applyRefreshDefaults fills the refresh flow knobs and rejects degenerate
 // values. Applied to the config itself so every consumer sees resolved values.
 func (s *ServerConfig) applyRefreshDefaults() error {
-	if s.RefreshTokensSecret == "" {
-		s.RefreshTokensSecret = DefaultRefreshTokensSecret
-	}
 	if s.DynamicClientsSecret == "" {
 		s.DynamicClientsSecret = DefaultDynamicClientsSecret
+	}
+	if s.OAuthStateSecret == "" {
+		s.OAuthStateSecret = DefaultOAuthStateSecret
 	}
 	if s.SigningKeySecret == "" {
 		s.SigningKeySecret = DefaultSigningKeySecret
@@ -28,6 +37,12 @@ func (s *ServerConfig) applyRefreshDefaults() error {
 	}
 	if s.IDTokenTTL == 0 {
 		s.IDTokenTTL = DefaultIDTokenTTL
+	}
+	if s.MaxSessionsPerUser == 0 {
+		s.MaxSessionsPerUser = DefaultMaxSessionsPerUser
+	}
+	if s.MaxSessionsPerUser < 0 {
+		return fmt.Errorf("server.maxSessionsPerUser must be > 0 (got %d)", s.MaxSessionsPerUser)
 	}
 	if s.IDTokenTTL < 0 {
 		return fmt.Errorf("server.idTokenTTL must be > 0 (got %s)", s.IDTokenTTL)
@@ -102,3 +117,7 @@ func (r *RateLimitConfig) applyDefaultsAndValidate() error {
 // DefaultRefreshTokenTTL is 90 days, within the 60 to 180 day range Google,
 // Auth0 and Okta default to.
 const DefaultRefreshTokenTTL = 90 * 24 * time.Hour
+
+// DefaultMaxSessionsPerUser bounds one user's logins: a few machines times
+// a few MCP hosts, the CLI and the web client.
+const DefaultMaxSessionsPerUser = 20

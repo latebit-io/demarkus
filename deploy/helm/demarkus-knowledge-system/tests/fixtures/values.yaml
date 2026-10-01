@@ -14,6 +14,7 @@ knowledge:
       gsa: knowledge@project.iam.gserviceaccount.com
   broker:
     publicURL: https://broker.example.com
+    stateBucket: gs://deployment-broker-state
     oidc:
       issuer: https://accounts.example.com
       clientID: broker-app

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blobtest"
+	"github.com/latebit-io/demarkus/server/blob"
+	"github.com/latebit-io/demarkus/server/blob/blobtest"
 )
 
 func TestMemoryConformance(t *testing.T) {

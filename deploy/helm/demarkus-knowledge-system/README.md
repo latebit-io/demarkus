@@ -111,9 +111,10 @@ entry.
 ## Defaults worth knowing
 
 - Sub-chart resources are named `knowledge` (from `global.knowledgeService`),
-  `agent` and `library` (through `fullnameOverride`). The broker's state
-  Secrets follow: `knowledge-refresh-tokens`, `knowledge-signing-key`,
-  `knowledge-cookie-key`, `knowledge-dynamic-clients`.
+  `agent` and `library` (through `fullnameOverride`). The broker's Secrets
+  follow: `knowledge-signing-key`, `knowledge-cookie-key`,
+  `knowledge-oauth-state`. Refresh tokens and MCP host registrations live in
+  `knowledge.broker.stateBucket`.
 - Every world lives in the release namespace, next to the pods that mount
   its token Secrets; a `namespace` on a `global.worlds` entry fails the
   render.

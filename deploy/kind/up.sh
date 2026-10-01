@@ -24,7 +24,7 @@ set -euo pipefail
 CLUSTER="${CLUSTER:-knowledge-system}"
 NAMESPACE="${NAMESPACE:-demarkus}"
 RELEASE="${RELEASE:-world-default}"
-SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.30.3}"
+SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.50.0}"
 SERVER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-server"
 KNOWLEDGE_RELEASE="${KNOWLEDGE_RELEASE:-knowledge}"
 KNOWLEDGE_IMAGE="${KNOWLEDGE_IMAGE:-}"
@@ -292,11 +292,15 @@ if [[ "$WITH_KNOWLEDGE" == "true" ]]; then
   echo "--- applying fake-gcs-server (the knowledge worlds' buckets)"
   kubectl -n "$NAMESPACE" apply -f "$FAKE_GCS_MANIFEST"
   kubectl -n "$NAMESPACE" rollout status deployment/fake-gcs-server --timeout=120s
-  # The chart never creates buckets; the world's bucket is gs://kind-world-default.
+  # The chart never creates buckets: the world's and the broker's state.
+  # A reused cluster already has them: 409 is fine, anything else fails.
   kubectl run -n "$NAMESPACE" bucket-setup --rm -i --restart=Never \
-    --image="$MINT_CURL_IMAGE" --command -- \
-    curl -sS -f -X POST -H 'Content-Type: application/json' -d '{"name":"kind-world-default"}' \
-    "http://fake-gcs-server.$NAMESPACE.svc.cluster.local:4443/storage/v1/b"
+    --image="$MINT_CURL_IMAGE" --command -- sh -c '
+for bucket in kind-world-default kind-broker-state; do
+  code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" \
+    -d "{\"name\":\"$bucket\"}" "http://fake-gcs-server.'"$NAMESPACE"'.svc.cluster.local:4443/storage/v1/b")
+  case $code in 200|409) ;; *) echo "bucket create $bucket: HTTP $code"; exit 1 ;; esac
+done'
 
   echo "--- applying mock-oauth2-server (OIDC issuer for broker discovery)"
   kubectl -n "$NAMESPACE" apply -f "$MOCK_OIDC_MANIFEST"
@@ -517,6 +521,28 @@ HTTP=$($CURL -o /tmp/replay.json -w "%{http_code}" -X POST "$BROKER/device/token
 [ "$HTTP" = "400" ] || { echo "FAIL: consumed code replay did not 400 (got $HTTP)"; cat /tmp/replay.json; exit 1; }
 echo "OK: authorization code is one-shot (replay rejected)"
 echo "OK: auth-code + PKCE flow end-to-end"
+
+# 6b. A public login rotates its refresh token on every refresh, through the
+#     Service so the replicas share the login. The token two rotations back
+#     is reuse: it revokes the login, so the newest token stops working too.
+FIRST=$(sed -n "s/.*\"refresh_token\":\"\([^\"]*\)\".*/\1/p" /tmp/tok.json)
+[ -n "$FIRST" ] || { echo "FAIL: refresh_token missing from the auth-code exchange"; exit 1; }
+refresh_public() {
+  $CURL -o /tmp/pref.json -w "%{http_code}" -X POST "$BROKER/device/token" \
+    --data-urlencode "grant_type=refresh_token" --data-urlencode "refresh_token=$1"
+}
+HTTP=$(refresh_public "$FIRST")
+SECOND=$(sed -n "s/.*\"refresh_token\":\"\([^\"]*\)\".*/\1/p" /tmp/pref.json)
+[ "$HTTP" = "200" ] && [ -n "$SECOND" ] && [ "$SECOND" != "$FIRST" ] || { echo "FAIL: refresh did not rotate (got $HTTP)"; cat /tmp/pref.json; exit 1; }
+HTTP=$(refresh_public "$SECOND")
+THIRD=$(sed -n "s/.*\"refresh_token\":\"\([^\"]*\)\".*/\1/p" /tmp/pref.json)
+[ "$HTTP" = "200" ] && [ -n "$THIRD" ] && [ "$THIRD" != "$SECOND" ] || { echo "FAIL: rotated token did not refresh (got $HTTP)"; cat /tmp/pref.json; exit 1; }
+echo "OK: a public refresh token rotates"
+for TOKEN in "$FIRST" "$THIRD"; do
+  HTTP=$(refresh_public "$TOKEN")
+  [ "$HTTP" = "400" ] && grep -q "invalid_grant" /tmp/pref.json || { echo "FAIL: reuse did not revoke the login (got $HTTP)"; cat /tmp/pref.json; exit 1; }
+done
+echo "OK: a reused refresh token revokes its login"
 
 # 7. TOOL CALLS — the Bearer minted above drives the MCP gateway, so the
 #    smoke covers what an agent does after joining: read, write, and the
@@ -750,6 +776,12 @@ HTTP=$($CURL -u "$CLIENT_ID:$CLIENT_SECRET" -o /tmp/ref.json -w "%{http_code}" -
 [ "$HTTP" = "200" ] || { echo "FAIL: Basic-auth refresh did not 200 (got $HTTP)"; cat /tmp/ref.json; exit 1; }
 grep -Eq "\"id_token\":\"[^\"]+\"" /tmp/ref.json || { echo "FAIL: id_token missing from authenticated refresh"; exit 1; }
 echo "OK: bound refresh token mints with client auth"
+
+# 10. A login bound to a web client keeps its token: the client secret
+#     guards it, so the refresh hands the same one back.
+NEXT=$(sed -n "s/.*\"refresh_token\":\"\([^\"]*\)\".*/\1/p" /tmp/ref.json)
+[ "$NEXT" = "$REFRESH" ] || { echo "FAIL: a client-bound refresh token changed"; exit 1; }
+echo "OK: a client-bound refresh token is not rotated"
 echo "OK: confidential web-client flow end-to-end"
 '
     echo "--- confidential web-client flow passed"

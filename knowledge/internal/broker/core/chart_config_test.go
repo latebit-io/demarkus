@@ -26,4 +26,7 @@ func TestLoadConfigAcceptsTheChartRendering(t *testing.T) {
 	if got := cfg.Server.BearerAddr; got != ":8443" {
 		t.Fatalf("bearerAddr = %q, want the chart's bearer port", got)
 	}
+	if got := OAuthStateRef(cfg).Name; got != "knowledge-oauth-state" {
+		t.Fatalf("oauth state Secret = %q, want the chart's name", got)
+	}
 }

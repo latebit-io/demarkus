@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -12,31 +13,37 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 )
 
-// RefreshSweeper retires expired refresh grants; the OAuth server's
-// RefreshStore implements it. Sweep returns how many it removed.
-type RefreshSweeper interface {
+// Sweepable deletes its expired records and returns how many it removed;
+// the refresh token and client registration stores implement it.
+type Sweepable interface {
 	Sweep(ctx context.Context) (int, error)
 }
 
-// Sweeper is the broker's periodic janitor: each tick retires expired refresh
-// tokens. RunLeaderElected keeps one replica sweeping through a Lease; the
-// others keep serving.
+// SweptStore names a Sweepable for the logs.
+type SweptStore struct {
+	Name  string
+	Store Sweepable
+}
+
+// Sweeper is the broker's periodic janitor: each tick sweeps every store.
+// RunLeaderElected keeps one replica sweeping through a Lease; the others
+// keep serving.
 type Sweeper struct {
-	k8s          kubernetes.Interface
-	refreshStore RefreshSweeper
-	interval     time.Duration
-	log          *slog.Logger
+	k8s      kubernetes.Interface
+	stores   []SweptStore
+	interval time.Duration
+	log      *slog.Logger
 	// sweepHook fires after each pass; tests count a replica's ticks with it.
 	sweepHook func()
 }
 
-// NewSweeper builds a Sweeper over the Lease client and the store to sweep.
-// A nil refreshStore makes each pass a no-op; a nil log means slog.Default.
-func NewSweeper(k8s kubernetes.Interface, refreshStore RefreshSweeper, interval time.Duration, log *slog.Logger) *Sweeper {
+// NewSweeper builds a Sweeper over the Lease client and the stores to sweep;
+// a nil log means slog.Default.
+func NewSweeper(k8s kubernetes.Interface, stores []SweptStore, interval time.Duration, log *slog.Logger) *Sweeper {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Sweeper{k8s: k8s, refreshStore: refreshStore, interval: interval, log: log}
+	return &Sweeper{k8s: k8s, stores: stores, interval: interval, log: log}
 }
 
 // RunLeaderElected sweeps only while this replica holds the Lease; every
@@ -94,17 +101,18 @@ func (s *Sweeper) runOnce(ctx context.Context) {
 	}
 }
 
-// sweep is one pass; nil refreshStore is a no-op.
+// sweep is one pass over every store; one store's failure does not skip
+// the others.
 func (s *Sweeper) sweep(ctx context.Context) error {
-	if s.refreshStore == nil {
-		return nil
+	var errs []error
+	for _, store := range s.stores {
+		swept, err := store.Store.Sweep(ctx)
+		if swept > 0 {
+			s.log.InfoContext(ctx, "broker: swept expired records", "store", store.Name, "count", swept)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s sweep: %w", store.Name, err))
+		}
 	}
-	swept, err := s.refreshStore.Sweep(ctx)
-	if err != nil {
-		return fmt.Errorf("refresh token sweep: %w", err)
-	}
-	if swept > 0 {
-		s.log.InfoContext(ctx, "broker: swept refresh tokens", "count", swept)
-	}
-	return nil
+	return errors.Join(errs...)
 }

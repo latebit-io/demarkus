@@ -35,8 +35,8 @@ tests:
             apiGroups: [""]
             resources: ["secrets"]
             resourceNames:
-              - RELEASE-NAME-refresh-tokens
               - RELEASE-NAME-dynamic-clients
+              - RELEASE-NAME-oauth-state
               - RELEASE-NAME-signing-key
               - RELEASE-NAME-cookie-key
             verbs: ["get", "update"]

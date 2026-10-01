@@ -86,10 +86,10 @@ tests:
 
   - it: rejects a raw secret name colliding with a broker state Secret
     set:
-      broker.refreshTokensSecret: team-a-token-values
+      broker.signingKeySecret: team-a-token-values
     asserts:
       - failedTemplate:
-          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with broker.refreshTokensSecret'
+          errorMessage: 'worlds[0]: generated raw Secret name "team-a-token-values" collides with broker.signingKeySecret'
 
   - it: rejects a raw secret name colliding with the TLS secret
     set:

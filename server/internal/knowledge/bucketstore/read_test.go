@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 )
 
 var _ backend.Store = (*Store)(nil)

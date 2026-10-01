@@ -17,6 +17,8 @@ under its `writeScope` with no token minted. See
 - One GCS bucket and immutable world ID per world; an empty bucket is created on first start
 - One existing multi-SAN TLS Secret for QUIC, or cert-manager and a suitable Issuer
 - An OIDC client registered at your IdP (`broker.oidc`) and the broker's public URL
+- One dedicated GCS bucket for broker state (`broker.stateBucket`), with
+  `roles/storage.objectAdmin` for the workload identity
 
 The chart never creates buckets, PVCs, or TLS Secrets. The optional
 `Certificate` asks cert-manager to populate the referenced TLS Secret.
@@ -308,11 +310,26 @@ subject and `/auth/login` per IP, per replica. `trustForwardedFor` is on by
 default and is only safe behind an Ingress controller that strips spoofed
 `X-Forwarded-For` (nginx-ingress and Traefik do); turn it off without one.
 
-Broker state lives in kept Secrets the chart seeds empty and never reclaims
-(`<fullname>-refresh-tokens`, `<fullname>-dynamic-clients`) or the broker
-creates on first start (`<fullname>-signing-key`, `<fullname>-cookie-key`).
-The signed-state cookie key never comes from the render, so `helm template`
-is deterministic; own it through `broker.existingCookieKeyRef`. Rotate the
+Logins and MCP host registrations live in `broker.stateBucket`, one object
+each: `refresh/<user>/<login>` and `clients/<client_id>`. The user key is a
+hash of the identity, and a record holds claims and secret hashes, never a
+token. Never point it at a world's bucket. A public client's refresh token
+rotates on every refresh; a replaced token works for one more minute, then
+presenting it revokes the login. A `webClients` login keeps its token, since
+the client authenticates on every refresh. `broker.maxSessionsPerUser` (default 20) caps one user's
+logins, revoking the oldest. The leader-elected sweeper deletes logins past
+their 90 days. An optional lifecycle rule deleting objects older than 91
+days is a safe backstop: a refresh rewrites the object, so it only catches
+records already expired.
+Keys live in Secrets the broker creates on first start (`<fullname>-signing-key`,
+`<fullname>-cookie-key`). The signed-state cookie key never comes from the
+render, so `helm template` is deterministic; own it through
+`broker.existingCookieKeyRef`. Logins in
+flight live in `<fullname>-oauth-state` (`broker.oauthStateSecret`), which
+the broker creates on first use: issued authorization codes and device
+grants under the hash of each code, holding claims only, swept as they
+expire (60 seconds and ten minutes) and capped, so a login may cross
+replicas. Uninstall leaves it behind; it holds nothing past ten minutes. Rotate the
 signing key by deleting its Secret and restarting every replica; in-flight
 broker-signed tokens are invalidated. The graph store behind
 `mark_backlinks`, `mark_graph` and friends is process memory and rebuilds
@@ -378,8 +395,12 @@ helm template knowledge ./deploy/helm/demarkus-knowledge-server \
 Resources are named after the release (`fullnameOverride` still wins). A
 release whose name did not contain the chart name and set no override is
 renamed on upgrade; set `fullnameOverride` to the old fullname to keep it.
-The broker's kept Secrets change name with it: every session logs in again,
-MCP hosts register again, and a new signing key invalidates broker-signed
-tokens in flight. Point `broker.refreshTokensSecret`,
-`broker.dynamicClientsSecret` and `broker.signingKeySecret` at the old names
-to keep them; the tenant registry keeps the binary's default name.
+The broker's Secrets change name with it: a new signing key invalidates
+broker-signed tokens in flight. Point `broker.signingKeySecret` at the old
+name to keep it; the tenant registry keeps the binary's default name.
+
+Upgrading to `broker.stateBucket`: create the bucket and grant the workload
+identity first. At start the broker imports MCP host registrations from
+`<fullname>-dynamic-clients` and empties it. Refresh tokens are not imported,
+so every user logs in once. Delete `<fullname>-refresh-tokens` after the
+rollout, and `<fullname>-dynamic-clients` once every replica has started.

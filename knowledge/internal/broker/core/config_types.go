@@ -136,13 +136,21 @@ type ServerConfig struct {
 	// DevicePollInterval is the minimum gap between /device/token polls before
 	// slow_down. Default 5s; also the interval advertised to clients.
 	DevicePollInterval time.Duration `yaml:"devicePollInterval"`
-	// RefreshTokensSecret holds the sha256(refresh_token) to record map.
-	RefreshTokensSecret string `yaml:"refreshTokensSecret"`
 	// SigningKeySecret holds the generated id_token signing key when
 	// OIDC.BrokerSigningKey is blank. Default "demarkus-broker-signing-key".
 	SigningKeySecret string `yaml:"signingKeySecret"`
-	// DynamicClientsSecret holds the RFC 7591 registration map.
+	// DynamicClientsSecret is where registrations lived before the state
+	// bucket; imported at start, then emptied.
 	DynamicClientsSecret string `yaml:"dynamicClientsSecret"`
+	// OAuthStateSecret holds in-flight authorization codes and device
+	// grants, so a login may cross replicas. Default "demarkus-broker-oauth-state".
+	OAuthStateSecret string `yaml:"oauthStateSecret"`
+	// MaxSessionsPerUser caps one user's live logins; the oldest is revoked
+	// past it. Default 20.
+	MaxSessionsPerUser int `yaml:"maxSessionsPerUser"`
+	// StateBucket is the gs:// bucket of the broker's lasting state, refresh
+	// token records and client registrations, one object each. Required.
+	StateBucket string `yaml:"stateBucket"`
 	// RefreshTokenTTL is the lifetime of a new refresh token. Default 90 days.
 	RefreshTokenTTL time.Duration `yaml:"refreshTokenTTL"`
 	// IDTokenTTL is the lifetime of a broker signed id_token. Default 15m.
@@ -167,6 +175,11 @@ type GatewayConfig struct {
 	// ToolProfile selects the tool surface: "lean" omits operator and
 	// federation tools; "full" (default) keeps every tool.
 	ToolProfile string `yaml:"toolProfile"`
+}
+
+// StateBucketName is StateBucket without its gs:// scheme.
+func (s *ServerConfig) StateBucketName() string {
+	return strings.TrimPrefix(s.StateBucket, "gs://")
 }
 
 // Enabled reports whether the gateway is configured at all.
@@ -306,8 +319,8 @@ func (a *AllowConfig) Empty() bool {
 	return len(a.Domains) == 0 && len(a.Groups) == 0 && len(a.Emails) == 0
 }
 
-// SweeperConfig tunes the refresh token expiry janitor. Leader election
-// timings stay at client-go defaults until a deployment needs faster failover.
+// SweeperConfig tunes the sweeper that deletes expired logins and client
+// registrations from the state bucket; one replica runs it under a Lease.
 type SweeperConfig struct {
 	// Disabled opts out; the zero value runs the sweeper, the safe default.
 	Disabled bool `yaml:"disabled"`

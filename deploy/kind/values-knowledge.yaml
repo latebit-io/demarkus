@@ -41,6 +41,8 @@ broker:
   publicURL: "http://localhost:8080"
   # DEV-ONLY: curl drives the OIDC state cookie over plain HTTP.
   insecureCookies: true
+  # Refresh records and client registrations, in fake-gcs-server.
+  stateBucket: gs://kind-broker-state
   oidc:
     issuer: http://mock-oauth2-server.demarkus.svc.cluster.local:8080/default
     clientID: demarkus-knowledge-kind

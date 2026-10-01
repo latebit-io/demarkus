@@ -235,34 +235,7 @@ fromYamlArray.
 {{- if empty $bucket.url -}}
 {{- fail (printf "%s.bucket.url is required (or set worldDefaults.bucketPrefix / global.bucketPrefix)" $location) -}}
 {{- end -}}
-{{- $bucketName := trimPrefix "gs://" $bucket.url -}}
-{{- $maximumBucketLength := 63 -}}
-{{- if contains "." $bucketName -}}
-{{- $maximumBucketLength = 222 -}}
-{{- end -}}
-{{- if or (not (hasPrefix "gs://" $bucket.url)) (lt (len $bucketName) 3) (gt (len $bucketName) $maximumBucketLength) (not (regexMatch "^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$" $bucketName)) -}}
-{{- fail (printf "%s.bucket.url %q must be an exact lowercase gs://bucket URL" $location $bucket.url) -}}
-{{- end -}}
-{{- range $component := splitList "." $bucketName -}}
-{{- if or (gt (len $component) 63) (not (regexMatch "^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$" $component)) -}}
-{{- fail (printf "%s.bucket.url %q must contain valid GCS bucket components" $location $bucket.url) -}}
-{{- end -}}
-{{- end -}}
-{{- $bucketComponents := splitList "." $bucketName -}}
-{{- $dottedIPv4 := eq (len $bucketComponents) 4 -}}
-{{- if $dottedIPv4 -}}
-{{- range $component := $bucketComponents -}}
-{{- if or (not (regexMatch "^(0|[1-9][0-9]{0,2})$" $component)) (gt (atoi $component) 255) -}}
-{{- $dottedIPv4 = false -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-{{- if $dottedIPv4 -}}
-{{- fail (printf "%s.bucket.url %q must not use an IPv4 address as a bucket name" $location $bucket.url) -}}
-{{- end -}}
-{{- if or (hasPrefix "goog" $bucketName) (contains "google" $bucketName) (contains "g00gle" $bucketName) (contains "go0gle" $bucketName) (contains "g0ogle" $bucketName) -}}
-{{- fail (printf "%s.bucket.url %q uses a reserved GCS bucket name" $location $bucket.url) -}}
-{{- end -}}
+{{- include "demarkus-knowledge-server.validateBucketURL" (dict "url" $bucket.url "field" (printf "%s.bucket.url" $location)) -}}
 {{- if hasKey $buckets $bucket.url -}}
 {{- fail (printf "%s.bucket.url %q is duplicated" $location $bucket.url) -}}
 {{- end -}}
@@ -313,10 +286,10 @@ fromYamlArray.
 {{- $_ := set $reserved .Values.provisioning.worldsSecret "provisioning.worldsSecret" -}}
 {{- end -}}
 {{- $_ := set $reserved (include "demarkus-knowledge-server.brokerConfigSecretName" .) "the broker config Secret" -}}
-{{- $_ := set $reserved (include "demarkus-knowledge-server.refreshTokensSecretName" .) "broker.refreshTokensSecret" -}}
 {{- $_ := set $reserved (include "demarkus-knowledge-server.signingKeySecretName" .) "broker.signingKeySecret" -}}
 {{- $_ := set $reserved (include "demarkus-knowledge-server.cookieKeySecretName" .) "broker.cookieKeySecret" -}}
 {{- $_ := set $reserved (include "demarkus-knowledge-server.dynamicClientsSecretName" .) "broker.dynamicClientsSecret" -}}
+{{- $_ := set $reserved (include "demarkus-knowledge-server.oauthStateSecretName" .) "broker.oauthStateSecret" -}}
 {{- if .Values.tls.existingSecret -}}
 {{- $_ := set $reserved .Values.tls.existingSecret "tls.existingSecret" -}}
 {{- end -}}
@@ -349,10 +322,6 @@ the admin entry in tokens.toml.
 {{- printf "%s-broker-config" (include "demarkus-knowledge-server.fullname" . | trunc 49 | trimSuffix "-") -}}
 {{- end -}}
 
-{{- define "demarkus-knowledge-server.refreshTokensSecretName" -}}
-{{- default (printf "%s-refresh-tokens" (include "demarkus-knowledge-server.fullname" .)) .Values.broker.refreshTokensSecret -}}
-{{- end -}}
-
 {{- define "demarkus-knowledge-server.cookieKeySecretName" -}}
 {{- default (printf "%s-cookie-key" (include "demarkus-knowledge-server.fullname" .)) .Values.broker.cookieKeySecret -}}
 {{- end -}}
@@ -363,6 +332,10 @@ the admin entry in tokens.toml.
 
 {{- define "demarkus-knowledge-server.dynamicClientsSecretName" -}}
 {{- default (printf "%s-dynamic-clients" (include "demarkus-knowledge-server.fullname" .)) .Values.broker.dynamicClientsSecret -}}
+{{- end -}}
+
+{{- define "demarkus-knowledge-server.oauthStateSecretName" -}}
+{{- default (printf "%s-oauth-state" (include "demarkus-knowledge-server.fullname" .)) .Values.broker.oauthStateSecret -}}
 {{- end -}}
 
 {{/* Env var carrying webClients[i]'s secret; rendered into the config and the pod alike. */}}
@@ -443,6 +416,43 @@ allow:
 {{- end -}}
 
 {{/*
+A gs:// bucket URL that GCS would accept: the world buckets and the broker's
+state bucket share it. Takes a dict with url and field, the value's name.
+*/}}
+{{- define "demarkus-knowledge-server.validateBucketURL" -}}
+{{- $url := .url -}}
+{{- $field := .field -}}
+{{- $bucketName := trimPrefix "gs://" $url -}}
+{{- $maximumBucketLength := 63 -}}
+{{- if contains "." $bucketName -}}
+{{- $maximumBucketLength = 222 -}}
+{{- end -}}
+{{- if or (not (hasPrefix "gs://" $url)) (lt (len $bucketName) 3) (gt (len $bucketName) $maximumBucketLength) (not (regexMatch "^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$" $bucketName)) -}}
+{{- fail (printf "%s %q must be an exact lowercase gs://bucket URL" $field $url) -}}
+{{- end -}}
+{{- range $component := splitList "." $bucketName -}}
+{{- if or (gt (len $component) 63) (not (regexMatch "^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$" $component)) -}}
+{{- fail (printf "%s %q must contain valid GCS bucket components" $field $url) -}}
+{{- end -}}
+{{- end -}}
+{{- $bucketComponents := splitList "." $bucketName -}}
+{{- $dottedIPv4 := eq (len $bucketComponents) 4 -}}
+{{- if $dottedIPv4 -}}
+{{- range $component := $bucketComponents -}}
+{{- if or (not (regexMatch "^(0|[1-9][0-9]{0,2})$" $component)) (gt (atoi $component) 255) -}}
+{{- $dottedIPv4 = false -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $dottedIPv4 -}}
+{{- fail (printf "%s %q must not use an IPv4 address as a bucket name" $field $url) -}}
+{{- end -}}
+{{- if or (hasPrefix "goog" $bucketName) (contains "google" $bucketName) (contains "g00gle" $bucketName) (contains "go0gle" $bucketName) (contains "g0ogle" $bucketName) -}}
+{{- fail (printf "%s %q uses a reserved GCS bucket name" $field $url) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Broker settings the binary checks at load, caught at render so a typo reads
 as such instead of a CrashLoopBackOff.
 */}}
@@ -450,6 +460,12 @@ as such instead of a CrashLoopBackOff.
 {{- $b := .Values.broker -}}
 {{- if empty $b.publicURL -}}
 {{- fail "broker.publicURL is required" -}}
+{{- end -}}
+{{- include "demarkus-knowledge-server.validateBucketURL" (dict "url" (default "" $b.stateBucket) "field" "broker.stateBucket") -}}
+{{- range (include "demarkus-knowledge-server.worlds" . | fromYamlArray) -}}
+{{- if eq .bucket.url $b.stateBucket -}}
+{{- fail (printf "broker.stateBucket %q is world %q's bucket; the broker needs its own" $b.stateBucket .name) -}}
+{{- end -}}
 {{- end -}}
 {{- if empty $b.oidc.issuer -}}
 {{- fail "broker.oidc.issuer is required" -}}

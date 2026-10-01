@@ -24,16 +24,25 @@ For deployment instructions, TLS, and Ingress topology, see
   answers its own hostname (`server.memory.publicURL`), the knowledge
   gateway every other host.
 - **Auth**: `Authorization: Bearer <id_token>` on every request.
-  The broker accepts both broker-signed id_tokens (from the
-  device-flow refresh grant, PR4) and IdP-signed id_tokens (from
-  the device-flow completion, PR3). Unverified-email tokens are
+  The broker issues its own signed id_token from every grant
+  (authorization code, device code, refresh) and also accepts an
+  IdP-signed id_token presented directly. Unverified-email tokens are
   rejected at the gateway boundary. A client that sends RFC 8707
   `resource` (the PRM `resource`, `<gateway>/mcp`) on the authorize,
-  device or token request gets a broker-signed token with that `aud`,
-  valid at that gateway only (the device flow then answers with the
-  broker's token instead of the IdP's); an unknown resource is
-  `invalid_target`. A client that sends none gets a token valid at
-  every gateway, as before.
+  device or token request gets a token with that `aud`, valid at that
+  gateway only; an unknown resource is `invalid_target`. A client that
+  sends none gets a token valid at every gateway. A device code is
+  collected once: the poll after the tokens were handed out answers
+  `expired_token`.
+- **Refresh tokens rotate** for public clients (device flow, MCP hosts):
+  every refresh answers a new `refresh_token`, and the client must keep
+  it, as RFC 6749 §6 requires. A confidential web client authenticates
+  on every refresh and keeps its token. A replaced token still works for
+  one minute, for concurrent refreshes and retries.
+  After that, presenting it is reuse and revokes the whole login, so
+  every copy must log in again. A user keeps at most
+  `server.maxSessionsPerUser` logins (default 20); a new login past
+  that revokes the oldest.
 - **OAuth metadata**: standard discovery via RFC 9728
   (`/.well-known/oauth-protected-resource`, bare and path-inserted
   `/mcp` forms, on the gateway listener) and RFC 8414

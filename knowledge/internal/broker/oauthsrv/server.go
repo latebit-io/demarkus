@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/server/blob"
 )
 
 // stateCookieName is the name of the signed cookie holding the OIDC state
@@ -31,9 +32,9 @@ type Server struct {
 	log       *slog.Logger
 	clock     func() time.Time
 
-	// deviceStore and authCodeStore hold in-flight grants in process memory;
-	// a restart drops them (single broker invariant). refreshStore and
-	// dynamicClients persist through the SecretStore.
+	// deviceStore and authCodeStore keep in-flight grants in one shared
+	// Secret, so a login may cross replicas; refreshStore and dynamicClients
+	// keep one object per record in the state bucket.
 	deviceStore    *deviceStore
 	authCodeStore  *authCodeStore
 	refreshStore   *RefreshStore
@@ -64,7 +65,10 @@ type ServerDeps struct {
 	// limiter the gateway uses too.
 	core.SharedDeps
 	Signer *Signer
-	Store  core.SecretStore
+	// Store holds the in-flight grants; State the refresh records and
+	// client registrations.
+	Store core.SecretStore
+	State blob.Store
 	// Discovery requires IDTokenSigner: the document advertises jwks_uri.
 	Discovery     *Discovery
 	IDTokenSigner *core.IDTokenSigner
@@ -88,28 +92,9 @@ func NewServer(cfg *core.Config, deps ServerDeps) *Server {
 	if deps.Discovery != nil && deps.IDTokenSigner == nil {
 		panic("broker: NewServer with discovery != nil requires idTokenSigner; otherwise the well-known doc would advertise jwks_uri at a route that is not registered")
 	}
-	// Knobs default here too so tests that build Config{} without
-	// LoadConfig get the same values the validated path resolves.
-	deviceTTL := cfg.Server.DeviceCodeTTL
-	if deviceTTL <= 0 {
-		deviceTTL = core.DefaultDeviceCodeTTL
-	}
+	// cfg carries resolved defaults: LoadConfig and the test configs apply them.
 	pollInterval := cfg.Server.DevicePollInterval
-	if pollInterval <= 0 {
-		pollInterval = core.DefaultDevicePollInterval
-	}
-	if cfg.Server.RefreshTokensSecret == "" {
-		cfg.Server.RefreshTokensSecret = core.DefaultRefreshTokensSecret
-	}
-	if cfg.Server.DynamicClientsSecret == "" {
-		cfg.Server.DynamicClientsSecret = core.DefaultDynamicClientsSecret
-	}
-	if cfg.Server.RefreshTokenTTL <= 0 {
-		cfg.Server.RefreshTokenTTL = core.DefaultRefreshTokenTTL
-	}
-	if cfg.Server.IDTokenTTL <= 0 {
-		cfg.Server.IDTokenTTL = core.DefaultIDTokenTTL
-	}
+	grants := &grantStore{store: deps.Store, ref: core.OAuthStateRef(cfg), clock: clock, grace: pollInterval}
 	s := &Server{
 		cfg:               cfg,
 		signer:            deps.Signer,
@@ -118,10 +103,10 @@ func NewServer(cfg *core.Config, deps ServerDeps) *Server {
 		idTokenSigner:     deps.IDTokenSigner,
 		log:               log,
 		clock:             clock,
-		deviceStore:       newDeviceStore(clock, deviceTTL, pollInterval),
-		authCodeStore:     newAuthCodeStore(clock, defaultPendingAuthCodeTTL, defaultAuthCodeTTL),
-		refreshStore:      NewRefreshStore(cfg, deps.Store),
-		dynamicClients:    NewDynamicClientStore(cfg, deps.Store),
+		deviceStore:       &deviceStore{grants: grants, expiresIn: cfg.Server.DeviceCodeTTL, pollInterval: pollInterval},
+		authCodeStore:     &authCodeStore{grants: grants, codeTTL: defaultAuthCodeTTL},
+		refreshStore:      NewRefreshStore(cfg, deps.State, log),
+		dynamicClients:    NewDynamicClientStore(deps.State),
 		subjectReg:        deps.SubjectLimiter,
 		loginReg:          deps.LoginLimiter,
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
@@ -216,6 +201,9 @@ func (s *Server) BeginDrain() { s.draining.Store(true) }
 // one instance; the Server owns construction, callers borrow.
 func (s *Server) RefreshStore() *RefreshStore { return s.refreshStore }
 
+// DynamicClients is the registration store, swept and imported at start.
+func (s *Server) DynamicClients() *DynamicClientStore { return s.dynamicClients }
+
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
@@ -267,15 +255,17 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := State{Nonce: nonce, ExpiresAt: s.clock().Add(s.cfg.Server.StateTTL)}
-	// Device-flow handoff: if /device set the device cookie, pin the
-	// device_code into the signed state HERE so /auth/callback's
-	// dispatch is driven by a tamper-evident value rather than the
-	// ambient cookie. The cookie itself is consumed (cleared) below
-	// so an abandoned-then-resumed-elsewhere flow can't silently
-	// resurrect the device branch later.
+	// The device cookie's grant key moves into the signed state, so the
+	// callback dispatches on a tamper-evident value; the cookie is cleared.
 	if cookie, cerr := r.Cookie(deviceCookieName); cerr == nil && cookie.Value != "" {
-		if _, ok := s.deviceStore.LookupByDeviceCode(cookie.Value); ok {
-			state.DeviceCode = cookie.Value
+		ok, lookupErr := s.deviceStore.Exists(r.Context(), cookie.Value)
+		if lookupErr != nil {
+			s.log.ErrorContext(r.Context(), "broker: device grant lookup", "err", lookupErr)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if ok {
+			state.DeviceKey = cookie.Value
 		}
 		s.clearDeviceCookie(w)
 	}
@@ -333,24 +323,16 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 	})
 
-	// Device-flow dispatch is driven by the signed State, not by an
-	// ambient cookie. authLogin pins state.DeviceCode when /device set
-	// the device cookie; an empty value here means a normal browser
-	// code-flow callback. A stale device cookie left in the jar from
-	// an abandoned flow cannot route a later browser callback through
-	// the device branch because the State was minted fresh at the
-	// most recent /auth/login.
-	if state.DeviceCode != "" {
-		s.deviceCallback(w, r, state.DeviceCode)
+	// Device dispatch rides the signed State minted at the latest
+	// /auth/login, so a stale device cookie cannot route a later login.
+	if state.DeviceKey != "" {
+		s.deviceCallback(w, r, state.DeviceKey)
 		return
 	}
-	// Auth-code dispatch (parallel to device-flow): the signed State
-	// carries AuthCodeID when /oauth/authorize set the cookie. The
-	// AuthCodeID was minted by authCodeStore.Begin and never left
-	// the broker (it lives only in the signed cookie), so a callback
-	// claiming a non-empty AuthCodeID is necessarily one we issued.
-	if state.AuthCodeID != "" {
-		s.authCodeCallback(w, r, state.AuthCodeID)
+	// The signed State carries the authorize request /oauth/authorize set,
+	// so only a request this broker validated resumes here.
+	if state.AuthCode != nil {
+		s.authCodeCallback(w, r, state.AuthCode)
 		return
 	}
 

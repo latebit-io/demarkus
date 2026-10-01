@@ -5,10 +5,11 @@ package core
 const (
 	// TokensSecretKey is the default data key holding a world's tokens.toml.
 	TokensSecretKey = "tokens.toml"
-	// RefreshTokensSecretKey holds the sha256(refresh_token) to record map.
-	RefreshTokensSecretKey = "refresh_tokens.json"
-	// DynamicClientsSecretKey holds the RFC 7591 registration map.
+	// DynamicClientsSecretKey held the RFC 7591 registration map.
 	DynamicClientsSecretKey = "dynamic-clients.json"
+	// OAuthStateSecretKey holds the issued authorization codes and device
+	// grants every replica shares.
+	OAuthStateSecretKey = "grants.json"
 	// SigningKeySecretKey holds the generated id_token signing key PEM.
 	SigningKeySecretKey = "signing-key.pem"
 	// CookieKeySecretKey holds the generated base64 state cookie key.
@@ -20,8 +21,8 @@ const (
 	// worldsFragmentKey holds the worlds fragment the knowledge server mounts.
 	worldsFragmentKey = "worlds.yaml"
 
-	DefaultRefreshTokensSecret  = "demarkus-broker-refresh-tokens"
 	DefaultDynamicClientsSecret = "demarkus-broker-dynamic-clients"
+	DefaultOAuthStateSecret     = "demarkus-broker-oauth-state"
 	DefaultSigningKeySecret     = "demarkus-broker-signing-key"
 	DefaultCookieKeySecret      = "demarkus-broker-cookie-key"
 )
@@ -36,14 +37,14 @@ func brokerSecretRef(cfg *Config, name, key string) SecretRef {
 	return SecretRef{Namespace: cfg.Server.BrokerNamespace, Name: name, Key: key}
 }
 
-// RefreshTokensRef locates the refresh token map.
-func RefreshTokensRef(cfg *Config) SecretRef {
-	return brokerSecretRef(cfg, cfg.Server.RefreshTokensSecret, RefreshTokensSecretKey)
-}
-
-// DynamicClientsRef locates the RFC 7591 registration map.
+// DynamicClientsRef locates the pre-bucket RFC 7591 registration map.
 func DynamicClientsRef(cfg *Config) SecretRef {
 	return brokerSecretRef(cfg, cfg.Server.DynamicClientsSecret, DynamicClientsSecretKey)
+}
+
+// OAuthStateRef locates the in-flight authorization codes and device grants.
+func OAuthStateRef(cfg *Config) SecretRef {
+	return brokerSecretRef(cfg, cfg.Server.OAuthStateSecret, OAuthStateSecretKey)
 }
 
 // SigningKeyRef locates the generated id_token signing key.

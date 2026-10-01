@@ -1,4 +1,5 @@
-// Package blob defines generation-aware object storage for knowledge buckets.
+// Package blob defines generation-aware object storage: knowledge world
+// buckets and the broker's state bucket.
 package blob
 
 import (

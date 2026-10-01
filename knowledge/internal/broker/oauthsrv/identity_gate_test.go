@@ -29,7 +29,7 @@ func TestDeviceTokenRefreshRegatesStoredClaims(t *testing.T) {
 			verifier := &brokertest.FakeVerifier{AuthURL: "https://idp.example.com/authorize"}
 			srv, broker := newTestServerWithSigner(t, cfg, verifier, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
 
-			rawRefresh, err := broker.refreshStore.Issue(context.Background(), &tt.claims, "", broker.cfg.Server.RefreshTokenTTL)
+			rawRefresh, err := broker.refreshStore.Issue(context.Background(), &tt.claims, "")
 			if err != nil {
 				t.Fatalf("refresh Issue: %v", err)
 			}

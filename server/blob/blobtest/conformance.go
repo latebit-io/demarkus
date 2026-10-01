@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
+	"github.com/latebit-io/demarkus/server/blob"
 )
 
 const concurrentWriters = 2

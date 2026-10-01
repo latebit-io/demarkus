@@ -318,7 +318,7 @@ mcp_call() {
     done
   } | HOME="$WORK/mcphome" client/bin/demarkus-mcp -host "$url" -token "$W" -insecure -no-cache -profile full 2>>"$WORK/mcp.log" | {
     while IFS= read -r line; do
-      case $line in *'"id":2,'*) printf '%s\n' "$line"; break ;; esac
+      case $line in *'"id":2,'* | *'"id":2}'*) printf '%s\n' "$line"; break ;; esac
     done
     : >"$answered"
     cat >/dev/null

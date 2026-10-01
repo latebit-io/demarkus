@@ -51,11 +51,14 @@ knowledge:
     bootstrap:
       enabled: false
   # The broker half: login, /me/install and the MCP gateways. The signing
-  # key is generated on first start; only the IdP client credentials and the
-  # public URLs are yours to supply.
+  # key is generated on first start; the IdP client credentials, the public
+  # URLs and the state bucket are yours to supply.
   broker:
     # Externally reachable base URL, e.g. https://broker.example.com. Required.
     publicURL: ""
+    # Dedicated gs:// bucket for refresh tokens and MCP host registrations;
+    # the GSA above needs roles/storage.objectAdmin on it. Required.
+    stateBucket: ""
     oidc:
       issuer: ""
       clientID: ""

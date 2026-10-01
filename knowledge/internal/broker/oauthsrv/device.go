@@ -4,11 +4,11 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 )
@@ -71,13 +71,8 @@ type deviceAuthorizeResponse struct {
 	Interval                int    `json:"interval"`
 }
 
-// deviceTokenSuccess mirrors RFC 8628 §3.5 success — the same shape as
-// an OAuth2 token endpoint response when the polling completes. We
-// forward the IdP's raw id_token + access_token verbatim; refresh_token
-// lands at PR4 (broker-minted opaque token; see refresh.go). On a
-// successful device-code completion every response carries all four
-// token fields — omitempty stays on RefreshToken purely as belt-and-
-// suspenders against a degenerate Bind path that didn't mint one.
+// deviceTokenSuccess is the token endpoint's success body (RFC 6749 §5.1,
+// RFC 8628 §3.5): a broker-signed id_token as both tokens, and a refresh token.
 type deviceTokenSuccess struct {
 	AccessToken  string `json:"access_token"`
 	IDToken      string `json:"id_token"`
@@ -123,7 +118,7 @@ func (s *Server) deviceAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
 		return
 	}
-	deviceCode, userCode, expiresAt, err := s.deviceStore.Authorize(resource)
+	deviceCode, userCode, expiresAt, err := s.deviceStore.Authorize(r.Context(), resource)
 	if errors.Is(err, errGrantStoreFull) {
 		s.log.WarnContext(r.Context(), "broker: device authorize refused", "err", err)
 		w.Header().Set("Retry-After", "60")
@@ -193,7 +188,12 @@ func (s *Server) deviceFormPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userCode := r.PostFormValue("user_code")
-	deviceCode, ok := s.deviceStore.LookupByUserCode(userCode)
+	deviceKey, ok, err := s.deviceStore.LookupByUserCode(r.Context(), userCode)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "broker: device user code lookup", "err", err)
+		s.renderDeviceForm(w, r, deviceFormData{PrefilledUserCode: userCode, Error: "Something went wrong. Try again."}, http.StatusInternalServerError)
+		return
+	}
 	if !ok {
 		s.renderDeviceForm(w, r, deviceFormData{
 			PrefilledUserCode: userCode,
@@ -203,7 +203,7 @@ func (s *Server) deviceFormPost(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     deviceCookieName,
-		Value:    deviceCode,
+		Value:    deviceKey,
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   !s.cfg.Server.InsecureCookies,
@@ -236,33 +236,66 @@ func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// deviceGrantSuccess is the completed grant's token response. An unbound
-// grant hands out the IdP's tokens as before; a bound one needs a token
-// that carries the resource, which only the broker's signer can mint.
-func (s *Server) deviceGrantSuccess(out *pollResult, claims *core.Claims) (deviceTokenSuccess, error) {
-	now := s.clock()
-	success := deviceTokenSuccess{
-		AccessToken:  out.Result.AccessToken,
-		IDToken:      out.Result.RawIDToken,
-		RefreshToken: out.RefreshToken,
-		TokenType:    "Bearer",
-	}
-	if !out.Result.Expiry.IsZero() {
-		success.ExpiresIn = max(int(out.Result.Expiry.Sub(now).Seconds()), 0)
-	}
-	if claims.Resource == "" {
-		return success, nil
+// grantTokens mints what a completed grant hands out: a refresh token on
+// the refresh store and a broker-signed id_token, both for claims. Public
+// clients get unbound refresh tokens; boundClientID binds a web client's.
+func (s *Server) grantTokens(ctx context.Context, claims *core.Claims, boundClientID string) (deviceTokenSuccess, error) {
+	rawRefresh, err := s.refreshStore.Issue(ctx, claims, boundClientID)
+	if err != nil {
+		return deviceTokenSuccess{}, fmt.Errorf("mint refresh token: %w", err)
 	}
 	if s.idTokenSigner == nil {
 		return deviceTokenSuccess{}, errors.New("id_token signer not wired")
 	}
-	idToken, err := s.idTokenSigner.Sign(claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
+	idToken, err := s.idTokenSigner.Sign(claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, s.clock())
 	if err != nil {
-		return deviceTokenSuccess{}, err
+		return deviceTokenSuccess{}, fmt.Errorf("sign id_token: %w", err)
 	}
-	success.AccessToken, success.IDToken = idToken, idToken
-	success.ExpiresIn = max(int(s.cfg.Server.IDTokenTTL.Seconds()), 0)
-	return success, nil
+	return deviceTokenSuccess{
+		AccessToken:  idToken,
+		IDToken:      idToken,
+		RefreshToken: rawRefresh,
+		TokenType:    "Bearer",
+		ExpiresIn:    max(int(s.cfg.Server.IDTokenTTL.Seconds()), 0),
+	}, nil
+}
+
+// collectDeviceGrant mints a completed grant's tokens, then collects the
+// grant. A refused resource or a failed mint keeps the grant for the next
+// poll; a collect that fails or loses a race revokes the refresh token.
+func (s *Server) collectDeviceGrant(w http.ResponseWriter, r *http.Request, deviceCode string, grant *core.Claims) {
+	claims, err := s.mintClaims(r, grant)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
+		return
+	}
+	success, err := s.grantTokens(r.Context(), &claims, "")
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "broker: device grant tokens failed",
+			"err", err, "subject", core.HashSubject(claims.Subject))
+		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		return
+	}
+	if err := s.deviceStore.Collect(r.Context(), deviceCode); err != nil {
+		if revokeErr := s.refreshStore.Revoke(r.Context(), success.RefreshToken); revokeErr != nil {
+			s.log.ErrorContext(r.Context(), "broker: revoke uncollected refresh token", "err", revokeErr)
+		}
+		if errors.Is(err, errDeviceCodeNotFound) {
+			writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "expired_token"})
+			return
+		}
+		s.log.ErrorContext(r.Context(), "broker: device grant collect failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		return
+	}
+	writeTokens(w, &success)
+}
+
+// writeTokens answers a token request with tokens, never cached (RFC 6749 §5.1).
+func writeTokens(w http.ResponseWriter, success *deviceTokenSuccess) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	writeJSON(w, http.StatusOK, success)
 }
 
 // mintClaims applies the token request's RFC 8707 `resource` to the grant's
@@ -278,36 +311,22 @@ func (s *Server) mintClaims(r *http.Request, grant *core.Claims) (core.Claims, e
 }
 
 // deviceTokenDeviceFlow handles the RFC 8628 §3.4 device-code poll:
-// authorization_pending until /auth/callback binds the IdP exchange, then
-// the success payload (deviceGrantSuccess) on every later poll.
+// authorization_pending until the user signs in, then the tokens once.
 func (s *Server) deviceTokenDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	deviceCode := r.PostFormValue("device_code")
 	if deviceCode == "" {
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
-	out := s.deviceStore.Poll(deviceCode)
+	out, err := s.deviceStore.Poll(r.Context(), deviceCode)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "broker: device poll failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		return
+	}
 	switch {
 	case out.Status == statusComplete:
-		claims, err := s.mintClaims(r, &out.Result.Claims)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
-			return
-		}
-		success, err := s.deviceGrantSuccess(&out, &claims)
-		if err != nil {
-			s.log.ErrorContext(r.Context(), "broker: device grant sign id_token failed",
-				"err", err, "subject", core.HashSubject(claims.Subject))
-			writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
-			return
-		}
-		// Tokens are bearer credentials — any intermediary that
-		// caches this response is a credential-leak vector. Set the
-		// canonical OAuth2 §5.1 no-store headers BEFORE writeJSON
-		// fires WriteHeader so they actually land in the response.
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Pragma", "no-cache")
-		writeJSON(w, http.StatusOK, success)
+		s.collectDeviceGrant(w, r, deviceCode, &out.Claims)
 	case out.Status == statusExpired:
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "expired_token"})
 	case out.Status == statusDenied:
@@ -319,38 +338,15 @@ func (s *Server) deviceTokenDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// deviceTokenRefresh handles RFC 6749 §6 refresh_token exchange.
-// Validates the supplied refresh_token against the broker's
-// Secret-backed refreshStore, mints a fresh broker-signed id_token
-// from the cached Claims, and returns the response with the SAME
-// refresh_token (PR4 does not rotate — see plan §Out of Scope).
-//
-// access_token == id_token: PR5's /me/install consumes the id_token
-// as a bearer, the broker's compositeVerifier accepts it on either
-// field, and an empty access_token would force clients to learn a
-// per-broker quirk. Same string in both fields keeps the
-// OIDC-client-library default codepath working.
-//
-// Client authentication: a record carrying a non-empty ClientID was
-// issued to a confidential web client and the request must
-// authenticate as that client (Basic or client_secret_post) — a
-// leaked refresh token alone mints nothing. The binding check runs
-// after the store lookup because the record IS the source of the
-// requirement; the only side effect before the gate is the record's
-// LastUsedAt bump, which is observability metadata, not credential
-// state. Unbound records (device flow, loopback auth-code) refresh
-// without client auth, unchanged.
-//
-// Error mapping:
-//   - Missing refresh_token form param / malformed client auth →
-//     invalid_request
-//   - refreshStore rejects (unknown / expired / revoked) →
-//     invalid_grant per RFC 6749 §5.2
-//   - Missing or wrong client auth for a client-bound record →
-//     401 invalid_client + WWW-Authenticate: Basic
-//   - Signing failure (programming error) → 500 server_error
-//   - id-token-signer not wired (operator misconfig) → 500
-//     server_error; PR4 wiring requires it always
+// Refusals the refresh grant's admit check returns, mapped to OAuth errors.
+var (
+	errRefreshIdentity = errors.New("refresh identity rejected")
+	errRefreshTarget   = errors.New("refresh resource refused")
+)
+
+// deviceTokenRefresh is the RFC 6749 §6 refresh grant: the login mints a
+// broker-signed id_token, also sent as access_token. A public client gets a
+// rotated refresh token; a web client authenticates and keeps its own.
 func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 	if s.idTokenSigner == nil {
 		// Broker started without a signing key — refresh grant
@@ -374,60 +370,57 @@ func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
-	record, err := s.refreshStore.Refresh(r.Context(), rawRefresh)
-	if err != nil {
-		if errors.Is(err, ErrRefreshTokenInvalid) {
-			writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
-			return
-		}
-		s.log.ErrorContext(r.Context(), "broker: refresh store read failed", "err", err)
-		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
-		return
+	// Every check and the signature run before the rotation is written, so
+	// a refused request never spends the token.
+	var idToken string
+	// The web client the request authenticated as, if any; a login bound to
+	// another client, or to one deregistered since, refreshes nothing.
+	client := ""
+	if webClient, ok := s.cfg.WebClient(creds.ClientID); ok && verifyWebClientSecret(webClient, creds.Secret) {
+		client = creds.ClientID
 	}
-	if record.ClientID != "" {
-		// Client-bound token: the presented identity must be the bound
-		// client and its secret must verify against the registry. A
-		// client deregistered since issuance also lands here — the
-		// binding can no longer be verified, so the token mints
-		// nothing until the operator restores the registration or the
-		// user re-authenticates.
-		webClient, ok := s.cfg.WebClient(record.ClientID)
-		if !ok || creds.ClientID != record.ClientID || !verifyWebClientSecret(webClient, creds.Secret) {
-			s.log.InfoContext(r.Context(), "broker: refresh client auth failed",
-				"bound_client_id", record.ClientID, "subject", core.HashSubject(record.Claims.Subject))
-			writeInvalidClient(w)
-			return
+	nextRefresh, record, err := s.refreshStore.Refresh(r.Context(), rawRefresh, client, func(record *refreshTokenRecord) error {
+		// Stored claims outlive config: a tightened org gate must stop the mint.
+		if err := core.GateIdentity(s.cfg.OIDC.AllowDomains, &record.Claims); err != nil {
+			return fmt.Errorf("%w: %w", errRefreshIdentity, err)
 		}
-	}
-	// Stored claims outlive config: a tightened org gate must stop the mint.
-	if err := core.GateIdentity(s.cfg.OIDC.AllowDomains, &record.Claims); err != nil {
-		s.log.InfoContext(r.Context(), "broker: refresh identity rejected", "err", err,
-			"subject", core.HashSubject(record.Claims.Subject), "hd", record.Claims.HD)
+		claims, err := s.mintClaims(r, &record.Claims)
+		if err != nil {
+			return errRefreshTarget
+		}
+		if idToken, err = s.idTokenSigner.Sign(&claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, s.clock()); err != nil {
+			return fmt.Errorf("sign id_token: %w", err)
+		}
+		return nil
+	})
+	subject := core.HashSubject(record.Claims.Subject)
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrRefreshTokenInvalid):
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
 		return
-	}
-	claims, err := s.mintClaims(r, &record.Claims)
-	if err != nil {
+	case errors.Is(err, errRefreshClientAuth):
+		s.log.InfoContext(r.Context(), "broker: refresh client auth failed", "bound_client_id", record.ClientID, "subject", subject)
+		writeInvalidClient(w)
+		return
+	case errors.Is(err, errRefreshIdentity):
+		s.log.InfoContext(r.Context(), "broker: refresh identity rejected", "err", err, "subject", subject, "hd", record.Claims.HD)
+		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
+		return
+	case errors.Is(err, errRefreshTarget):
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
 		return
-	}
-	now := s.clock()
-	idToken, err := s.idTokenSigner.Sign(&claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
-	if err != nil {
-		s.log.ErrorContext(r.Context(), "broker: refresh sign id_token failed",
-			"err", err, "subject", core.HashSubject(record.Claims.Subject))
+	default:
+		s.log.ErrorContext(r.Context(), "broker: refresh failed", "err", err, "subject", subject)
 		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
-	expiresIn := max(int(s.cfg.Server.IDTokenTTL.Seconds()), 0)
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
-	writeJSON(w, http.StatusOK, deviceTokenSuccess{
+	writeTokens(w, &deviceTokenSuccess{
 		AccessToken:  idToken,
 		IDToken:      idToken,
-		RefreshToken: rawRefresh,
+		RefreshToken: nextRefresh,
 		TokenType:    "Bearer",
-		ExpiresIn:    expiresIn,
+		ExpiresIn:    max(int(s.cfg.Server.IDTokenTTL.Seconds()), 0),
 	})
 }
 
@@ -510,54 +503,37 @@ func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
 		boundClientID = clientID
 	}
 
-	exchange, err := s.authCodeStore.Redeem(code, clientID, redirectURI, codeVerifier)
+	grant, err := s.authCodeStore.Redeem(r.Context(), codeRedemption{Code: code, ClientID: clientID, RedirectURI: redirectURI, CodeVerifier: codeVerifier})
 	if err != nil {
-		// Log the specific axis at debug so an operator can tell
-		// apart wrong-verifier (client bug) from unknown-code
-		// (replay or storage churn); the wire response stays
-		// invalid_grant uniformly.
-		s.log.DebugContext(r.Context(), "broker: auth code redeem failed", "err", err)
+		if !isRedeemRefusal(err) {
+			s.log.ErrorContext(r.Context(), "broker: auth code redeem failed", "err", err)
+			writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+			return
+		}
+		// The axis is for the operator; the wire answer stays invalid_grant.
+		s.log.DebugContext(r.Context(), "broker: auth code redeem refused", "err", err)
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
 		return
 	}
-	claims, err := s.mintClaims(r, &exchange.Claims)
+	claims, err := s.mintClaims(r, &grant)
 	if err != nil {
 		// The code is spent; the client restarts from /oauth/authorize.
 		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
 		return
 	}
-
-	rawRefresh, err := s.refreshStore.Issue(r.Context(), &claims, boundClientID, s.cfg.Server.RefreshTokenTTL)
+	success, err := s.grantTokens(r.Context(), &claims, boundClientID)
 	if err != nil {
-		// Code is already consumed by Redeem (one-shot). The user
-		// has to retry from /oauth/authorize; that's acceptable
-		// because the failure mode is a backend write to Secrets,
-		// rare in practice and resolved without user action by the
-		// time they retry.
-		s.log.ErrorContext(r.Context(), "broker: auth code refresh mint failed",
-			"err", err, "subject", core.HashSubject(exchange.Claims.Subject))
+		s.log.ErrorContext(r.Context(), "broker: auth code tokens failed",
+			"err", err, "subject", core.HashSubject(claims.Subject))
 		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
+	writeTokens(w, &success)
+}
 
-	now := s.clock()
-	idToken, err := s.idTokenSigner.Sign(&claims, s.cfg.Server.PublicURL, s.cfg.Server.IDTokenTTL, now)
-	if err != nil {
-		s.log.ErrorContext(r.Context(), "broker: auth code sign id_token failed",
-			"err", err, "subject", core.HashSubject(exchange.Claims.Subject))
-		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
-		return
-	}
-	expiresIn := max(int(s.cfg.Server.IDTokenTTL.Seconds()), 0)
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
-	writeJSON(w, http.StatusOK, deviceTokenSuccess{
-		AccessToken:  idToken,
-		IDToken:      idToken,
-		RefreshToken: rawRefresh,
-		TokenType:    "Bearer",
-		ExpiresIn:    expiresIn,
-	})
+// isRedeemRefusal tells a refused code from a failure to read the store.
+func isRedeemRefusal(err error) bool {
+	return errors.Is(err, errAuthCodeNotFound) || errors.Is(err, errAuthCodeMismatch)
 }
 
 // renderDeviceForm writes the user_code entry HTML. Templates are
@@ -587,36 +563,25 @@ func (s *Server) renderDeviceDone(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// deviceCallback is /auth/callback's device-flow branch — dispatched
-// by authCallback when the verified State carries a non-empty
-// DeviceCode. State validation (signature, nonce match, expiry,
-// cookie clear) is owned by the caller; this function is invoked
-// only after those gates pass.
-//
-// Runs Exchange and Binds the result into the deviceStore for the
-// polling client to pick up. Renders device_done.html regardless of
-// outcome (success / IdP-denied / Bind-failed) — the user-facing tab
-// carries no actionable detail, and the polling client distinguishes
-// by the next /device/token response. Logs carry the operational
-// detail for the operator.
-//
-// IdP-denied branch translates ?error=... into deviceStore.Deny so
-// the polling client sees RFC 8628 access_denied rather than timing
-// out with expired_token (plan §Open Question 1 lean: cleaner UX).
-func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCode string) {
-	state, ok := s.deviceStore.LookupByDeviceCode(deviceCode)
+// deviceCallback is /auth/callback's device branch, run after the caller
+// verified the state: it binds or denies the grant for the poller and
+// renders the same done page whatever happened; the logs carry the detail.
+func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceKey string) {
+	ok, err := s.deviceStore.Exists(r.Context(), deviceKey)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "broker: device grant lookup", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
-		// State carried a device_code the store doesn't recognize —
-		// could be post-restart memory loss, post-expiry sweep, or
-		// the grant was already resolved. The polling client (if any)
-		// already lost the grant.
+		// Expired or resolved since the form; the poller has lost the grant.
 		http.Error(w, "device session expired", http.StatusBadRequest)
 		return
 	}
 
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		s.log.InfoContext(r.Context(), "broker: device callback denied by idp", "err", errParam)
-		if denyErr := s.deviceStore.Deny(deviceCode); denyErr != nil {
+		if denyErr := s.deviceStore.Deny(r.Context(), deviceKey); denyErr != nil {
 			s.log.WarnContext(r.Context(), "broker: device deny failed", "err", denyErr)
 		}
 		s.renderDeviceDone(w, r)
@@ -642,24 +607,13 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 		// grant so the poller sees access_denied instead of retrying.
 		s.log.InfoContext(r.Context(), "broker: device callback identity rejected", "err", err,
 			"subject", core.HashSubject(exchange.Claims.Subject), "hd", exchange.Claims.HD)
-		if denyErr := s.deviceStore.Deny(deviceCode); denyErr != nil {
+		if denyErr := s.deviceStore.Deny(r.Context(), deviceKey); denyErr != nil {
 			s.log.WarnContext(r.Context(), "broker: device deny failed", "err", denyErr)
 		}
 		s.renderDeviceDone(w, r)
 		return
 	}
-	// Mint before Bind so a Secret-side failure keeps the grant pending rather
-	// than completing it without a refresh token; an orphaned mint ages out on
-	// Sweep. Device-flow clients are public, so tokens are never client-bound.
-	exchange.Claims = exchange.Claims.BoundTo(state.Resource)
-	rawRefresh, err := s.refreshStore.Issue(r.Context(), &exchange.Claims, "", s.cfg.Server.RefreshTokenTTL)
-	if err != nil {
-		s.log.WarnContext(r.Context(), "broker: device callback refresh mint failed",
-			"err", err, "subject", core.HashSubject(exchange.Claims.Subject))
-		s.renderDeviceDone(w, r)
-		return
-	}
-	if err := s.deviceStore.Bind(deviceCode, &exchange, rawRefresh); err != nil {
+	if err := s.deviceStore.Bind(r.Context(), deviceKey, &exchange.Claims); err != nil {
 		s.log.WarnContext(r.Context(), "broker: device bind failed",
 			"err", err, "subject", core.HashSubject(exchange.Claims.Subject))
 		s.renderDeviceDone(w, r)
@@ -670,61 +624,9 @@ func (s *Server) deviceCallback(w http.ResponseWriter, r *http.Request, deviceCo
 	s.renderDeviceDone(w, r)
 }
 
-// RunDeviceJanitor sweeps the deviceStore and the authCodeStore on a
-// fixed cadence until ctx is canceled. Sweep cadence is half the
-// configured device-code TTL so terminal device-flow entries are
-// evicted within one TTL window after resolution; the same tick
-// also sweeps the auth-code store, whose own TTLs (10m pending,
-// 60s code) are correctly enforced lazily by LookupPending/Redeem
-// regardless of sweep timing — the sweep is only a memory-cleanup
-// concern for abandoned grants.
-//
-// Unlike the Sweeper, this janitor needs no leader election: the
-// stores are per-replica in-memory state (plan §"Single broker only
-// for now"), so each replica sweeps its own. Multi-replica
-// deployments are out of scope until either store grows a shared
-// backing store.
-func (s *Server) RunDeviceJanitor(ctx context.Context) {
-	ttl := s.cfg.Server.DeviceCodeTTL
-	if ttl <= 0 {
-		ttl = core.DefaultDeviceCodeTTL
-	}
-	tick := max(ttl/2, time.Second)
-	t := time.NewTicker(tick)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			s.deviceStore.Sweep()
-			if s.authCodeStore != nil {
-				s.authCodeStore.Sweep()
-			}
-		}
-	}
-}
-
-// sameOriginPost returns false when the request carries an Origin
-// header whose scheme+host differs from the request's own — the
-// canonical signal of a cross-origin browser POST. Both axes
-// matter: `http://broker.example.com` and `https://broker.example.com`
-// are distinct origins, so a host-only match would let an attacker on
-// a downgraded scheme through.
-//
-// Absence of Origin is treated as "not a browser" (curl, Go's
-// http.Client, server-to-server tooling — none of which are CSRF-
-// vulnerable, since CSRF requires an authenticated user-agent the
-// attacker can puppet).
-//
-// Expected scheme: X-Forwarded-Proto wins when present (we are
-// behind a TLS-terminating ingress per the standard deployment
-// shape; a browser-driven CSRF cannot forge this header since it is
-// stripped/rewritten by the ingress), falling back to r.TLS to
-// distinguish direct HTTPS from plain HTTP. Expected host: r.Host
-// — what the browser actually saw — rather than cfg.Server.PublicURL,
-// so dev / kind / port-forward setups where users reach the broker
-// on a different host than PublicURL keep working.
+// sameOriginPost refuses a browser POST whose Origin scheme or host differs
+// from the request's (X-Forwarded-Proto, else TLS; r.Host, so port-forwards
+// work); no Origin is not a browser, and CSRF needs one.
 func sameOriginPost(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {

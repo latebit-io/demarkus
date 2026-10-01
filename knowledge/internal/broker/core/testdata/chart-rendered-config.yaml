@@ -4,10 +4,12 @@ server:
   cookieKeySecret: "knowledge-cookie-key"
   stateTTL: "5m"
   brokerNamespace: "demarkus"
-  refreshTokensSecret: "knowledge-refresh-tokens"
   signingKeySecret: "knowledge-signing-key"
   dynamicClientsSecret: "knowledge-dynamic-clients"
+  oauthStateSecret: "knowledge-oauth-state"
+  stateBucket: "gs://knowledge-broker-state"
   refreshTokenTTL: "2160h"
+  maxSessionsPerUser: 20
   idTokenTTL: "15m"
   publicURL: "https://broker.example.com"
   insecureCookies: false

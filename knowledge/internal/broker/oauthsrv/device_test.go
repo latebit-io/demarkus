@@ -2,7 +2,6 @@ package oauthsrv
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -101,17 +100,9 @@ func TestDeviceAuthorizeRequiresClientID(t *testing.T) {
 }
 
 func TestDeviceTokenSuccessIsNonCacheable(t *testing.T) {
-	srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-	deviceCode, _, _, err := broker.deviceStore.Authorize("")
-	if err != nil {
-		t.Fatalf("Authorize: %v", err)
-	}
-	if err := broker.deviceStore.Bind(deviceCode, &core.ExchangeResult{
-		RawIDToken:  "id",
-		AccessToken: "access",
-	}, "refresh-raw"); err != nil {
-		t.Fatalf("Bind: %v", err)
-	}
+	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
+	deviceCode, _ := authorizeTestDevice(t, broker, "")
+	bindTestDevice(t, broker, deviceCode, &core.Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true})
 	resp, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{
 		"grant_type":  {deviceGrantType},
 		"device_code": {deviceCode},
@@ -198,9 +189,13 @@ func TestDeviceCallbackExchangeFailureDoesNotDeny(t *testing.T) {
 
 	// Inspect the store to confirm the state machine matches: status
 	// should still be statusPending, not statusDenied.
-	state, ok := broker.deviceStore.LookupByDeviceCode(auth.DeviceCode)
+	st, err := broker.deviceStore.grants.read(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, ok := st.Devices[hashToken(auth.DeviceCode)]
 	if !ok {
-		t.Fatal("device_code disappeared from store")
+		t.Fatal("device grant disappeared from store")
 	}
 	if state.Status != statusPending {
 		t.Errorf("status = %v, want statusPending (exchange-failure must NOT permanently Deny)", state.Status)
@@ -255,7 +250,7 @@ func TestDeviceFormPostSuccessSetsCookieAndRedirects(t *testing.T) {
 	// Pre-seed a pending grant directly via the store so the test
 	// doesn't have to round-trip through /device/authorize. Keeps
 	// this test focused on the form-submit handler.
-	deviceCode, userCode, _, err := broker.deviceStore.Authorize("")
+	deviceCode, userCode, _, err := broker.deviceStore.Authorize(context.Background(), "")
 	if err != nil {
 		t.Fatalf("seed Authorize: %v", err)
 	}
@@ -277,8 +272,8 @@ func TestDeviceFormPostSuccessSetsCookieAndRedirects(t *testing.T) {
 	if cookie == nil {
 		t.Fatal("device cookie not set")
 	}
-	if cookie.Value != deviceCode {
-		t.Errorf("cookie value = %q, want device_code %q", cookie.Value, deviceCode)
+	if cookie.Value != hashToken(deviceCode) {
+		t.Errorf("cookie value = %q, want the grant key, never the device_code", cookie.Value)
 	}
 	if !cookie.HttpOnly {
 		t.Error("cookie should be HttpOnly")
@@ -305,7 +300,7 @@ func TestDeviceFormPostSuccessSetsCookieAndRedirects(t *testing.T) {
 // before any cookie is set.
 func TestDeviceFormPostRejectsCrossOriginCSRF(t *testing.T) {
 	srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-	_, userCode, _, err := broker.deviceStore.Authorize("")
+	_, userCode, _, err := broker.deviceStore.Authorize(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -337,7 +332,7 @@ func TestDeviceFormPostRejectsCrossOriginCSRF(t *testing.T) {
 // browser submits and asserts the request proceeds normally.
 func TestDeviceFormPostAcceptsSameOriginPost(t *testing.T) {
 	srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-	deviceCode, userCode, _, err := broker.deviceStore.Authorize("")
+	deviceCode, userCode, _, err := broker.deviceStore.Authorize(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -362,7 +357,7 @@ func TestDeviceFormPostAcceptsSameOriginPost(t *testing.T) {
 		t.Fatalf("status = %d, want 302", resp.StatusCode)
 	}
 	cookie := findDeviceCookie(resp.Cookies())
-	if cookie == nil || cookie.Value != deviceCode {
+	if cookie == nil || cookie.Value != hashToken(deviceCode) {
 		t.Fatalf("device cookie not set on same-origin POST: %+v", cookie)
 	}
 }
@@ -381,7 +376,7 @@ func TestDeviceFormPostSecureMatchesInsecureCookiesFlag(t *testing.T) {
 			cfg := deviceTestConfig()
 			cfg.Server.InsecureCookies = tt.insecureCookies
 			srv, broker := newTestServer(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-			_, userCode, _, err := broker.deviceStore.Authorize("")
+			_, userCode, _, err := broker.deviceStore.Authorize(context.Background(), "")
 			if err != nil {
 				t.Fatalf("Authorize: %v", err)
 			}
@@ -407,7 +402,7 @@ func TestDeviceFormPostSecureMatchesInsecureCookiesFlag(t *testing.T) {
 func TestDeviceTokenStates(t *testing.T) {
 	t.Run("pending returns authorization_pending", func(t *testing.T) {
 		srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize("")
+		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -419,7 +414,7 @@ func TestDeviceTokenStates(t *testing.T) {
 
 	t.Run("slow_down on rapid repeat poll", func(t *testing.T) {
 		srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize("")
+		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -436,16 +431,20 @@ func TestDeviceTokenStates(t *testing.T) {
 	t.Run("expired after TTL", func(t *testing.T) {
 		cfg := deviceTestConfig()
 		srv, broker := newTestServer(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize("")
+		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
-		// Force expiry by rewriting the entry's deadline through the
-		// store's own state. This is the only path that drives expiry
-		// without sleeping or a fake clock plumbed through Server.
-		broker.deviceStore.mu.Lock()
-		broker.deviceStore.codes[deviceCode].ExpiresAt = broker.deviceStore.clock().Add(-1)
-		broker.deviceStore.mu.Unlock()
+		// Force expiry by rewriting the grant's deadline in the shared document.
+		err = broker.deviceStore.grants.update(context.Background(), func(st *grantState) error {
+			grant := st.Devices[hashToken(deviceCode)]
+			grant.ExpiresAt = time.Now().Add(-time.Second)
+			st.Devices[hashToken(deviceCode)] = grant
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := expectDeviceTokenError(t, srv, deviceCode, "expired_token"); err != nil {
 			t.Fatal(err)
 		}
@@ -453,11 +452,11 @@ func TestDeviceTokenStates(t *testing.T) {
 
 	t.Run("denied after Deny", func(t *testing.T) {
 		srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize("")
+		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
-		if err := broker.deviceStore.Deny(deviceCode); err != nil {
+		if err := broker.deviceStore.Deny(context.Background(), hashToken(deviceCode)); err != nil {
 			t.Fatalf("Deny: %v", err)
 		}
 		if err := expectDeviceTokenError(t, srv, deviceCode, "access_denied"); err != nil {
@@ -465,19 +464,12 @@ func TestDeviceTokenStates(t *testing.T) {
 		}
 	})
 
-	t.Run("complete returns tokens", func(t *testing.T) {
-		srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize("")
-		if err != nil {
-			t.Fatalf("Authorize: %v", err)
-		}
-		if err := broker.deviceStore.Bind(deviceCode, &core.ExchangeResult{
-			Claims:      core.Claims{Email: "alice@example.com"},
-			RawIDToken:  "raw-id-token",
-			AccessToken: "raw-access-token",
-		}, "raw-refresh-token"); err != nil {
-			t.Fatalf("Bind: %v", err)
-		}
+	t.Run("complete returns broker tokens", func(t *testing.T) {
+		signer := brokertest.NewTestIDTokenSigner(t)
+		cfg := deviceTestConfig()
+		srv, broker := newTestServerWithSigner(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), signer)
+		deviceCode, _ := authorizeTestDevice(t, broker, "")
+		bindTestDevice(t, broker, deviceCode, &core.Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true})
 		resp, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{
 			"grant_type":  {deviceGrantType},
 			"device_code": {deviceCode},
@@ -494,14 +486,15 @@ func TestDeviceTokenStates(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&success); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if success.IDToken != "raw-id-token" {
-			t.Errorf("id_token = %q, want raw-id-token", success.IDToken)
+		claims, err := signer.VerifyIDToken(success.IDToken, cfg.Server.PublicURL, append([]string{cfg.Server.PublicURL}, cfg.Server.Resources()...), time.Now())
+		if err != nil || claims.Email != "alice@example.com" {
+			t.Errorf("id_token claims = %+v (err %v), want a broker token for alice", claims, err)
 		}
-		if success.AccessToken != "raw-access-token" {
-			t.Errorf("access_token = %q, want raw-access-token", success.AccessToken)
+		if success.AccessToken != success.IDToken {
+			t.Errorf("access_token differs from the broker id_token")
 		}
-		if success.RefreshToken != "raw-refresh-token" {
-			t.Errorf("refresh_token = %q, want raw-refresh-token", success.RefreshToken)
+		if success.RefreshToken == "" {
+			t.Error("no refresh_token")
 		}
 		if success.TokenType != "Bearer" {
 			t.Errorf("token_type = %q, want Bearer", success.TokenType)
@@ -553,27 +546,6 @@ func TestDeviceTokenStates(t *testing.T) {
 	})
 }
 
-// TestRunDeviceJanitorRespectsContextCancel is the lifecycle guard:
-// canceling the parent context must return the goroutine promptly so
-// the broker shutdown path doesn't hang. Doesn't assert Sweep behavior
-// (that's covered by TestDeviceStoreSweep); only the loop teardown.
-func TestRunDeviceJanitorRespectsContextCancel(t *testing.T) {
-	_, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		broker.RunDeviceJanitor(ctx)
-		close(done)
-	}()
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("RunDeviceJanitor did not exit within 2s of cancel")
-	}
-}
-
 // A device cookie left by an abandoned /soul-join must not route a later
 // browser /auth/login + /auth/callback through the device branch; dispatch
 // is driven by the signed State, not the ambient cookie.
@@ -597,14 +569,14 @@ func TestStaleDeviceCookieDoesNotHijackBrowserCallback(t *testing.T) {
 	// user gave up before completing the OIDC dance. Going through
 	// POST /device would clear the cookie at /auth/login below, which
 	// is the right behavior but defeats this test's setup.
-	deviceCode, _, _, err := broker.deviceStore.Authorize("")
+	deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
 	srvURL, _ := url.Parse(srv.URL)
 	jar.SetCookies(srvURL, []*http.Cookie{{
 		Name:  deviceCookieName,
-		Value: deviceCode,
+		Value: hashToken(deviceCode),
 		Path:  "/",
 	}})
 
@@ -724,7 +696,9 @@ func TestDeviceFlowIntegrationHappyPath(t *testing.T) {
 		RawIDToken:  "raw-id-token-abc",
 		AccessToken: "raw-access-token-xyz",
 	}
-	srv, _ := newTestServer(t, deviceTestConfig(), verifier, fake.NewSimpleClientset())
+	signer := brokertest.NewTestIDTokenSigner(t)
+	cfg := deviceTestConfig()
+	srv, _ := newTestServerWithSigner(t, cfg, verifier, fake.NewSimpleClientset(), signer)
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -808,11 +782,8 @@ func TestDeviceFlowIntegrationHappyPath(t *testing.T) {
 		t.Errorf("done page missing expected text, body=%s", body)
 	}
 
-	// Step 6: subsequent poll → success with forwarded tokens. Advance
-	// the store's lastPolledAt past the slow_down threshold by using a
-	// short pollInterval in the test config (testPollInterval = 5s) —
-	// since this test runs in the same goroutine without sleeping, we
-	// inspect the store directly instead of polling twice.
+	// Step 6: the next poll collects broker tokens; a completed grant
+	// answers before the slow_down check.
 	resp, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{
 		"grant_type":  {deviceGrantType},
 		"device_code": {auth.DeviceCode},
@@ -821,11 +792,6 @@ func TestDeviceFlowIntegrationHappyPath(t *testing.T) {
 		t.Fatalf("final poll: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	// First poll after Bind landed earlier (Step 2) already set
-	// lastPolledAt, so this poll falls inside the slow_down window
-	// even though Status==complete. Status takes precedence over
-	// SlowDown in Poll dispatch (terminal states short-circuit),
-	// so the response must be the 200 success body.
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("final poll status = %d body=%s", resp.StatusCode, body)
@@ -834,40 +800,27 @@ func TestDeviceFlowIntegrationHappyPath(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&success); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if success.IDToken != "raw-id-token-abc" {
-		t.Errorf("id_token = %q, want forwarded value", success.IDToken)
+	claims, err := signer.VerifyIDToken(success.IDToken, cfg.Server.PublicURL, []string{cfg.Server.PublicURL}, time.Now())
+	if err != nil || claims.Email != "alice@example.com" || success.AccessToken != success.IDToken {
+		t.Errorf("tokens: claims %+v (err %v); want a broker id_token for alice as both tokens, never the IdP's", claims, err)
 	}
-	if success.AccessToken != "raw-access-token-xyz" {
-		t.Errorf("access_token = %q, want forwarded value", success.AccessToken)
-	}
-	// PR4 contract: every device-code completion mints a refresh token.
-	// 32 bytes hex = 64 chars; assert hex validity too so a 64-byte
-	// garbage string can't masquerade as a real token in a future
-	// regression.
-	decoded, err := hex.DecodeString(success.RefreshToken)
-	if err != nil {
-		t.Errorf("refresh_token is not valid hex: %v (raw=%q)", err, success.RefreshToken)
-	}
-	if len(decoded) != refreshTokenBytes {
-		t.Errorf("refresh_token decoded len = %d, want %d", len(decoded), refreshTokenBytes)
+	// Every device-code completion starts a login with a well-formed token.
+	if _, ok := parseRefreshToken(success.RefreshToken); !ok {
+		t.Errorf("refresh_token %q is not <user>.<login>.<secret>", success.RefreshToken)
 	}
 }
 
-// TestDeviceCallbackRefreshMintFailureLeavesPending pins PR4's
-// "never ship anything broken" posture: when the refresh-token mint
-// fails after a successful OAuth exchange, deviceCallback MUST leave
-// the device-code grant in statusPending so the polling client retries
-// (or eventually sees expired_token). Translating to access_denied or
-// hand-rolling a half-bound state would silently leak an IdP-verified
-// claim into a state the polling client can't recover from.
-func TestDeviceCallbackRefreshMintFailureLeavesPending(t *testing.T) {
+// TestDeviceRefreshMintFailureKeepsTheGrant: a refresh token that cannot be
+// minted at collection answers server_error and leaves the completed grant,
+// so the client's next poll collects it.
+func TestDeviceRefreshMintFailureKeepsTheGrant(t *testing.T) {
 	verifier := &brokertest.FakeVerifier{
 		AuthURL:    "https://idp.example.com/authorize",
 		Claims:     core.Claims{Email: "alice@example.com", EmailVerified: true, Subject: "google|alice"},
 		RawIDToken: "id",
 	}
-	srv, broker := newTestServer(t, deviceTestConfig(), verifier, fake.NewSimpleClientset())
-	// Force refresh-mint failures: randFn always errors.
+	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), verifier, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
+	mint := broker.refreshStore.randFn
 	broker.refreshStore.randFn = func(_ []byte) (int, error) {
 		return 0, errors.New("simulated refresh mint failure")
 	}
@@ -914,14 +867,24 @@ func TestDeviceCallbackRefreshMintFailureLeavesPending(t *testing.T) {
 	}
 	_ = cbResp.Body.Close()
 	if cbResp.StatusCode != http.StatusOK {
-		t.Fatalf("callback status = %d, want 200 (done page renders on mint failure too)", cbResp.StatusCode)
+		t.Fatalf("callback status = %d, want 200", cbResp.StatusCode)
 	}
 
-	// Grant must still be pending, NOT access_denied (that's reserved
-	// for IdP-side denial) and NOT statusComplete (we never minted
-	// the refresh token to put in the success body).
-	if err := expectDeviceTokenError(t, srv, auth.DeviceCode, "authorization_pending"); err != nil {
-		t.Fatal(err)
+	poll := func() int {
+		t.Helper()
+		resp, err := testClient(srv).PostForm(srv.URL+"/device/token", url.Values{"grant_type": {deviceGrantType}, "device_code": {auth.DeviceCode}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if status := poll(); status != http.StatusInternalServerError {
+		t.Fatalf("poll while the mint fails = %d, want 500", status)
+	}
+	broker.refreshStore.randFn = mint
+	if status := poll(); status != http.StatusOK {
+		t.Fatalf("poll after the store recovered = %d, want the tokens", status)
 	}
 }
 
@@ -941,22 +904,12 @@ func TestDeviceTokenRefreshGrant(t *testing.T) {
 	cfg.Server.IDTokenTTL = 5 * time.Minute
 	srv, broker := newTestServerWithSigner(t, cfg, verifier, fake.NewSimpleClientset(), signer)
 
-	// Complete a device flow up to Bind by driving the store
-	// directly — the full /auth/callback dance is covered by
-	// TestDeviceFlowIntegrationHappyPath.
-	deviceCode, _, _, err := broker.deviceStore.Authorize("")
-	if err != nil {
-		t.Fatalf("Authorize: %v", err)
-	}
+	// A refresh token as a completed device grant hands out; the full
+	// /auth/callback dance is covered by TestDeviceFlowIntegrationHappyPath.
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		&verifier.Claims, "", broker.cfg.Server.RefreshTokenTTL)
+		&verifier.Claims, "")
 	if err != nil {
 		t.Fatalf("refresh Issue: %v", err)
-	}
-	if err := broker.deviceStore.Bind(deviceCode,
-		&core.ExchangeResult{Claims: verifier.Claims, RawIDToken: "raw-id-token-abc"},
-		rawRefresh); err != nil {
-		t.Fatalf("Bind: %v", err)
 	}
 
 	// Refresh-grant exchange.
@@ -985,10 +938,11 @@ func TestDeviceTokenRefreshGrant(t *testing.T) {
 	if out.IDToken != out.AccessToken {
 		t.Errorf("id_token != access_token; PR4 contract is same JWT in both fields")
 	}
-	// Refresh response returns the SAME refresh_token; PR4 does
-	// not rotate (plan §Out of Scope).
-	if out.RefreshToken != rawRefresh {
-		t.Errorf("refresh_token rotated: got %q, want %q", out.RefreshToken, rawRefresh)
+	// The refresh token rotates within the same login.
+	next, ok := parseRefreshToken(out.RefreshToken)
+	first, _ := parseRefreshToken(rawRefresh)
+	if !ok || out.RefreshToken == rawRefresh || next.name() != first.name() {
+		t.Errorf("refresh_token = %q, want a new secret for login %s", out.RefreshToken, first.name())
 	}
 	if out.TokenType != "Bearer" {
 		t.Errorf("token_type = %q", out.TokenType)
@@ -1033,7 +987,7 @@ func TestDeviceTokenRefreshErrors(t *testing.T) {
 		},
 		{
 			"unknown refresh_token",
-			url.Values{"grant_type": {refreshGrantType}, "refresh_token": {strings.Repeat("0", refreshTokenBytes*2)}},
+			url.Values{"grant_type": {refreshGrantType}, "refresh_token": {unknownRefreshToken()}},
 			"invalid_grant",
 		},
 	}
@@ -1065,7 +1019,7 @@ func TestDeviceTokenRefreshRejectsRevoked(t *testing.T) {
 	signer := brokertest.NewTestIDTokenSigner(t)
 	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), signer)
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		&core.Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour)
+		&core.Claims{Email: "a@b.com", EmailVerified: true}, "")
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -1100,7 +1054,7 @@ func TestDeviceTokenRefreshCrossGrantIsolation(t *testing.T) {
 
 	// Issue a refresh token; try it on the device_code branch.
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		&core.Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour)
+		&core.Claims{Email: "a@b.com", EmailVerified: true}, "")
 	if err != nil {
 		t.Fatalf("Issue refresh: %v", err)
 	}
@@ -1125,7 +1079,7 @@ func TestDeviceTokenRefreshCrossGrantIsolation(t *testing.T) {
 	}
 
 	// And the reverse: device_code on the refresh branch.
-	deviceCode, _, _, err := broker.deviceStore.Authorize("")
+	deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -1234,4 +1188,32 @@ func expectDeviceTokenError(t *testing.T, srv *httptest.Server, deviceCode, want
 		t.Fatalf("error = %q, want %q", errBody.Error, want)
 	}
 	return nil
+}
+
+// Through the token endpoint: each refresh hands out the next token, and a
+// token two rotations back revokes the login for its newest holder too.
+func TestDeviceTokenRefreshRotatesAndDetectsReuse(t *testing.T) {
+	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
+	first, err := broker.refreshStore.Issue(context.Background(),
+		&core.Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}, "")
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	refresh := func(raw string) (int, deviceTokenSuccess, deviceTokenError) {
+		return postToken(t, srv, url.Values{"grant_type": {refreshGrantType}, "refresh_token": {raw}})
+	}
+	status, second, _ := refresh(first)
+	if status != http.StatusOK {
+		t.Fatalf("first refresh = %d", status)
+	}
+	status, third, _ := refresh(second.RefreshToken)
+	if status != http.StatusOK || third.RefreshToken == second.RefreshToken {
+		t.Fatalf("second refresh = %d, token %q", status, third.RefreshToken)
+	}
+	if status, _, bad := refresh(first); status != http.StatusBadRequest || bad.Error != "invalid_grant" {
+		t.Fatalf("reused token = %d %q, want invalid_grant", status, bad.Error)
+	}
+	if status, _, bad := refresh(third.RefreshToken); status != http.StatusBadRequest || bad.Error != "invalid_grant" {
+		t.Fatalf("newest token after reuse = %d %q, want invalid_grant", status, bad.Error)
+	}
 }

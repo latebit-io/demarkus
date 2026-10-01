@@ -24,8 +24,8 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames:
-      - {{ include "demarkus-knowledge-server.refreshTokensSecretName" . | quote }}
       - {{ include "demarkus-knowledge-server.dynamicClientsSecretName" . | quote }}
+      - {{ include "demarkus-knowledge-server.oauthStateSecretName" . | quote }}
       - {{ include "demarkus-knowledge-server.signingKeySecretName" . | quote }}
       - {{ include "demarkus-knowledge-server.cookieKeySecretName" . | quote }}
       {{- if include "demarkus-knowledge-server.provisioningEnabled" . }}

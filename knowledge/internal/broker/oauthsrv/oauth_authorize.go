@@ -92,7 +92,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authCodeID, err := s.authCodeStore.Begin(&AuthCodeRequest{
+	nonce, err := s.setAuthCodeStateCookie(w, &AuthCodeRequest{
 		ClientID:            clientID,
 		RedirectURI:         redirectURI,
 		ClientState:         clientState,
@@ -101,17 +101,11 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		CodeChallengeMethod: codeChallengeMethod,
 		Resource:            resource,
 	})
-	if err != nil {
-		s.log.ErrorContext(r.Context(), "broker: auth code begin failed", "err", err)
-		code, description := authorizeBeginError(err)
-		reply.fail(code, description)
+	if errors.Is(err, errStateTooLarge) {
+		reply.fail("invalid_request", "authorization request too large")
 		return
 	}
-
-	nonce, err := s.setAuthCodeStateCookie(w, authCodeID)
 	if err != nil {
-		// No callback can ever present this id; do not let it hold a slot until the sweep.
-		s.authCodeStore.Cancel(authCodeID)
 		s.log.ErrorContext(r.Context(), "broker: auth code state", "err", err)
 		reply.fail("server_error", "internal error")
 		return
@@ -119,21 +113,32 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, s.verifier.AuthCodeURL(nonce), http.StatusFound)
 }
 
-// setAuthCodeStateCookie signs a State carrying authCodeID into the callback
-// cookie and returns its nonce, which rides to the IdP as the state parameter.
-func (s *Server) setAuthCodeStateCookie(w http.ResponseWriter, authCodeID string) (string, error) {
+// maxStateCookieBytes keeps the signed state under the 4 KiB browsers allow
+// a cookie, with room for its name and attributes.
+const maxStateCookieBytes = 3500
+
+// errStateTooLarge refuses a request whose state, scope or redirect would
+// not fit the cookie that carries it to the callback.
+var errStateTooLarge = errors.New("signed state exceeds the cookie budget")
+
+// setAuthCodeStateCookie signs the authorize request into the callback
+// cookie and returns its nonce, the state parameter sent to the IdP.
+func (s *Server) setAuthCodeStateCookie(w http.ResponseWriter, req *AuthCodeRequest) (string, error) {
 	nonce, err := NewNonce()
 	if err != nil {
 		return "", fmt.Errorf("nonce: %w", err)
 	}
 	state := State{
-		Nonce:      nonce,
-		AuthCodeID: authCodeID,
-		ExpiresAt:  s.clock().Add(s.cfg.Server.StateTTL),
+		Nonce:     nonce,
+		AuthCode:  req,
+		ExpiresAt: s.clock().Add(s.cfg.Server.StateTTL),
 	}
 	signed, err := s.signer.Sign(state)
 	if err != nil {
 		return "", fmt.Errorf("sign state: %w", err)
+	}
+	if len(signed) > maxStateCookieBytes {
+		return "", errStateTooLarge
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     stateCookieName,
@@ -148,41 +153,10 @@ func (s *Server) setAuthCodeStateCookie(w http.ResponseWriter, authCodeID string
 	return nonce, nil
 }
 
-// authCodeCallback resumes the auth-code flow after the IdP has
-// returned the user to /auth/callback. Dispatched from authCallback
-// when the verified State carries a non-empty AuthCodeID. State
-// validation (signature, nonce match, expiry, cookie clear) is
-// owned by the caller; this function is invoked only after those
-// gates pass.
-//
-// On success: Exchange the IdP code, Bind into the authCodeStore
-// (which mints the broker's authorization code), 302 back to the
-// client's redirect_uri with `code` + `state` + `iss` (RFC 9207
-// mix-up defense — cheap to ship even if Claude Code's SDK ignores
-// it).
-//
-// On IdP-side denial (?error=...): redirect to the client's
-// redirect_uri with the equivalent OAuth error code so the MCP SDK
-// surfaces a real failure rather than waiting for /token.
-//
-// On broker-side failure (LookupPending miss, Exchange error, Bind
-// error): redirect with `error=server_error` whenever the pending
-// entry is still recoverable (so we have a redirect_uri to send
-// the SDK to); render a generic error page only when the pending
-// entry is gone entirely.
-func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCodeID string) {
-	pending, ok := s.authCodeStore.LookupPending(authCodeID)
-	if !ok {
-		// No redirect_uri to send the client to — the pending entry
-		// has been swept or never existed. Surface the failure as a
-		// plain 400; the MCP SDK will see it as an aborted browser
-		// leg.
-		s.log.WarnContext(r.Context(), "broker: auth code callback: pending entry missing",
-			"authCodeID", core.HashSubject(authCodeID))
-		http.Error(w, "authorization session expired", http.StatusBadRequest)
-		return
-	}
-
+// authCodeCallback resumes the request the signed state carried: exchange
+// the IdP code, gate the identity, issue the broker's code and redirect with
+// code, state and RFC 9207 iss, or with the matching OAuth error.
+func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, pending *AuthCodeRequest) {
 	reply := &authorizeReply{w: w, r: r, redirectURI: pending.RedirectURI, clientState: pending.ClientState}
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		s.log.InfoContext(r.Context(), "broker: auth code callback denied by idp", "err", errParam)
@@ -216,11 +190,11 @@ func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCo
 		return
 	}
 
-	authCode, _, err := s.authCodeStore.Bind(authCodeID, &exchange)
+	authCode, err := s.authCodeStore.Issue(r.Context(), pending, &exchange.Claims)
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: auth code bind failed",
 			"err", err, "subject", core.HashSubject(exchange.Claims.Subject))
-		reply.fail("server_error", "authorization session expired")
+		reply.fail(grantError(err))
 		return
 	}
 
@@ -230,9 +204,9 @@ func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, authCo
 	reply.succeed(authCode, s.cfg.Server.PublicURL)
 }
 
-// authorizeBeginError maps a Begin failure to its RFC 6749 error code; a full
+// grantError maps a grant store failure to its RFC 6749 error code; a full
 // store is the client's cue to retry later, anything else is ours.
-func authorizeBeginError(err error) (code, description string) {
+func grantError(err error) (code, description string) {
 	if errors.Is(err, errGrantStoreFull) {
 		return "temporarily_unavailable", "too many pending grants"
 	}

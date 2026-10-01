@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
+	"github.com/latebit-io/demarkus/server/blob"
 )
 
 // EnsureWorld creates or finishes the world's genesis and reports whether it

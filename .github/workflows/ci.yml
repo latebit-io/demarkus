@@ -506,26 +506,3 @@ jobs:
             demarkus-server-tokens \
             broker-minted-test \
             ZmFrZS10b2tlbi1oYXNo
-      - name: Upgrade-wipe regression — demarkus-knowledge-server
-        run: |
-          # The broker needs a parseable ECDSA P-256 PEM for
-          # broker.oidc.brokerSigningKey (parsed at config load). Generate
-          # an ephemeral key per run, hand it to helm via --set-file so
-          # the multi-line value travels through a file, and let the trap
-          # rm it. The PEM never lives in the repo or shell history.
-          # (Avoid the literal GitHub-Actions expression marker in
-          # this comment — the workflow parser scans `run:` blocks
-          # for expressions and rejects an unmatched opener.)
-          SIGNING_KEY_FILE="$(mktemp)"
-          trap 'rm -f "$SIGNING_KEY_FILE"' EXIT
-          openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$SIGNING_KEY_FILE"
-          bash deploy/helm/test-upgrade-wipe.sh \
-            deploy/helm/demarkus-knowledge-server \
-            demarkus-knowledge-server \
-            test-knowledge \
-            demarkus-knowledge-server-refresh-tokens \
-            broker-seeded-test \
-            ZmFrZS10b2tlbg== \
-            -f deploy/helm/demarkus-knowledge-server/tests/fixtures/valid-values.yaml \
-            --set tokens.bootstrap.enabled=false \
-            --set-file broker.oidc.brokerSigningKey="$SIGNING_KEY_FILE"

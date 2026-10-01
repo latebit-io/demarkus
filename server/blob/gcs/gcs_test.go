@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
+	"github.com/latebit-io/demarkus/server/blob"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"

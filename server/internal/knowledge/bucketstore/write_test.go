@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/handler"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 	"github.com/latebit-io/demarkus/server/internal/storetest"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )

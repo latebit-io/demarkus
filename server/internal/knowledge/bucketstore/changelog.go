@@ -9,8 +9,8 @@ import (
 	"math"
 	"sync"
 
+	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 )
 
 // changeBlockSize is half the receipt window, so the receipts of nine

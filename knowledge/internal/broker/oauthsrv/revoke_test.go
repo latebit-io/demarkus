@@ -7,21 +7,18 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
-	"k8s.io/apimachinery/pkg/runtime"
+	"github.com/latebit-io/demarkus/server/blob"
 	"k8s.io/client-go/kubernetes/fake"
-	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestTokenRevokeValid(t *testing.T) {
 	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		&core.Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour)
+		&core.Claims{Email: "a@b.com", EmailVerified: true}, "")
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -35,7 +32,7 @@ func TestTokenRevokeValid(t *testing.T) {
 		t.Fatalf("status = %d body=%s, want 204", resp.StatusCode, body)
 	}
 	// Subsequent refresh of the revoked token must fail.
-	if _, err := broker.refreshStore.Refresh(context.Background(), rawRefresh); !errors.Is(err, ErrRefreshTokenInvalid) {
+	if _, _, err := broker.refreshStore.Refresh(context.Background(), rawRefresh, "", admitAll); !errors.Is(err, ErrRefreshTokenInvalid) {
 		t.Errorf("Refresh after Revoke err = %v, want ErrRefreshTokenInvalid", err)
 	}
 }
@@ -45,7 +42,7 @@ func TestTokenRevokeUnknownTokenIsNoOp(t *testing.T) {
 	// not signal back to the caller. Anything other than 204 turns
 	// the endpoint into an enumeration oracle.
 	srv, _ := newTestServerWithSigner(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
-	resp, err := testClient(srv).PostForm(srv.URL+"/token/revoke", url.Values{"token": {strings.Repeat("0", refreshTokenBytes*2)}})
+	resp, err := testClient(srv).PostForm(srv.URL+"/token/revoke", url.Values{"token": {unknownRefreshToken()}})
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
@@ -93,7 +90,7 @@ func TestTokenRevokeAcceptsTokenTypeHint(t *testing.T) {
 	// eager future validator).
 	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		&core.Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour)
+		&core.Claims{Email: "a@b.com", EmailVerified: true}, "")
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -113,7 +110,7 @@ func TestTokenRevokeAcceptsTokenTypeHint(t *testing.T) {
 func TestTokenRevokeIdempotent(t *testing.T) {
 	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		&core.Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour)
+		&core.Claims{Email: "a@b.com", EmailVerified: true}, "")
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -129,27 +126,17 @@ func TestTokenRevokeIdempotent(t *testing.T) {
 	}
 }
 
-// TestTokenRevokeServerErrorIsJSON pins the PR4-review fix: the
-// store-failure 500 branch must serve JSON (matching RFC 7009
-// §2.2.1 + the rest of the OAuth2 surface), not the text/plain
-// shape `http.Error` would emit. We force an upstream k8s failure
-// via a reactor so the Revoke I/O path errors out.
+// A store failure on revoke is a JSON 500 (RFC 7009 §2.2.1), not the
+// text/plain shape http.Error would emit.
 func TestTokenRevokeServerErrorIsJSON(t *testing.T) {
 	k8s := fake.NewSimpleClientset()
 	srv, broker := newTestServerWithSigner(t, deviceTestConfig(), &brokertest.FakeVerifier{}, k8s, brokertest.NewTestIDTokenSigner(t))
-	// Mint a token so refreshStore.Revoke reaches the Update step
-	// (the no-Secret-exists path returns nil and skips the failure
-	// surface).
 	rawRefresh, err := broker.refreshStore.Issue(context.Background(),
-		&core.Claims{Email: "a@b.com", EmailVerified: true}, "", time.Hour)
+		&core.Claims{Email: "a@b.com", EmailVerified: true}, "")
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	// Reactor that forces every secrets Get to fail. After enough
-	// retries mutateSecret surrenders and propagates the error.
-	k8s.PrependReactor("get", "secrets", func(_ k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, errors.New("simulated k8s outage")
-	})
+	failState(t, broker, blob.ErrUnavailable)
 
 	resp, err := testClient(srv).PostForm(srv.URL+"/token/revoke", url.Values{"token": {rawRefresh}})
 	if err != nil {

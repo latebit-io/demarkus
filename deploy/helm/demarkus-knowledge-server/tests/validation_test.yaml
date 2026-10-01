@@ -152,6 +152,20 @@ tests:
       - failedTemplate:
           errorMessage: 'provisioning.mode must be static, allowlisted or open (got "sometimes")'
 
+  - it: requires a gs:// state bucket
+    set:
+      broker.stateBucket: deployment-broker-state
+    asserts:
+      - failedTemplate:
+          errorMessage: 'broker.stateBucket "deployment-broker-state" must be an exact lowercase gs://bucket URL'
+
+  - it: refuses a world's bucket as the state bucket
+    set:
+      broker.stateBucket: gs://deployment-team-a
+    asserts:
+      - failedTemplate:
+          errorMessage: 'broker.stateBucket "gs://deployment-team-a" is world "team-a"''s bucket; the broker needs its own'
+
   - it: requires the broker's public URL and IdP registration
     set:
       broker.publicURL: ""

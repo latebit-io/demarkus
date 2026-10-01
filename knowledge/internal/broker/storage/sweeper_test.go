@@ -24,30 +24,25 @@ func (s *stubSweeper) Sweep(context.Context) (int, error) {
 	return s.n, s.err
 }
 
-func TestSweepCallsRefreshSweeper(t *testing.T) {
-	// Each pass calls the store once; a failure is wrapped and surfaced.
-	// Which grants expire is RefreshStore.Sweep's contract (refresh_test.go).
-	store := &stubSweeper{n: 2}
-	s := NewSweeper(fake.NewSimpleClientset(), store, time.Hour, nil)
+func TestSweepCallsEveryStore(t *testing.T) {
+	// Each pass calls every store once; one failure is surfaced named and
+	// does not skip the next store. Which records expire is each store's
+	// contract (refresh_test.go, dynamic_clients_test.go).
+	refresh, clients := &stubSweeper{n: 2}, &stubSweeper{n: 1}
+	s := NewSweeper(fake.NewSimpleClientset(), []SweptStore{{Name: "refresh", Store: refresh}, {Name: "clients", Store: clients}}, time.Hour, nil)
 	if err := s.sweep(context.Background()); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if store.calls != 1 {
-		t.Errorf("Sweep calls = %d, want 1", store.calls)
+	if refresh.calls != 1 || clients.calls != 1 {
+		t.Errorf("Sweep calls = %d, %d; want 1, 1", refresh.calls, clients.calls)
 	}
-	store.err = errors.New("secret unreachable")
+	refresh.err = errors.New("bucket unreachable")
 	err := s.sweep(context.Background())
-	if err == nil || !errors.Is(err, store.err) || !strings.Contains(err.Error(), "refresh token sweep") {
-		t.Errorf("sweep err = %v, want wrapped store error", err)
+	if err == nil || !errors.Is(err, refresh.err) || !strings.Contains(err.Error(), "refresh sweep") {
+		t.Errorf("sweep err = %v, want the named store error", err)
 	}
-}
-
-func TestSweepNoRefreshStoreIsNoop(t *testing.T) {
-	// Lifecycle-only sweepers pass nil; a pass must not panic.
-	k8s := fake.NewSimpleClientset()
-	s := NewSweeper(k8s, nil, time.Hour, nil)
-	if err := s.sweep(context.Background()); err != nil {
-		t.Fatalf("sweep with nil refreshStore: %v", err)
+	if clients.calls != 2 {
+		t.Errorf("clients Sweep calls = %d after a refresh failure, want 2", clients.calls)
 	}
 }
 

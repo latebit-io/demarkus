@@ -3,6 +3,7 @@ package oauthsrv
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,11 +11,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/storage"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/latebit-io/demarkus/server/blob"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -236,47 +238,124 @@ func TestRegisterRejectsOversizedMetadata(t *testing.T) {
 	}
 }
 
-// The serialized map must stay under the byte cap: max-size hostile
-// registrations trigger oldest-first eviction, never unbounded growth.
-func TestDynamicClientStoreEnforcesByteCap(t *testing.T) {
-	cfg := brokertest.NewConfig()
-	cfg.Server.DynamicClientsSecret = "dyn-clients"
-	clientset := fake.NewSimpleClientset()
-	store := NewDynamicClientStore(cfg, storage.NewK8sSecretStore(clientset))
+func newClientStoreForTest(t *testing.T) (*DynamicClientStore, *testState) {
+	t.Helper()
+	state := newTestState(t)
+	store := NewDynamicClientStore(state)
+	store.clock = func() time.Time { return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC) }
+	return store, state
+}
 
-	uris := make([]string, maxRedirectURIsPerClient)
-	for i := range uris {
-		uris[i] = "https://host.example/" + strings.Repeat("x", maxRedirectURILen-30) + fmt.Sprint(i)
+func TestDynamicClientStoreRegisterLookupSweep(t *testing.T) {
+	store, state := newClientStoreForTest(t)
+	ctx := context.Background()
+	uris := []string{"https://host.example/callback"}
+	if err := store.Register(ctx, "client-a", uris, "Host"); err != nil {
+		t.Fatalf("Register: %v", err)
 	}
-	// Enough max-size records to exceed the byte cap several times over.
-	n := maxDynamicClientsBytes/(maxRedirectURIsPerClient*maxRedirectURILen) + 20
-	for i := range n {
-		if err := store.Register(context.Background(), fmt.Sprintf("client-%04d", i), uris, strings.Repeat("n", maxClientNameLen)); err != nil {
-			t.Fatalf("register %d: %v", i, err)
+	if err := store.Register(ctx, "client-a", uris, "Host"); err == nil {
+		t.Fatal("re-registering a held client_id succeeded, want an error")
+	}
+	if err := store.Register(ctx, "../refresh/x", uris, ""); err == nil {
+		t.Fatal("Register with a malformed client_id succeeded")
+	}
+	record, found, err := store.Lookup(ctx, "client-a")
+	if err != nil || !found || !record.allowsRedirect(uris[0]) || record.ClientName != "Host" {
+		t.Fatalf("Lookup = %+v, %v, %v", record, found, err)
+	}
+	for _, id := range []string{"client-b", "../refresh/x", ""} {
+		if _, found, err := store.Lookup(ctx, id); err != nil || found {
+			t.Errorf("Lookup(%q) = %v, %v; want not found", id, found, err)
 		}
 	}
 
-	secret, err := clientset.CoreV1().Secrets(cfg.Server.BrokerNamespace).Get(context.Background(), "dyn-clients", metav1.GetOptions{})
+	if n, err := store.Sweep(ctx); err != nil || n != 0 {
+		t.Fatalf("Sweep of a live registration = %d, %v; want 0", n, err)
+	}
+	store.clock = func() time.Time {
+		return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC).Add(dynamicClientTTL + time.Hour)
+	}
+	if _, found, _ := store.Lookup(ctx, "client-a"); found {
+		t.Error("expired registration still found")
+	}
+	if n, err := store.Sweep(ctx); err != nil || n != 1 {
+		t.Fatalf("Sweep of an expired registration = %d, %v; want 1", n, err)
+	}
+	if _, err := state.Head(ctx, clientsPrefix+"client-a"); !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("swept registration: %v, want ErrNotFound", err)
+	}
+}
+
+// The pre-bucket Secret is imported once: live, well-formed entries land in
+// the bucket, the Secret is emptied, and a rerun changes nothing.
+func TestDynamicClientStoreImportSecret(t *testing.T) {
+	store, _ := newClientStoreForTest(t)
+	ctx := context.Background()
+	cfg := brokertest.NewConfig()
+	cfg.Server.DynamicClientsSecret = "dyn-clients"
+	ref := core.DynamicClientsRef(cfg)
+	secrets := storage.NewK8sSecretStore(fake.NewSimpleClientset())
+
+	if n, err := store.ImportSecret(ctx, secrets, ref); err != nil || n != 0 {
+		t.Fatalf("import with no Secret = %d, %v; want 0", n, err)
+	}
+	if value, err := core.ReadSecret(ctx, secrets, ref); err != nil || value != nil {
+		t.Fatalf("import materialized the Secret: %q, %v", value, err)
+	}
+
+	now := store.clock()
+	legacy, err := json.Marshal(map[string]dynamicClientRecord{
+		"live":         {RedirectURIs: []string{"https://host.example/cb"}, Created: now.Add(-time.Hour)},
+		"expired":      {RedirectURIs: []string{"https://host.example/cb"}, Created: now.Add(-dynamicClientTTL - time.Hour)},
+		"../refresh/x": {RedirectURIs: []string{"https://host.example/cb"}, Created: now},
+	})
 	if err != nil {
-		t.Fatalf("read secret: %v", err)
+		t.Fatal(err)
 	}
-	payload := secret.Data[core.DynamicClientsSecretKey]
-	if len(payload) > maxDynamicClientsBytes {
-		t.Errorf("serialized map = %d bytes, want <= %d", len(payload), maxDynamicClientsBytes)
+	if err := secrets.Mutate(ctx, ref, func([]byte) ([]byte, error) { return legacy, nil }); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
-	// Oldest evicted, newest kept.
-	_, found, err := store.Lookup(context.Background(), "client-0000")
+	if n, err := store.ImportSecret(ctx, secrets, ref); err != nil || n != 1 {
+		t.Fatalf("import = %d, %v; want 1", n, err)
+	}
+	if _, found, err := store.Lookup(ctx, "live"); err != nil || !found {
+		t.Fatalf("imported registration: %v, %v", found, err)
+	}
+	for _, id := range []string{"expired", "../refresh/x"} {
+		if _, found, _ := store.Lookup(ctx, id); found {
+			t.Errorf("%q imported", id)
+		}
+	}
+	if value, err := core.ReadSecret(ctx, secrets, ref); err != nil || len(value) != 0 {
+		t.Fatalf("Secret after import = %q, %v; want empty", value, err)
+	}
+	if n, err := store.ImportSecret(ctx, secrets, ref); err != nil || n != 0 {
+		t.Fatalf("rerun = %d, %v; want 0", n, err)
+	}
+}
+
+// A registration already in the bucket is kept as is; an interrupted import
+// reruns without failing on what it already copied.
+func TestDynamicClientStoreImportIsIdempotent(t *testing.T) {
+	store, _ := newClientStoreForTest(t)
+	ctx := context.Background()
+	cfg := brokertest.NewConfig()
+	ref := core.DynamicClientsRef(cfg)
+	secrets := storage.NewK8sSecretStore(fake.NewSimpleClientset())
+	if err := store.Register(ctx, "live", []string{"https://host.example/new"}, ""); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	legacy, err := json.Marshal(map[string]dynamicClientRecord{"live": {RedirectURIs: []string{"https://host.example/old"}, Created: store.clock()}})
 	if err != nil {
-		t.Fatalf("lookup oldest: %v", err)
+		t.Fatal(err)
 	}
-	if found {
-		t.Error("oldest registration survived byte-cap eviction")
+	if err := secrets.Mutate(ctx, ref, func([]byte) ([]byte, error) { return legacy, nil }); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
-	_, found, err = store.Lookup(context.Background(), fmt.Sprintf("client-%04d", n-1))
-	if err != nil {
-		t.Fatalf("lookup newest: %v", err)
+	if _, err := store.ImportSecret(ctx, secrets, ref); err != nil {
+		t.Fatalf("import: %v", err)
 	}
-	if !found {
-		t.Error("newest registration missing after eviction")
+	if record, _, _ := store.Lookup(ctx, "live"); !record.allowsRedirect("https://host.example/new") {
+		t.Fatalf("import overwrote the bucket record: %+v", record)
 	}
 }

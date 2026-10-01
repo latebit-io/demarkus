@@ -14,14 +14,16 @@ import (
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 )
 
-// State is the HMAC-signed OIDC state cookie payload: CSRF nonce, server-side
-// expiry, and the pending device or auth-code entry point. Dispatch on
-// /auth/callback keys off these signed fields, never an ambient cookie.
+// State is the HMAC-signed OIDC state cookie payload: CSRF nonce, expiry,
+// and the flow /auth/callback resumes. Dispatch keys off these signed
+// fields, never an ambient cookie.
 type State struct {
-	Nonce      string    `json:"n"`
-	ExpiresAt  time.Time `json:"e"`
-	DeviceCode string    `json:"d,omitempty"`
-	AuthCodeID string    `json:"a,omitempty"`
+	Nonce     string    `json:"n"`
+	ExpiresAt time.Time `json:"e"`
+	// DeviceKey is the device grant's key, its device_code's hash.
+	DeviceKey string `json:"d,omitempty"`
+	// AuthCode is the authorize request, carried here instead of stored.
+	AuthCode *AuthCodeRequest `json:"a,omitempty"`
 }
 
 // Signer encodes and verifies State values into the signed cookie format

@@ -26,7 +26,7 @@ const HTTPTimeout = 5 * time.Second
 
 // NewConfig is the base fixture: one static world, no gateway.
 func NewConfig() *core.Config {
-	return &core.Config{
+	cfg := &core.Config{
 		Server: core.ServerConfig{
 			Addr:            ":0",
 			CookieKey:       "dGVzdC1rZXktMTIzNDU2Nzg5MGFi",
@@ -49,6 +49,10 @@ func NewConfig() *core.Config {
 			},
 		},
 	}
+	if err := cfg.Server.ApplyDefaults(); err != nil {
+		panic(err) // the literal above is valid; a failure is a broken default
+	}
+	return cfg
 }
 
 // NewMemoryConfig provisions two static tenants on the memory gateway at

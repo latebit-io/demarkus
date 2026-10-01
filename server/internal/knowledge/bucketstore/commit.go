@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 )
 
 const maximumMutationAttempts = 12

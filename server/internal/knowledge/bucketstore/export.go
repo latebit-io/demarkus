@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
+	"github.com/latebit-io/demarkus/server/blob"
 )
 
 // ExportOptions names the world to export and how many shards load at once.

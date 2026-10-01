@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob/gcs"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blobtest"
+	"github.com/latebit-io/demarkus/server/blob"
+	"github.com/latebit-io/demarkus/server/blob/blobtest"
+	"github.com/latebit-io/demarkus/server/blob/gcs"
 )
 
 const cleanupTimeout = 2 * time.Minute

@@ -1,51 +1,38 @@
 package oauthsrv
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 )
 
-// userCodeAlphabet is the character set for user-readable device codes.
-// Excludes 0, 1, I, L, O, U to remove the visual confusables that trip
-// up users typing the code at a verification URL on a phone or laptop.
-// 30 chars; with two 4-character groups (8 total) the space is 30^8 ≈
-// 6.6×10^11. Birthday-paradox collision under a 10-minute TTL with even
-// pathological authorize rates stays in the negligible range, and the
-// generator still retries on collision as cheap insurance.
+// userCodeAlphabet leaves out the confusable 0, 1, I, L, O and U; eight
+// characters give 30^8 codes, and the generator still retries collisions.
 const userCodeAlphabet = "23456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 // userCodeLen is the total character count (not counting the hyphen).
 const userCodeLen = 8
 
-// userCodeHyphenAt is the index the display hyphen is inserted at when
-// rendering for the user. Server-side comparison always strips hyphens
-// + uppercases first, so a user typing "WDJB-MJHT", "wdjbmjht", or
-// "wdjb mjht" with stray whitespace all resolve to the same canonical
-// form.
+// userCodeHyphenAt places the display hyphen; comparison strips hyphens and
+// spaces and uppercases, so every typed form resolves the same.
 const userCodeHyphenAt = 4
 
-// deviceCodeBytes is the raw entropy in the opaque device_code returned
-// to the polling client. 32 bytes = 64 hex chars; the device_code is
-// only ever handled machine-to-machine, so length is not a UX concern.
+// deviceCodeBytes is the device_code's raw entropy, 64 hex characters; only
+// machines handle it.
 const deviceCodeBytes = 32
 
-// deviceCodeGenAttempts caps user-code collision retries. With the
-// alphabet size above, three attempts is sufficient under any realistic
-// load; a fourth would only paper over a malfunctioning RNG.
+// deviceCodeGenAttempts caps user code collision retries; a fourth would
+// only hide a broken RNG.
 const deviceCodeGenAttempts = 3
 
-// deviceStatus is the device-flow state-machine value. The four states
-// map directly to RFC 8628 §3.5 outcomes the polling client sees on
-// /device/token: authorization_pending → statusPending; success → the
-// 200-with-tokens response built from statusComplete; expired_token →
-// statusExpired; access_denied → statusDenied.
+// deviceStatus maps onto RFC 8628 §3.5: authorization_pending, the tokens,
+// expired_token and access_denied.
 type deviceStatus int
 
 const (
@@ -55,339 +42,180 @@ const (
 	statusDenied
 )
 
-// deviceCodeState is one in-flight device-flow grant. Created by
-// Authorize, mutated by Poll/Bind/Deny/Sweep, read by every handler.
-// All fields are owned by the deviceStore's mutex; callers must not
-// mutate after the value is returned outside the lock.
-type deviceCodeState struct {
-	DeviceCode   string
-	UserCode     string // canonical (no hyphen, uppercase)
-	Status       deviceStatus
-	CreatedAt    time.Time
-	ExpiresAt    time.Time
-	LastPolledAt time.Time // zero until first /device/token poll
-
-	// Resource is the canonical RFC 8707 indicator the client asked for at
-	// /device/authorize; it binds the refresh token minted at Bind.
-	Resource string
-	// Populated by Bind on successful IdP exchange; consumed by Poll
-	// to build the statusComplete response. Zero values otherwise.
-	Result core.ExchangeResult
-	// RefreshToken is the raw opaque refresh token minted at Bind time
-	// by the broker's refreshStore. Stashed here so that idempotent
-	// polling (a buggy client polling multiple times after completion
-	// resolves) returns the SAME refresh_token rather than minting a
-	// fresh one each poll. Empty until Bind sets it; cleared on Sweep
-	// alongside the state itself.
-	RefreshToken string
-}
-
-// pollResult is what the /device/token handler dispatches on. SlowDown
-// is set only for a pending poll that arrived before the configured
-// minimum interval elapsed — handler translates to the RFC 8628
-// "slow_down" error response (status stays statusPending in the
-// store; we just signal the rate violation to the handler).
+// pollResult is what /device/token answers: slow_down while pending and
+// polled early, or the terminal status, with the claims on completion.
 type pollResult struct {
 	Status   deviceStatus
 	SlowDown bool
-	Result   core.ExchangeResult // only set when Status == statusComplete
-	// RefreshToken is the raw opaque refresh token bound to this grant.
-	// Set only when Status == statusComplete and a refresh token was
-	// minted at Bind time. Forwarded verbatim into the /device/token
-	// success response; subsequent polls return the same value.
-	RefreshToken string
+	Claims   core.Claims
 }
 
-// errDeviceCodeNotFound is returned by Bind / Poll / Deny when the
-// device_code is unknown. Treated as expired/denied at the HTTP layer
-// — never echoed to the client beyond the standard RFC 8628 error
-// codes, since revealing whether a device_code ever existed would
-// turn the polling endpoint into an enumeration oracle.
-var errDeviceCodeNotFound = errors.New("device code not found")
+// Device grant refusals. Unknown codes answer as expired at the HTTP layer,
+// so the polling endpoint never says whether a code existed.
+var (
+	errDeviceCodeNotFound = errors.New("device code not found")
+	errDeviceCodeTerminal = errors.New("device code in terminal state")
+)
 
-// errDeviceCodeTerminal is returned by Bind when the state has already
-// transitioned out of pending (already complete / expired / denied).
-// The /auth/callback path treats it as a no-op success: the device
-// flow already moved on, and overwriting would silently invalidate
-// whichever resolution landed first.
-var errDeviceCodeTerminal = errors.New("device code in terminal state")
-
-// deviceStore is the in-memory state for all active device-flow grants
-// on this broker replica. Single-broker invariant per plan §"Single
-// broker only for now": no Redis, no Secret-backed persistence — a
-// broker restart drops all in-flight flows and clients see
-// expired_token on next poll. Acceptable for the ten-minute device-code
-// TTL; revisit if HA broker ever lands.
+// deviceStore runs RFC 8628 grants in the shared grant document. A grant is
+// keyed by its device_code's hash, which also rides the browser's cookies.
 type deviceStore struct {
-	mu sync.Mutex
-
-	codes     map[string]*deviceCodeState // device_code → state
-	userIndex map[string]string           // canonical user_code → device_code
-
-	clock        func() time.Time
+	grants       *grantStore
 	expiresIn    time.Duration
 	pollInterval time.Duration
-	maxPending   int
 }
 
-// maxPendingGrants bounds each unauthenticated grant map; the janitor frees
-// expired entries, so a full store is an attack or a stuck sweep, not load.
-const maxPendingGrants = 10000
-
-// errGrantStoreFull is returned instead of growing a grant map past its cap.
-var errGrantStoreFull = errors.New("broker: too many pending grants")
-
-// newDeviceStore builds a fresh in-memory store. expiresIn is the
-// device-code TTL (10m default — see plan open question §5);
-// pollInterval is the minimum allowed gap between /device/token polls
-// (5s default, matches the value emitted in the authorize response's
-// `interval` field). clock is injected so tests can drive expiry and
-// slow_down without sleeping.
-func newDeviceStore(clock func() time.Time, expiresIn, pollInterval time.Duration) *deviceStore {
-	if clock == nil {
-		clock = time.Now
-	}
-	return &deviceStore{
-		codes:        make(map[string]*deviceCodeState),
-		userIndex:    make(map[string]string),
-		clock:        clock,
-		expiresIn:    expiresIn,
-		pollInterval: pollInterval,
-		maxPending:   maxPendingGrants,
-	}
-}
-
-// Authorize creates a new pending grant and returns the codes the
-// /device/authorize handler echoes back to the polling client. The
-// caller composes the verification_uri + verification_uri_complete
-// from the broker's PublicURL; this method owns only the secret-
-// material side.
-//
-// User-code collisions are theoretically possible (30^8 ≈ 6.6×10^11
-// addresses, ~600 simultaneously-active codes under any realistic
-// load); we retry up to deviceCodeGenAttempts times and surface an
-// error on the unlikely third collision rather than allow a silent
-// overwrite of an in-flight code.
-func (s *deviceStore) Authorize(resource string) (deviceCode, userCode string, expiresAt time.Time, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.codes) >= s.maxPending {
-		return "", "", time.Time{}, errGrantStoreFull
-	}
-	now := s.clock()
-	expiresAt = now.Add(s.expiresIn)
-
+// Authorize creates a pending grant and returns the codes the client gets.
+// A user code collision with a live grant retries a few times, then fails.
+func (s *deviceStore) Authorize(ctx context.Context, resource string) (deviceCode, userCode string, expiresAt time.Time, err error) {
 	deviceCode, err = newDeviceCode()
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("device code: %w", err)
 	}
-
 	var canonical string
-	for range deviceCodeGenAttempts {
-		canonical, err = newUserCode()
-		if err != nil {
-			return "", "", time.Time{}, fmt.Errorf("user code: %w", err)
+	err = s.grants.update(ctx, func(st *grantState) error {
+		if len(st.Devices) >= maxDeviceGrants {
+			return errGrantStoreFull
 		}
-		if _, taken := s.userIndex[canonical]; !taken {
-			break
+		var genErr error
+		if canonical, genErr = freeUserCode(st); genErr != nil {
+			return genErr
 		}
-		canonical = ""
+		expiresAt = s.grants.clock().Add(s.expiresIn)
+		st.Devices[hashToken(deviceCode)] = deviceGrant{UserCode: canonical, Status: statusPending, Resource: resource, ExpiresAt: expiresAt}
+		return nil
+	})
+	if err != nil {
+		return "", "", time.Time{}, err
 	}
-	if canonical == "" {
-		return "", "", time.Time{}, fmt.Errorf("user code: exhausted %d collision retries", deviceCodeGenAttempts)
-	}
-
-	s.codes[deviceCode] = &deviceCodeState{
-		DeviceCode: deviceCode,
-		UserCode:   canonical,
-		Resource:   resource,
-		Status:     statusPending,
-		CreatedAt:  now,
-		ExpiresAt:  expiresAt,
-	}
-	s.userIndex[canonical] = deviceCode
 	return deviceCode, formatUserCode(canonical), expiresAt, nil
 }
 
-// LookupByUserCode resolves a user-typed code to its device_code. The
-// /device POST handler normalizes (strip hyphens + uppercase) before
-// calling; this method does the same defensively so a misuse from a
-// future handler doesn't silently fail to match. Returns false on
-// unknown codes and on terminal-state matches (expired / complete /
-// denied) — the form handler should not let a user complete a flow
-// that has already resolved.
-func (s *deviceStore) LookupByUserCode(userCode string) (string, bool) {
+// freeUserCode draws a user code no grant in st holds.
+func freeUserCode(st *grantState) (string, error) {
+	for range deviceCodeGenAttempts {
+		canonical, err := newUserCode()
+		if err != nil {
+			return "", fmt.Errorf("user code: %w", err)
+		}
+		if _, taken := st.deviceByUserCode(canonical); !taken {
+			return canonical, nil
+		}
+	}
+	return "", fmt.Errorf("user code: exhausted %d collision retries", deviceCodeGenAttempts)
+}
+
+// LookupByUserCode resolves a typed user code to its pending grant's key;
+// a resolved or expired grant is not found, so a flow completes once.
+func (s *deviceStore) LookupByUserCode(ctx context.Context, userCode string) (key string, ok bool, err error) {
 	canonical := canonicalizeUserCode(userCode)
 	if canonical == "" {
-		return "", false
+		return "", false, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	deviceCode, ok := s.userIndex[canonical]
+	st, err := s.grants.read(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	key, ok = st.deviceByUserCode(canonical)
 	if !ok {
-		return "", false
+		return "", false, nil
 	}
-	state, ok := s.codes[deviceCode]
-	if !ok {
-		return "", false
+	grant := st.Devices[key]
+	if grant.Status != statusPending || s.grants.clock().After(grant.ExpiresAt) {
+		return "", false, nil
 	}
-	if state.Status != statusPending {
-		return "", false
-	}
-	if s.clock().After(state.ExpiresAt) {
-		return "", false
-	}
-	return deviceCode, true
+	return key, true, nil
 }
 
-// LookupByDeviceCode returns a copy of the state for the given
-// device_code, or false if absent. Used by /auth/callback's device
-// branch to validate the cookie before kicking the OAuth exchange.
-// Returns a copy (not a pointer) so callers can't accidentally mutate
-// the store's state outside the mutex.
-func (s *deviceStore) LookupByDeviceCode(deviceCode string) (deviceCodeState, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, ok := s.codes[deviceCode]
-	if !ok {
-		return deviceCodeState{}, false
-	}
-	return *state, true
-}
-
-// Bind transitions a pending grant to statusComplete and stashes the
-// IdP exchange result + the broker-minted refresh token for the
-// polling client to pick up. Called from /auth/callback's device-cookie
-// branch after the OAuth exchange succeeds. Takes a pointer to
-// ExchangeResult to avoid copying ~120 bytes through the call site;
-// the store still owns its copy via the dereference into
-// deviceCodeState.Result.
-//
-// refreshToken may be empty during early callers; the caller is
-// expected to mint and pass it. An empty value is stored verbatim and
-// surfaced as an empty refresh_token in the polling response. PR4's
-// deviceCallback always mints before Bind, so production paths never
-// pass empty.
-//
-// Returns errDeviceCodeNotFound for unknown codes and
-// errDeviceCodeTerminal if the grant has already resolved (already
-// complete, expired, or denied) — the callback handler treats the
-// terminal case as a no-op, since whatever already resolved is the
-// authoritative outcome.
-func (s *deviceStore) Bind(deviceCode string, result *core.ExchangeResult, refreshToken string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, ok := s.codes[deviceCode]
-	if !ok {
-		return errDeviceCodeNotFound
-	}
-	now := s.clock()
-	if state.Status == statusPending && now.After(state.ExpiresAt) {
-		state.Status = statusExpired
-	}
-	if state.Status != statusPending {
-		return errDeviceCodeTerminal
-	}
-	state.Status = statusComplete
-	state.Result = *result
-	state.RefreshToken = refreshToken
-	return nil
-}
-
-// Deny transitions a pending grant to statusDenied. Called from
-// /auth/callback's device-cookie branch when the IdP redirects back
-// with an `error` query param (user denied consent at the IdP). The
-// polling client sees access_denied on the next /device/token poll.
-// Same terminal-state semantics as Bind.
-func (s *deviceStore) Deny(deviceCode string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, ok := s.codes[deviceCode]
-	if !ok {
-		return errDeviceCodeNotFound
-	}
-	now := s.clock()
-	if state.Status == statusPending && now.After(state.ExpiresAt) {
-		state.Status = statusExpired
-	}
-	if state.Status != statusPending {
-		return errDeviceCodeTerminal
-	}
-	state.Status = statusDenied
-	return nil
-}
-
-// Poll advances the state machine on each /device/token call. The
-// returned pollResult tells the handler exactly what to write:
-//   - Status==statusPending, SlowDown==false → "authorization_pending"
-//   - Status==statusPending, SlowDown==true  → "slow_down"
-//   - Status==statusComplete                 → success body w/ tokens
-//   - Status==statusExpired                  → "expired_token"
-//   - Status==statusDenied                   → "access_denied"
-//
-// Expiry is checked lazily on poll: a state that crossed ExpiresAt
-// while still pending gets transitioned to statusExpired here, so the
-// next poll sees expired_token even if the janitor hasn't swept yet.
-func (s *deviceStore) Poll(deviceCode string) pollResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, ok := s.codes[deviceCode]
-	if !ok {
-		return pollResult{Status: statusExpired}
-	}
-	now := s.clock()
-	if state.Status == statusPending && now.After(state.ExpiresAt) {
-		state.Status = statusExpired
-	}
-	if state.Status != statusPending {
-		out := pollResult{Status: state.Status}
-		if state.Status == statusComplete {
-			out.Result = state.Result
-			out.RefreshToken = state.RefreshToken
-		}
-		return out
-	}
-	// Plan §Open Question 4: RFC 8628 §3.5 says the server MAY require
-	// the client to increase its interval by 5s on each slow_down. PR3
-	// just enforces the configured minimum; if the client polls early,
-	// signal slow_down without bumping. Revisit if IdP abuse becomes a
-	// real signal in production.
-	if !state.LastPolledAt.IsZero() && now.Sub(state.LastPolledAt) < s.pollInterval {
-		return pollResult{Status: statusPending, SlowDown: true}
-	}
-	state.LastPolledAt = now
-	return pollResult{Status: statusPending}
-}
-
-// Sweep evicts terminal entries that have aged out. Called by the
-// janitor goroutine at half the device-code TTL. Pending entries past
-// ExpiresAt are not eagerly transitioned here — Poll does that
-// lazily on next poll — but their user_code reservation is released
-// so the alphabet doesn't slowly clog up with expired-but-never-
-// polled codes.
-//
-// retainGrace gives recently-resolved entries a short window so a
-// polling client racing the sweep can still read its statusComplete
-// result before the entry vanishes. One poll-interval is plenty;
-// any client that hasn't polled within that window after completion
-// is effectively gone.
-func (s *deviceStore) Sweep() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := s.clock()
-	retainGrace := s.pollInterval
-	for code, state := range s.codes {
-		expired := now.After(state.ExpiresAt)
-		if state.Status == statusPending && expired {
-			state.Status = statusExpired
-		}
-		terminal := state.Status != statusPending
-		past := now.After(state.ExpiresAt.Add(retainGrace))
-		if terminal && past {
-			delete(s.codes, code)
-			delete(s.userIndex, state.UserCode)
+// deviceByUserCode finds the grant holding a canonical user code; codes
+// are unique among live grants.
+func (st *grantState) deviceByUserCode(canonical string) (string, bool) {
+	for key := range st.Devices {
+		if st.Devices[key].UserCode == canonical {
+			return key, true
 		}
 	}
+	return "", false
+}
+
+// Exists reports whether a grant with this key is still held.
+func (s *deviceStore) Exists(ctx context.Context, key string) (bool, error) {
+	st, err := s.grants.read(ctx)
+	if err != nil {
+		return false, err
+	}
+	_, ok := st.Devices[key]
+	return ok, nil
+}
+
+// Bind completes a pending grant with the signed-in identity, bound to the
+// grant's resource. A grant already resolved or expired is terminal.
+func (s *deviceStore) Bind(ctx context.Context, key string, claims *core.Claims) error {
+	return s.resolve(ctx, key, func(grant *deviceGrant) {
+		grant.Status = statusComplete
+		grant.Claims = claims.BoundTo(grant.Resource)
+	})
+}
+
+// Deny resolves a pending grant as denied; the poller sees access_denied.
+func (s *deviceStore) Deny(ctx context.Context, key string) error {
+	return s.resolve(ctx, key, func(grant *deviceGrant) { grant.Status = statusDenied })
+}
+
+func (s *deviceStore) resolve(ctx context.Context, key string, apply func(*deviceGrant)) error {
+	return s.grants.update(ctx, func(st *grantState) error {
+		grant, ok := st.Devices[key]
+		if !ok {
+			return errDeviceCodeNotFound
+		}
+		if grant.Status != statusPending || s.grants.clock().After(grant.ExpiresAt) {
+			return errDeviceCodeTerminal
+		}
+		apply(&grant)
+		st.Devices[key] = grant
+		return nil
+	})
+}
+
+// Poll answers one /device/token call: a completed grant's claims, left in
+// place until Collect, or its status. A pending poll is recorded for
+// slow_down on every replica.
+func (s *deviceStore) Poll(ctx context.Context, deviceCode string) (pollResult, error) {
+	var out pollResult
+	err := s.grants.update(ctx, func(st *grantState) error {
+		key := hashToken(deviceCode)
+		grant, ok := st.Devices[key]
+		now := s.grants.clock()
+		switch {
+		case !ok, grant.Status == statusPending && now.After(grant.ExpiresAt):
+			out = pollResult{Status: statusExpired}
+		case grant.Status == statusComplete:
+			out = pollResult{Status: statusComplete, Claims: grant.Claims}
+		case grant.Status != statusPending:
+			out = pollResult{Status: grant.Status}
+		case !grant.LastPolledAt.IsZero() && now.Sub(grant.LastPolledAt) < s.pollInterval:
+			out = pollResult{Status: statusPending, SlowDown: true}
+		default:
+			out = pollResult{Status: statusPending}
+			grant.LastPolledAt = now
+			st.Devices[key] = grant
+		}
+		return nil
+	})
+	return out, err
+}
+
+// Collect deletes a completed grant once its tokens are minted, so no
+// claims stay behind; a grant already collected is errDeviceCodeNotFound.
+func (s *deviceStore) Collect(ctx context.Context, deviceCode string) error {
+	return s.grants.update(ctx, func(st *grantState) error {
+		key := hashToken(deviceCode)
+		if grant, ok := st.Devices[key]; !ok || grant.Status != statusComplete {
+			return errDeviceCodeNotFound
+		}
+		delete(st.Devices, key)
+		return nil
+	})
 }
 
 // newDeviceCode returns a fresh opaque device_code from crypto/rand.
@@ -399,16 +227,8 @@ func newDeviceCode() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-// newUserCode returns a canonical (no-hyphen, uppercase) user_code
-// drawn uniformly from userCodeAlphabet. The handler formats with a
-// hyphen before rendering; Lookup normalizes user input back to
-// canonical form before comparing.
-//
-// Uses crypto/rand with rejection sampling so the alphabet's
-// non-power-of-two size doesn't bias toward early characters. The
-// rejection rate is well under 1% for our 30-char alphabet
-// (256 % 30 = 16; reject 16/256 ≈ 6.25% per byte), so the average
-// cost is one rand.Read of a tiny buffer.
+// newUserCode draws a canonical user code uniformly from userCodeAlphabet;
+// rejection sampling keeps the 30-character alphabet unbiased.
 func newUserCode() (string, error) {
 	const maxByte = 256 - (256 % len(userCodeAlphabet))
 	out := make([]byte, 0, userCodeLen)
@@ -425,11 +245,8 @@ func newUserCode() (string, error) {
 	return string(out), nil
 }
 
-// canonicalizeUserCode strips whitespace + hyphens and uppercases the
-// input so the lookup compares against the canonical (alphabet-only)
-// form stored in userIndex. Returns "" on any character outside the
-// alphabet so the lookup naturally fails without exposing the
-// rejection reason to the caller.
+// canonicalizeUserCode strips spaces and hyphens and uppercases; any
+// character outside the alphabet gives "", so the lookup just misses.
 func canonicalizeUserCode(in string) string {
 	in = strings.ToUpper(strings.TrimSpace(in))
 	out := make([]byte, 0, userCodeLen)

@@ -2,8 +2,6 @@ package oauthsrv
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -413,16 +411,8 @@ func TestOAuthAuthorizeAllowDomainsRejectsForeignHD(t *testing.T) {
 	}
 }
 
-// TestOAuthAuthorizeStaleStateCookieRoutesToAuthCodeBranch confirms
-// the dispatch order: a State cookie carrying AuthCodeID enters the
-// auth-code branch even if it also happened to carry DeviceCode (it
-// won't in practice — the two entry points each set only their own
-// field — but the dispatch order is the load-bearing invariant).
-//
-// Implementation: the test only exercises pure AuthCodeID since the
-// production code paths never set both simultaneously; including
-// the "both fields set" case would assert behavior outside the
-// reachable state space and risk codifying the wrong order.
+// TestOAuthAuthorizeStaleStateCookieRoutesToAuthCodeBranch confirms a
+// State cookie carrying the authorize request enters the auth-code branch.
 func TestOAuthAuthorizeStaleStateCookieRoutesToAuthCodeBranch(t *testing.T) {
 	verifier := &brokertest.FakeVerifier{AuthURL: "https://idp.example.com/authorize"}
 	srv, _ := newTestServer(t, brokertest.NewConfig(), verifier, fake.NewSimpleClientset())
@@ -477,28 +467,15 @@ func TestDeviceTokenAuthCodeHappyPath(t *testing.T) {
 
 	// Seed the store directly so this test isolates the /token leg.
 	codeVerifier := "test-verifier-must-be-43-to-128-chars-long-1234"
-	sum := sha256.Sum256([]byte(codeVerifier))
-	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
-	id, err := broker.authCodeStore.Begin(&AuthCodeRequest{
+	challenge := s256(codeVerifier)
+	code := issueTestCode(t, broker, &AuthCodeRequest{
 		ClientID:            "client-abc",
 		RedirectURI:         "http://127.0.0.1:55408/callback",
 		ClientState:         "client-state-nonce",
 		Scope:               "openid",
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
-	})
-	if err != nil {
-		t.Fatalf("seed Begin: %v", err)
-	}
-	exchange := core.ExchangeResult{
-		Claims:      core.Claims{Subject: "google|123", Email: "alice@example.com", EmailVerified: true},
-		RawIDToken:  "idp-id-token-raw",
-		AccessToken: "idp-access-token-raw",
-	}
-	code, _, err := broker.authCodeStore.Bind(id, &exchange)
-	if err != nil {
-		t.Fatalf("seed Bind: %v", err)
-	}
+	}, &core.Claims{Subject: "google|123", Email: "alice@example.com", EmailVerified: true})
 
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -547,8 +524,7 @@ func TestDeviceTokenAuthCodeHappyPath(t *testing.T) {
 // of a successful redemption surfaces as invalid_grant.
 func TestDeviceTokenAuthCodeErrorMapping(t *testing.T) {
 	codeVerifier := "test-verifier-must-be-43-to-128-chars-long-1234"
-	sum := sha256.Sum256([]byte(codeVerifier))
-	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+	challenge := s256(codeVerifier)
 
 	// Each subtest builds a fresh store-seeded code so the table can
 	// independently mutate the token request.
@@ -558,21 +534,12 @@ func TestDeviceTokenAuthCodeErrorMapping(t *testing.T) {
 		srv, broker := newTestServerWithSigner(t, brokertest.NewConfig(), &brokertest.FakeVerifier{
 			Claims: core.Claims{Subject: "x", Email: "x@y", EmailVerified: true},
 		}, fake.NewSimpleClientset(), signer)
-		id, err := broker.authCodeStore.Begin(&AuthCodeRequest{
+		c := issueTestCode(t, broker, &AuthCodeRequest{
 			ClientID:            "client-abc",
 			RedirectURI:         "http://127.0.0.1:55408/callback",
 			CodeChallenge:       challenge,
 			CodeChallengeMethod: "S256",
-		})
-		if err != nil {
-			t.Fatalf("Begin: %v", err)
-		}
-		c, _, err := broker.authCodeStore.Bind(id, &core.ExchangeResult{
-			Claims: core.Claims{Subject: "x", Email: "x@y", EmailVerified: true},
-		})
-		if err != nil {
-			t.Fatalf("Bind: %v", err)
-		}
+		}, &core.Claims{Subject: "x", Email: "x@y", EmailVerified: true})
 		return testClient(srv), srv.URL, c
 	}
 
@@ -697,28 +664,18 @@ func TestDeviceTokenAuthCodeErrorMapping(t *testing.T) {
 // this test is the wire-level confirmation.
 func TestDeviceTokenAuthCodeReplayFails(t *testing.T) {
 	codeVerifier := "test-verifier-must-be-43-to-128-chars-long-1234"
-	sum := sha256.Sum256([]byte(codeVerifier))
-	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+	challenge := s256(codeVerifier)
 
 	signer := brokertest.NewTestIDTokenSigner(t)
 	srv, broker := newTestServerWithSigner(t, brokertest.NewConfig(), &brokertest.FakeVerifier{
 		Claims: core.Claims{Subject: "x", Email: "x@y", EmailVerified: true},
 	}, fake.NewSimpleClientset(), signer)
-	id, err := broker.authCodeStore.Begin(&AuthCodeRequest{
+	code := issueTestCode(t, broker, &AuthCodeRequest{
 		ClientID:            "client-abc",
 		RedirectURI:         "http://127.0.0.1:55408/callback",
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
-	})
-	if err != nil {
-		t.Fatalf("Begin: %v", err)
-	}
-	code, _, err := broker.authCodeStore.Bind(id, &core.ExchangeResult{
-		Claims: core.Claims{Subject: "x", Email: "x@y", EmailVerified: true},
-	})
-	if err != nil {
-		t.Fatalf("Bind: %v", err)
-	}
+	}, &core.Claims{Subject: "x", Email: "x@y", EmailVerified: true})
 
 	form := url.Values{
 		"grant_type":    {"authorization_code"},

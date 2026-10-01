@@ -1,355 +1,208 @@
 package oauthsrv
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
-	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 )
-
-const (
-	testExpiresIn    = 10 * time.Minute
-	testPollInterval = 5 * time.Second
-)
-
-func newTestDeviceStore(t *testing.T) (*deviceStore, *brokertest.FakeClock) {
-	t.Helper()
-	c := brokertest.NewFakeClock(time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC))
-	return newDeviceStore(c.Now, testExpiresIn, testPollInterval), c
-}
 
 func TestDeviceStoreAuthorize(t *testing.T) {
-	t.Run("populates state and returns formatted user code", func(t *testing.T) {
-		store, clock := newTestDeviceStore(t)
-
-		deviceCode, userCode, expiresAt, err := store.Authorize("")
-		if err != nil {
-			t.Fatalf("Authorize: %v", err)
-		}
-		if deviceCode == "" {
-			t.Fatal("empty device code")
-		}
-		if !strings.Contains(userCode, "-") {
-			t.Fatalf("user code missing hyphen: %q", userCode)
-		}
-		if len(userCode) != userCodeLen+1 {
-			t.Fatalf("user code wrong length: got %d want %d", len(userCode), userCodeLen+1)
-		}
-		if got, want := expiresAt, clock.Now().Add(testExpiresIn); !got.Equal(want) {
-			t.Fatalf("expiresAt: got %v want %v", got, want)
-		}
-
-		// Resolve back via lookup to confirm the user_code is indexed.
-		gotDevice, ok := store.LookupByUserCode(userCode)
-		if !ok {
-			t.Fatal("LookupByUserCode returned false")
-		}
-		if gotDevice != deviceCode {
-			t.Fatalf("user-code index mismatch: got %q want %q", gotDevice, deviceCode)
-		}
-	})
-
-	t.Run("device codes are unique across calls", func(t *testing.T) {
-		store, _ := newTestDeviceStore(t)
-		seenDevice := make(map[string]bool)
-		seenUser := make(map[string]bool)
-		for range 50 {
-			deviceCode, userCode, _, err := store.Authorize("")
-			if err != nil {
-				t.Fatalf("Authorize: %v", err)
-			}
-			if seenDevice[deviceCode] {
-				t.Fatalf("duplicate device_code: %q", deviceCode)
-			}
-			if seenUser[userCode] {
-				t.Fatalf("duplicate user_code: %q", userCode)
-			}
-			seenDevice[deviceCode] = true
-			seenUser[userCode] = true
-		}
-	})
+	ctx := context.Background()
+	devices := newGrantFixture(t).devices()
+	deviceCode, userCode, expiresAt, err := devices.Authorize(ctx, "https://mcp.example.com/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deviceCode) != deviceCodeBytes*2 || len(userCode) != userCodeLen+1 || userCode[userCodeHyphenAt] != '-' {
+		t.Errorf("device code %q, user code %q: want hex and XXXX-XXXX", deviceCode, userCode)
+	}
+	if expiresAt.IsZero() {
+		t.Error("no expiry")
+	}
+	other, _, _, err := devices.Authorize(ctx, "")
+	if err != nil || other == deviceCode {
+		t.Fatalf("second grant: %q, %v; want a distinct code", other, err)
+	}
 }
 
-func TestDeviceStoreLookupByUserCode(t *testing.T) {
-	t.Run("accepts canonical, hyphenated, and whitespace forms", func(t *testing.T) {
-		store, _ := newTestDeviceStore(t)
-		deviceCode, userCode, _, err := store.Authorize("")
+func TestDeviceLookupByUserCode(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("accepts canonical, hyphenated and spaced forms", func(t *testing.T) {
+		devices := newGrantFixture(t).devices()
+		deviceCode, userCode, _, err := devices.Authorize(ctx, "")
 		if err != nil {
-			t.Fatalf("Authorize: %v", err)
+			t.Fatal(err)
 		}
 		canonical := strings.ReplaceAll(userCode, "-", "")
-
-		variants := []string{
-			userCode,
-			canonical,
-			strings.ToLower(userCode),
-			" " + userCode + " ",
-			canonical[:4] + " " + canonical[4:],
-		}
-		for _, v := range variants {
-			got, ok := store.LookupByUserCode(v)
-			if !ok {
-				t.Fatalf("variant %q: not found", v)
-			}
-			if got != deviceCode {
-				t.Fatalf("variant %q: mismatch", v)
+		for _, typed := range []string{userCode, canonical, strings.ToLower(userCode), " " + canonical[:4] + " " + canonical[4:] + " "} {
+			key, ok, err := devices.LookupByUserCode(ctx, typed)
+			if err != nil || !ok || key != hashToken(deviceCode) {
+				t.Errorf("%q: key %q, ok %v, err %v", typed, key, ok, err)
 			}
 		}
 	})
 
-	t.Run("rejects unknown / malformed inputs", func(t *testing.T) {
-		store, _ := newTestDeviceStore(t)
-		cases := []struct {
-			name  string
-			input string
-		}{
-			{"empty", ""},
-			{"too short", "ABCD"},
-			{"too long", "ABCDEFGHIJK"},
-			{"alphabet violation", "11110000"},
-			{"never-issued", "AAAAAAAA"},
-		}
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				if _, ok := store.LookupByUserCode(tc.input); ok {
-					t.Fatalf("expected miss for %q", tc.input)
-				}
-			})
-		}
-	})
-
-	t.Run("misses after expiry without sweep", func(t *testing.T) {
-		store, clock := newTestDeviceStore(t)
-		_, userCode, _, err := store.Authorize("")
+	t.Run("misses unknown, expired and resolved grants", func(t *testing.T) {
+		f := newGrantFixture(t)
+		devices := f.devices()
+		deviceCode, userCode, _, err := devices.Authorize(ctx, "")
 		if err != nil {
-			t.Fatalf("Authorize: %v", err)
+			t.Fatal(err)
 		}
-		clock.Advance(testExpiresIn + time.Second)
-		if _, ok := store.LookupByUserCode(userCode); ok {
-			t.Fatal("expected lookup to miss after TTL")
+		for _, typed := range []string{"", "ZZZZ-ZZZZ", "WDJB0JHT"} {
+			if _, ok, _ := devices.LookupByUserCode(ctx, typed); ok {
+				t.Errorf("%q resolved", typed)
+			}
 		}
-	})
-
-	t.Run("misses after Bind", func(t *testing.T) {
-		store, _ := newTestDeviceStore(t)
-		deviceCode, userCode, _, err := store.Authorize("")
+		if err := devices.Bind(ctx, hashToken(deviceCode), aliceClaims()); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, _ := devices.LookupByUserCode(ctx, userCode); ok {
+			t.Error("a completed grant resolved")
+		}
+		_, expiring, _, err := devices.Authorize(ctx, "")
 		if err != nil {
-			t.Fatalf("Authorize: %v", err)
+			t.Fatal(err)
 		}
-		if err := store.Bind(deviceCode, &core.ExchangeResult{}, ""); err != nil {
-			t.Fatalf("Bind: %v", err)
-		}
-		if _, ok := store.LookupByUserCode(userCode); ok {
-			t.Fatal("expected lookup to miss after Bind")
+		f.clock.Advance(testExpiresIn + time.Second)
+		if _, ok, _ := devices.LookupByUserCode(ctx, expiring); ok {
+			t.Error("an expired grant resolved")
 		}
 	})
 }
 
-func TestDeviceStoreBind(t *testing.T) {
-	t.Run("transitions pending to complete with result", func(t *testing.T) {
-		store, _ := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize("")
+func TestDeviceBindAndDeny(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("resolve once; the second resolution is terminal", func(t *testing.T) {
+		devices := newGrantFixture(t).devices()
+		deviceCode, _, _, err := devices.Authorize(ctx, "")
 		if err != nil {
-			t.Fatalf("Authorize: %v", err)
+			t.Fatal(err)
 		}
-		result := core.ExchangeResult{
-			Claims:      core.Claims{Subject: "sub", Email: "alice@example.com", EmailVerified: true},
-			RawIDToken:  "id-token",
-			AccessToken: "access-token",
+		key := hashToken(deviceCode)
+		if err := devices.Bind(ctx, key, aliceClaims()); err != nil {
+			t.Fatal(err)
 		}
-		if err := store.Bind(deviceCode, &result, "refresh-raw"); err != nil {
-			t.Fatalf("Bind: %v", err)
+		if err := devices.Bind(ctx, key, aliceClaims()); !errors.Is(err, errDeviceCodeTerminal) {
+			t.Errorf("rebind: %v, want terminal", err)
 		}
-		out := store.Poll(deviceCode)
-		if out.Status != statusComplete {
-			t.Fatalf("status: got %v want statusComplete", out.Status)
-		}
-		if out.Result.RawIDToken != "id-token" {
-			t.Fatalf("forwarded id_token mismatch: %q", out.Result.RawIDToken)
-		}
-		if out.Result.AccessToken != "access-token" {
-			t.Fatalf("forwarded access_token mismatch: %q", out.Result.AccessToken)
-		}
-		if out.RefreshToken != "refresh-raw" {
-			t.Fatalf("forwarded refresh_token = %q, want refresh-raw", out.RefreshToken)
+		if err := devices.Deny(ctx, key); !errors.Is(err, errDeviceCodeTerminal) {
+			t.Errorf("deny after bind: %v, want terminal", err)
 		}
 	})
 
-	t.Run("unknown device code returns not-found", func(t *testing.T) {
-		store, _ := newTestDeviceStore(t)
-		err := store.Bind("nonexistent", &core.ExchangeResult{}, "")
-		if !errors.Is(err, errDeviceCodeNotFound) {
-			t.Fatalf("err: got %v want errDeviceCodeNotFound", err)
+	t.Run("unknown and expired grants refuse", func(t *testing.T) {
+		f := newGrantFixture(t)
+		devices := f.devices()
+		if err := devices.Bind(ctx, "missing", aliceClaims()); !errors.Is(err, errDeviceCodeNotFound) {
+			t.Errorf("unknown: %v", err)
 		}
-	})
-
-	t.Run("rejects rebind on terminal state", func(t *testing.T) {
-		store, _ := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize("")
+		deviceCode, _, _, err := devices.Authorize(ctx, "")
 		if err != nil {
-			t.Fatalf("Authorize: %v", err)
+			t.Fatal(err)
 		}
-		if err := store.Bind(deviceCode, &core.ExchangeResult{RawIDToken: "first"}, ""); err != nil {
-			t.Fatalf("first Bind: %v", err)
-		}
-		err = store.Bind(deviceCode, &core.ExchangeResult{RawIDToken: "second"}, "")
-		if !errors.Is(err, errDeviceCodeTerminal) {
-			t.Fatalf("second Bind: got %v want errDeviceCodeTerminal", err)
-		}
-		// First result must still win.
-		out := store.Poll(deviceCode)
-		if out.Result.RawIDToken != "first" {
-			t.Fatalf("first result was overwritten: %q", out.Result.RawIDToken)
-		}
-	})
-
-	t.Run("expired pending is rejected at Bind", func(t *testing.T) {
-		store, clock := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize("")
-		if err != nil {
-			t.Fatalf("Authorize: %v", err)
-		}
-		clock.Advance(testExpiresIn + time.Second)
-		err = store.Bind(deviceCode, &core.ExchangeResult{}, "")
-		if !errors.Is(err, errDeviceCodeTerminal) {
-			t.Fatalf("err: got %v want errDeviceCodeTerminal", err)
+		f.clock.Advance(testExpiresIn + time.Second)
+		if err := devices.Bind(ctx, hashToken(deviceCode), aliceClaims()); !errors.Is(err, errDeviceCodeTerminal) {
+			t.Errorf("expired: %v, want terminal", err)
 		}
 	})
 }
 
-func TestDeviceStoreDeny(t *testing.T) {
-	t.Run("transitions pending to denied", func(t *testing.T) {
-		store, _ := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize("")
+func TestDevicePoll(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("pending, slow_down, then the claims once", func(t *testing.T) {
+		f := newGrantFixture(t)
+		devices := f.devices()
+		deviceCode, _, _, err := devices.Authorize(ctx, "https://mcp.example.com/mcp")
 		if err != nil {
-			t.Fatalf("Authorize: %v", err)
+			t.Fatal(err)
 		}
-		if err := store.Deny(deviceCode); err != nil {
-			t.Fatalf("Deny: %v", err)
+		poll := func() pollResult {
+			t.Helper()
+			out, err := devices.Poll(ctx, deviceCode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return out
 		}
-		out := store.Poll(deviceCode)
-		if out.Status != statusDenied {
-			t.Fatalf("status: got %v want statusDenied", out.Status)
+		if out := poll(); out.Status != statusPending || out.SlowDown {
+			t.Fatalf("first poll: %+v", out)
+		}
+		if out := poll(); !out.SlowDown {
+			t.Fatalf("early poll: %+v, want slow_down", out)
+		}
+		f.clock.Advance(testPollInterval)
+		if err := devices.Bind(ctx, hashToken(deviceCode), aliceClaims()); err != nil {
+			t.Fatal(err)
+		}
+		out := poll()
+		if out.Status != statusComplete || out.Claims.Email != "alice@example.com" || out.Claims.Resource != "https://mcp.example.com/mcp" {
+			t.Fatalf("completed poll: %+v", out)
+		}
+		if err := devices.Collect(ctx, deviceCode); err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		if err := devices.Collect(ctx, deviceCode); !errors.Is(err, errDeviceCodeNotFound) {
+			t.Fatalf("second Collect: %v, want not found", err)
+		}
+		if again := poll(); again.Status != statusExpired {
+			t.Fatalf("poll after collection: %+v, want expired", again)
+		}
+		if doc := f.document(t); strings.Contains(doc, "alice@example.com") {
+			t.Errorf("claims stayed in the document after collection: %s", doc)
 		}
 	})
 
-	t.Run("Deny after Bind is rejected", func(t *testing.T) {
-		store, _ := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize("")
+	t.Run("denied, expired and unknown", func(t *testing.T) {
+		f := newGrantFixture(t)
+		devices := f.devices()
+		denied, _, _, err := devices.Authorize(ctx, "")
 		if err != nil {
-			t.Fatalf("Authorize: %v", err)
+			t.Fatal(err)
 		}
-		if err := store.Bind(deviceCode, &core.ExchangeResult{RawIDToken: "id"}, ""); err != nil {
-			t.Fatalf("Bind: %v", err)
+		if err := devices.Deny(ctx, hashToken(denied)); err != nil {
+			t.Fatal(err)
 		}
-		err = store.Deny(deviceCode)
-		if !errors.Is(err, errDeviceCodeTerminal) {
-			t.Fatalf("Deny: got %v want errDeviceCodeTerminal", err)
+		if out, _ := devices.Poll(ctx, denied); out.Status != statusDenied {
+			t.Errorf("denied: %+v", out)
+		}
+		if out, _ := devices.Poll(ctx, "unknown"); out.Status != statusExpired {
+			t.Errorf("unknown: %+v", out)
+		}
+		expiring, _, _, err := devices.Authorize(ctx, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.clock.Advance(testExpiresIn + time.Second)
+		if out, _ := devices.Poll(ctx, expiring); out.Status != statusExpired {
+			t.Errorf("expired: %+v", out)
 		}
 	})
 }
 
-func TestDeviceStorePoll(t *testing.T) {
-	t.Run("pending then complete", func(t *testing.T) {
-		store, _ := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize("")
-		if err != nil {
-			t.Fatalf("Authorize: %v", err)
-		}
-		if out := store.Poll(deviceCode); out.Status != statusPending || out.SlowDown {
-			t.Fatalf("first poll: got %+v want pending", out)
-		}
-		if err := store.Bind(deviceCode, &core.ExchangeResult{Claims: core.Claims{Email: "a@b"}}, ""); err != nil {
-			t.Fatalf("Bind: %v", err)
-		}
-		out := store.Poll(deviceCode)
-		if out.Status != statusComplete {
-			t.Fatalf("post-Bind poll: got %v want complete", out.Status)
-		}
-		if out.Result.Claims.Email != "a@b" {
-			t.Fatalf("claims forwarding broken: %+v", out.Result.Claims)
-		}
-	})
-
-	t.Run("slow_down enforces minimum interval", func(t *testing.T) {
-		store, clock := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize("")
-		if err != nil {
-			t.Fatalf("Authorize: %v", err)
-		}
-		if out := store.Poll(deviceCode); out.SlowDown {
-			t.Fatal("first poll should not slow_down")
-		}
-		// Immediate second poll well under the interval.
-		clock.Advance(testPollInterval / 2)
-		out := store.Poll(deviceCode)
-		if !out.SlowDown {
-			t.Fatalf("expected slow_down, got %+v", out)
-		}
-		if out.Status != statusPending {
-			t.Fatalf("slow_down poll must keep state pending, got %v", out.Status)
-		}
-		// After enough time, polling is allowed again.
-		clock.Advance(testPollInterval)
-		if out := store.Poll(deviceCode); out.SlowDown {
-			t.Fatalf("post-interval poll should not slow_down, got %+v", out)
-		}
-	})
-
-	t.Run("expiry transitions on poll", func(t *testing.T) {
-		store, clock := newTestDeviceStore(t)
-		deviceCode, _, _, err := store.Authorize("")
-		if err != nil {
-			t.Fatalf("Authorize: %v", err)
-		}
-		clock.Advance(testExpiresIn + time.Second)
-		out := store.Poll(deviceCode)
-		if out.Status != statusExpired {
-			t.Fatalf("got %v want expired", out.Status)
-		}
-		// Subsequent poll stays expired (idempotent terminal state).
-		if out := store.Poll(deviceCode); out.Status != statusExpired {
-			t.Fatalf("re-poll: got %v want expired", out.Status)
-		}
-	})
-
-	t.Run("unknown device code reads as expired", func(t *testing.T) {
-		store, _ := newTestDeviceStore(t)
-		out := store.Poll("never-issued")
-		if out.Status != statusExpired {
-			t.Fatalf("got %v want expired", out.Status)
-		}
-	})
-}
-
-func TestDeviceStoreSweep(t *testing.T) {
-	store, clock := newTestDeviceStore(t)
-	deviceCode, userCode, _, err := store.Authorize("")
+// A device login crosses replicas: authorize on one, the form and the
+// callback on a second, the poll on a third.
+func TestDeviceGrantCrossesReplicas(t *testing.T) {
+	f := newGrantFixture(t)
+	ctx := context.Background()
+	deviceCode, userCode, _, err := f.devices().Authorize(ctx, "")
 	if err != nil {
-		t.Fatalf("Authorize: %v", err)
+		t.Fatal(err)
 	}
-	canonical := strings.ReplaceAll(userCode, "-", "")
-
-	// Before expiry: sweep is a no-op.
-	store.Sweep()
-	if _, ok := store.LookupByDeviceCode(deviceCode); !ok {
-		t.Fatal("entry evicted before expiry")
+	key, ok, err := f.devices().LookupByUserCode(ctx, userCode)
+	if err != nil || !ok {
+		t.Fatalf("lookup on a second replica: %v, %v", ok, err)
 	}
-	if _, ok := store.userIndex[canonical]; !ok {
-		t.Fatal("user_code index evicted before expiry")
+	if err := f.devices().Bind(ctx, key, aliceClaims()); err != nil {
+		t.Fatalf("bind on a second replica: %v", err)
 	}
-
-	// Past expiry + grace: entry should be gone, and the user_code freed.
-	clock.Advance(testExpiresIn + testPollInterval + time.Second)
-	store.Sweep()
-	if _, ok := store.LookupByDeviceCode(deviceCode); ok {
-		t.Fatal("entry survived post-grace sweep")
-	}
-	if _, ok := store.userIndex[canonical]; ok {
-		t.Fatal("user_code index survived post-grace sweep")
+	if out, err := f.devices().Poll(ctx, deviceCode); err != nil || out.Status != statusComplete {
+		t.Fatalf("poll on a third replica: %+v, %v", out, err)
 	}
 }
 

@@ -15,10 +15,10 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/server/blob"
+	"github.com/latebit-io/demarkus/server/blob/gcs"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob/gcs"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/logging"
 	"github.com/latebit-io/demarkus/server/internal/management"

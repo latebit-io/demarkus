@@ -14,10 +14,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
 )
 
 const (

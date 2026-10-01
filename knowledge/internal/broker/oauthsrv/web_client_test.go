@@ -223,22 +223,12 @@ func TestOAuthAuthorizeWebClient(t *testing.T) {
 // registered web client and returns the redeemable code.
 func seedWebClientCode(t *testing.T, brokerSrv *Server, challenge string) string {
 	t.Helper()
-	id, err := brokerSrv.authCodeStore.Begin(&AuthCodeRequest{
+	return issueTestCode(t, brokerSrv, &AuthCodeRequest{
 		ClientID:            testWebClientID,
 		RedirectURI:         testWebRedirectURI,
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
-	})
-	if err != nil {
-		t.Fatalf("Begin: %v", err)
-	}
-	code, _, err := brokerSrv.authCodeStore.Bind(id, &core.ExchangeResult{
-		Claims: core.Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true},
-	})
-	if err != nil {
-		t.Fatalf("Bind: %v", err)
-	}
-	return code
+	}, &core.Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true})
 }
 
 // TestDeviceTokenAuthCodeWebClient locks client authentication on the
@@ -396,7 +386,7 @@ func TestDeviceTokenRefreshWebClientBinding(t *testing.T) {
 		t.Helper()
 		raw, err := brokerSrv.refreshStore.Issue(t.Context(),
 			&core.Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true},
-			testWebClientID, time.Hour)
+			testWebClientID)
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
 		}
@@ -499,7 +489,7 @@ func TestDeviceTokenRefreshWebClientBinding(t *testing.T) {
 	t.Run("unbound token still refreshes without client auth", func(t *testing.T) {
 		srv, brokerSrv := newTestServerWithSigner(t, webTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
 		raw, err := brokerSrv.refreshStore.Issue(t.Context(),
-			&core.Claims{Subject: "google|bob", Email: "bob@example.com", EmailVerified: true}, "", time.Hour)
+			&core.Claims{Subject: "google|bob", Email: "bob@example.com", EmailVerified: true}, "")
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
 		}
@@ -532,5 +522,26 @@ func TestDiscoveryOverridesTokenEndpointAuthMethods(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("methods = %v, want %v", got, want)
 		}
+	}
+}
+
+// A bound login refused for missing client auth spends nothing, and with
+// the client's credentials it refreshes and keeps its token.
+func TestRefusedClientAuthKeepsTheRefreshToken(t *testing.T) {
+	srv, brokerSrv := newTestServerWithSigner(t, webTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
+	raw, err := brokerSrv.refreshStore.Issue(t.Context(),
+		&core.Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}, testWebClientID)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	form := url.Values{"grant_type": {refreshGrantType}, "refresh_token": {raw}}
+	if status, _, bad := postToken(t, srv, form); status != http.StatusUnauthorized || bad.Error != "invalid_client" {
+		t.Fatalf("refresh without client auth = %d %q, want invalid_client", status, bad.Error)
+	}
+	form.Set("client_id", testWebClientID)
+	form.Set("client_secret", testWebClientSecret)
+	status, out, bad := postToken(t, srv, form)
+	if status != http.StatusOK || out.RefreshToken != raw {
+		t.Fatalf("refresh with client auth = %d %q, token %q; want the same token", status, bad.Error, out.RefreshToken)
 	}
 }

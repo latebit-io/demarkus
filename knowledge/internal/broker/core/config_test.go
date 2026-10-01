@@ -21,6 +21,7 @@ server:
   addr: ":8080"
   cookieKey: "dGVzdC1rZXk="
   brokerNamespace: demarkus-knowledge-broker
+  stateBucket: gs://broker-state
   publicURL: "https://broker.example.com"
 oidc:
   issuer: https://accounts.google.com
@@ -113,6 +114,16 @@ func TestLoadConfig(t *testing.T) {
 					t.Errorf("worlds = %+v", c.Worlds)
 				}
 			},
+		},
+		{
+			name:    "missing server.stateBucket",
+			body:    mustReplace(t, validConfig, "  stateBucket: gs://broker-state\n", ""),
+			wantErr: "server.stateBucket",
+		},
+		{
+			name:    "server.stateBucket without the gs:// scheme",
+			body:    mustReplace(t, validConfig, "stateBucket: gs://broker-state", "stateBucket: broker-state"),
+			wantErr: "must be a gs:// bucket URL",
 		},
 		{
 			name:    "missing server.addr",
@@ -755,25 +766,43 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "server.idTokenTTL must be > 0",
 		},
 		{
-			name: "refreshTokensSecret default applied",
+			name: "oauthStateSecret default applied",
 			body: validConfig,
 			validate: func(t *testing.T, c *Config) {
-				want := DefaultRefreshTokensSecret
-				if c.Server.RefreshTokensSecret != want {
-					t.Errorf("RefreshTokensSecret = %q, want %q", c.Server.RefreshTokensSecret, want)
+				if c.Server.OAuthStateSecret != DefaultOAuthStateSecret {
+					t.Errorf("OAuthStateSecret = %q, want %q", c.Server.OAuthStateSecret, DefaultOAuthStateSecret)
 				}
 			},
 		},
 		{
-			name: "refreshTokensSecret operator override",
+			name: "maxSessionsPerUser default applied",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				if c.Server.MaxSessionsPerUser != DefaultMaxSessionsPerUser {
+					t.Errorf("MaxSessionsPerUser = %d, want %d", c.Server.MaxSessionsPerUser, DefaultMaxSessionsPerUser)
+				}
+			},
+		},
+		{
+			name:    "maxSessionsPerUser negative rejected",
+			body:    strings.Replace(validConfig, "publicURL: \"https://broker.example.com\"", "publicURL: \"https://broker.example.com\"\n  maxSessionsPerUser: -1", 1),
+			wantErr: "server.maxSessionsPerUser must be > 0",
+		},
+		{
+			name: "stateBucket resolves to its bucket name",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				if got := c.Server.StateBucketName(); got != "broker-state" {
+					t.Errorf("StateBucketName() = %q, want broker-state", got)
+				}
+			},
+		},
+		{
+			name: "refreshTokensSecret is no longer a setting",
 			body: strings.Replace(validConfig,
 				"publicURL: \"https://broker.example.com\"",
 				"publicURL: \"https://broker.example.com\"\n  refreshTokensSecret: my-refresh-tokens", 1),
-			validate: func(t *testing.T, c *Config) {
-				if c.Server.RefreshTokensSecret != "my-refresh-tokens" {
-					t.Errorf("RefreshTokensSecret = %q", c.Server.RefreshTokensSecret)
-				}
-			},
+			wantErr: "refreshTokensSecret",
 		},
 	}
 	for _, tt := range tests {

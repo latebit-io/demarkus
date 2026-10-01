@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	gcs "cloud.google.com/go/storage"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/gateway"
@@ -92,9 +93,22 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 	if err != nil {
 		return nil, err
 	}
-	srv := oauthsrv.NewServer(cfg, deps)
-	provisioner, closeBuckets, err := enableProvisioning(cfg, opts, store, log)
+	gcsClient, closeBuckets, err := storage.NewGCSClient(log)
 	if err != nil {
+		return nil, err
+	}
+	if deps.State, err = storage.OpenStateBucket(gcsClient, &cfg.Server, log); err != nil {
+		closeBuckets()
+		return nil, err
+	}
+	srv := oauthsrv.NewServer(cfg, deps)
+	if err := importClientRegistrations(cfg, srv, store, log); err != nil {
+		closeBuckets()
+		return nil, err
+	}
+	provisioner, err := enableProvisioning(cfg, storage.ProvisionerDeps{Store: store, Worlds: opts.LocalWorlds, Log: log}, gcsClient)
+	if err != nil {
+		closeBuckets()
 		return nil, err
 	}
 
@@ -192,7 +206,7 @@ func (b *Broker) Serve(ctx context.Context) error {
 }
 
 // Close stops the listener outright, then the gateways' session sweeps,
-// the world pool and the tenant bucket backend; safe after Serve and more
+// the world pool and the bucket clients; safe after Serve and more
 // than once.
 func (b *Broker) Close() {
 	b.closeOnce.Do(func() {
@@ -207,6 +221,22 @@ func (b *Broker) Close() {
 		b.pool.Close()
 		b.closeBucket()
 	})
+}
+
+// importClientRegistrations moves registrations from the pre-bucket Secret
+// into the state bucket, so MCP hosts keep their client_id across the upgrade.
+func importClientRegistrations(cfg *core.Config, srv *oauthsrv.Server, store core.SecretStore, log *slog.Logger) error {
+	ref := core.DynamicClientsRef(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	imported, err := srv.DynamicClients().ImportSecret(ctx, store, ref)
+	if err != nil {
+		return fmt.Errorf("import client registrations from %s: %w", ref, err)
+	}
+	if imported > 0 {
+		log.Info("broker: imported client registrations into the state bucket", "count", imported, "from", ref.String())
+	}
+	return nil
 }
 
 // openBearerListener has the server in this process listen for identity
@@ -280,17 +310,11 @@ type backgroundTasks struct {
 	provisioner *storage.Provisioner
 }
 
-// start launches the leader-elected refresh token sweeper, the device
-// janitor, the agent token reconciler when agentTokens is set, and the
-// registry sync when provisioning is on.
+// start launches the leader-elected state bucket sweeper, the agent token
+// reconciler when agentTokens is set, and the registry sync when
+// provisioning is on. In-flight grants sweep themselves on every write.
 func (b *backgroundTasks) start(ctx context.Context, wg *sync.WaitGroup) {
 	b.startSweeper(ctx, wg)
-	b.log.Info("broker: starting device-store janitor",
-		"deviceCodeTTL", b.cfg.Server.DeviceCodeTTL,
-		"devicePollInterval", b.cfg.Server.DevicePollInterval)
-	wg.Go(func() {
-		b.srv.RunDeviceJanitor(ctx)
-	})
 	if len(b.cfg.AgentTokens) > 0 {
 		agentTokens := storage.NewAgentTokens(b.cfg, b.store, b.log)
 		b.log.Info("broker: starting agent token reconciler", "worlds", len(b.cfg.AgentTokens))
@@ -312,7 +336,10 @@ func (b *backgroundTasks) startSweeper(ctx context.Context, wg *sync.WaitGroup) 
 		b.log.Info("broker: sweeper disabled (sweeper.disabled=true)")
 		return
 	}
-	sweeper := storage.NewSweeper(b.k8s, b.srv.RefreshStore(), cfg.Sweeper.Interval, b.log)
+	sweeper := storage.NewSweeper(b.k8s, []storage.SweptStore{
+		{Name: "refresh tokens", Store: b.srv.RefreshStore()},
+		{Name: "client registrations", Store: b.srv.DynamicClients()},
+	}, cfg.Sweeper.Interval, b.log)
 	identity := brokerIdentity()
 	b.log.Info("broker: starting sweeper",
 		"interval", cfg.Sweeper.Interval, "leaseName", cfg.Sweeper.LeaseName,
@@ -403,23 +430,22 @@ func buildServerDeps(cfg *core.Config, store core.SecretStore, log *slog.Logger)
 	}, nil
 }
 
-// enableProvisioning builds the tenant provisioner when the config enables
-// provisioning; nil otherwise. The cleanup releases the bucket client and is
-// safe to call either way.
-func enableProvisioning(cfg *core.Config, opts *RunOptions, store core.SecretStore, log *slog.Logger) (*storage.Provisioner, func(), error) {
+// enableProvisioning builds the tenant provisioner over gcsClient when the
+// config enables provisioning; nil otherwise. deps arrives without Buckets.
+func enableProvisioning(cfg *core.Config, deps storage.ProvisionerDeps, gcsClient *gcs.Client) (*storage.Provisioner, error) {
 	if !cfg.Provisioning.Enabled() {
-		return nil, func() {}, nil
+		return nil, nil
 	}
-	buckets, closeBuckets, err := storage.NewGCSBuckets(&cfg.Provisioning, log)
+	buckets, err := storage.NewGCSBuckets(gcsClient, &cfg.Provisioning, deps.Log)
 	if err != nil {
-		return nil, nil, fmt.Errorf("provisioning enabled: %w", err)
+		return nil, fmt.Errorf("provisioning enabled: %w", err)
 	}
-	log.Info("broker: provisioning enabled",
+	deps.Log.Info("broker: provisioning enabled",
 		"mode", cfg.Provisioning.Mode,
 		"maxTenants", cfg.Provisioning.MaxTenants,
 		"authorityDomain", cfg.Provisioning.AuthorityDomain)
-	deps := storage.ProvisionerDeps{Store: store, Buckets: buckets, Worlds: opts.LocalWorlds, Log: log}
-	return storage.NewProvisioner(cfg, deps), closeBuckets, nil
+	deps.Buckets = buckets
+	return storage.NewProvisioner(cfg, deps), nil
 }
 
 // newSecretStore is the one place Open and RunDeprovision build the
@@ -466,12 +492,14 @@ func RunDeprovision(ctx context.Context, opts DeprovisionOptions) (found bool, e
 	// Secret-only cleanup must not depend on GCS reachability.
 	var buckets storage.BucketCreator
 	if opts.DeleteBucket {
-		gcsBuckets, cleanup, bucketsErr := storage.NewGCSBuckets(&cfg.Provisioning, opts.Log)
-		if bucketsErr != nil {
-			return false, bucketsErr
+		gcsClient, cleanup, clientErr := storage.NewGCSClient(opts.Log)
+		if clientErr != nil {
+			return false, clientErr
 		}
 		defer cleanup()
-		buckets = gcsBuckets
+		if buckets, err = storage.NewGCSBuckets(gcsClient, &cfg.Provisioning, opts.Log); err != nil {
+			return false, err
+		}
 	}
 	return storage.NewProvisioner(cfg, storage.ProvisionerDeps{Store: store, Buckets: buckets, Log: opts.Log}).DeprovisionTenant(ctx, opts.Slug, opts.DeleteBucket)
 }

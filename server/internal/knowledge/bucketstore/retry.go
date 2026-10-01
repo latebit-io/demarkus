@@ -6,7 +6,7 @@ import (
 	mathrand "math/rand/v2"
 	"time"
 
-	"github.com/latebit-io/demarkus/server/internal/knowledge/blob"
+	"github.com/latebit-io/demarkus/server/blob"
 )
 
 const maximumCreateAttempts = 12
