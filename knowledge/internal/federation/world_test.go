@@ -3,6 +3,7 @@ package federation
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -361,6 +362,44 @@ func TestDeriverRetriesAFailedHubWrite(t *testing.T) {
 	}
 	h.hub.setFailing(graphstore.WorldManifestPath("alpha"), false)
 	h.await(versions(map[string]int{"/a.md": 1}))
+}
+
+// A failed manifest write leaves the version the deriver last knew, so a
+// retry after a newer leader moved the manifest conflicts instead of writing
+// stale rows over it.
+func TestDeriverRetriesAFailedManifestWriteOverTheVersionItKnew(t *testing.T) {
+	ctx, h := context.Background(), newHarness(t)
+	manifest, cursor := graphstore.WorldManifestPath("alpha"), protocol.Cursor{Epoch: "e1", Seq: 1}
+	h.alpha.publish("/a.md", "# A\n")
+	w := newWorld(testDeriver(Config{Source: h.worlds, Hub: h.hub.io()}), "alpha")
+	if _, err := w.load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.rebuild(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.hub.setFailing(manifest, true)
+	if err := w.checkpoint(ctx, cursor); err == nil || errors.Is(err, generation.ErrConflict) {
+		t.Fatalf("checkpoint with the manifest refused: %v, want a plain failure", err)
+	}
+	h.hub.setFailing(manifest, false)
+	h.alpha.mu.Lock()
+	h.alpha.docs["/late.md"] = &fakeDoc{version: 1, body: "# Late\n"} // only the newer leader has seen it
+	h.alpha.mu.Unlock()
+	newer := newWorld(testDeriver(Config{Source: h.worlds, Hub: h.hub.io()}), "alpha")
+	if _, err := newer.load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := newer.rebuild(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := newer.checkpoint(ctx, cursor); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.checkpoint(ctx, cursor); !errors.Is(err, generation.ErrConflict) {
+		t.Fatalf("retry over a moved manifest: %v, want a conflict", err)
+	}
+	h.await(versions(map[string]int{"/a.md": 1, "/late.md": 1}))
 }
 
 // A shard past its target splits the world one hex digit further; the old

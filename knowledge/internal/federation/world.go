@@ -36,7 +36,7 @@ type world struct {
 	// reached or the walk could not list everything.
 	partial bool
 
-	manifestVersion  int // -1: unknown, read before the next write
+	manifestVersion  int // the live manifest's, as this world last loaded or wrote it
 	manifestComplete bool
 	// changed is the last change; dirtied the first one the live manifest
 	// lacks, zero when it has them all; attempted the last checkpoint.
@@ -437,8 +437,9 @@ func (w *world) split() {
 	w.log.Info("federation: world shards split", "prefixLength", w.prefixLength, "sources", w.sources)
 }
 
-// commit writes the manifest over the version it expects to replace, so a
-// write that raced another leader's fails with generation.ErrConflict.
+// commit writes the manifest over the version this world last loaded or
+// wrote, never a head it has not read: a write that raced another leader's,
+// even on a retry, fails with generation.ErrConflict.
 func (w *world) commit(ctx context.Context, cursor protocol.Cursor) error {
 	m := graphstore.WorldManifest{World: w.name, Cursor: cursor, Complete: w.complete(), PrefixLength: w.prefixLength}
 	m.Shards = slices.Collect(maps.Values(w.refs))
@@ -446,14 +447,8 @@ func (w *world) commit(ctx context.Context, cursor protocol.Cursor) error {
 	if err != nil {
 		return err
 	}
-	if w.manifestVersion < 0 {
-		if _, err := w.manifestHead(ctx); err != nil {
-			return err
-		}
-	}
 	_, version, err := w.Hub.PublishDocument(ctx, graphstore.WorldManifestPath(w.name), body, w.manifestVersion)
 	if err != nil {
-		w.manifestVersion = -1
 		return fmt.Errorf("checkpoint %s: %w", w.name, err)
 	}
 	w.manifestVersion, w.manifestComplete, w.dirtied = version, m.Complete, time.Time{}
