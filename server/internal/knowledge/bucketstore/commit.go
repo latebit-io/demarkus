@@ -27,9 +27,6 @@ func (store *Store) commitMutation(ctx context.Context, build mutationBuilder) (
 	if store.readOnly {
 		return mutationResult{}, backend.ErrReadOnly
 	}
-	if store.closed.Load() {
-		return mutationResult{}, backend.ErrClosed
-	}
 	ctx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
 	select {
@@ -38,7 +35,8 @@ func (store *Store) commitMutation(ctx context.Context, build mutationBuilder) (
 	case <-ctx.Done():
 		return mutationResult{}, fmt.Errorf("wait for commit token: %w", ctx.Err())
 	}
-	// Close may have run while this commit waited for the token.
+	// Checked with the token held: Close takes the token, so a commit that
+	// waited across it is refused rather than landing after it returned.
 	if store.closed.Load() {
 		return mutationResult{}, backend.ErrClosed
 	}

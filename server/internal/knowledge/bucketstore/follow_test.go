@@ -113,14 +113,24 @@ func TestCloseFencesCommits(t *testing.T) {
 		_, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/late.md", ExpectedVersion: -1, Content: []byte("# Late\n")})
 		result <- err
 	}()
-	time.Sleep(20 * time.Millisecond) // the writer is past its first check, waiting
 	closed := make(chan error, 1)
 	go func() { closed <- store.Close() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for !store.closed.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("Close never marked the store closed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Close cannot return while this test holds the token; the window only
+	// gives a Close that skips the token time to show it.
 	select {
 	case <-closed:
 		t.Fatal("Close returned while a commit held the token")
 	case <-time.After(20 * time.Millisecond):
 	}
+	// Whichever of the writer and Close takes the token next, the writer
+	// finds the store closed.
 	store.commitToken <- struct{}{} // the commit in flight ends
 	if err := <-closed; err != nil {
 		t.Fatalf("close: %v", err)
