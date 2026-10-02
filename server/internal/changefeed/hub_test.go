@@ -507,6 +507,19 @@ func TestConcurrentResumesShareOneCatchUp(t *testing.T) {
 	}
 }
 
+// joinedContext closes joined on its first Done call: catchUp's wait on the
+// flight is that call, so the waiter has joined the flight by then.
+type joinedContext struct {
+	context.Context
+	joined chan struct{}
+	once   sync.Once
+}
+
+func (c *joinedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.joined) })
+	return c.Context.Done()
+}
+
 // The shared catch-up outlives the resume that started it: that caller
 // leaving fails only itself, never the resumes waiting on the same flight.
 func TestCatchUpOutlivesTheResumeThatStartedIt(t *testing.T) {
@@ -526,10 +539,12 @@ func TestCatchUpOutlivesTheResumeThatStartedIt(t *testing.T) {
 	}()
 	<-started
 	second := make(chan error, 1)
+	waiting := &joinedContext{Context: t.Context(), joined: make(chan struct{})}
 	go func() {
-		_, err := hub.Subscribe(t.Context(), "/", since)
+		_, err := hub.Subscribe(waiting, "/", since)
 		second <- err
 	}()
+	<-waiting.joined
 	leave()
 	if err := <-first; !errors.Is(err, context.Canceled) {
 		t.Fatalf("leaving resume: %v, want its own cancellation", err)
