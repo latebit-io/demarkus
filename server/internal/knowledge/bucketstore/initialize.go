@@ -50,39 +50,17 @@ func initialize(ctx context.Context, objects blob.Store, worldID string) error {
 	return nil
 }
 
-// buildGenesis is the empty world's objects, the marker last.
+// buildGenesis is the empty world's objects, the marker last: one empty
+// folded shard, its root, checkpoint zero.
 func buildGenesis(worldID string) ([]modelObject, error) {
-	objects := make([]modelObject, 0, shardCount+3)
-	refs := make([]shardRef, 0, shardCount)
-	for index := range shardCount {
-		shardID := fmt.Sprintf("%02x", index)
-		shard := shardObject{Schema: schemaVersion, Shard: shardID, Entries: make([]shardEntry, 0)}
-		if err := validateShardObject(&shard, shardID); err != nil {
-			return nil, fmt.Errorf("build shard %s: %w", shardID, err)
-		}
-		object, ref, err := immutableJSON(func(hash string) string {
-			return shardKey(shardID, hash)
-		}, shard)
-		if err != nil {
-			return nil, fmt.Errorf("build shard %s: %w", shardID, err)
-		}
-		objects = append(objects, object)
-		refs = append(refs, shardRef{Shard: shardID, objectRef: ref})
-	}
-	root := rootObject{
-		Schema:        schemaVersion,
-		WorldID:       worldID,
-		DocumentCount: 0,
-		Shards:        refs,
-	}
-	if err := validateRootObject(&root, worldID); err != nil {
-		return nil, fmt.Errorf("build root: %w", err)
-	}
-	rootModel, rootRef, err := immutableJSON(rootKey, root)
+	shard, ref, err := foldShard(0, 0, make([]foldedEntry, 0))
 	if err != nil {
-		return nil, fmt.Errorf("build root: %w", err)
+		return nil, err
 	}
-	objects = append(objects, rootModel)
+	rootModel, rootRef, err := foldRoot(worldID, 0, 0, []shardRef{ref})
+	if err != nil {
+		return nil, err
+	}
 	checkpoint := checkpointObject{Schema: logSchema, WorldID: worldID, Sequence: 1, Root: rootRef}
 	if err := validateCheckpoint(&checkpoint, 1); err != nil {
 		return nil, fmt.Errorf("build checkpoint zero: %w", err)
@@ -91,7 +69,6 @@ func buildGenesis(worldID string) ([]modelObject, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build checkpoint zero: %w", err)
 	}
-	objects = append(objects, modelObject{Key: checkpointKey(1), Data: checkpointData})
 	marker := markerObject{Schema: logSchema, WorldID: worldID}
 	if err := validateMarker(&marker); err != nil {
 		return nil, fmt.Errorf("build marker: %w", err)
@@ -100,7 +77,7 @@ func buildGenesis(worldID string) ([]modelObject, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build marker: %w", err)
 	}
-	return append(objects, modelObject{Key: markerKey, Data: markerData}), nil
+	return []modelObject{shard, rootModel, {Key: checkpointKey(1), Data: checkpointData}, {Key: markerKey, Data: markerData}}, nil
 }
 
 func createImmutable(ctx context.Context, objects blob.Store, object modelObject) error {

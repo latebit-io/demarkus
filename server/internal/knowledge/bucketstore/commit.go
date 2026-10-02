@@ -286,7 +286,9 @@ func (c *committer) fill() {
 			}
 			b.base = tip
 		} else {
-			b.base = c.pipeline[len(c.pipeline)-1].next
+			// Rebased once here, a checkpoint adopted meanwhile is not rebased
+			// again on every later install.
+			b.base = c.store.rebased(c.pipeline[len(c.pipeline)-1].next)
 		}
 		c.build(b, requests)
 		c.pipeline = append(c.pipeline, b)

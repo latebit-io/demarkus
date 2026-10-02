@@ -33,7 +33,10 @@ const (
 // kind, keeping the first definitive answer. A create that finds its name taken
 // once a hedge went out may have met itself, so it answers ErrAmbiguous.
 func Hedged(store Store) Store {
-	return &hedged{Store: store}
+	h := &hedged{Store: store}
+	// Banked full, so a store's first calls may hedge before they earn any.
+	h.budget.tenths.Store(hedgeBank * 10)
+	return h
 }
 
 type hedged struct {

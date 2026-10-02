@@ -438,27 +438,16 @@ func (view *readView) history(ctx context.Context, state *pathState) ([]retained
 	return versions, nil
 }
 
-// baseHistory reads the versions a checkpoint's manifest retains.
+// baseHistory reads the versions a document's checkpoint entry retains.
 func (view *readView) baseHistory(ctx context.Context, state *pathState) ([]retainedVersion, error) {
 	base, documentHash := state.Base, pathHash(state.Path)
-	manifest, err := getImmutable(ctx, view.objects, keyedRef{base.Manifest, manifestKey(documentHash, base.Manifest.Hash)}, validateManifestObject)
+	blocks, err := baseBlocks(ctx, view.objects, state)
 	if err != nil {
-		return nil, fmt.Errorf("load manifest: %w", err)
-	}
-	if manifest.PathHash != documentHash || manifest.Current != base.Current || manifest.Archived != base.Archived {
-		return nil, fmt.Errorf("%w: manifest does not match checkpoint entry", blob.ErrIntegrity)
+		return nil, err
 	}
 	var versions []retainedVersion
-	for index, ref := range manifest.History {
-		history, err := getImmutable(ctx, view.objects, keyedRef{ref.objectRef, historyKey(ref.Hash)}, func(history *historyObject) error {
-			if err := validateHistoryObject(history); err != nil {
-				return err
-			}
-			if history.PathHash != ref.PathHash || history.First != ref.First || history.Last != ref.Last {
-				return fmt.Errorf("object does not match history reference")
-			}
-			return nil
-		})
+	for index, ref := range blocks {
+		history, err := readBlock(ctx, view.objects, documentHash, ref)
 		if err != nil {
 			return nil, fmt.Errorf("load history %d: %w", index, err)
 		}
@@ -471,13 +460,44 @@ func (view *readView) baseHistory(ctx context.Context, state *pathState) ([]reta
 		}
 	}
 	if len(versions) == 0 {
-		return nil, fmt.Errorf("%w: manifest has no retained versions", blob.ErrIntegrity)
+		return nil, fmt.Errorf("%w: checkpoint entry has no retained versions", blob.ErrIntegrity)
 	}
 	tip := versions[len(versions)-1]
 	if tip.entry.Version != base.Current || tip.entry.BodyHash != base.BodyHash || !tip.modified.Equal(base.Modified) {
 		return nil, fmt.Errorf("%w: history tip does not match checkpoint entry", blob.ErrIntegrity)
 	}
 	return versions, nil
+}
+
+// baseBlocks is a checkpoint entry's history blocks, from its manifest for a
+// schema 1 entry.
+func baseBlocks(ctx context.Context, objects objectGetter, state *pathState) ([]blockRef, error) {
+	base, documentHash := state.Base, pathHash(state.Path)
+	if base.History != nil {
+		return base.History, nil
+	}
+	manifest, err := getImmutable(ctx, objects, keyedRef{base.Manifest, manifestKey(documentHash, base.Manifest.Hash)}, validateManifestObject)
+	if err != nil {
+		return nil, fmt.Errorf("load manifest: %w", err)
+	}
+	if manifest.PathHash != documentHash || manifest.Current != base.Current || manifest.Archived != base.Archived {
+		return nil, fmt.Errorf("%w: manifest does not match checkpoint entry", blob.ErrIntegrity)
+	}
+	return manifestBlocks(manifest.History), nil
+}
+
+// readBlock reads one of a document's history blocks.
+func readBlock(ctx context.Context, objects objectGetter, documentHash string, ref blockRef) (historyObject, error) {
+	key := historyKey(ref.Hash)
+	return getImmutable(ctx, objects, keyedRef{objectRef{Key: key, Hash: ref.Hash}, key}, func(history *historyObject) error {
+		if err := validateHistoryObject(history); err != nil {
+			return err
+		}
+		if history.PathHash != documentHash || history.First != ref.First || history.Last != ref.Last {
+			return fmt.Errorf("object does not match history reference")
+		}
+		return nil
+	})
 }
 
 func (view *readView) loadBlob(ctx context.Context, ref objectRef) ([]byte, error) {

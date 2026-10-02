@@ -17,9 +17,11 @@ const treeDegree = 32
 type snapshot struct {
 	Sequence int64
 	// Tip is the hash the next slot names as its predecessor.
-	Tip      string
-	Paths    *btree.BTreeG[*pathState]
-	Children *btree.BTreeG[*dirChild]
+	Tip string
+	// Checkpoint is the one the documents' Base entries were last rebased on.
+	Checkpoint *checkpointBase
+	Paths      *btree.BTreeG[*pathState]
+	Children   *btree.BTreeG[*dirChild]
 	// Hashes holds the body hash of every live document, for LookupHash.
 	Hashes *btree.BTreeG[hashEntry]
 }
@@ -38,19 +40,46 @@ type pathState struct {
 	Entry    *catalog.Entry // prepared
 	// Sections is the body-search index; nil while archived or unindexed.
 	Sections *catalog.DocSections
-	// Base is the document as the loaded checkpoint holds it, nil when it
-	// arrived after; Recent are the versions committed since, oldest first.
+	// Base is the document as a checkpoint holds it, nil when it arrived
+	// after; Recent are the versions committed since, oldest first.
 	Base   *baseEntry
 	Recent []retainedVersion
 }
 
-// baseEntry is a document's checkpoint entry, which its manifest must match.
+// baseEntry is a document's checkpoint entry: a folded one names its history
+// blocks, a schema 1 one the manifest that does, which must match it.
 type baseEntry struct {
+	History  []blockRef
 	Manifest objectRef
 	Current  int
 	Archived bool
 	BodyHash string
 	Modified time.Time
+}
+
+// first is the oldest version a folded entry retains; 0 for schema 1.
+func (base *baseEntry) first() int {
+	if len(base.History) == 0 {
+		return 0
+	}
+	return base.History[0].First
+}
+
+// unchanged reports whether a document is as its folded checkpoint entry
+// holds it, so a compactor writes that entry again as it is.
+func (state *pathState) unchanged() bool {
+	base := state.Base
+	return base != nil && base.History != nil && len(state.Recent) == 0 &&
+		state.Archived == base.Archived && state.First == base.first()
+}
+
+// checkpointBase is a loaded checkpoint's layout, which the compactor reuses
+// for shards nothing changed in.
+type checkpointBase struct {
+	Sequence int64
+	Bits     int
+	Shards   []shardRef
+	Legacy   bool // schema 1: 256 shards whose entries name manifests
 }
 
 // dirChild is one name in a directory, with how many documents pass through
@@ -81,11 +110,12 @@ func newSnapshot() *snapshot {
 // one tree, so callers go through Store.derive.
 func (s *snapshot) derive() *snapshot {
 	return &snapshot{
-		Sequence: s.Sequence,
-		Tip:      s.Tip,
-		Paths:    s.Paths.Clone(),
-		Children: s.Children.Clone(),
-		Hashes:   s.Hashes.Clone(),
+		Sequence:   s.Sequence,
+		Tip:        s.Tip,
+		Checkpoint: s.Checkpoint,
+		Paths:      s.Paths.Clone(),
+		Children:   s.Children.Clone(),
+		Hashes:     s.Hashes.Clone(),
 	}
 }
 

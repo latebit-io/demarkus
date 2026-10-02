@@ -238,12 +238,14 @@ type bucketSite struct {
 	follow time.Duration
 	// noHedge opens them unhedged, for a bucket that holds one call.
 	noHedge bool
+	// trigger overrides when their compactors run.
+	trigger *compactionTrigger
 }
 
 // open opens a store that closes when t ends, stopping its follow loop.
 func (s *bucketSite) open(t *testing.T, ring int) *Store {
 	t.Helper()
-	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge})
+	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

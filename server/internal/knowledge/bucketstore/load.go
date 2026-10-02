@@ -56,15 +56,9 @@ func readMarker(ctx context.Context, objects blob.Store, worldID string) error {
 // newestCheckpoint lists the checkpoints and reads the one with the highest
 // sequence; the marker is written after checkpoint zero, so one must exist.
 func newestCheckpoint(ctx context.Context, objects blob.Store, worldID string) (checkpointObject, error) {
-	newest := int64(0)
-	for sequences, err := range sequencePages(ctx, objects, checkpointPrefix, 0) {
-		if err != nil {
-			return checkpointObject{}, err
-		}
-		newest = max(newest, sequences[len(sequences)-1])
-	}
-	if newest == 0 {
-		return checkpointObject{}, fmt.Errorf("%w: world has a marker but no checkpoint", blob.ErrIntegrity)
+	newest, err := newestCheckpointSequence(ctx, objects)
+	if err != nil {
+		return checkpointObject{}, err
 	}
 	checkpoint, _, err := getValidated(ctx, objects, checkpointKey(newest), func(checkpoint *checkpointObject) error {
 		return validateCheckpoint(checkpoint, newest)
@@ -78,35 +72,43 @@ func newestCheckpoint(ctx context.Context, objects blob.Store, worldID string) (
 	return checkpoint, nil
 }
 
+// newestCheckpointSequence lists the checkpoints for the highest sequence.
+func newestCheckpointSequence(ctx context.Context, objects blob.Store) (int64, error) {
+	newest := int64(0)
+	for sequences, err := range sequencePages(ctx, objects, checkpointPrefix, 0) {
+		if err != nil {
+			return 0, err
+		}
+		newest = max(newest, sequences[len(sequences)-1])
+	}
+	if newest == 0 {
+		return 0, fmt.Errorf("%w: world has a marker but no checkpoint", blob.ErrIntegrity)
+	}
+	return newest, nil
+}
+
 // loadCheckpoint builds the snapshot a checkpoint's root holds.
 func loadCheckpoint(ctx context.Context, objects blob.Store, checkpoint checkpointObject, workers int) (*snapshot, error) {
-	root, err := getImmutable(ctx, objects, keyedRef{checkpoint.Root, rootKey(checkpoint.Root.Hash)}, func(root *rootObject) error {
-		return validateRootObject(root, checkpoint.WorldID)
-	})
+	root, err := loadRoot(ctx, objects, checkpoint)
 	if err != nil {
 		return nil, fmt.Errorf("load root: %w", err)
 	}
-	shards, err := loadShards(ctx, objects, root.Shards, workers)
+	shards, err := shardReader{objects: objects, layout: root.layout, workers: workers}.states(ctx, indexes(len(root.layout.Shards)))
 	if err != nil {
 		return nil, err
 	}
 	loaded := newSnapshot()
-	loaded.Sequence, loaded.Tip = checkpoint.Sequence, checkpoint.Tip
-	for shardIndex := range shards {
-		for entryIndex := range shards[shardIndex].Entries {
-			entry := &shards[shardIndex].Entries[entryIndex]
-			state, err := checkpointState(entry)
-			if err != nil {
-				return nil, fmt.Errorf("%w: checkpoint path %q: %v", blob.ErrIntegrity, entry.Path, err)
-			}
-			if loaded.path(entry.Path) != nil {
-				return nil, fmt.Errorf("%w: checkpoint holds %q twice", blob.ErrIntegrity, entry.Path)
+	loaded.Sequence, loaded.Tip, loaded.Checkpoint = checkpoint.Sequence, checkpoint.Tip, root.layout
+	for _, states := range shards {
+		for _, state := range states {
+			if loaded.path(state.Path) != nil {
+				return nil, fmt.Errorf("%w: checkpoint holds %q twice", blob.ErrIntegrity, state.Path)
 			}
 			loaded.put(nil, state)
 		}
 	}
-	if loaded.Paths.Len() != root.DocumentCount {
-		return nil, fmt.Errorf("%w: root document count is %d, loaded %d paths", blob.ErrIntegrity, root.DocumentCount, loaded.Paths.Len())
+	if loaded.Paths.Len() != root.documents {
+		return nil, fmt.Errorf("%w: root document count is %d, loaded %d paths", blob.ErrIntegrity, root.documents, loaded.Paths.Len())
 	}
 	// A document is never an ancestor: nothing may lie under one.
 	var topology error
@@ -119,14 +121,138 @@ func loadCheckpoint(ctx context.Context, objects blob.Store, checkpoint checkpoi
 	return loaded, topology
 }
 
-// checkpointState is a document as a checkpoint's shard entry records it.
-func checkpointState(entry *shardEntry) (*pathState, error) {
+// rootRead is a checkpoint's root: its shard layout and document count.
+type rootRead struct {
+	layout    *checkpointBase
+	documents int
+}
+
+// loadRoot reads a checkpoint's root, folded or schema 1.
+func loadRoot(ctx context.Context, objects objectGetter, checkpoint checkpointObject) (rootRead, error) {
+	key := rootKey(checkpoint.Root.Hash)
+	data, err := getVerified(ctx, objects, keyedRef{checkpoint.Root, key})
+	if err != nil {
+		return rootRead{}, err
+	}
+	var version struct {
+		Schema int `json:"schema"`
+	}
+	if err := json.Unmarshal(data, &version); err != nil {
+		return rootRead{}, fmt.Errorf("%w: decode object %q: %v", blob.ErrIntegrity, key, err)
+	}
+	layout := &checkpointBase{Sequence: checkpoint.Sequence}
+	if version.Schema == schemaVersion {
+		root, err := decodeChecked(key, data, func(root *rootObject) error { return validateRootObject(root, checkpoint.WorldID) })
+		if err != nil {
+			return rootRead{}, err
+		}
+		layout.Bits, layout.Shards, layout.Legacy = 8, root.Shards, true
+		return rootRead{layout: layout, documents: root.DocumentCount}, nil
+	}
+	root, err := decodeChecked(key, data, func(root *foldedRoot) error { return validateFoldedRoot(root, checkpoint.WorldID) })
+	if err != nil {
+		return rootRead{}, err
+	}
+	layout.Bits, layout.Shards = root.ShardBits, root.Shards
+	return rootRead{layout: layout, documents: root.DocumentCount}, nil
+}
+
+// shardReader reads a checkpoint's shards, workers at a time.
+type shardReader struct {
+	objects objectGetter
+	layout  *checkpointBase
+	workers int
+}
+
+// states reads the given shards and returns their documents, shard by shard.
+func (reader shardReader) states(ctx context.Context, shards []int) ([][]*pathState, error) {
+	loaded := make([][]*pathState, len(shards))
+	err := runParallel(ctx, reader.workers, indexes(len(shards)), func(ctx context.Context, position int) error {
+		index := shards[position]
+		var states []*pathState
+		var err error
+		if reader.layout.Legacy {
+			states, err = reader.legacy(ctx, index)
+		} else {
+			states, err = reader.folded(ctx, index)
+		}
+		if err != nil {
+			return fmt.Errorf("load shard %s: %w", reader.layout.Shards[index].Shard, err)
+		}
+		loaded[position] = states
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return loaded, nil
+}
+
+func (reader shardReader) folded(ctx context.Context, index int) ([]*pathState, error) {
+	bits := reader.layout.Bits
+	label, ref := shardLabel(index, bits), reader.layout.Shards[index]
+	shard, err := getImmutable(ctx, reader.objects, keyedRef{ref.objectRef, shardKey(label, ref.Hash)}, func(shard *foldedShard) error {
+		return validateFoldedShard(shard, index, bits)
+	})
+	if err != nil {
+		return nil, err
+	}
+	states := make([]*pathState, len(shard.Entries))
+	for entryIndex := range shard.Entries {
+		entry := &shard.Entries[entryIndex]
+		if states[entryIndex], err = foldedState(entry); err != nil {
+			return nil, fmt.Errorf("%w: checkpoint path %q: %v", blob.ErrIntegrity, entry.Path, err)
+		}
+	}
+	return states, nil
+}
+
+func (reader shardReader) legacy(ctx context.Context, index int) ([]*pathState, error) {
+	label, ref := fmt.Sprintf("%02x", index), reader.layout.Shards[index]
+	shard, err := getImmutable(ctx, reader.objects, keyedRef{ref.objectRef, shardKey(label, ref.Hash)}, func(shard *shardObject) error {
+		return validateShardObject(shard, label)
+	})
+	if err != nil {
+		return nil, err
+	}
+	states := make([]*pathState, len(shard.Entries))
+	for entryIndex := range shard.Entries {
+		entry := &shard.Entries[entryIndex]
+		if states[entryIndex], err = legacyState(entry); err != nil {
+			return nil, fmt.Errorf("%w: checkpoint path %q: %v", blob.ErrIntegrity, entry.Path, err)
+		}
+	}
+	return states, nil
+}
+
+// foldedState is a document as a folded shard entry records it.
+func foldedState(entry *foldedEntry) (*pathState, error) {
 	modified, err := parseTimestamp(entry.Modified)
 	if err != nil {
 		return nil, err
 	}
-	catalogRecord := entry.Catalog
-	record, err := catalogEntry(&catalogRecord)
+	record, err := catalogEntry(&entry.Catalog)
+	if err != nil {
+		return nil, err
+	}
+	base := &baseEntry{
+		History: entry.History, Current: entry.Current, Archived: entry.Archived,
+		BodyHash: entry.BodyHash, Modified: modified,
+	}
+	return &pathState{
+		Path: entry.Path, Current: entry.Current, First: base.first(), Archived: entry.Archived,
+		BodyHash: entry.BodyHash, Modified: modified, Entry: record, Base: base,
+	}, nil
+}
+
+// legacyState is a document as a schema 1 shard entry records it; its
+// manifest is read when its history is.
+func legacyState(entry *shardEntry) (*pathState, error) {
+	modified, err := parseTimestamp(entry.Modified)
+	if err != nil {
+		return nil, err
+	}
+	record, err := catalogEntry(&entry.Catalog)
 	if err != nil {
 		return nil, err
 	}
@@ -250,33 +376,7 @@ func decodeValidated[T any](key string, object *blob.Object, validate func(*T) e
 	if err := validateReadObject(key, object); err != nil {
 		return value, err
 	}
-	if err := decodeImmutable(object.Data, &value); err != nil {
-		return value, fmt.Errorf("%w: decode %q: %v", blob.ErrIntegrity, key, err)
-	}
-	if err := validate(&value); err != nil {
-		return value, fmt.Errorf("%w: validate %q: %v", blob.ErrIntegrity, key, err)
-	}
-	return value, nil
-}
-
-func loadShards(ctx context.Context, objects blob.Store, refs []shardRef, workers int) (*[shardCount]shardObject, error) {
-	loaded := new([shardCount]shardObject)
-	err := runParallel(ctx, workers, indexes(shardCount), func(ctx context.Context, index int) error {
-		ref := refs[index]
-		expectedShard := fmt.Sprintf("%02x", index)
-		shard, err := getImmutable(ctx, objects, keyedRef{ref.objectRef, shardKey(expectedShard, ref.Hash)}, func(shard *shardObject) error {
-			return validateShardObject(shard, expectedShard)
-		})
-		if err != nil {
-			return fmt.Errorf("load shard %s: %w", expectedShard, err)
-		}
-		loaded[index] = shard
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return loaded, nil
+	return decodeChecked(key, object.Data, validate)
 }
 
 // runParallel applies fn to every job on up to workers goroutines. The first
@@ -320,29 +420,44 @@ type keyedRef struct {
 }
 
 func getImmutable[T any](ctx context.Context, objects objectGetter, keyed keyedRef, validate func(*T) error) (T, error) {
+	data, err := getVerified(ctx, objects, keyed)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return decodeChecked(keyed.Key, data, validate)
+}
+
+// getVerified reads a referenced object and checks its bytes hash to it.
+func getVerified(ctx context.Context, objects objectGetter, keyed keyedRef) ([]byte, error) {
 	ref := keyed.objectRef
-	var result T
 	if err := verifyRef(ref, keyed.expectedKey); err != nil {
-		return result, fmt.Errorf("%w: %v", blob.ErrIntegrity, err)
+		return nil, fmt.Errorf("%w: %v", blob.ErrIntegrity, err)
 	}
 	value, err := objects.Get(ctx, ref.Key)
 	if err != nil {
 		if errors.Is(err, blob.ErrNotFound) {
-			return result, fmt.Errorf("%w: referenced object %q is missing: %w", blob.ErrIntegrity, ref.Key, err)
+			return nil, fmt.Errorf("%w: referenced object %q is missing: %w", blob.ErrIntegrity, ref.Key, err)
 		}
-		return result, fmt.Errorf("read referenced object %q: %w", ref.Key, err)
+		return nil, fmt.Errorf("read referenced object %q: %w", ref.Key, err)
 	}
 	if err := validateReadObject(ref.Key, &value); err != nil {
-		return result, err
+		return nil, err
 	}
 	if actual := hashHex(value.Data); actual != ref.Hash {
-		return result, fmt.Errorf("%w: object %q hash is %s, reference is %s", blob.ErrIntegrity, ref.Key, actual, ref.Hash)
+		return nil, fmt.Errorf("%w: object %q hash is %s, reference is %s", blob.ErrIntegrity, ref.Key, actual, ref.Hash)
 	}
-	if err := decodeImmutable(value.Data, &result); err != nil {
-		return result, fmt.Errorf("%w: decode object %q: %v", blob.ErrIntegrity, ref.Key, err)
+	return value.Data, nil
+}
+
+// decodeChecked decodes the canonical bytes read at key and validates them.
+func decodeChecked[T any](key string, data []byte, validate func(*T) error) (T, error) {
+	var result T
+	if err := decodeImmutable(data, &result); err != nil {
+		return result, fmt.Errorf("%w: decode object %q: %v", blob.ErrIntegrity, key, err)
 	}
 	if err := validate(&result); err != nil {
-		return result, fmt.Errorf("%w: validate object %q: %v", blob.ErrIntegrity, ref.Key, err)
+		return result, fmt.Errorf("%w: validate object %q: %v", blob.ErrIntegrity, key, err)
 	}
 	return result, nil
 }

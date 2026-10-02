@@ -14,13 +14,19 @@ import (
 )
 
 const (
-	// schemaVersion versions the checkpoint objects (root, shards, manifests,
-	// history); logSchema versions the world marker, checkpoints and slots.
+	// schemaVersion versions history objects and schema 1 checkpoint objects,
+	// which a migrated world's first checkpoint names; foldedSchema the root
+	// and shards compactors write; logSchema the marker, checkpoints, slots.
 	schemaVersion    = 1
+	foldedSchema     = 2
 	logSchema        = 2
-	shardCount       = 256
-	maximumDocuments = 100_000
+	shardCount       = 256     // schema 1
+	maximumDocuments = 100_000 // schema 1
 	historyBlockSize = 256
+	// A folded checkpoint has the fewest shards, a power of two, that hold at
+	// most docsPerShard documents each (about 200 KB): 4096 at 1,000,000.
+	docsPerShard = 256
+	maxShardBits = 16
 	// maxSlotEntries bounds one slot's batch, and readers find the slot holding
 	// a sequence within this many names below it: raising it needs a new
 	// logSchema.
@@ -85,6 +91,44 @@ type shardEntry struct {
 	BodyHash string        `json:"body_hash"`
 	Modified string        `json:"modified"`
 	Catalog  catalogRecord `json:"catalog"`
+}
+
+// blockRef names one history block of a folded entry; the block's key and
+// path hash follow from its hash and the entry.
+type blockRef struct {
+	First int    `json:"first"`
+	Last  int    `json:"last"`
+	Hash  string `json:"hash"`
+}
+
+// foldedEntry is a document in a folded shard: its index entry with the
+// history block references a schema 1 manifest held.
+type foldedEntry struct {
+	Path     string        `json:"path"`
+	PathHash string        `json:"path_hash"`
+	Current  int           `json:"current"`
+	Archived bool          `json:"archived"`
+	BodyHash string        `json:"body_hash"`
+	Modified string        `json:"modified"`
+	Catalog  catalogRecord `json:"catalog"`
+	History  []blockRef    `json:"history"`
+}
+
+type foldedShard struct {
+	Schema    int           `json:"schema"`
+	ShardBits int           `json:"shard_bits"`
+	Shard     string        `json:"shard"`
+	Entries   []foldedEntry `json:"entries"`
+}
+
+// foldedRoot holds 1<<ShardBits shards; a path lies in the shard its path
+// hash's top ShardBits bits number.
+type foldedRoot struct {
+	Schema        int        `json:"schema"`
+	WorldID       string     `json:"world_id"`
+	DocumentCount int        `json:"document_count"`
+	ShardBits     int        `json:"shard_bits"`
+	Shards        []shardRef `json:"shards"`
 }
 
 type shardObject struct {
@@ -225,6 +269,29 @@ func manifestKey(pathHash, hash string) string {
 
 func shardKey(shard, hash string) string {
 	return objectPrefix + "index/" + shard + "/" + hash + ".json"
+}
+
+// shardBitsFor is the folded shard count, as bits, for n documents.
+func shardBitsFor(n int) int {
+	bits := 0
+	for bits < maxShardBits && n > docsPerShard<<bits {
+		bits++
+	}
+	return bits
+}
+
+// shardLabel names a folded shard in hex, at least one digit.
+func shardLabel(index, bits int) string {
+	return fmt.Sprintf("%0*x", max(1, (bits+3)/4), index)
+}
+
+// shardOf is the folded shard a valid path hash falls in.
+func shardOf(pathHash string, bits int) int {
+	prefix, err := strconv.ParseInt(pathHash[:8], 16, 64)
+	if err != nil {
+		return -1
+	}
+	return int(prefix >> (32 - bits))
 }
 
 func rootKey(hash string) string {

@@ -183,3 +183,39 @@ func TestHedgeDelay(t *testing.T) {
 		t.Fatalf("delay = %v, want the ceiling", got)
 	}
 }
+
+// A store's first calls may hedge before they have earned any budget, so a
+// new world's first stalled read does not wait out its deadline.
+func TestHedgedStartsFunded(t *testing.T) {
+	memory, err := NewMemory(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.Create(context.Background(), "k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	store := Hedged(&stallsFirstGet{Store: memory})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	if object, err := store.Get(ctx, "k"); err != nil || string(object.Data) != "v" {
+		t.Fatalf("get = %q, %v; want the hedge's answer", object.Data, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("first stalled get took %v, want it hedged after %v", elapsed, hedgeDefault)
+	}
+}
+
+// stallsFirstGet holds its first Get until the call's context ends.
+type stallsFirstGet struct {
+	Store
+	calls atomic.Int64
+}
+
+func (s *stallsFirstGet) Get(ctx context.Context, key string) (Object, error) {
+	if s.calls.Add(1) == 1 {
+		<-ctx.Done()
+		return Object{}, ctx.Err()
+	}
+	return s.Store.Get(ctx, key)
+}

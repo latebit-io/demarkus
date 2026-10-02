@@ -47,6 +47,8 @@ type Options struct {
 	followInterval time.Duration
 	// noHedge keeps the bucket unhedged, for tests that hold one call.
 	noHedge bool
+	// trigger overrides when the compactor runs, in tests.
+	trigger *compactionTrigger
 }
 
 // Store serves one world from the log: the snapshot it last applied, and
@@ -75,6 +77,10 @@ type Store struct {
 	yieldUntil atomic.Int64
 	// pending is the slot being created and the snapshot it makes.
 	pending atomic.Pointer[pendingSlot]
+	// adoption is the newest checkpoint this store rebased on; a snapshot
+	// built before it rebases as it is installed.
+	adoption   atomic.Pointer[adoption]
+	compaction compaction
 	// newestBatch is the committer's newest batch's objects, which the next
 	// batch and warm-ups read before the bucket; nil while it is idle.
 	newestBatch atomic.Pointer[batchObjects]
@@ -185,11 +191,17 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		warmSlots:      make(chan struct{}, options.ShardWorkers),
 		committed:      options.Committed,
 	}
+	store.compaction.trigger = defaultTrigger
+	if options.trigger != nil {
+		store.compaction.trigger = *options.trigger
+	}
+	store.compaction.ctx, store.compaction.cancel = context.WithCancel(context.Background())
 	store.changes = newHub(store, options.ChangeRing)
 	store.refreshMu.Lock()
 	err = store.loadOrCreate(ctx, &options)
 	store.refreshMu.Unlock()
 	if err != nil {
+		store.compaction.cancel()
 		return nil, fmt.Errorf("open bucket store: %w", err)
 	}
 	if store.changes != nil {
@@ -256,7 +268,7 @@ func (store *Store) loadOrCreate(ctx context.Context, options *Options) error {
 
 // load is a cold start: the newest checkpoint within one request's time,
 // every slot after it, then the section index, reading every live body once
-// (ADR 0012).
+// (ADR 0012). Replayed slots count toward the next checkpoint.
 func (store *Store) load(ctx context.Context) error {
 	started := store.now()
 	baseCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
@@ -267,7 +279,12 @@ func (store *Store) load(ctx context.Context) error {
 	}
 	// The hub starts at the checkpoint; replayed slots fill its ring.
 	store.skipTo(loaded.Sequence)
-	if err := replay(ctx, store.objects, loaded, replayOptions{worldID: store.worldID, workers: store.shardWorkers, onSlot: store.report}); err != nil {
+	replayed := 0
+	onSlot := func(slot *slotObject) {
+		replayed++
+		store.report(slot)
+	}
+	if err := replay(ctx, store.objects, loaded, replayOptions{worldID: store.worldID, workers: store.shardWorkers, onSlot: onSlot}); err != nil {
 		return err
 	}
 	reindex := make(map[string]struct{})
@@ -281,6 +298,7 @@ func (store *Store) load(ctx context.Context) error {
 		return err
 	}
 	store.served.Store(&served{snap: loaded, confirmed: started})
+	store.noteSlots(replayed)
 	return nil
 }
 
@@ -373,13 +391,14 @@ func (store *Store) catchUpLocked(ctx context.Context, known *slotRead) (*snapsh
 // install serves next, confirmed at the given time, and publishes the events
 // of the slots that built it; refreshMu orders events in the log's order.
 func (store *Store) install(next *snapshot, applied []*slotObject, confirmed time.Time) {
-	store.served.Store(&served{snap: next, confirmed: confirmed})
+	store.served.Store(&served{snap: store.rebased(next), confirmed: confirmed})
 	for _, slot := range applied {
 		if slot.Store != store.id {
 			store.peerSeen.Store(store.now().UnixNano())
 		}
 		store.report(slot)
 	}
+	store.noteSlots(len(applied))
 }
 
 // derive starts a snapshot from s; see snapshot.derive.

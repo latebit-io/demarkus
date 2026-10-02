@@ -59,12 +59,13 @@ func (store *Store) Follow(sequence int64) {
 	}
 }
 
-// Close stops following peers, ends every watch and refuses writes with
-// backend.ErrClosed; reads still work. It waits for a slot being created and
-// refuses the rest, so nothing lands after it returns. It is idempotent.
+// Close stops following peers and the compactor, ends every watch and refuses
+// writes with backend.ErrClosed; reads still work. It waits for a slot being
+// created and refuses the rest, so nothing lands after it returns. Idempotent.
 func (store *Store) Close() error {
 	store.commits.close()
 	store.stopHints()
+	store.stopCompaction()
 	if store.changes == nil {
 		return nil
 	}

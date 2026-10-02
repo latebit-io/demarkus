@@ -401,6 +401,26 @@ func makeCatalogRecord(path string, metadata map[string]string, body []byte, mod
 	}
 }
 
+// catalogRecordOf is the record a prepared catalog entry was built from.
+func catalogRecordOf(entry *catalog.Entry) catalogRecord {
+	tags := entry.Tags
+	if tags == nil {
+		tags = make([]string, 0)
+	}
+	metadata := entry.Metadata
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	return catalogRecord{
+		Path:       entry.Path,
+		Title:      entry.Title,
+		Tags:       tags,
+		Importance: strconv.FormatFloat(entry.Importance, 'f', -1, 64),
+		Modified:   entry.Modified.UTC().Format(time.RFC3339),
+		Metadata:   metadata,
+	}
+}
+
 func documentFromRetained(raw []byte, retained *retainedVersion, stored *storedDocument, archived bool) *storefmt.Document {
 	return &storefmt.Document{
 		Content:  bytes.Clone(stored.body),

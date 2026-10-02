@@ -98,7 +98,7 @@ func checkCommitHeap(t *testing.T, ring int, cycle func(t *testing.T, store *Sto
 	if err := initialize(ctx, objects, testWorldID); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
-	store, err := Open(ctx, objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring})
+	store, err := Open(ctx, objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, trigger: manual})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

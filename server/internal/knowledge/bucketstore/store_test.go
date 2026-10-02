@@ -32,8 +32,8 @@ func TestInitializeGenesis(t *testing.T) {
 		if err != nil {
 			t.Fatalf("list objects: %v", err)
 		}
-		if len(listed.Objects) != shardCount+3 || listed.NextCursor != "" {
-			t.Fatalf("object count = %d cursor %q, want %d and empty", len(listed.Objects), listed.NextCursor, shardCount+3)
+		if len(listed.Objects) != 4 || listed.NextCursor != "" {
+			t.Fatalf("object count = %d cursor %q, want 4 and empty", len(listed.Objects), listed.NextCursor)
 		}
 		var marker markerObject
 		decodeObject(t, getObject(t, objects, markerKey).Data, &marker)
@@ -50,25 +50,23 @@ func TestInitializeGenesis(t *testing.T) {
 		if hashHex(rootValue.Data) != checkpoint.Root.Hash || checkpoint.Root.Key != rootKey(checkpoint.Root.Hash) {
 			t.Fatalf("root identity does not match checkpoint zero: %+v", checkpoint.Root)
 		}
-		var root rootObject
+		var root foldedRoot
 		decodeObject(t, rootValue.Data, &root)
-		if root.DocumentCount != 0 || len(root.Shards) != shardCount || root.Shards == nil {
-			t.Fatalf("root count=%d shards=%d nil=%v", root.DocumentCount, len(root.Shards), root.Shards == nil)
+		if root.Schema != foldedSchema || root.DocumentCount != 0 || root.ShardBits != 0 || len(root.Shards) != 1 {
+			t.Fatalf("root = %+v, want one folded shard and no documents", root)
 		}
-		for index, ref := range root.Shards {
-			wantShard := fmt.Sprintf("%02x", index)
-			if ref.Shard != wantShard || ref.Key != shardKey(wantShard, ref.Hash) {
-				t.Fatalf("shard ref %d = %+v", index, ref)
-			}
-			value := getObject(t, objects, ref.Key)
-			if hashHex(value.Data) != ref.Hash {
-				t.Fatalf("shard %s hash mismatch", wantShard)
-			}
-			var shard shardObject
-			decodeObject(t, value.Data, &shard)
-			if shard.Entries == nil || len(shard.Entries) != 0 || !bytes.Contains(value.Data, []byte(`"entries":[]`)) {
-				t.Fatalf("shard %s entries = %#v bytes=%s", wantShard, shard.Entries, value.Data)
-			}
+		ref := root.Shards[0]
+		if ref.Shard != "0" || ref.Key != shardKey("0", ref.Hash) {
+			t.Fatalf("shard ref = %+v", ref)
+		}
+		value := getObject(t, objects, ref.Key)
+		if hashHex(value.Data) != ref.Hash {
+			t.Fatal("shard hash mismatch")
+		}
+		var shard foldedShard
+		decodeObject(t, value.Data, &shard)
+		if shard.Entries == nil || len(shard.Entries) != 0 || !bytes.Contains(value.Data, []byte(`"entries":[]`)) {
+			t.Fatalf("shard entries = %#v bytes=%s", shard.Entries, value.Data)
 		}
 	})
 
@@ -102,7 +100,7 @@ func TestInitializeGenesis(t *testing.T) {
 		if err != nil {
 			t.Fatalf("list after reinitialize: %v", err)
 		}
-		if len(listed.Objects) != shardCount+3 {
+		if len(listed.Objects) != 4 {
 			t.Errorf("object count after reinitialize = %d", len(listed.Objects))
 		}
 	})
@@ -416,18 +414,23 @@ func TestOpenRejectsBrokenLog(t *testing.T) {
 func TestOpenRejectsMissingOrCorruptReferences(t *testing.T) {
 	tests := []struct {
 		name   string
+		legacy bool // the newest checkpoint names a schema 1 root
 		mutate func(*testing.T, *blob.Memory)
 	}{
 		{name: "missing root", mutate: func(t *testing.T, objects *blob.Memory) {
-			checkpoint, _ := readCheckpointAndRoot(t, objects)
+			checkpoint, _ := readFoldedRoot(t, objects)
 			deleteObject(t, objects, checkpoint.Root.Key)
 		}},
 		{name: "missing shard", mutate: func(t *testing.T, objects *blob.Memory) {
+			_, root := readFoldedRoot(t, objects)
+			deleteObject(t, objects, root.Shards[0].Key)
+		}},
+		{name: "missing schema 1 shard", legacy: true, mutate: func(t *testing.T, objects *blob.Memory) {
 			_, root := readCheckpointAndRoot(t, objects)
 			deleteObject(t, objects, root.Shards[37].Key)
 		}},
 		{name: "corrupt root bytes", mutate: func(t *testing.T, objects *blob.Memory) {
-			checkpoint, _ := readCheckpointAndRoot(t, objects)
+			checkpoint, _ := readFoldedRoot(t, objects)
 			root := getObject(t, objects, checkpoint.Root.Key)
 			replaceObject(t, objects, checkpoint.Root.Key, root.Attributes.Generation, append(bytes.Clone(root.Data), ' '))
 		}},
@@ -442,6 +445,9 @@ func TestOpenRejectsMissingOrCorruptReferences(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			objects := initializedMemory(t)
+			if test.legacy {
+				objects = legacyMemory(t)
+			}
 			test.mutate(t, objects)
 			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID, ShardWorkers: 4})
 			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
@@ -467,7 +473,7 @@ func TestOpenRejectsRootInvariants(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			objects := initializedMemory(t)
+			objects := legacyMemory(t)
 			_, root := readCheckpointAndRoot(t, objects)
 			test.mutate(&root)
 			installRoot(t, objects, root)
@@ -502,7 +508,7 @@ func TestOpenRejectsShardInvariants(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			objects := initializedMemory(t)
+			objects := legacyMemory(t)
 			shard := test.shard
 			if test.entries != nil {
 				shard = shardObject{
@@ -521,7 +527,7 @@ func TestOpenRejectsShardInvariants(t *testing.T) {
 	}
 
 	t.Run("document ancestor", func(t *testing.T) {
-		objects := initializedMemory(t)
+		objects := legacyMemory(t)
 		installEntries(t, objects, []shardEntry{
 			testEntry("/a.md", false, ""),
 			testEntry("/a.md/b.md", false, ""),
@@ -534,7 +540,7 @@ func TestOpenRejectsShardInvariants(t *testing.T) {
 }
 
 func TestDerivedSnapshotLiveAndArchived(t *testing.T) {
-	objects := initializedMemory(t)
+	objects := legacyMemory(t)
 	sharedHash := storefmt.ContentHash([]byte("shared"))
 	archivedHash := storefmt.ContentHash([]byte("archived"))
 	installEntries(t, objects, []shardEntry{
@@ -729,7 +735,8 @@ func deleteObject(t *testing.T, objects blob.Store, key string) {
 	}
 }
 
-// readCheckpointAndRoot reads the world's newest checkpoint and its root.
+// readCheckpointAndRoot reads the world's newest checkpoint and its schema 1
+// root.
 func readCheckpointAndRoot(t *testing.T, objects blob.Store) (checkpointObject, rootObject) {
 	t.Helper()
 	checkpoint, err := newestCheckpoint(context.Background(), objects, testWorldID)
@@ -741,9 +748,21 @@ func readCheckpointAndRoot(t *testing.T, objects blob.Store) (checkpointObject, 
 	return checkpoint, root
 }
 
+// readFoldedRoot reads the world's newest checkpoint and its folded root.
+func readFoldedRoot(t *testing.T, objects blob.Store) (checkpointObject, foldedRoot) {
+	t.Helper()
+	checkpoint, err := newestCheckpoint(context.Background(), objects, testWorldID)
+	if err != nil {
+		t.Fatalf("newest checkpoint: %v", err)
+	}
+	var root foldedRoot
+	decodeObject(t, getObject(t, objects, checkpoint.Root.Key).Data, &root)
+	return checkpoint, root
+}
+
 // installRoot makes root the world's newest checkpoint, as a compactor or a
 // migration writes one; stores opened afterwards load it.
-func installRoot(t *testing.T, objects blob.Store, root rootObject) {
+func installRoot(t *testing.T, objects blob.Store, root any) {
 	t.Helper()
 	model, ref, err := immutableJSON(rootKey, root)
 	if err != nil {
@@ -752,8 +771,11 @@ func installRoot(t *testing.T, objects blob.Store, root rootObject) {
 	if _, err := objects.Create(context.Background(), model.Key, model.Data); err != nil {
 		t.Fatalf("create root %q: %v", model.Key, err)
 	}
-	previous, _ := readCheckpointAndRoot(t, objects)
-	checkpoint := checkpointObject{Schema: logSchema, WorldID: testWorldID, Sequence: previous.Sequence + 1, Root: ref}
+	previous, err := newestCheckpointSequence(context.Background(), objects)
+	if err != nil {
+		t.Fatalf("newest checkpoint: %v", err)
+	}
+	checkpoint := checkpointObject{Schema: logSchema, WorldID: testWorldID, Sequence: previous + 1, Root: ref}
 	data, err := marshalImmutable(checkpoint)
 	if err != nil {
 		t.Fatalf("marshal checkpoint: %v", err)

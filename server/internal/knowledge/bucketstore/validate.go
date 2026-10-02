@@ -377,20 +377,40 @@ func validateManifestObject(manifest *manifestObject) error {
 	if manifest.History == nil {
 		return fmt.Errorf("history must be an array")
 	}
-	if len(manifest.History) == 0 {
-		return fmt.Errorf("history must not be empty")
-	}
-	previousLast := 0
-	previousBlock := -1
 	for index, ref := range manifest.History {
 		if ref.PathHash != manifest.PathHash {
 			return fmt.Errorf("history reference %d path hash does not match manifest", index)
 		}
+		if err := verifyRef(ref.objectRef, historyKey(ref.Hash)); err != nil {
+			return fmt.Errorf("history reference %d: %w", index, err)
+		}
+	}
+	return validateBlocks(manifestBlocks(manifest.History), manifest.Current)
+}
+
+// manifestBlocks is a schema 1 manifest's history as a folded entry holds it.
+func manifestBlocks(refs []historyRef) []blockRef {
+	blocks := make([]blockRef, len(refs))
+	for index, ref := range refs {
+		blocks[index] = blockRef{First: ref.First, Last: ref.Last, Hash: ref.Hash}
+	}
+	return blocks
+}
+
+// validateBlocks checks a document's history blocks are contiguous, one per
+// absolute block, and end at current.
+func validateBlocks(blocks []blockRef, current int) error {
+	if len(blocks) == 0 {
+		return fmt.Errorf("history must not be empty")
+	}
+	previousLast := 0
+	previousBlock := -1
+	for index, ref := range blocks {
 		if err := validateHistoryRange(ref.First, ref.Last); err != nil {
 			return fmt.Errorf("history reference %d: %w", index, err)
 		}
-		if err := verifyRef(ref.objectRef, historyKey(ref.Hash)); err != nil {
-			return fmt.Errorf("history reference %d: %w", index, err)
+		if !validHash(ref.Hash) {
+			return fmt.Errorf("history reference %d: invalid SHA-256 hash %q", index, ref.Hash)
 		}
 		block := (ref.First - 1) / historyBlockSize
 		if index > 0 && (ref.First != previousLast+1 || block != previousBlock+1) {
@@ -399,10 +419,92 @@ func validateManifestObject(manifest *manifestObject) error {
 		previousLast = ref.Last
 		previousBlock = block
 	}
-	if previousLast != manifest.Current {
-		return fmt.Errorf("history ends at %d, current version is %d", previousLast, manifest.Current)
+	if previousLast != current {
+		return fmt.Errorf("history ends at %d, current version is %d", previousLast, current)
 	}
 	return nil
+}
+
+// validateFoldedRoot checks a folded root; its shard count must be the one
+// its document count gives, as every compactor computes it.
+func validateFoldedRoot(root *foldedRoot, expectedWorldID string) error {
+	if root.Schema != foldedSchema {
+		return fmt.Errorf("schema is %d, want %d", root.Schema, foldedSchema)
+	}
+	if !validWorldID(root.WorldID) {
+		return fmt.Errorf("invalid world ID %q", root.WorldID)
+	}
+	if root.WorldID != expectedWorldID {
+		return fmt.Errorf("world ID %q does not match world %q", root.WorldID, expectedWorldID)
+	}
+	if root.DocumentCount < 0 || root.DocumentCount > docsPerShard<<maxShardBits {
+		return fmt.Errorf("document count %d is outside [0,%d]", root.DocumentCount, docsPerShard<<maxShardBits)
+	}
+	if want := shardBitsFor(root.DocumentCount); root.ShardBits != want {
+		return fmt.Errorf("shard bits are %d, want %d for %d documents", root.ShardBits, want, root.DocumentCount)
+	}
+	if len(root.Shards) != 1<<root.ShardBits {
+		return fmt.Errorf("shard count is %d, want %d", len(root.Shards), 1<<root.ShardBits)
+	}
+	for index, ref := range root.Shards {
+		label := shardLabel(index, root.ShardBits)
+		if ref.Shard != label {
+			return fmt.Errorf("shard reference %d is labeled %q, want %q", index, ref.Shard, label)
+		}
+		if err := verifyRef(ref.objectRef, shardKey(label, ref.Hash)); err != nil {
+			return fmt.Errorf("shard reference %s: %w", label, err)
+		}
+	}
+	return nil
+}
+
+func validateFoldedShard(shard *foldedShard, index, bits int) error {
+	if shard.Schema != foldedSchema {
+		return fmt.Errorf("schema is %d, want %d", shard.Schema, foldedSchema)
+	}
+	if shard.ShardBits != bits {
+		return fmt.Errorf("shard bits are %d, root has %d", shard.ShardBits, bits)
+	}
+	if label := shardLabel(index, bits); shard.Shard != label {
+		return fmt.Errorf("shard label is %q, want %q", shard.Shard, label)
+	}
+	if shard.Entries == nil {
+		return fmt.Errorf("entries must be an array")
+	}
+	for entryIndex := range shard.Entries {
+		if entryIndex > 0 && shard.Entries[entryIndex-1].Path >= shard.Entries[entryIndex].Path {
+			return fmt.Errorf("entries %d and %d are not strictly path-sorted", entryIndex-1, entryIndex)
+		}
+		if err := validateFoldedEntry(&shard.Entries[entryIndex], index, bits); err != nil {
+			return fmt.Errorf("entry %d: %w", entryIndex, err)
+		}
+	}
+	return nil
+}
+
+func validateFoldedEntry(entry *foldedEntry, index, bits int) error {
+	if err := validateDocumentPath(entry.Path); err != nil {
+		return err
+	}
+	if entry.PathHash != pathHash(entry.Path) {
+		return fmt.Errorf("path hash %q does not match path %q", entry.PathHash, entry.Path)
+	}
+	if shard := shardOf(entry.PathHash, bits); shard != index {
+		return fmt.Errorf("path %q belongs to shard %d, not %d", entry.Path, shard, index)
+	}
+	if entry.Current < 1 || entry.Current > storefmt.MaxVersionNumber {
+		return fmt.Errorf("current version is outside [1,%d]", storefmt.MaxVersionNumber)
+	}
+	if !validBodyHash(entry.BodyHash) {
+		return fmt.Errorf("invalid body hash %q", entry.BodyHash)
+	}
+	if _, err := parseTimestamp(entry.Modified); err != nil {
+		return fmt.Errorf("modified: %w", err)
+	}
+	if err := validateCatalogRecord(&entry.Catalog, entry.Path, entry.Modified); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	return validateBlocks(entry.History, entry.Current)
 }
 
 func validateHistoryRange(first, last int) error {

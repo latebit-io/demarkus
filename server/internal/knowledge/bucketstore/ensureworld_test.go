@@ -88,7 +88,7 @@ func TestEnsureWorld(t *testing.T) {
 
 	t.Run("finishes a genesis another replica left without a head", func(t *testing.T) {
 		objects := newTestMemory(t)
-		createGenesisPrefix(t, objects, 10)
+		createGenesisPrefix(t, objects, 2)
 		created, err := ensureWorld(context.Background(), objects, testWorldID)
 		if err != nil || !created {
 			t.Fatalf("EnsureWorld = (%v, %v), want the genesis finished", created, err)
@@ -100,7 +100,7 @@ func TestEnsureWorld(t *testing.T) {
 
 	t.Run("refuses genesis objects mixed with a foreign one", func(t *testing.T) {
 		objects := newTestMemory(t)
-		createGenesisPrefix(t, objects, 10)
+		createGenesisPrefix(t, objects, 2)
 		if _, err := objects.Create(context.Background(), "someone-elses-data.json", []byte("{}")); err != nil {
 			t.Fatalf("seed foreign object: %v", err)
 		}
