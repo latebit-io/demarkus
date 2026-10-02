@@ -7,41 +7,10 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
+	"github.com/latebit-io/demarkus/server/internal/storetest"
 )
-
-// openFollower is a store that follows peers on a fast backstop timer.
-func openFollower(t *testing.T, objects blob.Store) *Store {
-	t.Helper()
-	store, err := Open(context.Background(), objects, Options{
-		Logger: discardLogger, WorldID: testWorldID, ChangeRing: changefeed.DefaultRingSize, followInterval: 10 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Errorf("close: %v", err)
-		}
-	})
-	return store
-}
-
-// peerCommit publishes through a second store over the same bucket and
-// returns the sequence it committed.
-func peerCommit(t *testing.T, objects blob.Store, path string) int64 {
-	t.Helper()
-	peer, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := peer.Publish(context.Background(), backend.WriteRequest{Path: path, ExpectedVersion: -1, Content: []byte("# Peer\n")}); err != nil {
-		t.Fatal(err)
-	}
-	return peer.servedSequence()
-}
 
 func waitServed(t *testing.T, store *Store, sequence int64) {
 	t.Helper()
@@ -54,77 +23,81 @@ func waitServed(t *testing.T, store *Store, sequence int64) {
 	}
 }
 
-// The backstop timer reads the bucket only while the hub has a subscriber:
-// with nobody watching, a peer's commit waits for the next read.
-func TestFollowerPollsOnlyForSubscribers(t *testing.T) {
-	objects := initializedMemory(t)
-	store := openFollower(t, objects)
-	sequence := peerCommit(t, objects, "/docs/unwatched.md")
+// The backstop reads the bucket only while a watcher waits on the hub: an
+// open subscription nobody reads does not count.
+func TestFollowerPollsOnlyForWaitingWatchers(t *testing.T) {
+	site := &bucketSite{objects: initializedMemory(t), follow: 10 * time.Millisecond}
+	store := site.open(t, changefeed.DefaultRingSize)
+	sub, err := store.Changes().Subscribe(t.Context(), "/", protocol.Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := store.servedSequence()
+	site.Tamper(t, "/docs/peer.md")
 
 	time.Sleep(100 * time.Millisecond) // ten backstop periods
-	if got := store.servedSequence(); got >= sequence {
-		t.Fatalf("served sequence = %d with no subscriber, want below %d", got, sequence)
+	if got := store.servedSequence(); got != before {
+		t.Fatalf("served sequence moved to %d with nobody reading", got)
 	}
-	sub, err := store.Changes().Subscribe(t.Context(), "/", protocol.Cursor{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitServed(t, store, sequence)
-	sub.Close()
-	if got := store.Changes().Subscribers(); got != 0 {
-		t.Errorf("subscribers = %d after close, want 0", got)
+	if ev := storetest.NextEvent(t, sub); ev.Path != "/docs/peer.md" {
+		t.Fatalf("watcher saw %s, want the peer's commit", ev.Path)
 	}
 }
 
-// A peer's hint reads at once, with nobody watching.
+// A peer's hint reads at once, long before the default backstop.
 func TestFollowReadsAtOnce(t *testing.T) {
 	objects := initializedMemory(t)
-	store := openFollower(t, objects)
-	sequence := peerCommit(t, objects, "/docs/hinted.md")
-	store.Follow(sequence)
-	waitServed(t, store, sequence)
+	site := &bucketSite{objects: objects}
+	store := site.open(t, changefeed.DefaultRingSize)
+	site.Tamper(t, "/docs/hinted.md")
+	head, _ := readHeadAndRoot(t, objects)
+	store.Follow(head.Sequence)
+	waitServed(t, store, head.Sequence)
 }
 
-// Close stops the follow loop and ends the hub's watches; a later hint is
-// a no-op rather than a send nobody receives.
+// Close stops the follow loop, ends the hub's watches and refuses writes;
+// a later hint and a second Close are no-ops.
 func TestCloseStopsFollowing(t *testing.T) {
-	objects := initializedMemory(t)
-	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: changefeed.DefaultRingSize})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sub, err := store.Changes().Subscribe(t.Context(), "/", protocol.Cursor{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
+	r := openReplica(t, initializedMemory(t))
+	if err := r.store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	select {
-	case <-store.follower.done:
+	case <-r.store.follower.done:
 	default:
 		t.Fatal("follow loop still running after Close")
 	}
-	if _, err := sub.Next(t.Context()); !errors.Is(err, changefeed.ErrClosed) {
+	if _, err := r.sub.Next(t.Context()); !errors.Is(err, changefeed.ErrClosed) {
 		t.Errorf("Next after Close = %v, want ErrClosed", err)
 	}
-	store.Follow(store.servedSequence() + 1)
-	if err := store.Close(); err != nil {
+	write := backend.WriteRequest{Path: "/docs/late.md", ExpectedVersion: -1, Content: []byte("# Late\n")}
+	if _, err := r.store.Publish(context.Background(), write); !errors.Is(err, backend.ErrClosed) {
+		t.Errorf("Publish after Close = %v, want backend.ErrClosed", err)
+	}
+	r.store.Follow(r.store.servedSequence() + 1)
+	if err := r.store.Close(); err != nil {
 		t.Errorf("second close: %v", err)
 	}
 }
 
-// Without WATCH there is nothing to follow for: no loop, and Close is free.
+// Without WATCH there is nothing to follow for: no loop to start or stop.
 func TestStoreWithoutWatchDoesNotFollow(t *testing.T) {
-	store, err := Open(context.Background(), initializedMemory(t), Options{Logger: discardLogger, WorldID: testWorldID})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := (&bucketSite{objects: initializedMemory(t)}).open(t, 0)
 	if store.follower != nil {
 		t.Fatal("a store without WATCH started a follow loop")
 	}
 	store.Follow(store.servedSequence() + 1)
-	if err := store.Close(); err != nil {
-		t.Errorf("close: %v", err)
+}
+
+// Opening an existing world reads its head once; only an empty bucket pays
+// for the genesis check.
+func TestOpenReadsAnExistingHeadOnce(t *testing.T) {
+	objects := newObservedBlobStore(initializedMemory(t))
+	if _, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID}); err != nil {
+		t.Fatal(err)
+	}
+	counts := objects.counts()
+	if reads := counts.heads[headObjectKey] + counts.gets[headObjectKey]; reads != 1 {
+		t.Errorf("head reads on open = %d (%d head, %d get), want 1", reads, counts.heads[headObjectKey], counts.gets[headObjectKey])
 	}
 }

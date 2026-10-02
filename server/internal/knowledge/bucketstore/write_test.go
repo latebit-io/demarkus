@@ -93,7 +93,7 @@ func newWritableStore(t testing.TB) (*Store, *blob.Memory) {
 	if err != nil {
 		t.Fatalf("new memory: %v", err)
 	}
-	if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+	if err := initialize(context.Background(), objects, testWorldID); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
 	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})

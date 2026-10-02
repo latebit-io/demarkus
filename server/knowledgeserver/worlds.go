@@ -38,7 +38,8 @@ const worldRetryInterval = 15 * time.Second
 type worldManager struct {
 	configFile string
 	openStore  storeFactory
-	// hint tells peer replicas a world committed a sequence; nil without peers.
+	// hint tells peer replicas a world committed a sequence; a no-op
+	// without peers.
 	hint   func(worldID string, sequence int64)
 	logger *slog.Logger
 	// maxStreams is the listener's per connection stream limit; runtimes
@@ -89,9 +90,9 @@ type worldEntry struct {
 	published bool
 }
 
-// worldStore is a world's store as the manager holds it: backend contract
-// types only, so any store the factory opens can serve. A store several
-// replicas share also implements backend.Follower.
+// worldStore is a world's store as the manager holds it: contract types
+// only. Close ends its watches and refuses later writes (backend.ErrClosed);
+// a store several replicas share also implements backend.Follower.
 type worldStore interface {
 	backend.Store
 	backend.ChangeSource
@@ -106,7 +107,7 @@ type storeFactory func(ctx context.Context, world *knowledgeconfig.WorldConfig, 
 type storeHooks struct {
 	logger *slog.Logger
 	// committed runs after each of this replica's own commits with its
-	// sequence; nil without peers.
+	// sequence.
 	committed func(sequence int64)
 }
 
@@ -354,9 +355,6 @@ func (m *worldManager) serve(
 
 // committed is the store hook that hints peers about this replica's commits.
 func (m *worldManager) committed(worldID string) func(sequence int64) {
-	if m.hint == nil {
-		return nil
-	}
 	return func(sequence int64) { m.hint(worldID, sequence) }
 }
 

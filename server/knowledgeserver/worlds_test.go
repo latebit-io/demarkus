@@ -112,7 +112,7 @@ func openHarness(
 	newStore func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error),
 ) (*worldsTestHarness, error) {
 	t.Helper()
-	h := &worldsTestHarness{dir: dir, stores: map[string]*blob.Memory{}}
+	h := newHarness(dir)
 	if newStore == nil {
 		newStore = func(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
 			return h.memory(world.Name)
@@ -120,6 +120,10 @@ func openHarness(
 	}
 	err := h.open(t, worldsSection, bucketStores(newStore))
 	return h, err
+}
+
+func newHarness(dir string) *worldsTestHarness {
+	return &worldsTestHarness{dir: dir, stores: map[string]*blob.Memory{}}
 }
 
 // open writes the config and starts the manager over openStore.

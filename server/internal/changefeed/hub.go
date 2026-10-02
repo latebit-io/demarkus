@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -52,8 +53,8 @@ type Hub struct {
 	// catching is the catch-up in flight; resumes that arrive meanwhile
 	// share it rather than each polling the store.
 	catching *catchUpFlight
-	// subscribers counts subscriptions not yet closed.
-	subscribers int
+	// waiting counts readers blocked in Next.
+	waiting atomic.Int64
 }
 
 type catchUpFlight struct {
@@ -106,13 +107,9 @@ func NewEpoch() string {
 // Epoch is the cursor epoch every event of this hub carries.
 func (h *Hub) Epoch() string { return h.epoch }
 
-// Subscribers is how many subscriptions are open, so a store can skip work
-// only a watcher would see.
-func (h *Hub) Subscribers() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.subscribers
-}
+// Waiting is how many readers are blocked in Next for the next event, so a
+// store can skip work only a live watcher would see.
+func (h *Hub) Waiting() int { return int(h.waiting.Load()) }
 
 // RingSize is how many events the hub retains for resume.
 func (h *Hub) RingSize() int { return len(h.buf) }
@@ -209,42 +206,18 @@ func (h *Hub) Close() {
 }
 
 // Subscription reads one scope's events from the hub in order: first any
-// backlog loaded at Subscribe, then the ring. Close releases it.
+// backlog loaded at Subscribe, then the ring.
 type Subscription struct {
-	hub      *Hub
-	scope    string
-	backlog  []Event // unread in-scope events older than the ring, in order
-	next     uint64  // Seq of the next event to read from the ring
-	released bool    // under hub.mu
+	hub     *Hub
+	scope   string
+	backlog []Event // unread in-scope events older than the ring, in order
+	next    uint64  // Seq of the next event to read from the ring
 }
 
 // Subscribe starts a subscription over scope ("/", a "/"-ended subtree, or
 // one document) at the head, after since, or ErrResync. A resume before the
 // ring reads the backlog; one past the head first catches the hub up.
 func (h *Hub) Subscribe(ctx context.Context, scope string, since protocol.Cursor) (*Subscription, error) {
-	sub, err := h.subscribe(ctx, scope, since)
-	if err != nil {
-		return nil, err
-	}
-	h.mu.Lock()
-	h.subscribers++
-	h.mu.Unlock()
-	return sub, nil
-}
-
-// Close takes the subscription out of the hub's count once its reader is
-// done with it. It is idempotent.
-func (s *Subscription) Close() {
-	h := s.hub
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !s.released {
-		s.released = true
-		h.subscribers--
-	}
-}
-
-func (h *Hub) subscribe(ctx context.Context, scope string, since protocol.Cursor) (*Subscription, error) {
 	if err := h.catchUp(ctx, since); err != nil {
 		return nil, err
 	}
@@ -366,11 +339,21 @@ func (s *Subscription) Next(ctx context.Context) (Event, error) {
 		if err != nil || wait == nil {
 			return ev, err
 		}
-		select {
-		case <-wait:
-		case <-ctx.Done():
-			return Event{}, ctx.Err()
+		if err := s.hub.await(ctx, wait); err != nil {
+			return Event{}, err
 		}
+	}
+}
+
+// await blocks until wait closes or ctx ends, counted as a waiting reader.
+func (h *Hub) await(ctx context.Context, wait <-chan struct{}) error {
+	h.waiting.Add(1)
+	defer h.waiting.Add(-1)
+	select {
+	case <-wait:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

@@ -40,6 +40,9 @@ func (store *Store) commitMutation(ctx context.Context, build mutationBuilder) (
 	if store.readOnly {
 		return mutationResult{}, backend.ErrReadOnly
 	}
+	if store.closed.Load() {
+		return mutationResult{}, backend.ErrClosed
+	}
 	ctx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
 	select {

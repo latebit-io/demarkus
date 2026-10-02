@@ -555,33 +555,35 @@ func TestCatchUpOutlivesTheResumeThatStartedIt(t *testing.T) {
 	}
 }
 
-// Subscribers counts open subscriptions: a refused Subscribe adds none, and
-// Close takes one away exactly once.
-func TestSubscribersCountsOpenSubscriptions(t *testing.T) {
+// Waiting counts readers blocked in Next and nobody else: an open
+// subscription that is not reading is not watching.
+func TestWaitingCountsBlockedReaders(t *testing.T) {
 	hub := New("w", 4)
 	var stamp stamper
+	sub, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hub.Waiting(); got != 0 {
+		t.Fatalf("waiting before any read = %d, want 0", got)
+	}
+	read := make(chan error, 1)
+	go func() {
+		_, err := sub.Next(t.Context())
+		read <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for hub.Waiting() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("waiting = %d with a reader blocked, want 1", hub.Waiting())
+		}
+		time.Sleep(time.Millisecond)
+	}
 	stamp.publish(hub, Event{Path: "/a.md"})
-	first, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{})
-	if err != nil {
-		t.Fatal(err)
+	if err := <-read; err != nil {
+		t.Fatalf("Next: %v", err)
 	}
-	second, err := hub.Subscribe(t.Context(), "/a.md", protocol.Cursor{Epoch: "w", Seq: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: "other", Seq: 1}); !errors.Is(err, ErrResync) {
-		t.Fatalf("Subscribe in another epoch = %v, want ErrResync", err)
-	}
-	if got := hub.Subscribers(); got != 2 {
-		t.Fatalf("subscribers = %d, want 2", got)
-	}
-	first.Close()
-	first.Close()
-	if got := hub.Subscribers(); got != 1 {
-		t.Fatalf("subscribers after closing one twice = %d, want 1", got)
-	}
-	second.Close()
-	if got := hub.Subscribers(); got != 0 {
-		t.Fatalf("subscribers = %d, want 0", got)
+	if got := hub.Waiting(); got != 0 {
+		t.Fatalf("waiting after the read = %d, want 0", got)
 	}
 }

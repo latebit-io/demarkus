@@ -5,13 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/latebit-io/demarkus/server/blob"
 )
 
-// Initialize creates the deterministic empty object graph and create-only head.
-func Initialize(ctx context.Context, objects blob.Store, worldID string) error {
+// initialize creates the deterministic empty object graph and create-only head.
+func initialize(ctx context.Context, objects blob.Store, worldID string) error {
 	if ctx == nil {
 		return fmt.Errorf("initialize bucket store: %w: context is nil", blob.ErrPrecondition)
 	}
@@ -169,10 +168,9 @@ func createGenesisHead(ctx context.Context, objects blob.Store, worldID string, 
 }
 
 func validateExistingWorld(ctx context.Context, objects blob.Store, worldID string) error {
-	// Only the verdict matters here; the caller opens the world again to serve
-	// it, with its own logger, and any warning repeats there. Read-only, so
-	// this open never starts a genesis of its own.
-	if _, err := Open(ctx, objects, Options{WorldID: worldID, Logger: slog.New(slog.DiscardHandler), ReadOnly: true}); err != nil {
+	// Only the verdict matters here: the snapshot load is the check, and the
+	// caller opens the world again to serve it.
+	if _, err := loadRootSnapshot(ctx, objects, worldID, defaultShardWorkers); err != nil {
 		return fmt.Errorf("validate existing world: %w", err)
 	}
 	return nil

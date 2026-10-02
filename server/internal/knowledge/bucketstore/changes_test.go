@@ -265,16 +265,30 @@ func TestLocalHintsFollowCommitOrder(t *testing.T) {
 
 // bucketSite is one bucket. Tamper commits through a second store with no
 // hub, as a peer replica does; the head's receipts name it on reopen.
-type bucketSite struct{ objects blob.Store }
+type bucketSite struct {
+	objects blob.Store
+	// follow overrides the backstop period of the stores it opens.
+	follow time.Duration
+}
 
+// open opens a store that closes when t ends, stopping its follow loop.
 func (s *bucketSite) open(t *testing.T, ring int) *Store {
 	t.Helper()
-	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring})
+	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	store.commitInterval = 0
+	closeAtEnd(t, store)
 	return store
+}
+
+func closeAtEnd(t *testing.T, store *Store) {
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
 }
 
 // siteRing holds the suite's 48 concurrent events, and a resume across
@@ -282,7 +296,8 @@ func (s *bucketSite) open(t *testing.T, ring int) *Store {
 const siteRing = 4 * maximumReceipts
 
 func (s *bucketSite) Open(t *testing.T) storetest.ChangeBackend {
-	return storetest.ChangeBackend{Store: s.open(t, siteRing)}
+	store := s.open(t, siteRing)
+	return storetest.ChangeBackend{Store: store, Close: store.Close}
 }
 
 func (s *bucketSite) Tamper(t *testing.T, path string) {

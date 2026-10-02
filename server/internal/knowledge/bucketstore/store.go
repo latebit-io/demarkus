@@ -77,6 +77,7 @@ type Store struct {
 	sealedThrough atomic.Int64
 
 	follower *follower // nil without WATCH
+	closed   atomic.Bool
 }
 
 var (
@@ -147,19 +148,11 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	if options.ShardWorkers == 0 {
 		options.ShardWorkers = defaultShardWorkers
 	}
+	if options.followInterval == 0 {
+		options.followInterval = followInterval
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("open bucket store: %w", err)
-	}
-	if !options.ReadOnly {
-		created, err := ensureWorld(ctx, objects, options.WorldID)
-		if err != nil {
-			return nil, fmt.Errorf("open bucket store: %w", err)
-		}
-		if created {
-			// Loud on purpose: an empty bucket is normally a first install,
-			// but it is also what a wrong bucket URL looks like.
-			options.Logger.Warn("created a new world in an empty bucket", "worldID", options.WorldID)
-		}
 	}
 
 	store := &Store{
@@ -178,10 +171,8 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	}
 	store.changes, store.backlog = newHub(store, options.ChangeRing)
 	store.commitToken <- struct{}{}
-	requestCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
-	defer cancel()
 	store.refreshMu.Lock()
-	loaded, err := loadRootSnapshot(requestCtx, store.objects, store.worldID, store.shardWorkers)
+	loaded, err := loadOrCreate(ctx, objects, &options)
 	if err != nil {
 		store.refreshMu.Unlock()
 		return nil, fmt.Errorf("open bucket store: %w", err)
@@ -199,6 +190,32 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		store.startFollowing(options.followInterval)
 	}
 	return store, nil
+}
+
+// loadOrCreate loads the world, first creating it in an empty bucket unless
+// the store is read-only; an existing world costs no extra head read.
+func loadOrCreate(ctx context.Context, objects blob.Store, options *Options) (*snapshot, error) {
+	load := func() (*snapshot, error) {
+		requestCtx, cancel := context.WithTimeout(ctx, options.RequestTimeout)
+		defer cancel()
+		return loadRootSnapshot(requestCtx, objects, options.WorldID, options.ShardWorkers)
+	}
+	loaded, err := load()
+	// Only a missing head is a clear not-found; a missing referenced object
+	// is an integrity failure and never a reason to create.
+	if options.ReadOnly || !errors.Is(err, blob.ErrNotFound) || errors.Is(err, blob.ErrIntegrity) {
+		return loaded, err
+	}
+	created, err := ensureWorld(ctx, objects, options.WorldID)
+	if err != nil {
+		return nil, err
+	}
+	if created {
+		// Loud on purpose: an empty bucket is normally a first install,
+		// but it is also what a wrong bucket URL looks like.
+		options.Logger.Warn("created a new world in an empty bucket", "worldID", options.WorldID)
+	}
+	return load()
 }
 
 func loadRootSnapshot(ctx context.Context, objects blob.Store, worldID string, workers int) (*snapshot, error) {

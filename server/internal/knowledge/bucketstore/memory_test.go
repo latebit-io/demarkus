@@ -59,7 +59,7 @@ func checkPublishPruneHeap(t *testing.T, ring int) {
 	}
 	objects := &storedBytes{Store: memory}
 	ctx := context.Background()
-	if err := Initialize(ctx, objects, testWorldID); err != nil {
+	if err := initialize(ctx, objects, testWorldID); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
 	store, err := Open(ctx, objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring})
@@ -67,6 +67,7 @@ func checkPublishPruneHeap(t *testing.T, ring int) {
 		t.Fatalf("open: %v", err)
 	}
 	store.commitInterval = 0
+	closeAtEnd(t, store)
 	meta := map[string]string{"retention": "20", "agent": "federation"}
 	cycle := func(n int) {
 		if _, err := store.Publish(ctx, backend.WriteRequest{Path: "/graph.md", ExpectedVersion: -1, Content: memtest.AgentGraphBody(n), Metadata: meta}); err != nil {

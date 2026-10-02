@@ -10,7 +10,7 @@ import (
 const followInterval = 5 * time.Second
 
 // follower polls the bucket for what peers committed: at once on a peer's
-// hint, and on a timer while the hub has subscribers.
+// hint, and on a timer while a watcher waits on the hub.
 type follower struct {
 	kick chan struct{}
 	stop context.CancelFunc
@@ -18,9 +18,6 @@ type follower struct {
 }
 
 func (store *Store) startFollowing(interval time.Duration) {
-	if interval <= 0 {
-		interval = followInterval
-	}
 	ctx, stop := context.WithCancel(context.Background())
 	f := &follower{kick: make(chan struct{}, 1), stop: stop, done: make(chan struct{})}
 	store.follower = f
@@ -37,7 +34,7 @@ func (store *Store) follow(ctx context.Context, f *follower, interval time.Durat
 			return
 		case <-f.kick:
 		case <-ticker.C:
-			if store.changes.Subscribers() == 0 {
+			if store.changes.Waiting() == 0 {
 				continue
 			}
 		}
@@ -49,7 +46,7 @@ func (store *Store) follow(ctx context.Context, f *follower, interval time.Durat
 
 // Follow is a peer replica's hint that it committed through sequence
 // (backend.Follower): the store polls now unless it already serves it.
-// Without WATCH every read validates the head, so a hint adds nothing.
+// Every read validates the head itself, so a poll only feeds the hub.
 func (store *Store) Follow(sequence int64) {
 	f := store.follower
 	if f == nil || store.servedSequence() >= sequence {
@@ -62,15 +59,15 @@ func (store *Store) Follow(sequence int64) {
 	}
 }
 
-// Close stops following peers and ends every watch on the hub; reads and
-// writes still work. It is idempotent.
+// Close stops following peers, ends every watch on the hub and refuses
+// later writes with backend.ErrClosed; reads still work. It is idempotent.
 func (store *Store) Close() error {
-	if f := store.follower; f != nil {
-		f.stop()
-		<-f.done
+	store.closed.Store(true)
+	if store.changes == nil {
+		return nil
 	}
-	if store.changes != nil {
-		store.changes.Close()
-	}
+	store.follower.stop()
+	<-store.follower.done
+	store.changes.Close()
 	return nil
 }

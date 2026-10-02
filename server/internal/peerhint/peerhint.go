@@ -30,8 +30,7 @@ import (
 // so a network policy can keep it inside the replica set.
 const ALPN = "mark-peer"
 
-// One hint per stream, one line: "head <world id> <sequence>". The "head"
-// token predates the store boundary and stays for replicas mid-deploy.
+// One hint per stream, one line: "head <world id> <sequence>".
 const (
 	maxLineLength = 256
 	streamTimeout = 5 * time.Second

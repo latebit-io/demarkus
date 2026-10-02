@@ -23,7 +23,7 @@ import (
 
 func TestInitializeGenesis(t *testing.T) {
 	objects := newTestMemory(t)
-	if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+	if err := initialize(context.Background(), objects, testWorldID); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func TestInitializeGenesis(t *testing.T) {
 
 	t.Run("idempotent", func(t *testing.T) {
 		before := getObject(t, objects, headObjectKey).Attributes.Generation
-		if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+		if err := initialize(context.Background(), objects, testWorldID); err != nil {
 			t.Fatalf("reinitialize: %v", err)
 		}
 		after := getObject(t, objects, headObjectKey).Attributes.Generation
@@ -127,7 +127,7 @@ func TestSeparateBucketsAreIndependent(t *testing.T) {
 	const otherWorldID = "7d4f3f8a-87f0-4bf5-932a-e4d1db28d235"
 	open := func(worldID string) *Store {
 		objects := newTestMemory(t)
-		if err := Initialize(context.Background(), objects, worldID); err != nil {
+		if err := initialize(context.Background(), objects, worldID); err != nil {
 			t.Fatalf("initialize %s: %v", worldID, err)
 		}
 		store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: worldID})
@@ -172,7 +172,7 @@ func TestInitializeReconciliation(t *testing.T) {
 	t.Run("ambiguous creates", func(t *testing.T) {
 		memory := newTestMemory(t)
 		objects := &ambiguousCreateStore{Store: memory}
-		if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+		if err := initialize(context.Background(), objects, testWorldID); err != nil {
 			t.Fatalf("initialize with ambiguous creates: %v", err)
 		}
 		if _, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID}); err != nil {
@@ -183,7 +183,7 @@ func TestInitializeReconciliation(t *testing.T) {
 	t.Run("ambiguous before immutable commit", func(t *testing.T) {
 		memory := newTestMemory(t)
 		objects := &failFirstCreateStore{Store: memory, category: blob.ErrAmbiguous}
-		if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+		if err := initialize(context.Background(), objects, testWorldID); err != nil {
 			t.Fatalf("initialize after ambiguous create: %v", err)
 		}
 	})
@@ -191,7 +191,7 @@ func TestInitializeReconciliation(t *testing.T) {
 	t.Run("throttled before immutable commit", func(t *testing.T) {
 		memory := newTestMemory(t)
 		objects := &failFirstCreateStore{Store: memory, category: blob.ErrThrottled}
-		if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+		if err := initialize(context.Background(), objects, testWorldID); err != nil {
 			t.Fatalf("initialize after throttled create: %v", err)
 		}
 	})
@@ -199,7 +199,7 @@ func TestInitializeReconciliation(t *testing.T) {
 	t.Run("ambiguous before head commit", func(t *testing.T) {
 		memory := newTestMemory(t)
 		objects := &failHeadCreateStore{Store: memory}
-		if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+		if err := initialize(context.Background(), objects, testWorldID); err != nil {
 			t.Fatalf("initialize after ambiguous head create: %v", err)
 		}
 	})
@@ -214,7 +214,7 @@ func TestInitializeReconciliation(t *testing.T) {
 		if _, err := memory.Create(context.Background(), first.Key, first.Data); err != nil {
 			t.Fatalf("seed immutable object: %v", err)
 		}
-		if err := Initialize(context.Background(), memory, testWorldID); err != nil {
+		if err := initialize(context.Background(), memory, testWorldID); err != nil {
 			t.Fatalf("initialize around immutable object: %v", err)
 		}
 	})
@@ -229,7 +229,7 @@ func TestInitializeReconciliation(t *testing.T) {
 		if _, err := memory.Create(context.Background(), first.Key, []byte("corrupt")); err != nil {
 			t.Fatalf("seed corrupt immutable object: %v", err)
 		}
-		err = Initialize(context.Background(), memory, testWorldID)
+		err = initialize(context.Background(), memory, testWorldID)
 		if !errors.Is(err, blob.ErrIntegrity) {
 			t.Fatalf("initialize error = %v, want integrity", err)
 		}
@@ -264,8 +264,8 @@ func TestOpenValidation(t *testing.T) {
 		if store != nil || !errors.Is(err, blob.ErrPrecondition) {
 			t.Fatalf("Open() = (%v, %v), want world precondition", store, err)
 		}
-		if err := Initialize(context.Background(), objects, otherWorldID); !errors.Is(err, blob.ErrPrecondition) {
-			t.Fatalf("Initialize(other world) error = %v, want precondition", err)
+		if err := initialize(context.Background(), objects, otherWorldID); !errors.Is(err, blob.ErrPrecondition) {
+			t.Fatalf("initialize(other world) error = %v, want precondition", err)
 		}
 	})
 
@@ -309,8 +309,8 @@ func TestOpenValidation(t *testing.T) {
 	t.Run("cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if err := Initialize(ctx, newTestMemory(t), testWorldID); !errors.Is(err, context.Canceled) {
-			t.Errorf("Initialize() error = %v, want canceled", err)
+		if err := initialize(ctx, newTestMemory(t), testWorldID); !errors.Is(err, context.Canceled) {
+			t.Errorf("initialize() error = %v, want canceled", err)
 		}
 		store, err := Open(ctx, initializedMemory(t), Options{Logger: discardLogger, WorldID: testWorldID})
 		if store != nil || !errors.Is(err, context.Canceled) {
@@ -627,7 +627,7 @@ func newTestMemory(t *testing.T) *blob.Memory {
 func initializedMemory(t *testing.T) *blob.Memory {
 	t.Helper()
 	objects := newTestMemory(t)
-	if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+	if err := initialize(context.Background(), objects, testWorldID); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
 	return objects

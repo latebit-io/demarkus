@@ -33,6 +33,9 @@ var ErrNotFound = errors.New("not found")
 // ErrViewClosed means a read reached a view after its Close.
 var ErrViewClosed = errors.New("read view is closed")
 
+// ErrClosed means a write reached a store after its Close.
+var ErrClosed = errors.New("store is closed")
+
 // FromNotExist marks a backend's own missing-file error as ErrNotFound, keeping
 // the cause in the chain.
 func FromNotExist(err error) error {
