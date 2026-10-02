@@ -3,7 +3,6 @@ package knowledgeserver
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net"
 	"testing"
@@ -130,28 +129,31 @@ func TestWatchAnswersResyncForAnotherEpoch(t *testing.T) {
 	}
 }
 
-// Ending the context lets go of the world at once, even with an event
-// written that nobody reads, and the reader sees the stream end.
-func TestWatchEndsWithItsContext(t *testing.T) {
-	server, h := newAliceServer(t)
+// The open's context bounds only the open, as a dial's does: the watch
+// carries changes made after it ends.
+func TestWatchOutlivesItsOpenContext(t *testing.T) {
+	server, _ := newAliceServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	_, reader, _ := watchAlice(ctx, t, server, protocol.Cursor{})
+	conn, reader, _ := watchAlice(ctx, t, server, protocol.Cursor{})
+	defer conn.Close() //nolint:errcheck // the test is over either way
+	cancel()
+	publishDoc(t, server, "/a.md")
+	if ev := nextEvent(t, reader); ev.Path != "/a.md" {
+		t.Errorf("event after the open's context ended = %+v, want /a.md", ev)
+	}
+}
+
+// Closing lets go of the world at once, even with an event written that
+// nobody reads.
+func TestWatchCloseLetsGoOfTheWorld(t *testing.T) {
+	server, h := newAliceServer(t)
+	conn, _, _ := watchAlice(context.Background(), t, server, protocol.Cursor{})
 	publishDoc(t, server, "/a.md")
 	time.Sleep(50 * time.Millisecond) // the event's write is now blocked on the pipe
-	cancel()
-	waitNoWatches(t, h)
-	for {
-		block, err := reader.Next()
-		if errors.Is(err, io.EOF) {
-			return
-		}
-		if err != nil {
-			t.Fatalf("after cancel: %v, want the stream's end", err)
-		}
-		if block.Status != protocol.StatusOK && block.Status != protocol.StatusClosing {
-			t.Fatalf("block after cancel = %+v", block)
-		}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close: %v", err)
 	}
+	waitNoWatches(t, h)
 }
 
 func TestWatchRefusesUnknownAuthorityAndOtherVerbs(t *testing.T) {

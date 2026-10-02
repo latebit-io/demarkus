@@ -239,11 +239,11 @@ func (c *Client) watchDialer(host string) WatchDialer {
 }
 
 // ConnDialer is a WatchDialer over conns that dial opens with req sent, such
-// as an in-process watch. The dial ctx bounds only the open, as net.Dialer's
-// does: a conn tied to it would die with the handshake; the watch closes it.
+// as an in-process watch. As with net.Dialer, dial's ctx bounds only the
+// open: the conn must outlive it, and the watch closes it.
 func ConnDialer(dial func(ctx context.Context, req protocol.Request) (net.Conn, error)) WatchDialer {
 	return func(ctx context.Context, req protocol.Request) (WatchStream, error) {
-		conn, err := dial(context.WithoutCancel(ctx), req)
+		conn, err := dial(ctx, req)
 		if err != nil {
 			return nil, err
 		}
