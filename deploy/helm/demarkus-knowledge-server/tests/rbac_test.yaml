@@ -50,6 +50,22 @@ tests:
           path: rules
           count: 4
 
+  - it: adds the federation Lease to the Lease rule when federation has a hub
+    documentIndex: 0
+    set:
+      broker.federation.hub: team-a
+    asserts:
+      - equal:
+          path: rules[0]
+          value:
+            apiGroups: ["coordination.k8s.io"]
+            resources: ["leases"]
+            resourceNames: ["demarkus-broker-sweeper", "demarkus-federation"]
+            verbs: ["get", "update"]
+      - lengthEqual:
+          path: rules
+          count: 4
+
   - it: adds the agent token record, raw Secret and the hub's tokens Secret per agent token
     documentIndex: 0
     set:

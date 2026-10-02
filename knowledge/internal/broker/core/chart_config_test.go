@@ -3,10 +3,11 @@ package core
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
-// The chart's secret-broker-config.yaml renders this fixture (helm template
-// with the chart's test fixture values); a key the chart emits that the
+// The chart's secret-broker-config.yaml renders this fixture, checked by CI's
+// test-charts job, which holds the command; a key the chart emits that the
 // loader no longer knows fails here, not at pod start.
 func TestLoadConfigAcceptsTheChartRendering(t *testing.T) {
 	clearConfigEnv(t)
@@ -28,5 +29,9 @@ func TestLoadConfigAcceptsTheChartRendering(t *testing.T) {
 	}
 	if got := OAuthStateRef(cfg).Name; got != "knowledge-oauth-state" {
 		t.Fatalf("oauth state Secret = %q, want the chart's name", got)
+	}
+	want := FederationConfig{Hub: "team-a", LeaseName: "demarkus-federation", QuietPeriod: 30 * time.Second, Interval: time.Minute}
+	if cfg.Federation != want {
+		t.Fatalf("federation = %+v, want %+v", cfg.Federation, want)
 	}
 }

@@ -16,7 +16,11 @@ metadata:
 rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
-    resourceNames: [{{ .Values.broker.sweeper.leaseName | quote }}]
+    resourceNames:
+      - {{ .Values.broker.sweeper.leaseName | quote }}
+      {{- if .Values.broker.federation.hub }}
+      - {{ .Values.broker.federation.leaseName | quote }}
+      {{- end }}
     verbs: ["get", "update"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]

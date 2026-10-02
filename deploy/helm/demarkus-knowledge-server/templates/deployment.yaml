@@ -49,7 +49,7 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           env:
-            # The leader-election holder identity for the sweeper Lease.
+            # The leader-election holder identity for the sweeper and federation Leases.
             - name: POD_NAME
               valueFrom:
                 fieldRef:

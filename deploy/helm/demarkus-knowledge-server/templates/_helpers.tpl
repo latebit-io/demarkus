@@ -213,7 +213,7 @@ fromYamlArray.
 {{- if hasKey $names $world.name -}}
 {{- fail (printf "%s.name %q is duplicated" $location $world.name) -}}
 {{- end -}}
-{{- $_ := set $names $world.name true -}}
+{{- $_ := set $names $world.name $world -}}
 {{- range $authorityIndex, $authority := $world.authorities -}}
 {{- if empty $authority -}}
 {{- fail (printf "%s.authorities[%d] is required" $location $authorityIndex) -}}
@@ -275,6 +275,20 @@ fromYamlArray.
 {{- end -}}
 {{- if and (eq $world.profile "memory") (not (or $allow.domains $allow.groups $allow.emails)) -}}
 {{- fail (printf "%s.allow must name the tenant identity (domains, groups or emails) on a memory world" $location) -}}
+{{- end -}}
+{{- end -}}
+{{- $federation := .Values.broker.federation -}}
+{{- if $federation.hub -}}
+{{- $hub := get $names $federation.hub -}}
+{{- if or (empty $hub) (ne $hub.profile "knowledge") -}}
+{{- fail (printf "broker.federation.hub %q must name a knowledge world in worlds (or global.worlds)" $federation.hub) -}}
+{{- end -}}
+{{- if $hub.readOnly -}}
+{{- fail (printf "broker.federation.hub %q is read-only; the deriver writes its checkpoints there" $federation.hub) -}}
+{{- end -}}
+{{- /* The Role names the Lease, so the broker's default cannot fill it. */ -}}
+{{- if empty $federation.leaseName -}}
+{{- fail "broker.federation.leaseName is required when broker.federation.hub is set" -}}
 {{- end -}}
 {{- end -}}
 {{- /* The bootstrap Job generates one <world>-token-values Secret per world;

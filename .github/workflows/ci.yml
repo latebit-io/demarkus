@@ -471,6 +471,17 @@ jobs:
         run: helm unittest deploy/helm/demarkus-server
       - name: Unit test demarkus-knowledge-server chart
         run: helm unittest deploy/helm/demarkus-knowledge-server
+      # The broker's LoadConfig test reads this rendering; a chart change
+      # must regenerate it with the same command.
+      - name: Broker config fixture matches the chart
+        run: |
+          helm template knowledge deploy/helm/demarkus-knowledge-server -n demarkus \
+            -f deploy/helm/demarkus-knowledge-server/tests/fixtures/valid-values.yaml \
+            --set broker.stateBucket=gs://knowledge-broker-state \
+            --set broker.federation.hub=team-a \
+            --show-only templates/secret-broker-config.yaml \
+            | yq '.stringData["config.yaml"]' | sed -e '$ { /^$/d; }' \
+            | diff - knowledge/internal/broker/core/testdata/chart-rendered-config.yaml
       - name: Unit test demarkus-agent chart
         run: helm unittest deploy/helm/demarkus-agent
       - name: Unit test demarkus-knowledge-system umbrella chart

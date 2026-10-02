@@ -55,6 +55,9 @@ sweeper:
   disabled: false
   interval: "5m"
   leaseName: "demarkus-broker-sweeper"
+federation:
+  hub: "team-a"
+  leaseName: "demarkus-federation"
 rateLimit:
   disabled: false
   tokens:

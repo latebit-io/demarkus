@@ -296,6 +296,15 @@ broker:
     interval: 5m
     leaseName: demarkus-broker-sweeper
 
+  # Federation graph, checkpointed into hub's /graph/worlds/ by one replica
+  # under the Lease; see the README. hub is a writable knowledge world, empty
+  # turns it off. Blank quietPeriod and interval take 30s and 1m.
+  federation:
+    hub: ""
+    leaseName: demarkus-federation
+    quietPeriod: ""
+    interval: ""
+
   # Per-subject (/me/install) and per-IP (/auth/login) token buckets.
   # trustForwardedFor is only safe behind an Ingress that strips spoofed
   # X-Forwarded-For; flip it off without one (dev, port-forward).
@@ -310,9 +319,10 @@ broker:
     trustForwardedFor: true
 
 # Role and RoleBinding in the release namespace for the broker's state: the
-# sweeper Lease, its own Secrets, each world's tokens Secret (agent token
-# hashes), agent token records, and the tenant registry and worlds fragment
-# when provisioning is on. Flip off only if RBAC is managed out of band.
+# sweeper and federation Leases, its own Secrets, each world's tokens Secret
+# (agent token hashes), agent token records, and the tenant registry and
+# worlds fragment when provisioning is on. Flip off only if RBAC is managed
+# out of band.
 rbac:
   create: true
 

@@ -335,6 +335,19 @@ broker-signed tokens are invalidated. The graph store behind
 `mark_backlinks`, `mark_graph` and friends is process memory and rebuilds
 after a restart.
 
+Federation: with `broker.federation.hub` set, one replica (Lease
+`broker.federation.leaseName`) derives each static knowledge world's graph
+from its change feed and checkpoints it into the hub's
+`/graph/worlds/<world>/`, from which the gateway seeds those worlds. No token
+or Secret is involved: writes run in process under a grant to
+`/graph/worlds/**`, and reads are anonymous, so no read token may cover that
+path in the hub. A changed world checkpoints after `quietPeriod` (default
+30s), at most `interval` (default 1m) after its first change, and never
+sooner than `interval` after its last checkpoint. A checkpoint writes each
+changed shard plus the manifest, one commit each at the bucket store's pace
+of one per 1.5 s per world: an edit costs the hub about 3 s of write
+capacity, a first build at most about 25 s per world.
+
 Production checklist: `broker.oidc.existingSecretRef` instead of a cleartext
 `clientSecret` (it lives in helm release history); Ingress TLS from
 cert-manager or an existing Secret; verify the `X-Forwarded-For` invariant
@@ -359,7 +372,8 @@ NetworkPolicy. The built-in policy therefore requires explicit
 `allowUnrestrictedHTTPS: true`. Otherwise disable it and provide an egress proxy
 or CNI FQDN policy.
 
-The broker's Role is scoped to its own state Secrets, the sweeper Lease, the
+The broker's Role is scoped to its own state Secrets, the sweeper Lease (and
+the federation Lease when `broker.federation.hub` is set), the
 agent token records and the tokens Secrets of hub worlds, plus the registry
 and worlds fragment when provisioning is on; `create` is namespace-wide
 because RBAC cannot name a Secret before it exists. Internet-facing OAuth
