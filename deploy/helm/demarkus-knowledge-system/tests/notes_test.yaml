@@ -9,12 +9,12 @@ tests:
       - matchRegexRaw:
           pattern: 'knowledge: knowledge\.NAMESPACE\.svc\.cluster\.local:6309 \(QUIC\), broker https://broker\.example\.com'
 
-  - it: says writes need no token Secret and names the agent token and keys
+  - it: says writes need no token Secret and names the federation hub and keys
     asserts:
       - matchRegexRaw:
           pattern: 'no token Secret is needed'
       - matchRegexRaw:
-          pattern: "issues the agent's hub token into root-token-values"
+          pattern: "derived in process into root's"
       - matchRegexRaw:
           pattern: 'state cookie key into knowledge-cookie-key'
       - matchRegexRaw:
@@ -28,3 +28,23 @@ tests:
     asserts:
       - matchRegexRaw:
           pattern: 'bootstrap Job creates each missing <world>-tokens Secret'
+
+  - it: says no federation graph is derived without a hub
+    set:
+      global.worlds:
+        - name: team-a
+          worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49
+    asserts:
+      - matchRegexRaw:
+          pattern: 'No world is marked hub'
+
+  - it: names the explicit federation hub over the marked world
+    set:
+      knowledge.broker.federation.hub: team-a
+    asserts:
+      - matchRegexRaw:
+          pattern: "derived in process into team-a's"
+      - matchRegexRaw:
+          pattern: '- team-a \(hub\)'
+      - notMatchRegexRaw:
+          pattern: 'root \(hub\)'

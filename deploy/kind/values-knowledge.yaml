@@ -1,6 +1,7 @@
-# demarkus-knowledge-server chart overrides for the kind harness: one world
+# demarkus-knowledge-server chart overrides for the kind harness: two worlds
 # in fake-gcs-server, the broker against the in-cluster mock OIDC issuer.
-# up.sh supplies the image, the TLS Secret and the signing key Secret.
+# up.sh supplies the image, the TLS Secret, the signing key Secret and the
+# federation cadence.
 
 # The chart refuses fewer than two replicas; kind's one node holds both.
 replicaCount: 2
@@ -19,6 +20,10 @@ worlds:
     worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
     allow:
       emails: ["alice@example.com"]
+  # The federation hub, up.sh's FEDERATION_HUB.
+  - name: root
+    worldID: c8938412-107c-4b73-bbf3-fa3644622b4b
+    hub: true
 
 # The GCS client follows STORAGE_EMULATOR_HOST to fake-gcs-server.
 extraEnv:

@@ -94,8 +94,8 @@ func (p *ProvisioningConfig) tenantAuthority(slug string) string {
 }
 
 // TenantWorld renders the broker-side WorldConfig for one tenant. A tenant
-// is served by the server in this process, so it is local and has no
-// tokens Secret or namespace: the identity grant is its only write path.
+// is served by the server in this process, so it is local, addressed by its
+// authority, and written only under the identity grant.
 func (p *ProvisioningConfig) TenantWorld(slug, email string) WorldConfig {
 	return WorldConfig{
 		Name:            slug,

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol/memtest"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
-	"github.com/latebit-io/demarkus/server/internal/memtest"
 )
 
 // TestSectionIndexMemory pins the plan's budget: the catalog with its

@@ -309,10 +309,9 @@ func TestHandleMarkGraphDepthClamping(t *testing.T) {
 func TestHandleMarkIndexBoundsOnDirectoryCycle(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:         "hub",
-		Namespace:    "hub",
-		TokensSecret: "hub-tokens",
-		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		Name:      "hub",
+		Namespace: "hub",
+		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
 		WriteScope: core.WriteScope{
 			Paths: []string{"/**"},
 		},
@@ -493,10 +492,9 @@ const indexManifestBody = "# Agent Manifest\n\nThis world accepts index publicat
 func TestHandleMarkIndexHappyPath(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:         "hub",
-		Namespace:    "hub",
-		TokensSecret: "hub-tokens",
-		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		Name:      "hub",
+		Namespace: "hub",
+		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
 		WriteScope: core.WriteScope{
 			Paths: []string{"/**"},
 		},
@@ -593,10 +591,9 @@ func TestHandleMarkIndexHappyPath(t *testing.T) {
 func TestHandleMarkIndexBlocksWhenTargetHasNoManifest(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:         "hub",
-		Namespace:    "hub",
-		TokensSecret: "hub-tokens",
-		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		Name:      "hub",
+		Namespace: "hub",
+		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
 		WriteScope: core.WriteScope{
 			Paths: []string{"/**"},
 		},
@@ -631,10 +628,9 @@ func TestHandleMarkIndexBlocksWhenTargetHasNoManifest(t *testing.T) {
 func TestHandleMarkIndexForceOverridesManifestBlock(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:         "hub",
-		Namespace:    "hub",
-		TokensSecret: "hub-tokens",
-		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		Name:      "hub",
+		Namespace: "hub",
+		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
 		WriteScope: core.WriteScope{
 			Paths: []string{"/**"},
 		},
@@ -683,10 +679,9 @@ func TestHandleMarkIndexForceOverridesManifestBlock(t *testing.T) {
 func TestHandleMarkIndexDryRunReturnsBodyWithoutPublishing(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:         "hub",
-		Namespace:    "hub",
-		TokensSecret: "hub-tokens",
-		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		Name:      "hub",
+		Namespace: "hub",
+		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
 		WriteScope: core.WriteScope{
 			Paths: []string{"/**"},
 		},

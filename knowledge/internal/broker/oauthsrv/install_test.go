@@ -33,11 +33,10 @@ func installTestConfig() *core.Config {
 func installTestConfigTwoWorlds() *core.Config {
 	cfg := installTestConfig()
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:         "team-b",
-		Namespace:    "team-b",
-		TokensSecret: "team-b-tokens",
-		PublicURL:    "mark://team-b.cluster.local:6309",
-		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		Name:      "team-b",
+		Namespace: "team-b",
+		PublicURL: "mark://team-b.cluster.local:6309",
+		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
 		WriteScope: core.WriteScope{
 			Paths: []string{"/team-b/*"},
 		},

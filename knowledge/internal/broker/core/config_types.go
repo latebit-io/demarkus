@@ -26,7 +26,7 @@ type Config struct {
 	RateLimit    RateLimitConfig    `yaml:"rateLimit"`
 	WorldDialer  WorldDialerConfig  `yaml:"worldDialer"`
 	Provisioning ProvisioningConfig `yaml:"provisioning"`
-	AgentTokens  []AgentTokenConfig `yaml:"agentTokens"`
+	Federation   FederationConfig   `yaml:"federation"`
 
 	// registry is the live world set, built from Worlds on first use.
 	registryOnce sync.Once
@@ -262,10 +262,8 @@ type WorldConfig struct {
 	// Profile is the gateway that serves the world, knowledge or memory.
 	// Required on every world once the memory gateway is configured.
 	Profile string `yaml:"profile"`
-	// Namespace is where TokensSecret lives.
+	// Namespace derives the address when InternalAddress is blank.
 	Namespace string `yaml:"namespace"`
-	// TokensSecret is the world's tokens.toml Secret; the broker needs get and patch.
-	TokensSecret string `yaml:"tokensSecret"`
 	// PublicURL is the address handed to clients by /me/install. The broker is
 	// the one source for it; a world does not know its external URL. Optional:
 	// blank omits the world from /me/install.
@@ -330,6 +328,34 @@ type SweeperConfig struct {
 	LeaseName string `yaml:"leaseName"`
 }
 
+// FederationConfig has one replica derive the federation graph of the
+// knowledge worlds served in process from their change feeds, checkpointed
+// into Hub. A blank Hub derives nothing.
+type FederationConfig struct {
+	// Hub names the local knowledge world the checkpoints are written to.
+	Hub string `yaml:"hub"`
+	// LeaseName is the Lease replicas race for. Default demarkus-federation.
+	LeaseName string `yaml:"leaseName"`
+	// QuietPeriod is how long a changed world rests before its checkpoint.
+	// Default 30s.
+	QuietPeriod time.Duration `yaml:"quietPeriod"`
+	// Interval is the least time between two checkpoints of one world.
+	// Default 1m.
+	Interval time.Duration `yaml:"interval"`
+}
+
+// FederatedWorlds names the static knowledge worlds served in process: the
+// worlds the federation graph is derived from, one of them its hub.
+func (c *Config) FederatedWorlds() []string {
+	var names []string
+	for i := range c.Worlds {
+		if w := &c.Worlds[i]; w.Local && w.Profile == ProfileKnowledge {
+			names = append(names, w.Name)
+		}
+	}
+	return names
+}
+
 // RateLimitConfig caps per subject and per IP rates. Per replica only: a
 // multi replica deployment sees up to N times the configured rate.
 type RateLimitConfig struct {
@@ -351,18 +377,6 @@ type RateLimitConfig struct {
 type RateLimitRouteConfig struct {
 	PerMinute int `yaml:"perMinute"`
 	Burst     int `yaml:"burst"`
-}
-
-// AgentTokenConfig has the broker issue a federation agent's publish token for
-// World and keep the raw value in Secret[Key], in the world's namespace.
-type AgentTokenConfig struct {
-	// World names a static worlds[] entry, the only world the token is valid in.
-	World string `yaml:"world"`
-	// Secret and Key locate the raw token the agent mounts.
-	Secret string `yaml:"secret"`
-	Key    string `yaml:"key"`
-	// Paths scopes the token. Default ["/**"].
-	Paths []string `yaml:"paths"`
 }
 
 // WriteScope is the path scope the gateway may write in a world; an identity

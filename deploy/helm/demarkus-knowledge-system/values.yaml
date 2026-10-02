@@ -1,12 +1,12 @@
 # demarkus-knowledge-system: declare each world once; the sub-charts derive
-# the rest. Sub-chart values live under their alias (knowledge, agent,
-# library) and accept everything the sub-chart's own values.yaml does.
+# the rest. Sub-chart values live under their alias (knowledge, library)
+# and accept everything the sub-chart's own values.yaml does.
 
 global:
   # One entry per world. name and worldID are required; hub marks the world
-  # the agent publishes its index into; allow is the gateway's per-world
-  # identity predicate and writeScope the paths it may write; readOnly and
-  # initialPolicy go to the world runtime.
+  # the federation graph is checkpointed into, at most one; allow is the
+  # gateway's per-world identity predicate and writeScope the paths it may
+  # write; readOnly and initialPolicy go to the world runtime.
   worlds: []
     # - name: root
     #   worldID: 1bb83179-7275-41a2-9519-a3410a7ac5dd
@@ -15,11 +15,11 @@ global:
     #   worldID: d7867876-1369-4b39-a33d-b175a4320acf
     #   allow:
     #     groups: ["team-a"]
-  # Name of the knowledge resources and Service; the agent dials
+  # Name of the knowledge resources and Service,
   # <knowledgeService>.<namespace>.svc.cluster.local:6309.
   knowledgeService: knowledge
   # Suffix of every world authority (<name>.<authorityDomain>): the SNI the
-  # QUIC certificate carries and the agent presents. Empty derives
+  # QUIC certificate carries and direct clients present. Empty derives
   # <knowledgeService>.<namespace>.svc.cluster.local. It never has to
   # resolve in DNS.
   authorityDomain: ""
@@ -32,7 +32,7 @@ global:
 knowledge:
   enabled: true
   nameOverride: demarkus-knowledge-server
-  # Self-signed in-cluster QUIC certificate; the agent dials with insecure.
+  # Self-signed in-cluster QUIC certificate; direct clients dial with insecure.
   tls:
     certManager:
       enabled: true
@@ -45,8 +45,8 @@ knowledge:
   # Off so a bare cluster installs; see the README before enabling.
   networkPolicy:
     enabled: false
-  # The broker issues the agent's hub token (knowledge.broker.agentTokens),
-  # so the imperative bootstrap Job is not needed.
+  # Identities write through the gateway and the federation graph is written
+  # in process, so the imperative bootstrap Job is not needed.
   tokens:
     bootstrap:
       enabled: false
@@ -77,14 +77,6 @@ knowledge:
   # Ingress for the broker hosts (management, MCP, memory).
   ingress:
     enabled: false
-
-agent:
-  enabled: true
-  nameOverride: demarkus-agent
-  fullnameOverride: agent
-  # Self-signed world certificates.
-  insecure: true
-  publishGraph: true
 
 # The library chart lives in its own repository and has no global
 # derivation; set its broker wiring explicitly.

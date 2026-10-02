@@ -307,6 +307,21 @@ type recordBacklog struct {
 	err     error
 	during  func()
 	reads   int
+	// peer runs on CatchUp, as a poll that finds a peer's commits would.
+	peer       func()
+	catchUpErr error
+	catchUps   int
+}
+
+func (b *recordBacklog) CatchUp(ctx context.Context) error {
+	b.catchUps++
+	if b.peer != nil {
+		b.peer()
+	}
+	if err := ctx.Err(); err != nil {
+		return err // as a poll under an ended context fails
+	}
+	return b.catchUpErr
 }
 
 func (b *recordBacklog) Events(_ context.Context, after, through uint64) ([]Event, error) {
@@ -399,11 +414,7 @@ func TestResumeBacklogFailuresResync(t *testing.T) {
 			backlog.history = append(backlog.history[:3:3], backlog.history[4:]...)
 		}},
 		{name: "ring passes the backlog during the read", since: 2, reads: 1, setup: func(hub *Hub, backlog *recordBacklog) {
-			backlog.during = func() {
-				for seq := uint64(11); seq <= 16; seq++ {
-					hub.PublishAt(Event{Seq: seq, Path: "/a/x.md", Version: int(seq), Op: protocol.OpPublish})
-				}
-			}
+			backlog.during = func() { publishThrough(hub, 16) }
 		}},
 	}
 	for _, tt := range tests {
@@ -417,5 +428,129 @@ func TestResumeBacklogFailuresResync(t *testing.T) {
 				t.Fatalf("backlog reads = %d, want %d", backlog.reads, tt.reads)
 			}
 		})
+	}
+}
+
+// publishThrough publishes /a/x.md events after the head through seq, as
+// commits that reach the ring while something else is under way.
+func publishThrough(hub *Hub, seq uint64) {
+	for next := hub.Head().Seq + 1; next <= seq; next++ {
+		hub.PublishAt(Event{Seq: next, Path: "/a/x.md", Version: int(next), Op: protocol.OpPublish})
+	}
+}
+
+// A resume past this replica's head asks the store once for what peers
+// committed before calling it a gap; anything else never asks.
+func TestResumePastTheHeadCatchesUpOnce(t *testing.T) {
+	tests := []struct {
+		name       string
+		since      protocol.Cursor
+		peerHead   uint64 // what a catch-up finds the peer committed through
+		catchUpErr error
+		resync     bool
+		catchUps   int
+		next       uint64
+	}{
+		{name: "peer committed past the head", since: protocol.Cursor{Epoch: "w", Seq: 11}, peerHead: 12, catchUps: 1, next: 12},
+		{name: "still past the head after catching up", since: protocol.Cursor{Epoch: "w", Seq: 13}, peerHead: 12, resync: true, catchUps: 1},
+		{name: "catching up fails", since: protocol.Cursor{Epoch: "w", Seq: 11}, catchUpErr: errors.New("bucket unavailable"), resync: true, catchUps: 1},
+		{name: "at the head", since: protocol.Cursor{Epoch: "w", Seq: 10}},
+		{name: "another epoch", since: protocol.Cursor{Epoch: "other", Seq: 20}, resync: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hub, backlog := backlogHub()
+			backlog.peer = func() { publishThrough(hub, tt.peerHead) }
+			backlog.catchUpErr = tt.catchUpErr
+			sub, err := hub.Subscribe(t.Context(), "/", tt.since)
+			if tt.resync != errors.Is(err, ErrResync) || !tt.resync && err != nil {
+				t.Fatalf("Subscribe: %v, want resync %v", err, tt.resync)
+			}
+			if backlog.catchUps != tt.catchUps {
+				t.Fatalf("catch-ups = %d, want %d", backlog.catchUps, tt.catchUps)
+			}
+			if tt.next != 0 {
+				if got := next(t, sub); got.Seq != tt.next {
+					t.Fatalf("first event = %+v, want seq %d", got, tt.next)
+				}
+			}
+		})
+	}
+}
+
+// Resumes that arrive while a catch-up is in flight share it: a failover
+// that moves every watcher at once polls the store once, not per watcher.
+func TestConcurrentResumesShareOneCatchUp(t *testing.T) {
+	hub, backlog := backlogHub()
+	release := make(chan struct{})
+	backlog.peer = func() {
+		<-release
+		publishThrough(hub, 12)
+	}
+	const resumes = 8
+	errs := make(chan error, resumes)
+	for range resumes {
+		go func() {
+			_, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: "w", Seq: 11})
+			errs <- err
+		}()
+	}
+	time.Sleep(20 * time.Millisecond) // let the resumes pile up behind the first
+	close(release)
+	for range resumes {
+		if err := <-errs; err != nil {
+			t.Errorf("Subscribe: %v", err)
+		}
+	}
+	if backlog.catchUps != 1 {
+		t.Fatalf("catch-ups = %d, want 1 shared by every resume", backlog.catchUps)
+	}
+}
+
+// joinedContext closes joined on its first Done call: catchUp's wait on the
+// flight is that call, so the waiter has joined the flight by then.
+type joinedContext struct {
+	context.Context
+	joined chan struct{}
+	once   sync.Once
+}
+
+func (c *joinedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.joined) })
+	return c.Context.Done()
+}
+
+// The shared catch-up outlives the resume that started it: that caller
+// leaving fails only itself, never the resumes waiting on the same flight.
+func TestCatchUpOutlivesTheResumeThatStartedIt(t *testing.T) {
+	hub, backlog := backlogHub()
+	started, release := make(chan struct{}), make(chan struct{})
+	backlog.peer = func() {
+		close(started)
+		<-release
+		publishThrough(hub, 12)
+	}
+	since := protocol.Cursor{Epoch: "w", Seq: 11}
+	leaving, leave := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+	go func() {
+		_, err := hub.Subscribe(leaving, "/", since)
+		first <- err
+	}()
+	<-started
+	second := make(chan error, 1)
+	waiting := &joinedContext{Context: t.Context(), joined: make(chan struct{})}
+	go func() {
+		_, err := hub.Subscribe(waiting, "/", since)
+		second <- err
+	}()
+	<-waiting.joined
+	leave()
+	if err := <-first; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leaving resume: %v, want its own cancellation", err)
+	}
+	close(release)
+	if err := <-second; err != nil {
+		t.Fatalf("waiting resume failed with the leaver: %v", err)
 	}
 }

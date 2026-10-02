@@ -178,3 +178,48 @@ func TestPublishReconcilesALostResponseAndStopsOnARealFailure(t *testing.T) {
 		t.Errorf("reads = %v, want the manifest and the shard's slot, then none", refused.reads)
 	}
 }
+
+func TestVerifyPinnedChecksEveryPinField(t *testing.T) {
+	body := "# Shard\n"
+	pin := generation.Pin{Path: "/s.md", Version: 3, ContentHash: generation.BodyHash(body), Bytes: len(body)}
+	ok := protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: map[string]string{"version": "3", "content-hash": pin.ContentHash}}
+	if err := generation.VerifyPinned(pin, ok); err != nil {
+		t.Fatalf("the pinned document: %v", err)
+	}
+	tests := []struct {
+		name string
+		edit func(r *protocol.Response)
+	}{
+		{name: "not ok", edit: func(r *protocol.Response) { r.Status = protocol.StatusNotFound }},
+		{name: "another version", edit: func(r *protocol.Response) { r.Metadata["version"] = "4" }},
+		{name: "no version", edit: func(r *protocol.Response) { delete(r.Metadata, "version") }},
+		{name: "another body", edit: func(r *protocol.Response) { r.Body = "# Other\n" }},
+		{name: "server hash disagrees", edit: func(r *protocol.Response) { r.Metadata["content-hash"] = generation.BodyHash("# Other\n") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := ok
+			resp.Metadata = map[string]string{"version": "3", "content-hash": pin.ContentHash}
+			tt.edit(&resp)
+			if err := generation.VerifyPinned(pin, resp); err == nil {
+				t.Fatal("verified")
+			}
+		})
+	}
+}
+
+// A refusal over another body is a conflict; over the same body it is the
+// write already done.
+func TestPublishDocumentTellsAConflictFromItsOwnWrite(t *testing.T) {
+	store := newDocs()
+	io := store.io()
+	if _, _, err := io.PublishDocument(t.Context(), "/doc.md", "one", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, version, err := io.PublishDocument(t.Context(), "/doc.md", "one", 0); err != nil || version != 1 {
+		t.Fatalf("same body over a stale version: %d, %v, want version 1", version, err)
+	}
+	if _, _, err := io.PublishDocument(t.Context(), "/doc.md", "two", 0); !errors.Is(err, generation.ErrConflict) {
+		t.Fatalf("another body over a stale version: %v, want ErrConflict", err)
+	}
+}

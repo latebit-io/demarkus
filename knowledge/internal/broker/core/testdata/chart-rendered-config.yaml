@@ -27,8 +27,6 @@ worlds:
   - name: "team-a"
     profile: "knowledge"
     local: true
-    namespace: "demarkus"
-    tokensSecret: "team-a-tokens"
     publicURL: ""
     internalAddress: "team-a.example.com:6309"
     allow:
@@ -40,8 +38,6 @@ worlds:
   - name: "team-b"
     profile: "knowledge"
     local: true
-    namespace: "demarkus"
-    tokensSecret: "team-b-tokens"
     publicURL: ""
     internalAddress: "team-b.example.com:6309"
     allow:
@@ -55,6 +51,9 @@ sweeper:
   disabled: false
   interval: "5m"
   leaseName: "demarkus-broker-sweeper"
+federation:
+  hub: "team-a"
+  leaseName: "demarkus-federation"
 rateLimit:
   disabled: false
   tokens:

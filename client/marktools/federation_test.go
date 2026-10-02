@@ -62,6 +62,47 @@ func TestResolveTriesEachCandidateAndVerifiesTheHash(t *testing.T) {
 	}
 }
 
+// Without an index, a surface with HashSources asks each in turn; one
+// without them refuses.
+func TestResolveWithoutAnIndexAsksTheHashSources(t *testing.T) {
+	doc := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# A\n", Metadata: map[string]string{"content-hash": resolveHash}}}
+	backend := &fetchtest.Client{FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		if r.Host == "good:6309" {
+			return doc, nil
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}}
+	if got := newTools(t, backend, hostHooks()).ResolveHash(t.Context(), marktools.ResolveArgs{Hash: resolveHash}); got.Text != "index is required" {
+		t.Errorf("no index, no sources = %+v", got)
+	}
+	hooks := hostHooks()
+	hooks.HashSources = func(context.Context) []string { return []string{"mark://empty", "mark://good"} }
+	got := newTools(t, backend, hooks).ResolveHash(t.Context(), marktools.ResolveArgs{Hash: resolveHash})
+	if got.IsError || got.Text != mcpfmt.Full(doc, "version", "modified", "content-hash") {
+		t.Fatalf("ResolveHash = %+v", got)
+	}
+	if calls := backend.Calls().Fetch; len(calls) != 2 || calls[0].Host != "empty:6309" {
+		t.Errorf("asked = %+v, want empty then good", calls)
+	}
+
+	hooks.HashSources = func(context.Context) []string { return nil }
+	if got := newTools(t, backend, hooks).ResolveHash(t.Context(), marktools.ResolveArgs{Hash: resolveHash}); got.Text != "hash "+resolveHash+": no server to ask" {
+		t.Errorf("no sources = %+v", got)
+	}
+
+	// Absent only when every server said not-found; a failure is inconclusive.
+	hooks.HashSources = func(context.Context) []string { return []string{"mark://empty"} }
+	if got := newTools(t, backend, hooks).ResolveHash(t.Context(), marktools.ResolveArgs{Hash: resolveHash}); got.Text != "hash "+resolveHash+" is held by none of the 1 servers asked" {
+		t.Errorf("absent = %+v", got)
+	}
+	backend.FetchFn = func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
+		return fetch.Result{}, errors.New("dial refused")
+	}
+	if got := newTools(t, backend, hooks).ResolveHash(t.Context(), marktools.ResolveArgs{Hash: resolveHash}); !strings.HasPrefix(got.Text, "could not resolve hash from any server") {
+		t.Errorf("unavailable = %+v", got)
+	}
+}
+
 func TestResolveFailures(t *testing.T) {
 	backend := &fetchtest.Client{}
 	tools := newTools(t, backend, hostHooks())

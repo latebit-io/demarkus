@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit-io/demarkus/server/internal/memtest"
+	"github.com/latebit-io/demarkus/protocol/memtest"
 )
 
 // hasWord resolves a word through the document's vocabulary and checks the set.

@@ -4,10 +4,10 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol/memtest"
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
-	"github.com/latebit-io/demarkus/server/internal/memtest"
 )
 
 // Versions live on disk, so an agent-shaped publish-and-prune loop must leave

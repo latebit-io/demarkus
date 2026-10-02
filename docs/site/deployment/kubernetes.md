@@ -8,9 +8,9 @@ This page covers deploying Demarkus on Kubernetes with the Helm charts in `deplo
 |---|---|---|
 | `demarkus-server` | StatefulSet | Single world over the filesystem store (PVC) |
 | `demarkus-server-common` | library | Shared backend-neutral server templates |
-| `demarkus-agent` | Deployment | Federation crawler: scheduled crawl, hash indexes, graph snapshots |
+| `demarkus-agent` | Deployment | Standalone federation crawler for servers outside a knowledge system: scheduled crawl, hash indexes, graph snapshots |
 | `demarkus-knowledge-server` | Deployment | The knowledge system: multi-world GCS-backed server with the OIDC broker and the MCP gateways in one process (defaults to 2 replicas + PDB) |
-| `demarkus-knowledge-system` | umbrella | Knowledge server, agent and optionally the library from one values file |
+| `demarkus-knowledge-system` | umbrella | Knowledge server and optionally the library from one values file |
 
 Each chart's `README.md` under `deploy/helm/<chart>/` documents every value; this page is the map.
 
@@ -78,7 +78,7 @@ See `deploy/helm/demarkus-knowledge-server/README.md` for the full surface (limi
 
 ## Broker and agent
 
-- The broker half of `demarkus-knowledge-server` (`broker.*` values): the IdP registration, the public URLs of the management host and the two gateways, web clients, agent tokens, and tenant provisioning for the memory gateway (`provisioning.*`). Agents join with `/knowledge-join <broker URL>`; the sweeper is Lease-elected across replicas.
+- The broker half of `demarkus-knowledge-server` (`broker.*` values): the IdP registration, the public URLs of the management host and the two gateways, web clients, the federation graph (`broker.federation`, on for the world marked `hub: true`), and tenant provisioning for the memory gateway (`provisioning.*`). Agents join with `/knowledge-join <broker URL>`; the sweeper and the federation deriver are each Lease-elected across replicas.
 
 - The bearer listener, UDP `server.bearerPort` in the pod and `service.bearerPort` (443) on the Service: mark clients signed in at the IdP put their token in the `auth` field instead of a capability token, and the broker admits each request by the gateways' rules. It is the port for networks that block 6309, and the NetworkPolicy opens it to any source. See the chart README.
 

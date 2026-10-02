@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -51,12 +53,29 @@ const watchQueueSize = 1024
 // three missed heartbeats.
 const watchStall = 3 * protocol.WatchHeartbeatInterval
 
+// WatchStream is one WATCH stream after its request was sent: the blocks to
+// read. A Client opens QUIC streams; NewWatch takes any other transport.
+type WatchStream interface {
+	io.Reader
+	SetReadDeadline(time.Time) error
+	// Abort unblocks a pending read at once; the stream is dead after it.
+	Abort()
+	// Release aborts the stream and hands it back, once; err is why it
+	// ended, nil if cleanly.
+	Release(err error)
+}
+
+// WatchDialer opens a stream to the watched world and sends req on it. ctx
+// bounds opening and sending only; the stream lives until Release.
+type WatchDialer func(ctx context.Context, req protocol.Request) (WatchStream, error)
+
 // Watch is one subscription that outlives its streams: it reopens after a
 // closing block, a lost connection or a stall, resuming from its cursor, and
 // surfaces resync as a Notice.
 type Watch struct {
-	client *Client
-	req    WatchRequest
+	dial             WatchDialer
+	handshakeTimeout time.Duration
+	req              WatchRequest
 
 	notices chan Notice
 	done    chan struct{}
@@ -73,10 +92,16 @@ type Watch struct {
 // server's refusal. Events arrive through Next until ctx ends or the server
 // ends the watch for good.
 func (c *Client) Watch(ctx context.Context, r WatchRequest) (*Watch, error) {
+	return NewWatch(ctx, c.watchDialer(r.Host), r, c.opts.RequestTimeout)
+}
+
+// NewWatch is Client.Watch over any transport: dial opens each stream, and
+// handshakeTimeout bounds opening one through its acknowledgement.
+func NewWatch(ctx context.Context, dial WatchDialer, r WatchRequest, handshakeTimeout time.Duration) (*Watch, error) {
 	if r.Path == "" {
 		return nil, errors.New("WATCH requires a path")
 	}
-	w := &Watch{client: c, req: r, notices: make(chan Notice, watchQueueSize), done: make(chan struct{}), stream: r.Since, consumed: r.Since}
+	w := &Watch{dial: dial, handshakeTimeout: handshakeTimeout, req: r, notices: make(chan Notice, watchQueueSize), done: make(chan struct{}), stream: r.Since, consumed: r.Since}
 	stream, err := w.open(ctx, r.Since)
 	if err != nil {
 		return nil, err
@@ -158,17 +183,79 @@ func (w *Watch) finish(err error) {
 	close(w.done)
 }
 
-// watchStream is one open WATCH stream on a pooled connection.
+// watchStream is one open WATCH stream and the reader over it.
 type watchStream struct {
-	conn   *quic.Conn
-	stream *quic.Stream
+	stream WatchStream
 	reader *protocol.WatchReader
+	// ended is the read error that cut the stream, so a dead connection is
+	// evicted on release; nil after a clean end.
+	ended error
 }
 
-func (s *watchStream) close(c *Client) {
-	s.stream.CancelRead(0)
-	c.release(s.conn)
+func (s *watchStream) close() { s.stream.Release(s.ended) }
+
+// quicWatchStream is a WATCH stream on a pooled connection.
+type quicWatchStream struct {
+	*quic.Stream
+	client *Client
+	host   string
+	conn   *quic.Conn
 }
+
+func (s *quicWatchStream) Abort() { s.CancelRead(0) }
+
+func (s *quicWatchStream) Release(err error) {
+	s.CancelRead(0)
+	s.client.dispose(s.host, s.conn, err)
+}
+
+// watchDialer opens WATCH streams on host's pooled connection.
+func (c *Client) watchDialer(host string) WatchDialer {
+	return func(ctx context.Context, req protocol.Request) (WatchStream, error) {
+		conn, err := c.acquire(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		stream, err := conn.OpenStreamSync(ctx)
+		if err != nil {
+			err = fmt.Errorf("open stream: %w", err)
+			c.dispose(host, conn, err)
+			return nil, err
+		}
+		stop := context.AfterFunc(ctx, func() {
+			stream.CancelRead(0)
+			stream.CancelWrite(0)
+		})
+		err = sendRequest(ctx, stream, req)
+		stop()
+		if err != nil {
+			c.dispose(host, conn, err)
+			return nil, err
+		}
+		return &quicWatchStream{Stream: stream, client: c, host: host, conn: conn}, nil
+	}
+}
+
+// ConnDialer is a WatchDialer over conns that dial opens with req sent, such
+// as an in-process watch. A conn has no pooled connection to evict.
+func ConnDialer(dial func(ctx context.Context, req protocol.Request) (net.Conn, error)) WatchDialer {
+	return func(ctx context.Context, req protocol.Request) (WatchStream, error) {
+		conn, err := dial(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return connStream{conn}, nil
+	}
+}
+
+// connStream is a conn as a WatchStream: closing it unblocks a read.
+type connStream struct{ net.Conn }
+
+func (s connStream) Abort() {
+	s.Close() //nolint:errcheck,gosec // the stream is dead either way; nothing reads why
+}
+
+func (s connStream) Release(error) { s.Abort() }
 
 // errResyncFirst marks a resync given in place of the acknowledgement: the
 // notice is queued and the watch subscribes again from the server's cursor.
@@ -199,41 +286,12 @@ func (w *Watch) open(ctx context.Context, since protocol.Cursor) (*watchStream, 
 	return nil, fmt.Errorf("%w %d times", errResyncFirst, maxRetries)
 }
 
+// subscribe opens a stream from since and reads the first block within the
+// handshake timeout. The reader that read it stays with the stream: its
+// buffer may already hold the blocks that followed.
 func (w *Watch) subscribe(ctx context.Context, since protocol.Cursor) (*watchStream, error) {
-	c := w.client
-	conn, err := c.acquire(ctx, w.req.Host)
-	if err != nil {
-		return nil, err
-	}
-	ws, first, err := w.subscribeOn(ctx, conn, since)
-	if err != nil {
-		c.dispose(w.req.Host, conn, err)
-		return nil, err
-	}
-	if err := w.accept(ctx, first); err != nil {
-		ws.close(c)
-		return nil, err
-	}
-	return ws, nil
-}
-
-// subscribeOn sends the request and reads the first block within the
-// request timeout. The reader that read it stays with the stream: its buffer
-// may already hold the blocks that followed.
-func (w *Watch) subscribeOn(ctx context.Context, conn *quic.Conn, since protocol.Cursor) (*watchStream, protocol.WatchBlock, error) {
-	handshake, cancel := context.WithTimeout(ctx, w.client.opts.RequestTimeout)
+	handshake, cancel := context.WithTimeout(ctx, w.handshakeTimeout)
 	defer cancel()
-	stream, err := conn.OpenStreamSync(handshake)
-	if err != nil {
-		return nil, protocol.WatchBlock{}, fmt.Errorf("open stream: %w", err)
-	}
-	// Stopped before the handshake context ends on success, so the stream
-	// outlives it.
-	stop := context.AfterFunc(handshake, func() {
-		stream.CancelRead(0)
-		stream.CancelWrite(0)
-	})
-	defer stop()
 	meta := map[string]string{}
 	if !since.IsZero() {
 		meta["since"] = since.String()
@@ -241,16 +299,26 @@ func (w *Watch) subscribeOn(ctx context.Context, conn *quic.Conn, since protocol
 	if w.req.Coalesce {
 		meta["coalesce"] = "path"
 	}
-	if err := sendRequest(handshake, stream, newRequest(protocol.VerbWatch, w.req.Path, w.req.Token, meta)); err != nil {
-		return nil, protocol.WatchBlock{}, err
+	stream, err := w.dial(handshake, newRequest(protocol.VerbWatch, w.req.Path, w.req.Token, meta))
+	if err != nil {
+		return nil, err
 	}
-	ws := &watchStream{conn: conn, stream: stream, reader: protocol.NewWatchReader(stream)}
+	// Stopped before the handshake context ends on success, so the stream
+	// outlives it.
+	stop := context.AfterFunc(handshake, stream.Abort)
+	defer stop()
+	ws := &watchStream{stream: stream, reader: protocol.NewWatchReader(stream)}
 	first, err := ws.reader.Next()
 	if err != nil {
-		stream.CancelRead(0)
-		return nil, protocol.WatchBlock{}, &sentError{cause: fmt.Errorf("read acknowledgement: %w", err)}
+		err = &sentError{cause: fmt.Errorf("read acknowledgement: %w", err)}
+		stream.Release(err)
+		return nil, err
 	}
-	return ws, first, nil
+	if err := w.accept(ctx, first); err != nil {
+		ws.close()
+		return nil, err
+	}
+	return ws, nil
 }
 
 // accept applies the first block: ok continues, resync is surfaced and
@@ -284,7 +352,7 @@ func (w *Watch) run(ctx context.Context, stream *watchStream) {
 	backoff := retryDelay
 	for {
 		delay, err := w.pump(ctx, stream)
-		stream.close(w.client)
+		stream.close()
 		if err != nil {
 			w.finish(err)
 			return
@@ -327,10 +395,11 @@ func reopenable(err error) bool {
 // watch survives and reopens after delay: the server said closing, the
 // stream was cut or stalled, or the queue wedged it.
 func (w *Watch) pump(ctx context.Context, s *watchStream) (delay time.Duration, err error) {
-	stop := context.AfterFunc(ctx, func() { s.stream.CancelRead(0) })
+	stop := context.AfterFunc(ctx, s.stream.Abort)
 	defer stop()
 	for {
 		if err := s.stream.SetReadDeadline(time.Now().Add(watchStall)); err != nil {
+			s.ended = err
 			return 0, nil
 		}
 		block, err := s.reader.Next()
@@ -339,6 +408,7 @@ func (w *Watch) pump(ctx context.Context, s *watchStream) (delay time.Duration, 
 		}
 		if err != nil {
 			// A cut stream, a stall or a malformed block: resume from the cursor.
+			s.ended = err
 			return 0, nil
 		}
 		if block.Status == "" {
@@ -381,7 +451,7 @@ func (w *Watch) deliver(ctx context.Context, s *watchStream, n *Notice) bool {
 		return true
 	default:
 	}
-	s.stream.CancelRead(0)
+	s.stream.Abort()
 	select {
 	case w.notices <- *n:
 		return false

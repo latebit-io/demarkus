@@ -49,13 +49,25 @@ type Hub struct {
 	floor   uint64 // seqs at or below it cannot be resumed from: see Skip
 	notify  chan struct{}
 	closed  bool
+	// catching is the catch-up in flight; resumes that arrive meanwhile
+	// share it rather than each polling the store.
+	catching *catchUpFlight
 }
 
-// Backlog is a store's durable record of events older than the ring.
+type catchUpFlight struct {
+	done chan struct{}
+	err  error
+}
+
+// Backlog is a store's durable record of events, shared by every replica
+// that opens the store, so this hub can lag what peers committed.
 type Backlog interface {
 	// Events returns every event with after < Seq <= through, in order, or
 	// an error when it cannot name them all.
 	Events(ctx context.Context, after, through uint64) ([]Event, error)
+	// CatchUp publishes to the hub what peer replicas committed since this
+	// replica last looked. It bounds its own wait: callers may detach ctx.
+	CatchUp(ctx context.Context) error
 }
 
 // New makes a hub. An empty epoch gets a random one, which is right for a
@@ -195,10 +207,13 @@ type Subscription struct {
 	next    uint64  // Seq of the next event to read from the ring
 }
 
-// Subscribe starts a subscription over scope ("/" for everything, a prefix
-// ending in "/" for a subtree, else one document) at the head, or after
-// since, or ErrResync. Only a resume older than the ring does backlog I/O.
+// Subscribe starts a subscription over scope ("/", a "/"-ended subtree, or
+// one document) at the head, after since, or ErrResync. A resume before the
+// ring reads the backlog; one past the head first catches the hub up.
 func (h *Hub) Subscribe(ctx context.Context, scope string, since protocol.Cursor) (*Subscription, error) {
+	if err := h.catchUp(ctx, since); err != nil {
+		return nil, err
+	}
 	h.mu.Lock()
 	head, oldest := h.lastSeq, h.oldest()
 	h.mu.Unlock()
@@ -214,6 +229,54 @@ func (h *Hub) Subscribe(ctx context.Context, scope string, since protocol.Cursor
 		return nil, ErrResync
 	}
 	return h.resume(ctx, scope, since.Seq, oldest-1)
+}
+
+// catchUp asks the store once for peer commits when since is past this
+// hub's head: a resume that moved replicas is not a gap.
+func (h *Hub) catchUp(ctx context.Context, since protocol.Cursor) error {
+	if h.backlog == nil || since.IsZero() || since.Epoch != h.epoch {
+		return nil
+	}
+	ran := false
+	for {
+		h.mu.Lock()
+		if since.Seq <= h.lastSeq {
+			h.mu.Unlock()
+			return nil
+		}
+		flight := h.catching
+		if flight == nil {
+			// One that started before since was committed may have missed it,
+			// so a waiter still behind starts its own, once.
+			if ran {
+				h.mu.Unlock()
+				return nil
+			}
+			flight = &catchUpFlight{done: make(chan struct{})}
+			h.catching = flight
+			// Detached, so the caller that started it leaving fails no waiter.
+			go h.fly(context.WithoutCancel(ctx), flight)
+			ran = true
+		}
+		h.mu.Unlock()
+		select {
+		case <-flight.done:
+		case <-ctx.Done():
+			return fmt.Errorf("%w: catch up: %w", ErrResync, ctx.Err())
+		}
+		if flight.err != nil {
+			return fmt.Errorf("%w: catch up: %w", ErrResync, flight.err)
+		}
+	}
+}
+
+// fly runs one shared catch-up and lets its waiters go.
+func (h *Hub) fly(ctx context.Context, flight *catchUpFlight) {
+	flight.err = h.backlog.CatchUp(ctx)
+	h.mu.Lock()
+	h.catching = nil
+	h.mu.Unlock()
+	close(flight.done)
 }
 
 // resume loads (after, through] from the backlog outside the lock, then

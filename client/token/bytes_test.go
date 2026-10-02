@@ -157,8 +157,7 @@ func TestParseBytesPopulated(t *testing.T) {
 
 func TestParseBytesQuotedLabel(t *testing.T) {
 	// Labels that need quoting in TOML (dots, plus signs) must round-trip
-	// through ParseBytes intact — the broker's drift sweep relies on a
-	// labels-map lookup, not a substring search on the serialized form.
+	// through ParseBytes intact, so callers look labels up by key.
 	existing := []byte(`[tokens."alice@example.com"]` + "\nhash = \"sha256-aaa\"\npaths = [\"/\"]\noperations = [\"read\"]\n")
 	f, err := ParseBytes(existing)
 	if err != nil {

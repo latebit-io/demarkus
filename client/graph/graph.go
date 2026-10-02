@@ -110,12 +110,17 @@ func (g *Graph) AddEdgeInfo(e Edge) { //nolint:gocritic // hugeParam: by value i
 		g.edges = append(g.edges, e)
 		return
 	}
-	cur := &g.edges[i]
-	cur.Count += e.Count
-	if cur.Label == "" && e.Label != "" {
-		cur.Label, cur.Anchor = e.Label, e.Anchor
-	} else if cur.Label == "" && cur.Anchor == "" && e.Anchor != "" {
-		cur.Anchor = e.Anchor
+	g.edges[i].Absorb(&e)
+}
+
+// Absorb folds another occurrence of the edge into e: Counts add, and the
+// first occurrence with a Label supplies Label and Anchor.
+func (e *Edge) Absorb(occurrence *Edge) {
+	e.Count += max(occurrence.Count, 1)
+	if e.Label == "" && occurrence.Label != "" {
+		e.Label, e.Anchor = occurrence.Label, occurrence.Anchor
+	} else if e.Label == "" && e.Anchor == "" && occurrence.Anchor != "" {
+		e.Anchor = occurrence.Anchor
 	}
 }
 

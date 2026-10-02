@@ -3,6 +3,7 @@ package protocol
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -133,6 +134,14 @@ func IsValidMetaKey(k string) bool {
 func IsValidMetaValue(v string) bool {
 	return utf8.ValidString(v) && !strings.ContainsAny(v, "\r\n")
 }
+
+// worldNameRE is a DNS label. A world name is the host of every mark:// URL
+// into the world, a graph key and part of a Secret name, so nothing looser
+// works everywhere; a bad name is rejected, never normalized.
+var worldNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// IsWorldName reports whether name is a valid world name.
+func IsWorldName(name string) bool { return worldNameRE.MatchString(name) }
 
 // ParseMatch validates a LOOKUP match value; empty means catalog. It is the
 // one rule server and clients apply, so a typo is rejected the same way

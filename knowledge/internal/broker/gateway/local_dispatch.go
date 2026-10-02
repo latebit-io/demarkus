@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
@@ -12,11 +14,16 @@ import (
 
 // LocalWorlds serves worlds in process, keyed by the SNI their QUIC clients
 // would present; a protocol.Grant on ctx authorizes a write. Routes answers
-// the startup check; Exchange on an unrouted authority errors, nothing retries.
+// the startup check; an unrouted authority errors, nothing retries.
 type LocalWorlds interface {
 	Routes(authority string) bool
 	Exchange(ctx context.Context, authority string, req protocol.Request) (protocol.Response, error)
+	Watch(ctx context.Context, authority string, req protocol.Request) (net.Conn, error)
 }
+
+// localWatchHandshake bounds opening an in-process watch through its
+// acknowledgement, as a request timeout bounds a QUIC one.
+const localWatchHandshake = 10 * time.Second
 
 // errWorldNotLocal is a write to a world this process does not serve: the
 // grant never leaves the process, so nothing could authorize it there.
@@ -122,6 +129,24 @@ func (c *Composite) Append(ctx context.Context, r fetch.WriteRequest) (fetch.Res
 // Archive dispatches an ARCHIVE to a local world.
 func (c *Composite) Archive(ctx context.Context, r fetch.ArchiveRequest) (fetch.Result, error) {
 	return c.write(ctx, r.Host, r.Request)
+}
+
+// Watch subscribes to a local world's changes in process, with the same
+// reopen, resync and backpressure handling as a QUIC watch. Remote worlds
+// are not watched yet.
+func (c *Composite) Watch(ctx context.Context, r fetch.WatchRequest) (*fetch.Watch, error) {
+	w, ok := c.worlds.Find(r.Host)
+	if !ok {
+		return nil, &errWorldNotFound{worldName: r.Host}
+	}
+	if !w.Local {
+		return nil, fmt.Errorf("watch world %q: %w", r.Host, errWorldNotLocal)
+	}
+	authority := w.Authority()
+	dial := fetch.ConnDialer(func(ctx context.Context, req protocol.Request) (net.Conn, error) {
+		return c.local.Watch(ctx, authority, req)
+	})
+	return fetch.NewWatch(ctx, dial, r, localWatchHandshake)
 }
 
 var _ WorldDispatcher = (*Composite)(nil)

@@ -42,6 +42,11 @@ ARGO_CHART_VERSION="${ARGO_CHART_VERSION:-7.7.0}"
 ARGO_REPO_URL="${ARGO_REPO_URL:-https://argoproj.github.io/argo-helm}"
 # Must match the elements list in deploy/k8s/examples/applicationset.yaml.
 ARGO_WORLDS=(world-a world-b)
+# Federation for the knowledge stage: the hub is the world values-knowledge.yaml
+# marks hub; the cadence is short so the smoke waits seconds (defaults 30s, 1m).
+FEDERATION_HUB=root
+FEDERATION_QUIET_SECONDS=5
+FEDERATION_INTERVAL_SECONDS=10
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." &>/dev/null && pwd)"
@@ -158,17 +163,19 @@ ensure_broker_signing_key() {
     --dry-run=client -o yaml | kubectl apply -f -
 }
 
-# ensure_knowledge_tls self-signs a certificate for the kind world's
-# authority into the knowledge-tls Secret the chart mounts. Nothing verifies
+# ensure_knowledge_tls self-signs a certificate for the kind worlds'
+# authorities into the knowledge-tls Secret the chart mounts. Nothing verifies
 # it in kind: the gateway reaches the world in process and the smoke tests
 # dial with -insecure.
 ensure_knowledge_tls() {
-  local ns="$1" authority="$2" tmpdir
-  echo "--- generating a self-signed QUIC certificate for $authority"
+  local ns="$1" tmpdir sans
+  shift
+  echo "--- generating a self-signed QUIC certificate for $*"
+  sans=$(printf 'DNS:%s,' "$@")
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' RETURN
-  openssl req -x509 -newkey rsa:2048 -nodes -days 7 -subj "/CN=$authority" \
-    -addext "subjectAltName=DNS:$authority" \
+  openssl req -x509 -newkey rsa:2048 -nodes -days 7 -subj "/CN=$1" \
+    -addext "subjectAltName=${sans%,}" \
     -keyout "$tmpdir/tls.key" -out "$tmpdir/tls.crt" 2>/dev/null
   kubectl -n "$ns" create secret tls knowledge-tls \
     --cert="$tmpdir/tls.crt" --key="$tmpdir/tls.key" \
@@ -296,7 +303,7 @@ if [[ "$WITH_KNOWLEDGE" == "true" ]]; then
   # A reused cluster already has them: 409 is fine, anything else fails.
   kubectl run -n "$NAMESPACE" bucket-setup --rm -i --restart=Never \
     --image="$MINT_CURL_IMAGE" --command -- sh -c '
-for bucket in kind-world-default kind-broker-state; do
+for bucket in kind-world-default kind-'"$FEDERATION_HUB"' kind-broker-state; do
   code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" \
     -d "{\"name\":\"$bucket\"}" "http://fake-gcs-server.'"$NAMESPACE"'.svc.cluster.local:4443/storage/v1/b")
   case $code in 200|409) ;; *) echo "bucket create $bucket: HTTP $code"; exit 1 ;; esac
@@ -307,7 +314,9 @@ done'
   kubectl -n "$NAMESPACE" rollout status deployment/mock-oauth2-server --timeout=120s
 
   ensure_broker_signing_key "$NAMESPACE"
-  ensure_knowledge_tls "$NAMESPACE" "world-default.$KNOWLEDGE_RELEASE.$NAMESPACE.svc.cluster.local"
+  ensure_knowledge_tls "$NAMESPACE" \
+    "world-default.$KNOWLEDGE_RELEASE.$NAMESPACE.svc.cluster.local" \
+    "$FEDERATION_HUB.$KNOWLEDGE_RELEASE.$NAMESPACE.svc.cluster.local"
 
   # KNOWLEDGE_IMAGE=<repository>:<tag> runs a published or already loaded
   # image; otherwise the composed image is built from this checkout so the
@@ -345,6 +354,8 @@ done'
     --set-string "broker.webClients[0].clientSecretHash=$WEBCLIENT_SECRET_HASH" \
     --set "broker.webClients[0].redirectURIs[0]=$WEBCLIENT_REDIRECT_URI" \
     --set "broker.webClients[0].name=Web SSO smoke client" \
+    --set "broker.federation.quietPeriod=${FEDERATION_QUIET_SECONDS}s" \
+    --set "broker.federation.interval=${FEDERATION_INTERVAL_SECONDS}s" \
     --wait --timeout 5m
 
   KNOWLEDGE_POD=$(pod_of "$NAMESPACE" "app.kubernetes.io/instance=$KNOWLEDGE_RELEASE,app.kubernetes.io/name=demarkus-knowledge-server")
@@ -417,7 +428,8 @@ echo "OK: POST /mcp 401 + WWW-Authenticate"
     AUTHCODE_CHALLENGE="$(printf '%s' "$AUTHCODE_VERIFIER" \
       | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
 
-    # The one world values-knowledge.yaml configures; the tool calls below use it.
+    # The tool calls below write here; the federation check reads its
+    # checkpoint in the hub.
     MCP_SMOKE_WORLD="world-default"
     echo "--- driving auth-code + PKCE flow, then MCP tool calls, from an ephemeral curl pod"
     BROKER_OAUTH_URL="$KNOWLEDGE_HTTP_URL"
@@ -646,8 +658,69 @@ refused "metadata that is not an object is refused" "metadata must be an object"
 tool mark_archive "{\"url\":\"$DOC\"}"
 want "mark_archive retires the smoke document" "archived: true"
 echo "OK: MCP tool calls end-to-end through the gateway"
+
+# 8. FEDERATION: an edit reaches the checkpoint of its world in the hub
+#    within quietPeriod + interval + two 1.5 s commits (shard, manifest),
+#    plus 2 s of polling. The deriver holds no token.
+HUB='"$FEDERATION_HUB"'
+QUIET='"$FEDERATION_QUIET_SECONDS"'
+INTERVAL='"$FEDERATION_INTERVAL_SECONDS"'
+MANIFEST="mark://$HUB/graph/worlds/$WORLD/manifest.md"
+# The first checkpoint follows the startup rebuild of every world.
+for attempt in $(seq 1 60); do
+  tool mark_fetch "{\"url\":\"$MANIFEST\",\"force\":true}"
+  grep -q "Format: demarkus-graph-world/v1" /tmp/rpc.out && break
+  sleep 2
+done
+want "the hub holds a checkpoint of $WORLD" "Format: demarkus-graph-world/v1"
+FED_PATH="/smoke/federation-$CLIENT_STATE.md"
+tool mark_publish "{\"url\":\"mark://$WORLD$FED_PATH\",\"body\":\"# Federation smoke\\n\\nSee [tools]($DOC).\\n\",\"expected_version\":0,\"metadata\":{\"tags\":\"smoke\"}}"
+want "mark_publish creates the federation smoke document" "version: 1"
+START=$(date +%s)
+BOUND=$((QUIET + INTERVAL + 5))
+# Polls the manifest, which is written last and names the shard (its prefix
+# grows with the world); the shard is read only when its pin moves.
+SEEN=""
+while :; do
+  tool mark_fetch "{\"url\":\"$MANIFEST\",\"force\":true}"
+  LEN=$(grep -o "Prefix-Length: [0-9]*" /tmp/rpc.out | cut -d" " -f2)
+  SHARD="/graph/worlds/$WORLD/$(printf "%s" "$FED_PATH" | sha256sum | cut -c1-"${LEN:-1}").md"
+  PIN=$(grep -o "| $SHARD | [0-9]* |" /tmp/rpc.out || true)
+  if [ -n "$PIN" ] && [ "$PIN" != "$SEEN" ]; then
+    SEEN=$PIN
+    tool mark_fetch "{\"url\":\"mark://$HUB$SHARD\",\"force\":true}"
+    VERSION=$(grep -o "version: [0-9]*" /tmp/rpc.out | head -1 | cut -d" " -f2)
+    if [ "$PIN" = "| $SHARD | $VERSION |" ] && grep -q "$FED_PATH" /tmp/rpc.out && grep -q "$DOC" /tmp/rpc.out; then
+      break
+    fi
+  fi
+  if [ $(($(date +%s) - START)) -ge "$BOUND" ]; then
+    echo "FAIL: the edit did not reach $MANIFEST within $BOUND s (last pin: [$SEEN])"; cat /tmp/rpc.out; exit 1
+  fi
+  sleep 1
+done
+echo "OK: the edit and its link reached the hub manifest in $(($(date +%s) - START)) s (bound $BOUND s)"
+# The export follows its checkpoint: at most one interval more, plus its commit.
+EXPORT_BOUND=$((BOUND + INTERVAL + 2))
+until tool mark_fetch "{\"url\":\"mark://$HUB/graph.md\",\"force\":true}" && grep -q "mark://$WORLD$FED_PATH" /tmp/rpc.out; do
+  if [ $(($(date +%s) - START)) -ge "$EXPORT_BOUND" ]; then
+    echo "FAIL: the edit did not reach mark://$HUB/graph.md within $EXPORT_BOUND s"; cat /tmp/rpc.out; exit 1
+  fi
+  sleep 1
+done
+echo "OK: the edit reached the hub /graph.md in $(($(date +%s) - START)) s (bound $EXPORT_BOUND s)"
+tool mark_archive "{\"url\":\"mark://$WORLD$FED_PATH\"}"
+want "mark_archive retires the federation smoke document" "archived: true"
 '
     echo "--- auth-code + PKCE flow and MCP tool calls passed"
+
+    # The federation step above ran with no token: none of the Secrets the
+    # chart or broker would hold a hub token in may exist.
+    HUB_TOKEN_SECRETS=$(kubectl -n "$NAMESPACE" get secret --ignore-not-found -o name \
+      "$FEDERATION_HUB-token-values" "$FEDERATION_HUB-tokens" "$FEDERATION_HUB-static-tokens" \
+      "demarkus-broker-agent-token-$FEDERATION_HUB")
+    [[ -z "$HUB_TOKEN_SECRETS" ]] || { echo "FAIL: token Secrets for the hub: $HUB_TOKEN_SECRETS" >&2; exit 1; }
+    echo "--- federation ran with no token Secret for the hub"
 
     # Confidential web-client flow (phase-1b web SSO). Proves the chart's
     # webClients rendering reached the broker AND the broker enforces the

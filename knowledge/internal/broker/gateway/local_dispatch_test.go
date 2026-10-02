@@ -3,8 +3,11 @@ package gateway
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
@@ -13,11 +16,38 @@ import (
 )
 
 // fakeLocal routes the authorities it knows; err fails every exchange.
+// A watch is answered with blocks, then held open until it is closed.
 type fakeLocal struct {
-	served map[string]protocol.Response
-	calls  []protocol.Request
-	grants []protocol.Grant
-	err    error
+	served  map[string]protocol.Response
+	calls   []protocol.Request
+	grants  []protocol.Grant
+	err     error
+	blocks  []protocol.WatchBlock
+	watches chan protocol.Request
+	t       *testing.T // reports the watch's pipe errors
+}
+
+func (f *fakeLocal) Watch(_ context.Context, authority string, req protocol.Request) (net.Conn, error) {
+	if !f.Routes(authority) {
+		return nil, errors.New("unrouted authority")
+	}
+	f.watches <- req
+	client, server := net.Pipe()
+	go func() {
+		for _, block := range f.blocks {
+			if _, err := block.WriteTo(server); err != nil {
+				return
+			}
+		}
+		// Held open until the client end closes it.
+		if _, err := io.Copy(io.Discard, server); err != nil {
+			f.t.Errorf("drain watch: %v", err)
+		}
+		if err := server.Close(); err != nil {
+			f.t.Errorf("close watch: %v", err)
+		}
+	}()
+	return client, nil
 }
 
 func (f *fakeLocal) Routes(authority string) bool {
@@ -182,5 +212,44 @@ func TestCheckLocalRequiresTheServerToRouteEveryLocalWorld(t *testing.T) {
 	}
 	if err := CheckLocal(brokertest.NewConfig().Registry(), nil); err != nil {
 		t.Fatalf("remote only worlds need no server: %v", err)
+	}
+}
+
+func TestCompositeWatchesLocalWorldInProcess(t *testing.T) {
+	cursor := protocol.Cursor{Epoch: "e1", Seq: 4}
+	local := &fakeLocal{
+		served:  map[string]protocol.Response{"team-a.team-a.svc.cluster.local": {}},
+		watches: make(chan protocol.Request, 1),
+		t:       t,
+		blocks: []protocol.WatchBlock{
+			protocol.WatchControl(protocol.StatusOK, cursor),
+			protocol.WatchEvent{Cursor: protocol.Cursor{Epoch: "e1", Seq: 5}, Path: "/a.md", Version: 2, Op: protocol.OpPublish}.Block(),
+		},
+	}
+	c := NewComposite(localConfig().Registry(), local, &fakeDispatcher{})
+	w, err := c.Watch(context.Background(), fetch.WatchRequest{Host: "team-a", Path: "/", Since: protocol.Cursor{Epoch: "e1", Seq: 3}})
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	defer w.Close()
+	if req := <-local.watches; req.Verb != protocol.VerbWatch || req.Path != "/" || req.Metadata["since"] != "e1:3" {
+		t.Errorf("wire request = %+v, want WATCH / since e1:3", req)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	n, err := w.Next(ctx)
+	if err != nil || n.Resync || n.Event.Path != "/a.md" || n.Event.Version != 2 {
+		t.Fatalf("notice = %+v, %v; want publish /a.md v2", n, err)
+	}
+}
+
+func TestCompositeWatchRefusesRemoteAndUnknownWorlds(t *testing.T) {
+	c := NewComposite(brokertest.NewConfig().Registry(), &fakeLocal{}, &fakeDispatcher{})
+	if _, err := c.Watch(context.Background(), fetch.WatchRequest{Host: "team-a", Path: "/"}); !errors.Is(err, errWorldNotLocal) {
+		t.Errorf("remote world err = %v, want errWorldNotLocal", err)
+	}
+	var unknown *errWorldNotFound
+	if _, err := c.Watch(context.Background(), fetch.WatchRequest{Host: "nope", Path: "/"}); !errors.As(err, &unknown) {
+		t.Errorf("unknown world err = %v, want errWorldNotFound", err)
 	}
 }

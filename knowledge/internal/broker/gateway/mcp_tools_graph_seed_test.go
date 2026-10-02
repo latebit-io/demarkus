@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
@@ -101,7 +102,7 @@ func agentContractGolden(t *testing.T) string {
 // every world-address row translated.
 func TestSeedConsumesAgentExportContract(t *testing.T) {
 	cfg := mcpTestConfig()
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub", TokensSecret: "hub-tokens"})
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub"})
 	body := agentContractGolden(t)
 	d := &fakeDispatcher{
 		FetchFn: unavailableSeedSource,
@@ -201,7 +202,7 @@ func TestSeedTranslatesInternalAddressesToWorldNames(t *testing.T) {
 // configured world is checked, not just the one in the query URL.
 func TestSeedFindsAggregateOnAnotherWorld(t *testing.T) {
 	cfg := mcpTestConfig()
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub", TokensSecret: "hub-tokens"})
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub"})
 	d := &fakeDispatcher{
 		FetchFn: unavailableSeedSource,
 		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
@@ -288,5 +289,59 @@ func TestHandleMarkExploreBacklinksSeeded(t *testing.T) {
 	text := toolResultText(t, res)
 	if !strings.Contains(text, "## Backlinks (1)") || !strings.Contains(text, "Page A") {
 		t.Errorf("explore backlinks not seeded:\n%s", text)
+	}
+}
+
+// A federated world seeds from its checkpoint in the hub, not from its own
+// published graph; a world outside the federation never probes the hub.
+func TestSeedReadsTheWorldCheckpointFromTheHub(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds[0].Local = true
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub"})
+	cfg.Federation.Hub = "hub"
+	a := graphstore.WorldSource{Path: "/a.md", Version: 3, Title: "Page A", Edges: []graphstore.WorldEdge{{To: "mark://team-a/b.md", Count: 1}}}
+	shard, err := graphstore.BuildWorldShard("team-a", graphstore.SourcePrefix(a.Path, 1), []graphstore.WorldSource{a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := graphstore.BuildWorldManifest(graphstore.WorldManifest{
+		World: "team-a", Cursor: protocol.Cursor{Epoch: "e1", Seq: 9}, Complete: true, PrefixLength: 1,
+		Shards: []graphstore.WorldShardRef{shard.Ref(1)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := func(body string) fetch.Result {
+		return fetchtest.Head(body, 1, map[string]string{"content-hash": generation.BodyHash(body)})
+	}
+	d := &fakeDispatcher{
+		Published: map[string]fetch.Result{
+			"hub" + graphstore.WorldManifestPath("team-a"): doc(manifest),
+			"hub" + protocol.VersionPath(shard.Path, 1):    doc(shard.Body),
+		},
+		FetchFn: unavailableSeedSource,
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+
+	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
+		"url": "mark://team-a/b.md",
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkBacklinks: %v", err)
+	}
+	if text := toolResultText(t, res); !strings.Contains(text, "mark://team-a/a.md") || !strings.Contains(text, "Page A") {
+		t.Errorf("checkpoint backlink missing:\n%s", text)
+	}
+	d.Lock()
+	defer d.Unlock()
+	for _, c := range d.SeedCalls {
+		if c.Host == "team-a" {
+			t.Errorf("team-a's own graph was read at %s though its checkpoint exists", c.Path)
+		}
+	}
+	for _, c := range d.FetchCalls {
+		if c.Host == "hub" && strings.Contains(c.Path, "/graph/worlds/hub/") {
+			t.Errorf("the hub, outside the federation here, was probed for a checkpoint at %s", c.Path)
+		}
 	}
 }

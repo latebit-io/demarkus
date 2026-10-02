@@ -496,17 +496,6 @@ func TestCrawlerHashesGraphExportWithoutRecrawlingIt(t *testing.T) {
 	}
 }
 
-func TestGeneratedGraphPathScope(t *testing.T) {
-	for _, docPath := range []string{"/graph.md", "/graph/manifest.md", "/graph/shards/a/nodes-000.md"} {
-		if !isGeneratedGraphPath(docPath) {
-			t.Errorf("generated path %q was not recognized", docPath)
-		}
-	}
-	if isGeneratedGraphPath("/graph/authored.md") {
-		t.Fatal("authored /graph document was treated as generated")
-	}
-}
-
 func TestCrawlerMaxDocuments(t *testing.T) {
 	t.Run("single_server", func(t *testing.T) {
 		cfg := DefaultConfig()
@@ -1049,7 +1038,7 @@ func TestRecordEdgesResolvesDocumentRelativeTargets(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			crawler := NewCrawler(DefaultConfig(), nil, nil, nil)
-			crawler.recordEdges("example.com:6309", test.source, "# Source\n\n[reference]("+test.destination+")\n", nil)
+			crawler.recordEdges("example.com:6309", test.source, &protocol.Response{Body: "# Source\n\n[reference](" + test.destination + ")\n"})
 
 			edges := crawler.graph.GetEdges()
 			if len(edges) != 1 {
@@ -1140,26 +1129,6 @@ func TestCrawlerGraphExportFiltersLoopbackAndNormalizesPorts(t *testing.T) {
 	// the external target is kept, normalized to identity form (ADR 0005).
 	if !containsMiddle(exp, "mark://a.example.com/index.md | mark://ext.example.com/page.md") {
 		t.Errorf("graph export missing normalized external edge\n---\n%s", exp)
-	}
-}
-
-func TestIsLoopbackHost(t *testing.T) {
-	cases := map[string]bool{
-		"127.0.0.1:6401":        true,  // IPv4 loopback + port
-		"localhost":             true,  // bare localhost
-		"localhost:6309":        true,  // localhost + port
-		"0.0.0.0:6309":          true,  // unspecified
-		"[::1]:6309":            true,  // bracketed IPv6 loopback + port
-		"::1":                   true,  // bare IPv6 loopback
-		"::1:6309":              true,  // unbracketed IPv6 loopback + port
-		"soul.demarkus.io:6309": false, // real external world
-		"10.0.0.5:6309":         false, // private IP — a real LAN/cluster world, kept
-		"2001:db8::5":           false, // routable IPv6
-	}
-	for in, want := range cases {
-		if got := isLoopbackHost(in); got != want {
-			t.Errorf("isLoopbackHost(%q) = %v, want %v", in, got, want)
-		}
 	}
 }
 

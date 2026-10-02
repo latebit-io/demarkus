@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit-io/demarkus/server/internal/memtest"
+	"github.com/latebit-io/demarkus/protocol/memtest"
 )
 
 func TestParseImportance(t *testing.T) {

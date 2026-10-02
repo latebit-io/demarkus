@@ -115,13 +115,9 @@ func sameEntry(a, b *Entry) bool {
 		slices.Equal(a.Paths, b.Paths) && slices.Equal(a.Operations, b.Operations)
 }
 
-// ParseBytes decodes tokens.toml bytes into a File. An empty input
-// returns an empty File with Tokens initialized to a non-nil map, the
-// same convention ReadFile uses. The broker calls this to inspect a
-// world's tokens Secret directly — drift detection in the expiry
-// sweeper compares broker-side issuance labels against the labels
-// actually present in the world's TOML, and a quoted-key parse here is
-// safer than a substring search on the serialized bytes.
+// ParseBytes decodes tokens.toml bytes into a File, for callers holding the
+// file elsewhere (a Kubernetes Secret). An empty input returns an empty File
+// with a non-nil Tokens map, as ReadFile does.
 func ParseBytes(existing []byte) (File, error) {
 	f := File{Tokens: make(map[string]Entry)}
 	if len(existing) == 0 {
@@ -137,8 +133,8 @@ func ParseBytes(existing []byte) (File, error) {
 }
 
 // AppendBytes is AppendEntry without the flock/atomic-publish layer, for
-// Secret-writing callers like the knowledge broker. Result is byte-equal to
-// existing + FormatEntry (comments and ordering preserved); ErrLabelExists / ErrNilEntry.
+// Secret-writing callers. Result is byte-equal to existing + FormatEntry
+// (comments and ordering preserved); ErrLabelExists / ErrNilEntry.
 func AppendBytes(existing []byte, label string, entry *Entry) ([]byte, error) {
 	if entry == nil {
 		return nil, ErrNilEntry
@@ -146,14 +142,9 @@ func AppendBytes(existing []byte, label string, entry *Entry) ([]byte, error) {
 	return appendChecked(existing, label, entry)
 }
 
-// RemoveBytes returns tokens.toml bytes with the given label removed. If
-// the label is not present in existing, the original bytes are returned
-// unchanged with a nil error — revoke-of-missing is not an error condition,
-// matching the broker's expiry-sweeper and idempotent-DELETE semantics.
-//
-// Re-encoding does not preserve original formatting (comments, ordering);
-// this is the rewrite path the broker uses on the Kubernetes Secret, the
-// in-memory analogue of WriteFile, not AppendEntry.
+// RemoveBytes returns tokens.toml bytes without label; a missing label
+// returns existing unchanged, so a revoke is idempotent. Like WriteFile, and
+// unlike AppendEntry, it re-encodes, dropping comments and ordering.
 func RemoveBytes(existing []byte, label string) ([]byte, error) {
 	if len(existing) == 0 {
 		return existing, nil

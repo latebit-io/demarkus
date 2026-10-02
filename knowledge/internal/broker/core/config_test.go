@@ -32,7 +32,6 @@ __SIGNING_KEY_BLOCK__
 worlds:
   - name: team-a
     namespace: team-a
-    tokensSecret: team-a-tokens
     allow:
       domains: ["example.com"]
     writeScope:
@@ -68,7 +67,6 @@ func init() {
 const validWorldBlock = `worlds:
   - name: team-a
     namespace: team-a
-    tokensSecret: team-a-tokens
     allow:
       domains: ["example.com"]
     writeScope:
@@ -208,18 +206,8 @@ func TestLoadConfig(t *testing.T) {
 		},
 		{
 			name:    "duplicate world name",
-			body:    validConfig + "  - name: team-a\n    namespace: team-a\n    tokensSecret: team-a-tokens\n    writeScope:\n      paths: [\"/x\"]\n",
+			body:    validConfig + "  - name: team-a\n    namespace: team-a\n    writeScope:\n      paths: [\"/x\"]\n",
 			wantErr: `duplicate name "team-a"`,
-		},
-		{
-			name:    "duplicate world tokens Secret reference",
-			body:    validConfig + "  - name: team-b\n    namespace: team-a\n    tokensSecret: team-a-tokens\n    writeScope:\n      paths: [\"/x\"]\n",
-			wantErr: `duplicate tokens Secret reference "team-a/team-a-tokens"`,
-		},
-		{
-			name:    "normalized duplicate world tokens Secret reference",
-			body:    validConfig + "  - name: team-b\n    namespace: \" TEAM-A \"\n    tokensSecret: \" TEAM-A-TOKENS \"\n    writeScope:\n      paths: [\"/x\"]\n",
-			wantErr: `duplicate tokens Secret reference "team-a/team-a-tokens"`,
 		},
 		{
 			name:    "uppercase world name",
@@ -244,19 +232,14 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name:    "whitespace-only world namespace",
 			body:    strings.Replace(validConfig, "namespace: team-a", `namespace: "   "`, 1),
-			wantErr: "namespace is required",
+			wantErr: "namespace or internalAddress is required",
 		},
 		{
-			name:    "whitespace-only world tokens Secret",
-			body:    strings.Replace(validConfig, "tokensSecret: team-a-tokens", `tokensSecret: "   "`, 1),
-			wantErr: "tokensSecret is required",
-		},
-		{
-			name: "same tokens Secret name in different namespace",
-			body: validConfig + "  - name: team-b\n    namespace: team-b\n    tokensSecret: team-a-tokens\n    writeScope:\n      paths: [\"/x\"]\n",
+			name: "an internal address needs no namespace",
+			body: strings.Replace(validConfig, "namespace: team-a", `internalAddress: "team-a.example.com:6309"`, 1),
 			validate: func(t *testing.T, c *Config) {
-				if len(c.Worlds) != 2 {
-					t.Errorf("worlds = %+v", c.Worlds)
+				if got := c.Worlds[0].Address(); got != "team-a.example.com:6309" {
+					t.Errorf("Address() = %q, want the internal address", got)
 				}
 			},
 		},
@@ -678,8 +661,8 @@ func TestLoadConfig(t *testing.T) {
 			// PR1 only asserts the field round-trips through YAML.
 			name: "publicURL round-trips through YAML",
 			body: strings.Replace(validConfig,
-				"tokensSecret: team-a-tokens",
-				"tokensSecret: team-a-tokens\n    publicURL: \"mark://team-a.cluster.local:6309\"", 1),
+				"namespace: team-a",
+				"namespace: team-a\n    publicURL: \"mark://team-a.cluster.local:6309\"", 1),
 			validate: func(t *testing.T, c *Config) {
 				want := "mark://team-a.cluster.local:6309"
 				if c.Worlds[0].PublicURL != want {
@@ -803,6 +786,17 @@ func TestLoadConfig(t *testing.T) {
 				"publicURL: \"https://broker.example.com\"",
 				"publicURL: \"https://broker.example.com\"\n  refreshTokensSecret: my-refresh-tokens", 1),
 			wantErr: "refreshTokensSecret",
+		},
+		{
+			// The federation deriver writes the hub under a grant: no token.
+			name:    "a world's tokensSecret is no longer a setting",
+			body:    strings.Replace(validConfig, "namespace: team-a", "namespace: team-a\n    tokensSecret: team-a-tokens", 1),
+			wantErr: "tokensSecret",
+		},
+		{
+			name:    "agentTokens is no longer a setting",
+			body:    validConfig + "agentTokens:\n  - world: team-a\n    secret: team-a-token-values\n    key: admin\n",
+			wantErr: "agentTokens",
 		},
 	}
 	for _, tt := range tests {

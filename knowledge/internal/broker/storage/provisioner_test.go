@@ -17,6 +17,7 @@ import (
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/protocol"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -114,7 +115,7 @@ func TestEnsureTenantProvisionsAndConverges(t *testing.T) {
 	if !strings.HasPrefix(world.Name, "eve-adams-") {
 		t.Errorf("world name = %q", world.Name)
 	}
-	if !world.Local || world.TokensSecret != "" || world.InternalAddress != world.Name+".memory-worlds.svc.cluster.local:6309" {
+	if !world.Local || world.InternalAddress != world.Name+".memory-worlds.svc.cluster.local:6309" {
 		t.Errorf("world template wrong: %+v", world)
 	}
 	if len(world.Allow.Emails) != 1 || world.Allow.Emails[0] != "eve.adams@example.com" {
@@ -804,7 +805,7 @@ func TestDeprovisionTenantRemovesEverything(t *testing.T) {
 // the same rule, whatever the email looks like.
 func TestTenantSlugIsAlwaysAValidWorldName(t *testing.T) {
 	for _, email := range []string{"Eve.Adams+x@example.com", "___@example.com", "", "-lead-@example.com", strings.Repeat("a", 80) + "@example.com", "日本@example.com"} {
-		if slug := TenantSlug("https://issuer", "sub", email); !core.WorldNameRE.MatchString(slug) {
+		if slug := TenantSlug("https://issuer", "sub", email); !protocol.IsWorldName(slug) {
 			t.Errorf("tenantSlug(%q) = %q, not a valid world name", email, slug)
 		}
 	}

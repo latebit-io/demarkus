@@ -580,3 +580,45 @@ func TestIdleFanoutHoldsNothing(t *testing.T) {
 		t.Fatalf("fresh watch saw %s", got)
 	}
 }
+
+// peerBacklog is a store shared with a peer replica: CatchUp publishes the
+// peer's commits this hub has not seen.
+type peerBacklog struct {
+	hub     *changefeed.Hub
+	pending []string // paths the peer committed, in order
+}
+
+func (b *peerBacklog) Events(context.Context, uint64, uint64) ([]changefeed.Event, error) {
+	return nil, errors.New("no sealed changes")
+}
+
+func (b *peerBacklog) CatchUp(context.Context) error {
+	for _, path := range b.pending {
+		publish(b.hub, path)
+	}
+	b.pending = nil
+	return nil
+}
+
+// A watch that moved here from a replica further ahead resumes once the hub
+// catches up, from after its cursor: nothing it saw there is replayed.
+func TestResumeAheadOfTheRingCatchesUpWithoutReplay(t *testing.T) {
+	backlog := &peerBacklog{}
+	hub := changefeed.NewWithBacklog("w", 0, backlog)
+	backlog.hub = hub
+	f := newFanout(t, hub, Config{})
+	attached := serve(t, f, Request{Scope: "/"})
+	attached.ack(t)
+	publish(hub, "/local.md")
+	waitAppended(t, f, 1)
+	backlog.pending = []string{"/peer-2.md", "/peer-3.md"}
+
+	since := protocol.Cursor{Epoch: "w", Seq: 2}
+	moved := serve(t, f, Request{Scope: "/", Since: since})
+	if got := moved.ack(t); got != since {
+		t.Fatalf("ack = %v, want since %v", got, since)
+	}
+	if got := moved.event(t).Path; got != "/peer-3.md" {
+		t.Fatalf("first event = %s, want /peer-3.md with nothing replayed", got)
+	}
+}

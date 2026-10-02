@@ -2,6 +2,7 @@ package marktools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -12,19 +13,32 @@ import (
 
 // ResolveArgs are mark_resolve's arguments.
 type ResolveArgs struct {
-	Hash  string // sha256-<hex>
-	Index string // url of a hash index; required, checked after the hash
+	Hash string // sha256-<hex>
+	// Index is the url of a hash index, checked after the hash. Empty asks
+	// the surface's HashSources, and is refused by a surface without them.
+	Index string
 }
 
-// ResolveHash answers mark_resolve: find hash in an index, then fetch it from
-// the first listed server that really holds that content.
+// ResolveHash answers mark_resolve: find hash in an index, or ask every
+// server the surface reads, then fetch it from the first that really holds
+// that content.
 func (t *Tools) ResolveHash(ctx context.Context, args ResolveArgs) Result {
 	hash, ok := protocol.IsHashPath(args.Hash)
 	if !ok {
 		return failure("invalid hash format: expected sha256-<64 lowercase hex characters>")
 	}
 	if args.Index == "" {
-		return failure("index is required")
+		if t.hooks.HashSources == nil {
+			return failure("index is required")
+		}
+		servers := t.hooks.HashSources(ctx)
+		if len(servers) == 0 {
+			return failure("hash %s: no server to ask", hash)
+		}
+		if res, absent := t.firstHolder(ctx, hash, servers); !absent {
+			return res
+		}
+		return failure("hash %s is held by none of the %d servers asked", hash, len(servers))
 	}
 	indexAt, err := t.hooks.Resolve(ctx, args.Index)
 	if err != nil {
@@ -49,16 +63,32 @@ func (t *Tools) ResolveHash(ctx context.Context, args ResolveArgs) Result {
 	if len(matches) == 0 {
 		return failure("hash %s not found in index", hash)
 	}
+	servers := make([]string, len(matches))
+	for i := range matches {
+		servers[i] = matches[i].Server
+	}
+	res, _ := t.firstHolder(ctx, hash, servers) // the index named them: absent is stale, not settled
+	return res
+}
 
+// errNotHeld is a server's answer that it has no document with the hash.
+var errNotHeld = errors.New(protocol.StatusNotFound)
+
+// firstHolder fetches hash from the first server that really holds it.
+// absent is whether every server said it holds no such document; any other
+// failure leaves the answer inconclusive.
+func (t *Tools) firstHolder(ctx context.Context, hash string, servers []string) (res Result, absent bool) {
 	var lastErr error
-	for _, m := range matches {
-		result, err := t.fetchByHash(ctx, m.Server, hash)
+	absent = true
+	for _, server := range servers {
+		result, err := t.fetchByHash(ctx, server, hash)
 		if err == nil {
-			return text(mcpfmt.Full(result, "version", "modified", "content-hash"))
+			return text(mcpfmt.Full(result, "version", "modified", "content-hash")), false
 		}
+		absent = absent && errors.Is(err, errNotHeld)
 		lastErr = err
 	}
-	return failure("could not resolve hash from any server: %v", lastErr)
+	return failure("could not resolve hash from any server: %v", lastErr), absent
 }
 
 // fetchByHash reads hash from one candidate server and checks that the server
@@ -71,6 +101,9 @@ func (t *Tools) fetchByHash(ctx context.Context, server, hash string) (fetch.Res
 	result, err := t.fetch(ctx, at, "/"+hash)
 	if err != nil {
 		return fetch.Result{}, fmt.Errorf("%s: %s", server, t.errText(SiteResolveCandidate, at.Host, err))
+	}
+	if result.Response.Status == protocol.StatusNotFound {
+		return fetch.Result{}, fmt.Errorf("%s: %w", server, errNotHeld)
 	}
 	if result.Response.Status != protocol.StatusOK {
 		return fetch.Result{}, fmt.Errorf("%s: %s", server, result.Response.Status)

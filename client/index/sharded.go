@@ -222,19 +222,9 @@ func HashPrefix(hash string) (string, error) {
 
 // VerifyShard validates a fetched shard against its manifest descriptor.
 func VerifyShard(ref ShardRef, resp protocol.Response) ([]Entry, error) {
-	if resp.Status != protocol.StatusOK {
-		return nil, fmt.Errorf("shard %s returned %s", ref.Path, resp.Status)
-	}
-	version, err := parsePositive("version", resp.Metadata["version"])
-	if err != nil || version != ref.Version {
-		return nil, fmt.Errorf("shard %s version mismatch: got %q, want %d", ref.Path, resp.Metadata["version"], ref.Version)
-	}
-	if len(resp.Body) != ref.Bytes {
-		return nil, fmt.Errorf("shard %s byte count mismatch: got %d, want %d", ref.Path, len(resp.Body), ref.Bytes)
-	}
-	bodyHash := generation.BodyHash(resp.Body)
-	if bodyHash != ref.ContentHash || resp.Metadata["content-hash"] != ref.ContentHash {
-		return nil, fmt.Errorf("shard %s content hash mismatch", ref.Path)
+	pin := generation.Pin{Path: ref.Path, Version: ref.Version, ContentHash: ref.ContentHash, Bytes: ref.Bytes}
+	if err := generation.VerifyPinned(pin, resp); err != nil {
+		return nil, fmt.Errorf("shard: %w", err)
 	}
 	prefix, part, entries, err := parseShard(resp.Body)
 	if err != nil {

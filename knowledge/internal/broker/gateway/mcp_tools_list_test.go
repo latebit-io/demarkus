@@ -135,7 +135,8 @@ func TestMCPToolsExposeRequiredArguments(t *testing.T) {
 		},
 		{
 			tool:         "mark_resolve",
-			wantRequired: []string{"hash", "index"},
+			wantRequired: []string{"hash"},
+			wantOptional: []string{"index"},
 		},
 		{
 			tool:         "mark_index",

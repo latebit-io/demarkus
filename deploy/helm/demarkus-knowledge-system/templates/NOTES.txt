@@ -1,17 +1,17 @@
+{{- /* The knowledge chart's own rule, over its merged values. */}}
+{{- $hub := include "demarkus-knowledge-server.federationHub" (dict "Values" .Values.knowledge "Release" .Release "Chart" .Chart) -}}
 demarkus-knowledge-system installed as release {{ .Release.Name | quote }} in namespace {{ .Release.Namespace | quote }}.
 
 == Worlds ({{ len .Values.global.worlds }}) ==
 {{- range .Values.global.worlds }}
-  - {{ .name }}{{ if .hub }} (hub){{ end }}: authority {{ .name }}.{{ default (printf "%s.%s.svc.cluster.local" $.Values.global.knowledgeService $.Release.Namespace) $.Values.global.authorityDomain }}, tokens Secret {{ .name }}-tokens
+  - {{ .name }}{{ if eq .name $hub }} (hub){{ end }}: authority {{ .name }}.{{ default (printf "%s.%s.svc.cluster.local" $.Values.global.knowledgeService $.Release.Namespace) $.Values.global.authorityDomain }}, tokens Secret {{ .name }}-tokens
 {{- end }}
 
 == Components ==
   knowledge: {{ if .Values.knowledge.enabled }}{{ .Values.global.knowledgeService }}.{{ .Release.Namespace }}.svc.cluster.local:6309 (QUIC), broker {{ .Values.knowledge.broker.publicURL }}{{ else }}disabled{{ end }}
-  agent:     {{ if .Values.agent.enabled }}{{ .Values.agent.fullnameOverride }}{{ else }}disabled{{ end }}
   library:   {{ if .Values.library.enabled }}{{ .Values.library.fullnameOverride }}{{ else }}disabled{{ end }}
 
 {{- $knowledge := .Values.global.knowledgeService }}
-{{- $hub := "" }}{{ range .Values.global.worlds }}{{ if .hub }}{{ $hub = .name }}{{ end }}{{ end }}
 
 {{ if .Values.knowledge.tokens.bootstrap.enabled -}}
 The knowledge chart's bootstrap Job creates each missing <world>-tokens Secret
@@ -20,8 +20,11 @@ on install and upgrade.
 Identities write through the gateway under each world's allow and writeScope;
 no token Secret is needed for that.
 {{- end }}
-{{- if and .Values.agent.enabled $hub }}
-The broker issues the agent's hub token into {{ $hub }}-token-values.
+{{- if $hub }}
+The federation graph of every world is derived in process into {{ $hub }}'s
+/graph/worlds/ and /graph.md, with no token.
+{{- else }}
+No world is marked hub, so no federation graph is derived.
 {{- end }}
 On first start the broker generates its signing key into {{ $knowledge }}-signing-key
 and its state cookie key into {{ $knowledge }}-cookie-key.
