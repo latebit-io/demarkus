@@ -144,6 +144,12 @@ func checkpointState(entry *shardEntry) (*pathState, error) {
 	}, nil
 }
 
+// applyError is a slot that failed to apply. The snapshot may then hold part
+// of it, so nothing built on it is served.
+type applyError struct{ error }
+
+func (err *applyError) Unwrap() error { return err.error }
+
 // replayOptions names the world, the read parallelism, who hears of each
 // applied slot, and where changed live paths are collected (nil drops them).
 type replayOptions struct {
@@ -179,7 +185,7 @@ func replay(ctx context.Context, objects blob.Store, loaded *snapshot, options r
 		}
 		for index, slot := range slots {
 			if err := loaded.applySlot(slot, hashes[index], reindex); err != nil {
-				return fmt.Errorf("replay: %w", err)
+				return &applyError{fmt.Errorf("replay: %w", err)}
 			}
 			if options.onSlot != nil {
 				options.onSlot(slot)

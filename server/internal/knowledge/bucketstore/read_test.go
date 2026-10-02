@@ -1363,3 +1363,43 @@ func waitForTestSignal(t *testing.T, signal <-chan struct{}, name string) {
 		t.Fatalf("timed out waiting for %s", name)
 	}
 }
+
+// A catch-up that fails partway keeps the slots it applied, so a replica far
+// behind gains ground on every attempt instead of restarting from its base.
+func TestCatchUpKeepsProgressWhenAReadFails(t *testing.T) {
+	memory := initializedMemory(t)
+	reader := (&bucketSite{objects: memory}).open(t, 0)
+	peer := (&bucketSite{objects: memory}).open(t, 0)
+	for index := range 5 {
+		if _, err := peer.WriteVersion(fmt.Sprintf("/docs/%d.md", index), 0, []byte("# doc\n"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader.objects = &failOnceGetStore{Store: memory, key: slotKey(4)}
+	if _, err := reader.refresh(context.Background()); !errors.Is(err, blob.ErrUnavailable) {
+		t.Fatalf("refresh over a failing read = %v, want unavailable", err)
+	}
+	if got := reader.servedSequence(); got != 2 {
+		t.Fatalf("served sequence after a failed catch-up = %d, want the probed slot 2 kept", got)
+	}
+	if _, err := reader.refresh(context.Background()); err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if got := reader.servedSequence(); got != 6 {
+		t.Errorf("served sequence = %d, want the tip at 6", got)
+	}
+}
+
+// failOnceGetStore fails the first read of key as unavailable.
+type failOnceGetStore struct {
+	blob.Store
+	key    string
+	failed atomic.Bool
+}
+
+func (store *failOnceGetStore) Get(ctx context.Context, key string) (blob.Object, error) {
+	if key == store.key && store.failed.CompareAndSwap(false, true) {
+		return blob.Object{}, &blob.OpError{Op: "get", Key: key, Err: blob.ErrUnavailable}
+	}
+	return store.Store.Get(ctx, key)
+}

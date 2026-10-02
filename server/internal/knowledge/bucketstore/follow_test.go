@@ -101,3 +101,32 @@ func TestOpenReadsAnExistingHeadOnce(t *testing.T) {
 		t.Errorf("marker reads on open = %d (%d head, %d get), want 1", reads, counts.heads[markerKey], counts.gets[markerKey])
 	}
 }
+
+// Close waits for a commit in flight, and a commit that waited for the token
+// across Close is refused: nothing lands after Close returns.
+func TestCloseFencesCommits(t *testing.T) {
+	objects := initializedMemory(t)
+	store := (&bucketSite{objects: objects}).open(t, 0)
+	<-store.commitToken // a commit in flight
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/late.md", ExpectedVersion: -1, Content: []byte("# Late\n")})
+		result <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // the writer is past its first check, waiting
+	closed := make(chan error, 1)
+	go func() { closed <- store.Close() }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a commit held the token")
+	case <-time.After(20 * time.Millisecond):
+	}
+	store.commitToken <- struct{}{} // the commit in flight ends
+	if err := <-closed; err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := <-result; !errors.Is(err, backend.ErrClosed) {
+		t.Fatalf("commit that waited across Close = %v, want backend.ErrClosed", err)
+	}
+	assertNoSlot(t, objects, 2)
+}

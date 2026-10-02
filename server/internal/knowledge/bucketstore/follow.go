@@ -60,9 +60,12 @@ func (store *Store) Follow(sequence int64) {
 }
 
 // Close stops following peers, ends every watch on the hub and refuses
-// later writes with backend.ErrClosed; reads still work. It is idempotent.
+// later writes with backend.ErrClosed; reads still work. It waits for a commit
+// in flight, so none lands after it returns. It is idempotent.
 func (store *Store) Close() error {
 	store.closed.Store(true)
+	<-store.commitToken
+	store.commitToken <- struct{}{}
 	if store.changes == nil {
 		return nil
 	}

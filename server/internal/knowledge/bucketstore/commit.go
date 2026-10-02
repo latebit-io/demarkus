@@ -38,6 +38,10 @@ func (store *Store) commitMutation(ctx context.Context, build mutationBuilder) (
 	case <-ctx.Done():
 		return mutationResult{}, fmt.Errorf("wait for commit token: %w", ctx.Err())
 	}
+	// Close may have run while this commit waited for the token.
+	if store.closed.Load() {
+		return mutationResult{}, backend.ErrClosed
+	}
 
 	operationID, err := store.newOperationID()
 	if err != nil {

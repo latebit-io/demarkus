@@ -259,11 +259,21 @@ func (store *Store) catchUpLocked(ctx context.Context, fresh map[string][]byte) 
 		worldID: store.worldID, workers: store.shardWorkers, reindex: reindex,
 		onSlot: func(slot *slotObject) { applied = append(applied, slot) },
 	})
-	if err != nil {
+	var broken *applyError
+	if errors.As(err, &broken) {
 		return nil, fmt.Errorf("refresh: %w", err)
 	}
-	if err := store.indexSections(ctx, next, reindex, fresh); err != nil {
-		return nil, err
+	// What applied is kept when a read fails, so a replica far behind gains
+	// ground on every attempt; the index runs past the caller's deadline.
+	indexCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), store.requestTimeout)
+	defer cancel()
+	if indexErr := store.indexSections(indexCtx, next, reindex, fresh); indexErr != nil {
+		return nil, errors.Join(err, indexErr)
+	}
+	if err != nil {
+		// Not the tip, but no slot existed past base when it was confirmed.
+		store.install(next, applied, store.served.Load().confirmed)
+		return nil, fmt.Errorf("refresh: %w", err)
 	}
 	store.install(next, applied, listed)
 	return next, nil
