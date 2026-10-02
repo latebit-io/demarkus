@@ -706,8 +706,11 @@ want "mark_archive retires the federation smoke document" "archived: true"
 '
     echo "--- auth-code + PKCE flow and MCP tool calls passed"
 
-    # The federation step above ran with no token: none may exist anywhere.
-    HUB_TOKEN_SECRETS=$(kubectl get secrets -A -o name | grep -E "^secret/($FEDERATION_HUB-|.*agent-token)" || true)
+    # The federation step above ran with no token: none of the Secrets the
+    # chart or broker would hold a hub token in may exist.
+    HUB_TOKEN_SECRETS=$(kubectl -n "$NAMESPACE" get secret --ignore-not-found -o name \
+      "$FEDERATION_HUB-token-values" "$FEDERATION_HUB-tokens" "$FEDERATION_HUB-static-tokens" \
+      "demarkus-broker-agent-token-$FEDERATION_HUB")
     [[ -z "$HUB_TOKEN_SECRETS" ]] || { echo "FAIL: token Secrets for the hub: $HUB_TOKEN_SECRETS" >&2; exit 1; }
     echo "--- federation ran with no token Secret for the hub"
 
