@@ -236,12 +236,14 @@ type bucketSite struct {
 	objects blob.Store
 	// follow overrides the backstop period of the stores it opens.
 	follow time.Duration
+	// noHedge opens them unhedged, for a bucket that holds one call.
+	noHedge bool
 }
 
 // open opens a store that closes when t ends, stopping its follow loop.
 func (s *bucketSite) open(t *testing.T, ring int) *Store {
 	t.Helper()
-	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow})
+	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

@@ -3,6 +3,7 @@ package bucketstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,13 +15,7 @@ import (
 
 func waitServed(t *testing.T, store *Store, sequence int64) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for store.servedSequence() < sequence {
-		if time.Now().After(deadline) {
-			t.Fatalf("served sequence = %d, want %d", store.servedSequence(), sequence)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitFor(t, fmt.Sprintf("served sequence %d", sequence), func() bool { return store.servedSequence() >= sequence })
 }
 
 // The backstop reads the bucket only while a watcher waits on the hub: an
@@ -108,7 +103,7 @@ func TestCloseFencesCommits(t *testing.T) {
 	objects := initializedMemory(t)
 	staged := &blobCreates{Store: objects, created: make(chan struct{}, 4)}
 	holds := newSlotHolds(t, staged, 2)
-	store := (&bucketSite{objects: holds}).open(t, 0)
+	store := (&bucketSite{objects: holds, noHedge: true}).open(t, 0)
 	publish := func(path string) <-chan writeOutcome {
 		return publishAsync(context.Background(), store, backend.WriteRequest{Path: path, ExpectedVersion: -1, Content: []byte("# " + path + "\n")})
 	}

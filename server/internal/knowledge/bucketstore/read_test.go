@@ -29,7 +29,7 @@ func TestSnapshotRefresh(t *testing.T) {
 		memory := initializedMemory(t)
 		commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A\n")})
 		observed := newObservedBlobStore(memory)
-		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID})
+		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -57,7 +57,7 @@ func TestSnapshotRefresh(t *testing.T) {
 	t.Run("new slots apply in order, each read once", func(t *testing.T) {
 		memory := initializedMemory(t)
 		observed := newObservedBlobStore(memory)
-		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID})
+		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -113,7 +113,7 @@ func TestSnapshotRefresh(t *testing.T) {
 	t.Run("a catalog read trusts a tip confirmed within the bound", func(t *testing.T) {
 		memory := initializedMemory(t)
 		observed := newObservedBlobStore(memory)
-		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID})
+		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -138,7 +138,7 @@ func TestSnapshotRefresh(t *testing.T) {
 	t.Run("a refresh never takes a tip confirmed before it asked", func(t *testing.T) {
 		memory := initializedMemory(t)
 		stalled := &stalledProbeStore{Store: memory, probed: make(chan struct{}), release: make(chan struct{})}
-		store, err := Open(context.Background(), stalled, Options{Logger: discardLogger, WorldID: testWorldID})
+		store, err := Open(context.Background(), stalled, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -196,7 +196,7 @@ func TestReadViewContextAndSnapshot(t *testing.T) {
 	first.Metadata[0] = readMetadata("A", "before", "context")
 	commitReadDocuments(t, memory, []readDocumentSpec{first})
 	observed := newObservedBlobStore(memory)
-	store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, RequestTimeout: 2 * time.Second})
+	store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true, RequestTimeout: 2 * time.Second})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestReadSemantics(t *testing.T) {
 	}
 	commit := commitReadDocuments(t, memory, documents)
 	observed := newObservedBlobStore(memory)
-	store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID})
+	store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -758,7 +758,7 @@ func TestVerifyChainErrors(t *testing.T) {
 		memory := initializedMemory(t)
 		commit := commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "one", "two", "three")})
 		observed := newObservedBlobStore(memory)
-		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID})
+		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}

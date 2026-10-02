@@ -44,9 +44,9 @@ type member struct {
 // build builds every request on a chain from b.base, each seeing the
 // members before it, then seals the slot and starts staging.
 func (c *committer) build(b *batch, requests []*commitRequest) {
-	b.objects = newBatchObjects(c.store.objects, c.previous, c.pipeline)
-	c.previous = b.objects
-	c.prefetch(b, requests)
+	b.objects = newBatchObjects(c.store.objects, c.store.newestBatch.Load(), c.pipeline)
+	c.store.newestBatch.Store(b.objects)
+	c.gather(b, requests)
 	chain := c.store.derive(b.base)
 	for _, request := range requests {
 		b.members = append(b.members, c.buildMember(chain, b.objects, request))
@@ -54,32 +54,96 @@ func (c *committer) build(b *batch, requests []*commitRequest) {
 	c.seal(b, chain)
 }
 
-// prefetch reads, in parallel and once per document, what the members'
-// builds read one by one: each existing document's history and tip.
-func (c *committer) prefetch(b *batch, requests []*commitRequest) {
-	var existing []*pathState
-	for _, request := range requests {
-		if state := b.base.path(request.path); state != nil && !slices.Contains(existing, state) {
-			existing = append(existing, state)
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), c.store.requestTimeout)
-	defer cancel()
-	view := &readView{objects: b.objects, snapshot: b.base}
-	err := runParallel(ctx, c.store.shardWorkers, existing, func(ctx context.Context, state *pathState) error {
-		history, err := view.history(ctx, state)
-		if err == nil {
-			_, err = view.loadBlobUnchecked(ctx, history[len(history)-1].entry.Blob)
-		}
-		// Only a warm-up: the member's build reads again and reports it.
-		if err != nil {
-			c.store.logger.Debug("commit prefetch failed", "path", state.Path, "error", err)
-		}
+// warmup is what a queued write's build reads first, the document's history
+// and tip as the served snapshot had them, read while the write waits; writes
+// queued for one document state share it until a batch takes it.
+type warmup struct {
+	state   *pathState
+	done    chan struct{}
+	objects *batchObjects
+}
+
+// warm starts reading what a write to path builds on; nil for a new path.
+func (store *Store) warm(ctx context.Context, path string) *warmup {
+	state := store.served.Load().snap.path(path)
+	if state == nil {
 		return nil
-	})
-	if err != nil {
-		c.store.logger.Debug("commit prefetch stopped", "error", err)
 	}
+	store.warmMu.Lock()
+	defer store.warmMu.Unlock()
+	if w := store.warming[path]; w != nil && w.state == state {
+		return w
+	}
+	source := newestFirst{batch: store.newestBatch.Load(), bucket: store.objects}
+	w := &warmup{state: state, done: make(chan struct{}), objects: newBatchObjects(source, nil, nil)}
+	store.warming[path] = w
+	go store.runWarmup(ctx, path, w)
+	return w
+}
+
+// runWarmup reads, at most shardWorkers at a time across the store.
+func (store *Store) runWarmup(ctx context.Context, path string, w *warmup) {
+	defer close(w.done)
+	select {
+	case store.warmSlots <- struct{}{}:
+		defer func() { <-store.warmSlots }()
+	case <-ctx.Done():
+		return
+	}
+	view := &readView{objects: w.objects}
+	history, err := view.history(ctx, w.state)
+	if err == nil {
+		_, err = view.loadBlobUnchecked(ctx, history[len(history)-1].entry.Blob)
+	}
+	// Only a warm-up: the build reads again and reports it.
+	if err != nil {
+		store.logger.Debug("commit warm-up failed", "path", path, "error", err)
+	}
+}
+
+// newestFirst reads what the committer's newest batch holds before the bucket.
+type newestFirst struct {
+	batch  *batchObjects
+	bucket objectGetter
+}
+
+func (s newestFirst) Get(ctx context.Context, key string) (blob.Object, error) {
+	if s.batch != nil {
+		if object, ok := s.batch.peek(key); ok {
+			return object, nil
+		}
+	}
+	return s.bucket.Get(ctx, key)
+}
+
+// gather gives the batch what its requests' warm-ups read, waiting for any
+// still reading; a request keeps none of it after.
+func (c *committer) gather(b *batch, requests []*commitRequest) {
+	for _, request := range requests {
+		if request.warm == nil {
+			continue
+		}
+		select {
+		case <-request.warm.done:
+			b.objects.adopt(request.warm.objects)
+		case <-request.ctx.Done():
+		}
+		c.store.unwarm(request)
+	}
+}
+
+// unwarm ends a request's share of its warm-up: once a batch has it, or the
+// request is answered without one.
+func (store *Store) unwarm(request *commitRequest) {
+	if request.warm == nil {
+		return
+	}
+	store.warmMu.Lock()
+	if store.warming[request.path] == request.warm {
+		delete(store.warming, request.path)
+	}
+	store.warmMu.Unlock()
+	request.warm = nil
 }
 
 // buildMember builds one request on chain and, when it changes the world,
@@ -328,6 +392,27 @@ func (objects *batchObjects) hold(written []modelObject) {
 	for _, object := range written {
 		objects.held[object.Key] = writtenObject(object)
 	}
+}
+
+// adopt takes what another batch's objects read.
+func (objects *batchObjects) adopt(from *batchObjects) {
+	from.mu.Lock()
+	read := maps.Clone(from.held)
+	from.mu.Unlock()
+	objects.mu.Lock()
+	defer objects.mu.Unlock()
+	maps.Copy(objects.held, read)
+}
+
+// peek returns an object the batch holds, without reading the bucket.
+func (objects *batchObjects) peek(key string) (blob.Object, bool) {
+	objects.mu.Lock()
+	defer objects.mu.Unlock()
+	if object, ok := objects.held[key]; ok {
+		return object, true
+	}
+	object, ok := objects.inherited[key]
+	return object, ok
 }
 
 func (objects *batchObjects) Get(ctx context.Context, key string) (blob.Object, error) {

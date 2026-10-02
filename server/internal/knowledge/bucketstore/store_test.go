@@ -604,7 +604,7 @@ func TestShardWorkerTimeout(t *testing.T) {
 	objects := initializedMemory(t)
 	blocking := &blockingGetStore{Store: objects, prefix: objectPrefix + "index/"}
 	store, err := Open(context.Background(), blocking, Options{
-		Logger: discardLogger, WorldID: testWorldID,
+		Logger: discardLogger, WorldID: testWorldID, noHedge: true,
 		RequestTimeout: 100 * time.Millisecond,
 		ShardWorkers:   5,
 	})

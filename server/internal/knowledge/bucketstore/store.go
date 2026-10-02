@@ -44,6 +44,8 @@ type Options struct {
 
 	// followInterval overrides the backstop poll's period in tests.
 	followInterval time.Duration
+	// noHedge keeps the bucket unhedged, for tests that hold one call.
+	noHedge bool
 }
 
 // Store serves one world from the log: the snapshot it last applied, and
@@ -72,6 +74,13 @@ type Store struct {
 	yieldUntil atomic.Int64
 	// pending is the slot being created and the snapshot it makes.
 	pending atomic.Pointer[pendingSlot]
+	// newestBatch is the committer's newest batch's objects, which the next
+	// batch and warm-ups read before the bucket; nil while it is idle.
+	newestBatch atomic.Pointer[batchObjects]
+	// warming holds the warm-ups still reading, by path; warmSlots bounds them.
+	warmMu    sync.Mutex
+	warming   map[string]*warmup
+	warmSlots chan struct{}
 
 	changes   *changefeed.Hub
 	committed func(sequence int64)
@@ -149,6 +158,10 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		return nil, fmt.Errorf("open bucket store: store ID: %w", err)
 	}
 
+	if !options.noHedge {
+		// Creates reconcile by reading the name back, which a hedge needs.
+		objects = blob.Hedged(objects)
+	}
 	store := &Store{
 		objects:        objects,
 		worldID:        options.WorldID,
@@ -162,6 +175,8 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		now:            time.Now,
 		newOperationID: randomOperationID,
 		jitter:         yieldDelay,
+		warming:        make(map[string]*warmup),
+		warmSlots:      make(chan struct{}, options.ShardWorkers),
 		committed:      options.Committed,
 	}
 	store.changes = newHub(store, options.ChangeRing)

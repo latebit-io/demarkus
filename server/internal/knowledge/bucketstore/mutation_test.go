@@ -134,7 +134,7 @@ func TestSlotRace(t *testing.T) {
 		base, memory := newWritableStore(t)
 		seedPolicy(t, base, "strictness: warn\nrequire_tags: domain\nrequire_fields: title\n", 0)
 		holds := newSlotHolds(t, memory, 3)
-		writer, err := Open(context.Background(), holds, Options{Logger: discardLogger, WorldID: testWorldID})
+		writer, err := Open(context.Background(), holds, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open writer: %v", err)
 		}
@@ -167,7 +167,7 @@ func TestSlotRace(t *testing.T) {
 			t.Fatalf("write v1: %v", err)
 		}
 		holds := newSlotHolds(t, memory, 3)
-		archiver, err := Open(context.Background(), holds, Options{Logger: discardLogger, WorldID: testWorldID})
+		archiver, err := Open(context.Background(), holds, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open archiver: %v", err)
 		}
@@ -511,7 +511,7 @@ func concurrentStoresOn(t *testing.T, memory blob.Store) (left, right *Store, ba
 	t.Helper()
 	barrier = &createBarrierStore{Store: memory, arrived: make(chan struct{}, 2), release: make(chan struct{})}
 	open := func() *Store {
-		store, err := Open(context.Background(), barrier, Options{Logger: discardLogger, WorldID: testWorldID})
+		store, err := Open(context.Background(), barrier, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open concurrent store: %v", err)
 		}

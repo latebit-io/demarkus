@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	mathrand "math/rand/v2"
 	"slices"
 	"strings"
@@ -27,7 +28,7 @@ func TestBatchCommitsInQueueOrder(t *testing.T) {
 	holds := newSlotHolds(t, staged, 2, 5)
 	var hinted []int64
 	var hintMu sync.Mutex
-	store, err := Open(context.Background(), holds, Options{Logger: discardLogger, WorldID: testWorldID, Committed: func(sequence int64) {
+	store, err := Open(context.Background(), holds, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true, Committed: func(sequence int64) {
 		hintMu.Lock()
 		hinted = append(hinted, sequence)
 		hintMu.Unlock()
@@ -119,7 +120,7 @@ func TestQueuedWriteExpires(t *testing.T) {
 	objects := initializedMemory(t)
 	staged := &blobCreates{Store: objects, created: make(chan struct{}, 8)}
 	holds := newSlotHolds(t, staged, 2)
-	store := (&bucketSite{objects: holds}).open(t, 0)
+	store := (&bucketSite{objects: holds, noHedge: true}).open(t, 0)
 	publish := func(ctx context.Context, path string) <-chan writeOutcome {
 		return publishAsync(ctx, store, backend.WriteRequest{Path: path, ExpectedVersion: 0, Content: []byte("# " + path + "\n")})
 	}
@@ -210,6 +211,84 @@ func TestYieldAfterWin(t *testing.T) {
 	if n := yields.Load(); n != 2 {
 		t.Fatalf("yields once the peer is %v old = %d, want none", yieldWindow, n-2)
 	}
+}
+
+// Writes read the document they build on while they wait in the queue, once
+// for all those queued on one state, so their batch builds without reading the
+// bucket again.
+func TestQueuedWritesWarmTheirDocument(t *testing.T) {
+	objects := initializedMemory(t)
+	seeded, err := (&bucketSite{objects: objects}).open(t, 0).WriteVersion("/doc.md", 0, []byte("# Doc\n"), nil)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	tip := blobKey(seeded.ETag)
+	gets := newObservedBlobStore(objects)
+	staged := &blobCreates{Store: gets, created: make(chan struct{}, 8)}
+	holds := newSlotHolds(t, staged, 3)
+	store := (&bucketSite{objects: holds, noHedge: true}).open(t, 0)
+	read := func() int { return gets.counts().gets[tip] }
+	opened := read() // the section index read the body at open
+	var written atomic.Int64
+	publish := func(path string) <-chan writeOutcome {
+		body := fmt.Appendf(nil, "# %s, write %d\n", path, written.Add(1))
+		return publishAsync(context.Background(), store, backend.WriteRequest{Path: path, ExpectedVersion: -1, Content: body})
+	}
+	ahead := fillPipeline(t, holds, staged, publish)
+	updates := make([]<-chan writeOutcome, 2)
+	for index := range updates {
+		updates[index] = publish("/doc.md")
+		waitQueued(t, store, index+1)
+	}
+	waitFor(t, "the queued writes' warm-up", func() bool { return read() > opened })
+	holds.holds[3].open()
+	for _, result := range append(ahead, updates...) {
+		if outcome := <-result; outcome.err != nil {
+			t.Fatalf("write: %v", outcome.err)
+		}
+	}
+	if n := read() - opened; n != 1 {
+		t.Errorf("the tip was read %d times after open, want once for both queued writes", n)
+	}
+}
+
+// Open hedges its bucket: a create that stalls does not hold the write it
+// belongs to until its deadline.
+func TestStalledCreatesAreHedged(t *testing.T) {
+	stalled := &stallFirstCreate{Store: initializedMemory(t), seen: make(map[string]bool)}
+	store := (&bucketSite{objects: stalled}).open(t, 0)
+	started := time.Now()
+	if _, err := store.WriteVersion("/doc.md", 0, []byte("# Doc\n"), nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Errorf("write took %v with its blob and slot creates stalled, want them hedged", elapsed)
+	}
+	if n := stalled.stalls.Load(); n != 2 {
+		t.Errorf("stalled creates = %d, want the blob's and the slot's", n)
+	}
+}
+
+// stallFirstCreate holds the first create of every name until its context
+// ends; later creates of the name go through.
+type stallFirstCreate struct {
+	blob.Store
+	mu     sync.Mutex
+	seen   map[string]bool
+	stalls atomic.Int64
+}
+
+func (s *stallFirstCreate) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
+	s.mu.Lock()
+	first := !s.seen[key]
+	s.seen[key] = true
+	s.mu.Unlock()
+	if first {
+		s.stalls.Add(1)
+		<-ctx.Done()
+		return blob.Attributes{}, &blob.OpError{Op: "create", Key: key, Err: ctx.Err()}
+	}
+	return s.Store.Create(ctx, key, data)
 }
 
 // The limit grows to a full slot while the queue stays deeper than a batch,
@@ -336,13 +415,14 @@ func logShape(t *testing.T, objects blob.Store, tip int64) (writers int, batched
 	return len(stores), batched
 }
 
-// fillPipeline makes /first.md's slot 2 create hold and stages a batch for
-// each of two writes behind it, so the next requests queue.
+// fillPipeline makes /first.md's create of the first held slot hold and
+// stages a batch for each of two writes behind it, so the next requests queue.
 func fillPipeline(t *testing.T, holds *slotHolds, staged *blobCreates, write func(path string) <-chan writeOutcome) []<-chan writeOutcome {
 	t.Helper()
 	outcomes := make([]<-chan writeOutcome, 1, 3)
 	outcomes[0] = write("/first.md")
-	waitForTestSignal(t, holds.holds[2].arrived, "slot 2's create")
+	first := slices.Min(slices.Collect(maps.Keys(holds.holds)))
+	waitForTestSignal(t, holds.holds[first].arrived, "the first held slot's create")
 	<-staged.created
 	for index := range 2 {
 		outcomes = append(outcomes, write(fmt.Sprintf("/ahead-%d.md", index+1)))
@@ -383,14 +463,18 @@ func waitIdle(t *testing.T, store *Store) {
 
 func waitUntil(t *testing.T, store *Store, name string, done func(*commitQueue) bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	waitFor(t, name, func() bool {
 		store.commits.mu.Lock()
-		reached := done(&store.commits)
-		store.commits.mu.Unlock()
-		if reached {
-			return
-		}
+		defer store.commits.mu.Unlock()
+		return done(&store.commits)
+	})
+}
+
+// waitFor polls reached until it holds, failing the test after five seconds.
+func waitFor(t *testing.T, name string, reached func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !reached() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", name)
 		}

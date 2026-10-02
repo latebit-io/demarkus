@@ -23,6 +23,15 @@ func TestMemoryConformance(t *testing.T) {
 	blobtest.RunConformance(t, store, "conformance/")
 }
 
+// A hedged store keeps the blob contract.
+func TestHedgedConformance(t *testing.T) {
+	store, err := blob.NewMemory(1 << 20)
+	if err != nil {
+		t.Fatalf("new memory: %v", err)
+	}
+	blobtest.RunConformance(t, blob.Hedged(store), "conformance/")
+}
+
 func TestMemoryPagination(t *testing.T) {
 	store, err := blob.NewMemory(1)
 	if err != nil {

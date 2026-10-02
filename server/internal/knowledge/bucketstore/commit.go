@@ -59,6 +59,8 @@ type commitRequest struct {
 	taken atomic.Bool
 	// staged are the object keys created for it; the committer's alone.
 	staged []string
+	// warm reads what its build reads first while it waits; nil for a new path.
+	warm *warmup
 }
 
 // commitAnswer is a mutation's outcome. hint is set on the last member of a
@@ -85,7 +87,10 @@ func (store *Store) runMutation(ctx context.Context, path string, build mutation
 	if !validWorldID(operationID) {
 		return mutationResult{}, fmt.Errorf("create operation ID: invalid UUID %q", operationID)
 	}
-	request := &commitRequest{ctx: ctx, path: path, build: build, operationID: operationID, answer: make(chan commitAnswer, 1)}
+	request := &commitRequest{
+		ctx: ctx, path: path, build: build, operationID: operationID, answer: make(chan commitAnswer, 1),
+		warm: store.warm(ctx, path),
+	}
 	if err := store.commits.enqueue(store, request); err != nil {
 		return mutationResult{}, err
 	}
@@ -155,9 +160,7 @@ type committer struct {
 	events  chan func()
 	running int // goroutines that have not reported
 	limit   int
-	// previous serves the next batch the objects the last one read.
-	previous *batchObjects
-	timer    *time.Timer
+	timer   *time.Timer
 }
 
 // commit runs the committer until the queue and the pipeline are empty.
@@ -201,6 +204,8 @@ func (c *committer) exit() bool {
 	}
 	queue.running = false
 	queue.done.Done()
+	// An idle store holds no batch's objects.
+	c.store.newestBatch.Store(nil)
 	if c.timer != nil {
 		c.timer.Stop()
 	}
@@ -427,6 +432,7 @@ func (c *committer) discardAfter(index int) {
 
 // reply answers a request; each is answered once.
 func (c *committer) reply(request *commitRequest, answer commitAnswer) {
+	c.store.unwarm(request)
 	select {
 	case request.answer <- answer:
 	default:
