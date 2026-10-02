@@ -64,6 +64,7 @@ func (store *Store) Follow(sequence int64) {
 // refuses the rest, so nothing lands after it returns. It is idempotent.
 func (store *Store) Close() error {
 	store.commits.close()
+	store.stopHints()
 	if store.changes == nil {
 		return nil
 	}

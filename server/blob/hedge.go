@@ -24,6 +24,9 @@ const (
 	// uploads of its size.
 	smallCreate  = 64 << 10
 	mediumCreate = 1 << 20
+	// Each call earns a tenth of a hedge and at most hedgeBank are kept, so a
+	// bucket that slows as a whole is sent at most about a tenth more calls.
+	hedgeBank = 10
 )
 
 // Hedged sends a second Get or Create past the recent 95th percentile of its
@@ -37,10 +40,11 @@ type hedged struct {
 	Store
 	gets    latencies
 	creates [3]latencies // under smallCreate, under mediumCreate, larger
+	budget  hedgeBudget
 }
 
 func (h *hedged) Get(ctx context.Context, key string) (Object, error) {
-	return hedge(ctx, &h.gets, func(ctx context.Context) (Object, error) { return h.Store.Get(ctx, key) })
+	return hedge(ctx, &h.gets, &h.budget, func(ctx context.Context) (Object, error) { return h.Store.Get(ctx, key) })
 }
 
 func (h *hedged) Create(ctx context.Context, key string, data []byte) (Attributes, error) {
@@ -51,7 +55,9 @@ func (h *hedged) Create(ctx context.Context, key string, data []byte) (Attribute
 	case len(data) >= smallCreate:
 		class = 1
 	}
-	return hedge(ctx, &h.creates[class], func(ctx context.Context) (Attributes, error) { return h.Store.Create(ctx, key, data) })
+	return hedge(ctx, &h.creates[class], &h.budget, func(ctx context.Context) (Attributes, error) {
+		return h.Store.Create(ctx, key, data)
+	})
 }
 
 type hedgeAnswer[T any] struct {
@@ -59,10 +65,11 @@ type hedgeAnswer[T any] struct {
 	err   error
 }
 
-// hedge runs call, again past the delay; a success, not found or precondition
-// wins at once, other errors wait for an attempt still running. A winning
-// hedge's latency bounds the primary's from below in the window.
-func hedge[T any](ctx context.Context, observed *latencies, call func(context.Context) (T, error)) (T, error) {
+// hedge runs call, again past the delay when the budget allows; a success,
+// not found or precondition wins at once, other errors wait for an attempt
+// still running. A winning hedge's latency bounds the primary's from below.
+func hedge[T any](ctx context.Context, observed *latencies, budget *hedgeBudget, call func(context.Context) (T, error)) (T, error) {
+	budget.earn()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	answers := make(chan hedgeAnswer[T], 2)
@@ -78,8 +85,10 @@ func hedge[T any](ctx context.Context, observed *latencies, call func(context.Co
 	for {
 		select {
 		case <-timer.C:
-			running, hedgeSent = running+1, true
-			go attempt()
+			if budget.spend() {
+				running, hedgeSent = running+1, true
+				go attempt()
+			}
 		case answer := <-answers:
 			running--
 			switch {
@@ -93,6 +102,30 @@ func hedge[T any](ctx context.Context, observed *latencies, call func(context.Co
 				// A primary that fails before the delay is the caller's to retry.
 				return answer.value, answer.err
 			}
+		}
+	}
+}
+
+// hedgeBudget counts tenths of a hedge.
+type hedgeBudget struct{ tenths atomic.Int64 }
+
+func (b *hedgeBudget) earn() {
+	for {
+		tenths := b.tenths.Load()
+		if tenths >= hedgeBank*10 || b.tenths.CompareAndSwap(tenths, tenths+1) {
+			return
+		}
+	}
+}
+
+func (b *hedgeBudget) spend() bool {
+	for {
+		tenths := b.tenths.Load()
+		if tenths < 10 {
+			return false
+		}
+		if b.tenths.CompareAndSwap(tenths, tenths-10) {
+			return true
 		}
 	}
 }

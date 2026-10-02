@@ -63,17 +63,13 @@ type commitRequest struct {
 	warm *warmup
 }
 
-// commitAnswer is a mutation's outcome. hint is set on the last member of a
-// slot, which tells peers the slot's sequence.
+// commitAnswer is a mutation's outcome.
 type commitAnswer struct {
 	result mutationResult
 	err    error
-	hint   bool
 }
 
-// runMutation queues one mutation and waits for its outcome, then runs the
-// Committed hook outside every lock: a hook that reenters the store must not
-// deadlock.
+// runMutation queues one mutation and waits for its outcome.
 func (store *Store) runMutation(ctx context.Context, path string, build mutationBuilder) (mutationResult, error) {
 	if store.readOnly {
 		return mutationResult{}, backend.ErrReadOnly
@@ -96,9 +92,6 @@ func (store *Store) runMutation(ctx context.Context, path string, build mutation
 	}
 	select {
 	case answer := <-request.answer:
-		if answer.err == nil && answer.hint && store.committed != nil {
-			store.committed(answer.result.Sequence)
-		}
 		return answer.result, answer.err
 	case <-ctx.Done():
 		// A request still queued is dropped untouched once its context ends.
@@ -390,19 +383,17 @@ func (c *committer) confirm(b *batch) {
 		store.install(b.next, []*slotObject{b.slot}, b.started)
 	}
 	store.refreshMu.Unlock()
-	var last *commitAnswer
 	sequence := b.slot.First
 	for _, m := range b.members {
 		if m.answer == nil {
 			m.result.Sequence = sequence
 			m.answer = &commitAnswer{result: m.result}
-			last = m.answer
 			sequence++
 		}
 	}
-	last.hint = true
 	c.answerRest(b, nil)
 	c.pop()
+	store.hint(b.slot.last())
 	if seen := store.peerSeen.Load(); seen != 0 && store.now().UnixNano()-seen < int64(yieldWindow) {
 		store.yieldUntil.Store(time.Now().Add(store.jitter()).UnixNano())
 	}

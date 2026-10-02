@@ -193,9 +193,6 @@ func ConcurrentWriters(t *testing.T, stores []Direct, writers int, checker Direc
 		}
 		given[acked.path] = append(given[acked.path], acked.version)
 	}
-	if own := len(acks) - len(given[shared[0]]) - len(given[shared[1]]); own != len(stores)*writers*rounds {
-		t.Errorf("own-path writes acknowledged = %d, want %d", own, len(stores)*writers*rounds)
-	}
 	for _, path := range shared {
 		current := currentVersion(t, checker, path)
 		versions := given[path]

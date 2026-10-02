@@ -16,6 +16,13 @@ func warmed() *latencies {
 	return observed
 }
 
+// funded is a budget with every hedge banked.
+func funded() *hedgeBudget {
+	budget := &hedgeBudget{}
+	budget.tenths.Store(hedgeBank * 10)
+	return budget
+}
+
 func warm(observed *latencies) {
 	for range hedgeRecompute {
 		observed.add(time.Millisecond)
@@ -26,7 +33,7 @@ func TestHedge(t *testing.T) {
 	t.Run("a slow call is hedged and the first answer wins", func(t *testing.T) {
 		var calls atomic.Int64
 		primaryCanceled := make(chan struct{})
-		value, err := hedge(context.Background(), warmed(), func(ctx context.Context) (string, error) {
+		value, err := hedge(context.Background(), warmed(), funded(), func(ctx context.Context) (string, error) {
 			if calls.Add(1) == 1 {
 				<-ctx.Done()
 				close(primaryCanceled)
@@ -46,7 +53,7 @@ func TestHedge(t *testing.T) {
 
 	t.Run("a fast call is not hedged", func(t *testing.T) {
 		var calls atomic.Int64
-		if _, err := hedge(context.Background(), warmed(), func(context.Context) (int, error) { return int(calls.Add(1)), nil }); err != nil {
+		if _, err := hedge(context.Background(), warmed(), funded(), func(context.Context) (int, error) { return int(calls.Add(1)), nil }); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(2 * hedgeFloor)
@@ -57,7 +64,7 @@ func TestHedge(t *testing.T) {
 
 	t.Run("a primary that fails at once is the caller's to retry", func(t *testing.T) {
 		var calls atomic.Int64
-		_, err := hedge(context.Background(), warmed(), func(context.Context) (int, error) {
+		_, err := hedge(context.Background(), warmed(), funded(), func(context.Context) (int, error) {
 			calls.Add(1)
 			return 0, ErrUnavailable
 		})
@@ -69,7 +76,7 @@ func TestHedge(t *testing.T) {
 	t.Run("an error waits for the attempt still running", func(t *testing.T) {
 		var calls atomic.Int64
 		hedgeStarted := make(chan struct{})
-		value, err := hedge(context.Background(), warmed(), func(context.Context) (string, error) {
+		value, err := hedge(context.Background(), warmed(), funded(), func(context.Context) (string, error) {
 			if calls.Add(1) == 1 {
 				<-hedgeStarted
 				return "", ErrUnavailable
@@ -83,9 +90,35 @@ func TestHedge(t *testing.T) {
 		}
 	})
 
+	t.Run("without budget a slow call runs alone", func(t *testing.T) {
+		var calls atomic.Int64
+		_, err := hedge(context.Background(), warmed(), &hedgeBudget{}, func(context.Context) (int, error) {
+			calls.Add(1)
+			time.Sleep(3 * hedgeFloor)
+			return 0, nil
+		})
+		if err != nil || calls.Load() != 1 {
+			t.Fatalf("hedge = %v after %d calls, want one call without budget", err, calls.Load())
+		}
+	})
+
+	t.Run("the budget allows about one hedge in ten calls", func(t *testing.T) {
+		budget := &hedgeBudget{}
+		hedges := 0
+		for range 100 {
+			budget.earn()
+			if budget.spend() {
+				hedges++
+			}
+		}
+		if hedges != 10 {
+			t.Fatalf("hedges allowed over 100 calls = %d, want 10", hedges)
+		}
+	})
+
 	t.Run("a definitive answer wins at once", func(t *testing.T) {
 		var calls atomic.Int64
-		_, err := hedge(context.Background(), warmed(), func(ctx context.Context) (int, error) {
+		_, err := hedge(context.Background(), warmed(), funded(), func(ctx context.Context) (int, error) {
 			if calls.Add(1) == 1 {
 				<-ctx.Done()
 				return 0, ctx.Err()
@@ -107,6 +140,7 @@ func TestHedgedCreateMeetsItself(t *testing.T) {
 	}
 	store := &hedged{Store: &answersLate{Store: memory}}
 	warm(&store.creates[0])
+	store.budget.tenths.Store(hedgeBank * 10)
 	_, err = store.Create(context.Background(), "k", []byte("v"))
 	if !errors.Is(err, ErrAmbiguous) || errors.Is(err, ErrPrecondition) {
 		t.Fatalf("create beaten by its own attempt = %v, want ambiguous only", err)

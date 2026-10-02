@@ -38,8 +38,9 @@ type Options struct {
 	// applied slots, under the log's sequence, and the store follows peers
 	// until Close. Zero leaves WATCH off.
 	ChangeRing int
-	// Committed runs once for each slot this replica creates, with the slot's
-	// last sequence, outside every lock; nil for none.
+	// Committed runs after this replica creates slots, with the newest sequence,
+	// in order on its own goroutine; slots created close together may be
+	// reported once. Nil for none.
 	Committed func(sequence int64)
 
 	// followInterval overrides the backstop poll's period in tests.
@@ -85,6 +86,11 @@ type Store struct {
 	changes   *changefeed.Hub
 	committed func(sequence int64)
 	follower  *follower // nil without WATCH
+	// hints carries the newest created sequence to the Committed goroutine;
+	// nil without the hook.
+	hints     chan int64
+	hinted    chan struct{}
+	hintsOnce sync.Once
 }
 
 var (
@@ -189,7 +195,42 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	if store.changes != nil {
 		store.startFollowing(options.followInterval)
 	}
+	if store.committed != nil {
+		store.hints, store.hinted = make(chan int64, 1), make(chan struct{})
+		go store.notify()
+	}
 	return store, nil
+}
+
+// notify runs the Committed hook, apart from the committer, so a hook that
+// writes to this store cannot deadlock it.
+func (store *Store) notify() {
+	defer close(store.hinted)
+	for sequence := range store.hints {
+		store.committed(sequence)
+	}
+}
+
+// hint hands the newest created sequence to notify, replacing one it has not
+// taken yet; only the committer sends, so it never blocks.
+func (store *Store) hint(sequence int64) {
+	if store.hints == nil {
+		return
+	}
+	select {
+	case <-store.hints:
+	default:
+	}
+	store.hints <- sequence
+}
+
+// stopHints ends notify once the committer has stopped, after the last hint.
+func (store *Store) stopHints() {
+	if store.hints == nil {
+		return
+	}
+	store.hintsOnce.Do(func() { close(store.hints) })
+	<-store.hinted
 }
 
 // loadOrCreate loads the world, first creating it in an empty bucket unless

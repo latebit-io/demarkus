@@ -26,13 +26,8 @@ func TestBatchCommitsInQueueOrder(t *testing.T) {
 	objects := initializedMemory(t)
 	staged := &blobCreates{Store: objects, created: make(chan struct{}, 8)}
 	holds := newSlotHolds(t, staged, 2, 5)
-	var hinted []int64
-	var hintMu sync.Mutex
-	store, err := Open(context.Background(), holds, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true, Committed: func(sequence int64) {
-		hintMu.Lock()
-		hinted = append(hinted, sequence)
-		hintMu.Unlock()
-	}})
+	hinted := &hints{}
+	store, err := Open(context.Background(), holds, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true, Committed: hinted.record})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -105,13 +100,75 @@ func TestBatchCommitsInQueueOrder(t *testing.T) {
 	if !slices.Equal(paths, []string{"/kept.md", "/later.md"}) {
 		t.Errorf("slot 6 holds %v, want the kept members in queue order", paths)
 	}
-	hintMu.Lock()
-	defer hintMu.Unlock()
-	// Members hint from their own goroutines, in any order.
-	slices.Sort(hinted)
-	if !slices.Equal(hinted, []int64{2, 3, 4, 7}) {
-		t.Errorf("hinted sequences %v, want each slot's last once", hinted)
+	hinted.waitFor(t, 7)
+	for index, sequence := range hinted.all() {
+		if !slices.Contains([]int64{2, 3, 4, 7}, sequence) || index > 0 && sequence <= hinted.all()[index-1] {
+			t.Fatalf("hinted %v, want the slots' last sequences in order", hinted.all())
+		}
 	}
+}
+
+// Committed reports a slot even when the write that ends it gave up waiting
+// while the slot was being created.
+func TestCommittedReportsSlotsItsWritersLeft(t *testing.T) {
+	objects := initializedMemory(t)
+	staged := &blobCreates{Store: objects, created: make(chan struct{}, 8)}
+	holds := newSlotHolds(t, staged, 2, 5)
+	hinted := &hints{}
+	store, err := Open(context.Background(), holds, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true, Committed: hinted.record})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	closeAtEnd(t, store)
+	write := func(ctx context.Context, path string) <-chan writeOutcome {
+		return publishAsync(ctx, store, backend.WriteRequest{Path: path, ExpectedVersion: 0, Content: []byte("# " + path + "\n")})
+	}
+	ahead := fillPipeline(t, holds, staged, func(path string) <-chan writeOutcome { return write(context.Background(), path) })
+	kept := write(context.Background(), "/kept.md")
+	waitQueued(t, store, 1)
+	short, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	left := write(short, "/left.md")
+	waitQueued(t, store, 2)
+	holds.holds[2].open()
+	waitForTestSignal(t, holds.holds[5].arrived, "slot 5's create")
+	if outcome := <-left; !errors.Is(outcome.err, context.DeadlineExceeded) {
+		t.Fatalf("write that gave up = %v, want its deadline", outcome.err)
+	}
+	holds.holds[5].open()
+	for _, result := range append(ahead, kept) {
+		if outcome := <-result; outcome.err != nil {
+			t.Fatalf("write: %v", outcome.err)
+		}
+	}
+	hinted.waitFor(t, 6)
+}
+
+// hints records the Committed hook's calls.
+type hints struct {
+	mu   sync.Mutex
+	seen []int64
+}
+
+func (h *hints) record(sequence int64) {
+	h.mu.Lock()
+	h.seen = append(h.seen, sequence)
+	h.mu.Unlock()
+}
+
+func (h *hints) all() []int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.seen)
+}
+
+// waitFor waits until the newest hint is sequence.
+func (h *hints) waitFor(t *testing.T, sequence int64) {
+	t.Helper()
+	waitFor(t, fmt.Sprintf("a hint of sequence %d", sequence), func() bool {
+		all := h.all()
+		return len(all) > 0 && all[len(all)-1] == sequence
+	})
 }
 
 // A request still queued when its deadline passes gives up and never
