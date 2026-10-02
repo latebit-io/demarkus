@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -619,11 +620,13 @@ func TestHandleMarkResolveWithoutAnIndexAsksEveryWorld(t *testing.T) {
 	if text := toolResultText(t, res); !strings.Contains(text, "resolved content") {
 		t.Errorf("resolved = %q", text)
 	}
-	asked := map[string]bool{}
+	var asked []string
 	for _, c := range d.FetchCalls {
-		asked[c.Host] = c.Path == "/"+testHashA
+		if c.Path == "/"+testHashA {
+			asked = append(asked, c.Host)
+		}
 	}
-	if !asked["team-a"] || !asked["team-b"] {
-		t.Errorf("worlds asked = %v, want team-a then team-b", asked)
+	if want := []string{"team-a", "team-b"}; !slices.Equal(asked, want) {
+		t.Errorf("worlds asked = %v, want %v in order", asked, want)
 	}
 }

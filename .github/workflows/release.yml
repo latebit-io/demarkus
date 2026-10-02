@@ -713,10 +713,11 @@ jobs:
 
   # Runs after the sub-chart releases so the vendored charts and their image
   # tags point at releases that exist. Skipped sub-chart releases are fine;
-  # a failed one blocks the umbrella.
+  # a failed one blocks the umbrella, as do failed knowledge tests, which
+  # skip that release rather than fail it.
   release-knowledge-system:
-    needs: [semver-knowledge-system, release-knowledge]
-    if: ${{ always() && !cancelled() && needs.semver-knowledge-system.outputs.should_release == 'true' && needs.release-knowledge.result != 'failure' }}
+    needs: [semver-knowledge-system, test-knowledge, release-knowledge]
+    if: ${{ always() && !cancelled() && needs.semver-knowledge-system.outputs.should_release == 'true' && contains(fromJSON('["success", "skipped"]'), needs.test-knowledge.result) && needs.release-knowledge.result != 'failure' }}
     runs-on: ubuntu-latest
     # Tag creation needs contents; the chart push and the library pull need packages.
     permissions:
