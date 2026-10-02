@@ -194,6 +194,10 @@ func stage[R any](ctx context.Context, p *publisher, shard *Shard[R], verify fun
 	return ref, true, verify(ref, verified)
 }
 
+// ErrConflict is a write refused because the document moved past the
+// expected version to another body.
+var ErrConflict = errors.New("document moved past the expected version")
+
 // PublishDocument writes body at path over expected (below 0 skips the
 // check), then reads it back at its version. A refusal or a lost answer is
 // settled by content, never by resending.
@@ -203,7 +207,10 @@ func (io IO) PublishDocument(ctx context.Context, path, body string, expected in
 	if publishErr != nil && !errors.Is(publishErr, protocol.ErrOutcomeUnknown) {
 		return protocol.Response{}, 0, fmt.Errorf("publish %s: %w", path, publishErr)
 	}
-	if publishErr == nil && !protocol.IsWriteSuccess(published.Status) {
+	switch {
+	case publishErr == nil && published.Status == protocol.StatusConflict:
+		publishErr = fmt.Errorf("publish returned %s: %w", published.Status, ErrConflict)
+	case publishErr == nil && !protocol.IsWriteSuccess(published.Status):
 		publishErr = fmt.Errorf("publish returned %s", published.Status)
 	}
 	version := 0

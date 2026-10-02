@@ -8,10 +8,10 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/memtest"
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
-	"github.com/latebit-io/demarkus/server/internal/memtest"
 	"github.com/latebit-io/demarkus/server/internal/storetest"
 )
 

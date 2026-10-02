@@ -156,8 +156,13 @@ func (w *world) follow(ctx context.Context, watch *fetch.Watch) error {
 		at, due := w.due()
 		if due && !time.Now().Before(at) {
 			if err := w.checkpoint(ctx, watch.Cursor()); err != nil {
-				if ctx.Err() != nil {
+				switch {
+				case ctx.Err() != nil:
 					return ctx.Err()
+				case errors.Is(err, generation.ErrConflict):
+					// Another leader moved the manifest: start over from its
+					// checkpoint, never write over it.
+					return err
 				}
 				w.log.Warn("federation: checkpoint failed", "err", err)
 			}
@@ -433,7 +438,7 @@ func (w *world) split() {
 }
 
 // commit writes the manifest over the version it expects to replace, so a
-// write that raced another leader's fails and is retried over the new head.
+// write that raced another leader's fails with generation.ErrConflict.
 func (w *world) commit(ctx context.Context, cursor protocol.Cursor) error {
 	m := graphstore.WorldManifest{World: w.name, Cursor: cursor, Complete: w.complete(), PrefixLength: w.prefixLength}
 	m.Shards = slices.Collect(maps.Values(w.refs))

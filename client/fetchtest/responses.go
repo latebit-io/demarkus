@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,7 +41,9 @@ func Versions(docPath string, current int) fetch.Result {
 func Head(body string, version int, meta map[string]string) fetch.Result {
 	m := map[string]string{"version": strconv.Itoa(version)}
 	maps.Copy(m, meta)
-	return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: m}}
+	// A fresh body each call, as off the wire, so a reader that aliases it
+	// keeps a copy no one else holds.
+	return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: strings.Clone(body), Metadata: m}}
 }
 
 // LostResponse is a write that was sent and never answered.

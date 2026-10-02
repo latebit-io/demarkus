@@ -90,7 +90,7 @@ func (h *testHub) publishCheckpoint(t *testing.T, m WorldManifest, sources []Wor
 		byPrefix[prefix] = append(byPrefix[prefix], src)
 	}
 	for prefix, group := range byPrefix {
-		shard, err := BuildWorldShard("alpha", prefix, group)
+		shard, err := BuildWorldShard(m.World, prefix, group)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -100,7 +100,7 @@ func (h *testHub) publishCheckpoint(t *testing.T, m WorldManifest, sources []Wor
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.put(WorldManifestPath("alpha"), body)
+	h.put(WorldManifestPath(m.World), body)
 }
 
 // Paths under distinct prefixes, so each edit touches its own shard.
@@ -110,9 +110,14 @@ var (
 )
 
 func seedAlpha(ctx context.Context, store *Store, hub *testHub) {
-	store.ExpireSeedCheck("alpha")
+	seedWorld(ctx, store, hub, "alpha")
+}
+
+// seedWorld seeds world from its checkpoint in hub, with nothing of its own.
+func seedWorld(ctx context.Context, store *Store, hub *testHub, world string) {
+	store.ExpireSeedCheck(world)
 	store.Seed(ctx, SeedSource{
-		Owner: "alpha",
+		Owner: world,
 		Fetch: func(context.Context, string, string) (protocol.Response, error) {
 			return protocol.Response{Status: protocol.StatusNotFound}, nil
 		},

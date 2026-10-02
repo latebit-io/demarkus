@@ -46,8 +46,9 @@ func newFakeWorld(t *testing.T) *fakeWorld {
 	return &fakeWorld{t: t, epoch: "e1", docs: map[string]*fakeDoc{}, changed: make(chan struct{}), fetches: map[string]int{}, failing: map[string]bool{}}
 }
 
-// publish writes body to docPath as its next version and announces it.
-func (f *fakeWorld) publish(docPath, body string) {
+// publish writes body to docPath as its next version, announces it and
+// returns the version.
+func (f *fakeWorld) publish(docPath, body string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	doc := f.docs[docPath]
@@ -58,6 +59,7 @@ func (f *fakeWorld) publish(docPath, body string) {
 	doc.version++
 	doc.body = body
 	f.emit(docPath, doc.version, protocol.OpPublish)
+	return doc.version
 }
 
 // archive archives docPath, keeping its version, and announces it.
@@ -98,7 +100,11 @@ func (f *fakeWorld) newEpoch() {
 func (f *fakeWorld) setFailing(docPath string, failing bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.failing[docPath] = failing
+	if failing {
+		f.failing[docPath] = true
+	} else {
+		delete(f.failing, docPath)
+	}
 }
 
 // reads is how often docPath was fetched.

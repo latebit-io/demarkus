@@ -1,6 +1,7 @@
 package federation
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -11,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/protocol"
 	"golang.org/x/time/rate"
 )
 
@@ -58,12 +61,20 @@ func with(more map[string]int) map[string]int {
 
 // start runs a deriver until the returned stop, which waits for it to end.
 func (h *harness) start() (stop func()) {
-	d := newDeriver(Config{
-		Worlds: slices.Collect(maps.Keys(h.worlds)), Source: h.worlds, Hub: h.hub.io(),
-		QuietPeriod: 20 * time.Millisecond, Interval: 50 * time.Millisecond,
-		Log: slog.New(slog.DiscardHandler),
-	})
+	return runDeriver(h.t, testDeriver(Config{Worlds: slices.Collect(maps.Keys(h.worlds)), Source: h.worlds, Hub: h.hub.io()}))
+}
+
+// testDeriver is a deriver with a test's cadence and no read pacing.
+func testDeriver(cfg Config) *deriver { //nolint:gocritic // a config is passed once per deriver
+	cfg.QuietPeriod, cfg.Interval = 20*time.Millisecond, 50*time.Millisecond
+	cfg.Log = cmp.Or(cfg.Log, slog.New(slog.DiscardHandler))
+	d := newDeriver(cfg)
 	d.reads = rate.NewLimiter(rate.Inf, 1)
+	return d
+}
+
+// runDeriver runs d until the returned stop, which waits for it to end.
+func runDeriver(t *testing.T, d *deriver) (stop func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -74,18 +85,37 @@ func (h *harness) start() (stop func()) {
 		cancel()
 		<-done
 	})
-	h.t.Cleanup(stop)
+	t.Cleanup(stop)
 	return stop
+}
+
+// applyEvent folds one change into w.
+func applyEvent(t *testing.T, w *world, docPath string, version int, op string) {
+	t.Helper()
+	if err := w.apply(context.Background(), &protocol.WatchEvent{Path: docPath, Version: version, Op: op}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // checkpoint loads alpha's checkpoint from the hub as a reader would.
 func (h *harness) checkpoint() (graphstore.WorldManifest, map[string]graphstore.WorldSource, error) {
+	return loadCheckpoint(h.hub.io(), "alpha")
+}
+
+// await polls until alpha's checkpoint satisfies check.
+func (h *harness) await(check func(graphstore.WorldManifest, map[string]graphstore.WorldSource) error) graphstore.WorldManifest {
+	h.t.Helper()
+	return awaitCheckpoint(h.t, h.hub.io(), "alpha", check)
+}
+
+// loadCheckpoint loads world's checkpoint from hub, as a reader would.
+func loadCheckpoint(hub generation.IO, world string) (graphstore.WorldManifest, map[string]graphstore.WorldSource, error) {
 	ctx := context.Background()
-	head, err := h.hub.fetch(ctx, graphstore.WorldManifestPath("alpha"))
+	head, err := hub.Fetch(ctx, graphstore.WorldManifestPath(world))
 	if err != nil {
 		return graphstore.WorldManifest{}, nil, err
 	}
-	load, err := graphstore.LoadWorld(ctx, graphstore.WorldLoadRequest{World: "alpha", Manifest: head, Fetch: h.hub.fetch})
+	load, err := graphstore.LoadWorld(ctx, graphstore.WorldLoadRequest{World: world, Manifest: head, Fetch: hub.Fetch})
 	rows := map[string]graphstore.WorldSource{}
 	for _, source := range load.Sources {
 		rows[source.Path] = source
@@ -93,12 +123,13 @@ func (h *harness) checkpoint() (graphstore.WorldManifest, map[string]graphstore.
 	return load.Manifest, rows, err
 }
 
-// await polls until alpha's checkpoint satisfies check.
-func (h *harness) await(check func(graphstore.WorldManifest, map[string]graphstore.WorldSource) error) graphstore.WorldManifest {
-	h.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+// awaitCheckpoint polls, backing off, until world's checkpoint satisfies
+// check: a real hub's readers share its rate budget with the deriver.
+func awaitCheckpoint(t *testing.T, hub generation.IO, world string, check func(graphstore.WorldManifest, map[string]graphstore.WorldSource) error) graphstore.WorldManifest {
+	t.Helper()
+	deadline, wait := time.Now().Add(30*time.Second), 5*time.Millisecond
 	for {
-		m, rows, err := h.checkpoint()
+		m, rows, err := loadCheckpoint(hub, world)
 		if err == nil {
 			err = check(m, rows)
 		}
@@ -106,9 +137,10 @@ func (h *harness) await(check func(graphstore.WorldManifest, map[string]graphsto
 			return m
 		}
 		if time.Now().After(deadline) {
-			h.t.Fatalf("checkpoint of alpha: %v", err)
+			t.Fatalf("checkpoint of %s: %v", world, err)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(wait)
+		wait = min(wait*2, 200*time.Millisecond)
 	}
 }
 
@@ -278,6 +310,31 @@ func TestDeriverRecoversWhenAnotherWriterMovedTheManifest(t *testing.T) {
 	h.rewriteManifest(func(m *graphstore.WorldManifest) { m.Cursor.Seq-- })
 	h.alpha.publish("/b.md", "# B\n")
 	h.await(versions(with(map[string]int{"/b.md": 1})))
+}
+
+// A deriver that loses the manifest to a newer leader starts over from that
+// checkpoint: a row only the newer leader has seen survives its next change.
+func TestDeriverAdoptsTheCheckpointOfANewerLeader(t *testing.T) {
+	ctx, h := context.Background(), newHarness(t)
+	h.alpha.publish("/a.md", "# A\n")
+	h.start()
+	h.await(versions(map[string]int{"/a.md": 1}))
+	h.alpha.mu.Lock()
+	h.alpha.docs["/late.md"] = &fakeDoc{version: 1, body: "# Late\n"} // committed, not yet announced
+	h.alpha.mu.Unlock()
+	newer := newWorld(testDeriver(Config{Source: h.worlds, Hub: h.hub.io()}), "alpha")
+	since, err := newer.load(ctx)
+	if err != nil || since.IsZero() {
+		t.Fatalf("newer leader's load: %v %v", since, err)
+	}
+	if err := newer.read(ctx, "/late.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := newer.checkpoint(ctx, since); err != nil {
+		t.Fatal(err)
+	}
+	h.alpha.publish("/b.md", "# B\n")
+	h.await(versions(map[string]int{"/a.md": 1, "/late.md": 1, "/b.md": 1}))
 }
 
 // A world found empty after a resync still owes the manifest, which must

@@ -16,6 +16,18 @@ func Retained(build func()) int64 {
 	return int64(liveHeap()) - int64(before) //nolint:gosec // heap sizes are far below 2^63
 }
 
+// Owned runs build and returns the heap only its result keeps alive: the
+// live heap with it, less the live heap once it is dropped. Keep what it
+// shares, such as fakes, alive past the call (runtime.KeepAlive) to cancel.
+func Owned(build func() any) int64 {
+	owner := []any{build()}
+	with := liveHeap()
+	owner[0] = nil
+	without := liveHeap()
+	runtime.KeepAlive(owner)
+	return int64(with) - int64(without) //nolint:gosec // heap sizes are far below 2^63
+}
+
 func liveHeap() uint64 {
 	// A second cycle frees what the first cycle's finalizers released.
 	runtime.GC()

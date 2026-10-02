@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/memtest"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
-	"github.com/latebit-io/demarkus/server/internal/memtest"
 )
 
 // countingWriter discards what a watcher writes and counts the blocks.

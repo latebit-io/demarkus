@@ -38,6 +38,9 @@ type Options struct {
 	ConfigFile string
 	// Logger defaults to JSON at info.
 	Logger *slog.Logger
+	// Buckets opens a world's bucket by name, for objects up to
+	// maxObjectBytes; nil opens it on GCS.
+	Buckets func(ctx context.Context, bucket string, maxObjectBytes int64) (blob.Store, error)
 }
 
 // Server is an opened knowledge server: worlds, peers and listeners, served
@@ -155,7 +158,7 @@ func Open(opts Options) (*Server, error) {
 	}
 	s := &Server{config: config, configFile: opts.ConfigFile, logger: logger, certificates: certificates}
 	s.watchCtx, s.stopWatchers = context.WithCancel(context.Background())
-	if err := s.open(); err != nil {
+	if err := s.open(opts.Buckets); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -164,18 +167,22 @@ func Open(opts Options) (*Server, error) {
 
 // open fills in everything after TLS; Close on the partial Server undoes
 // whatever it reached.
-func (s *Server) open() error {
-	startupCtx, startupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer startupCancel()
-	client, err := storage.NewClient(startupCtx)
-	if err != nil {
-		s.logger.Error("GCS client unavailable", "error", err)
-		return err
+func (s *Server) open(buckets func(context.Context, string, int64) (blob.Store, error)) error {
+	if buckets == nil {
+		startupCtx, startupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer startupCancel()
+		client, err := storage.NewClient(startupCtx)
+		if err != nil {
+			s.logger.Error("GCS client unavailable", "error", err)
+			return err
+		}
+		s.gcs = client
+		buckets = func(_ context.Context, bucket string, maxObjectBytes int64) (blob.Store, error) {
+			return gcs.New(client, bucket, maxObjectBytes)
+		}
 	}
-	s.gcs = client
-
-	newStore := func(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
-		return gcs.New(client, world.Bucket.Name(), maxObjectBytes)
+	newStore := func(ctx context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
+		return buckets(ctx, world.Bucket.Name(), maxObjectBytes)
 	}
 	peers, err := openPeers(s.config.Peers, s.certificates, s.logger)
 	if err != nil {

@@ -525,9 +525,11 @@ func (s *Store) rebuildSeedsLocked() {
 	if s.sourceRevisions == nil {
 		s.sourceRevisions = make(map[string]int)
 	}
+	shown := make(map[string]bool, len(selected))
 	for key := range selected {
 		candidate := selected[key]
 		observation := &candidate.Node.Observation
+		shown[observation.Source] = true
 		if observation.Source != "" && observation.HighestRevision > 0 {
 			s.sourceRevisions[observation.Source] = max(s.sourceRevisions[observation.Source], observation.HighestRevision)
 		}
@@ -540,6 +542,9 @@ func (s *Store) rebuildSeedsLocked() {
 		}
 		selected[key] = candidate
 	}
+	// A source no seed or crawl holds any more is forgotten with its high
+	// water, or every source ever seen would stay.
+	maps.DeleteFunc(s.sourceRevisions, func(source string, _ int) bool { return !shown[source] })
 	s.nodes = make(map[string]*StoredNode, len(selected))
 	edgeCapacity := 0
 	for key := range selected {
