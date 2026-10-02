@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,5 +108,60 @@ func TestNewWatchOverAConnReopensFromItsCursor(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("stream %d was not released", i)
 		}
+	}
+}
+
+// ackThenHold serves one watch over net.Pipe: the acknowledgement, then
+// nothing until the stream closes. With dialCtx it also closes when the dial's
+// context ends, as the knowledge server's in-process watch does.
+func ackThenHold(t *testing.T, dials *atomic.Int32, closeAfterAck bool) func(context.Context, protocol.Request) (net.Conn, error) {
+	return func(ctx context.Context, _ protocol.Request) (net.Conn, error) {
+		dials.Add(1)
+		client, server := net.Pipe()
+		go func() {
+			stop := context.AfterFunc(ctx, func() { server.Close() }) //nolint:errcheck,gosec // ends the stream either way
+			defer stop()
+			if _, err := protocol.WatchControl(protocol.StatusOK, protocol.Cursor{Epoch: "e", Seq: 1}).WriteTo(server); err != nil {
+				return
+			}
+			if closeAfterAck {
+				server.Close() //nolint:errcheck,gosec // ends the stream either way
+				return
+			}
+			if _, err := io.Copy(io.Discard, server); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+				t.Errorf("drain: %v", err)
+			}
+		}()
+		return client, nil
+	}
+}
+
+// A conn that lives as long as its dial's context, like the knowledge
+// server's in-process watch, still outlives the handshake.
+func TestConnDialerStreamOutlivesTheHandshake(t *testing.T) {
+	var dials atomic.Int32
+	w, err := NewWatch(t.Context(), ConnDialer(ackThenHold(t, &dials, false)), WatchRequest{Path: "/"}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	time.Sleep(300 * time.Millisecond) // a window in which no reopen may happen
+	if n := dials.Load(); n != 1 {
+		t.Fatalf("dialed %d times while idle, want 1", n)
+	}
+}
+
+// A server that ends every stream right after its acknowledgement gets
+// reopens backing off, never a tight loop.
+func TestWatchBacksOffStreamsThatEndEmpty(t *testing.T) {
+	var dials atomic.Int32
+	w, err := NewWatch(t.Context(), ConnDialer(ackThenHold(t, &dials, true)), WatchRequest{Path: "/"}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	time.Sleep(400 * time.Millisecond)
+	if n := dials.Load(); n > 4 {
+		t.Fatalf("dialed %d times in 400 ms, want a backoff from 100 ms", n)
 	}
 }

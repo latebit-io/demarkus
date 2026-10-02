@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/generation"
@@ -273,5 +276,37 @@ func TestNewLeaderWritesTheExportOnlyForAChange(t *testing.T) {
 	awaitExport(t, hub, map[string]string{"mark://team/a.md": "A", "mark://team/b.md": "B"})
 	if after := exportVersion(); after != before+1 {
 		t.Errorf("export at version %d after one change, want %d", after, before+1)
+	}
+}
+
+// watchCounter counts the in-process watches a replica opens.
+type watchCounter struct {
+	gateway.LocalWorlds
+	opened atomic.Int64
+}
+
+func (c *watchCounter) Watch(ctx context.Context, authority string, req protocol.Request) (net.Conn, error) {
+	c.opened.Add(1)
+	return c.LocalWorlds.Watch(ctx, authority, req)
+}
+
+// A deriver holds its one watch open: an in-process stream that ended with
+// its handshake reopened about every 20 ms in production.
+func TestDeriverHoldsOneWatch(t *testing.T) {
+	t.Parallel()
+	sys := newSystem(t)
+	all := sys.config.Registry().All()
+	worlds := make([]knowledgetest.World, len(all))
+	for i := range all {
+		worlds[i] = knowledgetest.World{Name: all[i].Name, Authority: all[i].Authority()}
+	}
+	local := &watchCounter{LocalWorlds: knowledgetest.Open(t, sys.buckets, worlds...)}
+	replica := gateway.NewComposite(sys.config.Registry(), local, nil)
+	publish(t, replica, "/a.md", "# A\n")
+	sys.lead(replica, replica)
+	sys.await(replica, versions(map[string]int{"/a.md": 1}))
+	time.Sleep(time.Second) // a window in which no reopen may happen
+	if opened := local.opened.Load(); opened != 1 {
+		t.Fatalf("the deriver opened its watch %d times, want once", opened)
 	}
 }
