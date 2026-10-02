@@ -84,3 +84,66 @@ func TestWorldRetainsOnlyItsLiveRows(t *testing.T) {
 		t.Errorf("the world holds %d bytes, want %d to %d", owned, floor, limit)
 	}
 }
+
+// The exporter holds the rows of the worlds' live checkpoints: many cycles of
+// agent-shaped edits, creates and archives leave it holding those and no
+// history of the checkpoints it loaded or the exports it wrote.
+func TestExporterRetainsOnlyTheLiveCheckpoints(t *testing.T) {
+	const live, cycles, edits, links = 16, 100, 4, 32
+	ctx, alpha := context.Background(), newFakeWorld(t)
+	d := testDeriver(Config{Worlds: []string{"alpha"}, Source: fakeSource{"alpha": alpha}, Hub: newFakeHub().io()})
+	w := newWorld(d, "alpha")
+	doc := func(i int) string { return fmt.Sprintf("/docs/doc-%d.md", i) }
+	run := func(cycle int) string { return fmt.Sprintf("/agents/run-%d.md", cycle) }
+	graph := memtest.AgentGraphBody(0)
+	publish := func(docPath string, cycle int) {
+		applyEvent(t, w, docPath, alpha.publish(docPath, agentDoc(graph, cycle, links)), protocol.OpPublish)
+	}
+	checkpoint := func(cycle int) {
+		if err := w.checkpoint(ctx, protocol.Cursor{Epoch: "e1", Seq: uint64(cycle + 1)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owned := memtest.Owned(func() any {
+		e := newExporter(d)
+		export := func() {
+			e.changed("alpha")
+			if err := e.export(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := range live {
+			publish(doc(i), 0)
+		}
+		publish(run(0), 0)
+		checkpoint(0)
+		export()
+		for cycle := 1; cycle <= cycles; cycle++ {
+			graph = memtest.AgentGraphBody(cycle)
+			for i := range edits {
+				publish(doc((cycle*edits+i)%live), cycle)
+			}
+			publish(run(cycle), cycle)
+			alpha.archive(run(cycle - 1))
+			applyEvent(t, w, run(cycle-1), 1, protocol.OpArchive)
+			checkpoint(cycle)
+			export()
+		}
+		rows := 0
+		for _, sources := range e.worlds["alpha"].shards {
+			rows += len(sources)
+		}
+		if rows != live+1 || e.owed {
+			t.Fatalf("after the cycles: %d rows, owed %t", rows, e.owed)
+		}
+		return e
+	})
+	runtime.KeepAlive(d) // and the world and fakes it reads and writes
+	runtime.KeepAlive(w)
+	t.Logf("the exporter holds %d bytes after %d cycles", owned, cycles)
+	// 17 rows of 32 edges are about 110 KB, as the world's own; a kept
+	// export body or superseded shards would add hundreds of KB.
+	if floor, limit := int64(32<<10), int64(192<<10); owned < floor || owned > limit {
+		t.Errorf("the exporter holds %d bytes, want %d to %d", owned, floor, limit)
+	}
+}

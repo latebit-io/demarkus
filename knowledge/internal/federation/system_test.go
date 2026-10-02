@@ -220,15 +220,16 @@ func sameShard(docPath string) string {
 	}
 }
 
-// The hub takes the deriver's checkpoints, pruned to their retention, and
-// nothing else under its grant.
+// The hub takes the deriver's checkpoints and export, pruned to their
+// retention, and nothing else under its grant: not the agent's snapshot.
 func TestHubRefusesWritesOutsideTheFederationGrant(t *testing.T) {
 	t.Parallel()
 	ctx, hub := context.Background(), HubIO(newSystem(t).replica(), hubWorld)
 	manifest := graphstore.WorldManifestPath(teamWorld)
 	for _, tc := range []struct{ path, want string }{
 		{manifest, protocol.StatusCreated},
-		{graphstore.LegacyExportPath, protocol.StatusNotPermitted},
+		{graphstore.LegacyExportPath, protocol.StatusCreated},
+		{graphstore.SnapshotManifestPath, protocol.StatusNotPermitted},
 		{"/index.md", protocol.StatusNotPermitted},
 	} {
 		resp, err := hub.Publish(ctx, tc.path, "# Graph\n", -1)
@@ -239,5 +240,38 @@ func TestHubRefusesWritesOutsideTheFederationGrant(t *testing.T) {
 	head, err := hub.Fetch(ctx, manifest)
 	if err != nil || head.Metadata["retention"] != strconv.Itoa(retention) {
 		t.Errorf("checkpoint metadata %v (%v), want retention %d", head.Metadata, err, retention)
+	}
+}
+
+// The export lands in the real hub, and a new leader whose render matches it
+// writes it again only for a change.
+func TestNewLeaderWritesTheExportOnlyForAChange(t *testing.T) {
+	t.Parallel()
+	ctx, sys := context.Background(), newSystem(t)
+	first, second := sys.replica(), sys.replica()
+	hub := HubIO(second, hubWorld)
+	exportVersion := func() int {
+		t.Helper()
+		head, err := hub.Fetch(ctx, graphstore.LegacyExportPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		version, err := generation.ResponseVersion(graphstore.LegacyExportPath, head)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return version
+	}
+	publish(t, first, "/a.md", "# A\n")
+	stop := sys.lead(first, first)
+	awaitExport(t, hub, map[string]string{"mark://team/a.md": "A"})
+	stop()
+	before := exportVersion()
+
+	sys.lead(second, second)
+	publish(t, second, "/b.md", "# B\n")
+	awaitExport(t, hub, map[string]string{"mark://team/a.md": "A", "mark://team/b.md": "B"})
+	if after := exportVersion(); after != before+1 {
+		t.Errorf("export at version %d after one change, want %d", after, before+1)
 	}
 }

@@ -11,10 +11,9 @@ import (
 func TestReadableWorldsIgnoresWriterAllow(t *testing.T) {
 	cfg := testConfig() // team-a: Allow domains=example.com
 	cfg.Worlds = append(cfg.Worlds, WorldConfig{
-		Name:         "locked",
-		Namespace:    "locked",
-		TokensSecret: "locked-tokens",
-		Allow:        AllowConfig{Emails: []string{"only-admin@nowhere.test"}},
+		Name:      "locked",
+		Namespace: "locked",
+		Allow:     AllowConfig{Emails: []string{"only-admin@nowhere.test"}},
 	})
 	got := ReadableWorlds(cfg.Registry().View(ProfileKnowledge))
 	if len(got) != 2 {

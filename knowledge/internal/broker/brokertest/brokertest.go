@@ -38,11 +38,10 @@ func NewConfig() *core.Config {
 		},
 		Worlds: []core.WorldConfig{
 			{
-				Name:         "team-a",
-				Profile:      core.ProfileKnowledge,
-				Namespace:    "team-a",
-				TokensSecret: "team-a-tokens",
-				Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+				Name:      "team-a",
+				Profile:   core.ProfileKnowledge,
+				Namespace: "team-a",
+				Allow:     core.AllowConfig{Domains: []string{"example.com"}},
 				WriteScope: core.WriteScope{
 					Paths: []string{"/team-a/*"},
 				},
@@ -62,11 +61,11 @@ func NewMemoryConfig() *core.Config {
 	cfg.Server.Memory = core.GatewayConfig{PublicURL: "https://memory.example.com"}
 	cfg.Worlds = []core.WorldConfig{
 		{
-			Name: "alice-w", Profile: core.ProfileMemory, Namespace: "alice-w", TokensSecret: "alice-w-tokens",
+			Name: "alice-w", Profile: core.ProfileMemory, Namespace: "alice-w",
 			Allow: core.AllowConfig{Emails: []string{"alice@example.com"}},
 		},
 		{
-			Name: "bob-w", Profile: core.ProfileMemory, Namespace: "bob-w", TokensSecret: "bob-w-tokens",
+			Name: "bob-w", Profile: core.ProfileMemory, Namespace: "bob-w",
 			Allow: core.AllowConfig{Emails: []string{"bob@example.com"}},
 		},
 	}

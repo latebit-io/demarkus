@@ -2,9 +2,10 @@
 {{- $worlds := include "demarkus-knowledge-server.worlds" . | fromYamlArray -}}
 demarkus-knowledge-server installed as release {{ .Release.Name | quote }} in namespace {{ .Release.Namespace | quote }}.
 
+{{- $hub := include "demarkus-knowledge-server.federationHub" . }}
 == Worlds ({{ len $worlds }}) ==
 {{- range $worlds }}
-  - {{ .name }} ({{ .profile }}{{ if .hub }}, hub{{ end }}): authority {{ index .authorities 0 }}, tokens Secret {{ .tokenSecret.name }}
+  - {{ .name }} ({{ .profile }}{{ if eq .name $hub }}, hub{{ end }}): authority {{ index .authorities 0 }}, tokens Secret {{ .tokenSecret.name }}
 {{- end }}
 {{- if include "demarkus-knowledge-server.provisioningEnabled" . }}
   provisioning {{ .Values.provisioning.mode }}: tenants land in {{ .Values.provisioning.worldsSecret }} and {{ include "demarkus-knowledge-server.registrySecretName" . }}

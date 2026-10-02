@@ -277,18 +277,18 @@ fromYamlArray.
 {{- fail (printf "%s.allow must name the tenant identity (domains, groups or emails) on a memory world" $location) -}}
 {{- end -}}
 {{- end -}}
-{{- $federation := .Values.broker.federation -}}
-{{- if $federation.hub -}}
-{{- $hub := get $names $federation.hub -}}
+{{- $hubName := include "demarkus-knowledge-server.federationHub" . -}}
+{{- if $hubName -}}
+{{- $hub := get $names $hubName -}}
 {{- if or (empty $hub) (ne $hub.profile "knowledge") -}}
-{{- fail (printf "broker.federation.hub %q must name a knowledge world in worlds (or global.worlds)" $federation.hub) -}}
+{{- fail (printf "federation hub %q must name a knowledge world in worlds (or global.worlds)" $hubName) -}}
 {{- end -}}
 {{- if $hub.readOnly -}}
-{{- fail (printf "broker.federation.hub %q is read-only; the deriver writes its checkpoints there" $federation.hub) -}}
+{{- fail (printf "federation hub %q is read-only; the deriver writes its checkpoints there" $hubName) -}}
 {{- end -}}
 {{- /* The Role names the Lease, so the broker's default cannot fill it. */ -}}
-{{- if empty $federation.leaseName -}}
-{{- fail "broker.federation.leaseName is required when broker.federation.hub is set" -}}
+{{- if empty .Values.broker.federation.leaseName -}}
+{{- fail "broker.federation.leaseName is required when federation has a hub" -}}
 {{- end -}}
 {{- end -}}
 {{- /* The bootstrap Job generates one <world>-token-values Secret per world;
@@ -357,11 +357,6 @@ the admin entry in tokens.toml.
 {{- printf "WEB_CLIENT_SECRET_%d" (int .) -}}
 {{- end -}}
 
-{{/* Broker record of a world's agent token; pinned to agentTokenSecretName in core/secret_refs.go. */}}
-{{- define "demarkus-knowledge-server.agentTokenSecretName" -}}
-{{- printf "demarkus-broker-agent-token-%s" .worldName -}}
-{{- end -}}
-
 {{/* The binary's default registry Secret, kept so an upgrade finds its tenants. */}}
 {{- define "demarkus-knowledge-server.registrySecretName" -}}
 {{- default "demarkus-memory-broker-registry" .Values.provisioning.registrySecret -}}
@@ -373,21 +368,16 @@ the admin entry in tokens.toml.
 {{- if or (eq $mode "allowlisted") (eq $mode "open") -}}true{{- end -}}
 {{- end -}}
 
-{{/*
-Resolved agentTokens as YAML: .Values.broker.agentTokens, or when unset one
-entry per hub world matching the agent chart's default <hub>-token-values[admin].
-*/}}
-{{- define "demarkus-knowledge-server.agentTokens" -}}
-{{- $tokens := .Values.broker.agentTokens -}}
-{{- if kindIs "invalid" $tokens -}}
-{{- $tokens = list -}}
+{{/* The federation hub: broker.federation.hub, else the one world marked hub; empty is off. */}}
+{{- define "demarkus-knowledge-server.federationHub" -}}
+{{- $marked := list -}}
 {{- range include "demarkus-knowledge-server.worlds" . | fromYamlArray -}}
-{{- if .hub -}}
-{{- $tokens = append $tokens (dict "world" .name "secret" (printf "%s-token-values" .name) "key" "admin") -}}
+{{- if .hub -}}{{- $marked = append $marked .name -}}{{- end -}}
 {{- end -}}
+{{- if gt (len $marked) 1 -}}
+{{- fail (printf "worlds %v are all marked hub; at most one world is the federation hub" $marked) -}}
 {{- end -}}
-{{- end -}}
-{{- toYaml $tokens -}}
+{{- default (first $marked | default "") .Values.broker.federation.hub -}}
 {{- end -}}
 
 {{/*

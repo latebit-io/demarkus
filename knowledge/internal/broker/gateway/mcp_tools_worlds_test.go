@@ -27,10 +27,9 @@ func worldsTestConfig() *core.Config {
 	cfg := mcpTestConfig()
 	cfg.Worlds[0].PublicURL = "mark://team-a.example.org:6309"
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:         "secret-b",
-		Namespace:    "secret-b",
-		TokensSecret: "secret-b-tokens",
-		Allow:        core.AllowConfig{Domains: []string{"otherco.test"}},
+		Name:      "secret-b",
+		Namespace: "secret-b",
+		Allow:     core.AllowConfig{Domains: []string{"otherco.test"}},
 	})
 	return cfg
 }

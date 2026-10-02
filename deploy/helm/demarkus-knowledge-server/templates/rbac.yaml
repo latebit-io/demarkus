@@ -1,12 +1,9 @@
 {{- if .Values.rbac.create }}
 {{- /* resourceNames never matches a create, so get/update are pinned per
        Secret and create is a separate namespace-wide rule. Everything the
-       broker writes lives in the release namespace: its own state, each
-       world's tokens Secret (agent token hashes), the agent token records,
-       and with provisioning the registry and the worlds fragment. */ -}}
+       broker writes lives in the release namespace: its own state, and with
+       provisioning the registry and the worlds fragment. */ -}}
 {{- $name := include "demarkus-knowledge-server.fullname" . -}}
-{{- $worlds := include "demarkus-knowledge-server.worlds" . | fromYamlArray -}}
-{{- $agentTokens := include "demarkus-knowledge-server.agentTokens" . | fromYamlArray -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -18,7 +15,7 @@ rules:
     resources: ["leases"]
     resourceNames:
       - {{ .Values.broker.sweeper.leaseName | quote }}
-      {{- if .Values.broker.federation.hub }}
+      {{- if include "demarkus-knowledge-server.federationHub" . }}
       - {{ .Values.broker.federation.leaseName | quote }}
       {{- end }}
     verbs: ["get", "update"]
@@ -37,21 +34,6 @@ rules:
       - {{ .Values.provisioning.worldsSecret | quote }}
       {{- end }}
     verbs: ["get", "update"]
-  {{- if $agentTokens }}
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames:
-      {{- range $spec := $agentTokens }}
-      - {{ include "demarkus-knowledge-server.agentTokenSecretName" (dict "worldName" $spec.world) | quote }}
-      - {{ $spec.secret | quote }}
-      {{- range $worlds }}
-      {{- if eq .name $spec.world }}
-      - {{ .tokenSecret.name | quote }}
-      {{- end }}
-      {{- end }}
-      {{- end }}
-    verbs: ["get", "update"]
-  {{- end }}
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]

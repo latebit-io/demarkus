@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"fmt"
 	"net/url"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -16,11 +15,6 @@ import (
 // maxSweeperInterval is the short lived token lifetime; a longer sweep leaves
 // expired tokens accepted for up to a whole cycle.
 const maxSweeperInterval = 24 * time.Hour
-
-var (
-	secretNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
-	secretKeyRE  = regexp.MustCompile(`^[-._a-zA-Z0-9]{1,253}$`)
-)
 
 func (c *Config) validate() error {
 	if c.Server.Addr == "" {
@@ -57,11 +51,7 @@ func (c *Config) validate() error {
 	if c.Provisioning.Enabled() && !c.Server.Memory.Enabled() {
 		return fmt.Errorf("provisioning.mode %q needs the memory gateway (server.memory.publicURL)", c.Provisioning.Mode)
 	}
-	tokenSecrets, err := c.validateWorlds()
-	if err != nil {
-		return err
-	}
-	if err := c.validateAgentTokens(tokenSecrets); err != nil {
+	if err := c.validateWorlds(); err != nil {
 		return err
 	}
 	if err := c.validateFederation(); err != nil {
@@ -76,34 +66,27 @@ func (c *Config) validate() error {
 	return c.RateLimit.applyDefaultsAndValidate()
 }
 
-// validateWorlds checks every static world and the set as a whole; it
-// returns the tokens Secret references (namespace and name to world) the
-// agent token check needs. Zero worlds is legal with provisioning on.
-func (c *Config) validateWorlds() (map[[2]string]string, error) {
+// validateWorlds checks every static world and the set as a whole. Zero
+// worlds is legal with provisioning on.
+func (c *Config) validateWorlds() error {
 	if len(c.Worlds) == 0 && !c.Provisioning.Enabled() {
-		return nil, fmt.Errorf("at least one world is required (or enable provisioning)")
+		return fmt.Errorf("at least one world is required (or enable provisioning)")
 	}
 	seen := make(map[string]bool, len(c.Worlds))
-	seenSecretRefs := make(map[[2]string]string, len(c.Worlds))
 	for i := range c.Worlds {
 		w := &c.Worlds[i]
 		if err := validateWorld(i, w); err != nil {
-			return nil, err
+			return err
 		}
 		if err := c.validateWorldProfile(i, w); err != nil {
-			return nil, err
+			return err
 		}
 		if seen[w.Name] {
-			return nil, fmt.Errorf("worlds[%d]: duplicate name %q", i, w.Name)
+			return fmt.Errorf("worlds[%d]: duplicate name %q", i, w.Name)
 		}
 		seen[w.Name] = true
-		ref := [2]string{w.Namespace, w.TokensSecret}
-		if other, ok := seenSecretRefs[ref]; ok {
-			return nil, fmt.Errorf("worlds[%d] (%s): duplicate tokens Secret reference %q (also used by world %q)", i, w.Name, fmt.Sprintf("%s/%s", ref[0], ref[1]), other)
-		}
-		seenSecretRefs[ref] = w.Name
 	}
-	return seenSecretRefs, nil
+	return nil
 }
 
 // applyDefaultsAndValidate fills the sweeper knobs and bounds the interval.
@@ -165,50 +148,6 @@ func (c *Config) validateWorldProfile(i int, w *WorldConfig) error {
 		}
 	default:
 		return fmt.Errorf("worlds[%d] (%s): profile must be %q or %q (got %q)", i, w.Name, ProfileKnowledge, ProfileMemory, w.Profile)
-	}
-	return nil
-}
-
-// validateAgentTokens requires each entry to name a distinct static world and
-// a Secret no world reads its tokens.toml from (tokenSecrets: namespace and
-// name to world); paths default to ["/**"].
-func (c *Config) validateAgentTokens(tokenSecrets map[[2]string]string) error {
-	if len(c.AgentTokens) == 0 {
-		return nil
-	}
-	worlds := make(map[string]*WorldConfig, len(c.Worlds))
-	for i := range c.Worlds {
-		worlds[c.Worlds[i].Name] = &c.Worlds[i]
-	}
-	seen := make(map[string]bool, len(c.AgentTokens))
-	seenRefs := make(map[[3]string]string, len(c.AgentTokens))
-	for i := range c.AgentTokens {
-		spec := &c.AgentTokens[i]
-		world, ok := worlds[spec.World]
-		switch {
-		case !ok:
-			return fmt.Errorf("agentTokens[%d]: world %q is not a configured worlds[] entry", i, spec.World)
-		case world.Profile != ProfileKnowledge:
-			return fmt.Errorf("agentTokens[%d]: world %q is a memory world; agent tokens serve knowledge worlds", i, spec.World)
-		case seen[spec.World]:
-			return fmt.Errorf("agentTokens[%d]: duplicate world %q", i, spec.World)
-		case !secretNameRE.MatchString(spec.Secret):
-			return fmt.Errorf("agentTokens[%d] (%s): secret %q must be a lowercase DNS subdomain", i, spec.World, spec.Secret)
-		case !secretKeyRE.MatchString(spec.Key):
-			return fmt.Errorf("agentTokens[%d] (%s): key %q must be letters, digits, '-', '_' or '.'", i, spec.World, spec.Key)
-		}
-		if other, ok := tokenSecrets[[2]string{world.Namespace, spec.Secret}]; ok {
-			return fmt.Errorf("agentTokens[%d] (%s): secret %q is the tokens Secret of world %q", i, spec.World, spec.Secret, other)
-		}
-		ref := [3]string{world.Namespace, spec.Secret, spec.Key}
-		if other, ok := seenRefs[ref]; ok {
-			return fmt.Errorf("agentTokens[%d] (%s): %s/%s[%s] is also the agent token of world %q", i, spec.World, ref[0], ref[1], ref[2], other)
-		}
-		seenRefs[ref] = spec.World
-		seen[spec.World] = true
-		if len(spec.Paths) == 0 {
-			spec.Paths = []string{"/**"}
-		}
 	}
 	return nil
 }
@@ -319,12 +258,8 @@ func validateWorld(i int, w *WorldConfig) error {
 		}
 	}
 	w.Namespace = strings.ToLower(strings.TrimSpace(w.Namespace))
-	w.TokensSecret = strings.ToLower(strings.TrimSpace(w.TokensSecret))
-	switch {
-	case w.Namespace == "":
-		return fmt.Errorf("worlds[%d] (%s): namespace is required", i, w.Name)
-	case w.TokensSecret == "":
-		return fmt.Errorf("worlds[%d] (%s): tokensSecret is required", i, w.Name)
+	if w.Namespace == "" && w.InternalAddress == "" {
+		return fmt.Errorf("worlds[%d] (%s): namespace or internalAddress is required", i, w.Name)
 	}
 	// Lowercased and trimmed at load so authorization is a plain compare.
 	// An empty entry is a typo and surfaces here rather than never matching.

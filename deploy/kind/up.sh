@@ -42,8 +42,8 @@ ARGO_CHART_VERSION="${ARGO_CHART_VERSION:-7.7.0}"
 ARGO_REPO_URL="${ARGO_REPO_URL:-https://argoproj.github.io/argo-helm}"
 # Must match the elements list in deploy/k8s/examples/applicationset.yaml.
 ARGO_WORLDS=(world-a world-b)
-# Federation for the knowledge stage: the hub is a world values-knowledge.yaml
-# declares; the cadence is short so the smoke waits seconds (defaults 30s, 1m).
+# Federation for the knowledge stage: the hub is the world values-knowledge.yaml
+# marks hub; the cadence is short so the smoke waits seconds (defaults 30s, 1m).
 FEDERATION_HUB=root
 FEDERATION_QUIET_SECONDS=5
 FEDERATION_INTERVAL_SECONDS=10
@@ -354,7 +354,6 @@ done'
     --set-string "broker.webClients[0].clientSecretHash=$WEBCLIENT_SECRET_HASH" \
     --set "broker.webClients[0].redirectURIs[0]=$WEBCLIENT_REDIRECT_URI" \
     --set "broker.webClients[0].name=Web SSO smoke client" \
-    --set "broker.federation.hub=$FEDERATION_HUB" \
     --set "broker.federation.quietPeriod=${FEDERATION_QUIET_SECONDS}s" \
     --set "broker.federation.interval=${FEDERATION_INTERVAL_SECONDS}s" \
     --wait --timeout 5m
@@ -701,6 +700,15 @@ while :; do
   sleep 1
 done
 echo "OK: the edit and its link reached the hub manifest in $(($(date +%s) - START)) s (bound $BOUND s)"
+# The export follows its checkpoint: at most one interval more, plus its commit.
+EXPORT_BOUND=$((BOUND + INTERVAL + 2))
+until tool mark_fetch "{\"url\":\"mark://$HUB/graph.md\",\"force\":true}" && grep -q "mark://$WORLD$FED_PATH" /tmp/rpc.out; do
+  if [ $(($(date +%s) - START)) -ge "$EXPORT_BOUND" ]; then
+    echo "FAIL: the edit did not reach mark://$HUB/graph.md within $EXPORT_BOUND s"; cat /tmp/rpc.out; exit 1
+  fi
+  sleep 1
+done
+echo "OK: the edit reached the hub /graph.md in $(($(date +%s) - START)) s (bound $EXPORT_BOUND s)"
 tool mark_archive "{\"url\":\"mark://$WORLD$FED_PATH\"}"
 want "mark_archive retires the federation smoke document" "archived: true"
 '

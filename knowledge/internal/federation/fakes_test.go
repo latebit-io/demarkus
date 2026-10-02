@@ -16,6 +16,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/generation"
+	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -244,7 +245,8 @@ type fakeHub struct {
 	mu      sync.Mutex
 	docs    map[string]protocol.Response
 	heads   map[string]int
-	writes  []string        // every path a new version was written at
+	writes  []string        // every checkpoint path a new version was written at
+	exports int             // publishes of the export, landed or not
 	failing map[string]bool // writes that fail for now
 }
 
@@ -268,6 +270,9 @@ func (h *fakeHub) fetch(_ context.Context, docPath string) (protocol.Response, e
 func (h *fakeHub) publish(_ context.Context, docPath, body string, expected int) (protocol.Response, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if docPath == graphstore.LegacyExportPath {
+		h.exports++
+	}
 	if h.failing[docPath] {
 		return protocol.Response{}, errors.New("hub unavailable")
 	}
@@ -279,7 +284,9 @@ func (h *fakeHub) publish(_ context.Context, docPath, body string, expected int)
 		head++
 		resp := fetchtest.Head(body, head, map[string]string{"content-hash": generation.BodyHash(body)}).Response
 		h.docs[docPath], h.docs[protocol.VersionPath(docPath, head)], h.heads[docPath] = resp, resp, head
-		h.writes = append(h.writes, docPath)
+		if docPath != graphstore.LegacyExportPath { // counted in exports
+			h.writes = append(h.writes, docPath)
+		}
 	}
 	return protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{"version": fmt.Sprint(head)}}, nil
 }
@@ -290,11 +297,19 @@ func (h *fakeHub) setFailing(docPath string, failing bool) {
 	h.failing[docPath] = failing
 }
 
-// written is every path written since the mark.
+// written is every checkpoint path written since the mark.
 func (h *fakeHub) written(mark int) []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Clone(h.writes[mark:])
+}
+
+// exportWrites is how often the export was published, even when the
+// body was unchanged or the write conflicted.
+func (h *fakeHub) exportWrites() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.exports
 }
 
 func (h *fakeHub) mark() int {

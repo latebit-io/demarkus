@@ -27,10 +27,9 @@ func testConfig() *Config {
 		},
 		Worlds: []WorldConfig{
 			{
-				Name:         "team-a",
-				Namespace:    "team-a",
-				TokensSecret: "team-a-tokens",
-				Allow:        AllowConfig{Domains: []string{"example.com"}},
+				Name:      "team-a",
+				Namespace: "team-a",
+				Allow:     AllowConfig{Domains: []string{"example.com"}},
 				WriteScope: WriteScope{
 					Paths: []string{"/team-a/*"},
 				},

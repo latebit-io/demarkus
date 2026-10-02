@@ -45,8 +45,8 @@ server:
 # configures the gateway: allow is the per world identity predicate,
 # writeScope the paths an allowed identity may write, publicURL the address
 # /me/install hands direct clients (blank omits the world), hub marks the
-# world the agent publishes into, profile picks the gateway (knowledge, or
-# memory for a hand-provisioned tenant whose allow names one identity).
+# federation hub (at most one world), profile picks the gateway (knowledge,
+# or memory for a hand-provisioned tenant whose allow names one identity).
 worlds: []
   # - name: team-a
   #   worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
@@ -71,11 +71,11 @@ tokens:
     # 64-char token is generated per world.
     token: ""
 
-  # When true, also create a <world>-token-values Secret with the raw value.
-  # Required when the federation agent takes its hub token from it.
+  # When true, also create a <world>-token-values Secret with the raw value,
+  # for a direct client that writes with it.
   emitRawValues: true
 
-  # Token Secrets are runtime-owned (the broker appends to tokens.toml), so a
+  # A token Secret's hash must match the raw value minted with it, so a
   # pre-install Job creates any missing ones out-of-band and the chart never
   # templates them. Disable for GitOps installs; see the README.
   bootstrap:
@@ -249,18 +249,6 @@ broker:
       name: ""
       key: signing-key.pem
 
-  # Federation agent tokens the broker issues and keeps current: a
-  # publish-only token per entry, its hash in the world's tokens Secret, the
-  # raw value in secret[key]. Unset derives one entry per hub world matching
-  # the agent chart's default mount; [] turns it off. A Secret the broker did
-  # not create is left alone.
-  agentTokens: ~
-    # - world: root
-    #   secret: root-token-values
-    #   key: admin
-    #   # Default ["/**"].
-    #   paths: ["/**"]
-
   # Registered confidential web clients (RFC 6749 2.1), such as the library.
   # Each entry sets exactly one of clientSecret (hashed at load),
   # clientSecretHash (sha256 hex) or existingSecretRef (the Secret the web
@@ -276,9 +264,7 @@ broker:
 
   # Worlds served elsewhere (another cluster) the gateway reads over QUIC.
   # Writes stay local. internalAddress is the authority and SNI, dialAddress
-  # the socket when it differs, publicURL what /me/install hands out;
-  # namespace and tokensSecret (default <name>-tokens here) matter only
-  # when an agent token targets the world.
+  # the socket when it differs, publicURL what /me/install hands out.
   remoteWorlds: []
     # - name: legacy
     #   internalAddress: "legacy.other-cluster.example:6309"
@@ -296,9 +282,10 @@ broker:
     interval: 5m
     leaseName: demarkus-broker-sweeper
 
-  # Federation graph, checkpointed into hub's /graph/worlds/ by one replica
-  # under the Lease; see the README. hub is a writable knowledge world, empty
-  # turns it off. Blank quietPeriod and interval take 30s and 1m.
+  # Federation graph, checkpointed into the hub's /graph/worlds/ and
+  # /graph.md by one replica under the Lease; see the README. hub, a writable
+  # knowledge world, defaults to the world marked hub; none is off. Blank
+  # quietPeriod and interval take 30s and 1m.
   federation:
     hub: ""
     leaseName: demarkus-federation
@@ -319,8 +306,7 @@ broker:
     trustForwardedFor: true
 
 # Role and RoleBinding in the release namespace for the broker's state: the
-# sweeper and federation Leases, its own Secrets, each world's tokens Secret
-# (agent token hashes), agent token records, and the tenant registry and
+# sweeper and federation Leases, its own Secrets, and the tenant registry and
 # worlds fragment when provisioning is on. Flip off only if RBAC is managed
 # out of band.
 rbac:

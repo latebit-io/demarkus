@@ -1,12 +1,14 @@
 // Package federation derives the federation graph of the worlds this process
 // serves from their change feeds, and checkpoints it into the hub world one
-// changed shard at a time (graphstore's world checkpoint format). Only a
-// world whose feed cannot be resumed is read whole again.
+// changed shard at a time (graphstore's world checkpoint format), rendering
+// the hub's /graph.md from the checkpoints. Only a world whose feed cannot be
+// resumed is read whole again.
 package federation
 
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -35,8 +37,9 @@ const (
 	readsPerSecond = 20
 )
 
-// Grant is everything the deriver may write: its checkpoints in the hub.
-var Grant = protocol.Grant{Label: "federation", Paths: []string{graphstore.WorldGraphRoot + "/**"}}
+// Grant is everything the deriver may write: its checkpoints in the hub and
+// the export rendered from them.
+var Grant = protocol.Grant{Label: "federation", Paths: []string{graphstore.WorldGraphRoot + "/**", graphstore.LegacyExportPath}}
 
 // Source reads the derived worlds by name, anonymously: no token and no
 // grant, so a document the public cannot read never enters the graph.
@@ -85,7 +88,8 @@ type Config struct {
 // deriver is what every world's loop shares.
 type deriver struct {
 	Config
-	reads *rate.Limiter
+	reads  *rate.Limiter
+	export *exporter
 }
 
 // Run derives every world until ctx ends. A world that fails starts over
@@ -96,7 +100,9 @@ func Run(ctx context.Context, cfg Config) { //nolint:gocritic // a config is pas
 
 func newDeriver(cfg Config) *deriver { //nolint:gocritic // a config is passed once per term
 	cfg.Log = cmp.Or(cfg.Log, slog.Default())
-	return &deriver{Config: cfg, reads: rate.NewLimiter(readsPerSecond, readsPerSecond)}
+	d := &deriver{Config: cfg, reads: rate.NewLimiter(readsPerSecond, readsPerSecond)}
+	d.export = newExporter(d)
+	return d
 }
 
 func (d *deriver) run(ctx context.Context) {
@@ -104,7 +110,37 @@ func (d *deriver) run(ctx context.Context) {
 	for _, name := range d.Worlds {
 		wg.Go(func() { d.derive(ctx, name) })
 	}
+	wg.Go(func() { d.export.run(ctx) })
 	wg.Wait()
+}
+
+// hubHead reads path's live document in the hub and its version: zero, with
+// the not-found response, when there is none.
+func (d *deriver) hubHead(ctx context.Context, path string) (protocol.Response, int, error) {
+	head, err := d.Hub.Fetch(ctx, path)
+	if err != nil {
+		return protocol.Response{}, 0, fmt.Errorf("fetch %s: %w", path, err)
+	}
+	switch head.Status {
+	case protocol.StatusNotFound:
+		return head, 0, nil
+	case protocol.StatusOK:
+	default:
+		return protocol.Response{}, 0, fmt.Errorf("fetch %s returned %s", path, head.Status)
+	}
+	version, err := generation.ResponseVersion(path, head)
+	if err != nil {
+		return protocol.Response{}, 0, err
+	}
+	return head, version, nil
+}
+
+// hubShard reads one pinned checkpoint shard, paced with the other reads.
+func (d *deriver) hubShard(ctx context.Context, path string) (protocol.Response, error) {
+	if err := d.reads.Wait(ctx); err != nil {
+		return protocol.Response{}, err
+	}
+	return d.Hub.Fetch(ctx, path)
 }
 
 // derive runs one world's loop until ctx ends, starting it over on failure.

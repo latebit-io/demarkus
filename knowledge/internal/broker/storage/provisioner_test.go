@@ -115,7 +115,7 @@ func TestEnsureTenantProvisionsAndConverges(t *testing.T) {
 	if !strings.HasPrefix(world.Name, "eve-adams-") {
 		t.Errorf("world name = %q", world.Name)
 	}
-	if !world.Local || world.TokensSecret != "" || world.InternalAddress != world.Name+".memory-worlds.svc.cluster.local:6309" {
+	if !world.Local || world.InternalAddress != world.Name+".memory-worlds.svc.cluster.local:6309" {
 		t.Errorf("world template wrong: %+v", world)
 	}
 	if len(world.Allow.Emails) != 1 || world.Allow.Emails[0] != "eve.adams@example.com" {

@@ -102,7 +102,7 @@ func agentContractGolden(t *testing.T) string {
 // every world-address row translated.
 func TestSeedConsumesAgentExportContract(t *testing.T) {
 	cfg := mcpTestConfig()
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub", TokensSecret: "hub-tokens"})
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub"})
 	body := agentContractGolden(t)
 	d := &fakeDispatcher{
 		FetchFn: unavailableSeedSource,
@@ -202,7 +202,7 @@ func TestSeedTranslatesInternalAddressesToWorldNames(t *testing.T) {
 // configured world is checked, not just the one in the query URL.
 func TestSeedFindsAggregateOnAnotherWorld(t *testing.T) {
 	cfg := mcpTestConfig()
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub", TokensSecret: "hub-tokens"})
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub"})
 	d := &fakeDispatcher{
 		FetchFn: unavailableSeedSource,
 		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
@@ -297,7 +297,7 @@ func TestHandleMarkExploreBacklinksSeeded(t *testing.T) {
 func TestSeedReadsTheWorldCheckpointFromTheHub(t *testing.T) {
 	cfg := mcpTestConfig()
 	cfg.Worlds[0].Local = true
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub", TokensSecret: "hub-tokens"})
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub"})
 	cfg.Federation.Hub = "hub"
 	a := graphstore.WorldSource{Path: "/a.md", Version: 3, Title: "Page A", Edges: []graphstore.WorldEdge{{To: "mark://team-a/b.md", Count: 1}}}
 	shard, err := graphstore.BuildWorldShard("team-a", graphstore.SourcePrefix(a.Path, 1), []graphstore.WorldSource{a})

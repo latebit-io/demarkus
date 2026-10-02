@@ -87,12 +87,7 @@ func (w *world) load(ctx context.Context) (protocol.Cursor, error) {
 	if err != nil || head.Status == protocol.StatusNotFound {
 		return protocol.Cursor{}, err
 	}
-	load, err := graphstore.LoadWorld(ctx, graphstore.WorldLoadRequest{World: w.name, Manifest: head, Fetch: func(ctx context.Context, shard string) (protocol.Response, error) {
-		if err := w.reads.Wait(ctx); err != nil {
-			return protocol.Response{}, err
-		}
-		return w.Hub.Fetch(ctx, shard)
-	}})
+	load, err := graphstore.LoadWorld(ctx, graphstore.WorldLoadRequest{World: w.name, Manifest: head, Fetch: w.hubShard})
 	switch {
 	case errors.Is(err, graphstore.ErrWorldUnavailable):
 		return protocol.Cursor{}, err
@@ -452,28 +447,18 @@ func (w *world) commit(ctx context.Context, cursor protocol.Cursor) error {
 		return fmt.Errorf("checkpoint %s: %w", w.name, err)
 	}
 	w.manifestVersion, w.manifestComplete, w.dirtied = version, m.Complete, time.Time{}
+	w.export.changed(w.name)
 	return nil
 }
 
 // manifestHead reads the world's live manifest, not-found when there is none,
 // and takes its version as the one the next write replaces.
 func (w *world) manifestHead(ctx context.Context) (protocol.Response, error) {
-	path := graphstore.WorldManifestPath(w.name)
-	head, err := w.Hub.Fetch(ctx, path)
+	head, version, err := w.hubHead(ctx, graphstore.WorldManifestPath(w.name))
 	if err != nil {
-		return protocol.Response{}, fmt.Errorf("fetch %s: %w", path, err)
-	}
-	switch head.Status {
-	case protocol.StatusNotFound:
-		w.manifestVersion = 0
-		return head, nil
-	case protocol.StatusOK:
-	default:
-		return protocol.Response{}, fmt.Errorf("fetch %s returned %s", path, head.Status)
-	}
-	if w.manifestVersion, err = generation.ResponseVersion(path, head); err != nil {
 		return protocol.Response{}, err
 	}
+	w.manifestVersion = version
 	return head, nil
 }
 

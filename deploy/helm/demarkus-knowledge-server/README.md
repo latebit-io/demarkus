@@ -23,22 +23,19 @@ under its `writeScope` with no token minted. See
 The chart never creates buckets, PVCs, or TLS Secrets. The optional
 `Certificate` asks cert-manager to populate the referenced TLS Secret.
 
-Token Secrets are runtime-owned (the broker appends the agent token hash it
-mints to `tokens.toml`), so the chart never templates them either. They live
-in the release namespace, since the pod mounts them. Each world mounts two
-optional Secrets: `tokenSecret` (default `<name>-tokens`), which the broker
-creates on its first agent token mint, and `staticTokenSecret` (default
-`<name>-static-tokens`), which holds entries you own and the broker never
-touches. Identities writing through the gateway need neither. A world opens with either or both absent and reloads as they are
-projected. By default a pre-install/pre-upgrade bootstrap Job
-(`tokens.bootstrap`) seeds any missing `tokenSecret` with a publish-only
-admin entry and hands off; existing Secrets are left untouched. When it
-creates one and `tokens.emitRawValues: true`, it also writes the raw token
-to a `<world>-token-values` Secret, which the demarkus-agent chart consumes
-directly through `tokens.fromWorldSecrets`. A world whose `tokenSecret`
-already existed is skipped entirely, raw Secret included: supply the agent's
-token through `staticTokenSecret` and a raw Secret of your own, as in the
-GitOps section, before enabling the agent. The Job's `tokens.bootstrap.image`
+Token Secrets hold the capability tokens of direct QUIC clients, and the
+chart never templates them. They live in the release namespace, since the
+pod mounts them. Each world mounts two optional Secrets: `tokenSecret`
+(default `<name>-tokens`) and `staticTokenSecret` (default
+`<name>-static-tokens`), which holds entries you own. Identities writing
+through the gateway, and the federation deriver, need neither. A world opens
+with either or both absent and reloads as they are projected. By default a
+pre-install/pre-upgrade bootstrap Job (`tokens.bootstrap`) seeds any missing
+`tokenSecret` with a publish-only admin entry and hands off; existing
+Secrets are left untouched. When it creates one and
+`tokens.emitRawValues: true`, it also writes the raw token to a
+`<world>-token-values` Secret. A world whose `tokenSecret` already existed
+is skipped entirely, raw Secret included. The Job's `tokens.bootstrap.image`
 defaults to kubectl 1.35, which supports API servers 1.34–1.36; override it
 to match older clusters (kubectl's skew policy is ±1 minor). For a GitOps
 install, disable the Job; see [GitOps install](#gitops-install-without-the-bootstrap-job).
@@ -174,22 +171,14 @@ tokens:
 Every world then starts with no token Secret at all, serves reads, and
 accepts writes as soon as a Secret lands; no restart, no `SIGHUP`:
 
-- `<name>-tokens` is the broker's. It creates the Secret on its first agent
-  token mint and appends afterwards. Never template it: a reconciler would
-  reset the broker's entries on every sync.
-- `<name>-static-tokens` is yours: entries the broker never touches. It
-  holds hashes only, so a plain Secret manifest in git is fine.
+- `<name>-tokens` is the bootstrap Job's, absent here.
+- `<name>-static-tokens` is yours. It holds hashes only, so a plain Secret
+  manifest in git is fine.
 
-The agent's publish token for the hub world needs nothing from you:
-`broker.agentTokens` (derived for every `hub: true` world) has the broker
-mint the token, add the hash to `<hub>-tokens` and write the raw value to
-`<hub>-token-values`, which the agent chart projects by default
-(`tokens.fromWorldSecrets`). The broker leaves a `<hub>-token-values` it did
-not create alone.
-
-To mint the token yourself instead (`broker.agentTokens: []`): The hash goes into the static
-Secret, the raw value into `<hub>-token-values`. Keep the raw Secret out of
-git (an ExternalSecret, a SealedSecret, or SOPS):
+A direct client that writes with a token (the standalone demarkus-agent
+chart, for one) needs a hash in the static Secret and the raw value in a
+Secret of your own. Keep the raw Secret out of git (an ExternalSecret, a
+SealedSecret, or SOPS):
 
 ```bash
 TOKEN=$(openssl rand -hex 32)
@@ -210,15 +199,13 @@ kubectl -n demarkus apply -f root-static-tokens.yaml   # or commit it for the re
 kubectl -n demarkus create secret generic root-token-values --from-literal=admin="$TOKEN"
 ```
 
-The static Secret must reach the cluster before the agent publishes, either
+The static Secret must reach the cluster before the client writes, either
 applied by hand as above or committed next to the Application so the
 reconciler creates it.
 
 Keep static entries publish-only: any `read` operation flips the world into
 read-auth mode and breaks the broker's open reads. A hash may appear in only
-one world and only one file; the world refuses the load otherwise. Two
-syncs in a row leave `<name>-tokens` as the broker wrote it, because nothing
-in the rendered manifests names it.
+one world and only one file; the world refuses the load otherwise.
 
 ## Broker and MCP gateways
 
@@ -335,18 +322,22 @@ broker-signed tokens are invalidated. The graph store behind
 `mark_backlinks`, `mark_graph` and friends is process memory and rebuilds
 after a restart.
 
-Federation: with `broker.federation.hub` set, one replica (Lease
+Federation: with a hub, `broker.federation.hub` or else the world marked
+`hub: true`, one replica (Lease
 `broker.federation.leaseName`) derives each static knowledge world's graph
 from its change feed and checkpoints it into the hub's
-`/graph/worlds/<world>/`, from which the gateway seeds those worlds. No token
-or Secret is involved: writes run in process under a grant to
-`/graph/worlds/**`, and reads are anonymous, so no read token may cover that
-path in the hub. A changed world checkpoints after `quietPeriod` (default
+`/graph/worlds/<world>/`, from which the gateway seeds those worlds, and
+renders the hub's `/graph.md` from those checkpoints for the library. No
+token or Secret is involved: writes run in process under a grant to
+`/graph/worlds/**` and `/graph.md`, and reads are anonymous, so no read token
+may cover those paths in the hub. A changed world checkpoints after `quietPeriod` (default
 30s), at most `interval` (default 1m) after its first change, and never
 sooner than `interval` after its last checkpoint. A checkpoint writes each
-changed shard plus the manifest, one commit each at the bucket store's pace
-of one per 1.5 s per world: an edit costs the hub about 3 s of write
-capacity, a first build at most about 25 s per world.
+changed shard, the manifest and `/graph.md`, one commit each at the bucket
+store's pace of one per 1.5 s per world: an edit costs the hub about 4.5 s
+of write capacity, a first build at most about 25 s per world. `/graph.md`
+is written at most once per `interval`, and only when the graph changed; a
+render past the 1 MiB body limit is not written and is logged.
 
 Production checklist: `broker.oidc.existingSecretRef` instead of a cleartext
 `clientSecret` (it lives in helm release history); Ingress TLS from
@@ -373,9 +364,8 @@ NetworkPolicy. The built-in policy therefore requires explicit
 or CNI FQDN policy.
 
 The broker's Role is scoped to its own state Secrets, the sweeper Lease (and
-the federation Lease when `broker.federation.hub` is set), the
-agent token records and the tokens Secrets of hub worlds, plus the registry
-and worlds fragment when provisioning is on; `create` is namespace-wide
+the federation Lease when federation has a hub), plus the registry and
+worlds fragment when provisioning is on; `create` is namespace-wide
 because RBAC cannot name a Secret before it exists. Internet-facing OAuth
 and the store share one pod: the mitigation is the hardened HTTP server and
 the pod security context, not a process boundary.

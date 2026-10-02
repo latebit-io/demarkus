@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,15 +53,22 @@ func (s *Store) Snapshot() ([]StoredNode, []StoredEdge) {
 	return nodes, edges
 }
 
+// exportedLine opens the export's timestamp, the one line two renders of
+// the same graph differ in.
+const exportedLine = "> Exported: "
+
 // BuildExport renders a deterministic graph export for one timestamp.
 func BuildExport(exported time.Time, nodes []StoredNode, edges []StoredEdge) string {
-	nodes = append([]StoredNode(nil), nodes...)
-	edges = append([]StoredEdge(nil), edges...)
+	return buildExport(exported, slices.Clone(nodes), slices.Clone(edges))
+}
+
+// buildExport is BuildExport over slices it may sort in place.
+func buildExport(exported time.Time, nodes []StoredNode, edges []StoredEdge) string {
 	sort.Slice(nodes, func(i, j int) bool { return lessStoredNode(&nodes[i], &nodes[j]) })
 	sort.Slice(edges, func(i, j int) bool { return lessStoredEdge(&edges[i], &edges[j]) })
 	var b strings.Builder
 	b.WriteString("# Document Graph\n\n")
-	b.WriteString(fmt.Sprintf("> Exported: %s\n", exported.UTC().Format(time.RFC3339)))
+	b.WriteString(exportedLine + exported.UTC().Format(time.RFC3339) + "\n")
 	b.WriteString(fmt.Sprintf("> Nodes: %d\n", len(nodes)))
 	b.WriteString(fmt.Sprintf("> Edges: %d\n", len(edges)))
 

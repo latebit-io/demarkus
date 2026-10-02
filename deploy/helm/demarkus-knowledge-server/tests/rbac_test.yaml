@@ -66,7 +66,7 @@ tests:
           path: rules
           count: 4
 
-  - it: adds the agent token record, raw Secret and the hub's tokens Secret per agent token
+  - it: names the federation Lease for the world marked hub
     documentIndex: 0
     set:
       worlds:
@@ -76,14 +76,11 @@ tests:
           hub: true
     asserts:
       - equal:
-          path: rules[3].resourceNames
-          value:
-            - demarkus-broker-agent-token-root
-            - root-token-values
-            - root-tokens
-      - equal:
-          path: rules[3].verbs
-          value: ["get", "update"]
+          path: rules[0].resourceNames
+          value: ["demarkus-broker-sweeper", "demarkus-federation"]
+      - lengthEqual:
+          path: rules
+          count: 4
 
   - it: adds the registry and worlds fragment Secrets when provisioning is on
     documentIndex: 0

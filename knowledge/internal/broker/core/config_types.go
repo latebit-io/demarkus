@@ -26,7 +26,6 @@ type Config struct {
 	RateLimit    RateLimitConfig    `yaml:"rateLimit"`
 	WorldDialer  WorldDialerConfig  `yaml:"worldDialer"`
 	Provisioning ProvisioningConfig `yaml:"provisioning"`
-	AgentTokens  []AgentTokenConfig `yaml:"agentTokens"`
 	Federation   FederationConfig   `yaml:"federation"`
 
 	// registry is the live world set, built from Worlds on first use.
@@ -263,10 +262,8 @@ type WorldConfig struct {
 	// Profile is the gateway that serves the world, knowledge or memory.
 	// Required on every world once the memory gateway is configured.
 	Profile string `yaml:"profile"`
-	// Namespace is where TokensSecret lives.
+	// Namespace derives the address when InternalAddress is blank.
 	Namespace string `yaml:"namespace"`
-	// TokensSecret is the world's tokens.toml Secret; the broker needs get and patch.
-	TokensSecret string `yaml:"tokensSecret"`
 	// PublicURL is the address handed to clients by /me/install. The broker is
 	// the one source for it; a world does not know its external URL. Optional:
 	// blank omits the world from /me/install.
@@ -380,18 +377,6 @@ type RateLimitConfig struct {
 type RateLimitRouteConfig struct {
 	PerMinute int `yaml:"perMinute"`
 	Burst     int `yaml:"burst"`
-}
-
-// AgentTokenConfig has the broker issue a federation agent's publish token for
-// World and keep the raw value in Secret[Key], in the world's namespace.
-type AgentTokenConfig struct {
-	// World names a static worlds[] entry, the only world the token is valid in.
-	World string `yaml:"world"`
-	// Secret and Key locate the raw token the agent mounts.
-	Secret string `yaml:"secret"`
-	Key    string `yaml:"key"`
-	// Paths scopes the token. Default ["/**"].
-	Paths []string `yaml:"paths"`
 }
 
 // WriteScope is the path scope the gateway may write in a world; an identity

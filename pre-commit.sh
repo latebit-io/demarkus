@@ -2,7 +2,8 @@
 set -e
 
 echo "Checking formatting..."
-unformatted=$(git ls-files -co --exclude-standard "*.go" | xargs gofmt -l)
+# ls-files still lists a tracked file deleted but not yet staged; skip it.
+unformatted=$(git ls-files -co --exclude-standard "*.go" | while read -r f; do [ -f "$f" ] && echo "$f"; done | xargs gofmt -l)
 if [ -n "$unformatted" ]; then
   echo "Not gofmt clean (run make fmt):" >&2
   echo "$unformatted" >&2

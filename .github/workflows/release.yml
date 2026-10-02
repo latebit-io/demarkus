@@ -51,7 +51,6 @@ jobs:
             knowledge_system:
               - 'deploy/helm/demarkus-knowledge-system/**'
               - 'deploy/helm/demarkus-knowledge-server/**'
-              - 'deploy/helm/demarkus-agent/**'
 
   test-protocol:
     needs: detect-changes
@@ -300,8 +299,8 @@ jobs:
           echo "Version: ${VERSION}, Tag exists: $(git rev-parse --verify "$TAG" 2>/dev/null && echo yes || echo no)"
 
   # The umbrella chart releases on its own stream (knowledge-system/v). It
-  # vendors the two local charts, so any of their changes bumps it too;
-  # the release job re-versions them to their latest tags before packaging.
+  # vendors the local knowledge-server chart, so its changes bump it too;
+  # the release job re-versions it to its latest tag before packaging.
   semver-knowledge-system:
     needs: detect-changes
     if: needs.detect-changes.outputs.knowledge_system == 'true'
@@ -322,7 +321,7 @@ jobs:
           tag_prefix: "knowledge-system/v"
           major_pattern: "BREAKING CHANGE:"
           minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
-          change_path: "deploy/helm/demarkus-knowledge-system/ deploy/helm/demarkus-knowledge-server/ deploy/helm/demarkus-agent/"
+          change_path: "deploy/helm/demarkus-knowledge-system/ deploy/helm/demarkus-knowledge-server/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -716,8 +715,8 @@ jobs:
   # tags point at releases that exist. Skipped sub-chart releases are fine;
   # a failed one blocks the umbrella.
   release-knowledge-system:
-    needs: [semver-knowledge-system, release-knowledge, release-client]
-    if: ${{ always() && !cancelled() && needs.semver-knowledge-system.outputs.should_release == 'true' && needs.release-knowledge.result != 'failure' && needs.release-client.result != 'failure' }}
+    needs: [semver-knowledge-system, release-knowledge]
+    if: ${{ always() && !cancelled() && needs.semver-knowledge-system.outputs.should_release == 'true' && needs.release-knowledge.result != 'failure' }}
     runs-on: ubuntu-latest
     # Tag creation needs contents; the chart push and the library pull need packages.
     permissions:
@@ -741,17 +740,17 @@ jobs:
         with:
           version: v3.13.2
 
-      - name: Re-version vendored charts to their latest release tags
-        # Each sub-chart publishes with --version/--app-version from its own
+      - name: Re-version the vendored chart to its latest release tag
+        # The sub-chart publishes with --version/--app-version from its own
         # tag stream; the committed Chart.yaml values are only local-render
-        # placeholders. Mirror the published numbers so the vendored copies
-        # default to the same image tags. A component job tags before it
+        # placeholders. Mirror the published number so the vendored copy
+        # defaults to the same image tag. A component job tags before it
         # pushes, so a tag alone does not prove a release: require the
         # component chart (pushed last, after its image) to exist on ghcr.
         run: |
           set -euo pipefail
           latest() { git tag --list "$1/v*" --sort=-v:refname | head -n1 | sed "s#^$1/v##"; }
-          for pair in knowledge:demarkus-knowledge-server client:demarkus-agent; do
+          for pair in knowledge:demarkus-knowledge-server; do
             stream="${pair%%:*}"
             chart="${pair##*:}"
             ver="$(latest "$stream")"

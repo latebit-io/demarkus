@@ -173,9 +173,9 @@ spec:
               - key: tls.key
                 path: tls.key
         {{- range $index, $world := $worlds }}
-        {{- /* Both optional: the broker creates the runtime Secret on its
-               first agent token mint, the static one is the operator's; the
-               world opens without either and reloads as they are projected. */}}
+        {{- /* Both optional: the bootstrap Job seeds the first, the static
+               one is the operator's; the world opens without either and
+               reloads as they are projected. */}}
         - name: {{ printf "world-token-%d" $index }}
           projected:
             sources:

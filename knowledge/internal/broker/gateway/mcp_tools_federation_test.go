@@ -333,10 +333,9 @@ func TestHandleMarkResolveContentHashMismatchSkipsCandidate(t *testing.T) {
 	// the second candidate (honest) wins.
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:         "team-b",
-		Namespace:    "team-b",
-		TokensSecret: "team-b-tokens",
-		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		Name:      "team-b",
+		Namespace: "team-b",
+		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
 		WriteScope: core.WriteScope{
 			Paths: []string{"/*"},
 		},
@@ -437,10 +436,9 @@ func TestHandleMarkResolveAllCandidatesFailReportsLast(t *testing.T) {
 	// retried-and-recovered semantics that hide the real cause).
 	cfg := mcpTestConfig()
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:         "team-b",
-		Namespace:    "team-b",
-		TokensSecret: "team-b-tokens",
-		Allow:        core.AllowConfig{Domains: []string{"example.com"}},
+		Name:      "team-b",
+		Namespace: "team-b",
+		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
 		WriteScope: core.WriteScope{
 			Paths: []string{"/*"},
 		},
@@ -603,7 +601,7 @@ func TestMCPGatewayMarkDiscoverEndToEnd(t *testing.T) {
 // answers from the first that really holds it.
 func TestHandleMarkResolveWithoutAnIndexAsksEveryWorld(t *testing.T) {
 	cfg := mcpTestConfig()
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "team-b", Namespace: "team-b", TokensSecret: "team-b-tokens"})
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "team-b", Namespace: "team-b"})
 	d := &fakeDispatcher{FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
 		if r.Host == "team-b" && r.Path == "/"+testHashA {
 			return fetch.Result{Response: protocol.Response{

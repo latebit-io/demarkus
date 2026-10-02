@@ -448,7 +448,7 @@ tests:
       broker.federation.hub: nope
     asserts:
       - failedTemplate:
-          errorMessage: 'broker.federation.hub "nope" must name a knowledge world in worlds (or global.worlds)'
+          errorMessage: 'federation hub "nope" must name a knowledge world in worlds (or global.worlds)'
 
   - it: rejects a memory world as the federation hub
     set:
@@ -462,14 +462,41 @@ tests:
           allow: {emails: [alice@example.com]}
     asserts:
       - failedTemplate:
-          errorMessage: 'broker.federation.hub "alice" must name a knowledge world in worlds (or global.worlds)'
+          errorMessage: 'federation hub "alice" must name a knowledge world in worlds (or global.worlds)'
 
   - it: rejects a read-only federation hub
     set:
       broker.federation.hub: team-b
     asserts:
       - failedTemplate:
-          errorMessage: 'broker.federation.hub "team-b" is read-only; the deriver writes its checkpoints there'
+          errorMessage: 'federation hub "team-b" is read-only; the deriver writes its checkpoints there'
+
+  - it: rejects a read-only world marked hub
+    set:
+      worlds:
+        - name: root
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+          bucket: {url: gs://deployment-root}
+          hub: true
+          readOnly: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'federation hub "root" is read-only; the deriver writes its checkpoints there'
+
+  - it: rejects two worlds marked hub
+    set:
+      worlds:
+        - name: root
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+          bucket: {url: gs://deployment-root}
+          hub: true
+        - name: team-a
+          worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49
+          bucket: {url: gs://deployment-team-a}
+          hub: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'worlds [root team-a] are all marked hub; at most one world is the federation hub'
 
   - it: requires the federation Lease name the Role grants
     set:
@@ -477,7 +504,7 @@ tests:
       broker.federation.leaseName: ""
     asserts:
       - failedTemplate:
-          errorMessage: broker.federation.leaseName is required when broker.federation.hub is set
+          errorMessage: broker.federation.leaseName is required when federation has a hub
 
   - it: derives authorities, bucket and token Secret from name and worldID
     set:

@@ -316,19 +316,12 @@ type backgroundTasks struct {
 	local *gateway.Composite
 }
 
-// start launches the leader-elected sweeper and federation deriver, the
-// agent token reconciler when agentTokens is set, and the registry sync when
-// provisioning is on. In-flight grants sweep themselves on every write.
+// start launches the leader-elected sweeper and federation deriver, and the
+// registry sync when provisioning is on. In-flight grants sweep themselves on
+// every write.
 func (b *backgroundTasks) start(ctx context.Context, wg *sync.WaitGroup) {
 	b.startSweeper(ctx, wg)
 	b.startFederation(ctx, wg)
-	if len(b.cfg.AgentTokens) > 0 {
-		agentTokens := storage.NewAgentTokens(b.cfg, b.store, b.log)
-		b.log.Info("broker: starting agent token reconciler", "worlds", len(b.cfg.AgentTokens))
-		wg.Go(func() {
-			agentTokens.Run(ctx)
-		})
-	}
 	if b.provisioner != nil {
 		// Keeps this replica converged with tenants its siblings provisioned.
 		wg.Go(func() {

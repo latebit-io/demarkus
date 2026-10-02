@@ -124,37 +124,49 @@ func loadCheckpoint(hub generation.IO, world string) (graphstore.WorldManifest, 
 	return load.Manifest, rows, err
 }
 
-// awaitCheckpoint polls, backing off, until world's checkpoint satisfies
-// check: a real hub's readers share its rate budget with the deriver.
+// awaitCheckpoint polls until world's checkpoint satisfies check.
 func awaitCheckpoint(t *testing.T, hub generation.IO, world string, check func(graphstore.WorldManifest, map[string]graphstore.WorldSource) error) graphstore.WorldManifest {
+	t.Helper()
+	var m graphstore.WorldManifest
+	poll(t, "checkpoint of "+world, func() error {
+		var rows map[string]graphstore.WorldSource
+		var err error
+		if m, rows, err = loadCheckpoint(hub, world); err != nil {
+			return err
+		}
+		return check(m, rows)
+	})
+	return m
+}
+
+// poll retries check, backing off, until it passes: a real hub's readers
+// share its rate budget with the deriver.
+func poll(t *testing.T, what string, check func() error) {
 	t.Helper()
 	deadline, wait := time.Now().Add(30*time.Second), 5*time.Millisecond
 	for {
-		m, rows, err := loadCheckpoint(hub, world)
+		err := check()
 		if err == nil {
-			err = check(m, rows)
-		}
-		if err == nil {
-			return m
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("checkpoint of %s: %v", world, err)
+			t.Fatalf("%s: %v", what, err)
 		}
 		time.Sleep(wait)
 		wait = min(wait*2, 200*time.Millisecond)
 	}
 }
 
-// rewriteManifest publishes alpha's manifest as edit leaves it, the way
+// rewriteManifest publishes world's manifest as edit leaves it, the way
 // another writer would.
-func (h *harness) rewriteManifest(edit func(*graphstore.WorldManifest)) {
+func (h *harness) rewriteManifest(world string, edit func(*graphstore.WorldManifest)) {
 	h.t.Helper()
-	ctx, path := context.Background(), graphstore.WorldManifestPath("alpha")
+	ctx, path := context.Background(), graphstore.WorldManifestPath(world)
 	head, err := h.hub.fetch(ctx, path)
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	m, err := graphstore.ParseWorldManifest("alpha", head.Body)
+	m, err := graphstore.ParseWorldManifest(world, head.Body)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -253,7 +265,7 @@ func TestDeriverResumesFromItsCheckpoint(t *testing.T) {
 func TestDeriverReplayIsGuardedByVersion(t *testing.T) {
 	h, stop := seeded(t)
 	stop()
-	h.rewriteManifest(func(m *graphstore.WorldManifest) { m.Cursor.Seq = 0 }) // before every change
+	h.rewriteManifest("alpha", func(m *graphstore.WorldManifest) { m.Cursor.Seq = 0 }) // before every change
 	reads := map[string]int{}
 	for _, p := range []string{"/index.md", "/a.md", "/docs/c.md", graphstore.WorldShardPath("alpha", "0")} {
 		reads[p] = h.alpha.reads(p)
@@ -308,7 +320,7 @@ func TestDeriverHoldsTheCheckpointIncompleteUntilAFailedReadSucceeds(t *testing.
 func TestDeriverRecoversWhenAnotherWriterMovedTheManifest(t *testing.T) {
 	h, _ := seeded(t)
 	// A deposed leader's late write: a valid manifest from an older cursor.
-	h.rewriteManifest(func(m *graphstore.WorldManifest) { m.Cursor.Seq-- })
+	h.rewriteManifest("alpha", func(m *graphstore.WorldManifest) { m.Cursor.Seq-- })
 	h.alpha.publish("/b.md", "# B\n")
 	h.await(versions(with(map[string]int{"/b.md": 1})))
 }
