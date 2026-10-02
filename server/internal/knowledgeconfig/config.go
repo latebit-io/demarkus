@@ -116,6 +116,10 @@ type WorldConfig struct {
 	Bootstrap bool `yaml:"bootstrap"`
 }
 
+// ID is the world's immutable identity, the key peer hints carry; it lives in
+// the bucket section because that is the store it identifies today.
+func (world *WorldConfig) ID() string { return world.Bucket.WorldID }
+
 // BucketConfig identifies one world's GCS bucket and immutable marker ID.
 type BucketConfig struct {
 	URL     string `yaml:"url"`

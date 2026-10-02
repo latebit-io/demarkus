@@ -554,3 +554,34 @@ func TestCatchUpOutlivesTheResumeThatStartedIt(t *testing.T) {
 		t.Fatalf("waiting resume failed with the leaver: %v", err)
 	}
 }
+
+// Subscribers counts open subscriptions: a refused Subscribe adds none, and
+// Close takes one away exactly once.
+func TestSubscribersCountsOpenSubscriptions(t *testing.T) {
+	hub := New("w", 4)
+	var stamp stamper
+	stamp.publish(hub, Event{Path: "/a.md"})
+	first, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := hub.Subscribe(t.Context(), "/a.md", protocol.Cursor{Epoch: "w", Seq: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: "other", Seq: 1}); !errors.Is(err, ErrResync) {
+		t.Fatalf("Subscribe in another epoch = %v, want ErrResync", err)
+	}
+	if got := hub.Subscribers(); got != 2 {
+		t.Fatalf("subscribers = %d, want 2", got)
+	}
+	first.Close()
+	first.Close()
+	if got := hub.Subscribers(); got != 1 {
+		t.Fatalf("subscribers after closing one twice = %d, want 1", got)
+	}
+	second.Close()
+	if got := hub.Subscribers(); got != 0 {
+		t.Fatalf("subscribers = %d, want 0", got)
+	}
+}

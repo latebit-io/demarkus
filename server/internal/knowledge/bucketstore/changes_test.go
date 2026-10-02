@@ -41,7 +41,7 @@ func (r replica) quiet(t *testing.T) { storetest.Quiet(t, r.sub) }
 
 func (r replica) poll(t *testing.T) {
 	t.Helper()
-	if err := r.store.Poll(context.Background()); err != nil {
+	if err := r.store.poll(context.Background()); err != nil {
 		t.Fatalf("poll: %v", err)
 	}
 }

@@ -18,8 +18,8 @@ import (
 // publishSeq publishes distinct paths until the head reaches seq.
 func publishSeq(t *testing.T, store *Store, seq int64) {
 	t.Helper()
-	for store.HeadSequence() < seq {
-		path := fmt.Sprintf("/log/%03d.md", store.HeadSequence()+1)
+	for store.servedSequence() < seq {
+		path := fmt.Sprintf("/log/%03d.md", store.servedSequence()+1)
 		if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: path, Content: []byte("# n\n")}); err != nil {
 			t.Fatalf("publish %s: %v", path, err)
 		}

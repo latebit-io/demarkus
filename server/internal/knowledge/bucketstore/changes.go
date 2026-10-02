@@ -52,18 +52,16 @@ func hubSeq(sequence int64) uint64 {
 	return uint64(sequence)
 }
 
-// Poll refreshes the snapshot from the bucket, reporting what peers wrote:
-// the backstop that lets a watch on one replica see another replica's
-// writes when no hint arrived.
-func (store *Store) Poll(ctx context.Context) error {
+// poll refreshes the snapshot from the bucket, reporting what peers wrote.
+func (store *Store) poll(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
 	_, err := store.refreshSnapshot(ctx)
 	return err
 }
 
-// HeadSequence is the sequence of the snapshot this replica serves.
-func (store *Store) HeadSequence() int64 {
+// servedSequence is the head sequence of the snapshot this replica serves.
+func (store *Store) servedSequence() int64 {
 	if snap := store.snapshot.Load(); snap != nil {
 		return snap.Head.Sequence
 	}

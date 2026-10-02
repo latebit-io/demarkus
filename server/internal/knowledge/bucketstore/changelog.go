@@ -132,7 +132,7 @@ func newChangeLog(store *Store, ring int) *changeLog {
 }
 
 // CatchUp polls the bucket head, which reports what peers committed.
-func (backlog *changeLog) CatchUp(ctx context.Context) error { return backlog.store.Poll(ctx) }
+func (backlog *changeLog) CatchUp(ctx context.Context) error { return backlog.store.poll(ctx) }
 
 func (backlog *changeLog) cached(index int64) (changeBlock, bool) {
 	backlog.mu.Lock()

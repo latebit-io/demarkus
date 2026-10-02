@@ -622,3 +622,41 @@ func TestResumeAheadOfTheRingCatchesUpWithoutReplay(t *testing.T) {
 		t.Fatalf("first event = %s, want /peer-3.md with nothing replayed", got)
 	}
 }
+
+// Every hub subscription a watch takes is released by the time it ends, so
+// a store's watcher-only work stops with the last watcher.
+func TestWatchesReleaseTheirHubSubscriptions(t *testing.T) {
+	backlog := &peerBacklog{}
+	hub := changefeed.NewWithBacklog("w", 0, backlog)
+	backlog.hub = hub
+	f := newFanout(t, hub, Config{})
+	for i := range 3 {
+		publish(hub, fmt.Sprintf("/early/%d.md", i))
+	}
+	live := serve(t, f, Request{Scope: "/"})
+	live.ack(t)
+	if got := hub.Subscribers(); got != 1 {
+		t.Fatalf("subscribers with one live watch = %d, want the reader's 1", got)
+	}
+	// Older than the fan-out's ring: replayed through a hub subscription.
+	replayed := serve(t, f, Request{Scope: "/", Since: protocol.Cursor{Epoch: "w", Seq: 1}})
+	replayed.ack(t)
+	replayed.event(t)
+	replayed.event(t)
+	if got := hub.Subscribers(); got != 1 {
+		t.Fatalf("subscribers after a catch-up = %d, want the reader's 1", got)
+	}
+	// Ahead of the reader: the hub catches up from the peer, nothing to replay.
+	backlog.pending = []string{"/peer.md"}
+	moved := serve(t, f, Request{Scope: "/", Since: protocol.Cursor{Epoch: "w", Seq: 4}})
+	moved.ack(t)
+	if got := hub.Subscribers(); got != 1 {
+		t.Fatalf("subscribers after a resume ahead of the reader = %d, want 1", got)
+	}
+	live.stop()
+	replayed.stop()
+	moved.stop()
+	if got := hub.Subscribers(); got != 0 {
+		t.Fatalf("subscribers after every watch ended = %d, want 0", got)
+	}
+}

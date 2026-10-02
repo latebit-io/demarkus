@@ -31,7 +31,8 @@ type Options struct {
 	WorldID        string
 	RequestTimeout time.Duration
 	ShardWorkers   int
-	// ReadOnly makes every write answer backend.ErrReadOnly before any I/O.
+	// ReadOnly makes every write answer backend.ErrReadOnly before any I/O,
+	// and Open fails on an empty bucket instead of creating the world.
 	ReadOnly bool
 	// MaxDocuments caps distinct document paths (0 = unlimited); a new
 	// path beyond the cap is rejected. Approximate under concurrency:
@@ -39,13 +40,16 @@ type Options struct {
 	MaxDocuments int
 	// Logger receives section-index warnings; nil uses slog.Default.
 	Logger *slog.Logger
-	// ChangeRing enables WATCH: the hub keeps this many events, fed with a
-	// hint for every commit the head's receipts name, under the head
-	// sequence, whenever a snapshot is installed. Zero leaves WATCH off.
+	// ChangeRing enables WATCH: the hub keeps this many events from the head's
+	// receipts, under the head sequence, and the store follows peers until
+	// Close. Zero leaves WATCH off.
 	ChangeRing int
 	// Committed runs after each of this replica's own commits with its head
 	// sequence, outside every lock; nil for none.
 	Committed func(sequence int64)
+
+	// followInterval overrides the backstop poll's period in tests.
+	followInterval time.Duration
 }
 
 // Store owns a validated immutable snapshot for one world.
@@ -71,11 +75,15 @@ type Store struct {
 	// sealedThrough is the last sequence this store has sealed into a change
 	// block; below it sealChanges skips without I/O.
 	sealedThrough atomic.Int64
+
+	follower *follower // nil without WATCH
 }
 
 var (
 	_ backend.Store        = (*Store)(nil)
 	_ backend.ViewProvider = (*Store)(nil)
+	_ backend.ChangeSource = (*Store)(nil)
+	_ backend.Follower     = (*Store)(nil)
 )
 
 type snapshotEntry struct {
@@ -142,6 +150,17 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("open bucket store: %w", err)
 	}
+	if !options.ReadOnly {
+		created, err := ensureWorld(ctx, objects, options.WorldID)
+		if err != nil {
+			return nil, fmt.Errorf("open bucket store: %w", err)
+		}
+		if created {
+			// Loud on purpose: an empty bucket is normally a first install,
+			// but it is also what a wrong bucket URL looks like.
+			options.Logger.Warn("created a new world in an empty bucket", "worldID", options.WorldID)
+		}
+	}
 
 	store := &Store{
 		objects:        objects,
@@ -176,6 +195,9 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	store.snapshot.Store(loaded)
 	store.report(loaded)
 	store.refreshMu.Unlock()
+	if store.changes != nil {
+		store.startFollowing(options.followInterval)
+	}
 	return store, nil
 }
 

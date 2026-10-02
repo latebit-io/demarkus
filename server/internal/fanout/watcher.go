@@ -144,6 +144,7 @@ func (f *Fanout) attach(ctx context.Context, req Request) (*watcher, error) {
 		// Past the ring's reader, which the hub vouches for: nothing to
 		// replay, and the reader appends what follows since.
 		w.index = req.Since.Seq + 1
+		sub.Close()
 	}
 	return w, nil
 }
@@ -157,6 +158,11 @@ func (f *Fanout) releaseConn(conn *quicserve.ConnState) {
 // detach releases the slots and the group; the last watcher out stops the
 // reader and the sweep and frees the ring.
 func (w *watcher) detach() {
+	if w.backlog != nil {
+		// Attached but never pumped: the peer left before its ack.
+		w.backlog.Close()
+		w.backlog = nil
+	}
 	f := w.fanout
 	f.mu.Lock()
 	f.leaveLocked(w.group)
@@ -304,6 +310,7 @@ func (w *watcher) catchUp() end {
 	f := w.fanout
 	sub := w.backlog
 	w.backlog = nil
+	defer sub.Close()
 	store := f.tokenStore()
 	for {
 		ev, err := sub.TryNext()

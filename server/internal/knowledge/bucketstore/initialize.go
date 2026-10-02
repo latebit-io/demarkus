@@ -170,8 +170,9 @@ func createGenesisHead(ctx context.Context, objects blob.Store, worldID string, 
 
 func validateExistingWorld(ctx context.Context, objects blob.Store, worldID string) error {
 	// Only the verdict matters here; the caller opens the world again to serve
-	// it, with its own logger, and any warning repeats there.
-	if _, err := Open(ctx, objects, Options{WorldID: worldID, Logger: slog.New(slog.DiscardHandler)}); err != nil {
+	// it, with its own logger, and any warning repeats there. Read-only, so
+	// this open never starts a genesis of its own.
+	if _, err := Open(ctx, objects, Options{WorldID: worldID, Logger: slog.New(slog.DiscardHandler), ReadOnly: true}); err != nil {
 		return fmt.Errorf("validate existing world: %w", err)
 	}
 	return nil

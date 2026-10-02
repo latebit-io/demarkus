@@ -238,9 +238,23 @@ func TestInitializeReconciliation(t *testing.T) {
 
 func TestOpenValidation(t *testing.T) {
 	t.Run("missing head", func(t *testing.T) {
-		store, err := Open(context.Background(), newTestMemory(t), Options{Logger: discardLogger, WorldID: testWorldID})
+		store, err := Open(context.Background(), newTestMemory(t), Options{Logger: discardLogger, WorldID: testWorldID, ReadOnly: true})
 		if store != nil || !errors.Is(err, blob.ErrNotFound) || errors.Is(err, blob.ErrIntegrity) {
 			t.Fatalf("Open() = (%v, %v), want nil clear not-found", store, err)
+		}
+	})
+
+	t.Run("empty bucket gets genesis", func(t *testing.T) {
+		objects := newTestMemory(t)
+		store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
+		if err != nil {
+			t.Fatalf("Open() error = %v, want a new world", err)
+		}
+		if got := store.servedSequence(); got != 1 {
+			t.Errorf("served sequence = %d, want genesis at 1", got)
+		}
+		if _, err := objects.Head(context.Background(), headObjectKey); err != nil {
+			t.Errorf("genesis head: %v", err)
 		}
 	})
 

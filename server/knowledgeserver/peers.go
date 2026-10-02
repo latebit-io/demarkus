@@ -17,7 +17,7 @@ import (
 
 // peerLinks is the hint path between replicas: a sender for this replica's
 // commits and a listener for the peers'. Without a peers section both are
-// nil and the backstop poll is the only path.
+// nil and each store's own backstop is the only path.
 type peerLinks struct {
 	sender *peerhint.Sender
 	server *quicserve.Server
@@ -83,7 +83,7 @@ func resolvePeers(config knowledgeconfig.PeersConfig, port int) func(context.Con
 	}
 }
 
-// hint tells the peers a world's head moved; nothing without peers.
+// hint tells the peers a world committed a sequence; nothing without peers.
 func (l *peerLinks) hint(worldID string, sequence int64) {
 	if l.sender != nil {
 		l.sender.Hint(worldID, sequence)
@@ -91,7 +91,7 @@ func (l *peerLinks) hint(worldID string, sequence int64) {
 }
 
 // deliverTo names who takes the peers' hints; hints before that are
-// dropped, which the backstop poll covers.
+// dropped, which each store's own backstop covers.
 func (l *peerLinks) deliverTo(onHint func(peerhint.Hint)) {
 	l.mu.Lock()
 	l.onHint = onHint

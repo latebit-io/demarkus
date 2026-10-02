@@ -8,10 +8,10 @@ import (
 	"github.com/latebit-io/demarkus/server/blob"
 )
 
-// EnsureWorld creates or finishes the world's genesis and reports whether it
+// ensureWorld creates or finishes the world's genesis and reports whether it
 // wrote it. Genesis objects without a head are a racing or interrupted replica;
 // any other object without a head is refused as a misconfigured bucket URL.
-func EnsureWorld(ctx context.Context, objects blob.Store, worldID string) (bool, error) {
+func ensureWorld(ctx context.Context, objects blob.Store, worldID string) (bool, error) {
 	if ctx == nil {
 		return false, fmt.Errorf("ensure world: %w: context is nil", blob.ErrPrecondition)
 	}
