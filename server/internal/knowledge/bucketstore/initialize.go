@@ -104,47 +104,50 @@ func buildGenesis(worldID string) ([]modelObject, error) {
 }
 
 func createImmutable(ctx context.Context, objects blob.Store, object modelObject) error {
+	existing, err := createOrRead(ctx, objects, object)
+	if err == nil && existing != nil {
+		return fmt.Errorf("%w: immutable object %q contains hash %s, want %s", blob.ErrIntegrity, object.Key, hashHex(existing.Data), hashHex(object.Data))
+	}
+	return err
+}
+
+// createOrRead creates an immutable object, deciding an unknown outcome by
+// reading the name back. A name that holds other bytes returns them: a
+// content-addressed object is corrupt, a slot was won by another writer.
+func createOrRead(ctx context.Context, objects blob.Store, object modelObject) (*blob.Object, error) {
 	var lastErr error
 	for attempt := range maximumCreateAttempts {
 		_, err := objects.Create(ctx, object.Key, object.Data)
 		if err == nil {
-			return nil
+			return nil, nil
 		}
 		lastErr = err
 		if !errors.Is(err, blob.ErrPrecondition) && !retryableObjectError(err) {
-			return fmt.Errorf("create immutable object %q: %w", object.Key, err)
+			return nil, fmt.Errorf("create immutable object %q: %w", object.Key, err)
 		}
 
 		existing, getErr := objects.Get(ctx, object.Key)
 		if getErr == nil {
-			return verifyExistingImmutable(object, &existing)
+			if err := validateReadObject(object.Key, &existing); err != nil {
+				return nil, fmt.Errorf("reconcile immutable object %q: %w", object.Key, err)
+			}
+			if bytes.Equal(existing.Data, object.Data) {
+				return nil, nil
+			}
+			return &existing, nil
 		}
 		lastErr = errors.Join(lastErr, getErr)
 		if !errors.Is(getErr, blob.ErrNotFound) && !retryableObjectError(getErr) {
-			return fmt.Errorf("reconcile immutable object %q: %w", object.Key, lastErr)
+			return nil, fmt.Errorf("reconcile immutable object %q: %w", object.Key, lastErr)
 		}
 		if attempt == maximumCreateAttempts-1 {
 			break
 		}
 		if err := waitForRetry(ctx, createRetryDelay(attempt)); err != nil {
-			return fmt.Errorf("wait to retry immutable object %q: %w", object.Key, errors.Join(lastErr, err))
+			return nil, fmt.Errorf("wait to retry immutable object %q: %w", object.Key, errors.Join(lastErr, err))
 		}
 	}
-	return fmt.Errorf("create immutable object %q retries exhausted: %w", object.Key, lastErr)
-}
-
-// errNameTaken is an immutable name that holds other bytes: corruption for a
-// content-addressed object, a lost race for a slot.
-var errNameTaken = errors.New("name holds other bytes")
-
-func verifyExistingImmutable(object modelObject, existing *blob.Object) error {
-	if err := validateReadObject(object.Key, existing); err != nil {
-		return fmt.Errorf("reconcile immutable object %q: %w", object.Key, err)
-	}
-	if !bytes.Equal(existing.Data, object.Data) {
-		return fmt.Errorf("%w: %w: immutable object %q contains hash %s, want %s", blob.ErrIntegrity, errNameTaken, object.Key, hashHex(existing.Data), hashHex(object.Data))
-	}
-	return nil
+	return nil, fmt.Errorf("create immutable object %q retries exhausted: %w", object.Key, lastErr)
 }
 
 // createMarker creates the world marker; one already there must be this

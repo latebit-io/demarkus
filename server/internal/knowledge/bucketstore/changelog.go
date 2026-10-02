@@ -141,11 +141,11 @@ listing:
 		}
 	}
 	err := runParallel(ctx, store.shardWorkers, missing, func(ctx context.Context, index int) error {
-		slot, _, err := readSlot(ctx, store.objects, store.worldID, names[index])
+		read, err := readSlot(ctx, store.objects, store.worldID, names[index])
 		if err != nil {
 			return err
 		}
-		events := slotEvents(slot)
+		events := slotEvents(read.slot)
 		backlog.remember(names[index], events)
 		slots[index] = events
 		return nil

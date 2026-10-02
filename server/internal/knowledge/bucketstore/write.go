@@ -18,8 +18,8 @@ import (
 )
 
 // candidateMutation is one change ready to commit: its slot entry, the
-// content-addressed objects staged before the slot, and the written body for
-// this replica's section index (nil for an archive transition).
+// content-addressed objects staged before the slot, and the body this
+// replica's section index takes (nil when the document is archived).
 type candidateMutation struct {
 	entry   slotEntry
 	objects []modelObject
@@ -54,15 +54,15 @@ func (store *Store) publish(ctx context.Context, req backend.WriteRequest) (muta
 	body := bytes.Clone(content)
 	meta := maps.Clone(metadata)
 	blindBase := -1
-	return store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
-		if view.snapshot.path(canonical) == nil {
+	return store.runMutation(ctx, canonical, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
+		if view.path(canonical) == nil {
 			if err := store.checkDocumentQuota(view); err != nil {
 				return nil, mutationResult{}, err
 			}
 		}
 		if expected < 0 {
 			current := 0
-			if entry := view.snapshot.path(canonical); entry != nil {
+			if entry := view.path(canonical); entry != nil {
 				current = entry.Current
 			}
 			if blindBase < 0 {
@@ -116,8 +116,8 @@ func (store *Store) appendVersion(ctx context.Context, req backend.WriteRequest)
 	}
 	addition := bytes.Clone(content)
 	meta := maps.Clone(metadata)
-	return store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
-		entry := view.snapshot.path(canonical)
+	return store.runMutation(ctx, canonical, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
+		entry := view.path(canonical)
 		if entry == nil {
 			return nil, mutationResult{}, backend.ErrNotFound
 		}
@@ -151,7 +151,7 @@ func (store *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest)
 		change:       storefmt.ArchiveChange{Path: canonical, Archived: req.Archived},
 		precondition: req.Precondition,
 	}
-	result, err := store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
+	result, err := store.runMutation(ctx, canonical, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
 		return store.buildArchiveCandidate(ctx, view, operationID, &archive)
 	})
 	return backend.ArchiveResult{Document: result.Document, Changed: result.Changed}, err
@@ -185,7 +185,7 @@ type writeCandidate struct {
 
 // checkWritable refuses what no version check can fix: an archived document,
 // a new path that collides with the topology, a spent version range.
-func checkWritable(loaded *snapshot, path string) error {
+func checkWritable(loaded snapshotReader, path string) error {
 	entry := loaded.path(path)
 	switch {
 	case entry == nil:
@@ -230,7 +230,7 @@ func (store *Store) buildWriteCandidate(
 	write *writeCandidate,
 ) (*candidateMutation, mutationResult, error) {
 	path, expected, body, metadata := write.path, write.expected, write.body, write.metadata
-	entry := view.snapshot.path(path)
+	entry := view.path(path)
 	current := 0
 	if entry != nil {
 		current = entry.Current
@@ -238,7 +238,7 @@ func (store *Store) buildWriteCandidate(
 	if expected >= 0 && current != expected {
 		return nil, conflictResult(current), storefmt.ErrConflict
 	}
-	if err := checkWritable(view.snapshot, path); err != nil {
+	if err := checkWritable(view, path); err != nil {
 		return nil, mutationResult{}, err
 	}
 
@@ -311,7 +311,7 @@ func (store *Store) buildArchiveCandidate(
 	archive *archiveCandidate,
 ) (*candidateMutation, mutationResult, error) {
 	path, archived := archive.change.Path, archive.change.Archived
-	entry := view.snapshot.path(path)
+	entry := view.path(path)
 	if entry == nil {
 		return nil, mutationResult{}, backend.ErrNotFound
 	}
@@ -334,16 +334,28 @@ func (store *Store) buildArchiveCandidate(
 			return nil, mutationResult{}, err
 		}
 	}
+	var body []byte
+	if !archived {
+		body = storedTip.body
+	}
 	return &candidateMutation{
 		entry: slotEntry{
 			OperationID: operationID, Op: changefeed.ArchiveOp(archived), Agent: document.Metadata["agent"],
 			Path: path, Current: entry.Current, First: history[0].entry.Version, Archived: archived,
 			BodyHash: entry.BodyHash, Modified: entry.Modified.Format(time.RFC3339),
 		},
+		body: body,
 	}, mutationResult{Document: document, Changed: true}, nil
 }
 
-func validateNewPathTopology(snapshot *snapshot, path string) error {
+// snapshotReader reads a snapshot directly when replaying, or through a commit
+// attempt's view, which records what it read.
+type snapshotReader interface {
+	path(path string) *pathState
+	isDirectory(path string) bool
+}
+
+func validateNewPathTopology(snapshot snapshotReader, path string) error {
 	if snapshot.isDirectory(path) {
 		return fmt.Errorf("cannot publish %s: a directory exists at this path: %w", path, storefmt.ErrPathCollision)
 	}

@@ -3,7 +3,9 @@ package storetest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,9 +21,9 @@ type ReplicaSite interface {
 	Open(t *testing.T) handler.DocumentStore
 }
 
-// RunReplicaConformance proves backend.SearchFreshness for a store several
-// replicas share: reads by path see every acknowledged write, catalog reads
-// trail another replica by at most the bound, and a view reads one snapshot.
+// RunReplicaConformance proves a store several replicas share: exact reads by
+// path, catalog reads within backend.SearchFreshness, one snapshot per view,
+// and no write lost to writers racing on several replicas.
 func RunReplicaConformance(t *testing.T, newSite func(t *testing.T) ReplicaSite) {
 	subtests := []struct {
 		name string
@@ -31,6 +33,7 @@ func RunReplicaConformance(t *testing.T, newSite func(t *testing.T) ReplicaSite)
 		{"CatalogReadsWithinBound", testReplicaCatalogReadsWithinBound},
 		{"OwnWritesAtOnce", testReplicaOwnWritesAtOnce},
 		{"OneSnapshotPerView", testReplicaOneSnapshotPerView},
+		{"ConcurrentWritersLoseNothing", testReplicaConcurrentWriters},
 	}
 	for _, st := range subtests {
 		t.Run(st.name, func(t *testing.T) { st.run(t, newSite(t)) })
@@ -125,5 +128,85 @@ func testReplicaOneSnapshotPerView(t *testing.T, site ReplicaSite) {
 	mustWrite(t, writer, "/later.md", 0, "# Later\n")
 	if _, err := view.Get(ctx, "/later.md", 0); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("Get of a later write on a pinned view = %v, want not found", err)
+	}
+}
+
+func testReplicaConcurrentWriters(t *testing.T, site ReplicaSite) {
+	stores := make([]Direct, 3)
+	for index := range stores {
+		stores[index] = Direct{Store: site.Open(t)}
+	}
+	ConcurrentWriters(t, stores, 4, Direct{Store: site.Open(t)})
+}
+
+// ConcurrentWriters races writers on each store over shared and own documents,
+// then checks through checker: every acknowledged write keeps its version and
+// body, each version is given once, and only a contended write is refused.
+func ConcurrentWriters(t *testing.T, stores []Direct, writers int, checker Direct) {
+	t.Helper()
+	const rounds = 6
+	shared := []string{"/race/a.md", "/race/b.md"}
+	type ack struct {
+		path    string
+		version int
+		body    string
+	}
+	var mu sync.Mutex
+	var acks []ack
+	var wg sync.WaitGroup
+	for replica, store := range stores {
+		for writer := range writers {
+			wg.Go(func() {
+				write := func(path string, expected int, body string, contended bool) {
+					doc, err := store.WriteVersion(path, expected, []byte(body), nil)
+					switch {
+					case err == nil && doc.Version == expected+1:
+						mu.Lock()
+						acks = append(acks, ack{path: path, version: doc.Version, body: body})
+						mu.Unlock()
+					case err == nil:
+						t.Errorf("write %s at expected %d acknowledged v%d", path, expected, doc.Version)
+					case !contended || !errors.Is(err, storefmt.ErrConflict):
+						t.Errorf("write %s at expected %d: %v", path, expected, err)
+					}
+				}
+				for round := range rounds {
+					path := shared[(writer+round)%len(shared)]
+					expected, err := store.CurrentVersion(path)
+					if err != nil {
+						t.Errorf("read %s: %v", path, err)
+						return
+					}
+					write(path, expected, fmt.Sprintf("# %d %d %d\n", replica, writer, round), true)
+					write(fmt.Sprintf("/race/own/%d-%d-%d.md", replica, writer, round), 0, "# own\n", false)
+				}
+			})
+		}
+	}
+	wg.Wait()
+
+	given := map[string][]int{}
+	for _, acked := range acks {
+		doc, err := checker.Get(acked.path, acked.version)
+		if err != nil || string(doc.Content) != acked.body {
+			t.Errorf("acknowledged %s v%d = %+v, %v; want body %q", acked.path, acked.version, doc, err, acked.body)
+		}
+		given[acked.path] = append(given[acked.path], acked.version)
+	}
+	if own := len(acks) - len(given[shared[0]]) - len(given[shared[1]]); own != len(stores)*writers*rounds {
+		t.Errorf("own-path writes acknowledged = %d, want %d", own, len(stores)*writers*rounds)
+	}
+	for _, path := range shared {
+		current := currentVersion(t, checker, path)
+		versions := given[path]
+		slices.Sort(versions)
+		for index, version := range versions {
+			if version != index+1 {
+				t.Fatalf("%s acknowledged versions %v, want each of 1..%d once", path, versions, current)
+			}
+		}
+		if len(versions) != current {
+			t.Errorf("%s is at v%d with %d acknowledged writes", path, current, len(versions))
+		}
 	}
 }

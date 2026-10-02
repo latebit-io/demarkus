@@ -24,7 +24,8 @@ type snapshot struct {
 	Hashes *btree.BTreeG[hashEntry]
 }
 
-// pathState is one document in a snapshot; a change replaces it whole.
+// pathState is one document in a snapshot; once published it is never written,
+// and a change replaces it whole.
 type pathState struct {
 	Path    string
 	Current int
@@ -77,7 +78,7 @@ func newSnapshot() *snapshot {
 }
 
 // derive starts the next snapshot. btree.Clone must not run concurrently on
-// one tree, so callers hold the store's refreshMu.
+// one tree, so callers go through Store.derive.
 func (s *snapshot) derive() *snapshot {
 	return &snapshot{
 		Sequence: s.Sequence,

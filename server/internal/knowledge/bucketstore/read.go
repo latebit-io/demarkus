@@ -39,12 +39,14 @@ func boundedBy(ctx context.Context, deadline time.Time) (context.Context, contex
 // a context per call.
 type snapshotView struct {
 	store    *Store // nil when the snapshot is lent pinned
-	objects  blob.Store
+	objects  objectGetter
 	deadline time.Time
 	closed   atomic.Bool
 
 	mu       sync.Mutex
 	snapshot *snapshot
+	// deps records a commit attempt's reads; nil for every other view.
+	deps *dependencies
 }
 
 var _ backend.ReadView = (*snapshotView)(nil)
@@ -85,7 +87,7 @@ func viewRead[T any](ctx context.Context, view *snapshotView, class readClass, f
 	if err != nil {
 		return zero, fmt.Errorf("pin snapshot: %w", normalizeReadIntegrity(err))
 	}
-	return fn(callCtx, &readView{objects: view.objects, snapshot: pinned})
+	return fn(callCtx, &readView{objects: view.objects, snapshot: pinned, deps: view.deps})
 }
 
 func (view *snapshotView) Get(ctx context.Context, reqPath string, version int) (*storefmt.Document, error) {
@@ -127,19 +129,42 @@ func (view *snapshotView) Lookup(ctx context.Context, query string, options cata
 }
 
 // attemptView lends a commit attempt's snapshot to a precondition as an
-// ordinary contract view, bounded by the attempt's own deadline.
+// ordinary contract view, bounded by the attempt's own deadline; its reads
+// join the attempt's dependencies.
 func attemptView(ctx context.Context, view *readView) *snapshotView {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(defaultRequestTimeout)
 	}
-	return &snapshotView{objects: view.objects, deadline: deadline, snapshot: view.snapshot}
+	return &snapshotView{objects: view.objects, deadline: deadline, snapshot: view.snapshot, deps: view.deps}
 }
 
 // readView reads one snapshot; every method takes the operation's context.
+// deps is set while a commit attempt builds on it.
 type readView struct {
-	objects  blob.Store
+	objects  objectGetter
 	snapshot *snapshot
+	deps     *dependencies
+}
+
+// path, isDirectory and scan read the snapshot, recording each read for a
+// commit attempt's rebase.
+func (view *readView) path(path string) *pathState {
+	state := view.snapshot.path(path)
+	view.deps.sawPath(path, state)
+	return state
+}
+
+func (view *readView) isDirectory(path string) bool {
+	isDir := view.snapshot.isDirectory(path)
+	view.deps.sawDirectory(path, isDir)
+	return isDir
+}
+
+// scan is the whole snapshot, for a listing or catalog read any change alters.
+func (view *readView) scan() *snapshot {
+	view.deps.sawAll()
+	return view.snapshot
 }
 
 type retainedVersion struct {
@@ -206,11 +231,11 @@ func (view *readView) listPage(ctx context.Context, reqPath string, opts storefm
 	if err != nil {
 		return nil, err
 	}
-	if view.snapshot.path(logicalPath) != nil || !view.snapshot.isDirectory(logicalPath) {
+	if view.path(logicalPath) != nil || !view.isDirectory(logicalPath) {
 		return nil, backend.ErrNotFound
 	}
 	var entries []storefmt.DirEntry
-	view.snapshot.children(logicalPath, opts.After, func(child *dirChild) bool {
+	view.scan().children(logicalPath, opts.After, func(child *dirChild) bool {
 		if opts.Limit > 0 && len(entries) == opts.Limit {
 			return false
 		}
@@ -234,10 +259,10 @@ func (view *readView) IsDir(ctx context.Context, reqPath string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if view.snapshot.isDirectory(logicalPath) {
+	if view.isDirectory(logicalPath) {
 		return true, nil
 	}
-	if view.snapshot.path(logicalPath) != nil {
+	if view.path(logicalPath) != nil {
 		return false, nil
 	}
 	return false, backend.ErrNotFound
@@ -274,7 +299,7 @@ func (view *readView) LookupHash(ctx context.Context, hash string) (string, erro
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	path, exists := view.snapshot.lookupHash(hash)
+	path, exists := view.scan().lookupHash(hash)
 	if !exists {
 		return "", backend.ErrNotFound
 	}
@@ -342,7 +367,7 @@ func (view *readView) Lookup(ctx context.Context, query string, options catalog.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	results, err := catalog.Search(view.snapshot, query, options)
+	results, err := catalog.Search(view.scan(), query, options)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +390,7 @@ func (view *readView) documentEntry(ctx context.Context, reqPath string) (*pathS
 	if err != nil {
 		return nil, err
 	}
-	entry := view.snapshot.path(logicalPath)
+	entry := view.path(logicalPath)
 	if entry == nil {
 		return nil, backend.ErrNotFound
 	}

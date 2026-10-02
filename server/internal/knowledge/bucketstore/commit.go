@@ -4,43 +4,80 @@ import (
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
+	mathrand "math/rand/v2"
+	"slices"
+	"sync"
+	"sync/atomic"
+	"time"
 
+	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 )
 
-// runMutation commits one mutation, then runs the Committed hook with the
-// commit token released: a hook that reenters the store must not deadlock.
-func (store *Store) runMutation(ctx context.Context, build mutationBuilder) (mutationResult, error) {
-	result, err := store.commitMutation(ctx, build)
-	if err == nil && result.Sequence != 0 && store.committed != nil {
-		store.committed(result.Sequence)
-	}
-	return result, err
+const (
+	// batchStart is the batch limit; it grows to maxSlotEntries while the
+	// queue stays deeper than a batch.
+	batchStart = 16
+	// pipelineDepth is the slot being created and two batches staged behind
+	// it; with one, staging stayed on the critical path (ADR 0036).
+	pipelineDepth = 3
+	// A store that applied another store's slot within yieldWindow waits up
+	// to yieldJitter after each win, so a pipelining winner cannot starve
+	// the others; a lone store never waits.
+	yieldWindow = 3 * time.Second
+	yieldJitter = 30 * time.Millisecond
+)
+
+// yieldDelay is the wait after a win, from (0, yieldJitter].
+func yieldDelay() time.Duration { return jitterWithin(yieldJitter, mathrand.Int64N) }
+
+func jitterWithin(limit time.Duration, random func(int64) int64) time.Duration {
+	return time.Duration(random(int64(limit)) + 1)
 }
 
-// commitMutation builds the mutation on the log's tip and creates the next
-// slot; a slot lost to another writer rebuilds it on the new tip, until the
-// request deadline.
-func (store *Store) commitMutation(ctx context.Context, build mutationBuilder) (mutationResult, error) {
+// commitQueue holds the mutations waiting for this store's committer, which
+// runs while there is work and exits when idle.
+type commitQueue struct {
+	mu      sync.Mutex
+	waiting []*commitRequest
+	running bool
+	closed  bool
+	wake    chan struct{} // a request arrived or Close ran
+	done    sync.WaitGroup
+}
+
+// commitRequest is one mutation waiting for its outcome.
+type commitRequest struct {
+	ctx         context.Context // the request's, bounded by the request timeout
+	path        string          // canonical path it changes
+	build       mutationBuilder
+	operationID string
+	answer      chan commitAnswer // buffered: the committer never waits on it
+	// taken is set once a batch holds the request: past it, a request that
+	// gives up cannot say whether it committed.
+	taken atomic.Bool
+	// staged are the object keys created for it; the committer's alone.
+	staged []string
+}
+
+// commitAnswer is a mutation's outcome. hint is set on the last member of a
+// slot, which tells peers the slot's sequence.
+type commitAnswer struct {
+	result mutationResult
+	err    error
+	hint   bool
+}
+
+// runMutation queues one mutation and waits for its outcome, then runs the
+// Committed hook outside every lock: a hook that reenters the store must not
+// deadlock.
+func (store *Store) runMutation(ctx context.Context, path string, build mutationBuilder) (mutationResult, error) {
 	if store.readOnly {
 		return mutationResult{}, backend.ErrReadOnly
 	}
 	ctx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
-	select {
-	case <-store.commitToken:
-		defer func() { store.commitToken <- struct{}{} }()
-	case <-ctx.Done():
-		return mutationResult{}, fmt.Errorf("wait for commit token: %w", ctx.Err())
-	}
-	// Checked with the token held: Close takes the token, so a commit that
-	// waited across it is refused rather than landing after it returned.
-	if store.closed.Load() {
-		return mutationResult{}, backend.ErrClosed
-	}
-
 	operationID, err := store.newOperationID()
 	if err != nil {
 		return mutationResult{}, fmt.Errorf("create operation ID: %w", err)
@@ -48,76 +85,378 @@ func (store *Store) commitMutation(ctx context.Context, build mutationBuilder) (
 	if !validWorldID(operationID) {
 		return mutationResult{}, fmt.Errorf("create operation ID: invalid UUID %q", operationID)
 	}
+	request := &commitRequest{ctx: ctx, path: path, build: build, operationID: operationID, answer: make(chan commitAnswer, 1)}
+	if err := store.commits.enqueue(store, request); err != nil {
+		return mutationResult{}, err
+	}
+	select {
+	case answer := <-request.answer:
+		if answer.err == nil && answer.hint && store.committed != nil {
+			store.committed(answer.result.Sequence)
+		}
+		return answer.result, answer.err
+	case <-ctx.Done():
+		// A request still queued is dropped untouched once its context ends.
+		if request.taken.Load() {
+			return mutationResult{}, fmt.Errorf("operation %s outcome unknown: %w", operationID, ctx.Err())
+		}
+		return mutationResult{}, fmt.Errorf("operation %s wait for commit: %w", operationID, ctx.Err())
+	}
+}
 
+func (queue *commitQueue) enqueue(store *Store, request *commitRequest) error {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if queue.closed {
+		return backend.ErrClosed
+	}
+	queue.waiting = append(queue.waiting, request)
+	if queue.running {
+		queue.signal()
+		return nil
+	}
+	queue.running = true
+	queue.done.Add(1)
+	go store.commit()
+	return nil
+}
+
+func (queue *commitQueue) signal() {
+	select {
+	case queue.wake <- struct{}{}:
+	default:
+	}
+}
+
+// close refuses later writes and waits for the committer to finish.
+func (queue *commitQueue) close() {
+	queue.mu.Lock()
+	queue.closed = true
+	queue.mu.Unlock()
+	queue.signal()
+	queue.done.Wait()
+}
+
+func (queue *commitQueue) isClosed() bool {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	return queue.closed
+}
+
+// committer turns queued mutations into slots: it builds batches in queue
+// order, stages their objects, and creates one slot at a time while the
+// batches behind it build and stage.
+type committer struct {
+	store *Store
+	// pipeline holds the batches not yet answered, oldest first; only the
+	// first creates its slot.
+	pipeline []*batch
+	// events are results of staging and create goroutines, run here.
+	events  chan func()
+	running int // goroutines that have not reported
+	limit   int
+	// previous serves the next batch the objects the last one read.
+	previous *batchObjects
+	timer    *time.Timer
+}
+
+// commit runs the committer until the queue and the pipeline are empty.
+func (store *Store) commit() {
+	c := &committer{store: store, events: make(chan func(), pipelineDepth), limit: batchStart}
 	for {
-		base, err := store.refresh(ctx)
-		if err != nil {
-			return mutationResult{}, fmt.Errorf("operation %s refresh: %w", operationID, err)
+		closing := store.commits.isClosed()
+		if closing {
+			c.shutdown()
 		}
-		candidate, built, err := build(ctx, &readView{objects: store.objects, snapshot: base}, operationID)
-		if err != nil || candidate == nil {
-			return built, err
+		// The staged head's create starts before the next batch builds.
+		wait := c.launch()
+		if !closing {
+			c.fill()
+			wait = c.launch()
 		}
-		sequence, err := store.commitSlot(ctx, base, candidate)
-		if err != nil {
-			return built, fmt.Errorf("operation %s commit: %w", operationID, err)
+		if c.exit() {
+			return
 		}
-		if sequence != 0 {
-			built.Sequence = sequence
-			return built, nil
+		select {
+		case <-store.commits.wake:
+		case event := <-c.events:
+			c.running--
+			event()
+		case <-wait:
 		}
 	}
 }
 
-// commitSlot stages the candidate's objects, applies its slot to a copy of
-// base, and creates the slot; it reports the committed sequence, or 0 when
-// another writer took the name. A slot that does not apply is never created.
-func (store *Store) commitSlot(ctx context.Context, base *snapshot, candidate *candidateMutation) (int64, error) {
-	if err := runParallel(ctx, store.shardWorkers, candidate.objects, func(ctx context.Context, object modelObject) error {
-		return createImmutable(ctx, store.objects, object)
-	}); err != nil {
-		return 0, fmt.Errorf("stage: %w", err)
+// exit stops the committer when nothing is left to do; under the queue's
+// lock, so a request queued meanwhile starts another.
+func (c *committer) exit() bool {
+	if len(c.pipeline) > 0 || c.running > 0 {
+		return false
 	}
-	slot := &slotObject{
-		Schema: logSchema, WorldID: store.worldID, First: base.Sequence + 1, Store: store.id, Prev: base.Tip,
-		Entries: []slotEntry{candidate.entry},
+	queue := &c.store.commits
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.waiting) > 0 {
+		return false
 	}
-	data, err := marshalImmutable(slot)
-	if err == nil {
-		err = validateSlot(slot, slot.First)
+	queue.running = false
+	queue.done.Done()
+	if c.timer != nil {
+		c.timer.Stop()
 	}
-	if err != nil {
-		return 0, fmt.Errorf("build slot: %w", err)
+	return true
+}
+
+// shutdown refuses everything but a slot being created, which ends as it
+// would have.
+func (c *committer) shutdown() {
+	queue := &c.store.commits
+	queue.mu.Lock()
+	waiting := queue.waiting
+	queue.waiting = nil
+	queue.mu.Unlock()
+	for _, request := range waiting {
+		c.reply(request, commitAnswer{err: backend.ErrClosed})
 	}
-	store.refreshMu.Lock()
-	next := base.derive()
-	store.refreshMu.Unlock()
-	reindex := make(map[string]struct{})
-	if err := next.applySlot(slot, hashHex(data), reindex); err != nil {
-		return 0, fmt.Errorf("slot %d would not apply: %w", slot.First, err)
+	keep := 0
+	if len(c.pipeline) > 0 && c.pipeline[0].creating {
+		keep = 1
 	}
-	var fresh map[string][]byte
-	if candidate.body != nil {
-		fresh = map[string][]byte{candidate.entry.Path: candidate.body}
+	for _, b := range c.pipeline[keep:] {
+		c.answerRest(b, backend.ErrClosed)
 	}
-	if err := store.indexSections(ctx, next, reindex, fresh); err != nil {
-		return 0, err
+	c.pipeline = c.pipeline[:keep]
+}
+
+// take removes the next batch's requests from the queue, answering those
+// whose context already ended.
+func (c *committer) take() []*commitRequest {
+	queue := &c.store.commits
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	var taken []*commitRequest
+	for len(queue.waiting) > 0 && len(taken) < c.limit {
+		request := queue.waiting[0]
+		queue.waiting[0] = nil
+		queue.waiting = queue.waiting[1:]
+		request.taken.Store(true)
+		if err := request.ctx.Err(); err != nil {
+			c.reply(request, commitAnswer{err: fmt.Errorf("operation %s wait for commit: %w", request.operationID, err)})
+			continue
+		}
+		taken = append(taken, request)
 	}
-	created := store.now()
-	err = createImmutable(ctx, store.objects, modelObject{Key: slotKey(slot.First), Data: data})
 	switch {
-	case errors.Is(err, errNameTaken):
-		return 0, nil
-	case err != nil:
-		return 0, fmt.Errorf("create slot %d: %w", slot.First, err)
+	case len(taken) == c.limit && len(queue.waiting) > 0:
+		c.limit = maxSlotEntries
+	case len(taken) < batchStart:
+		c.limit = batchStart
 	}
+	return taken
+}
+
+// requeue puts requests back at the head of the queue, in order.
+func (c *committer) requeue(requests []*commitRequest) {
+	if len(requests) == 0 {
+		return
+	}
+	queue := &c.store.commits
+	queue.mu.Lock()
+	queue.waiting = append(requests, queue.waiting...)
+	queue.mu.Unlock()
+}
+
+// fill builds batches while the pipeline has room: the first on the log's
+// tip, the rest on the batch before them.
+func (c *committer) fill() {
+	for len(c.pipeline) < pipelineDepth {
+		requests := c.take()
+		if len(requests) == 0 {
+			return
+		}
+		head := len(c.pipeline) == 0
+		b := &batch{}
+		if head {
+			ctx, cancel := context.WithTimeout(context.Background(), c.store.requestTimeout)
+			tip, err := c.store.refresh(ctx)
+			cancel()
+			if err != nil {
+				for _, request := range requests {
+					c.reply(request, commitAnswer{err: fmt.Errorf("operation %s refresh: %w", request.operationID, err)})
+				}
+				continue
+			}
+			b.base = tip
+		} else {
+			b.base = c.pipeline[len(c.pipeline)-1].next
+		}
+		c.build(b, requests)
+		c.pipeline = append(c.pipeline, b)
+		if head {
+			c.answerSettled(b)
+		}
+	}
+}
+
+// launch answers batches with nothing to create, then starts the first
+// slot's create once it is staged; it returns a timer while a yield holds it.
+func (c *committer) launch() <-chan time.Time {
+	for len(c.pipeline) > 0 {
+		head := c.pipeline[0]
+		if head.slot == nil {
+			c.answerRest(head, nil)
+			c.pop()
+			continue
+		}
+		if head.creating || !head.staged {
+			return nil
+		}
+		if wait := time.Until(time.Unix(0, c.store.yieldUntil.Load())); wait > 0 {
+			return c.after(wait)
+		}
+		c.create(head)
+		return nil
+	}
+	return nil
+}
+
+func (c *committer) after(wait time.Duration) <-chan time.Time {
+	if c.timer == nil {
+		c.timer = time.NewTimer(wait)
+	} else {
+		c.timer.Reset(wait)
+	}
+	return c.timer.C
+}
+
+// pop drops the answered first batch; the next one's base now exists.
+func (c *committer) pop() {
+	c.pipeline = slices.Delete(c.pipeline, 0, 1)
+	if len(c.pipeline) > 0 {
+		c.answerSettled(c.pipeline[0])
+	}
+}
+
+// create starts the first batch's slot create, bounded by the latest
+// deadline among its members. None starts once Close has come.
+func (c *committer) create(b *batch) {
+	store := c.store
+	if store.commits.isClosed() {
+		return
+	}
+	b.creating, b.started = true, store.now()
+	deadline := time.Now()
+	for _, m := range b.members {
+		if until, ok := m.request.ctx.Deadline(); ok && m.answer == nil && until.After(deadline) {
+			deadline = until
+		}
+	}
+	store.pending.Store(&pendingSlot{base: b.base, next: b.next, hash: hashHex(b.data)})
+	slot := modelObject{Key: slotKey(b.slot.First), Data: b.data}
+	c.running++
+	go func() {
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		defer cancel()
+		winner, err := createOrRead(ctx, store.objects, slot)
+		c.events <- func() { c.created(b, winner, err) }
+	}()
+}
+
+// created settles the first batch's create: confirmed, lost to winner, or
+// failed with its outcome unknown.
+func (c *committer) created(b *batch, winner *blob.Object, err error) {
+	c.store.pending.Store(nil)
+	switch {
+	case err != nil:
+		c.fail(b, fmt.Errorf("create slot %d: %w", b.slot.First, err))
+	case winner != nil:
+		c.rebase(b, winner)
+	default:
+		c.confirm(b)
+	}
+}
+
+// confirm installs a created slot and answers its batch. It installs only
+// over the slot's own base: a refresh that read the slot first did already.
+func (c *committer) confirm(b *batch) {
+	store := c.store
 	store.refreshMu.Lock()
-	// A refresh that read the slot first has installed it already.
-	if store.served.Load().snap.Sequence == base.Sequence {
-		store.install(next, []*slotObject{slot}, created)
+	if store.served.Load().snap.Sequence == b.base.Sequence {
+		store.install(b.next, []*slotObject{b.slot}, b.started)
 	}
 	store.refreshMu.Unlock()
-	return slot.First, nil
+	var last *commitAnswer
+	sequence := b.slot.First
+	for _, m := range b.members {
+		if m.answer == nil {
+			m.result.Sequence = sequence
+			m.answer = &commitAnswer{result: m.result}
+			last = m.answer
+			sequence++
+		}
+	}
+	last.hint = true
+	c.answerRest(b, nil)
+	c.pop()
+	if seen := store.peerSeen.Load(); seen != 0 && store.now().UnixNano()-seen < int64(yieldWindow) {
+		store.yieldUntil.Store(time.Now().Add(store.jitter()).UnixNano())
+	}
+}
+
+// fail answers every member of b that is still waiting with err, and sends
+// the batches built on it back to the queue.
+func (c *committer) fail(b *batch, err error) {
+	index := slices.Index(c.pipeline, b)
+	c.discardAfter(index)
+	c.answerRest(b, err)
+	c.pipeline = slices.Delete(c.pipeline, index, index+1)
+}
+
+// discardAfter sends the requests of every batch after index back to the
+// queue: they were built on a state that will not exist.
+func (c *committer) discardAfter(index int) {
+	var requests []*commitRequest
+	for _, b := range c.pipeline[index+1:] {
+		for _, m := range b.members[b.answered:] {
+			requests = append(requests, m.request)
+		}
+	}
+	c.pipeline = c.pipeline[:index+1]
+	c.requeue(requests)
+}
+
+// reply answers a request; each is answered once.
+func (c *committer) reply(request *commitRequest, answer commitAnswer) {
+	select {
+	case request.answer <- answer:
+	default:
+		c.store.logger.Error("commit answered twice", "operation", request.operationID, "path", request.path)
+	}
+}
+
+// answerSettled sends the answers at the front of a batch whose base exists:
+// those judged on the base alone.
+func (c *committer) answerSettled(b *batch) {
+	for b.answered < len(b.members) && b.members[b.answered].answer != nil {
+		c.reply(b.members[b.answered].request, *b.members[b.answered].answer)
+		b.answered++
+	}
+}
+
+// answerRest sends every remaining answer, with err in place of each when
+// it is set.
+func (c *committer) answerRest(b *batch, err error) {
+	for _, m := range b.members[b.answered:] {
+		switch {
+		case err != nil:
+			c.reply(m.request, commitAnswer{err: err})
+		case m.answer != nil:
+			c.reply(m.request, *m.answer)
+		default:
+			c.reply(m.request, commitAnswer{err: fmt.Errorf("operation %s: committer left it without an answer", m.request.operationID)})
+		}
+	}
+	b.answered = len(b.members)
 }
 
 func randomOperationID() (string, error) {

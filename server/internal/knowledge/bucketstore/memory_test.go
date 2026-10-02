@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -48,11 +49,46 @@ func (s *storedBytes) Replace(ctx context.Context, key string, generation blob.G
 // heap tracking live documents: retention trims the versions a snapshot holds
 // and old snapshots share nothing pinned. With WATCH on, the hub must evict.
 func TestPublishPruneHeapTracksLiveData(t *testing.T) {
-	t.Run("plain", func(t *testing.T) { checkPublishPruneHeap(t, 0) })
-	t.Run("watch", func(t *testing.T) { checkPublishPruneHeap(t, 16) })
+	cycle := func(t *testing.T, store *Store, n int) {
+		publishPruned(t, store, "/graph.md", memtest.AgentGraphBody(n))
+		for server := range 5 {
+			publishPruned(t, store, fmt.Sprintf("/index/server-%d.md", server), fmt.Appendf(nil, "# Index %d\n\nCycle %d.\n", server, n))
+		}
+	}
+	t.Run("plain", func(t *testing.T) { checkCommitHeap(t, 0, cycle) })
+	t.Run("watch", func(t *testing.T) { checkCommitHeap(t, 16, cycle) })
 }
 
-func checkPublishPruneHeap(t *testing.T, ring int) {
+// Concurrent writers fill the committer's queue, batches and pipeline; once
+// they drain and the committer stops, heap tracks the live documents alone.
+func TestConcurrentCommitHeapTracksLiveData(t *testing.T) {
+	checkCommitHeap(t, 0, func(t *testing.T, store *Store, n int) {
+		var wg sync.WaitGroup
+		for writer := range 24 {
+			wg.Go(func() {
+				body := fmt.Appendf(nil, "# Index %d\n\nCycle %d.\n", writer, n)
+				if writer == 0 {
+					body = memtest.AgentGraphBody(n)
+				}
+				publishPruned(t, store, fmt.Sprintf("/w/%d.md", writer), body)
+			})
+		}
+		wg.Wait()
+	})
+}
+
+// publishPruned publishes body under the agent's retention, so every write
+// past warmup also prunes.
+func publishPruned(t *testing.T, store *Store, path string, body []byte) {
+	meta := map[string]string{"retention": "20", "agent": "federation"}
+	if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: path, ExpectedVersion: -1, Content: body, Metadata: meta}); err != nil {
+		t.Errorf("publish %s: %v", path, err)
+	}
+}
+
+// checkCommitHeap runs cycle past retention, then measures it: heap outside
+// what the in-memory bucket holds must stay under two graph bodies.
+func checkCommitHeap(t *testing.T, ring int, cycle func(t *testing.T, store *Store, n int)) {
 	memory, err := blob.NewMemory(4 << 20)
 	if err != nil {
 		t.Fatalf("new memory: %v", err)
@@ -67,28 +103,17 @@ func checkPublishPruneHeap(t *testing.T, ring int) {
 		t.Fatalf("open: %v", err)
 	}
 	closeAtEnd(t, store)
-	meta := map[string]string{"retention": "20", "agent": "federation"}
-	cycle := func(n int) {
-		if _, err := store.Publish(ctx, backend.WriteRequest{Path: "/graph.md", ExpectedVersion: -1, Content: memtest.AgentGraphBody(n), Metadata: meta}); err != nil {
-			t.Fatalf("cycle %d graph: %v", n, err)
-		}
-		for server := range 5 {
-			body := fmt.Appendf(nil, "# Index %d\n\nCycle %d.\n", server, n)
-			if _, err := store.Publish(ctx, backend.WriteRequest{Path: fmt.Sprintf("/index/server-%d.md", server), ExpectedVersion: -1, Content: body, Metadata: meta}); err != nil {
-				t.Fatalf("cycle %d index: %v", n, err)
-			}
-		}
-	}
-	// Past retention, so every measured write also prunes.
 	const warmup, cycles = 25, 60
 	for n := range warmup {
-		cycle(n)
+		cycle(t, store, n)
 	}
+	waitIdle(t, store)
 	bytesBefore, objectsBefore := objects.bytes.Load(), objects.objects.Load()
 	growth := memtest.Retained(func() {
 		for n := warmup; n < warmup+cycles; n++ {
-			cycle(n)
+			cycle(t, store, n)
 		}
+		waitIdle(t, store)
 	})
 	runtime.KeepAlive(store)
 	// Each stored object also costs its key and map slot beyond its bytes.
@@ -96,7 +121,7 @@ func checkPublishPruneHeap(t *testing.T, ring int) {
 	bodyBytes := int64(len(memtest.AgentGraphBody(0)))
 	t.Logf("heap grew %d bytes, %d of them the bucket's", growth, bucket)
 	if limit := 2 * bodyBytes; growth-bucket > limit {
-		t.Errorf("heap outside the bucket grew %d bytes over %d publish-and-prune cycles of a %d-byte body, want under %d", growth-bucket, cycles, bodyBytes, limit)
+		t.Errorf("heap outside the bucket grew %d bytes over %d cycles, want under %d", growth-bucket, cycles, limit)
 	}
 }
 

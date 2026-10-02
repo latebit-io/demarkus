@@ -170,25 +170,24 @@ func replay(ctx context.Context, objects blob.Store, loaded *snapshot, options r
 		if err != nil {
 			return err
 		}
-		slots := make([]*slotObject, len(firsts))
-		hashes := make([]string, len(firsts))
+		slots := make([]slotRead, len(firsts))
 		err := runParallel(ctx, options.workers, indexes(len(firsts)), func(ctx context.Context, index int) error {
-			slot, hash, err := readSlot(ctx, objects, options.worldID, firsts[index])
+			read, err := readSlot(ctx, objects, options.worldID, firsts[index])
 			if errors.Is(err, blob.ErrNotFound) {
 				return fmt.Errorf("%w: listed slot %d is missing: %w", blob.ErrIntegrity, firsts[index], err)
 			}
-			slots[index], hashes[index] = slot, hash
+			slots[index] = read
 			return err
 		})
 		if err != nil {
 			return fmt.Errorf("replay: %w", err)
 		}
-		for index, slot := range slots {
-			if err := loaded.applySlot(slot, hashes[index], reindex); err != nil {
+		for _, read := range slots {
+			if err := loaded.applySlot(read, reindex); err != nil {
 				return &applyError{fmt.Errorf("replay: %w", err)}
 			}
 			if options.onSlot != nil {
-				options.onSlot(slot)
+				options.onSlot(read.slot)
 			}
 		}
 	}
@@ -242,16 +241,22 @@ func getValidated[T any](ctx context.Context, objects blob.Store, key string, va
 	if err != nil {
 		return value, nil, fmt.Errorf("read %q: %w", key, err)
 	}
-	if err := validateReadObject(key, &object); err != nil {
-		return value, nil, err
+	value, err = decodeValidated(key, &object, validate)
+	return value, object.Data, err
+}
+
+// decodeValidated checks an object read at key and decodes it.
+func decodeValidated[T any](key string, object *blob.Object, validate func(*T) error) (value T, err error) {
+	if err := validateReadObject(key, object); err != nil {
+		return value, err
 	}
 	if err := decodeImmutable(object.Data, &value); err != nil {
-		return value, nil, fmt.Errorf("%w: decode %q: %v", blob.ErrIntegrity, key, err)
+		return value, fmt.Errorf("%w: decode %q: %v", blob.ErrIntegrity, key, err)
 	}
 	if err := validate(&value); err != nil {
-		return value, nil, fmt.Errorf("%w: validate %q: %v", blob.ErrIntegrity, key, err)
+		return value, fmt.Errorf("%w: validate %q: %v", blob.ErrIntegrity, key, err)
 	}
-	return value, object.Data, nil
+	return value, nil
 }
 
 func loadShards(ctx context.Context, objects blob.Store, refs []shardRef, workers int) (*[shardCount]shardObject, error) {
@@ -314,7 +319,7 @@ type keyedRef struct {
 	expectedKey string
 }
 
-func getImmutable[T any](ctx context.Context, objects blob.Store, keyed keyedRef, validate func(*T) error) (T, error) {
+func getImmutable[T any](ctx context.Context, objects objectGetter, keyed keyedRef, validate func(*T) error) (T, error) {
 	ref := keyed.objectRef
 	var result T
 	if err := verifyRef(ref, keyed.expectedKey); err != nil {

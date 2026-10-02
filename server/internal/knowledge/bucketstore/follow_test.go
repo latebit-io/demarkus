@@ -102,41 +102,44 @@ func TestOpenReadsAnExistingHeadOnce(t *testing.T) {
 	}
 }
 
-// Close waits for a commit in flight, and a commit that waited for the token
-// across Close is refused: nothing lands after Close returns.
+// Close waits for the slot being created and refuses a write staged behind
+// it: nothing lands after Close returns.
 func TestCloseFencesCommits(t *testing.T) {
 	objects := initializedMemory(t)
-	store := (&bucketSite{objects: objects}).open(t, 0)
-	<-store.commitToken // a commit in flight
-	result := make(chan error, 1)
-	go func() {
-		_, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/late.md", ExpectedVersion: -1, Content: []byte("# Late\n")})
-		result <- err
-	}()
+	staged := &blobCreates{Store: objects, created: make(chan struct{}, 4)}
+	holds := newSlotHolds(t, staged, 2)
+	store := (&bucketSite{objects: holds}).open(t, 0)
+	publish := func(path string) <-chan writeOutcome {
+		return publishAsync(context.Background(), store, backend.WriteRequest{Path: path, ExpectedVersion: -1, Content: []byte("# " + path + "\n")})
+	}
+	first := publish("/first.md")
+	waitForTestSignal(t, holds.holds[2].arrived, "the first slot create")
+	<-staged.created
+	late := publish("/late.md")
+	waitForTestSignal(t, staged.created, "the late write staged behind the slot")
+
 	closed := make(chan error, 1)
 	go func() { closed <- store.Close() }()
-	deadline := time.Now().Add(5 * time.Second)
-	for !store.closed.Load() {
-		if time.Now().After(deadline) {
-			t.Fatal("Close never marked the store closed")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	// Close cannot return while this test holds the token; the window only
-	// gives a Close that skips the token time to show it.
+	waitUntil(t, store, "Close", func(queue *commitQueue) bool { return queue.closed })
+	// Close cannot return while the slot create is held; the window only
+	// gives a Close that skips it time to show it.
 	select {
 	case <-closed:
-		t.Fatal("Close returned while a commit held the token")
+		t.Fatal("Close returned while a slot create was in flight")
 	case <-time.After(20 * time.Millisecond):
 	}
-	// Whichever of the writer and Close takes the token next, the writer
-	// finds the store closed.
-	store.commitToken <- struct{}{} // the commit in flight ends
+	holds.holds[2].open()
 	if err := <-closed; err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	if err := <-result; !errors.Is(err, backend.ErrClosed) {
-		t.Fatalf("commit that waited across Close = %v, want backend.ErrClosed", err)
+	if outcome := <-first; outcome.err != nil {
+		t.Fatalf("write whose slot was in flight: %v", outcome.err)
 	}
-	assertNoSlot(t, objects, 2)
+	if outcome := <-late; !errors.Is(outcome.err, backend.ErrClosed) {
+		t.Fatalf("write staged behind Close = %v, want backend.ErrClosed", outcome.err)
+	}
+	assertNoSlot(t, objects, 3)
+	if outcome := <-publish("/after.md"); !errors.Is(outcome.err, backend.ErrClosed) {
+		t.Fatalf("write after Close = %v, want backend.ErrClosed", outcome.err)
+	}
 }

@@ -10,19 +10,15 @@ import (
 )
 
 // indexSections fills the section index of every live path in reindex on a
-// snapshot not yet published: fresh bodies index directly, the rest are read
-// in parallel. A body that fails to load is logged and skipped (ADR 0012).
-func (store *Store) indexSections(ctx context.Context, next *snapshot, reindex map[string]struct{}, fresh map[string][]byte) error {
+// snapshot not yet published, reading the bodies in parallel. A body that
+// fails to load is logged and skipped (ADR 0012).
+func (store *Store) indexSections(ctx context.Context, next *snapshot, reindex map[string]struct{}) error {
 	var pending []*pathState
 	var mu sync.Mutex
 	indexed := make(map[string]*catalog.DocSections, len(reindex))
 	for path := range reindex {
 		state := next.path(path)
 		if state == nil || state.Archived {
-			continue
-		}
-		if body, ok := fresh[path]; ok {
-			indexed[path] = catalog.IndexSections(body)
 			continue
 		}
 		pending = append(pending, state)

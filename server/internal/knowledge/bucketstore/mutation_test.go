@@ -133,8 +133,8 @@ func TestSlotRace(t *testing.T) {
 	t.Run("policy change", func(t *testing.T) {
 		base, memory := newWritableStore(t)
 		seedPolicy(t, base, "strictness: warn\nrequire_tags: domain\nrequire_fields: title\n", 0)
-		blocking := newBlockingFirstSlotStore(memory)
-		writer, err := Open(context.Background(), blocking, Options{Logger: discardLogger, WorldID: testWorldID})
+		holds := newSlotHolds(t, memory, 3)
+		writer, err := Open(context.Background(), holds, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open writer: %v", err)
 		}
@@ -147,9 +147,9 @@ func TestSlotRace(t *testing.T) {
 			_, err := enforced(writer, false).WriteVersion("/doc", 0, []byte("body"), nil)
 			result <- err
 		}()
-		waitForTestSignal(t, blocking.blocked, "blocked slot create")
+		waitForTestSignal(t, holds.holds[3].arrived, "blocked slot create")
 		seedPolicy(t, policyWriter, "strictness: block\nrequire_tags: domain\nrequire_fields: title\n", 1)
-		close(blocking.release)
+		holds.holds[3].open()
 		select {
 		case err := <-result:
 			if !errors.Is(err, writepolicy.ErrPolicyBlocked) {
@@ -166,8 +166,8 @@ func TestSlotRace(t *testing.T) {
 		if _, err := base.WriteVersion("/doc", 0, []byte("v1"), nil); err != nil {
 			t.Fatalf("write v1: %v", err)
 		}
-		blocking := newBlockingFirstSlotStore(memory)
-		archiver, err := Open(context.Background(), blocking, Options{Logger: discardLogger, WorldID: testWorldID})
+		holds := newSlotHolds(t, memory, 3)
+		archiver, err := Open(context.Background(), holds, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open archiver: %v", err)
 		}
@@ -181,12 +181,12 @@ func TestSlotRace(t *testing.T) {
 			document, changed, err := archiver.ArchiveResult("/doc", true)
 			result <- archiveOutcome{document: document, changed: changed, err: err}
 		}()
-		waitForTestSignal(t, blocking.blocked, "blocked archive slot")
+		waitForTestSignal(t, holds.holds[3].arrived, "blocked archive slot")
 		written, err := base.WriteVersion("/doc", 1, []byte("v2"), nil)
 		if err != nil {
 			t.Fatalf("write concurrent v2: %v", err)
 		}
-		close(blocking.release)
+		holds.holds[3].open()
 		select {
 		case outcome := <-result:
 			if outcome.err != nil || !outcome.changed || outcome.document == nil || outcome.document.Version != 2 || !outcome.document.Archived || outcome.document.ETag != written.ETag {
@@ -387,6 +387,16 @@ type writeOutcome struct {
 	err      error
 }
 
+// publishAsync publishes on its own goroutine.
+func publishAsync(ctx context.Context, store *Store, req backend.WriteRequest) <-chan writeOutcome {
+	result := make(chan writeOutcome, 1)
+	go func() {
+		document, err := store.Publish(ctx, req)
+		result <- writeOutcome{document: document, err: err}
+	}()
+	return result
+}
+
 func runConcurrentWrites(left *Store, leftPath string, right *Store, rightPath string) <-chan writeOutcome {
 	results := make(chan writeOutcome, 2)
 	go func() {
@@ -538,30 +548,6 @@ func (store *createBarrierStore) releaseBoth(t *testing.T) {
 		}
 	}
 	store.once.Do(func() { close(store.release) })
-}
-
-// blockingFirstSlotStore holds the first slot create until released.
-type blockingFirstSlotStore struct {
-	blob.Store
-	blocked chan struct{}
-	release chan struct{}
-	once    atomic.Bool
-}
-
-func newBlockingFirstSlotStore(store blob.Store) *blockingFirstSlotStore {
-	return &blockingFirstSlotStore{Store: store, blocked: make(chan struct{}), release: make(chan struct{})}
-}
-
-func (store *blockingFirstSlotStore) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
-	if isSlot(key) && store.once.CompareAndSwap(false, true) {
-		close(store.blocked)
-		select {
-		case <-store.release:
-		case <-ctx.Done():
-			return blob.Attributes{}, &blob.OpError{Op: "create", Key: key, Err: ctx.Err()}
-		}
-	}
-	return store.Store.Create(ctx, key, data)
 }
 
 // peerWinsSlotStore lets a peer commit just before this store's first slot

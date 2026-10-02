@@ -38,8 +38,8 @@ type Options struct {
 	// applied slots, under the log's sequence, and the store follows peers
 	// until Close. Zero leaves WATCH off.
 	ChangeRing int
-	// Committed runs after each of this replica's own commits with its
-	// sequence, outside every lock; nil for none.
+	// Committed runs once for each slot this replica creates, with the slot's
+	// last sequence, outside every lock; nil for none.
 	Committed func(sequence int64)
 
 	// followInterval overrides the backstop poll's period in tests.
@@ -59,14 +59,23 @@ type Store struct {
 	readOnly       bool
 	served         atomic.Pointer[served]
 	refreshMu      sync.Mutex
-	commitToken    chan struct{}
+	// deriveMu serializes snapshot clones: btree.Clone writes to its source.
+	deriveMu       sync.Mutex
+	commits        commitQueue
 	now            func() time.Time
 	newOperationID func() (string, error)
+	// peerSeen is when this store last applied another store's slot, in Unix
+	// nanoseconds; jitter is the wait after a win while it is recent, and no
+	// create starts before yieldUntil.
+	peerSeen   atomic.Int64
+	jitter     func() time.Duration
+	yieldUntil atomic.Int64
+	// pending is the slot being created and the snapshot it makes.
+	pending atomic.Pointer[pendingSlot]
 
 	changes   *changefeed.Hub
 	committed func(sequence int64)
 	follower  *follower // nil without WATCH
-	closed    atomic.Bool
 }
 
 var (
@@ -81,6 +90,13 @@ var (
 type served struct {
 	snap      *snapshot
 	confirmed time.Time
+}
+
+// pendingSlot is a slot this store is creating: a refresh that reads it before
+// the create returns installs next rather than applying and indexing it again.
+type pendingSlot struct {
+	base, next *snapshot
+	hash       string
 }
 
 // readClass is how fresh a view's first read needs its snapshot.
@@ -142,13 +158,13 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		logger:         options.Logger,
 		maxDocuments:   options.MaxDocuments,
 		readOnly:       options.ReadOnly,
-		commitToken:    make(chan struct{}, 1),
+		commits:        commitQueue{wake: make(chan struct{}, 1)},
 		now:            time.Now,
 		newOperationID: randomOperationID,
+		jitter:         yieldDelay,
 		committed:      options.Committed,
 	}
 	store.changes = newHub(store, options.ChangeRing)
-	store.commitToken <- struct{}{}
 	store.refreshMu.Lock()
 	err = store.loadOrCreate(ctx, &options)
 	store.refreshMu.Unlock()
@@ -205,7 +221,7 @@ func (store *Store) load(ctx context.Context) error {
 		}
 		return true
 	})
-	if err := store.indexSections(ctx, loaded, reindex, nil); err != nil {
+	if err := store.indexSections(ctx, loaded, reindex); err != nil {
 		return err
 	}
 	store.served.Store(&served{snap: loaded, confirmed: started})
@@ -233,29 +249,48 @@ func (store *Store) refresh(ctx context.Context) (*snapshot, error) {
 	return store.catchUpLocked(ctx, nil)
 }
 
-// catchUpLocked probes the slot after the served snapshot; when there is one
-// it applies it and every slot a listing names after it, read in parallel.
-// Bodies this replica just wrote are in fresh.
-func (store *Store) catchUpLocked(ctx context.Context, fresh map[string][]byte) (*snapshot, error) {
+// catchUpFrom catches up through a slot this store lost the race for; it
+// holds the winner already, so that slot is not read again.
+func (store *Store) catchUpFrom(ctx context.Context, winner slotRead) (*snapshot, error) {
+	store.refreshMu.Lock()
+	defer store.refreshMu.Unlock()
+	return store.catchUpLocked(ctx, &winner)
+}
+
+// catchUpLocked probes the slot after the served snapshot, unless known is
+// that slot; when there is one it applies it and every slot a listing names
+// after it, read in parallel.
+func (store *Store) catchUpLocked(ctx context.Context, known *slotRead) (*snapshot, error) {
 	base := store.served.Load().snap
 	probed := store.now()
-	slot, hash, err := readSlot(ctx, store.objects, store.worldID, base.Sequence+1)
-	if errors.Is(err, blob.ErrNotFound) && !errors.Is(err, blob.ErrIntegrity) {
-		store.served.Store(&served{snap: base, confirmed: probed})
-		return base, nil
+	var first slotRead
+	if known != nil && known.slot.First == base.Sequence+1 {
+		first = *known
+	} else {
+		read, err := readSlot(ctx, store.objects, store.worldID, base.Sequence+1)
+		if errors.Is(err, blob.ErrNotFound) && !errors.Is(err, blob.ErrIntegrity) {
+			store.served.Store(&served{snap: base, confirmed: probed})
+			return base, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("refresh: %w", err)
+		}
+		first = read
 	}
-	if err != nil {
-		return nil, fmt.Errorf("refresh: %w", err)
-	}
-	next := base.derive()
+	var next *snapshot
 	reindex := make(map[string]struct{})
-	if err := next.applySlot(slot, hash, reindex); err != nil {
-		return nil, fmt.Errorf("refresh: %w", err)
+	if pending := store.pending.Load(); pending != nil && pending.hash == first.hash && pending.base.Sequence == base.Sequence {
+		next = store.derive(pending.next)
+	} else {
+		next = store.derive(base)
+		if err := next.applySlot(first, reindex); err != nil {
+			return nil, fmt.Errorf("refresh: %w", err)
+		}
 	}
-	applied := []*slotObject{slot}
+	applied := []*slotObject{first.slot}
 	// A strongly consistent listing names every slot created before it began.
 	listed := store.now()
-	err = replay(ctx, store.objects, next, replayOptions{
+	err := replay(ctx, store.objects, next, replayOptions{
 		worldID: store.worldID, workers: store.shardWorkers, reindex: reindex,
 		onSlot: func(slot *slotObject) { applied = append(applied, slot) },
 	})
@@ -267,7 +302,7 @@ func (store *Store) catchUpLocked(ctx context.Context, fresh map[string][]byte) 
 	// ground on every attempt; the index runs past the caller's deadline.
 	indexCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), store.requestTimeout)
 	defer cancel()
-	if indexErr := store.indexSections(indexCtx, next, reindex, fresh); indexErr != nil {
+	if indexErr := store.indexSections(indexCtx, next, reindex); indexErr != nil {
 		return nil, errors.Join(err, indexErr)
 	}
 	if err != nil {
@@ -284,8 +319,18 @@ func (store *Store) catchUpLocked(ctx context.Context, fresh map[string][]byte) 
 func (store *Store) install(next *snapshot, applied []*slotObject, confirmed time.Time) {
 	store.served.Store(&served{snap: next, confirmed: confirmed})
 	for _, slot := range applied {
+		if slot.Store != store.id {
+			store.peerSeen.Store(store.now().UnixNano())
+		}
 		store.report(slot)
 	}
+}
+
+// derive starts a snapshot from s; see snapshot.derive.
+func (store *Store) derive(s *snapshot) *snapshot {
+	store.deriveMu.Lock()
+	defer store.deriveMu.Unlock()
+	return s.derive()
 }
 
 // poll refreshes the snapshot from the bucket, reporting what peers wrote.

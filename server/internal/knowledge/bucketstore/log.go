@@ -10,10 +10,25 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
+// slotRead is a verified slot and the hash the next slot names as Prev.
+type slotRead struct {
+	slot *slotObject
+	hash string
+}
+
 // readSlot reads and verifies the slot named by first; a missing slot is
-// blob.ErrNotFound, the log's tip. hash is what the next slot names as Prev.
-func readSlot(ctx context.Context, objects blob.Store, worldID string, first int64) (slot *slotObject, hash string, err error) {
-	read, data, err := getValidated(ctx, objects, slotKey(first), func(slot *slotObject) error {
+// blob.ErrNotFound, the log's tip.
+func readSlot(ctx context.Context, objects blob.Store, worldID string, first int64) (slotRead, error) {
+	object, err := objects.Get(ctx, slotKey(first))
+	if err != nil {
+		return slotRead{}, fmt.Errorf("read %q: %w", slotKey(first), err)
+	}
+	return parseSlot(&object, worldID, first)
+}
+
+// parseSlot verifies an object read at the slot name for first.
+func parseSlot(object *blob.Object, worldID string, first int64) (slotRead, error) {
+	slot, err := decodeValidated(slotKey(first), object, func(slot *slotObject) error {
 		if err := validateSlot(slot, first); err != nil {
 			return err
 		}
@@ -23,14 +38,15 @@ func readSlot(ctx context.Context, objects blob.Store, worldID string, first int
 		return nil
 	})
 	if err != nil {
-		return nil, "", err
+		return slotRead{}, err
 	}
-	return &read, hashHex(data), nil
+	return slotRead{slot: &slot, hash: hashHex(object.Data)}, nil
 }
 
 // applySlot advances a derived snapshot by one slot. Paths whose body
 // changed while live are added to reindex, for their section index.
-func (s *snapshot) applySlot(slot *slotObject, hash string, reindex map[string]struct{}) error {
+func (s *snapshot) applySlot(read slotRead, reindex map[string]struct{}) error {
+	slot := read.slot
 	if slot.First != s.Sequence+1 {
 		return fmt.Errorf("%w: slot %d follows sequence %d", blob.ErrIntegrity, slot.First, s.Sequence)
 	}
@@ -43,47 +59,57 @@ func (s *snapshot) applySlot(slot *slotObject, hash string, reindex map[string]s
 			return fmt.Errorf("%w: sequence %d %s: %v", blob.ErrIntegrity, slot.First+int64(index), entry.Path, err)
 		}
 	}
-	s.Sequence, s.Tip = slot.last(), hash
+	s.Sequence, s.Tip = slot.last(), read.hash
 	return nil
 }
 
 // applyEntry installs one change, refusing what no writer could commit from
-// this state.
+// this state. A live path left without sections is added to reindex.
 func (s *snapshot) applyEntry(entry *slotEntry, reindex map[string]struct{}) error {
-	modified, err := parseTimestamp(entry.Modified)
+	old := s.path(entry.Path)
+	state, err := s.entryState(old, entry)
 	if err != nil {
 		return err
 	}
-	old := s.path(entry.Path)
+	if !state.Archived && state.Sections == nil {
+		reindex[entry.Path] = struct{}{}
+	}
+	s.put(old, state)
+	return nil
+}
+
+// entryState is the document after entry, from old (nil for a new path). It
+// keeps old's sections only while the body is unchanged and live.
+func (s *snapshot) entryState(old *pathState, entry *slotEntry) (*pathState, error) {
+	modified, err := parseTimestamp(entry.Modified)
+	if err != nil {
+		return nil, err
+	}
 	state := &pathState{
 		Path: entry.Path, Current: entry.Current, First: entry.First, Archived: entry.Archived,
 		BodyHash: entry.BodyHash, Modified: modified,
 	}
 	if entry.Version == nil {
 		if old == nil || old.Current != entry.Current || old.BodyHash != entry.BodyHash || !old.Modified.Equal(modified) || old.Archived == entry.Archived {
-			return errors.New("archive transition does not follow the document's state")
+			return nil, errors.New("archive transition does not follow the document's state")
 		}
 		state.Entry, state.Base, state.Recent = old.Entry, old.Base, retainFrom(old.Recent, entry.First)
-		if !entry.Archived {
-			reindex[entry.Path] = struct{}{}
-		}
-		s.put(old, state)
-		return nil
+		return state, nil
 	}
 	switch {
 	case old == nil:
 		if entry.Current != 1 {
-			return fmt.Errorf("new document starts at version %d", entry.Current)
+			return nil, fmt.Errorf("new document starts at version %d", entry.Current)
 		}
 		if err := validateNewPathTopology(s, entry.Path); err != nil {
-			return err
+			return nil, err
 		}
 	case old.Archived:
-		return errors.New("write to an archived document")
+		return nil, errors.New("write to an archived document")
 	case entry.Current != old.Current+1:
-		return fmt.Errorf("version %d follows %d", entry.Current, old.Current)
+		return nil, fmt.Errorf("version %d follows %d", entry.Current, old.Current)
 	case entry.First < old.First:
-		return fmt.Errorf("first retained version moves back from %d to %d", old.First, entry.First)
+		return nil, fmt.Errorf("first retained version moves back from %d to %d", old.First, entry.First)
 	default:
 		state.Base, state.Recent = old.Base, retainFrom(old.Recent, entry.First)
 		if old.BodyHash == entry.BodyHash {
@@ -91,15 +117,11 @@ func (s *snapshot) applyEntry(entry *slotEntry, reindex map[string]struct{}) err
 		}
 	}
 	if state.Entry, err = catalogEntry(entry.Catalog); err != nil {
-		return err
+		return nil, err
 	}
 	// Clipped, so the append never writes into an array another snapshot holds.
 	state.Recent = append(slices.Clip(state.Recent), retainedVersion{entry: *entry.Version, modified: modified})
-	if state.Sections == nil {
-		reindex[entry.Path] = struct{}{}
-	}
-	s.put(old, state)
-	return nil
+	return state, nil
 }
 
 // retainFrom drops the versions retention pruned below first.
