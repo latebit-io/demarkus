@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,5 +108,57 @@ func TestNewWatchOverAConnReopensFromItsCursor(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("stream %d was not released", i)
 		}
+	}
+}
+
+// ackThenClose serves one watch over net.Pipe that ends right after its
+// acknowledgement.
+func ackThenClose(dials *atomic.Int32) func(context.Context, protocol.Request) (net.Conn, error) {
+	return func(context.Context, protocol.Request) (net.Conn, error) {
+		dials.Add(1)
+		client, server := net.Pipe()
+		go func() {
+			if _, err := protocol.WatchControl(protocol.StatusOK, protocol.Cursor{Epoch: "e", Seq: 1}).WriteTo(server); err != nil {
+				return
+			}
+			server.Close() //nolint:errcheck,gosec // ends the stream either way
+		}()
+		return client, nil
+	}
+}
+
+// The handshake timeout reaches a dial that waits on its context.
+func TestConnDialerOpenEndsWithTheHandshake(t *testing.T) {
+	stuck := ConnDialer(func(ctx context.Context, _ protocol.Request) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	opened := make(chan error, 1)
+	go func() {
+		_, err := NewWatch(t.Context(), stuck, WatchRequest{Path: "/"}, 50*time.Millisecond)
+		opened <- err
+	}()
+	select {
+	case err := <-opened:
+		if err == nil {
+			t.Fatal("a stuck dial opened a watch")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the open outlived its handshake timeout")
+	}
+}
+
+// A server that ends every stream right after its acknowledgement gets
+// reopens backing off, never a tight loop.
+func TestWatchBacksOffStreamsThatEndEmpty(t *testing.T) {
+	var dials atomic.Int32
+	w, err := NewWatch(t.Context(), ConnDialer(ackThenClose(&dials)), WatchRequest{Path: "/"}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	time.Sleep(400 * time.Millisecond)
+	if n := dials.Load(); n < 2 || n > 4 {
+		t.Fatalf("dialed %d times in 400 ms, want a reopen backing off from 100 ms", n)
 	}
 }

@@ -35,8 +35,8 @@ func (s *Server) Exchange(ctx context.Context, authority string, req protocol.Re
 }
 
 // Watch serves a WATCH request in process through the world that routes
-// authority, under a stream's controls plus any protocol.Grant on ctx. The
-// returned conn carries the watch's blocks until ctx ends or it is closed.
+// authority, under a stream's controls plus any protocol.Grant on ctx. Like a
+// dial's, ctx bounds only the open: the conn carries blocks until closed.
 func (s *Server) Watch(ctx context.Context, authority string, req protocol.Request) (net.Conn, error) {
 	if req.Verb != protocol.VerbWatch {
 		return nil, fmt.Errorf("in-process watch of %s: verb %s", authority, req.Verb)
@@ -49,13 +49,13 @@ func (s *Server) Watch(ctx context.Context, authority string, req protocol.Reque
 		return nil, err
 	}
 	client, server := net.Pipe()
-	watchCtx, cancel := context.WithCancel(ctx)
+	watchCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
 		defer cancel()
-		// Ending ctx closes the world's end, so a write nobody reads fails at
-		// once instead of holding the world until its write deadline.
+		// Close ends watchCtx, which closes the world's end, so a write nobody
+		// reads fails at once instead of holding the world until its deadline.
 		stop := context.AfterFunc(watchCtx, func() {
 			if err := server.Close(); err != nil {
 				s.logger.Debug("closing in-process watch", "authority", authority, "error", err)

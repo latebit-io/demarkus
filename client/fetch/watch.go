@@ -190,6 +190,8 @@ type watchStream struct {
 	// ended is the read error that cut the stream, so a dead connection is
 	// evicted on release; nil after a clean end.
 	ended error
+	// blocks counts what the stream carried after its acknowledgement.
+	blocks int
 }
 
 func (s *watchStream) close() { s.stream.Release(s.ended) }
@@ -237,7 +239,8 @@ func (c *Client) watchDialer(host string) WatchDialer {
 }
 
 // ConnDialer is a WatchDialer over conns that dial opens with req sent, such
-// as an in-process watch. A conn has no pooled connection to evict.
+// as an in-process watch. As with net.Dialer, dial's ctx bounds only the
+// open: the conn must outlive it, and the watch closes it.
 func ConnDialer(dial func(ctx context.Context, req protocol.Request) (net.Conn, error)) WatchDialer {
 	return func(ctx context.Context, req protocol.Request) (WatchStream, error) {
 		conn, err := dial(ctx, req)
@@ -349,13 +352,21 @@ func (w *Watch) accept(ctx context.Context, first protocol.WatchBlock) error {
 // cursor whenever it can.
 func (w *Watch) run(ctx context.Context, stream *watchStream) {
 	defer w.cancel()
-	backoff := retryDelay
+	backoff, empty := retryDelay, retryDelay
 	for {
 		delay, err := w.pump(ctx, stream)
 		stream.close()
 		if err != nil {
 			w.finish(err)
 			return
+		}
+		// A stream that ended carrying nothing reopens after a growing pause,
+		// so a server ending every stream cannot spin the watch.
+		if stream.blocks == 0 {
+			delay = max(delay, empty)
+			empty = min(empty*2, 5*time.Second)
+		} else {
+			empty = retryDelay
 		}
 		if err := waitForRetry(ctx, delay); err != nil {
 			w.finish(err)
@@ -411,6 +422,7 @@ func (w *Watch) pump(ctx context.Context, s *watchStream) (delay time.Duration, 
 			s.ended = err
 			return 0, nil
 		}
+		s.blocks++
 		if block.Status == "" {
 			ev, err := block.Event()
 			if err != nil {
