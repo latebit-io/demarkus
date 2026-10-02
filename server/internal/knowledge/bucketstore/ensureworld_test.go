@@ -73,7 +73,7 @@ func TestEnsureWorld(t *testing.T) {
 
 	t.Run("leaves an existing world alone", func(t *testing.T) {
 		objects := initializedMemory(t)
-		before := getObject(t, objects, headObjectKey).Attributes.Generation
+		before := getObject(t, objects, markerKey).Attributes.Generation
 		created, err := ensureWorld(context.Background(), objects, testWorldID)
 		if err != nil {
 			t.Fatalf("EnsureWorld: %v", err)
@@ -81,7 +81,7 @@ func TestEnsureWorld(t *testing.T) {
 		if created {
 			t.Error("created = true for an initialized bucket")
 		}
-		if after := getObject(t, objects, headObjectKey).Attributes.Generation; after != before {
+		if after := getObject(t, objects, markerKey).Attributes.Generation; after != before {
 			t.Errorf("head generation changed from %d to %d", before, after)
 		}
 	})

@@ -15,6 +15,7 @@ package catalog
 
 import (
 	"fmt"
+	"iter"
 	"slices"
 	"sort"
 	"strings"
@@ -102,7 +103,7 @@ func New() *Catalog {
 // Set adds or replaces the entry for e.Path, leaving its section index as it
 // was. The catalog takes ownership of e; the caller must not mutate it.
 func (c *Catalog) Set(e *Entry) {
-	e.prepare()
+	e.Prepare()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[e.Path] = e
@@ -112,7 +113,7 @@ func (c *Catalog) Set(e *Entry) {
 // body has store frontmatter already stripped.
 func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modified time.Time) {
 	e := FromDocument(docPath, meta, body, modified)
-	e.prepare()
+	e.Prepare()
 	doc := IndexSections(body)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -120,9 +121,9 @@ func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modif
 	c.sections[e.Path] = doc
 }
 
-// prepare canonicalizes the path and derives what body match consults (tag
-// and title terms, path demotion); every entry passes through here first.
-func (e *Entry) prepare() {
+// Prepare canonicalizes the path and derives what body match consults (tag
+// and title terms, path demotion); every entry searched passes through it.
+func (e *Entry) Prepare() {
 	e.Path = storefmt.CanonicalPath(e.Path)
 	e.terms = newTermSet(fieldTokenSet(append(append([]string(nil), e.Tags...), e.Title)))
 	e.demote = 1
@@ -180,22 +181,41 @@ type Options struct {
 	Match Mode
 }
 
-// Lookup returns documents whose tags or title match at least one query term,
-// satisfy every filter predicate, and fall under the scope, ordered by
-// descending match count, then importance, then modification time, then path.
-// The error is always nil; the signature exists for the LookupCatalog seam.
-//
-// The query "*" matches every catalogued document under the scope (filters
-// still apply): with all match scores equal, the ordering reduces to
-// importance — "the most important documents here" without guessing a
-// subject. This is the whole-catalog view that universe browsers build on.
+// Index is what a lookup searches: each searchable entry, prepared and never
+// mutated, with its section index (nil when none). Entries may yield entries
+// outside scope, which Search drops. Catalog is one; a store supplies another.
+type Index interface {
+	Entries(scope string) iter.Seq2[*Entry, *DocSections]
+}
+
+// Lookup searches the catalog; see Search.
 func (c *Catalog) Lookup(query string, opts Options) ([]Result, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return Search(catalogIndex{c}, query, opts)
+}
+
+// catalogIndex reads the catalog's maps under a lock its caller holds.
+type catalogIndex struct{ c *Catalog }
+
+func (index catalogIndex) Entries(string) iter.Seq2[*Entry, *DocSections] {
+	return func(yield func(*Entry, *DocSections) bool) {
+		for path, entry := range index.c.entries {
+			if !yield(entry, index.c.sections[path]) {
+				return
+			}
+		}
+	}
+}
+
+// Search returns documents whose tags or title match a query term, under the
+// scope and filters, by match count, importance, modified time, then path.
+// The query "*" matches every document, so the order reduces to importance.
+func Search(index Index, query string, opts Options) ([]Result, error) {
 	switch opts.Match {
 	case "", MatchCatalog:
 	case MatchBody:
-		c.mu.RLock()
-		defer c.mu.RUnlock()
-		return c.lookupBody(queryTerms(query), NormalizeScope(opts.Scope), opts), nil
+		return lookupBody(index, queryTerms(query), NormalizeScope(opts.Scope), opts), nil
 	default:
 		return nil, fmt.Errorf("unknown match mode %q", opts.Match)
 	}
@@ -206,9 +226,8 @@ func (c *Catalog) Lookup(query string, opts Options) ([]Result, error) {
 	}
 	scope := NormalizeScope(opts.Scope)
 
-	c.mu.RLock()
 	var results []Result
-	for _, e := range c.entries {
+	for e := range index.Entries(scope) {
 		if !underScope(e.Path, scope) {
 			continue
 		}
@@ -223,7 +242,6 @@ func (c *Catalog) Lookup(query string, opts Options) ([]Result, error) {
 			results = append(results, Result{Entry: *e, Score: score})
 		}
 	}
-	c.mu.RUnlock()
 
 	sortResults(results)
 	if opts.Max > 0 && len(results) > opts.Max {

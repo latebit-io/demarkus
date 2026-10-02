@@ -186,6 +186,8 @@ Where the status title is the status value with the first letter capitalised and
 
 ## 6. Verbs
 
+**Freshness across replicas.** A server MAY serve one world from several replicas. Every response is answered from one committed state. A write acknowledged by any replica is visible to every later FETCH and VERSIONS on every replica. LOOKUP, LIST and content-addressed FETCH (§12) MAY miss a write acknowledged on another replica for up to one second; the replica that acknowledged a write reflects it at once. Writes judge their preconditions (expected version, path collisions, archive state, policy) against every acknowledged write, whatever the replica.
+
 ### 6.1. FETCH
 
 Retrieves a document.

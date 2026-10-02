@@ -7,35 +7,22 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 )
 
-const maximumMutationAttempts = 12
-
-type commitOutcome int
-
-const (
-	commitSucceeded commitOutcome = iota
-	commitRebase
-)
-
-// runMutation commits one mutation, then runs the Committed hook and seals
-// change blocks with the commit token released: a hook that reenters the
-// store must not deadlock. The seal outlives a caller that hangs up.
+// runMutation commits one mutation, then runs the Committed hook with the
+// commit token released: a hook that reenters the store must not deadlock.
 func (store *Store) runMutation(ctx context.Context, build mutationBuilder) (mutationResult, error) {
 	result, err := store.commitMutation(ctx, build)
-	if err == nil && result.Sequence != 0 {
-		if store.committed != nil {
-			store.committed(result.Sequence)
-		}
-		sealCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), store.requestTimeout)
-		store.sealChanges(sealCtx)
-		cancel()
+	if err == nil && result.Sequence != 0 && store.committed != nil {
+		store.committed(result.Sequence)
 	}
 	return result, err
 }
 
+// commitMutation builds the mutation on the log's tip and creates the next
+// slot; a slot lost to another writer rebuilds it on the new tip, until the
+// request deadline.
 func (store *Store) commitMutation(ctx context.Context, build mutationBuilder) (mutationResult, error) {
 	if store.readOnly {
 		return mutationResult{}, backend.ErrReadOnly
@@ -60,156 +47,75 @@ func (store *Store) commitMutation(ctx context.Context, build mutationBuilder) (
 		return mutationResult{}, fmt.Errorf("create operation ID: invalid UUID %q", operationID)
 	}
 
-	var result mutationResult
-	for attempt := range maximumMutationAttempts {
-		loaded, err := store.refreshSnapshot(ctx)
+	for {
+		base, err := store.refresh(ctx)
 		if err != nil {
-			return result, fmt.Errorf("operation %s refresh: %w", operationID, err)
+			return mutationResult{}, fmt.Errorf("operation %s refresh: %w", operationID, err)
 		}
-		view := &readView{objects: store.objects, snapshot: loaded}
-		candidate, built, err := build(ctx, view, operationID)
-		result = built
+		candidate, built, err := build(ctx, &readView{objects: store.objects, snapshot: base}, operationID)
 		if err != nil || candidate == nil {
-			return result, err
+			return built, err
 		}
-		for _, object := range candidate.objects {
-			if err := createImmutable(ctx, store.objects, object); err != nil {
-				return result, fmt.Errorf("operation %s stage %q: %w", operationID, object.Key, err)
-			}
-		}
-		outcome, err := store.commitCandidate(ctx, candidate)
+		sequence, err := store.commitSlot(ctx, base, candidate)
 		if err != nil {
-			return result, fmt.Errorf("operation %s commit: %w", operationID, err)
+			return built, fmt.Errorf("operation %s commit: %w", operationID, err)
 		}
-		if outcome == commitSucceeded {
-			candidate.result.Sequence = candidate.head.Sequence
-			return candidate.result, nil
-		}
-		if attempt == maximumMutationAttempts-1 {
-			break
+		if sequence != 0 {
+			built.Sequence = sequence
+			return built, nil
 		}
 	}
-	return result, fmt.Errorf("operation %s exhausted %d rebases", operationID, maximumMutationAttempts)
 }
 
-func (store *Store) commitCandidate(ctx context.Context, candidate *candidateMutation) (commitOutcome, error) {
-	for attempt := range maximumMutationAttempts {
-		if err := store.waitForHeadAttempt(ctx); err != nil {
-			return commitRebase, err
-		}
-
-		store.refreshMu.Lock()
-		cached := store.snapshot.Load()
-		store.refreshMu.Unlock()
-		if cached == nil || cached.HeadGeneration != candidate.base.HeadGeneration {
-			return commitRebase, nil
-		}
-		attributes, replaceErr := store.objects.Replace(
-			ctx,
-			headObjectKey,
-			candidate.base.HeadGeneration,
-			candidate.headData,
-		)
-		if replaceErr == nil {
-			store.installCandidateIfBase(candidate, attributes)
-			return commitSucceeded, nil
-		}
-
-		if errors.Is(replaceErr, blob.ErrPrecondition) {
-			return commitRebase, nil
-		}
-		if !retryableObjectError(replaceErr) {
-			return commitRebase, replaceErr
-		}
-
-		latest, latestAttributes, err := store.reconcileHead(ctx, candidate.operationID)
-		if err != nil {
-			return commitRebase, errors.Join(replaceErr, err)
-		}
-		if receiptCommitted(&latest, candidate.operationID) {
-			if latest.Sequence == candidate.head.Sequence && latest.Root == candidate.head.Root {
-				store.installCandidateIfBase(candidate, latestAttributes)
-			}
-			return commitSucceeded, nil
-		}
-		if latestAttributes.Generation == candidate.base.HeadGeneration {
-			if attempt == maximumMutationAttempts-1 {
-				return commitRebase, fmt.Errorf("identical head retry exhausted after ambiguous replace")
-			}
-			continue
-		}
-		if latest.Sequence < candidate.head.Sequence {
-			return commitRebase, fmt.Errorf("%w: head sequence %d is behind candidate %d", blob.ErrIntegrity, latest.Sequence, candidate.head.Sequence)
-		}
-		if !receiptWindowCovers(&latest, candidate.head.Sequence) {
-			return commitRebase, fmt.Errorf("ambiguous outcome: receipt for sequence %d was evicted at head sequence %d", candidate.head.Sequence, latest.Sequence)
-		}
-		return commitRebase, nil
+// commitSlot stages the candidate's objects, applies its slot to a copy of
+// base, and creates the slot; it reports the committed sequence, or 0 when
+// another writer took the name. A slot that does not apply is never created.
+func (store *Store) commitSlot(ctx context.Context, base *snapshot, candidate *candidateMutation) (int64, error) {
+	if err := runParallel(ctx, store.shardWorkers, candidate.objects, func(ctx context.Context, object modelObject) error {
+		return createImmutable(ctx, store.objects, object)
+	}); err != nil {
+		return 0, fmt.Errorf("stage: %w", err)
 	}
-	return commitRebase, fmt.Errorf("head commit exhausted without result")
-}
-
-func (store *Store) reconcileHead(ctx context.Context, operationID string) (headObject, blob.Attributes, error) {
-	var lastErr error
-	for attempt := range maximumMutationAttempts {
-		head, attributes, err := loadHeadObject(ctx, store.objects, store.worldID)
-		if err == nil {
-			return head, attributes, nil
-		}
-		lastErr = err
-		if !retryableObjectError(err) || attempt == maximumMutationAttempts-1 {
-			break
-		}
-		if err := waitForRetry(ctx, createRetryDelay(attempt)); err != nil {
-			return headObject{}, blob.Attributes{}, fmt.Errorf("reconcile operation %s: %w", operationID, errors.Join(lastErr, err))
-		}
+	slot := &slotObject{
+		Schema: logSchema, WorldID: store.worldID, First: base.Sequence + 1, Store: store.id, Prev: base.Tip,
+		Entries: []slotEntry{candidate.entry},
 	}
-	return headObject{}, blob.Attributes{}, fmt.Errorf("reconcile operation %s: %w", operationID, lastErr)
-}
-
-func (store *Store) installCandidateIfBase(candidate *candidateMutation, attributes blob.Attributes) {
+	data, err := marshalImmutable(slot)
+	if err == nil {
+		err = validateSlot(slot, slot.First)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("build slot: %w", err)
+	}
 	store.refreshMu.Lock()
-	defer store.refreshMu.Unlock()
-	cached := store.snapshot.Load()
-	if cached == nil || cached.HeadGeneration != candidate.base.HeadGeneration {
-		return
+	next := base.derive()
+	store.refreshMu.Unlock()
+	reindex := make(map[string]struct{})
+	if err := next.applySlot(slot, hashHex(data), reindex); err != nil {
+		return 0, fmt.Errorf("slot %d would not apply: %w", slot.First, err)
 	}
-	prepared := candidate.prepared
-	prepared.HeadAttributes = attributes
-	prepared.HeadGeneration = attributes.Generation
-	store.snapshot.Store(prepared)
-	store.report(prepared)
-}
-
-func (store *Store) waitForHeadAttempt(ctx context.Context) error {
-	if store.commitInterval <= 0 || store.lastHeadTry.IsZero() {
-		store.lastHeadTry = store.now()
-		return ctx.Err()
+	var fresh map[string][]byte
+	if candidate.body != nil {
+		fresh = map[string][]byte{candidate.entry.Path: candidate.body}
 	}
-	delay := store.lastHeadTry.Add(store.commitInterval).Sub(store.now())
-	if delay > 0 {
-		if err := waitForRetry(ctx, delay); err != nil {
-			return err
-		}
+	if err := store.indexSections(ctx, next, reindex, fresh); err != nil {
+		return 0, err
 	}
-	store.lastHeadTry = store.now()
-	return ctx.Err()
-}
-
-func receiptCommitted(head *headObject, operationID string) bool {
-	for _, receipt := range head.Receipts {
-		if receipt.OperationID == operationID && receipt.Result == "committed" {
-			return true
-		}
+	created := store.now()
+	err = createImmutable(ctx, store.objects, modelObject{Key: slotKey(slot.First), Data: data})
+	switch {
+	case errors.Is(err, errNameTaken):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("create slot %d: %w", slot.First, err)
 	}
-	return false
-}
-
-func receiptWindowCovers(head *headObject, sequence int64) bool {
-	if len(head.Receipts) == 0 {
-		return false
+	store.refreshMu.Lock()
+	// A refresh that read the slot first has installed it already.
+	if store.served.Load().snap.Sequence == base.Sequence {
+		store.install(next, []*slotObject{slot}, created)
 	}
-	return sequence >= head.Receipts[0].Sequence && sequence <= head.Receipts[len(head.Receipts)-1].Sequence
+	store.refreshMu.Unlock()
+	return slot.First, nil
 }
 
 func randomOperationID() (string, error) {

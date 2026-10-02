@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -19,7 +18,7 @@ type ExportOptions struct {
 	Workers int
 }
 
-// ExportDocs reads every retained version from one immutable root snapshot.
+// ExportDocs reads every retained version from one snapshot of the log.
 func ExportDocs(ctx context.Context, objects blob.Store, options ExportOptions, fn func(string, storefmt.StoredDocument) error) error {
 	worldID, workers := options.WorldID, options.Workers
 	if ctx == nil {
@@ -40,24 +39,31 @@ func ExportDocs(ctx context.Context, objects blob.Store, options ExportOptions, 
 	if workers == 0 {
 		workers = defaultShardWorkers
 	}
-	loaded, err := loadRootSnapshot(ctx, objects, worldID, workers)
+	loaded, err := loadBase(ctx, objects, worldID, workers)
+	if err == nil {
+		err = replay(ctx, objects, loaded, replayOptions{worldID: worldID, workers: workers})
+	}
 	if err != nil {
 		return fmt.Errorf("export bucket store: %w", err)
 	}
 	view := readView{objects: objects, snapshot: loaded}
-	paths := slices.Collect(maps.Keys(loaded.Paths))
+	paths := make([]string, 0, loaded.Paths.Len())
+	loaded.Paths.Ascend(func(state *pathState) bool {
+		paths = append(paths, state.Path)
+		return true
+	})
 	sort.Slice(paths, func(i, j int) bool {
 		return slices.Compare(strings.Split(paths[i], "/"), strings.Split(paths[j], "/")) < 0
 	})
 	for _, path := range paths {
-		entry := loaded.Paths[path]
-		history, err := view.loadHistory(ctx, &entry)
+		entry := loaded.path(path)
+		history, err := view.history(ctx, entry)
 		if err != nil {
 			return fmt.Errorf("export %s: %w", path, err)
 		}
-		versions := make([]storefmt.StoredVersion, len(history.versions))
-		for index := range history.versions {
-			retained := &history.versions[index]
+		versions := make([]storefmt.StoredVersion, len(history))
+		for index := range history {
+			retained := &history[index]
 			raw, err := view.loadBlob(ctx, retained.entry.Blob)
 			if err != nil {
 				return fmt.Errorf("export %s v%d: %w", path, retained.entry.Version, err)

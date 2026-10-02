@@ -3,13 +3,11 @@ package bucketstore
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"maps"
+	pathpkg "path"
 	"slices"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
@@ -19,24 +17,20 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
+// candidateMutation is one change ready to commit: its slot entry, the
+// content-addressed objects staged before the slot, and the written body for
+// this replica's section index (nil for an archive transition).
 type candidateMutation struct {
-	base        *snapshot
-	head        headObject
-	headData    []byte
-	root        rootObject
-	shard       shardObject
-	shardIndex  int
-	objects     []modelObject
-	result      mutationResult
-	operationID string
-	prepared    *snapshot
+	entry   slotEntry
+	objects []modelObject
+	body    []byte
 }
 
 // mutationResult is a committed or refused mutation.
 type mutationResult struct {
 	Document *storefmt.Document
 	Changed  bool
-	Sequence int64 // head sequence of the commit, once it succeeded
+	Sequence int64 // log sequence of the commit, once it succeeded
 }
 
 type mutationBuilder func(context.Context, *readView, string) (*candidateMutation, mutationResult, error)
@@ -61,14 +55,14 @@ func (store *Store) publish(ctx context.Context, req backend.WriteRequest) (muta
 	meta := maps.Clone(metadata)
 	blindBase := -1
 	return store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
-		if _, exists := view.snapshot.Paths[canonical]; !exists {
+		if view.snapshot.path(canonical) == nil {
 			if err := store.checkDocumentQuota(view); err != nil {
 				return nil, mutationResult{}, err
 			}
 		}
 		if expected < 0 {
 			current := 0
-			if entry, exists := view.snapshot.Paths[canonical]; exists {
+			if entry := view.snapshot.path(canonical); entry != nil {
 				current = entry.Current
 			}
 			if blindBase < 0 {
@@ -92,8 +86,8 @@ func (store *Store) checkDocumentQuota(view *readView) error {
 	if store.maxDocuments <= 0 {
 		return nil
 	}
-	if len(view.snapshot.Paths) >= store.maxDocuments {
-		return fmt.Errorf("%w: world holds %d documents (limit %d)", ErrDocumentQuota, len(view.snapshot.Paths), store.maxDocuments)
+	if count := view.snapshot.Paths.Len(); count >= store.maxDocuments {
+		return fmt.Errorf("%w: world holds %d documents (limit %d)", ErrDocumentQuota, count, store.maxDocuments)
 	}
 	return nil
 }
@@ -123,8 +117,8 @@ func (store *Store) appendVersion(ctx context.Context, req backend.WriteRequest)
 	addition := bytes.Clone(content)
 	meta := maps.Clone(metadata)
 	return store.runMutation(ctx, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
-		entry, exists := view.snapshot.Paths[canonical]
-		if !exists {
+		entry := view.snapshot.path(canonical)
+		if entry == nil {
 			return nil, mutationResult{}, backend.ErrNotFound
 		}
 		if entry.Current != expected {
@@ -192,9 +186,9 @@ type writeCandidate struct {
 // checkWritable refuses what no version check can fix: an archived document,
 // a new path that collides with the topology, a spent version range.
 func checkWritable(loaded *snapshot, path string) error {
-	entry, exists := loaded.Paths[path]
+	entry := loaded.path(path)
 	switch {
-	case !exists:
+	case entry == nil:
 		return validateNewPathTopology(loaded, path)
 	case entry.Archived:
 		return storefmt.ErrArchived
@@ -207,22 +201,18 @@ func checkWritable(loaded *snapshot, path string) error {
 // writeBase is what a write to an existing document builds on. unchanged is
 // set when the write would repeat the tip, body and metadata both.
 type writeBase struct {
-	history     retainedHistory
+	history     []retainedVersion
 	previousRaw []byte
 	unchanged   *storefmt.Document
 }
 
-func loadWriteBase(ctx context.Context, view *readView, entry *snapshotEntry, write *writeCandidate) (writeBase, error) {
-	history, err := view.loadHistory(ctx, entry)
+func loadWriteBase(ctx context.Context, view *readView, entry *pathState, write *writeCandidate) (writeBase, error) {
+	history, err := view.history(ctx, entry)
 	if err != nil {
 		return writeBase{}, err
 	}
-	tip := history.versions[len(history.versions)-1]
-	previousRaw, err := view.loadBlob(ctx, tip.entry.Blob)
-	if err != nil {
-		return writeBase{}, err
-	}
-	storedTip, err := validateStoredDocument(previousRaw, &tip)
+	tip := history[len(history)-1]
+	previousRaw, storedTip, err := view.loadStored(ctx, &tip)
 	if err != nil {
 		return writeBase{}, err
 	}
@@ -240,9 +230,9 @@ func (store *Store) buildWriteCandidate(
 	write *writeCandidate,
 ) (*candidateMutation, mutationResult, error) {
 	path, expected, body, metadata := write.path, write.expected, write.body, write.metadata
-	entry, exists := view.snapshot.Paths[path]
+	entry := view.snapshot.path(path)
 	current := 0
-	if exists {
+	if entry != nil {
 		current = entry.Current
 	}
 	if expected >= 0 && current != expected {
@@ -253,19 +243,18 @@ func (store *Store) buildWriteCandidate(
 	}
 
 	var base writeBase
-	if exists {
+	if entry != nil {
 		var err error
-		if base, err = loadWriteBase(ctx, view, &entry, write); err != nil {
+		if base, err = loadWriteBase(ctx, view, entry, write); err != nil {
 			return nil, mutationResult{}, err
 		}
 		if base.unchanged != nil {
 			return nil, mutationResult{Document: base.unchanged}, storefmt.ErrNotModified
 		}
 	}
-	history, previousRaw := base.history, base.previousRaw
 
 	next := current + 1
-	stored, err := storefmt.SerializeVersion(next, previousRaw, body, metadata)
+	stored, err := storefmt.SerializeVersion(next, base.previousRaw, body, metadata)
 	if err != nil {
 		return nil, mutationResult{}, err
 	}
@@ -286,38 +275,9 @@ func (store *Store) buildWriteCandidate(
 		BodyHash: storefmt.ContentHash(body),
 		Modified: modified.Format(time.RFC3339),
 	}
-	versions := append(slices.Clone(history.versions), retainedVersion{entry: versionEntry, modified: modified})
+	versions := append(slices.Clone(base.history), retainedVersion{entry: versionEntry, modified: modified})
 	prune := applyRetention(&versions, metadata)
-	oldManifest := history.manifest
-	if !exists {
-		oldManifest = manifestObject{History: make([]historyRef, 0)}
-	}
-	historyRefs, historyObjects, err := buildHistoryBlocks(pathHash(path), versions, oldManifest.History, map[int]bool{next: true})
-	if err != nil {
-		return nil, mutationResult{}, err
-	}
-	manifest := manifestObject{
-		Schema:   schemaVersion,
-		PathHash: pathHash(path),
-		Current:  next,
-		Archived: false,
-		History:  historyRefs,
-	}
-	manifestModel, manifestRef, err := buildManifestModel(manifest)
-	if err != nil {
-		return nil, mutationResult{}, err
-	}
-	catalogRecord := makeCatalogRecord(path, persisted, body, modified)
-	newEntry := shardEntry{
-		Path:     path,
-		PathHash: pathHash(path),
-		Manifest: manifestRef,
-		Current:  next,
-		Archived: false,
-		BodyHash: versionEntry.BodyHash,
-		Modified: versionEntry.Modified,
-		Catalog:  catalogRecord,
-	}
+	record := makeCatalogRecord(path, persisted, body, modified)
 	document := &storefmt.Document{
 		Content:  bytes.Clone(body),
 		Modified: modified,
@@ -327,14 +287,15 @@ func (store *Store) buildWriteCandidate(
 		ETag:     blobHash,
 		Prune:    prune,
 	}
-	objects := make([]modelObject, 0, len(historyObjects)+4)
-	objects = append(objects, modelObject{Key: versionEntry.Blob.Key, Data: bytes.Clone(stored)})
-	objects = append(objects, historyObjects...)
-	objects = append(objects, manifestModel)
-	return store.buildNamespaceCandidate(ctx, view.snapshot, &namespaceChange{
-		operationID: operationID, entry: &newEntry, created: !exists, objects: objects, body: body,
-		result: mutationResult{Document: document, Changed: true}, op: write.op, agent: persisted["agent"],
-	})
+	return &candidateMutation{
+		entry: slotEntry{
+			OperationID: operationID, Op: write.op, Agent: persisted["agent"], Path: path,
+			Current: next, First: versions[0].entry.Version, BodyHash: versionEntry.BodyHash,
+			Modified: versionEntry.Modified, Catalog: &record, Version: &versionEntry,
+		},
+		objects: []modelObject{{Key: versionEntry.Blob.Key, Data: stored}},
+		body:    body,
+	}, mutationResult{Document: document, Changed: true}, nil
 }
 
 // archiveCandidate is one canonical archive transition inside a commit attempt.
@@ -350,25 +311,21 @@ func (store *Store) buildArchiveCandidate(
 	archive *archiveCandidate,
 ) (*candidateMutation, mutationResult, error) {
 	path, archived := archive.change.Path, archive.change.Archived
-	entry, exists := view.snapshot.Paths[path]
-	if !exists {
+	entry := view.snapshot.path(path)
+	if entry == nil {
 		return nil, mutationResult{}, backend.ErrNotFound
 	}
-	history, err := view.loadHistory(ctx, &entry)
+	history, err := view.history(ctx, entry)
 	if err != nil {
 		return nil, mutationResult{}, err
 	}
-	tip := history.versions[len(history.versions)-1]
-	raw, err := view.loadBlob(ctx, tip.entry.Blob)
+	tip := history[len(history)-1]
+	raw, storedTip, err := view.loadStored(ctx, &tip)
 	if err != nil {
 		return nil, mutationResult{}, err
 	}
-	storedTip, err := validateStoredDocument(raw, &tip)
-	if err != nil {
-		return nil, mutationResult{}, err
-	}
+	document := documentFromRetained(raw, &tip, &storedTip, archived)
 	if entry.Archived == archived {
-		document := documentFromRetained(raw, &tip, &storedTip, archived)
 		return nil, mutationResult{Document: document, Changed: false}, nil
 	}
 	if archive.precondition != nil {
@@ -377,36 +334,21 @@ func (store *Store) buildArchiveCandidate(
 			return nil, mutationResult{}, err
 		}
 	}
-	manifest := history.manifest
-	manifest.Archived = archived
-	manifestModel, manifestRef, err := buildManifestModel(manifest)
-	if err != nil {
-		return nil, mutationResult{}, err
-	}
-	oldEntry, err := snapshotShardEntry(view.snapshot, path)
-	if err != nil {
-		return nil, mutationResult{}, err
-	}
-	oldEntry.Manifest = manifestRef
-	oldEntry.Archived = archived
-	objects := []modelObject{manifestModel}
-	document := documentFromRetained(raw, &tip, &storedTip, archived)
-	result := mutationResult{Document: document, Changed: true}
-	return store.buildNamespaceCandidate(ctx, view.snapshot, &namespaceChange{
-		operationID: operationID, entry: &oldEntry, objects: objects, result: result,
-		op: changefeed.ArchiveOp(archived), agent: document.Metadata["agent"],
-	})
+	return &candidateMutation{
+		entry: slotEntry{
+			OperationID: operationID, Op: changefeed.ArchiveOp(archived), Agent: document.Metadata["agent"],
+			Path: path, Current: entry.Current, First: history[0].entry.Version, Archived: archived,
+			BodyHash: entry.BodyHash, Modified: entry.Modified.Format(time.RFC3339),
+		},
+	}, mutationResult{Document: document, Changed: true}, nil
 }
 
 func validateNewPathTopology(snapshot *snapshot, path string) error {
-	if _, exists := snapshot.Directories[path]; exists {
+	if snapshot.isDirectory(path) {
 		return fmt.Errorf("cannot publish %s: a directory exists at this path: %w", path, storefmt.ErrPathCollision)
 	}
-	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	ancestor := ""
-	for _, part := range parts[:len(parts)-1] {
-		ancestor += "/" + part
-		if _, exists := snapshot.Paths[ancestor]; exists {
+	for ancestor := pathpkg.Dir(path); ancestor != "/"; ancestor = pathpkg.Dir(ancestor) {
+		if snapshot.path(ancestor) != nil {
 			return fmt.Errorf("cannot publish %s: a document exists at ancestor %s: %w", path, ancestor, storefmt.ErrPathCollision)
 		}
 	}
@@ -425,81 +367,6 @@ func applyRetention(versions *[]retainedVersion, metadata map[string]string) *st
 	}
 	*versions = slices.Clone((*versions)[remove:])
 	return prune
-}
-
-func buildHistoryBlocks(
-	documentPathHash string,
-	versions []retainedVersion,
-	oldRefs []historyRef,
-	dirty map[int]bool,
-) ([]historyRef, []modelObject, error) {
-	oldByRange := make(map[[2]int]historyRef, len(oldRefs))
-	for _, ref := range oldRefs {
-		oldByRange[[2]int{ref.First, ref.Last}] = ref
-	}
-	refs := make([]historyRef, 0, len(versions)/historyBlockSize+1)
-	objects := make([]modelObject, 0, cap(refs))
-	for start := 0; start < len(versions); {
-		block := (versions[start].entry.Version - 1) / historyBlockSize
-		end := start + 1
-		for end < len(versions) && (versions[end].entry.Version-1)/historyBlockSize == block {
-			end++
-		}
-		first := versions[start].entry.Version
-		last := versions[end-1].entry.Version
-		reuse := true
-		for index := start; index < end; index++ {
-			if dirty[versions[index].entry.Version] {
-				reuse = false
-				break
-			}
-		}
-		if old, exists := oldByRange[[2]int{first, last}]; exists && reuse {
-			refs = append(refs, old)
-			start = end
-			continue
-		}
-		entries := make([]historyEntry, end-start)
-		for index := range entries {
-			entries[index] = versions[start+index].entry
-		}
-		history := historyObject{
-			Schema:   schemaVersion,
-			PathHash: documentPathHash,
-			First:    first,
-			Last:     last,
-			Entries:  entries,
-		}
-		if err := validateHistoryObject(&history); err != nil {
-			return nil, nil, fmt.Errorf("build history %d-%d: %w", first, last, err)
-		}
-		model, ref, err := immutableJSON(historyKey, history)
-		if err != nil {
-			return nil, nil, fmt.Errorf("build history %d-%d: %w", first, last, err)
-		}
-		refs = append(refs, historyRef{
-			PathHash:  documentPathHash,
-			First:     first,
-			Last:      last,
-			objectRef: ref,
-		})
-		objects = append(objects, model)
-		start = end
-	}
-	return refs, objects, nil
-}
-
-func buildManifestModel(manifest manifestObject) (modelObject, objectRef, error) {
-	if err := validateManifestObject(&manifest); err != nil {
-		return modelObject{}, objectRef{}, fmt.Errorf("build manifest: %w", err)
-	}
-	model, ref, err := immutableJSON(func(hash string) string {
-		return manifestKey(manifest.PathHash, hash)
-	}, manifest)
-	if err != nil {
-		return modelObject{}, objectRef{}, fmt.Errorf("build manifest: %w", err)
-	}
-	return model, ref, nil
 }
 
 func makeCatalogRecord(path string, metadata map[string]string, body []byte, modified time.Time) catalogRecord {
@@ -522,139 +389,6 @@ func makeCatalogRecord(path string, metadata map[string]string, body []byte, mod
 	}
 }
 
-func snapshotShardEntry(snapshot *snapshot, path string) (shardEntry, error) {
-	index := int(pathHashBytes(path)[0])
-	entries := snapshot.Shards[index].Entries
-	position := sort.Search(len(entries), func(position int) bool { return entries[position].Path >= path })
-	if position == len(entries) || entries[position].Path != path {
-		return shardEntry{}, fmt.Errorf("%w: snapshot path %s has no shard entry", storefmt.ErrIntegrity, path)
-	}
-	return entries[position], nil
-}
-
-// namespaceChange is one changed entry plus the objects staged for it. body is
-// the written content, nil for an archive flip.
-type namespaceChange struct {
-	operationID string
-	entry       *shardEntry
-	created     bool
-	objects     []modelObject
-	result      mutationResult
-	body        []byte
-	op, agent   string // what the head receipt names
-}
-
-// buildNamespaceCandidate derives the committed snapshot from base plus one
-// changed entry, so the section index needs at most one bucket read.
-func (store *Store) buildNamespaceCandidate(
-	ctx context.Context,
-	base *snapshot,
-	change *namespaceChange,
-) (*candidateMutation, mutationResult, error) {
-	entry, objects := change.entry, change.objects
-	shardIndex := int(pathHashBytes(entry.Path)[0])
-	shard := base.Shards[shardIndex]
-	shard.Entries = slices.Clone(shard.Entries)
-	position := sort.Search(len(shard.Entries), func(position int) bool {
-		return shard.Entries[position].Path >= entry.Path
-	})
-	if change.created {
-		shard.Entries = slices.Insert(shard.Entries, position, *entry)
-	} else {
-		if position == len(shard.Entries) || shard.Entries[position].Path != entry.Path {
-			return nil, mutationResult{}, fmt.Errorf("%w: path %s is missing from shard", storefmt.ErrIntegrity, entry.Path)
-		}
-		shard.Entries[position] = *entry
-	}
-	shardID := fmt.Sprintf("%02x", shardIndex)
-	if err := validateShardObject(&shard, shardID); err != nil {
-		return nil, mutationResult{}, fmt.Errorf("build shard: %w", err)
-	}
-	shardModel, shardObjectRef, err := immutableJSON(func(hash string) string {
-		return shardKey(shardID, hash)
-	}, shard)
-	if err != nil {
-		return nil, mutationResult{}, fmt.Errorf("build shard: %w", err)
-	}
-	objects = append(objects, shardModel)
-
-	root := base.Root
-	root.Shards = slices.Clone(root.Shards)
-	root.Shards[shardIndex] = shardRef{Shard: shardID, objectRef: shardObjectRef}
-	if change.created {
-		root.DocumentCount++
-	}
-	if err := validateRootObject(&root, base.Head.WorldID); err != nil {
-		return nil, mutationResult{}, fmt.Errorf("build root: %w", err)
-	}
-	rootModel, rootRef, err := immutableJSON(rootKey, root)
-	if err != nil {
-		return nil, mutationResult{}, fmt.Errorf("build root: %w", err)
-	}
-	objects = append(objects, rootModel)
-
-	head := nextHead(&base.Head, rootRef, change)
-	if err := validateHeadObject(&head); err != nil {
-		return nil, mutationResult{}, fmt.Errorf("build head: %w", err)
-	}
-	headData, err := marshalImmutable(head)
-	if err != nil {
-		return nil, mutationResult{}, fmt.Errorf("build head: %w", err)
-	}
-	shards := new([shardCount]shardObject)
-	*shards = *base.Shards
-	shards[shardIndex] = shard
-	preparedAttributes := base.HeadAttributes
-	preparedAttributes.Size = int64(len(headData))
-	prepared, err := buildDerivedSnapshot(&head, preparedAttributes, &root, shards)
-	if err != nil {
-		return nil, mutationResult{}, fmt.Errorf("prepare committed snapshot: %w", err)
-	}
-	var fresh map[string][]byte
-	if change.body != nil {
-		fresh = map[string][]byte{entry.Path: change.body}
-	}
-	if err := store.indexSections(ctx, prepared, sectionSources{previous: base, fresh: fresh}, 1); err != nil {
-		return nil, mutationResult{}, fmt.Errorf("prepare committed snapshot: %w", err)
-	}
-	return &candidateMutation{
-		base:        base,
-		head:        head,
-		headData:    headData,
-		root:        root,
-		shard:       shard,
-		shardIndex:  shardIndex,
-		objects:     objects,
-		result:      change.result,
-		operationID: change.operationID,
-		prepared:    prepared,
-	}, change.result, nil
-}
-
-func nextHead(current *headObject, root objectRef, change *namespaceChange) headObject {
-	sequence := current.Sequence + 1
-	receipts := append(slices.Clone(current.Receipts), operationReceipt{
-		OperationID: change.operationID,
-		Sequence:    sequence,
-		Result:      "committed",
-		Path:        change.entry.Path,
-		Op:          change.op,
-		Agent:       change.agent,
-		Version:     change.entry.Current,
-		Hash:        change.entry.BodyHash,
-	})
-	if len(receipts) > maximumReceipts {
-		receipts = slices.Clone(receipts[len(receipts)-maximumReceipts:])
-	}
-	return headObject{
-		Schema:   schemaVersion,
-		WorldID:  current.WorldID,
-		Sequence: sequence,
-		Root:     root,
-		Receipts: receipts,
-	}
-}
-
 func documentFromRetained(raw []byte, retained *retainedVersion, stored *storedDocument, archived bool) *storefmt.Document {
 	return &storefmt.Document{
 		Content:  bytes.Clone(stored.body),
@@ -664,8 +398,4 @@ func documentFromRetained(raw []byte, retained *retainedVersion, stored *storedD
 		Metadata: maps.Clone(stored.metadata),
 		ETag:     storefmt.StoredETag(raw),
 	}
-}
-
-func pathHashBytes(path string) [32]byte {
-	return sha256.Sum256([]byte(path))
 }

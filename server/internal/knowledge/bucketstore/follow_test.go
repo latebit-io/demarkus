@@ -50,9 +50,9 @@ func TestFollowReadsAtOnce(t *testing.T) {
 	site := &bucketSite{objects: objects}
 	store := site.open(t, changefeed.DefaultRingSize)
 	site.Tamper(t, "/docs/hinted.md")
-	head, _ := readHeadAndRoot(t, objects)
-	store.Follow(head.Sequence)
-	waitServed(t, store, head.Sequence)
+	tip := site.open(t, 0).servedSequence()
+	store.Follow(tip)
+	waitServed(t, store, tip)
 }
 
 // Close stops the follow loop, ends the hub's watches and refuses writes;
@@ -89,7 +89,7 @@ func TestStoreWithoutWatchDoesNotFollow(t *testing.T) {
 	store.Follow(store.servedSequence() + 1)
 }
 
-// Opening an existing world reads its head once; only an empty bucket pays
+// Opening an existing world reads its marker once; only an empty bucket pays
 // for the genesis check.
 func TestOpenReadsAnExistingHeadOnce(t *testing.T) {
 	objects := newObservedBlobStore(initializedMemory(t))
@@ -97,7 +97,7 @@ func TestOpenReadsAnExistingHeadOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	counts := objects.counts()
-	if reads := counts.heads[headObjectKey] + counts.gets[headObjectKey]; reads != 1 {
-		t.Errorf("head reads on open = %d (%d head, %d get), want 1", reads, counts.heads[headObjectKey], counts.gets[headObjectKey])
+	if reads := counts.heads[markerKey] + counts.gets[markerKey]; reads != 1 {
+		t.Errorf("marker reads on open = %d (%d head, %d get), want 1", reads, counts.heads[markerKey], counts.gets[markerKey])
 	}
 }

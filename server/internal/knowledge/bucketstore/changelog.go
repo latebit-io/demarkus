@@ -13,155 +13,69 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
-// changeBlockSize is half the receipt window, so the receipts of nine
-// consecutive heads cover each block and a seal lost with its writer is
-// completed by the commits after it.
-const changeBlockSize = maximumReceipts / 2
-
-// changeBlock is the durable record of one run of receipts past the head's
-// window. Its bytes follow from the receipts alone, so every writer that
-// seals it writes the same object.
-type changeBlock struct {
-	Schema   int                `json:"schema"`
-	WorldID  string             `json:"world_id"`
-	First    int64              `json:"first"`
-	Receipts []operationReceipt `json:"receipts"`
-}
-
-func changeBlockKey(block int64) string {
-	return fmt.Sprintf("%schanges/%016x.json", objectPrefix, block)
-}
-
-// blockOf is the block holding sequence.
-func blockOf(sequence int64) int64 { return (sequence - 1) / changeBlockSize }
-
-// blockRange is the sequences block holds; sequence 1 creates the world and
-// has no receipt.
-func blockRange(block int64) (first, last int64) {
-	return max(block*changeBlockSize+1, 2), (block + 1) * changeBlockSize
-}
-
-func validateChangeBlock(block *changeBlock, worldID string, index int64) error {
-	if block.Schema != schemaVersion {
-		return fmt.Errorf("schema is %d, want %d", block.Schema, schemaVersion)
-	}
-	if block.WorldID != worldID {
-		return fmt.Errorf("world ID %q, want %q", block.WorldID, worldID)
-	}
-	first, last := blockRange(index)
-	if block.First != first || int64(len(block.Receipts)) != last-first+1 {
-		return fmt.Errorf("holds %d receipts from %d, want %d..%d", len(block.Receipts), block.First, first, last)
-	}
-	return validateReceipts(block.Receipts, first)
-}
-
-// sealChanges writes every complete block the served head's receipts cover
-// and this store has not sealed. A failure is logged, not returned: the
-// commit stands, and the commits after it cover the same block.
-func (store *Store) sealChanges(ctx context.Context) {
-	snap := store.snapshot.Load()
-	if snap == nil || len(snap.Head.Receipts) == 0 {
-		return
-	}
-	head := &snap.Head
-	oldest := head.Receipts[0].Sequence
-	for block := blockOf(oldest); ; block++ {
-		first, last := blockRange(block)
-		if last > head.Sequence {
-			return
-		}
-		if first < oldest || last <= store.sealedThrough.Load() {
-			continue
-		}
-		data, err := marshalImmutable(changeBlock{
-			Schema:   schemaVersion,
-			WorldID:  store.worldID,
-			First:    first,
-			Receipts: head.Receipts[first-oldest : last-oldest+1],
-		})
-		if err == nil {
-			err = createImmutable(ctx, store.objects, modelObject{Key: changeBlockKey(block), Data: data})
-		}
-		if err != nil {
-			store.logger.Warn("change block not sealed; a later commit retries", "world", store.worldID, "block", block, "error", err)
-			return
-		}
-		for {
-			sealed := store.sealedThrough.Load()
-			if sealed >= last || store.sealedThrough.CompareAndSwap(sealed, last) {
-				break
-			}
-		}
-	}
-}
-
-// changeLog is the world's sealed blocks as the hub's backlog. Blocks are
-// immutable, so a ring's worth of recently read ones stay cached (LRU): a
-// burst of resumes, honest or not, costs the bucket one read per block.
+// changeLog is the log's slots as the hub's backlog. Slots are immutable, so
+// the events of recently read ones stay cached (LRU, at most a ring of
+// events): a burst of resumes, honest or not, costs one read per slot.
 type changeLog struct {
-	objects blob.Store
-	worldID string
-	workers int
-	logger  *slog.Logger
-	store   *Store
+	store *Store
 
 	mu     sync.Mutex
-	limit  int
-	recent *list.List // front is the most recently used *cachedBlock
-	blocks map[int64]*list.Element
+	limit  int // cached events
+	held   int
+	recent *list.List // front is the most recently used *cachedSlot
+	slots  map[int64]*list.Element
 }
 
-type cachedBlock struct {
-	index int64
-	block changeBlock
+type cachedSlot struct {
+	first  int64
+	events []changefeed.Event
 }
 
 var _ changefeed.Backlog = (*changeLog)(nil)
 
 func newChangeLog(store *Store, ring int) *changeLog {
 	return &changeLog{
-		objects: store.objects,
-		worldID: store.worldID,
-		workers: store.shardWorkers,
-		logger:  store.logger,
-		store:   store,
-		limit:   max(ring/changeBlockSize, 1),
-		recent:  list.New(),
-		blocks:  make(map[int64]*list.Element),
+		store:  store,
+		limit:  max(ring, maxSlotEntries),
+		recent: list.New(),
+		slots:  make(map[int64]*list.Element),
 	}
 }
 
-// CatchUp polls the bucket head, which reports what peers committed.
+// CatchUp reads the slots peers committed since this replica last looked.
 func (backlog *changeLog) CatchUp(ctx context.Context) error { return backlog.store.poll(ctx) }
 
-func (backlog *changeLog) cached(index int64) (changeBlock, bool) {
+func (backlog *changeLog) cached(first int64) ([]changefeed.Event, bool) {
 	backlog.mu.Lock()
 	defer backlog.mu.Unlock()
-	element, ok := backlog.blocks[index]
+	element, ok := backlog.slots[first]
 	if !ok {
-		return changeBlock{}, false
+		return nil, false
 	}
 	backlog.recent.MoveToFront(element)
-	return element.Value.(*cachedBlock).block, true
+	return element.Value.(*cachedSlot).events, true
 }
 
-func (backlog *changeLog) remember(index int64, block changeBlock) {
+func (backlog *changeLog) remember(first int64, events []changefeed.Event) {
 	backlog.mu.Lock()
 	defer backlog.mu.Unlock()
-	if element, ok := backlog.blocks[index]; ok {
+	if element, ok := backlog.slots[first]; ok {
 		backlog.recent.MoveToFront(element)
 		return
 	}
-	backlog.blocks[index] = backlog.recent.PushFront(&cachedBlock{index: index, block: block})
-	for backlog.recent.Len() > backlog.limit {
+	backlog.slots[first] = backlog.recent.PushFront(&cachedSlot{first: first, events: events})
+	backlog.held += len(events)
+	for backlog.held > backlog.limit {
 		oldest := backlog.recent.Back()
-		delete(backlog.blocks, oldest.Value.(*cachedBlock).index)
+		evicted := oldest.Value.(*cachedSlot)
+		delete(backlog.slots, evicted.first)
+		backlog.held -= len(evicted.events)
 		backlog.recent.Remove(oldest)
 	}
 }
 
-// Events reads the blocks holding (after, through]. A block not yet sealed,
-// or a receipt that names no change, fails the read: the watcher resyncs.
+// Events reads the slots holding (after, through]. A missing slot, or one
+// that fails verification, fails the read: the watcher resyncs.
 func (backlog *changeLog) Events(ctx context.Context, after, through uint64) ([]changefeed.Event, error) {
 	if through <= after {
 		return nil, nil
@@ -174,64 +88,90 @@ func (backlog *changeLog) Events(ctx context.Context, after, through uint64) ([]
 	if err != nil {
 		return nil, err
 	}
-	firstBlock, lastBlock := blockOf(first), blockOf(last)
-	blocks := make([]changeBlock, lastBlock-firstBlock+1)
-	var missing []int64
-	for index := firstBlock; index <= lastBlock; index++ {
-		if block, ok := backlog.cached(index); ok {
-			blocks[index-firstBlock] = block
+	events, err := backlog.read(ctx, first, last)
+	if err != nil {
+		level := slog.LevelWarn
+		switch {
+		case errors.Is(err, blob.ErrIntegrity):
+			level = slog.LevelError
+		case errors.Is(err, blob.ErrNotFound):
+			level = slog.LevelInfo
+		}
+		backlog.store.logger.Log(ctx, level, "change backlog unavailable; watcher resyncs", "world", backlog.store.worldID, "after", after, "through", through, "error", err)
+		return nil, err
+	}
+	kept := make([]changefeed.Event, 0, through-after)
+	for _, event := range events {
+		if event.Seq > after && event.Seq <= through {
+			kept = append(kept, event)
+		}
+	}
+	return kept, nil
+}
+
+// read returns the events of every slot that may hold [first, last]: the slot
+// holding first starts within maxSlotEntries names at or below it.
+func (backlog *changeLog) read(ctx context.Context, first, last int64) ([]changefeed.Event, error) {
+	store := backlog.store
+	var names []int64
+listing:
+	for firsts, err := range sequencePages(ctx, store.objects, logPrefix, max(first-maxSlotEntries, 1)) {
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range firsts {
+			if name > last {
+				break listing
+			}
+			names = append(names, name)
+		}
+	}
+	// Names are first sequences, so the slot holding first is the last name
+	// at or below it; earlier names hold nothing in range.
+	for len(names) > 1 && names[1] <= first {
+		names = names[1:]
+	}
+	slots := make([][]changefeed.Event, len(names))
+	var missing []int
+	for index, name := range names {
+		if events, ok := backlog.cached(name); ok {
+			slots[index] = events
 		} else {
 			missing = append(missing, index)
 		}
 	}
-	err = runParallel(ctx, backlog.workers, missing, func(ctx context.Context, index int64) error {
-		block, err := backlog.load(ctx, index)
+	err := runParallel(ctx, store.shardWorkers, missing, func(ctx context.Context, index int) error {
+		slot, _, err := readSlot(ctx, store.objects, store.worldID, names[index])
 		if err != nil {
 			return err
 		}
-		backlog.remember(index, block)
-		blocks[index-firstBlock] = block
+		events := slotEvents(slot)
+		backlog.remember(names[index], events)
+		slots[index] = events
 		return nil
 	})
 	if err != nil {
-		level := slog.LevelWarn
-		switch {
-		case errors.Is(err, blob.ErrNotFound):
-			level = slog.LevelInfo
-		case errors.Is(err, blob.ErrIntegrity):
-			level = slog.LevelError
-		}
-		backlog.logger.Log(ctx, level, "change backlog unavailable; watcher resyncs", "world", backlog.worldID, "after", after, "through", through, "error", err)
 		return nil, err
 	}
-	events := make([]changefeed.Event, 0, through-after)
-	for i := range blocks {
-		for j := range blocks[i].Receipts {
-			receipt := &blocks[i].Receipts[j]
-			seq := hubSeq(receipt.Sequence)
-			if seq <= after || seq > through {
-				continue
-			}
-			if receipt.Path == "" {
-				return nil, fmt.Errorf("sequence %d was committed before receipts named their change", seq)
-			}
-			events = append(events, receiptEvent(receipt))
+	var events []changefeed.Event
+	next := hubSeq(first)
+	for _, slot := range slots {
+		if slot[0].Seq > next {
+			return nil, fmt.Errorf("%w: no slot holds sequence %d", blob.ErrNotFound, next)
 		}
+		events = append(events, slot...)
+		next = max(next, slot[len(slot)-1].Seq+1)
+	}
+	if next <= hubSeq(last) {
+		return nil, fmt.Errorf("%w: no slot holds sequence %d", blob.ErrNotFound, next)
 	}
 	return events, nil
 }
 
-func (backlog *changeLog) load(ctx context.Context, index int64) (changeBlock, error) {
-	block, _, err := getValidated(ctx, backlog.objects, changeBlockKey(index), func(block *changeBlock) error {
-		return validateChangeBlock(block, backlog.worldID, index)
-	})
-	return block, err
-}
-
-// headSequence is a hub sequence as a head sequence, the inverse of hubSeq.
+// headSequence is a hub sequence as a log sequence, the inverse of hubSeq.
 func headSequence(seq uint64) (int64, error) {
 	if seq > math.MaxInt64 {
-		return 0, fmt.Errorf("sequence %d is past any head", seq)
+		return 0, fmt.Errorf("sequence %d is past any log", seq)
 	}
 	return int64(seq), nil
 }

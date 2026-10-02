@@ -41,15 +41,17 @@ func TestSectionIndexAcrossSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open reader: %v", err)
 	}
-	reader.commitInterval = 0
 	if got := strings.Join(bodyRows(t, reader, "kqueue"), ","); got != "/docs/b.md#b" {
 		t.Errorf("reader after open = %q, want the index built from the bucket", got)
 	}
-	carried := reader.snapshot.Load().Catalog.Sections("/docs/a.md")
+	carried := reader.served.Load().snap.path("/docs/a.md").Sections
 
 	// Change b through the writer; the reader's refresh reindexes b only.
 	if _, err := writer.WriteVersion("/docs/b.md", 1, []byte("# B\n\n## Poison\n\nlock pid write\n"), nil); err != nil {
 		t.Fatalf("rewrite b: %v", err)
+	}
+	if err := reader.poll(context.Background()); err != nil {
+		t.Fatalf("reader refresh: %v", err)
 	}
 	if got := strings.Join(bodyRows(t, reader, "poison"), ","); got != "/docs/b.md#poison" {
 		t.Errorf("reader after refresh = %q, want the rewritten section", got)
@@ -57,13 +59,16 @@ func TestSectionIndexAcrossSnapshots(t *testing.T) {
 	if len(bodyRows(t, reader, "kqueue")) != 0 {
 		t.Error("stale section survived the rewrite")
 	}
-	if reader.snapshot.Load().Catalog.Sections("/docs/a.md") != carried {
+	if reader.served.Load().snap.path("/docs/a.md").Sections != carried {
 		t.Error("unchanged document was reindexed instead of carried by body hash")
 	}
 
 	// Archive drops the sections; unarchive rebuilds them from the bucket.
 	if _, _, err := writer.ArchiveResult("/docs/a.md", true); err != nil {
 		t.Fatalf("archive: %v", err)
+	}
+	if err := reader.poll(context.Background()); err != nil {
+		t.Fatalf("reader refresh: %v", err)
 	}
 	if len(bodyRows(t, reader, "hairpin")) != 0 || len(bodyRows(t, writer, "hairpin")) != 0 {
 		t.Error("archived document still matches")

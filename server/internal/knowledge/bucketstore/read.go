@@ -1,13 +1,12 @@
 package bucketstore
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,17 +16,14 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
-// OpenReadView validates the current head and pins one immutable snapshot.
-// Reads on the view share the request timeout that started here.
+// OpenReadView starts a view; its first read pins one snapshot, the log's
+// tip for a read by path or one confirmed within SearchFreshness for a
+// catalog read. Reads on the view share the request timeout started here.
 func (store *Store) OpenReadView(ctx context.Context) (backend.ReadView, error) {
-	deadline := time.Now().Add(store.requestTimeout)
-	openCtx, cancel := boundedBy(ctx, deadline)
-	defer cancel()
-	loaded, err := store.refreshSnapshot(openCtx)
-	if err != nil {
-		return nil, fmt.Errorf("open read view: %w", normalizeReadIntegrity(err))
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("open read view: %w", err)
 	}
-	return &snapshotView{objects: store.objects, snapshot: loaded, deadline: deadline}, nil
+	return &snapshotView{store: store, objects: store.objects, deadline: time.Now().Add(store.requestTimeout)}, nil
 }
 
 // boundedBy derives a context only when ctx would outlive the deadline; a
@@ -39,12 +35,16 @@ func boundedBy(ctx context.Context, deadline time.Time) (context.Context, contex
 	return context.WithDeadline(ctx, deadline)
 }
 
-// snapshotView is the contract view: one pinned snapshot, a context per call.
+// snapshotView is the contract view: one snapshot pinned at its first read,
+// a context per call.
 type snapshotView struct {
+	store    *Store // nil when the snapshot is lent pinned
 	objects  blob.Store
-	snapshot *snapshot
 	deadline time.Time
 	closed   atomic.Bool
+
+	mu       sync.Mutex
+	snapshot *snapshot
 }
 
 var _ backend.ReadView = (*snapshotView)(nil)
@@ -55,53 +55,75 @@ func (view *snapshotView) Close() error {
 	return nil
 }
 
+// pin returns the view's snapshot, choosing it on the first read.
+func (view *snapshotView) pin(ctx context.Context, class readClass) (*snapshot, error) {
+	view.mu.Lock()
+	defer view.mu.Unlock()
+	if view.snapshot == nil {
+		pinned, err := view.store.current(ctx, class)
+		if err != nil {
+			return nil, err
+		}
+		view.snapshot = pinned
+	}
+	return view.snapshot, nil
+}
+
 // viewRead runs one read against the pinned snapshot under the call's context.
 // A closed view answers backend.ErrViewClosed.
-func viewRead[T any](ctx context.Context, view *snapshotView, fn func(context.Context, *readView) (T, error)) (T, error) {
+func viewRead[T any](ctx context.Context, view *snapshotView, class readClass, fn func(context.Context, *readView) (T, error)) (T, error) {
+	var zero T
 	if view.closed.Load() {
-		var zero T
 		return zero, backend.ErrViewClosed
 	}
 	callCtx, cancel := boundedBy(ctx, view.deadline)
 	defer cancel()
-	return fn(callCtx, &readView{objects: view.objects, snapshot: view.snapshot})
+	if err := callCtx.Err(); err != nil {
+		return zero, err
+	}
+	pinned, err := view.pin(callCtx, class)
+	if err != nil {
+		return zero, fmt.Errorf("pin snapshot: %w", normalizeReadIntegrity(err))
+	}
+	return fn(callCtx, &readView{objects: view.objects, snapshot: pinned})
 }
 
 func (view *snapshotView) Get(ctx context.Context, reqPath string, version int) (*storefmt.Document, error) {
-	return viewRead(ctx, view, func(ctx context.Context, r *readView) (*storefmt.Document, error) {
+	return viewRead(ctx, view, exactRead, func(ctx context.Context, r *readView) (*storefmt.Document, error) {
 		return r.Get(ctx, reqPath, version)
 	})
 }
 
 func (view *snapshotView) ListEntries(ctx context.Context, reqPath string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {
-	return viewRead(ctx, view, func(ctx context.Context, r *readView) ([]storefmt.DirEntry, error) {
+	return viewRead(ctx, view, catalogRead, func(ctx context.Context, r *readView) ([]storefmt.DirEntry, error) {
 		return r.listPage(ctx, reqPath, opts)
 	})
 }
 
+// IsDir is exact: FETCH asks it before reading a version path.
 func (view *snapshotView) IsDir(ctx context.Context, reqPath string) (bool, error) {
-	return viewRead(ctx, view, func(ctx context.Context, r *readView) (bool, error) { return r.IsDir(ctx, reqPath) })
+	return viewRead(ctx, view, exactRead, func(ctx context.Context, r *readView) (bool, error) { return r.IsDir(ctx, reqPath) })
 }
 
 func (view *snapshotView) Versions(ctx context.Context, reqPath string) ([]storefmt.VersionInfo, error) {
-	return viewRead(ctx, view, func(ctx context.Context, r *readView) ([]storefmt.VersionInfo, error) {
+	return viewRead(ctx, view, exactRead, func(ctx context.Context, r *readView) ([]storefmt.VersionInfo, error) {
 		return r.Versions(ctx, reqPath)
 	})
 }
 
 func (view *snapshotView) LookupHash(ctx context.Context, hash string) (string, error) {
-	return viewRead(ctx, view, func(ctx context.Context, r *readView) (string, error) { return r.LookupHash(ctx, hash) })
+	return viewRead(ctx, view, catalogRead, func(ctx context.Context, r *readView) (string, error) { return r.LookupHash(ctx, hash) })
 }
 
 func (view *snapshotView) VerifyChain(ctx context.Context, reqPath string) error {
-	_, err := viewRead(ctx, view, func(ctx context.Context, r *readView) (struct{}, error) {
+	_, err := viewRead(ctx, view, exactRead, func(ctx context.Context, r *readView) (struct{}, error) {
 		return struct{}{}, r.VerifyChain(ctx, reqPath)
 	})
 	return err
 }
 
 func (view *snapshotView) Lookup(ctx context.Context, query string, options catalog.Options) ([]catalog.Result, error) {
-	return viewRead(ctx, view, func(ctx context.Context, r *readView) ([]catalog.Result, error) { return r.Lookup(ctx, query, options) })
+	return viewRead(ctx, view, catalogRead, func(ctx context.Context, r *readView) ([]catalog.Result, error) { return r.Lookup(ctx, query, options) })
 }
 
 // attemptView lends a commit attempt's snapshot to a precondition as an
@@ -111,7 +133,7 @@ func attemptView(ctx context.Context, view *readView) *snapshotView {
 	if !ok {
 		deadline = time.Now().Add(defaultRequestTimeout)
 	}
-	return &snapshotView{objects: view.objects, snapshot: view.snapshot, deadline: deadline}
+	return &snapshotView{objects: view.objects, deadline: deadline, snapshot: view.snapshot}
 }
 
 // readView reads one snapshot; every method takes the operation's context.
@@ -123,11 +145,6 @@ type readView struct {
 type retainedVersion struct {
 	entry    historyEntry
 	modified time.Time
-}
-
-type retainedHistory struct {
-	manifest manifestObject
-	versions []retainedVersion
 }
 
 type storedDocument struct {
@@ -148,81 +165,66 @@ func (view *readView) get(ctx context.Context, reqPath string, version int) (*st
 	if version < 0 {
 		return nil, backend.ErrNotFound
 	}
-	history, err := view.loadHistory(ctx, &entry)
+	history, err := view.history(ctx, entry)
 	if err != nil {
 		return nil, err
 	}
 	current := version == 0
 	requested := version
 	if requested == 0 {
-		requested = history.manifest.Current
+		requested = entry.Current
 	}
-	retained, ok := retainedAt(history.versions, requested)
+	retained, ok := retainedAt(history, requested)
 	if !ok {
 		return nil, backend.ErrNotFound
 	}
-	raw, err := view.loadBlob(ctx, retained.entry.Blob)
-	if err != nil {
-		return nil, fmt.Errorf("load v%d: %w", retained.entry.Version, err)
-	}
-	stored, err := validateStoredDocument(raw, &retained)
+	raw, stored, err := view.loadStored(ctx, &retained)
 	if err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &storefmt.Document{
-		Content:  bytes.Clone(stored.body),
-		Modified: retained.modified,
-		Version:  retained.entry.Version,
-		Archived: current && entry.Archived,
-		Metadata: maps.Clone(stored.metadata),
-		ETag:     storefmt.StoredETag(raw),
-	}, nil
+	return documentFromRetained(raw, &retained, &stored, current && entry.Archived), nil
 }
 
-// listPage windows the derived directory; Children are sorted by name, so
-// After is a binary search and Limit an early stop.
+// loadStored reads a retained version's bytes and checks them against it.
+func (view *readView) loadStored(ctx context.Context, retained *retainedVersion) ([]byte, storedDocument, error) {
+	raw, err := view.loadBlob(ctx, retained.entry.Blob)
+	if err != nil {
+		return nil, storedDocument{}, fmt.Errorf("load v%d: %w", retained.entry.Version, err)
+	}
+	stored, err := validateStoredDocument(raw, retained)
+	return raw, stored, err
+}
+
+// listPage windows a directory; its names come in order, so After is a seek
+// and Limit an early stop.
 func (view *readView) listPage(ctx context.Context, reqPath string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {
 	includeArchived := opts.IncludeArchived
 	logicalPath, err := view.logicalPath(ctx, reqPath)
 	if err != nil {
 		return nil, err
 	}
-	if _, isDocument := view.snapshot.Paths[logicalPath]; isDocument {
+	if view.snapshot.path(logicalPath) != nil || !view.snapshot.isDirectory(logicalPath) {
 		return nil, backend.ErrNotFound
 	}
-	directory, exists := view.snapshot.Directories[logicalPath]
-	if !exists {
-		return nil, backend.ErrNotFound
-	}
-	children := directory.Children
-	if opts.After != "" {
-		start, found := slices.BinarySearchFunc(children, opts.After, func(child directoryChild, after string) int {
-			return strings.Compare(child.Name, after)
-		})
-		if found {
-			start++
-		}
-		children = children[start:]
-	}
-	capacity := len(children)
-	if opts.Limit > 0 {
-		capacity = min(capacity, opts.Limit)
-	}
-	entries := make([]storefmt.DirEntry, 0, capacity)
-	for _, child := range children {
+	var entries []storefmt.DirEntry
+	view.snapshot.children(logicalPath, opts.After, func(child *dirChild) bool {
 		if opts.Limit > 0 && len(entries) == opts.Limit {
-			break
+			return false
 		}
-		if hiddenLogicalName(child.Name) || (includeArchived && !child.Visible) || (!includeArchived && !child.Live) {
-			continue
+		if hiddenLogicalName(child.Name) || (includeArchived && child.Visible == 0) || (!includeArchived && child.Live == 0) {
+			return true
 		}
 		entries = append(entries, storefmt.DirEntry{Name: child.Name, IsDir: child.IsDir})
-	}
+		return true
+	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if entries == nil {
+		entries = []storefmt.DirEntry{}
 	}
 	return entries, nil
 }
@@ -232,10 +234,10 @@ func (view *readView) IsDir(ctx context.Context, reqPath string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if _, exists := view.snapshot.Directories[logicalPath]; exists {
+	if view.snapshot.isDirectory(logicalPath) {
 		return true, nil
 	}
-	if _, exists := view.snapshot.Paths[logicalPath]; exists {
+	if view.snapshot.path(logicalPath) != nil {
 		return false, nil
 	}
 	return false, backend.ErrNotFound
@@ -251,12 +253,12 @@ func (view *readView) versions(ctx context.Context, reqPath string) ([]storefmt.
 	if err != nil {
 		return nil, err
 	}
-	history, err := view.loadHistory(ctx, &entry)
+	history, err := view.history(ctx, entry)
 	if err != nil {
 		return nil, err
 	}
-	versions := make([]storefmt.VersionInfo, 0, len(history.versions))
-	for _, retained := range slices.Backward(history.versions) {
+	versions := make([]storefmt.VersionInfo, 0, len(history))
+	for _, retained := range slices.Backward(history) {
 		versions = append(versions, storefmt.VersionInfo{
 			Version:  retained.entry.Version,
 			Modified: retained.modified,
@@ -272,7 +274,7 @@ func (view *readView) LookupHash(ctx context.Context, hash string) (string, erro
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	path, exists := view.snapshot.BodyHashes[hash]
+	path, exists := view.snapshot.lookupHash(hash)
 	if !exists {
 		return "", backend.ErrNotFound
 	}
@@ -295,16 +297,16 @@ func (view *readView) verifyChain(ctx context.Context, reqPath string) error {
 	if err != nil {
 		return fmt.Errorf("list versions: %w", err)
 	}
-	history, err := view.loadHistory(ctx, &entry)
+	history, err := view.history(ctx, entry)
 	if err != nil {
 		return fmt.Errorf("list versions: %w", err)
 	}
-	previous := history.versions[0]
+	previous := history[0]
 	previousRaw, err := view.loadBlobUnchecked(ctx, previous.entry.Blob)
 	if err != nil {
 		return fmt.Errorf("read v%d: %w", previous.entry.Version, err)
 	}
-	for _, current := range history.versions[1:] {
+	for _, current := range history[1:] {
 		currentRaw, err := view.loadBlobUnchecked(ctx, current.entry.Blob)
 		if err != nil {
 			return fmt.Errorf("read v%d: %w", current.entry.Version, err)
@@ -340,7 +342,7 @@ func (view *readView) Lookup(ctx context.Context, query string, options catalog.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	results, err := view.snapshot.Catalog.Lookup(query, options)
+	results, err := catalog.Search(view.snapshot, query, options)
 	if err != nil {
 		return nil, err
 	}
@@ -358,14 +360,14 @@ func (view *readView) Lookup(ctx context.Context, query string, options catalog.
 	return cloned, nil
 }
 
-func (view *readView) documentEntry(ctx context.Context, reqPath string) (snapshotEntry, error) {
+func (view *readView) documentEntry(ctx context.Context, reqPath string) (*pathState, error) {
 	logicalPath, err := view.logicalPath(ctx, reqPath)
 	if err != nil {
-		return snapshotEntry{}, err
+		return nil, err
 	}
-	entry, exists := view.snapshot.Paths[logicalPath]
-	if !exists {
-		return snapshotEntry{}, backend.ErrNotFound
+	entry := view.snapshot.path(logicalPath)
+	if entry == nil {
+		return nil, backend.ErrNotFound
 	}
 	return entry, nil
 }
@@ -384,16 +386,44 @@ func (view *readView) logicalPath(ctx context.Context, reqPath string) (string, 
 	return "/" + relative, nil
 }
 
-func (view *readView) loadHistory(ctx context.Context, entry *snapshotEntry) (retainedHistory, error) {
-	manifest, err := getImmutable(ctx, view.objects, keyedRef{entry.Manifest, manifestKey(entry.PathHash, entry.Manifest.Hash)}, validateManifestObject)
-	if err != nil {
-		return retainedHistory{}, fmt.Errorf("load manifest: %w", err)
+// history is every retained version of a document, oldest first: the
+// checkpoint's manifest for what it holds, then the versions committed since.
+func (view *readView) history(ctx context.Context, state *pathState) ([]retainedVersion, error) {
+	var versions []retainedVersion
+	if state.Base != nil && (state.First == 0 || state.First <= state.Base.Current) {
+		base, err := view.baseHistory(ctx, state)
+		if err != nil {
+			return nil, err
+		}
+		versions = retainFrom(base, state.First)
 	}
-	if manifest.PathHash != entry.PathHash || manifest.Current != entry.Current || manifest.Archived != entry.Archived {
-		return retainedHistory{}, fmt.Errorf("%w: manifest does not match shard entry", blob.ErrIntegrity)
+	versions = append(versions, retainFrom(state.Recent, state.First)...)
+	for index := 1; index < len(versions); index++ {
+		if versions[index].entry.Version != versions[index-1].entry.Version+1 {
+			return nil, fmt.Errorf("%w: retained versions skip from %d to %d", blob.ErrIntegrity, versions[index-1].entry.Version, versions[index].entry.Version)
+		}
 	}
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("%w: no retained versions", blob.ErrIntegrity)
+	}
+	tip := versions[len(versions)-1]
+	if tip.entry.Version != state.Current || tip.entry.BodyHash != state.BodyHash || !tip.modified.Equal(state.Modified) {
+		return nil, fmt.Errorf("%w: history tip does not match the document", blob.ErrIntegrity)
+	}
+	return versions, nil
+}
 
-	loaded := retainedHistory{manifest: manifest}
+// baseHistory reads the versions a checkpoint's manifest retains.
+func (view *readView) baseHistory(ctx context.Context, state *pathState) ([]retainedVersion, error) {
+	base, documentHash := state.Base, pathHash(state.Path)
+	manifest, err := getImmutable(ctx, view.objects, keyedRef{base.Manifest, manifestKey(documentHash, base.Manifest.Hash)}, validateManifestObject)
+	if err != nil {
+		return nil, fmt.Errorf("load manifest: %w", err)
+	}
+	if manifest.PathHash != documentHash || manifest.Current != base.Current || manifest.Archived != base.Archived {
+		return nil, fmt.Errorf("%w: manifest does not match checkpoint entry", blob.ErrIntegrity)
+	}
+	var versions []retainedVersion
 	for index, ref := range manifest.History {
 		history, err := getImmutable(ctx, view.objects, keyedRef{ref.objectRef, historyKey(ref.Hash)}, func(history *historyObject) error {
 			if err := validateHistoryObject(history); err != nil {
@@ -405,24 +435,24 @@ func (view *readView) loadHistory(ctx context.Context, entry *snapshotEntry) (re
 			return nil
 		})
 		if err != nil {
-			return retainedHistory{}, fmt.Errorf("load history %d: %w", index, err)
+			return nil, fmt.Errorf("load history %d: %w", index, err)
 		}
 		for _, historyEntry := range history.Entries {
 			modified, err := parseTimestamp(historyEntry.Modified)
 			if err != nil {
-				return retainedHistory{}, fmt.Errorf("%w: history v%d modified: %v", blob.ErrIntegrity, historyEntry.Version, err)
+				return nil, fmt.Errorf("%w: history v%d modified: %v", blob.ErrIntegrity, historyEntry.Version, err)
 			}
-			loaded.versions = append(loaded.versions, retainedVersion{entry: historyEntry, modified: modified})
+			versions = append(versions, retainedVersion{entry: historyEntry, modified: modified})
 		}
 	}
-	if len(loaded.versions) == 0 {
-		return retainedHistory{}, fmt.Errorf("%w: manifest has no retained versions", blob.ErrIntegrity)
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("%w: manifest has no retained versions", blob.ErrIntegrity)
 	}
-	tip := loaded.versions[len(loaded.versions)-1]
-	if tip.entry.Version != entry.Current || tip.entry.BodyHash != entry.BodyHash || !tip.modified.Equal(entry.Modified) {
-		return retainedHistory{}, fmt.Errorf("%w: history tip does not match shard entry", blob.ErrIntegrity)
+	tip := versions[len(versions)-1]
+	if tip.entry.Version != base.Current || tip.entry.BodyHash != base.BodyHash || !tip.modified.Equal(base.Modified) {
+		return nil, fmt.Errorf("%w: history tip does not match checkpoint entry", blob.ErrIntegrity)
 	}
-	return loaded, nil
+	return versions, nil
 }
 
 func (view *readView) loadBlob(ctx context.Context, ref objectRef) ([]byte, error) {

@@ -1,69 +1,59 @@
 package bucketstore
 
 import (
-	"context"
-
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
-// report publishes the head's receipts the hub has not seen, in head order,
-// so watchers on this replica learn of every replica's commits under one
-// sequence. Called with refreshMu held wherever a snapshot is installed.
-func (store *Store) report(snap *snapshot) {
-	hub := store.changes
-	if hub == nil {
+// newHub is the world's change hub under the world ID and log sequences, so
+// cursors agree across replicas and restarts (backend.ChangeSource); the slots
+// are its backlog. Nil when WATCH is off.
+func newHub(store *Store, ring int) *changefeed.Hub {
+	if ring <= 0 {
+		return nil
+	}
+	return changefeed.NewWithBacklog(store.worldID, ring, newChangeLog(store, ring))
+}
+
+// Changes is the hub this store feeds, or nil when WATCH is off.
+func (store *Store) Changes() *changefeed.Hub { return store.changes }
+
+// skipTo starts the hub at a checkpoint: what came before it resumes from the
+// backlog, or resyncs.
+func (store *Store) skipTo(sequence int64) {
+	if store.changes != nil {
+		store.changes.Skip(hubSeq(sequence))
+	}
+}
+
+// report publishes one applied slot's changes in log order, so watchers on
+// this replica learn of every replica's commits under one sequence.
+func (store *Store) report(slot *slotObject) {
+	if store.changes == nil {
 		return
 	}
-	head := &snap.Head
-	from := hub.Head().Seq
-	// Receipts cover (covered, head.Sequence]; anything older is a gap the
-	// watchers rebuild from.
-	covered := hubSeq(head.Sequence - int64(len(head.Receipts)))
-	if from < covered {
-		hub.Skip(covered)
-		from = covered
-	}
-	for i := range head.Receipts {
-		receipt := &head.Receipts[i]
-		seq := hubSeq(receipt.Sequence)
-		if seq <= from {
-			continue
-		}
-		if receipt.Path == "" {
-			// Written before receipts named their change: no hint to give.
-			hub.Skip(seq)
-			continue
-		}
-		hub.PublishAt(receiptEvent(receipt))
+	for _, event := range slotEvents(slot) {
+		store.changes.PublishAt(event)
 	}
 }
 
-// receiptEvent is the change hint a receipt names.
-func receiptEvent(receipt *operationReceipt) changefeed.Event {
-	return changefeed.Event{Seq: hubSeq(receipt.Sequence), Path: receipt.Path, Version: receipt.Version, Hash: receipt.Hash, Op: receipt.Op, Agent: receipt.Agent}
+// slotEvents are the change hints a slot names.
+func slotEvents(slot *slotObject) []changefeed.Event {
+	events := make([]changefeed.Event, len(slot.Entries))
+	for index := range slot.Entries {
+		entry := &slot.Entries[index]
+		events[index] = changefeed.Event{
+			Seq: hubSeq(slot.First + int64(index)), Path: entry.Path, Version: entry.Current,
+			Hash: entry.BodyHash, Op: entry.Op, Agent: entry.Agent,
+		}
+	}
+	return events
 }
 
-// hubSeq is a head sequence as a cursor sequence; heads are validated
+// hubSeq is a log sequence as a cursor sequence; sequences are validated
 // positive, so the guard only satisfies the conversion check.
 func hubSeq(sequence int64) uint64 {
 	if sequence < 0 {
 		return 0
 	}
 	return uint64(sequence)
-}
-
-// poll refreshes the snapshot from the bucket, reporting what peers wrote.
-func (store *Store) poll(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, store.requestTimeout)
-	defer cancel()
-	_, err := store.refreshSnapshot(ctx)
-	return err
-}
-
-// servedSequence is the head sequence of the snapshot this replica serves.
-func (store *Store) servedSequence() int64 {
-	if snap := store.snapshot.Load(); snap != nil {
-		return snap.Head.Sequence
-	}
-	return 0
 }

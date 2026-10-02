@@ -369,7 +369,7 @@ func TestWorldManagerRefusesUnreadablePolicyFile(t *testing.T) {
 		t.Fatal("manager started with an unreadable policy file")
 	}
 	// The seed is read before genesis, so a bad file leaves no world behind.
-	listed, err := h.objects(t, "acme").List(context.Background(), "", "")
+	listed, err := h.objects(t, "acme").List(context.Background(), "", "", "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -683,7 +683,7 @@ func TestWorldManagerReadOnlyWorldWritesNothing(t *testing.T) {
 		t.Fatal("read-only world over an empty bucket came up")
 	}
 	// Neither genesis nor a policy seed may be authored for it.
-	listed, err := h.objects(t, "acme").List(context.Background(), "", "")
+	listed, err := h.objects(t, "acme").List(context.Background(), "", "", "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

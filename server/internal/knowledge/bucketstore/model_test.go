@@ -70,7 +70,7 @@ func TestModelIdentifiers(t *testing.T) {
 			got  string
 			want string
 		}{
-			{name: "head", got: headObjectKey, want: "_demarkus/v1/head.json"},
+			{name: "head", got: markerKey, want: "_demarkus/v1/head.json"},
 			{name: "blob", got: blobKey(hash), want: "_demarkus/v1/blobs/" + hash},
 			{name: "history", got: historyKey(hash), want: "_demarkus/v1/history/" + hash + ".json"},
 			{name: "manifest", got: manifestKey(path, hash), want: "_demarkus/v1/docs/" + path + "/manifests/" + hash + ".json"},
@@ -140,21 +140,20 @@ func TestModelTimestampsAndImportance(t *testing.T) {
 
 func TestCanonicalJSON(t *testing.T) {
 	rootHash := strings.Repeat("a", 64)
-	head := headObject{
-		Schema:   schemaVersion,
+	checkpoint := checkpointObject{
+		Schema:   logSchema,
 		WorldID:  testWorldID,
 		Sequence: 1,
 		Root:     objectRef{Key: rootKey(rootHash), Hash: rootHash},
-		Receipts: make([]operationReceipt, 0),
 	}
-	canonical, err := marshalImmutable(head)
+	canonical, err := marshalImmutable(checkpoint)
 	if err != nil {
-		t.Fatalf("marshal head: %v", err)
+		t.Fatalf("marshal checkpoint: %v", err)
 	}
-	want := `{"schema":1,"world_id":"52b471f7-8d38-4c89-b44a-6f4f8b1a4f48","sequence":1,"root":{"key":"_demarkus/v1/roots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"receipts":[]}`
-	reordered := `{"world_id":"52b471f7-8d38-4c89-b44a-6f4f8b1a4f48","schema":1,"sequence":1,"root":{"key":"_demarkus/v1/roots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"receipts":[]}`
+	want := `{"schema":2,"world_id":"52b471f7-8d38-4c89-b44a-6f4f8b1a4f48","sequence":1,"root":{"key":"_demarkus/v1/roots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"tip":""}`
+	reordered := `{"world_id":"52b471f7-8d38-4c89-b44a-6f4f8b1a4f48","schema":2,"sequence":1,"root":{"key":"_demarkus/v1/roots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"tip":""}`
 	if string(canonical) != want {
-		t.Fatalf("canonical head:\n%s\nwant:\n%s", canonical, want)
+		t.Fatalf("canonical checkpoint:\n%s\nwant:\n%s", canonical, want)
 	}
 
 	t.Run("decode", func(t *testing.T) {
@@ -172,7 +171,7 @@ func TestCanonicalJSON(t *testing.T) {
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
-				var decoded headObject
+				var decoded checkpointObject
 				err := decodeImmutable(test.data, &decoded)
 				if (err != nil) != test.wantErr {
 					t.Errorf("decodeImmutable() error = %v, wantErr %v", err, test.wantErr)
@@ -200,13 +199,18 @@ func TestCanonicalJSON(t *testing.T) {
 	})
 
 	t.Run("null collection", func(t *testing.T) {
-		data := []byte(strings.Replace(want, `"receipts":[]`, `"receipts":null`, 1))
-		var decoded headObject
+		slot := validWriteSlot()
+		slot.Entries = nil
+		data, err := marshalImmutable(slot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded slotObject
 		if err := decodeImmutable(data, &decoded); err != nil {
 			t.Fatalf("decode canonical null: %v", err)
 		}
-		if err := validateHeadObject(&decoded); err == nil {
-			t.Fatal("validateHeadObject() accepted null receipts")
+		if err := validateSlot(&decoded, decoded.First); err == nil {
+			t.Fatal("validateSlot() accepted null entries")
 		}
 	})
 }
@@ -250,7 +254,6 @@ func TestGoldenHistoryObject(t *testing.T) {
 
 func TestModelCollectionValidation(t *testing.T) {
 	hash := strings.Repeat("a", 64)
-	validRef := objectRef{Key: rootKey(hash), Hash: hash}
 	validCatalog := catalogRecord{
 		Path:       "/a.md",
 		Title:      "A",
@@ -263,8 +266,8 @@ func TestModelCollectionValidation(t *testing.T) {
 		name     string
 		validate func() error
 	}{
-		{name: "head receipts", validate: func() error {
-			return validateHeadObject(&headObject{Schema: schemaVersion, WorldID: testWorldID, Sequence: 1, Root: validRef})
+		{name: "checkpoint root", validate: func() error {
+			return validateCheckpoint(&checkpointObject{Schema: logSchema, WorldID: testWorldID, Sequence: 1}, 1)
 		}},
 		{name: "root shards", validate: func() error {
 			return validateRootObject(&rootObject{Schema: schemaVersion, WorldID: testWorldID}, testWorldID)
@@ -298,59 +301,79 @@ func TestModelCollectionValidation(t *testing.T) {
 	}
 }
 
-func TestReceiptWindowValidation(t *testing.T) {
-	rootHash := strings.Repeat("a", 64)
-	makeHead := func(sequence int64) headObject {
-		receiptCount := int(min(sequence-1, int64(maximumReceipts)))
-		receipts := make([]operationReceipt, receiptCount)
-		for index := range receipts {
-			receiptSequence := sequence - int64(receiptCount) + int64(index) + 1
-			receipts[index] = operationReceipt{
-				OperationID: fmt.Sprintf("00000000-0000-4000-8000-%012x", receiptSequence),
-				Sequence:    receiptSequence,
-				Result:      "committed",
-			}
-		}
-		return headObject{
-			Schema:   schemaVersion,
-			WorldID:  testWorldID,
-			Sequence: sequence,
-			Root:     objectRef{Key: rootKey(rootHash), Hash: rootHash},
-			Receipts: receipts,
-		}
+// validWriteSlot is a slot holding one valid write of /a.md at version 1.
+func validWriteSlot() slotObject {
+	blobHash, bodyHash := strings.Repeat("b", 64), "sha256-"+strings.Repeat("c", 64)
+	record := catalogRecord{Path: "/a.md", Title: "A", Tags: []string{}, Importance: "0.5", Modified: testModified, Metadata: map[string]string{}}
+	return slotObject{
+		Schema: logSchema, WorldID: testWorldID, First: 2, Store: otherWorldID,
+		Entries: []slotEntry{{
+			OperationID: "00000000-0000-4000-8000-000000000002", Op: "publish", Path: "/a.md",
+			Current: 1, First: 1, BodyHash: bodyHash, Modified: testModified, Catalog: &record,
+			Version: &historyEntry{Version: 1, Blob: objectRef{Key: blobKey(blobHash), Hash: blobHash}, BodyHash: bodyHash, Modified: testModified},
+		}},
+	}
+}
+
+func TestSlotValidation(t *testing.T) {
+	archive := func(slot *slotObject) {
+		entry := &slot.Entries[0]
+		entry.Op, entry.Archived, entry.Catalog, entry.Version = "archive", true, nil, nil
 	}
 	tests := []struct {
 		name    string
-		mutate  func(*headObject)
+		mutate  func(*slotObject)
 		wantErr bool
 	}{
-		{name: "genesis", mutate: func(head *headObject) { *head = makeHead(1) }},
-		{name: "partial window", mutate: func(head *headObject) { *head = makeHead(20) }},
-		{name: "missing receipt", mutate: func(head *headObject) {
-			*head = makeHead(3)
-			head.Receipts = head.Receipts[1:]
-		}, wantErr: true},
-		{name: "sequence gap", mutate: func(head *headObject) {
-			*head = makeHead(4)
-			head.Receipts[1].Sequence++
-		}, wantErr: true},
-		{name: "named receipt", mutate: func(head *headObject) {
-			*head = makeHead(2)
-			head.Receipts[0].Path, head.Receipts[0].Op = "/a.md", "publish"
-			head.Receipts[0].Version, head.Receipts[0].Hash = 1, "sha256-"+strings.Repeat("b", 64)
+		{name: "write", mutate: func(*slotObject) {}},
+		{name: "archive transition", mutate: archive},
+		{name: "unarchive transition", mutate: func(slot *slotObject) {
+			archive(slot)
+			slot.Entries[0].Op, slot.Entries[0].Archived = "publish", false
 		}},
-		{name: "named receipt without its commit", mutate: func(head *headObject) {
-			*head = makeHead(2)
-			head.Receipts[0].Path, head.Receipts[0].Op = "/a.md", "publish"
+		{name: "predecessor", mutate: func(slot *slotObject) { slot.Prev = strings.Repeat("d", 64) }},
+		{name: "key names another sequence", mutate: func(slot *slotObject) { slot.First = 3 }, wantErr: true},
+		{name: "genesis sequence", mutate: func(slot *slotObject) { slot.First = 1 }, wantErr: true},
+		{name: "no entries", mutate: func(slot *slotObject) { slot.Entries = []slotEntry{} }, wantErr: true},
+		{name: "too many entries", mutate: func(slot *slotObject) {
+			for len(slot.Entries) <= maxSlotEntries {
+				entry := slot.Entries[0]
+				entry.OperationID = fmt.Sprintf("00000000-0000-4000-8000-%012x", len(slot.Entries)+10)
+				slot.Entries = append(slot.Entries, entry)
+			}
 		}, wantErr: true},
+		{name: "duplicate operation", mutate: func(slot *slotObject) {
+			slot.Entries = append(slot.Entries, slot.Entries[0])
+		}, wantErr: true},
+		{name: "bad store ID", mutate: func(slot *slotObject) { slot.Store = "replica-1" }, wantErr: true},
+		{name: "bad predecessor", mutate: func(slot *slotObject) { slot.Prev = "nope" }, wantErr: true},
+		{name: "first past current", mutate: func(slot *slotObject) { slot.Entries[0].First = 2 }, wantErr: true},
+		{name: "write without version", mutate: func(slot *slotObject) {
+			slot.Entries[0].Version = nil
+		}, wantErr: true},
+		{name: "write left archived", mutate: func(slot *slotObject) { slot.Entries[0].Archived = true }, wantErr: true},
+		{name: "version from another write", mutate: func(slot *slotObject) {
+			slot.Entries[0].Version.Version = 2
+		}, wantErr: true},
+		{name: "archive op that unarchives", mutate: func(slot *slotObject) {
+			archive(slot)
+			slot.Entries[0].Archived = false
+		}, wantErr: true},
+		{name: "archive with a catalog", mutate: func(slot *slotObject) {
+			record := *validWriteSlot().Entries[0].Catalog
+			archive(slot)
+			slot.Entries[0].Catalog = &record
+		}, wantErr: true},
+		{name: "unknown op", mutate: func(slot *slotObject) { slot.Entries[0].Op = "delete" }, wantErr: true},
+		{name: "directory path", mutate: func(slot *slotObject) { slot.Entries[0].Path = "/" }, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var head headObject
-			test.mutate(&head)
-			err := validateHeadObject(&head)
+			slot := validWriteSlot()
+			test.mutate(&slot)
+			err := validateSlot(&slot, 2)
 			if (err != nil) != test.wantErr {
-				t.Errorf("validateHeadObject() error = %v, wantErr %v", err, test.wantErr)
+				t.Errorf("validateSlot() error = %v, wantErr %v", err, test.wantErr)
 			}
 		})
 	}

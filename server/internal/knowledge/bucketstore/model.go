@@ -1,4 +1,5 @@
-// Package bucketstore stores one knowledge world behind an immutable root graph.
+// Package bucketstore stores one knowledge world in a bucket: a log of
+// create-only slots over a verified checkpoint (ADR 0036).
 package bucketstore
 
 import (
@@ -8,17 +9,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 )
 
 const (
+	// schemaVersion versions the checkpoint objects (root, shards, manifests,
+	// history); logSchema versions the world marker, checkpoints and slots.
 	schemaVersion    = 1
+	logSchema        = 2
 	shardCount       = 256
 	maximumDocuments = 100_000
 	historyBlockSize = 256
-	maximumReceipts  = 16
+	// maxSlotEntries bounds one slot's batch, and readers find the slot holding
+	// a sequence within this many names below it: raising it needs a new
+	// logSchema.
+	maxSlotEntries = 32
 
-	objectPrefix  = "_demarkus/v1/"
-	headObjectKey = objectPrefix + "head.json"
+	objectPrefix     = "_demarkus/v1/"
+	markerKey        = objectPrefix + "head.json"
+	checkpointPrefix = objectPrefix + "checkpoints/"
+	logPrefix        = objectPrefix + "log/"
 )
 
 type objectRef struct {
@@ -94,27 +105,53 @@ type rootObject struct {
 	Shards        []shardRef `json:"shards"`
 }
 
-type operationReceipt struct {
-	OperationID string `json:"operation_id"`
-	Sequence    int64  `json:"sequence"`
-	Result      string `json:"result"`
-	// What the commit changed, so a replica can report it as a change
-	// hint; absent in heads written before hints existed. Version and hash
-	// are the commit's own: the path may have moved on by the time it is read.
-	Path    string `json:"path,omitempty"`
-	Op      string `json:"op,omitempty"`
-	Agent   string `json:"agent,omitempty"`
-	Version int    `json:"version,omitempty"`
-	Hash    string `json:"hash,omitempty"`
+// markerObject is head.json under schema 2: written once when the world is
+// created, never on the commit path. A replica on schema 1 refuses it.
+type markerObject struct {
+	Schema  int    `json:"schema"`
+	WorldID string `json:"world_id"`
 }
 
-type headObject struct {
-	Schema   int                `json:"schema"`
-	WorldID  string             `json:"world_id"`
-	Sequence int64              `json:"sequence"`
-	Root     objectRef          `json:"root"`
-	Receipts []operationReceipt `json:"receipts"`
+// checkpointObject names the root that holds the world through Sequence.
+// Tip is the hash the next slot names as its predecessor, empty when no slot
+// precedes it.
+type checkpointObject struct {
+	Schema   int       `json:"schema"`
+	WorldID  string    `json:"world_id"`
+	Sequence int64     `json:"sequence"`
+	Root     objectRef `json:"root"`
+	Tip      string    `json:"tip"`
 }
+
+// slotObject is one commit: a batch of changes with contiguous sequences from
+// First, chained to its predecessor by Prev.
+type slotObject struct {
+	Schema  int         `json:"schema"`
+	WorldID string      `json:"world_id"`
+	First   int64       `json:"first"`
+	Store   string      `json:"store"`
+	Prev    string      `json:"prev"`
+	Entries []slotEntry `json:"entries"`
+}
+
+// slotEntry is one committed change and the document state after it. A write
+// carries its catalog record and version; an archive transition carries
+// neither and keeps the document's.
+type slotEntry struct {
+	OperationID string         `json:"operation_id"`
+	Op          string         `json:"op"`
+	Agent       string         `json:"agent,omitempty"`
+	Path        string         `json:"path"`
+	Current     int            `json:"current"`
+	First       int            `json:"first"`
+	Archived    bool           `json:"archived"`
+	BodyHash    string         `json:"body_hash"`
+	Modified    string         `json:"modified"`
+	Catalog     *catalogRecord `json:"catalog,omitempty"`
+	Version     *historyEntry  `json:"version,omitempty"`
+}
+
+func (slot *slotObject) last() int64 { return slot.First + int64(len(slot.Entries)) - 1 }
 
 type modelObject struct {
 	Key  string
@@ -192,4 +229,25 @@ func shardKey(shard, hash string) string {
 
 func rootKey(hash string) string {
 	return objectPrefix + "roots/" + hash + ".json"
+}
+
+func checkpointKey(sequence int64) string {
+	return fmt.Sprintf("%s%016x.json", checkpointPrefix, sequence)
+}
+
+func slotKey(first int64) string {
+	return fmt.Sprintf("%s%016x.json", logPrefix, first)
+}
+
+// sequenceOfKey parses the sequence a checkpoint or slot key names.
+func sequenceOfKey(key, prefix string) (int64, bool) {
+	name, ok := strings.CutPrefix(key, prefix)
+	if !ok || len(name) != 16+len(".json") || !strings.HasSuffix(name, ".json") {
+		return 0, false
+	}
+	sequence, err := strconv.ParseInt(name[:16], 16, 64)
+	if err != nil || sequence < 1 || fmt.Sprintf("%016x", sequence) != name[:16] {
+		return 0, false
+	}
+	return sequence, true
 }

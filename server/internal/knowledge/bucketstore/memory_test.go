@@ -45,8 +45,8 @@ func (s *storedBytes) Replace(ctx context.Context, key string, generation blob.G
 }
 
 // The agent's publish-and-prune loop, which leaked in production, must leave
-// heap tracking live documents. With WATCH on, warmup fills the small ring:
-// the hub must evict, and sealed change blocks live only in the bucket.
+// heap tracking live documents: retention trims the versions a snapshot holds
+// and old snapshots share nothing pinned. With WATCH on, the hub must evict.
 func TestPublishPruneHeapTracksLiveData(t *testing.T) {
 	t.Run("plain", func(t *testing.T) { checkPublishPruneHeap(t, 0) })
 	t.Run("watch", func(t *testing.T) { checkPublishPruneHeap(t, 16) })
@@ -66,7 +66,6 @@ func checkPublishPruneHeap(t *testing.T, ring int) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	store.commitInterval = 0
 	closeAtEnd(t, store)
 	meta := map[string]string{"retention": "20", "agent": "federation"}
 	cycle := func(n int) {
@@ -101,15 +100,17 @@ func checkPublishPruneHeap(t *testing.T, ring int) {
 	}
 }
 
-// A watcher resuming through sealed blocks, again and again, keeps nothing
-// once it has drained and gone: the backlog lives only as long as its watch.
+// A watcher resuming through the slots, again and again, keeps nothing once
+// it has drained and gone: the backlog lives only as long as its watch, and
+// the slot cache stays within its limit.
 func TestBacklogResumeRetainsNothing(t *testing.T) {
 	objects := initializedMemory(t)
 	writer := (&bucketSite{objects: objects}).open(t, 0)
 	publishSeq(t, writer, 200)
-	// A fresh replica holds only the receipt window, so every resume from
-	// seq 100 reads about 84 events from blocks.
+	// A hub that starts at 199, as after a checkpoint there, reads every
+	// resume from seq 100 out of the slots.
 	reader := (&bucketSite{objects: objects}).open(t, changefeed.DefaultRingSize)
+	reader.skipTo(199)
 	hub := reader.Changes()
 	resume := func() {
 		sub, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: testWorldID, Seq: 100})
@@ -120,8 +121,8 @@ func TestBacklogResumeRetainsNothing(t *testing.T) {
 			storetest.NextEvent(t, sub)
 		}
 	}
-	// Warmup grows the runtime's threads and caches for the parallel block
-	// reads; they are reused, not per resume.
+	// Warmup grows the runtime's threads and fills the slot cache; both are
+	// reused, not per resume.
 	for range 50 {
 		resume()
 	}

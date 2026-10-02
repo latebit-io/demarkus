@@ -9,7 +9,9 @@ import (
 	"github.com/latebit-io/demarkus/server/blob"
 )
 
-// initialize creates the deterministic empty object graph and create-only head.
+// initialize creates the deterministic genesis: an empty root, checkpoint
+// zero naming it, and last the world marker, so a marker always has a
+// checkpoint. A world that exists already is validated instead.
 func initialize(ctx context.Context, objects blob.Store, worldID string) error {
 	if ctx == nil {
 		return fmt.Errorf("initialize bucket store: %w: context is nil", blob.ErrPrecondition)
@@ -24,12 +26,12 @@ func initialize(ctx context.Context, objects blob.Store, worldID string) error {
 		return fmt.Errorf("initialize bucket store: %w", err)
 	}
 
-	_, err := objects.Get(ctx, headObjectKey)
+	_, err := objects.Get(ctx, markerKey)
 	switch {
 	case err == nil:
 		return validateExistingWorld(ctx, objects, worldID)
 	case !errors.Is(err, blob.ErrNotFound):
-		return fmt.Errorf("initialize bucket store: check head: %w", err)
+		return fmt.Errorf("initialize bucket store: check marker: %w", err)
 	}
 
 	model, err := buildGenesis(worldID)
@@ -41,15 +43,16 @@ func initialize(ctx context.Context, objects blob.Store, worldID string) error {
 			return fmt.Errorf("initialize bucket store: %w", err)
 		}
 	}
-	head := model[len(model)-1]
-	if err := createGenesisHead(ctx, objects, worldID, head); err != nil {
+	marker := model[len(model)-1]
+	if err := createMarker(ctx, objects, worldID, marker); err != nil {
 		return fmt.Errorf("initialize bucket store: %w", err)
 	}
 	return nil
 }
 
+// buildGenesis is the empty world's objects, the marker last.
 func buildGenesis(worldID string) ([]modelObject, error) {
-	objects := make([]modelObject, 0, shardCount+2)
+	objects := make([]modelObject, 0, shardCount+3)
 	refs := make([]shardRef, 0, shardCount)
 	for index := range shardCount {
 		shardID := fmt.Sprintf("%02x", index)
@@ -80,21 +83,24 @@ func buildGenesis(worldID string) ([]modelObject, error) {
 		return nil, fmt.Errorf("build root: %w", err)
 	}
 	objects = append(objects, rootModel)
-	head := headObject{
-		Schema:   schemaVersion,
-		WorldID:  worldID,
-		Sequence: 1,
-		Root:     rootRef,
-		Receipts: make([]operationReceipt, 0),
+	checkpoint := checkpointObject{Schema: logSchema, WorldID: worldID, Sequence: 1, Root: rootRef}
+	if err := validateCheckpoint(&checkpoint, 1); err != nil {
+		return nil, fmt.Errorf("build checkpoint zero: %w", err)
 	}
-	if err := validateHeadObject(&head); err != nil {
-		return nil, fmt.Errorf("build head: %w", err)
-	}
-	headData, err := marshalImmutable(head)
+	checkpointData, err := marshalImmutable(checkpoint)
 	if err != nil {
-		return nil, fmt.Errorf("build head: %w", err)
+		return nil, fmt.Errorf("build checkpoint zero: %w", err)
 	}
-	return append(objects, modelObject{Key: headObjectKey, Data: headData}), nil
+	objects = append(objects, modelObject{Key: checkpointKey(1), Data: checkpointData})
+	marker := markerObject{Schema: logSchema, WorldID: worldID}
+	if err := validateMarker(&marker); err != nil {
+		return nil, fmt.Errorf("build marker: %w", err)
+	}
+	markerData, err := marshalImmutable(marker)
+	if err != nil {
+		return nil, fmt.Errorf("build marker: %w", err)
+	}
+	return append(objects, modelObject{Key: markerKey, Data: markerData}), nil
 }
 
 func createImmutable(ctx context.Context, objects blob.Store, object modelObject) error {
@@ -127,50 +133,43 @@ func createImmutable(ctx context.Context, objects blob.Store, object modelObject
 	return fmt.Errorf("create immutable object %q retries exhausted: %w", object.Key, lastErr)
 }
 
+// errNameTaken is an immutable name that holds other bytes: corruption for a
+// content-addressed object, a lost race for a slot.
+var errNameTaken = errors.New("name holds other bytes")
+
 func verifyExistingImmutable(object modelObject, existing *blob.Object) error {
 	if err := validateReadObject(object.Key, existing); err != nil {
 		return fmt.Errorf("reconcile immutable object %q: %w", object.Key, err)
 	}
 	if !bytes.Equal(existing.Data, object.Data) {
-		return fmt.Errorf("%w: immutable object %q contains hash %s, want %s", blob.ErrIntegrity, object.Key, hashHex(existing.Data), hashHex(object.Data))
+		return fmt.Errorf("%w: %w: immutable object %q contains hash %s, want %s", blob.ErrIntegrity, errNameTaken, object.Key, hashHex(existing.Data), hashHex(object.Data))
 	}
 	return nil
 }
 
-func createGenesisHead(ctx context.Context, objects blob.Store, worldID string, head modelObject) error {
-	var lastErr error
-	for attempt := range maximumCreateAttempts {
-		_, err := objects.Create(ctx, head.Key, head.Data)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if !errors.Is(err, blob.ErrPrecondition) && !retryableObjectError(err) {
-			return fmt.Errorf("create head: %w", err)
-		}
-
-		openErr := validateExistingWorld(ctx, objects, worldID)
-		if openErr == nil {
-			return nil
-		}
-		lastErr = errors.Join(lastErr, openErr)
-		if !errors.Is(openErr, blob.ErrNotFound) && !retryableObjectError(openErr) {
-			return fmt.Errorf("reconcile head create: %w", lastErr)
-		}
-		if attempt == maximumCreateAttempts-1 {
-			break
-		}
-		if err := waitForRetry(ctx, createRetryDelay(attempt)); err != nil {
-			return fmt.Errorf("wait to retry head create: %w", errors.Join(lastErr, err))
+// createMarker creates the world marker; one already there must be this
+// world's, else the bucket belongs to another world.
+func createMarker(ctx context.Context, objects blob.Store, worldID string, marker modelObject) error {
+	err := createImmutable(ctx, objects, marker)
+	if errors.Is(err, blob.ErrIntegrity) {
+		if existing := validateExistingWorld(ctx, objects, worldID); existing != nil {
+			return existing
 		}
 	}
-	return fmt.Errorf("create head retries exhausted: %w", lastErr)
+	return err
 }
 
+// validateExistingWorld checks the bucket holds worldID's marker and a
+// checkpoint that loads. The caller opens the world again to serve it.
 func validateExistingWorld(ctx context.Context, objects blob.Store, worldID string) error {
-	// Only the verdict matters here: the snapshot load is the check, and the
-	// caller opens the world again to serve it.
-	if _, err := loadRootSnapshot(ctx, objects, worldID, defaultShardWorkers); err != nil {
+	if err := readMarker(ctx, objects, worldID); err != nil {
+		return fmt.Errorf("validate existing world: %w", err)
+	}
+	checkpoint, err := newestCheckpoint(ctx, objects, worldID)
+	if err == nil {
+		_, err = loadCheckpoint(ctx, objects, checkpoint, defaultShardWorkers)
+	}
+	if err != nil {
 		return fmt.Errorf("validate existing world: %w", err)
 	}
 	return nil

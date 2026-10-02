@@ -83,7 +83,7 @@ func (d stateDir) list(ctx context.Context, sub string) ([]blob.Attributes, erro
 func (d stateDir) each(ctx context.Context, sub string, visit func(blob.Attributes) error) error {
 	cursor := ""
 	for {
-		page, err := d.objects.List(ctx, d.prefix+sub, cursor)
+		page, err := d.objects.List(ctx, d.prefix+sub, "", cursor)
 		if err != nil {
 			return fmt.Errorf("list %s%s: %w", d.prefix, sub, err)
 		}

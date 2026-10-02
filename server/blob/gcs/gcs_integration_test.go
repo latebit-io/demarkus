@@ -59,7 +59,7 @@ func cleanupObjects(t *testing.T, store blob.Store, prefix string) {
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 	for {
-		result, err := store.List(ctx, prefix, "")
+		result, err := store.List(ctx, prefix, "", "")
 		if err != nil {
 			if ctx.Err() != nil {
 				t.Errorf("cleanup %q exceeded %s: %v", prefix, cleanupTimeout, ctx.Err())

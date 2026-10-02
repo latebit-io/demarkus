@@ -46,7 +46,7 @@ func (store *Store) follow(ctx context.Context, f *follower, interval time.Durat
 
 // Follow is a peer replica's hint that it committed through sequence
 // (backend.Follower): the store polls now unless it already serves it.
-// Every read validates the head itself, so a poll only feeds the hub.
+// A read by path probes the log itself, so a poll mostly feeds the hub.
 func (store *Store) Follow(sequence int64) {
 	f := store.follower
 	if f == nil || store.servedSequence() >= sequence {

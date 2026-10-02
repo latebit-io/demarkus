@@ -177,12 +177,15 @@ func (m *Memory) Delete(ctx context.Context, key string, generation Generation) 
 }
 
 // List returns up to MaxListPage current objects in key order.
-func (m *Memory) List(ctx context.Context, prefix, cursor string) (ListResult, error) {
+func (m *Memory) List(ctx context.Context, prefix, startAfter, cursor string) (ListResult, error) {
 	const op = "list"
 	if err := operationContext(ctx, op, prefix); err != nil {
 		return ListResult{}, err
 	}
 	if err := ValidatePrefix(prefix); err != nil {
+		return ListResult{}, operationError(op, prefix, err)
+	}
+	if err := ValidateStartAfter(startAfter); err != nil {
 		return ListResult{}, operationError(op, prefix, err)
 	}
 	after, err := UnwrapCursor(prefix, cursor)
@@ -207,6 +210,7 @@ func (m *Memory) List(ctx context.Context, prefix, cursor string) (ListResult, e
 		}
 	}
 	sort.Strings(keys)
+	after = max(after, startAfter)
 	start := sort.Search(len(keys), func(index int) bool {
 		return keys[index] > after
 	})

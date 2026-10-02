@@ -9,8 +9,8 @@ import (
 )
 
 // ensureWorld creates or finishes the world's genesis and reports whether it
-// wrote it. Genesis objects without a head are a racing or interrupted replica;
-// any other object without a head is refused as a misconfigured bucket URL.
+// wrote it. Genesis objects without a marker are a racing or interrupted
+// replica; any other object without one is refused as a misconfigured bucket URL.
 func ensureWorld(ctx context.Context, objects blob.Store, worldID string) (bool, error) {
 	if ctx == nil {
 		return false, fmt.Errorf("ensure world: %w: context is nil", blob.ErrPrecondition)
@@ -18,12 +18,12 @@ func ensureWorld(ctx context.Context, objects blob.Store, worldID string) (bool,
 	if nilStore(objects) {
 		return false, fmt.Errorf("ensure world: %w: blob store is nil", blob.ErrPrecondition)
 	}
-	_, err := objects.Head(ctx, headObjectKey)
+	_, err := objects.Head(ctx, markerKey)
 	switch {
 	case err == nil:
 		return false, nil
 	case !errors.Is(err, blob.ErrNotFound):
-		return false, fmt.Errorf("ensure world: check head: %w", err)
+		return false, fmt.Errorf("ensure world: check marker: %w", err)
 	}
 	foreign, err := foreignObject(ctx, objects, worldID)
 	if err != nil {
@@ -52,7 +52,7 @@ func foreignObject(ctx context.Context, objects blob.Store, worldID string) (str
 	}
 	cursor := ""
 	for {
-		listed, err := objects.List(ctx, "", cursor)
+		listed, err := objects.List(ctx, "", "", cursor)
 		if err != nil {
 			return "", fmt.Errorf("ensure world: list bucket: %w", err)
 		}

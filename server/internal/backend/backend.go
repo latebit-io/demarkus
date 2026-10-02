@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
@@ -106,8 +107,14 @@ type CatalogReader interface {
 	Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error)
 }
 
-// ReadView pins all read surfaces to one committed backend snapshot. Close is
-// idempotent; every read after it answers ErrViewClosed.
+// SearchFreshness bounds how far a catalog read (Lookup, ListEntries,
+// LookupHash) may trail a write acknowledged on another replica; reads by path
+// and a replica's own writes are exact. ADR 0036.
+const SearchFreshness = time.Second
+
+// ReadView pins all read surfaces to one committed snapshot, chosen at its
+// first read under SearchFreshness. Close is idempotent; every read after it
+// answers ErrViewClosed.
 type ReadView interface {
 	Reader
 	CatalogReader

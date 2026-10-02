@@ -11,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
 func validHash(hash string) bool {
@@ -75,75 +76,131 @@ func validTimestamp(value string) bool {
 	return err == nil
 }
 
-func validateHeadObject(head *headObject) error {
-	if head.Schema != schemaVersion {
-		return fmt.Errorf("schema is %d, want %d", head.Schema, schemaVersion)
+func validateMarker(marker *markerObject) error {
+	if marker.Schema != logSchema {
+		return fmt.Errorf("schema is %d, want %d", marker.Schema, logSchema)
 	}
-	if !validWorldID(head.WorldID) {
-		return fmt.Errorf("invalid world ID %q", head.WorldID)
+	if !validWorldID(marker.WorldID) {
+		return fmt.Errorf("invalid world ID %q", marker.WorldID)
 	}
-	if head.Sequence < 1 {
-		return fmt.Errorf("sequence must be positive")
-	}
-	if head.Receipts == nil {
-		return fmt.Errorf("receipts must be an array")
-	}
-	expectedReceipts := int(min(head.Sequence-1, int64(maximumReceipts)))
-	if len(head.Receipts) != expectedReceipts {
-		return fmt.Errorf("receipt count is %d, want %d at sequence %d", len(head.Receipts), expectedReceipts, head.Sequence)
-	}
-	if err := verifyRef(head.Root, rootKey(head.Root.Hash)); err != nil {
-		return fmt.Errorf("root reference: %w", err)
-	}
-	return validateReceipts(head.Receipts, head.Sequence-int64(len(head.Receipts))+1)
+	return nil
 }
 
-// validateReceipts checks a run of committed receipts starting at first,
-// as the head and a change block hold them.
-func validateReceipts(receipts []operationReceipt, first int64) error {
-	seen := make(map[string]struct{}, len(receipts))
-	for index, receipt := range receipts {
-		expectedSequence := first + int64(index)
-		if !validWorldID(receipt.OperationID) {
-			return fmt.Errorf("receipt %d has invalid operation ID %q", index, receipt.OperationID)
+// validateCheckpoint checks a checkpoint read at the key for sequence.
+func validateCheckpoint(checkpoint *checkpointObject, sequence int64) error {
+	if checkpoint.Schema != logSchema {
+		return fmt.Errorf("schema is %d, want %d", checkpoint.Schema, logSchema)
+	}
+	if !validWorldID(checkpoint.WorldID) {
+		return fmt.Errorf("invalid world ID %q", checkpoint.WorldID)
+	}
+	if checkpoint.Sequence != sequence {
+		return fmt.Errorf("sequence is %d, key names %d", checkpoint.Sequence, sequence)
+	}
+	if err := verifyRef(checkpoint.Root, rootKey(checkpoint.Root.Hash)); err != nil {
+		return fmt.Errorf("root reference: %w", err)
+	}
+	if checkpoint.Tip != "" && !validHash(checkpoint.Tip) {
+		return fmt.Errorf("invalid tip %q", checkpoint.Tip)
+	}
+	return nil
+}
+
+// validateSlot checks a slot read at the key for first; the chain and the
+// world are checked against the snapshot it extends.
+func validateSlot(slot *slotObject, first int64) error {
+	if slot.Schema != logSchema {
+		return fmt.Errorf("schema is %d, want %d", slot.Schema, logSchema)
+	}
+	if !validWorldID(slot.WorldID) {
+		return fmt.Errorf("invalid world ID %q", slot.WorldID)
+	}
+	if slot.First != first || first < 2 {
+		return fmt.Errorf("first sequence is %d, key names %d", slot.First, first)
+	}
+	if !validWorldID(slot.Store) {
+		return fmt.Errorf("invalid store ID %q", slot.Store)
+	}
+	if slot.Prev != "" && !validHash(slot.Prev) {
+		return fmt.Errorf("invalid predecessor hash %q", slot.Prev)
+	}
+	if len(slot.Entries) == 0 || len(slot.Entries) > maxSlotEntries {
+		return fmt.Errorf("entry count %d is outside [1,%d]", len(slot.Entries), maxSlotEntries)
+	}
+	seen := make(map[string]struct{}, len(slot.Entries))
+	for index := range slot.Entries {
+		entry := &slot.Entries[index]
+		if _, exists := seen[entry.OperationID]; exists {
+			return fmt.Errorf("entry %d duplicates operation ID %q", index, entry.OperationID)
 		}
-		if receipt.Sequence != expectedSequence {
-			return fmt.Errorf("receipt %d has sequence %d, want %d", index, receipt.Sequence, expectedSequence)
-		}
-		if receipt.Result != "committed" {
-			return fmt.Errorf("receipt %d has unsupported result %q", index, receipt.Result)
-		}
-		if _, exists := seen[receipt.OperationID]; exists {
-			return fmt.Errorf("receipt %d duplicates operation ID %q", index, receipt.OperationID)
-		}
-		seen[receipt.OperationID] = struct{}{}
-		if err := validateReceiptChange(&receipt); err != nil {
-			return fmt.Errorf("receipt %d: %w", index, err)
+		seen[entry.OperationID] = struct{}{}
+		if err := validateSlotEntry(entry); err != nil {
+			return fmt.Errorf("entry %d: %w", index, err)
 		}
 	}
 	return nil
 }
 
-// validateReceiptChange checks the change a receipt names; a receipt from
-// before change hints names none.
-func validateReceiptChange(receipt *operationReceipt) error {
-	if receipt.Path == "" && receipt.Op == "" && receipt.Agent == "" && receipt.Version == 0 && receipt.Hash == "" {
-		return nil
+func validateSlotEntry(entry *slotEntry) error {
+	if !validWorldID(entry.OperationID) {
+		return fmt.Errorf("invalid operation ID %q", entry.OperationID)
 	}
-	if err := protocol.ValidateRequestPath(receipt.Path); err != nil {
-		return fmt.Errorf("path %q: %w", receipt.Path, err)
+	if err := validateDocumentPath(entry.Path); err != nil {
+		return err
 	}
-	if !protocol.IsKnownOp(receipt.Op) {
-		return fmt.Errorf("unknown op %q", receipt.Op)
+	if !protocol.IsKnownOp(entry.Op) {
+		return fmt.Errorf("unknown op %q", entry.Op)
 	}
-	if !protocol.IsValidMetaValue(receipt.Agent) {
+	if !protocol.IsValidMetaValue(entry.Agent) {
 		return errors.New("agent is not a valid metadata value")
 	}
-	if receipt.Version < 1 {
-		return fmt.Errorf("version %d is not positive", receipt.Version)
+	if entry.Current < 1 || entry.Current > storefmt.MaxVersionNumber {
+		return fmt.Errorf("current version is outside [1,%d]", storefmt.MaxVersionNumber)
 	}
-	if !validBodyHash(receipt.Hash) {
-		return fmt.Errorf("invalid body hash %q", receipt.Hash)
+	if entry.First < 1 || entry.First > entry.Current {
+		return fmt.Errorf("first retained version %d is outside [1,%d]", entry.First, entry.Current)
+	}
+	if !validBodyHash(entry.BodyHash) {
+		return fmt.Errorf("invalid body hash %q", entry.BodyHash)
+	}
+	if _, err := parseTimestamp(entry.Modified); err != nil {
+		return fmt.Errorf("modified: %w", err)
+	}
+	if entry.Version == nil {
+		// An archive transition: the op names its direction, as a WATCH event does.
+		if entry.Catalog != nil {
+			return errors.New("an archive transition carries no catalog record")
+		}
+		if entry.Op != changefeed.ArchiveOp(entry.Archived) {
+			return fmt.Errorf("op %q does not match archived %t", entry.Op, entry.Archived)
+		}
+		return nil
+	}
+	if entry.Op != protocol.OpPublish && entry.Op != protocol.OpAppend {
+		return fmt.Errorf("a write has op %q", entry.Op)
+	}
+	if entry.Archived {
+		return errors.New("a write leaves the document archived")
+	}
+	if entry.Catalog == nil {
+		return errors.New("a write carries no catalog record")
+	}
+	if err := validateCatalogRecord(entry.Catalog, entry.Path, entry.Modified); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	version := entry.Version
+	if version.Version != entry.Current || version.BodyHash != entry.BodyHash || version.Modified != entry.Modified {
+		return errors.New("version record does not match the entry")
+	}
+	if err := verifyRef(version.Blob, blobKey(version.Blob.Hash)); err != nil {
+		return fmt.Errorf("blob reference: %w", err)
+	}
+	return nil
+}
+
+func validateDocumentPath(path string) error {
+	if path == "/" || protocol.ValidateRequestPath(path) != nil || storefmt.ContainsDotDot(path) || storefmt.CanonicalPath(path) != path {
+		return fmt.Errorf("path %q is not a canonical document path", path)
 	}
 	return nil
 }
@@ -156,7 +213,7 @@ func validateRootObject(root *rootObject, expectedWorldID string) error {
 		return fmt.Errorf("invalid world ID %q", root.WorldID)
 	}
 	if expectedWorldID != "" && root.WorldID != expectedWorldID {
-		return fmt.Errorf("world ID %q does not match head world %q", root.WorldID, expectedWorldID)
+		return fmt.Errorf("world ID %q does not match world %q", root.WorldID, expectedWorldID)
 	}
 	if root.DocumentCount < 0 || root.DocumentCount > maximumDocuments {
 		return fmt.Errorf("document count %d is outside [0,%d]", root.DocumentCount, maximumDocuments)
@@ -205,8 +262,8 @@ func validateShardObject(shard *shardObject, expectedShard string) error {
 }
 
 func validateShardEntry(entry *shardEntry, shardIndex int) error {
-	if entry.Path == "/" || protocol.ValidateRequestPath(entry.Path) != nil || storefmt.ContainsDotDot(entry.Path) || storefmt.CanonicalPath(entry.Path) != entry.Path {
-		return fmt.Errorf("path %q is not a canonical document path", entry.Path)
+	if err := validateDocumentPath(entry.Path); err != nil {
+		return err
 	}
 	expectedPathHash := pathHash(entry.Path)
 	if entry.PathHash != expectedPathHash {

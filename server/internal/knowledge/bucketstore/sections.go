@@ -4,59 +4,52 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
-// sectionSources are the bodies an index pass need not read from the bucket.
-type sectionSources struct {
-	previous *snapshot
-	fresh    map[string][]byte
-}
-
-// indexSections fills the snapshot's section index: unchanged bodies carry
-// over from previous by hash, fresh bodies index directly, the rest are read
+// indexSections fills the section index of every live path in reindex on a
+// snapshot not yet published: fresh bodies index directly, the rest are read
 // in parallel. A body that fails to load is logged and skipped (ADR 0012).
-func (store *Store) indexSections(ctx context.Context, loaded *snapshot, sources sectionSources, workers int) error {
-	var pending []string
-	for path, entry := range loaded.Paths {
-		if entry.Archived {
+func (store *Store) indexSections(ctx context.Context, next *snapshot, reindex map[string]struct{}, fresh map[string][]byte) error {
+	var pending []*pathState
+	var mu sync.Mutex
+	indexed := make(map[string]*catalog.DocSections, len(reindex))
+	for path := range reindex {
+		state := next.path(path)
+		if state == nil || state.Archived {
 			continue
 		}
-		if body, ok := sources.fresh[path]; ok {
-			loaded.Catalog.SetSections(path, catalog.IndexSections(body))
+		if body, ok := fresh[path]; ok {
+			indexed[path] = catalog.IndexSections(body)
 			continue
 		}
-		if doc := carriedSections(sources.previous, path, entry.BodyHash); doc != nil {
-			loaded.Catalog.SetSections(path, doc)
-			continue
-		}
-		pending = append(pending, path)
+		pending = append(pending, state)
 	}
-	return runParallel(ctx, workers, pending, func(ctx context.Context, path string) error {
-		view := &readView{objects: store.objects, snapshot: loaded}
-		document, err := view.get(ctx, path, 0)
+	err := runParallel(ctx, store.shardWorkers, pending, func(ctx context.Context, state *pathState) error {
+		view := &readView{objects: store.objects, snapshot: next}
+		document, err := view.get(ctx, state.Path, 0)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return fmt.Errorf("index sections %s: %w", path, err)
+				return fmt.Errorf("index sections %s: %w", state.Path, err)
 			}
-			store.logger.Warn("section index skipped document", "path", path, "error", err)
+			store.logger.Warn("section index skipped document", "path", state.Path, "error", err)
 			return nil
 		}
-		loaded.Catalog.SetSections(path, catalog.IndexSections(document.Content))
+		sections := catalog.IndexSections(document.Content)
+		mu.Lock()
+		indexed[state.Path] = sections
+		mu.Unlock()
 		return nil
 	})
-}
-
-// carriedSections returns the previous snapshot's index for path when the
-// current body is the same bytes, else nil.
-func carriedSections(previous *snapshot, path, bodyHash string) *catalog.DocSections {
-	if previous == nil {
-		return nil
+	if err != nil {
+		return err
 	}
-	entry, ok := previous.Paths[path]
-	if !ok || entry.Archived || entry.BodyHash != bodyHash {
-		return nil
+	for path, sections := range indexed {
+		state := *next.path(path)
+		state.Sections = sections
+		next.Paths.ReplaceOrInsert(&state)
 	}
-	return previous.Catalog.Sections(path)
+	return nil
 }

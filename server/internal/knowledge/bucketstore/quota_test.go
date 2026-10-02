@@ -22,7 +22,6 @@ func newQuotaStore(t *testing.T, maxDocuments int) *Store {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	store.commitInterval = 0
 	return store
 }
 
