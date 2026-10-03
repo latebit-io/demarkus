@@ -48,7 +48,6 @@ func TestRejectionConformance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
-		store.commitInterval = 0
 		return storetest.LookupBackend{Store: store}
 	}
 	storetest.RunRejectionConformance(t, storetest.RejectionFactories{
@@ -93,14 +92,13 @@ func newWritableStore(t testing.TB) (*Store, *blob.Memory) {
 	if err != nil {
 		t.Fatalf("new memory: %v", err)
 	}
-	if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+	if err := initialize(context.Background(), objects, testWorldID); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
 	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	store.commitInterval = 0
 	return store, objects
 }
 
@@ -110,17 +108,17 @@ func tamperBucketVersion(t testing.TB, documentStore handler.DocumentStore, path
 	if !ok {
 		t.Fatalf("tamper store is %T, want *bucketstore.Store", documentStore)
 	}
-	loaded := store.snapshot.Load()
-	entry, exists := loaded.Paths[storefmt.CanonicalPath(path)]
-	if !exists {
+	loaded := store.served.Load().snap
+	entry := loaded.path(storefmt.CanonicalPath(path))
+	if entry == nil {
 		t.Fatalf("tamper path %s is missing", path)
 	}
 	view := &readView{objects: store.objects, snapshot: loaded}
-	history, err := view.loadHistory(context.Background(), &entry)
+	history, err := view.history(context.Background(), entry)
 	if err != nil {
 		t.Fatalf("tamper load history: %v", err)
 	}
-	retained, exists := retainedAt(history.versions, version)
+	retained, exists := retainedAt(history, version)
 	if !exists {
 		t.Fatalf("tamper version %s v%d is missing", path, version)
 	}
@@ -139,7 +137,7 @@ func TestRandomOperationID(t *testing.T) {
 		if err != nil {
 			t.Fatalf("random operation ID: %v", err)
 		}
-		if !validWorldID(operationID) || operationID[14] != '4' {
+		if !validUUID(operationID) || operationID[14] != '4' {
 			t.Errorf("operation ID %q is not RFC UUIDv4", operationID)
 		}
 	}

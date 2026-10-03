@@ -8,7 +8,6 @@ import (
 	pathpkg "path"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,51 +22,50 @@ import (
 
 func TestInitializeGenesis(t *testing.T) {
 	objects := newTestMemory(t)
-	if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+	if err := initialize(context.Background(), objects, testWorldID); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
 
 	t.Run("object graph", func(t *testing.T) {
-		listed, err := objects.List(context.Background(), "", "")
+		listed, err := objects.List(context.Background(), "", "", "")
 		if err != nil {
 			t.Fatalf("list objects: %v", err)
 		}
-		if len(listed.Objects) != shardCount+2 || listed.NextCursor != "" {
-			t.Fatalf("object count = %d cursor %q, want %d and empty", len(listed.Objects), listed.NextCursor, shardCount+2)
+		if len(listed.Objects) != 4 || listed.NextCursor != "" {
+			t.Fatalf("object count = %d cursor %q, want 4 and empty", len(listed.Objects), listed.NextCursor)
 		}
-		headValue := getObject(t, objects, headObjectKey)
-		var head headObject
-		decodeObject(t, headValue.Data, &head)
-		if head.Schema != schemaVersion || head.WorldID != testWorldID || head.Sequence != 1 || len(head.Receipts) != 0 || head.Receipts == nil {
-			t.Fatalf("head = %+v", head)
+		var marker markerObject
+		decodeObject(t, getObject(t, objects, markerKey).Data, &marker)
+		if marker != (markerObject{Schema: logSchema, WorldID: testWorldID}) {
+			t.Fatalf("marker = %+v", marker)
 		}
-		if !bytes.Contains(headValue.Data, []byte(`"receipts":[]`)) {
-			t.Errorf("head does not encode empty receipts as []: %s", headValue.Data)
+		var checkpoint checkpointObject
+		decodeObject(t, getObject(t, objects, checkpointKey(1)).Data, &checkpoint)
+		if checkpoint.Schema != logSchema || checkpoint.WorldID != testWorldID || checkpoint.Sequence != 1 || checkpoint.Tip != "" {
+			t.Fatalf("checkpoint zero = %+v", checkpoint)
 		}
 
-		rootValue := getObject(t, objects, head.Root.Key)
-		if hashHex(rootValue.Data) != head.Root.Hash || head.Root.Key != rootKey(head.Root.Hash) {
-			t.Fatalf("root identity does not match head: %+v", head.Root)
+		rootValue := getObject(t, objects, checkpoint.Root.Key)
+		if hashHex(rootValue.Data) != checkpoint.Root.Hash || checkpoint.Root.Key != rootKey(checkpoint.Root.Hash) {
+			t.Fatalf("root identity does not match checkpoint zero: %+v", checkpoint.Root)
 		}
-		var root rootObject
+		var root foldedRoot
 		decodeObject(t, rootValue.Data, &root)
-		if root.DocumentCount != 0 || len(root.Shards) != shardCount || root.Shards == nil {
-			t.Fatalf("root count=%d shards=%d nil=%v", root.DocumentCount, len(root.Shards), root.Shards == nil)
+		if root.Schema != foldedSchema || root.DocumentCount != 0 || root.ShardBits != 0 || len(root.Shards) != 1 {
+			t.Fatalf("root = %+v, want one folded shard and no documents", root)
 		}
-		for index, ref := range root.Shards {
-			wantShard := fmt.Sprintf("%02x", index)
-			if ref.Shard != wantShard || ref.Key != shardKey(wantShard, ref.Hash) {
-				t.Fatalf("shard ref %d = %+v", index, ref)
-			}
-			value := getObject(t, objects, ref.Key)
-			if hashHex(value.Data) != ref.Hash {
-				t.Fatalf("shard %s hash mismatch", wantShard)
-			}
-			var shard shardObject
-			decodeObject(t, value.Data, &shard)
-			if shard.Entries == nil || len(shard.Entries) != 0 || !bytes.Contains(value.Data, []byte(`"entries":[]`)) {
-				t.Fatalf("shard %s entries = %#v bytes=%s", wantShard, shard.Entries, value.Data)
-			}
+		ref := root.Shards[0]
+		if ref.Shard != "0" || ref.Key != shardKey("0", ref.Hash) {
+			t.Fatalf("shard ref = %+v", ref)
+		}
+		value := getObject(t, objects, ref.Key)
+		if hashHex(value.Data) != ref.Hash {
+			t.Fatal("shard hash mismatch")
+		}
+		var shard foldedShard
+		decodeObject(t, value.Data, &shard)
+		if shard.Entries == nil || len(shard.Entries) != 0 || !bytes.Contains(value.Data, []byte(`"entries":[]`)) {
+			t.Fatalf("shard entries = %#v bytes=%s", shard.Entries, value.Data)
 		}
 	})
 
@@ -79,30 +77,29 @@ func TestInitializeGenesis(t *testing.T) {
 		if store.requestTimeout != defaultRequestTimeout || store.shardWorkers != defaultShardWorkers {
 			t.Errorf("defaults timeout=%v workers=%d", store.requestTimeout, store.shardWorkers)
 		}
-		loaded := store.snapshot.Load()
-		if loaded == nil || len(loaded.Paths) != 0 || len(loaded.BodyHashes) != 0 || loaded.Catalog.Len() != 0 {
+		loaded := store.served.Load().snap
+		if loaded == nil || loaded.Sequence != 1 || loaded.Paths.Len() != 0 || loaded.Hashes.Len() != 0 || loaded.Children.Len() != 0 {
 			t.Fatalf("empty snapshot = %+v", loaded)
 		}
-		root, exists := loaded.Directories["/"]
-		if !exists || root.Children == nil || len(root.Children) != 0 {
-			t.Errorf("root directory = %+v, exists %v", root, exists)
+		if !loaded.isDirectory("/") {
+			t.Error("an empty world has no root directory")
 		}
 	})
 
 	t.Run("idempotent", func(t *testing.T) {
-		before := getObject(t, objects, headObjectKey).Attributes.Generation
-		if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+		before := getObject(t, objects, markerKey).Attributes.Generation
+		if err := initialize(context.Background(), objects, testWorldID); err != nil {
 			t.Fatalf("reinitialize: %v", err)
 		}
-		after := getObject(t, objects, headObjectKey).Attributes.Generation
+		after := getObject(t, objects, markerKey).Attributes.Generation
 		if after != before {
-			t.Errorf("head generation changed from %d to %d", before, after)
+			t.Errorf("marker generation changed from %d to %d", before, after)
 		}
-		listed, err := objects.List(context.Background(), "", "")
+		listed, err := objects.List(context.Background(), "", "", "")
 		if err != nil {
 			t.Fatalf("list after reinitialize: %v", err)
 		}
-		if len(listed.Objects) != shardCount+2 {
+		if len(listed.Objects) != 4 {
 			t.Errorf("object count after reinitialize = %d", len(listed.Objects))
 		}
 	})
@@ -127,14 +124,13 @@ func TestSeparateBucketsAreIndependent(t *testing.T) {
 	const otherWorldID = "7d4f3f8a-87f0-4bf5-932a-e4d1db28d235"
 	open := func(worldID string) *Store {
 		objects := newTestMemory(t)
-		if err := Initialize(context.Background(), objects, worldID); err != nil {
+		if err := initialize(context.Background(), objects, worldID); err != nil {
 			t.Fatalf("initialize %s: %v", worldID, err)
 		}
 		store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: worldID})
 		if err != nil {
 			t.Fatalf("open %s: %v", worldID, err)
 		}
-		store.commitInterval = 0
 		return store
 	}
 	left := open(testWorldID)
@@ -172,7 +168,7 @@ func TestInitializeReconciliation(t *testing.T) {
 	t.Run("ambiguous creates", func(t *testing.T) {
 		memory := newTestMemory(t)
 		objects := &ambiguousCreateStore{Store: memory}
-		if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+		if err := initialize(context.Background(), objects, testWorldID); err != nil {
 			t.Fatalf("initialize with ambiguous creates: %v", err)
 		}
 		if _, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID}); err != nil {
@@ -183,7 +179,7 @@ func TestInitializeReconciliation(t *testing.T) {
 	t.Run("ambiguous before immutable commit", func(t *testing.T) {
 		memory := newTestMemory(t)
 		objects := &failFirstCreateStore{Store: memory, category: blob.ErrAmbiguous}
-		if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+		if err := initialize(context.Background(), objects, testWorldID); err != nil {
 			t.Fatalf("initialize after ambiguous create: %v", err)
 		}
 	})
@@ -191,16 +187,16 @@ func TestInitializeReconciliation(t *testing.T) {
 	t.Run("throttled before immutable commit", func(t *testing.T) {
 		memory := newTestMemory(t)
 		objects := &failFirstCreateStore{Store: memory, category: blob.ErrThrottled}
-		if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+		if err := initialize(context.Background(), objects, testWorldID); err != nil {
 			t.Fatalf("initialize after throttled create: %v", err)
 		}
 	})
 
-	t.Run("ambiguous before head commit", func(t *testing.T) {
+	t.Run("ambiguous before the marker create", func(t *testing.T) {
 		memory := newTestMemory(t)
-		objects := &failHeadCreateStore{Store: memory}
-		if err := Initialize(context.Background(), objects, testWorldID); err != nil {
-			t.Fatalf("initialize after ambiguous head create: %v", err)
+		objects := &failFirstCreateStore{Store: memory, prefix: markerKey, category: blob.ErrAmbiguous}
+		if err := initialize(context.Background(), objects, testWorldID); err != nil {
+			t.Fatalf("initialize after an ambiguous marker create: %v", err)
 		}
 	})
 
@@ -214,7 +210,7 @@ func TestInitializeReconciliation(t *testing.T) {
 		if _, err := memory.Create(context.Background(), first.Key, first.Data); err != nil {
 			t.Fatalf("seed immutable object: %v", err)
 		}
-		if err := Initialize(context.Background(), memory, testWorldID); err != nil {
+		if err := initialize(context.Background(), memory, testWorldID); err != nil {
 			t.Fatalf("initialize around immutable object: %v", err)
 		}
 	})
@@ -229,7 +225,7 @@ func TestInitializeReconciliation(t *testing.T) {
 		if _, err := memory.Create(context.Background(), first.Key, []byte("corrupt")); err != nil {
 			t.Fatalf("seed corrupt immutable object: %v", err)
 		}
-		err = Initialize(context.Background(), memory, testWorldID)
+		err = initialize(context.Background(), memory, testWorldID)
 		if !errors.Is(err, blob.ErrIntegrity) {
 			t.Fatalf("initialize error = %v, want integrity", err)
 		}
@@ -237,10 +233,24 @@ func TestInitializeReconciliation(t *testing.T) {
 }
 
 func TestOpenValidation(t *testing.T) {
-	t.Run("missing head", func(t *testing.T) {
-		store, err := Open(context.Background(), newTestMemory(t), Options{Logger: discardLogger, WorldID: testWorldID})
+	t.Run("missing marker", func(t *testing.T) {
+		store, err := Open(context.Background(), newTestMemory(t), Options{Logger: discardLogger, WorldID: testWorldID, ReadOnly: true})
 		if store != nil || !errors.Is(err, blob.ErrNotFound) || errors.Is(err, blob.ErrIntegrity) {
 			t.Fatalf("Open() = (%v, %v), want nil clear not-found", store, err)
+		}
+	})
+
+	t.Run("empty bucket gets genesis", func(t *testing.T) {
+		objects := newTestMemory(t)
+		store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
+		if err != nil {
+			t.Fatalf("Open() error = %v, want a new world", err)
+		}
+		if got := store.servedSequence(); got != 1 {
+			t.Errorf("served sequence = %d, want genesis at 1", got)
+		}
+		if _, err := objects.Head(context.Background(), markerKey); err != nil {
+			t.Errorf("genesis marker: %v", err)
 		}
 	})
 
@@ -250,8 +260,8 @@ func TestOpenValidation(t *testing.T) {
 		if store != nil || !errors.Is(err, blob.ErrPrecondition) {
 			t.Fatalf("Open() = (%v, %v), want world precondition", store, err)
 		}
-		if err := Initialize(context.Background(), objects, otherWorldID); !errors.Is(err, blob.ErrPrecondition) {
-			t.Fatalf("Initialize(other world) error = %v, want precondition", err)
+		if err := initialize(context.Background(), objects, otherWorldID); !errors.Is(err, blob.ErrPrecondition) {
+			t.Fatalf("initialize(other world) error = %v, want precondition", err)
 		}
 	})
 
@@ -295,8 +305,8 @@ func TestOpenValidation(t *testing.T) {
 	t.Run("cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if err := Initialize(ctx, newTestMemory(t), testWorldID); !errors.Is(err, context.Canceled) {
-			t.Errorf("Initialize() error = %v, want canceled", err)
+		if err := initialize(ctx, newTestMemory(t), testWorldID); !errors.Is(err, context.Canceled) {
+			t.Errorf("initialize() error = %v, want canceled", err)
 		}
 		store, err := Open(ctx, initializedMemory(t), Options{Logger: discardLogger, WorldID: testWorldID})
 		if store != nil || !errors.Is(err, context.Canceled) {
@@ -305,7 +315,7 @@ func TestOpenValidation(t *testing.T) {
 	})
 }
 
-func TestOpenRejectsMalformedHead(t *testing.T) {
+func TestOpenRejectsMalformedMarker(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func([]byte) []byte
@@ -316,26 +326,64 @@ func TestOpenRejectsMalformedHead(t *testing.T) {
 		}},
 		{name: "trailing newline", mutate: func(data []byte) []byte { return append(bytes.Clone(data), '\n') }},
 		{name: "trailing value", mutate: func(data []byte) []byte { return append(bytes.Clone(data), []byte(`{}`)...) }},
-		{name: "null receipts", mutate: func(data []byte) []byte {
-			return []byte(strings.Replace(string(data), `"receipts":[]`, `"receipts":null`, 1))
-		}},
-		{name: "invalid receipt", mutate: func(data []byte) []byte {
-			var head headObject
-			decodeObject(t, data, &head)
-			head.Sequence = 2
-			head.Receipts = []operationReceipt{{OperationID: otherWorldID, Sequence: 2, Result: "failed"}}
-			encoded, err := marshalImmutable(head)
-			if err != nil {
-				t.Fatalf("marshal invalid receipt head: %v", err)
-			}
-			return encoded
+		{name: "newer schema", mutate: func([]byte) []byte {
+			return []byte(`{"schema":3,"world_id":"` + testWorldID + `"}`)
 		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			objects := initializedMemory(t)
-			head := getObject(t, objects, headObjectKey)
-			replaceObject(t, objects, headObjectKey, head.Attributes.Generation, test.mutate(head.Data))
+			head := getObject(t, objects, markerKey)
+			replaceObject(t, objects, markerKey, head.Attributes.Generation, test.mutate(head.Data))
+			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
+			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
+				t.Fatalf("Open() = (%v, %v), want nil integrity", store, err)
+			}
+		})
+	}
+}
+
+// Every break in the log fails the open: a gap, a slot that is not
+// canonical, one that names another predecessor, one from another world.
+func TestOpenRejectsBrokenLog(t *testing.T) {
+	tests := []struct {
+		name   string
+		damage func(t *testing.T, objects *blob.Memory)
+	}{
+		{name: "gap", damage: func(t *testing.T, objects *blob.Memory) { deleteObject(t, objects, slotKey(3)) }},
+		{name: "corrupt bytes", damage: func(t *testing.T, objects *blob.Memory) {
+			slot := getObject(t, objects, slotKey(3))
+			replaceObject(t, objects, slotKey(3), slot.Attributes.Generation, append(bytes.Clone(slot.Data), ' '))
+		}},
+		{name: "broken chain", damage: func(t *testing.T, objects *blob.Memory) {
+			rewriteSlot(t, objects, 3, func(slot *slotObject) { slot.Prev = strings.Repeat("0", 64) })
+		}},
+		{name: "other world", damage: func(t *testing.T, objects *blob.Memory) {
+			rewriteSlot(t, objects, 3, func(slot *slotObject) { slot.WorldID = otherWorldID })
+		}},
+		{name: "version skips", damage: func(t *testing.T, objects *blob.Memory) {
+			rewriteSlot(t, objects, 3, func(slot *slotObject) {
+				slot.Entries[0].Current, slot.Entries[0].Version.Version = 3, 3
+			})
+		}},
+		{name: "retention moves back", damage: func(t *testing.T, objects *blob.Memory) {
+			rewriteSlot(t, objects, 5, func(slot *slotObject) { slot.Entries[0].First = 1 })
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			objects := initializedMemory(t)
+			writer := (&bucketSite{objects: objects}).open(t, 0)
+			for version := range 4 {
+				var meta map[string]string
+				if version == 2 {
+					meta = map[string]string{"retention": "2"}
+				}
+				if _, err := writer.WriteVersion("/docs/a.md", version, fmt.Appendf(nil, "# v%d\n", version+1), meta); err != nil {
+					t.Fatal(err)
+				}
+			}
+			test.damage(t, objects)
 			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
 			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
 				t.Fatalf("Open() = (%v, %v), want nil integrity", store, err)
@@ -350,17 +398,24 @@ func TestOpenRejectsMissingOrCorruptReferences(t *testing.T) {
 		mutate func(*testing.T, *blob.Memory)
 	}{
 		{name: "missing root", mutate: func(t *testing.T, objects *blob.Memory) {
-			head, _ := readHeadAndRoot(t, objects)
-			deleteObject(t, objects, head.Root.Key)
+			checkpoint, _ := readFoldedRoot(t, objects)
+			deleteObject(t, objects, checkpoint.Root.Key)
 		}},
 		{name: "missing shard", mutate: func(t *testing.T, objects *blob.Memory) {
-			_, root := readHeadAndRoot(t, objects)
-			deleteObject(t, objects, root.Shards[37].Key)
+			_, root := readFoldedRoot(t, objects)
+			deleteObject(t, objects, root.Shards[0].Key)
 		}},
 		{name: "corrupt root bytes", mutate: func(t *testing.T, objects *blob.Memory) {
-			head, _ := readHeadAndRoot(t, objects)
-			root := getObject(t, objects, head.Root.Key)
-			replaceObject(t, objects, head.Root.Key, root.Attributes.Generation, append(bytes.Clone(root.Data), ' '))
+			checkpoint, _ := readFoldedRoot(t, objects)
+			root := getObject(t, objects, checkpoint.Root.Key)
+			replaceObject(t, objects, checkpoint.Root.Key, root.Attributes.Generation, append(bytes.Clone(root.Data), ' '))
+		}},
+		{name: "no checkpoint", mutate: func(t *testing.T, objects *blob.Memory) {
+			deleteObject(t, objects, checkpointKey(1))
+		}},
+		{name: "corrupt checkpoint", mutate: func(t *testing.T, objects *blob.Memory) {
+			checkpoint := getObject(t, objects, checkpointKey(1))
+			replaceObject(t, objects, checkpointKey(1), checkpoint.Attributes.Generation, append(bytes.Clone(checkpoint.Data), ' '))
 		}},
 	}
 	for _, test := range tests {
@@ -378,90 +433,24 @@ func TestOpenRejectsMissingOrCorruptReferences(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsRootInvariants(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*rootObject)
-	}{
-		{name: "null shards", mutate: func(root *rootObject) { root.Shards = nil }},
-		{name: "wrong shard order", mutate: func(root *rootObject) { root.Shards[0], root.Shards[1] = root.Shards[1], root.Shards[0] }},
-		{name: "too many documents", mutate: func(root *rootObject) { root.DocumentCount = maximumDocuments + 1 }},
-		{name: "wrong world", mutate: func(root *rootObject) { root.WorldID = otherWorldID }},
-		{name: "document count mismatch", mutate: func(root *rootObject) { root.DocumentCount = 1 }},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			objects := initializedMemory(t)
-			_, root := readHeadAndRoot(t, objects)
-			test.mutate(&root)
-			installRoot(t, objects, root)
-			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
-			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
-				t.Fatalf("Open() = (%v, %v), want nil integrity", store, err)
-			}
-		})
-	}
-}
-
-func TestOpenRejectsShardInvariants(t *testing.T) {
-	shardIndex, paths := findPathsInShard(t, 2)
-	wrongShard := fmt.Sprintf("%02x", (shardIndex+1)%shardCount)
-	first := testEntry(paths[0], false, "")
-	second := testEntry(paths[1], false, "")
-	if first.Path > second.Path {
-		first, second = second, first
-	}
-	tests := []struct {
-		name    string
-		shard   shardObject
-		count   int
-		entries []shardEntry
-	}{
-		{name: "null entries", shard: shardObject{Schema: schemaVersion, Shard: fmt.Sprintf("%02x", shardIndex)}},
-		{name: "wrong label", shard: shardObject{Schema: schemaVersion, Shard: wrongShard, Entries: make([]shardEntry, 0)}},
-		{name: "unsorted entries", count: 2, shard: shardObject{
-			Schema: schemaVersion, Shard: fmt.Sprintf("%02x", shardIndex), Entries: []shardEntry{second, first},
-		}},
-		{name: "bad path hash", count: 1, entries: []shardEntry{first}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			objects := initializedMemory(t)
-			shard := test.shard
-			if test.entries != nil {
-				shard = shardObject{
-					Schema:  schemaVersion,
-					Shard:   fmt.Sprintf("%02x", shardIndex),
-					Entries: slices.Clone(test.entries),
-				}
-				shard.Entries[0].PathHash = strings.Repeat("0", 64)
-			}
-			installShard(t, objects, shardIndex, shard, test.count)
-			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
-			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
-				t.Fatalf("Open() = (%v, %v), want nil integrity", store, err)
-			}
-		})
-	}
-
-	t.Run("document ancestor", func(t *testing.T) {
-		objects := initializedMemory(t)
-		installEntries(t, objects, []shardEntry{
-			testEntry("/a.md", false, ""),
-			testEntry("/a.md/b.md", false, ""),
-		})
-		store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
-		if store != nil || !errors.Is(err, blob.ErrIntegrity) {
-			t.Fatalf("Open() = (%v, %v), want topology integrity", store, err)
-		}
+// A shard entry under another document breaks topology: the open fails.
+func TestOpenRejectsADocumentUnderADocument(t *testing.T) {
+	objects := initializedMemory(t)
+	installEntries(t, objects, []foldedEntry{
+		testEntry("/a.md", false, ""),
+		testEntry("/a.md/b.md", false, ""),
 	})
+	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
+	if store != nil || !errors.Is(err, blob.ErrIntegrity) {
+		t.Fatalf("Open() = (%v, %v), want topology integrity", store, err)
+	}
 }
 
 func TestDerivedSnapshotLiveAndArchived(t *testing.T) {
 	objects := initializedMemory(t)
 	sharedHash := storefmt.ContentHash([]byte("shared"))
 	archivedHash := storefmt.ContentHash([]byte("archived"))
-	installEntries(t, objects, []shardEntry{
+	installEntries(t, objects, []foldedEntry{
 		testEntry("/docs/z.md", false, sharedHash),
 		testEntry("/docs/a.md", false, sharedHash),
 		testEntry("/docs/archived.md", true, sharedHash),
@@ -471,28 +460,25 @@ func TestDerivedSnapshotLiveAndArchived(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	loaded := store.snapshot.Load()
+	loaded := store.served.Load().snap
 
 	t.Run("paths and hashes", func(t *testing.T) {
-		if len(loaded.Paths) != 4 {
-			t.Fatalf("paths = %d, want 4", len(loaded.Paths))
+		if loaded.Paths.Len() != 4 {
+			t.Fatalf("paths = %d, want 4", loaded.Paths.Len())
 		}
-		if !loaded.Paths["/docs/archived.md"].Archived || !loaded.Paths["/archive/only.md"].Archived {
-			t.Errorf("archived paths were not retained: %+v", loaded.Paths)
+		if !loaded.path("/docs/archived.md").Archived || !loaded.path("/archive/only.md").Archived {
+			t.Error("archived paths were not retained")
 		}
-		if got := loaded.BodyHashes[sharedHash]; got != "/docs/a.md" {
+		if got, _ := loaded.lookupHash(sharedHash); got != "/docs/a.md" {
 			t.Errorf("shared body path = %q, want lexicographically smallest live path", got)
 		}
-		if _, exists := loaded.BodyHashes[archivedHash]; exists {
+		if _, exists := loaded.lookupHash(archivedHash); exists {
 			t.Errorf("archived-only body hash %q is live", archivedHash)
 		}
 	})
 
 	t.Run("catalog", func(t *testing.T) {
-		if loaded.Catalog.Len() != 2 {
-			t.Fatalf("catalog length = %d, want 2", loaded.Catalog.Len())
-		}
-		results, err := loaded.Catalog.Lookup("*", catalog.Options{})
+		results, err := catalog.Search(loaded, "*", catalog.Options{})
 		if err != nil {
 			t.Fatalf("lookup: %v", err)
 		}
@@ -507,27 +493,31 @@ func TestDerivedSnapshotLiveAndArchived(t *testing.T) {
 	})
 
 	t.Run("directory topology", func(t *testing.T) {
-		root := loaded.Directories["/"]
-		archive, exists := directoryChildNamed(root, "archive")
-		if !exists || !archive.IsDir || archive.Live {
-			t.Errorf("archive root child = %+v, exists %v", archive, exists)
+		archive := directoryChildNamed(loaded, "/", "archive")
+		if archive == nil || !archive.IsDir || archive.Live != 0 {
+			t.Errorf("archive root child = %+v", archive)
 		}
-		docs, exists := directoryChildNamed(root, "docs")
-		if !exists || !docs.IsDir || !docs.Live {
-			t.Errorf("docs root child = %+v, exists %v", docs, exists)
+		docs := directoryChildNamed(loaded, "/", "docs")
+		if docs == nil || !docs.IsDir || docs.Live != 2 || docs.Docs != 3 {
+			t.Errorf("docs root child = %+v", docs)
 		}
-		only, exists := directoryChildNamed(loaded.Directories["/archive"], "only.md")
-		if !exists || only.IsDir || only.Live {
-			t.Errorf("archived document child = %+v, exists %v", only, exists)
+		only := directoryChildNamed(loaded, "/archive", "only.md")
+		if only == nil || only.IsDir || only.Live != 0 || only.Visible != 1 {
+			t.Errorf("archived document child = %+v", only)
 		}
 	})
 }
 
+func directoryChildNamed(loaded *snapshot, parent, name string) *dirChild {
+	child, _ := loaded.Children.Get(&dirChild{Parent: parent, Name: name})
+	return child
+}
+
 func TestShardWorkerTimeout(t *testing.T) {
 	objects := initializedMemory(t)
-	blocking := &blockingShardStore{Store: objects}
+	blocking := &blockingGetStore{Store: objects, prefix: objectPrefix + "index/"}
 	store, err := Open(context.Background(), blocking, Options{
-		Logger: discardLogger, WorldID: testWorldID,
+		Logger: discardLogger, WorldID: testWorldID, noHedge: true,
 		RequestTimeout: 100 * time.Millisecond,
 		ShardWorkers:   5,
 	})
@@ -542,51 +532,53 @@ func TestShardWorkerTimeout(t *testing.T) {
 	}
 }
 
-type ambiguousCreateStore struct {
-	blob.Store
-}
-
+// failFirstCreateStore fails the first create under prefix before it lands,
+// with category, or with a plain error when category is nil.
 type failFirstCreateStore struct {
 	blob.Store
-	failed   atomic.Bool
+	prefix   string
 	category error
+	failed   atomic.Bool
 }
 
 func (store *failFirstCreateStore) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
-	if store.failed.CompareAndSwap(false, true) {
+	if strings.HasPrefix(key, store.prefix) && store.failed.CompareAndSwap(false, true) {
+		if store.category == nil {
+			return blob.Attributes{}, errors.New("injected create failure")
+		}
 		return blob.Attributes{}, &blob.OpError{Op: "create", Key: key, Err: store.category}
 	}
 	return store.Store.Create(ctx, key, data)
 }
 
-type failHeadCreateStore struct {
+// ambiguousCreateStore lands creates under prefix but reports them ambiguous:
+// every one, or with once only the first.
+type ambiguousCreateStore struct {
 	blob.Store
-	failed atomic.Bool
-}
-
-func (store *failHeadCreateStore) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
-	if key == headObjectKey && store.failed.CompareAndSwap(false, true) {
-		return blob.Attributes{}, &blob.OpError{Op: "create", Key: key, Err: blob.ErrAmbiguous}
-	}
-	return store.Store.Create(ctx, key, data)
+	prefix string
+	once   bool
+	done   atomic.Bool
 }
 
 func (store *ambiguousCreateStore) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
 	attributes, err := store.Store.Create(ctx, key, data)
-	if err != nil {
+	if err != nil || !strings.HasPrefix(key, store.prefix) || store.once && !store.done.CompareAndSwap(false, true) {
 		return attributes, err
 	}
-	return attributes, &blob.OpError{Op: "create", Key: key, Err: blob.ErrAmbiguous}
+	return blob.Attributes{}, &blob.OpError{Op: "create", Key: key, Err: blob.ErrAmbiguous}
 }
 
-type blockingShardStore struct {
+// blockingGetStore holds every read under prefix until its context ends, and
+// counts how many it held at once.
+type blockingGetStore struct {
 	blob.Store
+	prefix string
 	active atomic.Int64
 	peak   atomic.Int64
 }
 
-func (store *blockingShardStore) Get(ctx context.Context, key string) (blob.Object, error) {
-	if !strings.HasPrefix(key, objectPrefix+"index/") {
+func (store *blockingGetStore) Get(ctx context.Context, key string) (blob.Object, error) {
+	if !strings.HasPrefix(key, store.prefix) {
 		return store.Store.Get(ctx, key)
 	}
 	active := store.active.Add(1)
@@ -613,7 +605,7 @@ func newTestMemory(t *testing.T) *blob.Memory {
 func initializedMemory(t *testing.T) *blob.Memory {
 	t.Helper()
 	objects := newTestMemory(t)
-	if err := Initialize(context.Background(), objects, testWorldID); err != nil {
+	if err := initialize(context.Background(), objects, testWorldID); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
 	return objects
@@ -650,16 +642,21 @@ func deleteObject(t *testing.T, objects blob.Store, key string) {
 	}
 }
 
-func readHeadAndRoot(t *testing.T, objects blob.Store) (headObject, rootObject) {
+// readFoldedRoot reads the world's newest checkpoint and its folded root.
+func readFoldedRoot(t *testing.T, objects blob.Store) (checkpointObject, foldedRoot) {
 	t.Helper()
-	var head headObject
-	decodeObject(t, getObject(t, objects, headObjectKey).Data, &head)
-	var root rootObject
-	decodeObject(t, getObject(t, objects, head.Root.Key).Data, &root)
-	return head, root
+	checkpoint, err := newestCheckpoint(context.Background(), objects, testWorldID)
+	if err != nil {
+		t.Fatalf("newest checkpoint: %v", err)
+	}
+	var root foldedRoot
+	decodeObject(t, getObject(t, objects, checkpoint.Root.Key).Data, &root)
+	return checkpoint, root
 }
 
-func installRoot(t *testing.T, objects blob.Store, root rootObject) {
+// installRoot makes root the world's newest checkpoint, as a compactor writes
+// one; stores opened afterwards load it.
+func installRoot(t *testing.T, objects blob.Store, root any) {
 	t.Helper()
 	model, ref, err := immutableJSON(rootKey, root)
 	if err != nil {
@@ -668,77 +665,53 @@ func installRoot(t *testing.T, objects blob.Store, root rootObject) {
 	if _, err := objects.Create(context.Background(), model.Key, model.Data); err != nil {
 		t.Fatalf("create root %q: %v", model.Key, err)
 	}
-	headValue := getObject(t, objects, headObjectKey)
-	var head headObject
-	decodeObject(t, headValue.Data, &head)
-	head.Sequence++
-	head.Root = ref
-	head.Receipts = append(head.Receipts, operationReceipt{
-		OperationID: fmt.Sprintf("00000000-0000-4000-8000-%012x", head.Sequence),
-		Sequence:    head.Sequence,
-		Result:      "committed",
-	})
-	if len(head.Receipts) > maximumReceipts {
-		head.Receipts = head.Receipts[len(head.Receipts)-maximumReceipts:]
-	}
-	data, err := marshalImmutable(head)
+	previous, err := newestCheckpointSequence(context.Background(), objects, 0)
 	if err != nil {
-		t.Fatalf("marshal head: %v", err)
+		t.Fatalf("newest checkpoint: %v", err)
 	}
-	replaceObject(t, objects, headObjectKey, headValue.Attributes.Generation, data)
+	checkpoint := checkpointObject{Schema: logSchema, WorldID: testWorldID, Sequence: previous + 1, Root: ref}
+	data, err := marshalImmutable(checkpoint)
+	if err != nil {
+		t.Fatalf("marshal checkpoint: %v", err)
+	}
+	if _, err := objects.Create(context.Background(), checkpointKey(checkpoint.Sequence), data); err != nil {
+		t.Fatalf("create checkpoint %d: %v", checkpoint.Sequence, err)
+	}
 }
 
-func installShard(t *testing.T, objects blob.Store, index int, shard shardObject, documentCount int) {
+// installEntries makes a checkpoint holding entries, unchecked, so a test can
+// install one that breaks the format.
+func installEntries(t *testing.T, objects blob.Store, entries []foldedEntry) {
 	t.Helper()
-	_, root := readHeadAndRoot(t, objects)
-	shardID := fmt.Sprintf("%02x", index)
-	model, ref, err := immutableJSON(func(hash string) string { return shardKey(shardID, hash) }, shard)
-	if err != nil {
-		t.Fatalf("build shard: %v", err)
+	bits := shardBitsFor(len(entries))
+	grouped := make([][]foldedEntry, 1<<bits)
+	for position := range entries {
+		index := shardOf(entries[position].PathHash, bits)
+		grouped[index] = append(grouped[index], entries[position])
 	}
-	if _, err := objects.Create(context.Background(), model.Key, model.Data); err != nil {
-		t.Fatalf("create shard %q: %v", model.Key, err)
-	}
-	root.Shards[index] = shardRef{Shard: shardID, objectRef: ref}
-	root.DocumentCount = documentCount
-	installRoot(t, objects, root)
-}
-
-func installEntries(t *testing.T, objects blob.Store, entries []shardEntry) {
-	t.Helper()
-	_, root := readHeadAndRoot(t, objects)
-	grouped := make(map[int][]shardEntry)
-	for entryIndex := range entries {
-		entry := &entries[entryIndex]
-		indexValue, err := strconv.ParseUint(pathHash(entry.Path)[:2], 16, 8)
-		if err != nil {
-			t.Fatalf("parse shard for %q: %v", entry.Path, err)
-		}
-		index := int(indexValue)
-		grouped[index] = append(grouped[index], *entry)
-	}
+	refs := make([]shardRef, len(grouped))
 	for index, shardEntries := range grouped {
-		sort.Slice(shardEntries, func(left, right int) bool {
-			return shardEntries[left].Path < shardEntries[right].Path
-		})
-		shardID := fmt.Sprintf("%02x", index)
-		shard := shardObject{Schema: schemaVersion, Shard: shardID, Entries: shardEntries}
-		model, ref, err := immutableJSON(func(hash string) string { return shardKey(shardID, hash) }, shard)
+		if shardEntries == nil {
+			shardEntries = make([]foldedEntry, 0)
+		}
+		sort.Slice(shardEntries, func(left, right int) bool { return shardEntries[left].Path < shardEntries[right].Path })
+		label := shardLabel(index, bits)
+		shard := foldedShard{Schema: foldedSchema, ShardBits: bits, Shard: label, Entries: shardEntries}
+		model, ref, err := immutableJSON(func(hash string) string { return shardKey(label, hash) }, shard)
 		if err != nil {
-			t.Fatalf("build shard %s: %v", shardID, err)
+			t.Fatalf("build shard %s: %v", label, err)
 		}
 		if _, err := objects.Create(context.Background(), model.Key, model.Data); err != nil {
-			t.Fatalf("create shard %s: %v", shardID, err)
+			t.Fatalf("create shard %s: %v", label, err)
 		}
-		root.Shards[index] = shardRef{Shard: shardID, objectRef: ref}
+		refs[index] = shardRef{Shard: label, objectRef: ref}
 	}
-	root.DocumentCount = len(entries)
-	installRoot(t, objects, root)
+	installRoot(t, objects, foldedRoot{Schema: foldedSchema, WorldID: testWorldID, DocumentCount: len(entries), ShardBits: bits, Shards: refs})
 }
 
-func testEntry(path string, archived bool, bodyHash string) shardEntry {
+// testEntry is a document at version 1 whose history block is never read.
+func testEntry(path string, archived bool, bodyHash string) foldedEntry {
 	pathSum := pathHash(path)
-	manifestSum := hashHex([]byte("manifest:" + path))
 	if bodyHash == "" {
 		bodyHash = storefmt.ContentHash([]byte(path))
 	}
@@ -749,10 +722,10 @@ func testEntry(path string, archived bool, bodyHash string) shardEntry {
 		"title":      title,
 		"type":       "Document",
 	}
-	return shardEntry{
+	return foldedEntry{
 		Path:     path,
 		PathHash: pathSum,
-		Manifest: objectRef{Key: manifestKey(pathSum, manifestSum), Hash: manifestSum},
+		History:  []blockRef{{First: 1, Last: 1, Hash: hashHex([]byte("history:" + path))}},
 		Current:  1,
 		Archived: archived,
 		BodyHash: bodyHash,
@@ -766,32 +739,4 @@ func testEntry(path string, archived bool, bodyHash string) shardEntry {
 			Metadata:   metadata,
 		},
 	}
-}
-
-func findPathsInShard(t *testing.T, count int) (shardIndex int, paths []string) {
-	t.Helper()
-	grouped := make(map[int][]string)
-	for index := range 10_000 {
-		path := fmt.Sprintf("/docs/item-%04d.md", index)
-		shardValue, err := strconv.ParseUint(pathHash(path)[:2], 16, 8)
-		if err != nil {
-			t.Fatalf("parse shard: %v", err)
-		}
-		index := int(shardValue)
-		grouped[index] = append(grouped[index], path)
-		if len(grouped[index]) == count {
-			return index, grouped[index]
-		}
-	}
-	t.Fatalf("no shard with %d paths", count)
-	return 0, nil
-}
-
-func directoryChildNamed(node directoryNode, name string) (directoryChild, bool) {
-	for _, child := range node.Children {
-		if child.Name == name {
-			return child, true
-		}
-	}
-	return directoryChild{}, false
 }

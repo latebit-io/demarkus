@@ -1,8 +1,8 @@
 package bucketstore
 
 import (
+	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
+	"github.com/latebit-io/demarkus/server/internal/handler"
 	"github.com/latebit-io/demarkus/server/internal/storetest"
 )
 
@@ -41,12 +42,12 @@ func (r replica) quiet(t *testing.T) { storetest.Quiet(t, r.sub) }
 
 func (r replica) poll(t *testing.T) {
 	t.Helper()
-	if err := r.store.Poll(context.Background()); err != nil {
+	if err := r.store.poll(context.Background()); err != nil {
 		t.Fatalf("poll: %v", err)
 	}
 }
 
-// Every replica reports a commit under its head sequence with the exact op
+// Every replica reports a commit under its log sequence with the exact op
 // and agent, whether it made the commit, polled it, or opened afterwards;
 // a cursor from one replica resumes on another.
 func TestReplicasShareOneSequence(t *testing.T) {
@@ -107,7 +108,7 @@ func TestReplicasShareOneSequence(t *testing.T) {
 	a.poll(t)
 	a.quiet(t)
 
-	// A replica opened later replays the receipt window, so a watcher that
+	// A replica opened later replays the slots, so a watcher that
 	// moves to it resumes from its cursor with the events it has not seen.
 	c := openReplica(t, objects)
 	c.quiet(t)
@@ -141,6 +142,9 @@ func TestReadRefreshReportsPeerWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := view.Get(ctx, "/docs/one.md", 0); err != nil {
+		t.Fatal(err)
+	}
 	if err := view.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -149,70 +153,34 @@ func TestReadRefreshReportsPeerWrites(t *testing.T) {
 	}
 }
 
-// Commits beyond the receipt window cannot be named, so a replica that
-// missed them tells its watchers to resync from the covered sequence.
-func TestGapBeyondReceiptsResyncs(t *testing.T) {
+// Slots carry every change, so a replica that missed many commits reports
+// each of them in order when it catches up, with no gap to resync over.
+func TestLaggingReplicaReportsEveryCommit(t *testing.T) {
 	objects := initializedMemory(t)
 	ctx := context.Background()
 	a := openReplica(t, objects)
 	b := openReplica(t, objects)
-	for i := range maximumReceipts + 2 {
+	const commits = 40
+	for i := range commits {
 		if _, err := a.store.Publish(ctx, backend.WriteRequest{Path: "/docs/one.md", ExpectedVersion: -1, Content: fmt.Appendf(nil, "# %d\n", i)}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	b.poll(t)
-	rctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	if _, err := b.sub.Next(rctx); !errors.Is(err, changefeed.ErrResync) {
-		t.Fatalf("subscriber across the gap got %v, want ErrResync", err)
+	for i := range commits {
+		if ev := b.next(t); ev.Version != i+1 || ev.Path != "/docs/one.md" {
+			t.Fatalf("event %d = %+v, want version %d", i, ev, i+1)
+		}
 	}
 	if b.hub.Head() != a.hub.Head() {
-		t.Fatalf("heads differ after the gap: %v vs %v", b.hub.Head(), a.hub.Head())
-	}
-	fresh, err := b.hub.Subscribe(t.Context(), "/", b.hub.Head())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.store.Publish(ctx, backend.WriteRequest{Path: "/docs/two.md", ExpectedVersion: -1, Content: []byte("# Two\n")}); err != nil {
-		t.Fatal(err)
-	}
-	b.poll(t)
-	if ev, err := fresh.Next(rctx); err != nil || ev.Path != "/docs/two.md" || ev.Seq != a.hub.Head().Seq {
-		t.Fatalf("event after the resync = %+v, %v", ev, err)
+		t.Fatalf("heads differ after catching up: %v vs %v", b.hub.Head(), a.hub.Head())
 	}
 }
 
-// A receipt written before receipts named their change is a gap, not a
-// guess.
-func TestUnnamedReceiptSkips(t *testing.T) {
-	hub := changefeed.New(testWorldID, 0)
-	store := &Store{changes: hub}
-	sub, _ := hub.Subscribe(t.Context(), "/", protocol.Cursor{})
-	store.report(&snapshot{
-		Head: headObject{Sequence: 3, Receipts: []operationReceipt{
-			{Sequence: 2, Result: "committed"},
-			{Sequence: 3, Result: "committed", Path: "/a.md", Op: protocol.OpPublish, Version: 1, Hash: "sha256-x"},
-		}},
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if _, err := sub.Next(ctx); !errors.Is(err, changefeed.ErrResync) {
-		t.Fatalf("across the unnamed receipt got %v, want ErrResync", err)
-	}
-	resumed, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: testWorldID, Seq: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ev, err := resumed.Next(ctx); err != nil || ev.Seq != 3 || ev.Path != "/a.md" || ev.Version != 1 {
-		t.Fatalf("named receipt = %+v, %v", ev, err)
-	}
-}
-
-// A receipt carries its own commit's version and hash: a replica that
+// A slot entry carries its own commit's version and hash: a replica that
 // catches up on two commits to one path reports each as it was, not both as
 // the path is now.
-func TestReceiptsKeepTheirCommit(t *testing.T) {
+func TestSlotEventsKeepTheirCommit(t *testing.T) {
 	objects := initializedMemory(t)
 	ctx := context.Background()
 	a := openReplica(t, objects)
@@ -264,25 +232,54 @@ func TestLocalHintsFollowCommitOrder(t *testing.T) {
 }
 
 // bucketSite is one bucket. Tamper commits through a second store with no
-// hub, as a peer replica does; the head's receipts name it on reopen.
-type bucketSite struct{ objects blob.Store }
+// hub, as a peer replica does; the slots name it on reopen.
+type bucketSite struct {
+	objects blob.Store
+	// follow overrides the backstop period of the stores it opens.
+	follow time.Duration
+	// noHedge opens them unhedged, for a bucket that holds one call.
+	noHedge bool
+	// trigger overrides when their compactors run.
+	trigger *compactionTrigger
+	// reach and idle override how far their backlogs reach, in slots, and
+	// how long their slot caches outlive a read.
+	reach uint64
+	idle  time.Duration
+}
 
+// open opens a store that closes when t ends, stopping its follow loop.
 func (s *bucketSite) open(t *testing.T, ring int) *Store {
 	t.Helper()
-	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring})
+	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	store.commitInterval = 0
+	if store.changeLog != nil {
+		store.changeLog.reach = cmp.Or(s.reach, store.changeLog.reach)
+		store.changeLog.idle = cmp.Or(s.idle, store.changeLog.idle)
+	}
+	closeAtEnd(t, store)
 	return store
 }
 
-// siteRing holds the suite's 48 concurrent events, and a resume across
-// reopen reaches past the receipts into sealed change blocks.
-const siteRing = 4 * maximumReceipts
+func closeAtEnd(t *testing.T, store *Store) {
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+}
+
+// siteRing holds the suite's 48 concurrent events; siteReach is past it, so a
+// resume across reopen reads the slots.
+const (
+	siteRing  = 64
+	siteReach = 96
+)
 
 func (s *bucketSite) Open(t *testing.T) storetest.ChangeBackend {
-	return storetest.ChangeBackend{Store: s.open(t, siteRing)}
+	store := s.open(t, siteRing)
+	return storetest.ChangeBackend{Store: store, Close: store.Close}
 }
 
 func (s *bucketSite) Tamper(t *testing.T, path string) {
@@ -292,12 +289,26 @@ func (s *bucketSite) Tamper(t *testing.T, path string) {
 	}
 }
 
-// Window is the ring: receipts, then sealed blocks, name the rest.
-func (s *bucketSite) Window() int { return siteRing }
+// Window is the backlog's reach: the suite commits one slot at a time.
+func (s *bucketSite) Window() int { return siteReach }
 
 func TestChangeConformance(t *testing.T) {
 	storetest.RunChangeConformance(t, func(t *testing.T) storetest.ChangeSite {
-		return &bucketSite{objects: initializedMemory(t)}
+		return &bucketSite{objects: initializedMemory(t), reach: siteReach}
+	})
+}
+
+// everySlot checkpoints after each slot, at once.
+var everySlot = compactionTrigger{slots: 1, age: time.Hour, wait: func() time.Duration { return 0 }}
+
+// Stores that checkpoint after every slot pass the suite too: resumes cross
+// a recent checkpoint through the slots. Written an hour ago, old checkpoints
+// drop while the slots behind them stay for the retention.
+func TestChangeConformanceAcrossCheckpoints(t *testing.T) {
+	storetest.RunChangeConformance(t, func(t *testing.T) storetest.ChangeSite {
+		objects := newClockedStore(t)
+		objects.writtenAgo(time.Hour)
+		return &bucketSite{objects: objects, trigger: &everySlot, reach: siteReach}
 	})
 }
 
@@ -325,4 +336,15 @@ func TestResumeOnALaggingReplicaCatchesUp(t *testing.T) {
 	if ev := storetest.NextEvent(t, moved); ev.Path != "/two.md" {
 		t.Fatalf("resumed event = %+v, want /two.md", ev)
 	}
+}
+
+// replicaSite opens stores over one bucket, as replicas of one world.
+type replicaSite struct{ site *bucketSite }
+
+func (s replicaSite) Open(t *testing.T) handler.DocumentStore { return s.site.open(t, 0) }
+
+func TestReplicaConformance(t *testing.T) {
+	storetest.RunReplicaConformance(t, func(t *testing.T) storetest.ReplicaSite {
+		return replicaSite{site: &bucketSite{objects: initializedMemory(t)}}
+	})
 }

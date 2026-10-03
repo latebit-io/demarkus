@@ -200,6 +200,7 @@ func (f *Fanout) wakeAllLocked() {
 // the head; a hub close ends every watcher with closing.
 func (f *Fanout) read(ctx context.Context, r *run, sub *changefeed.Subscription) {
 	defer r.done.Done()
+	defer func() { sub.Close() }()
 	for {
 		ev, err := sub.Next(ctx)
 		switch {
@@ -209,6 +210,7 @@ func (f *Fanout) read(ctx context.Context, r *run, sub *changefeed.Subscription)
 		case ctx.Err() != nil:
 			return
 		case errors.Is(err, changefeed.ErrResync):
+			sub.Close()
 			if sub, err = f.hub.Subscribe(ctx, "/", protocol.Cursor{}); err == nil {
 				f.rejoin(r, sub.Cursor().Seq)
 				continue

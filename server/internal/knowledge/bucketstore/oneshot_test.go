@@ -44,7 +44,7 @@ func (store *Store) Lookup(query string, options catalog.Options) ([]catalog.Res
 // open surfaces here as it does for every other read.
 func (store *Store) CurrentVersionResult(reqPath string) (int, error) {
 	ctx := context.Background()
-	loaded, err := store.refreshSnapshot(ctx)
+	loaded, err := store.refresh(ctx)
 	if err != nil {
 		return 0, normalizeReadIntegrity(err)
 	}
@@ -57,8 +57,8 @@ func (view *readView) currentVersion(ctx context.Context, reqPath string) (int, 
 	if err != nil {
 		return 0, err
 	}
-	entry, exists := view.snapshot.Paths[logicalPath]
-	if !exists {
+	entry := view.snapshot.path(logicalPath)
+	if entry == nil {
 		return 0, nil
 	}
 	return entry.Current, nil
@@ -119,9 +119,6 @@ func (p *pinnedView) Lookup(query string, options catalog.Options) ([]catalog.Re
 }
 
 func (p *pinnedView) Close() error { return p.view.Close() }
-
-// pinned is the snapshot the view holds, for tests that compare identities.
-func (p *pinnedView) pinned() *snapshot { return p.view.(*snapshotView).snapshot }
 
 var discardLogger = slog.New(slog.DiscardHandler)
 

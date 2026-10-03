@@ -5,10 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	pathpkg "path"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,235 +25,169 @@ import (
 var _ backend.Store = (*Store)(nil)
 
 func TestSnapshotRefresh(t *testing.T) {
-	t.Run("unchanged head uses Head and reuses snapshot", func(t *testing.T) {
+	t.Run("an unchanged tip costs one probe", func(t *testing.T) {
 		memory := initializedMemory(t)
 		commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A\n")})
 		observed := newObservedBlobStore(memory)
-		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID})
+		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
-		cached := store.snapshot.Load()
+		cached := store.served.Load().snap
 		observed.reset()
 
-		view, err := store.openReadView()
-		if err != nil {
-			t.Fatalf("open read view: %v", err)
+		if entries, err := store.ListEntries("/docs", false); err != nil || len(entries) != 1 {
+			t.Fatalf("catalog read = (%v, %v)", entries, err)
 		}
-		if view.pinned() != cached {
-			t.Error("unchanged head did not reuse snapshot pointer")
+		if counts := observed.counts(); sumCounts(counts.gets)+sumCounts(counts.heads) != 0 {
+			t.Errorf("a catalog read right after open read the bucket: %v %v", counts.gets, counts.heads)
 		}
-		if err := view.Close(); err != nil {
-			t.Fatalf("close: %v", err)
+		if _, err := store.Versions("/docs/a.md"); err != nil {
+			t.Fatalf("path read: %v", err)
 		}
 		counts := observed.counts()
-		if counts.heads[headObjectKey] != 1 || sumCounts(counts.gets) != 0 {
-			t.Errorf("operations = heads %v gets %v, want one head only", counts.heads, counts.gets)
+		if counts.gets[slotKey(cached.Sequence+1)] != 1 || len(counts.heads) != 0 || counts.gets[markerKey] != 0 {
+			t.Errorf("path read operations = heads %v gets %v, want one probe of the next slot", counts.heads, counts.gets)
 		}
-
-		if isDir, err := store.IsDir("/"); err != nil || !isDir {
-			t.Fatalf("direct IsDir = (%v, %v)", isDir, err)
-		}
-		if got := observed.counts().heads[headObjectKey]; got != 2 {
-			t.Errorf("head calls after direct read = %d, want 2", got)
+		if store.served.Load().snap != cached {
+			t.Error("an unchanged tip replaced the snapshot")
 		}
 	})
 
-	t.Run("changed root fetches only changed shard", func(t *testing.T) {
-		firstPath, secondPath := pathsInDistinctShards(t)
+	t.Run("new slots apply in order, each read once", func(t *testing.T) {
 		memory := initializedMemory(t)
-		initial := []readDocumentSpec{
-			newReadDocument(firstPath, "# First v1\n"),
-			newReadDocument(secondPath, "# Second\n"),
-		}
-		commitReadDocuments(t, memory, initial)
 		observed := newObservedBlobStore(memory)
-		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, ShardWorkers: 3})
+		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
-		before := store.snapshot.Load()
-		changed := initial[0]
-		changed.Bodies = append(changed.Bodies, []byte("# First v2\n"))
-		changed.Metadata = append(changed.Metadata, defaultReadMetadata(firstPath))
-		commit := commitReadDocuments(t, memory, []readDocumentSpec{changed, initial[1]})
-		observed.reset()
-
-		view, err := store.openReadView()
-		if err != nil {
-			t.Fatalf("refresh: %v", err)
-		}
-		defer func() {
-			if err := view.Close(); err != nil {
-				t.Errorf("close: %v", err)
+		peer := (&bucketSite{objects: memory}).open(t, 0)
+		for index, path := range []string{"/docs/one.md", "/docs/two.md", "/docs/one.md"} {
+			if _, err := peer.WriteVersion(path, -1, fmt.Appendf(nil, "# %s %d\n", path, index), nil); err != nil {
+				t.Fatal(err)
 			}
-		}()
-		after := view.pinned()
-		if after == before {
-			t.Fatal("changed head reused old snapshot")
 		}
-		changedIndex := shardIndexForPath(t, firstPath)
-		unchangedIndex := shardIndexForPath(t, secondPath)
-		if &before.Shards[unchangedIndex].Entries[0] != &after.Shards[unchangedIndex].Entries[0] {
-			t.Error("unchanged shard entries were not reused")
+		observed.reset()
+		document, err := store.Get("/docs/one.md", 0)
+		if err != nil || document.Version != 2 {
+			t.Fatalf("Get = (%+v, %v), want the peer's v2", document, err)
 		}
+		// The probe finds slot 2; a listing names 3 and 4 and confirms the tip.
 		counts := observed.counts()
-		changedShardKey := commit.root.Shards[changedIndex].Key
-		if counts.heads[headObjectKey] != 2 || counts.gets[headObjectKey] != 1 || counts.gets[commit.rootRef.Key] != 1 || counts.gets[changedShardKey] != 1 {
-			t.Errorf("refresh operations = heads %v gets %v", counts.heads, counts.gets)
+		for first := int64(2); first <= 4; first++ {
+			if counts.gets[slotKey(first)] != 1 {
+				t.Errorf("slot %d read %d times, want once", first, counts.gets[slotKey(first)])
+			}
 		}
-		// The changed document's section index costs its manifest, history,
-		// and blob on top of head, root, and the one shard.
-		if sumCounts(counts.gets) != 6 {
-			t.Errorf("refresh Get count = %d, want head, root, one shard, and the changed body", sumCounts(counts.gets))
+		if counts.gets[slotKey(5)] != 0 {
+			t.Errorf("past the listed tip probed %d times, want none", counts.gets[slotKey(5)])
 		}
-		if counts.gets[commit.root.Shards[unchangedIndex].Key] != 0 {
-			t.Error("unchanged shard was fetched")
+		if got := store.servedSequence(); got != 4 {
+			t.Errorf("served sequence = %d, want 4", got)
 		}
 	})
 
-	t.Run("corrupt changed head never serves cache", func(t *testing.T) {
+	t.Run("a corrupt slot never serves stale data", func(t *testing.T) {
 		memory := initializedMemory(t)
-		commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A\n")})
 		store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
-		cached := store.snapshot.Load()
-		head := getObject(t, memory, headObjectKey)
-		replaceObject(t, memory, headObjectKey, head.Attributes.Generation, []byte("{"))
-
-		view, err := store.OpenReadView(context.Background())
-		if view != nil || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, storefmt.ErrIntegrity) {
-			t.Fatalf("OpenReadView() = (%v, %v), want integrity", view, err)
+		cached := store.served.Load().snap
+		peer := (&bucketSite{objects: memory}).open(t, 0)
+		if _, err := peer.WriteVersion("/docs/a.md", 0, []byte("# A\n"), nil); err != nil {
+			t.Fatal(err)
 		}
-		if store.snapshot.Load() != cached {
-			t.Error("failed refresh replaced cached snapshot")
-		}
+		corruptObject(t, memory, slotKey(2))
 		if _, err := store.Get("/docs/a.md", 0); !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, storefmt.ErrIntegrity) {
-			t.Errorf("direct Get error = %v, want integrity instead of stale data", err)
+			t.Errorf("Get over a corrupt slot = %v, want integrity", err)
 		}
-		if got, err := store.CurrentVersionResult("/docs/a.md"); got != 0 || !errors.Is(err, blob.ErrIntegrity) {
-			t.Errorf("CurrentVersion during failed refresh = (%d, %v), want integrity", got, err)
+		if store.served.Load().snap != cached {
+			t.Error("a failed refresh replaced the snapshot")
+		}
+		if _, err := store.WriteVersion("/docs/b.md", 0, []byte("# B\n"), nil); !errors.Is(err, blob.ErrIntegrity) {
+			t.Errorf("write over a corrupt slot = %v, want integrity", err)
 		}
 	})
 
-	t.Run("locked double-check uses fresh head", func(t *testing.T) {
+	t.Run("a catalog read trusts a tip confirmed within the bound", func(t *testing.T) {
 		memory := initializedMemory(t)
-		base := newReadDocument("/docs/a.md", "# A v1\n")
-		commitReadDocuments(t, memory, []readDocumentSpec{base})
-		delayed := newDelayedHeadStore(memory)
-		store, err := Open(context.Background(), delayed, Options{Logger: discardLogger, WorldID: testWorldID})
+		observed := newObservedBlobStore(memory)
+		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
+		opened := time.Now()
+		store.now = func() time.Time { return opened.Add(backend.SearchFreshness / 2) }
+		observed.reset()
+		if _, err := store.Lookup("anything", catalog.Options{}); err != nil {
+			t.Fatal(err)
+		}
+		if n := sumCounts(observed.counts().gets); n != 0 {
+			t.Errorf("a catalog read inside the bound read the bucket %d times", n)
+		}
+		store.now = func() time.Time { return opened.Add(2 * backend.SearchFreshness) }
+		if _, err := store.Lookup("anything", catalog.Options{}); err != nil {
+			t.Fatal(err)
+		}
+		if n := observed.counts().gets[slotKey(2)]; n != 1 {
+			t.Errorf("a catalog read past the bound probed %d times, want 1", n)
+		}
+	})
 
-		second := base
-		second.Bodies = append(second.Bodies, []byte("# A v2\n"))
-		second.Metadata = append(second.Metadata, defaultReadMetadata(second.Path))
-		secondCommit := commitReadDocuments(t, memory, []readDocumentSpec{second})
-		delayed.target = secondCommit.headGeneration
-		store.refreshMu.Lock()
-		locked := true
-		defer func() {
-			if locked {
-				store.refreshMu.Unlock()
+	t.Run("a refresh never takes a tip confirmed before it asked", func(t *testing.T) {
+		memory := initializedMemory(t)
+		stalled := &stalledProbeStore{Store: memory, probed: make(chan struct{}), release: make(chan struct{})}
+		store, err := Open(context.Background(), stalled, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		stalled.armed.Store(true)
+		first := make(chan error, 1)
+		go func() {
+			_, err := store.refresh(context.Background())
+			first <- err
+		}()
+		waitForTestSignal(t, stalled.probed, "first probe")
+		peer := (&bucketSite{objects: memory}).open(t, 0)
+		if _, err := peer.WriteVersion("/docs/late.md", 0, []byte("# Late\n"), nil); err != nil {
+			t.Fatal(err)
+		}
+		second := make(chan *snapshot, 1)
+		go func() {
+			snap, err := store.refresh(context.Background())
+			if err != nil {
+				t.Errorf("second refresh: %v", err)
 			}
-			delayed.releaseHead()
+			second <- snap
 		}()
-		result := make(chan readViewResult, 1)
-		go func() {
-			view, err := store.openReadView()
-			result <- readViewResult{view: view, err: err}
-		}()
-		waitForTestSignal(t, delayed.observed, "stale pre-lock head")
-		installedSecond, err := loadRootSnapshot(context.Background(), memory, testWorldID, defaultShardWorkers)
-		if err != nil {
-			t.Fatalf("load second snapshot: %v", err)
+		time.Sleep(10 * time.Millisecond) // the second refresh waits on the first
+		close(stalled.release)
+		if err := <-first; err != nil {
+			t.Fatalf("first refresh: %v", err)
 		}
-		store.snapshot.Store(installedSecond)
-
-		third := second
-		third.Bodies = append(third.Bodies, []byte("# A v3\n"))
-		third.Metadata = append(third.Metadata, defaultReadMetadata(third.Path))
-		thirdCommit := commitReadDocuments(t, memory, []readDocumentSpec{third})
-		delayed.releaseHead()
-		waitForTestSignal(t, delayed.returning, "stale head return")
-		store.refreshMu.Unlock()
-		locked = false
-
-		view := receiveReadView(t, result)
-		defer closeTestReadView(t, view)
-		assertViewBody(t, view, "# A v3\n", 3)
-		if installed := store.snapshot.Load(); installed.HeadGeneration != thirdCommit.headGeneration {
-			t.Errorf("installed generation = %d, want %d", installed.HeadGeneration, thirdCommit.headGeneration)
+		if snap := <-second; snap.path("/docs/late.md") == nil {
+			t.Error("a refresh that asked after a write took a tip confirmed before it")
 		}
 	})
+}
 
-	t.Run("replayed sequence never replaces cache", func(t *testing.T) {
-		memory := initializedMemory(t)
-		commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "# A\n")})
-		store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
-		if err != nil {
-			t.Fatalf("open: %v", err)
-		}
-		cached := store.snapshot.Load()
-		head := getObject(t, memory, headObjectKey)
-		replaceObject(t, memory, headObjectKey, head.Attributes.Generation, head.Data)
-		view, err := store.OpenReadView(context.Background())
-		if view != nil || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, storefmt.ErrIntegrity) {
-			t.Fatalf("OpenReadView() = (%v, %v), want sequence integrity", view, err)
-		}
-		if store.snapshot.Load() != cached {
-			t.Error("replayed sequence replaced cached snapshot")
-		}
-	})
+// stalledProbeStore answers the first slot probe at once from the bucket but
+// holds the answer until released, as a slow response does.
+type stalledProbeStore struct {
+	blob.Store
+	armed   atomic.Bool
+	probed  chan struct{}
+	release chan struct{}
+}
 
-	t.Run("serialized refresh cannot install older root", func(t *testing.T) {
-		memory := initializedMemory(t)
-		base := newReadDocument("/docs/a.md", "# A v1\n")
-		commitReadDocuments(t, memory, []readDocumentSpec{base})
-		interleaved := newInterleavingBlobStore(memory)
-		store, err := Open(context.Background(), interleaved, Options{Logger: discardLogger, WorldID: testWorldID, RequestTimeout: 5 * time.Second})
-		if err != nil {
-			t.Fatalf("open: %v", err)
-		}
-
-		second := base
-		second.Bodies = append(second.Bodies, []byte("# A v2\n"))
-		second.Metadata = append(second.Metadata, defaultReadMetadata(second.Path))
-		secondCommit := commitReadDocuments(t, memory, []readDocumentSpec{second})
-		interleaved.block(secondCommit.rootRef.Key)
-		firstResult := make(chan readViewResult, 1)
-		go func() {
-			view, err := store.openReadView()
-			firstResult <- readViewResult{view: view, err: err}
-		}()
-		interleaved.waitBlocked(t)
-
-		third := second
-		third.Bodies = append(third.Bodies, []byte("# A v3\n"))
-		third.Metadata = append(third.Metadata, defaultReadMetadata(third.Path))
-		thirdCommit := commitReadDocuments(t, memory, []readDocumentSpec{third})
-		interleaved.watch(thirdCommit.headGeneration)
-		secondResult := make(chan readViewResult, 1)
-		go func() {
-			view, err := store.openReadView()
-			secondResult <- readViewResult{view: view, err: err}
-		}()
-		interleaved.waitWatched(t)
-		interleaved.release()
-
-		older := receiveReadView(t, firstResult)
-		newer := receiveReadView(t, secondResult)
-		defer closeTestReadView(t, older)
-		defer closeTestReadView(t, newer)
-		assertViewBody(t, older, "# A v2\n", 2)
-		assertViewBody(t, newer, "# A v3\n", 3)
-		if installed := store.snapshot.Load(); installed.Head.Root != thirdCommit.rootRef {
-			t.Errorf("installed root = %+v, want newest %+v", installed.Head.Root, thirdCommit.rootRef)
-		}
-	})
+func (store *stalledProbeStore) Get(ctx context.Context, key string) (blob.Object, error) {
+	object, err := store.Store.Get(ctx, key)
+	if isSlot(key) && store.armed.CompareAndSwap(true, false) {
+		close(store.probed)
+		<-store.release
+	}
+	return object, err
 }
 
 func TestReadViewContextAndSnapshot(t *testing.T) {
@@ -262,14 +196,16 @@ func TestReadViewContextAndSnapshot(t *testing.T) {
 	first.Metadata[0] = readMetadata("A", "before", "context")
 	commitReadDocuments(t, memory, []readDocumentSpec{first})
 	observed := newObservedBlobStore(memory)
-	store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, RequestTimeout: 2 * time.Second})
+	store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true, RequestTimeout: 2 * time.Second})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	observed.reset()
 	old, err := store.openReadView()
 	if err != nil {
 		t.Fatalf("open old view: %v", err)
+	}
+	if _, err := old.Versions("/docs/a.md"); err != nil {
+		t.Fatalf("pin old view: %v", err)
 	}
 	contractView, err := store.OpenReadView(context.Background())
 	if err != nil {
@@ -281,10 +217,13 @@ func TestReadViewContextAndSnapshot(t *testing.T) {
 	}
 	observed.reset()
 
-	second := first
-	second.Bodies = append(second.Bodies, []byte("# A v2\n"))
-	second.Metadata = append(second.Metadata, readMetadata("A", "after", "context"))
-	commitReadDocuments(t, memory, []readDocumentSpec{second, newReadDocument("/docs/new.md", "# New\n")})
+	if _, err := store.WriteVersion("/docs/a.md", 1, []byte("# A v2\n"), readMetadata("A", "after", "context")); err != nil {
+		t.Fatalf("write v2 over the checkpoint's v1: %v", err)
+	}
+	if _, err := store.WriteVersion("/docs/new.md", 0, []byte("# New\n"), defaultReadMetadata("/docs/new.md")); err != nil {
+		t.Fatalf("write new: %v", err)
+	}
+	observed.reset()
 	assertPinnedReadView(t, old, &pinnedReadWant{
 		body:          "# A v1\n",
 		version:       1,
@@ -314,6 +253,12 @@ func TestReadViewContextAndSnapshot(t *testing.T) {
 		missingBody:   "# A v1\n",
 	})
 	closeTestReadView(t, fresh)
+	if err := fresh.VerifyChain("/docs/a.md"); !errors.Is(err, backend.ErrViewClosed) {
+		t.Errorf("read after close = %v, want ErrViewClosed", err)
+	}
+	if err := store.VerifyChain("/docs/a.md"); err != nil {
+		t.Errorf("chain across the checkpoint and the log: %v", err)
+	}
 	if err := old.Close(); err != nil {
 		t.Fatalf("close old: %v", err)
 	}
@@ -358,7 +303,7 @@ func TestReadSemantics(t *testing.T) {
 	}
 	commit := commitReadDocuments(t, memory, documents)
 	observed := newObservedBlobStore(memory)
-	store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID})
+	store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -553,57 +498,16 @@ func TestReferencedObjectIntegrity(t *testing.T) {
 		mutate    func(*testing.T, *blob.Memory, *readCommit)
 	}{
 		{
-			name:      "missing manifest",
-			wantCause: blob.ErrNotFound,
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				deleteObject(t, memory, commit.documents["/docs/a.md"].entry.Manifest.Key)
-			},
-		},
-		{
-			name: "corrupt manifest",
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				corruptObject(t, memory, commit.documents["/docs/a.md"].entry.Manifest.Key)
-			},
-		},
-		{
-			name: "manifest path hash mismatch",
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				installManifestMutation(t, memory, commit.documents["/docs/a.md"], func(manifest *manifestObject) {
-					manifest.PathHash = strings.Repeat("a", 64)
-					for index := range manifest.History {
-						manifest.History[index].PathHash = manifest.PathHash
-					}
-				})
-			},
-		},
-		{
-			name: "manifest current mismatch",
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				installManifestMutation(t, memory, commit.documents["/docs/a.md"], func(manifest *manifestObject) {
-					manifest.Current = 1
-					manifest.History[0].Last = 1
-				})
-			},
-		},
-		{
-			name: "manifest archive mismatch",
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				installManifestMutation(t, memory, commit.documents["/docs/a.md"], func(manifest *manifestObject) {
-					manifest.Archived = true
-				})
-			},
-		},
-		{
 			name:      "missing history",
 			wantCause: blob.ErrNotFound,
 			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				deleteObject(t, memory, commit.documents["/docs/a.md"].historyRef.Key)
+				deleteObject(t, memory, commit.documents["/docs/a.md"].historyKey)
 			},
 		},
 		{
 			name: "corrupt history",
 			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				corruptObject(t, memory, commit.documents["/docs/a.md"].historyRef.Key)
+				corruptObject(t, memory, commit.documents["/docs/a.md"].historyKey)
 			},
 		},
 		{
@@ -767,7 +671,7 @@ func TestReadIntegrityNormalization(t *testing.T) {
 					}()
 					surface = &pinnedView{ctx: context.Background(), view: view}
 				}
-				deleteObject(t, memory, commit.documents["/docs/a.md"].entry.Manifest.Key)
+				deleteObject(t, memory, commit.documents["/docs/a.md"].historyKey)
 				err = operation.read(surface)
 				if !errors.Is(err, storefmt.ErrIntegrity) || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, blob.ErrNotFound) {
 					t.Fatalf("read error = %v, want protocol integrity with blob integrity and not-found causes", err)
@@ -813,7 +717,7 @@ func TestVerifyChainErrors(t *testing.T) {
 		memory := initializedMemory(t)
 		commit := commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "one", "two", "three")})
 		observed := newObservedBlobStore(memory)
-		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID})
+		store, err := Open(context.Background(), observed, Options{Logger: discardLogger, WorldID: testWorldID, noHedge: true})
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -852,10 +756,18 @@ func TestReadViewTimeout(t *testing.T) {
 	}
 	// Tighten after the open so a slow runner cannot time out the open itself.
 	store.requestTimeout = 25 * time.Millisecond
-	store.objects = &blockingHeadStore{Store: memory}
+	store.objects = &blockingGetStore{Store: memory, prefix: logPrefix}
 	view, err := store.OpenReadView(context.Background())
-	if view != nil || !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("OpenReadView() = (%v, %v), want deadline", view, err)
+	if err != nil {
+		t.Fatalf("OpenReadView() = %v; the view pins at its first read", err)
+	}
+	defer func() {
+		if err := view.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	}()
+	if _, err := view.Get(context.Background(), "/docs/a.md", 0); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("first read = %v, want the view's deadline", err)
 	}
 }
 
@@ -876,18 +788,14 @@ type committedReadVersion struct {
 }
 
 type committedReadDocument struct {
-	entry      shardEntry
-	manifest   manifestObject
+	entry      foldedEntry
 	history    historyObject
-	historyRef historyRef
+	historyKey string
 	versions   map[int]committedReadVersion
 }
 
 type readCommit struct {
-	documents      map[string]*committedReadDocument
-	root           rootObject
-	rootRef        objectRef
-	headGeneration blob.Generation
+	documents map[string]*committedReadDocument
 }
 
 func newReadDocument(path string, bodies ...string) readDocumentSpec {
@@ -921,49 +829,16 @@ func readMetadata(title, tags, project string) map[string]string {
 func commitReadDocuments(t *testing.T, memory *blob.Memory, specs []readDocumentSpec) readCommit {
 	t.Helper()
 	commit := readCommit{documents: make(map[string]*committedReadDocument, len(specs))}
-	grouped := make(map[int][]shardEntry)
+	entries := make([]foldedEntry, 0, len(specs))
 	for _, spec := range specs {
 		document := buildReadDocument(t, memory, &spec)
 		if _, exists := commit.documents[spec.Path]; exists {
 			t.Fatalf("duplicate test document %q", spec.Path)
 		}
 		commit.documents[spec.Path] = document
-		index := shardIndexForPath(t, spec.Path)
-		grouped[index] = append(grouped[index], document.entry)
+		entries = append(entries, document.entry)
 	}
-
-	refs := make([]shardRef, shardCount)
-	for index := range shardCount {
-		entries := grouped[index]
-		if entries == nil {
-			entries = make([]shardEntry, 0)
-		}
-		sort.Slice(entries, func(left, right int) bool {
-			return entries[left].Path < entries[right].Path
-		})
-		shardID := fmt.Sprintf("%02x", index)
-		shard := shardObject{Schema: schemaVersion, Shard: shardID, Entries: entries}
-		model, ref, err := immutableJSON(func(hash string) string { return shardKey(shardID, hash) }, shard)
-		if err != nil {
-			t.Fatalf("build shard %s: %v", shardID, err)
-		}
-		createReadObject(t, memory, model)
-		refs[index] = shardRef{Shard: shardID, objectRef: ref}
-	}
-	root := rootObject{
-		Schema:        schemaVersion,
-		WorldID:       testWorldID,
-		DocumentCount: len(specs),
-		Shards:        refs,
-	}
-	_, rootRef, err := immutableJSON(rootKey, root)
-	if err != nil {
-		t.Fatalf("build root ref: %v", err)
-	}
-	installRoot(t, memory, root)
-	commit.root = root
-	commit.rootRef = rootRef
-	commit.headGeneration = getObject(t, memory, headObjectKey).Attributes.Generation
+	installEntries(t, memory, entries)
 	return commit
 }
 
@@ -1017,7 +892,7 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 	}
 
 	history := historyObject{
-		Schema:   schemaVersion,
+		Schema:   historySchema,
 		PathHash: pathSum,
 		First:    spec.RetainFrom,
 		Last:     len(spec.Bodies),
@@ -1028,27 +903,6 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 		t.Fatalf("build history %q: %v", spec.Path, err)
 	}
 	createReadObject(t, memory, historyModel)
-	historyReference := historyRef{
-		PathHash:  pathSum,
-		First:     history.First,
-		Last:      history.Last,
-		objectRef: historyObjectRef,
-	}
-	manifest := manifestObject{
-		Schema:   schemaVersion,
-		PathHash: pathSum,
-		Current:  len(spec.Bodies),
-		Archived: spec.Archived,
-		History:  []historyRef{historyReference},
-	}
-	manifestModel, manifestRef, err := immutableJSON(func(hash string) string {
-		return manifestKey(pathSum, hash)
-	}, manifest)
-	if err != nil {
-		t.Fatalf("build manifest %q: %v", spec.Path, err)
-	}
-	createReadObject(t, memory, manifestModel)
-
 	tip := document.versions[len(spec.Bodies)]
 	metadata := storefmt.ExtractMetadata(tip.raw)
 	catalogEntry := catalog.FromDocument(spec.Path, metadata, spec.Bodies[len(spec.Bodies)-1], tip.modified)
@@ -1056,10 +910,10 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 	if tags == nil {
 		tags = make([]string, 0)
 	}
-	document.entry = shardEntry{
+	document.entry = foldedEntry{
 		Path:     spec.Path,
 		PathHash: pathSum,
-		Manifest: manifestRef,
+		History:  []blockRef{{First: history.First, Last: history.Last, Hash: historyObjectRef.Hash}},
 		Current:  len(spec.Bodies),
 		Archived: spec.Archived,
 		BodyHash: tip.entry.BodyHash,
@@ -1073,9 +927,8 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 			Metadata:   maps.Clone(catalogEntry.Metadata),
 		},
 	}
-	document.manifest = manifest
 	document.history = history
-	document.historyRef = historyReference
+	document.historyKey = historyObjectRef.Key
 	return document
 }
 
@@ -1088,19 +941,6 @@ func createReadObject(t *testing.T, memory blob.Store, object modelObject) {
 	if err := createImmutable(context.Background(), memory, object); err != nil {
 		t.Fatalf("create test object %q: %v", object.Key, err)
 	}
-}
-
-func installManifestMutation(
-	t *testing.T,
-	memory *blob.Memory,
-	document *committedReadDocument,
-	mutate func(*manifestObject),
-) {
-	t.Helper()
-	manifest := document.manifest
-	manifest.History = slices.Clone(manifest.History)
-	mutate(&manifest)
-	installManifestObject(t, memory, document, manifest)
 }
 
 func installHistoryMutation(
@@ -1119,15 +959,13 @@ func installHistoryMutation(
 		t.Fatalf("build mutated history: %v", err)
 	}
 	createReadObject(t, memory, model)
-	manifest := document.manifest
-	manifest.History = slices.Clone(manifest.History)
-	manifest.History[0].objectRef = ref
+	entry := document.entry
+	entry.History = slices.Clone(entry.History)
+	entry.History[0].Hash = ref.Hash
 	if matchReference {
-		manifest.History[0].PathHash = history.PathHash
-		manifest.History[0].First = history.First
-		manifest.History[0].Last = history.Last
+		entry.History[0].First, entry.History[0].Last = history.First, history.Last
 	}
-	installManifestObject(t, memory, document, manifest)
+	installSnapshotEntry(t, memory, &entry)
 }
 
 func installRawMutation(
@@ -1152,30 +990,14 @@ func installRawMutation(
 	installHistoryMutation(t, memory, document, history, true)
 }
 
-func installManifestObject(t *testing.T, memory *blob.Memory, document *committedReadDocument, manifest manifestObject) {
+// installSnapshotEntry replaces entry's document in the newest checkpoint,
+// unchecked, so a test can install one that breaks the format.
+func installSnapshotEntry(t *testing.T, memory *blob.Memory, entry *foldedEntry) {
 	t.Helper()
-	if err := validateManifestObject(&manifest); err != nil {
-		t.Fatalf("invalid mutated manifest: %v", err)
-	}
-	model, ref, err := immutableJSON(func(hash string) string {
-		return manifestKey(document.entry.PathHash, hash)
-	}, manifest)
-	if err != nil {
-		t.Fatalf("build mutated manifest: %v", err)
-	}
-	createReadObject(t, memory, model)
-	entry := document.entry
-	entry.Manifest = ref
-	installSnapshotEntry(t, memory, &entry)
-}
-
-func installSnapshotEntry(t *testing.T, memory *blob.Memory, entry *shardEntry) {
-	t.Helper()
-	_, root := readHeadAndRoot(t, memory)
-	index := shardIndexForPath(t, entry.Path)
-	shardValue := getObject(t, memory, root.Shards[index].Key)
-	var shard shardObject
-	decodeObject(t, shardValue.Data, &shard)
+	_, root := readFoldedRoot(t, memory)
+	index := shardOf(entry.PathHash, root.ShardBits)
+	var shard foldedShard
+	decodeObject(t, getObject(t, memory, root.Shards[index].Key).Data, &shard)
 	found := false
 	for entryIndex := range shard.Entries {
 		if shard.Entries[entryIndex].Path == entry.Path {
@@ -1187,13 +1009,12 @@ func installSnapshotEntry(t *testing.T, memory *blob.Memory, entry *shardEntry) 
 	if !found {
 		t.Fatalf("snapshot entry %q not found", entry.Path)
 	}
-	shardID := fmt.Sprintf("%02x", index)
-	model, ref, err := immutableJSON(func(hash string) string { return shardKey(shardID, hash) }, shard)
+	model, ref, err := immutableJSON(func(hash string) string { return shardKey(shard.Shard, hash) }, shard)
 	if err != nil {
 		t.Fatalf("build mutated shard: %v", err)
 	}
 	createReadObject(t, memory, model)
-	root.Shards[index] = shardRef{Shard: shardID, objectRef: ref}
+	root.Shards[index] = shardRef{Shard: shard.Shard, objectRef: ref}
 	installRoot(t, memory, root)
 }
 
@@ -1316,29 +1137,6 @@ func assertEntries(t *testing.T, view *pinnedView, requestPath string, includeAr
 	}
 }
 
-func pathsInDistinctShards(t *testing.T) (firstPath, secondPath string) {
-	t.Helper()
-	firstPath = "/docs/a.md"
-	firstIndex := shardIndexForPath(t, firstPath)
-	for index := range 10_000 {
-		candidate := fmt.Sprintf("/docs/item-%04d.md", index)
-		if shardIndexForPath(t, candidate) != firstIndex {
-			return firstPath, candidate
-		}
-	}
-	t.Fatal("could not find paths in distinct shards")
-	return "", ""
-}
-
-func shardIndexForPath(t *testing.T, documentPath string) int {
-	t.Helper()
-	value, err := strconv.ParseUint(pathHash(documentPath)[:2], 16, 8)
-	if err != nil {
-		t.Fatalf("parse shard for %q: %v", documentPath, err)
-	}
-	return int(value)
-}
-
 type observedBlobStore struct {
 	blob.Store
 	mu       sync.Mutex
@@ -1416,107 +1214,6 @@ func countPrefix(counts map[string]int, prefix string) int {
 	return total
 }
 
-type interleavingBlobStore struct {
-	blob.Store
-	mu              sync.Mutex
-	blockKey        string
-	watchGeneration blob.Generation
-	watchSet        bool
-	blocked         chan struct{}
-	unblock         chan struct{}
-	watched         chan struct{}
-	blockOnce       atomic.Bool
-	watchOnce       atomic.Bool
-	releaseOnce     sync.Once
-}
-
-func newInterleavingBlobStore(store blob.Store) *interleavingBlobStore {
-	return &interleavingBlobStore{
-		Store:   store,
-		blocked: make(chan struct{}),
-		unblock: make(chan struct{}),
-		watched: make(chan struct{}),
-	}
-}
-
-func (store *interleavingBlobStore) block(key string) {
-	store.mu.Lock()
-	store.blockKey = key
-	store.mu.Unlock()
-}
-
-func (store *interleavingBlobStore) watch(generation blob.Generation) {
-	store.mu.Lock()
-	store.watchGeneration = generation
-	store.watchSet = true
-	store.mu.Unlock()
-}
-
-func (store *interleavingBlobStore) Get(ctx context.Context, key string) (blob.Object, error) {
-	store.mu.Lock()
-	blockKey := store.blockKey
-	store.mu.Unlock()
-	if key == blockKey && store.blockOnce.CompareAndSwap(false, true) {
-		close(store.blocked)
-		select {
-		case <-store.unblock:
-		case <-ctx.Done():
-			return blob.Object{}, &blob.OpError{Op: "get", Key: key, Err: ctx.Err()}
-		}
-	}
-	return store.Store.Get(ctx, key)
-}
-
-func (store *interleavingBlobStore) Head(ctx context.Context, key string) (blob.Attributes, error) {
-	attributes, err := store.Store.Head(ctx, key)
-	if err != nil {
-		return attributes, err
-	}
-	store.mu.Lock()
-	watchGeneration := store.watchGeneration
-	watchSet := store.watchSet
-	store.mu.Unlock()
-	if watchSet && attributes.Generation == watchGeneration && store.watchOnce.CompareAndSwap(false, true) {
-		close(store.watched)
-	}
-	return attributes, nil
-}
-
-func (store *interleavingBlobStore) waitBlocked(t *testing.T) {
-	t.Helper()
-	waitForTestSignal(t, store.blocked, "blocked root read")
-}
-
-func (store *interleavingBlobStore) waitWatched(t *testing.T) {
-	t.Helper()
-	waitForTestSignal(t, store.watched, "new head observation")
-}
-
-func (store *interleavingBlobStore) release() {
-	store.releaseOnce.Do(func() { close(store.unblock) })
-}
-
-type readViewResult struct {
-	view *pinnedView
-	err  error
-}
-
-func receiveReadView(t *testing.T, results <-chan readViewResult) *pinnedView {
-	t.Helper()
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-	select {
-	case result := <-results:
-		if result.err != nil {
-			t.Fatalf("open concurrent read view: %v", result.err)
-		}
-		return result.view
-	case <-timer.C:
-		t.Fatal("timed out waiting for concurrent read view")
-		return nil
-	}
-}
-
 func waitForTestSignal(t *testing.T, signal <-chan struct{}, name string) {
 	t.Helper()
 	timer := time.NewTimer(5 * time.Second)
@@ -1528,49 +1225,102 @@ func waitForTestSignal(t *testing.T, signal <-chan struct{}, name string) {
 	}
 }
 
-type blockingHeadStore struct {
+// A catch-up that fails partway keeps the slots it applied, so a replica far
+// behind gains ground on every attempt instead of restarting from its base.
+func TestCatchUpKeepsProgressWhenAReadFails(t *testing.T) {
+	memory := initializedMemory(t)
+	reader := (&bucketSite{objects: memory}).open(t, 0)
+	peer := (&bucketSite{objects: memory}).open(t, 0)
+	for index := range 5 {
+		if _, err := peer.WriteVersion(fmt.Sprintf("/docs/%d.md", index), 0, []byte("# doc\n"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader.objects = &failOnceGetStore{Store: memory, key: slotKey(4)}
+	if _, err := reader.refresh(context.Background()); !errors.Is(err, blob.ErrUnavailable) {
+		t.Fatalf("refresh over a failing read = %v, want unavailable", err)
+	}
+	if got := reader.servedSequence(); got != 2 {
+		t.Fatalf("served sequence after a failed catch-up = %d, want the probed slot 2 kept", got)
+	}
+	if _, err := reader.refresh(context.Background()); err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if got := reader.servedSequence(); got != 6 {
+		t.Errorf("served sequence = %d, want the tip at 6", got)
+	}
+}
+
+// failOnceGetStore fails the first read of key as unavailable.
+type failOnceGetStore struct {
 	blob.Store
+	key    string
+	failed atomic.Bool
 }
 
-type delayedHeadStore struct {
-	blob.Store
-	target      blob.Generation
-	observed    chan struct{}
-	release     chan struct{}
-	returning   chan struct{}
-	once        atomic.Bool
-	releaseOnce sync.Once
+func (store *failOnceGetStore) Get(ctx context.Context, key string) (blob.Object, error) {
+	if key == store.key && store.failed.CompareAndSwap(false, true) {
+		return blob.Object{}, &blob.OpError{Op: "get", Key: key, Err: blob.ErrUnavailable}
+	}
+	return store.Store.Get(ctx, key)
 }
 
-func newDelayedHeadStore(store blob.Store) *delayedHeadStore {
-	return &delayedHeadStore{
-		Store:     store,
-		observed:  make(chan struct{}),
-		release:   make(chan struct{}),
-		returning: make(chan struct{}),
+// A read of one version reads the one history block that holds it, so a
+// document's read cost does not grow with its history.
+func TestReadOfOneVersionReadsOneBlock(t *testing.T) {
+	objects := initializedMemory(t)
+	writer := manualSite(objects).open(t, 0)
+	for version := range 600 {
+		_, err := writer.WriteVersion("/long.md", version, fmt.Appendf(nil, "# v%d\n", version+1), nil)
+		mustSucceed(t, err)
+	}
+	checkpointOnly(t, writer)
+	observed := newObservedBlobStore(objects)
+	reader := manualSite(observed).open(t, 0)
+	for _, version := range []int{0, 1, 300} {
+		observed.reset()
+		if _, err := reader.Get("/long.md", version); err != nil {
+			t.Fatalf("read v%d: %v", version, err)
+		}
+		if n := countPrefix(observed.counts().gets, objectPrefix+"history/"); n != 1 {
+			t.Errorf("read v%d read %d history blocks, want 1", version, n)
+		}
 	}
 }
 
-func (store *delayedHeadStore) Head(ctx context.Context, key string) (blob.Attributes, error) {
-	attributes, err := store.Store.Head(ctx, key)
-	if err != nil || key != headObjectKey || attributes.Generation != store.target || !store.once.CompareAndSwap(false, true) {
-		return attributes, err
-	}
-	close(store.observed)
-	select {
-	case <-store.release:
-		close(store.returning)
-		return attributes, nil
-	case <-ctx.Done():
-		return blob.Attributes{}, &blob.OpError{Op: "head", Key: key, Err: ctx.Err()}
+// countingIndex counts the entries a scan visits and ends ctx after the
+// tenth, as a request cut short mid-lookup.
+type countingIndex struct {
+	catalog.Index
+	cancel  context.CancelFunc
+	visited int
+}
+
+func (index *countingIndex) Entries(scope string) iter.Seq2[*catalog.Entry, *catalog.DocSections] {
+	return func(yield func(*catalog.Entry, *catalog.DocSections) bool) {
+		for entry, sections := range index.Index.Entries(scope) {
+			index.visited++
+			if index.visited == 10 {
+				index.cancel()
+			}
+			if !yield(entry, sections) {
+				return
+			}
+		}
 	}
 }
 
-func (store *delayedHeadStore) releaseHead() {
-	store.releaseOnce.Do(func() { close(store.release) })
-}
-
-func (store *blockingHeadStore) Head(ctx context.Context, key string) (blob.Attributes, error) {
-	<-ctx.Done()
-	return blob.Attributes{}, &blob.OpError{Op: "head", Key: key, Err: ctx.Err()}
+// A lookup stops scanning soon after its request ends, not at the end of
+// the world.
+func TestLookupStopsWithItsRequest(t *testing.T) {
+	store := manualSite(initializedMemory(t)).open(t, 0)
+	writeDocuments(t, store, 5000)
+	ctx, cancel := context.WithCancel(context.Background())
+	index := &countingIndex{Index: store.served.Load().snap, cancel: cancel}
+	if _, err := search(ctx, index, "*", catalog.Options{Max: 10}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("search after its request ended: %v, want context.Canceled", err)
+	}
+	if index.visited > cancelCheck {
+		t.Errorf("scanned %d entries after the request ended, want at most %d", index.visited, cancelCheck)
+	}
 }

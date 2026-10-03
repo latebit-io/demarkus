@@ -35,7 +35,7 @@ type Attributes struct {
 	Key        string
 	Generation Generation
 	Size       int64
-	Modified   time.Time // UTC, second precision; used only for object lifecycle.
+	Modified   time.Time // provider wall time, UTC, second precision; used only for object lifecycle.
 }
 
 // Object contains object bytes and their attributes.
@@ -57,7 +57,10 @@ type Store interface {
 	Create(context.Context, string, []byte) (Attributes, error)
 	Replace(context.Context, string, Generation, []byte) (Attributes, error)
 	Delete(context.Context, string, Generation) error
-	List(context.Context, string, string) (ListResult, error)
+	// List returns one page of the keys under prefix that sort after
+	// startAfter (empty for none), in key order. A cursor continues the
+	// listing it came from, with the same prefix and startAfter.
+	List(ctx context.Context, prefix, startAfter, cursor string) (ListResult, error)
 }
 
 var (
@@ -109,6 +112,14 @@ func ValidateKey(key string) error {
 // ValidatePrefix checks the shared list-prefix contract.
 func ValidatePrefix(prefix string) error {
 	return validateText("prefix", prefix)
+}
+
+// ValidateStartAfter checks a list start position: empty, or a valid key.
+func ValidateStartAfter(startAfter string) error {
+	if startAfter == "" {
+		return nil
+	}
+	return ValidateKey(startAfter)
 }
 
 // ValidateGeneration rejects non-positive generation conditions.

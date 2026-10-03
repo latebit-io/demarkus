@@ -146,9 +146,9 @@ func (s *Store) Delete(ctx context.Context, key string, generation blob.Generati
 }
 
 // List returns one provider-ordered page under prefix.
-func (s *Store) List(ctx context.Context, prefix, cursor string) (blob.ListResult, error) {
+func (s *Store) List(ctx context.Context, prefix, startAfter, cursor string) (blob.ListResult, error) {
 	const op = "list"
-	if err := preflight(ctx, op, prefix, blob.ValidatePrefix(prefix)); err != nil {
+	if err := preflight(ctx, op, prefix, blob.ValidatePrefix(prefix), blob.ValidateStartAfter(startAfter)); err != nil {
 		return blob.ListResult{}, err
 	}
 	providerCursor, err := blob.UnwrapCursor(prefix, cursor)
@@ -156,7 +156,8 @@ func (s *Store) List(ctx context.Context, prefix, cursor string) (blob.ListResul
 		return blob.ListResult{}, operationError(op, prefix, err)
 	}
 
-	query := &storage.Query{Prefix: prefix, Projection: storage.ProjectionNoACL}
+	// StartOffset is inclusive; the startAfter key itself is dropped below.
+	query := &storage.Query{Prefix: prefix, StartOffset: startAfter, Projection: storage.ProjectionNoACL}
 	if err := query.SetAttrSelection([]string{"Name", "Generation", "Size", "Updated"}); err != nil {
 		return blob.ListResult{}, operationError(op, prefix, err)
 	}
@@ -190,7 +191,7 @@ func (s *Store) List(ctx context.Context, prefix, cursor string) (blob.ListResul
 	if err != nil {
 		return blob.ListResult{}, integrityError(ctx, op, prefix, fmt.Errorf("encode provider cursor: %w", err), false)
 	}
-	result := blob.ListResult{Objects: make([]blob.Attributes, len(providerAttributes)), NextCursor: nextCursor}
+	result := blob.ListResult{Objects: make([]blob.Attributes, 0, len(providerAttributes)), NextCursor: nextCursor}
 	previous := ""
 	for index, providerAttribute := range providerAttributes {
 		attributes, err := s.objectAttributes(providerAttribute, "")
@@ -205,8 +206,15 @@ func (s *Store) List(ctx context.Context, prefix, cursor string) (blob.ListResul
 			cause := fmt.Errorf("provider keys %q and %q are not strictly ordered", previous, attributes.Key)
 			return blob.ListResult{}, integrityError(ctx, op, prefix, cause, false)
 		}
-		result.Objects[index] = attributes
+		if startAfter != "" && attributes.Key < startAfter {
+			cause := fmt.Errorf("provider key %q sorts before start offset %q", attributes.Key, startAfter)
+			return blob.ListResult{}, integrityError(ctx, op, prefix, cause, false)
+		}
 		previous = attributes.Key
+		if attributes.Key == startAfter {
+			continue
+		}
+		result.Objects = append(result.Objects, attributes)
 	}
 	return result, nil
 }

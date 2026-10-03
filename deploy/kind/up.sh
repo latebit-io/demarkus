@@ -660,7 +660,7 @@ want "mark_archive retires the smoke document" "archived: true"
 echo "OK: MCP tool calls end-to-end through the gateway"
 
 # 8. FEDERATION: an edit reaches the checkpoint of its world in the hub
-#    within quietPeriod + interval + two 1.5 s commits (shard, manifest),
+#    within quietPeriod + interval + two commits (shard, manifest),
 #    plus 2 s of polling. The deriver holds no token.
 HUB='"$FEDERATION_HUB"'
 QUIET='"$FEDERATION_QUIET_SECONDS"'

@@ -3,6 +3,8 @@ package changefeed
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -304,9 +306,11 @@ func TestPublishAtAndSkip(t *testing.T) {
 // runs inside the read, as a publish racing the load would.
 type recordBacklog struct {
 	history []Event // history[i] has Seq i+1
+	reach   uint64  // how far behind the head a resume may start; 0 is any
 	err     error
 	during  func()
 	reads   int
+	longest int // the most events one read returned
 	// peer runs on CatchUp, as a poll that finds a peer's commits would.
 	peer       func()
 	catchUpErr error
@@ -324,23 +328,35 @@ func (b *recordBacklog) CatchUp(ctx context.Context) error {
 	return b.catchUpErr
 }
 
+func (b *recordBacklog) Reaches(_ context.Context, after, head uint64) error {
+	if b.reach > 0 && head-after > b.reach {
+		return fmt.Errorf("%d events behind, past the reach of %d", head-after, b.reach)
+	}
+	return nil
+}
+
 func (b *recordBacklog) Events(_ context.Context, after, through uint64) ([]Event, error) {
 	b.reads++
 	if b.during != nil {
-		b.during()
+		during := b.during
+		b.during = nil
+		during()
 	}
 	if b.err != nil {
 		return nil, b.err
 	}
-	return b.history[after:through], nil
+	b.longest = max(b.longest, int(through-after))
+	return slices.Clone(b.history[after:through]), nil
 }
 
 // backlogHub is a reopened store's hub: 10 committed events alternating
-// between /a/ and /b/, all in the backlog, the ring of 8 replayed from 7.
+// between /a/ and /b/, all in the backlog, the ring of 8 replayed from 7
+// while a watch holds it.
 func backlogHub() (*Hub, *recordBacklog) {
 	backlog := &recordBacklog{}
 	hub := NewWithBacklog("w", 8, backlog)
 	hub.Skip(6)
+	holdRing(hub)
 	for seq := uint64(1); seq <= 10; seq++ {
 		path := "/a/x.md"
 		if seq%2 == 0 {
@@ -403,24 +419,23 @@ func TestResumeBacklogFailuresResync(t *testing.T) {
 	tests := []struct {
 		name  string
 		since uint64
-		setup func(hub *Hub, backlog *recordBacklog)
+		setup func(backlog *recordBacklog)
 		reads int
 	}{
-		{name: "lag past the ring", since: 1, reads: 0, setup: func(*Hub, *recordBacklog) {}},
-		{name: "backlog error", since: 2, reads: 1, setup: func(_ *Hub, backlog *recordBacklog) {
+		{name: "past the backlog's reach", since: 1, reads: 0, setup: func(backlog *recordBacklog) {
+			backlog.reach = 8
+		}},
+		{name: "backlog error", since: 2, reads: 1, setup: func(backlog *recordBacklog) {
 			backlog.err = errors.New("bucket unavailable")
 		}},
-		{name: "short backlog", since: 2, reads: 1, setup: func(_ *Hub, backlog *recordBacklog) {
+		{name: "short backlog", since: 2, reads: 1, setup: func(backlog *recordBacklog) {
 			backlog.history = append(backlog.history[:3:3], backlog.history[4:]...)
-		}},
-		{name: "ring passes the backlog during the read", since: 2, reads: 1, setup: func(hub *Hub, backlog *recordBacklog) {
-			backlog.during = func() { publishThrough(hub, 16) }
 		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			hub, backlog := backlogHub()
-			tt.setup(hub, backlog)
+			tt.setup(backlog)
 			if _, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: "w", Seq: tt.since}); !errors.Is(err, ErrResync) {
 				t.Fatalf("Subscribe: %v, want ErrResync", err)
 			}
@@ -436,6 +451,57 @@ func TestResumeBacklogFailuresResync(t *testing.T) {
 func publishThrough(hub *Hub, seq uint64) {
 	for next := hub.Head().Seq + 1; next <= seq; next++ {
 		hub.PublishAt(Event{Seq: next, Path: "/a/x.md", Version: int(next), Op: protocol.OpPublish})
+	}
+}
+
+// commitThrough is publishThrough for commits the backlog records too.
+func commitThrough(hub *Hub, backlog *recordBacklog, seq uint64) {
+	for next := uint64(len(backlog.history)) + 1; next <= seq; next++ {
+		backlog.history = append(backlog.history, Event{Seq: next, Path: "/a/x.md", Version: int(next), Op: protocol.OpPublish})
+	}
+	publishThrough(hub, seq)
+}
+
+// readThrough reads sub's events through seq and checks they are contiguous.
+func readThrough(t *testing.T, sub *Subscription, from, through uint64) {
+	t.Helper()
+	for seq := from; seq <= through; seq++ {
+		if got := next(t, sub); got.Seq != seq {
+			t.Fatalf("event = %+v, want seq %d", got, seq)
+		}
+	}
+}
+
+// A resume far older than the ring reads the backlog a ring's worth at a
+// time, so a subscription never holds more than one page.
+func TestResumePagesTheBacklog(t *testing.T) {
+	backlog := &recordBacklog{}
+	hub := NewWithBacklog("w", 8, backlog)
+	hub.Skip(30)
+	holdRing(hub)
+	commitThrough(hub, backlog, 40)
+	sub, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: "w", Seq: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readThrough(t, sub, 3, 40)
+	if backlog.reads != 4 || backlog.longest != 8 {
+		t.Fatalf("backlog reads = %d, longest %d events; want 4 pages of at most 8", backlog.reads, backlog.longest)
+	}
+}
+
+// A ring that moves on while the backlog is read is caught up from the
+// backlog: a slow resume is not lapped before it reaches the ring.
+func TestRingMovingDuringTheBacklogIsCaughtUp(t *testing.T) {
+	hub, backlog := backlogHub()
+	backlog.during = func() { commitThrough(hub, backlog, 30) }
+	sub, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: "w", Seq: 2})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	readThrough(t, sub, 3, 30)
+	if sub.paging {
+		t.Fatal("still paging at the head")
 	}
 }
 
@@ -552,5 +618,87 @@ func TestCatchUpOutlivesTheResumeThatStartedIt(t *testing.T) {
 	close(release)
 	if err := <-second; err != nil {
 		t.Fatalf("waiting resume failed with the leaver: %v", err)
+	}
+}
+
+// Waiting counts readers blocked in Next and nobody else: an open
+// subscription that is not reading is not watching.
+func TestWaitingCountsBlockedReaders(t *testing.T) {
+	hub := New("w", 4)
+	var stamp stamper
+	sub, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hub.Waiting(); got != 0 {
+		t.Fatalf("waiting before any read = %d, want 0", got)
+	}
+	read := make(chan error, 1)
+	go func() {
+		_, err := sub.Next(t.Context())
+		read <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for hub.Waiting() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("waiting = %d with a reader blocked, want 1", hub.Waiting())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stamp.publish(hub, Event{Path: "/a.md"})
+	if err := <-read; err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if got := hub.Waiting(); got != 0 {
+		t.Fatalf("waiting after the read = %d, want 0", got)
+	}
+}
+
+// holdRing opens a watch at the head that is never read, so the hub keeps its
+// ring as it does while anyone watches.
+func holdRing(hub *Hub) {
+	if _, err := hub.Subscribe(context.Background(), "/", protocol.Cursor{}); err != nil {
+		panic(err)
+	}
+}
+
+// A hub with a backlog drops its ring once no subscription is open: what is
+// published meanwhile is served to a resume from the backlog, and the ring
+// comes back with the next subscription. A hub without one keeps its ring.
+func TestUnwatchedHubDropsItsRing(t *testing.T) {
+	backlog := &recordBacklog{}
+	hub := NewWithBacklog("w", 8, backlog)
+	if hub.buf != nil {
+		t.Fatal("a backlogged hub nobody watches holds a ring")
+	}
+	watch, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitThrough(hub, backlog, 3)
+	readThrough(t, watch, 1, 3)
+	watch.Close()
+	if hub.buf != nil {
+		t.Fatal("the hub kept its ring after the last subscription closed")
+	}
+	commitThrough(hub, backlog, 6)
+	resumed, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: "w", Seq: 3})
+	if err != nil {
+		t.Fatalf("resume after the ring went: %v", err)
+	}
+	readThrough(t, resumed, 4, 6)
+	if backlog.reads == 0 || hub.buf == nil {
+		t.Errorf("backlog reads %d, ring held %v: want the gap from the backlog and the ring back", backlog.reads, hub.buf != nil)
+	}
+
+	plain := New("p", 8)
+	publishThrough(plain, 2)
+	sub, err := plain.Subscribe(t.Context(), "/", protocol.Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub.Close()
+	if plain.buf == nil || len(plain.Retained()) != 2 {
+		t.Error("a hub without a backlog let go of its ring, its only record")
 	}
 }

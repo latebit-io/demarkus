@@ -48,6 +48,23 @@ tests:
           path: data["config.yaml"]
           pattern: 'name: "team-b"[\s\S]*readOnly: true[\s\S]*maxConcurrentRequests: 16[\s\S]*requestTimeout: "5s"'
 
+  - it: passes a world's checkpoint grace through, and omits it unset
+    set:
+      worlds:
+        - name: team-a
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+          bucket: {url: gs://team-a-bucket, checkpointGrace: 30m}
+        - name: team-b
+          worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49
+          bucket: {url: gs://team-b-bucket}
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'worldID: "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48"\n      checkpointGrace: "30m"'
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'worldID: "42b471f7-8d38-4c89-b44a-6f4f8b1a4f49"\n      checkpointGrace'
+
   - it: propagates listener settings
     set:
       server.udpPort: 7443

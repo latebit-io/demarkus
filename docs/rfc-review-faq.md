@@ -118,7 +118,7 @@ A knowledge system is distributed: many logically isolated worlds behind one bro
 - A world is an independent failure domain for its own content: its bucket, tokens, and policy are its own, and other worlds keep serving and answering lookups.
 - A world being down degrades shared state: the next crawl silently omits its nodes and edges from the hub graph, so cross-world backlinks for it disappear until a later successful crawl. If the down world is the hub, cross-world discovery goes with it.
 - Adding a world is one entry in the server's `worlds[]` config plus a bucket bootstrap; no new workload.
-- Replicas are stateless over shared GCS; writes race on a compare-and-swap of one head object per world, with no leader election. The chart refuses fewer than 2 replicas.
+- Replicas are stateless over shared GCS; writes commit as create-only log slots that replicas race to create, with no leader election. The chart refuses fewer than 2 replicas.
 - The world list and deployment identity are declared once and reconciled by ArgoCD. Versions, secrets, bootstrap, and the hub name are not.
 - Smaller needs: the reference deployment's README calls this overkill for teams and says one or two plain deploys would do.
 

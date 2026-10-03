@@ -59,7 +59,7 @@ func TestSeedCountsArchivedPolicyAsPresent(t *testing.T) {
 func TestEnsureWorld(t *testing.T) {
 	t.Run("creates genesis in an empty bucket", func(t *testing.T) {
 		objects := newTestMemory(t)
-		created, err := EnsureWorld(context.Background(), objects, testWorldID)
+		created, err := ensureWorld(context.Background(), objects, testWorldID)
 		if err != nil {
 			t.Fatalf("EnsureWorld: %v", err)
 		}
@@ -73,23 +73,23 @@ func TestEnsureWorld(t *testing.T) {
 
 	t.Run("leaves an existing world alone", func(t *testing.T) {
 		objects := initializedMemory(t)
-		before := getObject(t, objects, headObjectKey).Attributes.Generation
-		created, err := EnsureWorld(context.Background(), objects, testWorldID)
+		before := getObject(t, objects, markerKey).Attributes.Generation
+		created, err := ensureWorld(context.Background(), objects, testWorldID)
 		if err != nil {
 			t.Fatalf("EnsureWorld: %v", err)
 		}
 		if created {
 			t.Error("created = true for an initialized bucket")
 		}
-		if after := getObject(t, objects, headObjectKey).Attributes.Generation; after != before {
-			t.Errorf("head generation changed from %d to %d", before, after)
+		if after := getObject(t, objects, markerKey).Attributes.Generation; after != before {
+			t.Errorf("marker generation changed from %d to %d", before, after)
 		}
 	})
 
-	t.Run("finishes a genesis another replica left without a head", func(t *testing.T) {
+	t.Run("finishes a genesis another replica left without a marker", func(t *testing.T) {
 		objects := newTestMemory(t)
-		createGenesisPrefix(t, objects, 10)
-		created, err := EnsureWorld(context.Background(), objects, testWorldID)
+		createGenesisPrefix(t, objects, 2)
+		created, err := ensureWorld(context.Background(), objects, testWorldID)
 		if err != nil || !created {
 			t.Fatalf("EnsureWorld = (%v, %v), want the genesis finished", created, err)
 		}
@@ -100,26 +100,26 @@ func TestEnsureWorld(t *testing.T) {
 
 	t.Run("refuses genesis objects mixed with a foreign one", func(t *testing.T) {
 		objects := newTestMemory(t)
-		createGenesisPrefix(t, objects, 10)
+		createGenesisPrefix(t, objects, 2)
 		if _, err := objects.Create(context.Background(), "someone-elses-data.json", []byte("{}")); err != nil {
 			t.Fatalf("seed foreign object: %v", err)
 		}
-		_, err := EnsureWorld(context.Background(), objects, testWorldID)
+		_, err := ensureWorld(context.Background(), objects, testWorldID)
 		if !errors.Is(err, blob.ErrPrecondition) || !strings.Contains(err.Error(), "someone-elses-data.json") {
 			t.Fatalf("EnsureWorld error = %v, want ErrPrecondition naming the foreign object", err)
 		}
 	})
 
-	t.Run("refuses a non-empty bucket with no head", func(t *testing.T) {
+	t.Run("refuses a non-empty bucket with no marker", func(t *testing.T) {
 		objects := newTestMemory(t)
 		if _, err := objects.Create(context.Background(), "someone-elses-data.json", []byte("{}")); err != nil {
 			t.Fatalf("seed foreign object: %v", err)
 		}
-		_, err := EnsureWorld(context.Background(), objects, testWorldID)
+		_, err := ensureWorld(context.Background(), objects, testWorldID)
 		if !errors.Is(err, blob.ErrPrecondition) {
 			t.Fatalf("EnsureWorld error = %v, want ErrPrecondition", err)
 		}
-		if !strings.Contains(err.Error(), "no world head") {
+		if !strings.Contains(err.Error(), "no world marker") {
 			t.Errorf("error does not name the cause: %v", err)
 		}
 	})

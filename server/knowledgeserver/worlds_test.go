@@ -38,7 +38,7 @@ type worldsTestHarness struct {
 	certs   *certsource.Source
 	manager *worldManager
 	// storesMu guards stores: the manager's retry loop and the test
-	// goroutine both drive newStore.
+	// goroutine both reach them.
 	storesMu sync.Mutex
 	stores   map[string]*blob.Memory
 }
@@ -103,14 +103,31 @@ func newWorldsHarness(t *testing.T, fragment string) *worldsTestHarness {
 	return h
 }
 
-// openHarness writes a config whose world set is worldsSection, either a
-// worldsFile pointer or an inline worlds list, and opens a manager over it.
-// newStore overrides the blob-store factory; nil uses in-memory buckets.
+// openHarness opens a manager over worldsSection (a worldsFile pointer or an
+// inline list) through the server's bucket store wiring; newStore overrides
+// its blob stores, nil uses in-memory buckets.
 func openHarness(
 	t *testing.T,
 	dir, worldsSection string,
 	newStore func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error),
 ) (*worldsTestHarness, error) {
+	t.Helper()
+	h := newHarness(dir)
+	if newStore == nil {
+		newStore = func(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
+			return h.memory(world.Name)
+		}
+	}
+	err := h.open(t, worldsSection, bucketStores(newStore))
+	return h, err
+}
+
+func newHarness(dir string) *worldsTestHarness {
+	return &worldsTestHarness{dir: dir, stores: map[string]*blob.Memory{}}
+}
+
+// open writes the config and starts the manager over openStore.
+func (h *worldsTestHarness) open(t *testing.T, worldsSection string, openStore storeFactory) error {
 	t.Helper()
 	certFile, keyFile := testCertFiles(t)
 	main := fmt.Sprintf(`version: 1
@@ -118,7 +135,7 @@ tls:
   certFile: %s
   keyFile: %s
 %s`, certFile, keyFile, worldsSection)
-	configFile := filepath.Join(dir, "config.yaml")
+	configFile := filepath.Join(h.dir, "config.yaml")
 	if err := os.WriteFile(configFile, []byte(main), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -130,30 +147,15 @@ tls:
 	if err != nil {
 		t.Fatalf("certsource: %v", err)
 	}
-	h := &worldsTestHarness{dir: dir, config: config, certs: certs, stores: map[string]*blob.Memory{}}
-	if newStore == nil {
-		newStore = func(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
-			h.storesMu.Lock()
-			defer h.storesMu.Unlock()
-			if store, ok := h.stores[world.Name]; ok {
-				return store, nil
-			}
-			store, err := blob.NewMemory(maxObjectBytes)
-			if err != nil {
-				return nil, err
-			}
-			h.stores[world.Name] = store
-			return store, nil
-		}
-	}
+	h.config, h.certs = config, certs
 	watchCtx, cancel := context.WithCancel(context.Background())
 	group := &sync.WaitGroup{}
-	manager, err := newWorldManager(watchCtx, group, worldManagerConfig{configFile: configFile, config: config, newStore: newStore, certs: certs, peers: &peerLinks{}, logger: slog.Default()})
+	manager, err := newWorldManager(watchCtx, group, worldManagerConfig{configFile: configFile, config: config, openStore: openStore, certs: certs, peers: &peerLinks{}, logger: slog.Default()})
 	if err != nil {
 		cancel()
 		group.Wait()
 		// The harness carries the stores the failed open touched.
-		return h, err
+		return err
 	}
 	h.manager = manager
 	t.Cleanup(func() {
@@ -161,7 +163,23 @@ tls:
 		cancel()
 		group.Wait()
 	})
-	return h, nil
+	return nil
+}
+
+// memory is world's in-memory bucket, empty on first use: the manager's
+// retry loop and the test goroutine both reach it.
+func (h *worldsTestHarness) memory(world string) (*blob.Memory, error) {
+	h.storesMu.Lock()
+	defer h.storesMu.Unlock()
+	if store, ok := h.stores[world]; ok {
+		return store, nil
+	}
+	store, err := blob.NewMemory(maxObjectBytes)
+	if err != nil {
+		return nil, err
+	}
+	h.stores[world] = store
+	return store, nil
 }
 
 func (h *worldsTestHarness) writeFragment(t *testing.T, fragment string) {
@@ -207,13 +225,12 @@ func writeTokens(t *testing.T, dir, name string) string {
 	return path
 }
 
+// objects is world's bucket; one the manager never opened is still empty.
 func (h *worldsTestHarness) objects(t *testing.T, world string) *blob.Memory {
 	t.Helper()
-	h.storesMu.Lock()
-	defer h.storesMu.Unlock()
-	store := h.stores[world]
-	if store == nil {
-		t.Fatalf("no store opened for %s", world)
+	store, err := h.memory(world)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return store
 }
@@ -295,9 +312,9 @@ func TestWorldManagerBootstrapInitializesGenesis(t *testing.T) {
 	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, tokens, true))
 
 	// The memory blob store started empty; a successful open proves the
-	// bootstrap path wrote genesis. The head object must now exist.
+	// bootstrap path wrote genesis. The world marker must now exist.
 	if _, err := h.objects(t, "alice").Get(context.Background(), "_demarkus/v1/head.json"); err != nil {
-		t.Fatalf("bootstrap did not create genesis head: %v", err)
+		t.Fatalf("bootstrap did not create the world marker: %v", err)
 	}
 }
 
@@ -352,7 +369,7 @@ func TestWorldManagerRefusesUnreadablePolicyFile(t *testing.T) {
 		t.Fatal("manager started with an unreadable policy file")
 	}
 	// The seed is read before genesis, so a bad file leaves no world behind.
-	listed, err := h.objects(t, "acme").List(context.Background(), "", "")
+	listed, err := h.objects(t, "acme").List(context.Background(), "", "", "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -377,7 +394,7 @@ func TestWorldManagerRefusesBucketWithForeignObjects(t *testing.T) {
 	if err == nil {
 		t.Fatal("manager started over a bucket holding foreign objects")
 	}
-	if !strings.Contains(err.Error(), "no world head") {
+	if !strings.Contains(err.Error(), "no world marker") {
 		t.Errorf("error does not name the cause: %v", err)
 	}
 }
@@ -666,7 +683,7 @@ func TestWorldManagerReadOnlyWorldWritesNothing(t *testing.T) {
 		t.Fatal("read-only world over an empty bucket came up")
 	}
 	// Neither genesis nor a policy seed may be authored for it.
-	listed, err := h.objects(t, "acme").List(context.Background(), "", "")
+	listed, err := h.objects(t, "acme").List(context.Background(), "", "", "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -688,15 +705,15 @@ func TestWorldManagerSeedsProvisionedWorld(t *testing.T) {
 	}
 }
 
-// A peer's hint makes the world poll at once, so a commit on another
-// replica reaches this one without a watcher or the 5 s timer.
+// A peer's hint makes the world read at once, so a commit on another
+// replica reaches this one without a watcher or the backstop timer.
 func TestWorldManagerHintPollsTheWorld(t *testing.T) {
 	tokensDir := t.TempDir()
 	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, writeTokens(t, tokensDir, "alice"), true))
 	h.manager.mu.Lock()
-	entry := h.manager.entries["alice"]
+	hub := h.manager.entries["alice"].store.Changes()
 	h.manager.mu.Unlock()
-	before := entry.store.HeadSequence()
+	before := hub.Head().Seq
 
 	// Another replica's commit: a second store over the same bucket.
 	peer, err := bucketstore.Open(context.Background(), h.objects(t, "alice"), bucketstore.Options{Logger: slog.Default(), WorldID: testWorldID})
@@ -706,14 +723,14 @@ func TestWorldManagerHintPollsTheWorld(t *testing.T) {
 	if _, err := peer.Publish(context.Background(), backend.WriteRequest{Path: "/docs/peer.md", ExpectedVersion: -1, Content: []byte("# Peer\n")}); err != nil {
 		t.Fatal(err)
 	}
-	if got := entry.store.HeadSequence(); got != before {
+	if got := hub.Head().Seq; got != before {
 		t.Fatalf("head moved to %d without a hint or a read", got)
 	}
-	h.manager.Hint(peerhint.Hint{WorldID: testWorldID, Sequence: before + 1})
+	h.manager.Hint(peerhint.Hint{WorldID: testWorldID, Sequence: int64(before) + 1})
 	deadline := time.Now().Add(5 * time.Second)
-	for entry.store.HeadSequence() != before+1 {
+	for hub.Head().Seq != before+1 {
 		if time.Now().After(deadline) {
-			t.Fatalf("head = %d after the hint, want %d", entry.store.HeadSequence(), before+1)
+			t.Fatalf("head = %d after the hint, want %d", hub.Head().Seq, before+1)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

@@ -55,7 +55,7 @@ worlds: []
   # - name: team-b
   #   worldID: 42b471f7-8d38-4c89-b44a-6f4f8b1a4f49
   #   authorities: [team-b.example.com]
-  #   bucket: {url: gs://other-bucket}
+  #   bucket: {url: gs://other-bucket, checkpointGrace: 30m}  # grace: 15m default and minimum
   #   readOnly: true
   #   publicURL: "mark://team-b.example.com:6309"
 

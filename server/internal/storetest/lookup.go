@@ -278,7 +278,7 @@ func catalogUnarchive(t *testing.T, b LookupBackend, path string) {
 // mustLookup runs a lookup, failing the test on error.
 func mustLookup(t *testing.T, b LookupBackend, query string, opts catalog.Options) []catalog.Result {
 	t.Helper()
-	rs, err := b.direct().Lookup(query, opts)
+	rs, err := SettledLookup(b.direct(), query, opts)
 	if err != nil {
 		t.Fatalf("lookup %q: %v", query, err)
 	}
