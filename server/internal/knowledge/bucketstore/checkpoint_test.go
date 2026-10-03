@@ -599,6 +599,334 @@ func TestCompactorListsOnlyNewerCheckpoints(t *testing.T) {
 	}
 }
 
+// youngListing lists every object as written just now.
+type youngListing struct{ blob.Store }
+
+func (s youngListing) List(ctx context.Context, prefix, startAfter, cursor string) (blob.ListResult, error) {
+	result, err := s.Store.List(ctx, prefix, startAfter, cursor)
+	for index := range result.Objects {
+		result.Objects[index].Modified = time.Now().UTC()
+	}
+	return result, err
+}
+
+// A compactor deletes checkpoints past the newest three once an hour old, so
+// a cold start lists few; what they reach stays, so a replica resting on one
+// still reads every version.
+func TestCompactorDropsOldCheckpoints(t *testing.T) {
+	ctx := context.Background()
+	listed := func(t *testing.T, objects blob.Store) []int64 {
+		sequences := make([]int64, 0, 8)
+		for page, err := range sequencePages(ctx, objects, checkpointPrefix, 0) {
+			mustSucceed(t, err)
+			sequences = append(sequences, page...)
+		}
+		return sequences
+	}
+
+	t.Run("old", func(t *testing.T) {
+		objects := initializedMemory(t)
+		site := manualSite(objects)
+		writer, resting := site.open(t, 0), site.open(t, 0)
+		written := make([]int64, 0, 5)
+		for round := range 5 {
+			writeWorld(t, writer, round)
+			mustSucceed(t, writer.checkpoint(ctx))
+			written = append(written, writer.layout().Sequence)
+			if round == 0 {
+				mustSucceed(t, resting.poll(ctx))
+				mustSucceed(t, resting.checkpoint(ctx))
+			}
+		}
+		if got := listed(t, objects); !reflect.DeepEqual(got, written[2:]) {
+			t.Fatalf("checkpoints left = %v, want the newest three %v", got, written[2:])
+		}
+		readEveryVersion(t, resting)
+		if live, cold := worldDigest(t, writer), worldDigest(t, site.open(t, 0)); !reflect.DeepEqual(live, cold) {
+			t.Error("cold replica differs after old checkpoints went")
+		}
+	})
+
+	t.Run("young", func(t *testing.T) {
+		objects := initializedMemory(t)
+		writer := manualSite(youngListing{objects}).open(t, 0)
+		for round := range 5 {
+			writeWorld(t, writer, round)
+			mustSucceed(t, writer.checkpoint(ctx))
+		}
+		if got := listed(t, objects); len(got) != 6 {
+			t.Errorf("checkpoints left = %v, want all six, each under an hour old", got)
+		}
+	})
+}
+
+// clockedStore stamps each generation with the wall clock less an offset, in
+// place of blob.Memory's logical time, so objects have real ages.
+type clockedStore struct {
+	blob.Store
+	mu     sync.Mutex
+	offset time.Duration
+	times  map[blob.Generation]time.Time
+}
+
+func newClockedStore(t *testing.T) *clockedStore {
+	return &clockedStore{Store: initializedMemory(t), times: make(map[blob.Generation]time.Time)}
+}
+
+// writtenAgo stamps what is written from now on as written that long ago.
+func (s *clockedStore) writtenAgo(age time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.offset = -age
+}
+
+func (s *clockedStore) stamp(attributes blob.Attributes) blob.Attributes {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if at, ok := s.times[attributes.Generation]; ok {
+		attributes.Modified = at
+	}
+	return attributes
+}
+
+func (s *clockedStore) record(attributes blob.Attributes, err error) (blob.Attributes, error) {
+	if err != nil {
+		return attributes, err
+	}
+	s.mu.Lock()
+	s.times[attributes.Generation] = time.Now().Add(s.offset).UTC().Truncate(time.Second)
+	s.mu.Unlock()
+	return s.stamp(attributes), nil
+}
+
+func (s *clockedStore) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
+	return s.record(s.Store.Create(ctx, key, data))
+}
+
+func (s *clockedStore) Replace(ctx context.Context, key string, generation blob.Generation, data []byte) (blob.Attributes, error) {
+	return s.record(s.Store.Replace(ctx, key, generation, data))
+}
+
+func (s *clockedStore) Get(ctx context.Context, key string) (blob.Object, error) {
+	object, err := s.Store.Get(ctx, key)
+	object.Attributes = s.stamp(object.Attributes)
+	return object, err
+}
+
+func (s *clockedStore) Head(ctx context.Context, key string) (blob.Attributes, error) {
+	attributes, err := s.Store.Head(ctx, key)
+	return s.stamp(attributes), err
+}
+
+func (s *clockedStore) List(ctx context.Context, prefix, startAfter, cursor string) (blob.ListResult, error) {
+	result, err := s.Store.List(ctx, prefix, startAfter, cursor)
+	for index := range result.Objects {
+		result.Objects[index] = s.stamp(result.Objects[index])
+	}
+	return result, err
+}
+
+func exists(t *testing.T, objects blob.Store, key string) bool {
+	t.Helper()
+	_, err := objects.Head(context.Background(), key)
+	if err != nil && !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("head %q: %v", key, err)
+	}
+	return err == nil
+}
+
+// checkpointOnly writes a checkpoint and rebases on it without dropping old
+// ones, so a test drops where it says.
+func checkpointOnly(t *testing.T, store *Store) {
+	t.Helper()
+	adopted, err := store.checkpointWriter().write(context.Background(), store.served.Load().snap)
+	mustSucceed(t, err)
+	store.installAdoption(adopted)
+}
+
+// rootOf reads the root and shard keys of the newest checkpoint.
+func rootOf(t *testing.T, store *Store) keyedRoot {
+	t.Helper()
+	root, err := store.checkpointRoot(context.Background(), checkpointKey(store.layout().Sequence))
+	mustSucceed(t, err)
+	return root
+}
+
+// A dropped checkpoint takes the shards and root no kept checkpoint uses;
+// shards it shared with them stay.
+func TestDroppedCheckpointsTakeOnlyTheirShards(t *testing.T) {
+	ctx := context.Background()
+	objects := initializedMemory(t)
+	site := manualSite(objects)
+	writer := site.open(t, 0)
+	writeDocuments(t, writer, 600)
+	roots := make([]keyedRoot, 0, 5)
+	for version := range 5 {
+		if version > 0 {
+			_, err := writer.WriteVersion("/many/0007.md", version, fmt.Appendf(nil, "# v%d\n", version+1), nil)
+			mustSucceed(t, err)
+		}
+		mustSucceed(t, writer.checkpoint(ctx))
+		roots = append(roots, rootOf(t, writer))
+	}
+	changed := shardOf(pathHash("/many/0007.md"), roots[0].layout.Bits)
+	for index, root := range roots {
+		dropped := index < 2
+		if present := exists(t, objects, root.Key); present == dropped {
+			t.Errorf("root of checkpoint %d present = %t, want %t", index, present, !dropped)
+		}
+		for shard, ref := range root.layout.Shards {
+			if want := !dropped || shard != changed; exists(t, objects, ref.Key) != want {
+				t.Errorf("checkpoint %d shard %d present = %t, want %t", index, shard, !want, want)
+			}
+		}
+	}
+	readEveryVersion(t, writer)
+	if live, cold := worldDigest(t, writer), worldDigest(t, site.open(t, 0)); !reflect.DeepEqual(live, cold) {
+		t.Error("cold replica differs after old shards went")
+	}
+}
+
+// A checkpoint whose successor is under an hour old stays however old it is:
+// a compactor that started on it may still be writing.
+func TestDropKeepsCheckpointsWithAYoungSuccessor(t *testing.T) {
+	ctx := context.Background()
+	objects := newClockedStore(t)
+	writer := manualSite(objects).open(t, 0)
+	sequences := make([]int64, 1, 8)
+	sequences[0] = 1
+	objects.writtenAgo(3 * time.Hour)
+	for round := range 7 {
+		if round == 3 {
+			objects.writtenAgo(0)
+		}
+		writeWorld(t, writer, round)
+		mustSucceed(t, writer.checkpoint(ctx))
+		sequences = append(sequences, writer.layout().Sequence)
+	}
+	left := make([]int64, 0, 8)
+	for page, err := range sequencePages(ctx, objects, checkpointPrefix, 0) {
+		mustSucceed(t, err)
+		left = append(left, page...)
+	}
+	// Checkpoints 0 to 3 are old; 3 stays because 4 is young.
+	if want := sequences[3:]; !reflect.DeepEqual(left, want) {
+		t.Errorf("checkpoints left = %v, want %v", left, want)
+	}
+}
+
+// A new checkpoint that reuses a dropped checkpoint's shard and root (the
+// world returned to that state) rewrites them first, so the drop spares them.
+func TestDropSparesShardsReusedMeanwhile(t *testing.T) {
+	ctx := context.Background()
+	objects := newClockedStore(t)
+	site := manualSite(objects)
+	writer := site.open(t, 0)
+	objects.writtenAgo(2 * time.Hour)
+	_, err := writer.WriteVersion("/a.md", 0, []byte("# A\n"), nil)
+	mustSucceed(t, err)
+	checkpointOnly(t, writer)
+	live := rootOf(t, writer)
+	for range 3 {
+		_, _, err = writer.ArchiveResult("/a.md", false)
+		mustSucceed(t, err)
+		_, _, err = writer.ArchiveResult("/a.md", true)
+		mustSucceed(t, err)
+		checkpointOnly(t, writer)
+	}
+	objects.writtenAgo(0)
+	plan, err := writer.planDrop(ctx)
+	mustSucceed(t, err)
+	if plan.kept[live.Key] {
+		t.Fatal("the drop keeps the live state's root; the test needs it dropped")
+	}
+	_, _, err = writer.ArchiveResult("/a.md", false)
+	mustSucceed(t, err)
+	written := checkpointWriter{objects: objects, worldID: testWorldID, workers: 4}
+	adopted, err := written.write(ctx, writer.served.Load().snap)
+	mustSucceed(t, err)
+	if !reflect.DeepEqual(adopted.checkpoint.Shards, live.layout.Shards) {
+		t.Fatal("the new checkpoint does not reuse the dropped one's shards")
+	}
+	mustSucceed(t, writer.applyDrop(ctx, plan))
+	readEveryVersion(t, site.open(t, 0))
+}
+
+// A drop cut short after deleting a checkpoint's root is finished by the next:
+// the root's absence means its shards went first.
+func TestDropFinishesAfterACrash(t *testing.T) {
+	ctx := context.Background()
+	objects := initializedMemory(t)
+	writer := manualSite(objects).open(t, 0)
+	_, err := writer.WriteVersion("/a.md", 0, []byte("# A\n"), nil)
+	mustSucceed(t, err)
+	plan, err := writer.planDrop(ctx)
+	mustSucceed(t, err)
+	if len(plan.dropped) != 0 {
+		t.Fatalf("dropped %d with one checkpoint", len(plan.dropped))
+	}
+	for version := 1; version < 5; version++ {
+		_, err := writer.WriteVersion("/a.md", version, fmt.Appendf(nil, "# A%d\n", version), nil)
+		mustSucceed(t, err)
+		checkpointOnly(t, writer)
+	}
+	plan, err = writer.planDrop(ctx)
+	mustSucceed(t, err)
+	if len(plan.dropped) == 0 {
+		t.Fatal("nothing to drop")
+	}
+	failing := manualSite(failShardDeletes{objects}).open(t, 0)
+	if err := failing.applyDrop(ctx, plan); err == nil {
+		t.Fatal("drop with failing shard deletes succeeded")
+	}
+	for _, dropped := range plan.dropped {
+		if !exists(t, objects, dropped.Key) {
+			t.Fatalf("checkpoint %s went before its shards, which nothing can find now", dropped.Key)
+		}
+	}
+	cut := plan.dropped[0]
+	root, err := writer.checkpointRoot(ctx, cut.Key)
+	mustSucceed(t, err)
+	deleteObject(t, objects, root.Key)
+	mustSucceed(t, writer.applyDrop(ctx, plan))
+	for _, dropped := range plan.dropped {
+		if exists(t, objects, dropped.Key) {
+			t.Errorf("checkpoint %s outlived the drop that finished it", dropped.Key)
+		}
+	}
+}
+
+// failShardDeletes fails every shard delete, as a drop cut short does.
+type failShardDeletes struct{ blob.Store }
+
+func (s failShardDeletes) Delete(ctx context.Context, key string, generation blob.Generation) error {
+	if strings.HasPrefix(key, objectPrefix+"index/") {
+		return errors.New("unavailable")
+	}
+	return s.Store.Delete(ctx, key, generation)
+}
+
+// readEveryVersion reads every retained version of every document and
+// verifies each chain, so a missing object anywhere fails it.
+func readEveryVersion(t *testing.T, store *Store) {
+	t.Helper()
+	store.served.Load().snap.Paths.Ascend(func(state *pathState) bool {
+		versions, err := store.Versions(state.Path)
+		if err != nil {
+			t.Fatalf("versions of %s: %v", state.Path, err)
+		}
+		for _, version := range versions {
+			if _, err := store.Get(state.Path, version.Version); err != nil {
+				t.Fatalf("%s v%d: %v", state.Path, version.Version, err)
+			}
+		}
+		if err := store.VerifyChain(state.Path); err != nil {
+			t.Fatalf("chain of %s: %v", state.Path, err)
+		}
+		return true
+	})
+}
+
 // waitIdleCompactor waits until no compaction runs.
 func waitIdleCompactor(t *testing.T, store *Store) {
 	t.Helper()

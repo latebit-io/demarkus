@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/latebit-io/demarkus/server/blob"
 )
@@ -88,6 +89,11 @@ func createImmutable(ctx context.Context, objects blob.Store, object modelObject
 	return err
 }
 
+// freshenAge is how old stored bytes may be for a create to reuse them as
+// they are; older ones are rewritten first, which fences a pending delete of
+// an old checkpoint's shard or root (dropOldCheckpoints).
+const freshenAge = dropGrace / 2
+
 // createOrRead creates an immutable object, deciding an unknown outcome by
 // reading the name back. A name that holds other bytes returns them: a
 // content-addressed object is corrupt, a slot was won by another writer.
@@ -108,10 +114,21 @@ func createOrRead(ctx context.Context, objects blob.Store, object modelObject) (
 			if err := validateReadObject(object.Key, &existing); err != nil {
 				return nil, fmt.Errorf("reconcile immutable object %q: %w", object.Key, err)
 			}
-			if bytes.Equal(existing.Data, object.Data) {
+			if !bytes.Equal(existing.Data, object.Data) {
+				return &existing, nil
+			}
+			if time.Since(existing.Attributes.Modified) < freshenAge {
 				return nil, nil
 			}
-			return &existing, nil
+			// A new generation fails a delete conditioned on the one it read; a
+			// delete that already won makes the next attempt create it again.
+			_, getErr = objects.Replace(ctx, object.Key, existing.Attributes.Generation, object.Data)
+			if getErr == nil {
+				return nil, nil
+			}
+			if errors.Is(getErr, blob.ErrPrecondition) {
+				continue
+			}
 		}
 		lastErr = errors.Join(lastErr, getErr)
 		if !errors.Is(getErr, blob.ErrNotFound) && !retryableObjectError(getErr) {

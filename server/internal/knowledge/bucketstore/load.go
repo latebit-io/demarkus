@@ -60,14 +60,19 @@ func newestCheckpoint(ctx context.Context, objects blob.Store, worldID string) (
 	if err != nil {
 		return checkpointObject{}, err
 	}
-	checkpoint, _, err := getValidated(ctx, objects, checkpointKey(newest), func(checkpoint *checkpointObject) error {
-		return validateCheckpoint(checkpoint, newest)
+	return readCheckpoint(ctx, objects, worldID, newest)
+}
+
+// readCheckpoint reads and checks the checkpoint at sequence.
+func readCheckpoint(ctx context.Context, objects blob.Store, worldID string, sequence int64) (checkpointObject, error) {
+	checkpoint, _, err := getValidated(ctx, objects, checkpointKey(sequence), func(checkpoint *checkpointObject) error {
+		return validateCheckpoint(checkpoint, sequence)
 	})
 	if err != nil {
-		return checkpointObject{}, fmt.Errorf("load checkpoint: %w", err)
+		return checkpointObject{}, fmt.Errorf("load checkpoint %d: %w", sequence, err)
 	}
 	if checkpoint.WorldID != worldID {
-		return checkpointObject{}, fmt.Errorf("%w: checkpoint %d belongs to world %q", blob.ErrIntegrity, newest, checkpoint.WorldID)
+		return checkpointObject{}, fmt.Errorf("%w: checkpoint %d belongs to world %q", blob.ErrIntegrity, sequence, checkpoint.WorldID)
 	}
 	return checkpoint, nil
 }

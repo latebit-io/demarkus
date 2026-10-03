@@ -2,6 +2,7 @@ package bucketstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	mathrand "math/rand/v2"
 	"slices"
@@ -21,6 +22,14 @@ const (
 	// checkpointTimeout bounds one compaction or adoption, which no request
 	// waits for.
 	checkpointTimeout = 5 * time.Minute
+	// The newest checkpointsKept stay, and any whose successor came within
+	// checkpointKeep: a compactor building on one has long finished when it
+	// goes. A dropped one takes the shards and root only it used.
+	checkpointKeep  = time.Hour
+	checkpointsKept = 3
+	// dropGrace: a shard or root is deleted only once older than this when
+	// the drop starts, conditioned on the generation read (freshenAge).
+	dropGrace = time.Hour
 )
 
 // compactionTrigger is when a store's compactor runs; tests shorten it.
@@ -125,6 +134,147 @@ func (store *Store) checkpoint(ctx context.Context) error {
 		return err
 	}
 	store.installAdoption(adopted)
+	plan, err := store.planDrop(ctx)
+	if err == nil {
+		err = store.applyDrop(ctx, plan)
+	}
+	if err != nil {
+		store.logger.Warn("old checkpoints not dropped; a later checkpoint retries", "world", store.worldID, "error", err)
+	}
+	return nil
+}
+
+// dropPlan is the checkpoints to drop, at their listed generations, and the
+// root and shard keys the kept ones use.
+type dropPlan struct {
+	started time.Time
+	dropped []blob.Attributes
+	kept    map[string]bool
+}
+
+// planDrop lists the checkpoints and reads the kept ones' roots.
+func (store *Store) planDrop(ctx context.Context) (dropPlan, error) {
+	plan := dropPlan{started: store.now(), kept: make(map[string]bool)}
+	var listed []blob.Attributes
+	cursor := ""
+	for {
+		page, err := store.objects.List(ctx, checkpointPrefix, "", cursor)
+		if err != nil {
+			return dropPlan{}, fmt.Errorf("list checkpoints: %w", err)
+		}
+		listed = append(listed, page.Objects...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	var kept []string
+	for index, attributes := range listed {
+		if index < len(listed)-checkpointsKept && plan.started.Sub(listed[index+1].Modified) >= checkpointKeep {
+			plan.dropped = append(plan.dropped, attributes)
+		} else {
+			kept = append(kept, attributes.Key)
+		}
+	}
+	if len(plan.dropped) == 0 {
+		return plan, nil
+	}
+	// Racing compactors may write sequences out of order, so every kept root
+	// is read, not only those after the dropped ones.
+	for _, key := range kept {
+		root, err := store.checkpointRoot(ctx, key)
+		if err != nil {
+			return dropPlan{}, err
+		}
+		plan.kept[root.Key] = true
+		for _, shard := range root.layout.Shards {
+			plan.kept[shard.Key] = true
+		}
+	}
+	return plan, nil
+}
+
+// checkpointRoot reads the root of the checkpoint at key.
+func (store *Store) checkpointRoot(ctx context.Context, key string) (keyedRoot, error) {
+	sequence, ok := sequenceOfKey(key, checkpointPrefix)
+	if !ok {
+		return keyedRoot{}, fmt.Errorf("%w: %q is not a sequence name", blob.ErrIntegrity, key)
+	}
+	checkpoint, err := readCheckpoint(ctx, store.objects, store.worldID, sequence)
+	if err != nil {
+		return keyedRoot{}, err
+	}
+	root, err := loadRoot(ctx, store.objects, checkpoint)
+	return keyedRoot{Key: checkpoint.Root.Key, rootRead: root}, err
+}
+
+// keyedRoot is a checkpoint's root and its key.
+type keyedRoot struct {
+	Key string
+	rootRead
+}
+
+// applyDrop deletes each dropped checkpoint's own shards, then its root, then
+// the checkpoint, so a drop cut short is found and finished by the next.
+func (store *Store) applyDrop(ctx context.Context, plan dropPlan) error {
+	var failures []error
+	for _, attributes := range plan.dropped {
+		if err := store.drop(ctx, plan, attributes); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (store *Store) drop(ctx context.Context, plan dropPlan, checkpoint blob.Attributes) error {
+	root, err := store.checkpointRoot(ctx, checkpoint.Key)
+	switch {
+	case err == nil:
+		var shards []string
+		for _, shard := range root.layout.Shards {
+			if !plan.kept[shard.Key] {
+				shards = append(shards, shard.Key)
+			}
+		}
+		err = runParallel(ctx, store.shardWorkers, shards, func(ctx context.Context, key string) error {
+			return store.deleteUnused(ctx, key, plan.started)
+		})
+		if err == nil && !plan.kept[root.Key] {
+			err = store.deleteUnused(ctx, root.Key, plan.started)
+		}
+		if err != nil {
+			return fmt.Errorf("drop %q: %w", checkpoint.Key, err)
+		}
+	case !errors.Is(err, blob.ErrNotFound):
+		return fmt.Errorf("drop %q: %w", checkpoint.Key, err)
+	}
+	// A missing root was deleted by a drop cut short, after its shards.
+	return deleteAt(ctx, store.objects, checkpoint)
+}
+
+// deleteUnused deletes a shard or root no kept checkpoint uses, unless it was
+// written or reused within dropGrace of the drop's start.
+func (store *Store) deleteUnused(ctx context.Context, key string, started time.Time) error {
+	attributes, err := store.objects.Head(ctx, key)
+	if errors.Is(err, blob.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("head %q: %w", key, err)
+	}
+	if started.Sub(attributes.Modified) < dropGrace {
+		return nil
+	}
+	return deleteAt(ctx, store.objects, attributes)
+}
+
+// deleteAt deletes an object at the generation read; one rewritten or gone
+// since is left as it is.
+func deleteAt(ctx context.Context, objects blob.Store, attributes blob.Attributes) error {
+	err := objects.Delete(ctx, attributes.Key, attributes.Generation)
+	if err != nil && !errors.Is(err, blob.ErrNotFound) && !errors.Is(err, blob.ErrPrecondition) {
+		return fmt.Errorf("delete %q: %w", attributes.Key, err)
+	}
 	return nil
 }
 
@@ -139,14 +289,9 @@ func (store *Store) layout() *checkpointBase {
 // adoptPeerCheckpoint rebases on a checkpoint another store wrote, reading
 // only the shards that differ from the one this store rests on.
 func (store *Store) adoptPeerCheckpoint(ctx context.Context, sequence int64) error {
-	checkpoint, _, err := getValidated(ctx, store.objects, checkpointKey(sequence), func(checkpoint *checkpointObject) error {
-		return validateCheckpoint(checkpoint, sequence)
-	})
+	checkpoint, err := readCheckpoint(ctx, store.objects, store.worldID, sequence)
 	if err != nil {
-		return fmt.Errorf("adopt checkpoint %d: %w", sequence, err)
-	}
-	if checkpoint.WorldID != store.worldID {
-		return fmt.Errorf("%w: checkpoint %d belongs to world %q", blob.ErrIntegrity, sequence, checkpoint.WorldID)
+		return fmt.Errorf("adopt: %w", err)
 	}
 	root, err := loadRoot(ctx, store.objects, checkpoint)
 	if err != nil {
