@@ -834,8 +834,48 @@ func TestDroppedCheckpointsTakeOnlyTheirShards(t *testing.T) {
 	}
 }
 
-// A checkpoint whose successor is under an hour old stays however old it is:
-// a compactor that started on it may still be writing.
+// A drop honors the store's grace: checkpoints whose successor came 20
+// minutes ago go under the default, and stay under an hour.
+func TestDropHonorsTheConfiguredGrace(t *testing.T) {
+	for _, test := range []struct {
+		grace time.Duration
+		left  int
+	}{{0, 4}, {time.Hour, 7}} {
+		t.Run(test.grace.String(), func(t *testing.T) {
+			ctx := context.Background()
+			objects := newClockedStore(t)
+			writer := openSectionStore(t, objects, func(options *Options) { options.CheckpointGrace = test.grace })
+			objects.writtenAgo(20 * time.Minute)
+			for round := range 6 {
+				if round == 3 {
+					objects.writtenAgo(0)
+				}
+				writeWorld(t, writer, round)
+				mustSucceed(t, writer.checkpoint(ctx))
+			}
+			left := 0
+			for page, err := range sequencePages(ctx, objects, checkpointPrefix, 0) {
+				mustSucceed(t, err)
+				left += len(page)
+			}
+			if left != test.left {
+				t.Errorf("checkpoints left = %d, want %d", left, test.left)
+			}
+		})
+	}
+}
+
+// A grace under the minimum would let a drop take bytes a compactor is still
+// reusing, so Open refuses it.
+func TestOpenRefusesAGraceUnderTheMinimum(t *testing.T) {
+	_, err := Open(context.Background(), initializedMemory(t), Options{Logger: discardLogger, WorldID: testWorldID, CheckpointGrace: MinCheckpointGrace - time.Second})
+	if !errors.Is(err, blob.ErrPrecondition) {
+		t.Fatalf("open with a short grace = %v, want ErrPrecondition", err)
+	}
+}
+
+// A checkpoint whose successor is younger than the grace stays however old it
+// is: a compactor that started on it may still be writing.
 func TestDropKeepsCheckpointsWithAYoungSuccessor(t *testing.T) {
 	ctx := context.Background()
 	objects := newClockedStore(t)

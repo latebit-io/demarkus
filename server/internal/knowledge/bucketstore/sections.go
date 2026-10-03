@@ -209,7 +209,12 @@ func (index *sectionIndex) close() {
 
 // run builds the index, then applies queued installs until stopped or idle.
 func (index *sectionIndex) run(ctx context.Context, done chan struct{}) {
-	defer close(done)
+	evicted := false
+	defer func() {
+		if !evicted {
+			close(done)
+		}
+	}()
 	built, retry := false, sectionRetry
 	for {
 		var err error
@@ -235,20 +240,20 @@ func (index *sectionIndex) run(ctx context.Context, done chan struct{}) {
 		} else if wake == nil {
 			retry = sectionRetry
 		}
-		if !index.pause(ctx, wake, delay) {
+		if ctx.Err() != nil {
+			return
+		}
+		if evicted = index.evictIfIdle(done); evicted || !index.pause(ctx, wake, delay) {
 			return
 		}
 	}
 }
 
 // pause waits for delay, or for an install when wake is set; false once
-// stopped or evicted for idleness.
+// stopped.
 func (index *sectionIndex) pause(ctx context.Context, wake <-chan struct{}, delay time.Duration) bool {
-	if ctx.Err() != nil || index.evictIfIdle() {
-		return false
-	}
 	if wake == nil && delay == 0 {
-		return true
+		return ctx.Err() == nil
 	}
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -261,14 +266,17 @@ func (index *sectionIndex) pause(ctx context.Context, wake <-chan struct{}, dela
 	return true
 }
 
-// evictIfIdle drops the index after idle without a body search.
-func (index *sectionIndex) evictIfIdle() bool {
+// evictIfIdle drops the index after idle without a body search. The worker
+// whose done it is closes it in the same step, so a later activation never
+// overlaps it and close never waits on the wrong worker.
+func (index *sectionIndex) evictIfIdle(done chan struct{}) bool {
 	index.mu.Lock()
 	defer index.mu.Unlock()
 	if index.waiting > 0 || index.store.now().Sub(index.used) < index.idle {
 		return false
 	}
 	index.resetLocked()
+	close(done)
 	return true
 }
 

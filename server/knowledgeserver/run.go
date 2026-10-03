@@ -178,13 +178,14 @@ func bucketStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (b
 		// Epoch = world ID, sequence = head sequence: a cursor resumes on any
 		// replica and across a restart.
 		store, err := bucketstore.Open(ctx, bucket, bucketstore.Options{
-			WorldID:        world.Bucket.WorldID,
-			Logger:         hooks.logger.With("bucket", world.Bucket.Name()),
-			RequestTimeout: time.Duration(world.Limits.RequestTimeout),
-			MaxDocuments:   world.Limits.MaxDocuments,
-			ReadOnly:       world.ReadOnly,
-			ChangeRing:     changefeed.DefaultRingSize,
-			Committed:      hooks.committed,
+			WorldID:         world.Bucket.WorldID,
+			Logger:          hooks.logger.With("bucket", world.Bucket.Name()),
+			RequestTimeout:  time.Duration(world.Limits.RequestTimeout),
+			MaxDocuments:    world.Limits.MaxDocuments,
+			ReadOnly:        world.ReadOnly,
+			CheckpointGrace: time.Duration(world.Bucket.CheckpointGrace),
+			ChangeRing:      changefeed.DefaultRingSize,
+			Committed:       hooks.committed,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("bucket: %w", err)

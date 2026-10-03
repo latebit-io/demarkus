@@ -90,9 +90,9 @@ func createImmutable(ctx context.Context, objects blob.Store, object modelObject
 }
 
 // freshenAge is how old stored bytes may be for a create to reuse them as
-// they are; older ones are rewritten first, which fences a pending delete of
-// an old checkpoint's shard or root (dropOldCheckpoints).
-const freshenAge = dropGrace / 2
+// they are; older ones are rewritten first, which fences a pending drop. It
+// is fixed, so replicas configured with different graces stay fenced.
+const freshenAge = 15 * time.Minute / 2
 
 // createOrRead creates an immutable object, deciding an unknown outcome by
 // reading the name back. A name that holds other bytes returns them: a

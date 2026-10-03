@@ -43,6 +43,10 @@ type Options struct {
 	// in order on its own goroutine; slots created close together may be
 	// reported once. Nil for none.
 	Committed func(sequence int64)
+	// CheckpointGrace is how long a superseded checkpoint and what only it
+	// uses outlive their successor: 0 is DefaultCheckpointGrace, and less than
+	// MinCheckpointGrace is refused.
+	CheckpointGrace time.Duration
 
 	// followInterval overrides the backstop poll's period in tests.
 	followInterval time.Duration
@@ -64,11 +68,13 @@ type Store struct {
 	id             string // names this store in the slots it writes
 	requestTimeout time.Duration
 	shardWorkers   int
-	logger         *slog.Logger
-	maxDocuments   int
-	readOnly       bool
-	served         atomic.Pointer[served]
-	refreshMu      sync.Mutex
+	// checkpointGrace is Options.CheckpointGrace, defaulted.
+	checkpointGrace time.Duration
+	logger          *slog.Logger
+	maxDocuments    int
+	readOnly        bool
+	served          atomic.Pointer[served]
+	refreshMu       sync.Mutex
 	// deriveMu serializes snapshot clones: btree.Clone writes to its source.
 	deriveMu       sync.Mutex
 	commits        commitQueue
@@ -159,6 +165,12 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	if options.MaxDocuments < 0 {
 		return nil, fmt.Errorf("open bucket store: %w: max documents must not be negative", blob.ErrPrecondition)
 	}
+	if options.CheckpointGrace == 0 {
+		options.CheckpointGrace = DefaultCheckpointGrace
+	}
+	if options.CheckpointGrace < MinCheckpointGrace {
+		return nil, fmt.Errorf("open bucket store: %w: checkpoint grace %s is under the minimum %s", blob.ErrPrecondition, options.CheckpointGrace, MinCheckpointGrace)
+	}
 	if options.RequestTimeout == 0 {
 		options.RequestTimeout = defaultRequestTimeout
 	}
@@ -181,21 +193,22 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		objects = blob.Hedged(objects)
 	}
 	store := &Store{
-		objects:        objects,
-		worldID:        options.WorldID,
-		id:             id,
-		requestTimeout: options.RequestTimeout,
-		shardWorkers:   options.ShardWorkers,
-		logger:         options.Logger,
-		maxDocuments:   options.MaxDocuments,
-		readOnly:       options.ReadOnly,
-		commits:        commitQueue{wake: make(chan struct{}, 1)},
-		now:            time.Now,
-		newOperationID: randomOperationID,
-		jitter:         yieldDelay,
-		warming:        make(map[string]*warmup),
-		warmSlots:      make(chan struct{}, options.ShardWorkers),
-		committed:      options.Committed,
+		objects:         objects,
+		worldID:         options.WorldID,
+		id:              id,
+		requestTimeout:  options.RequestTimeout,
+		checkpointGrace: options.CheckpointGrace,
+		shardWorkers:    options.ShardWorkers,
+		logger:          options.Logger,
+		maxDocuments:    options.MaxDocuments,
+		readOnly:        options.ReadOnly,
+		commits:         commitQueue{wake: make(chan struct{}, 1)},
+		now:             time.Now,
+		newOperationID:  randomOperationID,
+		jitter:          yieldDelay,
+		warming:         make(map[string]*warmup),
+		warmSlots:       make(chan struct{}, options.ShardWorkers),
+		committed:       options.Committed,
 	}
 	store.compaction.trigger = defaultTrigger
 	if options.trigger != nil {

@@ -312,7 +312,7 @@ func (store *Store) dropSegments(ctx context.Context, plan dropPlan) error {
 			// A key not shaped as a segment part is left alone.
 			label, rest, labeled := strings.Cut(strings.TrimPrefix(attributes.Key, segmentPrefix), "/")
 			hash, _, hashed := strings.Cut(rest, "/")
-			if labeled && hashed && !plan.kept[shardKey(label, hash)] && plan.started.Sub(attributes.Modified) >= dropGrace {
+			if labeled && hashed && !plan.kept[shardKey(label, hash)] && plan.expired(attributes.Modified) {
 				unused = append(unused, attributes)
 			}
 		}

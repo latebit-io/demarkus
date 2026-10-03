@@ -23,13 +23,14 @@ const (
 	// waits for.
 	checkpointTimeout = 5 * time.Minute
 	// The newest checkpointsKept stay, and any whose successor came within
-	// checkpointKeep: a compactor building on one has long finished when it
-	// goes. A dropped one takes the shards and root only it used.
-	checkpointKeep  = time.Hour
+	// the store's grace. A dropped one takes the shards, segments and root
+	// only it used, each past the grace and at the generation read.
 	checkpointsKept = 3
-	// dropGrace: a shard or root is deleted only once older than this when
-	// the drop starts, conditioned on the generation read (freshenAge).
-	dropGrace = time.Hour
+	// DefaultCheckpointGrace is the grace when Options leaves it zero.
+	DefaultCheckpointGrace = 15 * time.Minute
+	// MinCheckpointGrace leaves a compactor that reused bytes just younger
+	// than freshenAge time to finish (checkpointTimeout) before they can go.
+	MinCheckpointGrace = 2 * freshenAge
 )
 
 // compactionTrigger is when a store's compactor runs; tests shorten it.
@@ -147,14 +148,25 @@ func (store *Store) checkpoint(ctx context.Context) error {
 // dropPlan is the checkpoints to drop, at their listed generations, and the
 // root and shard keys the kept ones use.
 type dropPlan struct {
-	started time.Time
+	dropFence
 	dropped []blob.Attributes
 	kept    map[string]bool
 }
 
+// dropFence is when a drop started and the grace it honors.
+type dropFence struct {
+	started time.Time
+	grace   time.Duration
+}
+
+// expired reports something written at modified as past the grace.
+func (fence dropFence) expired(modified time.Time) bool {
+	return fence.started.Sub(modified) >= fence.grace
+}
+
 // planDrop lists the checkpoints and reads the kept ones' roots.
 func (store *Store) planDrop(ctx context.Context) (dropPlan, error) {
-	plan := dropPlan{started: store.now(), kept: make(map[string]bool)}
+	plan := dropPlan{dropFence: dropFence{started: store.now(), grace: store.checkpointGrace}, kept: make(map[string]bool)}
 	var listed []blob.Attributes
 	cursor := ""
 	for {
@@ -170,7 +182,7 @@ func (store *Store) planDrop(ctx context.Context) (dropPlan, error) {
 	}
 	var kept []string
 	for index, attributes := range listed {
-		if index < len(listed)-checkpointsKept && plan.started.Sub(listed[index+1].Modified) >= checkpointKeep {
+		if index < len(listed)-checkpointsKept && plan.expired(listed[index+1].Modified) {
 			plan.dropped = append(plan.dropped, attributes)
 		} else {
 			kept = append(kept, attributes.Key)
@@ -243,10 +255,10 @@ func (store *Store) drop(ctx context.Context, plan dropPlan, checkpoint blob.Att
 			}
 		}
 		err = runParallel(ctx, store.shardWorkers, shards, func(ctx context.Context, key string) error {
-			return store.deleteUnused(ctx, key, plan.started)
+			return store.deleteUnused(ctx, key, plan.dropFence)
 		})
 		if err == nil && !plan.kept[root.Key] {
-			err = store.deleteUnused(ctx, root.Key, plan.started)
+			err = store.deleteUnused(ctx, root.Key, plan.dropFence)
 		}
 		if err != nil {
 			return fmt.Errorf("drop %q: %w", checkpoint.Key, err)
@@ -259,8 +271,8 @@ func (store *Store) drop(ctx context.Context, plan dropPlan, checkpoint blob.Att
 }
 
 // deleteUnused deletes a shard or root no kept checkpoint uses, unless it was
-// written or reused within dropGrace of the drop's start.
-func (store *Store) deleteUnused(ctx context.Context, key string, started time.Time) error {
+// written or reused within the grace before the drop's start.
+func (store *Store) deleteUnused(ctx context.Context, key string, fence dropFence) error {
 	attributes, err := store.objects.Head(ctx, key)
 	if errors.Is(err, blob.ErrNotFound) {
 		return nil
@@ -268,7 +280,7 @@ func (store *Store) deleteUnused(ctx context.Context, key string, started time.T
 	if err != nil {
 		return fmt.Errorf("head %q: %w", key, err)
 	}
-	if started.Sub(attributes.Modified) < dropGrace {
+	if !fence.expired(attributes.Modified) {
 		return nil
 	}
 	return deleteAt(ctx, store.objects, attributes)

@@ -58,6 +58,7 @@ worlds:                         # one or more
     bucket:
       url: gs://<bucket>        # exact form
       worldID: <uuid>           # canonical lowercase RFC 4122, unique
+      checkpointGrace: "15m"    # default and minimum; how long superseded checkpoints stay
     auth:
       tokensFile: <path>        # required; the broker appends to it
       staticTokensFile: <path>  # optional; operator-owned entries merged in
