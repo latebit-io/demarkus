@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -683,12 +684,14 @@ func pagedHub(n int) (*changefeed.Hub, *historyBacklog) {
 func TestCatchUpJoinsTheRingWhereItMovedTo(t *testing.T) {
 	hub, backlog := pagedHub(40)
 	f := newFanout(t, hub, Config{})
+	// The hook runs off the test's goroutine; a late append is reported after.
+	var late atomic.Bool
 	backlog.onRead = func(read int) {
 		if read == 2 {
 			for range 20 {
 				backlog.record(hub, true)
 			}
-			appended(f, 60)
+			late.Store(!appended(f, 60))
 		}
 	}
 	s := serve(t, f, Request{Scope: "/", Since: protocol.Cursor{Epoch: "w", Seq: 2}})
@@ -697,6 +700,9 @@ func TestCatchUpJoinsTheRingWhereItMovedTo(t *testing.T) {
 		if ev := s.event(t); ev.Path != agentPath(seq) {
 			t.Fatalf("event %d = %s, want %s", seq, ev.Path, agentPath(seq))
 		}
+	}
+	if late.Load() {
+		t.Fatal("the reader did not append seq 60 within 2s; the ring never moved as the test needs")
 	}
 	publish(hub, "/live.md")
 	if got := s.event(t).Path; got != "/live.md" {

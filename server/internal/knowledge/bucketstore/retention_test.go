@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
@@ -80,8 +81,7 @@ func TestStaleReplicaReloadsBeforeTrustingAMissingSlot(t *testing.T) {
 	if exists(t, objects, slotKey(2)) {
 		t.Fatal("slot 2 was not collected; the test needs it gone")
 	}
-	current := stale.served.Load()
-	stale.served.Store(&served{snap: current.snap, confirmed: time.Now().Add(-staleAfter - time.Minute)})
+	unconfirmed(stale)
 
 	if _, err := stale.Get("/log/016.md", 0); err != nil {
 		t.Fatalf("read on the stale replica: %v", err)
@@ -94,4 +94,30 @@ func TestStaleReplicaReloadsBeforeTrustingAMissingSlot(t *testing.T) {
 		t.Fatalf("stale replica committed at sequence %d, want 17 after the log", got)
 	}
 	assertRows(t, stale, "haystack", "/needle.md#needle")
+}
+
+// A watch open on a replica that reloads past collected slots is told to
+// resync, never handed the next event as if nothing came between.
+func TestStaleReloadResyncsOpenWatches(t *testing.T) {
+	objects := newClockedStore(t)
+	objects.writtenAgo(slotRetention + time.Hour)
+	stale := manualSite(objects).open(t, changefeed.DefaultRingSize)
+	sub, err := stale.Changes().Subscribe(t.Context(), "/", protocol.Cursor{})
+	mustSucceed(t, err)
+	checkpointedLog(t, manualSite(objects).open(t, 0))
+	unconfirmed(stale)
+
+	_, err = stale.Publish(context.Background(), backend.WriteRequest{Path: "/after.md", ExpectedVersion: -1, Content: []byte("# after\n")})
+	mustSucceed(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if ev, err := sub.Next(ctx); !errors.Is(err, changefeed.ErrResync) {
+		t.Fatalf("open watch after the reload: %+v, %v; want ErrResync for the collected changes", ev, err)
+	}
+}
+
+// unconfirmed marks store's snapshot as unconfirmed for longer than staleAfter.
+func unconfirmed(store *Store) {
+	current := store.served.Load()
+	store.served.Store(&served{snap: current.snap, confirmed: time.Now().Add(-staleAfter - time.Minute)})
 }
