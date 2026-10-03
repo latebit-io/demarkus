@@ -301,14 +301,12 @@ func readBodies(bodies []*segmentBody, keep func(position int) bool) []segmentBo
 // and that is past the grace, at its listed generation. One sweep also takes
 // parts a cut-short write or a late repair left behind.
 func (store *Store) dropSegments(ctx context.Context, plan dropPlan) error {
-	cursor := ""
-	for {
-		page, err := store.objects.List(ctx, segmentPrefix, "", cursor)
+	for page, err := range attributePages(ctx, store.objects, segmentPrefix, "") {
 		if err != nil {
-			return fmt.Errorf("list %q: %w", segmentPrefix, err)
+			return err
 		}
 		var unused []blob.Attributes
-		for _, attributes := range page.Objects {
+		for _, attributes := range page {
 			// A key not shaped as a segment part is left alone.
 			label, rest, labeled := strings.Cut(strings.TrimPrefix(attributes.Key, segmentPrefix), "/")
 			hash, _, hashed := strings.Cut(rest, "/")
@@ -316,15 +314,9 @@ func (store *Store) dropSegments(ctx context.Context, plan dropPlan) error {
 				unused = append(unused, attributes)
 			}
 		}
-		err = runParallel(ctx, store.shardWorkers, unused, func(ctx context.Context, attributes blob.Attributes) error {
-			return deleteAt(ctx, store.objects, attributes)
-		})
-		if err != nil {
+		if err := store.deleteListed(ctx, unused); err != nil {
 			return err
 		}
-		if page.NextCursor == "" {
-			return nil
-		}
-		cursor = page.NextCursor
 	}
+	return nil
 }

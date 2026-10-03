@@ -4,17 +4,9 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 )
 
-// newHub is the world's change hub under the world ID and log sequences, so
-// cursors agree across replicas and restarts (backend.ChangeSource); the slots
-// are its backlog. Nil when WATCH is off.
-func newHub(store *Store, ring int) *changefeed.Hub {
-	if ring <= 0 {
-		return nil
-	}
-	return changefeed.NewWithBacklog(store.worldID, ring, newChangeLog(store, ring))
-}
-
-// Changes is the hub this store feeds, or nil when WATCH is off.
+// Changes is the hub this store feeds, or nil when WATCH is off: under the
+// world ID and log sequences, so cursors agree across replicas and restarts
+// (backend.ChangeSource), with the slots as its backlog.
 func (store *Store) Changes() *changefeed.Hub { return store.changes }
 
 // skipTo starts the hub at a checkpoint: what came before it resumes from the

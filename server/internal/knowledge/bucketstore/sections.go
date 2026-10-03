@@ -170,6 +170,18 @@ func (index *sectionIndex) boundLocked() {
 	}
 }
 
+// reloaded drops the queued steps of a store that started again from a
+// checkpoint: the index catches up by comparing with the served snapshot.
+func (index *sectionIndex) reloaded() {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	if !index.active || index.closed {
+		return
+	}
+	index.steps, index.resync = nil, true
+	index.wakeLocked()
+}
+
 // installed queues a snapshot the store now serves; it does no section work.
 func (index *sectionIndex) installed(snap *snapshot, applied []*slotObject) {
 	index.mu.Lock()
@@ -185,6 +197,11 @@ func (index *sectionIndex) installed(snap *snapshot, applied []*slotObject) {
 	}
 	index.steps = append(index.steps, sectionStep{sequence: snap.Sequence, changed: changed})
 	index.boundLocked()
+	index.wakeLocked()
+}
+
+// wakeLocked tells the worker there is work, without waiting for it.
+func (index *sectionIndex) wakeLocked() {
 	select {
 	case index.wake <- struct{}{}:
 	default:

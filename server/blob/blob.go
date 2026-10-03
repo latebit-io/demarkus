@@ -35,7 +35,7 @@ type Attributes struct {
 	Key        string
 	Generation Generation
 	Size       int64
-	Modified   time.Time // UTC, second precision; used only for object lifecycle.
+	Modified   time.Time // provider wall time, UTC, second precision; used only for object lifecycle.
 }
 
 // Object contains object bytes and their attributes.

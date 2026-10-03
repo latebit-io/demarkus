@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/memtest"
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
@@ -104,7 +108,7 @@ func TestBacklogCachesSlots(t *testing.T) {
 	objects := newObservedBlobStore(initializedMemory(t))
 	publishSeq(t, openReplica(t, objects).store, 20)
 	reader := (&bucketSite{objects: objects}).open(t, 0)
-	backlog := newChangeLog(reader, maxSlotEntries)
+	backlog := newChangeLog(reader, maxSlotEntries, backlogReach, slotCacheIdle)
 	events, err := backlog.Events(t.Context(), 10, 14)
 	if err != nil || len(events) != 4 || events[0].Seq != 11 || events[3].Seq != 14 {
 		t.Fatalf("events (10,14] = %+v, %v", events, err)
@@ -118,5 +122,116 @@ func TestBacklogCachesSlots(t *testing.T) {
 	}
 	if backlog.held > backlog.limit {
 		t.Fatalf("cache holds %d events, limit %d", backlog.held, backlog.limit)
+	}
+}
+
+// publishBatched publishes n documents while the first slot's create is
+// held, so the rest queue and commit in batched slots.
+func publishBatched(t *testing.T, objects blob.Store, n int) *Store {
+	t.Helper()
+	holds := newSlotHolds(t, objects, 2)
+	writer := (&bucketSite{objects: holds}).open(t, 0)
+	publish := func(index int) {
+		path := fmt.Sprintf("/agents/session-%d/inbox/01HZX%08d.md", index%7, index)
+		meta := map[string]string{"agent": fmt.Sprintf("federation-agent-%d-2026-09-30T15:58:33.%09dZ", index%3, index)}
+		if _, err := writer.Publish(context.Background(), backend.WriteRequest{Path: path, ExpectedVersion: -1, Content: []byte("# n\n"), Metadata: meta}); err != nil {
+			t.Errorf("publish %s: %v", path, err)
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Go(func() { publish(0) })
+	waitForTestSignal(t, holds.holds[2].arrived, "the first slot's create")
+	for index := 1; index < n; index++ {
+		wg.Go(func() { publish(index) })
+	}
+	waitUntil(t, writer, "half the writes queued", func(queue *commitQueue) bool { return len(queue.waiting) >= n/2 })
+	holds.holds[2].open()
+	wg.Wait()
+	return writer
+}
+
+// A resume may start at most reach slots behind the head, counted in slots,
+// so batched slots let it reach further back in changes.
+func TestBacklogReachCountsSlots(t *testing.T) {
+	objects := initializedMemory(t)
+	writer := publishBatched(t, objects, 100)
+	head := writer.servedSequence()
+	slots := uint64(len(logSlots(t, objects, head)))
+	if lag := uint64(head) - 1; lag <= slots-1 || lag > (slots-1)*maxSlotEntries {
+		t.Fatalf("%d slots for %d changes; the test needs batched slots", slots, lag)
+	}
+	for _, tt := range []struct {
+		reach uint64
+		want  error
+	}{{reach: slots}, {reach: slots - 1, want: errBeyondReach}} {
+		backlog := newChangeLog(writer, 8, tt.reach, slotCacheIdle)
+		if err := backlog.Reaches(t.Context(), 1, uint64(head)); !errors.Is(err, tt.want) {
+			t.Errorf("Reaches over %d slots with a reach of %d: %v, want %v", slots, tt.reach, err, tt.want)
+		}
+	}
+}
+
+// An idle slot cache empties itself: a world nobody resumes on keeps none of
+// the agent-shaped events its last resumes read.
+func TestSlotCacheEmptiesWhenIdle(t *testing.T) {
+	objects := initializedMemory(t)
+	head := uint64(publishBatched(t, objects, 600).servedSequence())
+	reader := (&bucketSite{objects: objects, idle: 20 * time.Millisecond}).open(t, changefeed.DefaultRingSize)
+	reader.skipTo(int64(head))
+	held := func() int {
+		reader.changeLog.mu.Lock()
+		defer reader.changeLog.mu.Unlock()
+		return reader.changeLog.held
+	}
+	growth := memtest.Retained(func() {
+		sub, err := resumeAt(t, reader, 1)
+		mustSucceed(t, err)
+		for seq := uint64(2); seq <= head; seq++ {
+			storetest.NextEvent(t, sub)
+		}
+		if held() == 0 {
+			t.Fatal("the resume cached no slots")
+		}
+		waitFor(t, "an empty slot cache", func() bool { return held() == 0 })
+	})
+	t.Logf("heap grew %d bytes after the cache went idle", growth)
+	if growth > 32<<10 {
+		t.Errorf("heap grew %d bytes once the slot cache went idle, want under 32 KiB", growth)
+	}
+}
+
+// slowSlots delays every slot read, so concurrent readers overlap.
+type slowSlots struct{ *observedBlobStore }
+
+func (s slowSlots) Get(ctx context.Context, key string) (blob.Object, error) {
+	if strings.HasPrefix(key, logPrefix) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	return s.observedBlobStore.Get(ctx, key)
+}
+
+// Resumes over the same slots at once share each slot's read, as after a
+// network blip reconnects every watcher from about the same cursor.
+func TestConcurrentResumesShareSlotReads(t *testing.T) {
+	objects := initializedMemory(t)
+	publishSeq(t, (&bucketSite{objects: objects}).open(t, 0), 20)
+	observed := newObservedBlobStore(objects)
+	reader := (&bucketSite{objects: slowSlots{observed}}).open(t, 0)
+	backlog := newChangeLog(reader, maxSlotEntries, backlogReach, slotCacheIdle)
+	observed.reset()
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			<-start
+			if events, err := backlog.Events(t.Context(), 1, 20); err != nil || len(events) != 19 {
+				t.Errorf("events (1,20] = %d events, %v", len(events), err)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	if gets := countPrefix(observed.counts().gets, logPrefix); gets != 19 {
+		t.Errorf("8 concurrent resumes read %d slots, want each of the 19 once", gets)
 	}
 }

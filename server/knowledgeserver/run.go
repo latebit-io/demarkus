@@ -175,7 +175,7 @@ func bucketStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (b
 		if err != nil {
 			return nil, fmt.Errorf("blob store: %w", err)
 		}
-		// Epoch = world ID, sequence = head sequence: a cursor resumes on any
+		// Epoch = world ID, sequence = log sequence: a cursor resumes on any
 		// replica and across a restart.
 		store, err := bucketstore.Open(ctx, bucket, bucketstore.Options{
 			WorldID:         world.Bucket.WorldID,

@@ -52,7 +52,6 @@ type watcher struct {
 	group    *group
 	conn     *quicserve.ConnState
 	coalesce bool
-	ack      protocol.Cursor
 	backlog  *changefeed.Subscription
 	index    uint64
 	tick     uint64
@@ -66,7 +65,7 @@ type watcher struct {
 // block) until ctx ends or the watch is over. A refusal before the ack is
 // returned: an auth verdict or a *LimitError; a bad since is a resync block.
 func (f *Fanout) Serve(ctx context.Context, req Request, out io.Writer) error {
-	w, err := f.attach(ctx, req)
+	w, ack, err := f.attach(ctx, req)
 	if errors.Is(err, changefeed.ErrResync) {
 		f.logger.Info("watch resync", "scope", req.Scope, "since", req.Since.String(), "error", err)
 		_, writeErr := protocol.WatchControl(protocol.StatusResync, f.hub.Head()).WriteTo(out)
@@ -76,7 +75,7 @@ func (f *Fanout) Serve(ctx context.Context, req Request, out io.Writer) error {
 		return err
 	}
 	defer w.detach()
-	if _, err := protocol.WatchControl(protocol.StatusOK, w.ack).WriteTo(out); err != nil {
+	if _, err := protocol.WatchControl(protocol.StatusOK, ack).WriteTo(out); err != nil {
 		return nil //nolint:nilerr // the peer is gone; nothing is left to say
 	}
 	f.logger.Info("watch", "scope", req.Scope, "resumed", !req.Since.IsZero())
@@ -89,23 +88,24 @@ func (f *Fanout) Serve(ctx context.Context, req Request, out io.Writer) error {
 	return nil
 }
 
-// attach admits a watch: the token must read the scope now, a slot must be
-// free at the world and the connection, and since must be resumable.
-func (f *Fanout) attach(ctx context.Context, req Request) (*watcher, error) {
+// attach admits a watch and returns its acknowledgement: the head for a new
+// watch, the client's since for a resume. The token must read the scope now,
+// a slot must be free at the world and the connection, and since resumable.
+func (f *Fanout) attach(ctx context.Context, req Request) (*watcher, protocol.Cursor, error) {
 	token := auth.HashToken(req.Token)
 	if err := f.tokenStore().AuthorizeReadHashed(token, req.Scope); err != nil {
-		return nil, err
+		return nil, protocol.Cursor{}, err
 	}
 	conn := quicserve.ConnStateFromContext(ctx)
 	f.mu.Lock()
 	if f.watchers >= f.maxWatches {
 		f.mu.Unlock()
-		return nil, &LimitError{Limit: "world"}
+		return nil, protocol.Cursor{}, &LimitError{Limit: "world"}
 	}
 	if conn != nil && f.maxPerConn > 0 && int(conn.Watches.Add(1)) > f.maxPerConn {
 		conn.Watches.Add(-1)
 		f.mu.Unlock()
-		return nil, &LimitError{Limit: "connection"}
+		return nil, protocol.Cursor{}, &LimitError{Limit: "connection"}
 	}
 	r := f.run
 	if r == nil {
@@ -113,30 +113,30 @@ func (f *Fanout) attach(ctx context.Context, req Request) (*watcher, error) {
 		if r, err = f.startLocked(); err != nil {
 			f.mu.Unlock()
 			f.releaseConn(conn)
-			return nil, err
+			return nil, protocol.Cursor{}, err
 		}
 	}
 	w := &watcher{fanout: f, conn: conn, coalesce: req.Coalesce, tick: r.tick, group: f.joinLocked(groupKey{scope: req.Scope, token: token}, r.next)}
 	f.watchers++
-	// The ack is the head for a new watch, the client's since for a resume.
-	w.index, w.ack = r.next, req.Since
-	inRing := !req.Since.IsZero() && req.Since.Epoch == f.hub.Epoch() && req.Since.Seq+1 >= max(r.oldest(), w.group.from) && req.Since.Seq < r.next
+	w.index = r.next
+	ack := req.Since
+	inRing := !req.Since.IsZero() && req.Since.Epoch == f.hub.Epoch() && req.Since.Seq+1 >= w.ringFromLocked() && req.Since.Seq < r.next
 	if inRing {
 		w.index = req.Since.Seq + 1
 	}
 	if req.Since.IsZero() {
-		w.ack = f.cursor(r.next - 1)
+		ack = f.cursor(r.next - 1)
 	}
 	f.mu.Unlock()
 	if req.Since.IsZero() || inRing {
-		return w, nil
+		return w, ack, nil
 	}
-	// Older than the ring: the hub serves up to the ring's next seq, from
-	// its own ring or the store's backlog.
+	// Older than the ring: the hub serves it, from its own ring or the
+	// store's backlog, until this ring holds what follows.
 	sub, err := f.hub.Subscribe(ctx, req.Scope, req.Since)
 	if err != nil {
 		w.detach()
-		return nil, err
+		return nil, protocol.Cursor{}, err
 	}
 	if req.Since.Seq < w.index {
 		w.backlog = sub
@@ -145,7 +145,7 @@ func (f *Fanout) attach(ctx context.Context, req Request) (*watcher, error) {
 		// replay, and the reader appends what follows since.
 		w.index = req.Since.Seq + 1
 	}
-	return w, nil
+	return w, ack, nil
 }
 
 func (f *Fanout) releaseConn(conn *quicserve.ConnState) {
@@ -176,9 +176,14 @@ func (w *watcher) detach() {
 // returns the terminal block to write. A write that fails, or ctx ending
 // without an auth verdict as its cause, means the peer is gone: an empty end.
 func (w *watcher) pump(ctx context.Context, out io.Writer) end {
-	if w.backlog != nil {
-		if e := w.catchUp(); e.status != "" {
+	for w.backlog != nil {
+		if e, over := w.catchUp(ctx); over {
 			return e
+		}
+		if len(w.pending) > 0 {
+			if err := w.flush(out); err != nil {
+				return end{}
+			}
 		}
 	}
 	for {
@@ -200,13 +205,18 @@ func (w *watcher) pump(ctx context.Context, out io.Writer) end {
 		select {
 		case <-wait:
 		case <-ctx.Done():
-			// A credential that lapses mid-watch ends it with its verdict.
-			if cause := context.Cause(ctx); auth.IsDenial(cause) {
-				return end{status: auth.DenialStatus(cause), cursor: w.cursor()}
-			}
-			return end{}
+			return w.stopped(ctx)
 		}
 	}
+}
+
+// stopped is the end of a watch whose ctx ended: a credential that lapsed
+// mid-watch ends it with its verdict; otherwise the peer is gone.
+func (w *watcher) stopped(ctx context.Context) end {
+	if cause := context.Cause(ctx); auth.IsDenial(cause) {
+		return end{status: auth.DenialStatus(cause), cursor: w.cursor()}
+	}
+	return end{}
 }
 
 // gather copies the pending entries of the watcher's group out of the ring
@@ -294,35 +304,69 @@ func (w *watcher) heartbeat(out io.Writer) error {
 	return err
 }
 
-// cursor is the resume position: just before the next index.
-func (w *watcher) cursor() protocol.Cursor { return w.fanout.cursor(w.index - 1) }
+// cursor is the resume position: just before the first event not written,
+// which during a catch-up is the hub subscription's.
+func (w *watcher) cursor() protocol.Cursor {
+	switch {
+	case len(w.pending) > 0:
+		return w.fanout.cursor(w.pending[0].seq - 1)
+	case w.backlog != nil:
+		return w.backlog.Cursor()
+	}
+	return w.fanout.cursor(w.index - 1)
+}
 
-// catchUp moves what the hub holds before the ring's start into pending,
-// checked and encoded for this watcher alone, so the first flush coalesces
-// it with the ring's own. Only a resume older than the ring pays for it.
-func (w *watcher) catchUp() end {
+// catchUp moves a write's worth of what the hub holds before the ring into
+// pending, checked and encoded for this watcher alone, and joins the ring once
+// it holds what follows; over ends the watch with e.
+func (w *watcher) catchUp(ctx context.Context) (e end, over bool) {
 	f := w.fanout
-	sub := w.backlog
-	w.backlog = nil
 	store := f.tokenStore()
-	for {
-		ev, err := sub.TryNext()
+	// The ring's start only moves up, so an event below a stale reading of it
+	// is below the current one; only one at or past it rereads under the lock.
+	from := w.ringFrom()
+	for size := 0; size < maxBatchBytes; {
+		ev, err := w.backlog.TryNext(ctx)
+		if err == nil && ev.Seq >= from {
+			from = w.ringFrom()
+		}
 		switch {
-		case errors.Is(err, changefeed.ErrIdle) || err == nil && ev.Seq >= w.index:
-			return end{}
+		case errors.Is(err, changefeed.ErrIdle):
+			w.join(w.backlog.Cursor().Seq + 1)
+			return end{}, false
+		case err == nil && ev.Seq >= from:
+			w.join(ev.Seq)
+			return end{}, false
 		case errors.Is(err, changefeed.ErrResync):
-			return end{status: protocol.StatusResync, cursor: f.hub.Head()}
+			return end{status: protocol.StatusResync, cursor: f.hub.Head()}, true
 		case errors.Is(err, changefeed.ErrClosed):
-			return end{status: protocol.StatusClosing, cursor: w.ack}
+			return end{status: protocol.StatusClosing, cursor: w.cursor()}, true
+		case ctx.Err() != nil:
+			return w.stopped(ctx), true
 		case err != nil:
+			// Never skip what could not be read: the client rebuilds.
 			f.logger.Error("watch catch-up failed", "error", err)
-			return end{}
+			return end{status: protocol.StatusResync, cursor: f.hub.Head()}, true
 		}
 		if store.AuthorizeReadHashed(w.group.key.token, ev.Path) != nil {
 			continue
 		}
 		if block := f.encode(ev); block != nil {
 			w.pending = append(w.pending, entry{seq: ev.Seq, path: ev.Path, block: block})
+			size += len(block)
 		}
 	}
+	return end{}, false
 }
+
+// ringFrom is the first seq from which the ring holds this watcher's events.
+func (w *watcher) ringFrom() uint64 {
+	w.fanout.mu.Lock()
+	defer w.fanout.mu.Unlock()
+	return w.ringFromLocked()
+}
+
+func (w *watcher) ringFromLocked() uint64 { return max(w.fanout.run.oldest(), w.group.from) }
+
+// join ends the catch-up: the ring is read from index on.
+func (w *watcher) join(index uint64) { w.index, w.backlog = index, nil }

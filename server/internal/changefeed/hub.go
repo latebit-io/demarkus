@@ -65,8 +65,12 @@ type catchUpFlight struct {
 // Backlog is a store's durable record of events, shared by every replica
 // that opens the store, so this hub can lag what peers committed.
 type Backlog interface {
-	// Events returns every event with after < Seq <= through, in order, or
-	// an error when it cannot name them all.
+	// Reaches reports whether a resume from after may read the backlog while
+	// the head is at head: nil, or why it resyncs. It bounds what one resume
+	// costs the store.
+	Reaches(ctx context.Context, after, head uint64) error
+	// Events returns every event with after < Seq <= through, in order, in a
+	// slice the caller keeps, or an error when it cannot name them all.
 	Events(ctx context.Context, after, through uint64) ([]Event, error)
 	// CatchUp publishes to the hub what peer replicas committed since this
 	// replica last looked. It bounds its own wait: callers may detach ctx.
@@ -81,8 +85,8 @@ func New(epoch string, ringSize int) *Hub {
 }
 
 // NewWithBacklog is New for a store that keeps events past the ring: a
-// resume the ring cannot serve, within a ring's length of the head, reads
-// the rest from backlog. Nil is New.
+// resume older than the ring, as far back as the backlog Reaches, reads it a
+// ring's worth at a time until it reaches the ring. Nil is New.
 func NewWithBacklog(epoch string, ringSize int, backlog Backlog) *Hub {
 	if epoch == "" {
 		epoch = NewEpoch()
@@ -205,13 +209,14 @@ func (h *Hub) Close() {
 	h.notify = make(chan struct{})
 }
 
-// Subscription reads one scope's events from the hub in order: first any
-// backlog loaded at Subscribe, then the ring.
+// Subscription reads one scope's events from the hub in order: from the
+// backlog while it is older than the ring, then the ring.
 type Subscription struct {
 	hub     *Hub
 	scope   string
-	backlog []Event // unread in-scope events older than the ring, in order
-	next    uint64  // Seq of the next event to read from the ring
+	paging  bool    // next is still read from the backlog
+	backlog []Event // unread in-scope events of the page read last, in order
+	next    uint64  // Seq of the next event to read, from a page or the ring
 }
 
 // Subscribe starts a subscription over scope ("/", a "/"-ended subtree, or
@@ -232,10 +237,19 @@ func (h *Hub) Subscribe(ctx context.Context, scope string, since protocol.Cursor
 	case since.Seq+1 >= oldest:
 		// Next resyncs if the ring passes since before the first read.
 		return &Subscription{hub: h, scope: scope, next: since.Seq + 1}, nil
-	case h.backlog == nil || head-since.Seq > uint64(len(h.buf)):
+	case h.backlog == nil:
 		return nil, ErrResync
 	}
-	return h.resume(ctx, scope, since.Seq, oldest-1)
+	if err := h.backlog.Reaches(ctx, since.Seq, head); err != nil {
+		return nil, fmt.Errorf("%w: backlog: %w", ErrResync, err)
+	}
+	// The first page is read now, so a backlog that cannot serve since
+	// resyncs the subscribe rather than its first read.
+	s := &Subscription{hub: h, scope: scope, paging: true, next: since.Seq + 1}
+	if err := s.page(ctx, oldest-1); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // catchUp asks the store once for peer commits when since is past this
@@ -286,36 +300,39 @@ func (h *Hub) fly(ctx context.Context, flight *catchUpFlight) {
 	close(flight.done)
 }
 
-// resume loads (after, through] from the backlog outside the lock, then
-// joins the ring at through+1 unless the ring moved past it meanwhile.
-func (h *Hub) resume(ctx context.Context, scope string, after, through uint64) (*Subscription, error) {
+// page reads the backlog after next, at most a ring's worth and none past
+// through, outside the hub lock, and keeps what is in scope.
+func (s *Subscription) page(ctx context.Context, through uint64) error {
+	h := s.hub
+	after := s.next - 1
+	through = min(through, after+uint64(len(h.buf)))
 	events, err := h.backlog.Events(ctx, after, through)
 	if err != nil {
-		return nil, fmt.Errorf("%w: backlog: %w", ErrResync, err)
+		return fmt.Errorf("%w: backlog: %w", ErrResync, err)
 	}
 	want := after
 	for _, ev := range events {
 		want++
 		if ev.Seq != want {
-			return nil, fmt.Errorf("%w: backlog event has seq %d, want %d", ErrResync, ev.Seq, want)
+			return fmt.Errorf("%w: backlog event has seq %d, want %d", ErrResync, ev.Seq, want)
 		}
 	}
 	if want != through {
-		return nil, fmt.Errorf("%w: backlog ended at seq %d, want %d", ErrResync, want, through)
+		return fmt.Errorf("%w: backlog ended at seq %d, want %d", ErrResync, want, through)
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if through+1 < h.oldest() {
-		return nil, fmt.Errorf("%w: ring passed seq %d during the backlog read", ErrResync, through+1)
-	}
-	// A fresh slice, so an idle narrow watch holds only its own events.
-	var kept []Event
-	for _, ev := range events {
-		if inScope(scope, ev.Path) {
-			kept = append(kept, ev)
+	// A narrow scope keeps a fresh slice, so an idle watch holds only its own
+	// events; the backlog's slice is the subscription's to keep.
+	kept := events
+	if s.scope != "/" {
+		kept = nil
+		for _, ev := range events {
+			if inScope(s.scope, ev.Path) {
+				kept = append(kept, ev)
+			}
 		}
 	}
-	return &Subscription{hub: h, scope: scope, backlog: kept, next: through + 1}, nil
+	s.backlog, s.next = kept, through+1
+	return nil
 }
 
 // Scope is what the subscription was opened over.
@@ -331,11 +348,11 @@ func (s *Subscription) Cursor() protocol.Cursor {
 }
 
 // Next returns the next event in scope, waiting for one. It returns
-// ErrResync once the ring has overwritten unread events, ErrClosed after
-// Close, or ctx's error.
+// ErrResync once the ring has overwritten unread events or the backlog
+// cannot name them, ErrClosed after Close, or ctx's error.
 func (s *Subscription) Next(ctx context.Context) (Event, error) {
 	for {
-		ev, wait, err := s.pending()
+		ev, wait, err := s.pending(ctx)
 		if err != nil || wait == nil {
 			return ev, err
 		}
@@ -357,10 +374,10 @@ func (h *Hub) await(ctx context.Context, wait <-chan struct{}) error {
 	}
 }
 
-// TryNext is Next without the wait: ErrIdle when nothing in scope is
-// published yet.
-func (s *Subscription) TryNext() (Event, error) {
-	ev, wait, err := s.pending()
+// TryNext is Next without waiting for a publish: ErrIdle when nothing in
+// scope is published yet. It may read the backlog under ctx.
+func (s *Subscription) TryNext(ctx context.Context) (Event, error) {
+	ev, wait, err := s.pending(ctx)
 	if err == nil && wait != nil {
 		return Event{}, ErrIdle
 	}
@@ -371,19 +388,41 @@ func (s *Subscription) TryNext() (Event, error) {
 var ErrIdle = errors.New("changefeed: no event pending")
 
 // pending returns the next event in scope, or the channel a publish closes
-// when there is none yet.
-func (s *Subscription) pending() (Event, <-chan struct{}, error) {
-	if len(s.backlog) > 0 {
-		ev := s.backlog[0]
-		s.backlog = s.backlog[1:]
-		if len(s.backlog) == 0 {
-			s.backlog = nil // release the loaded array
-		}
-		return ev, nil, nil
-	}
+// when there is none yet. A paging subscription reads pages until it reaches
+// the ring, which may move on meanwhile, so a slow reader is not lapped.
+func (s *Subscription) pending(ctx context.Context) (Event, <-chan struct{}, error) {
 	h := s.hub
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	for {
+		if len(s.backlog) > 0 {
+			ev := s.backlog[0]
+			s.backlog = s.backlog[1:]
+			if len(s.backlog) == 0 {
+				s.backlog = nil // release the page's array
+			}
+			return ev, nil, nil
+		}
+		h.mu.Lock()
+		oldest, closed := h.oldest(), h.closed
+		if !s.paging || s.next >= oldest {
+			s.paging = false
+			ev, wait, err := s.ringLocked()
+			h.mu.Unlock()
+			return ev, wait, err
+		}
+		h.mu.Unlock()
+		if closed {
+			return Event{}, nil, ErrClosed
+		}
+		if err := s.page(ctx, oldest-1); err != nil {
+			return Event{}, nil, err
+		}
+	}
+}
+
+// ringLocked returns the next event in scope from the ring, or the channel a
+// publish closes when there is none yet.
+func (s *Subscription) ringLocked() (Event, <-chan struct{}, error) {
+	h := s.hub
 	if s.next < h.oldest() {
 		return Event{}, nil, ErrResync
 	}

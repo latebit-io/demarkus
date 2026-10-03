@@ -121,6 +121,7 @@ func TestMemoryListStartAfterPages(t *testing.T) {
 }
 
 func TestMemoryDeterministicMetadata(t *testing.T) {
+	started := time.Now().UTC().Truncate(time.Second)
 	stores := make([]*blob.Memory, 2)
 	for index := range stores {
 		store, err := blob.NewMemory(32)
@@ -144,20 +145,27 @@ func TestMemoryDeterministicMetadata(t *testing.T) {
 		fourth := mustCreate(t, store, "b", []byte("four"))
 		histories[index] = []blob.Attributes{first, second, third, fourth}
 	}
-	if !slices.Equal(histories[0], histories[1]) {
+	// Generations repeat across stores; Modified is wall time.
+	unstamped := func(history []blob.Attributes) []blob.Attributes {
+		out := slices.Clone(history)
+		for index := range out {
+			out[index].Modified = time.Time{}
+		}
+		return out
+	}
+	if !slices.Equal(unstamped(histories[0]), unstamped(histories[1])) {
 		t.Errorf("identical histories differ:\n%+v\n%+v", histories[0], histories[1])
 	}
 	for index, attributes := range histories[0] {
 		if attributes.Generation <= 0 || attributes.Modified.Location() != time.UTC {
 			t.Errorf("attributes %d = %+v, want positive generation and UTC", index, attributes)
 		}
-		wantModified := time.Unix(int64(attributes.Generation), 0).UTC()
-		if attributes.Modified != wantModified {
-			t.Errorf("modified %d = %v, want logical time %v", index, attributes.Modified, wantModified)
+		if !attributes.Modified.Equal(attributes.Modified.Truncate(time.Second)) || attributes.Modified.Before(started) || attributes.Modified.After(time.Now()) {
+			t.Errorf("modified %d = %v, want wall time to the second since %v", index, attributes.Modified, started)
 		}
 		if index > 0 {
 			previous := histories[0][index-1]
-			if attributes.Generation <= previous.Generation || !attributes.Modified.After(previous.Modified) {
+			if attributes.Generation <= previous.Generation || attributes.Modified.Before(previous.Modified) {
 				t.Errorf("attributes %d = %+v, want after %+v", index, attributes, previous)
 			}
 		}

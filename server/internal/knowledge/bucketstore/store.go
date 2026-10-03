@@ -58,6 +58,10 @@ type Options struct {
 	// and how long a body search waits for it, in tests.
 	sectionIdle time.Duration
 	bodyWait    time.Duration
+	// backlogReach and slotCacheIdle override how far a resume reaches and
+	// how long the slot cache outlives its last read, in tests.
+	backlogReach  uint64
+	slotCacheIdle time.Duration
 }
 
 // Store serves one world from the log: the snapshot it last applied, and
@@ -102,6 +106,7 @@ type Store struct {
 	warmSlots chan struct{}
 
 	changes   *changefeed.Hub
+	changeLog *changeLog // the hub's backlog; nil without WATCH
 	committed func(sequence int64)
 	follower  *follower // nil without WATCH
 	// hints carries the newest created sequence to the Committed goroutine;
@@ -143,7 +148,7 @@ const (
 )
 
 // Open loads the world, creating it in an empty bucket unless read-only.
-func Open(ctx context.Context, objects blob.Store, options Options) (*Store, error) {
+func Open(ctx context.Context, objects blob.Store, options Options) (*Store, error) { //nolint:gocritic // options are read once per world, at open
 	if ctx == nil {
 		return nil, fmt.Errorf("open bucket store: %w: context is nil", blob.ErrPrecondition)
 	}
@@ -216,7 +221,10 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	}
 	store.compaction.ctx, store.compaction.cancel = context.WithCancel(context.Background())
 	store.sections = newSectionIndex(store, cmp.Or(options.sectionIdle, sectionIdle), cmp.Or(options.bodyWait, backend.SearchFreshness))
-	store.changes = newHub(store, options.ChangeRing)
+	if options.ChangeRing > 0 {
+		store.changeLog = newChangeLog(store, options.ChangeRing, cmp.Or(options.backlogReach, backlogReach), cmp.Or(options.slotCacheIdle, slotCacheIdle))
+		store.changes = changefeed.NewWithBacklog(store.worldID, options.ChangeRing, store.changeLog)
+	}
 	store.refreshMu.Lock()
 	err = store.loadOrCreate(ctx, &options)
 	store.refreshMu.Unlock()
@@ -297,7 +305,12 @@ func (store *Store) load(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// The hub starts at the checkpoint; replayed slots fill its ring.
+	return store.start(ctx, loaded, started)
+}
+
+// start serves a checkpoint's snapshot with every slot after it applied; the
+// hub starts at the checkpoint and replayed slots fill its ring.
+func (store *Store) start(ctx context.Context, loaded *snapshot, started time.Time) error {
 	store.skipTo(loaded.Sequence)
 	replayed := 0
 	onSlot := func(slot *slotObject) {
@@ -307,7 +320,11 @@ func (store *Store) load(ctx context.Context) error {
 	if err := replay(ctx, store.objects, loaded, replayOptions{worldID: store.worldID, workers: store.shardWorkers, onSlot: onSlot}); err != nil {
 		return err
 	}
+	// The snapshot rests on its own checkpoint, and an active section index
+	// catches up to it; both are no-ops at open.
+	store.adoption.Store(nil)
 	store.served.Store(&served{snap: loaded, confirmed: started})
+	store.sections.reloaded()
 	store.noteSlots(replayed)
 	return nil
 }
@@ -345,6 +362,15 @@ func (store *Store) catchUpFrom(ctx context.Context, winner slotRead) (*snapshot
 // that slot; when there is one it applies it and every slot a listing names
 // after it, read in parallel.
 func (store *Store) catchUpLocked(ctx context.Context, known *slotRead) (*snapshot, error) {
+	if current := store.served.Load(); store.now().Sub(current.confirmed) > staleAfter {
+		reloaded, err := store.reloadIfBehind(ctx, current.snap)
+		if err != nil {
+			return nil, fmt.Errorf("refresh: %w", err)
+		}
+		if reloaded {
+			return store.served.Load().snap, nil
+		}
+	}
 	base := store.served.Load().snap
 	probed := store.now()
 	var first slotRead
@@ -390,6 +416,19 @@ func (store *Store) catchUpLocked(ctx context.Context, known *slotRead) (*snapsh
 	}
 	store.install(next, applied, listed)
 	return next, nil
+}
+
+// reloadIfBehind starts again from the newest checkpoint when one lies past
+// base: base's next slot may have been collected, which a probe would take
+// for the log's tip, and a commit would then fork the log (ADR 0036).
+func (store *Store) reloadIfBehind(ctx context.Context, base *snapshot) (bool, error) {
+	newest, err := newestCheckpointSequence(ctx, store.objects, base.Sequence)
+	if err != nil || newest == base.Sequence {
+		return false, err
+	}
+	store.logger.Warn("snapshot unconfirmed for half the slot retention; reloading from the newest checkpoint",
+		"world", store.worldID, "served", base.Sequence, "checkpoint", newest)
+	return true, store.load(ctx)
 }
 
 // install serves next, confirmed at the given time, and publishes the events

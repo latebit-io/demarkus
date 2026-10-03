@@ -643,17 +643,6 @@ func TestCompactorListsOnlyNewerCheckpoints(t *testing.T) {
 	}
 }
 
-// youngListing lists every object as written just now.
-type youngListing struct{ blob.Store }
-
-func (s youngListing) List(ctx context.Context, prefix, startAfter, cursor string) (blob.ListResult, error) {
-	result, err := s.Store.List(ctx, prefix, startAfter, cursor)
-	for index := range result.Objects {
-		result.Objects[index].Modified = time.Now().UTC()
-	}
-	return result, err
-}
-
 // A compactor deletes checkpoints past the newest three once an hour old, so
 // a cold start lists few; what they reach stays, so a replica resting on one
 // still reads every version.
@@ -669,7 +658,8 @@ func TestCompactorDropsOldCheckpoints(t *testing.T) {
 	}
 
 	t.Run("old", func(t *testing.T) {
-		objects := initializedMemory(t)
+		objects := newClockedStore(t)
+		objects.writtenAgo(time.Hour)
 		site := manualSite(objects)
 		writer, resting := site.open(t, 0), site.open(t, 0)
 		written := make([]int64, 0, 5)
@@ -693,7 +683,7 @@ func TestCompactorDropsOldCheckpoints(t *testing.T) {
 
 	t.Run("young", func(t *testing.T) {
 		objects := initializedMemory(t)
-		writer := manualSite(youngListing{objects}).open(t, 0)
+		writer := manualSite(objects).open(t, 0)
 		for round := range 5 {
 			writeWorld(t, writer, round)
 			mustSucceed(t, writer.checkpoint(ctx))
@@ -704,8 +694,8 @@ func TestCompactorDropsOldCheckpoints(t *testing.T) {
 	})
 }
 
-// clockedStore stamps each generation with the wall clock less an offset, in
-// place of blob.Memory's logical time, so objects have real ages.
+// clockedStore stamps each generation with the wall clock less an offset, so
+// a test can write objects that look old.
 type clockedStore struct {
 	blob.Store
 	mu     sync.Mutex
@@ -713,8 +703,10 @@ type clockedStore struct {
 	times  map[blob.Generation]time.Time
 }
 
-func newClockedStore(t *testing.T) *clockedStore {
-	return &clockedStore{Store: initializedMemory(t), times: make(map[blob.Generation]time.Time)}
+func newClockedStore(t *testing.T) *clockedStore { return clocked(initializedMemory(t)) }
+
+func clocked(objects blob.Store) *clockedStore {
+	return &clockedStore{Store: objects, times: make(map[blob.Generation]time.Time)}
 }
 
 // writtenAgo stamps what is written from now on as written that long ago.
@@ -800,7 +792,8 @@ func rootOf(t *testing.T, store *Store) keyedRoot {
 // shards it shared with them stay.
 func TestDroppedCheckpointsTakeOnlyTheirShards(t *testing.T) {
 	ctx := context.Background()
-	objects := initializedMemory(t)
+	objects := newClockedStore(t)
+	objects.writtenAgo(time.Hour)
 	site := manualSite(objects)
 	writer := site.open(t, 0)
 	writeDocuments(t, writer, 600)
@@ -943,7 +936,9 @@ func TestDropSparesShardsReusedMeanwhile(t *testing.T) {
 // the root's absence means its shards went first.
 func TestDropFinishesAfterACrash(t *testing.T) {
 	ctx := context.Background()
-	objects := initializedMemory(t)
+	objects := clocked(newTestMemory(t))
+	objects.writtenAgo(time.Hour)
+	mustSucceed(t, initialize(ctx, objects, testWorldID))
 	writer := manualSite(objects).open(t, 0)
 	_, err := writer.WriteVersion("/a.md", 0, []byte("# A\n"), nil)
 	mustSucceed(t, err)

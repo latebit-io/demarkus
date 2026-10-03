@@ -46,7 +46,7 @@ func (r replica) poll(t *testing.T) {
 	}
 }
 
-// Every replica reports a commit under its head sequence with the exact op
+// Every replica reports a commit under its log sequence with the exact op
 // and agent, whether it made the commit, polled it, or opened afterwards;
 // a cursor from one replica resumes on another.
 func TestReplicasShareOneSequence(t *testing.T) {
@@ -240,12 +240,16 @@ type bucketSite struct {
 	noHedge bool
 	// trigger overrides when their compactors run.
 	trigger *compactionTrigger
+	// reach and idle override how far their backlogs reach, in slots, and
+	// how long their slot caches outlive a read.
+	reach uint64
+	idle  time.Duration
 }
 
 // open opens a store that closes when t ends, stopping its follow loop.
 func (s *bucketSite) open(t *testing.T, ring int) *Store {
 	t.Helper()
-	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger})
+	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger, backlogReach: s.reach, slotCacheIdle: s.idle})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -261,9 +265,12 @@ func closeAtEnd(t *testing.T, store *Store) {
 	})
 }
 
-// siteRing holds the suite's 48 concurrent events; a resume across reopen
-// within it reads the slots.
-const siteRing = 64
+// siteRing holds the suite's 48 concurrent events; siteReach is past it, so a
+// resume across reopen reads the slots.
+const (
+	siteRing  = 64
+	siteReach = 96
+)
 
 func (s *bucketSite) Open(t *testing.T) storetest.ChangeBackend {
 	store := s.open(t, siteRing)
@@ -277,12 +284,26 @@ func (s *bucketSite) Tamper(t *testing.T, path string) {
 	}
 }
 
-// Window is the ring: the slots name every change within it.
-func (s *bucketSite) Window() int { return siteRing }
+// Window is the backlog's reach: the suite commits one slot at a time.
+func (s *bucketSite) Window() int { return siteReach }
 
 func TestChangeConformance(t *testing.T) {
 	storetest.RunChangeConformance(t, func(t *testing.T) storetest.ChangeSite {
-		return &bucketSite{objects: initializedMemory(t)}
+		return &bucketSite{objects: initializedMemory(t), reach: siteReach}
+	})
+}
+
+// everySlot checkpoints after each slot, at once.
+var everySlot = compactionTrigger{slots: 1, age: time.Hour, wait: func() time.Duration { return 0 }}
+
+// Stores that checkpoint after every slot pass the suite too: resumes cross
+// a recent checkpoint through the slots. Written an hour ago, old checkpoints
+// drop while the slots behind them stay for the retention.
+func TestChangeConformanceAcrossCheckpoints(t *testing.T) {
+	storetest.RunChangeConformance(t, func(t *testing.T) storetest.ChangeSite {
+		objects := newClockedStore(t)
+		objects.writtenAgo(time.Hour)
+		return &bucketSite{objects: objects, trigger: &everySlot, reach: siteReach}
 	})
 }
 

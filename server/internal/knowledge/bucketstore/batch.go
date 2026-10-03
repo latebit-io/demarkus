@@ -190,9 +190,8 @@ func keep(chain *snapshot, m *member) bool {
 	return true
 }
 
-// seal makes the slot from the members in it, indexes the bodies it leaves
-// live, and starts staging; every entry in chain was judged as a reader
-// replays it, so the slot applies.
+// seal makes the slot from the members in it and starts staging; every
+// entry in chain was judged as a reader replays it, so the slot applies.
 func (c *committer) seal(b *batch, chain *snapshot) {
 	store := c.store
 	b.slot, b.data, b.next, b.staged, b.creating = nil, nil, b.base, false, false

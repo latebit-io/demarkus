@@ -259,10 +259,59 @@ func replay(ctx context.Context, objects blob.Store, loaded *snapshot, options r
 // listing names after the given one; an error ends it.
 func sequencePages(ctx context.Context, objects blob.Store, prefix string, after int64) iter.Seq2[[]int64, error] {
 	return func(yield func([]int64, error) bool) {
+		for page, err := range sequencedPages(ctx, objects, prefix, after) {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			sequences := make([]int64, len(page))
+			for index := range page {
+				sequences[index] = page[index].sequence
+			}
+			if !yield(sequences, nil) {
+				return
+			}
+		}
+	}
+}
+
+// sequenced is a listed object named by its sequence.
+type sequenced struct {
+	blob.Attributes
+	sequence int64
+}
+
+// sequencedPages is sequencePages with each name's attributes.
+func sequencedPages(ctx context.Context, objects blob.Store, prefix string, after int64) iter.Seq2[[]sequenced, error] {
+	return func(yield func([]sequenced, error) bool) {
 		startAfter := ""
 		if after > 0 {
 			startAfter = fmt.Sprintf("%s%016x.json", prefix, after)
 		}
+		for page, err := range attributePages(ctx, objects, prefix, startAfter) {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			named := make([]sequenced, len(page))
+			for index, attributes := range page {
+				sequence, ok := sequenceOfKey(attributes.Key, prefix)
+				if !ok {
+					yield(nil, fmt.Errorf("%w: %q is not a sequence name", blob.ErrIntegrity, attributes.Key))
+					return
+				}
+				named[index] = sequenced{Attributes: attributes, sequence: sequence}
+			}
+			if !yield(named, nil) {
+				return
+			}
+		}
+	}
+}
+
+// attributePages lists prefix after startAfter, one non-empty page at a time.
+func attributePages(ctx context.Context, objects blob.Store, prefix, startAfter string) iter.Seq2[[]blob.Attributes, error] {
+	return func(yield func([]blob.Attributes, error) bool) {
 		cursor := ""
 		for {
 			page, err := objects.List(ctx, prefix, startAfter, cursor)
@@ -270,16 +319,7 @@ func sequencePages(ctx context.Context, objects blob.Store, prefix string, after
 				yield(nil, fmt.Errorf("list %q: %w", prefix, err))
 				return
 			}
-			sequences := make([]int64, len(page.Objects))
-			for index, attributes := range page.Objects {
-				sequence, ok := sequenceOfKey(attributes.Key, prefix)
-				if !ok {
-					yield(nil, fmt.Errorf("%w: %q is not a sequence name", blob.ErrIntegrity, attributes.Key))
-					return
-				}
-				sequences[index] = sequence
-			}
-			if len(sequences) > 0 && !yield(sequences, nil) || page.NextCursor == "" {
+			if len(page.Objects) > 0 && !yield(page.Objects, nil) || page.NextCursor == "" {
 				return
 			}
 			cursor = page.NextCursor

@@ -31,6 +31,11 @@ const (
 	// MinCheckpointGrace leaves a compactor that reused bytes just younger
 	// than freshenAge time to finish (checkpointTimeout) before they can go.
 	MinCheckpointGrace = 2 * freshenAge
+	// A slot the oldest kept checkpoint covers goes once slotRetention old,
+	// for resumes and the federation deriver's cursors. A replica unconfirmed
+	// for staleAfter reloads before trusting a missing slot as the tip.
+	slotRetention = 24 * time.Hour
+	staleAfter    = slotRetention / 2
 )
 
 // compactionTrigger is when a store's compactor runs; tests shorten it.
@@ -137,20 +142,21 @@ func (store *Store) checkpoint(ctx context.Context) error {
 	store.installAdoption(adopted)
 	plan, err := store.planDrop(ctx)
 	if err == nil {
-		err = store.applyDrop(ctx, plan)
+		err = errors.Join(store.applyDrop(ctx, plan), store.dropSlots(ctx, plan))
 	}
 	if err != nil {
-		store.logger.Warn("old checkpoints not dropped; a later checkpoint retries", "world", store.worldID, "error", err)
+		store.logger.Warn("old checkpoints or slots not dropped; a later checkpoint retries", "world", store.worldID, "error", err)
 	}
 	return nil
 }
 
-// dropPlan is the checkpoints to drop, at their listed generations, and the
-// root and shard keys the kept ones use.
+// dropPlan is the checkpoints to drop, at their listed generations, the
+// root and shard keys the kept ones use, and the oldest kept's sequence.
 type dropPlan struct {
 	dropFence
-	dropped []blob.Attributes
-	kept    map[string]bool
+	dropped    []blob.Attributes
+	kept       map[string]bool
+	oldestKept int64
 }
 
 // dropFence is when a drop started and the grace it honors.
@@ -167,26 +173,23 @@ func (fence dropFence) expired(modified time.Time) bool {
 // planDrop lists the checkpoints and reads the kept ones' roots.
 func (store *Store) planDrop(ctx context.Context) (dropPlan, error) {
 	plan := dropPlan{dropFence: dropFence{started: store.now(), grace: store.checkpointGrace}, kept: make(map[string]bool)}
-	var listed []blob.Attributes
-	cursor := ""
-	for {
-		page, err := store.objects.List(ctx, checkpointPrefix, "", cursor)
+	var listed []sequenced
+	for page, err := range sequencedPages(ctx, store.objects, checkpointPrefix, 0) {
 		if err != nil {
-			return dropPlan{}, fmt.Errorf("list checkpoints: %w", err)
+			return dropPlan{}, err
 		}
-		listed = append(listed, page.Objects...)
-		if page.NextCursor == "" {
-			break
-		}
-		cursor = page.NextCursor
+		listed = append(listed, page...)
 	}
 	var kept []string
-	for index, attributes := range listed {
+	for index := range listed {
 		if index < len(listed)-checkpointsKept && plan.expired(listed[index+1].Modified) {
-			plan.dropped = append(plan.dropped, attributes)
-		} else {
-			kept = append(kept, attributes.Key)
+			plan.dropped = append(plan.dropped, listed[index].Attributes)
+			continue
 		}
+		if len(kept) == 0 {
+			plan.oldestKept = listed[index].sequence
+		}
+		kept = append(kept, listed[index].Key)
 	}
 	if len(plan.dropped) == 0 {
 		return plan, nil
@@ -268,6 +271,41 @@ func (store *Store) drop(ctx context.Context, plan dropPlan, checkpoint blob.Att
 	}
 	// A missing root was deleted by a drop cut short, after its shards.
 	return deleteAt(ctx, store.objects, checkpoint)
+}
+
+// dropSlots deletes, oldest first a page at a time, the slots the oldest kept
+// checkpoint covers that were slotRetention old when the drop began, each at
+// its listed generation; a resume from before them resyncs.
+func (store *Store) dropSlots(ctx context.Context, plan dropPlan) error {
+	fence := dropFence{started: plan.started, grace: slotRetention}
+	var previous *sequenced // a slot ends where the next one starts
+	for page, err := range sequencedPages(ctx, store.objects, logPrefix, 0) {
+		if err != nil {
+			return err
+		}
+		var expired []blob.Attributes
+		for index := range page {
+			slot := &page[index]
+			if previous != nil {
+				if slot.sequence-1 > plan.oldestKept || !fence.expired(previous.Modified) {
+					return store.deleteListed(ctx, expired)
+				}
+				expired = append(expired, previous.Attributes)
+			}
+			previous = slot
+		}
+		if err := store.deleteListed(ctx, expired); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteListed deletes listed objects in parallel, each at its listed generation.
+func (store *Store) deleteListed(ctx context.Context, listed []blob.Attributes) error {
+	return runParallel(ctx, store.shardWorkers, listed, func(ctx context.Context, attributes blob.Attributes) error {
+		return deleteAt(ctx, store.objects, attributes)
+	})
 }
 
 // deleteUnused deletes a shard or root no kept checkpoint uses, unless it was

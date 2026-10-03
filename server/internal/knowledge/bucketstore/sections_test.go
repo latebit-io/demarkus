@@ -564,7 +564,10 @@ func TestSegmentParts(t *testing.T) {
 	memory, err := blob.NewMemory(4 << 20)
 	mustSucceed(t, err)
 	mustSucceed(t, initialize(ctx, memory, testWorldID))
-	writer := openSectionStore(t, memory, nil)
+	// Written an hour ago, so the dropped checkpoint's segment is past the grace.
+	objects := clocked(memory)
+	objects.writtenAgo(time.Hour)
+	writer := openSectionStore(t, objects, nil)
 	large := strings.Repeat("filler ", (900<<10)/7)
 	for n := range 3 {
 		write(t, writer, fmt.Sprintf("/big%d.md", n), fmt.Sprintf("# Big %d\n\nterm%d %s\n", n, n, large), nil)
@@ -593,7 +596,7 @@ func TestSegmentParts(t *testing.T) {
 		write(t, writer, "/small.md", fmt.Sprintf("# Small %d\n", n), nil)
 		mustSucceed(t, writer.checkpoint(ctx))
 	}
-	if left := listKeys(t, memory, segmentPrefix+ref.Shard+"/"+ref.Hash+"/"); len(left) != 0 {
+	if left := listKeys(t, objects, segmentPrefix+ref.Shard+"/"+ref.Hash+"/"); len(left) != 0 {
 		t.Errorf("parts of a dropped checkpoint's segment left: %v", left)
 	}
 }

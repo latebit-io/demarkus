@@ -455,16 +455,26 @@ func (s *raceCounter) Create(ctx context.Context, key string, data []byte) (blob
 func logShape(t *testing.T, objects blob.Store, tip int64) (writers int, batched bool) {
 	t.Helper()
 	stores := map[string]bool{}
+	for _, slot := range logSlots(t, objects, tip) {
+		stores[slot.Store] = true
+		batched = batched || len(slot.Entries) > 1
+	}
+	return len(stores), batched
+}
+
+// logSlots reads the log's slots through tip, in order.
+func logSlots(t *testing.T, objects blob.Store, tip int64) []*slotObject {
+	t.Helper()
+	var slots []*slotObject
 	for first := int64(2); first <= tip; {
 		read, err := readSlot(context.Background(), objects, testWorldID, first)
 		if err != nil {
 			t.Fatalf("read slot %d: %v", first, err)
 		}
-		stores[read.slot.Store] = true
-		batched = batched || len(read.slot.Entries) > 1
+		slots = append(slots, read.slot)
 		first = read.slot.last() + 1
 	}
-	return len(stores), batched
+	return slots
 }
 
 // fillPipeline makes /first.md's create of the first held slot hold and

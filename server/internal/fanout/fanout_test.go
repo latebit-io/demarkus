@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -166,17 +167,23 @@ func publish(hub *changefeed.Hub, path string) changefeed.Event {
 // waitAppended returns once the reader has put seq in the ring.
 func waitAppended(t *testing.T, f *Fanout, seq uint64) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		f.mu.Lock()
-		appended := f.run != nil && f.run.next > seq
-		f.mu.Unlock()
-		if appended {
-			return
-		}
-		time.Sleep(time.Millisecond)
+	if !appended(f, seq) {
+		t.Fatalf("seq %d not appended within 2s", seq)
 	}
-	t.Fatalf("seq %d not appended within 2s", seq)
+}
+
+// appended reports, within 2s, that the reader has put seq in the ring; it
+// may run off the test's goroutine.
+func appended(f *Fanout, seq uint64) bool {
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		f.mu.Lock()
+		done := f.run != nil && f.run.next > seq
+		f.mu.Unlock()
+		if done {
+			return true
+		}
+	}
+	return false
 }
 
 // waitWatches returns once n watches are attached.
@@ -588,8 +595,10 @@ type peerBacklog struct {
 	pending []string // paths the peer committed, in order
 }
 
+func (b *peerBacklog) Reaches(context.Context, uint64, uint64) error { return nil }
+
 func (b *peerBacklog) Events(context.Context, uint64, uint64) ([]changefeed.Event, error) {
-	return nil, errors.New("no sealed changes")
+	return nil, errors.New("no backlog")
 }
 
 func (b *peerBacklog) CatchUp(context.Context) error {
@@ -620,5 +629,113 @@ func TestResumeAheadOfTheRingCatchesUpWithoutReplay(t *testing.T) {
 	}
 	if got := moved.event(t).Path; got != "/peer-3.md" {
 		t.Fatalf("first event = %s, want /peer-3.md with nothing replayed", got)
+	}
+}
+
+// historyBacklog is a store's full record of agent-shaped events; onRead runs
+// inside each read, as commits or a close racing a resume would.
+type historyBacklog struct {
+	history []changefeed.Event // history[i] has Seq i+1
+	reads   int
+	onRead  func(read int)
+}
+
+func (b *historyBacklog) Reaches(context.Context, uint64, uint64) error { return nil }
+
+func (b *historyBacklog) CatchUp(context.Context) error { return nil }
+
+func (b *historyBacklog) Events(_ context.Context, after, through uint64) ([]changefeed.Event, error) {
+	b.reads++
+	if b.onRead != nil {
+		b.onRead(b.reads)
+	}
+	return slices.Clone(b.history[after:through]), nil
+}
+
+// record appends the next event, published to hub when publish is set.
+func (b *historyBacklog) record(hub *changefeed.Hub, publish bool) {
+	n := len(b.history) + 1
+	ev := agentEvent(hub, n)
+	ev.Seq = uint64(n)
+	b.history = append(b.history, ev)
+	if publish {
+		hub.PublishAt(ev)
+	}
+}
+
+// pagedHub is a reopened store's hub, its ring of 8 holding the last 4 of n
+// events: a resume from early on pages through the backlog.
+func pagedHub(n int) (*changefeed.Hub, *historyBacklog) {
+	backlog := &historyBacklog{}
+	hub := changefeed.NewWithBacklog("w", 8, backlog)
+	for range n - 4 {
+		backlog.record(hub, false)
+	}
+	hub.Skip(uint64(n - 4))
+	for range 4 {
+		backlog.record(hub, true)
+	}
+	return hub, backlog
+}
+
+// A catch-up joins the ring where the ring holds what follows when it gets
+// there, not where it stood at attach: the ring may have moved on meanwhile.
+func TestCatchUpJoinsTheRingWhereItMovedTo(t *testing.T) {
+	hub, backlog := pagedHub(40)
+	f := newFanout(t, hub, Config{})
+	backlog.onRead = func(read int) {
+		if read == 2 {
+			for range 20 {
+				backlog.record(hub, true)
+			}
+			appended(f, 60)
+		}
+	}
+	s := serve(t, f, Request{Scope: "/", Since: protocol.Cursor{Epoch: "w", Seq: 2}})
+	s.ack(t)
+	for seq := 3; seq <= 60; seq++ {
+		if ev := s.event(t); ev.Path != agentPath(seq) {
+			t.Fatalf("event %d = %s, want %s", seq, ev.Path, agentPath(seq))
+		}
+	}
+	publish(hub, "/live.md")
+	if got := s.event(t).Path; got != "/live.md" {
+		t.Fatalf("live event after the catch-up = %s", got)
+	}
+}
+
+// A hub closed during a catch-up ends the watch with closing at the last
+// event written, so a resume from it neither skips nor repeats.
+func TestCloseDuringCatchUpEndsAtTheLastEventWritten(t *testing.T) {
+	hub, backlog := pagedHub(1200)
+	f := newFanout(t, hub, Config{})
+	backlog.onRead = func(read int) {
+		if read == 100 {
+			hub.Close()
+		}
+	}
+	s := serve(t, f, Request{Scope: "/", Since: protocol.Cursor{Epoch: "w", Seq: 2}})
+	s.ack(t)
+	last := uint64(2)
+	for {
+		block := s.next(t)
+		if block.Status == protocol.StatusOK {
+			continue
+		}
+		if block.Status == protocol.StatusClosing {
+			cursor, err := block.Cursor()
+			if err != nil || cursor.Seq != last {
+				t.Fatalf("closing cursor = %v (%v), want seq %d, the last event written", cursor, err, last)
+			}
+			return
+		}
+		ev, err := block.Event()
+		if err != nil {
+			t.Fatalf("block %+v: %v", block, err)
+		}
+		if ev.Path != agentPath(int(last)+1) {
+			t.Fatalf("event %s after seq %d", ev.Path, last)
+		}
+		last++
 	}
 }

@@ -73,5 +73,6 @@ func (store *Store) Close() error {
 	store.follower.stop()
 	<-store.follower.done
 	store.changes.Close()
+	store.changeLog.close()
 	return nil
 }
