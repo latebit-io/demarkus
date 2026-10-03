@@ -28,11 +28,11 @@ func validHash(hash string) bool {
 	return true
 }
 
-func validWorldID(worldID string) bool {
-	if len(worldID) != 36 {
+func validUUID(value string) bool {
+	if len(value) != 36 {
 		return false
 	}
-	for index, character := range []byte(worldID) {
+	for index, character := range []byte(value) {
 		switch index {
 		case 8, 13, 18, 23:
 			if character != '-' {
@@ -44,7 +44,7 @@ func validWorldID(worldID string) bool {
 			}
 		}
 	}
-	if worldID[19] != '8' && worldID[19] != '9' && worldID[19] != 'a' && worldID[19] != 'b' {
+	if value[19] != '8' && value[19] != '9' && value[19] != 'a' && value[19] != 'b' {
 		return false
 	}
 	return true
@@ -71,16 +71,11 @@ func parseTimestamp(value string) (time.Time, error) {
 	return parsed.UTC(), nil
 }
 
-func validTimestamp(value string) bool {
-	_, err := parseTimestamp(value)
-	return err == nil
-}
-
 func validateMarker(marker *markerObject) error {
 	if marker.Schema != logSchema {
 		return fmt.Errorf("schema is %d, want %d", marker.Schema, logSchema)
 	}
-	if !validWorldID(marker.WorldID) {
+	if !validUUID(marker.WorldID) {
 		return fmt.Errorf("invalid world ID %q", marker.WorldID)
 	}
 	return nil
@@ -91,7 +86,7 @@ func validateCheckpoint(checkpoint *checkpointObject, sequence int64) error {
 	if checkpoint.Schema != logSchema {
 		return fmt.Errorf("schema is %d, want %d", checkpoint.Schema, logSchema)
 	}
-	if !validWorldID(checkpoint.WorldID) {
+	if !validUUID(checkpoint.WorldID) {
 		return fmt.Errorf("invalid world ID %q", checkpoint.WorldID)
 	}
 	if checkpoint.Sequence != sequence {
@@ -112,13 +107,13 @@ func validateSlot(slot *slotObject, first int64) error {
 	if slot.Schema != logSchema {
 		return fmt.Errorf("schema is %d, want %d", slot.Schema, logSchema)
 	}
-	if !validWorldID(slot.WorldID) {
+	if !validUUID(slot.WorldID) {
 		return fmt.Errorf("invalid world ID %q", slot.WorldID)
 	}
 	if slot.First != first || first < 2 {
 		return fmt.Errorf("first sequence is %d, key names %d", slot.First, first)
 	}
-	if !validWorldID(slot.Store) {
+	if !validUUID(slot.Store) {
 		return fmt.Errorf("invalid store ID %q", slot.Store)
 	}
 	if slot.Prev != "" && !validHash(slot.Prev) {
@@ -142,7 +137,7 @@ func validateSlot(slot *slotObject, first int64) error {
 }
 
 func validateSlotEntry(entry *slotEntry) error {
-	if !validWorldID(entry.OperationID) {
+	if !validUUID(entry.OperationID) {
 		return fmt.Errorf("invalid operation ID %q", entry.OperationID)
 	}
 	if err := validateDocumentPath(entry.Path); err != nil {
@@ -312,7 +307,7 @@ func validateFoldedRoot(root *foldedRoot, expectedWorldID string) error {
 	if root.Schema != foldedSchema {
 		return fmt.Errorf("schema is %d, want %d", root.Schema, foldedSchema)
 	}
-	if !validWorldID(root.WorldID) {
+	if !validUUID(root.WorldID) {
 		return fmt.Errorf("invalid world ID %q", root.WorldID)
 	}
 	if root.WorldID != expectedWorldID {

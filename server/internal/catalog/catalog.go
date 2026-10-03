@@ -14,6 +14,7 @@
 package catalog
 
 import (
+	"container/heap"
 	"fmt"
 	"iter"
 	"slices"
@@ -21,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -226,28 +228,56 @@ func Search(index Index, query string, opts Options) ([]Result, error) {
 	}
 	scope := NormalizeScope(opts.Scope)
 
-	var results []Result
+	best := topResults{max: opts.Max}
 	for e := range index.Entries(scope) {
-		if !underScope(e.Path, scope) {
+		if !underScope(e.Path, scope) || !MatchesAll(e, opts.Filter) {
 			continue
 		}
-		if !MatchesAll(e, opts.Filter) {
-			continue
+		score := 0
+		if !matchAll {
+			if score = matchScore(e, terms); score == 0 {
+				continue
+			}
 		}
-		if matchAll {
-			results = append(results, Result{Entry: *e})
-			continue
-		}
-		if score := matchScore(e, terms); score > 0 {
-			results = append(results, Result{Entry: *e, Score: score})
-		}
+		best.offer(e, score)
 	}
+	return best.sorted(), nil
+}
 
-	sortResults(results)
-	if opts.Max > 0 && len(results) > opts.Max {
-		results = results[:opts.Max]
+// topResults keeps the best max results seen, worst first, so a lookup over
+// a large world holds and sorts max results, not every match. max <= 0 keeps all.
+type topResults struct {
+	max     int
+	results []Result
+}
+
+func (top *topResults) offer(e *Entry, score int) {
+	if top.max <= 0 || len(top.results) < top.max {
+		heap.Push(top, Result{Entry: *e, Score: score})
+		return
 	}
-	return results, nil
+	probe := Result{Entry: Entry{Path: e.Path, Importance: e.Importance, Modified: e.Modified}, Score: score}
+	if better(&probe, &top.results[0]) {
+		top.results[0] = Result{Entry: *e, Score: score}
+		heap.Fix(top, 0)
+	}
+}
+
+func (top *topResults) sorted() []Result {
+	sortResults(top.results)
+	return top.results
+}
+
+func (top *topResults) Len() int           { return len(top.results) }
+func (top *topResults) Less(i, j int) bool { return better(&top.results[j], &top.results[i]) }
+func (top *topResults) Swap(i, j int) {
+	top.results[i], top.results[j] = top.results[j], top.results[i]
+}
+func (top *topResults) Push(x any) { top.results = append(top.results, x.(Result)) }
+func (top *topResults) Pop() any {
+	last := top.results[len(top.results)-1]
+	top.results = top.results[:len(top.results)-1]
+	return last
 }
 
 // Tokenize lowercases s and splits it into distinct whitespace-separated
@@ -302,38 +332,73 @@ func normalizeTerms(terms []string) []string {
 	return out
 }
 
-// matchScore scores against already-normalized terms.
+// matchScore scores against already-normalized terms. It runs on every
+// entry a lookup scans, so ASCII titles and tags are compared in place.
 func matchScore(e *Entry, terms []string) int {
-	lowerTitle := strings.ToLower(e.Title)
-	lowerTags := make(map[string]bool, len(e.Tags))
-	for _, t := range e.Tags {
-		lowerTags[strings.ToLower(t)] = true
-	}
 	score := 0
 	for _, term := range terms {
-		if lowerTags[term] || (lowerTitle != "" && strings.Contains(lowerTitle, term)) {
+		if containsLower(e.Title, term) || slices.ContainsFunc(e.Tags, func(tag string) bool { return strings.EqualFold(tag, term) }) {
 			score++
 		}
 	}
 	return score
 }
 
+// containsLower reports whether s, lowercased, contains term, which is
+// lowercase and not empty.
+func containsLower(s, term string) bool {
+	if !isASCII(s) {
+		return strings.Contains(strings.ToLower(s), term)
+	}
+	for start := 0; start+len(term) <= len(s); start++ {
+		if equalLowerASCII(s[start:start+len(term)], term) {
+			return true
+		}
+	}
+	return false
+}
+
+// equalLowerASCII compares ASCII s, lowercased, with term of the same length.
+func equalLowerASCII(s, term string) bool {
+	for index := range len(s) {
+		c := s[index]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != term[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCII(s string) bool {
+	for index := range len(s) {
+		if s[index] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
 // sortResults orders results by descending score, then importance, then
 // modification time, then ascending path for a deterministic tiebreak.
 func sortResults(rs []Result) {
-	sort.SliceStable(rs, func(i, j int) bool {
-		a, b := rs[i], rs[j]
-		if a.Score != b.Score {
-			return a.Score > b.Score
-		}
-		if a.Importance != b.Importance {
-			return a.Importance > b.Importance
-		}
-		if !a.Modified.Equal(b.Modified) {
-			return a.Modified.After(b.Modified)
-		}
-		return a.Path < b.Path
-	})
+	sort.Slice(rs, func(i, j int) bool { return better(&rs[i], &rs[j]) })
+}
+
+// better is the result order: higher score, importance, newer, then path.
+func better(a, b *Result) bool {
+	if a.Score != b.Score {
+		return a.Score > b.Score
+	}
+	if a.Importance != b.Importance {
+		return a.Importance > b.Importance
+	}
+	if !a.Modified.Equal(b.Modified) {
+		return a.Modified.After(b.Modified)
+	}
+	return a.Path < b.Path
 }
 
 // NormalizeScope returns a leading-slashed, trailing-slash-trimmed scope, or

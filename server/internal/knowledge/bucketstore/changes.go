@@ -19,13 +19,24 @@ func (store *Store) skipTo(sequence int64) {
 
 // report publishes one applied slot's changes in log order, so watchers on
 // this replica learn of every replica's commits under one sequence.
-func (store *Store) report(slot *slotObject) {
+func (store *Store) report(slot appliedSlot) {
 	if store.changes == nil {
 		return
 	}
-	for _, event := range slotEvents(slot) {
+	for _, event := range slot.events {
 		store.changes.PublishAt(event)
 	}
+}
+
+// appliedSlot is what an install keeps of a slot it applied: its changes,
+// which name its paths, and the store that wrote it, never the decoded slot.
+type appliedSlot struct {
+	store  string
+	events []changefeed.Event
+}
+
+func appliedOf(slot *slotObject) appliedSlot {
+	return appliedSlot{store: slot.Store, events: slotEvents(slot)}
 }
 
 // slotEvents are the change hints a slot names.

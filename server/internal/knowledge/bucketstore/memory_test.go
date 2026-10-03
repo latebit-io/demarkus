@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -162,5 +163,38 @@ func TestBacklogResumeRetainsNothing(t *testing.T) {
 	// A retained backlog costs about 17 KB a resume, 3.4 MB here.
 	if growth > 512<<10 {
 		t.Errorf("heap grew %d bytes over %d drained resumes, want under 512 KiB", growth, resumes)
+	}
+}
+
+// What a write keeps, in the snapshot and in the hub's ring of events, owns
+// its strings: once a document is rewritten without its summary, nothing
+// keeps the first version's stored frontmatter alive.
+func TestWrittenMetadataPinsNoFrontmatter(t *testing.T) {
+	const docs = 500
+	owned := func(summary int) int64 {
+		objects := initializedMemory(t)
+		defer runtime.KeepAlive(objects)
+		return memtest.Owned(func() any {
+			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: 4096, trigger: manual})
+			mustSucceed(t, err)
+			// A watch keeps the hub's ring, and so every event's agent.
+			_, err = store.Changes().Subscribe(context.Background(), "/", protocol.Cursor{})
+			mustSucceed(t, err)
+			for n := range docs {
+				path := fmt.Sprintf("/agents/session-%d/inbox/01HZX%08d.md", n%7, n)
+				first := map[string]string{"agent": fmt.Sprintf("federation-agent-%d", n%3), "summary": strings.Repeat("s", summary)}
+				_, err := store.WriteVersion(path, -1, []byte("# Observation\n"), first)
+				mustSucceed(t, err)
+				_, err = store.WriteVersion(path, -1, []byte("# Observation\n\nagain\n"), map[string]string{"agent": first["agent"]})
+				mustSucceed(t, err)
+			}
+			mustSucceed(t, store.Close())
+			return store
+		})
+	}
+	small, large := owned(0), owned(900)
+	t.Logf("store owns %d bytes after small first versions, %d after 900 byte summaries", small, large)
+	if large-small > docs*128 {
+		t.Errorf("900 byte summaries no version holds still cost %d bytes, %d per document: kept strings pin stored frontmatter", large-small, (large-small)/docs)
 	}
 }

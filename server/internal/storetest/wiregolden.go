@@ -55,7 +55,7 @@ func WireScenario(t *testing.T, b LookupBackend) []WireGolden {
 	}
 	goldens := make([]WireGolden, 0, len(steps))
 	for _, step := range steps {
-		resp := pinWallClock(SendSettled(t, h, step.req))
+		resp := pinWallClock(sendSettled(t, h, step.req))
 		if step.name == "" {
 			if resp.Status != protocol.StatusCreated {
 				t.Fatalf("setup %s %s: status %s", step.req.Verb, step.req.Path, resp.Status)

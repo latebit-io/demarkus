@@ -15,12 +15,10 @@ import (
 
 const (
 	// historySchema versions history objects; foldedSchema roots and
-	// shards; logSchema the marker, checkpoints and slots. headSchema is the
-	// head.json of the release before the commit log, which is refused.
+	// shards; logSchema the marker, checkpoints and slots.
 	historySchema    = 1
-	foldedSchema     = 2
-	logSchema        = 2
-	headSchema       = 1
+	foldedSchema     = 1
+	logSchema        = 1
 	historyBlockSize = 256
 	// A folded checkpoint has the fewest shards, a power of two, that hold at
 	// most docsPerShard documents each (about 200 KB): 4096 at 1,000,000.
@@ -109,8 +107,8 @@ type shardRef struct {
 	objectRef
 }
 
-// markerObject is head.json under schema 2: written once when the world is
-// created, never on the commit path. A replica of the old release refuses it.
+// markerObject is head.json: written once when the world is created, never on
+// the commit path.
 type markerObject struct {
 	Schema  int    `json:"schema"`
 	WorldID string `json:"world_id"`
@@ -248,6 +246,15 @@ func shardOf(pathHash string, bits int) int {
 		return -1
 	}
 	return int(prefix >> (32 - bits))
+}
+
+// hashPrefix is the top 32 bits of a path hash that validation checked.
+func hashPrefix(pathHash string) uint32 {
+	prefix, err := strconv.ParseUint(pathHash[:8], 16, 32)
+	if err != nil {
+		panic("bucketstore: path hash " + pathHash + " is not hex")
+	}
+	return uint32(prefix)
 }
 
 func rootKey(hash string) string {

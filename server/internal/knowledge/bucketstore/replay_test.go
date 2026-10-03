@@ -15,35 +15,29 @@ func TestReplayFromCheckpointZeroEqualsLiveSnapshot(t *testing.T) {
 	site := &bucketSite{objects: objects}
 	writer, peer, follower := site.open(t, 0), site.open(t, 0), site.open(t, 0)
 	ctx := context.Background()
-	must := func(err error) {
-		t.Helper()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
 	for index, path := range []string{"/a.md", "/docs/b.md", "/docs/deep/c.md", "/.hidden/d.md", "/docs/versions/e.md"} {
 		_, err := writer.WriteVersion(path, 0, fmt.Appendf(nil, "# %d\n\n## Part\n\nbody %d\n", index, index), map[string]string{"tags": "replay"})
-		must(err)
+		mustSucceed(t, err)
 	}
 	_, err := peer.WriteVersion("/docs/b.md", 1, []byte("# B two\n"), nil)
-	must(err)
+	mustSucceed(t, err)
 	_, err = writer.AppendVersion("/docs/b.md", 2, []byte("more\n"), nil)
-	must(err)
+	mustSucceed(t, err)
 	_, _, err = peer.ArchiveResult("/a.md", true)
-	must(err)
+	mustSucceed(t, err)
 	_, _, err = writer.ArchiveResult("/docs/deep/c.md", true)
-	must(err)
+	mustSucceed(t, err)
 	_, _, err = writer.ArchiveResult("/docs/deep/c.md", false)
-	must(err)
+	mustSucceed(t, err)
 	for version := 1; version <= 6; version++ {
 		_, err := peer.WriteVersion("/retained.md", version-1, fmt.Appendf(nil, "v%d", version), map[string]string{"retention": "3"})
-		must(err)
+		mustSucceed(t, err)
 	}
 	_, err = writer.WriteVersion("/docs/same.md", 0, []byte("# 0\n\n## Part\n\nbody 0\n"), nil)
-	must(err)
-	must(writer.poll(ctx))
-	must(peer.poll(ctx))
-	must(follower.poll(ctx))
+	mustSucceed(t, err)
+	mustSucceed(t, writer.poll(ctx))
+	mustSucceed(t, peer.poll(ctx))
+	mustSucceed(t, follower.poll(ctx))
 
 	live := snapshotDigest(writer.served.Load().snap)
 	replayed := snapshotDigest(site.open(t, 0).served.Load().snap)

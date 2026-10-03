@@ -30,7 +30,7 @@ import (
 // so a network policy can keep it inside the replica set.
 const ALPN = "mark-peer"
 
-// One hint per stream, one line: "head <world id> <sequence>".
+// One hint per stream, one line: "commit <world id> <sequence>".
 const (
 	maxLineLength = 256
 	streamTimeout = 5 * time.Second
@@ -44,12 +44,12 @@ type Hint struct {
 }
 
 func (h Hint) line() string {
-	return "head " + h.WorldID + " " + strconv.FormatInt(h.Sequence, 10) + "\n"
+	return "commit " + h.WorldID + " " + strconv.FormatInt(h.Sequence, 10) + "\n"
 }
 
 func parseHint(line string) (Hint, error) {
 	fields := strings.Fields(line)
-	if len(fields) != 3 || fields[0] != "head" {
+	if len(fields) != 3 || fields[0] != "commit" {
 		return Hint{}, fmt.Errorf("malformed hint %q", strings.TrimSpace(line))
 	}
 	if len(fields[1]) > 64 {

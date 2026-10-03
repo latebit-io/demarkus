@@ -30,10 +30,11 @@ const (
 )
 
 // yieldDelay is the wait after a win, from (0, yieldJitter].
-func yieldDelay() time.Duration { return jitterWithin(yieldJitter, mathrand.Int64N) }
+func yieldDelay() time.Duration { return jitterWithin(yieldJitter) }
 
-func jitterWithin(limit time.Duration, random func(int64) int64) time.Duration {
-	return time.Duration(random(int64(limit)) + 1)
+// jitterWithin is a random wait from (0, limit].
+func jitterWithin(limit time.Duration) time.Duration {
+	return time.Duration(mathrand.Int64N(int64(limit)) + 1) //nolint:gosec // a backoff jitter, not a secret
 }
 
 // commitQueue holds the mutations waiting for this store's committer, which
@@ -76,18 +77,16 @@ func (store *Store) runMutation(ctx context.Context, path string, build mutation
 	}
 	ctx, cancel := context.WithTimeout(ctx, store.requestTimeout)
 	defer cancel()
-	operationID, err := store.newOperationID()
+	operationID, err := randomOperationID()
 	if err != nil {
 		return mutationResult{}, fmt.Errorf("create operation ID: %w", err)
-	}
-	if !validWorldID(operationID) {
-		return mutationResult{}, fmt.Errorf("create operation ID: invalid UUID %q", operationID)
 	}
 	request := &commitRequest{
 		ctx: ctx, path: path, build: build, operationID: operationID, answer: make(chan commitAnswer, 1),
 		warm: store.warm(ctx, path),
 	}
 	if err := store.commits.enqueue(store, request); err != nil {
+		store.unwarm(request)
 		return mutationResult{}, err
 	}
 	select {
@@ -133,6 +132,13 @@ func (queue *commitQueue) close() {
 	queue.mu.Unlock()
 	queue.signal()
 	queue.done.Wait()
+}
+
+// active reports a committer running, which may hold snapshots of any age.
+func (queue *commitQueue) active() bool {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	return queue.running
 }
 
 func (queue *commitQueue) isClosed() bool {
@@ -351,15 +357,21 @@ func (c *committer) create(b *batch) {
 			deadline = until
 		}
 	}
-	store.pending.Store(&pendingSlot{base: b.base, next: b.next, hash: hashHex(b.data)})
+	store.pending.Store(&pendingSlot{base: b.base, next: b.next, hash: b.next.Tip})
 	slot := modelObject{Key: slotKey(b.slot.First), Data: b.data}
 	c.running++
 	go func() {
 		ctx, cancel := context.WithDeadline(context.Background(), deadline)
 		defer cancel()
-		winner, err := createOrRead(ctx, store.objects, slot)
+		winner, err := createSlot(ctx, store.objects, slot)
 		c.events <- func() { c.created(b, winner, err) }
 	}()
+}
+
+// createSlot creates a slot, never rewriting it: equal bytes under its name
+// are this create's own, other bytes another writer's win.
+func createSlot(ctx context.Context, objects blob.Store, slot modelObject) (*blob.Object, error) {
+	return createOrRead(ctx, objects, slot, false)
 }
 
 // created settles the first batch's create: confirmed, lost to winner, or
@@ -380,17 +392,14 @@ func (c *committer) created(b *batch, winner *blob.Object, err error) {
 // over the slot's own base: a refresh that read the slot first did already.
 func (c *committer) confirm(b *batch) {
 	store := c.store
-	store.refreshMu.Lock()
+	store.installMu.Lock()
 	if store.served.Load().snap.Sequence == b.base.Sequence {
-		store.install(b.next, []*slotObject{b.slot}, b.started)
+		store.install(b.next, []appliedSlot{appliedOf(b.slot)}, b.started)
 	}
-	store.refreshMu.Unlock()
-	sequence := b.slot.First
+	store.installMu.Unlock()
 	for _, m := range b.members {
 		if m.answer == nil {
-			m.result.Sequence = sequence
 			m.answer = &commitAnswer{result: m.result}
-			sequence++
 		}
 	}
 	c.answerRest(b, nil)

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -27,7 +26,7 @@ func ExportDocs(ctx context.Context, objects blob.Store, options ExportOptions, 
 	if nilStore(objects) {
 		return fmt.Errorf("export bucket store: %w: blob store is nil", blob.ErrPrecondition)
 	}
-	if !validWorldID(worldID) {
+	if !validUUID(worldID) {
 		return fmt.Errorf("export bucket store: %w: invalid world ID %q", blob.ErrPrecondition, worldID)
 	}
 	if workers < 0 {
@@ -47,16 +46,16 @@ func ExportDocs(ctx context.Context, objects blob.Store, options ExportOptions, 
 		return fmt.Errorf("export bucket store: %w", err)
 	}
 	view := readView{objects: objects, snapshot: loaded}
-	paths := make([]string, 0, loaded.Paths.Len())
+	entries := make([]*pathState, 0, loaded.Paths.Len())
 	loaded.Paths.Ascend(func(state *pathState) bool {
-		paths = append(paths, state.Path)
+		entries = append(entries, state)
 		return true
 	})
-	sort.Slice(paths, func(i, j int) bool {
-		return slices.Compare(strings.Split(paths[i], "/"), strings.Split(paths[j], "/")) < 0
+	slices.SortFunc(entries, func(a, b *pathState) int {
+		return slices.Compare(strings.Split(a.Path, "/"), strings.Split(b.Path, "/"))
 	})
-	for _, path := range paths {
-		entry := loaded.path(path)
+	for _, entry := range entries {
+		path := entry.Path
 		history, err := view.history(ctx, entry)
 		if err != nil {
 			return fmt.Errorf("export %s: %w", path, err)
@@ -64,11 +63,8 @@ func ExportDocs(ctx context.Context, objects blob.Store, options ExportOptions, 
 		versions := make([]storefmt.StoredVersion, len(history))
 		for index := range history {
 			retained := &history[index]
-			raw, err := view.loadBlob(ctx, retained.entry.Blob)
+			raw, _, err := view.loadStored(ctx, retained)
 			if err != nil {
-				return fmt.Errorf("export %s v%d: %w", path, retained.entry.Version, err)
-			}
-			if _, err := validateStoredDocument(raw, retained); err != nil {
 				return fmt.Errorf("export %s v%d: %w", path, retained.entry.Version, err)
 			}
 			versions[index] = storefmt.StoredVersion{Version: retained.entry.Version, Stored: bytes.Clone(raw), Modified: retained.modified}

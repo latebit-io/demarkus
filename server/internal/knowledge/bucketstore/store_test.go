@@ -93,7 +93,7 @@ func TestInitializeGenesis(t *testing.T) {
 		}
 		after := getObject(t, objects, markerKey).Attributes.Generation
 		if after != before {
-			t.Errorf("head generation changed from %d to %d", before, after)
+			t.Errorf("marker generation changed from %d to %d", before, after)
 		}
 		listed, err := objects.List(context.Background(), "", "", "")
 		if err != nil {
@@ -192,11 +192,11 @@ func TestInitializeReconciliation(t *testing.T) {
 		}
 	})
 
-	t.Run("ambiguous before head commit", func(t *testing.T) {
+	t.Run("ambiguous before the marker create", func(t *testing.T) {
 		memory := newTestMemory(t)
 		objects := &failFirstCreateStore{Store: memory, prefix: markerKey, category: blob.ErrAmbiguous}
 		if err := initialize(context.Background(), objects, testWorldID); err != nil {
-			t.Fatalf("initialize after ambiguous head create: %v", err)
+			t.Fatalf("initialize after an ambiguous marker create: %v", err)
 		}
 	})
 
@@ -233,7 +233,7 @@ func TestInitializeReconciliation(t *testing.T) {
 }
 
 func TestOpenValidation(t *testing.T) {
-	t.Run("missing head", func(t *testing.T) {
+	t.Run("missing marker", func(t *testing.T) {
 		store, err := Open(context.Background(), newTestMemory(t), Options{Logger: discardLogger, WorldID: testWorldID, ReadOnly: true})
 		if store != nil || !errors.Is(err, blob.ErrNotFound) || errors.Is(err, blob.ErrIntegrity) {
 			t.Fatalf("Open() = (%v, %v), want nil clear not-found", store, err)
@@ -250,7 +250,7 @@ func TestOpenValidation(t *testing.T) {
 			t.Errorf("served sequence = %d, want genesis at 1", got)
 		}
 		if _, err := objects.Head(context.Background(), markerKey); err != nil {
-			t.Errorf("genesis head: %v", err)
+			t.Errorf("genesis marker: %v", err)
 		}
 	})
 
@@ -340,24 +340,6 @@ func TestOpenRejectsMalformedMarker(t *testing.T) {
 				t.Fatalf("Open() = (%v, %v), want nil integrity", store, err)
 			}
 		})
-	}
-}
-
-// A world from before the commit log is never migrated: the store refuses
-// it by name and creates nothing over it.
-func TestOpenRefusesSchemaOneWorld(t *testing.T) {
-	objects := newTestMemory(t)
-	legacy := []byte(`{"schema":1,"world_id":"` + testWorldID + `","sequence":1,"root":{"key":"k","hash":"h"},"receipts":[]}`)
-	if _, err := objects.Create(context.Background(), markerKey, legacy); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
-	if store != nil || !errors.Is(err, blob.ErrPrecondition) || !strings.Contains(err.Error(), "empty the bucket") {
-		t.Fatalf("Open() = (%v, %v), want a precondition saying to start again", store, err)
-	}
-	listed, err := objects.List(context.Background(), "", "", "")
-	if err != nil || len(listed.Objects) != 1 {
-		t.Fatalf("objects after the refusal = %d, %v; want the head alone", len(listed.Objects), err)
 	}
 }
 

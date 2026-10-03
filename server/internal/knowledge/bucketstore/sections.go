@@ -87,8 +87,8 @@ func newDocTree() *btree.BTreeG[*docSections] {
 
 func docProbe(path string) *docSections { return &docSections{path: path} }
 
-func newSectionIndex(store *Store, idle, wait time.Duration) *sectionIndex {
-	return &sectionIndex{store: store, idle: idle, wait: wait, published: make(chan struct{}), wake: make(chan struct{}, 1)}
+func newSectionIndex(store *Store) *sectionIndex {
+	return &sectionIndex{store: store, idle: sectionIdle, wait: backend.SearchFreshness, published: make(chan struct{}), wake: make(chan struct{}, 1)}
 }
 
 func (version *sectionVersion) Entries(scope string) iter.Seq2[*catalog.Entry, *catalog.DocSections] {
@@ -183,7 +183,7 @@ func (index *sectionIndex) reloaded() {
 }
 
 // installed queues a snapshot the store now serves; it does no section work.
-func (index *sectionIndex) installed(snap *snapshot, applied []*slotObject) {
+func (index *sectionIndex) installed(snap *snapshot, applied []appliedSlot) {
 	index.mu.Lock()
 	defer index.mu.Unlock()
 	if !index.active || index.closed || index.resync {
@@ -191,8 +191,8 @@ func (index *sectionIndex) installed(snap *snapshot, applied []*slotObject) {
 	}
 	var changed []*pathState
 	for _, slot := range applied {
-		for entry := range slot.Entries {
-			changed = append(changed, snap.path(slot.Entries[entry].Path))
+		for _, event := range slot.events {
+			changed = append(changed, snap.path(event.Path))
 		}
 	}
 	index.steps = append(index.steps, sectionStep{sequence: snap.Sequence, changed: changed})
@@ -246,6 +246,7 @@ func (index *sectionIndex) run(ctx context.Context, done chan struct{}) {
 				index.requeue(steps, resync)
 			}
 		} else {
+			index.prune()
 			wake, delay = index.wake, min(index.idle, time.Minute)
 		}
 		cancel()
@@ -326,16 +327,29 @@ func (index *sectionIndex) publish(version *sectionVersion) {
 	defer index.mu.Unlock()
 	version.published = index.store.now()
 	index.versions = append(index.versions, version)
+	index.pruneLocked(version.published)
+	close(index.published)
+	index.published = make(chan struct{})
+}
+
+// prune is pruneLocked now, for a worker with nothing else to do.
+func (index *sectionIndex) prune() {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	index.pruneLocked(index.store.now())
+}
+
+// pruneLocked drops versions superseded more than a request ago: no view
+// pinned to their snapshot can still ask for them.
+func (index *sectionIndex) pruneLocked(now time.Time) {
 	stale := 0
-	for stale < len(index.versions)-1 && version.published.Sub(index.versions[stale].published) > index.store.requestTimeout {
+	for stale < len(index.versions)-1 && now.Sub(index.versions[stale+1].published) > index.store.requestTimeout {
 		stale++
 	}
 	if stale > 0 {
 		// Copied, so the old array does not keep the dropped versions alive.
 		index.versions = append([]*sectionVersion(nil), index.versions[stale:]...)
 	}
-	close(index.published)
-	index.published = make(chan struct{})
 }
 
 // build indexes the served snapshot from its checkpoint's segments and blobs.
@@ -501,9 +515,6 @@ func (reader bodyReader) read(ctx context.Context, state *pathState) ([]byte, er
 // shardGroup is a checkpoint shard's documents as a snapshot holds them.
 type shardGroup struct {
 	live []*pathState
-	// based is set when the checkpoint holds a live document here; drifted
-	// once one changed since, so the builder cannot write the segment.
-	based, drifted bool
 }
 
 // buildSections indexes snap's live documents, shard by shard of its
@@ -512,19 +523,19 @@ func (store *Store) buildSections(ctx context.Context, snap *snapshot) (*btree.B
 	layout := snap.Checkpoint
 	groups := make([]shardGroup, len(layout.Shards))
 	snap.Paths.Ascend(func(state *pathState) bool {
-		group := &groups[shardOf(pathHash(state.Path), layout.Bits)]
-		if base := state.Base; base != nil && !base.Archived {
-			group.based = true
-			group.drifted = group.drifted || !sameBody(state)
-		}
 		if !state.Archived {
+			group := &groups[state.shard(layout.Bits)]
 			group.live = append(group.live, state)
 		}
 		return true
 	})
+	listing, err := listSegments(ctx, store.objects)
+	if err != nil {
+		return nil, err
+	}
 	built := make([][]*docSections, len(groups))
-	err := runParallel(ctx, store.shardWorkers, indexes(len(groups)), func(ctx context.Context, shard int) error {
-		docs, err := store.buildShard(ctx, layout.Shards[shard], &groups[shard])
+	err = runParallel(ctx, store.shardWorkers, indexes(len(groups)), func(ctx context.Context, shard int) error {
+		docs, err := store.buildShard(ctx, &listing, segmentLabel(shard, layout.Bits), &groups[shard])
 		built[shard] = docs
 		return err
 	})
@@ -540,17 +551,18 @@ func (store *Store) buildSections(ctx context.Context, snap *snapshot) (*btree.B
 	return tree, nil
 }
 
-// buildShard indexes one shard's live documents. When the shard has no
-// segment and nothing in it changed since the checkpoint, it writes one.
-func (store *Store) buildShard(ctx context.Context, ref shardRef, group *shardGroup) ([]*docSections, error) {
+// buildShard indexes one shard's live documents from its newest segment and
+// the blobs of what that lacks. When the shard has no segment, it writes one.
+func (store *Store) buildShard(ctx context.Context, listing *segmentListing, label string, group *shardGroup) ([]*docSections, error) {
 	if len(group.live) == 0 {
 		return nil, nil
 	}
 	reader := store.bodyReader()
+	source, sourced := listing.latest(label)
 	var carried map[string]string
-	if group.based {
+	if sourced {
 		var err error
-		if carried, err = reader.segment(ctx, ref); err != nil {
+		if carried, err = reader.segment(ctx, source); err != nil {
 			return nil, err
 		}
 	}
@@ -565,10 +577,10 @@ func (store *Store) buildShard(ctx context.Context, ref shardRef, group *shardGr
 			docs[position].sections = catalog.IndexSectionsString(body.Body)
 		}
 	}
-	if carried == nil && group.based && !group.drifted && !store.readOnly {
-		segment := readBodies(bodies, func(position int) bool { return sameBody(group.live[position]) })
-		if err := writeSegment(ctx, store.objects, ref, segment); err != nil && ctx.Err() == nil {
-			store.logger.Warn("section segment not written; the next build reads its bodies again", "world", store.worldID, "shard", ref.Hash, "error", err)
+	if !sourced && !store.readOnly {
+		repaired := segmentRef{label: label, window: windowOf(store.now())}
+		if err := writeSegment(ctx, store.objects, repaired, readBodies(bodies)); err != nil && ctx.Err() == nil {
+			store.logger.Warn("section segment not written; the next build reads its bodies again", "world", store.worldID, "segment", label, "error", err)
 		}
 	}
 	return docs, nil

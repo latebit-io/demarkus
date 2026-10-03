@@ -34,9 +34,9 @@ func SettledLookup(d backendtest.Direct, query string, opts catalog.Options) (re
 	return results, err
 }
 
-// SendSettled is Send, resending a body LOOKUP answered as catalog fallback
+// sendSettled is Send, resending a body LOOKUP answered as catalog fallback
 // until bodySettle passes; every other request is sent once.
-func SendSettled(t testing.TB, h *handler.Handler, req protocol.Request) (resp protocol.Response) {
+func sendSettled(t testing.TB, h *handler.Handler, req protocol.Request) (resp protocol.Response) {
 	t.Helper()
 	settle(func() bool {
 		resp = Send(t, h, req)

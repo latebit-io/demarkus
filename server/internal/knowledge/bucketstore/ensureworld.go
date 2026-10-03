@@ -30,7 +30,7 @@ func ensureWorld(ctx context.Context, objects blob.Store, worldID string) (bool,
 		return false, err
 	}
 	if foreign != "" {
-		return false, fmt.Errorf("ensure world: %w: bucket holds %q but no world head",
+		return false, fmt.Errorf("ensure world: %w: bucket holds %q but no world marker",
 			blob.ErrPrecondition, foreign)
 	}
 	if err := initialize(ctx, objects, worldID); err != nil {

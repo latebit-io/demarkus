@@ -14,6 +14,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/memtest"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
@@ -172,7 +173,8 @@ func TestFirstBodySearchFallsBack(t *testing.T) {
 	write(t, writer, "/docs/a.md", "# A\n\n## Hairpin\n\nnat on the same host\n", map[string]string{"tags": "net"})
 	gate := newGatedGets(memory)
 	gate.hold()
-	reader := openSectionStore(t, gate, func(options *Options) { options.bodyWait = 20 * time.Millisecond })
+	reader := openSectionStore(t, gate, nil)
+	reader.sections.wait = 20 * time.Millisecond
 
 	if _, err := bodyRows(reader, "hairpin"); !errors.Is(err, backend.ErrBodyMatchUnavailable) {
 		t.Fatalf("first body search = %v, want ErrBodyMatchUnavailable", err)
@@ -245,7 +247,8 @@ func TestBodySearchMatchesEagerIndex(t *testing.T) {
 func TestLaggingSectionIndexFallsBack(t *testing.T) {
 	memory := initializedMemory(t)
 	gate := newGatedGets(memory)
-	store := openSectionStore(t, gate, func(options *Options) { options.bodyWait = 20 * time.Millisecond })
+	store := openSectionStore(t, gate, nil)
+	store.sections.wait = 20 * time.Millisecond
 	write(t, store, "/a.md", "# A\n\nhairpin nat\n", nil)
 	assertRows(t, store, "hairpin", "/a.md#a")
 
@@ -356,9 +359,8 @@ func TestSlowBuildIsKeptWhileSearched(t *testing.T) {
 	for n := range 3 {
 		write(t, writer, fmt.Sprintf("/doc%d.md", n), fmt.Sprintf("# Doc %d\n\nhairpin %d\n", n, n), nil)
 	}
-	reader := openSectionStore(t, slowGets{Store: memory, delay: 30 * time.Millisecond}, func(options *Options) {
-		options.sectionIdle, options.bodyWait = time.Nanosecond, 5*time.Millisecond
-	})
+	reader := openSectionStore(t, slowGets{Store: memory, delay: 30 * time.Millisecond}, nil)
+	reader.sections.idle, reader.sections.wait = time.Nanosecond, 5*time.Millisecond
 	if rows := settledRows(t, reader, "hairpin"); len(rows) != 3 {
 		t.Errorf("body rows = %v, want 3", rows)
 	}
@@ -371,9 +373,8 @@ func TestIdleSectionIndexReleasesMemory(t *testing.T) {
 	mustSucceed(t, err)
 	mustSucceed(t, initialize(context.Background(), memory, testWorldID))
 	// A search waits out the build, which the race detector slows past a second.
-	store := openSectionStore(t, memory, func(options *Options) {
-		options.sectionIdle, options.bodyWait = 50*time.Millisecond, time.Minute
-	})
+	store := openSectionStore(t, memory, nil)
+	store.sections.idle, store.sections.wait = 50*time.Millisecond, time.Minute
 	const documents = 24
 	bodyBytes := 0
 	for n := range documents {
@@ -452,39 +453,27 @@ func TestActiveSectionIndexTracksLiveData(t *testing.T) {
 // the segments of its unchanged shards, from which the next replica builds
 // without reading a body.
 func TestCheckpointWithoutSegmentsBuildsFromBodies(t *testing.T) {
-	tests := []struct {
-		name  string
-		world func(t *testing.T) *blob.Memory
-	}{
-		{name: "folded", world: func(t *testing.T) *blob.Memory {
-			memory := initializedMemory(t)
-			writer := openSectionStore(t, memory, nil)
-			write(t, writer, "/docs/a.md", "# A\n\n## Hairpin\n\nnat\n", nil)
-			write(t, writer, "/docs/b.md", "# B\n\nkqueue swap\n", nil)
-			mustSucceed(t, writer.checkpoint(context.Background()))
-			for _, key := range listKeys(t, memory, segmentPrefix) {
-				deleteObject(t, memory, key)
-			}
-			return memory
-		}},
+	memory := initializedMemory(t)
+	writer := openSectionStore(t, memory, nil)
+	write(t, writer, "/docs/a.md", "# A\n\n## Hairpin\n\nnat\n", nil)
+	write(t, writer, "/docs/b.md", "# B\n\nkqueue swap\n", nil)
+	mustSucceed(t, writer.checkpoint(context.Background()))
+	for _, key := range listKeys(t, memory, segmentPrefix) {
+		deleteObject(t, memory, key)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			memory := tt.world(t)
-			first := newObservedBlobStore(memory)
-			assertRows(t, openSectionStore(t, first, nil), "hairpin", "/docs/a.md#hairpin")
-			if bodyReads(first) == 0 {
-				t.Error("built without reading a body")
-			}
-			if len(listKeys(t, memory, segmentPrefix)) == 0 {
-				t.Error("no segment written for the unchanged shards")
-			}
-			second := newObservedBlobStore(memory)
-			assertRows(t, openSectionStore(t, second, nil), "kqueue", "/docs/b.md#b")
-			if n := bodyReads(second); n != 0 {
-				t.Errorf("replica after the repair read %d bodies, want the segments only", n)
-			}
-		})
+
+	first := newObservedBlobStore(memory)
+	assertRows(t, openSectionStore(t, first, nil), "hairpin", "/docs/a.md#hairpin")
+	if bodyReads(first) == 0 {
+		t.Error("built without reading a body")
+	}
+	if len(listKeys(t, memory, segmentPrefix)) == 0 {
+		t.Error("no segment written for the unchanged shards")
+	}
+	second := newObservedBlobStore(memory)
+	assertRows(t, openSectionStore(t, second, nil), "kqueue", "/docs/b.md#b")
+	if n := bodyReads(second); n != 0 {
+		t.Errorf("replica after the repair read %d bodies, want the segments only", n)
 	}
 }
 
@@ -518,14 +507,16 @@ func TestCorruptSegmentFallsBackToBodies(t *testing.T) {
 	}
 }
 
-// A compactor carries unchanged bodies from the previous checkpoint's
-// segment and reads only those that changed; a reader then builds from the
-// segments alone.
-func TestSegmentsCarryUnchangedBodies(t *testing.T) {
+// A shard's segment is written at most once a window: later checkpoints in
+// the window leave it, and a reader takes what changed since from blobs. The
+// next window's checkpoint carries unchanged bodies and reads only the rest.
+func TestSegmentsAreWrittenOncePerWindow(t *testing.T) {
 	ctx := context.Background()
 	memory := initializedMemory(t)
 	counted := newObservedBlobStore(memory)
 	writer := openSectionStore(t, counted, nil)
+	clock := time.Now()
+	writer.now = func() time.Time { return clock }
 	for n := range 5 {
 		write(t, writer, fmt.Sprintf("/doc%d.md", n), fmt.Sprintf("# Doc %d\n\nbody %d\n", n, n), nil)
 	}
@@ -534,25 +525,27 @@ func TestSegmentsCarryUnchangedBodies(t *testing.T) {
 		mustSucceed(t, writer.checkpoint(ctx))
 		return bodyReads(counted)
 	}
+	readerReads := func() int {
+		reader := newObservedBlobStore(memory)
+		assertRows(t, openSectionStore(t, reader, nil), "hairpin", "/doc2.md#doc-2")
+		return bodyReads(reader)
+	}
 	if n := checkpointReads(); n != 5 {
 		t.Errorf("first checkpoint read %d bodies, want all 5", n)
 	}
 	write(t, writer, "/doc2.md", "# Doc 2\n\nchanged hairpin\n", nil)
-	if n := checkpointReads(); n != 1 {
-		t.Errorf("checkpoint after one body changed read %d bodies, want 1", n)
-	}
-	write(t, writer, "/doc3.md", "# Doc 3\n\nbody 3\n", map[string]string{"tags": "renamed"})
 	if n := checkpointReads(); n != 0 {
-		t.Errorf("checkpoint after a metadata change read %d bodies, want 0", n)
+		t.Errorf("checkpoint in the same window read %d bodies, want 0: it rewrote the segment", n)
 	}
-	layout := writer.layout()
-	bodies, err := readSegment(ctx, memory, layout.Shards[0])
-	if err != nil || len(bodies) != 5 {
-		t.Fatalf("segment of the newest shard: %d bodies, %v; want 5", len(bodies), err)
+	if n := readerReads(); n != 1 {
+		t.Errorf("reader read %d bodies, want the one changed since the segment", n)
 	}
-	reader := newObservedBlobStore(memory)
-	assertRows(t, openSectionStore(t, reader, nil), "hairpin", "/doc2.md#doc-2")
-	if n := bodyReads(reader); n != 0 {
+	clock = clock.Add(segmentWindow)
+	write(t, writer, "/doc3.md", "# Doc 3\n\nbody 3\n", map[string]string{"tags": "renamed"})
+	if n := checkpointReads(); n != 1 {
+		t.Errorf("next window's checkpoint read %d bodies, want the 1 its last segment lacks", n)
+	}
+	if n := readerReads(); n != 0 {
 		t.Errorf("reader read %d bodies, want the segment only", n)
 	}
 }
@@ -564,10 +557,12 @@ func TestSegmentParts(t *testing.T) {
 	memory, err := blob.NewMemory(4 << 20)
 	mustSucceed(t, err)
 	mustSucceed(t, initialize(ctx, memory, testWorldID))
-	// Written an hour ago, so the dropped checkpoint's segment is past the grace.
+	// Written an hour ago, so a superseded segment is past the grace.
 	objects := clocked(memory)
 	objects.writtenAgo(time.Hour)
 	writer := openSectionStore(t, objects, nil)
+	clock := time.Now()
+	writer.now = func() time.Time { return clock }
 	large := strings.Repeat("filler ", (900<<10)/7)
 	for n := range 3 {
 		write(t, writer, fmt.Sprintf("/big%d.md", n), fmt.Sprintf("# Big %d\n\nterm%d %s\n", n, n, large), nil)
@@ -575,8 +570,8 @@ func TestSegmentParts(t *testing.T) {
 	// Escaped, every '<' takes six bytes: past any part.
 	write(t, writer, "/escaped.md", "# Escaped\n\nhairpin "+strings.Repeat("<", protocol.MaxBodyLength-64)+"\n", nil)
 	mustSucceed(t, writer.checkpoint(ctx))
-	ref := writer.layout().Shards[0]
-	keys := listKeys(t, memory, segmentPrefix+ref.Shard+"/"+ref.Hash+"/")
+	ref := newestSegment(t, memory, segmentLabel(0, writer.layout().Bits))
+	keys := listKeys(t, memory, segmentDir(ref))
 	if len(keys) != 2 {
 		t.Fatalf("segment parts = %v, want 2", keys)
 	}
@@ -591,62 +586,94 @@ func TestSegmentParts(t *testing.T) {
 	if n := bodyReads(counted); n != 1 {
 		t.Errorf("reader read %d bodies, want only the one no part holds", n)
 	}
-	// Once its checkpoint is dropped, every part of its shard's segment goes.
-	for n := range checkpointsKept + 1 {
-		write(t, writer, "/small.md", fmt.Sprintf("# Small %d\n", n), nil)
-		mustSucceed(t, writer.checkpoint(ctx))
-	}
-	if left := listKeys(t, objects, segmentPrefix+ref.Shard+"/"+ref.Hash+"/"); len(left) != 0 {
-		t.Errorf("parts of a dropped checkpoint's segment left: %v", left)
+	// Once a later window's segment supersedes it, every part goes.
+	clock = clock.Add(segmentWindow)
+	write(t, writer, "/small.md", "# Small\n", nil)
+	mustSucceed(t, writer.checkpoint(ctx))
+	if left := listKeys(t, objects, segmentDir(ref)); len(left) != 0 {
+		t.Errorf("parts of a superseded segment left: %v", left)
 	}
 }
+
+// newestSegment is label's newest segment, which must exist.
+func newestSegment(t *testing.T, objects blob.Store, label string) segmentRef {
+	t.Helper()
+	listing, err := listSegments(context.Background(), objects)
+	mustSucceed(t, err)
+	ref, ok := listing.latest(label)
+	if !ok {
+		t.Fatalf("no segment for %s", label)
+	}
+	return ref
+}
+
+// segmentDir is the prefix of ref's parts.
+func segmentDir(ref segmentRef) string { return strings.TrimSuffix(segmentKey(ref, 0), "0.json") }
 
 func listKeys(t *testing.T, objects blob.Store, prefix string) []string {
 	t.Helper()
 	var keys []string
-	cursor := ""
-	for {
-		page, err := objects.List(context.Background(), prefix, "", cursor)
+	for page, err := range attributePages(context.Background(), objects, prefix, "") {
 		mustSucceed(t, err)
-		for _, attributes := range page.Objects {
+		for _, attributes := range page {
 			keys = append(keys, attributes.Key)
 		}
-		if page.NextCursor == "" {
-			return keys
-		}
-		cursor = page.NextCursor
 	}
+	return keys
 }
 
-// A drop sweeps every segment part whose shard no kept checkpoint uses once it
-// is past the grace, orphans included, and spares young ones and kept shards'.
-func TestDropSweepsUnusedSegments(t *testing.T) {
+// A checkpoint sweeps the segments a later window superseded and those of
+// another shard layout once past the grace, and spares young ones.
+func TestSupersededSegmentsAreSwept(t *testing.T) {
 	ctx := context.Background()
 	objects := newClockedStore(t)
 	writer := openSectionStore(t, objects, nil)
-	orphan := func(name string) string {
-		key := segmentKey(shardRef{Shard: "0", objectRef: objectRef{Hash: hashHex([]byte(name))}}, 3)
-		_, err := objects.Create(ctx, key, []byte("{}"))
-		mustSucceed(t, err)
-		return key
-	}
-	objects.writtenAgo(3 * time.Hour)
-	old := orphan("old")
-	for n := range checkpointsKept + 1 {
+	clock := time.Now()
+	writer.now = func() time.Time { return clock }
+	round := func(n int) segmentRef {
 		write(t, writer, "/doc.md", fmt.Sprintf("# Doc\n\nround %d\n", n), nil)
 		mustSucceed(t, writer.checkpoint(ctx))
+		return newestSegment(t, objects, segmentLabel(0, writer.layout().Bits))
 	}
-	objects.writtenAgo(0)
-	young := orphan("young")
-	write(t, writer, "/doc.md", "# Doc\n\nlast round\n", nil)
-	mustSucceed(t, writer.checkpoint(ctx))
-	if exists(t, objects, old) {
-		t.Error("an old orphan segment part survived the drop")
+	objects.writtenAgo(time.Hour)
+	old := round(0)
+	foreign := segmentRef{label: "07-00", window: old.window}
+	mustSucceed(t, writeSegment(ctx, objects, foreign, []segmentBody{{Path: "/x.md", BodyHash: storefmt.ContentHash([]byte("x")), Body: "x"}}))
+	// Stamped as the store's clock reads, a window on.
+	objects.writtenAgo(-segmentWindow)
+	clock = clock.Add(segmentWindow)
+	young := round(1)
+	clock = clock.Add(segmentWindow)
+	newest := round(2)
+	for _, gone := range []segmentRef{old, foreign} {
+		if exists(t, objects, segmentKey(gone, 0)) {
+			t.Errorf("segment %s window %d survived past the grace", gone.label, gone.window)
+		}
 	}
-	if !exists(t, objects, young) {
-		t.Error("a young segment part was swept within the grace")
+	for _, kept := range []segmentRef{young, newest} {
+		if !exists(t, objects, segmentKey(kept, 0)) {
+			t.Errorf("segment %s window %d was swept within the grace", kept.label, kept.window)
+		}
 	}
-	if !exists(t, objects, segmentKey(writer.layout().Shards[0], 0)) {
-		t.Error("the newest checkpoint's segment was swept")
+}
+
+// Once writes stop, a section index still searched keeps one version: the
+// older ones go once superseded for longer than a request can pin them.
+func TestQuietSectionIndexKeepsOneVersion(t *testing.T) {
+	store := openSectionStore(t, initializedMemory(t), func(options *Options) { options.RequestTimeout = 50 * time.Millisecond })
+	store.sections.idle = 100 * time.Millisecond
+	for round := range 4 {
+		write(t, store, "/doc.md", fmt.Sprintf("# Doc\n\nround%d\n", round), nil)
+		assertRows(t, store, fmt.Sprintf("round%d", round), "/doc.md#doc")
 	}
+	versions := func() int {
+		store.sections.mu.Lock()
+		defer store.sections.mu.Unlock()
+		return len(store.sections.versions)
+	}
+	// Searching keeps the index from idle eviction while the worker idles.
+	waitFor(t, "one section version", func() bool {
+		assertRows(t, store, "round3", "/doc.md#doc")
+		return versions() == 1
+	})
 }

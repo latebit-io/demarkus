@@ -82,11 +82,11 @@ func TestEnsureWorld(t *testing.T) {
 			t.Error("created = true for an initialized bucket")
 		}
 		if after := getObject(t, objects, markerKey).Attributes.Generation; after != before {
-			t.Errorf("head generation changed from %d to %d", before, after)
+			t.Errorf("marker generation changed from %d to %d", before, after)
 		}
 	})
 
-	t.Run("finishes a genesis another replica left without a head", func(t *testing.T) {
+	t.Run("finishes a genesis another replica left without a marker", func(t *testing.T) {
 		objects := newTestMemory(t)
 		createGenesisPrefix(t, objects, 2)
 		created, err := ensureWorld(context.Background(), objects, testWorldID)
@@ -110,7 +110,7 @@ func TestEnsureWorld(t *testing.T) {
 		}
 	})
 
-	t.Run("refuses a non-empty bucket with no head", func(t *testing.T) {
+	t.Run("refuses a non-empty bucket with no marker", func(t *testing.T) {
 		objects := newTestMemory(t)
 		if _, err := objects.Create(context.Background(), "someone-elses-data.json", []byte("{}")); err != nil {
 			t.Fatalf("seed foreign object: %v", err)
@@ -119,7 +119,7 @@ func TestEnsureWorld(t *testing.T) {
 		if !errors.Is(err, blob.ErrPrecondition) {
 			t.Fatalf("EnsureWorld error = %v, want ErrPrecondition", err)
 		}
-		if !strings.Contains(err.Error(), "no world head") {
+		if !strings.Contains(err.Error(), "no world marker") {
 			t.Errorf("error does not name the cause: %v", err)
 		}
 	})

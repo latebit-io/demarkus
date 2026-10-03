@@ -173,7 +173,7 @@ Agents (MCP over HTTPS, OIDC)          demarkus-agent (scheduled crawl)
 
 ### Multi-world knowledge server
 
-At production scale, one `demarkus-knowledge-server` deployment replaces per-world server processes: TLS SNI selects the world during the QUIC handshake, each world has its own GCS bucket with an immutable world ID, and 2 or more stateless replicas share the buckets with no leader election (writes race on a compare-and-swap of one head object). See [Kubernetes & Helm](../deployment/kubernetes.md).
+At production scale, one `demarkus-knowledge-server` deployment replaces per-world server processes: TLS SNI selects the world during the QUIC handshake, each world has its own GCS bucket with an immutable world ID, and 2 or more stateless replicas share the buckets with no leader election (replicas race to create the next slot of a per-world commit log). See [Kubernetes & Helm](../deployment/kubernetes.md).
 
 ## Request Flow
 

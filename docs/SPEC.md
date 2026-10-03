@@ -683,7 +683,7 @@ Terminal, the last block of the stream:
 - A cursor is an opaque string of the form `<epoch>:<seq>`: the epoch is 1 to 64 characters of letters, digits, `.`, `_` and `-`; the sequence is a decimal integer without leading zeros. The server changes the epoch whenever its sequence restarts. A client uses a cursor only by passing it back; it MUST NOT infer a gap from cursor values, since events it may not read are omitted silently. A gap is signalled only by `resync`.
 - Delivery is at least once and in order within an epoch. Events MUST NOT be reordered. A server MAY deliver only the latest of several consecutive changes to one path; every version remains reachable through VERSIONS.
 - The write that produced an event is committed before the event is emitted, so a FETCH of the event's version succeeds unless the document was archived or pruned since.
-- A server that learns of a change from a peer replica rather than from the write itself MAY report an append as `publish`; the version and hash are exact either way.
+- An event's `op` names the operation that made the change, whichever replica reports it: an append is `append`, never `publish`.
 - Read authorisation (§11.8): the token MUST grant `read` on the request path at subscription, and every event MUST be checked against the token before it is sent; an event on a path the token does not cover is omitted. A server that reloads its token store MUST recheck open watches and end those no longer authorised with `unauthorized`.
 - A watch occupies one QUIC stream for its lifetime. Servers SHOULD cap open watches per connection and per server below their stream limits, exempt an open watch from the per-request deadline, and count it once against rate limits at subscription.
 

@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -230,5 +232,44 @@ func TestLookupMatchAll(t *testing.T) {
 	}
 	if got := paths(mustLookup(t, c, "* go", Options{})); len(got) != 2 {
 		t.Errorf("star-with-terms must behave as a term query, got %v", got)
+	}
+}
+
+// A bounded lookup keeps only its best results as it scans, and returns
+// exactly what sorting every match and cutting would.
+func TestBoundedLookupEqualsSortAndCut(t *testing.T) {
+	c := New()
+	base := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	for n := range 500 {
+		c.Set(&Entry{
+			Path:       fmt.Sprintf("/docs/%03d.md", n),
+			Title:      fmt.Sprintf("Agent Run %d", n%7),
+			Tags:       []string{"Agent", fmt.Sprintf("t%d", n%3)},
+			Importance: float64(n%5) / 4,
+			Modified:   base.Add(time.Duration(n%11) * time.Minute),
+		})
+	}
+	for _, query := range []string{"agent", "agent t1", "run 3", "*"} {
+		all := mustLookup(t, c, query, Options{})
+		bounded := mustLookup(t, c, query, Options{Max: 20})
+		if want := all[:min(20, len(all))]; !reflect.DeepEqual(bounded, want) {
+			t.Errorf("Lookup(%q, max 20) differs from the first 20 of all %d", query, len(all))
+		}
+	}
+}
+
+// Scoring an ASCII entry allocates nothing, since it runs on every entry a
+// lookup scans; a non-ASCII title is still matched case-insensitively.
+func TestMatchScoreAllocatesNothingForASCII(t *testing.T) {
+	e := &Entry{Title: "Agent Run Observation", Tags: []string{"Agent", "graph"}}
+	terms := []string{"agent", "observation", "graph", "missing"}
+	if allocations := testing.AllocsPerRun(100, func() { matchScore(e, terms) }); allocations != 0 {
+		t.Errorf("matchScore allocated %v times per call, want 0", allocations)
+	}
+	if got := matchScore(e, terms); got != 3 {
+		t.Errorf("matchScore = %d, want 3", got)
+	}
+	if got := matchScore(&Entry{Title: "Übersicht der Läufe", Tags: []string{"Straße"}}, []string{"übersicht", "straße"}); got != 2 {
+		t.Errorf("non-ASCII matchScore = %d, want 2", got)
 	}
 }

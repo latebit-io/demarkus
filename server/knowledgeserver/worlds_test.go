@@ -312,9 +312,9 @@ func TestWorldManagerBootstrapInitializesGenesis(t *testing.T) {
 	h := newWorldsHarness(t, "worlds:\n"+worldFragment("alice", testWorldID, tokens, true))
 
 	// The memory blob store started empty; a successful open proves the
-	// bootstrap path wrote genesis. The head object must now exist.
+	// bootstrap path wrote genesis. The world marker must now exist.
 	if _, err := h.objects(t, "alice").Get(context.Background(), "_demarkus/v1/head.json"); err != nil {
-		t.Fatalf("bootstrap did not create genesis head: %v", err)
+		t.Fatalf("bootstrap did not create the world marker: %v", err)
 	}
 }
 
@@ -394,7 +394,7 @@ func TestWorldManagerRefusesBucketWithForeignObjects(t *testing.T) {
 	if err == nil {
 		t.Fatal("manager started over a bucket holding foreign objects")
 	}
-	if !strings.Contains(err.Error(), "no world head") {
+	if !strings.Contains(err.Error(), "no world marker") {
 		t.Errorf("error does not name the cause: %v", err)
 	}
 }

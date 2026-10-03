@@ -23,7 +23,7 @@ Prerequisites per world:
 - A GCS bucket with an immutable world ID (a canonical RFC 4122 UUID).
 - A token Secret referenced by `worlds[].tokenSecret`.
 
-An empty bucket needs nothing else. The server writes the world skeleton on first start and seeds a default write policy at `/.well-known/demarkus/policy.md` that warns rather than blocks, then enforces it. Publish your own policy through the protocol to replace it; it takes effect on the next write and survives restarts. A bucket that holds objects but no world head is refused, so a mistyped `bucket.url` naming a bucket already in use fails the open; a typo naming some other empty bucket still creates a world there, which the Warn log on creation surfaces. All of that applies to a writable world; a read-only one is never created or seeded and needs a bucket that already holds a world and its policy. To pick the policy instead of taking the default, set `worlds[].initialPolicy` (or `worldDefaults.initialPolicy`) in the chart: the body ships in the config ConfigMap and the server seeds it as version 1. Seeding is create-only, so a world that already has a policy keeps it, but the file itself is read and validated on every world open and must stay present and parseable once configured.
+An empty bucket needs nothing else. The server writes the world skeleton on first start and seeds a default write policy at `/.well-known/demarkus/policy.md` that warns rather than blocks, then enforces it. Publish your own policy through the protocol to replace it; it takes effect on the next write and survives restarts. A bucket that holds objects but no world marker is refused, so a mistyped `bucket.url` naming a bucket already in use fails the open; a typo naming some other empty bucket still creates a world there, which the Warn log on creation surfaces. All of that applies to a writable world; a read-only one is never created or seeded and needs a bucket that already holds a world and its policy. To pick the policy instead of taking the default, set `worlds[].initialPolicy` (or `worldDefaults.initialPolicy`) in the chart: the body ships in the config ConfigMap and the server seeds it as version 1. Seeding is create-only, so a world that already has a policy keeps it, but the file itself is read and validated on every world open and must stay present and parseable once configured.
 
 Cluster prerequisites:
 
@@ -34,7 +34,7 @@ Cluster prerequisites:
 High availability:
 
 - Replicas are stateless; all durable state lives in the buckets.
-- Writes race on a compare-and-swap of one head object per world; there is no leader election and no lock.
+- Writes commit as create-only log slots, batched per replica; replicas race to create the next slot, with no leader election and no lock.
 - The chart rejects `replicaCount` below 2 and ships a PodDisruptionBudget and zone spread constraints by default.
 
 Minimal values sketch:

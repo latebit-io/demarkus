@@ -2,7 +2,6 @@ package bucketstore
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -24,8 +23,7 @@ func loadBase(ctx context.Context, objects blob.Store, worldID string, workers i
 	return loadCheckpoint(ctx, objects, checkpoint, workers)
 }
 
-// readMarker checks the marker names this world under schema 2. A head from
-// before the commit log is refused: such a world starts again from empty.
+// readMarker checks the marker names this world.
 func readMarker(ctx context.Context, objects blob.Store, worldID string) error {
 	object, err := objects.Get(ctx, markerKey)
 	if err != nil {
@@ -33,12 +31,6 @@ func readMarker(ctx context.Context, objects blob.Store, worldID string) error {
 	}
 	if err := validateReadObject(markerKey, &object); err != nil {
 		return err
-	}
-	var version struct {
-		Schema int `json:"schema"`
-	}
-	if json.Unmarshal(object.Data, &version) == nil && version.Schema == headSchema {
-		return fmt.Errorf("%w: world head is schema %d, from before the commit log, which does not migrate it; empty the bucket to start the world again (ADR 0036)", blob.ErrPrecondition, version.Schema)
 	}
 	var marker markerObject
 	if err := decodeImmutable(object.Data, &marker); err != nil {
@@ -65,7 +57,7 @@ func newestCheckpoint(ctx context.Context, objects blob.Store, worldID string) (
 
 // readCheckpoint reads and checks the checkpoint at sequence.
 func readCheckpoint(ctx context.Context, objects blob.Store, worldID string, sequence int64) (checkpointObject, error) {
-	checkpoint, _, err := getValidated(ctx, objects, checkpointKey(sequence), func(checkpoint *checkpointObject) error {
+	checkpoint, err := getValidated(ctx, objects, checkpointKey(sequence), func(checkpoint *checkpointObject) error {
 		return validateCheckpoint(checkpoint, sequence)
 	})
 	if err != nil {
@@ -81,11 +73,11 @@ func readCheckpoint(ctx context.Context, objects blob.Store, worldID string, seq
 // of them from 0, for the highest sequence.
 func newestCheckpointSequence(ctx context.Context, objects blob.Store, after int64) (int64, error) {
 	newest := after
-	for sequences, err := range sequencePages(ctx, objects, checkpointPrefix, after) {
+	for page, err := range sequencedPages(ctx, objects, checkpointPrefix, after) {
 		if err != nil {
 			return 0, err
 		}
-		newest = max(newest, sequences[len(sequences)-1])
+		newest = max(newest, page[len(page)-1].sequence)
 	}
 	if newest == 0 {
 		return 0, fmt.Errorf("%w: world has a marker but no checkpoint", blob.ErrIntegrity)
@@ -127,8 +119,9 @@ func loadCheckpoint(ctx context.Context, objects blob.Store, checkpoint checkpoi
 	return loaded, topology
 }
 
-// rootRead is a checkpoint's root: its shard layout and document count.
+// rootRead is a checkpoint's root: its key, shard layout and document count.
 type rootRead struct {
+	Key       string
 	layout    *checkpointBase
 	documents int
 }
@@ -143,7 +136,7 @@ func loadRoot(ctx context.Context, objects objectGetter, checkpoint checkpointOb
 		return rootRead{}, err
 	}
 	layout := &checkpointBase{Sequence: checkpoint.Sequence, Bits: root.ShardBits, Shards: root.Shards}
-	return rootRead{layout: layout, documents: root.DocumentCount}, nil
+	return rootRead{Key: checkpoint.Root.Key, layout: layout, documents: root.DocumentCount}, nil
 }
 
 // shardReader reads a checkpoint's shards, workers at a time.
@@ -171,12 +164,17 @@ func (reader shardReader) states(ctx context.Context, shards []int) ([][]*pathSt
 	return loaded, nil
 }
 
-func (reader shardReader) folded(ctx context.Context, index int) ([]*pathState, error) {
+// shard reads and checks the shard at index.
+func (reader shardReader) shard(ctx context.Context, index int) (foldedShard, error) {
 	bits := reader.layout.Bits
 	label, ref := shardLabel(index, bits), reader.layout.Shards[index]
-	shard, err := getImmutable(ctx, reader.objects, keyedRef{ref.objectRef, shardKey(label, ref.Hash)}, func(shard *foldedShard) error {
+	return getImmutable(ctx, reader.objects, keyedRef{ref.objectRef, shardKey(label, ref.Hash)}, func(shard *foldedShard) error {
 		return validateFoldedShard(shard, index, bits)
 	})
+}
+
+func (reader shardReader) folded(ctx context.Context, index int) ([]*pathState, error) {
+	shard, err := reader.shard(ctx, index)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +190,7 @@ func (reader shardReader) folded(ctx context.Context, index int) ([]*pathState, 
 
 // foldedState is a document as a folded shard entry records it.
 func foldedState(entry *foldedEntry) (*pathState, error) {
-	modified, err := parseTimestamp(entry.Modified)
+	base, err := foldedBase(entry)
 	if err != nil {
 		return nil, err
 	}
@@ -200,13 +198,22 @@ func foldedState(entry *foldedEntry) (*pathState, error) {
 	if err != nil {
 		return nil, err
 	}
-	base := &baseEntry{
-		History: entry.History, Current: entry.Current, Archived: entry.Archived,
-		BodyHash: entry.BodyHash, Modified: modified,
-	}
 	return &pathState{
 		Path: entry.Path, Current: entry.Current, First: base.first(), Archived: entry.Archived,
-		BodyHash: entry.BodyHash, Modified: modified, Entry: record, Base: base,
+		BodyHash: entry.BodyHash, Modified: base.Modified, Entry: record, Base: base,
+		hashPrefix: hashPrefix(entry.PathHash),
+	}, nil
+}
+
+// foldedBase is a checkpoint entry's base alone, without its catalog entry.
+func foldedBase(entry *foldedEntry) (*baseEntry, error) {
+	modified, err := parseTimestamp(entry.Modified)
+	if err != nil {
+		return nil, err
+	}
+	return &baseEntry{
+		History: entry.History, Current: entry.Current, Archived: entry.Archived,
+		BodyHash: entry.BodyHash, Modified: modified,
 	}, nil
 }
 
@@ -227,15 +234,15 @@ type replayOptions struct {
 // replay applies every slot after loaded's sequence, a page of names at a
 // time, reading each page's slots in parallel.
 func replay(ctx context.Context, objects blob.Store, loaded *snapshot, options replayOptions) error {
-	for firsts, err := range sequencePages(ctx, objects, logPrefix, loaded.Sequence) {
+	for page, err := range sequencedPages(ctx, objects, logPrefix, loaded.Sequence) {
 		if err != nil {
 			return err
 		}
-		slots := make([]slotRead, len(firsts))
-		err := runParallel(ctx, options.workers, indexes(len(firsts)), func(ctx context.Context, index int) error {
-			read, err := readSlot(ctx, objects, options.worldID, firsts[index])
+		slots := make([]slotRead, len(page))
+		err := runParallel(ctx, options.workers, indexes(len(page)), func(ctx context.Context, index int) error {
+			read, err := readSlot(ctx, objects, options.worldID, page[index].sequence)
 			if errors.Is(err, blob.ErrNotFound) {
-				return fmt.Errorf("%w: listed slot %d is missing: %w", blob.ErrIntegrity, firsts[index], err)
+				return fmt.Errorf("%w: listed slot %d is missing: %w", blob.ErrIntegrity, page[index].sequence, err)
 			}
 			slots[index] = read
 			return err
@@ -255,33 +262,14 @@ func replay(ctx context.Context, objects blob.Store, loaded *snapshot, options r
 	return nil
 }
 
-// sequencePages yields, a page at a time, the sequences a checkpoint or slot
-// listing names after the given one; an error ends it.
-func sequencePages(ctx context.Context, objects blob.Store, prefix string, after int64) iter.Seq2[[]int64, error] {
-	return func(yield func([]int64, error) bool) {
-		for page, err := range sequencedPages(ctx, objects, prefix, after) {
-			if err != nil {
-				yield(nil, err)
-				return
-			}
-			sequences := make([]int64, len(page))
-			for index := range page {
-				sequences[index] = page[index].sequence
-			}
-			if !yield(sequences, nil) {
-				return
-			}
-		}
-	}
-}
-
 // sequenced is a listed object named by its sequence.
 type sequenced struct {
 	blob.Attributes
 	sequence int64
 }
 
-// sequencedPages is sequencePages with each name's attributes.
+// sequencedPages yields, a page at a time, the objects a checkpoint or slot
+// listing names after the given sequence; an error ends it.
 func sequencedPages(ctx context.Context, objects blob.Store, prefix string, after int64) iter.Seq2[[]sequenced, error] {
 	return func(yield func([]sequenced, error) bool) {
 		startAfter := ""
@@ -337,13 +325,13 @@ func indexes(n int) []int {
 
 // getValidated reads the object at a fixed key and returns it with its
 // bytes; a defect in its encoding or content is an integrity failure.
-func getValidated[T any](ctx context.Context, objects blob.Store, key string, validate func(*T) error) (value T, data []byte, err error) {
+func getValidated[T any](ctx context.Context, objects blob.Store, key string, validate func(*T) error) (T, error) {
 	object, err := objects.Get(ctx, key)
 	if err != nil {
-		return value, nil, fmt.Errorf("read %q: %w", key, err)
+		var zero T
+		return zero, fmt.Errorf("read %q: %w", key, err)
 	}
-	value, err = decodeValidated(key, &object, validate)
-	return value, object.Data, err
+	return decodeValidated(key, &object, validate)
 }
 
 // decodeValidated checks an object read at key and decodes it.
@@ -405,6 +393,19 @@ func getImmutable[T any](ctx context.Context, objects objectGetter, keyed keyedR
 
 // getVerified reads a referenced object and checks its bytes hash to it.
 func getVerified(ctx context.Context, objects objectGetter, keyed keyedRef) ([]byte, error) {
+	data, err := getReferenced(ctx, objects, keyed)
+	if err == nil {
+		err = verifyBlobHash(keyed.objectRef, data)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// getReferenced is getVerified without the hash check, for a caller that
+// verifies the bytes another way: a missing object is an integrity failure.
+func getReferenced(ctx context.Context, objects objectGetter, keyed keyedRef) ([]byte, error) {
 	ref := keyed.objectRef
 	if err := verifyRef(ref, keyed.expectedKey); err != nil {
 		return nil, fmt.Errorf("%w: %v", blob.ErrIntegrity, err)
@@ -418,9 +419,6 @@ func getVerified(ctx context.Context, objects objectGetter, keyed keyedRef) ([]b
 	}
 	if err := validateReadObject(ref.Key, &value); err != nil {
 		return nil, err
-	}
-	if actual := hashHex(value.Data); actual != ref.Hash {
-		return nil, fmt.Errorf("%w: object %q hash is %s, reference is %s", blob.ErrIntegrity, ref.Key, actual, ref.Hash)
 	}
 	return value.Data, nil
 }

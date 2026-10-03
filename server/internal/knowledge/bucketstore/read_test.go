@@ -5,10 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	pathpkg "path"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -796,8 +796,6 @@ type committedReadDocument struct {
 
 type readCommit struct {
 	documents map[string]*committedReadDocument
-	root      foldedRoot
-	rootRef   objectRef
 }
 
 func newReadDocument(path string, bodies ...string) readDocumentSpec {
@@ -831,47 +829,16 @@ func readMetadata(title, tags, project string) map[string]string {
 func commitReadDocuments(t *testing.T, memory *blob.Memory, specs []readDocumentSpec) readCommit {
 	t.Helper()
 	commit := readCommit{documents: make(map[string]*committedReadDocument, len(specs))}
-	bits := shardBitsFor(len(specs))
-	grouped := make([][]foldedEntry, 1<<bits)
+	entries := make([]foldedEntry, 0, len(specs))
 	for _, spec := range specs {
 		document := buildReadDocument(t, memory, &spec)
 		if _, exists := commit.documents[spec.Path]; exists {
 			t.Fatalf("duplicate test document %q", spec.Path)
 		}
 		commit.documents[spec.Path] = document
-		index := shardOf(document.entry.PathHash, bits)
-		grouped[index] = append(grouped[index], document.entry)
+		entries = append(entries, document.entry)
 	}
-
-	refs := make([]shardRef, len(grouped))
-	for index, entries := range grouped {
-		if entries == nil {
-			entries = make([]foldedEntry, 0)
-		}
-		sort.Slice(entries, func(left, right int) bool {
-			return entries[left].Path < entries[right].Path
-		})
-		model, ref, err := foldShard(index, bits, entries)
-		if err != nil {
-			t.Fatalf("build shard %d: %v", index, err)
-		}
-		createReadObject(t, memory, model)
-		refs[index] = ref
-	}
-	root := foldedRoot{
-		Schema:        foldedSchema,
-		WorldID:       testWorldID,
-		DocumentCount: len(specs),
-		ShardBits:     bits,
-		Shards:        refs,
-	}
-	_, rootRef, err := immutableJSON(rootKey, root)
-	if err != nil {
-		t.Fatalf("build root ref: %v", err)
-	}
-	installRoot(t, memory, root)
-	commit.root = root
-	commit.rootRef = rootRef
+	installEntries(t, memory, entries)
 	return commit
 }
 
@@ -1296,4 +1263,64 @@ func (store *failOnceGetStore) Get(ctx context.Context, key string) (blob.Object
 		return blob.Object{}, &blob.OpError{Op: "get", Key: key, Err: blob.ErrUnavailable}
 	}
 	return store.Store.Get(ctx, key)
+}
+
+// A read of one version reads the one history block that holds it, so a
+// document's read cost does not grow with its history.
+func TestReadOfOneVersionReadsOneBlock(t *testing.T) {
+	objects := initializedMemory(t)
+	writer := manualSite(objects).open(t, 0)
+	for version := range 600 {
+		_, err := writer.WriteVersion("/long.md", version, fmt.Appendf(nil, "# v%d\n", version+1), nil)
+		mustSucceed(t, err)
+	}
+	checkpointOnly(t, writer)
+	observed := newObservedBlobStore(objects)
+	reader := manualSite(observed).open(t, 0)
+	for _, version := range []int{0, 1, 300} {
+		observed.reset()
+		if _, err := reader.Get("/long.md", version); err != nil {
+			t.Fatalf("read v%d: %v", version, err)
+		}
+		if n := countPrefix(observed.counts().gets, objectPrefix+"history/"); n != 1 {
+			t.Errorf("read v%d read %d history blocks, want 1", version, n)
+		}
+	}
+}
+
+// countingIndex counts the entries a scan visits and ends ctx after the
+// tenth, as a request cut short mid-lookup.
+type countingIndex struct {
+	catalog.Index
+	cancel  context.CancelFunc
+	visited int
+}
+
+func (index *countingIndex) Entries(scope string) iter.Seq2[*catalog.Entry, *catalog.DocSections] {
+	return func(yield func(*catalog.Entry, *catalog.DocSections) bool) {
+		for entry, sections := range index.Index.Entries(scope) {
+			index.visited++
+			if index.visited == 10 {
+				index.cancel()
+			}
+			if !yield(entry, sections) {
+				return
+			}
+		}
+	}
+}
+
+// A lookup stops scanning soon after its request ends, not at the end of
+// the world.
+func TestLookupStopsWithItsRequest(t *testing.T) {
+	store := manualSite(initializedMemory(t)).open(t, 0)
+	writeDocuments(t, store, 5000)
+	ctx, cancel := context.WithCancel(context.Background())
+	index := &countingIndex{Index: store.served.Load().snap, cancel: cancel}
+	if _, err := search(ctx, index, "*", catalog.Options{Max: 10}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("search after its request ended: %v, want context.Canceled", err)
+	}
+	if index.visited > cancelCheck {
+		t.Errorf("scanned %d entries after the request ended, want at most %d", index.visited, cancelCheck)
+	}
 }

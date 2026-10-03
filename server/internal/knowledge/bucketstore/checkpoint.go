@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	mathrand "math/rand/v2"
 	"slices"
 	"sync"
 	"time"
@@ -26,17 +25,21 @@ const (
 	// the store's grace. A dropped one takes the shards, segments and root
 	// only it used, each past the grace and at the generation read.
 	checkpointsKept = 3
-	// DefaultCheckpointGrace is the grace when Options leaves it zero.
-	DefaultCheckpointGrace = 15 * time.Minute
-	// MinCheckpointGrace leaves a compactor that reused bytes just younger
+	// defaultCheckpointGrace is the grace when Options leaves it zero.
+	defaultCheckpointGrace = minCheckpointGrace
+	// minCheckpointGrace leaves a compactor that reused bytes just younger
 	// than freshenAge time to finish (checkpointTimeout) before they can go.
-	MinCheckpointGrace = 2 * freshenAge
+	minCheckpointGrace = 2 * freshenAge
 	// A slot the oldest kept checkpoint covers goes once slotRetention old,
 	// for resumes and the federation deriver's cursors. A replica unconfirmed
 	// for staleAfter reloads before trusting a missing slot as the tip.
 	slotRetention = 24 * time.Hour
 	staleAfter    = slotRetention / 2
 )
+
+// A drop must not take bytes a compactor reused just under freshenAge ago
+// and is still writing, so the build fails if the grace cannot cover it.
+const _ = uint64(minCheckpointGrace - freshenAge - checkpointTimeout)
 
 // compactionTrigger is when a store's compactor runs; tests shorten it.
 type compactionTrigger struct {
@@ -48,7 +51,7 @@ type compactionTrigger struct {
 var defaultTrigger = compactionTrigger{
 	slots: checkpointSlots,
 	age:   checkpointAge,
-	wait:  func() time.Duration { return jitterWithin(checkpointJitter, mathrand.Int64N) },
+	wait:  func() time.Duration { return jitterWithin(checkpointJitter) },
 }
 
 // compaction schedules a store's compactor: one run at a time, started by
@@ -135,6 +138,11 @@ func (store *Store) checkpoint(ctx context.Context) error {
 	if store.readOnly || snap.Sequence <= newest {
 		return nil
 	}
+	// A snapshot that failed to rebase on the newest checkpoint would name
+	// shards of an older one, which a drop may already have taken.
+	if snap.Checkpoint.Sequence != known {
+		return fmt.Errorf("%w: snapshot rests on checkpoint %d, not the newest %d", blob.ErrIntegrity, snap.Checkpoint.Sequence, known)
+	}
 	adopted, err := store.checkpointWriter().write(ctx, snap)
 	if err != nil {
 		return err
@@ -150,298 +158,6 @@ func (store *Store) checkpoint(ctx context.Context) error {
 	return nil
 }
 
-// dropPlan is the checkpoints to drop, at their listed generations, the
-// root and shard keys the kept ones use, and the oldest kept's sequence.
-type dropPlan struct {
-	dropFence
-	dropped    []blob.Attributes
-	kept       map[string]bool
-	oldestKept int64
-}
-
-// dropFence is when a drop started and the grace it honors.
-type dropFence struct {
-	started time.Time
-	grace   time.Duration
-}
-
-// expired reports something written at modified as past the grace.
-func (fence dropFence) expired(modified time.Time) bool {
-	return fence.started.Sub(modified) >= fence.grace
-}
-
-// planDrop lists the checkpoints and reads the kept ones' roots.
-func (store *Store) planDrop(ctx context.Context) (dropPlan, error) {
-	plan := dropPlan{dropFence: dropFence{started: store.now(), grace: store.checkpointGrace}, kept: make(map[string]bool)}
-	var listed []sequenced
-	for page, err := range sequencedPages(ctx, store.objects, checkpointPrefix, 0) {
-		if err != nil {
-			return dropPlan{}, err
-		}
-		listed = append(listed, page...)
-	}
-	var kept []string
-	for index := range listed {
-		if index < len(listed)-checkpointsKept && plan.expired(listed[index+1].Modified) {
-			plan.dropped = append(plan.dropped, listed[index].Attributes)
-			continue
-		}
-		if len(kept) == 0 {
-			plan.oldestKept = listed[index].sequence
-		}
-		kept = append(kept, listed[index].Key)
-	}
-	if len(plan.dropped) == 0 {
-		return plan, nil
-	}
-	// Racing compactors may write sequences out of order, so every kept root
-	// is read, not only those after the dropped ones.
-	for _, key := range kept {
-		root, err := store.checkpointRoot(ctx, key)
-		if err != nil {
-			return dropPlan{}, err
-		}
-		plan.kept[root.Key] = true
-		for _, shard := range root.layout.Shards {
-			plan.kept[shard.Key] = true
-		}
-	}
-	return plan, nil
-}
-
-// checkpointRoot reads the root of the checkpoint at key.
-func (store *Store) checkpointRoot(ctx context.Context, key string) (keyedRoot, error) {
-	sequence, ok := sequenceOfKey(key, checkpointPrefix)
-	if !ok {
-		return keyedRoot{}, fmt.Errorf("%w: %q is not a sequence name", blob.ErrIntegrity, key)
-	}
-	checkpoint, err := readCheckpoint(ctx, store.objects, store.worldID, sequence)
-	if err != nil {
-		return keyedRoot{}, err
-	}
-	root, err := loadRoot(ctx, store.objects, checkpoint)
-	return keyedRoot{Key: checkpoint.Root.Key, rootRead: root}, err
-}
-
-// keyedRoot is a checkpoint's root and its key.
-type keyedRoot struct {
-	Key string
-	rootRead
-}
-
-// applyDrop deletes each dropped checkpoint's own shards, then its root, then
-// the checkpoint, so a drop cut short is found and finished by the next; then
-// the segments of shards nothing kept uses.
-func (store *Store) applyDrop(ctx context.Context, plan dropPlan) error {
-	var failures []error
-	for _, attributes := range plan.dropped {
-		if err := store.drop(ctx, plan, attributes); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	if len(plan.dropped) > 0 {
-		if err := store.dropSegments(ctx, plan); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	return errors.Join(failures...)
-}
-
-func (store *Store) drop(ctx context.Context, plan dropPlan, checkpoint blob.Attributes) error {
-	root, err := store.checkpointRoot(ctx, checkpoint.Key)
-	switch {
-	case err == nil:
-		var shards []string
-		for _, shard := range root.layout.Shards {
-			if !plan.kept[shard.Key] {
-				shards = append(shards, shard.Key)
-			}
-		}
-		err = runParallel(ctx, store.shardWorkers, shards, func(ctx context.Context, key string) error {
-			return store.deleteUnused(ctx, key, plan.dropFence)
-		})
-		if err == nil && !plan.kept[root.Key] {
-			err = store.deleteUnused(ctx, root.Key, plan.dropFence)
-		}
-		if err != nil {
-			return fmt.Errorf("drop %q: %w", checkpoint.Key, err)
-		}
-	case !errors.Is(err, blob.ErrNotFound):
-		return fmt.Errorf("drop %q: %w", checkpoint.Key, err)
-	}
-	// A missing root was deleted by a drop cut short, after its shards.
-	return deleteAt(ctx, store.objects, checkpoint)
-}
-
-// dropSlots deletes, oldest first a page at a time, the slots the oldest kept
-// checkpoint covers that were slotRetention old when the drop began, each at
-// its listed generation; a resume from before them resyncs.
-func (store *Store) dropSlots(ctx context.Context, plan dropPlan) error {
-	fence := dropFence{started: plan.started, grace: slotRetention}
-	var previous *sequenced // a slot ends where the next one starts
-	for page, err := range sequencedPages(ctx, store.objects, logPrefix, 0) {
-		if err != nil {
-			return err
-		}
-		var expired []blob.Attributes
-		for index := range page {
-			slot := &page[index]
-			if previous != nil {
-				if slot.sequence-1 > plan.oldestKept || !fence.expired(previous.Modified) {
-					return store.deleteListed(ctx, expired)
-				}
-				expired = append(expired, previous.Attributes)
-			}
-			previous = slot
-		}
-		if err := store.deleteListed(ctx, expired); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// deleteListed deletes listed objects in parallel, each at its listed generation.
-func (store *Store) deleteListed(ctx context.Context, listed []blob.Attributes) error {
-	return runParallel(ctx, store.shardWorkers, listed, func(ctx context.Context, attributes blob.Attributes) error {
-		return deleteAt(ctx, store.objects, attributes)
-	})
-}
-
-// deleteUnused deletes a shard or root no kept checkpoint uses, unless it was
-// written or reused within the grace before the drop's start.
-func (store *Store) deleteUnused(ctx context.Context, key string, fence dropFence) error {
-	attributes, err := store.objects.Head(ctx, key)
-	if errors.Is(err, blob.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("head %q: %w", key, err)
-	}
-	if !fence.expired(attributes.Modified) {
-		return nil
-	}
-	return deleteAt(ctx, store.objects, attributes)
-}
-
-// deleteAt deletes an object at the generation read; one rewritten or gone
-// since is left as it is.
-func deleteAt(ctx context.Context, objects blob.Store, attributes blob.Attributes) error {
-	err := objects.Delete(ctx, attributes.Key, attributes.Generation)
-	if err != nil && !errors.Is(err, blob.ErrNotFound) && !errors.Is(err, blob.ErrPrecondition) {
-		return fmt.Errorf("delete %q: %w", attributes.Key, err)
-	}
-	return nil
-}
-
-// layout is the checkpoint the store last rebased on.
-func (store *Store) layout() *checkpointBase {
-	if adopted := store.adoption.Load(); adopted != nil {
-		return adopted.checkpoint
-	}
-	return store.served.Load().snap.Checkpoint
-}
-
-// adoptPeerCheckpoint rebases on a checkpoint another store wrote, reading
-// only the shards that differ from the one this store rests on.
-func (store *Store) adoptPeerCheckpoint(ctx context.Context, sequence int64) error {
-	checkpoint, err := readCheckpoint(ctx, store.objects, store.worldID, sequence)
-	if err != nil {
-		return fmt.Errorf("adopt: %w", err)
-	}
-	root, err := loadRoot(ctx, store.objects, checkpoint)
-	if err != nil {
-		return fmt.Errorf("adopt checkpoint %d: %w", sequence, err)
-	}
-	current := store.layout()
-	var changed []int
-	for index, ref := range root.layout.Shards {
-		if current.Bits != root.layout.Bits || current.Shards[index] != ref {
-			changed = append(changed, index)
-		}
-	}
-	shards, err := shardReader{objects: store.objects, layout: root.layout, workers: store.shardWorkers}.states(ctx, changed)
-	if err != nil {
-		return fmt.Errorf("adopt checkpoint %d: %w", sequence, err)
-	}
-	// Entries the served snapshot rests on already are left out, so the
-	// adoption holds only what changed.
-	served := store.served.Load().snap
-	entries := make(map[string]*baseEntry)
-	for _, states := range shards {
-		for _, state := range states {
-			if old := served.path(state.Path); old == nil || !sameBase(old.Base, state.Base) {
-				entries[state.Path] = state.Base
-			}
-		}
-	}
-	store.installAdoption(&adoption{checkpoint: root.layout, entries: entries})
-	return nil
-}
-
-// adoption is a checkpoint the store's snapshots rebase on: its layout and
-// the entry of every document that changed in it.
-type adoption struct {
-	checkpoint *checkpointBase
-	entries    map[string]*baseEntry
-}
-
-// installAdoption makes a the newest checkpoint and rebases the served
-// snapshot on it; snapshots built earlier rebase as they are installed.
-func (store *Store) installAdoption(a *adoption) {
-	store.refreshMu.Lock()
-	defer store.refreshMu.Unlock()
-	if current := store.adoption.Load(); current != nil && current.checkpoint.Sequence >= a.checkpoint.Sequence {
-		return
-	}
-	store.adoption.Store(a)
-	current := store.served.Load()
-	store.served.Store(&served{snap: store.rebased(current.snap), confirmed: current.confirmed})
-}
-
-// rebased is s on the newest adopted checkpoint when s was built before it
-// and holds it; otherwise s.
-func (store *Store) rebased(s *snapshot) *snapshot {
-	a := store.adoption.Load()
-	if a == nil || s.Checkpoint.Sequence >= a.checkpoint.Sequence || s.Sequence < a.checkpoint.Sequence {
-		return s
-	}
-	next := store.derive(s)
-	if err := next.adopt(a); err != nil {
-		store.logger.Error("rebase on checkpoint failed", "world", store.worldID, "checkpoint", a.checkpoint.Sequence, "error", err)
-		return s
-	}
-	return next
-}
-
-// adopt rebases a derived snapshot at or past a's checkpoint on it, dropping
-// the versions the checkpoint now holds.
-func (s *snapshot) adopt(a *adoption) error {
-	for path, base := range a.entries {
-		old := s.path(path)
-		if old == nil || old.Current < base.Current {
-			return fmt.Errorf("%w: checkpoint %d holds %s ahead of the log", blob.ErrIntegrity, a.checkpoint.Sequence, path)
-		}
-		if sameBase(old.Base, base) {
-			continue
-		}
-		state := *old
-		state.Base, state.Recent = base, nil
-		if index := slices.IndexFunc(old.Recent, func(version retainedVersion) bool { return version.entry.Version > base.Current }); index >= 0 {
-			// Cloned: the old array holds the versions the checkpoint took.
-			state.Recent = slices.Clone(old.Recent[index:])
-		}
-		s.put(old, &state)
-	}
-	s.Checkpoint = a.checkpoint
-	return nil
-}
-
-func sameBase(a, b *baseEntry) bool {
-	return a != nil && b != nil && slices.Equal(a.History, b.History) &&
-		a.Current == b.Current && a.Archived == b.Archived && a.BodyHash == b.BodyHash && a.Modified.Equal(b.Modified)
-}
-
 // grouped is a document with its path hash, in the shard the hash names.
 type grouped struct {
 	state *pathState
@@ -452,10 +168,13 @@ type grouped struct {
 type checkpointWriter struct {
 	bodyReader
 	workers int
+	// now dates the segment window; grace fences the sweep of old segments.
+	now   func() time.Time
+	grace time.Duration
 }
 
 func (store *Store) checkpointWriter() checkpointWriter {
-	return checkpointWriter{bodyReader: store.bodyReader(), workers: store.shardWorkers}
+	return checkpointWriter{bodyReader: store.bodyReader(), workers: store.shardWorkers, now: store.now, grace: store.checkpointGrace}
 }
 
 // write writes snap's changed history blocks and shards, the root, the
@@ -464,27 +183,30 @@ func (store *Store) checkpointWriter() checkpointWriter {
 func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adoption, error) {
 	objects, worldID, workers := writer.objects, writer.worldID, writer.workers
 	bits := shardBitsFor(snap.Paths.Len())
-	groups := make([][]grouped, 1<<bits)
+	byShard := make([][]*pathState, 1<<bits)
 	snap.Paths.Ascend(func(state *pathState) bool {
-		hash := pathHash(state.Path)
-		index := shardOf(hash, bits)
-		groups[index] = append(groups[index], grouped{state: state, hash: hash})
+		index := state.shard(bits)
+		byShard[index] = append(byShard[index], state)
 		return true
 	})
 	previous := snap.Checkpoint
 	reuse := previous.Bits == bits
+	// Only a shard that is written needs its documents' path hashes.
+	groups := make([][]grouped, 1<<bits)
 	var shards []int
 	var changed []grouped
-	for index, group := range groups {
-		dirty := !reuse
-		for _, document := range group {
-			if !document.state.unchanged() {
-				dirty = true
+	for index, states := range byShard {
+		if reuse && !slices.ContainsFunc(states, func(state *pathState) bool { return !state.unchanged() }) {
+			continue
+		}
+		shards = append(shards, index)
+		groups[index] = make([]grouped, len(states))
+		for position, state := range states {
+			document := grouped{state: state, hash: pathHash(state.Path)}
+			groups[index][position] = document
+			if !state.unchanged() {
 				changed = append(changed, document)
 			}
-		}
-		if dirty {
-			shards = append(shards, index)
 		}
 	}
 
@@ -544,8 +266,12 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint %d: %w", snap.Sequence, err)
 	}
-	run := &segmentRun{reader: writer.bodyReader, workers: workers, previous: previous, bits: bits}
-	run.write(ctx, groups, shards, refs)
+	now := writer.now()
+	run := &segmentRun{
+		reader: writer.bodyReader, workers: workers, window: windowOf(now), bits: bits, previousBits: previous.Bits,
+		fence: dropFence{started: now, grace: writer.grace},
+	}
+	run.write(ctx, groups, shards)
 	return &adoption{checkpoint: &checkpointBase{Sequence: snap.Sequence, Bits: bits, Shards: refs}, entries: entries}, nil
 }
 

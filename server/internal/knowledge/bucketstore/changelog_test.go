@@ -108,7 +108,7 @@ func TestBacklogCachesSlots(t *testing.T) {
 	objects := newObservedBlobStore(initializedMemory(t))
 	publishSeq(t, openReplica(t, objects).store, 20)
 	reader := (&bucketSite{objects: objects}).open(t, 0)
-	backlog := newChangeLog(reader, maxSlotEntries, backlogReach, slotCacheIdle)
+	backlog := newChangeLog(reader, maxSlotEntries)
 	events, err := backlog.Events(t.Context(), 10, 14)
 	if err != nil || len(events) != 4 || events[0].Seq != 11 || events[3].Seq != 14 {
 		t.Fatalf("events (10,14] = %+v, %v", events, err)
@@ -164,19 +164,20 @@ func TestBacklogReachCountsSlots(t *testing.T) {
 		reach uint64
 		want  error
 	}{{reach: slots}, {reach: slots - 1, want: errBeyondReach}} {
-		backlog := newChangeLog(writer, 8, tt.reach, slotCacheIdle)
+		backlog := newChangeLog(writer, 8)
+		backlog.reach = tt.reach
 		if err := backlog.Reaches(t.Context(), 1, uint64(head)); !errors.Is(err, tt.want) {
 			t.Errorf("Reaches over %d slots with a reach of %d: %v, want %v", slots, tt.reach, err, tt.want)
 		}
 	}
 }
 
-// An idle slot cache empties itself: a world nobody resumes on keeps none of
-// the agent-shaped events its last resumes read.
+// An idle slot cache empties itself and an unwatched hub drops its ring: a
+// world nobody watches keeps none of the agent-shaped events it served.
 func TestSlotCacheEmptiesWhenIdle(t *testing.T) {
 	objects := initializedMemory(t)
 	head := uint64(publishBatched(t, objects, 600).servedSequence())
-	reader := (&bucketSite{objects: objects, idle: 20 * time.Millisecond}).open(t, changefeed.DefaultRingSize)
+	reader := (&bucketSite{objects: objects, idle: 500 * time.Millisecond}).open(t, changefeed.DefaultRingSize)
 	reader.skipTo(int64(head))
 	held := func() int {
 		reader.changeLog.mu.Lock()
@@ -184,14 +185,16 @@ func TestSlotCacheEmptiesWhenIdle(t *testing.T) {
 		return reader.changeLog.held
 	}
 	growth := memtest.Retained(func() {
+		// The subscribe reads the whole gap as its first page, through the cache.
 		sub, err := resumeAt(t, reader, 1)
 		mustSucceed(t, err)
-		for seq := uint64(2); seq <= head; seq++ {
-			storetest.NextEvent(t, sub)
-		}
 		if held() == 0 {
 			t.Fatal("the resume cached no slots")
 		}
+		for seq := uint64(2); seq <= head; seq++ {
+			storetest.NextEvent(t, sub)
+		}
+		sub.Close()
 		waitFor(t, "an empty slot cache", func() bool { return held() == 0 })
 	})
 	t.Logf("heap grew %d bytes after the cache went idle", growth)
@@ -217,7 +220,7 @@ func TestConcurrentResumesShareSlotReads(t *testing.T) {
 	publishSeq(t, (&bucketSite{objects: objects}).open(t, 0), 20)
 	observed := newObservedBlobStore(objects)
 	reader := (&bucketSite{objects: slowSlots{observed}}).open(t, 0)
-	backlog := newChangeLog(reader, maxSlotEntries, backlogReach, slotCacheIdle)
+	backlog := newChangeLog(reader, maxSlotEntries)
 	observed.reset()
 	start := make(chan struct{})
 	var wg sync.WaitGroup

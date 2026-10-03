@@ -43,13 +43,17 @@ type Event struct {
 type Hub struct {
 	epoch string
 
-	mu      sync.Mutex
-	buf     []Event
-	backlog Backlog
-	lastSeq uint64
-	floor   uint64 // seqs at or below it cannot be resumed from: see Skip
-	notify  chan struct{}
-	closed  bool
+	mu   sync.Mutex
+	size uint64 // events the ring holds
+	// buf is the ring; a hub with a backlog drops it while no subscription
+	// is open, and resumes page from the backlog until it is back.
+	buf         []Event
+	subscribers int
+	backlog     Backlog
+	lastSeq     uint64
+	floor       uint64 // seqs at or below it cannot be resumed from: see Skip
+	notify      chan struct{}
+	closed      bool
 	// catching is the catch-up in flight; resumes that arrive meanwhile
 	// share it rather than each polling the store.
 	catching *catchUpFlight
@@ -94,7 +98,14 @@ func NewWithBacklog(epoch string, ringSize int, backlog Backlog) *Hub {
 	if ringSize <= 0 {
 		ringSize = DefaultRingSize
 	}
-	return &Hub{epoch: epoch, buf: make([]Event, ringSize), backlog: backlog, notify: make(chan struct{})}
+	h := &Hub{epoch: epoch, backlog: backlog, notify: make(chan struct{})}
+	if ringSize > 0 {
+		h.size = uint64(ringSize)
+	}
+	if backlog == nil {
+		h.buf = make([]Event, h.size)
+	}
+	return h
 }
 
 // NewEpoch returns a random epoch in the cursor grammar.
@@ -116,7 +127,7 @@ func (h *Hub) Epoch() string { return h.epoch }
 func (h *Hub) Waiting() int { return int(h.waiting.Load()) }
 
 // RingSize is how many events the hub retains for resume.
-func (h *Hub) RingSize() int { return len(h.buf) }
+func (h *Hub) RingSize() int { return int(h.size) } //nolint:gosec // set from a positive int
 
 // Head is the cursor of the newest event, or seq 0 before any.
 func (h *Hub) Head() protocol.Cursor {
@@ -133,6 +144,9 @@ func (h *Hub) cursor(seq uint64) protocol.Cursor {
 func (h *Hub) Retained() []Event {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.buf == nil {
+		return nil
+	}
 	events := make([]Event, 0, h.lastSeq+1-h.oldest())
 	for seq := h.oldest(); seq <= h.lastSeq; seq++ {
 		if ev := h.buf[h.slot(seq)]; ev.Seq == seq {
@@ -174,9 +188,33 @@ func (h *Hub) Skip(seq uint64) {
 }
 
 func (h *Hub) append(ev Event) {
-	h.buf[h.slot(ev.Seq)] = ev
+	if h.buf == nil {
+		// Nobody reads the ring: the backlog serves this event to a resume.
+		h.floor = ev.Seq
+	} else {
+		h.buf[h.slot(ev.Seq)] = ev
+	}
 	h.lastSeq = ev.Seq
 	h.wake()
+}
+
+// retainLocked counts a subscription in, bringing the ring back.
+func (h *Hub) retainLocked() {
+	h.subscribers++
+	if h.buf == nil {
+		h.buf, h.floor = make([]Event, h.size), max(h.floor, h.lastSeq)
+	}
+}
+
+// release counts a subscription out; the last one out drops a backlogged
+// hub's ring, so a world nobody watches holds none.
+func (h *Hub) release() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.subscribers--
+	if h.subscribers == 0 && h.backlog != nil {
+		h.buf, h.floor = nil, max(h.floor, h.lastSeq)
+	}
 }
 
 func (h *Hub) wake() {
@@ -184,13 +222,13 @@ func (h *Hub) wake() {
 	h.notify = make(chan struct{})
 }
 
-func (h *Hub) slot(seq uint64) uint64 { return seq % uint64(len(h.buf)) }
+func (h *Hub) slot(seq uint64) uint64 { return seq % h.size }
 
 // oldest is the Seq of the oldest event still in the ring, or the first
 // after a skip.
 func (h *Hub) oldest() uint64 {
 	oldest := uint64(1)
-	if n := uint64(len(h.buf)); h.lastSeq > n {
+	if n := h.size; h.lastSeq > n {
 		oldest = h.lastSeq - n + 1
 	}
 	return max(oldest, h.floor+1)
@@ -217,18 +255,44 @@ type Subscription struct {
 	paging  bool    // next is still read from the backlog
 	backlog []Event // unread in-scope events of the page read last, in order
 	next    uint64  // Seq of the next event to read, from a page or the ring
+	closed  bool
+}
+
+// Close ends the subscription; later reads return ErrClosed. Idempotent, and
+// a no-op on nil.
+func (s *Subscription) Close() {
+	if s == nil || s.closed {
+		return
+	}
+	s.closed, s.backlog = true, nil
+	s.hub.release()
 }
 
 // Subscribe starts a subscription over scope ("/", a "/"-ended subtree, or
-// one document) at the head, after since, or ErrResync. A resume before the
-// ring reads the backlog; one past the head first catches the hub up.
+// one document) at the head, after since, or ErrResync; close it when done,
+// as it holds the ring. A resume before the ring reads the backlog.
 func (h *Hub) Subscribe(ctx context.Context, scope string, since protocol.Cursor) (*Subscription, error) {
 	if err := h.catchUp(ctx, since); err != nil {
 		return nil, err
 	}
 	h.mu.Lock()
+	h.retainLocked()
 	head, oldest := h.lastSeq, h.oldest()
 	h.mu.Unlock()
+	s, err := h.open(ctx, scope, since, ringPosition{head: head, oldest: oldest})
+	if err != nil {
+		h.release()
+		return nil, err
+	}
+	return s, nil
+}
+
+// ringPosition is the hub's head and oldest resumable seq, read together.
+type ringPosition struct{ head, oldest uint64 }
+
+// open is Subscribe's subscription once the ring is retained for it.
+func (h *Hub) open(ctx context.Context, scope string, since protocol.Cursor, at ringPosition) (*Subscription, error) {
+	head, oldest := at.head, at.oldest
 	switch {
 	case since.IsZero():
 		return &Subscription{hub: h, scope: scope, next: head + 1}, nil
@@ -305,7 +369,7 @@ func (h *Hub) fly(ctx context.Context, flight *catchUpFlight) {
 func (s *Subscription) page(ctx context.Context, through uint64) error {
 	h := s.hub
 	after := s.next - 1
-	through = min(through, after+uint64(len(h.buf)))
+	through = min(through, after+h.size)
 	events, err := h.backlog.Events(ctx, after, through)
 	if err != nil {
 		return fmt.Errorf("%w: backlog: %w", ErrResync, err)
@@ -392,6 +456,9 @@ var ErrIdle = errors.New("changefeed: no event pending")
 // the ring, which may move on meanwhile, so a slow reader is not lapped.
 func (s *Subscription) pending(ctx context.Context) (Event, <-chan struct{}, error) {
 	h := s.hub
+	if s.closed {
+		return Event{}, nil, ErrClosed
+	}
 	for {
 		if len(s.backlog) > 0 {
 			ev := s.backlog[0]

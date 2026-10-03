@@ -32,8 +32,8 @@ func TestModelIdentifiers(t *testing.T) {
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
-				if got := validWorldID(test.value); got != test.valid {
-					t.Errorf("validWorldID(%q) = %v, want %v", test.value, got, test.valid)
+				if got := validUUID(test.value); got != test.valid {
+					t.Errorf("validUUID(%q) = %v, want %v", test.value, got, test.valid)
 				}
 			})
 		}
@@ -73,7 +73,7 @@ func TestModelIdentifiers(t *testing.T) {
 			{name: "history", got: historyKey(hash), want: "_demarkus/v1/history/" + hash + ".json"},
 			{name: "shard", got: shardKey("af", hash), want: "_demarkus/v1/index/af/" + hash + ".json"},
 			{name: "root", got: rootKey(hash), want: "_demarkus/v1/roots/" + hash + ".json"},
-			{name: "segment", got: segmentKey(shardRef{Shard: "af", objectRef: objectRef{Hash: hash}}, 2), want: "_demarkus/v1/segments/af/" + hash + "/2.json"},
+			{name: "segment", got: segmentKey(segmentRef{label: segmentLabel(0xaf, 12), window: 0x1f}, 2), want: "_demarkus/v1/segments/12-0af/000000000000001f/2.json"},
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
@@ -101,8 +101,8 @@ func TestModelTimestampsAndImportance(t *testing.T) {
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
-				if got := validTimestamp(test.value); got != test.valid {
-					t.Errorf("validTimestamp(%q) = %v, want %v", test.value, got, test.valid)
+				if _, err := parseTimestamp(test.value); (err == nil) != test.valid {
+					t.Errorf("parseTimestamp(%q) = %v, want valid %v", test.value, err, test.valid)
 				}
 			})
 		}
@@ -148,8 +148,8 @@ func TestCanonicalJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal checkpoint: %v", err)
 	}
-	want := `{"schema":2,"world_id":"52b471f7-8d38-4c89-b44a-6f4f8b1a4f48","sequence":1,"root":{"key":"_demarkus/v1/roots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"tip":""}`
-	reordered := `{"world_id":"52b471f7-8d38-4c89-b44a-6f4f8b1a4f48","schema":2,"sequence":1,"root":{"key":"_demarkus/v1/roots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"tip":""}`
+	want := `{"schema":1,"world_id":"52b471f7-8d38-4c89-b44a-6f4f8b1a4f48","sequence":1,"root":{"key":"_demarkus/v1/roots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"tip":""}`
+	reordered := `{"world_id":"52b471f7-8d38-4c89-b44a-6f4f8b1a4f48","schema":1,"sequence":1,"root":{"key":"_demarkus/v1/roots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"tip":""}`
 	if string(canonical) != want {
 		t.Fatalf("canonical checkpoint:\n%s\nwant:\n%s", canonical, want)
 	}

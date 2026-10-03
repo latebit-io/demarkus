@@ -41,7 +41,13 @@ type pathState struct {
 	// after; Recent are the versions committed since, oldest first.
 	Base   *baseEntry
 	Recent []retainedVersion
+	// hashPrefix is the path hash's top 32 bits, which name its shard, kept
+	// so a checkpoint need not hash every path again.
+	hashPrefix uint32
 }
+
+// shard is the shard, of 1<<bits, that the document's path lies in.
+func (state *pathState) shard(bits int) int { return int(state.hashPrefix >> (32 - bits)) }
 
 // baseEntry is a document's checkpoint entry, with its history blocks.
 type baseEntry struct {

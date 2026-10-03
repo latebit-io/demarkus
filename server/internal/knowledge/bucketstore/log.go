@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
@@ -84,6 +83,11 @@ func (s *snapshot) entryState(old *pathState, entry *slotEntry) (*pathState, err
 		Path: entry.Path, Current: entry.Current, First: entry.First, Archived: entry.Archived,
 		BodyHash: entry.BodyHash, Modified: modified,
 	}
+	if old != nil {
+		state.hashPrefix = old.hashPrefix
+	} else {
+		state.hashPrefix = hashPrefix(pathHash(entry.Path))
+	}
 	if entry.Version == nil {
 		if old == nil || old.Current != entry.Current || old.BodyHash != entry.BodyHash || !old.Modified.Equal(modified) || old.Archived == entry.Archived {
 			return nil, errors.New("archive transition does not follow the document's state")
@@ -111,8 +115,11 @@ func (s *snapshot) entryState(old *pathState, entry *slotEntry) (*pathState, err
 	if state.Entry, err = catalogEntry(entry.Catalog); err != nil {
 		return nil, err
 	}
-	// Clipped, so the append never writes into an array another snapshot holds.
-	state.Recent = append(slices.Clip(state.Recent), retainedVersion{entry: *entry.Version, modified: modified})
+	// A fresh array of the exact size: another snapshot holds the old one.
+	recent := make([]retainedVersion, len(state.Recent)+1)
+	copy(recent, state.Recent)
+	recent[len(recent)-1] = retainedVersion{entry: *entry.Version, modified: modified}
+	state.Recent = recent
 	return state, nil
 }
 

@@ -132,12 +132,22 @@ func TestCheckpointEqualsReplay(t *testing.T) {
 // deleteNewer deletes every checkpoint from sequence on.
 func deleteNewer(t *testing.T, objects blob.Store, sequence int64) {
 	t.Helper()
-	for sequences, err := range sequencePages(context.Background(), objects, checkpointPrefix, sequence-1) {
+	for _, newer := range checkpointSequences(t, objects, sequence-1) {
+		deleteObject(t, objects, checkpointKey(newer))
+	}
+}
+
+// checkpointSequences lists the checkpoints after sequence.
+func checkpointSequences(t *testing.T, objects blob.Store, after int64) []int64 {
+	t.Helper()
+	var sequences []int64
+	for page, err := range sequencedPages(context.Background(), objects, checkpointPrefix, after) {
 		mustSucceed(t, err)
-		for _, newer := range sequences {
-			deleteObject(t, objects, checkpointKey(newer))
+		for index := range page {
+			sequences = append(sequences, page[index].sequence)
 		}
 	}
+	return sequences
 }
 
 // Two compactors checkpointing one sequence from different bases, an earlier
@@ -175,19 +185,14 @@ func TestRacingCompactorsWriteIdenticalBytes(t *testing.T) {
 	if !reflect.DeepEqual(results[0].checkpoint, results[1].checkpoint) {
 		t.Errorf("compactors wrote different checkpoints:\n%+v\n%+v", results[0].checkpoint, results[1].checkpoint)
 	}
-	raced := 0
+	// Segments are a cache: whichever compactor wrote a part first stands, and
+	// every part names this window and holds bodies that hash as filed.
 	for key, attempts := range objects.snapshot() {
-		for _, data := range attempts[1:] {
-			if !slices.Equal(data, attempts[0]) {
-				t.Errorf("segment part %s written with different bytes", key)
-			}
+		var part segmentObject
+		decodeObject(t, getObject(t, objects, key).Data, &part)
+		if len(attempts) == 0 || part.Window != windowOf(time.Now()) {
+			t.Errorf("segment part %s: %d attempts, window %d", key, len(attempts), part.Window)
 		}
-		if len(attempts) > 1 {
-			raced++
-		}
-	}
-	if raced == 0 {
-		t.Error("no segment part was written by both compactors")
 	}
 }
 
@@ -216,7 +221,7 @@ func (s *recordingCreates) snapshot() map[string][][]byte {
 
 // testCheckpointWriter writes checkpoints to objects as a store would.
 func testCheckpointWriter(objects blob.Store) checkpointWriter {
-	return checkpointWriter{bodyReader: bodyReader{objects: objects, logger: discardLogger, worldID: testWorldID}, workers: 4}
+	return checkpointWriter{bodyReader: bodyReader{objects: objects, logger: discardLogger, worldID: testWorldID}, workers: 4, now: time.Now, grace: defaultCheckpointGrace}
 }
 
 // failCheckpoints refuses to create checkpoint objects, as a compactor that
@@ -414,9 +419,9 @@ func writeDocuments(t *testing.T, store *Store, n int) {
 	wg.Wait()
 }
 
-// One changed document costs its history block, shard, segment, the root and
-// the checkpoint; a replica rebases on a peer's checkpoint by reading only
-// the shards that changed.
+// One changed document costs its history block, shard, the root and the
+// checkpoint, and no segment within the window; a replica rebases on a peer's
+// checkpoint by reading only the shards that changed.
 func TestCheckpointsWriteAndReadOnlyChangedShards(t *testing.T) {
 	ctx := context.Background()
 	memory := initializedMemory(t)
@@ -436,7 +441,7 @@ func TestCheckpointsWriteAndReadOnlyChangedShards(t *testing.T) {
 	mustSucceed(t, err)
 	created.take()
 	mustSucceed(t, writer.checkpoint(ctx))
-	want := map[string]int{"history": 1, "index": 1, "segments": 1, "roots": 1, "checkpoints": 1}
+	want := map[string]int{"history": 1, "index": 1, "roots": 1, "checkpoints": 1}
 	if got := created.take(); !reflect.DeepEqual(got, want) {
 		t.Errorf("checkpoint after one change created %v, want %v", got, want)
 	}
@@ -648,14 +653,7 @@ func TestCompactorListsOnlyNewerCheckpoints(t *testing.T) {
 // still reads every version.
 func TestCompactorDropsOldCheckpoints(t *testing.T) {
 	ctx := context.Background()
-	listed := func(t *testing.T, objects blob.Store) []int64 {
-		sequences := make([]int64, 0, 8)
-		for page, err := range sequencePages(ctx, objects, checkpointPrefix, 0) {
-			mustSucceed(t, err)
-			sequences = append(sequences, page...)
-		}
-		return sequences
-	}
+	listed := func(t *testing.T, objects blob.Store) []int64 { return checkpointSequences(t, objects, 0) }
 
 	t.Run("old", func(t *testing.T) {
 		objects := newClockedStore(t)
@@ -781,9 +779,9 @@ func checkpointOnly(t *testing.T, store *Store) {
 }
 
 // rootOf reads the root and shard keys of the newest checkpoint.
-func rootOf(t *testing.T, store *Store) keyedRoot {
+func rootOf(t *testing.T, store *Store) rootRead {
 	t.Helper()
-	root, err := store.checkpointRoot(context.Background(), checkpointKey(store.layout().Sequence))
+	root, err := store.checkpointRoot(context.Background(), store.layout().Sequence)
 	mustSucceed(t, err)
 	return root
 }
@@ -797,7 +795,7 @@ func TestDroppedCheckpointsTakeOnlyTheirShards(t *testing.T) {
 	site := manualSite(objects)
 	writer := site.open(t, 0)
 	writeDocuments(t, writer, 600)
-	roots := make([]keyedRoot, 0, 5)
+	roots := make([]rootRead, 0, 5)
 	for version := range 5 {
 		if version > 0 {
 			_, err := writer.WriteVersion("/many/0007.md", version, fmt.Appendf(nil, "# v%d\n", version+1), nil)
@@ -816,9 +814,6 @@ func TestDroppedCheckpointsTakeOnlyTheirShards(t *testing.T) {
 			if want := !dropped || shard != changed; exists(t, objects, ref.Key) != want {
 				t.Errorf("checkpoint %d shard %d present = %t, want %t", index, shard, !want, want)
 			}
-			if want := !dropped || shard != changed; exists(t, objects, segmentKey(ref, 0)) != want {
-				t.Errorf("checkpoint %d shard %d segment present = %t, want %t", index, shard, !want, want)
-			}
 		}
 	}
 	readEveryVersion(t, writer)
@@ -828,16 +823,19 @@ func TestDroppedCheckpointsTakeOnlyTheirShards(t *testing.T) {
 }
 
 // A drop honors the store's grace: checkpoints whose successor came 20
-// minutes ago go under the default, and stay under an hour.
+// minutes ago go under the default and stay under an hour, and one whose
+// successor is younger than the grace stays however old it is.
 func TestDropHonorsTheConfiguredGrace(t *testing.T) {
 	for _, test := range []struct {
 		grace time.Duration
-		left  int
-	}{{0, 4}, {time.Hour, 7}} {
+		kept  int // the oldest checkpoint left, checkpoint zero being 0
+	}{{0, 3}, {time.Hour, 0}} {
 		t.Run(test.grace.String(), func(t *testing.T) {
 			ctx := context.Background()
 			objects := newClockedStore(t)
 			writer := openSectionStore(t, objects, func(options *Options) { options.CheckpointGrace = test.grace })
+			sequences := make([]int64, 1, 7)
+			sequences[0] = 1
 			objects.writtenAgo(20 * time.Minute)
 			for round := range 6 {
 				if round == 3 {
@@ -845,14 +843,10 @@ func TestDropHonorsTheConfiguredGrace(t *testing.T) {
 				}
 				writeWorld(t, writer, round)
 				mustSucceed(t, writer.checkpoint(ctx))
+				sequences = append(sequences, writer.layout().Sequence)
 			}
-			left := 0
-			for page, err := range sequencePages(ctx, objects, checkpointPrefix, 0) {
-				mustSucceed(t, err)
-				left += len(page)
-			}
-			if left != test.left {
-				t.Errorf("checkpoints left = %d, want %d", left, test.left)
+			if left, want := checkpointSequences(t, objects, 0), sequences[test.kept:]; !reflect.DeepEqual(left, want) {
+				t.Errorf("checkpoints left = %v, want %v", left, want)
 			}
 		})
 	}
@@ -861,37 +855,9 @@ func TestDropHonorsTheConfiguredGrace(t *testing.T) {
 // A grace under the minimum would let a drop take bytes a compactor is still
 // reusing, so Open refuses it.
 func TestOpenRefusesAGraceUnderTheMinimum(t *testing.T) {
-	_, err := Open(context.Background(), initializedMemory(t), Options{Logger: discardLogger, WorldID: testWorldID, CheckpointGrace: MinCheckpointGrace - time.Second})
+	_, err := Open(context.Background(), initializedMemory(t), Options{Logger: discardLogger, WorldID: testWorldID, CheckpointGrace: minCheckpointGrace - time.Second})
 	if !errors.Is(err, blob.ErrPrecondition) {
 		t.Fatalf("open with a short grace = %v, want ErrPrecondition", err)
-	}
-}
-
-// A checkpoint whose successor is younger than the grace stays however old it
-// is: a compactor that started on it may still be writing.
-func TestDropKeepsCheckpointsWithAYoungSuccessor(t *testing.T) {
-	ctx := context.Background()
-	objects := newClockedStore(t)
-	writer := manualSite(objects).open(t, 0)
-	sequences := make([]int64, 1, 8)
-	sequences[0] = 1
-	objects.writtenAgo(3 * time.Hour)
-	for round := range 7 {
-		if round == 3 {
-			objects.writtenAgo(0)
-		}
-		writeWorld(t, writer, round)
-		mustSucceed(t, writer.checkpoint(ctx))
-		sequences = append(sequences, writer.layout().Sequence)
-	}
-	left := make([]int64, 0, 8)
-	for page, err := range sequencePages(ctx, objects, checkpointPrefix, 0) {
-		mustSucceed(t, err)
-		left = append(left, page...)
-	}
-	// Checkpoints 0 to 3 are old; 3 stays because 4 is young.
-	if want := sequences[3:]; !reflect.DeepEqual(left, want) {
-		t.Errorf("checkpoints left = %v, want %v", left, want)
 	}
 }
 
@@ -967,7 +933,7 @@ func TestDropFinishesAfterACrash(t *testing.T) {
 		}
 	}
 	cut := plan.dropped[0]
-	root, err := writer.checkpointRoot(ctx, cut.Key)
+	root, err := writer.checkpointRoot(ctx, cut.sequence)
 	mustSucceed(t, err)
 	deleteObject(t, objects, root.Key)
 	mustSucceed(t, writer.applyDrop(ctx, plan))
@@ -1103,5 +1069,35 @@ func TestCheckpointedStoreHeapTracksLiveData(t *testing.T) {
 	t.Logf("store heap after 20 cycles %d bytes, after 80 %d", short, long)
 	if growth := long - short; growth > 256<<10 {
 		t.Errorf("store heap grew %d bytes over 60 more cycles of 48 versions, want it to track 48 documents", growth)
+	}
+}
+
+// A checkpoint after one change hashes only the shard it writes, not every
+// path in the world: what each further document costs it stays small.
+func TestCheckpointHashesOnlyWrittenShards(t *testing.T) {
+	allocated := func(documents int) uint64 {
+		store := manualSite(initializedMemory(t)).open(t, 0)
+		writeDocuments(t, store, documents)
+		checkpointOnly(t, store)
+		_, err := store.WriteVersion("/many/0007.md", 1, []byte("# changed\n"), nil)
+		mustSucceed(t, err)
+		snap, writer := store.served.Load().snap, store.checkpointWriter()
+		// The fewest of three, since the reading counts every goroutine.
+		fewest := uint64(math.MaxUint64)
+		for range 3 {
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			_, err = writer.write(context.Background(), snap)
+			runtime.ReadMemStats(&after)
+			mustSucceed(t, err)
+			fewest = min(fewest, after.TotalAlloc-before.TotalAlloc)
+		}
+		return fewest
+	}
+	small, large := allocated(8000), allocated(16000)
+	perDocument := (int64(large) - int64(small)) / 8000
+	t.Logf("each further document costs a one-change checkpoint %d bytes", perDocument)
+	if perDocument > 100 {
+		t.Errorf("each further document costs a one-change checkpoint %d bytes, want under 100: it hashes every path", perDocument)
 	}
 }

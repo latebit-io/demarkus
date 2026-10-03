@@ -137,7 +137,7 @@ func TestRandomOperationID(t *testing.T) {
 		if err != nil {
 			t.Fatalf("random operation ID: %v", err)
 		}
-		if !validWorldID(operationID) || operationID[14] != '4' {
+		if !validUUID(operationID) || operationID[14] != '4' {
 			t.Errorf("operation ID %q is not RFC UUIDv4", operationID)
 		}
 	}

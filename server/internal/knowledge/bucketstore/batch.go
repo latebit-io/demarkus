@@ -62,7 +62,8 @@ type warmup struct {
 	objects *batchObjects
 }
 
-// warm starts reading what a write to path builds on; nil for a new path.
+// warm starts reading what a write to path builds on; nil for a new path or
+// a closing store.
 func (store *Store) warm(ctx context.Context, path string) *warmup {
 	state := store.served.Load().snap.path(path)
 	if state == nil {
@@ -75,14 +76,24 @@ func (store *Store) warm(ctx context.Context, path string) *warmup {
 	}
 	source := newestFirst{batch: store.newestBatch.Load(), bucket: store.objects}
 	w := &warmup{state: state, done: make(chan struct{}), objects: newBatchObjects(source, nil, nil)}
+	started := store.goBackground(func(life context.Context) {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		defer context.AfterFunc(life, cancel)()
+		store.runWarmup(ctx, path, w)
+	})
+	if !started {
+		return nil
+	}
 	store.warming[path] = w
-	go store.runWarmup(ctx, path, w)
 	return w
 }
 
-// runWarmup reads, at most shardWorkers at a time across the store.
+// runWarmup reads, at most shardWorkers at a time across the store, then
+// lets go of the batch it read through, which a later one may outlive.
 func (store *Store) runWarmup(ctx context.Context, path string, w *warmup) {
 	defer close(w.done)
+	defer func() { w.objects.source = nil }()
 	select {
 	case store.warmSlots <- struct{}{}:
 		defer func() { <-store.warmSlots }()
@@ -90,9 +101,9 @@ func (store *Store) runWarmup(ctx context.Context, path string, w *warmup) {
 		return
 	}
 	view := &readView{objects: w.objects}
-	history, err := view.history(ctx, w.state)
+	tip, err := view.currentRetained(ctx, w.state)
 	if err == nil {
-		_, err = view.loadBlobUnchecked(ctx, history[len(history)-1].entry.Blob)
+		_, err = view.loadBlobUnchecked(ctx, tip.entry.Blob)
 	}
 	// Only a warm-up: the build reads again and reports it.
 	if err != nil {

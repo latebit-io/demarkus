@@ -1,6 +1,7 @@
 package bucketstore
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"sync"
@@ -249,9 +250,13 @@ type bucketSite struct {
 // open opens a store that closes when t ends, stopping its follow loop.
 func (s *bucketSite) open(t *testing.T, ring int) *Store {
 	t.Helper()
-	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger, backlogReach: s.reach, slotCacheIdle: s.idle})
+	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger})
 	if err != nil {
 		t.Fatalf("open: %v", err)
+	}
+	if store.changeLog != nil {
+		store.changeLog.reach = cmp.Or(s.reach, store.changeLog.reach)
+		store.changeLog.idle = cmp.Or(s.idle, store.changeLog.idle)
 	}
 	closeAtEnd(t, store)
 	return store

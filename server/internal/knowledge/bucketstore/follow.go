@@ -58,21 +58,3 @@ func (store *Store) Follow(sequence int64) {
 	default:
 	}
 }
-
-// Close stops following, the compactor and the section index, ends every
-// watch, waits for a slot being created and refuses later writes with
-// backend.ErrClosed; reads still work, body search from the catalog. Idempotent.
-func (store *Store) Close() error {
-	store.commits.close()
-	store.stopHints()
-	store.stopCompaction()
-	store.sections.close()
-	if store.changes == nil {
-		return nil
-	}
-	store.follower.stop()
-	<-store.follower.done
-	store.changes.Close()
-	store.changeLog.close()
-	return nil
-}

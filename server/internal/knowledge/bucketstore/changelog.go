@@ -59,11 +59,11 @@ type cachedSlot struct {
 
 var _ changefeed.Backlog = (*changeLog)(nil)
 
-func newChangeLog(store *Store, ring int, reach uint64, idle time.Duration) *changeLog {
+func newChangeLog(store *Store, ring int) *changeLog {
 	return &changeLog{
 		store:   store,
-		reach:   reach,
-		idle:    idle,
+		reach:   backlogReach,
+		idle:    slotCacheIdle,
 		limit:   max(ring, maxSlotEntries),
 		recent:  list.New(),
 		slots:   make(map[int64]*list.Element),
@@ -273,13 +273,13 @@ func (backlog *changeLog) read(ctx context.Context, first, last int64) ([]change
 // slotNames yields the names of the slots after `after` up to last, in order.
 func slotNames(ctx context.Context, objects blob.Store, after, last int64) iter.Seq2[int64, error] {
 	return func(yield func(int64, error) bool) {
-		for firsts, err := range sequencePages(ctx, objects, logPrefix, after) {
+		for page, err := range sequencedPages(ctx, objects, logPrefix, after) {
 			if err != nil {
 				yield(0, err)
 				return
 			}
-			for _, name := range firsts {
-				if name > last || !yield(name, nil) {
+			for index := range page {
+				if name := page[index].sequence; name > last || !yield(name, nil) {
 					return
 				}
 			}

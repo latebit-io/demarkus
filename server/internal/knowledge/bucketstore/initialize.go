@@ -20,7 +20,7 @@ func initialize(ctx context.Context, objects blob.Store, worldID string) error {
 	if nilStore(objects) {
 		return fmt.Errorf("initialize bucket store: %w: blob store is nil", blob.ErrPrecondition)
 	}
-	if !validWorldID(worldID) {
+	if !validUUID(worldID) {
 		return fmt.Errorf("initialize bucket store: %w: invalid world ID %q", blob.ErrPrecondition, worldID)
 	}
 	if err := ctx.Err(); err != nil {
@@ -82,7 +82,7 @@ func buildGenesis(worldID string) ([]modelObject, error) {
 }
 
 func createImmutable(ctx context.Context, objects blob.Store, object modelObject) error {
-	existing, err := createOrRead(ctx, objects, object)
+	existing, err := createOrRead(ctx, objects, object, true)
 	if err == nil && existing != nil {
 		return fmt.Errorf("%w: immutable object %q contains hash %s, want %s", blob.ErrIntegrity, object.Key, hashHex(existing.Data), hashHex(object.Data))
 	}
@@ -94,10 +94,10 @@ func createImmutable(ctx context.Context, objects blob.Store, object modelObject
 // is fixed, so replicas configured with different graces stay fenced.
 const freshenAge = 15 * time.Minute / 2
 
-// createOrRead creates an immutable object, deciding an unknown outcome by
-// reading the name back. A name that holds other bytes returns them: a
-// content-addressed object is corrupt, a slot was won by another writer.
-func createOrRead(ctx context.Context, objects blob.Store, object modelObject) (*blob.Object, error) {
+// createOrRead creates an immutable object, an unknown outcome decided by
+// reading the name back; other bytes there are returned. With freshen, equal
+// bytes older than freshenAge are rewritten first.
+func createOrRead(ctx context.Context, objects blob.Store, object modelObject, freshen bool) (*blob.Object, error) {
 	var lastErr error
 	for attempt := range maximumCreateAttempts {
 		_, err := objects.Create(ctx, object.Key, object.Data)
@@ -117,7 +117,7 @@ func createOrRead(ctx context.Context, objects blob.Store, object modelObject) (
 			if !bytes.Equal(existing.Data, object.Data) {
 				return &existing, nil
 			}
-			if time.Since(existing.Attributes.Modified) < freshenAge {
+			if !freshen || time.Since(existing.Attributes.Modified) < freshenAge {
 				return nil, nil
 			}
 			// A new generation fails a delete conditioned on the one it read; a
@@ -159,14 +159,7 @@ func createMarker(ctx context.Context, objects blob.Store, worldID string, marke
 // validateExistingWorld checks the bucket holds worldID's marker and a
 // checkpoint that loads. The caller opens the world again to serve it.
 func validateExistingWorld(ctx context.Context, objects blob.Store, worldID string) error {
-	if err := readMarker(ctx, objects, worldID); err != nil {
-		return fmt.Errorf("validate existing world: %w", err)
-	}
-	checkpoint, err := newestCheckpoint(ctx, objects, worldID)
-	if err == nil {
-		_, err = loadCheckpoint(ctx, objects, checkpoint, defaultShardWorkers)
-	}
-	if err != nil {
+	if _, err := loadBase(ctx, objects, worldID, defaultShardWorkers); err != nil {
 		return fmt.Errorf("validate existing world: %w", err)
 	}
 	return nil

@@ -49,7 +49,7 @@ func publishDoc(t *testing.T, h *handler.Handler, path, body string, meta map[st
 
 func lookup(t *testing.T, h *handler.Handler, scope string, meta map[string]string) protocol.Response {
 	t.Helper()
-	return SendSettled(t, h, request(protocol.VerbLookup, scope, meta, ""))
+	return sendSettled(t, h, request(protocol.VerbLookup, scope, meta, ""))
 }
 
 func testHandlerBodyEchoAndColumns(t *testing.T, b LookupBackend) {

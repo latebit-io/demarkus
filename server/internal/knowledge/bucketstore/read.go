@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"sync"
@@ -205,16 +206,15 @@ func (view *readView) get(ctx context.Context, reqPath string, version int) (*st
 	if version < 0 {
 		return nil, backend.ErrNotFound
 	}
-	history, err := view.history(ctx, entry)
-	if err != nil {
-		return nil, err
-	}
 	current := version == 0
 	requested := version
 	if requested == 0 {
 		requested = entry.Current
 	}
-	retained, ok := retainedAt(history, requested)
+	retained, ok, err := view.retained(ctx, entry, requested)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, backend.ErrNotFound
 	}
@@ -360,22 +360,27 @@ func (view *readView) verifyChain(ctx context.Context, reqPath string) error {
 			return fmt.Errorf("%w: v%d chain broken: previous-hash mismatch (want %s, got %s)",
 				blob.ErrIntegrity, current.entry.Version, expected, recorded)
 		}
-		if _, err := validateStoredDocument(previousRaw, &previous); err != nil {
-			return fmt.Errorf("validate v%d: %w", previous.entry.Version, err)
-		}
-		if err := verifyBlobHash(previous.entry.Blob, previousRaw); err != nil {
-			return fmt.Errorf("validate v%d: %w", previous.entry.Version, err)
+		if err := validateVersion(previousRaw, &previous); err != nil {
+			return err
 		}
 		previous = current
 		previousRaw = currentRaw
 	}
-	if _, err := validateStoredDocument(previousRaw, &previous); err != nil {
-		return fmt.Errorf("validate v%d: %w", previous.entry.Version, err)
-	}
-	if err := verifyBlobHash(previous.entry.Blob, previousRaw); err != nil {
-		return fmt.Errorf("validate v%d: %w", previous.entry.Version, err)
+	if err := validateVersion(previousRaw, &previous); err != nil {
+		return err
 	}
 	return ctx.Err()
+}
+
+// validateVersion checks a version's stored bytes against its log record.
+func validateVersion(raw []byte, retained *retainedVersion) error {
+	if _, err := validateStoredDocument(raw, retained); err != nil {
+		return fmt.Errorf("validate v%d: %w", retained.entry.Version, err)
+	}
+	if err := verifyBlobHash(retained.entry.Blob, raw); err != nil {
+		return fmt.Errorf("validate v%d: %w", retained.entry.Version, err)
+	}
+	return nil
 }
 
 // search runs a lookup over index and clones what the results share with it.
@@ -383,23 +388,45 @@ func search(ctx context.Context, index catalog.Index, query string, options cata
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	results, err := catalog.Search(index, query, options)
+	results, err := catalog.Search(cancellable{Index: index, ctx: ctx}, query, options)
 	if err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	cloned := slices.Clone(results)
+	// The slice is the search's own; tags and metadata are the snapshot's.
 	for index := range results {
-		cloned[index].Tags = slices.Clone(results[index].Tags)
-		cloned[index].Metadata = maps.Clone(results[index].Metadata)
+		results[index].Tags = slices.Clone(results[index].Tags)
+		results[index].Metadata = maps.Clone(results[index].Metadata)
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return cloned, nil
+	return results, nil
 }
+
+// cancellable ends an index scan soon after ctx ends, so a lookup over a
+// large world stops with its request.
+type cancellable struct {
+	catalog.Index
+	ctx context.Context
+}
+
+func (index cancellable) Entries(scope string) iter.Seq2[*catalog.Entry, *catalog.DocSections] {
+	return func(yield func(*catalog.Entry, *catalog.DocSections) bool) {
+		scanned := 0
+		for entry, sections := range index.Index.Entries(scope) {
+			scanned++
+			if scanned%cancelCheck == 0 && index.ctx.Err() != nil {
+				return
+			}
+			if !yield(entry, sections) {
+				return
+			}
+		}
+	}
+}
+
+// cancelCheck is how many entries a scan visits between context checks.
+const cancelCheck = 1024
 
 func (view *readView) documentEntry(ctx context.Context, reqPath string) (*pathState, error) {
 	logicalPath, err := view.logicalPath(ctx, reqPath)
@@ -430,14 +457,56 @@ func (view *readView) logicalPath(ctx context.Context, reqPath string) (string, 
 // currentRetained is a document's current version: the newest one committed
 // since the checkpoint when there is one, so reading its body costs one read.
 func (view *readView) currentRetained(ctx context.Context, state *pathState) (retainedVersion, error) {
-	if n := len(state.Recent); n > 0 && state.Recent[n-1].entry.Version == state.Current {
-		return state.Recent[n-1], nil
+	retained, ok, err := view.retained(ctx, state, state.Current)
+	if err == nil && !ok {
+		err = fmt.Errorf("%w: current version %d is not retained", blob.ErrIntegrity, state.Current)
 	}
-	history, err := view.history(ctx, state)
+	return retained, err
+}
+
+// retained is one version's record, from the snapshot's recent versions or
+// the one history block that holds it: never the whole history.
+func (view *readView) retained(ctx context.Context, state *pathState, version int) (retainedVersion, bool, error) {
+	if version < state.First || version > state.Current {
+		return retainedVersion{}, false, nil
+	}
+	retained, ok := retainedAt(state.Recent, version)
+	if !ok {
+		var err error
+		if retained, err = view.baseVersion(ctx, state, version); err != nil {
+			return retainedVersion{}, false, err
+		}
+	}
+	if version == state.Current && !tipMatches([]retainedVersion{retained}, state.Current, state.BodyHash, state.Modified) {
+		return retainedVersion{}, false, fmt.Errorf("%w: history tip does not match the document", blob.ErrIntegrity)
+	}
+	return retained, true, nil
+}
+
+// baseVersion reads version from the checkpoint history block that holds it.
+func (view *readView) baseVersion(ctx context.Context, state *pathState, version int) (retainedVersion, error) {
+	var refs []blockRef
+	if state.Base != nil {
+		refs = state.Base.History
+	}
+	index := slices.IndexFunc(refs, func(ref blockRef) bool { return ref.First <= version && version <= ref.Last })
+	if index < 0 {
+		return retainedVersion{}, fmt.Errorf("%w: no history block holds v%d of %s", blob.ErrIntegrity, version, state.Path)
+	}
+	block, err := readBlock(ctx, view.objects, pathHash(state.Path), refs[index])
 	if err != nil {
-		return retainedVersion{}, err
+		return retainedVersion{}, fmt.Errorf("load history %d: %w", index, err)
 	}
-	return history[len(history)-1], nil
+	for _, entry := range block.Entries {
+		if entry.Version == version {
+			modified, err := parseTimestamp(entry.Modified)
+			if err != nil {
+				return retainedVersion{}, fmt.Errorf("%w: history v%d modified: %v", blob.ErrIntegrity, version, err)
+			}
+			return retainedVersion{entry: entry, modified: modified}, nil
+		}
+	}
+	return retainedVersion{}, fmt.Errorf("%w: history block %d lacks v%d", blob.ErrIntegrity, index, version)
 }
 
 // history is every retained version of a document, oldest first: the
@@ -461,8 +530,7 @@ func (view *readView) history(ctx context.Context, state *pathState) ([]retained
 	if len(versions) == 0 {
 		return nil, fmt.Errorf("%w: no retained versions", blob.ErrIntegrity)
 	}
-	tip := versions[len(versions)-1]
-	if tip.entry.Version != state.Current || tip.entry.BodyHash != state.BodyHash || !tip.modified.Equal(state.Modified) {
+	if !tipMatches(versions, state.Current, state.BodyHash, state.Modified) {
 		return nil, fmt.Errorf("%w: history tip does not match the document", blob.ErrIntegrity)
 	}
 	return versions, nil
@@ -488,11 +556,16 @@ func (view *readView) baseHistory(ctx context.Context, state *pathState) ([]reta
 	if len(versions) == 0 {
 		return nil, fmt.Errorf("%w: checkpoint entry has no retained versions", blob.ErrIntegrity)
 	}
-	tip := versions[len(versions)-1]
-	if tip.entry.Version != base.Current || tip.entry.BodyHash != base.BodyHash || !tip.modified.Equal(base.Modified) {
+	if !tipMatches(versions, base.Current, base.BodyHash, base.Modified) {
 		return nil, fmt.Errorf("%w: history tip does not match checkpoint entry", blob.ErrIntegrity)
 	}
 	return versions, nil
+}
+
+// tipMatches reports whether versions end at the version recorded as current.
+func tipMatches(versions []retainedVersion, current int, bodyHash string, modified time.Time) bool {
+	tip := versions[len(versions)-1]
+	return tip.entry.Version == current && tip.entry.BodyHash == bodyHash && tip.modified.Equal(modified)
 }
 
 // readBlock reads one of a document's history blocks.
@@ -510,31 +583,11 @@ func readBlock(ctx context.Context, objects objectGetter, documentHash string, r
 }
 
 func (view *readView) loadBlob(ctx context.Context, ref objectRef) ([]byte, error) {
-	data, err := view.loadBlobUnchecked(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
-	if err := verifyBlobHash(ref, data); err != nil {
-		return nil, err
-	}
-	return data, nil
+	return getVerified(ctx, view.objects, keyedRef{ref, blobKey(ref.Hash)})
 }
 
 func (view *readView) loadBlobUnchecked(ctx context.Context, ref objectRef) ([]byte, error) {
-	if err := verifyRef(ref, blobKey(ref.Hash)); err != nil {
-		return nil, fmt.Errorf("%w: %v", blob.ErrIntegrity, err)
-	}
-	value, err := view.objects.Get(ctx, ref.Key)
-	if err != nil {
-		if errors.Is(err, blob.ErrNotFound) {
-			return nil, fmt.Errorf("%w: referenced object %q is missing: %w", blob.ErrIntegrity, ref.Key, err)
-		}
-		return nil, fmt.Errorf("read referenced object %q: %w", ref.Key, err)
-	}
-	if err := validateReadObject(ref.Key, &value); err != nil {
-		return nil, err
-	}
-	return value.Data, nil
+	return getReferenced(ctx, view.objects, keyedRef{ref, blobKey(ref.Hash)})
 }
 
 func verifyBlobHash(ref objectRef, data []byte) error {

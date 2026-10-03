@@ -350,11 +350,13 @@ func (b *recordBacklog) Events(_ context.Context, after, through uint64) ([]Even
 }
 
 // backlogHub is a reopened store's hub: 10 committed events alternating
-// between /a/ and /b/, all in the backlog, the ring of 8 replayed from 7.
+// between /a/ and /b/, all in the backlog, the ring of 8 replayed from 7
+// while a watch holds it.
 func backlogHub() (*Hub, *recordBacklog) {
 	backlog := &recordBacklog{}
 	hub := NewWithBacklog("w", 8, backlog)
 	hub.Skip(6)
+	holdRing(hub)
 	for seq := uint64(1); seq <= 10; seq++ {
 		path := "/a/x.md"
 		if seq%2 == 0 {
@@ -476,6 +478,7 @@ func TestResumePagesTheBacklog(t *testing.T) {
 	backlog := &recordBacklog{}
 	hub := NewWithBacklog("w", 8, backlog)
 	hub.Skip(30)
+	holdRing(hub)
 	commitThrough(hub, backlog, 40)
 	sub, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: "w", Seq: 2})
 	if err != nil {
@@ -648,5 +651,54 @@ func TestWaitingCountsBlockedReaders(t *testing.T) {
 	}
 	if got := hub.Waiting(); got != 0 {
 		t.Fatalf("waiting after the read = %d, want 0", got)
+	}
+}
+
+// holdRing opens a watch at the head that is never read, so the hub keeps its
+// ring as it does while anyone watches.
+func holdRing(hub *Hub) {
+	if _, err := hub.Subscribe(context.Background(), "/", protocol.Cursor{}); err != nil {
+		panic(err)
+	}
+}
+
+// A hub with a backlog drops its ring once no subscription is open: what is
+// published meanwhile is served to a resume from the backlog, and the ring
+// comes back with the next subscription. A hub without one keeps its ring.
+func TestUnwatchedHubDropsItsRing(t *testing.T) {
+	backlog := &recordBacklog{}
+	hub := NewWithBacklog("w", 8, backlog)
+	if hub.buf != nil {
+		t.Fatal("a backlogged hub nobody watches holds a ring")
+	}
+	watch, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitThrough(hub, backlog, 3)
+	readThrough(t, watch, 1, 3)
+	watch.Close()
+	if hub.buf != nil {
+		t.Fatal("the hub kept its ring after the last subscription closed")
+	}
+	commitThrough(hub, backlog, 6)
+	resumed, err := hub.Subscribe(t.Context(), "/", protocol.Cursor{Epoch: "w", Seq: 3})
+	if err != nil {
+		t.Fatalf("resume after the ring went: %v", err)
+	}
+	readThrough(t, resumed, 4, 6)
+	if backlog.reads == 0 || hub.buf == nil {
+		t.Errorf("backlog reads %d, ring held %v: want the gap from the backlog and the ring back", backlog.reads, hub.buf != nil)
+	}
+
+	plain := New("p", 8)
+	publishThrough(plain, 2)
+	sub, err := plain.Subscribe(t.Context(), "/", protocol.Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub.Close()
+	if plain.buf == nil || len(plain.Retained()) != 2 {
+		t.Error("a hub without a backlog let go of its ring, its only record")
 	}
 }
