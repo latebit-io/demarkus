@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -437,7 +438,7 @@ func TestCompactorRunsOnLag(t *testing.T) {
 		return &compactionTrigger{slots: slots, age: age, wait: func() time.Duration { return 0 }}
 	}
 	newest := func(t *testing.T, objects blob.Store) int64 {
-		sequence, err := newestCheckpointSequence(context.Background(), objects)
+		sequence, err := newestCheckpointSequence(context.Background(), objects, 0)
 		mustSucceed(t, err)
 		return sequence
 	}
@@ -528,7 +529,7 @@ func TestCheckpointDuringWritesRebasesEveryInstall(t *testing.T) {
 	wg.Wait()
 	waitIdle(t, writer)
 
-	newest, err := newestCheckpointSequence(ctx, objects)
+	newest, err := newestCheckpointSequence(ctx, objects, 0)
 	mustSucceed(t, err)
 	snap := writer.served.Load().snap
 	if snap.Checkpoint.Sequence != newest {
@@ -548,6 +549,53 @@ func TestCheckpointDuringWritesRebasesEveryInstall(t *testing.T) {
 	})
 	if live, cold := worldDigest(t, writer), worldDigest(t, site.open(t, 0)); !reflect.DeepEqual(live, cold) {
 		t.Error("cold replica differs from the writer")
+	}
+}
+
+// listedCheckpoints counts the checkpoint names listings return.
+type listedCheckpoints struct {
+	blob.Store
+	listed atomic.Int64
+}
+
+func (s *listedCheckpoints) List(ctx context.Context, prefix, startAfter, cursor string) (blob.ListResult, error) {
+	result, err := s.Store.List(ctx, prefix, startAfter, cursor)
+	if prefix == checkpointPrefix {
+		s.listed.Add(int64(len(result.Objects)))
+	}
+	return result, err
+}
+
+// A compactor lists only the checkpoints after the one it rests on: until old
+// ones are collected, a long-lived world holds one a minute.
+func TestCompactorListsOnlyNewerCheckpoints(t *testing.T) {
+	ctx := context.Background()
+	objects := initializedMemory(t)
+	listing := &listedCheckpoints{Store: objects}
+	writer := manualSite(listing).open(t, 0)
+	peer := manualSite(objects).open(t, 0)
+	for version := range 5 {
+		_, err := writer.WriteVersion("/doc.md", version, fmt.Appendf(nil, "v%d", version), nil)
+		mustSucceed(t, err)
+		mustSucceed(t, writer.checkpoint(ctx))
+	}
+	listing.listed.Store(0)
+	mustSucceed(t, writer.checkpoint(ctx))
+	if listed := listing.listed.Load(); listed != 0 {
+		t.Errorf("compactor resting on the newest checkpoint listed %d checkpoints, want none", listed)
+	}
+	mustSucceed(t, peer.poll(ctx))
+	mustSucceed(t, peer.checkpoint(ctx))
+	_, err := peer.WriteVersion("/doc.md", 5, []byte("v5"), nil)
+	mustSucceed(t, err)
+	mustSucceed(t, peer.checkpoint(ctx))
+	listing.listed.Store(0)
+	mustSucceed(t, writer.checkpoint(ctx))
+	if listed := listing.listed.Load(); listed != 1 {
+		t.Errorf("compactor listed %d checkpoints to find a peer's, want the one after its own", listed)
+	}
+	if writer.layout().Sequence != peer.layout().Sequence {
+		t.Errorf("writer rests on checkpoint %d, peer wrote %d", writer.layout().Sequence, peer.layout().Sequence)
 	}
 }
 

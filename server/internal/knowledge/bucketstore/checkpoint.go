@@ -106,11 +106,14 @@ func (store *Store) stopCompaction() {
 // checkpoint brings the store's newest checkpoint up to its snapshot: it
 // adopts one a peer wrote meanwhile, or writes one unless read-only.
 func (store *Store) checkpoint(ctx context.Context) error {
-	newest, err := newestCheckpointSequence(ctx, store.objects)
+	// Only checkpoints after the known one are listed: the rest may be many
+	// until they are collected.
+	known := store.layout().Sequence
+	newest, err := newestCheckpointSequence(ctx, store.objects, known)
 	if err != nil {
 		return err
 	}
-	if newest > store.layout().Sequence {
+	if newest > known {
 		return store.adoptPeerCheckpoint(ctx, newest)
 	}
 	snap := store.served.Load().snap

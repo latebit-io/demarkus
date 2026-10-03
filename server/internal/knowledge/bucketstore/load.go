@@ -56,7 +56,7 @@ func readMarker(ctx context.Context, objects blob.Store, worldID string) error {
 // newestCheckpoint lists the checkpoints and reads the one with the highest
 // sequence; the marker is written after checkpoint zero, so one must exist.
 func newestCheckpoint(ctx context.Context, objects blob.Store, worldID string) (checkpointObject, error) {
-	newest, err := newestCheckpointSequence(ctx, objects)
+	newest, err := newestCheckpointSequence(ctx, objects, 0)
 	if err != nil {
 		return checkpointObject{}, err
 	}
@@ -72,10 +72,11 @@ func newestCheckpoint(ctx context.Context, objects blob.Store, worldID string) (
 	return checkpoint, nil
 }
 
-// newestCheckpointSequence lists the checkpoints for the highest sequence.
-func newestCheckpointSequence(ctx context.Context, objects blob.Store) (int64, error) {
-	newest := int64(0)
-	for sequences, err := range sequencePages(ctx, objects, checkpointPrefix, 0) {
+// newestCheckpointSequence lists the checkpoints after a known one, or all
+// of them from 0, for the highest sequence.
+func newestCheckpointSequence(ctx context.Context, objects blob.Store, after int64) (int64, error) {
+	newest := after
+	for sequences, err := range sequencePages(ctx, objects, checkpointPrefix, after) {
 		if err != nil {
 			return 0, err
 		}

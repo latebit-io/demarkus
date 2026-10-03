@@ -771,7 +771,7 @@ func installRoot(t *testing.T, objects blob.Store, root any) {
 	if _, err := objects.Create(context.Background(), model.Key, model.Data); err != nil {
 		t.Fatalf("create root %q: %v", model.Key, err)
 	}
-	previous, err := newestCheckpointSequence(context.Background(), objects)
+	previous, err := newestCheckpointSequence(context.Background(), objects, 0)
 	if err != nil {
 		t.Fatalf("newest checkpoint: %v", err)
 	}
