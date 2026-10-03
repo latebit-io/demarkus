@@ -8,7 +8,6 @@ import (
 	pathpkg "path"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -344,8 +343,8 @@ func TestOpenRejectsMalformedMarker(t *testing.T) {
 	}
 }
 
-// A schema 1 world opens only once migrated; until then the store refuses it
-// by name, and creates nothing over it.
+// A world from before the commit log is never migrated: the store refuses
+// it by name and creates nothing over it.
 func TestOpenRefusesSchemaOneWorld(t *testing.T) {
 	objects := newTestMemory(t)
 	legacy := []byte(`{"schema":1,"world_id":"` + testWorldID + `","sequence":1,"root":{"key":"k","hash":"h"},"receipts":[]}`)
@@ -353,8 +352,8 @@ func TestOpenRefusesSchemaOneWorld(t *testing.T) {
 		t.Fatal(err)
 	}
 	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
-	if store != nil || !errors.Is(err, blob.ErrPrecondition) || !strings.Contains(err.Error(), "migrated") {
-		t.Fatalf("Open() = (%v, %v), want a precondition naming migration", store, err)
+	if store != nil || !errors.Is(err, blob.ErrPrecondition) || !strings.Contains(err.Error(), "empty the bucket") {
+		t.Fatalf("Open() = (%v, %v), want a precondition saying to start again", store, err)
 	}
 	listed, err := objects.List(context.Background(), "", "", "")
 	if err != nil || len(listed.Objects) != 1 {
@@ -414,7 +413,6 @@ func TestOpenRejectsBrokenLog(t *testing.T) {
 func TestOpenRejectsMissingOrCorruptReferences(t *testing.T) {
 	tests := []struct {
 		name   string
-		legacy bool // the newest checkpoint names a schema 1 root
 		mutate func(*testing.T, *blob.Memory)
 	}{
 		{name: "missing root", mutate: func(t *testing.T, objects *blob.Memory) {
@@ -424,10 +422,6 @@ func TestOpenRejectsMissingOrCorruptReferences(t *testing.T) {
 		{name: "missing shard", mutate: func(t *testing.T, objects *blob.Memory) {
 			_, root := readFoldedRoot(t, objects)
 			deleteObject(t, objects, root.Shards[0].Key)
-		}},
-		{name: "missing schema 1 shard", legacy: true, mutate: func(t *testing.T, objects *blob.Memory) {
-			_, root := readCheckpointAndRoot(t, objects)
-			deleteObject(t, objects, root.Shards[37].Key)
 		}},
 		{name: "corrupt root bytes", mutate: func(t *testing.T, objects *blob.Memory) {
 			checkpoint, _ := readFoldedRoot(t, objects)
@@ -445,9 +439,6 @@ func TestOpenRejectsMissingOrCorruptReferences(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			objects := initializedMemory(t)
-			if test.legacy {
-				objects = legacyMemory(t)
-			}
 			test.mutate(t, objects)
 			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID, ShardWorkers: 4})
 			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
@@ -460,90 +451,24 @@ func TestOpenRejectsMissingOrCorruptReferences(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsRootInvariants(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*rootObject)
-	}{
-		{name: "null shards", mutate: func(root *rootObject) { root.Shards = nil }},
-		{name: "wrong shard order", mutate: func(root *rootObject) { root.Shards[0], root.Shards[1] = root.Shards[1], root.Shards[0] }},
-		{name: "too many documents", mutate: func(root *rootObject) { root.DocumentCount = maximumDocuments + 1 }},
-		{name: "wrong world", mutate: func(root *rootObject) { root.WorldID = otherWorldID }},
-		{name: "document count mismatch", mutate: func(root *rootObject) { root.DocumentCount = 1 }},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			objects := legacyMemory(t)
-			_, root := readCheckpointAndRoot(t, objects)
-			test.mutate(&root)
-			installRoot(t, objects, root)
-			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
-			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
-				t.Fatalf("Open() = (%v, %v), want nil integrity", store, err)
-			}
-		})
-	}
-}
-
-func TestOpenRejectsShardInvariants(t *testing.T) {
-	shardIndex, paths := findPathsInShard(t, 2)
-	wrongShard := fmt.Sprintf("%02x", (shardIndex+1)%shardCount)
-	first := testEntry(paths[0], false, "")
-	second := testEntry(paths[1], false, "")
-	if first.Path > second.Path {
-		first, second = second, first
-	}
-	tests := []struct {
-		name    string
-		shard   shardObject
-		count   int
-		entries []shardEntry
-	}{
-		{name: "null entries", shard: shardObject{Schema: schemaVersion, Shard: fmt.Sprintf("%02x", shardIndex)}},
-		{name: "wrong label", shard: shardObject{Schema: schemaVersion, Shard: wrongShard, Entries: make([]shardEntry, 0)}},
-		{name: "unsorted entries", count: 2, shard: shardObject{
-			Schema: schemaVersion, Shard: fmt.Sprintf("%02x", shardIndex), Entries: []shardEntry{second, first},
-		}},
-		{name: "bad path hash", count: 1, entries: []shardEntry{first}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			objects := legacyMemory(t)
-			shard := test.shard
-			if test.entries != nil {
-				shard = shardObject{
-					Schema:  schemaVersion,
-					Shard:   fmt.Sprintf("%02x", shardIndex),
-					Entries: slices.Clone(test.entries),
-				}
-				shard.Entries[0].PathHash = strings.Repeat("0", 64)
-			}
-			installShard(t, objects, shardIndex, shard, test.count)
-			store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
-			if store != nil || !errors.Is(err, blob.ErrIntegrity) {
-				t.Fatalf("Open() = (%v, %v), want nil integrity", store, err)
-			}
-		})
-	}
-
-	t.Run("document ancestor", func(t *testing.T) {
-		objects := legacyMemory(t)
-		installEntries(t, objects, []shardEntry{
-			testEntry("/a.md", false, ""),
-			testEntry("/a.md/b.md", false, ""),
-		})
-		store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
-		if store != nil || !errors.Is(err, blob.ErrIntegrity) {
-			t.Fatalf("Open() = (%v, %v), want topology integrity", store, err)
-		}
+// A shard entry under another document breaks topology: the open fails.
+func TestOpenRejectsADocumentUnderADocument(t *testing.T) {
+	objects := initializedMemory(t)
+	installEntries(t, objects, []foldedEntry{
+		testEntry("/a.md", false, ""),
+		testEntry("/a.md/b.md", false, ""),
 	})
+	store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID})
+	if store != nil || !errors.Is(err, blob.ErrIntegrity) {
+		t.Fatalf("Open() = (%v, %v), want topology integrity", store, err)
+	}
 }
 
 func TestDerivedSnapshotLiveAndArchived(t *testing.T) {
-	objects := legacyMemory(t)
+	objects := initializedMemory(t)
 	sharedHash := storefmt.ContentHash([]byte("shared"))
 	archivedHash := storefmt.ContentHash([]byte("archived"))
-	installEntries(t, objects, []shardEntry{
+	installEntries(t, objects, []foldedEntry{
 		testEntry("/docs/z.md", false, sharedHash),
 		testEntry("/docs/a.md", false, sharedHash),
 		testEntry("/docs/archived.md", true, sharedHash),
@@ -735,19 +660,6 @@ func deleteObject(t *testing.T, objects blob.Store, key string) {
 	}
 }
 
-// readCheckpointAndRoot reads the world's newest checkpoint and its schema 1
-// root.
-func readCheckpointAndRoot(t *testing.T, objects blob.Store) (checkpointObject, rootObject) {
-	t.Helper()
-	checkpoint, err := newestCheckpoint(context.Background(), objects, testWorldID)
-	if err != nil {
-		t.Fatalf("newest checkpoint: %v", err)
-	}
-	var root rootObject
-	decodeObject(t, getObject(t, objects, checkpoint.Root.Key).Data, &root)
-	return checkpoint, root
-}
-
 // readFoldedRoot reads the world's newest checkpoint and its folded root.
 func readFoldedRoot(t *testing.T, objects blob.Store) (checkpointObject, foldedRoot) {
 	t.Helper()
@@ -760,8 +672,8 @@ func readFoldedRoot(t *testing.T, objects blob.Store) (checkpointObject, foldedR
 	return checkpoint, root
 }
 
-// installRoot makes root the world's newest checkpoint, as a compactor or a
-// migration writes one; stores opened afterwards load it.
+// installRoot makes root the world's newest checkpoint, as a compactor writes
+// one; stores opened afterwards load it.
 func installRoot(t *testing.T, objects blob.Store, root any) {
 	t.Helper()
 	model, ref, err := immutableJSON(rootKey, root)
@@ -785,57 +697,39 @@ func installRoot(t *testing.T, objects blob.Store, root any) {
 	}
 }
 
-func installShard(t *testing.T, objects blob.Store, index int, shard shardObject, documentCount int) {
+// installEntries makes a checkpoint holding entries, unchecked, so a test can
+// install one that breaks the format.
+func installEntries(t *testing.T, objects blob.Store, entries []foldedEntry) {
 	t.Helper()
-	_, root := readCheckpointAndRoot(t, objects)
-	shardID := fmt.Sprintf("%02x", index)
-	model, ref, err := immutableJSON(func(hash string) string { return shardKey(shardID, hash) }, shard)
-	if err != nil {
-		t.Fatalf("build shard: %v", err)
+	bits := shardBitsFor(len(entries))
+	grouped := make([][]foldedEntry, 1<<bits)
+	for position := range entries {
+		index := shardOf(entries[position].PathHash, bits)
+		grouped[index] = append(grouped[index], entries[position])
 	}
-	if _, err := objects.Create(context.Background(), model.Key, model.Data); err != nil {
-		t.Fatalf("create shard %q: %v", model.Key, err)
-	}
-	root.Shards[index] = shardRef{Shard: shardID, objectRef: ref}
-	root.DocumentCount = documentCount
-	installRoot(t, objects, root)
-}
-
-func installEntries(t *testing.T, objects blob.Store, entries []shardEntry) {
-	t.Helper()
-	_, root := readCheckpointAndRoot(t, objects)
-	grouped := make(map[int][]shardEntry)
-	for entryIndex := range entries {
-		entry := &entries[entryIndex]
-		indexValue, err := strconv.ParseUint(pathHash(entry.Path)[:2], 16, 8)
-		if err != nil {
-			t.Fatalf("parse shard for %q: %v", entry.Path, err)
-		}
-		index := int(indexValue)
-		grouped[index] = append(grouped[index], *entry)
-	}
+	refs := make([]shardRef, len(grouped))
 	for index, shardEntries := range grouped {
-		sort.Slice(shardEntries, func(left, right int) bool {
-			return shardEntries[left].Path < shardEntries[right].Path
-		})
-		shardID := fmt.Sprintf("%02x", index)
-		shard := shardObject{Schema: schemaVersion, Shard: shardID, Entries: shardEntries}
-		model, ref, err := immutableJSON(func(hash string) string { return shardKey(shardID, hash) }, shard)
+		if shardEntries == nil {
+			shardEntries = make([]foldedEntry, 0)
+		}
+		sort.Slice(shardEntries, func(left, right int) bool { return shardEntries[left].Path < shardEntries[right].Path })
+		label := shardLabel(index, bits)
+		shard := foldedShard{Schema: foldedSchema, ShardBits: bits, Shard: label, Entries: shardEntries}
+		model, ref, err := immutableJSON(func(hash string) string { return shardKey(label, hash) }, shard)
 		if err != nil {
-			t.Fatalf("build shard %s: %v", shardID, err)
+			t.Fatalf("build shard %s: %v", label, err)
 		}
 		if _, err := objects.Create(context.Background(), model.Key, model.Data); err != nil {
-			t.Fatalf("create shard %s: %v", shardID, err)
+			t.Fatalf("create shard %s: %v", label, err)
 		}
-		root.Shards[index] = shardRef{Shard: shardID, objectRef: ref}
+		refs[index] = shardRef{Shard: label, objectRef: ref}
 	}
-	root.DocumentCount = len(entries)
-	installRoot(t, objects, root)
+	installRoot(t, objects, foldedRoot{Schema: foldedSchema, WorldID: testWorldID, DocumentCount: len(entries), ShardBits: bits, Shards: refs})
 }
 
-func testEntry(path string, archived bool, bodyHash string) shardEntry {
+// testEntry is a document at version 1 whose history block is never read.
+func testEntry(path string, archived bool, bodyHash string) foldedEntry {
 	pathSum := pathHash(path)
-	manifestSum := hashHex([]byte("manifest:" + path))
 	if bodyHash == "" {
 		bodyHash = storefmt.ContentHash([]byte(path))
 	}
@@ -846,10 +740,10 @@ func testEntry(path string, archived bool, bodyHash string) shardEntry {
 		"title":      title,
 		"type":       "Document",
 	}
-	return shardEntry{
+	return foldedEntry{
 		Path:     path,
 		PathHash: pathSum,
-		Manifest: objectRef{Key: manifestKey(pathSum, manifestSum), Hash: manifestSum},
+		History:  []blockRef{{First: 1, Last: 1, Hash: hashHex([]byte("history:" + path))}},
 		Current:  1,
 		Archived: archived,
 		BodyHash: bodyHash,
@@ -863,23 +757,4 @@ func testEntry(path string, archived bool, bodyHash string) shardEntry {
 			Metadata:   metadata,
 		},
 	}
-}
-
-func findPathsInShard(t *testing.T, count int) (shardIndex int, paths []string) {
-	t.Helper()
-	grouped := make(map[int][]string)
-	for index := range 10_000 {
-		path := fmt.Sprintf("/docs/item-%04d.md", index)
-		shardValue, err := strconv.ParseUint(pathHash(path)[:2], 16, 8)
-		if err != nil {
-			t.Fatalf("parse shard: %v", err)
-		}
-		index := int(shardValue)
-		grouped[index] = append(grouped[index], path)
-		if len(grouped[index]) == count {
-			return index, grouped[index]
-		}
-	}
-	t.Fatalf("no shard with %d paths", count)
-	return 0, nil
 }

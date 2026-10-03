@@ -24,8 +24,8 @@ func loadBase(ctx context.Context, objects blob.Store, worldID string, workers i
 	return loadCheckpoint(ctx, objects, checkpoint, workers)
 }
 
-// readMarker checks the marker names this world under schema 2. A schema 1
-// head is a world that has not migrated yet.
+// readMarker checks the marker names this world under schema 2. A head from
+// before the commit log is refused: such a world starts again from empty.
 func readMarker(ctx context.Context, objects blob.Store, worldID string) error {
 	object, err := objects.Get(ctx, markerKey)
 	if err != nil {
@@ -37,8 +37,8 @@ func readMarker(ctx context.Context, objects blob.Store, worldID string) error {
 	var version struct {
 		Schema int `json:"schema"`
 	}
-	if json.Unmarshal(object.Data, &version) == nil && version.Schema == schemaVersion {
-		return fmt.Errorf("%w: world head is schema %d; it opens once migrated to the commit log (ADR 0036)", blob.ErrPrecondition, version.Schema)
+	if json.Unmarshal(object.Data, &version) == nil && version.Schema == headSchema {
+		return fmt.Errorf("%w: world head is schema %d, from before the commit log, which does not migrate it; empty the bucket to start the world again (ADR 0036)", blob.ErrPrecondition, version.Schema)
 	}
 	var marker markerObject
 	if err := decodeImmutable(object.Data, &marker); err != nil {
@@ -133,33 +133,16 @@ type rootRead struct {
 	documents int
 }
 
-// loadRoot reads a checkpoint's root, folded or schema 1.
+// loadRoot reads a checkpoint's root.
 func loadRoot(ctx context.Context, objects objectGetter, checkpoint checkpointObject) (rootRead, error) {
 	key := rootKey(checkpoint.Root.Hash)
-	data, err := getVerified(ctx, objects, keyedRef{checkpoint.Root, key})
+	root, err := getImmutable(ctx, objects, keyedRef{checkpoint.Root, key}, func(root *foldedRoot) error {
+		return validateFoldedRoot(root, checkpoint.WorldID)
+	})
 	if err != nil {
 		return rootRead{}, err
 	}
-	var version struct {
-		Schema int `json:"schema"`
-	}
-	if err := json.Unmarshal(data, &version); err != nil {
-		return rootRead{}, fmt.Errorf("%w: decode object %q: %v", blob.ErrIntegrity, key, err)
-	}
-	layout := &checkpointBase{Sequence: checkpoint.Sequence}
-	if version.Schema == schemaVersion {
-		root, err := decodeChecked(key, data, func(root *rootObject) error { return validateRootObject(root, checkpoint.WorldID) })
-		if err != nil {
-			return rootRead{}, err
-		}
-		layout.Bits, layout.Shards, layout.Legacy = 8, root.Shards, true
-		return rootRead{layout: layout, documents: root.DocumentCount}, nil
-	}
-	root, err := decodeChecked(key, data, func(root *foldedRoot) error { return validateFoldedRoot(root, checkpoint.WorldID) })
-	if err != nil {
-		return rootRead{}, err
-	}
-	layout.Bits, layout.Shards = root.ShardBits, root.Shards
+	layout := &checkpointBase{Sequence: checkpoint.Sequence, Bits: root.ShardBits, Shards: root.Shards}
 	return rootRead{layout: layout, documents: root.DocumentCount}, nil
 }
 
@@ -175,13 +158,7 @@ func (reader shardReader) states(ctx context.Context, shards []int) ([][]*pathSt
 	loaded := make([][]*pathState, len(shards))
 	err := runParallel(ctx, reader.workers, indexes(len(shards)), func(ctx context.Context, position int) error {
 		index := shards[position]
-		var states []*pathState
-		var err error
-		if reader.layout.Legacy {
-			states, err = reader.legacy(ctx, index)
-		} else {
-			states, err = reader.folded(ctx, index)
-		}
+		states, err := reader.folded(ctx, index)
 		if err != nil {
 			return fmt.Errorf("load shard %s: %w", reader.layout.Shards[index].Shard, err)
 		}
@@ -213,24 +190,6 @@ func (reader shardReader) folded(ctx context.Context, index int) ([]*pathState, 
 	return states, nil
 }
 
-func (reader shardReader) legacy(ctx context.Context, index int) ([]*pathState, error) {
-	label, ref := fmt.Sprintf("%02x", index), reader.layout.Shards[index]
-	shard, err := getImmutable(ctx, reader.objects, keyedRef{ref.objectRef, shardKey(label, ref.Hash)}, func(shard *shardObject) error {
-		return validateShardObject(shard, label)
-	})
-	if err != nil {
-		return nil, err
-	}
-	states := make([]*pathState, len(shard.Entries))
-	for entryIndex := range shard.Entries {
-		entry := &shard.Entries[entryIndex]
-		if states[entryIndex], err = legacyState(entry); err != nil {
-			return nil, fmt.Errorf("%w: checkpoint path %q: %v", blob.ErrIntegrity, entry.Path, err)
-		}
-	}
-	return states, nil
-}
-
 // foldedState is a document as a folded shard entry records it.
 func foldedState(entry *foldedEntry) (*pathState, error) {
 	modified, err := parseTimestamp(entry.Modified)
@@ -248,31 +207,6 @@ func foldedState(entry *foldedEntry) (*pathState, error) {
 	return &pathState{
 		Path: entry.Path, Current: entry.Current, First: base.first(), Archived: entry.Archived,
 		BodyHash: entry.BodyHash, Modified: modified, Entry: record, Base: base,
-	}, nil
-}
-
-// legacyState is a document as a schema 1 shard entry records it; its
-// manifest is read when its history is.
-func legacyState(entry *shardEntry) (*pathState, error) {
-	modified, err := parseTimestamp(entry.Modified)
-	if err != nil {
-		return nil, err
-	}
-	record, err := catalogEntry(&entry.Catalog)
-	if err != nil {
-		return nil, err
-	}
-	return &pathState{
-		Path:     entry.Path,
-		Current:  entry.Current,
-		Archived: entry.Archived,
-		BodyHash: entry.BodyHash,
-		Modified: modified,
-		Entry:    record,
-		Base: &baseEntry{
-			Manifest: entry.Manifest, Current: entry.Current, Archived: entry.Archived,
-			BodyHash: entry.BodyHash, Modified: modified,
-		},
 	}, nil
 }
 

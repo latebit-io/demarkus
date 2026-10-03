@@ -3,8 +3,6 @@ package bucketstore
 import (
 	"fmt"
 	"testing"
-
-	"github.com/latebit-io/demarkus/server/blob"
 )
 
 // legacyHead is head.json as the release before the commit log decoded it,
@@ -40,7 +38,7 @@ func validateLegacyHead(head *legacyHead) error {
 }
 
 // A replica on the release before the commit log reads the world marker as
-// its head and fails closed, so it can never commit to a migrated world.
+// its head and fails closed, so it can never commit to a new world.
 func TestOldReplicaRefusesTheMarker(t *testing.T) {
 	objects := initializedMemory(t)
 	marker := getObject(t, objects, markerKey)
@@ -51,24 +49,4 @@ func TestOldReplicaRefusesTheMarker(t *testing.T) {
 			t.Fatalf("the old release accepted the marker as head %+v", head)
 		}
 	}
-}
-
-// legacyMemory is a world whose newest checkpoint names a schema 1 root, as a
-// migrated world's first checkpoint does: 256 empty shards.
-func legacyMemory(t *testing.T) *blob.Memory {
-	t.Helper()
-	objects := initializedMemory(t)
-	refs := make([]shardRef, shardCount)
-	for index := range shardCount {
-		label := fmt.Sprintf("%02x", index)
-		shard := shardObject{Schema: schemaVersion, Shard: label, Entries: make([]shardEntry, 0)}
-		model, ref, err := immutableJSON(func(hash string) string { return shardKey(label, hash) }, shard)
-		if err != nil {
-			t.Fatalf("build shard %s: %v", label, err)
-		}
-		createReadObject(t, objects, model)
-		refs[index] = shardRef{Shard: label, objectRef: ref}
-	}
-	installRoot(t, objects, rootObject{Schema: schemaVersion, WorldID: testWorldID, Shards: refs})
-	return objects
 }

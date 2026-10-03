@@ -14,14 +14,13 @@ import (
 )
 
 const (
-	// schemaVersion versions history objects and schema 1 checkpoint objects,
-	// which a migrated world's first checkpoint names; foldedSchema the root
-	// and shards compactors write; logSchema the marker, checkpoints, slots.
-	schemaVersion    = 1
+	// historySchema versions history objects; foldedSchema roots and
+	// shards; logSchema the marker, checkpoints and slots. headSchema is the
+	// head.json of the release before the commit log, which is refused.
+	historySchema    = 1
 	foldedSchema     = 2
 	logSchema        = 2
-	shardCount       = 256     // schema 1
-	maximumDocuments = 100_000 // schema 1
+	headSchema       = 1
 	historyBlockSize = 256
 	// A folded checkpoint has the fewest shards, a power of two, that hold at
 	// most docsPerShard documents each (about 200 KB): 4096 at 1,000,000.
@@ -58,21 +57,6 @@ type historyObject struct {
 	Entries  []historyEntry `json:"entries"`
 }
 
-type historyRef struct {
-	PathHash string `json:"path_hash"`
-	First    int    `json:"first"`
-	Last     int    `json:"last"`
-	objectRef
-}
-
-type manifestObject struct {
-	Schema   int          `json:"schema"`
-	PathHash string       `json:"path_hash"`
-	Current  int          `json:"current"`
-	Archived bool         `json:"archived"`
-	History  []historyRef `json:"history"`
-}
-
 type catalogRecord struct {
 	Path       string            `json:"path"`
 	Title      string            `json:"title"`
@@ -80,17 +64,6 @@ type catalogRecord struct {
 	Importance string            `json:"importance"`
 	Modified   string            `json:"modified"`
 	Metadata   map[string]string `json:"metadata"`
-}
-
-type shardEntry struct {
-	Path     string        `json:"path"`
-	PathHash string        `json:"path_hash"`
-	Manifest objectRef     `json:"manifest"`
-	Current  int           `json:"current"`
-	Archived bool          `json:"archived"`
-	BodyHash string        `json:"body_hash"`
-	Modified string        `json:"modified"`
-	Catalog  catalogRecord `json:"catalog"`
 }
 
 // blockRef names one history block of a folded entry; the block's key and
@@ -101,8 +74,8 @@ type blockRef struct {
 	Hash  string `json:"hash"`
 }
 
-// foldedEntry is a document in a folded shard: its index entry with the
-// history block references a schema 1 manifest held.
+// foldedEntry is a document in a folded shard: its index entry with its
+// history block references.
 type foldedEntry struct {
 	Path     string        `json:"path"`
 	PathHash string        `json:"path_hash"`
@@ -131,26 +104,13 @@ type foldedRoot struct {
 	Shards        []shardRef `json:"shards"`
 }
 
-type shardObject struct {
-	Schema  int          `json:"schema"`
-	Shard   string       `json:"shard"`
-	Entries []shardEntry `json:"entries"`
-}
-
 type shardRef struct {
 	Shard string `json:"shard"`
 	objectRef
 }
 
-type rootObject struct {
-	Schema        int        `json:"schema"`
-	WorldID       string     `json:"world_id"`
-	DocumentCount int        `json:"document_count"`
-	Shards        []shardRef `json:"shards"`
-}
-
 // markerObject is head.json under schema 2: written once when the world is
-// created, never on the commit path. A replica on schema 1 refuses it.
+// created, never on the commit path. A replica of the old release refuses it.
 type markerObject struct {
 	Schema  int    `json:"schema"`
 	WorldID string `json:"world_id"`
@@ -261,10 +221,6 @@ func blobKey(hash string) string {
 
 func historyKey(hash string) string {
 	return objectPrefix + "history/" + hash + ".json"
-}
-
-func manifestKey(pathHash, hash string) string {
-	return objectPrefix + "docs/" + pathHash + "/manifests/" + hash + ".json"
 }
 
 func shardKey(shard, hash string) string {

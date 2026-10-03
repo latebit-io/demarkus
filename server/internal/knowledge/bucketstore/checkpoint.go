@@ -318,7 +318,7 @@ func (store *Store) adoptPeerCheckpoint(ctx context.Context, sequence int64) err
 	current := store.layout()
 	var changed []int
 	for index, ref := range root.layout.Shards {
-		if current.Legacy || root.layout.Legacy || current.Bits != root.layout.Bits || current.Shards[index] != ref {
+		if current.Bits != root.layout.Bits || current.Shards[index] != ref {
 			changed = append(changed, index)
 		}
 	}
@@ -393,9 +393,6 @@ func (s *snapshot) adopt(a *adoption) error {
 			// Cloned: the old array holds the versions the checkpoint took.
 			state.Recent = slices.Clone(old.Recent[index:])
 		}
-		if state.First == 0 {
-			state.First = base.first()
-		}
 		s.put(old, &state)
 	}
 	s.Checkpoint = a.checkpoint
@@ -403,7 +400,7 @@ func (s *snapshot) adopt(a *adoption) error {
 }
 
 func sameBase(a, b *baseEntry) bool {
-	return a != nil && b != nil && slices.Equal(a.History, b.History) && a.Manifest == b.Manifest &&
+	return a != nil && b != nil && slices.Equal(a.History, b.History) &&
 		a.Current == b.Current && a.Archived == b.Archived && a.BodyHash == b.BodyHash && a.Modified.Equal(b.Modified)
 }
 
@@ -437,7 +434,7 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 		return true
 	})
 	previous := snap.Checkpoint
-	reuse := !previous.Legacy && previous.Bits == bits
+	reuse := previous.Bits == bits
 	var shards []int
 	var changed []grouped
 	for index, group := range groups {
@@ -521,17 +518,9 @@ func foldHistory(ctx context.Context, objects blob.Store, document grouped) ([]b
 	var base []blockRef
 	baseCurrent := 0
 	if state.Base != nil {
-		var err error
-		if base, err = baseBlocks(ctx, objects, state); err != nil {
-			return nil, err
-		}
-		baseCurrent = state.Base.Current
+		base, baseCurrent = state.Base.History, state.Base.Current
 	}
 	first := state.First
-	if first == 0 && len(base) > 0 {
-		// A schema 1 entry nothing changed since.
-		first = base[0].First
-	}
 	if first < 1 {
 		return nil, fmt.Errorf("%w: no first retained version", blob.ErrIntegrity)
 	}
@@ -560,7 +549,7 @@ func foldHistory(ctx context.Context, objects blob.Store, document grouped) ([]b
 				versions = append(versions, version.entry)
 			}
 		}
-		history := historyObject{Schema: schemaVersion, PathHash: document.hash, First: from, Last: to, Entries: versions}
+		history := historyObject{Schema: historySchema, PathHash: document.hash, First: from, Last: to, Entries: versions}
 		if err := validateHistoryObject(&history); err != nil {
 			return nil, fmt.Errorf("%w: versions %d-%d: %v", blob.ErrIntegrity, from, to, err)
 		}

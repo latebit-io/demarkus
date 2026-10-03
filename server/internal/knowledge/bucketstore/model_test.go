@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"maps"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -64,7 +63,6 @@ func TestModelIdentifiers(t *testing.T) {
 
 	t.Run("keys", func(t *testing.T) {
 		hash := strings.Repeat("a", 64)
-		path := strings.Repeat("b", 64)
 		tests := []struct {
 			name string
 			got  string
@@ -73,9 +71,9 @@ func TestModelIdentifiers(t *testing.T) {
 			{name: "head", got: markerKey, want: "_demarkus/v1/head.json"},
 			{name: "blob", got: blobKey(hash), want: "_demarkus/v1/blobs/" + hash},
 			{name: "history", got: historyKey(hash), want: "_demarkus/v1/history/" + hash + ".json"},
-			{name: "manifest", got: manifestKey(path, hash), want: "_demarkus/v1/docs/" + path + "/manifests/" + hash + ".json"},
 			{name: "shard", got: shardKey("af", hash), want: "_demarkus/v1/index/af/" + hash + ".json"},
 			{name: "root", got: rootKey(hash), want: "_demarkus/v1/roots/" + hash + ".json"},
+			{name: "segment", got: segmentKey(shardRef{Shard: "af", objectRef: objectRef{Hash: hash}}, 2), want: "_demarkus/v1/segments/af/" + hash + "/2.json"},
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
@@ -220,7 +218,7 @@ func TestGoldenHistoryObject(t *testing.T) {
 	blobSum := strings.Repeat("2", 64)
 	bodySum := strings.Repeat("3", 64)
 	history := historyObject{
-		Schema:   schemaVersion,
+		Schema:   historySchema,
 		PathHash: pathSum,
 		First:    257,
 		Last:     257,
@@ -270,16 +268,18 @@ func TestModelCollectionValidation(t *testing.T) {
 			return validateCheckpoint(&checkpointObject{Schema: logSchema, WorldID: testWorldID, Sequence: 1}, 1)
 		}},
 		{name: "root shards", validate: func() error {
-			return validateRootObject(&rootObject{Schema: schemaVersion, WorldID: testWorldID}, testWorldID)
+			return validateFoldedRoot(&foldedRoot{Schema: foldedSchema, WorldID: testWorldID}, testWorldID)
 		}},
 		{name: "shard entries", validate: func() error {
-			return validateShardObject(&shardObject{Schema: schemaVersion, Shard: "00"}, "00")
+			return validateFoldedShard(&foldedShard{Schema: foldedSchema, Shard: "0"}, 0, 0)
 		}},
 		{name: "history entries", validate: func() error {
-			return validateHistoryObject(&historyObject{Schema: schemaVersion, PathHash: hash, First: 1, Last: 1})
+			return validateHistoryObject(&historyObject{Schema: historySchema, PathHash: hash, First: 1, Last: 1})
 		}},
-		{name: "manifest history", validate: func() error {
-			return validateManifestObject(&manifestObject{Schema: schemaVersion, PathHash: hash, Current: 1})
+		{name: "entry history", validate: func() error {
+			entry := testEntry("/a.md", false, "")
+			entry.History = nil
+			return validateFoldedEntry(&entry, 0, 0)
 		}},
 		{name: "catalog tags", validate: func() error {
 			record := validCatalog
@@ -381,48 +381,22 @@ func TestSlotValidation(t *testing.T) {
 
 func TestHistoryBlockValidation(t *testing.T) {
 	hash := strings.Repeat("a", 64)
-	ref := func(first, last int) historyRef {
-		return historyRef{
-			PathHash:  hash,
-			First:     first,
-			Last:      last,
-			objectRef: objectRef{Key: historyKey(hash), Hash: hash},
-		}
-	}
+	ref := func(first, last int) blockRef { return blockRef{First: first, Last: last, Hash: hash} }
 	tests := []struct {
 		name    string
-		value   manifestObject
+		blocks  []blockRef
+		current int
 		wantErr bool
 	}{
-		{
-			name: "absolute contiguous blocks",
-			value: manifestObject{
-				Schema: schemaVersion, PathHash: hash, Current: 300,
-				History: []historyRef{ref(100, 256), ref(257, 300)},
-			},
-		},
-		{
-			name: "range crosses block",
-			value: manifestObject{
-				Schema: schemaVersion, PathHash: hash, Current: 257,
-				History: []historyRef{ref(256, 257)},
-			},
-			wantErr: true,
-		},
-		{
-			name: "gap",
-			value: manifestObject{
-				Schema: schemaVersion, PathHash: hash, Current: 300,
-				History: []historyRef{ref(100, 250), ref(257, 300)},
-			},
-			wantErr: true,
-		},
+		{name: "absolute contiguous blocks", blocks: []blockRef{ref(100, 256), ref(257, 300)}, current: 300},
+		{name: "range crosses block", blocks: []blockRef{ref(256, 257)}, current: 257, wantErr: true},
+		{name: "gap", blocks: []blockRef{ref(100, 250), ref(257, 300)}, current: 300, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateManifestObject(&test.value)
+			err := validateBlocks(test.blocks, test.current)
 			if (err != nil) != test.wantErr {
-				t.Errorf("validateManifestObject() error = %v, wantErr %v", err, test.wantErr)
+				t.Errorf("validateBlocks() error = %v, wantErr %v", err, test.wantErr)
 			}
 		})
 	}
@@ -475,7 +449,7 @@ func TestCatalogSelfConsistency(t *testing.T) {
 	}
 }
 
-func TestShardEntryRejectsUnaddressablePaths(t *testing.T) {
+func TestFoldedEntryRejectsUnaddressablePaths(t *testing.T) {
 	paths := []string{
 		"/line\nbreak.md",
 		"/" + strings.Repeat("a", 4090) + ".md",
@@ -483,25 +457,17 @@ func TestShardEntryRejectsUnaddressablePaths(t *testing.T) {
 	for _, path := range paths {
 		t.Run(fmt.Sprintf("%d-bytes", len(path)), func(t *testing.T) {
 			entry := testEntry(path, false, "")
-			shard, err := strconv.ParseUint(entry.PathHash[:2], 16, 8)
-			if err != nil {
-				t.Fatalf("parse shard: %v", err)
-			}
-			if err := validateShardEntry(&entry, int(shard)); err == nil {
-				t.Errorf("validateShardEntry() accepted %q", path)
+			if err := validateFoldedEntry(&entry, 0, 0); err == nil {
+				t.Errorf("validateFoldedEntry() accepted %q", path)
 			}
 		})
 	}
 }
 
-func TestShardEntryAllowsPathAgnosticDocuments(t *testing.T) {
+func TestFoldedEntryAllowsPathAgnosticDocuments(t *testing.T) {
 	entry := testEntry("/x", false, "")
-	shard, err := strconv.ParseUint(entry.PathHash[:2], 16, 8)
-	if err != nil {
-		t.Fatalf("parse shard: %v", err)
-	}
-	if err := validateShardEntry(&entry, int(shard)); err != nil {
-		t.Errorf("validateShardEntry(/x): %v", err)
+	if err := validateFoldedEntry(&entry, 0, 0); err != nil {
+		t.Errorf("validateFoldedEntry(/x): %v", err)
 	}
 }
 

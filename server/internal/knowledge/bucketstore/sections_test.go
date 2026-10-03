@@ -448,22 +448,14 @@ func TestActiveSectionIndexTracksLiveData(t *testing.T) {
 	}
 }
 
-// A checkpoint without segments, schema 1 or folded, builds the index from
-// bodies, then writes the segments of its unchanged shards, from which the
-// next replica builds without reading a body.
+// A checkpoint without segments builds the index from bodies, then writes
+// the segments of its unchanged shards, from which the next replica builds
+// without reading a body.
 func TestCheckpointWithoutSegmentsBuildsFromBodies(t *testing.T) {
 	tests := []struct {
 		name  string
 		world func(t *testing.T) *blob.Memory
 	}{
-		{name: "schema 1", world: func(t *testing.T) *blob.Memory {
-			memory := initializedMemory(t)
-			commitReadDocuments(t, memory, []readDocumentSpec{
-				newReadDocument("/docs/a.md", "# A v1\n", "# A\n\n## Hairpin\n\nnat\n"),
-				newReadDocument("/docs/b.md", "# B\n\nkqueue swap\n"),
-			})
-			return memory
-		}},
 		{name: "folded", world: func(t *testing.T) *blob.Memory {
 			memory := initializedMemory(t)
 			writer := openSectionStore(t, memory, nil)

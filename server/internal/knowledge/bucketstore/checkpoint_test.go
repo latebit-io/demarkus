@@ -1024,31 +1024,6 @@ func waitIdleCompactor(t *testing.T, store *Store) {
 	})
 }
 
-// A world whose newest checkpoint is schema 1 folds into the new format on
-// its first checkpoint, reading each manifest once and reusing its blocks.
-func TestCheckpointFoldsSchemaOne(t *testing.T) {
-	ctx := context.Background()
-	memory := initializedMemory(t)
-	commitReadDocuments(t, memory, []readDocumentSpec{
-		newReadDocument("/docs/a.md", "# A v1\n", "# A v2\n"),
-		newReadDocument("/docs/b.md", "# B\n"),
-	})
-	site := manualSite(memory)
-	writer := site.open(t, 0)
-	_, err := writer.WriteVersion("/docs/a.md", 2, []byte("# A v3\n"), nil)
-	mustSucceed(t, err)
-	mustSucceed(t, writer.checkpoint(ctx))
-	if writer.layout().Legacy {
-		t.Fatal("the checkpoint after a schema 1 one is schema 1")
-	}
-	live := worldDigest(t, writer)
-	cold := site.open(t, 0)
-	if got := worldDigest(t, cold); !reflect.DeepEqual(live, got) {
-		t.Errorf("folded checkpoint differs:\nlive %+v\ncold %+v", live, got)
-	}
-	mustSucceed(t, cold.VerifyChain("/docs/a.md"))
-}
-
 // A folded root or shard that breaks the format's rules is refused.
 func TestOpenRejectsFoldedInvariants(t *testing.T) {
 	foldedWorld := func(t *testing.T) (*blob.Memory, foldedRoot, foldedShard) {
@@ -1080,6 +1055,12 @@ func TestOpenRejectsFoldedInvariants(t *testing.T) {
 		{name: "history short of current", mutate: func(_ *foldedRoot, shard *foldedShard) { shard.Entries[0].Current = 2 }},
 		{name: "no history", mutate: func(_ *foldedRoot, shard *foldedShard) { shard.Entries[0].History = []blockRef{} }},
 		{name: "shard bits differ from the root's", mutate: func(_ *foldedRoot, shard *foldedShard) { shard.ShardBits = 1 }},
+		{name: "null entries", mutate: func(root *foldedRoot, shard *foldedShard) { shard.Entries, root.DocumentCount = nil, 0 }},
+		{name: "bad path hash", mutate: func(_ *foldedRoot, shard *foldedShard) { shard.Entries[0].PathHash = strings.Repeat("0", 64) }},
+		{name: "unsorted entries", mutate: func(root *foldedRoot, shard *foldedShard) {
+			second := testEntry("/aaa.md", false, "")
+			shard.Entries, root.DocumentCount = append(shard.Entries, second), 2
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

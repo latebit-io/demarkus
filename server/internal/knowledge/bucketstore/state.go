@@ -31,8 +31,7 @@ type snapshot struct {
 type pathState struct {
 	Path    string
 	Current int
-	// First is the oldest retained version; 0 while only the checkpoint's
-	// manifest knows it.
+	// First is the oldest retained version.
 	First    int
 	Archived bool
 	BodyHash string
@@ -44,18 +43,16 @@ type pathState struct {
 	Recent []retainedVersion
 }
 
-// baseEntry is a document's checkpoint entry: a folded one names its history
-// blocks, a schema 1 one the manifest that does, which must match it.
+// baseEntry is a document's checkpoint entry, with its history blocks.
 type baseEntry struct {
 	History  []blockRef
-	Manifest objectRef
 	Current  int
 	Archived bool
 	BodyHash string
 	Modified time.Time
 }
 
-// first is the oldest version a folded entry retains; 0 for schema 1.
+// first is the oldest version the entry retains.
 func (base *baseEntry) first() int {
 	if len(base.History) == 0 {
 		return 0
@@ -67,7 +64,7 @@ func (base *baseEntry) first() int {
 // holds it, so a compactor writes that entry again as it is.
 func (state *pathState) unchanged() bool {
 	base := state.Base
-	return base != nil && base.History != nil && len(state.Recent) == 0 &&
+	return base != nil && len(state.Recent) == 0 &&
 		state.Archived == base.Archived && state.First == base.first()
 }
 
@@ -77,7 +74,6 @@ type checkpointBase struct {
 	Sequence int64
 	Bits     int
 	Shards   []shardRef
-	Legacy   bool // schema 1: 256 shards whose entries name manifests
 }
 
 // dirChild is one name in a directory, with how many documents pass through

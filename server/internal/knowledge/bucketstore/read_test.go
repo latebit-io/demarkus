@@ -498,57 +498,16 @@ func TestReferencedObjectIntegrity(t *testing.T) {
 		mutate    func(*testing.T, *blob.Memory, *readCommit)
 	}{
 		{
-			name:      "missing manifest",
-			wantCause: blob.ErrNotFound,
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				deleteObject(t, memory, commit.documents["/docs/a.md"].entry.Manifest.Key)
-			},
-		},
-		{
-			name: "corrupt manifest",
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				corruptObject(t, memory, commit.documents["/docs/a.md"].entry.Manifest.Key)
-			},
-		},
-		{
-			name: "manifest path hash mismatch",
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				installManifestMutation(t, memory, commit.documents["/docs/a.md"], func(manifest *manifestObject) {
-					manifest.PathHash = strings.Repeat("a", 64)
-					for index := range manifest.History {
-						manifest.History[index].PathHash = manifest.PathHash
-					}
-				})
-			},
-		},
-		{
-			name: "manifest current mismatch",
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				installManifestMutation(t, memory, commit.documents["/docs/a.md"], func(manifest *manifestObject) {
-					manifest.Current = 1
-					manifest.History[0].Last = 1
-				})
-			},
-		},
-		{
-			name: "manifest archive mismatch",
-			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				installManifestMutation(t, memory, commit.documents["/docs/a.md"], func(manifest *manifestObject) {
-					manifest.Archived = true
-				})
-			},
-		},
-		{
 			name:      "missing history",
 			wantCause: blob.ErrNotFound,
 			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				deleteObject(t, memory, commit.documents["/docs/a.md"].historyRef.Key)
+				deleteObject(t, memory, commit.documents["/docs/a.md"].historyKey)
 			},
 		},
 		{
 			name: "corrupt history",
 			mutate: func(t *testing.T, memory *blob.Memory, commit *readCommit) {
-				corruptObject(t, memory, commit.documents["/docs/a.md"].historyRef.Key)
+				corruptObject(t, memory, commit.documents["/docs/a.md"].historyKey)
 			},
 		},
 		{
@@ -712,7 +671,7 @@ func TestReadIntegrityNormalization(t *testing.T) {
 					}()
 					surface = &pinnedView{ctx: context.Background(), view: view}
 				}
-				deleteObject(t, memory, commit.documents["/docs/a.md"].entry.Manifest.Key)
+				deleteObject(t, memory, commit.documents["/docs/a.md"].historyKey)
 				err = operation.read(surface)
 				if !errors.Is(err, storefmt.ErrIntegrity) || !errors.Is(err, blob.ErrIntegrity) || !errors.Is(err, blob.ErrNotFound) {
 					t.Fatalf("read error = %v, want protocol integrity with blob integrity and not-found causes", err)
@@ -829,16 +788,15 @@ type committedReadVersion struct {
 }
 
 type committedReadDocument struct {
-	entry      shardEntry
-	manifest   manifestObject
+	entry      foldedEntry
 	history    historyObject
-	historyRef historyRef
+	historyKey string
 	versions   map[int]committedReadVersion
 }
 
 type readCommit struct {
 	documents map[string]*committedReadDocument
-	root      rootObject
+	root      foldedRoot
 	rootRef   objectRef
 }
 
@@ -873,39 +831,38 @@ func readMetadata(title, tags, project string) map[string]string {
 func commitReadDocuments(t *testing.T, memory *blob.Memory, specs []readDocumentSpec) readCommit {
 	t.Helper()
 	commit := readCommit{documents: make(map[string]*committedReadDocument, len(specs))}
-	grouped := make(map[int][]shardEntry)
+	bits := shardBitsFor(len(specs))
+	grouped := make([][]foldedEntry, 1<<bits)
 	for _, spec := range specs {
 		document := buildReadDocument(t, memory, &spec)
 		if _, exists := commit.documents[spec.Path]; exists {
 			t.Fatalf("duplicate test document %q", spec.Path)
 		}
 		commit.documents[spec.Path] = document
-		index := shardIndexForPath(t, spec.Path)
+		index := shardOf(document.entry.PathHash, bits)
 		grouped[index] = append(grouped[index], document.entry)
 	}
 
-	refs := make([]shardRef, shardCount)
-	for index := range shardCount {
-		entries := grouped[index]
+	refs := make([]shardRef, len(grouped))
+	for index, entries := range grouped {
 		if entries == nil {
-			entries = make([]shardEntry, 0)
+			entries = make([]foldedEntry, 0)
 		}
 		sort.Slice(entries, func(left, right int) bool {
 			return entries[left].Path < entries[right].Path
 		})
-		shardID := fmt.Sprintf("%02x", index)
-		shard := shardObject{Schema: schemaVersion, Shard: shardID, Entries: entries}
-		model, ref, err := immutableJSON(func(hash string) string { return shardKey(shardID, hash) }, shard)
+		model, ref, err := foldShard(index, bits, entries)
 		if err != nil {
-			t.Fatalf("build shard %s: %v", shardID, err)
+			t.Fatalf("build shard %d: %v", index, err)
 		}
 		createReadObject(t, memory, model)
-		refs[index] = shardRef{Shard: shardID, objectRef: ref}
+		refs[index] = ref
 	}
-	root := rootObject{
-		Schema:        schemaVersion,
+	root := foldedRoot{
+		Schema:        foldedSchema,
 		WorldID:       testWorldID,
 		DocumentCount: len(specs),
+		ShardBits:     bits,
 		Shards:        refs,
 	}
 	_, rootRef, err := immutableJSON(rootKey, root)
@@ -968,7 +925,7 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 	}
 
 	history := historyObject{
-		Schema:   schemaVersion,
+		Schema:   historySchema,
 		PathHash: pathSum,
 		First:    spec.RetainFrom,
 		Last:     len(spec.Bodies),
@@ -979,27 +936,6 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 		t.Fatalf("build history %q: %v", spec.Path, err)
 	}
 	createReadObject(t, memory, historyModel)
-	historyReference := historyRef{
-		PathHash:  pathSum,
-		First:     history.First,
-		Last:      history.Last,
-		objectRef: historyObjectRef,
-	}
-	manifest := manifestObject{
-		Schema:   schemaVersion,
-		PathHash: pathSum,
-		Current:  len(spec.Bodies),
-		Archived: spec.Archived,
-		History:  []historyRef{historyReference},
-	}
-	manifestModel, manifestRef, err := immutableJSON(func(hash string) string {
-		return manifestKey(pathSum, hash)
-	}, manifest)
-	if err != nil {
-		t.Fatalf("build manifest %q: %v", spec.Path, err)
-	}
-	createReadObject(t, memory, manifestModel)
-
 	tip := document.versions[len(spec.Bodies)]
 	metadata := storefmt.ExtractMetadata(tip.raw)
 	catalogEntry := catalog.FromDocument(spec.Path, metadata, spec.Bodies[len(spec.Bodies)-1], tip.modified)
@@ -1007,10 +943,10 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 	if tags == nil {
 		tags = make([]string, 0)
 	}
-	document.entry = shardEntry{
+	document.entry = foldedEntry{
 		Path:     spec.Path,
 		PathHash: pathSum,
-		Manifest: manifestRef,
+		History:  []blockRef{{First: history.First, Last: history.Last, Hash: historyObjectRef.Hash}},
 		Current:  len(spec.Bodies),
 		Archived: spec.Archived,
 		BodyHash: tip.entry.BodyHash,
@@ -1024,9 +960,8 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 			Metadata:   maps.Clone(catalogEntry.Metadata),
 		},
 	}
-	document.manifest = manifest
 	document.history = history
-	document.historyRef = historyReference
+	document.historyKey = historyObjectRef.Key
 	return document
 }
 
@@ -1039,19 +974,6 @@ func createReadObject(t *testing.T, memory blob.Store, object modelObject) {
 	if err := createImmutable(context.Background(), memory, object); err != nil {
 		t.Fatalf("create test object %q: %v", object.Key, err)
 	}
-}
-
-func installManifestMutation(
-	t *testing.T,
-	memory *blob.Memory,
-	document *committedReadDocument,
-	mutate func(*manifestObject),
-) {
-	t.Helper()
-	manifest := document.manifest
-	manifest.History = slices.Clone(manifest.History)
-	mutate(&manifest)
-	installManifestObject(t, memory, document, manifest)
 }
 
 func installHistoryMutation(
@@ -1070,15 +992,13 @@ func installHistoryMutation(
 		t.Fatalf("build mutated history: %v", err)
 	}
 	createReadObject(t, memory, model)
-	manifest := document.manifest
-	manifest.History = slices.Clone(manifest.History)
-	manifest.History[0].objectRef = ref
+	entry := document.entry
+	entry.History = slices.Clone(entry.History)
+	entry.History[0].Hash = ref.Hash
 	if matchReference {
-		manifest.History[0].PathHash = history.PathHash
-		manifest.History[0].First = history.First
-		manifest.History[0].Last = history.Last
+		entry.History[0].First, entry.History[0].Last = history.First, history.Last
 	}
-	installManifestObject(t, memory, document, manifest)
+	installSnapshotEntry(t, memory, &entry)
 }
 
 func installRawMutation(
@@ -1103,30 +1023,14 @@ func installRawMutation(
 	installHistoryMutation(t, memory, document, history, true)
 }
 
-func installManifestObject(t *testing.T, memory *blob.Memory, document *committedReadDocument, manifest manifestObject) {
+// installSnapshotEntry replaces entry's document in the newest checkpoint,
+// unchecked, so a test can install one that breaks the format.
+func installSnapshotEntry(t *testing.T, memory *blob.Memory, entry *foldedEntry) {
 	t.Helper()
-	if err := validateManifestObject(&manifest); err != nil {
-		t.Fatalf("invalid mutated manifest: %v", err)
-	}
-	model, ref, err := immutableJSON(func(hash string) string {
-		return manifestKey(document.entry.PathHash, hash)
-	}, manifest)
-	if err != nil {
-		t.Fatalf("build mutated manifest: %v", err)
-	}
-	createReadObject(t, memory, model)
-	entry := document.entry
-	entry.Manifest = ref
-	installSnapshotEntry(t, memory, &entry)
-}
-
-func installSnapshotEntry(t *testing.T, memory *blob.Memory, entry *shardEntry) {
-	t.Helper()
-	_, root := readCheckpointAndRoot(t, memory)
-	index := shardIndexForPath(t, entry.Path)
-	shardValue := getObject(t, memory, root.Shards[index].Key)
-	var shard shardObject
-	decodeObject(t, shardValue.Data, &shard)
+	_, root := readFoldedRoot(t, memory)
+	index := shardOf(entry.PathHash, root.ShardBits)
+	var shard foldedShard
+	decodeObject(t, getObject(t, memory, root.Shards[index].Key).Data, &shard)
 	found := false
 	for entryIndex := range shard.Entries {
 		if shard.Entries[entryIndex].Path == entry.Path {
@@ -1138,13 +1042,12 @@ func installSnapshotEntry(t *testing.T, memory *blob.Memory, entry *shardEntry) 
 	if !found {
 		t.Fatalf("snapshot entry %q not found", entry.Path)
 	}
-	shardID := fmt.Sprintf("%02x", index)
-	model, ref, err := immutableJSON(func(hash string) string { return shardKey(shardID, hash) }, shard)
+	model, ref, err := immutableJSON(func(hash string) string { return shardKey(shard.Shard, hash) }, shard)
 	if err != nil {
 		t.Fatalf("build mutated shard: %v", err)
 	}
 	createReadObject(t, memory, model)
-	root.Shards[index] = shardRef{Shard: shardID, objectRef: ref}
+	root.Shards[index] = shardRef{Shard: shard.Shard, objectRef: ref}
 	installRoot(t, memory, root)
 }
 
@@ -1265,15 +1168,6 @@ func assertEntries(t *testing.T, view *pinnedView, requestPath string, includeAr
 	if !slices.Equal(entries, want) {
 		t.Errorf("ListEntries(%q, %v) = %+v, want %+v", requestPath, includeArchived, entries, want)
 	}
-}
-
-func shardIndexForPath(t *testing.T, documentPath string) int {
-	t.Helper()
-	value, err := strconv.ParseUint(pathHash(documentPath)[:2], 16, 8)
-	if err != nil {
-		t.Fatalf("parse shard for %q: %v", documentPath, err)
-	}
-	return int(value)
 }
 
 type observedBlobStore struct {
