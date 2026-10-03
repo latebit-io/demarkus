@@ -124,8 +124,23 @@ func (view *snapshotView) VerifyChain(ctx context.Context, reqPath string) error
 	return err
 }
 
+// Lookup in body mode answers from the section index version built for the
+// pinned snapshot, waiting briefly for it; without one it refuses with
+// backend.ErrBodyMatchUnavailable and the caller answers from the catalog.
 func (view *snapshotView) Lookup(ctx context.Context, query string, options catalog.Options) ([]catalog.Result, error) {
-	return viewRead(ctx, view, catalogRead, func(ctx context.Context, r *readView) ([]catalog.Result, error) { return r.Lookup(ctx, query, options) })
+	return viewRead(ctx, view, catalogRead, func(ctx context.Context, r *readView) ([]catalog.Result, error) {
+		if options.Match != catalog.MatchBody {
+			return search(ctx, r.scan(), query, options)
+		}
+		if view.store == nil {
+			return nil, backend.ErrBodyMatchUnavailable
+		}
+		version, ok := view.store.sections.await(ctx, r.snapshot.Sequence)
+		if !ok {
+			return nil, backend.ErrBodyMatchUnavailable
+		}
+		return search(ctx, version, query, options)
+	})
 }
 
 // attemptView lends a commit attempt's snapshot to a precondition as an
@@ -363,11 +378,12 @@ func (view *readView) verifyChain(ctx context.Context, reqPath string) error {
 	return ctx.Err()
 }
 
-func (view *readView) Lookup(ctx context.Context, query string, options catalog.Options) ([]catalog.Result, error) {
+// search runs a lookup over index and clones what the results share with it.
+func search(ctx context.Context, index catalog.Index, query string, options catalog.Options) ([]catalog.Result, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	results, err := catalog.Search(view.scan(), query, options)
+	results, err := catalog.Search(index, query, options)
 	if err != nil {
 		return nil, err
 	}
@@ -409,6 +425,19 @@ func (view *readView) logicalPath(ctx context.Context, reqPath string) (string, 
 		return "/", nil
 	}
 	return "/" + relative, nil
+}
+
+// currentRetained is a document's current version: the newest one committed
+// since the checkpoint when there is one, so reading its body costs one read.
+func (view *readView) currentRetained(ctx context.Context, state *pathState) (retainedVersion, error) {
+	if n := len(state.Recent); n > 0 && state.Recent[n-1].entry.Version == state.Current {
+		return state.Recent[n-1], nil
+	}
+	history, err := view.history(ctx, state)
+	if err != nil {
+		return retainedVersion{}, err
+	}
+	return history[len(history)-1], nil
 }
 
 // history is every retained version of a document, oldest first: the

@@ -250,7 +250,7 @@ func (d *handlerDifferential) compareSnapshots() {
 func handlerSnapshot(t *testing.T, h *handler.Handler, currents map[string]int) []string {
 	var lines []string
 	add := func(label string, req protocol.Request) {
-		lines = append(lines, label+" = "+normalize(Send(t, h, req)))
+		lines = append(lines, label+" = "+normalize(SendSettled(t, h, req)))
 	}
 	for _, p := range diffDocPaths {
 		add("fetch "+p, request(protocol.VerbFetch, p, nil, ""))

@@ -78,9 +78,9 @@ func snapshotDigest(snap *snapshot) digest {
 		for _, version := range state.Recent {
 			versions = append(versions, fmt.Sprintf("%d:%s:%s:%s", version.entry.Version, version.entry.Blob.Hash, version.entry.BodyHash, version.modified))
 		}
-		d.paths = append(d.paths, fmt.Sprintf("%s current=%d first=%d archived=%t body=%s modified=%s base=%t indexed=%t entry=%+v versions=%v",
+		d.paths = append(d.paths, fmt.Sprintf("%s current=%d first=%d archived=%t body=%s modified=%s base=%t entry=%+v versions=%v",
 			state.Path, state.Current, state.First, state.Archived, state.BodyHash, state.Modified, state.Base != nil,
-			state.Sections != nil, *state.Entry, versions))
+			*state.Entry, versions))
 		return true
 	})
 	snap.Children.Ascend(func(child *dirChild) bool {

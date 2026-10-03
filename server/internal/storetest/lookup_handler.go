@@ -1,11 +1,14 @@
 package storetest
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/auth"
+	"github.com/latebit-io/demarkus/server/internal/backend"
+	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 )
 
@@ -18,6 +21,7 @@ func RunLookupHandlerConformance(t *testing.T, factory LookupFactory) {
 		{"CatalogByteIdentical", testHandlerCatalogByteIdentical},
 		{"BodyUnknownModeBadRequest", testHandlerBodyUnknownMode},
 		{"BodyReadAuthFiltering", testHandlerBodyReadAuth},
+		{"BodyFallbackEchoesCatalog", testHandlerBodyFallback},
 	}
 	for _, st := range subtests {
 		t.Run(st.name, func(t *testing.T) {
@@ -45,7 +49,7 @@ func publishDoc(t *testing.T, h *handler.Handler, path, body string, meta map[st
 
 func lookup(t *testing.T, h *handler.Handler, scope string, meta map[string]string) protocol.Response {
 	t.Helper()
-	return Send(t, h, request(protocol.VerbLookup, scope, meta, ""))
+	return SendSettled(t, h, request(protocol.VerbLookup, scope, meta, ""))
 }
 
 func testHandlerBodyEchoAndColumns(t *testing.T, b LookupBackend) {
@@ -126,5 +130,48 @@ func testHandlerBodyReadAuth(t *testing.T, b LookupBackend) {
 	resp = lookup(t, h, "/", map[string]string{"query": "rosetta", "match": "body", "auth": readSecret})
 	if resp.Metadata["matches"] != "3" || !strings.Contains(resp.Body, "/private/secret.md#hidden") {
 		t.Errorf("authorized requester should see both private sections (matches %q):\n%s", resp.Metadata["matches"], resp.Body)
+	}
+}
+
+// fallbackStore refuses every body-mode Lookup, as a backend does while its
+// section index is built or behind.
+type fallbackStore struct{ handler.DocumentStore }
+
+func (s fallbackStore) OpenReadView(ctx context.Context) (backend.ReadView, error) {
+	view, err := s.DocumentStore.OpenReadView(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return fallbackView{view}, nil
+}
+
+type fallbackView struct{ backend.ReadView }
+
+func (v fallbackView) Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error) {
+	if opts.Match == catalog.MatchBody {
+		return nil, backend.ErrBodyMatchUnavailable
+	}
+	return v.ReadView.Lookup(ctx, query, opts)
+}
+
+func testHandlerBodyFallback(t *testing.T, b LookupBackend) {
+	h := NewHandler(LookupBackend{Store: fallbackStore{b.Store}})
+	publishDoc(t, h, "/docs/doc.md", "# Doc\n\n## Section\n\npapaya\n", map[string]string{"tags": "fruit", "importance": "0.6"})
+
+	for _, scope := range []string{"/", "/docs"} {
+		body := Send(t, h, request(protocol.VerbLookup, scope, map[string]string{"query": "fruit", "match": "body"}, ""))
+		plain := Send(t, h, request(protocol.VerbLookup, scope, map[string]string{"query": "fruit", "match": "catalog"}, ""))
+		if body.Status != protocol.StatusOK || body.Metadata["match"] != "catalog" || body.Metadata["matches"] != "1" {
+			t.Errorf("scope %s: status %q match %q matches %q, want ok catalog 1 (%s)", scope, body.Status, body.Metadata["match"], body.Metadata["matches"], body.Body)
+		}
+		if body.Body != plain.Body {
+			t.Errorf("scope %s: fallback answer differs from the catalog answer:\n%s\n---\n%s", scope, body.Body, plain.Body)
+		}
+	}
+	// A term only the body holds finds nothing in the catalog, and the echo
+	// says so instead of claiming the body was searched.
+	resp := Send(t, h, request(protocol.VerbLookup, "/", map[string]string{"query": "papaya", "match": "body"}, ""))
+	if resp.Metadata["match"] != "catalog" || resp.Metadata["matches"] != "0" || strings.Contains(resp.Body, "Snippet") {
+		t.Errorf("body-only term: match %q matches %q, want catalog 0 and four columns:\n%s", resp.Metadata["match"], resp.Metadata["matches"], resp.Body)
 	}
 }

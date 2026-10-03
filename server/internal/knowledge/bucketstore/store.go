@@ -1,6 +1,7 @@
 package bucketstore
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -49,6 +50,10 @@ type Options struct {
 	noHedge bool
 	// trigger overrides when the compactor runs, in tests.
 	trigger *compactionTrigger
+	// sectionIdle and bodyWait override the section index's idle eviction
+	// and how long a body search waits for it, in tests.
+	sectionIdle time.Duration
+	bodyWait    time.Duration
 }
 
 // Store serves one world from the log: the snapshot it last applied, and
@@ -81,6 +86,7 @@ type Store struct {
 	// built before it rebases as it is installed.
 	adoption   atomic.Pointer[adoption]
 	compaction compaction
+	sections   *sectionIndex
 	// newestBatch is the committer's newest batch's objects, which the next
 	// batch and warm-ups read before the bucket; nil while it is idle.
 	newestBatch atomic.Pointer[batchObjects]
@@ -196,6 +202,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		store.compaction.trigger = *options.trigger
 	}
 	store.compaction.ctx, store.compaction.cancel = context.WithCancel(context.Background())
+	store.sections = newSectionIndex(store, cmp.Or(options.sectionIdle, sectionIdle), cmp.Or(options.bodyWait, backend.SearchFreshness))
 	store.changes = newHub(store, options.ChangeRing)
 	store.refreshMu.Lock()
 	err = store.loadOrCreate(ctx, &options)
@@ -266,9 +273,9 @@ func (store *Store) loadOrCreate(ctx context.Context, options *Options) error {
 	return store.load(ctx)
 }
 
-// load is a cold start: the newest checkpoint within one request's time,
-// every slot after it, then the section index, reading every live body once
-// (ADR 0012). Replayed slots count toward the next checkpoint.
+// load is a cold start: the newest checkpoint within one request's time and
+// every slot after it; no body is read. Replayed slots count toward the next
+// checkpoint.
 func (store *Store) load(ctx context.Context) error {
 	started := store.now()
 	baseCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
@@ -285,16 +292,6 @@ func (store *Store) load(ctx context.Context) error {
 		store.report(slot)
 	}
 	if err := replay(ctx, store.objects, loaded, replayOptions{worldID: store.worldID, workers: store.shardWorkers, onSlot: onSlot}); err != nil {
-		return err
-	}
-	reindex := make(map[string]struct{})
-	loaded.Paths.Ascend(func(state *pathState) bool {
-		if !state.Archived {
-			reindex[state.Path] = struct{}{}
-		}
-		return true
-	})
-	if err := store.indexSections(ctx, loaded, reindex); err != nil {
 		return err
 	}
 	store.served.Store(&served{snap: loaded, confirmed: started})
@@ -352,12 +349,11 @@ func (store *Store) catchUpLocked(ctx context.Context, known *slotRead) (*snapsh
 		first = read
 	}
 	var next *snapshot
-	reindex := make(map[string]struct{})
 	if pending := store.pending.Load(); pending != nil && pending.hash == first.hash && pending.base.Sequence == base.Sequence {
 		next = store.derive(pending.next)
 	} else {
 		next = store.derive(base)
-		if err := next.applySlot(first, reindex); err != nil {
+		if err := next.applySlot(first); err != nil {
 			return nil, fmt.Errorf("refresh: %w", err)
 		}
 	}
@@ -365,7 +361,7 @@ func (store *Store) catchUpLocked(ctx context.Context, known *slotRead) (*snapsh
 	// A strongly consistent listing names every slot created before it began.
 	listed := store.now()
 	err := replay(ctx, store.objects, next, replayOptions{
-		worldID: store.worldID, workers: store.shardWorkers, reindex: reindex,
+		worldID: store.worldID, workers: store.shardWorkers,
 		onSlot: func(slot *slotObject) { applied = append(applied, slot) },
 	})
 	var broken *applyError
@@ -373,12 +369,7 @@ func (store *Store) catchUpLocked(ctx context.Context, known *slotRead) (*snapsh
 		return nil, fmt.Errorf("refresh: %w", err)
 	}
 	// What applied is kept when a read fails, so a replica far behind gains
-	// ground on every attempt; the index runs past the caller's deadline.
-	indexCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), store.requestTimeout)
-	defer cancel()
-	if indexErr := store.indexSections(indexCtx, next, reindex); indexErr != nil {
-		return nil, errors.Join(err, indexErr)
-	}
+	// ground on every attempt.
 	if err != nil {
 		// Not the tip, but no slot existed past base when it was confirmed.
 		store.install(next, applied, store.served.Load().confirmed)
@@ -389,9 +380,12 @@ func (store *Store) catchUpLocked(ctx context.Context, known *slotRead) (*snapsh
 }
 
 // install serves next, confirmed at the given time, and publishes the events
-// of the slots that built it; refreshMu orders events in the log's order.
+// of the slots that built it; refreshMu orders events and section steps in
+// the log's order.
 func (store *Store) install(next *snapshot, applied []*slotObject, confirmed time.Time) {
-	store.served.Store(&served{snap: store.rebased(next), confirmed: confirmed})
+	installed := store.rebased(next)
+	store.served.Store(&served{snap: installed, confirmed: confirmed})
+	store.sections.installed(installed, applied)
 	for _, slot := range applied {
 		if slot.Store != store.id {
 			store.peerSeen.Store(store.now().UnixNano())

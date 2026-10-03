@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/server/blob"
-	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
 // batch is one slot's worth of requests, built in queue order on base.
@@ -223,35 +222,9 @@ func (c *committer) seal(b *batch, chain *snapshot) {
 		}
 		return
 	}
-	c.indexBodies(last)
 	chain.Sequence, chain.Tip = slot.last(), hashHex(data)
 	b.slot, b.data, b.next = slot, data, chain
 	c.stage(b)
-}
-
-// indexBodies fills the sections of each live document the batch leaves
-// without any, once per path and in parallel, from the body it wrote.
-func (c *committer) indexBodies(last map[string]*member) {
-	var pending []*member
-	for _, m := range last {
-		if !m.after.Archived && m.after.Sections == nil {
-			pending = append(pending, m)
-		}
-	}
-	sections := make([]*catalog.DocSections, len(pending))
-	err := runParallel(context.Background(), c.store.shardWorkers, indexes(len(pending)), func(_ context.Context, index int) error {
-		sections[index] = catalog.IndexSections(pending[index].candidate.body)
-		return nil
-	})
-	if err != nil {
-		c.store.logger.Error("section index skipped a batch", "error", err)
-		return
-	}
-	// In place: the state is this batch's and unpublished, and a member kept by
-	// a rebase brings its sections along instead of indexing again.
-	for index, m := range pending {
-		m.after.Sections = sections[index]
-	}
 }
 
 // stage creates the objects of b's members that are not created yet.

@@ -215,11 +215,17 @@ type keyedRoot struct {
 }
 
 // applyDrop deletes each dropped checkpoint's own shards, then its root, then
-// the checkpoint, so a drop cut short is found and finished by the next.
+// the checkpoint, so a drop cut short is found and finished by the next; then
+// the segments of shards nothing kept uses.
 func (store *Store) applyDrop(ctx context.Context, plan dropPlan) error {
 	var failures []error
 	for _, attributes := range plan.dropped {
 		if err := store.drop(ctx, plan, attributes); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	if len(plan.dropped) > 0 {
+		if err := store.dropSegments(ctx, plan); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -397,18 +403,17 @@ type grouped struct {
 
 // checkpointWriter writes one world's checkpoints, workers objects at a time.
 type checkpointWriter struct {
-	objects blob.Store
-	worldID string
+	bodyReader
 	workers int
 }
 
 func (store *Store) checkpointWriter() checkpointWriter {
-	return checkpointWriter{objects: store.objects, worldID: store.worldID, workers: store.shardWorkers}
+	return checkpointWriter{bodyReader: store.bodyReader(), workers: store.shardWorkers}
 }
 
-// write writes snap's checkpoint: changed documents' history blocks, changed
-// shards, the root, then the checkpoint. Its bytes follow from the log alone,
-// so compactors racing on one sequence write the same objects.
+// write writes snap's changed history blocks and shards, the root, the
+// checkpoint, then the shards' segments, which the root does not name: a
+// missing one costs readers blob reads and never fails the checkpoint.
 func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adoption, error) {
 	objects, worldID, workers := writer.objects, writer.worldID, writer.workers
 	bits := shardBitsFor(snap.Paths.Len())
@@ -492,6 +497,8 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint %d: %w", snap.Sequence, err)
 	}
+	run := &segmentRun{reader: writer.bodyReader, workers: workers, previous: previous, bits: bits}
+	run.write(ctx, groups, shards, refs)
 	return &adoption{checkpoint: &checkpointBase{Sequence: snap.Sequence, Bits: bits, Shards: refs}, entries: entries}, nil
 }
 

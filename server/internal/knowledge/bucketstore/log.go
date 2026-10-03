@@ -43,9 +43,8 @@ func parseSlot(object *blob.Object, worldID string, first int64) (slotRead, erro
 	return slotRead{slot: &slot, hash: hashHex(object.Data)}, nil
 }
 
-// applySlot advances a derived snapshot by one slot. Paths whose body
-// changed while live are added to reindex, for their section index.
-func (s *snapshot) applySlot(read slotRead, reindex map[string]struct{}) error {
+// applySlot advances a derived snapshot by one slot.
+func (s *snapshot) applySlot(read slotRead) error {
 	slot := read.slot
 	if slot.First != s.Sequence+1 {
 		return fmt.Errorf("%w: slot %d follows sequence %d", blob.ErrIntegrity, slot.First, s.Sequence)
@@ -55,7 +54,7 @@ func (s *snapshot) applySlot(read slotRead, reindex map[string]struct{}) error {
 	}
 	for index := range slot.Entries {
 		entry := &slot.Entries[index]
-		if err := s.applyEntry(entry, reindex); err != nil {
+		if err := s.applyEntry(entry); err != nil {
 			return fmt.Errorf("%w: sequence %d %s: %v", blob.ErrIntegrity, slot.First+int64(index), entry.Path, err)
 		}
 	}
@@ -64,22 +63,18 @@ func (s *snapshot) applySlot(read slotRead, reindex map[string]struct{}) error {
 }
 
 // applyEntry installs one change, refusing what no writer could commit from
-// this state. A live path left without sections is added to reindex.
-func (s *snapshot) applyEntry(entry *slotEntry, reindex map[string]struct{}) error {
+// this state.
+func (s *snapshot) applyEntry(entry *slotEntry) error {
 	old := s.path(entry.Path)
 	state, err := s.entryState(old, entry)
 	if err != nil {
 		return err
 	}
-	if !state.Archived && state.Sections == nil {
-		reindex[entry.Path] = struct{}{}
-	}
 	s.put(old, state)
 	return nil
 }
 
-// entryState is the document after entry, from old (nil for a new path). It
-// keeps old's sections only while the body is unchanged and live.
+// entryState is the document after entry, from old (nil for a new path).
 func (s *snapshot) entryState(old *pathState, entry *slotEntry) (*pathState, error) {
 	modified, err := parseTimestamp(entry.Modified)
 	if err != nil {
@@ -112,9 +107,6 @@ func (s *snapshot) entryState(old *pathState, entry *slotEntry) (*pathState, err
 		return nil, fmt.Errorf("first retained version moves back from %d to %d", old.First, entry.First)
 	default:
 		state.Base, state.Recent = old.Base, retainFrom(old.Recent, entry.First)
-		if old.BodyHash == entry.BodyHash {
-			state.Sections = old.Sections
-		}
 	}
 	if state.Entry, err = catalogEntry(entry.Catalog); err != nil {
 		return nil, err

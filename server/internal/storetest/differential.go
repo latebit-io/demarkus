@@ -411,7 +411,7 @@ func snapshot(b LookupBackend) []string {
 			add("filter %q parse error", filter)
 			return
 		}
-		rs, err := b.direct().Lookup(q, catalog.Options{Scope: scope, Filter: preds, Match: mode})
+		rs, err := SettledLookup(b.direct(), q, catalog.Options{Scope: scope, Filter: preds, Match: mode})
 		add("%s q=%q scope=%q filter=%q = %s %s", label, q, scope, filter, errClass(err), describe(rs))
 	}
 	for _, q := range diffQueries {

@@ -38,8 +38,6 @@ type pathState struct {
 	BodyHash string
 	Modified time.Time
 	Entry    *catalog.Entry // prepared
-	// Sections is the body-search index; nil while archived or unindexed.
-	Sections *catalog.DocSections
 	// Base is the document as a checkpoint holds it, nil when it arrived
 	// after; Recent are the versions committed since, oldest first.
 	Base   *baseEntry
@@ -160,21 +158,28 @@ func (s *snapshot) lookupHash(hash string) (string, bool) {
 	return path, found
 }
 
-// Entries yields each live document under scope with its sections
-// (catalog.Index): the scope itself, then the range below scope+"/".
+// Entries yields each live document under scope for a catalog search
+// (catalog.Index); sections live in the section index, not the snapshot.
 func (s *snapshot) Entries(scope string) iter.Seq2[*catalog.Entry, *catalog.DocSections] {
 	return func(yield func(*catalog.Entry, *catalog.DocSections) bool) {
-		visit := func(state *pathState) bool { return state.Archived || yield(state.Entry, state.Sections) }
-		if scope == "/" {
-			s.Paths.Ascend(visit)
-			return
-		}
-		if state := s.path(scope); state != nil && !visit(state) {
-			return
-		}
-		// '0' follows '/', so the range is exactly the paths under scope+"/".
-		s.Paths.AscendRange(&pathState{Path: scope + "/"}, &pathState{Path: scope + "0"}, visit)
+		ascendScope(s.Paths, scope, func(path string) *pathState { return &pathState{Path: path} }, func(state *pathState) bool {
+			return state.Archived || yield(state.Entry, nil)
+		})
 	}
+}
+
+// ascendScope visits a path-ordered tree's items under scope: the scope
+// itself, then the range below scope+"/"; probe makes a search key.
+func ascendScope[T any](tree *btree.BTreeG[T], scope string, probe func(path string) T, visit func(T) bool) {
+	if scope == "/" {
+		tree.Ascend(visit)
+		return
+	}
+	if item, ok := tree.Get(probe(scope)); ok && !visit(item) {
+		return
+	}
+	// '0' follows '/', so the range is exactly the paths under scope+"/".
+	tree.AscendRange(probe(scope+"/"), probe(scope+"0"), visit)
 }
 
 // put installs state over old (nil for a new path) in a derived snapshot,

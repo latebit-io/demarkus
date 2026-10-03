@@ -559,7 +559,7 @@ matches: <count>
 
 The body MUST be a markdown table, one row per result. Columns are the document's server-relative path, its importance, its title, and its declared tags. The `Path` is server-relative; clients compose the full `mark://authority/path` URL from the logical authority used for the request, never from an overridden dial address. The response MUST NOT include document body content; clients FETCH the documents they choose. `matches` is the number of rows returned.
 
-When the request carries `match`, the response MUST echo the mode it answered in as `match: catalog` or `match: body`. A request without `match` is answered exactly as before this key existed, with no `match` header. Clients MUST treat a response without `match: body` as a catalog answer, whatever the request asked for.
+When the request carries `match`, the response MUST echo the mode it answered in as `match: catalog` or `match: body`. A request without `match` is answered exactly as before this key existed, with no `match` header. Clients MUST treat a response without `match: body` as a catalog answer, whatever the request asked for. A server that implements body match MAY answer a body request in catalog mode, echoing `match: catalog`, while its section index is being built or trails the committed state the request reads; it MUST NOT echo `match: body` for an answer from a section index that misses part of that state.
 
 **Ranking**: results are ordered by (1) the number of distinct query terms matched, then (2) descending `importance`, then (3) descending modification time, then (4) ascending path. Importance influences ordering only among documents that already matched the query; it MUST NOT cause an unmatched document to appear in the results.
 

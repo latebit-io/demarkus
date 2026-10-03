@@ -282,22 +282,17 @@ type applyError struct{ error }
 
 func (err *applyError) Unwrap() error { return err.error }
 
-// replayOptions names the world, the read parallelism, who hears of each
-// applied slot, and where changed live paths are collected (nil drops them).
+// replayOptions names the world, the read parallelism, and who hears of each
+// applied slot.
 type replayOptions struct {
 	worldID string
 	workers int
 	onSlot  func(slot *slotObject)
-	reindex map[string]struct{}
 }
 
 // replay applies every slot after loaded's sequence, a page of names at a
 // time, reading each page's slots in parallel.
 func replay(ctx context.Context, objects blob.Store, loaded *snapshot, options replayOptions) error {
-	reindex := options.reindex
-	if reindex == nil {
-		reindex = make(map[string]struct{})
-	}
 	for firsts, err := range sequencePages(ctx, objects, logPrefix, loaded.Sequence) {
 		if err != nil {
 			return err
@@ -315,7 +310,7 @@ func replay(ctx context.Context, objects blob.Store, loaded *snapshot, options r
 			return fmt.Errorf("replay: %w", err)
 		}
 		for _, read := range slots {
-			if err := loaded.applySlot(read, reindex); err != nil {
+			if err := loaded.applySlot(read); err != nil {
 				return &applyError{fmt.Errorf("replay: %w", err)}
 			}
 			if options.onSlot != nil {

@@ -113,8 +113,11 @@ type rawSection struct {
 // IndexSections splits body by the shared mdoutline rule and tokenizes each
 // section's own text and heading trail. Text before the first heading, or a
 // body with no headings, is one bare section (empty anchor).
-func IndexSections(body []byte) *DocSections {
-	src := string(body)
+func IndexSections(body []byte) *DocSections { return IndexSectionsString(string(body)) }
+
+// IndexSectionsString is IndexSections for a body held as a string, which it
+// indexes without a copy.
+func IndexSectionsString(src string) *DocSections {
 	hs := mdoutline.Headings(src)
 	var raws []rawSection
 	preambleEnd := len(src)

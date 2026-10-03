@@ -84,11 +84,6 @@ func TestBatchCommitsInQueueOrder(t *testing.T) {
 	if n := staged.attempts.Load(); n != 6 {
 		t.Errorf("blob creates = %d, want 6", n)
 	}
-	for _, path := range []string{"/kept.md", "/later.md"} {
-		if state := store.served.Load().snap.path(path); state == nil || state.Sections == nil {
-			t.Errorf("%s served without its sections after the rebase", path)
-		}
-	}
 	read, err := readSlot(context.Background(), objects, testWorldID, 6)
 	if err != nil {
 		t.Fatalf("read slot 6: %v", err)

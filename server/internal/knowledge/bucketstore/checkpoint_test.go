@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -76,8 +78,8 @@ func worldDigest(t *testing.T, store *Store) digest {
 		for _, version := range history {
 			versions = append(versions, fmt.Sprintf("%d:%s:%s:%s", version.entry.Version, version.entry.Blob.Hash, version.entry.BodyHash, version.modified))
 		}
-		d.paths = append(d.paths, fmt.Sprintf("%s current=%d archived=%t body=%s modified=%s indexed=%t entry=%+v versions=%v",
-			state.Path, state.Current, state.Archived, state.BodyHash, state.Modified, state.Sections != nil, *state.Entry, versions))
+		d.paths = append(d.paths, fmt.Sprintf("%s current=%d archived=%t body=%s modified=%s entry=%+v versions=%v",
+			state.Path, state.Current, state.Archived, state.BodyHash, state.Modified, *state.Entry, versions))
 		return true
 	})
 	return d
@@ -138,12 +140,12 @@ func deleteNewer(t *testing.T, objects blob.Store, sequence int64) {
 	}
 }
 
-// Two compactors that checkpoint one sequence from different bases, one
-// rebased on an earlier checkpoint and one on checkpoint zero, write the same
-// bytes; create-if-absent refuses any that differ.
+// Two compactors checkpointing one sequence from different bases, an earlier
+// checkpoint and checkpoint zero, write the same bytes: create-if-absent
+// refuses any that differ, and each one's segment parts are compared.
 func TestRacingCompactorsWriteIdenticalBytes(t *testing.T) {
 	ctx := context.Background()
-	objects := initializedMemory(t)
+	objects := &recordingCreates{Store: initializedMemory(t), prefix: segmentPrefix, data: make(map[string][][]byte)}
 	site := manualSite(objects)
 	writer, peer := site.open(t, 0), site.open(t, 0)
 	writeWorld(t, writer, 0)
@@ -161,7 +163,7 @@ func TestRacingCompactorsWriteIdenticalBytes(t *testing.T) {
 	errs := make([]error, 2)
 	for index, snap := range []*snapshot{first, second} {
 		wg.Go(func() {
-			results[index], errs[index] = checkpointWriter{objects: objects, worldID: testWorldID, workers: 4}.write(ctx, snap)
+			results[index], errs[index] = testCheckpointWriter(objects).write(ctx, snap)
 		})
 	}
 	wg.Wait()
@@ -173,6 +175,48 @@ func TestRacingCompactorsWriteIdenticalBytes(t *testing.T) {
 	if !reflect.DeepEqual(results[0].checkpoint, results[1].checkpoint) {
 		t.Errorf("compactors wrote different checkpoints:\n%+v\n%+v", results[0].checkpoint, results[1].checkpoint)
 	}
+	raced := 0
+	for key, attempts := range objects.snapshot() {
+		for _, data := range attempts[1:] {
+			if !slices.Equal(data, attempts[0]) {
+				t.Errorf("segment part %s written with different bytes", key)
+			}
+		}
+		if len(attempts) > 1 {
+			raced++
+		}
+	}
+	if raced == 0 {
+		t.Error("no segment part was written by both compactors")
+	}
+}
+
+// recordingCreates records every create under prefix, landed or not.
+type recordingCreates struct {
+	blob.Store
+	prefix string
+	mu     sync.Mutex
+	data   map[string][][]byte
+}
+
+func (s *recordingCreates) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
+	if strings.HasPrefix(key, s.prefix) {
+		s.mu.Lock()
+		s.data[key] = append(s.data[key], slices.Clone(data))
+		s.mu.Unlock()
+	}
+	return s.Store.Create(ctx, key, data)
+}
+
+func (s *recordingCreates) snapshot() map[string][][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return maps.Clone(s.data)
+}
+
+// testCheckpointWriter writes checkpoints to objects as a store would.
+func testCheckpointWriter(objects blob.Store) checkpointWriter {
+	return checkpointWriter{bodyReader: bodyReader{objects: objects, logger: discardLogger, worldID: testWorldID}, workers: 4}
 }
 
 // failCheckpoints refuses to create checkpoint objects, as a compactor that
@@ -195,7 +239,7 @@ func TestCrashedCheckpointCostsOnlyReplay(t *testing.T) {
 	writer := site.open(t, 0)
 	writeWorld(t, writer, 0)
 	snap := writer.served.Load().snap
-	crashing := checkpointWriter{objects: failCheckpoints{objects}, worldID: testWorldID, workers: 4}
+	crashing := testCheckpointWriter(failCheckpoints{objects})
 	if _, err := crashing.write(ctx, snap); err == nil {
 		t.Fatal("checkpoint without its checkpoint object succeeded")
 	}
@@ -208,7 +252,7 @@ func TestCrashedCheckpointCostsOnlyReplay(t *testing.T) {
 	if got := worldDigest(t, cold); !reflect.DeepEqual(live, got) {
 		t.Errorf("replay past a crashed checkpoint differs:\nlive %+v\ncold %+v", live, got)
 	}
-	if _, err := (checkpointWriter{objects: objects, worldID: testWorldID, workers: 4}).write(ctx, snap); err != nil {
+	if _, err := (testCheckpointWriter(objects)).write(ctx, snap); err != nil {
 		t.Fatalf("checkpoint over the crashed one's objects: %v", err)
 	}
 }
@@ -370,9 +414,9 @@ func writeDocuments(t *testing.T, store *Store, n int) {
 	wg.Wait()
 }
 
-// A checkpoint writes only what changed: one changed document costs its
-// history block, its shard, the root and the checkpoint. A replica rebases
-// on a peer's checkpoint by reading only the shards that changed.
+// One changed document costs its history block, shard, segment, the root and
+// the checkpoint; a replica rebases on a peer's checkpoint by reading only
+// the shards that changed.
 func TestCheckpointsWriteAndReadOnlyChangedShards(t *testing.T) {
 	ctx := context.Background()
 	memory := initializedMemory(t)
@@ -392,7 +436,7 @@ func TestCheckpointsWriteAndReadOnlyChangedShards(t *testing.T) {
 	mustSucceed(t, err)
 	created.take()
 	mustSucceed(t, writer.checkpoint(ctx))
-	want := map[string]int{"history": 1, "index": 1, "roots": 1, "checkpoints": 1}
+	want := map[string]int{"history": 1, "index": 1, "segments": 1, "roots": 1, "checkpoints": 1}
 	if got := created.take(); !reflect.DeepEqual(got, want) {
 		t.Errorf("checkpoint after one change created %v, want %v", got, want)
 	}
@@ -779,6 +823,9 @@ func TestDroppedCheckpointsTakeOnlyTheirShards(t *testing.T) {
 			if want := !dropped || shard != changed; exists(t, objects, ref.Key) != want {
 				t.Errorf("checkpoint %d shard %d present = %t, want %t", index, shard, !want, want)
 			}
+			if want := !dropped || shard != changed; exists(t, objects, segmentKey(ref, 0)) != want {
+				t.Errorf("checkpoint %d shard %d segment present = %t, want %t", index, shard, !want, want)
+			}
 		}
 	}
 	readEveryVersion(t, writer)
@@ -842,7 +889,7 @@ func TestDropSparesShardsReusedMeanwhile(t *testing.T) {
 	}
 	_, _, err = writer.ArchiveResult("/a.md", false)
 	mustSucceed(t, err)
-	written := checkpointWriter{objects: objects, worldID: testWorldID, workers: 4}
+	written := testCheckpointWriter(objects)
 	adopted, err := written.write(ctx, writer.served.Load().snap)
 	mustSucceed(t, err)
 	if !reflect.DeepEqual(adopted.checkpoint.Shards, live.layout.Shards) {

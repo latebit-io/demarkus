@@ -473,18 +473,7 @@ func policyMetadata() map[string]string {
 
 func countObjects(t *testing.T, store blob.Store) int {
 	t.Helper()
-	count, cursor := 0, ""
-	for {
-		listed, err := store.List(context.Background(), "", "", cursor)
-		if err != nil {
-			t.Fatalf("list objects: %v", err)
-		}
-		count += len(listed.Objects)
-		if listed.NextCursor == "" {
-			return count
-		}
-		cursor = listed.NextCursor
-	}
+	return len(listKeys(t, store, ""))
 }
 
 func isSlot(key string) bool { return strings.HasPrefix(key, logPrefix) }

@@ -829,7 +829,14 @@ func (h *Handler) handleLookup(ctx context.Context, call *readCall) {
 		}
 	}
 
-	results, err := lookup.Lookup(ctx, query, catalog.Options{Scope: req.Path, Filter: preds, Max: maxLookupResults, Match: mode})
+	opts := catalog.Options{Scope: req.Path, Filter: preds, Max: maxLookupResults, Match: mode}
+	results, err := lookup.Lookup(ctx, query, opts)
+	if errors.Is(err, storagebackend.ErrBodyMatchUnavailable) {
+		// The view's snapshot has no section index yet: answer from the
+		// catalog on the same snapshot and echo the mode answered (SPEC 6.7).
+		mode, opts.Match = catalog.MatchCatalog, catalog.MatchCatalog
+		results, err = lookup.Lookup(ctx, query, opts)
+	}
 	if err != nil {
 		h.logger.Error("lookup failed", "path", sanitize(req.Path), "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
