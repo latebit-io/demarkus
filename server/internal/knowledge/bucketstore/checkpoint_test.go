@@ -221,7 +221,7 @@ func (s *recordingCreates) snapshot() map[string][][]byte {
 
 // testCheckpointWriter writes checkpoints to objects as a store would.
 func testCheckpointWriter(objects blob.Store) checkpointWriter {
-	return checkpointWriter{bodyReader: bodyReader{objects: objects, logger: discardLogger, worldID: testWorldID}, workers: 4, now: time.Now, grace: defaultCheckpointGrace}
+	return checkpointWriter{bodyReader: bodyReader{objects: objects, logger: discardLogger, worldID: testWorldID}, workers: 4, now: time.Now, grace: defaultCheckpointGrace, pathHash: pathHash}
 }
 
 // failCheckpoints refuses to create checkpoint objects, as a compactor that
@@ -1072,32 +1072,25 @@ func TestCheckpointedStoreHeapTracksLiveData(t *testing.T) {
 	}
 }
 
-// A checkpoint after one change hashes only the shard it writes, not every
-// path in the world: what each further document costs it stays small.
+// A checkpoint after one change hashes the paths of the one shard it writes,
+// however large the world.
 func TestCheckpointHashesOnlyWrittenShards(t *testing.T) {
-	allocated := func(documents int) uint64 {
+	for _, documents := range []int{2000, 8000} {
 		store := manualSite(initializedMemory(t)).open(t, 0)
 		writeDocuments(t, store, documents)
 		checkpointOnly(t, store)
 		_, err := store.WriteVersion("/many/0007.md", 1, []byte("# changed\n"), nil)
 		mustSucceed(t, err)
-		snap, writer := store.served.Load().snap, store.checkpointWriter()
-		// The fewest of three, since the reading counts every goroutine.
-		fewest := uint64(math.MaxUint64)
-		for range 3 {
-			var before, after runtime.MemStats
-			runtime.ReadMemStats(&before)
-			_, err = writer.write(context.Background(), snap)
-			runtime.ReadMemStats(&after)
-			mustSucceed(t, err)
-			fewest = min(fewest, after.TotalAlloc-before.TotalAlloc)
+		var hashed atomic.Int64
+		writer := store.checkpointWriter()
+		writer.pathHash = func(path string) string {
+			hashed.Add(1)
+			return pathHash(path)
 		}
-		return fewest
-	}
-	small, large := allocated(8000), allocated(16000)
-	perDocument := (int64(large) - int64(small)) / 8000
-	t.Logf("each further document costs a one-change checkpoint %d bytes", perDocument)
-	if perDocument > 100 {
-		t.Errorf("each further document costs a one-change checkpoint %d bytes, want under 100: it hashes every path", perDocument)
+		_, err = writer.write(context.Background(), store.served.Load().snap)
+		mustSucceed(t, err)
+		if n := hashed.Load(); n > 2*docsPerShard {
+			t.Errorf("a one-change checkpoint of %d documents hashed %d paths, want one shard's, at most %d", documents, n, 2*docsPerShard)
+		}
 	}
 }

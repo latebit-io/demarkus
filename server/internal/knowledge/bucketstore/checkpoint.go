@@ -168,13 +168,15 @@ type grouped struct {
 type checkpointWriter struct {
 	bodyReader
 	workers int
-	// now dates the segment window; grace fences the sweep of old segments.
-	now   func() time.Time
-	grace time.Duration
+	// now dates the segment window; grace fences the sweep of old segments;
+	// pathHash hashes the paths of the shards written.
+	now      func() time.Time
+	grace    time.Duration
+	pathHash func(path string) string
 }
 
 func (store *Store) checkpointWriter() checkpointWriter {
-	return checkpointWriter{bodyReader: store.bodyReader(), workers: store.shardWorkers, now: store.now, grace: store.checkpointGrace}
+	return checkpointWriter{bodyReader: store.bodyReader(), workers: store.shardWorkers, now: store.now, grace: store.checkpointGrace, pathHash: pathHash}
 }
 
 // write writes snap's changed history blocks and shards, the root, the
@@ -202,7 +204,7 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 		shards = append(shards, index)
 		groups[index] = make([]grouped, len(states))
 		for position, state := range states {
-			document := grouped{state: state, hash: pathHash(state.Path)}
+			document := grouped{state: state, hash: writer.pathHash(state.Path)}
 			groups[index][position] = document
 			if !state.unchanged() {
 				changed = append(changed, document)

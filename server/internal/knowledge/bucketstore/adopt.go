@@ -113,7 +113,10 @@ func (store *Store) rebased(s *snapshot) *snapshot {
 	}
 	next := store.derive(s)
 	if err := next.adopt(a); err != nil {
-		store.logger.Error("rebase on checkpoint failed", "world", store.worldID, "checkpoint", a.checkpoint.Sequence, "error", err)
+		// The compactor refuses a snapshot off the newest checkpoint, so the
+		// next refresh starts the store again from it.
+		store.diverged.Store(true)
+		store.logger.Error("rebase on checkpoint failed; reloading from the newest checkpoint", "world", store.worldID, "checkpoint", a.checkpoint.Sequence, "error", err)
 		return s
 	}
 	return next

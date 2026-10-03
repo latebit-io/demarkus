@@ -74,32 +74,34 @@ func (store *Store) warm(ctx context.Context, path string) *warmup {
 	if w := store.warming[path]; w != nil && w.state == state {
 		return w
 	}
+	// With every slot busy the build reads for itself: a warm-up only helps.
+	select {
+	case store.warmSlots <- struct{}{}:
+	default:
+		return nil
+	}
 	source := newestFirst{batch: store.newestBatch.Load(), bucket: store.objects}
 	w := &warmup{state: state, done: make(chan struct{}), objects: newBatchObjects(source, nil, nil)}
 	started := store.goBackground(func(life context.Context) {
+		defer func() { <-store.warmSlots }()
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		defer context.AfterFunc(life, cancel)()
 		store.runWarmup(ctx, path, w)
 	})
 	if !started {
+		<-store.warmSlots
 		return nil
 	}
 	store.warming[path] = w
 	return w
 }
 
-// runWarmup reads, at most shardWorkers at a time across the store, then
-// lets go of the batch it read through, which a later one may outlive.
+// runWarmup reads under one of shardWorkers slots, then lets go of the batch
+// it read through, which a later one may outlive.
 func (store *Store) runWarmup(ctx context.Context, path string, w *warmup) {
 	defer close(w.done)
 	defer func() { w.objects.source = nil }()
-	select {
-	case store.warmSlots <- struct{}{}:
-		defer func() { <-store.warmSlots }()
-	case <-ctx.Done():
-		return
-	}
 	view := &readView{objects: w.objects}
 	tip, err := view.currentRetained(ctx, w.state)
 	if err == nil {

@@ -116,8 +116,10 @@ type Store struct {
 	end        context.CancelFunc
 	background sync.WaitGroup
 	// reloading is the reload stale refreshes share; nil when none runs.
+	// diverged is set when a snapshot failed to rebase on a checkpoint.
 	reloadMu  sync.Mutex
 	reloading *reloadFlight
+	diverged  atomic.Bool
 	hintsOnce sync.Once
 }
 
@@ -348,7 +350,7 @@ func (store *Store) current(ctx context.Context, class readClass) (*snapshot, er
 // refresh probed after it asked takes that tip instead of probing again.
 func (store *Store) refresh(ctx context.Context) (*snapshot, error) {
 	asked := store.now()
-	if asked.Sub(store.served.Load().confirmed) > staleAfter {
+	if asked.Sub(store.served.Load().confirmed) > staleAfter || store.diverged.Load() {
 		if err := store.reload(ctx); err != nil {
 			return nil, fmt.Errorf("refresh: %w", err)
 		}
@@ -463,9 +465,9 @@ type reloadFlight struct {
 	err  error
 }
 
-// reload waits, up to ctx, for the store to start again from the newest
-// checkpoint. The load is shared and outlives the request that asked, since
-// at scale it can take most of one request's time.
+// reload waits, up to ctx, for a shared load from the newest checkpoint that
+// outlives the request, since at scale it takes most of one request's time.
+// After Close, when nothing runs in the background, the caller loads it.
 func (store *Store) reload(ctx context.Context) error {
 	store.reloadMu.Lock()
 	flight := store.reloading
@@ -473,7 +475,7 @@ func (store *Store) reload(ctx context.Context) error {
 		flight = &reloadFlight{done: make(chan struct{})}
 		if !store.goBackground(func(life context.Context) { store.runReload(life, flight) }) {
 			store.reloadMu.Unlock()
-			return backend.ErrClosed
+			return store.reloadIfBehind(ctx)
 		}
 		store.reloading = flight
 	}
@@ -500,13 +502,16 @@ func (store *Store) runReload(life context.Context, flight *reloadFlight) {
 // the served snapshot: its next slot may have been collected, which a probe
 // would take for the log's tip, and a commit would then fork the log.
 func (store *Store) reloadIfBehind(ctx context.Context) error {
-	base := store.served.Load().snap
-	newest, err := newestCheckpointSequence(ctx, store.objects, base.Sequence)
-	if err != nil || newest == base.Sequence {
+	base, diverged := store.served.Load().snap, store.diverged.Load()
+	after := base.Sequence
+	if diverged {
+		after = 0 // the newest checkpoint, wherever it lies
+	}
+	newest, err := newestCheckpointSequence(ctx, store.objects, after)
+	if err != nil || newest == base.Sequence && !diverged {
 		return err
 	}
-	store.logger.Warn("snapshot unconfirmed for half the slot retention; reloading from the newest checkpoint",
-		"world", store.worldID, "served", base.Sequence, "checkpoint", newest)
+	store.logger.Warn("reloading from the newest checkpoint", "world", store.worldID, "served", base.Sequence, "checkpoint", newest, "diverged", diverged)
 	started := store.now()
 	checkpoint, err := readCheckpoint(ctx, store.objects, store.worldID, newest)
 	if err != nil {
@@ -518,7 +523,11 @@ func (store *Store) reloadIfBehind(ctx context.Context) error {
 	}
 	store.refreshMu.Lock()
 	defer store.refreshMu.Unlock()
-	return store.start(ctx, loaded, started)
+	if err := store.start(ctx, loaded, started); err != nil {
+		return err
+	}
+	store.diverged.Store(false)
+	return nil
 }
 
 // goBackground runs fn with the store's life unless Close has begun, in

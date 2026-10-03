@@ -90,7 +90,9 @@ func TestCompactorRefusesAnUnrebasedSnapshot(t *testing.T) {
 	// An adoption whose rebase fails, as one ahead of the log does: the
 	// served snapshot stays on the older checkpoint.
 	writer.adoption.Store(&adoption{checkpoint: peer.layout(), entries: map[string]*baseEntry{"/never.md": {Current: 1}}})
-	writeWorld(t, writer, 1)
+	// One write installs the unrebased snapshot; no refresh reloads it yet.
+	_, err := writer.WriteVersion("/after.md", -1, []byte("# after\n"), nil)
+	mustSucceed(t, err)
 	if err := writer.checkpoint(ctx); !errors.Is(err, blob.ErrIntegrity) {
 		t.Fatalf("checkpoint on an unrebased snapshot: %v, want ErrIntegrity", err)
 	}
@@ -140,8 +142,11 @@ func TestWarmupsEndWithTheStore(t *testing.T) {
 	if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/a.md", ExpectedVersion: -1, Content: []byte("# b\n")}); !errors.Is(err, backend.ErrClosed) {
 		t.Fatalf("publish after the queue closed: %v, want ErrClosed", err)
 	}
-	if n := len(store.warming); n != 0 {
-		t.Errorf("%d warm-ups left behind by a refused write", n)
+	store.warmMu.Lock()
+	left := len(store.warming)
+	store.warmMu.Unlock()
+	if left != 0 {
+		t.Errorf("%d warm-ups left behind by a refused write", left)
 	}
 	mustSucceed(t, store.Close())
 	if store.warm(context.Background(), "/a.md") != nil {
@@ -243,5 +248,59 @@ func TestCommitConfirmsWhileAProbeStalls(t *testing.T) {
 	mustSucceed(t, <-read)
 	if got := store.servedSequence(); got != 3 {
 		t.Errorf("served sequence %d after the commit and the read, want 3", got)
+	}
+}
+
+// A snapshot that failed to rebase on the newest checkpoint is replaced at
+// the next refresh by a reload from it, and the compactor writes again.
+func TestFailedRebaseReloads(t *testing.T) {
+	ctx := context.Background()
+	objects := initializedMemory(t)
+	writer := manualSite(objects).open(t, 0)
+	peer := manualSite(objects).open(t, 0)
+	writeWorld(t, writer, 0)
+	mustSucceed(t, peer.poll(ctx))
+	checkpointOnly(t, peer)
+	writer.adoption.Store(&adoption{checkpoint: peer.layout(), entries: map[string]*baseEntry{"/never.md": {Current: 1}}})
+	writeWorld(t, writer, 1)
+	mustSucceed(t, writer.poll(ctx))
+	if writer.diverged.Load() || writer.served.Load().snap.Checkpoint.Sequence != peer.layout().Sequence {
+		t.Fatalf("after a failed rebase the store rests on checkpoint %d, want a reload onto the peer's %d", writer.served.Load().snap.Checkpoint.Sequence, peer.layout().Sequence)
+	}
+	mustSucceed(t, writer.checkpoint(ctx))
+	if writer.layout().Sequence <= peer.layout().Sequence {
+		t.Errorf("compactor wrote nothing after the reload: newest checkpoint %d", writer.layout().Sequence)
+	}
+	readEveryVersion(t, writer)
+}
+
+// A warm-up waits for no slot: with every slot busy, the build reads for
+// itself and no goroutine is started.
+func TestWarmupsNeedAFreeSlot(t *testing.T) {
+	store, _ := newWritableStore(t)
+	_, err := store.WriteVersion("/a.md", -1, []byte("# a\n"), nil)
+	mustSucceed(t, err)
+	for range cap(store.warmSlots) {
+		store.warmSlots <- struct{}{}
+	}
+	if store.warm(context.Background(), "/a.md") != nil {
+		t.Error("a warm-up started with every slot busy")
+	}
+	for range cap(store.warmSlots) {
+		<-store.warmSlots
+	}
+}
+
+// A closed store's reads still work when its snapshot went stale: the read
+// reloads it itself, since no background work runs after Close.
+func TestClosedStaleReplicaStillReads(t *testing.T) {
+	objects := newClockedStore(t)
+	objects.writtenAgo(slotRetention + time.Hour)
+	stale := manualSite(objects).open(t, 0)
+	checkpointedLog(t, manualSite(objects).open(t, 0))
+	unconfirmed(stale)
+	mustSucceed(t, stale.Close())
+	if _, err := stale.Get("/log/016.md", 0); err != nil {
+		t.Fatalf("read on a closed stale replica: %v", err)
 	}
 }
