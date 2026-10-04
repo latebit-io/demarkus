@@ -141,7 +141,7 @@ func testReplicaConcurrentWriters(t *testing.T, site ReplicaSite) {
 
 // ConcurrentWriters races writers on each store over shared and own documents,
 // then checks through checker: every acknowledged write keeps its version and
-// body, each version is given once, and only a contended write is refused.
+// body, each version is given once, and only an expected version conflicts.
 func ConcurrentWriters(t *testing.T, stores []Direct, writers int, checker Direct) {
 	t.Helper()
 	const rounds = 6
@@ -160,7 +160,7 @@ func ConcurrentWriters(t *testing.T, stores []Direct, writers int, checker Direc
 				write := func(path string, expected int, body string, contended bool) {
 					doc, err := store.WriteVersion(path, expected, []byte(body), nil)
 					switch {
-					case err == nil && doc.Version == expected+1:
+					case err == nil && (expected < 0 || doc.Version == expected+1):
 						mu.Lock()
 						acks = append(acks, ack{path: path, version: doc.Version, body: body})
 						mu.Unlock()
@@ -178,6 +178,7 @@ func ConcurrentWriters(t *testing.T, stores []Direct, writers int, checker Direc
 						return
 					}
 					write(path, expected, fmt.Sprintf("# %d %d %d\n", replica, writer, round), true)
+					write(shared[(writer+round+1)%len(shared)], -1, fmt.Sprintf("# blind %d %d %d\n", replica, writer, round), false)
 					write(fmt.Sprintf("/race/own/%d-%d-%d.md", replica, writer, round), 0, "# own\n", false)
 				}
 			})

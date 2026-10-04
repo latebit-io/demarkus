@@ -97,8 +97,8 @@ func TestBatchCommitsInQueueOrder(t *testing.T) {
 	}
 	hinted.waitFor(t, 7)
 	for index, sequence := range hinted.all() {
-		if !slices.Contains([]int64{2, 3, 4, 7}, sequence) || index > 0 && sequence <= hinted.all()[index-1] {
-			t.Fatalf("hinted %v, want the slots' last sequences in order", hinted.all())
+		if !slices.Contains([]int64{2, 3, 4, 5, 7}, sequence) || index > 0 && sequence <= hinted.all()[index-1] {
+			t.Fatalf("hinted %v, want the last sequences of its slots and of the one it lost, in order", hinted.all())
 		}
 	}
 }
@@ -224,44 +224,218 @@ func TestStoresShareOneLog(t *testing.T) {
 	}
 }
 
-// A store yields after each win only while it has seen another store's slot
-// within yieldWindow; alone, it never waits.
-func TestYieldAfterWin(t *testing.T) {
-	objects := initializedMemory(t)
-	site := &bucketSite{objects: objects}
-	store := site.open(t, 0)
-	clock := time.Now()
-	store.now = func() time.Time { return clock }
-	var yields atomic.Int64
-	store.jitter = func() time.Duration {
-		yields.Add(1)
-		return time.Millisecond
+// A store that loses a slot hints the winner, which reads it as a peer waiting.
+// The loser does not hold: a commit hint that came during its own create is
+// void once it installs the winner's slot.
+func TestLosingStoreSignalsTheWinner(t *testing.T) {
+	_, memory := newWritableStore(t)
+	barrier := &createBarrierStore{Store: memory, arrived: make(chan struct{}, 2), release: make(chan struct{})}
+	site := &bucketSite{objects: barrier, noHedge: true, hinted: true}
+	left, right := site.open(t, 0), site.open(t, 0)
+	results := runConcurrentWrites(left, "/left", right, "/right")
+	barrier.releaseBoth(t)
+	for _, outcome := range collectWriteOutcomes(t, results) {
+		if outcome.err != nil {
+			t.Fatalf("write: %v", outcome.err)
+		}
 	}
-	write := func(path string) {
+	slots := logSlots(t, memory, max(left.servedSequence(), right.servedSequence()))
+	winner, loser := left, right
+	if slots[len(slots)-2].Store == right.id {
+		winner, loser = right, left
+	}
+	waitFor(t, "the winner to hear the loser", func() bool { return winner.waiting.Load() != nil })
+	started := time.Now()
+	if _, err := loser.WriteVersion("/again", 0, []byte("again"), nil); err != nil {
+		t.Fatalf("loser's next write: %v", err)
+	}
+	if waited := time.Since(started); waited > loser.handoffWait/2 {
+		t.Errorf("the loser's next write took %v: it held a slot for the winner", waited)
+	}
+}
+
+// Follow tells a hint inside one of this store's newest slots, which only a
+// peer that lost that slot sends, from a hint inside a peer's slot.
+func TestFollowTellsLoserHintsApart(t *testing.T) {
+	site := &bucketSite{objects: initializedMemory(t)}
+	store, peer := site.open(t, 0), site.open(t, 0)
+	write := func(writer *Store, path string) int64 {
 		t.Helper()
-		if _, err := store.WriteVersion(path, 0, []byte("# x\n"), nil); err != nil {
+		if _, err := writer.WriteVersion(path, 0, []byte("# x\n"), nil); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
-		waitIdle(t, store)
+		return writer.servedSequence()
 	}
-	for index := range 3 {
-		write(fmt.Sprintf("/alone-%d.md", index))
+	own := write(store, "/own.md")
+	theirs := write(peer, "/theirs.md")
+	if _, err := store.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh: %v", err)
 	}
-	if n := yields.Load(); n != 0 {
-		t.Fatalf("a lone store yielded %d times", n)
+	store.Follow(theirs)
+	if store.waiting.Load() != nil {
+		t.Fatal("a hint inside a peer's slot read as a peer waiting")
 	}
-	if _, err := site.open(t, 0).WriteVersion("/peer.md", 0, []byte("# peer\n"), nil); err != nil {
-		t.Fatalf("peer write: %v", err)
+	// A peer pipelining small slots may write dozens before the hint arrives.
+	for index := range 64 {
+		write(store, fmt.Sprintf("/since-%d.md", index))
 	}
-	write("/seen-1.md")
-	write("/seen-2.md")
-	if n := yields.Load(); n != 2 {
-		t.Fatalf("yields after seeing a peer = %d, want one per win", n)
+	store.Follow(own)
+	if store.waiting.Load() == nil {
+		t.Fatal("a hint inside this store's slot 64 slots back was not read as a peer waiting")
 	}
-	clock = clock.Add(yieldWindow)
-	write("/later.md")
-	if n := yields.Load(); n != 2 {
-		t.Fatalf("yields once the peer is %v old = %d, want none", yieldWindow, n-2)
+	store.waiting.Store(nil)
+	// A loser can hear of a slot before its writer has seen its create succeed.
+	tip := store.servedSequence()
+	store.pending.Store(&pendingSlot{base: &snapshot{Sequence: tip}, next: &snapshot{Sequence: tip + 2}})
+	store.Follow(tip + 1)
+	store.pending.Store(nil)
+	if store.waiting.Load() == nil {
+		t.Fatal("a hint inside the slot being created was not read as a peer waiting")
+	}
+	store.waiting.Store(nil)
+	for index := range ownSlots {
+		write(store, fmt.Sprintf("/later-%d.md", index))
+	}
+	store.Follow(own)
+	if store.waiting.Load() != nil {
+		t.Errorf("a hint for a slot %d slots back still read as waiting", ownSlots)
+	}
+}
+
+// After a win with a peer waiting, the next slot is held until the peer's
+// slot is installed, then rebuilt on it without losing a create; a peer that
+// never comes costs at most handoffWait.
+func TestWinnerHandsTheNextSlotToAWaitingPeer(t *testing.T) {
+	setup := func(t *testing.T) (*Store, *Store, *raceCounter) {
+		objects := &raceCounter{Store: initializedMemory(t)}
+		site := &bucketSite{objects: objects}
+		store, peer := site.open(t, 16), site.open(t, 0)
+		if _, err := store.WriteVersion("/a.md", 0, []byte("# a\n"), nil); err != nil {
+			t.Fatalf("write /a.md: %v", err)
+		}
+		store.Follow(store.servedSequence())
+		if _, err := store.WriteVersion("/b.md", 0, []byte("# b\n"), nil); err != nil {
+			t.Fatalf("write /b.md: %v", err)
+		}
+		return store, peer, objects
+	}
+	held := func(store *Store) (<-chan error, time.Time) {
+		done := make(chan error, 1)
+		started := time.Now()
+		go func() {
+			_, err := store.WriteVersion("/c.md", 0, []byte("# c\n"), nil)
+			done <- err
+		}()
+		return done, started
+	}
+
+	t.Run("until the peer's slot", func(t *testing.T) {
+		store, peer, objects := setup(t)
+		done, _ := held(store)
+		select {
+		case err := <-done:
+			t.Fatalf("the next slot committed during the handoff: %v", err)
+		case <-time.After(150 * time.Millisecond):
+		}
+		if _, err := peer.WriteVersion("/p.md", 0, []byte("# p\n"), nil); err != nil {
+			t.Fatalf("peer write: %v", err)
+		}
+		peerSequence := peer.servedSequence()
+		store.Follow(peerSequence)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("held write: %v", err)
+			}
+		case <-time.After(store.handoffWait / 2):
+			t.Fatal("the held write did not commit once the peer's slot was installed")
+		}
+		after, err := readSlot(context.Background(), objects, testWorldID, peerSequence+1)
+		if err != nil || after.slot.Store != store.id {
+			t.Fatalf("slot after the peer's = (%+v, %v), want this store's", after.slot, err)
+		}
+		if n := objects.losses.Load(); n != 0 {
+			t.Errorf("lost slot creates = %d, want the held batch rebuilt before its create", n)
+		}
+	})
+
+	t.Run("not for a stale hint", func(t *testing.T) {
+		store := (&bucketSite{objects: initializedMemory(t)}).open(t, 16)
+		store.handoffWait = 100 * time.Millisecond
+		if _, err := store.WriteVersion("/a.md", 0, []byte("# a\n"), nil); err != nil {
+			t.Fatalf("write /a.md: %v", err)
+		}
+		store.Follow(store.servedSequence())
+		time.Sleep(store.handoffWait + 20*time.Millisecond)
+		if _, err := store.WriteVersion("/b.md", 0, []byte("# b\n"), nil); err != nil {
+			t.Fatalf("write /b.md: %v", err)
+		}
+		done, started := held(store)
+		if err := <-done; err != nil {
+			t.Fatalf("write /c.md: %v", err)
+		}
+		if waited := time.Since(started); waited >= store.handoffWait/2 {
+			t.Errorf("write after a stale hint took %v, want no hold", waited)
+		}
+	})
+
+	t.Run("at most handoffWait", func(t *testing.T) {
+		store := (&bucketSite{objects: initializedMemory(t)}).open(t, 16)
+		store.handoffWait = 100 * time.Millisecond
+		if _, err := store.WriteVersion("/a.md", 0, []byte("# a\n"), nil); err != nil {
+			t.Fatalf("write /a.md: %v", err)
+		}
+		store.Follow(store.servedSequence())
+		if _, err := store.WriteVersion("/b.md", 0, []byte("# b\n"), nil); err != nil {
+			t.Fatalf("write /b.md: %v", err)
+		}
+		done, started := held(store)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("held write: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a hold for a peer that never came did not end")
+		}
+		if waited := time.Since(started); waited < 50*time.Millisecond {
+			t.Errorf("held write committed after %v, want it held", waited)
+		}
+	})
+}
+
+// Two stores writing one world as fast as they can both keep committing:
+// the one that loses races hints the winner, which hands it the next slot.
+func TestContendingStoresTakeTurns(t *testing.T) {
+	site := &bucketSite{objects: latentStore{Store: initializedMemory(t), delay: 5 * time.Millisecond}, hinted: true}
+	stores := []*Store{site.open(t, 16), site.open(t, 16)}
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	var committed [2]atomic.Int64
+	var wg sync.WaitGroup
+	for index, store := range stores {
+		for writer := range 8 {
+			wg.Go(func() {
+				for n := 0; time.Now().Before(deadline); n++ {
+					path := fmt.Sprintf("/s%d/w%d/%d.md", index, writer, n)
+					if _, err := store.WriteVersion(path, 0, []byte("# x\n"), nil); err != nil {
+						t.Errorf("write %s: %v", path, err)
+						return
+					}
+					if time.Now().Before(deadline) {
+						committed[index].Add(1)
+					}
+				}
+			})
+		}
+	}
+	wg.Wait()
+	left, right := committed[0].Load(), committed[1].Load()
+	if left+right == 0 {
+		t.Fatal("no write committed")
+	}
+	t.Logf("writes committed during the run: %d and %d", left, right)
+	if least := min(left, right); least*3 < left+right {
+		t.Errorf("writes committed during the run: %d and %d; one store starved", left, right)
 	}
 }
 
@@ -414,6 +588,27 @@ func (s *slotHolds) Create(ctx context.Context, key string, data []byte) (blob.A
 		}
 	}
 	return s.Store.Create(ctx, key, data)
+}
+
+// latentStore delays every call by a fixed delay, as a bucket's latency does.
+type latentStore struct {
+	blob.Store
+	delay time.Duration
+}
+
+func (s latentStore) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
+	time.Sleep(s.delay)
+	return s.Store.Create(ctx, key, data)
+}
+
+func (s latentStore) Get(ctx context.Context, key string) (blob.Object, error) {
+	time.Sleep(s.delay)
+	return s.Store.Get(ctx, key)
+}
+
+func (s latentStore) List(ctx context.Context, prefix, startAfter, cursor string) (blob.ListResult, error) {
+	time.Sleep(s.delay)
+	return s.Store.List(ctx, prefix, startAfter, cursor)
 }
 
 // slowStore delays every call by up to 2 ms, so stores interleave.

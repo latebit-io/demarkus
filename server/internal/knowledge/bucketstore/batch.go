@@ -258,7 +258,7 @@ func (c *committer) stage(b *batch) {
 		ctx, cancel := context.WithTimeout(context.Background(), store.requestTimeout)
 		defer cancel()
 		err := runParallel(ctx, store.shardWorkers, objects, func(ctx context.Context, object modelObject) error {
-			return createImmutable(ctx, store.objects, object)
+			return createContent(ctx, store.objects, object)
 		})
 		c.events <- func() { c.stagedResult(b, err) }
 	}()
@@ -289,17 +289,16 @@ func (c *committer) stagedResult(b *batch, err error) {
 	b.staged = true
 }
 
-// rebase moves the first batch past a slot another store won: members whose
-// dependencies still hold are kept as built, the rest rebuilt, and the batch
-// seals the next name. Nothing staged is staged again.
+// rebase moves the first batch past a slot another store won. Its hint tells
+// the winner a peer is waiting behind that slot (Store.Follow).
 func (c *committer) rebase(b *batch, existing *blob.Object) {
 	store := c.store
-	c.discardAfter(0)
 	winner, err := parseSlot(existing, store.worldID, b.slot.First)
 	if err != nil {
 		c.fail(b, fmt.Errorf("read slot %d: %w", b.slot.First, err))
 		return
 	}
+	store.hint(winner.slot.last())
 	ctx, cancel := context.WithTimeout(context.Background(), store.requestTimeout)
 	tip, err := store.catchUpFrom(ctx, winner)
 	cancel()
@@ -307,7 +306,15 @@ func (c *committer) rebase(b *batch, existing *blob.Object) {
 		c.fail(b, fmt.Errorf("operation refresh: %w", err))
 		return
 	}
-	chain := store.derive(tip)
+	c.rebuild(b, tip)
+}
+
+// rebuild moves the first batch onto tip: members whose dependencies still
+// hold are kept as built, the rest rebuilt, and the batch seals the next
+// name. Nothing staged is staged again.
+func (c *committer) rebuild(b *batch, tip *snapshot) {
+	c.discardAfter(0)
+	chain := c.store.derive(tip)
 	for index := b.answered; index < len(b.members); index++ {
 		if !keep(chain, b.members[index]) {
 			b.members[index] = c.buildMember(chain, b.objects, b.members[index].request)

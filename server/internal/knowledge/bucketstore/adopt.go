@@ -63,7 +63,9 @@ func (store *Store) adoptPeerCheckpoint(ctx context.Context, sequence int64) err
 	if err != nil {
 		return fmt.Errorf("adopt checkpoint %d: %w", sequence, err)
 	}
-	store.installAdoption(&adoption{checkpoint: root.layout, entries: entries})
+	a := &adoption{checkpoint: root.layout, entries: entries}
+	store.installAdoption(a)
+	store.advanceBase(ctx, current.Sequence, a)
 	return nil
 }
 
@@ -72,6 +74,8 @@ func (store *Store) adoptPeerCheckpoint(ctx context.Context, sequence int64) err
 type adoption struct {
 	checkpoint *checkpointBase
 	entries    map[string]*baseEntry
+	// own is set when this store's create made the checkpoint, not a racer's.
+	own bool
 }
 
 // installAdoption makes a the newest checkpoint and rebases the served

@@ -44,22 +44,12 @@ func (store *Store) Publish(ctx context.Context, req backend.WriteRequest) (*sto
 	}
 	body := bytes.Clone(content)
 	meta := maps.Clone(metadata)
-	blindBase := -1
+	// Without an expected version a rebuild after a lost race writes on the
+	// new current version: no conflict detection (SPEC 6.4).
 	result, err := store.runMutation(ctx, canonical, func(ctx context.Context, view *readView, operationID string) (*candidateMutation, mutationResult, error) {
 		if view.path(canonical) == nil {
 			if err := store.checkDocumentQuota(view); err != nil {
 				return nil, mutationResult{}, err
-			}
-		}
-		if expected < 0 {
-			current := 0
-			if entry := view.path(canonical); entry != nil {
-				current = entry.Current
-			}
-			if blindBase < 0 {
-				blindBase = current
-			} else if current != blindBase {
-				return nil, conflictResult(current), storefmt.ErrConflict
 			}
 		}
 		write := writeCandidate{path: canonical, op: protocol.OpPublish, expected: expected, body: body, metadata: meta, precondition: req.Precondition}

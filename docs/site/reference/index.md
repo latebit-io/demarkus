@@ -45,7 +45,7 @@ listen:
   idleTimeout: "30s"            # default
 health:
   address: ":8081"              # default; serves /livez and /readyz
-peers:                          # optional: replicas hint each other about commits
+peers:                          # replicas hint each other about commits; needed by more than one replica
   listen: ":6310"               # replica-only hint listener (ALPN mark-peer); empty disables
   service: <dns-name>           # headless Service resolved to the peers, this host left out
   addresses: [<host:port>]      # or fixed peers, for deployments without DNS

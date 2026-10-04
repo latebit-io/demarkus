@@ -129,7 +129,7 @@ A healthy server returns:
 
 ## Multi-World Mode (`demarkus-knowledge-server`)
 
-`demarkus-knowledge-server` is the production server: one process hosts many logically isolated worlds on one UDP listener, with TLS SNI selecting the world during the QUIC handshake. Each world is backed by its own GCS bucket, and any number of stateless replicas can share the buckets. Replicas tell each other about commits over a replica-only port (`peers` in the configuration; the chart wires it), so a WATCH on one replica sees a write made through another at once; without peers configured, a 5 s poll is the backstop.
+`demarkus-knowledge-server` is the production server: one process hosts many logically isolated worlds on one UDP listener, with TLS SNI selecting the world during the QUIC handshake. Each world is backed by its own GCS bucket, and any number of stateless replicas can share the buckets. Replicas tell each other about commits over a replica-only port (`peers` in the configuration; the chart wires it), so a WATCH on one replica sees a write made through another at once, and replicas writing one world take turns rather than one starving another. Without peers configured, a 5 s poll is the backstop for WATCH, and a replica that keeps losing write races to a busy peer can wait until that peer's queue drains.
 
 It takes one required flag, `-config`, pointing at a strict YAML file:
 

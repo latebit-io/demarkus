@@ -622,7 +622,9 @@ func TestCompactorListsOnlyNewerCheckpoints(t *testing.T) {
 	objects := initializedMemory(t)
 	listing := &listedCheckpoints{Store: objects}
 	writer := manualSite(listing).open(t, 0)
-	peer := manualSite(objects).open(t, 0)
+	// A step bound of a nanosecond: the peer writes without deferring to the
+	// writer's fresh checkpoint.
+	peer := (&bucketSite{objects: objects, trigger: stepping(0, time.Nanosecond)}).open(t, 0)
 	for version := range 5 {
 		_, err := writer.WriteVersion("/doc.md", version, fmt.Appendf(nil, "v%d", version), nil)
 		mustSucceed(t, err)

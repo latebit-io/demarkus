@@ -1,11 +1,13 @@
 package bucketstore
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/latebit-io/demarkus/server/blob"
@@ -13,14 +15,18 @@ import (
 
 const (
 	// A store checkpoints once the newest checkpoint lags its snapshot by
-	// checkpointSlots slots, or by checkpointAge since the first slot after
-	// it, after a random wait so racing replicas usually find one written.
-	checkpointSlots  = 1024
-	checkpointAge    = 60 * time.Second
+	// checkpointSlots slots (a replay budget: spread writes rewrite every
+	// shard, ADR 0036), or by checkpointAge since the first slot after it.
+	checkpointSlots  = 8192
+	checkpointAge    = 10 * time.Minute
 	checkpointJitter = 10 * time.Second
-	// checkpointTimeout bounds one compaction or adoption, which no request
-	// waits for.
+	// checkpointTimeout bounds one compaction step or adoption, which no
+	// request waits for.
 	checkpointTimeout = 5 * time.Minute
+	// checkpointStep bounds the documents one checkpoint folds: a backlog past
+	// it is checkpointed at earlier slot boundaries first, so every step ends
+	// within checkpointTimeout and progress accumulates.
+	checkpointStep = 1 << 15
 	// The newest checkpointsKept stay, and any whose successor came within
 	// the store's grace. A dropped one takes the shards, segments and root
 	// only it used, each past the grace and at the generation read.
@@ -46,6 +52,9 @@ type compactionTrigger struct {
 	slots int
 	age   time.Duration
 	wait  func() time.Duration
+	// timeout and step override checkpointTimeout and checkpointStep when set.
+	timeout time.Duration
+	step    int
 }
 
 var defaultTrigger = compactionTrigger{
@@ -60,6 +69,12 @@ type compaction struct {
 	trigger compactionTrigger
 	ctx     context.Context
 	cancel  context.CancelFunc
+	// base is the snapshot at the newest checkpoint, rebased on it, which a
+	// bounded step replays from; it shares every unchanged node with the
+	// served snapshot. Nil until a load or checkpoint gives one.
+	base atomic.Pointer[snapshot]
+	// written is the newest checkpoint this store wrote itself.
+	written atomic.Int64
 
 	mu      sync.Mutex
 	slots   int       // installed since the newest checkpoint this store knows
@@ -68,6 +83,10 @@ type compaction struct {
 	closed  bool
 	done    sync.WaitGroup
 }
+
+func (c *compaction) timeout() time.Duration { return cmp.Or(c.trigger.timeout, checkpointTimeout) }
+
+func (c *compaction) stepLimit() int { return cmp.Or(c.trigger.step, checkpointStep) }
 
 // noteSlots counts installed slots and starts the compactor once they lag
 // enough. A world gone quiet keeps its last few slots until the next write.
@@ -90,14 +109,15 @@ func (store *Store) noteSlots(n int) {
 	go store.compact(c.slots)
 }
 
-// compact runs the compactor once, after its wait, and forgets the slots it
+// compact runs the compactor after its wait, a step at a time until the
+// served snapshot is checkpointed or a step fails, and forgets the slots it
 // covered: those counted when it started.
 func (store *Store) compact(counted int) {
 	c := &store.compaction
 	err := waitForRetry(c.ctx, c.trigger.wait())
-	if err == nil {
-		ctx, cancel := context.WithTimeout(c.ctx, checkpointTimeout)
-		err = store.checkpoint(ctx)
+	for more := err == nil; more; {
+		ctx, cancel := context.WithTimeout(c.ctx, c.timeout())
+		more, err = store.step(ctx)
 		cancel()
 	}
 	if err != nil && c.ctx.Err() == nil {
@@ -121,33 +141,57 @@ func (store *Store) stopCompaction() {
 	c.done.Wait()
 }
 
-// checkpoint brings the store's newest checkpoint up to its snapshot: it
-// adopts one a peer wrote meanwhile, or writes one unless read-only.
+// checkpoint brings the store's newest checkpoint up to its snapshot, in as
+// many steps as it takes.
 func (store *Store) checkpoint(ctx context.Context) error {
+	for {
+		more, err := store.step(ctx)
+		if err != nil || !more {
+			return err
+		}
+	}
+}
+
+// step adopts a peer's newer checkpoint, ending the run since that peer is
+// compacting, or writes one of the served snapshot, or of an earlier slot
+// boundary when its changes exceed a step; more while served still lags.
+func (store *Store) step(ctx context.Context) (bool, error) {
 	// Only checkpoints after the known one are listed: the rest may be many
 	// until they are collected.
 	known := store.layout().Sequence
 	newest, err := newestCheckpointSequence(ctx, store.objects, known)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if newest > known {
-		return store.adoptPeerCheckpoint(ctx, newest)
+		return false, store.adoptPeerCheckpoint(ctx, newest)
 	}
 	snap := store.served.Load().snap
 	if store.readOnly || snap.Sequence <= newest {
-		return nil
+		return false, nil
 	}
 	// A snapshot that failed to rebase on the newest checkpoint would name
 	// shards of an older one, which a drop may already have taken.
 	if snap.Checkpoint.Sequence != known {
-		return fmt.Errorf("%w: snapshot rests on checkpoint %d, not the newest %d", blob.ErrIntegrity, snap.Checkpoint.Sequence, known)
+		return false, fmt.Errorf("%w: snapshot rests on checkpoint %d, not the newest %d", blob.ErrIntegrity, snap.Checkpoint.Sequence, known)
 	}
-	adopted, err := store.checkpointWriter().write(ctx, snap)
+	if deferred, err := store.deferToPeer(ctx, known); deferred || err != nil {
+		return false, err
+	}
+	target, err := store.stepTarget(ctx, snap)
 	if err != nil {
-		return err
+		return false, err
+	}
+	adopted, err := store.checkpointWriter().write(ctx, target)
+	if err != nil {
+		return false, err
 	}
 	store.installAdoption(adopted)
+	if adopted.own {
+		store.compaction.written.Store(target.Sequence)
+	}
+	store.keepBase(target, adopted)
+	store.logger.Info("checkpoint written", "world", store.worldID, "sequence", target.Sequence, "served", snap.Sequence)
 	plan, err := store.planDrop(ctx)
 	if err == nil {
 		err = errors.Join(store.applyDrop(ctx, plan), store.dropSlots(ctx, plan))
@@ -155,7 +199,110 @@ func (store *Store) checkpoint(ctx context.Context) error {
 	if err != nil {
 		store.logger.Warn("old checkpoints or slots not dropped; a later checkpoint retries", "world", store.worldID, "error", err)
 	}
-	return nil
+	return target != snap, nil
+}
+
+// deferToPeer reports whether the newest checkpoint is a peer's written
+// within one step bound: that peer is compacting, and one that died is
+// replaced after the bound. Checkpoint zero and own checkpoints never defer.
+func (store *Store) deferToPeer(ctx context.Context, known int64) (bool, error) {
+	c := &store.compaction
+	if known <= 1 || known == c.written.Load() {
+		return false, nil
+	}
+	attributes, err := store.objects.Head(ctx, checkpointKey(known))
+	if err != nil {
+		return false, fmt.Errorf("head checkpoint %d: %w", known, err)
+	}
+	return store.now().Sub(attributes.Modified) < c.timeout(), nil
+}
+
+// stepTarget is the snapshot the next checkpoint covers: snap when its
+// changes fit one step, else the base replayed to the slot boundary that
+// fills a step; without a base at the newest checkpoint, the whole backlog.
+func (store *Store) stepTarget(ctx context.Context, snap *snapshot) (*snapshot, error) {
+	c := &store.compaction
+	limit := c.stepLimit()
+	if changedDocuments(snap, limit) <= limit {
+		return snap, nil
+	}
+	base := c.base.Load()
+	if base == nil || base.Checkpoint.Sequence != snap.Checkpoint.Sequence {
+		store.logger.Warn("no snapshot at the newest checkpoint; checkpointing the whole backlog", "world", store.worldID, "checkpoint", snap.Checkpoint.Sequence)
+		return snap, nil
+	}
+	target := store.derive(base)
+	touched := make(map[string]struct{}, limit)
+	options := replayOptions{
+		worldID: store.worldID, workers: store.shardWorkers, until: snap.Sequence,
+		stop: func(slot *slotObject) bool {
+			for index := range slot.Entries {
+				touched[slot.Entries[index].Path] = struct{}{}
+			}
+			return len(touched) >= limit
+		},
+	}
+	if err := replay(ctx, store.objects, target, options); err != nil {
+		return nil, fmt.Errorf("checkpoint step from %d: %w", base.Sequence, err)
+	}
+	if target.Sequence >= snap.Sequence {
+		return snap, nil
+	}
+	return target, nil
+}
+
+// changedDocuments counts the documents changed since snap's checkpoint, up
+// to limit+1.
+func changedDocuments(snap *snapshot, limit int) int {
+	count := 0
+	snap.Paths.Ascend(func(state *pathState) bool {
+		if !state.unchanged() {
+			count++
+		}
+		return count <= limit
+	})
+	return count
+}
+
+// keepBase keeps target, rebased on the checkpoint just written of it, as
+// the base the next step replays from.
+func (store *Store) keepBase(target *snapshot, adopted *adoption) {
+	next := store.derive(target)
+	if err := next.adopt(adopted); err != nil {
+		store.logger.Error("snapshot at the new checkpoint failed to rebase; the next step writes the whole backlog", "world", store.worldID, "checkpoint", adopted.checkpoint.Sequence, "error", err)
+		store.compaction.base.Store(nil)
+		return
+	}
+	store.compaction.base.Store(next)
+}
+
+// advanceBase replays the base to a peer's checkpoint and rebases it there,
+// so this store can step from it too. A base that cannot follow is dropped;
+// the next checkpoint this store writes sets one again.
+func (store *Store) advanceBase(ctx context.Context, from int64, a *adoption) {
+	c := &store.compaction
+	base := c.base.Load()
+	if store.readOnly || base == nil {
+		return
+	}
+	if base.Checkpoint.Sequence != from {
+		c.base.Store(nil)
+		return
+	}
+	next := store.derive(base)
+	err := replay(ctx, store.objects, next, replayOptions{worldID: store.worldID, workers: store.shardWorkers, until: a.checkpoint.Sequence})
+	if err == nil && next.Sequence != a.checkpoint.Sequence {
+		err = fmt.Errorf("%w: checkpoint %d is not a slot boundary; replay reached %d", blob.ErrIntegrity, a.checkpoint.Sequence, next.Sequence)
+	}
+	if err == nil {
+		err = next.adopt(a)
+	}
+	if err != nil {
+		store.logger.Warn("snapshot at the peer's checkpoint not built; the next own checkpoint sets one", "world", store.worldID, "checkpoint", a.checkpoint.Sequence, "error", err)
+		c.base.Store(nil)
+		return
+	}
+	c.base.Store(next)
 }
 
 // grouped is a document with its path hash, in the shard the hash names.
@@ -262,8 +409,9 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 	}
 	checkpoint := checkpointObject{Schema: logSchema, WorldID: worldID, Sequence: snap.Sequence, Root: rootRef, Tip: snap.Tip}
 	data, err := marshalImmutable(checkpoint)
+	own := false
 	if err == nil {
-		err = createImmutable(ctx, objects, modelObject{Key: checkpointKey(snap.Sequence), Data: data})
+		own, err = createImmutableOwn(ctx, objects, modelObject{Key: checkpointKey(snap.Sequence), Data: data})
 	}
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint %d: %w", snap.Sequence, err)
@@ -274,7 +422,7 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 		fence: dropFence{started: now, grace: writer.grace},
 	}
 	run.write(ctx, groups, shards)
-	return &adoption{checkpoint: &checkpointBase{Sequence: snap.Sequence, Bits: bits, Shards: refs}, entries: entries}, nil
+	return &adoption{checkpoint: &checkpointBase{Sequence: snap.Sequence, Bits: bits, Shards: refs}, entries: entries, own: own}, nil
 }
 
 // foldHistory is a document's history blocks, one per absolute block of
@@ -321,7 +469,7 @@ func foldHistory(ctx context.Context, objects blob.Store, document grouped) ([]b
 		}
 		object, ref, err := immutableJSON(historyKey, history)
 		if err == nil {
-			err = createImmutable(ctx, objects, object)
+			err = createContent(ctx, objects, object)
 		}
 		if err != nil {
 			return nil, err

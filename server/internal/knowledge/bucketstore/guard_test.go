@@ -256,7 +256,9 @@ func TestCommitConfirmsWhileAProbeStalls(t *testing.T) {
 func TestFailedRebaseReloads(t *testing.T) {
 	ctx := context.Background()
 	objects := initializedMemory(t)
-	writer := manualSite(objects).open(t, 0)
+	// A step bound of a nanosecond: the writer takes over from the peer's
+	// fresh checkpoint without deferring to it.
+	writer := (&bucketSite{objects: objects, trigger: stepping(0, time.Nanosecond)}).open(t, 0)
 	peer := manualSite(objects).open(t, 0)
 	writeWorld(t, writer, 0)
 	mustSucceed(t, peer.poll(ctx))

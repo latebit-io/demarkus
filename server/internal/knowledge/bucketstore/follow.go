@@ -44,12 +44,19 @@ func (store *Store) follow(ctx context.Context, f *follower, interval time.Durat
 	}
 }
 
-// Follow is a peer replica's hint that it committed through sequence
-// (backend.Follower): the store polls now unless it already serves it.
-// A read by path probes the log itself, so a poll mostly feeds the hub.
+// Follow is a peer's hint that the log reached sequence (backend.Follower):
+// the store polls now unless it serves it. A hint inside this store's own
+// slot is a peer that lost it, so the next win hands the following one over.
 func (store *Store) Follow(sequence int64) {
+	if store.wrote(sequence) {
+		store.waiting.Store(&peerWaiting{at: time.Now(), peerSlots: store.peerSlots.Load()})
+		return
+	}
+	if store.servedSequence() >= sequence {
+		return
+	}
 	f := store.follower
-	if f == nil || store.servedSequence() >= sequence {
+	if f == nil {
 		return
 	}
 	select {
@@ -57,4 +64,31 @@ func (store *Store) Follow(sequence int64) {
 		store.logger.Info("peer hint", "sequence", sequence)
 	default:
 	}
+}
+
+// sequenceRange is the sequences one slot holds.
+type sequenceRange struct{ first, last int64 }
+
+// remember records a slot this store created, replacing its oldest.
+func (store *Store) remember(first, last int64) {
+	store.ownMu.Lock()
+	defer store.ownMu.Unlock()
+	store.own[store.ownNext] = sequenceRange{first: first, last: last}
+	store.ownNext = (store.ownNext + 1) % ownSlots
+}
+
+// wrote reports whether sequence lies in one of this store's newest slots,
+// the one being created included: a loser can hear of it first.
+func (store *Store) wrote(sequence int64) bool {
+	if pending := store.pending.Load(); pending != nil && pending.base.Sequence < sequence && sequence <= pending.next.Sequence {
+		return true
+	}
+	store.ownMu.Lock()
+	defer store.ownMu.Unlock()
+	for _, slot := range store.own[:] {
+		if slot.first > 0 && slot.first <= sequence && sequence <= slot.last {
+			return true
+		}
+	}
+	return false
 }

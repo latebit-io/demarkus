@@ -39,9 +39,9 @@ type Options struct {
 	// applied slots, under the log's sequence, and the store follows peers
 	// until Close. Zero leaves WATCH off.
 	ChangeRing int
-	// Committed runs after this replica creates slots, with the newest sequence,
-	// in order on its own goroutine; slots created close together may be
-	// reported once. Nil for none.
+	// Committed runs with each sequence this replica learns the log reached,
+	// by its own slot or one it lost, in order on its own goroutine; close
+	// ones may be reported once. Nil for none.
 	Committed func(sequence int64)
 	// CheckpointGrace is how long a superseded checkpoint and what only it
 	// uses outlive their successor: 0 is defaultCheckpointGrace, and less than
@@ -79,12 +79,16 @@ type Store struct {
 	deriveMu sync.Mutex
 	commits  commitQueue
 	now      func() time.Time
-	// peerSeen is when this store last applied another store's slot, in Unix
-	// nanoseconds; jitter is the wait after a win while it is recent, and no
-	// create starts before yieldUntil.
-	peerSeen   atomic.Int64
-	jitter     func() time.Duration
-	yieldUntil atomic.Int64
+	// own are the sequence ranges of this store's newest slots: a peer's hint
+	// inside one means the peer lost that slot, and waiting records it.
+	// peerSlots counts installed slots other stores wrote.
+	ownMu       sync.Mutex
+	own         [ownSlots]sequenceRange
+	ownNext     int
+	waiting     atomic.Pointer[peerWaiting]
+	peerSlots   atomic.Int64
+	handoffWait time.Duration
+	hold        handoff // the committer's alone
 	// pending is the slot being created and the snapshot it makes.
 	pending atomic.Pointer[pendingSlot]
 	// adoption is the newest checkpoint this store rebased on; a snapshot
@@ -213,7 +217,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		readOnly:        options.ReadOnly,
 		commits:         commitQueue{wake: make(chan struct{}, 1)},
 		now:             time.Now,
-		jitter:          yieldDelay,
+		handoffWait:     handoffWait,
 		warming:         make(map[string]*warmup),
 		warmSlots:       make(chan struct{}, options.ShardWorkers),
 		committed:       options.Committed,
@@ -313,9 +317,9 @@ func (store *Store) load(ctx context.Context) error {
 	return store.start(ctx, loaded, started)
 }
 
-// start serves a checkpoint's snapshot with every slot after it applied; the
-// hub starts at the checkpoint and replayed slots fill its ring. Only at open
-// and on a reload, so it holds installMu across the replay.
+// start serves a checkpoint's snapshot with every slot after it applied, and
+// keeps the loaded snapshot itself as the compactor's base. Only at open and
+// on a reload, so it holds installMu across the replay.
 func (store *Store) start(ctx context.Context, loaded *snapshot, started time.Time) error {
 	store.installMu.Lock()
 	defer store.installMu.Unlock()
@@ -325,13 +329,17 @@ func (store *Store) start(ctx context.Context, loaded *snapshot, started time.Ti
 		replayed++
 		store.report(appliedOf(slot))
 	}
-	if err := replay(ctx, store.objects, loaded, replayOptions{worldID: store.worldID, workers: store.shardWorkers, onSlot: onSlot}); err != nil {
+	tip := store.derive(loaded)
+	if err := replay(ctx, store.objects, tip, replayOptions{worldID: store.worldID, workers: store.shardWorkers, onSlot: onSlot}); err != nil {
 		return err
 	}
 	// The snapshot rests on its own checkpoint, and an active section index
 	// catches up to it; both are no-ops at open.
 	store.adoption.Store(nil)
-	store.served.Store(&served{snap: loaded, confirmed: started})
+	if !store.readOnly {
+		store.compaction.base.Store(loaded)
+	}
+	store.served.Store(&served{snap: tip, confirmed: started})
 	store.sections.reloaded()
 	store.noteSlots(replayed)
 	return nil
@@ -574,7 +582,8 @@ func (store *Store) install(next *snapshot, applied []appliedSlot, confirmed tim
 	store.sections.installed(installed, applied)
 	for _, slot := range applied {
 		if slot.store != store.id {
-			store.peerSeen.Store(store.now().UnixNano())
+			store.peerSlots.Add(1)
+			store.commits.signal()
 		}
 		store.report(slot)
 	}

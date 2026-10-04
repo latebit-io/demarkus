@@ -29,7 +29,7 @@ func TestSlotRace(t *testing.T) {
 		assertCurrentVersion(t, left, "/same", 1)
 	})
 
-	t.Run("blind same path conflicts after rebase", func(t *testing.T) {
+	t.Run("blind same path commits after rebase", func(t *testing.T) {
 		base, memory := newWritableStore(t)
 		if _, err := base.WriteVersion("/same", 0, []byte("base"), nil); err != nil {
 			t.Fatalf("seed base: %v", err)
@@ -45,8 +45,23 @@ func TestSlotRace(t *testing.T) {
 			results <- writeOutcome{document: document, err: err}
 		}()
 		barrier.releaseBoth(t)
-		assertOneConflict(t, collectWriteOutcomes(t, results))
-		assertCurrentVersion(t, left, "/same", 2)
+		versions := map[int]bool{}
+		for _, outcome := range collectWriteOutcomes(t, results) {
+			if outcome.err != nil || outcome.document == nil {
+				t.Fatalf("blind write = (%+v, %v), want success: no expected version, no conflict", outcome.document, outcome.err)
+			}
+			versions[outcome.document.Version] = true
+		}
+		if !versions[2] || !versions[3] {
+			t.Errorf("blind writes landed as versions %v, want 2 and 3", versions)
+		}
+		assertCurrentVersion(t, left, "/same", 3)
+		if err := left.VerifyChain("/same"); err != nil {
+			t.Errorf("VerifyChain: %v", err)
+		}
+		if n := barrier.losses.Load(); n != 1 {
+			t.Errorf("lost slot creates = %d, want 1: the race was not exercised", n)
+		}
 	})
 
 	t.Run("rebase without conflict", func(t *testing.T) {

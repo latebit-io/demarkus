@@ -106,8 +106,8 @@ type storeFactory func(ctx context.Context, world *knowledgeconfig.WorldConfig, 
 // storeHooks is what the manager hands a world's store at open.
 type storeHooks struct {
 	logger *slog.Logger
-	// committed runs after each of this replica's own commits with its
-	// sequence.
+	// committed runs with each sequence this replica learns its store
+	// committed through, by its own commit or one it lost a race to.
 	committed func(sequence int64)
 }
 
@@ -353,12 +353,12 @@ func (m *worldManager) serve(
 	return runtime, nil
 }
 
-// committed is the store hook that hints peers about this replica's commits.
+// committed is the store hook that hints peers about the store's commits.
 func (m *worldManager) committed(worldID string) func(sequence int64) {
 	return func(sequence int64) { m.hint(worldID, sequence) }
 }
 
-// Hint is a peer replica saying it committed a world through a sequence; a
+// Hint is a peer replica saying a world committed through a sequence; a
 // store several replicas share decides whether to read.
 func (m *worldManager) Hint(hint peerhint.Hint) {
 	m.mu.Lock()

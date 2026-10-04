@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -245,21 +247,47 @@ type bucketSite struct {
 	// how long their slot caches outlive a read.
 	reach uint64
 	idle  time.Duration
+	// hinted wires each store's Committed hook to the others' Follow, as the
+	// knowledge server's peer hints do.
+	hinted bool
+	mu     sync.Mutex
+	stores []*Store
 }
 
 // open opens a store that closes when t ends, stopping its follow loop.
 func (s *bucketSite) open(t *testing.T, ring int) *Store {
 	t.Helper()
-	store, err := Open(context.Background(), s.objects, Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger})
+	var self atomic.Pointer[Store]
+	options := Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger}
+	if s.hinted {
+		options.Committed = func(sequence int64) { s.hint(self.Load(), sequence) }
+	}
+	store, err := Open(context.Background(), s.objects, options)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	self.Store(store)
+	s.mu.Lock()
+	s.stores = append(s.stores, store)
+	s.mu.Unlock()
 	if store.changeLog != nil {
 		store.changeLog.reach = cmp.Or(s.reach, store.changeLog.reach)
 		store.changeLog.idle = cmp.Or(s.idle, store.changeLog.idle)
 	}
 	closeAtEnd(t, store)
 	return store
+}
+
+// hint tells every other store on the site that the log reached sequence.
+func (s *bucketSite) hint(from *Store, sequence int64) {
+	s.mu.Lock()
+	peers := slices.Clone(s.stores)
+	s.mu.Unlock()
+	for _, peer := range peers {
+		if peer != from {
+			peer.Follow(sequence)
+		}
+	}
 }
 
 func closeAtEnd(t *testing.T, store *Store) {

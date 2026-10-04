@@ -81,12 +81,23 @@ func buildGenesis(worldID string) ([]modelObject, error) {
 	return []modelObject{shard, rootModel, {Key: checkpointKey(1), Data: checkpointData}, {Key: markerKey, Data: markerData}}, nil
 }
 
+// createImmutable creates an object a drop may delete (a shard, root,
+// checkpoint): the generation fence in createOrRead rewrites stale bytes.
 func createImmutable(ctx context.Context, objects blob.Store, object modelObject) error {
 	existing, err := createOrRead(ctx, objects, object, true)
 	if err == nil && existing != nil {
 		return fmt.Errorf("%w: immutable object %q contains hash %s, want %s", blob.ErrIntegrity, object.Key, hashHex(existing.Data), hashHex(object.Data))
 	}
 	return err
+}
+
+// createImmutableOwn is createImmutable reporting whether this call's plain
+// create made the object; a racer's, or an unclear outcome, reports false.
+func createImmutableOwn(ctx context.Context, objects blob.Store, object modelObject) (bool, error) {
+	if _, err := objects.Create(ctx, object.Key, object.Data); err == nil {
+		return true, nil
+	}
+	return false, createImmutable(ctx, objects, object)
 }
 
 // freshenAge is how old stored bytes may be for a create to reuse them as
@@ -142,6 +153,40 @@ func createOrRead(ctx context.Context, objects blob.Store, object modelObject, f
 		}
 	}
 	return nil, fmt.Errorf("create immutable object %q retries exhausted: %w", object.Key, lastErr)
+}
+
+// createContent creates a content-addressed object no drop ever deletes (a
+// history block, a blob): a taken name is this content, which readers verify
+// by hash, so it needs no read-back and no freshen.
+func createContent(ctx context.Context, objects blob.Store, object modelObject) error {
+	var lastErr error
+	for attempt := range maximumCreateAttempts {
+		_, err := objects.Create(ctx, object.Key, object.Data)
+		if err == nil || errors.Is(err, blob.ErrPrecondition) {
+			return nil
+		}
+		if !retryableObjectError(err) {
+			return fmt.Errorf("create content object %q: %w", object.Key, err)
+		}
+		lastErr = err
+		if errors.Is(err, blob.ErrAmbiguous) {
+			// Unknown whether it landed, or a hedge met the name taken.
+			_, headErr := objects.Head(ctx, object.Key)
+			if headErr == nil {
+				return nil
+			}
+			if !errors.Is(headErr, blob.ErrNotFound) && !retryableObjectError(headErr) {
+				return fmt.Errorf("reconcile content object %q: %w", object.Key, errors.Join(lastErr, headErr))
+			}
+		}
+		if attempt == maximumCreateAttempts-1 {
+			break
+		}
+		if err := waitForRetry(ctx, createRetryDelay(attempt)); err != nil {
+			return fmt.Errorf("wait to retry content object %q: %w", object.Key, errors.Join(lastErr, err))
+		}
+	}
+	return fmt.Errorf("create content object %q retries exhausted: %w", object.Key, lastErr)
 }
 
 // createMarker creates the world marker; one already there must be this

@@ -20,7 +20,8 @@ server:
   idleTimeout: 30s
   # Replicas tell each other about commits on this port (ALPN mark-peer),
   # so a WATCH on one replica sees another's write at once instead of on
-  # the 5 s poll. Reached only through the headless peers Service and
+  # the 5 s poll, and replicas writing one world take turns instead of one
+  # starving another. Reached only through the headless peers Service and
   # admitted only from this chart's pods by the NetworkPolicy.
   peerPort: 6310
   # The bearer listener (UDP, ALPN mark): clients signed in at the IdP put

@@ -22,15 +22,13 @@ const (
 	// pipelineDepth is the slot being created and two batches staged behind
 	// it; with one, staging stayed on the critical path (ADR 0036).
 	pipelineDepth = 3
-	// A store that applied another store's slot within yieldWindow waits up
-	// to yieldJitter after each win, so a pipelining winner cannot starve
-	// the others; a lone store never waits.
-	yieldWindow = 3 * time.Second
-	yieldJitter = 30 * time.Millisecond
+	// handoffWait bounds how long a winner holds its next slot for a peer
+	// that lost to it; the hold ends once a peer's slot is installed.
+	handoffWait = time.Second
+	// ownSlots is how many of its newest slots a store remembers, to tell a
+	// loser's hint from a peer's: more than a second of slots at any rate.
+	ownSlots = 256
 )
-
-// yieldDelay is the wait after a win, from (0, yieldJitter].
-func yieldDelay() time.Duration { return jitterWithin(yieldJitter) }
 
 // jitterWithin is a random wait from (0, limit].
 func jitterWithin(limit time.Duration) time.Duration {
@@ -160,6 +158,25 @@ type committer struct {
 	running int // goroutines that have not reported
 	limit   int
 	timer   *time.Timer
+	// handedOver is set when a hold ended on a peer's slot, which the
+	// staged head was not built on.
+	handedOver bool
+}
+
+// handoff holds the next create for a peer that lost to this store, until a
+// peer slot is installed or until passes; it outlives an idle committer.
+// signal is the waiting hint the latest hold answered, so each holds once.
+type handoff struct {
+	until     time.Time
+	peerSlots int64
+	signal    *peerWaiting
+}
+
+// peerWaiting is a peer's hint for a slot this store wrote: the peer lost
+// that slot and is retrying. peerSlots is the store's count when it came.
+type peerWaiting struct {
+	at        time.Time
+	peerSlots int64
 }
 
 // commit runs the committer until the queue and the pipeline are empty.
@@ -305,7 +322,8 @@ func (c *committer) fill() {
 }
 
 // launch answers batches with nothing to create, then starts the first
-// slot's create once it is staged; it returns a timer while a yield holds it.
+// slot's create once it is staged; it returns a timer while a handoff holds
+// it. After a handoff the head is rebuilt on the peer's slot once.
 func (c *committer) launch() <-chan time.Time {
 	for len(c.pipeline) > 0 {
 		head := c.pipeline[0]
@@ -317,13 +335,46 @@ func (c *committer) launch() <-chan time.Time {
 		if head.creating || !head.staged {
 			return nil
 		}
-		if wait := time.Until(time.Unix(0, c.store.yieldUntil.Load())); wait > 0 {
+		if wait := c.held(); wait > 0 {
 			return c.after(wait)
+		}
+		if c.handedOver {
+			c.handedOver = false
+			if served := c.store.served.Load().snap; served.Sequence > head.base.Sequence {
+				c.rebuild(head, served)
+				continue
+			}
 		}
 		c.create(head)
 		return nil
 	}
 	return nil
+}
+
+// held is how much longer the handoff holds the next create; zero once a
+// peer's slot is installed or the hold has passed.
+func (c *committer) held() time.Duration {
+	hold := &c.store.hold
+	if hold.until.IsZero() {
+		return 0
+	}
+	wait := time.Until(hold.until)
+	if handed := c.store.peerSlots.Load() != hold.peerSlots; wait <= 0 || handed {
+		hold.until, c.handedOver = time.Time{}, handed
+		return 0
+	}
+	return wait
+}
+
+// handOff starts a hold after a win when a peer recently hinted that it lost
+// to one of this store's slots and no peer slot has been installed since.
+func (c *committer) handOff() {
+	store := c.store
+	signal := store.waiting.Load()
+	if signal == nil || signal == store.hold.signal || time.Since(signal.at) > store.handoffWait || store.peerSlots.Load() != signal.peerSlots {
+		return
+	}
+	store.hold = handoff{until: time.Now().Add(store.handoffWait), peerSlots: signal.peerSlots, signal: signal}
 }
 
 func (c *committer) after(wait time.Duration) <-chan time.Time {
@@ -404,10 +455,9 @@ func (c *committer) confirm(b *batch) {
 	}
 	c.answerRest(b, nil)
 	c.pop()
+	store.remember(b.slot.First, b.slot.last())
 	store.hint(b.slot.last())
-	if seen := store.peerSeen.Load(); seen != 0 && store.now().UnixNano()-seen < int64(yieldWindow) {
-		store.yieldUntil.Store(time.Now().Add(store.jitter()).UnixNano())
-	}
+	c.handOff()
 }
 
 // fail answers every member of b that is still waiting with err, and sends

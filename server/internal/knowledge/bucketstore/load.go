@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"sync"
 
 	"github.com/latebit-io/demarkus/server/blob"
@@ -224,42 +225,70 @@ type applyError struct{ error }
 func (err *applyError) Unwrap() error { return err.error }
 
 // replayOptions names the world, the read parallelism, and who hears of each
-// applied slot.
+// applied slot. A positive until is the last sequence applied; stop, asked
+// after each slot, ends the replay early.
 type replayOptions struct {
 	worldID string
 	workers int
 	onSlot  func(slot *slotObject)
+	until   int64
+	stop    func(slot *slotObject) bool
 }
 
+// replayChunk is how many slots a replay reads ahead of applying them.
+const replayChunk = 256
+
 // replay applies every slot after loaded's sequence, a page of names at a
-// time, reading each page's slots in parallel.
+// time, reading the slots in parallel a chunk at a time.
 func replay(ctx context.Context, objects blob.Store, loaded *snapshot, options replayOptions) error {
 	for page, err := range sequencedPages(ctx, objects, logPrefix, loaded.Sequence) {
 		if err != nil {
 			return err
 		}
-		slots := make([]slotRead, len(page))
-		err := runParallel(ctx, options.workers, indexes(len(page)), func(ctx context.Context, index int) error {
-			read, err := readSlot(ctx, objects, options.worldID, page[index].sequence)
-			if errors.Is(err, blob.ErrNotFound) {
-				return fmt.Errorf("%w: listed slot %d is missing: %w", blob.ErrIntegrity, page[index].sequence, err)
-			}
-			slots[index] = read
-			return err
-		})
-		if err != nil {
-			return fmt.Errorf("replay: %w", err)
+		listed := len(page)
+		if options.until > 0 {
+			page = slices.DeleteFunc(page, func(slot sequenced) bool { return slot.sequence > options.until })
 		}
-		for _, read := range slots {
-			if err := loaded.applySlot(read); err != nil {
-				return &applyError{fmt.Errorf("replay: %w", err)}
+		for chunk := range slices.Chunk(page, replayChunk) {
+			slots, err := readSlots(ctx, objects, options, chunk)
+			if err != nil {
+				return err
 			}
-			if options.onSlot != nil {
-				options.onSlot(read.slot)
+			for _, read := range slots {
+				if err := loaded.applySlot(read); err != nil {
+					return &applyError{fmt.Errorf("replay: %w", err)}
+				}
+				if options.onSlot != nil {
+					options.onSlot(read.slot)
+				}
+				if options.stop != nil && options.stop(read.slot) {
+					return nil
+				}
 			}
+		}
+		if len(page) < listed {
+			return nil
 		}
 	}
 	return nil
+}
+
+// readSlots reads the listed slots in parallel; a listed slot that is
+// missing is an integrity failure.
+func readSlots(ctx context.Context, objects blob.Store, options replayOptions, listed []sequenced) ([]slotRead, error) {
+	slots := make([]slotRead, len(listed))
+	err := runParallel(ctx, options.workers, indexes(len(listed)), func(ctx context.Context, index int) error {
+		read, err := readSlot(ctx, objects, options.worldID, listed[index].sequence)
+		if errors.Is(err, blob.ErrNotFound) {
+			return fmt.Errorf("%w: listed slot %d is missing: %w", blob.ErrIntegrity, listed[index].sequence, err)
+		}
+		slots[index] = read
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("replay: %w", err)
+	}
+	return slots, nil
 }
 
 // sequenced is a listed object named by its sequence.
