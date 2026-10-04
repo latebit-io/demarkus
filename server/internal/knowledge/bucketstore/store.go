@@ -317,21 +317,28 @@ func (store *Store) load(ctx context.Context) error {
 	return store.start(ctx, loaded, started)
 }
 
-// start serves a checkpoint's snapshot with every slot after it applied, and
-// keeps the loaded snapshot itself as the compactor's base. Only at open and
-// on a reload, so it holds installMu across the replay.
+// start serves a checkpoint's snapshot with every slot after it applied and
+// keeps the loaded one as the compactor's base. The replay reads the bucket
+// outside installMu; a reload a commit overtook replays on before installing.
 func (store *Store) start(ctx context.Context, loaded *snapshot, started time.Time) error {
-	store.installMu.Lock()
+	tip := store.derive(loaded)
+	var applied []appliedSlot
+	onSlot := func(slot *slotObject) { applied = append(applied, appliedOf(slot)) }
+	options := replayOptions{worldID: store.worldID, workers: store.shardWorkers, onSlot: onSlot}
+	for {
+		if err := replay(ctx, store.objects, tip, options); err != nil {
+			return err
+		}
+		store.installMu.Lock()
+		if current := store.served.Load(); current == nil || current.snap.Sequence <= tip.Sequence {
+			break
+		}
+		store.installMu.Unlock()
+	}
 	defer store.installMu.Unlock()
 	store.skipTo(loaded.Sequence)
-	replayed := 0
-	onSlot := func(slot *slotObject) {
-		replayed++
-		store.report(appliedOf(slot))
-	}
-	tip := store.derive(loaded)
-	if err := replay(ctx, store.objects, tip, replayOptions{worldID: store.worldID, workers: store.shardWorkers, onSlot: onSlot}); err != nil {
-		return err
+	for _, slot := range applied {
+		store.report(slot)
 	}
 	// The snapshot rests on its own checkpoint, and an active section index
 	// catches up to it; both are no-ops at open.
@@ -341,7 +348,7 @@ func (store *Store) start(ctx context.Context, loaded *snapshot, started time.Ti
 	}
 	store.served.Store(&served{snap: tip, confirmed: started})
 	store.sections.reloaded()
-	store.noteSlots(replayed)
+	store.noteSlots(len(applied))
 	return nil
 }
 

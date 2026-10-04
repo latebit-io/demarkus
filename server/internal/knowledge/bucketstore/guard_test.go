@@ -251,6 +251,50 @@ func TestCommitConfirmsWhileAProbeStalls(t *testing.T) {
 	}
 }
 
+// A commit confirms its slot while a reload's replay is stalled on the
+// bucket: the replay holds no lock an install needs, and the reload replays on
+// past the commit before it installs.
+func TestCommitConfirmsWhileAReloadReplays(t *testing.T) {
+	ctx := context.Background()
+	gate := &slotGate{Store: initializedMemory(t), key: slotKey(3)}
+	holds := newSlotHolds(t, gate, 5)
+	store := (&bucketSite{objects: holds, trigger: manual, noHedge: true}).open(t, 0)
+	_, err := store.WriteVersion("/a.md", -1, []byte("# a\n"), nil)
+	mustSucceed(t, err)
+	mustSucceed(t, store.checkpoint(ctx))
+	for _, path := range []string{"/b.md", "/c.md"} {
+		_, err := store.WriteVersion(path, -1, []byte("# x\n"), nil)
+		mustSucceed(t, err)
+	}
+
+	written := publishAsync(ctx, store, backend.WriteRequest{Path: "/d.md", ExpectedVersion: -1, Content: []byte("# d\n")})
+	waitForTestSignal(t, holds.holds[5].arrived, "the create of slot 5")
+	gate.close()
+	store.diverged.Store(true)
+	read := make(chan error, 1)
+	go func() {
+		_, err := store.Get("/a.md", 0)
+		read <- err
+	}()
+	waitFor(t, "the reload's replay of slot 3 to stall", func() bool { return gate.held.Load() > 0 })
+	holds.holds[5].open()
+	select {
+	case outcome := <-written:
+		mustSucceed(t, outcome.err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the commit waited on a reload's replay stalled on the bucket")
+	}
+	gate.open()
+	mustSucceed(t, <-read)
+	if got := store.servedSequence(); got != 5 {
+		t.Errorf("served sequence %d after the reload and the commit, want 5", got)
+	}
+	if store.diverged.Load() {
+		t.Error("the reload left the store diverged")
+	}
+	readEveryVersion(t, store)
+}
+
 // A snapshot that failed to rebase on the newest checkpoint is replaced at
 // the next refresh by a reload from it, and the compactor writes again.
 func TestFailedRebaseReloads(t *testing.T) {
