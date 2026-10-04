@@ -49,12 +49,12 @@ type bodyScan struct {
 
 // lookupBody keeps every section under the scope and filter in which all
 // terms appear (text, heading trail, tags, title), ordered by BM25 scaled by
-// the importance prior. Callers hold the read lock.
-func (c *Catalog) lookupBody(words []string, scope string, opts Options) []Result {
+// the importance prior.
+func lookupBody(index Index, words []string, scope string, opts Options) []Result {
 	if len(words) == 0 {
 		return nil
 	}
-	scan := c.scanBody(words, scope, opts.Filter)
+	scan := scanBody(index, words, scope, opts.Filter)
 	if len(scan.found) == 0 {
 		return nil
 	}
@@ -75,15 +75,14 @@ func (c *Catalog) lookupBody(words []string, scope string, opts Options) []Resul
 	return results
 }
 
-func (c *Catalog) scanBody(terms []string, scope string, filter []Predicate) *bodyScan {
+func scanBody(index Index, terms []string, scope string, filter []Predicate) *bodyScan {
 	scan := &bodyScan{df: make([]int, len(terms))}
 	totalLength := 0
 	docHas := make([]bool, len(terms))
-	for path, e := range c.entries {
+	for e, doc := range index.Entries(scope) {
 		if !underScope(e.Path, scope) || !MatchesAll(e, filter) {
 			continue
 		}
-		doc := c.sections[path]
 		if doc == nil {
 			continue
 		}

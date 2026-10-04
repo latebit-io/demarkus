@@ -25,6 +25,7 @@ worlds:
     bucket:
       url: gs://deployment-world-a
       worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+      checkpointGrace: 30m
     auth:
       tokensFile: /run/demarkus/world-a/tokens.toml
       staticTokensFile: /run/demarkus/world-a/static-tokens.toml
@@ -51,6 +52,9 @@ func TestParseValidConfig(t *testing.T) {
 	}
 	if config.Worlds[0].Limits.RequestTimeout != Duration(10*time.Second) {
 		t.Fatalf("request timeout: got %s", time.Duration(config.Worlds[0].Limits.RequestTimeout))
+	}
+	if config.Worlds[0].Bucket.CheckpointGrace != Duration(30*time.Minute) {
+		t.Fatalf("checkpoint grace: got %s", time.Duration(config.Worlds[0].Bucket.CheckpointGrace))
 	}
 	if got := config.Worlds[0].Auth.StaticTokensFile; got != "/run/demarkus/world-a/static-tokens.toml" {
 		t.Fatalf("static tokens file: got %q", got)
@@ -87,6 +91,9 @@ worlds:
 	}
 	if world.Policy.File != "" {
 		t.Errorf("policy file: got %q, want unset", world.Policy.File)
+	}
+	if world.Bucket.CheckpointGrace != 0 {
+		t.Errorf("checkpoint grace: got %s, want unset for the store's default", time.Duration(world.Bucket.CheckpointGrace))
 	}
 	wantLimits := LimitsConfig{MaxConcurrentRequests: 32, RequestTimeout: Duration(10 * time.Second), RequestsPerSecond: 50, Burst: 100, MaxWatches: 1024}
 	if world.Limits != wantLimits {
@@ -152,6 +159,7 @@ func TestValidateRequiredAndLimitFields(t *testing.T) {
 		{"authorities", func(config *Config) { config.Worlds[0].Authorities = nil }, "authorities must contain at least one"},
 		{"bucket URL", func(config *Config) { config.Worlds[0].Bucket.URL = "" }, "must be exactly gs://bucket"},
 		{"world ID", func(config *Config) { config.Worlds[0].Bucket.WorldID = "not-a-uuid" }, "canonical lowercase UUID"},
+		{"checkpoint grace", func(config *Config) { config.Worlds[0].Bucket.CheckpointGrace = -1 }, "checkpointGrace must not be negative"},
 		{"policy path", func(config *Config) { config.Worlds[0].Policy.Path = "/policy/../policy.md" }, "canonical absolute path"},
 		{"unsupported policy path", func(config *Config) { config.Worlds[0].Policy.Path = "/policy.md" }, "only \"/.well-known/demarkus/policy.md\" is supported"},
 		{"relative policy file", func(config *Config) { config.Worlds[0].Policy.File = "policy.md" }, "policy.file must be a canonical absolute path"},

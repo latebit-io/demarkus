@@ -142,7 +142,7 @@ func TestSenderRefusesAStrangersCertificate(t *testing.T) {
 func TestEndpointParsesOneLine(t *testing.T) {
 	var got []Hint
 	endpoint := &Endpoint{Logger: discardLogger, OnHint: func(h Hint) { got = append(got, h) }}
-	for _, line := range []string{"head 52b471f7 9\n", "head 52b471f7 nine\n", "peek 52b471f7 9\n", "head 52b471f7 0\n", strings.Repeat("x", 300) + "\n", "head 52b471f7 10"} {
+	for _, line := range []string{"commit 52b471f7 9\n", "commit 52b471f7 nine\n", "peek 52b471f7 9\n", "commit 52b471f7 0\n", strings.Repeat("x", 300) + "\n", "commit 52b471f7 10"} {
 		endpoint.ServeStream(context.Background(), nil, &memStream{Reader: strings.NewReader(line)})
 	}
 	if len(got) != 1 || got[0] != (Hint{WorldID: "52b471f7", Sequence: 9}) {

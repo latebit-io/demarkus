@@ -6,6 +6,7 @@ require (
 	cloud.google.com/go/storage v1.65.0
 	github.com/BurntSushi/toml v1.6.0
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/google/btree v1.1.3
 	github.com/latebit-io/demarkus/protocol v0.0.0
 	github.com/quic-go/quic-go v0.59.1
 	golang.org/x/time v0.15.0

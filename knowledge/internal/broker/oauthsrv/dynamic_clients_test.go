@@ -272,9 +272,9 @@ func TestDynamicClientStoreRegisterLookupSweep(t *testing.T) {
 	if n, err := store.Sweep(ctx); err != nil || n != 0 {
 		t.Fatalf("Sweep of a live registration = %d, %v; want 0", n, err)
 	}
-	store.clock = func() time.Time {
-		return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC).Add(dynamicClientTTL + time.Hour)
-	}
+	// Past the TTL of both the record and its object, which the bucket
+	// stamps with wall time.
+	store.clock = func() time.Time { return time.Now().Add(dynamicClientTTL + time.Hour) }
 	if _, found, _ := store.Lookup(ctx, "client-a"); found {
 		t.Error("expired registration still found")
 	}

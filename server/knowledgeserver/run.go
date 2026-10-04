@@ -18,7 +18,9 @@ import (
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/blob/gcs"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
+	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
+	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/logging"
 	"github.com/latebit-io/demarkus/server/internal/management"
@@ -165,6 +167,33 @@ func Open(opts Options) (*Server, error) {
 	return s, nil
 }
 
+// bucketStores is the server's one store wiring: each world is a bucket
+// store over the blob store objects opens for it.
+func bucketStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error)) storeFactory {
+	return func(ctx context.Context, world *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore, error) {
+		bucket, err := objects(ctx, world)
+		if err != nil {
+			return nil, fmt.Errorf("blob store: %w", err)
+		}
+		// Epoch = world ID, sequence = log sequence: a cursor resumes on any
+		// replica and across a restart.
+		store, err := bucketstore.Open(ctx, bucket, bucketstore.Options{
+			WorldID:         world.Bucket.WorldID,
+			Logger:          hooks.logger.With("bucket", world.Bucket.Name()),
+			RequestTimeout:  time.Duration(world.Limits.RequestTimeout),
+			MaxDocuments:    world.Limits.MaxDocuments,
+			ReadOnly:        world.ReadOnly,
+			CheckpointGrace: time.Duration(world.Bucket.CheckpointGrace),
+			ChangeRing:      changefeed.DefaultRingSize,
+			Committed:       hooks.committed,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("bucket: %w", err)
+		}
+		return store, nil
+	}
+}
+
 // open fills in everything after TLS; Close on the partial Server undoes
 // whatever it reached.
 func (s *Server) open(buckets func(context.Context, string, int64) (blob.Store, error)) error {
@@ -181,7 +210,7 @@ func (s *Server) open(buckets func(context.Context, string, int64) (blob.Store, 
 			return gcs.New(client, bucket, maxObjectBytes)
 		}
 	}
-	newStore := func(ctx context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
+	objects := func(ctx context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
 		return buckets(ctx, world.Bucket.Name(), maxObjectBytes)
 	}
 	peers, err := openPeers(s.config.Peers, s.certificates, s.logger)
@@ -191,7 +220,7 @@ func (s *Server) open(buckets func(context.Context, string, int64) (blob.Store, 
 	}
 	s.peers = peers
 	worlds, err := newWorldManager(s.watchCtx, &s.watcherGroup, worldManagerConfig{
-		configFile: s.configFile, config: s.config, newStore: newStore, certs: s.certificates, peers: peers, logger: s.logger,
+		configFile: s.configFile, config: s.config, openStore: bucketStores(objects), certs: s.certificates, peers: peers, logger: s.logger,
 	})
 	if err != nil {
 		s.logger.Error("world startup failed", "error", err)

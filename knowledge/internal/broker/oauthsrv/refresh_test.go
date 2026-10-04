@@ -308,7 +308,7 @@ func TestRefreshStoreObjectShape(t *testing.T) {
 	s := newRefreshStoreForTest(t)
 	raw := s.issue(t, "a@example.com", time.Hour)
 	token, _ := parseRefreshToken(raw)
-	listed, err := s.state.List(context.Background(), "", "")
+	listed, err := s.state.List(context.Background(), "", "", "")
 	if err != nil || len(listed.Objects) != 1 || listed.Objects[0].Key != refreshPrefix+token.name() {
 		t.Fatalf("bucket = %+v, %v; want only %s", listed.Objects, err, refreshPrefix+token.name())
 	}

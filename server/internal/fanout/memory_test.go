@@ -29,13 +29,15 @@ var fence = []byte("---\n")
 func agentEvent(hub *changefeed.Hub, n int) changefeed.Event {
 	return changefeed.Event{
 		Seq:     hub.Head().Seq + 1,
-		Path:    fmt.Sprintf("/agents/session-%d/inbox/01HZX%08d.md", n%7, n),
+		Path:    agentPath(n),
 		Version: n%40 + 1,
 		Hash:    fmt.Sprintf("sha256-%064x", n),
 		Op:      protocol.OpAppend,
 		Agent:   fmt.Sprintf("federation-agent-%d-2026-09-30T15:58:33.%09dZ", n%3, n),
 	}
 }
+
+func agentPath(n int) string { return fmt.Sprintf("/agents/session-%d/inbox/01HZX%08d.md", n%7, n) }
 
 // served runs n watches on scope with their own writers and returns the
 // writers, once every acknowledgement is written, and a stop.
@@ -135,5 +137,39 @@ func TestDeliveryAllocatesNothingPerWatcher(t *testing.T) {
 	t.Logf("allocations per event: %.1f with 1 watcher, %.1f with 64", one, many)
 	if perWatcher := (many - one) / 63; perWatcher > 0.1 {
 		t.Errorf("each further watcher costs %.2f allocations per event, want 0", perWatcher)
+	}
+}
+
+// largestWriter counts blocks and keeps the largest single write.
+type largestWriter struct {
+	countingWriter
+	largest atomic.Int64
+}
+
+func (w *largestWriter) Write(p []byte) (int, error) {
+	if n := int64(len(p)); n > w.largest.Load() {
+		w.largest.Store(n)
+	}
+	return w.countingWriter.Write(p)
+}
+
+// A resume far behind is written a batch at a time, so the watcher holds one
+// batch of the backlog, not all of it.
+func TestCatchUpWritesABatchAtATime(t *testing.T) {
+	const events = 1200
+	hub, _ := pagedHub(events)
+	f := newFanout(t, hub, Config{})
+	writer := &largestWriter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- f.Serve(ctx, Request{Scope: "/", Since: protocol.Cursor{Epoch: "w", Seq: 2}}, writer) }()
+	waitDelivered(t, []*countingWriter{&writer.countingWriter}, events-2)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	// One block past the batch bound at most: the one that crossed it.
+	if largest := writer.largest.Load(); largest > maxBatchBytes+1024 {
+		t.Fatalf("largest write = %d bytes, want at most a batch (%d) and one block", largest, maxBatchBytes)
 	}
 }

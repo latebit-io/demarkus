@@ -44,6 +44,7 @@ func RunConformance(t *testing.T, store blob.Store, prefix string) {
 		{"ConcurrentCreate", testConcurrentCreate},
 		{"ConcurrentReplace", testConcurrentReplace},
 		{"List", testList},
+		{"ListStartAfter", testListStartAfter},
 		{"Validation", testValidation},
 		{"CanceledContext", testCanceledContext},
 		{"ZeroResults", testZeroResults},
@@ -113,7 +114,7 @@ func testAliasing(t *testing.T, s suite) {
 	replacement[0] = 'Z'
 	assertData(t, s.store, key, "replaced")
 
-	result, err := s.store.List(context.Background(), s.root, "")
+	result, err := s.store.List(context.Background(), s.root, "", "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -121,7 +122,7 @@ func testAliasing(t *testing.T, s suite) {
 		t.Fatalf("list = %+v, want replaced attributes", result)
 	}
 	result.Objects[0].Key = "changed"
-	again, err := s.store.List(context.Background(), s.root, "")
+	again, err := s.store.List(context.Background(), s.root, "", "")
 	if err != nil {
 		t.Fatalf("list again: %v", err)
 	}
@@ -258,7 +259,7 @@ func testList(t *testing.T, s suite) {
 	current[keys[2]] = replaced
 	mustCreate(t, s.store, strings.TrimSuffix(s.root, "/")+"-outside", nil)
 
-	result, err := s.store.List(context.Background(), s.root, "")
+	result, err := s.store.List(context.Background(), s.root, "", "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -277,6 +278,42 @@ func testList(t *testing.T, s suite) {
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("listed keys = %q, want %q", gotKeys, wantKeys)
 	}
+}
+
+func testListStartAfter(t *testing.T, s suite) {
+	keys := []string{s.key("a"), s.key("b"), s.key("c"), s.key("d")}
+	for _, key := range keys {
+		mustCreate(t, s.store, key, nil)
+	}
+	tests := []struct {
+		name, startAfter string
+		want             []string
+	}{
+		{"none", "", keys},
+		{"listed key", keys[1], keys[2:]},
+		{"absent key between", s.key("b0"), keys[2:]},
+		{"before the prefix", strings.TrimSuffix(s.root, "/"), keys},
+		{"last key", keys[3], nil},
+		{"after the prefix", s.root + "\uffff", nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := s.store.List(context.Background(), s.root, test.startAfter, "")
+			if err != nil {
+				t.Fatalf("list after %q: %v", test.startAfter, err)
+			}
+			var got []string
+			for _, attributes := range result.Objects {
+				got = append(got, attributes.Key)
+			}
+			if !slices.Equal(got, test.want) {
+				t.Errorf("listed after %q = %q, want %q", test.startAfter, got, test.want)
+			}
+		})
+	}
+	result, err := s.store.List(context.Background(), s.root, "line\nbreak", "")
+	requireOpError(t, err, blob.ErrPrecondition, "list", s.root)
+	assertZeroListResult(t, result)
 }
 
 func testValidation(t *testing.T, s suite) {
@@ -302,16 +339,16 @@ func testValidation(t *testing.T, s suite) {
 
 	invalidPrefixes := []string{"line\nbreak", "line\rbreak", string([]byte{0xff}), strings.Repeat("p", blob.MaxKeyBytes+1)}
 	for _, prefix := range invalidPrefixes {
-		result, err := s.store.List(context.Background(), prefix, "")
+		result, err := s.store.List(context.Background(), prefix, "", "")
 		requireOpError(t, err, blob.ErrPrecondition, "list", prefix)
 		assertZeroListResult(t, result)
 	}
 	for _, prefix := range []string{".", ".."} {
-		if _, err := s.store.List(context.Background(), prefix, ""); err != nil {
+		if _, err := s.store.List(context.Background(), prefix, "", ""); err != nil {
 			t.Errorf("valid prefix %q: %v", prefix, err)
 		}
 	}
-	result, err := s.store.List(context.Background(), s.root, "not-a-cursor")
+	result, err := s.store.List(context.Background(), s.root, "", "not-a-cursor")
 	requireOpError(t, err, blob.ErrPrecondition, "list", s.root)
 	assertZeroListResult(t, result)
 }
@@ -336,7 +373,7 @@ func testCanceledContext(t *testing.T, s suite) {
 	requireOpError(t, err, context.Canceled, "replace", key)
 	assertZeroAttributes(t, attributes)
 	requireOpError(t, s.store.Delete(ctx, key, created.Generation), context.Canceled, "delete", key)
-	result, err := s.store.List(ctx, s.root, "")
+	result, err := s.store.List(ctx, s.root, "", "")
 	requireOpError(t, err, context.Canceled, "list", s.root)
 	assertZeroListResult(t, result)
 
@@ -360,7 +397,7 @@ func testZeroResults(t *testing.T, s suite) {
 	attributes, err = s.store.Replace(context.Background(), missing, 1, nil)
 	requireOpError(t, err, blob.ErrPrecondition, "replace", missing)
 	assertZeroAttributes(t, attributes)
-	result, err := s.store.List(context.Background(), s.root, "bad cursor")
+	result, err := s.store.List(context.Background(), s.root, "", "bad cursor")
 	requireOpError(t, err, blob.ErrPrecondition, "list", s.root)
 	assertZeroListResult(t, result)
 }

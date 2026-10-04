@@ -271,7 +271,7 @@ func TestContextPreflight(t *testing.T) {
 			return store.Delete(ctx, "key", 1)
 		}},
 		{name: "List", op: "list", key: "prefix/", run: func(t *testing.T) error {
-			result, err := store.List(ctx, "prefix/", "cursor")
+			result, err := store.List(ctx, "prefix/", "", "cursor")
 			assertZeroListResult(t, result)
 			return err
 		}},
@@ -602,7 +602,7 @@ func TestListRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wrap input cursor: %v", err)
 	}
-	result, err := store.List(context.Background(), "prefix/", cursor)
+	result, err := store.List(context.Background(), "prefix/", "", cursor)
 	if err != nil {
 		t.Fatalf("List(): %v", err)
 	}
@@ -644,12 +644,47 @@ func TestListRequest(t *testing.T) {
 		}
 	}
 
-	wrongPrefix, err := store.List(context.Background(), "other/", cursor)
+	wrongPrefix, err := store.List(context.Background(), "other/", "", cursor)
 	assertZeroListResult(t, wrongPrefix)
 	assertOperationError(t, err, nil, "list", "other/", blob.ErrPrecondition)
 	if attempts.Load() != 1 {
 		t.Errorf("wrong-prefix cursor made a provider request; attempts = %d", attempts.Load())
 	}
+}
+
+// A start position goes to GCS as its inclusive startOffset; the key itself
+// is dropped, so the listing starts strictly after it.
+func TestListStartAfter(t *testing.T) {
+	modified := time.Date(2026, time.August, 22, 10, 11, 12, 0, time.UTC)
+	requests := make(chan capturedRequest, 1)
+	items := []objectResponse{
+		objectResponseFor("prefix/a", 7, []byte("a"), modified, 0),
+		objectResponseFor("prefix/b", 8, []byte("bb"), modified, 0),
+	}
+	store := newHTTPTestStore(t, 1<<20, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests <- captureRequest(request)
+		response.Header().Set("Content-Type", "application/json")
+		payload := struct {
+			Items []objectResponse `json:"items"`
+		}{Items: items}
+		if err := json.NewEncoder(response).Encode(payload); err != nil {
+			t.Errorf("encode list response: %v", err)
+		}
+	}))
+	result, err := store.List(context.Background(), "prefix/", "prefix/a", "")
+	if err != nil {
+		t.Fatalf("List(): %v", err)
+	}
+	if len(result.Objects) != 1 || result.Objects[0].Key != "prefix/b" {
+		t.Errorf("objects = %+v, want prefix/b alone", result.Objects)
+	}
+	if request := receiveRequest(t, requests); request.query.Get("startOffset") != "prefix/a" {
+		t.Errorf("query = %v, want startOffset=prefix/a", request.query)
+	}
+
+	invalid, err := store.List(context.Background(), "prefix/", "line\nbreak", "")
+	assertZeroListResult(t, invalid)
+	assertOperationError(t, err, nil, "list", "prefix/", blob.ErrPrecondition)
 }
 
 func TestReaderResumePinsGeneration(t *testing.T) {
@@ -750,7 +785,7 @@ func TestRetryNeverMakesOneSDKAttempt(t *testing.T) {
 			return store.Delete(ctx, "object", 7)
 		}},
 		{name: "List", op: "list", key: "prefix/", run: func(t *testing.T, ctx context.Context, store *Store) error {
-			result, err := store.List(ctx, "prefix/", "")
+			result, err := store.List(ctx, "prefix/", "", "")
 			assertZeroListResult(t, result)
 			return err
 		}},

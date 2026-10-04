@@ -25,7 +25,7 @@ func OpenStateBucket(client *gcsclient.Client, cfg *core.ServerConfig, log *slog
 	defer cancel()
 	objects, err := gcs.New(client, cfg.StateBucketName(), maxStateObjectBytes)
 	if err == nil {
-		_, err = objects.List(ctx, "probe/", "")
+		_, err = objects.List(ctx, "probe/", "", "")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("state bucket %s: %w", cfg.StateBucket, err)

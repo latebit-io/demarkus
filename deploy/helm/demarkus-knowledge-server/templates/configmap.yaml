@@ -34,6 +34,9 @@ data:
         bucket:
           url: {{ $world.bucket.url | quote }}
           worldID: {{ $world.bucket.worldID | quote }}
+          {{- with $world.bucket.checkpointGrace }}
+          checkpointGrace: {{ . | quote }}
+          {{- end }}
         auth:
           tokensFile: {{ printf "/run/demarkus/worlds/%s/tokens.toml" $world.name | quote }}
           staticTokensFile: {{ printf "/run/demarkus/worlds/%s/static-tokens.toml" $world.name | quote }}

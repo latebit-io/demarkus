@@ -186,6 +186,8 @@ Where the status title is the status value with the first letter capitalised and
 
 ## 6. Verbs
 
+**Freshness across replicas.** A server MAY serve one world from several replicas. Every response is answered from one committed state. A write acknowledged by any replica is visible to every later FETCH and VERSIONS on every replica. LOOKUP, LIST and content-addressed FETCH (§12) MAY miss a write acknowledged on another replica for up to one second; the replica that acknowledged a write reflects it at once. Writes judge their preconditions (expected version, path collisions, archive state, policy) against every acknowledged write, whatever the replica.
+
 ### 6.1. FETCH
 
 Retrieves a document.
@@ -557,7 +559,7 @@ matches: <count>
 
 The body MUST be a markdown table, one row per result. Columns are the document's server-relative path, its importance, its title, and its declared tags. The `Path` is server-relative; clients compose the full `mark://authority/path` URL from the logical authority used for the request, never from an overridden dial address. The response MUST NOT include document body content; clients FETCH the documents they choose. `matches` is the number of rows returned.
 
-When the request carries `match`, the response MUST echo the mode it answered in as `match: catalog` or `match: body`. A request without `match` is answered exactly as before this key existed, with no `match` header. Clients MUST treat a response without `match: body` as a catalog answer, whatever the request asked for.
+When the request carries `match`, the response MUST echo the mode it answered in as `match: catalog` or `match: body`. A request without `match` is answered exactly as before this key existed, with no `match` header. Clients MUST treat a response without `match: body` as a catalog answer, whatever the request asked for. A server that implements body match MAY answer a body request in catalog mode, echoing `match: catalog`, while its section index is being built or trails the committed state the request reads; it MUST NOT echo `match: body` for an answer from a section index that misses part of that state.
 
 **Ranking**: results are ordered by (1) the number of distinct query terms matched, then (2) descending `importance`, then (3) descending modification time, then (4) ascending path. Importance influences ordering only among documents that already matched the query; it MUST NOT cause an unmatched document to appear in the results.
 
@@ -681,7 +683,7 @@ Terminal, the last block of the stream:
 - A cursor is an opaque string of the form `<epoch>:<seq>`: the epoch is 1 to 64 characters of letters, digits, `.`, `_` and `-`; the sequence is a decimal integer without leading zeros. The server changes the epoch whenever its sequence restarts. A client uses a cursor only by passing it back; it MUST NOT infer a gap from cursor values, since events it may not read are omitted silently. A gap is signalled only by `resync`.
 - Delivery is at least once and in order within an epoch. Events MUST NOT be reordered. A server MAY deliver only the latest of several consecutive changes to one path; every version remains reachable through VERSIONS.
 - The write that produced an event is committed before the event is emitted, so a FETCH of the event's version succeeds unless the document was archived or pruned since.
-- A server that learns of a change from a peer replica rather than from the write itself MAY report an append as `publish`; the version and hash are exact either way.
+- An event's `op` names the operation that made the change, whichever replica reports it: an append is `append`, never `publish`.
 - Read authorisation (§11.8): the token MUST grant `read` on the request path at subscription, and every event MUST be checked against the token before it is sent; an event on a path the token does not cover is omitted. A server that reloads its token store MUST recheck open watches and end those no longer authorised with `unauthorized`.
 - A watch occupies one QUIC stream for its lifetime. Servers SHOULD cap open watches per connection and per server below their stream limits, exempt an open watch from the per-request deadline, and count it once against rate limits at subscription.
 

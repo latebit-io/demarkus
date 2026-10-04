@@ -3,7 +3,7 @@ package filestore
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -16,7 +16,7 @@ import (
 )
 
 // ErrClosed means a write reached the store after Close.
-var ErrClosed = errors.New("filestore: store is closed")
+var ErrClosed = fmt.Errorf("filestore: %w", backend.ErrClosed)
 
 // Store keeps file data, hash state, and catalog state behind one lock.
 type Store struct {

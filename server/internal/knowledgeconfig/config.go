@@ -116,10 +116,17 @@ type WorldConfig struct {
 	Bootstrap bool `yaml:"bootstrap"`
 }
 
+// ID is the world's immutable identity, the key peer hints carry; it lives in
+// the bucket section because that is the store it identifies today.
+func (world *WorldConfig) ID() string { return world.Bucket.WorldID }
+
 // BucketConfig identifies one world's GCS bucket and immutable marker ID.
 type BucketConfig struct {
 	URL     string `yaml:"url"`
 	WorldID string `yaml:"worldID"`
+	// CheckpointGrace is how long a superseded checkpoint, and the objects
+	// only it uses, stay after their successor; zero is the store's default.
+	CheckpointGrace Duration `yaml:"checkpointGrace"`
 }
 
 // Name returns the validated GCS bucket name.
@@ -500,6 +507,10 @@ func (config *Config) validateWorlds() error {
 		bucketURLs[world.Bucket.URL] = worldIndex
 		if !validWorldID(world.Bucket.WorldID) {
 			return fmt.Errorf("%s.bucket.worldID must be a canonical lowercase UUID with RFC 4122 variant (got %q)", location, world.Bucket.WorldID)
+		}
+		// The store holds the minimum; only it knows what the grace fences.
+		if world.Bucket.CheckpointGrace < 0 {
+			return fmt.Errorf("%s.bucket.checkpointGrace must not be negative (got %s)", location, time.Duration(world.Bucket.CheckpointGrace))
 		}
 		if previous, exists := worldIDs[world.Bucket.WorldID]; exists {
 			return fmt.Errorf("%s.bucket.worldID %q duplicates worlds[%d].bucket.worldID", location, world.Bucket.WorldID, previous)

@@ -45,7 +45,7 @@ created on first start: the server writes the world skeleton and seeds a
 default write policy that warns rather than blocks, then enforces it. Publish
 your own policy to `/.well-known/demarkus/policy.md` through the protocol and
 it governs the next write; restarts never revert it. A bucket holding objects
-but no world head is refused, so a mistyped `bucket.url` naming a bucket
+but no world marker is refused, so a mistyped `bucket.url` naming a bucket
 already in use fails the open. A typo naming some other empty bucket still
 creates a world there, logged at Warn.
 
@@ -333,9 +333,7 @@ token or Secret is involved: writes run in process under a grant to
 may cover those paths in the hub. A changed world checkpoints after `quietPeriod` (default
 30s), at most `interval` (default 1m) after its first change, and never
 sooner than `interval` after its last checkpoint. A checkpoint writes each
-changed shard, the manifest and `/graph.md`, one commit each at the bucket
-store's pace of one per 1.5 s per world: an edit costs the hub about 4.5 s
-of write capacity, a first build at most about 25 s per world. `/graph.md`
+changed shard, the manifest and `/graph.md`, one commit each. `/graph.md`
 is written at most once per `interval`, and only when the graph changed; a
 render past the 1 MiB body limit is not written and is logged.
 

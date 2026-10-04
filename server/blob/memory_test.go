@@ -23,6 +23,15 @@ func TestMemoryConformance(t *testing.T) {
 	blobtest.RunConformance(t, store, "conformance/")
 }
 
+// A hedged store keeps the blob contract.
+func TestHedgedConformance(t *testing.T) {
+	store, err := blob.NewMemory(1 << 20)
+	if err != nil {
+		t.Fatalf("new memory: %v", err)
+	}
+	blobtest.RunConformance(t, blob.Hedged(store), "conformance/")
+}
+
 func TestMemoryPagination(t *testing.T) {
 	store, err := blob.NewMemory(1)
 	if err != nil {
@@ -43,7 +52,7 @@ func TestMemoryPagination(t *testing.T) {
 		t.Fatalf("create outside object: %v", err)
 	}
 
-	first, err := store.List(context.Background(), prefix, "")
+	first, err := store.List(context.Background(), prefix, "", "")
 	if err != nil {
 		t.Fatalf("first page: %v", err)
 	}
@@ -53,21 +62,21 @@ func TestMemoryPagination(t *testing.T) {
 	if !slices.Equal(first.Objects, want[:blob.MaxListPage]) {
 		t.Error("first page objects differ")
 	}
-	repeated, err := store.List(context.Background(), prefix, "")
+	repeated, err := store.List(context.Background(), prefix, "", "")
 	if err != nil {
 		t.Fatalf("repeat first page: %v", err)
 	}
 	if repeated.NextCursor != first.NextCursor {
 		t.Errorf("repeated cursor = %q, want %q", repeated.NextCursor, first.NextCursor)
 	}
-	second, err := store.List(context.Background(), prefix, first.NextCursor)
+	second, err := store.List(context.Background(), prefix, "", first.NextCursor)
 	if err != nil {
 		t.Fatalf("second page: %v", err)
 	}
 	if second.NextCursor != "" || !slices.Equal(second.Objects, want[blob.MaxListPage:]) {
 		t.Errorf("second page = %+v cursor %q", second.Objects, second.NextCursor)
 	}
-	wrongPrefix, err := store.List(context.Background(), "other/", first.NextCursor)
+	wrongPrefix, err := store.List(context.Background(), "other/", "", first.NextCursor)
 	if !errors.Is(err, blob.ErrPrecondition) {
 		t.Fatalf("cursor under wrong prefix: %v", err)
 	}
@@ -76,7 +85,43 @@ func TestMemoryPagination(t *testing.T) {
 	}
 }
 
+// A start position composes with paging: every page starts after both it and
+// the cursor.
+func TestMemoryListStartAfterPages(t *testing.T) {
+	store, err := blob.NewMemory(1 << 20)
+	if err != nil {
+		t.Fatalf("new memory: %v", err)
+	}
+	const count = blob.MaxListPage + 10
+	keys := make([]string, count)
+	for index := range count {
+		keys[index] = fmt.Sprintf("log/%04d", index)
+		if _, err := store.Create(context.Background(), keys[index], nil); err != nil {
+			t.Fatalf("create %q: %v", keys[index], err)
+		}
+	}
+	var listed []string
+	cursor := ""
+	for {
+		page, err := store.List(context.Background(), "log/", keys[4], cursor)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		for _, attributes := range page.Objects {
+			listed = append(listed, attributes.Key)
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if !slices.Equal(listed, keys[5:]) {
+		t.Errorf("listed %d keys from %q, want %d from %q", len(listed), listed[0], count-5, keys[5])
+	}
+}
+
 func TestMemoryDeterministicMetadata(t *testing.T) {
+	started := time.Now().UTC().Truncate(time.Second)
 	stores := make([]*blob.Memory, 2)
 	for index := range stores {
 		store, err := blob.NewMemory(32)
@@ -100,20 +145,27 @@ func TestMemoryDeterministicMetadata(t *testing.T) {
 		fourth := mustCreate(t, store, "b", []byte("four"))
 		histories[index] = []blob.Attributes{first, second, third, fourth}
 	}
-	if !slices.Equal(histories[0], histories[1]) {
+	// Generations repeat across stores; Modified is wall time.
+	unstamped := func(history []blob.Attributes) []blob.Attributes {
+		out := slices.Clone(history)
+		for index := range out {
+			out[index].Modified = time.Time{}
+		}
+		return out
+	}
+	if !slices.Equal(unstamped(histories[0]), unstamped(histories[1])) {
 		t.Errorf("identical histories differ:\n%+v\n%+v", histories[0], histories[1])
 	}
 	for index, attributes := range histories[0] {
 		if attributes.Generation <= 0 || attributes.Modified.Location() != time.UTC {
 			t.Errorf("attributes %d = %+v, want positive generation and UTC", index, attributes)
 		}
-		wantModified := time.Unix(int64(attributes.Generation), 0).UTC()
-		if attributes.Modified != wantModified {
-			t.Errorf("modified %d = %v, want logical time %v", index, attributes.Modified, wantModified)
+		if !attributes.Modified.Equal(attributes.Modified.Truncate(time.Second)) || attributes.Modified.Before(started) || attributes.Modified.After(time.Now()) {
+			t.Errorf("modified %d = %v, want wall time to the second since %v", index, attributes.Modified, started)
 		}
 		if index > 0 {
 			previous := histories[0][index-1]
-			if attributes.Generation <= previous.Generation || !attributes.Modified.After(previous.Modified) {
+			if attributes.Generation <= previous.Generation || attributes.Modified.Before(previous.Modified) {
 				t.Errorf("attributes %d = %+v, want after %+v", index, attributes, previous)
 			}
 		}
@@ -159,7 +211,7 @@ func TestMemoryLimitsAndValidation(t *testing.T) {
 		if _, err := store.Create(context.Background(), exact, nil); err != nil {
 			t.Fatalf("create maximum key: %v", err)
 		}
-		result, err := store.List(context.Background(), exact, "")
+		result, err := store.List(context.Background(), exact, "", "")
 		if err != nil || len(result.Objects) != 1 || result.Objects[0].Key != exact {
 			t.Errorf("list maximum prefix = (%+v, %v)", result, err)
 		}
@@ -177,7 +229,7 @@ func TestMemoryLimitsAndValidation(t *testing.T) {
 		}
 		mustCreate(t, store, "b", nil)
 		mustCreate(t, store, "a", nil)
-		result, err := store.List(context.Background(), "", "")
+		result, err := store.List(context.Background(), "", "", "")
 		if err != nil {
 			t.Fatalf("list empty prefix: %v", err)
 		}

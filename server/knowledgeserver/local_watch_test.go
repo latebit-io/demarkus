@@ -96,7 +96,7 @@ func TestWatchStreamsChangesAndResumesAfterACursor(t *testing.T) {
 		t.Fatalf("ack = %+v", ack)
 	}
 	if got := h.runtime(t, "alice").Watches(); got != 1 {
-		t.Errorf("open watches = %d, want 1: the poll backstop counts them", got)
+		t.Errorf("open watches = %d, want 1", got)
 	}
 	publishDoc(t, server, "/a.md")
 	seen := nextEvent(t, reader)

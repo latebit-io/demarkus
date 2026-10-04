@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
@@ -32,6 +33,9 @@ var ErrNotFound = errors.New("not found")
 
 // ErrViewClosed means a read reached a view after its Close.
 var ErrViewClosed = errors.New("read view is closed")
+
+// ErrClosed means a write reached a store after its Close.
+var ErrClosed = errors.New("store is closed")
 
 // FromNotExist marks a backend's own missing-file error as ErrNotFound, keeping
 // the cause in the chain.
@@ -98,13 +102,24 @@ type Store interface {
 	SetArchived(ctx context.Context, req ArchiveRequest) (ArchiveResult, error)
 }
 
-// CatalogReader exposes LOOKUP against the same snapshot as Reader.
+// ErrBodyMatchUnavailable means a body-mode Lookup has no section index
+// covering the view's snapshot yet; the caller answers in catalog mode. ADR 0036.
+var ErrBodyMatchUnavailable = errors.New("body match unavailable")
+
+// CatalogReader exposes LOOKUP against the same snapshot as Reader. A
+// body-mode Lookup may return ErrBodyMatchUnavailable.
 type CatalogReader interface {
 	Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error)
 }
 
-// ReadView pins all read surfaces to one committed backend snapshot. Close is
-// idempotent; every read after it answers ErrViewClosed.
+// SearchFreshness bounds how far a catalog read (Lookup, ListEntries,
+// LookupHash) may trail a write acknowledged on another replica; reads by path
+// and a replica's own writes are exact. ADR 0036.
+const SearchFreshness = time.Second
+
+// ReadView pins all read surfaces to one committed snapshot, chosen at its
+// first read under SearchFreshness. Close is idempotent; every read after it
+// answers ErrViewClosed.
 type ReadView interface {
 	Reader
 	CatalogReader

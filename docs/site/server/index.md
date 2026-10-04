@@ -129,7 +129,7 @@ A healthy server returns:
 
 ## Multi-World Mode (`demarkus-knowledge-server`)
 
-`demarkus-knowledge-server` is the production server: one process hosts many logically isolated worlds on one UDP listener, with TLS SNI selecting the world during the QUIC handshake. Each world is backed by its own GCS bucket, and any number of stateless replicas can share the buckets. Replicas tell each other about commits over a replica-only port (`peers` in the configuration; the chart wires it), so a WATCH on one replica sees a write made through another at once; without peers configured, a 5 s poll is the backstop.
+`demarkus-knowledge-server` is the production server: one process hosts many logically isolated worlds on one UDP listener, with TLS SNI selecting the world during the QUIC handshake. Each world is backed by its own GCS bucket, and any number of stateless replicas can share the buckets. Replicas tell each other about commits over a replica-only port (`peers` in the configuration; the chart wires it), so a WATCH on one replica sees a write made through another at once, and replicas writing one world take turns rather than one starving another. Without peers configured, a 5 s poll is the backstop for WATCH, and a replica that keeps losing write races to a busy peer can wait until that peer's queue drains.
 
 It takes one required flag, `-config`, pointing at a strict YAML file:
 
@@ -162,7 +162,7 @@ Operational notes:
 - `SIGHUP` reloads TLS certificates and token files; token files also hot-reload on change.
 - Token files may be absent when a world opens: it serves reads with no tokens and loads a file once it appears. `staticTokensFile` holds operator-owned entries merged with the broker-owned `tokensFile`; a hash may appear in only one of them.
 - GCS credentials come from Application Default Credentials (Workload Identity on GKE); there are no credential flags or env vars.
-- The bucket must exist, but needs no out-of-band initialization: an existing empty one is initialized and seeded on first start, and a bucket holding objects but no world head is refused.
+- The bucket must exist, but needs no out-of-band initialization: an existing empty one is initialized and seeded on first start, and a bucket holding objects but no world marker is refused.
 - `policy.file` names a local file whose body seeds the world's first policy version instead of the embedded default. Seeding is create-only, so a world that already holds a policy keeps it, but the file is still read and validated on every open and must stay present and parseable.
 - `policy.file` applies to a writable world only. Configuration refuses it on a read-only world, which is never seeded and must already hold a valid policy in its bucket.
 

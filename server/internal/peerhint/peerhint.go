@@ -1,8 +1,8 @@
 // Package peerhint carries commit hints between the replicas of one
-// knowledge server: the head of a world moved to a sequence. A hint is a
-// trigger, never the change itself: the peer refreshes its snapshot, whose
-// receipts name what was committed. A lost hint costs latency until the
-// backstop poll; a forged one costs one head read.
+// knowledge server: a world committed through a sequence. A hint is a
+// trigger, never the change itself: the peer's store reads what was
+// committed. A lost hint costs latency until the store's own backstop; a
+// forged one costs one read.
 package peerhint
 
 import (
@@ -30,26 +30,26 @@ import (
 // so a network policy can keep it inside the replica set.
 const ALPN = "mark-peer"
 
-// One hint per stream, one line: "head <world id> <sequence>".
+// One hint per stream, one line: "commit <world id> <sequence>".
 const (
 	maxLineLength = 256
 	streamTimeout = 5 * time.Second
 	dialTimeout   = 3 * time.Second
 )
 
-// Hint says the head of a world moved to Sequence.
+// Hint says a world committed through Sequence.
 type Hint struct {
 	WorldID  string
 	Sequence int64
 }
 
 func (h Hint) line() string {
-	return "head " + h.WorldID + " " + strconv.FormatInt(h.Sequence, 10) + "\n"
+	return "commit " + h.WorldID + " " + strconv.FormatInt(h.Sequence, 10) + "\n"
 }
 
 func parseHint(line string) (Hint, error) {
 	fields := strings.Fields(line)
-	if len(fields) != 3 || fields[0] != "head" {
+	if len(fields) != 3 || fields[0] != "commit" {
 		return Hint{}, fmt.Errorf("malformed hint %q", strings.TrimSpace(line))
 	}
 	if len(fields[1]) > 64 {
@@ -94,7 +94,7 @@ func (e *Endpoint) ServeStream(_ context.Context, remote net.Addr, stream quicse
 // SenderConfig wires a Sender.
 type SenderConfig struct {
 	// Peers resolves the addresses to hint on each flush; a failure drops
-	// the batch, which the backstop poll covers.
+	// the batch, which the stores' backstop covers.
 	Peers  func(ctx context.Context) ([]string, error)
 	TLS    *tls.Config
 	Logger *slog.Logger

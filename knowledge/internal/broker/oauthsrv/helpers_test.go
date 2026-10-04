@@ -82,11 +82,11 @@ func (s *testState) Delete(ctx context.Context, key string, generation blob.Gene
 	return s.Memory.Delete(ctx, key, generation)
 }
 
-func (s *testState) List(ctx context.Context, prefix, cursor string) (blob.ListResult, error) {
+func (s *testState) List(ctx context.Context, prefix, startAfter, cursor string) (blob.ListResult, error) {
 	if err := s.fault(); err != nil {
 		return blob.ListResult{}, err
 	}
-	return s.Memory.List(ctx, prefix, cursor)
+	return s.Memory.List(ctx, prefix, startAfter, cursor)
 }
 
 // failState makes every state bucket operation of broker fail with err.
