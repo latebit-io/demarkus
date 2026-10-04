@@ -63,7 +63,7 @@ func TestCompactionConvergesInBoundedSteps(t *testing.T) {
 	const documents, latency, timeout = 300, 2 * time.Millisecond, 400 * time.Millisecond
 	backlog := func(t *testing.T, trigger *compactionTrigger) (*Store, blob.Store) {
 		t.Helper()
-		objects := latentStore{Store: initializedMemory(t), delay: latency}
+		objects := evenLatency(initializedMemory(t), latency)
 		store, err := Open(context.Background(), objects, Options{Logger: discardLogger, WorldID: testWorldID, ShardWorkers: 1, noHedge: true, trigger: trigger})
 		mustSucceed(t, err)
 		closeAtEnd(t, store)

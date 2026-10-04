@@ -1,6 +1,7 @@
 package bucketstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -407,7 +408,7 @@ func TestWinnerHandsTheNextSlotToAWaitingPeer(t *testing.T) {
 // Two stores writing one world as fast as they can both keep committing:
 // the one that loses races hints the winner, which hands it the next slot.
 func TestContendingStoresTakeTurns(t *testing.T) {
-	site := &bucketSite{objects: latentStore{Store: initializedMemory(t), delay: 5 * time.Millisecond}, hinted: true}
+	site := &bucketSite{objects: evenLatency(initializedMemory(t), 5*time.Millisecond), hinted: true}
 	stores := []*Store{site.open(t, 16), site.open(t, 16)}
 	deadline := time.Now().Add(1500 * time.Millisecond)
 	var committed [2]atomic.Int64
@@ -475,6 +476,48 @@ func TestQueuedWritesWarmTheirDocument(t *testing.T) {
 	}
 	if n := read() - opened; n != 1 {
 		t.Errorf("the tip was read %d times after open, want once for both queued writes", n)
+	}
+}
+
+// The batches behind a lost slot are rebuilt from what they had read: a
+// requeued update does not read its document from the bucket again, so a
+// loser creates again within a few bucket calls rather than one per member.
+func TestDiscardedBatchesKeepTheirReads(t *testing.T) {
+	objects := initializedMemory(t)
+	seeder := (&bucketSite{objects: objects}).open(t, 0)
+	tips := make(map[string]string)
+	for _, path := range []string{"/first.md", "/ahead-1.md", "/ahead-2.md"} {
+		seeded, err := seeder.WriteVersion(path, 0, []byte("# "+path+"\n"), nil)
+		if err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+		tips[path] = blobKey(seeded.ETag)
+	}
+	gets := newObservedBlobStore(objects)
+	staged := &blobCreates{Store: gets, created: make(chan struct{}, 8)}
+	holds := newSlotHolds(t, staged, 5)
+	store := (&bucketSite{objects: holds, noHedge: true}).open(t, 0)
+	update := func(path string) <-chan writeOutcome {
+		return publishAsync(context.Background(), store, backend.WriteRequest{Path: path, ExpectedVersion: -1, Content: []byte("# again\n")})
+	}
+	ahead := fillPipeline(t, holds, staged, update)
+	read := func(path string) int { return gets.counts().gets[tips[path]] }
+	before := map[string]int{"/ahead-1.md": read("/ahead-1.md"), "/ahead-2.md": read("/ahead-2.md")}
+
+	// A peer takes slot 5: the head rebuilds and the staged batches requeue.
+	if _, err := (&bucketSite{objects: objects}).open(t, 0).WriteVersion("/peer.md", 0, []byte("# peer\n"), nil); err != nil {
+		t.Fatalf("peer write: %v", err)
+	}
+	holds.holds[5].open()
+	for index, result := range ahead {
+		if outcome := <-result; outcome.err != nil || outcome.document.Version != 2 {
+			t.Fatalf("write %d = %+v, %v; want v2", index, outcome.document, outcome.err)
+		}
+	}
+	for path, n := range before {
+		if again := read(path) - n; again != 0 {
+			t.Errorf("%s's tip was read %d times more after the lost slot, want its batch's read kept", path, again)
+		}
 	}
 }
 
@@ -590,24 +633,41 @@ func (s *slotHolds) Create(ctx context.Context, key string, data []byte) (blob.A
 	return s.Store.Create(ctx, key, data)
 }
 
-// latentStore delays every call by a fixed delay, as a bucket's latency does.
+// latentStore delays each kind of call by a fixed delay plus up to a tenth
+// of jitter, as a bucket's latency does.
 type latentStore struct {
 	blob.Store
-	delay time.Duration
+	create, get, list time.Duration
+}
+
+// evenLatency delays every call by delay.
+func evenLatency(objects blob.Store, delay time.Duration) latentStore {
+	return latentStore{Store: objects, create: delay, get: delay, list: delay}
+}
+
+// gcsLatency is what the GCS gate measured per call (research, 2026-10-04).
+func gcsLatency(objects blob.Store) latentStore {
+	return latentStore{Store: objects, create: 45 * time.Millisecond, get: 25 * time.Millisecond, list: 30 * time.Millisecond}
+}
+
+func (s latentStore) wait(delay time.Duration) {
+	if delay > 0 {
+		time.Sleep(delay + jitterWithin(max(delay/10, time.Nanosecond)))
+	}
 }
 
 func (s latentStore) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
-	time.Sleep(s.delay)
+	s.wait(s.create)
 	return s.Store.Create(ctx, key, data)
 }
 
 func (s latentStore) Get(ctx context.Context, key string) (blob.Object, error) {
-	time.Sleep(s.delay)
+	s.wait(s.get)
 	return s.Store.Get(ctx, key)
 }
 
 func (s latentStore) List(ctx context.Context, prefix, startAfter, cursor string) (blob.ListResult, error) {
-	time.Sleep(s.delay)
+	s.wait(s.list)
 	return s.Store.List(ctx, prefix, startAfter, cursor)
 }
 
@@ -736,5 +796,259 @@ func waitFor(t *testing.T, name string, reached func() bool) {
 			t.Fatalf("timed out waiting for %s", name)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// writersModel is R stores on one bucket with GCS-shaped latency under a
+// closed or an open load: the in-process model of several replicas writing
+// one world (plan: several-writers).
+type writersModel struct {
+	replicas    int
+	handoffWait time.Duration
+	hinted      bool
+	// closed is the writers per store looping as fast as they are answered;
+	// zero for an open loop offering rate writes/s over all stores.
+	closed   int
+	rate     int
+	duration time.Duration
+}
+
+// modelSeed is the documents a model world holds before the load.
+const modelSeed = 2000
+
+// modelResult is what one run shows: the acknowledged writes, the log's
+// shape, and what the slot creates cost each store.
+type modelResult struct {
+	acked, failed int64
+	perStore      []int64
+	// acks are the acknowledged (path, version) pairs with how many slot
+	// entries hold each; every one must be exactly one.
+	acks    map[string]int
+	p50     time.Duration
+	slots   int
+	entries int
+	losses  int64
+	// recoveryP50 is a loss to the same store's next create; afterWinP50 a
+	// win to its next create, and holds counts those over 200 ms.
+	recoveryP50, afterWinP50 time.Duration
+	holds                    int
+}
+
+func (r modelResult) String() string {
+	return fmt.Sprintf("acked %d (%v) failed %d p50 %v | slots %d entries/slot %.1f losses %d | recovery p50 %v after-win p50 %v holds %d",
+		r.acked, r.perStore, r.failed, r.p50.Round(time.Millisecond), r.slots, float64(r.entries)/float64(max(r.slots, 1)), r.losses,
+		r.recoveryP50.Round(time.Millisecond), r.afterWinP50.Round(time.Millisecond), r.holds)
+}
+
+// slotAttempt is one slot create a store made.
+type slotAttempt struct {
+	started, ended time.Time
+	lost           bool
+}
+
+// slotProbe records each slot create of the store it serves.
+type slotProbe struct {
+	blob.Store
+	mu       sync.Mutex
+	attempts []slotAttempt
+}
+
+func (p *slotProbe) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
+	if !isSlot(key) {
+		return p.Store.Create(ctx, key, data)
+	}
+	started := time.Now()
+	attributes, err := p.Store.Create(ctx, key, data)
+	p.mu.Lock()
+	p.attempts = append(p.attempts, slotAttempt{started: started, ended: time.Now(), lost: errors.Is(err, blob.ErrPrecondition)})
+	p.mu.Unlock()
+	return attributes, err
+}
+
+// gaps are the time from each attempt's end to the store's next create,
+// split by whether the attempt lost.
+func (p *slotProbe) gaps() (recovery, afterWin []time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for index, attempt := range p.attempts[:max(len(p.attempts)-1, 0)] {
+		gap := p.attempts[index+1].started.Sub(attempt.ended)
+		if attempt.lost {
+			recovery = append(recovery, gap)
+		} else {
+			afterWin = append(afterWin, gap)
+		}
+	}
+	return recovery, afterWin
+}
+
+func percentile(samples []time.Duration, fraction float64) time.Duration {
+	if len(samples) == 0 {
+		return 0
+	}
+	sorted := slices.Clone(samples)
+	slices.Sort(sorted)
+	return sorted[min(int(float64(len(sorted))*fraction), len(sorted)-1)]
+}
+
+// run opens the stores on one bucket, drives the load for the duration and
+// reads the log back without latency.
+func (m writersModel) run(t *testing.T) modelResult {
+	t.Helper()
+	memory := initializedMemory(t)
+	// The seed is written without latency; the load's builds then read it
+	// through the bucket, as the gate's updates of random documents did.
+	writeDocuments(t, (&bucketSite{objects: memory}).open(t, 0), modelSeed)
+	bucket := gcsLatency(memory)
+	site := &bucketSite{hinted: m.hinted, noHedge: true}
+	stores := make([]*Store, m.replicas)
+	probes := make([]*slotProbe, m.replicas)
+	for index := range stores {
+		probes[index] = &slotProbe{Store: bucket}
+		stores[index] = site.openOn(t, probes[index], 16)
+		stores[index].handoffWait = m.handoffWait
+	}
+	body := bytes.Repeat([]byte("# model\n"), 128)
+	var acked, failed atomic.Int64
+	perStore := make([]atomic.Int64, m.replicas)
+	var latencies struct {
+		mu      sync.Mutex
+		samples []time.Duration
+		acks    map[string]int
+	}
+	latencies.acks = make(map[string]int)
+	var failure sync.Once
+	deadline := time.Now().Add(m.duration)
+	write := func(index int, n int) {
+		path, expected := fmt.Sprintf("/new/%d.md", n), 0
+		if n%10 >= 3 {
+			// Seven writes in ten update a random document blind (expected -1).
+			path, expected = fmt.Sprintf("/many/%04d.md", mathrand.IntN(modelSeed)), -1
+		}
+		started := time.Now()
+		document, err := stores[index].WriteVersion(path, expected, fmt.Appendf(body, "write %d\n", n), nil)
+		if err != nil {
+			failed.Add(1)
+			failure.Do(func() { t.Logf("write %s: %v", path, err) })
+			return
+		}
+		latencies.mu.Lock()
+		latencies.acks[fmt.Sprintf("%s@%d", path, document.Version)] = 0
+		latencies.mu.Unlock()
+		if m.closed > 0 && !started.Before(deadline) {
+			return
+		}
+		acked.Add(1)
+		perStore[index].Add(1)
+		latencies.mu.Lock()
+		latencies.samples = append(latencies.samples, time.Since(started))
+		latencies.mu.Unlock()
+	}
+	var wg sync.WaitGroup
+	var sequence atomic.Int64
+	if m.closed > 0 {
+		for index := range stores {
+			for range m.closed {
+				wg.Go(func() {
+					for time.Now().Before(deadline) {
+						write(index, int(sequence.Add(1)))
+					}
+				})
+			}
+		}
+	} else {
+		ticker := time.NewTicker(time.Second / time.Duration(m.rate))
+		for time.Now().Before(deadline) {
+			<-ticker.C
+			n := int(sequence.Add(1))
+			wg.Go(func() { write(n%m.replicas, n) })
+		}
+		ticker.Stop()
+	}
+	wg.Wait()
+
+	result := modelResult{acked: acked.Load(), failed: failed.Load(), p50: percentile(latencies.samples, 0.5), acks: latencies.acks}
+	for index := range perStore {
+		result.perStore = append(result.perStore, perStore[index].Load())
+	}
+	var tip int64
+	for _, store := range stores {
+		tip = max(tip, store.servedSequence())
+	}
+	for _, slot := range logSlots(t, memory, tip) {
+		result.slots++
+		result.entries += len(slot.Entries)
+		for index := range slot.Entries {
+			key := fmt.Sprintf("%s@%d", slot.Entries[index].Path, slot.Entries[index].Current)
+			if _, acknowledged := result.acks[key]; acknowledged {
+				result.acks[key]++
+			}
+		}
+	}
+	recovery, afterWin := make([]time.Duration, 0, result.slots), make([]time.Duration, 0, result.slots)
+	for _, probe := range probes {
+		lost, won := probe.gaps()
+		recovery, afterWin = append(recovery, lost...), append(afterWin, won...)
+		probe.mu.Lock()
+		for _, attempt := range probe.attempts {
+			if attempt.lost {
+				result.losses++
+			}
+		}
+		probe.mu.Unlock()
+	}
+	result.recoveryP50, result.afterWinP50 = percentile(recovery, 0.5), percentile(afterWin, 0.5)
+	for _, gap := range afterWin {
+		if gap > 200*time.Millisecond {
+			result.holds++
+		}
+	}
+	return result
+}
+
+// Several stores writing one world on GCS-shaped latency: the model of the
+// GCS gate's three-writer collapse (94 writes/s against 365 with one) and
+// the regression test for its fix; the guarantees it holds are in check.
+func TestSeveralWritersModel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("the several-writers model runs for about 20 s")
+	}
+	const duration, rate = 3 * time.Second, 300
+	// No write fails, every acknowledged write is in exactly one slot, no
+	// store starves, and a loser creates again within a few bucket calls.
+	check := func(t *testing.T, name string, result modelResult) {
+		t.Helper()
+		if result.failed > 0 {
+			t.Errorf("%s: %d writes failed", name, result.failed)
+		}
+		for key, n := range result.acks {
+			if n != 1 {
+				t.Errorf("%s: acknowledged %s is in %d slots", name, key, n)
+			}
+		}
+		// A store that keeps losing acknowledges its first batch and no more.
+		if least := slices.Min(result.perStore); least*2*int64(len(result.perStore)) < result.acked {
+			t.Errorf("%s: a store acknowledged %d of %d writes; it starved", name, least, result.acked)
+		}
+		if result.recoveryP50 > 500*time.Millisecond {
+			t.Errorf("%s: a loser took %v to create again, want a few bucket calls", name, result.recoveryP50)
+		}
+	}
+	var alone float64
+	for _, replicas := range []int{1, 2, 3} {
+		closed := writersModel{replicas: replicas, handoffWait: handoffWait, hinted: true, closed: 64, duration: duration}.run(t)
+		perSecond := float64(closed.acked) / duration.Seconds()
+		t.Logf("R=%d closed 64/store: %.0f writes/s; %v", replicas, perSecond, closed)
+		check(t, fmt.Sprintf("R=%d closed", replicas), closed)
+		if replicas == 1 {
+			alone = perSecond
+		} else if perSecond < 0.7*alone {
+			t.Errorf("R=%d closed loop: %.0f writes/s, under 70%% of one writer's %.0f", replicas, perSecond, alone)
+		}
+		open := writersModel{replicas: replicas, handoffWait: handoffWait, hinted: true, rate: rate, duration: duration}.run(t)
+		t.Logf("R=%d open %d/s:       %.0f writes/s; %v", replicas, rate, float64(open.acked)/duration.Seconds(), open)
+		check(t, fmt.Sprintf("R=%d open", replicas), open)
+		if offered := int64(rate * int(duration.Seconds())); open.acked < offered*9/10 || open.p50 > 1500*time.Millisecond {
+			t.Errorf("R=%d open loop: %d of %d offered writes acknowledged at p50 %v", replicas, open.acked, offered, open.p50)
+		}
 	}
 }
