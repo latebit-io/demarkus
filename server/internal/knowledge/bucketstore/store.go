@@ -70,10 +70,12 @@ type Store struct {
 	maxDocuments    int
 	readOnly        bool
 	served          atomic.Pointer[served]
-	// refreshMu lets one probe of the log at a time read the bucket;
+	// probing is the probe of the log's tip in flight, which refreshes share
+	// (one bucket reader at a time); nil when none runs.
+	probeMu sync.Mutex
+	probing chan struct{}
 	// installMu orders installs and is never held across a bucket call, so a
 	// commit confirming its slot never waits on a probe.
-	refreshMu sync.Mutex
 	installMu sync.Mutex
 	// deriveMu serializes snapshot clones: btree.Clone writes to its source.
 	deriveMu sync.Mutex
@@ -233,10 +235,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		store.changeLog = newChangeLog(store, options.ChangeRing)
 		store.changes = changefeed.NewWithBacklog(store.worldID, options.ChangeRing, store.changeLog)
 	}
-	store.refreshMu.Lock()
-	err = store.loadOrCreate(ctx)
-	store.refreshMu.Unlock()
-	if err != nil {
+	if err := store.loadOrCreate(ctx); err != nil {
 		store.compaction.cancel()
 		store.end()
 		return nil, fmt.Errorf("open bucket store: %w", err)
@@ -361,8 +360,9 @@ func (store *Store) current(ctx context.Context, class readClass) (*snapshot, er
 	return store.refresh(ctx)
 }
 
-// refresh catches up to the log's tip. A caller that waited while another
-// refresh probed after it asked takes that tip instead of probing again.
+// refresh catches up to the log's tip. Probes are a shared flight: a caller
+// takes a tip confirmed after it asked, waits on the probe in flight no
+// longer than its own context, and otherwise starts the next one.
 func (store *Store) refresh(ctx context.Context) (*snapshot, error) {
 	asked := store.now()
 	if asked.Sub(store.served.Load().confirmed) > staleAfter || store.diverged.Load() {
@@ -370,26 +370,56 @@ func (store *Store) refresh(ctx context.Context) (*snapshot, error) {
 			return nil, fmt.Errorf("refresh: %w", err)
 		}
 	}
-	store.refreshMu.Lock()
-	defer store.refreshMu.Unlock()
-	if served := store.served.Load(); served.confirmed.After(asked) {
-		return served.snap, nil
+	for {
+		if served := store.served.Load(); served.confirmed.After(asked) {
+			return served.snap, nil
+		}
+		flight, started := store.joinProbe()
+		if started {
+			return store.probe(ctx, flight, asked)
+		}
+		select {
+		case <-flight:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("refresh: %w", ctx.Err())
+		}
 	}
-	return store.catchUpLocked(ctx, nil, asked)
 }
 
-// catchUpFrom catches up through a slot this store lost the race for; it
-// holds the winner already, so that slot is not read again.
+// joinProbe returns the probe in flight, or a new one this caller runs.
+func (store *Store) joinProbe() (flight chan struct{}, started bool) {
+	store.probeMu.Lock()
+	defer store.probeMu.Unlock()
+	if store.probing == nil {
+		store.probing = make(chan struct{})
+		return store.probing, true
+	}
+	return store.probing, false
+}
+
+// probe runs the flight's catch-up and releases it on every exit, so a panic
+// recovered above the store cannot leave later refreshes waiting on it.
+func (store *Store) probe(ctx context.Context, flight chan struct{}, asked time.Time) (*snapshot, error) {
+	defer func() {
+		store.probeMu.Lock()
+		store.probing = nil
+		store.probeMu.Unlock()
+		close(flight)
+	}()
+	return store.catchUp(ctx, nil, asked)
+}
+
+// catchUpFrom catches up through a slot this store lost the race for, outside
+// the probe flight: it holds the winner already and reads only the listing
+// after it, so a loser's recovery never waits behind a reader's probe.
 func (store *Store) catchUpFrom(ctx context.Context, winner slotRead) (*snapshot, error) {
-	store.refreshMu.Lock()
-	defer store.refreshMu.Unlock()
-	return store.catchUpLocked(ctx, &winner, time.Time{})
+	return store.catchUp(ctx, &winner, time.Time{})
 }
 
-// catchUpLocked brings the served snapshot to the log's tip under refreshMu,
-// from its next slot or known, one this store lost the race for. A commit
-// installing meanwhile restarts it, unless that one was confirmed after asked.
-func (store *Store) catchUpLocked(ctx context.Context, known *slotRead, asked time.Time) (*snapshot, error) {
+// catchUp brings the served snapshot to the log's tip, from its next slot or
+// from known, one this store lost the race for. A commit installing meanwhile
+// restarts it, unless that one was confirmed after asked.
+func (store *Store) catchUp(ctx context.Context, known *slotRead, asked time.Time) (*snapshot, error) {
 	for {
 		current := store.served.Load()
 		if !asked.IsZero() && current.confirmed.After(asked) {
@@ -397,7 +427,8 @@ func (store *Store) catchUpLocked(ctx context.Context, known *slotRead, asked ti
 		}
 		base := current.snap
 		if known != nil && known.slot.First != base.Sequence+1 {
-			known = nil
+			// The winner's slot is installed already; the rest is a probe.
+			return store.refresh(ctx)
 		}
 		ahead, err := store.readAhead(ctx, base, known)
 		if ahead.next == nil && err != nil {
@@ -536,8 +567,6 @@ func (store *Store) reloadIfBehind(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	store.refreshMu.Lock()
-	defer store.refreshMu.Unlock()
 	if err := store.start(ctx, loaded, started); err != nil {
 		return err
 	}
