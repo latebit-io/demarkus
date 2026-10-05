@@ -118,7 +118,7 @@ func openHarness(
 			return h.memory(world.Name)
 		}
 	}
-	err := h.open(t, worldsSection, bucketStores(newStore))
+	err := h.open(t, worldsSection, bucketStores(newStore, bucketstore.Eager))
 	return h, err
 }
 

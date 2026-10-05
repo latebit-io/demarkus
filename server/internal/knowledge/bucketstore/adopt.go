@@ -78,23 +78,62 @@ type adoption struct {
 	own bool
 }
 
+// rebaseAttempts is how often an adoption rebases the served snapshot
+// outside installMu before holding it: a restart repeats the whole rebase,
+// so a writer committing faster than one would never finish.
+const rebaseAttempts = 3
+
 // installAdoption makes a the newest checkpoint and rebases the served
-// snapshot on it; snapshots built earlier rebase as they are installed.
+// snapshot on it outside installMu, so no commit waits; an install meanwhile
+// restarts it, the last attempt under the lock. Earlier snapshots rebase as installed.
 func (store *Store) installAdoption(a *adoption) {
-	store.installMu.Lock()
-	defer store.installMu.Unlock()
+	for attempt := 1; ; attempt++ {
+		locked := attempt >= rebaseAttempts
+		if locked {
+			store.installMu.Lock()
+		}
+		current := store.served.Load()
+		snap := current.snap
+		if store.rebasedPast(a, snap) {
+			if locked {
+				store.installMu.Unlock()
+			}
+			return
+		}
+		rebased := snap
+		// A served snapshot behind the checkpoint rebases once it passes it.
+		if snap.Sequence >= a.checkpoint.Sequence {
+			if store.holdRebase != nil && !locked {
+				store.holdRebase()
+			}
+			rebased = store.rebase(snap, a)
+		}
+		if !locked {
+			store.installMu.Lock()
+			if current = store.served.Load(); current.snap != snap {
+				store.installMu.Unlock()
+				continue
+			}
+			if store.rebasedPast(a, snap) {
+				store.installMu.Unlock()
+				return
+			}
+		}
+		store.adoption.Store(a)
+		store.served.Store(&served{snap: rebased, confirmed: current.confirmed})
+		store.releaseAdoption(rebased)
+		store.installMu.Unlock()
+		return
+	}
+}
+
+// rebasedPast reports whether the store already rests on a or a newer
+// checkpoint, by its adoption or by a reload that moved the served snapshot.
+func (store *Store) rebasedPast(a *adoption, snap *snapshot) bool {
 	if current := store.adoption.Load(); current != nil && current.checkpoint.Sequence >= a.checkpoint.Sequence {
-		return
+		return true
 	}
-	// A reload may have moved the served snapshot past it already.
-	current := store.served.Load()
-	if current.snap.Checkpoint.Sequence >= a.checkpoint.Sequence {
-		return
-	}
-	store.adoption.Store(a)
-	rebased := store.rebased(current.snap)
-	store.served.Store(&served{snap: rebased, confirmed: current.confirmed})
-	store.releaseAdoption(rebased)
+	return snap.Checkpoint.Sequence >= a.checkpoint.Sequence
 }
 
 // releaseAdoption drops the adoption's entries once nothing built before it
@@ -115,6 +154,11 @@ func (store *Store) rebased(s *snapshot) *snapshot {
 	if a == nil || s.Checkpoint.Sequence >= a.checkpoint.Sequence || s.Sequence < a.checkpoint.Sequence {
 		return s
 	}
+	return store.rebase(s, a)
+}
+
+// rebase is s on a; a failure marks the store diverged and keeps s.
+func (store *Store) rebase(s *snapshot, a *adoption) *snapshot {
 	next := store.derive(s)
 	if err := next.adopt(a); err != nil {
 		// The compactor refuses a snapshot off the newest checkpoint, so the

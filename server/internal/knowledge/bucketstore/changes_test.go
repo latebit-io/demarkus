@@ -241,17 +241,20 @@ type bucketSite struct {
 	follow time.Duration
 	// noHedge opens them unhedged, for a bucket that holds one call.
 	noHedge bool
-	// trigger overrides when their compactors run.
+	// trigger overrides when their compactors run; role is their part in it.
 	trigger *compactionTrigger
+	role    CompactionRole
 	// reach and idle override how far their backlogs reach, in slots, and
 	// how long their slot caches outlive a read.
 	reach uint64
 	idle  time.Duration
 	// hinted wires each store's Committed hook to the others' Follow, as the
-	// knowledge server's peer hints do.
-	hinted bool
-	mu     sync.Mutex
-	stores []*Store
+	// knowledge server's peer hints do. unpinned leaves closing to the test,
+	// so it can drop a store and measure what it held.
+	hinted   bool
+	unpinned bool
+	mu       sync.Mutex
+	stores   []*Store
 }
 
 // open opens a store that closes when t ends, stopping its follow loop.
@@ -265,7 +268,7 @@ func (s *bucketSite) open(t *testing.T, ring int) *Store {
 func (s *bucketSite) openOn(t *testing.T, objects blob.Store, ring int) *Store {
 	t.Helper()
 	var self atomic.Pointer[Store]
-	options := Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger}
+	options := Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, Compaction: s.role, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger}
 	if s.hinted {
 		options.Committed = func(sequence int64) { s.hint(self.Load(), sequence) }
 	}
@@ -274,6 +277,9 @@ func (s *bucketSite) openOn(t *testing.T, objects blob.Store, ring int) *Store {
 		t.Fatalf("open: %v", err)
 	}
 	self.Store(store)
+	if !s.unpinned {
+		closeAtEnd(t, store)
+	}
 	s.mu.Lock()
 	s.stores = append(s.stores, store)
 	s.mu.Unlock()
@@ -281,7 +287,6 @@ func (s *bucketSite) openOn(t *testing.T, objects blob.Store, ring int) *Store {
 		store.changeLog.reach = cmp.Or(s.reach, store.changeLog.reach)
 		store.changeLog.idle = cmp.Or(s.idle, store.changeLog.idle)
 	}
-	closeAtEnd(t, store)
 	return store
 }
 

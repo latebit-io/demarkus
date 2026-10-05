@@ -154,6 +154,7 @@ func TestValidateRequiredAndLimitFields(t *testing.T) {
 		{"peers listen without port", func(config *Config) { config.Peers = PeersConfig{Listen: "localhost", Service: "peers"} }, "peers.listen \"localhost\""},
 		{"peers without anyone to hint", func(config *Config) { config.Peers = PeersConfig{Listen: ":6310"} }, "peers.service or peers.addresses"},
 		{"peer address without port", func(config *Config) { config.Peers = PeersConfig{Listen: ":6310", Addresses: []string{"replica-b"}} }, "peers.addresses \"replica-b\""},
+		{"compaction role", func(config *Config) { config.Compaction.Role = "leader" }, "compaction.role \"leader\""},
 		{"worlds", func(config *Config) { config.Worlds = nil }, "worlds must contain at least one"},
 		{"world name", func(config *Config) { config.Worlds[0].Name = "" }, "worlds[0].name is required"},
 		{"authorities", func(config *Config) { config.Worlds[0].Authorities = nil }, "authorities must contain at least one"},
@@ -330,6 +331,24 @@ func secondWorld() WorldConfig {
 			Burst:                 100,
 			MaxWatches:            1024,
 		},
+	}
+}
+
+func TestParseCompaction(t *testing.T) {
+	body := strings.Replace(validConfig, "health:", "compaction:\n  role: backstop\nhealth:", 1)
+	config, err := Parse([]byte(body))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if config.Compaction.Role != CompactionBackstop {
+		t.Fatalf("compaction = %+v", config.Compaction)
+	}
+	plain, err := Parse([]byte(validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Compaction.Role != CompactionEager {
+		t.Fatalf("compaction without a section = %+v, want eager", plain.Compaction)
 	}
 }
 
