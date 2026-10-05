@@ -23,8 +23,9 @@ const (
 	// it; with one, staging stayed on the critical path (ADR 0036).
 	pipelineDepth = 3
 	// handoffWait bounds how long a winner holds its next slot for a peer
-	// that lost to it; the hold ends once a peer's slot is installed.
-	handoffWait = time.Second
+	// that lost to it; the hold ends once a peer's slot is installed. About
+	// twice a loser's recovery on GCS (plan: several-writers).
+	handoffWait = 300 * time.Millisecond
 	// ownSlots is how many of its newest slots a store remembers, to tell a
 	// loser's hint from a peer's: more than a second of slots at any rate.
 	ownSlots = 256
@@ -470,11 +471,14 @@ func (c *committer) fail(b *batch, err error) {
 }
 
 // discardAfter sends the requests of every batch after index back to the
-// queue: they were built on a state that will not exist.
+// queue with what their batch read: they were built on a state that will not
+// exist, and rebuilt cold they read the bucket one document at a time.
 func (c *committer) discardAfter(index int) {
 	var requests []*commitRequest
 	for _, b := range c.pipeline[index+1:] {
+		read := b.objects.asWarmup()
 		for _, m := range b.members[b.answered:] {
+			m.request.warm = read
 			requests = append(requests, m.request)
 		}
 	}

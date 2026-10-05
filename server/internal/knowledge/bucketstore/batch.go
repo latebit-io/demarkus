@@ -131,13 +131,18 @@ func (s newestFirst) Get(ctx context.Context, key string) (blob.Object, error) {
 // gather gives the batch what its requests' warm-ups read, waiting for any
 // still reading; a request keeps none of it after.
 func (c *committer) gather(b *batch, requests []*commitRequest) {
+	var adopted *batchObjects
 	for _, request := range requests {
 		if request.warm == nil {
 			continue
 		}
 		select {
 		case <-request.warm.done:
-			b.objects.adopt(request.warm.objects)
+			// Requests of one discarded batch share its reads: adopt once.
+			if request.warm.objects != adopted {
+				adopted = request.warm.objects
+				b.objects.adopt(adopted)
+			}
 		case <-request.ctx.Done():
 		}
 		c.store.unwarm(request)
@@ -355,6 +360,18 @@ type batchObjects struct {
 
 // stagedModified stands in for an object's creation time until it exists.
 var stagedModified = time.Unix(1, 0).UTC()
+
+// doneReading is a warm-up that is already done.
+var doneReading = func() chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}()
+
+// asWarmup hands a batch's reads to requests that rebuild elsewhere.
+func (objects *batchObjects) asWarmup() *warmup {
+	return &warmup{done: doneReading, objects: objects}
+}
 
 func newBatchObjects(source objectGetter, previous *batchObjects, pipeline []*batch) *batchObjects {
 	objects := &batchObjects{source: source, held: make(map[string]blob.Object), inherited: make(map[string]blob.Object)}

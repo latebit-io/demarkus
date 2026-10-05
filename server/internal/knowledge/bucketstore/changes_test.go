@@ -257,12 +257,19 @@ type bucketSite struct {
 // open opens a store that closes when t ends, stopping its follow loop.
 func (s *bucketSite) open(t *testing.T, ring int) *Store {
 	t.Helper()
+	return s.openOn(t, s.objects, ring)
+}
+
+// openOn opens a store on its own bucket wrapper, for one that observes
+// each store apart.
+func (s *bucketSite) openOn(t *testing.T, objects blob.Store, ring int) *Store {
+	t.Helper()
 	var self atomic.Pointer[Store]
 	options := Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger}
 	if s.hinted {
 		options.Committed = func(sequence int64) { s.hint(self.Load(), sequence) }
 	}
-	store, err := Open(context.Background(), s.objects, options)
+	store, err := Open(context.Background(), objects, options)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
