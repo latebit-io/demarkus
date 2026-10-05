@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	mathrand "math/rand/v2"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -811,6 +812,11 @@ type writersModel struct {
 	closed   int
 	rate     int
 	duration time.Duration
+	// trigger is every store's compaction cadence; compactor adds an eager
+	// store that takes no writes, and roles makes the writers backstops.
+	trigger   *compactionTrigger
+	compactor bool
+	roles     bool
 }
 
 // modelSeed is the documents a model world holds before the load.
@@ -826,15 +832,25 @@ type modelResult struct {
 	perStore []int64
 	// acks are the acknowledged (path, version) pairs with how many slot
 	// entries hold each; every one must be exactly one.
-	acks    map[string]int
-	p50     time.Duration
-	slots   int
-	entries int
-	losses  int64
+	acks     map[string]int
+	p50, p99 time.Duration
+	slots    int
+	entries  int
+	losses   int64
 	// recoveryP50 is a loss to the same store's next create; afterWinP50 a
 	// win to its next create, and holds counts those over 200 ms.
 	recoveryP50, afterWinP50 time.Duration
 	holds                    int
+	// noWin is each store's longest window without a slot won, and stalls
+	// how many of its windows passed a second; checkpoints is the checkpoint
+	// creates each store made; steps is the compactor store's step times.
+	noWin       []time.Duration
+	stalls      []int
+	checkpoints []int
+	steps       []time.Duration
+	// heap is what each store held at the end, the writers then the
+	// compactor store: freed by closing and dropping it.
+	heap []int64
 }
 
 func (r modelResult) String() string {
@@ -849,15 +865,22 @@ type slotAttempt struct {
 	lost           bool
 }
 
-// slotProbe records each slot create of the store it serves.
+// slotProbe records each slot create of the store it serves, and counts its
+// checkpoint creates.
 type slotProbe struct {
 	blob.Store
-	mu       sync.Mutex
-	attempts []slotAttempt
+	mu          sync.Mutex
+	attempts    []slotAttempt
+	checkpoints int
 }
 
 func (p *slotProbe) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
 	if !isSlot(key) {
+		if strings.HasPrefix(key, checkpointPrefix) {
+			p.mu.Lock()
+			p.checkpoints++
+			p.mu.Unlock()
+		}
 		return p.Store.Create(ctx, key, data)
 	}
 	started := time.Now()
@@ -884,6 +907,74 @@ func (p *slotProbe) gaps() (recovery, afterWin []time.Duration) {
 	return recovery, afterWin
 }
 
+// noWin is the longest gap between a store's won slot creates, and how many
+// of them passed a second.
+func (p *slotProbe) noWin() (longest time.Duration, stalls int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var last time.Time
+	for _, attempt := range p.attempts {
+		if attempt.lost {
+			continue
+		}
+		if !last.IsZero() {
+			gap := attempt.started.Sub(last)
+			longest = max(longest, gap)
+			if gap > time.Second {
+				stalls++
+			}
+		}
+		last = attempt.ended
+	}
+	return longest, stalls
+}
+
+// stepProbe times the compactor's steps on a store that takes no writes:
+// from its first history block or shard to the checkpoint.
+type stepProbe struct {
+	blob.Store
+	mu      sync.Mutex
+	started time.Time
+	steps   []time.Duration
+}
+
+func (p *stepProbe) Create(ctx context.Context, key string, data []byte) (blob.Attributes, error) {
+	p.mu.Lock()
+	switch {
+	case strings.HasPrefix(key, objectPrefix+"history/") || strings.HasPrefix(key, objectPrefix+"shards/"):
+		if p.started.IsZero() {
+			p.started = time.Now()
+		}
+	case strings.HasPrefix(key, checkpointPrefix) && !p.started.IsZero():
+		p.steps = append(p.steps, time.Since(p.started).Round(time.Millisecond))
+		p.started = time.Time{}
+	}
+	p.mu.Unlock()
+	return p.Store.Create(ctx, key, data)
+}
+
+// heapNow is the live heap after collection, as memtest reads it.
+func heapNow() int64 {
+	runtime.GC()
+	runtime.GC()
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	return int64(stats.HeapAlloc) //nolint:gosec // heap sizes are far below 2^63
+}
+
+// drop closes the store at index and takes it out of the site, returning
+// what that freed; the caller holds no other reference to it.
+func (s *bucketSite) drop(t *testing.T, stores []*Store, index int) int64 {
+	t.Helper()
+	before := heapNow()
+	s.mu.Lock()
+	s.stores = slices.DeleteFunc(s.stores, func(store *Store) bool { return store == stores[index] })
+	s.mu.Unlock()
+	mustSucceed(t, stores[index].Close())
+	stores[index] = nil
+	return before - heapNow()
+}
+
 func percentile(samples []time.Duration, fraction float64) time.Duration {
 	if len(samples) == 0 {
 		return 0
@@ -900,16 +991,44 @@ func (m writersModel) run(t *testing.T) modelResult {
 	memory := initializedMemory(t)
 	// The seed is written without latency; the load's builds then read it
 	// through the bucket, as the gate's updates of random documents did.
-	writeDocuments(t, (&bucketSite{objects: memory}).open(t, 0), modelSeed)
-	bucket := gcsLatency(memory)
-	site := &bucketSite{hinted: m.hinted, noHedge: true}
-	stores := make([]*Store, m.replicas)
+	clock := clocked(memory)
+	seed := (&bucketSite{objects: clock}).open(t, 0)
+	writeDocuments(t, seed, modelSeed)
+	if m.compactor {
+		// A checkpointed seed, older than the step bound and younger than
+		// the backstop delay: the load's first step is the load's alone.
+		clock.writtenAgo(checkpointTimeout + time.Minute)
+		mustSucceed(t, seed.checkpoint(context.Background()))
+		clock.writtenAgo(0)
+	}
+	bucket := gcsLatency(clock)
+	site := &bucketSite{hinted: m.hinted, noHedge: true, trigger: m.trigger, unpinned: true}
+	t.Cleanup(func() {
+		site.mu.Lock()
+		defer site.mu.Unlock()
+		for _, store := range site.stores {
+			if err := store.Close(); err != nil {
+				t.Errorf("close: %v", err)
+			}
+		}
+	})
+	if m.roles {
+		site.role = Backstop
+	}
+	stores := make([]*Store, m.replicas, m.replicas+1)
 	probes := make([]*slotProbe, m.replicas)
 	for index := range stores {
 		probes[index] = &slotProbe{Store: bucket}
 		stores[index] = site.openOn(t, probes[index], 16)
 		stores[index].handoffWait = m.handoffWait
 	}
+	var steps *stepProbe
+	if m.compactor {
+		site.role = Eager
+		steps = &stepProbe{Store: bucket}
+		stores = append(stores, site.openOn(t, steps, 16))
+	}
+	writers := stores[:m.replicas]
 	body := bytes.Repeat([]byte("# model\n"), 128)
 	var acked, failed atomic.Int64
 	perStore := make([]atomic.Int64, m.replicas)
@@ -949,7 +1068,7 @@ func (m writersModel) run(t *testing.T) modelResult {
 	var wg sync.WaitGroup
 	var sequence atomic.Int64
 	if m.closed > 0 {
-		for index := range stores {
+		for index := range writers {
 			for range m.closed {
 				wg.Go(func() {
 					for time.Now().Before(deadline) {
@@ -969,13 +1088,25 @@ func (m writersModel) run(t *testing.T) modelResult {
 	}
 	wg.Wait()
 
-	result := modelResult{acked: acked.Load(), failed: failed.Load(), offered: sequence.Load(), p50: percentile(latencies.samples, 0.5), acks: latencies.acks}
-	for index := range perStore {
-		result.perStore = append(result.perStore, perStore[index].Load())
-	}
+	result := modelResult{acked: acked.Load(), failed: failed.Load(), offered: sequence.Load(), p50: percentile(latencies.samples, 0.5), p99: percentile(latencies.samples, 0.99), acks: latencies.acks}
 	var tip int64
 	for _, store := range stores {
 		tip = max(tip, store.servedSequence())
+	}
+	if m.compactor {
+		for _, store := range stores {
+			waitIdle(t, store)
+			waitIdleCompactor(t, store)
+		}
+		steps.mu.Lock()
+		result.steps = slices.Clone(steps.steps)
+		steps.mu.Unlock()
+		for index := range stores {
+			result.heap = append(result.heap, site.drop(t, stores, index))
+		}
+	}
+	for index := range perStore {
+		result.perStore = append(result.perStore, perStore[index].Load())
 	}
 	for _, slot := range logSlots(t, memory, tip) {
 		result.slots++
@@ -997,7 +1128,10 @@ func (m writersModel) run(t *testing.T) modelResult {
 				result.losses++
 			}
 		}
+		result.checkpoints = append(result.checkpoints, probe.checkpoints)
 		probe.mu.Unlock()
+		longest, stalls := probe.noWin()
+		result.noWin, result.stalls = append(result.noWin, longest), append(result.stalls, stalls)
 	}
 	result.recoveryP50, result.afterWinP50 = percentile(recovery, 0.5), percentile(afterWin, 0.5)
 	for _, gap := range afterWin {
@@ -1006,6 +1140,44 @@ func (m writersModel) run(t *testing.T) modelResult {
 		}
 	}
 	return result
+}
+
+// The compactor off the writers (plan: compactor-off-writers): three writers
+// and one eager store that takes no writes, checkpointing every 64 slots,
+// with the writers eager and as backstops. A measurement, logged, not a guarantee.
+func TestSeveralWritersModelWithACompactor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("the compactor model runs for about 40 s")
+	}
+	const duration, rate = 15 * time.Second, 200
+	trigger := &compactionTrigger{slots: 64, age: time.Hour, wait: func() time.Duration { return 0 }}
+	for _, roles := range []bool{false, true} {
+		model := writersModel{replicas: 3, handoffWait: handoffWait, hinted: true, rate: rate, duration: duration, trigger: trigger, compactor: true, roles: roles}
+		result := model.run(t)
+		name := "writers eager"
+		if roles {
+			name = "writers backstop"
+		}
+		t.Logf("%s: %.0f writes/s p99 %v; %v", name, float64(result.acked)/duration.Seconds(), result.p99.Round(time.Millisecond), result)
+		t.Logf("%s: no-win windows %v, over a second %v; checkpoints by writer %v; steps %v; heap by store, compactor last %v",
+			name, result.noWin, result.stalls, result.checkpoints, result.steps, result.heap)
+		// A writer that compacts can stall past the request timeout under
+		// the race detector: the arrangement under measurement, not a check.
+		if result.failed > 0 && roles {
+			t.Errorf("%s: %d writes failed", name, result.failed)
+		}
+		for key, n := range result.acks {
+			if n != 1 {
+				t.Errorf("%s: acknowledged %s is in %d slots", name, key, n)
+			}
+		}
+		if roles && slices.Max(result.checkpoints) > 0 {
+			t.Errorf("backstop writers created checkpoints %v, want the eager store to write every one", result.checkpoints)
+		}
+		if roles && len(result.steps) == 0 {
+			t.Error("the eager store wrote no checkpoint")
+		}
+	}
 }
 
 // Several stores writing one world on GCS-shaped latency: the model of the

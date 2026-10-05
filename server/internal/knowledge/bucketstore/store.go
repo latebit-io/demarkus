@@ -21,11 +21,28 @@ const (
 	defaultShardWorkers   = 16
 )
 
+// CompactionRole is a replica's part in checkpointing one world, set by the
+// server: one eager replica per world, the rest backstops.
+type CompactionRole int
+
+const (
+	// Eager checkpoints on the cadence (8,192 slots or 10 minutes), defers
+	// to a peer's checkpoint fresher than one step bound, never to its own,
+	// and keeps a base to step from. The default.
+	Eager CompactionRole = iota
+	// Backstop checkpoints only when the newest checkpoint, whoever wrote
+	// it, is older than the cadence plus two step bounds, so a live eager
+	// replica always moves first; it keeps no base and writes the backlog whole.
+	Backstop
+)
+
 // Options configures one world store.
 type Options struct {
 	WorldID        string
 	RequestTimeout time.Duration
 	ShardWorkers   int
+	// Compaction is this replica's role in checkpointing; zero is Eager.
+	Compaction CompactionRole
 	// ReadOnly makes every write answer backend.ErrReadOnly before any I/O,
 	// and Open fails on an empty bucket instead of creating the world.
 	ReadOnly bool
@@ -97,6 +114,9 @@ type Store struct {
 	// built before it rebases as it is installed.
 	adoption   atomic.Pointer[adoption]
 	compaction compaction
+	// holdRebase, when set, runs before an adoption rebases the served
+	// snapshot outside installMu; tests hold it there.
+	holdRebase func()
 	sections   *sectionIndex
 	// newestBatch is the committer's newest batch's objects, which the next
 	// batch and warm-ups read before the bucket; nil while it is idle.
@@ -183,6 +203,9 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	if options.MaxDocuments < 0 {
 		return nil, fmt.Errorf("open bucket store: %w: max documents must not be negative", blob.ErrPrecondition)
 	}
+	if options.Compaction != Eager && options.Compaction != Backstop {
+		return nil, fmt.Errorf("open bucket store: %w: unknown compaction role %d", blob.ErrPrecondition, options.Compaction)
+	}
 	if options.CheckpointGrace == 0 {
 		options.CheckpointGrace = defaultCheckpointGrace
 	}
@@ -225,6 +248,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		committed:       options.Committed,
 	}
 	store.compaction.trigger = defaultTrigger
+	store.compaction.role = options.Compaction
 	if options.trigger != nil {
 		store.compaction.trigger = *options.trigger
 	}
@@ -317,8 +341,8 @@ func (store *Store) load(ctx context.Context) error {
 }
 
 // start serves a checkpoint's snapshot with every slot after it applied and
-// keeps the loaded one as the compactor's base. The replay reads the bucket
-// outside installMu; a reload a commit overtook replays on before installing.
+// keeps the loaded one as an eager compactor's base. The replay reads the
+// bucket outside installMu; a reload a commit overtook replays on first.
 func (store *Store) start(ctx context.Context, loaded *snapshot, started time.Time) error {
 	tip := store.derive(loaded)
 	var applied []appliedSlot
@@ -342,7 +366,7 @@ func (store *Store) start(ctx context.Context, loaded *snapshot, started time.Ti
 	// The snapshot rests on its own checkpoint, and an active section index
 	// catches up to it; both are no-ops at open.
 	store.adoption.Store(nil)
-	if !store.readOnly {
+	if store.keepsBase() {
 		store.compaction.base.Store(loaded)
 	}
 	store.served.Store(&served{snap: tip, confirmed: started})

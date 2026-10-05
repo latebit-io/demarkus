@@ -23,6 +23,9 @@ const (
 	// checkpointTimeout bounds one compaction step or adoption, which no
 	// request waits for.
 	checkpointTimeout = 5 * time.Minute
+	// backstopDelay is how old the newest checkpoint must be before a
+	// backstop steps: an eager replica's trigger, its step, and one more.
+	backstopDelay = checkpointAge + 2*checkpointTimeout
 	// checkpointStep bounds the documents one checkpoint folds: a backlog past
 	// it is checkpointed at earlier slot boundaries first, so every step ends
 	// within checkpointTimeout and progress accumulates.
@@ -52,9 +55,11 @@ type compactionTrigger struct {
 	slots int
 	age   time.Duration
 	wait  func() time.Duration
-	// timeout and step override checkpointTimeout and checkpointStep when set.
+	// timeout, step and delay override checkpointTimeout, checkpointStep and
+	// backstopDelay when set.
 	timeout time.Duration
 	step    int
+	delay   time.Duration
 }
 
 var defaultTrigger = compactionTrigger{
@@ -67,6 +72,7 @@ var defaultTrigger = compactionTrigger{
 // installed slots, stopped with the store.
 type compaction struct {
 	trigger compactionTrigger
+	role    CompactionRole
 	ctx     context.Context
 	cancel  context.CancelFunc
 	// base is the snapshot at the newest checkpoint, rebased on it, which a
@@ -87,6 +93,15 @@ type compaction struct {
 func (c *compaction) timeout() time.Duration { return cmp.Or(c.trigger.timeout, checkpointTimeout) }
 
 func (c *compaction) stepLimit() int { return cmp.Or(c.trigger.step, checkpointStep) }
+
+func (c *compaction) backstopDelay() time.Duration { return cmp.Or(c.trigger.delay, backstopDelay) }
+
+// keepsBase reports whether this store keeps a snapshot at the newest
+// checkpoint to step from: an eager writer does, a backstop or a read-only
+// store never steps from one.
+func (store *Store) keepsBase() bool {
+	return !store.readOnly && store.compaction.role == Eager
+}
 
 // noteSlots counts installed slots and starts the compactor once they lag
 // enough. A world gone quiet keeps its last few slots until the next write.
@@ -202,19 +217,22 @@ func (store *Store) step(ctx context.Context) (bool, error) {
 	return target != snap, nil
 }
 
-// deferToPeer reports whether the newest checkpoint is a peer's written
-// within one step bound: that peer is compacting, and one that died is
-// replaced after the bound. Checkpoint zero and own checkpoints never defer.
+// deferToPeer reports whether the newest checkpoint is one to leave alone:
+// for an eager store a peer's within one step bound (that peer is compacting;
+// zero and its own never defer), for a backstop any one within its delay.
 func (store *Store) deferToPeer(ctx context.Context, known int64) (bool, error) {
 	c := &store.compaction
-	if known <= 1 || known == c.written.Load() {
+	hold := c.timeout()
+	if c.role == Backstop {
+		hold = c.backstopDelay()
+	} else if known <= 1 || known == c.written.Load() {
 		return false, nil
 	}
 	attributes, err := store.objects.Head(ctx, checkpointKey(known))
 	if err != nil {
 		return false, fmt.Errorf("head checkpoint %d: %w", known, err)
 	}
-	return store.now().Sub(attributes.Modified) < c.timeout(), nil
+	return store.now().Sub(attributes.Modified) < hold, nil
 }
 
 // stepTarget is the snapshot the next checkpoint covers: snap when its
@@ -265,8 +283,11 @@ func changedDocuments(snap *snapshot, limit int) int {
 }
 
 // keepBase keeps target, rebased on the checkpoint just written of it, as
-// the base the next step replays from.
+// the base the next step replays from; a backstop keeps none.
 func (store *Store) keepBase(target *snapshot, adopted *adoption) {
+	if !store.keepsBase() {
+		return
+	}
 	next := store.derive(target)
 	if err := next.adopt(adopted); err != nil {
 		store.logger.Error("snapshot at the new checkpoint failed to rebase; the next step writes the whole backlog", "world", store.worldID, "checkpoint", adopted.checkpoint.Sequence, "error", err)
@@ -282,7 +303,7 @@ func (store *Store) keepBase(target *snapshot, adopted *adoption) {
 func (store *Store) advanceBase(ctx context.Context, from int64, a *adoption) {
 	c := &store.compaction
 	base := c.base.Load()
-	if store.readOnly || base == nil {
+	if !store.keepsBase() || base == nil {
 		return
 	}
 	if base.Checkpoint.Sequence != from {

@@ -168,8 +168,9 @@ func Open(opts Options) (*Server, error) {
 }
 
 // bucketStores is the server's one store wiring: each world is a bucket
-// store over the blob store objects opens for it.
-func bucketStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error)) storeFactory {
+// store over the blob store objects opens for it, in this replica's
+// compaction role.
+func bucketStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error), role bucketstore.CompactionRole) storeFactory {
 	return func(ctx context.Context, world *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore, error) {
 		bucket, err := objects(ctx, world)
 		if err != nil {
@@ -184,6 +185,7 @@ func bucketStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (b
 			MaxDocuments:    world.Limits.MaxDocuments,
 			ReadOnly:        world.ReadOnly,
 			CheckpointGrace: time.Duration(world.Bucket.CheckpointGrace),
+			Compaction:      role,
 			ChangeRing:      changefeed.DefaultRingSize,
 			Committed:       hooks.committed,
 		})
@@ -192,6 +194,14 @@ func bucketStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (b
 		}
 		return store, nil
 	}
+}
+
+// compactionRole is the store's role for the configured one.
+func compactionRole(role knowledgeconfig.CompactionRole) bucketstore.CompactionRole {
+	if role == knowledgeconfig.CompactionBackstop {
+		return bucketstore.Backstop
+	}
+	return bucketstore.Eager
 }
 
 // open fills in everything after TLS; Close on the partial Server undoes
@@ -220,7 +230,7 @@ func (s *Server) open(buckets func(context.Context, string, int64) (blob.Store, 
 	}
 	s.peers = peers
 	worlds, err := newWorldManager(s.watchCtx, &s.watcherGroup, worldManagerConfig{
-		configFile: s.configFile, config: s.config, openStore: bucketStores(objects), certs: s.certificates, peers: peers, logger: s.logger,
+		configFile: s.configFile, config: s.config, openStore: bucketStores(objects, compactionRole(s.config.Compaction.Role)), certs: s.certificates, peers: peers, logger: s.logger,
 	})
 	if err != nil {
 		s.logger.Error("world startup failed", "error", err)

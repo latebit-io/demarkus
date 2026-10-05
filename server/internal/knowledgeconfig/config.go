@@ -47,6 +47,9 @@ type Config struct {
 	Health  HealthConfig `yaml:"health"`
 	TLS     TLSConfig    `yaml:"tls"`
 	Peers   PeersConfig  `yaml:"peers"`
+	// Compaction is this replica's part in checkpointing the worlds it
+	// serves; a server setting, so one Deployment's replicas share it.
+	Compaction CompactionConfig `yaml:"compaction"`
 	// WorldsFile optionally names a worlds-only YAML document appended
 	// to Worlds at Load: the dynamic-world seam a provisioner (the
 	// memory broker) owns while the operator owns this file.
@@ -88,6 +91,30 @@ func (config PeersConfig) Port() (int, error) {
 		return 0, fmt.Errorf("peers.listen %q: %w", config.Listen, err)
 	}
 	return number, nil
+}
+
+// CompactionConfig sets the replica's compaction role for every world.
+type CompactionConfig struct {
+	// Role is eager (the default: checkpoints on the cadence) or backstop
+	// (checkpoints only when no eager replica has for 20 minutes).
+	Role CompactionRole `yaml:"role"`
+}
+
+// CompactionRole names a replica's part in checkpointing.
+type CompactionRole string
+
+// The roles bucketstore.Options.Compaction takes, as the YAML spells them.
+const (
+	CompactionEager    CompactionRole = "eager"
+	CompactionBackstop CompactionRole = "backstop"
+)
+
+func (config CompactionConfig) validate() error {
+	switch config.Role {
+	case CompactionEager, CompactionBackstop:
+		return nil
+	}
+	return fmt.Errorf("compaction.role %q must be %q or %q", config.Role, CompactionEager, CompactionBackstop)
 }
 
 // HealthConfig contains the private management listener address.
@@ -191,6 +218,7 @@ type rawConfig struct {
 	Health     rawHealthConfig  `yaml:"health"`
 	TLS        TLSConfig        `yaml:"tls"`
 	Peers      PeersConfig      `yaml:"peers"`
+	Compaction CompactionConfig `yaml:"compaction"`
 	WorldsFile string           `yaml:"worldsFile"`
 	Worlds     []rawWorldConfig `yaml:"worlds"`
 }
@@ -367,8 +395,12 @@ func (raw *rawConfig) config() *Config {
 		Health:     HealthConfig{Address: valueOr(raw.Health.Address, ":8081")},
 		TLS:        raw.TLS,
 		Peers:      PeersConfig{Listen: strings.TrimSpace(raw.Peers.Listen), Service: strings.TrimSpace(raw.Peers.Service), Addresses: raw.Peers.Addresses},
+		Compaction: CompactionConfig{Role: CompactionRole(strings.TrimSpace(string(raw.Compaction.Role)))},
 		WorldsFile: strings.TrimSpace(raw.WorldsFile),
 		Worlds:     make([]WorldConfig, len(raw.Worlds)),
+	}
+	if config.Compaction.Role == "" {
+		config.Compaction.Role = CompactionEager
 	}
 	for index := range raw.Worlds {
 		config.Worlds[index] = worldFromRaw(&raw.Worlds[index])
@@ -448,6 +480,9 @@ func (config *Config) Validate() error {
 		return errors.New("health.address must not be empty")
 	}
 	if err := config.Peers.validate(); err != nil {
+		return err
+	}
+	if err := config.Compaction.validate(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(config.TLS.CertFile) == "" {
