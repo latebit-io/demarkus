@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: fake-gcs-server
-          image: fsouza/fake-gcs-server:1.52.2
+          image: fsouza/fake-gcs-server:1.56.1
           args:
             - -scheme
             - http
