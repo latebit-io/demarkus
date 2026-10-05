@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.149
+
+Support OpenCode V2 while retaining V1 1.18.29+ through the dual `setup`/`server` entrypoint. Register MCP servers, commands, model-only guidance, and coordinated write gates with V2 APIs. Test the installed adapter against both host contracts, including failure and cleanup paths. Fixes #541.
+
 ## 0.5.128
 
 Command and skill bodies cut about a fifth to a third on invocation: /knowledge-doctor and the knowledge-promote skill keep every stage, bound and failure line in terser prose, with the doctor report as a pattern plus examples.

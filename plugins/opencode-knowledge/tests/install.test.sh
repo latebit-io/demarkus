@@ -89,6 +89,9 @@ assets="${HOME}/.demarkus/opencode-knowledge"
 [[ -f "${assets}/commands/knowledge-join.md" && -s "${assets}/commands/knowledge-join.md" ]]
 assert_no_transaction_artifacts
 
+# Exercise the installed standalone entrypoint with both host API contracts.
+DEMARKUS_TEST_PLUGIN="${plugin}" node --test "${ROOT}/tests/installed.ts"
+
 # Updating from the same checkout must stay idempotent.
 snapshot="${TEST_HOME}/snapshot"
 snapshot_state "${snapshot}"
