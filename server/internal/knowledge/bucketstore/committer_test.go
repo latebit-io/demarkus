@@ -1050,6 +1050,9 @@ func TestSeveralWritersModel(t *testing.T) {
 		open := writersModel{replicas: replicas, handoffWait: handoffWait, hinted: true, rate: rate, duration: duration}.run(t)
 		t.Logf("R=%d open %d/s:       %.0f writes/s; %v", replicas, rate, float64(open.acked)/duration.Seconds(), open)
 		check(t, fmt.Sprintf("R=%d open", replicas), open)
+		if intended := int64(rate * int(duration.Seconds())); open.offered < intended*9/10 {
+			t.Errorf("R=%d open loop offered %d writes of %d intended: the load lagged", replicas, open.offered, intended)
+		}
 		if open.acked < open.offered*9/10 || open.p50 > 1500*time.Millisecond {
 			t.Errorf("R=%d open loop: %d of %d offered writes acknowledged at p50 %v", replicas, open.acked, open.offered, open.p50)
 		}
