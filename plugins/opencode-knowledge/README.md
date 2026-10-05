@@ -4,6 +4,8 @@ Connect [OpenCode](https://opencode.ai) to an organizational demarkus knowledge 
 
 This plugin complements [`demarkus-opencode-memory`](../opencode-memory/). Memory owns personal memories and working notes; knowledge owns shared, curated, authoritative material. Both reuse `~/.demarkus` registries and one helper binary.
 
+Supports OpenCode V2 and V1 **1.18.29+** through one installed adapter. Older V1 releases must upgrade before installing this version.
+
 ## Features
 
 - `/knowledge-join <broker-url>` validates the broker, records its remote MCP endpoint, registers policy scope, and hands authentication to OpenCode OAuth.
@@ -35,7 +37,7 @@ Restart OpenCode. Existing systems already present in both `~/.demarkus/knowledg
 /knowledge-join https://knowledge.example.com
 ```
 
-Restart once more after joining so OpenCode loads the new remote MCP entry. Complete OAuth when prompted, or run `opencode mcp auth <slug>`.
+Restart once more after joining so OpenCode loads the new remote MCP entry. In V2, open `/mcps`, select the server, and sign in. In V1, complete OAuth when prompted or run `opencode mcp auth <slug>`.
 
 ## Layout
 
@@ -46,7 +48,9 @@ Restart once more after joining so OpenCode loads the new remote MCP entry. Comp
 - Shared endpoints: `~/.config/mcp/mcp.json`
 - Mirrored policy: `~/.demarkus/plugin-knowledge.*.<slug>`
 
-Explicit `config.mcp[slug]` entries win over generated entries. Joined systems without a shared endpoint remain disabled and produce a startup diagnostic; rerun `/knowledge-join` in OpenCode to repair them.
+Explicit MCP entries (`mcp.servers[slug]` in V2, `mcp[slug]` in V1) win over generated entries, including disabled servers and authentication settings. Reserved local-memory slugs are disabled in both versions. Joined systems without a shared endpoint produce a startup diagnostic; rerun `/knowledge-join` in OpenCode to repair them.
+
+V2 registers commands through the command API and adds guidance to model context without rewriting persisted user prompts. V1 retains its config and synthetic-message hooks. Existing command definitions take precedence. V2 bootstrap and update notices go to the server log; V1 uses toasts.
 
 ## Update
 

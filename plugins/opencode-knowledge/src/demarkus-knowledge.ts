@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { Plugin } from "@opencode/plugin";
 
 const HOME = homedir();
 const BIN = join(HOME, ".demarkus", "bin", "demarkus-plugin");
@@ -157,17 +158,16 @@ function isReservedKnowledgeSlug(slug: string): boolean {
   return normalized === "demarkus_memory" || normalized.endsWith("_demarkus_memory");
 }
 
-export function wireKnowledgeMcp(
-  mcp: Record<string, unknown>,
+function knowledgeMcpWiring(
   paths: RegistryPaths = { knowledgeSystems: KNOWLEDGE_SYSTEMS, mcpCatalog: MCP_CATALOG },
   report: (message: string) => void = (message) => console.error(`[demarkus-knowledge] ${message}`),
-): void {
+) {
   let slugs: string[];
   try {
     slugs = nonCommentLines(paths.knowledgeSystems);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") report(`knowledge registry unreadable: ${error}`);
-    return;
+    return { servers: {}, reserved: [], missing: [] };
   }
 
   let servers: Record<string, unknown> = {};
@@ -177,25 +177,49 @@ export function wireKnowledgeMcp(
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") report(`MCP endpoint catalog unreadable: ${error}`);
   }
 
+  const joined: Record<string, { type: "remote"; url: string }> = {};
+  const reserved: string[] = [];
+  const missing: string[] = [];
   for (const slug of slugs) {
     if (isReservedKnowledgeSlug(slug)) {
-      const entry = mcp[slug];
-      if (entry && typeof entry === "object" && !Array.isArray(entry)) {
-        mcp[slug] = { ...entry, enabled: false };
-      } else {
-        delete mcp[slug];
-      }
+      reserved.push(slug);
       report(`knowledge slug '${slug}' is reserved by local-memory tool normalization and was disabled; unregister it`);
       continue;
     }
-    if (mcp[slug] !== undefined) continue;
     const entry = servers[slug];
     const url = entry && typeof entry === "object" && !Array.isArray(entry) ? (entry as { url?: unknown }).url : undefined;
     if (typeof url !== "string" || !url) {
-      report(`joined system '${slug}' has no MCP endpoint; rerun /knowledge-join in OpenCode`);
+      missing.push(slug);
       continue;
     }
-    mcp[slug] = { type: "remote", url, enabled: true };
+    joined[slug] = { type: "remote", url };
+  }
+  return { servers: joined, reserved, missing };
+}
+
+function missingEndpoint(slug: string): string {
+  return `joined system '${slug}' has no MCP endpoint; rerun /knowledge-join in OpenCode`;
+}
+
+export function wireKnowledgeMcp(
+  mcp: Record<string, unknown>,
+  paths?: RegistryPaths,
+  report: (message: string) => void = (message) => console.error(`[demarkus-knowledge] ${message}`),
+): void {
+  const wiring = knowledgeMcpWiring(paths, report);
+  for (const slug of wiring.missing) {
+    if (mcp[slug] === undefined) report(missingEndpoint(slug));
+  }
+  for (const slug of wiring.reserved) {
+    const entry = mcp[slug];
+    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      mcp[slug] = { ...entry, enabled: false };
+    } else {
+      delete mcp[slug];
+    }
+  }
+  for (const [slug, server] of Object.entries(wiring.servers)) {
+    mcp[slug] ??= { ...server, enabled: true };
   }
 }
 
@@ -251,12 +275,33 @@ export function loadCommand(file: string, commandsDir = COMMANDS_DIR): { descrip
   return { description, template: `${body}\n\nUser arguments (may be empty): $ARGUMENTS\n` };
 }
 
+function loadCommands(): Record<string, ReturnType<typeof loadCommand>> {
+  const commands: Record<string, ReturnType<typeof loadCommand>> = {};
+  let files: string[];
+  try {
+    files = readdirSync(COMMANDS_DIR).filter((file) => file.endsWith(".md"));
+  } catch (error) {
+    console.error(`[demarkus-knowledge] commands unavailable (${ASSETS} not installed?): ${error}`);
+    return commands;
+  }
+  for (const file of files) {
+    const name = file.replace(/\.md$/, "");
+    try {
+      commands[name] = loadCommand(file);
+    } catch (error) {
+      console.error(`[demarkus-knowledge] failed to load command '${name}': ${error}`);
+    }
+  }
+  return commands;
+}
+
 export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: ToastClient; directory: string }) => {
   const adapters = gateAdapters(directory);
   adapters.add("knowledge");
-  const knowledgeOwnsGate = () => ownsGate("knowledge", adapters);
+  let disposed = false;
+  const knowledgeOwnsGate = () => !disposed && ownsGate("knowledge", adapters);
   const sessions = new Map<string, SessionState>();
-  const pendingWarns = new Map<string, string>();
+  const pendingWarns = new Map<string, { warning?: string }>();
   const state = (id: string): SessionState => {
     let session = sessions.get(id);
     if (!session) {
@@ -277,8 +322,10 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
   let bootstrapping: Promise<void> | null = null;
   let updateChecked = false;
   const ensureBootstrapped = () => {
+    if (disposed) return;
     bootstrapping ??= bootstrap()
       .then(async (warning) => {
+        if (disposed) return;
         if (warning) {
           await toast(warning, "warning");
           return;
@@ -286,7 +333,7 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
         if (!updateChecked) {
           updateChecked = true;
           const message = await checkForUpdate();
-          if (message) await toast(message);
+          if (message && !disposed) await toast(message);
         }
       })
       .finally(() => {
@@ -301,19 +348,8 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       wireKnowledgeMcp(config.mcp);
 
       config.command = config.command ?? {};
-      let files: string[] = [];
-      try {
-        files = readdirSync(COMMANDS_DIR).filter((file) => file.endsWith(".md"));
-      } catch (error) {
-        console.error(`[demarkus-knowledge] commands unavailable (${ASSETS} not installed?): ${error}`);
-      }
-      for (const file of files) {
-        const name = file.replace(/\.md$/, "");
-        try {
-          config.command[name] = config.command[name] ?? loadCommand(file);
-        } catch (error) {
-          console.error(`[demarkus-knowledge] failed to load command '${name}': ${error}`);
-        }
+      for (const [name, command] of Object.entries(loadCommands())) {
+        config.command[name] ??= command;
       }
     },
 
@@ -356,15 +392,20 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       output: { args: Record<string, unknown> },
     ) => {
       if (!isKnowledgeWrite(input.tool) || !knowledgeOwnsGate()) return;
-      const decision = await callGate(input.tool, output.args ?? {}, directory);
-      if (decision.decision === "block") {
-        throw new Error(decision.reason ?? "demarkus-knowledge gate blocked this write");
-      }
-      if (decision.decision === "ask") {
-        throw new Error(`${decision.reason ?? "blocked"} Confirm with the user before retrying this write.`);
-      }
-      if (decision.decision === "warn" && decision.reason && input.sessionID && input.callID) {
-        pendingWarns.set(`${input.sessionID}:${input.callID}`, decision.reason);
+      const key = input.sessionID && input.callID ? `${input.sessionID}:${input.callID}` : undefined;
+      const pending: { warning?: string } = {};
+      if (key) pendingWarns.set(key, pending);
+      try {
+        const decision = await callGate(input.tool, output.args ?? {}, directory);
+        if (decision.decision === "block") {
+          throw new Error(decision.reason ?? "demarkus-knowledge gate blocked this write");
+        }
+        if (decision.decision === "ask") {
+          throw new Error(`${decision.reason ?? "blocked"} Confirm with the user before retrying this write.`);
+        }
+        if (decision.decision === "warn") pending.warning = decision.reason;
+      } finally {
+        if (key && !pending.warning && pendingWarns.get(key) === pending) pendingWarns.delete(key);
       }
     },
 
@@ -372,10 +413,10 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       input: { tool: string; sessionID?: string; callID?: string },
       output: { output: string },
     ) => {
-      if (!isKnowledgeWrite(input.tool) || !knowledgeOwnsGate()) return;
       const key = `${input.sessionID}:${input.callID}`;
-      const warning = pendingWarns.get(key);
+      const warning = pendingWarns.get(key)?.warning;
       pendingWarns.delete(key);
+      if (!isKnowledgeWrite(input.tool) || !knowledgeOwnsGate()) return;
       if (warning) output.output += `\n\nWarning: ${warning}`;
     },
 
@@ -392,7 +433,142 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
         if (key.startsWith(`${id}:`)) pendingWarns.delete(key);
       }
     },
+
+    dispose: async () => {
+      if (disposed) return;
+      disposed = true;
+      sessions.clear();
+      pendingWarns.clear();
+      adapters.delete("knowledge");
+      if (adapters.size === 0) {
+        const registry = (globalThis as GateGlobal)[GATE_ADAPTERS] as Map<string, Set<string>>;
+        registry.delete(directory);
+      }
+    },
   };
 };
 
-export default DemarkusKnowledgePlugin;
+type V2Services = {
+  guidance?: typeof callGuidance;
+  nudge?: typeof callNudge;
+};
+
+export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): Promise<Plugin.Cleanup> {
+  const legacy = await DemarkusKnowledgePlugin({
+    directory: ctx.location.directory,
+    client: { tui: { showToast: async ({ body }) => {
+      const message = `[demarkus-knowledge] ${body.message}`;
+      if (body.variant === "warning") console.error(message);
+      else console.info(message);
+    } } },
+  });
+  const controller = new AbortController();
+  const pendingContext = new Map<string, { recall?: string }>();
+  let guidance: string | null = null;
+  const cleanup = async () => {
+    controller.abort();
+    pendingContext.clear();
+    await legacy.dispose();
+  };
+
+  try {
+    // Capture filesystem inputs before registering replayable transforms.
+    const wiring = knowledgeMcpWiring();
+    await ctx.mcp.transform((editor) => {
+      for (const name of wiring.missing) {
+        if (editor.get(name) === undefined) reportFailure("MCP wiring", missingEndpoint(name));
+      }
+      for (const name of wiring.reserved) {
+        editor.update(name, (server) => { server.disabled = true; });
+      }
+      for (const [name, server] of Object.entries(wiring.servers)) {
+        if (editor.get(name) === undefined) editor.set(name, server);
+      }
+    });
+    const commands = loadCommands();
+    const existing = new Set((await ctx.command.list()).data.map((command) => command.name));
+    await ctx.command.transform((editor) => {
+      for (const [name, command] of Object.entries(commands)) {
+        if (existing.has(name)) continue;
+        editor.add({
+          name,
+          description: command.description,
+          execute: async ({ sessionID, prompt, delivery }) => {
+            // Template expansion invalidates composer mention offsets.
+            await ctx.session.prompt({
+              ...prompt,
+              files: prompt.files?.map(({ mention: _mention, ...file }) => file),
+              agents: prompt.agents?.map(({ mention: _mention, ...agent }) => agent),
+              skills: prompt.skills?.map(({ mention: _mention, ...skill }) => skill),
+              sessionID,
+              text: command.template.replaceAll("$ARGUMENTS", () => prompt.text),
+              delivery,
+            });
+          },
+        });
+      }
+    });
+    await ctx.session.hook("prompt", async (event) => {
+      if (controller.signal.aborted) return;
+      const pending: { recall?: string } = {};
+      pendingContext.set(event.sessionID, pending);
+      try {
+        pending.recall = await (services.nudge ?? callNudge)({ event: "recall", surface: "knowledge", prompt: event.prompt.text });
+      } finally {
+        if (!pending.recall && pendingContext.get(event.sessionID) === pending) pendingContext.delete(event.sessionID);
+      }
+    });
+    await ctx.session.hook("context", async (event) => {
+      if (guidance === null) guidance = await (services.guidance ?? callGuidance)();
+      if (guidance) event.system.push({ type: "text", text: guidance });
+      const recall = pendingContext.get(event.sessionID)?.recall;
+      pendingContext.delete(event.sessionID);
+      if (recall) event.system.push({ type: "text", text: recall });
+    });
+    await ctx.tool.hook("execute.before", async (event) => {
+      await legacy["tool.execute.before"](
+        { tool: event.tool, sessionID: event.sessionID, callID: event.id },
+        { args: (event.input ?? {}) as Record<string, unknown> },
+      );
+    });
+    await ctx.tool.hook("execute.after", async (event) => {
+      const output = { output: "" };
+      await legacy["tool.execute.after"](
+        { tool: event.tool, sessionID: event.sessionID, callID: event.id }, output,
+      );
+      if (event.status !== "completed" || !output.output) return;
+      const content = event.result.content;
+      event.result = {
+        ...event.result,
+        content: typeof content === "string"
+          ? content + output.output
+          : [...(content ?? []), { type: "text", text: output.output.trim() }],
+      };
+    });
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+
+  void (async () => {
+    try {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (event.type === "session.created") await legacy.event({ event: { type: event.type } });
+        if (event.type === "session.deleted") {
+          const id = event.data.sessionID;
+          pendingContext.delete(id);
+          await legacy.event({ event: { type: event.type, properties: { info: { id } } } });
+        }
+        if (event.type === "session.idle") pendingContext.delete(event.data.sessionID);
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) console.error(`[demarkus-knowledge] event subscription failed: ${error}`);
+    }
+  })();
+  return cleanup;
+}
+
+// V1 1.18.29+ calls server(); V2 validates id and calls setup().
+export default { id: "demarkus-knowledge", setup: setupV2, server: DemarkusKnowledgePlugin } satisfies Plugin.Plugin & {
+  server: typeof DemarkusKnowledgePlugin;
+};

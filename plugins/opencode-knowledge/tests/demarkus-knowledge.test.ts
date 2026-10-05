@@ -54,6 +54,20 @@ test("wireKnowledgeMcp reports a registered system without an endpoint", () => {
   assert.deepEqual(reports, ["joined system 'acme' has no MCP endpoint; rerun /knowledge-join in OpenCode"]);
 });
 
+test("wireKnowledgeMcp accepts an explicit endpoint missing from the shared catalog", () => {
+  const paths = fixture();
+  writeFileSync(paths.systems, "acme\n");
+  writeFileSync(paths.mcp, JSON.stringify({ mcpServers: {} }));
+  const reports: string[] = [];
+  const explicit = { type: "remote", url: "https://explicit.test/mcp" };
+  const mcp = { acme: explicit };
+
+  wireKnowledgeMcp(mcp, { knowledgeSystems: paths.systems, mcpCatalog: paths.mcp }, (message) => reports.push(message));
+
+  assert.equal(mcp.acme, explicit);
+  assert.deepEqual(reports, []);
+});
+
 test("memory adapter owns the shared gate when both plugins are loaded", () => {
   assert.equal(ownsGate("knowledge", new Set(["knowledge"])), true);
   assert.equal(ownsGate("knowledge", new Set(["knowledge", "memory"])), false);
