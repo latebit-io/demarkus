@@ -146,6 +146,111 @@ func TestRefreshesShareOneProbe(t *testing.T) {
 	})
 }
 
+// A probe that fails on the bucket answers every refresh waiting on it with
+// that error, so a persistent failure costs one probe per burst; a probe that
+// ended because its starter's context did answers none, and a waiter probes.
+func TestRefreshesShareAProbeFailure(t *testing.T) {
+	t.Run("a bucket error reaches every waiter", func(t *testing.T) {
+		calls := &bucketCalls{Store: initializedMemory(t)}
+		hold := newGetHold(t, calls, slotKey(3))
+		hold.failWith = blob.ErrUnavailable
+		store := (&bucketSite{objects: hold, noHedge: true}).open(t, 0)
+		clock := countClock(store)
+		_, err := store.WriteVersion("/a.md", 0, []byte("# a\n"), nil)
+		mustSucceed(t, err)
+		calls.reset()
+
+		first := refreshAsync(store)
+		waitForTestSignal(t, hold.arrived, "the probe of slot 3")
+		second := askWhileProbing(t, store, clock)
+		hold.open()
+		for _, outcome := range []<-chan refreshOutcome{first, second} {
+			if got := <-outcome; !errors.Is(got.err, blob.ErrUnavailable) {
+				t.Errorf("refresh behind a failed probe = %v, want the bucket's error", got.err)
+			}
+		}
+		// The failed probe never reached the bucket behind the hold; a second
+		// probe would have.
+		if gets := calls.slotGets(); gets != 0 {
+			t.Errorf("%d slot gets reached the bucket after a probe failed, want no second probe", gets)
+		}
+	})
+
+	t.Run("a canceled starter does not fail a waiter", func(t *testing.T) {
+		calls := &bucketCalls{Store: initializedMemory(t)}
+		hold := newGetHold(t, calls, slotKey(3))
+		store := (&bucketSite{objects: hold, noHedge: true}).open(t, 0)
+		clock := countClock(store)
+		_, err := store.WriteVersion("/a.md", 0, []byte("# a\n"), nil)
+		mustSucceed(t, err)
+		calls.reset()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		first := refreshWith(ctx, store)
+		waitForTestSignal(t, hold.arrived, "the probe of slot 3")
+		second := askWhileProbing(t, store, clock)
+		cancel()
+		if got := <-first; !errors.Is(got.err, context.Canceled) {
+			t.Errorf("the canceled starter's refresh = %v, want its own cancellation", got.err)
+		}
+		got := <-second
+		mustSucceed(t, got.err)
+		if got.sequence != 2 {
+			t.Errorf("the waiter's refresh returned sequence %d, want 2", got.sequence)
+		}
+		// The canceled probe never reached the bucket behind the hold.
+		if gets := calls.slotGets(); gets != 1 {
+			t.Errorf("%d slot gets reached the bucket, want the waiter's own probe", gets)
+		}
+	})
+}
+
+// A loser whose served snapshot already passed the winner's slot, installed by
+// a probe meanwhile, rebuilds on that snapshot without joining the probe in
+// flight, which may be stalled: its recovery stays out of the flight.
+func TestLoserRecoversWithoutJoiningAStalledProbe(t *testing.T) {
+	memory := initializedMemory(t)
+	calls := &bucketCalls{Store: memory}
+	hold := newGetHold(t, calls, slotKey(4))
+	hold.armed.Store(false)
+	holds := newSlotHolds(t, hold, 3)
+	site := &bucketSite{noHedge: true}
+	store, peer := site.openOn(t, holds, 0), site.openOn(t, memory, 0)
+	_, err := store.WriteVersion("/a.md", 0, []byte("# a\n"), nil)
+	mustSucceed(t, err)
+
+	// The create of slot 3 is held; the peer takes slot 3, and a read's probe
+	// installs it here, so served is past the winner before the loss is seen.
+	written := publishAsync(context.Background(), store, backend.WriteRequest{Path: "/b.md", ExpectedVersion: 0, Content: []byte("# b\n")})
+	waitForTestSignal(t, holds.holds[3].arrived, "the create of slot 3")
+	_, err = peer.WriteVersion("/p.md", 0, []byte("# p\n"), nil)
+	mustSucceed(t, err)
+	mustSucceed(t, <-readAsync(context.Background(), store, "/a.md"))
+	if got := store.servedSequence(); got != 3 {
+		t.Fatalf("served sequence %d after the read, want the peer's slot 3", got)
+	}
+	// Then a probe of slot 4 stalls, and the held create goes through and loses.
+	hold.armed.Store(true)
+	stalled := readAsync(context.Background(), store, "/a.md")
+	waitForTestSignal(t, hold.arrived, "the probe of slot 4")
+	holds.holds[3].open()
+	select {
+	case outcome := <-written:
+		mustSucceed(t, outcome.err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the loser's recovery joined a probe stalled on the bucket")
+	}
+	hold.open()
+	mustSucceed(t, <-stalled)
+	if between := calls.between(slotKey(3), slotKey(4)); len(between) > 2 {
+		t.Errorf("the loser made %d bucket calls between its lost create and its next: %v", len(between), between)
+	}
+	if got := store.servedSequence(); got != 4 {
+		t.Errorf("served sequence %d after the recovery and the read, want 4", got)
+	}
+	readEveryVersion(t, store)
+}
+
 // readAsync reads the current version of path on a view opened with ctx.
 func readAsync(ctx context.Context, store *Store, path string) <-chan error {
 	done := make(chan error, 1)
@@ -168,9 +273,13 @@ type refreshOutcome struct {
 }
 
 func refreshAsync(store *Store) <-chan refreshOutcome {
+	return refreshWith(context.Background(), store)
+}
+
+func refreshWith(ctx context.Context, store *Store) <-chan refreshOutcome {
 	done := make(chan refreshOutcome, 1)
 	go func() {
-		snap, err := store.refresh(context.Background())
+		snap, err := store.refresh(ctx)
 		outcome := refreshOutcome{err: err}
 		if snap != nil {
 			outcome.sequence = snap.Sequence
@@ -212,6 +321,8 @@ type getHold struct {
 	release chan struct{}
 	first   sync.Once
 	opened  sync.Once
+	// failWith, when set, is what the held read answers once released.
+	failWith error
 }
 
 func newGetHold(t *testing.T, objects blob.Store, key string) *getHold {
@@ -231,6 +342,9 @@ func (hold *getHold) Get(ctx context.Context, key string) (blob.Object, error) {
 			close(hold.arrived)
 			select {
 			case <-hold.release:
+				if hold.failWith != nil {
+					return blob.Object{}, &blob.OpError{Op: "get", Key: key, Err: hold.failWith}
+				}
 			case <-ctx.Done():
 				return blob.Object{}, &blob.OpError{Op: "get", Key: key, Err: ctx.Err()}
 			}

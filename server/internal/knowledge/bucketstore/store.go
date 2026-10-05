@@ -73,7 +73,7 @@ type Store struct {
 	// probing is the probe of the log's tip in flight, which refreshes share
 	// (one bucket reader at a time); nil when none runs.
 	probeMu sync.Mutex
-	probing chan struct{}
+	probing *probeFlight
 	// installMu orders installs and is never held across a bucket call, so a
 	// commit confirming its slot never waits on a probe.
 	installMu sync.Mutex
@@ -379,19 +379,31 @@ func (store *Store) refresh(ctx context.Context) (*snapshot, error) {
 			return store.probe(ctx, flight, asked)
 		}
 		select {
-		case <-flight:
+		case <-flight.done:
+			// A bucket failure answers the burst once; only a probe that ended
+			// with its starter's context leaves the waiters to probe again.
+			if flight.err != nil && !flight.canceled {
+				return nil, flight.err
+			}
 		case <-ctx.Done():
 			return nil, fmt.Errorf("refresh: %w", ctx.Err())
 		}
 	}
 }
 
+// probeFlight is one probe of the log's tip and how it ended.
+type probeFlight struct {
+	done     chan struct{}
+	err      error
+	canceled bool // the starter's context ended
+}
+
 // joinProbe returns the probe in flight, or a new one this caller runs.
-func (store *Store) joinProbe() (flight chan struct{}, started bool) {
+func (store *Store) joinProbe() (flight *probeFlight, started bool) {
 	store.probeMu.Lock()
 	defer store.probeMu.Unlock()
 	if store.probing == nil {
-		store.probing = make(chan struct{})
+		store.probing = &probeFlight{done: make(chan struct{})}
 		return store.probing, true
 	}
 	return store.probing, false
@@ -399,12 +411,13 @@ func (store *Store) joinProbe() (flight chan struct{}, started bool) {
 
 // probe runs the flight's catch-up and releases it on every exit, so a panic
 // recovered above the store cannot leave later refreshes waiting on it.
-func (store *Store) probe(ctx context.Context, flight chan struct{}, asked time.Time) (*snapshot, error) {
+func (store *Store) probe(ctx context.Context, flight *probeFlight, asked time.Time) (tip *snapshot, err error) {
 	defer func() {
+		flight.err, flight.canceled = err, ctx.Err() != nil
 		store.probeMu.Lock()
 		store.probing = nil
 		store.probeMu.Unlock()
-		close(flight)
+		close(flight.done)
 	}()
 	return store.catchUp(ctx, nil, asked)
 }
@@ -426,9 +439,10 @@ func (store *Store) catchUp(ctx context.Context, known *slotRead, asked time.Tim
 			return current.snap, nil
 		}
 		base := current.snap
-		if known != nil && known.slot.First != base.Sequence+1 {
-			// The winner's slot is installed already; the rest is a probe.
-			return store.refresh(ctx)
+		if known != nil && base.Sequence >= known.slot.last() {
+			// A probe installed the winner's slot meanwhile and listed past it;
+			// that stands as the tip, so a loser never waits on a probe.
+			return base, nil
 		}
 		ahead, err := store.readAhead(ctx, base, known)
 		if ahead.next == nil && err != nil {
