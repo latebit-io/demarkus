@@ -820,7 +820,10 @@ const modelSeed = 2000
 // shape, and what the slot creates cost each store.
 type modelResult struct {
 	acked, failed int64
-	perStore      []int64
+	// offered is how many writes the load started: a ticker drops ticks
+	// when its receiver lags, so the open loop offers fewer than its rate.
+	offered  int64
+	perStore []int64
 	// acks are the acknowledged (path, version) pairs with how many slot
 	// entries hold each; every one must be exactly one.
 	acks    map[string]int
@@ -966,7 +969,7 @@ func (m writersModel) run(t *testing.T) modelResult {
 	}
 	wg.Wait()
 
-	result := modelResult{acked: acked.Load(), failed: failed.Load(), p50: percentile(latencies.samples, 0.5), acks: latencies.acks}
+	result := modelResult{acked: acked.Load(), failed: failed.Load(), offered: sequence.Load(), p50: percentile(latencies.samples, 0.5), acks: latencies.acks}
 	for index := range perStore {
 		result.perStore = append(result.perStore, perStore[index].Load())
 	}
@@ -1047,8 +1050,8 @@ func TestSeveralWritersModel(t *testing.T) {
 		open := writersModel{replicas: replicas, handoffWait: handoffWait, hinted: true, rate: rate, duration: duration}.run(t)
 		t.Logf("R=%d open %d/s:       %.0f writes/s; %v", replicas, rate, float64(open.acked)/duration.Seconds(), open)
 		check(t, fmt.Sprintf("R=%d open", replicas), open)
-		if offered := int64(rate * int(duration.Seconds())); open.acked < offered*9/10 || open.p50 > 1500*time.Millisecond {
-			t.Errorf("R=%d open loop: %d of %d offered writes acknowledged at p50 %v", replicas, open.acked, offered, open.p50)
+		if open.acked < open.offered*9/10 || open.p50 > 1500*time.Millisecond {
+			t.Errorf("R=%d open loop: %d of %d offered writes acknowledged at p50 %v", replicas, open.acked, open.offered, open.p50)
 		}
 	}
 }
