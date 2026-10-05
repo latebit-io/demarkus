@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Plugin } from "@opencode/plugin";
 
 const HOME = homedir();
@@ -302,6 +303,10 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
   const knowledgeOwnsGate = () => !disposed && ownsGate("knowledge", adapters);
   const sessions = new Map<string, SessionState>();
   const pendingWarns = new Map<string, { warning?: string }>();
+  const resetSessionState = () => {
+    sessions.clear();
+    pendingWarns.clear();
+  };
   const state = (id: string): SessionState => {
     let session = sessions.get(id);
     if (!session) {
@@ -420,25 +425,26 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       if (warning) output.output += `\n\nWarning: ${warning}`;
     },
 
-    event: async ({ event }: { event: { type: string; properties?: { info?: { id?: string } } } }) => {
+    event: async ({ event }: { event: { type: string; properties?: { sessionID?: string; info?: { id?: string } } } }) => {
       if (event.type === "session.created") {
         ensureBootstrapped();
         return;
       }
-      if (event.type !== "session.deleted") return;
-      const id = event.properties?.info?.id;
+      if (event.type !== "session.deleted" && event.type !== "session.idle") return;
+      const id = event.type === "session.deleted" ? event.properties?.info?.id : event.properties?.sessionID;
       if (!id) return;
-      sessions.delete(id);
+      if (event.type === "session.deleted") sessions.delete(id);
       for (const key of pendingWarns.keys()) {
         if (key.startsWith(`${id}:`)) pendingWarns.delete(key);
       }
     },
 
+    resetSessionState,
+
     dispose: async () => {
       if (disposed) return;
       disposed = true;
-      sessions.clear();
-      pendingWarns.clear();
+      resetSessionState();
       adapters.delete("knowledge");
       if (adapters.size === 0) {
         const registry = (globalThis as GateGlobal)[GATE_ADAPTERS] as Map<string, Set<string>>;
@@ -451,6 +457,7 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
 type V2Services = {
   guidance?: typeof callGuidance;
   nudge?: typeof callNudge;
+  wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 };
 
 export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): Promise<Plugin.Cleanup> {
@@ -465,10 +472,14 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
   const controller = new AbortController();
   const pendingContext = new Map<string, { recall?: string }>();
   let guidance: string | null = null;
+  let guidanceAttempts = 0;
+  let guidanceLoading: Promise<void> | undefined;
+  let events: Promise<void> | undefined;
   const cleanup = async () => {
     controller.abort();
     pendingContext.clear();
     await legacy.dispose();
+    await events;
   };
 
   try {
@@ -510,6 +521,8 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
     });
     await ctx.session.hook("prompt", async (event) => {
       if (controller.signal.aborted) return;
+      // Bound tool-continuation delays without giving up on a slow bootstrap.
+      guidanceAttempts = 0;
       const pending: { recall?: string } = {};
       pendingContext.set(event.sessionID, pending);
       try {
@@ -519,7 +532,17 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
       }
     });
     await ctx.session.hook("context", async (event) => {
-      if (guidance === null) guidance = await (services.guidance ?? callGuidance)();
+      if (controller.signal.aborted) return;
+      if (guidance === null) {
+        if (!guidanceLoading && guidanceAttempts < 2) {
+          guidanceAttempts++;
+          guidanceLoading = (services.guidance ?? callGuidance)()
+            .then((value) => { guidance = value; })
+            .finally(() => { guidanceLoading = undefined; });
+        }
+        await guidanceLoading;
+      }
+      if (controller.signal.aborted) return;
       if (guidance) event.system.push({ type: "text", text: guidance });
       const recall = pendingContext.get(event.sessionID)?.recall;
       pendingContext.delete(event.sessionID);
@@ -550,21 +573,40 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
     throw error;
   }
 
-  void (async () => {
-    try {
-      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-        if (event.type === "session.created") await legacy.event({ event: { type: event.type } });
-        if (event.type === "session.deleted") {
-          const id = event.data.sessionID;
-          pendingContext.delete(id);
-          await legacy.event({ event: { type: event.type, properties: { info: { id } } } });
+  events = (async () => {
+    let retryDelay = 1_000;
+    while (!controller.signal.aborted) {
+      try {
+        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+          if (controller.signal.aborted) return;
+          retryDelay = 1_000;
+          if (event.type === "session.created") await legacy.event({ event: { type: event.type } });
+          if (event.type === "session.deleted" || event.type === "session.idle") {
+            const id = event.data.sessionID;
+            pendingContext.delete(id);
+            await legacy.event({ event: { type: event.type, properties: { sessionID: id, info: { id } } } });
+          }
         }
-        if (event.type === "session.idle") pendingContext.delete(event.data.sessionID);
+        if (!controller.signal.aborted) console.error("[demarkus-knowledge] event subscription ended; reconnecting");
+      } catch (error) {
+        if (!controller.signal.aborted) console.error(`[demarkus-knowledge] event subscription failed: ${error}; reconnecting`);
       }
-    } catch (error) {
-      if (!controller.signal.aborted) console.error(`[demarkus-knowledge] event subscription failed: ${error}`);
+      if (controller.signal.aborted) return;
+      try {
+        if (services.wait) await services.wait(retryDelay, controller.signal);
+        else await delay(retryDelay, undefined, { signal: controller.signal, ref: false });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        throw error;
+      }
+      // Reconnection cannot replay cleanup events lost during the outage.
+      pendingContext.clear();
+      legacy.resetSessionState();
+      retryDelay = Math.min(retryDelay * 2, 30_000);
     }
-  })();
+  })().catch((error) => {
+    console.error(`[demarkus-knowledge] event recovery failed: ${error}`);
+  });
   return cleanup;
 }
 

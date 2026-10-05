@@ -52,6 +52,7 @@ function harness(directory: string) {
   const prompts: any[] = [];
   let replayMcp: () => void = () => {};
   let signal: AbortSignal;
+  let subscriptions = 0;
   let receive: ((event: any) => void) | undefined;
   const ctx = {
     location: { directory },
@@ -73,6 +74,7 @@ function harness(directory: string) {
     },
     tool: { hook: async (name: string, fn: any) => { hooks.set(name, fn); } },
     event: { subscribe: async function* (options: { signal: AbortSignal }) {
+      subscriptions++;
       signal = options.signal;
       while (!signal.aborted) {
         const event = await new Promise<any>((resolve) => {
@@ -83,6 +85,8 @@ function harness(directory: string) {
           };
           signal.addEventListener("abort", abort, { once: true });
         });
+        if (event instanceof Error) throw event;
+        if (event === "end") return;
         if (event) yield event;
       }
     } },
@@ -91,9 +95,34 @@ function harness(directory: string) {
     ctx: ctx as unknown as Plugin.Context, hooks, servers, commands, prompts,
     replayMcp: () => replayMcp(),
     aborted: () => signal.aborted,
+    subscriptions: () => subscriptions,
     emit: async (event: any) => {
       assert.ok(receive, "subscription is listening");
       receive(event);
+      await new Promise((resolve) => setImmediate(resolve));
+    },
+  };
+}
+
+function retryClock() {
+  const waits: number[] = [];
+  let resume: (() => void) | undefined;
+  return {
+    waits,
+    wait: (milliseconds: number, signal: AbortSignal) => new Promise<void>((resolve) => {
+      waits.push(milliseconds);
+      const finish = () => {
+        signal.removeEventListener("abort", finish);
+        resume = undefined;
+        resolve();
+      };
+      resume = finish;
+      if (signal.aborted) finish();
+      else signal.addEventListener("abort", finish, { once: true });
+    }),
+    advance: async () => {
+      assert.ok(resume, "reconnect is waiting for backoff");
+      resume();
       await new Promise((resolve) => setImmediate(resolve));
     },
   };
@@ -126,6 +155,19 @@ test("installed V1 adapter keeps config, synthetic guidance and write gates", as
   const result = { output: "Saved" };
   await legacy["tool.execute.after"](call, result);
   assert.equal(result.output, "Saved\n\nWarning: policy reason");
+  await legacy["tool.execute.before"](call, { args: { decision: "warn" } });
+  const other = { ...call, sessionID: "s2" };
+  await legacy["tool.execute.before"](other, { args: { decision: "warn" } });
+  await legacy.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } });
+  const abandoned = { output: "Saved" };
+  await legacy["tool.execute.after"](call, abandoned);
+  assert.equal(abandoned.output, "Saved");
+  const active = { output: "Saved" };
+  await legacy["tool.execute.after"](other, active);
+  assert.equal(active.output, "Saved\n\nWarning: policy reason");
+  output.parts = [{ type: "text", text: "again" }];
+  await legacy["chat.message"]({}, output);
+  assert.deepEqual(output.parts.slice(1).map((part: any) => part.text), ["Recall again"], "idle preserves delivered guidance");
 });
 
 test("installed V2 setup wires MCP and executes commands with attachments and literal arguments", async (t) => {
@@ -181,6 +223,43 @@ test("V2 guidance stays model-only, retries unavailable guidance and expires ses
   assert.equal(h.aborted(), true);
 });
 
+test("V2 bounds failed guidance retries per prompt and recovers when the helper becomes ready", async (t) => {
+  const h = harness("/v2-guidance-limit");
+  let attempts = 0;
+  let ready = false;
+  t.after(await installed.setupV2(h.ctx, {
+    guidance: async () => { attempts++; return ready ? "Guidance" : null; },
+    nudge: async () => "",
+  }));
+  for (let i = 0; i < 8; i++) await h.hooks.get("context")!({ sessionID: "s1", system: [] });
+  assert.equal(attempts, 2, "persistent failures do not delay every tool continuation");
+  ready = true;
+  await h.hooks.get("prompt")!({ sessionID: "s1", prompt: { text: "retry" } });
+  const recovered = { sessionID: "s1", system: [] };
+  await h.hooks.get("context")!(recovered);
+  assert.equal(attempts, 3);
+  assert.deepEqual(recovered.system, [{ type: "text", text: "Guidance" }]);
+});
+
+test("V2 shares concurrent guidance lookups and caches successful empty guidance", async (t) => {
+  const h = harness("/v2-guidance-concurrent");
+  let attempts = 0;
+  let finish: (value: string | null) => void = () => {};
+  t.after(await installed.setupV2(h.ctx, {
+    guidance: () => { attempts++; return new Promise<string | null>((resolve) => { finish = resolve; }); },
+    nudge: async () => "",
+  }));
+  for (const value of [null, ""]) {
+    const calls = ["s1", "s2", "s3"].map((sessionID) => h.hooks.get("context")!({ sessionID, system: [] }));
+    assert.equal(attempts, value === null ? 1 : 2);
+    finish(value);
+    await Promise.all(calls);
+  }
+  await h.hooks.get("prompt")!({ sessionID: "s1", prompt: { text: "next" } });
+  await h.hooks.get("context")!({ sessionID: "s1", system: [] });
+  assert.equal(attempts, 2, "empty success remains cached across prompts");
+});
+
 test("V2 gates block and ask, preserve structured results, and discard failed/deleted warnings", async (t) => {
   const h = harness("/v2-gates");
   t.after(await plugin.setup(h.ctx));
@@ -200,10 +279,10 @@ test("V2 gates block and ask, preserve structured results, and discard failed/de
       : [...(content ?? []), { type: "text", text: "Warning: policy reason" }]);
   }
   assert.deepEqual(gateCalls().at(-1), { tool: call.tool, input: call.input, cwd: "/v2-gates" });
-  for (const failure of ["error", "deleted"]) {
+  for (const failure of ["error", "deleted", "idle"]) {
     await before(call);
     if (failure === "error") await after({ ...call, status: "error", error: { message: "failed" } });
-    else await h.emit({ type: "session.deleted", data: { sessionID: "s1" } });
+    else await h.emit({ type: `session.${failure}`, data: { sessionID: "s1" } });
     const result = { ...call, status: "completed", result: { content: "Saved" } };
     await after(result);
     assert.equal(result.result.content, "Saved");
@@ -213,7 +292,7 @@ test("V2 gates block and ask, preserve structured results, and discard failed/de
   assert.equal(gateCalls().length, count);
 });
 
-test("V2 async callbacks cannot restore nudges or warnings after session deletion or unload", async (t) => {
+test("V2 async callbacks cannot restore nudges or warnings after idle, deletion or unload", async (t) => {
   const h = harness("/v2-inflight");
   let resolveNudge: (text: string) => void = () => {};
   const stop = await installed.setupV2(h.ctx, {
@@ -221,12 +300,12 @@ test("V2 async callbacks cannot restore nudges or warnings after session deletio
     nudge: () => new Promise<string>((resolve) => { resolveNudge = resolve; }),
   });
   t.after(stop);
-  for (const unload of [false, true]) {
+  for (const termination of ["idle", "deleted", "unload"]) {
     const prompting = h.hooks.get("prompt")!({ sessionID: "s1", prompt: { text: "question" } });
     const call = { tool: "acme_mark_append", sessionID: "s1", id: "c1", input: { decision: "warn" } };
     const gating = h.hooks.get("execute.before")!(call);
-    if (unload) await stop();
-    else await h.emit({ type: "session.deleted", data: { sessionID: "s1" } });
+    if (termination === "unload") await stop();
+    else await h.emit({ type: `session.${termination}`, data: { sessionID: "s1" } });
     resolveNudge("Stale nudge");
     await Promise.all([prompting, gating]);
     const context = { sessionID: "s1", system: [] };
@@ -236,6 +315,58 @@ test("V2 async callbacks cannot restore nudges or warnings after session deletio
     await h.hooks.get("execute.after")!(result);
     assert.equal(result.result.content, "Saved");
   }
+});
+
+test("V2 reconnects failed and ended streams, discards outage state and resumes idle cleanup", async (t) => {
+  const h = harness("/v2-reconnect");
+  const clock = retryClock();
+  const stop = await installed.setupV2(h.ctx, { wait: clock.wait, guidance: async () => "", nudge: async () => "Recall" });
+  t.after(stop);
+  const call = { tool: "acme_mark_publish", sessionID: "s1", id: "c1", input: { decision: "warn" } };
+  await h.emit(new Error("transport lost"));
+  assert.deepEqual(clock.waits, [1_000]);
+  assert.equal(h.subscriptions(), 1);
+  await h.hooks.get("prompt")!({ sessionID: "s1", prompt: { text: "during outage" } });
+  await h.hooks.get("execute.before")!(call);
+  await clock.advance();
+  assert.equal(h.subscriptions(), 2);
+  const context = { sessionID: "s1", system: [] };
+  await h.hooks.get("context")!(context);
+  assert.deepEqual(context.system, []);
+  const result = { ...call, status: "completed", result: { content: "Saved" } };
+  await h.hooks.get("execute.after")!(result);
+  assert.equal(result.result.content, "Saved");
+  await h.hooks.get("execute.before")!(call);
+  await h.emit({ type: "session.idle", data: { sessionID: "s1" } });
+  await h.hooks.get("execute.after")!(result);
+  assert.equal(result.result.content, "Saved");
+  await h.emit("end");
+  assert.deepEqual(clock.waits, [1_000, 1_000], "received events reset the reconnect delay");
+  await stop();
+  assert.equal(h.subscriptions(), 2, "unload cancels backoff without resubscribing");
+});
+
+test("V2 event reconnect backoff is capped during persistent failure", async (t) => {
+  const h = harness("/v2-backoff");
+  let subscriptions = 0;
+  h.ctx.event.subscribe = async function* () { subscriptions++; throw new Error("offline"); };
+  const clock = retryClock();
+  const stop = await installed.setupV2(h.ctx, { wait: clock.wait });
+  t.after(stop);
+  await new Promise((resolve) => setImmediate(resolve));
+  for (let i = 0; i < 6; i++) await clock.advance();
+  assert.deepEqual(clock.waits, [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
+  assert.equal(subscriptions, 7);
+  await stop();
+  assert.equal(subscriptions, 7);
+});
+
+test("V2 unload cancels the production reconnect timer", async () => {
+  const h = harness("/v2-reconnect-abort");
+  const stop = await plugin.setup(h.ctx);
+  await h.emit(new Error("transport lost"));
+  await stop();
+  assert.equal(h.subscriptions(), 1);
 });
 
 test("V2 defers to memory gate owner in either load order and releases ownership on unload", async () => {
