@@ -41,3 +41,9 @@ func OpensWithFrontmatter(body string) bool {
 func NavExempt(leaf string) bool {
 	return navExempt(leaf)
 }
+
+// DescriptionProblems applies the metadata.description rules: word floor,
+// summary rules, and identity with the H1 summary line.
+func DescriptionProblems(body string, headings []mdoutline.Heading, description string) []string {
+	return descriptionProblems(body, headings, description)
+}
