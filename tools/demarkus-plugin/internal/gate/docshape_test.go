@@ -35,6 +35,7 @@ func TestShapeProblems(t *testing.T) {
 		{"is a entity in prose later is fine", "/plans/x.md", "# Plan\n\nFor maintainers: what this settles.\n\n## Goal\n\nA hub is a document that links.\n", nil},
 		{"only the opening paragraph is the summary", "/x/atlas.md", "# Atlas\n\nThe Atlas.\n\nDetails explain its archival API.\n\n## Uses\n\nx\n", []string{"restates the title"}},
 		{"setext H1 underline is not the summary", "/x/atlas.md", "Atlas\n=====\n\nA catalog of archival APIs and the teams that run them.\n\n## Uses\n\nx\n", nil},
+		{"whitespace-only line is a paragraph break", "/x/atlas.md", "# Atlas\n\nThe Atlas.\n   \nDetails explain its archival API.\n\n## Uses\n\nx\n", []string{"restates the title"}},
 		{"crlf paragraphs", "/x/atlas.md", "# Atlas\r\n\r\nThe Atlas.\r\n\r\nDetails explain its archival API.\r\n\r\n## Uses\r\n\r\nx\r\n", []string{"restates the title"}},
 	}
 	for _, c := range cases {
@@ -86,6 +87,7 @@ func TestDescriptionProblems(t *testing.T) {
 		{"stub body compares nothing", "# Plan\n", "A sentence long enough to pass the word floor easily.", nil},
 		{"setext underline skipped", "Death metal\n===========\n\nAn extreme metal style from mid-1980s Florida and Sweden built on growled vocals and blast beats.\n\n## Origin\n\nx\n", "An extreme metal style from mid-1980s Florida and Sweden built on growled vocals and blast beats.", nil},
 		{"crlf body matches", "# Title\r\n\r\nA matching summary sentence with enough words.\r\n\r\nMore detail.\r\n", "A matching summary sentence with enough words.", nil},
+		{"whitespace-only break before detail", "# Title\n\nA matching summary sentence with enough words.\n \t \nMore detail here.\n", "A matching summary sentence with enough words.", nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

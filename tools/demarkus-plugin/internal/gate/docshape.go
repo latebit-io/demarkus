@@ -18,6 +18,7 @@ var (
 	kindPlaceholder = regexp.MustCompile(`(?i)\bis\s+an?\s+(?:[\w-]+\s+){0,6}?(entity|record|document|page|item|node|stub|placeholder|entry)\b`)
 	wordRe          = regexp.MustCompile(`[\p{L}\p{N}][\p{L}\p{N}'-]*`)
 	spaceRe         = regexp.MustCompile(`\s+`)
+	blankLine       = regexp.MustCompile(`\n[ \t]*\n`)
 	setextUnderline = regexp.MustCompile(`^[=-]+\s*$`)
 )
 
@@ -137,11 +138,12 @@ func headingFollowsH1(headings []mdoutline.Heading) bool {
 	return false
 }
 
-// firstParagraph is the text up to the first blank line, CRLF included.
+// firstParagraph is the text up to the first blank line; a line of spaces
+// or tabs is blank, as in CommonMark, and CRLF counts as a line end.
 func firstParagraph(s string) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n"))
-	if i := strings.Index(s, "\n\n"); i >= 0 {
-		s = s[:i]
+	if loc := blankLine.FindStringIndex(s); loc != nil {
+		s = s[:loc[0]]
 	}
 	return s
 }
