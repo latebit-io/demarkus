@@ -23,6 +23,8 @@ Cowork with local MCP servers enabled; `bash`, `curl`, `tar`, and `sha256sum` or
 
 Upload the plugin as a zip (Customize, Plugins), or add this repository as a marketplace and install `demarkus-cowork`. Do not install it next to `demarkus-memory` in the same Cowork workspace: both register the same local MCP server.
 
+Beside a branded Claude Code plugin on one machine, brand this plugin with the same `mcp_server_key`. `mcp-serve` records that key as the local memory's name for the gates, and a start without `--name` clears it, which would turn the gates off for the branded plugin.
+
 ## Development
 
 The commands and skill under `commands/` and `skills/` are generated from `plugins/prompt-source` by `tools/plugin-prompts` (target `cowork-memory`). Edit the templates, then `cd tools && go run ./plugin-prompts write`. `scripts/bootstrap.sh` and `scripts/mcp-launch.sh` are byte copies of the Claude Code plugin's, checked by `scripts/check-identical-copies.sh`.

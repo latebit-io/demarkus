@@ -1,6 +1,6 @@
 ---
 name: remember
-description: {{if eq .Harness "cowork"}}Recall and record notes in the user's local {{.Store}} (a versioned store, never built-in memory). Use at the start of substantive work, when asked to remember, save, recall or query notes, and to record decisions, bug lessons, patterns and progress as you go.{{else}}Remember, save, recall, or query personal notes across {{.Agent}} sessions; versioned {{.Store}} by project, local or bound remote.{{end}}
+description: {{if eq .Harness "cowork"}}Recall and record notes in the user's local {{.Store}}. Use when asked to remember, save, recall or query notes, at the start of substantive work, and to record decisions, bug lessons, patterns and progress.{{else}}Remember, save, recall, or query personal notes across {{.Agent}} sessions; versioned {{.Store}} by project, local or bound remote.{{end}}
 ---
 
 # Remember
@@ -9,7 +9,7 @@ Routes "remember" / "recall" intents through the project's {{.Store}}: a version
 
 {{if eq .Harness "cowork"}}## Standing behavior
 
-No session hook runs here, so this skill is the guidance. Consult the {{.Store}} before substantive work; record decisions, bug lessons, patterns and progress as you go, unprompted. Shared or authoritative knowledge is promoted from a terminal session, never written directly. No trivia, chat, secrets, or anything derivable from the repo. Tag gates and the destination gate do not run here: every `mark_publish` sets `metadata.tags` and `importance`, and writes go only to the user's confirmed project.
+Consult the {{.Store}} before substantive work; record decisions, bug lessons, patterns and progress unprompted. No tag or destination gate runs here: every `mark_publish` sets `metadata.tags` and `importance`; write only to the user's confirmed project. Promote shared knowledge from a terminal session. No trivia, chat, secrets, or anything derivable from the repo.
 
 {{end}}## Triggers
 
