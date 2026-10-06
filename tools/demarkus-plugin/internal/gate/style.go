@@ -61,6 +61,8 @@ func styleDecision(pt config.ParsedTool, args map[string]any, guideRef string) (
 
 	problems = append(problems, hubProblems(leaf, body)...)
 	problems = append(problems, shapeProblems(urlOf(args), body, headings)...)
+	description, _ := metadataOf(args)["description"].(string)
+	problems = append(problems, descriptionProblems(body, headings, description)...)
 
 	if len(problems) == 0 {
 		return nil, nil

@@ -253,6 +253,9 @@ func (a *audit) checkShape() {
 		for _, problem := range gate.ShapeProblems(p, d.body, d.headings) {
 			a.add(CheckDocumentShape, p, problem, "/soul-curate "+p)
 		}
+		for _, problem := range gate.DescriptionProblems(d.body, d.headings, d.meta["description"]) {
+			a.add(CheckDocumentShape, p, problem, "re-publish with metadata.description equal to the H1 summary line")
+		}
 		if n := gate.EmDashCount(d.body); n > 0 {
 			a.add(CheckStyle, p, fmt.Sprintf("%d em dash(es)", n), "replace with comma, colon, semicolon or parentheses")
 		}

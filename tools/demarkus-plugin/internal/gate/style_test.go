@@ -129,6 +129,23 @@ func TestStyleGate(t *testing.T) {
 	})
 }
 
+func TestStyleGateDescription(t *testing.T) {
+	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	body := "# Title\n\nA summary sentence long enough to pass the floor.\n\n## Setup\n\nSteps.\n"
+	in := func(description string) *Input {
+		return &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+			"url": "/doc.md", "body": body, "metadata": map[string]any{"tags": "a,b", "description": description},
+		}}
+	}
+	if d := mustEval(t, in("A summary sentence long enough to pass the floor.")); d.Decision != "allow" {
+		t.Fatalf("want allow, got %q (%s)", d.Decision, d.Reason)
+	}
+	d := mustEval(t, in("Something else entirely, long enough to pass the floor."))
+	if d.Decision != "warn" || !strings.Contains(d.Reason, "differs from the summary line") {
+		t.Fatalf("want warn about the mismatch, got %q (%s)", d.Decision, d.Reason)
+	}
+}
+
 func TestBodyOpensWithFrontmatter(t *testing.T) {
 	cases := []struct {
 		name string
