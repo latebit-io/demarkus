@@ -15,7 +15,7 @@ Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`;
 
 ## Steps
 
-1. **Read.** `mark_fetch` the path with `force: true` and `verbose: true`; keep the version and the complete metadata map. `not-found`: say so, stop. Outline-only or any other failure: surface, stop. `mark_backlinks` the path; list every inbound link that carries an `#anchor`, since a split keeps anchors only where headings move verbatim.
+1. **Read.** `mark_fetch` the path with `force: true` and `verbose: true`; keep the version and the complete metadata map. `not-found`: say so, stop. Outline-only or any other failure: surface, stop. `mark_backlinks` the path; any failure: surface, stop, nothing proposed without the inbound list. Success: list every inbound link that carries an `#anchor`, since a split keeps anchors only where headings move verbatim.
 
 2. **Check.** Report each rule as pass or fail, one line each:
    - Size: bytes against 8 KB (a plain fetch returns an outline at or over it).

@@ -37,7 +37,7 @@ bounded() {
 }
 
 bounded 300 bash "${SCRIPTS_DIR}/bootstrap.sh" 1>&2 || echo "[demarkus] bootstrap failed or timed out; trying the installed binary" >&2
-[[ -x "${BIN}" ]] || { echo "[demarkus] ${BIN} not installed; run /soul-init" >&2; exit 1; }
+[[ -x "${BIN}" ]] || { echo "[demarkus] ${BIN} not installed; run /soul-init in Claude Code, or in a terminal: bash \"${SCRIPTS_DIR}/bootstrap.sh\"" >&2; exit 1; }
 
 # mcp-serve needs the pinned demarkus-mcp and the token, which only provision
 # installs. Its cross-process lock serializes this with the hook's run. Not
