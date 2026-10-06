@@ -18,6 +18,7 @@ var (
 	kindPlaceholder = regexp.MustCompile(`(?i)\bis\s+an?\s+(?:[\w-]+\s+){0,6}?(entity|record|document|page|item|node|stub|placeholder|entry)\b`)
 	wordRe          = regexp.MustCompile(`[\p{L}\p{N}][\p{L}\p{N}'-]*`)
 	spaceRe         = regexp.MustCompile(`\s+`)
+	setextUnderline = regexp.MustCompile(`^[=-]+\s*$`)
 )
 
 // minDescriptionWords is the floor for metadata.description: it is the
@@ -37,7 +38,7 @@ func shapeProblems(url, body string, headings []mdoutline.Heading) []string {
 			problems = append(problems,
 				"no summary under the `# H1` (the next line is a heading); add one sentence saying who the document is for and what it settles")
 		case ok:
-			problems = append(problems, summaryProblems("the summary under the `# H1`", title, summary)...)
+			problems = append(problems, summaryProblems("the summary under the `# H1`", title, firstParagraph(summary))...)
 		}
 	}
 	var status []string
@@ -107,15 +108,23 @@ func summaryUnderH1(body string, headings []mdoutline.Heading) (title, summary s
 		if i+1 < len(headings) {
 			end = headings[i+1].Start
 		}
-		between := body[h.Start:end]
-		if nl := strings.IndexByte(between, '\n'); nl >= 0 {
-			between = between[nl+1:]
-		} else {
-			between = ""
-		}
-		return h.Text, between, true
+		return h.Text, afterHeading(body[h.Start:end]), true
 	}
 	return "", "", false
+}
+
+// afterHeading drops the heading's own lines: the text line, plus a setext
+// underline (=== or ---) when one follows it.
+func afterHeading(section string) string {
+	_, rest, found := strings.Cut(section, "\n")
+	if !found {
+		return ""
+	}
+	line, after, _ := strings.Cut(rest, "\n")
+	if setextUnderline.MatchString(strings.TrimRight(line, "\r")) {
+		return after
+	}
+	return rest
 }
 
 // headingFollowsH1 reports a heading after the first H1.
@@ -128,9 +137,9 @@ func headingFollowsH1(headings []mdoutline.Heading) bool {
 	return false
 }
 
-// firstParagraph is the text up to the first blank line.
+// firstParagraph is the text up to the first blank line, CRLF included.
 func firstParagraph(s string) string {
-	s = strings.TrimSpace(s)
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n"))
 	if i := strings.Index(s, "\n\n"); i >= 0 {
 		s = s[:i]
 	}
