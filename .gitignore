@@ -66,6 +66,7 @@ bin
 # The Claude Code plugin ships its own .mcp.json (no tokens — just points at the
 # plugin's wrapper script). It must be tracked for the plugin to work.
 !plugins/claude-code/.mcp.json
+!plugins/cowork-memory/.mcp.json
 .clawhub
 node_modules/
 .project/
