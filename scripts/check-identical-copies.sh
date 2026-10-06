@@ -11,6 +11,8 @@ cd "$(dirname "$0")/.."
 pairs=(
   "plugins/claude-code/scripts/bootstrap.sh|plugins/claude-code-knowledge/scripts/bootstrap.sh"
   "plugins/claude-code/scripts/bootstrap.sh|plugins/cursor-memory/scripts/bootstrap.sh"
+  "plugins/claude-code/scripts/bootstrap.sh|plugins/cowork-memory/scripts/bootstrap.sh"
+  "plugins/claude-code/scripts/mcp-launch.sh|plugins/cowork-memory/scripts/mcp-launch.sh"
   "plugins/claude-code/scripts/bootstrap.sh|plugins/cursor-knowledge/scripts/bootstrap.sh"
   "plugins/claude-code/scripts/bootstrap.sh|plugins/opencode-memory/scripts/bootstrap.sh"
   "plugins/claude-code/scripts/bootstrap.sh|plugins/opencode-knowledge/scripts/bootstrap.sh"

@@ -17,8 +17,8 @@
 #
 # It also patch-bumps the affected plugins' versions, in two lineages:
 #   - memory    (changes when server|client|tools change): claude-code +
-#     pi-memory + opencode-memory + cursor-memory + the claude-code and cursor
-#     marketplace entries.
+#     pi-memory + opencode-memory + cursor-memory + cowork-memory + the claude-code
+#     and cursor marketplace entries.
 #   - knowledge (changes when tools changes, via its bootstrap): claude-code-
 #     knowledge + pi-knowledge + opencode-knowledge + cursor-knowledge + the
 #     claude-code and cursor knowledge marketplace entries.
@@ -196,6 +196,8 @@ if [[ "$memory_changed" == true ]]; then
   _=$(bump_json_version plugins/opencode-memory/package.json)
   cv_ver="$(bump_json_version plugins/cursor-memory/.cursor-plugin/plugin.json)"
   set_marketplace_version "$cursor_marketplace" "plugins/cursor-memory" "$cv_ver"
+  cw_ver="$(bump_json_version plugins/cowork-memory/.claude-plugin/plugin.json)"
+  set_marketplace_version "$marketplace" "./plugins/cowork-memory" "$cw_ver"
   emit memory_version "$mv_ver"
 fi
 if [[ "$knowledge_changed" == true ]]; then

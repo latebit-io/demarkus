@@ -1,0 +1,11 @@
+{
+  "name": "demarkus-cowork",
+  "version": "0.13.153",
+  "description": "Local, versioned memory for Claude Cowork via demarkus. Wires the local demarkus MCP tools (fetch/publish/append/graph/lookup) to the same soul Claude Code uses. Hook-free: Cowork runs no plugin hooks, so there are no gates or nudges and no shell commands.",
+  "author": {
+    "name": "latebit",
+    "url": "https://github.com/latebit-io"
+  },
+  "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/cowork-memory",
+  "license": "MIT"
+}
