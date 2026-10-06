@@ -1,6 +1,6 @@
 # Rebranding the memory and knowledge plugins
 
-Audience: a team that wants the demarkus memory or knowledge plugin for Claude Code or Cursor under its own plugin name, generated on its own machines or CI and published from its own marketplace.
+Audience: a team that wants the demarkus memory or knowledge plugin for Claude Code, Claude Cowork or Cursor under its own plugin name, generated on its own machines or CI and published from its own marketplace.
 
 The demarkus repository ships no brands. A brand is declared in a small `brands.json` that lives in your repository; the generator (`tools/plugin-prompts`) renders it against an unmodified demarkus checkout at a commit you pin. Staying current is a pin bump plus a regeneration, with no fork and no merge.
 
@@ -15,7 +15,7 @@ The memory MCP server key defaults to `demarkus-memory`, which is what tool name
 
 Because the state is shared, a brand replaces the upstream plugin on a machine. Installing both doubles every hook and both fight over one managed server. Tell your users to uninstall `demarkus-memory` and `demarkus-knowledge` before installing the brand.
 
-Brandable bases: `claude-memory`, `claude-knowledge`, `cursor-memory`, `cursor-knowledge`. The pi and OpenCode plugins carry their names in TypeScript and install scripts and cannot be branded by the generator.
+Brandable bases: `claude-memory`, `claude-knowledge`, `cursor-memory`, `cursor-knowledge`, `cowork-memory`. The pi and OpenCode plugins carry their names in TypeScript and install scripts and cannot be branded by the generator.
 
 ## The brands file
 

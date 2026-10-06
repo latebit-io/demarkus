@@ -51,10 +51,10 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 80 rendered canonical prompts (four memory/knowledge pairs) plus each
-	// brand's share, derived from the manifest and source tree rather than
-	// from the render.
-	const canonical = 80
+	// 80 rendered canonical prompts (four memory/knowledge pairs) plus the six
+	// of the Cowork memory target, plus each brand's share, derived from the
+	// manifest and source tree rather than from the render.
+	const canonical = 86
 	want := canonical + expectedBrandArtifacts(t, root)
 	if len(artifacts) != want {
 		t.Fatalf("renderAll() produced %d artifacts, want %d", len(artifacts), want)
@@ -159,6 +159,7 @@ func validManifest() manifest {
 			add(surface, harness)
 		}
 	}
+	add("memory", "cowork")
 	return spec
 }
 
@@ -515,6 +516,47 @@ func TestCursorArtifactsPutHarnessFlagBeforeSubcommand(t *testing.T) {
 	}
 	if seen == 0 {
 		t.Fatal("no rendered Cursor command registers an MCP server with --harness cursor")
+	}
+}
+
+// Cowork runs plugin commands in a sandbox without ~/.demarkus, so a rendered
+// Cowork prompt that shells out would fail there.
+func TestCoworkArtifactsNeedNoShell(t *testing.T) {
+	root, err := findRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := renderAll(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, a := range artifacts {
+		if a.Target == nil || a.Target.Harness != "cowork" {
+			continue
+		}
+		seen++
+		for _, shell := range []string{"```bash", "$HOME", "demarkus-plugin"} {
+			if strings.Contains(string(a.Content), shell) {
+				t.Errorf("%s: Cowork prompt contains %q", a.Path, shell)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no Cowork artifacts rendered")
+	}
+}
+
+func TestExcludeMustMatchATemplate(t *testing.T) {
+	root, err := findRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &target{Name: "x", Surface: "memory", Harness: "claude", Agent: "A", Output: "plugins/x",
+		RepoInstructions: "i", ToolForm: "t", Exclude: []string{"commands/no-such.md"}}
+	applyStoreDefaults(spec)
+	if _, err := renderSurface(root, spec, map[string]string{}); err == nil || !strings.Contains(err.Error(), "matches no template") {
+		t.Fatalf("renderSurface() error = %v, want unmatched exclude rejection", err)
 	}
 }
 

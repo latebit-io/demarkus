@@ -122,6 +122,43 @@ func TestRenderAllBrandsCursorBase(t *testing.T) {
 	}
 }
 
+func TestRenderAllBrandsCoworkBase(t *testing.T) {
+	root, err := findRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "brands.json")
+	spec := `{"brands": [{"name": "acme-cowork", "base": "cowork-memory", "output": "plugins/brands/acme-cowork",
+		"plugin_name": "acme-brain", "mcp_server_key": "memory", "description": "Acme Brain."}]}`
+	if err := os.WriteFile(path, []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := renderAll(root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "plugins", "brands", "acme-cowork") + string(filepath.Separator)
+	seen := map[string]string{}
+	for i := range artifacts {
+		if rel, ok := strings.CutPrefix(artifacts[i].Path, outDir); ok {
+			seen[filepath.ToSlash(rel)] = string(artifacts[i].Content)
+		}
+	}
+	for _, want := range []string{".claude-plugin/plugin.json", ".mcp.json", "scripts/mcp-launch.sh", "commands/soul.md", "skills/remember/SKILL.md"} {
+		if _, ok := seen[want]; !ok {
+			t.Fatalf("cowork brand lacks %s", want)
+		}
+	}
+	for rel := range seen {
+		if strings.HasPrefix(rel, "hooks/") {
+			t.Fatalf("cowork brand copied a hook: %s", rel)
+		}
+	}
+	if !strings.Contains(seen["skills/remember/SKILL.md"], "`memory` MCP server") {
+		t.Fatal("cowork skill does not name the branded MCP server key")
+	}
+}
+
 // writeBaseFixture lays out a minimal base plugin under root/output.
 func writeBaseFixture(t *testing.T, root, output string, files map[string]string) {
 	t.Helper()
@@ -283,7 +320,7 @@ func TestValidateBrandsRejectsUnbrandableHarness(t *testing.T) {
 		Targets: []target{{Name: "pi-memory", Surface: "memory", Harness: "pi", PluginName: "demarkus-pi-memory"}},
 		Brands:  []brand{{Name: "acme", Base: "pi-memory", Output: "plugins/brands/acme", PluginName: "acme", Description: "Acme."}},
 	}
-	if err := validateBrands(spec); err == nil || !strings.Contains(err.Error(), "only claude and cursor") {
+	if err := validateBrands(spec); err == nil || !strings.Contains(err.Error(), "only claude, cursor and cowork") {
 		t.Fatalf("err = %v", err)
 	}
 }

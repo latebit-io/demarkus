@@ -101,6 +101,7 @@ type harnessLayout struct {
 var brandLayouts = map[string]harnessLayout{
 	"claude": {Manifest: ".claude-plugin/plugin.json", MCP: ".mcp.json", Copied: []string{"hooks", "scripts"}},
 	"cursor": {Manifest: ".cursor-plugin/plugin.json", MCP: "mcp.json", Copied: []string{"hooks", "scripts"}},
+	"cowork": {Manifest: ".claude-plugin/plugin.json", MCP: ".mcp.json", Copied: []string{"scripts"}},
 }
 
 // brandCopiedRoots lists the base files a brand copies; each must exist.
@@ -129,7 +130,7 @@ func validateBrands(spec *manifest) error {
 			return fmt.Errorf("brand %q: unknown base target %q", b.Name, b.Base)
 		}
 		if _, ok := brandLayouts[base.Harness]; !ok {
-			return fmt.Errorf("brand %q: only claude and cursor targets can be branded (base %q is %s)", b.Name, b.Base, base.Harness)
+			return fmt.Errorf("brand %q: only claude, cursor and cowork targets can be branded (base %q is %s)", b.Name, b.Base, base.Harness)
 		}
 		if b.Name == "" || b.Description == "" || !pluginNameRE.MatchString(b.PluginName) {
 			return fmt.Errorf("brand %q: name, description, and a lowercase plugin_name are required", b.Name)

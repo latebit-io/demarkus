@@ -75,6 +75,7 @@ jobs:
               - 'plugins/opencode-memory/**'
               - 'plugins/opencode-knowledge/**'
               - 'plugins/cursor-memory/**'
+              - 'plugins/cowork-memory/**'
               - 'plugins/cursor-knowledge/**'
               - '.cursor-plugin/**'
               - 'tools/plugin-prompts/**'
@@ -393,6 +394,11 @@ jobs:
             bash plugins/$p/hooks/test.sh
           done
           jq empty plugins/cursor-memory/mcp.json
+      - name: Check the Cowork plugin
+        run: |
+          jq empty plugins/cowork-memory/.claude-plugin/plugin.json plugins/cowork-memory/.mcp.json
+          bash -n plugins/cowork-memory/scripts/*.sh
+          shellcheck -S warning plugins/cowork-memory/scripts/*.sh
 
   # release.yml stages goreleaser build output by id; a rename on either side
   # would otherwise only surface at release time.

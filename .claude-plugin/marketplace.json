@@ -16,6 +16,15 @@
       "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code"
     },
     {
+      "name": "demarkus-cowork",
+      "source": "./plugins/cowork-memory",
+      "description": "Local memory for Claude Cowork. Wires the local demarkus MCP tools to the same soul Claude Code uses. Hook-free: Cowork runs no plugin hooks, so there are no gates, nudges or shell commands; slash commands cover /soul, /soul-context, /soul-journal, /soul-archive and /soul-curate.",
+      "version": "0.13.153",
+      "category": "memory",
+      "tags": ["memory", "demarkus", "mark-protocol", "local-first", "cowork"],
+      "homepage": "https://github.com/latebit-io/demarkus/tree/main/plugins/cowork-memory"
+    },
+    {
       "name": "demarkus-knowledge",
       "source": "./plugins/claude-code-knowledge",
       "description": "Join an organizational demarkus knowledge system from Claude Code ; a shared, broker-fronted, versioned markdown catalog. Steers sessions to the shared catalog, enforces publishing policy, and curates promoted notes. Runs no local server; a shared helper binary provides gates and guidance.",
