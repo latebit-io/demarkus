@@ -2,13 +2,13 @@
 description: Show the index of this project's {{.Store}} (the bound {{.Store}}, or the local one when unbound)
 ---
 
-Show the root index of this project's {{.Store}}.
+Show the index of this project's {{.Store}}: `/<slug>/index.md`.
 
 {{template "store.tmpl" .}}
 
 ## Steps
 
-1. **Fetch.** `mark_fetch` with `url: /index.md` and `force: true` through the bound store's server.
+1. **Fetch.** `mark_fetch` with `url: /<slug>/index.md` (the confirmed slug) and `force: true` through the bound store's server.
 
 2. **Render.** One line naming the {{.Store}} read (id and host, or "local {{.Store}}"), then the full index. Only an explicit `not-found` means no index: say so, suggest populating it. `unauthorized`, unreachable, transport, server, malformed or other failures: surface the actual error, stop, no population hint.
 
