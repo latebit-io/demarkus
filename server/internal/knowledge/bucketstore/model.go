@@ -143,6 +143,7 @@ type slotEntry struct {
 	OperationID string         `json:"operation_id"`
 	Op          string         `json:"op"`
 	Agent       string         `json:"agent,omitempty"`
+	User        string         `json:"user,omitempty"`
 	Path        string         `json:"path"`
 	Current     int            `json:"current"`
 	First       int            `json:"first"`

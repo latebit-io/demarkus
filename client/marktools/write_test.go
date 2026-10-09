@@ -15,10 +15,12 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
-// writingHooks is a direct client with a write token and a named agent.
+// writingHooks is a direct client with a write token, a named agent and a
+// verified user.
 func writingHooks() marktools.Hooks {
 	hooks := directHooks()
 	hooks.Agent = func(context.Context) string { return "test-agent" }
+	hooks.User = func(context.Context) string { return "alice@example.com" }
 	hooks.Writer = func(_ context.Context, target marktools.Target, verb string) (marktools.WriteFunc, error) {
 		if target.Path == "/locked.md" {
 			return nil, errors.New(verb + " requires a token")
@@ -33,7 +35,7 @@ func TestPublishSendsTheWriteWithIdentity(t *testing.T) {
 	tools := newTools(t, backend, writingHooks())
 	got := tools.Publish(t.Context(), marktools.PublishArgs{
 		URL: "/doc.md", Body: "# Doc\n", ExpectedVersion: new(0), OnConflict: "fail",
-		Metadata: map[string]any{"tags": "a,b", "importance": 0.5, "agent": "someone-else"},
+		Metadata: map[string]any{"tags": "a,b", "importance": 0.5, "agent": "someone-else", "user": "mallory@example.com"},
 	})
 	want := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "1"}}}, "version", "modified", "server-version")
 	if got.IsError || got.Text != want {
@@ -47,7 +49,7 @@ func TestPublishSendsTheWriteWithIdentity(t *testing.T) {
 		t.Errorf("sent = %+v", sent)
 	}
 	// Identity is the surface's to set: a caller cannot write under another name.
-	if fmt.Sprint(sent.Metadata) != "map[agent:test-agent importance:0.5 tags:a,b]" {
+	if fmt.Sprint(sent.Metadata) != "map[agent:test-agent importance:0.5 tags:a,b user:alice@example.com]" {
 		t.Errorf("metadata = %v", sent.Metadata)
 	}
 }
@@ -120,7 +122,7 @@ func TestPublishConflictOffersAMergeCandidate(t *testing.T) {
 // A write whose response was lost may have landed. The tool checks the head
 // and never invites a blind resend (the self conflict debt, C4's leftover).
 func TestWritesReconcileAfterAnUnknownOutcome(t *testing.T) {
-	sentMeta := map[string]string{"agent": "test-agent"}
+	sentMeta := map[string]string{"agent": "test-agent", "user": "alice@example.com"}
 	tests := []struct {
 		name     string
 		call     func(*marktools.Tools) marktools.Result
@@ -212,7 +214,7 @@ func TestAppendResolvesTheVersionItself(t *testing.T) {
 		t.Fatalf("Append = %+v", got)
 	}
 	if len(backend.AppendCalls) != 1 || backend.AppendCalls[0].ExpectedVersion != 7 || backend.AppendCalls[0].Token != "write-token" ||
-		backend.AppendCalls[0].Metadata["agent"] != "test-agent" {
+		backend.AppendCalls[0].Metadata["agent"] != "test-agent" || backend.AppendCalls[0].Metadata["user"] != "alice@example.com" {
 		t.Errorf("append = %+v", backend.AppendCalls)
 	}
 	if len(backend.VersionsCalls) != 1 || backend.VersionsCalls[0].Token != "token-for-host:6309" {

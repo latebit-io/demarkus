@@ -267,7 +267,7 @@ func (store *Store) buildWriteCandidate(
 	}
 	return &candidateMutation{
 		entry: slotEntry{
-			OperationID: operationID, Op: write.op, Agent: persisted["agent"], Path: path,
+			OperationID: operationID, Op: write.op, Agent: persisted["agent"], User: persisted["user"], Path: path,
 			Current: next, First: first, BodyHash: versionEntry.BodyHash,
 			Modified: versionEntry.Modified, Catalog: &record, Version: &versionEntry,
 		},
@@ -313,6 +313,7 @@ func (store *Store) buildArchiveCandidate(
 	return &candidateMutation{
 		entry: slotEntry{
 			OperationID: operationID, Op: changefeed.ArchiveOp(archived), Agent: strings.Clone(document.Metadata["agent"]),
+			User: strings.Clone(document.Metadata["user"]),
 			Path: path, Current: entry.Current, First: entry.First, Archived: archived,
 			BodyHash: entry.BodyHash, Modified: entry.Modified.Format(time.RFC3339),
 		},

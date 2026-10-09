@@ -20,8 +20,7 @@ import (
 var memorySeedFS embed.FS
 
 // memorySeedDoc maps one embedded seed to its destination and catalog
-// metadata. The agent key marks broker-initiated writes in the world's
-// audit trail (user writes carry the caller's email instead).
+// metadata. Its agent key marks a broker write.
 type memorySeedDoc struct {
 	embedName string
 	path      string

@@ -199,9 +199,12 @@ type WatchEvent struct {
 	Version int
 	// Hash addresses the new version's content; empty when the op stores no
 	// new content.
-	Hash  string
-	Op    string
+	Hash string
+	Op   string
+	// Agent is the writing software; User the verified person behind it, when
+	// the surface stamps one. Both are the write's metadata keys of that name.
 	Agent string
+	User  string
 }
 
 // Event decodes an event block. Keys the event does not define are ignored,
@@ -214,7 +217,7 @@ func (b WatchBlock) Event() (WatchEvent, error) {
 	if err != nil {
 		return WatchEvent{}, fmt.Errorf("%w: %w", ErrMalformedWatchBlock, err)
 	}
-	e := WatchEvent{Cursor: cursor, Path: b.Metadata["path"], Hash: b.Metadata["hash"], Op: b.Metadata["op"], Agent: b.Metadata["agent"]}
+	e := WatchEvent{Cursor: cursor, Path: b.Metadata["path"], Hash: b.Metadata["hash"], Op: b.Metadata["op"], Agent: b.Metadata[MetaAgent], User: b.Metadata[MetaUser]}
 	if err := ValidateRequestPath(e.Path); err != nil {
 		return WatchEvent{}, fmt.Errorf("%w: %w", ErrMalformedWatchBlock, err)
 	}
@@ -232,7 +235,7 @@ func (b WatchBlock) Event() (WatchEvent, error) {
 	return e, nil
 }
 
-// Block encodes the event; empty Hash and Agent are omitted.
+// Block encodes the event; empty Hash, Agent and User are omitted.
 func (e WatchEvent) Block() WatchBlock {
 	m := map[string]string{
 		"cursor":  e.Cursor.String(),
@@ -244,7 +247,10 @@ func (e WatchEvent) Block() WatchBlock {
 		m["hash"] = e.Hash
 	}
 	if e.Agent != "" {
-		m["agent"] = e.Agent
+		m[MetaAgent] = e.Agent
+	}
+	if e.User != "" {
+		m[MetaUser] = e.User
 	}
 	return WatchBlock{Metadata: m}
 }

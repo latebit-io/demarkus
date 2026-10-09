@@ -4,13 +4,26 @@
 package mcpbind
 
 import (
+	"context"
 	"errors"
 
 	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
+
+// ClientName is the MCP client's self-reported name from the session on ctx,
+// "unknown" without one: the agent identity key on every surface.
+func ClientName(ctx context.Context) string {
+	if session, ok := mcpserver.ClientSessionFromContext(ctx).(mcpserver.SessionWithClientInfo); ok {
+		if name := session.GetClientInfo().Name; name != "" {
+			return name
+		}
+	}
+	return "unknown"
+}
 
 // defaultGraphRetention bounds the published graph's version history: it is
 // a generated artifact republished wholesale, and 20 versions is enough to

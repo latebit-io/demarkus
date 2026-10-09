@@ -46,7 +46,7 @@ func slotEvents(slot *slotObject) []changefeed.Event {
 		entry := &slot.Entries[index]
 		events[index] = changefeed.Event{
 			Seq: hubSeq(slot.First + int64(index)), Path: entry.Path, Version: entry.Current,
-			Hash: entry.BodyHash, Op: entry.Op, Agent: entry.Agent,
+			Hash: entry.BodyHash, Op: entry.Op, Agent: entry.Agent, User: entry.User,
 		}
 	}
 	return events

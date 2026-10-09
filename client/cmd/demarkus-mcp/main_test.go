@@ -15,7 +15,6 @@ import (
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 func TestResolveURL(t *testing.T) {
@@ -269,35 +268,6 @@ func TestHandlerMarkPublish_NoToken(t *testing.T) {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
 	assertIsToolError(t, result, "requires a token")
-}
-
-func TestAgentName(t *testing.T) {
-	t.Run("returns client name from session", func(t *testing.T) {
-		s := mcpserver.NewMCPServer("test", "0.1.0")
-		session := mcpserver.NewInProcessSession("test-session", nil)
-		session.SetClientInfo(mcp.Implementation{Name: "claude-code", Version: "1.0"})
-		ctx := s.WithContext(context.Background(), session)
-
-		if got := agentName(ctx); got != "claude-code" {
-			t.Errorf("agent = %q, want %q", got, "claude-code")
-		}
-	})
-
-	t.Run("falls back to unknown without session", func(t *testing.T) {
-		if got := agentName(context.Background()); got != "unknown" {
-			t.Errorf("agent = %q, want %q", got, "unknown")
-		}
-	})
-
-	t.Run("falls back to unknown with empty client name", func(t *testing.T) {
-		s := mcpserver.NewMCPServer("test", "0.1.0")
-		session := mcpserver.NewInProcessSession("test-session", nil)
-		ctx := s.WithContext(context.Background(), session)
-
-		if got := agentName(ctx); got != "unknown" {
-			t.Errorf("agent = %q, want %q", got, "unknown")
-		}
-	})
 }
 
 func TestToolDefinition_MarkDiscover(t *testing.T) {

@@ -26,7 +26,7 @@ func (h *handler) bodies() (*marktools.Tools, error) {
 		ReadToken: func(_ context.Context, host string) string { return h.resolveToken(host) },
 		Writer:    h.writer,
 		Seen:      processSeen{h},
-		Agent:     agentName,
+		Agent:     mcpbind.ClientName,
 		Graph:     h.graphScope,
 		Now:       func() time.Time { return timeNow() },
 	})

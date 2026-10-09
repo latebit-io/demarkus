@@ -22,7 +22,8 @@ func (g *Gateway) toolBodies() (*marktools.Tools, error) {
 		Resolve: resolveToolTarget,
 		Seen:    g.fetchSeen,
 		Writer:  g.toolWriter,
-		Agent:   toolAgent,
+		Agent:   mcpbind.ClientName,
+		User:    toolUser,
 		Graph:   g.toolGraph,
 		Warnf:   func(format string, args ...any) { g.deps.Log.Warn(fmt.Sprintf(format, args...)) },
 		ErrText: toolSiteErrorText,
@@ -97,8 +98,9 @@ func (g *Gateway) toolGraph(ctx context.Context) (*marktools.GraphScope, error) 
 	}, nil
 }
 
-// toolAgent is who the world's history shows as the writer: the verified email.
-func toolAgent(ctx context.Context) string {
+// toolUser is who the world's history shows behind the write: the verified
+// email the auth middleware put on ctx. The agent key is the client name.
+func toolUser(ctx context.Context) string {
 	claims, ok := core.ClaimsFromCtx(ctx)
 	if !ok {
 		return ""

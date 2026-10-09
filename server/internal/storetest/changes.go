@@ -185,7 +185,7 @@ func assertContiguous(t *testing.T, events []changefeed.Event) {
 func testEventsFollowCommits(t *testing.T, site ChangeSite) {
 	s := openChanges(t, site, protocol.Cursor{})
 	defer s.close(t)
-	first := s.publish(t, "/w/a.md", "# A\n", map[string]string{"agent": "suite"})
+	first := s.publish(t, "/w/a.md", "# A\n", map[string]string{"agent": "suite", "user": "alice@example.com"})
 	appended, err := s.direct.AppendVersion("/w/a.md", first.Version, []byte("more\n"), nil)
 	if err != nil {
 		t.Fatalf("append: %v", err)
@@ -206,16 +206,16 @@ func testEventsFollowCommits(t *testing.T, site ChangeSite) {
 	want := []struct {
 		path, op, hash string
 		version        int
-		agent          string
+		agent, user    string
 	}{
-		{"/w/a.md", protocol.OpPublish, storefmt.ContentHash(first.Content), 1, "suite"},
-		{"/w/a.md", protocol.OpAppend, storefmt.ContentHash(appended.Content), 2, "suite"},
-		{"/w/a.md", protocol.OpArchive, storefmt.ContentHash(appended.Content), 2, "suite"},
-		{"/w/b.md", protocol.OpPublish, storefmt.ContentHash([]byte("# B\n")), 1, ""},
+		{"/w/a.md", protocol.OpPublish, storefmt.ContentHash(first.Content), 1, "suite", "alice@example.com"},
+		{"/w/a.md", protocol.OpAppend, storefmt.ContentHash(appended.Content), 2, "suite", "alice@example.com"},
+		{"/w/a.md", protocol.OpArchive, storefmt.ContentHash(appended.Content), 2, "suite", "alice@example.com"},
+		{"/w/b.md", protocol.OpPublish, storefmt.ContentHash([]byte("# B\n")), 1, "", ""},
 	}
 	for i, w := range want {
 		got := events[i]
-		if got.Path != w.path || got.Op != w.op || got.Hash != w.hash || got.Version != w.version || got.Agent != w.agent {
+		if got.Path != w.path || got.Op != w.op || got.Hash != w.hash || got.Version != w.version || got.Agent != w.agent || got.User != w.user {
 			t.Fatalf("event %d = %+v, want %+v", i, got, w)
 		}
 	}

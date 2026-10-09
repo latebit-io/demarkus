@@ -289,19 +289,6 @@ func markIndexTool(host string) mcp.Tool {
 	)
 }
 
-// agentName is the "agent" publisher value: the MCP client name from the
-// session context, "unknown" when unavailable.
-func agentName(ctx context.Context) string {
-	if session := mcpserver.ClientSessionFromContext(ctx); session != nil {
-		if s, ok := session.(mcpserver.SessionWithClientInfo); ok {
-			if n := s.GetClientInfo().Name; n != "" {
-				return n
-			}
-		}
-	}
-	return "unknown"
-}
-
 // Tool handlers bind a call to a shared body; mcpbind reads the arguments.
 // Handler signatures are dictated by mcp-go's ToolHandlerFunc type.
 
