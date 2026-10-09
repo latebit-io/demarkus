@@ -2,7 +2,7 @@
 
 ## 0.5.152
 
-The publish gate no longer asks the agent for identity keys (`agent`, `user`) a policy requires; the gateway stamps them. The promote skill and /knowledge-doctor say the same.
+Publish gate and /knowledge-doctor skip gateway-stamped identity keys (`agent`, `user`) in `require_fields`.
 
 ## 0.5.149
 

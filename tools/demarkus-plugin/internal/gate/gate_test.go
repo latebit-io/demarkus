@@ -182,7 +182,7 @@ func TestKnowledgeGate(t *testing.T) {
 	t.Setenv("DEMARKUS_KNOWLEDGE_STRICTNESS", "block")
 	setupHome(t, map[string]string{
 		"knowledge-systems":                         "knowledge\n",
-		"plugin-knowledge.require-fields.knowledge": "type user\n",
+		"plugin-knowledge.require-fields.knowledge": "type user\n", // user: gateway-stamped, never asked of the caller
 		"plugin-knowledge.require-tags.knowledge":   "category\n",
 	})
 	// tagless → block
