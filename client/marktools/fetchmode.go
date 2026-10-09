@@ -21,9 +21,8 @@ type SeenStore interface {
 
 // FetchArgs are mark_fetch's arguments. URL may carry a #anchor.
 type FetchArgs struct {
-	URL    string
-	Force  bool
-	Render mcpfmt.Options
+	URL   string
+	Force bool
 }
 
 // Fetch answers mark_fetch: a section, an unchanged notice, an outline of a
@@ -41,13 +40,13 @@ func (t *Tools) Fetch(ctx context.Context, args FetchArgs) Result {
 		return t.failed(SiteFetch, target.Host, err)
 	}
 	if result.Response.Status != protocol.StatusOK {
-		return text(mcpfmt.Format(result, args.Render))
+		return text(mcpfmt.Full(result, mcpfmt.FetchKeys...))
 	}
 	body := result.Response.Body
 
 	// MCP text cannot carry binary faithfully; byte exact retrieval is the CLI's job.
 	if mdoutline.BinaryBody(body) {
-		return text(mcpfmt.FormatWith(result, mdoutline.NonMarkdownNotice(len(body)), map[string]string{"mode": "binary"}, args.Render))
+		return text(mcpfmt.FullWith(result, mdoutline.NonMarkdownNotice(len(body)), map[string]string{"mode": "binary"}, mcpfmt.FetchKeys...))
 	}
 	// A section works at any size and skips dedup: it asks for content the
 	// agent has not necessarily seen.
@@ -56,7 +55,7 @@ func (t *Tools) Fetch(ctx context.Context, args FetchArgs) Result {
 		if err != nil {
 			return failure("%v", err)
 		}
-		return text(mcpfmt.FormatWith(result, section, map[string]string{"section": "#" + anchor}, args.Render))
+		return text(mcpfmt.FullWith(result, section, map[string]string{"section": "#" + anchor}, mcpfmt.FetchKeys...))
 	}
 	return t.fullOrOutline(ctx, &fetched{target: target, docURL: docURL, result: result}, args)
 }
@@ -76,7 +75,7 @@ func (t *Tools) fullOrOutline(ctx context.Context, f *fetched, args FetchArgs) R
 	key := f.target.Host + f.target.Path
 	prev, seenBefore := t.seenLookup(ctx, key)
 	if seenBefore && !args.Force && cur.Identified() && prev == cur {
-		return text(fetchdedup.UnchangedNotice(cur, args.Render.Verbose))
+		return text(fetchdedup.UnchangedNotice(cur))
 	}
 	extra := map[string]string{}
 	if seenBefore && cur.Identified() && prev != cur {
@@ -86,12 +85,12 @@ func (t *Tools) fullOrOutline(ctx context.Context, f *fetched, args FetchArgs) R
 	if !args.Force && len(body) >= mdoutline.OutlineThreshold {
 		extra["mode"] = "outline"
 		extra["size"] = fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1)
-		return text(mcpfmt.FormatWith(f.result, mdoutline.OutlineBody(f.docURL, body), extra, args.Render))
+		return text(mcpfmt.FullWith(f.result, mdoutline.OutlineBody(f.docURL, body), extra, mcpfmt.FetchKeys...))
 	}
 	if cur.Identified() && t.hooks.Seen != nil {
 		t.hooks.Seen.Record(ctx, key, cur)
 	}
-	return text(mcpfmt.FormatWith(f.result, body, extra, args.Render))
+	return text(mcpfmt.FullWith(f.result, body, extra, mcpfmt.FetchKeys...))
 }
 
 func (t *Tools) seenLookup(ctx context.Context, key string) (fetchdedup.Doc, bool) {

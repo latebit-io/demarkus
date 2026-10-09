@@ -106,7 +106,7 @@ func TestMCPToolsExposeRequiredArguments(t *testing.T) {
 		{
 			tool:         "mark_fetch",
 			wantRequired: []string{"url"},
-			wantOptional: []string{"force", "verbose"},
+			wantOptional: []string{"force"},
 		},
 		{
 			tool:         "mark_lookup",
@@ -121,7 +121,7 @@ func TestMCPToolsExposeRequiredArguments(t *testing.T) {
 		{
 			tool:         "mark_explore",
 			wantRequired: []string{"url"},
-			wantOptional: []string{"verbose"},
+			wantOptional: []string{"direction"},
 		},
 		{
 			tool:         "mark_publish",

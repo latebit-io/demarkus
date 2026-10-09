@@ -20,23 +20,22 @@ const TagCap = 10
 // verboseParam is the tool argument that selects the verbose envelope.
 const verboseParam = "verbose"
 
-// Envelope names what a tool shows. Lean keys render in order and nothing
-// else from the response; Verbose keys lead the full rendering, every other
-// key following sorted (nil means the Lean keys lead).
+// FetchKeys lead a fetch or explore rendering, every other key following
+// sorted. Neither tool has a lean form: metadata is what a reader judges a
+// document by and what a republish must carry.
+var FetchKeys = []string{"version", "modified", "etag"}
+
+// Envelope names what a tool with a lean form shows: Lean keys render in
+// order and nothing else; verbose leads with the same keys and follows with
+// every other key sorted.
 type Envelope struct {
 	Lean        []string
-	Verbose     []string
 	CapTags     bool   // lean: cap each table row's Tags cell at TagCap
 	VerboseDesc string // description of the verbose tool argument
 }
 
 // Envelopes of the tools with a lean form.
 var (
-	Fetch = Envelope{
-		Lean:        []string{"version", "title"},
-		Verbose:     []string{"version", "modified", "etag"},
-		VerboseDesc: "all metadata keys (default false)",
-	}
 	Lookup = Envelope{
 		Lean:        []string{"matches", "match"},
 		CapTags:     true,
@@ -71,33 +70,39 @@ func Format(r fetch.Result, o Options) string {
 }
 
 // FormatWith renders r with a replacement body and surface-added keys, which
-// show in both modes. r's metadata map is never mutated: it may belong to a
-// cached response.
+// show in both modes.
 func FormatWith(r fetch.Result, body string, extra map[string]string, o Options) string {
-	meta := r.Response.Metadata
-	if len(extra) > 0 {
-		meta = make(map[string]string, len(meta)+len(extra))
-		maps.Copy(meta, r.Response.Metadata)
-		maps.Copy(meta, extra)
+	meta := withExtra(r.Response.Metadata, extra)
+	if o.Verbose {
+		return render(r.Response.Status, meta, o.Envelope.Lean, true, body)
 	}
-	keys, rest := o.Envelope.Verbose, true
-	if keys == nil {
-		keys = o.Envelope.Lean
+	keys := append(slices.Clone(o.Envelope.Lean), slices.Sorted(maps.Keys(extra))...)
+	if o.Envelope.CapTags {
+		body = CapTableTags(body)
 	}
-	if !o.Verbose {
-		keys = append(slices.Clone(o.Envelope.Lean), slices.Sorted(maps.Keys(extra))...)
-		rest = false
-		if o.Envelope.CapTags {
-			body = CapTableTags(body)
-		}
-	}
-	return render(r.Response.Status, meta, keys, rest, body)
+	return render(r.Response.Status, meta, keys, false, body)
 }
 
-// Full renders every metadata key, the named ones first: the rendering of
-// tools that have no lean form.
+// Full renders every metadata key, the named ones first.
 func Full(r fetch.Result, keys ...string) string {
-	return render(r.Response.Status, r.Response.Metadata, keys, true, r.Response.Body)
+	return FullWith(r, r.Response.Body, nil, keys...)
+}
+
+// FullWith is Full with a replacement body and surface-added keys.
+func FullWith(r fetch.Result, body string, extra map[string]string, keys ...string) string {
+	return render(r.Response.Status, withExtra(r.Response.Metadata, extra), keys, true, body)
+}
+
+// withExtra overlays extra on meta without mutating it: the map may belong
+// to a cached response.
+func withExtra(meta, extra map[string]string) map[string]string {
+	if len(extra) == 0 {
+		return meta
+	}
+	merged := make(map[string]string, len(meta)+len(extra))
+	maps.Copy(merged, meta)
+	maps.Copy(merged, extra)
+	return merged
 }
 
 // render writes the named keys in order, then (with rest) every other key

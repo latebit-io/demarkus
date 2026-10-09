@@ -116,8 +116,8 @@ identical in both profiles.
 Fifteen tools below have semantic parity with the local
 `client/cmd/demarkus-mcp` stdio server. Both surfaces render tool text
 through one package, `client/mcpfmt`, so their output is byte-identical
-by construction; `mark_fetch`, `mark_explore`, `mark_lookup`, and
-`mark_lookup_all` take `verbose: true` for the full metadata envelope.
+by construction; `mark_lookup` and `mark_lookup_all` take `verbose: true`
+for full tag lists per row.
 
 ### Read
 

@@ -170,34 +170,14 @@ func TestHandleMarkFetchHappyPath(t *testing.T) {
 		t.Fatalf("isError = true: %+v", res.Content)
 	}
 	text := toolResultText(t, res)
-	// Lean envelope by default: version and body, identity keys trimmed.
-	if want := "status: ok\nversion: 3\n\n# hello\n"; text != want {
-		t.Errorf("lean response = %q, want %q", text, want)
-	}
-	res, err = g.handleMarkFetch(ctx, callToolReq("mark_fetch", map[string]any{
-		"url": "mark://team-a/foo.md", "verbose": true, "force": true,
-	}))
-	if err != nil || res.IsError {
-		t.Fatalf("verbose handleMarkFetch: %v %+v", err, res)
-	}
-	text = toolResultText(t, res)
-	// Verbose: every metadata key verbatim, the proxy-fidelity rendering.
-	for _, want := range []string{
-		"status: ok",
-		"version: 3",
-		"modified: 2026-05-21T10:00:00Z",
-		"etag: abc123",
-		"content-hash: sha256-deadbeef",
-		"# hello",
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("verbose response missing %q\nfull:\n%s", want, text)
-		}
+	// Every metadata key on a plain call: there is no lean fetch.
+	if want := "status: ok\nversion: 3\nmodified: 2026-05-21T10:00:00Z\netag: abc123\ncontent-hash: sha256-deadbeef\n\n# hello\n"; text != want {
+		t.Errorf("response = %q, want %q", text, want)
 	}
 	// Dispatcher must have seen the worldName + path resolved
 	// from the tool URL.
-	if d.FetchCallCount() != 2 {
-		t.Errorf("fetch dispatch count = %d, want 2", d.FetchCallCount())
+	if d.FetchCallCount() != 1 {
+		t.Errorf("fetch dispatch count = %d, want 1", d.FetchCallCount())
 	}
 	call := d.FetchCalls[0]
 	if call.Host != "team-a" {
@@ -499,7 +479,7 @@ func TestMCPGatewayMarkFetchEndToEnd(t *testing.T) {
 	}
 	first, _ := contents[0].(map[string]any)
 	text, _ := first["text"].(string)
-	for _, want := range []string{"status: ok\nversion: 1\n\nbody via gateway"} {
+	for _, want := range []string{"status: ok\nversion: 1\nmodified: 2026-05-21T10:00:00Z\netag: abc\ncontent-hash: sha256-deadbeef\n\nbody via gateway"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("end-to-end text missing %q\nfull:\n%s", want, text)
 		}

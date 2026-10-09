@@ -75,7 +75,6 @@ func FetchTool(urlDesc, suffix string) mcp.Tool {
 		describe(fetchDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc+"; #<anchor> for one section")),
 		mcp.WithBoolean("force", mcp.Description(forceDesc)),
-		Fetch.Param(),
 	)
 }
 
@@ -88,7 +87,6 @@ func ExploreTool(urlDesc, suffix string) mcp.Tool {
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 	)
 	options = append(options, neighborhoodParams...)
-	options = append(options, Fetch.Param())
 	return mcp.NewTool("mark_explore", options...)
 }
 

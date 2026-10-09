@@ -53,18 +53,19 @@ func bigDoc() string {
 	return "# Big\n\nIntro paragraph.\n\n## Setup\n\n" + filler + "\n## Usage\n\n" + filler
 }
 
-// url with its #anchor, force and verbose all have to arrive at the body.
+// url with its #anchor and force have to arrive at the body; every call
+// carries every metadata key.
 func TestHandlerMarkFetch_ArgumentsReachTheBody(t *testing.T) {
 	calls := 0
 	h := &handler{client: fetchStub(bigDoc(), "3", "abc", &calls)}
 
 	outline := fetchText(t, h, map[string]any{"url": "mark://example.com/big.md"})
-	if !strings.Contains(outline, "mode: outline") || strings.Contains(outline, "etag: abc\n") {
-		t.Fatalf("default call should outline with a lean envelope, got:\n%.300s", outline)
+	if !strings.Contains(outline, "mode: outline") || !strings.Contains(outline, "etag: abc\n") {
+		t.Fatalf("default call should outline with every key, got:\n%.300s", outline)
 	}
-	forced := fetchText(t, h, map[string]any{"url": "mark://example.com/big.md", "force": true, "verbose": true})
+	forced := fetchText(t, h, map[string]any{"url": "mark://example.com/big.md", "force": true})
 	if strings.Contains(forced, "mode: outline") || !strings.Contains(forced, "filler line") || !strings.Contains(forced, "etag: abc\n") {
-		t.Errorf("force and verbose did not reach the body:\n%.300s", forced)
+		t.Errorf("force did not reach the body:\n%.300s", forced)
 	}
 	section := fetchText(t, h, map[string]any{"url": "mark://example.com/big.md#usage"})
 	if !strings.Contains(section, "section: #usage") {

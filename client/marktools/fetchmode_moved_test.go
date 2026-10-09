@@ -28,12 +28,12 @@ func fmStub(body, version, etag string) *fetchtest.Client {
 
 // fmArgs are one mark_fetch call as an agent would make it.
 type fmArgs struct {
-	url            string
-	force, verbose bool
+	url   string
+	force bool
 }
 
 func (a fmArgs) fetchArgs() marktools.FetchArgs {
-	return marktools.FetchArgs{URL: a.url, Force: a.force, Render: mcpfmt.Options{Envelope: &mcpfmt.Fetch, Verbose: a.verbose}}
+	return marktools.FetchArgs{URL: a.url, Force: a.force}
 }
 
 func fmText(t *testing.T, tools *marktools.Tools, args fmArgs) string {
@@ -343,7 +343,9 @@ func TestFetch_NonOKStatusPassthrough(t *testing.T) {
 	}
 }
 
-func TestFetch_LeanEnvelopeAndVerbose(t *testing.T) {
+// Fetch shows every metadata key on a plain call; the unchanged notice keeps
+// the etag line, the only identity when a server sends no version.
+func TestFetch_EveryKeyAndUnchangedNotice(t *testing.T) {
 	tools := fmTools(t, &fetchtest.Client{FetchFn: func(_ context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{
 			Status: protocol.StatusOK,
@@ -352,19 +354,14 @@ func TestFetch_LeanEnvelopeAndVerbose(t *testing.T) {
 			Body: fmSmallDoc,
 		}}, nil
 	}})
-	lean := fmText(t, tools, fmArgs{url: "mark://example.com/doc.md"})
-	if !strings.HasPrefix(lean, "status: ok\nversion: 3\ntitle: Doc\n\n# Doc") {
-		t.Fatalf("lean envelope:\n%s", lean)
-	}
-	verbose := fmText(t, tools, fmArgs{url: "mark://example.com/doc.md", verbose: true, force: true})
-	for _, want := range []string{"etag: abc\n", "content-hash: sha256-1\n", "tags: a,b\n", "type: Note\n", "modified: "} {
-		if !strings.Contains(verbose, want) {
-			t.Errorf("verbose envelope missing %q:\n%s", want, verbose)
-		}
+	first := fmText(t, tools, fmArgs{url: "mark://example.com/doc.md"})
+	want := "status: ok\nversion: 3\nmodified: 2026-07-04T00:00:00Z\netag: abc\nagent: x\ncontent-hash: sha256-1\ntags: a,b\ntitle: Doc\ntype: Note\n\n# Doc"
+	if !strings.HasPrefix(first, want) {
+		t.Fatalf("envelope:\n%s", first)
 	}
 	unchanged := fmText(t, tools, fmArgs{url: "mark://example.com/doc.md"})
-	if !strings.HasPrefix(unchanged, "status: unchanged\nversion: 3\n\n") {
-		t.Fatalf("lean unchanged notice:\n%s", unchanged)
+	if !strings.HasPrefix(unchanged, "status: unchanged\nversion: 3\netag: abc\n\n") {
+		t.Fatalf("unchanged notice:\n%s", unchanged)
 	}
 }
 

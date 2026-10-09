@@ -50,7 +50,7 @@ func TestHandlerMarkExplore_InvalidURL(t *testing.T) {
 }
 
 // A url alone gets the default card; a relation argument switches the graph
-// section, and direction, relations, page_size and verbose all arrive.
+// section, and direction, relations and page_size all arrive.
 func TestHandlerMarkExplore_ArgumentsReachTheBody(t *testing.T) {
 	h := &handler{client: exploreStub(), graphStore: graphstore.New()}
 	explore := func(args map[string]any) string {
@@ -63,11 +63,11 @@ func TestHandlerMarkExplore_ArgumentsReachTheBody(t *testing.T) {
 	}
 
 	card := explore(map[string]any{"url": "mark://host:6309/hub.md"})
-	if !strings.Contains(card, "## Backlinks (0)") || strings.Contains(card, "## Relations") || strings.Contains(card, "etag: xyz\n") {
+	if !strings.Contains(card, "## Backlinks (0)") || strings.Contains(card, "## Relations") || !strings.Contains(card, "etag: xyz\n") {
 		t.Fatalf("default card:\n%s", card)
 	}
 	relations := explore(map[string]any{
-		"url": "mark://host:6309/hub.md", "direction": "outgoing", "page_size": 1, "verbose": true,
+		"url": "mark://host:6309/hub.md", "direction": "outgoing", "page_size": 1,
 	})
 	for _, want := range []string{"## Relations (2 documents)", "mark://host/alpha.md", "next-cursor: ", "etag: xyz\n"} {
 		if !strings.Contains(relations, want) {

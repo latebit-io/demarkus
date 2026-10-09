@@ -15,7 +15,6 @@ import (
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/marktools"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -64,7 +63,7 @@ func exRelations(opts graphstore.NeighborhoodOptions) *marktools.RelationsArgs {
 }
 
 func exArgs(url string, relations *marktools.RelationsArgs) marktools.ExploreArgs {
-	return marktools.ExploreArgs{URL: url, Render: mcpfmt.Options{Envelope: &mcpfmt.Fetch}, Relations: relations}
+	return marktools.ExploreArgs{URL: url, Relations: relations}
 }
 
 func exTools(t *testing.T, backend marktools.Backend, store *graphstore.Store) *marktools.Tools {

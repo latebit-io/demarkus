@@ -10,7 +10,6 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchdedup"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/marktools"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -45,7 +44,7 @@ func docBackend(body, version string) *fetchtest.Client {
 }
 
 func fetchArgs(url string) marktools.FetchArgs {
-	return marktools.FetchArgs{URL: url, Render: mcpfmt.Options{Envelope: &mcpfmt.Fetch}}
+	return marktools.FetchArgs{URL: url}
 }
 
 func TestFetchDedupsThroughTheSeenStore(t *testing.T) {
@@ -62,7 +61,7 @@ func TestFetchDedupsThroughTheSeenStore(t *testing.T) {
 		t.Fatalf("seen keys = %v, want host+path", seen.docs)
 	}
 	second := tools.Fetch(t.Context(), fetchArgs("/doc.md"))
-	if second.Text != fetchdedup.UnchangedNotice(fetchdedup.Doc{Version: "4", Etag: "e4"}, false) {
+	if second.Text != fetchdedup.UnchangedNotice(fetchdedup.Doc{Version: "4", Etag: "e4"}) {
 		t.Errorf("second fetch = %q, want the unchanged notice", second.Text)
 	}
 	forced := fetchArgs("/doc.md")

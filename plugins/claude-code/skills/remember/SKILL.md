@@ -23,7 +23,7 @@ Slug and bound soul: the session header `Project slug: ... Bound store: ...`. He
 
 `<project-dir>`: `"${CLAUDE_PROJECT_DIR}"`, or the named directory as one POSIX-safe shell word. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (`mcp__<store>__mark_*`); tools not connected: say so, name the server, stop.
 
-A slug never proves identity. Before the first read or write, `mark_fetch /<slug>/index.md` with `force: true` and `verbose: true`; keep the result (body, version, metadata map) as the hub state. `ok` or `archived`: the subtree is this checkout's only when established this session (a checkout path recorded in the hub matches, or the user confirmed); otherwise the user confirms or picks a unique slug matching `^[a-z0-9][a-z0-9._-]*$`. `not-found`: `mark_list /<slug>/` with `include_archived: true`; any entry means the subtree exists without a hub, same confirmation; `not-found` or an empty complete page: new project. Any other failure: identity unknown, surface it, ask before writing.
+A slug never proves identity. Before the first read or write, `mark_fetch /<slug>/index.md` with `force: true`; keep the result (body, version, metadata map) as the hub state. `ok` or `archived`: the subtree is this checkout's only when established this session (a checkout path recorded in the hub matches, or the user confirmed); otherwise the user confirms or picks a unique slug matching `^[a-z0-9][a-z0-9._-]*$`. `not-found`: `mark_list /<slug>/` with `include_archived: true`; any entry means the subtree exists without a hub, same confirmation; `not-found` or an empty complete page: new project. Any other failure: identity unknown, surface it, ask before writing.
 
 ## Layout
 
@@ -46,7 +46,7 @@ OKF `type` on publish: `architecture.md` `Architecture`; `adr/*` `Decision`; `pl
 
 ## Write
 
-Force-fetch = `mark_fetch` with `force: true` and `verbose: true`: complete body and complete metadata map, which `mark_publish` replaces wholesale.
+Force-fetch = `mark_fetch` with `force: true`: complete body and complete metadata map, which `mark_publish` replaces wholesale.
 
 Shared flow (`patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `plans/*.md`, `thoughts.md`, `architecture.md`): force-fetch the target. `not-found`: create at `expected_version: 0`, `on_conflict: "fail"`, suitable `type`, `tags`, `importance` (`architecture.md`: `type: Architecture`, `tags: architecture,<project>`, `importance: 0.9`). `ok`: require a complete body (reject an outline), apply the change, publish at the fetched version, `on_conflict: "fail"`, complete metadata map minus unrequested `retention`. First conflict on either path: force-fetch again, preserve concurrent edits, reapply once, retry at the fresh version; a second conflict or any fetch failure: surface, never overwrite. `mark_append` only for a purely additive change after a successful fetch proves the document exists, at its fetched version; on conflict refetch, already-present content counts as done, else retry once, then surface.
 

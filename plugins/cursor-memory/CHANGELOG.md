@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.157
+
+mark_fetch and mark_explore return every metadata key on every call; the verbose argument is gone and no fetch instruction passes it.
+
 ## 0.13.143
 
 `/soul-archive` runs the checkout-identity check before its first read: a new project has nothing to archive, an unknown identity stops, and a target outside the project's subtree needs the user's confirmation.
