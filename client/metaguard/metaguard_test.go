@@ -26,7 +26,7 @@ func TestCompareReportsDroppedTagsAndKeys(t *testing.T) {
 		t.Fatalf("keys = %q, want %q", got, want)
 	}
 	note := n.Note("7")
-	for _, sub := range []string{"note: this publish dropped tags plan, verbose and keys importance=0.9;", "carried by v7", "verbose: true"} {
+	for _, sub := range []string{"note: this publish dropped tags plan, verbose and keys importance=0.9;", "carried by v7", "force: true"} {
 		if !strings.Contains(note, sub) {
 			t.Errorf("note missing %q:\n%s", sub, note)
 		}

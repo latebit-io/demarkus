@@ -10,12 +10,11 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/marktools"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
 func exploreArgs(url string) marktools.ExploreArgs {
-	return marktools.ExploreArgs{URL: url, Render: mcpfmt.Options{Envelope: &mcpfmt.Fetch}}
+	return marktools.ExploreArgs{URL: url}
 }
 
 func hubBackend(siblings ...string) *fetchtest.Client {

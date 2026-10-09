@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.155
+
+mark_fetch and mark_explore return every metadata key on every call; the verbose argument is gone and no fetch instruction passes it.
+
 ## 0.5.152
 
 Publish gate and /knowledge-doctor skip gateway-stamped identity keys (`agent`, `user`) in `require_fields`.

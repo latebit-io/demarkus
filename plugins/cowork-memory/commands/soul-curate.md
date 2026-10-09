@@ -15,7 +15,7 @@ Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`;
 
 ## Steps
 
-1. **Read.** `mark_fetch` the path with `force: true` and `verbose: true`; keep the version and the complete metadata map. `not-found`: say so, stop. Outline-only or any other failure: surface, stop. `mark_backlinks` the path; any failure: surface, stop, nothing proposed without the inbound list. Success: list every inbound link that carries an `#anchor`, since a split keeps anchors only where headings move verbatim.
+1. **Read.** `mark_fetch` the path with `force: true`; keep the version and the complete metadata map. `not-found`: say so, stop. Outline-only or any other failure: surface, stop. `mark_backlinks` the path; any failure: surface, stop, nothing proposed without the inbound list. Success: list every inbound link that carries an `#anchor`, since a split keeps anchors only where headings move verbatim.
 
 2. **Check.** Report each rule as pass or fail, one line each:
    - Size: bytes against 8 KB (a plain fetch returns an outline at or over it).
@@ -32,7 +32,7 @@ Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`;
 
 4. **Gate.** Ask for approval on the exact proposal. Declined: stop, nothing written.
 
-5. **Publish.** Split: preflight every topic path with `mark_fetch` (`force: true`, `verbose: true`): `not-found` publishes at `expected_version: 0`; an existing topic whose body and metadata equal the proposal is skipped; one that differs stops before the hub (a resumed split must match what was approved). Then the topic files, then the hub at the step 1 version with the preserved metadata map, `on_conflict: "fail"`, `retention` never unless the user asked for this write. Edit: one publish at the step 1 version. Conflict: force-fetch again with `verbose: true`, show the difference, return to step 4. Any failure: report it exactly and which files landed; never claim the split is complete.
+5. **Publish.** Split: preflight every topic path with `mark_fetch` (`force: true`): `not-found` publishes at `expected_version: 0`; an existing topic whose body and metadata equal the proposal is skipped; one that differs stops before the hub (a resumed split must match what was approved). Then the topic files, then the hub at the step 1 version with the preserved metadata map, `on_conflict: "fail"`, `retention` never unless the user asked for this write. Edit: one publish at the step 1 version. Conflict: force-fetch again, show the difference, return to step 4. Any failure: report it exactly and which files landed; never claim the split is complete.
 
 6. **Report.** Path, what changed, every new path with its size, the inbound links the user should repoint, and the version the old body lives at.
 
@@ -40,5 +40,5 @@ Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`;
 
 - Don't rewrite prose in a split; move it. Curation of wording is a separate, explicit ask.
 - Don't write before the gate, and don't touch any document other than the one named and its new topic files.
-- Don't drop metadata: `mark_publish` replaces the map; resend every key from the verbose fetch except unrequested `retention`.
+- Don't drop metadata: `mark_publish` replaces the map; resend every key from the force-fetch except unrequested `retention`.
 - Don't fabricate a summary the document does not support; ask when the audience or the point is unclear.

@@ -27,15 +27,15 @@ func (d Doc) Identified() bool {
 }
 
 // UnchangedNotice renders the dedup short-circuit response: the document
-// identity plus a pointer at force=true. Only call it for an Identified
-// Doc. The etag line is verbose-only unless it is the sole identity.
-func UnchangedNotice(d Doc, verbose bool) string {
+// identity, both fields when present, plus a pointer at force=true. Only
+// call it for an Identified Doc.
+func UnchangedNotice(d Doc) string {
 	var b strings.Builder
 	b.WriteString("status: unchanged\n")
 	if d.Version != "" {
 		fmt.Fprintf(&b, "version: %s\n", d.Version)
 	}
-	if d.Etag != "" && (verbose || d.Version == "") {
+	if d.Etag != "" {
 		fmt.Fprintf(&b, "etag: %s\n", d.Etag)
 	}
 	since := "since this session's earlier fetch (etag match)"

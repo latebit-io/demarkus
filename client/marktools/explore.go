@@ -21,7 +21,6 @@ const exploreSectionCap = 10
 // section from backlinks to a page of the document's neighborhood.
 type ExploreArgs struct {
 	URL       string
-	Render    mcpfmt.Options
 	Relations *RelationsArgs
 }
 
@@ -54,7 +53,7 @@ func (t *Tools) Explore(ctx context.Context, args ExploreArgs) Result { //nolint
 	// No store is not a failure here: the card says so in its graph section.
 	scope, _ := t.graphScope(ctx)
 	if result.Response.Status != protocol.StatusOK {
-		out := mcpfmt.Format(result, args.Render)
+		out := mcpfmt.Full(result, mcpfmt.FetchKeys...)
 		if warning := observe(scope, &target, observed); warning != "" {
 			out += mcpfmt.Note(strings.TrimSuffix(warning, "\n"))
 		}
@@ -71,7 +70,7 @@ func (t *Tools) Explore(ctx context.Context, args ExploreArgs) Result { //nolint
 		if cacheWarning != "" {
 			notice += "\n" + cacheWarning
 		}
-		return text(mcpfmt.FormatWith(result, notice, map[string]string{"mode": "binary"}, args.Render))
+		return text(mcpfmt.FullWith(result, notice, map[string]string{"mode": "binary"}, mcpfmt.FetchKeys...))
 	}
 
 	var b strings.Builder
@@ -85,7 +84,7 @@ func (t *Tools) Explore(ctx context.Context, args ExploreArgs) Result { //nolint
 	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; mark_fetch force=true for the full body\n", docURL)
 
 	extra := map[string]string{"size": fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1)}
-	return text(mcpfmt.FormatWith(result, b.String(), extra, args.Render))
+	return text(mcpfmt.FullWith(result, b.String(), extra, mcpfmt.FetchKeys...))
 }
 
 // observe records what the fetch saw in the graph store and saves it; the

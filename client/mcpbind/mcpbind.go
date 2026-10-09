@@ -71,7 +71,7 @@ func Fetch(req *mcp.CallToolRequest) (marktools.FetchArgs, error) {
 	if err != nil {
 		return marktools.FetchArgs{}, err
 	}
-	return marktools.FetchArgs{URL: url, Force: req.GetBool("force", false), Render: mcpfmt.Fetch.Options(req)}, nil
+	return marktools.FetchArgs{URL: url, Force: req.GetBool("force", false)}, nil
 }
 
 // Explore binds mark_explore; the relations page is read only when asked for.
@@ -80,7 +80,7 @@ func Explore(req *mcp.CallToolRequest) (marktools.ExploreArgs, error) {
 	if err != nil {
 		return marktools.ExploreArgs{}, err
 	}
-	args := marktools.ExploreArgs{URL: url, Render: mcpfmt.Fetch.Options(req)}
+	args := marktools.ExploreArgs{URL: url}
 	if mcpfmt.NeighborhoodRequested(req) {
 		args.Relations = &marktools.RelationsArgs{
 			Options:    mcpfmt.NeighborhoodOptions(req),

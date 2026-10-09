@@ -51,7 +51,7 @@ func TestNeighborhoodRequested(t *testing.T) {
 		want bool
 	}{
 		{"URL only", map[string]any{"url": "/doc.md"}, false},
-		{"verbose metadata", map[string]any{"url": "/doc.md", "verbose": true}, false},
+		{"unknown argument", map[string]any{"url": "/doc.md", "verbose": true}, false},
 		{"direction", map[string]any{"direction": "both"}, true},
 		{"all relations", map[string]any{"relations": []string{}}, true},
 		{"page size", map[string]any{"page_size": 10}, true},

@@ -96,7 +96,7 @@ func (n Narrowing) Note(version string) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return mcpfmt.Note(fmt.Sprintf("this publish dropped %s carried by v%s; fetch with verbose: true and republish the complete metadata map to restore them",
+	return mcpfmt.Note(fmt.Sprintf("this publish dropped %s carried by v%s; fetch with force: true and republish the complete metadata map to restore them",
 		strings.Join(parts, " and "), version))
 }
 

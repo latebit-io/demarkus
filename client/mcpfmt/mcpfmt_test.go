@@ -29,41 +29,24 @@ func fullDoc() fetch.Result {
 	}}
 }
 
-func TestFetchLean(t *testing.T) {
-	got := Format(fullDoc(), Options{Envelope: &Fetch})
-	want := "status: ok\nversion: 7\ntitle: Doc\n\n# Doc\nbody\n"
-	if got != want {
-		t.Fatalf("lean fetch:\n%q\nwant\n%q", got, want)
-	}
-}
-
-func TestFetchVerboseIsTheFullRendering(t *testing.T) {
-	got := Format(fullDoc(), Options{Envelope: &Fetch, Verbose: true})
+// Full leads with the fetch keys and follows with every other key sorted.
+func TestFullLeadsWithFetchKeys(t *testing.T) {
+	got := Full(fullDoc(), FetchKeys...)
 	want := "status: ok\nversion: 7\nmodified: 2026-05-21T10:00:00Z\netag: abc-123\n" +
 		"agent: claude-code\ncontent-hash: sha256-deadbeef\nimportance: 0.9\nrel-related: /other.md\n" +
 		"source: docs/x.md\ntags: a,b,c\ntitle: Doc\ntype: Reference\n\n# Doc\nbody\n"
 	if got != want {
-		t.Fatalf("verbose fetch:\n%q\nwant\n%q", got, want)
-	}
-	if full := Full(fullDoc(), "version", "modified", "etag"); full != want {
-		t.Fatalf("Full differs from verbose:\n%q", full)
+		t.Fatalf("Full:\n%q\nwant\n%q", got, want)
 	}
 }
 
-func TestFormatWithExtrasShowInBothModes(t *testing.T) {
+func TestFullWithExtras(t *testing.T) {
 	extra := map[string]string{"mode": "outline", "size": "9000 bytes, 100 lines"}
-	lean := FormatWith(fullDoc(), "- outline", extra, Options{Envelope: &Fetch})
-	if want := "status: ok\nversion: 7\ntitle: Doc\nmode: outline\nsize: 9000 bytes, 100 lines\n\n- outline"; lean != want {
-		t.Fatalf("lean with extras:\n%q\nwant\n%q", lean, want)
-	}
-	verbose := FormatWith(fullDoc(), "- outline", extra, Options{Envelope: &Fetch, Verbose: true})
-	for _, line := range []string{"mode: outline\n", "size: 9000 bytes, 100 lines\n", "etag: abc-123\n"} {
-		if !strings.Contains(verbose, line) {
-			t.Errorf("verbose with extras missing %q:\n%s", line, verbose)
-		}
-	}
-	if strings.Contains(verbose, "body\n") {
-		t.Error("replacement body not applied")
+	got := FullWith(fullDoc(), "- outline", extra, FetchKeys...)
+	want := "status: ok\nversion: 7\nmodified: 2026-05-21T10:00:00Z\netag: abc-123\nagent: claude-code\ncontent-hash: sha256-deadbeef\n" +
+		"importance: 0.9\nmode: outline\nrel-related: /other.md\nsize: 9000 bytes, 100 lines\nsource: docs/x.md\ntags: a,b,c\ntitle: Doc\ntype: Reference\n\n- outline"
+	if got != want {
+		t.Fatalf("FullWith:\n%q\nwant\n%q", got, want)
 	}
 	if fullDoc().Response.Metadata["mode"] != "" {
 		t.Error("extras leaked into the response map")
@@ -72,15 +55,12 @@ func TestFormatWithExtrasShowInBothModes(t *testing.T) {
 
 func TestMissingKeysAndEmptyBody(t *testing.T) {
 	r := fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound, Metadata: map[string]string{}}}
-	if got := Format(r, Options{Envelope: &Fetch}); got != "status: not-found\n" {
-		t.Fatalf("not-found lean = %q", got)
-	}
-	if got := Format(r, Options{Envelope: &Fetch, Verbose: true}); got != "status: not-found\n" {
-		t.Fatalf("not-found verbose = %q", got)
+	if got := Full(r, FetchKeys...); got != "status: not-found\n" {
+		t.Fatalf("not-found = %q", got)
 	}
 	nilMeta := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "x"}}
-	if got := FormatWith(nilMeta, "x", map[string]string{"mode": "binary"}, Options{Envelope: &Fetch, Verbose: true}); got != "status: ok\nmode: binary\n\nx" {
-		t.Fatalf("nil metadata verbose = %q", got)
+	if got := FullWith(nilMeta, "x", map[string]string{"mode": "binary"}, FetchKeys...); got != "status: ok\nmode: binary\n\nx" {
+		t.Fatalf("nil metadata = %q", got)
 	}
 }
 
