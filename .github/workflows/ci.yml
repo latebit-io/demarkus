@@ -182,12 +182,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
-      - uses: golangci/golangci-lint-action@v7
-        with:
-          version: v2.9.0
-          working-directory: server
       - name: Test
-        run: cd server && go test -race ./...
+        # -short skips the several-writers models and the adoption cost
+        # probe, about 70 s under -race; the release workflow runs them.
+        run: cd server && go test -short -race ./...
       - name: Vet
         run: cd server && go vet ./...
       - name: Vulnerabilities
@@ -205,6 +203,39 @@ jobs:
           fi
           go build -o /tmp/demarkus-server ./cmd/demarkus-server
           go build -o /tmp/demarkus-knowledge-server ./cmd/demarkus-knowledge-server
+
+  # Lint and the release-target builds run beside the server tests, not
+  # after them: in one job they added four minutes to every server PR.
+  lint-server:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.server == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.9.0
+          working-directory: server
+  cross-compile-server:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.server == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
       # The release builds 32-bit arm, where an untyped 64-bit constant is a
       # compile error the amd64 build never sees (it shipped one: #338).
       - name: Cross-compile the release targets
@@ -219,7 +250,6 @@ jobs:
             CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-knowledge-server
             echo "ok $GOOS/$GOARCH${GOARM:+v$GOARM}"
           done
-
   test-client:
     needs: detect-changes
     if: needs.detect-changes.outputs.client == 'true'
