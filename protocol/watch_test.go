@@ -82,6 +82,7 @@ func TestWatchStreamRoundTrip(t *testing.T) {
 		Hash:    "sha256-" + strings.Repeat("ab", 32),
 		Op:      OpPublish,
 		Agent:   "claude-code",
+		User:    "alice@example.com",
 	}
 	archive := WatchEvent{Cursor: Cursor{Epoch: "world-a", Seq: 9}, Path: "/a.md", Version: 3, Op: OpArchive}
 	var wire bytes.Buffer

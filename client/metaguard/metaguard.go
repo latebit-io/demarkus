@@ -16,9 +16,9 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
-// uncarried keys never count as dropped: the surface stamps agent, the store
-// never inherits retention, and tags are compared as a set.
-var uncarried = map[string]bool{"agent": true, "retention": true, "tags": true}
+// uncarried keys never count as dropped: the store never inherits retention,
+// tags are compared as a set, and identity keys are the surface's to stamp.
+var uncarried = map[string]bool{"retention": true, "tags": true}
 
 // maxValue bounds a dropped key's value in the note.
 const maxValue = 80
@@ -66,7 +66,7 @@ func Compare(current, incoming map[string]string) Narrowing {
 		}
 	}
 	for key, value := range current {
-		if protocol.IsReservedMetadataKey(key) || uncarried[key] {
+		if protocol.IsReservedMetadataKey(key) || protocol.IsIdentityMetadataKey(key) || uncarried[key] {
 			continue
 		}
 		// The server stamps the default type on every version, so omitting

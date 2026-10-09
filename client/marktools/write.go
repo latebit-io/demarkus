@@ -86,9 +86,9 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 // publisherMeta is the caller's metadata under the surface's identity: a
 // caller cannot write under another agent's name.
 func (t *Tools) publisherMeta(ctx context.Context, raw map[string]any) map[string]string {
-	meta := t.agentMeta(ctx)
+	meta := t.identityMeta(ctx)
 	for k, v := range raw {
-		if k != "agent" {
+		if !protocol.IsIdentityMetadataKey(k) {
 			meta[k] = fmt.Sprintf("%v", v)
 		}
 	}
@@ -108,10 +108,15 @@ func requireVersion(given *int) (int, *Result) {
 	return *given, nil
 }
 
-func (t *Tools) agentMeta(ctx context.Context) map[string]string {
+// identityMeta is the surface's stamp on every write: the identity keys its
+// hooks supply.
+func (t *Tools) identityMeta(ctx context.Context) map[string]string {
 	meta := map[string]string{}
 	if t.hooks.Agent != nil {
-		meta["agent"] = t.hooks.Agent(ctx)
+		meta[protocol.MetaAgent] = t.hooks.Agent(ctx)
+	}
+	if t.hooks.User != nil {
+		meta[protocol.MetaUser] = t.hooks.User(ctx)
 	}
 	return meta
 }
@@ -170,7 +175,7 @@ func (t *Tools) Append(ctx context.Context, args AppendArgs) Result {
 		return *bad
 	}
 	result, err := t.doc(ctx, target, write).Append(ctx, docwrite.AppendRequest{
-		Body: args.Body, ExpectedVersion: args.ExpectedVersion, Metadata: t.agentMeta(ctx),
+		Body: args.Body, ExpectedVersion: args.ExpectedVersion, Metadata: t.identityMeta(ctx),
 	})
 	if err != nil {
 		return t.writeFailed(SiteAppend, target.Host, err)

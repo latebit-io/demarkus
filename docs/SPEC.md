@@ -655,7 +655,7 @@ agent: <agent id>
 - `version` (REQUIRED): the version the write created; for an archive, the current version.
 - `op` (REQUIRED): `publish`, `append` or `archive`.
 - `hash` (OPTIONAL): the `content-hash` (§6.1) of the version the event names.
-- `agent` (OPTIONAL): the `agent` metadata the write carried, when it carried one.
+- `agent`, `user` (OPTIONAL): the identity keys (§8.1) the write carried, when it carried them.
 
 Heartbeat, while no event is due (every 20 seconds RECOMMENDED):
 
@@ -747,6 +747,8 @@ The following status values are reserved for future use:
 
 Beyond the interpreted fields above, a PUBLISH request MAY carry additional publisher metadata as arbitrary `key: value` frontmatter lines. The server stores these opaquely and exposes them to LOOKUP `filter` predicates. Reserved store fields (§9.4) MUST be rejected. §9.4 specifies how publisher metadata is persisted, including the Open Knowledge Format field names that are stored as bare frontmatter fields.
 
+Two publisher keys are the identity convention: `agent` names the writing software and `user` the verified person behind the write. A writing surface that knows them MAY stamp them and MUST NOT let a caller override a key it stamps. Servers store them like any publisher metadata and echo them on WATCH events (§6.8).
+
 ### 8.2. Response Metadata
 
 | Field | Applicable verbs | Format | Description |
@@ -772,6 +774,7 @@ Beyond the interpreted fields above, a PUBLISH request MAY carry additional publ
 | `op` | WATCH (event block) | `publish`, `append` or `archive` | What changed. Clients skip an unknown value. |
 | `hash` | WATCH (event block) | `sha256-` + 64-char lowercase hex | `content-hash` of the version the event names. |
 | `agent` | WATCH (event block) | String | The `agent` metadata the write carried. |
+| `user` | WATCH (event block) | String | The `user` metadata the write carried. |
 
 ## 9. Versioning
 

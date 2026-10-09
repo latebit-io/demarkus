@@ -76,9 +76,12 @@ type Hooks struct {
 	// Writer authorizes verb on target and returns how to run the write. Its
 	// error is the tool's answer as is. Nil means the surface cannot write.
 	Writer func(ctx context.Context, target Target, verb string) (WriteFunc, error)
-	// Agent names who writes; it becomes the agent metadata key, which a caller
-	// cannot override. Nil writes none.
+	// Agent names the writing software; it becomes the agent metadata key,
+	// which a caller cannot override. Nil writes none.
 	Agent func(ctx context.Context) string
+	// User names the verified person behind the write; it becomes the user
+	// metadata key, which a caller cannot override. Nil writes none.
+	User func(ctx context.Context) string
 	// Graph is the graph store a call works on; nil or an error means none,
 	// and the error's text is the tool's answer.
 	Graph func(ctx context.Context) (*GraphScope, error)

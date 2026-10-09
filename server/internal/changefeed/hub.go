@@ -35,6 +35,7 @@ type Event struct {
 	Hash    string
 	Op      string
 	Agent   string
+	User    string
 }
 
 // Hub holds a world's recent events and wakes subscribers on each publish.

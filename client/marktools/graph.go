@@ -162,7 +162,7 @@ func (t *Tools) GraphPublish(ctx context.Context, args GraphPublishArgs) Result 
 	if bad != nil {
 		return *bad
 	}
-	meta := t.agentMeta(ctx)
+	meta := t.identityMeta(ctx)
 	if args.Retention > 0 {
 		meta["retention"] = strconv.Itoa(args.Retention)
 	}

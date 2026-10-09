@@ -127,7 +127,7 @@ func (t *Tools) publishIndex(ctx context.Context, run *indexRun) (index.PublishR
 		entries = index.Merge(existingEntries, run.source.Authority, run.entries)
 		manifestSource = run.target.Authority
 	}
-	meta := t.agentMeta(ctx)
+	meta := t.identityMeta(ctx)
 	published, err := index.PublishGeneration(ctx, index.PublishOptions{
 		ManifestPath:            run.target.Path,
 		Source:                  manifestSource,

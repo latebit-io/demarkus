@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
@@ -14,7 +16,7 @@ import (
 )
 
 // watchMain prints one tab separated line per change hint until interrupted:
-// cursor, op, path, version, hash, agent. A resync is a line whose op is
+// cursor, op, path, version, hash, agent, user. A resync is a line whose op is
 // resync; everything derived from earlier lines is stale from then on.
 func watchMain(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
@@ -25,8 +27,8 @@ func watchMain(ctx context.Context, args []string) {
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus watch [-since CURSOR] [-auth TOKEN] [-coalesce] [-insecure] mark://host:port/prefix/\n\n")
 		fmt.Fprintf(os.Stderr, "Subscribe to change hints under a prefix (ending in /) or for one document and\n")
-		fmt.Fprintf(os.Stderr, "print one line per change: cursor, op, path, version, hash, agent. The watch\n")
-		fmt.Fprintf(os.Stderr, "reconnects on its own; a line whose op is resync means earlier state is stale.\n\n")
+		fmt.Fprintf(os.Stderr, "print one line per change: cursor, op, path, version, hash, agent, user. The\n")
+		fmt.Fprintf(os.Stderr, "watch reconnects on its own; a line whose op is resync means earlier state is stale.\n\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -66,10 +68,11 @@ func watchMain(ctx context.Context, args []string) {
 			log.Fatal(err)
 		}
 		e := notice.Event
-		line := e.Cursor.String() + "\tresync\t\t\t\t"
-		if !notice.Resync {
-			line = fmt.Sprintf("%s\t%s\t%s\t%d\t%s\t%s", e.Cursor, e.Op, e.Path, e.Version, e.Hash, e.Agent)
+		op, version := e.Op, strconv.Itoa(e.Version)
+		if notice.Resync {
+			op, version = "resync", ""
 		}
+		line := strings.Join([]string{e.Cursor.String(), op, e.Path, version, e.Hash, e.Agent, e.User}, "\t")
 		if _, err := fmt.Fprintln(os.Stdout, line); err != nil {
 			log.Fatal(err)
 		}

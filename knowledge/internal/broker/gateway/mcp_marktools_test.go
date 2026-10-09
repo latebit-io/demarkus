@@ -47,14 +47,15 @@ func TestToolBodiesBinding(t *testing.T) {
 	}
 }
 
-// A write whose response was lost is looked for, never resent, and the agent
-// the landed version carries is the caller's verified email.
+// A write whose response was lost is looked for, never resent, and the landed
+// version is ours only under the identity the gateway stamps: the client name
+// as agent (unknown without a session) and the verified email as user.
 func TestLostWriteResponseIsReconciled(t *testing.T) {
 	d := &fakeDispatcher{
 		AppendFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
 			return fetch.Result{}, fetchtest.LostResponse()
 		},
-		FetchFn: fetchtest.History("/foo.md", map[string]string{"agent": "alice@example.com"}, "a", "b", "old", "old\nmore"),
+		FetchFn: fetchtest.History("/foo.md", map[string]string{"agent": "unknown", "user": "alice@example.com"}, "a", "b", "old", "old\nmore"),
 	}
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
 	res, err := g.handleMarkAppend(withAliceClaims(context.Background()), callToolReq("mark_append", map[string]any{
@@ -94,5 +95,17 @@ func TestToolURLWorldNamesAreCaseInsensitive(t *testing.T) {
 	world, path, err := parseToolURL("mark://Team-A/Docs/A.md")
 	if err != nil || world != "team-a" || path != "/Docs/A.md" {
 		t.Errorf("parseToolURL = %q, %q, %v; want the world lowercased and the path as written", world, path, err)
+	}
+}
+
+// The user key is the verified email, canonical, and absent without claims;
+// the agent key is mcpbind.ClientName, tested there.
+func TestToolUser(t *testing.T) {
+	claims := core.CtxWithClaims(context.Background(), &core.Claims{Subject: "google|alice", Email: " Alice@Example.com ", EmailVerified: true})
+	if got := toolUser(claims); got != "alice@example.com" {
+		t.Errorf("toolUser = %q, want the canonical email", got)
+	}
+	if got := toolUser(context.Background()); got != "" {
+		t.Errorf("toolUser without claims = %q, want empty", got)
 	}
 }

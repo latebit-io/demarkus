@@ -12,7 +12,7 @@ import (
 
 func TestCompareReportsDroppedTagsAndKeys(t *testing.T) {
 	current := map[string]string{
-		"version": "7", "etag": "x", "content-hash": "y", "modified": "z", "agent": "a", "retention": "3",
+		"version": "7", "etag": "x", "content-hash": "y", "modified": "z", "agent": "a", "user": "u@example.com", "retention": "3",
 		"tags": "plan, lookup,verbose", "importance": "0.9", "title": "Plan", "type": "Plan",
 		"rel-related": "/a.md,/b.md", "source": strings.Repeat("s", 100),
 	}

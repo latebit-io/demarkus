@@ -71,8 +71,11 @@ func TestHandleMarkPublishHappyPath(t *testing.T) {
 	if call.ExpectedVersion != 3 {
 		t.Errorf("expectedVersion = %d, want 3", call.ExpectedVersion)
 	}
-	if call.Metadata["agent"] != "alice@example.com" {
-		t.Errorf("publisher meta agent = %q, want canonical email", call.Metadata["agent"])
+	if call.Metadata["user"] != "alice@example.com" {
+		t.Errorf("publisher meta user = %q, want canonical email", call.Metadata["user"])
+	}
+	if call.Metadata["agent"] != "unknown" {
+		t.Errorf("publisher meta agent = %q, want unknown without an MCP session", call.Metadata["agent"])
 	}
 }
 
@@ -110,9 +113,9 @@ func TestHandleMarkPublishForwardsMetadata(t *testing.T) {
 	if m["importance"] != "0.9" {
 		t.Errorf("forwarded importance = %q, want 0.9", m["importance"])
 	}
-	// Agent identity is applied last and cannot be spoofed by caller metadata.
-	if m["agent"] != "alice@example.com" {
-		t.Errorf("agent = %q, want alice@example.com", m["agent"])
+	// Identity is applied last and cannot be spoofed by caller metadata.
+	if m["user"] != "alice@example.com" || m["agent"] != "unknown" {
+		t.Errorf("user = %q, agent = %q; want alice@example.com and unknown", m["user"], m["agent"])
 	}
 }
 

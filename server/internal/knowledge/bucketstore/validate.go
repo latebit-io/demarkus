@@ -149,6 +149,9 @@ func validateSlotEntry(entry *slotEntry) error {
 	if !protocol.IsValidMetaValue(entry.Agent) {
 		return errors.New("agent is not a valid metadata value")
 	}
+	if !protocol.IsValidMetaValue(entry.User) {
+		return errors.New("user is not a valid metadata value")
+	}
 	if entry.Current < 1 || entry.Current > storefmt.MaxVersionNumber {
 		return fmt.Errorf("current version is outside [1,%d]", storefmt.MaxVersionNumber)
 	}

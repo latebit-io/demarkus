@@ -53,6 +53,19 @@ func IsReservedMetadataKey(key string) bool {
 	return reservedMetadataKeys[key]
 }
 
+// Identity keys are ordinary publisher metadata a writing surface stamps and
+// never lets a caller set; servers store them opaquely and echo them on
+// WATCH events.
+const (
+	MetaAgent = "agent" // the writing software
+	MetaUser  = "user"  // the verified person behind the write
+)
+
+// IsIdentityMetadataKey reports a surface-stamped identity key.
+func IsIdentityMetadataKey(key string) bool {
+	return key == MetaAgent || key == MetaUser
+}
+
 const (
 	// DefaultPort is the default port for Mark Protocol servers.
 	DefaultPort = 6309

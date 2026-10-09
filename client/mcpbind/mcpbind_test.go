@@ -1,12 +1,14 @@
 package mcpbind
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 func call(args map[string]any) *mcp.CallToolRequest {
@@ -156,5 +158,23 @@ func TestMetadataArgument(t *testing.T) {
 				t.Fatalf("metadata = %v, %v; want %v, error=%v", got, err, tt.want, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestClientName(t *testing.T) {
+	s := mcpserver.NewMCPServer("test", "0.1.0")
+	named := mcpserver.NewInProcessSession("named", nil)
+	named.SetClientInfo(mcp.Implementation{Name: "claude-code", Version: "1.0"})
+	for name, tt := range map[string]struct {
+		ctx  context.Context
+		want string
+	}{
+		"client name from the session": {s.WithContext(context.Background(), named), "claude-code"},
+		"no session":                   {context.Background(), "unknown"},
+		"empty client name":            {s.WithContext(context.Background(), mcpserver.NewInProcessSession("bare", nil)), "unknown"},
+	} {
+		if got := ClientName(tt.ctx); got != tt.want {
+			t.Errorf("%s: ClientName = %q, want %q", name, got, tt.want)
+		}
 	}
 }
