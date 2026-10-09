@@ -373,8 +373,13 @@ func TestIdleSectionIndexReleasesMemory(t *testing.T) {
 	mustSucceed(t, err)
 	mustSucceed(t, initialize(context.Background(), memory, testWorldID))
 	// A search waits out the build, which the race detector slows past a second.
+	// The idle clock is the test's: it only moves when the test evicts, so the
+	// GCs a heap sample costs can never let an eviction land between samples.
 	store := openSectionStore(t, memory, nil)
 	store.sections.idle, store.sections.wait = 50*time.Millisecond, time.Minute
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	store.now = func() time.Time { return time.Unix(0, clock.Load()) }
 	const documents = 24
 	bodyBytes := 0
 	for n := range documents {
@@ -383,7 +388,10 @@ func TestIdleSectionIndexReleasesMemory(t *testing.T) {
 		write(t, store, fmt.Sprintf("/graph/%d.md", n), string(body), nil)
 	}
 	waitIdle(t, store)
-	evicted := func() { waitFor(t, "an evicted section index", func() bool { return !store.sections.isActive() }) }
+	evicted := func() {
+		clock.Add(int64(store.sections.idle))
+		waitFor(t, "an evicted section index", func() bool { return !store.sections.isActive() })
+	}
 	build := func() {
 		if rows := settledRows(t, store, "observations"); len(rows) != documents {
 			t.Fatalf("body rows = %d, want %d", len(rows), documents)
@@ -392,6 +400,9 @@ func TestIdleSectionIndexReleasesMemory(t *testing.T) {
 	build()
 	evicted()
 	resident := memtest.Retained(build)
+	if !store.sections.isActive() {
+		t.Fatal("the index was evicted before the eviction sample; the idle clock moved on its own")
+	}
 	released := memtest.Retained(evicted)
 	t.Logf("resident index %d bytes for %d body bytes (%.2f per byte); eviction released %d", resident, bodyBytes, float64(resident)/float64(bodyBytes), -released)
 	if resident < int64(bodyBytes)/2 {
