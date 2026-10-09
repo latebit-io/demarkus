@@ -373,8 +373,10 @@ func TestIdleSectionIndexReleasesMemory(t *testing.T) {
 	mustSucceed(t, err)
 	mustSucceed(t, initialize(context.Background(), memory, testWorldID))
 	// A search waits out the build, which the race detector slows past a second.
+	// The idle period outlasts the two forced GCs a heap sample costs, so an
+	// eviction never lands between the build sample and the eviction sample.
 	store := openSectionStore(t, memory, nil)
-	store.sections.idle, store.sections.wait = 50*time.Millisecond, time.Minute
+	store.sections.idle, store.sections.wait = time.Second, time.Minute
 	const documents = 24
 	bodyBytes := 0
 	for n := range documents {
@@ -392,6 +394,9 @@ func TestIdleSectionIndexReleasesMemory(t *testing.T) {
 	build()
 	evicted()
 	resident := memtest.Retained(build)
+	if !store.sections.isActive() {
+		t.Fatal("the index was evicted before the eviction sample; idle is too short for this machine")
+	}
 	released := memtest.Retained(evicted)
 	t.Logf("resident index %d bytes for %d body bytes (%.2f per byte); eviction released %d", resident, bodyBytes, float64(resident)/float64(bodyBytes), -released)
 	if resident < int64(bodyBytes)/2 {
