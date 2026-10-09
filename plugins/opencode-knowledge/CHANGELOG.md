@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.152
+
+The publish gate no longer asks the agent for identity keys (`agent`, `user`) a policy requires; the gateway stamps them. The promote skill and /knowledge-doctor say the same.
+
 ## 0.5.149
 
 Support OpenCode V2 while retaining V1 1.18.29+ through the dual `setup`/`server` entrypoint. Register MCP servers, commands, model-only guidance, and coordinated write gates with V2 APIs. Test the installed adapter against both host contracts, including failure and cleanup paths. Fixes #541.

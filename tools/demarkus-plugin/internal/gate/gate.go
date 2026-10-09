@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
@@ -366,6 +368,9 @@ func knowledgeTagDecision(args map[string]any, slug, verb string) (*Decision, er
 	if err != nil {
 		return nil, err
 	}
+	// Identity keys are the gateway's to stamp; the caller never sends them
+	// and the server judges the stamped write.
+	policy.RequiredFields = slices.DeleteFunc(slices.Clone(policy.RequiredFields), protocol.IsIdentityMetadataKey)
 	result := publishpolicy.Evaluate(policy, url, md)
 	if verb == "append" {
 		result = publishpolicy.EvaluateOverrides(policy, url, md)

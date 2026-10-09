@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.151
+
+The publish gate no longer asks the agent for identity keys (`agent`, `user`) a policy requires; the gateway stamps them. The promote skill and /knowledge-doctor say the same.
+
 ## 0.5.128
 
 Command and skill bodies cut about a fifth to a third on invocation: /knowledge-doctor and the knowledge-promote skill keep every stage, bound and failure line in terser prose, with the doctor report as a pattern plus examples.
