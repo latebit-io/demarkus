@@ -2,6 +2,7 @@ package publishpolicy
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -80,6 +81,13 @@ func (p Policy) Validate() error {
 		return err
 	}
 	return validateSatisfiable(p)
+}
+
+// ForCaller is the policy a pre-write gate holds a caller to: required
+// identity keys are dropped, since the surface stamps them after the gate.
+func (p Policy) ForCaller() Policy {
+	p.RequiredFields = slices.DeleteFunc(slices.Clone(p.RequiredFields), protocol.IsIdentityMetadataKey)
+	return p
 }
 
 // EffectiveStrictness returns Warn for absent or invalid strictness values.

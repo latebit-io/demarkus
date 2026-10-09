@@ -366,6 +366,7 @@ func knowledgeTagDecision(args map[string]any, slug, verb string) (*Decision, er
 	if err != nil {
 		return nil, err
 	}
+	policy = policy.ForCaller()
 	result := publishpolicy.Evaluate(policy, url, md)
 	if verb == "append" {
 		result = publishpolicy.EvaluateOverrides(policy, url, md)

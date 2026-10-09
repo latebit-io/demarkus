@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.152
+
+Publish gate and /knowledge-doctor skip gateway-stamped identity keys (`agent`, `user`) in `require_fields`.
+
 ## 0.5.149
 
 Support OpenCode V2 while retaining V1 1.18.29+ through the dual `setup`/`server` entrypoint. Register MCP servers, commands, model-only guidance, and coordinated write gates with V2 APIs. Test the installed adapter against both host contracts, including failure and cleanup paths. Fixes #541.

@@ -3,6 +3,7 @@ package publishpolicy
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -226,5 +227,16 @@ func TestStrictnessValues(t *testing.T) {
 func TestDocumentPath(t *testing.T) {
 	if DocumentPath != "/.well-known/demarkus/policy.md" {
 		t.Fatalf("DocumentPath = %q", DocumentPath)
+	}
+}
+
+func TestPolicyForCaller(t *testing.T) {
+	policy := Policy{Strictness: Block, RequiredTagAxes: []string{"category"}, RequiredFields: []string{"user", "type", "agent"}}
+	got := policy.ForCaller()
+	if !slices.Equal(got.RequiredFields, []string{"type"}) || got.Strictness != Block || !slices.Equal(got.RequiredTagAxes, []string{"category"}) {
+		t.Fatalf("ForCaller() = %+v, want only identity fields dropped", got)
+	}
+	if !slices.Equal(policy.RequiredFields, []string{"user", "type", "agent"}) {
+		t.Fatal("ForCaller() mutated the receiver")
 	}
 }

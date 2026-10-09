@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.151
+
+Publish gate and /knowledge-doctor skip gateway-stamped identity keys (`agent`, `user`) in `require_fields`.
+
 ## 0.5.128
 
 Command and skill bodies cut about a fifth to a third on invocation: /knowledge-doctor and the knowledge-promote skill keep every stage, bound and failure line in terser prose, with the doctor report as a pattern plus examples.
