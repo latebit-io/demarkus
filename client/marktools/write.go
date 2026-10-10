@@ -3,10 +3,13 @@ package marktools
 import (
 	"context"
 	"fmt"
+	"maps"
+	"strconv"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/client/metaguard"
@@ -80,7 +83,70 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 	if err != nil {
 		return t.failed(SitePublish, target.Host, err)
 	}
+	if landed(&result) {
+		// The body and publisher metadata are in hand; the server's keys
+		// (version, etag) come from the response.
+		meta := maps.Clone(w.Metadata)
+		maps.Copy(meta, result.Response.Metadata)
+		t.observeWrite(ctx, target, graph.FetchResult{Status: protocol.StatusOK, Body: args.Body, Metadata: meta})
+	}
 	return text(formatResult(&result, writeFields...) + t.narrowingNote(ctx, doc, w, result.Response.Status))
+}
+
+// landed is a write the server applied, not a merge candidate to review.
+func landed(r *docwrite.Result) bool {
+	return r.Candidate == nil && protocol.IsWriteSuccess(r.Response.Status)
+}
+
+// writeScope is the graph scope a landed write is observed into; nil when the
+// surface has none for this call, which is not a failure of the write.
+func (t *Tools) writeScope(ctx context.Context) *GraphScope {
+	if t.hooks.Graph == nil {
+		return nil
+	}
+	scope, err := t.hooks.Graph(ctx)
+	if err != nil {
+		return nil // the scope's refusal is explore's answer, not a write's
+	}
+	return scope
+}
+
+// observeWrite merges a landed write into the graph scope the way explore
+// merges a read, so the document and its edges are current without a crawl.
+// Best effort: the write already landed; a failed save is only logged.
+func (t *Tools) observeWrite(ctx context.Context, target Target, result graph.FetchResult) {
+	scope := t.writeScope(ctx)
+	if scope == nil {
+		return
+	}
+	if scope.Source != nil {
+		result.Source = scope.Source(target)
+	}
+	if !scope.Store.ObserveDocument(target.NodeURL, result) {
+		return
+	}
+	if err := scope.Store.Save(); err != nil {
+		t.warnf("warning: graph cache save after write mark://%s%s: %v", target.Host, target.Path, err)
+	}
+}
+
+// observeAppended reads the appended head once; the client never holds the
+// full body of an append. Skipped without a scope so no fetch is wasted.
+func (t *Tools) observeAppended(ctx context.Context, target Target, doc *docwrite.Doc, result *docwrite.Result) {
+	if t.writeScope(ctx) == nil {
+		return
+	}
+	version, err := strconv.Atoi(result.Response.Metadata["version"])
+	if err != nil || version < 1 {
+		t.warnf("warning: graph observation after append mark://%s%s: response carries no version", target.Host, target.Path)
+		return
+	}
+	head, err := doc.FetchVersion(ctx, version)
+	if err != nil || head.Response.Status != protocol.StatusOK {
+		t.warnf("warning: graph observation after append mark://%s%s: read of v%d failed: status %q err %v", target.Host, target.Path, version, head.Response.Status, err)
+		return
+	}
+	t.observeWrite(ctx, target, graph.FetchResult{Status: protocol.StatusOK, Body: head.Response.Body, Metadata: head.Response.Metadata})
 }
 
 // publisherMeta is the caller's metadata under the surface's identity: a
@@ -174,11 +240,15 @@ func (t *Tools) Append(ctx context.Context, args AppendArgs) Result {
 	if bad != nil {
 		return *bad
 	}
-	result, err := t.doc(ctx, target, write).Append(ctx, docwrite.AppendRequest{
+	doc := t.doc(ctx, target, write)
+	result, err := doc.Append(ctx, docwrite.AppendRequest{
 		Body: args.Body, ExpectedVersion: args.ExpectedVersion, Metadata: t.identityMeta(ctx),
 	})
 	if err != nil {
 		return t.writeFailed(SiteAppend, target.Host, err)
+	}
+	if landed(&result) {
+		t.observeAppended(ctx, target, doc, &result)
 	}
 	return text(formatResult(&result, writeFields...))
 }
@@ -196,6 +266,10 @@ func (t *Tools) Archive(ctx context.Context, rawURL string) Result {
 	result, err := t.doc(ctx, target, write).Archive(ctx)
 	if err != nil {
 		return t.writeFailed(SiteArchive, target.Host, err)
+	}
+	if landed(&result) {
+		// A confirmed archive is a complete observation: stale outgoing rows go.
+		t.observeWrite(ctx, target, graph.FetchResult{Status: protocol.StatusArchived, Metadata: result.Response.Metadata})
 	}
 	return text(formatResult(&result, "version"))
 }
