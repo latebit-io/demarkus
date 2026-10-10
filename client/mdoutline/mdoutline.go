@@ -18,6 +18,9 @@ func Slug(heading string) string { return mdoutline.Slug(heading) }
 // Section is protocol/mdoutline.Section.
 func Section(body, anchor string) (string, bool) { return mdoutline.Section(body, anchor) }
 
+// Find locates the heading anchor opens among parsed headings.
+func Find(headings []Heading, anchor string) (Heading, bool) { return mdoutline.Find(headings, anchor) }
+
 // Outline is protocol/mdoutline.Outline.
 func Outline(body string) string { return mdoutline.Outline(body) }
 

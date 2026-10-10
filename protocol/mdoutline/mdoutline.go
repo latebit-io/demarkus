@@ -124,20 +124,29 @@ func Slug(heading string) string {
 // optional, case-insensitive). Raw heading text is re-slugged as a fallback so
 // agents can pass "Problem Statement" instead of the slug.
 func Section(body, anchor string) (string, bool) {
+	h, found := Find(Headings(body), anchor)
+	if !found {
+		return "", false
+	}
+	return body[h.Start:h.End], true
+}
+
+// Find is Section's match rule over already parsed headings: the anchor as
+// written (leading '#' optional, case-insensitive), then its re-slugged form.
+func Find(headings []Heading, anchor string) (Heading, bool) {
 	want := strings.TrimPrefix(strings.TrimSpace(anchor), "#")
-	hs := Headings(body)
-	for _, h := range hs {
+	for _, h := range headings {
 		if strings.EqualFold(h.Anchor, want) {
-			return body[h.Start:h.End], true
+			return h, true
 		}
 	}
 	slugged := Slug(want)
-	for _, h := range hs {
+	for _, h := range headings {
 		if h.Anchor == slugged {
-			return body[h.Start:h.End], true
+			return h, true
 		}
 	}
-	return "", false
+	return Heading{}, false
 }
 
 // Outline renders the heading tree as an indented list with anchors and

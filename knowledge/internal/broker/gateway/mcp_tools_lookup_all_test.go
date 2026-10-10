@@ -396,3 +396,49 @@ func TestHandleMarkLookupAllCapsTagsUnlessVerbose(t *testing.T) {
 		t.Errorf("verbose rows capped:\n%s", verbose)
 	}
 }
+
+// A budget expands rows and their typed relations inside the matched world,
+// counting the merged table against it.
+func TestHandleMarkLookupAllBudgetExpandsWithinTheWorld(t *testing.T) {
+	cfg := mcpTestConfig()
+	bodies := map[string]protocol.Response{
+		"/debugging.md": {Status: protocol.StatusOK, Body: "# Debugging\n\n## Hairpin NAT\n\nsame host hairpin\n", Metadata: map[string]string{"version": "4", "rel-supersedes": "/old.md"}},
+		"/old.md":       {Status: protocol.StatusOK, Body: "# Old\n\nold note\n", Metadata: map[string]string{"version": "1"}},
+	}
+	var fetched []fetch.FetchRequest
+	d := &fakeDispatcher{
+		LookupFn: func(_ context.Context, _ fetch.LookupRequest) (fetch.Result, error) {
+			return bodyLookupResult(render.LookupRow{Path: "/debugging.md", Anchor: "hairpin-nat", Importance: 0.7, Title: "Debugging › Hairpin NAT", Tags: []string{"net"}, Snippet: "hairpin"}), nil
+		},
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			fetched = append(fetched, r)
+			return fetch.Result{Response: bodies[r.Path]}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkLookupAll(withAliceClaims(context.Background()), callToolReq("mark_lookup_all", map[string]any{"query": "hairpin", "match": "body", "budget": float64(1500)}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkLookupAll: err %v res %+v", err, res)
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{
+		">>> mark://team-a/debugging.md/v4#hairpin-nat\n\n## Hairpin NAT\n\nsame host hairpin\n\n>>> related: rel-supersedes mark://team-a/old.md\n",
+		">>> mark://team-a/old.md/v1#old\n\n# Old\n\nold note\n",
+		">>> note: expanded 1 of 1 rows and 1 related documents within the budget",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("response missing %q\nfull:\n%s", want, text)
+		}
+	}
+	if len(fetched) != 2 || fetched[0].Host != "team-a" || fetched[0].Path != "/debugging.md" || fetched[1].Host != "team-a" || fetched[1].Path != "/old.md" {
+		t.Errorf("fetches = %+v, want the row then its relation, both in team-a", fetched)
+	}
+	fetched = nil
+	res, err = g.handleMarkLookupAll(withAliceClaims(context.Background()), callToolReq("mark_lookup_all", map[string]any{"query": "hairpin", "match": "body", "budget": float64(10)}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkLookupAll: err %v res %+v", err, res)
+	}
+	if text := toolResultText(t, res); len(fetched) != 0 || !strings.Contains(text, ">>> note: the table alone used") {
+		t.Errorf("a budget the table fills must fetch nothing; fetches %+v\n%s", fetched, text)
+	}
+}
