@@ -6,6 +6,7 @@ package lookupexpand
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -32,9 +33,29 @@ const bytesPerToken = 4
 // count: the budget bounds output, this bounds wire calls.
 const MaxFetches = 10
 
-// Fetch returns the body of the document at a table row's location (a bare
-// path or a mark:// URL, as the table printed it).
-type Fetch func(ctx context.Context, location string) (string, error)
+// Document is what a Fetch returns: the body and, when the source reports
+// one, the immutable version it came from, so a block can be cited as
+// path/vN#anchor rather than as a head that may have moved on.
+type Document struct {
+	Body    string
+	Version int
+}
+
+// Fetch returns the document at a table row's location (a bare path or a
+// mark:// URL, as the table printed it).
+type Fetch func(ctx context.Context, location string) (Document, error)
+
+// pinned is the location with its version, when known, ahead of the anchor.
+func pinned(path, anchor string, version int) string {
+	loc := path
+	if version > 0 {
+		loc += "/v" + strconv.Itoa(version)
+	}
+	if anchor != "" {
+		loc += "#" + anchor
+	}
+	return loc
+}
 
 // Option declares the budget argument on a tool.
 func Option() mcp.ToolOption {
@@ -81,7 +102,7 @@ func Expand(ctx context.Context, table, query string, budgetBytes int, fetch Fet
 		return ""
 	}
 	e := &expansion{remaining: budgetBytes}
-	bodies := make(map[string]string)
+	bodies := make(map[string]Document)
 	fetches, limitNoted := 0, false
 	for _, loc := range rows {
 		if e.remaining <= 0 {
@@ -92,7 +113,7 @@ func Expand(ctx context.Context, table, query string, budgetBytes int, fetch Fet
 			break
 		}
 		path, anchor := lookuptable.SplitLocation(loc)
-		body, seen := bodies[path]
+		doc, seen := bodies[path]
 		if !seen {
 			if fetches >= MaxFetches {
 				if !limitNoted {
@@ -103,25 +124,26 @@ func Expand(ctx context.Context, table, query string, budgetBytes int, fetch Fet
 			}
 			fetches++
 			var err error
-			body, err = fetch(ctx, path)
+			doc, err = fetch(ctx, path)
 			if err != nil {
 				e.note("%s: %v", path, err)
-				bodies[path] = ""
+				bodies[path] = Document{}
 				continue
 			}
-			bodies[path] = body
+			bodies[path] = doc
 		}
+		body := doc.Body
 		if body == "" {
 			continue
 		}
 		if anchor == "" && len(body) >= mdoutline.OutlineThreshold {
 			n := 0
 			for _, h := range matchingSections(body, query) {
-				if e.add(path+"#"+h.Anchor, body[h.Start:h.End]) {
+				if e.add(pinned(path, h.Anchor, doc.Version), body[h.Start:h.End]) {
 					n++
 				}
 			}
-			if n == 0 && e.add(path, mdoutline.OutlineBody(path, body)) {
+			if n == 0 && e.add(pinned(path, "", doc.Version), mdoutline.OutlineBody(path, body)) {
 				n++
 			}
 			if n > 0 {
@@ -137,7 +159,7 @@ func Expand(ctx context.Context, table, query string, budgetBytes int, fetch Fet
 				continue
 			}
 		}
-		if e.add(loc, text) {
+		if e.add(pinned(path, anchor, doc.Version), text) {
 			e.expanded++
 		}
 	}

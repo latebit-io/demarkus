@@ -71,14 +71,28 @@ type crawlItem struct {
 
 // RelRef is a typed-relation reference parsed from rel-<predicate> metadata.
 type RelRef struct {
-	Rel    string // predicate, e.g. "supersedes"
-	Target string // resolved target URL
+	Rel      string // predicate, e.g. "supersedes"
+	Target   string // resolved target URL
+	Fragment string // target fragment the value named (no '#'), "" for the whole document
+}
+
+// Occurrence is one link or rel- value as written: the evidence behind an
+// aggregated edge. Ordinal is its position in document order.
+type Occurrence struct {
+	To       string
+	Rel      string
+	Fragment string // destination fragment (no '#'), "" for the whole document
+	Anchor   string // enclosing source section anchor (no '#'), "" for rel- values
+	Label    string
+	Ordinal  int
 }
 
 // ExtractedEdges contains normalized edges from one fetched document.
+// Edges aggregate by identity downstream; Occurrences keep every location.
 type ExtractedEdges struct {
 	BodyLinkCount int
 	Edges         []Edge
+	Occurrences   []Occurrence
 	RejectedRels  []RejectedRel // rel- values that produced no edge
 }
 
@@ -91,23 +105,15 @@ func ExtractDocumentEdges(docURL, body string, metadata map[string]string) Extra
 		Edges:         make([]Edge, 0, len(anchored)),
 	}
 	for _, link := range anchored {
-		extracted.Edges = append(extracted.Edges, Edge{
-			From:   docURL,
-			To:     links.CanonicalURL(links.Resolve(docURL, link.Dest)),
-			Label:  link.Label,
-			Anchor: link.Anchor,
-			Count:  1,
-		})
+		to := links.CanonicalURL(links.Resolve(docURL, link.Dest))
+		extracted.Edges = append(extracted.Edges, Edge{From: docURL, To: to, Label: link.Label, Anchor: link.Anchor, Count: 1})
+		extracted.Occurrences = append(extracted.Occurrences, Occurrence{To: to, Fragment: link.Fragment, Anchor: link.Anchor, Label: link.Label, Ordinal: len(extracted.Occurrences)})
 	}
 	relations := RelEdges(docURL, metadata)
 	extracted.RejectedRels = relations.Rejected
 	for _, relation := range relations.Refs {
-		extracted.Edges = append(extracted.Edges, Edge{
-			From:  docURL,
-			To:    relation.Target,
-			Rel:   relation.Rel,
-			Count: 1,
-		})
+		extracted.Edges = append(extracted.Edges, Edge{From: docURL, To: relation.Target, Rel: relation.Rel, Count: 1})
+		extracted.Occurrences = append(extracted.Occurrences, Occurrence{To: relation.Target, Rel: relation.Rel, Fragment: relation.Fragment, Ordinal: len(extracted.Occurrences)})
 	}
 	return extracted
 }
@@ -149,13 +155,15 @@ func RelEdges(docURL string, metadata map[string]string) RelResult {
 			}
 			reason := ""
 			resolved := ""
+			fragment := ""
 			switch {
 			case pred == "":
 				reason = "empty predicate"
 			case strings.IndexFunc(ref, unicode.IsSpace) >= 0:
 				reason = "whitespace in reference"
 			default:
-				resolved = links.CanonicalURL(links.Resolve(docURL, ref))
+				target, frag, _ := strings.Cut(ref, "#")
+				resolved, fragment = links.CanonicalURL(links.Resolve(docURL, target)), frag
 				if resolved == docURL {
 					reason = "self reference"
 				}
@@ -164,7 +172,7 @@ func RelEdges(docURL string, metadata map[string]string) RelResult {
 				result.Rejected = append(result.Rejected, RejectedRel{Key: key, Value: ref, Reason: reason})
 				continue
 			}
-			result.Refs = append(result.Refs, RelRef{Rel: pred, Target: resolved})
+			result.Refs = append(result.Refs, RelRef{Rel: pred, Target: resolved, Fragment: fragment})
 		}
 	}
 	return result

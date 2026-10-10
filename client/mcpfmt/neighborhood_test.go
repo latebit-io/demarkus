@@ -101,3 +101,45 @@ func TestFormatNeighborhoodDirectionIgnoresHowTheCenterWasSpelled(t *testing.T) 
 		}
 	}
 }
+
+// Located occurrences pin the source link to its revision and list the
+// distinct places behind an edge; a lone occurrence at the edge's own
+// anchor adds nothing to the line.
+func TestFormatNeighborhoodListsOccurrenceLocations(t *testing.T) {
+	center := "mark://world/center.md"
+	source := graphstore.StoredNode{URL: center, Observation: graph.Observation{Revision: 7}}
+	page := graphstore.NeighborhoodPage{TotalRows: 1, Rows: []graphstore.NeighborhoodRow{{
+		Node: graphstore.StoredNode{URL: "mark://world/a.md"},
+		Edges: []graphstore.NeighborhoodEdge{
+			{Edge: graph.Edge{From: center, To: "mark://world/a.md", Anchor: "proof", Count: 3}, Source: source, Occurrences: []graph.Occurrence{
+				{To: "mark://world/a.md", Anchor: "proof", Fragment: "one"},
+				{To: "mark://world/a.md", Anchor: "proof", Fragment: "one"},
+				{To: "mark://world/a.md", Anchor: "notes"},
+			}},
+			{Edge: graph.Edge{From: center, To: "mark://world/a.md", Rel: "depends-on", Count: 1}, Source: source, Occurrences: []graph.Occurrence{
+				{To: "mark://world/a.md", Rel: "depends-on", Fragment: "decision"},
+			}},
+			{Edge: graph.Edge{From: center, To: "mark://world/a.md", Rel: "see", Anchor: "intro", Count: 1}, Source: source, Occurrences: []graph.Occurrence{
+				{To: "mark://world/a.md", Rel: "see", Anchor: "intro"},
+			}},
+		},
+	}}}
+	got := FormatNeighborhood(center, page)
+	for _, want := range []string{
+		"outgoing [link]; [source](mark://world/center.md/v7#proof) x3 at >#one, #notes [freshness",
+		"outgoing [depends-on]; [source](mark://world/center.md/v7) at >#decision [freshness",
+		"outgoing [see]; [source](mark://world/center.md/v7#intro) [freshness",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	many := make([]graph.Occurrence, 0, 8)
+	for i := range 8 {
+		many = append(many, graph.Occurrence{To: "mark://world/a.md", Anchor: fmt.Sprintf("s%d", i)})
+	}
+	page.Rows[0].Edges = []graphstore.NeighborhoodEdge{{Edge: graph.Edge{From: center, To: "mark://world/a.md", Count: 8}, Source: source, Occurrences: many}}
+	if got := FormatNeighborhood(center, page); !strings.Contains(got, " at #s0, #s1, #s2, #s3, #s4 +3 more [freshness") {
+		t.Errorf("locations not capped:\n%s", got)
+	}
+}

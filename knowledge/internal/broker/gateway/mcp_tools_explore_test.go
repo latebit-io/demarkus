@@ -131,7 +131,7 @@ func TestHandleMarkExploreOrdinaryReadCachesTypedRelations(t *testing.T) {
 		t.Fatalf("handleMarkExplore: err=%v result=%+v", err, res)
 	}
 	text := toolResultText(t, res)
-	for _, want := range []string{"## Relations (1 documents)", "mark://team-a/old.md", "outgoing [supersedes]", "[source](mark://team-a/current.md)"} {
+	for _, want := range []string{"## Relations (1 documents)", "mark://team-a/old.md", "outgoing [supersedes]", "[source](mark://team-a/current.md/v4)"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

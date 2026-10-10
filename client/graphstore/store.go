@@ -72,6 +72,8 @@ type document struct {
 	SeedGraphs      map[string]seedGraphData `json:"seed_graphs,omitempty"`
 	LocalSources    map[string]sourceRecord  `json:"local_sources,omitempty"`
 	SourceRevisions map[string]int           `json:"source_revisions,omitempty"`
+	// Evidence is derived and schema-neutral: an older binary drops it on save.
+	Evidence map[string]sourceEvidence `json:"evidence,omitempty"`
 }
 
 type seedGraphData struct {
@@ -98,6 +100,7 @@ type Store struct {
 	representations map[string][sha256.Size]byte
 	validating      map[string]time.Time
 	sourceRevisions map[string]int
+	evidence        map[string]sourceEvidence // local source URL -> occurrences at its accepted revision
 }
 
 // DefaultPath returns the default graph store location (~/.mark/graph.json).
@@ -206,6 +209,7 @@ func Load(path string) (*Store, error) {
 	}
 	s.loadCandidates(&doc)
 	s.sourceRevisions = doc.SourceRevisions
+	s.loadEvidence(&doc)
 	return s, nil
 }
 
@@ -315,6 +319,9 @@ func (s *Store) saveDocument() document {
 		Edges:           slices.Clone(s.edges),
 		SourceRevisions: maps.Clone(s.sourceRevisions),
 	}
+	if len(s.evidence) > 0 {
+		doc.Evidence = maps.Clone(s.evidence) // values are replaced whole, never appended to
+	}
 	// Selected local rows already live in Nodes/Edges; only shadowed candidates
 	// need a second representation to survive seed-owner withdrawal.
 	for key := range s.localSources {
@@ -391,6 +398,7 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 		incoming.Node.Seeded = false
 		s.localSources[key] = incoming
 	}
+	s.pruneEvidenceLocked()
 	s.rebuildSeedsLocked()
 	return len(nodes)
 }

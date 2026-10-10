@@ -55,6 +55,7 @@ func (s *Store) ObserveDocument(docURL string, result graph.FetchResult) bool {
 	}
 	s.Merge(observed, nil)
 	s.rememberDocumentRepresentation(node, extracted, representation)
+	s.recordEvidence(node, extracted.Occurrences)
 	return true
 }
 
