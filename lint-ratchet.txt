@@ -31,7 +31,6 @@
 1 client/internal/launcher/launcher.go: G204: Subprocess launched with variable (gosec)
 1 client/joinurl/joinurl.go: Error return value of `strconv.Atoi` is not checked (errcheck)
 4 client/links/links.go: Error return value of `ast.Walk` is not checked (errcheck)
-1 client/lookupexpand/lookupexpand.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)
 1 client/mcpfmt/mcpfmt.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)
 1 client/merge/diff3.go: Function 'Diff3' has too many statements (64 > 60) (funlen)
 1 client/merge/diff3.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)

@@ -73,7 +73,8 @@ func listPageSize(raw any) (int, error) {
 }
 
 // LookupArgs are mark_lookup's arguments. Budget above zero appends the matched
-// sections, in rank order, until that many result tokens are spent.
+// sections, in rank order, then typed related documents, until the whole
+// result has spent that many tokens.
 type LookupArgs struct {
 	URL, Query    string
 	Filter, Match string
@@ -97,8 +98,11 @@ func (t *Tools) Lookup(ctx context.Context, args LookupArgs) Result {
 	}
 	out := mcpfmt.Format(result, args.Render) + mcpfmt.CatalogFallback(lookup, result)
 	if args.Budget > 0 && result.Response.Status == protocol.StatusOK {
-		out += lookupexpand.Expand(ctx, result.Response.Body, args.Query, args.Budget, func(ctx context.Context, path string) (lookupexpand.Document, error) {
-			return FetchBody(t.backend.Fetch(ctx, fetch.FetchRequest{Host: target.Host, Path: path, Token: lookup.Token}))
+		out += lookupexpand.Expand(ctx, lookupexpand.Input{
+			Table: result.Response.Body, Query: args.Query, Budget: args.Budget, Spent: len(out),
+			Fetch: func(ctx context.Context, path string) (lookupexpand.Document, error) {
+				return FetchBody(t.backend.Fetch(ctx, fetch.FetchRequest{Host: target.Host, Path: path, Token: lookup.Token}))
+			},
 		})
 	}
 	return text(out)
@@ -117,7 +121,7 @@ func FetchBody(r fetch.Result, err error) (lookupexpand.Document, error) {
 	if err != nil {
 		version = 0
 	}
-	return lookupexpand.Document{Body: r.Response.Body, Version: version}, nil
+	return lookupexpand.Document{Body: r.Response.Body, Version: version, Metadata: r.Response.Metadata}, nil
 }
 
 // Discover answers mark_discover: the server's agent manifest, whatever

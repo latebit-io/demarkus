@@ -95,24 +95,37 @@ func TestLookup(t *testing.T) {
 	}
 }
 
-// Expansion reads each matched document with the token the lookup used.
+// Expansion reads each matched document, and the typed relations its
+// metadata declares, with the token the lookup used.
 func TestLookupExpandsWithinTheBudget(t *testing.T) {
 	rows := []render.LookupRow{{Path: "/docs/a.md", Anchor: "intro", Importance: 0.5, Title: "A"}}
+	bodies := map[string]protocol.Response{
+		"/docs/a.md":   {Status: protocol.StatusOK, Body: "# A\n\n## Intro\n\nalpha text\n", Metadata: map[string]string{"version": "2", "rel-supersedes": "/docs/old.md"}},
+		"/docs/old.md": {Status: protocol.StatusOK, Body: "# Old\n\nold text\n", Metadata: map[string]string{"version": "1"}},
+	}
 	backend := &fetchtest.Client{
 		LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
 			return fetchtest.Lookup(r.Query, r.Scope, fetch.MatchBody, rows...), nil
 		},
-		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# A\n\n## Intro\n\nalpha text\n"}}, nil
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			return fetch.Result{Response: bodies[r.Path]}, nil
 		},
 	}
 	tools := newTools(t, backend, directHooks())
 	got := tools.Lookup(t.Context(), marktools.LookupArgs{URL: "/", Query: "alpha", Match: fetch.MatchBody, Budget: 1500, Render: mcpfmt.Options{Envelope: &mcpfmt.Lookup}})
-	if got.IsError || !strings.Contains(got.Text, ">>> /docs/a.md#intro") || !strings.Contains(got.Text, "alpha text") {
-		t.Errorf("expanded lookup = %q", got.Text)
+	for _, want := range []string{">>> /docs/a.md/v2#intro\n\n## Intro\n\nalpha text", ">>> related: rel-supersedes /docs/old.md\n", ">>> /docs/old.md/v1#old\n\n# Old\n\nold text"} {
+		if got.IsError || !strings.Contains(got.Text, want) {
+			t.Errorf("expanded lookup missing %q:\n%s", want, got.Text)
+		}
 	}
-	if len(backend.FetchCalls) != 1 || backend.FetchCalls[0].Token != "token-for-host:6309" {
-		t.Errorf("expansion fetches = %+v, want one with the lookup's token", backend.FetchCalls)
+	if len(backend.FetchCalls) != 2 || backend.FetchCalls[0].Token != "token-for-host:6309" || backend.FetchCalls[1].Token != "token-for-host:6309" || backend.FetchCalls[1].Path != "/docs/old.md" {
+		t.Errorf("expansion fetches = %+v, want the row then the related document, both with the lookup's token", backend.FetchCalls)
+	}
+	// The table counts: a budget the table already fills expands nothing.
+	backend.FetchCalls = nil
+	got = tools.Lookup(t.Context(), marktools.LookupArgs{URL: "/", Query: "alpha", Match: fetch.MatchBody, Budget: 40, Render: mcpfmt.Options{Envelope: &mcpfmt.Lookup}})
+	if got.IsError || len(backend.FetchCalls) != 0 || !strings.Contains(got.Text, ">>> note: the table alone used") {
+		t.Errorf("table-only budget: fetches = %+v, text = %q", backend.FetchCalls, got.Text)
 	}
 }
 
