@@ -44,9 +44,12 @@ type NeighborhoodOptions struct {
 }
 
 // NeighborhoodEdge carries an edge and a copy of its source document evidence.
+// Occurrences are the locations behind the edge when this store observed the
+// source at the selected revision; nil for seeded or stale sources.
 type NeighborhoodEdge struct {
-	Edge   graph.Edge
-	Source StoredNode
+	Edge        graph.Edge
+	Source      StoredNode
+	Occurrences []graph.Occurrence
 }
 
 // NeighborhoodRow groups bounded edge evidence for one adjacent document.
@@ -264,7 +267,8 @@ func (s *Store) neighborhoodRows(query neighborhoodQuery, position neighborhoodP
 				From: edge.From, To: edge.To, Rel: edge.Rel,
 				Label: edge.Label, Anchor: edge.Anchor, Count: max(edge.Count, 1),
 			},
-			Source: source,
+			Source:      source,
+			Occurrences: s.edgeOccurrencesLocked(edge, &source),
 		})
 	})
 	s.mu.RUnlock()

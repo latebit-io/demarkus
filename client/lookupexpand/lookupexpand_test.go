@@ -26,13 +26,13 @@ var docs = map[string]string{
 
 // fakeFetch serves docs and records every path asked for.
 func fakeFetch(calls *[]string) Fetch {
-	return func(_ context.Context, path string) (string, error) {
+	return func(_ context.Context, path string) (Document, error) {
 		*calls = append(*calls, path)
 		body, ok := docs[path]
 		if !ok {
-			return "", errors.New("not-found")
+			return Document{}, errors.New("not-found")
 		}
-		return body, nil
+		return Document{Body: body}, nil
 	}
 }
 
@@ -164,5 +164,18 @@ func TestExpandMissingSectionAndEmptyInputs(t *testing.T) {
 	}
 	if Expand(context.Background(), table, "x", 0, fakeFetch(&calls)) != "" || Expand(context.Background(), "no rows here", "x", 4096, fakeFetch(&calls)) != "" {
 		t.Error("zero budget or no rows must expand to nothing")
+	}
+}
+
+// A fetch that reports its version pins every block header to it.
+func TestExpandPinsBlocksToTheFetchedVersion(t *testing.T) {
+	fetch := func(_ context.Context, path string) (Document, error) {
+		return Document{Body: docs[path], Version: 3}, nil
+	}
+	out := Expand(context.Background(), rowTable("/a.md#two", "/b.md"), "two", 4096, fetch)
+	for _, want := range []string{">>> /a.md/v3#two\n", ">>> /b.md/v3\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
 	}
 }

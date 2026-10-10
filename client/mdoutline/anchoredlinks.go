@@ -9,9 +9,10 @@ import (
 // AnchoredLink is a body link with its label text and the anchor of the
 // enclosing section, for edge provenance.
 type AnchoredLink struct {
-	Dest   string // destination, fragment stripped (same filtering as links.Extract)
-	Label  string // rendered link text, "" for [](x.md)
-	Anchor string // enclosing section anchor (no '#'), "" above the first heading
+	Dest     string // destination, fragment stripped (same filtering as links.Extract)
+	Fragment string // destination fragment (no '#'), "" when the link names the whole document
+	Label    string // rendered link text, "" for [](x.md)
+	Anchor   string // enclosing section anchor (no '#'), "" above the first heading
 }
 
 // AnchoredLinks returns every link in body with its label and the anchor of
@@ -36,7 +37,7 @@ func AnchoredLinks(body string) []AnchoredLink {
 				anchor = hs[idx-1].Anchor
 			}
 		}
-		out[i] = AnchoredLink{Dest: info.Dest, Label: info.Text, Anchor: anchor}
+		out[i] = AnchoredLink{Dest: info.Dest, Fragment: info.Fragment, Label: info.Text, Anchor: anchor}
 	}
 	return out
 }

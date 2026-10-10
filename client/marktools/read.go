@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/lookupexpand"
@@ -96,22 +97,27 @@ func (t *Tools) Lookup(ctx context.Context, args LookupArgs) Result {
 	}
 	out := mcpfmt.Format(result, args.Render) + mcpfmt.CatalogFallback(lookup, result)
 	if args.Budget > 0 && result.Response.Status == protocol.StatusOK {
-		out += lookupexpand.Expand(ctx, result.Response.Body, args.Query, args.Budget, func(ctx context.Context, path string) (string, error) {
+		out += lookupexpand.Expand(ctx, result.Response.Body, args.Query, args.Budget, func(ctx context.Context, path string) (lookupexpand.Document, error) {
 			return FetchBody(t.backend.Fetch(ctx, fetch.FetchRequest{Host: target.Host, Path: path, Token: lookup.Token}))
 		})
 	}
 	return text(out)
 }
 
-// FetchBody adapts a fetch result to lookupexpand's body or error contract.
-func FetchBody(r fetch.Result, err error) (string, error) {
+// FetchBody adapts a fetch result to lookupexpand's document or error contract.
+func FetchBody(r fetch.Result, err error) (lookupexpand.Document, error) {
 	if err != nil {
-		return "", err
+		return lookupexpand.Document{}, err
 	}
 	if r.Response.Status != protocol.StatusOK {
-		return "", errors.New(r.Response.Status)
+		return lookupexpand.Document{}, errors.New(r.Response.Status)
 	}
-	return r.Response.Body, nil
+	// An absent or malformed version leaves the block unpinned, as before.
+	version, err := strconv.Atoi(r.Response.Metadata["version"])
+	if err != nil {
+		version = 0
+	}
+	return lookupexpand.Document{Body: r.Response.Body, Version: version}, nil
 }
 
 // Discover answers mark_discover: the server's agent manifest, whatever

@@ -319,3 +319,18 @@ func TestNodeURLMatchesCanonicalURL(t *testing.T) {
 		}
 	}
 }
+
+// The destination fragment is kept beside the stripped Dest, for labeled
+// and empty-text links alike.
+func TestExtractWithPositionsKeepsTheFragment(t *testing.T) {
+	infos := ExtractWithPositions("See [one](/t.md#one), [](/t.md#two) and [whole](/t.md).\n")
+	want := []struct{ dest, fragment string }{{"/t.md", "one"}, {"/t.md", "two"}, {"/t.md", ""}}
+	if len(infos) != len(want) {
+		t.Fatalf("links = %+v, want %d", infos, len(want))
+	}
+	for i, w := range want {
+		if infos[i].Dest != w.dest || infos[i].Fragment != w.fragment {
+			t.Errorf("link %d = %+v, want dest %q fragment %q", i, infos[i], w.dest, w.fragment)
+		}
+	}
+}

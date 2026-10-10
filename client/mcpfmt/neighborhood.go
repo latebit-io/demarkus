@@ -122,7 +122,13 @@ func writeNeighborhoodEdge(b *strings.Builder, center string, item *graphstore.N
 	if relation == "" {
 		relation = "link"
 	}
+	// A fresh observation pins the source link to the passage that was
+	// observed; a stale or unknown one links the head, so a pin is never
+	// followed as if current. The annotation still names the revision.
 	source := edge.From
+	if observation := &item.Source.Observation; observation.Freshness() == "fresh" {
+		source += "/v" + strconv.Itoa(observation.Revision)
+	}
 	if edge.Anchor != "" {
 		source += "#" + edge.Anchor
 	}
@@ -133,6 +139,45 @@ func writeNeighborhoodEdge(b *strings.Builder, center string, item *graphstore.N
 	if edge.Count > 1 {
 		fmt.Fprintf(b, " x%d", edge.Count)
 	}
+	writeOccurrences(b, edge, item.Occurrences)
 	b.WriteString(item.Source.Observation.Annotation())
 	b.WriteByte('\n')
+}
+
+// maxOccurrenceLocations bounds the locations one edge line lists.
+const maxOccurrenceLocations = 5
+
+// writeOccurrences lists the distinct locations behind an edge as
+// #source-anchor>#target-fragment when they say more than the edge itself;
+// the source link names the edge's anchor, so a location there shows only its fragment.
+func writeOccurrences(b *strings.Builder, edge *graph.Edge, occurrences []graph.Occurrence) {
+	var locations []string
+	seen := make(map[string]bool, len(occurrences))
+	for i := range occurrences {
+		o := &occurrences[i]
+		loc := ""
+		if o.Anchor != "" && o.Anchor != edge.Anchor {
+			loc = "#" + o.Anchor
+		}
+		if o.Fragment != "" {
+			loc += ">#" + o.Fragment
+		}
+		if loc == "" || seen[loc] {
+			continue
+		}
+		seen[loc] = true
+		locations = append(locations, loc)
+	}
+	if len(locations) == 0 {
+		return
+	}
+	more := 0
+	if len(locations) > maxOccurrenceLocations {
+		more = len(locations) - maxOccurrenceLocations
+		locations = locations[:maxOccurrenceLocations]
+	}
+	fmt.Fprintf(b, " at %s", strings.Join(locations, ", "))
+	if more > 0 {
+		fmt.Fprintf(b, " +%d more", more)
+	}
 }

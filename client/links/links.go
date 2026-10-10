@@ -67,6 +67,7 @@ func NodeURL(host, path string) string {
 // LinkInfo describes a link extracted from markdown, including its position in the source.
 type LinkInfo struct {
 	Dest         string // link destination (fragment stripped)
+	Fragment     string // destination fragment without '#', "" when the link has none
 	Text         string // rendered link text
 	OpenBracket  int    // byte offset of '[' in source, -1 for links with no text nodes
 	CloseBracket int    // byte offset of ']' in source, -1 for links with no text nodes
@@ -93,9 +94,7 @@ func ExtractWithPositions(body string) []LinkInfo {
 		if dest == "" || strings.HasPrefix(dest, "#") {
 			return ast.WalkContinue, nil
 		}
-		if idx := strings.Index(dest, "#"); idx != -1 {
-			dest = dest[:idx]
-		}
+		dest, fragment, _ := strings.Cut(dest, "#")
 
 		// Inline nodes carry no segments, but the enclosing block does;
 		// headings cannot occur inside a block, so its start is in the same
@@ -137,6 +136,7 @@ func ExtractWithPositions(body string) []LinkInfo {
 			// but mark bracket positions as unknown so marker injection skips it.
 			infos = append(infos, LinkInfo{
 				Dest:         dest,
+				Fragment:     fragment,
 				Text:         "",
 				OpenBracket:  -1,
 				CloseBracket: -1,
@@ -158,6 +158,7 @@ func ExtractWithPositions(body string) []LinkInfo {
 
 		infos = append(infos, LinkInfo{
 			Dest:         dest,
+			Fragment:     fragment,
 			Text:         linkText.String(),
 			OpenBracket:  open,
 			CloseBracket: closeBracket,

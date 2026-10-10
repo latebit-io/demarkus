@@ -167,7 +167,7 @@ func TestExplore_OrdinaryReadCachesTypedRelations(t *testing.T) {
 		t.Fatalf("Explore: result=%+v", result)
 	}
 	text := result.Text
-	for _, want := range []string{"## Relations (1 documents)", "mark://host/old.md", "outgoing [supersedes]", "[source](mark://host/current.md)"} {
+	for _, want := range []string{"## Relations (1 documents)", "mark://host/old.md", "outgoing [supersedes]", "[source](mark://host/current.md/v3)"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
