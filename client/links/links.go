@@ -136,6 +136,7 @@ func ExtractWithPositions(body string) []LinkInfo {
 			// but mark bracket positions as unknown so marker injection skips it.
 			infos = append(infos, LinkInfo{
 				Dest:         dest,
+				Fragment:     fragment,
 				Text:         "",
 				OpenBracket:  -1,
 				CloseBracket: -1,

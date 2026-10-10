@@ -122,10 +122,12 @@ func writeNeighborhoodEdge(b *strings.Builder, center string, item *graphstore.N
 	if relation == "" {
 		relation = "link"
 	}
-	// A known revision pins the source link to the passage that was observed.
+	// A fresh observation pins the source link to the passage that was
+	// observed; a stale or unknown one links the head, so a pin is never
+	// followed as if current. The annotation still names the revision.
 	source := edge.From
-	if revision := item.Source.Observation.Revision; revision > 0 {
-		source += "/v" + strconv.Itoa(revision)
+	if observation := &item.Source.Observation; observation.Freshness() == "fresh" {
+		source += "/v" + strconv.Itoa(observation.Revision)
 	}
 	if edge.Anchor != "" {
 		source += "#" + edge.Anchor

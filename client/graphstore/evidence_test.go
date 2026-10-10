@@ -57,12 +57,12 @@ func locations(edges []NeighborhoodEdge) []string {
 // located occurrences; a third, unlabeled, from another section is kept too.
 func TestEvidenceKeepsFragmentsAndSourceSections(t *testing.T) {
 	store := New()
-	observeSource(t, store, 1, "# Src\n\n## Alpha\n\nSee [one](/t.md#one) and [two](/t.md#two).\n\n## Beta\n\n[](/t.md)\n")
+	observeSource(t, store, 1, "# Src\n\n## Alpha\n\nSee [one](/t.md#one) and [two](/t.md#two).\n\n## Beta\n\n[](/t.md#three) [](/t.md)\n")
 	edges := outgoingEdges(t, store, "mark://world/t.md")
-	if len(edges) != 1 || edges[0].Edge.Count != 3 || edges[0].Edge.Anchor != "alpha" {
-		t.Fatalf("edges = %+v, want one aggregated edge of three occurrences", edges)
+	if len(edges) != 1 || edges[0].Edge.Count != 4 || edges[0].Edge.Anchor != "alpha" {
+		t.Fatalf("edges = %+v, want one aggregated edge of four occurrences", edges)
 	}
-	want := []string{":alpha>one", ":alpha>two", ":beta>"}
+	want := []string{":alpha>one", ":alpha>two", ":beta>three", ":beta>"}
 	if got := locations(edges); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("occurrences = %v, want %v", got, want)
 	}
@@ -88,6 +88,21 @@ func TestEvidenceFollowsTheLatestRevision(t *testing.T) {
 	observeSource(t, store, 2, "# Src\n\n## New name\n\n[t](/t.md#y)\n")
 	if got := locations(outgoingEdges(t, store, "mark://world/t.md")); strings.Join(got, " ") != ":new-name>y" {
 		t.Errorf("occurrences = %v", got)
+	}
+}
+
+// An older read the store rejects does not erase the evidence of the
+// accepted revision; the regression is reported on the node, not by loss.
+func TestEvidenceSurvivesARejectedOlderRead(t *testing.T) {
+	store := New()
+	observeSource(t, store, 7, "# Src\n\n## Alpha\n\n[t](/t.md#one)\n")
+	observeSource(t, store, 3, "# Src\n\n## Old\n\n[t](/t.md#zero)\n")
+	node := store.GetNode(evidenceSource)
+	if node == nil || node.Observation.Revision != 7 || node.Observation.Problem != "revision-regression" {
+		t.Fatalf("node = %+v, want revision 7 with a regression problem", node)
+	}
+	if got := locations(outgoingEdges(t, store, "mark://world/t.md")); strings.Join(got, " ") != ":alpha>one" {
+		t.Errorf("occurrences after the rejected read = %v", got)
 	}
 }
 

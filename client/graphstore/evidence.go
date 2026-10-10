@@ -22,17 +22,24 @@ func (e *sourceEvidence) current(node *StoredNode) bool {
 	return node != nil && !node.Seeded && node.Observation.Revision == e.Revision && node.Observation.Etag == e.Etag
 }
 
-// recordEvidence keeps the occurrences of a complete document-view read when
-// the store accepted that read as the source's local record; anything else
-// drops the entry so stale locations cannot outlive their topology.
+// recordEvidence keeps the occurrences of a complete document-view read the
+// store accepted cleanly as the local record. A rejected read (older revision,
+// conflict) keeps earlier evidence while it matches the accepted revision.
 func (s *Store) recordEvidence(node *graph.Node, occurrences []graph.Occurrence) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	observation := &node.Observation
 	accepted, exists := s.localSources[node.URL]
-	if !exists || node.Status != "ok" || !observation.Complete || observation.View != graph.ViewDocument ||
-		accepted.Node.Observation.Problem != "" || accepted.Node.Observation.Revision != observation.Revision || accepted.Node.Observation.Etag != observation.Etag {
+	if !exists {
 		delete(s.evidence, node.URL)
+		return
+	}
+	selected := &accepted.Node.Observation
+	if node.Status != "ok" || !observation.Complete || observation.View != graph.ViewDocument ||
+		selected.Problem != "" || selected.Revision != observation.Revision || selected.Etag != observation.Etag {
+		if current, ok := s.evidence[node.URL]; !ok || current.Revision != selected.Revision || current.Etag != selected.Etag {
+			delete(s.evidence, node.URL)
+		}
 		return
 	}
 	if s.evidence == nil {
