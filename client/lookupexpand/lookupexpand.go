@@ -13,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/lookuptable"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 )
@@ -101,9 +102,12 @@ type span struct {
 	loc        string
 }
 
-// relation is a typed link a printed document declared.
-type relation struct {
-	source, rel, target, fragment string
+// cached is a fetched document with its headings parsed once per path; ok is
+// false when the fetch failed, so an empty document is not mistaken for one.
+type cached struct {
+	Document
+	headings []mdoutline.Heading
+	ok       bool
 }
 
 // piece is one candidate block: a section or whole document of path.
@@ -122,13 +126,12 @@ type expansion struct {
 	related    int
 	fetches    int
 	limitNoted bool
-	top        string // the first document printed: the only one whose relations expand
-	query      string
+	terms      []string
 	fetch      Fetch
-	docs       map[string]Document // fetched by path; an empty body marks a failed fetch
-	spans      map[string][]span   // printed ranges per path
-	texts      map[string]string   // printed text to its first location
-	linked     map[string]bool     // paths whose relation lines were printed
+	docs       map[string]*cached // fetched by path
+	spans      map[string][]span  // printed ranges per path
+	texts      map[string]string  // printed text to its first location
+	linked     map[string]bool    // paths whose relation line was printed
 	unfit      []string
 	unfitMore  int
 }
@@ -139,8 +142,13 @@ func (e *expansion) write(s string) {
 	e.remaining -= len(s)
 }
 
-// add appends a block when it fits whole and reports whether it did.
+// add appends a block when it fits whole and reports whether it did. The
+// size check precedes the copy; escaping only grows text, so a reject is safe.
 func (e *expansion) add(loc, text string) bool {
+	const frame = len(Delimiter) + 1 + 2 + 2
+	if frame+len(loc)+len(text) > e.remaining {
+		return false
+	}
 	block := Delimiter + " " + loc + "\n\n" + escapeFrame(text) + "\n\n"
 	if len(block) > e.remaining {
 		return false
@@ -151,8 +159,13 @@ func (e *expansion) add(loc, text string) bool {
 
 // note appends a delimited note line.
 func (e *expansion) note(format string, args ...any) {
-	e.write(fmt.Sprintf(Delimiter+" note: "+format+"\n", args...))
+	before := e.b.Len()
+	fmt.Fprintf(&e.b, Delimiter+" note: "+format+"\n", args...)
+	e.remaining -= e.b.Len() - before
 }
+
+// row is one table row's location, split once.
+type row struct{ path, anchor string }
 
 // Expand renders the rows' sections in rank order, whole sections only, then
 // the strongest match's related documents, until the budget or MaxFetches is
@@ -163,8 +176,8 @@ func Expand(ctx context.Context, in Input) string {
 		return ""
 	}
 	e := &expansion{
-		remaining: in.Budget - in.Spent, query: in.Query, fetch: in.Fetch,
-		docs: make(map[string]Document), spans: make(map[string][]span),
+		remaining: in.Budget - in.Spent, terms: queryTerms(in.Query), fetch: in.Fetch,
+		docs: make(map[string]*cached), spans: make(map[string][]span),
 		texts: make(map[string]string), linked: make(map[string]bool),
 	}
 	if e.remaining <= 0 {
@@ -172,29 +185,27 @@ func Expand(ctx context.Context, in Input) string {
 		return "\n" + e.b.String()
 	}
 	inTable := make(map[string]bool, len(rows))
-	for _, loc := range rows {
-		path, _ := lookuptable.SplitLocation(loc)
-		inTable[path] = true
+	for _, r := range rows {
+		inTable[r.path] = true
 	}
-	var candidates []relation
-	for _, loc := range rows {
+	// Only the first document printed, the strongest match, seeds the hop.
+	var top string
+	var candidates []graph.RelRef
+	for _, r := range rows {
 		if e.remaining <= 0 || e.stopped(ctx) {
 			break
 		}
-		path, anchor := lookuptable.SplitLocation(loc)
-		doc, ok := e.document(ctx, path)
-		if !ok {
+		doc, ok := e.document(ctx, r.path)
+		if !ok || e.render(r.path, r.anchor, doc) == 0 {
 			continue
 		}
-		if e.render(path, anchor, doc) > 0 {
-			e.expanded++
-			if e.top == "" {
-				e.top = path
-			}
-			candidates = e.relations(path, doc, candidates)
+		e.expanded++
+		refs := e.relations(r.path, doc)
+		if top == "" {
+			top, candidates = r.path, refs
 		}
 	}
-	e.expandRelated(ctx, preferFirst(candidates), inTable)
+	e.expandRelated(ctx, top, preferFirst(candidates), inTable)
 	e.unfitNote()
 	if e.related > 0 {
 		e.note("expanded %d of %d rows and %d related documents within the budget", e.expanded, len(rows), e.related)
@@ -213,39 +224,40 @@ func (e *expansion) stopped(ctx context.Context) bool {
 	return false
 }
 
-// document returns path's body, fetching it once; false when it is not
-// available, which has been noted.
-func (e *expansion) document(ctx context.Context, path string) (Document, bool) {
-	doc, seen := e.docs[path]
-	if seen {
-		return doc, doc.Body != ""
+// document returns path's document, fetching and parsing it once; false when
+// it is not available, which has been noted.
+func (e *expansion) document(ctx context.Context, path string) (*cached, bool) {
+	if doc, seen := e.docs[path]; seen {
+		return doc, doc.ok
 	}
 	if e.fetches >= MaxFetches {
 		if !e.limitNoted {
 			e.note("fetch limit of %d documents reached; later rows on unfetched documents skipped", MaxFetches)
 			e.limitNoted = true
 		}
-		return Document{}, false
+		return nil, false
 	}
 	e.fetches++
-	doc, err := e.fetch(ctx, path)
+	doc := &cached{}
+	fetched, err := e.fetch(ctx, path)
 	if err != nil {
 		e.note("%s: %v", path, err)
-		doc = Document{}
+	} else {
+		doc.Document, doc.headings, doc.ok = fetched, mdoutline.Headings(fetched.Body), true
 	}
 	e.docs[path] = doc
-	return doc, doc.Body != ""
+	return doc, doc.ok
 }
 
 // render prints the blocks one row asks for and returns how many it printed.
 // A whole document whose H1 opens it is pinned to that H1's anchor, so the
 // block can be cited as a section, as the answer contract asks.
-func (e *expansion) render(path, anchor string, doc Document) int {
+func (e *expansion) render(path, anchor string, doc *cached) int {
 	body := doc.Body
 	p := piece{path: path, anchor: anchor, version: doc.Version}
 	if anchor == "" && len(body) >= mdoutline.OutlineThreshold {
 		n := 0
-		for _, h := range matchingSections(body, e.query) {
+		for _, h := range matchingSections(body, doc.headings, e.terms) {
 			p.anchor, p.start, p.end, p.text = h.Anchor, h.Start, h.End, body[h.Start:h.End]
 			if e.emit(&p) {
 				n++
@@ -261,9 +273,9 @@ func (e *expansion) render(path, anchor string, doc Document) int {
 	}
 	p.start, p.end, p.text = 0, len(body), body
 	if anchor == "" {
-		p.anchor = openingAnchor(body)
+		p.anchor = openingAnchor(body, doc.headings)
 	} else {
-		h, found := sectionRange(body, anchor)
+		h, found := mdoutline.Find(doc.headings, anchor)
 		if !found {
 			e.note("%s: section #%s not found", path, anchor)
 			return 0
@@ -294,8 +306,9 @@ func (e *expansion) emit(p *piece) bool {
 		}
 	}
 	text := strings.TrimSpace(p.text)
-	if first, dup := e.texts[text]; dup {
-		return e.add(loc, "same text as "+first)
+	first, dup := e.texts[text]
+	if dup {
+		text = "same text as " + first
 	}
 	if !e.add(loc, text) {
 		if len(e.unfit) < maxUnfitListed {
@@ -305,7 +318,10 @@ func (e *expansion) emit(p *piece) bool {
 		}
 		return false
 	}
-	e.texts[text] = loc
+	if !dup {
+		e.texts[text] = loc
+	}
+	// A stub covers its range too, so a nested row is not printed after it.
 	if p.end > p.start {
 		e.spans[p.path] = append(e.spans[p.path], span{start: p.start, end: p.end, loc: loc})
 	}
@@ -313,47 +329,39 @@ func (e *expansion) emit(p *piece) bool {
 }
 
 // relations prints the document's rel-* declarations once, grouped by
-// predicate on one line under its block, and queues the strongest match's
-// for expansion. Malformed values are skipped as the crawl skips them (ADR 0004).
-func (e *expansion) relations(path string, doc Document, candidates []relation) []relation {
+// predicate on one line under its block, and returns them. Malformed values
+// are skipped as the crawl skips them (ADR 0004).
+func (e *expansion) relations(path string, doc *cached) []graph.RelRef {
 	if e.linked[path] {
-		return candidates
+		return nil
 	}
 	e.linked[path] = true
 	refs := graph.RelEdges(path, doc.Metadata).Refs
 	if len(refs) == 0 {
-		return candidates
+		return nil
 	}
-	var line strings.Builder
-	line.WriteString(Delimiter + " related:")
-	rel := ""
+	var groups []string
+	last := ""
 	for _, ref := range refs {
 		target := ref.Target
 		if ref.Fragment != "" {
 			target += "#" + ref.Fragment
 		}
-		switch {
-		case ref.Rel != rel && rel == "":
-			line.WriteString(" rel-" + ref.Rel + " " + target)
-		case ref.Rel != rel:
-			line.WriteString("; rel-" + ref.Rel + " " + target)
-		default:
-			line.WriteString(", " + target)
+		if ref.Rel == last {
+			groups[len(groups)-1] += ", " + target
+			continue
 		}
-		rel = ref.Rel
-		if path == e.top {
-			candidates = append(candidates, relation{source: path, rel: ref.Rel, target: ref.Target, fragment: ref.Fragment})
-		}
+		groups, last = append(groups, "rel-"+ref.Rel+" "+target), ref.Rel
 	}
-	e.write(line.String() + "\n\n")
-	return candidates
+	e.write(Delimiter + " related: " + strings.Join(groups, "; ") + "\n\n")
+	return refs
 }
 
 // preferFirst orders candidates so PreferredRelations come before the rest,
 // keeping declaration order within each group.
-func preferFirst(candidates []relation) []relation {
-	slices.SortStableFunc(candidates, func(a, b relation) int {
-		pa, pb := slices.Contains(PreferredRelations, a.rel), slices.Contains(PreferredRelations, b.rel)
+func preferFirst(candidates []graph.RelRef) []graph.RelRef {
+	slices.SortStableFunc(candidates, func(a, b graph.RelRef) int {
+		pa, pb := slices.Contains(PreferredRelations, a.Rel), slices.Contains(PreferredRelations, b.Rel)
 		switch {
 		case pa == pb:
 			return 0
@@ -366,25 +374,25 @@ func preferFirst(candidates []relation) []relation {
 	return candidates
 }
 
-// expandRelated follows the queued relations one hop, within the source's
+// expandRelated follows source's queued relations one hop, within source's
 // authority, skipping documents the table already names.
-func (e *expansion) expandRelated(ctx context.Context, candidates []relation, inTable map[string]bool) {
+func (e *expansion) expandRelated(ctx context.Context, source string, candidates []graph.RelRef, inTable map[string]bool) {
 	seen := make(map[string]bool, len(candidates))
 	for _, c := range candidates {
 		if e.related >= MaxRelated || e.remaining <= 0 || e.stopped(ctx) {
 			return
 		}
-		if seen[c.target] || inTable[c.target] || !sameAuthority(c.source, c.target) {
+		if seen[c.Target] || inTable[c.Target] || !sameAuthority(source, c.Target) {
 			continue
 		}
-		seen[c.target] = true
-		doc, ok := e.document(ctx, c.target)
+		seen[c.Target] = true
+		doc, ok := e.document(ctx, c.Target)
 		if !ok {
 			continue
 		}
-		if e.render(c.target, c.fragment, doc) > 0 {
+		if e.render(c.Target, c.Fragment, doc) > 0 {
 			e.related++
-			e.relations(c.target, doc, nil)
+			e.relations(c.Target, doc)
 		}
 	}
 }
@@ -402,27 +410,29 @@ func (e *expansion) unfitNote() {
 }
 
 // sameAuthority reports whether target lives where source does: both bare
-// paths, or the same scheme and host.
+// paths, or the same server identity.
 func sameAuthority(source, target string) bool {
 	sourceAuthority, sourceOK := authority(source)
 	targetAuthority, targetOK := authority(target)
 	return sourceOK && targetOK && sourceAuthority == targetAuthority
 }
 
-// authority is the scheme and host of a location; "" for a bare path.
+// authority is the server identity of a location (links.Target's rule);
+// "" for a bare path.
 func authority(loc string) (string, bool) {
-	scheme, rest, found := strings.Cut(loc, "://")
-	if !found {
+	if !strings.Contains(loc, "://") {
 		return "", strings.HasPrefix(loc, "/")
 	}
-	host, _, _ := strings.Cut(rest, "/")
-	return scheme + "://" + host, host != ""
+	target, err := links.ParseMark(loc)
+	if err != nil {
+		return "", false
+	}
+	return target.AuthorityURL(), true
 }
 
 // openingAnchor is the anchor of an H1 that opens body and spans all of it;
 // "" when the document has none, so the block stays a whole-document one.
-func openingAnchor(body string) string {
-	headings := mdoutline.Headings(body)
+func openingAnchor(body string, headings []mdoutline.Heading) string {
 	if len(headings) == 0 {
 		return ""
 	}
@@ -431,24 +441,6 @@ func openingAnchor(body string) string {
 		return ""
 	}
 	return h.Anchor
-}
-
-// sectionRange finds the heading anchor opens and its byte range, as
-// leniently as mdoutline.Section: case-insensitive, then re-slugged.
-func sectionRange(body, anchor string) (mdoutline.Heading, bool) {
-	headings := mdoutline.Headings(body)
-	for _, h := range headings {
-		if strings.EqualFold(h.Anchor, anchor) {
-			return h, true
-		}
-	}
-	slugged := mdoutline.Slug(anchor)
-	for _, h := range headings {
-		if h.Anchor == slugged {
-			return h, true
-		}
-	}
-	return mdoutline.Heading{}, false
 }
 
 // escapeFrame indents body lines that would read as a frame line.
@@ -465,21 +457,26 @@ func escapeFrame(text string) string {
 	return strings.Join(lines, "\n")
 }
 
-// matchingSections returns the H2-or-deeper sections whose text holds every
-// query term (case-insensitive substrings), outermost only, in order.
-func matchingSections(body, query string) []mdoutline.Heading {
+// queryTerms are the lowercase query words of two or more characters.
+func queryTerms(query string) []string {
 	var terms []string
 	for t := range strings.FieldsSeq(strings.ToLower(query)) {
 		if t = strings.Trim(t, "\"'.,;:()"); len(t) >= 2 {
 			terms = append(terms, t)
 		}
 	}
+	return terms
+}
+
+// matchingSections returns the H2-or-deeper sections whose text holds every
+// term (case-insensitive substrings), outermost only, in order.
+func matchingSections(body string, headings []mdoutline.Heading, terms []string) []mdoutline.Heading {
 	if len(terms) == 0 {
 		return nil
 	}
 	var out []mdoutline.Heading
 	lastEnd := 0
-	for _, h := range mdoutline.Headings(body) {
+	for _, h := range headings {
 		if h.Level < 2 || h.Start < lastEnd {
 			continue
 		}
@@ -499,16 +496,17 @@ func matchingSections(body, query string) []mdoutline.Heading {
 	return out
 }
 
-// locations returns the first cell of every data row, in table order,
-// keeping the anchor.
-func locations(table string) []string {
-	var out []string
+// locations returns the first cell of every data row, in table order, split
+// into path and anchor.
+func locations(table string) []row {
+	var out []row
 	for line := range strings.SplitSeq(table, "\n") {
 		cells, ok := lookuptable.SplitRow(line)
 		if !ok || !lookuptable.IsDataRow(cells) {
 			continue
 		}
-		out = append(out, lookuptable.Unescape(cells[0]))
+		path, anchor := lookuptable.SplitLocation(lookuptable.Unescape(cells[0]))
+		out = append(out, row{path: path, anchor: anchor})
 	}
 	return out
 }

@@ -133,14 +133,20 @@ func TestExpandCoalescesNestedSections(t *testing.T) {
 }
 
 // Identical text from a second location prints as a stub naming the first,
-// so both citations stay available without a second copy.
+// so both citations stay available without a second copy; the stub covers
+// its range, so a row nested inside it is reported, not printed.
 func TestExpandCollapsesIdenticalText(t *testing.T) {
-	docs["/copy.md"] = "# Copy\n\n## Two\n\ntwo text\n"
-	defer delete(docs, "/copy.md")
+	docs["/copy.md"] = "# Copy\n\n## Two\n\ntwo text\n\n### Two A\n\ndeeper\n"
+	docs["/a.md"] = strings.Replace(docs["/a.md"], "two text\n", "two text\n\n### Two A\n\ndeeper\n", 1)
+	original := "# A\n\nIntro.\n\n## One\n\none text\n\n## Two\n\ntwo text\n\n## Three\n\n" + strings.Repeat("three text ", 30) + "\n"
+	defer func() { delete(docs, "/copy.md"); docs["/a.md"] = original }()
 	var calls []string
-	out := expand(context.Background(), rowTable("/a.md#two", "/copy.md#two"), "x", 4096, fakeFetch(&calls))
-	if strings.Count(out, "two text") != 1 || !strings.Contains(out, ">>> /copy.md#two\n\nsame text as /a.md#two\n\n") || !strings.Contains(out, "expanded 2 of 2 rows") {
+	out := expand(context.Background(), rowTable("/a.md#two", "/copy.md#two", "/copy.md#two-a"), "x", 4096, fakeFetch(&calls))
+	if strings.Count(out, "two text") != 1 || !strings.Contains(out, ">>> /copy.md#two\n\nsame text as /a.md#two\n\n") || !strings.Contains(out, "expanded 2 of 3 rows") {
 		t.Errorf("want one copy and a stub:\n%s", out)
+	}
+	if strings.Count(out, "deeper") != 1 || !strings.Contains(out, ">>> note: /copy.md#two-a is within /copy.md#two above") {
+		t.Errorf("want the nested row covered by the stub:\n%s", out)
 	}
 }
 
