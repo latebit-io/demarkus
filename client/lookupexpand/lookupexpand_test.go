@@ -391,3 +391,22 @@ func TestExpandPinsWholeDocumentsToTheirOpeningHeading(t *testing.T) {
 		}
 	}
 }
+
+// A relation line counts against the budget like a block: when it does not
+// fit it is dropped, and no hop follows it.
+func TestExpandDropsRelationLineThatDoesNotFit(t *testing.T) {
+	docs["/src.md"] = "# Src\n\nsource.\n"
+	docs["/dst.md"] = "# Dst\n\ntarget.\n"
+	metadata["/src.md"] = map[string]string{"rel-supersedes": "/dst.md"}
+	defer func() { delete(docs, "/src.md"); delete(docs, "/dst.md"); delete(metadata, "/src.md") }()
+	block := ">>> /src.md#src\n\n# Src\n\nsource.\n\n"
+	var calls []string
+	out := expand(context.Background(), rowTable("/src.md"), "x", len(block)+10, fakeFetch(&calls))
+	if !strings.Contains(out, block) || strings.Contains(out, ">>> related:") || strings.Contains(out, ">>> /dst.md") || len(calls) != 1 {
+		t.Errorf("want the block alone, no relation line or hop, fetches %v:\n%s", calls, out)
+	}
+	out = expand(context.Background(), rowTable("/src.md"), "x", 4096, fakeFetch(&calls))
+	if !strings.Contains(out, ">>> related: rel-supersedes /dst.md\n\n>>> /dst.md#dst\n") {
+		t.Errorf("want the relation line and its hop when they fit:\n%s", out)
+	}
+}

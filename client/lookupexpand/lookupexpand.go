@@ -329,8 +329,8 @@ func (e *expansion) emit(p *piece) bool {
 }
 
 // relations prints the document's rel-* declarations once, grouped by
-// predicate on one line under its block, and returns them. Malformed values
-// are skipped as the crawl skips them (ADR 0004).
+// predicate on one line under its block, and returns them; nil when the line
+// does not fit, so no hop follows a relation the reader cannot see.
 func (e *expansion) relations(path string, doc *cached) []graph.RelRef {
 	if e.linked[path] {
 		return nil
@@ -353,7 +353,11 @@ func (e *expansion) relations(path string, doc *cached) []graph.RelRef {
 		}
 		groups, last = append(groups, "rel-"+ref.Rel+" "+target), ref.Rel
 	}
-	e.write(Delimiter + " related: " + strings.Join(groups, "; ") + "\n\n")
+	line := Delimiter + " related: " + strings.Join(groups, "; ") + "\n\n"
+	if len(line) > e.remaining {
+		return nil
+	}
+	e.write(line)
 	return refs
 }
 
