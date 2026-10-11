@@ -31,11 +31,11 @@ Orient in the joined organizational demarkus knowledge system(s). Knowledge-syst
 
    `not-found`: say so plainly (e.g. no `root` index or policy published yet); never invent content. Surface outline-only, transport, authorization, dispatch, and tool errors separately; they do not mean the document is absent.
 
-3. **Point the way.** Ordinary recall defaults to section-first: descriptive lookup terms, `limit: 3`, no `budget`; catalog for names/tags, `match: body` for section text or catalog misses.
+3. **Point the way.** Ordinary recall defaults to section-first: descriptive lookup terms, `limit: 3`, `budget` per the server instructions; catalog for names/tags, `match: body` for section text or catalog misses.
    - Explicit world: `mark_lookup` in that scope, never widen unasked. Surface errors and stop. Only a successful non-partial empty lookup means no relevant result there.
    - Blank/slug broker scope: `mark_lookup_all`, the system-wide card catalog. Tool error: surface and stop. Partial: disclose failed worlds and keep successful rows; empty partial results are inconclusive. Older broker: require a successful, complete `mark_worlds` directory first; malformed/failed directory means stop, empty directory means no readable scope. Request the same chosen global limit from each readable world's `mark_lookup`, qualify paths, merge by row ordinal ascending, importance descending, world name and path, then truncate once. Some failed worlds: disclose partial coverage; all fail: aggregate error and stop. Never reuse a stale world set.
    - Plain endpoint: `mark_lookup` directly; surface errors and stop.
-   - `mark_fetch` the best `#anchor`; choose a section from an outline, or read a short unanchored document whole. Optional `budget: 1500` is only for focused body queries likely to return the evidence. The world's `index.md` is the backstop for untagged content. Surface every fetch failure; never invent a missing hub or turn errors into absence.
+   - `mark_fetch` the best `#anchor`; choose a section from an outline, or read a short unanchored document whole. The world's `index.md` is the backstop for untagged content. Surface every fetch failure; never invent a missing hub or turn errors into absence.
    - `/knowledge-join` adds systems. `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-list` is the joined-system source of truth. Remove through the joining harness, then `registry knowledge-unregister <slug>`; surface any registry failure.
 
 ## Don't

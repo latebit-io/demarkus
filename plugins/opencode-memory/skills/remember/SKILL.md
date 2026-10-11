@@ -39,8 +39,8 @@ OKF `type` on publish: `architecture.md` `Architecture`; `adr/*` `Decision`; `pl
 
 ## Read
 
-1. `mark_lookup` in `/<project>/` or a narrower established subtree; `/` only for cross-project intent. `limit: 3`, no `budget`, descriptive subjects, not bare ids. Catalog mode for names and tags; `match: body` for section text or catalog misses (rows carry `#anchor` and snippet). `filter` (`tag=`, `modified-after=`, `modified-before=`) narrows. Never widen explicit scope unasked.
-2. `mark_fetch` the best `#anchor`, a section from an outline, or a short document whole; a given URL directly. `budget: 1500` only for focused body queries likely to return the evidence. Target two calls, about 1,500 result tokens, correctness first.
+1. `mark_lookup` in `/<project>/` or a narrower established subtree; `/` only for cross-project intent. `limit: 3`, descriptive subjects, not bare ids; `budget` per the server instructions. Catalog mode for names and tags; `match: body` for section text or catalog misses (rows carry `#anchor` and snippet). `filter` (`tag=`, `modified-after=`, `modified-before=`) narrows. Never widen explicit scope unasked.
+2. `mark_fetch` the best `#anchor`, a section from an outline, or a short document whole; a given URL directly. Target two calls, about 1,500 result tokens, correctness first.
 3. `/index.md` or `/<project>/index.md` as the backstop for untagged content; `mark_backlinks` / `mark_graph` for related documents in scope.
 4. Any lookup, fetch or graph failure: surface, stop that read; disclose partial results. Only a successful non-partial empty lookup means nothing found.
 
