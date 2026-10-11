@@ -408,6 +408,13 @@ func reopenable(err error) bool {
 func (w *Watch) pump(ctx context.Context, s *watchStream) (delay time.Duration, err error) {
 	stop := context.AfterFunc(ctx, s.stream.Abort)
 	defer stop()
+	// Close aborted the stream under the loop: a clean end, whatever the
+	// deadline or read reported.
+	defer func() {
+		if err == nil && ctx.Err() != nil {
+			s.ended, err = nil, ctx.Err()
+		}
+	}()
 	for {
 		if err := s.stream.SetReadDeadline(time.Now().Add(watchStall)); err != nil {
 			s.ended = err

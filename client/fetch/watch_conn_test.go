@@ -111,6 +111,56 @@ func TestNewWatchOverAConnReopensFromItsCursor(t *testing.T) {
 	}
 }
 
+// closeAtTop is a stream whose second SetReadDeadline, the loop top after
+// the first event, waits until Close's abort has landed.
+type closeAtTop struct {
+	releaseProbe
+	calls   int
+	aborted chan struct{}
+}
+
+func (s *closeAtTop) SetReadDeadline(t time.Time) error {
+	s.calls++
+	if s.calls == 2 {
+		<-s.aborted
+	}
+	return s.Conn.SetReadDeadline(t)
+}
+
+// Release's Abort is releaseProbe's, so aborted closes once.
+func (s *closeAtTop) Abort() {
+	s.releaseProbe.Abort()
+	close(s.aborted)
+}
+
+// A Close that lands between two reads must release the stream clean: the
+// deadline the loop sets next fails on the aborted stream, which is not a cut.
+func TestWatchCloseBetweenReadsReleasesClean(t *testing.T) {
+	at := protocol.Cursor{Epoch: "e1", Seq: 1}
+	f := &pipeFeed{t: t, released: make(chan error, 1), scripts: [][]protocol.WatchBlock{{
+		protocol.WatchControl(protocol.StatusOK, at),
+		protocol.WatchEvent{Cursor: at, Path: "/a.md", Version: 1, Op: protocol.OpPublish}.Block(),
+	}}}
+	s := &closeAtTop{aborted: make(chan struct{})}
+	dial := func(ctx context.Context, req protocol.Request) (WatchStream, error) {
+		stream, err := f.dial(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		s.releaseProbe = stream.(releaseProbe)
+		return s, nil
+	}
+	w, err := NewWatch(context.Background(), dial, WatchRequest{Path: "/"}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("NewWatch: %v", err)
+	}
+	expectEvent(t, w, "/a.md")
+	w.Close()
+	if got := <-f.released; got != nil {
+		t.Errorf("stream released with %v after Close, want clean", got)
+	}
+}
+
 // ackThenClose serves one watch over net.Pipe that ends right after its
 // acknowledgement.
 func ackThenClose(dials *atomic.Int32) func(context.Context, protocol.Request) (net.Conn, error) {
