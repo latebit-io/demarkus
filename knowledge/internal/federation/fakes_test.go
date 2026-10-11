@@ -270,7 +270,7 @@ func (h *fakeHub) fetch(_ context.Context, docPath string) (protocol.Response, e
 func (h *fakeHub) publish(_ context.Context, docPath, body string, expected int) (protocol.Response, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if docPath == graphstore.LegacyExportPath {
+	if docPath == graphstore.GraphExportPath {
 		h.exports++
 	}
 	if h.failing[docPath] {
@@ -284,7 +284,7 @@ func (h *fakeHub) publish(_ context.Context, docPath, body string, expected int)
 		head++
 		resp := fetchtest.Head(body, head, map[string]string{"content-hash": generation.BodyHash(body)}).Response
 		h.docs[docPath], h.docs[protocol.VersionPath(docPath, head)], h.heads[docPath] = resp, resp, head
-		if docPath != graphstore.LegacyExportPath { // counted in exports
+		if docPath != graphstore.GraphExportPath { // counted in exports
 			h.writes = append(h.writes, docPath)
 		}
 	}

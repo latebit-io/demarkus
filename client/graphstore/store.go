@@ -29,9 +29,6 @@ import (
 // v4 retains local candidates separately from revision-selected seed observations.
 const schemaVersion = 4
 
-// minSchemaVersion is the oldest on-disk format still readable.
-const minSchemaVersion = 1
-
 // StoredNode is a graph node with persistence metadata.
 type StoredNode struct {
 	Observation graph.Observation `json:"observation,omitzero"`
@@ -160,32 +157,24 @@ func Load(path string) (*Store, error) {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse graph store %q: %w", path, err)
 	}
-	if doc.Version < minSchemaVersion || doc.Version > schemaVersion {
-		return nil, fmt.Errorf("graph store %q: unsupported schema version %d (expected %d..%d)", path, doc.Version, minSchemaVersion, schemaVersion)
+	if doc.Version > schemaVersion {
+		return nil, fmt.Errorf("graph store %q: unsupported schema version %d (expected %d)", path, doc.Version, schemaVersion)
+	}
+	if doc.Version < schemaVersion {
+		// The store is a crawl cache: an older file is dropped, not upgraded,
+		// and the next Save writes the current schema.
+		return s, nil
 	}
 	s.nodes = make(map[string]*StoredNode, len(doc.Nodes))
 	s.edges = make([]StoredEdge, 0, len(doc.Edges))
 	s.edgeIdx = make(map[edgeKey]int, len(doc.Edges))
 
-	// v1 keyed nodes by whatever the crawler was handed, so one document could
-	// appear under both mark://host/x and mark://host:6309/x. Canonicalizing on
-	// load merges those, keeping the more recently crawled copy.
+	// Rows load as stored: every write path canonicalizes URLs before Save.
 	for i := range doc.Nodes {
 		n := doc.Nodes[i]
-		n.URL = links.CanonicalURL(n.URL)
-		if n.CrawledAt.IsZero() {
-			n.Seeded = true
-		}
-		if prev := s.nodes[n.URL]; prev != nil && prev.CrawledAt.After(n.CrawledAt) {
-			continue
-		}
 		s.nodes[n.URL] = &n
 	}
 	for _, e := range doc.Edges {
-		if e.Count < 1 {
-			e.Count = 1 // legacy rows predate Count; an edge on disk means one occurrence
-		}
-		e.From, e.To = links.CanonicalURL(e.From), links.CanonicalURL(e.To)
 		if _, exists := s.edgeIdx[e.key()]; !exists {
 			s.edgeIdx[e.key()] = len(s.edges)
 			s.edges = append(s.edges, e)
@@ -203,48 +192,30 @@ func Load(path string) (*Store, error) {
 		}
 		s.seedGraphs[owner] = records
 	}
-	if doc.Version < 3 && len(s.seedEtags) > 0 {
-		// Pre-snapshot stores lack owner provenance; force one full refresh.
-		clear(s.seedEtags)
-	}
 	s.loadCandidates(&doc)
 	s.sourceRevisions = doc.SourceRevisions
 	s.loadEvidence(&doc)
 	return s, nil
 }
 
+// loadCandidates rebuilds local (unseeded) sources; seeded rows are owned
+// by seedGraphs and skipped without building a record.
 func (s *Store) loadCandidates(doc *document) {
-	records := s.sourceRecordsLocked()
-	for key := range records {
-		record := records[key]
-		if !record.Node.Seeded {
-			if doc.Version < 4 {
-				record.Node.Observation = graph.Observation{}
-			}
-			s.localSources[key] = record
+	for key, node := range s.nodes {
+		if !node.Seeded {
+			s.localSources[key], _ = s.selectedRecordLocked(key)
 		}
 	}
-	if doc.Version < 3 {
-		legacySeeds := make(map[string]sourceRecord)
-		for key := range records {
-			record := records[key]
-			if record.Node.Seeded {
-				record.Node.Observation = graph.Observation{}
-				legacySeeds[key] = record
-			}
-		}
-		if len(legacySeeds) > 0 {
-			s.seedGraphs[""] = legacySeeds
+	for key := range s.outgoing {
+		if s.nodes[key] == nil {
+			s.localSources[key], _ = s.selectedRecordLocked(key)
 		}
 	}
-	if doc.Version >= 4 {
-		for key := range doc.LocalSources {
-			record := doc.LocalSources[key]
-			normalized := sourceRecords([]StoredNode{record.Node}, record.Edges)
-			maps.Copy(s.localSources, normalized)
-		}
+	for key := range doc.LocalSources {
+		record := doc.LocalSources[key]
+		normalized := sourceRecords([]StoredNode{record.Node}, record.Edges)
+		maps.Copy(s.localSources, normalized)
 	}
-
 }
 
 // Save atomically persists one store snapshot. Calls on one Store serialize;
@@ -493,20 +464,6 @@ func (s *Store) setPinsLocked(owner string, pins *WorldManifest) {
 		return
 	}
 	s.worldPins[owner] = pins
-}
-
-// sourceRecordsLocked snapshots every selected source; Merge reads one key at a time instead.
-func (s *Store) sourceRecordsLocked() map[string]sourceRecord {
-	records := make(map[string]sourceRecord, len(s.nodes))
-	for key := range s.nodes {
-		records[key], _ = s.selectedRecordLocked(key)
-	}
-	for key := range s.outgoing {
-		if _, exists := records[key]; !exists {
-			records[key], _ = s.selectedRecordLocked(key)
-		}
-	}
-	return records
 }
 
 // selectedRecordLocked reads one selected source without copying the whole store.

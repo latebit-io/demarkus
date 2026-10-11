@@ -16,7 +16,6 @@ import (
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/procscan"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/release"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/tokens"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
@@ -106,17 +105,10 @@ func Ensure(memoryDir string, port int) error {
 	if err != nil || current {
 		return err
 	}
-	// Pre-#289 the log sat at <memoryDir>/.log, inside the server's tokens-watch
-	// directory, feeding the watcher its own output. Remove it on migration.
-	legacyLog := filepath.Join(memoryDir, ".log")
-	if err := os.Remove(legacyLog); err != nil && !os.IsNotExist(err) {
-		progress.Warnf("remove legacy server log %s: %v", legacyLog, err)
-	}
-
 	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
 		return err
 	}
-	tokensPath, err := tokens.MigrateManaged(memoryDir)
+	tokensPath, err := config.ManagedTokensPath(memoryDir)
 	if err != nil {
 		return err
 	}

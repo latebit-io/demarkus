@@ -274,27 +274,6 @@ func TestMergeKeepsDistinctRels(t *testing.T) {
 	}
 }
 
-func TestLoadLegacyEdgesDefaultsCount(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "graph.json")
-	legacy := `{"version":1,"nodes":[{"url":"mark://a/a.md","title":"A","status":"ok","link_count":1,"crawled_at":"2026-01-01T00:00:00Z"}],"edges":[{"from":"mark://a/a.md","to":"mark://a/b.md"}]}`
-	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	s, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	edges := s.edges
-	if len(edges) != 1 {
-		t.Fatalf("EdgeCount = %d, want 1", len(edges))
-	}
-	e := edges[0]
-	if e.Count != 1 || e.Rel != "" || e.Label != "" || e.Anchor != "" {
-		t.Errorf("legacy edge = %+v, want Count=1 and empty enrichment", e)
-	}
-}
-
 func TestLoadRejectsSchemaVersionMismatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
 	if err := os.WriteFile(path, fmt.Appendf(nil, `{"version":%d,"nodes":[],"edges":[]}`, schemaVersion+1), 0o644); err != nil {
@@ -307,77 +286,21 @@ func TestLoadRejectsSchemaVersionMismatch(t *testing.T) {
 	}
 }
 
-// A v1 store keyed nodes by whatever the crawler was handed, so one document
-// could sit under both spellings. Load migrates to identity keys (ADR 0005)
-// and keeps the more recently crawled copy of a merged pair.
-func TestLoadMigratesV1KeysToIdentity(t *testing.T) {
+func TestLoadDropsOlderSchemaAsEmptyCache(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
-	v1 := `{"version":1,"nodes":[
-		{"url":"mark://a:6309/index.md","title":"stale","status":"ok","crawled_at":"2026-01-01T00:00:00Z"},
-		{"url":"mark://a/index.md","title":"fresh","status":"ok","crawled_at":"2026-06-01T00:00:00Z"},
-		{"url":"mark://a:7000/other.md","title":"other world","status":"ok","crawled_at":"2026-06-01T00:00:00Z"}
-	],"edges":[
-		{"from":"mark://a:6309/index.md","to":"mark://a/about.md"},
-		{"from":"mark://a/index.md","to":"mark://a:6309/about.md"}
-	]}`
-	if err := os.WriteFile(path, []byte(v1), 0o644); err != nil {
+	older := fmt.Appendf(nil, `{"version":%d,"nodes":[{"url":"mark://a/a.md","status":"ok"}],"edges":[]}`, schemaVersion-1)
+	if err := os.WriteFile(path, older, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-
 	s, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load v1: %v", err)
+	if err != nil || s.NodeCount() != 0 {
+		t.Fatalf("Load older schema = %d nodes, %v; want an empty store", s.NodeCount(), err)
 	}
-
-	if s.NodeCount() != 2 {
-		t.Errorf("NodeCount = %d, want 2 (the two spellings merge)", s.NodeCount())
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
-	n := s.GetNode("mark://a/index.md")
-	if n == nil || n.Title != "fresh" {
-		t.Errorf("merged node = %+v, want the more recently crawled copy", n)
-	}
-	if s.GetNode("mark://a:7000/other.md") == nil {
-		t.Error("non-default port dropped; it names a different server")
-	}
-	if len(s.edges) != 1 {
-		t.Errorf("edges = %+v, want the two spellings deduped to 1", s.edges)
-	}
-	if bl := s.Backlinks("mark://a/about.md"); len(bl) != 1 || bl[0] != "mark://a/index.md" {
-		t.Errorf("Backlinks = %v, want [mark://a/index.md]", bl)
-	}
-}
-
-// ADR 0018: host case is not identity. A store written before it may hold one
-// document under two host spellings; load merges them and reads accept either.
-func TestLoadMergesHostCaseSpellings(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "graph.json")
-	stored := `{"version":2,"nodes":[
-		{"url":"mark://Docs.Example/Index.md","title":"stale","status":"ok","crawled_at":"2026-01-01T00:00:00Z"},
-		{"url":"mark://docs.example/Index.md","title":"fresh","status":"ok","crawled_at":"2026-06-01T00:00:00Z"},
-		{"url":"mark://docs.example/index.md","title":"other path","status":"ok","crawled_at":"2026-06-01T00:00:00Z"}
-	],"edges":[
-		{"from":"mark://Docs.Example/Index.md","to":"mark://DOCS.example/about.md"},
-		{"from":"mark://docs.example/Index.md","to":"mark://docs.example/about.md"}
-	]}`
-	if err := os.WriteFile(path, []byte(stored), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	s, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if s.NodeCount() != 2 {
-		t.Errorf("NodeCount = %d, want 2 (host spellings merge, path case stays distinct)", s.NodeCount())
-	}
-	if n := s.GetNode("mark://DOCS.EXAMPLE/Index.md"); n == nil || n.Title != "fresh" {
-		t.Errorf("merged node = %+v, want the more recently crawled copy under any host spelling", n)
-	}
-	if len(s.edges) != 1 {
-		t.Errorf("edges = %+v, want the two spellings deduped to 1", s.edges)
-	}
-	if bl := s.Backlinks("mark://Docs.Example/about.md"); len(bl) != 1 || bl[0] != "mark://docs.example/Index.md" {
-		t.Errorf("Backlinks = %v, want [mark://docs.example/Index.md]", bl)
+	if reloaded, err := Load(path); err != nil || reloaded.NodeCount() != 0 {
+		t.Fatalf("reload after Save = %v, %v", reloaded, err)
 	}
 }
 
@@ -519,10 +442,10 @@ func TestSaveAtomic(t *testing.T) {
 	}
 }
 
-func TestSaveReplacesLegacyFileWithPrivateMode(t *testing.T) {
+func TestSaveReplacesWorldReadableFileWithPrivateMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
-	legacy := `{"version":1,"nodes":[{"url":"mark://a/source.md","status":"ok","crawled_at":"2026-01-01T00:00:00Z"}],"edges":[{"from":"mark://a/source.md","to":"mark://a/target.md"}]}`
-	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+	shared := `{"version":4,"nodes":[{"url":"mark://a/source.md","status":"ok","crawled_at":"2026-01-01T00:00:00Z"}],"edges":[{"from":"mark://a/source.md","to":"mark://a/target.md"}]}`
+	if err := os.WriteFile(path, []byte(shared), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(path, 0o644); err != nil {
@@ -547,7 +470,7 @@ func TestSaveReplacesLegacyFileWithPrivateMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := reloaded.Backlinks("mark://a/target.md"); !slices.Equal(got, []string{"mark://a/source.md"}) {
-		t.Fatalf("legacy graph changed across private save: %v", got)
+		t.Fatalf("graph changed across private save: %v", got)
 	}
 }
 
@@ -1103,21 +1026,6 @@ func TestConcurrentSave(t *testing.T) {
 	}
 }
 
-func TestLoadClearsPreOwnershipSeedEtags(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "graph.json")
-	body := `{"version":2,"nodes":[],"edges":[],"seed_etags":{"hub":"stale"}}`
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	store, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got := store.SeedEtag("hub"); got != "" {
-		t.Fatalf("SeedEtag = %q, want refresh", got)
-	}
-}
-
 func TestReplaceSeedRemovesSourcesMissingFromCompleteGeneration(t *testing.T) {
 	store := New()
 	store.ReplaceSeed("hub", []StoredNode{
@@ -1167,55 +1075,5 @@ func TestReplaceSeedOwnershipPersists(t *testing.T) {
 	store.ReplaceSeed("a", nil, nil)
 	if got := store.Backlinks("mark://w/b.md"); len(got) != 1 {
 		t.Fatalf("persisted owner edge was erased: %v", got)
-	}
-}
-
-func TestLoadLegacyFileWithoutSeedEtags(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "graph.json")
-	legacy := `{"version":1,"nodes":[],"edges":[]}`
-	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load legacy: %v", err)
-	}
-	if got := s.SeedEtag("a:6309"); got != "" {
-		t.Errorf("SeedEtag = %q, want empty", got)
-	}
-	s.SetSeedEtag("a:6309", "etag-1")
-	if err := s.Save(); err != nil {
-		t.Fatalf("Save after legacy load: %v", err)
-	}
-}
-
-func TestSeedFromLegacyExport(t *testing.T) {
-	// A /graph.md still in the pre-enrichment two-column edge form must seed.
-	body := `# Document Graph
-
-> Exported: 2026-07-01T00:00:00Z
-> Nodes: 2
-> Edges: 1
-
-## Nodes
-
-| URL | Title | Status | Links |
-|-----|-------|--------|-------|
-| [mark://a/a.md](mark://a/a.md) | A | ok | 1 |
-| [mark://a/b.md](mark://a/b.md) | B | ok | 0 |
-
-## Edges
-
-| From | To |
-|------|----|
-| mark://a/a.md | mark://a/b.md |
-`
-	nodes, edges := ParseExport(body)
-	s := New()
-	if added := s.SeedFromExport(nodes, edges); added != 2 {
-		t.Errorf("added = %d, want 2", added)
-	}
-	if bl := s.Backlinks("mark://a/b.md"); len(bl) != 1 || bl[0] != "mark://a/a.md" {
-		t.Errorf("Backlinks = %v, want [mark://a/a.md]", bl)
 	}
 }

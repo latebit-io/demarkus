@@ -102,7 +102,6 @@ func cmdNudge() {
 	surface := fs.String("surface", "", "override surface: memory | knowledge")
 	changed := fs.Bool("changed-files", false, "session-end: the session changed files")
 	memoryWrite := fs.Bool("memory-write", false, "session-end: a memory write happened")
-	fs.BoolVar(memoryWrite, "soul-write", false, "deprecated alias of -memory-write")
 	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits, never returns an error
 
 	in, err := readNudgeInput(os.Stdin)
@@ -124,7 +123,7 @@ func cmdNudge() {
 	if set["changed-files"] {
 		in.ChangedFiles = *changed
 	}
-	if set["memory-write"] || set["soul-write"] {
+	if set["memory-write"] {
 		in.MemoryWrite = *memoryWrite
 	}
 

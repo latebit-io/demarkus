@@ -20,8 +20,6 @@ cd tools && go run ./plugin-prompts check
 
 Surface partial: `partials/<name>.tmpl`. Include with `{{template "<name>.tmpl" .}}`.
 
-A `commands/<old>.md.alias` file whose body names another command renders that command's full body under the old name with a `Deprecated alias of /<new>` description prefix, so a renamed command keeps working under both names on every harness while the alias file exists.
-
 ## Store noun
 
 Prose never calls the personal store "memory": hosts ship a built-in memory feature and agents conflated the two. Templates write `{{.Store}}`, `{{.Stores}}`, and `{{.StoreTitle}}` (default `soul` / `souls` / `Soul`); a target or brand overrides them with `store_noun` and `store_noun_plural` in `manifest.json`. Plugin names, MCP server ids, and registry subcommands are identifiers and stay as they are; slash commands follow the noun (`/soul-*`).

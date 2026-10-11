@@ -219,7 +219,7 @@ func renderAll(root, brandsPath string) ([]artifact, error) {
 	return artifacts, nil
 }
 
-// renderSurface renders every template and alias under the target's surface
+// renderSurface renders every template under the target's surface
 // tree, skipping the partials directory, which templates include by name.
 func renderSurface(root string, target *target, seen map[string]string) ([]artifact, error) {
 	if err := validateTarget(target); err != nil {
@@ -245,24 +245,18 @@ func renderSurface(root string, target *target, seen map[string]string) ([]artif
 			}
 			return nil
 		}
-		isAlias := strings.HasSuffix(entry.Name(), ".md.alias")
-		if !isAlias && !strings.HasSuffix(entry.Name(), ".tmpl") {
+		if !strings.HasSuffix(entry.Name(), ".tmpl") {
 			return nil
 		}
 		rel, err := filepath.Rel(templateRoot, path)
 		if err != nil {
 			return err
 		}
-		var rendered []byte
-		if isAlias {
-			rendered, err = renderAlias(path, target, partials)
-		} else {
-			rendered, err = renderTemplate(path, target, partials)
-		}
+		rendered, err := renderTemplate(path, target, partials)
 		if err != nil {
 			return err
 		}
-		name := strings.TrimSuffix(strings.TrimSuffix(rel, ".tmpl"), ".alias")
+		name := strings.TrimSuffix(rel, ".tmpl")
 		if _, skip := excluded[filepath.ToSlash(name)]; skip {
 			excluded[filepath.ToSlash(name)] = true
 			return nil
@@ -404,8 +398,8 @@ func renderTemplate(path string, target *target, partials []string) ([]byte, err
 	return addMarker(output.Bytes()), nil
 }
 
-// claimOutput rejects two sources (e.g. foo.md.tmpl and foo.md.alias) mapping
-// to one generated path, which writeAll would otherwise silently overwrite.
+// claimOutput rejects two sources mapping to one generated path, which
+// writeAll would otherwise silently overwrite.
 func claimOutput(seen map[string]string, output, source string) error {
 	key := filepath.Clean(output)
 	if prev, ok := seen[key]; ok {
@@ -413,49 +407,6 @@ func claimOutput(seen map[string]string, output, source string) error {
 	}
 	seen[key] = source
 	return nil
-}
-
-// renderAlias renders a deprecated command alias: a `<old>.md.alias` file in
-// commands/ names the target command, and the alias ships the target's full
-// body under the old name so both names behave identically on every harness.
-func renderAlias(path string, target *target, partials []string) ([]byte, error) {
-	if !strings.HasSuffix(path, ".md.alias") {
-		return nil, fmt.Errorf("%s: alias files must be named <command>.md.alias", path)
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	name := strings.TrimSpace(string(raw))
-	if name == "" || strings.ContainsAny(name, "/\\ \n") {
-		return nil, fmt.Errorf("%s: alias must name one command", path)
-	}
-	if filepath.Base(filepath.Dir(path)) != "commands" {
-		return nil, fmt.Errorf("%s: aliases are only supported under commands/", path)
-	}
-	if strings.TrimSuffix(filepath.Base(path), ".md.alias") == name {
-		return nil, fmt.Errorf("%s: alias targets itself", path)
-	}
-	rendered, err := renderTemplate(filepath.Join(filepath.Dir(path), name+".md.tmpl"), target, partials)
-	if err != nil {
-		return nil, fmt.Errorf("%s: alias target: %w", path, err)
-	}
-	text := string(rendered)
-	end, ok := frontmatterEnd(text)
-	if !ok {
-		return nil, fmt.Errorf("%s: alias target has no frontmatter", path)
-	}
-	head, body := text[:end], text[end:]
-	marker := "\ndescription: "
-	at := strings.Index(head, marker)
-	if at < 0 {
-		return nil, fmt.Errorf("%s: alias target has no description", path)
-	}
-	at += len(marker)
-	if at < len(head) && (head[at] == '"' || head[at] == '\'') {
-		at++ // quoted description: stay inside the quotes
-	}
-	return []byte(head[:at] + "Deprecated alias of /" + name + ". " + head[at:] + body), nil
 }
 
 // cursorCommand reshapes a command's frontmatter for Cursor: `name` comes from

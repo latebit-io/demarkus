@@ -1,13 +1,9 @@
 package store
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // outsideDoc builds a valid document in a second store and links its parent
@@ -39,31 +35,6 @@ func TestVersionQuestionsStayInsideRoot(t *testing.T) {
 	}
 	if versions := s.findVersions("/linked/doc.md"); len(versions) != 0 {
 		t.Errorf("findVersions listed %d versions outside the root", len(versions))
-	}
-}
-
-func TestImportDocRefusesEscapingDirectory(t *testing.T) {
-	root := t.TempDir()
-	s := New(root)
-	outside := t.TempDir()
-	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
-	stored, err := storefmt.SerializeVersion(1, nil, []byte("# Imported\n"), nil)
-	if err != nil {
-		t.Fatalf("SerializeVersion: %v", err)
-	}
-	doc := storefmt.StoredDocument{Versions: []storefmt.StoredVersion{{Version: 1, Stored: stored, Modified: time.Now()}}}
-
-	if err := s.ImportDoc(context.Background(), "/linked/new.md", doc); err == nil {
-		t.Error("ImportDoc wrote through an escaping symlink")
-	}
-	entries, err := os.ReadDir(outside)
-	if err != nil {
-		t.Fatalf("ReadDir outside: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Errorf("import left %d entries outside the root", len(entries))
 	}
 }
 

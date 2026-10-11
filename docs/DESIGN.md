@@ -1294,10 +1294,10 @@ Hubs are the entry points into the information graph:
 - `CrawlAndPersist`: shared crawl path used by CLI (`demarkus graph`), TUI (`d` key), and MCP (`mark_graph`); merges new nodes/edges into the existing store
 - `mark_backlinks` MCP tool: queries the stored graph for reverse links
 - TUI loads the stored graph instantly on `d`, then runs a live crawl in the background to discover new links
-- Graph as content: `Store.Export()` renders the graph as publishable markdown with `mark://` links (six-column Edges table: `From | To | Rel | Label | Anchor | Count`); `ParseExport()` parses it back, accepting the legacy two-column shape too; CLI `demarkus graph export` and MCP `mark_graph_export` tool
+- Graph as content: `Store.Export()` renders the graph as publishable markdown with `mark://` links (six-column Edges table: `From | To | Rel | Label | Anchor | Count`); `ParseExport()` parses it back; CLI `demarkus graph export` and MCP `mark_graph_export` tool
 - Edge semantics: edges carry provenance (link label, source section anchor, occurrence count) and typed relations ingested from `rel-<predicate>` publisher metadata (ADR 0004)
 - Agent discovery: `mark_graph_publish` MCP tool exports and publishes the graph in one step; other agents crawl the published document to inherit the topology without recrawling original servers
-- Atomic graph snapshots: `demarkus-agent` publishes version-pinned node and edge shards under `/graph/`, commits `/graph/manifest.md` last, and then updates legacy `/graph.md`; seeders verify the complete snapshot before applying it
+- Atomic graph snapshots: `demarkus-agent` publishes version-pinned node and edge shards under `/graph/`, commits `/graph/manifest.md` last, and then updates `/graph.md`; seeders verify the complete snapshot before applying it
 - Federation crawler exception: generated `/graph.md` and `/graph/` documents are crawled but never reinterpreted as authored edges or discovery links
 
 ### Later architecture decisions

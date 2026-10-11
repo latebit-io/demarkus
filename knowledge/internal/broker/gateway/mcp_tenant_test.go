@@ -361,7 +361,7 @@ func TestMemoryGraphSourcesIsolated(t *testing.T) {
 }
 
 func TestMemoryGraphSeedSourcesIsolated(t *testing.T) {
-	for _, format := range []string{"legacy", "snapshot"} {
+	for _, format := range []string{"export", "snapshot"} {
 		t.Run(format, func(t *testing.T) { testMemoryGraphSeedSources(t, format) })
 	}
 }
@@ -394,7 +394,7 @@ func testMemoryGraphSeedSources(t *testing.T, format string) {
 			responses := make(map[string]protocol.Response)
 			for _, tenant := range order {
 				body := tenantSeedGraph(tenant).Export()
-				if format == "legacy" {
+				if format == "export" {
 					responses[tenant+"-w/graph.md"] = protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: map[string]string{"etag": "same-etag"}}
 					continue
 				}

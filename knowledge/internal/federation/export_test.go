@@ -26,7 +26,7 @@ func (h *harness) withBeta() {
 func awaitExport(t *testing.T, hub generation.IO, want map[string]string) {
 	t.Helper()
 	poll(t, "export", func() error {
-		head, err := hub.Fetch(context.Background(), graphstore.LegacyExportPath)
+		head, err := hub.Fetch(context.Background(), graphstore.GraphExportPath)
 		if err != nil {
 			return err
 		}
@@ -98,7 +98,7 @@ func TestExporterRendersFromTheHubAgainAfterAConflict(t *testing.T) {
 
 	// A newer term emptied beta's checkpoint and wrote the export.
 	h.rewriteManifest("beta", func(m *graphstore.WorldManifest) { m.Shards = nil })
-	if _, err := h.hub.publish(context.Background(), graphstore.LegacyExportPath, "# Document Graph\n", -1); err != nil {
+	if _, err := h.hub.publish(context.Background(), graphstore.GraphExportPath, "# Document Graph\n", -1); err != nil {
 		t.Fatal(err)
 	}
 

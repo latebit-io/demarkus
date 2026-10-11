@@ -22,10 +22,7 @@ var testLogger = slog.New(slog.DiscardHandler)
 // openWatched opens root with the document index built and WATCH on.
 func openWatched(t *testing.T, root string, ring int) (*Store, *changefeed.Hub) {
 	t.Helper()
-	documents, err := protocolstore.Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	documents := protocolstore.New(root)
 	if err := documents.BuildIndex(); err != nil {
 		t.Fatal(err)
 	}
@@ -135,10 +132,7 @@ func TestOutOfBandArchiveStartsNewEpoch(t *testing.T) {
 	epoch, head := hub.Epoch(), hub.Head()
 	closeStore(t, store)
 
-	documents, err := protocolstore.Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	documents := protocolstore.New(root)
 	if _, err := New(documents, catalog.New()).SetArchived(context.Background(), backend.ArchiveRequest{Path: "/d/a.md", Archived: true}); err != nil {
 		t.Fatal(err)
 	}

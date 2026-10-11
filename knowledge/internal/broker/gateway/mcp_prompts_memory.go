@@ -13,48 +13,39 @@ import (
 // ships as slash commands, restated for plugin-less hosts. Both address
 // the caller's single world; tenantGate scopes every tool call they trigger.
 
-// registerMemoryPrompts wires the memory prompts. Each pre-rename soul-* name
-// stays registered for one release on the same handler and arguments.
+// registerMemoryPrompts wires the memory prompts.
 func (g *Gateway) registerMemoryPrompts() {
 	prompts := []struct {
-		name, old string
-		desc      string
-		arg       mcp.PromptOption
-		handler   mcpserver.PromptHandlerFunc
+		name, desc string
+		arg        mcp.PromptOption
+		handler    mcpserver.PromptHandlerFunc
 	}{
-		{"memory-context", "soul-context",
+		{"memory-context",
 			"Restore working context from your memory: the index hub, recent journal entries, and active plans, digested into a short brief.",
 			mcp.WithArgument("focus", mcp.ArgumentDescription("optional subject to prioritize, e.g. a project or topic")),
 			memoryContextPrompt},
-		{"memory-journal", "soul-journal",
+		{"memory-journal",
 			"Record a dated journal entry in your memory: append what happened this session to today's journal document.",
 			mcp.WithArgument("entry", mcp.ArgumentDescription("optional summary of what to record; when omitted, distill the current conversation")),
 			memoryJournalPrompt},
-		{"memory-export", "soul-export",
+		{"memory-export",
 			"Export your whole memory to local files: walk every document and save it, so the service is never a lock-in.",
 			mcp.WithArgument("directory", mcp.ArgumentDescription("local directory to write the export into (default ./<prompt name>)")),
-			exportPrompt("./memory-export")},
+			memoryExportPrompt},
 	}
 	for _, p := range prompts {
 		g.mcpServer.AddPrompt(mcp.NewPrompt(p.name, mcp.WithPromptDescription(p.desc), p.arg), p.handler)
-		h := p.handler
-		if p.name == "memory-export" {
-			h = exportPrompt("./soul-export") // the alias keeps its pre-rename default
-		}
-		g.mcpServer.AddPrompt(mcp.NewPrompt(p.old, mcp.WithPromptDescription("Deprecated alias of "+p.name+"."), p.arg), h)
 	}
 }
 
-// exportPrompt builds the export handler with defaultDir used when the
-// directory argument is empty.
-func exportPrompt(defaultDir string) mcpserver.PromptHandlerFunc {
-	return func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-		dir := strings.TrimSpace(req.Params.Arguments["directory"])
-		if dir == "" {
-			dir = defaultDir
-		}
-		return memoryExportResult(dir), nil
+const memoryExportDir = "./memory-export"
+
+func memoryExportPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	dir := strings.TrimSpace(req.Params.Arguments["directory"])
+	if dir == "" {
+		dir = memoryExportDir
 	}
+	return memoryExportResult(dir), nil
 }
 
 func memoryExportResult(dir string) *mcp.GetPromptResult {

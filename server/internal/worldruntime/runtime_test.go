@@ -163,10 +163,7 @@ func TestRuntimeRejectsStaticTokensFileOutsideTokensDirectory(t *testing.T) {
 
 func mustOpenStore(t *testing.T) *protocolstore.Store {
 	t.Helper()
-	documents, err := protocolstore.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	documents := protocolstore.New(t.TempDir())
 	return documents
 }
 
@@ -378,10 +375,7 @@ func TestWriteRateLimited(t *testing.T) {
 
 func newTestRuntime(t *testing.T, config *Config) *Runtime {
 	t.Helper()
-	documents, err := protocolstore.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	documents := protocolstore.New(t.TempDir())
 	lookup := catalog.New()
 	store := filestore.New(documents, lookup)
 	config.Store = store

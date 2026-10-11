@@ -125,7 +125,7 @@ Maintains integrity and auditability.
 
 **Workflow:**
 1. The federation agent crawls its configured servers and publishes with `-publish-graph`.
-2. It commits an atomic `/graph/manifest.md` snapshot and then updates `/graph.md` for legacy readers.
+2. It commits an atomic `/graph/manifest.md` snapshot and then updates the single-document `/graph.md` export.
 3. Another snapshot-aware MCP client or broker fetches and verifies the manifest's version-pinned shards.
 4. The client imports the complete generation into its graph store without re-fetching every original document.
 

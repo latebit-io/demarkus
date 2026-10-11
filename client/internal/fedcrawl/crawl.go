@@ -471,7 +471,7 @@ func (c *Crawler) PublishGraphToHubs(ctx context.Context, client PublishClient) 
 		} else {
 			published = true
 		}
-		if err := c.publishDocument(ctx, client, host, graphstore.LegacyExportPath, body, token); err != nil {
+		if err := c.publishDocument(ctx, client, host, graphstore.GraphExportPath, body, token); err != nil {
 			publishErrs = append(publishErrs, fmt.Errorf("publish /graph.md to hub %s: %w", hub, err))
 		} else {
 			published = true

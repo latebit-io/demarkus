@@ -12,14 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/procscan"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/statefile"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/token"
@@ -30,73 +28,9 @@ import (
 
 const tokenLabel = "claude-code-plugin"
 
-// tokenPaths is the scope minted for the plugin token. legacyTokenPaths is the
-// pre-fix scope: path.Match's "*" does not cross "/", so it blocked writes to
-// nested docs; entries still carrying it are revoked and reminted.
-const (
-	tokenPaths       = "/**"
-	legacyTokenPaths = "/*"
-)
-
-// PathFor resolves the live tokens.toml for memoryDir: the out-of-root
-// path once migrated, a legacy <memoryDir>/tokens.toml until then (the running
-// server's -tokens flag still points there), the new path on fresh installs.
-func PathFor(memoryDir string) (string, error) {
-	newPath, err := config.ManagedTokensPath(memoryDir)
-	if err != nil {
-		return "", err
-	}
-	if config.FileExists(newPath) {
-		return newPath, nil
-	}
-	// TODO: drop the legacy branch once released installs have migrated.
-	if legacy := filepath.Join(memoryDir, "tokens.toml"); config.FileExists(legacy) {
-		return legacy, nil
-	}
-	return newPath, nil
-}
-
-// MigrateManaged moves a legacy <memoryDir>/tokens.toml to the out-of-root
-// path and returns the final path. Only call with the managed server stopped:
-// a live server reads the legacy path.
-func MigrateManaged(memoryDir string) (string, error) {
-	newPath, err := config.ManagedTokensPath(memoryDir)
-	if err != nil {
-		return "", err
-	}
-	legacy := filepath.Join(memoryDir, "tokens.toml")
-	if config.FileExists(newPath) {
-		// Retry a legacy cleanup that failed after a successful copy on a
-		// prior run; a leftover copy keeps token material in the content root.
-		if config.FileExists(legacy) {
-			if err := os.Remove(legacy); err != nil {
-				return "", fmt.Errorf("remove leftover legacy tokens.toml: %w", err)
-			}
-		}
-		return newPath, nil
-	}
-	if !config.FileExists(legacy) {
-		return newPath, nil // fresh install: Ensure populates it
-	}
-	if err := os.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
-		return "", err
-	}
-	if err := os.Rename(legacy, newPath); err != nil {
-		// Cross-device fallback: project memories can sit on another volume.
-		body, err := os.ReadFile(legacy)
-		if err != nil {
-			return "", fmt.Errorf("migrate tokens.toml out of memory root: %w", err)
-		}
-		if err := statefile.WriteFile(newPath, body, 0o600); err != nil {
-			return "", fmt.Errorf("migrate tokens.toml out of memory root: %w", err)
-		}
-		if err := os.Remove(legacy); err != nil {
-			return "", fmt.Errorf("remove legacy tokens.toml after copy: %w", err)
-		}
-	}
-	progress.Logf("moved tokens.toml out of the memory root (%s)", newPath)
-	return newPath, nil
-}
+// tokenPaths is the scope minted for the plugin token: "/**" so writes reach
+// nested documents (path.Match's "*" does not cross "/").
+const tokenPaths = "/**"
 
 // Ensure mints the plugin token (raw to plugin-memory.token, entry
 // to tokensTOML, which may live outside root, the server root used to find a
@@ -115,7 +49,7 @@ func Ensure(root, tokensTOML string) error {
 	if err != nil {
 		return err
 	}
-	if present && !scopeStale(&entry) && rawMatchesEntry(tokenFile, &entry) {
+	if present && rawMatchesEntry(tokenFile, &entry) {
 		// Reassert 0600 on the idempotent path: an existing token left
 		// world/group-readable (e.g. from an older install) would otherwise stay
 		// exposed forever since we return without regenerating.
@@ -235,12 +169,6 @@ func pluginEntry(tokensTOML string) (token.Entry, bool, error) {
 	}
 	entry, ok := f.Tokens[tokenLabel]
 	return entry, ok, nil
-}
-
-// scopeStale reports whether an entry still carries the legacy scope without
-// the current one. A manually widened entry listing both is left alone.
-func scopeStale(entry *token.Entry) bool {
-	return slices.Contains(entry.Paths, legacyTokenPaths) && !slices.Contains(entry.Paths, tokenPaths)
 }
 
 // withUmask runs fn with the process umask set to mask, restoring it after.

@@ -161,7 +161,6 @@ func provisionLocked() (int, error) {
 		return 0, fmt.Errorf("unknown MODE in plugin-memory.conf: %s", cfg.Mode)
 	}
 
-	seed.CleanupLegacyTemplate(cfg.MemoryDir) // local-only; runs even when seeding is skipped
 	progress.Logf("ready (mode=%s, memory=%s, port=%s)", cfg.Mode, cfg.MemoryDir, cfg.Port)
 	if !seedAfter {
 		port = 0
@@ -222,7 +221,7 @@ func doIsolated() error {
 // on port, proves the token authenticates end to end (setup success must mean
 // writes work, not that files were written), then records the config.
 func setupManaged(mode, memory string, port int) error {
-	tokensTOML, err := tokens.PathFor(memory)
+	tokensTOML, err := config.ManagedTokensPath(memory)
 	if err != nil {
 		return err
 	}
@@ -366,7 +365,7 @@ func VerifyAuth() (string, error) {
 		if cfg.Mode == "reuse" {
 			tokensTOML = filepath.Join(cfg.MemoryDir, "tokens.toml")
 		} else {
-			p, err := tokens.PathFor(cfg.MemoryDir)
+			p, err := config.ManagedTokensPath(cfg.MemoryDir)
 			if err != nil {
 				return "", fmt.Errorf("resolve token registry for %s: %w", cfg.MemoryDir, err)
 			}

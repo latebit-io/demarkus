@@ -234,7 +234,7 @@ func TestSeedFindsAggregateOnAnotherWorld(t *testing.T) {
 		probed[c.Host]++
 	}
 	if probed["team-a"] != 2 || probed["hub"] != 2 || len(probed) != 2 {
-		t.Errorf("seed probes = %v, want snapshot and legacy checks per world", probed)
+		t.Errorf("seed probes = %v, want snapshot and export checks per world", probed)
 	}
 }
 
@@ -264,7 +264,7 @@ func TestHandleMarkBacklinksColdPodSeedsFromWorldGraph(t *testing.T) {
 		t.Errorf("source revalidation fetches = %d, want 1", len(d.FetchCalls))
 	}
 	if len(d.SeedCalls) != 2 || d.SeedCalls[0].Path != graphstore.SnapshotManifestPath || d.SeedCalls[1].Path != "/graph.md" {
-		t.Errorf("fetchCondCalls = %+v, want snapshot then legacy checks", d.SeedCalls)
+		t.Errorf("fetchCondCalls = %+v, want snapshot then export checks", d.SeedCalls)
 	}
 }
 

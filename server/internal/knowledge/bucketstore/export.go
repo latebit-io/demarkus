@@ -70,7 +70,7 @@ func ExportDocs(ctx context.Context, objects blob.Store, options ExportOptions, 
 			versions[index] = storefmt.StoredVersion{Version: retained.entry.Version, Stored: bytes.Clone(raw), Modified: retained.modified}
 		}
 		document := storefmt.StoredDocument{Versions: versions, Archived: entry.Archived}
-		if err := storefmt.ValidateImport(path, document); err != nil {
+		if err := storefmt.ValidateExport(path, document); err != nil {
 			return fmt.Errorf("export %s: %w", path, err)
 		}
 		if err := fn(path, document); err != nil {

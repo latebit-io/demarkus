@@ -24,8 +24,6 @@ type Input struct {
 	// session-end signals: supplied by the adapter (pi, Cursor) or derived from
 	// TranscriptPath (Claude); the two sources are OR-merged.
 	Signals
-	// LegacyMemoryWrite is the pre-rename key older adapters still send.
-	LegacyMemoryWrite bool `json:"soulWrite"`
 	// Claude hook payload fields (used when Tool/Input are absent) so an adapter
 	// can pipe the raw Claude payload verbatim. UserPromptSubmit carries `prompt`
 	// (already mapped above); PostToolUse carries tool_name/tool_input.
@@ -59,7 +57,6 @@ const journalNudge = "This session changed files but recorded nothing to demarku
 
 // Evaluate dispatches on the event and returns the nudge text (or empty).
 func Evaluate(in *Input) (Output, error) {
-	in.MemoryWrite = in.MemoryWrite || in.LegacyMemoryWrite
 	// Accept the Claude PostToolUse shape (tool_name/tool_input) for promote.
 	if in.Tool == "" && in.ToolName != "" {
 		in.Tool = in.ToolName

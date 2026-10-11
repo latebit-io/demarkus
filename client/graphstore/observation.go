@@ -161,7 +161,7 @@ func generatedGraphURL(raw string) bool {
 // IsGeneratedGraphPath reports whether docPath, or a version of it, is graph
 // data this package publishes rather than an authored document.
 func IsGeneratedGraphPath(docPath string) bool {
-	return generatedGraphPath(docPath, LegacyExportPath) || generatedGraphPath(docPath, SnapshotManifestPath) ||
+	return generatedGraphPath(docPath, GraphExportPath) || generatedGraphPath(docPath, SnapshotManifestPath) ||
 		strings.HasPrefix(docPath, SnapshotShardRoot(SnapshotManifestPath)+"/") || strings.HasPrefix(docPath, WorldGraphRoot+"/")
 }
 

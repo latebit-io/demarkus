@@ -18,26 +18,6 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
-func TestScopeStale(t *testing.T) {
-	tests := []struct {
-		name  string
-		paths []string
-		stale bool
-	}{
-		{"legacy single-segment scope", []string{"/*"}, true},
-		{"recursive scope", []string{"/**"}, false},
-		{"both patterns present", []string{"/*", "/**"}, false},
-		{"unrelated scope", []string{"/docs/*"}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := scopeStale(&token.Entry{Paths: tt.paths}); got != tt.stale {
-				t.Errorf("scopeStale(%v) = %v, want %v", tt.paths, got, tt.stale)
-			}
-		})
-	}
-}
-
 func TestPluginEntry(t *testing.T) {
 	dir := t.TempDir()
 	pluginStanza := token.FormatEntry(tokenLabel, &token.Entry{Hash: "abc", Paths: []string{"/*"}, Operations: []string{"publish"}})
@@ -246,79 +226,6 @@ func TestEnsureTokenEntryReload(t *testing.T) {
 	}
 	if !config.FileExists(tokenFile) {
 		t.Error("token file missing after successful retry")
-	}
-}
-
-// TestManagedTokensMigration pins the #289 follow-up: tokens.toml moves out of
-// the content root on respawn; resolution prefers legacy until migrated.
-func TestManagedTokensMigration(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	memory := filepath.Join(home, "memory")
-	if err := os.MkdirAll(memory, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	newPath, err := config.ManagedTokensPath(memory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.HasPrefix(newPath, memory+string(os.PathSeparator)) {
-		t.Fatalf("managed tokens path %s is inside the memory root", newPath)
-	}
-
-	// Fresh install: nothing on disk resolves to the new path.
-	if got, err := PathFor(memory); err != nil || got != newPath {
-		t.Fatalf("fresh tokensPathFor = %q, %v; want %q", got, err, newPath)
-	}
-
-	// A legacy file wins resolution until migrated: the running server's
-	// -tokens flag still points there.
-	legacy := filepath.Join(memory, "tokens.toml")
-	if err := os.WriteFile(legacy, []byte("[tokens]\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := PathFor(memory); err != nil || got != legacy {
-		t.Fatalf("unmigrated tokensPathFor = %q, %v; want %q", got, err, legacy)
-	}
-
-	// Migration moves the file, preserving content; resolution flips.
-	migrated, err := MigrateManaged(memory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if migrated != newPath {
-		t.Fatalf("migrateManagedTokens = %q, want %q", migrated, newPath)
-	}
-	data, err := os.ReadFile(newPath)
-	if err != nil || string(data) != "[tokens]\n" {
-		t.Fatalf("migrated content = %q, %v; want original body", data, err)
-	}
-	if config.FileExists(legacy) {
-		t.Error("legacy tokens.toml still present after migration")
-	}
-	if got, err := PathFor(memory); err != nil || got != newPath {
-		t.Fatalf("post-migration tokensPathFor = %q, %v; want %q", got, err, newPath)
-	}
-
-	// Idempotent rerun leaves the migrated file alone.
-	if again, err := MigrateManaged(memory); err != nil || again != newPath {
-		t.Fatalf("rerun migrateManagedTokens = %q, %v; want %q", again, err, newPath)
-	}
-
-	// A leftover legacy file (failed removal after a prior copy) is cleaned up
-	// on the next run without touching the migrated file.
-	if err := os.WriteFile(legacy, []byte("leftover"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := MigrateManaged(memory); err != nil || got != newPath {
-		t.Fatalf("leftover-cleanup migrateManagedTokens = %q, %v; want %q", got, err, newPath)
-	}
-	if config.FileExists(legacy) {
-		t.Error("leftover legacy tokens.toml not removed on rerun")
-	}
-	if data, err := os.ReadFile(newPath); err != nil || string(data) != "[tokens]\n" {
-		t.Fatalf("migrated file changed by leftover cleanup: %q, %v", data, err)
 	}
 }
 

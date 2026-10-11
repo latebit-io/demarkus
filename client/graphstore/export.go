@@ -24,10 +24,6 @@ var nodeRowRe = regexp.MustCompile(`^\|\s*\[[^\]]+\]\(([^)]+)\)\s*\|\s*((?:[^\\|
 // Rel and anchor may be empty; the label group handles escaped pipes like nodeRowRe's title.
 var edgeRowRe = regexp.MustCompile(`^\|\s*(\S+)\s*\|\s*(\S+)\s*\|\s*(\S*)\s*\|\s*((?:[^\\|]|\\.)*?)\s*\|\s*(\S*)\s*\|\s*(\d+)\s*\|$`)
 
-// legacyEdgeRowRe matches the pre-enrichment two-column row: | from | to |
-// Published /graph.md documents in the wild still carry this shape.
-var legacyEdgeRowRe = regexp.MustCompile(`^\|\s*(\S+)\s*\|\s*(\S+)\s*\|$`)
-
 // Export renders the graph store as a publishable markdown document.
 // The output contains mark:// links so crawling the document naturally
 // discovers the topology. Thread-safe.
@@ -188,8 +184,6 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 				LinkCount: linkCount,
 			})
 		case "edges":
-			// The two shapes are $-anchored with disjoint column counts,
-			// so they cannot cross-match; enriched first for clarity.
 			if m := edgeRowRe.FindStringSubmatch(trimmed); m != nil {
 				// Digits only per the regex; overflow falls to the floor of one below.
 				count, _ := strconv.Atoi(m[6])
@@ -201,16 +195,12 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 					Anchor: m[5],
 					Count:  max(count, 1),
 				})
-				continue
-			}
-			if m := legacyEdgeRowRe.FindStringSubmatch(trimmed); m != nil {
-				edges = append(edges, StoredEdge{From: m[1], To: m[2], Count: 1})
 			}
 		}
 	}
 
 	if err := readExportObservations(body, nodes); err != nil {
-		// The permissive legacy API cannot return errors; retain unknown freshness.
+		// The permissive parser cannot return errors; retain unknown freshness.
 		for i := range nodes {
 			nodes[i].Observation = graph.Observation{}
 			nodes[i].Etag = ""
@@ -219,7 +209,7 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 	return nodes, edges
 }
 
-// ParseExportStrict validates a generated legacy export before parsing it.
+// ParseExportStrict validates a generated export before parsing it.
 func ParseExportStrict(body string) ([]StoredNode, []StoredEdge, error) {
 	if len(body) > protocol.MaxBodyLength {
 		return nil, nil, fmt.Errorf("graph export exceeds body limit: %d", len(body))
@@ -310,7 +300,6 @@ func normalizeStrictExport(nodes []StoredNode, edges []StoredEdge) error {
 func validateExportTables(body string, requireEdges bool) error { //nolint:gocyclo // strict state-machine validation stays linear
 	section := ""
 	rowIndex := 0
-	edgeColumns := 6
 	foundNodes, foundEdges := false, false
 	for line := range strings.SplitSeq(body, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -339,9 +328,6 @@ func validateExportTables(body string, requireEdges bool) error { //nolint:gocyc
 			want := "| URL | Title | Status | Links |"
 			if section == "edges" {
 				want = "| From | To | Rel | Label | Anchor | Count |"
-				if trimmed == "| From | To |" {
-					want, edgeColumns = trimmed, 2
-				}
 			}
 			if trimmed != want {
 				return fmt.Errorf("invalid graph %s header", section)
@@ -352,7 +338,7 @@ func validateExportTables(body string, requireEdges bool) error { //nolint:gocyc
 			cells := strings.Split(strings.Trim(trimmed, "|"), "|")
 			wantColumns := 4
 			if section == "edges" {
-				wantColumns = edgeColumns
+				wantColumns = 6
 			}
 			if len(cells) != wantColumns {
 				return fmt.Errorf("invalid graph %s separator", section)
@@ -372,12 +358,6 @@ func validateExportTables(body string, requireEdges bool) error { //nolint:gocyc
 			}
 			if _, err := strconv.Atoi(match[4]); err != nil {
 				return fmt.Errorf("invalid graph node link count %q", match[4])
-			}
-			continue
-		}
-		if edgeColumns == 2 {
-			if legacyEdgeRowRe.FindStringSubmatch(trimmed) == nil {
-				return fmt.Errorf("invalid graph edge row %q", trimmed)
 			}
 			continue
 		}

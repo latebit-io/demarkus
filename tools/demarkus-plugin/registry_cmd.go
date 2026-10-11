@@ -122,14 +122,14 @@ func fail(msg string) {
 // bash and the mcp-config.mjs JS; the switch below is the subcommand list.
 func cmdRegistry(args []string) {
 	if len(args) == 0 {
-		fail("registry: missing subcommand (mcp|memory-join (alias soul-join)|memory-default (alias soul-default)|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|policy-mirror|promote-target|detect-promote|project)")
+		fail("registry: missing subcommand (mcp|memory-join|memory-default|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|policy-mirror|promote-target|detect-promote|project)")
 	}
 	switch args[0] {
 	case "mcp":
 		registryMcp(args[1:])
-	case "memory-join", "soul-join": // soul-* names: aliases kept for older plugin scripts
+	case "memory-join":
 		registryMemoryJoin(args[1:])
-	case "memory-default", "soul-default":
+	case "memory-default":
 		registryMemoryDefault(args[1:])
 	case "project":
 		registryProject(args[1:])
@@ -553,12 +553,10 @@ func mcpServeEnv(base []string, token string) []string {
 }
 
 // cmdMcpServe launches demarkus-mcp for the local memory or a joined remote one
-// (--memory <slug>), injecting DEMARKUS_AUTH from the shared state. --soul stays
-// accepted: older plugin versions persisted it in users' .mcp.json entries.
+// (--memory <slug>), injecting DEMARKUS_AUTH from the shared state.
 func cmdMcpServe(args []string) {
 	fs := flag.NewFlagSet("mcp-serve", flag.ExitOnError)
 	memory := fs.String("memory", "", "joined remote-memory slug (omit for the local managed memory)")
-	fs.StringVar(memory, "soul", "", "deprecated alias of -memory")
 	name := fs.String("name", "", "MCP server name a branded plugin registers the local memory under; recorded so gates resolve it")
 	_ = fs.Parse(args) // ExitOnError: Parse never returns
 

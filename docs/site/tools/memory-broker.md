@@ -42,4 +42,4 @@ With dynamic provisioning, a brand-new identity's first call creates the world a
 
 ## Getting your data out
 
-The `soul-export` prompt walks every document in your world and saves each one verbatim to local files with a manifest. The memory is yours; the service is not a lock-in.
+The `memory-export` prompt walks every document in your world and saves each one verbatim to local files with a manifest. The memory is yours; the service is not a lock-in.
