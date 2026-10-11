@@ -31,7 +31,7 @@ type Profile struct {
 }
 
 // KnowledgeProfile is the demarkus-knowledge-broker surface:
-// all 17 tools, org-open reads, per-world Allow writes.
+// all 15 tools, org-open reads, per-world Allow writes.
 func KnowledgeProfile() *Profile {
 	return &Profile{
 		Name:         core.ProfileKnowledge,
@@ -41,9 +41,9 @@ func KnowledgeProfile() *Profile {
 	}
 }
 
-// MemoryProfile is the demarkus-memory-broker surface: mark_*
-// minus federation/multi-world (mark_lookup_all, mark_index, mark_resolve)
-// and minus whole-store graph exports, which would leak cross-tenant edges.
+// MemoryProfile is the demarkus-memory-broker surface: mark_* minus
+// multi-world lookup (mark_lookup_all) and minus whole-store graph exports,
+// which would leak cross-tenant edges.
 func MemoryProfile() *Profile {
 	return &Profile{
 		Name:         core.ProfileMemory,

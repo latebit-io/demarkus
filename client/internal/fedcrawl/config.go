@@ -1,5 +1,5 @@
 // Package fedcrawl provides multi-server federation crawling for the Mark Protocol.
-// It discovers servers, collects content hashes, and publishes indexes to hubs.
+// It discovers servers, accumulates the link graph, and publishes it to hubs.
 package fedcrawl
 
 import (
@@ -18,7 +18,7 @@ import (
 // Config holds the crawler configuration loaded from a TOML file.
 type Config struct {
 	Seeds []string `toml:"seeds"` // Initial servers to crawl (mark://host:port)
-	Hubs  []string `toml:"hubs"`  // Servers to publish indexes to
+	Hubs  []string `toml:"hubs"`  // Servers to publish the graph to
 	// Endpoints maps logical Mark authorities to transport routes. This lets
 	// broker-style world names remain graph/token identity while agents dial
 	// cluster-internal addresses with the SNI required by a shared listener.
@@ -55,10 +55,10 @@ type PolitenessConfig struct {
 	PerServerConcurrency int           `toml:"per_server_concurrency"` // Max concurrent requests per server (default: 2)
 }
 
-// PublishConfig controls hub publications (hash indexes and /graph.md).
+// PublishConfig controls hub publications (/graph.md and the graph snapshot).
 type PublishConfig struct {
-	// Retention caps graph and index-manifest histories. Version-pinned index
-	// shards omit retention so reachable manifest versions stay readable.
+	// Retention caps the /graph.md and graph manifest histories; version-pinned
+	// graph shards omit retention so reachable manifest versions stay readable.
 	// 0 keeps every version. (default: 20)
 	Retention int `toml:"retention"`
 }

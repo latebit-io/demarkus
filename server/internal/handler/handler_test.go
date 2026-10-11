@@ -102,41 +102,13 @@ func testHandleFetch(t *testing.T, newBackend backendFactory) {
 		}
 	})
 
-	t.Run("fetch by content hash", func(t *testing.T) {
-		// Both backends index the body hash on write; no rebuild needed.
-		// First fetch to get the content-hash
-		stream := newMockStream("FETCH /hello.md\n")
-		h.HandleStream(context.Background(), stream)
-		resp, err := protocol.ParseResponse(&stream.output)
-		if err != nil {
-			t.Fatalf("parse response: %v", err)
-		}
-		contentHash := resp.Metadata["content-hash"]
-
-		// Now fetch by hash
-		stream2 := newMockStream("FETCH /" + contentHash + "\n")
-		h.HandleStream(context.Background(), stream2)
-		resp2, err := protocol.ParseResponse(&stream2.output)
-		if err != nil {
-			t.Fatalf("parse response: %v", err)
-		}
-		if resp2.Status != protocol.StatusOK {
-			t.Errorf("status: got %q, want %q", resp2.Status, protocol.StatusOK)
-		}
-		if !strings.Contains(resp2.Body, "# Hello World") {
-			t.Errorf("body missing content: %q", resp2.Body)
-		}
-	})
-
-	t.Run("fetch by unknown hash", func(t *testing.T) {
-		stream := newMockStream("FETCH /sha256-0000000000000000000000000000000000000000000000000000000000000000\n")
-		h.HandleStream(context.Background(), stream)
-		resp, err := protocol.ParseResponse(&stream.output)
-		if err != nil {
-			t.Fatalf("parse response: %v", err)
-		}
-		if resp.Status != protocol.StatusNotFound {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusNotFound)
+	t.Run("reserved hash path answers not-found", func(t *testing.T) {
+		// Whether or not a document with that body exists (ADR 0035).
+		held := sendLookup(t, h, "FETCH /hello.md\n").Metadata["content-hash"]
+		for _, hash := range []string{held, storefmt.ContentHash([]byte("absent"))} {
+			if resp := sendLookup(t, h, "FETCH /"+hash+"\n"); resp.Status != protocol.StatusNotFound {
+				t.Errorf("FETCH /%s = %q, want not-found", hash, resp.Status)
+			}
 		}
 	})
 
@@ -1564,30 +1536,6 @@ func TestParseVersionPath(t *testing.T) {
 	}
 }
 
-func TestIsHashPath(t *testing.T) {
-	tests := []struct {
-		path string
-		hash string
-		ok   bool
-	}{
-		{"/sha256-" + strings.Repeat("ab", 32), "sha256-" + strings.Repeat("ab", 32), true},
-		{"/sha256-0000000000000000000000000000000000000000000000000000000000000000", "sha256-0000000000000000000000000000000000000000000000000000000000000000", true},
-		{"/sha256-short", "", false},
-		{"/doc.md", "", false},
-		{"/sha256-" + strings.Repeat("GG", 32), "", false}, // uppercase not valid
-		{"/sha256-" + strings.Repeat("ab", 32) + "extra", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			hash, ok := protocol.IsHashPath(tt.path)
-			if ok != tt.ok || hash != tt.hash {
-				t.Errorf("IsHashPath(%q) = (%q, %v), want (%q, %v)",
-					tt.path, hash, ok, tt.hash, tt.ok)
-			}
-		})
-	}
-}
-
 func TestHandleArchive(t *testing.T) { forEachBackend(t, testHandleArchive) }
 
 func TestArchiveUsesCommittedResult(t *testing.T) {
@@ -2479,50 +2427,6 @@ func testReadAuth(t *testing.T, newBackend backendFactory) {
 		}
 	})
 
-	t.Run("FETCH by hash protected path without token", func(t *testing.T) {
-		// First fetch the doc with auth to get its content hash.
-		stream := newMockStream("FETCH /private/secret.md\n---\nauth: " + readSecret + "\n---\n")
-		h.HandleStream(context.Background(), stream)
-		resp, err := protocol.ParseResponse(&stream.output)
-		if err != nil {
-			t.Fatalf("parse response: %v", err)
-		}
-		hash := resp.Metadata["content-hash"]
-		if hash == "" {
-			t.Fatal("no content-hash in response")
-		}
-
-		// Now try fetching by hash without auth — should be denied.
-		stream = newMockStream("FETCH /" + hash + "\n")
-		h.HandleStream(context.Background(), stream)
-		resp, err = protocol.ParseResponse(&stream.output)
-		if err != nil {
-			t.Fatalf("parse response: %v", err)
-		}
-		if resp.Status != protocol.StatusUnauthorized {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusUnauthorized)
-		}
-	})
-
-	t.Run("FETCH by hash protected path with valid token", func(t *testing.T) {
-		stream := newMockStream("FETCH /private/secret.md\n---\nauth: " + readSecret + "\n---\n")
-		h.HandleStream(context.Background(), stream)
-		resp, err := protocol.ParseResponse(&stream.output)
-		if err != nil {
-			t.Fatalf("parse response: %v", err)
-		}
-		hash := resp.Metadata["content-hash"]
-
-		stream = newMockStream("FETCH /" + hash + "\n---\nauth: " + readSecret + "\n---\n")
-		h.HandleStream(context.Background(), stream)
-		resp, err = protocol.ParseResponse(&stream.output)
-		if err != nil {
-			t.Fatalf("parse response: %v", err)
-		}
-		if resp.Status != protocol.StatusOK {
-			t.Errorf("status: got %q, want %q", resp.Status, protocol.StatusOK)
-		}
-	})
 }
 
 func TestDirectoryReadAuthFiltering(t *testing.T) {
@@ -2663,48 +2567,57 @@ func testDirectoryReadAuthFiltering(t *testing.T, newBackend backendFactory) {
 	})
 }
 
-type hashResultView struct {
+// untouchedView fails the test on any read: a reserved path must be answered
+// without asking the store.
+type untouchedView struct {
 	storagebackend.ReadView
-	path string
-	err  error
+	t *testing.T
 }
 
-func (v *hashResultView) LookupHash(context.Context, string) (string, error) {
-	return v.path, v.err
+func (v *untouchedView) touched(method string) {
+	v.t.Errorf("store %s called for a reserved hash path", method)
 }
 
-func TestFetchHashLookupFailure(t *testing.T) {
-	forEachBackend(t, testFetchHashLookupFailure)
+func (v *untouchedView) Get(context.Context, string, int) (*storefmt.Document, error) {
+	v.touched("Get")
+	return nil, storagebackend.ErrNotFound
 }
 
-func testFetchHashLookupFailure(t *testing.T, newBackend backendFactory) {
-	hashPath := "/sha256-0000000000000000000000000000000000000000000000000000000000000000"
-	tests := []struct {
-		name string
-		path string
-		err  error
-		want string
-	}{
-		{"backend error", "", errors.New("storage unavailable"), protocol.StatusServerError},
-		{"resolved path disappeared", "/missing.md", nil, protocol.StatusServerError},
+func (v *untouchedView) IsDir(context.Context, string) (bool, error) {
+	v.touched("IsDir")
+	return false, storagebackend.ErrNotFound
+}
+
+func (v *untouchedView) ListEntries(context.Context, string, storefmt.ListOptions) ([]storefmt.DirEntry, error) {
+	v.touched("ListEntries")
+	return nil, storagebackend.ErrNotFound
+}
+
+func (v *untouchedView) Versions(context.Context, string) ([]storefmt.VersionInfo, error) {
+	v.touched("Versions")
+	return nil, storagebackend.ErrNotFound
+}
+
+func TestReservedHashPathSkipsStore(t *testing.T) { forEachBackend(t, testReservedHashPathSkipsStore) }
+
+func testReservedHashPathSkipsStore(t *testing.T, newBackend backendFactory) {
+	hashPath := "/" + storefmt.ContentHash([]byte("absent"))
+	b := newBackend(t)
+	h := newHandler(b, nil)
+	h.store = &viewStore{DocumentStore: b.Store, wrap: func(view storagebackend.ReadView) storagebackend.ReadView {
+		return &untouchedView{ReadView: view, t: t}
+	}}
+	tests := []struct{ request, want string }{
+		{"FETCH " + hashPath + "\n", protocol.StatusNotFound},
+		{"LIST " + hashPath + "\n", protocol.StatusNotFound},
+		{"VERSIONS " + hashPath + "\n", protocol.StatusNotFound},
+		{"PUBLISH " + hashPath + "\n\n# Body\n", protocol.StatusBadRequest},
+		{"WATCH " + hashPath + "\n", protocol.StatusBadRequest},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			b := newBackend(t)
-			h := newHandler(b, nil)
-			h.store = &viewStore{DocumentStore: b.Store, wrap: func(view storagebackend.ReadView) storagebackend.ReadView {
-				return &hashResultView{ReadView: view, path: test.path, err: test.err}
-			}}
-			stream := newMockStream("FETCH " + hashPath + "\n")
-			h.HandleStream(context.Background(), stream)
-			resp, err := protocol.ParseResponse(&stream.output)
-			if err != nil {
-				t.Fatalf("parse response: %v", err)
-			}
-			if resp.Status != test.want {
-				t.Errorf("status = %q, want %q", resp.Status, test.want)
-			}
-		})
+	for _, tt := range tests {
+		if resp := sendLookup(t, h, tt.request); resp.Status != tt.want {
+			t.Errorf("%q = %q, want %q", tt.request, resp.Status, tt.want)
+		}
 	}
 }
 

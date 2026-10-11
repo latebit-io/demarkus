@@ -218,16 +218,8 @@ func TestCrawlerSingleServer(t *testing.T) {
 	if result.DocumentsCrawled != 2 {
 		t.Errorf("DocumentsCrawled = %d, want 2", result.DocumentsCrawled)
 	}
-	if result.HashesCollected != 2 {
-		t.Errorf("HashesCollected = %d, want 2", result.HashesCollected)
-	}
 	if result.Incomplete {
 		t.Errorf("Incomplete = true, errors = %v", result.Errors)
-	}
-
-	hashes := crawler.Hashes()
-	if len(hashes) != 2 {
-		t.Errorf("len(Hashes()) = %d, want 2", len(hashes))
 	}
 }
 
@@ -299,13 +291,6 @@ func TestCrawlerMarksIncompleteResponses(t *testing.T) {
 			setup: func(client *mockClient) {
 				client.addList("example.com:6309", "/", "a.md")
 				client.pages["example.com:6309/a.md"] = mockPage{status: protocol.StatusNotFound}
-			},
-		},
-		{
-			name: "missing content hash",
-			setup: func(client *mockClient) {
-				client.addList("example.com:6309", "/", "a.md")
-				client.addDoc("example.com:6309", "/a.md", "# A", "")
 			},
 		},
 	}
@@ -466,7 +451,7 @@ func TestCrawlerRunRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestCrawlerHashesGraphExportWithoutRecrawlingIt(t *testing.T) {
+func TestCrawlerFetchesGraphExportWithoutRecrawlingIt(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Seeds = []string{"mark://content"}
 
@@ -487,8 +472,8 @@ func TestCrawlerHashesGraphExportWithoutRecrawlingIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
-	if result.ServersDiscovered != 1 || result.DocumentsCrawled != 4 || result.HashesCollected != 4 {
-		t.Fatalf("result = %+v, want graph hashed without projected server crawl", result)
+	if result.ServersDiscovered != 1 || result.DocumentsCrawled != 4 {
+		t.Fatalf("result = %+v, want graph fetched without projected server crawl", result)
 	}
 	graph := crawler.GraphExport()
 	if strings.Contains(graph, "/graph.md") || strings.Contains(graph, "/graph/") || strings.Contains(graph, "mark://projected") {
@@ -745,9 +730,6 @@ func TestCrawlerSubdirectories(t *testing.T) {
 	if result.DocumentsCrawled != 3 {
 		t.Errorf("DocumentsCrawled = %d, want 3", result.DocumentsCrawled)
 	}
-	if result.HashesCollected != 3 {
-		t.Errorf("HashesCollected = %d, want 3", result.HashesCollected)
-	}
 }
 
 func TestCrawlerWithState(t *testing.T) {
@@ -787,7 +769,7 @@ func TestCrawlerWithState(t *testing.T) {
 	}
 }
 
-func TestPublishIndex(t *testing.T) {
+func TestPublishDocument(t *testing.T) {
 	tests := []struct {
 		name       string
 		status     string
@@ -806,7 +788,7 @@ func TestPublishIndex(t *testing.T) {
 			client.publishStatuses["hub.example.com:6309/index.md"] = tt.status
 
 			crawler := NewCrawler(DefaultConfig(), client, nil, nil)
-			err := crawler.publishIndex(context.Background(), client, "hub.example.com:6309", "/index.md", "# Index\n", "tok")
+			err := crawler.publishDocument(context.Background(), client, "hub.example.com:6309", "/index.md", "# Index\n", "tok")
 
 			if tt.wantErr {
 				if err == nil {
@@ -844,13 +826,13 @@ func TestPublishIndex(t *testing.T) {
 	}
 }
 
-func TestPublishIndexRePublish(t *testing.T) {
+func TestPublishDocumentRePublish(t *testing.T) {
 	// Two consecutive publishes to the same path: first returns created,
 	// second returns ok. Both must succeed (the daemon-mode case).
 	client := newMockClient()
 	crawler := NewCrawler(DefaultConfig(), client, nil, nil)
 
-	if err := crawler.publishIndex(context.Background(), client, "hub.example.com:6309", "/index.md", "# v1\n", "tok"); err != nil {
+	if err := crawler.publishDocument(context.Background(), client, "hub.example.com:6309", "/index.md", "# v1\n", "tok"); err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
 
@@ -858,7 +840,7 @@ func TestPublishIndexRePublish(t *testing.T) {
 	client.publishStatuses["hub.example.com:6309/index.md"] = protocol.StatusOK
 	client.mu.Unlock()
 
-	if err := crawler.publishIndex(context.Background(), client, "hub.example.com:6309", "/index.md", "# v2\n", "tok"); err != nil {
+	if err := crawler.publishDocument(context.Background(), client, "hub.example.com:6309", "/index.md", "# v2\n", "tok"); err != nil {
 		t.Fatalf("second publish: %v", err)
 	}
 
@@ -870,101 +852,6 @@ func TestPublishIndexRePublish(t *testing.T) {
 			t.Errorf("publishes[%d].ExpectedVersion = %d, want -1 (no-check) for idempotent re-publish", i, call.ExpectedVersion)
 		}
 	}
-}
-
-func TestPublishToHubs(t *testing.T) {
-	t.Run("no hubs returns zero publishes", func(t *testing.T) {
-		cfg := DefaultConfig()
-		cfg.Seeds = []string{"mark://example.com"}
-		// no hubs configured
-		client := newMockClient()
-		crawler := NewCrawler(cfg, client, nil, nil)
-		count, err := crawler.PublishToHubs(context.Background(), client, false)
-		if err != nil {
-			t.Fatalf("PublishToHubs() error: %v", err)
-		}
-		if count != 0 {
-			t.Errorf("count = %d, want 0", count)
-		}
-		if len(client.publishes) != 0 {
-			t.Errorf("expected 0 publishes, got %d", len(client.publishes))
-		}
-	})
-
-	t.Run("aggregated mode publishes single /index.md", func(t *testing.T) {
-		cfg := DefaultConfig()
-		cfg.Seeds = []string{"mark://example.com"}
-		cfg.Hubs = []string{"mark://hub.example.com"}
-
-		client := newMockClient()
-		client.addList("example.com:6309", "/", "a.md")
-		client.addDoc("example.com:6309", "/a.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-
-		crawler := NewCrawler(cfg, client, nil, nil)
-		if _, err := crawler.Run(context.Background()); err != nil {
-			t.Fatalf("Run() error: %v", err)
-		}
-		count, err := crawler.PublishToHubs(context.Background(), client, false)
-		if err != nil {
-			t.Fatalf("PublishToHubs() error: %v", err)
-		}
-		if count != 1 {
-			t.Errorf("count = %d, want 1", count)
-		}
-		if len(client.publishes) != 2 {
-			t.Fatalf("expected shard + manifest publishes, got %d", len(client.publishes))
-		}
-		if client.publishes[1].Path != "/index.md" {
-			t.Errorf("last publish path = %q, want /index.md", client.publishes[1].Path)
-		}
-	})
-
-	t.Run("per-server mode publishes one index per discovered server", func(t *testing.T) {
-		cfg := DefaultConfig()
-		cfg.Seeds = []string{"mark://a.example.com", "mark://b.example.com"}
-		cfg.Hubs = []string{"mark://hub.example.com"}
-
-		client := newMockClient()
-		client.addList("a.example.com:6309", "/", "doc.md")
-		client.addDoc("a.example.com:6309", "/doc.md", "# A", "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-		client.addList("b.example.com:6309", "/", "doc.md")
-		client.addDoc("b.example.com:6309", "/doc.md", "# B", "sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-
-		crawler := NewCrawler(cfg, client, nil, nil)
-		if _, err := crawler.Run(context.Background()); err != nil {
-			t.Fatalf("Run() error: %v", err)
-		}
-		count, err := crawler.PublishToHubs(context.Background(), client, true)
-		if err != nil {
-			t.Fatalf("PublishToHubs() error: %v", err)
-		}
-		if count != 2 {
-			t.Errorf("count = %d, want 2", count)
-		}
-		if len(client.publishes) != 4 {
-			t.Fatalf("expected two shards + two manifests, got %d", len(client.publishes))
-		}
-		var published strings.Builder
-		for i, call := range client.publishes {
-			if call.ExpectedVersion != 0 {
-				t.Errorf("publishes[%d].ExpectedVersion = %d, want 0", i, call.ExpectedVersion)
-			}
-			published.WriteString(call.Body)
-		}
-		// Servers are named by identity, never by dial address (ADR 0005, ADR 0018).
-		for _, want := range []string{
-			"| mark://a.example.com |", "> Source: mark://a.example.com\n",
-			"| mark://b.example.com |", "> Source: mark://b.example.com\n",
-		} {
-			if !strings.Contains(published.String(), want) {
-				t.Errorf("published indexes missing %q:\n%s", want, published.String())
-			}
-		}
-		// The per server document path still carries the dial host; only names are identity.
-		if strings.Contains(published.String(), "mark://a.example.com:6309") || strings.Contains(published.String(), "mark://b.example.com:6309") {
-			t.Errorf("dial port leaked into a server name:\n%s", published.String())
-		}
-	})
 }
 
 func TestCrawlerGraphExportAndPublish(t *testing.T) {
@@ -1170,14 +1057,11 @@ func TestPublishRetentionMeta(t *testing.T) {
 		if _, err := crawler.PublishGraphToHubs(context.Background(), client); err != nil {
 			t.Fatalf("PublishGraphToHubs() error: %v", err)
 		}
-		if _, err := crawler.PublishToHubs(context.Background(), client, false); err != nil {
-			t.Fatalf("PublishToHubs() error: %v", err)
-		}
 		if len(client.publishes) == 0 {
 			t.Fatal("expected publishes")
 		}
 		for _, call := range client.publishes {
-			isShard := strings.Contains(call.Path, ".shards/") || strings.Contains(call.Path, "/graph/shards/")
+			isShard := strings.Contains(call.Path, "/graph/shards/")
 			if !isShard && call.Meta["retention"] != "20" {
 				t.Errorf("publish %s%s meta.retention = %q, want %q", call.Host, call.Path, call.Meta["retention"], "20")
 			}

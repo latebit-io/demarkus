@@ -7,16 +7,16 @@ import (
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 )
 
-func TestMCPToolsExactly17(t *testing.T) {
+func TestMCPToolsExactly15(t *testing.T) {
 	tools := mcpTools()
 	if len(tools) != len(mcpToolNames) {
 		t.Fatalf("mcpTools() returned %d tools, mcpToolNames lists %d — names + builders out of sync", len(tools), len(mcpToolNames))
 	}
-	// 15 tools mirror client/cmd/demarkus-mcp for cross-transport parity;
+	// 13 tools mirror client/cmd/demarkus-mcp for cross-transport parity;
 	// mark_worlds and mark_lookup_all are deliberate broker-only additions:
 	// both operate on the knowledge system rather than one world.
-	if len(tools) != 17 {
-		t.Fatalf("expected 17 tools (demarkus-mcp parity surface + 2 broker tools), got %d", len(tools))
+	if len(tools) != 15 {
+		t.Fatalf("expected 15 tools (demarkus-mcp parity surface + 2 broker tools), got %d", len(tools))
 	}
 	for i, tool := range tools {
 		if tool.Name != mcpToolNames[i] {
@@ -96,8 +96,7 @@ func TestGatewayToolProfilesAndBudget(t *testing.T) {
 func TestMCPToolsExposeRequiredArguments(t *testing.T) {
 	// Pin the contract the plan spells out: mark_publish requires
 	// expected_version; mark_append leaves it optional (auto-resolved
-	// via VERSIONS by the broker handler in Slice 3); mark_resolve
-	// needs hash + index; mark_index needs source + target.
+	// via VERSIONS by the broker handler in Slice 3).
 	tests := []struct {
 		tool         string
 		wantRequired []string
@@ -132,16 +131,6 @@ func TestMCPToolsExposeRequiredArguments(t *testing.T) {
 			tool:         "mark_append",
 			wantRequired: []string{"url", "body"},
 			wantOptional: []string{"expected_version"},
-		},
-		{
-			tool:         "mark_resolve",
-			wantRequired: []string{"hash"},
-			wantOptional: []string{"index"},
-		},
-		{
-			tool:         "mark_index",
-			wantRequired: []string{"source", "target"},
-			wantOptional: []string{"expected_version", "dry_run", "force"},
 		},
 	}
 

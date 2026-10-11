@@ -229,19 +229,25 @@ func VersionPath(docPath string, version int) string {
 	return docPath + "/v" + strconv.Itoa(version)
 }
 
-// IsHashPath checks if path matches the content-addressed fetch format (sha256-<64hex>).
-// Returns the hash string (without leading /) and true if valid.
-func IsHashPath(path string) (hash string, ok bool) {
-	clean := strings.TrimPrefix(path, "/")
-	if len(clean) != 71 || !strings.HasPrefix(clean, "sha256-") {
-		return "", false
+// IsReservedHashPath reports whether path has the reserved content-address
+// form /sha256-<64 hex>: no document is created there and reads answer
+// not-found (ADR 0035).
+func IsReservedHashPath(path string) bool {
+	return IsContentHash(strings.TrimPrefix(path, "/"))
+}
+
+// IsContentHash validates the sha256-<64 lowercase hex> form that the
+// content-hash header, WATCH events and graph references carry.
+func IsContentHash(hash string) bool {
+	if len(hash) != 71 || !strings.HasPrefix(hash, "sha256-") {
+		return false
 	}
-	for _, c := range clean[7:] {
+	for _, c := range hash[7:] {
 		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return "", false
+			return false
 		}
 	}
-	return clean, true
+	return true
 }
 
 // IsValidVerb returns true if verb is a known Mark Protocol verb.

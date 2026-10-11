@@ -692,7 +692,7 @@ mark-server --mirror news.com/investigation.md
 
 ### Content Addressing & Verification
 
-**Hash-Based Addressing** (future extension):
+**Content hash on every FETCH**:
 
 ```
 FETCH mark://example.com/article.md
@@ -707,17 +707,11 @@ modified: 2025-02-14T10:30:00Z
 # Article content
 ```
 
-**Fetch by Hash from Any Server**:
-
-```
-FETCH mark://hash/sha256-abc123def456...
-```
-
-Any server that has this content can serve it. Client verifies hash matches content.
+The client verifies the hash matches the content it received. Fetch by hash (`FETCH /sha256-...` on any server holding the content) shipped as SPEC §12 and was removed before 1.0 (ADR 0035): nothing called it, and every store paid for a world-wide index to answer it. The `/sha256-<64 hex>` paths stay reserved, so it can return as an extension.
 
 **Benefits**:
-- Content is location-independent
-- Can be mirrored without central coordination
+- A mirror's copy can be checked against the origin's hash
+- Content can be mirrored without central coordination
 - Cryptographic proof of authenticity
 - Prevents tampering
 
@@ -948,19 +942,9 @@ cached_at = "2025-02-14T10:35:00Z"
 - No central authority or registry
 - No commercial control
 
-### Content Addressing (Future)
+### Content Addressing (Removed, Reserved)
 
-Support content-addressed URLs:
-
-```
-mark://hash/sha256-abc123def456...
-```
-
-This allows:
-- Content mirroring without central control
-- Verification of content integrity
-- Censorship resistance
-- Distributed caching
+Content-addressed URLs (`mark://hash/sha256-abc123def456...`) would allow mirroring without central control, censorship resistance and distributed caching. Fetch by hash was implemented and removed before 1.0 (ADR 0035); `/sha256-<64 hex>` paths stay reserved for a future extension.
 
 ### Server Discovery
 
@@ -969,12 +953,12 @@ This allows:
 mark://example.com:6309/doc.md
 ```
 
-**Content-addressed** (future):
+**Content-addressed** (reserved, see above):
 ```
 mark://hash/sha256-...
 ```
 
-Client queries DHT or known mirrors for content.
+A client would query a DHT or known mirrors for content.
 
 ## Protocol Extensions (Future Considerations)
 
@@ -1235,8 +1219,8 @@ This is what Tim Berners-Lee originally imagined: the web as a navigable informa
 
 **Server**:
 - ~~Directory indexes~~ (LIST with pagination, LOOKUP catalog)
-- ~~Content addressing~~ (content-addressed fetch, SPEC §12)
-- ~~Federation support~~ (`demarkus-agent` crawler, hash indexes, graph snapshots)
+- Content addressing: fetch by hash shipped, then left before 1.0 (ADR 0035); `/sha256-` paths stay reserved
+- ~~Federation support~~ (`demarkus-agent` crawler, graph snapshots)
 
 **Client**:
 - Offline mode
@@ -1310,12 +1294,11 @@ Hubs are the entry points into the information graph:
 - `CrawlAndPersist`: shared crawl path used by CLI (`demarkus graph`), TUI (`d` key), and MCP (`mark_graph`); merges new nodes/edges into the existing store
 - `mark_backlinks` MCP tool: queries the stored graph for reverse links
 - TUI loads the stored graph instantly on `d`, then runs a live crawl in the background to discover new links
-- Hub pattern with `mark_index`: federated content indexing through version-pinned prefix shards; inactive-slot staging and manifest-last CAS keep each published generation atomic
 - Graph as content: `Store.Export()` renders the graph as publishable markdown with `mark://` links (six-column Edges table: `From | To | Rel | Label | Anchor | Count`); `ParseExport()` parses it back, accepting the legacy two-column shape too; CLI `demarkus graph export` and MCP `mark_graph_export` tool
 - Edge semantics: edges carry provenance (link label, source section anchor, occurrence count) and typed relations ingested from `rel-<predicate>` publisher metadata (ADR 0004)
 - Agent discovery: `mark_graph_publish` MCP tool exports and publishes the graph in one step; other agents crawl the published document to inherit the topology without recrawling original servers
 - Atomic graph snapshots: `demarkus-agent` publishes version-pinned node and edge shards under `/graph/`, commits `/graph/manifest.md` last, and then updates legacy `/graph.md`; seeders verify the complete snapshot before applying it
-- Federation crawler exception: generated `/graph.md` and `/graph/` documents are hash-indexed but never reinterpreted as authored edges or discovery links
+- Federation crawler exception: generated `/graph.md` and `/graph/` documents are crawled but never reinterpreted as authored edges or discovery links
 
 ### Later architecture decisions
 

@@ -74,7 +74,7 @@ func TestMemoryProfileToolsAllClassified(t *testing.T) {
 // TestMemoryProfileExcludesFederationTools pins the surface: no
 // multi-world aggregation, federation, or whole-store graph export.
 func TestMemoryProfileExcludesFederationTools(t *testing.T) {
-	excluded := []string{"mark_lookup_all", "mark_index", "mark_resolve", "mark_graph_export", "mark_graph_publish"}
+	excluded := []string{"mark_lookup_all", "mark_graph_export", "mark_graph_publish"}
 	names := map[string]bool{}
 	for _, tool := range MemoryProfile().Tools {
 		names[tool.Name] = true

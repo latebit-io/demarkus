@@ -105,7 +105,7 @@ interval = "6h"  # Time between crawl runs (daemon mode)
 | Field | Default | Description |
 |-------|---------|-------------|
 | `seeds` | *(required)* | Initial servers to crawl |
-| `hubs` | *(empty)* | Servers to publish hash indexes to |
+| `hubs` | *(empty)* | Servers to publish the graph to |
 | `endpoints.<authority>.dial_address` | *(required per endpoint)* | Socket destination override |
 | `endpoints.<authority>.server_name` | *(authority host)* | TLS SNI and certificate name override |
 | `crawl.max_servers` | `50` | Maximum servers to discover per run |
@@ -124,8 +124,8 @@ Flags override config file values:
 | `-seeds <urls>` | Comma-separated seed servers (overrides config) |
 | `-state <path>` | State file path (default `~/.mark/fedcrawl.json`) |
 | `-insecure` | Skip TLS certificate verification |
-| `-publish` | Publish indexes to hubs after crawl |
-| `-per-server` | Publish per-server indexes (not aggregated) |
+| `-publish-graph` | Publish the link graph (`/graph/manifest.md` snapshot and `/graph.md`) to hubs after crawl |
+| `-publish-retention <n>` | Cap the `/graph.md` and `/graph/manifest.md` histories to the newest n versions; shards stay unpruned |
 | `-v` | Verbose output |
 
 #### Environment variables

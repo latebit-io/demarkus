@@ -43,54 +43,6 @@ tests:
       - notExists:
           path: spec.template.spec.containers[0].command
 
-  - it: omits --publish when no hubs configured
-    template: deployment.yaml
-    set:
-      config.seeds:
-        - mark://team-a:6309
-      config.hubs: []
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --publish
-
-  - it: includes --publish when hubs configured
-    template: deployment.yaml
-    set:
-      config.seeds:
-        - mark://team-a:6309
-      config.hubs:
-        - mark://hub:6309
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --publish
-
-  - it: includes --per-server by default
-    template: deployment.yaml
-    set:
-      config.seeds:
-        - mark://team-a:6309
-      config.hubs:
-        - mark://hub:6309
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --per-server
-
-  - it: omits --per-server when perServer=false
-    template: deployment.yaml
-    set:
-      config.seeds:
-        - mark://team-a:6309
-      config.hubs:
-        - mark://hub:6309
-      perServer: false
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --per-server
-
   - it: includes --publish-graph when publishGraph=true
     template: deployment.yaml
     set:
@@ -319,15 +271,12 @@ tests:
       - failedTemplate:
           errorPattern: 'tokens.fromWorldSecrets\[1\].hostPort "team-a:6309" is duplicated'
 
-  - it: derives the hub token Secret and --publish from hub
+  - it: derives the hub token Secret from hub
     template: deployment.yaml
     set:
       worlds: [root, team-a]
       hub: root
     asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --publish
       - equal:
           path: spec.template.spec.volumes[1].projected.sources[1].secret
           value:

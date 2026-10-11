@@ -27,8 +27,6 @@ var mcpToolNames = []string{
 	"mark_append",
 	"mark_archive",
 	"mark_discover",
-	"mark_resolve",
-	"mark_index",
 	"mark_backlinks",
 	"mark_graph",
 	"mark_graph_export",
@@ -36,7 +34,7 @@ var mcpToolNames = []string{
 	"mark_worlds",
 }
 
-// mcpTools returns 15 direct-MCP parity tools plus broker-only mark_worlds and
+// mcpTools returns 13 direct-MCP parity tools plus broker-only mark_worlds and
 // mark_lookup_all, which operate on the knowledge system rather than one world.
 func mcpTools() []mcp.Tool {
 	return []mcp.Tool{
@@ -50,8 +48,6 @@ func mcpTools() []mcp.Tool {
 		markAppendTool(),
 		markArchiveTool(),
 		markDiscoverTool(),
-		markResolveTool(),
-		markIndexTool(),
 		markBacklinksTool(),
 		markGraphTool(),
 		markGraphExportTool(),
@@ -101,25 +97,6 @@ func markDiscoverTool() mcp.Tool {
 	return mcp.NewTool("mark_discover",
 		mcp.WithDescription(mcpfmt.DiscoverDescription),
 		mcp.WithString("url", mcp.Required(), mcp.Description(mcpURLDesc)),
-	)
-}
-
-func markResolveTool() mcp.Tool {
-	return mcp.NewTool("mark_resolve",
-		mcp.WithDescription("Resolve content by SHA-256 hash across your worlds, or via a hub index document, and fetch it."),
-		mcp.WithString("hash", mcp.Required(), mcp.Description(mcpfmt.HashDesc)),
-		mcp.WithString("index", mcp.Description("hub hash index document, e.g. mark://hub/index.md; omit to ask every world")),
-	)
-}
-
-func markIndexTool() mcp.Tool {
-	return mcp.NewTool("mark_index",
-		mcp.WithDescription(mcpfmt.IndexDescription),
-		mcp.WithString("source", mcp.Required(), mcp.Description("world to crawl, e.g. mark://team-a/")),
-		mcp.WithString("target", mcp.Required(), mcp.Description("index destination, e.g. mark://hub/index.md")),
-		mcp.WithNumber("expected_version", mcp.Description(mcpfmt.IndexVersionDesc)),
-		mcp.WithBoolean("dry_run", mcp.Description(mcpfmt.DryRunDesc)),
-		mcp.WithBoolean("force", mcp.Description(mcpfmt.IndexForceDesc)),
 	)
 }
 

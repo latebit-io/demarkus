@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchdedup"
@@ -160,8 +159,6 @@ func (h *handler) tools(host string) []mcpserver.ServerTool {
 		{Tool: mcpfmt.ArchiveTool(url, requiresToken), Handler: h.markArchive},
 		{Tool: mcpfmt.AppendTool(url, requiresToken), Handler: h.markAppend},
 		{Tool: markDiscoverTool(), Handler: h.markDiscover},
-		{Tool: markResolveTool(host), Handler: h.markResolve},
-		{Tool: markIndexTool(host), Handler: h.markIndex},
 		{Tool: mcpfmt.BacklinksTool(url, ""), Handler: h.markBacklinks},
 		{Tool: mcpfmt.GraphExportTool(""), Handler: h.markGraphExport},
 		{Tool: mcpfmt.GraphPublishTool("graph document target, e.g. /graph.md or "+url, requiresToken), Handler: h.markGraphPublish},
@@ -270,25 +267,6 @@ func markDiscoverTool() mcp.Tool {
 	)
 }
 
-func markResolveTool(host string) mcp.Tool {
-	return mcp.NewTool("mark_resolve",
-		mcp.WithDescription(mcpfmt.ResolveDescription),
-		mcp.WithString("hash", mcp.Required(), mcp.Description(mcpfmt.HashDesc)),
-		mcp.WithString("index", mcp.Required(), mcp.Description("hub hash index document: mark:// URL or "+urlDesc(host))),
-	)
-}
-
-func markIndexTool(host string) mcp.Tool {
-	return mcp.NewTool("mark_index",
-		mcp.WithDescription(mcpfmt.IndexDescription),
-		mcp.WithString("source", mcp.Required(), mcp.Description("server to crawl: mark:// URL or "+urlDesc(host))),
-		mcp.WithString("target", mcp.Required(), mcp.Description("index destination: mark:// URL or "+urlDesc(host))),
-		mcp.WithNumber("expected_version", mcp.Description(mcpfmt.IndexVersionDesc)),
-		mcp.WithBoolean("dry_run", mcp.Description(mcpfmt.DryRunDesc)),
-		mcp.WithBoolean("force", mcp.Description(mcpfmt.IndexForceDesc)),
-	)
-}
-
 // Tool handlers bind a call to a shared body; mcpbind reads the arguments.
 // Handler signatures are dictated by mcp-go's ToolHandlerFunc type.
 
@@ -353,25 +331,6 @@ func (h *handler) markDiscover(ctx context.Context, req mcp.CallToolRequest) (*m
 	rawURL := mcpbind.OptionalURL(&req)
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Discover(ctx, rawURL) })
 }
-
-func (h *handler) markResolve(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	args, err := mcpbind.Resolve(&req)
-	if err != nil {
-		return mcpbind.Refused(err), nil
-	}
-	return h.run(func(t *marktools.Tools) marktools.Result { return t.ResolveHash(ctx, args) })
-}
-
-func (h *handler) markIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	args, err := mcpbind.Index(&req)
-	if err != nil {
-		return mcpbind.Refused(err), nil
-	}
-	return h.run(func(t *marktools.Tools) marktools.Result { return t.Index(ctx, args) })
-}
-
-// timeNow is a variable for testing.
-var timeNow = time.Now
 
 func (h *handler) markGraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	args, err := mcpbind.Graph(&req)

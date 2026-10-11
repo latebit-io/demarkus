@@ -55,10 +55,10 @@ func (h *Handler) serveWatch(ctx context.Context, w io.Writer, req protocol.Requ
 	}
 }
 
-// refuseHashPath answers a write or watch on a content address, which no
-// verb but FETCH accepts.
+// refuseHashPath answers a write or watch on a reserved content address,
+// where no document may exist (ADR 0035).
 func (h *Handler) refuseHashPath(w io.Writer, path string) bool {
-	if _, ok := protocol.IsHashPath(path); !ok {
+	if !protocol.IsReservedHashPath(path) {
 		return false
 	}
 	h.writeError(w, protocol.StatusBadRequest, "paths matching /sha256-<hash> are reserved")

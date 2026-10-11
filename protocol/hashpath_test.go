@@ -2,25 +2,46 @@ package protocol
 
 import "testing"
 
-func TestIsHashPath(t *testing.T) {
+const testHex = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+
+func TestIsContentHash(t *testing.T) {
 	tests := []struct {
-		input    string
-		wantHash string
-		wantOK   bool
+		input string
+		want  bool
 	}{
-		{"sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", "sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", true},
-		{"/sha256-0000000000000000000000000000000000000000000000000000000000000000", "sha256-0000000000000000000000000000000000000000000000000000000000000000", true},
-		{"sha256-AAAA", "", false},
-		{"sha256-a1b2c3", "", false},
-		{"md5-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", "", false},
-		{"sha256-g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", "", false},
-		{"sha256-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2aa", "", false},
-		{"", "", false},
+		{"sha256-" + testHex, true},
+		{"sha256-0000000000000000000000000000000000000000000000000000000000000000", true},
+		{"/sha256-" + testHex, false},
+		{"sha256-AAAA", false},
+		{"sha256-a1b2c3", false},
+		{"md5-" + testHex, false},
+		{"sha256-g" + testHex[1:], false},
+		{"sha256-" + testHex + "aa", false},
+		{"", false},
 	}
 	for _, tt := range tests {
-		hash, ok := IsHashPath(tt.input)
-		if ok != tt.wantOK || hash != tt.wantHash {
-			t.Errorf("IsHashPath(%q) = (%q, %v), want (%q, %v)", tt.input, hash, ok, tt.wantHash, tt.wantOK)
+		if got := IsContentHash(tt.input); got != tt.want {
+			t.Errorf("IsContentHash(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestIsReservedHashPath(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"/sha256-" + testHex, true},
+		{"sha256-" + testHex, true},
+		{"/sha256-" + testHex + "/v1", false},
+		{"/docs/sha256-" + testHex, false},
+		{"/sha256-short", false},
+		{"/doc.md", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := IsReservedHashPath(tt.input); got != tt.want {
+			t.Errorf("IsReservedHashPath(%q) = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }

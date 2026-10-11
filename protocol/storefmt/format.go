@@ -201,17 +201,7 @@ func exactStoredField(line, key string) (string, bool) {
 	return strings.TrimPrefix(line, prefix), true
 }
 
-func validStoredHash(value string) bool {
-	if len(value) != len("sha256-")+sha256.Size*2 || !strings.HasPrefix(value, "sha256-") {
-		return false
-	}
-	for _, character := range value[len("sha256-"):] {
-		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
-			return false
-		}
-	}
-	return true
-}
+func validStoredHash(value string) bool { return protocol.IsContentHash(value) }
 
 // PrepareAppendMeta builds the publisher metadata an APPEND stores: the base
 // version's merged with the request's, then typed (SPEC 6.6). Both backends

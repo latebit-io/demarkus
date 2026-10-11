@@ -44,7 +44,6 @@ Server logs cover protocol request handling, startup, and TLS/auth lifecycle. Th
 | `archive` | INFO | `audit: true`, `operation: ARCHIVE`, `path`, `version`, `token_label`, `success` | Audit event for content deletion. The `audit: true` field is the marker for routing to a separate audit-log stream. |
 | `chain verification failed` | WARN | `path`, `error` | Hash-chain integrity check failed for a versioned document. Should not occur in normal operation. |
 | `body too large` | ERROR | `path`, `size_bytes` | Inbound write exceeded the body limit. |
-| `hash index stale` | INFO | `hash`, `path` | Content-addressed lookup found a stale index entry. Low-frequency under normal write load. |
 | `rate limited` | WARN | `ip`, `error`, `suppressed` | A request waited past its budget for the per-IP rate limiter and was refused. Logged once per minute per world: `suppressed` counts the refusals held back since the previous line. |
 | `concurrency limited` | WARN | `ip`, `error`, `suppressed` | A request found every concurrency slot busy past its budget and was refused. Logged like `rate limited`. |
 | `server started` | INFO | `addr`, `root`, `idle_timeout`, `request_timeout` | Process startup. One per restart. |

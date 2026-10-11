@@ -46,12 +46,6 @@ spec:
             - /etc/demarkus/agent.toml
             - --state
             - /var/lib/demarkus/state.json
-            {{- if include "demarkus-agent.hubs" . | fromYamlArray }}
-            - --publish
-            {{- end }}
-            {{- if .Values.perServer }}
-            - --per-server
-            {{- end }}
             {{- if .Values.publishGraph }}
             - --publish-graph
             {{- end }}

@@ -94,9 +94,6 @@ func testReplicaCatalogReadsWithinBound(t *testing.T, site ReplicaSite) {
 	if isDir, err := reader.IsDir("/bound/"); err != nil || !isDir {
 		t.Errorf("IsDir after the bound = %v, %v; want a directory", isDir, err)
 	}
-	if path, err := reader.LookupHash(storefmt.ContentHash([]byte("# Bound\n"))); err != nil || path != "/bound/doc.md" {
-		t.Errorf("LookupHash of the body after the bound = %q, %v; want the document", path, err)
-	}
 }
 
 func testReplicaOwnWritesAtOnce(t *testing.T, site ReplicaSite) {

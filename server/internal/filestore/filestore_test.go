@@ -2,12 +2,10 @@ package filestore
 
 import (
 	"bytes"
-	"errors"
 	"testing"
 	"time"
 
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
-	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
@@ -78,9 +76,6 @@ func assertFileView(t *testing.T, view backend.ReadView, body []byte, tag string
 	if !bytes.Equal(document.Content, body) {
 		t.Errorf("body = %q, want %q", document.Content, body)
 	}
-	if path, err := view.LookupHash(ctx, storefmt.ContentHash(body)); err != nil || path != "/docs/doc.md" {
-		t.Errorf("hash lookup = %q, %v", path, err)
-	}
 	results, err := view.Lookup(ctx, tag, catalog.Options{})
 	if err != nil {
 		t.Fatalf("lookup: %v", err)
@@ -88,15 +83,4 @@ func assertFileView(t *testing.T, view backend.ReadView, body []byte, tag string
 	if len(results) != 1 || results[0].Path != "/docs/doc.md" {
 		t.Errorf("lookup results = %+v", results)
 	}
-	other := firstOrSecondBody(tag)
-	if _, err := view.LookupHash(ctx, storefmt.ContentHash(other)); !errors.Is(err, backend.ErrNotFound) {
-		t.Errorf("other hash error = %v, want not-found", err)
-	}
-}
-
-func firstOrSecondBody(tag string) []byte {
-	if tag == "first" {
-		return []byte("# Second\n")
-	}
-	return []byte("# First\n")
 }

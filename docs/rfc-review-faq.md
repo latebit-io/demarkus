@@ -14,9 +14,9 @@ Two access paths: MCP over HTTPS for agents, web or CLI for humans.
 ## What are a world, a hub, root, and an index?
 
 - **World**: one demarkus server in a knowledge system, addressed by logical name. Own namespace, store, tokens, and release. It may describe itself in an optional `world.md`; a world without one still works.
-- **Hub**: an ordinary world that receives published aggregates, the content-hash indexes from `mark_index` and the graph exports (`/graph/manifest.md` snapshots plus legacy `/graph.md`). `mark_resolve` and backlink seeding read from it. Not a protocol or server concept: the server binary has no hub mode, and `hub: true` is a deploy-repo flag the crawler reads.
+- **Hub**: an ordinary world that receives published aggregates, the graph exports (`/graph/manifest.md` snapshots plus legacy `/graph.md`). Backlink seeding reads from it. Not a protocol or server concept: the server binary has no hub mode, and `hub: true` is a deploy-repo flag the crawler reads.
 - **Root**: the conventional name for the hub world. Not guaranteed by the protocol. The deploy only checks that some world sets `hub: true`, but the name `root` is hardcoded in the secret store and library config, so in practice the hub must be called root.
-- **Index**: `index.md` is a curated entry-point document, the discovery backstop for what lookup can't surface. The crawler writes machine hash indexes to `/index/<host>.md` when `perServer: true` (the chart default); setting it false writes `/index.md` and overwrites the curated one. Large indexes publish as a sharded v2 manifest with shards under `<manifest>.shards/` in alternating a/b slots, manifest committed last so readers never see a partial index.
+- **Index**: `index.md` is a curated entry-point document, the discovery backstop for what lookup can't surface. Nothing generated writes there: the crawler's machine hash indexes under `/index/<host>.md` went with content-addressed fetch (ADR 0035).
 
 ## What automated cues push agents to record memory?
 
@@ -84,7 +84,7 @@ so a deep crawl usually stops on the node cap rather than the depth limit).
 A scheduled agent builds it; the broker reads what that agent publishes.
 
 - The agent is configured with a seed URL per content world and crawls each one. The hub is not crawled; it is where results are published.
-- It merges every world's edges into one graph, publishes an atomic `/graph/manifest.md` snapshot, then updates compatible `/graph.md` on the hub alongside the content-hash index. Graph publishing is off by default and switched on in this deployment.
+- It merges every world's edges into one graph, publishes an atomic `/graph/manifest.md` snapshot, then updates compatible `/graph.md` on the hub. Graph publishing is off by default and switched on in this deployment.
 - Each run rebuilds from scratch, so a world that fails to answer is skipped and drops out of the published graph until the next successful crawl.
 - Cross-world links are ordinary `mark://{worldName}/{path}` links, so an edge from one world to another is just a link the crawl followed.
 - The broker's own graph store is in-memory and pod-scoped. It loads the hub's verified snapshot, or legacy `/graph.md`, on demand so a fresh pod answers backlinks without crawling.
@@ -127,7 +127,7 @@ A knowledge system is distributed: many logically isolated worlds behind one bro
 - Reads go to the world's server every time. The client revalidates with `if-none-match` / `if-modified-since`, so a cached body is only reused when the server confirms it.
 - Each write creates a new hash-chained version. Re-writing identical content is a no-op that returns the existing version rather than a new one.
 - Optimistic concurrency (`expected_version` plus merge-on-conflict) stops stale writes clobbering newer ones.
-- A scheduled agent re-crawls every world and republishes the content-hash index and graph on the hub.
+- A scheduled agent re-crawls every world and republishes the graph on the hub.
 - Memory copies of promoted documents can go stale. Refresh runs one way only: `/soul-refresh` copies the knowledge system's version down to the memory, and `/promote` is the only way a memory edit goes back up. There is no two-way sync.
 
 ## How do diffs and merges work?
@@ -166,12 +166,11 @@ that property.
 - Each version carries a `content-hash`, which is what lets agents on different mirrors confirm they hold identical content. The hash chain is a separate guarantee: it proves one server has not rewritten its own history. VERSIONS returns no per-version hashes, so the chain is not a cross-mirror check.
 - A server per world makes the ownership boundary physical: own store, token file, writer allowlist, release. Blast radius stays contained.
 - A memory is the same `demarkus-server` binary at personal scale.
-- `mark_resolve` fetches by hash via a hub index, across the worlds the broker is configured for. Cross-org resolution is explicitly out of scope today.
 - Worth saying plainly at review: this deployment is centrally administered by design, with one broker, an OIDC org gate, a domain allowlist, and per-world writer allowlists. The protocol is decentralized; this instance is not.
 
 ## What tools does the memory plugin expose?
 
-Fifteen `mark_*` MCP tools.
+Thirteen `mark_*` MCP tools.
 
 | Tool | Description |
 |------|-------------|
@@ -188,8 +187,6 @@ Fifteen `mark_*` MCP tools.
 | `mark_graph_export` | Export the graph store as publishable markdown |
 | `mark_graph_publish` | Export and publish the graph as legacy `/graph.md` (retention default 20); sharded snapshots are the agent's job |
 | `mark_discover` | Fetch a server's agent manifest |
-| `mark_resolve` | Resolve content by SHA-256 hash via a hub index |
-| `mark_index` | Crawl a server, publish its content-hash index to a hub |
 
 ## What tools does the knowledge plugin expose?
 

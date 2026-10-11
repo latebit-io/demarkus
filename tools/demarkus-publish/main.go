@@ -67,8 +67,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: -path must be a document path, not \"/\"\n")
 		os.Exit(1)
 	}
-	if _, ok := protocol.IsHashPath(*path); ok {
-		fmt.Fprintf(os.Stderr, "error: /sha256-<hash> paths are reserved for content-addressed fetch\n")
+	if protocol.IsReservedHashPath(*path) {
+		fmt.Fprintf(os.Stderr, "error: /sha256-<hash> paths are reserved\n")
 		os.Exit(1)
 	}
 

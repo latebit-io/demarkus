@@ -11,7 +11,7 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 - **document**: one markdown file in a world, with a full version history. Metadata (title, tags, importance, type, typed relations) travels out of band, not in the body.
 - **hub**: a document, conventionally `index.md`, whose links are the entry point to a world or to a set of worlds. Hubs can link to hubs.
 - **server**: a process that serves one or more worlds over the Mark Protocol. Servers are storage engines: they hold documents and hand them back; they do not search, rank, or route.
-- **agent**: `demarkus-agent`, the indexer. It crawls worlds, aggregates the link graph, and publishes hash indexes and hub documents. Not to be confused with an AI agent using the MCP tools.
+- **agent**: `demarkus-agent`, the crawler. It crawls worlds, aggregates the link graph, and publishes it to hubs. Not to be confused with an AI agent using the MCP tools.
 - **capability token**: the write credential. Tokens are scoped to a world and a path prefix; reads need no token unless the world enables read auth.
 
 ## Memory

@@ -149,12 +149,8 @@ func TestWatchDeliversAfterPublish(t *testing.T) {
 		if event.Path != "/agents/me/inbox/01.md" || event.Version != 1 || event.Op != protocol.OpPublish || event.Agent != "session-a" {
 			t.Fatalf("event = %+v", event)
 		}
-		if _, ok := protocol.IsHashPath(event.Hash); !ok {
+		if !protocol.IsContentHash(event.Hash) {
 			t.Fatalf("event hash = %q", event.Hash)
-		}
-		fetched := sendLookup(t, h, "FETCH /"+event.Hash+"\n")
-		if fetched.Status != protocol.StatusOK || fetched.Body != "# hello\n" {
-			t.Fatalf("fetch by event hash: %q %q", fetched.Status, fetched.Body)
 		}
 
 		// Idle: a heartbeat carries the resume cursor, which passed the

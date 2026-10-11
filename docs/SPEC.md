@@ -11,7 +11,7 @@ The Mark Protocol is an application-layer protocol for the transfer of markdown 
 
 ## Status of This Document
 
-This is a working draft specification for the Mark Protocol version 1.0. It documents the normative behaviour of the protocol as currently defined. Features described in the project design document (DESIGN.md) that are not yet specified here are considered future extensions and are not part of this specification. Federation document formats (hash indexes and graph snapshots) are specified in Section 12; server-to-server sync remains a future extension.
+This is a working draft specification for the Mark Protocol version 1.0. It documents the normative behaviour of the protocol as currently defined. Features described in the project design document (DESIGN.md) that are not yet specified here are considered future extensions and are not part of this specification. The federation graph snapshot format is specified in Section 12; server-to-server sync remains a future extension.
 
 ## 1. Terminology
 
@@ -186,7 +186,7 @@ Where the status title is the status value with the first letter capitalised and
 
 ## 6. Verbs
 
-**Freshness across replicas.** A server MAY serve one world from several replicas. Every response is answered from one committed state. A write acknowledged by any replica is visible to every later FETCH and VERSIONS on every replica. LOOKUP, LIST and content-addressed FETCH (§12) MAY miss a write acknowledged on another replica for up to one second; the replica that acknowledged a write reflects it at once. Writes judge their preconditions (expected version, path collisions, archive state, policy) against every acknowledged write, whatever the replica.
+**Freshness across replicas.** A server MAY serve one world from several replicas. Every response is answered from one committed state. A write acknowledged by any replica is visible to every later FETCH and VERSIONS on every replica. LOOKUP and LIST MAY miss a write acknowledged on another replica for up to one second; the replica that acknowledged a write reflects it at once. Writes judge their preconditions (expected version, path collisions, archive state, policy) against every acknowledged write, whatever the replica.
 
 ### 6.1. FETCH
 
@@ -605,7 +605,7 @@ A valid LOOKUP over an existing scope with no matching documents MUST return `ok
 
 ### 6.8. WATCH
 
-Subscribes to change hints for one document or for every document under a directory prefix. WATCH is the one verb whose response is a stream: the server keeps the QUIC stream open and writes a frontmatter block per change, so a client learns of a write within the server's latency budget instead of on its next poll. Events are hints, not content: a block names the path, the new version and its content hash, and the client FETCHes what it needs, by hash (§12) when it wants exactly that version.
+Subscribes to change hints for one document or for every document under a directory prefix. WATCH is the one verb whose response is a stream: the server keeps the QUIC stream open and writes a frontmatter block per change, so a client learns of a write within the server's latency budget instead of on its next poll. Events are hints, not content: a block names the path, the new version and its content hash, and the client FETCHes what it needs, by version path (§6.1) when it wants exactly that version.
 
 The store holds no durable subscriber state. A watch lives exactly as long as its stream; the server MAY end it at any time with a terminal block, and the client resumes by opening a new stream with the last cursor it saw. Level 3 realtime (concurrent editing, presence, cursors) is out of scope for the store; the block format leaves room for it through the unknown-key rule below.
 
@@ -766,7 +766,7 @@ Two publisher keys are the identity convention: `agent` names the writing softwa
 | `current` | VERSIONS | Decimal integer | Highest version number. |
 | `chain-valid` | VERSIONS | `true` or `false` | Whether the version hash chain is intact. |
 | `chain-error` | VERSIONS | String | Description of chain verification failure. Present only when `chain-valid` is `false`. |
-| `content-hash` | FETCH | `sha256-` + 64-char lowercase hex | SHA-256 hash of the response body (stripped of store frontmatter). Enables content-addressed retrieval. |
+| `content-hash` | FETCH | `sha256-` + 64-char lowercase hex | SHA-256 hash of the response body (stripped of store frontmatter), so a client can verify the body it received. |
 | `matches` | LOOKUP | Decimal integer | Number of rows returned in the table body: documents in catalog mode, sections in body mode. |
 | `match` | LOOKUP | `catalog` or `body` | The mode the server answered in. Present exactly when the request carried `match`. |
 | `cursor` | WATCH (every block) | `<epoch>:<seq>` | Position to resume from (§6.8). |
@@ -1002,7 +1002,7 @@ The Mark Protocol uses capability-based token authentication. Tokens grant speci
 
 **Read authentication**: Tokens with the `read` operation protect specific paths. When any token grants `read` on a path pattern, requests to matching paths require a valid read token. Paths not covered by any read token remain public. This enables private intranets (protect `/**`) and mixed public/private servers (protect `/internal/**` while leaving the rest open).
 
-Servers MUST enforce read auth on FETCH, LIST, VERSIONS, LOOKUP (§6.7) and WATCH (§6.8) operations. Content-addressed FETCH (by hash) MUST resolve the hash to a path and check read auth on that path. Versioned paths (e.g., `/doc.md/v2`) MUST check auth on the base path (`/doc.md`). The well-known manifest path (`/.well-known/agent-manifest.md`) is always public.
+Servers MUST enforce read auth on FETCH, LIST, VERSIONS, LOOKUP (§6.7) and WATCH (§6.8) operations. Versioned paths (e.g., `/doc.md/v2`) MUST check auth on the base path (`/doc.md`). The well-known manifest path (`/.well-known/agent-manifest.md`) is always public.
 
 **Token storage**: The server stores SHA-256 hashes of tokens, never the raw tokens themselves. The token store is a TOML file:
 
@@ -1048,79 +1048,11 @@ This ensures every served document has:
 - SHA-256 hash chain for tamper detection
 - Proper store frontmatter
 
-## 12. Content-Addressed Fetch
+## 12. Reserved Paths and Graph Snapshots
 
-Every successful FETCH response that serves a document includes a `content-hash` field containing the SHA-256 hash of the response body (the document content after stripping store frontmatter). The format is `sha256-<64 hex characters>`. Directory listings and error responses do not include `content-hash`.
+Paths matching `/sha256-<64 hex characters>` are reserved. A server MUST NOT create a document at such a path, MUST answer `not-found` to every read of one, and MUST refuse PUBLISH, APPEND, ARCHIVE and WATCH on one with `bad-request`. Content-addressed fetch, which these paths once served, was removed before 1.0 (ADR 0035); the reservation keeps the door open for an extension without colliding with documents. The `content-hash` response field (§6.1) remains, so a client can verify the body it received, and the `sha256-<64 hex>` form is still used by WATCH events (§6.8) and graph references below.
 
-Clients can fetch a document by its content hash instead of its path:
-
-```text
-FETCH /sha256-<64 hex characters>
-```
-
-The server maintains an in-memory index mapping content hashes to document paths. Only current (non-archived) versions are indexed. The server resolves the hash to a path and serves the document normally, including all standard response metadata.
-
-If no document matches the hash, the server returns `not-found`.
-
-Paths matching `/sha256-<64 hex characters>` are reserved for content-addressed fetch. Servers MUST NOT allow documents to be created at these paths.
-
-**Benefits:**
-
-- Location-independent content retrieval: any server with the content can serve it
-- Client can verify received content matches the requested hash
-- Foundation for distributed mirroring and caching
-
-### 12.1 Agent-Driven Hash Discovery
-
-Servers do not crawl or discover content from other servers. Agents fill this role by building and publishing hash indexes to hubs.
-
-**Workflow:**
-
-1. An agent fetches documents from one or more servers, collecting `content-hash` values from each response.
-2. The agent builds a mapping of content hashes to server locations.
-3. The agent publishes this mapping as a sharded index generation to a hub server.
-
-Legacy indexes store all entries in one markdown table:
-
-```markdown
-# Content Index
-
-| Hash | Server | Path |
-|------|--------|------|
-| sha256-a1b2c3... | mark://docs.example.com | /guide.md |
-| sha256-d4e5f6... | mark://notes.example.com | /readme.md |
-| sha256-d4e5f6... | mark://mirror.example.com | /copy.md |
-```
-
-Current indexes use a `demarkus-hash-index/v2` manifest at the requested index path. The manifest records the source, index time, completeness, document count, active slot, and each shard's hash prefix, path, immutable version, content hash, row count, and byte count. Shards use `demarkus-hash-index-shard/v1` and retain the `Hash | Server | Path` table shape.
-
-Entries are partitioned by the first two lowercase hexadecimal characters after `sha256-`. A prefix may have multiple deterministic overflow parts. For a manifest at `/index.md`, shard paths have the form `/index.shards/{a|b}/<prefix>-<part>.md`. Other manifest paths use the same `.shards` suffix rule.
-
-Publishers stage a complete generation in the inactive `a` or `b` slot. They publish and verify every shard first, then compare-and-swap the manifest last. A failed manifest publish leaves the previous generation active. Readers fetch each shard through its immutable version path, such as `/index.shards/a/a1-000.md/v4`, and verify response version, byte count, content hash, shard identity, and row count against the manifest. Implementations MUST reject incomplete manifests, out-of-scope shard paths, missing overflow parts, and aggregate count mismatches.
-
-Hash resolution fetches only shards matching the requested hash prefix. Full-index updates fetch and verify every referenced shard before merging. Readers SHOULD continue accepting legacy single-document indexes so deployed indexes migrate on their next successful publication.
-
-Publishers require read access and publish access to both the manifest path and its `.shards` subtree; read access may be public. Deployments MUST upgrade all index readers and writers before enabling v2 publication at an existing legacy path; a legacy reader interprets a v2 manifest as an empty index and a legacy writer can overwrite it.
-
-**Resolution flow when content is missing:**
-
-1. Agent fetches a document by path: server returns `not-found`.
-2. Agent checks a hub's content index for the document's last known `content-hash`.
-3. Agent finds alternative servers hosting that hash.
-4. Agent fetches `FETCH /sha256-<hash>` from one of those servers.
-5. Agent verifies the response body matches the requested hash.
-
-**Key properties:**
-
-- Servers remain simple: they serve content and answer hash lookups, nothing more.
-- Agents own the discovery logic: crawling, indexing, and routing decisions.
-- Hubs are just servers: the index is a regular published document, not a special protocol feature.
-- Multiple agents can maintain independent indexes on the same or different hubs.
-- No single point of failure: if a hub is unavailable, agents can query servers directly by hash.
-- Version-pinned shards are immutable inputs to a manifest generation. Publishers MUST NOT apply retention that can prune a shard version while a reachable manifest references it.
-- Manifest retention does not imply shard retention. Shards remain unpruned until a reference-aware collector can prove no retained manifest version names them. A fixed shard window is unsafe because failed or concurrent staging can advance shard versions without advancing manifest history.
-
-### 12.2 Atomic Graph Snapshots
+### 12.1 Atomic Graph Snapshots
 
 Federation agents publish a strict graph snapshot at `/graph/manifest.md` alongside the legacy `/graph.md` export. The separate path keeps old graph consumers working during migration.
 
@@ -1136,9 +1068,9 @@ The legacy `/graph.md` export MAY append a `## Source observations` fenced JSON 
 
 Publishers stage and verify the inactive slot before compare-and-swapping the manifest. Readers fetch every shard through its version path and verify version, byte count, content hash, kind, part, and aggregate counts before applying any rows. A failed fetch or integrity check leaves the previous local graph state and seed etag unchanged.
 
-Snapshot-aware readers prefer `/graph/manifest.md` and fall back to `/graph.md` only when the manifest is `not-found`. Federation agents publish the snapshot first and the legacy export second. Generated graph documents under `/graph/` are hash-indexed but MUST NOT be interpreted as authored discovery links.
+Snapshot-aware readers prefer `/graph/manifest.md` and fall back to `/graph.md` only when the manifest is `not-found`. Federation agents publish the snapshot first and the legacy export second. Generated graph documents under `/graph/` are crawled but MUST NOT be interpreted as authored discovery links.
 
-Manifest retention does not permit shard retention while a retained manifest can reference an older shard version. The same reference-aware collection requirement as hash-index shards applies.
+Manifest retention does not permit shard retention while a retained manifest can reference an older shard version: shards remain unpruned until a reference-aware collector can prove no retained manifest version names them. A fixed shard window is unsafe because failed or concurrent staging can advance shard versions without advancing manifest history.
 
 ## 13. Future Extensions
 

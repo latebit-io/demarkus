@@ -12,7 +12,7 @@ import (
 
 // A WATCH stream (§6.8) is a sequence of frontmatter blocks with no bodies:
 // an acknowledgement, then events and heartbeats, until a terminal status.
-// Events are hints; a client fetches content by hash.
+// Events are hints; a client fetches content by path and version.
 const (
 	// MaxWatchBlockLength bounds one block, fences included, so a client reads
 	// a stream with a fixed buffer.
@@ -225,7 +225,7 @@ func (b WatchBlock) Event() (WatchEvent, error) {
 		return WatchEvent{}, fmt.Errorf("%w: version %q", ErrMalformedWatchBlock, b.Metadata["version"])
 	}
 	if e.Hash != "" {
-		if _, ok := IsHashPath(e.Hash); !ok {
+		if !IsContentHash(e.Hash) {
 			return WatchEvent{}, fmt.Errorf("%w: hash %q", ErrMalformedWatchBlock, e.Hash)
 		}
 	}

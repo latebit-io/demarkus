@@ -54,7 +54,6 @@ type Reader interface {
 	ListEntries(ctx context.Context, reqPath string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error)
 	IsDir(ctx context.Context, reqPath string) (bool, error)
 	Versions(ctx context.Context, reqPath string) ([]storefmt.VersionInfo, error)
-	LookupHash(ctx context.Context, hash string) (string, error)
 	VerifyChain(ctx context.Context, reqPath string) error
 }
 
@@ -112,9 +111,9 @@ type CatalogReader interface {
 	Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error)
 }
 
-// SearchFreshness bounds how far a catalog read (Lookup, ListEntries,
-// LookupHash) may trail a write acknowledged on another replica; reads by path
-// and a replica's own writes are exact. ADR 0036.
+// SearchFreshness bounds how far a catalog read (Lookup, ListEntries) may
+// trail a write acknowledged on another replica; reads by path and a
+// replica's own writes are exact. ADR 0036.
 const SearchFreshness = time.Second
 
 // ReadView pins all read surfaces to one committed snapshot, chosen at its

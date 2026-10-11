@@ -44,9 +44,6 @@ func TestRequiredArgumentsAreNamed(t *testing.T) {
 		{"publish url", func(r *mcp.CallToolRequest) error { _, err := Publish(r); return err }, map[string]any{"body": "b"}, "url is required"},
 		{"publish body", func(r *mcp.CallToolRequest) error { _, err := Publish(r); return err }, map[string]any{"url": "/x"}, "body is required"},
 		{"append body", func(r *mcp.CallToolRequest) error { _, err := Append(r); return err }, map[string]any{"url": "/x"}, "body is required"},
-		{"resolve", func(r *mcp.CallToolRequest) error { _, err := Resolve(r); return err }, nil, "hash is required"},
-		{"index source", func(r *mcp.CallToolRequest) error { _, err := Index(r); return err }, map[string]any{"target": "/t"}, "source is required"},
-		{"index target", func(r *mcp.CallToolRequest) error { _, err := Index(r); return err }, map[string]any{"source": "/s"}, "target is required"},
 		{"graph", func(r *mcp.CallToolRequest) error { _, err := Graph(r); return err }, map[string]any{"url": 3}, "url is required"},
 	}
 	for _, tt := range tests {

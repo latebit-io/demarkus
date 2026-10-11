@@ -30,10 +30,6 @@ func (store *Store) Versions(reqPath string) ([]storefmt.VersionInfo, error) {
 	return store.direct().Versions(reqPath)
 }
 
-func (store *Store) LookupHash(hash string) (string, error) {
-	return store.direct().LookupHash(hash)
-}
-
 func (store *Store) VerifyChain(reqPath string) error { return store.direct().VerifyChain(reqPath) }
 
 func (store *Store) Lookup(query string, options catalog.Options) ([]catalog.Result, error) {
@@ -109,8 +105,6 @@ func (p *pinnedView) IsDir(reqPath string) (bool, error) { return p.view.IsDir(p
 func (p *pinnedView) Versions(reqPath string) ([]storefmt.VersionInfo, error) {
 	return p.view.Versions(p.ctx, reqPath)
 }
-
-func (p *pinnedView) LookupHash(hash string) (string, error) { return p.view.LookupHash(p.ctx, hash) }
 
 func (p *pinnedView) VerifyChain(reqPath string) error { return p.view.VerifyChain(p.ctx, reqPath) }
 

@@ -1,6 +1,6 @@
 # demarkus-agent Helm chart
 
-Deploys [demarkus-agent](https://github.com/latebit-io/demarkus) as a federation crawler in Kubernetes. The agent crawls a list of seed Mark Protocol servers, collects content hashes, and publishes aggregated (or per-server) indexes to one or more hubs on a schedule.
+Deploys [demarkus-agent](https://github.com/latebit-io/demarkus) as a federation crawler in Kubernetes. The agent crawls a list of seed Mark Protocol servers, accumulates the link graph, and publishes it to one or more hubs on a schedule.
 
 ## Quick start
 
@@ -81,7 +81,7 @@ these come from `global.worlds` (the entry flagged `hub: true`),
 | `image.pullPolicy` | string | `IfNotPresent` | |
 | `replicaCount` | int | `1` | Keep at 1; multiple replicas re-do the same crawl |
 | `config.seeds` | list | `[]` | `mark://` URLs to crawl. Required unless derived from `worlds` |
-| `config.hubs` | list | `[]` | `mark://` URLs to publish indexes to. Empty = crawl-only mode |
+| `config.hubs` | list | `[]` | `mark://` URLs to publish the graph to. Empty = crawl-only mode |
 | `config.endpoints` | map | `{}` | Logical authority to explicit `dialAddress` and optional `serverName` transport route |
 | `config.crawl.maxDepth` | int | `2` | Max link hops per server |
 | `config.crawl.maxServers` | int | `50` | Max servers to discover per run |
@@ -90,7 +90,6 @@ these come from `global.worlds` (the entry flagged `hub: true`),
 | `config.schedule.interval` | duration | `6h` | Time between crawl runs |
 | `config.politeness.requestDelay` | duration | `100ms` | Delay between requests to same server |
 | `config.politeness.perServerConcurrency` | int | `2` | Max concurrent requests per server |
-| `perServer` | bool | `true` | `true` → one index per server at `/index/<host>.md`; `false` → single aggregated `/index.md` (overwrites a curated `/index.md` on the hub) |
 | `insecure` | bool | `false` | Skip TLS cert verification (self-signed dev clusters only) |
 | `tokens.existingSecret` | string | `""` | Name of an existing Secret with key `tokens.toml`. Takes precedence over `tokens.inline` |
 | `tokens.inline` | map | `{}` | Inline `host:port → token` map. Generates `<release>-tokens` Secret |
@@ -123,7 +122,7 @@ config:
       serverName: root-knowledge.namespace.svc.cluster.local
 ```
 
-Graph URLs, hash indexes, state, and token lookup remain keyed by `team-a:6309`
+Graph URLs, state, and token lookup remain keyed by `team-a:6309`
 and `root:6309`. Only socket destination and TLS server name are overridden.
 Token files must therefore use logical authority keys.
 
@@ -140,21 +139,20 @@ For a single hub with a single token, you can also set the `DEMARKUS_AUTH` env v
 | Setting | What the agent publishes |
 |---|---|
 | `hubs: []` | Nothing. Crawl-only. State is updated. |
-| `hubs: [X]`, `perServer: true` (default) | One `/index/<server>.md` per discovered server, to each hub |
-| `hubs: [X]`, `perServer: false` | Single aggregated `/index.md` to each hub, replacing any curated `/index.md` there |
+| `hubs: [X]`, `publishGraph: false` (default) | Nothing. Crawl-only. |
+| `hubs: [X]`, `publishGraph: true` | The `/graph/manifest.md` snapshot and the legacy `/graph.md` export, to each hub |
 
 Configured hubs are not followed from document links unless they also appear in
-`config.seeds`. This prevents an aggregation hub from recursively crawling and
-indexing its own generated graph and hash indexes.
+`config.seeds`. This prevents an aggregation hub from recursively crawling its
+own generated graph.
 
-The canonical `/graph.md` export is fetched and included in hash indexes, but
-its generated table links are not recorded as authored edges or followed for
-server discovery. This prevents graph exports from recursively amplifying one
-another.
+The canonical `/graph.md` export is fetched, but its generated table links are
+not recorded as authored edges or followed for server discovery. This prevents
+graph exports from recursively amplifying one another.
 
-Re-publishing is idempotent: the agent uses `expected_version=-1` (no check), and the server's no-op-on-duplicate-content prevents version churn when the computed index is unchanged.
+Re-publishing is idempotent: the agent uses `expected_version=-1` (no check), and the server's no-op-on-duplicate-content prevents version churn when the computed graph is unchanged.
 
-Generated graph and index-manifest documents are published with `retention: 20` (the fedcrawl `[publish]` default); the chart exposes no knob for it. Version-pinned index shards omit retention so reachable manifest versions stay readable.
+Generated graph documents are published with `retention: 20` (the fedcrawl `[publish]` default); the chart exposes no knob for it. Version-pinned snapshot shards omit retention so reachable manifest versions stay readable.
 
 ## Probes
 
@@ -184,6 +182,5 @@ helm unittest deploy/helm/demarkus-agent/
 ## See also
 
 - `/plans/universe-deployment.md`: full Phase 6 plan
-- `/architecture.md#agent-driven-hash-discovery`: federation pattern
 - `client/cmd/demarkus-agent/main.go`: agent CLI
-- `client/internal/fedcrawl/`: crawl + index + publish core
+- `client/internal/fedcrawl/`: crawl + graph publish core

@@ -19,14 +19,14 @@ import (
 
 var testLogger = slog.New(slog.DiscardHandler)
 
-// openWatched opens root with the hash index built and WATCH on.
+// openWatched opens root with the document index built and WATCH on.
 func openWatched(t *testing.T, root string, ring int) (*Store, *changefeed.Hub) {
 	t.Helper()
 	documents, err := protocolstore.Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := documents.BuildHashIndex(); err != nil {
+	if err := documents.BuildIndex(); err != nil {
 		t.Fatal(err)
 	}
 	store, err := Open(documents, catalog.New(), Options{ChangeRing: ring, Logger: testLogger})

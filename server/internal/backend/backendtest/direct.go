@@ -64,13 +64,6 @@ func (d Direct) Versions(reqPath string) ([]storefmt.VersionInfo, error) {
 	})
 }
 
-// LookupHash resolves a body hash through a fresh view.
-func (d Direct) LookupHash(hash string) (string, error) {
-	return read(d, func(ctx context.Context, view backend.ReadView) (string, error) {
-		return view.LookupHash(ctx, hash)
-	})
-}
-
 // VerifyChain checks the hash chain through a fresh view.
 func (d Direct) VerifyChain(reqPath string) error {
 	_, err := read(d, func(ctx context.Context, view backend.ReadView) (struct{}, error) {

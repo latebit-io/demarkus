@@ -3,7 +3,6 @@ package store
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,8 +58,8 @@ func TestMigrationPreservesArchiveStateSeparately(t *testing.T) {
 		if err != nil || pinned.Archived {
 			t.Fatalf("pinned = %+v (err %v), want unarchived", pinned, err)
 		}
-		if _, err := destination.LookupHashResult(storefmt.ContentHash([]byte("# Body\n"))); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("archived imported hash lookup err = %v, want ErrNotExist", err)
+		if destination.IndexSize() != 0 {
+			t.Errorf("archived import indexed: size %d, want 0", destination.IndexSize())
 		}
 	})
 
@@ -98,8 +97,8 @@ func TestMigrationPreservesArchiveStateSeparately(t *testing.T) {
 		if err != nil || !bytes.Equal(imported, stored) {
 			t.Errorf("imported bytes equal = %v (err %v), want true", bytes.Equal(imported, stored), err)
 		}
-		if path, err := destination.LookupHashResult(storefmt.ContentHash([]byte("# Legacy\n"))); err != nil || path != "/legacy.md" {
-			t.Errorf("active imported hash lookup = (%q, %v), want /legacy.md", path, err)
+		if destination.IndexSize() != 1 {
+			t.Errorf("active import not indexed: size %d, want 1", destination.IndexSize())
 		}
 
 		exported := make(map[string]storefmt.StoredDocument)

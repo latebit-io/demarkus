@@ -170,13 +170,3 @@ func (g *Gateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToolRe
 	args := mcpbind.GraphPublish(&req)
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.GraphPublish(ctx, args) })
 }
-
-// handleMarkIndex answers mark_index. The shared body authorizes the publish
-// target before the first request of the crawl; a dry run asks nobody.
-func (g *Gateway) handleMarkIndex(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	args, err := mcpbind.Index(&req)
-	if err != nil {
-		return mcpbind.Refused(err), nil
-	}
-	return g.run(func(t *marktools.Tools) marktools.Result { return t.Index(ctx, args) })
-}

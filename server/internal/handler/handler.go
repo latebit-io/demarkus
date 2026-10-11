@@ -186,6 +186,14 @@ type readCall struct {
 // serveRead answers a read verb from one snapshot, so a response never mixes
 // two committed states.
 func (h *Handler) serveRead(ctx context.Context, w io.Writer, req protocol.Request) {
+	// A reserved content address holds no document (ADR 0035): answered
+	// without a view. LOOKUP's path is a scope, not a document.
+	if req.Verb != protocol.VerbLookup && protocol.IsReservedHashPath(req.Path) {
+		if h.authorizeRead(w, req) {
+			h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
+		}
+		return
+	}
 	view, err := h.store.OpenReadView(ctx)
 	if err != nil {
 		h.logger.Error("open read view failed", "verb", req.Verb, "path", sanitize(req.Path), "error", err)
@@ -334,41 +342,9 @@ func (h *Handler) versionedFetch(ctx context.Context, reqPath string, reader sto
 	return basePath, version
 }
 
-func (h *Handler) handleFetchByHash(ctx context.Context, call *readCall, hash string) {
-	w, req, reader := call.w, call.req, call.view
-	docPath, err := reader.LookupHash(ctx, hash)
-	if errors.Is(err, storagebackend.ErrNotFound) {
-		h.logger.Info("hash not found", "hash", hash)
-		h.writeError(w, protocol.StatusNotFound, "content not found for hash "+hash)
-		return
-	}
-	if err != nil {
-		h.logger.Error("hash lookup failed", "hash", hash, "error", err)
-		h.writeError(w, protocol.StatusServerError, "internal error")
-		return
-	}
-
-	// Check read auth on the resolved path — knowing a hash must not bypass access control.
-	pathReq := req
-	pathReq.Path = docPath
-	if !h.authorizeRead(w, pathReq) {
-		return
-	}
-
-	doc, err := reader.Get(ctx, docPath, 0)
-	if err != nil {
-		h.logger.Error("fetch by hash failed", "hash", hash, "path", sanitize(docPath), "error", err)
-		h.writeError(w, protocol.StatusServerError, "internal error")
-		return
-	}
-
-	h.serveDocument(w, req, doc, docPath)
-}
-
-// authorizeRead checks whether a read request is allowed. Returns true if the
-// request may proceed. If the path is not covered by any read token, access is
-// public and the request proceeds without auth. Returns false and writes an
-// error response if auth is required but missing or invalid.
+// authorizeRead reports whether a read may proceed: a path no read token
+// covers is public. On a missing or invalid token it writes the denial and
+// returns false.
 func (h *Handler) authorizeRead(w io.Writer, req protocol.Request) bool {
 	if err := h.checkReadAuth(req.Path, req.Metadata["auth"]); err != nil {
 		h.Deny(w, req, err)
@@ -407,12 +383,6 @@ func scopePath(reqPath string) string {
 
 func (h *Handler) handleFetch(ctx context.Context, call *readCall) {
 	w, req, reader := call.w, call.req, call.view
-	// Check for content-addressed hash: FETCH /sha256-<64hex>
-	// Read auth for hash paths is checked after resolving to a real path.
-	if hash, ok := protocol.IsHashPath(req.Path); ok {
-		h.handleFetchByHash(ctx, call, hash)
-		return
-	}
 
 	// For versioned paths, check read auth on the base path so that
 	// /doc.md/v2 is gated by the same token as /doc.md.
@@ -514,10 +484,6 @@ func (h *Handler) handleList(ctx context.Context, call *readCall) {
 		return
 	}
 	reqPath := req.Path
-	if _, ok := protocol.IsHashPath(reqPath); ok {
-		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
-		return
-	}
 	includeArchived, err := parseListIncludeArchived(req.Metadata["include-archived"])
 	if err != nil {
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
@@ -735,10 +701,6 @@ func (h *Handler) handleVersions(ctx context.Context, call *readCall) {
 		return
 	}
 	reqPath := req.Path
-	if _, ok := protocol.IsHashPath(reqPath); ok {
-		h.writeError(w, protocol.StatusNotFound, reqPath+" not found")
-		return
-	}
 
 	versions, err := reader.Versions(ctx, reqPath)
 	if err != nil {
