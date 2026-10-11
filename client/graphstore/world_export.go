@@ -7,7 +7,7 @@ import (
 	"github.com/latebit-io/demarkus/client/graph"
 )
 
-// BuildWorldsExport renders checkpoint rows, by world name, as the legacy
+// BuildWorldsExport renders checkpoint rows, by world name, as the graph
 // export: an ok node per row and its edges, with no source observations, so
 // only the rows and exported change the body.
 func BuildWorldsExport(exported time.Time, worlds map[string][]WorldSource) string {

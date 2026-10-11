@@ -83,10 +83,8 @@ the protocol's 4MB object limit.
 
 The initialize result carries server `instructions` (recall-first,
 record-as-you-go routing, metadata rules), and three prompts ship in
-place of the knowledge broker's: `memory-context` (restore working
-context from the memory), `memory-journal` (append a dated journal entry),
-and `memory-export` (byte-preserving export of every document to local
+place of the knowledge broker's: `soul-context` (restore working
+context from the soul), `soul-journal` (append a dated journal entry),
+and `soul-export` (byte-preserving export of every document to local
 files; the service is not a lock-in). Plugin-less hosts (Claude
 Desktop, ChatGPT, Cursor) get their usage contract from these.
-
-The pre-rename `soul-context`, `soul-journal`, and `soul-export` prompt names remain registered as deprecated aliases for one release.

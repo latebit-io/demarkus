@@ -256,18 +256,9 @@ func withLockedFile(path string, fn func() error) (err error) {
 	return fn()
 }
 
-// FormatEntry returns the TOML text representation of a single labeled
-// entry. Labels that satisfy TOML's bare-key grammar (alphanumeric, `_`,
-// `-`) are emitted unquoted — the common case for human-chosen labels and
-// the format the legacy demarkus-token CLI produces. Labels with dots,
-// whitespace, or other characters are emitted as quoted keys, e.g.
-// `[tokens."with.dot"]`, which is otherwise valid TOML and round-trips
-// through ReadFile to the same map key.
-//
-// Entry.Expires is emitted only when non-empty, matching the `omitempty`
-// semantics of the struct tag. Callers must pass a non-nil entry; panics
-// on nil are a programmer error and the call site in AppendEntry guards
-// against that path.
+// FormatEntry renders one labeled entry as TOML. Bare-key labels stay
+// unquoted; others are quoted (`[tokens."with.dot"]`) and round-trip through
+// ReadFile. Expires is omitted when empty. entry must be non-nil.
 func FormatEntry(label string, entry *Entry) string {
 	keyExpr := label
 	if !isBareTOMLKey(label) {

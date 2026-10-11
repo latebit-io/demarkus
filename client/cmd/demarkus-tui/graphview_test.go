@@ -170,53 +170,6 @@ func newTestStore(t *testing.T) *graphstore.Store {
 	return gs
 }
 
-func TestBacklinksList(t *testing.T) {
-	t.Run("nil store", func(t *testing.T) {
-		items := backlinksList(nil, "mark://h/a.md")
-		if items != nil {
-			t.Errorf("got %d items, want nil", len(items))
-		}
-	})
-
-	t.Run("returns backlinks with titles", func(t *testing.T) {
-		gs := newTestStore(t)
-		g := graph.New()
-		g.AddNode(&graph.Node{URL: "mark://h/a.md", Title: "A", Status: "ok"})
-		g.AddNode(&graph.Node{URL: "mark://h/b.md", Title: "B", Status: "ok"})
-		g.AddNode(&graph.Node{URL: "mark://h/c.md", Title: "C", Status: "ok"})
-		g.AddEdge("mark://h/a.md", "mark://h/c.md")
-		g.AddEdge("mark://h/b.md", "mark://h/c.md")
-		gs.Merge(g, nil)
-
-		items := backlinksList(gs, "mark://h/c.md")
-		if len(items) != 2 {
-			t.Fatalf("got %d items, want 2", len(items))
-		}
-		urls := map[string]bool{}
-		for _, item := range items {
-			urls[item.url] = true
-			if item.title == "" {
-				t.Errorf("item %q has empty title", item.url)
-			}
-		}
-		if !urls["mark://h/a.md"] || !urls["mark://h/b.md"] {
-			t.Errorf("expected a.md and b.md, got %v", urls)
-		}
-	})
-
-	t.Run("no backlinks", func(t *testing.T) {
-		gs := newTestStore(t)
-		g := graph.New()
-		g.AddNode(&graph.Node{URL: "mark://h/a.md", Title: "A", Status: "ok"})
-		gs.Merge(g, nil)
-
-		items := backlinksList(gs, "mark://h/a.md")
-		if len(items) != 0 {
-			t.Errorf("got %d items, want 0", len(items))
-		}
-	})
-}
-
 func TestTopologyList(t *testing.T) {
 	t.Run("nil store", func(t *testing.T) {
 		items := topologyList(nil)

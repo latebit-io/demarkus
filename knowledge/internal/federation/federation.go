@@ -39,7 +39,7 @@ const (
 
 // Grant is everything the deriver may write: its checkpoints in the hub and
 // the export rendered from them.
-var Grant = protocol.Grant{Label: "federation", Paths: []string{graphstore.WorldGraphRoot + "/**", graphstore.LegacyExportPath}}
+var Grant = protocol.Grant{Label: "federation", Paths: []string{graphstore.WorldGraphRoot + "/**", graphstore.GraphExportPath}}
 
 // Source reads the derived worlds by name, anonymously: no token and no
 // grant, so a document the public cannot read never enters the graph.

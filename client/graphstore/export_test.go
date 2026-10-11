@@ -103,7 +103,7 @@ func TestExportObservationHeadingOnlyMatchesSections(t *testing.T) {
 				t.Fatal(err)
 			}
 			if len(nodes) != 1 || nodes[0].Title != title || len(edges) != 1 || nodes[0].Observation.Freshness() != "unknown" {
-				t.Fatalf("legacy export changed: nodes=%+v edges=%+v", nodes, edges)
+				t.Fatalf("export changed: nodes=%+v edges=%+v", nodes, edges)
 			}
 			for _, suffix := range []string{"\n## Source observations", "\n## Source observations\n", "\n## Source observations \n"} {
 				if _, _, err := ParseExportStrict(body + suffix); err == nil {
@@ -114,7 +114,7 @@ func TestExportObservationHeadingOnlyMatchesSections(t *testing.T) {
 	}
 }
 
-func TestExportInvalidObservationTimeLogsAndRetainsLegacyOutput(t *testing.T) {
+func TestExportInvalidObservationTimeLogsAndRetainsPlainOutput(t *testing.T) {
 	observation := graph.Observe("mark://host/a.md", map[string]string{"version": "3"})
 	observation.Complete = true
 	observation.ObservedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -128,7 +128,7 @@ func TestExportInvalidObservationTimeLogsAndRetainsLegacyOutput(t *testing.T) {
 		t.Fatalf("marshal failure not logged: %s", output.String())
 	}
 	if !strings.Contains(body, "Source observations unavailable: invalid observation time.") || strings.Contains(body, observationSection) {
-		t.Fatalf("legacy fallback changed: %s", body)
+		t.Fatalf("fallback changed: %s", body)
 	}
 	nodes, _, err := ParseExportStrict(body)
 	if err != nil || len(nodes) != 1 || nodes[0].Observation.Freshness() != "unknown" {
@@ -152,14 +152,14 @@ func TestParseExport(t *testing.T) {
 
 ## Edges
 
-| From | To |
-|------|----|
-| mark://a:6309/x.md | mark://a:6309/y.md |
+| From | To | Rel | Label | Anchor | Count |
+|------|----|-----|-------|--------|-------|
+| mark://a:6309/x.md | mark://a:6309/y.md |  |  |  | 1 |
 `
 
 	nodes, edges := ParseExport(md)
 	if _, _, err := ParseExportStrict(md); err != nil {
-		t.Fatalf("ParseExportStrict legacy export: %v", err)
+		t.Fatalf("ParseExportStrict: %v", err)
 	}
 
 	if len(nodes) != 2 {
@@ -185,7 +185,7 @@ func TestParseExport(t *testing.T) {
 		t.Errorf("edge = %+v, want x.md -> y.md", edges[0])
 	}
 	if edges[0].Count != 1 {
-		t.Errorf("legacy edge Count = %d, want 1", edges[0].Count)
+		t.Errorf("edge Count = %d, want 1", edges[0].Count)
 	}
 }
 

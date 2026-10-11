@@ -183,13 +183,13 @@ func TestSeedFallsBackToTheWorldsOwnGraph(t *testing.T) {
 	seedAlpha(ctx, store, hub)
 
 	hub.remove(WorldManifestPath("alpha"))
-	legacy := BuildExport(time.Now(), []StoredNode{{URL: "mark://alpha/c.md", Title: "C", Status: "ok"}}, nil)
+	plain := BuildExport(time.Now(), []StoredNode{{URL: "mark://alpha/c.md", Title: "C", Status: "ok"}}, nil)
 	store.ExpireSeedCheck("alpha")
 	store.Seed(ctx, SeedSource{
 		Owner: "alpha",
 		Fetch: func(_ context.Context, docPath, _ string) (protocol.Response, error) {
-			if docPath == LegacyExportPath {
-				return protocol.Response{Status: protocol.StatusOK, Body: legacy}, nil
+			if docPath == GraphExportPath {
+				return protocol.Response{Status: protocol.StatusOK, Body: plain}, nil
 			}
 			return protocol.Response{Status: protocol.StatusNotFound}, nil
 		},
@@ -199,7 +199,7 @@ func TestSeedFallsBackToTheWorldsOwnGraph(t *testing.T) {
 		t.Fatal("the world's own graph did not replace the checkpoint's rows")
 	}
 
-	// The same checkpoint back is read whole: the legacy rows hold none of it.
+	// The same checkpoint back is read whole: the export rows hold none of it.
 	reads := hub.shardReads()
 	hub.checkpoint(t, true, seedA, seedB)
 	seedAlpha(ctx, store, hub)
@@ -207,7 +207,7 @@ func TestSeedFallsBackToTheWorldsOwnGraph(t *testing.T) {
 		t.Errorf("read %d shards, want both", got)
 	}
 	if store.GetNode("mark://alpha/c.md") != nil || store.GetNode("mark://alpha/b.md") == nil {
-		t.Error("legacy rows survived the checkpoint, or its rows are missing")
+		t.Error("export rows survived the checkpoint, or its rows are missing")
 	}
 }
 
@@ -233,10 +233,10 @@ func TestSeedKeepsAnEscapedPathsRow(t *testing.T) {
 // they are not a checkpoint's subset.
 func TestSeedIncompleteCheckpointKeepsNoFallbackRows(t *testing.T) {
 	ctx, store, hub := context.Background(), New(), newTestHub()
-	legacy := BuildExport(time.Now(), []StoredNode{{URL: "mark://alpha/c.md", Title: "C", Status: "ok"}}, nil)
+	plain := BuildExport(time.Now(), []StoredNode{{URL: "mark://alpha/c.md", Title: "C", Status: "ok"}}, nil)
 	store.Seed(ctx, SeedSource{Owner: "alpha", Hub: hub.fetch, Fetch: func(_ context.Context, docPath, _ string) (protocol.Response, error) {
-		if docPath == LegacyExportPath {
-			return protocol.Response{Status: protocol.StatusOK, Body: legacy}, nil
+		if docPath == GraphExportPath {
+			return protocol.Response{Status: protocol.StatusOK, Body: plain}, nil
 		}
 		return protocol.Response{Status: protocol.StatusNotFound}, nil
 	}})

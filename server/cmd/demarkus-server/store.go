@@ -57,12 +57,7 @@ func openStore(cfg *config.Config, logger *slog.Logger) (backend, error) {
 
 // openFileStore serves documents from versioned files under the content dir.
 func openFileStore(cfg *config.Config, logger *slog.Logger) (backend, error) {
-	// Open migrates any legacy-layout version files; serving an unmigrated
-	// root would hide every legacy document, so failure is fatal.
-	s, err := store.Open(cfg.ContentDir)
-	if err != nil {
-		return backend{}, fmt.Errorf("store open failed: %w", err)
-	}
+	s := store.New(cfg.ContentDir)
 	// A broken walk is fatal (an empty index would hide every document from
 	// LIST); a walk that merely skipped entries is logged per entry and served.
 	if err := s.BuildIndex(); err != nil && !logPartialWalk(logger, "document index", err) {

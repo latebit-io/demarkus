@@ -43,7 +43,7 @@ type exportedWorld struct {
 
 func newExporter(d *deriver) *exporter {
 	e := &exporter{
-		deriver: d, log: d.Log.With("export", graphstore.LegacyExportPath),
+		deriver: d, log: d.Log.With("export", graphstore.GraphExportPath),
 		pending: make(map[string]struct{}, len(d.Worlds)), wake: make(chan struct{}, 1),
 		worlds: make(map[string]*exportedWorld, len(d.Worlds)), liveVersion: -1,
 	}
@@ -185,7 +185,7 @@ func (e *exporter) write(ctx context.Context) error {
 		e.owed = false
 		return nil
 	}
-	_, version, err := e.Hub.PublishDocument(ctx, graphstore.LegacyExportPath, body, e.liveVersion)
+	_, version, err := e.Hub.PublishDocument(ctx, graphstore.GraphExportPath, body, e.liveVersion)
 	if errors.Is(err, generation.ErrConflict) {
 		// Another term wrote it: render again from the hub's checkpoints,
 		// never from the ones this term last saw.
@@ -201,7 +201,7 @@ func (e *exporter) write(ctx context.Context) error {
 
 // readLive takes the live document's version and content.
 func (e *exporter) readLive(ctx context.Context) error {
-	head, version, err := e.hubHead(ctx, graphstore.LegacyExportPath)
+	head, version, err := e.hubHead(ctx, graphstore.GraphExportPath)
 	if err != nil {
 		return err
 	}

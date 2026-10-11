@@ -125,13 +125,6 @@ func TestSessionEndScansTranscript(t *testing.T) {
 	}
 }
 
-func TestSessionEndAcceptsLegacySoulWriteKey(t *testing.T) {
-	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=1\nMODE=default\n"})
-	if eval(t, &Input{Event: "session-end", Signals: Signals{ChangedFiles: true}, LegacyMemoryWrite: true}) != "" {
-		t.Error("legacy soulWrite=true must suppress the journal nudge like memoryWrite=true")
-	}
-}
-
 func TestPromoteAcceptsCursorShape(t *testing.T) {
 	setupHome(t, map[string]string{
 		"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n",

@@ -819,8 +819,6 @@ root/
 
 The current file (`doc.md`) SHOULD be a symbolic link to the latest version file. Each document's version files reside in their own subdirectory of `versions/`, at the same level as the document, named `v<N>` where N is the version number. The `archive-state` sidecar records current archive state separately from immutable version bytes. When absent, implementations MUST fall back to the latest version's legacy `archived` field; an explicit `false` sidecar overrides a legacy `archived: true` value.
 
-An older layout named version files `versions/<filename>.v<N>` directly in the `versions/` directory. Servers encountering it MUST migrate those files into the per-document layout before serving the store (§9.8).
-
 ### 9.4. Version File Format
 
 Each version file MUST be prefixed with a store-managed frontmatter block. The block carries the store's own operational fields followed by any publisher-declared metadata.
@@ -907,8 +905,6 @@ Servers MUST NOT overwrite existing version files. Before writing a new version 
 ### 9.8. Non-Document Files
 
 A flat file present in the storage medium without version history never passed the protocol's write path: no token authorized it, no content contract validated it, and no hash chain anchors it. It is not a document (§11.9). Servers MUST NOT migrate such a file's content into version history; a PUBLISH to its path creates version 1 from the request body and replaces the file with the current-version pointer.
-
-This is distinct from the legacy flat *layout* (`versions/<filename>.v<N>`), whose versions were written through the protocol and MUST be preserved by layout migration to the on-disk layout of §9.3.
 
 ### 9.9. Version Retention
 
@@ -1054,9 +1050,9 @@ Paths matching `/sha256-<64 hex characters>` are reserved. A server MUST NOT cre
 
 ### 12.1 Atomic Graph Snapshots
 
-Federation agents publish a strict graph snapshot at `/graph/manifest.md` alongside the legacy `/graph.md` export. The separate path keeps old graph consumers working during migration.
+Federation agents publish a strict graph snapshot at `/graph/manifest.md` alongside the single-document `/graph.md` export.
 
-The `demarkus-graph-snapshot/v2` manifest records export time, completeness, total node and edge counts, active slot, and immutable descriptors for `nodes` and `edges` shards. Shards use `demarkus-graph-snapshot-shard/v2`, contain a fenced JSON payload, and live under `/graph/shards/{a|b}/<kind>-<part>.md`. Readers MUST accept v1 generations as having unknown source freshness; manifest and shard format versions MUST match. Older v1 readers reject v2 atomically. The separate legacy `/graph.md` tables remain compatible.
+The `demarkus-graph-snapshot/v2` manifest records export time, completeness, total node and edge counts, active slot, and immutable descriptors for `nodes` and `edges` shards. Shards use `demarkus-graph-snapshot-shard/v2`, contain a fenced JSON payload, and live under `/graph/shards/{a|b}/<kind>-<part>.md`. Readers MUST accept v1 generations as having unknown source freshness; manifest and shard format versions MUST match. Older v1 readers reject v2 atomically. The `/graph.md` tables remain compatible.
 
 Node payloads MAY carry an `observation` object: canonical logical document URL `source`, positive document `revision` when known, raw-version `etag`, outgoing-set `complete`, source `observed_at`, latest `attempted_at`, and bounded `problem` detail. Missing observations mean unknown freshness. Source revision comparisons MUST be scoped to the same source identity. Body hashes, manifest export timestamps and immutable shard versions MUST NOT substitute for source revisions. Metadata-only writes can change graph relations without changing the body hash. Archive state remains separate from source revision (§9.1).
 
@@ -1064,11 +1060,11 @@ Observations carry an extraction `view`: `document` for ordinary extraction or `
 
 An observation MAY also carry `highest_revision`, the highest previously observed revision of that same source. If present, it MUST be at least `revision`; surviving older topology MUST remain stale after the newer seed owner's withdrawal. It is not the containing shard's version.
 
-The legacy `/graph.md` export MAY append a `## Source observations` fenced JSON array of `{"url": "...", "observation": {...}}` rows. Existing node and edge tables are unchanged. Strict readers MUST reject malformed, duplicate or unmatched observation rows before applying the export. Readers without sidecar support retain topology with unknown freshness. Revision selection, last-good preservation and bounded revalidation policy are documented in [ADR 0013](adr/0013-graph-source-freshness.md).
+The `/graph.md` export MAY append a `## Source observations` fenced JSON array of `{"url": "...", "observation": {...}}` rows. Existing node and edge tables are unchanged. Strict readers MUST reject malformed, duplicate or unmatched observation rows before applying the export. Readers without sidecar support retain topology with unknown freshness. Revision selection, last-good preservation and bounded revalidation policy are documented in [ADR 0013](adr/0013-graph-source-freshness.md).
 
 Publishers stage and verify the inactive slot before compare-and-swapping the manifest. Readers fetch every shard through its version path and verify version, byte count, content hash, kind, part, and aggregate counts before applying any rows. A failed fetch or integrity check leaves the previous local graph state and seed etag unchanged.
 
-Snapshot-aware readers prefer `/graph/manifest.md` and fall back to `/graph.md` only when the manifest is `not-found`. Federation agents publish the snapshot first and the legacy export second. Generated graph documents under `/graph/` are crawled but MUST NOT be interpreted as authored discovery links.
+Snapshot-aware readers prefer `/graph/manifest.md` and fall back to `/graph.md` only when the manifest is `not-found`. Federation agents publish the snapshot first and `/graph.md` second. Generated graph documents under `/graph/` are crawled but MUST NOT be interpreted as authored discovery links.
 
 Manifest retention does not permit shard retention while a retained manifest can reference an older shard version: shards remain unpruned until a reference-aware collector can prove no retained manifest version names them. A fixed shard window is unsafe because failed or concurrent staging can advance shard versions without advancing manifest history.
 

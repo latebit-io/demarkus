@@ -206,21 +206,6 @@ type graphNeighborhoodPage struct {
 
 const graphNeighborhoodPageSize = 20
 
-// backlinksList preserves the legacy helper over the indexed query contract.
-func backlinksList(gs *graphstore.Store, url string) []graphListItem {
-	if gs == nil {
-		return nil
-	}
-	page, err := graphNeighborhoodList(gs, url, graphstore.NeighborhoodOptions{
-		Direction: graphstore.NeighborhoodIncoming,
-		PageSize:  graphstore.MaxNeighborhoodPageSize,
-	})
-	if err != nil {
-		return nil
-	}
-	return page.items
-}
-
 func graphNeighborhoodList(gs *graphstore.Store, url string, opts graphstore.NeighborhoodOptions) (graphNeighborhoodPage, error) {
 	if gs == nil {
 		return graphNeighborhoodPage{}, nil

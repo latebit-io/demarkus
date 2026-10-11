@@ -40,7 +40,7 @@ func (p SeedProblem) Error() string { //nolint:gocritic // a small report, forma
 }
 
 // Seed refreshes the owner's seed at most once per SeedCheckInterval: its
-// hub checkpoint first, then its snapshot, then its legacy export. A failed
+// hub checkpoint first, then its snapshot, then its single-document export. A failed
 // pass keeps the last good seed and marks it; the store is then saved.
 func (s *Store) Seed(ctx context.Context, src SeedSource) { //nolint:gocritic // a source is built once and passed once
 	s.seedChecks.Run(ctx, src.Owner, func(ctx context.Context) bool {
@@ -117,20 +117,20 @@ func (s *Store) seedPass(ctx context.Context, src *SeedSource) (replaced bool, p
 		return failed("fetch", SnapshotManifestPath, manifest, nil)
 	}
 
-	legacy, err := src.Fetch(ctx, LegacyExportPath, etag)
+	export, err := src.Fetch(ctx, GraphExportPath, etag)
 	switch {
 	case err != nil:
-		return failed("fetch", LegacyExportPath, legacy, err)
-	case legacy.Status == protocol.StatusNotFound, legacy.Status == protocol.StatusNotModified:
+		return failed("fetch", GraphExportPath, export, err)
+	case export.Status == protocol.StatusNotFound, export.Status == protocol.StatusNotModified:
 		return false, nil
-	case legacy.Status != protocol.StatusOK:
-		return failed("fetch", LegacyExportPath, legacy, nil)
+	case export.Status != protocol.StatusOK:
+		return failed("fetch", GraphExportPath, export, nil)
 	}
-	nodes, edges, err := ParseExportStrict(legacy.Body)
+	nodes, edges, err := ParseExportStrict(export.Body)
 	if err != nil {
-		return failed("parse", LegacyExportPath, legacy, err)
+		return failed("parse", GraphExportPath, export, err)
 	}
-	s.commitSeed(src, &seedUpdate{nodes: nodes, edges: edges, etag: legacy.Metadata["etag"]})
+	s.commitSeed(src, &seedUpdate{nodes: nodes, edges: edges, etag: export.Metadata["etag"]})
 	return true, nil
 }
 

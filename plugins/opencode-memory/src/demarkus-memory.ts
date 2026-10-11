@@ -275,9 +275,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
             ? { type: "remote", url: host + "/mcp", enabled: true }
             : {
                 type: "local",
-                // --soul, not --memory: this hook can run before the fire-and-forget
-                // bootstrap has replaced an older binary. Switch when --soul is removed.
-                command: [BIN, "mcp-serve", "--soul", slug],
+                command: [BIN, "mcp-serve", "--memory", slug],
                 enabled: true,
               };
         }

@@ -130,7 +130,7 @@ The client-side `graphstore` package persists crawled graph data at `~/.mark/gra
 
 Backlinks ("what documents link here?") are derived from the stored graph with no server-side changes needed. The MCP `mark_backlinks` tool exposes this as a query for agents. The store is seeded on demand from the world's atomic `/graph/manifest.md` snapshot, with `/graph.md` as a compatibility fallback, so a fresh client answers backlinks before its first crawl; local crawls take precedence over seeded rows.
 
-The graph itself is exportable as a publishable markdown document. `mark_graph_export` renders the graph; `mark_graph_publish` exports and publishes the legacy single-document form in one step. The federation agent additionally publishes version-pinned node and edge shards behind a manifest-last CAS, allowing clients to import a complete generation without recrawling original documents.
+The graph itself is exportable as a publishable markdown document. `mark_graph_export` renders the graph; `mark_graph_publish` exports and publishes the single-document form in one step. The federation agent additionally publishes version-pinned node and edge shards behind a manifest-last CAS, allowing clients to import a complete generation without recrawling original documents.
 
 ## Open Knowledge Format (OKF) Compatibility
 

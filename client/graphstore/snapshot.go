@@ -22,8 +22,8 @@ import (
 const (
 	// SnapshotManifestPath is the additive entry point for atomic graph snapshots.
 	SnapshotManifestPath = "/graph/manifest.md"
-	// LegacyExportPath is the single document export that predates snapshots.
-	LegacyExportPath = "/graph.md"
+	// GraphExportPath is the single-document export; seeders prefer the snapshot.
+	GraphExportPath = "/graph.md"
 	// SnapshotManifestFormat identifies the manifest wire format.
 	SnapshotManifestFormat = "demarkus-graph-snapshot/v2"
 	// SnapshotShardFormat identifies the shard wire format.

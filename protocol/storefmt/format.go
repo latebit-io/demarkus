@@ -21,11 +21,9 @@ type StoredVersionHeader struct {
 	PreviousHash string
 }
 
-// This file exports the version-file format as shared vocabulary. A stored
-// version is a store-managed frontmatter block (version, archived,
-// previous-hash, publisher metadata) followed by the document content. Every
-// DocumentStore backend persists these exact bytes so the hash chain,
-// metadata extraction, and migration between backends stay byte-identical.
+// Stored version: store frontmatter (version, archived, previous-hash,
+// publisher metadata) then content. Every backend persists these exact bytes
+// so hash chains, metadata extraction and exports stay byte-identical.
 
 // SerializeVersion constructs the stored bytes for a version: store
 // frontmatter followed by content. prevRaw is the previous version's stored
@@ -70,9 +68,9 @@ func SerializeVersion(version int, prevRaw, content []byte, meta map[string]stri
 	return append([]byte(sb.String()), content...), nil
 }
 
-// SetArchived rewrites the legacy archived flag in stored bytes. It remains
-// for compatibility and fixtures; production archive transitions use separate
-// operational state so stored versions stay immutable.
+// SetArchived rewrites the archived flag in stored bytes, for test fixtures
+// only: production archive transitions use the sidecar so stored versions
+// stay immutable.
 func SetArchived(data []byte, archived bool) ([]byte, error) {
 	split, ok := splitStored(data)
 	if !ok {

@@ -80,12 +80,12 @@ func resultText(t *testing.T, res *mcp.CallToolResult) string {
 	return text.Text
 }
 
-// legacySeed hides the snapshot manifest unless the stub scripts one, so a
+// exportOnlySeed hides the snapshot manifest unless the stub scripts one, so a
 // SeedFn that ignores its path serves /graph.md only. The fake alone would
 // hand such a SeedFn the manifest too.
-type legacySeed struct{ *stubClient }
+type exportOnlySeed struct{ *stubClient }
 
-func (l legacySeed) Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+func (l exportOnlySeed) Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error) {
 	if err := ctx.Err(); err != nil {
 		return fetch.Result{}, err
 	}
@@ -114,7 +114,7 @@ func TestSeedGraph_ColdStoreAnswersBacklinks(t *testing.T) {
 			}}, nil
 		},
 	}
-	h := &handler{client: legacySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
+	h := &handler{client: exportOnlySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
 
 	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"}))
 	if err != nil {
@@ -135,7 +135,7 @@ func TestSeedGraph_ColdStoreAnswersBacklinks(t *testing.T) {
 	}
 }
 
-func TestSeedGraph_EmptyLegacyGenerationClearsSeed(t *testing.T) {
+func TestSeedGraph_EmptyExportGenerationClearsSeed(t *testing.T) {
 	store := emptyGraphStore(t)
 	store.ReplaceSeed("host:6309",
 		[]graphstore.StoredNode{{URL: "mark://host/source.md", Status: "ok"}},
@@ -147,13 +147,13 @@ func TestSeedGraph_EmptyLegacyGenerationClearsSeed(t *testing.T) {
 			Body:   graphstore.BuildExport(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), nil, nil),
 		}}, nil
 	}}
-	h := &handler{client: legacySeed{sc}, graphStore: store}
+	h := &handler{client: exportOnlySeed{sc}, graphStore: store}
 	h.seedGraph(t.Context(), "host:6309")
 	if got := store.Backlinks("mark://host/old.md"); len(got) != 0 {
-		t.Fatalf("stale backlink survived empty legacy generation: %v", got)
+		t.Fatalf("stale backlink survived empty export generation: %v", got)
 	}
 	if node := store.GetNode("mark://host/source.md"); node != nil {
-		t.Fatalf("stale node survived empty legacy generation: %+v", node)
+		t.Fatalf("stale node survived empty export generation: %+v", node)
 	}
 }
 
@@ -169,7 +169,7 @@ func TestSeedGraph_SnapshotShardFetchHonorsCancellation(t *testing.T) {
 			return fetch.Result{Response: shards[r.Path]}, nil
 		},
 	}
-	h := &handler{client: legacySeed{sc}, graphStore: emptyGraphStore(t)}
+	h := &handler{client: exportOnlySeed{sc}, graphStore: emptyGraphStore(t)}
 	h.seedGraph(ctx, "host:6309")
 	if got := h.graphStore.NodeCount(); got != 0 {
 		t.Fatalf("NodeCount = %d after canceled shard fetch", got)
@@ -191,7 +191,7 @@ func TestSeedGraph_DefaultHostWithoutPortCanonicalizes(t *testing.T) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
 		},
 	}
-	h := &handler{client: legacySeed{sc}, defaultHost: "mark://host", graphStore: emptyGraphStore(t)}
+	h := &handler{client: exportOnlySeed{sc}, defaultHost: "mark://host", graphStore: emptyGraphStore(t)}
 
 	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"}))
 	if err != nil {
@@ -213,7 +213,7 @@ func TestSeedGraph_SeedsResolvedHostNotDefault(t *testing.T) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
 		},
 	}
-	h := &handler{client: legacySeed{sc}, defaultHost: "mark://elsewhere:6309", graphStore: emptyGraphStore(t)}
+	h := &handler{client: exportOnlySeed{sc}, defaultHost: "mark://elsewhere:6309", graphStore: emptyGraphStore(t)}
 
 	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "mark://host:6309/b.md"}))
 	if err != nil {
@@ -233,7 +233,7 @@ func TestSeedGraph_FetchErrorDegrades(t *testing.T) {
 			return fetch.Result{}, errors.New("dial refused")
 		},
 	}
-	h := &handler{client: legacySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
+	h := &handler{client: exportOnlySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
 
 	res, err := h.markBacklinks(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"}))
 	if err != nil {
@@ -262,7 +262,7 @@ func TestSeedGraph_ExploreBacklinksSeeded(t *testing.T) {
 			return fetchtest.ListPage("/", ""), nil
 		},
 	}
-	h := &handler{client: legacySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
+	h := &handler{client: exportOnlySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
 
 	res, err := h.markExplore(context.Background(), newCallToolRequest(map[string]any{"url": "/b.md"}))
 	if err != nil {
@@ -285,7 +285,7 @@ func TestSeedGraph_MarkGraphSeeds(t *testing.T) {
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: hubGraphBody()}}, nil
 		},
 	}
-	h := &handler{client: legacySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
+	h := &handler{client: exportOnlySeed{sc}, defaultHost: "mark://host:6309", graphStore: emptyGraphStore(t)}
 
 	if _, err := h.markGraph(context.Background(), newCallToolRequest(map[string]any{"url": "/doc.md", "depth": float64(1)})); err != nil {
 		t.Fatalf("unexpected Go error: %v", err)

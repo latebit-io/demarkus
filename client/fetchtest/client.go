@@ -21,7 +21,7 @@ type Client struct {
 	mu sync.Mutex
 
 	FetchFn func(context.Context, fetch.FetchRequest) (fetch.Result, error)
-	// SeedFn answers the graph seed documents: the legacy export and the snapshot
+	// SeedFn answers the graph seed documents: the graph export and the snapshot
 	// manifest. FetchFn never sees either; unscripted, a seed is whatever was
 	// Published, else not found.
 	SeedFn func(context.Context, fetch.FetchRequest) (fetch.Result, error)
@@ -52,7 +52,7 @@ func status(code string, meta map[string]string) fetch.Result {
 }
 
 func isSeedPath(path string) bool {
-	return path == graphstore.LegacyExportPath || path == graphstore.SnapshotManifestPath
+	return path == graphstore.GraphExportPath || path == graphstore.SnapshotManifestPath
 }
 
 // Fetch records and answers a FETCH. A done context fails first, as it does

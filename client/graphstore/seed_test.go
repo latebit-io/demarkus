@@ -30,7 +30,7 @@ func (r *seedRemote) fetch(_ context.Context, path, ifNoneMatch string) (protoco
 	return protocol.Response{Status: protocol.StatusNotFound}, nil
 }
 
-func legacyExport(t *testing.T, from, to string) string {
+func plainExport(t *testing.T, from, to string) string {
 	t.Helper()
 	published := New()
 	published.ReplaceSeed("publisher", []StoredNode{{URL: from, Status: "ok"}}, []StoredEdge{{From: from, To: to, Count: 1}})
@@ -52,17 +52,17 @@ func publishedSnapshot(t *testing.T, from, to string) func(context.Context, stri
 	return func(ctx context.Context, path, _ string) (protocol.Response, error) { return remote.fetch(ctx, path) }
 }
 
-func TestSeedPrefersTheSnapshotAndFallsBackToTheLegacyExport(t *testing.T) {
+func TestSeedPrefersTheSnapshotAndFallsBackToTheExport(t *testing.T) {
 	const from, to = "mark://w/a.md", "mark://w/b.md"
-	legacy := protocol.Response{Status: protocol.StatusOK, Body: legacyExport(t, from, to), Metadata: map[string]string{"etag": "legacy-1"}}
-	noSnapshot := &seedRemote{docs: map[string]protocol.Response{LegacyExportPath: legacy}}
+	plain := protocol.Response{Status: protocol.StatusOK, Body: plainExport(t, from, to), Metadata: map[string]string{"etag": "export-1"}}
+	noSnapshot := &seedRemote{docs: map[string]protocol.Response{GraphExportPath: plain}}
 	tests := []struct {
 		name     string
 		fetch    func(context.Context, string, string) (protocol.Response, error)
 		wantEtag string
 	}{
 		{"snapshot", publishedSnapshot(t, from, to), "snap-1"},
-		{"legacy export when no snapshot exists", noSnapshot.fetch, "legacy-1"},
+		{"export when no snapshot exists", noSnapshot.fetch, "export-1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -77,7 +77,7 @@ func TestSeedPrefersTheSnapshotAndFallsBackToTheLegacyExport(t *testing.T) {
 		})
 	}
 	if len(noSnapshot.reads) != 2 {
-		t.Errorf("reads = %v, want the manifest, then the legacy export", noSnapshot.reads)
+		t.Errorf("reads = %v, want the manifest, then the export", noSnapshot.reads)
 	}
 }
 
@@ -106,8 +106,8 @@ func TestSeedFailureKeepsTheLastGoodSeedAndReportsWhy(t *testing.T) {
 		{"transport", &seedRemote{err: errors.New("dial refused")}, true},
 		{"snapshot status", &seedRemote{docs: map[string]protocol.Response{SnapshotManifestPath: {Status: protocol.StatusServerError}}}, true},
 		{"snapshot unreadable", &seedRemote{docs: map[string]protocol.Response{SnapshotManifestPath: {Status: protocol.StatusOK, Body: "not a manifest"}}}, true},
-		{"legacy status", &seedRemote{docs: map[string]protocol.Response{LegacyExportPath: {Status: protocol.StatusServerError}}}, true},
-		{"legacy unreadable", &seedRemote{docs: map[string]protocol.Response{LegacyExportPath: {Status: protocol.StatusOK, Body: "## Nodes\n- broken"}}}, true},
+		{"export status", &seedRemote{docs: map[string]protocol.Response{GraphExportPath: {Status: protocol.StatusServerError}}}, true},
+		{"export unreadable", &seedRemote{docs: map[string]protocol.Response{GraphExportPath: {Status: protocol.StatusOK, Body: "## Nodes\n- broken"}}}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -128,8 +128,8 @@ func TestSeedFailureKeepsTheLastGoodSeedAndReportsWhy(t *testing.T) {
 
 // A surface may translate or drop rows before they become the owner's seed.
 func TestSeedRewriteRunsBeforeTheSeedIsReplaced(t *testing.T) {
-	legacy := protocol.Response{Status: protocol.StatusOK, Body: legacyExport(t, "mark://w.svc/a.md", "mark://w.svc/b.md")}
-	store, remote := New(), &seedRemote{docs: map[string]protocol.Response{LegacyExportPath: legacy}}
+	plain := protocol.Response{Status: protocol.StatusOK, Body: plainExport(t, "mark://w.svc/a.md", "mark://w.svc/b.md")}
+	store, remote := New(), &seedRemote{docs: map[string]protocol.Response{GraphExportPath: plain}}
 	store.Seed(t.Context(), SeedSource{Owner: "w", Fetch: remote.fetch,
 		Rewrite: func([]StoredNode, []StoredEdge) ([]StoredNode, []StoredEdge) {
 			return nil, nil // a filter that owns nothing

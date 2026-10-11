@@ -332,10 +332,10 @@ func TestFreshnessProducerConsumerCompatibility(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(nodes[0].Observation, parsed[0].Observation) || len(parsedEdges) != 1 {
 		t.Fatalf("export round trip: %v", err)
 	}
-	legacy, _, _ := strings.Cut(body, observationSection)
-	oldNodes, oldEdges, err := ParseExportStrict(legacy)
+	plain, _, _ := strings.Cut(body, observationSection)
+	oldNodes, oldEdges, err := ParseExportStrict(plain)
 	if err != nil || oldNodes[0].Observation.Freshness() != "unknown" || len(oldEdges) != 1 {
-		t.Fatalf("legacy compatibility: %v", err)
+		t.Fatalf("export without observations: %v", err)
 	}
 	artifacts, err := BuildSnapshotShards(SnapshotManifestPath, generation.SlotA, nodes, edges, 0)
 	if err != nil {

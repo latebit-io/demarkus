@@ -1,19 +1,13 @@
 package seed
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
 // mockSeedClient records Publish calls and returns canned responses.
@@ -59,61 +53,6 @@ func TestSeedDocPublishesThroughProtocol(t *testing.T) {
 	if !strings.Contains(m.published[0].body, "# Projects") {
 		t.Errorf("seeded content does not look like index.md: %q", m.published[0].body[:min(40, len(m.published[0].body))])
 	}
-}
-
-// TestPristineTemplateHashes pins the hash set to the checked-in copies of
-// every seed variant ever shipped; a drifted hash would misclassify a pristine
-// flat file as user-customized and publish it as a stale layout override.
-func TestPristineTemplateHashes(t *testing.T) {
-	variants, err := filepath.Glob("testdata/project-template-v*.md")
-	if err != nil || len(variants) != len(pristineTemplateHashes) {
-		t.Fatalf("testdata variants = %d (err %v), want %d", len(variants), err, len(pristineTemplateHashes))
-	}
-	for _, f := range variants {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sum := sha256.Sum256(b)
-		if !pristineTemplateHashes[hex.EncodeToString(sum[:])] {
-			t.Errorf("%s hash %x not in pristineTemplateHashes", f, sum)
-		}
-	}
-}
-
-func TestCleanupLegacyTemplate(t *testing.T) {
-	// A real shipped seed variant; its hash is in pristineTemplateHashes.
-	pristine, err := os.ReadFile("testdata/project-template-v2.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	write := func(t *testing.T, content []byte) string {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "project-template.md"), content, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return dir
-	}
-
-	// Pristine seed: deleted.
-	dir := write(t, pristine)
-	CleanupLegacyTemplate(dir)
-	if config.FileExists(filepath.Join(dir, "project-template.md")) {
-		t.Error("pristine flat template not deleted")
-	}
-
-	// Customized: left in place for the store's flat-file migration.
-	custom := []byte("# My layout\n\ncustomized\n")
-	dir = write(t, custom)
-	CleanupLegacyTemplate(dir)
-	got, err := os.ReadFile(filepath.Join(dir, "project-template.md"))
-	if err != nil || !bytes.Equal(got, custom) {
-		t.Errorf("customized template altered: %q (err %v)", got, err)
-	}
-
-	// Absent: nothing happens.
-	CleanupLegacyTemplate(t.TempDir())
 }
 
 func (m *mockSeedClient) Fetch(context.Context, fetch.FetchRequest) (fetch.Result, error) {

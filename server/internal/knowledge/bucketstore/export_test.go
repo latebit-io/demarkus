@@ -1,10 +1,13 @@
 package bucketstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
@@ -46,7 +49,7 @@ func TestExportDocsPreservesPinnedStoredDocuments(t *testing.T) {
 	if !slices.Equal(paths, wantPaths) {
 		t.Fatalf("export paths = %v, want store traversal order %v", paths, wantPaths)
 	}
-	if err := storefmt.DiffExports(want, got); err != nil {
+	if err := diffExports(want, got); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -83,4 +86,40 @@ func TestExportDocsSurfacesCancellationAndCallbackFailure(t *testing.T) {
 	if err := ExportDocs(t.Context(), memory, ExportOptions{WorldID: testWorldID, Workers: 1}, func(string, storefmt.StoredDocument) error { return want }); !errors.Is(err, want) {
 		t.Fatalf("callback error=%v", err)
 	}
+}
+
+// diffExports is the one definition of export equality: same documents,
+// archive state, version numbers, stored bytes, and second-precision modified
+// times (the precision the protocol exposes via RFC3339 in VERSIONS).
+func diffExports(want, got map[string]storefmt.StoredDocument) error {
+	if len(got) != len(want) {
+		return fmt.Errorf("document count: got %d, want %d", len(got), len(want))
+	}
+	for path, wantDocument := range want {
+		gotDocument, ok := got[path]
+		if !ok {
+			return fmt.Errorf("%s: missing", path)
+		}
+		if gotDocument.Archived != wantDocument.Archived {
+			return fmt.Errorf("%s: archived %v, want %v", path, gotDocument.Archived, wantDocument.Archived)
+		}
+		wv := wantDocument.Versions
+		gv := gotDocument.Versions
+		if len(gv) != len(wv) {
+			return fmt.Errorf("%s: %d versions, want %d", path, len(gv), len(wv))
+		}
+		for i := range wv {
+			if gv[i].Version != wv[i].Version {
+				return fmt.Errorf("%s[%d]: version %d, want %d", path, i, gv[i].Version, wv[i].Version)
+			}
+			if !bytes.Equal(gv[i].Stored, wv[i].Stored) {
+				return fmt.Errorf("%s v%d: stored bytes differ", path, wv[i].Version)
+			}
+			w := wv[i].Modified.UTC().Truncate(time.Second)
+			if !gv[i].Modified.UTC().Truncate(time.Second).Equal(w) {
+				return fmt.Errorf("%s v%d: modified differs", path, wv[i].Version)
+			}
+		}
+	}
+	return nil
 }

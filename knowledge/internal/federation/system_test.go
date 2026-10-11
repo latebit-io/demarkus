@@ -231,7 +231,7 @@ func TestHubRefusesWritesOutsideTheFederationGrant(t *testing.T) {
 	manifest := graphstore.WorldManifestPath(teamWorld)
 	for _, tc := range []struct{ path, want string }{
 		{manifest, protocol.StatusCreated},
-		{graphstore.LegacyExportPath, protocol.StatusCreated},
+		{graphstore.GraphExportPath, protocol.StatusCreated},
 		{graphstore.SnapshotManifestPath, protocol.StatusNotPermitted},
 		{"/index.md", protocol.StatusNotPermitted},
 	} {
@@ -255,11 +255,11 @@ func TestNewLeaderWritesTheExportOnlyForAChange(t *testing.T) {
 	hub := HubIO(second, hubWorld)
 	exportVersion := func() int {
 		t.Helper()
-		head, err := hub.Fetch(ctx, graphstore.LegacyExportPath)
+		head, err := hub.Fetch(ctx, graphstore.GraphExportPath)
 		if err != nil {
 			t.Fatal(err)
 		}
-		version, err := generation.ResponseVersion(graphstore.LegacyExportPath, head)
+		version, err := generation.ResponseVersion(graphstore.GraphExportPath, head)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -200,7 +200,7 @@ rm ~/.mark/fedcrawl.json
 
 With `-publish-graph`, the crawler publishes an atomic snapshot at `/graph/manifest.md` before updating the compatible `/graph.md` export. Snapshot shards live under `/graph/shards/a/` or `/graph/shards/b/`; the manifest pins each shard version and becomes visible only after every shard verifies successfully. The agent stages and verifies the inactive slot first, so readers see either the old complete generation or the new one.
 
-Snapshot-aware clients and brokers prefer the manifest and fall back to `/graph.md` when it is absent. Retention (`-publish-retention`, config `publish.retention`, default 20) applies to the manifest and legacy export only. Version-pinned shards remain unpruned until reference-aware garbage collection can prove they are unreachable; operators should monitor `/graph/shards` growth.
+Snapshot-aware clients and brokers prefer the manifest and fall back to `/graph.md` when it is absent. Retention (`-publish-retention`, config `publish.retention`, default 20) applies to the manifest and `/graph.md` only. Version-pinned shards remain unpruned until reference-aware garbage collection can prove they are unreachable; operators should monitor `/graph/shards` growth.
 
 ## Authentication
 

@@ -93,13 +93,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Open migrates any legacy layout; writing an unmigrated legacy doc
-	// would restart its version numbering and orphan its history.
-	s, err := store.Open(*root)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+	s := store.New(*root)
 	doc, err := s.Write(*path, content, nil)
 	if errors.Is(err, storefmt.ErrCommittedNotSynced) {
 		// The version is current; only its directory sync failed, which
