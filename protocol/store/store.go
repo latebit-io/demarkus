@@ -154,13 +154,18 @@ type Store struct {
 	digest  [digestLen]byte
 	indexed bool
 	dirDebt dirSyncDebt
+	// cleanDirs: versions dirs proven free of flat-layout files, so a write
+	// pays the scan once per directory. Live set, one entry per directory.
+	cleanMu   sync.Mutex
+	cleanDirs map[string]struct{}
 }
 
 // New creates a store rooted at the given directory.
 func New(root string) *Store {
 	return &Store{
-		root:    root,
-		pathIdx: make(map[string][digestLen]byte),
+		root:      root,
+		pathIdx:   make(map[string][digestLen]byte),
+		cleanDirs: make(map[string]struct{}),
 	}
 }
 
@@ -177,11 +182,14 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 	// symlink must not take the server down. They are reported as a
 	// PartialWalkError so the caller can surface the degradation.
 	partial := &storefmt.PartialWalkError{}
-	skip := func(path string, err error) error {
+	record := func(path string, err error) {
 		partial.Total++
 		if len(partial.Skipped) < storefmt.MaxSkippedSample {
 			partial.Skipped = append(partial.Skipped, storefmt.SkippedEntry{Path: path, Err: err})
 		}
+	}
+	skip := func(path string, err error) error {
+		record(path, err)
 		return nil
 	}
 	walkErr := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
@@ -194,8 +202,12 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 		}
 		if d.IsDir() {
 			if d.Name() == versionsDirName {
-				if err := checkVersionsDir(path); err != nil {
-					return err // fatal: serving would hide these documents
+				// Legacy history is fatal: serving would hide those documents.
+				// Any other read failure is one skipped directory, reported.
+				if err := s.checkVersionsDir(path); errors.Is(err, ErrLegacyLayout) {
+					return err
+				} else if err != nil {
+					record(path, err)
 				}
 				return filepath.SkipDir
 			}
@@ -260,19 +272,28 @@ var errSymlinkEscapes = errors.New("current-version symlink escapes the content 
 // that this release neither migrates nor serves.
 var ErrLegacyLayout = errors.New("pre-1.0 flat version layout; migrate with a pre-1.0 demarkus release first")
 
-// checkVersionsDir fails on a regular file named like a flat-layout version.
-// BuildIndex runs it per versions dir and write before touching one, so no
-// entry point serves over or writes beside unmigrated history.
-func checkVersionsDir(versionsDir string) error {
+// checkVersionsDir fails on a flat-layout version file; BuildIndex and write
+// both run it, so nothing serves over or writes beside unmigrated history.
+// A clean directory is remembered; a read failure is returned, never passed.
+func (s *Store) checkVersionsDir(versionsDir string) error {
+	s.cleanMu.Lock()
+	_, clean := s.cleanDirs[versionsDir]
+	s.cleanMu.Unlock()
+	if clean {
+		return nil
+	}
 	entries, err := os.ReadDir(versionsDir)
 	if err != nil {
-		return nil // unreadable versions/ hides its documents, as elsewhere
+		return fmt.Errorf("read %s: %w", versionsDir, err)
 	}
 	for _, e := range entries {
 		if e.Type().IsRegular() && isLegacyVersionName(e.Name()) {
 			return fmt.Errorf("%s: %w", filepath.Join(versionsDir, e.Name()), ErrLegacyLayout)
 		}
 	}
+	s.cleanMu.Lock()
+	s.cleanDirs[versionsDir] = struct{}{}
+	s.cleanMu.Unlock()
 	return nil
 }
 
@@ -1307,7 +1328,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 	if err := s.mkdirAllDurable(versionsDir); err != nil {
 		return nil, fmt.Errorf("create versions dir: %w", err)
 	}
-	if err := checkVersionsDir(versionsDir); err != nil {
+	if err := s.checkVersionsDir(versionsDir); err != nil {
 		return nil, err
 	}
 

@@ -273,6 +273,46 @@ func TestLegacyLayoutRefused(t *testing.T) {
 	}
 }
 
+// The layout scan runs once per versions dir: repeated writes add no entries,
+// and an unreadable versions dir is a reported skip, never a clean pass.
+func TestLegacyLayoutScanOncePerDir(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	for i := range 20 {
+		for _, dir := range []string{"a", "b", "c"} {
+			if _, err := s.Write("/"+dir+"/doc.md", fmt.Appendf(nil, "# %d\n", i), nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	s.cleanMu.Lock()
+	n := len(s.cleanDirs)
+	s.cleanMu.Unlock()
+	if n != 3 {
+		t.Fatalf("cleanDirs = %d entries after 60 writes to 3 dirs, want 3", n)
+	}
+
+	if os.Getuid() == 0 {
+		t.Skip("root reads every directory")
+	}
+	locked := filepath.Join(root, "locked", "versions")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) }) // best-effort restore for TempDir cleanup
+	err := New(root).BuildIndex()
+	var partial *storefmt.PartialWalkError
+	if !errors.As(err, &partial) || partial.Total != 1 {
+		t.Fatalf("BuildIndex over an unreadable versions dir = %v, want one skipped entry", err)
+	}
+	if _, err := New(root).Write("/locked/doc.md", []byte("# X\n"), nil); err == nil || errors.Is(err, ErrLegacyLayout) {
+		t.Fatalf("Write under an unreadable versions dir = %v, want a read error", err)
+	}
+}
+
 func TestIsLegacyVersionName(t *testing.T) {
 	for name, want := range map[string]bool{"doc.md.v1": true, "doc.md.v01": true, "v1": false, "doc.md": false, "notes.txt.v1": false, "doc.md.v0": false, ".x.md.v1": false, ".md.v1": false} {
 		if got := isLegacyVersionName(name); got != want {
