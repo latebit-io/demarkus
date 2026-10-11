@@ -332,7 +332,7 @@ Returns an empty hint if the store is empty.
 
 Export the broker's graph store and publish it to a world in one
 step. `mark_graph_export` + `mark_publish` combined. This manual tool writes the
-single-document `/graph.md`; federation-agent snapshots are loaded
+single-document export to `url` (conventionally `/graph.md`); federation-agent snapshots are loaded
 automatically from `/graph/manifest.md` when present. This tool does not seed
 the store itself; run `mark_graph`, `mark_backlinks`, or `mark_explore` first.
 

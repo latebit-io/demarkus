@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -49,7 +50,7 @@ func Ensure(root, tokensTOML string) error {
 	if err != nil {
 		return err
 	}
-	if present && rawMatchesEntry(tokenFile, &entry) {
+	if present && scopeCurrent(&entry) && rawMatchesEntry(tokenFile, &entry) {
 		// Reassert 0600 on the idempotent path: an existing token left
 		// world/group-readable (e.g. from an older install) would otherwise stay
 		// exposed forever since we return without regenerating.
@@ -129,6 +130,12 @@ var (
 	findServerAtRoot = procscan.PIDAtRoot
 	reloadServer     = SignalReload
 )
+
+// scopeCurrent reports whether the entry grants the recursive scope; an entry
+// without it (a narrower "/*", say) cannot write nested docs and is reminted.
+func scopeCurrent(entry *token.Entry) bool {
+	return slices.Contains(entry.Paths, tokenPaths)
+}
 
 // rawMatchesEntry reports whether the raw token on disk hashes to the entry's
 // hash. False on a missing or unreadable file: an inconsistent pair (e.g.

@@ -286,6 +286,16 @@ func TestLoadRejectsSchemaVersionMismatch(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsMissingSchemaVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	if err := os.WriteFile(path, []byte(`{"nodes":[{"url":"mark://a/a.md","status":"ok"}],"edges":[]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unsupported schema version 0") {
+		t.Fatalf("Load without version = %v, want unsupported schema version error", err)
+	}
+}
+
 func TestLoadDropsOlderSchemaAsEmptyCache(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.json")
 	older := fmt.Appendf(nil, `{"version":%d,"nodes":[{"url":"mark://a/a.md","status":"ok"}],"edges":[]}`, schemaVersion-1)

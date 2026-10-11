@@ -9,9 +9,9 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// Memory-broker prompts: the memory workflows the demarkus-memory plugin
-// ships as slash commands, restated for plugin-less hosts. Both address
-// the caller's single world; tenantGate scopes every tool call they trigger.
+// Memory-broker prompts: the soul workflows the memory plugin ships as
+// /soul-* slash commands, under the same names for plugin-less hosts. Each
+// addresses the caller's single world; tenantGate scopes every tool call.
 
 // registerMemoryPrompts wires the memory prompts.
 func (g *Gateway) registerMemoryPrompts() {
@@ -20,15 +20,15 @@ func (g *Gateway) registerMemoryPrompts() {
 		arg        mcp.PromptOption
 		handler    mcpserver.PromptHandlerFunc
 	}{
-		{"memory-context",
+		{"soul-context",
 			"Restore working context from your memory: the index hub, recent journal entries, and active plans, digested into a short brief.",
 			mcp.WithArgument("focus", mcp.ArgumentDescription("optional subject to prioritize, e.g. a project or topic")),
 			memoryContextPrompt},
-		{"memory-journal",
+		{"soul-journal",
 			"Record a dated journal entry in your memory: append what happened this session to today's journal document.",
 			mcp.WithArgument("entry", mcp.ArgumentDescription("optional summary of what to record; when omitted, distill the current conversation")),
 			memoryJournalPrompt},
-		{"memory-export",
+		{"soul-export",
 			"Export your whole memory to local files: walk every document and save it, so the service is never a lock-in.",
 			mcp.WithArgument("directory", mcp.ArgumentDescription("local directory to write the export into (default ./<prompt name>)")),
 			memoryExportPrompt},
@@ -38,12 +38,10 @@ func (g *Gateway) registerMemoryPrompts() {
 	}
 }
 
-const memoryExportDir = "./memory-export"
-
 func memoryExportPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	dir := strings.TrimSpace(req.Params.Arguments["directory"])
 	if dir == "" {
-		dir = memoryExportDir
+		dir = "./" + req.Params.Name // "default ./<prompt name>", as the argument promises
 	}
 	return memoryExportResult(dir), nil
 }

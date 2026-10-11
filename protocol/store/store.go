@@ -194,6 +194,9 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 		}
 		if d.IsDir() {
 			if d.Name() == versionsDirName {
+				if err := checkVersionsDir(path); err != nil {
+					return err // fatal: serving would hide these documents
+				}
 				return filepath.SkipDir
 			}
 			return nil
@@ -210,9 +213,17 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 		if !isContained(resolved, absRoot) {
 			return skip(path, errSymlinkEscapes)
 		}
+		// A document has a stored version in its per-doc dir (SPEC 11.9), the
+		// same test Get applies; any other symlink is not a document.
+		if highestPerDocVersion(filepath.Join(filepath.Dir(path), versionsDirName), d.Name()) == 0 {
+			return nil
+		}
 		info, err := os.Stat(resolved)
 		if err != nil {
 			return skip(path, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil
 		}
 		if info.Size() > int64(protocol.MaxBodyLength+storefmt.MaxStoreFrontmatter) {
 			return skip(path, storefmt.ErrSizeLimit)
@@ -244,6 +255,37 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 }
 
 var errSymlinkEscapes = errors.New("current-version symlink escapes the content root")
+
+// ErrLegacyLayout reports a pre-1.0 flat version layout (versions/doc.md.v1)
+// that this release neither migrates nor serves.
+var ErrLegacyLayout = errors.New("pre-1.0 flat version layout; migrate with a pre-1.0 demarkus release first")
+
+// checkVersionsDir fails on a regular file named like a flat-layout version.
+// BuildIndex runs it per versions dir and write before touching one, so no
+// entry point serves over or writes beside unmigrated history.
+func checkVersionsDir(versionsDir string) error {
+	entries, err := os.ReadDir(versionsDir)
+	if err != nil {
+		return nil // unreadable versions/ hides its documents, as elsewhere
+	}
+	for _, e := range entries {
+		if e.Type().IsRegular() && isLegacyVersionName(e.Name()) {
+			return fmt.Errorf("%s: %w", filepath.Join(versionsDir, e.Name()), ErrLegacyLayout)
+		}
+	}
+	return nil
+}
+
+// isLegacyVersionName matches the flat layout's "{base}.md.v{N}" filename;
+// hidden bases never were documents.
+func isLegacyVersionName(name string) bool {
+	i := strings.LastIndex(name, ".md.v")
+	if i <= 0 || isHiddenEntry(name[:i+3]) {
+		return false
+	}
+	n, err := strconv.Atoi(name[i+5:])
+	return err == nil && n >= 1
+}
 
 // BuildIndex walks the content root and indexes the current, live documents
 // by path, with the version and body hash each folds into the fingerprint.
@@ -1264,6 +1306,9 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 
 	if err := s.mkdirAllDurable(versionsDir); err != nil {
 		return nil, fmt.Errorf("create versions dir: %w", err)
+	}
+	if err := checkVersionsDir(versionsDir); err != nil {
+		return nil, err
 	}
 
 	// Determine the next version number. For a truly new document (no current

@@ -157,7 +157,9 @@ func Load(path string) (*Store, error) {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse graph store %q: %w", path, err)
 	}
-	if doc.Version > schemaVersion {
+	if doc.Version < 1 || doc.Version > schemaVersion {
+		// A missing version is a damaged file, not an older schema: refuse
+		// rather than let the next Save overwrite it.
 		return nil, fmt.Errorf("graph store %q: unsupported schema version %d (expected %d)", path, doc.Version, schemaVersion)
 	}
 	if doc.Version < schemaVersion {

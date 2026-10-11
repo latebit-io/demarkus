@@ -56,6 +56,23 @@ func TestPluginEntry(t *testing.T) {
 	}
 }
 
+func TestScopeCurrent(t *testing.T) {
+	for _, tt := range []struct {
+		paths   []string
+		current bool
+	}{
+		{[]string{"/**"}, true},
+		{[]string{"/*", "/**"}, true},
+		{[]string{"/*"}, false},
+		{[]string{"/docs/**"}, false},
+		{nil, false},
+	} {
+		if got := scopeCurrent(&token.Entry{Paths: tt.paths}); got != tt.current {
+			t.Errorf("scopeCurrent(%v) = %v, want %v", tt.paths, got, tt.current)
+		}
+	}
+}
+
 // TestEnsureTokenEntryScope pins the minted scope to the recursive "/**" and
 // the remint-on-stale-scope behavior, via a fake demarkus-token binary that
 // logs its argv and mirrors generate's tokens.toml append.

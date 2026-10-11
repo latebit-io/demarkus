@@ -203,6 +203,95 @@ func TestListDir(t *testing.T) {
 	}
 }
 
+// A symlink without a per-doc version dir is not a document: LIST, LOOKUP
+// and FETCH share that test, so the index skips it.
+func TestBuildIndex_SkipsSymlinkWithoutPerDocVersions(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	if _, err := s.Write("/real.md", []byte("# Real\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+	stored := storedVersion(t, 1, nil, "# Stray\n")
+	if err := os.WriteFile(filepath.Join(root, "versions", "stray.bin"), stored, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("versions", "stray.bin"), filepath.Join(root, "flat.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "plain.txt"), stored, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("plain.txt", filepath.Join(root, "linked.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.BuildIndex(); err != nil {
+		t.Fatalf("BuildIndex: %v", err)
+	}
+	if got := s.IndexSize(); got != 1 {
+		t.Fatalf("IndexSize = %d, want 1 (only /real.md)", got)
+	}
+	entries, err := s.listDir("/", storefmt.ListOptions{})
+	if err != nil {
+		t.Fatalf("listDir: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() == "flat.md" || e.Name() == "linked.md" {
+			t.Errorf("non-document %s listed", e.Name())
+		}
+	}
+	for _, p := range []string{"/flat.md", "/linked.md"} {
+		if _, err := s.Get(p, 0); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Get(%s) = %v, want ErrNotExist", p, err)
+		}
+	}
+}
+
+// A flat-layout root (versions/doc.md.v1) is refused by the index and by
+// writes beside it: silently hiding or renumbering would look like data loss.
+func TestLegacyLayoutRefused(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	if _, err := s.Write("/fine.md", []byte("# Fine\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+	legacyDir := filepath.Join(root, "old", "versions")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "doc.md.v1"), storedVersion(t, 1, nil, "# Old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BuildIndex(); !errors.Is(err, ErrLegacyLayout) {
+		t.Fatalf("BuildIndex = %v, want ErrLegacyLayout", err)
+	}
+	if _, err := s.Write("/old/doc.md", []byte("# Clobber\n"), nil); !errors.Is(err, ErrLegacyLayout) {
+		t.Fatalf("Write beside legacy history = %v, want ErrLegacyLayout", err)
+	}
+	if _, err := s.Write("/fine.md", []byte("# Fine v2\n"), nil); err != nil {
+		t.Fatalf("Write in a clean directory: %v", err)
+	}
+}
+
+func TestIsLegacyVersionName(t *testing.T) {
+	for name, want := range map[string]bool{"doc.md.v1": true, "doc.md.v01": true, "v1": false, "doc.md": false, "notes.txt.v1": false, "doc.md.v0": false, ".x.md.v1": false, ".md.v1": false} {
+		if got := isLegacyVersionName(name); got != want {
+			t.Errorf("isLegacyVersionName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// storedVersion is a version file as the writer produces it, so a fixture
+// placed on disk by hand cannot drift from the stored format.
+func storedVersion(t *testing.T, version int, previous []byte, content string) []byte {
+	t.Helper()
+	stored, err := storefmt.SerializeVersion(version, previous, []byte(content), nil)
+	if err != nil {
+		t.Fatalf("serialize v%d: %v", version, err)
+	}
+	return stored
+}
+
 func TestListDir_HidesArchived(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)

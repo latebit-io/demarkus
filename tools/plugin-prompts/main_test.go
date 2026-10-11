@@ -409,11 +409,11 @@ func TestBrandPluginJSONRewritesNameAndDescription(t *testing.T) {
 
 func TestCursorCommandFrontmatter(t *testing.T) {
 	in := []byte("---\ndescription: Do a thing\nargument-hint: <entry text>\n---\n" + generatedMarker + "\nBody.\n")
-	out, err := cursorCommand("memory-journal", in)
+	out, err := cursorCommand("soul-journal", in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "---\nname: memory-journal\ndescription: Do a thing\n---\n" + generatedMarker + "\nBody.\n"
+	want := "---\nname: soul-journal\ndescription: Do a thing\n---\n" + generatedMarker + "\nBody.\n"
 	if string(out) != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", out, want)
 	}
