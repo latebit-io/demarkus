@@ -63,12 +63,12 @@ func openFileStore(cfg *config.Config, logger *slog.Logger) (backend, error) {
 	if err != nil {
 		return backend{}, fmt.Errorf("store open failed: %w", err)
 	}
-	// A broken walk is fatal (an empty index would fail every hash FETCH); a
-	// walk that merely skipped entries is logged per entry and served.
-	if err := s.BuildHashIndex(); err != nil && !logPartialWalk(logger, "hash index", err) {
-		return backend{}, fmt.Errorf("hash index build failed: %w", err)
+	// A broken walk is fatal (an empty index would hide every document from
+	// LIST); a walk that merely skipped entries is logged per entry and served.
+	if err := s.BuildIndex(); err != nil && !logPartialWalk(logger, "document index", err) {
+		return backend{}, fmt.Errorf("document index build failed: %w", err)
 	}
-	logger.Info("content hash index built", "entries", s.HashIndexSize())
+	logger.Info("document index built", "entries", s.IndexSize())
 	fs, err := filestore.Open(s, buildCatalog(s, logger), filestore.Options{ChangeRing: changefeed.DefaultRingSize, Logger: logger})
 	if err != nil {
 		return backend{}, fmt.Errorf("change journal: %w", err)

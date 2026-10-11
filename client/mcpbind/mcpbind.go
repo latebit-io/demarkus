@@ -160,33 +160,6 @@ func Append(req *mcp.CallToolRequest) (marktools.AppendArgs, error) {
 	return marktools.AppendArgs{URL: url, Body: body, ExpectedVersion: req.GetInt("expected_version", 0)}, nil
 }
 
-// Resolve binds mark_resolve; the index is checked by the body, after the hash.
-func Resolve(req *mcp.CallToolRequest) (marktools.ResolveArgs, error) {
-	hash, err := Required(req, "hash")
-	if err != nil {
-		return marktools.ResolveArgs{}, err
-	}
-	return marktools.ResolveArgs{Hash: hash, Index: req.GetString("index", "")}, nil
-}
-
-// Index binds mark_index.
-func Index(req *mcp.CallToolRequest) (marktools.IndexArgs, error) {
-	source, err := Required(req, "source")
-	if err != nil {
-		return marktools.IndexArgs{}, err
-	}
-	target, err := Required(req, "target")
-	if err != nil {
-		return marktools.IndexArgs{}, err
-	}
-	return marktools.IndexArgs{
-		Source: source, Target: target,
-		DryRun:          req.GetBool("dry_run", false),
-		Force:           req.GetBool("force", false),
-		ExpectedVersion: req.GetInt("expected_version", 0),
-	}, nil
-}
-
 // Graph binds mark_graph; the depth is the body's default when absent, and
 // an explicit 0 is the shallowest crawl, not the default.
 func Graph(req *mcp.CallToolRequest) (marktools.GraphArgs, error) {

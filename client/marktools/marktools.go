@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -46,23 +45,16 @@ type Site string
 
 // Sites, one per backend call a tool makes.
 const (
-	SiteVersions Site = "versions"
-	SiteList     Site = "list"
-	SiteLookup   Site = "lookup"
-	SiteDiscover Site = "discover"
-	SiteArchive  Site = "archive"
-	SiteFetch    Site = "fetch"
-	SitePublish  Site = "publish"
-	SiteAppend   Site = "append"
-	// SiteResolveIndex is mark_resolve reading its index, SiteResolveCandidate
-	// its read of one candidate server.
-	SiteResolveIndex     Site = "resolve (index fetch)"
-	SiteResolveCandidate Site = "resolve candidate"
-	SiteExplore          Site = "explore"
-	SiteGraphPublish     Site = "graph publish"
-	// SiteIndexExisting is mark_index reading the index it merges into.
-	SiteIndexExisting Site = "index (fetch existing)"
-	SiteIndexPublish  Site = "index (publish)"
+	SiteVersions     Site = "versions"
+	SiteList         Site = "list"
+	SiteLookup       Site = "lookup"
+	SiteDiscover     Site = "discover"
+	SiteArchive      Site = "archive"
+	SiteFetch        Site = "fetch"
+	SitePublish      Site = "publish"
+	SiteAppend       Site = "append"
+	SiteExplore      Site = "explore"
+	SiteGraphPublish Site = "graph publish"
 )
 
 // Hooks are what differs between surfaces. Resolve is required.
@@ -89,13 +81,8 @@ type Hooks struct {
 	Seen SeenStore
 	// ErrText words a failed backend call; nil says "<site> failed: <err>".
 	ErrText func(site Site, host string, err error) string
-	// Now stamps a published index; nil is time.Now.
-	Now func() time.Time
 	// Warnf reports a best effort step that failed; nil is log.Printf.
 	Warnf func(format string, args ...any)
-	// HashSources are the servers mark_resolve asks, in order, when a call
-	// names no index; nil requires one.
-	HashSources func(ctx context.Context) []string
 }
 
 // Tools runs the mark_* tools over one Backend.
@@ -174,15 +161,9 @@ func (t *Tools) errText(site Site, host string, err error) string {
 // defaultErrText words a failure by the verb sent, not by the tool that sent it.
 func defaultErrText(site Site, err error) string {
 	switch site {
-	case SiteResolveIndex:
-		return fmt.Sprintf("failed to fetch index: %v", err)
-	case SiteIndexExisting:
-		return fmt.Sprintf("failed to fetch existing index: %v", err)
-	case SiteResolveCandidate:
-		return err.Error()
 	case SiteExplore:
 		site = SiteFetch
-	case SiteGraphPublish, SiteIndexPublish:
+	case SiteGraphPublish:
 		site = SitePublish
 	}
 	return fmt.Sprintf("%s failed: %v", site, err)

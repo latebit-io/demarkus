@@ -1,10 +1,10 @@
 apiVersion: v2
 name: demarkus-agent
 description: |
-  Federation crawler for the Mark Protocol. Discovers servers, collects content
-  hashes, and publishes aggregated or per-server indexes to one or more hubs.
+  Federation crawler for the Mark Protocol. Discovers servers, accumulates the
+  link graph, and publishes it to one or more hubs.
 type: application
-version: 0.2.0
+version: 0.3.0
 appVersion: "0.7.1"
 keywords:
   - demarkus

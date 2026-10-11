@@ -27,8 +27,8 @@ func profileSchemas(profile string) []mcp.Tool {
 func TestToolProfiles(t *testing.T) {
 	full := profileSchemas(mcpfmt.ProfileFull)
 	lean := profileSchemas(mcpfmt.ProfileLean)
-	if len(full) != 15 {
-		t.Fatalf("full profile = %d tools, want 15", len(full))
+	if len(full) != 13 {
+		t.Fatalf("full profile = %d tools, want 13", len(full))
 	}
 	if len(lean) != len(full)-len(mcpfmt.AdvancedTools) {
 		t.Fatalf("lean profile = %d tools, want %d", len(lean), len(full)-len(mcpfmt.AdvancedTools))

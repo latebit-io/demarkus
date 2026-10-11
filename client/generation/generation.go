@@ -1,7 +1,7 @@
 // Package generation publishes generated artifacts: single documents written
 // and read back to pin (PublishDocument, VerifyPinned), and sharded ones
-// whose manifest flips between two slots, as the hash index and the graph
-// snapshot are, so readers never see half of one.
+// whose manifest flips between two slots, as the graph snapshot is, so
+// readers never see half of one.
 package generation
 
 import (

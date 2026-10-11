@@ -15,7 +15,6 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/blob"
-	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
@@ -78,7 +77,7 @@ func TestInitializeGenesis(t *testing.T) {
 			t.Errorf("defaults timeout=%v workers=%d", store.requestTimeout, store.shardWorkers)
 		}
 		loaded := store.served.Load().snap
-		if loaded == nil || loaded.Sequence != 1 || loaded.Paths.Len() != 0 || loaded.Hashes.Len() != 0 || loaded.Children.Len() != 0 {
+		if loaded == nil || loaded.Sequence != 1 || loaded.Paths.Len() != 0 || loaded.Children.Len() != 0 {
 			t.Fatalf("empty snapshot = %+v", loaded)
 		}
 		if !loaded.isDirectory("/") {
@@ -155,12 +154,6 @@ func TestSeparateBucketsAreIndependent(t *testing.T) {
 	rightDocument, err := right.Get("/same", 0)
 	if err != nil || rightDocument.Version != 1 || rightDocument.Archived || !bytes.Equal(rightDocument.Content, body) {
 		t.Fatalf("right document = (%+v, %v), want active v1", rightDocument, err)
-	}
-	if _, err := left.LookupHash(storefmt.ContentHash(body)); !errors.Is(err, backend.ErrNotFound) {
-		t.Fatalf("left shared hash error = %v, want ErrNotExist", err)
-	}
-	if path, err := right.LookupHash(storefmt.ContentHash(body)); err != nil || path != "/same" {
-		t.Fatalf("right shared hash = (%q, %v), want /same", path, err)
 	}
 }
 
@@ -462,18 +455,12 @@ func TestDerivedSnapshotLiveAndArchived(t *testing.T) {
 	}
 	loaded := store.served.Load().snap
 
-	t.Run("paths and hashes", func(t *testing.T) {
+	t.Run("paths", func(t *testing.T) {
 		if loaded.Paths.Len() != 4 {
 			t.Fatalf("paths = %d, want 4", loaded.Paths.Len())
 		}
 		if !loaded.path("/docs/archived.md").Archived || !loaded.path("/archive/only.md").Archived {
 			t.Error("archived paths were not retained")
-		}
-		if got, _ := loaded.lookupHash(sharedHash); got != "/docs/a.md" {
-			t.Errorf("shared body path = %q, want lexicographically smallest live path", got)
-		}
-		if _, exists := loaded.lookupHash(archivedHash); exists {
-			t.Errorf("archived-only body hash %q is live", archivedHash)
 		}
 	})
 

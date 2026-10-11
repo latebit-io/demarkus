@@ -44,9 +44,9 @@ Broker-only: `mark_worlds` returns a one-row table naming the
 caller's world (call it once to learn the `{worldName}` every other
 tool addresses as `mark://{worldName}/{path}`).
 
-Deliberately absent: `mark_lookup_all`, `mark_index`, `mark_resolve`
-(federation / multi-world aggregation has no meaning for a
-single-world tenant) and `mark_graph_export` / `mark_graph_publish`
+Deliberately absent: `mark_lookup_all` (multi-world aggregation has
+no meaning for a single-world tenant) and `mark_graph_export` /
+`mark_graph_publish`
 (whole-store reads of the shared per-pod graph store would leak
 cross-tenant edges).
 

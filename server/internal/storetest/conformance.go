@@ -64,7 +64,7 @@ func RunConformance(t *testing.T, factory Factory, tamper Tamper) {
 		{"MissingDocument", testMissingDocument},
 		{"PathCollisions", testPathCollisions},
 		{"RejectsBinaryBody", testRejectsBinaryBody},
-		{"SharedBodyHash", testSharedBodyHash},
+		{"ReservedHashPath", testReservedHashPath},
 		{"BodySizeLimit", testBodySizeLimit},
 		{"InvalidMetadata", testInvalidMetadata},
 		{"CanceledContext", testCanceledContext},
@@ -270,11 +270,6 @@ func testNotModifiedDedup(t *testing.T, s Direct) {
 
 func testArchiveLifecycle(t *testing.T, s Direct) {
 	initial := mustWrite(t, s, "/arch.md", 0, "content")
-	hash := storefmt.ContentHash([]byte("content"))
-
-	if p, err := s.LookupHash(hash); err != nil || p != "/arch.md" {
-		t.Errorf("LookupHash before archive = (%q, %v), want (/arch.md, nil)", p, err)
-	}
 	archivedDoc := mustArchiveTransition(t, s, "/arch.md", true)
 	if archivedDoc.Version != 1 || archivedDoc.ETag != initial.ETag || !archivedDoc.Modified.Equal(initial.Modified) {
 		t.Errorf("archive changed immutable version identity: got %+v, want v1 etag=%q modified=%v", archivedDoc, initial.ETag, initial.Modified)
@@ -284,9 +279,6 @@ func testArchiveLifecycle(t *testing.T, s Direct) {
 	unchangedDoc, changed := unchanged.Document, unchanged.Changed
 	if err != nil || changed || unchangedDoc == nil || unchangedDoc.ETag != archivedDoc.ETag || !unchangedDoc.Modified.Equal(archivedDoc.Modified) {
 		t.Errorf("archive no-op = (%+v, changed=%v, err=%v), want unchanged committed document", unchangedDoc, changed, err)
-	}
-	if _, err := s.LookupHash(hash); !errors.Is(err, backend.ErrNotFound) {
-		t.Errorf("LookupHash after archive: err = %v, want ErrNotExist", err)
 	}
 	if _, err := s.WriteVersion("/arch.md", 1, []byte("new"), nil); !errors.Is(err, storefmt.ErrArchived) {
 		t.Errorf("write to archived: err = %v, want ErrArchived", err)
@@ -299,9 +291,6 @@ func testArchiveLifecycle(t *testing.T, s Direct) {
 		t.Errorf("unarchive changed immutable version identity: got %+v, want v1 etag=%q modified=%v", unarchivedDoc, initial.ETag, initial.Modified)
 	}
 	assertArchiveState(t, s, "/arch.md", initial, false)
-	if p, err := s.LookupHash(hash); err != nil || p != "/arch.md" {
-		t.Errorf("LookupHash after unarchive = (%q, %v), want (/arch.md, nil)", p, err)
-	}
 	if doc, err := s.WriteVersion("/arch.md", 1, []byte("new"), nil); err != nil || doc.Version != 2 {
 		t.Errorf("write after unarchive = (%+v, %v), want v2", doc, err)
 	}
@@ -647,35 +636,18 @@ func testRejectsBinaryBody(t *testing.T, s Direct) {
 	}
 }
 
-// testSharedBodyHash pins LookupHash when several live documents share a
-// body: the smallest path wins, and updating or archiving one never drops
-// the others.
-func testSharedBodyHash(t *testing.T, s Direct) {
-	hash := storefmt.ContentHash([]byte("same"))
-	mustWrite(t, s, "/b.md", 0, "same")
-	mustWrite(t, s, "/a.md", 0, "same")
-	mustWrite(t, s, "/c.md", 0, "same")
-	if p, err := s.LookupHash(hash); err != nil || p != "/a.md" {
-		t.Errorf("LookupHash shared = (%q, %v), want (/a.md, nil)", p, err)
-	}
-	if _, err := s.Archive("/a.md", true); err != nil {
-		t.Fatal(err)
-	}
-	if p, err := s.LookupHash(hash); err != nil || p != "/b.md" {
-		t.Errorf("LookupHash after archiving /a.md = (%q, %v), want (/b.md, nil)", p, err)
-	}
-	mustWrite(t, s, "/b.md", 1, "changed")
-	if p, err := s.LookupHash(hash); err != nil || p != "/c.md" {
-		t.Errorf("LookupHash after rewriting /b.md = (%q, %v), want (/c.md, nil)", p, err)
-	}
-	if p, err := s.LookupHash(storefmt.ContentHash([]byte("changed"))); err != nil || p != "/b.md" {
-		t.Errorf("LookupHash new body = (%q, %v), want (/b.md, nil)", p, err)
-	}
-	if _, err := s.Archive("/a.md", false); err != nil {
-		t.Fatal(err)
-	}
-	if p, err := s.LookupHash(hash); err != nil || p != "/a.md" {
-		t.Errorf("LookupHash after unarchiving /a.md = (%q, %v), want (/a.md, nil)", p, err)
+// testReservedHashPath pins that a content address is never a document:
+// a read of /sha256-<64 hex> answers ErrNotFound whether or not a document
+// with that body exists (ADR 0035).
+func testReservedHashPath(t *testing.T, s Direct) {
+	mustWrite(t, s, "/held.md", 0, "held")
+	for _, hash := range []string{storefmt.ContentHash([]byte("held")), storefmt.ContentHash([]byte("absent"))} {
+		if _, err := s.Get("/"+hash, 0); !errors.Is(err, backend.ErrNotFound) {
+			t.Errorf("Get(/%s) err = %v, want ErrNotFound", hash, err)
+		}
+		if isDir, err := s.IsDir("/" + hash); isDir || !errors.Is(err, backend.ErrNotFound) {
+			t.Errorf("IsDir(/%s) = (%v, %v), want (false, ErrNotFound)", hash, isDir, err)
+		}
 	}
 }
 
@@ -1070,7 +1042,6 @@ func testClosedView(t *testing.T, s Direct) {
 		"ListEntries": func() error { _, err := view.ListEntries(ctx, "/", storefmt.ListOptions{}); return err },
 		"IsDir":       func() error { _, err := view.IsDir(ctx, "/"); return err },
 		"Versions":    func() error { _, err := view.Versions(ctx, "/closed.md"); return err },
-		"LookupHash":  func() error { _, err := view.LookupHash(ctx, "sha256-0"); return err },
 		"VerifyChain": func() error { return view.VerifyChain(ctx, "/closed.md") },
 		"Lookup":      func() error { _, err := view.Lookup(ctx, "v1", catalog.Options{}); return err },
 	}

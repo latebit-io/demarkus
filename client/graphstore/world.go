@@ -420,7 +420,7 @@ func validateWorldManifest(m *WorldManifest) error {
 		if ref.Path != WorldShardPath(m.World, ref.Prefix) {
 			return fmt.Errorf("world manifest %s: shard %s is not at %s", m.World, ref.Prefix, WorldShardPath(m.World, ref.Prefix))
 		}
-		if hash, ok := protocol.IsHashPath(ref.ContentHash); !ok || hash != ref.ContentHash || ref.Version < 1 || ref.Sources < 1 || ref.Edges < 0 || ref.Bytes < 1 || ref.Bytes > protocol.MaxBodyLength {
+		if !protocol.IsContentHash(ref.ContentHash) || ref.Version < 1 || ref.Sources < 1 || ref.Edges < 0 || ref.Bytes < 1 || ref.Bytes > protocol.MaxBodyLength {
 			return fmt.Errorf("world manifest %s: shard %s has an invalid pin", m.World, ref.Prefix)
 		}
 	}

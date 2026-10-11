@@ -18,17 +18,10 @@ import (
 const (
 	LookupDescription   = "Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends sections."
 	DiscoverDescription = "Fetch the agent manifest (/.well-known/agent-manifest.md): purpose, key paths, auth, usage. not-found if absent."
-	ResolveDescription  = "Resolve content by SHA-256 hash via a hub index document and fetch it."
-	IndexDescription    = "Crawl a source, collect content hashes, publish a sharded hash index to target (typically a hub). Needs read access to source and publish access to the target manifest and .shards subtree."
-
 	QueryDesc           = "subject matched against tags and titles (min 2 chars); '*' for all"
 	FilterDesc          = "comma-separated key=value predicates: tag=, modified-after=, modified-before="
 	LimitDesc           = "max results (default 10, cap 1000)"
 	MatchDesc           = "catalog (default) or body"
-	HashDesc            = "sha256-<64 lowercase hex>"
-	IndexVersionDesc    = "existing index version at target; 0 to create"
-	DryRunDesc          = "return index without publishing (default false)"
-	IndexForceDesc      = "publish even without hub manifest at target (default false)"
 	ExpectedVersionDesc = "version from prior fetch; 0 to create"
 )
 
@@ -198,8 +191,6 @@ const (
 // in lean: /soul-archive is the only archive path a plugin user has.
 var AdvancedTools = map[string]bool{
 	"mark_discover":      true,
-	"mark_resolve":       true,
-	"mark_index":         true,
 	"mark_graph_export":  true,
 	"mark_graph_publish": true,
 }

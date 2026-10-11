@@ -145,9 +145,9 @@ func (s *Store) ImportDoc(ctx context.Context, reqPath string, document storefmt
 		return cleanup(fmt.Errorf("import %s: %w", reqPath, err))
 	}
 	if document.Archived {
-		s.RemoveHashEntry(reqPath)
+		s.RemoveIndexEntry(reqPath)
 	} else {
-		s.UpdateHashIndex(reqPath, storefmt.ExtractBody(newest.Stored), newest.Version)
+		s.UpdateIndex(reqPath, storefmt.ExtractBody(newest.Stored), newest.Version)
 	}
 	return nil
 }

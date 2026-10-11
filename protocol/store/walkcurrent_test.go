@@ -97,10 +97,10 @@ func keysOf(m map[string]storefmt.CurrentDoc) []string {
 	return out
 }
 
-// TestBuildHashIndex_ReportsSkippedEntries pins that an unindexable entry
+// TestBuildIndex_ReportsSkippedEntries pins that an unindexable entry
 // (here a dangling current-version symlink) is reported, not swallowed, and
 // does not prevent the rest of the root from being indexed.
-func TestBuildHashIndex_ReportsSkippedEntries(t *testing.T) {
+func TestBuildIndex_ReportsSkippedEntries(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 	if _, err := s.Write("/good.md", []byte("good"), nil); err != nil {
@@ -110,28 +110,23 @@ func TestBuildHashIndex_ReportsSkippedEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := s.BuildHashIndex()
+	err := s.BuildIndex()
 	var partial *storefmt.PartialWalkError
 	if !errors.As(err, &partial) {
-		t.Fatalf("BuildHashIndex err = %v, want *PartialWalkError", err)
+		t.Fatalf("BuildIndex err = %v, want *PartialWalkError", err)
 	}
 	if len(partial.Skipped) != 1 || filepath.Base(partial.Skipped[0].Path) != "dangling.md" {
 		t.Errorf("skipped = %+v, want the dangling symlink", partial.Skipped)
 	}
-	if p, err := s.LookupHashResult(storefmt.ContentHash([]byte("good"))); err != nil || p != "/good.md" {
-		t.Errorf("LookupHash hit after partial walk = (%q, %v), want (/good.md, nil)", p, err)
-	}
-	_, err = s.LookupHashResult(storefmt.ContentHash([]byte("missing")))
-	var lookupPartial *storefmt.PartialWalkError
-	if !errors.As(err, &lookupPartial) {
-		t.Errorf("LookupHash miss after partial walk err = %v, want *PartialWalkError", err)
+	if s.IndexSize() != 1 {
+		t.Errorf("index size after partial walk = %d, want the one good document", s.IndexSize())
 	}
 }
 
-// TestBuildHashIndex_RootFailureIsFatal pins that a root the walk cannot open
+// TestBuildIndex_RootFailureIsFatal pins that a root the walk cannot open
 // is a real error, not a partial walk with zero entries. The missing-root case
 // is deterministic everywhere; the permission case needs a non-root uid.
-func TestBuildHashIndex_RootFailureIsFatal(t *testing.T) {
+func TestBuildIndex_RootFailureIsFatal(t *testing.T) {
 	newRoot := func(t *testing.T) (string, *Store) {
 		root := filepath.Join(t.TempDir(), "content")
 		if err := os.Mkdir(root, 0o755); err != nil {
@@ -145,10 +140,10 @@ func TestBuildHashIndex_RootFailureIsFatal(t *testing.T) {
 	}
 	assertFatal := func(t *testing.T, s *Store) {
 		t.Helper()
-		err := s.BuildHashIndex()
+		err := s.BuildIndex()
 		var partial *storefmt.PartialWalkError
 		if err == nil || errors.As(err, &partial) {
-			t.Fatalf("BuildHashIndex err = %v, want a non-partial error", err)
+			t.Fatalf("BuildIndex err = %v, want a non-partial error", err)
 		}
 	}
 

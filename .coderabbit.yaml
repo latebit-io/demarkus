@@ -51,8 +51,8 @@ reviews:
           or protocol responses
         - Path traversal defense: filepath.Clean + ".." check, return
           not-found (not forbidden) to avoid leaking structure
-        - Content-hash index is in-memory only, rebuilt on startup, updated
-          incrementally on Write/Archive
+        - The file store's document index is in-memory only, rebuilt on
+          startup, updated incrementally on Write/Archive
         - Size limits enforced at every trust boundary (parser, handler, store)
 
     - path: "server/internal/handler/**"
@@ -63,8 +63,8 @@ reviews:
         Check for:
         - Optimistic concurrency: expected-version is mandatory for APPEND,
           required (>=1) for updates via PUBLISH
-        - Content-addressed fetch resolves hash to path, then checks read
-          auth on that path. Knowing a hash must not bypass access control
+        - Reserved /sha256-<64 hex> paths answer not-found on reads and
+          bad-request on writes without touching the store (ADR 0035)
         - Versioned path requests (/doc.md/v2) check auth on the base path
         - /.well-known/agent-manifest.md is always public
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -21,7 +20,6 @@ type clientSurface struct {
 	Token       string            // sent on every read and write; empty refuses writes
 	Agent       string            // "" writes as "unknown"
 	Store       *graphstore.Store // nil: no graph store
-	Now         time.Time         // zero: the real clock
 	Seeded      []string          // hosts the graph hook was asked to seed
 	seen        mapSeen
 }
@@ -59,9 +57,6 @@ func (c *clientSurface) tools(t *testing.T, backend marktools.Backend) *marktool
 				EmptyHint: "Run mark_graph to populate the graph store.",
 			}, nil
 		},
-	}
-	if !c.Now.IsZero() {
-		hooks.Now = func() time.Time { return c.Now }
 	}
 	return newTools(t, backend, hooks)
 }

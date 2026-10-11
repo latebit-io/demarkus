@@ -1,6 +1,6 @@
 # Federation Crawler (`demarkus-agent`)
 
-The federation crawler discovers Mark Protocol servers, collects content hashes, and publishes indexes to hubs. It's a Go binary that handles the mechanical work of crawling; no LLM required.
+The federation crawler discovers Mark Protocol servers, accumulates the link graph, and publishes it to hubs. It's a Go binary that handles the mechanical work of crawling; no LLM required.
 
 ## Overview
 
@@ -8,8 +8,8 @@ The crawler implements the core federation loop:
 
 1. **Seed**: start from configured servers
 2. **Crawl**: follow `mark://` links, discover new servers
-3. **Hash**: collect content hashes from every document
-4. **Index**: publish hash indexes to configured hubs
+3. **Graph**: record every document's outbound `mark://` edges
+4. **Publish**: with `-publish-graph`, push the graph snapshot and `/graph.md` to configured hubs
 5. **Repeat**: on a configurable schedule
 
 ## Installation
@@ -34,7 +34,7 @@ Crawl a single server with inline configuration:
 demarkus-agent crawl -seeds "mark://localhost:6309" -insecure -v
 ```
 
-Output shows servers discovered, documents crawled, hashes collected, and any errors.
+Output shows servers discovered, documents crawled, and any errors.
 
 ### With Config File
 
@@ -90,8 +90,8 @@ demarkus-agent crawl [options]
 | `-seeds` | - | Comma-separated seed servers (overrides config) |
 | `-state` | `~/.mark/fedcrawl.json` | Path to state file |
 | `-insecure` | false | Skip TLS certificate verification |
-| `-publish` | false | Publish indexes to hubs after crawl |
-| `-per-server` | false | Publish per-server indexes (not aggregated) |
+| `-publish-graph` | false | Publish the graph snapshot and `/graph.md` to hubs after crawl |
+| `-publish-retention` | -1 | Cap the `/graph.md` and `/graph/manifest.md` histories to the newest N versions; 0 keeps every version; -1 uses the config value |
 | `-v` | false | Verbose output |
 
 ### `daemon`: Scheduled Crawling
@@ -106,8 +106,8 @@ demarkus-agent daemon -config <path> [options]
 | `-seeds` | - | Comma-separated seed servers (overrides config) |
 | `-state` | `~/.mark/fedcrawl.json` | Path to state file |
 | `-insecure` | false | Skip TLS certificate verification |
-| `-publish` | false | Publish indexes to hubs after each crawl |
-| `-per-server` | false | Publish per-server indexes (not aggregated) |
+| `-publish-graph` | false | Publish the graph snapshot and `/graph.md` to hubs after each crawl |
+| `-publish-retention` | -1 | As for `crawl` |
 
 Daemon mode requires a config file with `schedule.interval` set.
 
@@ -129,11 +129,11 @@ hubs = ["mark://hub.example:6309"]
 ```
 
 - `seeds`: Initial servers to crawl (required unless `-seeds` flag provided)
-- `hubs`: Servers to publish hash indexes to
+- `hubs`: Servers to publish the graph to
 
 Hubs are publish-only unless also listed in `seeds`. Links to a publish-only hub
 remain graph edges but do not enqueue the hub's generated artifacts for crawling.
-The crawler hashes `/graph.md` and the `/graph/` snapshot namespace, but does not
+The crawler fetches `/graph.md` and the `/graph/` snapshot namespace, but does not
 ingest their generated links as authored edges or discovery targets. Graph
 exports are projections, not sources.
 
@@ -147,8 +147,8 @@ dial_address = "shared.internal:6309"
 server_name = "team-a.internal"
 ```
 
-The table key remains the authority used by links, graph nodes, indexes, state,
-and token lookup. `dial_address` only opens the socket. `server_name` selects the
+The table key remains the authority used by links, graph nodes, state, and
+token lookup. `dial_address` only opens the socket. `server_name` selects the
 virtual server through TLS SNI and certificate verification; when omitted it
 defaults to the logical authority hostname.
 
@@ -196,46 +196,11 @@ To start fresh, delete the state file:
 rm ~/.mark/fedcrawl.json
 ```
 
-## Hub Index Publishing
-
-When `-publish` is set, the crawler publishes hash indexes to configured hubs.
-
-### Aggregated Index
-
-By default, the crawler publishes one logical index at `/index.md` containing entries from all servers:
-
-```bash
-demarkus-agent crawl -config fedcrawl.toml -publish -insecure
-```
-
-### Per-Server Indexes
-
-With `-per-server`, publishes a separate index for each discovered server:
-
-```bash
-demarkus-agent crawl -config fedcrawl.toml -publish -per-server -insecure
-```
-
-Indexes are published to `/index/<host>.md` on each hub.
-
-Each logical index path is a small manifest. Entries are stored in hash-prefix shards under a sibling `.shards/a/` or `.shards/b/` directory. The agent stages and verifies the inactive slot before publishing the manifest, so readers see either the old complete generation or the new complete generation. Existing single-document indexes are converted automatically on their next publication.
-
-The agent needs read access and publish access to the manifest and its `.shards` subtree; read access may be public. Upgrade index readers and writers together before enabling this publisher against an existing legacy index. Configured retention applies to graph documents and index manifests. Version-pinned shard history remains unpruned so retained manifests cannot acquire dangling references. Operators should monitor `.shards` growth until reference-aware garbage collection is available; a fixed shard window is unsafe because failed or concurrent staging can advance shard versions without advancing the manifest.
-
-### Content-Addressed Discovery
-
-Published indexes enable content-addressed fetching. Resolution reads all shards matching the requested hash prefix, including every deterministic overflow part:
-
-```bash
-# Resolve content by hash (requires hub with index)
-demarkus resolve sha256-abc123... mark://hub.example:6309/index.md
-```
-
 ## Atomic Graph Publishing
 
-With `-publish-graph`, the crawler publishes an atomic snapshot at `/graph/manifest.md` before updating the compatible `/graph.md` export. Snapshot shards live under `/graph/shards/a/` or `/graph/shards/b/`; the manifest pins each shard version and becomes visible only after every shard verifies successfully.
+With `-publish-graph`, the crawler publishes an atomic snapshot at `/graph/manifest.md` before updating the compatible `/graph.md` export. Snapshot shards live under `/graph/shards/a/` or `/graph/shards/b/`; the manifest pins each shard version and becomes visible only after every shard verifies successfully. The agent stages and verifies the inactive slot first, so readers see either the old complete generation or the new one.
 
-Snapshot-aware clients and brokers prefer the manifest and fall back to `/graph.md` when it is absent. Retention applies to the manifest and legacy export only. Version-pinned shards remain unpruned until reference-aware garbage collection can prove they are unreachable.
+Snapshot-aware clients and brokers prefer the manifest and fall back to `/graph.md` when it is absent. Retention (`-publish-retention`, config `publish.retention`, default 20) applies to the manifest and legacy export only. Version-pinned shards remain unpruned until reference-aware garbage collection can prove they are unreachable; operators should monitor `/graph/shards` growth.
 
 ## Authentication
 
@@ -250,19 +215,19 @@ Store tokens before crawling:
 # Read access to private servers being crawled
 demarkus token add mark://private.example:6309 <read-token>
 
-# Publish access to hubs (required for -publish flag)
+# Publish access to hubs (required for -publish-graph)
 demarkus token add mark://my-hub.example:6309 <publish-token>
 ```
 
 The crawler automatically uses stored tokens for:
 - **Reads** (FETCH, LIST) on private servers being crawled
-- **Writes** (PUBLISH) to hubs when using `-publish`
+- **Writes** (PUBLISH) to hubs when using `-publish-graph`
 
 The agent follows LIST continuation cursors until `complete: true`. A server
 without completeness metadata, a cursor failure, or a traversal budget limit
 makes that crawl incomplete rather than silently publishing authoritative absence.
 Deploy LIST-pagination-capable world servers before upgrading the agent; the
-agent refuses index and graph publication while any crawled world lacks the
+agent refuses graph publication while any crawled world lacks the
 completeness metadata.
 
 ### Token Requirements
@@ -275,7 +240,7 @@ completeness metadata.
 
 ### Hub Tokens
 
-When using `-publish`, ensure you have `publish` capability tokens stored for each hub in your config:
+When using `-publish-graph`, ensure you have `publish` capability tokens stored for each hub in your config:
 
 ```toml
 hubs = ["mark://hub1.example:6309", "mark://hub2.example:6309"]
@@ -287,18 +252,18 @@ demarkus token add mark://hub1.example:6309 <hub1-publish-token>
 demarkus token add mark://hub2.example:6309 <hub2-publish-token>
 ```
 
-Without hub tokens, the crawler will still complete but index publishing will fail with unauthorized errors.
+Without hub tokens, the crawler will still complete but graph publishing will fail with unauthorized errors.
 
 ## Examples
 
-### Crawl a Hub and Index
+### Crawl a Hub and Publish the Graph
 
 ```bash
-# Crawl the demarkus hub and publish to your own hub
+# Crawl the demarkus hub and publish the graph to your own hub
 demarkus-agent crawl \
   -seeds "mark://hub.demarkus.io" \
   -config my-hub.toml \
-  -publish \
+  -publish-graph \
   -insecure \
   -v
 ```
@@ -313,7 +278,7 @@ demarkus-agent crawl -seeds "mark://localhost:6309" -insecure -v
 Output:
 
 ```
-servers=1 docs=5 hashes=5 errors=0
+servers=1 docs=5 errors=0
 ```
 
 ### Production Daemon
@@ -338,7 +303,7 @@ interval = "12h"
 Run as a systemd service (see deployment docs) or directly:
 
 ```bash
-demarkus-agent daemon -config /etc/demarkus/fedcrawl.toml -publish
+demarkus-agent daemon -config /etc/demarkus/fedcrawl.toml -publish-graph
 ```
 
 ## Related

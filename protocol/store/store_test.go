@@ -3,7 +3,6 @@ package store
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -1119,11 +1118,11 @@ func TestArchive(t *testing.T) {
 		if err != nil || !current.Archived {
 			t.Fatalf("legacy current = %+v (err %v), want archived", current, err)
 		}
-		if err := s.BuildHashIndex(); err != nil {
-			t.Fatalf("BuildHashIndex: %v", err)
+		if err := s.BuildIndex(); err != nil {
+			t.Fatalf("BuildIndex: %v", err)
 		}
-		if _, err := s.LookupHashResult(storefmt.ContentHash([]byte("# Hello\n"))); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("legacy archived hash lookup err = %v, want ErrNotExist", err)
+		if s.IndexSize() != 0 {
+			t.Errorf("legacy archived document indexed: size %d, want 0", s.IndexSize())
 		}
 		entries, err := s.listDir("/", storefmt.ListOptions{})
 		if err != nil {
@@ -1153,8 +1152,8 @@ func TestArchive(t *testing.T) {
 		if err != nil || current.Archived {
 			t.Fatalf("overridden current = %+v (err %v), want active", current, err)
 		}
-		if path, err := s.LookupHashResult(storefmt.ContentHash([]byte("# Hello\n"))); err != nil || path != "/doc.md" {
-			t.Errorf("unarchived hash lookup = (%q, %v), want /doc.md", path, err)
+		if s.IndexSize() != 1 {
+			t.Errorf("unarchived document not indexed: size %d, want 1", s.IndexSize())
 		}
 		entries, err = s.listDir("/", storefmt.ListOptions{})
 		if err != nil {
@@ -2081,165 +2080,76 @@ func TestExtractMetadata(t *testing.T) {
 	}
 }
 
-func wantHash(body string) string {
-	h := sha256.Sum256([]byte(body))
-	return "sha256-" + hex.EncodeToString(h[:])
-}
-
-func TestHashIndex(t *testing.T) {
+func TestIndex(t *testing.T) {
 	t.Run("build indexes current versions", func(t *testing.T) {
-		root := t.TempDir()
-		s := New(root)
-
-		if _, err := s.Write("/a.md", []byte("alpha"), nil); err != nil {
-			t.Fatal(err)
+		s := New(t.TempDir())
+		for _, doc := range []string{"/a.md", "/b.md"} {
+			if _, err := s.Write(doc, []byte(doc), nil); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if _, err := s.Write("/b.md", []byte("beta"), nil); err != nil {
-			t.Fatal(err)
+		if err := s.BuildIndex(); err != nil {
+			t.Fatalf("BuildIndex: %v", err)
 		}
-
-		if err := s.BuildHashIndex(); err != nil {
-			t.Fatalf("BuildHashIndex: %v", err)
-		}
-		if s.HashIndexSize() != 2 {
-			t.Fatalf("index size: got %d, want 2", s.HashIndexSize())
-		}
-
-		path, err := s.LookupHashResult(wantHash("alpha"))
-		if err != nil || path != "/a.md" {
-			t.Errorf("lookup alpha: got %q, %v", path, err)
-		}
-		path, err = s.LookupHashResult(wantHash("beta"))
-		if err != nil || path != "/b.md" {
-			t.Errorf("lookup beta: got %q, %v", path, err)
+		if s.IndexSize() != 2 {
+			t.Fatalf("index size: got %d, want 2", s.IndexSize())
 		}
 	})
 
 	t.Run("build skips archived", func(t *testing.T) {
-		root := t.TempDir()
-		s := New(root)
-
-		if _, err := s.Write("/live.md", []byte("live"), nil); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := s.Write("/dead.md", []byte("dead"), nil); err != nil {
-			t.Fatal(err)
+		s := New(t.TempDir())
+		for _, doc := range []string{"/live.md", "/dead.md"} {
+			if _, err := s.Write(doc, []byte(doc), nil); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if _, _, err := s.ArchiveResult("/dead.md", true); err != nil {
 			t.Fatal(err)
 		}
-
-		if err := s.BuildHashIndex(); err != nil {
-			t.Fatalf("BuildHashIndex: %v", err)
+		if err := s.BuildIndex(); err != nil {
+			t.Fatalf("BuildIndex: %v", err)
 		}
-		if s.HashIndexSize() != 1 {
-			t.Fatalf("index size: got %d, want 1", s.HashIndexSize())
-		}
-		if _, err := s.LookupHashResult(wantHash("dead")); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("archived doc lookup: err = %v, want ErrNotExist", err)
+		if s.IndexSize() != 1 {
+			t.Fatalf("index size: got %d, want 1", s.IndexSize())
 		}
 	})
 
-	t.Run("update replaces old hash", func(t *testing.T) {
-		root := t.TempDir()
-		s := New(root)
-
-		s.UpdateHashIndex("/doc.md", []byte("old"), 1)
-		if _, err := s.LookupHashResult(wantHash("old")); err != nil {
-			t.Fatalf("expected old hash to exist: %v", err)
-		}
-
-		s.UpdateHashIndex("/doc.md", []byte("new"), 2)
-		if _, err := s.LookupHashResult(wantHash("old")); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("old hash lookup: err = %v, want ErrNotExist", err)
-		}
-		path, err := s.LookupHashResult(wantHash("new"))
-		if err != nil || path != "/doc.md" {
-			t.Errorf("lookup new: got %q, %v", path, err)
-		}
-	})
-
-	t.Run("remove deletes entry", func(t *testing.T) {
-		root := t.TempDir()
-		s := New(root)
-
-		s.UpdateHashIndex("/doc.md", []byte("content"), 1)
-		s.RemoveHashEntry("/doc.md")
-		if _, err := s.LookupHashResult(wantHash("content")); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("removed entry lookup: err = %v, want ErrNotExist", err)
-		}
-		if s.HashIndexSize() != 0 {
-			t.Errorf("index size: got %d, want 0", s.HashIndexSize())
-		}
-	})
-
-	t.Run("lookup unknown hash", func(t *testing.T) {
-		root := t.TempDir()
-		s := New(root)
-
-		if _, err := s.LookupHashResult("sha256-0000000000000000000000000000000000000000000000000000000000000000"); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("unknown hash lookup: err = %v, want ErrNotExist", err)
-		}
-	})
-
-	t.Run("write updates index", func(t *testing.T) {
-		root := t.TempDir()
-		s := New(root)
-
-		if _, err := s.Write("/doc.md", []byte("v1 content"), nil); err != nil {
+	t.Run("update replaces the entry and moves the fingerprint", func(t *testing.T) {
+		s := New(t.TempDir())
+		if err := s.BuildIndex(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.LookupHashResult(wantHash("v1 content")); err != nil {
-			t.Errorf("write should add entry to hash index: %v", err)
+		s.UpdateIndex("/doc.md", []byte("old"), 1)
+		first := s.Fingerprint()
+		s.UpdateIndex("/doc.md", []byte("new"), 2)
+		if s.IndexSize() != 1 || s.Fingerprint() == first {
+			t.Errorf("after update: size %d, fingerprint moved %v", s.IndexSize(), s.Fingerprint() != first)
 		}
-
-		// Second write replaces the old hash
-		if _, err := s.Write("/doc.md", []byte("v2 content"), nil); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := s.LookupHashResult(wantHash("v1 content")); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("old hash lookup after new write: err = %v, want ErrNotExist", err)
-		}
-		if _, err := s.LookupHashResult(wantHash("v2 content")); err != nil {
-			t.Errorf("new hash should be in index: %v", err)
+		s.RemoveIndexEntry("/doc.md")
+		if s.IndexSize() != 0 {
+			t.Errorf("index size after remove: got %d, want 0", s.IndexSize())
 		}
 	})
 
-	t.Run("archive removes from index", func(t *testing.T) {
-		root := t.TempDir()
-		s := New(root)
-
+	t.Run("write, archive and unarchive keep the index in step", func(t *testing.T) {
+		s := New(t.TempDir())
 		if _, err := s.Write("/doc.md", []byte("content"), nil); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.LookupHashResult(wantHash("content")); err != nil {
-			t.Fatalf("expected entry before archive: %v", err)
-		}
-
-		if _, _, err := s.ArchiveResult("/doc.md", true); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := s.LookupHashResult(wantHash("content")); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("archived doc lookup: err = %v, want ErrNotExist", err)
-		}
-	})
-
-	t.Run("unarchive restores to index", func(t *testing.T) {
-		root := t.TempDir()
-		s := New(root)
-
-		if _, err := s.Write("/doc.md", []byte("content"), nil); err != nil {
-			t.Fatal(err)
+		if s.IndexSize() != 1 {
+			t.Fatalf("index size after write: got %d, want 1", s.IndexSize())
 		}
 		if _, _, err := s.ArchiveResult("/doc.md", true); err != nil {
 			t.Fatal(err)
+		}
+		if s.IndexSize() != 0 {
+			t.Errorf("index size after archive: got %d, want 0", s.IndexSize())
 		}
 		if _, _, err := s.ArchiveResult("/doc.md", false); err != nil {
 			t.Fatal(err)
 		}
-
-		if _, err := s.LookupHashResult(wantHash("content")); err != nil {
-			t.Errorf("unarchived doc should be back in index: %v", err)
+		if s.IndexSize() != 1 {
+			t.Errorf("index size after unarchive: got %d, want 1", s.IndexSize())
 		}
 	})
 }
@@ -2505,7 +2415,7 @@ func TestFingerprint(t *testing.T) {
 		t.Fatal("a fingerprint before the index is built")
 	}
 	for _, s := range []*Store{a, b} {
-		if err := s.BuildHashIndex(); err != nil {
+		if err := s.BuildIndex(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -2541,7 +2451,7 @@ func TestFingerprint(t *testing.T) {
 	}
 	// A rebuilt index over the same tree agrees with the incremental value.
 	reopened := New(a.Root())
-	if err := reopened.BuildHashIndex(); err != nil {
+	if err := reopened.BuildIndex(); err != nil {
 		t.Fatal(err)
 	}
 	if reopened.Fingerprint() != archived {

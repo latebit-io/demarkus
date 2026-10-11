@@ -114,10 +114,6 @@ func (view *snapshotView) Versions(ctx context.Context, reqPath string) ([]store
 	})
 }
 
-func (view *snapshotView) LookupHash(ctx context.Context, hash string) (string, error) {
-	return viewRead(ctx, view, catalogRead, func(ctx context.Context, r *readView) (string, error) { return r.LookupHash(ctx, hash) })
-}
-
 func (view *snapshotView) VerifyChain(ctx context.Context, reqPath string) error {
 	_, err := viewRead(ctx, view, exactRead, func(ctx context.Context, r *readView) (struct{}, error) {
 		return struct{}{}, r.VerifyChain(ctx, reqPath)
@@ -308,17 +304,6 @@ func (view *readView) versions(ctx context.Context, reqPath string) ([]storefmt.
 		return nil, err
 	}
 	return versions, nil
-}
-
-func (view *readView) LookupHash(ctx context.Context, hash string) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	path, exists := view.scan().lookupHash(hash)
-	if !exists {
-		return "", backend.ErrNotFound
-	}
-	return path, nil
 }
 
 func (view *readView) VerifyChain(ctx context.Context, reqPath string) error {

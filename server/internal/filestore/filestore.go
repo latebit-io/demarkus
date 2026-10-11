@@ -48,7 +48,7 @@ func New(documents *protocolstore.Store, lookup *catalog.Catalog) *Store {
 }
 
 // Open is New plus WATCH (backend.ChangeSource): the change journal beside
-// the documents is restored against the hash index's fingerprint, so build
+// the documents is restored against the document index's fingerprint, so build
 // the index first or every open starts a new epoch.
 func Open(documents *protocolstore.Store, lookup *catalog.Catalog, opts Options) (*Store, error) {
 	s := New(documents, lookup)
@@ -213,10 +213,6 @@ func (r reader) Versions(ctx context.Context, path string) ([]storefmt.VersionIn
 	return call(ctx, func() ([]storefmt.VersionInfo, error) { return r.store.documents.Versions(path) })
 }
 
-func (r reader) LookupHash(ctx context.Context, hash string) (string, error) {
-	return call(ctx, func() (string, error) { return r.store.documents.LookupHashResult(hash) })
-}
-
 func (r reader) VerifyChain(ctx context.Context, path string) error {
 	_, err := call(ctx, func() (struct{}, error) { return struct{}{}, r.store.documents.VerifyChain(path) })
 	return err
@@ -259,10 +255,6 @@ func (view *readView) IsDir(ctx context.Context, path string) (bool, error) {
 
 func (view *readView) Versions(ctx context.Context, path string) ([]storefmt.VersionInfo, error) {
 	return admit(view, func(r reader) ([]storefmt.VersionInfo, error) { return r.Versions(ctx, path) })
-}
-
-func (view *readView) LookupHash(ctx context.Context, hash string) (string, error) {
-	return admit(view, func(r reader) (string, error) { return r.LookupHash(ctx, hash) })
 }
 
 func (view *readView) VerifyChain(ctx context.Context, path string) error {

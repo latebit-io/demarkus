@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -28,7 +27,6 @@ func (h *handler) bodies() (*marktools.Tools, error) {
 		Seen:      processSeen{h},
 		Agent:     mcpbind.ClientName,
 		Graph:     h.graphScope,
-		Now:       func() time.Time { return timeNow() },
 	})
 }
 

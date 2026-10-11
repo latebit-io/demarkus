@@ -398,10 +398,6 @@ func snapshot(b LookupBackend) []string {
 			add("list %q archived=%v = %s %v", dir, includeArchived, errClass(err), entries)
 		}
 	}
-	for i, body := range diffBodies {
-		p, err := b.direct().LookupHash(storefmt.ContentHash(body))
-		add("hash body=%d = %q %s", i, p, errClass(err))
-	}
 	// Queries x scopes unfiltered, then filters on the match-all query: the
 	// full cross product is mostly redundant and dominates snapshot cost.
 	// Body match rows are compared as a set, the contract, not by rank.

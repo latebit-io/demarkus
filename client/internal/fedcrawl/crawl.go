@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
-	"github.com/latebit-io/demarkus/client/index"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/listwalk"
@@ -39,9 +37,8 @@ type Crawler struct {
 	// Crawl results
 	runMu          sync.Mutex
 	mu             sync.Mutex
-	hashes         map[string][]index.Entry // content-hash -> all observed locations
-	servers        map[string]bool          // discovered servers (host)
-	graph          *graph.Graph             // link graph accumulated during the walk (concurrency-safe itself)
+	servers        map[string]bool // discovered servers (host)
+	graph          *graph.Graph    // link graph accumulated during the walk (concurrency-safe itself)
 	completedNodes []graphstore.StoredNode
 	completedEdges []graphstore.StoredEdge
 	publishable    bool
@@ -58,7 +55,6 @@ func NewCrawler(cfg Config, client FetchClient, state *State, tokenStore *tokens
 		state:      state,
 		tokens:     tokenStore,
 		cred:       tokens.Credential{Origin: singleHubHost(cfg.Hubs)},
-		hashes:     make(map[string][]index.Entry),
 		servers:    make(map[string]bool),
 		graph:      graph.New(),
 		publishSem: make(chan struct{}, 1),
@@ -69,13 +65,12 @@ func NewCrawler(cfg Config, client FetchClient, state *State, tokenStore *tokens
 type CrawlResult struct {
 	ServersDiscovered int
 	DocumentsCrawled  int
-	HashesCollected   int
 	Incomplete        bool
 	Errors            []string
 }
 
 // Run executes the federation crawl starting from configured seeds.
-// It discovers servers, collects content hashes, and returns results.
+// It discovers servers, accumulates the link graph, and returns results.
 func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	c.runMu.Lock()
 	defer c.runMu.Unlock()
@@ -91,7 +86,6 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 
 	// Reset crawl state for each invocation.
 	c.mu.Lock()
-	c.hashes = make(map[string][]index.Entry)
 	c.servers = make(map[string]bool)
 	c.graph = graph.New()
 	c.publishable = false
@@ -201,7 +195,6 @@ func (c *Crawler) Run(ctx context.Context) (*CrawlResult, error) {
 	c.mu.Lock()
 	result.ServersDiscovered = len(c.servers)
 	result.DocumentsCrawled = int(docCount.Load())
-	result.HashesCollected = len(c.hashes)
 	result.Incomplete = incomplete.Load()
 	result.Errors = crawlErrors
 	g := c.graph
@@ -226,10 +219,10 @@ type crawlRun struct {
 	recordIncomplete func(string, ...any)
 }
 
-// crawlServer crawls a single server, collecting hashes and discovering new servers.
+// crawlServer crawls a single server, recording edges and discovering new servers.
 // Returns the number of documents successfully crawled.
 func (c *Crawler) crawlServer(ctx context.Context, run *crawlRun, host string) (int, error) {
-	walk := &serverWalk{c: c, run: run, host: host, authority: links.AuthorityURL(host), token: c.resolveToken(host)}
+	walk := &serverWalk{c: c, run: run, host: host, token: c.resolveToken(host)}
 	depth := c.cfg.Crawl.MaxDepth
 	if depth == 0 {
 		depth = listwalk.RootOnly // the walker reads zero as its default
@@ -250,12 +243,11 @@ func (c *Crawler) crawlServer(ctx context.Context, run *crawlRun, host string) (
 
 // serverWalk is the state of one server's walk.
 type serverWalk struct {
-	c         *Crawler
-	run       *crawlRun
-	host      string
-	authority string // host's identity, stamped on every entry it yields
-	token     string
-	count     int
+	c     *Crawler
+	run   *crawlRun
+	host  string
+	token string
+	count int
 }
 
 // problem is the crawler's walk policy: a root that cannot be listed fails the
@@ -272,7 +264,7 @@ func (s *serverWalk) problem(p *listwalk.Problem) error {
 	return nil
 }
 
-// visit fetches one document, records its hash and edges, and queues the
+// visit fetches one document, records its edges, and queues the
 // servers it links to. Only the document budget and cancellation end the walk.
 func (s *serverWalk) visit(ctx context.Context, fullPath string) error {
 	c := s.c
@@ -303,16 +295,6 @@ func (s *serverWalk) visit(ctx context.Context, fullPath string) error {
 	if doc.Response.Status != protocol.StatusOK {
 		s.run.recordIncomplete("fetch %s%s: status %s", s.host, fullPath, doc.Response.Status)
 		return nil
-	}
-
-	contentHash := doc.Response.Metadata["content-hash"]
-	if _, ok := protocol.IsHashPath(contentHash); ok {
-		entry := index.Entry{Hash: contentHash, Server: s.authority, Path: fullPath}
-		c.mu.Lock()
-		c.hashes[contentHash] = append(c.hashes[contentHash], entry)
-		c.mu.Unlock()
-	} else {
-		s.run.recordIncomplete("fetch %s%s: missing or invalid content-hash", s.host, fullPath)
 	}
 
 	// Generated graph exports are data, not authored discovery links.
@@ -406,108 +388,6 @@ func (c *Crawler) resolveToken(host string) string {
 	return tokens.Resolve(c.cred, host, c.tokens)
 }
 
-// Hashes returns all collected content hashes flattened to single entries.
-// When the same content appears at multiple locations, the first location is returned.
-func (c *Crawler) Hashes() map[string]index.Entry {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	cp := make(map[string]index.Entry, len(c.hashes))
-	for hash, entries := range c.hashes {
-		if len(entries) > 0 {
-			cp[hash] = entries[0]
-		}
-	}
-	return cp
-}
-
-func (c *Crawler) entriesForServer(host string) []index.Entry {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var entries []index.Entry
-	server := links.AuthorityURL(host)
-	for _, entriesForHash := range c.hashes {
-		for _, entry := range entriesForHash {
-			if entry.Server == server {
-				entries = append(entries, entry)
-			}
-		}
-	}
-	slices.SortFunc(entries, func(a, b index.Entry) int {
-		return strings.Compare(a.Path, b.Path)
-	})
-	return entries
-}
-
-func (c *Crawler) globalEntries() []index.Entry {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	total := 0
-	for _, entriesForHash := range c.hashes {
-		total += len(entriesForHash)
-	}
-	entries := make([]index.Entry, 0, total)
-	for _, entriesForHash := range c.hashes {
-		entries = append(entries, entriesForHash...)
-	}
-	slices.SortFunc(entries, func(a, b index.Entry) int {
-		if cmp := strings.Compare(a.Hash, b.Hash); cmp != 0 {
-			return cmp
-		}
-		if cmp := strings.Compare(a.Server, b.Server); cmp != 0 {
-			return cmp
-		}
-		return strings.Compare(a.Path, b.Path)
-	})
-
-	return entries
-}
-
-// PublishToHubs publishes indexes to all configured hubs.
-// If perServer is true, publishes a separate index for each discovered server.
-// If perServer is false, publishes a single aggregated index.
-// Returns the number of successful publications.
-func (c *Crawler) PublishToHubs(ctx context.Context, client PublishClient, perServer bool) (int, error) {
-	if len(c.cfg.Hubs) == 0 {
-		return 0, nil
-	}
-
-	now := time.Now().UTC()
-	successCount := 0
-	var publishErrs []error
-
-	for _, hub := range c.cfg.Hubs {
-		host, err := links.DialHost(hub + "/")
-		if err != nil {
-			publishErrs = append(publishErrs, fmt.Errorf("parse hub URL %q: %w", hub, err))
-			continue
-		}
-
-		token := c.resolveToken(host)
-
-		if perServer {
-			// Publish an index for each discovered server
-			for serverHost := range c.servers {
-				idxPath := "/index/" + serverHost + ".md"
-				if err := c.publishShardedIndex(ctx, client, host, idxPath, links.AuthorityURL(serverHost), c.entriesForServer(serverHost), now, token); err != nil {
-					publishErrs = append(publishErrs, fmt.Errorf("publish %s to hub %s: %w", idxPath, hub, err))
-					continue
-				}
-				successCount++
-			}
-		} else {
-			// Publish a single aggregated index
-			idxPath := "/index.md"
-			if err := c.publishShardedIndex(ctx, client, host, idxPath, "aggregated", c.globalEntries(), now, token); err != nil {
-				publishErrs = append(publishErrs, fmt.Errorf("publish %s to hub %s: %w", idxPath, hub, err))
-				continue
-			}
-			successCount++
-		}
-	}
-
-	return successCount, errors.Join(publishErrs...)
-}
-
 // Federation keeps mark:// topology only; source revisions survive hub export.
 func (c *Crawler) recordEdges(host, docPath string, resp *protocol.Response) []graphstore.WorldEdge {
 	url := links.NodeURL(host, docPath)
@@ -556,9 +436,8 @@ func snapshotGraph(g *graph.Graph) ([]graphstore.StoredNode, []graphstore.Stored
 }
 
 // PublishGraphToHubs publishes the link-graph export to each configured hub at
-// /graph.md. Unlike the hash index this is always aggregated (cross-server
-// edges are the whole point — they make portal nodes on the floor). Returns
-// the number of successful publications.
+// /graph.md, aggregated across servers so cross-server edges make portal
+// nodes on the floor. Returns the number of successful publications.
 func (c *Crawler) PublishGraphToHubs(ctx context.Context, client PublishClient) (int, error) {
 	if len(c.cfg.Hubs) == 0 {
 		return 0, nil
@@ -592,7 +471,7 @@ func (c *Crawler) PublishGraphToHubs(ctx context.Context, client PublishClient) 
 		} else {
 			published = true
 		}
-		if err := c.publishIndex(ctx, client, host, graphstore.LegacyExportPath, body, token); err != nil {
+		if err := c.publishDocument(ctx, client, host, graphstore.LegacyExportPath, body, token); err != nil {
 			publishErrs = append(publishErrs, fmt.Errorf("publish /graph.md to hub %s: %w", hub, err))
 		} else {
 			published = true
@@ -631,26 +510,6 @@ type PublishClient interface {
 	Publish(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error)
 }
 
-func (c *Crawler) publishShardedIndex(ctx context.Context, client PublishClient, host, manifestPath, source string, entries []index.Entry, indexed time.Time, token string) error {
-	_, err := index.PublishGeneration(ctx, index.PublishOptions{
-		ManifestPath: manifestPath,
-		Source:       source,
-		Indexed:      indexed,
-		Entries:      entries,
-	}, func(ioCtx context.Context, docPath string) (protocol.Response, error) {
-		result, err := client.Fetch(ioCtx, fetch.FetchRequest{Host: host, Path: docPath, Token: token})
-		return result.Response, err
-	}, func(ioCtx context.Context, docPath, body string, expectedVersion int) (protocol.Response, error) {
-		meta := c.generatedArtifactMeta(docPath == manifestPath)
-		result, err := client.Publish(ioCtx, fetch.WriteRequest{
-			Host: host, Path: docPath, Token: token,
-			Body: body, ExpectedVersion: expectedVersion, Metadata: meta,
-		})
-		return result.Response, err
-	})
-	return err
-}
-
 func (c *Crawler) generatedArtifactMeta(retain bool) map[string]string {
 	retention := 0
 	if retain {
@@ -659,9 +518,9 @@ func (c *Crawler) generatedArtifactMeta(retain bool) map[string]string {
 	return generation.ArtifactMetadata("demarkus-agent", retention)
 }
 
-// publishIndex publishes a generated whole document, currently /graph.md.
+// publishDocument publishes a generated whole document, currently /graph.md.
 // Duplicate bodies create no version, keeping unconditional writes idempotent.
-func (c *Crawler) publishIndex(ctx context.Context, client PublishClient, host, docPath, body, token string) error {
+func (c *Crawler) publishDocument(ctx context.Context, client PublishClient, host, docPath, body, token string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

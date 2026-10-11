@@ -62,7 +62,6 @@ type digest struct {
 	tip      string
 	paths    []string
 	children []dirChild
-	hashes   []hashEntry
 }
 
 func snapshotDigest(snap *snapshot) digest {
@@ -79,10 +78,6 @@ func snapshotDigest(snap *snapshot) digest {
 	})
 	snap.Children.Ascend(func(child *dirChild) bool {
 		d.children = append(d.children, *child)
-		return true
-	})
-	snap.Hashes.Ascend(func(entry hashEntry) bool {
-		d.hashes = append(d.hashes, entry)
 		return true
 	})
 	return d

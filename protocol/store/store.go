@@ -148,24 +148,17 @@ func newVersionSymlinkTarget(base string, version int) string {
 
 // Store provides read access to a versioned document directory.
 type Store struct {
-	root   string
-	hashMu sync.RWMutex
-	// hashIdx: content hash → sorted canonical request paths whose current
-	// body has that hash. LookupHash answers the smallest so any backend and
-	// a rebuilt index agree on shared bodies.
-	hashIdx map[string][]string
-	// pathIdx: canonical request path → its index entry. liveChildren also reads
-	// membership as "current, non-archived doc" for ListDir filtering, so
-	// keep membership semantics exact; a miss only degrades to a disk scan.
-	pathIdx map[string]indexEntry
+	root    string
+	indexMu sync.RWMutex
+	// pathIdx: canonical request path → its fold, the digest contribution it
+	// is removed with. liveChildren also reads membership as "current,
+	// non-archived doc" for ListDir filtering, so keep membership exact.
+	pathIdx map[string][digestLen]byte
 	// digest is the XOR of every entry's fold, so it updates per entry and
 	// equals any other index over the same current documents. Meaningful
-	// only once indexed is set by BuildHashIndex. hashMu.
+	// only once indexed is set by BuildIndex. indexMu.
 	digest  [digestLen]byte
 	indexed bool
-	// hashErr records an incomplete index build. Hits remain valid, but misses
-	// cannot be reported as confirmed absence until a clean rebuild succeeds.
-	hashErr error
 	dirDebt dirSyncDebt
 }
 
@@ -174,8 +167,7 @@ type Store struct {
 func New(root string) *Store {
 	return &Store{
 		root:    root,
-		hashIdx: make(map[string][]string),
-		pathIdx: make(map[string]indexEntry),
+		pathIdx: make(map[string][digestLen]byte),
 	}
 }
 
@@ -191,7 +183,7 @@ func Open(root string) (*Store, error) {
 }
 
 // walkCurrentFiles calls fn with the raw stored bytes of each current, live
-// document. BuildHashIndex and WalkCurrent share it so the skip and containment
+// document. BuildIndex and WalkCurrent share it so the skip and containment
 // rules live in one place.
 func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified time.Time) error) error {
 	absRoot, err := s.resolvedRoot()
@@ -271,60 +263,44 @@ func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified t
 
 var errSymlinkEscapes = errors.New("current-version symlink escapes the content root")
 
-// BuildHashIndex walks the content root and indexes current versions by content hash.
+// BuildIndex walks the content root and indexes the current, live documents
+// by path, with the version and body hash each folds into the fingerprint.
 // Skips versions/ directories and archived documents.
-func (s *Store) BuildHashIndex() error {
-	s.hashMu.Lock()
-	defer s.hashMu.Unlock()
+func (s *Store) BuildIndex() error {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
 
-	s.hashIdx = make(map[string][]string)
-	s.pathIdx = make(map[string]indexEntry)
+	s.pathIdx = make(map[string][digestLen]byte)
 	s.digest = [digestLen]byte{}
 	s.indexed = true
-	s.hashErr = nil
 
-	err := s.walkCurrentFiles(func(reqPath string, data []byte, _ time.Time) error {
+	return s.walkCurrentFiles(func(reqPath string, data []byte, _ time.Time) error {
 		s.indexLocked(reqPath, storefmt.ContentHash(storefmt.ExtractBody(data)), indexVersion(data))
 		return nil
 	})
-	s.hashErr = err
-	return err
 }
 
-// indexLocked records reqPath (already canonical) under hash, dropping any
-// earlier hash it was indexed under. Caller holds hashMu.
+// indexLocked records reqPath (already canonical), replacing any earlier
+// entry. Caller holds indexMu.
 func (s *Store) indexLocked(reqPath, hash string, version int) {
 	s.unindexLocked(reqPath)
-	paths := s.hashIdx[hash]
-	i, _ := slices.BinarySearch(paths, reqPath)
-	s.hashIdx[hash] = slices.Insert(paths, i, reqPath)
-	entry := indexEntry{hash: hash, fold: fold(reqPath, version, hash)}
-	s.pathIdx[reqPath] = entry
-	s.xorDigest(entry.fold)
+	digest := fold(reqPath, version, hash)
+	s.pathIdx[reqPath] = digest
+	s.xorDigest(digest)
 }
 
-// unindexLocked removes reqPath from both maps. Caller holds hashMu.
+// unindexLocked removes reqPath from the index. Caller holds indexMu.
 func (s *Store) unindexLocked(reqPath string) {
-	entry, ok := s.pathIdx[reqPath]
+	digest, ok := s.pathIdx[reqPath]
 	if !ok {
 		return
 	}
 	delete(s.pathIdx, reqPath)
-	s.xorDigest(entry.fold)
-	hash := entry.hash
-	paths := s.hashIdx[hash]
-	if i, found := slices.BinarySearch(paths, reqPath); found {
-		paths = slices.Delete(paths, i, i+1)
-	}
-	if len(paths) == 0 {
-		delete(s.hashIdx, hash)
-	} else {
-		s.hashIdx[hash] = paths
-	}
+	s.xorDigest(digest)
 }
 
 // WalkCurrent visits every current, non-archived document, with the same skip
-// rules as BuildHashIndex, so a derived index reads the same source of truth.
+// rules as BuildIndex, so a derived index reads the same source of truth.
 func (s *Store) WalkCurrent(fn func(storefmt.CurrentDoc) error) error {
 	return s.walkCurrentFiles(func(reqPath string, data []byte, modified time.Time) error {
 		return fn(storefmt.CurrentDoc{
@@ -336,52 +312,31 @@ func (s *Store) WalkCurrent(fn func(storefmt.CurrentDoc) error) error {
 	})
 }
 
-// LookupHashResult returns the smallest live request path for a content hash.
-// A confirmed miss is os.ErrNotExist; an incomplete index reports its cause.
-func (s *Store) LookupHashResult(hash string) (string, error) {
-	s.hashMu.RLock()
-	defer s.hashMu.RUnlock()
-	if paths := s.hashIdx[hash]; len(paths) > 0 {
-		return paths[0], nil
-	}
-	if s.hashErr != nil {
-		return "", fmt.Errorf("hash index incomplete: %w", s.hashErr)
-	}
-	return "", os.ErrNotExist
-}
-
-// UpdateHashIndex indexes the current version of a document by body and
+// UpdateIndex indexes the current version of a document by body and
 // version number. Keys are canonical so "/d/e/" and "/d/e" index one
-// document, as BuildHashIndex derives from the walk.
-func (s *Store) UpdateHashIndex(reqPath string, body []byte, version int) {
-	s.hashMu.Lock()
-	defer s.hashMu.Unlock()
+// document, as BuildIndex derives from the walk.
+func (s *Store) UpdateIndex(reqPath string, body []byte, version int) {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
 	s.indexLocked(storefmt.CanonicalPath(reqPath), storefmt.ContentHash(body), version)
 }
 
-// RemoveHashEntry removes the hash index entry for a given request path.
-func (s *Store) RemoveHashEntry(reqPath string) {
-	s.hashMu.Lock()
-	defer s.hashMu.Unlock()
+// RemoveIndexEntry drops a request path from the index.
+func (s *Store) RemoveIndexEntry(reqPath string) {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
 	s.unindexLocked(storefmt.CanonicalPath(reqPath))
 }
 
-// HashIndexSize returns the number of indexed documents.
-func (s *Store) HashIndexSize() int {
-	s.hashMu.RLock()
-	defer s.hashMu.RUnlock()
+// IndexSize returns the number of indexed documents.
+func (s *Store) IndexSize() int {
+	s.indexMu.RLock()
+	defer s.indexMu.RUnlock()
 	return len(s.pathIdx)
 }
 
 // digestLen is the fingerprint width: change detection, not a security bound.
 const digestLen = 16
-
-// indexEntry is one current document: its content hash, and its fold, the
-// digest contribution the entry is removed with.
-type indexEntry struct {
-	hash string
-	fold [digestLen]byte
-}
 
 // fold is an entry's digest contribution. The version is in it so a new
 // version with the same body still moves the fingerprint.
@@ -416,10 +371,10 @@ func indexVersion(stored []byte) int {
 
 // Fingerprint identifies the current, live documents by path, version and
 // content hash, in any indexing order; every write, archive or unarchive
-// changes it. Empty until BuildHashIndex.
+// changes it. Empty until BuildIndex.
 func (s *Store) Fingerprint() string {
-	s.hashMu.RLock()
-	defer s.hashMu.RUnlock()
+	s.indexMu.RLock()
+	defer s.indexMu.RUnlock()
 	if !s.indexed {
 		return ""
 	}
@@ -653,25 +608,15 @@ type liveChildren struct {
 	dirs  map[string]struct{}
 }
 
-// liveChildren makes a single pass over the in-memory pathIdx — which the
-// store maintains incrementally on every write and archive/unarchive (see
-// UpdateHashIndex / RemoveHashEntry) — and classifies the live docs under the
-// directory request path dirReq, so a LIST answers both "is this file live?"
-// and "does this child directory hold live docs?" with O(1) lookups, never
-// touching disk for indexed entries.
-//
-// The request path is canonicalized first: pathIdx keys are canonical
-// ("/"+filepath.Rel), so a non-canonical caller path ("//docs", "/docs/.")
-// would otherwise match nothing and silently force the disk fallback for
-// every child. Docs with a hidden path segment (dot-named) are skipped even
-// though the index tracks them: a listing never shows them, so counting one
-// as live would keep its parent visible as an empty shell.
+// liveChildren classifies the live documents under dirReq from pathIdx, so a
+// LIST answers "is this file live?" and "does this child hold live docs?"
+// without disk. Dot-named segments are skipped: a listing never shows them.
 func (s *Store) liveChildren(dirReq string) liveChildren {
 	canon := storefmt.CanonicalPath(dirReq)
 	prefix := strings.TrimRight(canon, "/") + "/"
 	out := liveChildren{files: make(map[string]struct{}), dirs: make(map[string]struct{})}
-	s.hashMu.RLock()
-	defer s.hashMu.RUnlock()
+	s.indexMu.RLock()
+	defer s.indexMu.RUnlock()
 	for p := range s.pathIdx {
 		rest, ok := strings.CutPrefix(p, prefix)
 		if !ok || hasHiddenSegment(rest) {
@@ -1125,10 +1070,10 @@ func (s *Store) ArchiveChecked(spec *storefmt.ArchiveSpec) (*storefmt.Document, 
 
 func (s *Store) updateArchiveIndex(reqPath string, stored []byte, version int, archived bool) {
 	if archived {
-		s.RemoveHashEntry(reqPath)
+		s.RemoveIndexEntry(reqPath)
 		return
 	}
-	s.UpdateHashIndex(reqPath, storefmt.ExtractBody(stored), version)
+	s.UpdateIndex(reqPath, storefmt.ExtractBody(stored), version)
 }
 
 func documentFromStored(data []byte, modified time.Time, version int, archived bool) *storefmt.Document {
@@ -1411,7 +1356,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 		return nil, fmt.Errorf("stat version file: %w", err)
 	}
 
-	s.UpdateHashIndex(reqPath, content, next)
+	s.UpdateIndex(reqPath, content, next)
 
 	// Metadata is the persisted form (what Get returns), not the request
 	// map: "alpha, beta" is stored as a tags list and reads back "alpha,beta",

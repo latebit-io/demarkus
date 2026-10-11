@@ -1,5 +1,5 @@
 // Command demarkus-agent is a federation crawler for the Mark Protocol.
-// It discovers servers, collects content hashes, and publishes indexes to hubs.
+// It discovers servers, accumulates the link graph, and publishes it to hubs.
 package main
 
 import (
@@ -70,17 +70,28 @@ func main() {
 	os.Exit(1)
 }
 
+// crawlFlags are the flags crawl and daemon share.
+type crawlFlags struct {
+	configPath, seeds, statePath string
+	insecure, publishGraph       bool
+	publishRetention             int
+}
+
+func newCrawlFlagSet(name string, handling flag.ErrorHandling) (*flag.FlagSet, *crawlFlags) {
+	fs := flag.NewFlagSet(name, handling)
+	f := &crawlFlags{}
+	fs.StringVar(&f.configPath, "config", "", "path to TOML config file")
+	fs.StringVar(&f.seeds, "seeds", "", "comma-separated seed servers (mark://host:port)")
+	fs.StringVar(&f.statePath, "state", fedcrawl.DefaultStatePath(), "path to state file")
+	fs.BoolVar(&f.insecure, "insecure", false, "skip TLS certificate verification")
+	fs.BoolVar(&f.publishGraph, "publish-graph", false, "publish a link-graph export (/graph.md) to hubs after each crawl")
+	fs.IntVar(&f.publishRetention, "publish-retention", -1, "cap the /graph.md and /graph/manifest.md histories to their newest N versions; version-pinned shards stay unpruned; 0 keeps every version; -1 uses the config value (default 20)")
+	return fs, f
+}
+
 func crawlMain(args []string) {
-	fs := flag.NewFlagSet("crawl", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to TOML config file")
-	seeds := fs.String("seeds", "", "comma-separated seed servers (mark://host:port)")
-	statePath := fs.String("state", fedcrawl.DefaultStatePath(), "path to state file")
-	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
+	fs, f := newCrawlFlagSet("crawl", flag.ExitOnError)
 	verbose := fs.Bool("v", false, "verbose output")
-	publish := fs.Bool("publish", false, "publish indexes to hubs after crawl")
-	perServer := fs.Bool("per-server", false, "publish per-server indexes instead of aggregated")
-	publishGraph := fs.Bool("publish-graph", false, "publish a link-graph export (/graph.md) to hubs after crawl")
-	publishRetention := fs.Int("publish-retention", -1, "cap /graph.md and hash-index manifest histories to their newest N versions; version-pinned shards stay unpruned; 0 keeps every version; -1 uses the config value (default 20)")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus-agent crawl [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Runs a single federation crawl.\n\n")
@@ -92,15 +103,15 @@ func crawlMain(args []string) {
 
 	// Parse seeds from flag or config.
 	var seedList []string
-	if *seeds != "" {
-		seedList = strings.Split(*seeds, ",")
+	if f.seeds != "" {
+		seedList = strings.Split(f.seeds, ",")
 		for i, s := range seedList {
 			seedList[i] = strings.TrimSpace(s)
 		}
 	}
 
 	// Load config.
-	cfg, err := fedcrawl.Load(*configPath, seedList)
+	cfg, err := fedcrawl.Load(f.configPath, seedList)
 	if err != nil {
 		fatal("load config", "err", err)
 	}
@@ -108,11 +119,11 @@ func crawlMain(args []string) {
 	// CLI retention overrides config when set (-1 keeps the config value).
 	// Anything else negative is a mistake; fail loudly instead of silently
 	// falling back to the config value.
-	if *publishRetention < -1 {
-		fatal("invalid -publish-retention (want -1, 0, or a positive count)", "value", *publishRetention)
+	if f.publishRetention < -1 {
+		fatal("invalid -publish-retention (want -1, 0, or a positive count)", "value", f.publishRetention)
 	}
-	if *publishRetention >= 0 {
-		cfg.Publish.Retention = *publishRetention
+	if f.publishRetention >= 0 {
+		cfg.Publish.Retention = f.publishRetention
 	}
 
 	// Validate.
@@ -121,12 +132,12 @@ func crawlMain(args []string) {
 	}
 
 	// Create client.
-	opts := fetch.Options{Insecure: *insecure, Endpoints: cfg.ClientEndpoints()}
+	opts := fetch.Options{Insecure: f.insecure, Endpoints: cfg.ClientEndpoints()}
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
 	// Load state.
-	state, err := fedcrawl.LoadState(*statePath)
+	state, err := fedcrawl.LoadState(f.statePath)
 	if err != nil {
 		fatal("load state", "err", err)
 	}
@@ -157,7 +168,6 @@ func crawlMain(args []string) {
 			"duration_ms", elapsed.Round(time.Millisecond).Milliseconds(),
 			"servers", result.ServersDiscovered,
 			"documents", result.DocumentsCrawled,
-			"hashes", result.HashesCollected,
 			"errors", len(result.Errors))
 		for _, e := range result.Errors {
 			logger.Warn("crawl: error", "detail", e)
@@ -165,28 +175,17 @@ func crawlMain(args []string) {
 	} else {
 		// Single-line stdout summary preserved for shell-script parsing.
 		// Not routed through slog because it's user-facing output, not a log event.
-		fmt.Printf("servers=%d docs=%d hashes=%d errors=%d\n",
+		fmt.Printf("servers=%d docs=%d errors=%d\n",
 			result.ServersDiscovered,
 			result.DocumentsCrawled,
-			result.HashesCollected,
 			len(result.Errors))
 	}
-	if blockIncompletePublication(result, *publish, *publishGraph, len(cfg.Hubs)) {
+	if blockIncompletePublication(result, f.publishGraph, len(cfg.Hubs)) {
 		fatal("publish: skipped because crawl is incomplete", "errors", len(result.Errors))
 	}
 
-	// Publish indexes to hubs if requested.
-	if *publish && len(cfg.Hubs) > 0 {
-		pubCount, err := crawler.PublishToHubs(ctx, client, *perServer)
-		if err != nil {
-			logger.Warn("publish: hub push failed", "err", err)
-		} else if *verbose {
-			logger.Info("publish: complete", "indexes", pubCount, "hubs", len(cfg.Hubs))
-		}
-	}
-
 	// Publish the link-graph export to hubs if requested.
-	if *publishGraph && len(cfg.Hubs) > 0 {
+	if f.publishGraph && len(cfg.Hubs) > 0 {
 		gCount, err := crawler.PublishGraphToHubs(ctx, client)
 		if err != nil {
 			logger.Warn("publish-graph: hub push failed", "err", err)
@@ -197,15 +196,7 @@ func crawlMain(args []string) {
 }
 
 func daemonMain(args []string) {
-	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to TOML config file (required)")
-	seeds := fs.String("seeds", "", "comma-separated seed servers (overrides config)")
-	statePath := fs.String("state", fedcrawl.DefaultStatePath(), "path to state file")
-	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
-	publish := fs.Bool("publish", false, "publish indexes to hubs after each crawl")
-	perServer := fs.Bool("per-server", false, "publish per-server indexes instead of aggregated")
-	publishGraph := fs.Bool("publish-graph", false, "publish a link-graph export (/graph.md) to hubs after each crawl")
-	publishRetention := fs.Int("publish-retention", -1, "cap /graph.md and hash-index manifest histories to their newest N versions; version-pinned shards stay unpruned; 0 keeps every version; -1 uses the config value (default 20)")
+	fs, f := newCrawlFlagSet("daemon", flag.ExitOnError)
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus-agent daemon [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Runs federation crawl as a daemon on a schedule.\n\n")
@@ -216,21 +207,21 @@ func daemonMain(args []string) {
 	}
 
 	// Validate required flags.
-	if *configPath == "" {
+	if f.configPath == "" {
 		fatal("config path is required; use -config flag")
 	}
 
 	// Parse seeds from flag.
 	var seedList []string
-	if *seeds != "" {
-		seedList = strings.Split(*seeds, ",")
+	if f.seeds != "" {
+		seedList = strings.Split(f.seeds, ",")
 		for i, s := range seedList {
 			seedList[i] = strings.TrimSpace(s)
 		}
 	}
 
 	// Load config.
-	cfg, err := fedcrawl.Load(*configPath, seedList)
+	cfg, err := fedcrawl.Load(f.configPath, seedList)
 	if err != nil {
 		fatal("load config", "err", err)
 	}
@@ -238,11 +229,11 @@ func daemonMain(args []string) {
 	// CLI retention overrides config when set (-1 keeps the config value).
 	// Anything else negative is a mistake; fail loudly instead of silently
 	// falling back to the config value.
-	if *publishRetention < -1 {
-		fatal("invalid -publish-retention (want -1, 0, or a positive count)", "value", *publishRetention)
+	if f.publishRetention < -1 {
+		fatal("invalid -publish-retention (want -1, 0, or a positive count)", "value", f.publishRetention)
 	}
-	if *publishRetention >= 0 {
-		cfg.Publish.Retention = *publishRetention
+	if f.publishRetention >= 0 {
+		cfg.Publish.Retention = f.publishRetention
 	}
 
 	// Validate.
@@ -251,12 +242,12 @@ func daemonMain(args []string) {
 	}
 
 	// Create client.
-	opts := fetch.Options{Insecure: *insecure, Endpoints: cfg.ClientEndpoints()}
+	opts := fetch.Options{Insecure: f.insecure, Endpoints: cfg.ClientEndpoints()}
 	client := fetch.NewClient(opts)
 	defer client.Close()
 
 	// Load state.
-	state, err := fedcrawl.LoadState(*statePath)
+	state, err := fedcrawl.LoadState(f.statePath)
 	if err != nil {
 		fatal("load state", "err", err)
 	}
@@ -276,7 +267,7 @@ func daemonMain(args []string) {
 	defer cancel()
 
 	// Run initial crawl.
-	runCrawl(ctx, &cfg, client, state, tokenStore, *publish, *perServer, *publishGraph)
+	runCrawl(ctx, &cfg, client, state, tokenStore, f.publishGraph)
 
 	// Schedule subsequent crawls.
 	ticker := time.NewTicker(cfg.Schedule.Interval)
@@ -288,12 +279,12 @@ func daemonMain(args []string) {
 			logger.Info("daemon: stopping")
 			return
 		case <-ticker.C:
-			runCrawl(ctx, &cfg, client, state, tokenStore, *publish, *perServer, *publishGraph)
+			runCrawl(ctx, &cfg, client, state, tokenStore, f.publishGraph)
 		}
 	}
 }
 
-func runCrawl(ctx context.Context, cfg *fedcrawl.Config, client *fetch.Client, state *fedcrawl.State, tokenStore *tokens.Store, publish, perServer, publishGraph bool) {
+func runCrawl(ctx context.Context, cfg *fedcrawl.Config, client *fetch.Client, state *fedcrawl.State, tokenStore *tokens.Store, publishGraph bool) {
 	crawler := fedcrawl.NewCrawler(*cfg, client, state, tokenStore)
 
 	start := time.Now()
@@ -309,25 +300,14 @@ func runCrawl(ctx context.Context, cfg *fedcrawl.Config, client *fetch.Client, s
 		"duration_ms", elapsed.Round(time.Millisecond).Milliseconds(),
 		"servers", result.ServersDiscovered,
 		"documents", result.DocumentsCrawled,
-		"hashes", result.HashesCollected,
 		"errors", len(result.Errors))
 
 	for _, e := range result.Errors {
 		logger.Warn("crawl: error", "detail", e)
 	}
-	if blockIncompletePublication(result, publish, publishGraph, len(cfg.Hubs)) {
+	if blockIncompletePublication(result, publishGraph, len(cfg.Hubs)) {
 		logger.Error("publish: skipped because crawl is incomplete", "errors", len(result.Errors))
 		return
-	}
-
-	// Publish indexes to hubs if requested.
-	if publish && len(cfg.Hubs) > 0 {
-		pubCount, err := crawler.PublishToHubs(ctx, client, perServer)
-		if err != nil {
-			logger.Warn("publish: hub push failed", "err", err)
-		} else {
-			logger.Info("publish: complete", "indexes", pubCount, "hubs", len(cfg.Hubs))
-		}
 	}
 
 	// Publish the link-graph export to hubs if requested.
@@ -341,8 +321,8 @@ func runCrawl(ctx context.Context, cfg *fedcrawl.Config, client *fetch.Client, s
 	}
 }
 
-func blockIncompletePublication(result *fedcrawl.CrawlResult, publish, publishGraph bool, hubCount int) bool {
-	return result.Incomplete && hubCount > 0 && (publish || publishGraph)
+func blockIncompletePublication(result *fedcrawl.CrawlResult, publishGraph bool, hubCount int) bool {
+	return result.Incomplete && hubCount > 0 && publishGraph
 }
 
 func init() {

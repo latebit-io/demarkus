@@ -189,7 +189,8 @@ verbs() {
   expect "private dir visible with the reader token" 'private' -- "${C[@]}" -X LIST -auth "$R" "$U/"
   refute "lookup hides private rows from anonymous" 's\.md' -- client/bin/demarkus lookup -insecure -query Secret -match body "$U/"
   hash=$("${C[@]}" "$U/docs/b.md" 2>&1 </dev/null | grep -oE 'content-hash=sha256-[0-9a-f]+' | head -1 | cut -d= -f2)
-  expect "fetch by content hash" '# b' -- "${C[@]}" "$U/$hash"
+  expect "fetch carries a content hash" 'sha256-[0-9a-f]{64}' -- echo "$hash"
+  expect "a reserved hash path is not-found" 'not-found' -- "${C[@]}" "$U/$hash"
 }
 
 # start_watch <url>: a background `demarkus watch` on /watched/, one line per
@@ -230,12 +231,11 @@ watch_stream() {
   expect "watched append makes v2" 'created' -- "${C[@]}" -X APPEND -auth "$W" -body "more" "$U/watched/w.md"
   expect "publish beside the watched prefix" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=domain:smoke -body "# Beside" "$U/beside/b.md"
   watch_lines 2
-  expect "watch printed the publish" $'\tpublish\t/watched/w\.md\t1\tsha256-[0-9a-f]{64}\tsmoke$' -- cat "$WORK/watch.out"
-  expect "watch printed the append" $'\tappend\t/watched/w\.md\t2\tsha256-[0-9a-f]{64}\tsmoke$' -- cat "$WORK/watch.out"
-  # Hints carry no content: the hash in the line fetches it. Before the
-  # archive, since the hash index serves current documents only.
-  hash=$(grep -E $'\tappend\t' "$WORK/watch.out" | head -1 | cut -f5)
-  expect "the append's hash fetches the joined body" '^more$' -- "${C[@]}" "$U/$hash"
+  # The line ends with the agent then the user column, empty for a token write.
+  expect "watch printed the publish" $'\tpublish\t/watched/w\.md\t1\tsha256-[0-9a-f]{64}\tsmoke\t$' -- cat "$WORK/watch.out"
+  expect "watch printed the append" $'\tappend\t/watched/w\.md\t2\tsha256-[0-9a-f]{64}\tsmoke\t$' -- cat "$WORK/watch.out"
+  # Hints carry no content: the version in the line fetches it.
+  expect "the append's version fetches the joined body" '^more$' -- "${C[@]}" "$U/watched/w.md/v2"
   expect "watched archive" '^\[ok\]' -- "${C[@]}" -X ARCHIVE -auth "$W" "$U/watched/w.md"
   watch_lines 3
   expect "watch printed the archive" $'\tarchive\t/watched/w\.md\t2\t' -- cat "$WORK/watch.out"
@@ -337,7 +337,6 @@ mcp_tools() {
   expect "mcp publish at a stale version offers a merge" 'merge' -- mcp_call "$U" mark_publish '{"url":"/docs/a.md","body":"# A\\nmine\\n","expected_version":1}'
   expect "mcp append resolves the version itself" 'version' -- mcp_call "$U" mark_append '{"url":"/mcp/new.md","body":"second"}'
   expect "mcp fetch sees the append" 'second' -- mcp_call "$U" mark_fetch '{"url":"/mcp/new.md"}'
-  expect "mcp index dry run names the source by identity" "from mark://localhost:$FILE_PORT" -- mcp_call "$U" mark_index "{\"source\":\"$U\",\"target\":\"/index/smoke.md\",\"dry_run\":true,\"force\":true}"
   expect "mcp archive archives the document" 'archived' -- mcp_call "$U" mark_archive '{"url":"/mcp/new.md"}'
   refute "mcp stderr has no panic" 'panic|fatal error' -- cat "$WORK/mcp.log"
 }

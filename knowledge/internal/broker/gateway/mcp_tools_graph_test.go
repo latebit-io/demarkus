@@ -3,13 +3,10 @@ package gateway
 import (
 	"context"
 	"net/http"
-	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
@@ -298,87 +295,6 @@ func TestHandleMarkGraphDepthClamping(t *testing.T) {
 	}
 }
 
-// TestHandleMarkIndexBoundsOnDirectoryCycle pins the cycle-
-// detection guard in walkIndexDir. PR #149 review surfaced the
-// DoS shape: a LIST that links a subdirectory back to its
-// ancestor would have recursed forever before this fix.
-// maxIndexDocuments caps file appends but not the directory
-// traversal itself, so without visited-set protection an
-// adversarial (or buggy) world could pin the broker on a
-// single index call.
-func TestHandleMarkIndexBoundsOnDirectoryCycle(t *testing.T) {
-	cfg := mcpTestConfig()
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:      "hub",
-		Namespace: "hub",
-		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
-		WriteScope: core.WriteScope{
-			Paths: []string{"/**"},
-		},
-	})
-	var listCalls atomic.Int32
-	d := &fakeDispatcher{
-		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			path := r.Path
-			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
-				return fetch.Result{Response: protocol.Response{
-					Status: protocol.StatusOK,
-					Body:   indexManifestBody,
-				}}, nil
-			}
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-		},
-		ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
-			n := listCalls.Add(1)
-			// Sanity cap: if the fix is broken, this will fire
-			// thousands of times before any test timeout. Fail
-			// loud at 100 LIST calls so the test fails in
-			// seconds rather than hanging.
-			if n > 100 {
-				t.Errorf("walkIndexDir called LIST %d times on a cyclic graph — cycle detection regressed", n)
-				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-			}
-			// Pathological LIST body: a subdirectory link that
-			// points back to the parent. Without cycle
-			// detection this would recurse indefinitely.
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"entries": "2", "complete": "true"},
-				Body:     "- [self](./)\n- [parent](../)\n",
-			}}, nil
-		},
-		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"version": "1"},
-			}}, nil
-		},
-	}
-	g := newGatewayWithDispatcher(t, cfg, d)
-	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
-		"source": "mark://team-a/",
-		"target": "mark://hub/index.md",
-	}))
-	if err != nil {
-		t.Fatalf("handleMarkIndex: %v", err)
-	}
-	if res.IsError {
-		// Acceptable if the cycle scenario produces an error
-		// envelope, as long as we didn't recurse indefinitely.
-		// What's NOT acceptable is a hang or runaway LIST count.
-		t.Logf("index returned tool error (acceptable for cycle scenario): %s", toolResultText(t, res))
-	}
-	// Two source LISTs are reasonable: one for the initial
-	// dirPath, plus possibly the "./" entry recursing once into
-	// the canonicalized same path (which then dedupes). The
-	// "../" entry should be rejected by the path-escape guard
-	// without ever LIST-ing. The sanity cap above catches any
-	// regression that lets recursion run free.
-	if n := listCalls.Load(); n > 5 {
-		t.Errorf("LIST called %d times on a cyclic source — cycle/escape guard not bounding recursion tightly enough", n)
-	}
-}
-
 func TestHandleMarkGraphExportEmptyStore(t *testing.T) {
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
 	res, err := g.handleMarkGraphExport(withAliceClaims(context.Background()), callToolReq("mark_graph_export", nil))
@@ -485,267 +401,6 @@ func TestHandleMarkGraphPublishForwardsThroughWriteAuth(t *testing.T) {
 	}
 }
 
-// indexManifestBody builds a minimal agent manifest the dispatcher
-// can return when the test wants to satisfy the manifest check.
-const indexManifestBody = "# Agent Manifest\n\nThis world accepts index publications.\n"
-
-func TestHandleMarkIndexHappyPath(t *testing.T) {
-	cfg := mcpTestConfig()
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:      "hub",
-		Namespace: "hub",
-		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
-		WriteScope: core.WriteScope{
-			Paths: []string{"/**"},
-		},
-	})
-	var publishCalled atomic.Bool
-	d := &fakeDispatcher{
-		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			path, token := r.Path, r.Token
-			if token != "" {
-				t.Errorf("index helper fetch %q used token %q, want public read", path, token)
-			}
-			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
-				return fetch.Result{Response: protocol.Response{
-					Status: protocol.StatusOK,
-					Body:   indexManifestBody,
-				}}, nil
-			}
-			if path == "/bar.md" || path == "/foo.md" {
-				hashChar := "a"
-				if path == "/bar.md" {
-					hashChar = "b"
-				}
-				return fetch.Result{Response: protocol.Response{
-					Status: protocol.StatusOK,
-					Metadata: map[string]string{
-						"content-hash": "sha256-" + strings.Repeat(hashChar, 64),
-					},
-					Body: "doc body",
-				}}, nil
-			}
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-		},
-		ListFn: func(_ context.Context, r fetch.ListRequest) (fetch.Result, error) {
-			path, token := r.Path, r.Token
-			if token != "" {
-				t.Errorf("index helper list %q used token %q, want public read", path, token)
-			}
-			if path == "/" {
-				switch r.Cursor {
-				case "":
-					return fetchtest.ListPage("/", "next", "bar.md"), nil
-				case "next":
-					return fetchtest.ListPage("/", "", "foo.md"), nil
-				}
-				t.Fatalf("unexpected LIST cursor %q", r.Cursor)
-			}
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-		},
-		PublishFn: func(ctx context.Context, _ fetch.WriteRequest) (fetch.Result, error) {
-			publishCalled.Store(true)
-			if _, ok := protocol.GrantFrom(ctx); !ok {
-				t.Error("index publish dispatched without a write grant")
-			}
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"version": "1", "modified": "2026-05-22T11:00:00Z"},
-			}}, nil
-		},
-	}
-	g := newGatewayWithDispatcher(t, cfg, d)
-	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
-		"source": "mark://team-a/",
-		"target": "mark://hub/index.md",
-	}))
-	if err != nil {
-		t.Fatalf("handleMarkIndex: %v", err)
-	}
-	if res.IsError {
-		t.Fatalf("isError = true: %s", toolResultText(t, res))
-	}
-	if !publishCalled.Load() {
-		t.Error("publish was not called; expected the index doc to be written to target")
-	}
-	d.Lock()
-	publishCalls := slices.Clone(d.PublishCalls)
-	d.Unlock()
-	if len(publishCalls) != 3 {
-		t.Fatalf("publish calls = %d, want two shards + manifest", len(publishCalls))
-	}
-	if publishCalls[2].Path != "/index.md" {
-		t.Fatalf("last publish path = %q, want manifest /index.md", publishCalls[2].Path)
-	}
-	for i, call := range publishCalls {
-		if call.ExpectedVersion != 0 {
-			t.Errorf("publish call %d expected_version = %d, want 0", i, call.ExpectedVersion)
-		}
-	}
-	text := toolResultText(t, res)
-	if !strings.Contains(text, "Indexed 2 documents") {
-		t.Errorf("expected indexed-count line, got:\n%s", text)
-	}
-}
-
-func TestHandleMarkIndexBlocksWhenTargetHasNoManifest(t *testing.T) {
-	cfg := mcpTestConfig()
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:      "hub",
-		Namespace: "hub",
-		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
-		WriteScope: core.WriteScope{
-			Paths: []string{"/**"},
-		},
-	})
-	d := &fakeDispatcher{
-		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			path := r.Path
-			// All manifest fetches return not-found.
-			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
-				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-			}
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-		},
-	}
-	g := newGatewayWithDispatcher(t, cfg, d)
-	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
-		"source": "mark://team-a/",
-		"target": "mark://hub/index.md",
-	}))
-	if err != nil {
-		t.Fatalf("handleMarkIndex: %v", err)
-	}
-	if !res.IsError {
-		t.Error("expected manifest-block tool error when target has no manifest")
-	}
-	text := toolResultText(t, res)
-	if !strings.Contains(text, "no agent manifest") {
-		t.Errorf("expected manifest message; got:\n%s", text)
-	}
-}
-
-func TestHandleMarkIndexForceOverridesManifestBlock(t *testing.T) {
-	cfg := mcpTestConfig()
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:      "hub",
-		Namespace: "hub",
-		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
-		WriteScope: core.WriteScope{
-			Paths: []string{"/**"},
-		},
-	})
-	var publishCalled atomic.Bool
-	d := &fakeDispatcher{
-		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			path := r.Path
-			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
-				return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-			}
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-		},
-		ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
-			return fetchtest.ListPage("/", ""), nil
-		},
-		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
-			publishCalled.Store(true)
-			return fetch.Result{Response: protocol.Response{
-				Status:   protocol.StatusOK,
-				Metadata: map[string]string{"version": "1"},
-			}}, nil
-		},
-	}
-	g := newGatewayWithDispatcher(t, cfg, d)
-	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
-		"source": "mark://team-a/",
-		"target": "mark://hub/index.md",
-		"force":  true,
-	}))
-	if err != nil {
-		t.Fatalf("handleMarkIndex: %v", err)
-	}
-	if res.IsError {
-		t.Fatalf("force=true should have bypassed the manifest block: %s", toolResultText(t, res))
-	}
-	if !publishCalled.Load() {
-		t.Error("force=true should still publish")
-	}
-	text := toolResultText(t, res)
-	if !strings.Contains(text, "force=true override") {
-		t.Errorf("expected force-override warning; got:\n%s", text)
-	}
-}
-
-func TestHandleMarkIndexDryRunReturnsBodyWithoutPublishing(t *testing.T) {
-	cfg := mcpTestConfig()
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{
-		Name:      "hub",
-		Namespace: "hub",
-		Allow:     core.AllowConfig{Domains: []string{"example.com"}},
-		WriteScope: core.WriteScope{
-			Paths: []string{"/**"},
-		},
-	})
-	var publishCalled atomic.Bool
-	d := &fakeDispatcher{
-		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			path := r.Path
-			if strings.HasSuffix(path, protocol.WellKnownManifestPath) {
-				return fetch.Result{Response: protocol.Response{
-					Status: protocol.StatusOK,
-					Body:   indexManifestBody,
-				}}, nil
-			}
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
-		},
-		ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
-			return fetchtest.ListPage("/", ""), nil
-		},
-		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
-			publishCalled.Store(true)
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK}}, nil
-		},
-	}
-	g := newGatewayWithDispatcher(t, cfg, d)
-	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
-		"source":  "mark://team-a/",
-		"target":  "mark://hub/index.md",
-		"dry_run": true,
-	}))
-	if err != nil {
-		t.Fatalf("handleMarkIndex: %v", err)
-	}
-	if res.IsError {
-		t.Fatalf("isError = true: %s", toolResultText(t, res))
-	}
-	if publishCalled.Load() {
-		t.Error("dry_run should NOT publish")
-	}
-	text := toolResultText(t, res)
-	if !strings.Contains(text, "dry run") {
-		t.Errorf("expected dry-run marker in output; got:\n%s", text)
-	}
-}
-
-func TestHandleMarkIndexNegativeExpectedVersion(t *testing.T) {
-	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
-	res, err := g.handleMarkIndex(withAliceClaims(context.Background()), callToolReq("mark_index", map[string]any{
-		"source":           "mark://team-a/",
-		"target":           "mark://team-a/index.md",
-		"expected_version": float64(-1),
-	}))
-	if err != nil {
-		t.Fatalf("handleMarkIndex: %v", err)
-	}
-	if !res.IsError {
-		t.Error("isError = false on negative expected_version, want true")
-	}
-}
-
-// TestMCPGatewayMarkGraphEndToEnd drives mark_graph through the
-// full Streamable HTTP transport. One end-to-end test per slice
-// pins the wire-shape contract; the unit tests above cover the
-// dispatch logic with finer granularity.
 func TestMCPGatewayMarkGraphEndToEnd(t *testing.T) {
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{
@@ -877,8 +532,8 @@ func TestHandleMarkGraphPublishRetention(t *testing.T) {
 }
 
 func TestGraphWriteHandlersDenyNonWriter(t *testing.T) {
-	// mark_graph_publish and mark_index (publishing) enforce the same
-	// writer-allow gate as every other write verb.
+	// mark_graph_publish enforces the same writer-allow gate as every other
+	// write verb.
 	cfg := mcpTestConfig()
 	d := &fakeDispatcher{}
 	g := newGatewayWithDispatcher(t, cfg, d)
@@ -904,24 +559,7 @@ func TestGraphWriteHandlersDenyNonWriter(t *testing.T) {
 		}
 	})
 
-	t.Run("mark_index", func(t *testing.T) {
-		res, err := g.handleMarkIndex(ctx, callToolReq("mark_index", map[string]any{
-			"source": "mark://team-a/",
-			"target": "mark://team-a/index.md",
-		}))
-		if err != nil {
-			t.Fatalf("handleMarkIndex: %v", err)
-		}
-		if !res.IsError {
-			t.Fatal("isError = false for non-writer identity, want true")
-		}
-		if text := toolResultText(t, res); !strings.Contains(text, "write access denied") {
-			t.Errorf("tool error = %q, want writer-allow rejection", text)
-		}
-	})
-
-	// Denied writes must produce no dispatcher activity at all: no
-	// publishes, and no pre-gate reads (manifest checks, crawl).
+	// A denied write must produce no dispatcher activity at all.
 	if n := len(d.PublishCalls) + len(d.FetchCalls) + len(d.SeedCalls) + len(d.ListCalls); n != 0 {
 		t.Errorf("dispatcher saw %d calls for denied writes, want 0 (publish=%d fetch=%d fetchCond=%d list=%d)",
 			n, len(d.PublishCalls), len(d.FetchCalls), len(d.SeedCalls), len(d.ListCalls))

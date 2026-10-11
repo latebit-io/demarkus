@@ -22,8 +22,6 @@ type snapshot struct {
 	Checkpoint *checkpointBase
 	Paths      *btree.BTreeG[*pathState]
 	Children   *btree.BTreeG[*dirChild]
-	// Hashes holds the body hash of every live document, for LookupHash.
-	Hashes *btree.BTreeG[hashEntry]
 }
 
 // pathState is one document in a snapshot; once published it is never written,
@@ -92,16 +90,11 @@ type dirChild struct {
 	Live         int
 }
 
-type hashEntry struct{ Hash, Path string }
-
 func newSnapshot() *snapshot {
 	return &snapshot{
 		Paths: btree.NewG(treeDegree, func(a, b *pathState) bool { return a.Path < b.Path }),
 		Children: btree.NewG(treeDegree, func(a, b *dirChild) bool {
 			return a.Parent < b.Parent || a.Parent == b.Parent && a.Name < b.Name
-		}),
-		Hashes: btree.NewG(treeDegree, func(a, b hashEntry) bool {
-			return a.Hash < b.Hash || a.Hash == b.Hash && a.Path < b.Path
 		}),
 	}
 }
@@ -115,7 +108,6 @@ func (s *snapshot) derive() *snapshot {
 		Checkpoint: s.Checkpoint,
 		Paths:      s.Paths.Clone(),
 		Children:   s.Children.Clone(),
-		Hashes:     s.Hashes.Clone(),
 	}
 }
 
@@ -150,16 +142,6 @@ func (s *snapshot) children(dir, after string, visit func(*dirChild) bool) {
 	})
 }
 
-// lookupHash returns the smallest live path whose body has hash.
-func (s *snapshot) lookupHash(hash string) (string, bool) {
-	path, found := "", false
-	s.Hashes.AscendGreaterOrEqual(hashEntry{Hash: hash}, func(entry hashEntry) bool {
-		path, found = entry.Path, entry.Hash == hash
-		return false
-	})
-	return path, found
-}
-
 // Entries yields each live document under scope for a catalog search
 // (catalog.Index); sections live in the section index, not the snapshot.
 func (s *snapshot) Entries(scope string) iter.Seq2[*catalog.Entry, *catalog.DocSections] {
@@ -185,7 +167,7 @@ func ascendScope[T any](tree *btree.BTreeG[T], scope string, probe func(path str
 }
 
 // put installs state over old (nil for a new path) in a derived snapshot,
-// keeping directory counts and the hash index in step.
+// keeping directory counts in step.
 func (s *snapshot) put(old, state *pathState) {
 	s.Paths.ReplaceOrInsert(state)
 	switch {
@@ -209,12 +191,6 @@ func (s *snapshot) put(old, state *pathState) {
 				child.Live += delta
 			}
 		})
-	}
-	if old != nil && !old.Archived {
-		s.Hashes.Delete(hashEntry{Hash: old.BodyHash, Path: old.Path})
-	}
-	if !state.Archived {
-		s.Hashes.ReplaceOrInsert(hashEntry{Hash: state.BodyHash, Path: state.Path})
 	}
 }
 

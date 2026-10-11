@@ -1,8 +1,8 @@
 # Broker MCP API
 
-Operator + developer reference for the 17-tool MCP surface exposed by
+Operator + developer reference for the 15-tool MCP surface exposed by
 the knowledge gateway's `/mcp` endpoint in demarkus-knowledge, the process
-that also serves the worlds. Fifteen tools mirror the local
+that also serves the worlds. Thirteen tools mirror the local
 `client/cmd/demarkus-mcp` stdio server; `mark_worlds` and
 `mark_lookup_all` are broker-only system operations. A document
 fetched via the broker and the same document fetched direct-QUIC
@@ -105,7 +105,7 @@ for caller-supplied URLs.
 `server.mcp.toolProfile` selects the surface `tools/list` returns. `full`
 (default) is the complete list below. `lean` omits the operator and
 federation tools no plugin prompt references: `mark_discover`,
-`mark_resolve`, `mark_index`, `mark_graph_export`, `mark_graph_publish`.
+`mark_graph_export`, `mark_graph_publish`.
 The set is defined once in `client/mcpfmt` and shared with
 `demarkus-mcp -profile`; `tools/plugin-prompts check` fails when a prompt
 template references a tool outside it. Tool behavior is
@@ -113,7 +113,7 @@ identical in both profiles.
 
 ## Tools
 
-Fifteen tools below have semantic parity with the local
+Thirteen tools below have semantic parity with the local
 `client/cmd/demarkus-mcp` stdio server. Both surfaces render tool text
 through one package, `client/mcpfmt`, so their output is byte-identical
 by construction; `mark_lookup` and `mark_lookup_all` take `verbose: true`
@@ -268,44 +268,6 @@ Returns `not-found` if no manifest is published.
 | --- | --- | --- | --- |
 | `url` | string | yes | `mark://{worldName}/` (or any path on the world; the broker resolves to the manifest path). |
 
-#### `mark_resolve`
-
-Resolve content by its SHA-256 hash using a hub index document.
-Looks the hash up in the index, finds candidate servers, and fetches
-by hash. Skips candidates the broker has no `worlds[]` entry for and
-candidates the identity is not authorized for (`ErrNotAuthorized`);
-both collapse to "this broker can't reach this candidate for me; try
-the next."
-
-| Param | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `hash` | string | yes | `sha256-` + 64 lowercase hex chars. |
-| `index` | string | yes | `mark://hub/index.md` or similar. |
-
-### Federation writes
-
-#### `mark_index`
-
-Crawl a source world, collect content hashes, and publish a hash
-index to a target world (typically a hub). Verifies the target has a
-hub manifest unless `force: true`.
-
-The target path stores a `demarkus-hash-index/v2` manifest. The broker
-stages version-pinned hash-prefix shards under the target's `.shards`
-directory and compare-and-swaps the manifest last. Updates verify and
-merge legacy or sharded target indexes before publication.
-The manifest and its sibling `.shards` subtree must be publicly readable;
-the target token requires publish access to both. Upgrade all readers and
-writers before publishing v2 at an existing legacy path.
-
-| Param | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `source` | string | yes | Source world URL to crawl. |
-| `target` | string | yes | Target URL where the index is published. |
-| `expected_version` | number | no | Conflict detection on the target. `0` to create new. |
-| `dry_run` | boolean | no | Return the index without publishing (default `false`). |
-| `force` | boolean | no | Publish even if target has no hub manifest (default `false`). |
-
 ### Graph store (ephemeral)
 
 > **The broker's graph store is in-memory only and pod-scoped.**
@@ -402,6 +364,3 @@ A few non-obvious categories worth pinning:
   checks the world's `allow` predicate and the world honours the
   identity's grant in process, so a refusal is a refusal, never
   retried.
-- **Cross-org candidate in `mark_resolve`** → the candidate is
-  skipped with a logged reason; if all candidates skip or fail, the
-  last failure surfaces in the tool response.

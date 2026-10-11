@@ -559,7 +559,7 @@ func validateSnapshotManifest(manifestPath string, manifest SnapshotManifest) er
 		if ref.Kind == snapshotShardKindEdges && (ref.Edges < 1 || ref.Nodes != 0) {
 			return fmt.Errorf("invalid edge shard counts for %q", ref.Path)
 		}
-		if clean, ok := protocol.IsHashPath(ref.ContentHash); !ok || clean != ref.ContentHash {
+		if !protocol.IsContentHash(ref.ContentHash) {
 			return fmt.Errorf("invalid graph shard hash %q", ref.ContentHash)
 		}
 		if ref.Path != snapshotShardPath(manifestPath, manifest.ActiveSlot, ref.Kind, ref.Part) {
@@ -590,7 +590,7 @@ func validateSnapshotManifestPath(manifestPath string) error {
 	if err := protocol.ValidateRequestPath(manifestPath); err != nil || path.Clean(manifestPath) != manifestPath || manifestPath == "/" || !strings.HasSuffix(manifestPath, ".md") || strings.Contains(manifestPath, "|") {
 		return fmt.Errorf("invalid snapshot manifest path %q", manifestPath)
 	}
-	if _, ok := protocol.IsHashPath(manifestPath); ok || snapshotVersionSuffix(manifestPath) {
+	if protocol.IsReservedHashPath(manifestPath) || snapshotVersionSuffix(manifestPath) {
 		return fmt.Errorf("snapshot manifest path conflicts with immutable fetch syntax %q", manifestPath)
 	}
 	generated := snapshotShardPath(manifestPath, generation.SlotA, snapshotShardKindNodes, MaxSnapshotShards-1)

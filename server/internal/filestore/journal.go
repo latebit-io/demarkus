@@ -55,7 +55,7 @@ func openJournal(dir, fingerprint string, ring int, logger *slog.Logger) (*journ
 	var reason string
 	clean := false
 	if fingerprint == "" {
-		reason = "hash index not built"
+		reason = "document index not built"
 	} else {
 		var recorded string
 		var err error

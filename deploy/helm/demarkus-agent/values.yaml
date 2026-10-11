@@ -31,7 +31,7 @@ replicaCount: 1
 worlds: []
   # - root
   # - team-a
-# World that receives the published index. Else the global world flagged
+# World that receives the published graph. Else the global world flagged
 # hub: true.
 hub: ""
 # Shared knowledge Service host:port every world is dialed at. Else
@@ -51,7 +51,7 @@ config:
   #  - mark://team-a.example.com:6309
   #  - mark://team-b.example.com:6309
 
-  # mark:// URLs of hubs to publish indexes to. Unset derives mark://<hub>
+  # mark:// URLs of hubs to publish the graph to. Unset derives mark://<hub>
   # from hub or global.worlds; an explicit [] means crawl only.
   hubs: ~
   #  - mark://hub.example.com:6309
@@ -75,14 +75,9 @@ config:
     requestDelay: 100ms
     perServerConcurrency: 2
 
-# Publishing mode. true = one index per discovered server at /index/<host>.md.
-# false = single aggregated /index.md published to every configured hub,
-# overwriting any curated /index.md there; only set false when no hub has one.
-perServer: true
-
-# Also publish a link-graph export to each hub at /graph.md (the durable
-# topology the reading-room floor renders: nodes + edges). Independent of the
-# hash index; aggregated across servers so cross-server edges are kept.
+# Publish a link-graph export to each hub at /graph.md (the durable topology
+# the reading-room floor renders: nodes + edges), aggregated across servers
+# so cross-server edges are kept. Without it, hubs receive nothing.
 publishGraph: false
 
 # Skip TLS certificate verification on outbound mark:// connections.

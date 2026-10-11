@@ -7,7 +7,7 @@ import (
 )
 
 // CanonicalPath is the one spelling of a request path shared by every index
-// keyed on paths (hash index, catalog): slash-cleaned, single leading
+// keyed on paths (document index, catalog): slash-cleaned, single leading
 // slash, root is "/". Callers reject traversal via ContainsDotDot.
 func CanonicalPath(reqPath string) string {
 	return path.Clean("/" + reqPath)

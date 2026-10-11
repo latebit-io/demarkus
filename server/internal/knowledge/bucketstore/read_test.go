@@ -454,15 +454,7 @@ func TestReadSemantics(t *testing.T) {
 		}
 	})
 
-	t.Run("hash and catalog", func(t *testing.T) {
-		sharedHash := storefmt.ContentHash([]byte("same"))
-		path, err := view.LookupHash(sharedHash)
-		if err != nil || path != sharedA.Path {
-			t.Errorf("LookupHash = (%q, %v), want %q", path, err, sharedA.Path)
-		}
-		if _, err := view.LookupHash(storefmt.ContentHash([]byte("# Archived\n"))); !errors.Is(err, backend.ErrNotFound) {
-			t.Errorf("archived hash error = %v", err)
-		}
+	t.Run("catalog", func(t *testing.T) {
 		results, err := view.Lookup("after", catalog.Options{Scope: "/docs"})
 		if err != nil || len(results) != 1 || results[0].Path != live.Path {
 			t.Fatalf("Lookup(after) = (%+v, %v)", results, err)
@@ -1105,13 +1097,6 @@ func assertPinnedReadView(t *testing.T, view *pinnedView, want *pinnedReadWant) 
 		if !slices.Equal(got, want.versions) {
 			t.Errorf("Versions = %v, want %v", got, want.versions)
 		}
-	}
-	hash := storefmt.ContentHash([]byte(want.body))
-	if path, err := view.LookupHash(hash); err != nil || path != "/docs/a.md" {
-		t.Errorf("LookupHash = (%q, %v)", path, err)
-	}
-	if _, err := view.LookupHash(storefmt.ContentHash([]byte(want.missingBody))); !errors.Is(err, backend.ErrNotFound) {
-		t.Errorf("missing LookupHash error = %v", err)
 	}
 	results, err := view.Lookup(want.lookup, catalog.Options{Scope: "/docs"})
 	if err != nil || len(results) != 1 || results[0].Path != "/docs/a.md" {
