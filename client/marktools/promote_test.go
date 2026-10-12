@@ -111,8 +111,14 @@ func knowledgeBackend() *fetchtest.Client {
 func TestPromoteDryRunChecksPolicyAndDedups(t *testing.T) {
 	backend := knowledgeBackend()
 	tools := newTools(t, backend, writingHooks())
-	draft := marktools.PromoteArgs{URL: "/docs/retry-rules.md", Phase: "dry_run", Body: promoteSource, Metadata: map[string]any{"tags": "retry", "importance": 0.7}}
+	draft := marktools.PromoteArgs{URL: "/docs/retry-rules.md", Phase: "dry_run", Body: promoteSource, Metadata: map[string]any{"tags": "retry", "importance": 0.7, "retention": float64(1000000), "pinned": true}}
 	got := tools.Promote(t.Context(), draft)
+	// Dedup finds the same-title row; the packet is over the decimal values the write would carry.
+	draft.Phase, draft.Packet = "apply", packetOf(t, got)
+	if applied := tools.Promote(t.Context(), draft); applied.IsError || backend.PublishCalls[0].Metadata["retention"] != "1000000" || backend.PublishCalls[0].Metadata["pinned"] != "true" || backend.PublishCalls[0].Metadata["importance"] != "0.7" {
+		t.Errorf("numbers = %+v (%s)", backend.PublishCalls, applied.Text)
+	}
+	backend.PublishCalls, draft.Phase, draft.Packet = nil, "dry_run", ""
 	for _, want := range []string{"target: /docs/retry-rules.md\nstatus: findings\nversion: 0\npolicy: strictness block; require_tags domain\n", "findings:\n- missing tag axis domain", "candidates:\n- /docs/retries.md: same title (v2); tags retry\n", "related:\n- /docs/other.md: Other\n", "packet: ", "\n=== /docs/retries.md (v2)\n# Retry Rules\n\nOlder rules."} {
 		if !strings.Contains(got.Text, want) {
 			t.Errorf("dry run missing %q:\n%s", want, got.Text)

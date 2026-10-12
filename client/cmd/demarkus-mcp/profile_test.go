@@ -10,8 +10,8 @@ import (
 // Wire bytes of tools/list per profile with five percent headroom; o200k is
 // about 4.1 bytes per token (2026-10-12). Raise only with a measured offset.
 const (
-	fullSchemaBudgetBytes = 13360
-	leanSchemaBudgetBytes = 11910
+	fullSchemaBudgetBytes = 13140
+	leanSchemaBudgetBytes = 11690
 )
 
 func profileSchemas(profile string) []mcp.Tool {

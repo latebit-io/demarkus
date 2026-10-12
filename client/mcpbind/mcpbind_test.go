@@ -147,6 +147,9 @@ func TestMetadataArgument(t *testing.T) {
 		{"object", map[string]any{"metadata": object}, object, false},
 		{"string", map[string]any{"metadata": "tags: go"}, nil, true},
 		{"array", map[string]any{"metadata": []any{"go"}}, nil, true},
+		{"scalars", map[string]any{"metadata": map[string]any{"importance": 0.7, "pinned": true}}, map[string]any{"importance": 0.7, "pinned": true}, false},
+		{"nested", map[string]any{"metadata": map[string]any{"tags": []any{"go"}}}, nil, true},
+		{"null value", map[string]any{"metadata": map[string]any{"tags": nil}}, nil, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -547,3 +547,15 @@ func TestAnAppendThatCannotBeJoinedIsReported(t *testing.T) {
 		t.Errorf("err = %v, want the unknown outcome and the size limit", err)
 	}
 }
+
+// A digest frames each part, so parts that only differ in where a boundary
+// falls hash differently.
+func TestDigestFramesItsParts(t *testing.T) {
+	if docwrite.Digest("a\x00b", "c") == docwrite.Digest("a", "b\x00c") || docwrite.Digest("ab", "") == docwrite.Digest("a", "b") {
+		t.Fatal("digest boundaries are ambiguous")
+	}
+	first := docwrite.Digest("v1", "body")
+	if first != docwrite.Digest("v1", "body") || len(first) != 16 {
+		t.Fatal("digest is not stable or not 16 hex characters")
+	}
+}

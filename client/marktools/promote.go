@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
@@ -357,11 +358,20 @@ func (t *Tools) promoteApply(ctx context.Context, target Target, doc *docwrite.D
 }
 
 // callerMeta is the caller's metadata as strings; identity keys are the
-// surface's, never the caller's.
+// surface's, never the caller's. A JSON number is written as the decimal it
+// was, never in exponent form.
 func callerMeta(raw map[string]any) map[string]string {
 	meta := make(map[string]string, len(raw))
 	for k, v := range raw {
-		if !protocol.IsIdentityMetadataKey(k) {
+		if protocol.IsIdentityMetadataKey(k) {
+			continue
+		}
+		switch x := v.(type) {
+		case float64:
+			meta[k] = strconv.FormatFloat(x, 'f', -1, 64)
+		case bool:
+			meta[k] = strconv.FormatBool(x)
+		default:
 			meta[k] = fmt.Sprintf("%v", v)
 		}
 	}

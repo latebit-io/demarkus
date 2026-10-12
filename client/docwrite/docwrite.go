@@ -360,9 +360,14 @@ func optionalInt(meta map[string]string, key string) (int, error) {
 }
 
 // Digest binds a write to exactly what a report showed: a short hash over
-// the parts, which a later call recomputes and compares.
+// the parts, each framed by its length so no boundary is ambiguous, which a
+// later call recomputes and compares.
 func Digest(parts ...string) string {
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	var b strings.Builder
+	for _, p := range parts {
+		b.WriteString(strconv.Itoa(len(p)) + ":" + p)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:8])
 }
 

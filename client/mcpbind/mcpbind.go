@@ -65,6 +65,13 @@ func metadata(args map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, errors.New("metadata must be an object of key/value pairs")
 	}
+	for k, v := range meta {
+		switch v.(type) {
+		case string, float64, bool:
+		default:
+			return nil, fmt.Errorf("metadata.%s must be a string, number or boolean", k)
+		}
+	}
 	return meta, nil
 }
 
