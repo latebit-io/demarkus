@@ -184,6 +184,24 @@ func GraphPublish(req *mcp.CallToolRequest) marktools.GraphPublishArgs {
 	return args
 }
 
+// Archive binds mark_archive's arguments.
+func Archive(req *mcp.CallToolRequest) (marktools.ArchiveArgs, error) {
+	url, err := URL(req)
+	if err != nil {
+		return marktools.ArchiveArgs{}, err
+	}
+	return marktools.ArchiveArgs{URL: url, Recursive: req.GetBool("recursive", false)}, nil
+}
+
+// Curate binds mark_curate's arguments.
+func Curate(req *mcp.CallToolRequest) (marktools.CurateArgs, error) {
+	url, err := URL(req)
+	if err != nil {
+		return marktools.CurateArgs{}, err
+	}
+	return marktools.CurateArgs{URL: url, Apply: req.GetBool("apply", false), Proposal: req.GetString("proposal", "")}, nil
+}
+
 // Doctor binds mark_doctor's arguments.
 func Doctor(req *mcp.CallToolRequest) (marktools.DoctorArgs, error) {
 	url, err := URL(req)

@@ -145,7 +145,7 @@ func TestArchiveObservesAbsenceAndClearsEdges(t *testing.T) {
 	if got := tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: observedBody, ExpectedVersion: new(0)}); got.IsError {
 		t.Fatalf("Publish = %+v", got)
 	}
-	if got := tools.Archive(t.Context(), "/doc.md"); got.IsError {
+	if got := tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/doc.md"}); got.IsError {
 		t.Fatalf("Archive = %+v", got)
 	}
 	node := store.GetNode("mark://host/doc.md")

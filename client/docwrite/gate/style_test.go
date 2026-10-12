@@ -79,3 +79,28 @@ func TestBodyOpensWithFrontmatter(t *testing.T) {
 		})
 	}
 }
+
+func TestSizeRuleAppliesToEveryDocumentButJournals(t *testing.T) {
+	big := "# Big\n\nWhat big settles.\n\n" + strings.Repeat("line of prose\n", 700)
+	if got := Problems("/plans/big.md", big, ""); len(got) != 1 || !strings.Contains(got[0], "body is 9 KB, at or over the 8 KB fetch threshold") {
+		t.Errorf("non-hub = %v", got)
+	}
+	if got := Problems("/journal/2026-10-12.md", big, ""); len(got) != 0 {
+		t.Errorf("journal = %v", got)
+	}
+	hub := "# Hub\n\n" + strings.Repeat("- [a](/a.md): one\n", 600)
+	got := Problems("/index.md", hub, "")
+	if n := strings.Count(strings.Join(got, "\n"), "fetch threshold"); n != 1 {
+		t.Errorf("hub carries %d size findings, want the hub wording once: %v", n, got)
+	}
+}
+
+func TestFrontmatterReadsTheFence(t *testing.T) {
+	kv, rest, ok := Frontmatter("---\nname: Doc\ntags: [a, b]\n---\n# Doc\n")
+	if !ok || kv["name"] != "Doc" || kv["tags"] != "a,b" || rest != "# Doc\n" {
+		t.Errorf("kv %v rest %q ok %v", kv, rest, ok)
+	}
+	if _, rest, ok := Frontmatter("# Doc\n---\n"); ok || rest != "# Doc\n---\n" {
+		t.Errorf("no fence: %q %v", rest, ok)
+	}
+}

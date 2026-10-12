@@ -12,16 +12,18 @@ import (
 	"github.com/yuin/goldmark/text"
 
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/mdoutline"
 )
 
 // Hub rules from the style guide's "Hubs" section: a link page stays under
 // one fetch, links plus one line each, about forty outbound documents.
 const (
-	hubSizeLimit    = 8 * 1024 // demarkus-mcp and the broker outline a body at or over this
-	hubBulletMax    = 200      // visible characters per bullet, link destinations stripped
-	hubLinkMax      = 40       // distinct outbound documents before a second-level hub
-	hubMinLinkItems = 5        // fewer link bullets than this is a list, not a link page
-	hubLinkShare    = 0.8      // share of text lines that are link bullets on a link page
+	// HubBulletMax is the visible characters per bullet, link destinations
+	// stripped; a generated bullet stays under it by construction.
+	HubBulletMax    = 200
+	hubLinkMax      = 40  // distinct outbound documents before a second-level hub
+	hubMinLinkItems = 5   // fewer link bullets than this is a list, not a link page
+	hubLinkShare    = 0.8 // share of text lines that are link bullets on a link page
 )
 
 var (
@@ -51,7 +53,7 @@ func HubProblems(url, body string) []string {
 		return nil
 	}
 	var problems []string
-	if len(body) >= hubSizeLimit {
+	if len(body) >= mdoutline.OutlineThreshold {
 		problems = append(problems, fmt.Sprintf(
 			"hub body is %d KB, at or over the 8 KB fetch threshold, so a plain fetch returns an outline; split it into a link hub plus topic files", len(body)/1024))
 	}
@@ -95,7 +97,7 @@ func bulletOK(b bullet) bool {
 	if b.multiBlock || b.bold {
 		return false
 	}
-	if utf8.RuneCountInString(b.visible) > hubBulletMax {
+	if utf8.RuneCountInString(b.visible) > HubBulletMax {
 		return false
 	}
 	return !hubStatusKey.MatchString(b.outside) && !hubISODate.MatchString(b.outside) && !hubPRNumber.MatchString(b.outside)

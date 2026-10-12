@@ -10,7 +10,9 @@ import (
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/hub"
 	"github.com/latebit-io/demarkus/client/journal"
+	"github.com/latebit-io/demarkus/client/listwalk"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/client/metaguard"
@@ -95,12 +97,16 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 		// A candidate ends with its body; a note after it would read as body.
 		return text(formatResult(&result, writeFields...))
 	}
-	// The body and publisher metadata are in hand; the server's keys
-	// (version, etag) come from the response.
+	t.observePublished(ctx, target, &w, &result)
+	return text(formatResult(&result, writeFields...) + t.narrowingNote(ctx, doc, w) + styleNote)
+}
+
+// observePublished merges a landed publish into the graph: the body and
+// publisher metadata are in hand, the server's keys come from the response.
+func (t *Tools) observePublished(ctx context.Context, target Target, w *docwrite.Write, result *docwrite.Result) {
 	meta := maps.Clone(w.Metadata)
 	maps.Copy(meta, result.Response.Metadata)
-	t.observeWrite(ctx, target, graph.FetchResult{Status: protocol.StatusOK, Body: args.Body, Metadata: meta})
-	return text(formatResult(&result, writeFields...) + t.narrowingNote(ctx, doc, w) + styleNote)
+	t.observeWrite(ctx, target, graph.FetchResult{Status: protocol.StatusOK, Body: w.Body, Metadata: meta})
 }
 
 // landed is a write the server applied, not a merge candidate to review.
@@ -282,9 +288,7 @@ func (t *Tools) appendToday(ctx context.Context, target Target, args AppendArgs)
 	if bad != nil {
 		return *bad
 	}
-	docs := func(p string) *docwrite.Doc {
-		return t.doc(ctx, Target{Host: target.Host, Path: p, NodeURL: target.NodeURL, Authority: target.Authority}, write)
-	}
+	docs := func(p string) *docwrite.Doc { return t.doc(ctx, target.at(p), write) }
 	l, err := t.layoutFor(ctx, target)
 	if err != nil {
 		return failure("append failed: %v", err)
@@ -298,7 +302,7 @@ func (t *Tools) appendToday(ctx context.Context, target Target, args AppendArgs)
 	}
 	if out.Status != journal.StatusPresent {
 		landed := docwrite.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": strconv.Itoa(out.Version)}}}
-		t.observeAppended(ctx, Target{Host: target.Host, Path: out.Path, NodeURL: target.Authority + out.Path, Authority: target.Authority}, docs(out.Path), &landed)
+		t.observeAppended(ctx, target.at(out.Path), docs(out.Path), &landed)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "status: %s\nversion: %d\npath: %s\n", out.Status, out.Version, out.Path)
@@ -308,23 +312,125 @@ func (t *Tools) appendToday(ctx context.Context, target Target, args AppendArgs)
 	return text(b.String())
 }
 
-// Archive answers mark_archive.
-func (t *Tools) Archive(ctx context.Context, rawURL string) Result {
-	target, bad := t.resolve(ctx, rawURL)
+// ArchiveArgs are mark_archive's arguments; Recursive takes a directory and
+// archives every live document under it.
+type ArchiveArgs struct {
+	URL       string
+	Recursive bool
+}
+
+// Bounds on a recursive archive, so one call cannot sweep a whole store.
+const (
+	archiveListCalls = 100
+	archiveDocs      = 500
+)
+
+// Archive answers mark_archive. After the archive, every ancestor hub drops
+// the bullets that only linked what was archived; a hub that could not be
+// edited is a note, the archive stands.
+func (t *Tools) Archive(ctx context.Context, args ArchiveArgs) Result {
+	target, bad := t.resolve(ctx, args.URL)
 	if bad != nil {
 		return *bad
+	}
+	if args.Recursive {
+		switch {
+		case !strings.HasSuffix(target.Path, "/"):
+			return failure("recursive needs a directory url ending in /")
+		case target.Path == "/":
+			return failure("recursive archive of the store root is refused; name a directory under it")
+		}
+	} else if isContextPath(target.Path) {
+		return failure("%s is reserved: the primer is read, never written", ContextLeaf)
 	}
 	write, bad := t.writer(ctx, target, "archive")
 	if bad != nil {
 		return *bad
 	}
-	result, err := t.doc(ctx, target, write).Archive(ctx)
-	if err != nil {
-		return t.writeFailed(SiteArchive, target.Host, err)
+	if !args.Recursive {
+		result, err := t.archiveOne(ctx, target, write)
+		if err != nil {
+			return t.writeFailed(SiteArchive, target.Host, err)
+		}
+		out := formatResult(&result, "version")
+		if landed(&result) {
+			out += t.dropHubLinks(ctx, target, write, []string{target.Path})
+		}
+		return text(out)
 	}
-	if landed(&result) {
+	paths, err := t.liveUnder(ctx, target)
+	if err != nil {
+		return failure("archive failed: %v", err)
+	}
+	if len(paths) == 0 {
+		return failure("archive failed: no live documents under %s", target.Path)
+	}
+	var b strings.Builder
+	var archived []string
+	for _, p := range paths {
+		result, err := t.archiveOne(ctx, target.at(p), write)
+		switch {
+		case err != nil:
+			fmt.Fprintf(&b, "- %s: failed: %s\n", p, t.writeFailed(SiteArchive, target.Host, err).Text)
+		case !landed(&result):
+			fmt.Fprintf(&b, "- %s: failed: %s\n", p, result.Response.Status)
+		default:
+			archived = append(archived, p)
+			fmt.Fprintf(&b, "- %s: v%s\n", p, result.Response.Metadata["version"])
+		}
+	}
+	all := len(archived) == len(paths)
+	status, targets := "partial", archived
+	if all {
+		// A bullet linking the directory goes only when nothing live is left under it.
+		status, targets = "archived", []string{target.Path}
+	}
+	hubs := ""
+	if len(archived) > 0 {
+		hubs = t.dropHubLinks(ctx, target, write, targets)
+	}
+	return text(fmt.Sprintf("status: %s\narchived: %d of %d\n%s%s", status, len(archived), len(paths), b.String(), hubs))
+}
+
+// archiveOne archives one document and observes it into the graph.
+func (t *Tools) archiveOne(ctx context.Context, target Target, write WriteFunc) (docwrite.Result, error) {
+	result, err := t.doc(ctx, target, write).Archive(ctx)
+	if err == nil && landed(&result) {
 		// A confirmed archive is a complete observation: stale outgoing rows go.
 		t.observeWrite(ctx, target, graph.FetchResult{Status: protocol.StatusArchived, Metadata: result.Response.Metadata})
 	}
-	return text(formatResult(&result, "version"))
+	return result, err
+}
+
+// liveUnder lists every live document under the directory, bounded.
+func (t *Tools) liveUnder(ctx context.Context, target Target) ([]string, error) {
+	var paths []string
+	w := listwalk.Walker{Client: t.backend, Host: target.Host, Token: t.readToken(ctx, target.Host), MaxLists: archiveListCalls}
+	err := w.Walk(ctx, target.Path, func(docPath string) error {
+		if len(paths) >= archiveDocs {
+			return fmt.Errorf("over %d documents under %s; archive a narrower directory", archiveDocs, target.Path)
+		}
+		paths = append(paths, docPath)
+		return nil
+	})
+	return paths, err
+}
+
+// dropHubLinks drops the targets' bullets from every ancestor hub of the
+// target, reported as lines; a hub that could not be edited is a note.
+func (t *Tools) dropHubLinks(ctx context.Context, target Target, write WriteFunc, targets []string) string {
+	docs := func(p string) *docwrite.Doc { return t.doc(ctx, target.at(p), write) }
+	var b strings.Builder
+	for _, d := range hub.DropFromAncestors(ctx, docs, target.Path, &hub.Drop{Targets: targets, Stamp: t.identityMeta(ctx)}) {
+		switch {
+		case d.Err != nil:
+			b.WriteString(mcpfmt.Note(d.Err.Error()))
+		case d.Dropped > 0:
+			fmt.Fprintf(&b, "- %s: %d bullet(s) dropped\n", d.Hub, d.Dropped)
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "hubs:\n" + b.String()
 }

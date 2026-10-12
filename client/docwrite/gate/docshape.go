@@ -22,6 +22,10 @@ var (
 	setextUnderline = regexp.MustCompile(`^[=-]+\s*$`)
 )
 
+// StatusTokens are what makes a heading carry status: a date, a PR number,
+// a status word. The curator strips them; the shape rule flags them.
+var StatusTokens = []*regexp.Regexp{hubISODate, hubPRNumber, headingStatusWord}
+
 // minDescriptionWords is the floor for metadata.description: it is the
 // catalog summary, so it must say something without the body.
 const minDescriptionWords = 6
@@ -34,8 +38,7 @@ func ShapeProblems(url, body string, headings []mdoutline.Heading) []string {
 	if !NavExempt(url) && !journalPath(url) {
 		title, summary, ok := summaryUnderH1(body, headings)
 		switch {
-		case ok && strings.TrimSpace(summary) == "" && headingFollowsH1(headings):
-			// An H1 with nothing after it is a stub, not a missing summary.
+		case MissingSummary(body, headings):
 			problems = append(problems,
 				"no summary under the `# H1` (the next line is a heading); add one sentence saying who the document is for and what it settles")
 		case ok:
@@ -47,7 +50,7 @@ func ShapeProblems(url, body string, headings []mdoutline.Heading) []string {
 		if h.Level == 1 {
 			continue
 		}
-		if hubISODate.MatchString(h.Text) || hubPRNumber.MatchString(h.Text) || headingStatusWord.MatchString(h.Text) {
+		if CarriesStatus(h.Text) {
 			status = append(status, fmt.Sprintf("%q", h.Text))
 		}
 	}
@@ -61,6 +64,23 @@ func ShapeProblems(url, body string, headings []mdoutline.Heading) []string {
 			len(status), strings.Join(shown, ", ")))
 	}
 	return problems
+}
+
+// CarriesStatus reports a heading with a status token in it.
+func CarriesStatus(text string) bool {
+	for _, re := range StatusTokens {
+		if re.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
+// MissingSummary reports an H1 followed by a heading with nothing between.
+// An H1 with nothing after it at all is a stub, not a missing summary.
+func MissingSummary(body string, headings []mdoutline.Heading) bool {
+	_, summary, ok := summaryUnderH1(body, headings)
+	return ok && strings.TrimSpace(summary) == "" && headingFollowsH1(headings)
 }
 
 // DescriptionProblems checks metadata.description: a word floor, the summary
@@ -77,7 +97,7 @@ func DescriptionProblems(body string, headings []mdoutline.Heading, description 
 	}
 	title, summary, ok := summaryUnderH1(body, headings)
 	problems := summaryProblems("metadata.description", title, description)
-	if ok && firstParagraph(summary) != "" && collapse(firstParagraph(summary)) != collapse(description) {
+	if ok && firstParagraph(summary) != "" && Collapse(firstParagraph(summary)) != Collapse(description) {
 		problems = append(problems,
 			"metadata.description differs from the summary line under the `# H1`; they are one sentence in two slots (the catalog stores the metadata copy, readers see the body copy), so make them identical")
 	}
@@ -148,9 +168,9 @@ func firstParagraph(s string) string {
 	return s
 }
 
-// collapse normalizes whitespace so a wrapped body line equals its
+// Collapse normalizes whitespace so a wrapped body line equals its
 // single-line metadata copy.
-func collapse(s string) string {
+func Collapse(s string) string {
 	return spaceRe.ReplaceAllString(strings.TrimSpace(s), " ")
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/internal/okf"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
@@ -50,7 +51,12 @@ func Problems(url, body, description string) []string {
 			"duplicate headings (%s); headings are #section anchors, and duplicates get -1 suffixes that shift when sections move, breaking inbound links; make each heading unique", strings.Join(dups, ", ")))
 	}
 
-	problems = append(problems, HubProblems(url, body)...)
+	// A hub at or over the threshold is worded by the hub rules.
+	if hub := HubProblems(url, body); len(hub) > 0 {
+		problems = append(problems, hub...)
+	} else {
+		problems = append(problems, sizeProblems(url, body)...)
+	}
 	problems = append(problems, ShapeProblems(url, body, headings)...)
 	problems = append(problems, DescriptionProblems(body, headings, description)...)
 	return problems
@@ -59,6 +65,33 @@ func Problems(url, body, description string) []string {
 // Findings words problems as one sentence ending in the guide to cite.
 func Findings(problems []string, guide string) string {
 	return strings.Join(problems, " Also: ") + ". " + guide
+}
+
+// sizeProblems applies the fetch threshold to a document that is not a
+// journal, which grows by the day and is read by section.
+func sizeProblems(url, body string) []string {
+	if len(body) < mdoutline.OutlineThreshold || NavExempt(url) || journalPath(url) {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"body is %d KB, at or over the 8 KB fetch threshold, so a plain fetch returns an outline; split it into a hub plus topic files", len(body)/1024)}
+}
+
+// Frontmatter reads the fence OpensWithFrontmatter detects: its keys as the
+// OKF parser reads them and the body after the fence.
+func Frontmatter(body string) (kv map[string]string, rest string, ok bool) {
+	if !OpensWithFrontmatter(body) {
+		return nil, body, false
+	}
+	fm, after, found := okf.SplitFrontmatter([]byte(strings.TrimLeft(body, "\n\r\t ")))
+	if !found {
+		return nil, body, false
+	}
+	kv, err := okf.ParseFrontmatter(fm)
+	if err != nil {
+		return nil, body, false
+	}
+	return kv, strings.TrimLeft(string(after), "\n"), true
 }
 
 // NavExempt reports an OKF navigation/history file (index.md, log.md): exempt

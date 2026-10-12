@@ -4,6 +4,7 @@ package protocol
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -20,6 +21,18 @@ func SplitTags(s string) []string {
 		}
 	}
 	return tags
+}
+
+// MergeTags adds the trimmed, non-empty tags of add that have is missing;
+// have's own empty entries are dropped.
+func MergeTags(have, add []string) []string {
+	out := slices.DeleteFunc(slices.Clone(have), func(t string) bool { return t == "" })
+	for _, t := range add {
+		if t = strings.TrimSpace(t); t != "" && !slices.Contains(out, t) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // IsWriteSuccess reports a PUBLISH or APPEND status that landed.

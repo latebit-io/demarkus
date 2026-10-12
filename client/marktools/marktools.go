@@ -39,6 +39,11 @@ type Target struct {
 	Authority string
 }
 
+// at names another path on the target's server.
+func (t Target) at(p string) Target {
+	return Target{Host: t.Host, Path: p, NodeURL: t.Authority + p, Authority: t.Authority}
+}
+
 // Site names the call that failed, for ErrText. A surface that words failures
 // itself may print the name as the verb; the default wording does not.
 type Site string

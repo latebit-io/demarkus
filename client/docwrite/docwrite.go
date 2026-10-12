@@ -381,6 +381,16 @@ type Head struct {
 	Metadata map[string]string
 }
 
+// Head reads the document as an edit finds it: the current body, version
+// and metadata under the read token.
+func (d *Doc) Head(ctx context.Context) (*Head, error) {
+	h, err := d.head(ctx, d.Path)
+	if err != nil {
+		return nil, err
+	}
+	return &Head{Status: h.status, Body: h.body, Version: h.version, Metadata: h.metadata}, nil
+}
+
 // EditFunc decides the write from the head: the new body and metadata, or
 // write false to leave the document alone.
 type EditFunc func(head *Head) (w Write, write bool, err error)
@@ -391,11 +401,9 @@ type EditFunc func(head *Head) (w Write, write bool, err error)
 func (d *Doc) Edit(ctx context.Context, head *Head, edit EditFunc) (result Result, written bool, err error) {
 	for attempt := range 2 {
 		if head == nil {
-			h, err := d.head(ctx, d.Path)
-			if err != nil {
+			if head, err = d.Head(ctx); err != nil {
 				return Result{}, false, err
 			}
-			head = &Head{Status: h.status, Body: h.body, Version: h.version, Metadata: h.metadata}
 		}
 		switch head.Status {
 		case protocol.StatusOK, protocol.StatusNotFound:

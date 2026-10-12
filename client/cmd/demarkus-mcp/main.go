@@ -163,6 +163,7 @@ func (h *handler) tools(host string) []mcpserver.ServerTool {
 		{Tool: mcpfmt.GraphExportTool(""), Handler: h.markGraphExport},
 		{Tool: mcpfmt.GraphPublishTool("graph document target, e.g. /graph.md or "+url, requiresToken), Handler: h.markGraphPublish},
 		{Tool: mcpfmt.DoctorTool(scopeDesc(host), ""), Handler: h.markDoctor},
+		{Tool: mcpfmt.CurateTool(url, "apply "+requiresToken), Handler: h.markCurate},
 	}
 }
 
@@ -320,11 +321,19 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 }
 
 func (h *handler) markArchive(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := mcpbind.URL(&req)
+	args, err := mcpbind.Archive(&req)
 	if err != nil {
 		return mcpbind.Refused(err), nil
 	}
-	return h.run(func(t *marktools.Tools) marktools.Result { return t.Archive(ctx, rawURL) })
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Archive(ctx, args) })
+}
+
+func (h *handler) markCurate(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	args, err := mcpbind.Curate(&req)
+	if err != nil {
+		return mcpbind.Refused(err), nil
+	}
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Curate(ctx, args) })
 }
 
 func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go

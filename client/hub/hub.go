@@ -7,6 +7,9 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"path"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
@@ -25,6 +28,9 @@ func Title(body string, meta map[string]string, fallback string) string {
 	}
 	return fallback
 }
+
+// Docs binds a surface's write contract to one path on the store.
+type Docs func(docPath string) *docwrite.Doc
 
 // Link is one child a hub must reach: the directory or document, the bullet
 // that links it (under Section when that heading exists), and what to
@@ -51,10 +57,15 @@ func EnsureLink(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, lin
 		}
 		return docwrite.Write{Body: WithBullet(h.Body, link.Section, link.Bullet), Metadata: stamped(docwrite.Carried(h.Metadata), link.Stamp)}, true, nil
 	})
-	switch {
-	case err != nil:
+	return settled(doc, &result, err, protocol.StatusOK, protocol.StatusCreated)
+}
+
+// settled words an Edit outcome: nil when it ended in an accepted status.
+func settled(doc *docwrite.Doc, result *docwrite.Result, err error, accepted ...string) error {
+	if err != nil {
 		return fmt.Errorf("hub %s not updated: %w", doc.Path, err)
-	case result.Response.Status == protocol.StatusOK, result.Response.Status == protocol.StatusCreated, result.Response.Status == "":
+	}
+	if slices.Contains(accepted, result.Response.Status) {
 		return nil
 	}
 	return fmt.Errorf("hub %s not updated: %s", doc.Path, result.Response.Status)
@@ -64,16 +75,18 @@ func EnsureLink(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, lin
 // a directory, anything under it.
 func Reaches(body, hubPath, target string) bool {
 	for _, dest := range links.Extract(body) {
-		resolved := links.ResolvePath(hubPath, dest)
-		if resolved == "" {
-			continue
-		}
-		if resolved == target || resolved == strings.TrimSuffix(target, "/") ||
-			(strings.HasSuffix(target, "/") && strings.HasPrefix(resolved, target)) {
+		if resolved := links.ResolvePath(hubPath, dest); resolved != "" && matches(resolved, target) {
 			return true
 		}
 	}
 	return false
+}
+
+// matches is one resolved link against one target: the document, or the
+// directory (slash optional) and anything under it.
+func matches(resolved, target string) bool {
+	return resolved == target || resolved == strings.TrimSuffix(target, "/") ||
+		(strings.HasSuffix(target, "/") && strings.HasPrefix(resolved, target))
 }
 
 // WithBullet appends the bullet at the end of section's list when the
@@ -103,4 +116,113 @@ func stamped(meta, stamp map[string]string) map[string]string {
 	maps.Copy(out, meta)
 	maps.Copy(out, stamp)
 	return out
+}
+
+// Drop names what a hub must stop linking: document paths, or directories
+// with their slash (anything under them), and the identity to write under.
+type Drop struct {
+	Targets []string
+	Stamp   map[string]string
+}
+
+// DropLinks removes every bullet whose links all point at a drop target; a
+// bullet with a link elsewhere stays. One compare and swap, one retry; head
+// nil fetches. An absent or archived hub links nothing and is not an error.
+func DropLinks(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, drop *Drop) (dropped int, err error) {
+	result, _, err := doc.Edit(ctx, head, func(h *docwrite.Head) (docwrite.Write, bool, error) {
+		if h.Status != protocol.StatusOK {
+			return docwrite.Write{}, false, nil
+		}
+		body, n := WithoutLinks(h.Body, doc.Path, drop.Targets)
+		dropped = n
+		if n == 0 {
+			return docwrite.Write{}, false, nil
+		}
+		return docwrite.Write{Body: body, Metadata: stamped(docwrite.Carried(h.Metadata), drop.Stamp)}, true, nil
+	})
+	err = settled(doc, &result, err, protocol.StatusOK, protocol.StatusNotFound, protocol.StatusArchived)
+	if err != nil {
+		return 0, err
+	}
+	return dropped, nil
+}
+
+// Ancestors are the index.md of every directory above the path, nearest
+// first, the path's own hub excluded.
+func Ancestors(p string) []string {
+	var hubs []string
+	dir := path.Dir(strings.TrimSuffix(p, "/"))
+	for {
+		if h := path.Join(dir, "index.md"); h != p {
+			hubs = append(hubs, h)
+		}
+		if dir == "/" || dir == "." {
+			return hubs
+		}
+		dir = path.Dir(dir)
+	}
+}
+
+// Dropped is one ancestor hub's outcome: bullets dropped, or why not.
+type Dropped struct {
+	Hub     string
+	Dropped int
+	Err     error
+}
+
+// DropFromAncestors drops the targets' bullets from every ancestor hub of p;
+// one hub's failure does not stop the next.
+func DropFromAncestors(ctx context.Context, docs Docs, p string, drop *Drop) []Dropped {
+	hubs := Ancestors(p)
+	out := make([]Dropped, 0, len(hubs))
+	for _, hubPath := range hubs {
+		n, err := DropLinks(ctx, docs(hubPath), nil, drop)
+		out = append(out, Dropped{Hub: hubPath, Dropped: n, Err: err})
+	}
+	return out
+}
+
+// WithoutLinks is the body with every bullet dropped whose links (at least
+// one) all reach a target; n counts them. Links are read from one parse of
+// the body and judged by the line they start on: a hub bullet is one line.
+func WithoutLinks(body, hubPath string, targets []string) (out string, n int) {
+	byLine := map[int][]string{}
+	for _, link := range links.ExtractWithPositions(body) {
+		pos := link.OpenBracket
+		if pos < 0 {
+			pos = link.BlockStart
+		}
+		if pos >= 0 {
+			byLine[strings.Count(body[:pos], "\n")] = append(byLine[strings.Count(body[:pos], "\n")], link.Dest)
+		}
+	}
+	lines := strings.Split(body, "\n")
+	kept := lines[:0]
+	for i, line := range lines {
+		if bulletLine.MatchString(line) && onlyReaches(byLine[i], hubPath, targets) {
+			n++
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if n == 0 {
+		return body, 0
+	}
+	return strings.Join(kept, "\n"), n
+}
+
+var bulletLine = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s+`)
+
+// onlyReaches: every link resolves to a target, and there is one.
+func onlyReaches(dests []string, hubPath string, targets []string) bool {
+	if len(dests) == 0 {
+		return false
+	}
+	for _, dest := range dests {
+		resolved := links.ResolvePath(hubPath, dest)
+		if resolved == "" || !slices.ContainsFunc(targets, func(t string) bool { return matches(resolved, t) }) {
+			return false
+		}
+	}
+	return true
 }

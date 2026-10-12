@@ -260,7 +260,8 @@ attempt.
 
 Every publish is held to the style rules (one `# H1` with a summary
 under it, unique status-free headings, no frontmatter fence, no em
-dashes, hubs as links plus one line each). The write lands and a
+dashes, hubs as links plus one line each, a body under the 8 KB fetch
+threshold unless it is a journal). The write lands and a
 `note:` line names what to fix; a knowledge world cites
 `mark://root/.well-known/demarkus/style.md`.
 
@@ -290,11 +291,51 @@ the current version (one extra round trip, invisible to the agent).
 #### `mark_archive`
 
 Archive a document. Archived documents return `archived` status on
-FETCH; version history is preserved.
+FETCH; version history is preserved. With `recursive: true` the url is
+a directory and every live document under it is archived in listing
+order (bounded: 100 LIST calls, 500 documents; the world root is
+refused), each reported with its version or its failure. After either
+form the ancestor hubs (`index.md` up to the root) drop every bullet
+whose links all point at what was archived; a bullet with a link
+elsewhere stays. A hub that could not be edited is a `note:`, the
+archive stands. A directory bullet goes only when everything under
+the directory archived.
+
+| Param | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `url` | string | yes | `mark://{worldName}/{path}`, or a directory with its slash when recursive. |
+| `recursive` | boolean | no | Archive every live document under the directory url. |
+
+#### `mark_curate`
+
+Bring one document into shape. Without `apply` it is a read: the
+style findings on the document, the mechanical change the tool
+proposes, the findings that need the agent after it, the inbound
+anchored links to repoint (read from the documents the graph store
+says link here; a cold store is a `note:`), a proposal hash, then
+every proposed body in full. Under 8 KB the proposal is an edit in
+place: a frontmatter fence lifted into metadata, em dashes replaced,
+status tokens moved out of headings onto a `Status:` line, the
+metadata description inserted as the missing summary. At or over
+8 KB it is a split: every second-level section of weight moves
+verbatim to `<path without .md>/<slug>.md` (its headings kept, so
+anchors survive; it links back to the hub; tags are the parent's name,
+its slug and the parent tags it mentions), the document keeps its
+path as the hub with its preamble, a `Topics` list and its short
+sections, and its tags lose the ones only a topic mentions.
+
+With `apply: true` and the hash a report returned, the tool recomputes
+the proposal from the current head and refuses when the hash differs.
+It then preflights every topic path (absent: created at version 0;
+identical to the proposal: skipped; anything else: refused before any
+write), publishes the topics, then the document at the reported
+version with `on_conflict: fail`. A failure names what landed.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `url` | string | yes | `mark://{worldName}/{path}` |
+| `apply` | boolean | no | Write the proposal (default false: report only). |
+| `proposal` | string | no | The hash from the report; required with `apply`. |
 
 ### Federation reads
 

@@ -9,12 +9,10 @@ import (
 	"fmt"
 	"maps"
 	"path"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
-	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/hub"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
@@ -135,7 +133,7 @@ func (r *run) create(ctx context.Context, doc *docwrite.Doc) (created bool, vers
 	w := docwrite.Write{
 		Body: fmt.Sprintf("# %s journal: %s\n\n%s\n", r.title, r.date, r.Entry),
 		Metadata: r.stamped(map[string]string{
-			"tags":       strings.Join(mergeTags([]string{"journal", slugOf(r.Dir)}, r.Tags), ","),
+			"tags":       strings.Join(protocol.MergeTags([]string{"journal", slugOf(r.Dir)}, r.Tags), ","),
 			"importance": defaultImportance,
 			"type":       "Journal",
 		}),
@@ -161,7 +159,7 @@ func (r *run) appendOnce(ctx context.Context, doc *docwrite.Doc, h *docwrite.Hea
 		if hasBlock(h.Body, r.Entry) {
 			return StatusPresent, h.Version, nil
 		}
-		meta := r.stamped(map[string]string{"tags": strings.Join(mergeTags(protocol.SplitTags(h.Metadata["tags"]), r.Tags), ",")})
+		meta := r.stamped(map[string]string{"tags": strings.Join(protocol.MergeTags(protocol.SplitTags(h.Metadata["tags"]), r.Tags), ",")})
 		result, err := doc.Append(ctx, docwrite.AppendRequest{Body: "\n" + r.Entry + "\n", ExpectedVersion: h.Version, Metadata: meta})
 		switch {
 		case err != nil:
@@ -199,7 +197,7 @@ func (r *run) links() []hubLink {
 	out := []hubLink{{doc: r.docs(r.Dir + "index.md"), Link: hub.Link{
 		Target: r.Dir + r.Layout.Journal, Bullet: bullet, Section: "## " + section,
 		CreateBody: fmt.Sprintf("# %s\n\n## %s\n\n%s\n", r.title, section, bullet),
-		CreateMeta: map[string]string{"tags": strings.Join(mergeTags([]string{"index"}, []string{slugOf(r.Dir)}), ","), "importance": hubImportance},
+		CreateMeta: map[string]string{"tags": strings.Join(protocol.MergeTags([]string{"index"}, []string{slugOf(r.Dir)}), ","), "importance": hubImportance},
 		Stamp:      r.Stamp,
 	}}}
 	if r.Dir == "/" {
@@ -236,15 +234,11 @@ func (r *run) stamped(meta map[string]string) map[string]string {
 
 // head reads the document as an edit would find it.
 func head(ctx context.Context, doc *docwrite.Doc) (*docwrite.Head, error) {
-	res, err := doc.Backend.Fetch(ctx, fetch.FetchRequest{Host: doc.Host, Path: doc.Path, Token: doc.ReadToken})
+	h, err := doc.Head(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", doc.Path, err)
 	}
-	version, err := docwrite.Version(res.Response.Metadata)
-	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", doc.Path, err)
-	}
-	return &docwrite.Head{Status: res.Response.Status, Body: res.Response.Body, Version: version, Metadata: res.Response.Metadata}, nil
+	return h, nil
 }
 
 // hasBlock reports the entry present as its own blank line delimited block.
@@ -266,15 +260,4 @@ func slugOf(dir string) string {
 		return ""
 	}
 	return path.Base(strings.TrimSuffix(dir, "/"))
-}
-
-// mergeTags adds the trimmed, non-empty tags of add that have is missing.
-func mergeTags(have, add []string) []string {
-	out := slices.DeleteFunc(slices.Clone(have), func(t string) bool { return t == "" })
-	for _, t := range add {
-		if t = strings.TrimSpace(t); t != "" && !slices.Contains(out, t) {
-			out = append(out, t)
-		}
-	}
-	return out
 }

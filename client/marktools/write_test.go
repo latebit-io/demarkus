@@ -162,14 +162,18 @@ func TestWritesReconcileAfterAnUnknownOutcome(t *testing.T) {
 		},
 		{
 			name: "archive, landed",
-			call: func(tools *marktools.Tools) marktools.Result { return tools.Archive(t.Context(), "/doc.md") },
+			call: func(tools *marktools.Tools) marktools.Result {
+				return tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/doc.md"})
+			},
 			head: fetchtest.Archived(),
 			// An archived document answers without a version, so none is claimed.
 			wantText: "status: ok\narchived: true\n",
 		},
 		{
 			name: "archive, still live",
-			call: func(tools *marktools.Tools) marktools.Result { return tools.Archive(t.Context(), "/doc.md") },
+			call: func(tools *marktools.Tools) marktools.Result {
+				return tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/doc.md"})
+			},
 			head: fetchtest.Head("live", 3, nil), wantErr: true,
 			wantText: "archive failed: read response: request sent but outcome unknown; it may have landed: fetch the document before retrying",
 		},
@@ -244,7 +248,7 @@ func TestDefiniteWriteFailuresDoNotProbeTheHead(t *testing.T) {
 	for name, got := range map[string]marktools.Result{
 		"publish": tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: "x", ExpectedVersion: new(3), OnConflict: "fail"}),
 		"append":  tools.Append(t.Context(), marktools.AppendArgs{URL: "/doc.md", Body: "x", ExpectedVersion: 3}),
-		"archive": tools.Archive(t.Context(), "/doc.md"),
+		"archive": tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/doc.md"}),
 	} {
 		if !got.IsError || got.Text != name+" failed: dial refused" {
 			t.Errorf("%s = %+v", name, got)

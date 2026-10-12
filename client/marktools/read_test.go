@@ -142,7 +142,7 @@ func TestArchive(t *testing.T) {
 	}
 	tools := newTools(t, backend, hooks)
 
-	got := tools.Archive(t.Context(), "/doc.md")
+	got := tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/doc.md"})
 	wantText := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "3", "archived": "true"}}}, "version")
 	if got.IsError || got.Text != wantText {
 		t.Errorf("Archive = %+v, want %q", got, wantText)
@@ -153,7 +153,7 @@ func TestArchive(t *testing.T) {
 	}
 
 	// The surface's refusal is the tool's answer, word for word, and nothing is sent.
-	if got := tools.Archive(t.Context(), "/locked.md"); !got.IsError || got.Text != "archive requires a token" {
+	if got := tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/locked.md"}); !got.IsError || got.Text != "archive requires a token" {
 		t.Errorf("refused = %+v", got)
 	}
 	if len(backend.ArchiveCalls) != 1 || strings.Join(verbs, ",") != "archive /doc.md,archive /locked.md" {
@@ -161,7 +161,7 @@ func TestArchive(t *testing.T) {
 	}
 
 	noWriter := newTools(t, backend, directHooks())
-	if got := noWriter.Archive(t.Context(), "/doc.md"); !got.IsError || !strings.Contains(got.Text, "no writer") {
+	if got := noWriter.Archive(t.Context(), marktools.ArchiveArgs{URL: "/doc.md"}); !got.IsError || !strings.Contains(got.Text, "no writer") {
 		t.Errorf("a surface without a Writer must refuse writes, got %+v", got)
 	}
 }

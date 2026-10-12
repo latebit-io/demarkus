@@ -36,7 +36,8 @@ const (
 	versionsDescription     = "Version history: total and current version, hash chain validity, per-version timestamps."
 	publishDescription      = "Publish or update a document (markdown body); expected_version from prior fetch, 0 to create; metadata replaces the current map; a note lists dropped tags or keys and style problems. On conflict the default on_conflict=merge returns a merged candidate body (git-style markers where both sides changed) to review and republish at publish-at-version."
 	appendDescription       = "Append markdown to an existing document. expected_version optional; omitted or 0 resolves the current version. Catalog metadata (tags, importance, title, type) carries over; change it via mark_publish. route=today: url is a directory, the entry goes to its journal/<YYYY-MM-DD>.md (created when absent, hubs linked, tags widened); a repeated entry is reported present, not written."
-	archiveDescription      = "Archive a document: fetches as 'archived', history kept."
+	archiveDescription      = "Archive a document: fetches as 'archived', history kept. recursive=true: url is a directory, every live document under it. Ancestor hubs drop the bullets that only linked what was archived."
+	curateDescription       = "Bring one document into shape: style findings, the proposed mechanical fix (frontmatter lifted, em dashes, status out of headings, description as summary; at or over 8KB a split into a hub plus topic files, headings kept so anchors survive), inbound anchored links to repoint, a proposal hash. apply=true with the hash writes it at the reported version."
 	backlinksDescription    = "Documents linking to a URL, from the revision-aware graph store, with bounded source revalidation. Freshness, provenance and typed relations also appear in mark_explore."
 	graphDescription        = "Crawl outbound links from a document to depth: link graph with edge provenance and rel-* typed relations. External links recorded, not followed. Feeds the graph store for mark_backlinks."
 	graphExportDescription  = "Export the graph store as publishable markdown with mark:// links. Run mark_graph first."
@@ -55,6 +56,9 @@ const (
 	onConflictDesc      = "merge (default): merged candidate body to review and republish at publish-at-version; fail: raw conflict status"
 	metadataDesc        = "string values stored with the document: tags (comma-separated) and importance (0-1) rank mark_lookup; rel-<predicate> declares a typed relation (e.g. rel-supersedes: /adr/0002.md); other keys stored opaquely. retention (positive int) permanently deletes all but the newest N versions on this and every later write carrying it: irreversible, confirm with the user first"
 	depthDesc           = "max link depth (default 2, max 5)"
+	recursiveDesc       = "archive every live document under the directory url (default false)"
+	curateApplyDesc     = "write the proposal (default false: report only)"
+	curateProposalDesc  = "the proposal hash from the report; required with apply"
 	doctorDeepDesc      = "walk version history for lost metadata (default false)"
 	doctorPromotionDesc = "list promotion candidates, promoted ones excluded (default false)"
 	graphRetentionDesc  = "graph versions to keep (default 20; 0 keeps all); older permanently pruned"
@@ -156,6 +160,17 @@ func ArchiveTool(urlDesc, suffix string) mcp.Tool {
 	return mcp.NewTool("mark_archive",
 		describe(archiveDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
+		mcp.WithBoolean("recursive", mcp.Description(recursiveDesc)),
+	)
+}
+
+// CurateTool builds mark_curate.
+func CurateTool(urlDesc, suffix string) mcp.Tool {
+	return mcp.NewTool("mark_curate",
+		describe(curateDescription, suffix),
+		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
+		mcp.WithBoolean("apply", mcp.Description(curateApplyDesc)),
+		mcp.WithString("proposal", mcp.Description(curateProposalDesc)),
 	)
 }
 
@@ -219,6 +234,7 @@ var KnownTools = map[string]bool{
 	"mark_lookup": true, "mark_lookup_all": true, "mark_publish": true, "mark_append": true,
 	"mark_archive": true, "mark_discover": true, "mark_backlinks": true, "mark_graph": true,
 	"mark_graph_export": true, "mark_graph_publish": true, "mark_worlds": true, "mark_doctor": true,
+	"mark_curate": true,
 }
 
 // ValidProfile rejects anything but the two named profiles. Surfaces call it
