@@ -157,7 +157,10 @@ func Append(req *mcp.CallToolRequest) (marktools.AppendArgs, error) {
 	if err != nil {
 		return marktools.AppendArgs{}, err
 	}
-	return marktools.AppendArgs{URL: url, Body: body, ExpectedVersion: req.GetInt("expected_version", 0)}, nil
+	return marktools.AppendArgs{
+		URL: url, Body: body, ExpectedVersion: req.GetInt("expected_version", 0),
+		Route: req.GetString("route", ""), Tags: req.GetString("tags", ""),
+	}, nil
 }
 
 // Graph binds mark_graph; the depth is the body's default when absent, and

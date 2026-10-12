@@ -209,14 +209,8 @@ func (a *audit) fetchAll(ctx context.Context) error {
 func (a *audit) classifyLinks(d *document) {
 	seen := map[string]bool{}
 	for _, dest := range links.Extract(d.body) {
-		if strings.Contains(dest, "://") {
-			continue
-		}
-		target := path.Clean(dest)
-		if !strings.HasPrefix(dest, "/") {
-			target = path.Join(path.Dir(d.path), dest)
-		}
-		if seen[target] {
+		target := links.ResolvePath(d.path, dest)
+		if target == "" || seen[target] {
 			continue
 		}
 		seen[target] = true

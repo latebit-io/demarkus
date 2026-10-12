@@ -3,6 +3,7 @@ package links
 
 import (
 	"net/url"
+	pathpkg "path"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -197,4 +198,21 @@ func ExtractTitle(body string) string {
 		return ast.WalkStop, nil
 	})
 	return title.String()
+}
+
+// ResolvePath is the store path a link in docPath points at: an absolute
+// dest cleaned, a relative one joined to the document's directory, a trailing
+// slash kept so a directory link stays one. "" for an external link.
+func ResolvePath(docPath, dest string) string {
+	if dest == "" || strings.Contains(dest, "://") {
+		return ""
+	}
+	target := pathpkg.Clean(dest)
+	if !strings.HasPrefix(dest, "/") {
+		target = pathpkg.Join(pathpkg.Dir(docPath), dest)
+	}
+	if strings.HasSuffix(dest, "/") && !strings.HasSuffix(target, "/") {
+		target += "/"
+	}
+	return target
 }

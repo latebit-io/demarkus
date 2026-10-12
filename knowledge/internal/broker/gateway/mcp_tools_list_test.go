@@ -54,9 +54,9 @@ func TestMCPURLFormStatedOnceInInstructions(t *testing.T) {
 // about 4.1 bytes per token (2026-10-12). Raise only with a measured offset.
 const (
 	knowledgeFullSchemaBudgetBytes = 12030
-	knowledgeLeanSchemaBudgetBytes = 10600
-	memoryFullSchemaBudgetBytes    = 9720
-	memoryLeanSchemaBudgetBytes    = 9300
+	knowledgeLeanSchemaBudgetBytes = 11150
+	memoryFullSchemaBudgetBytes    = 10270
+	memoryLeanSchemaBudgetBytes    = 9840
 )
 
 func TestGatewayToolProfilesAndBudget(t *testing.T) {

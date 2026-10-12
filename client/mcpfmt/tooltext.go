@@ -31,11 +31,11 @@ func ScopeDesc(example string) string {
 }
 
 const (
-	fetchDescription        = "Fetch a document: status, version, title, markdown body; over 8KB an outline (headings with #anchors), url#<anchor> one section, force=true the full body. Unchanged re-fetch returns a short notice."
+	fetchDescription        = "Fetch a document: status, version, title, markdown body; over 8KB an outline (headings with #anchors), url#<anchor> one section, force=true the full body. Unchanged re-fetch returns a short notice. <dir>/.context reads a session primer: hub, newest journal entries, active work."
 	listDescription         = "List documents and subdirectories. Archived hidden unless include_archived; while complete=false pass next-cursor as cursor. For one document prefer mark_explore."
 	versionsDescription     = "Version history: total and current version, hash chain validity, per-version timestamps."
 	publishDescription      = "Publish or update a document (markdown body); expected_version from prior fetch, 0 to create; metadata replaces the current map; a note lists dropped tags or keys and style problems. On conflict the default on_conflict=merge returns a merged candidate body (git-style markers where both sides changed) to review and republish at publish-at-version."
-	appendDescription       = "Append markdown to an existing document. expected_version optional; omitted or 0 resolves the current version. Catalog metadata (tags, importance, title, type) carries over; change it via mark_publish."
+	appendDescription       = "Append markdown to an existing document. expected_version optional; omitted or 0 resolves the current version. Catalog metadata (tags, importance, title, type) carries over; change it via mark_publish. route=today: url is a directory, the entry goes to its journal/<YYYY-MM-DD>.md (created when absent, hubs linked, tags widened); a repeated entry is reported present, not written."
 	archiveDescription      = "Archive a document: fetches as 'archived', history kept."
 	backlinksDescription    = "Documents linking to a URL, from the revision-aware graph store, with bounded source revalidation. Freshness, provenance and typed relations also appear in mark_explore."
 	graphDescription        = "Crawl outbound links from a document to depth: link graph with edge provenance and rel-* typed relations. External links recorded, not followed. Feeds the graph store for mark_backlinks."
@@ -50,6 +50,8 @@ const (
 	bodyDesc            = "markdown body"
 	appendBodyDesc      = "markdown to append"
 	appendVersionDesc   = "version from prior fetch; omit or 0 to auto-resolve"
+	appendRouteDesc     = "today: url names a directory and the entry lands in its dated journal"
+	appendTagsDesc      = "with route=today: comma-separated subjects of the entry, added to the journal's tags"
 	onConflictDesc      = "merge (default): merged candidate body to review and republish at publish-at-version; fail: raw conflict status"
 	metadataDesc        = "string values stored with the document: tags (comma-separated) and importance (0-1) rank mark_lookup; rel-<predicate> declares a typed relation (e.g. rel-supersedes: /adr/0002.md); other keys stored opaquely. retention (positive int) permanently deletes all but the newest N versions on this and every later write carrying it: irreversible, confirm with the user first"
 	depthDesc           = "max link depth (default 2, max 5)"
@@ -144,6 +146,8 @@ func AppendTool(urlDesc, suffix string) mcp.Tool {
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 		mcp.WithString("body", mcp.Required(), mcp.Description(appendBodyDesc)),
 		mcp.WithNumber("expected_version", mcp.Description(appendVersionDesc)),
+		mcp.WithString("route", mcp.Description(appendRouteDesc)),
+		mcp.WithString("tags", mcp.Description(appendTagsDesc)),
 	)
 }
 

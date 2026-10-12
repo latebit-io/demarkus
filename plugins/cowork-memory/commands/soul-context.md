@@ -16,17 +16,15 @@ A slug never proves identity. Before the first read or write, `mark_fetch /<slug
 
 1. **Confirm the project** from the identity check above: new project: say so, suggest `/soul-journal "<entry>"`, stop; subtree without a hub: note it, continue; identity unknown: stop.
 
-2. **Recent journal.** `mark_list /<slug>/journal/`, `next-cursor` as `cursor` until `complete: true`, max 100 calls, each incomplete page a non-empty unseen cursor; a bound before complete is partial. Fetch today plus the two most recent prior days (UTC `YYYY-MM-DD.md`) with `force: true`; today `not-found`: the two most recent prior days. Any cursor, list or fetch failure: partial.
+2. **Read the primer.** `mark_fetch` through the store's server with `url` `/<slug>/.context`. A tool error: surface it, stop.
 
-3. **Active work.** `mark_fetch /<slug>/roadmap.md` with `force: true`. `not-found`: skip; other failures: surface.
-
-4. **Summarize.** Plain text, no preamble:
+3. **Summarize.** Plain text, no preamble:
 
    ```text
    ## <Project>: recent context
 
    ### What's in flight
-   <one or two sentences from roadmap.md, or "No roadmap yet">
+   <one or two sentences from the roadmap or plans, or "No roadmap yet">
 
    ### Recent journal
    - <YYYY-MM-DD>: <one-line summary>
@@ -35,7 +33,7 @@ A slug never proves identity. Before the first read or write, `mark_fetch /<slug
    <one or two specific suggestions from the latest entry: what was the user about to do?>
 
    ### Coverage
-   <per partial or failed read (steps 1-3): what, exact error or bound; omit if none>
+   <the primer's Coverage lines, verbatim; omit if none>
    ```
 
    One line per summary; restore context, never read entries verbatim.
@@ -43,5 +41,5 @@ A slug never proves identity. Before the first read or write, `mark_fetch /<slug
 ## Don't
 
 - Fabricate: an empty section (no roadmap, no recent journals) says so.
-- Pull every doc; a primer, not a dump.
+- Read more than the primer unless the user asks.
 - Write to the soul.

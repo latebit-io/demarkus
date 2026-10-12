@@ -338,6 +338,10 @@ mcp_tools() {
   expect "mcp append resolves the version itself" 'version' -- mcp_call "$U" mark_append '{"url":"/mcp/new.md","body":"second"}'
   expect "mcp fetch sees the append" 'second' -- mcp_call "$U" mark_fetch '{"url":"/mcp/new.md"}'
   expect "mcp archive archives the document" 'archived' -- mcp_call "$U" mark_archive '{"url":"/mcp/new.md"}'
+  expect "mcp append route today creates the journal" 'status: created' -- mcp_call "$U" mark_append '{"url":"/","route":"today","body":"Smoke entry.","tags":"smoke"}'
+  expect "mcp append route today is idempotent" 'status: present' -- mcp_call "$U" mark_append '{"url":"/","route":"today","body":"Smoke entry.","tags":"smoke"}'
+  expect "mcp context primer reads the hub and the journal" 'Journal 20[0-9][0-9]-' -- mcp_call "$U" mark_fetch '{"url":"/.context"}'
+  expect "mcp doctor audits the store" 'hygiene report' -- mcp_call "$U" mark_doctor '{"url":"/"}'
   refute "mcp stderr has no panic" 'panic|fatal error' -- cat "$WORK/mcp.log"
 }
 

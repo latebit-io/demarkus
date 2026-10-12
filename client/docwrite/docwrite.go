@@ -356,3 +356,68 @@ func optionalInt(meta map[string]string, key string) (int, error) {
 	}
 	return n, nil
 }
+
+// Version reads the version a response carries: absent is 0, malformed an error.
+func Version(meta map[string]string) (int, error) { return optionalInt(meta, "version") }
+
+// Carried is the metadata a republish of a fetched document resends: the
+// publisher's keys without retention (never inherited) and without identity,
+// which the writing surface stamps again.
+func Carried(meta map[string]string) map[string]string {
+	out := make(map[string]string, len(meta))
+	for k, v := range meta {
+		if k != "retention" && !protocol.IsReservedMetadataKey(k) && !protocol.IsIdentityMetadataKey(k) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// Head is the document as an edit found it; Version is 0 when absent.
+type Head struct {
+	Status   string
+	Body     string
+	Version  int
+	Metadata map[string]string
+}
+
+// EditFunc decides the write from the head: the new body and metadata, or
+// write false to leave the document alone.
+type EditFunc func(head *Head) (w Write, write bool, err error)
+
+// Edit is a compare and swap: the head (fetched unless given), the edit, one
+// publish at its version, one retry on conflict. Written is false when the
+// edit declined or the retry conflicted; Result is the last response.
+func (d *Doc) Edit(ctx context.Context, head *Head, edit EditFunc) (result Result, written bool, err error) {
+	for attempt := range 2 {
+		if head == nil {
+			h, err := d.head(ctx, d.Path)
+			if err != nil {
+				return Result{}, false, err
+			}
+			head = &Head{Status: h.status, Body: h.body, Version: h.version, Metadata: h.metadata}
+		}
+		switch head.Status {
+		case protocol.StatusOK, protocol.StatusNotFound:
+		default:
+			return Result{Response: protocol.Response{Status: head.Status}}, false, nil
+		}
+		w, write, err := edit(head)
+		if err != nil {
+			return Result{}, false, err
+		}
+		if !write {
+			return Result{Response: protocol.Response{Status: head.Status, Metadata: head.Metadata}}, false, nil
+		}
+		w.ExpectedVersion = head.Version
+		result, err = d.Publish(ctx, w, merge.OnConflictFail)
+		if err != nil {
+			return Result{}, false, err
+		}
+		if result.Response.Status != protocol.StatusConflict || attempt == 1 {
+			return result, protocol.IsWriteSuccess(result.Response.Status), nil
+		}
+		head = nil
+	}
+	return result, false, nil
+}

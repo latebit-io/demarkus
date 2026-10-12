@@ -2,7 +2,7 @@
 
 ## 0.13.166
 
-`/soul-doctor` and `/promote-scan` call the new `mark_doctor` tool instead of the plugin binary: the server reads the scope once and returns the hygiene report, so a bound broker store can be audited too, and `promotion: true` lists promotion candidates with the already-promoted set excluded. The style rules every publish is held to now run inside `mark_publish` on every surface; the Claude Code hook is unchanged.
+`/soul-doctor` and `/promote-scan` call the new `mark_doctor` tool instead of the plugin binary: the server reads the scope once and returns the hygiene report, so a bound broker store can be audited too, and `promotion: true` lists promotion candidates with the already-promoted set excluded. The style rules every publish is held to now run inside `mark_publish` on every surface; the Claude Code hook is unchanged. `/soul-journal` is one `mark_append` call with `route: "today"`: the server picks the day, creates or appends, widens tags and keeps the hubs linked, answering `present` for a repeated entry. `/soul-context` reads one primer, `/<slug>/.context` (hub, newest journal entries, roadmap, plans).
 
 ## 0.13.161
 

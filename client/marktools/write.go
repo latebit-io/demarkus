@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/journal"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/client/metaguard"
@@ -65,6 +66,9 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 		return *bad
 	}
 	// Arguments, then authorization, then the network: on every write tool.
+	if isContextPath(target.Path) {
+		return failure("%s is reserved: the primer is read, never written", ContextLeaf)
+	}
 	expected, bad := requireVersion(args.ExpectedVersion)
 	if bad != nil {
 		return *bad
@@ -224,11 +228,16 @@ func (t *Tools) narrowingNote(ctx context.Context, doc *docwrite.Doc, w docwrite
 }
 
 // AppendArgs are mark_append's arguments; ExpectedVersion 0 resolves the
-// current version through VERSIONS.
+// current version. Route today: URL is a directory, the target its dated
+// journal (created when absent) and Tags the entry's subjects.
 type AppendArgs struct {
 	URL, Body       string
 	ExpectedVersion int
+	Route, Tags     string
 }
+
+// RouteToday is the journal route.
+const RouteToday = "today"
 
 // Append answers mark_append.
 func (t *Tools) Append(ctx context.Context, args AppendArgs) Result {
@@ -238,6 +247,16 @@ func (t *Tools) Append(ctx context.Context, args AppendArgs) Result {
 	}
 	if args.ExpectedVersion < 0 {
 		return failure("expected_version must be >= 0")
+	}
+	if isContextPath(target.Path) {
+		return failure("%s is reserved: the primer is read, never written", ContextLeaf)
+	}
+	switch args.Route {
+	case "":
+	case RouteToday:
+		return t.appendToday(ctx, target, args)
+	default:
+		return failure("invalid route %q: expected \"today\" or none", args.Route)
 	}
 	write, bad := t.writer(ctx, target, "append")
 	if bad != nil {
@@ -254,6 +273,32 @@ func (t *Tools) Append(ctx context.Context, args AppendArgs) Result {
 		t.observeAppended(ctx, target, doc, &result)
 	}
 	return text(formatResult(&result, writeFields...))
+}
+
+// appendToday records the entry in today's journal under the target
+// directory; the surface's one authorization covers the hubs it keeps current.
+func (t *Tools) appendToday(ctx context.Context, target Target, args AppendArgs) Result { //nolint:gocritic // arguments by value, like every tool
+	write, bad := t.writer(ctx, target, "append")
+	if bad != nil {
+		return *bad
+	}
+	docs := func(p string) *docwrite.Doc {
+		return t.doc(ctx, Target{Host: target.Host, Path: p, NodeURL: target.NodeURL, Authority: target.Authority}, write)
+	}
+	out, err := journal.Append(ctx, docs, journal.Request{Dir: target.Path, Entry: args.Body, Tags: protocol.SplitTags(args.Tags), Stamp: t.identityMeta(ctx)})
+	if err != nil {
+		return failure("append failed: %v", err)
+	}
+	if out.Status != journal.StatusPresent {
+		landed := docwrite.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": strconv.Itoa(out.Version)}}}
+		t.observeAppended(ctx, Target{Host: target.Host, Path: out.Path, NodeURL: target.Authority + out.Path, Authority: target.Authority}, docs(out.Path), &landed)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "status: %s\nversion: %d\npath: %s\n", out.Status, out.Version, out.Path)
+	for _, note := range out.Notes {
+		b.WriteString(mcpfmt.Note(note))
+	}
+	return text(b.String())
 }
 
 // Archive answers mark_archive.
