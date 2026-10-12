@@ -227,6 +227,12 @@ same lines) for the agent to verify, then re-call with
 `on_conflict: "fail"` for the raw conflict envelope with no merge
 attempt.
 
+Every publish is held to the style rules (one `# H1` with a summary
+under it, unique status-free headings, no frontmatter fence, no em
+dashes, hubs as links plus one line each). The write lands and a
+`note:` line names what to fix; a knowledge world cites
+`mark://root/.well-known/demarkus/style.md`.
+
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `url` | string | yes | `mark://{worldName}/{path}` |

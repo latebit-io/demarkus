@@ -77,20 +77,26 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 	if bad != nil {
 		return *bad
 	}
+	styleNote, bad := t.styleGate(ctx, target, &args)
+	if bad != nil {
+		return *bad
+	}
 	doc := t.doc(ctx, target, write)
 	w := docwrite.Write{Body: args.Body, ExpectedVersion: expected, Metadata: t.publisherMeta(ctx, args.Metadata)}
 	result, err := doc.Publish(ctx, w, mode)
 	if err != nil {
 		return t.failed(SitePublish, target.Host, err)
 	}
-	if landed(&result) {
-		// The body and publisher metadata are in hand; the server's keys
-		// (version, etag) come from the response.
-		meta := maps.Clone(w.Metadata)
-		maps.Copy(meta, result.Response.Metadata)
-		t.observeWrite(ctx, target, graph.FetchResult{Status: protocol.StatusOK, Body: args.Body, Metadata: meta})
+	if !landed(&result) {
+		// A candidate ends with its body; a note after it would read as body.
+		return text(formatResult(&result, writeFields...))
 	}
-	return text(formatResult(&result, writeFields...) + t.narrowingNote(ctx, doc, w, result.Response.Status))
+	// The body and publisher metadata are in hand; the server's keys
+	// (version, etag) come from the response.
+	meta := maps.Clone(w.Metadata)
+	maps.Copy(meta, result.Response.Metadata)
+	t.observeWrite(ctx, target, graph.FetchResult{Status: protocol.StatusOK, Body: args.Body, Metadata: meta})
+	return text(formatResult(&result, writeFields...) + t.narrowingNote(ctx, doc, w) + styleNote)
 }
 
 // landed is a write the server applied, not a merge candidate to review.
@@ -207,10 +213,7 @@ func formatResult(r *docwrite.Result, fields ...string) string {
 
 // narrowingNote warns, after a write that landed, when it dropped tags or keys
 // the replaced version had. A failed check is logged and never fails the write.
-func (t *Tools) narrowingNote(ctx context.Context, doc *docwrite.Doc, w docwrite.Write, status string) string {
-	if !protocol.IsWriteSuccess(status) {
-		return ""
-	}
+func (t *Tools) narrowingNote(ctx context.Context, doc *docwrite.Doc, w docwrite.Write) string {
 	note, err := metaguard.Gate(ctx, w.ExpectedVersion, w.Metadata, func(ctx context.Context) (fetch.Result, error) {
 		return doc.FetchVersion(ctx, w.ExpectedVersion)
 	})

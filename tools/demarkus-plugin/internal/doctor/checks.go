@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/docwrite/gate"
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/gate"
 )
 
 // Check names in report order.
@@ -206,7 +206,7 @@ func (a *audit) checkMetadata() {
 		if strings.TrimSpace(d.meta["tags"]) == "" {
 			a.add(CheckUntagged, p, "no tags; findable only by title or path", "re-publish with metadata.tags")
 		}
-		if gate.NavExempt(path.Base(p)) {
+		if gate.NavExempt(p) {
 			continue
 		}
 		if t := d.meta["type"]; t == "" || t == "Document" {

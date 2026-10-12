@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
 // toolBodies binds the shared tool bodies to the gateway: a url names a world,
@@ -25,9 +26,16 @@ func (g *Gateway) toolBodies() (*marktools.Tools, error) {
 		Agent:   mcpbind.ClientName,
 		User:    toolUser,
 		Graph:   g.toolGraph,
+		Style:   g.toolStyle,
 		Warnf:   func(format string, args ...any) { g.deps.Log.Warn(fmt.Sprintf(format, args...)) },
 		ErrText: toolSiteErrorText,
 	})
+}
+
+// toolStyle holds every publish to the style rules at warn: the finding rides
+// in the response, the write lands, and the profile says what it cites.
+func (g *Gateway) toolStyle(context.Context, marktools.Target) marktools.StyleGate {
+	return marktools.StyleGate{Strictness: publishpolicy.Warn, Guide: g.profile.StyleGuide}
 }
 
 // resolveToolTarget keeps the url as the agent wrote it for display; the graph

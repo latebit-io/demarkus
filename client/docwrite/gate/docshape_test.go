@@ -40,7 +40,7 @@ func TestShapeProblems(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := shapeProblems(c.url, c.body, mdoutline.Headings(c.body))
+			got := ShapeProblems(c.url, c.body, mdoutline.Headings(c.body))
 			if c.want == nil {
 				if len(got) != 0 {
 					t.Fatalf("want no problems, got %q", got)
@@ -54,18 +54,6 @@ func TestShapeProblems(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestShapeGateThroughEvaluate(t *testing.T) {
-	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
-	d := mustEval(t, styleInput("# Plan\n\n## Phase 1 SHIPPED\n\ntext\n"))
-	if d.Decision != "warn" || !strings.Contains(d.Reason, "no summary") || !strings.Contains(d.Reason, "carry status") {
-		t.Fatalf("want both shape warnings, got %q (%s)", d.Decision, d.Reason)
-	}
-	clean := mustEval(t, styleInput("# Plan\n\nFor maintainers: what this settles.\n\n## Phase 1\n\nStatus: shipped\n"))
-	if clean.Decision != "allow" {
-		t.Fatalf("want allow, got %q (%s)", clean.Decision, clean.Reason)
 	}
 }
 
@@ -91,7 +79,7 @@ func TestDescriptionProblems(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := descriptionProblems(c.body, mdoutline.Headings(c.body), c.description)
+			got := DescriptionProblems(c.body, mdoutline.Headings(c.body), c.description)
 			if c.want == nil {
 				if len(got) != 0 {
 					t.Fatalf("want no problems, got %q", got)

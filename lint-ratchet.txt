@@ -64,7 +64,6 @@
 1 tools/demarkus-plugin/internal/config/paths.go: G306: Expect WriteFile permissions to be 0600 or less (gosec)
 3 tools/demarkus-plugin/internal/doctor/checks.go: Error return value of `strconv.Atoi` is not checked (errcheck)
 1 tools/demarkus-plugin/internal/gate/gate.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)
-1 tools/demarkus-plugin/internal/gate/hub.go: Error return value of `ast.Walk` is not checked (errcheck)
 2 tools/demarkus-plugin/internal/guidance/guidance.go: Error return value of `os.MkdirAll` is not checked (errcheck)
 2 tools/demarkus-plugin/internal/guidance/guidance.go: Error return value of `os.WriteFile` is not checked (errcheck)
 1 tools/demarkus-plugin/internal/lockdir/lockdir.go: G301: Expect directory permissions to be 0750 or less (gosec)

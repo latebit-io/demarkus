@@ -77,6 +77,9 @@ type Hooks struct {
 	// Graph is the graph store a call works on; nil or an error means none,
 	// and the error's text is the tool's answer.
 	Graph func(ctx context.Context) (*GraphScope, error)
+	// Style is how strictly a publish to target is held to the style rules
+	// and which guide a finding cites; nil warns and cites the baseline.
+	Style func(ctx context.Context, target Target) StyleGate
 	// Seen dedups full bodies mark_fetch already returned; nil never dedups.
 	Seen SeenStore
 	// ErrText words a failed backend call; nil says "<site> failed: <err>".

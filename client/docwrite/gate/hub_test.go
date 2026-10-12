@@ -81,7 +81,7 @@ func TestHubProblems(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := hubProblems(c.leaf, c.body)
+			got := HubProblems(c.leaf, c.body)
 			if c.want == nil {
 				if len(got) != 0 {
 					t.Fatalf("want no problems, got %q", got)
@@ -96,31 +96,4 @@ func TestHubProblems(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestHubGateThroughEvaluate(t *testing.T) {
-	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
-	body := "# Hub\n\n" + linkBullets(5) + "- [Plan](/p.md): **SHIPPED** PR #12 on 2026-09-01\n"
-	d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
-		"url": "/demarkus/index.md", "body": body, "metadata": map[string]any{"tags": "index,hub"},
-	}})
-	if d.Decision != "warn" || !strings.Contains(d.Reason, "hub bullet") || !strings.Contains(d.Reason, "one line each") {
-		t.Fatalf("want hub warn naming the fix, got %q (%s)", d.Decision, d.Reason)
-	}
-
-	t.Run("append is exempt", func(t *testing.T) {
-		d := mustEval(t, &Input{Tool: "demarkus_memory_mark_append", Input: map[string]any{
-			"url": "/demarkus/index.md", "body": "- [Plan](/p.md): **SHIPPED** 2026-09-01\n",
-		}})
-		if d.Decision != "allow" {
-			t.Fatalf("want allow, got %q (%s)", d.Decision, d.Reason)
-		}
-	})
-
-	t.Run("plain document keeps its bullets", func(t *testing.T) {
-		d := mustEval(t, styleInput("# Plan\n\nA design.\n\n## Status\n\n- **SHIPPED** 2026-09-01 as PR #12, a long status line that a hub could not carry\n"))
-		if d.Decision != "allow" {
-			t.Fatalf("want allow, got %q (%s)", d.Decision, d.Reason)
-		}
-	})
 }

@@ -412,7 +412,7 @@ func TestPublish_NarrowingNote(t *testing.T) {
 		}
 		tools := (&clientSurface{DefaultHost: "mark://example.com", Token: "test"}).tools(t, backend)
 		result := tools.Publish(context.Background(), marktools.PublishArgs{
-			URL: "mark://example.com/doc.md", Body: "y", ExpectedVersion: &version,
+			URL: "mark://example.com/doc.md", Body: "# Doc\n", ExpectedVersion: &version,
 			Metadata: meta, OnConflict: onConflict,
 		})
 		if result.IsError {

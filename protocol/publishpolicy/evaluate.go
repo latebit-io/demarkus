@@ -92,7 +92,7 @@ func evaluate(policy Policy, path string, metadata map[string]any, overridesOnly
 		if _, supplied := metadata[field]; overridesOnly && !supplied {
 			continue
 		}
-		if field == "type" && navigationExempt(path) {
+		if field == "type" && NavigationExempt(path) {
 			continue
 		}
 		if !fieldPresent(metadata, field) {
@@ -170,7 +170,9 @@ func fieldPresent(metadata map[string]any, field string) bool {
 	}
 }
 
-func navigationExempt(documentPath string) bool {
+// NavigationExempt reports the OKF navigation leaves (index.md, log.md) the
+// type rule skips; shared so the style gate agrees on the same leaves.
+func NavigationExempt(documentPath string) bool {
 	if slash := strings.LastIndex(documentPath, "/"); slash >= 0 {
 		documentPath = documentPath[slash+1:]
 	}

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"github.com/latebit-io/demarkus/client/docwrite/gate"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -26,6 +27,9 @@ type Profile struct {
 	// SeedMemory seeds the memory template into a tenant world on first
 	// access (memory broker only).
 	SeedMemory bool
+	// StyleGuide is what a style finding on a publish cites; "" cites the
+	// baseline rules.
+	StyleGuide string
 	// Tools is the tool surface this profile registers.
 	Tools []mcp.Tool
 }
@@ -37,6 +41,7 @@ func KnowledgeProfile() *Profile {
 		Name:         core.ProfileKnowledge,
 		ServerName:   "demarkus-knowledge-broker",
 		Instructions: knowledgeInstructions,
+		StyleGuide:   gate.KnowledgeGuide,
 		Tools:        mcpTools(),
 	}
 }

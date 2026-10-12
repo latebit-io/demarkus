@@ -26,12 +26,12 @@ var (
 // catalog summary, so it must say something without the body.
 const minDescriptionWords = 6
 
-// shapeProblems checks the summary and heading rules. Hubs and journals are
+// ShapeProblems checks the summary and heading rules. Hubs and journals are
 // exempt from the summary rules: navigation has no summary, a journal's is
 // its date.
-func shapeProblems(url, body string, headings []mdoutline.Heading) []string {
+func ShapeProblems(url, body string, headings []mdoutline.Heading) []string {
 	var problems []string
-	if !navExempt(leafOf(url)) && !journalPath(url) {
+	if !NavExempt(url) && !journalPath(url) {
 		title, summary, ok := summaryUnderH1(body, headings)
 		switch {
 		case ok && strings.TrimSpace(summary) == "" && headingFollowsH1(headings):
@@ -63,10 +63,10 @@ func shapeProblems(url, body string, headings []mdoutline.Heading) []string {
 	return problems
 }
 
-// descriptionProblems checks metadata.description: a word floor, the summary
+// DescriptionProblems checks metadata.description: a word floor, the summary
 // rules, and identity with the H1 summary line so neither copy drifts.
 // Empty is not a problem here; presence is the publish policy's job.
-func descriptionProblems(body string, headings []mdoutline.Heading, description string) []string {
+func DescriptionProblems(body string, headings []mdoutline.Heading, description string) []string {
 	description = strings.TrimSpace(description)
 	if description == "" {
 		return nil

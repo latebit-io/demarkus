@@ -133,14 +133,14 @@ func TestWritesReconcileAfterAnUnknownOutcome(t *testing.T) {
 		{
 			name: "publish fail mode, landed",
 			call: func(tools *marktools.Tools) marktools.Result {
-				return tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: "mine", ExpectedVersion: new(3), OnConflict: "fail"})
+				return tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: "# mine\n", ExpectedVersion: new(3), OnConflict: "fail"})
 			},
-			head: fetchtest.Head("mine", 4, sentMeta), wantText: "status: ok\nversion: 4\n",
+			head: fetchtest.Head("# mine\n", 4, sentMeta), wantText: "status: ok\nversion: 4\n",
 		},
 		{
 			name: "publish fail mode, not landed",
 			call: func(tools *marktools.Tools) marktools.Result {
-				return tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: "mine", ExpectedVersion: new(3), OnConflict: "fail"})
+				return tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: "# mine\n", ExpectedVersion: new(3), OnConflict: "fail"})
 			},
 			head: fetchtest.Head("theirs", 4, nil), wantErr: true,
 			wantText: "publish failed: read response: request sent but outcome unknown; it may have landed: fetch the document before retrying",

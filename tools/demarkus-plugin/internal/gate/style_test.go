@@ -13,6 +13,8 @@ func styleInput(body string) *Input {
 	}}
 }
 
+// The rules are tested in client/docwrite/gate; here only how the hook
+// applies them: which verbs, at what strictness, on which surfaces.
 func TestStyleGate(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
 
@@ -23,64 +25,10 @@ func TestStyleGate(t *testing.T) {
 		}
 	})
 
-	t.Run("frontmatter fence warns", func(t *testing.T) {
-		d := mustEval(t, styleInput("---\nname: doc\ntype: reference\n---\n# Title\n\nBody.\n"))
-		if d.Decision != "warn" || !strings.Contains(d.Reason, "frontmatter fence") {
-			t.Fatalf("want warn about fence, got %q (%s)", d.Decision, d.Reason)
-		}
-	})
-
-	t.Run("horizontal rule start is not a fence", func(t *testing.T) {
-		d := mustEval(t, styleInput("---\n\n# Title\n\nBody after a rule.\n"))
-		if d.Decision != "allow" {
-			t.Fatalf("want allow, got %q (%s)", d.Decision, d.Reason)
-		}
-	})
-
-	t.Run("missing H1 warns", func(t *testing.T) {
-		d := mustEval(t, styleInput("Just prose with no heading at all.\n"))
-		if d.Decision != "warn" || !strings.Contains(d.Reason, "H1") {
-			t.Fatalf("want warn about H1, got %q (%s)", d.Decision, d.Reason)
-		}
-	})
-
-	t.Run("index.md exempt from H1", func(t *testing.T) {
-		d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
-			"url": "/world/index.md", "body": "- [a](a.md)\n", "metadata": map[string]any{"tags": "a"},
-		}})
-		if d.Decision != "allow" {
-			t.Fatalf("want allow, got %q (%s)", d.Decision, d.Reason)
-		}
-	})
-
-	t.Run("em dash warns", func(t *testing.T) {
-		d := mustEval(t, styleInput("# Title\n\nA sentence — with an em dash.\n"))
-		if d.Decision != "warn" || !strings.Contains(d.Reason, "em dash") {
-			t.Fatalf("want warn about em dash, got %q (%s)", d.Decision, d.Reason)
-		}
-	})
-
-	t.Run("duplicate headings warn", func(t *testing.T) {
-		d := mustEval(t, styleInput("# Title\n\n## Notes\n\na\n\n## Notes\n\nb\n"))
-		if d.Decision != "warn" || !strings.Contains(d.Reason, "duplicate headings") {
-			t.Fatalf("want warn about duplicates, got %q (%s)", d.Decision, d.Reason)
-		}
-	})
-
-	t.Run("em dash inside a code fence still warns", func(t *testing.T) {
-		// By design: the guide bans em dashes in examples too, and fenced
-		// examples are what readers copy.
-		d := mustEval(t, styleInput("# Title\n\n```text\nquoted — output\n```\n"))
-		if d.Decision != "warn" || !strings.Contains(d.Reason, "em dash") {
-			t.Fatalf("want warn about em dash, got %q (%s)", d.Decision, d.Reason)
-		}
-	})
-
-	t.Run("hash comments in code fences are not headings", func(t *testing.T) {
-		body := "# Title\n\n```bash\n# comment\n# comment\n```\n\nProse.\n"
-		d := mustEval(t, styleInput(body))
-		if d.Decision != "allow" {
-			t.Fatalf("want allow, got %q (%s)", d.Decision, d.Reason)
+	t.Run("flawed body warns and names the fix", func(t *testing.T) {
+		d := mustEval(t, styleInput("No heading — and an em dash.\n"))
+		if d.Decision != "warn" || !strings.Contains(d.Reason, "H1") || !strings.Contains(d.Reason, "Also: 1 em dash") || !strings.Contains(d.Reason, "DEMARKUS_STYLE_STRICTNESS") {
+			t.Fatalf("want warn naming both problems, got %q (%s)", d.Decision, d.Reason)
 		}
 	})
 
@@ -123,50 +71,21 @@ func TestStyleGate(t *testing.T) {
 		d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
 			"url": "/k.md", "body": "prose — no heading", "metadata": map[string]any{"tags": "a,b", "type": "Note"},
 		}})
-		if d.Decision != "warn" || !strings.Contains(d.Reason, "style") {
-			t.Fatalf("want style warn, got %q (%s)", d.Decision, d.Reason)
+		if d.Decision != "warn" || !strings.Contains(d.Reason, "style.md") {
+			t.Fatalf("want style warn citing the guide, got %q (%s)", d.Decision, d.Reason)
 		}
 	})
 }
 
+// metadata.description reaches the rules from the hook payload.
 func TestStyleGateDescription(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
 	body := "# Title\n\nA summary sentence long enough to pass the floor.\n\n## Setup\n\nSteps.\n"
-	in := func(description string) *Input {
-		return &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
-			"url": "/doc.md", "body": body, "metadata": map[string]any{"tags": "a,b", "description": description},
-		}}
-	}
-	if d := mustEval(t, in("A summary sentence long enough to pass the floor.")); d.Decision != "allow" {
-		t.Fatalf("want allow, got %q (%s)", d.Decision, d.Reason)
-	}
-	d := mustEval(t, in("Something else entirely, long enough to pass the floor."))
+	d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+		"url": "/doc.md", "body": body, "metadata": map[string]any{"tags": "a,b", "description": "Something else entirely, long enough to pass the floor."},
+	}})
 	if d.Decision != "warn" || !strings.Contains(d.Reason, "differs from the summary line") {
 		t.Fatalf("want warn about the mismatch, got %q (%s)", d.Decision, d.Reason)
-	}
-}
-
-func TestBodyOpensWithFrontmatter(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-		want bool
-	}{
-		{"classic block", "---\nname: x\n---\nbody", true},
-		{"crlf block", "---\r\ntype: Note\r\n---\r\nbody", true},
-		{"leading blank lines", "\n\n---\ntags: a\n---\n", true},
-		{"horizontal rule only", "---\n\ntext\n", false},
-		{"rule then heading", "---\n# Title\n---\n", false},
-		{"no opening fence", "# Title\n---\nkey: v\n---\n", false},
-		{"unclosed fence", "---\nkey: v\nno close", false},
-		{"kv with spaces in key is prose", "---\nthis is: prose\n---\n", false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := bodyOpensWithFrontmatter(c.body); got != c.want {
-				t.Errorf("bodyOpensWithFrontmatter(%q) = %v, want %v", c.body, got, c.want)
-			}
-		})
 	}
 }
 

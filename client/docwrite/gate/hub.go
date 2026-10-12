@@ -2,6 +2,7 @@ package gate
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -41,9 +42,10 @@ type bullet struct {
 	multiBlock bool
 }
 
-// hubProblems applies the hub rules when the document is a hub: index.md at
+// HubProblems applies the hub rules when the document is a hub: index.md at
 // any depth, or a body that is mostly link bullets. Reads only the body.
-func hubProblems(leaf, body string) []string {
+func HubProblems(url, body string) []string {
+	leaf := path.Base(url)
 	items, textLines := listItems(body)
 	if leaf != "index.md" && !linkPage(items, textLines) {
 		return nil
@@ -119,8 +121,7 @@ func outboundDocs(body string) int {
 func listItems(body string) (items []bullet, textLines int) {
 	src := []byte(body)
 	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
-	// The callback never returns an error, so Walk cannot either.
-	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) { //nolint:errcheck // the callback never returns an error
 		if !entering {
 			return ast.WalkContinue, nil
 		}
