@@ -94,10 +94,10 @@ response deliberately exposes each internal topology address to authenticated
 identities so graph consumers can join host-keyed edges to logical worlds.
 
 Path traversal, query strings, and fragments are rejected by the
-gateway parser (strict shape, clear errors). The crawler used by
+gateway parser (strict shape, clear errors). The link crawl behind
 `mark_graph` is lenient about `?query` and `#fragment` on outbound
 links it discovers in document bodies, because real-world markdown
-embeds them; that leniency is crawler-scoped only, never the parser
+embeds them; that leniency is crawl-scoped only, never the parser
 for caller-supplied URLs.
 
 ## Tool profiles
@@ -332,8 +332,8 @@ Returns an empty hint if the store is empty.
 
 Export the broker's graph store and publish it to a world in one
 step. `mark_graph_export` + `mark_publish` combined. This manual tool writes the
-single-document export to `url` (conventionally `/graph.md`); federation-agent snapshots are loaded
-automatically from `/graph/manifest.md` when present. This tool does not seed
+single-document export to `url` (conventionally `/graph.md`); in a knowledge
+system the hub's deriver checkpoints are seeded automatically. This tool does not seed
 the store itself; run `mark_graph`, `mark_backlinks`, or `mark_explore` first.
 
 | Param | Type | Required | Notes |

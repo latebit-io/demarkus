@@ -14,9 +14,9 @@ Two access paths: MCP over HTTPS for agents, web or CLI for humans.
 ## What are a world, a hub, root, and an index?
 
 - **World**: one demarkus server in a knowledge system, addressed by logical name. Own namespace, store, tokens, and release. It may describe itself in an optional `world.md`; a world without one still works.
-- **Hub**: an ordinary world that receives published aggregates, the graph exports (`/graph/manifest.md` snapshots plus legacy `/graph.md`). Backlink seeding reads from it. Not a protocol or server concept: the server binary has no hub mode, and `hub: true` is a deploy-repo flag the crawler reads.
+- **Hub**: an ordinary world that receives the federation graph: per-world checkpoints under `/graph/worlds/<world>/` plus the rendered `/graph.md`. Backlink seeding reads from it. Not a protocol or server concept: the server binary has no hub mode, and `hub: true` is a deploy-repo flag that tells the knowledge server which world to checkpoint into.
 - **Root**: the conventional name for the hub world. Not guaranteed by the protocol. The deploy only checks that some world sets `hub: true`, but the name `root` is hardcoded in the secret store and library config, so in practice the hub must be called root.
-- **Index**: `index.md` is a curated entry-point document, the discovery backstop for what lookup can't surface. Nothing generated writes there: the crawler's machine hash indexes under `/index/<host>.md` went with content-addressed fetch (ADR 0035).
+- **Index**: `index.md` is a curated entry-point document, the discovery backstop for what lookup can't surface. Nothing generated writes there: the old crawler's machine hash indexes under `/index/<host>.md` went with content-addressed fetch (ADR 0035), and the crawler itself with ADR 0039.
 
 ## What automated cues push agents to record memory?
 
@@ -76,19 +76,19 @@ so a deep crawl usually stops on the node cap rather than the depth limit).
 
 - Edges carry provenance: link label, source section anchor, occurrence count.
 - Typed relations come from `rel-<predicate>` publisher metadata, e.g. `rel-supersedes`.
-- Crawls persist to a graph store that answers `mark_backlinks`; seeded from a verified `/graph/manifest.md` snapshot with `/graph.md` fallback, local crawls take precedence.
+- Crawls persist to a graph store that answers `mark_backlinks`; a cold gateway seeds it from the hub's checkpoints, with `/graph.md` as fallback, and local crawls take precedence.
 - `mark_graph_publish` republishes the store as a crawlable `/graph.md` (the legacy single-document form; generated doc, default retention 20). In a knowledge system the server's deriver checkpoints version-pinned per-world shards into the hub.
 
 ## How is the graph built world to world?
 
-A scheduled agent builds it; the broker reads what that agent publishes.
+The knowledge server derives it in process (ADR 0034); the gateways read what it checkpoints.
 
-- The agent is configured with a seed URL per content world and crawls each one. The hub is not crawled; it is where results are published.
-- It merges every world's edges into one graph, publishes an atomic `/graph/manifest.md` snapshot, then updates compatible `/graph.md` on the hub. Graph publishing is off by default and switched on in this deployment.
-- Each run rebuilds from scratch, so a world that fails to answer is skipped and drops out of the published graph until the next successful crawl.
-- Cross-world links are ordinary `mark://{worldName}/{path}` links, so an edge from one world to another is just a link the crawl followed.
-- The broker's own graph store is in-memory and pod-scoped. It loads the hub's verified snapshot, or legacy `/graph.md`, on demand so a fresh pod answers backlinks without crawling.
-- A world with no published graph falls back to on-demand `mark_graph` crawls only.
+- One replica, Lease-elected, follows every world's change feed through an in-process WATCH and extracts links and `rel-` relations from each changed document. No crawl, no token, no separate workload.
+- After a quiet period it checkpoints the world's graph into the hub as version-pinned shards under `/graph/worlds/<world>/` with a manifest committed last, writing only shards whose bytes changed, then renders the hub's `/graph.md` from every world's checkpoint.
+- A world that stops answering keeps its last checkpoint; nothing is dropped until the world changes again.
+- Cross-world links are ordinary `mark://{worldName}/{path}` links, so an edge from one world to another is just a link the deriver extracted.
+- The gateway's own graph store is in-memory and pod-scoped. It loads the hub's checkpoints, or `/graph.md`, on demand so a fresh pod answers backlinks without crawling.
+- A world with no checkpoint yet falls back to on-demand `mark_graph` crawls only.
 
 ## Is edge information there to guide agents to relevant information?
 
@@ -116,7 +116,7 @@ A knowledge system is distributed: many logically isolated worlds behind one bro
 
 - At production scale, one multi-replica `demarkus-knowledge-server` Deployment hosts every world: TLS SNI selects the world per connection, and each world keeps its own GCS bucket (with an immutable world ID), tokens, policy, and rate limits. The earlier shape, one StatefulSet per world, is superseded by this.
 - A world is an independent failure domain for its own content: its bucket, tokens, and policy are its own, and other worlds keep serving and answering lookups.
-- A world being down degrades shared state: the next crawl silently omits its nodes and edges from the hub graph, so cross-world backlinks for it disappear until a later successful crawl. If the down world is the hub, cross-world discovery goes with it.
+- A world being down degrades shared state: its checkpoint in the hub stops advancing, so cross-world backlinks for it go stale until it answers again. If the down world is the hub, checkpoints and cross-world discovery go with it.
 - Adding a world is one entry in the server's `worlds[]` config plus a bucket bootstrap; no new workload.
 - Replicas are stateless over shared GCS; writes commit as create-only log slots that replicas race to create, with no leader election. The chart refuses fewer than 2 replicas.
 - The world list and deployment identity are declared once and reconciled by ArgoCD. Versions, secrets, bootstrap, and the hub name are not.
@@ -127,7 +127,7 @@ A knowledge system is distributed: many logically isolated worlds behind one bro
 - Reads go to the world's server every time. The client revalidates with `if-none-match` / `if-modified-since`, so a cached body is only reused when the server confirms it.
 - Each write creates a new hash-chained version. Re-writing identical content is a no-op that returns the existing version rather than a new one.
 - Optimistic concurrency (`expected_version` plus merge-on-conflict) stops stale writes clobbering newer ones.
-- A scheduled agent re-crawls every world and republishes the graph on the hub.
+- The knowledge server's deriver checkpoints a world's graph into the hub after each change settles, so the hub graph follows the change feeds rather than a crawl schedule.
 - Memory copies of promoted documents can go stale. Refresh runs one way only: `/soul-refresh` copies the knowledge system's version down to the memory, and `/promote` is the only way a memory edit goes back up. There is no two-way sync.
 
 ## How do diffs and merges work?
