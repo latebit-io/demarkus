@@ -285,7 +285,7 @@ the current version (one extra round trip, invisible to the agent).
 | `url` | string | yes | `mark://{worldName}/{path}`; with `route: "today"` a directory, `mark://{worldName}/` or a project under it. |
 | `body` | string | yes | Markdown to append. |
 | `expected_version` | number | no | Pass explicitly to skip the auto-resolve round trip. |
-| `route` | string | no | `today`: the entry goes to `<dir><journal>/<YYYY-MM-DD>.md` (UTC; the directory from the world's template layout, `journal/` by default), created with `journal` tags, `type: Journal` and importance 0.4 when absent. An entry already present as its own block answers `status: present` without writing. The directory hub gains a link to `journal/` and, under a project, the root hub a link to the project; each hub failure is a `note:`, the entry stays committed. |
+| `route` | string | no | `today`: the entry goes to `<dir><journal>/<YYYY-MM-DD>.md` (UTC; the directory from the world's template layout, `journal/` by default), created with `journal` tags, `type: Journal` and importance 0.4 when absent. An entry already present as its own block answers `status: present` without writing. The directory hub gains a link to the configured journal directory and, under a project, the root hub a link to the project; each hub failure is a `note:`, the entry stays committed. |
 | `tags` | string | no | With `route: "today"`: comma-separated subjects of the entry, added to the journal's tags (widened by a republish when the day already exists). |
 
 #### `mark_archive`
@@ -327,9 +327,12 @@ sections, and its tags lose the ones only a topic mentions.
 With `apply: true` and the hash a report returned, the tool recomputes
 the proposal from the current head and refuses when the hash differs.
 It then preflights every topic path (absent: created at version 0;
-identical to the proposal: skipped; anything else: refused before any
-write), publishes the topics, then the document at the reported
-version with `on_conflict: fail`. A failure names what landed.
+identical to the proposal: skipped; carrying `curated-from` naming
+this document, from an earlier apply the hub conflict interrupted:
+updated at its version; anything else: refused before any write),
+publishes the topics, then the document at the reported version with
+`on_conflict: fail`. A failure names what landed; a report rerun after
+it resumes.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |

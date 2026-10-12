@@ -308,6 +308,7 @@ func TestPromotionCandidates(t *testing.T) {
 		"/notes.md":              {Body: body, Meta: map[string]string{"tags": "n", "type": "Note", "importance": "0.9"}},
 		"/journal/2026-01-01.md": {Body: body, Meta: map[string]string{"tags": "j", "type": "Decision", "importance": "1"}},
 		"/plans/p.md":            {Body: body, Meta: map[string]string{"tags": "p", "type": "Plan", "importance": "0.5"}},
+		"/nan.md":                {Body: body, Meta: map[string]string{"tags": "n", "type": "Note", "importance": "NaN"}}, // not a number is below the floor
 	}
 	r, err := Run(context.Background(), newFake(docs), Options{Scope: "/", Promotion: true})
 	if err != nil {

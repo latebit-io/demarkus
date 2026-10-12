@@ -145,7 +145,7 @@ func TestDropLinksEditsOnlyWhenABulletGoes(t *testing.T) {
 	}
 }
 
-func TestAncestorsAndDropFromAncestors(t *testing.T) {
+func TestAncestorsAndDropFromHubs(t *testing.T) {
 	if got := Ancestors("/a/b/c.md"); strings.Join(got, " ") != "/a/b/index.md /a/index.md /index.md" {
 		t.Errorf("ancestors = %v", got)
 	}
@@ -160,7 +160,10 @@ func TestAncestorsAndDropFromAncestors(t *testing.T) {
 		"h/index.md":   {Response: protocol.Response{Status: protocol.StatusUnauthorized}},
 	}}
 	docs := func(p string) *docwrite.Doc { return docOn(backend, p) }
-	got := DropFromAncestors(t.Context(), docs, "/a/b/c.md", &Drop{Targets: []string{"/a/b/c.md"}})
+	if got := AncestorsOf("/a/b/c.md", "/a/d.md"); strings.Join(got, " ") != "/a/b/index.md /a/index.md /index.md" {
+		t.Errorf("union = %v", got)
+	}
+	got := DropFromHubs(t.Context(), docs, AncestorsOf("/a/b/c.md"), &Drop{Targets: []string{"/a/b/c.md"}})
 	if len(got) != 3 || got[0].Dropped != 0 || got[1].Dropped != 1 || got[2].Err == nil {
 		t.Errorf("drop = %+v", got)
 	}

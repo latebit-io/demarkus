@@ -13,7 +13,7 @@ Archived: fetches as `archived`, every version kept, no unarchive tool (the oper
 
 1. **Confirm the project** from the identity check above: identity unknown: stop. Target outside `/<slug>/`: the user confirms it, else stop. Target inside: new project: nothing to archive, say so, stop.
 
-2. **Collect.** Document: `mark_fetch`; `ok` continues; `archived` or `not-found`: say so, stop; other failure: surface, stop. Directory: `mark_list` to count the live documents (`next-cursor` as `cursor` until `complete: true`, recurse into subdirectories); `not-found` or none: say so, stop; a listing failure: surface, stop.
+2. **Collect.** Document: `mark_fetch`; `ok` continues; `archived` or `not-found`: say so, stop; other failure: surface, stop. Directory: `mark_list` to count the live documents (`next-cursor` as `cursor` until `complete: true`, recurse into subdirectories; over 100 list calls or 500 documents: stop, ask for a narrower directory); `not-found` or none: say so, stop; a listing failure: surface, stop.
 
 3. **Gate.** Approval on the exact target: the document, or the directory with its document count. Declined: stop, nothing written.
 

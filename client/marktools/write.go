@@ -354,7 +354,7 @@ func (t *Tools) Archive(ctx context.Context, args ArchiveArgs) Result {
 		}
 		out := formatResult(&result, "version")
 		if landed(&result) {
-			out += t.dropHubLinks(ctx, target, write, []string{target.Path})
+			out += t.dropHubLinks(ctx, target, write, &unlink{hubs: hub.Ancestors(target.Path), targets: []string{target.Path}})
 		}
 		return text(out)
 	}
@@ -379,17 +379,17 @@ func (t *Tools) Archive(ctx context.Context, args ArchiveArgs) Result {
 			fmt.Fprintf(&b, "- %s: v%s\n", p, result.Response.Metadata["version"])
 		}
 	}
-	all := len(archived) == len(paths)
-	status, targets := "partial", archived
-	if all {
-		// A bullet linking the directory goes only when nothing live is left under it.
-		status, targets = "archived", []string{target.Path}
+	// A bullet linking the directory goes only when nothing live is left
+	// under it; a partial sweep unlinks each archived path from its own hubs.
+	status, u := "partial", &unlink{hubs: hub.AncestorsOf(archived...), targets: archived}
+	if len(archived) == len(paths) {
+		status, u = "archived", &unlink{hubs: hub.Ancestors(target.Path), targets: []string{target.Path}}
 	}
-	hubs := ""
+	dropped := ""
 	if len(archived) > 0 {
-		hubs = t.dropHubLinks(ctx, target, write, targets)
+		dropped = t.dropHubLinks(ctx, target, write, u)
 	}
-	return text(fmt.Sprintf("status: %s\narchived: %d of %d\n%s%s", status, len(archived), len(paths), b.String(), hubs))
+	return text(fmt.Sprintf("status: %s\narchived: %d of %d\n%s%s", status, len(archived), len(paths), b.String(), dropped))
 }
 
 // archiveOne archives one document and observes it into the graph.
@@ -416,12 +416,15 @@ func (t *Tools) liveUnder(ctx context.Context, target Target) ([]string, error) 
 	return paths, err
 }
 
-// dropHubLinks drops the targets' bullets from every ancestor hub of the
-// target, reported as lines; a hub that could not be edited is a note.
-func (t *Tools) dropHubLinks(ctx context.Context, target Target, write WriteFunc, targets []string) string {
+// unlink names the hubs to edit and what they must stop linking.
+type unlink struct{ hubs, targets []string }
+
+// dropHubLinks drops the targets' bullets from the hubs, reported as lines;
+// a hub that could not be edited is a note.
+func (t *Tools) dropHubLinks(ctx context.Context, target Target, write WriteFunc, u *unlink) string {
 	docs := func(p string) *docwrite.Doc { return t.doc(ctx, target.at(p), write) }
 	var b strings.Builder
-	for _, d := range hub.DropFromAncestors(ctx, docs, target.Path, &hub.Drop{Targets: targets, Stamp: t.identityMeta(ctx)}) {
+	for _, d := range hub.DropFromHubs(ctx, docs, u.hubs, &hub.Drop{Targets: u.targets, Stamp: t.identityMeta(ctx)}) {
 		switch {
 		case d.Err != nil:
 			b.WriteString(mcpfmt.Note(d.Err.Error()))

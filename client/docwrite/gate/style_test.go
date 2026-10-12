@@ -88,6 +88,9 @@ func TestSizeRuleAppliesToEveryDocumentButJournals(t *testing.T) {
 	if got := Problems("/journal/2026-10-12.md", big, ""); len(got) != 0 {
 		t.Errorf("journal = %v", got)
 	}
+	if got := Problems("/log.md", big, ""); len(got) != 1 || !strings.Contains(got[0], "fetch threshold") {
+		t.Errorf("prose log is outlined like any document: %v", got)
+	}
 	hub := "# Hub\n\n" + strings.Repeat("- [a](/a.md): one\n", 600)
 	got := Problems("/index.md", hub, "")
 	if n := strings.Count(strings.Join(got, "\n"), "fetch threshold"); n != 1 {

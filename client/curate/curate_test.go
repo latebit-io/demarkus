@@ -95,7 +95,7 @@ func TestSplitMovesHeadingsVerbatimAndKeepsTheFrame(t *testing.T) {
 	if topic.Path != "/plans/big/steps.md" || !strings.HasPrefix(topic.Body, "# Big plan: Steps\n\nPart of [Big plan](/plans/big.md).\n\n## Steps\n\nFirst sentence of steps. Second.\n\n### Steps detail\n") {
 		t.Errorf("topic = %s\n%s", topic.Path, topic.Body[:200])
 	}
-	if topic.Metadata["tags"] != "big,steps" || topic.Metadata["importance"] != "0.7" || topic.Metadata["type"] != "Plan" || topic.Metadata["title"] != "" {
+	if topic.Metadata["tags"] != "big,steps" || topic.Metadata["importance"] != "0.7" || topic.Metadata["type"] != "Plan" || topic.Metadata["title"] != "" || topic.Metadata[CuratedFrom] != "/plans/big.md" {
 		t.Errorf("topic metadata = %v", topic.Metadata)
 	}
 	hub := p.Writes[3]
@@ -140,6 +140,15 @@ func TestSplitMovesShortSectionsWhenTheHubWouldStillOverflow(t *testing.T) {
 	}
 	if hub := p.Writes[len(p.Writes)-1]; len(hub.Body) >= 8*1024 {
 		t.Errorf("hub still %d bytes", len(hub.Body))
+	}
+}
+
+func TestReplaceEmDashes(t *testing.T) {
+	in := "a — b\n— lead\n- — item\n`x — y` and z—w\n```\nc — d\n```\ne —  f\n"
+	got, n := replaceEmDashes(in)
+	want := "a, b\n— lead\n- — item\n`x — y` and z, w\n```\nc — d\n```\ne, f\n"
+	if got != want || n != 3 {
+		t.Errorf("n %d\n%s\nwant\n%s", n, got, want)
 	}
 }
 
@@ -194,6 +203,14 @@ func TestApplyPreflightsTopicsAndWritesTheHubLast(t *testing.T) {
 	}
 	if len(backend.PublishCalls) != 3 || backend.PublishCalls[0].ExpectedVersion != 0 || backend.PublishCalls[2].Path != "/plans/big.md" || backend.PublishCalls[2].ExpectedVersion != 2 || backend.PublishCalls[2].Metadata["agent"] != "a" {
 		t.Errorf("publishes = %+v", backend.PublishCalls)
+	}
+
+	// A topic an earlier apply of this document created is updated at its version, never refused.
+	stale := fetchtest.Head("# Big plan: Design\n\nolder split\n", 3, map[string]string{CuratedFrom: "/plans/big.md", "tags": "x"})
+	backend = &fetchtest.Client{Published: map[string]fetch.Result{"h/plans/big/design.md": stale, "h/plans/big.md": fetchtest.Head(in.Body, 2, in.Metadata)}}
+	applied, err = Apply(t.Context(), docsOn(backend), &p, stamp)
+	if err != nil || applied[0].Action != ActionUpdated || backend.PublishCalls[0].ExpectedVersion != 3 {
+		t.Fatalf("resumed split: %v %+v %+v", err, applied[0], backend.PublishCalls[0])
 	}
 
 	backend = &fetchtest.Client{PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {

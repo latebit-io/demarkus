@@ -109,9 +109,12 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	for _, r := range renamed {
 		p.Fixed = append(p.Fixed, fmt.Sprintf("heading %q is now %q with its status on the line under it", r.from, r.to))
 	}
-	if n := gate.EmDashCount(body); n > 0 {
-		body = emDash.ReplaceAllString(body, ", ")
-		p.Fixed = append(p.Fixed, fmt.Sprintf("%d em dash(es) replaced with a comma", n))
+	if total := gate.EmDashCount(body); total > 0 {
+		var n int
+		body, n = replaceEmDashes(body)
+		if n > 0 {
+			p.Fixed = append(p.Fixed, fmt.Sprintf("%d of %d em dash(es) replaced with a comma; the rest are in code or open a line", n, total))
+		}
 	}
 	after := mdoutline.Headings(body)
 	if desc := strings.TrimSpace(meta["description"]); desc != "" && gate.MissingSummary(body, after) {
@@ -142,9 +145,56 @@ func (p *Proposal) moved(anchor, to string) {
 }
 
 var (
-	emDash     = regexp.MustCompile(`[ \t]*—[ \t]*`)
-	parenGroup = regexp.MustCompile(`\s*\([^()]*\)`)
+	parenGroup    = regexp.MustCompile(`\s*\([^()]*\)`)
+	lineStartDash = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])?\s*—`)
 )
+
+// replaceEmDashes turns em dashes into commas outside code fences, code
+// spans and line starts, where a dash may be a bullet; n is what changed.
+func replaceEmDashes(body string) (out string, n int) {
+	lines := strings.Split(body, "\n")
+	inFence := false
+	for i, line := range lines {
+		if t := strings.TrimSpace(line); strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if !inFence && strings.Contains(line, "—") {
+			lines[i] = replaceOutsideCode(line, &n)
+		}
+	}
+	return strings.Join(lines, "\n"), n
+}
+
+// replaceOutsideCode replaces one line's em dashes outside backtick spans,
+// a dash that opens the line kept, surrounding blanks folded into ", ".
+func replaceOutsideCode(line string, n *int) string {
+	keep := 0
+	if m := lineStartDash.FindStringIndex(line); m != nil {
+		keep = m[1]
+	}
+	out, rest := []rune(line[:keep]), []rune(line[keep:])
+	inCode := false
+	for i := 0; i < len(rest); i++ {
+		r := rest[i]
+		if r == '`' {
+			inCode = !inCode
+		}
+		if r != '—' || inCode {
+			out = append(out, r)
+			continue
+		}
+		*n++
+		for len(out) > 0 && (out[len(out)-1] == ' ' || out[len(out)-1] == '\t') {
+			out = out[:len(out)-1]
+		}
+		out = append(out, ',', ' ')
+		for i+1 < len(rest) && (rest[i+1] == ' ' || rest[i+1] == '\t') {
+			i++
+		}
+	}
+	return string(out)
+}
 
 // lift moves the fence's keys into meta (a key the document already carries
 // wins; name is the title; reserved and identity keys never) and names them.
@@ -333,7 +383,7 @@ func topicWrite(title, parentPath string, carried map[string]string, s *section)
 			tags = protocol.MergeTags(tags, []string{tag})
 		}
 	}
-	meta := map[string]string{"tags": strings.Join(tags, ","), "importance": topicImportance(carried["importance"])}
+	meta := map[string]string{"tags": strings.Join(tags, ","), "importance": topicImportance(carried["importance"]), CuratedFrom: parentPath}
 	if t := carried["type"]; t != "" {
 		meta["type"] = t
 	}
@@ -535,6 +585,10 @@ func metaLine(meta map[string]string) string {
 	return strings.Join(parts, "; ")
 }
 
+// CuratedFrom is the metadata key a topic carries naming the document it
+// was split from, so a resumed split may update it and nothing else may.
+const CuratedFrom = "curated-from"
+
 // Applied is one write the apply made or found in place.
 type Applied struct {
 	Path     string
@@ -556,40 +610,47 @@ type Refusal struct{ Path, Reason string }
 
 func (r *Refusal) Error() string { return r.Path + ": " + r.Reason }
 
-// Apply preflights every topic path (absent created, identical skipped,
-// anything else refuses before a write), writes the topics, then the
-// document at the proposal's version. What landed comes back with any error.
+// Apply preflights every topic path (absent created, identical skipped, an
+// earlier apply's topic updated, anything else refused before a write), then
+// writes the topics and the document at its version. What landed is returned.
 func Apply(ctx context.Context, docs hub.Docs, p *Proposal, stamp map[string]string) (applied []Applied, err error) {
 	if len(p.Writes) == 0 {
 		return nil, fmt.Errorf("nothing to apply: the document is %s", p.Kind)
 	}
 	a := applier{docs: docs, stamp: stamp}
 	topics := p.Writes[:len(p.Writes)-1]
-	skip := make([]bool, len(topics))
+	// Per topic: -1 skips an identical one, 0 creates, else updates at that
+	// version a topic an earlier apply of this document left behind.
+	expected := make([]int, len(topics))
 	for i := range topics {
 		w := &topics[i]
 		h, err := docs(w.Path).Head(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("fetch %s: %w", w.Path, err)
 		}
-		switch h.Status {
-		case protocol.StatusNotFound:
-		case protocol.StatusOK:
-			if h.Body != w.Body || !maps.Equal(docwrite.Carried(h.Metadata), w.Metadata) {
-				return nil, &Refusal{Path: w.Path, Reason: "exists and differs from the proposal; nothing written"}
-			}
-			skip[i] = true
-		default:
+		switch {
+		case h.Status == protocol.StatusNotFound:
+		case h.Status != protocol.StatusOK:
 			return nil, &Refusal{Path: w.Path, Reason: "fetch: " + h.Status + "; nothing written"}
+		case h.Body == w.Body && maps.Equal(docwrite.Carried(h.Metadata), w.Metadata):
+			expected[i] = -1
+		case h.Metadata[CuratedFrom] == p.Path && h.Version > 0:
+			expected[i] = h.Version
+		default:
+			return nil, &Refusal{Path: w.Path, Reason: "exists and differs from the proposal; nothing written"}
 		}
 	}
 	for i := range topics {
 		w := &topics[i]
-		if skip[i] {
+		action := ActionCreated
+		switch {
+		case expected[i] < 0:
 			applied = append(applied, Applied{Path: w.Path, Action: ActionSkipped, Body: w.Body, Metadata: w.Metadata})
 			continue
+		case expected[i] > 0:
+			action = ActionUpdated
 		}
-		done, err := a.publish(ctx, w, 0, ActionCreated)
+		done, err := a.publish(ctx, w, max(expected[i], 0), action)
 		if err != nil {
 			return applied, err
 		}

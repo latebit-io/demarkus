@@ -170,10 +170,23 @@ type Dropped struct {
 	Err     error
 }
 
-// DropFromAncestors drops the targets' bullets from every ancestor hub of p;
-// one hub's failure does not stop the next.
-func DropFromAncestors(ctx context.Context, docs Docs, p string, drop *Drop) []Dropped {
-	hubs := Ancestors(p)
+// AncestorsOf is the ordered union of every path's ancestor hubs, nearest
+// first, each hub once.
+func AncestorsOf(paths ...string) []string {
+	var hubs []string
+	for _, p := range paths {
+		for _, h := range Ancestors(p) {
+			if !slices.Contains(hubs, h) {
+				hubs = append(hubs, h)
+			}
+		}
+	}
+	return hubs
+}
+
+// DropFromHubs drops the targets' bullets from each hub; one hub's failure
+// does not stop the next.
+func DropFromHubs(ctx context.Context, docs Docs, hubs []string, drop *Drop) []Dropped {
 	out := make([]Dropped, 0, len(hubs))
 	for _, hubPath := range hubs {
 		n, err := DropLinks(ctx, docs(hubPath), nil, drop)

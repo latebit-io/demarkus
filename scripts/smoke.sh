@@ -345,8 +345,11 @@ mcp_tools() {
   expect "mcp publish seeds a document to curate" 'created' -- mcp_call "$U" mark_publish '{"url":"/curate/c.md","body":"# C\n\nWhat C settles for its readers.\n\n## Step (DONE 2026-01-01)\n\ntext\n","expected_version":0,"metadata":{"tags":"smoke","importance":"0.1"}}'
   expect "mcp curate reports a dated heading" 'status: edit' -- mcp_call "$U" mark_curate '{"url":"/curate/c.md"}'
   curate_hash=$(mcp_call "$U" mark_curate '{"url":"/curate/c.md"}' | sed -n 's/.*proposal: \([0-9a-f]*\).*/\1/p' | head -n1)
-  expect "mcp curate apply writes the proposal" 'status: applied' -- mcp_call "$U" mark_curate "{\"url\":\"/curate/c.md\",\"apply\":true,\"proposal\":\"$curate_hash\"}"
-  expect "mcp curate apply moved the status under the heading" 'Status: DONE' -- mcp_call "$U" mark_fetch '{"url":"/curate/c.md"}'
+  expect "mcp curate report carries a proposal hash" '^[0-9a-f]{16}$' -- printf '%s\n' "$curate_hash"
+  if [ -n "$curate_hash" ]; then
+    expect "mcp curate apply writes the proposal" 'status: applied' -- mcp_call "$U" mark_curate "{\"url\":\"/curate/c.md\",\"apply\":true,\"proposal\":\"$curate_hash\"}"
+    expect "mcp curate apply moved the status under the heading" 'Status: DONE' -- mcp_call "$U" mark_fetch '{"url":"/curate/c.md"}'
+  fi
   expect "mcp archive recursive sweeps the directory" 'archived: 1 of 1' -- mcp_call "$U" mark_archive '{"url":"/curate/","recursive":true}'
   expect "mcp archive recursive hid the document" 'archived' -- mcp_call "$U" mark_fetch '{"url":"/curate/c.md"}'
   refute "mcp stderr has no panic" 'panic|fatal error' -- cat "$WORK/mcp.log"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math"
 	"path"
 	"regexp"
 	"slices"
@@ -416,8 +417,8 @@ func promotionReason(p string, meta map[string]string, l *layout.Layout) string 
 	}
 	kind := meta["type"]
 	importance, parseErr := strconv.ParseFloat(meta["importance"], 64)
-	if parseErr != nil {
-		importance = 0 // unparsable or absent: below the floor
+	if parseErr != nil || math.IsNaN(importance) || math.IsInf(importance, 0) {
+		importance = 0 // unparsable, absent or not a number: below the floor
 	}
 	if !adr && !slices.Contains(l.PromoteTypes, kind) && importance < l.PromoteFloor {
 		return ""

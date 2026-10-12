@@ -70,7 +70,7 @@ func Findings(problems []string, guide string) string {
 // sizeProblems applies the fetch threshold to a document that is not a
 // journal, which grows by the day and is read by section.
 func sizeProblems(url, body string) []string {
-	if len(body) < mdoutline.OutlineThreshold || NavExempt(url) || journalPath(url) {
+	if len(body) < mdoutline.OutlineThreshold || journalPath(url) {
 		return nil
 	}
 	return []string{fmt.Sprintf(
