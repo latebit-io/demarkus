@@ -8,7 +8,7 @@ Demarkus is a markdown‑native document protocol built on QUIC. The repository 
 
 - **`protocol/`**: wire format and parsing/serialization only
 - **`server/`**: QUIC servers: `demarkus-server` (filesystem), `demarkus-knowledge-server` (multi-world, GCS)
-- **`client/`**: CLI, TUI, MCP server, and the federation agent
+- **`client/`**: CLI, TUI, and MCP server
 - **`tools/`**: the OIDC broker/MCP gateway, token tooling, direct-to-store publish, load testing
 - **`plugins/`**: agent plugins for Claude Code, OpenCode, and pi
 - **`deploy/`**: Helm charts, Kubernetes examples, and the kind dev harness
@@ -45,12 +45,11 @@ Core server pieces:
 
 ### Clients
 
-The client module ships four tools:
+The client module ships three tools:
 
 - **`demarkus`** (CLI): fetch/list/publish/versions + graph crawl
 - **`demarkus-tui`** (TUI): interactive markdown browser
 - **`demarkus-mcp`** (MCP server): tools for LLM agents
-- **`demarkus-agent`** (federation crawler): scheduled crawl, graph snapshots
 
 All tools share the same Mark Protocol client layer with:
 
@@ -130,7 +129,7 @@ The client-side `graphstore` package persists crawled graph data at `~/.mark/gra
 
 Backlinks ("what documents link here?") are derived from the stored graph with no server-side changes needed. The MCP `mark_backlinks` tool exposes this as a query for agents. The store is seeded on demand from the world's atomic `/graph/manifest.md` snapshot, with `/graph.md` as a compatibility fallback, so a fresh client answers backlinks before its first crawl; local crawls take precedence over seeded rows.
 
-The graph itself is exportable as a publishable markdown document. `mark_graph_export` renders the graph; `mark_graph_publish` exports and publishes the single-document form in one step. The federation agent additionally publishes version-pinned node and edge shards behind a manifest-last CAS, allowing clients to import a complete generation without recrawling original documents.
+The graph itself is exportable as a publishable markdown document. `mark_graph_export` renders the graph; `mark_graph_publish` exports and publishes the single-document form in one step. The knowledge server's deriver additionally checkpoints each world's graph as version-pinned shards behind a manifest, so a gateway seeds a complete generation without recrawling original documents.
 
 ## Open Knowledge Format (OKF) Compatibility
 
@@ -163,12 +162,13 @@ The filesystem form needs no database and no background services.
 
 ### Knowledge system
 
-`demarkus-knowledge` serves many worlds in one process and fronts them itself: it terminates MCP over HTTPS with OIDC auth, dispatches tool calls to the worlds in process, and authorizes a write by the identity's grant against the world's `allow` and `writeScope`, so no per-world token is minted. The edge is a package boundary, not a process boundary: the store handler still knows no user identity. The federation agent (`demarkus-agent`) crawls the worlds over QUIC on a schedule; with `-publish-graph` set and at least one hub configured it publishes graph snapshots to the hub, skipping publication when a crawl is incomplete.
+`demarkus-knowledge` serves many worlds in one process and fronts them itself: it terminates MCP over HTTPS with OIDC auth, dispatches tool calls to the worlds in process, and authorizes a write by the identity's grant against the world's `allow` and `writeScope`, so no per-world token is minted. The edge is a package boundary, not a process boundary: the store handler still knows no user identity. One replica derives the federation graph from every world's change feed and checkpoints it into the hub world, in process, with no token.
 
 ```text
-Agents (MCP over HTTPS, OIDC)          demarkus-agent (scheduled crawl)
-        |                                       |
+Agents (MCP over HTTPS, OIDC)
+        |
   demarkus-knowledge: gateways ── in process ── worlds (GCS buckets) ── QUIC/TLS (capability tokens)
+                      federation deriver ── checkpoints ── hub world
 ```
 
 ### Multi-world knowledge server

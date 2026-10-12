@@ -77,11 +77,6 @@ The render is the same under Argo CD or Flux: the knowledge chart's
 bootstrap Job is off (`knowledge.tokens.bootstrap.enabled: false`), so no
 hook, no kubectl image and no token Secret to seal.
 
-The `demarkus-agent` crawler is no longer part of this chart. It is still
-published standalone, for crawling servers outside the system; give it a
-publish token of your own as the knowledge chart's README describes, and
-let it publish somewhere other than the hub's `/graph.md`.
-
 ## What derives from `global`
 
 | Global | Knowledge (worlds and broker) |
@@ -124,9 +119,9 @@ entry.
   direct clients skip verification. Replace with a CA issuer once one
   exists. The broker's Ingress TLS is separate (`knowledge.ingress.tls`).
 - NetworkPolicies are off (the standalone charts default them on). Enabling
-  the knowledge chart's policy under the umbrella also needs
-  `knowledge.networkPolicy.agent.namespace` and `podLabels` naming your
-  direct QUIC clients, and `ingressFromNamespace` your controller's.
+  the knowledge chart's policy under the umbrella closes the QUIC port unless
+  `knowledge.networkPolicy.externalCIDRs` names your direct QUIC clients, and
+  needs `ingressFromNamespace` naming your controller's namespace.
 - The knowledge deployment runs two replicas and refuses fewer.
 
 ## Tests

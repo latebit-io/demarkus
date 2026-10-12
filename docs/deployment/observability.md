@@ -1,20 +1,19 @@
 # Observability
 
-demarkus emits structured logs to stdout/stderr. Each runtime image (server, knowledge, agent) writes one JSON record per event when `DEMARKUS_LOG_FORMAT=json` (the chart default in production deployments). Operators ingest those JSON records with whatever log shipper their stack already runs: Datadog Agent, OpenTelemetry Collector, Vector, Fluent Bit, Grafana Alloy, or anything else that can parse JSON from container stdout. The field schema below tells your log shipper what to extract; the rest is your backend's existing JSON-log documentation.
+demarkus emits structured logs to stdout/stderr. Each runtime image (server, knowledge) writes one JSON record per event when `DEMARKUS_LOG_FORMAT=json` (the chart default in production deployments). Operators ingest those JSON records with whatever log shipper their stack already runs: Datadog Agent, OpenTelemetry Collector, Vector, Fluent Bit, Grafana Alloy, or anything else that can parse JSON from container stdout. The field schema below tells your log shipper what to extract; the rest is your backend's existing JSON-log documentation.
 
 This document deliberately ships no pre-built collector configs. Every backend's config language drifts; an example `vector.yaml` written today is wrong six months later. The schema below stays stable because it's the actual code path, not a snapshot.
 
 ## Format and routing
 
-All three services write to stdout/stderr via Go's `log/slog`:
+Both services write to stdout/stderr via Go's `log/slog`:
 
 | Service | Default format | Override |
 |---|---|---|
 | `demarkus-server` | `json` (chart default) | `server.logFormat` in values; `DEMARKUS_LOG_FORMAT` env var |
 | `demarkus-knowledge` | `json` (hardcoded in binary) | not exposed; `knowledge/cmd/demarkus-knowledge/main.go` (the worlds half logs as `server/knowledgeserver`) |
-| `demarkus-agent` | `json` (chart default) | `logFormat` in values; `DEMARKUS_LOG_FORMAT` env var |
 
-The binary's standalone default outside the chart is `text` for server and agent (human-readable for local dev). The Helm charts override to `json` so production deployments are machine-parseable without operator intervention.
+The binary's standalone default outside the chart is `text` for the server (human-readable for local dev). The Helm charts override to `json` so production deployments are machine-parseable without operator intervention.
 
 Standard slog field shape:
 
@@ -102,32 +101,11 @@ Broker logs cover OIDC mint/revoke/rotate, sweeper drift+expiry handling, and ra
 - Sweeper health: `where msg='broker: swept'`; should be one per `sweeper.interval` (default 5m) per leader
 - Leadership churn: `where msg in ('broker: sweeper observing new leader', 'broker: sweeper lost leadership')`
 
-## Agent (`demarkus-agent`): field schema
-
-Agent logs cover crawl scheduling, federation results, and hub-publish outcomes.
-
-| msg | level | Key fields | What it means |
-|---|---|---|---|
-| `daemon: starting` | INFO | `interval` | Process startup in daemon mode. |
-| `daemon: stopping` | INFO | (none) | Signal-driven shutdown. |
-| `crawl: starting` | INFO | `seeds` (count) | One per crawl iteration. |
-| `crawl: complete` | INFO | `duration_ms`, `servers`, `documents`, `hashes`, `errors` | Per-crawl summary. The base signal for crawl-throughput dashboards. |
-| `crawl: error` | WARN | `detail` | One per per-server error encountered during a crawl. Multiple per `crawl: complete` is normal. |
-| `crawl: failed` | ERROR | `err` | The entire crawl iteration failed. |
-| `publish: complete` | INFO | `indexes`, `hubs` | Hub-index publish after a successful crawl. |
-| `publish: hub push failed` | WARN | `err` | Per-hub publish failure. |
-
-**Useful operator queries:**
-
-- Crawl throughput: `latest(documents) where msg='crawl: complete'`
-- Crawl-error rate: `sum(errors) where msg='crawl: complete'`; divide by `count where msg='crawl: complete'` for errors-per-iteration
-- Schedule health: `count where msg='crawl: complete'`; should be one per `schedule.interval`
-
 ## Wiring it into your backend
 
 Every backend's JSON-log ingestion is the same shape: read container stdout, parse the JSON body, surface `time` / `level` / `msg` as core fields, and let the rest of the keys flow through as searchable attributes. Pointers:
 
-- **Datadog**: enable Datadog Agent log collection (`logs_enabled: true` + `logs_config.container_collect_all: true`, or the Operator equivalents `features.logCollection.enabled` + `containerCollectAll`); JSON parsing is automatic for structured log bodies. Add a `service:demarkus-server` (or `-broker` / `-agent`) tag via Datadog autodiscovery pod annotations. See [Datadog Agent: Kubernetes log collection](https://docs.datadoghq.com/containers/kubernetes/log/).
+- **Datadog**: enable Datadog Agent log collection (`logs_enabled: true` + `logs_config.container_collect_all: true`, or the Operator equivalents `features.logCollection.enabled` + `containerCollectAll`); JSON parsing is automatic for structured log bodies. Add a `service:demarkus-server` (or `-knowledge`) tag via Datadog autodiscovery pod annotations. See [Datadog Agent: Kubernetes log collection](https://docs.datadoghq.com/containers/kubernetes/log/).
 - **OpenTelemetry Collector**: use the `filelog` receiver scoped to container log paths, the `json_parser` operator on the message body, and the `attributes` processor to promote `level` / `msg` to log-record attributes. See [OTel filelog receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/filelogreceiver) and the [OTLP logs exporter](https://github.com/open-telemetry/opentelemetry-collector/tree/main/exporter/otlpexporter) for the route to your backend.
 - **Vector**: `[sources.kubernetes_logs]` for ingestion, `[transforms.parse_json]` for the body, then your sink of choice. See [Vector kubernetes_logs source](https://vector.dev/docs/reference/configuration/sources/kubernetes_logs/).
 - **Fluent Bit**: `tail` input on `/var/log/containers/*.log` with a JSON parser, optionally enriched by the `kubernetes` filter for pod-metadata attributes. See [Fluent Bit Tail input](https://docs.fluentbit.io/manual/pipeline/inputs/tail) and [Kubernetes filter](https://docs.fluentbit.io/manual/pipeline/filters/kubernetes).

@@ -493,8 +493,6 @@ jobs:
           helm dependency update deploy/helm/demarkus-server
       - name: Lint demarkus-server chart
         run: helm lint deploy/helm/demarkus-server
-      - name: Lint demarkus-agent chart
-        run: helm lint deploy/helm/demarkus-agent
       - name: Lint demarkus-knowledge-server chart
         run: helm lint deploy/helm/demarkus-knowledge-server -f deploy/helm/demarkus-knowledge-server/tests/fixtures/valid-values.yaml
       # The umbrella vendors the two local charts (file://) and the
@@ -518,8 +516,6 @@ jobs:
             --show-only templates/secret-broker-config.yaml \
             | yq '.stringData["config.yaml"]' | sed -e '$ { /^$/d; }' \
             | diff - knowledge/internal/broker/core/testdata/chart-rendered-config.yaml
-      - name: Unit test demarkus-agent chart
-        run: helm unittest deploy/helm/demarkus-agent
       - name: Unit test demarkus-knowledge-system umbrella chart
         run: helm unittest deploy/helm/demarkus-knowledge-system
 

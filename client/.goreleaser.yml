@@ -58,25 +58,6 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
 
-  # demarkus-agent ships as a container image (release-client bundles it
-  # into ghcr.io/.../demarkus-agent) AND as a linux tarball: the standalone
-  # agent binary for hosts outside Kubernetes.
-  - id: demarkus-agent
-    main: ./cmd/demarkus-agent
-    binary: demarkus-agent
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-    goarch:
-      - amd64
-      - arm64
-      - arm
-    goarm:
-      - "7"
-    ldflags:
-      - -s -w -X main.version={{ .Version }}
-
 archives:
   - id: demarkus
     builds:
@@ -92,11 +73,6 @@ archives:
     builds:
       - demarkus-mcp
     name_template: "demarkus-mcp_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-
-  - id: demarkus-agent
-    builds:
-      - demarkus-agent
-    name_template: "demarkus-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: "demarkus-client_checksums.txt"

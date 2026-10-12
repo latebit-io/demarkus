@@ -20,17 +20,12 @@ tests:
           value: [Ingress, Egress]
       - lengthEqual:
           path: spec.ingress
-          count: 4
+          count: 3
       - equal:
           path: spec.ingress[0].ports[0]
           value:
             protocol: TCP
             port: 8080
-      - equal:
-          path: spec.ingress[1].ports[0]
-          value:
-            protocol: UDP
-            port: 6309
 
   - it: admits the HTTP listener only from the Ingress controller namespace
     asserts:
@@ -46,9 +41,9 @@ tests:
   - it: admits the bearer listener from any source
     asserts:
       - notExists:
-          path: spec.ingress[3].from
+          path: spec.ingress[2].from
       - equal:
-          path: spec.ingress[3].ports
+          path: spec.ingress[2].ports
           value:
             - protocol: UDP
               port: 8443
@@ -56,12 +51,12 @@ tests:
   - it: admits peer hints only from this chart's own pods
     asserts:
       - equal:
-          path: spec.ingress[2].from[0].podSelector.matchLabels["app.kubernetes.io/name"]
+          path: spec.ingress[1].from[0].podSelector.matchLabels["app.kubernetes.io/name"]
           value: demarkus-knowledge-server
       - notExists:
-          path: spec.ingress[2].from[0].namespaceSelector
+          path: spec.ingress[1].from[0].namespaceSelector
       - equal:
-          path: spec.ingress[2].ports[0]
+          path: spec.ingress[1].ports[0]
           value:
             protocol: UDP
             port: 6310
@@ -74,17 +69,15 @@ tests:
             protocol: UDP
             port: 6310
 
-  - it: admits QUIC only from labeled agent pods in the configured namespace
+  - it: closes the QUIC port to direct clients unless CIDRs are configured
     asserts:
-      - equal:
-          path: spec.ingress[1].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
-          value: demarkus-agent
-      - equal:
-          path: spec.ingress[1].from[0].podSelector.matchLabels["app.kubernetes.io/name"]
-          value: demarkus-agent
-      - lengthEqual:
-          path: spec.ingress[1].from
-          count: 1
+      - notContains:
+          path: spec.ingress
+          content:
+            ports:
+              - protocol: UDP
+                port: 6309
+          any: true
 
   - it: allows DNS over UDP and TCP only to kube-system
     asserts:
@@ -141,13 +134,22 @@ tests:
           path: spec.egress[1].to[0].ipBlock.cidr
           value: 169.254.169.254/32
 
-  - it: admits configured direct-client CIDRs
+  - it: admits configured direct-client CIDRs on the QUIC port
     set:
       networkPolicy.externalCIDRs: [203.0.113.0/24]
     asserts:
+      - lengthEqual:
+          path: spec.ingress
+          count: 4
       - equal:
-          path: spec.ingress[1].from[1].ipBlock.cidr
-          value: 203.0.113.0/24
+          path: spec.ingress[1]
+          value:
+            from:
+              - ipBlock:
+                  cidr: 203.0.113.0/24
+            ports:
+              - protocol: UDP
+                port: 6309
 
   - it: opens UDP egress to remote worlds by their ports
     set:

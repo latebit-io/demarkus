@@ -152,4 +152,3 @@ helm unittest deploy/helm/demarkus-server/
 
 - `/plans/universe-deployment.md`: full Phase 6 plan
 - `/architecture.md`: Mark Protocol architecture (capability auth, versioned store)
-- `deploy/helm/demarkus-agent/`: federation crawler chart (Phase 6.0)

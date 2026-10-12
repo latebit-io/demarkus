@@ -1,22 +1,6 @@
 # Tools
 
-This section covers the supporting tools that ship with Demarkus: the **federation crawler** for discovering servers and building indexes, the **broker** that fronts a knowledge system, **token generation** for capability-based authentication, and **direct-to-store publishing** for read-only server installs.
-
-## Federation Crawler (`demarkus-agent`)
-
-The federation crawler discovers Mark Protocol servers, collects content hashes, and publishes indexes to hubs. It runs the core federation loop: seed → crawl → hash → index → repeat.
-
-See [Federation Crawler](./agent.md) for full documentation.
-
-### Quick start
-
-```bash
-# Single crawl
-demarkus-agent crawl -seeds "mark://localhost:6309" -insecure -v
-
-# Daemon mode with config
-demarkus-agent daemon -config fedcrawl.toml -insecure
-```
+This section covers the supporting tools that ship with Demarkus: the **broker** that fronts a knowledge system, **token generation** for capability-based authentication, and **direct-to-store publishing** for read-only server installs.
 
 ## Broker (in `demarkus-knowledge`)
 
@@ -40,7 +24,7 @@ The server is secure by default and **denies writes** unless you configure a tok
 
 Every token is identified by a **label** that you pick at generation time. Labels are the primary way to reason about tokens in Demarkus: they show up in audit logs on every write operation, they're how you revoke a token later (`demarkus-token revoke -label NAME`), and they live alongside the hashed token in `tokens.toml` as `[tokens.<label>]`.
 
-Pick a label that tells you (or your future self) **who or what uses this token and where**. Good labels: `fritz-laptop`, `ci-deploy`, `agent-crawler`, `claude-code-plugin`. Bad labels: `token1`, `t`, `xxx`.
+Pick a label that tells you (or your future self) **who or what uses this token and where**. Good labels: `fritz-laptop`, `ci-deploy`, `claude-code-plugin`. Bad labels: `token1`, `t`, `xxx`.
 
 A descriptive label is how you'll know which entry to revoke when a device is lost or a service is decommissioned.
 

@@ -114,34 +114,3 @@ func TestAuthorityURL(t *testing.T) {
 		}
 	}
 }
-
-// A server URL names an authority and nothing else: index rows, crawler seeds
-// and hubs. Anything ParseMark would silently drop is refused here.
-func TestParseServer(t *testing.T) {
-	for raw, want := range map[string]string{
-		"mark://host":          "mark://host",
-		"mark://host/":         "mark://host",
-		"mark://HOST:6309":     "mark://host",
-		"mark://host:7000/":    "mark://host:7000",
-		"mark://[::1]:6309":    "mark://[::1]",
-		"mark://team-a":        "mark://team-a",
-		"mark://docs.example/": "mark://docs.example",
-	} {
-		target, err := ParseServer(raw)
-		if err != nil {
-			t.Errorf("ParseServer(%q): %v", raw, err)
-			continue
-		}
-		if got := target.AuthorityURL(); got != want {
-			t.Errorf("ParseServer(%q).AuthorityURL() = %q, want %q", raw, got, want)
-		}
-	}
-	for _, raw := range []string{
-		"", "host:6309", "https://host", "mark://", "mark://host:0", "mark://host/doc.md",
-		"mark://user@host", "mark://host?x=1", "mark://host#frag", "mark://host/?", "mark://ho\tst",
-	} {
-		if target, err := ParseServer(raw); err == nil {
-			t.Errorf("ParseServer(%q) = %+v, want an error", raw, target)
-		}
-	}
-}

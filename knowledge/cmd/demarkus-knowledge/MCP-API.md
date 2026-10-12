@@ -287,7 +287,7 @@ Returns `not-found` if no manifest is published.
 > run at most once per world per 5 minutes, and merge successful loads
 > into the store so cold pods answer backlinks without a crawl. Seed rows
 > keyed by a configured world's internal dial address
-> (the form the federation agent publishes) are translated to
+> (as an outside publisher might key them) are translated to
 > `mark://{worldName}/...` so they answer world-name queries. Locally
 > crawled data always takes precedence over seeded rows, and a world
 > without either graph form degrades to the unseeded behavior.

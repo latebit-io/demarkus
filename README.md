@@ -4,7 +4,7 @@
 
 Demarkus gives your agent persistent, versioned memory: it records decisions, lessons, and progress as it works and recalls them in every later session. It is your second brain too: journals, logs, and notes with full history. The same store scales up to a team's shared world and an organizational **knowledge system**: a broker-fronted set of servers behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same versioned catalog.
 
-Every link between documents feeds a persistent **knowledge graph**. Agents query backlinks and related documents across sessions, the TUI and the [reading room](https://github.com/latebit-io/demarkus-library) render it, and `demarkus-agent` aggregates it across worlds. Memory here is connected knowledge you traverse, not a pile of files.
+Every link between documents feeds a persistent **knowledge graph**. Agents query backlinks and related documents across sessions, the TUI and the [reading room](https://github.com/latebit-io/demarkus-library) render it, and the knowledge server aggregates it across worlds. Memory here is connected knowledge you traverse, not a pile of files.
 
 Underneath sits the **Mark Protocol**: versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Capability tokens gate writes, every change is kept, and one static binary runs anywhere.
 
@@ -76,7 +76,7 @@ Other install paths:
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | sudo bash -s -- --domain yourdomain.com
 ```
 
-Kubernetes deployments use the Helm charts in [`deploy/helm/`](deploy/helm/) (server, agent, knowledge system). The [`demarkus-knowledge-system`](deploy/helm/demarkus-knowledge-system/) umbrella installs a whole knowledge system from one values file that declares each world once.
+Kubernetes deployments use the Helm charts in [`deploy/helm/`](deploy/helm/) (server, knowledge system). The [`demarkus-knowledge-system`](deploy/helm/demarkus-knowledge-system/) umbrella installs a whole knowledge system from one values file that declares each world once.
 
 See [full install docs](https://www.demarkus.io/install/) for platform-specific guides and other options.
 
@@ -113,7 +113,6 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus` | CLI tool for all protocol operations (fetch, publish, append, graph, okf, etc.) |
 | `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
 | `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
-| `demarkus-agent` | Federation agent: crawls worlds, aggregates the link graph, publishes hub indexes |
 | `demarkus-knowledge` | Production knowledge system in one process: many worlds (SNI-routed, GCS-backed) plus the OIDC-fronted MCP gateways for the knowledge profile (system-wide `mark_lookup_all`) and the memory profile (one private world per identity, dynamic tenant provisioning) |
 | `demarkus-knowledge-server` | The multi-world server alone, for capability-token clients without SSO |
 

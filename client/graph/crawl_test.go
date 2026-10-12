@@ -404,8 +404,8 @@ func TestCrawlSkipsMalformedRelRefs(t *testing.T) {
 }
 
 // A rel- target that points back at the document is a self-reference even when
-// the caller addressed the document by its dial address. fedcrawl does exactly
-// that, so comparing raw strings would emit a bogus self-edge.
+// the caller addressed the document by its dial address, so comparing raw
+// strings would emit a bogus self-edge.
 func TestRelEdgesSkipsSelfReferenceAcrossURLForms(t *testing.T) {
 	for _, docURL := range []string{"mark://host:6309/doc.md", "mark://host/doc.md"} {
 		refs := RelEdges(docURL, map[string]string{"rel-supersedes": "/doc.md, /other.md"}).Refs

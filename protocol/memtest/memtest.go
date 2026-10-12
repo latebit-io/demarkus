@@ -37,7 +37,7 @@ func liveHeap() uint64 {
 	return stats.HeapAlloc
 }
 
-// AgentGraphBody mimics the federation agent's /graph.md: a nodes table
+// AgentGraphBody mimics a crawler-published /graph.md: a nodes table
 // plus one spaceless JSON line whose nanosecond timestamps are new for
 // every cycle, the shape that leaked through the section index.
 func AgentGraphBody(cycle int) []byte {

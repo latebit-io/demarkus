@@ -124,10 +124,10 @@ Maintains integrity and auditability.
 **Goal:** Share your crawled graph so other agents can discover the topology without recrawling.
 
 **Workflow:**
-1. The federation agent crawls its configured servers and publishes with `-publish-graph`.
-2. It commits an atomic `/graph/manifest.md` snapshot and then updates the single-document `/graph.md` export.
-3. Another snapshot-aware MCP client or broker fetches and verifies the manifest's version-pinned shards.
-4. The client imports the complete generation into its graph store without re-fetching every original document.
+1. An agent crawls its servers with `mark_graph` and publishes the result with `mark_graph_publish` as a `/graph.md` export.
+2. In a knowledge system, the server's deriver does this continuously: it checkpoints every world's graph into the hub and renders the hub's `/graph.md`.
+3. Another MCP client or gateway fetches the export and seeds its graph store from it.
+4. The client answers backlinks over the complete generation without re-fetching every original document.
 
 **Multi-agent variant:**
 - Agent A publishes its graph from crawling `mark://server-a.com`
