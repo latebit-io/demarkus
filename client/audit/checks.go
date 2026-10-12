@@ -385,21 +385,23 @@ func (a *audit) checkLostMetadata(ctx context.Context) {
 }
 
 // checkPromotion (on request): live documents an adr directory, a shared
-// type or high importance marks as team knowledge, minus the promoted set
-// (tag or marker); hubs and staging directories never qualify.
+// type or high importance marks as team knowledge; hubs and staging
+// directories never qualify. The promoted ones (tag or marker) are counted.
 func (a *audit) checkPromotion() {
 	for _, p := range a.order {
 		d := a.docs[p]
 		if !live(d.status) || gate.NavExempt(p) {
 			continue
 		}
+		why := promotionReason(p, d.meta)
+		if why == "" {
+			continue
+		}
 		if slices.Contains(protocol.SplitTags(d.meta["tags"]), "promoted") || Promoted(d.body) {
 			a.promoted++
 			continue
 		}
-		if why := promotionReason(p, d.meta); why != "" {
-			a.add(CheckPromotion, p, why, "/promote "+p)
-		}
+		a.add(CheckPromotion, p, why, "/promote "+p)
 	}
 }
 
@@ -409,19 +411,21 @@ func Promoted(body string) bool {
 	return strings.Contains(body, "promoted") && promotedMarker.MatchString(body)
 }
 
-// promotionReason says why a document qualifies, or "" when it does not.
+// promotionReason says why a document qualifies, or "" when it does not. An
+// adr directory anywhere above the document makes it a decision record.
 func promotionReason(p string, meta map[string]string) string {
+	adr := false
 	for seg := range strings.SplitSeq(path.Dir(p), "/") {
 		if stagingDirs[seg] {
 			return ""
 		}
+		adr = adr || seg == "adr"
 	}
 	kind := meta["type"]
 	importance, parseErr := strconv.ParseFloat(meta["importance"], 64)
 	if parseErr != nil {
 		importance = 0 // unparsable or absent: below the floor
 	}
-	adr := path.Base(path.Dir(p)) == "adr"
 	if !adr && !promotionTypes[kind] && importance < promotionFloor {
 		return ""
 	}

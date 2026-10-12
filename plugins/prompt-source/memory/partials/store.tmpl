@@ -1,6 +1,6 @@
 ## {{.StoreTitle}} and project
 
-{{if eq .Harness "cowork"}}Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`; never the working directory, a sandbox path. None named: ask once. No shell helper here: never run shell, use `mark_*` tools only. Store: the local {{.Store}}, served by the `{{.MCPServerKey}}` MCP server; a tool not connected or missing (older server): say so, name the server, stop.{{else}}Slug and bound {{.Store}}: the session header `Project slug: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
+{{if eq .Harness "cowork"}}Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`; never the working directory, a sandbox path. None named: ask once, unless the command accepts a blank slug for the whole {{.Store}}. No shell helper here: never run shell, use `mark_*` tools only. Store: the local {{.Store}}, served by the `{{.MCPServerKey}}` MCP server; a tool not connected or missing (older server): say so, name the server, stop.{{else}}Slug and bound {{.Store}}: the session header `Project slug: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
 
 ```bash
 "$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>

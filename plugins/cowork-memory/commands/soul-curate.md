@@ -11,7 +11,7 @@ Curate one document so an agent reads it in one fetch and finds it by its subjec
 
 ## Soul and project
 
-Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`; never the working directory, a sandbox path. None named: ask once. No shell helper here: never run shell, use `mark_*` tools only. Store: the local soul, served by the `demarkus-memory` MCP server; a tool not connected or missing (older server): say so, name the server, stop.
+Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`; never the working directory, a sandbox path. None named: ask once, unless the command accepts a blank slug for the whole soul. No shell helper here: never run shell, use `mark_*` tools only. Store: the local soul, served by the `demarkus-memory` MCP server; a tool not connected or missing (older server): say so, name the server, stop.
 
 ## Steps
 

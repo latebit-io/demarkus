@@ -11,7 +11,7 @@ Append the entry to today's journal for the current project: one file per day pe
 
 ## Soul and project
 
-Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`; never the working directory, a sandbox path. None named: ask once. No shell helper here: never run shell, use `mark_*` tools only. Store: the local soul, served by the `demarkus-memory` MCP server; a tool not connected or missing (older server): say so, name the server, stop.
+Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`; never the working directory, a sandbox path. None named: ask once, unless the command accepts a blank slug for the whole soul. No shell helper here: never run shell, use `mark_*` tools only. Store: the local soul, served by the `demarkus-memory` MCP server; a tool not connected or missing (older server): say so, name the server, stop.
 
 A slug never proves identity. Before the first read or write, `mark_fetch /<slug>/index.md` with `force: true`; keep the result (body, version, metadata map) as the hub state. `ok` or `archived`: the subtree is this checkout's only when established this session (a checkout path recorded in the hub matches, or the user confirmed); otherwise the user confirms or picks a unique slug matching `^[a-z0-9][a-z0-9._-]*$`. `not-found`: `mark_list /<slug>/` with `include_archived: true`; any entry means the subtree exists without a hub, same confirmation; `not-found` or an empty complete page: new project. Any other failure: identity unknown, surface it, ask before writing.
 

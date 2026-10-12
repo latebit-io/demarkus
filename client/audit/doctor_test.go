@@ -302,6 +302,8 @@ func TestPromotionCandidates(t *testing.T) {
 		"/adr/0001-a.md":         {Body: body, Meta: map[string]string{"tags": "adr", "type": "Decision", "importance": "0.8"}},
 		"/adr/0002-b.md":         {Body: body, Meta: map[string]string{"tags": "adr,promoted", "type": "Decision"}},
 		"/adr/0003-c.md":         {Body: stamped, Meta: map[string]string{"tags": "adr", "type": "Decision"}},
+		"/adr/2026/0004-d.md":    {Body: body, Meta: map[string]string{"tags": "adr"}},
+		"/journal/old.md":        {Body: body, Meta: map[string]string{"tags": "j,promoted", "type": "Decision"}},
 		"/architecture.md":       {Body: body, Meta: map[string]string{"tags": "arch", "type": "Architecture"}},
 		"/notes.md":              {Body: body, Meta: map[string]string{"tags": "n", "type": "Note", "importance": "0.9"}},
 		"/journal/2026-01-01.md": {Body: body, Meta: map[string]string{"tags": "j", "type": "Decision", "importance": "1"}},
@@ -316,14 +318,15 @@ func TestPromotionCandidates(t *testing.T) {
 		"/architecture.md: type Architecture",
 		"/notes.md: type Note, importance 0.9",
 		"/adr/0001-a.md: decision record, type Decision, importance 0.8",
+		"/adr/2026/0004-d.md: decision record",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("candidates = %q\nwant %q", got, want)
 	}
-	if r.Promoted != 2 {
+	if r.Promoted != 2 { // the promoted journal entry was never a candidate
 		t.Errorf("promoted excluded = %d, want 2", r.Promoted)
 	}
-	if md := r.Markdown(); !strings.Contains(md, "### Promotion candidates (3)\n") || !strings.Contains(md, ", 2 already promoted\n") {
+	if md := r.Markdown(); !strings.Contains(md, "### Promotion candidates (4)\n") || !strings.Contains(md, ", 2 already promoted\n") {
 		t.Errorf("markdown lacks the section or the excluded count:\n%s", md)
 	}
 

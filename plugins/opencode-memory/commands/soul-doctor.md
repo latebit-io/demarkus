@@ -23,7 +23,7 @@ Slug and bound soul: the session header `Project slug: ... Bound store: ...`. He
 
 `mark_doctor` through the store's server: `url` is `/<slug>/` for one project, `/` for the whole soul (a broker store: `mark://<world>/` from `mark_worlds`, then `/<slug>/` under it); `deep: true` with `--deep`. An invalid slug or scope is the tool's own refusal. Whole local soul: also run `"$HOME/.demarkus/bin/demarkus-plugin" provision verify-auth` via Bash and relay its verdict as one line after the report; a non-zero exit is a coverage gap, not a finding.
 
-- Success: print the report verbatim, then a short prioritized "what I'd fix first". "All clean" only with zero findings and Coverage `complete`; otherwise name the gaps Coverage lists.
+- Success: print the report verbatim, then a short prioritized "what I'd fix first". "All clean" only with zero findings, Coverage `complete` and a healthy verify-auth verdict where one was due; otherwise name the gaps.
 - Tool error (store unreachable, unauthorized, inventory bound, scope not found): surface it verbatim, stop. Never substitute a manual crawl.
 
 ## Don't

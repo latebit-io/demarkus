@@ -13,7 +13,7 @@ Read-only health check over the project's {{.Store}}: one `mark_doctor` call run
 
 `mark_doctor` through the store's server: `url` is `/<slug>/` for one project, `/` for the whole {{.Store}} (a broker store: `mark://<world>/` from `mark_worlds`, then `/<slug>/` under it); `deep: true` with `--deep`. An invalid slug or scope is the tool's own refusal.{{if ne .Harness "cowork"}} Whole local {{.Store}}: also run `"$HOME/.demarkus/bin/demarkus-plugin" provision verify-auth` via Bash and relay its verdict as one line after the report; a non-zero exit is a coverage gap, not a finding.{{end}}
 
-- Success: print the report verbatim, then a short prioritized "what I'd fix first". "All clean" only with zero findings and Coverage `complete`; otherwise name the gaps Coverage lists.
+- Success: print the report verbatim, then a short prioritized "what I'd fix first". "All clean" only with zero findings, Coverage `complete`{{if ne .Harness "cowork"}} and a healthy verify-auth verdict where one was due{{end}}; otherwise name the gaps.
 - Tool error (store unreachable, unauthorized, inventory bound, scope not found): surface it verbatim, stop. Never substitute a manual crawl.
 
 ## Don't
