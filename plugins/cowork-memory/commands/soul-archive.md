@@ -13,11 +13,9 @@ Archived: fetches as `archived`, every version kept, no unarchive tool (the oper
 
 Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`; never the working directory, a sandbox path. None named: ask once, unless the command accepts a blank slug for the whole soul. No shell helper here: never run shell, use `mark_*` tools only. Store: the local soul, served by the `demarkus-memory` MCP server; a tool not connected or missing (older server): say so, name the server, stop.
 
-A slug never proves identity. Before the first read or write, `mark_fetch /<slug>/index.md` with `force: true`; keep the result (body, version, metadata map) as the hub state. `ok` or `archived`: the subtree is this checkout's only when established this session (a checkout path recorded in the hub matches, or the user confirmed); otherwise the user confirms or picks a unique slug matching `^[a-z0-9][a-z0-9._-]*$`. `not-found`: `mark_list /<slug>/` with `include_archived: true`; any entry means the subtree exists without a hub, same confirmation; `not-found` or an empty complete page: new project. Any other failure: identity unknown, surface it, ask before writing.
-
 ## Steps
 
-1. **Confirm the project** from the identity check above: identity unknown: stop. Target outside `/<slug>/`: the user confirms it, else stop. Target inside: new project: nothing to archive, say so, stop.
+1. **Scope.** Target outside `/<slug>/`: the user confirms it, else stop.
 
 2. **Collect.** Document: `mark_fetch`; `ok` continues; `archived` or `not-found`: say so, stop; other failure: surface, stop. Directory: `mark_list` to count the live documents (`next-cursor` as `cursor` until `complete: true`, recurse into subdirectories; over 100 list calls or 500 documents: stop, ask for a narrower directory); `not-found` or none: say so, stop; a listing failure: surface, stop.
 

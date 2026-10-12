@@ -175,6 +175,10 @@ func TestAppendRefusesWhatItCannotRead(t *testing.T) {
 	if _, err := Append(t.Context(), docsOn(backend), Request{Dir: "/proj/", Entry: "  "}); err == nil {
 		t.Fatal("empty entry accepted")
 	}
+	backend.Published["h/proj/index.md"] = fetch.Result{Response: protocol.Response{Status: protocol.StatusArchived}}
+	if _, err := Append(t.Context(), docsOn(backend), Request{Dir: "/proj/", Entry: "x", Now: day}); err == nil || err.Error() != "/proj/ is archived; nothing written" {
+		t.Fatalf("archived scope: err = %v", err)
+	}
 	if len(backend.PublishCalls)+len(backend.AppendCalls) != 0 {
 		t.Error("nothing may be written")
 	}

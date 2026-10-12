@@ -4,15 +4,13 @@ description: Restore session context from the current project's {{.Store}} (rece
 
 Bring the project's recent {{.Store}} into the session so agent and user pick up where they left off. Read-only.
 
-{{template "project.tmpl" .}}
+{{template "store.tmpl" .}}
 
 ## Steps
 
-1. **Confirm the project** from the identity check above: new project: say so, suggest `/soul-journal "<entry>"`, stop; subtree without a hub: note it, continue; identity unknown: stop.
+1. **Read the primer.** `mark_fetch` through the store's server with `url` `/<slug>/.context`. A tool error: surface it, stop. `status: new`: new project, say so, suggest `/soul-journal "<entry>"`, stop. `status: archived`: say so, stop.
 
-2. **Read the primer.** `mark_fetch` through the store's server with `url` `/<slug>/.context`. A tool error: surface it, stop.
-
-3. **Summarize.** Plain text, no preamble:
+2. **Summarize.** Plain text, no preamble:
 
    ```text
    ## <Project>: recent context

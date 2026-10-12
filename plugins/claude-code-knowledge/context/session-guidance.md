@@ -4,11 +4,11 @@ A demarkus **knowledge system** is the organization's shared, versioned knowledg
 
 ## Consult first
 
-Use the joined system's own tools (`mcp__<slug>__mark_*`). Explicit `mark://<world>/` scope: `mark_lookup` there, never widen unasked. No target world: `mark_lookup_all`. Plain single-world endpoint: `mark_lookup` directly. The server's instructions carry the read contract; `/knowledge` lists joined systems and hubs and carries the fallback for an older broker without `mark_lookup_all`. Never fabricate organizational soul.
+Use the joined system's own tools (`mcp__<slug>__mark_*`); the server's instructions carry the read contract. `/knowledge` lists joined systems and hubs and carries the fallback for an older broker without `mark_lookup_all`. Never fabricate organizational soul.
 
 ## Record
 
-Publish only when the user asks or confirms, through the `knowledge-promote` skill, never a direct `mark_publish` during a read task. The skill fetches the root policy and template, tags for the shared taxonomy and strips secrets; write-time gates enforce tags, required axes, retention and style and say what to fix. Writing standards: `mark://root/.well-known/demarkus/style.md` when published; audience upfront, unique headings, no em dashes.
+Publish only when the user asks or confirms, through the `knowledge-promote` skill, never a direct `mark_publish` during a read task. Write-time gates (tags, required axes, retention, style) say what to fix; follow them.
 
 ## Soul and knowledge system
 

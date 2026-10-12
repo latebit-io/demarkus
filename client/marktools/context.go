@@ -45,7 +45,12 @@ func (t *Tools) Context(ctx context.Context, rawURL string) Result {
 	}
 	journal := layout.Section(l.Journal)
 	fmt.Fprintf(&p.out, "# Context: %s\n", dir)
-	p.section(ctx, "Hub", dir+"index.md", false)
+	switch p.section(ctx, "Hub", dir+"index.md", false) {
+	case protocol.StatusNotFound:
+		return text(fmt.Sprintf("status: new\n\nNo hub at %sindex.md: a new project; the journal route creates it.\n", dir))
+	case protocol.StatusArchived:
+		return text(fmt.Sprintf("status: archived\n\n%sindex.md is archived: a retired project.\n", dir))
+	}
 	entries, listed := p.newest(ctx, dir+l.Journal, contextJournalDays, journalDay)
 	if listed && len(entries) == 0 {
 		fmt.Fprintf(&p.out, "\n## %s\n\nNo entries yet.\n", journal)
@@ -91,18 +96,21 @@ type primer struct {
 	coverage    []string
 }
 
-// section reads one document into the primer; an optional one may be absent.
-func (p *primer) section(ctx context.Context, heading, docPath string, optional bool) {
+// section reads one document into the primer and reports its status ("" on
+// a transport error); an optional one may be absent.
+func (p *primer) section(ctx context.Context, heading, docPath string, optional bool) string {
 	r, err := p.tools.backend.Fetch(ctx, fetch.FetchRequest{Host: p.host, Path: docPath, Token: p.token})
 	switch {
 	case err != nil:
 		p.coverage = append(p.coverage, fmt.Sprintf("%s: %v", docPath, err))
+		return ""
 	case r.Response.Status == protocol.StatusNotFound && optional:
 	case r.Response.Status != protocol.StatusOK:
 		p.coverage = append(p.coverage, fmt.Sprintf("%s: %s", docPath, r.Response.Status))
 	default:
 		fmt.Fprintf(&p.out, "\n## %s (%s)\n\n%s\n", heading, docPath, clip(r.Response.Body, contextBodyCap, fmt.Sprintf("(truncated; mark_fetch %s with force: true for the rest)", docPath)))
 	}
+	return r.Response.Status
 }
 
 // journalDay keeps the dated entries of a journal directory.

@@ -80,6 +80,10 @@ func Append(ctx context.Context, docs Docs, req Request) (Outcome, error) { //no
 	if err != nil {
 		return Outcome{}, err
 	}
+	// The today route refuses a retired scope.
+	if hubHead.Status == protocol.StatusArchived {
+		return Outcome{}, fmt.Errorf("%s is archived; nothing written", r.Dir)
+	}
 	r.title = r.titleFrom(hubHead)
 
 	doc := docs(r.Dir + r.Layout.Journal + r.date + ".md")

@@ -16,15 +16,11 @@ Slug and bound soul: the session header `Project slug: ... Bound store: ...`. He
 
 `<project-dir>`: `"${CLAUDE_PROJECT_DIR}"`, or the named directory as one POSIX-safe shell word. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (`mcp__<store>__mark_*`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
 
-A slug never proves identity. Before the first read or write, `mark_fetch /<slug>/index.md` with `force: true`; keep the result (body, version, metadata map) as the hub state. `ok` or `archived`: the subtree is this checkout's only when established this session (a checkout path recorded in the hub matches, or the user confirmed); otherwise the user confirms or picks a unique slug matching `^[a-z0-9][a-z0-9._-]*$`. `not-found`: `mark_list /<slug>/` with `include_archived: true`; any entry means the subtree exists without a hub, same confirmation; `not-found` or an empty complete page: new project. Any other failure: identity unknown, surface it, ask before writing.
-
 ## Steps
 
-1. **Confirm the project** from the identity check above: new project: say so, suggest `/soul-journal "<entry>"`, stop; subtree without a hub: note it, continue; identity unknown: stop.
+1. **Read the primer.** `mark_fetch` through the store's server with `url` `/<slug>/.context`. A tool error: surface it, stop. `status: new`: new project, say so, suggest `/soul-journal "<entry>"`, stop. `status: archived`: say so, stop.
 
-2. **Read the primer.** `mark_fetch` through the store's server with `url` `/<slug>/.context`. A tool error: surface it, stop.
-
-3. **Summarize.** Plain text, no preamble:
+2. **Summarize.** Plain text, no preamble:
 
    ```text
    ## <Project>: recent context

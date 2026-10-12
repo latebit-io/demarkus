@@ -136,7 +136,7 @@ the markdown `body`. Identical wire shape to direct-QUIC `FETCH`.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `url` | string | yes | `mark://{worldName}/{path}`; `mark://{worldName}/<dir>/.context` reads a session primer instead: the directory's `index.md`, its three newest journal entries, the roadmap when present and the plans listing (names from the world's template layout), each body capped, with a Coverage section for what could not be read. The same path works as an MCP resource. |
+| `url` | string | yes | `mark://{worldName}/{path}`; `mark://{worldName}/<dir>/.context` reads a session primer instead: the directory's `index.md`, its three newest journal entries, the roadmap when present and the plans listing (names from the world's template layout), each body capped, with a Coverage section for what could not be read; a directory whose `index.md` is absent or archived answers one `status: new` or `status: archived` line instead. The same path works as an MCP resource. |
 
 #### `mark_explore`
 

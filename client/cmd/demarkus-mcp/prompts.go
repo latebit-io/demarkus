@@ -108,7 +108,7 @@ func contextResult(dir string) *mcp.GetPromptResult {
 	text := fmt.Sprintf(`Restore working context from %s.
 
 1. Call mark_fetch with url %q.
-2. Report a short brief, no preamble: what is in flight, recent decisions, and one or two specific next steps from the latest entry. Cite each claim as its path. Relay every Coverage line; a primer with no journal says so plainly. Read nothing else unless asked.`, dir, dir+".context")
+2. A status line (new or archived): relay it, stop. Otherwise report a short brief, no preamble: what is in flight, recent decisions, and one or two specific next steps from the latest entry. Cite each claim as its path. Relay every Coverage line; a primer with no journal says so plainly. Read nothing else unless asked.`, dir, dir+".context")
 	return mcp.NewGetPromptResult("Context", []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
 	})
