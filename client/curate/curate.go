@@ -151,17 +151,42 @@ var (
 // spans and line starts, where a dash may be a bullet; n is what changed.
 func replaceEmDashes(body string) (out string, n int) {
 	lines := strings.Split(body, "\n")
-	inFence := false
+	var fence string // the open fence's run, "" outside one
 	for i, line := range lines {
-		if t := strings.TrimSpace(line); strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
-			inFence = !inFence
-			continue
+		if run := fenceRun(line); run != "" {
+			switch {
+			case fence == "":
+				fence = run
+				continue
+			case closesFence(line, fence):
+				fence = ""
+				continue
+			}
 		}
-		if !inFence && strings.Contains(line, "—") {
+		if fence == "" && strings.Contains(line, "—") {
 			lines[i] = replaceOutsideCode(line, &n)
 		}
 	}
 	return strings.Join(lines, "\n"), n
+}
+
+// fenceRun is the backtick or tilde run (3 or more) opening a line, else "".
+func fenceRun(line string) string {
+	t := strings.TrimSpace(line)
+	if t == "" || (t[0] != '`' && t[0] != '~') {
+		return ""
+	}
+	n := len(t) - len(strings.TrimLeft(t, t[:1]))
+	if n < 3 {
+		return ""
+	}
+	return t[:n]
+}
+
+// closesFence: the same character, a run at least as long, nothing after it.
+func closesFence(line, fence string) bool {
+	run := fenceRun(line)
+	return run != "" && run[0] == fence[0] && len(run) >= len(fence) && strings.TrimSpace(line) == run
 }
 
 // replaceOutsideCode replaces one line's em dashes outside backtick spans,
@@ -172,13 +197,27 @@ func replaceOutsideCode(line string, n *int) string {
 		keep = m[1]
 	}
 	out, rest := []rune(line[:keep]), []rune(line[keep:])
-	inCode := false
+	code := 0 // the open span's backtick run length, 0 outside one
 	for i := 0; i < len(rest); i++ {
 		r := rest[i]
 		if r == '`' {
-			inCode = !inCode
+			// A span opens with a run and closes only with a run of the
+			// same length; other runs inside it are literal.
+			run := 1
+			for i+run < len(rest) && rest[i+run] == '`' {
+				run++
+			}
+			switch {
+			case code == 0:
+				code = run
+			case run == code:
+				code = 0
+			}
+			out = append(out, rest[i:i+run]...)
+			i += run - 1
+			continue
 		}
-		if r != '—' || inCode {
+		if r != '—' || code > 0 {
 			out = append(out, r)
 			continue
 		}

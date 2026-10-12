@@ -199,7 +199,11 @@ func (t *Tools) promoteDraft(ctx context.Context, target Target, args *PromoteAr
 		bad.Text = "status: not-permitted\n" + bad.Text
 		return *bad
 	}
-	draft := &promote.Draft{Path: target.Path, Body: args.Body, Metadata: callerMeta(args.Metadata), Source: strings.TrimSpace(args.Source)}
+	meta, err := callerMeta(args.Metadata)
+	if err != nil {
+		return failure("%v", err)
+	}
+	draft := &promote.Draft{Path: target.Path, Body: args.Body, Metadata: meta, Source: strings.TrimSpace(args.Source)}
 	doc := t.doc(ctx, target, write)
 	head, err := doc.Head(ctx)
 	if err != nil {
@@ -360,20 +364,22 @@ func (t *Tools) promoteApply(ctx context.Context, target Target, doc *docwrite.D
 // callerMeta is the caller's metadata as strings; identity keys are the
 // surface's, never the caller's. A JSON number is written as the decimal it
 // was, never in exponent form.
-func callerMeta(raw map[string]any) map[string]string {
+func callerMeta(raw map[string]any) (map[string]string, error) {
 	meta := make(map[string]string, len(raw))
 	for k, v := range raw {
 		if protocol.IsIdentityMetadataKey(k) {
 			continue
 		}
 		switch x := v.(type) {
+		case string:
+			meta[k] = x
 		case float64:
 			meta[k] = strconv.FormatFloat(x, 'f', -1, 64)
 		case bool:
 			meta[k] = strconv.FormatBool(x)
 		default:
-			meta[k] = fmt.Sprintf("%v", v)
+			return nil, fmt.Errorf("metadata.%s: %T is not a string value", k, v)
 		}
 	}
-	return meta
+	return meta, nil
 }

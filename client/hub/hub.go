@@ -181,6 +181,7 @@ func AncestorsOf(paths ...string) []string {
 			}
 		}
 	}
+	slices.SortStableFunc(hubs, func(a, b string) int { return strings.Count(b, "/") - strings.Count(a, "/") })
 	return hubs
 }
 

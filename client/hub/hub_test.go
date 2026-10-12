@@ -160,7 +160,7 @@ func TestAncestorsAndDropFromHubs(t *testing.T) {
 		"h/index.md":   {Response: protocol.Response{Status: protocol.StatusUnauthorized}},
 	}}
 	docs := func(p string) *docwrite.Doc { return docOn(backend, p) }
-	if got := AncestorsOf("/a/b/c.md", "/a/d.md"); strings.Join(got, " ") != "/a/b/index.md /a/index.md /index.md" {
+	if got := AncestorsOf("/a/d.md", "/a/b/c.md"); strings.Join(got, " ") != "/a/b/index.md /a/index.md /index.md" {
 		t.Errorf("union = %v", got)
 	}
 	got := DropFromHubs(t.Context(), docs, AncestorsOf("/a/b/c.md"), &Drop{Targets: []string{"/a/b/c.md"}})

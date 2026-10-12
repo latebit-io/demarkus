@@ -54,6 +54,17 @@ func TestPublishSendsTheWriteWithIdentity(t *testing.T) {
 	}
 }
 
+func TestPublishRefusesNonStringMetadata(t *testing.T) {
+	backend := &fetchtest.Client{}
+	got := newTools(t, backend, writingHooks()).Publish(t.Context(), marktools.PublishArgs{
+		URL: "/doc.md", Body: "# Doc\n", ExpectedVersion: new(0),
+		Metadata: map[string]any{"tags": "a", "rel-sees": []any{"/x.md"}},
+	})
+	if !got.IsError || !strings.Contains(got.Text, "metadata.rel-sees: []interface {} is not a string value") || len(backend.PublishCalls) != 0 {
+		t.Fatalf("Publish = %+v (publishes %d)", got, len(backend.PublishCalls))
+	}
+}
+
 // Arguments are checked before authorization, authorization before any write:
 // a caller fixes what it sent before learning it may not write at all.
 func TestPublishChecksInOrder(t *testing.T) {
