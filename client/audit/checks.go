@@ -1,10 +1,11 @@
-package doctor
+package audit
 
 import (
 	"context"
 	"fmt"
 	"maps"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,6 +33,7 @@ const (
 	CheckFrontmatter   = "In-body frontmatter"
 	CheckReferences    = "Dangling and unlinked references"
 	CheckLostMetadata  = "Metadata lost across versions"
+	CheckPromotion     = "Promotion candidates"
 	CheckTokenDrift    = "Token drift"
 )
 
@@ -39,8 +41,19 @@ const (
 var CheckOrder = []string{
 	CheckBrokenLinks, CheckUnresolved, CheckOrphans, CheckStaleIndex, CheckMissingHub, CheckUntitled,
 	CheckADRSequence, CheckUntagged, CheckUntyped, CheckDuplicates, CheckHubShape, CheckOversized,
-	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckReferences, CheckLostMetadata, CheckTokenDrift,
+	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckReferences, CheckLostMetadata, CheckPromotion, CheckTokenDrift,
 }
+
+// Promotion: what marks shared-team knowledge in a personal store, and the
+// staging directories whose content stays personal by nature.
+var (
+	promotedMarker = regexp.MustCompile(`(?m)^promoted(-via)?: \S`)
+	promotionTypes = map[string]bool{"Decision": true, "Architecture": true, "Guideline": true, "Guide": true, "Reference": true, "Pattern": true}
+	stagingDirs    = map[string]bool{"journal": true, "thoughts": true, "debt": true, "notes": true, "scratch": true}
+)
+
+// promotionFloor is the importance at which any typed document qualifies.
+const promotionFloor = 0.8
 
 // checkLinks: a target absent from the live inventory is broken when a fetch
 // says not-found or archived, fine when it serves (outside the scope), any
@@ -369,6 +382,60 @@ func (a *audit) checkLostMetadata(ctx context.Context) {
 			a.add(CheckLostMetadata, p, fmt.Sprintf("untagged through the last %d versions; never tagged", min(current-1, MaxVersionsPerDoc)), "curation, not repair")
 		}
 	}
+}
+
+// checkPromotion (on request): live documents an adr directory, a shared
+// type or high importance marks as team knowledge, minus the promoted set
+// (tag or marker); hubs and staging directories never qualify.
+func (a *audit) checkPromotion() {
+	for _, p := range a.order {
+		d := a.docs[p]
+		if !live(d.status) || gate.NavExempt(p) {
+			continue
+		}
+		if slices.Contains(protocol.SplitTags(d.meta["tags"]), "promoted") || Promoted(d.body) {
+			a.promoted++
+			continue
+		}
+		if why := promotionReason(p, d.meta); why != "" {
+			a.add(CheckPromotion, p, why, "/promote "+p)
+		}
+	}
+}
+
+// Promoted reports a body back-stamped by /promote: a standalone
+// `promoted:` or `promoted-via:` marker line.
+func Promoted(body string) bool {
+	return strings.Contains(body, "promoted") && promotedMarker.MatchString(body)
+}
+
+// promotionReason says why a document qualifies, or "" when it does not.
+func promotionReason(p string, meta map[string]string) string {
+	for seg := range strings.SplitSeq(path.Dir(p), "/") {
+		if stagingDirs[seg] {
+			return ""
+		}
+	}
+	kind := meta["type"]
+	importance, parseErr := strconv.ParseFloat(meta["importance"], 64)
+	if parseErr != nil {
+		importance = 0 // unparsable or absent: below the floor
+	}
+	adr := path.Base(path.Dir(p)) == "adr"
+	if !adr && !promotionTypes[kind] && importance < promotionFloor {
+		return ""
+	}
+	var parts []string
+	if adr {
+		parts = append(parts, "decision record")
+	}
+	if kind != "" {
+		parts = append(parts, "type "+kind)
+	}
+	if meta["importance"] != "" {
+		parts = append(parts, "importance "+meta["importance"])
+	}
+	return strings.Join(parts, ", ")
 }
 
 func describeMeta(m map[string]string) string {

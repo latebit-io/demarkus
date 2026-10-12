@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/audit"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/doctor"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
@@ -43,12 +43,12 @@ func cmdDoctor(args []string) {
 		}
 		id = r.Store
 	}
-	store, err := resolveStore(id)
+	client, store, err := resolveStore(id)
 	if err != nil {
 		die(err)
 	}
-	defer store.Client.Close() // no error to handle; on die the process exits and the OS closes the sockets
-	report, err := doctor.Run(context.Background(), store, doctor.Options{Scope: *scope, Deep: *deep})
+	defer client.Close() // no error to handle; on die the process exits and the OS closes the sockets
+	report, err := audit.Run(context.Background(), store, audit.Options{Scope: *scope, Deep: *deep})
 	if err != nil {
 		die(err)
 	}
@@ -68,14 +68,14 @@ func cmdDoctor(args []string) {
 
 // addTokenDrift folds the local write-auth probe into the report: drift is a
 // finding, an unverifiable state a coverage gap, healthy nothing.
-func addTokenDrift(report *doctor.Report) {
+func addTokenDrift(report *audit.Report) {
 	verdict, err := provision.VerifyAuth()
 	switch {
 	case err != nil:
 		report.Coverage = append(report.Coverage, "write auth not verified: "+err.Error())
 	case strings.HasPrefix(verdict, "write auth healthy"):
 	case strings.HasPrefix(verdict, "token drift"):
-		report.Findings = append(report.Findings, doctor.Finding{Check: doctor.CheckTokenDrift, Path: "provision verify-auth", Detail: verdict, Fix: "writes fail unauthorized until the token or registry is fixed"})
+		report.Findings = append(report.Findings, audit.Finding{Check: audit.CheckTokenDrift, Path: "provision verify-auth", Detail: verdict, Fix: "writes fail unauthorized until the token or registry is fixed"})
 	default:
 		report.Coverage = append(report.Coverage, "write auth not verified: "+verdict)
 	}
@@ -83,18 +83,18 @@ func addTokenDrift(report *doctor.Report) {
 
 // resolveStore maps a catalog id to a client. Broker stores need the
 // harness's OAuth session and are refused.
-func resolveStore(id string) (*doctor.ClientStore, error) {
+func resolveStore(id string) (*fetch.Client, *audit.ClientStore, error) {
 	ep, err := catalog.Resolve(id)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if ep.Broker {
-		return nil, errors.New("store '" + id + "' is a broker store; the doctor audits local and direct-QUIC stores only")
+		return nil, nil, errors.New("store '" + id + "' is a broker store; the doctor audits local and direct-QUIC stores only")
 	}
 	hostPort, err := links.DialHost(ep.Host)
 	if err != nil {
-		return nil, fmt.Errorf("store '%s' host: %w", id, err)
+		return nil, nil, fmt.Errorf("store '%s' host: %w", id, err)
 	}
 	client := fetch.NewClient(fetch.Options{Insecure: ep.Insecure, DialTimeout: 3 * time.Second, RequestTimeout: 15 * time.Second})
-	return &doctor.ClientStore{Client: client, Host: hostPort, Token: ep.Token}, nil
+	return client, &audit.ClientStore{Client: client, Host: hostPort, Token: ep.Token}, nil
 }

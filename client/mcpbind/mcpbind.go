@@ -181,6 +181,15 @@ func GraphPublish(req *mcp.CallToolRequest) marktools.GraphPublishArgs {
 	return args
 }
 
+// Doctor binds mark_doctor's arguments.
+func Doctor(req *mcp.CallToolRequest) (marktools.DoctorArgs, error) {
+	url, err := URL(req)
+	if err != nil {
+		return marktools.DoctorArgs{}, err
+	}
+	return marktools.DoctorArgs{URL: url, Deep: req.GetBool("deep", false), Promotion: req.GetBool("promotion", false)}, nil
+}
+
 // Refused is the tool result for an argument the surface refused.
 func Refused(err error) *mcp.CallToolResult {
 	return mcp.NewToolResultError(err.Error())

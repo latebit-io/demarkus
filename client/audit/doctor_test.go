@@ -1,4 +1,4 @@
-package doctor
+package audit
 
 import (
 	"context"
@@ -290,6 +290,61 @@ func TestInventoryOrderIsBreadthFirst(t *testing.T) {
 	for _, dir := range []string{"/", "/a/", "/a/deep/", "/a/deep/er/", "/b/", "/b/sub/"} {
 		if !a.dirs[dir] {
 			t.Errorf("directory %s missing from the inventory", dir)
+		}
+	}
+}
+
+func TestPromotionCandidates(t *testing.T) {
+	body := "# T\n\nFor the team: what this settles.\n"
+	stamped := "# T\n\npromoted-via: knowledge\npromoted: mark://w/t.md@v1\n\nFor the team: what this settles.\n"
+	docs := map[string]fakeDoc{
+		"/index.md":              {Body: "# Hub\n\n- [a](/adr/0001-a.md)\n", Meta: map[string]string{"tags": "hub", "importance": "0.9"}},
+		"/adr/0001-a.md":         {Body: body, Meta: map[string]string{"tags": "adr", "type": "Decision", "importance": "0.8"}},
+		"/adr/0002-b.md":         {Body: body, Meta: map[string]string{"tags": "adr,promoted", "type": "Decision"}},
+		"/adr/0003-c.md":         {Body: stamped, Meta: map[string]string{"tags": "adr", "type": "Decision"}},
+		"/architecture.md":       {Body: body, Meta: map[string]string{"tags": "arch", "type": "Architecture"}},
+		"/notes.md":              {Body: body, Meta: map[string]string{"tags": "n", "type": "Note", "importance": "0.9"}},
+		"/journal/2026-01-01.md": {Body: body, Meta: map[string]string{"tags": "j", "type": "Decision", "importance": "1"}},
+		"/plans/p.md":            {Body: body, Meta: map[string]string{"tags": "p", "type": "Plan", "importance": "0.5"}},
+	}
+	r, err := Run(context.Background(), newFake(docs), Options{Scope: "/", Promotion: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := findings(r, CheckPromotion)
+	want := []string{ // breadth first: root documents, then adr/
+		"/architecture.md: type Architecture",
+		"/notes.md: type Note, importance 0.9",
+		"/adr/0001-a.md: decision record, type Decision, importance 0.8",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("candidates = %q\nwant %q", got, want)
+	}
+	if r.Promoted != 2 {
+		t.Errorf("promoted excluded = %d, want 2", r.Promoted)
+	}
+	if md := r.Markdown(); !strings.Contains(md, "### Promotion candidates (3)\n") || !strings.Contains(md, ", 2 already promoted\n") {
+		t.Errorf("markdown lacks the section or the excluded count:\n%s", md)
+	}
+
+	off, err := Run(context.Background(), newFake(docs), Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings(off, CheckPromotion)) != 0 || strings.Contains(off.Markdown(), "already promoted") {
+		t.Error("promotion check ran without being asked")
+	}
+}
+
+func TestValidScopeAcceptsNestedSlugPaths(t *testing.T) {
+	for in, want := range map[string]string{"": "/", "/": "/", "/proj/": "/proj/", "proj": "/proj/", "/projects/demarkus": "/projects/demarkus/"} {
+		if got, err := ValidScope(in); err != nil || got != want {
+			t.Errorf("ValidScope(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"bad slug", "/a/../b/", "/Upper/", "/a//b/"} {
+		if _, err := ValidScope(bad); err == nil {
+			t.Errorf("ValidScope(%q) accepted", bad)
 		}
 	}
 }

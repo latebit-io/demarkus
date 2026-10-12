@@ -32,9 +32,10 @@ var mcpToolNames = []string{
 	"mark_graph_export",
 	"mark_graph_publish",
 	"mark_worlds",
+	"mark_doctor",
 }
 
-// mcpTools returns 13 direct-MCP parity tools plus broker-only mark_worlds and
+// mcpTools returns 14 direct-MCP parity tools plus broker-only mark_worlds and
 // mark_lookup_all, which operate on the knowledge system rather than one world.
 func mcpTools() []mcp.Tool {
 	return []mcp.Tool{
@@ -53,6 +54,7 @@ func mcpTools() []mcp.Tool {
 		markGraphExportTool(),
 		markGraphPublishTool(),
 		markWorldsTool(),
+		markDoctorTool(),
 	}
 }
 
@@ -92,6 +94,10 @@ func markPublishTool() mcp.Tool { return mcpfmt.PublishTool(mcpURLDesc, "") }
 func markAppendTool() mcp.Tool { return mcpfmt.AppendTool(mcpURLDesc, "") }
 
 func markArchiveTool() mcp.Tool { return mcpfmt.ArchiveTool(mcpURLDesc, "") }
+
+func markDoctorTool() mcp.Tool {
+	return mcpfmt.DoctorTool("world root or a directory, e.g. mark://team-a/ or mark://team-a/docs/", "")
+}
 
 func markDiscoverTool() mcp.Tool {
 	return mcp.NewTool("mark_discover",

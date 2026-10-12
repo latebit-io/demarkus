@@ -14,7 +14,7 @@ Slug and bound soul: the session header `Project slug: ... Bound store: ...`. He
 "$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
 ```
 
-`<project-dir>`: `"${CLAUDE_PROJECT_DIR}"`, or the named directory as one POSIX-safe shell word. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (`mcp__<store>__mark_*`); tools not connected: say so, name the server, stop.
+`<project-dir>`: `"${CLAUDE_PROJECT_DIR}"`, or the named directory as one POSIX-safe shell word. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (`mcp__<store>__mark_*`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
 
 ## Steps
 

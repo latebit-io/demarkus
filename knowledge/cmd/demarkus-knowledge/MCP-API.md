@@ -215,6 +215,25 @@ world fails, the tool returns an error.
 | `limit` | number | no | Global max results (default 10, cap 1000). |
 | `match` | string | no | `catalog` (default) or `body`. Body rows merge by the same ordinal rule and carry a `Snippet` column; worlds that answered from their catalog are listed in a note. |
 
+#### `mark_doctor`
+
+Read-only hygiene audit of one world or a directory under it: broken
+and unresolved links, orphans, stale index entries, missing hubs,
+untitled, untagged and untyped documents, ADR sequence and references,
+duplicate content, hub and document shape, style, in-body frontmatter.
+The audit reads every document in scope once within fixed bounds; the
+report's Coverage section lists every bound hit and every failed call,
+so an empty findings list is clean only when Coverage says `complete`.
+An audit that cannot be trusted (scope not found, unauthorized,
+inventory bound) is a tool error. The memory broker scopes it to the
+caller's world.
+
+| Param | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `url` | string | yes | `mark://{worldName}/` or a directory under it. |
+| `deep` | boolean | no | Also walk version history for metadata lost across versions (bounded). |
+| `promotion` | boolean | no | Also list promotion candidates: decision records, shared types and high-importance documents not yet promoted; staging directories excluded. |
+
 ### Write
 
 #### `mark_publish`

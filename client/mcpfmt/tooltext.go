@@ -41,6 +41,7 @@ const (
 	graphDescription        = "Crawl outbound links from a document to depth: link graph with edge provenance and rel-* typed relations. External links recorded, not followed. Feeds the graph store for mark_backlinks."
 	graphExportDescription  = "Export the graph store as publishable markdown with mark:// links. Run mark_graph first."
 	graphPublishDescription = "Export the graph store and publish it as crawlable markdown (mark_graph_export + mark_publish). Run mark_graph first."
+	doctorDescription       = "Read-only hygiene audit of a store or directory: broken links, orphans, missing hubs, untagged or untyped documents, duplicates, hub and document shape, style, ADR gaps. Bounded; Coverage lists gaps. deep: metadata lost across versions. promotion: candidates for a shared knowledge system."
 
 	forceDesc           = "full body regardless of size or unchanged status (default false)"
 	includeArchivedDesc = "include archived documents and all-archived directories (default false)"
@@ -52,6 +53,8 @@ const (
 	onConflictDesc      = "merge (default): merged candidate body to review and republish at publish-at-version; fail: raw conflict status"
 	metadataDesc        = "string values stored with the document: tags (comma-separated) and importance (0-1) rank mark_lookup; rel-<predicate> declares a typed relation (e.g. rel-supersedes: /adr/0002.md); other keys stored opaquely. retention (positive int) permanently deletes all but the newest N versions on this and every later write carrying it: irreversible, confirm with the user first"
 	depthDesc           = "max link depth (default 2, max 5)"
+	doctorDeepDesc      = "walk version history for lost metadata (default false)"
+	doctorPromotionDesc = "list promotion candidates, promoted ones excluded (default false)"
 	graphRetentionDesc  = "graph versions to keep (default 20; 0 keeps all); older permanently pruned"
 )
 
@@ -179,6 +182,16 @@ func LookupParams() []mcp.ToolOption {
 	}
 }
 
+// DoctorTool builds mark_doctor; urlDesc describes the scope argument.
+func DoctorTool(urlDesc, suffix string) mcp.Tool {
+	return mcp.NewTool("mark_doctor",
+		describe(doctorDescription, suffix),
+		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
+		mcp.WithBoolean("deep", mcp.Description(doctorDeepDesc)),
+		mcp.WithBoolean("promotion", mcp.Description(doctorPromotionDesc)),
+	)
+}
+
 // Tool profiles. Lean omits the operator and federation tools that no plugin
 // prompt references; full is the complete surface for direct consumers.
 const (
@@ -193,6 +206,15 @@ var AdvancedTools = map[string]bool{
 	"mark_discover":      true,
 	"mark_graph_export":  true,
 	"mark_graph_publish": true,
+}
+
+// KnownTools is every mark_* tool any surface serves. The plugin-prompts
+// check fails when a template names a tool outside it.
+var KnownTools = map[string]bool{
+	"mark_fetch": true, "mark_explore": true, "mark_list": true, "mark_versions": true,
+	"mark_lookup": true, "mark_lookup_all": true, "mark_publish": true, "mark_append": true,
+	"mark_archive": true, "mark_discover": true, "mark_backlinks": true, "mark_graph": true,
+	"mark_graph_export": true, "mark_graph_publish": true, "mark_worlds": true, "mark_doctor": true,
 }
 
 // ValidProfile rejects anything but the two named profiles. Surfaces call it

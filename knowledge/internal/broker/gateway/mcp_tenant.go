@@ -34,6 +34,7 @@ var tenantWorldArgs = map[string][]string{
 	"mark_backlinks": {"url"},
 	"mark_graph":     {"url"},
 	"mark_worlds":    {},
+	"mark_doctor":    {"url"},
 }
 
 // tenantWorldCtxKey carries the world tenantGate already resolved, so

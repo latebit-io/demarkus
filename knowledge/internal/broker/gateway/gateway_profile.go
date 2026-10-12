@@ -69,6 +69,7 @@ func MemoryProfile() *Profile {
 			markBacklinksTool(),
 			markGraphTool(),
 			markWorldsSelfTool(),
+			markDoctorTool(),
 		},
 	}
 }

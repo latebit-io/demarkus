@@ -22,11 +22,11 @@ Zero-config: the plugin spawns a local `demarkus-server`, generates a capability
 - **`/soul-context`**: restore session context from the project's soul (recent journal, active work).
 - **`/soul-journal`**: append an entry to today's journal.
 - **`/soul-status`**: show connection state and verify health.
-- **`/soul-doctor`**: read-only hygiene audit (orphans, broken links, untagged docs, stale index entries, hub and document shape, ADR gaps), run by `demarkus-plugin doctor` in one pass over the store.
+- **`/soul-doctor`**: read-only hygiene audit (orphans, broken links, untagged docs, stale index entries, hub and document shape, ADR gaps), one `mark_doctor` call over the store.
 - **`/soul-curate`**: bring one document into shape (summary, stable headings, hub rules, a split into hub plus topic files when it outgrows one fetch); human gate before any write.
 - **`/soul-archive`**: archive one document or every live document under a directory (history kept, hidden from lists and lookup) and drop the hub bullets that linked it; human gate before any write.
 - **`/promote`**: lift a soul document to a shared knowledge system (curate, route, gate, publish, back-stamp).
-- **`/promote-scan`**: sweep the soul for promotion candidates.
+- **`/promote-scan`**: sweep the soul for promotion candidates (`mark_doctor` with `promotion`).
 - **`/soul-refresh`**: refresh promoted documents from the knowledge system, the downward leg of the coherence edge.
 - **`remember` skill**: routing rules for recall and recording (which file gets decisions, lessons, patterns, journal entries).
 

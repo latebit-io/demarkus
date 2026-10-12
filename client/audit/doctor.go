@@ -3,7 +3,7 @@
 // shape, ADR gaps and references. It reads every document in scope once and
 // derives every check from that pass, so the report is exact within its
 // bounds. It never writes.
-package doctor
+package audit
 
 import (
 	"context"
@@ -16,7 +16,6 @@ import (
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 )
 
 // Bounds keep one audit affordable on a large store; each bound hit is
@@ -38,6 +37,7 @@ const (
 var (
 	adrReferenceRe = regexp.MustCompile(`(?i)\bADR[ -]?#?(\d{3,4})\b`)
 	adrFileRe      = regexp.MustCompile(`^(\d{4})-.*\.md$`)
+	slugRe         = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 )
 
 // Store is the read surface an audit needs. Every method returns the wire
@@ -50,8 +50,10 @@ type Store interface {
 
 // Options select the audit scope and optional checks.
 type Options struct {
-	Scope string // "/" or "/<slug>/"
-	Deep  bool   // metadata lost across versions
+	Scope     string        // "/" or a directory path of slugs, "/<slug>/"
+	Deep      bool          // metadata lost across versions
+	Promotion bool          // documents worth lifting to a shared knowledge system
+	Timeout   time.Duration // whole audit; 0 is MaxAuditDuration
 }
 
 // Finding is one report line: the document, what is wrong, and the fix.
@@ -71,6 +73,10 @@ type Report struct {
 	Findings  []Finding `json:"findings"`
 	Coverage  []string  `json:"coverage"`
 	Deep      bool      `json:"deep"`
+	// Promoted counts the documents the promotion check excluded as already
+	// promoted; it reads on the summary line only when that check ran.
+	Promotion bool `json:"promotion"`
+	Promoted  int  `json:"promoted,omitempty"`
 }
 
 // document is one inventory entry after its fetch.
@@ -92,18 +98,26 @@ type audit struct {
 	dirs     map[string]bool
 	findings []Finding
 	coverage []string
+	promoted int // documents the promotion check excluded as already promoted
 }
 
-// ValidScope checks the audit root: "/" or "/<slug>/" with a path-safe slug.
+// IsSlug reports whether s can be a store path segment: no delimiters, no
+// dot-only names. Prompts quote the same rule for user-typed slugs.
+func IsSlug(s string) bool { return slugRe.MatchString(s) }
+
+// ValidScope checks the audit root: "/" or a directory path whose every
+// segment is a path-safe slug, returned with its trailing slash.
 func ValidScope(scope string) (string, error) {
 	if scope == "" || scope == "/" {
 		return "/", nil
 	}
-	slug := strings.Trim(scope, "/")
-	if strings.Contains(slug, "/") || !project.IsSlug(slug) {
-		return "", fmt.Errorf("scope %q is not a project slug", scope)
+	clean := strings.Trim(scope, "/")
+	for seg := range strings.SplitSeq(clean, "/") {
+		if !IsSlug(seg) {
+			return "", fmt.Errorf("scope %q is not a slug path", scope)
+		}
 	}
-	return "/" + slug + "/", nil
+	return "/" + clean + "/", nil
 }
 
 // Run performs the audit. An error means the audit cannot be trusted
@@ -115,7 +129,11 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 		return nil, err
 	}
 	opts.Scope = scope
-	ctx, cancel := context.WithTimeout(ctx, MaxAuditDuration)
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = MaxAuditDuration
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	a := &audit{opts: opts, store: store, docs: map[string]*document{}, dirs: map[string]bool{}}
 	if err := a.inventory(ctx); err != nil {
@@ -136,7 +154,10 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 	if opts.Deep {
 		a.checkLostMetadata(ctx)
 	}
-	return &Report{Scope: scope, Documents: len(a.order), Deep: opts.Deep, Findings: a.findings, Coverage: a.coverage}, nil
+	if opts.Promotion {
+		a.checkPromotion()
+	}
+	return &Report{Scope: scope, Documents: len(a.order), Deep: opts.Deep, Promotion: opts.Promotion, Promoted: a.promoted, Findings: a.findings, Coverage: a.coverage}, nil
 }
 
 func (a *audit) note(format string, args ...any) {
