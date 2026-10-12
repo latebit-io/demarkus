@@ -12,6 +12,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/docwrite/gate"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/layout"
 )
 
 // Check names in report order.
@@ -44,16 +45,8 @@ var CheckOrder = []string{
 	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckReferences, CheckLostMetadata, CheckPromotion, CheckTokenDrift,
 }
 
-// Promotion: what marks shared-team knowledge in a personal store, and the
-// staging directories whose content stays personal by nature.
-var (
-	promotedMarker = regexp.MustCompile(`(?m)^promoted(-via)?: \S`)
-	promotionTypes = map[string]bool{"Decision": true, "Architecture": true, "Guideline": true, "Guide": true, "Reference": true, "Pattern": true}
-	stagingDirs    = map[string]bool{"journal": true, "thoughts": true, "debt": true, "notes": true, "scratch": true}
-)
-
-// promotionFloor is the importance at which any typed document qualifies.
-const promotionFloor = 0.8
+// promotedMarker is the back-stamp /promote leaves in a body.
+var promotedMarker = regexp.MustCompile(`(?m)^promoted(-via)?: \S`)
 
 // checkLinks: a target absent from the live inventory is broken when a fetch
 // says not-found or archived, fine when it serves (outside the scope), any
@@ -393,7 +386,7 @@ func (a *audit) checkPromotion() {
 		if !live(d.status) || gate.NavExempt(p) {
 			continue
 		}
-		why := promotionReason(p, d.meta)
+		why := promotionReason(p, d.meta, &a.layout)
 		if why == "" {
 			continue
 		}
@@ -411,12 +404,12 @@ func Promoted(body string) bool {
 	return strings.Contains(body, "promoted") && promotedMarker.MatchString(body)
 }
 
-// promotionReason says why a document qualifies, or "" when it does not. An
-// adr directory anywhere above the document makes it a decision record.
-func promotionReason(p string, meta map[string]string) string {
+// promotionReason says why a document qualifies under the layout's rules, or
+// "" when it does not. An adr directory anywhere above it makes it a record.
+func promotionReason(p string, meta map[string]string, l *layout.Layout) string {
 	adr := false
 	for seg := range strings.SplitSeq(path.Dir(p), "/") {
-		if stagingDirs[seg] {
+		if slices.Contains(l.Staging, seg) {
 			return ""
 		}
 		adr = adr || seg == "adr"
@@ -426,7 +419,7 @@ func promotionReason(p string, meta map[string]string) string {
 	if parseErr != nil {
 		importance = 0 // unparsable or absent: below the floor
 	}
-	if !adr && !promotionTypes[kind] && importance < promotionFloor {
+	if !adr && !slices.Contains(l.PromoteTypes, kind) && importance < l.PromoteFloor {
 		return ""
 	}
 	var parts []string

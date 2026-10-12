@@ -285,7 +285,14 @@ func (t *Tools) appendToday(ctx context.Context, target Target, args AppendArgs)
 	docs := func(p string) *docwrite.Doc {
 		return t.doc(ctx, Target{Host: target.Host, Path: p, NodeURL: target.NodeURL, Authority: target.Authority}, write)
 	}
-	out, err := journal.Append(ctx, docs, journal.Request{Dir: target.Path, Entry: args.Body, Tags: protocol.SplitTags(args.Tags), Stamp: t.identityMeta(ctx)})
+	l, err := t.layoutFor(ctx, target)
+	if err != nil {
+		return failure("append failed: %v", err)
+	}
+	out, err := journal.Append(ctx, docs, journal.Request{
+		Dir: target.Path, Entry: args.Body, Tags: protocol.SplitTags(args.Tags),
+		Stamp: t.identityMeta(ctx), Layout: l,
+	})
 	if err != nil {
 		return failure("append failed: %v", err)
 	}

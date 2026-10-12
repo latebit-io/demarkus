@@ -25,9 +25,15 @@ func Extract(body string) []string {
 	return out
 }
 
+// isAbsoluteURL reports a dest with a scheme (https://, mark://, mailto:).
+func isAbsoluteURL(dest string) bool {
+	u, err := url.Parse(dest)
+	return err == nil && u.Scheme != ""
+}
+
 // Resolve resolves a possibly-relative link dest against baseURL.
 func Resolve(baseURL, dest string) string {
-	if strings.Contains(dest, "://") {
+	if isAbsoluteURL(dest) {
 		return dest
 	}
 	base, err := url.Parse(baseURL)
@@ -206,7 +212,7 @@ func ExtractTitle(body string) string {
 func ResolvePath(docPath, dest string) string {
 	dest, _, _ = strings.Cut(dest, "#")
 	dest, _, _ = strings.Cut(dest, "?")
-	if dest == "" || strings.Contains(dest, "://") {
+	if dest == "" || isAbsoluteURL(dest) {
 		return ""
 	}
 	target := pathpkg.Clean(dest)

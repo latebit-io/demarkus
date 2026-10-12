@@ -1,0 +1,70 @@
+package layout
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/latebit-io/demarkus/protocol"
+)
+
+func TestParseOverlaysDirectivesOnDefault(t *testing.T) {
+	body := "# Template\n\n```text\njournal: log\nplans: work/\nroadmap: next.md\nstaging: log, scratch\npromote_types: Decision, ADR\npromote_floor: 0.6\n```\n\njournal: ignored-second-occurrence\n"
+	got, err := Parse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Journal != "log/" || got.Plans != "work/" || got.Roadmap != "next.md" || got.PromoteFloor != 0.6 {
+		t.Errorf("parsed = %+v", got)
+	}
+	if fmt.Sprint(got.Staging) != "[log scratch]" || fmt.Sprint(got.PromoteTypes) != "[Decision ADR]" {
+		t.Errorf("lists = %v %v", got.Staging, got.PromoteTypes)
+	}
+}
+
+func TestParseNamesRejectedKeysAndKeepsTheirDefaults(t *testing.T) {
+	got, err := Parse("journal: ../etc\nplans: Two Words\nroadmap: /abs.md\nstaging: ok, ../bad\npromote_types: has space\npromote_floor: 7\n")
+	if err == nil || err.Error() != "template /.well-known/demarkus/template.md: invalid journal, plans, roadmap, staging, promote_types, promote_floor" {
+		t.Fatalf("err = %v", err)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(Default()) {
+		t.Errorf("invalid values changed the layout: %+v", got)
+	}
+	if got, err := Parse(""); err != nil || fmt.Sprint(got) != fmt.Sprint(Default()) {
+		t.Error("empty body is the default")
+	}
+}
+
+func TestReadMapsStatusToLayout(t *testing.T) {
+	answer := func(status, body string, err error) func(context.Context, string) (protocol.Response, error) {
+		return func(_ context.Context, p string) (protocol.Response, error) {
+			if p != DocumentPath {
+				t.Errorf("read %s, want the template", p)
+			}
+			return protocol.Response{Status: status, Body: body}, err
+		}
+	}
+	if l, err := Read(t.Context(), answer(protocol.StatusOK, "journal: log\n", nil)); err != nil || l.Journal != "log/" {
+		t.Errorf("ok = %+v %v", l, err)
+	}
+	if l, err := Read(t.Context(), answer(protocol.StatusNotFound, "", nil)); err != nil || l.Journal != "journal/" {
+		t.Errorf("not-found = %+v %v", l, err)
+	}
+	if _, err := Read(t.Context(), answer(protocol.StatusUnauthorized, "", nil)); err == nil || !strings.Contains(err.Error(), "unauthorized") {
+		t.Errorf("unauthorized = %v", err)
+	}
+	if _, err := Read(t.Context(), answer("", "", errors.New("dial"))); err == nil || !strings.Contains(err.Error(), "dial") {
+		t.Errorf("transport = %v", err)
+	}
+	if _, err := Read(t.Context(), answer(protocol.StatusOK, "journal: Bad/\n", nil)); err == nil {
+		t.Error("an invalid template is the reader's error")
+	}
+}
+
+func TestSection(t *testing.T) {
+	if Section("journal/") != "Journal" || Section("log") != "Log" || Section("") != "" {
+		t.Error("section names capitalize the directory")
+	}
+}

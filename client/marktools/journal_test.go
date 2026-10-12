@@ -98,6 +98,43 @@ func TestContextPrimerReadsHubJournalAndPlans(t *testing.T) {
 	}
 }
 
+func TestContextPrimerFollowsTheTemplateLayout(t *testing.T) {
+	backend := &fetchtest.Client{
+		Published: map[string]fetch.Result{
+			"host:6309/.well-known/demarkus/template.md": fetchtest.Head("journal: log\nroadmap: next.md\n", 1, nil),
+			"host:6309/index.md":                         fetchtest.Head("# Hub\n", 1, nil),
+			"host:6309/log/2026-10-12.md":                fetchtest.Head("# day\n", 1, nil),
+			"host:6309/next.md":                          fetchtest.Head("# Next\n", 1, nil),
+		},
+		ListFn: func(_ context.Context, r fetch.ListRequest) (fetch.Result, error) {
+			if r.Path == "/log/" {
+				return fetchtest.ListPage(r.Path, "", "2026-10-12.md"), nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+	}
+	got := newTools(t, backend, directHooks()).Fetch(t.Context(), marktools.FetchArgs{URL: "/.context"})
+	if got.IsError || !strings.Contains(got.Text, "## Log 2026-10-12 (/log/2026-10-12.md)") || !strings.Contains(got.Text, "## Active work (/next.md)") {
+		t.Fatalf("context = %+v", got)
+	}
+}
+
+func TestContextPrimerNotesABadTemplate(t *testing.T) {
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"host:6309/.well-known/demarkus/template.md": fetchtest.Head("journal: Bad Dir\n", 1, nil),
+		"host:6309/index.md":                         fetchtest.Head("# Hub\n", 1, nil),
+	}}
+	got := newTools(t, backend, directHooks()).Fetch(t.Context(), marktools.FetchArgs{URL: "/.context"})
+	if got.IsError || !strings.Contains(got.Text, "invalid journal (default layout assumed)") {
+		t.Fatalf("context = %+v", got)
+	}
+	// The route refuses to write under a layout it cannot trust.
+	tools := newTools(t, backend, writingHooks())
+	if w := tools.Append(t.Context(), marktools.AppendArgs{URL: "/", Body: "x", Route: "today"}); !w.IsError || !strings.Contains(w.Text, "invalid journal") {
+		t.Fatalf("append = %+v", w)
+	}
+}
+
 func TestContextPrimerListsWhatItCouldNotRead(t *testing.T) {
 	backend := &fetchtest.Client{
 		Published: map[string]fetch.Result{"host:6309/index.md": {Response: protocol.Response{Status: protocol.StatusUnauthorized}}},

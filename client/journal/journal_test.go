@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/layout"
 )
 
 var day = time.Date(2026, 10, 12, 15, 0, 0, 0, time.UTC)
@@ -193,6 +194,19 @@ func TestRootScopeHasNoProjectLink(t *testing.T) {
 	}
 	if len(backend.PublishCalls) != 2 {
 		t.Errorf("publishes = %d, want journal and hub only", len(backend.PublishCalls))
+	}
+}
+
+func TestLayoutNamesTheJournalDirectory(t *testing.T) {
+	backend := &fetchtest.Client{}
+	l := layout.Default()
+	l.Journal = "log/"
+	out, err := Append(t.Context(), docsOn(backend), Request{Dir: "/proj/", Entry: "x", Now: day, Layout: l})
+	if err != nil || out.Path != "/proj/log/2026-10-12.md" {
+		t.Fatalf("outcome = %+v err %v", out, err)
+	}
+	if hub := call(backend, "/proj/index.md"); hub == nil || !strings.Contains(hub.Body, "## Log\n\n- [Log](log/)") {
+		t.Errorf("hub publish = %+v", hub)
 	}
 }
 

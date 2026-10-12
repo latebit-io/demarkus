@@ -12,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/listwalk"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/layout"
 )
 
 // ContextLeaf is the pseudo document under any directory that reads as a
@@ -38,17 +39,22 @@ func (t *Tools) Context(ctx context.Context, rawURL string) Result {
 		dir += "/"
 	}
 	p := primer{tools: t, host: target.Host, token: t.readToken(ctx, target.Host)}
+	l, err := t.layoutFor(ctx, target)
+	if err != nil {
+		p.coverage = append(p.coverage, err.Error()+" (default layout assumed)")
+	}
+	journal := layout.Section(l.Journal)
 	fmt.Fprintf(&p.out, "# Context: %s\n", dir)
 	p.section(ctx, "Hub", dir+"index.md", false)
-	entries, listed := p.newest(ctx, dir+"journal/", contextJournalDays, journalDay)
+	entries, listed := p.newest(ctx, dir+l.Journal, contextJournalDays, journalDay)
 	if listed && len(entries) == 0 {
-		p.out.WriteString("\n## Journal\n\nNo entries yet.\n")
+		fmt.Fprintf(&p.out, "\n## %s\n\nNo entries yet.\n", journal)
 	}
 	for _, e := range entries {
-		p.section(ctx, "Journal "+strings.TrimSuffix(path.Base(e), ".md"), e, false)
+		p.section(ctx, journal+" "+strings.TrimSuffix(path.Base(e), ".md"), e, false)
 	}
-	p.section(ctx, "Active work", dir+"roadmap.md", true)
-	if plans, _ := p.newest(ctx, dir+"plans/", contextPlanCap, nil); len(plans) > 0 {
+	p.section(ctx, "Active work", dir+l.Roadmap, true)
+	if plans, _ := p.newest(ctx, dir+l.Plans, contextPlanCap, nil); len(plans) > 0 {
 		p.out.WriteString("\n## Plans\n\n")
 		slices.Reverse(plans)
 		for _, e := range plans {
@@ -62,6 +68,19 @@ func (t *Tools) Context(ctx context.Context, rawURL string) Result {
 		}
 	}
 	return text(p.out.String())
+}
+
+// layoutFor reads the target's world layout; the Default comes back with the
+// error so a reader may still render, while a writer must not.
+func (t *Tools) layoutFor(ctx context.Context, target Target) (layout.Layout, error) {
+	l, err := layout.Read(ctx, func(ctx context.Context, p string) (protocol.Response, error) {
+		r, err := t.fetch(ctx, target, p)
+		return r.Response, err
+	})
+	if err != nil {
+		return layout.Default(), err
+	}
+	return l, nil
 }
 
 // primer renders one context read: sections in, gaps under coverage.

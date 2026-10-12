@@ -16,6 +16,7 @@ import (
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/layout"
 )
 
 // Bounds keep one audit affordable on a large store; each bound hit is
@@ -37,7 +38,6 @@ const (
 var (
 	adrReferenceRe = regexp.MustCompile(`(?i)\bADR[ -]?#?(\d{3,4})\b`)
 	adrFileRe      = regexp.MustCompile(`^(\d{4})-.*\.md$`)
-	slugRe         = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 )
 
 // Store is the read surface an audit needs. Every method returns the wire
@@ -99,11 +99,11 @@ type audit struct {
 	findings []Finding
 	coverage []string
 	promoted int // documents the promotion check excluded as already promoted
+	layout   layout.Layout
 }
 
-// IsSlug reports whether s can be a store path segment: no delimiters, no
-// dot-only names. Prompts quote the same rule for user-typed slugs.
-func IsSlug(s string) bool { return slugRe.MatchString(s) }
+// IsSlug reports whether s can be a store path segment; the layout owns the rule.
+func IsSlug(s string) bool { return layout.IsSegment(s) }
 
 // ValidScope checks the audit root: "/" or a directory path whose every
 // segment is a path-safe slug, returned with its trailing slash.
@@ -136,6 +136,9 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	a := &audit{opts: opts, store: store, docs: map[string]*document{}, dirs: map[string]bool{}}
+	if a.layout, err = layout.Read(ctx, store.Fetch); err != nil {
+		return nil, err
+	}
 	if err := a.inventory(ctx); err != nil {
 		return nil, err
 	}

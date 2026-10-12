@@ -9,6 +9,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
@@ -46,7 +47,7 @@ func memorySeedDocs() []memorySeedDoc {
 		},
 		{
 			embedName: "template.md",
-			path:      "/.well-known/demarkus/template.md",
+			path:      layout.DocumentPath,
 			meta: map[string]string{
 				"agent": agent, "tags": "template,layout,memory,routes",
 				"importance": "0.7", "type": "Reference",

@@ -339,6 +339,23 @@ func TestPromotionCandidates(t *testing.T) {
 	}
 }
 
+func TestPromotionFollowsTheTemplateLayout(t *testing.T) {
+	docs := map[string]fakeDoc{
+		"/.well-known/demarkus/template.md": {Body: "# T\n\n```text\nstaging: drafts\npromote_types: Spec\npromote_floor: 0.95\n```\n", Meta: map[string]string{"tags": "template"}},
+		"/index.md":                         {Body: "# Hub\n", Meta: map[string]string{"tags": "hub"}},
+		"/journal/x.md":                     {Body: "# J\n\nA journal day the custom layout does not stage.\n", Meta: map[string]string{"tags": "j", "type": "Spec"}},
+		"/drafts/y.md":                      {Body: "# D\n\nStaged under the custom layout.\n", Meta: map[string]string{"tags": "d", "type": "Spec"}},
+		"/notes/z.md":                       {Body: "# N\n\nImportant but typed outside the list.\n", Meta: map[string]string{"tags": "n", "type": "Decision", "importance": "0.9"}},
+	}
+	r, err := Run(context.Background(), newFake(docs), Options{Scope: "/", Promotion: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findings(r, CheckPromotion); fmt.Sprint(got) != "[/journal/x.md: type Spec]" {
+		t.Errorf("candidates = %q, want only the Spec outside the custom staging", got)
+	}
+}
+
 func TestValidScopeAcceptsNestedSlugPaths(t *testing.T) {
 	for in, want := range map[string]string{"": "/", "/": "/", "/proj/": "/proj/", "proj": "/proj/", "/projects/demarkus": "/projects/demarkus/"} {
 		if got, err := ValidScope(in); err != nil || got != want {

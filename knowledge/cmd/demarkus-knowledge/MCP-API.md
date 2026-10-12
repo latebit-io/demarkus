@@ -136,7 +136,7 @@ the markdown `body`. Identical wire shape to direct-QUIC `FETCH`.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `url` | string | yes | `mark://{worldName}/{path}`; `mark://{worldName}/<dir>/.context` reads a session primer instead: the directory's `index.md`, its three newest `journal/` entries, `roadmap.md` when present and the `plans/` listing, each body capped, with a Coverage section for what could not be read. The same path works as an MCP resource. |
+| `url` | string | yes | `mark://{worldName}/{path}`; `mark://{worldName}/<dir>/.context` reads a session primer instead: the directory's `index.md`, its three newest journal entries, the roadmap when present and the plans listing (names from the world's template layout), each body capped, with a Coverage section for what could not be read. The same path works as an MCP resource. |
 
 #### `mark_explore`
 
@@ -215,6 +215,18 @@ world fails, the tool returns an error.
 | `limit` | number | no | Global max results (default 10, cap 1000). |
 | `match` | string | no | `catalog` (default) or `body`. Body rows merge by the same ordinal rule and carry a `Snippet` column; worlds that answered from their catalog are listed in a note. |
 
+#### Template layout
+
+A world's `/.well-known/demarkus/template.md` may carry a `key: value`
+block the mechanics read: `journal:` and `plans:` (directories),
+`roadmap:` (a document), `staging:` (directories whose content never
+promotes), `promote_types:` and `promote_floor:` (what the doctor's
+promotion sweep counts as shared knowledge). Absent keys keep the
+defaults, which are the block the memory broker seeds. A publish of the
+template with an invalid line is refused like an invalid policy; a reader
+that cannot fetch the template fails (the audit, the journal route) or
+notes it under Coverage (the primer).
+
 #### `mark_doctor`
 
 Read-only hygiene audit of one world or a directory under it: broken
@@ -272,7 +284,7 @@ the current version (one extra round trip, invisible to the agent).
 | `url` | string | yes | `mark://{worldName}/{path}`; with `route: "today"` a directory, `mark://{worldName}/` or a project under it. |
 | `body` | string | yes | Markdown to append. |
 | `expected_version` | number | no | Pass explicitly to skip the auto-resolve round trip. |
-| `route` | string | no | `today`: the entry goes to `<dir>journal/<YYYY-MM-DD>.md` (UTC), created with `journal` tags, `type: Journal` and importance 0.4 when absent. An entry already present as its own block answers `status: present` without writing. The directory hub gains a link to `journal/` and, under a project, the root hub a link to the project; each hub failure is a `note:`, the entry stays committed. |
+| `route` | string | no | `today`: the entry goes to `<dir><journal>/<YYYY-MM-DD>.md` (UTC; the directory from the world's template layout, `journal/` by default), created with `journal` tags, `type: Journal` and importance 0.4 when absent. An entry already present as its own block answers `status: present` without writing. The directory hub gains a link to `journal/` and, under a project, the root hub a link to the project; each hub failure is a `note:`, the entry stays committed. |
 | `tags` | string | no | With `route: "today"`: comma-separated subjects of the entry, added to the journal's tags (widened by a republish when the day already exists). |
 
 #### `mark_archive`

@@ -18,6 +18,7 @@ import (
 	"github.com/latebit-io/demarkus/client/hub"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/layout"
 )
 
 // Request is one entry for today's journal under Dir ("/" or "/<slug>/").
@@ -28,6 +29,8 @@ type Request struct {
 	Stamp map[string]string // the surface's identity keys, on every write
 	Title string            // the scope's name when it has no hub; "" is Memory
 	Now   time.Time         // zero is time.Now; the date is UTC
+	// Layout names the journal directory; zero is the default layout.
+	Layout layout.Layout
 }
 
 // Status is how the entry ended.
@@ -58,7 +61,7 @@ const (
 
 // Append records the entry. An error means nothing was committed, or the
 // outcome is unknown; a committed entry always returns an Outcome.
-func Append(ctx context.Context, docs Docs, req Request) (Outcome, error) {
+func Append(ctx context.Context, docs Docs, req Request) (Outcome, error) { //nolint:gocritic // a request is built once and passed once
 	req.Entry = strings.TrimSpace(req.Entry)
 	if req.Entry == "" {
 		return Outcome{}, errors.New("entry is empty")
@@ -69,6 +72,9 @@ func Append(ctx context.Context, docs Docs, req Request) (Outcome, error) {
 	if req.Now.IsZero() {
 		req.Now = time.Now()
 	}
+	if req.Layout.Journal == "" {
+		req.Layout = layout.Default()
+	}
 	r := run{Request: req, docs: docs, date: req.Now.UTC().Format("2006-01-02")}
 
 	scopeHub := docs(r.Dir + "index.md")
@@ -78,7 +84,7 @@ func Append(ctx context.Context, docs Docs, req Request) (Outcome, error) {
 	}
 	r.title = r.titleFrom(hubHead)
 
-	doc := docs(r.Dir + "journal/" + r.date + ".md")
+	doc := docs(r.Dir + r.Layout.Journal + r.date + ".md")
 	out := Outcome{Path: doc.Path}
 	if out.Status, out.Version, err = r.record(ctx, doc); err != nil {
 		return Outcome{}, err
@@ -188,9 +194,11 @@ type hubLink struct {
 // the journal directory (one link reaches every day), the root hub links the
 // project.
 func (r *run) links() []hubLink {
+	section := layout.Section(r.Layout.Journal)
+	bullet := fmt.Sprintf("- [%s](%s): dated session notes", section, r.Layout.Journal)
 	out := []hubLink{{doc: r.docs(r.Dir + "index.md"), Link: hub.Link{
-		Target: r.Dir + "journal/", Bullet: "- [Journal](journal/): dated session notes", Section: "## Journal",
-		CreateBody: fmt.Sprintf("# %s\n\n## Journal\n\n- [Journal](journal/): dated session notes\n", r.title),
+		Target: r.Dir + r.Layout.Journal, Bullet: bullet, Section: "## " + section,
+		CreateBody: fmt.Sprintf("# %s\n\n## %s\n\n%s\n", r.title, section, bullet),
 		CreateMeta: map[string]string{"tags": strings.Join(mergeTags([]string{"index"}, []string{slugOf(r.Dir)}), ","), "importance": hubImportance},
 		Stamp:      r.Stamp,
 	}}}
