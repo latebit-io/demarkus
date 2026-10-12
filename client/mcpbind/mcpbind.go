@@ -6,6 +6,9 @@ package mcpbind
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/marktools"
@@ -200,6 +203,29 @@ func Curate(req *mcp.CallToolRequest) (marktools.CurateArgs, error) {
 		return marktools.CurateArgs{}, err
 	}
 	return marktools.CurateArgs{URL: url, Apply: req.GetBool("apply", false), Proposal: req.GetString("proposal", "")}, nil
+}
+
+// Promote binds mark_promote's arguments; a phase outside phases is refused.
+func Promote(req *mcp.CallToolRequest, phases []string) (marktools.PromoteArgs, error) {
+	url, err := URL(req)
+	if err != nil {
+		return marktools.PromoteArgs{}, err
+	}
+	phase, err := Required(req, "phase")
+	if err != nil {
+		return marktools.PromoteArgs{}, err
+	}
+	if !slices.Contains(phases, phase) {
+		return marktools.PromoteArgs{}, fmt.Errorf("phase %q is not served here (%s)", phase, strings.Join(phases, ", "))
+	}
+	args := marktools.PromoteArgs{
+		URL: url, Phase: phase, Body: req.GetString("body", ""), Source: req.GetString("source", ""),
+		Target: req.GetString("target", ""), Via: req.GetString("via", ""), Stub: req.GetBool("stub", false), Packet: req.GetString("packet", ""),
+	}
+	if args.Metadata, err = metadata(req.GetArguments()); err != nil {
+		return marktools.PromoteArgs{}, err
+	}
+	return args, nil
 }
 
 // Doctor binds mark_doctor's arguments.

@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/audit"
+	soulpromote "github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 )
@@ -124,7 +124,7 @@ func promote(in *Input) (Output, error) {
 		return Output{}, nil
 	}
 	body, _ := args["body"].(string)
-	if audit.Promoted(body) {
+	if soulpromote.Marked(body) {
 		return Output{}, nil // already back-stamped: no re-nudge
 	}
 	return Output{Nudge: "New ADR published to demarkus (" + url + "). ADRs are high-signal, shared-team knowledge: if this decision is durable and useful beyond you, /promote " + url + " to lift it into the knowledge system (curate → gate → publish). If it is personal or provisional, leave it here; most personal content correctly stays put."}, nil

@@ -6,8 +6,6 @@ package curate
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -483,8 +481,7 @@ func hash(version int, writes []Write) string {
 			fmt.Fprintf(&b, "%s=%s\n", k, w.Metadata[k])
 		}
 	}
-	sum := sha256.Sum256([]byte(b.String()))
-	return hex.EncodeToString(sum[:8])
+	return docwrite.Digest(b.String())
 }
 
 // Inbound is one link into the document that names a section.

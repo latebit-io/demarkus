@@ -83,22 +83,41 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 	if bad != nil {
 		return *bad
 	}
-	styleNote, bad := t.styleGate(ctx, target, &args)
+	w := docwrite.Write{Body: args.Body, ExpectedVersion: expected, Metadata: t.publisherMeta(ctx, args.Metadata)}
+	result, notes, bad := t.landPublish(ctx, &landing{target: target, doc: t.doc(ctx, target, write), mode: mode}, &w)
 	if bad != nil {
 		return *bad
 	}
-	doc := t.doc(ctx, target, write)
-	w := docwrite.Write{Body: args.Body, ExpectedVersion: expected, Metadata: t.publisherMeta(ctx, args.Metadata)}
-	result, err := doc.Publish(ctx, w, mode)
+	// A candidate ends with its body; a note after it would read as body.
+	return text(formatResult(&result, writeFields...) + notes)
+}
+
+// landing is where a publish lands: the target, its bound document, and
+// the conflict mode.
+type landing struct {
+	target Target
+	doc    *docwrite.Doc
+	mode   string
+}
+
+// landPublish is the write every publish tool makes after its own checks:
+// the style gate, the write, the graph, then the notes a landed write
+// carries (narrowed metadata, style findings). Notes are "" otherwise.
+func (t *Tools) landPublish(ctx context.Context, at *landing, w *docwrite.Write) (result docwrite.Result, notes string, bad *Result) {
+	styleNote, bad := t.styleGate(ctx, at.target, w.Body, w.Metadata["description"])
+	if bad != nil {
+		return docwrite.Result{}, "", bad
+	}
+	result, err := at.doc.Publish(ctx, *w, at.mode)
 	if err != nil {
-		return t.failed(SitePublish, target.Host, err)
+		failed := t.failed(SitePublish, at.target.Host, err)
+		return docwrite.Result{}, "", &failed
 	}
 	if !landed(&result) {
-		// A candidate ends with its body; a note after it would read as body.
-		return text(formatResult(&result, writeFields...))
+		return result, "", nil
 	}
-	t.observePublished(ctx, target, &w, &result)
-	return text(formatResult(&result, writeFields...) + t.narrowingNote(ctx, doc, w) + styleNote)
+	t.observePublished(ctx, at.target, w, &result)
+	return result, t.narrowingNote(ctx, at.doc, *w) + styleNote, nil
 }
 
 // observePublished merges a landed publish into the graph: the body and
@@ -168,12 +187,8 @@ func (t *Tools) observeAppended(ctx context.Context, target Target, doc *docwrit
 // publisherMeta is the caller's metadata under the surface's identity: a
 // caller cannot write under another agent's name.
 func (t *Tools) publisherMeta(ctx context.Context, raw map[string]any) map[string]string {
-	meta := t.identityMeta(ctx)
-	for k, v := range raw {
-		if !protocol.IsIdentityMetadataKey(k) {
-			meta[k] = fmt.Sprintf("%v", v)
-		}
-	}
+	meta := callerMeta(raw)
+	maps.Copy(meta, t.identityMeta(ctx))
 	return meta
 }
 

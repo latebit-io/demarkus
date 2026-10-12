@@ -15,13 +15,19 @@ import (
 
 const curateDoc = "# Doc\n\n## Step 3 (DONE 2026-10-12)\n\nShipped — finally.\n"
 
-// proposalHash is the hash a report carries; a report without one fails.
+// proposalHash is the hash a curate report carries; a report without one fails.
 func proposalHash(t *testing.T, report marktools.Result) string {
 	t.Helper()
-	_, after, _ := strings.Cut(report.Text, "proposal: ")
+	return hashAfter(t, report, "proposal: ")
+}
+
+// hashAfter is the hash a report carries after key; a report without one fails.
+func hashAfter(t *testing.T, report marktools.Result, key string) string {
+	t.Helper()
+	_, after, _ := strings.Cut(report.Text, key)
 	hash, _, _ := strings.Cut(after, "\n")
 	if report.IsError || hash == "" {
-		t.Fatalf("no proposal hash in:\n%s", report.Text)
+		t.Fatalf("no %q in:\n%s", key, report.Text)
 	}
 	return hash
 }

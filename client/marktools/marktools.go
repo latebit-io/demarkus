@@ -39,6 +39,14 @@ type Target struct {
 	Authority string
 }
 
+// name is the target as the surface shows it: the node URL, else the path.
+func (t Target) name() string {
+	if t.NodeURL != "" {
+		return t.NodeURL
+	}
+	return t.Path
+}
+
 // at names another path on the target's server.
 func (t Target) at(p string) Target {
 	return Target{Host: t.Host, Path: p, NodeURL: t.Authority + p, Authority: t.Authority}

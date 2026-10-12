@@ -23,6 +23,7 @@ import (
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -164,6 +165,7 @@ func (h *handler) tools(host string) []mcpserver.ServerTool {
 		{Tool: mcpfmt.GraphPublishTool("graph document target, e.g. /graph.md or "+url, requiresToken), Handler: h.markGraphPublish},
 		{Tool: mcpfmt.DoctorTool(scopeDesc(host), ""), Handler: h.markDoctor},
 		{Tool: mcpfmt.CurateTool(url, "apply "+requiresToken), Handler: h.markCurate},
+		{Tool: mcpfmt.PromoteTool(url, "Writes require -token.", promote.AllPhases), Handler: h.markPromote},
 	}
 }
 
@@ -364,6 +366,14 @@ func (h *handler) markBacklinks(ctx context.Context, req mcp.CallToolRequest) (*
 		return mcpbind.Refused(err), nil
 	}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Backlinks(ctx, rawURL) })
+}
+
+func (h *handler) markPromote(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	args, err := mcpbind.Promote(&req, promote.AllPhases)
+	if err != nil {
+		return mcpbind.Refused(err), nil
+	}
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Promote(ctx, args) })
 }
 
 func (h *handler) markDoctor(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go

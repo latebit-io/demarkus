@@ -340,6 +340,61 @@ it resumes.
 | `apply` | boolean | no | Write the proposal (default false: report only). |
 | `proposal` | string | no | The hash from the report; required with `apply`. |
 
+#### `mark_promote`
+
+One phase of a promotion, the client-composed bridge from a personal
+store to a shared world. The memory broker serves the source phases
+(`stage`, `stamp`, `refresh`), the knowledge broker the target phases
+(`dry_run`, `apply`); `demarkus-mcp` serves all five, since one host can
+play either part. The agent distills between `stage` and `dry_run`, a
+human approves between `dry_run` and `apply`. Every write is bound to
+the `packet` hash the report before it returned; a changed document or
+draft refuses.
+
+- `stage` reads the source: status (`staged`, or `promoted` with its
+  `promoted-via`, `promoted` and `mode` lines), whether the world's
+  layout marks it as shared (`candidate:`), its metadata, the packet,
+  then the body.
+- `dry_run` checks the distilled draft at `url` against the world: the
+  caller's write grant (`status: not-permitted`), the world's
+  `/.well-known/demarkus/policy.md` (required axes and fields as
+  findings; an unreadable policy is `policy-unavailable`), the style
+  rules, and the catalog: a body-mode lookup on the draft's title, then
+  a catalog lookup on its subject tags when the title found nothing
+  (a page that fills twice is `incomplete-dedup`). Candidates are the
+  target path, a same-title row (both shown with their body, capped at
+  4 KB) and a row sharing two subject tags; other rows are `related:`.
+  `version:` is the target's current version, 0 when it does not exist.
+- `apply` rechecks the draft against the packet and the policy, holds it
+  to the style gate as `mark_publish` does, and publishes at that
+  version with `on_conflict: fail`, `promoted-from` set to `source`
+  when given, agent and user stamped.
+- `stamp` writes `promoted-via: <via>` and `promoted: <target>` under
+  the source's H1 and widens its tags with `promoted`, at the head with
+  one retry. With `stub: true` the body becomes the title, the markers
+  and the summary (the description, else the opening paragraph); a stub
+  refuses when the source changed since `stage`, a full stamp lands on
+  the current body with a `note:`.
+- `refresh` compares the source's marker with the live copy the agent
+  fetched (`body`, `target` as `<url>@v<N>`): `in-sync`, `behind` (the
+  live version is under the marker; nothing to write), `unpromoted`, or
+  `stale` with the proposed body and a packet. A stub takes the live
+  opening paragraph as its summary; a full source takes the live body.
+  With the packet the body is written at the reported version, never
+  retried.
+
+| Param | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `url` | string | yes | The source (`stage`, `stamp`, `refresh`) or the knowledge target (`dry_run`, `apply`). |
+| `phase` | string | yes | `stage`, `dry_run`, `apply`, `stamp` or `refresh`; a broker lists the ones it serves. |
+| `body` | string | no | `dry_run`, `apply`: the distilled draft. `refresh`: the live knowledge body. |
+| `metadata` | object | no | `dry_run`, `apply`: the draft's metadata (tags, importance, type, the policy's axes). |
+| `source` | string | no | `dry_run`, `apply`: the origin recorded as `promoted-from`. |
+| `target` | string | no | `stamp`, `refresh`: the knowledge copy as `<url>@v<N>`. |
+| `via` | string | no | `stamp`: the knowledge server's name, recorded as `promoted-via`. |
+| `stub` | boolean | no | `stamp`: reduce the body to its title and summary (default false). |
+| `packet` | string | no | `apply`, `stamp`, `refresh`: the packet hash from the report before it. |
+
 ### Federation reads
 
 #### `mark_discover`

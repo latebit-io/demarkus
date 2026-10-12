@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.166
+
+The `knowledge-promote` skill checks and publishes through the new `mark_promote` tool on the knowledge broker: `dry_run` verifies the caller's write grant, the world's policy (required axes and fields), the style rules and the catalog (a title lookup, then a subject-tag lookup; same-title and same-path candidates are shown with their bodies), and returns a packet; `apply` publishes the approved draft at the checked version with `promoted-from` provenance, bound to that packet. The skill keeps triage, distillation, routing and the human gate.
+
 ## 0.5.161
 
 Recall guidance budgets by question shape: an answer in one section omits `budget` and fetches the section; an answer spanning documents or their relations passes `budget: 1500` on the first lookup and cites the appended blocks. The rule lives in the MCP server instructions; the skill and command defer to it.

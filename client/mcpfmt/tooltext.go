@@ -3,6 +3,7 @@ package mcpfmt
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/protocol"
@@ -38,6 +39,7 @@ const (
 	appendDescription       = "Append markdown to an existing document. expected_version optional; omitted or 0 resolves the current version. Catalog metadata (tags, importance, title, type) carries over; change it via mark_publish. route=today: url is a directory, the entry goes to its journal/<YYYY-MM-DD>.md (created when absent, hubs linked, tags widened); a repeated entry is reported present, not written."
 	archiveDescription      = "Archive a document: fetches as 'archived', history kept. recursive=true: url is a directory, every live document under it. Ancestor hubs drop the bullets that only linked what was archived."
 	curateDescription       = "Bring one document into shape: style findings, a proposed mechanical fix (an edit, or at 8KB a split into a hub plus topic files with anchors kept), inbound links to repoint, a proposal hash. apply=true with the hash writes it at the reported version."
+	promoteDescription      = "Promote one document to a shared knowledge system, by phase. stage: the source, its promoted markers, whether the layout marks it shared; a packet. dry_run: the distilled draft at url against the world's policy and style, dedup by title and tags; a packet. apply: publish the draft with provenance. stamp: write the markers on the source. refresh: compare the source with the live copy and propose the republish; with the packet, write it. A write needs the packet of the report before it."
 	backlinksDescription    = "Documents linking to a URL, from the revision-aware graph store, with bounded source revalidation. Freshness, provenance and typed relations also appear in mark_explore."
 	graphDescription        = "Crawl outbound links from a document to depth: link graph with edge provenance and rel-* typed relations. External links recorded, not followed. Feeds the graph store for mark_backlinks."
 	graphExportDescription  = "Export the graph store as publishable markdown with mark:// links. Run mark_graph first."
@@ -59,6 +61,14 @@ const (
 	recursiveDesc       = "archive every live document under the directory url (default false)"
 	curateApplyDesc     = "write the proposal (default false: report only)"
 	curateProposalDesc  = "the proposal hash from the report; required with apply"
+	promotePhaseDesc    = "which phase to run"
+	promoteBodyDesc     = "dry_run, apply: the distilled draft; refresh: the live knowledge body"
+	promoteMetadataDesc = "dry_run, apply: the draft's metadata object (tags, importance, type, the policy's axes)"
+	promoteSourceDesc   = "dry_run, apply: origin recorded as promoted-from (default none)"
+	promoteTargetDesc   = "stamp, refresh: the knowledge copy as <url>@v<N>"
+	promoteViaDesc      = "stamp: the knowledge server's name, recorded as promoted-via"
+	promoteStubDesc     = "stamp: reduce the body to its title and summary (default false: keep it)"
+	promotePacketDesc   = "apply, stamp, refresh: the packet hash from the report before it"
 	doctorDeepDesc      = "walk version history for lost metadata (default false)"
 	doctorPromotionDesc = "list promotion candidates, promoted ones excluded (default false)"
 	graphRetentionDesc  = "graph versions to keep (default 20; 0 keeps all); older permanently pruned"
@@ -174,6 +184,39 @@ func CurateTool(urlDesc, suffix string) mcp.Tool {
 	)
 }
 
+// PromoteTool builds mark_promote for the phases a surface serves; only
+// the arguments those phases read are advertised.
+func PromoteTool(urlDesc, suffix string, phases []string) mcp.Tool {
+	options := []mcp.ToolOption{
+		describe(promoteDescription, suffix),
+		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
+		mcp.WithString("phase", mcp.Required(), mcp.Enum(phases...), mcp.Description(promotePhaseDesc)),
+	}
+	serves := func(names ...string) bool {
+		return slices.ContainsFunc(names, func(n string) bool { return slices.Contains(phases, n) })
+	}
+	if serves("dry_run", "apply", "refresh") {
+		options = append(options, mcp.WithString("body", mcp.Description(promoteBodyDesc)))
+	}
+	if serves("dry_run", "apply") {
+		options = append(options,
+			mcp.WithObject("metadata", mcp.Description(promoteMetadataDesc)),
+			mcp.WithString("source", mcp.Description(promoteSourceDesc)))
+	}
+	if serves("stamp", "refresh") {
+		options = append(options, mcp.WithString("target", mcp.Description(promoteTargetDesc)))
+	}
+	if serves("stamp") {
+		options = append(options,
+			mcp.WithString("via", mcp.Description(promoteViaDesc)),
+			mcp.WithBoolean("stub", mcp.Description(promoteStubDesc)))
+	}
+	if serves("apply", "stamp", "refresh") {
+		options = append(options, mcp.WithString("packet", mcp.Description(promotePacketDesc)))
+	}
+	return mcp.NewTool("mark_promote", options...)
+}
+
 // GraphExportTool builds mark_graph_export, which takes no arguments.
 func GraphExportTool(suffix string) mcp.Tool {
 	return mcp.NewTool("mark_graph_export", describe(graphExportDescription, suffix))
@@ -234,7 +277,7 @@ var KnownTools = map[string]bool{
 	"mark_lookup": true, "mark_lookup_all": true, "mark_publish": true, "mark_append": true,
 	"mark_archive": true, "mark_discover": true, "mark_backlinks": true, "mark_graph": true,
 	"mark_graph_export": true, "mark_graph_publish": true, "mark_worlds": true, "mark_doctor": true,
-	"mark_curate": true,
+	"mark_curate": true, "mark_promote": true,
 }
 
 // ValidProfile rejects anything but the two named profiles. Surfaces call it

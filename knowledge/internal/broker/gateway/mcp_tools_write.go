@@ -58,3 +58,14 @@ func (g *Gateway) handleMarkCurate(ctx context.Context, req mcp.CallToolRequest)
 	}
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.Curate(ctx, args) })
 }
+
+// mark_promote serves the profile's phases: a memory tenant stages, stamps
+// and refreshes its own world; the knowledge side checks and publishes
+// under the world's write grant.
+func (g *Gateway) handleMarkPromote(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	args, err := mcpbind.Promote(&req, g.profile.PromotePhases)
+	if err != nil {
+		return mcpbind.Refused(err), nil
+	}
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.Promote(ctx, args) })
+}

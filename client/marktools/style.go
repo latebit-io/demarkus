@@ -18,9 +18,8 @@ type StyleGate struct {
 
 // styleGate runs the rules on a publish body. refused is the tool's answer
 // when the gate blocks; otherwise note is what to append to a landed write.
-func (t *Tools) styleGate(ctx context.Context, target Target, args *PublishArgs) (note string, refused *Result) {
-	description, _ := args.Metadata["description"].(string)
-	problems := gate.Problems(target.Path, args.Body, description)
+func (t *Tools) styleGate(ctx context.Context, target Target, body, description string) (note string, refused *Result) {
+	problems := gate.Problems(target.Path, body, description)
 	if len(problems) == 0 {
 		return "", nil
 	}

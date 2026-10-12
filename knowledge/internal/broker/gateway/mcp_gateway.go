@@ -299,6 +299,7 @@ func (g *Gateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
 		"mark_worlds":        g.handleMarkWorlds,
 		"mark_doctor":        g.handleMarkDoctor,
 		"mark_curate":        g.handleMarkCurate,
+		"mark_promote":       g.handleMarkPromote,
 	}
 }
 

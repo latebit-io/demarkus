@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"github.com/latebit-io/demarkus/client/docwrite/gate"
+	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -32,17 +33,21 @@ type Profile struct {
 	StyleGuide string
 	// Tools is the tool surface this profile registers.
 	Tools []mcp.Tool
+	// PromotePhases are the mark_promote phases this profile serves: the
+	// knowledge side checks and publishes, the memory side stages and stamps.
+	PromotePhases []string
 }
 
 // KnowledgeProfile is the demarkus-knowledge-broker surface:
-// all 15 tools, org-open reads, per-world Allow writes.
+// every parity tool plus the broker ones, org-open reads, per-world Allow writes.
 func KnowledgeProfile() *Profile {
 	return &Profile{
-		Name:         core.ProfileKnowledge,
-		ServerName:   "demarkus-knowledge-broker",
-		Instructions: knowledgeInstructions,
-		StyleGuide:   gate.KnowledgeGuide,
-		Tools:        mcpTools(),
+		Name:          core.ProfileKnowledge,
+		ServerName:    "demarkus-knowledge-broker",
+		Instructions:  knowledgeInstructions,
+		StyleGuide:    gate.KnowledgeGuide,
+		Tools:         mcpTools(),
+		PromotePhases: promote.KnowledgePhases,
 	}
 }
 
@@ -71,7 +76,9 @@ func MemoryProfile() *Profile {
 			markWorldsSelfTool(),
 			markDoctorTool(),
 			markCurateTool(),
+			markPromoteTool(promote.SoulPhases),
 		},
+		PromotePhases: promote.SoulPhases,
 	}
 }
 

@@ -7,6 +7,8 @@ package layout
 import (
 	"context"
 	"fmt"
+	"math"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -144,4 +146,36 @@ func Section(directory string) string {
 		return ""
 	}
 	return strings.ToUpper(name[:1]) + name[1:]
+}
+
+// Qualifies says why a document is shared knowledge under the layout's
+// rules, or "" when it is not. An adr directory above it makes it a record;
+// a staging directory keeps it personal.
+func (l *Layout) Qualifies(p string, meta map[string]string) string {
+	adr := false
+	for seg := range strings.SplitSeq(path.Dir(p), "/") {
+		if slices.Contains(l.Staging, seg) {
+			return ""
+		}
+		adr = adr || seg == "adr"
+	}
+	kind := meta["type"]
+	importance, parseErr := strconv.ParseFloat(meta["importance"], 64)
+	if parseErr != nil || math.IsNaN(importance) || math.IsInf(importance, 0) {
+		importance = 0 // unparsable, absent or not a number: below the floor
+	}
+	if !adr && !slices.Contains(l.PromoteTypes, kind) && importance < l.PromoteFloor {
+		return ""
+	}
+	var parts []string
+	if adr {
+		parts = append(parts, "decision record")
+	}
+	if kind != "" {
+		parts = append(parts, "type "+kind)
+	}
+	if meta["importance"] != "" {
+		parts = append(parts, "importance "+meta["importance"])
+	}
+	return strings.Join(parts, ", ")
 }

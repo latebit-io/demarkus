@@ -6,6 +6,8 @@ package docwrite
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -355,6 +357,13 @@ func optionalInt(meta map[string]string, key string) (int, error) {
 		return 0, fmt.Errorf("response metadata %q = %q: %w", key, s, err)
 	}
 	return n, nil
+}
+
+// Digest binds a write to exactly what a report showed: a short hash over
+// the parts, which a later call recomputes and compares.
+func Digest(parts ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:8])
 }
 
 // Version reads the version a response carries: absent is 0, malformed an error.

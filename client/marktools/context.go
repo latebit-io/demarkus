@@ -101,7 +101,7 @@ func (p *primer) section(ctx context.Context, heading, docPath string, optional 
 	case r.Response.Status != protocol.StatusOK:
 		p.coverage = append(p.coverage, fmt.Sprintf("%s: %s", docPath, r.Response.Status))
 	default:
-		fmt.Fprintf(&p.out, "\n## %s (%s)\n\n%s\n", heading, docPath, clip(r.Response.Body, docPath))
+		fmt.Fprintf(&p.out, "\n## %s (%s)\n\n%s\n", heading, docPath, clip(r.Response.Body, contextBodyCap, fmt.Sprintf("(truncated; mark_fetch %s with force: true for the rest)", docPath)))
 	}
 }
 
@@ -139,23 +139,24 @@ func (p *primer) newest(ctx context.Context, dir string, n int, keep *regexp.Reg
 	return paths, true
 }
 
-// clip bounds one body in the primer; the rest is one fetch away.
-func clip(body, docPath string) string {
+// clip bounds one body at a line, else a character, and ends it with the
+// trailer when it was cut.
+func clip(body string, limit int, trailer string) string {
 	body = strings.TrimRight(body, "\n")
-	if len(body) <= contextBodyCap {
+	if len(body) <= limit {
 		return body
 	}
-	cut := contextBodyCap
+	cut := limit
 	for cut > 0 && body[cut-1] != '\n' {
 		cut--
 	}
 	if cut == 0 {
-		cut = contextBodyCap
+		cut = limit
 		for cut > 0 && !utf8.RuneStart(body[cut]) {
 			cut--
 		}
 	}
-	return strings.TrimRight(body[:cut], "\n") + fmt.Sprintf("\n\n(truncated; mark_fetch %s with force: true for the rest)", docPath)
+	return strings.TrimRight(body[:cut], "\n") + "\n\n" + trailer
 }
 
 // isContextPath reports the primer pseudo document.

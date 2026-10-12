@@ -4,16 +4,14 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"math"
 	"path"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite/gate"
+	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/layout"
 )
 
 // Check names in report order.
@@ -45,9 +43,6 @@ var CheckOrder = []string{
 	CheckADRSequence, CheckUntagged, CheckUntyped, CheckDuplicates, CheckHubShape, CheckOversized,
 	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckReferences, CheckLostMetadata, CheckPromotion, CheckTokenDrift,
 }
-
-// promotedMarker is the back-stamp /promote leaves in a body.
-var promotedMarker = regexp.MustCompile(`(?m)^promoted(-via)?: \S`)
 
 // checkLinks: a target absent from the live inventory is broken when a fetch
 // says not-found or archived, fine when it serves (outside the scope), any
@@ -387,53 +382,16 @@ func (a *audit) checkPromotion() {
 		if !live(d.status) || gate.NavExempt(p) {
 			continue
 		}
-		why := promotionReason(p, d.meta, &a.layout)
+		why := a.layout.Qualifies(p, d.meta)
 		if why == "" {
 			continue
 		}
-		if slices.Contains(protocol.SplitTags(d.meta["tags"]), "promoted") || Promoted(d.body) {
+		if promote.IsPromoted(d.meta, d.body) {
 			a.promoted++
 			continue
 		}
 		a.add(CheckPromotion, p, why, "/promote "+p)
 	}
-}
-
-// Promoted reports a body back-stamped by /promote: a standalone
-// `promoted:` or `promoted-via:` marker line.
-func Promoted(body string) bool {
-	return strings.Contains(body, "promoted") && promotedMarker.MatchString(body)
-}
-
-// promotionReason says why a document qualifies under the layout's rules, or
-// "" when it does not. An adr directory anywhere above it makes it a record.
-func promotionReason(p string, meta map[string]string, l *layout.Layout) string {
-	adr := false
-	for seg := range strings.SplitSeq(path.Dir(p), "/") {
-		if slices.Contains(l.Staging, seg) {
-			return ""
-		}
-		adr = adr || seg == "adr"
-	}
-	kind := meta["type"]
-	importance, parseErr := strconv.ParseFloat(meta["importance"], 64)
-	if parseErr != nil || math.IsNaN(importance) || math.IsInf(importance, 0) {
-		importance = 0 // unparsable, absent or not a number: below the floor
-	}
-	if !adr && !slices.Contains(l.PromoteTypes, kind) && importance < l.PromoteFloor {
-		return ""
-	}
-	var parts []string
-	if adr {
-		parts = append(parts, "decision record")
-	}
-	if kind != "" {
-		parts = append(parts, "type "+kind)
-	}
-	if meta["importance"] != "" {
-		parts = append(parts, "importance "+meta["importance"])
-	}
-	return strings.Join(parts, ", ")
 }
 
 func describeMeta(m map[string]string) string {

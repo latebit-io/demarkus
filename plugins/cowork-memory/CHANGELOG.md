@@ -6,6 +6,8 @@
 
 `/soul-curate` is two `mark_curate` calls: the report (findings, the proposed edit or the split into a hub plus topic files with anchors kept, the inbound anchored links to repoint, a proposal hash) and, after the human gate, `apply: true` with that hash; the tool preflights every topic path and writes the hub last at the reported version. `/soul-archive` is one `mark_archive` call: a document, or a directory with `recursive: true`; the tool archives every live document under it and drops the hub bullets that only linked what was archived. The style gate now warns on any document at or over the 8 KB fetch threshold, not only a hub; journals are exempt.
 
+`/promote`, `/soul-refresh` and the knowledge plugin's `knowledge-promote` skill run on the new `mark_promote` tool. The soul server stages the source (`stage`: markers, whether the layout marks it as shared, a packet), writes the back-stamp (`stamp`, marker-only by default, `stub` on request) and refreshes a promoted copy from the live knowledge body (`refresh`: in-sync, stale with the proposed body and a packet, behind). The knowledge server checks the distilled draft (`dry_run`: write grant, policy axes and fields, style, dedup by title and tags with candidate bodies) and publishes it with `promoted-from` provenance (`apply`), each write bound to the packet of the report before it. The memory broker serves the soul phases only; promotion stays client composed.
+
 ## 0.13.161
 
 Recall guidance budgets by question shape: an answer in one section omits `budget` and fetches the section; an answer spanning documents or their relations passes `budget: 1500` on the first lookup and cites the appended blocks. The rule lives in the MCP server instructions; the skill and command defer to it.
