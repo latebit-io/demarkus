@@ -69,7 +69,7 @@ func TestContextPrimerReadsHubJournalAndPlans(t *testing.T) {
 		ListFn: func(_ context.Context, r fetch.ListRequest) (fetch.Result, error) {
 			switch r.Path {
 			case "/proj/journal/":
-				return fetchtest.ListPage(r.Path, "", "2026-10-09.md", "2026-10-10.md", "2026-10-11.md", "2026-10-12.md"), nil
+				return fetchtest.ListPage(r.Path, "", "2026-10-09.md", "2026-10-10.md", "2026-10-11.md", "2026-10-12.md", "README.md"), nil
 			case "/proj/plans/":
 				return fetchtest.ListPage(r.Path, "", "a.md", "b.md"), nil
 			}
@@ -89,8 +89,8 @@ func TestContextPrimerReadsHubJournalAndPlans(t *testing.T) {
 			t.Errorf("primer missing %q:\n%s", want, got.Text)
 		}
 	}
-	if strings.Contains(got.Text, "2026-10-09") || strings.Contains(got.Text, "Coverage") || strings.Contains(got.Text, "Active work") {
-		t.Errorf("primer shows more than the newest three days, or a gap, or an absent roadmap:\n%s", got.Text)
+	if strings.Contains(got.Text, "2026-10-09") || strings.Contains(got.Text, "README") || strings.Contains(got.Text, "Coverage") || strings.Contains(got.Text, "Active work") {
+		t.Errorf("primer shows more than the newest three dated days, or a gap, or an absent roadmap:\n%s", got.Text)
 	}
 	resource, err := tools.ReadResource(t.Context(), "/proj/.context")
 	if err != nil || resource.MIMEType != "text/markdown" || resource.Text != got.Text {
@@ -104,6 +104,15 @@ func TestContextPrimerListsWhatItCouldNotRead(t *testing.T) {
 	}
 	got := newTools(t, backend, directHooks()).Fetch(t.Context(), marktools.FetchArgs{URL: "/.context"})
 	if got.IsError || !strings.Contains(got.Text, "## Journal\n\nNo entries yet.\n") || !strings.Contains(got.Text, "## Coverage\n\n- /index.md: unauthorized\n") {
+		t.Fatalf("context = %+v", got)
+	}
+
+	// A journal that could not be listed is unknown, not empty.
+	backend = &fetchtest.Client{ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
+	}}
+	got = newTools(t, backend, directHooks()).Fetch(t.Context(), marktools.FetchArgs{URL: "/.context"})
+	if got.IsError || strings.Contains(got.Text, "No entries yet") || !strings.Contains(got.Text, "- /journal/: list /journal/: server returned \"unauthorized\"") {
 		t.Fatalf("context = %+v", got)
 	}
 }

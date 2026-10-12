@@ -200,10 +200,12 @@ func ExtractTitle(body string) string {
 	return title.String()
 }
 
-// ResolvePath is the store path a link in docPath points at: an absolute
-// dest cleaned, a relative one joined to the document's directory, a trailing
-// slash kept so a directory link stays one. "" for an external link.
+// ResolvePath is the store path a link in docPath points at: fragment and
+// query dropped, absolute cleaned, relative joined to the document's
+// directory, a trailing slash kept. "" for an external link.
 func ResolvePath(docPath, dest string) string {
+	dest, _, _ = strings.Cut(dest, "#")
+	dest, _, _ = strings.Cut(dest, "?")
 	if dest == "" || strings.Contains(dest, "://") {
 		return ""
 	}

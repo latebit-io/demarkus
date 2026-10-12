@@ -334,3 +334,14 @@ func TestExtractWithPositionsKeepsTheFragment(t *testing.T) {
 		}
 	}
 }
+
+func TestResolvePath(t *testing.T) {
+	for dest, want := range map[string]string{
+		"/a/b.md": "/a/b.md", "b.md": "/docs/b.md", "../x.md": "/x.md", "sub/": "/docs/sub/", "/j/": "/j/",
+		"b.md#sec": "/docs/b.md", "b.md?x=1": "/docs/b.md", "https://e.example/b.md": "", "": "",
+	} {
+		if got := ResolvePath("/docs/a.md", dest); got != want {
+			t.Errorf("ResolvePath(%q) = %q, want %q", dest, got, want)
+		}
+	}
+}

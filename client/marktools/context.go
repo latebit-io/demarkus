@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/listwalk"
@@ -38,15 +40,15 @@ func (t *Tools) Context(ctx context.Context, rawURL string) Result {
 	p := primer{tools: t, host: target.Host, token: t.readToken(ctx, target.Host)}
 	fmt.Fprintf(&p.out, "# Context: %s\n", dir)
 	p.section(ctx, "Hub", dir+"index.md", false)
-	entries := p.newest(ctx, dir+"journal/", contextJournalDays)
-	if len(entries) == 0 {
+	entries, listed := p.newest(ctx, dir+"journal/", contextJournalDays, journalDay)
+	if listed && len(entries) == 0 {
 		p.out.WriteString("\n## Journal\n\nNo entries yet.\n")
 	}
 	for _, e := range entries {
 		p.section(ctx, "Journal "+strings.TrimSuffix(path.Base(e), ".md"), e, false)
 	}
 	p.section(ctx, "Active work", dir+"roadmap.md", true)
-	if plans := p.newest(ctx, dir+"plans/", contextPlanCap); len(plans) > 0 {
+	if plans, _ := p.newest(ctx, dir+"plans/", contextPlanCap, nil); len(plans) > 0 {
 		p.out.WriteString("\n## Plans\n\n")
 		slices.Reverse(plans)
 		for _, e := range plans {
@@ -84,10 +86,13 @@ func (p *primer) section(ctx context.Context, heading, docPath string, optional 
 	}
 }
 
-// newest lists one directory and returns up to n document paths, newest
-// name first; dated journal names sort by day. A missing directory is empty.
-func (p *primer) newest(ctx context.Context, dir string, n int) []string {
-	var paths []string
+// journalDay keeps the dated entries of a journal directory.
+var journalDay = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}\.md$`)
+
+// newest lists one directory and returns up to n document paths the keep
+// filter admits (nil keeps all), newest name first; dated journal names sort
+// by day. A missing directory is empty; a failed listing is not listed.
+func (p *primer) newest(ctx context.Context, dir string, n int, keep *regexp.Regexp) (paths []string, listed bool) {
 	w := listwalk.Walker{
 		Client: p.tools.backend, Host: p.host, Token: p.token, MaxDepth: listwalk.RootOnly, MaxLists: contextListCalls,
 		OnProblem: func(problem *listwalk.Problem) error {
@@ -98,18 +103,21 @@ func (p *primer) newest(ctx context.Context, dir string, n int) []string {
 		},
 	}
 	err := w.Walk(ctx, dir, func(docPath string) error {
-		paths = append(paths, docPath)
+		if keep == nil || keep.MatchString(path.Base(docPath)) {
+			paths = append(paths, docPath)
+		}
 		return nil
 	})
 	if err != nil {
 		p.coverage = append(p.coverage, fmt.Sprintf("%s: %v", dir, err))
+		return nil, false
 	}
 	slices.Sort(paths)
 	slices.Reverse(paths)
 	if len(paths) > n {
 		paths = paths[:n]
 	}
-	return paths
+	return paths, true
 }
 
 // clip bounds one body in the primer; the rest is one fetch away.
@@ -124,6 +132,9 @@ func clip(body, docPath string) string {
 	}
 	if cut == 0 {
 		cut = contextBodyCap
+		for cut > 0 && !utf8.RuneStart(body[cut]) {
+			cut--
+		}
 	}
 	return strings.TrimRight(body[:cut], "\n") + fmt.Sprintf("\n\n(truncated; mark_fetch %s with force: true for the rest)", docPath)
 }

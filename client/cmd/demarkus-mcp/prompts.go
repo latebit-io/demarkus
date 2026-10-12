@@ -44,29 +44,42 @@ func registerPrompts(s *mcpserver.MCPServer, defaultHost string) {
 		mcp.WithPromptDescription("Record a dated journal entry: today's document under a directory, created or appended, hubs kept current."),
 		mcp.WithArgument("entry", mcp.ArgumentDescription("what to record; omitted: distill the current conversation")),
 		mcp.WithArgument("dir", mcp.ArgumentDescription(scopeDesc(defaultHost)+" (default the store root)")),
-	), journalPrompt)
+	), journalPrompt(defaultHost))
 
 	s.AddPrompt(mcp.NewPrompt("context",
 		mcp.WithPromptDescription("Restore working context from a directory: its hub, newest journal entries and active work, digested into a short brief."),
 		mcp.WithArgument("dir", mcp.ArgumentDescription(scopeDesc(defaultHost)+" (default the store root)")),
-	), contextPrompt)
+	), contextPrompt(defaultHost))
 }
 
-// dirArg is the directory a journal or context prompt works under.
-func dirArg(req *mcp.GetPromptRequest) string {
+// dirArg is the directory a journal or context prompt works under: the
+// store root by default, which only exists when -host names a server.
+func dirArg(req *mcp.GetPromptRequest, defaultHost string) (string, error) {
 	dir := strings.TrimSpace(req.Params.Arguments["dir"])
 	if dir == "" {
-		return "/"
+		if defaultHost == "" {
+			return "", fmt.Errorf("dir argument is required without -host: a mark:// directory URL")
+		}
+		return "/", nil
 	}
 	if !strings.HasSuffix(dir, "/") {
 		dir += "/"
 	}
-	return dir
+	return dir, nil
 }
 
-func journalPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go
-	dir := dirArg(&req)
-	entry := strings.TrimSpace(req.Params.Arguments["entry"])
+func journalPrompt(defaultHost string) mcpserver.PromptHandlerFunc {
+	return func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go
+		dir, err := dirArg(&req, defaultHost)
+		if err != nil {
+			return nil, err
+		}
+		return journalResult(dir, req.Params.Arguments["entry"]), nil
+	}
+}
+
+func journalResult(dir, entry string) *mcp.GetPromptResult {
+	entry = strings.TrimSpace(entry)
 	entryLine := "Distill the current conversation into one entry: what was worked on, decisions and why, open threads. The non-obvious only; skip trivia."
 	if entry != "" {
 		entryLine = fmt.Sprintf("Record this entry, expanded with relevant context from the conversation: %s", entry)
@@ -78,18 +91,27 @@ func journalPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptR
 3. Relay the status, path, version and every note from the result. A decision or lesson worth finding later also goes to its own document (adr/, debugging.md, patterns.md) under the same directory.`, dir, entryLine, dir)
 	return mcp.NewGetPromptResult("Journal", []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
-	}), nil
+	})
 }
 
-func contextPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go
-	dir := dirArg(&req)
+func contextPrompt(defaultHost string) mcpserver.PromptHandlerFunc {
+	return func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go
+		dir, err := dirArg(&req, defaultHost)
+		if err != nil {
+			return nil, err
+		}
+		return contextResult(dir), nil
+	}
+}
+
+func contextResult(dir string) *mcp.GetPromptResult {
 	text := fmt.Sprintf(`Restore working context from %s.
 
 1. Call mark_fetch with url %q.
 2. Report a short brief, no preamble: what is in flight, recent decisions, and one or two specific next steps from the latest entry. Cite each claim as its path. Relay every Coverage line; a primer with no journal says so plainly. Read nothing else unless asked.`, dir, dir+".context")
 	return mcp.NewGetPromptResult("Context", []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
-	}), nil
+	})
 }
 
 // requiredArg returns the trimmed argument value or an error naming it —
