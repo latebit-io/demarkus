@@ -38,7 +38,6 @@ This produces the following binaries:
 | `demarkus` | `client/bin/demarkus` | CLI (fetch/list/publish) |
 | `demarkus-tui` | `client/bin/demarkus-tui` | TUI browser |
 | `demarkus-mcp` | `client/bin/demarkus-mcp` | MCP server |
-| `demarkus-agent` | `client/bin/demarkus-agent` | Federation crawler |
 | `demarkus-knowledge` | `knowledge/bin/demarkus-knowledge` | The knowledge system: multi-world server, OIDC broker and both MCP gateways in one process |
 | `demarkus-publish` | `tools/bin/demarkus-publish` | Local publish (bypasses server) |
 

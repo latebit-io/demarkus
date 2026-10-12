@@ -83,27 +83,28 @@ func brokerSnapshotRows(t *testing.T, nodes []graphstore.StoredNode, edges []gra
 	}}, shards
 }
 
-// agentContractGoldenPath is the real agent's in-cluster /graph.md, pinned
-// by fedcrawl's TestGraphExportContract; consuming it here is the other
-// half of the cross-module contract (producer drift regenerates it).
-const agentContractGoldenPath = "../../../../client/internal/fedcrawl/testdata/graph-export-incluster.md"
+// deriverContractGoldenPath is the deriver's /graph.md minus its Exported
+// line, pinned by federation's TestGraphExportContract; consuming it here is
+// the other half of the contract (producer drift regenerates it).
+const deriverContractGoldenPath = "../../federation/testdata/graph-export-contract.md"
 
-func agentContractGolden(t *testing.T) string {
+func deriverContractGolden(t *testing.T) string {
 	t.Helper()
-	body, err := os.ReadFile(agentContractGoldenPath)
+	body, err := os.ReadFile(deriverContractGoldenPath)
 	if err != nil {
-		t.Fatalf("read agent export contract golden (regenerate with: go test ./internal/fedcrawl -run TestGraphExportContract -update, in client/): %v", err)
+		t.Fatalf("read export contract golden (regenerate with: UPDATE_GOLDEN=1 go test ./internal/federation -run TestGraphExportContract): %v", err)
 	}
-	return strings.Replace(string(body), "> Exported: GOLDEN", "> Exported: 2026-01-01T00:00:00Z", 1)
+	// The golden is ExportContent; the strict parser wants the Exported line back.
+	return strings.Replace(string(body), "\n> Nodes:", "\n> Exported: 2026-01-01T00:00:00Z\n> Nodes:", 1)
 }
 
-// TestSeedConsumesAgentExportContract: the real agent's export (the golden)
-// must seed a cold gateway into answering world-name backlink queries, with
-// every world-address row translated.
-func TestSeedConsumesAgentExportContract(t *testing.T) {
+// TestSeedConsumesDeriverExportContract: the deriver's real export (the
+// golden) must seed a cold gateway into answering backlink queries by world
+// name, typed relations included.
+func TestSeedConsumesDeriverExportContract(t *testing.T) {
 	cfg := mcpTestConfig()
-	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub"})
-	body := agentContractGolden(t)
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub"}, core.WorldConfig{Name: "alpha", Namespace: "alpha"})
+	body := deriverContractGolden(t)
 	d := &fakeDispatcher{
 		FetchFn: unavailableSeedSource,
 		SeedFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
@@ -117,36 +118,26 @@ func TestSeedConsumesAgentExportContract(t *testing.T) {
 	g := newGatewayWithDispatcher(t, cfg, d)
 
 	res, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{
-		"url": "mark://team-a/docs/a.md",
+		"url": "mark://alpha/docs/a.md",
 	}))
 	if err != nil {
 		t.Fatalf("handleMarkBacklinks: %v", err)
 	}
 	text := toolResultText(t, res)
-	// index.md's plain link and b.md's typed rel edge, both translated,
-	// with enriched provenance intact.
-	for _, want := range []string{"mark://team-a/index.md", "mark://team-a/docs/b.md", "[supersedes]"} {
+	// index.md's plain link and b.md's typed rel edge.
+	for _, want := range []string{"mark://alpha/index.md", "mark://alpha/docs/b.md", "[supersedes]"} {
 		if !strings.Contains(text, want) {
-			t.Errorf("missing %q in backlinks from the agent's real export:\n%s", want, text)
+			t.Errorf("missing %q in backlinks from the deriver's real export:\n%s", want, text)
 		}
 	}
-
-	// Addressability invariant: every seeded mark:// row on a configured
-	// world address must be translated; none may keep the dial-address form.
-	for _, n := range g.knowledgeGraph.graphStore.AllNodes() {
-		if strings.Contains(n.URL, ".svc.cluster.local") {
-			t.Errorf("unaddressable seeded row survived translation: %s", n.URL)
-		}
-	}
-	node := g.knowledgeGraph.graphStore.GetNode("mark://team-a/docs/a.md")
-	if node.Observation.Source != "mark://team-a.team-a.svc.cluster.local/docs/a.md" || node.Observation.Revision != 2 {
-		t.Fatalf("producer source identity/revision lost through translation: %+v", node)
+	if node := g.knowledgeGraph.graphStore.GetNode("mark://alpha/docs/a.md"); node == nil || node.Title != "Applications" {
+		t.Fatalf("seeded node lost its title: %+v", node)
 	}
 }
 
-// internalAddrGraphBody renders a /graph.md the way the federation agent
-// publishes it in-cluster: rows keyed by internal dial addresses
-// (name.namespace.svc.cluster.local:6309), not world names.
+// internalAddrGraphBody renders a /graph.md keyed by internal dial
+// addresses (name.namespace.svc.cluster.local:6309), as an outside producer
+// might publish it, not by world names.
 func internalAddrGraphBody() string {
 	src := graphstore.New()
 	g := graph.New()

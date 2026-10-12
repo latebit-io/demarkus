@@ -563,7 +563,7 @@ tests:
           path: metadata.name
           value: RELEASE-NAME-config
 
-  - it: names itself after global.knowledgeService so the agent finds it
+  - it: names itself after global.knowledgeService so the broker and library find it
     set:
       worlds: []
       global:
@@ -603,4 +603,4 @@ tests:
       global.knowledgeService: knowledge
     asserts:
       - failedTemplate:
-          errorMessage: 'fullnameOverride "other" differs from global.knowledgeService "knowledge"; the broker and agent dial the latter'
+          errorMessage: 'fullnameOverride "other" differs from global.knowledgeService "knowledge"; the broker and library dial the latter'

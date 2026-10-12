@@ -1,4 +1,4 @@
-.PHONY: all protocol server knowledge-server client tools knowledge image image-server image-knowledge image-agent test clean install help lint fmt vet vuln fuzz smoke deps
+.PHONY: all protocol server knowledge-server client tools knowledge image image-server image-knowledge test clean install help lint fmt vet vuln fuzz smoke deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
@@ -54,8 +54,7 @@ client: protocol
 	cd client && go build -o bin/demarkus ./cmd/demarkus
 	cd client && go build -o bin/demarkus-tui ./cmd/demarkus-tui
 	cd client && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-mcp ./cmd/demarkus-mcp
-	cd client && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-agent ./cmd/demarkus-agent
-	@echo "✓ Client built: client/bin/demarkus, client/bin/demarkus-tui, client/bin/demarkus-mcp, client/bin/demarkus-agent"
+	@echo "✓ Client built: client/bin/demarkus, client/bin/demarkus-tui, client/bin/demarkus-mcp"
 
 # Build tools
 tools: protocol
@@ -82,7 +81,7 @@ IMAGE_REGISTRY ?= ghcr.io/latebit-io
 TAG            ?= dev
 HOST_ARCH      ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/;s/armv7l/arm/')
 
-image: image-server image-knowledge image-agent
+image: image-server image-knowledge
 
 image-server:
 	@echo "Building $(IMAGE_REGISTRY)/demarkus-server:$(TAG) for linux/$(HOST_ARCH)..."
@@ -98,13 +97,6 @@ image-knowledge:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C knowledge -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-knowledge ./cmd/demarkus-knowledge
 	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f knowledge/cmd/demarkus-knowledge/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-knowledge:$(TAG) .
 	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-knowledge:$(TAG)"
-
-image-agent:
-	@echo "Building $(IMAGE_REGISTRY)/demarkus-agent:$(TAG) for linux/$(HOST_ARCH)..."
-	@mkdir -p dist/docker/$(HOST_ARCH)
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -C client -ldflags "-s -w -X main.version=$(VERSION)" -o ../dist/docker/$(HOST_ARCH)/demarkus-agent ./cmd/demarkus-agent
-	docker build --build-arg TARGETARCH=$(HOST_ARCH) -f client/cmd/demarkus-agent/Dockerfile -t $(IMAGE_REGISTRY)/demarkus-agent:$(TAG) .
-	@echo "✓ Image built: $(IMAGE_REGISTRY)/demarkus-agent:$(TAG)"
 
 # Run tests
 test:

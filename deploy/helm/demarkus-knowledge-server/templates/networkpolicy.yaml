@@ -19,15 +19,10 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.server.httpPort }}
-    # Direct QUIC clients: the agent and any configured CIDRs. The MCP
-    # gateways reach the worlds in process.
+    # Direct QUIC clients: the configured CIDRs. The MCP gateways reach the
+    # worlds in process.
+    {{- if .Values.networkPolicy.externalCIDRs }}
     - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.agent.namespace | quote }}
-          podSelector:
-            matchLabels:
-              {{- toYaml .Values.networkPolicy.agent.podLabels | nindent 14 }}
         {{- range .Values.networkPolicy.externalCIDRs }}
         - ipBlock:
             cidr: {{ . | quote }}
@@ -35,6 +30,7 @@ spec:
       ports:
         - protocol: UDP
           port: {{ .Values.server.udpPort }}
+    {{- end }}
     # Commit hints between this chart's own replicas.
     - from:
         - podSelector:

@@ -87,7 +87,7 @@ tokens:
     token: ""
 
   # When true, also create the <release>-token-values Secret with the raw value.
-  # Required when the broker / federation agent manages this world. Default true.
+  # Required when the broker manages this world. Default true.
   emitRawValues: true
 
   # Token Secrets are runtime-owned (the broker appends to tokens.toml), so a

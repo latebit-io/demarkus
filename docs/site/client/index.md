@@ -209,7 +209,6 @@ The MCP server resolves tokens per-host: on the `-host` server the `-token` flag
 
 ## Related Tools
 
-- [Federation Crawler](../tools/agent.md): discover servers and publish the link graph
 - [Token Tooling](../tools/index.md)
 
 ## Next Steps

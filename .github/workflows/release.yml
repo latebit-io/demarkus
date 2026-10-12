@@ -37,7 +37,6 @@ jobs:
             client:
               - 'client/**'
               - 'protocol/**'
-              - 'deploy/helm/demarkus-agent/**'
             tools:
               - 'tools/**'
               - 'protocol/**'
@@ -202,9 +201,7 @@ jobs:
           tag_prefix: "client/v"
           major_pattern: "BREAKING CHANGE:"
           minor_pattern: '/^feat(\(.+\))?:/' # regex (slash-wrapped): also matches scoped feat(x):
-          # See server's change_path note: chart-only commits must
-          # bump the version so the chart actually publishes.
-          change_path: "client/ protocol/ deploy/helm/demarkus-agent/"
+          change_path: "client/ protocol/"
           bump_each_commit: false
           search_commit_body: true
       - name: Check if version changed
@@ -489,7 +486,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -515,15 +511,6 @@ jobs:
       - name: Fetch tags
         run: git fetch --tags --force
 
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           distribution: goreleaser-pro
@@ -533,45 +520,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GORELEASER_CURRENT_TAG: "client/v${{ needs.semver-client.outputs.new_version }}"
-
-      # Stage pre-built agent binaries (built by client/.goreleaser.yml's
-      # demarkus-agent build entry, which also ships a linux tarball) into
-      # dist/docker/<arch>/ so the Dockerfile is COPY-only and buildx
-      # skips QEMU compilation.
-      - name: Stage binaries for Docker build
-        run: |
-          set -euxo pipefail
-          ls dist/
-          mkdir -p dist/docker/amd64 dist/docker/arm64 dist/docker/armv7
-          cp dist/demarkus-agent_linux_amd64*/demarkus-agent dist/docker/amd64/
-          cp dist/demarkus-agent_linux_arm64*/demarkus-agent dist/docker/arm64/
-          cp dist/demarkus-agent_linux_arm_7*/demarkus-agent dist/docker/armv7/
-
-      # demarkus-agent lives in client/cmd/ so it rides the client release
-      # cadence. Dockerfile is COPY-only over the staged binaries above.
-      - name: Build + push demarkus-agent image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          file: client/cmd/demarkus-agent/Dockerfile
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          push: true
-          tags: |
-            ghcr.io/latebit-io/demarkus-agent:${{ needs.semver-client.outputs.new_version }}
-            ghcr.io/latebit-io/demarkus-agent:latest
-
-      # Chart version + appVersion pinned 1:1 to the client module version
-      # so the agent chart and the agent image released in the same module
-      # bump always reference each other.
-      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
-        with:
-          version: v3.13.2
-
-      - name: Package + push demarkus-agent chart
-        run: |
-          VER="${{ needs.semver-client.outputs.new_version }}"
-          helm package deploy/helm/demarkus-agent --version "$VER" --app-version "$VER" --destination /tmp/charts
-          helm push "/tmp/charts/demarkus-agent-${VER}.tgz" oci://ghcr.io/latebit-io/charts
 
   release-tools:
     needs: semver-tools

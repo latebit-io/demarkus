@@ -32,22 +32,6 @@ func ParseMark(raw string) (Target, error) {
 	return targetOf(u)
 }
 
-// ParseServer parses a URL that names a server and nothing else: no document
-// path, userinfo, query or fragment. Index rows, seeds and hubs are these.
-func ParseServer(raw string) (Target, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return Target{}, err
-	}
-	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") {
-		return Target{}, fmt.Errorf("invalid server URL %q: only mark://host[:port] is allowed", raw)
-	}
-	if u.Path != "" && u.Path != "/" {
-		return Target{}, fmt.Errorf("invalid server URL %q: must not contain a document path", raw)
-	}
-	return targetOf(u)
-}
-
 func targetOf(u *url.URL) (Target, error) {
 	var err error
 	if u.Scheme != protocol.ALPN {

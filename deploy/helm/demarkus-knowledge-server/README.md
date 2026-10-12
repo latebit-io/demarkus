@@ -127,9 +127,8 @@ Only `name` and `worldID` are required. Each world derives
 `profile: knowledge`; `allow` and `writeScope` come from `worldDefaults`
 (everyone admitted, `/**`); a field set on the world wins.
 `worldDefaults.authorityDomain` defaults to
-`<fullname>.<namespace>.svc.cluster.local`, the same suffix the agent chart
-derives, so the two agree without ExternalName aliases; it is also the SNI
-the gateway routes each world by. Under the `demarkus-knowledge-system`
+`<fullname>.<namespace>.svc.cluster.local`; it is also the SNI the gateway
+routes each world by. Under the `demarkus-knowledge-system`
 umbrella the list and the defaults come from `global.worlds`,
 `global.bucketPrefix` and `global.authorityDomain`.
 
@@ -175,10 +174,9 @@ accepts writes as soon as a Secret lands; no restart, no `SIGHUP`:
 - `<name>-static-tokens` is yours. It holds hashes only, so a plain Secret
   manifest in git is fine.
 
-A direct client that writes with a token (the standalone demarkus-agent
-chart, for one) needs a hash in the static Secret and the raw value in a
-Secret of your own. Keep the raw Secret out of git (an ExternalSecret, a
-SealedSecret, or SOPS):
+A direct client that writes with a token needs a hash in the static Secret
+and the raw value in a Secret of your own. Keep the raw Secret out of git (an
+ExternalSecret, a SealedSecret, or SOPS):
 
 ```bash
 TOKEN=$(openssl rand -hex 32)
@@ -210,7 +208,7 @@ one world and only one file; the world refuses the load otherwise.
 ## Broker and MCP gateways
 
 The process listens three times: UDP `server.udpPort` for QUIC (direct
-clients with capability tokens, the agent, other clusters), UDP
+clients with capability tokens, other clusters), UDP
 `server.bearerPort` for QUIC clients signed in at the IdP (below), and TCP
 `server.httpPort` for plain HTTP behind the Ingress. One mux serves the management API (OIDC
 login, RFC 8628 device flow, RFC 7591 registration, `/me/install`, the
@@ -348,12 +346,11 @@ gateway sessions.
 
 Health endpoints listen on the private pod port only. No health Service is
 created. NetworkPolicy admits the HTTP listener from the Ingress controller
-namespace only, UDP ingress on the QUIC port only from the configured agent
-namespace and pod selector and optional `externalCIDRs`, and the bearer port
-from any source, since every request there carries a verified token. A
-LoadBalancer remains blocked from capability token clients until those CIDRs
-are set. Egress permits cluster DNS,
-TCP 443 (GCS, the OIDC issuer, the API server), GKE metadata-server
+namespace only, UDP ingress on the QUIC port only from `externalCIDRs`
+(closed when empty), and the bearer port from any source, since every
+request there carries a verified token. A LoadBalancer remains blocked from
+capability token clients until those CIDRs are set. Egress permits cluster
+DNS, TCP 443 (GCS, the OIDC issuer, the API server), GKE metadata-server
 endpoints, and the UDP ports of `broker.remoteWorlds`.
 
 GCS egress cannot be restricted to stable CIDRs with standard Kubernetes

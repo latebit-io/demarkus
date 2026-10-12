@@ -94,10 +94,10 @@ response deliberately exposes each internal topology address to authenticated
 identities so graph consumers can join host-keyed edges to logical worlds.
 
 Path traversal, query strings, and fragments are rejected by the
-gateway parser (strict shape, clear errors). The crawler used by
+gateway parser (strict shape, clear errors). The link crawl behind
 `mark_graph` is lenient about `?query` and `#fragment` on outbound
 links it discovers in document bodies, because real-world markdown
-embeds them; that leniency is crawler-scoped only, never the parser
+embeds them; that leniency is crawl-scoped only, never the parser
 for caller-supplied URLs.
 
 ## Tool profiles
@@ -281,13 +281,16 @@ Returns `not-found` if no manifest is published.
 > To make restarts cheap (not durable), the store is **seeded on
 > demand from the worlds' published graph**: any
 > `mark_backlinks` / `mark_graph` / `mark_explore` call checks every
-> configured world for `/graph/manifest.md`, loading its complete,
-> version-pinned shards when present and falling back to `/graph.md`
-> only when the manifest is `not-found`. Checks use the last seen etag,
+> configured world. A federated world is read from the hub first, its
+> checkpoint manifest under `/graph/worlds/<world>/` and the complete,
+> version-pinned shards it names; when the hub has no checkpoint, and
+> for a world outside federation, the world's own `/graph/manifest.md`
+> is loaded, falling back to `/graph.md` only when that manifest is
+> `not-found`. Checks use the last seen etag,
 > run at most once per world per 5 minutes, and merge successful loads
 > into the store so cold pods answer backlinks without a crawl. Seed rows
 > keyed by a configured world's internal dial address
-> (the form the federation agent publishes) are translated to
+> (as an outside publisher might key them) are translated to
 > `mark://{worldName}/...` so they answer world-name queries. Locally
 > crawled data always takes precedence over seeded rows, and a world
 > without either graph form degrades to the unseeded behavior.
@@ -332,8 +335,8 @@ Returns an empty hint if the store is empty.
 
 Export the broker's graph store and publish it to a world in one
 step. `mark_graph_export` + `mark_publish` combined. This manual tool writes the
-single-document export to `url` (conventionally `/graph.md`); federation-agent snapshots are loaded
-automatically from `/graph/manifest.md` when present. This tool does not seed
+single-document export to `url` (conventionally `/graph.md`); in a knowledge
+system the hub's deriver checkpoints are seeded automatically. This tool does not seed
 the store itself; run `mark_graph`, `mark_backlinks`, or `mark_explore` first.
 
 | Param | Type | Required | Notes |

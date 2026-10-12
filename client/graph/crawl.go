@@ -134,7 +134,7 @@ type RelResult struct {
 // RelEdges resolves comma-separated rel-<predicate> refs against docURL.
 // Bad values never fail a crawl (ADR 0004); they come back as Rejected.
 func RelEdges(docURL string, metadata map[string]string) RelResult {
-	// Callers may pass a dial address (fedcrawl does); compare like with like
+	// Callers may pass a dial address; compare like with like
 	// so a self-reference is not mistaken for an edge to a different node.
 	docURL = links.CanonicalURL(docURL)
 	var result RelResult

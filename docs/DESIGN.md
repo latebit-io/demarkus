@@ -1220,7 +1220,7 @@ This is what Tim Berners-Lee originally imagined: the web as a navigable informa
 **Server**:
 - ~~Directory indexes~~ (LIST with pagination, LOOKUP catalog)
 - Content addressing: fetch by hash shipped, then left before 1.0 (ADR 0035); `/sha256-` paths stay reserved
-- ~~Federation support~~ (`demarkus-agent` crawler, graph snapshots)
+- ~~Federation support~~ (graph derived in the knowledge server, checkpointed into the hub)
 
 **Client**:
 - Offline mode
@@ -1297,8 +1297,8 @@ Hubs are the entry points into the information graph:
 - Graph as content: `Store.Export()` renders the graph as publishable markdown with `mark://` links (six-column Edges table: `From | To | Rel | Label | Anchor | Count`); `ParseExport()` parses it back; CLI `demarkus graph export` and MCP `mark_graph_export` tool
 - Edge semantics: edges carry provenance (link label, source section anchor, occurrence count) and typed relations ingested from `rel-<predicate>` publisher metadata (ADR 0004)
 - Agent discovery: `mark_graph_publish` MCP tool exports and publishes the graph in one step; other agents crawl the published document to inherit the topology without recrawling original servers
-- Atomic graph snapshots: `demarkus-agent` publishes version-pinned node and edge shards under `/graph/`, commits `/graph/manifest.md` last, and then updates `/graph.md`; seeders verify the complete snapshot before applying it
-- Federation crawler exception: generated `/graph.md` and `/graph/` documents are crawled but never reinterpreted as authored edges or discovery links
+- Atomic graph snapshots: the knowledge server's deriver publishes version-pinned per-world shards under `/graph/worlds/<world>/`, commits the manifest last, and then updates `/graph.md`; seeders verify the complete snapshot before applying it
+- Generated `/graph.md` and `/graph/` documents are never reinterpreted as authored edges or discovery links
 
 ### Later architecture decisions
 

@@ -22,8 +22,8 @@ func (h *harness) withBeta() {
 }
 
 // awaitExport polls until the hub's export holds exactly these nodes, by URL
-// to title.
-func awaitExport(t *testing.T, hub generation.IO, want map[string]string) {
+// to title, and returns that export.
+func awaitExport(t *testing.T, hub generation.IO, want map[string]string) (body string) {
 	t.Helper()
 	poll(t, "export", func() error {
 		head, err := hub.Fetch(context.Background(), graphstore.GraphExportPath)
@@ -41,8 +41,10 @@ func awaitExport(t *testing.T, hub generation.IO, want map[string]string) {
 		if !maps.Equal(got, want) {
 			return fmt.Errorf("nodes %v, want %v", got, want)
 		}
+		body = head.Body
 		return nil
 	})
+	return body
 }
 
 var seededNodes = map[string]string{"mark://alpha/index.md": "Home", "mark://alpha/a.md": "A", "mark://alpha/docs/c.md": "C"}

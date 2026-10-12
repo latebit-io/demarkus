@@ -117,7 +117,7 @@ provisioning:
 
 worldDefaults:
   # Suffix for derived authorities (<name>.<authorityDomain>); also the SNI
-  # the broker and agent dial with. Falls back to global.authorityDomain,
+  # the broker dials with. Falls back to global.authorityDomain,
   # then <fullname>.<namespace>.svc.cluster.local. Need not resolve in DNS.
   authorityDomain: ""
   # Prefix for derived bucket URLs, e.g. gs://my-project-demarkus-. Falls
@@ -396,11 +396,8 @@ networkPolicy:
   allowUnrestrictedHTTPS: false
   # Namespace of the Ingress controller that may reach the HTTP listener.
   ingressFromNamespace: ingress-nginx
-  agent:
-    namespace: demarkus-agent
-    podLabels:
-      app.kubernetes.io/name: demarkus-agent
-  # Required for direct clients when service.type is LoadBalancer.
+  # Direct QUIC clients (capability tokens), such as those behind a
+  # LoadBalancer. Empty closes the QUIC port to everything but peer hints.
   externalCIDRs: []
 
 podSecurityContext:

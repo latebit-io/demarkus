@@ -24,6 +24,7 @@ import (
 type fakeDoc struct {
 	version  int
 	body     string
+	meta     map[string]string // catalog metadata beside the etag
 	archived bool
 	private  bool // refused to an anonymous reader
 }
@@ -50,6 +51,11 @@ func newFakeWorld(t *testing.T) *fakeWorld {
 // publish writes body to docPath as its next version, announces it and
 // returns the version.
 func (f *fakeWorld) publish(docPath, body string) int {
+	return f.publishWith(docPath, body, nil)
+}
+
+// publishWith is publish with catalog metadata beside the etag.
+func (f *fakeWorld) publishWith(docPath, body string, meta map[string]string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	doc := f.docs[docPath]
@@ -58,7 +64,7 @@ func (f *fakeWorld) publish(docPath, body string) int {
 		f.docs[docPath] = doc
 	}
 	doc.version++
-	doc.body = body
+	doc.body, doc.meta = body, meta
 	f.emit(docPath, doc.version, protocol.OpPublish)
 	return doc.version
 }
@@ -137,7 +143,9 @@ func (f *fakeWorld) fetch(docPath string) (fetch.Result, error) {
 	case doc.archived:
 		return fetchtest.Archived(), nil
 	}
-	return fetchtest.Head(doc.body, doc.version, map[string]string{"etag": fmt.Sprintf("e%d", doc.version)}), nil
+	res := fetchtest.Head(doc.body, doc.version, doc.meta) // copies meta
+	res.Response.Metadata["etag"] = fmt.Sprintf("e%d", doc.version)
+	return res, nil
 }
 
 // list answers one directory as the server would to an anonymous reader.

@@ -6,7 +6,6 @@ This section is a stable reference for configuration, environment variables, and
 
 - [Server configuration & env vars](#server-configuration)
 - [Knowledge server configuration](#knowledge-server-configuration)
-- [Federation crawler configuration](#federation-crawler-configuration)
 
 Broker configuration (OIDC, worlds, the MCP gateways) is documented in `knowledge/cmd/demarkus-knowledge/` and the `demarkus-knowledge-server` Helm chart README.
 
@@ -75,68 +74,6 @@ worlds:                         # one or more
 ```
 
 See [Run a Server](../server/index.md#multi-world-mode-demarkus-knowledge-server) and `deploy/helm/demarkus-knowledge-server/README.md`.
-
-### Federation crawler configuration
-
-The federation crawler (`demarkus-agent`) uses a TOML configuration file:
-
-```toml
-seeds = ["mark://server1:6309", "mark://server2:6309"]
-hubs = ["mark://hub.example:6309"]
-
-[endpoints."server1:6309"]
-dial_address = "server1.internal:6309"
-server_name = "server1.internal"
-
-[crawl]
-max_servers = 50      # Maximum servers to discover
-max_documents = 1000  # Maximum documents per crawl run
-workers = 5           # Concurrent fetch goroutines
-
-[politeness]
-request_delay = "100ms"  # Delay between requests to same server
-
-[schedule]
-interval = "6h"  # Time between crawl runs (daemon mode)
-```
-
-#### Config fields
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `seeds` | *(required)* | Initial servers to crawl |
-| `hubs` | *(empty)* | Servers to publish the graph to |
-| `endpoints.<authority>.dial_address` | *(required per endpoint)* | Socket destination override |
-| `endpoints.<authority>.server_name` | *(authority host)* | TLS SNI and certificate name override |
-| `crawl.max_servers` | `50` | Maximum servers to discover per run |
-| `crawl.max_documents` | `1000` | Maximum documents to fetch per run |
-| `crawl.workers` | `5` | Concurrent fetch goroutines |
-| `politeness.request_delay` | `100ms` | Delay between requests to same server |
-| `schedule.interval` | - | Time between runs (daemon mode, required) |
-
-#### CLI flags
-
-Flags override config file values:
-
-| Flag | Description |
-|------|-------------|
-| `-config <path>` | Path to TOML config file |
-| `-seeds <urls>` | Comma-separated seed servers (overrides config) |
-| `-state <path>` | State file path (default `~/.mark/fedcrawl.json`) |
-| `-insecure` | Skip TLS certificate verification |
-| `-publish-graph` | Publish the link graph (`/graph/manifest.md` snapshot and `/graph.md`) to hubs after crawl |
-| `-publish-retention <n>` | Cap the `/graph.md` and `/graph/manifest.md` histories to the newest n versions; shards stay unpruned |
-| `-v` | Verbose output |
-
-#### Environment variables
-
-The crawler uses the same token resolution as other clients:
-
-| Env var | Description |
-|---------|-------------|
-| `DEMARKUS_AUTH` | Fallback auth token for the origin server only (named host, first TUI host, MCP `-host`, or the agent's single hub) |
-
-For per-server tokens, use `demarkus token add mark://host:6309 <token>` before crawling.
 
 ## Vocabulary
 

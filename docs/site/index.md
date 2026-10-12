@@ -24,7 +24,6 @@ Welcome to the Demarkus documentation site. This is the canonical table of conte
 
 ## Tools
 
-- [Federation Crawler](tools/agent.md): discover servers and publish the link graph
 - [Token Tooling](tools/index.md)
 
 ## Reference
