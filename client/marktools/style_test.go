@@ -25,7 +25,7 @@ func TestPublishStyleGate(t *testing.T) {
 		t.Helper()
 		backend := &fetchtest.Client{}
 		got := newTools(t, backend, hooks).Publish(t.Context(), marktools.PublishArgs{
-			URL: "/doc.md", Body: body, ExpectedVersion: new(0), OnConflict: "fail", Metadata: map[string]any{"tags": "a"},
+			URL: "/doc.md", Body: body, ExpectedVersion: new(0), OnConflict: "fail", Metadata: map[string]string{"tags": "a"},
 		})
 		return got, backend
 	}

@@ -5,6 +5,7 @@
 package curate
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -147,90 +148,66 @@ var (
 	lineStartDash = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])?\s*—`)
 )
 
-// replaceEmDashes turns em dashes into commas outside code fences, code
-// spans and line starts, where a dash may be a bullet; n is what changed.
+// replaceEmDashes turns em dashes into commas outside code and line starts,
+// where a dash may be a bullet; n is what changed.
 func replaceEmDashes(body string) (out string, n int) {
-	lines := strings.Split(body, "\n")
-	var fence string // the open fence's run, "" outside one
-	for i, line := range lines {
-		if run := fenceRun(line); run != "" {
-			switch {
-			case fence == "":
-				fence = run
-				continue
-			case closesFence(line, fence):
-				fence = ""
-				continue
-			}
+	code := codeMask{segs: mdoutline.CodeSegments(body)}
+	var b strings.Builder
+	b.Grow(len(body))
+	for off := 0; off <= len(body); {
+		end := len(body)
+		if i := strings.IndexByte(body[off:], '\n'); i >= 0 {
+			end = off + i
 		}
-		if fence == "" && strings.Contains(line, "—") {
-			lines[i] = replaceOutsideCode(line, &n)
+		keep := off
+		if m := lineStartDash.FindStringIndex(body[off:end]); m != nil {
+			keep = off + m[1]
 		}
+		b.WriteString(body[off:keep])
+		line, changed := replaceOutsideCode(body, keep, end, &code)
+		b.Write(line)
+		n += changed
+		if end < len(body) {
+			b.WriteByte('\n')
+		}
+		off = end + 1
 	}
-	return strings.Join(lines, "\n"), n
+	return b.String(), n
 }
 
-// fenceRun is the backtick or tilde run (3 or more) opening a line, else "".
-func fenceRun(line string) string {
-	t := strings.TrimSpace(line)
-	if t == "" || (t[0] != '`' && t[0] != '~') {
-		return ""
-	}
-	n := len(t) - len(strings.TrimLeft(t, t[:1]))
-	if n < 3 {
-		return ""
-	}
-	return t[:n]
+const emDash = "—"
+
+// codeMask answers whether a byte offset is code; offsets are asked in order.
+type codeMask struct {
+	segs []mdoutline.Segment
+	i    int
 }
 
-// closesFence: the same character, a run at least as long, nothing after it.
-func closesFence(line, fence string) bool {
-	run := fenceRun(line)
-	return run != "" && run[0] == fence[0] && len(run) >= len(fence) && strings.TrimSpace(line) == run
+func (m *codeMask) at(off int) bool {
+	for m.i < len(m.segs) && m.segs[m.i].Stop <= off {
+		m.i++
+	}
+	return m.i < len(m.segs) && off >= m.segs[m.i].Start
 }
 
-// replaceOutsideCode replaces one line's em dashes outside backtick spans,
-// a dash that opens the line kept, surrounding blanks folded into ", ".
-func replaceOutsideCode(line string, n *int) string {
-	keep := 0
-	if m := lineStartDash.FindStringIndex(line); m != nil {
-		keep = m[1]
-	}
-	out, rest := []rune(line[:keep]), []rune(line[keep:])
-	code := 0 // the open span's backtick run length, 0 outside one
-	for i := 0; i < len(rest); i++ {
-		r := rest[i]
-		if r == '`' {
-			// A span opens with a run and closes only with a run of the
-			// same length; other runs inside it are literal.
-			run := 1
-			for i+run < len(rest) && rest[i+run] == '`' {
-				run++
-			}
-			switch {
-			case code == 0:
-				code = run
-			case run == code:
-				code = 0
-			}
-			out = append(out, rest[i:i+run]...)
-			i += run - 1
+// replaceOutsideCode rewrites body[from:to] with each em dash outside code
+// replaced by ", ", surrounding blanks folded; n is what changed.
+func replaceOutsideCode(body string, from, to int, code *codeMask) (out []byte, n int) {
+	out = make([]byte, 0, to-from)
+	for i := from; i < to; {
+		if !strings.HasPrefix(body[i:to], emDash) || code.at(i) {
+			out = append(out, body[i])
+			i++
 			continue
 		}
-		if r != '—' || code > 0 {
-			out = append(out, r)
-			continue
-		}
-		*n++
-		for len(out) > 0 && (out[len(out)-1] == ' ' || out[len(out)-1] == '\t') {
-			out = out[:len(out)-1]
-		}
-		out = append(out, ',', ' ')
-		for i+1 < len(rest) && (rest[i+1] == ' ' || rest[i+1] == '\t') {
+		n++
+		out = append(bytes.TrimRight(out, " \t"), ", "...)
+		i += len(emDash)
+		for i < to && (body[i] == ' ' || body[i] == '\t') {
 			i++
 		}
 	}
-	return string(out)
+	return out, n
 }
 
 // lift moves the fence's keys into meta (a key the document already carries
@@ -425,6 +402,7 @@ func topicWrite(title, parentPath string, carried map[string]string, s *section)
 		meta["type"] = t
 	}
 	body := fmt.Sprintf("# %s: %s\n\nPart of [%s](%s).\n\n%s\n", title, s.heading.Text, title, parentPath, strings.TrimRight(s.text, "\n"))
+	meta[curatedDigest] = topicDigest(body, meta)
 	return Write{Path: s.topic, Body: body, Metadata: meta}
 }
 
@@ -621,6 +599,31 @@ func metaLine(meta map[string]string) string {
 	return strings.Join(parts, "; ")
 }
 
+// curatedDigest is the metadata key a topic carries over the body and
+// metadata curate wrote, so a resumed split can tell its own write from an
+// edit made since.
+const curatedDigest = "curated-digest"
+
+// topicDigest is the digest over a topic's body and metadata, the digest
+// key itself excluded.
+func topicDigest(body string, meta map[string]string) string {
+	meta = sansDigest(meta)
+	parts := make([]string, 0, 1+2*len(meta))
+	parts = append(parts, body)
+	for _, k := range slices.Sorted(maps.Keys(meta)) {
+		parts = append(parts, k, meta[k])
+	}
+	return docwrite.Digest(parts...)
+}
+
+// sansDigest is the metadata without the digest key; identical content is
+// identical whether or not a topic carries one.
+func sansDigest(meta map[string]string) map[string]string {
+	out := maps.Clone(meta)
+	delete(out, curatedDigest)
+	return out
+}
+
 // CuratedFrom is the metadata key a topic carries naming the document it
 // was split from, so a resumed split may update it and nothing else may.
 const CuratedFrom = "curated-from"
@@ -656,7 +659,8 @@ func Apply(ctx context.Context, docs hub.Docs, p *Proposal, stamp map[string]str
 	a := applier{docs: docs, stamp: stamp}
 	topics := p.Writes[:len(p.Writes)-1]
 	// Per topic: -1 skips an identical one, 0 creates, else updates at that
-	// version a topic an earlier apply of this document left behind.
+	// version a topic an earlier apply of this document wrote and nobody
+	// edited since (its digest still matches).
 	expected := make([]int, len(topics))
 	for i := range topics {
 		w := &topics[i]
@@ -668,9 +672,9 @@ func Apply(ctx context.Context, docs hub.Docs, p *Proposal, stamp map[string]str
 		case h.Status == protocol.StatusNotFound:
 		case h.Status != protocol.StatusOK:
 			return nil, &Refusal{Path: w.Path, Reason: "fetch: " + h.Status + "; nothing written"}
-		case h.Body == w.Body && maps.Equal(docwrite.Carried(h.Metadata), w.Metadata):
+		case h.Body == w.Body && maps.Equal(sansDigest(docwrite.Carried(h.Metadata)), sansDigest(w.Metadata)):
 			expected[i] = -1
-		case h.Metadata[CuratedFrom] == p.Path && h.Version > 0:
+		case h.Metadata[CuratedFrom] == p.Path && h.Metadata[curatedDigest] == topicDigest(h.Body, docwrite.Carried(h.Metadata)) && h.Version > 0:
 			expected[i] = h.Version
 		default:
 			return nil, &Refusal{Path: w.Path, Reason: "exists and differs from the proposal; nothing written"}

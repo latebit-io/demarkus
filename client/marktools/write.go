@@ -57,7 +57,7 @@ type PublishArgs struct {
 	URL, Body       string
 	ExpectedVersion *int
 	OnConflict      string
-	Metadata        map[string]any
+	Metadata        map[string]string
 }
 
 // Publish answers mark_publish. On a conflict the default mode returns a merge
@@ -83,11 +83,7 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 	if bad != nil {
 		return *bad
 	}
-	meta, err := t.publisherMeta(ctx, args.Metadata)
-	if err != nil {
-		return failure("%v", err)
-	}
-	w := docwrite.Write{Body: args.Body, ExpectedVersion: expected, Metadata: meta}
+	w := docwrite.Write{Body: args.Body, ExpectedVersion: expected, Metadata: t.publisherMeta(ctx, args.Metadata)}
 	result, notes, bad := t.landPublish(ctx, &landing{target: target, doc: t.doc(ctx, target, write), mode: mode}, &w)
 	if bad != nil {
 		return *bad
@@ -190,13 +186,10 @@ func (t *Tools) observeAppended(ctx context.Context, target Target, doc *docwrit
 
 // publisherMeta is the caller's metadata under the surface's identity: a
 // caller cannot write under another agent's name.
-func (t *Tools) publisherMeta(ctx context.Context, raw map[string]any) (map[string]string, error) {
-	meta, err := callerMeta(raw)
-	if err != nil {
-		return nil, err
-	}
+func (t *Tools) publisherMeta(ctx context.Context, raw map[string]string) map[string]string {
+	meta := callerMeta(raw)
 	maps.Copy(meta, t.identityMeta(ctx))
-	return meta, nil
+	return meta
 }
 
 // requireVersion is the check every version checked publish makes.

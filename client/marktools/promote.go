@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
@@ -31,7 +30,7 @@ const (
 type PromoteArgs struct {
 	URL, Phase string
 	Body       string
-	Metadata   map[string]any
+	Metadata   map[string]string
 	Source     string
 	Target     string
 	Via        string
@@ -199,11 +198,7 @@ func (t *Tools) promoteDraft(ctx context.Context, target Target, args *PromoteAr
 		bad.Text = "status: not-permitted\n" + bad.Text
 		return *bad
 	}
-	meta, err := callerMeta(args.Metadata)
-	if err != nil {
-		return failure("%v", err)
-	}
-	draft := &promote.Draft{Path: target.Path, Body: args.Body, Metadata: meta, Source: strings.TrimSpace(args.Source)}
+	draft := &promote.Draft{Path: target.Path, Body: args.Body, Metadata: callerMeta(args.Metadata), Source: strings.TrimSpace(args.Source)}
 	doc := t.doc(ctx, target, write)
 	head, err := doc.Head(ctx)
 	if err != nil {
@@ -361,25 +356,14 @@ func (t *Tools) promoteApply(ctx context.Context, target Target, doc *docwrite.D
 	return text(fmt.Sprintf("status: published\ntarget: %s\nversion: %d\n", target.name(), version) + notes)
 }
 
-// callerMeta is the caller's metadata as strings; identity keys are the
-// surface's, never the caller's. A JSON number is written as the decimal it
-// was, never in exponent form.
-func callerMeta(raw map[string]any) (map[string]string, error) {
+// callerMeta is the caller's metadata without identity keys: the surface
+// stamps agent and user, a caller cannot write under another name.
+func callerMeta(raw map[string]string) map[string]string {
 	meta := make(map[string]string, len(raw))
 	for k, v := range raw {
-		if protocol.IsIdentityMetadataKey(k) {
-			continue
-		}
-		switch x := v.(type) {
-		case string:
-			meta[k] = x
-		case float64:
-			meta[k] = strconv.FormatFloat(x, 'f', -1, 64)
-		case bool:
-			meta[k] = strconv.FormatBool(x)
-		default:
-			return nil, fmt.Errorf("metadata.%s: %T is not a string value", k, v)
+		if !protocol.IsIdentityMetadataKey(k) {
+			meta[k] = v
 		}
 	}
-	return meta, nil
+	return meta
 }

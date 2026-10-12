@@ -68,7 +68,7 @@ func TestPublishVersionAndMetadata(t *testing.T) {
 	if args.ExpectedVersion == nil || *args.ExpectedVersion != 3 || args.OnConflict != "fail" {
 		t.Errorf("args = %+v, want version 3 and fail mode", args)
 	}
-	if args.Metadata["tags"] != "go" || args.Metadata["importance"] != 0.9 {
+	if args.Metadata["tags"] != "go" || args.Metadata["importance"] != "0.9" {
 		t.Errorf("metadata = %v", args.Metadata)
 	}
 
@@ -87,6 +87,14 @@ func TestPublishVersionAndMetadata(t *testing.T) {
 	_, err = Publish(call(map[string]any{"url": "/d.md", "body": "b", "expected_version": float64(1), "metadata": "tags: go"}))
 	if err == nil || !strings.Contains(err.Error(), "metadata must be an object") {
 		t.Errorf("non object metadata err = %v", err)
+	}
+	// Values reach the store as strings: numbers in plain decimal, never 1e+06.
+	args, err = Publish(call(map[string]any{"url": "/d.md", "body": "b", "metadata": map[string]any{"tags": "go", "retention": float64(1000000), "importance": 0.7, "pinned": true}}))
+	if err != nil || args.Metadata["retention"] != "1000000" || args.Metadata["importance"] != "0.7" || args.Metadata["pinned"] != "true" || args.Metadata["tags"] != "go" {
+		t.Errorf("metadata = %+v, err = %v", args.Metadata, err)
+	}
+	if _, err = Publish(call(map[string]any{"url": "/d.md", "body": "b", "metadata": map[string]any{"rel-sees": []any{"/x.md"}}})); err == nil || !strings.Contains(err.Error(), "metadata.rel-sees must be a string, number or boolean") {
+		t.Errorf("array metadata err = %v", err)
 	}
 }
 
@@ -139,15 +147,15 @@ func TestMetadataArgument(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    map[string]any
-		want    map[string]any
+		want    map[string]string
 		wantErr bool
 	}{
 		{"absent", map[string]any{}, nil, false},
 		{"null", map[string]any{"metadata": nil}, nil, false},
-		{"object", map[string]any{"metadata": object}, object, false},
+		{"object", map[string]any{"metadata": object}, map[string]string{"tags": "go"}, false},
 		{"string", map[string]any{"metadata": "tags: go"}, nil, true},
 		{"array", map[string]any{"metadata": []any{"go"}}, nil, true},
-		{"scalars", map[string]any{"metadata": map[string]any{"importance": 0.7, "pinned": true}}, map[string]any{"importance": 0.7, "pinned": true}, false},
+		{"scalars", map[string]any{"metadata": map[string]any{"importance": 0.7, "pinned": true}}, map[string]string{"importance": "0.7", "pinned": "true"}, false},
 		{"nested", map[string]any{"metadata": map[string]any{"tags": []any{"go"}}}, nil, true},
 		{"null value", map[string]any{"metadata": map[string]any{"tags": nil}}, nil, true},
 	}

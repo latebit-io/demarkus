@@ -205,12 +205,22 @@ func TestApplyPreflightsTopicsAndWritesTheHubLast(t *testing.T) {
 		t.Errorf("publishes = %+v", backend.PublishCalls)
 	}
 
-	// A topic an earlier apply of this document created is updated at its version, never refused.
-	stale := fetchtest.Head("# Big plan: Design\n\nolder split\n", 3, map[string]string{CuratedFrom: "/plans/big.md", "tags": "x"})
-	backend = &fetchtest.Client{Published: map[string]fetch.Result{"h/plans/big/design.md": stale, "h/plans/big.md": fetchtest.Head(in.Body, 2, in.Metadata)}}
+	// A topic an earlier apply of this document wrote is updated at any
+	// version while its digest still matches; one edited since refuses.
+	topicAt := func(body string, version int, digestOf string) *fetchtest.Client {
+		meta := map[string]string{CuratedFrom: "/plans/big.md", "tags": "x"}
+		meta[curatedDigest] = topicDigest(digestOf, meta)
+		return &fetchtest.Client{Published: map[string]fetch.Result{"h/plans/big/design.md": fetchtest.Head(body, version, meta), "h/plans/big.md": fetchtest.Head(in.Body, 2, in.Metadata)}}
+	}
+	older := "# Big plan: Design\n\nolder split\n"
+	backend = topicAt(older, 3, older)
 	applied, err = Apply(t.Context(), docsOn(backend), &p, stamp)
 	if err != nil || applied[0].Action != ActionUpdated || backend.PublishCalls[0].ExpectedVersion != 3 {
 		t.Fatalf("resumed split: %v %+v %+v", err, applied[0], backend.PublishCalls[0])
+	}
+	backend = topicAt("# Big plan: Design\n\nmy edit\n", 4, older)
+	if _, err = Apply(t.Context(), docsOn(backend), &p, stamp); !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, "differs") || len(backend.PublishCalls) != 0 {
+		t.Fatalf("edited topic: %v (publishes %d)", err, len(backend.PublishCalls))
 	}
 
 	backend = &fetchtest.Client{PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {

@@ -35,7 +35,7 @@ func TestPublishSendsTheWriteWithIdentity(t *testing.T) {
 	tools := newTools(t, backend, writingHooks())
 	got := tools.Publish(t.Context(), marktools.PublishArgs{
 		URL: "/doc.md", Body: "# Doc\n", ExpectedVersion: new(0), OnConflict: "fail",
-		Metadata: map[string]any{"tags": "a,b", "importance": 0.5, "agent": "someone-else", "user": "mallory@example.com"},
+		Metadata: map[string]string{"tags": "a,b", "importance": "0.5", "agent": "someone-else", "user": "mallory@example.com"},
 	})
 	want := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "1"}}}, "version", "modified", "server-version")
 	if got.IsError || got.Text != want {
@@ -51,17 +51,6 @@ func TestPublishSendsTheWriteWithIdentity(t *testing.T) {
 	// Identity is the surface's to set: a caller cannot write under another name.
 	if fmt.Sprint(sent.Metadata) != "map[agent:test-agent importance:0.5 tags:a,b user:alice@example.com]" {
 		t.Errorf("metadata = %v", sent.Metadata)
-	}
-}
-
-func TestPublishRefusesNonStringMetadata(t *testing.T) {
-	backend := &fetchtest.Client{}
-	got := newTools(t, backend, writingHooks()).Publish(t.Context(), marktools.PublishArgs{
-		URL: "/doc.md", Body: "# Doc\n", ExpectedVersion: new(0),
-		Metadata: map[string]any{"tags": "a", "rel-sees": []any{"/x.md"}},
-	})
-	if !got.IsError || !strings.Contains(got.Text, "metadata.rel-sees: []interface {} is not a string value") || len(backend.PublishCalls) != 0 {
-		t.Fatalf("Publish = %+v (publishes %d)", got, len(backend.PublishCalls))
 	}
 }
 

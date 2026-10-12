@@ -29,3 +29,9 @@ func OpeningParagraph(body string) string { return mdoutline.OpeningParagraph(bo
 
 // Anchors is protocol/mdoutline.Anchors.
 func Anchors(body string) []string { return mdoutline.Anchors(body) }
+
+// Segment is protocol/mdoutline.Segment.
+type Segment = mdoutline.Segment
+
+// CodeSegments is protocol/mdoutline.CodeSegments.
+func CodeSegments(body string) []Segment { return mdoutline.CodeSegments(body) }

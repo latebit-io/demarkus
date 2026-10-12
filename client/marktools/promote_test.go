@@ -111,9 +111,9 @@ func knowledgeBackend() *fetchtest.Client {
 func TestPromoteDryRunChecksPolicyAndDedups(t *testing.T) {
 	backend := knowledgeBackend()
 	tools := newTools(t, backend, writingHooks())
-	draft := marktools.PromoteArgs{URL: "/docs/retry-rules.md", Phase: "dry_run", Body: promoteSource, Metadata: map[string]any{"tags": "retry", "importance": 0.7, "retention": float64(1000000), "pinned": true}}
+	draft := marktools.PromoteArgs{URL: "/docs/retry-rules.md", Phase: "dry_run", Body: promoteSource, Metadata: map[string]string{"tags": "retry", "importance": "0.7", "retention": "1000000", "pinned": "true"}}
 	got := tools.Promote(t.Context(), draft)
-	// Dedup finds the same-title row; the packet is over the decimal values the write would carry.
+	// Dedup finds the same-title row; the packet is over the values the write carries.
 	draft.Phase, draft.Packet = "apply", packetOf(t, got)
 	if applied := tools.Promote(t.Context(), draft); applied.IsError || backend.PublishCalls[0].Metadata["retention"] != "1000000" || backend.PublishCalls[0].Metadata["pinned"] != "true" || backend.PublishCalls[0].Metadata["importance"] != "0.7" {
 		t.Errorf("numbers = %+v (%s)", backend.PublishCalls, applied.Text)
@@ -151,7 +151,7 @@ func TestPromoteApplyBindsToThePacketAndTheStyleGate(t *testing.T) {
 		return marktools.StyleGate{Strictness: publishpolicy.Block}
 	}
 	tools := newTools(t, backend, hooks)
-	draft := marktools.PromoteArgs{URL: "/docs/retry-rules.md", Phase: "dry_run", Body: promoteSource, Metadata: map[string]any{"tags": "retry,domain:eng"}, Source: "soul"}
+	draft := marktools.PromoteArgs{URL: "/docs/retry-rules.md", Phase: "dry_run", Body: promoteSource, Metadata: map[string]string{"tags": "retry,domain:eng"}, Source: "soul"}
 	packet := packetOf(t, tools.Promote(t.Context(), draft))
 	draft.Phase = "apply"
 	if got := tools.Promote(t.Context(), draft); !got.IsError || !strings.Contains(got.Text, "apply needs the packet") {
@@ -162,12 +162,12 @@ func TestPromoteApplyBindsToThePacketAndTheStyleGate(t *testing.T) {
 	if got := tools.Promote(t.Context(), draft); !got.IsError || !strings.Contains(got.Text, "does not match the draft") {
 		t.Errorf("changed body = %+v", got)
 	}
-	draft.Body, draft.Metadata = promoteSource, map[string]any{"tags": "retry"}
+	draft.Body, draft.Metadata = promoteSource, map[string]string{"tags": "retry"}
 	if got := tools.Promote(t.Context(), draft); !got.IsError || !strings.Contains(got.Text, "does not match the draft") {
 		t.Errorf("changed metadata = %+v", got)
 	}
 	// The style gate holds apply as it holds mark_publish: block refuses.
-	draft.Body, draft.Metadata, draft.Phase = "# Retry Rules\n\nWhen — to retry.\n", map[string]any{"tags": "retry,domain:eng"}, "dry_run"
+	draft.Body, draft.Metadata, draft.Phase = "# Retry Rules\n\nWhen — to retry.\n", map[string]string{"tags": "retry,domain:eng"}, "dry_run"
 	draft.Packet = packetOf(t, tools.Promote(t.Context(), draft))
 	draft.Phase = "apply"
 	if got := tools.Promote(t.Context(), draft); !got.IsError || !strings.Contains(got.Text, "publish refused, style problems") || len(backend.PublishCalls) != 0 {

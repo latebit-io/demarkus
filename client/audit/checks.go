@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"fmt"
+	"github.com/latebit-io/demarkus/client/mdoutline"
 	"maps"
 	"path"
 	"slices"
@@ -279,7 +280,7 @@ func (a *audit) checkReferences() {
 		if !live(d.status) {
 			continue
 		}
-		mentions := adrReferenceRe.FindAllStringSubmatch(stripFences(d.body), -1)
+		mentions := adrReferenceRe.FindAllStringSubmatch(stripCode(d.body), -1)
 		if len(mentions) == 0 {
 			continue
 		}
@@ -411,24 +412,18 @@ func statusOrErr(status string, err error) string {
 	return status
 }
 
-// stripFences blanks fenced code blocks so ADR mentions in examples do not count.
-func stripFences(body string) string {
-	var out strings.Builder
-	out.Grow(len(body))
-	fence := ""
-	for line := range strings.SplitSeq(body, "\n") {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case fence == "" && (strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")):
-			fence = trimmed[:3]
-		case fence != "" && strings.HasPrefix(trimmed, fence):
-			fence = ""
-		case fence == "":
-			out.WriteString(line)
+// stripCode blanks code (fences, indented blocks, spans) so ADR mentions in
+// examples do not count.
+func stripCode(body string) string {
+	out := []byte(body)
+	for _, seg := range mdoutline.CodeSegments(body) {
+		for i := seg.Start; i < seg.Stop; i++ {
+			if out[i] != '\n' {
+				out[i] = ' '
+			}
 		}
-		out.WriteByte('\n')
 	}
-	return out.String()
+	return string(out)
 }
 
 func sortedUnique(in []string) []string {

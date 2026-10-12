@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/lookupexpand"
@@ -54,20 +55,27 @@ func OptionalURL(req *mcp.CallToolRequest) string {
 	return req.GetString("url", "")
 }
 
-// metadata is a tool call's optional "metadata" object. PUBLISH replaces the
-// metadata map, so a mistyped argument is refused, never read as none.
-func metadata(args map[string]any) (map[string]any, error) {
+// metadata is a tool call's optional "metadata" object as the strings the
+// store keeps; numbers in plain decimal. PUBLISH replaces the metadata map,
+// so a mistyped argument is refused, never read as none.
+func metadata(args map[string]any) (map[string]string, error) {
 	raw, given := args["metadata"]
 	if !given || raw == nil {
 		return nil, nil
 	}
-	meta, ok := raw.(map[string]any)
+	obj, ok := raw.(map[string]any)
 	if !ok {
 		return nil, errors.New("metadata must be an object of key/value pairs")
 	}
-	for k, v := range meta {
-		switch v.(type) {
-		case string, float64, bool:
+	meta := make(map[string]string, len(obj))
+	for k, v := range obj {
+		switch x := v.(type) {
+		case string:
+			meta[k] = x
+		case float64:
+			meta[k] = strconv.FormatFloat(x, 'f', -1, 64)
+		case bool:
+			meta[k] = strconv.FormatBool(x)
 		default:
 			return nil, fmt.Errorf("metadata.%s must be a string, number or boolean", k)
 		}

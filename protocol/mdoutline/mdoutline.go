@@ -205,3 +205,37 @@ func countLines(span []byte) int {
 	}
 	return n
 }
+
+// Segment is a byte range [Start, Stop) of the body.
+type Segment struct{ Start, Stop int }
+
+// CodeSegments are the body's code ranges in document order: fenced and
+// indented block lines, and code span text. Editors that must leave code
+// alone skip them, so every surface agrees on what code is.
+func CodeSegments(body string) []Segment {
+	src := []byte(body)
+	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
+	var segs []Segment
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) { //nolint:errcheck // the callback never errors
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch v := n.(type) {
+		case *ast.FencedCodeBlock, *ast.CodeBlock:
+			lines := v.Lines()
+			for i := 0; i < lines.Len(); i++ {
+				l := lines.At(i)
+				segs = append(segs, Segment{Start: l.Start, Stop: l.Stop})
+			}
+		case *ast.CodeSpan:
+			for c := v.FirstChild(); c != nil; c = c.NextSibling() {
+				if t, ok := c.(*ast.Text); ok {
+					segs = append(segs, Segment{Start: t.Segment.Start, Stop: t.Segment.Stop})
+				}
+			}
+			return ast.WalkSkipChildren, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	return segs
+}

@@ -328,8 +328,9 @@ With `apply: true` and the hash a report returned, the tool recomputes
 the proposal from the current head and refuses when the hash differs.
 It then preflights every topic path (absent: created at version 0;
 identical to the proposal: skipped; carrying `curated-from` naming
-this document, from an earlier apply the hub conflict interrupted:
-updated at its version; anything else: refused before any write),
+this document, from an earlier apply the hub conflict interrupted,
+with its `curated-digest` still matching the body: updated at its
+version; edited since, or anything else: refused before any write),
 publishes the topics, then the document at the reported version with
 `on_conflict: fail`. A failure names what landed; a report rerun after
 it resumes.

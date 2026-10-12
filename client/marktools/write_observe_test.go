@@ -26,7 +26,7 @@ func TestPublishObservesTheWrittenDocument(t *testing.T) {
 	tools := newTools(t, backend, graphHooks(store, &seeded))
 	got := tools.Publish(t.Context(), marktools.PublishArgs{
 		URL: "/doc.md", Body: observedBody, ExpectedVersion: new(0), OnConflict: "fail",
-		Metadata: map[string]any{"tags": "a", "rel-related": "/adr/0001.md"},
+		Metadata: map[string]string{"tags": "a", "rel-related": "/adr/0001.md"},
 	})
 	if got.IsError {
 		t.Fatalf("Publish = %+v", got)
