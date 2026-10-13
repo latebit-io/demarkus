@@ -83,6 +83,8 @@ type Gateway struct {
 	tenantGraphs   map[string]*tenantGraph
 	// Session-end hooks evict unchanged-fetch dedup state.
 	fetchSeen *sessionSeen
+	// hubBrands bounds unauthenticated hub reads (hub_branding.go).
+	hubBrands hubBrandingCache
 	// memorySeed tracks per-world memory-template seeding (memory profile).
 	memorySeed memorySeeder
 	// tools are the shared mark_* bodies bound to this gateway; nil only if
@@ -327,6 +329,8 @@ func (g *Gateway) Register(mux *http.ServeMux, host string) {
 	// prmPath+MCPPath is RFC 9728 §3.1's path-inserted form for a
 	// resource URL that carries a path. Same document.
 	mux.HandleFunc("GET "+host+prmPath+core.MCPPath, g.oauthProtectedResource)
+	// The hub's branding documents, public like the metadata (hub_branding.go).
+	mux.HandleFunc("GET "+host+hubBrandingPath, g.hubBranding)
 }
 
 // Routes is the gateway alone on a mux, for tests and single-gateway hosts.
