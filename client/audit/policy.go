@@ -72,9 +72,9 @@ func (a *audit) checkPolicy() {
 	}
 }
 
-// checkContent scans every body for secrets and personal data. An override
-// is reported with its reason, not a fix, so overrides can be reviewed.
-// Email stays unchecked: the doctor does not know the work domains.
+// checkContent scans every body for secrets and personal data. A reviewed
+// override is reported with its reason, not a fix. Email stays unchecked:
+// the doctor does not know the work domains.
 func (a *audit) checkContent() {
 	scanner := contentcheck.New(contentcheck.Options{PII: contentcheck.Block})
 	for _, p := range a.order {
@@ -86,11 +86,12 @@ func (a *audit) checkContent() {
 		if len(findings) == 0 {
 			continue
 		}
-		if override := strings.TrimSpace(d.meta[contentcheck.OverrideKey]); override != "" {
+		// An override covers personal data only; a secret under one is still a finding.
+		if override := strings.TrimSpace(d.meta[contentcheck.OverrideKey]); override != "" && !contentcheck.Secrets(findings) {
 			a.add(CheckContent, p, contentcheck.Summary(findings)+" (override: "+override+")", "")
 			continue
 		}
-		a.add(CheckContent, p, contentcheck.Summary(findings), "remove it and re-publish, or for a false positive re-publish with metadata "+contentcheck.OverrideKey+" set to the reason")
+		a.add(CheckContent, p, contentcheck.Summary(findings), contentcheck.Remedy(findings))
 	}
 }
 

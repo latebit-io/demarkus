@@ -25,6 +25,7 @@ func TestScanSecrets(t *testing.T) {
 		{"openai", "sk-" + strings.Repeat("A", 40), "openai-api-key"},
 		{"jwt", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJlLXNpZ25hdHVyZQ", "jwt"},
 		{"connection string", "postgres://app:s3cr3tpass@db.internal:5432/app", "connection-string-password"},
+		{"connection string with a slash in the password", "postgres://app:ab/cd9x@db.internal/app", "connection-string-password"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

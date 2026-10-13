@@ -100,3 +100,18 @@ func TestContentAndStyleGuideChecks(t *testing.T) {
 		t.Fatalf("style guide: %v", got)
 	}
 }
+
+func TestContentOverrideNeverCoversASecret(t *testing.T) {
+	f := newFake(map[string]fakeDoc{
+		"/index.md": {Body: "# Hub\n\n- [k](/k.md)\n", Meta: map[string]string{"tags": "index"}},
+		"/k.md":     {Body: "# K\n\nSummary.\n\n-----BEGIN RSA PRIVATE KEY-----\n", Meta: map[string]string{"tags": "t", "type": "Guide", "content-check-override": "legacy"}},
+	})
+	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := findings(r, CheckContent)
+	if len(got) != 1 || got[0] != "/k.md: secret/pem-private-key at line 5" {
+		t.Fatalf("content findings: %v", got)
+	}
+}

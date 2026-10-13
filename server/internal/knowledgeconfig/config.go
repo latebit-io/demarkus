@@ -622,6 +622,13 @@ func (config *Config) validateWorlds() error {
 			return err
 		}
 	}
+	// The floor is operator-owned and static; a misnamed one would refuse
+	// every write at write time, so refuse it here.
+	if config.FloorWorld != "" {
+		if _, found := worldNames[config.FloorWorld]; !found {
+			return fmt.Errorf("floorWorld %q names no configured world", config.FloorWorld)
+		}
+	}
 	return nil
 }
 

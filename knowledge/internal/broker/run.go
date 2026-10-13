@@ -145,7 +145,9 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 	mux := http.NewServeMux()
 	srv.Register(mux)
 	knowledge := gateway.KnowledgeProfile()
-	gateways := []*gateway.Gateway{gateway.New(gateway.DepsFor(cfg, knowledge, deps.SharedDeps, nil), opts.Version, dispatcher, knowledge)}
+	knowledgeDeps := gateway.DepsFor(cfg, knowledge, deps.SharedDeps, nil)
+	knowledgeDeps.Floor = gateway.FloorOf(opts.LocalWorlds)
+	gateways := []*gateway.Gateway{gateway.New(knowledgeDeps, opts.Version, dispatcher, knowledge)}
 	gateways[0].Register(mux, "")
 	if cfg.Server.Memory.Enabled() {
 		memory := gateway.MemoryProfile()

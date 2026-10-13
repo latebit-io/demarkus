@@ -86,9 +86,13 @@ func Current(ctx context.Context, reader backend.Reader, require bool) (publishp
 }
 
 // evaluate judges one prepared write: the body for secrets and personal
-// data, then the metadata under the floor merged with this world's policy.
-// A candidate policy must be enforceable and satisfiable under the floor.
+// data first, so a refused body is reported as such, then the metadata under
+// the floor merged with this world's policy. A candidate policy must be
+// enforceable and satisfiable under the floor.
 func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
+	if err := e.content.judge(write); err != nil {
+		return err
+	}
 	var floor *publishpolicy.Policy
 	if e.options.Floor != nil {
 		read, err := e.options.Floor(ctx)
@@ -119,9 +123,6 @@ func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write sto
 		if _, err := layout.Parse(string(write.Content)); err != nil {
 			return fmt.Errorf("%w: %w: candidate template: %v", backend.ErrRejected, ErrInvalidPolicy, err)
 		}
-	}
-	if err := e.content.judge(write); err != nil {
-		return err
 	}
 	policy, err := Current(ctx, state, e.options.Require)
 	if err != nil {

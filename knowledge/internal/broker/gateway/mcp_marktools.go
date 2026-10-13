@@ -39,13 +39,14 @@ func (g *Gateway) toolStyle(context.Context, marktools.Target) marktools.StyleGa
 	return marktools.StyleGate{Strictness: publishpolicy.Warn, Guide: g.profile.StyleGuide}
 }
 
-// toolFloor names the hub world as the policy floor under every other
-// world; the hub judges itself, and a tenant-scoped surface has no floor.
+// toolFloor names the server's floor world as the policy floor under every
+// other world; the floor judges itself, and a tenant-scoped surface has
+// no floor.
 func (g *Gateway) toolFloor(_ context.Context, target marktools.Target) (marktools.Target, bool) {
-	if g.profile.TenantScoped || g.deps.Hub == "" || target.Host == g.deps.Hub {
+	if g.profile.TenantScoped || g.deps.Floor == "" || target.Host == g.deps.Floor {
 		return marktools.Target{}, false
 	}
-	return marktools.Target{Host: g.deps.Hub, Path: "/"}, true
+	return marktools.Target{Host: g.deps.Floor, Path: "/"}, true
 }
 
 // resolveToolTarget keeps the url as the agent wrote it for display; the graph

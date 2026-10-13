@@ -152,28 +152,40 @@ func TestEnforceContent(t *testing.T) {
 			t.Errorf("off mode pii = %v, warned %+v", err, warned)
 		}
 	})
-	t.Run("override lands and is reported", func(t *testing.T) {
+	t.Run("override lands personal data and is reported, never a secret", func(t *testing.T) {
 		warned = nil
 		gated := backendtest.Direct{Store: writepolicy.Enforce(raw, writepolicy.Options{Require: true, Content: writepolicy.ContentOptions{Warn: warn}})}
-		meta := map[string]string{"tags": "topic", contentcheck.OverrideKey: "documented example key"}
-		doc, err := gated.WriteVersion("/keys.md", 0, secret, meta)
+		meta := map[string]string{"tags": "topic", contentcheck.OverrideKey: "test fixture number"}
+		doc, err := gated.WriteVersion("/sin.md", 0, sin, meta)
 		if err != nil {
 			t.Fatalf("override: %v", err)
 		}
-		if doc.Metadata[contentcheck.OverrideKey] != "documented example key" {
+		if doc.Metadata[contentcheck.OverrideKey] != "test fixture number" {
 			t.Errorf("override not recorded: %v", doc.Metadata)
 		}
-		if len(warned) != 1 || warned[0].override != "documented example key" {
+		if len(warned) != 1 || warned[0].override != "test fixture number" {
 			t.Errorf("warned = %+v", warned)
 		}
-		if _, err := gated.WriteVersion("/keys.md", 1, secret, map[string]string{"tags": "topic", contentcheck.OverrideKey: "  "}); !errors.Is(err, writepolicy.ErrContentBlocked) {
+		if _, err := gated.WriteVersion("/sin.md", 1, sin, map[string]string{"tags": "topic", contentcheck.OverrideKey: "  "}); !errors.Is(err, writepolicy.ErrContentBlocked) {
 			t.Errorf("blank override = %v, want blocked", err)
 		}
+		_, err = gated.WriteVersion("/keys.md", 0, secret, map[string]string{"tags": "topic", contentcheck.OverrideKey: "documented example key"})
+		var contentErr *writepolicy.ContentError
+		if !errors.Is(err, writepolicy.ErrContentBlocked) || !errors.As(err, &contentErr) || !strings.Contains(contentErr.RejectionMessage(), contentcheck.Remedy(contentErr.Findings)) {
+			t.Errorf("secret under override = %v, want blocked with no override offered", err)
+		}
 	})
-	t.Run("the scan runs before the policy", func(t *testing.T) {
+	t.Run("the scan runs before the policy and before the floor is read", func(t *testing.T) {
 		gated := backendtest.Direct{Store: writepolicy.Enforce(raw, writepolicy.Options{Require: true, Floor: fixedFloor(publishpolicy.Policy{Strictness: publishpolicy.Block, RequiredTagAxes: []string{"category"}})})}
 		if _, err := gated.WriteVersion("/r.md", 0, secret, nil); !errors.Is(err, writepolicy.ErrContentBlocked) {
 			t.Errorf("secret with bad metadata = %v, want the content refusal first", err)
+		}
+		unreadable := backendtest.Direct{Store: writepolicy.Enforce(raw, writepolicy.Options{Require: true,
+			Floor: func(context.Context) (publishpolicy.Policy, error) {
+				return publishpolicy.Policy{}, errors.New("floor down")
+			}})}
+		if _, err := unreadable.WriteVersion("/r.md", 0, secret, tags); !errors.Is(err, writepolicy.ErrContentBlocked) {
+			t.Errorf("secret with the floor unreadable = %v, want the content refusal, not the floor error", err)
 		}
 	})
 }

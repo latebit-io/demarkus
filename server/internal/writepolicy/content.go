@@ -37,15 +37,16 @@ func (err *ContentError) Unwrap() []error {
 	return []error{ErrContentBlocked, backend.ErrRejected}
 }
 
-// RejectionMessage names each rule and line and how to override a false
-// positive; the matched text never appears.
+// RejectionMessage names each rule and line and the way out: a secret is
+// removed, a personal-data false positive is overridden; the matched text
+// never appears.
 func (err *ContentError) RejectionMessage() string {
 	var b strings.Builder
 	b.WriteString("content check refused this write (a secret or personal data in the body):\n")
 	for _, f := range err.Findings {
 		fmt.Fprintf(&b, "- %s\n", f)
 	}
-	fmt.Fprintf(&b, "Remove it, or for a false positive set metadata %s to the reason; the override is recorded with the version.\n", contentcheck.OverrideKey)
+	b.WriteString("Fix: " + contentcheck.Remedy(err.Findings) + ".\n")
 	return b.String()
 }
 
@@ -62,18 +63,22 @@ func newContentGate(options ContentOptions) contentGate {
 	return contentGate{scanner: contentcheck.New(options.Options), options: options}
 }
 
-// judge scans the prepared body. Secrets refuse regardless of mode; PII
-// follows the mode. An override lets any finding land and is reported.
+// judge scans the prepared body. A secret refuses the write, override or
+// not; personal data follows the mode, and an override lets it land,
+// reported with its reason.
 func (g contentGate) judge(write storefmt.PreparedWrite) error {
 	findings := g.scanner.Scan(string(write.Content))
 	if len(findings) == 0 {
 		return nil
 	}
+	if contentcheck.Secrets(findings) {
+		return &ContentError{Findings: findings}
+	}
 	if override := strings.TrimSpace(write.Metadata[contentcheck.OverrideKey]); override != "" {
 		g.warn(write.Path, findings, override)
 		return nil
 	}
-	if contentcheck.Secrets(findings) || g.options.PII != contentcheck.Warn {
+	if g.options.PII != contentcheck.Warn {
 		return &ContentError{Findings: findings}
 	}
 	g.warn(write.Path, findings, "")

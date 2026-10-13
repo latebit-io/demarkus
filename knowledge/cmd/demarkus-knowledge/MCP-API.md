@@ -272,9 +272,9 @@ The server judges the metadata under the world's
 floor: the stricter strictness, the union of required axes and
 fields, the intersection of `allow_tags.<axis>` lists), and scans the
 body for secrets and personal data before any of it: a hit refuses the
-write naming the rule and line, never the value. Metadata
-`content-check-override: <reason>` lets a reviewed false positive land
-and is recorded with the version.
+write naming the rule and line, never the value. A secret is removed;
+for personal data, metadata `content-check-override: <reason>` lets a
+reviewed false positive land and is recorded with the version.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |

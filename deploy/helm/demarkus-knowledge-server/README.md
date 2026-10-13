@@ -67,16 +67,19 @@ merges it under each world's own on every write (the stricter strictness,
 the union of required axes and fields, the intersection of allowed tag
 values), so a world can only tighten it. `server.policyFloor` names that
 world; blank takes the federation hub (`broker.federation.hub` or the world
-marked `hub: true`) and `none` turns the floor off. The floor world also
-receives the style guide at `/.well-known/demarkus/style.md`, create-only
-like the policy, with the style gate's rule table rendered into it.
+marked `hub: true`) and `none` turns the floor off. The broker in the same
+process learns the floor from the server, so `mark_doctor` and `mark_promote`
+judge by the floor the writes are held to. The floor world also receives the
+style guide at `/.well-known/demarkus/style.md`, create-only like the policy,
+with the style gate's rule table rendered into it.
 
 Every write is scanned for secrets (always refused) and personal data
 (`server.contentCheck.pii`: `block`, `warn` or `off`; `workDomains` lists
 the organization's email domains, and an address outside them counts as
 personal data once the list is set). A refusal names the rule and line,
-never the value; metadata `content-check-override: <reason>` lets a
-reviewed false positive land and is recorded with the version.
+never the value. A secret is never overridable; for personal data,
+metadata `content-check-override: <reason>` lets a reviewed false
+positive land and is recorded with the version.
 
 ```yaml
 worlds:

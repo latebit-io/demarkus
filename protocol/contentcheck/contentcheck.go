@@ -37,9 +37,9 @@ const (
 // Valid reports a Mode the config accepts.
 func (m Mode) Valid() bool { return m == Block || m == Warn || m == Off }
 
-// OverrideKey is the metadata key that lets a write land despite findings;
-// its value is the reason, recorded with the version so overrides can be
-// listed and reviewed.
+// OverrideKey is the metadata key that lets a write land despite personal-
+// data findings; its value is the reason, recorded with the version so
+// overrides can be listed and reviewed. A secret is never overridable.
 const OverrideKey = "content-check-override"
 
 // Finding is one rule hit on one line.
@@ -85,7 +85,7 @@ var secretRules = []rule{
 	{name: "openai-api-key", kind: Secret, pattern: regexp.MustCompile(`\bsk-(?:proj-)?[A-Za-z0-9]{32,}\b`)},
 	{name: "jwt", kind: Secret, pattern: regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b`)},
 	{name: "connection-string-password", kind: Secret,
-		pattern: regexp.MustCompile(`\b[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s@/]+)@\S+`),
+		pattern: regexp.MustCompile(`\b[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s@]+)@\S+`),
 		confirm: func(sub []string) bool { return !placeholderPassword.MatchString(sub[1]) }},
 }
 
@@ -199,6 +199,15 @@ func luhn(digits string) bool {
 // Secrets reports whether any finding is a credential.
 func Secrets(findings []Finding) bool {
 	return slices.ContainsFunc(findings, func(f Finding) bool { return f.Kind == Secret })
+}
+
+// Remedy is the one sentence every surface offers for findings: a secret
+// is removed, personal data is removed or overridden with a reason.
+func Remedy(findings []Finding) string {
+	if Secrets(findings) {
+		return "remove the secret and re-publish; a secret cannot be overridden"
+	}
+	return "remove it and re-publish, or for a false positive re-publish with metadata " + OverrideKey + " set to the reason; the override is recorded with the version"
 }
 
 // Summary words the findings for a refusal or a note: one per line, rule
