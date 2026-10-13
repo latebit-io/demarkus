@@ -193,7 +193,7 @@ func TestExamineAgainstThePolicy(t *testing.T) {
 		t.Errorf("check = %+v", c)
 	}
 	r := c.Report()
-	for _, want := range []string{"status: findings\nversion: 2\npolicy: strictness block; require_tags domain, category; require_fields type\n", "findings:\n- missing tag axis category", "- 1 em dash", "packet: " + c.Packet + "\n"} {
+	for _, want := range []string{"status: findings\nversion: 2\npolicy: strictness block; require_tags domain, category; require_fields type\n", "findings:\n- missing tag axis category", "- em-dash: 1 em dash", "packet: " + c.Packet + "\n"} {
 		if !strings.Contains(r, want) {
 			t.Errorf("report missing %q:\n%s", want, r)
 		}

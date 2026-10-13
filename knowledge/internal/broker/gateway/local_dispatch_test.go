@@ -25,6 +25,7 @@ type fakeLocal struct {
 	blocks  []protocol.WatchBlock
 	watches chan protocol.Request
 	t       *testing.T // reports the watch's pipe errors
+	floor   string
 }
 
 func (f *fakeLocal) Watch(_ context.Context, authority string, req protocol.Request) (net.Conn, error) {
@@ -49,6 +50,8 @@ func (f *fakeLocal) Watch(_ context.Context, authority string, req protocol.Requ
 	}()
 	return client, nil
 }
+
+func (f *fakeLocal) FloorWorld() string { return f.floor }
 
 func (f *fakeLocal) Routes(authority string) bool {
 	_, ok := f.served[authority]
@@ -209,6 +212,18 @@ func TestCheckLocalRequiresTheServerToRouteEveryLocalWorld(t *testing.T) {
 	routed := &fakeLocal{served: map[string]protocol.Response{"team-a.team-a.svc.cluster.local": {}}}
 	if err := CheckLocal(cfg.Registry(), routed); err != nil {
 		t.Fatalf("routed: %v", err)
+	}
+	// The server's floor must be a local knowledge world the tools can reach.
+	routed.floor = "team-a"
+	if err := CheckLocal(cfg.Registry(), routed); err != nil {
+		t.Fatalf("local floor: %v", err)
+	}
+	routed.floor = "elsewhere"
+	if err := CheckLocal(cfg.Registry(), routed); err == nil || !strings.Contains(err.Error(), `floor world "elsewhere"`) {
+		t.Fatalf("foreign floor err = %v, want the floor named", err)
+	}
+	if got := FloorOf(nil); got != "" {
+		t.Fatalf("FloorOf(nil) = %q", got)
 	}
 	if err := CheckLocal(brokertest.NewConfig().Registry(), nil); err != nil {
 		t.Fatalf("remote only worlds need no server: %v", err)

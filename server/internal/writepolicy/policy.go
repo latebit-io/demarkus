@@ -29,6 +29,7 @@ var (
 type PolicyError struct {
 	Strictness publishpolicy.Strictness
 	Result     publishpolicy.Result
+	Policy     publishpolicy.Policy
 }
 
 func (err *PolicyError) Error() string {
@@ -47,11 +48,14 @@ func (err *PolicyError) RejectionMessage() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "publish policy (%s) refused this write:\n", err.Strictness)
 	for _, v := range err.Result.Violations {
-		if v.Name == "" {
+		switch {
+		case v.Name == "":
 			fmt.Fprintf(&b, "- %s\n", v.Code)
-			continue
+		case v.Axis != "":
+			fmt.Fprintf(&b, "- %s: %s (allowed %s values: %s)\n", v.Code, v.Name, v.Axis, err.Policy.AllowedList(v.Axis))
+		default:
+			fmt.Fprintf(&b, "- %s: %s\n", v.Code, v.Name)
 		}
-		fmt.Fprintf(&b, "- %s: %s\n", v.Code, v.Name)
 	}
 	return b.String()
 }
@@ -81,12 +85,35 @@ func Current(ctx context.Context, reader backend.Reader, require bool) (publishp
 	return policy, nil
 }
 
-// evaluate judges one prepared write against the policy it commits under. A
-// write of the policy document must itself be an enforceable policy.
-func evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite, require bool) error {
+// evaluate judges one prepared write: the body for secrets and personal
+// data first, then the metadata under the floor merged with this world's
+// policy; a candidate policy must be satisfiable under the floor.
+func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
+	if err := e.content.judge(write); err != nil {
+		return err
+	}
+	var floor *publishpolicy.Policy
+	if e.options.Floor != nil {
+		read, err := e.options.Floor(ctx)
+		if err != nil {
+			return fmt.Errorf("%w: read floor policy: %w", ErrInvalidPolicy, err)
+		}
+		floor = &read
+	}
 	if write.Path == publishpolicy.DocumentPath {
-		if err := publishpolicy.Parse(string(write.Content)).Validate(); err != nil {
+		candidate := publishpolicy.Parse(string(write.Content))
+		if err := candidate.Validate(); err != nil {
 			return fmt.Errorf("%w: %w: candidate policy: %v", backend.ErrRejected, ErrInvalidPolicy, err)
+		}
+		if err := e.floorSatisfiable(ctx, candidate); err != nil {
+			return err
+		}
+		// A world list disjoint from the floor's would refuse every value on
+		// that axis; refuse the candidate instead.
+		if floor != nil {
+			if err := publishpolicy.Merge(*floor, candidate).Validate(); err != nil {
+				return fmt.Errorf("%w: %w: candidate policy merged under the floor: %v", backend.ErrRejected, ErrInvalidPolicy, err)
+			}
 		}
 	}
 	// A template with a bad layout line would silently route writes to the
@@ -96,18 +123,35 @@ func evaluate(ctx context.Context, state backend.Reader, write storefmt.Prepared
 			return fmt.Errorf("%w: %w: candidate template: %v", backend.ErrRejected, ErrInvalidPolicy, err)
 		}
 	}
-	policy, err := Current(ctx, state, require)
+	policy, err := Current(ctx, state, e.options.Require)
 	if err != nil {
 		return err
 	}
-	values := make(map[string]any, len(write.Metadata))
-	for key, value := range write.Metadata {
-		values[key] = value
+	if floor != nil {
+		policy = publishpolicy.Merge(*floor, policy)
 	}
-	result := publishpolicy.Evaluate(policy, write.Path, values)
+	result := publishpolicy.EvaluateStrings(policy, write.Path, write.Metadata)
 	strictness := policy.EffectiveStrictness()
 	if result.Compliant() || strictness == publishpolicy.Warn {
 		return nil
 	}
-	return &PolicyError{Strictness: strictness, Result: result}
+	return &PolicyError{Strictness: strictness, Result: result, Policy: policy}
+}
+
+// floorSatisfiable refuses a candidate floor policy that, merged under any
+// world's current policy, could not be met within the metadata budget.
+func (e *enforcer) floorSatisfiable(ctx context.Context, candidate publishpolicy.Policy) error {
+	if e.options.Worlds == nil {
+		return nil
+	}
+	worlds, err := e.options.Worlds(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: read world policies: %w", ErrInvalidPolicy, err)
+	}
+	for _, world := range worlds {
+		if err := publishpolicy.Merge(candidate, world).Validate(); err != nil {
+			return fmt.Errorf("%w: %w: candidate floor policy merged with a world's: %v", backend.ErrRejected, ErrInvalidPolicy, err)
+		}
+	}
+	return nil
 }

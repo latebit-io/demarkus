@@ -24,6 +24,17 @@ data:
     {{- if include "demarkus-knowledge-server.provisioningEnabled" . }}
     worldsFile: /run/demarkus/tenant-worlds/worlds.yaml
     {{- end }}
+    {{- with include "demarkus-knowledge-server.floorWorld" . }}
+    floorWorld: {{ . | quote }}
+    {{- end }}
+    contentCheck:
+      pii: {{ .Values.server.contentCheck.pii | quote }}
+      workDomains:
+        {{- range .Values.server.contentCheck.workDomains }}
+        - {{ lower . | quote }}
+        {{- else }}
+        []
+        {{- end }}
     worlds:
       {{- range $world := $worlds }}
       - name: {{ $world.name | quote }}

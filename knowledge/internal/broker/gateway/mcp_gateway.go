@@ -39,6 +39,10 @@ type Deps struct {
 	// worlds, whose graphs seed from them; the rest seed from their own.
 	Hub       string
 	Federated map[string]bool
+	// Floor is the world whose write policy the server in this process
+	// merges under every other world's; the tools judge by the same floor.
+	// Set from the local server after DepsFor; empty is none.
+	Floor string
 }
 
 // DepsFor builds one profile's gateway deps from what the management API

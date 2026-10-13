@@ -28,7 +28,7 @@ Orient in the joined organizational demarkus knowledge system(s). Knowledge-syst
 2. **Show each system's entry points.** Per slug in scope, use that slug's own MCP tools through the destination server's `mark_*` tools; `mark://root/...` resolves inside the selected broker, so never reuse one system's tool for another system's root. Then:
 
    - Blank/slug scope: fetch `mark://root/index.md` with `force: true`; when present, it is the system's global hub. Explicit world scope: fetch `mark://<world>/index.md` with `force: true` instead. Render only a successful full-body response; an outline-mode response is incomplete, surface it rather than displaying it as the document.
-   - Fetch `mark://root/.well-known/demarkus/policy.md` with `force: true` if present; surface the write policy (strictness + required tag axes) in one line.
+   - Fetch `mark://root/.well-known/demarkus/policy.md` with `force: true` if present: the floor every world's own `/.well-known/demarkus/policy.md` is merged over (a world only tightens it). One line: strictness, required tag axes, allowed values per axis. Explicit world scope: fetch the world's policy too and report the merge, not root's alone.
    - If the system has more than one world and lists them on the `root` hub, show that list.
 
    `not-found`: say so plainly (e.g. no `root` index or policy published yet); never invent content. Surface outline-only, transport, authorization, dispatch, and tool errors separately; they do not mean the document is absent.

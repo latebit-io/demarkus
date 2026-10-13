@@ -27,6 +27,7 @@ func (g *Gateway) toolBodies() (*marktools.Tools, error) {
 		User:    toolUser,
 		Graph:   g.toolGraph,
 		Style:   g.toolStyle,
+		Floor:   g.toolFloor,
 		Warnf:   func(format string, args ...any) { g.deps.Log.Warn(fmt.Sprintf(format, args...)) },
 		ErrText: toolSiteErrorText,
 	})
@@ -36,6 +37,16 @@ func (g *Gateway) toolBodies() (*marktools.Tools, error) {
 // in the response, the write lands, and the profile says what it cites.
 func (g *Gateway) toolStyle(context.Context, marktools.Target) marktools.StyleGate {
 	return marktools.StyleGate{Strictness: publishpolicy.Warn, Guide: g.profile.StyleGuide}
+}
+
+// toolFloor names the server's floor world as the policy floor under every
+// other world; the floor judges itself, and a tenant-scoped surface has
+// no floor.
+func (g *Gateway) toolFloor(_ context.Context, target marktools.Target) (marktools.Target, bool) {
+	if g.profile.TenantScoped || g.deps.Floor == "" || target.Host == g.deps.Floor {
+		return marktools.Target{}, false
+	}
+	return marktools.Target{Host: g.deps.Floor, Path: "/"}, true
 }
 
 // resolveToolTarget keeps the url as the agent wrote it for display; the graph

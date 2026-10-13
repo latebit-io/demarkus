@@ -191,3 +191,29 @@ func TestPromoteApplyBindsToThePacketAndTheStyleGate(t *testing.T) {
 		t.Errorf("moved target = %+v", got)
 	}
 }
+
+// A dry run judges the draft under the floor world's policy merged with the
+// target's, as the server will, so apply cannot be refused by a floor the
+// dry run never saw.
+func TestPromoteDryRunMergesTheFloorPolicy(t *testing.T) {
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"team" + publishpolicy.DocumentPath: fetchtest.Head("# Policy\n\nstrictness: warn\n", 1, nil),
+		"root" + publishpolicy.DocumentPath: fetchtest.Head("# Policy\n\nstrictness: block\nrequire_tags: category\nallow_tags.category: guide\n", 1, nil),
+	}}
+	hooks := writingHooks()
+	hooks.Resolve = func(_ context.Context, raw string) (marktools.Target, error) {
+		return marktools.Target{Host: "team", Path: strings.TrimPrefix(raw, "mark://team")}, nil
+	}
+	hooks.Floor = func(_ context.Context, target marktools.Target) (marktools.Target, bool) {
+		return marktools.Target{Host: "root", Path: "/"}, target.Host != "root"
+	}
+	tools := newTools(t, backend, hooks)
+	got := tools.Promote(t.Context(), marktools.PromoteArgs{
+		URL: "mark://team/notes/a.md", Phase: "dry_run",
+		Body:     "# A\n\nWhat A settles for its readers.\n",
+		Metadata: map[string]string{"tags": "category:howto", "importance": "0.5", "type": "Guide"},
+	})
+	if got.IsError || !strings.Contains(got.Text, "findings:") || !strings.Contains(got.Text, "tag category:howto (allowed category values: guide)") {
+		t.Fatalf("dry run under the floor = %+v", got)
+	}
+}

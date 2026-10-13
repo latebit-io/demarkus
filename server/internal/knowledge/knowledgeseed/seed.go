@@ -4,6 +4,7 @@ package knowledgeseed
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/protocol/stylerules"
+	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
@@ -82,4 +85,35 @@ func readPolicyFile(name string) ([]byte, error) {
 		return nil, fmt.Errorf("policy file %q exceeds %d bytes", name, protocol.MaxBodyLength)
 	}
 	return body, nil
+}
+
+// styleProse is the hand-written part of the style guide; the enforced-rules
+// table is rendered after it so the seed can never disagree with the gate.
+//
+//go:embed style.md
+var styleProse []byte
+
+var styleMetadata = map[string]string{
+	"title":       "Style Guide",
+	"tags":        "category:governance,style,writing,hubs,metadata",
+	"importance":  "0.9",
+	"type":        "Guide",
+	"description": "How documents in this knowledge system are written so agents and people can find, fetch and link them: metadata out of band, one name per document, stable headings, hubs that are only links.",
+	"agent":       publishpolicy.SeedAgent,
+}
+
+// StyleSeed is the style guide as a fresh seed for stylerules.DocumentPath:
+// the prose plus the rendered rule table between its markers.
+func StyleSeed() writepolicy.PolicySeed {
+	body := append(bytes.Clone(styleProse), []byte(stylerules.Markdown()+"\n")...)
+	return writepolicy.PolicySeed{Body: body, Metadata: maps.Clone(styleMetadata)}
+}
+
+// EnsureStyleGuide seeds the style guide when the world has none.
+func EnsureStyleGuide(ctx context.Context, store backend.Store) (bool, error) {
+	found, err := writepolicy.Exists(ctx, store, stylerules.DocumentPath)
+	if err != nil || found {
+		return false, err
+	}
+	return writepolicy.EnsureDocument(ctx, store, stylerules.DocumentPath, StyleSeed())
 }

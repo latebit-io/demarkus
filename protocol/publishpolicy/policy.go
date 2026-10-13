@@ -2,6 +2,7 @@ package publishpolicy
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"unicode"
@@ -35,26 +36,60 @@ type Policy struct {
 	Strictness      Strictness
 	RequiredTagAxes []string
 	RequiredFields  []string
+	// AllowedTagValues lists, per axis, the values an `axis:value` tag may
+	// carry; an axis absent from the map is free-form. One directive line
+	// per axis: `allow_tags.<axis>: v1|v2`.
+	AllowedTagValues map[string][]string
 }
+
+// allowTagsPrefix starts the per-axis allowed-values directive key.
+const allowTagsPrefix = "allow_tags."
 
 // Parse extracts the first occurrence of each supported policy directive.
 func Parse(body string) Policy {
 	found := directives.First(body)
 	return Policy{
-		Strictness:      Strictness(found["strictness"]),
-		RequiredTagAxes: splitList(found["require_tags"]),
-		RequiredFields:  splitList(found["require_fields"]),
+		Strictness:       Strictness(found["strictness"]),
+		RequiredTagAxes:  splitList(found["require_tags"]),
+		RequiredFields:   splitList(found["require_fields"]),
+		AllowedTagValues: allowedValues(found),
 	}
 }
 
-func splitList(value string) []string {
+// allowedValues collects every `allow_tags.<axis>` directive. A blank list
+// stays in the map as nil, so Validate refuses an axis that allows nothing
+// instead of treating it as free-form.
+func allowedValues(found map[string]string) map[string][]string {
+	var values map[string][]string
+	for key, raw := range found {
+		axis, ok := strings.CutPrefix(key, allowTagsPrefix)
+		if !ok {
+			continue
+		}
+		if values == nil {
+			values = make(map[string][]string)
+		}
+		values[axis] = splitOn(raw, '|')
+	}
+	return values
+}
+
+func splitList(value string) []string { return splitOn(value, ',') }
+
+// splitOn splits on sep and whitespace, dropping empties; nil when none.
+func splitOn(value string, sep rune) []string {
 	fields := strings.FieldsFunc(value, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		return r == sep || r == ' ' || r == '\t' || r == '\n' || r == '\r'
 	})
 	if len(fields) == 0 {
 		return nil
 	}
 	return fields
+}
+
+// AllowedList words an axis's allowed values as the directive writes them.
+func (p Policy) AllowedList(axis string) string {
+	return strings.Join(p.AllowedTagValues[axis], "|")
 }
 
 // Validate rejects unsupported non-empty strictness values.
@@ -68,7 +103,34 @@ func (p Policy) Validate() error {
 	if err := validateFields(p.RequiredFields); err != nil {
 		return err
 	}
+	if err := validateAllowedValues(p.AllowedTagValues); err != nil {
+		return err
+	}
 	return validateSatisfiable(p)
+}
+
+// validateAllowedValues holds each allow_tags axis to the axis rules and
+// each value to the tag rules; an axis allowing nothing would refuse every
+// tag on it, so it is refused instead.
+func validateAllowedValues(values map[string][]string) error {
+	if len(values) > maxRequiredAxes {
+		return fmt.Errorf("publish policy has too many allow_tags axes: %d > %d", len(values), maxRequiredAxes)
+	}
+	for _, axis := range slices.Sorted(maps.Keys(values)) {
+		if err := validateNames("tag axis", []string{axis}, ":,"); err != nil {
+			return fmt.Errorf("allow_tags.%s: %w", axis, err)
+		}
+		if len(values[axis]) == 0 {
+			return fmt.Errorf("allow_tags.%s allows no values", axis)
+		}
+		if len(values[axis]) > maxAllowedValues {
+			return fmt.Errorf("allow_tags.%s has too many values: %d > %d", axis, len(values[axis]), maxAllowedValues)
+		}
+		if err := validateNames("value", values[axis], ",|"); err != nil {
+			return fmt.Errorf("allow_tags.%s: %w", axis, err)
+		}
+	}
+	return nil
 }
 
 // ForCaller is the policy a pre-write gate holds a caller to: required
@@ -91,6 +153,7 @@ func (p Policy) EffectiveStrictness() Strictness {
 const (
 	maxRequiredAxes    = protocol.MaxMetaKeys
 	maxRequiredFields  = protocol.MaxMetaKeys
+	maxAllowedValues   = 64
 	maxPolicyNameBytes = 64
 )
 
@@ -98,20 +161,27 @@ func validateAxes(axes []string) error {
 	if len(axes) > maxRequiredAxes {
 		return fmt.Errorf("publish policy has too many required tag axes: %d > %d", len(axes), maxRequiredAxes)
 	}
-	seen := make(map[string]bool, len(axes))
-	for _, axis := range axes {
-		if axis == "" || len(axis) > maxPolicyNameBytes || !utf8.ValidString(axis) {
-			return fmt.Errorf("invalid required tag axis %q", axis)
+	return validateNames("required tag axis", axes, ":,")
+}
+
+// validateNames holds tag axes and allowed values to one rule: non-empty,
+// bounded, valid UTF-8, no whitespace or control runes, none of forbidden,
+// no duplicates.
+func validateNames(what string, names []string, forbidden string) error {
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		if name == "" || len(name) > maxPolicyNameBytes || !utf8.ValidString(name) || strings.ContainsAny(name, forbidden) {
+			return fmt.Errorf("invalid %s %q", what, name)
 		}
-		for _, r := range axis {
-			if r == ':' || r == ',' || unicode.IsSpace(r) || unicode.IsControl(r) {
-				return fmt.Errorf("invalid required tag axis %q", axis)
+		for _, r := range name {
+			if unicode.IsSpace(r) || unicode.IsControl(r) {
+				return fmt.Errorf("invalid %s %q", what, name)
 			}
 		}
-		if seen[axis] {
-			return fmt.Errorf("duplicate required tag axis %q", axis)
+		if seen[name] {
+			return fmt.Errorf("duplicate %s %q", what, name)
 		}
-		seen[axis] = true
+		seen[name] = true
 	}
 	return nil
 }

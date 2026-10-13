@@ -5,10 +5,11 @@ owner: <team / contact, e.g. platform-eng (#knowledge-base)>
 
 strictness: warn
 require_tags: category
+allow_tags.category: project|ops|governance|platform
 
 The write policy for this demarkus knowledge system. Joined agents (via the demarkus-knowledge Claude Code plugin's `/knowledge-join`) fetch this from `mark://root/.well-known/demarkus/policy.md` and follow it. Edit it here on `root` to change the policy for everyone; it is versioned like any demarkus document and propagates to each member on their next session.
 
-The lines above are the **enforced core**: the agent mirrors them into the plugin's local gate (`strictness:` → severity, `require_tags:` → mandatory tag axes, and the optional `require_fields:` → mandatory OKF metadata fields such as `type`). `require_fields:` is omitted here so `type` stays advisory until the corpus is typed; add it (e.g. `require_fields: type`) to make it mandatory. Everything below is **convention** the agent follows; the `/knowledge-doctor` hygiene auditor can check it after the fact.
+The lines above are the **enforced core**: the server enforces them on every write to every world (this `root` policy is the floor; a world's own `/.well-known/demarkus/policy.md` can only tighten it), and the agent mirrors them into the plugin's local gate (`strictness:` → severity, `require_tags:` → mandatory tag axes, `allow_tags.<axis>:` → the values an axis accepts, `|`-separated, and the optional `require_fields:` → mandatory OKF metadata fields such as `type`). `require_fields:` is omitted here so `type` stays advisory until the corpus is typed; add it (e.g. `require_fields: type`) to make it mandatory. Keep `governance` in the `category` list: this policy carries `category:governance` itself. Everything below is **convention** the agent follows; the `/knowledge-doctor` hygiene auditor can check it after the fact.
 
 ## What to publish here
 
@@ -29,8 +30,8 @@ Enforced by the plugin's publish gate, at the severity set by `strictness:` abov
 
 Tag as `axis:value` so the catalog stays coherent. The axes named in `require_tags:` are mandatory; the gate checks each is present.
 
-- `category:`: the **domain / area** a document belongs to, e.g. `category:project`, `category:ops`, `category:governance`, `category:platform`. This is what the doc is *about*, not what *kind* it is (kind is the OKF `type` field; see below). Tags are query-rankable in `mark_lookup`, so `category:` is the discoverability axis; keep the set small and stable.
-- As the catalog grows and more teams write, add axes (`team:`, `status:`) and list them in `require_tags:` above to enforce them too.
+- `category:`: the **domain / area** a document belongs to, e.g. `category:project`, `category:ops`, `category:governance`, `category:platform`. This is what the doc is *about*, not what *kind* it is (kind is the OKF `type` field; see below). Tags are query-rankable in `mark_lookup`, so `category:` is the discoverability axis; keep the set small and stable, and list it in `allow_tags.category:` so `category:runbooks` and `category:howto` cannot drift in.
+- As the catalog grows and more teams write, add axes (`team:`, `status:`) and list them in `require_tags:` above to enforce them too, each with its own `allow_tags.<axis>:` line when its values are agreed. An axis without one stays free-form.
 
 ## Document type (OKF `type` field)
 

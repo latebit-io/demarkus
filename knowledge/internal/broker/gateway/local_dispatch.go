@@ -17,6 +17,9 @@ import (
 // the startup check; an unrouted authority errors, nothing retries.
 type LocalWorlds interface {
 	Routes(authority string) bool
+	// FloorWorld names the world whose write policy the server merges under
+	// every other world's; "" is none. The tools judge by the same floor.
+	FloorWorld() string
 	Exchange(ctx context.Context, authority string, req protocol.Request) (protocol.Response, error)
 	Watch(ctx context.Context, authority string, req protocol.Request) (net.Conn, error)
 }
@@ -60,7 +63,21 @@ func CheckLocal(worlds *core.WorldRegistry, local LocalWorlds) error {
 			return fmt.Errorf("local world %q: the knowledge server in this process does not serve %q", w.Name, authority)
 		}
 	}
+	if floor := FloorOf(local); floor != "" {
+		w, ok := worlds.Find(floor)
+		if !ok || !w.Local || w.Profile != core.ProfileKnowledge {
+			return fmt.Errorf("the knowledge server's floor world %q is not a local knowledge world of this broker", floor)
+		}
+	}
 	return nil
+}
+
+// FloorOf is the local server's floor world, "" without a local server.
+func FloorOf(local LocalWorlds) string {
+	if local == nil {
+		return ""
+	}
+	return local.FloorWorld()
 }
 
 // exchange serves the encoded request locally when the world is local, else

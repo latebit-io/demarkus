@@ -378,6 +378,20 @@ the admin entry in tokens.toml.
 {{- end -}}
 
 {{/*
+The world whose write policy is the floor under every other world's:
+server.policyFloor when set, else the federation hub. "none" is no floor.
+*/}}
+{{- define "demarkus-knowledge-server.floorWorld" -}}
+{{- $floor := .Values.server.policyFloor -}}
+{{- if eq $floor "none" -}}
+{{- else if $floor -}}
+{{- $floor -}}
+{{- else -}}
+{{- include "demarkus-knowledge-server.federationHub" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Cookie key rendered into the config, or empty to let the broker generate
 and persist one in cookieKeySecret: broker.cookieKey, else the key an
 earlier chart rendered into the live config Secret (found only by `helm

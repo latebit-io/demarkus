@@ -379,6 +379,11 @@ func knowledgeTagDecision(args map[string]any, slug, verb string) (*Decision, er
 			"missing required OKF metadata fields: %s (set each as a key in the metadata object, e.g. metadata: {%q: \"...\"})",
 			strings.Join(missingFields, " "), missingFields[0]))
 	}
+	for _, v := range result.Violations {
+		if v.Code == publishpolicy.DisallowedTagValue {
+			problems = append(problems, fmt.Sprintf("tag %s is outside this knowledge system's allowed %s values (%s)", v.Name, v.Axis, policy.AllowedList(v.Axis)))
+		}
+	}
 	target := url
 	if target == "" {
 		target = "the document"

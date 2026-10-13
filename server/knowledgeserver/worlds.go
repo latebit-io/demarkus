@@ -12,7 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/protocol/stylerules"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
@@ -78,6 +80,15 @@ type worldManager struct {
 	// dynamicSet; an empty push is a push, not an absence.
 	dynamic    []byte
 	dynamicSet bool
+
+	// floorWorld's policy is merged under every other world's; "" is none.
+	floorWorld string
+	content    writepolicy.ContentOptions
+	// policyStores mirrors the live stores for the write path, which reads
+	// a sibling world's policy inside a commit. Its own lock, never held
+	// across a close: runtime.Close drains in-flight writes under m.mu.
+	policyMu     sync.RWMutex
+	policyStores map[string]worldStore
 }
 
 type worldEntry struct {
@@ -140,6 +151,15 @@ func newWorldManager(watchCtx context.Context, group *sync.WaitGroup, cfg worldM
 		tokenDirs:  make(map[string]*dirWatch),
 		pending:    make(map[string]knowledgeconfig.WorldConfig),
 		resilient:  config.WorldsFile != "",
+		floorWorld: config.FloorWorld,
+		content: writepolicy.ContentOptions{Options: contentcheck.Options{
+			PII:         config.ContentCheck.PII,
+			WorkDomains: config.ContentCheck.WorkDomains,
+		}},
+		policyStores: make(map[string]worldStore),
+	}
+	m.content.Warn = func(path string, findings []contentcheck.Finding, override string) {
+		m.logger.Warn("content check finding let through", "path", path, "findings", contentcheck.Summary(findings), "override", override)
 	}
 	router, err := snirouter.NewDynamic(nil)
 	if err != nil {
@@ -227,6 +247,7 @@ func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
 			m.logger.Info("world removed", "world", name)
 		}
 		delete(m.entries, name)
+		m.setPolicyStore(name, nil)
 		if !entry.published {
 			m.retireEntryLocked(name, entry)
 			continue
@@ -305,6 +326,7 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 		}
 	}
 	m.entries[world.Name] = &worldEntry{config: *world, runtime: runtime, store: store}
+	m.setPolicyStore(world.Name, store)
 	m.acquireTokenWatchLocked(tokenFiles(world))
 	m.logger.Info("world opened", "world", world.Name)
 	return nil
@@ -327,9 +349,19 @@ func (m *worldManager) serve(
 	if created {
 		m.logger.Info("seeded the initial write policy", "world", world.Name, "path", publishpolicy.DocumentPath)
 	}
+	if world.Name == m.floorWorld && !world.ReadOnly {
+		// The floor world also carries the style guide every finding cites.
+		created, err := knowledgeseed.EnsureStyleGuide(ctx, store)
+		if err != nil {
+			return nil, fmt.Errorf("style guide: %w", err)
+		}
+		if created {
+			m.logger.Info("seeded the style guide", "world", world.Name, "path", stylerules.DocumentPath)
+		}
+	}
 	runtime, err := worldruntime.New(&worldruntime.Config{
 		Name:             world.Name,
-		Store:            writepolicy.Enforce(store, writepolicy.Options{Require: true}),
+		Store:            writepolicy.Enforce(store, m.enforceOptions(world.Name)),
 		CloseBackend:     store.Close,
 		Changes:          store.Changes(),
 		MaxWatches:       world.Limits.MaxWatches,
@@ -471,6 +503,7 @@ func (m *worldManager) releaseTokenWatchLocked(files []string) {
 
 func (m *worldManager) closeEntryLocked(name string, entry *worldEntry) {
 	delete(m.entries, name)
+	m.setPolicyStore(name, nil)
 	m.retireEntryLocked(name, entry)
 }
 

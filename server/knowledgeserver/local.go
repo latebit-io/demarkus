@@ -14,6 +14,9 @@ import (
 // routes.
 var ErrUnknownAuthority = snirouter.ErrUnknownAuthority
 
+// FloorWorld names the configured policy floor world; "" is none.
+func (s *Server) FloorWorld() string { return s.config.FloorWorld }
+
 // Routes reports whether a live world serves authority right now.
 func (s *Server) Routes(authority string) bool {
 	_, err := s.worlds.Router().Lookup(authority)

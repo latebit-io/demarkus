@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/audit"
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
 // doctorTimeout bounds one audit from a tool call: an agent waits on the
@@ -26,10 +27,32 @@ func (t *Tools) Doctor(ctx context.Context, args DoctorArgs) Result {
 	if bad != nil {
 		return *bad
 	}
+	floor, bad := t.floorPolicy(ctx, target)
+	if bad != nil {
+		return *bad
+	}
 	store := &audit.ClientStore{Client: t.backend, Host: target.Host, Token: t.readToken(ctx, target.Host)}
-	report, err := audit.Run(ctx, store, audit.Options{Scope: target.Path, Deep: args.Deep, Promotion: args.Promotion, Timeout: doctorTimeout})
+	report, err := audit.Run(ctx, store, audit.Options{Scope: target.Path, Deep: args.Deep, Promotion: args.Promotion, Timeout: doctorTimeout, Floor: floor})
 	if err != nil {
 		return failure("doctor failed: %v", err)
 	}
 	return text(report.Markdown())
+}
+
+// floorPolicy reads the floor store's policy when the surface names one;
+// a floor that cannot be read fails the audit, since every policy finding
+// would then be judged without it.
+func (t *Tools) floorPolicy(ctx context.Context, target Target) (*publishpolicy.Policy, *Result) {
+	if t.hooks.Floor == nil {
+		return nil, nil
+	}
+	floor, ok := t.hooks.Floor(ctx, target)
+	if !ok {
+		return nil, nil
+	}
+	policy, bad := t.worldPolicy(ctx, floor)
+	if bad != nil {
+		return nil, bad
+	}
+	return policy, nil
 }

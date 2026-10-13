@@ -24,6 +24,46 @@ tests:
           path: data["config.yaml"]
           pattern: 'certFile: /run/demarkus/tls/tls.crt\n  keyFile: /run/demarkus/tls/tls.key'
 
+  - it: renders the content check and no floor without a hub
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'contentCheck:\n  pii: "block"\n  workDomains:\n    \[\]'
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'floorWorld'
+
+  - it: takes the floor from the hub and renders the content check values
+    set:
+      broker.federation.hub: team-a
+      server.contentCheck.pii: warn
+      server.contentCheck.workDomains: ["Acme.Example"]
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'floorWorld: "team-a"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'contentCheck:\n  pii: "warn"\n  workDomains:\n    - "acme.example"'
+
+  - it: policyFloor overrides the hub
+    set:
+      broker.federation.hub: team-a
+      server.policyFloor: team-b
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'floorWorld: "team-b"'
+
+  - it: policyFloor none renders no floor
+    set:
+      broker.federation.hub: team-a
+      server.policyFloor: none
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'floorWorld'
+
   - it: normalizes authorities and renders fixed isolated token paths
     asserts:
       - matchRegex:

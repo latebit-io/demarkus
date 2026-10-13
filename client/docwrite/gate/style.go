@@ -1,7 +1,7 @@
 // Package gate holds the mechanically checkable document style rules every
 // surface applies to a publish: the write path of the MCP tools, the plugin
-// hook and the catalog audit. Rules are the knowledge system style guide
-// (mark://root/.well-known/demarkus/style.md); strictness is the caller's.
+// hook and the catalog audit. Each finding opens with its stylerules id, the
+// table the knowledge system style guide renders; strictness is the caller's.
 package gate
 
 import (
@@ -11,13 +11,14 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/okf"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/protocol/stylerules"
 )
 
 // What a finding cites: the guide a knowledge system publishes, or the
 // baseline for a surface without one.
 const (
 	Baseline       = "Rules: metadata out of band, one # H1 with a summary under it, unique status-free headings, no em dashes, hubs are links plus one line each under 8 KB."
-	KnowledgeGuide = "See mark://root/.well-known/demarkus/style.md."
+	KnowledgeGuide = "See mark://root" + stylerules.DocumentPath + "."
 )
 
 // Problems applies every rule to a publish of body at url: frontmatter fence,
@@ -29,26 +30,26 @@ func Problems(url, body, description string) []string {
 	}
 	var problems []string
 	if OpensWithFrontmatter(body) {
-		problems = append(problems,
-			"the body opens with a YAML frontmatter fence; demarkus carries metadata out of band, so the block is stored as literal content (garbled headings, invisible to mark_lookup); move name/tags/type into the metadata object and delete the fence")
+		problems = append(problems, stylerules.Prefix(stylerules.Frontmatter,
+			"the body opens with a YAML frontmatter fence; demarkus carries metadata out of band, so the block is stored as literal content (garbled headings, invisible to mark_lookup); move name/tags/type into the metadata object and delete the fence"))
 	}
 
 	headings := mdoutline.Headings(body)
 	if !NavExempt(url) && !hasH1(headings) {
-		problems = append(problems,
-			"no `# H1` heading (the document's name is its H1; add one as the first line)")
+		problems = append(problems, stylerules.Prefix(stylerules.H1,
+			"no `# H1` heading (the document's name is its H1; add one as the first line)"))
 	}
 
 	// Counts the raw body, code fences included: the style guide bans em
 	// dashes in examples too, and fenced examples are what readers copy.
 	if n := EmDashCount(body); n > 0 {
-		problems = append(problems, fmt.Sprintf(
-			"%d em dash(es); the style guide bans them everywhere (prose, headings, examples); use a comma, colon, semicolon, or parentheses", n))
+		problems = append(problems, stylerules.Prefix(stylerules.EmDash, fmt.Sprintf(
+			"%d em dash(es); the style guide bans them everywhere (prose, headings, examples); use a comma, colon, semicolon, or parentheses", n)))
 	}
 
 	if dups := DuplicateHeadings(headings); len(dups) > 0 {
-		problems = append(problems, fmt.Sprintf(
-			"duplicate headings (%s); headings are #section anchors, and duplicates get -1 suffixes that shift when sections move, breaking inbound links; make each heading unique", strings.Join(dups, ", ")))
+		problems = append(problems, stylerules.Prefix(stylerules.DuplicateHeading, fmt.Sprintf(
+			"duplicate headings (%s); headings are #section anchors, and duplicates get -1 suffixes that shift when sections move, breaking inbound links; make each heading unique", strings.Join(dups, ", "))))
 	}
 
 	// A hub at or over the threshold is worded by the hub rules.
@@ -73,8 +74,8 @@ func sizeProblems(url, body string) []string {
 	if len(body) < mdoutline.OutlineThreshold || journalPath(url) {
 		return nil
 	}
-	return []string{fmt.Sprintf(
-		"body is %d KB, at or over the 8 KB fetch threshold, so a plain fetch returns an outline; split it into a hub plus topic files", len(body)/1024)}
+	return []string{stylerules.Prefix(stylerules.Size, fmt.Sprintf(
+		"body is %d KB, at or over the 8 KB fetch threshold, so a plain fetch returns an outline; split it into a hub plus topic files", len(body)/1024))}
 }
 
 // Frontmatter reads the fence OpensWithFrontmatter detects: its keys as the

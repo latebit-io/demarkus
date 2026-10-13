@@ -66,3 +66,52 @@ func TestDoctorRefusesWhatItCannotTrust(t *testing.T) {
 		t.Fatalf("bad url = %+v", got)
 	}
 }
+
+// Behind a broker the doctor judges a world under the floor world's policy
+// merged with its own; an unreadable floor fails the audit.
+func TestDoctorReadsTheFloorPolicy(t *testing.T) {
+	policies := map[string]string{
+		"root": "# Policy\n\nstrictness: block\nrequire_tags: category\n",
+		"team": "# Policy\n\nstrictness: warn\n",
+	}
+	backend := &fetchtest.Client{
+		ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
+			entries := []render.ListEntry{{Name: "a.md"}, {Name: "index.md"}}
+			return fetch.Result{Response: render.ListResponse("/", entries, "")}, nil
+		},
+		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+			switch r.Path {
+			case "/.well-known/demarkus/policy.md":
+				if body, ok := policies[r.Host]; ok {
+					return fetchtest.Head(body, 1, map[string]string{"tags": "category:governance"}), nil
+				}
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusServerError}}, nil
+			case "/index.md":
+				return fetchtest.Head("# Hub\n\n- [a](/a.md)\n", 1, map[string]string{"tags": "category:hub"}), nil
+			case "/a.md":
+				return fetchtest.Head("# A\n\nWhat A settles.\n", 1, map[string]string{"tags": "topic", "type": "Guide"}), nil
+			}
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+		},
+	}
+	hooks := directHooks()
+	hooks.Resolve = func(context.Context, string) (marktools.Target, error) {
+		return marktools.Target{Host: "team", Path: "/"}, nil
+	}
+	floorHost := "root"
+	hooks.Floor = func(_ context.Context, target marktools.Target) (marktools.Target, bool) {
+		return marktools.Target{Host: floorHost, Path: "/"}, target.Host != floorHost
+	}
+	tools := newTools(t, backend, hooks)
+	got := tools.Doctor(t.Context(), marktools.DoctorArgs{URL: "/"})
+	if got.IsError || !strings.Contains(got.Text, "### Policy compliance (1)\n- /a.md: missing required tag axis category: (strictness block)") {
+		t.Fatalf("doctor under the floor = %+v", got)
+	}
+	if !strings.Contains(got.Text, "### Policy floor (1)\n- /.well-known/demarkus/policy.md: strictness warn is below the floor's block") {
+		t.Errorf("floor finding missing:\n%s", got.Text)
+	}
+	floorHost = "nowhere"
+	if got := tools.Doctor(t.Context(), marktools.DoctorArgs{URL: "/"}); !got.IsError || !strings.Contains(got.Text, "policy-unavailable") {
+		t.Errorf("unreadable floor = %+v, want the audit refused", got)
+	}
+}

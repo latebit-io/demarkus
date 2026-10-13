@@ -9,21 +9,33 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/backend"
 )
 
-// Options configures enforcement. Require makes a missing policy document a
-// refusal instead of the empty policy.
+// Options configures enforcement.
 type Options struct {
+	// Require makes a missing policy document a refusal instead of the
+	// empty policy.
 	Require bool
+	// Floor reads the floor world's policy, merged under this world's so
+	// the world can only tighten it. Nil means no floor. An error refuses
+	// the write: a floor that cannot be read is not skipped.
+	Floor func(ctx context.Context) (publishpolicy.Policy, error)
+	// Worlds lists the policies of every world under this one's floor; set
+	// on the floor world so a candidate floor is refused when it would
+	// leave a world unsatisfiable. Nil skips the check.
+	Worlds func(ctx context.Context) ([]publishpolicy.Policy, error)
+	// Content is the secrets and personal-data scan.
+	Content ContentOptions
 }
 
 // Enforce wraps store so every PUBLISH and APPEND is judged by the world's
 // policy document. Reads pass through untouched.
 func Enforce(store backend.Store, options Options) backend.Store {
-	return &enforcer{Store: store, require: options.Require}
+	return &enforcer{Store: store, options: options, content: newContentGate(options.Content)}
 }
 
 type enforcer struct {
 	backend.Store
-	require bool
+	options Options
+	content contentGate
 }
 
 // chain runs the caller's precondition, then the enforcer's.
@@ -42,7 +54,7 @@ func chain[T any](inner, next func(context.Context, backend.Reader, T) error) fu
 // guard adds the policy verdict after any precondition the caller set.
 func (e *enforcer) guard(req *backend.WriteRequest) {
 	req.Precondition = chain(req.Precondition, func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
-		return evaluate(ctx, state, write, e.require)
+		return e.evaluate(ctx, state, write)
 	})
 }
 
@@ -64,7 +76,7 @@ func (e *enforcer) SetArchived(ctx context.Context, req backend.ArchiveRequest) 
 }
 
 func (e *enforcer) keepRequiredPolicy(_ context.Context, _ backend.Reader, change storefmt.ArchiveChange) error {
-	if change.Archived && e.require && change.Path == publishpolicy.DocumentPath {
+	if change.Archived && e.options.Require && change.Path == publishpolicy.DocumentPath {
 		return fmt.Errorf("%w: %w: required policy cannot be archived", backend.ErrRejected, ErrInvalidPolicy)
 	}
 	return nil
@@ -77,16 +89,21 @@ func Validate(ctx context.Context, store backend.Store) error {
 }
 
 // inspect reads the current policy through one view and returns its verdict.
-func inspect(ctx context.Context, store backend.Store) (err error) {
+func inspect(ctx context.Context, store backend.Store) error {
+	_, err := Read(ctx, store, true)
+	return err
+}
+
+// Read is Current through one view of store.
+func Read(ctx context.Context, store backend.Store, require bool) (policy publishpolicy.Policy, err error) {
 	view, err := store.OpenReadView(ctx)
 	if err != nil {
-		return fmt.Errorf("read policy: %w", err)
+		return publishpolicy.Policy{}, fmt.Errorf("read policy: %w", err)
 	}
 	defer func() {
 		if closeErr := view.Close(); closeErr != nil && err == nil {
 			err = fmt.Errorf("read policy: close view: %w", closeErr)
 		}
 	}()
-	_, err = Current(ctx, view, true)
-	return err
+	return Current(ctx, view, require)
 }

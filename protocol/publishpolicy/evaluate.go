@@ -3,6 +3,7 @@ package publishpolicy
 import (
 	"encoding/json"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -21,12 +22,17 @@ const (
 	MissingTagAxis ViolationCode = "missing-tag-axis"
 	// MissingField means one policy-required metadata field is absent.
 	MissingField ViolationCode = "missing-field"
+	// DisallowedTagValue means an `axis:value` tag carries a value outside
+	// the policy's allowed list for that axis; Name is the offending tag.
+	DisallowedTagValue ViolationCode = "disallowed-tag-value"
 )
 
-// Violation identifies a violation and its axis or field name, when applicable.
+// Violation identifies a violation and its axis or field name, when
+// applicable. Axis is set on DisallowedTagValue, whose Name is the full tag.
 type Violation struct {
 	Code ViolationCode
 	Name string
+	Axis string
 }
 
 // Result contains violations in deterministic evaluation order.
@@ -65,6 +71,16 @@ func Evaluate(policy Policy, path string, metadata map[string]any) Result {
 	return evaluate(policy, path, metadata, false)
 }
 
+// EvaluateStrings is Evaluate over the string metadata a store or a tool
+// holds.
+func EvaluateStrings(policy Policy, path string, metadata map[string]string) Result {
+	values := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		values[key] = value
+	}
+	return evaluate(policy, path, values, false)
+}
+
 // EvaluateOverrides checks only fields explicitly supplied by an update.
 // It catches invalid APPEND overrides without treating inherited fields as absent.
 func EvaluateOverrides(policy Policy, path string, metadata map[string]any) Result {
@@ -87,6 +103,7 @@ func evaluate(policy Policy, path string, metadata map[string]any, overridesOnly
 				result.Violations = append(result.Violations, Violation{Code: MissingTagAxis, Name: axis})
 			}
 		}
+		result.Violations = append(result.Violations, disallowedTags(tags, policy.AllowedTagValues)...)
 	}
 	for _, field := range policy.RequiredFields {
 		if _, supplied := metadata[field]; overridesOnly && !supplied {
@@ -151,6 +168,27 @@ func tagsHaveAxis(tags, axis string) bool {
 		}
 	}
 	return false
+}
+
+// disallowedTags returns, in tag order, every `axis:value` tag whose axis
+// has an allowed list the value is not on. A tag without a colon has no
+// axis; a tag on a free-form axis is never flagged.
+func disallowedTags(tags string, allowed map[string][]string) []Violation {
+	if len(allowed) == 0 {
+		return nil
+	}
+	var out []Violation
+	for _, tag := range protocol.SplitTags(tags) {
+		axis, value, ok := strings.Cut(tag, ":")
+		if !ok {
+			continue
+		}
+		values, listed := allowed[axis]
+		if listed && !slices.Contains(values, strings.TrimSpace(value)) {
+			out = append(out, Violation{Code: DisallowedTagValue, Name: tag, Axis: axis})
+		}
+	}
+	return out
 }
 
 func fieldPresent(metadata map[string]any, field string) bool {
