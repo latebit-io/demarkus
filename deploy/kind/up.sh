@@ -609,7 +609,7 @@ RPC_ID=$((RPC_ID + 1))
 rpc <<EOF
 {"jsonrpc":"2.0","id":$RPC_ID,"method":"tools/list","params":{}}
 EOF
-for name in mark_fetch mark_publish mark_worlds mark_lookup_all; do
+for name in mark_fetch mark_publish mark_worlds mark_lookup_all mark_doctor mark_curate mark_promote; do
   grep -q "\"name\":\"$name\"" /tmp/rpc.out || { echo "FAIL: tools/list is missing $name"; exit 1; }
 done
 echo "OK: tools/list names the read, write and directory tools"
@@ -655,6 +655,27 @@ refused "a publish without a version is refused" "expected_version is required"
 tool mark_publish "{\"url\":\"$DOC\",\"body\":\"x\",\"expected_version\":2,\"metadata\":\"tags: smoke\"}"
 refused "metadata that is not an object is refused" "metadata must be an object"
 
+# 7b. ADR 0040 mechanics in the gateway: style gate, doctor, curate, promote
+#     dry run; then an archive drops the hub bullet that linked the document.
+#     Only an ancestor index.md is a hub; hub links are relative paths.
+HUB_DIR="mark://$WORLD/smoke-$CLIENT_STATE"
+HUB_DOC="$HUB_DIR/index.md"
+LINKED="$HUB_DIR/linked.md"
+tool mark_publish "{\"url\":\"$LINKED\",\"body\":\"No heading \\u2014 and an em dash.\\n\",\"expected_version\":0,\"metadata\":{\"tags\":\"smoke\"}}"
+want "a flawed publish lands with a style note" "note: style problems"
+tool mark_publish "{\"url\":\"$HUB_DOC\",\"body\":\"# Smoke hub\\n\\nLinks for the smoke.\\n\\n- [linked](linked.md): the linked document\\n\",\"expected_version\":0,\"metadata\":{\"tags\":\"smoke,hub\"}}"
+want "mark_publish creates a hub linking it" "version: 1"
+tool mark_doctor "{\"url\":\"$HUB_DIR/\"}"
+want "mark_doctor audits the smoke directory" "hygiene report"
+tool mark_curate "{\"url\":\"$LINKED\"}"
+want "mark_curate proposes an edit for the flawed document" "proposal: "
+tool mark_promote "{\"url\":\"mark://$WORLD/smoke/promoted-$CLIENT_STATE.md\",\"phase\":\"dry_run\",\"body\":\"# Promoted smoke\\n\\nWhat the smoke promotes.\\n\",\"metadata\":{\"tags\":\"smoke\"},\"source\":\"mark://soul/smoke.md\"}"
+want "mark_promote dry_run reports a packet" "packet: "
+tool mark_archive "{\"url\":\"$LINKED\"}"
+want "mark_archive retires the linked document" "archived: true"
+want "the archive dropped the hub bullet that linked the document" "bullet(s) dropped"
+tool mark_archive "{\"url\":\"$HUB_DOC\"}"
+want "mark_archive retires the smoke hub" "archived: true"
 tool mark_archive "{\"url\":\"$DOC\"}"
 want "mark_archive retires the smoke document" "archived: true"
 echo "OK: MCP tool calls end-to-end through the gateway"

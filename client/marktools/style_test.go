@@ -32,7 +32,7 @@ func TestPublishStyleGate(t *testing.T) {
 
 	t.Run("no hook warns and cites the baseline", func(t *testing.T) {
 		got, backend := publish(t, writingHooks(), flawed)
-		if got.IsError || !strings.HasPrefix(got.Text, "status: ok\nversion: 1\n") {
+		if got.IsError || !strings.HasPrefix(got.Text, "status: created\nversion: 1\n") {
 			t.Fatalf("publish = %+v", got)
 		}
 		for _, want := range []string{"\nnote: style problems in this publish: no `# H1`", "Also: 1 em dash", "Rules: metadata out of band"} {

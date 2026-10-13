@@ -57,15 +57,16 @@ func EnsureLink(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, lin
 		}
 		return docwrite.Write{Body: WithBullet(h.Body, link.Section, link.Bullet), Metadata: stamped(docwrite.Carried(h.Metadata), link.Stamp)}, true, nil
 	})
-	return settled(doc, &result, err, protocol.StatusOK, protocol.StatusCreated)
+	return settled(doc, &result, err)
 }
 
-// settled words an Edit outcome: nil when it ended in an accepted status.
-func settled(doc *docwrite.Doc, result *docwrite.Result, err error, accepted ...string) error {
+// settled words an Edit outcome: nil when the write landed or the head
+// ended in a status listed as unchanged.
+func settled(doc *docwrite.Doc, result *docwrite.Result, err error, unchanged ...string) error {
 	if err != nil {
 		return fmt.Errorf("hub %s not updated: %w", doc.Path, err)
 	}
-	if slices.Contains(accepted, result.Response.Status) {
+	if s := result.Response.Status; protocol.IsWriteSuccess(s) || slices.Contains(unchanged, s) {
 		return nil
 	}
 	return fmt.Errorf("hub %s not updated: %s", doc.Path, result.Response.Status)
@@ -140,7 +141,7 @@ func DropLinks(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, drop
 		}
 		return docwrite.Write{Body: body, Metadata: stamped(docwrite.Carried(h.Metadata), drop.Stamp)}, true, nil
 	})
-	err = settled(doc, &result, err, protocol.StatusOK, protocol.StatusNotFound, protocol.StatusArchived)
+	err = settled(doc, &result, err, protocol.StatusNotFound, protocol.StatusArchived)
 	if err != nil {
 		return 0, err
 	}

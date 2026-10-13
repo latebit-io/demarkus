@@ -99,7 +99,7 @@ func TestEnsureLinkRetriesOnceOnConflict(t *testing.T) {
 			if calls == 1 {
 				return fetch.Result{Response: protocol.Response{Status: protocol.StatusConflict}}, nil
 			}
-			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "2"}}}, nil
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{"version": "2"}}}, nil
 		},
 	}
 	link := &Link{Target: "/proj/", Bullet: "- [proj](/proj/)", CreateBody: "x"}

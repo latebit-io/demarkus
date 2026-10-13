@@ -37,7 +37,7 @@ func TestPublishSendsTheWriteWithIdentity(t *testing.T) {
 		URL: "/doc.md", Body: "# Doc\n", ExpectedVersion: new(0), OnConflict: "fail",
 		Metadata: map[string]string{"tags": "a,b", "importance": "0.5", "agent": "someone-else", "user": "mallory@example.com"},
 	})
-	want := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "1"}}}, "version", "modified", "server-version")
+	want := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{"version": "1"}}}, "version", "modified", "server-version")
 	if got.IsError || got.Text != want {
 		t.Fatalf("Publish = %+v, want %q", got, want)
 	}
@@ -214,7 +214,7 @@ func TestAppendResolvesTheVersionItself(t *testing.T) {
 	}
 	tools := newTools(t, backend, writingHooks())
 	got := tools.Append(t.Context(), marktools.AppendArgs{URL: "/doc.md", Body: "more"})
-	if got.IsError || !strings.HasPrefix(got.Text, "status: ok") {
+	if got.IsError || !strings.HasPrefix(got.Text, "status: created") {
 		t.Fatalf("Append = %+v", got)
 	}
 	if len(backend.AppendCalls) != 1 || backend.AppendCalls[0].ExpectedVersion != 7 || backend.AppendCalls[0].Token != "write-token" ||

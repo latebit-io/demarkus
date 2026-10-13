@@ -143,7 +143,7 @@ func TestFinishEditSavesWorkOnEveryFailure(t *testing.T) {
 	}
 
 	ok := finishEdit(t.Context(), cliDoc(&fetchtest.Client{}), editedDoc{body: "my edits", fetchedVersion: 0})
-	if ok.code != 0 || ok.status != protocol.StatusOK {
+	if ok.code != 0 || ok.status != protocol.StatusCreated {
 		t.Errorf("published = %+v", ok)
 	}
 }

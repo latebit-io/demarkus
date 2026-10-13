@@ -358,7 +358,7 @@ func TestAppendResolvesTheCurrentVersion(t *testing.T) {
 		},
 	}
 	got, err := doc(backend).Append(t.Context(), docwrite.AppendRequest{Body: "more"})
-	if err != nil || got.Response.Status != protocol.StatusOK {
+	if err != nil || got.Response.Status != protocol.StatusCreated {
 		t.Fatalf("Append = %+v, %v", got, err)
 	}
 	if backend.AppendCalls[0].ExpectedVersion != 7 || backend.AppendCalls[0].Token != "write-token" || backend.VersionsCalls[0].Token != "read-token" {

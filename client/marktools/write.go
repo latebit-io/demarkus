@@ -438,17 +438,17 @@ type unlink struct{ hubs, targets []string }
 // a hub that could not be edited is a note.
 func (t *Tools) dropHubLinks(ctx context.Context, target Target, write WriteFunc, u *unlink) string {
 	docs := func(p string) *docwrite.Doc { return t.doc(ctx, target.at(p), write) }
-	var b strings.Builder
+	var hubs, notes strings.Builder
 	for _, d := range hub.DropFromHubs(ctx, docs, u.hubs, &hub.Drop{Targets: u.targets, Stamp: t.identityMeta(ctx)}) {
 		switch {
 		case d.Err != nil:
-			b.WriteString(mcpfmt.Note(d.Err.Error()))
+			notes.WriteString(mcpfmt.Note(d.Err.Error()))
 		case d.Dropped > 0:
-			fmt.Fprintf(&b, "- %s: %d bullet(s) dropped\n", d.Hub, d.Dropped)
+			if hubs.Len() == 0 {
+				hubs.WriteString("hubs:\n")
+			}
+			fmt.Fprintf(&hubs, "- %s: %d bullet(s) dropped\n", d.Hub, d.Dropped)
 		}
 	}
-	if b.Len() == 0 {
-		return ""
-	}
-	return "hubs:\n" + b.String()
+	return hubs.String() + notes.String()
 }
