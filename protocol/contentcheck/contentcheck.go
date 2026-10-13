@@ -201,13 +201,24 @@ func Secrets(findings []Finding) bool {
 	return slices.ContainsFunc(findings, func(f Finding) bool { return f.Kind == Secret })
 }
 
-// Remedy is the one sentence every surface offers for findings: a secret
-// is removed, personal data is removed or overridden with a reason.
+// Remedy is the one sentence every surface offers for findings on a refused
+// write: a secret is removed, personal data is removed or overridden with a
+// reason.
 func Remedy(findings []Finding) string {
 	if Secrets(findings) {
 		return "remove the secret and re-publish; a secret cannot be overridden"
 	}
 	return "remove it and re-publish, or for a false positive re-publish with metadata " + OverrideKey + " set to the reason; the override is recorded with the version"
+}
+
+// StoredRemedy is Remedy for findings on a document already published, where
+// every earlier version keeps the body: a stored secret is compromised and
+// re-publishing does not take it out of history.
+func StoredRemedy(findings []Finding) string {
+	if Secrets(findings) {
+		return "treat the secret as compromised: rotate or revoke it, then remove it and re-publish; earlier versions keep it until the operator purges them"
+	}
+	return Remedy(findings)
 }
 
 // Summary words the findings for a refusal or a note: one per line, rule

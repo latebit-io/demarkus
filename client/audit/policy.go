@@ -91,7 +91,7 @@ func (a *audit) checkContent() {
 			a.add(CheckContent, p, contentcheck.Summary(findings)+" (override: "+override+")", "")
 			continue
 		}
-		a.add(CheckContent, p, contentcheck.Summary(findings), contentcheck.Remedy(findings))
+		a.add(CheckContent, p, contentcheck.Summary(findings), contentcheck.StoredRemedy(findings))
 	}
 }
 

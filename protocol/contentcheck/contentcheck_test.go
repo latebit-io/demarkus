@@ -117,6 +117,17 @@ func TestScanOrderAndSummary(t *testing.T) {
 	}
 }
 
+func TestRemedies(t *testing.T) {
+	secret := []Finding{{Rule: "pem-private-key", Kind: Secret, Line: 1}}
+	pii := []Finding{{Rule: "canadian-sin", Kind: PII, Line: 1}}
+	if !strings.Contains(Remedy(secret), "cannot be overridden") || !strings.Contains(Remedy(pii), OverrideKey) {
+		t.Errorf("Remedy = %q / %q", Remedy(secret), Remedy(pii))
+	}
+	if !strings.Contains(StoredRemedy(secret), "rotate or revoke") || StoredRemedy(pii) != Remedy(pii) {
+		t.Errorf("StoredRemedy = %q / %q", StoredRemedy(secret), StoredRemedy(pii))
+	}
+}
+
 func TestLuhn(t *testing.T) {
 	for digits, want := range map[string]bool{"4111111111111111": true, "4111111111111112": false, "046454286": true, "0": false, "12a4": false} {
 		if got := luhn(digits); got != want {

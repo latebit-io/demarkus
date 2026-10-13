@@ -358,7 +358,17 @@ done'
     --set "broker.federation.interval=${FEDERATION_INTERVAL_SECONDS}s" \
     --wait --timeout 5m
 
-  KNOWLEDGE_POD=$(pod_of "$NAMESPACE" "app.kubernetes.io/instance=$KNOWLEDGE_RELEASE,app.kubernetes.io/name=demarkus-knowledge-server")
+  KNOWLEDGE_SELECTOR="app.kubernetes.io/instance=$KNOWLEDGE_RELEASE,app.kubernetes.io/name=demarkus-knowledge-server"
+  # Every run rotates the web-client secret, so the broker config checksum
+  # changes and the pods roll. helm --wait returns once the new pods are
+  # ready while the replaced ones, listener closed, stay in the Service for
+  # their grace period; a smoke curl that lands on one times out. Wait for
+  # them to be gone.
+  for attempt in $(seq 1 60); do
+    [[ -z "$(kubectl -n "$NAMESPACE" get pods -l "$KNOWLEDGE_SELECTOR" -o jsonpath='{.items[*].metadata.deletionTimestamp}')" ]] && break
+    sleep 2
+  done
+  KNOWLEDGE_POD=$(pod_of "$NAMESPACE" "$KNOWLEDGE_SELECTOR")
   KNOWLEDGE_HTTP_URL="http://$KNOWLEDGE_RELEASE.$NAMESPACE.svc.cluster.local:8080"
 
   if [[ "$WITH_MCP_SMOKE" == "true" ]]; then
@@ -669,6 +679,16 @@ tool mark_doctor "{\"url\":\"$HUB_DIR/\"}"
 want "mark_doctor audits the smoke directory" "hygiene report"
 tool mark_curate "{\"url\":\"$LINKED\"}"
 want "mark_curate proposes an edit for the flawed document" "proposal: "
+# The server scans every body: a secret is refused, override or not. The hub
+# is the policy floor; it carries the seeded style guide, and the doctor
+# reads its policy under every other world.
+FLOOR='"$FEDERATION_HUB"'
+tool mark_publish "{\"url\":\"mark://$WORLD/smoke/secret-$CLIENT_STATE.md\",\"body\":\"# Keys\\n\\n-----BEGIN RSA PRIVATE KEY-----\\n\",\"expected_version\":0,\"metadata\":{\"tags\":\"smoke\",\"content-check-override\":\"smoke\"}}"
+want "a body carrying a secret is refused by the server, override or not" "secret/pem-private-key at line 3"
+tool mark_fetch "{\"url\":\"mark://$FLOOR/.well-known/demarkus/style.md\",\"force\":true}"
+want "the floor world carries the seeded style guide" "stylerules:begin"
+tool mark_doctor "{\"url\":\"mark://$WORLD/smoke/\"}"
+want "mark_doctor judges the world under the floor policy" "hygiene report"
 tool mark_promote "{\"url\":\"mark://$WORLD/smoke/promoted-$CLIENT_STATE.md\",\"phase\":\"dry_run\",\"body\":\"# Promoted smoke\\n\\nWhat the smoke promotes.\\n\",\"metadata\":{\"tags\":\"smoke\"},\"source\":\"mark://soul/smoke.md\"}"
 want "mark_promote dry_run reports a packet" "packet: "
 tool mark_archive "{\"url\":\"$LINKED\"}"

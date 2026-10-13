@@ -271,9 +271,12 @@ The server judges the metadata under the world's
 `/.well-known/demarkus/policy.md` merged over the hub world's (the
 floor: the stricter strictness, the union of required axes and
 fields, the intersection of `allow_tags.<axis>` lists), and scans the
-body for secrets and personal data before any of it: a hit refuses the
-write naming the rule and line, never the value. A secret is removed;
-for personal data, metadata `content-check-override: <reason>` lets a
+body for secrets and personal data before any of it. A secret refuses
+the write, naming the rule and line and never the value; nothing is
+removed or edited for the caller, and the refusal cannot be overridden.
+Personal data follows the server's `contentCheck.pii` mode (`block` by
+default, `warn` lets the write land and logs it, `off` skips the rules);
+under `block`, metadata `content-check-override: <reason>` lets a
 reviewed false positive land and is recorded with the version.
 
 | Param | Type | Required | Notes |

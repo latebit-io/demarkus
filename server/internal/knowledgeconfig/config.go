@@ -832,14 +832,15 @@ func asciiHex(character byte) bool {
 	return character >= '0' && character <= '9' || character >= 'a' && character <= 'f'
 }
 
-// trimmedLower normalizes a domain list; empty entries are dropped so a
-// trailing comma in YAML cannot disable the email rule by accident.
+// trimmedLower normalizes a domain list; a blank entry stays so Validate
+// refuses it instead of the email rule silently going unconfigured.
 func trimmedLower(values []string) []string {
-	var out []string
-	for _, v := range values {
-		if v = strings.ToLower(strings.TrimSpace(v)); v != "" {
-			out = append(out, v)
-		}
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = strings.ToLower(strings.TrimSpace(v))
 	}
 	return out
 }

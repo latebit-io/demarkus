@@ -376,7 +376,7 @@ func TestParsePeers(t *testing.T) {
 }
 
 func TestParseFloorAndContentCheck(t *testing.T) {
-	body := strings.Replace(validConfig, "health:", "floorWorld: world-a \ncontentCheck:\n  pii: warn\n  workDomains: [\" Acme.Example \", \"\"]\nhealth:", 1)
+	body := strings.Replace(validConfig, "health:", "floorWorld: world-a \ncontentCheck:\n  pii: warn\n  workDomains: [\" Acme.Example \"]\nhealth:", 1)
 	config, err := Parse([]byte(body))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -395,7 +395,7 @@ func TestParseFloorAndContentCheck(t *testing.T) {
 	if plain.FloorWorld != "" || plain.ContentCheck.PII != contentcheck.Block || plain.ContentCheck.WorkDomains != nil {
 		t.Errorf("defaults = floor %q content %+v, want no floor and pii block", plain.FloorWorld, plain.ContentCheck)
 	}
-	for _, bad := range []string{"contentCheck:\n  pii: maybe\n", "contentCheck:\n  workDomains: [\"@acme.example\"]\n", "floorWorld: rot\n"} {
+	for _, bad := range []string{"contentCheck:\n  pii: maybe\n", "contentCheck:\n  workDomains: [\"@acme.example\"]\n", "contentCheck:\n  workDomains: [\"acme.example\", \"\"]\n", "floorWorld: rot\n"} {
 		if _, err := Parse([]byte(strings.Replace(validConfig, "health:", bad+"health:", 1))); err == nil {
 			t.Errorf("%q parsed", bad)
 		}
