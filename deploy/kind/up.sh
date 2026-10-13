@@ -364,10 +364,18 @@ done'
   # ready while the replaced ones, listener closed, stay in the Service for
   # their grace period; a smoke curl that lands on one times out. Wait for
   # them to be gone.
+  terminating_knowledge_pods() {
+    kubectl -n "$NAMESPACE" get pods -l "$KNOWLEDGE_SELECTOR" -o jsonpath='{.items[*].metadata.deletionTimestamp}'
+  }
   for attempt in $(seq 1 60); do
-    [[ -z "$(kubectl -n "$NAMESPACE" get pods -l "$KNOWLEDGE_SELECTOR" -o jsonpath='{.items[*].metadata.deletionTimestamp}')" ]] && break
+    [[ -z "$(terminating_knowledge_pods)" ]] && break
     sleep 2
   done
+  if [[ -n "$(terminating_knowledge_pods)" ]]; then
+    echo "knowledge pods are still terminating after 120s; not starting the smoke checks against them" >&2
+    kubectl -n "$NAMESPACE" get pods -l "$KNOWLEDGE_SELECTOR" >&2
+    exit 1
+  fi
   KNOWLEDGE_POD=$(pod_of "$NAMESPACE" "$KNOWLEDGE_SELECTOR")
   KNOWLEDGE_HTTP_URL="http://$KNOWLEDGE_RELEASE.$NAMESPACE.svc.cluster.local:8080"
 
