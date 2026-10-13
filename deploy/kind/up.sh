@@ -679,12 +679,18 @@ tool mark_doctor "{\"url\":\"$HUB_DIR/\"}"
 want "mark_doctor audits the smoke directory" "hygiene report"
 tool mark_curate "{\"url\":\"$LINKED\"}"
 want "mark_curate proposes an edit for the flawed document" "proposal: "
-# The server scans every body: a secret is refused, override or not. The hub
-# is the policy floor; it carries the seeded style guide, and the doctor
+# The server scans every body: a secret is refused, override or not. The
+# world answers bad-request and the gateway relays that status as the tool
+# text, not as a tool error (client/marktools write_test pins this), so the
+# check reads the status and the finding from a successful tool call. The
+# hub is the policy floor; it carries the seeded style guide, and the doctor
 # reads its policy under every other world.
 FLOOR='"$FEDERATION_HUB"'
 tool mark_publish "{\"url\":\"mark://$WORLD/smoke/secret-$CLIENT_STATE.md\",\"body\":\"# Keys\\n\\n-----BEGIN RSA PRIVATE KEY-----\\n\",\"expected_version\":0,\"metadata\":{\"tags\":\"smoke\",\"content-check-override\":\"smoke\"}}"
-want "a body carrying a secret is refused by the server, override or not" "secret/pem-private-key at line 3"
+want "a body carrying a secret is refused by the server, override or not" "status: bad-request"
+want "the refusal names the rule and line, never the value" "secret/pem-private-key at line 3"
+tool mark_fetch "{\"url\":\"mark://$WORLD/smoke/secret-$CLIENT_STATE.md\"}"
+want "the refused document was never created" "status: not-found"
 tool mark_fetch "{\"url\":\"mark://$FLOOR/.well-known/demarkus/style.md\",\"force\":true}"
 want "the floor world carries the seeded style guide" "stylerules:begin"
 tool mark_doctor "{\"url\":\"mark://$WORLD/smoke/\"}"
