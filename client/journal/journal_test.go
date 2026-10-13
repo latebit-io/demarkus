@@ -219,3 +219,13 @@ func TestHasBlock(t *testing.T) {
 		t.Error("hasBlock matches whole blocks only")
 	}
 }
+
+func TestAppendDatesTheEntryByItsLocalDay(t *testing.T) {
+	// 02:00 UTC on the 13th is still the 12th four hours west; the file follows the clock the caller passed.
+	late := time.Date(2026, 10, 13, 2, 0, 0, 0, time.UTC).In(time.FixedZone("west", -4*3600))
+	backend := &fetchtest.Client{}
+	out, err := Append(t.Context(), docsOn(backend), Request{Dir: "/proj/", Entry: "Late.", Now: late})
+	if err != nil || out.Path != "/proj/journal/2026-10-12.md" {
+		t.Fatalf("outcome = %+v err %v", out, err)
+	}
+}

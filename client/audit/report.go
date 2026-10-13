@@ -16,6 +16,7 @@ func (r *Report) Markdown() string {
 		fmt.Fprintf(&b, ", %d already promoted", r.Promoted)
 	}
 	b.WriteByte('\n')
+	hidden := 0
 	byCheck := map[string][]Finding{}
 	for _, f := range r.Findings {
 		byCheck[f.Check] = append(byCheck[f.Check], f)
@@ -26,15 +27,22 @@ func (r *Report) Markdown() string {
 			continue
 		}
 		fmt.Fprintf(&b, "\n### %s (%d)\n", check, len(fs))
-		for _, f := range fs {
+		for _, f := range fs[:min(len(fs), MaxShownPerCheck)] {
 			fmt.Fprintf(&b, "- %s: %s", f.Path, f.Detail)
 			if f.Fix != "" {
 				b.WriteString("; fix: " + f.Fix)
 			}
 			b.WriteByte('\n')
 		}
+		if len(fs) > MaxShownPerCheck {
+			fmt.Fprintf(&b, "- and %d more\n", len(fs)-MaxShownPerCheck)
+			hidden += len(fs) - MaxShownPerCheck
+		}
 	}
 	b.WriteString("\n### Coverage\n")
+	if hidden > 0 {
+		fmt.Fprintf(&b, "- %d findings not shown (%d per check); run on a subdirectory for the rest\n", hidden, MaxShownPerCheck)
+	}
 	if len(r.Coverage) == 0 {
 		suffix := "; version history not checked (run with --deep)"
 		if r.Deep {

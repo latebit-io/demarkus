@@ -28,7 +28,10 @@ const (
 	MaxLinkConfirms   = 50
 	MaxVersionFetches = 100
 	MaxVersionsPerDoc = 10
-	MaxAuditDuration  = 10 * time.Minute
+	// MaxShownPerCheck caps one section of the Markdown report; the JSON
+	// report is complete. A whole-store run otherwise outgrows an MCP result.
+	MaxShownPerCheck = 20
+	MaxAuditDuration = 10 * time.Minute
 	// maxUnconfirmedShown caps the pairs listed in the coverage note; the count stays exact.
 	maxUnconfirmedShown = 10
 	oversizedBytes      = 8 * 1024
