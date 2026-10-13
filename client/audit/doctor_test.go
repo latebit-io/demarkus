@@ -369,3 +369,24 @@ func TestValidScopeAcceptsNestedSlugPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestReportMarkdownCapsEachCheck(t *testing.T) {
+	r := &Report{Scope: "/", Documents: 1}
+	for i := range MaxShownPerCheck + 5 {
+		r.Findings = append(r.Findings, Finding{Check: CheckStyle, Path: fmt.Sprintf("/d%d.md", i), Detail: "x"})
+	}
+	r.Findings = append(r.Findings, Finding{Check: CheckOrphans, Path: "/o.md", Detail: "y"})
+	md := r.Markdown()
+	for _, want := range []string{
+		fmt.Sprintf("### %s (%d)\n", CheckStyle, MaxShownPerCheck+5),
+		fmt.Sprintf("- /d%d.md: x\n- and 5 more\n", MaxShownPerCheck-1),
+		fmt.Sprintf("### Coverage\n- 5 findings not shown (%d per check); run on a subdirectory for the rest\n- complete", MaxShownPerCheck),
+	} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("markdown lacks %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, fmt.Sprintf("/d%d.md", MaxShownPerCheck)) || !strings.Contains(md, "- /o.md: y\n") {
+		t.Fatalf("cap applied per check:\n%s", md)
+	}
+}

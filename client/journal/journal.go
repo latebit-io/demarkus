@@ -26,7 +26,7 @@ type Request struct {
 	Tags  []string          // subjects of the entry; journal and the slug are implied
 	Stamp map[string]string // the surface's identity keys, on every write
 	Title string            // the scope's name when it has no hub; "" is Memory
-	Now   time.Time         // zero is time.Now; the date is UTC
+	Now   time.Time         // zero is time.Now; the date is its local day
 	// Layout names the journal directory; zero is the default layout.
 	Layout layout.Layout
 }
@@ -73,7 +73,7 @@ func Append(ctx context.Context, docs Docs, req Request) (Outcome, error) { //no
 	if req.Layout.Journal == "" {
 		req.Layout = layout.Default()
 	}
-	r := run{Request: req, docs: docs, date: req.Now.UTC().Format("2006-01-02")}
+	r := run{Request: req, docs: docs, date: req.Now.Format("2006-01-02")}
 
 	scopeHub := docs(r.Dir + "index.md")
 	hubHead, err := head(ctx, scopeHub)
