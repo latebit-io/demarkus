@@ -518,17 +518,15 @@ func Missing(path string, meta map[string]string, policy *publishpolicy.Policy) 
 	if policy == nil {
 		return nil
 	}
-	values := make(map[string]any, len(meta))
-	for k, v := range meta {
-		values[k] = v
-	}
 	var out []string
-	for _, v := range publishpolicy.Evaluate(policy.ForCaller(), path, values).Violations {
+	for _, v := range publishpolicy.EvaluateStrings(policy.ForCaller(), path, meta).Violations {
 		switch v.Code {
 		case publishpolicy.MissingTagAxis:
 			out = append(out, "tag axis "+v.Name+" (an "+v.Name+":<value> tag)")
 		case publishpolicy.MissingField:
 			out = append(out, "metadata "+v.Name)
+		case publishpolicy.DisallowedTagValue:
+			out = append(out, "tag "+v.Name+" (allowed "+v.Axis+" values: "+policy.AllowedList(v.Axis)+")")
 		default:
 			out = append(out, string(v.Code))
 		}
@@ -593,6 +591,9 @@ func (c *Check) Report() string {
 		}
 		if fields := c.Policy.ForCaller().RequiredFields; len(fields) > 0 {
 			fmt.Fprintf(&b, "; require_fields %s", strings.Join(fields, ", "))
+		}
+		for _, axis := range slices.Sorted(maps.Keys(c.Policy.AllowedTagValues)) {
+			fmt.Fprintf(&b, "; allow_tags.%s %s", axis, c.Policy.AllowedList(axis))
 		}
 		b.WriteString("\n")
 	}

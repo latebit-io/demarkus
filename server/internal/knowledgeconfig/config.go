@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"gopkg.in/yaml.v3"
 )
@@ -55,6 +56,33 @@ type Config struct {
 	// memory broker) owns while the operator owns this file.
 	WorldsFile string        `yaml:"worldsFile"`
 	Worlds     []WorldConfig `yaml:"worlds"`
+	// FloorWorld names the world whose policy document is the floor every
+	// other world's policy is merged over; empty means no floor.
+	FloorWorld string `yaml:"floorWorld"`
+	// ContentCheck is the secrets and personal-data scan on every write.
+	ContentCheck ContentCheckConfig `yaml:"contentCheck"`
+}
+
+// ContentCheckConfig tunes the content scan. Secrets always block; PII is
+// the operator's call. It is contentcheck.Options as the YAML spells it.
+type ContentCheckConfig struct {
+	// PII is block (the default), warn (log and let the write land) or off.
+	PII contentcheck.Mode `yaml:"pii"`
+	// WorkDomains are the email domains that belong to the organization;
+	// an address outside them is personal data. Empty leaves email unchecked.
+	WorkDomains []string `yaml:"workDomains"`
+}
+
+func (config ContentCheckConfig) validate() error {
+	if !config.PII.Valid() {
+		return fmt.Errorf("contentCheck.pii %q must be %q, %q or %q", config.PII, contentcheck.Block, contentcheck.Warn, contentcheck.Off)
+	}
+	for _, domain := range config.WorkDomains {
+		if domain == "" || strings.ContainsAny(domain, " \t@/") {
+			return fmt.Errorf("contentCheck.workDomains entry %q is not a domain", domain)
+		}
+	}
+	return nil
 }
 
 // ListenConfig contains process-wide QUIC listener settings.
@@ -213,14 +241,16 @@ type LimitsConfig struct {
 }
 
 type rawConfig struct {
-	Version    int              `yaml:"version"`
-	Listen     rawListenConfig  `yaml:"listen"`
-	Health     rawHealthConfig  `yaml:"health"`
-	TLS        TLSConfig        `yaml:"tls"`
-	Peers      PeersConfig      `yaml:"peers"`
-	Compaction CompactionConfig `yaml:"compaction"`
-	WorldsFile string           `yaml:"worldsFile"`
-	Worlds     []rawWorldConfig `yaml:"worlds"`
+	Version      int                `yaml:"version"`
+	Listen       rawListenConfig    `yaml:"listen"`
+	Health       rawHealthConfig    `yaml:"health"`
+	TLS          TLSConfig          `yaml:"tls"`
+	Peers        PeersConfig        `yaml:"peers"`
+	Compaction   CompactionConfig   `yaml:"compaction"`
+	WorldsFile   string             `yaml:"worldsFile"`
+	Worlds       []rawWorldConfig   `yaml:"worlds"`
+	FloorWorld   string             `yaml:"floorWorld"`
+	ContentCheck ContentCheckConfig `yaml:"contentCheck"`
 }
 
 type rawListenConfig struct {
@@ -398,9 +428,17 @@ func (raw *rawConfig) config() *Config {
 		Compaction: CompactionConfig{Role: CompactionRole(strings.TrimSpace(string(raw.Compaction.Role)))},
 		WorldsFile: strings.TrimSpace(raw.WorldsFile),
 		Worlds:     make([]WorldConfig, len(raw.Worlds)),
+		FloorWorld: strings.TrimSpace(raw.FloorWorld),
+		ContentCheck: ContentCheckConfig{
+			PII:         contentcheck.Mode(strings.TrimSpace(string(raw.ContentCheck.PII))),
+			WorkDomains: trimmedLower(raw.ContentCheck.WorkDomains),
+		},
 	}
 	if config.Compaction.Role == "" {
 		config.Compaction.Role = CompactionEager
+	}
+	if config.ContentCheck.PII == "" {
+		config.ContentCheck.PII = contentcheck.Block
 	}
 	for index := range raw.Worlds {
 		config.Worlds[index] = worldFromRaw(&raw.Worlds[index])
@@ -483,6 +521,9 @@ func (config *Config) Validate() error {
 		return err
 	}
 	if err := config.Compaction.validate(); err != nil {
+		return err
+	}
+	if err := config.ContentCheck.validate(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(config.TLS.CertFile) == "" {
@@ -782,4 +823,16 @@ func asciiLowercaseAlphanumeric(character byte) bool {
 
 func asciiHex(character byte) bool {
 	return character >= '0' && character <= '9' || character >= 'a' && character <= 'f'
+}
+
+// trimmedLower normalizes a domain list; empty entries are dropped so a
+// trailing comma in YAML cannot disable the email rule by accident.
+func trimmedLower(values []string) []string {
+	var out []string
+	for _, v := range values {
+		if v = strings.ToLower(strings.TrimSpace(v)); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/client/docwrite/gate"
 	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/stylerules"
 )
 
 // Check names in report order.
@@ -26,12 +27,16 @@ const (
 	CheckADRSequence   = "ADR sequence"
 	CheckUntagged      = "Untagged"
 	CheckUntyped       = "Untyped"
+	CheckPolicy        = "Policy compliance"
+	CheckPolicyFloor   = "Policy floor"
 	CheckDuplicates    = "Duplicate content"
 	CheckHubShape      = "Hub shape"
 	CheckOversized     = "Oversized"
 	CheckDocumentShape = "Document shape"
 	CheckStyle         = "Style"
 	CheckFrontmatter   = "In-body frontmatter"
+	CheckContent       = "Secrets and personal data"
+	CheckStyleGuide    = "Style guide stale"
 	CheckReferences    = "Dangling and unlinked references"
 	CheckLostMetadata  = "Metadata lost across versions"
 	CheckPromotion     = "Promotion candidates"
@@ -41,8 +46,8 @@ const (
 // CheckOrder is the report section order, most actionable first.
 var CheckOrder = []string{
 	CheckBrokenLinks, CheckUnresolved, CheckOrphans, CheckStaleIndex, CheckMissingHub, CheckUntitled,
-	CheckADRSequence, CheckUntagged, CheckUntyped, CheckDuplicates, CheckHubShape, CheckOversized,
-	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckReferences, CheckLostMetadata, CheckPromotion, CheckTokenDrift,
+	CheckADRSequence, CheckUntagged, CheckUntyped, CheckPolicy, CheckPolicyFloor, CheckDuplicates, CheckHubShape, CheckOversized,
+	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckContent, CheckStyleGuide, CheckReferences, CheckLostMetadata, CheckPromotion, CheckTokenDrift,
 }
 
 // checkLinks: a target absent from the live inventory is broken when a fetch
@@ -239,34 +244,31 @@ func (a *audit) checkDuplicates() {
 	}
 }
 
-// checkShape runs the gate's hub, document-shape and style rules over each body.
+// checkShape runs the gate once per body and files each finding under the
+// check its rule id belongs to. A missing H1 is the Untitled check's.
 func (a *audit) checkShape() {
 	for _, p := range a.order {
 		d := a.docs[p]
 		if !live(d.status) {
 			continue
 		}
-		hub := gate.HubProblems(p, d.body)
-		for _, problem := range hub {
-			a.add(CheckHubShape, p, problem, "/soul-curate "+p)
-		}
-		if len(d.body) >= oversizedBytes && len(hub) == 0 {
-			a.add(CheckOversized, p, fmt.Sprintf("%d KB; a plain fetch returns an outline", len(d.body)/1024), "/soul-curate "+p+" (hub plus topic files)")
-		}
-		for _, problem := range gate.ShapeProblems(p, d.body, d.headings) {
-			a.add(CheckDocumentShape, p, problem, "/soul-curate "+p)
-		}
-		for _, problem := range gate.DescriptionProblems(d.body, d.headings, d.meta["description"]) {
-			a.add(CheckDocumentShape, p, problem, "re-publish with metadata.description equal to the H1 summary line")
-		}
-		if n := gate.EmDashCount(d.body); n > 0 {
-			a.add(CheckStyle, p, fmt.Sprintf("%d em dash(es)", n), "replace with comma, colon, semicolon or parentheses")
-		}
-		if dups := gate.DuplicateHeadings(d.headings); len(dups) > 0 {
-			a.add(CheckStyle, p, "duplicate headings "+strings.Join(dups, ", ")+" (a -1 suffix shifts inbound anchors)", "make headings unique")
-		}
-		if gate.OpensWithFrontmatter(d.body) {
-			a.add(CheckFrontmatter, p, "body opens with a --- block; the server stores it literally", "strip the block and re-publish with metadata out of band")
+		for _, problem := range gate.Problems(p, d.body, d.meta["description"]) {
+			id, _, _ := strings.Cut(problem, ": ")
+			switch id {
+			case stylerules.H1:
+			case stylerules.Frontmatter:
+				a.add(CheckFrontmatter, p, problem, "strip the block and re-publish with metadata out of band")
+			case stylerules.EmDash, stylerules.DuplicateHeading:
+				a.add(CheckStyle, p, problem, "/soul-curate "+p)
+			case stylerules.HubSize, stylerules.HubBullet, stylerules.HubFanout:
+				a.add(CheckHubShape, p, problem, "/soul-curate "+p)
+			case stylerules.Size:
+				a.add(CheckOversized, p, problem, "/soul-curate "+p+" (hub plus topic files)")
+			case stylerules.DescriptionShort, stylerules.DescriptionRestatesTitle, stylerules.DescriptionPlaceholder, stylerules.DescriptionMismatch:
+				a.add(CheckDocumentShape, p, problem, "re-publish with metadata.description equal to the H1 summary line")
+			default:
+				a.add(CheckDocumentShape, p, problem, "/soul-curate "+p)
+			}
 		}
 	}
 }

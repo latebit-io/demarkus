@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.169
+
+The knowledge-doctor deep checks lead with `mark_doctor`, which now judges every document under the world's policy merged over root's floor (required axes, fields and `allow_tags.<axis>` values), reports a world policy below the floor, scans bodies for secrets and personal data (rule and line, never the value; overrides listed with their reason) and flags a root style guide whose rule table drifted from the gate. `/knowledge` reports the effective policy; style findings open with their rule id.
+
 ## 0.5.164
 
 The session guidance defers the read contract to the broker's instructions and keeps only the harness contract: consult the joined system first, `/knowledge` for the hubs and the older-broker fallback, publish through `knowledge-promote` only when asked, follow the write-time gates, keep the soul and system lanes.

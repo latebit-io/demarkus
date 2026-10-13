@@ -262,8 +262,19 @@ Every publish is held to the style rules (one `# H1` with a summary
 under it, unique status-free headings, no frontmatter fence, no em
 dashes, hubs as links plus one line each, a body under the 8 KB fetch
 threshold unless it is a journal). The write lands and a
-`note:` line names what to fix; a knowledge world cites
-`mark://root/.well-known/demarkus/style.md`.
+`note:` line names what to fix; each finding opens with its rule id,
+the table `mark://root/.well-known/demarkus/style.md` carries (the
+server seeds that guide on the hub world and the doctor reports one
+whose table has drifted).
+
+The server judges the metadata under the world's
+`/.well-known/demarkus/policy.md` merged over the hub world's (the
+floor: the stricter strictness, the union of required axes and
+fields, the intersection of `allow_tags.<axis>` lists), and scans the
+body for secrets and personal data before any of it: a hit refuses the
+write naming the rule and line, never the value. Metadata
+`content-check-override: <reason>` lets a reviewed false positive land
+and is recorded with the version.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -358,9 +369,10 @@ draft refuses.
   then the body.
 - `dry_run` checks the distilled draft at `url` against the world: the
   caller's write grant (`status: not-permitted`), the world's
-  `/.well-known/demarkus/policy.md` (required axes and fields as
-  findings; an unreadable policy is `policy-unavailable`), the style
-  rules, and the catalog: a body-mode lookup on the draft's title, then
+  `/.well-known/demarkus/policy.md` merged over the hub world's floor
+  (required axes and fields and tag values outside an axis's allowed
+  list as findings; an unreadable policy is `policy-unavailable`), the
+  style rules, and the catalog: a body-mode lookup on the draft's title, then
   a catalog lookup on its subject tags when the title found nothing
   (a page that fills twice is `incomplete-dedup`). Candidates are the
   target path, a same-title row (both shown with their body, capped at

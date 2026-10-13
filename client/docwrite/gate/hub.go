@@ -13,6 +13,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/mdoutline"
+	"github.com/latebit-io/demarkus/protocol/stylerules"
 )
 
 // Hub rules from the style guide's "Hubs" section: a link page stays under
@@ -54,8 +55,8 @@ func HubProblems(url, body string) []string {
 	}
 	var problems []string
 	if len(body) >= mdoutline.OutlineThreshold {
-		problems = append(problems, fmt.Sprintf(
-			"hub body is %d KB, at or over the 8 KB fetch threshold, so a plain fetch returns an outline; split it into a link hub plus topic files", len(body)/1024))
+		problems = append(problems, stylerules.Prefix(stylerules.HubSize, fmt.Sprintf(
+			"hub body is %d KB, at or over the 8 KB fetch threshold, so a plain fetch returns an outline; split it into a link hub plus topic files", len(body)/1024)))
 	}
 	var bad []string
 	for _, b := range items {
@@ -68,13 +69,13 @@ func HubProblems(url, body string) []string {
 		if len(shown) > 3 {
 			shown = shown[:3]
 		}
-		problems = append(problems, fmt.Sprintf(
+		problems = append(problems, stylerules.Prefix(stylerules.HubBullet, fmt.Sprintf(
 			"%d hub bullet(s) run past one line or carry status (bold, Status:, a date, a PR number): %s; a hub is links plus one line each, status and summaries stay in the child",
-			len(bad), strings.Join(shown, ", ")))
+			len(bad), strings.Join(shown, ", "))))
 	}
 	if n := outboundDocs(body); n > hubLinkMax {
-		problems = append(problems, fmt.Sprintf(
-			"%d outbound documents, over the %d a hub carries; add a second-level hub", n, hubLinkMax))
+		problems = append(problems, stylerules.Prefix(stylerules.HubFanout, fmt.Sprintf(
+			"%d outbound documents, over the %d a hub carries; add a second-level hub", n, hubLinkMax)))
 	}
 	return problems
 }

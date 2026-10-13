@@ -29,6 +29,17 @@ server:
   # broker admits every request (ADR 0033). The NetworkPolicy admits it from
   # anywhere; the Service carries it on service.bearerPort.
   bearerPort: 8443
+  # The world whose write policy is the floor every other world's policy
+  # is merged over (a world can only tighten it). Blank takes the federation
+  # hub; "none" turns the floor off.
+  policyFloor: ""
+  # Secrets and personal data are scanned on every write. Secrets always
+  # block; pii is block, warn (log, let it land) or off. workDomains are the
+  # organization's email domains; an address outside them is personal data,
+  # and an empty list leaves email unchecked.
+  contentCheck:
+    pii: block
+    workDomains: []
 
 # Static worlds; empty is valid only with provisioning enabled below, or when
 # the umbrella supplies global.worlds. An existing empty bucket is initialized

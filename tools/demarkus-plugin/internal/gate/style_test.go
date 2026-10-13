@@ -27,7 +27,7 @@ func TestStyleGate(t *testing.T) {
 
 	t.Run("flawed body warns and names the fix", func(t *testing.T) {
 		d := mustEval(t, styleInput("No heading — and an em dash.\n"))
-		if d.Decision != "warn" || !strings.Contains(d.Reason, "H1") || !strings.Contains(d.Reason, "Also: 1 em dash") || !strings.Contains(d.Reason, "DEMARKUS_STYLE_STRICTNESS") {
+		if d.Decision != "warn" || !strings.Contains(d.Reason, "H1") || !strings.Contains(d.Reason, "Also: em-dash: 1 em dash") || !strings.Contains(d.Reason, "DEMARKUS_STYLE_STRICTNESS") {
 			t.Fatalf("want warn naming both problems, got %q (%s)", d.Decision, d.Reason)
 		}
 	})

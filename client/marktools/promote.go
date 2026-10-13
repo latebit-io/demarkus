@@ -211,7 +211,7 @@ func (t *Tools) promoteDraft(ctx context.Context, target Target, args *PromoteAr
 	default:
 		return failure("%s refused: the target is %s", args.Phase, head.Status)
 	}
-	policy, bad := t.worldPolicy(ctx, target)
+	policy, bad := t.effectivePolicy(ctx, target)
 	if bad != nil {
 		return *bad
 	}
@@ -223,6 +223,29 @@ func (t *Tools) promoteDraft(ctx context.Context, target Target, args *PromoteAr
 		return failure("packet %s does not match the draft against the target at v%d; rerun dry_run and review", args.Packet, draft.Version)
 	}
 	return t.promoteApply(ctx, target, doc, draft)
+}
+
+// effectivePolicy is the policy the server will judge the write by: the
+// world's own merged over the floor world's when the surface names one.
+// Nil when neither has a policy document.
+func (t *Tools) effectivePolicy(ctx context.Context, target Target) (*publishpolicy.Policy, *Result) {
+	own, bad := t.worldPolicy(ctx, target)
+	if bad != nil {
+		return nil, bad
+	}
+	floor, bad := t.floorPolicy(ctx, target)
+	if bad != nil {
+		return nil, bad
+	}
+	if floor == nil {
+		return own, nil
+	}
+	var world publishpolicy.Policy
+	if own != nil {
+		world = *own
+	}
+	merged := publishpolicy.Merge(*floor, world)
+	return &merged, nil
 }
 
 // worldPolicy reads the world's write policy; not-found is no policy, any

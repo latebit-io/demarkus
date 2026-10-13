@@ -44,7 +44,7 @@ const (
 	graphDescription        = "Crawl outbound links from a document to depth: link graph with edge provenance and rel-* typed relations. External links recorded, not followed. Feeds the graph store for mark_backlinks."
 	graphExportDescription  = "Export the graph store as publishable markdown with mark:// links. Run mark_graph first."
 	graphPublishDescription = "Export the graph store and publish it as crawlable markdown (mark_graph_export + mark_publish). Run mark_graph first."
-	doctorDescription       = "Read-only hygiene audit of a store or directory: broken links, orphans, missing hubs, untagged or untyped documents, duplicates, hub and document shape, style, ADR gaps. Bounded; Coverage lists gaps. deep: metadata lost across versions. promotion: candidates for a shared knowledge system."
+	doctorDescription       = "Read-only hygiene audit of a store or directory: broken links, orphans, missing hubs, untagged or untyped documents, write-policy compliance under the floor (axes, fields, allowed values), secrets and personal data, duplicates, hub and document shape, style, a stale style guide, ADR gaps. Bounded; Coverage lists gaps. deep: metadata lost across versions. promotion: candidates for a shared knowledge system."
 
 	forceDesc           = "full body regardless of size or unchanged status (default false)"
 	includeArchivedDesc = "include archived documents and all-archived directories (default false)"

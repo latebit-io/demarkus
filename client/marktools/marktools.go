@@ -93,6 +93,10 @@ type Hooks struct {
 	// Style is how strictly a publish to target is held to the style rules
 	// and which guide a finding cites; nil warns and cites the baseline.
 	Style func(ctx context.Context, target Target) StyleGate
+	// Floor names the store whose write policy is the floor under target's
+	// (the floor world behind a knowledge broker); false means none. The
+	// doctor judges target under the merged policy.
+	Floor func(ctx context.Context, target Target) (Target, bool)
 	// Seen dedups full bodies mark_fetch already returned; nil never dedups.
 	Seen SeenStore
 	// ErrText words a failed backend call; nil says "<site> failed: <err>".

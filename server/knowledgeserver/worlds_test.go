@@ -17,6 +17,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/protocol/stylerules"
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/backend"
@@ -27,6 +28,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/peerhint"
 	"github.com/latebit-io/demarkus/server/internal/worldruntime"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 // worldsTestHarness runs a worldManager over in-memory blob stores and a
@@ -781,5 +783,74 @@ func TestWorldManagerDynamicFragmentLeadsTheFile(t *testing.T) {
 	}
 	if err := static.manager.SetDynamicWorlds([]byte("worlds: []\n")); err == nil {
 		t.Fatal("a static server accepted a dynamic fragment")
+	}
+}
+
+// store is a live world's raw store, below the policy enforcer.
+func (h *worldsTestHarness) store(t *testing.T, world string) worldStore {
+	t.Helper()
+	h.manager.mu.Lock()
+	defer h.manager.mu.Unlock()
+	entry := h.manager.entries[world]
+	if entry == nil {
+		t.Fatalf("world %s is not live", world)
+	}
+	return entry.store
+}
+
+// The floor world's policy governs every world, and it carries the style
+// guide every finding cites.
+func TestWorldManagerFloorWorldGovernsEveryWorld(t *testing.T) {
+	dir := t.TempDir()
+	const otherID = "7d2e4c0a-5b1f-4e3a-9c8d-2f6a1b3c4d5e"
+	section := "floorWorld: root\nworlds:\n" +
+		worldFragment("root", testWorldID, writeTokens(t, dir, "root"), false) +
+		worldFragment("acme", otherID, writeTokens(t, dir, "acme"), false)
+	h, err := openHarness(t, t.TempDir(), section, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	root := backendtest.Direct{Store: h.store(t, "root")}
+	if guide, err := root.Get(stylerules.DocumentPath, 0); err != nil || !stylerules.Current(string(guide.Content)) {
+		t.Fatalf("style guide on the floor world = %v, %v; want the seeded, current guide", guide, err)
+	}
+	if _, err := (backendtest.Direct{Store: h.store(t, "acme")}).Get(stylerules.DocumentPath, 0); !errors.Is(err, backend.ErrNotFound) {
+		t.Errorf("style guide on a tenant world = %v, want not found", err)
+	}
+
+	// Tighten the floor; acme's own policy still says warn.
+	block := []byte("# Write Policy\n\nstrictness: block\nrequire_tags: category\nallow_tags.category: guide|decision\n")
+	if _, err := root.WriteVersion(publishpolicy.DocumentPath, 1, block, map[string]string{"tags": "category:governance"}); err != nil {
+		t.Fatalf("tighten floor: %v", err)
+	}
+	acme := backendtest.Direct{Store: writepolicy.Enforce(h.store(t, "acme"), h.manager.enforceOptions("acme"))}
+	if _, err := acme.WriteVersion("/a.md", 0, []byte("# A\n\nSummary.\n"), map[string]string{"tags": "topic"}); !errors.Is(err, writepolicy.ErrPolicyBlocked) {
+		t.Errorf("write below the floor = %v, want blocked", err)
+	}
+	if _, err := acme.WriteVersion("/a.md", 0, []byte("# A\n\nSummary.\n"), map[string]string{"tags": "category:howto"}); !errors.Is(err, writepolicy.ErrPolicyBlocked) {
+		t.Errorf("disallowed value = %v, want blocked", err)
+	}
+	if _, err := acme.WriteVersion("/a.md", 0, []byte("# A\n\nSummary.\n"), map[string]string{"tags": "category:guide"}); err != nil {
+		t.Errorf("compliant write: %v", err)
+	}
+	if _, err := acme.WriteVersion("/k.md", 0, []byte("# K\n\n-----BEGIN PRIVATE KEY-----\n"), map[string]string{"tags": "category:guide"}); !errors.Is(err, writepolicy.ErrContentBlocked) {
+		t.Errorf("secret = %v, want blocked", err)
+	}
+
+	// A floor candidate no world could satisfy is refused on the floor world.
+	gatedRoot := backendtest.Direct{Store: writepolicy.Enforce(h.store(t, "root"), h.manager.enforceOptions("root"))}
+	if _, err := (backendtest.Direct{Store: h.store(t, "acme")}).WriteVersion(publishpolicy.DocumentPath, 1,
+		[]byte("# Write Policy\n\nstrictness: warn\nallow_tags.category: guide\n"), map[string]string{"tags": "category:governance"}); err != nil {
+		t.Fatalf("acme policy: %v", err)
+	}
+	disjoint := []byte("# Write Policy\n\nstrictness: block\nallow_tags.category: decision\n")
+	if _, err := gatedRoot.WriteVersion(publishpolicy.DocumentPath, 2, disjoint, map[string]string{"tags": "category:governance"}); !errors.Is(err, writepolicy.ErrInvalidPolicy) {
+		t.Errorf("unsatisfiable floor = %v, want ErrInvalidPolicy", err)
+	}
+
+	// The floor world closed: writes elsewhere refuse rather than skip it.
+	h.manager.setPolicyStore("root", nil)
+	if _, err := acme.WriteVersion("/b.md", 0, []byte("# B\n\nSummary.\n"), map[string]string{"tags": "category:guide"}); !errors.Is(err, writepolicy.ErrInvalidPolicy) {
+		t.Errorf("write with the floor world closed = %v, want ErrInvalidPolicy", err)
 	}
 }

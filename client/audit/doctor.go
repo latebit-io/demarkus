@@ -17,6 +17,7 @@ import (
 	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
 // Bounds keep one audit affordable on a large store; each bound hit is
@@ -57,6 +58,9 @@ type Options struct {
 	Deep      bool          // metadata lost across versions
 	Promotion bool          // documents worth lifting to a shared knowledge system
 	Timeout   time.Duration // whole audit; 0 is MaxAuditDuration
+	// Floor is the policy the store's own policy is merged over (the floor
+	// world's, behind a knowledge broker); nil means none.
+	Floor *publishpolicy.Policy
 }
 
 // Finding is one report line: the document, what is wrong, and the fix.
@@ -103,6 +107,10 @@ type audit struct {
 	coverage []string
 	promoted int // documents the promotion check excluded as already promoted
 	layout   layout.Layout
+	// policy is the effective write policy (the floor merged under the
+	// store's own); policyKnown is false when the store's could not be read.
+	policy      publishpolicy.Policy
+	policyKnown bool
 }
 
 // IsSlug reports whether s can be a store path segment; the layout owns the rule.
@@ -142,6 +150,7 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 	if a.layout, err = layout.Read(ctx, store.Fetch); err != nil {
 		return nil, err
 	}
+	a.readPolicy(ctx)
 	if err := a.inventory(ctx); err != nil {
 		return nil, err
 	}
@@ -154,8 +163,11 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 	a.checkTitles()
 	a.checkADRSequence()
 	a.checkMetadata()
+	a.checkPolicy()
 	a.checkDuplicates()
 	a.checkShape()
+	a.checkContent()
+	a.checkStyleGuide()
 	a.checkReferences()
 	if opts.Deep {
 		a.checkLostMetadata(ctx)

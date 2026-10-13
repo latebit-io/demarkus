@@ -7,9 +7,12 @@ Reference artifacts for an organizational demarkus knowledge system (a broker-fr
 Every knowledge system has a guaranteed hub world named **`root`** that tracks things globally for the system. Org-wide conventions live there as ordinary versioned documents under a well-known prefix:
 
 ```text
-mark://root/.well-known/demarkus/policy.md     ← strictness + required tags (see policy.md here)
+mark://root/.well-known/demarkus/policy.md     ← strictness, required tags, allowed values (see policy.md here)
 mark://root/.well-known/demarkus/template.md   ← required per-world structure (the canonical layout)
+mark://root/.well-known/demarkus/style.md      ← the style guide; seeded by the server, its rule table generated from the style gate
 ```
+
+The `root` policy is the **floor**: the server merges it under every other world's own `/.well-known/demarkus/policy.md` on every write (the stricter strictness, the union of required axes and fields, the intersection of allowed values), so a world can tighten the org's rules but never loosen them. The server also refuses any body carrying a secret or personal data, whatever the policy says.
 
 `template.md` is the canonical per-world layout (world hub, descriptor, `/projects/<slug>/` subtrees, hub and metadata rules); publish a copy of it to `root`, tailored as needed. `policy.md` and `template.md` are the examples in this directory.
 

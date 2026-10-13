@@ -1,7 +1,9 @@
 package knowledgeconfig
 
 import (
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -370,5 +372,32 @@ func TestParsePeers(t *testing.T) {
 	}
 	if plain.Peers.Enabled() {
 		t.Fatalf("peers enabled without a section: %+v", plain.Peers)
+	}
+}
+
+func TestParseFloorAndContentCheck(t *testing.T) {
+	body := strings.Replace(validConfig, "health:", "floorWorld: root \ncontentCheck:\n  pii: warn\n  workDomains: [\" Acme.Example \", \"\"]\nhealth:", 1)
+	config, err := Parse([]byte(body))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if config.FloorWorld != "root" {
+		t.Errorf("floorWorld = %q", config.FloorWorld)
+	}
+	want := ContentCheckConfig{PII: contentcheck.Warn, WorkDomains: []string{"acme.example"}}
+	if !reflect.DeepEqual(config.ContentCheck, want) {
+		t.Errorf("contentCheck = %+v, want %+v", config.ContentCheck, want)
+	}
+	plain, err := Parse([]byte(validConfig))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if plain.FloorWorld != "" || plain.ContentCheck.PII != contentcheck.Block || plain.ContentCheck.WorkDomains != nil {
+		t.Errorf("defaults = floor %q content %+v, want no floor and pii block", plain.FloorWorld, plain.ContentCheck)
+	}
+	for _, bad := range []string{"contentCheck:\n  pii: maybe\n", "contentCheck:\n  workDomains: [\"@acme.example\"]\n"} {
+		if _, err := Parse([]byte(strings.Replace(validConfig, "health:", bad+"health:", 1))); err == nil {
+			t.Errorf("%q parsed", bad)
+		}
 	}
 }

@@ -35,7 +35,7 @@ func TestPublishStyleGate(t *testing.T) {
 		if got.IsError || !strings.HasPrefix(got.Text, "status: created\nversion: 1\n") {
 			t.Fatalf("publish = %+v", got)
 		}
-		for _, want := range []string{"\nnote: style problems in this publish: no `# H1`", "Also: 1 em dash", "Rules: metadata out of band"} {
+		for _, want := range []string{"\nnote: style problems in this publish: h1: no `# H1`", "Also: em-dash: 1 em dash", "Rules: metadata out of band"} {
 			if !strings.Contains(got.Text, want) {
 				t.Errorf("missing %q in:\n%s", want, got.Text)
 			}
@@ -54,7 +54,7 @@ func TestPublishStyleGate(t *testing.T) {
 
 	t.Run("block refuses before the network", func(t *testing.T) {
 		got, backend := publish(t, styled(publishpolicy.Block, "See the guide."), flawed)
-		if !got.IsError || !strings.HasPrefix(got.Text, "publish refused, style problems: no `# H1`") || !strings.HasSuffix(got.Text, "See the guide. Fix the body and republish.") {
+		if !got.IsError || !strings.HasPrefix(got.Text, "publish refused, style problems: h1: no `# H1`") || !strings.HasSuffix(got.Text, "See the guide. Fix the body and republish.") {
 			t.Fatalf("publish = %+v", got)
 		}
 		if len(backend.PublishCalls) != 0 {

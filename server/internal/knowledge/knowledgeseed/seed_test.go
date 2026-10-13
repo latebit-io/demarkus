@@ -8,6 +8,8 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/protocol/stylerules"
 )
 
 func TestDefaultPolicyParsesPermissive(t *testing.T) {
@@ -107,4 +109,21 @@ func writePolicy(t *testing.T, body string) string {
 		t.Fatalf("write policy: %v", err)
 	}
 	return name
+}
+
+func TestStyleSeedCarriesTheRuleTable(t *testing.T) {
+	seed := StyleSeed()
+	body := string(seed.Body)
+	if !stylerules.Current(body) {
+		t.Fatal("style seed does not carry the rendered rule table")
+	}
+	if !strings.HasPrefix(body, "# Style Guide\n") || strings.Contains(body, "—") {
+		t.Error("style seed breaks the baseline it documents")
+	}
+	if err := storefmt.ValidateWrite(seed.Body, seed.Metadata); err != nil {
+		t.Fatalf("style seed is not a valid write: %v", err)
+	}
+	if len(seed.Metadata) == 0 {
+		t.Error("style seed carries no metadata")
+	}
 }
