@@ -24,6 +24,10 @@ const hubBrandingPath = "/worlds/{world}/.well-known/library/{doc}"
 // one per document per interval; the Cache-Control header says the same.
 const hubBrandingTTL = time.Minute
 
+// hubBrandingFetchTimeout bounds a fetch that no longer has a caller's
+// context to end it.
+const hubBrandingFetchTimeout = 10 * time.Second
+
 // hubBrandingDocs is the allowlist; nothing else under the hub leaves the
 // gateway unauthenticated.
 var hubBrandingDocs = map[string]bool{
@@ -77,7 +81,8 @@ func (g *Gateway) hubBranding(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	entry, err := g.hubBrandingEntry(r.Context(), doc)
+	now := g.deps.Clock()
+	entry, err := g.hubBrandingEntry(r.Context(), doc, now)
 	if err != nil {
 		g.deps.Log.WarnContext(r.Context(), "broker: hub branding read failed", "doc", doc, "err", err)
 		http.Error(w, "hub unavailable", http.StatusBadGateway)
@@ -89,9 +94,9 @@ func (g *Gateway) hubBranding(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	// Short public cache: a rebrand is a publish, and the library re-reads
-	// every minute anyway.
-	w.Header().Set("Cache-Control", "public, max-age=60")
+	// Public cache for what is left of the entry's minute, so a rebrand never
+	// sits in an HTTP cache past the TTL; the library re-reads every minute.
+	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(max(entry.until.Sub(now), 0)/time.Second)))
 	if _, err := io.WriteString(w, entry.body); err != nil {
 		g.deps.Log.DebugContext(r.Context(), "broker: hub branding write failed", "doc", doc, "err", err)
 	}
@@ -100,22 +105,35 @@ func (g *Gateway) hubBranding(w http.ResponseWriter, r *http.Request) {
 // hubBrandingEntry serves from the cache or fetches once for every caller
 // waiting on the same document. A failed read is not cached, so the next
 // caller retries.
-func (g *Gateway) hubBrandingEntry(ctx context.Context, doc string) (hubBrandingEntry, error) {
-	if entry, ok := g.hubBrands.get(doc, g.deps.Clock()); ok {
+func (g *Gateway) hubBrandingEntry(ctx context.Context, doc string, now time.Time) (hubBrandingEntry, error) {
+	if entry, ok := g.hubBrands.get(doc, now); ok {
 		return entry, nil
 	}
-	fetched, err, _ := g.hubBrands.misses.Do(doc, func() (any, error) {
-		entry, err := g.fetchHubBranding(ctx, doc)
+	flight := g.hubBrands.misses.DoChan(doc, func() (any, error) {
+		// A flight that just landed serves a caller that missed before it.
+		if entry, ok := g.hubBrands.get(doc, g.deps.Clock()); ok {
+			return entry, nil
+		}
+		// The fetch outlives the caller that started it: a canceled request
+		// must not fail everyone sharing the flight, and the entry still lands.
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hubBrandingFetchTimeout)
+		defer cancel()
+		entry, err := g.fetchHubBranding(fetchCtx, doc)
 		if err != nil {
 			return hubBrandingEntry{}, err
 		}
 		g.hubBrands.put(doc, entry, g.deps.Clock())
 		return entry, nil
 	})
-	if err != nil {
-		return hubBrandingEntry{}, err
+	select {
+	case <-ctx.Done():
+		return hubBrandingEntry{}, ctx.Err()
+	case fetched := <-flight:
+		if fetched.Err != nil {
+			return hubBrandingEntry{}, fetched.Err
+		}
+		return fetched.Val.(hubBrandingEntry), nil
 	}
-	return fetched.(hubBrandingEntry), nil
 }
 
 var errHubBrandingRefused = errors.New("hub refused the read")

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
@@ -109,8 +110,14 @@ func TestHubBrandingCachesPerDocument(t *testing.T) {
 	}
 
 	d.Published["root/.well-known/library/site.css.md"] = fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# v2"}}
-	if got := getPublic(t, sheet); got.body != "# v1" {
+	f.clock.Advance(45 * time.Second)
+	got := getPublic(t, sheet)
+	if got.body != "# v1" {
 		t.Errorf("sheet changed within the TTL: %q", got.body)
+	}
+	// An HTTP cache may keep the entry only for what is left of its minute.
+	if cc := got.header.Get("Cache-Control"); cc != "public, max-age=15" {
+		t.Errorf("Cache-Control after 45s = %q, want max-age=15", cc)
 	}
 	f.clock.Advance(hubBrandingTTL)
 	if got := getPublic(t, sheet); got.body != "# v2" {
@@ -132,5 +139,42 @@ func TestHubBrandingCachesPerDocument(t *testing.T) {
 	d.FetchFn, d.Published["root/.well-known/library/site.css.md"] = nil, v2
 	if got := getPublic(t, sheet); got.code != http.StatusOK {
 		t.Errorf("hub back: %d, want 200 (failures must not be cached)", got.code)
+	}
+}
+
+// The first caller's cancellation neither fails the others sharing the
+// flight nor loses the entry: the fetch runs on its own context.
+func TestHubBrandingFlightOutlivesItsFirstCaller(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	d := &fakeDispatcher{FetchFn: func(ctx context.Context, _ fetch.FetchRequest) (fetch.Result, error) {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return fetch.Result{}, ctx.Err()
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "# sheet"}}, nil
+	}}
+	g := newGatewayFixture(t, hubBrandingConfig(), &brokertest.FakeVerifier{}, KnowledgeProfile()).gateway(d)
+	now := g.deps.Clock()
+
+	first, firstCancel := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := g.hubBrandingEntry(first, "site.css.md", now)
+		firstDone <- err
+	}()
+	<-started
+	firstCancel()
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled caller: %v, want context.Canceled", err)
+	}
+	close(release)
+	entry, err := g.hubBrandingEntry(context.Background(), "site.css.md", now)
+	if err != nil || entry.body != "# sheet" {
+		t.Fatalf("after the first caller left: %+v %v", entry, err)
+	}
+	if n := len(d.FetchCalls); n != 1 {
+		t.Errorf("hub fetched %d times, want 1: the flight should have landed", n)
 	}
 }
