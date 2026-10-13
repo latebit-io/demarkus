@@ -28,6 +28,11 @@ func TestCheckToolSurface(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "bad.md.tmpl:2 references mark_graph_export") {
 		t.Fatalf("advanced reference not reported: %v", err)
 	}
+	write("bad.md.tmpl", "Call mark_doctor, then mark_mystery.\n")
+	err = checkToolSurface(root)
+	if err == nil || !strings.Contains(err.Error(), "bad.md.tmpl:1 references unknown mark_mystery") || strings.Contains(err.Error(), "mark_doctor") {
+		t.Fatalf("unknown reference not reported as such: %v", err)
+	}
 }
 
 func TestRepositoryPromptsStayOnLeanSurface(t *testing.T) {

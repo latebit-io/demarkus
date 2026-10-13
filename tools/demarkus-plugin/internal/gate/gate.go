@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	docgate "github.com/latebit-io/demarkus/client/docwrite/gate"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
@@ -51,22 +52,6 @@ func urlOf(args map[string]any) string {
 		return u
 	}
 	return ""
-}
-
-// leafOf returns the basename of a document URL or path.
-func leafOf(url string) string {
-	if i := strings.LastIndex(url, "/"); i >= 0 {
-		return url[i+1:]
-	}
-	return url
-}
-
-// navExempt reports whether leaf is an OKF navigation/history file
-// (index.md, log.md). These are exempt from the H1 rule and the required
-// OKF `type` field: the server never defaults their type, and a hub is
-// intentionally untyped navigation, not a concept document.
-func navExempt(leaf string) bool {
-	return leaf == "index.md" || leaf == "log.md"
 }
 
 // prunableRetention recognizes positive integers accepted by the server.
@@ -266,7 +251,7 @@ func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambigu
 	}
 
 	// Documentation-style guard (publish only): body-shape rules.
-	sd, err := styleDecision(pt, args, styleRefMemory)
+	sd, err := styleDecision(pt, args, docgate.Baseline)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -339,7 +324,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	if rd != nil {
 		decisions = append(decisions, *rd)
 	}
-	sd, err := styleDecision(pt, args, styleRefKnowledge)
+	sd, err := styleDecision(pt, args, docgate.KnowledgeGuide)
 	if err != nil {
 		return Decision{}, err
 	}

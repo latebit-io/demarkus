@@ -338,6 +338,50 @@ mcp_tools() {
   expect "mcp append resolves the version itself" 'version' -- mcp_call "$U" mark_append '{"url":"/mcp/new.md","body":"second"}'
   expect "mcp fetch sees the append" 'second' -- mcp_call "$U" mark_fetch '{"url":"/mcp/new.md"}'
   expect "mcp archive archives the document" 'archived' -- mcp_call "$U" mark_archive '{"url":"/mcp/new.md"}'
+  expect "mcp append route today creates the journal" 'status: created' -- mcp_call "$U" mark_append '{"url":"/","route":"today","body":"Smoke entry.","tags":"smoke"}'
+  expect "mcp append route today is idempotent" 'status: present' -- mcp_call "$U" mark_append '{"url":"/","route":"today","body":"Smoke entry.","tags":"smoke"}'
+  expect "mcp context primer reads the hub and the journal" 'Journal 20[0-9][0-9]-' -- mcp_call "$U" mark_fetch '{"url":"/.context"}'
+  expect "mcp publish seeds a hub to retire" 'created' -- mcp_call "$U" mark_publish '{"url":"/retired/index.md","body":"# Retired\n\nA project that ended.\n","expected_version":0,"metadata":{"tags":"smoke","importance":"0.1"}}'
+  expect "mcp archive retires the hub" 'archived' -- mcp_call "$U" mark_archive '{"url":"/retired/index.md"}'
+  expect "mcp append route today refuses an archived project" '/retired/ is archived; nothing written' -- mcp_call "$U" mark_append '{"url":"/retired/","route":"today","body":"Late entry.","tags":"smoke"}'
+  expect "mcp context primer reports a retired project" 'status: archived' -- mcp_call "$U" mark_fetch '{"url":"/retired/.context"}'
+  expect "mcp context primer reports a new project" 'status: new' -- mcp_call "$U" mark_fetch '{"url":"/fresh/.context"}'
+  expect "mcp doctor audits the store" 'hygiene report' -- mcp_call "$U" mark_doctor '{"url":"/"}'
+  expect "mcp publish seeds a document to curate" 'created' -- mcp_call "$U" mark_publish '{"url":"/curate/c.md","body":"# C\n\nWhat C settles for its readers.\n\n## Step (DONE 2026-01-01)\n\ntext\n","expected_version":0,"metadata":{"tags":"smoke","importance":"0.1"}}'
+  expect "mcp curate reports a dated heading" 'status: edit' -- mcp_call "$U" mark_curate '{"url":"/curate/c.md"}'
+  curate_hash=$(mcp_call "$U" mark_curate '{"url":"/curate/c.md"}' | sed -n 's/.*proposal: \([0-9a-f]*\).*/\1/p' | head -n1)
+  expect "mcp curate report carries a proposal hash" '^[0-9a-f]{16}$' -- printf '%s\n' "$curate_hash"
+  if [ -n "$curate_hash" ]; then
+    expect "mcp curate apply writes the proposal" 'status: applied' -- mcp_call "$U" mark_curate "{\"url\":\"/curate/c.md\",\"apply\":true,\"proposal\":\"$curate_hash\"}"
+    expect "mcp curate apply moved the status under the heading" 'Status: DONE' -- mcp_call "$U" mark_fetch '{"url":"/curate/c.md"}'
+  fi
+  expect "mcp archive recursive sweeps the directory" 'archived: 1 of 1' -- mcp_call "$U" mark_archive '{"url":"/curate/","recursive":true}'
+  expect "mcp archive recursive hid the document" 'archived' -- mcp_call "$U" mark_fetch '{"url":"/curate/c.md"}'
+  expect "mcp publish seeds a document to promote" 'created' -- mcp_call "$U" mark_publish '{"url":"/adr/0001-smoke.md","body":"# Smoke Decision\n\nWhat the smoke decides for its readers.\n","expected_version":0,"metadata":{"tags":"smoke","importance":"0.9","type":"Decision"}}'
+  stage_out=$(mcp_call "$U" mark_promote '{"url":"/adr/0001-smoke.md","phase":"stage"}')
+  expect "mcp promote stage reads the candidate" 'candidate: decision record' -- printf '%s\n' "$stage_out"
+  stage_packet=$(printf '%s\n' "$stage_out" | sed -n 's/.*packet: \([0-9a-f]*\).*/\1/p' | head -n1)
+  expect "mcp promote stage carries a packet" '^[0-9a-f]{16}$' -- printf '%s\n' "$stage_packet"
+  draft='"url":"/shared/smoke.md","body":"# Smoke Decision\n\nWhat the smoke decides, for everyone.\n","metadata":{"tags":"smoke,shared","importance":"0.8","type":"Decision"},"source":"smoke"'
+  dry_out=$(mcp_call "$U" mark_promote "{$draft,\"phase\":\"dry_run\"}")
+  expect "mcp promote dry_run checks the draft" 'status: ready' -- printf '%s\n' "$dry_out"
+  draft_packet=$(printf '%s\n' "$dry_out" | sed -n 's/.*packet: \([0-9a-f]*\).*/\1/p' | head -n1)
+  expect "mcp promote dry_run carries a packet" '^[0-9a-f]{16}$' -- printf '%s\n' "$draft_packet"
+  if [ -n "$draft_packet" ] && [ -n "$stage_packet" ]; then
+    expect "mcp promote apply publishes the draft" 'status: published' -- mcp_call "$U" mark_promote "{$draft,\"phase\":\"apply\",\"packet\":\"$draft_packet\"}"
+    expect "mcp promote apply recorded the provenance" 'promoted-from: smoke' -- mcp_call "$U" mark_fetch '{"url":"/shared/smoke.md"}'
+    expect "mcp promote stamp writes the markers" 'status: stamped' -- mcp_call "$U" mark_promote "{\"url\":\"/adr/0001-smoke.md\",\"phase\":\"stamp\",\"target\":\"/shared/smoke.md@v1\",\"via\":\"smoke\",\"packet\":\"$stage_packet\"}"
+    expect "mcp promote stamp landed under the title" 'promoted: /shared/smoke.md@v1' -- mcp_call "$U" mark_fetch '{"url":"/adr/0001-smoke.md"}'
+    live='"url":"/adr/0001-smoke.md","phase":"refresh","body":"# Smoke Decision\n\nRevised.\n"'
+    expect "mcp promote refresh sees the copy in sync" 'status: in-sync' -- mcp_call "$U" mark_promote "{$live,\"target\":\"/shared/smoke.md@v1\"}"
+    refresh_out=$(mcp_call "$U" mark_promote "{$live,\"target\":\"/shared/smoke.md@v2\"}")
+    expect "mcp promote refresh proposes the pull" 'status: stale' -- printf '%s\n' "$refresh_out"
+    refresh_packet=$(printf '%s\n' "$refresh_out" | sed -n 's/.*packet: \([0-9a-f]*\).*/\1/p' | head -n1)
+    if [ -n "$refresh_packet" ]; then
+      expect "mcp promote refresh writes with the packet" 'status: refreshed' -- mcp_call "$U" mark_promote "{$live,\"target\":\"/shared/smoke.md@v2\",\"packet\":\"$refresh_packet\"}"
+      expect "mcp promote refresh moved the marker" 'promoted: /shared/smoke.md@v2' -- mcp_call "$U" mark_fetch '{"url":"/adr/0001-smoke.md"}'
+    fi
+  fi
   refute "mcp stderr has no panic" 'panic|fatal error' -- cat "$WORK/mcp.log"
 }
 

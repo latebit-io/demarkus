@@ -1,42 +1,33 @@
 ---
-description: "Promote a {{.Store}} document up to a shared knowledge system: curate, route, gate, publish, and back-stamp the source"
+description: "Promote a {{.Store}} document up to a shared knowledge system: stage, distill, gate, publish, and back-stamp the source"
 ---
 
-Promote one {{.Store}} document (staging tier) to a shared destination (curated, authoritative tier): a **brokered knowledge system** (joined via `/knowledge-join`) or a **plain remote demarkus server** registered as a promote target. This command owns intent, source, registry and back-stamp; the execution cascade (triage, distill, dedup, tag, route, gate, publish) is the {{.KnowledgePluginName}} plugin's `knowledge-promote` skill.
+Promote one {{.Store}} document (staging tier) to a shared destination (curated, authoritative tier): a **brokered knowledge system** (joined via `/knowledge-join`) or a **plain remote demarkus server** registered as a promote target. `mark_promote` on the {{.Store}} server stages the source and writes the back-stamp; the {{.KnowledgePluginName}} plugin's `knowledge-promote` skill distills, checks and publishes on the destination. This command owns intent, destination and the back-stamp.
 
 `$ARGUMENTS`: {{.Store}} path (e.g. `/demarkus/plans/foo.md`). Empty: ask which document.
 
+{{template "store.tmpl" .}}
+
 ## Steps
 
-1. **Detection gate.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: registry failure, surface, stop. One destination per line:
+1. **Destination.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: registry failure, surface, stop. One destination per line:
    - `knowledge <slug>`: brokered system (the `<slug>` MCP server); the cascade selects the world.
-   - `target <slug> <path> [label]`: plain endpoint with its declared write `<path>`; destination is that slug and path directly, no `mark_worlds` or `world.md`, default autonomy `human-only`.
-   - `NONE`: promotion dormant. Offer both ways to enable it and act on the choice: `/knowledge-join <broker-url>` ({{.KnowledgePluginName}} plugin); or register a plain server now: confirm its MCP server slug{{if eq .Harness "claude"}} (from `claude mcp list`){{end}} and write path or prefix, shell-escape each value as one argument, run `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add <shell-escaped-slug> <shell-escaped-path> <shell-escaped-label-if-present>`; continue only on zero exit with `OK: registered promote target`, else surface, stop; rerun `detect-promote`, continue only when the exact new `target <slug> <path>` row appears.
-   - New promotion, several destinations: ask which; one: use it. Previously promoted: destination decided in step 3 by the recorded server. Reach every destination through {{.ToolForm}}.
+   - `target <slug> <path> [label]`: plain endpoint with its declared write `<path>`; destination is that slug and path, no `mark_worlds` or `world.md`, default autonomy `human-only`.
+   - `NONE`: promotion dormant. Offer both ways to enable it and act on the choice: `/knowledge-join <broker-url>` ({{.KnowledgePluginName}} plugin); or register a plain server now: confirm its MCP server slug{{if eq .Harness "claude"}} (from `claude mcp list`){{end}} and write path, shell-escape each value as one argument, run `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add <shell-escaped-slug> <shell-escaped-path> <shell-escaped-label-if-present>`; continue only on zero exit with `OK: registered promote target`, else surface, stop; rerun `detect-promote`, continue only when the exact new `target <slug> <path>` row appears.
+   - Several destinations: ask which; one: use it. Previously promoted: the destination is decided in step 2. Reach every destination through {{.ToolForm}} of its slug.
 
-2. **Read the source.** `mark_fetch` through the {{.Store}} server{{if eq .Harness "claude"}} (`mcp__plugin_{{.PluginName}}_{{.MCPServerKey}}__mark_fetch` or the bound store's){{end}} with `force: true`: the complete body (marker detection), current version and complete metadata map (back-stamp). `not-found`: say so, stop. Outline-only, transport or authorization failure: surface, never treat as absence.
+2. **Stage.** `mark_promote` through the store's server with `url` and `phase: stage`. Tool error (`not-found`, transport, authorization): surface, stop; never treat as absence. Keep the `packet`, the body and the metadata lines for the cascade. `candidate: no`: say why (not a shared type, under the importance floor, a staging directory), continue only on request. `status: promoted`: promoted before; tell the user where it lives (`promoted:` line) and continue only on an explicit **update** request: the destination is the step 1 row whose slug is `promoted-via` (none in the registry: stop); `promoted-via: none` (legacy marker): the user picks the configured destination that owns the target; never infer a broker from a `mark://` authority; a plain destination with a `mark://<server>/<path>` target uses the bare `/path`. The recorded target is the cascade's update target.
 
-3. **Already promoted?** Markers are standalone lines exactly `promoted-via: <server-slug>` and `promoted: <target>@v<N>` (step 6 format). Both present: promoted before; tell the user where it lives, continue only on an explicit **update** request; destination = the detection row matching the recorded server (none: stop); pass the recorded target to the cascade as the update target, no new world or path selection. No markers: new promotion (the cascade's dedup catches a lost back-stamp). Legacy `promoted:` only: the user picks the configured destination that owns the target; never infer a broker from a `mark://` authority; a plain destination with a `mark://<server>/<path>` target uses the bare `/path` before any call.
-
-4. **Run the cascade.** Hand the source, the step 1 destination (brokered, or plain `target` with its write path) and any step 3 update target to the `knowledge-promote` skill, which triages, distills, dedups, tags, routes, gates and publishes with provenance back to this {{.Store}}, and returns the exact target of the successful `mark_publish`, the returned `@v<N>` and the publishing server slug.
+3. **Cascade.** Hand the staged body and metadata, the destination (brokered, or plain `target` with its write path) and any update target to the `knowledge-promote` skill. It triages, distills, runs `dry_run` and `apply` on the destination with a human gate between, and returns the exact `target` url of the successful `apply`, its `version` and the publishing server slug.
    - Triaged out or declined at the gate: report, **stop without back-stamping**.
-   - Any lookup, fetch, policy, routing, approval, validation or publish failure, or a result missing target, server slug or version: surface, **stop without back-stamping**. A merge candidate or conflict response is not a publish.
+   - Any failure, or a result missing target, slug or version: surface, **stop without back-stamping**.
 
-5. **Capture the result.** Only after a successful publish: the exact target plus version as `<target>@v<N>` and the destination server slug. Broker target `mark://<world>/<path>`; plain target bare `/path` through its recorded server. Never synthesize an authority from an MCP slug; never continue on malformed output.
+4. **Back-stamp.** Confirm the mode with the user: **marker only** (default; keeps the body, for documents still iterated in the {{.Store}}) or **stub** (title, markers, summary; recall follows the link, no rival copy). `mark_promote` through the store's server: `url`, `phase: stamp`, `target: <target>@v<N>` from step 3, `via: <slug>`, the step 2 `packet`, `stub: true` for a stub. A broker target is `mark://<world>/<path>`, a plain target its bare `/path`; never synthesize an authority from an MCP slug.
+   - `status: stamped`: done; `note:` lines are reported as is.
+   - `stamp refused` (the document changed since staging): rerun step 2's stage, stamp again with the new `packet`, marker only.
+   - Any other failure: print the pending back-stamp lines verbatim (`promoted-via: <slug>` and `promoted: <target>@v<N>`), stop, never claim success.
 
-6. **Back-stamp the {{.Store}} doc.** Confirm the mode with the user. Both modes emit two marker lines verbatim, on separate lines (`/soul-refresh` routes on them): `<server-slug>` the publishing server from step 5 (the endpoint identity), `<target>` the exact brokered mark or plain bare path of the successful publish, `<N>` its version:
-
-   ```text
-   promoted-via: <server-slug>
-   promoted: <target>@v<N>
-   ```
-
-   - **Stub (default).** Body becomes H1, both markers, one-line summary: recall resolves the link and fetches fresh; no rival copy. For reference docs not edited locally.
-   - **Marker only.** Keep the body; markers directly under the H1. For documents still iterated in the {{.Store}}.
-
-   `mark_publish` on the {{.Store}} at the step 2 version with the step 2 metadata map (opaque keys kept, `retention` only on explicit request) plus the `promoted` tag, `on_conflict: "fail"`. Conflict: refetch with `force: true`; body unchanged from step 2: marker-only mode reapplies both markers, unions `promoted` into the refetched tags, retries once at that version; body changed, or stub mode: no retry, the local edit re-enters through step 3 later. Unrecovered failure: print both filled-in marker lines as the **pending back-stamp**, stop, never claim success.
-
-7. **Report.** Destination target and server, back-stamp mode, {{.Store}} path, pending back-stamp if any. Full paths.
+5. **Report.** Destination target and version, server, back-stamp mode and version, {{.Store}} path, pending back-stamp if any. Full paths.
 
 ## Don't
 

@@ -1,4 +1,4 @@
-package doctor
+package audit
 
 import (
 	"encoding/json"
@@ -11,7 +11,11 @@ import (
 // with its count, one bullet per finding, then Coverage.
 func (r *Report) Markdown() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## %s hygiene report  (%d docs)\n\n%d docs, %d findings\n", r.Scope, r.Documents, r.Documents, len(r.Findings))
+	fmt.Fprintf(&b, "## %s hygiene report  (%d docs)\n\n%d docs, %d findings", r.Scope, r.Documents, r.Documents, len(r.Findings))
+	if r.Promotion {
+		fmt.Fprintf(&b, ", %d already promoted", r.Promoted)
+	}
+	b.WriteByte('\n')
 	byCheck := map[string][]Finding{}
 	for _, f := range r.Findings {
 		byCheck[f.Check] = append(byCheck[f.Check], f)

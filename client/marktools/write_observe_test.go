@@ -26,7 +26,7 @@ func TestPublishObservesTheWrittenDocument(t *testing.T) {
 	tools := newTools(t, backend, graphHooks(store, &seeded))
 	got := tools.Publish(t.Context(), marktools.PublishArgs{
 		URL: "/doc.md", Body: observedBody, ExpectedVersion: new(0), OnConflict: "fail",
-		Metadata: map[string]any{"tags": "a", "rel-related": "/adr/0001.md"},
+		Metadata: map[string]string{"tags": "a", "rel-related": "/adr/0001.md"},
 	})
 	if got.IsError {
 		t.Fatalf("Publish = %+v", got)
@@ -145,7 +145,7 @@ func TestArchiveObservesAbsenceAndClearsEdges(t *testing.T) {
 	if got := tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: observedBody, ExpectedVersion: new(0)}); got.IsError {
 		t.Fatalf("Publish = %+v", got)
 	}
-	if got := tools.Archive(t.Context(), "/doc.md"); got.IsError {
+	if got := tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/doc.md"}); got.IsError {
 		t.Fatalf("Archive = %+v", got)
 	}
 	node := store.GetNode("mark://host/doc.md")

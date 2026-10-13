@@ -3,20 +3,18 @@ description: "Audit the {{.Store}} (or a single project) for catalog hygiene: or
 argument-hint: "[project-slug | blank = whole {{.Store}}] [--deep]"
 ---
 
-Read-only health check over the project's {{.Store}}; the plugin binary runs every check and prints the report. **Never writes.** An organizational knowledge system is `/knowledge-doctor`'s territory ({{.KnowledgePluginName}} plugin).
+Read-only health check over the project's {{.Store}}: one `mark_doctor` call runs every check and returns the report. **Never writes.** An organizational knowledge system is `/knowledge-doctor`'s territory ({{.KnowledgePluginName}} plugin).
+
+{{template "store.tmpl" .}}
 
 ## Run
 
-`$ARGUMENTS`: an optional project slug, and `--deep` to also check metadata lost across versions (one version walk per untagged document). Bash:
+`$ARGUMENTS`: an optional project slug and `--deep` (metadata lost across versions).
 
-```bash
-"$HOME/.demarkus/bin/demarkus-plugin" doctor --dir {{if eq .Harness "claude"}}"${CLAUDE_PROJECT_DIR}"{{else}}<shell-escaped-absolute-project-dir>{{end}} [--scope /<slug>/] [--deep]
-```
+`mark_doctor` through the store's server: `url` is `/<slug>/` for one project, `/` for the whole {{.Store}} (a broker store: `mark://<world>/` from `mark_worlds`, then `/<slug>/` under it); `deep: true` with `--deep`. An invalid slug or scope is the tool's own refusal.{{if ne .Harness "cowork"}} Whole local {{.Store}}: also run `"$HOME/.demarkus/bin/demarkus-plugin" provision verify-auth` via Bash and relay its verdict as one line after the report; a non-zero exit is a coverage gap, not a finding.{{end}}
 
-The binary resolves the bound {{.Store}} from the project directory (`--store <id>` overrides), validates the slug, reads every document in scope once and runs every hygiene check (links, orphans, hubs, metadata, shape, style, ADR sequence and references; a whole-{{.Store}} audit adds the write-auth verdict).
-
-- Exit 0: print the report verbatim, then a short prioritized "what I'd fix first". "All clean" only when it has zero findings and Coverage says complete; otherwise name the gaps Coverage lists.
-- Exit 1: the audit is untrustworthy (store unreachable, unauthorized, inventory bound, broker-tier store, binary older than the subcommand); surface stderr verbatim and stop. Never substitute a manual crawl.
+- Success: print the report verbatim, then a short prioritized "what I'd fix first". "All clean" only with zero findings, Coverage `complete`{{if ne .Harness "cowork"}} and a healthy verify-auth verdict where one was due{{end}}; otherwise name the gaps.
+- Tool error (store unreachable, unauthorized, inventory bound, scope not found): surface it verbatim, stop. Never substitute a manual crawl.
 
 ## Don't
 

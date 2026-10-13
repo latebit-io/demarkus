@@ -3,6 +3,7 @@ package mcpfmt
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/protocol"
@@ -31,16 +32,19 @@ func ScopeDesc(example string) string {
 }
 
 const (
-	fetchDescription        = "Fetch a document: status, version, title, markdown body; over 8KB an outline (headings with #anchors), url#<anchor> one section, force=true the full body. Unchanged re-fetch returns a short notice."
+	fetchDescription        = "Fetch a document: status, version, title, markdown body; over 8KB an outline (headings with #anchors), url#<anchor> one section, force=true the full body. Unchanged re-fetch returns a short notice. <dir>/.context reads a session primer: hub, newest journal entries, active work."
 	listDescription         = "List documents and subdirectories. Archived hidden unless include_archived; while complete=false pass next-cursor as cursor. For one document prefer mark_explore."
 	versionsDescription     = "Version history: total and current version, hash chain validity, per-version timestamps."
-	publishDescription      = "Publish or update a document (markdown body); expected_version from prior fetch, 0 to create; metadata replaces the current map, a note lists dropped tags or keys. On conflict the default on_conflict=merge returns a merged candidate body (git-style markers where both sides changed) to review and republish at publish-at-version."
-	appendDescription       = "Append markdown to an existing document. expected_version optional; omitted or 0 resolves the current version. Catalog metadata (tags, importance, title, type) carries over; change it via mark_publish."
-	archiveDescription      = "Archive a document: fetches as 'archived', history kept."
+	publishDescription      = "Publish or update a document (markdown body); expected_version from prior fetch, 0 to create; metadata replaces the current map; a note lists dropped tags or keys and style problems. On conflict the default on_conflict=merge returns a merged candidate body (git-style markers where both sides changed) to review and republish at publish-at-version."
+	appendDescription       = "Append markdown to an existing document. expected_version optional; omitted or 0 resolves the current version. Catalog metadata (tags, importance, title, type) carries over; change it via mark_publish. route=today: url is a directory, the entry goes to its journal/<YYYY-MM-DD>.md (created when absent, hubs linked, tags widened; an archived scope refuses); a repeated entry is reported present, not written."
+	archiveDescription      = "Archive a document: fetches as 'archived', history kept. recursive=true: url is a directory, every live document under it. Ancestor hubs drop the bullets that only linked what was archived."
+	curateDescription       = "Bring one document into shape: style findings, a proposed mechanical fix (an edit, or at 8KB a split into a hub plus topic files with anchors kept), inbound links to repoint, a proposal hash. apply=true with the hash writes it at the reported version."
+	promoteDescription      = "Promote a document to a shared knowledge system, by phase. A write needs the packet from the report before it."
 	backlinksDescription    = "Documents linking to a URL, from the revision-aware graph store, with bounded source revalidation. Freshness, provenance and typed relations also appear in mark_explore."
 	graphDescription        = "Crawl outbound links from a document to depth: link graph with edge provenance and rel-* typed relations. External links recorded, not followed. Feeds the graph store for mark_backlinks."
 	graphExportDescription  = "Export the graph store as publishable markdown with mark:// links. Run mark_graph first."
 	graphPublishDescription = "Export the graph store and publish it as crawlable markdown (mark_graph_export + mark_publish). Run mark_graph first."
+	doctorDescription       = "Read-only hygiene audit of a store or directory: broken links, orphans, missing hubs, untagged or untyped documents, duplicates, hub and document shape, style, ADR gaps. Bounded; Coverage lists gaps. deep: metadata lost across versions. promotion: candidates for a shared knowledge system."
 
 	forceDesc           = "full body regardless of size or unchanged status (default false)"
 	includeArchivedDesc = "include archived documents and all-archived directories (default false)"
@@ -49,9 +53,24 @@ const (
 	bodyDesc            = "markdown body"
 	appendBodyDesc      = "markdown to append"
 	appendVersionDesc   = "version from prior fetch; omit or 0 to auto-resolve"
+	appendRouteDesc     = "today: url names a directory and the entry lands in its dated journal"
+	appendTagsDesc      = "with route=today: comma-separated subjects of the entry, added to the journal's tags"
 	onConflictDesc      = "merge (default): merged candidate body to review and republish at publish-at-version; fail: raw conflict status"
 	metadataDesc        = "string values stored with the document: tags (comma-separated) and importance (0-1) rank mark_lookup; rel-<predicate> declares a typed relation (e.g. rel-supersedes: /adr/0002.md); other keys stored opaquely. retention (positive int) permanently deletes all but the newest N versions on this and every later write carrying it: irreversible, confirm with the user first"
 	depthDesc           = "max link depth (default 2, max 5)"
+	recursiveDesc       = "archive every live document under the directory url (default false)"
+	curateApplyDesc     = "write the proposal (default false: report only)"
+	curateProposalDesc  = "the proposal hash from the report; required with apply"
+	promotePhaseDesc    = "which phase to run"
+	promoteBodyDesc     = "dry_run, apply: the distilled draft; refresh: the live knowledge body"
+	promoteMetadataDesc = "dry_run, apply: the draft's metadata object (tags, importance, type, the policy's axes)"
+	promoteSourceDesc   = "dry_run, apply: origin recorded as promoted-from (default none)"
+	promoteTargetDesc   = "stamp, refresh: the knowledge copy as <url>@v<N>"
+	promoteViaDesc      = "stamp: the knowledge server's name, recorded as promoted-via"
+	promoteStubDesc     = "stamp: reduce the body to its title and summary (default false: keep it)"
+	promotePacketDesc   = "apply, stamp, refresh: the packet hash from the report before it"
+	doctorDeepDesc      = "walk version history for lost metadata (default false)"
+	doctorPromotionDesc = "list promotion candidates, promoted ones excluded (default false)"
 	graphRetentionDesc  = "graph versions to keep (default 20; 0 keeps all); older permanently pruned"
 )
 
@@ -141,6 +160,8 @@ func AppendTool(urlDesc, suffix string) mcp.Tool {
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 		mcp.WithString("body", mcp.Required(), mcp.Description(appendBodyDesc)),
 		mcp.WithNumber("expected_version", mcp.Description(appendVersionDesc)),
+		mcp.WithString("route", mcp.Description(appendRouteDesc)),
+		mcp.WithString("tags", mcp.Description(appendTagsDesc)),
 	)
 }
 
@@ -149,7 +170,51 @@ func ArchiveTool(urlDesc, suffix string) mcp.Tool {
 	return mcp.NewTool("mark_archive",
 		describe(archiveDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
+		mcp.WithBoolean("recursive", mcp.Description(recursiveDesc)),
 	)
+}
+
+// CurateTool builds mark_curate.
+func CurateTool(urlDesc, suffix string) mcp.Tool {
+	return mcp.NewTool("mark_curate",
+		describe(curateDescription, suffix),
+		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
+		mcp.WithBoolean("apply", mcp.Description(curateApplyDesc)),
+		mcp.WithString("proposal", mcp.Description(curateProposalDesc)),
+	)
+}
+
+// PromoteTool builds mark_promote for the phases a surface serves; only
+// the arguments those phases read are advertised.
+func PromoteTool(urlDesc, suffix string, phases []string) mcp.Tool {
+	options := []mcp.ToolOption{
+		describe(promoteDescription, suffix),
+		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
+		mcp.WithString("phase", mcp.Required(), mcp.Enum(phases...), mcp.Description(promotePhaseDesc)),
+	}
+	serves := func(names ...string) bool {
+		return slices.ContainsFunc(names, func(n string) bool { return slices.Contains(phases, n) })
+	}
+	if serves("dry_run", "apply", "refresh") {
+		options = append(options, mcp.WithString("body", mcp.Description(promoteBodyDesc)))
+	}
+	if serves("dry_run", "apply") {
+		options = append(options,
+			mcp.WithObject("metadata", mcp.Description(promoteMetadataDesc)),
+			mcp.WithString("source", mcp.Description(promoteSourceDesc)))
+	}
+	if serves("stamp", "refresh") {
+		options = append(options, mcp.WithString("target", mcp.Description(promoteTargetDesc)))
+	}
+	if serves("stamp") {
+		options = append(options,
+			mcp.WithString("via", mcp.Description(promoteViaDesc)),
+			mcp.WithBoolean("stub", mcp.Description(promoteStubDesc)))
+	}
+	if serves("apply", "stamp", "refresh") {
+		options = append(options, mcp.WithString("packet", mcp.Description(promotePacketDesc)))
+	}
+	return mcp.NewTool("mark_promote", options...)
 }
 
 // GraphExportTool builds mark_graph_export, which takes no arguments.
@@ -179,6 +244,16 @@ func LookupParams() []mcp.ToolOption {
 	}
 }
 
+// DoctorTool builds mark_doctor; urlDesc describes the scope argument.
+func DoctorTool(urlDesc, suffix string) mcp.Tool {
+	return mcp.NewTool("mark_doctor",
+		describe(doctorDescription, suffix),
+		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
+		mcp.WithBoolean("deep", mcp.Description(doctorDeepDesc)),
+		mcp.WithBoolean("promotion", mcp.Description(doctorPromotionDesc)),
+	)
+}
+
 // Tool profiles. Lean omits the operator and federation tools that no plugin
 // prompt references; full is the complete surface for direct consumers.
 const (
@@ -193,6 +268,16 @@ var AdvancedTools = map[string]bool{
 	"mark_discover":      true,
 	"mark_graph_export":  true,
 	"mark_graph_publish": true,
+}
+
+// KnownTools is every mark_* tool any surface serves. The plugin-prompts
+// check fails when a template names a tool outside it.
+var KnownTools = map[string]bool{
+	"mark_fetch": true, "mark_explore": true, "mark_list": true, "mark_versions": true,
+	"mark_lookup": true, "mark_lookup_all": true, "mark_publish": true, "mark_append": true,
+	"mark_archive": true, "mark_discover": true, "mark_backlinks": true, "mark_graph": true,
+	"mark_graph_export": true, "mark_graph_publish": true, "mark_worlds": true, "mark_doctor": true,
+	"mark_curate": true, "mark_promote": true,
 }
 
 // ValidProfile rejects anything but the two named profiles. Surfaces call it

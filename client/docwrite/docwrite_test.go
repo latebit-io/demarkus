@@ -358,7 +358,7 @@ func TestAppendResolvesTheCurrentVersion(t *testing.T) {
 		},
 	}
 	got, err := doc(backend).Append(t.Context(), docwrite.AppendRequest{Body: "more"})
-	if err != nil || got.Response.Status != protocol.StatusOK {
+	if err != nil || got.Response.Status != protocol.StatusCreated {
 		t.Fatalf("Append = %+v, %v", got, err)
 	}
 	if backend.AppendCalls[0].ExpectedVersion != 7 || backend.AppendCalls[0].Token != "write-token" || backend.VersionsCalls[0].Token != "read-token" {
@@ -545,5 +545,17 @@ func TestAnAppendThatCannotBeJoinedIsReported(t *testing.T) {
 	_, err := doc(backend).Append(t.Context(), docwrite.AppendRequest{Body: "more", ExpectedVersion: 3, Metadata: meta})
 	if !errors.Is(err, protocol.ErrOutcomeUnknown) || !errors.Is(err, storefmt.ErrSizeLimit) {
 		t.Errorf("err = %v, want the unknown outcome and the size limit", err)
+	}
+}
+
+// A digest frames each part, so parts that only differ in where a boundary
+// falls hash differently.
+func TestDigestFramesItsParts(t *testing.T) {
+	if docwrite.Digest("a\x00b", "c") == docwrite.Digest("a", "b\x00c") || docwrite.Digest("ab", "") == docwrite.Digest("a", "b") {
+		t.Fatal("digest boundaries are ambiguous")
+	}
+	first := docwrite.Digest("v1", "body")
+	if first != docwrite.Digest("v1", "body") || len(first) != 16 {
+		t.Fatal("digest is not stable or not 16 hex characters")
 	}
 }

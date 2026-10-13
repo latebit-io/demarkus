@@ -23,6 +23,7 @@ import (
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -162,6 +163,9 @@ func (h *handler) tools(host string) []mcpserver.ServerTool {
 		{Tool: mcpfmt.BacklinksTool(url, ""), Handler: h.markBacklinks},
 		{Tool: mcpfmt.GraphExportTool(""), Handler: h.markGraphExport},
 		{Tool: mcpfmt.GraphPublishTool("graph document target, e.g. /graph.md or "+url, requiresToken), Handler: h.markGraphPublish},
+		{Tool: mcpfmt.DoctorTool(scopeDesc(host), ""), Handler: h.markDoctor},
+		{Tool: mcpfmt.CurateTool(url, "apply "+requiresToken), Handler: h.markCurate},
+		{Tool: mcpfmt.PromoteTool(url, "Writes require -token.", promote.AllPhases), Handler: h.markPromote},
 	}
 }
 
@@ -252,6 +256,14 @@ func urlDesc(host string) string {
 	return "mark:// URL, e.g. mark://host/index.md"
 }
 
+// scopeDesc describes a directory scope argument in the surface's URL form.
+func scopeDesc(host string) string {
+	if host != "" {
+		return "store root / or a directory, e.g. /demarkus/"
+	}
+	return "mark:// URL of the store root or a directory, e.g. mark://host/demarkus/"
+}
+
 func markLookupTool(host string) mcp.Tool {
 	options := append([]mcp.ToolOption{
 		mcp.WithDescription(mcpfmt.LookupDescription),
@@ -311,11 +323,19 @@ func (h *handler) markPublish(ctx context.Context, req mcp.CallToolRequest) (*mc
 }
 
 func (h *handler) markArchive(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	rawURL, err := mcpbind.URL(&req)
+	args, err := mcpbind.Archive(&req)
 	if err != nil {
 		return mcpbind.Refused(err), nil
 	}
-	return h.run(func(t *marktools.Tools) marktools.Result { return t.Archive(ctx, rawURL) })
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Archive(ctx, args) })
+}
+
+func (h *handler) markCurate(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	args, err := mcpbind.Curate(&req)
+	if err != nil {
+		return mcpbind.Refused(err), nil
+	}
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Curate(ctx, args) })
 }
 
 func (h *handler) markAppend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
@@ -346,6 +366,22 @@ func (h *handler) markBacklinks(ctx context.Context, req mcp.CallToolRequest) (*
 		return mcpbind.Refused(err), nil
 	}
 	return h.run(func(t *marktools.Tools) marktools.Result { return t.Backlinks(ctx, rawURL) })
+}
+
+func (h *handler) markPromote(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	args, err := mcpbind.Promote(&req, promote.AllPhases)
+	if err != nil {
+		return mcpbind.Refused(err), nil
+	}
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Promote(ctx, args) })
+}
+
+func (h *handler) markDoctor(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	args, err := mcpbind.Doctor(&req)
+	if err != nil {
+		return mcpbind.Refused(err), nil
+	}
+	return h.run(func(t *marktools.Tools) marktools.Result { return t.Doctor(ctx, args) })
 }
 
 func (h *handler) markGraphExport(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go

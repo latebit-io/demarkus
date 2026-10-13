@@ -7,20 +7,23 @@ import (
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 )
 
-func TestMCPToolsExactly15(t *testing.T) {
+func TestMCPToolsExactly18(t *testing.T) {
 	tools := mcpTools()
 	if len(tools) != len(mcpToolNames) {
 		t.Fatalf("mcpTools() returned %d tools, mcpToolNames lists %d — names + builders out of sync", len(tools), len(mcpToolNames))
 	}
-	// 13 tools mirror client/cmd/demarkus-mcp for cross-transport parity;
+	// 16 tools mirror client/cmd/demarkus-mcp for cross-transport parity;
 	// mark_worlds and mark_lookup_all are deliberate broker-only additions:
 	// both operate on the knowledge system rather than one world.
-	if len(tools) != 15 {
-		t.Fatalf("expected 15 tools (demarkus-mcp parity surface + 2 broker tools), got %d", len(tools))
+	if len(tools) != 18 {
+		t.Fatalf("expected 18 tools (demarkus-mcp parity surface + 2 broker tools), got %d", len(tools))
 	}
 	for i, tool := range tools {
 		if tool.Name != mcpToolNames[i] {
 			t.Errorf("tools[%d].Name = %q, mcpToolNames[%d] = %q", i, tool.Name, i, mcpToolNames[i])
+		}
+		if !mcpfmt.KnownTools[tool.Name] {
+			t.Errorf("%s is served but missing from mcpfmt.KnownTools", tool.Name)
 		}
 	}
 }
@@ -48,12 +51,12 @@ func TestMCPURLFormStatedOnceInInstructions(t *testing.T) {
 }
 
 // Wire bytes of tools/list per profile with five percent headroom; o200k is
-// about 4.1 bytes per token (2026-09-17). Raise only with a measured offset.
+// about 4.1 bytes per token (2026-10-12). Raise only with a measured offset.
 const (
-	knowledgeFullSchemaBudgetBytes = 12550
-	knowledgeLeanSchemaBudgetBytes = 9400
-	memoryFullSchemaBudgetBytes    = 8900
-	memoryLeanSchemaBudgetBytes    = 8550
+	knowledgeFullSchemaBudgetBytes = 14630
+	knowledgeLeanSchemaBudgetBytes = 13200
+	memoryFullSchemaBudgetBytes    = 12410
+	memoryLeanSchemaBudgetBytes    = 11980
 )
 
 func TestGatewayToolProfilesAndBudget(t *testing.T) {

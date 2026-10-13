@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	soulpromote "github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 )
@@ -53,7 +54,7 @@ const memoryRecallNudge = "This reads like a recall question. Before answering f
 
 const knowledgeRecallNudge = "This reads like a recall question. If it concerns shared or organizational knowledge, check the joined demarkus knowledge system first: mark_lookup the system for the subject (and fetch the relevant world's index.md / the root hub), then answer from what's recorded; or say plainly if nothing is there."
 
-const journalNudge = "This session changed files but recorded nothing to demarkus. If something here is worth remembering (a decision, a gotcha, a non-obvious why), capture it with /soul-journal (or mark_append to today's journal under /<project>/journal/<YYYY-MM-DD>.md). If it's all routine, ignore this."
+const journalNudge = "This session changed files but recorded nothing to demarkus. If something here is worth remembering (a decision, a gotcha, a non-obvious why), capture it with /soul-journal (or mark_append with route today on /<project>/). If it's all routine, ignore this."
 
 // Evaluate dispatches on the event and returns the nudge text (or empty).
 func Evaluate(in *Input) (Output, error) {
@@ -123,8 +124,8 @@ func promote(in *Input) (Output, error) {
 		return Output{}, nil
 	}
 	body, _ := args["body"].(string)
-	if strings.Contains(body, "promoted: mark://") {
-		return Output{}, nil // already back-stamped → don't re-nudge
+	if soulpromote.Marked(body) {
+		return Output{}, nil // already back-stamped: no re-nudge
 	}
 	return Output{Nudge: "New ADR published to demarkus (" + url + "). ADRs are high-signal, shared-team knowledge: if this decision is durable and useful beyond you, /promote " + url + " to lift it into the knowledge system (curate → gate → publish). If it is personal or provisional, leave it here; most personal content correctly stays put."}, nil
 }

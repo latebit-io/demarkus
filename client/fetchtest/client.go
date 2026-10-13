@@ -135,7 +135,8 @@ func (c *Client) Publish(ctx context.Context, r fetch.WriteRequest) (fetch.Resul
 	c.PublishCalls = append(c.PublishCalls, recorded(r))
 	fn := c.PublishFn
 	c.mu.Unlock()
-	result := status(protocol.StatusOK, map[string]string{"version": "1"})
+	// The server answers created to a new version; ok only to an unchanged body.
+	result := status(protocol.StatusCreated, map[string]string{"version": "1"})
 	if fn != nil {
 		var err error
 		if result, err = fn(ctx, r); err != nil {
@@ -200,7 +201,7 @@ func (c *Client) Append(ctx context.Context, r fetch.WriteRequest) (fetch.Result
 	fn := c.AppendFn
 	c.mu.Unlock()
 	if fn == nil {
-		return status(protocol.StatusOK, map[string]string{"version": "2"}), nil
+		return status(protocol.StatusCreated, map[string]string{"version": "2"}), nil
 	}
 	return fn(ctx, r)
 }

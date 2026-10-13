@@ -66,11 +66,9 @@ func memoryContextPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetP
 	}
 	text := fmt.Sprintf(`Restore working context from this memory.%s
 
-1. Call mark_worlds to learn your world name <w>; every URL below uses it.
-2. Call mark_fetch with url "mark://<w>/index.md" to load the hub.
-3. Call mark_list with url "mark://<w>/journal/" and read the newest one or two entries with mark_fetch.
-4. If the hub lists active plans or open questions, mark_fetch the one or two most relevant documents (prefer #anchor section fetches for large ones).
-5. Report a short brief: what was in progress, recent decisions, and anything flagged as next. Cite each claim as mark://<w>/<path>. If the memory is freshly seeded and has no history, say so plainly.`, focusLine)
+1. Call mark_worlds to learn your world name <w>.
+2. Call mark_fetch with url "mark://<w>/.context".
+3. Report a short brief: what was in progress, recent decisions, and anything flagged as next. Cite each claim as mark://<w>/<path>; relay every Coverage line. If the memory is freshly seeded and has no history, say so plainly.`, focusLine)
 	return mcp.NewGetPromptResult("Memory context", []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
 	}), nil
@@ -85,10 +83,9 @@ func memoryJournalPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetP
 	text := fmt.Sprintf(`Record a dated journal entry in this memory.
 
 1. Call mark_worlds to learn your world name <w>.
-2. Today's journal document is "mark://<w>/journal/<YYYY-MM-DD>.md" using today's date.
-3. %s
-4. Call mark_fetch on that URL. If it exists, mark_append a "## <short heading>" section with the entry. If it does not exist, mark_publish it with expected_version 0, a "# Journal <YYYY-MM-DD>" H1, and a metadata object with tags (subjects from the entry, plus "journal") and importance 0.4.
-5. If the entry records a decision or a lesson worth finding later, also update the matching document (/adr/, /debugging.md, /patterns.md) and keep mark://<w>/index.md current.`, entryLine)
+2. %s
+3. Call mark_append with url "mark://<w>/", route "today", body the entry, and tags naming its subjects (comma-separated).
+4. Relay the status, path, version and every note from the result. A decision or lesson worth finding later also goes to its own document (/adr/, /debugging.md, /patterns.md); keep mark://<w>/index.md current.`, entryLine)
 	return mcp.NewGetPromptResult("Memory journal", []mcp.PromptMessage{
 		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
 	}), nil

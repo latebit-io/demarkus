@@ -39,6 +39,19 @@ type Target struct {
 	Authority string
 }
 
+// name is the target as the surface shows it: the node URL, else the path.
+func (t Target) name() string {
+	if t.NodeURL != "" {
+		return t.NodeURL
+	}
+	return t.Path
+}
+
+// at names another path on the target's server.
+func (t Target) at(p string) Target {
+	return Target{Host: t.Host, Path: p, NodeURL: t.Authority + p, Authority: t.Authority}
+}
+
 // Site names the call that failed, for ErrText. A surface that words failures
 // itself may print the name as the verb; the default wording does not.
 type Site string
@@ -77,6 +90,9 @@ type Hooks struct {
 	// Graph is the graph store a call works on; nil or an error means none,
 	// and the error's text is the tool's answer.
 	Graph func(ctx context.Context) (*GraphScope, error)
+	// Style is how strictly a publish to target is held to the style rules
+	// and which guide a finding cites; nil warns and cites the baseline.
+	Style func(ctx context.Context, target Target) StyleGate
 	// Seen dedups full bodies mark_fetch already returned; nil never dedups.
 	Seen SeenStore
 	// ErrText words a failed backend call; nil says "<site> failed: <err>".

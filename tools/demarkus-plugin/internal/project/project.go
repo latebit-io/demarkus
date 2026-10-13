@@ -8,10 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/audit"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
@@ -26,9 +26,6 @@ const (
 
 // ErrNoDir is returned when neither the caller nor the harness names a project directory.
 var ErrNoDir = errors.New("no project directory: pass --dir or set the harness project variable")
-
-// slugRe is the path segment alphabet; it excludes delimiters and dot-only names.
-var slugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // Resolution is a project's slug and bound store.
 type Resolution struct {
@@ -92,8 +89,8 @@ func Slug(dir string) (string, error) {
 	return slug, nil
 }
 
-// IsSlug reports whether s can be a store path segment.
-func IsSlug(s string) bool { return slugRe.MatchString(s) }
+// IsSlug reports whether s can be a store path segment; the audit owns the rule.
+func IsSlug(s string) bool { return audit.IsSlug(s) }
 
 // Hint names the recovery for a binding the catalog no longer lists, so
 // prompts relay it instead of restating which command restores which store.

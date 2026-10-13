@@ -4,17 +4,15 @@
 
 Your soul is a versioned demarkus store behind the `demarkus-memory` MCP tools; "recall" and "record" here always mean it, never the host's built-in memory. Treat it like CLAUDE.md: consult before starting, record as you go, unprompted. Never disable Claude Code's built-in memory tool unasked.
 
-Everything lives under `/<slug>/`. Write through the bound store's tools (`mcp__<slug>__mark_*`). Ambiguous target: ask the user once.
+Everything lives under `/<slug>/`. Write through the bound store's tools (`mcp__<slug>__mark_*`); the server's instructions carry the read contract. Ambiguous target: ask the user once.
 
 ## Recall first
 
-Before "what do I know / did we decide / have we seen X" and at the start of substantive work, `mark_lookup` the project or a narrower subtree with descriptive subjects, then `mark_fetch` the best `#anchor`; `/<slug>/index.md` is the backstop for untagged content. The MCP server's instructions carry the read contract. Never fabricate recall.
+Before "what do I know / did we decide / have we seen X" and at the start of substantive work, `mark_lookup` `/<slug>/` with descriptive subjects; `/<slug>/index.md` is the backstop for untagged content. Never fabricate recall.
 
 ## Record as you go
 
-Write without prompting: decisions to `/<slug>/adr/<NNNN>-<title>.md`, bug lessons to `/<slug>/debugging.md`, patterns to `/<slug>/patterns.md`, session progress to `/<slug>/journal/<YYYY-MM-DD>.md`, and architecture, roadmap, debt, plans or open questions to their file under `/<slug>/`. Keep `/<slug>/index.md` current. The `remember` skill has the full layout.
-
-Every `mark_publish` sets `metadata.tags` and `metadata.importance` (0 to 1; 0.8 and up only for hubs and key decisions). Write-time gates (tags, destination, retention, style) say what to fix; follow them. `mark_append` keeps metadata but cannot widen tags; re-publish for that.
+Write without prompting: decisions to `/<slug>/adr/<NNNN>-<title>.md`, bug lessons to `/<slug>/debugging.md`, patterns to `/<slug>/patterns.md`, session progress through `/soul-journal`, and architecture, roadmap, debt, plans or open questions to their file under `/<slug>/`. Keep `/<slug>/index.md` current. The `remember` skill has the layout. Write-time gates (tags, destination, retention, style) say what to fix; follow them.
 
 ## Restraint
 

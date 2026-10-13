@@ -1,16 +1,18 @@
-package doctor
+package audit
 
 import (
 	"context"
 	"fmt"
+	"github.com/latebit-io/demarkus/client/mdoutline"
 	"maps"
 	"path"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/docwrite/gate"
+	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/gate"
 )
 
 // Check names in report order.
@@ -32,6 +34,7 @@ const (
 	CheckFrontmatter   = "In-body frontmatter"
 	CheckReferences    = "Dangling and unlinked references"
 	CheckLostMetadata  = "Metadata lost across versions"
+	CheckPromotion     = "Promotion candidates"
 	CheckTokenDrift    = "Token drift"
 )
 
@@ -39,7 +42,7 @@ const (
 var CheckOrder = []string{
 	CheckBrokenLinks, CheckUnresolved, CheckOrphans, CheckStaleIndex, CheckMissingHub, CheckUntitled,
 	CheckADRSequence, CheckUntagged, CheckUntyped, CheckDuplicates, CheckHubShape, CheckOversized,
-	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckReferences, CheckLostMetadata, CheckTokenDrift,
+	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckReferences, CheckLostMetadata, CheckPromotion, CheckTokenDrift,
 }
 
 // checkLinks: a target absent from the live inventory is broken when a fetch
@@ -206,7 +209,7 @@ func (a *audit) checkMetadata() {
 		if strings.TrimSpace(d.meta["tags"]) == "" {
 			a.add(CheckUntagged, p, "no tags; findable only by title or path", "re-publish with metadata.tags")
 		}
-		if gate.NavExempt(path.Base(p)) {
+		if gate.NavExempt(p) {
 			continue
 		}
 		if t := d.meta["type"]; t == "" || t == "Document" {
@@ -277,7 +280,7 @@ func (a *audit) checkReferences() {
 		if !live(d.status) {
 			continue
 		}
-		mentions := adrReferenceRe.FindAllStringSubmatch(stripFences(d.body), -1)
+		mentions := adrReferenceRe.FindAllStringSubmatch(stripCode(d.body), -1)
 		if len(mentions) == 0 {
 			continue
 		}
@@ -371,6 +374,27 @@ func (a *audit) checkLostMetadata(ctx context.Context) {
 	}
 }
 
+// checkPromotion (on request): live documents an adr directory, a shared
+// type or high importance marks as team knowledge; hubs and staging
+// directories never qualify. The promoted ones (tag or marker) are counted.
+func (a *audit) checkPromotion() {
+	for _, p := range a.order {
+		d := a.docs[p]
+		if !live(d.status) || gate.NavExempt(p) {
+			continue
+		}
+		why := a.layout.Qualifies(p, d.meta)
+		if why == "" {
+			continue
+		}
+		if promote.IsPromoted(d.meta, d.body) {
+			a.promoted++
+			continue
+		}
+		a.add(CheckPromotion, p, why, "/promote "+p)
+	}
+}
+
 func describeMeta(m map[string]string) string {
 	parts := []string{strconv.Itoa(len(protocol.SplitTags(m["tags"]))) + " tags"}
 	for _, k := range []string{"importance", "type"} {
@@ -388,24 +412,18 @@ func statusOrErr(status string, err error) string {
 	return status
 }
 
-// stripFences blanks fenced code blocks so ADR mentions in examples do not count.
-func stripFences(body string) string {
-	var out strings.Builder
-	out.Grow(len(body))
-	fence := ""
-	for line := range strings.SplitSeq(body, "\n") {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case fence == "" && (strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")):
-			fence = trimmed[:3]
-		case fence != "" && strings.HasPrefix(trimmed, fence):
-			fence = ""
-		case fence == "":
-			out.WriteString(line)
+// stripCode blanks code (fences, indented blocks, spans) so ADR mentions in
+// examples do not count.
+func stripCode(body string) string {
+	out := []byte(body)
+	for _, seg := range mdoutline.CodeSegments(body) {
+		for i := seg.Start; i < seg.Stop; i++ {
+			if out[i] != '\n' {
+				out[i] = ' '
+			}
 		}
-		out.WriteByte('\n')
 	}
-	return out.String()
+	return string(out)
 }
 
 func sortedUnique(in []string) []string {

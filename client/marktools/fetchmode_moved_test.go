@@ -394,7 +394,7 @@ func TestLookup_TagCapAndVerbose(t *testing.T) {
 func TestPublish_NarrowingNote(t *testing.T) {
 	// A fresh backend per publish: it stores each publish as the new current
 	// version, which would otherwise conflict the next case.
-	publish := func(version int, meta map[string]any, onConflict string) string {
+	publish := func(version int, meta map[string]string, onConflict string) string {
 		t.Helper()
 		current := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK,
 			Metadata: map[string]string{"version": "3", "etag": "e", "tags": "a,b,c", "type": "Note", "title": "T"}, Body: "x"}}
@@ -412,7 +412,7 @@ func TestPublish_NarrowingNote(t *testing.T) {
 		}
 		tools := (&clientSurface{DefaultHost: "mark://example.com", Token: "test"}).tools(t, backend)
 		result := tools.Publish(context.Background(), marktools.PublishArgs{
-			URL: "mark://example.com/doc.md", Body: "y", ExpectedVersion: &version,
+			URL: "mark://example.com/doc.md", Body: "# Doc\n", ExpectedVersion: &version,
 			Metadata: meta, OnConflict: onConflict,
 		})
 		if result.IsError {
@@ -421,16 +421,16 @@ func TestPublish_NarrowingNote(t *testing.T) {
 		return result.Text
 	}
 	for _, mode := range []string{"fail", "merge"} {
-		narrowed := publish(3, map[string]any{"tags": "a", "title": "T"}, mode)
+		narrowed := publish(3, map[string]string{"tags": "a", "title": "T"}, mode)
 		if !strings.HasPrefix(narrowed, "status: ok\nversion: 4\n") ||
 			!strings.Contains(narrowed, "\nnote: this publish dropped tags b, c and keys type=Note carried by v3;") {
 			t.Errorf("%s: narrowing note missing:\n%s", mode, narrowed)
 		}
 	}
-	if full := publish(3, map[string]any{"tags": "c,b,a", "title": "T", "type": "Note"}, "fail"); strings.Contains(full, "note:") {
+	if full := publish(3, map[string]string{"tags": "c,b,a", "title": "T", "type": "Note"}, "fail"); strings.Contains(full, "note:") {
 		t.Errorf("complete metadata noted:\n%s", full)
 	}
-	if created := publish(0, map[string]any{"tags": "a"}, "fail"); strings.Contains(created, "note:") {
+	if created := publish(0, map[string]string{"tags": "a"}, "fail"); strings.Contains(created, "note:") {
 		t.Errorf("create noted:\n%s", created)
 	}
 }

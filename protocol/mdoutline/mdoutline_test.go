@@ -279,6 +279,19 @@ func TestOpeningParagraph(t *testing.T) {
 	}
 }
 
+func TestCodeSegments(t *testing.T) {
+	body := "a `x` b\n\n~~~\n```\nin\n~~~\n\n    indented\n\n``y ` z`` end\n````\nq\n``` o\n````\n"
+	segs := CodeSegments(body)
+	got := make([]string, 0, len(segs))
+	for _, s := range segs {
+		got = append(got, body[s.Start:s.Stop])
+	}
+	want := []string{"x", "```\n", "in\n", "indented\n", "y ` z", "q\n", "``` o\n"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("CodeSegments = %q, want %q", got, want)
+	}
+}
+
 func TestAnchors(t *testing.T) {
 	got := Anchors(sampleDoc)
 	want := []string{"title", "setup", "details", "usage"}

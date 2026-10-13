@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
@@ -86,6 +87,13 @@ func evaluate(ctx context.Context, state backend.Reader, write storefmt.Prepared
 	if write.Path == publishpolicy.DocumentPath {
 		if err := publishpolicy.Parse(string(write.Content)).Validate(); err != nil {
 			return fmt.Errorf("%w: %w: candidate policy: %v", backend.ErrRejected, ErrInvalidPolicy, err)
+		}
+	}
+	// A template with a bad layout line would silently route writes to the
+	// default directories; refuse it the way a bad policy is refused.
+	if write.Path == layout.DocumentPath {
+		if _, err := layout.Parse(string(write.Content)); err != nil {
+			return fmt.Errorf("%w: %w: candidate template: %v", backend.ErrRejected, ErrInvalidPolicy, err)
 		}
 	}
 	policy, err := Current(ctx, state, require)

@@ -3,6 +3,7 @@ package gateway
 import (
 	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -32,9 +33,12 @@ var mcpToolNames = []string{
 	"mark_graph_export",
 	"mark_graph_publish",
 	"mark_worlds",
+	"mark_doctor",
+	"mark_curate",
+	"mark_promote",
 }
 
-// mcpTools returns 13 direct-MCP parity tools plus broker-only mark_worlds and
+// mcpTools returns the direct-MCP parity tools plus broker-only mark_worlds and
 // mark_lookup_all, which operate on the knowledge system rather than one world.
 func mcpTools() []mcp.Tool {
 	return []mcp.Tool{
@@ -53,6 +57,9 @@ func mcpTools() []mcp.Tool {
 		markGraphExportTool(),
 		markGraphPublishTool(),
 		markWorldsTool(),
+		markDoctorTool(),
+		markCurateTool(),
+		markPromoteTool(promote.KnowledgePhases),
 	}
 }
 
@@ -92,6 +99,14 @@ func markPublishTool() mcp.Tool { return mcpfmt.PublishTool(mcpURLDesc, "") }
 func markAppendTool() mcp.Tool { return mcpfmt.AppendTool(mcpURLDesc, "") }
 
 func markArchiveTool() mcp.Tool { return mcpfmt.ArchiveTool(mcpURLDesc, "") }
+
+func markDoctorTool() mcp.Tool {
+	return mcpfmt.DoctorTool("world root or a directory, e.g. mark://team-a/ or mark://team-a/docs/", "")
+}
+
+func markCurateTool() mcp.Tool { return mcpfmt.CurateTool(mcpURLDesc, "") }
+
+func markPromoteTool(phases []string) mcp.Tool { return mcpfmt.PromoteTool(mcpURLDesc, "", phases) }
 
 func markDiscoverTool() mcp.Tool {
 	return mcp.NewTool("mark_discover",

@@ -2,6 +2,7 @@ package marktools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -32,6 +33,9 @@ func (t *Tools) Fetch(ctx context.Context, args FetchArgs) Result {
 	target, bad := t.resolve(ctx, docURL)
 	if bad != nil {
 		return *bad
+	}
+	if isContextPath(target.Path) {
+		return t.Context(ctx, docURL)
 	}
 	result, err := t.backend.Fetch(ctx, fetch.FetchRequest{
 		Host: target.Host, Path: target.Path, Token: t.readToken(ctx, target.Host),
@@ -124,6 +128,13 @@ func (t *Tools) ReadResource(ctx context.Context, rawURI string) (Resource, erro
 	target, err := t.hooks.Resolve(ctx, docURL)
 	if err != nil {
 		return Resource{}, fmt.Errorf("invalid resource URI %q: %w", rawURI, err)
+	}
+	if isContextPath(target.Path) {
+		primer := t.Context(ctx, docURL)
+		if primer.IsError {
+			return Resource{}, errors.New(primer.Text)
+		}
+		return Resource{MIMEType: "text/markdown", Text: primer.Text}, nil
 	}
 	result, err := t.backend.Fetch(ctx, fetch.FetchRequest{
 		Host: target.Host, Path: target.Path, Token: t.readToken(ctx, target.Host),

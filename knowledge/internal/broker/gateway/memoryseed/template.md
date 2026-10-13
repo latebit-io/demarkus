@@ -7,9 +7,22 @@ The canonical layout for this memory. Agents route new knowledge to these docume
 - A decision worth remembering: `/adr/<NNNN>-<title>.md`, numbered sequentially, with a `Decision` type in metadata. Add a row to the hub's Decisions section.
 - A lesson from a bug or investigation: `/debugging.md` (append a uniquely titled section). Often the highest recall value.
 - A pattern or convention learned: `/patterns.md`.
-- Session progress and working notes: `/journal/<YYYY-MM-DD>.md`, one document per day, appended through the day.
-- A plan for a larger piece of work: `/plans/<name>.md`, linked from the hub's Active section.
+- Session progress and working notes: one document per day, `<YYYY-MM-DD>.md` under the `journal:` directory below (`journal/` by default), appended through the day.
+- A plan for a larger piece of work: `<name>.md` under the `plans:` directory below (`plans/` by default), linked from the hub's Active section.
 - Reflections and ideas that fit nowhere else: `/thoughts.md`.
+
+## Layout
+
+Mechanics read these names (the journal route, the context primer, the doctor's promotion sweep); change a line to move a directory. Directories are one path segment; lists are comma-separated. A moved journal needs the matching `staging:` entry, or its entries can surface as promotion candidates.
+
+```text
+journal: journal/
+plans: plans/
+roadmap: roadmap.md
+staging: journal, thoughts, debt, notes, scratch
+promote_types: Decision, Architecture, Guideline, Guide, Reference, Pattern
+promote_floor: 0.8
+```
 
 ## Rules
 

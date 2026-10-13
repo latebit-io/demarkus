@@ -136,7 +136,7 @@ the markdown `body`. Identical wire shape to direct-QUIC `FETCH`.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `url` | string | yes | `mark://{worldName}/{path}` |
+| `url` | string | yes | `mark://{worldName}/{path}`; `mark://{worldName}/<dir>/.context` reads a session primer instead: the directory's `index.md`, its three newest journal entries, the roadmap when present and the plans listing (names from the world's template layout), each body capped, with a Coverage section for what could not be read; a directory whose `index.md` is absent or archived answers one `status: new` or `status: archived` line instead. The same path works as an MCP resource. |
 
 #### `mark_explore`
 
@@ -215,6 +215,37 @@ world fails, the tool returns an error.
 | `limit` | number | no | Global max results (default 10, cap 1000). |
 | `match` | string | no | `catalog` (default) or `body`. Body rows merge by the same ordinal rule and carry a `Snippet` column; worlds that answered from their catalog are listed in a note. |
 
+#### Template layout
+
+A world's `/.well-known/demarkus/template.md` may carry a `key: value`
+block the mechanics read: `journal:` and `plans:` (directories),
+`roadmap:` (a document), `staging:` (directories whose content never
+promotes), `promote_types:` and `promote_floor:` (what the doctor's
+promotion sweep counts as shared knowledge). Absent keys keep the
+defaults, which are the block the memory broker seeds. A publish of the
+template with an invalid line is refused like an invalid policy; a reader
+that cannot fetch the template fails (the audit, the journal route) or
+notes it under Coverage (the primer).
+
+#### `mark_doctor`
+
+Read-only hygiene audit of one world or a directory under it: broken
+and unresolved links, orphans, stale index entries, missing hubs,
+untitled, untagged and untyped documents, ADR sequence and references,
+duplicate content, hub and document shape, style, in-body frontmatter.
+The audit reads every document in scope once within fixed bounds; the
+report's Coverage section lists every bound hit and every failed call,
+so an empty findings list is clean only when Coverage says `complete`.
+An audit that cannot be trusted (scope not found, unauthorized,
+inventory bound) is a tool error. The memory broker scopes it to the
+caller's world.
+
+| Param | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `url` | string | yes | `mark://{worldName}/` or a directory under it. |
+| `deep` | boolean | no | Also walk version history for metadata lost across versions (bounded). |
+| `promotion` | boolean | no | Also list promotion candidates: decision records, shared types and high-importance documents not yet promoted; staging directories excluded. |
+
 ### Write
 
 #### `mark_publish`
@@ -226,6 +257,13 @@ same lines) for the agent to verify, then re-call with
 `expected_version` set to the candidate's `publish-at-version`. Pass
 `on_conflict: "fail"` for the raw conflict envelope with no merge
 attempt.
+
+Every publish is held to the style rules (one `# H1` with a summary
+under it, unique status-free headings, no frontmatter fence, no em
+dashes, hubs as links plus one line each, a body under the 8 KB fetch
+threshold unless it is a journal). The write lands and a
+`note:` line names what to fix; a knowledge world cites
+`mark://root/.well-known/demarkus/style.md`.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -244,18 +282,119 @@ the current version (one extra round trip, invisible to the agent).
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `url` | string | yes | `mark://{worldName}/{path}` |
+| `url` | string | yes | `mark://{worldName}/{path}`; with `route: "today"` a directory, `mark://{worldName}/` or a project under it. |
 | `body` | string | yes | Markdown to append. |
 | `expected_version` | number | no | Pass explicitly to skip the auto-resolve round trip. |
+| `route` | string | no | `today`: the entry goes to `<dir><journal>/<YYYY-MM-DD>.md` (UTC; the directory from the world's template layout, `journal/` by default), created with `journal` tags, `type: Journal` and importance 0.4 when absent. An entry already present as its own block answers `status: present` without writing. The directory hub gains a link to the configured journal directory and, under a project, the root hub a link to the project; each hub failure is a `note:`, the entry stays committed. |
+| `tags` | string | no | With `route: "today"`: comma-separated subjects of the entry, added to the journal's tags (widened by a republish when the day already exists). |
 
 #### `mark_archive`
 
 Archive a document. Archived documents return `archived` status on
-FETCH; version history is preserved.
+FETCH; version history is preserved. With `recursive: true` the url is
+a directory and every live document under it is archived in listing
+order (bounded: 100 LIST calls, 500 documents; the world root is
+refused), each reported with its version or its failure. After either
+form the ancestor hubs (`index.md` up to the root) drop every bullet
+whose links all point at what was archived; a bullet with a link
+elsewhere stays. A hub that could not be edited is a `note:`, the
+archive stands. A directory bullet goes only when everything under
+the directory archived.
+
+| Param | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `url` | string | yes | `mark://{worldName}/{path}`, or a directory with its slash when recursive. |
+| `recursive` | boolean | no | Archive every live document under the directory url. |
+
+#### `mark_curate`
+
+Bring one document into shape. Without `apply` it is a read: the
+style findings on the document, the mechanical change the tool
+proposes, the findings that need the agent after it, the inbound
+anchored links to repoint (read from the documents the graph store
+says link here; a cold store is a `note:`), a proposal hash, then
+every proposed body in full. Under 8 KB the proposal is an edit in
+place: a frontmatter fence lifted into metadata, em dashes replaced,
+status tokens moved out of headings onto a `Status:` line, the
+metadata description inserted as the missing summary. At or over
+8 KB it is a split: every second-level section of weight moves
+verbatim to `<path without .md>/<slug>.md` (its headings kept, so
+anchors survive; it links back to the hub; tags are the parent's name,
+its slug and the parent tags it mentions), the document keeps its
+path as the hub with its preamble, a `Topics` list and its short
+sections, and its tags lose the ones only a topic mentions.
+
+With `apply: true` and the hash a report returned, the tool recomputes
+the proposal from the current head and refuses when the hash differs.
+It then preflights every topic path (absent: created at version 0;
+identical to the proposal: skipped; carrying `curated-from` naming
+this document, from an earlier apply the hub conflict interrupted,
+with its `curated-digest` still matching the body: updated at its
+version; edited since, or anything else: refused before any write),
+publishes the topics, then the document at the reported version with
+`on_conflict: fail`. A failure names what landed; a report rerun after
+it resumes.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `url` | string | yes | `mark://{worldName}/{path}` |
+| `apply` | boolean | no | Write the proposal (default false: report only). |
+| `proposal` | string | no | The hash from the report; required with `apply`. |
+
+#### `mark_promote`
+
+One phase of a promotion, the client-composed bridge from a personal
+store to a shared world. The memory broker serves the source phases
+(`stage`, `stamp`, `refresh`), the knowledge broker the target phases
+(`dry_run`, `apply`); `demarkus-mcp` serves all five, since one host can
+play either part. The agent distills between `stage` and `dry_run`, a
+human approves between `dry_run` and `apply`. Every write is bound to
+the `packet` hash the report before it returned; a changed document or
+draft refuses.
+
+- `stage` reads the source: status (`staged`, or `promoted` with its
+  `promoted-via`, `promoted` and `mode` lines), whether the world's
+  layout marks it as shared (`candidate:`), its metadata, the packet,
+  then the body.
+- `dry_run` checks the distilled draft at `url` against the world: the
+  caller's write grant (`status: not-permitted`), the world's
+  `/.well-known/demarkus/policy.md` (required axes and fields as
+  findings; an unreadable policy is `policy-unavailable`), the style
+  rules, and the catalog: a body-mode lookup on the draft's title, then
+  a catalog lookup on its subject tags when the title found nothing
+  (a page that fills twice is `incomplete-dedup`). Candidates are the
+  target path, a same-title row (both shown with their body, capped at
+  4 KB) and a row sharing two subject tags; other rows are `related:`.
+  `version:` is the target's current version, 0 when it does not exist.
+- `apply` rechecks the draft against the packet and the policy, holds it
+  to the style gate as `mark_publish` does, and publishes at that
+  version with `on_conflict: fail`, `promoted-from` set to `source`
+  when given, agent and user stamped.
+- `stamp` writes `promoted-via: <via>` and `promoted: <target>` under
+  the source's H1 and widens its tags with `promoted`, at the head with
+  one retry. With `stub: true` the body becomes the title, the markers
+  and the summary (the description, else the opening paragraph); a stub
+  refuses when the source changed since `stage`, a full stamp lands on
+  the current body with a `note:`.
+- `refresh` compares the source's marker with the live copy the agent
+  fetched (`body`, `target` as `<url>@v<N>`): `in-sync`, `behind` (the
+  live version is under the marker; nothing to write), `unpromoted`, or
+  `stale` with the proposed body and a packet. A stub takes the live
+  opening paragraph as its summary; a full source takes the live body.
+  With the packet the body is written at the reported version, never
+  retried.
+
+| Param | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `url` | string | yes | The source (`stage`, `stamp`, `refresh`) or the knowledge target (`dry_run`, `apply`). |
+| `phase` | string | yes | `stage`, `dry_run`, `apply`, `stamp` or `refresh`; a broker lists the ones it serves. |
+| `body` | string | no | `dry_run`, `apply`: the distilled draft. `refresh`: the live knowledge body. |
+| `metadata` | object | no | `dry_run`, `apply`: the draft's metadata (tags, importance, type, the policy's axes). |
+| `source` | string | no | `dry_run`, `apply`: the origin recorded as `promoted-from`. |
+| `target` | string | no | `stamp`, `refresh`: the knowledge copy as `<url>@v<N>`. |
+| `via` | string | no | `stamp`: the knowledge server's name, recorded as `promoted-via`. |
+| `stub` | boolean | no | `stamp`: reduce the body to its title and summary (default false). |
+| `packet` | string | no | `apply`, `stamp`, `refresh`: the packet hash from the report before it. |
 
 ### Federation reads
 

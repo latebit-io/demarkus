@@ -6,26 +6,29 @@ description: Sweep the soul for promotion candidates (high-signal, durable, not-
 
 Ranked shortlist of soul docs worth `/promote`; never promotes here.
 
-`$ARGUMENTS` optionally scopes to one project slug; empty means every project. Before the first scoped `mark_lookup`/`mark_list`, require `^[a-z0-9][a-z0-9._-]*$`; anything else (including `/`, `?`, `#`, `%`, `..`) → report the invalid slug and stop; never pass it into a path.
+`$ARGUMENTS` optionally scopes to one project slug; empty means every project.
 
-Set a command-wide deadline three minutes ahead before the first tool call. Check it before every call; when it expires, stop starting work, preserve completed results, list skipped scope, mark the scan partial.
+## Soul and project
+
+Slug and bound soul: the session header `Project slug: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
+
+```bash
+"$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
+```
+
+`<project-dir>`: `"${CLAUDE_PROJECT_DIR}"`, or the named directory as one POSIX-safe shell word. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (`mcp__<store>__mark_*`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
 
 ## Steps
 
-1. **Detection gate.** Run `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote` via Bash. Non-zero exit or malformed output is a registry failure: surface it and stop. `NONE` from a successful call → nowhere to promote to; say so and stop. Otherwise note the destinations (`knowledge <slug>` and/or `target <slug> <path>`); candidates can be promoted to any via `/promote`.
+1. **Detection gate.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: registry failure, surface it, stop. `NONE`: nowhere to promote to; say so, stop. Otherwise note the destinations (`knowledge <slug>` and/or `target <slug> <path>`); `/promote` reaches any of them.
 
-2. **Gather the already-promoted set (to exclude).** `mark_lookup` the soul with `filter=tag=promoted`, `limit=1000` (optionally scoped to `/<slug>/`). On failure, report the exact error, mark the scan incomplete, and stop; never treat the exclusion set as empty. `mark_lookup` has no cursor: exactly 1000 rows means the set may be truncated, so report the scan as partial and stop before claiming any candidates. These already live in the catalog; never re-list them. Legacy docs may carry a `promoted: <target>@v<N>` marker line without the tag: during triage (step 4), drop any fetched candidate whose body carries a valid marker.
+2. **Sweep.** `mark_doctor` through the store's server with `promotion: true`; `url` is `/<slug>/` or `/` (a broker store: `mark://<world>/` from `mark_worlds`, then `/<slug>/` under it). Its `Promotion candidates` section lists each candidate with its reason; already promoted and staging documents are excluded, and the summary line counts the promoted. Tool error: surface it verbatim, stop. A Coverage line other than `complete`: the scan is partial; say which scope was not read.
 
-3. **Find high-signal candidates.** Within scope, surface documents whose *type* suggests shared-team knowledge, skipping the already-promoted set. `mark_list` lists one directory: keep a directory queue seeded with the scope, follow each response's `next-cursor` as `cursor` until `complete: true`, enqueue every returned subdirectory within scope, repeat until the queue is empty or the sweep budget is reached; an unlisted subdirectory means partial coverage. Track visited directory/cursor pairs; require every incomplete page to return a non-empty, different, unseen cursor. Budget: 250 list calls, 200 listed paths, 40 `mark_fetch` calls with `force: true`, prioritizing ADRs, architecture, guidelines, patterns, high importance, explicit sharing tags. Rank only successful full-body responses; reject outline-only or incomplete content, list that path as unassessed, mark the scan partial. Surface every `mark_lookup`/`mark_list`/`mark_fetch` failure and stop or mark the affected scope partial; never convert an inventory failure into an empty shortlist. If any budget is exceeded or cursor progress fails, report a partial scan with the applied limits; never imply exhaustive coverage.
-   - **ADRs** (`/<slug>/adr/*.md`): decisions, highest-signal type. List via `mark_lookup`/`mark_list`.
-   - **Architecture and key patterns**: `/<slug>/architecture.md`, durable `patterns.md`/`guidelines.md` sections, any doc tagged for sharing or rated high `importance`.
-   - Skip journals, thoughts, debt, day-to-day notes; staging-tier by nature.
+3. **Triage lightly.** Judge each candidate cheaply from its report line; `mark_fetch` with `force: true` at most 10 to decide: durable? useful beyond you? plausibly not in the catalog? Drop obvious failures; be ruthless; most soul content stays personal. Real triage, distill and dedup happen inside `/promote`. A fetch failure: list the path as unassessed.
 
-4. **Lightly triage each (not the full cascade).** Per fetched candidate, judge cheaply: durable? useful beyond you? plausibly not already in the catalog? Drop obvious failures; be ruthless; most soul content stays personal. Real triage/distill/dedup happens inside `/promote`; here only a worthwhile shortlist. Surface fetch failures; list affected paths as unassessed.
+4. **Present.** Plain text, highest-signal first:
 
-5. **Present the ranked list.** Plain text, highest-signal first:
-
-    ```text
+   ```text
    ## Promotion candidates: <scope>
 
    1. /<slug>/adr/0007-foo.md: <one line: why it's a candidate>
@@ -35,11 +38,9 @@ Set a command-wide deadline three minutes ahead before the first tool call. Chec
    Already promoted (excluded): N docs.   Run /promote <path> on any of the above.
    ```
 
-   Nothing qualifies **and coverage was complete** → say so plainly; an empty sweep is healthy. Any inventory/fetch failure, budget/deadline truncation, or unassessed path → report a partial scan; never turn incomplete coverage into a healthy empty result.
+   Nothing qualifies and Coverage was `complete`: say so plainly; an empty sweep is healthy. A partial scan or an unassessed path is reported as such, never as a healthy empty result.
 
 ## Don't
 
 - Don't promote anything here; `/promote` runs the gate per doc.
-- Don't re-list already-promoted docs (the `tag=promoted` set from step 2).
 - Don't pad the list. A ruthless shortlist is the point; if most of the soul qualified, the bar is wrong.
-- Don't scan toward a non-existent destination; stop at the detection gate only when no brokered system or plain remote target is configured.

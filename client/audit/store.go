@@ -1,4 +1,4 @@
-package doctor
+package audit
 
 import (
 	"context"
@@ -7,10 +7,18 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
-// ClientStore adapts a Mark client to the Store interface for one host and token.
+// Reader is the part of a Mark client an audit reads through; *fetch.Client
+// and the MCP surfaces' backends both satisfy it.
+type Reader interface {
+	Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error)
+	List(ctx context.Context, r fetch.ListRequest) (fetch.Result, error)
+	Versions(ctx context.Context, r fetch.VersionsRequest) (fetch.Result, error)
+}
+
+// ClientStore adapts a Reader to the Store interface for one host and token.
 type ClientStore struct {
-	Client *fetch.Client
-	Host   string // host:port
+	Client Reader
+	Host   string // host:port, or a world name behind the broker
 	Token  string
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -48,6 +49,12 @@ func TestEnforce(t *testing.T) {
 	}
 	if _, err := gated.WriteVersion(publishpolicy.DocumentPath, 1, []byte("strictness: nonsense\n"), policyMeta); !errors.Is(err, writepolicy.ErrInvalidPolicy) {
 		t.Errorf("unenforceable candidate policy = %v, want ErrInvalidPolicy", err)
+	}
+	if _, err := gated.WriteVersion(layout.DocumentPath, 0, []byte("# T\n\njournal: Bad Dir\n"), policyMeta); !errors.Is(err, writepolicy.ErrInvalidPolicy) {
+		t.Errorf("template with an invalid layout line = %v, want ErrInvalidPolicy", err)
+	}
+	if _, err := gated.WriteVersion(layout.DocumentPath, 0, []byte("# T\n\njournal: log/\n"), map[string]string{"tags": "domain:x"}); err != nil {
+		t.Errorf("template with a valid layout line = %v", err)
 	}
 	if _, err := gated.Archive(publishpolicy.DocumentPath, true); !errors.Is(err, writepolicy.ErrInvalidPolicy) || !errors.Is(err, backend.ErrRejected) {
 		t.Errorf("archiving a required policy = %v, want a rejection", err)

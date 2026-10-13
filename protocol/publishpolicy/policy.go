@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/directives"
 )
 
 // SeedAgent is the agent metadata value on a policy a knowledge server seeded
@@ -38,25 +39,12 @@ type Policy struct {
 
 // Parse extracts the first occurrence of each supported policy directive.
 func Parse(body string) Policy {
-	var policy Policy
-	var strictnessSet, tagAxesSet, fieldsSet bool
-
-	for line := range strings.SplitSeq(body, "\n") {
-		line = strings.TrimLeft(line, " \t")
-		switch {
-		case !strictnessSet && strings.HasPrefix(line, "strictness:"):
-			policy.Strictness = Strictness(strings.TrimSpace(line[len("strictness:"):]))
-			strictnessSet = true
-		case !tagAxesSet && strings.HasPrefix(line, "require_tags:"):
-			policy.RequiredTagAxes = splitList(strings.TrimSpace(line[len("require_tags:"):]))
-			tagAxesSet = true
-		case !fieldsSet && strings.HasPrefix(line, "require_fields:"):
-			policy.RequiredFields = splitList(strings.TrimSpace(line[len("require_fields:"):]))
-			fieldsSet = true
-		}
+	found := directives.First(body)
+	return Policy{
+		Strictness:      Strictness(found["strictness"]),
+		RequiredTagAxes: splitList(found["require_tags"]),
+		RequiredFields:  splitList(found["require_fields"]),
 	}
-
-	return policy
 }
 
 func splitList(value string) []string {

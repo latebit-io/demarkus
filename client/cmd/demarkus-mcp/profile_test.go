@@ -8,10 +8,10 @@ import (
 )
 
 // Wire bytes of tools/list per profile with five percent headroom; o200k is
-// about 4.1 bytes per token (2026-09-17). Raise only with a measured offset.
+// about 4.1 bytes per token (2026-10-12). Raise only with a measured offset.
 const (
-	fullSchemaBudgetBytes = 10700
-	leanSchemaBudgetBytes = 7800
+	fullSchemaBudgetBytes = 12970
+	leanSchemaBudgetBytes = 11510
 )
 
 func profileSchemas(profile string) []mcp.Tool {
@@ -27,8 +27,8 @@ func profileSchemas(profile string) []mcp.Tool {
 func TestToolProfiles(t *testing.T) {
 	full := profileSchemas(mcpfmt.ProfileFull)
 	lean := profileSchemas(mcpfmt.ProfileLean)
-	if len(full) != 13 {
-		t.Fatalf("full profile = %d tools, want 13", len(full))
+	if len(full) != 16 {
+		t.Fatalf("full profile = %d tools, want 16", len(full))
 	}
 	if len(lean) != len(full)-len(mcpfmt.AdvancedTools) {
 		t.Fatalf("lean profile = %d tools, want %d", len(lean), len(full)-len(mcpfmt.AdvancedTools))
@@ -36,6 +36,11 @@ func TestToolProfiles(t *testing.T) {
 	for _, tool := range lean {
 		if mcpfmt.AdvancedTools[tool.Name] {
 			t.Errorf("lean profile exposes advanced tool %s", tool.Name)
+		}
+	}
+	for _, tool := range full {
+		if !mcpfmt.KnownTools[tool.Name] {
+			t.Errorf("%s is served but missing from mcpfmt.KnownTools", tool.Name)
 		}
 	}
 }

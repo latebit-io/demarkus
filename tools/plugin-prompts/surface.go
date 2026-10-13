@@ -14,8 +14,8 @@ import (
 
 var toolNamePattern = regexp.MustCompile(`\bmark_[a-z_]+\b`)
 
-// checkToolSurface fails when a prompt template references a tool outside
-// the lean profile, which is the surface the plugin launcher exposes.
+// checkToolSurface fails when a prompt template references a tool no surface
+// serves, or one outside the lean profile the plugin launcher exposes.
 func checkToolSurface(root string) error {
 	var offenders []string
 	source := filepath.Join(root, "plugins", "prompt-source")
@@ -36,7 +36,10 @@ func checkToolSurface(root string) error {
 		}
 		for i, line := range strings.Split(string(raw), "\n") {
 			for _, name := range toolNamePattern.FindAllString(line, -1) {
-				if mcpfmt.AdvancedTools[name] {
+				switch {
+				case !mcpfmt.KnownTools[name]:
+					offenders = append(offenders, fmt.Sprintf("%s:%d references unknown %s", filepath.ToSlash(rel), i+1, name))
+				case mcpfmt.AdvancedTools[name]:
 					offenders = append(offenders, fmt.Sprintf("%s:%d references %s", filepath.ToSlash(rel), i+1, name))
 				}
 			}
@@ -48,7 +51,7 @@ func checkToolSurface(root string) error {
 	}
 	if len(offenders) > 0 {
 		sort.Strings(offenders)
-		return fmt.Errorf("prompt templates reference tools outside the lean profile:\n  %s\nadd the tool to the lean profile or drop the reference", strings.Join(offenders, "\n  "))
+		return fmt.Errorf("prompt templates reference tools no plugin surface serves:\n  %s\nadd the tool to mcpfmt.KnownTools and the lean profile, or drop the reference", strings.Join(offenders, "\n  "))
 	}
 	return nil
 }

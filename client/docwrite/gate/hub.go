@@ -2,6 +2,7 @@ package gate
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -11,16 +12,18 @@ import (
 	"github.com/yuin/goldmark/text"
 
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/mdoutline"
 )
 
 // Hub rules from the style guide's "Hubs" section: a link page stays under
 // one fetch, links plus one line each, about forty outbound documents.
 const (
-	hubSizeLimit    = 8 * 1024 // demarkus-mcp and the broker outline a body at or over this
-	hubBulletMax    = 200      // visible characters per bullet, link destinations stripped
-	hubLinkMax      = 40       // distinct outbound documents before a second-level hub
-	hubMinLinkItems = 5        // fewer link bullets than this is a list, not a link page
-	hubLinkShare    = 0.8      // share of text lines that are link bullets on a link page
+	// HubBulletMax is the visible characters per bullet, link destinations
+	// stripped; a generated bullet stays under it by construction.
+	HubBulletMax    = 200
+	hubLinkMax      = 40  // distinct outbound documents before a second-level hub
+	hubMinLinkItems = 5   // fewer link bullets than this is a list, not a link page
+	hubLinkShare    = 0.8 // share of text lines that are link bullets on a link page
 )
 
 var (
@@ -41,15 +44,16 @@ type bullet struct {
 	multiBlock bool
 }
 
-// hubProblems applies the hub rules when the document is a hub: index.md at
+// HubProblems applies the hub rules when the document is a hub: index.md at
 // any depth, or a body that is mostly link bullets. Reads only the body.
-func hubProblems(leaf, body string) []string {
+func HubProblems(url, body string) []string {
+	leaf := path.Base(url)
 	items, textLines := listItems(body)
 	if leaf != "index.md" && !linkPage(items, textLines) {
 		return nil
 	}
 	var problems []string
-	if len(body) >= hubSizeLimit {
+	if len(body) >= mdoutline.OutlineThreshold {
 		problems = append(problems, fmt.Sprintf(
 			"hub body is %d KB, at or over the 8 KB fetch threshold, so a plain fetch returns an outline; split it into a link hub plus topic files", len(body)/1024))
 	}
@@ -93,7 +97,7 @@ func bulletOK(b bullet) bool {
 	if b.multiBlock || b.bold {
 		return false
 	}
-	if utf8.RuneCountInString(b.visible) > hubBulletMax {
+	if utf8.RuneCountInString(b.visible) > HubBulletMax {
 		return false
 	}
 	return !hubStatusKey.MatchString(b.outside) && !hubISODate.MatchString(b.outside) && !hubPRNumber.MatchString(b.outside)
@@ -119,8 +123,7 @@ func outboundDocs(body string) int {
 func listItems(body string) (items []bullet, textLines int) {
 	src := []byte(body)
 	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
-	// The callback never returns an error, so Walk cannot either.
-	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) { //nolint:errcheck // the callback never returns an error
 		if !entering {
 			return ast.WalkContinue, nil
 		}

@@ -42,9 +42,30 @@ func (g *Gateway) handleMarkAppend(ctx context.Context, req mcp.CallToolRequest)
 }
 
 func (g *Gateway) handleMarkArchive(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	raw, err := mcpbind.URL(&req)
+	args, err := mcpbind.Archive(&req)
 	if err != nil {
 		return mcpbind.Refused(err), nil
 	}
-	return g.run(func(t *marktools.Tools) marktools.Result { return t.Archive(ctx, raw) })
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.Archive(ctx, args) })
+}
+
+// mark_curate reads like a fetch and, with apply, writes under the world's
+// write grant; the tenant gate scopes its url.
+func (g *Gateway) handleMarkCurate(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	args, err := mcpbind.Curate(&req)
+	if err != nil {
+		return mcpbind.Refused(err), nil
+	}
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.Curate(ctx, args) })
+}
+
+// mark_promote serves the profile's phases: a memory tenant stages, stamps
+// and refreshes its own world; the knowledge side checks and publishes
+// under the world's write grant.
+func (g *Gateway) handleMarkPromote(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
+	args, err := mcpbind.Promote(&req, g.profile.PromotePhases)
+	if err != nil {
+		return mcpbind.Refused(err), nil
+	}
+	return g.run(func(t *marktools.Tools) marktools.Result { return t.Promote(ctx, args) })
 }

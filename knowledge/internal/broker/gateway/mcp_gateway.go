@@ -297,6 +297,9 @@ func (g *Gateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
 		"mark_graph_export":  g.handleMarkGraphExport,
 		"mark_graph_publish": g.handleMarkGraphPublish,
 		"mark_worlds":        g.handleMarkWorlds,
+		"mark_doctor":        g.handleMarkDoctor,
+		"mark_curate":        g.handleMarkCurate,
+		"mark_promote":       g.handleMarkPromote,
 	}
 }
 

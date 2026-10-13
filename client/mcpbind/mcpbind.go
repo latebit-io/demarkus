@@ -6,6 +6,10 @@ package mcpbind
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/marktools"
@@ -51,16 +55,30 @@ func OptionalURL(req *mcp.CallToolRequest) string {
 	return req.GetString("url", "")
 }
 
-// metadata is a tool call's optional "metadata" object. PUBLISH replaces the
-// metadata map, so a mistyped argument is refused, never read as none.
-func metadata(args map[string]any) (map[string]any, error) {
+// metadata is a tool call's optional "metadata" object as the strings the
+// store keeps; numbers in plain decimal. PUBLISH replaces the metadata map,
+// so a mistyped argument is refused, never read as none.
+func metadata(args map[string]any) (map[string]string, error) {
 	raw, given := args["metadata"]
 	if !given || raw == nil {
 		return nil, nil
 	}
-	meta, ok := raw.(map[string]any)
+	obj, ok := raw.(map[string]any)
 	if !ok {
 		return nil, errors.New("metadata must be an object of key/value pairs")
+	}
+	meta := make(map[string]string, len(obj))
+	for k, v := range obj {
+		switch x := v.(type) {
+		case string:
+			meta[k] = x
+		case float64:
+			meta[k] = strconv.FormatFloat(x, 'f', -1, 64)
+		case bool:
+			meta[k] = strconv.FormatBool(x)
+		default:
+			return nil, fmt.Errorf("metadata.%s must be a string, number or boolean", k)
+		}
 	}
 	return meta, nil
 }
@@ -157,7 +175,10 @@ func Append(req *mcp.CallToolRequest) (marktools.AppendArgs, error) {
 	if err != nil {
 		return marktools.AppendArgs{}, err
 	}
-	return marktools.AppendArgs{URL: url, Body: body, ExpectedVersion: req.GetInt("expected_version", 0)}, nil
+	return marktools.AppendArgs{
+		URL: url, Body: body, ExpectedVersion: req.GetInt("expected_version", 0),
+		Route: req.GetString("route", ""), Tags: req.GetString("tags", ""),
+	}, nil
 }
 
 // Graph binds mark_graph; the depth is the body's default when absent, and
@@ -179,6 +200,56 @@ func GraphPublish(req *mcp.CallToolRequest) marktools.GraphPublishArgs {
 		args.ExpectedVersion = &version
 	}
 	return args
+}
+
+// Archive binds mark_archive's arguments.
+func Archive(req *mcp.CallToolRequest) (marktools.ArchiveArgs, error) {
+	url, err := URL(req)
+	if err != nil {
+		return marktools.ArchiveArgs{}, err
+	}
+	return marktools.ArchiveArgs{URL: url, Recursive: req.GetBool("recursive", false)}, nil
+}
+
+// Curate binds mark_curate's arguments.
+func Curate(req *mcp.CallToolRequest) (marktools.CurateArgs, error) {
+	url, err := URL(req)
+	if err != nil {
+		return marktools.CurateArgs{}, err
+	}
+	return marktools.CurateArgs{URL: url, Apply: req.GetBool("apply", false), Proposal: req.GetString("proposal", "")}, nil
+}
+
+// Promote binds mark_promote's arguments; a phase outside phases is refused.
+func Promote(req *mcp.CallToolRequest, phases []string) (marktools.PromoteArgs, error) {
+	url, err := URL(req)
+	if err != nil {
+		return marktools.PromoteArgs{}, err
+	}
+	phase, err := Required(req, "phase")
+	if err != nil {
+		return marktools.PromoteArgs{}, err
+	}
+	if !slices.Contains(phases, phase) {
+		return marktools.PromoteArgs{}, fmt.Errorf("phase %q is not served here (%s)", phase, strings.Join(phases, ", "))
+	}
+	args := marktools.PromoteArgs{
+		URL: url, Phase: phase, Body: req.GetString("body", ""), Source: req.GetString("source", ""),
+		Target: req.GetString("target", ""), Via: req.GetString("via", ""), Stub: req.GetBool("stub", false), Packet: req.GetString("packet", ""),
+	}
+	if args.Metadata, err = metadata(req.GetArguments()); err != nil {
+		return marktools.PromoteArgs{}, err
+	}
+	return args, nil
+}
+
+// Doctor binds mark_doctor's arguments.
+func Doctor(req *mcp.CallToolRequest) (marktools.DoctorArgs, error) {
+	url, err := URL(req)
+	if err != nil {
+		return marktools.DoctorArgs{}, err
+	}
+	return marktools.DoctorArgs{URL: url, Deep: req.GetBool("deep", false), Promotion: req.GetBool("promotion", false)}, nil
 }
 
 // Refused is the tool result for an argument the surface refused.

@@ -35,9 +35,9 @@ func TestPublishSendsTheWriteWithIdentity(t *testing.T) {
 	tools := newTools(t, backend, writingHooks())
 	got := tools.Publish(t.Context(), marktools.PublishArgs{
 		URL: "/doc.md", Body: "# Doc\n", ExpectedVersion: new(0), OnConflict: "fail",
-		Metadata: map[string]any{"tags": "a,b", "importance": 0.5, "agent": "someone-else", "user": "mallory@example.com"},
+		Metadata: map[string]string{"tags": "a,b", "importance": "0.5", "agent": "someone-else", "user": "mallory@example.com"},
 	})
-	want := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "1"}}}, "version", "modified", "server-version")
+	want := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{"version": "1"}}}, "version", "modified", "server-version")
 	if got.IsError || got.Text != want {
 		t.Fatalf("Publish = %+v, want %q", got, want)
 	}
@@ -133,14 +133,14 @@ func TestWritesReconcileAfterAnUnknownOutcome(t *testing.T) {
 		{
 			name: "publish fail mode, landed",
 			call: func(tools *marktools.Tools) marktools.Result {
-				return tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: "mine", ExpectedVersion: new(3), OnConflict: "fail"})
+				return tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: "# mine\n", ExpectedVersion: new(3), OnConflict: "fail"})
 			},
-			head: fetchtest.Head("mine", 4, sentMeta), wantText: "status: ok\nversion: 4\n",
+			head: fetchtest.Head("# mine\n", 4, sentMeta), wantText: "status: ok\nversion: 4\n",
 		},
 		{
 			name: "publish fail mode, not landed",
 			call: func(tools *marktools.Tools) marktools.Result {
-				return tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: "mine", ExpectedVersion: new(3), OnConflict: "fail"})
+				return tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: "# mine\n", ExpectedVersion: new(3), OnConflict: "fail"})
 			},
 			head: fetchtest.Head("theirs", 4, nil), wantErr: true,
 			wantText: "publish failed: read response: request sent but outcome unknown; it may have landed: fetch the document before retrying",
@@ -162,14 +162,18 @@ func TestWritesReconcileAfterAnUnknownOutcome(t *testing.T) {
 		},
 		{
 			name: "archive, landed",
-			call: func(tools *marktools.Tools) marktools.Result { return tools.Archive(t.Context(), "/doc.md") },
+			call: func(tools *marktools.Tools) marktools.Result {
+				return tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/doc.md"})
+			},
 			head: fetchtest.Archived(),
 			// An archived document answers without a version, so none is claimed.
 			wantText: "status: ok\narchived: true\n",
 		},
 		{
 			name: "archive, still live",
-			call: func(tools *marktools.Tools) marktools.Result { return tools.Archive(t.Context(), "/doc.md") },
+			call: func(tools *marktools.Tools) marktools.Result {
+				return tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/doc.md"})
+			},
 			head: fetchtest.Head("live", 3, nil), wantErr: true,
 			wantText: "archive failed: read response: request sent but outcome unknown; it may have landed: fetch the document before retrying",
 		},
@@ -210,7 +214,7 @@ func TestAppendResolvesTheVersionItself(t *testing.T) {
 	}
 	tools := newTools(t, backend, writingHooks())
 	got := tools.Append(t.Context(), marktools.AppendArgs{URL: "/doc.md", Body: "more"})
-	if got.IsError || !strings.HasPrefix(got.Text, "status: ok") {
+	if got.IsError || !strings.HasPrefix(got.Text, "status: created") {
 		t.Fatalf("Append = %+v", got)
 	}
 	if len(backend.AppendCalls) != 1 || backend.AppendCalls[0].ExpectedVersion != 7 || backend.AppendCalls[0].Token != "write-token" ||
@@ -244,7 +248,7 @@ func TestDefiniteWriteFailuresDoNotProbeTheHead(t *testing.T) {
 	for name, got := range map[string]marktools.Result{
 		"publish": tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: "x", ExpectedVersion: new(3), OnConflict: "fail"}),
 		"append":  tools.Append(t.Context(), marktools.AppendArgs{URL: "/doc.md", Body: "x", ExpectedVersion: 3}),
-		"archive": tools.Archive(t.Context(), "/doc.md"),
+		"archive": tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/doc.md"}),
 	} {
 		if !got.IsError || got.Text != name+" failed: dial refused" {
 			t.Errorf("%s = %+v", name, got)
