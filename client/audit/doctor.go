@@ -167,7 +167,7 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 	a.checkDuplicates()
 	a.checkShape()
 	a.checkContent()
-	a.checkStyleGuide()
+	a.checkStyleGuide(ctx)
 	a.checkReferences()
 	if opts.Deep {
 		a.checkLostMetadata(ctx)

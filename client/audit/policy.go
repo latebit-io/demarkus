@@ -95,15 +95,25 @@ func (a *audit) checkContent() {
 	}
 }
 
-// checkStyleGuide compares a published style guide's rule table with the
-// one this build renders; a guide without the table is stale too.
-func (a *audit) checkStyleGuide() {
-	d, ok := a.docs[stylerules.DocumentPath]
-	if !ok || !live(d.status) || stylerules.Current(d.body) {
+// checkStyleGuide compares a published guide's rule table with this build's;
+// fetched by path, since LIST hides `.well-known/` from the inventory. A
+// world without a guide (every world but the floor's) has no finding.
+func (a *audit) checkStyleGuide(ctx context.Context) {
+	resp, err := a.store.Fetch(ctx, stylerules.DocumentPath)
+	switch {
+	case err != nil:
+		a.note("fetch %s failed: %v; style guide check skipped", stylerules.DocumentPath, err)
+		return
+	case resp.Status == protocol.StatusNotFound, resp.Status == protocol.StatusArchived:
+		return
+	case resp.Status != protocol.StatusOK:
+		a.note("fetch %s returned %s; style guide check skipped", stylerules.DocumentPath, resp.Status)
+		return
+	case stylerules.Current(resp.Body):
 		return
 	}
 	detail := "the enforced-rules table differs from the gate's"
-	if !strings.Contains(d.body, stylerules.BeginMarker) {
+	if !strings.Contains(resp.Body, stylerules.BeginMarker) {
 		detail = "no enforced-rules table between the stylerules markers"
 	}
 	a.add(CheckStyleGuide, stylerules.DocumentPath, detail, "re-publish with the current table between "+stylerules.BeginMarker+" and "+stylerules.EndMarker)

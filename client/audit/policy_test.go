@@ -99,6 +99,32 @@ func TestContentAndStyleGuideChecks(t *testing.T) {
 	if got := findings(r, CheckStyleGuide); len(got) != 1 || !strings.Contains(got[0], "differs from the gate's") {
 		t.Fatalf("style guide: %v", got)
 	}
+	// The guide lives under .well-known, which LIST hides: it is fetched, never inventoried.
+	if r.Documents != 4 {
+		t.Fatalf("documents = %d, want the four listed ones without the guide", r.Documents)
+	}
+}
+
+func TestStyleGuideCheckSkipsWorldsWithoutOne(t *testing.T) {
+	f := newFake(map[string]fakeDoc{
+		"/index.md": {Body: "# Hub\n\n- [a](/a.md)\n", Meta: map[string]string{"tags": "index"}},
+		"/a.md":     tagged("# A\n\nSummary.\n"),
+	})
+	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findings(r, CheckStyleGuide); len(got) != 0 || len(r.Coverage) != 0 {
+		t.Fatalf("style guide findings %v coverage %v, want none", got, r.Coverage)
+	}
+	f.missing[stylerules.DocumentPath] = "server-error"
+	r, err = Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Coverage) != 1 || !strings.Contains(r.Coverage[0], "style guide check skipped") {
+		t.Fatalf("coverage = %v, want the skipped note", r.Coverage)
+	}
 }
 
 func TestContentOverrideNeverCoversASecret(t *testing.T) {
