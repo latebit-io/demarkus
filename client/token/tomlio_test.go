@@ -395,3 +395,51 @@ func mapKeys(m map[string]Entry) []string {
 	}
 	return out
 }
+
+// TestAtomicWriteKeepsMode guards the installer's root:demarkus 0640 layout:
+// a rewrite as 0600 locks the server out of its own tokens file.
+func TestAtomicWriteKeepsMode(t *testing.T) {
+	entry := Entry{Hash: "sha256-bbb", Paths: []string{"/*"}, Operations: []string{"publish"}}
+	writes := map[string]func(path string) error{
+		"AppendEntry": func(path string) error { return AppendEntry(path, "second", &entry) },
+		"WriteFile": func(path string) error {
+			return WriteFile(path, File{Tokens: map[string]Entry{"second": entry}})
+		},
+	}
+	for name, write := range writes {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "tokens.toml")
+			seed := "[tokens.first]\nhash = \"sha256-aaa\"\npaths = [\"/*\"]\noperations = [\"read\"]\n"
+			if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			if err := os.Chmod(path, 0o640); err != nil {
+				t.Fatalf("chmod seed: %v", err)
+			}
+			if err := write(path); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat: %v", err)
+			}
+			if got := info.Mode().Perm(); got != 0o640 {
+				t.Errorf("mode after %s = %o, want 640", name, got)
+			}
+		})
+	}
+
+	t.Run("new file stays 0600", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "tokens.toml")
+		if err := AppendEntry(path, "first", &entry); err != nil {
+			t.Fatalf("AppendEntry: %v", err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("new file mode = %o, want 600", got)
+		}
+	})
+}
