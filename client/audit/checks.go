@@ -252,7 +252,7 @@ func (a *audit) checkShape() {
 		if !live(d.status) {
 			continue
 		}
-		for _, problem := range gate.Problems(p, d.body, d.meta["description"]) {
+		for _, problem := range gate.AuditProblems(p, d.body, d.meta["description"]) {
 			id, _, _ := strings.Cut(problem, ": ")
 			switch id {
 			case stylerules.H1:

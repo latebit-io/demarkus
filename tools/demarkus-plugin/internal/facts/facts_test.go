@@ -12,30 +12,40 @@ import (
 )
 
 func TestClassify(t *testing.T) {
+	ok := func(checks ...Check) Command { return Command{checks, true, len(checks) == 1} }
+	passOnly := func(checks ...Check) Command { return Command{checks, true, false} }
+	unknown := func(checks ...Check) Command { return Command{Checks: checks} }
 	cases := []struct {
 		cmd  string
 		want Command
 	}{
-		{"go test ./...", Command{[]Check{Test}, true}},
-		{"cd tools && go test ./internal/... -race", Command{[]Check{Test}, true}},
-		{"CGO_ENABLED=0 go build ./...", Command{[]Check{Build}, true}},
-		{"bash pre-commit.sh", Command{[]Check{PreCommit}, true}},
-		{"sh scripts/pre-commit.sh", Command{[]Check{PreCommit}, true}},
-		{"bash -c 'go test ./...'", Command{Attributable: true}},
-		{"./pre-commit.sh;", Command{[]Check{PreCommit}, true}},
-		{"/usr/local/go/bin/go vet ./...", Command{[]Check{Lint}, true}},
-		{"make", Command{[]Check{Build}, true}},
-		{"make test", Command{[]Check{Test}, true}},
-		{"go test ./... && bash pre-commit.sh", Command{[]Check{Test, PreCommit}, true}},
-		{"go build ./... && go test ./... 2>&1 | tail -20", Command{[]Check{Build, Test}, false}},
-		{"go test ./... ; echo done", Command{[]Check{Test}, false}},
-		{"go test -run 'A|B' ./...", Command{[]Check{Test}, true}},
-		{`go test -run "A|B" ./... | tail`, Command{[]Check{Test}, false}},
-		{"go test ./... || true", Command{[]Check{Test}, false}},
-		{"git status | head", Command{Attributable: true}},
-		{`git commit -m "fix && go test"`, Command{Attributable: true}},
-		{"echo go test", Command{Attributable: true}},
-		{"", Command{Attributable: true}},
+		{"go test ./...", ok(Test)},
+		{"cd tools && go test ./internal/... -race", ok(Test)},
+		{"CGO_ENABLED=0 go build ./...", ok(Build)},
+		{"bash pre-commit.sh", ok(PreCommit)},
+		{"sh scripts/pre-commit.sh", ok(PreCommit)},
+		{"bash -c 'go test ./...'", passOnly()},
+		{"./pre-commit.sh;", ok(PreCommit)},
+		{"/usr/local/go/bin/go vet ./...", ok(Lint)},
+		{"make", ok(Build)},
+		{"make test", ok(Test)},
+		{"go test ./... 2>&1", ok(Test)},
+		{"go test ./... &>/dev/null", ok(Test)},
+		{"go test ./... && bash pre-commit.sh", passOnly(Test, PreCommit)},
+		{"go test ./... && false", passOnly(Test)},
+		{"make generate && go test ./...", passOnly(Test)},
+		{"go build ./... && go test ./... 2>&1 | tail -20", unknown(Build, Test)},
+		{"go test ./... |& tail", unknown(Test)},
+		{"go test ./... &", unknown(Test)},
+		{"go test ./... & wait", unknown(Test)},
+		{"go test ./... ; echo done", unknown(Test)},
+		{"go test -run 'A|B' ./...", ok(Test)},
+		{`go test -run "A|B" ./... | tail`, unknown(Test)},
+		{"go test ./... || true", unknown(Test)},
+		{"git status | head", passOnly()},
+		{`git commit -m "fix && go test"`, passOnly()},
+		{"echo go test", passOnly()},
+		{"", passOnly()},
 	}
 	for _, c := range cases {
 		if got := Classify(c.cmd); !reflect.DeepEqual(got, c.want) {
@@ -45,9 +55,9 @@ func TestClassify(t *testing.T) {
 }
 
 func TestOutcome(t *testing.T) {
-	one := Command{[]Check{Test}, true}
-	two := Command{[]Check{Test, PreCommit}, true}
-	piped := Command{[]Check{Test}, false}
+	one := Command{[]Check{Test}, true, true}
+	two := Command{[]Check{Test, PreCommit}, true, false}
+	piped := Command{[]Check{Test}, false, false}
 	cases := []struct {
 		cmd    Command
 		exitOK bool

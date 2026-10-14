@@ -80,21 +80,23 @@ func TestBodyOpensWithFrontmatter(t *testing.T) {
 	}
 }
 
-func TestSizeRuleAppliesToEveryDocumentButJournals(t *testing.T) {
+func TestSizeRuleIsAuditOnly(t *testing.T) {
 	big := "# Big\n\nWhat big settles.\n\n" + strings.Repeat("line of prose\n", 700)
-	if got := Problems("/plans/big.md", big, ""); len(got) != 1 || !strings.Contains(got[0], "body is 9 KB, at or over the 8 KB fetch threshold") {
+	if got := Problems("/plans/big.md", big, ""); len(got) != 0 {
+		t.Errorf("a publish must not carry the size advisory: %v", got)
+	}
+	if got := AuditProblems("/plans/big.md", big, ""); len(got) != 1 || !strings.Contains(got[0], "body is 9 KB, at or over the 8 KB fetch threshold") {
 		t.Errorf("non-hub = %v", got)
 	}
-	if got := Problems("/journal/2026-10-12.md", big, ""); len(got) != 0 {
+	if got := AuditProblems("/journal/2026-10-12.md", big, ""); len(got) != 0 {
 		t.Errorf("journal = %v", got)
 	}
-	if got := Problems("/log.md", big, ""); len(got) != 1 || !strings.Contains(got[0], "fetch threshold") {
-		t.Errorf("prose log is outlined like any document: %v", got)
-	}
 	hub := "# Hub\n\n" + strings.Repeat("- [a](/a.md): one\n", 600)
-	got := Problems("/index.md", hub, "")
-	if n := strings.Count(strings.Join(got, "\n"), "fetch threshold"); n != 1 {
-		t.Errorf("hub carries %d size findings, want the hub wording once: %v", n, got)
+	for name, check := range map[string]func(string, string, string) []string{"Problems": Problems, "AuditProblems": AuditProblems} {
+		got := check("/index.md", hub, "")
+		if n := strings.Count(strings.Join(got, "\n"), "fetch threshold"); n != 1 {
+			t.Errorf("%s: hub carries %d size findings, want the hub wording once: %v", name, n, got)
+		}
 	}
 }
 

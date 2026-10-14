@@ -21,10 +21,21 @@ const (
 	KnowledgeGuide = "See mark://root" + stylerules.DocumentPath + "."
 )
 
-// Problems applies every rule to a publish of body at url: frontmatter fence,
-// H1, em dashes, unique headings, then the hub, shape and description rules.
-// Nil when the body is empty or clean. Appends are fragments: not checked.
+// Problems applies the write-time rules to a publish of body at url:
+// frontmatter fence, H1, em dashes, unique headings, then the hub, shape and
+// description rules. Nil when empty or clean. Appends are fragments: not checked.
 func Problems(url, body, description string) []string {
+	return collect(url, body, description, false)
+}
+
+// AuditProblems is Problems plus the non-hub size advisory, for on-demand
+// readers (doctor, curate): a publish has no fix to apply for it, and an
+// outline fetch serves a large document (design-hub-gate.md).
+func AuditProblems(url, body, description string) []string {
+	return collect(url, body, description, true)
+}
+
+func collect(url, body, description string, withSize bool) []string {
 	if strings.TrimSpace(body) == "" {
 		return nil
 	}
@@ -55,7 +66,7 @@ func Problems(url, body, description string) []string {
 	// A hub at or over the threshold is worded by the hub rules.
 	if hub := HubProblems(url, body); len(hub) > 0 {
 		problems = append(problems, hub...)
-	} else {
+	} else if withSize {
 		problems = append(problems, sizeProblems(url, body)...)
 	}
 	problems = append(problems, ShapeProblems(url, body, headings)...)

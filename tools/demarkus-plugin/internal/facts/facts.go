@@ -97,9 +97,12 @@ var checkPrefixes = []struct {
 // Command is what a Bash command runs, as far as its exit status can tell.
 type Command struct {
 	Checks []Check // in order, each once
-	// Attributable: an && chain with no piped check, so exit 0 means every
-	// check passed and a failure belongs to one of them.
+	// Attributable: a foreground && chain with no piped check, so exit 0
+	// means every check passed.
 	Attributable bool
+	// FailureIsCheck: a failed exit can only be the check's: it is the
+	// chain's one check, its last segment, and only cd runs before it.
+	FailureIsCheck bool
 }
 
 // Classify reads the checks a Bash command runs.
@@ -107,9 +110,12 @@ func Classify(command string) Command {
 	segs, andOnly := splitSegments(command)
 	cmd := Command{Attributable: andOnly}
 	seen := map[Check]bool{}
-	for _, seg := range segs {
-		c, ok := classifySegment(strings.Fields(seg.stage))
+	setupOnly := true // every segment before the current one is a cd
+	for i, seg := range segs {
+		tokens := strings.Fields(seg.stage)
+		c, ok := classifySegment(tokens)
 		if !ok {
+			setupOnly = setupOnly && len(tokens) > 0 && tokens[0] == "cd"
 			continue
 		}
 		if seg.piped {
@@ -119,7 +125,10 @@ func Classify(command string) Command {
 			seen[c] = true
 			cmd.Checks = append(cmd.Checks, c)
 		}
+		cmd.FailureIsCheck = len(cmd.Checks) == 1 && setupOnly && i == len(segs)-1
+		setupOnly = false
 	}
+	cmd.FailureIsCheck = cmd.FailureIsCheck && cmd.Attributable
 	return cmd
 }
 
@@ -130,7 +139,7 @@ func (c Command) Outcome(exitOK bool) Outcome {
 		return Unknown
 	case exitOK:
 		return Passed
-	case len(c.Checks) == 1:
+	case c.FailureIsCheck:
 		return Failed
 	default:
 		return Unknown
@@ -183,9 +192,9 @@ type segment struct {
 	piped bool
 }
 
-// splitSegments splits on &&, ||, ; and newlines outside quotes, so a check
+// splitSegments splits on &&, ||, ;, & and newlines outside quotes, so a check
 // named inside a commit message is not a check, and a quoted | is no pipe.
-// andOnly: every separator was &&.
+// andOnly: every separator was && (a background & never is: Bash returns first).
 func splitSegments(command string) (segs []segment, andOnly bool) {
 	andOnly = true
 	var cur strings.Builder
@@ -224,12 +233,24 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 			i++
 		case c == '|':
 			piped = true
+			if i+1 < len(command) && command[i+1] == '&' {
+				i++ // |& pipes stderr too
+			}
+		case c == '&' && !isRedirect(command, i):
+			andOnly = false
+			flush()
 		default:
 			write(c)
 		}
 	}
 	flush()
 	return segs, andOnly
+}
+
+// isRedirect: the & at i belongs to a redirection (2>&1, <&3, &>file).
+func isRedirect(command string, i int) bool {
+	return (i > 0 && (command[i-1] == '>' || command[i-1] == '<')) ||
+		(i+1 < len(command) && command[i+1] == '>')
 }
 
 // Render is the facts block: a heading line and one bullet per fact, capped
