@@ -72,7 +72,7 @@ type Proposal struct {
 // Propose reports the document and proposes the smallest mechanical change
 // that settles what it can. Nothing is written.
 func Propose(in *Input) Proposal {
-	p := Proposal{Path: in.Path, Version: in.Version, Size: len(in.Body), Problems: gate.Problems(in.Path, in.Body, in.Metadata["description"])}
+	p := Proposal{Path: in.Path, Version: in.Version, Size: len(in.Body), Problems: gate.AuditProblems(in.Path, in.Body, in.Metadata["description"])}
 	if len(p.Problems) == 0 {
 		p.Kind = KindClean
 		return p
@@ -126,7 +126,7 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	}
 	p.Kind = KindEdit
 	p.Writes = []Write{{Path: in.Path, Body: body, Metadata: meta}}
-	p.Unfixed = gate.Problems(in.Path, body, meta["description"])
+	p.Unfixed = gate.AuditProblems(in.Path, body, meta["description"])
 	// Headings keep their count and order through a rename, so index maps
 	// the old anchor to the new one.
 	for _, r := range renamed {
@@ -347,7 +347,7 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	p.Writes = append(p.Writes, Write{Path: in.Path, Body: body, Metadata: meta})
 	p.Fixed = append(p.Fixed, fmt.Sprintf("%s becomes the hub (%d bytes)", in.Path, len(body)))
 	p.Kind = KindSplit
-	p.Unfixed = gate.Problems(in.Path, body, meta["description"])
+	p.Unfixed = gate.AuditProblems(in.Path, body, meta["description"])
 }
 
 // planSections cuts the body at its H2 headings, names each section's topic

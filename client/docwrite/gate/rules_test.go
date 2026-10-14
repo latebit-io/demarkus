@@ -44,7 +44,7 @@ func TestEveryStyleRuleFires(t *testing.T) {
 			continue
 		}
 		var hit bool
-		for _, p := range Problems(f.url, f.body, f.description) {
+		for _, p := range AuditProblems(f.url, f.body, f.description) {
 			id, _, _ := strings.Cut(p, ": ")
 			if id == rule.ID {
 				hit = true

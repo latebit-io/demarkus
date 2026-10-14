@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
 )
@@ -466,6 +467,20 @@ func ParseTool(tool string) (ParsedTool, bool) {
 	server = strings.TrimSuffix(server, "__")
 	server = strings.TrimSuffix(server, "_")
 	return ParsedTool{Server: server, Verb: verb}, true
+}
+
+// journalDir is the layout's journal directory as a path segment ("/journal/").
+var journalDir = "/" + layout.Default().Journal
+
+// IsJournalWrite reports a write that records a journal entry: the today route
+// (marktools.RouteToday) or a path under the journal directory. The pi and
+// OpenCode adapters mirror it.
+func IsJournalWrite(tool, url, route string) bool {
+	pt, ok := ParseTool(tool)
+	if !ok || (pt.Verb != "publish" && pt.Verb != "append") {
+		return false
+	}
+	return route == "today" || strings.Contains(url, journalDir)
 }
 
 // QualifyTool prefixes a bare tool name with its MCP server when the harness

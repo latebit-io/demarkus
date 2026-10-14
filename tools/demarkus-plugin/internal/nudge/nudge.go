@@ -6,11 +6,18 @@
 package nudge
 
 import (
+	"cmp"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	soulpromote "github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/facts"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 )
 
@@ -36,6 +43,9 @@ type Input struct {
 	SessionID      string `json:"session_id"`
 	TranscriptPath string `json:"transcript_path"`
 	StopHookActive bool   `json:"stop_hook_active"`
+	// Cwd locates the repo for the session facts; "" falls back to the host's
+	// project dir, then the process cwd.
+	Cwd string `json:"cwd"`
 }
 
 // Output carries the nudge text, empty when nothing should be surfaced.
@@ -54,16 +64,28 @@ const memoryRecallNudge = "This reads like a recall question. Before answering f
 
 const knowledgeRecallNudge = "This reads like a recall question. If it concerns shared or organizational knowledge, check the joined demarkus knowledge system first: mark_lookup the system for the subject (and fetch the relevant world's index.md / the root hub), then answer from what's recorded; or say plainly if nothing is there."
 
-const journalNudge = "This session changed files but recorded nothing to demarkus. If something here is worth remembering (a decision, a gotcha, a non-obvious why), capture it with /soul-journal (or mark_append with route today on /<project>/). If it's all routine, ignore this."
+const (
+	journalNudgeHead     = "This session has file changes no demarkus journal entry covers."
+	journalNudgeFactsUse = "These facts are for you: use them to say where the work stopped, do not paste the list."
+	journalNudgeAsk      = "If something here is worth remembering (a decision, a gotcha, a non-obvious why), capture it with /soul-journal (or mark_append with route today on /<project>/). If it's all routine, ignore this."
+)
 
-// Evaluate dispatches on the event and returns the nudge text (or empty).
-func Evaluate(in *Input) (Output, error) {
-	// Accept the Claude PostToolUse shape (tool_name/tool_input) for promote.
+// gitTimeout bounds each facts git read; two reads stay inside the Stop hook's 10s.
+const gitTimeout = 3 * time.Second
+
+// normalizeTool accepts the Claude/Cursor hook shape (tool_name/tool_input)
+// and qualifies the tool with its MCP server.
+func (in *Input) normalizeTool() {
 	if in.Tool == "" && in.ToolName != "" {
 		in.Tool = in.ToolName
 		in.Input = in.ToolInput
 	}
 	in.Tool = config.QualifyTool(in.Tool, in.McpServerName)
+}
+
+// Evaluate dispatches on the event and returns the nudge text (or empty).
+func Evaluate(in *Input) (Output, error) {
+	in.normalizeTool()
 	switch in.Event {
 	case "recall":
 		return recall(in)
@@ -138,17 +160,57 @@ func sessionEnd(in *Input) (Output, error) {
 	if err != nil || !present {
 		return Output{}, err
 	}
+	var session facts.Session
+	var lastEdit string
 	if in.TranscriptPath != "" {
 		sig, err := ScanTranscript(in.TranscriptPath)
 		if err != nil {
 			return Output{}, err
 		}
 		in.ChangedFiles = in.ChangedFiles || sig.ChangedFiles
-		in.MemoryWrite = in.MemoryWrite || sig.MemoryWrite
+		in.JournalWrite = in.JournalWrite || sig.JournalWrite
 		in.PendingBackground = in.PendingBackground || sig.PendingBackground
+		session.Checks = sig.Checks
+		lastEdit = sig.LastEdit
 	}
-	if in.ChangedFiles && !in.MemoryWrite && !in.PendingBackground {
-		return Output{Nudge: journalNudge}, nil
+	if !in.ChangedFiles || in.JournalWrite || in.MemoryWrite || in.PendingBackground {
+		return Output{}, nil
 	}
-	return Output{}, nil
+	if g, err := readSessionGit(cmp.Or(in.Cwd, host.ProjectDir()), lastEdit); err != nil {
+		// The facts are an aid; the nudge goes out without the git ones.
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: session facts: "+err.Error())
+	} else {
+		session.Git = &g
+	}
+	return Output{Nudge: journalNudgeText(facts.Render(session))}, nil
+}
+
+// readSessionGit reads the repo of the last edit, else the session's cwd: a
+// worktree or second repo is where the work is. Each attempt gets its own
+// timeout so a hung first read cannot starve the fallback.
+func readSessionGit(cwd, lastEdit string) (facts.Git, error) {
+	if lastEdit != "" {
+		if !filepath.IsAbs(lastEdit) {
+			lastEdit = filepath.Join(cwd, lastEdit)
+		}
+		g, err := readGit(filepath.Dir(lastEdit))
+		if err == nil {
+			return g, nil
+		}
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: session facts: last edit's repo: "+err.Error()+"; using cwd")
+	}
+	return readGit(cwd)
+}
+
+func readGit(dir string) (facts.Git, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+	return facts.ReadGit(ctx, dir)
+}
+
+func journalNudgeText(factsBlock string) string {
+	if factsBlock == "" {
+		return journalNudgeHead + " " + journalNudgeAsk
+	}
+	return journalNudgeHead + "\n" + factsBlock + journalNudgeFactsUse + " " + journalNudgeAsk
 }

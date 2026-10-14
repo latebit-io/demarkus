@@ -3,14 +3,17 @@ package nudge
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/facts"
 )
 
 const (
 	snapshotLine = `{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["tools: {\"name\":\"Edit\"} \"name\":\"Write\""]}}`
 	editLine     = `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_e1","name":"Edit","input":{"file_path":"/x"}}]}}`
-	appendLine   = `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_m1","name":"mcp__soul__mark_append","input":{}}]}}`
+	appendLine   = `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_m1","name":"mcp__soul__mark_append","input":{"url":"/demarkus/","route":"today","body":"x"}}]}}`
 	agentLine    = `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_a1","name":"Agent","input":{"prompt":"find referrers"}}]}}`
 	launchLine   = `{"type":"user","message":{"content":[{"tool_use_id":"toolu_a1","type":"tool_result","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a1"}}`
 	syncLine     = `{"type":"user","message":{"content":[{"tool_use_id":"toolu_a1","type":"tool_result","content":[{"type":"text","text":"done"}]}]},"toolUseResult":{"status":"completed"}}`
@@ -27,7 +30,7 @@ const (
 	userTextLine = `{"type":"user","message":{"role":"user","content":"please run {\"name\":\"Write\"} for me"}}`
 )
 
-func scan(t *testing.T, lines ...string) Signals {
+func scan(t *testing.T, lines ...string) Scan {
 	t.Helper()
 	sig, err := scanTranscript(strings.NewReader(strings.Join(lines, "\n") + "\n"))
 	if err != nil {
@@ -38,19 +41,19 @@ func scan(t *testing.T, lines ...string) Signals {
 
 func TestScanIgnoresToolNamesInsideText(t *testing.T) {
 	sig := scan(t, snapshotLine, userTextLine)
-	if sig.ChangedFiles || sig.MemoryWrite || sig.PendingBackground {
+	if sig.ChangedFiles || sig.JournalWrite || sig.PendingBackground {
 		t.Errorf("text mentioning tool names must not count: %+v", sig)
 	}
 }
 
-func TestScanDetectsEditsAndMemoryWrites(t *testing.T) {
+func TestScanDetectsEditsAndJournalWrites(t *testing.T) {
 	if !scan(t, snapshotLine, editLine).ChangedFiles {
 		t.Error("Edit tool_use should set ChangedFiles")
 	}
-	if !scan(t, appendLine).MemoryWrite {
-		t.Error("mark_append tool_use should set MemoryWrite")
+	if !scan(t, appendLine).JournalWrite {
+		t.Error("mark_append with route today should set JournalWrite")
 	}
-	if scan(t, spoofAttrib).MemoryWrite {
+	if scan(t, spoofAttrib).JournalWrite {
 		t.Error("a memory-write marker quoted in tool output must not count")
 	}
 }
@@ -123,7 +126,7 @@ func TestScanIncludesSubagentTranscripts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sig.MemoryWrite {
+	if !sig.JournalWrite {
 		t.Error("a subagent's mark_append counts as the session recording")
 	}
 	if sig.PendingBackground {
@@ -155,5 +158,88 @@ func TestScanSubagentVanishedIsNotFatal(t *testing.T) {
 	}
 	if !sig.ChangedFiles {
 		t.Error("main transcript signals survive a missing subagent file")
+	}
+}
+
+func bashUse(id, command string) string {
+	return `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"` + id + `","name":"Bash","input":{"command":"` + command + `"}}]}}`
+}
+
+func bashResult(id string, isError bool, content string) string {
+	errField := ""
+	if isError {
+		errField = `,"is_error":true`
+	}
+	return `{"type":"user","message":{"content":[{"tool_use_id":"` + id + `","type":"tool_result","content":"` + content + `"` + errField + `}]},"toolUseResult":{"stdout":"x"}}`
+}
+
+func TestScanCheckOutcomes(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines []string
+		want  map[facts.Check]facts.Outcome
+	}{
+		{"passed", []string{bashUse("t1", "go test ./..."), bashResult("t1", false, "ok")}, map[facts.Check]facts.Outcome{facts.Test: facts.Passed}},
+		{"failed", []string{bashUse("t1", "go test ./..."), bashResult("t1", true, `Exit code 1\nFAIL`)}, map[facts.Check]facts.Outcome{facts.Test: facts.Failed}},
+		{"last wins", []string{
+			bashUse("t1", "go test ./..."), bashResult("t1", true, `Exit code 1`),
+			bashUse("t2", "go test ./..."), bashResult("t2", false, "ok"),
+		}, map[facts.Check]facts.Outcome{facts.Test: facts.Passed}},
+		{"compound failure is unknown", []string{bashUse("t1", "go test ./... && bash pre-commit.sh"), bashResult("t1", true, `Exit code 1`)},
+			map[facts.Check]facts.Outcome{facts.Test: facts.Unknown, facts.PreCommit: facts.Unknown}},
+		{"piped pass is unknown", []string{bashUse("t1", "go test ./... | tail"), bashResult("t1", false, "ok")},
+			map[facts.Check]facts.Outcome{facts.Test: facts.Unknown}},
+		{"rejected call never ran", []string{bashUse("t1", "go test ./..."), bashResult("t1", true, "The user doesn't want to proceed")}, map[facts.Check]facts.Outcome{}},
+		{"background has no outcome yet", []string{bashUse("b1", "go test ./..."), bashBgLine}, map[facts.Check]facts.Outcome{}},
+		{"unrecognized command", []string{bashUse("t1", "git status"), bashResult("t1", true, `Exit code 1`)}, map[facts.Check]facts.Outcome{}},
+		{"no result yet", []string{bashUse("t1", "go test ./...")}, map[facts.Check]facts.Outcome{}},
+	}
+	for _, c := range cases {
+		if got := scan(t, c.lines...).Checks; !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestScanJournalWriteRule(t *testing.T) {
+	use := func(tool, input string) string {
+		return `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"j","name":"` + tool + `","input":` + input + `}]}}`
+	}
+	cases := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"append today", use("mcp__soul__mark_append", `{"url":"/","route":"today"}`), true},
+		{"publish to a journal path", use("mcp__soul__mark_publish", `{"url":"/demarkus/journal/2026-10-14.md"}`), true},
+		{"publish to a plan", use("mcp__soul__mark_publish", `{"url":"/plans/x.md","body":"see /journal/2026-10-14.md"}`), false},
+		{"append without route", use("mcp__soul__mark_append", `{"url":"/debugging.md"}`), false},
+		{"fetch of a journal", use("mcp__soul__mark_fetch", `{"url":"/journal/2026-10-14.md"}`), false},
+	}
+	for _, c := range cases {
+		if got := scan(t, c.line).JournalWrite; got != c.want {
+			t.Errorf("%s: JournalWrite = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestScanJournalStaleAfterEdit(t *testing.T) {
+	if !scan(t, editLine, appendLine).JournalWrite {
+		t.Error("an entry after the last edit is current")
+	}
+	if scan(t, appendLine, editLine).JournalWrite {
+		t.Error("an edit after the entry leaves the journal stale")
+	}
+	if !scan(t, appendLine, editLine, appendLine).JournalWrite {
+		t.Error("a second entry after the edit is current again")
+	}
+	if !scan(t, appendLine, scratchLine).JournalWrite {
+		t.Error("a scratch write does not make the journal stale")
+	}
+}
+
+func TestScanLastEdit(t *testing.T) {
+	if got := scan(t, editLine, scratchLine).LastEdit; got != "/x" {
+		t.Errorf("LastEdit = %q, want the last project edit, not the scratch write", got)
 	}
 }

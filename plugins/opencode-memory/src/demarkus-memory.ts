@@ -102,17 +102,39 @@ function isMemoryWrite(toolName: string): boolean {
   return /mark_(publish|append)$/.test(toolName);
 }
 
+// Mirrors config.IsJournalWrite in the plugin binary: route today, or a url
+// under a journal/ directory. A plan or ADR write is not a journal entry.
+function isJournalWrite(args: Record<string, unknown> | undefined): boolean {
+  const url = typeof args?.url === "string" ? args.url : "";
+  return args?.route === "today" || url.includes("/journal/");
+}
+
+// trackActivity records one completed tool call in the session's signals and
+// reports whether it was a memory write. An edit after a journal entry leaves
+// the entry stale.
+function trackActivity(s: SessionState, tool: string, args: Record<string, unknown> | undefined): boolean {
+  if (!isMemoryWrite(tool)) {
+    if (isFileMutation(tool)) {
+      s.changedFiles = true;
+      s.journalWrite = false;
+    }
+    return false;
+  }
+  if (isJournalWrite(args)) s.journalWrite = true;
+  return true;
+}
+
 function isFileMutation(toolName: string): boolean {
   return /^(edit|write|patch|multiedit)$/i.test(toolName);
 }
 
 // Per-session adapter state: one guidance injection, one idle nudge, and the
-// two session-end signals (files changed / memory written).
+// two session-end signals (files changed / journal written).
 interface SessionState {
   guidanceDelivered: boolean;
   idleNudged: boolean;
   changedFiles: boolean;
-  memoryWrite: boolean;
+  journalWrite: boolean;
 }
 
 // run executes a provisioning step; resolves "" on success, a warning on failure.
@@ -209,7 +231,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
   const state = (id: string): SessionState => {
     let s = sessions.get(id);
     if (!s) {
-      s = { guidanceDelivered: false, idleNudged: false, changedFiles: false, memoryWrite: false };
+      s = { guidanceDelivered: false, idleNudged: false, changedFiles: false, journalWrite: false };
       sessions.set(id, s);
     }
     return s;
@@ -376,11 +398,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
     ) => {
       if (!adapters.has("memory")) return;
       const s = state(input.sessionID ?? "default");
-      if (!isMemoryWrite(input.tool)) {
-        if (isFileMutation(input.tool)) s.changedFiles = true;
-        return;
-      }
-      s.memoryWrite = true;
+      if (!trackActivity(s, input.tool, input.args)) return;
 
       const key = `${input.sessionID}:${input.callID}`;
       const warn = pendingWarns.get(key);
@@ -419,12 +437,13 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       const s = state(event.properties?.sessionID ?? "default");
       // Pre-filter with the same signals the binary checks, so the common
       // nothing-to-say case doesn't spawn a subprocess after every turn.
-      if (s.idleNudged || !s.changedFiles || s.memoryWrite) return;
+      if (s.idleNudged || !s.changedFiles || s.journalWrite) return;
       s.idleNudged = true;
       const nudge = await callNudge({
         event: "session-end",
+        cwd: directory,
         changedFiles: s.changedFiles,
-        memoryWrite: s.memoryWrite,
+        journalWrite: s.journalWrite,
       });
       if (nudge) await toast(nudge);
     },
@@ -492,7 +511,7 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
   const state = (id: string): SessionState => {
     let value = sessions.get(id);
     if (!value) {
-      value = { guidanceDelivered: false, idleNudged: false, changedFiles: false, memoryWrite: false };
+      value = { guidanceDelivered: false, idleNudged: false, changedFiles: false, journalWrite: false };
       sessions.set(id, value);
     }
     return value;
@@ -524,11 +543,7 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
     pendingWarns.delete(key);
     if (event.status !== "completed") return;
     const s = state(event.sessionID);
-    if (!isMemoryWrite(event.tool)) {
-      if (isFileMutation(event.tool)) s.changedFiles = true;
-      return;
-    }
-    s.memoryWrite = true;
+    if (!trackActivity(s, event.tool, event.input as Record<string, unknown> | undefined)) return;
     const nudge = await (services.nudge ?? callNudge)({ event: "promote", tool: event.tool, input: event.input ?? {} });
     const additions = [warn && `⚠️ ${warn}`, nudge].filter(Boolean).join("\n\n");
     if (!additions) return;
@@ -560,9 +575,9 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
         }
         if (event.type !== "session.idle" || !event.data?.sessionID) continue;
         const s = state(event.data.sessionID);
-        if (s.idleNudged || !s.changedFiles || s.memoryWrite) continue;
+        if (s.idleNudged || !s.changedFiles || s.journalWrite) continue;
         s.idleNudged = true;
-        const nudge = await (services.nudge ?? callNudge)({ event: "session-end", changedFiles: true, memoryWrite: false });
+        const nudge = await (services.nudge ?? callNudge)({ event: "session-end", cwd: directory, changedFiles: true, journalWrite: false });
         if (nudge) pendingContext.set(event.data.sessionID, [...(pendingContext.get(event.data.sessionID) ?? []), nudge]);
       }
     } catch (error) {

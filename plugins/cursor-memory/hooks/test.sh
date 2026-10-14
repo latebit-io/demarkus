@@ -15,6 +15,8 @@ case "\$1" in
         echo '{"permission":"allow","agent_message":"warned"}' ;;
   nudge) case "\$*" in *session-end*) echo '{"followup_message":"journal?"}' ;; *) echo '{"permission":"allow","agent_message":"promote?"}' ;; esac ;;
   guidance) echo '{"additional_context":"guidance"}' ;;
+  journal-write) [[ -z "\${FAKE_JOURNAL_CRASH:-}" ]] || exit 3
+                 case "\$in" in *'"route":"today"'*|*'/journal/'*) exit 0 ;; *) exit 1 ;; esac ;;
 esac
 FAKE
 chmod +x "${HOME}/.demarkus/bin/demarkus-plugin"
@@ -31,15 +33,29 @@ out="$(printf '{"hook_event_name":"stop","conversation_id":"%s","status":"comple
 # afterFileEdit + afterMCPExecution set sentinels
 printf '{"hook_event_name":"afterFileEdit","conversation_id":"%s","file_path":"/x"}' "$cid" | bash "${HERE}/mark-activity.sh"
 [[ -e "${dir}/changed" ]] || fail "afterFileEdit should mark changed"
-printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_fetch","mcp_server_name":"demarkus-memory"}' "$cid" | bash "${HERE}/mark-activity.sh"
-[[ ! -e "${dir}/memory-write" ]] || fail "mark_fetch must not mark memory-write"
-printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_append","mcp_server_name":"demarkus-memory"}' "$cid" | bash "${HERE}/mark-activity.sh"
-[[ -e "${dir}/memory-write" ]] || fail "mark_append should mark memory-write"
+printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_fetch","mcp_server_name":"demarkus-memory","tool_input":{"url":"/journal/2026-10-14.md"}}' "$cid" | bash "${HERE}/mark-activity.sh"
+[[ ! -e "${dir}/journal-write" ]] || fail "mark_fetch must not mark journal-write"
+printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_publish","mcp_server_name":"demarkus-memory","tool_input":{"url":"/plans/x.md"}}' "$cid" | bash "${HERE}/mark-activity.sh"
+[[ ! -e "${dir}/journal-write" ]] || fail "a plan publish must not mark journal-write"
+# The rule itself is tested in Go (nudge.JournalWriteCall); here only the wiring.
+grep -q '^journal-write$' "${CALLS}" || fail "a mark write should ask the binary"
+err="${HOME}/jw.err"
+printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_append","tool_input":{"route":"today"}}' "$cid" | FAKE_JOURNAL_CRASH=1 bash "${HERE}/mark-activity.sh" 2>"${err}"
+[[ ! -e "${dir}/journal-write" ]] || fail "a failed check must not mark journal-write"
+grep -q 'journal-write check failed (exit 3)' "${err}" || fail "a failed check should log on stderr: $(cat "${err}")"
+printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_publish","mcp_server_name":"demarkus-memory","tool_input":"{\\"url\\":\\"/p/journal/2026-10-14.md\\"}"}' "$cid" | bash "${HERE}/mark-activity.sh"
+[[ -e "${dir}/journal-write" ]] || fail "a publish under journal/ (escaped tool_input) should mark journal-write"
+rm -f "${dir}/journal-write"
+printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_append","mcp_server_name":"demarkus-memory","tool_input":{"url":"/","route":"today"}}' "$cid" | bash "${HERE}/mark-activity.sh"
+[[ -e "${dir}/journal-write" ]] || fail "mark_append route today should mark journal-write"
+printf '{"hook_event_name":"afterFileEdit","conversation_id":"%s","file_path":"/y"}' "$cid" | bash "${HERE}/mark-activity.sh"
+[[ ! -e "${dir}/journal-write" ]] || fail "an edit after the entry should clear journal-write"
+printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_append","mcp_server_name":"demarkus-memory","tool_input":{"url":"/","route":"today"}}' "$cid" | bash "${HERE}/mark-activity.sh"
 
 # stop: forwards both signals, emits followup once
 out="$(printf '{"hook_event_name":"stop","conversation_id":"%s","status":"completed","loop_count":0}' "$cid" | bash "${HERE}/stop-nudge.sh")"
 [[ "${out}" == '{"followup_message":"journal?"}' ]] || fail "stop should emit the followup: ${out}"
-grep -q -- '--changed-files=true --memory-write=true --format cursor' "${CALLS}" || fail "stop passed wrong flags: $(cat "${CALLS}")"
+grep -q -- '--changed-files=true --journal-write=true --format cursor' "${CALLS}" || fail "stop passed wrong flags: $(cat "${CALLS}")"
 out="$(printf '{"hook_event_name":"stop","conversation_id":"%s","status":"completed","loop_count":0}' "$cid" | bash "${HERE}/stop-nudge.sh")"
 [[ -z "${out}" ]] || fail "second stop must be silent: ${out}"
 out="$(printf '{"hook_event_name":"stop","conversation_id":"%s","status":"aborted","loop_count":0}' "$cid" | bash "${HERE}/stop-nudge.sh")"

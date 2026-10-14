@@ -17,10 +17,10 @@ dir="${TMPDIR:-/tmp}/demarkus-memory-cursor-${cid//[^A-Za-z0-9_-]/_}"
 [[ -e "${dir}/nudged" ]] && exit 0
 
 changed=false; [[ -e "${dir}/changed" ]] && changed=true
-memory_write=false; [[ -e "${dir}/memory-write" ]] && memory_write=true
+journal_write=false; [[ -e "${dir}/journal-write" ]] && journal_write=true
 
 status=0
-out="$("${BIN}" nudge --event session-end --changed-files="${changed}" --memory-write="${memory_write}" --format cursor < /dev/null)" || status=$?
+out="$("${BIN}" nudge --event session-end --changed-files="${changed}" --journal-write="${journal_write}" --format cursor < /dev/null)" || status=$?
 if [[ "${status}" -ne 0 ]]; then
   echo "[demarkus] session-end nudge failed (exit ${status}); skipping" >&2
   exit 0

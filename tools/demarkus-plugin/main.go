@@ -9,7 +9,7 @@
 //	echo '{"tool":"...","input":{...},"cwd":"..."}' | demarkus-plugin gate
 //	demarkus-plugin version
 //
-// Subcommands: gate, nudge, guidance, update-check, registry, provision, mcp-serve, doctor.
+// Subcommands: gate, nudge, journal-write, guidance, update-check, registry, provision, mcp-serve, doctor.
 package main
 
 import (
@@ -42,6 +42,8 @@ func main() {
 		cmdGate()
 	case "nudge":
 		cmdNudge()
+	case "journal-write":
+		cmdJournalWrite()
 	case "guidance":
 		cmdGuidance()
 	case "update-check":
@@ -67,6 +69,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "Commands:\n")
 	fmt.Fprintf(os.Stderr, "  gate      Decide whether a mark_publish/mark_append should proceed (reads JSON on stdin)\n")
 	fmt.Fprintf(os.Stderr, "  nudge     Decide a recall/promote/session-end nudge (reads JSON on stdin)\n")
+	fmt.Fprintf(os.Stderr, "  journal-write  Exit 0 if the tool hook payload on stdin is a journal write, 1 if not, 2 on error\n")
 	fmt.Fprintf(os.Stderr, "  guidance  Emit the session-start context for a surface (memory|knowledge)\n")
 	fmt.Fprintf(os.Stderr, "  update-check  Report whether a newer release of the calling plugin exists\n")
 	fmt.Fprintf(os.Stderr, "  doctor    Audit a store for catalog hygiene and print the report (read-only)\n")
@@ -101,7 +104,8 @@ func cmdNudge() {
 	event := fs.String("event", "", "override event: recall | promote | session-end")
 	surface := fs.String("surface", "", "override surface: memory | knowledge")
 	changed := fs.Bool("changed-files", false, "session-end: the session changed files")
-	memoryWrite := fs.Bool("memory-write", false, "session-end: a memory write happened")
+	journalWrite := fs.Bool("journal-write", false, "session-end: a journal entry was written")
+	memoryWrite := fs.Bool("memory-write", false, "session-end: any memory write happened (adapters older than --journal-write)")
 	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits, never returns an error
 
 	in, err := readNudgeInput(os.Stdin)
@@ -122,6 +126,9 @@ func cmdNudge() {
 	}
 	if set["changed-files"] {
 		in.ChangedFiles = *changed
+	}
+	if set["journal-write"] {
+		in.JournalWrite = *journalWrite
 	}
 	if set["memory-write"] {
 		in.MemoryWrite = *memoryWrite
@@ -162,6 +169,19 @@ func cmdNudge() {
 		return
 	}
 	printJSON(out)
+}
+
+// cmdJournalWrite answers by exit status so shell adapters need no JSON
+// parsing: 0 a journal write, 1 not, 2 unreadable payload.
+func cmdJournalWrite() {
+	in, err := readNudgeInput(os.Stdin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] journal-write: "+err.Error())
+		os.Exit(2)
+	}
+	if !nudge.JournalWriteCall(&in) {
+		os.Exit(1)
+	}
 }
 
 // cmdUpdateCheck reports whether a newer release of the calling plugin exists:

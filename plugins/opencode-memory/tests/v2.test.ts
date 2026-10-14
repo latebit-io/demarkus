@@ -22,6 +22,7 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
     } },
   };
   const gateCalls: unknown[] = [];
+  const sessionEndCwds: unknown[] = [];
   const lifecycle: string[] = [];
   const notices: string[] = [];
   const stop = await setupV2(ctx, {
@@ -39,7 +40,10 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
       } as any;
     },
     guidance: async () => "Recall first",
-    nudge: async (input) => input.event === "recall" ? "Recall nudge" : input.event === "promote" ? "Promote nudge" : "Journal nudge",
+    nudge: async (input) => {
+      if (input.event === "session-end") sessionEndCwds.push(input.cwd);
+      return input.event === "recall" ? "Recall nudge" : input.event === "promote" ? "Promote nudge" : "Journal nudge";
+    },
     gate: async (tool, input, directory) => {
       gateCalls.push({ tool, input, directory });
       return input.block ? { decision: "block", reason: "write denied" } : { decision: "warn", reason: "Tag this publish" };
@@ -79,6 +83,21 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
     { type: "text", text: "Journal nudge" },
     { type: "text", text: "Recall nudge" },
   ]);
+  // A journal write after the last edit suppresses the idle nudge; a plan
+  // write does not, and an edit after the entry makes it stale again.
+  const cases = [["s4", "/p/journal/2026-10-14.md", false, false], ["s5", "/p/plans/x.md", true, false], ["s6", "/p/journal/2026-10-14.md", true, true]] as const;
+  for (const [sessionID, url, nudged, editAfter] of cases) {
+    await hooks.get("execute.after")!({ tool: "patch", sessionID, id: "edit", input: {}, status: "completed", result: {} });
+    await hooks.get("execute.after")!({ tool: "demarkus-memory_mark_publish", sessionID, id: "w", input: { url }, status: "completed", result: { content: "Saved" } });
+    if (editAfter) await hooks.get("execute.after")!({ tool: "patch", sessionID, id: "edit2", input: {}, status: "completed", result: {} });
+    const idleN = { type: "session.idle", data: { sessionID } };
+    if (nextEvent) { const resolve = nextEvent; nextEvent = undefined; resolve(idleN); } else events.push(idleN);
+    await new Promise((resolve) => setImmediate(resolve));
+    const ctxN = { sessionID, system: [] as Array<{ type: string; text: string }> };
+    await hooks.get("context")!(ctxN);
+    assert.equal(ctxN.system.some((p) => p.text === "Journal nudge"), nudged, `${sessionID} ${url}`);
+  }
+  assert.ok(sessionEndCwds.length > 0 && sessionEndCwds.every((cwd) => cwd === "/test/project"), `session-end cwd: ${sessionEndCwds}`);
   const created = { type: "session.created", data: { sessionID: "s3" } };
   if (nextEvent) { const resolve = nextEvent; nextEvent = undefined; resolve(created); } else events.push(created);
   await new Promise((resolve) => setImmediate(resolve));
