@@ -468,6 +468,16 @@ func ParseTool(tool string) (ParsedTool, bool) {
 	return ParsedTool{Server: server, Verb: verb}, true
 }
 
+// IsJournalWrite reports a write that records a journal entry: the today route or
+// a path under a journal/ directory. Adapters in shell and TypeScript mirror it.
+func IsJournalWrite(tool, url, route string) bool {
+	pt, ok := ParseTool(tool)
+	if !ok || (pt.Verb != "publish" && pt.Verb != "append") {
+		return false
+	}
+	return route == "today" || strings.Contains(url, "/journal/")
+}
+
 // QualifyTool prefixes a bare tool name with its MCP server when the harness
 // reports them separately (Cursor: tool_name + mcp_server_name), so ParseTool
 // can resolve the target server. Already-qualified names pass through.

@@ -101,7 +101,8 @@ func cmdNudge() {
 	event := fs.String("event", "", "override event: recall | promote | session-end")
 	surface := fs.String("surface", "", "override surface: memory | knowledge")
 	changed := fs.Bool("changed-files", false, "session-end: the session changed files")
-	memoryWrite := fs.Bool("memory-write", false, "session-end: a memory write happened")
+	journalWrite := fs.Bool("journal-write", false, "session-end: a journal entry was written")
+	memoryWrite := fs.Bool("memory-write", false, "session-end: any memory write happened (adapters older than --journal-write)")
 	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits, never returns an error
 
 	in, err := readNudgeInput(os.Stdin)
@@ -122,6 +123,9 @@ func cmdNudge() {
 	}
 	if set["changed-files"] {
 		in.ChangedFiles = *changed
+	}
+	if set["journal-write"] {
+		in.JournalWrite = *journalWrite
 	}
 	if set["memory-write"] {
 		in.MemoryWrite = *memoryWrite

@@ -228,7 +228,7 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     const nudge = await callNudge({
       event: "session-end",
       changedFiles: activity.changedFiles,
-      memoryWrite: activity.hadMemoryWrite,
+      journalWrite: activity.hadJournalWrite,
     });
     if (nudge) ctx.ui.notify(nudge, "info");
   });

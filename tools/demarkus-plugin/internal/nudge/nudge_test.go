@@ -2,7 +2,9 @@ package nudge
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -93,7 +95,10 @@ func TestSessionEnd(t *testing.T) {
 		t.Error("changed files + no memory write → journal nudge")
 	}
 	if eval(t, sig(true, true, false)) != "" {
-		t.Error("a memory write suppresses the nudge")
+		t.Error("a legacy memoryWrite from an older adapter still suppresses the nudge")
+	}
+	if eval(t, &Input{Event: "session-end", Signals: Signals{ChangedFiles: true, JournalWrite: true}}) != "" {
+		t.Error("a journal write suppresses the nudge")
 	}
 	if eval(t, sig(false, false, false)) != "" {
 		t.Error("no file changes → no nudge")
@@ -117,8 +122,16 @@ func TestSessionEndScansTranscript(t *testing.T) {
 	if eval(t, &Input{Event: "session-end", TranscriptPath: path}) == "" {
 		t.Error("an Edit in the transcript should nudge")
 	}
-	if eval(t, &Input{Event: "session-end", TranscriptPath: path, Signals: Signals{MemoryWrite: true}}) != "" {
-		t.Error("adapter-supplied memoryWrite OR-merges with the scan")
+	if eval(t, &Input{Event: "session-end", TranscriptPath: path, Signals: Signals{JournalWrite: true}}) != "" {
+		t.Error("adapter-supplied journalWrite OR-merges with the scan")
+	}
+	planOnly := filepath.Join(t.TempDir(), "p.jsonl")
+	planLine := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"p","name":"mcp__soul__mark_publish","input":{"url":"/plans/x.md"}}]}}`
+	if err := os.WriteFile(planOnly, []byte(editLine+"\n"+planLine+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if eval(t, &Input{Event: "session-end", TranscriptPath: planOnly}) == "" {
+		t.Error("a plan edit is not a journal entry; the nudge still fires")
 	}
 	if _, err := Evaluate(&Input{Event: "session-end", TranscriptPath: filepath.Join(t.TempDir(), "missing")}); err == nil {
 		t.Error("unreadable transcript must surface an error, not nudge silently")
@@ -139,5 +152,83 @@ func TestPromoteAcceptsCursorShape(t *testing.T) {
 		ToolInput: map[string]any{"url": "/proj/adr/0001-x.md", "body": "# x"}})
 	if got != "" {
 		t.Fatal("publish to the knowledge system must not nudge promotion")
+	}
+}
+
+func TestSessionEndCarriesFacts(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "-C", repo, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "new.go"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	body := strings.Join([]string{editLine, bashUse("t1", "go test ./..."), bashResult("t1", true, `Exit code 1`)}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := eval(t, &Input{Event: "session-end", TranscriptPath: path, Cwd: repo})
+	for _, want := range []string{journalNudgeHead, "- branch: main (no commits yet)", "- uncommitted (1): new.go", "- checks: test failed", journalNudgeFactsUse, journalNudgeAsk} {
+		if !strings.Contains(got, want) {
+			t.Errorf("nudge missing %q:\n%s", want, got)
+		}
+	}
+
+	got = eval(t, &Input{Event: "session-end", TranscriptPath: path, Cwd: t.TempDir()})
+	if strings.Contains(got, "branch:") || !strings.Contains(got, "- checks: test failed") {
+		t.Errorf("outside a repo the nudge keeps the checks and drops git facts:\n%s", got)
+	}
+}
+
+func TestSessionEndReadsTheEditedRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	// Outside the temp dir: the scanner treats temp paths as scratch, not project work.
+	repo, err := os.MkdirTemp(".", "_testrepo-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(repo); err != nil {
+			t.Errorf("remove %s: %v", repo, err)
+		}
+	})
+	if repo, err = filepath.Abs(repo); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", repo, "init", "-q", "-b", "feat/elsewhere").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	edit := func(path string) string {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "t.jsonl")
+		line := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e","name":"Edit","input":{"file_path":"` + path + `"}}]}}`
+		if err := os.WriteFile(p, []byte(line+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	// Session started outside any repo; the edit was in repo/pkg.
+	got := eval(t, &Input{Event: "session-end", TranscriptPath: edit(filepath.Join(repo, "pkg", "a.go")), Cwd: t.TempDir()})
+	if !strings.Contains(got, "- branch: feat/elsewhere (no commits yet) in "+filepath.Base(repo)) {
+		t.Errorf("git should be read where the last edit happened:\n%s", got)
+	}
+
+	// Edit outside any repo: fall back to the session cwd.
+	got = eval(t, &Input{Event: "session-end", TranscriptPath: edit("/nonexistent/dir/a.go"), Cwd: repo})
+	if !strings.Contains(got, "- branch: feat/elsewhere") {
+		t.Errorf("an edit outside any repo falls back to cwd:\n%s", got)
 	}
 }
