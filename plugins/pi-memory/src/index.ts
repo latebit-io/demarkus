@@ -227,6 +227,7 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async (_event, ctx) => {
     const nudge = await callNudge({
       event: "session-end",
+      cwd: ctx.cwd,
       changedFiles: activity.changedFiles,
       journalWrite: activity.hadJournalWrite,
     });

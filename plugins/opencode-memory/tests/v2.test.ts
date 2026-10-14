@@ -22,6 +22,7 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
     } },
   };
   const gateCalls: unknown[] = [];
+  const sessionEndCwds: unknown[] = [];
   const lifecycle: string[] = [];
   const notices: string[] = [];
   const stop = await setupV2(ctx, {
@@ -39,7 +40,10 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
       } as any;
     },
     guidance: async () => "Recall first",
-    nudge: async (input) => input.event === "recall" ? "Recall nudge" : input.event === "promote" ? "Promote nudge" : "Journal nudge",
+    nudge: async (input) => {
+      if (input.event === "session-end") sessionEndCwds.push(input.cwd);
+      return input.event === "recall" ? "Recall nudge" : input.event === "promote" ? "Promote nudge" : "Journal nudge";
+    },
     gate: async (tool, input, directory) => {
       gateCalls.push({ tool, input, directory });
       return input.block ? { decision: "block", reason: "write denied" } : { decision: "warn", reason: "Tag this publish" };
@@ -93,6 +97,7 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
     await hooks.get("context")!(ctxN);
     assert.equal(ctxN.system.some((p) => p.text === "Journal nudge"), nudged, `${sessionID} ${url}`);
   }
+  assert.ok(sessionEndCwds.length > 0 && sessionEndCwds.every((cwd) => cwd === "/test/project"), `session-end cwd: ${sessionEndCwds}`);
   const created = { type: "session.created", data: { sessionID: "s3" } };
   if (nextEvent) { const resolve = nextEvent; nextEvent = undefined; resolve(created); } else events.push(created);
   await new Promise((resolve) => setImmediate(resolve));

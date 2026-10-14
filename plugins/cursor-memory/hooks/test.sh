@@ -15,6 +15,8 @@ case "\$1" in
         echo '{"permission":"allow","agent_message":"warned"}' ;;
   nudge) case "\$*" in *session-end*) echo '{"followup_message":"journal?"}' ;; *) echo '{"permission":"allow","agent_message":"promote?"}' ;; esac ;;
   guidance) echo '{"additional_context":"guidance"}' ;;
+  journal-write) [[ -z "\${FAKE_JOURNAL_CRASH:-}" ]] || exit 3
+                 case "\$in" in *'"route":"today"'*|*'/journal/'*) exit 0 ;; *) exit 1 ;; esac ;;
 esac
 FAKE
 chmod +x "${HOME}/.demarkus/bin/demarkus-plugin"
@@ -33,8 +35,14 @@ printf '{"hook_event_name":"afterFileEdit","conversation_id":"%s","file_path":"/
 [[ -e "${dir}/changed" ]] || fail "afterFileEdit should mark changed"
 printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_fetch","mcp_server_name":"demarkus-memory","tool_input":{"url":"/journal/2026-10-14.md"}}' "$cid" | bash "${HERE}/mark-activity.sh"
 [[ ! -e "${dir}/journal-write" ]] || fail "mark_fetch must not mark journal-write"
-printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_publish","mcp_server_name":"demarkus-memory","tool_input":{"url":"/plans/x.md","body":"see /journal/a.md"}}' "$cid" | bash "${HERE}/mark-activity.sh"
+printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_publish","mcp_server_name":"demarkus-memory","tool_input":{"url":"/plans/x.md"}}' "$cid" | bash "${HERE}/mark-activity.sh"
 [[ ! -e "${dir}/journal-write" ]] || fail "a plan publish must not mark journal-write"
+# The rule itself is tested in Go (nudge.JournalWriteCall); here only the wiring.
+grep -q '^journal-write$' "${CALLS}" || fail "a mark write should ask the binary"
+err="${HOME}/jw.err"
+printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_append","tool_input":{"route":"today"}}' "$cid" | FAKE_JOURNAL_CRASH=1 bash "${HERE}/mark-activity.sh" 2>"${err}"
+[[ ! -e "${dir}/journal-write" ]] || fail "a failed check must not mark journal-write"
+grep -q 'journal-write check failed (exit 3)' "${err}" || fail "a failed check should log on stderr: $(cat "${err}")"
 printf '{"hook_event_name":"afterMCPExecution","conversation_id":"%s","tool_name":"mark_publish","mcp_server_name":"demarkus-memory","tool_input":"{\\"url\\":\\"/p/journal/2026-10-14.md\\"}"}' "$cid" | bash "${HERE}/mark-activity.sh"
 [[ -e "${dir}/journal-write" ]] || fail "a publish under journal/ (escaped tool_input) should mark journal-write"
 rm -f "${dir}/journal-write"

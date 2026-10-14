@@ -91,8 +91,6 @@ var checkPrefixes = []struct {
 	{[]string{"cargo", "build"}, Build},
 	{[]string{"make", "build"}, Build},
 	{[]string{"pre-commit.sh"}, PreCommit},
-	{[]string{"bash", "pre-commit.sh"}, PreCommit},
-	{[]string{"sh", "pre-commit.sh"}, PreCommit},
 	{[]string{"pre-commit", "run"}, PreCommit},
 }
 
@@ -110,12 +108,11 @@ func Classify(command string) Command {
 	cmd := Command{Attributable: andOnly}
 	seen := map[Check]bool{}
 	for _, seg := range segs {
-		stage, _, piped := strings.Cut(seg, "|")
-		c, ok := classifySegment(strings.Fields(stage))
+		c, ok := classifySegment(strings.Fields(seg.stage))
 		if !ok {
 			continue
 		}
-		if piped {
+		if seg.piped {
 			cmd.Attributable = false
 		}
 		if !seen[c] {
@@ -143,6 +140,9 @@ func (c Command) Outcome(exitOK bool) Outcome {
 func classifySegment(tokens []string) (Check, bool) {
 	for len(tokens) > 0 && isEnvAssignment(tokens[0]) {
 		tokens = tokens[1:]
+	}
+	if len(tokens) > 1 && (tokens[0] == "bash" || tokens[0] == "sh") {
+		tokens = tokens[1:] // a script run through a shell is the script
 	}
 	if len(tokens) == 1 && tokens[0] == "make" {
 		return Build, true
@@ -176,17 +176,32 @@ func isEnvAssignment(tok string) bool {
 	return i > 0 && !strings.ContainsAny(tok[:i], "-/.")
 }
 
+// segment is one command of a chain: its first pipeline stage, and whether a
+// pipe follows it (then the exit status is the last stage's).
+type segment struct {
+	stage string
+	piped bool
+}
+
 // splitSegments splits on &&, ||, ; and newlines outside quotes, so a check
-// named inside a commit message is not a check. andOnly: every separator was &&.
-func splitSegments(command string) (segs []string, andOnly bool) {
+// named inside a commit message is not a check, and a quoted | is no pipe.
+// andOnly: every separator was &&.
+func splitSegments(command string) (segs []segment, andOnly bool) {
 	andOnly = true
 	var cur strings.Builder
 	var quote byte
+	piped := false
 	flush := func() {
 		if s := strings.TrimSpace(cur.String()); s != "" {
-			segs = append(segs, s)
+			segs = append(segs, segment{stage: s, piped: piped})
 		}
 		cur.Reset()
+		piped = false
+	}
+	write := func(c byte) {
+		if !piped {
+			cur.WriteByte(c)
+		}
 	}
 	for i := 0; i < len(command); i++ {
 		c := command[i]
@@ -195,10 +210,10 @@ func splitSegments(command string) (segs []string, andOnly bool) {
 			if c == quote {
 				quote = 0
 			}
-			cur.WriteByte(c)
+			write(c)
 		case c == '\'' || c == '"':
 			quote = c
-			cur.WriteByte(c)
+			write(c)
 		case c == ';' || c == '\n':
 			// A trailing ; or newline ends the command; it sequences nothing.
 			andOnly = andOnly && strings.TrimSpace(command[i+1:]) == ""
@@ -207,8 +222,10 @@ func splitSegments(command string) (segs []string, andOnly bool) {
 			andOnly = andOnly && c == '&'
 			flush()
 			i++
+		case c == '|':
+			piped = true
 		default:
-			cur.WriteByte(c)
+			write(c)
 		}
 	}
 	flush()
@@ -218,19 +235,20 @@ func splitSegments(command string) (segs []string, andOnly bool) {
 // Render is the facts block: a heading line and one bullet per fact, capped
 // at maxPaths paths and maxBlock bytes. Empty when there is nothing to say.
 func Render(s Session) string {
-	if s.Git == nil && s.Checks == nil {
-		return ""
+	var checks []string
+	if s.Checks != nil {
+		checks = []string{"checks: " + renderChecks(s.Checks)}
 	}
 	if s.Git == nil {
-		return block("checks: " + renderChecks(s.Checks))
-	}
-	for n := min(len(s.Git.Uncommitted), maxPaths); ; n-- {
-		lines := []string{s.Git.position(), uncommittedLine(s.Git.Uncommitted, n)}
-		if s.Checks != nil {
-			lines = append(lines, "checks: "+renderChecks(s.Checks))
+		if checks == nil {
+			return ""
 		}
-		b := block(lines...)
-		if len(b) <= maxBlock || n == 0 {
+		return block(checks...)
+	}
+	pos := s.Git.position()
+	for n := min(len(s.Git.Uncommitted), maxPaths); ; n-- {
+		lines := append([]string{pos, uncommittedLine(s.Git.Uncommitted, n)}, checks...)
+		if b := block(lines...); len(b) <= maxBlock || n == 0 {
 			return b
 		}
 	}
@@ -241,27 +259,19 @@ func block(lines ...string) string {
 }
 
 func (g *Git) position() string {
-	pos := "branch: " + orDetached(g.Branch)
+	pos := "branch: detached HEAD"
+	if g.Branch != "" {
+		pos = "branch: " + g.Branch
+	}
 	if g.Head == "" {
 		pos += " (no commits yet)"
 	} else {
-		head := g.Head
-		if len(head) > shortHash {
-			head = head[:shortHash]
-		}
-		pos += " at " + head
+		pos += " at " + g.Head[:min(len(g.Head), shortHash)]
 	}
 	if g.Root != "" {
 		pos += " in " + filepath.Base(g.Root)
 	}
 	return pos
-}
-
-func orDetached(branch string) string {
-	if branch == "" {
-		return "detached HEAD"
-	}
-	return branch
 }
 
 func uncommittedLine(paths []string, shown int) string {

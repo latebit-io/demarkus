@@ -13,10 +13,8 @@ function isMemoryWrite(toolName: string, input: Record<string, unknown>): boolea
 }
 
 // Mirrors config.IsJournalWrite in the plugin binary: route today, or a url
-// under a journal/ directory. A plan or ADR write is not a journal entry.
-function isJournalWrite(toolName: string, input: Record<string, unknown>): boolean {
-  if (!isMemoryWrite(toolName, input)) return false;
-  const args = toolName === "mcp" && input.args && typeof input.args === "object" ? (input.args as Record<string, unknown>) : input;
+// under a journal/ directory. Args arrive already unwrapped (normalizeToolCall).
+function isJournalWrite(args: Record<string, unknown>): boolean {
   const url = typeof args.url === "string" ? args.url : "";
   return args.route === "today" || url.includes("/journal/");
 }
@@ -27,7 +25,7 @@ export class SessionActivity {
 
   observe(toolName: string, input: Record<string, unknown> = {}): void {
     if (isMemoryWrite(toolName, input)) {
-      if (isJournalWrite(toolName, input)) this.journalWrite = true;
+      if (isJournalWrite(input)) this.journalWrite = true;
       return;
     }
     if (/(^|_)(Edit|Write|NotebookEdit)$/.test(toolName) || ["edit", "write"].includes(toolName)) {

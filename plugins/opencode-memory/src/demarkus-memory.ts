@@ -109,6 +109,21 @@ function isJournalWrite(args: Record<string, unknown> | undefined): boolean {
   return args?.route === "today" || url.includes("/journal/");
 }
 
+// trackActivity records one completed tool call in the session's signals and
+// reports whether it was a memory write. An edit after a journal entry leaves
+// the entry stale.
+function trackActivity(s: SessionState, tool: string, args: Record<string, unknown> | undefined): boolean {
+  if (!isMemoryWrite(tool)) {
+    if (isFileMutation(tool)) {
+      s.changedFiles = true;
+      s.journalWrite = false;
+    }
+    return false;
+  }
+  if (isJournalWrite(args)) s.journalWrite = true;
+  return true;
+}
+
 function isFileMutation(toolName: string): boolean {
   return /^(edit|write|patch|multiedit)$/i.test(toolName);
 }
@@ -383,14 +398,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
     ) => {
       if (!adapters.has("memory")) return;
       const s = state(input.sessionID ?? "default");
-      if (!isMemoryWrite(input.tool)) {
-        if (isFileMutation(input.tool)) {
-          s.changedFiles = true;
-          s.journalWrite = false; // an edit after the entry leaves it stale
-        }
-        return;
-      }
-      if (isJournalWrite(input.args)) s.journalWrite = true;
+      if (!trackActivity(s, input.tool, input.args)) return;
 
       const key = `${input.sessionID}:${input.callID}`;
       const warn = pendingWarns.get(key);
@@ -433,6 +441,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       s.idleNudged = true;
       const nudge = await callNudge({
         event: "session-end",
+        cwd: directory,
         changedFiles: s.changedFiles,
         journalWrite: s.journalWrite,
       });
@@ -534,14 +543,7 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
     pendingWarns.delete(key);
     if (event.status !== "completed") return;
     const s = state(event.sessionID);
-    if (!isMemoryWrite(event.tool)) {
-      if (isFileMutation(event.tool)) {
-        s.changedFiles = true;
-        s.journalWrite = false; // an edit after the entry leaves it stale
-      }
-      return;
-    }
-    if (isJournalWrite(event.input as Record<string, unknown> | undefined)) s.journalWrite = true;
+    if (!trackActivity(s, event.tool, event.input as Record<string, unknown> | undefined)) return;
     const nudge = await (services.nudge ?? callNudge)({ event: "promote", tool: event.tool, input: event.input ?? {} });
     const additions = [warn && `⚠️ ${warn}`, nudge].filter(Boolean).join("\n\n");
     if (!additions) return;
@@ -575,7 +577,7 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
         const s = state(event.data.sessionID);
         if (s.idleNudged || !s.changedFiles || s.journalWrite) continue;
         s.idleNudged = true;
-        const nudge = await (services.nudge ?? callNudge)({ event: "session-end", changedFiles: true, journalWrite: false });
+        const nudge = await (services.nudge ?? callNudge)({ event: "session-end", cwd: directory, changedFiles: true, journalWrite: false });
         if (nudge) pendingContext.set(event.data.sessionID, [...(pendingContext.get(event.data.sessionID) ?? []), nudge]);
       }
     } catch (error) {

@@ -22,8 +22,8 @@ type Signals struct {
 	// JournalWrite: a journal entry was written after the last project edit,
 	// so the journal covers the session's work so far.
 	JournalWrite bool `json:"journalWrite"`
-	// MemoryWrite: any memory write, from adapters older than journalWrite;
-	// still suppresses so they keep their behavior.
+	// MemoryWrite: any memory write, from adapters older than journalWrite,
+	// which share ~/.demarkus/bin; remove once every plugin pins a binary with it.
 	MemoryWrite bool `json:"memoryWrite"`
 	// PendingBackground: a background agent or command has not reported back,
 	// so this Stop is a pause mid-task, not the session's end.
@@ -71,7 +71,7 @@ type contentBlock struct {
 	Name      string          `json:"name"`        // tool_use
 	ToolUseID string          `json:"tool_use_id"` // tool_result
 	IsError   bool            `json:"is_error"`    // tool_result
-	Content   json.RawMessage `json:"content"`     // tool_result
+	ExitCode  exitCodeContent `json:"content"`     // tool_result: content starts with "Exit code"
 	Input     struct {
 		FilePath     string `json:"file_path"`
 		NotebookPath string `json:"notebook_path"`
@@ -199,6 +199,15 @@ func (s *scanner) line(line []byte) {
 	}
 }
 
+// exitCodeContent decodes a tool_result's content only to whether it starts
+// with the harness's "Exit code" line, so result bodies are never copied.
+type exitCodeContent bool
+
+func (e *exitCodeContent) UnmarshalJSON(data []byte) error {
+	*e = exitCodeContent(bytes.HasPrefix(data, []byte(`"Exit code `)))
+	return nil
+}
+
 // checkResult records a recognized check's outcome. A failed exit is is_error
 // plus the "Exit code" prefix; a rejected or timed-out call sets is_error
 // without one. Background runs report later, unread here.
@@ -211,11 +220,8 @@ func (s *scanner) checkResult(b *contentBlock, background bool) {
 	if background {
 		return
 	}
-	if b.IsError {
-		var text string
-		if json.Unmarshal(b.Content, &text) != nil || !strings.HasPrefix(text, "Exit code ") {
-			return
-		}
+	if b.IsError && !bool(b.ExitCode) {
+		return
 	}
 	outcome := cmd.Outcome(!b.IsError)
 	for _, c := range cmd.Checks {
