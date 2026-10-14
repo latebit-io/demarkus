@@ -52,6 +52,10 @@ func (f *fakeStore) List(_ context.Context, dir string, includeArchived bool, cu
 			continue
 		}
 		rest := strings.TrimPrefix(p, dir)
+		// As the server does: a dot directory (`.well-known/`) never lists.
+		if strings.HasPrefix(rest, ".") {
+			continue
+		}
 		if head, _, nested := strings.Cut(rest, "/"); nested {
 			names[head+"/"] = true
 		} else {
