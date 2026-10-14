@@ -180,12 +180,15 @@ func WriteFile(path string, file File) error {
 	})
 }
 
-// writeAtomic publishes through a temp file and a rename, with an fsync of the
-// file and of its directory, so readers never see a partial file and a revoke
-// survives a crash. Callers hold the lock from withLockedFile.
+// writeAtomic publishes via temp file, rename and fsync of file and directory:
+// no partial reads, a revoke survives a crash, owner and mode carry over.
+// Callers hold the lock from withLockedFile.
 func writeAtomic(path string, fn func(io.Writer) error) error {
 	tmp := path + ".tmp"
 	if err := writeTemp(tmp, fn); err != nil {
+		return errors.Join(err, removeTemp(tmp))
+	}
+	if err := matchExisting(tmp, path); err != nil {
 		return errors.Join(err, removeTemp(tmp))
 	}
 	if err := os.Rename(tmp, path); err != nil {

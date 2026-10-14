@@ -1826,8 +1826,16 @@ do_install() {
     fi
   fi
   echo ""
-  log_info "Generate additional tokens:"
-  echo "  demarkus-token generate -paths \"/**\" -ops publish -tokens ${tokens_file}"
+  local sudo_prefix=""
+  if [ "$PLATFORM" = "linux" ] && command -v sudo >/dev/null 2>&1; then
+    sudo_prefix="sudo "
+    log_info "Generate additional tokens:"
+  elif [ "$PLATFORM" = "linux" ]; then
+    log_info "Generate additional tokens (as root):"
+  else
+    log_info "Generate additional tokens:"
+  fi
+  echo "  ${sudo_prefix}demarkus-token generate -paths \"/**\" -ops publish -tokens ${tokens_file}"
   echo ""
   log_info "Update later with: demarkus-install update"
 
