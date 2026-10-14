@@ -100,8 +100,8 @@ type Command struct {
 	// Attributable: a foreground && chain with no piped check, so exit 0
 	// means every check passed.
 	Attributable bool
-	// FailureIsCheck: a failed exit can only be the check's: it is the
-	// chain's one check, its last segment, and only cd runs before it.
+	// FailureIsCheck: the check is the whole command, so a failed exit is
+	// its own; any other segment, even a cd, may be what failed.
 	FailureIsCheck bool
 }
 
@@ -110,12 +110,9 @@ func Classify(command string) Command {
 	segs, andOnly := splitSegments(command)
 	cmd := Command{Attributable: andOnly}
 	seen := map[Check]bool{}
-	setupOnly := true // every segment before the current one is a cd
-	for i, seg := range segs {
-		tokens := strings.Fields(seg.stage)
-		c, ok := classifySegment(tokens)
+	for _, seg := range segs {
+		c, ok := classifySegment(strings.Fields(seg.stage))
 		if !ok {
-			setupOnly = setupOnly && len(tokens) > 0 && tokens[0] == "cd"
 			continue
 		}
 		if seg.piped {
@@ -125,10 +122,8 @@ func Classify(command string) Command {
 			seen[c] = true
 			cmd.Checks = append(cmd.Checks, c)
 		}
-		cmd.FailureIsCheck = len(cmd.Checks) == 1 && setupOnly && i == len(segs)-1
-		setupOnly = false
 	}
-	cmd.FailureIsCheck = cmd.FailureIsCheck && cmd.Attributable
+	cmd.FailureIsCheck = cmd.Attributable && len(segs) == 1 && len(cmd.Checks) == 1
 	return cmd
 }
 

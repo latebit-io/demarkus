@@ -20,7 +20,8 @@ func TestClassify(t *testing.T) {
 		want Command
 	}{
 		{"go test ./...", ok(Test)},
-		{"cd tools && go test ./internal/... -race", ok(Test)},
+		{"cd tools && go test ./internal/... -race", passOnly(Test)},
+		{"cd missing-dir && go test ./...", passOnly(Test)},
 		{"CGO_ENABLED=0 go build ./...", ok(Build)},
 		{"bash pre-commit.sh", ok(PreCommit)},
 		{"sh scripts/pre-commit.sh", ok(PreCommit)},
