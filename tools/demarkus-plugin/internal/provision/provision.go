@@ -30,15 +30,15 @@ var (
 	isolatedPortStart = 16310
 )
 
-// restartLocalServerOnUpgrade moves the local server onto a freshly swapped
-// binary. Ownership is the MODE, not a .pid: reuse-mode servers are the user's,
-// so only a down one is started. Restart problems are warned, never propagated.
+// restartLocalServerOnUpgrade moves the managed server onto a freshly swapped
+// binary. Ownership is the MODE, not a .pid: a reuse-mode server is the user's,
+// handled in provisionLocked. Restart problems are warned, never propagated.
 func restartLocalServerOnUpgrade(replaced bool) {
 	if !replaced {
 		return
 	}
 	cfg, err := config.LoadConfig()
-	if err != nil || cfg == nil {
+	if err != nil || cfg == nil || cfg.Mode == "reuse" {
 		return
 	}
 	port, err := strconv.Atoi(strings.TrimSpace(cfg.Port))
@@ -57,7 +57,7 @@ func restartLocalServerOnUpgrade(replaced bool) {
 		return
 	}
 
-	// Reuse mode, or a managed server that's down: don't assume it's ours.
+	// A managed server that's down, or one without our .pid: don't assume it's ours.
 	if extPID := procscan.PIDAtRoot(cfg.MemoryDir); extPID > 0 {
 		progress.Warnf("binary upgraded, but the server at %s (pid=%d, mode=%s) is user-managed and still running the old binary; restart it yourself to pick up the new one", cfg.MemoryDir, extPID, cfg.Mode)
 		return
@@ -67,6 +67,52 @@ func restartLocalServerOnUpgrade(replaced bool) {
 	if err := server.Ensure(cfg.MemoryDir, port); err != nil {
 		progress.Warnf("could not (re)start the local server after a binary upgrade; run /soul-init to recover: %v", err)
 	}
+}
+
+// respawnWait bounds the wait for a supervisor to bring the new server up.
+const respawnWait = 5 * time.Second
+
+// healReusedServer restarts a reused server left on a replaced binary when the
+// user's own service manager runs it. Every other case is the health
+// warning's to name; the plugin never signals the process itself.
+func healReusedServer(root string, pid, port int) {
+	exe := procscan.Executable(pid)
+	if exe == "" || !procscan.BinaryReplaced(pid, exe) {
+		return
+	}
+	sup, ran := procscan.Supervisor(pid)
+	if !ran || !sup.User {
+		return
+	}
+	progress.Logf("binary replaced; restarting the reused server (pid %d) through %s %s", pid, sup.Kind, sup.Unit)
+	if err := sup.Restart(); err != nil {
+		progress.Warnf("could not restart the reused server: %v", err)
+		return
+	}
+	fresh := awaitRespawn(root, pid, port)
+	if fresh == 0 {
+		progress.Warnf("%s %s was asked to restart, but no new server at %s came up within %s; run /soul-status to check", sup.Kind, sup.Unit, root, respawnWait)
+		return
+	}
+	progress.Logf("reused server restarted (pid %d) on %s", fresh, exe)
+}
+
+// awaitRespawn waits for a server at root other than old with its port bound
+// (an unknown port counts as bound); 0 when that did not happen within
+// respawnWait, a process that never listens included.
+func awaitRespawn(root string, old, port int) int {
+	fresh := 0
+	for deadline := time.Now().Add(respawnWait); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if fresh == 0 {
+			if pid := procscan.PIDAtRoot(root); pid > 0 && pid != old {
+				fresh = pid
+			}
+		}
+		if fresh != 0 && (port == 0 || !procscan.PortIsFree(port)) {
+			return fresh
+		}
+	}
+	return 0
 }
 
 // withProvisionLock serializes provisioning across processes (concurrent
@@ -153,7 +199,11 @@ func provisionLocked() (int, error) {
 			progress.Warnf("malformed PORT %q in plugin-memory.conf; skipping doc seeding", cfg.Port)
 			seedAfter = false
 		}
-		if procscan.PIDAtRoot(cfg.MemoryDir) == 0 {
+		// A down one is the user's to start: server.Ensure would write managed
+		// bookkeeping and the managed tokens path into their root.
+		if pid := procscan.PIDAtRoot(cfg.MemoryDir); pid > 0 {
+			healReusedServer(cfg.MemoryDir, pid, port)
+		} else {
 			progress.Warnf("configured to reuse server at %s but none is running; run /soul-init to reconfigure", cfg.MemoryDir)
 			seedAfter = false // known down; don't pay the seeding dial retries
 		}
@@ -455,7 +505,11 @@ func replacedBinaryWarning(pid int, exe, got string) string {
 	if got != "" {
 		installed = got
 	}
-	return fmt.Sprintf("the reused demarkus server (pid %d) started before its binary %s was replaced, so it is still serving the old code rather than %s. Restart that server to pick it up.", pid, exe, installed)
+	restart := "Restart that server to pick it up."
+	if sup, ran := procscan.Supervisor(pid); ran && sup.Kind != "" {
+		restart = "Restart it: " + sup.ManualRestart() + "."
+	}
+	return fmt.Sprintf("the reused demarkus server (pid %d) started before its binary %s was replaced, so it is still serving the old code rather than %s. %s", pid, exe, installed, restart)
 }
 
 // HealthWarning echoes a one-line warning when the configured memory server is

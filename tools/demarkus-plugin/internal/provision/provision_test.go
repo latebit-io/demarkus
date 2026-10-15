@@ -448,3 +448,79 @@ func TestHealthWarning(t *testing.T) {
 		t.Errorf("HealthWarning() with a reused server behind the pin = %q, %v", got, err)
 	}
 }
+
+// fakeLaunchctl installs a launchctl on PATH whose print names the old server
+// as the job's process and whose kickstart records its arguments, ends the
+// old server and respawns the stub the way a KeepAlive job does.
+func fakeLaunchctl(t *testing.T, exe, root string, port, oldPID int, argsLog string) {
+	t.Helper()
+	bin := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = print ]; then printf 'pid = %d\\n'; exit 0; fi\nprintf '%%s\\n' \"$*\" > %q\nkill %d\nXPC_SERVICE_NAME=io.latebit.demarkus nohup %q -root %q -port %d -tokens /dev/null >/dev/null 2>&1 &\n", oldPID, argsLog, oldPID, exe, root, port)
+	if err := os.WriteFile(filepath.Join(bin, "launchctl"), []byte(script), 0o755); err != nil { //nolint:gosec // test fake
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// reusedServer starts a stub server carrying label in its environment with a
+// fake launchctl on PATH, and replaces its binary when asked.
+func reusedServer(t *testing.T, label string, replace bool) (root string, old, port int, argsLog string) {
+	t.Helper()
+	t.Setenv("STUB_VERSION", release.ServerVersion)
+	exe := provisiontest.BuildStub(t)
+	root, port = t.TempDir(), provisiontest.FreePort(t)
+	old = provisiontest.StartServer(t, exe, provisiontest.ServerArgs{Root: root, Port: port, Tokens: "/dev/null", Env: []string{"XPC_SERVICE_NAME=" + label}})
+	argsLog = filepath.Join(t.TempDir(), "launchctl.args")
+	fakeLaunchctl(t, exe, root, port, old, argsLog)
+	t.Cleanup(func() {
+		if pid := procscan.PIDAtRoot(root); pid > 0 && pid != old {
+			_ = procscan.Signal(pid, syscall.SIGKILL) // the fake's respawn, not a test child
+		}
+	})
+	if replace {
+		time.Sleep(1100 * time.Millisecond) // past binaryReplaceSkew where mtime is the only signal
+		provisiontest.ReplaceBinary(t, exe)
+	}
+	return root, old, port, argsLog
+}
+
+// A reused server is restarted through launchd only once its binary was
+// replaced and only when a launchd job owns it; the new process serves the
+// new binary and the health check goes quiet.
+func TestHealReusedServer(t *testing.T) {
+	tests := []struct {
+		name, label string
+		replace     bool
+		restarted   bool
+	}{
+		{"current binary is left alone", "io.latebit.demarkus", false, false},
+		{"plain process is left alone", "0", true, false},
+		{"launchd job is restarted", "io.latebit.demarkus", true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, old, port, argsLog := reusedServer(t, tt.label, tt.replace)
+			healReusedServer(root, old, port)
+			args, err := os.ReadFile(argsLog)
+			if ran := err == nil; ran != tt.restarted {
+				t.Fatalf("launchctl ran = %v (%q), want %v", ran, args, tt.restarted)
+			}
+			fresh := procscan.PIDAtRoot(root)
+			if !tt.restarted {
+				if fresh != old {
+					t.Fatalf("server at %s = pid %d, want the untouched %d", root, fresh, old)
+				}
+				return
+			}
+			if want := "kickstart -k gui/" + strconv.Itoa(os.Getuid()) + "/io.latebit.demarkus"; strings.TrimSpace(string(args)) != want {
+				t.Fatalf("launchctl args = %q, want %q", args, want)
+			}
+			if fresh == 0 || fresh == old {
+				t.Fatalf("server at %s = pid %d, want a respawn other than %d", root, fresh, old)
+			}
+			if w := reuseDriftWarning(fresh); w != "" {
+				t.Errorf("after the restart: reuseDriftWarning = %q, want empty", w)
+			}
+		})
+	}
+}
