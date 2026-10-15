@@ -222,7 +222,8 @@ func cmdGuidance() {
 	format := fs.String("format", "json", "output format: json | claude | cursor")
 	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits, never returns an error
 
-	out, err := guidance.Evaluate(guidance.Input{Surface: *surface, GuidanceFile: *guidanceFile, ProjectDir: *projectDir})
+	h, hooked := host.ForHook(*format)
+	out, err := guidance.Evaluate(guidance.Input{Surface: *surface, GuidanceFile: *guidanceFile, ProjectDir: *projectDir, NoStatus: hooked && !h.ShowsStatus()})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] guidance: "+err.Error())
 		return
@@ -230,7 +231,7 @@ func cmdGuidance() {
 	if out.Context == "" && out.Status == "" {
 		return
 	}
-	if h, ok := host.ForHook(*format); ok {
+	if hooked {
 		printJSON(h.Guidance(out.Context, out.Status))
 		return
 	}

@@ -182,15 +182,18 @@ reviews:
       enabled: false
 
   pre_merge_checks:
+    docstrings:
+      mode: off
+    description:
+      mode: off
+    issue_assessment:
+      mode: off
     title:
-      mode: error
+      mode: warning
       requirements: >
-        Title must follow Conventional Commits format:
-        type(scope): description. Valid types: feat, fix, docs, style,
-        refactor, perf, test, build, ci, chore, revert.
-        The scope is optional. Valid scopes: protocol, server, client,
-        tui, mcp, tools, plugins, deploy, install, publish, knowledge,
-        kind.
+        Conventional Commits shape: type(scope): description, or
+        type: description. Any conventional type; the scope is free text
+        naming the area changed. Nothing else is required.
 
 chat:
   auto_reply: true

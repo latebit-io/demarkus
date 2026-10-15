@@ -25,32 +25,59 @@ func setupHome(t *testing.T, files map[string]string) string {
 	return home
 }
 
-func ctx(t *testing.T, in Input) string {
+func eval(t *testing.T, in Input) Output {
 	t.Helper()
 	o, err := Evaluate(in)
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
-	return o.Context
+	return o
 }
 
-func TestMemoryGuidanceHealthAndOffer(t *testing.T) {
+func ctx(t *testing.T, in Input) string { return eval(t, in).Context }
+
+// stubHealth stands in the server health check.
+func stubHealth(t *testing.T, warn string) {
+	t.Helper()
+	prev := serverHealthWarning
+	serverHealthWarning = func() (string, error) { return warn, nil }
+	t.Cleanup(func() { serverHealthWarning = prev })
+}
+
+func TestMemoryGuidanceHealth(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/no/such/dir\nPORT=6310\nMODE=default\n"})
 	gfile := filepath.Join(t.TempDir(), "g.md")
 	_ = os.WriteFile(gfile, []byte("# standing guidance"), 0o644)
 
-	out := ctx(t, Input{Surface: "memory", GuidanceFile: gfile})
-	if !strings.Contains(out, "server is not running") {
+	out := eval(t, Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: t.TempDir()})
+	if !strings.Contains(out.Context, "server is not running") {
 		t.Error("expected health warning (no .pid for the configured memory)")
 	}
-	if !strings.Contains(out, "One-time setup offer") {
-		t.Error("expected the one-time memory offer on first call")
-	}
-	if !strings.Contains(out, "standing guidance") {
+	if !strings.Contains(out.Context, "standing guidance") {
 		t.Error("expected the static guidance body appended")
 	}
-	// second call: offer is now suppressed by the sentinel
-	if strings.Contains(ctx(t, Input{Surface: "memory", GuidanceFile: gfile}), "One-time setup offer") {
+	// A warning owns the status line; the offer waits for a healthy session.
+	if strings.Contains(out.Status, memoryOfferText) {
+		t.Errorf("offer beside a warning: %q", out.Status)
+	}
+}
+
+// The one-time offer is the user's to act on: on the status line, never in
+// the context, once, and not spent on a host that shows no status line.
+func TestMemoryOfferOnTheStatusLineOnce(t *testing.T) {
+	project := filepath.Join(t.TempDir(), "app")
+	setupHome(t, map[string]string{"project-souls": project + "\tteam\n", "souls": "team\tmark://team.example:6309\tfalse\t-\n"})
+	stubHealth(t, "")
+	in := Input{Surface: "memory", ProjectDir: project}
+
+	if out := eval(t, Input{Surface: "memory", ProjectDir: project, NoStatus: true}); strings.Contains(out.Status, memoryOfferText) {
+		t.Errorf("offer on a host without a status line: %q", out.Status)
+	}
+	first := eval(t, in)
+	if !strings.HasSuffix(first.Status, " · "+memoryOfferText) || strings.Contains(first.Context, memoryOfferText) {
+		t.Errorf("offer: status %q, context %q", first.Status, first.Context)
+	}
+	if strings.Contains(eval(t, in).Status, memoryOfferText) {
 		t.Error("offer should show only once")
 	}
 }
@@ -94,9 +121,8 @@ func TestMemoryGuidanceProjectHeader(t *testing.T) {
 	if !strings.Contains(out, "Project slug: `my-repo`. Project root: `/stub/`. Bound store: `team`. Project: unknown (not probed).") {
 		t.Fatalf("header missing or wrong:\n%s", out)
 	}
-	o, err := Evaluate(Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: project})
-	if err != nil || !strings.HasPrefix(o.Status, "demarkus: soul team · project my-repo (status unknown: not probed)") {
-		t.Fatalf("status = %q, %v", o.Status, err)
+	if o := eval(t, Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: project}); !strings.HasPrefix(o.Status, "demarkus: soul team · project my-repo (status unknown: not probed)") {
+		t.Fatalf("status = %q", o.Status)
 	}
 	if strings.Contains(out, "<!--") || !strings.Contains(out, "\n\n# standing guidance") {
 		t.Fatalf("generator comments must be stripped from the injected guidance:\n%s", out)
@@ -142,8 +168,7 @@ func TestMemoryGuidanceSurvivesInvalidProjectName(t *testing.T) {
 	if !strings.Contains(out, "Project slug: none (directory name \"bad#name\" is not a valid slug") {
 		t.Fatalf("an unusable directory name must be stated, not drop the guidance:\n%s", out)
 	}
-	o, err := Evaluate(Input{Surface: "memory", ProjectDir: filepath.Join(t.TempDir(), "bad#name")})
-	if err != nil || o.Status != `demarkus: no project (directory name "bad#name" is not a valid slug)` {
-		t.Fatalf("status = %q, %v", o.Status, err)
+	if o := eval(t, Input{Surface: "memory", ProjectDir: filepath.Join(t.TempDir(), "bad#name")}); o.Status != `demarkus: no project (directory name "bad#name" is not a valid slug)` {
+		t.Fatalf("status = %q", o.Status)
 	}
 }
