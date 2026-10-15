@@ -29,8 +29,12 @@ func (t *Tools) linkOnPublish(ctx context.Context, at *landing, w *docwrite.Writ
 		if err != nil {
 			return mcpfmt.Note(fmt.Sprintf("hub %s not updated: %v", hubPath, err))
 		}
-		if h.Status != protocol.StatusOK {
-			continue // absent or archived: the next ancestor may name it
+		switch h.Status {
+		case protocol.StatusNotFound, protocol.StatusArchived:
+			continue // the next ancestor may name it
+		case protocol.StatusOK:
+		default:
+			return mcpfmt.Note(fmt.Sprintf("hub %s not updated: %s", hubPath, h.Status))
 		}
 		added, err := hub.EnsureLink(ctx, doc, h, &hub.Link{Target: at.target.Path, Bullet: bulletFor(at.target.Path, w), Stamp: t.identityMeta(ctx)})
 		switch {
@@ -59,12 +63,16 @@ func bulletFor(p string, w *docwrite.Write) string {
 	if d := w.Metadata["description"]; d != "" {
 		summary = d
 	}
-	bullet := fmt.Sprintf("- [%s](%s)", title, p)
+	bullet := fmt.Sprintf("- [%s](%s)", linkText.Replace(title), p)
 	if s := gate.BulletSummary(title, summary); s != "" {
 		bullet += ": " + s
 	}
 	return bullet
 }
+
+// linkText keeps a title inside its link: a bracket or backslash in it would
+// end the link text early.
+var linkText = strings.NewReplacer(`\`, `\\`, "[", `\[`, "]", `\]`)
 
 // unlinked words the finding when no ancestor hub exists, with the fix.
 func unlinked(p string) string {

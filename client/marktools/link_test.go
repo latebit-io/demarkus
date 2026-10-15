@@ -9,6 +9,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/marktools"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 const noteBody = "# QUIC retries\n\nBack off from 200ms, capped at 5s.\n\n## Detail\n\nMore.\n"
@@ -72,6 +73,7 @@ func TestPublishBulletText(t *testing.T) {
 		"description wins": {noteBody, "Retry timing for QUIC streams.", "- [QUIC retries](/notes/quic.md): Retry timing for QUIC streams."},
 		"dated summary":    {"# Release\n\nShipped 2026-10-15 in #592.\n", "", "- [Release](/notes/quic.md)"},
 		"no H1":            {"plain text\n", "", "- [quic](/notes/quic.md)"},
+		"bracket in title": {"# API ](v2)\n\nThe v2 surface.\n", "", "- [API \\](v2)](/notes/quic.md): The v2 surface."},
 	} {
 		t.Run(name, func(t *testing.T) {
 			backend := &fetchtest.Client{Published: map[string]fetch.Result{"host:6309/index.md": fetchtest.Head("# Store\n", 1, nil)}}
@@ -135,6 +137,16 @@ func TestPublishReportsAHubItCouldNotLink(t *testing.T) {
 	got = publishNote(t, backend, "/notes/quic.md", noteBody, 0)
 	if got.IsError || got.Text != "status: created v1\nversion: 1\n\nnote: unlinked: no hub reaches /notes/quic.md; publish /notes/index.md with a bullet for it, or add one to /index.md\n" {
 		t.Errorf("no hub = %+v", got)
+	}
+
+	// A hub that cannot be read is not absent: the walk stops and says so.
+	backend = &fetchtest.Client{Published: map[string]fetch.Result{
+		"host:6309/notes/index.md": {Response: protocol.Response{Status: protocol.StatusUnauthorized}},
+		"host:6309/index.md":       fetchtest.Head("# Store\n", 1, nil),
+	}}
+	got = publishNote(t, backend, "/notes/quic.md", noteBody, 0)
+	if got.IsError || got.Text != "status: created v1\nversion: 1\n\nnote: hub /notes/index.md not updated: unauthorized\n" || len(backend.PublishCalls) != 1 {
+		t.Errorf("unreadable hub = %+v, publishes %d", got, len(backend.PublishCalls))
 	}
 	if len(backend.PublishCalls) != 1 {
 		t.Errorf("publishes = %d, want the document alone", len(backend.PublishCalls))
