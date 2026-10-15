@@ -250,7 +250,11 @@ caller's world.
 
 #### `mark_publish`
 
-Publish or update a document. Conflict-aware: on version mismatch,
+Publish or update a document. The status line carries the version
+delta (`created v9 (was v8)`; a first write `created v1`). A first
+version of a non-hub document is linked from the nearest ancestor hub
+that exists (a `hubs:` line names it); no hub, or a hub edit that
+failed, is a note. Conflict-aware: on version mismatch,
 the default `on_conflict: "merge"` returns a structurally-merged
 candidate body (git-style conflict markers if both sides edited the
 same lines) for the agent to verify, then re-call with

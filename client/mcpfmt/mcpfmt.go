@@ -88,6 +88,11 @@ func Full(r fetch.Result, keys ...string) string {
 	return FullWith(r, r.Response.Body, nil, keys...)
 }
 
+// FullStatus renders a write under a status line the surface words itself.
+func FullStatus(status string, meta map[string]string, keys ...string) string {
+	return render(status, meta, keys, true, "")
+}
+
 // FullWith is Full with a replacement body and surface-added keys.
 func FullWith(r fetch.Result, body string, extra map[string]string, keys ...string) string {
 	return render(r.Response.Status, withExtra(r.Response.Metadata, extra), keys, true, body)

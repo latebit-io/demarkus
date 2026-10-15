@@ -37,6 +37,11 @@ func Versions(docPath string, current int) fetch.Result {
 	return fetch.Result{Response: render.VersionsResponse(docPath, history, true)}
 }
 
+// Created is the server's answer to a write that made version v.
+func Created(v int) fetch.Result {
+	return fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{"version": strconv.Itoa(v)}}}
+}
+
 // Head is a live document at version, as a FETCH of it answers.
 func Head(body string, version int, meta map[string]string) fetch.Result {
 	m := map[string]string{"version": strconv.Itoa(version)}

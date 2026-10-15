@@ -25,15 +25,6 @@ func docsOn(backend *fetchtest.Client) Docs {
 	}
 }
 
-func call(backend *fetchtest.Client, path string) *fetch.WriteRequest {
-	for i := range backend.PublishCalls {
-		if backend.PublishCalls[i].Path == path {
-			return &backend.PublishCalls[i]
-		}
-	}
-	return nil
-}
-
 func TestAppendCreatesTheDayAndBothHubs(t *testing.T) {
 	backend := &fetchtest.Client{}
 	out, err := Append(t.Context(), docsOn(backend), Request{Dir: "/proj/", Entry: "Shipped the thing.", Tags: []string{"release", " "}, Stamp: stamp, Now: day})
@@ -43,18 +34,18 @@ func TestAppendCreatesTheDayAndBothHubs(t *testing.T) {
 	if out.Path != today || out.Status != StatusCreated || out.Version != 1 || len(out.Notes) != 0 {
 		t.Fatalf("outcome = %+v", out)
 	}
-	j := call(backend, today)
+	j := backend.PublishCall(today)
 	if j == nil || j.Body != "# proj journal: 2026-10-12\n\nShipped the thing.\n" || j.ExpectedVersion != 0 || j.Token != "w" {
 		t.Fatalf("journal publish = %+v", j)
 	}
 	if j.Metadata["tags"] != "journal,proj,release" || j.Metadata["type"] != "Journal" || j.Metadata["importance"] != "0.4" || j.Metadata["agent"] != "test-agent" {
 		t.Errorf("journal metadata = %v", j.Metadata)
 	}
-	hub := call(backend, "/proj/index.md")
+	hub := backend.PublishCall("/proj/index.md")
 	if hub == nil || !strings.Contains(hub.Body, "# proj\n\n## Journal\n\n- [Journal](journal/)") || hub.Metadata["tags"] != "index,proj" || hub.Metadata["agent"] != "test-agent" {
 		t.Errorf("hub publish = %+v", hub)
 	}
-	root := call(backend, "/index.md")
+	root := backend.PublishCall("/index.md")
 	if root == nil || root.Body != "# Projects\n\n- [proj](/proj/)\n" || root.Metadata["importance"] != "0.9" {
 		t.Errorf("root publish = %+v", root)
 	}
@@ -132,13 +123,13 @@ func TestAppendLinksAnExistingHubUnderItsJournalSection(t *testing.T) {
 	if err != nil || out.Status != StatusCreated || len(out.Notes) != 0 {
 		t.Fatalf("outcome = %+v err %v", out, err)
 	}
-	if j := call(backend, today); j == nil || !strings.HasPrefix(j.Body, "# Demarkus journal: 2026-10-12\n") {
+	if j := backend.PublishCall(today); j == nil || !strings.HasPrefix(j.Body, "# Demarkus journal: 2026-10-12\n") {
 		t.Errorf("journal title should come from the hub H1: %+v", j)
 	}
-	if hub := call(backend, "/proj/index.md"); hub != nil {
+	if hub := backend.PublishCall("/proj/index.md"); hub != nil {
 		t.Errorf("a hub linking a dated entry already reaches the journal: %+v", hub)
 	}
-	root := call(backend, "/index.md")
+	root := backend.PublishCall("/index.md")
 	if root == nil || root.Body != "# Projects\n\n- [Other](/other/)\n- [Demarkus](/proj/)\n" || root.ExpectedVersion != 1 || root.Metadata["tags"] != "projects,index" || root.Metadata["agent"] != "test-agent" {
 		t.Errorf("root publish = %+v", root)
 	}
@@ -190,10 +181,10 @@ func TestRootScopeHasNoProjectLink(t *testing.T) {
 	if err != nil || out.Path != "/journal/2026-10-12.md" {
 		t.Fatalf("outcome = %+v err %v", out, err)
 	}
-	if j := call(backend, "/journal/2026-10-12.md"); j == nil || !strings.HasPrefix(j.Body, "# Memory journal: 2026-10-12\n") || j.Metadata["tags"] != "journal" {
+	if j := backend.PublishCall("/journal/2026-10-12.md"); j == nil || !strings.HasPrefix(j.Body, "# Memory journal: 2026-10-12\n") || j.Metadata["tags"] != "journal" {
 		t.Errorf("journal publish = %+v", j)
 	}
-	if hub := call(backend, "/index.md"); hub == nil || !strings.HasPrefix(hub.Body, "# Memory\n\n## Journal") || hub.Metadata["tags"] != "index" {
+	if hub := backend.PublishCall("/index.md"); hub == nil || !strings.HasPrefix(hub.Body, "# Memory\n\n## Journal") || hub.Metadata["tags"] != "index" {
 		t.Errorf("hub publish = %+v", hub)
 	}
 	if len(backend.PublishCalls) != 2 {
@@ -209,7 +200,7 @@ func TestLayoutNamesTheJournalDirectory(t *testing.T) {
 	if err != nil || out.Path != "/proj/log/2026-10-12.md" {
 		t.Fatalf("outcome = %+v err %v", out, err)
 	}
-	if hub := call(backend, "/proj/index.md"); hub == nil || !strings.Contains(hub.Body, "## Log\n\n- [Log](log/)") {
+	if hub := backend.PublishCall("/proj/index.md"); hub == nil || !strings.Contains(hub.Body, "## Log\n\n- [Log](log/)") {
 		t.Errorf("hub publish = %+v", hub)
 	}
 }

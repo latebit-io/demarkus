@@ -77,3 +77,6 @@ tools/benchmarks/
 # deploy/helm/demarkus-server-common, so the tarball and lock are artifacts.
 deploy/helm/*/charts/
 deploy/helm/*/Chart.lock
+
+# plugin eval runs (tools/demarkus-plugin/evals/run.sh)
+tools/demarkus-plugin/evals/results/

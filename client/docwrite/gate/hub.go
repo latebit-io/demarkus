@@ -101,7 +101,12 @@ func bulletOK(b bullet) bool {
 	if utf8.RuneCountInString(b.visible) > HubBulletMax {
 		return false
 	}
-	return !hubStatusKey.MatchString(b.outside) && !hubISODate.MatchString(b.outside) && !hubPRNumber.MatchString(b.outside)
+	return !hubMarked(b.outside)
+}
+
+// hubMarked: text carries a status marker the hub rule keeps in the child.
+func hubMarked(s string) bool {
+	return hubStatusKey.MatchString(s) || hubISODate.MatchString(s) || hubPRNumber.MatchString(s)
 }
 
 // outboundDocs counts distinct link destinations that are documents in the
@@ -231,4 +236,42 @@ func (r *inlineReader) walk(n ast.Node, src []byte, inLink, inCode int) {
 			r.walk(v, src, inLink, inCode)
 		}
 	}
+}
+
+// Summary is the document's name and its first paragraph under the H1,
+// whitespace collapsed; "" each when the body has none.
+func Summary(body string) (title, summary string) {
+	title, summary, _ = summaryUnderH1(body, mdoutline.Headings(body))
+	return Collapse(title), Collapse(firstParagraph(summary))
+}
+
+// BulletSummary is what a generated hub bullet may say after its link: the
+// summary clipped to fit HubBulletMax with the title; "" when it carries a
+// status marker the hub rule forbids.
+func BulletSummary(title, summary string) string {
+	summary = Collapse(summary)
+	if hubMarked(summary) {
+		return ""
+	}
+	return ClipBullet(summary, HubBulletMax-utf8.RuneCountInString(title)-len(": "))
+}
+
+// ClipBullet cuts s to room runes at a word, trailing punctuation
+// dropped; s within the room is returned as is, room <= 0 is "".
+func ClipBullet(s string, room int) string {
+	if room <= 0 {
+		return ""
+	}
+	n := 0
+	for i := range s {
+		if n == room {
+			s = s[:i]
+			if cut := strings.LastIndex(s, " "); cut > 0 {
+				s = s[:cut]
+			}
+			return strings.TrimRight(s, " ,;:")
+		}
+		n++
+	}
+	return s
 }

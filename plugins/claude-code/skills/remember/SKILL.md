@@ -41,7 +41,7 @@ Routes:
 
 - **Fleeting note, session progress**: `/soul-journal`, or `mark_append` with `url` `<root>` and `route: "today"` (creates today's entry, a missing hub and, under `/<slug>/`, its `/index.md` link; a new project starts here).
 - **Decision**: `mark_list <root>adr/` with `include_archived: true`, every page to `complete: true`; next unused number, zero-padded 4 digits; `not-found`: `0001`; a listing failure or an incomplete listing: surface, assign none. Body: `# <NNNN>. <Title>`, `## Status`, `## Context`, `## Decision`, `## Consequences`.
-- **Pattern or convention**: `patterns.md`. **Hard rule**: `guidelines.md`. **Bug lesson**: `debugging.md` (the non-obvious why). **Architecture change**: `architecture.md`. **Next, done, not prioritized**: `roadmap.md`. **Debt**: `debt.md`. **Plan**: `<name>.md` under the layout's `plans:` directory (`plans/` by default). **Open question or idea**: `thoughts.md`. Keep `<root>index.md` linking each.
+- **Pattern or convention**: `patterns.md`. **Hard rule**: `guidelines.md`. **Bug lesson**: `debugging.md` (the non-obvious why). **Architecture change**: `architecture.md`. **Next, done, not prioritized**: `roadmap.md`. **Debt**: `debt.md`. **Plan**: `<name>.md` under the layout's `plans:` directory (`plans/` by default). **Open question or idea**: `thoughts.md`.
 - **Cross-project or unplaceable**: ask the user where.
 
 Always reference what you saved by full path.

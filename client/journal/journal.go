@@ -109,7 +109,7 @@ func Append(ctx context.Context, docs Docs, req Request) (Outcome, error) { //no
 		if link.doc.Path != scopeHub.Path {
 			h = nil
 		}
-		if err := hub.EnsureLink(ctx, link.doc, h, &link.Link); err != nil {
+		if _, err := hub.EnsureLink(ctx, link.doc, h, &link.Link); err != nil {
 			out.Notes = append(out.Notes, err.Error())
 		}
 	}
