@@ -15,6 +15,12 @@ func encode(t *testing.T, v any) string {
 }
 
 // TestHookShapes pins every payload the bash hooks parse.
+func TestShowsStatus(t *testing.T) {
+	if !Claude.ShowsStatus() || Cursor.ShowsStatus() {
+		t.Errorf("claude %v cursor %v, want true and false", Claude.ShowsStatus(), Cursor.ShowsStatus())
+	}
+}
+
 func TestHookShapes(t *testing.T) {
 	tests := []struct {
 		name string

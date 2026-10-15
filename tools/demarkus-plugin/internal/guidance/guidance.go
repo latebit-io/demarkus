@@ -21,6 +21,9 @@ type Input struct {
 	GuidanceFile string `json:"guidanceFile"` // path to the plugin's static guidance md
 	// ProjectDir overrides the harness environment when the adapter passes one.
 	ProjectDir string `json:"projectDir,omitempty"`
+	// NoStatus: the host shows the user no status line, so a one-time notice
+	// waits for a session on a host that does.
+	NoStatus bool `json:"noStatus,omitempty"`
 }
 
 // Output carries the guidance text to inject for a session.
@@ -29,7 +32,9 @@ type Output struct {
 	Status  string `json:"status,omitempty"` // one line for the user; empty = nothing to show
 }
 
-const memoryOfferText = "[One-time setup offer: raise this with the user once, then drop it] demarkus-memory is now wired as your persistent memory store. If the user would like demarkus to be their SINGLE source of durable memory, offer to disable your harness's built-in memory tool so the two don't compete: ask first, and only if they agree, turn it off and report what you changed. If they decline, say nothing further about it. Do not disable anything unasked."
+// memoryOfferText is status-line only, never agent context: raised by the
+// agent, it landed inside unrelated replies.
+const memoryOfferText = "demarkus is now your persistent memory store; to make it the only one, ask to disable the host's built-in memory tool"
 
 // Evaluate builds the session guidance to inject for the requested surface.
 func Evaluate(in Input) (Output, error) {
@@ -71,19 +76,22 @@ func memory(in Input) (Output, error) {
 	if warn != "" {
 		parts = append(parts, "⚠️ "+warn)
 	}
-	offer, err := memoryOffer()
-	if err != nil {
-		return Output{}, err
-	}
-	if offer != "" {
-		parts = append(parts, offer)
-	}
 	header, status, err := projectHeader(in.ProjectDir, warn)
 	if err != nil {
 		return Output{}, err
 	}
 	if header != "" {
 		parts = append(parts, header)
+	}
+	// The offer waits for a session that shows the user a healthy status line.
+	if warn == "" && status != "" && !in.NoStatus {
+		offer, err := memoryOffer()
+		if err != nil {
+			return Output{}, err
+		}
+		if offer != "" {
+			status += " · " + offer
+		}
 	}
 	g, err := readFile(in.GuidanceFile)
 	if err != nil {
@@ -114,12 +122,9 @@ func projectHeader(dir, warn string) (header, status string, err error) {
 	return s.agentHeader(r), s.userLine(r, warn), nil
 }
 
-// serverHealthWarning delegates to provision.HealthWarning so the health check —
-// including the PID-at-root ownership test that avoids a reused-.pid false
-// positive — lives in exactly one place.
-func serverHealthWarning() (string, error) {
-	return provision.HealthWarning()
-}
+// serverHealthWarning is provision.HealthWarning (the PID-at-root ownership
+// test lives there alone); a variable so tests can stand in a healthy server.
+var serverHealthWarning = provision.HealthWarning
 
 // memoryOffer returns the one-time offer text the first time, "" thereafter.
 func memoryOffer() (string, error) {

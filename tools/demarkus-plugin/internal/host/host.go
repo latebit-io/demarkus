@@ -32,9 +32,11 @@ type Host struct {
 	// httpAuthMarker: pi-mcp-adapter needs an explicit auth key on a remote
 	// server entry; Cursor discovers OAuth from the endpoint.
 	httpAuthMarker bool
-	nudge          func(event, text string) any
-	guidance       func(text, status string) any
-	gate           func(phase, decision, reason string) (any, bool)
+	// noStatus: the harness shows the user no status line at session start.
+	noStatus bool
+	nudge    func(event, text string) any
+	guidance func(text, status string) any
+	gate     func(phase, decision, reason string) (any, bool)
 }
 
 // The harnesses. Claude Code and Cursor run bash hooks and read a per-hook
@@ -51,6 +53,7 @@ var (
 		mcpConfig: filepath.Join(".cursor", "mcp.json"),
 		nudge:     cursorNudge,
 		// sessionStart has no user-visible field: user_message is accepted, not shown.
+		noStatus: true,
 		guidance: func(text, _ string) any { return map[string]any{"additional_context": text} },
 		gate:     cursorGate,
 	}
@@ -133,6 +136,9 @@ func (h Host) Nudge(event, text string) any { return h.nudge(event, text) }
 // Guidance wraps the session-start context and, where the host shows one,
 // the user's status line.
 func (h Host) Guidance(text, status string) any { return h.guidance(text, status) }
+
+// ShowsStatus reports whether the user sees the status line at session start.
+func (h Host) ShowsStatus() bool { return !h.noStatus }
 
 // Gate wraps a gate decision for phase; emit is false when this hook says nothing.
 func (h Host) Gate(phase, decision, reason string) (out any, emit bool) {
