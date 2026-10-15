@@ -26,6 +26,27 @@ func TestWithBullet(t *testing.T) {
 	if got := WithBullet("# H\n\n- a\n", "", "- b"); got != "# H\n\n- a\n- b\n" {
 		t.Errorf("no section = %q", got)
 	}
+	if got := WithBullet("# H\n\nIntro.\n", "", "- b"); got != "# H\n\nIntro.\n\n- b\n" {
+		t.Errorf("no section after prose = %q", got)
+	}
+	if got := WithBullet("# H\n\n## Journal\n\nProse.\n", "## Journal", "- b"); got != "# H\n\n## Journal\n\nProse.\n\n- b\n" {
+		t.Errorf("section after prose = %q", got)
+	}
+}
+
+func TestNames(t *testing.T) {
+	for body, want := range map[string]bool{
+		"- [d](/notes/quic.md)":    true,
+		"- [d](notes/quic.md)":     true,
+		"- [n](/notes/)":           true,
+		"- [n](notes)":             true,
+		"- [s](/notes/sibling.md)": false,
+		"- [o](/other.md)":         false,
+	} {
+		if got := Names(body, "/index.md", "/notes/quic.md"); got != want {
+			t.Errorf("Names(%q) = %v, want %v", body, got, want)
+		}
+	}
 }
 
 func TestReaches(t *testing.T) {
@@ -63,16 +84,16 @@ func TestEnsureLinkCreatesAddsOrLeavesAlone(t *testing.T) {
 		CreateBody: "# proj\n\n## Journal\n\n- [Journal](journal/)\n", CreateMeta: map[string]string{"tags": "index"}, Stamp: map[string]string{"agent": "a"}}
 
 	backend := &fetchtest.Client{}
-	if err := EnsureLink(t.Context(), docOn(backend, "/proj/index.md"), nil, link); err != nil {
-		t.Fatal(err)
+	if added, err := EnsureLink(t.Context(), docOn(backend, "/proj/index.md"), nil, link); err != nil || !added {
+		t.Fatalf("added %v err %v", added, err)
 	}
 	if len(backend.PublishCalls) != 1 || backend.PublishCalls[0].ExpectedVersion != 0 || backend.PublishCalls[0].Metadata["agent"] != "a" {
 		t.Fatalf("create = %+v", backend.PublishCalls)
 	}
 
 	backend = &fetchtest.Client{Published: map[string]fetch.Result{"h/proj/index.md": fetchtest.Head("# proj\n\n## Plans\n\n- [p](plans/p.md)\n", 3, map[string]string{"tags": "index", "retention": "2", "agent": "old"})}}
-	if err := EnsureLink(t.Context(), docOn(backend, "/proj/index.md"), nil, link); err != nil {
-		t.Fatal(err)
+	if added, err := EnsureLink(t.Context(), docOn(backend, "/proj/index.md"), nil, link); err != nil || !added {
+		t.Fatalf("added %v err %v", added, err)
 	}
 	w := backend.PublishCalls[0]
 	if w.ExpectedVersion != 3 || !strings.HasSuffix(w.Body, "## Plans\n\n- [p](plans/p.md)\n\n## Journal\n\n- [Journal](journal/)\n") || w.Metadata["agent"] != "a" || w.Metadata["retention"] != "" {
@@ -80,12 +101,12 @@ func TestEnsureLinkCreatesAddsOrLeavesAlone(t *testing.T) {
 	}
 
 	backend = &fetchtest.Client{Published: map[string]fetch.Result{"h/proj/index.md": fetchtest.Head("# proj\n\n- [J](journal/)\n", 3, nil)}}
-	if err := EnsureLink(t.Context(), docOn(backend, "/proj/index.md"), nil, link); err != nil || len(backend.PublishCalls) != 0 {
-		t.Errorf("linked hub rewritten: %v %+v", err, backend.PublishCalls)
+	if added, err := EnsureLink(t.Context(), docOn(backend, "/proj/index.md"), nil, link); err != nil || added || len(backend.PublishCalls) != 0 {
+		t.Errorf("linked hub rewritten: %v %v %+v", added, err, backend.PublishCalls)
 	}
 
 	backend = &fetchtest.Client{Published: map[string]fetch.Result{"h/proj/index.md": {Response: protocol.Response{Status: protocol.StatusUnauthorized}}}}
-	if err := EnsureLink(t.Context(), docOn(backend, "/proj/index.md"), nil, link); err == nil || err.Error() != "hub /proj/index.md not updated: unauthorized" {
+	if _, err := EnsureLink(t.Context(), docOn(backend, "/proj/index.md"), nil, link); err == nil || err.Error() != "hub /proj/index.md not updated: unauthorized" {
 		t.Errorf("unreadable hub = %v", err)
 	}
 }
@@ -103,7 +124,7 @@ func TestEnsureLinkRetriesOnceOnConflict(t *testing.T) {
 		},
 	}
 	link := &Link{Target: "/proj/", Bullet: "- [proj](/proj/)", CreateBody: "x"}
-	if err := EnsureLink(t.Context(), docOn(backend, "/index.md"), nil, link); err != nil || calls != 2 {
+	if added, err := EnsureLink(t.Context(), docOn(backend, "/index.md"), nil, link); err != nil || !added || calls != 2 {
 		t.Fatalf("err %v calls %d", err, calls)
 	}
 }

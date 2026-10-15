@@ -461,15 +461,11 @@ func oneLine(sectionText string, labelLen int) string {
 	if i := strings.Index(para, ". "); i > 0 {
 		para = para[:i+1]
 	}
-	room := gate.HubBulletMax - labelLen - 6 // ": " and "..." with room to spare
-	if utf8.RuneCountInString(para) <= room {
-		return para
+	cut := gate.ClipBullet(para, gate.HubBulletMax-labelLen-6) // ": " and "..." with room to spare
+	if cut != para {
+		cut += "..."
 	}
-	cut := string([]rune(para)[:max(room, 0)])
-	if i := strings.LastIndex(cut, " "); i > 0 {
-		cut = cut[:i]
-	}
-	return strings.TrimRight(cut, " ,;:") + "..."
+	return cut
 }
 
 // mentions is a case-insensitive match of a tag in lowercased text; a

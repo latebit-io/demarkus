@@ -153,6 +153,18 @@ func (c *Client) Publish(ctx context.Context, r fetch.WriteRequest) (fetch.Resul
 	return c.store(r, version, result)
 }
 
+// PublishCall is the first PUBLISH recorded for the path, nil when none.
+func (c *Client) PublishCall(path string) *fetch.WriteRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.PublishCalls {
+		if c.PublishCalls[i].Path == path {
+			return &c.PublishCalls[i]
+		}
+	}
+	return nil
+}
+
 // recorded copies the metadata so a caller's later change cannot rewrite the record.
 func recorded(r fetch.WriteRequest) fetch.WriteRequest {
 	r.Metadata = maps.Clone(r.Metadata)

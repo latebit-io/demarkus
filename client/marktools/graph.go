@@ -175,6 +175,6 @@ func (t *Tools) GraphPublish(ctx context.Context, args GraphPublishArgs) Result 
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Published graph (%d nodes, %d edges) to %s\n", scope.Store.NodeCount(), scope.Store.EdgeCount(), target.NodeURL)
-	b.WriteString(formatResult(&result, writeFields...))
+	b.WriteString(formatWrite(&result, writeFields...))
 	return text(b.String())
 }

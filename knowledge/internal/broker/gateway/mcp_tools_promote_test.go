@@ -64,6 +64,7 @@ func TestMemoryPromoteServesTheSoulPhasesOnly(t *testing.T) {
 func TestKnowledgePromoteDryRunThenApply(t *testing.T) {
 	d := &fakeDispatcher{Published: map[string]fetch.Result{
 		"team-a/.well-known/demarkus/policy.md": fetchtest.Head("# Policy\n\nrequire_tags: domain\n", 1, nil),
+		"team-a/index.md":                       fetchtest.Head("# Team A\n\n- [Docs](/docs/other.md)\n", 2, nil),
 	}}
 	d.LookupFn = func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
 		return fetchtest.Lookup(r.Query, r.Scope, r.Match), nil
@@ -86,8 +87,12 @@ func TestKnowledgePromoteDryRunThenApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	if text = toolResultText(t, res); res.IsError || text != "status: published\ntarget: mark://team-a/docs/x.md\nversion: 1\n" {
+	// The world's hub names the promoted document, as it would a mark_publish.
+	if text = toolResultText(t, res); res.IsError || text != "status: published\ntarget: mark://team-a/docs/x.md\nversion: 1\nhubs:\n- /index.md: bullet added\n" {
 		t.Fatalf("apply = %s", text)
+	}
+	if hub := d.PublishCalls[1]; hub.Host != "team-a" || hub.Path != "/index.md" || !strings.HasSuffix(hub.Body, "- [X](/docs/x.md): What x settles for the team.\n") {
+		t.Errorf("hub publish = %+v", hub)
 	}
 	w := d.PublishCalls[0]
 	if w.Host != "team-a" || w.ExpectedVersion != 0 || w.Metadata["promoted-from"] != "alice's soul" || w.Metadata["user"] != "alice@example.com" || w.Metadata["tags"] != "x,domain:eng" {

@@ -21,6 +21,7 @@ help:
 	@echo "  image     - Build runtime container images (TAG overridable)"
 	@echo "  image-knowledge - Build the demarkus-knowledge image"
 	@echo "  test      - Run all tests"
+	@echo "  plugin-eval - Run the Claude Code memory plugin eval suite (paid; tools/demarkus-plugin/evals)"
 	@echo "  lint      - Run golangci-lint on all modules"
 	@echo "  clean     - Remove build artifacts"
 	@echo "  install   - Install binaries to /usr/local/bin"
@@ -105,6 +106,10 @@ test:
 		(cd $$mod && go test -race ./...) || exit 1; \
 		echo "✓ $$mod tests passed"; \
 	done
+
+# Run the Claude Code memory plugin's eval suite (paid: agent runs plus judges)
+plugin-eval:
+	bash tools/demarkus-plugin/evals/run.sh
 
 # Clean build artifacts
 clean:

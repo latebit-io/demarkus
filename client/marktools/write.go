@@ -89,7 +89,7 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 		return *bad
 	}
 	// A candidate ends with its body; a note after it would read as body.
-	return text(formatResult(&result, writeFields...) + notes)
+	return text(formatWrite(&result, writeFields...) + notes)
 }
 
 // landing is where a publish lands: the target, its bound document, and
@@ -101,8 +101,8 @@ type landing struct {
 }
 
 // landPublish is the write every publish tool makes after its own checks:
-// the style gate, the write, the graph, then the notes a landed write
-// carries (narrowed metadata, style findings). Notes are "" otherwise.
+// style gate, write, graph, hub link of a first version; notes is what a
+// landed write carries after its fields (hubs edited, then the notes).
 func (t *Tools) landPublish(ctx context.Context, at *landing, w *docwrite.Write) (result docwrite.Result, notes string, bad *Result) {
 	styleNote, bad := t.styleGate(ctx, at.target, w.Body, w.Metadata["description"])
 	if bad != nil {
@@ -117,7 +117,7 @@ func (t *Tools) landPublish(ctx context.Context, at *landing, w *docwrite.Write)
 		return result, "", nil
 	}
 	t.observePublished(ctx, at.target, w, &result)
-	return result, t.narrowingNote(ctx, at.doc, *w) + styleNote, nil
+	return result, t.linkOnPublish(ctx, at, w, &result) + t.narrowingNote(ctx, at.doc, *w) + styleNote, nil
 }
 
 // observePublished merges a landed publish into the graph: the body and
@@ -236,6 +236,20 @@ func formatResult(r *docwrite.Result, fields ...string) string {
 	return b.String()
 }
 
+// formatWrite is formatResult with the version delta on the status line:
+// "created v9 (was v8)" reads as the update it is, "created v1" as new.
+func formatWrite(r *docwrite.Result, fields ...string) string {
+	v, err := docwrite.Version(r.Response.Metadata)
+	if err != nil || v < 1 || r.Response.Status != protocol.StatusCreated {
+		return formatResult(r, fields...)
+	}
+	status := fmt.Sprintf("created v%d", v)
+	if v > 1 {
+		status += fmt.Sprintf(" (was v%d)", v-1)
+	}
+	return mcpfmt.FullStatus(status, r.Response.Metadata, fields...)
+}
+
 // narrowingNote warns, after a write that landed, when it dropped tags or keys
 // the replaced version had. A failed check is logged and never fails the write.
 func (t *Tools) narrowingNote(ctx context.Context, doc *docwrite.Doc, w docwrite.Write) string {
@@ -293,7 +307,7 @@ func (t *Tools) Append(ctx context.Context, args AppendArgs) Result {
 	if landed(&result) {
 		t.observeAppended(ctx, target, doc, &result)
 	}
-	return text(formatResult(&result, writeFields...))
+	return text(formatWrite(&result, writeFields...))
 }
 
 // appendToday records the entry in today's journal under the target

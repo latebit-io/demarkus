@@ -175,7 +175,8 @@ func TestPromoteApplyBindsToThePacketAndTheStyleGate(t *testing.T) {
 	}
 	draft.Body, draft.Phase, draft.Packet = promoteSource, "apply", packet
 	got := tools.Promote(t.Context(), draft)
-	if got.IsError || got.Text != "status: published\ntarget: /docs/retry-rules.md\nversion: 1\n" {
+	// The landing is mark_publish's: an unlinked document is noted the same way.
+	if got.IsError || !strings.HasPrefix(got.Text, "status: published\ntarget: /docs/retry-rules.md\nversion: 1\n") || !strings.Contains(got.Text, "\nnote: unlinked: no hub reaches /docs/retry-rules.md;") {
 		t.Fatalf("apply = %+v", got)
 	}
 	w := backend.PublishCalls[0]

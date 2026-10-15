@@ -45,19 +45,28 @@ type Link struct {
 }
 
 // EnsureLink makes the hub reach the target: no write when it already does,
-// else the bullet added (or the hub created) at the head's version, one retry
-// on conflict. Head may be a fetch already in hand; nil fetches.
-func EnsureLink(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, link *Link) error {
-	result, _, err := doc.Edit(ctx, head, func(h *docwrite.Head) (docwrite.Write, bool, error) {
+// else the bullet added (or the hub created) at the head's version, one
+// retry on conflict; added reports a write that landed. Head nil fetches.
+func EnsureLink(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, link *Link) (added bool, err error) {
+	result, added, err := doc.Edit(ctx, head, func(h *docwrite.Head) (docwrite.Write, bool, error) {
 		if h.Status == protocol.StatusNotFound {
 			return docwrite.Write{Body: link.CreateBody, Metadata: stamped(link.CreateMeta, link.Stamp)}, true, nil
 		}
-		if Reaches(h.Body, doc.Path, link.Target) {
+		if reaches(h.Body, doc.Path, link.Target) {
 			return docwrite.Write{}, false, nil
 		}
 		return docwrite.Write{Body: WithBullet(h.Body, link.Section, link.Bullet), Metadata: stamped(docwrite.Carried(h.Metadata), link.Stamp)}, true, nil
 	})
-	return settled(doc, &result, err)
+	return added, settled(doc, &result, err)
+}
+
+// reaches is the link a target needs: a directory, anything under it; a
+// document, the document itself or its directory.
+func reaches(body, hubPath, target string) bool {
+	if strings.HasSuffix(target, "/") {
+		return Reaches(body, hubPath, target)
+	}
+	return Names(body, hubPath, target)
 }
 
 // settled words an Edit outcome: nil when the write landed or the head
@@ -83,6 +92,20 @@ func Reaches(body, hubPath, target string) bool {
 	return false
 }
 
+// Names reports a link to the document, or to its directory, which names
+// every document directly in it (a journal hub links journal/, not each
+// day); a sibling's link is neither.
+func Names(body, hubPath, docPath string) bool {
+	dir := path.Dir(docPath)
+	for _, dest := range links.Extract(body) {
+		switch links.ResolvePath(hubPath, dest) {
+		case docPath, dir, dir + "/":
+			return true
+		}
+	}
+	return false
+}
+
 // matches is one resolved link against one target: the document, or the
 // directory (slash optional) and anything under it.
 func matches(resolved, target string) bool {
@@ -93,10 +116,10 @@ func matches(resolved, target string) bool {
 // WithBullet appends the bullet at the end of section's list when the
 // heading exists, else as a new section at the end; no section: at the end.
 func WithBullet(body, section, bullet string) string {
-	body = strings.TrimRight(body, "\n") + "\n"
 	if section == "" {
-		return body + bullet + "\n"
+		return joinBullet(body, bullet)
 	}
+	body = strings.TrimRight(body, "\n") + "\n"
 	headings := mdoutline.Headings(body)
 	for i, h := range headings {
 		if "## "+h.Text != section {
@@ -106,9 +129,23 @@ func WithBullet(body, section, bullet string) string {
 		if i+1 < len(headings) {
 			end = headings[i+1].Start
 		}
-		return strings.TrimRight(body[:end], "\n") + "\n" + bullet + "\n\n" + body[end:]
+		if end == len(body) {
+			return joinBullet(body, bullet)
+		}
+		return joinBullet(body[:end], bullet) + "\n" + body[end:]
 	}
 	return body + "\n" + section + "\n\n" + bullet + "\n"
+}
+
+// joinBullet appends the bullet to the block: a blank line opens a list
+// after prose; a block ending in a list item continues it.
+func joinBullet(block, bullet string) string {
+	block = strings.TrimRight(block, "\n")
+	sep := "\n"
+	if !bulletLine.MatchString(block[strings.LastIndex(block, "\n")+1:]) {
+		sep = "\n\n"
+	}
+	return block + sep + bullet + "\n"
 }
 
 // stamped overlays the surface's identity on the publisher metadata.

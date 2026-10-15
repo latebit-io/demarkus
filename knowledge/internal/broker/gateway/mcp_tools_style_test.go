@@ -38,8 +38,9 @@ func TestMemoryPublishCarriesStyleFindings(t *testing.T) {
 			t.Errorf("response missing %q:\n%s", want, text)
 		}
 	}
-	if len(d.PublishCalls) != 1 {
-		t.Errorf("publishes = %d, want the write to land", len(d.PublishCalls))
+	// The write lands, then the world's hub is linked to it.
+	if len(d.PublishCalls) != 2 || d.PublishCalls[0].Path != "/notes.md" || d.PublishCalls[1].Path != "/index.md" {
+		t.Errorf("publishes = %+v, want the write to land and the hub linked", d.PublishCalls)
 	}
 }
 

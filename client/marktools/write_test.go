@@ -30,14 +30,22 @@ func writingHooks() marktools.Hooks {
 	return hooks
 }
 
+// hubbedStore is a store whose root hub already reaches /doc.md, so a
+// publish there has no hub to edit and no note to carry.
+func hubbedStore() *fetchtest.Client {
+	return &fetchtest.Client{Published: map[string]fetch.Result{
+		"host:6309/index.md": fetchtest.Head("# Store\n\n- [Doc](/doc.md)\n", 1, nil),
+	}}
+}
+
 func TestPublishSendsTheWriteWithIdentity(t *testing.T) {
-	backend := &fetchtest.Client{}
+	backend := hubbedStore()
 	tools := newTools(t, backend, writingHooks())
 	got := tools.Publish(t.Context(), marktools.PublishArgs{
 		URL: "/doc.md", Body: "# Doc\n", ExpectedVersion: new(0), OnConflict: "fail",
 		Metadata: map[string]string{"tags": "a,b", "importance": "0.5", "agent": "someone-else", "user": "mallory@example.com"},
 	})
-	want := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{"version": "1"}}}, "version", "modified", "server-version")
+	want := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: "created v1", Metadata: map[string]string{"version": "1"}}}, "version", "modified", "server-version")
 	if got.IsError || got.Text != want {
 		t.Fatalf("Publish = %+v, want %q", got, want)
 	}

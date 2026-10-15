@@ -22,7 +22,7 @@ const observedBody = "# Doc\n\nSee the [hub](/hub.md).\n"
 func TestPublishObservesTheWrittenDocument(t *testing.T) {
 	store := graphstore.New()
 	var seeded []string
-	backend := &fetchtest.Client{}
+	backend := hubbedStore()
 	tools := newTools(t, backend, graphHooks(store, &seeded))
 	got := tools.Publish(t.Context(), marktools.PublishArgs{
 		URL: "/doc.md", Body: observedBody, ExpectedVersion: new(0), OnConflict: "fail",
@@ -40,8 +40,9 @@ func TestPublishObservesTheWrittenDocument(t *testing.T) {
 			t.Errorf("backlinks(%s) = %v, want the published document", target, back)
 		}
 	}
-	if len(backend.FetchCalls) != 0 {
-		t.Errorf("publish fetched %d documents to observe itself; the body was in hand", len(backend.FetchCalls))
+	// The hub read is the link step's; observation needs no read, the body is in hand.
+	if len(backend.FetchCalls) != 1 || backend.FetchCalls[0].Path != "/index.md" {
+		t.Errorf("publish fetched %+v to observe itself; the body was in hand", backend.FetchCalls)
 	}
 	if len(seeded) != 0 {
 		t.Errorf("publish seeded the store: %v", seeded)
@@ -76,9 +77,9 @@ func TestPublishObservesUnderTheScopesSource(t *testing.T) {
 // Without a graph scope the write is unchanged and nothing is fetched; a write
 // that did not land is never observed.
 func TestWritesWithoutAScopeOrWithoutLandingObserveNothing(t *testing.T) {
-	backend := &fetchtest.Client{}
+	backend := hubbedStore()
 	got := newTools(t, backend, writingHooks()).Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: observedBody, ExpectedVersion: new(0)})
-	if got.IsError || len(backend.FetchCalls) != 0 {
+	if got.IsError || len(backend.FetchCalls) != 1 {
 		t.Fatalf("Publish without a scope = %+v, fetches %d", got, len(backend.FetchCalls))
 	}
 

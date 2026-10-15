@@ -23,7 +23,7 @@ func TestPublishStyleGate(t *testing.T) {
 	}
 	publish := func(t *testing.T, hooks marktools.Hooks, body string) (marktools.Result, *fetchtest.Client) {
 		t.Helper()
-		backend := &fetchtest.Client{}
+		backend := hubbedStore()
 		got := newTools(t, backend, hooks).Publish(t.Context(), marktools.PublishArgs{
 			URL: "/doc.md", Body: body, ExpectedVersion: new(0), OnConflict: "fail", Metadata: map[string]string{"tags": "a"},
 		})
@@ -32,7 +32,7 @@ func TestPublishStyleGate(t *testing.T) {
 
 	t.Run("no hook warns and cites the baseline", func(t *testing.T) {
 		got, backend := publish(t, writingHooks(), flawed)
-		if got.IsError || !strings.HasPrefix(got.Text, "status: created\nversion: 1\n") {
+		if got.IsError || !strings.HasPrefix(got.Text, "status: created v1\nversion: 1\n") {
 			t.Fatalf("publish = %+v", got)
 		}
 		for _, want := range []string{"\nnote: style problems in this publish: h1: no `# H1`", "Also: em-dash: 1 em dash", "Rules: metadata out of band"} {
