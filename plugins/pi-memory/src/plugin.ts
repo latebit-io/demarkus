@@ -64,16 +64,18 @@ export async function callNudge(req: Record<string, unknown>): Promise<string> {
   return o?.nudge ?? "";
 }
 
+// Session-start guidance: context for the model, status for the user; "" = nothing to say.
+export type Guidance = { context: string; status: string };
+
 // callGuidance asks `demarkus-plugin guidance` for the session-start context for
-// SURFACE, wrapping the plugin's bundled static guidance file. Resolves the text
-// ("" when the binary ran but had nothing to inject) or null when the binary is
-// unavailable / failed — so the caller can retry rather than burn its one-shot
-// guidance flag on a transient failure.
-export async function callGuidance(surface: "memory" | "knowledge", guidanceFile: string, projectDir?: string): Promise<string | null> {
+// SURFACE, wrapping the plugin's bundled static guidance file. Resolves null when
+// the binary is unavailable / failed, so the caller can retry rather than burn
+// its one-shot guidance flag on a transient failure.
+export async function callGuidance(surface: "memory" | "knowledge", guidanceFile: string, projectDir?: string): Promise<Guidance | null> {
   const args = ["guidance", "--surface", surface, "--guidance-file", guidanceFile];
   if (projectDir) args.push("--project-dir", projectDir);
-  const o = await runBin<{ context?: string }>(args);
-  return o === null ? null : (o.context ?? "");
+  const o = await runBin<{ context?: string; status?: string }>(args);
+  return o === null ? null : { context: o.context ?? "", status: o.status ?? "" };
 }
 
 // callUpdateCheck asks the binary whether a newer release of this plugin exists;

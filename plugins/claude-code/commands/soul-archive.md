@@ -11,17 +11,17 @@ Archived: fetches as `archived`, every version kept, no unarchive tool (the oper
 
 ## Soul and project
 
-Slug and bound soul: the session header `Project slug: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
+Slug, root and bound soul: the session header `Project slug: ... Project root: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
 
 ```bash
 "$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
 ```
 
-`<project-dir>`: `"${CLAUDE_PROJECT_DIR}"`, or the named directory as one POSIX-safe shell word. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (`mcp__<store>__mark_*`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
+`<project-dir>`: `"${CLAUDE_PROJECT_DIR}"`, or the named directory as one POSIX-safe shell word. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`), `root=`, `project=` (`known`, `new`, `unknown`; unknown adds `reason=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unrecognized `state`: surface it, stop. `<root>` below is the project root: `/` for the soul's root project, else `/<slug>/`. Project unknown (header or line): the root is the default, unconfirmed; name the reason once, continue. Every `mark_*` call goes through the store's server (`mcp__<store>__mark_*`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
 
 ## Steps
 
-1. **Scope.** Target outside `/<slug>/`: the user confirms it, else stop.
+1. **Scope.** Target outside `<root>`: the user confirms it, else stop.
 
 2. **Collect.** Document: `mark_fetch`; `ok` continues; `archived` or `not-found`: say so, stop; other failure: surface, stop. Directory: `mark_list` to count the live documents (`next-cursor` as `cursor` until `complete: true`, recurse into subdirectories; over 100 list calls or 500 documents: stop, ask for a narrower directory); `not-found` or none: say so, stop; a listing failure: surface, stop.
 

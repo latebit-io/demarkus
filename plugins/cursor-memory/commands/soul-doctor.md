@@ -9,19 +9,19 @@ Read-only health check over the project's soul: one `mark_doctor` call runs ever
 
 ## Soul and project
 
-Slug and bound soul: the session header `Project slug: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
+Slug, root and bound soul: the session header `Project slug: ... Project root: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
 
 ```bash
 "$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
 ```
 
-`<project-dir>`: the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (the MCP server named `<store>`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
+`<project-dir>`: the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`), `root=`, `project=` (`known`, `new`, `unknown`; unknown adds `reason=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unrecognized `state`: surface it, stop. `<root>` below is the project root: `/` for the soul's root project, else `/<slug>/`. Project unknown (header or line): the root is the default, unconfirmed; name the reason once, continue. Every `mark_*` call goes through the store's server (the MCP server named `<store>`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
 
 ## Run
 
 `$ARGUMENTS`: an optional project slug and `--deep` (metadata lost across versions).
 
-`mark_doctor` through the store's server: `url` is `/<slug>/` for one project, `/` for the whole soul (a broker store: `mark://<world>/` from `mark_worlds`, then `/<slug>/` under it); `deep: true` with `--deep`. An invalid slug or scope is the tool's own refusal. Whole local soul: also run `"$HOME/.demarkus/bin/demarkus-plugin" provision verify-auth` via Bash and relay its verdict as one line after the report; a non-zero exit is a coverage gap, not a finding.
+`mark_doctor` through the store's server: `url` is `/<slug>/` for one project (this project: `<root>`), `/` for the whole soul (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it); `deep: true` with `--deep`. An invalid slug or scope is the tool's own refusal. Whole local soul: also run `"$HOME/.demarkus/bin/demarkus-plugin" provision verify-auth` via Bash and relay its verdict as one line after the report; a non-zero exit is a coverage gap, not a finding.
 
 - Success: print the report verbatim, then a short prioritized "what I'd fix first". "All clean" only with zero findings, Coverage `complete` and a healthy verify-auth verdict where one was due; otherwise name the gaps.
 - Tool error (store unreachable, unauthorized, inventory bound, scope not found): surface it verbatim, stop. Never substitute a manual crawl.

@@ -10,19 +10,19 @@ Ranked shortlist of soul docs worth `/promote`; never promotes here.
 
 ## Soul and project
 
-Slug and bound soul: the session header `Project slug: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
+Slug, root and bound soul: the session header `Project slug: ... Project root: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
 
 ```bash
 "$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
 ```
 
-`<project-dir>`: the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (the MCP server named `<store>`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
+`<project-dir>`: the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`), `root=`, `project=` (`known`, `new`, `unknown`; unknown adds `reason=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unrecognized `state`: surface it, stop. `<root>` below is the project root: `/` for the soul's root project, else `/<slug>/`. Project unknown (header or line): the root is the default, unconfirmed; name the reason once, continue. Every `mark_*` call goes through the store's server (the MCP server named `<store>`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
 
 ## Steps
 
 1. **Detection gate.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: registry failure, surface it, stop. `NONE`: nowhere to promote to; say so, stop. Otherwise note the destinations (`knowledge <slug>` and/or `target <slug> <path>`); `/promote` reaches any of them.
 
-2. **Sweep.** `mark_doctor` through the store's server with `promotion: true`; `url` is `/<slug>/` or `/` (a broker store: `mark://<world>/` from `mark_worlds`, then `/<slug>/` under it). Its `Promotion candidates` section lists each candidate with its reason; already promoted and staging documents are excluded, and the summary line counts the promoted. Tool error: surface it verbatim, stop. A Coverage line other than `complete`: the scan is partial; say which scope was not read.
+2. **Sweep.** `mark_doctor` through the store's server with `promotion: true`; `url` is `/<slug>/` for one project (this project: `<root>`) or `/` (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it). Its `Promotion candidates` section lists each candidate with its reason; already promoted and staging documents are excluded, and the summary line counts the promoted. Tool error: surface it verbatim, stop. A Coverage line other than `complete`: the scan is partial; say which scope was not read.
 
 3. **Triage lightly.** Judge each candidate cheaply from its report line; `mark_fetch` with `force: true` at most 10 to decide: durable? useful beyond you? plausibly not in the catalog? Drop obvious failures; be ruthless; most soul content stays personal. Real triage, distill and dedup happen inside `/promote`. A fetch failure: list the path as unassessed.
 

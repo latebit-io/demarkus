@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/guidance"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
@@ -453,7 +454,8 @@ func registryProject(args []string) {
 	if err != nil {
 		fail("project: " + err.Error())
 	}
-	if _, err := fmt.Println(r.Lines()); err != nil {
+	st := guidance.Probe(r.Store, r.Slug)
+	if _, err := fmt.Println(r.Lines() + "\n" + st.Lines()); err != nil {
 		fail("project: write output: " + err.Error())
 	}
 }

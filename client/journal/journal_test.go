@@ -229,3 +229,14 @@ func TestAppendDatesTheEntryByItsLocalDay(t *testing.T) {
 		t.Fatalf("outcome = %+v err %v", out, err)
 	}
 }
+
+func TestIsEntry(t *testing.T) {
+	for name, want := range map[string]bool{
+		"2026-10-13.md": true, "2026-02-30.md": false, "2026-10-13.txt": false,
+		"notes.md": false, "2026-10-13-extra.md": false, "2026-1-3.md": false,
+	} {
+		if IsEntry(name) != want {
+			t.Errorf("IsEntry(%q) = %v, want %v", name, !want, want)
+		}
+	}
+}

@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"path"
-	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/journal"
 	"github.com/latebit-io/demarkus/client/listwalk"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
@@ -43,7 +43,7 @@ func (t *Tools) Context(ctx context.Context, rawURL string) Result {
 	if err != nil {
 		p.coverage = append(p.coverage, err.Error()+" (default layout assumed)")
 	}
-	journal := layout.Section(l.Journal)
+	journalHeading := layout.Section(l.Journal)
 	fmt.Fprintf(&p.out, "# Context: %s\n", dir)
 	switch p.section(ctx, "Hub", dir+"index.md", false) {
 	case protocol.StatusNotFound:
@@ -51,12 +51,12 @@ func (t *Tools) Context(ctx context.Context, rawURL string) Result {
 	case protocol.StatusArchived:
 		return text(fmt.Sprintf("status: archived\n\n%sindex.md is archived: a retired project.\n", dir))
 	}
-	entries, listed := p.newest(ctx, dir+l.Journal, contextJournalDays, journalDay)
+	entries, listed := p.newest(ctx, dir+l.Journal, contextJournalDays, journal.IsEntry)
 	if listed && len(entries) == 0 {
-		fmt.Fprintf(&p.out, "\n## %s\n\nNo entries yet.\n", journal)
+		fmt.Fprintf(&p.out, "\n## %s\n\nNo entries yet.\n", journalHeading)
 	}
 	for _, e := range entries {
-		p.section(ctx, journal+" "+strings.TrimSuffix(path.Base(e), ".md"), e, false)
+		p.section(ctx, journalHeading+" "+strings.TrimSuffix(path.Base(e), ".md"), e, false)
 	}
 	p.section(ctx, "Active work", dir+l.Roadmap, true)
 	if plans, _ := p.newest(ctx, dir+l.Plans, contextPlanCap, nil); len(plans) > 0 {
@@ -113,13 +113,10 @@ func (p *primer) section(ctx context.Context, heading, docPath string, optional 
 	return r.Response.Status
 }
 
-// journalDay keeps the dated entries of a journal directory.
-var journalDay = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}\.md$`)
-
 // newest lists one directory and returns up to n document paths the keep
 // filter admits (nil keeps all), newest name first; dated journal names sort
 // by day. A missing directory is empty; a failed listing is not listed.
-func (p *primer) newest(ctx context.Context, dir string, n int, keep *regexp.Regexp) (paths []string, listed bool) {
+func (p *primer) newest(ctx context.Context, dir string, n int, keep func(name string) bool) (paths []string, listed bool) {
 	w := listwalk.Walker{
 		Client: p.tools.backend, Host: p.host, Token: p.token, MaxDepth: listwalk.RootOnly, MaxLists: contextListCalls,
 		OnProblem: func(problem *listwalk.Problem) error {
@@ -130,7 +127,7 @@ func (p *primer) newest(ctx context.Context, dir string, n int, keep *regexp.Reg
 		},
 	}
 	err := w.Walk(ctx, dir, func(docPath string) error {
-		if keep == nil || keep.MatchString(path.Base(docPath)) {
+		if keep == nil || keep(path.Base(docPath)) {
 			paths = append(paths, docPath)
 		}
 		return nil

@@ -88,14 +88,17 @@ async function callNudge(req: Record<string, unknown>): Promise<string> {
   return o?.nudge ?? "";
 }
 
-// null = binary unavailable/failed (caller retries next turn); "" = ran, nothing to say.
-async function callGuidance(directory: string): Promise<string | null> {
-  const o = await runBin<{ context?: string }>(
+// context for the model, status for the user; "" = nothing to say.
+type Guidance = { context: string; status: string };
+
+// null = binary unavailable/failed (caller retries next turn).
+async function callGuidance(directory: string): Promise<Guidance | null> {
+  const o = await runBin<{ context?: string; status?: string }>(
     ["guidance", "--surface", "memory", "--guidance-file", GUIDANCE_FILE, "--project-dir", directory],
     undefined,
     true,
   );
-  return o === null ? null : (o.context ?? "");
+  return o === null ? null : { context: o.context ?? "", status: o.status ?? "" };
 }
 
 function isMemoryWrite(toolName: string): boolean {
@@ -338,15 +341,16 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
         .map((p) => p.text)
         .join("\n");
 
-      const [context, recall] = await Promise.all([
-        s.guidanceDelivered ? Promise.resolve("") : callGuidance(directory),
+      const [guidance, recall] = await Promise.all([
+        s.guidanceDelivered ? Promise.resolve(null) : callGuidance(directory),
         callNudge({ event: "recall", surface: "memory", prompt: promptText }),
       ]);
 
       const texts: string[] = [];
       // null = binary not ready; retry next turn instead of burning the flag.
-      if (context !== null && !s.guidanceDelivered) {
-        if (context) texts.push(context);
+      if (guidance !== null && !s.guidanceDelivered) {
+        if (guidance.context) texts.push(guidance.context);
+        if (guidance.status) void toast(guidance.status);
         s.guidanceDelivered = true;
       }
       if (recall) texts.push(recall);
@@ -507,7 +511,7 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
   const sessions = new Map<string, SessionState>();
   const pendingWarns = new Map<string, string>();
   const pendingContext = new Map<string, string[]>();
-  let guidance: string | null = null;
+  let guidance: Guidance | null = null;
   const state = (id: string): SessionState => {
     let value = sessions.get(id);
     if (!value) {
@@ -524,8 +528,12 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
 
   await ctx.session.hook("context", async (event) => {
     // Model-only context is not appended to the user's persisted prompt.
-    if (guidance === null) guidance = await (services.guidance ?? callGuidance)(directory);
-    if (guidance) event.system.push({ type: "text", text: guidance });
+    if (guidance === null) {
+      guidance = await (services.guidance ?? callGuidance)(directory);
+      // V2 has no toast channel; the status line goes where bootstrap failures do.
+      if (guidance?.status) console.info(guidance.status);
+    }
+    if (guidance?.context) event.system.push({ type: "text", text: guidance.context });
     for (const text of pendingContext.get(event.sessionID) ?? []) event.system.push({ type: "text", text });
     pendingContext.delete(event.sessionID);
   });

@@ -8,11 +8,11 @@ Bring the project's recent soul into the session so agent and user pick up where
 
 ## Soul and project
 
-Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`; never the working directory, a sandbox path. None named: ask once, unless the command accepts a blank slug for the whole soul. No shell helper here: never run shell, use `mark_*` tools only. Store: the local soul, served by the `demarkus-memory` MCP server; a tool not connected or missing (older server): say so, name the server, stop.
+Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`; never the working directory, a sandbox path. None named: ask once, unless the command accepts a blank slug for the whole soul. `<root>` below is `/<slug>/`. No shell helper here: never run shell, use `mark_*` tools only. Store: the local soul, served by the `demarkus-memory` MCP server; a tool not connected or missing (older server): say so, name the server, stop.
 
 ## Steps
 
-1. **Read the primer.** `mark_fetch` through the store's server with `url` `/<slug>/.context`. A tool error: surface it, stop. `status: new`: new project, say so, suggest `/soul-journal "<entry>"`, stop. `status: archived`: say so, stop.
+1. **Read the primer.** `mark_fetch` through the store's server with `url` `<root>.context`. A tool error: surface it, stop. `status: new`: new project, say so, suggest `/soul-journal "<entry>"`, stop. `status: archived`: say so, stop.
 
 2. **Summarize.** Plain text, no preamble:
 

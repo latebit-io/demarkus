@@ -3,7 +3,8 @@
 // The pi port of the claude-code demarkus-memory plugin. Same behavior, mapped
 // onto pi's extension API:
 //   - session_start      → provision the managed server + wire the MCP entry,
-//                          plus a notify-only update check (throttled, daily)
+//                          notify the session status line, plus a notify-only
+//                          update check (throttled, daily)
 //   - before_agent_start → inject standing guidance (once) + recall nudge
 //   - tool_call          → publish tag-gate + destination gate + promote nudge
 //   - session_shutdown   → journal nudge
@@ -16,7 +17,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionActivity } from "./nudges.js";
-import { callGate, callGuidance, callNudge, callUpdateCheck } from "./plugin.js";
+import { callGate, callGuidance, callNudge, callUpdateCheck, type Guidance } from "./plugin.js";
 import { ensureMcpServerEntry, provisionServer } from "./setup.js";
 
 // Minimal structural types — pi's ExtensionAPI is provided at runtime; we keep
@@ -150,11 +151,13 @@ async function checkForUpdate(): Promise<string> {
 
 export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   let contextDelivered = false;
+  let guidance: Guidance | null = null;
   let projectDir = "";
   let activity = new SessionActivity();
 
   pi.on("session_start", async (_event, ctx) => {
     contextDelivered = false;
+    guidance = null;
     projectDir = ctx.cwd;
     activity = new SessionActivity();
 
@@ -166,6 +169,9 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     if (mcp.status === "error") {
       ctx.ui.notify(`demarkus-memory: MCP registration failed: ${mcp.message}`, "warning");
     }
+    // After provisioning, so the status reflects the server just started.
+    guidance = await callGuidance("memory", GUIDANCE_FILE, projectDir);
+    if (guidance?.status) ctx.ui.notify(guidance.status, "info");
 
     // After provisioning, which is what installs the binary this call needs.
     // Fire-and-forget: a notice must never delay the session.
@@ -177,11 +183,11 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event) => {
     const parts: string[] = [];
     if (!contextDelivered) {
-      const context = await callGuidance("memory", GUIDANCE_FILE, projectDir);
-      // null = binary failed; leave the flag unset so we retry next turn rather
-      // than dropping guidance for the whole session. "" = ran, nothing to say.
-      if (context !== null) {
-        if (context) parts.push(context);
+      // null = binary failed; retry each turn rather than dropping guidance
+      // for the whole session.
+      guidance ??= await callGuidance("memory", GUIDANCE_FILE, projectDir);
+      if (guidance !== null) {
+        if (guidance.context) parts.push(guidance.context);
         contextDelivered = true;
       }
     }

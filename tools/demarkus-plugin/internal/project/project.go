@@ -102,8 +102,9 @@ func (r Resolution) Hint() string {
 	return "not in the catalog; restore it with " + restore + " or rebind with /soul-default"
 }
 
-// Header renders the resolution as the session-start line.
-func (r Resolution) Header() string {
+// Header renders the resolution as the session-start line; root is the
+// project's directory in the store.
+func (r Resolution) Header(root string) string {
 	store := "Bound store: `" + r.Store + "`."
 	switch r.State {
 	case StateLocal:
@@ -111,7 +112,7 @@ func (r Resolution) Header() string {
 	case StateStale:
 		store = "Bound store: `" + r.Store + "` (stale: " + r.Hint() + ")."
 	}
-	return "Project slug: `" + r.Slug + "`. " + store
+	return "Project slug: `" + r.Slug + "`. Project root: `" + root + "`. " + store
 }
 
 // Lines renders the resolution as key=value lines for the registry subcommand;

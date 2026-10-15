@@ -41,8 +41,8 @@ func TestResolveStates(t *testing.T) {
 	if r.Slug != "my-repo" || r.Store != "team" || r.State != StateBound {
 		t.Fatalf("bound resolution wrong: %+v", r)
 	}
-	if r.Header() != "Project slug: `my-repo`. Bound store: `team`." {
-		t.Fatalf("header: %s", r.Header())
+	if r.Header("/my-repo/") != "Project slug: `my-repo`. Project root: `/my-repo/`. Bound store: `team`." {
+		t.Fatalf("header: %s", r.Header("/"))
 	}
 	if r.Lines() != "slug=my-repo\nstore=team\nstate=bound" {
 		t.Fatalf("lines: %s", r.Lines())
@@ -57,8 +57,8 @@ func TestResolveStates(t *testing.T) {
 	if r.Dir != other || r.Store != "demarkus-memory" || r.State != StateLocal {
 		t.Fatalf("harness fallback wrong: %+v", r)
 	}
-	if r.Header() != "Project slug: `other`. Bound store: `demarkus-memory` (local, no project binding)." {
-		t.Fatalf("local header: %s", r.Header())
+	if r.Header("/other/") != "Project slug: `other`. Project root: `/other/`. Bound store: `demarkus-memory` (local, no project binding)." {
+		t.Fatalf("local header: %s", r.Header("/"))
 	}
 
 	stale := filepath.Join(t.TempDir(), "stale")
@@ -70,8 +70,8 @@ func TestResolveStates(t *testing.T) {
 	if r.State != StateStale || r.Store != "gone" {
 		t.Fatalf("stale resolution wrong: %+v", r)
 	}
-	if r.Header() != "Project slug: `stale`. Bound store: `gone` (stale: not in the catalog; restore it with /soul-join or rebind with /soul-default)." {
-		t.Fatalf("stale header: %s", r.Header())
+	if r.Header("/") != "Project slug: `stale`. Project root: `/`. Bound store: `gone` (stale: not in the catalog; restore it with /soul-join or rebind with /soul-default)." {
+		t.Fatalf("stale header: %s", r.Header("/"))
 	}
 	if r.Lines() != "slug=stale\nstore=gone\nstate=stale\nhint=not in the catalog; restore it with /soul-join or rebind with /soul-default" {
 		t.Fatalf("stale lines: %s", r.Lines())

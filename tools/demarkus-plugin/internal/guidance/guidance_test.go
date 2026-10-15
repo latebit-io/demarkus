@@ -7,8 +7,10 @@ import (
 	"testing"
 )
 
+// setupHome also stubs the store probe: no test dials out.
 func setupHome(t *testing.T, files map[string]string) string {
 	t.Helper()
+	stubProbe(t, ProjectStatus{State: ProjectUnknown, Root: "/stub/", Reason: "not probed"})
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	dm := filepath.Join(home, ".demarkus")
@@ -89,8 +91,12 @@ func TestMemoryGuidanceProjectHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := ctx(t, Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: project})
-	if !strings.Contains(out, "Project slug: `my-repo`. Bound store: `team`.") {
+	if !strings.Contains(out, "Project slug: `my-repo`. Project root: `/stub/`. Bound store: `team`. Project: unknown (not probed).") {
 		t.Fatalf("header missing or wrong:\n%s", out)
+	}
+	o, err := Evaluate(Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: project})
+	if err != nil || !strings.HasPrefix(o.Status, "demarkus: soul team · project my-repo (status unknown: not probed)") {
+		t.Fatalf("status = %q, %v", o.Status, err)
 	}
 	if strings.Contains(out, "<!--") || !strings.Contains(out, "\n\n# standing guidance") {
 		t.Fatalf("generator comments must be stripped from the injected guidance:\n%s", out)
@@ -100,7 +106,7 @@ func TestMemoryGuidanceProjectHeader(t *testing.T) {
 	}
 	t.Setenv("CURSOR_PROJECT_DIR", "")
 	t.Setenv("CLAUDE_PROJECT_DIR", filepath.Join(t.TempDir(), "other"))
-	if out := ctx(t, Input{Surface: "memory", GuidanceFile: gfile}); !strings.Contains(out, "Project slug: `other`. Bound store: `demarkus-memory` (local, no project binding).") {
+	if out := ctx(t, Input{Surface: "memory", GuidanceFile: gfile}); !strings.Contains(out, "Project slug: `other`. Project root: `/stub/`. Bound store: `demarkus-memory` (local, no project binding).") {
 		t.Fatalf("unbound project header wrong:\n%s", out)
 	}
 	stale := filepath.Join(t.TempDir(), "stale")
@@ -125,7 +131,7 @@ func TestGuidanceSurfacesUnreadableFileAndRelativeProjectDir(t *testing.T) {
 		"souls":              "team\tmark://team.example:6309\tfalse\t-\n",
 	})
 	t.Chdir(project)
-	if out := ctx(t, Input{Surface: "memory", ProjectDir: "."}); !strings.Contains(out, "Project slug: `rel-project`. Bound store: `team`.") {
+	if out := ctx(t, Input{Surface: "memory", ProjectDir: "."}); !strings.Contains(out, "Project slug: `rel-project`. Project root: `/stub/`. Bound store: `team`.") {
 		t.Fatalf("relative project dir must resolve to its binding:\n%s", out)
 	}
 }
@@ -135,5 +141,9 @@ func TestMemoryGuidanceSurvivesInvalidProjectName(t *testing.T) {
 	out := ctx(t, Input{Surface: "memory", ProjectDir: filepath.Join(t.TempDir(), "bad#name")})
 	if !strings.Contains(out, "Project slug: none (directory name \"bad#name\" is not a valid slug") {
 		t.Fatalf("an unusable directory name must be stated, not drop the guidance:\n%s", out)
+	}
+	o, err := Evaluate(Input{Surface: "memory", ProjectDir: filepath.Join(t.TempDir(), "bad#name")})
+	if err != nil || o.Status != `demarkus: no project (directory name "bad#name" is not a valid slug)` {
+		t.Fatalf("status = %q, %v", o.Status, err)
 	}
 }

@@ -26,8 +26,9 @@ func TestHookShapes(t *testing.T) {
 		{"claude recall nudge", Claude.Nudge("recall", "n"), `{"hookSpecificOutput":{"additionalContext":"n","hookEventName":"UserPromptSubmit"}}`},
 		{"cursor session-end nudge", Cursor.Nudge("session-end", "n"), `{"followup_message":"n"}`},
 		{"cursor promote nudge", Cursor.Nudge("promote", "n"), `{"agent_message":"n","permission":"allow"}`},
-		{"claude guidance", Claude.Guidance("g"), `{"hookSpecificOutput":{"additionalContext":"g","hookEventName":"SessionStart"}}`},
-		{"cursor guidance", Cursor.Guidance("g"), `{"additional_context":"g"}`},
+		{"claude guidance", Claude.Guidance("g", ""), `{"hookSpecificOutput":{"additionalContext":"g","hookEventName":"SessionStart"}}`},
+		{"claude guidance with status", Claude.Guidance("g", "demarkus: soul s"), `{"hookSpecificOutput":{"additionalContext":"g","hookEventName":"SessionStart"},"systemMessage":"demarkus: soul s"}`},
+		{"cursor guidance", Cursor.Guidance("g", "demarkus: soul s"), `{"additional_context":"g"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
