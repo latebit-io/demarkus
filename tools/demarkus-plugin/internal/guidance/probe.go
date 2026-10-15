@@ -7,7 +7,6 @@ import (
 	"os"
 	"path"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -95,27 +94,37 @@ func probeStore(ctx context.Context, store, slug string) ProjectStatus {
 	return probe(ctx, soul{reader: c, host: host, token: ep.Token}, slug)
 }
 
-// probe reads the template and the default hub together; the template's
-// root project has its hub at "/", read second.
+// probe reads the template and the default hub together. A template naming
+// another root cancels the default hub read, so it cannot eat the root's time.
 func probe(ctx context.Context, s soul, slug string) ProjectStatus {
 	st := unknownStatus(slug, "")
-	var (
-		l          layout.Layout
-		hub        protocol.Response
-		lErr, hErr error
-		wg         sync.WaitGroup
-	)
-	wg.Go(func() { l, lErr = layout.Read(ctx, s.fetch) })
-	wg.Go(func() { hub, hErr = s.fetch(ctx, st.Root+"index.md") })
-	wg.Wait()
+	type fetched struct {
+		resp protocol.Response
+		err  error
+	}
+	hubCtx, cancelHub := context.WithCancel(ctx)
+	defer cancelHub()
+	hubDone := make(chan fetched, 1)
+	defaultHub := st.Root + "index.md" // read before st.Root may change
+	go func() {
+		resp, err := s.fetch(hubCtx, defaultHub)
+		hubDone <- fetched{resp, err}
+	}()
+	l, lErr := layout.Read(ctx, s.fetch)
 	if lErr != nil {
 		// The default root would call the root project new.
 		st.Reason = failure(ctx, lErr)
 		return st
 	}
+	var hub protocol.Response
+	var hErr error
 	if root := l.Root(slug); root != st.Root {
 		st.Root = root
+		cancelHub()
 		hub, hErr = s.fetch(ctx, root+"index.md")
+	} else {
+		r := <-hubDone
+		hub, hErr = r.resp, r.err
 	}
 	hubPath := st.Root + "index.md"
 	switch {

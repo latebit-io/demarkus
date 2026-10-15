@@ -85,7 +85,15 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
   await hooks.get("prompt")!(nextPrompt);
   assert.equal(nextPrompt.prompt.text, "Continue");
   const nextContext = { sessionID: "s2", system: [] as Array<{ type: string; text: string }> };
-  await hooks.get("context")!(nextContext);
+  // A new session gets its own guidance call and status line.
+  statuses.length = 0;
+  console.info = (message: string) => { statuses.push(message); };
+  try {
+    await hooks.get("context")!(nextContext);
+  } finally {
+    console.info = info;
+  }
+  assert.deepEqual(statuses, ["demarkus: soul s · project p (new)"]);
   assert.deepEqual(nextContext.system, [
     { type: "text", text: "Recall first" },
     { type: "text", text: "Journal nudge" },

@@ -511,7 +511,8 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
   const sessions = new Map<string, SessionState>();
   const pendingWarns = new Map<string, string>();
   const pendingContext = new Map<string, string[]>();
-  let guidance: Guidance | null = null;
+  // Per session: the status and facts in it describe one session's start.
+  const guidance = new Map<string, Guidance>();
   const state = (id: string): SessionState => {
     let value = sessions.get(id);
     if (!value) {
@@ -528,12 +529,18 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
 
   await ctx.session.hook("context", async (event) => {
     // Model-only context is not appended to the user's persisted prompt.
-    if (guidance === null) {
-      guidance = await (services.guidance ?? callGuidance)(directory);
-      // V2 has no toast channel; the status line goes where bootstrap failures do.
-      if (guidance?.status) console.info(guidance.status);
+    let g = guidance.get(event.sessionID);
+    if (g === undefined) {
+      // null = binary not ready; retry on the next context build.
+      const fresh = await (services.guidance ?? callGuidance)(directory);
+      if (fresh !== null) {
+        guidance.set(event.sessionID, fresh);
+        g = fresh;
+        // V2 has no toast channel; the status line goes where bootstrap failures do.
+        if (fresh.status) console.info(fresh.status);
+      }
     }
-    if (guidance?.context) event.system.push({ type: "text", text: guidance.context });
+    if (g?.context) event.system.push({ type: "text", text: g.context });
     for (const text of pendingContext.get(event.sessionID) ?? []) event.system.push({ type: "text", text });
     pendingContext.delete(event.sessionID);
   });
@@ -577,6 +584,7 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
           if (id) {
             sessions.delete(id);
             pendingContext.delete(id);
+            guidance.delete(id);
             for (const key of pendingWarns.keys()) if (key.startsWith(`${id}:`)) pendingWarns.delete(key);
           }
           continue;

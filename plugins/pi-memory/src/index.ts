@@ -180,12 +180,15 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     });
   });
 
-  pi.on("before_agent_start", async (event) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     const parts: string[] = [];
     if (!contextDelivered) {
       // null = binary failed; retry each turn rather than dropping guidance
-      // for the whole session.
-      guidance ??= await callGuidance("memory", GUIDANCE_FILE, projectDir);
+      // for the whole session. A retry that succeeds still owes the status.
+      if (guidance === null) {
+        guidance = await callGuidance("memory", GUIDANCE_FILE, projectDir);
+        if (guidance?.status) ctx.ui.notify(guidance.status, "info");
+      }
       if (guidance !== null) {
         if (guidance.context) parts.push(guidance.context);
         contextDelivered = true;
