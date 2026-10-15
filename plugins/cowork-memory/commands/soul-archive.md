@@ -11,11 +11,11 @@ Archived: fetches as `archived`, every version kept, no unarchive tool (the oper
 
 ## Soul and project
 
-Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`; never the working directory, a sandbox path. None named: ask once, unless the command accepts a blank slug for the whole soul. No shell helper here: never run shell, use `mark_*` tools only. Store: the local soul, served by the `demarkus-memory` MCP server; a tool not connected or missing (older server): say so, name the server, stop.
+Slug: the project the user names or confirms, matching `^[a-z0-9][a-z0-9._-]*$`; never the working directory, a sandbox path. None named: ask once, unless the command accepts a blank slug for the whole soul. `<root>` below is `/<slug>/`. No shell helper here: never run shell, use `mark_*` tools only. Store: the local soul, served by the `demarkus-memory` MCP server; a tool not connected or missing (older server): say so, name the server, stop.
 
 ## Steps
 
-1. **Scope.** Target outside `/<slug>/`: the user confirms it, else stop.
+1. **Scope.** Target outside `<root>`: the user confirms it, else stop.
 
 2. **Collect.** Document: `mark_fetch`; `ok` continues; `archived` or `not-found`: say so, stop; other failure: surface, stop. Directory: `mark_list` to count the live documents (`next-cursor` as `cursor` until `complete: true`, recurse into subdirectories; over 100 list calls or 500 documents: stop, ask for a narrower directory); `not-found` or none: say so, stop; a listing failure: surface, stop.
 

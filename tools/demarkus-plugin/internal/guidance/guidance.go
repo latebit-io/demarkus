@@ -1,8 +1,6 @@
-// Package guidance assembles the session-start context for every demarkus plugin
-// — the dynamic pieces (managed-server health warning, the one-time "make
-// demarkus your only memory" offer, the joined-knowledge-systems list, the
-// one-time join hint, the memory↔system note) wrapped around generated static
-// guidance. Plugins bundle rendered copies; plugins/prompt-source owns the prose.
+// Package guidance assembles session start for every demarkus plugin: dynamic
+// pieces (health warning, one-time offers, project status, joined systems)
+// around generated static guidance, plus the user's status line.
 package guidance
 
 import (
@@ -27,7 +25,8 @@ type Input struct {
 
 // Output carries the guidance text to inject for a session.
 type Output struct {
-	Context string `json:"context"` // full text to inject; empty = nothing to say
+	Context string `json:"context"`          // full text to inject; empty = nothing to say
+	Status  string `json:"status,omitempty"` // one line for the user; empty = nothing to show
 }
 
 const memoryOfferText = "[One-time setup offer: raise this with the user once, then drop it] demarkus-memory is now wired as your persistent memory store. If the user would like demarkus to be their SINGLE source of durable memory, offer to disable your harness's built-in memory tool so the two don't compete: ask first, and only if they agree, turn it off and report what you changed. If they decline, say nothing further about it. Do not disable anything unasked."
@@ -79,7 +78,7 @@ func memory(in Input) (Output, error) {
 	if offer != "" {
 		parts = append(parts, offer)
 	}
-	header, err := projectHeader(in.ProjectDir)
+	header, status, err := projectHeader(in.ProjectDir, warn)
 	if err != nil {
 		return Output{}, err
 	}
@@ -93,25 +92,26 @@ func memory(in Input) (Output, error) {
 	if g != "" {
 		parts = append(parts, g)
 	}
-	return Output{Context: strings.Join(parts, "\n\n")}, nil
+	return Output{Context: strings.Join(parts, "\n\n"), Status: status}, nil
 }
 
-// projectHeader states the project slug and bound store as data, so the
-// guidance need not teach the slug rule or the binding lookup. Empty when no
-// project directory is known; an unusable directory name is stated, not fatal.
-func projectHeader(dir string) (string, error) {
+// projectHeader states the project, its soul root and state, and where the
+// work stands, as data for the agent; status is the user's line. Both empty
+// when no project directory is known; an unusable directory name is stated.
+func projectHeader(dir, warn string) (header, status string, err error) {
 	r, err := project.Resolve(dir)
 	if errors.Is(err, project.ErrNoDir) {
-		return "", nil
+		return "", "", nil
 	}
 	if err != nil {
 		var slugErr *project.SlugError
 		if errors.As(err, &slugErr) {
-			return "Project slug: none (" + slugErr.Error() + ").", nil
+			return "Project slug: none (" + slugErr.Error() + ").", slugStatus(slugErr), nil
 		}
-		return "", err
+		return "", "", err
 	}
-	return r.Header(), nil
+	s := readStatus(r)
+	return s.agentHeader(r), s.userLine(r, warn), nil
 }
 
 // serverHealthWarning delegates to provision.HealthWarning so the health check —

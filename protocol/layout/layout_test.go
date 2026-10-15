@@ -63,6 +63,23 @@ func TestReadMapsStatusToLayout(t *testing.T) {
 	}
 }
 
+func TestRootProject(t *testing.T) {
+	l, err := Parse("root_project: demarkus\n")
+	if err != nil || l.Root("demarkus") != "/" || l.Root("demarkus-library") != "/demarkus-library/" {
+		t.Errorf("root project = %+v %v", l, err)
+	}
+	def := Default()
+	if def.Root("demarkus") != "/demarkus/" {
+		t.Errorf("default root = %s", def.Root("demarkus"))
+	}
+	for _, v := range []string{"/", "/demarkus/", "", "Two Words"} {
+		got, err := Parse("root_project: " + v + "\n")
+		if err == nil || !strings.Contains(err.Error(), "invalid root_project") || got.RootProject != "" {
+			t.Errorf("root_project %q = %+v %v", v, got, err)
+		}
+	}
+}
+
 func TestSection(t *testing.T) {
 	if Section("journal/") != "Journal" || Section("log") != "Log" || Section("") != "" {
 		t.Error("section names capitalize the directory")

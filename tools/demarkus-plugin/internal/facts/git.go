@@ -6,7 +6,12 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+// pipeWait bounds the wait for git's output pipes after ctx kills it: a
+// child it spawned may still hold them open.
+const pipeWait = 200 * time.Millisecond
 
 // ReadGit reads root, branch, HEAD and uncommitted paths (repo-relative) for
 // the repository containing dir. dir "" is the process cwd.
@@ -16,6 +21,7 @@ func ReadGit(ctx context.Context, dir string) (Git, error) {
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // fixed binary, no shell; dir is only ever -C's value
 	cmd.Stderr = &stderr
+	cmd.WaitDelay = pipeWait
 	out, err := cmd.Output()
 	if err != nil {
 		return Git{}, fmt.Errorf("git status in %q: %w: %s", dir, err, strings.TrimSpace(stderr.String()))
@@ -24,6 +30,7 @@ func ReadGit(ctx context.Context, dir string) (Git, error) {
 	stderr.Reset()
 	root := exec.CommandContext(ctx, "git", append(prefix(dir), "rev-parse", "--show-toplevel")...) //nolint:gosec // as above
 	root.Stderr = &stderr
+	root.WaitDelay = pipeWait
 	top, err := root.Output()
 	if err != nil {
 		return Git{}, fmt.Errorf("git rev-parse in %q: %w: %s", dir, err, strings.TrimSpace(stderr.String()))

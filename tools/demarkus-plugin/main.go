@@ -212,8 +212,8 @@ func cmdUpdateCheck() {
 }
 
 // cmdGuidance emits the session-start context for a surface. --format json
-// (default) → {"context":...}; claude → a SessionStart additionalContext payload;
-// cursor → a sessionStart additional_context payload. Empty context → no output.
+// (default) → {"context":...,"status":...}; claude → SessionStart additionalContext
+// plus systemMessage; cursor → sessionStart additional_context. Nothing to say → no output.
 func cmdGuidance() {
 	fs := flag.NewFlagSet("guidance", flag.ExitOnError)
 	surface := fs.String("surface", "memory", "memory | knowledge")
@@ -227,11 +227,11 @@ func cmdGuidance() {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] guidance: "+err.Error())
 		return
 	}
-	if out.Context == "" {
+	if out.Context == "" && out.Status == "" {
 		return
 	}
 	if h, ok := host.ForHook(*format); ok {
-		printJSON(h.Guidance(out.Context))
+		printJSON(h.Guidance(out.Context, out.Status))
 		return
 	}
 	printJSON(out)

@@ -4,15 +4,17 @@
 
 Your soul is a versioned demarkus store behind the `demarkus-memory` MCP tools; "recall" and "record" here always mean it, never the host's built-in memory. Treat it like repo instructions: consult before starting, record as you go, unprompted. Never disable the host's built-in memory unasked.
 
-Everything lives under `/<slug>/`. Write through the bound store's tools (the destination server's `mark_*` tools); the server's instructions carry the read contract. Ambiguous target: ask the user once.
+Everything lives under the header's `Project root:` (`<root>` below). Write through the bound store's tools (the destination server's `mark_*` tools); the server's instructions carry the read contract. Ambiguous target: ask the user once.
 
 ## Recall first
 
-Before "what do I know / did we decide / have we seen X" and at the start of substantive work, `mark_lookup` `/<slug>/` with descriptive subjects; `/<slug>/index.md` is the backstop for untagged content. Never fabricate recall.
+Before "what do I know / did we decide / have we seen X" and at the start of substantive work, `mark_lookup` `<root>` with descriptive subjects; `<root>index.md` is the backstop for untagged content. Header `Project: new`: nothing to recall, skip lookups; ask the user once whether to add the project; yes: `/soul-journal` with a first entry creates its hub. Never fabricate recall.
+
+At the start of substantive work, compare `Where it stands:` with the newest journal entry the header names; raise a switched branch or uncommitted work the entry does not mention, first.
 
 ## Record as you go
 
-Write without prompting: decisions to `/<slug>/adr/<NNNN>-<title>.md`, bug lessons to `/<slug>/debugging.md`, patterns to `/<slug>/patterns.md`, session progress through `/soul-journal`, and architecture, roadmap, debt, plans or open questions to their file under `/<slug>/`. Keep `/<slug>/index.md` current. The `remember` skill has the layout. Write-time gates (tags, destination, retention, style) say what to fix; follow them.
+Write without prompting: decisions to `<root>adr/<NNNN>-<title>.md`, bug lessons to `<root>debugging.md`, patterns to `<root>patterns.md`, session progress through `/soul-journal`, and architecture, roadmap, debt, plans or open questions to their file under `<root>`. Keep `<root>index.md` current. The `remember` skill has the layout. Write-time gates (tags, destination, retention, style) say what to fix; follow them.
 
 ## Restraint
 

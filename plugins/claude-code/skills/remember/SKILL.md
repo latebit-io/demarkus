@@ -7,7 +7,7 @@ description: Remember, save, recall, or query personal notes across Claude Code 
 
 # Remember
 
-Routes "remember" / "recall" intents through the project's soul: a versioned, link-graph-aware personal store, never the host's built-in memory. `/index.md` lists projects; each project lives at `/<slug>/`.
+Routes "remember" / "recall" intents through the project's soul: a versioned, link-graph-aware personal store, never the host's built-in memory. Each project lives at its root: `/<slug>/`, listed in `/index.md`; the template's `root_project` lives at `/`.
 
 ## Triggers
 
@@ -15,23 +15,23 @@ Routes "remember" / "recall" intents through the project's soul: a versioned, li
 
 ## Soul and project
 
-Slug and bound soul: the session header `Project slug: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
+Slug, root and bound soul: the session header `Project slug: ... Project root: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
 
 ```bash
 "$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
 ```
 
-`<project-dir>`: `"${CLAUDE_PROJECT_DIR}"`, or the named directory as one POSIX-safe shell word. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unknown state: surface it, stop. Every `mark_*` call goes through the store's server (`mcp__<store>__mark_*`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
+`<project-dir>`: `"${CLAUDE_PROJECT_DIR}"`, or the named directory as one POSIX-safe shell word. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`), `root=`, `project=` (`known`, `new`, `unknown`; unknown adds `reason=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unrecognized `state`: surface it, stop. `<root>` below is the project root: `/` for the soul's root project, else `/<slug>/`. Project unknown (header or line): the root is the default, unconfirmed; name the reason once, continue. Every `mark_*` call goes through the store's server (`mcp__<store>__mark_*`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
 
 ## Layout
 
-Under `/<slug>/` (`/.well-known/demarkus/template.md` overrides the directory names when published; route tools apply it server-side): `index.md` (hub), `architecture.md`, `patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `thoughts.md`, `adr/<NNNN>-<slug>.md`, `plans/<name>.md`, `journal/<YYYY-MM-DD>.md`. The root holds `/index.md` only.
+Under `<root>` (`/.well-known/demarkus/template.md` overrides the directory names when published; route tools apply it server-side): `index.md` (hub), `architecture.md`, `patterns.md`, `guidelines.md`, `debugging.md`, `roadmap.md`, `debt.md`, `thoughts.md`, `adr/<NNNN>-<slug>.md`, `plans/<name>.md`, `journal/<YYYY-MM-DD>.md`. Otherwise `/` holds `/index.md` only.
 
 `type` on publish: `architecture.md` `Architecture`; `adr/*` `Decision`; `plans/*`, `roadmap.md` `Plan`; `journal/*` `Journal`; `patterns.md`, `guidelines.md`, `debugging.md` `Guide`; standalone references `Reference`; hubs untyped.
 
 ## Read
 
-The server instructions carry the read contract. Scope `/<slug>/` or a narrower established subtree; `/` only for cross-project intent. `mark_backlinks` / `mark_graph` for related documents in scope.
+The server instructions carry the read contract. Scope `<root>` or a narrower established subtree; `/` only for cross-project intent. `mark_backlinks` / `mark_graph` for related documents in scope.
 
 ## Write
 
@@ -39,9 +39,9 @@ Update: `mark_fetch` with `force: true` (complete body and metadata map), apply 
 
 Routes:
 
-- **Fleeting note, session progress**: `/soul-journal`, or `mark_append` with `url` `/<slug>/` and `route: "today"` (creates today's entry, a missing hub and its `/index.md` link; a new project starts here).
-- **Decision**: `mark_list /<slug>/adr/` with `include_archived: true`, every page to `complete: true`; next unused number, zero-padded 4 digits; `not-found`: `0001`; a listing failure or an incomplete listing: surface, assign none. Body: `# <NNNN>. <Title>`, `## Status`, `## Context`, `## Decision`, `## Consequences`.
-- **Pattern or convention**: `patterns.md`. **Hard rule**: `guidelines.md`. **Bug lesson**: `debugging.md` (the non-obvious why). **Architecture change**: `architecture.md`. **Next, done, not prioritized**: `roadmap.md`. **Debt**: `debt.md`. **Plan**: `<name>.md` under the layout's `plans:` directory (`plans/` by default). **Open question or idea**: `thoughts.md`. Keep `/<slug>/index.md` linking each.
+- **Fleeting note, session progress**: `/soul-journal`, or `mark_append` with `url` `<root>` and `route: "today"` (creates today's entry, a missing hub and, under `/<slug>/`, its `/index.md` link; a new project starts here).
+- **Decision**: `mark_list <root>adr/` with `include_archived: true`, every page to `complete: true`; next unused number, zero-padded 4 digits; `not-found`: `0001`; a listing failure or an incomplete listing: surface, assign none. Body: `# <NNNN>. <Title>`, `## Status`, `## Context`, `## Decision`, `## Consequences`.
+- **Pattern or convention**: `patterns.md`. **Hard rule**: `guidelines.md`. **Bug lesson**: `debugging.md` (the non-obvious why). **Architecture change**: `architecture.md`. **Next, done, not prioritized**: `roadmap.md`. **Debt**: `debt.md`. **Plan**: `<name>.md` under the layout's `plans:` directory (`plans/` by default). **Open question or idea**: `thoughts.md`. Keep `<root>index.md` linking each.
 - **Cross-project or unplaceable**: ask the user where.
 
 Always reference what you saved by full path.

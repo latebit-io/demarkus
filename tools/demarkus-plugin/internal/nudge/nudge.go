@@ -182,7 +182,7 @@ func sessionEnd(in *Input) (Output, error) {
 	} else {
 		session.Git = &g
 	}
-	return Output{Nudge: journalNudgeText(facts.Render(session))}, nil
+	return Output{Nudge: journalNudgeText(facts.Render("Where it stopped:", session))}, nil
 }
 
 // readSessionGit reads the repo of the last edit, else the session's cwd: a

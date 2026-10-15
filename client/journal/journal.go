@@ -50,6 +50,19 @@ type Outcome struct {
 // Docs binds the surface's write contract to one path on the store.
 type Docs func(docPath string) *docwrite.Doc
 
+// DateLayout names an entry: one document per day, "<date>.md".
+const DateLayout = "2006-01-02"
+
+// IsEntry reports whether a journal directory's file name is a dated entry.
+func IsEntry(name string) bool {
+	day, ok := strings.CutSuffix(name, ".md")
+	if !ok || len(day) != len(DateLayout) {
+		return false
+	}
+	_, err := time.Parse(DateLayout, day)
+	return err == nil
+}
+
 const (
 	defaultImportance = "0.4"
 	hubImportance     = "0.8"
@@ -73,7 +86,7 @@ func Append(ctx context.Context, docs Docs, req Request) (Outcome, error) { //no
 	if req.Layout.Journal == "" {
 		req.Layout = layout.Default()
 	}
-	r := run{Request: req, docs: docs, date: req.Now.Format("2006-01-02")}
+	r := run{Request: req, docs: docs, date: req.Now.Format(DateLayout)}
 
 	scopeHub := docs(r.Dir + "index.md")
 	hubHead, err := head(ctx, scopeHub)

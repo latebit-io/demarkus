@@ -116,7 +116,7 @@ func TestRender(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		if got := Render(c.s); got != c.want {
+		if got := Render("Where it stopped:", c.s); got != c.want {
 			t.Errorf("%s:\ngot  %q\nwant %q", c.name, got, c.want)
 		}
 	}
@@ -127,7 +127,7 @@ func TestRenderBounds(t *testing.T) {
 	for i := range 30 {
 		paths = append(paths, fmt.Sprintf("p%02d.go", i))
 	}
-	got := Render(Session{Git: &Git{Branch: "b", Head: "h", Uncommitted: paths}})
+	got := Render("Where it stopped:", Session{Git: &Git{Branch: "b", Head: "h", Uncommitted: paths}})
 	if !strings.Contains(got, "uncommitted (30): p00.go") || !strings.Contains(got, "p19.go, +10 more") || strings.Contains(got, "p20.go") {
 		t.Errorf("want 20 paths then +10 more, got %q", got)
 	}
@@ -137,7 +137,7 @@ func TestRenderBounds(t *testing.T) {
 	for i := range 20 {
 		paths = append(paths, fmt.Sprintf("%s%02d", long, i))
 	}
-	got = Render(Session{Git: &Git{Branch: "b", Head: "h", Uncommitted: paths}})
+	got = Render("Where it stopped:", Session{Git: &Git{Branch: "b", Head: "h", Uncommitted: paths}})
 	if len(got) > maxBlock {
 		t.Errorf("block is %d bytes, cap %d", len(got), maxBlock)
 	}
@@ -215,5 +215,24 @@ func TestReadGit(t *testing.T) {
 
 	if _, err := ReadGit(context.Background(), t.TempDir()); err == nil {
 		t.Error("a directory outside any repo must error")
+	}
+}
+
+func TestRenderHeadingAndBrief(t *testing.T) {
+	g := &Git{Branch: "feat/x", Head: "0123456789", Uncommitted: []string{"a.go", "b.go"}}
+	if got := Render("Where it stands:", Session{Git: g}); !strings.HasPrefix(got, "Where it stands:\n- branch: feat/x at 01234567") || strings.Contains(got, "checks") {
+		t.Errorf("render = %q", got)
+	}
+	for _, c := range []struct {
+		g    Git
+		want string
+	}{
+		{*g, "feat/x, 2 uncommitted"},
+		{Git{Branch: "main"}, "main, clean"},
+		{Git{Head: "abc"}, "detached HEAD, clean"},
+	} {
+		if got := c.g.Brief(); got != c.want {
+			t.Errorf("Brief = %q, want %q", got, c.want)
+		}
 	}
 }

@@ -29,6 +29,7 @@ type Layout struct {
 	Staging      []string // directory names whose content stays personal
 	PromoteTypes []string // document types that mark shared knowledge
 	PromoteFloor float64  // importance at which any typed document is shared
+	RootProject  string   // slug of the one project at "/"; "" when every project has /<slug>/
 }
 
 // Default is the layout every seeded world starts from.
@@ -83,10 +84,22 @@ func Parse(body string) (Layout, error) {
 			l.PromoteFloor = f
 		}
 	}
+	if v, ok := found["root_project"]; ok {
+		set("root_project", assign(&l.RootProject, v, IsSegment))
+	}
 	if len(bad) > 0 {
 		return l, fmt.Errorf("template %s: invalid %s", DocumentPath, strings.Join(bad, ", "))
 	}
 	return l, nil
+}
+
+// Root is the project's directory with both slashes: "/" for the root
+// project, "/<slug>/" for every other.
+func (l *Layout) Root(slug string) string {
+	if slug == l.RootProject {
+		return "/"
+	}
+	return "/" + slug + "/"
 }
 
 // Read fetches the world's template through fetch: absent or archived is

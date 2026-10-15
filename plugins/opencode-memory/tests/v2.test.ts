@@ -39,7 +39,7 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
         event: async ({ event }: { event: { type: string } }) => { lifecycle.push(event.type); },
       } as any;
     },
-    guidance: async () => "Recall first",
+    guidance: async () => ({ context: "Recall first", status: "demarkus: soul s · project p (new)" }),
     nudge: async (input) => {
       if (input.event === "session-end") sessionEndCwds.push(input.cwd);
       return input.event === "recall" ? "Recall nudge" : input.event === "promote" ? "Promote nudge" : "Journal nudge";
@@ -55,7 +55,15 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
   await hooks.get("prompt")!(prompt);
   assert.equal(prompt.prompt.text, "original");
   const context = { sessionID: "s1", system: [] as Array<{ type: string; text: string }> };
-  await hooks.get("context")!(context);
+  const info = console.info;
+  const statuses: string[] = [];
+  console.info = (message: string) => { statuses.push(message); };
+  try {
+    await hooks.get("context")!(context);
+  } finally {
+    console.info = info;
+  }
+  assert.deepEqual(statuses, ["demarkus: soul s · project p (new)"]);
   assert.deepEqual(context.system, [{ type: "text", text: "Recall first" }, { type: "text", text: "Recall nudge" }]);
   const continuation = { sessionID: "s1", system: [] as Array<{ type: string; text: string }> };
   await hooks.get("context")!(continuation);
@@ -77,7 +85,15 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
   await hooks.get("prompt")!(nextPrompt);
   assert.equal(nextPrompt.prompt.text, "Continue");
   const nextContext = { sessionID: "s2", system: [] as Array<{ type: string; text: string }> };
-  await hooks.get("context")!(nextContext);
+  // A new session gets its own guidance call and status line.
+  statuses.length = 0;
+  console.info = (message: string) => { statuses.push(message); };
+  try {
+    await hooks.get("context")!(nextContext);
+  } finally {
+    console.info = info;
+  }
+  assert.deepEqual(statuses, ["demarkus: soul s · project p (new)"]);
   assert.deepEqual(nextContext.system, [
     { type: "text", text: "Recall first" },
     { type: "text", text: "Journal nudge" },

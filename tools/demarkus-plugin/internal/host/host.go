@@ -33,7 +33,7 @@ type Host struct {
 	// server entry; Cursor discovers OAuth from the endpoint.
 	httpAuthMarker bool
 	nudge          func(event, text string) any
-	guidance       func(text string) any
+	guidance       func(text, status string) any
 	gate           func(phase, decision, reason string) (any, bool)
 }
 
@@ -43,15 +43,16 @@ var (
 	Claude = Host{
 		Name: "claude", projectDirEnv: "CLAUDE_PROJECT_DIR", NudgeOnce: true,
 		nudge:    claudeNudge,
-		guidance: func(text string) any { return hookOutput("SessionStart", map[string]any{"additionalContext": text}) },
+		guidance: claudeGuidance,
 		gate:     claudeGate,
 	}
 	Cursor = Host{
 		Name: "cursor", projectDirEnv: "CURSOR_PROJECT_DIR",
 		mcpConfig: filepath.Join(".cursor", "mcp.json"),
 		nudge:     cursorNudge,
-		guidance:  func(text string) any { return map[string]any{"additional_context": text} },
-		gate:      cursorGate,
+		// sessionStart has no user-visible field: user_message is accepted, not shown.
+		guidance: func(text, _ string) any { return map[string]any{"additional_context": text} },
+		gate:     cursorGate,
 	}
 	OpenCode = Host{Name: "opencode"}
 	Pi       = Host{Name: "pi", mcpConfig: filepath.Join(".config", "mcp", "mcp.json"), httpAuthMarker: true}
@@ -129,8 +130,9 @@ func (h Host) HTTPEntry(url string) map[string]any {
 // Nudge wraps a nudge for the hook that raised event.
 func (h Host) Nudge(event, text string) any { return h.nudge(event, text) }
 
-// Guidance wraps the session-start context.
-func (h Host) Guidance(text string) any { return h.guidance(text) }
+// Guidance wraps the session-start context and, where the host shows one,
+// the user's status line.
+func (h Host) Guidance(text, status string) any { return h.guidance(text, status) }
 
 // Gate wraps a gate decision for phase; emit is false when this hook says nothing.
 func (h Host) Gate(phase, decision, reason string) (out any, emit bool) {
@@ -141,6 +143,14 @@ func (h Host) Gate(phase, decision, reason string) (out any, emit bool) {
 func hookOutput(event string, fields map[string]any) map[string]any {
 	fields["hookEventName"] = event
 	return map[string]any{"hookSpecificOutput": fields}
+}
+
+func claudeGuidance(text, status string) any {
+	out := hookOutput("SessionStart", map[string]any{"additionalContext": text})
+	if status != "" {
+		out["systemMessage"] = status
+	}
+	return out
 }
 
 func claudeNudge(event, text string) any {

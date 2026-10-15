@@ -248,9 +248,9 @@ func isRedirect(command string, i int) bool {
 		(i+1 < len(command) && command[i+1] == '>')
 }
 
-// Render is the facts block: a heading line and one bullet per fact, capped
-// at maxPaths paths and maxBlock bytes. Empty when there is nothing to say.
-func Render(s Session) string {
+// Render is the facts block: heading, then one bullet per fact, capped at
+// maxPaths paths and maxBlock bytes. Empty when there is nothing to say.
+func Render(heading string, s Session) string {
 	var checks []string
 	if s.Checks != nil {
 		checks = []string{"checks: " + renderChecks(s.Checks)}
@@ -259,19 +259,32 @@ func Render(s Session) string {
 		if checks == nil {
 			return ""
 		}
-		return block(checks...)
+		return block(heading, checks...)
 	}
 	pos := s.Git.position()
 	for n := min(len(s.Git.Uncommitted), maxPaths); ; n-- {
 		lines := append([]string{pos, uncommittedLine(s.Git.Uncommitted, n)}, checks...)
-		if b := block(lines...); len(b) <= maxBlock || n == 0 {
+		if b := block(heading, lines...); len(b) <= maxBlock || n == 0 {
 			return b
 		}
 	}
 }
 
-func block(lines ...string) string {
-	return "Where it stopped:\n- " + strings.Join(lines, "\n- ") + "\n"
+func block(heading string, lines ...string) string {
+	return heading + "\n- " + strings.Join(lines, "\n- ") + "\n"
+}
+
+// Brief is the one-line position for a user-facing status: branch, then the
+// uncommitted count or clean.
+func (g *Git) Brief() string {
+	pos := g.Branch
+	if pos == "" {
+		pos = "detached HEAD"
+	}
+	if len(g.Uncommitted) == 0 {
+		return pos + ", clean"
+	}
+	return fmt.Sprintf("%s, %d uncommitted", pos, len(g.Uncommitted))
 }
 
 func (g *Git) position() string {

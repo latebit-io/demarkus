@@ -37,7 +37,7 @@ From the demarkus-soul MCP server:
 5. Fetch as needed: `/architecture.md`, `/debugging.md`, `/roadmap.md`
 6. If the MCP server is unavailable, stop and ask before proceeding.
 
-## demarkus-soul layout (flat — one project)
+## demarkus-soul layout (demarkus at the root)
 
 ```text
 /index.md         — hub, links to every section
@@ -52,8 +52,10 @@ From the demarkus-soul MCP server:
 /plans/<name>.md  — plan documents
 ```
 
-This is a single-project flat soul. The demarkus-memory plugin's per-project
-`/<slug>/` template does **not** apply here.
+The soul's template names demarkus as its root project (`root_project:
+demarkus` in `/.well-known/demarkus/template.md`), so the session header reads
+`Project root: /`. Other projects bound to this soul keep `/<slug>/` (for
+example `/demarkus-library/`).
 
 ## Plans
 
