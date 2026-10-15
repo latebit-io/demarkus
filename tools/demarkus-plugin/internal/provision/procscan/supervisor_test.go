@@ -1,7 +1,9 @@
 package procscan
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -57,13 +59,30 @@ func TestManualRestart(t *testing.T) {
 	}
 }
 
-// A launchd job carries its label in the environment; a terminal-started
-// process carries "0". Both are observable on a stub this test starts.
+// fakeLaunchctlPrint puts a launchctl on PATH whose print reports jobPID.
+func fakeLaunchctlPrint(t *testing.T, jobPID int) {
+	t.Helper()
+	bin := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = print ] || exit 1\nprintf 'state = running\\n\\tpid = %d\\n'\n", jobPID)
+	if err := os.WriteFile(filepath.Join(bin, "launchctl"), []byte(script), 0o755); err != nil { //nolint:gosec // test fake
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// A launchd job carries its label in the environment, and so does every
+// process it spawned; only the job's own pid is supervised. A
+// terminal-started process carries "0".
 func TestSupervisorReadsLaunchdLabel(t *testing.T) {
 	exe := provisiontest.BuildStub(t)
-	s, ran := Supervisor(provisiontest.StartStub(t, exe, "XPC_SERVICE_NAME=io.latebit.demarkus"))
-	if !ran || s.Kind != "launchd" || s.Unit != "io.latebit.demarkus" || !s.User {
+	job := provisiontest.StartStub(t, exe, "XPC_SERVICE_NAME=io.latebit.demarkus")
+	fakeLaunchctlPrint(t, job)
+	if s, ran := Supervisor(job); !ran || s.Kind != "launchd" || s.Unit != "io.latebit.demarkus" || !s.User {
 		t.Errorf("launchd job = %+v ran=%v", s, ran)
+	}
+	inherited := provisiontest.StartStub(t, exe, "XPC_SERVICE_NAME=io.latebit.demarkus")
+	if s, ran := Supervisor(inherited); !ran || s.Kind != "" {
+		t.Errorf("descendant of the job = %+v ran=%v, want a plain process", s, ran)
 	}
 	if s, ran := Supervisor(provisiontest.StartStub(t, exe, "XPC_SERVICE_NAME=0")); !ran || s.Kind != "" {
 		t.Errorf("terminal process = %+v ran=%v, want a plain process", s, ran)

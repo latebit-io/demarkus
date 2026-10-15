@@ -247,7 +247,26 @@ func StartStub(t *testing.T, exe string, env ...string) int {
 		t.Fatalf("start stub: %v", err)
 	}
 	t.Cleanup(func() { StopProcess(t, cmd) })
+	awaitEnviron(t, cmd.Process.Pid)
 	return cmd.Process.Pid
+}
+
+// awaitEnviron waits for a just started process to be readable through procfs.
+// Linux returns from Start as the child enters execve, before the ELF loader
+// has set its environment, so an early /proc/<pid>/environ reads empty.
+func awaitEnviron(t *testing.T, pid int) {
+	t.Helper()
+	environ := fmt.Sprintf("/proc/%d/environ", pid)
+	if _, err := os.Stat("/proc/self"); err != nil {
+		return
+	}
+	for range 200 {
+		if b, err := os.ReadFile(environ); err == nil && len(b) > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("stub %d never exposed its environment", pid)
 }
 
 // WriteFakeTokenBin installs a fake demarkus-token: revoke truncates

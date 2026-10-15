@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -22,25 +23,57 @@ type Supervision struct {
 // restartTimeout bounds one restart request to the supervisor.
 const restartTimeout = 10 * time.Second
 
-// Supervisor reports the service manager running pid; a plain process has an
-// empty Kind. ran is false when discovery could not run at all.
+// Supervisor reports the service manager whose job is pid itself; a plain
+// process, or a descendant of some job, has an empty Kind. ran is false when
+// discovery could not run at all.
 func Supervisor(pid int) (s Supervision, ran bool) {
 	label, ran := procEnv(pid, "XPC_SERVICE_NAME")
 	if !ran {
 		return Supervision{}, false
 	}
 	if launchdLabel(label) {
-		return Supervision{Kind: "launchd", Unit: label, User: true}, true
+		s = Supervision{Kind: "launchd", Unit: label, User: true}
+	} else if cg, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid)); err == nil {
+		if unit, user := systemdUnit(string(cg)); unit != "" {
+			s = Supervision{Kind: "systemd", Unit: unit, User: user}
+		}
 	}
-	cg, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
-	if err != nil {
-		return Supervision{}, true // no procfs, or not systemd
-	}
-	unit, user := systemdUnit(string(cg))
-	if unit == "" {
+	// A label or cgroup is inherited by every descendant of the job; a
+	// restart through it must hit the job's own process.
+	if s.Kind == "" || s.mainPID() != pid {
 		return Supervision{}, true
 	}
-	return Supervision{Kind: "systemd", Unit: unit, User: user}, true
+	return s, true
+}
+
+// launchdPIDLine is the "pid = N" line of launchctl print.
+var launchdPIDLine = regexp.MustCompile(`(?m)^\s*pid = (\d+)\s*$`)
+
+// mainPID is the process the supervisor runs for the unit, 0 when it cannot say.
+func (s Supervision) mainPID() int {
+	var out string
+	var ran bool
+	switch {
+	case s.Kind == "launchd":
+		out, ran = probeBounded(nil, "launchctl", "print", "gui/"+strconv.Itoa(os.Getuid())+"/"+s.Unit)
+		m := launchdPIDLine.FindStringSubmatch(out)
+		if m == nil {
+			return 0
+		}
+		out = m[1]
+	case s.User:
+		out, ran = probeBounded(nil, "systemctl", "--user", "show", "-p", "MainPID", "--value", s.Unit)
+	default:
+		out, ran = probeBounded(nil, "systemctl", "show", "-p", "MainPID", "--value", s.Unit)
+	}
+	if !ran {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0
+	}
+	return pid
 }
 
 // launchdLabel reports a launchd job label. launchd also stamps "0" on

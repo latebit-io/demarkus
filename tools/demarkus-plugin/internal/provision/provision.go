@@ -199,17 +199,11 @@ func provisionLocked() (int, error) {
 			progress.Warnf("malformed PORT %q in plugin-memory.conf; skipping doc seeding", cfg.Port)
 			seedAfter = false
 		}
-		switch pid := procscan.PIDAtRoot(cfg.MemoryDir); {
-		case pid > 0:
+		// A down one is the user's to start: server.Ensure would write managed
+		// bookkeeping and the managed tokens path into their root.
+		if pid := procscan.PIDAtRoot(cfg.MemoryDir); pid > 0 {
 			healReusedServer(cfg.MemoryDir, pid, port)
-		case replaced && perr == nil:
-			// Down across an upgrade: start it on the new binary rather than warn.
-			progress.Logf("binary upgraded; starting down server (mode=reuse, memory=%s, port=%d) on the new binary", cfg.MemoryDir, port)
-			if err := server.Ensure(cfg.MemoryDir, port); err != nil {
-				progress.Warnf("could not start the local server after a binary upgrade; run /soul-init to recover: %v", err)
-				seedAfter = false
-			}
-		default:
+		} else {
 			progress.Warnf("configured to reuse server at %s but none is running; run /soul-init to reconfigure", cfg.MemoryDir)
 			seedAfter = false // known down; don't pay the seeding dial retries
 		}

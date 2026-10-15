@@ -449,12 +449,13 @@ func TestHealthWarning(t *testing.T) {
 	}
 }
 
-// fakeLaunchctl installs a launchctl on PATH that records its arguments, ends
-// the old server and respawns the stub the way a KeepAlive job does.
+// fakeLaunchctl installs a launchctl on PATH whose print names the old server
+// as the job's process and whose kickstart records its arguments, ends the
+// old server and respawns the stub the way a KeepAlive job does.
 func fakeLaunchctl(t *testing.T, exe, root string, port, oldPID int, argsLog string) {
 	t.Helper()
 	bin := t.TempDir()
-	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" > %q\nkill %d\nXPC_SERVICE_NAME=io.latebit.demarkus nohup %q -root %q -port %d -tokens /dev/null >/dev/null 2>&1 &\n", argsLog, oldPID, exe, root, port)
+	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = print ]; then printf 'pid = %d\\n'; exit 0; fi\nprintf '%%s\\n' \"$*\" > %q\nkill %d\nXPC_SERVICE_NAME=io.latebit.demarkus nohup %q -root %q -port %d -tokens /dev/null >/dev/null 2>&1 &\n", oldPID, argsLog, oldPID, exe, root, port)
 	if err := os.WriteFile(filepath.Join(bin, "launchctl"), []byte(script), 0o755); err != nil { //nolint:gosec // test fake
 		t.Fatal(err)
 	}
