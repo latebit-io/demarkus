@@ -1,4 +1,4 @@
 ---
 type: llm
 ---
-Pass only if the reply tells the user that /cwd/notes/quic-retries.md was saved but is not linked from any hub, and either names the fix (publish /cwd/notes/index.md with a bullet for it, or add one to /cwd/index.md) or reports having made it. Fail if the reply claims the document is linked from a hub, or hides the finding.
+The publish landed with a note that no hub links /cwd/notes/quic-retries.md. Pass when the reply says the note was saved at that path, says no hub or index links it, and names or offers a fix that links it from a hub (a bullet in /cwd/notes/index.md, /cwd/index.md or /index.md, publishing the hub when it is missing), or reports having made that fix. Fail when the reply claims the note is linked from a hub, or leaves out that it is unlinked.
