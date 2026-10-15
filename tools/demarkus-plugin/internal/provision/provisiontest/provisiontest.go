@@ -145,6 +145,7 @@ type ServerArgs struct {
 	Root   string
 	Port   int
 	Tokens string
+	Env    []string // added to the environment, e.g. a launchd label
 }
 
 // StartServer runs the stub as a server at args.Root, the way a user-managed
@@ -152,6 +153,7 @@ type ServerArgs struct {
 func StartServer(t *testing.T, exe string, args ServerArgs) int {
 	t.Helper()
 	cmd := exec.Command(exe, "-root", args.Root, "-port", strconv.Itoa(args.Port), "-tokens", args.Tokens) //nolint:gosec // the stub under test
+	cmd.Env = append(os.Environ(), args.Env...)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start server stub: %v", err)
 	}
@@ -235,10 +237,12 @@ func ReplaceBinary(t *testing.T, exe string) {
 	}
 }
 
-// StartStub runs the stub so it stays alive and returns its pid.
-func StartStub(t *testing.T, exe string) int {
+// StartStub runs the stub so it stays alive and returns its pid; env entries
+// are added to its environment.
+func StartStub(t *testing.T, exe string, env ...string) int {
 	t.Helper()
 	cmd := exec.Command(exe) //nolint:gosec // the stub under test
+	cmd.Env = append(os.Environ(), env...)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start stub: %v", err)
 	}
