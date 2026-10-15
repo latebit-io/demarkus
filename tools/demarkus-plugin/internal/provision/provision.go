@@ -97,9 +97,9 @@ func healReusedServer(root string, pid, port int) {
 	progress.Logf("reused server restarted (pid %d) on %s", fresh, exe)
 }
 
-// awaitRespawn waits for a server at root other than old with its port bound,
-// permissive when the port probe cannot see it as the managed spawn is; 0
-// when none appeared within respawnWait.
+// awaitRespawn waits for a server at root other than old with its port bound
+// (an unknown port counts as bound); 0 when that did not happen within
+// respawnWait, a process that never listens included.
 func awaitRespawn(root string, old, port int) int {
 	fresh := 0
 	for deadline := time.Now().Add(respawnWait); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
@@ -112,7 +112,7 @@ func awaitRespawn(root string, old, port int) int {
 			return fresh
 		}
 	}
-	return fresh
+	return 0
 }
 
 // withProvisionLock serializes provisioning across processes (concurrent
