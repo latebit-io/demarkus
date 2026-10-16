@@ -5,32 +5,24 @@ import (
 	"testing"
 )
 
-func TestAllowedPointsDown(t *testing.T) {
+// The rules form a strict order: no two layers import each other, and a layer
+// may import everything below the layers it imports, so none can cycle.
+func TestAllowedIsAStrictOrder(t *testing.T) {
 	for layer, below := range allowed {
 		for _, to := range below {
 			if _, ok := allowed[to]; !ok {
 				t.Errorf("%s may import unknown layer %q", layer, to)
+				continue
+			}
+			if mayImport(to, layer) {
+				t.Errorf("%s and %s may import each other", layer, to)
+			}
+			for _, deeper := range allowed[to] {
+				if !mayImport(layer, deeper) {
+					t.Errorf("%s may import %s but not %s, which %s imports", layer, to, deeper, to)
+				}
 			}
 		}
-	}
-	// A cycle would let two layers import each other.
-	state := map[string]int{} // 1 visiting, 2 done
-	var visit func(layer, trail string)
-	visit = func(layer, trail string) {
-		switch state[layer] {
-		case 1:
-			t.Fatalf("layer cycle: %s -> %s", trail, layer)
-		case 2:
-			return
-		}
-		state[layer] = 1
-		for _, to := range allowed[layer] {
-			visit(to, trail+" -> "+layer)
-		}
-		state[layer] = 2
-	}
-	for layer := range allowed {
-		visit(layer, "")
 	}
 }
 
@@ -65,7 +57,7 @@ func TestParseMap(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m, err := parseMap(strings.NewReader(tt.in))
+			m, err := parseMap(tt.in)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("err = %v, want %q", err, tt.wantErr)

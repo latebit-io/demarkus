@@ -551,7 +551,7 @@ func TestHandlerMarkGraphExport(t *testing.T) {
 }
 
 func TestToolDefinition_MarkGraphPublish(t *testing.T) {
-	tool := mcpfmt.GraphPublishTool("graph document target, e.g. "+urlDesc(""), requiresToken)
+	tool := mcpfmt.GraphPublishTool(graphTargetDesc(""), requiresToken)
 	if tool.Name != "mark_graph_publish" {
 		t.Errorf("name = %q, want mark_graph_publish", tool.Name)
 	}

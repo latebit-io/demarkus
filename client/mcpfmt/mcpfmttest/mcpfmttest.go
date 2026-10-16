@@ -15,15 +15,15 @@ import (
 )
 
 // ToolsGolden fails when tools differ from the golden file at path, or
-// rewrites the file when update is set. Tools sort by name: registration
-// order is not part of the contract.
-func ToolsGolden(t testing.TB, path string, tools []mcp.Tool, update bool) {
+// rewrites the file under UPDATE_GOLDEN=1, the knowledge module's convention.
+// Tools sort by name: registration order is not part of the contract.
+func ToolsGolden(t testing.TB, path string, tools []mcp.Tool) {
 	t.Helper()
 	got, err := render(tools)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if update {
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
 		if err := os.WriteFile(path, got, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -31,10 +31,10 @@ func ToolsGolden(t testing.TB, path string, tools []mcp.Tool, update bool) {
 	}
 	want, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read golden (create it with -update): %v", err)
+		t.Fatalf("read golden (create it with UPDATE_GOLDEN=1): %v", err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatalf("%s: %s\nthe served tool list changed: review it, then rerun with -update", path, firstDiff(want, got))
+		t.Fatalf("%s: %s\nthe served tool list changed: review it, then rerun with UPDATE_GOLDEN=1", path, firstDiff(want, got))
 	}
 }
 

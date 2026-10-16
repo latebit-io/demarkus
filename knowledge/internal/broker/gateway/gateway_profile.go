@@ -87,10 +87,9 @@ func MemoryProfile() *Profile {
 // output shape as the knowledge broker's, but the table only ever
 // contains the caller's own world.
 func markWorldsSelfTool() mcp.Tool {
-	return mcp.NewTool("mark_worlds",
+	return mcpfmt.NewTool("mark_worlds",
 		mcp.WithDescription(
 			"Show your own world: your identity maps to one private world and every other tool addresses it as mark://{worldName}/{path}. Table columns: world, url (external, may be blank), address (internal), writable (always yes). Call once before the other tools.",
 		),
-		mcpfmt.ReadOnly(),
 	)
 }

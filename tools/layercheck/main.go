@@ -6,13 +6,13 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/latebit-io/demarkus/tools/internal/reporoot"
 )
 
 const (
@@ -31,7 +31,7 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	root, err := findRoot()
+	root, err := reporoot.Find(mapFile)
 	if err == nil {
 		err = run(root, *update)
 	}
@@ -42,14 +42,11 @@ func main() {
 }
 
 func run(root string, update bool) error {
-	f, err := os.Open(filepath.Join(root, mapFile))
+	raw, err := os.ReadFile(filepath.Join(root, mapFile))
 	if err != nil {
 		return err
 	}
-	m, err := parseMap(f)
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
+	m, err := parseMap(string(raw))
 	if err != nil {
 		return fmt.Errorf("%s: %w", mapFile, err)
 	}
@@ -114,32 +111,8 @@ func readBaseline(path string) ([]string, error) {
 		return nil, err
 	}
 	var lines []string
-	for line := range strings.Lines(string(raw)) {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			lines = append(lines, line)
-		}
+	for _, line := range dataLines(string(raw)) {
+		lines = append(lines, line)
 	}
 	return lines, nil
-}
-
-func findRoot() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("get working directory: %w", err)
-	}
-	for {
-		_, err := os.Stat(filepath.Join(dir, mapFile))
-		if err == nil {
-			return dir, nil
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return "", err
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", errors.New(mapFile + " not found in this directory or its parents")
-		}
-		dir = parent
-	}
 }

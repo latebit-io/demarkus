@@ -51,7 +51,7 @@ func checkToolSurface(root string) error {
 	}
 	if len(offenders) > 0 {
 		sort.Strings(offenders)
-		return fmt.Errorf("prompt templates reference tools no plugin surface serves:\n  %s\nadd the tool to mcpfmt.KnownTools and the lean profile, or drop the reference", strings.Join(offenders, "\n  "))
+		return fmt.Errorf("prompt templates reference tools no plugin surface serves:\n  %s\nclassify the tool in mcpfmt toolClasses (not advanced), or drop the reference", strings.Join(offenders, "\n  "))
 	}
 	return nil
 }

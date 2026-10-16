@@ -278,16 +278,14 @@ func scopeDesc(host string) string {
 func markLookupTool(host string) mcp.Tool {
 	options := append([]mcp.ToolOption{
 		mcp.WithDescription(mcpfmt.LookupDescription),
-		mcpfmt.ReadOnly(),
 		mcp.WithString("url", mcp.Required(), mcp.Description(mcpfmt.ScopeDesc("/")+"; "+urlDesc(host))),
 	}, mcpfmt.LookupParams()...)
-	return mcp.NewTool("mark_lookup", options...)
+	return mcpfmt.NewTool("mark_lookup", options...)
 }
 
 func markDiscoverTool() mcp.Tool {
-	return mcp.NewTool("mark_discover",
+	return mcpfmt.NewTool("mark_discover",
 		mcp.WithDescription(mcpfmt.DiscoverDescription),
-		mcpfmt.ReadOnly(),
 		mcp.WithString("url", mcp.Description("server mark:// URL (optional with -host)")),
 	)
 }

@@ -89,9 +89,6 @@ func TestGatewayToolProfilesAndBudget(t *testing.T) {
 			if err := mcpfmt.CheckSchemaBudget(full, tc.fullBudget); err != nil {
 				t.Error(err)
 			}
-			if err := mcpfmt.CheckReadOnly(full); err != nil {
-				t.Error(err)
-			}
 			if err := mcpfmt.CheckSchemaBudget(lean, tc.leanBudget); err != nil {
 				t.Error(err)
 			}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 )
 
@@ -10,20 +11,6 @@ type pkg struct {
 	path        string
 	imports     []string
 	testImports []string // test files only, may repeat imports
-}
-
-type violation struct {
-	from, fromLayer string
-	to, toLayer     string
-	testOnly        bool
-}
-
-func (v violation) String() string {
-	s := fmt.Sprintf("%s (%s) -> %s (%s)", v.from, v.fromLayer, v.to, v.toLayer)
-	if v.testOnly {
-		s += " [test]"
-	}
-	return s
 }
 
 type report struct {
@@ -46,32 +33,29 @@ func check(m layerMap, pkgs []pkg) report {
 		return e.layer, true
 	}
 
-	found := map[string]bool{}
+	// Package paths are unique and edges lists each import once, so every
+	// line is too.
 	for _, p := range pkgs {
 		from, ok := layerOf(p.path)
-		for _, edge := range edges(p) {
-			to, toOK := layerOf(edge.to)
+		for _, e := range edges(p) {
+			to, toOK := layerOf(e.to)
 			if !ok || !toOK || mayImport(from, to) {
 				continue
 			}
-			v := violation{from: p.path, fromLayer: from, to: edge.to, toLayer: to, testOnly: edge.testOnly}
-			found[v.String()] = true
+			line := fmt.Sprintf("%s (%s) -> %s (%s)", p.path, from, e.to, to)
+			if e.testOnly {
+				line += " [test]"
+			}
+			r.violations = append(r.violations, line)
 		}
 	}
-
-	for line := range found {
-		r.violations = append(r.violations, line)
-	}
-	for path := range unmapped {
-		r.unmapped = append(r.unmapped, path)
-	}
+	slices.Sort(r.violations)
+	r.unmapped = slices.Sorted(maps.Keys(unmapped))
 	for _, e := range m {
 		if !used[e.pattern] {
 			r.unused = append(r.unused, e)
 		}
 	}
-	slices.Sort(r.violations)
-	slices.Sort(r.unmapped)
 	return r
 }
 
@@ -83,17 +67,17 @@ type edge struct {
 // edges lists each import of p once; a package production code imports is
 // not test only, whatever its tests import.
 func edges(p pkg) []edge {
+	seen := map[string]bool{p.path: true} // an external test imports its own package
 	var out []edge
 	for _, to := range p.imports {
+		seen[to] = true
 		out = append(out, edge{to: to})
 	}
-	seen := map[string]bool{p.path: true} // an external test imports its own package
 	for _, to := range p.testImports {
-		if seen[to] || slices.Contains(p.imports, to) {
-			continue
+		if !seen[to] {
+			seen[to] = true
+			out = append(out, edge{to: to, testOnly: true})
 		}
-		seen[to] = true
-		out = append(out, edge{to: to, testOnly: true})
 	}
 	return out
 }

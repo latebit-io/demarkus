@@ -100,5 +100,6 @@ tools/demarkus-plugin/internal/update           surface
 tools                                           tool
 tools/demarkus-publish                          tool
 tools/demarkus-token                            tool
+tools/internal/reporoot                         tool
 tools/layercheck                                tool
 tools/plugin-prompts                            tool
