@@ -1,0 +1,103 @@
+# Target layer of every Go package, wherever it lives today. tools/layercheck
+# (pre-commit) fails an import that points up, a package no line maps, and a
+# line that maps nothing. Layers and what each may import:
+# tools/layercheck/layers.go.
+#
+# <package> maps one package; <package>/... also maps every package below it
+# that no line names. A move changes paths here, never the layers.
+
+protocol/...                                    protocol
+
+server/blob/...                                 store
+server/internal/auth                            store
+server/internal/backend/...                     store
+server/internal/catalog                         store
+server/internal/certsource                      store
+server/internal/changefeed                      store
+server/internal/config                          store
+server/internal/configwatch                     store
+server/internal/fanout                          store
+server/internal/filestore                       store
+server/internal/handler                         store
+server/internal/knowledge/bucketstore           store      # a world backend; the tier owns policy, not storage
+server/internal/logging                         store
+server/internal/management                      store
+server/internal/quicserve                       store
+server/internal/ratelimit                       store
+server/internal/storetest                       store
+server/internal/tls                             store
+server/internal/worldruntime                    store      # multi-world hosting is core (plan lean)
+server/internal/writepolicy                     store      # the mechanism; policy content is the tier's
+server/logthrottle                              store
+
+client/docwrite                                 storeclient  # the write contract; its gate is model
+client/fetch                                    storeclient
+client/fetchtest                                storeclient
+client/generation                               storeclient
+client/internal/cache                           storeclient
+client/internal/tokens                          storeclient
+client/joinurl                                  storeclient
+client/links                                    storeclient
+client/listing                                  storeclient
+client/listwalk                                 storeclient
+client/lookuptable                              storeclient
+client/merge                                    storeclient
+client/token                                    storeclient
+
+client/audit                                    model
+client/curate                                   model
+client/docwrite/gate                            model
+client/graph                                    model
+client/graphstore                               model
+client/hub                                      model
+client/internal/okf                             model
+client/journal                                  model
+client/lookupexpand                             model
+client/mdoutline                                model
+client/metaguard                                model
+client/promote                                  model
+
+tools/demarkus-plugin/internal/config           soul
+tools/demarkus-plugin/internal/lockdir          soul
+tools/demarkus-plugin/internal/project          soul
+tools/demarkus-plugin/internal/provision/...    soul
+tools/demarkus-plugin/internal/registry/...     soul
+tools/demarkus-plugin/internal/semver           soul
+
+knowledge/internal/broker/brokertest            knowledge
+knowledge/internal/broker/core                  knowledge
+knowledge/internal/broker/oauthsrv              knowledge  # identity: grants, refresh, JWKS
+knowledge/internal/broker/storage               knowledge
+knowledge/internal/federation                   knowledge
+knowledge/internal/leader                       knowledge
+server/internal/knowledge/knowledgeseed         knowledge
+server/internal/knowledgeconfig                 knowledge
+server/internal/peerhint                        knowledge
+server/internal/snirouter                       knowledge
+server/knowledgeserver/...                      knowledge
+
+client/cmd/...                                  surface
+client/fetchdedup                               surface
+client/internal/bookmarks                       surface
+client/internal/launcher                        surface
+client/marktools                                surface
+client/mcpbind                                  surface
+client/mcpfmt                                   surface
+knowledge/cmd/...                               surface
+knowledge/internal/broker                       surface    # composition root of the broker packages
+knowledge/internal/broker/gateway               surface
+server/cmd/...                                  surface
+tools/demarkus-plugin                           surface
+tools/demarkus-plugin/internal/facts            surface
+tools/demarkus-plugin/internal/gate             surface
+tools/demarkus-plugin/internal/guidance         surface
+tools/demarkus-plugin/internal/host             surface
+tools/demarkus-plugin/internal/nudge            surface
+tools/demarkus-plugin/internal/registry/mcpconfig  surface  # edits a harness's config file
+tools/demarkus-plugin/internal/update           surface
+
+tools                                           tool
+tools/demarkus-publish                          tool
+tools/demarkus-token                            tool
+tools/layercheck                                tool
+tools/plugin-prompts                            tool
