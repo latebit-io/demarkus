@@ -98,7 +98,7 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	body, meta := in.Body, docwrite.Carried(in.Metadata)
 	if kv, rest, ok := gate.Frontmatter(body); ok {
 		body = rest
-		p.Fixed = append(p.Fixed, "frontmatter fence removed; metadata keys: "+strings.Join(lift(kv, meta), ", "))
+		p.Fixed = append(p.Fixed, "frontmatter fence removed; metadata keys: "+strings.Join(Lift(kv, meta), ", "))
 		headings = mdoutline.Headings(body)
 	}
 	// Headings are renamed on the offsets just parsed; the em dash pass
@@ -210,9 +210,9 @@ func replaceOutsideCode(body string, from, to int, code *codeMask) (out []byte, 
 	return out, n
 }
 
-// lift moves the fence's keys into meta (a key the document already carries
+// Lift moves the fence's keys into meta (a key the document already carries
 // wins; name is the title; reserved and identity keys never) and names them.
-func lift(kv, meta map[string]string) []string {
+func Lift(kv, meta map[string]string) []string {
 	var keys []string
 	for _, k := range slices.Sorted(maps.Keys(kv)) {
 		v := strings.TrimSpace(kv[k])

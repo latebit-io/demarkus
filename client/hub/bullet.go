@@ -31,6 +31,13 @@ func Bullet(p, body string, meta map[string]string) string {
 	return bullet
 }
 
+// JournalBullet is the scope hub's one link to its journal directory, and
+// the section it sits under; one link reaches every day.
+func JournalBullet(journal string) (section, bullet string) {
+	name := layout.Section(journal)
+	return "## " + name, fmt.Sprintf("- [%s](%s): dated session notes", name, journal)
+}
+
 // linkText keeps a title inside its link: a bracket or backslash in it would
 // end the link text early.
 var linkText = strings.NewReplacer(`\`, `\\`, "[", `\[`, "]", `\]`)

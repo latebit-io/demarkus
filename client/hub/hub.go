@@ -251,6 +251,29 @@ func DropFromHubs(ctx context.Context, docs Docs, hubs []string, drop *Drop) []D
 // one) all reach a target; n counts them. Links are read from one parse of
 // the body and judged by the line they start on: a hub bullet is one line.
 func WithoutLinks(body, hubPath string, targets []string) (out string, n int) {
+	out, cut := cutLinks(body, hubPath, targets, "")
+	return out, len(cut)
+}
+
+// MoveLinks cuts the bullets WithoutLinks drops and puts bullet where the
+// first was. Moved are the cut lines with relative links made absolute, so
+// another hub can carry them verbatim.
+func MoveLinks(body, hubPath string, targets []string, bullet string) (out string, moved []string) {
+	out, moved = cutLinks(body, hubPath, targets, bullet)
+	for i, line := range moved {
+		for _, link := range links.ExtractWithPositions(line) {
+			if abs := links.ResolvePath(hubPath, link.Dest); abs != "" && abs != link.Dest {
+				line = strings.Replace(line, "]("+link.Dest, "]("+abs, 1)
+			}
+		}
+		moved[i] = line
+	}
+	return out, moved
+}
+
+// cutLinks drops the bullets whose links all reach a target, bullet (when
+// not "") taking the first one's line, and returns the dropped lines.
+func cutLinks(body, hubPath string, targets []string, bullet string) (out string, cut []string) {
 	byLine := map[int][]string{}
 	for _, link := range links.ExtractWithPositions(body) {
 		pos := link.OpenBracket
@@ -264,16 +287,19 @@ func WithoutLinks(body, hubPath string, targets []string) (out string, n int) {
 	lines := strings.Split(body, "\n")
 	kept := lines[:0]
 	for i, line := range lines {
-		if bulletLine.MatchString(line) && onlyReaches(byLine[i], hubPath, targets) {
-			n++
+		if !bulletLine.MatchString(line) || !onlyReaches(byLine[i], hubPath, targets) {
+			kept = append(kept, line)
 			continue
 		}
-		kept = append(kept, line)
+		if len(cut) == 0 && bullet != "" {
+			kept = append(kept, bullet)
+		}
+		cut = append(cut, line)
 	}
-	if n == 0 {
-		return body, 0
+	if len(cut) == 0 {
+		return body, nil
 	}
-	return strings.Join(kept, "\n"), n
+	return strings.Join(kept, "\n"), cut
 }
 
 var bulletLine = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s+`)

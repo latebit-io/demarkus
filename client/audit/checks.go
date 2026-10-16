@@ -74,7 +74,7 @@ func (a *audit) checkLinks(ctx context.Context) {
 			switch {
 			case live(status):
 			case status == protocol.StatusArchived:
-				a.brokenLink(p, target, status, "drop the link")
+				a.leads.archived = append(a.leads.archived, archivedLead{doc: p, target: target, findings: a.brokenLink(p, target, status, "drop the link")})
 			case status == protocol.StatusNotFound:
 				a.brokenLink(p, target, status, "fix the link or restore the target")
 			default:
@@ -97,16 +97,18 @@ func (a *audit) confirm(ctx context.Context, target string) string {
 	return resp.Status
 }
 
-// brokenLink: a hub's broken link is also a stale index entry.
-func (a *audit) brokenLink(p, target, status, fix string) {
-	a.add(CheckBrokenLinks, p, "-> "+target+" (fetch: "+status+")", fix)
+// brokenLink: a hub's broken link is also a stale index entry; the
+// findings' indices are returned.
+func (a *audit) brokenLink(p, target, status, fix string) []int {
+	found := []int{a.add(CheckBrokenLinks, p, "-> "+target+" (fetch: "+status+")", fix)}
 	if path.Base(p) == "index.md" {
 		word := "missing"
 		if status == protocol.StatusArchived {
 			word = "archived"
 		}
-		a.add(CheckStaleIndex, p, "-> "+target+" (hub links a "+word+" document)", fix)
+		found = append(found, a.add(CheckStaleIndex, p, "-> "+target+" (hub links a "+word+" document)", fix))
 	}
+	return found
 }
 
 // checkOrphans: a live document nothing in scope links to, the hub
@@ -128,7 +130,7 @@ func (a *audit) checkOrphans() {
 		if p == scopeHub || !live(d.status) || inbound[p] || reachedDirs[path.Dir(p)+"/"] {
 			continue
 		}
-		a.add(CheckOrphans, p, "no inbound link from any document in scope", "link it from its hub, or /soul-archive it")
+		a.leads.orphans = append(a.leads.orphans, lead{p, a.add(CheckOrphans, p, "no inbound link from any document in scope", "link it from its hub, or /soul-archive it")})
 	}
 }
 
@@ -152,7 +154,7 @@ func (a *audit) checkHubs(ctx context.Context) {
 	}
 	for _, dir := range slices.Sorted(maps.Keys(counts)) {
 		if !a.hasHub(ctx, dir) {
-			a.add(CheckMissingHub, dir, fmt.Sprintf("%d documents and no %s", counts[dir], strings.Join(hub.Paths(dir), " or ")), "publish a hub linking each document once")
+			a.leads.hubs = append(a.leads.hubs, lead{dir, a.add(CheckMissingHub, dir, fmt.Sprintf("%d documents and no %s", counts[dir], strings.Join(hub.Paths(dir), " or ")), "publish a hub linking each document once")})
 		}
 	}
 }
@@ -248,7 +250,10 @@ func (a *audit) checkMetadata() {
 			if t != "" {
 				detail = "type=Document (generic default)"
 			}
-			a.add(CheckUntyped, p, detail, "re-publish with metadata.type (Reference, Decision, Architecture, Plan, Journal, Guide)")
+			i := a.add(CheckUntyped, p, detail, "re-publish with metadata.type (Reference, Decision, Architecture, Plan, Journal, Guide)")
+			if a.isJournalEntry(p) {
+				a.leads.journalType = append(a.leads.journalType, lead{p, i})
+			}
 		}
 	}
 }
@@ -283,7 +288,7 @@ func (a *audit) checkShape() {
 			switch id {
 			case stylerules.H1:
 			case stylerules.Frontmatter:
-				a.add(CheckFrontmatter, p, problem, "strip the block and re-publish with metadata out of band")
+				a.leads.frontmatter = append(a.leads.frontmatter, lead{p, a.add(CheckFrontmatter, p, problem, "strip the block and re-publish with metadata out of band")})
 			case stylerules.EmDash, stylerules.DuplicateHeading:
 				a.add(CheckStyle, p, problem, "/soul-curate "+p)
 			case stylerules.HubSize, stylerules.HubBullet, stylerules.HubFanout:
@@ -334,7 +339,8 @@ func (a *audit) checkReferences() {
 			case len(ref.records) > 1:
 				a.add(CheckReferences, p, fmt.Sprintf("%q ambiguous: %s share the number", m[0], strings.Join(ref.records, " and ")), "renumber one (ADR sequence), then link the record meant")
 			default:
-				a.add(CheckReferences, p, fmt.Sprintf("%q unlinked: %s exists but the body has no link to it", m[0], ref.records[0]), "[ADR "+num+"]("+ref.records[0]+")")
+				i := a.add(CheckReferences, p, fmt.Sprintf("%q unlinked: %s exists but the body has no link to it", m[0], ref.records[0]), "[ADR "+num+"]("+ref.records[0]+")")
+				a.leads.adr = append(a.leads.adr, adrLead{lead: lead{p, i}, num: num, record: ref.records[0]})
 			}
 		}
 	}

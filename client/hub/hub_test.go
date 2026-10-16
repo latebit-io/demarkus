@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -138,6 +139,22 @@ func TestWithoutLinks(t *testing.T) {
 	}
 	if _, n := WithoutLinks(body, "/proj/index.md", []string{"/proj/plans/"}); n != 1 {
 		t.Errorf("directory target drops %d, want the bullet under it", n)
+	}
+}
+
+// The bullet takes the first cut line; the cut lines come back with their
+// relative links made absolute, fragments kept.
+func TestMoveLinks(t *testing.T) {
+	body := "# Hub\n\n- [x](/x.md)\n- [a](plans/a.md#why): one\n- [x2](/x2.md)\n- [b](/proj/plans/b.md)\n"
+	got, moved := MoveLinks(body, "/proj/index.md", []string{"/proj/plans/"}, "- [Plans](plans/)")
+	if got != "# Hub\n\n- [x](/x.md)\n- [Plans](plans/)\n- [x2](/x2.md)\n" {
+		t.Errorf("body = %q", got)
+	}
+	if want := []string{"- [a](/proj/plans/a.md#why): one", "- [b](/proj/plans/b.md)"}; !slices.Equal(moved, want) {
+		t.Errorf("moved = %q", moved)
+	}
+	if got, moved := MoveLinks(body, "/proj/index.md", []string{"/none/"}, "- [N](/none/)"); got != body || moved != nil {
+		t.Errorf("nothing to move: %q %q", got, moved)
 	}
 }
 

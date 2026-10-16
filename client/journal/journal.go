@@ -196,11 +196,10 @@ type hubLink struct {
 // the journal directory (one link reaches every day), the root hub links the
 // project.
 func (r *run) links() []hubLink {
-	section := layout.Section(r.Layout.Journal)
-	bullet := fmt.Sprintf("- [%s](%s): dated session notes", section, r.Layout.Journal)
+	section, bullet := hub.JournalBullet(r.Layout.Journal)
 	out := []hubLink{{doc: r.docs(r.Dir + "index.md"), Link: hub.Link{
-		Target: r.Dir + r.Layout.Journal, Bullet: bullet, Section: "## " + section,
-		CreateBody: fmt.Sprintf("# %s\n\n## %s\n\n%s\n", r.title, section, bullet),
+		Target: r.Dir + r.Layout.Journal, Bullet: bullet, Section: section,
+		CreateBody: fmt.Sprintf("# %s\n\n%s\n\n%s\n", r.title, section, bullet),
 		CreateMeta: map[string]string{"tags": strings.Join(protocol.MergeTags([]string{"index"}, []string{slugOf(r.Dir)}), ","), "importance": hubImportance},
 		Stamp:      r.Stamp,
 	}}}

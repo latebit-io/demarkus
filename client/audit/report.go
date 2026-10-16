@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// Markdown renders the report in the shape the /soul-doctor prompt promises:
-// heading with the document count, one summary line, one section per check
-// with its count, one bullet per finding, then Coverage.
+// Markdown renders the shape /soul-doctor promises: heading with the count,
+// a summary line, one section per check with its count and the count apply
+// fixes, one bullet per finding, then Coverage.
 func (r *Report) Markdown() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## %s hygiene report  (%d docs)\n\n%d docs, %d findings", r.Scope, r.Documents, r.Documents, len(r.Findings))
@@ -16,17 +16,24 @@ func (r *Report) Markdown() string {
 		fmt.Fprintf(&b, ", %d already promoted", r.Promoted)
 	}
 	b.WriteByte('\n')
-	hidden := 0
+	hidden, fixable := 0, map[string]int{}
 	byCheck := map[string][]Finding{}
 	for _, f := range r.Findings {
 		byCheck[f.Check] = append(byCheck[f.Check], f)
+		if f.Fixable {
+			fixable[f.Check]++
+		}
 	}
 	for _, check := range CheckOrder {
 		fs := byCheck[check]
 		if len(fs) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "\n### %s (%d)\n", check, len(fs))
+		fmt.Fprintf(&b, "\n### %s (%d", check, len(fs))
+		if n := fixable[check]; n > 0 {
+			fmt.Fprintf(&b, ", %d fixable", n)
+		}
+		b.WriteString(")\n")
 		for _, f := range fs[:min(len(fs), MaxShownPerCheck)] {
 			fmt.Fprintf(&b, "- %s: %s", f.Path, f.Detail)
 			if f.Fix != "" {
