@@ -1,6 +1,6 @@
 ---
 type: regex
-pattern: 'What.s in flight[\s\S]*Recent journal[\s\S]*Pick up where you left off'
+pattern: '(^|\n)### What[''’]s in flight\n[\s\S]*\n### Recent journal\n[\s\S]*\n### Pick up where you left off\n'
 match: contains
 target: last_message
 ---

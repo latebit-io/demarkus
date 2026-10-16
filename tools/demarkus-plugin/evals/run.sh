@@ -33,13 +33,15 @@ for state in known new; do
     "${head} ${project}\\n\\n${stands}\\n\\n${guidance}" >"${work}/hooks/session-start.${state}.json"
 done
 # Each run gets a temp HOME; refuse rather than replace the operator's binary.
+# No header on failure, so the /cwd/ graders fail: gates and nudges fail open
+# and would let a run without the build pass.
 stand_in='#!/usr/bin/env bash
 set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 [[ "${HOME}" != "@HOME@" ]] || { echo "[eval] HOME is the operator home; not installing" >&2; exit 1; }
 mkdir -p "${HOME}/.demarkus/bin" &&
   install -m 0755 "${HOOK_DIR}/../eval-bin/demarkus-plugin" "${HOME}/.demarkus/bin/" ||
-  echo "[eval] demarkus-plugin install failed" >&2
+  { echo "[eval] demarkus-plugin install failed" >&2; exit 1; }
 cat "${HOOK_DIR}/session-start.${EVAL_PROJECT:-known}.json"'
 printf '%s\n' "${stand_in//@HOME@/${HOME}}" >"${work}/hooks/session-start.sh"
 
