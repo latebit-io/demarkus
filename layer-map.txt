@@ -83,6 +83,7 @@ client/internal/launcher                        surface
 client/marktools                                surface
 client/mcpbind                                  surface
 client/mcpfmt                                   surface
+client/mcpfmt/mcpfmttest                        surface
 knowledge/cmd/...                               surface
 knowledge/internal/broker                       surface    # composition root of the broker packages
 knowledge/internal/broker/gateway               surface
