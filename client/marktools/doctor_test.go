@@ -41,7 +41,7 @@ func TestDoctorAuditsTheScopeThroughTheBackend(t *testing.T) {
 	if got.IsError {
 		t.Fatalf("doctor = %+v", got)
 	}
-	for _, want := range []string{"## / hygiene report  (3 docs)", "### Orphans (1, 1 fixable)\n- /orphan.md:", "### Untitled (1)", "### Coverage\n- complete"} {
+	for _, want := range []string{"## / hygiene report  (3 docs)", "1 fixable: mark_curate / proposes the writes\n", "### Orphans (1, 1 fixable)\n- /orphan.md:", "### Untitled (1)", "### Coverage\n- complete"} {
 		if !strings.Contains(got.Text, want) {
 			t.Errorf("report missing %q:\n%s", want, got.Text)
 		}

@@ -93,7 +93,7 @@
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Bring one document into shape: style findings, a proposed mechanical fix (an edit, or at 8KB a split into a hub plus topic files with anchors kept), inbound links to repoint, a proposal hash. apply=true with the hash writes it at the reported version.",
+    "description": "Bring one document into shape: style findings, a proposed mechanical fix (an edit, or at 8KB a split into a hub plus topic files with anchors kept), inbound links to repoint, a proposal hash. A directory url (trailing /) proposes mark_doctor's fixable findings under it, up to 100 writes. apply=true with the hash writes it at the reported versions.",
     "inputSchema": {
       "properties": {
         "apply": {

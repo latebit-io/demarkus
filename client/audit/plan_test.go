@@ -150,6 +150,11 @@ func TestPlanGeneratesAMissingHub(t *testing.T) {
 	if len(fixable(r, CheckMissingHub)) != 1 || len(fixable(r, CheckOrphans)) != 1 {
 		t.Errorf("fixable hub %v, orphans %v", fixable(r, CheckMissingHub), fixable(r, CheckOrphans))
 	}
+	// Nothing else shows a created document, so the proposal carries it whole.
+	if md := r.Plan.Markdown("/"); !strings.Contains(md, "- /research/index.md (create): hub created: 2 bullet(s) moved from /index.md, 1 added\n\n~~~~markdown\n"+created.Body+"~~~~\n") ||
+		!strings.Contains(md, "- /index.md (v1, after /research/index.md): ") {
+		t.Errorf("proposal:\n%s", md)
+	}
 }
 
 // Over the cap, and a journal directory, a missing hub is reported, not

@@ -1,11 +1,13 @@
 package marktools
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/audit"
 	"github.com/latebit-io/demarkus/client/curate"
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/graph"
@@ -42,6 +44,9 @@ func (t *Tools) Curate(ctx context.Context, args CurateArgs) Result {
 		if write, bad = t.writer(ctx, target, "publish"); bad != nil {
 			return *bad
 		}
+	}
+	if strings.HasSuffix(target.Path, "/") {
+		return t.curateScope(ctx, target, args, write)
 	}
 	head, err := t.doc(ctx, target, nil).Head(ctx)
 	if err != nil {
@@ -87,6 +92,37 @@ func (t *Tools) Curate(ctx context.Context, args CurateArgs) Result {
 		return failure("apply refused: %s", reason)
 	}
 	return failure("status: partial\n%s- %s\nThe writes above landed; fetch the document and rerun the report.", b.String(), reason)
+}
+
+// curateScope answers mark_curate on a directory: the doctor's fix plan for
+// it, or with apply the batch written, refused unless the plan recomputed
+// now still hashes to what the caller saw.
+func (t *Tools) curateScope(ctx context.Context, target Target, args CurateArgs, write WriteFunc) Result {
+	report, bad := t.runAudit(ctx, target, audit.Options{})
+	if bad != nil {
+		return *bad
+	}
+	plan := report.Plan
+	if !args.Apply {
+		return text(plan.Markdown(report.Scope))
+	}
+	if plan.Hash != args.Proposal {
+		return failure("proposal %s does not match %s now (%s); rerun without apply and review", args.Proposal, report.Scope, cmp.Or(plan.Hash, "nothing to apply"))
+	}
+	docs := func(p string) *docwrite.Doc { return t.doc(ctx, target.at(p), write) }
+	outcomes := audit.Apply(ctx, docs, plan, t.identityMeta(ctx))
+	landed := 0
+	for i := range outcomes {
+		if o := &outcomes[i]; o.Result == audit.Applied {
+			landed++
+			t.observeWrite(ctx, target.at(o.Path), graph.FetchResult{Status: protocol.StatusOK, Body: o.Body, Metadata: o.Metadata})
+		}
+	}
+	out := audit.ApplyMarkdown(report.Scope, plan, outcomes)
+	if landed == 0 {
+		return failure("%s", out)
+	}
+	return text(out)
 }
 
 // anchoredInbound reads the documents the graph store says link here and
