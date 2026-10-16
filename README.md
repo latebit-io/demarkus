@@ -65,7 +65,7 @@ Teams: `demarkus-knowledge → Add` from the same marketplace to join a shared k
 
 **Claude Cowork**
 
-Add this repository as a marketplace (Customize, Plugins) and install `demarkus-cowork`. Cowork runs no hooks and sandboxes its shell, so the plugin is MCP only: provisioning and the shell-based commands run from Claude Code or a terminal. Details: [Cowork memory plugin](plugins/cowork-memory/).
+Add this repository as a marketplace (Customize, Plugins) and install `demarkus-cowork`. Cowork's shell runs in a sandbox without access to `~/.demarkus`, so the plugin is MCP only and ships no hooks: provisioning and the shell-based commands run from Claude Code or a terminal. Details: [Cowork memory plugin](plugins/cowork-memory/).
 
 ### Binaries
 

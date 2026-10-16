@@ -4,11 +4,11 @@ Local, versioned memory for [Claude Cowork](https://claude.com/product/cowork) v
 
 ## What differs from the Claude Code plugin
 
-Cowork runs no plugin hooks, and its Bash tool runs in a sandbox with no access to `~/.demarkus`. This plugin is built around both limits:
+Cowork's Bash tool runs in a sandbox with no access to `~/.demarkus`, so every `demarkus-plugin` call there fails. This plugin is built around that limit:
 
 - **MCP only.** The `demarkus-memory` MCP server runs on your machine, outside the sandbox. Its launcher installs the pinned binaries and attaches to (or starts) the managed local server, so no hook is needed.
 - **No shell commands.** Prompts never run `demarkus-plugin`. `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/soul-doctor`, `/soul-refresh`, `/promote`, and `/promote-scan` are not shipped; run them from Claude Code or a terminal.
-- **No gates or nudges.** The tag gate, destination gate, and journal, recall, and promote nudges need hooks. Server-side write policy still applies.
+- **No gates or nudges.** The tag gate, destination gate, and journal, recall, and promote nudges need hooks that reach `~/.demarkus`. Server-side write policy still applies.
 - **Project slug.** There is no project directory or binding. The `remember` skill asks which project to use and never takes the slug from the sandbox working directory.
 
 ## Commands

@@ -18,7 +18,7 @@
     {
       "name": "demarkus-cowork",
       "source": "./plugins/cowork-memory",
-      "description": "Local memory for Claude Cowork. Wires the local demarkus MCP tools to the same soul Claude Code uses. Hook-free: Cowork runs no plugin hooks, so there are no gates, nudges or shell commands; slash commands cover /soul, /soul-context, /soul-journal, /soul-archive and /soul-curate.",
+      "description": "Local memory for Claude Cowork. Wires the local demarkus MCP tools to the same soul Claude Code uses. MCP only: Cowork's shell sandbox cannot reach ~/.demarkus, so there are no hooks, gates, nudges or shell commands; slash commands cover /soul, /soul-context, /soul-journal, /soul-archive and /soul-curate.",
       "version": "0.13.182",
       "category": "memory",
       "tags": ["memory", "demarkus", "mark-protocol", "local-first", "cowork"],

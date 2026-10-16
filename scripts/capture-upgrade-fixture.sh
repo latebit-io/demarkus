@@ -18,7 +18,7 @@ mkdir -p "$partial"
 docker run --rm -i -e VERSION="$version" -e DEBIAN_FRONTEND=noninteractive \
   -v "$partial:/out" debian:stable-slim bash -euo pipefail -s <<'CONTAINER'
 apt-get update -qq >/dev/null
-apt-get install -y -qq curl ca-certificates procps >/dev/null
+apt-get install -y -qq curl ca-certificates procps jq >/dev/null
 export HOME=/home/fixture
 mkdir -p "$HOME/project" "$HOME/other-project"
 arch="$(dpkg --print-architecture)"
@@ -31,28 +31,42 @@ grep " $asset\$" demarkus-tools_checksums.txt | sha256sum -c - >/dev/null
 tar -xzf "$asset" -C /usr/local/bin demarkus-plugin
 
 demarkus-plugin provision init default
-demarkus-plugin provision status
+# The plugin pins its server and client; the capture must be that stack.
+desired="$(demarkus-plugin provision status | sed -n 's/^desired=//p' | tr ',' '\n')"
+server="$(printf '%s\n' "$desired" | sed -n 's/^server=//p')"
+client="$(printf '%s\n' "$desired" | sed -n 's/^client=//p')"
+running="$(cat "$HOME/.demarkus/soul/.server-version")"
+if [ -z "$server" ] || [ "$running" != "$server" ]; then
+  echo "capture: running server '$running', plugin pins '$server'" >&2
+  exit 1
+fi
 
 # Agent writes through the released MCP tools: a hub, a versioned document
 # with typed metadata, a journal entry, an archived document, a graph crawl.
-# One call per second: a version must land before the next write expects it.
-call() {
-  printf '{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' "$1" "$2" "$3"
-  sleep 1
-}
+calls=(
+  'mark_publish|{"url":"/fixture/index.md","expected_version":0,"body":"# Fixture\n\n- [Decision](/fixture/adr/0001-decision.md): the first decision\n- [Old note](/fixture/old.md): archived\n","metadata":{"type":"Hub","tags":"fixture,hub","importance":"0.8"}}'
+  'mark_publish|{"url":"/fixture/adr/0001-decision.md","expected_version":0,"body":"# Decision\n\nWe keep markdown.\n","metadata":{"type":"ADR","tags":"fixture,decision","importance":"0.7"}}'
+  'mark_publish|{"url":"/fixture/adr/0001-decision.md","expected_version":1,"body":"# Decision\n\nWe keep markdown, versioned.\n\n## Why\n\nHistory matters.\n","metadata":{"type":"ADR","tags":"fixture,decision","importance":"0.7","rel-related":"/fixture/index.md"}}'
+  'mark_append|{"url":"/fixture/","route":"today","tags":"fixture,journal","body":"\n## Captured\n\nUpgrade fixture written by the released plugin.\n"}'
+  'mark_publish|{"url":"/fixture/old.md","expected_version":0,"body":"# Old note\n\nSuperseded.\n","metadata":{"type":"Note","tags":"fixture","importance":"0.2"}}'
+  'mark_archive|{"url":"/fixture/old.md"}'
+  'mark_graph|{"url":"/fixture/index.md"}'
+)
 {
-  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"capture","version":"1"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"capture","version":"1"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-  call 2 mark_publish '{"url":"/fixture/index.md","expected_version":0,"body":"# Fixture\n\n- [Decision](/fixture/adr/0001-decision.md): the first decision\n- [Old note](/fixture/old.md): archived\n","metadata":{"type":"Hub","tags":"fixture,hub","importance":"0.8"}}'
-  call 3 mark_publish '{"url":"/fixture/adr/0001-decision.md","expected_version":0,"body":"# Decision\n\nWe keep markdown.\n","metadata":{"type":"ADR","tags":"fixture,decision","importance":"0.7"}}'
-  call 4 mark_publish '{"url":"/fixture/adr/0001-decision.md","expected_version":1,"body":"# Decision\n\nWe keep markdown, versioned.\n\n## Why\n\nHistory matters.\n","metadata":{"type":"ADR","tags":"fixture,decision","importance":"0.7","rel-related":"/fixture/index.md"}}'
-  call 5 mark_append '{"url":"/fixture/","route":"today","tags":"fixture,journal","body":"\n## Captured\n\nUpgrade fixture written by the released plugin.\n"}'
-  call 6 mark_publish '{"url":"/fixture/old.md","expected_version":0,"body":"# Old note\n\nSuperseded.\n","metadata":{"type":"Note","tags":"fixture","importance":"0.2"}}'
-  call 7 mark_archive '{"url":"/fixture/old.md"}'
-  call 8 mark_graph '{"url":"/fixture/index.md"}'
+  for i in "${!calls[@]}"; do
+    printf '{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' \
+      "$((i + 1))" "${calls[i]%%|*}" "${calls[i]#*|}"
+    sleep 1 # a version must land before the next write expects it
+  done
   sleep 1
 } | demarkus-plugin mcp-serve >/tmp/mcp.log
-if grep -q '"isError":true' /tmp/mcp.log; then
+# Every call needs a successful result: a JSON-RPC error, a tool error or a
+# missing response fails the capture.
+if ! jq -se --argjson n "${#calls[@]}" \
+  '[.[] | select((.id // 0) > 0 and .result != null and ((.result.isError // false) | not))] | length == $n' \
+  /tmp/mcp.log >/dev/null; then
   cat /tmp/mcp.log >&2
   exit 1
 fi
@@ -75,7 +89,8 @@ mkdir /out/home
 tar -C "$HOME" --exclude=.demarkus/bin --exclude=.demarkus/logs --exclude=.mark/cache \
   --exclude='*.pid' --exclude='*.lock' -cf - .demarkus .mark | tar -C /out/home -xf -
 # The tests read home to rebase the absolute paths the plugin recorded.
-printf 'captured: %s\nplugin: %s\nhome: %s\n' "$(date -u +%Y-%m-%d)" "$(demarkus-plugin version)" "$HOME" >/out/CAPTURE
+printf 'captured: %s\nplugin: %s\nserver: %s\nclient: %s\nhome: %s\n' \
+  "$(date -u +%Y-%m-%d)" "$(demarkus-plugin version)" "$server" "$client" "$HOME" >/out/CAPTURE
 CONTAINER
 
 # One capture, replaced in place: support spans the previous release only,

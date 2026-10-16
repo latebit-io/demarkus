@@ -8,15 +8,15 @@
         "revision": 1,
         "etag": "77d6c483fe30037862a355458ba1a0050879513afaa41a196bed2d120e4d91da",
         "complete": true,
-        "observed_at": "2026-10-16T15:47:58.915089674Z",
-        "attempted_at": "2026-10-16T15:47:58.915089674Z"
+        "observed_at": "2026-10-16T16:01:35.628497992Z",
+        "attempted_at": "2026-10-16T16:01:35.628497992Z"
       },
       "url": "mark://localhost:6310/fixture/journal/2026-10-16.md",
       "title": "Fixture journal: 2026-10-16",
       "status": "ok",
       "link_count": 0,
       "etag": "77d6c483fe30037862a355458ba1a0050879513afaa41a196bed2d120e4d91da",
-      "crawled_at": "2026-10-16T15:47:58.915198632Z"
+      "crawled_at": "2026-10-16T16:01:35.628672785Z"
     },
     {
       "observation": {
@@ -24,14 +24,14 @@
         "view": "document",
         "revision": 1,
         "complete": true,
-        "observed_at": "2026-10-16T15:47:57.91275839Z",
-        "attempted_at": "2026-10-16T15:47:57.91275839Z"
+        "observed_at": "2026-10-16T16:01:34.628331312Z",
+        "attempted_at": "2026-10-16T16:01:34.628331312Z"
       },
       "url": "mark://localhost:6310/fixture/old.md",
       "title": "",
       "status": "archived",
       "link_count": 0,
-      "crawled_at": "2026-10-16T15:47:57.912763181Z"
+      "crawled_at": "2026-10-16T16:01:34.628368938Z"
     },
     {
       "observation": {
@@ -39,15 +39,15 @@
         "view": "document",
         "revision": 2,
         "complete": true,
-        "observed_at": "2026-10-16T15:47:54.905353705Z",
-        "attempted_at": "2026-10-16T15:47:58.914033593Z",
+        "observed_at": "2026-10-16T16:01:31.614314035Z",
+        "attempted_at": "2026-10-16T16:01:35.626976317Z",
         "problem": "revision-conflict"
       },
       "url": "mark://localhost:6310/fixture/adr/0001-decision.md",
       "title": "Decision",
       "status": "ok",
       "link_count": 0,
-      "crawled_at": "2026-10-16T15:47:54.905436288Z"
+      "crawled_at": "2026-10-16T16:01:31.614379202Z"
     },
     {
       "observation": {
@@ -56,15 +56,15 @@
         "revision": 3,
         "etag": "4e0ffc854d8d49b90f9a93301b1fe3f88c7de42deea5118f1f3db5b44c276e30",
         "complete": true,
-        "observed_at": "2026-10-16T15:47:58.911834222Z",
-        "attempted_at": "2026-10-16T15:47:58.911834222Z"
+        "observed_at": "2026-10-16T16:01:35.624830222Z",
+        "attempted_at": "2026-10-16T16:01:35.624830222Z"
       },
       "url": "mark://localhost:6310/fixture/index.md",
       "title": "Fixture",
       "status": "ok",
       "link_count": 2,
       "etag": "4e0ffc854d8d49b90f9a93301b1fe3f88c7de42deea5118f1f3db5b44c276e30",
-      "crawled_at": "2026-10-16T15:47:58.915198632Z"
+      "crawled_at": "2026-10-16T16:01:35.628672785Z"
     },
     {
       "observation": {
@@ -72,15 +72,15 @@
         "view": "document",
         "etag": "b73f08d5e6be8d99b55e6c3cae1078f09a7c7b3b972091b9d681b40146c6f39d",
         "complete": true,
-        "observed_at": "2026-10-16T15:47:58.914195759Z",
-        "attempted_at": "2026-10-16T15:47:58.914195759Z"
+        "observed_at": "2026-10-16T16:01:35.627196235Z",
+        "attempted_at": "2026-10-16T16:01:35.627196235Z"
       },
       "url": "mark://localhost:6310/fixture/journal/",
       "title": "Index of /fixture/journal/",
       "status": "ok",
       "link_count": 1,
       "etag": "b73f08d5e6be8d99b55e6c3cae1078f09a7c7b3b972091b9d681b40146c6f39d",
-      "crawled_at": "2026-10-16T15:47:58.915198632Z"
+      "crawled_at": "2026-10-16T16:01:35.628672785Z"
     }
   ],
   "edges": [
