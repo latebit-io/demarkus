@@ -6,8 +6,8 @@ permalink: /scenarios/
 
 # Scenarios
 
-One system, three scales. Store, verbs, version history, and MCP surface are
-identical at every tier. Only reach and identity change.
+One versioned document model, three scales. Storage, identity, and discovery
+scale with the deployment.
 
 ## Personal: your memory
 
@@ -20,28 +20,28 @@ device.
 ## Team: a shared world
 
 One server a group reads, a [reading room](/library/) for humans, MCP for agents.
-Capability tokens per person, or the appliance's built-in login.
+Capability tokens scope each person's writes.
 
-- [Five-minute appliance](/install/stack/): world, broker, library, login, and HTTPS in one command
 - [Team knowledge base](/scenarios/team/): the manual build with per-person tokens
 - [Public hub](/scenarios/public-hub/): public server, Let's Encrypt, open reads
 
 ## Enterprise: a knowledge system
 
-Many worlds behind one broker, your identity provider in front. Teams join with
-one command; the broker mints per-world tokens. The [indexing
-agent](/ecosystem/#indexing-agent) keeps the cross-world graph current.
+Many worlds behind one gateway, your identity provider in front. Teams join with
+one command; access is scoped per world. The [knowledge
+server](/ecosystem/#knowledge-server) derives the cross-world graph.
 
 - [Organizational knowledge system](/scenarios/knowledge-system/): architecture, reference deployment, how users join
+- [Install a knowledge system](/install/stack/): worlds, gateways, and library with Helm
 - [The library and the librarian](/library/): human front-end over the universe
 
 ## They compose
 
 Anyone can run a personal memory and join the org system in the same agent, in
-Claude Code, [OpenCode](https://opencode.ai), or [pi](https://pi.dev). All three
+Claude Code, [Cursor](https://cursor.com), [OpenCode](https://opencode.ai), or [pi](https://pi.dev). All four
 plugin pairs share one `~/.demarkus` state. `/promote` lifts a ready note from
-the private tier to the shared one through a curation gate; `/memory-refresh`
-pulls the authoritative copy back as it changes. The two plugins partition by
+the private tier to the shared one through a curation gate; `/soul-refresh`
+reconciles it with the shared copy. The two plugins partition by
 server scope.
 
 For the full agent-driven flow, how data lands in memory and gets promoted up to

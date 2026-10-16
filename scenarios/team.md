@@ -28,23 +28,8 @@ Team server (mark://docs.internal.example.com)
 
 Each team member gets a personal publish token scoped to paths they own. A team lead token covers everything.
 
-## Faster path: the appliance
-
-If you want the reading room, a login page, and MCP for agents rather than
-hand-distributed tokens, one command gives you all of it on the same host:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-stack.sh | \
-  sudo bash -s -- --domain kb.example.com --owner-email you@example.com
-```
-
-That is the [five-minute appliance](/install/stack/): world server, broker,
-[library](/library/), self-hosted OIDC, HTTPS, indexing agent. Teammates log in
-with an account instead of pasting a token, and agents join with
-`/knowledge-join`.
-
-The manual build below is the right choice when you want a plain world with
-capability tokens and no identity layer.
+For a reading room, add `--with-library` to the Linux install. For single sign-on
+and many worlds, use the [knowledge-system chart](/install/stack/).
 
 ## Setup
 
@@ -78,7 +63,7 @@ demarkus-publish -root /srv/team-docs -path /runbooks/index.md -body "# Runbooks
 
 ```bash
 sudo demarkus-token generate \
-  -paths "/*" \
+  -paths "/**" \
   -ops publish \
   -tokens /etc/demarkus/tokens.toml \
   -label "team-lead"
@@ -90,7 +75,7 @@ The `publish` op grants all writes (PUBLISH, APPEND, and ARCHIVE) for the matche
 
 ```bash
 sudo demarkus-token generate \
-  -paths "/projects/myproject/*" \
+  -paths "/projects/myproject/**" \
   -ops publish \
   -tokens /etc/demarkus/tokens.toml \
   -label "dev-alice"
@@ -98,17 +83,17 @@ sudo demarkus-token generate \
 
 **Restricting reads (optional):**
 
-By default all reads are open. Reads become gated only once you mint a token that carries the `read` op for a path. From then on that path requires a valid read token. So to make `/projects/secret/*` private, generate a read token for it and hand it only to authorized members:
+By default all reads are open. A token with the `read` op gates its paths. To make `/projects/secret/` and its descendants private:
 
 ```bash
 sudo demarkus-token generate \
-  -paths "/projects/secret/*" \
+  -paths "/projects/secret/**" \
   -ops read \
   -tokens /etc/demarkus/tokens.toml \
   -label "secret-reader"
 ```
 
-(Granting `read` somewhere does not change read access for any other path.)
+`**` includes descendants; `*` matches one path segment. Other paths stay read-open.
 
 After generating tokens, reload:
 
@@ -136,16 +121,19 @@ demarkus-tui mark://docs.internal.example.com/index.md
 Edit a document (opens `$EDITOR`, publishes on save):
 
 ```bash
-demarkus edit -auth <token> mark://docs.internal.example.com/runbooks/deploy.md
+demarkus edit -auth "$TOKEN" mark://docs.internal.example.com/runbooks/deploy.md
 ```
 
 Publish directly:
 
 ```bash
-demarkus -X PUBLISH -auth <token> \
+demarkus -X PUBLISH -auth "$TOKEN" -expected-version 0 \
   -body "# ADR 001: Use Demarkus for team docs" \
   mark://docs.internal.example.com/decisions/001-use-demarkus.md
 ```
+
+Set `TOKEN` to your raw token. `-expected-version 0` creates a new document; use
+the fetched version to replace one, or use `demarkus edit`.
 
 ### 6. View version history
 
@@ -164,11 +152,11 @@ demarkus mark://docs.internal.example.com/runbooks/deploy.md/v3
 - Scope tokens narrowly: per-person or per-directory
 - Use `-label` when generating tokens for audit clarity
 - `demarkus-tui` graph view (`d` key) shows document relationships
-- Version history is permanent: there's no delete, only archive
+- Archive keeps history; explicit retention can prune older versions
 
 ## Related
 
-- [Five-minute appliance](/install/stack/): the same tier with login and a reading room
+- [Install a knowledge system](/install/stack/): many worlds with single sign-on
 - [Install on Linux](/install/linux/)
 - [Public hub scenario](/scenarios/public-hub/)
 - [Organizational knowledge system](/scenarios/knowledge-system/): the next tier up

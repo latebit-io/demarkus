@@ -16,7 +16,7 @@ The web reading room: server-rendered Go + htmx over one world or a whole knowle
 
 - Repo: [latebit-io/demarkus-library](https://github.com/latebit-io/demarkus-library)
 - Guide: [The library](/library/)
-- Ships with the [five-minute appliance](/install/stack/)
+- Available through the [knowledge-system chart](/install/stack/) or `install.sh --with-library` on Linux
 
 ### Caztor
 
@@ -43,12 +43,12 @@ Two plugins ship from the same marketplace (`/plugin marketplace add latebit-io/
 
 - Source: [plugins/claude-code](https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code)
 - Install: `/plugin install demarkus-memory@demarkus`
-- Local memory: `/memory`, `/memory-context`, `/memory-journal`, `/memory-init`, `/memory-status`, `/memory-doctor`
-- Remote memories: `/memory-join <join-url>` adds a remote memory to the catalog and binds it to the project; `/memory-default` picks which one this project writes to
-- Promotion: `/promote <path>` lifts a ready note to a knowledge system through the curation gate, `/promote-scan` sweeps for candidates, `/memory-refresh` pulls promoted docs back as the authoritative copy changes
+- Local memory: `/soul`, `/soul-context`, `/soul-journal`, `/soul-init`, `/soul-status`, `/soul-doctor`, `/soul-curate`, `/soul-archive`
+- Remote memories: `/soul-join <join-url>` adds a remote memory and binds it to the project; `/soul-default` picks which one this project writes to
+- Promotion: `/promote <path>` lifts a ready note through the curation gate, `/promote-scan` finds candidates, `/soul-refresh` reconciles promoted notes with the shared copy
 - Skill: `remember`, which triggers on "remember / recall / save / note" intents
 
-**`demarkus-knowledge`** joins an organizational [knowledge system](/scenarios/knowledge-system/), a broker-fronted universe of worlds. No binaries and no local server: pure broker plus the Claude Code MCP OAuth flow.
+**`demarkus-knowledge`** joins an organizational [knowledge system](/scenarios/knowledge-system/) through MCP OAuth. It runs a shared helper for guidance and gates, with no local world server.
 
 - Source: [plugins/claude-code-knowledge](https://github.com/latebit-io/demarkus/tree/main/plugins/claude-code-knowledge)
 - Install: `/plugin install demarkus-knowledge@demarkus`
@@ -74,8 +74,8 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/op
 ```
 
 - Source: [plugins/opencode-memory](https://github.com/latebit-io/demarkus/tree/main/plugins/opencode-memory) · [plugins/opencode-knowledge](https://github.com/latebit-io/demarkus/tree/main/plugins/opencode-knowledge)
-- Commands: the same `/memory*`, `/promote*`, and `/knowledge*` command sets described above
-- Restart OpenCode after installation; restart once more after memory's first session or after joining a knowledge system so the new MCP entry connects
+- Commands: the same `/soul*`, `/promote*`, and `/knowledge*` command sets described above
+- Restart OpenCode after installation. The first session provisions the memory; `/soul-status` checks the connection
 
 ### pi
 
@@ -87,17 +87,16 @@ Both need the MCP adapter first:
 pi install npm:pi-mcp-adapter
 ```
 
-**`demarkus-pi-memory`** is the local memory, with the same zero-config provisioning, gates, and nudges. Commands: `/memory`, `/memory-context`, `/memory-journal`, `/memory-init`, `/memory-join`, `/memory-default`, `/memory-status`, `/memory-doctor`, `/memory-refresh`, `/promote`, `/promote-scan`, plus the `remember` skill.
+**`demarkus-pi-memory`** is the local memory, with the same provisioning, gates, `/soul*` and `/promote*` commands, plus the `remember` skill.
 
 **`demarkus-pi-knowledge`** joins a knowledge system over the adapter's OAuth, with no tokens stored locally. Commands: `/knowledge`, `/knowledge-join`, `/knowledge-doctor`, plus the `knowledge-promote` skill.
 
 - Source: [plugins/pi-memory](https://github.com/latebit-io/demarkus/tree/main/plugins/pi-memory) · [plugins/pi-knowledge](https://github.com/latebit-io/demarkus/tree/main/plugins/pi-knowledge)
-- Install from a checkout: pi's `git:` installer reads a repo's root `package.json`, so a monorepo subdirectory can't be git-installed:
+- Install from the standalone mirrors:
 
 ```bash
-git clone https://github.com/latebit-io/demarkus
-pi install ./demarkus/plugins/pi-memory      # add -l for project-local scope
-pi install ./demarkus/plugins/pi-knowledge
+pi install git:github.com/latebit-io/demarkus-pi-memory
+pi install git:github.com/latebit-io/demarkus-pi-knowledge
 ```
 
 ### Cursor
@@ -125,45 +124,34 @@ demarkus-knowledge → Add
 ```
 
 - Or symlink a checkout: `ln -s "$PWD/demarkus/plugins/cursor-memory" ~/.cursor/plugins/local/demarkus-memory` (same for `cursor-knowledge`)
-- Commands: the same `/memory*`, `/promote*`, and `/knowledge*` command sets described above; the MCP server's prompts appear as `/demarkus-memory/orient`, `/recall`, and `/whats-new`
+- Commands: the same `/soul*`, `/promote*`, and `/knowledge*` command sets described above; the MCP server also provides `orient`, `recall`, and `whats-new` prompts
 - Restart Cursor after install; if the `demarkus-memory` MCP server shows as failed before the first conversation provisions the binary, toggle it once under Settings → MCP. Cloud agents run no hooks and cannot reach a local server; the plugins are for the desktop IDE
 
-## Agent platforms
+## Knowledge server
 
-### Indexing agent
+`demarkus-knowledge` hosts GCS-backed worlds, OIDC login, and the knowledge and
+memory MCP gateways in one process. The knowledge gateway exposes shared worlds;
+the memory gateway gives each identity a private world.
 
-`demarkus-agent` crawls the worlds it is seeded with, collects content hashes, and publishes the aggregate back to a hub: sharded hash indexes for content-addressed fetch and an atomic sharded graph snapshot under `/graph/manifest.md`, both staged in A/B slots so readers never see a partial write. Crawls walk large directories with paginated LIST cursors. Clients seed their graph from that aggregate, so a cold agent answers backlink questions on its first call instead of crawling.
-
-```bash
-# one pass
-demarkus-agent crawl -seeds mark://world.example.com -publish -publish-graph
-
-# on a schedule
-demarkus-agent daemon -config /etc/demarkus-agent/config.toml -publish -publish-graph
-```
-
-Published artifacts carry a version retention cap (newest 20 by default) so a generated document does not accumulate thousands of versions. The [appliance](/install/stack/) installs it as a timer that republishes every 6 hours.
+It derives the cross-world graph in process and publishes `/graph/worlds/` and
+`/graph.md` to the hub. No separate crawler or indexing-agent deployment is needed.
 
 ## CLI and server tools
 
 | Tool | Purpose |
 |------|---------|
 | `demarkus-server` | Serve a directory of markdown files |
-| `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
-| `demarkus-knowledge-bootstrap` | Initialize a world's GCS bucket and seed its policy |
+| `demarkus-knowledge` | Many GCS-backed worlds, OIDC gateways, and cross-world graph |
+| `demarkus-knowledge-server` | Multi-world QUIC server without the OIDC gateways |
 | `demarkus` | CLI: fetch, list, publish, edit, graph, lookup, okf |
 | `demarkus-tui` | Terminal browser with graph view |
 | `demarkus-mcp` | MCP server for LLM agents: tools, resources, prompts |
-| `demarkus-agent` | Indexing agent: crawls worlds, aggregates the graph, publishes hub indexes |
-| `demarkus-knowledge-broker` | OIDC-fronted MCP gateway composing many worlds into one system |
-| `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private memory world per identity (memory as a service) |
 | `demarkus-library` | Web reading room with the AI librarian |
 | `demarkus-token` | Generate capability-based auth tokens |
 | `demarkus-publish` | Write directly to the store for read-only server installs |
-| `demarkus-migrate` | Migrate document history between store backends |
 
 ## Building your own
 
-The protocol surface is small: QUIC with ALPN `mark`, a text request verb (one of FETCH, LIST, VERSIONS, LOOKUP, PUBLISH, APPEND, ARCHIVE), and YAML-style `---`-delimited metadata in responses. Caztor's read-only Java client is roughly a hundred lines. See the [protocol reference](/reference/) for the full spec.
+The protocol surface is small: QUIC with ALPN `mark`, a text request verb (FETCH, LIST, VERSIONS, LOOKUP, PUBLISH, APPEND, ARCHIVE, WATCH), and YAML-style `---`-delimited metadata. WATCH streams change hints; clients fetch the versions they need. See the [protocol reference](/reference/) for the full spec.
 
 If you ship something that speaks Demarkus, [open an issue](https://github.com/latebit-io/demarkus/issues) or drop a link and we will list it here.

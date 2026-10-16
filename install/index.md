@@ -6,17 +6,18 @@ permalink: /install/
 
 # Install
 
-Pick your platform, or take the whole stack in one command.
+Pick your platform, or deploy a shared knowledge system.
 
-## Whole system (Linux host)
+## Knowledge system (Kubernetes)
 
-World server, broker, [reading room](/library/), self-hosted login, HTTPS, and the indexing agent, wired together. No DNS setup required.
+GCS-backed worlds, OIDC gateways, and an optional [reading room](/library/), configured through one Helm values file.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-stack.sh | sudo bash
+helm upgrade --install demarkus oci://ghcr.io/latebit-io/charts/demarkus-knowledge-system \
+  --namespace demarkus --create-namespace --values knowledge-system.yaml
 ```
 
-[Full appliance guide →](/install/stack/)
+[Prerequisites and configuration →](/install/stack/)
 
 ## macOS
 

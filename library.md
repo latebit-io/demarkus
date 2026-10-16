@@ -12,7 +12,7 @@ read here; agents read the same documents over MCP.
 
 - **Live: [soul.demarkus.io](https://soul.demarkus.io)**: the project's own memory, open and read-only
 - Source: [latebit-io/demarkus-library](https://github.com/latebit-io/demarkus-library)
-- Ships with the [five-minute appliance](/install/stack/) and the [knowledge system deployment](/scenarios/knowledge-system/)
+- Available through `install.sh --with-library` on Linux or the [knowledge-system chart](/install/stack/)
 
 ## The reading room
 
@@ -30,9 +30,8 @@ your reading rather than on a bare document.
 highlighting, alert callouts, lazy mermaid and KaTeX islands. Tag pages, search,
 edition history, and raw source are routes.
 
-**Card catalog.** Search is a LOOKUP against the catalog: subject in, an
-importance-ranked table of matching documents out, each row a click into the
-reading room.
+**Card catalog.** Search matches tags, titles, and section text where the world
+supports it. Each result opens in the reading room.
 
 <figure class="shot">
   <img src="/assets/img/library-catalog.png" alt="A search results page titled 'Catalog: broker' with a table of matching documents, their importance scores, titles, and tags" />
@@ -75,8 +74,7 @@ can't see documents you can't: access is enforced at the world, not in the
 prompt.
 
 Feature-dark until you give it a provider. Without one the pane reads "not on
-duty". On the appliance, pass `--librarian-key-file` at install, or add the
-provider config to `/etc/demarkus-library/env` later.
+duty". Configure the provider in the library's environment.
 
 ### Configuring the provider
 
@@ -149,7 +147,8 @@ gives you a real room to browse.
 | `LLM_BASE_URL` | `https://openrouter.ai/api/v1` | Librarian provider endpoint (OpenAI-compatible) |
 | `LLM_MODEL` | `google/gemini-2.5-flash` | Librarian model id |
 | `DEMARKUS_LLM_KEYSTORE` | `true` | Allow reading the key from nib's key store; `false` = env only |
-| `DEMARKUS_BRAND` / `DEMARKUS_LOGO` | _(empty)_ | Name and logo in nav, titles, login card |
+| `DEMARKUS_BRAND` | `demarkus Library` | Name in nav, titles, and login card |
+| `DEMARKUS_LOGO` | _(empty)_ | Logo file |
 | `DEMARKUS_THEME_CSS` | _(empty)_ | Override stylesheet, loaded last |
 
 See [Configuring the provider](#configuring-the-provider) for how those three
@@ -172,6 +171,5 @@ The project's own memory is served through the library, open and read-only:
 live memory in the reading room, walk the trail, and open the floor and document
 graph, no account required.
 
-The [five-minute appliance](/install/stack/) installs the library in broker mode
-behind the stack's own login. Run it locally in `quic` mode to see the room
-without any identity layer at all.
+The [knowledge-system chart](/install/stack/) runs the library behind the org
+login. Run it locally in `quic` mode to browse an open world.

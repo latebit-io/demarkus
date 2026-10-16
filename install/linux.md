@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 This installs `demarkus-server`, `demarkus-token`, `demarkus-publish`, `demarkus`, `demarkus-tui`, and `demarkus-mcp`.
 
-Add `--with-broker` (OIDC MCP gateway) and `--with-library` (web reading room) for a single-host knowledge system; the [five-minute appliance](/install/stack/) wraps both plus login and HTTPS.
+Add `--with-library` for a read-only web reading room. For many worlds and OIDC login, use the [knowledge-system chart](/install/stack/).
 
 ## With Let's Encrypt TLS
 

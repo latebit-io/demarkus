@@ -8,61 +8,61 @@ permalink: /scenarios/knowledge-system/
 
 Run Demarkus at organization scale: a **broker-fronted universe** of worlds that whole teams join with one command, authenticate against with OIDC, and reach through the same MCP tools their agents already use.
 
-This is the tier above the [team knowledge base](/scenarios/team/). A team scenario is one shared server with hand-distributed tokens. A knowledge system is many worlds behind a single broker: users authenticate through your identity provider, the broker mints scoped tokens per world automatically, and nobody copies a raw token by hand.
+This is the tier above the [team knowledge base](/scenarios/team/). Users sign in through your identity provider; the gateway checks each world's access and write scope. Nobody copies a raw world token by hand.
 
 ## What you'll have
 
-- A **broker**: an OIDC-fronted HTTPS gateway. Agents speak MCP to it over HTTPS; it translates to QUIC for the internal worlds behind it.
-- One or more **worlds**: ordinary `demarkus-server` instances (per team, per domain), private behind the broker.
-- A **hub**, the world whose job is indexing. The [indexing agent](/ecosystem/#indexing-agent) crawls the connected worlds and publishes hash indexes plus a `/graph.md` link-graph export there, so the whole system is discoverable and cold clients seed their graph without crawling.
+- **`demarkus-knowledge`**: one process hosting worlds, OIDC login, and MCP gateways.
+- One or more **worlds**: isolated catalogs, each with its own GCS bucket, policy, and access rules.
+- A **hub**: the world holding shared conventions and the cross-world graph, derived by the knowledge server.
 - A **[library](/library/)**: the reading room for humans, behind the same login, over the same worlds.
-- **No hand-distributed tokens**: users run `/knowledge-join`, authenticate in the browser, and the broker provisions per-world access for them.
+- **No hand-distributed tokens**: users run `/knowledge-join` and authenticate in the browser.
 - Full version history, capability auth, and audit logging on every world, same as any Demarkus server.
 
 ## Architecture
 
 ```
-                 Coding agent  (MCP over HTTPS, OIDC)
-                      │
-                      ▼
-        knowledge.example.com                 ← broker: OIDC + token minting
-                      │  (QUIC, internal)
-        ┌─────────────┼─────────────┬─────────────┐
-        ▼             ▼             ▼             ▼
-   world: planner  world: storage  hub: root   library      ← reading room
-        ▲             ▲             ▲
-    memories      memories        agent           ← crawls worlds, publishes the graph
+     Coding agents          Library
+            │                  │
+            └──── MCP + OIDC ───┘
+                       │
+              demarkus-knowledge
+          gateways + worlds + graph
+                       │
+             ┌─────────┼─────────┐
+             ▼         ▼         ▼
+           root      planner   storage
+              one GCS bucket per world
 ```
 
-The broker is the only public surface. Worlds stay private; the broker authenticates the caller against your IdP, mints a scoped token for the world being addressed, and proxies the request. The MCP tool surface the agent sees is byte-for-byte the same as talking to a local `demarkus-server`, federation, graph, and lookup tools included, plus two broker-only tools: `mark_worlds` lists the worlds and `mark_lookup_all` runs one catalog lookup across every readable world, globally limited, with a partial status when a world fails instead of a failed query.
+Gateway calls reach worlds in process. `mark_worlds` lists readable worlds;
+`mark_lookup_all` searches them in one call and reports partial failures. Lookup
+matches tags and titles, or section text with `match=body`; `budget` can include
+focused passages and related documents.
 
-Worlds default to the file store. Point one at Postgres (`-store postgres -pg-dsn ...`) and it serves LOOKUP from the database catalog, so that world scales past a single replica.
-
-At production scale, `demarkus-knowledge-server` replaces per-world server processes: one deployment serves every world on one UDP listener, TLS SNI selects the world during the handshake, and each world keeps its own GCS bucket (with an immutable world ID), tokens, policy, and rate limits. A Helm chart ships in the repo (`deploy/helm/demarkus-knowledge-server`).
+Direct QUIC clients select a world with TLS SNI. Capability tokens are for direct
+clients; gateway writes use the signed-in identity's world grant.
 
 ### High availability
 
-The knowledge server is stateless: all durable state lives in the world's GCS bucket, so every replica derives the same view from one head object. Writes race on a compare-and-swap of that head object; there is no leader election. The chart refuses to render fewer than 2 replicas and ships a PodDisruptionBudget with `minAvailable: 1`.
+Durable state lives in GCS. World writes commit through a compare-and-swap head
+and commit log; replicas catch up from the bucket. No persistent volumes or
+writer leader election. The chart requires at least two replicas and keeps one
+available during voluntary disruption.
 
-Before a world serves, `demarkus-knowledge-bootstrap` initializes its bucket and seeds its publish policy. Credentials come only from Workload Identity / Application Default Credentials; no keys are mounted. Egress to GCS requires the explicit `networkPolicy.allowUnrestrictedHTTPS` opt-in, because a NetworkPolicy cannot express GCS hostnames. Per-world tokens mount from Secrets and hot-reload on change or SIGHUP. The chart README covers all of it.
+The server initializes an empty world on first start and seeds its write policy.
+The floor world's policy applies across the system; each world can tighten it.
+Writes are checked for secrets and personal data. GCS access uses workload
+identity; direct-client tokens, when needed, mount from Secrets.
 
 For the design rationale behind worlds, hubs, and memories, see [Creating an automated knowledge universe](/blog/creating-an-automated-knowledge-universe/).
 
 ## Stand up the system
 
-### On one host
-
-The [five-minute appliance](/install/stack/) installs the same architecture on a
-single Linux box in one command: broker, world, hub, agent, library, login, and
-HTTPS. Right for a pilot, a small org, or an air-gapped install.
-
-### On a cluster
-
-The reference deployment is a forkable GitHub template that stands up a complete knowledge system on GKE (broker, worlds, and hub) with GitOps and secret management wired in:
-
-- **[latebit-io/demarkus-knowledge-system-deploy](https://github.com/latebit-io/demarkus-knowledge-system-deploy)**: OpenTofu for the cluster and DNS, ArgoCD for GitOps delivery, and OpenBao (with bank-vaults) for secrets. CSI-snapshot backups for the world volumes. Apps: broker, worlds, indexing agent, library, backups. `deployment.yaml` at the repo root is the single source of deployment identity: domain, worlds, web clients, admin allowlists.
-
-Fork it, point it at your project and domain, and apply. The live `knowledge.demarkus.io` runs from this same template.
+Use the [knowledge-system Helm chart](/install/stack/): one values file declares
+the worlds, OIDC gateway, and optional library. The
+[deployment repository](https://github.com/latebit-io/demarkus-knowledge-system-deploy)
+provides the GKE and GitOps setup.
 
 The deployment publishes a system policy and project template to the hub's well-known path (`mark://root/.well-known/demarkus/`), so joining agents discover the conventions of *your* system, required tags and project layout included, without you documenting them separately.
 
@@ -87,11 +87,11 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/op
 
 Restart OpenCode before continuing.
 
-pi (`demarkus-pi-knowledge`, installed from a checkout):
+pi:
 
 ```bash
 pi install npm:pi-mcp-adapter
-pi install ./demarkus/plugins/pi-knowledge
+pi install git:github.com/latebit-io/demarkus-pi-knowledge
 ```
 
 Cursor, with the repository added as a marketplace from the plugins panel (or symlinked from a checkout into `~/.cursor/plugins/local/`):
@@ -109,11 +109,13 @@ Restart Cursor before continuing.
 /knowledge-join https://knowledge.example.com
 ```
 
-Pass the full `https://` URL of the broker's MCP gateway. The command validates it, registers it as an MCP server in your agent, and points you at the browser-based auth flow on the first tool call. Authentication follows the standard MCP authorization spec: discovery (RFC 8414 / 9728), dynamic client registration (RFC 7591), then `authorization_code` + PKCE. You log in through your identity provider; the broker handles per-world tokens from there.
+Pass the full `https://` URL of the MCP gateway. The command registers it in your
+agent and starts the browser-based OAuth flow. You log in through your identity
+provider; the gateway enforces access per world.
 
-In OpenCode, restart once more after joining so it loads the new MCP entry.
-Complete OAuth when prompted, or run `opencode mcp auth <slug>`. In Cursor,
-restart once more and complete OAuth under Settings → MCP.
+In OpenCode, restart after joining. In V2, open `/mcps`, select the server, and
+sign in; in V1, complete OAuth when prompted or run `opencode mcp auth <slug>`.
+In Cursor, restart and complete OAuth under Settings → MCP.
 
 ### 3. Navigate and work
 
@@ -121,9 +123,12 @@ restart once more and complete OAuth under Settings → MCP.
 /knowledge
 ```
 
-The plugin's session guidance steers agents to recall from the system before answering and to publish back to it as work lands, with the system's tag policy enforced at publish time, so the catalog stays searchable via `mark_lookup`.
+The plugin steers agents to consult the system first on shared subjects. Ready
+material lands through `/promote` and a human gate, with the system's policy
+enforced at write time.
 
-A personal [memory](/scenarios/agent-memory/) and an organizational knowledge system compose cleanly in the same install. The memory is your private scratch space over direct QUIC; the system is the shared, broker-fronted universe. They don't conflict; the plugins partition by server scope.
+A personal [memory](/scenarios/agent-memory/) and a knowledge system compose in
+the same agent. Draft in your memory; promote what others should rely on.
 
 ## Live example
 

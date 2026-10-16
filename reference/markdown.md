@@ -10,9 +10,14 @@ What you can rely on when authoring documents for Demarkus.
 
 ## The short version
 
-Demarkus does not parse or validate the markdown you write. The server treats your document body as an opaque blob and defers all rendering to the client. (On disk, the server prepends its own YAML frontmatter for `version`, `previous-hash`, `archived`, and any publisher `meta.*` keys, but that's stripped before the body is returned to clients.) What you see in the TUI depends entirely on the renderer. `demarkus-tui` uses [Glamour](https://github.com/charmbracelet/glamour) (v2), which is built on [goldmark](https://github.com/yuin/goldmark) and enables **CommonMark + GitHub Flavored Markdown + definition lists** by default.
+Demarkus accepts UTF-8 markdown at `.md` paths and preserves the body. Clients
+render it; knowledge-system writes also pass policy and content checks.
+`demarkus-tui` uses [Glamour](https://github.com/charmbracelet/glamour) over
+[goldmark](https://github.com/yuin/goldmark): **CommonMark + GitHub Flavored
+Markdown + definition lists**.
 
-Everything on this page is what Glamour renders. Other clients (plain CLI, MCP) hand back raw markdown unchanged, so the consumer of that markdown decides what features it understands.
+The rendering features below describe the TUI. The CLI returns markdown; MCP may
+return a section or outline. The library has its own renderer.
 
 ## CommonMark
 
@@ -82,6 +87,8 @@ The block mixes three kinds of keys:
 
 The handler strips this whole block before returning the body to clients, so you never see it when you FETCH.
 
+Archive state is maintained separately; archiving does not rewrite stored versions.
+
 ### Publisher metadata
 
 To attach structured metadata to a document, pass it as request metadata on `PUBLISH`, **not** by writing YAML inside the body. Recognized OKF fields (`type`, `title`, `description`, `resource`, `tags`, `timestamp`) are stored bare; every other key is namespaced under `meta.*`. All of it is surfaced in response metadata on FETCH.
@@ -96,7 +103,8 @@ On FETCH, the server returns `modified`, `etag`, and `content-hash` as protocol 
 
 ### If you write `---` at the top of your body
 
-It's treated as body content: the server does not parse it and does not strip it. Glamour will render `---` as a horizontal rule, so an in-body frontmatter block shows up as two horizontal rules with text between them. Use publisher metadata instead.
+It remains body content, not publisher metadata. Authoring gates may reject an
+in-body frontmatter block. Pass metadata separately.
 
 ## Open Knowledge Format (OKF) compatibility
 
@@ -137,6 +145,9 @@ It does **not** track:
 - Wiki-style `[[links]]`
 
 If you want a link to appear in the graph, use `[text](url)` or a reference link.
+
+Publisher keys such as `rel-depends-on` also declare typed document relations.
+Graph results distinguish these from ordinary links and carry source revisions.
 
 ## Document size
 

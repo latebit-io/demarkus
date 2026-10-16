@@ -38,7 +38,7 @@ In **[pi](https://pi.dev)**:
 
 ```bash
 pi install npm:pi-mcp-adapter
-pi install ./demarkus/plugins/pi-memory
+pi install git:github.com/latebit-io/demarkus-pi-memory
 ```
 
 In **[Cursor](https://cursor.com)**, add the repository as a marketplace from the plugins panel, then add the plugin:
@@ -50,7 +50,10 @@ demarkus-memory → Add
 
 Then ask your agent to read `mark://soul.demarkus.io/index.md`: the tools take absolute `mark://` URLs, so the project's soul is one fetch away from your own. To make it a project's default soul, run `/soul-join mark://soul.demarkus.io`; no token is needed, it is read-open, and writes stay closed.
 
-Every `mark_*` tool works on it: `mark_lookup` is the card catalog (subject to documents, ranked by importance), `mark_explore` orients you in one call, `mark_backlinks` finds what links to a page, and `mark_fetch` returns whole documents under 8KB or an outline of `#anchors` for larger ones, so you fetch `path.md#section` instead of the whole file. See the [Agent Memory scenario](/scenarios/agent-memory/) for the full tool list.
+Use `mark_lookup` to search tags and titles, or section text with `match=body`.
+`mark_backlinks` finds incoming links. `mark_fetch` returns short documents or an
+outline for larger ones, so you can fetch `path.md#section` instead of the whole
+file. See [Agent Memory](/scenarios/agent-memory/) for setup and tools.
 
 ## Browse it manually
 
@@ -95,7 +98,7 @@ demarkus-tui mark://soul.demarkus.io/index.md
 | `plans/<name>.md` | Plan documents, active and archived |
 | `faq.md` | Common questions and comparisons |
 
-All documents are public and read-open. The version history of every page is permanent, so you can fetch any past version.
+The soul is public and read-open. Documents keep version history unless explicitly pruned with retention; promoted notes link to their shared authority.
 
 ## Browse it in the library
 
@@ -104,7 +107,7 @@ This soul is served through the [library](/library/) at
 the trail, and open the floor and the document graph, no account needed.
 
 The library defaults to this world, so a local run gives you the same reading
-room over your own copy:
+room over the live world:
 
 ```bash
 git clone https://github.com/latebit-io/demarkus-library

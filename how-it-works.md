@@ -6,147 +6,89 @@ permalink: /how-it-works/
 
 # How knowledge flows
 
-Demarkus is agent-driven memory. You do not file documents by hand. As the agent
-works, it records what is worth keeping, and when a note is ready for other people
-it promotes it to the shared catalog. Three stores, one flow.
+Demarkus is agent-driven memory. As the agent works, it records what is worth
+keeping. When a note is ready for other people, it promotes it to the shared
+catalog. Two stores, one flow.
 
 ```text
-   you steer                 the agent files
-   ─────────                 ───────────────
-      │                            │
-      ▼                            ▼
-  a request  ──▶  [ agent ]  ──record──▶  MEMORY        personal, local, drafts
+                 you steer
+                     │
+                     ▼
+                  [ agent ] ──record──▶ MEMORY
+                     │                 personal, drafts
                      │                     │
-                     │ recall              │ /promote  (curate + human gate)
-                     │ (both stores)       ▼
-                     │             KNOWLEDGE SYSTEM      shared, authoritative
-                     │                     │
-                     └─────read────────────┤ /memory-refresh (authoritative wins)
-                                           ▼
-                                        LIBRARY          humans read the same store
+                     │                 /promote
+                     │                 human gate
+                     │                     ▼
+                     └──consult────▶ KNOWLEDGE SYSTEM
+                                     shared, authoritative
+                                           │
+                                        LIBRARY
+                                     humans read here
 ```
 
-The **memory** is your private draft tier. The **knowledge system** is the shared,
-authoritative one. The [library](/library/) is a read surface over either, not a
-third store. A memory can live on a local plugin-managed server or as a hosted
-world behind the memory broker; the flow is the same either way.
+Your **memory**, also called a soul, is the private draft tier. The **knowledge
+system** is the shared, authoritative one. The [library](/library/) reads the same
+documents; it is not another store.
 
-## It is the agent, not you
+## The agent files as it goes
 
-The plugins do not add a "save note" button. They inject standing guidance and a
-few hooks, so the agent reads and writes memory as a normal part of working. You
-steer the session; the agent files as it goes. Nothing is published to the shared
-catalog without a human gate.
+Two plugins compose in one agent:
 
-Two plugins, each in its lane, composing in one install:
+- **`demarkus-memory`** captures and recalls personal memory, locally or remotely.
+- **`demarkus-knowledge`** consults the shared system and curates what lands there.
 
-- **`demarkus-memory`** owns the personal memory: capture, recall, and the intent
-  to promote.
-- **`demarkus-knowledge`** owns the shared system: the consult-first bar and the
-  curation cascade that gates what lands there.
-
-They partition by server scope, so a write never lands in the wrong store.
-
-## Into personal memory
-
-At the start of substantive work the agent **recalls** before answering from the
-current context alone: `mark_lookup` for the subject, `mark_fetch` the project
-hub, `mark_backlinks` for related work. If nothing comes back it says so rather
-than inventing memory.
-
-As the work produces something durable, the agent **records** it to the right
-place, without being asked:
+The agent recalls before substantive work, records decisions and lessons as they
+land, and journals progress. Hooks reinforce recall, metadata, and destination
+rules; shared publishing goes through a human gate.
 
 | What | Where |
 |---|---|
-| A decision | an ADR at `/<project>/adr/<NNNN>-<title>.md` |
-| A bug lesson or gotcha | `/<project>/debugging.md` |
-| A pattern or convention | `/<project>/patterns.md` |
-| End-of-session progress | today's `/<project>/journal/<YYYY-MM-DD>.md` |
+| A decision | `/<project>/adr/<NNNN>-<title>.md` |
+| A bug lesson | `/<project>/debugging.md` |
+| A pattern | `/<project>/patterns.md` |
+| Session progress | `/<project>/journal/<YYYY-MM-DD>.md` |
 
-Memory is organized per project under `/<project>/`. Three hooks keep the catalog
-honest: a publish without tags is caught at write time (an untagged doc is
-invisible to `mark_lookup`), an end-of-session nudge asks for a journal entry when
-files changed but nothing was recorded, and a recall nudge fires on a "did we
-decide X" question. They are reminders, not gates.
+A single-project store can use the root. The store's template declares the layout.
 
-Links between documents accumulate into a persistent **knowledge graph**: each
-`mark_graph` crawl merges into a graph stored across sessions, and
-`mark_backlinks` answers "what links here?" without re-crawling. Recall is graph
-traversal, not just search; an ADR pulls in the debugging note that motivated it
-and the pattern it produced. At the system tier the [indexing
-agent](/ecosystem/#indexing-agent) aggregates the graph across worlds and
-publishes it to the hub as an atomic sharded snapshot under `/graph/manifest.md`,
-so a cold agent seeds its graph on the first call and never reads a half-written
-export.
+## Recall with evidence
 
-This is the whole loop for one person. The memory is fast, private, and
-yours: on your own machine, or on a [remote host](/scenarios/agent-memory/)
-you join from every device.
+`mark_lookup` finds documents by tags and title; `match=body` also finds matching
+sections. A `budget` can include focused passages and related documents. Fetch
+the returned `#anchor` when you need more, rather than loading whole files.
 
-## Up to the knowledge system
+Links and typed relations form the graph. `mark_graph` follows outbound links;
+`mark_backlinks` queries the revision-aware graph with bounded source checks.
+In a knowledge system, the server derives the cross-world graph in process.
 
-Most memory content should stay personal. A debugging note about your local setup,
-a half-formed idea, a session journal: none of that belongs in the shared catalog.
-Promotion is the deliberate step that lifts the small fraction that does.
+For a shared subject, `mark_lookup_all` searches every readable world in one call.
+Failures and partial results stay visible.
 
-`/promote <memory-path>` runs the **curation cascade** (the `knowledge-promote`
-skill on the knowledge side):
+## Promote what others should rely on
 
-1. **Triage.** Durable? Broadly useful? Not already in the catalog? Most memory
-   content correctly fails here and stays personal.
-2. **Distill.** Rewrite for a shared audience, stripping personal and local
-   framing and any secrets or PII. This strips them, it does not summarize around
-   them.
-3. **Dedup.** `mark_lookup` the destination for an existing document on the
-   subject; an update re-enters as a gated change, not a duplicate.
-4. **Tag.** Apply the destination's taxonomy, honoring any required tag axes and
-   OKF fields its policy declares.
-5. **Route.** Pick a writable world via `mark_worlds` and each world's `world.md`.
-6. **Gate.** A human approves, capped by the world's autonomy ceiling. Nothing
-   auto-publishes to a shared store.
-7. **Publish with provenance,** then **back-stamp** the memory doc so it is not
-   re-promoted and can be refreshed later.
+Most memory stays personal. `/promote <path>` lifts the useful fraction through
+the `knowledge-promote` skill:
 
-`/promote-scan` sweeps the memory for candidates worth lifting, and publishing a new
-ADR nudges promotion. The trigger is always explicit; the human always gates.
+1. **Triage and distill.** Keep durable knowledge; remove personal framing and secrets.
+2. **Route and check.** Pick a writable world; check existing content, policy, and style.
+3. **Review.** Show the dry run and get approval.
+4. **Publish.** Apply with provenance and mark the source as promoted.
 
-## Staying coherent
+`/promote-scan` finds candidates. `/soul-refresh` reconciles promoted notes with
+their shared copies through review. The knowledge system stays authoritative;
+shared knowledge is linked or fetched fresh.
 
-Once promoted, the authoritative copy lives in the knowledge system and may move
-on. `/memory-refresh` is the downward leg: it finds promoted docs (they carry a
-`promoted:` marker and tag), checks each against the live copy, and refreshes the
-stale ones. Reconciliation is **directional**: knowledge is the base of truth, the
-memory refreshes from it, and any local edits go back up through `/promote`'s gate,
-never as a silent two-way merge.
+## Day to day
 
-So the edge between the two stores is a loop with a clear direction: draft in the
-memory, promote up through the gate, refresh back down as the shared copy evolves.
-
-## Using it day to day
-
-A typical session:
-
-1. **Orient.** `/memory-context` restores where you left off; for a shared subject
-   the agent consults the knowledge system first (`/knowledge` to navigate it).
-2. **Work.** The agent recalls as questions come up and records decisions,
-   lessons, and patterns as they land.
-3. **Close out.** `/memory-journal` captures progress if the Stop nudge has not
-   already prompted it.
-4. **Promote when ready.** `/promote` a note that others should rely on, or
-   `/promote-scan` to sweep for candidates. The cascade gates it into the catalog.
-5. **Refresh.** `/memory-refresh` pulls promoted docs back down as their
-   authoritative copies change.
-
-For anything shared or organizational, the knowledge system is the first place to
-look and the source of truth; the memory is your scratch space and personal backstop.
-On a brokered system, `mark_lookup_all` runs that first lookup across every
-readable world in one call.
-Humans browse the same catalog in the [library](/library/); agents read it over
-MCP. Same store, same versions.
+- `/soul-context`: restore where you left off.
+- `/knowledge`: navigate joined systems.
+- `/soul-journal`: record progress.
+- `/soul-doctor`: audit memory hygiene.
+- `/soul-curate`: review and reshape a document.
+- `/promote`: publish a ready note through the shared gate.
 
 ## Where each tier fits
 
-- [Agent memory](/scenarios/agent-memory/): the personal memory, the capture loop, the plugin setup.
-- [Organizational knowledge system](/scenarios/knowledge-system/): the shared, broker-fronted catalog and how teams join.
-- [The library](/library/): the human reading room over either.
+- [Agent memory](/scenarios/agent-memory/): personal capture, recall, and setup.
+- [Knowledge system](/scenarios/knowledge-system/): the shared catalog and team login.
+- [The library](/library/): the human reading room.

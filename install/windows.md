@@ -22,7 +22,8 @@ Restart when prompted. This installs Ubuntu by default. Open "Ubuntu" from the S
 
 ### 2. Enable systemd (server only)
 
-The server runs as a systemd service. WSL2 supports systemd, but it's opt-in. Skip this step if you're only installing the client.
+The server runs as a systemd service. If your WSL distribution has not enabled
+systemd, add the setting below. Skip this for client-only installs.
 
 Inside your WSL2 terminal:
 
@@ -62,41 +63,23 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 ## Access from Windows
 
-WSL2 auto-forwards **TCP** to the Windows host, but Demarkus uses **QUIC over UDP** (port 6309), which is not forwarded automatically. You have two options.
-
-### Option A: Connect from inside WSL2 (simplest)
+Demarkus uses **QUIC over UDP**. Run its clients inside WSL2:
 
 Any client running inside WSL2 reaches the server directly at `mark://localhost:6309`:
 
 ```bash
-demarkus mark://localhost:6309/index.md
+demarkus --insecure mark://localhost:6309/health
 ```
 
 From PowerShell or CMD, invoke the WSL binary:
 
 ```powershell
-wsl demarkus mark://localhost:6309/index.md
+wsl demarkus --insecure mark://localhost:6309/health
 ```
 
-### Option B: Forward UDP 6309 to Windows
-
-Find your WSL2 IP from inside WSL:
-
-```bash
-ip addr show eth0 | grep 'inet '
-```
-
-Then from an **Administrator** PowerShell (replace `172.x.x.x` with your WSL2 IP):
-
-```powershell
-netsh interface portproxy add v4tov4 listenport=6309 listenaddress=0.0.0.0 `
-  connectport=6309 connectaddress=172.x.x.x protocol=udp
-
-New-NetFirewallRule -DisplayName "Demarkus QUIC" -Direction Inbound `
-  -Action Allow -Protocol UDP -LocalPort 6309
-```
-
-WSL2's virtual IP changes on each reboot. For a stable external address, either script the `portproxy` re-registration at boot or run a reverse proxy outside WSL2.
+Windows `netsh interface portproxy` forwards TCP, not UDP. For access from other
+machines, configure [WSL mirrored networking](https://learn.microsoft.com/en-us/windows/wsl/networking#mirrored-mode-networking)
+and its firewall, or deploy the server on a Linux host.
 
 ## Related
 

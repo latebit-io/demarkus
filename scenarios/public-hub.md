@@ -97,7 +97,7 @@ demarkus-publish -root /srv/site -path /hello.md -body "# Hello"
 Generate a publish token on the server:
 
 ```bash
-sudo demarkus-token generate -paths "/*" -ops publish -tokens /etc/demarkus/tokens.toml
+sudo demarkus-token generate -label hub-writer -paths "/**" -ops publish -tokens /etc/demarkus/tokens.toml
 ```
 
 Then reload the server config:
@@ -106,22 +106,27 @@ Then reload the server config:
 sudo systemctl restart demarkus
 ```
 
-Publish from your local machine:
+Set `TOKEN` to the raw token, then publish a new document from your local machine:
 
 ```bash
-demarkus -X PUBLISH -auth <your-token> -body "# Hello" mark://yourdomain.com/hello.md
+demarkus -X PUBLISH -auth "$TOKEN" -expected-version 0 \
+  -body "# A new page" mark://yourdomain.com/new-page.md
 ```
+
+To replace a document, pass its fetched version as `-expected-version`, or use
+`demarkus edit`.
 
 ## Agent Discovery via Published Graphs
 
-Hubs are natural hosts for published graph documents. An agent crawls a set of servers, then publishes its graph to a hub so other agents can discover the topology without recrawling.
+Hubs can host graph exports. With the full MCP tool profile, an agent crawls a
+set of servers and publishes the discovered links for other agents to follow.
 
 ### How it works
 
 1. An agent crawls servers using `mark_graph` to build a local graph store
 2. The agent publishes the graph to the hub using `mark_graph_publish` (e.g. `/graphs/my-network.md`)
 3. Another agent fetches the published graph and runs `mark_graph` on it
-4. The crawler follows all `mark://` links in the document, reconstructing the topology instantly
+4. The crawler follows `mark://` links and checks the source documents
 
 The published graph is plain markdown with `mark://` links in a table. No special format: the same link extraction the crawler already uses parses it naturally.
 
@@ -131,7 +136,7 @@ Multiple agents can publish their graphs to the same hub:
 
 - Agent A publishes its graph from crawling `mark://server-a.com`
 - Agent B publishes its graph from crawling `mark://server-b.com`
-- Agent C crawls both published graph documents, inheriting both topologies instantly
+- Agent C follows both exports to explore the connected documents
 
 Each published graph is versioned, so you get a history of how the network evolved over time.
 
@@ -144,9 +149,9 @@ Each published graph is versioned, so you get a history of how the network evolv
 | `mark_graph_publish` | Export and publish the graph to a server in one step |
 | `mark_backlinks` | Query the local graph for reverse links |
 
-### Content indexing
-
-Hubs can also host content indexes, hash-based directories that map content hashes to server locations. Use `mark_index` to crawl a server and publish its content index to a hub, and `mark_resolve` to look up content by hash.
+In a [knowledge system](/scenarios/knowledge-system/), the server derives the
+cross-world graph itself. Content-hash lookup and the standalone indexing agent
+have been retired.
 
 ## Certificate renewal
 

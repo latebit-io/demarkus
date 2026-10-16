@@ -127,6 +127,16 @@ body {
     margin: 0 auto;
 }
 
+.beta-note {
+    color: var(--muted);
+    font-size: 0.95rem;
+    margin: 1rem 0;
+}
+
+.beta-note strong {
+    color: var(--gold);
+}
+
 /* ---------- Masthead ---------- */
 
 .site-header {

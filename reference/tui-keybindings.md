@@ -17,6 +17,7 @@ Full keyboard reference for `demarkus-tui`.
 | `[` or `Alt+Left` | Go back |
 | `]` or `Alt+Right` | Go forward |
 | `f` | Focus address bar |
+| `r` | Open cached relations view |
 | `Esc` | Blur address bar / exit bookmarks / dismiss help |
 
 ## Scrolling
@@ -43,9 +44,10 @@ The CLI command `demarkus graph` also persists to the same store.
 
 | Key | Action |
 |-----|--------|
-| `d` | Open graph view / show the links (outbound) view |
-| `r` | Backlinks view: what links to the current node |
+| `d` | Show outbound links; close if already in that view |
+| `r` | Relations view: incoming links and typed relations |
 | `t` | Topology view: the whole crawled graph |
+| `[` / `]` | Previous / next relations page |
 | `j` or `Down` | Select next node |
 | `k` or `Up` | Select previous node |
 | `Enter` | Navigate to selected node |

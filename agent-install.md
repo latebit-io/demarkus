@@ -19,7 +19,7 @@ Goals:
    - For client-only: add --client-only flag
    - For Let's Encrypt TLS: add --domain yourdomain.com --root /srv/site
    - For custom certs: add --tls-cert /path/cert.pem --tls-key /path/key.pem
-   - Optional components (Linux-only): --with-broker (OIDC MCP gateway), --with-library (web reading room)
+   - Optional (Linux-only): --with-library (read-only web reading room)
    - On Linux, run with sudo for server installs
 2. Start demarkus-server and verify client connectivity.
 3. If requested, configure MCP using demarkus-mcp and create/update .mcp.json.
@@ -46,7 +46,7 @@ Constraints:
 
 1. `demarkus-server` starts successfully.
 2. CLI fetch works:
-   - `demarkus --insecure mark://localhost:6309/index.md` (self-signed/local)
+   - `demarkus --insecure mark://localhost:6309/health` (self-signed/local)
    - or without `--insecure` when using trusted TLS.
 3. If MCP configured:
    - `demarkus-mcp` can initialize and `mark_list` works.
@@ -57,4 +57,4 @@ Constraints:
 - [Linux](/install/linux/)
 - [Windows (WSL2)](/install/windows/)
 
-For the agent memory (memory) scenario, see [Agent Memory](/scenarios/agent-memory/).
+For persistent agent memory, see [Agent Memory](/scenarios/agent-memory/).

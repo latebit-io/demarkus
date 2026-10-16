@@ -5,7 +5,7 @@ title: Demarkus
 
 Your agent records decisions, lessons, and progress as it works, and recalls them in every later session. It is your second brain too: journals, logs, and notes with full history. Your team shares one versioned catalog that humans and agents keep current. The [Mark Protocol](/about/) underneath keeps it all portable and self-hostable.
 
-Every link between documents feeds a persistent **knowledge graph**. Agents query backlinks and related documents across sessions, the [TUI](/ecosystem/#demarkus-tui) and [library](/library/) render it, and the [indexing agent](/ecosystem/#indexing-agent) aggregates it across worlds. Memory here is connected knowledge you traverse, not a pile of files.
+Every link between documents feeds a persistent **knowledge graph**. Agents query backlinks and related documents across sessions, the [TUI](/ecosystem/#demarkus-tui) and [library](/library/) render it, and the [knowledge server](/ecosystem/#knowledge-server) derives it across worlds. Memory here is connected knowledge you traverse, not a pile of files.
 
 <div class="memory-demo memory-demo--wide">
   <img src="/demarkus-soul-graph.svg" alt="Knowledge graph of soul.demarkus.io: 261 documents and 840 edges, clustered by prefix, with typed relations highlighted" />
@@ -31,7 +31,7 @@ In **[pi](https://pi.dev)**:
 
 ```bash
 pi install npm:pi-mcp-adapter
-pi install ./demarkus/plugins/pi-memory
+pi install git:github.com/latebit-io/demarkus-pi-memory
 ```
 
 In **[Cursor](https://cursor.com)**, add the repository as a marketplace from the plugins panel, then add the plugin:
@@ -43,13 +43,7 @@ demarkus-memory → Add
 
 All four share the same `~/.demarkus` state, so they coexist on one machine. [Agent memory →](/scenarios/agent-memory/)
 
-Ready to share it? One command turns a fresh Linux host into a whole knowledge system: world server, broker, [reading room](/library/), self-hosted login, HTTPS, and the indexing agent.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-stack.sh | sudo bash
-```
-
-No DNS setup, no accounts. [The five-minute appliance →](/install/stack/)
+Ready to share it? Run a [shared world](/scenarios/team/), or deploy a [knowledge system](/install/stack/) with many worlds, single sign-on, and the [reading room](/library/).
 
 ---
 
@@ -65,21 +59,21 @@ No DNS setup, no accounts. [The five-minute appliance →](/install/stack/)
   <div class="tier">
     <p class="tier-kicker">Team</p>
     <h3>A shared world</h3>
-    <p>One server a group reads, a reading room for humans, MCP for agents. Tokens per person, or the appliance's built-in login.</p>
-    <p class="tier-links"><a href="/install/stack/">Five-minute appliance</a> · <a href="/scenarios/team/">Team knowledge base</a></p>
+    <p>One server a group reads, a reading room for humans, MCP for agents. Capability tokens scope each person's writes.</p>
+    <p class="tier-links"><a href="/scenarios/team/">Team knowledge base</a> · <a href="/library/">The library</a></p>
   </div>
   <div class="tier">
     <p class="tier-kicker">Enterprise</p>
     <h3>A knowledge system</h3>
-    <p>Many worlds behind one broker, your identity provider in front. Teams join with one command; the broker mints per-world tokens.</p>
+    <p>Many worlds behind one gateway, your identity provider in front. Teams join with one command; access is scoped per world.</p>
     <figure class="shot"><a href="/library/"><img src="/assets/img/library-trail.png" alt="The library reading room showing two document panes side by side" /></a></figure>
     <p class="tier-links"><a href="/scenarios/knowledge-system/">Knowledge system</a> · <a href="/library/">The library</a></p>
   </div>
 </div>
 
-Store, verbs, history, and MCP surface are identical at every tier. Only reach and identity change, so moving up is a deployment change rather than a migration. [Compare the tiers →](/scenarios/)
+One versioned document model at every tier. Storage, identity, and discovery scale with the deployment. [Compare the tiers →](/scenarios/)
 
-The tiers compose: anyone runs a personal memory and joins the org system in the same agent. The agent captures to the memory as it works, and `/promote` lifts a ready note up through a curation gate; `/memory-refresh` pulls the authoritative copy back as it changes. [How knowledge flows →](/how-it-works/)
+The tiers compose: anyone runs a personal memory and joins the org system in the same agent. The agent captures to the memory as it works, and `/promote` lifts a ready note up through a curation gate; `/soul-refresh` reconciles it with the shared copy. [How knowledge flows →](/how-it-works/)
 
 ---
 
@@ -88,35 +82,31 @@ The tiers compose: anyone runs a personal memory and joins the org system in the
 The memory and knowledge tiers sit on one foundation: the **Mark Protocol**, versioned markdown served over QUIC. It is:
 
 - **Read-only by default**: no writes without explicit auth tokens
-- **Version-preserving**: every change is kept, nothing is deleted
+- **Version-preserving**: history is kept unless explicitly pruned with retention
 - **Privacy-first**: no tracking, no cookies, no user agents logged
 - **Self-hostable**: one static binary, no dependencies
 - **Graph-aware**: persistent document graph with backlink queries across sessions
 - **OKF-compatible**: interoperates with [Open Knowledge Format](/reference/markdown/#open-knowledge-format-okf-compatibility) v0.1
 
-The servers are **memory storage engines**: versioned, hash-chained document stores kept deliberately simple. Brokers add the service tier: identity, tenancy, and one HTTPS front door. The knowledge broker composes many worlds into an organizational system, and the memory broker serves each identity a private hosted memory from any MCP host (Claude Desktop, ChatGPT, Cursor). The intelligence lives in the agent: lookup, routing, and graph traversal.
+The servers are **memory storage engines**: versioned, hash-chained document stores. `demarkus-knowledge` adds identity, tenancy, and an HTTPS front door in the same process. Its knowledge gateway serves a shared catalog; its memory gateway gives each identity a private world. Agents decide what to recall, record, and promote.
 
 ## Tools
 
 | Tool | Purpose |
 |------|---------|
 | `demarkus-server` | Serve a directory of markdown files |
-| `demarkus-knowledge-server` | Production server hosting many worlds in one process (SNI-routed, GCS-backed) |
-| `demarkus-knowledge-bootstrap` | Initialize a world's GCS bucket and seed its policy |
+| `demarkus-knowledge` | Many GCS-backed worlds, OIDC gateways, and the cross-world graph in one process |
+| `demarkus-knowledge-server` | Multi-world QUIC server without the OIDC gateways |
 | `demarkus` | CLI: fetch, list, publish, edit, graph, lookup, okf |
 | `demarkus-tui` | Terminal browser with graph view |
 | `demarkus-mcp` | MCP server for LLM agents: tools, resources, prompts |
-| `demarkus-agent` | Indexing agent: crawls worlds, aggregates the graph, publishes hub indexes |
-| `demarkus-knowledge-broker` | OIDC-fronted MCP gateway composing many worlds into one system |
-| `demarkus-memory-broker` | OIDC-fronted MCP gateway serving one private memory world per identity (memory as a service) |
 | `demarkus-library` | Web reading room with the AI librarian |
 | `demarkus-token` | Generate capability-based auth tokens |
 | `demarkus-publish` | Write directly to the store for read-only server installs |
-| `demarkus-migrate` | Migrate document history between store backends |
 
 ## Install
 
-- [Five-minute appliance](/install/stack/): the whole system on one host
+- [Knowledge system](/install/stack/): worlds, gateways, and the library with Helm
 - [macOS](/install/macos/) · [Linux](/install/linux/) · [Windows (WSL2)](/install/windows/) · [Docker](/install/docker/)
 
 ## Learn more

@@ -8,7 +8,7 @@ permalink: /setup/
 
 Whole system on one Linux host:
 
-- [Five-minute appliance](/install/stack/): world, broker, library, login, HTTPS
+- [Knowledge system](/install/stack/): worlds, OIDC gateways, and library with Helm
 
 Platform installs:
 

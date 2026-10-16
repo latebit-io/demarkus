@@ -14,7 +14,8 @@ Install the CLI, TUI browser, and MCP server with one command:
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --client-only
 ```
 
-This installs to `~/.local/bin`. Add it to your PATH if needed:
+The installer prefers `/usr/local/bin`, falling back to `~/.local/bin` when sudo
+is unavailable. If it uses the fallback, add it to your PATH:
 
 ```bash
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
@@ -38,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
   bash -s -- --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
 ```
 
-### Without TLS (dev/local only)
+### With self-signed TLS (dev/local)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
@@ -74,7 +75,7 @@ cd demarkus
 make all
 ```
 
-Binaries are placed in `server/bin/`, `client/bin/`, and `tools/bin/`. Requires Go 1.26+.
+Binaries are placed in `server/bin/`, `client/bin/`, `tools/bin/`, and `knowledge/bin/`. Requires Go 1.26+.
 
 ## Upgrade
 

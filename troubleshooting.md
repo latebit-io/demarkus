@@ -10,9 +10,8 @@ permalink: /troubleshooting/
 
 ### `Permission denied` writing to `/usr/local/bin`
 
-On macOS, `/usr/local/bin` is root-owned. The install script handles this:
-- When piped from `curl | bash`, it falls back to `~/.local/bin` automatically.
-- When run interactively, it uses `sudo`.
+The installer tries sudo when `/usr/local/bin` is not writable, including when
+piped from curl. If sudo is unavailable, a fresh install uses `~/.local/bin`.
 
 If you see permission errors, check that `~/.local/bin` is in your PATH:
 
@@ -104,10 +103,10 @@ The content root doesn't exist. Create it:
 
 ```bash
 mkdir -p /srv/site
-echo "# Hello" > /srv/site/index.md
+demarkus-publish -root /srv/site -path /index.md -body "# Hello"
 ```
 
-### Writes returning `403 Forbidden`
+### Writes returning `unauthorized` or `forbidden`
 
 No tokens file is configured, or the token is wrong. Check:
 
@@ -166,7 +165,8 @@ which demarkus-mcp
 
 ### `mark_publish` returns `conflict`
 
-You fetched the document, it was updated by someone else, and your `expected_version` is stale. Re-fetch and retry with the new version number.
+Your `expected_version` is stale. Review the returned merge candidate, or fetch
+the latest body and reconcile your changes before retrying at the new version.
 
 ---
 

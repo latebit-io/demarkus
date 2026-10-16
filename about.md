@@ -12,9 +12,9 @@ self-hostable. It is built on several core principles.
 
 ## Privacy First
 
-- **No user tracking** - Servers do not log IP addresses or user agents.
+- **No user tracking** - No analytics or user-agent tracking.
 - **No cookies** - Stateless by design.
-- **Minimal logging** - Only what is needed for security.
+- **Operational logging** - Errors, rate limits, and writes; security logs may include IP addresses.
 - **Anonymous by default** - Authentication grants capability, not identity.
 
 ## Security Minded

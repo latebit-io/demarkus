@@ -52,7 +52,7 @@ docker run -d \
 Generate a tokens file on the host, then mount it:
 
 ```bash
-demarkus-token generate -label docker -paths "/*" -ops publish -tokens /srv/site/tokens.toml
+demarkus-token generate -label docker -paths "/**" -ops publish -tokens /srv/site/tokens.toml
 ```
 
 ```bash
@@ -76,14 +76,14 @@ services:
       - "6309:6309/udp"
     volumes:
       - /srv/site:/data
-      - /etc/letsencrypt/live/yourdomain.com:/certs:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     command:
       - -root
       - /data
       - -tls-cert
-      - /certs/fullchain.pem
+      - /etc/letsencrypt/live/yourdomain.com/fullchain.pem
       - -tls-key
-      - /certs/privkey.pem
+      - /etc/letsencrypt/live/yourdomain.com/privkey.pem
       - -tokens
       - /data/tokens.toml
 ```
@@ -119,7 +119,7 @@ docker compose up -d
 ## Notes
 
 - The image is built `FROM scratch`: no shell, no OS, just the `demarkus-server` and `demarkus` binaries. Keep this in mind for debugging.
-- Every release also publishes `demarkus-server-pg`, `demarkus-knowledge-server`, `demarkus-knowledge-broker`, `demarkus-memory-broker`, and `demarkus-agent` images, plus Helm charts at `oci://ghcr.io/latebit-io/charts`.
+- Knowledge releases publish `ghcr.io/latebit-io/demarkus-knowledge`, with worlds and gateways in one process. Helm charts live at `oci://ghcr.io/latebit-io/charts`.
 - Content directory and tokens file live on the host via volume mounts, so they persist across container restarts and upgrades.
 - The image exposes UDP port 6309 only. No HTTP, no healthcheck endpoint over TCP.
 

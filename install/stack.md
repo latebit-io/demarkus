@@ -1,107 +1,56 @@
 ---
 layout: default
-title: Five-Minute Appliance
+title: Install a Knowledge System
 permalink: /install/stack/
 ---
 
-# The five-minute appliance
+# Install a knowledge system
 
-One command turns a fresh Linux host into a complete knowledge system: world
-server, broker, [reading room](/library/), self-hosted OIDC, automatic HTTPS, and
-the indexing agent.
+The `demarkus-knowledge-system` Helm chart installs many worlds, OIDC-backed MCP
+gateways, and an optional [reading room](/library/). Declare each world once in
+one values file.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-stack.sh | sudo bash
-```
+The former `install-stack.sh` appliance has been retired.
 
-No flags, no DNS setup, nothing to sign up for.
-
-## What it installs
+## What it runs
 
 | Component | Role |
 |---|---|
-| `demarkus-server` | The world: versioned markdown over QUIC |
-| `demarkus-knowledge-broker` | OIDC-fronted MCP gateway; agents join here |
-| `demarkus-library` | Reading room, plus the AI librarian if you supply a key |
-| `demarkus-agent` | Indexing agent; republishes hub indexes and the link graph every 6 hours |
-| Authelia | Self-hosted identity provider |
-| Caddy | Automatic HTTPS via Let's Encrypt |
+| `demarkus-knowledge` | World storage, identity, MCP gateways, and cross-world graph |
+| `demarkus-library` | Web reading room and optional AI librarian |
 
-It drives the regular [`install.sh`](/install/linux/) for the demarkus
-components, then layers identity and TLS on top.
+The knowledge deployment runs at least two replicas. Each world keeps its history
+in a GCS bucket; the server initializes an empty world on first start.
 
-## What you get
+## Prerequisites
 
-```text
-https://library.<host>     reading room (read + edit)
-https://broker.<host>      MCP gateway
-https://auth.<host>        login
-mark://memory.<host>:6309    the world, direct over QUIC
-```
+- Kubernetes, GCS buckets, and workload identity
+- An OIDC provider and registered client
+- Ingress and TLS for the gateway and library
 
-The install prints a card with the owner login and both join commands:
-
-```text
-Agents join with:   /knowledge-join https://broker.<host>
-Personal memory:    /memory-join mark://memory.<host>:6309#token=<token>
-```
-
-Installs made before the soul to memory rename keep `soul.<host>` as the world hostname; their join line prints that name instead.
-
-## DNS
-
-Without `--domain` the stack names itself `<public-ip>.sslip.io`: real DNS, real
-Let's Encrypt certificates, zero setup. That identity follows the machine's IP, so
-switch to a real domain once you're keeping the system.
-
-With a domain, point one wildcard A record at the host:
-
-```text
-*.kb.example.com    A    <host ip>
-```
+Use the chart's [example values](https://github.com/latebit-io/demarkus/tree/main/deploy/helm/demarkus-knowledge-system)
+to configure worlds, buckets, login, and the library's OAuth client. Then install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-stack.sh | \
-  sudo bash -s -- --domain kb.example.com --owner-email you@example.com
+helm upgrade --install demarkus oci://ghcr.io/latebit-io/charts/demarkus-knowledge-system \
+  --namespace demarkus --create-namespace --values knowledge-system.yaml
 ```
 
-## Options
+Users join the configured gateway:
 
-| Flag | Meaning |
-|---|---|
-| `--domain <host>` | Base domain; `library.`, `broker.`, `auth.`, `memory.` hang off it |
-| `--owner-email <addr>` | First user's email, and the Let's Encrypt contact |
-| `--librarian-key-file <path>` | File holding the LLM API key that enables the [librarian](/library/#configuring-the-provider); pick the provider with `LLM_BASE_URL`/`LLM_MODEL` in the env file |
-| `--library-version <ver>` | Pin a library release instead of the latest |
+```text
+/knowledge-join https://knowledge.example.com
+```
 
-The librarian key rides a `chmod 600` file, never argv, which leaks through `ps`
-and shell history. A group- or world-readable key file is refused.
+## Smaller setup
 
-## Day two
+For one world on a Linux host, install the server with a read-only reading room:
 
 ```bash
-# add users or change the owner password
-sudoedit /etc/demarkus-auth/users.yml
-sudo systemctl restart demarkus-auth
-
-# enable the librarian later (LLM_API_KEY alone uses OpenRouter + Gemini 2.5 Flash;
-# add LLM_BASE_URL and LLM_MODEL for another OpenAI-compatible provider)
-printf 'LLM_API_KEY=%s\n' "$KEY" | sudo tee -a /etc/demarkus-library/env
-sudo systemctl restart demarkus-library
-
-# remove everything
-sudo demarkus-stack uninstall
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
+  sudo bash -s -- --domain docs.example.com --root /srv/site --with-library
 ```
 
-Re-running the installer is safe: it preserves `users.yml`, keeps the configured
-host, and re-converges the services.
-
-Certificates provision on first request, so the first page load takes a few
-seconds. Backlinks and the graph view populate after the agent's first crawl.
-
-## Beyond one box
-
-The appliance is the whole system on a single host. The same architecture at
-cluster scale, with many worlds, GitOps, external secrets, and backups, is the
-[organizational knowledge system](/scenarios/knowledge-system/), deployed from a
-forkable template.
+This uses direct QUIC and capability tokens. See [team setup](/scenarios/team/)
+for shared writes, or [knowledge-system architecture](/scenarios/knowledge-system/)
+for the multi-world deployment.

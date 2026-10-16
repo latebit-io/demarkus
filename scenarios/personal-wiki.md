@@ -24,17 +24,19 @@ Run Demarkus locally as a private knowledge base: browse with the TUI, publish f
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
 ```
 
-This installs the server, client tools, and registers the server as a background service. The content directory (`~/.demarkus/content` by default, or the path you pass with `--root`) is created automatically.
+This installs the server and clients. The examples below use macOS paths;
+Linux installs use `/var/lib/demarkus` for content and `/etc/demarkus` for config.
 
 ### 2. Generate a write token
 
-All writes go through the Mark Protocol. Generate a token to allow publishing:
+Generate a token for private reads and writes:
 
 ```bash
-demarkus-token generate -paths "/*" -ops publish -tokens ~/.demarkus/tokens.toml
+demarkus-token generate -label my-wiki -paths "/**" -ops read,publish -tokens ~/.demarkus/tokens.toml
 ```
 
-Copy the raw token from the output and use it as `$TOKEN` below.
+Copy the raw token and set `DEMARKUS_AUTH` below. Reload or restart the server
+after changing its tokens file.
 
 > If you used the full installer, the tokens file path is already configured. The installer saves an initial token to `~/.demarkus/initial-token.txt`.
 
@@ -46,23 +48,24 @@ If running manually (the installer starts the server automatically as a backgrou
 demarkus-server -root ~/.demarkus/content -tokens ~/.demarkus/tokens.toml
 ```
 
-The server uses a built-in self-signed certificate and listens on `localhost:6309`.
+The server uses a self-signed certificate and listens on UDP 6309 on all
+interfaces. The read token above protects the content.
 
 ### 4. Publish your first documents
 
 Everything goes through the protocol, with no writing files directly to disk:
 
 ```bash
-export TOKEN=<your-token>
+export DEMARKUS_AUTH='your-raw-token'
 
-demarkus --insecure -X PUBLISH -auth $TOKEN \
+demarkus --insecure -X PUBLISH -expected-version 0 \
   -body "# My Wiki
 
 - [Notes](notes.md)
 - [Ideas](ideas.md)" \
   mark://localhost:6309/index.md
 
-demarkus --insecure -X PUBLISH -auth $TOKEN \
+demarkus --insecure -X PUBLISH -expected-version 0 \
   -body "# Notes
 
 Start writing here." \
@@ -97,13 +100,13 @@ demarkus-tui --insecure mark://localhost:6309/index.md
 Fetch a document to stdout:
 
 ```bash
-demarkus --insecure mark://localhost:6309/notes.md
+demarkus --insecure -v mark://localhost:6309/notes.md
 ```
 
-Publish from a file:
+Replace from a file, using the version you just fetched:
 
 ```bash
-demarkus --insecure -X PUBLISH -auth $TOKEN \
+demarkus --insecure -X PUBLISH -expected-version 1 \
   -body "$(cat notes.md)" \
   mark://localhost:6309/notes.md
 ```
@@ -113,7 +116,7 @@ demarkus --insecure -X PUBLISH -auth $TOKEN \
 The `edit` subcommand opens a document in `$EDITOR` and publishes on save:
 
 ```bash
-demarkus edit -auth $TOKEN --insecure mark://localhost:6309/notes.md
+demarkus edit --insecure mark://localhost:6309/notes.md
 ```
 
 If the document doesn't exist yet, it opens an empty editor and creates it on save.

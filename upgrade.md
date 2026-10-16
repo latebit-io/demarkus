@@ -41,10 +41,12 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 ## What gets updated
 
-- `demarkus-server`, `demarkus-token`, `demarkus-publish` (server releases)
+- `demarkus-server` (server release), `demarkus-token` and `demarkus-publish` (tools release)
 - `demarkus`, `demarkus-tui`, `demarkus-mcp` (client releases)
-- `demarkus-knowledge-broker` and `demarkus-library`, when installed via `--with-broker` / `--with-library`
+- `demarkus-library`, when installed via `--with-library`
 - `demarkus-install` (the update helper itself)
+
+Knowledge-system deployments upgrade through Helm or their GitOps configuration.
 
 ## What is preserved
 
@@ -55,9 +57,8 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 ## Check installed version
 
-`demarkus-server -version` prints its release; the client binaries do not
-expose a version flag. The installer records the installed release in a
-version marker:
+`demarkus-server -version` and `demarkus-mcp -version` print their releases.
+The installer also records the installed release in a version marker:
 
 ```bash
 # Linux

@@ -13,7 +13,7 @@ This is the pattern used by the Demarkus project itself. You can browse the live
 ## What you'll have
 
 - A Demarkus server holding structured markdown docs
-- The full MCP surface. Fifteen tools (`mark_fetch`, `mark_list`, `mark_versions`, `mark_lookup`, `mark_explore`, `mark_publish`, `mark_append`, `mark_archive`, `mark_resolve`, `mark_index`, `mark_discover`, `mark_graph`, `mark_backlinks`, `mark_graph_export`, `mark_graph_publish`), plus documents as attachable resources and the `orient` / `recall` / `whats-new` prompts; a broker-fronted [knowledge system](/scenarios/knowledge-system/) adds `mark_worlds` and `mark_lookup_all` for seventeen
+- MCP tools for lookup, reading, writing, graph traversal, and curation. The exposed set depends on the tool profile; a [knowledge system](/scenarios/knowledge-system/) adds world discovery and system-wide lookup
 - Version history of every memory update
 - Persistent document graph with backlink queries
 - The agent reads context at session start and writes updates at the end
@@ -34,11 +34,11 @@ four has one memory, one token, one registry.
 /plugin install demarkus-memory@demarkus
 ```
 
-On the first session it spawns a local `demarkus-server`, auto-generates a publish token, wires the MCP tools, and **seeds the memory**, so you never hand-author an index. It adds the `/memory`, `/memory-context`, `/memory-init`, `/memory-journal`, `/memory-status`, and `/memory-doctor` commands plus a `remember` skill that triggers on "remember / recall / save / note" intents.
+On the first session it spawns a local `demarkus-server`, generates a publish token, wires the MCP tools, and **seeds the memory**. Your memory is also called a soul: `/soul-context`, `/soul-journal`, `/soul-status`, `/soul-doctor`, `/soul-curate`, and `/soul-archive` work on it. The `remember` skill handles recall and recording.
 
 Hooks keep the catalog honest: a publish without tags is caught at write time, an end-of-session nudge asks for a journal entry when files changed but nothing was recorded, and a "did we decide X" question nudges a recall before you answer from context.
 
-Memory is organized **per project**: each one lives under `/<project>/` (the slug is the basename of your project directory) following the canonical layout the plugin seeds as `/project-template.md`. The agent maintains the per-project `index.md` hub itself as it adds documents.
+Memory is organized **per project** under `/<project>/`, following the store's `/.well-known/demarkus/template.md`. A declared root project uses `/`. The agent maintains the project hub as it adds documents.
 
 ### OpenCode
 
@@ -48,9 +48,8 @@ Install `demarkus-opencode-memory` with the standalone installer:
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
 ```
 
-Restart OpenCode. The first session provisions the memory; restart once more so
-OpenCode connects the newly registered MCP server. `/memory-status` diagnoses and
-`/memory-init` reconfigures the installation.
+Restart OpenCode. The first session provisions the memory. `/soul-status`
+diagnoses the connection; `/soul-init` reconfigures it.
 
 ### pi
 
@@ -61,16 +60,14 @@ MCP adapter for the tool surface:
 pi install npm:pi-mcp-adapter
 ```
 
-pi's `git:` installer reads a repository's root `package.json`, so a monorepo
-subdirectory can't be git-installed. Install from a checkout:
+Install from the standalone mirror:
 
 ```bash
-git clone https://github.com/latebit-io/demarkus
-pi install ./demarkus/plugins/pi-memory     # add -l for project-local scope
+pi install git:github.com/latebit-io/demarkus-pi-memory
 ```
 
 The memory provisions on the next session. Run `/mcp` once (or restart pi) to
-connect the newly registered server; `/memory-status` diagnoses, `/memory-init`
+connect the newly registered server; `/soul-status` diagnoses, `/soul-init`
 reconfigures.
 
 ### Cursor
@@ -96,7 +93,7 @@ ln -s "$PWD/demarkus/plugins/cursor-memory" ~/.cursor/plugins/local/demarkus-mem
 
 Restart Cursor. The first conversation provisions the memory; if the
 `demarkus-memory` MCP server shows as failed before that, toggle it once under
-Settings → MCP. `/memory-status` diagnoses, `/memory-init` reconfigures. Cloud
+Settings → MCP. `/soul-status` diagnoses, `/soul-init` reconfigures. Cloud
 agents run no session hooks and cannot reach a local server, so the plugin is
 for the desktop IDE.
 
@@ -124,7 +121,7 @@ That's it: leave it empty. You don't pre-build an index or a structure by hand. 
 ### 3. Generate a publish token
 
 ```bash
-demarkus-token generate -label my-memory -paths "/*" -ops publish -tokens ~/memory/tokens.toml
+demarkus-token generate -label my-memory -paths "/**" -ops publish -tokens ~/memory/tokens.toml
 ```
 
 `-label` is required. A single `publish` op is all you need; it authorizes `PUBLISH`, `APPEND`, and `ARCHIVE` (there is no separate `archive` operation). Copy the raw token from the output, since you'll need it for the MCP config.
@@ -195,10 +192,10 @@ All project context lives on the memory server, organized per project under
 Open a Claude Code session and run:
 
 ```
-Please fetch mark://localhost:6310/index.md and summarize what you find.
+Please check mark://localhost:6310/health, then initialize this project's memory.
 ```
 
-The agent should use `mark_fetch` and return the contents of your index.
+The agent should verify connectivity and create the project's hub and first notes.
 
 ## Graph exploration
 
@@ -217,11 +214,11 @@ mark_discover
 
 `mark_graph` crawls outbound links from a document, building a persistent graph stored at `~/.mark/graph.json`. Each crawl merges into the existing graph, so knowledge accumulates across sessions.
 
-`mark_backlinks` queries the stored graph for reverse links: "what documents link here?" This enables agents to understand document relationships without re-crawling.
+`mark_backlinks` queries reverse links with bounded source revalidation. Results carry revision and freshness information.
 
 ### Sharing the graph
 
-Agents can export and publish their crawled graph so other agents can discover the topology without recrawling:
+The full tool profile can export and publish the graph as markdown:
 
 ```
 # Export the graph as publishable markdown
@@ -231,14 +228,14 @@ mark_graph_export
 mark_graph_publish url="/graphs/my-network.md" expected_version=0
 ```
 
-The published graph is plain markdown with `mark://` links. Other agents can crawl it with `mark_graph` to inherit the topology instantly. See the [Public Hub](/scenarios/public-hub/) scenario for multi-agent discovery patterns.
+The published graph contains `mark://` links that other agents can follow. See the [Public Hub](/scenarios/public-hub/) scenario.
 
 ## Recommended memory structure
 
 Memory is organized **per project**. Each project lives under `/<project>/`
 (the slug is the basename of your project directory, lowercased, spaces →
 hyphens) and follows the canonical layout, the same one the plugin seeds as
-`/project-template.md`:
+`/.well-known/demarkus/template.md`:
 
 ```
 /<project>/index.md              # the project hub; links to every doc below
@@ -262,23 +259,22 @@ the per-project `index.md` current as the discovery backstop for anything
 
 > A single-project memory can instead keep these files flat at the root (no
 > `/<project>/` prefix). That's what the Demarkus project's own memory at
-> `mark://soul.demarkus.io` does: a documented exception, not the default.
+> `mark://soul.demarkus.io` does, declared by `root_project` in its template.
 
 ## Remote memories and promotion
 
-A memory does not have to be local. `/memory-join` takes a join URL (host and token
+A memory does not have to be local. `/soul-join` takes a join URL (host and token
 in one paste-able string), registers that server as an MCP server, and binds it to
-the current project. `/memory-default` picks which joined memory a project writes to
+the current project. `/soul-default` picks which joined memory a project writes to
 when several exist, and the binding is enforced at write time rather than left to
-convention. The [appliance](/install/stack/) prints a ready-made join URL for its
-world.
+convention. `demarkus-token join -host <host> -token <token>` builds a join URL.
 
 When a note is ready for other people, `/promote <path>` lifts it to a joined
 [knowledge system](/scenarios/knowledge-system/): the cascade distills it, strips
 personal framing and secrets, dedups against the shared catalog, tags it to that
 system's taxonomy, picks a writable world, and stops at a human gate before
-publishing. `/promote-scan` sweeps the memory for candidates; `/memory-refresh` pulls
-promoted documents back down as the authoritative copy evolves.
+publishing. `/promote-scan` finds candidates; `/soul-refresh` reconciles promoted
+notes with the authoritative copy through review.
 
 Memory is the draft tier, the knowledge system is the authoritative one. Nothing
 auto-publishes. [How knowledge flows](/how-it-works/) walks the whole loop end to

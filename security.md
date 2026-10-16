@@ -14,10 +14,10 @@ The server is deliberately minimal:
 
 - **No code execution**: serves and stores markdown text, nothing else
 - **No shell access**: no CGI, no templates, no scripting
-- **No database**: documents are files on disk
-- **No sessions or cookies**: stateless request handling
-- **Single directory**: all reads and writes are scoped to the content root
-- **7 verbs**: FETCH, LIST, VERSIONS, LOOKUP (read), PUBLISH, APPEND, ARCHIVE (write)
+- **Versioned storage**: local files, or per-world GCS buckets in a knowledge system
+- **No protocol cookies**: OIDC gateways and the library manage login separately
+- **Scoped storage**: reads and writes stay within the selected world
+- **8 verbs**: FETCH, LIST, VERSIONS, LOOKUP, WATCH (read), PUBLISH, APPEND, ARCHIVE (write)
 - **Encrypted transport**: QUIC with TLS (self-signed for local, real certs for production)
 - **Size limits**: 1 MiB body, 64 KB frontmatter per request
 - **Rate limiting**: per-IP request throttling built in
@@ -25,10 +25,11 @@ The server is deliberately minimal:
 
 ## Authentication
 
-Write operations (PUBLISH, APPEND, ARCHIVE) require a capability token: a SHA-256 hash scoped to specific paths and to an access class (read or write).
+Standalone-server writes (PUBLISH, APPEND, ARCHIVE) require a capability token: a random
+secret stored server-side as a SHA-256 hash, scoped to paths and operations.
 
 - Tokens are generated offline with `demarkus-token generate`
-- Tokens can be scoped to path patterns (e.g., `/docs/*`) and to an access class. The write capability is a single `publish` op that grants PUBLISH, APPEND, and ARCHIVE together: these are not individually grantable. Reads are a separate `read` op, only enforced on paths where a read token exists.
+- Tokens scope paths: `/docs/*` matches one segment, `/docs/**` includes descendants. The `publish` op grants PUBLISH, APPEND, and ARCHIVE together. The separate `read` op gates reads on its paths.
 - Every write is logged with the token label for auditing
 - Tokens are revocable by removing them from the tokens file and sending SIGHUP
 - Read auth is opt-in: configure read tokens for private paths when needed
@@ -47,10 +48,10 @@ Retention is the store's only destructive operation. It needs no extra capabilit
 
 Mitigation:
 
-- Scope tokens narrowly (e.g., `/blog/*` instead of `/*`)
+- Scope tokens narrowly (e.g., `/blog/**` instead of `/**`)
 - Rotate tokens periodically
 - Review audit logs for unexpected writes
-- Every version is immutable: overwritten content is still in the version history
+- Versions are immutable; older content remains unless explicitly pruned
 
 ## What a Compromised Server Gets You
 
@@ -148,13 +149,14 @@ Full versioning is preserved: `demarkus-publish` uses the same store code as the
 
 ## Knowledge system (broker)
 
-In a [knowledge system](/scenarios/knowledge-system/) the broker is the only public surface and worlds stay private behind it.
+In a [knowledge system](/scenarios/knowledge-system/), OIDC gateways front the
+worlds. Direct QUIC access is a separate deployment choice.
 
-- Users never hold a world token. They authenticate against your IdP; the broker mints a scoped token per world and proxies the request.
+- Users authenticate against your IdP. Gateway calls reach worlds in process under each world's access and write scope, without minting world tokens.
 - Auth follows the MCP authorization spec: discovery (RFC 8414 / 9728), dynamic client registration (RFC 7591), then authorization code with PKCE.
 - The [library](/library/) in broker mode is a confidential web client: tokens stay server-side, the browser holds an opaque session cookie, and state-changing requests carry CSRF protection.
 - The AI librarian works only the read ports the reader has, so it cannot surface a document the reader could not fetch.
-- Compromising the broker exposes what the worlds behind it serve to authenticated callers; it does not grant write capability beyond the tokens it can mint.
+- A compromised knowledge process can access the worlds and buckets its service identity can reach.
 
 ## Comparison
 
@@ -164,7 +166,7 @@ In a [knowledge system](/scenarios/knowledge-system/) the broker is the only pub
 | Database | Full access | Often | None | None |
 | Write scope | Entire machine | Varies | None (read-only) | Content dir only |
 | Auth model | Keys / passwords | Sessions / cookies | Client certs | Capability tokens |
-| Worst case | Full compromise | RCE, data breach | DoS | Markdown overwrite |
+| Write-token compromise | Full access within account | Application-dependent | Not applicable | Scoped content changes and history pruning |
 
 ## Related
 
