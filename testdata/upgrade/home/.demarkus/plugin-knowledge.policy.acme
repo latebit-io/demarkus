@@ -1,0 +1,3 @@
+# Atomic mirrored publish policy.
+strictness: block
+require_tags: category

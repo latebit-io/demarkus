@@ -1,0 +1,145 @@
+{
+  "version": 4,
+  "nodes": [
+    {
+      "observation": {
+        "source": "mark://localhost:6310/fixture/journal/2026-10-16.md",
+        "view": "document",
+        "revision": 1,
+        "etag": "77d6c483fe30037862a355458ba1a0050879513afaa41a196bed2d120e4d91da",
+        "complete": true,
+        "observed_at": "2026-10-16T15:47:58.915089674Z",
+        "attempted_at": "2026-10-16T15:47:58.915089674Z"
+      },
+      "url": "mark://localhost:6310/fixture/journal/2026-10-16.md",
+      "title": "Fixture journal: 2026-10-16",
+      "status": "ok",
+      "link_count": 0,
+      "etag": "77d6c483fe30037862a355458ba1a0050879513afaa41a196bed2d120e4d91da",
+      "crawled_at": "2026-10-16T15:47:58.915198632Z"
+    },
+    {
+      "observation": {
+        "source": "mark://localhost:6310/fixture/old.md",
+        "view": "document",
+        "revision": 1,
+        "complete": true,
+        "observed_at": "2026-10-16T15:47:57.91275839Z",
+        "attempted_at": "2026-10-16T15:47:57.91275839Z"
+      },
+      "url": "mark://localhost:6310/fixture/old.md",
+      "title": "",
+      "status": "archived",
+      "link_count": 0,
+      "crawled_at": "2026-10-16T15:47:57.912763181Z"
+    },
+    {
+      "observation": {
+        "source": "mark://localhost:6310/fixture/adr/0001-decision.md",
+        "view": "document",
+        "revision": 2,
+        "complete": true,
+        "observed_at": "2026-10-16T15:47:54.905353705Z",
+        "attempted_at": "2026-10-16T15:47:58.914033593Z",
+        "problem": "revision-conflict"
+      },
+      "url": "mark://localhost:6310/fixture/adr/0001-decision.md",
+      "title": "Decision",
+      "status": "ok",
+      "link_count": 0,
+      "crawled_at": "2026-10-16T15:47:54.905436288Z"
+    },
+    {
+      "observation": {
+        "source": "mark://localhost:6310/fixture/index.md",
+        "view": "document",
+        "revision": 3,
+        "etag": "4e0ffc854d8d49b90f9a93301b1fe3f88c7de42deea5118f1f3db5b44c276e30",
+        "complete": true,
+        "observed_at": "2026-10-16T15:47:58.911834222Z",
+        "attempted_at": "2026-10-16T15:47:58.911834222Z"
+      },
+      "url": "mark://localhost:6310/fixture/index.md",
+      "title": "Fixture",
+      "status": "ok",
+      "link_count": 2,
+      "etag": "4e0ffc854d8d49b90f9a93301b1fe3f88c7de42deea5118f1f3db5b44c276e30",
+      "crawled_at": "2026-10-16T15:47:58.915198632Z"
+    },
+    {
+      "observation": {
+        "source": "mark://localhost:6310/fixture/journal/",
+        "view": "document",
+        "etag": "b73f08d5e6be8d99b55e6c3cae1078f09a7c7b3b972091b9d681b40146c6f39d",
+        "complete": true,
+        "observed_at": "2026-10-16T15:47:58.914195759Z",
+        "attempted_at": "2026-10-16T15:47:58.914195759Z"
+      },
+      "url": "mark://localhost:6310/fixture/journal/",
+      "title": "Index of /fixture/journal/",
+      "status": "ok",
+      "link_count": 1,
+      "etag": "b73f08d5e6be8d99b55e6c3cae1078f09a7c7b3b972091b9d681b40146c6f39d",
+      "crawled_at": "2026-10-16T15:47:58.915198632Z"
+    }
+  ],
+  "edges": [
+    {
+      "from": "mark://localhost:6310/fixture/adr/0001-decision.md",
+      "to": "mark://localhost:6310/fixture/index.md",
+      "rel": "related",
+      "count": 1
+    },
+    {
+      "from": "mark://localhost:6310/fixture/index.md",
+      "to": "mark://localhost:6310/fixture/adr/0001-decision.md",
+      "label": "Decision",
+      "anchor": "fixture",
+      "count": 1
+    },
+    {
+      "from": "mark://localhost:6310/fixture/index.md",
+      "to": "mark://localhost:6310/fixture/journal/",
+      "label": "Journal",
+      "anchor": "journal",
+      "count": 1
+    },
+    {
+      "from": "mark://localhost:6310/fixture/journal/",
+      "to": "mark://localhost:6310/fixture/journal/2026-10-16.md",
+      "label": "2026-10-16.md",
+      "anchor": "index-of-fixturejournal",
+      "count": 1
+    }
+  ],
+  "source_revisions": {
+    "mark://localhost:6310/fixture/adr/0001-decision.md": 2,
+    "mark://localhost:6310/fixture/index.md": 3,
+    "mark://localhost:6310/fixture/journal/2026-10-16.md": 1,
+    "mark://localhost:6310/fixture/old.md": 1
+  },
+  "evidence": {
+    "mark://localhost:6310/fixture/adr/0001-decision.md": {
+      "revision": 2,
+      "occurrences": [
+        {
+          "To": "mark://localhost:6310/fixture/index.md",
+          "Rel": "related",
+          "Fragment": "",
+          "Anchor": "",
+          "Label": "",
+          "Ordinal": 0
+        }
+      ]
+    },
+    "mark://localhost:6310/fixture/journal/2026-10-16.md": {
+      "revision": 1,
+      "etag": "77d6c483fe30037862a355458ba1a0050879513afaa41a196bed2d120e4d91da",
+      "occurrences": null
+    },
+    "mark://localhost:6310/fixture/old.md": {
+      "revision": 1,
+      "occurrences": null
+    }
+  }
+}

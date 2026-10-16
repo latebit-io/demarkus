@@ -1,0 +1,86 @@
+---
+cursor: 8e78fc142f69:0
+status: ok
+tree: "00000000000000000000000000000000"
+---
+---
+agent: unknown
+cursor: 8e78fc142f69:1
+hash: sha256-71934fc4c52bdaac5d5243fb8d54dc70ad35a530cf01b6e345f1e8043923abbe
+op: publish
+path: /fixture/index.md
+tree: 80ed0d42718f7f48db5849d0a960651a
+version: "1"
+---
+---
+agent: capture
+cursor: 8e78fc142f69:2
+hash: sha256-6ccb90a9d382a279b4d0b18865282c2dd7d5697eb789dc3b97be27869af34bd7
+op: publish
+path: /fixture/adr/0001-decision.md
+tree: b45736fdad8c272759fd152eb876630a
+version: "1"
+---
+---
+agent: capture
+cursor: 8e78fc142f69:3
+hash: sha256-31cb65128e5dcbbc5f1b9ad43080c133b71c62d738c204a4c24dd4b0d676b99a
+op: publish
+path: /fixture/adr/0001-decision.md
+tree: de97b99bef353f9daed48e3cd122d168
+version: "2"
+---
+---
+agent: capture
+cursor: 8e78fc142f69:4
+hash: sha256-9dc297036d4524a37d5a20b36698f35198d2f85ad185ce86e9cc40474e6c0261
+op: publish
+path: /fixture/journal/2026-10-16.md
+tree: 2935b7ab4596ea5cba3028c6ffca2b28
+version: "1"
+---
+---
+agent: capture
+cursor: 8e78fc142f69:5
+hash: sha256-87a27cc348bd8ff8e55e79c3dfc47b284dfeda4b7fe000cffbd3a4dc0596cf79
+op: publish
+path: /fixture/index.md
+tree: 2c3ab003f0944cf3c668284e96aef10e
+version: "2"
+---
+---
+agent: capture
+cursor: 8e78fc142f69:6
+hash: sha256-69c0b81231e22f9554cef5e2693a6eb0b958de830057a7569c3726c20d7c8ec0
+op: publish
+path: /index.md
+tree: 565800d76b9c81f68af3839aeb63a4fb
+version: "1"
+---
+---
+agent: capture
+cursor: 8e78fc142f69:7
+hash: sha256-393a6582d04bfcd2cf035c58d8a64749ae8d4ff6cdc4431b4674f80092dd91e4
+op: publish
+path: /fixture/old.md
+tree: 26ce67c15d3bbf94991a6963bdfe0326
+version: "1"
+---
+---
+agent: capture
+cursor: 8e78fc142f69:8
+hash: sha256-393a6582d04bfcd2cf035c58d8a64749ae8d4ff6cdc4431b4674f80092dd91e4
+op: archive
+path: /fixture/old.md
+tree: 565800d76b9c81f68af3839aeb63a4fb
+version: "1"
+---
+---
+agent: capture
+cursor: 8e78fc142f69:9
+hash: sha256-413a474cce6a7af3745ad5bc4ec5df04aa9bab25b4cd997d0af07d65dbc212ba
+op: publish
+path: /fixture/index.md
+tree: d59e9dce2608204656ba9efc582cfbbc
+version: "3"
+---

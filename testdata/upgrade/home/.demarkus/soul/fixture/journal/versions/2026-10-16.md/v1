@@ -1,0 +1,13 @@
+---
+version: 1
+archived: false
+meta.agent: capture
+meta.importance: 0.4
+tags: [journal, fixture]
+type: Journal
+---
+# Fixture journal: 2026-10-16
+
+## Captured
+
+Upgrade fixture written by the released plugin.
