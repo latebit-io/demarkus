@@ -66,7 +66,7 @@ func main() {
 	// notification is what makes them appear without a reconnect.
 	s := mcpserver.NewMCPServer("demarkus-mcp", version,
 		mcpserver.WithResourceCapabilities(false, true),
-		mcpserver.WithInstructions(hostInstructions(*defaultHost)+" "+mcpfmt.SectionFirst+" "+mcpfmt.ReadOutcomes),
+		mcpserver.WithInstructions(serverInstructions(*defaultHost)),
 	)
 
 	gs, gsErr := graphstore.Load(graphstore.DefaultPath())
@@ -245,6 +245,11 @@ func (h *handler) resolveURL(rawURL string) (links.Target, error) {
 
 // hostInstructions tells the model how to address documents. It rides the
 // server instructions once instead of every tool description.
+// serverInstructions is what initialize tells the agent, once per session.
+func serverInstructions(host string) string {
+	return hostInstructions(host) + " " + mcpfmt.SectionFirst + " " + mcpfmt.ReadOutcomes
+}
+
 func hostInstructions(host string) string {
 	if host != "" {
 		return fmt.Sprintf("Connected to %s; use bare paths like /index.md.", host)

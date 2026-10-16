@@ -1,5 +1,5 @@
-// Package mcpfmttest pins the tools/list contract of the MCP surfaces in
-// golden files, so a changed name, parameter or description shows in review.
+// Package mcpfmttest pins what the MCP surfaces show an agent, the tool list
+// and the server instructions, in golden files that show every change in review.
 package mcpfmttest
 
 import (
@@ -14,15 +14,21 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// ToolsGolden fails when tools differ from the golden file at path, or
-// rewrites the file under UPDATE_GOLDEN=1, the knowledge module's convention.
-// Tools sort by name: registration order is not part of the contract.
+// ToolsGolden pins tools/list in the golden file at path. Tools sort by
+// name: registration order is not part of the contract.
 func ToolsGolden(t testing.TB, path string, tools []mcp.Tool) {
 	t.Helper()
 	got, err := render(tools)
 	if err != nil {
 		t.Fatal(err)
 	}
+	Golden(t, path, got)
+}
+
+// Golden fails when got differs from the golden file at path, or rewrites
+// the file under UPDATE_GOLDEN=1, the knowledge module's convention.
+func Golden(t testing.TB, path string, got []byte) {
+	t.Helper()
 	if os.Getenv("UPDATE_GOLDEN") == "1" {
 		if err := os.WriteFile(path, got, 0o600); err != nil {
 			t.Fatal(err)
@@ -34,7 +40,7 @@ func ToolsGolden(t testing.TB, path string, tools []mcp.Tool) {
 		t.Fatalf("read golden (create it with UPDATE_GOLDEN=1): %v", err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatalf("%s: %s\nthe served tool list changed: review it, then rerun with UPDATE_GOLDEN=1", path, firstDiff(want, got))
+		t.Fatalf("%s: %s\nwhat the agent sees changed: review it, then rerun with UPDATE_GOLDEN=1", path, firstDiff(want, got))
 	}
 }
 

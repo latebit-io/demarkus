@@ -12,32 +12,6 @@ import (
 // host mode; the URL form is stated once in the server instructions.
 const mcpURLDesc = "mark:// URL, e.g. mark://team-a/index.md"
 
-// mcpToolNames is the canonical list of tool names the broker MCP
-// gateway exposes. The order matches mcpTools() — both lists are
-// kept in sync so a tools/list regression test can assert the
-// expected surface in one fixed comparison rather than parsing every
-// description.
-var mcpToolNames = []string{
-	"mark_fetch",
-	"mark_explore",
-	"mark_list",
-	"mark_versions",
-	"mark_lookup",
-	"mark_lookup_all",
-	"mark_publish",
-	"mark_append",
-	"mark_archive",
-	"mark_discover",
-	"mark_backlinks",
-	"mark_graph",
-	"mark_graph_export",
-	"mark_graph_publish",
-	"mark_worlds",
-	"mark_doctor",
-	"mark_curate",
-	"mark_promote",
-}
-
 // mcpTools returns the direct-MCP parity tools plus broker-only mark_worlds and
 // mark_lookup_all, which operate on the knowledge system rather than one world.
 func mcpTools() []mcp.Tool {

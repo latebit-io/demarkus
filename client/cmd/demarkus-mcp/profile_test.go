@@ -29,20 +29,12 @@ func profileSchemas(host, profile string) []mcp.Tool {
 func TestToolProfiles(t *testing.T) {
 	full := profileSchemas(exampleHost, mcpfmt.ProfileFull)
 	lean := profileSchemas(exampleHost, mcpfmt.ProfileLean)
-	if len(full) != 16 {
-		t.Fatalf("full profile = %d tools, want 16", len(full))
-	}
 	if len(lean) != len(full)-len(mcpfmt.AdvancedTools) {
 		t.Fatalf("lean profile = %d tools, want %d", len(lean), len(full)-len(mcpfmt.AdvancedTools))
 	}
 	for _, tool := range lean {
 		if mcpfmt.AdvancedTools[tool.Name] {
 			t.Errorf("lean profile exposes advanced tool %s", tool.Name)
-		}
-	}
-	for _, tool := range full {
-		if !mcpfmt.KnownTools[tool.Name] {
-			t.Errorf("%s is served but missing from mcpfmt.KnownTools", tool.Name)
 		}
 	}
 }

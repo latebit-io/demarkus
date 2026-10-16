@@ -116,7 +116,7 @@ reviews:
         these schemas on every request in eager-loading hosts. Same rule as
         client/cmd/demarkus-mcp: 1-3 terse sentences per description, no
         rationale, keep the mark:// URL hint every test asserts on, and
-        keep mcpToolNames in sync with mcpTools()
+        regenerate the testdata goldens (UPDATE_GOLDEN=1) with any change
 
     - path: "plugins/prompt-source/**"
       instructions: >
