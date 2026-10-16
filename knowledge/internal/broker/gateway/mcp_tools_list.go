@@ -12,32 +12,6 @@ import (
 // host mode; the URL form is stated once in the server instructions.
 const mcpURLDesc = "mark:// URL, e.g. mark://team-a/index.md"
 
-// mcpToolNames is the canonical list of tool names the broker MCP
-// gateway exposes. The order matches mcpTools() — both lists are
-// kept in sync so a tools/list regression test can assert the
-// expected surface in one fixed comparison rather than parsing every
-// description.
-var mcpToolNames = []string{
-	"mark_fetch",
-	"mark_explore",
-	"mark_list",
-	"mark_versions",
-	"mark_lookup",
-	"mark_lookup_all",
-	"mark_publish",
-	"mark_append",
-	"mark_archive",
-	"mark_discover",
-	"mark_backlinks",
-	"mark_graph",
-	"mark_graph_export",
-	"mark_graph_publish",
-	"mark_worlds",
-	"mark_doctor",
-	"mark_curate",
-	"mark_promote",
-}
-
 // mcpTools returns the direct-MCP parity tools plus broker-only mark_worlds and
 // mark_lookup_all, which operate on the knowledge system rather than one world.
 func mcpTools() []mcp.Tool {
@@ -76,11 +50,11 @@ func markLookupTool() mcp.Tool {
 		mcp.WithDescription(mcpfmt.LookupDescription + " A world without body match answers from the catalog and says so; system-wide: mark_lookup_all."),
 		mcp.WithString("url", mcp.Required(), mcp.Description(mcpfmt.ScopeDesc("mark://{worldName}/"))),
 	}, mcpfmt.LookupParams()...)
-	return mcp.NewTool("mark_lookup", options...)
+	return mcpfmt.NewTool("mark_lookup", options...)
 }
 
 func markLookupAllTool() mcp.Tool {
-	return mcp.NewTool("mark_lookup_all",
+	return mcpfmt.NewTool("mark_lookup_all",
 		mcp.WithDescription(
 			"Catalog lookup by subject across all readable worlds. One globally limited table of mark://{worldName}/{path} rows; partial world failures reported with matches. match=body also matches section text; budget>0 appends sections.",
 		),
@@ -109,7 +83,7 @@ func markCurateTool() mcp.Tool { return mcpfmt.CurateTool(mcpURLDesc, "") }
 func markPromoteTool(phases []string) mcp.Tool { return mcpfmt.PromoteTool(mcpURLDesc, "", phases) }
 
 func markDiscoverTool() mcp.Tool {
-	return mcp.NewTool("mark_discover",
+	return mcpfmt.NewTool("mark_discover",
 		mcp.WithDescription(mcpfmt.DiscoverDescription),
 		mcp.WithString("url", mcp.Required(), mcp.Description(mcpURLDesc)),
 	)
@@ -122,7 +96,7 @@ func markGraphTool() mcp.Tool { return mcpfmt.GraphTool(mcpURLDesc, "") }
 func markGraphExportTool() mcp.Tool { return mcpfmt.GraphExportTool("") }
 
 func markWorldsTool() mcp.Tool {
-	return mcp.NewTool("mark_worlds",
+	return mcpfmt.NewTool("mark_worlds",
 		mcp.WithDescription("Readable worlds with a writable flag. Columns: world ({worldName} in mark://{worldName}/{path}), url, address, writable. Discover the system and pick a write destination."),
 	)
 }

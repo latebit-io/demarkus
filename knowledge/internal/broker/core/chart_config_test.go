@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// The chart's secret-broker-config.yaml renders this fixture, checked by CI's
-// test-charts job, which holds the command; a key the chart emits that the
-// loader no longer knows fails here, not at pod start.
+// scripts/check-chart-fixtures.sh renders this fixture from the chart, and CI
+// checks it is current; a key the chart emits that the loader no longer knows
+// fails here, not at pod start.
 func TestLoadConfigAcceptsTheChartRendering(t *testing.T) {
 	clearConfigEnv(t)
 	cfg, err := LoadConfig(filepath.Join("testdata", "chart-rendered-config.yaml"))

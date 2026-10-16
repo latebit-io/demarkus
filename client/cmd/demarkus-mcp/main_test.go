@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"slices"
 	"strings"
 	"testing"
 
@@ -12,7 +11,6 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/graphstore"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -89,121 +87,6 @@ func TestResolveURL(t *testing.T) {
 	}
 }
 
-func TestToolDefinitions(t *testing.T) {
-	tests := []struct {
-		name         string
-		tool         mcp.Tool
-		wantName     string
-		wantRequired []string
-		wantDesc     string // substring to check
-	}{
-		{
-			name:         "mark_fetch with host",
-			tool:         mcpfmt.FetchTool(urlDesc("mark://example.com:6309"), ""),
-			wantName:     "mark_fetch",
-			wantRequired: []string{"url"},
-			wantDesc:     "Fetch a document",
-		},
-		{
-			name:         "mark_backlinks",
-			tool:         mcpfmt.BacklinksTool(urlDesc(""), ""),
-			wantName:     "mark_backlinks",
-			wantRequired: []string{"url"},
-			wantDesc:     "Documents linking to a URL",
-		},
-		{
-			name:         "mark_fetch without host",
-			tool:         mcpfmt.FetchTool(urlDesc(""), ""),
-			wantName:     "mark_fetch",
-			wantRequired: []string{"url"},
-			wantDesc:     "Fetch a document",
-		},
-		{
-			name:         "mark_list",
-			tool:         mcpfmt.ListTool(urlDesc(""), ""),
-			wantName:     "mark_list",
-			wantRequired: []string{"url"},
-			wantDesc:     "List documents",
-		},
-		{
-			name:         "mark_graph",
-			tool:         mcpfmt.GraphTool(urlDesc(""), ""),
-			wantName:     "mark_graph",
-			wantRequired: []string{"url"},
-			wantDesc:     "Crawl outbound links",
-		},
-		{
-			name:         "mark_versions",
-			tool:         mcpfmt.VersionsTool(urlDesc(""), ""),
-			wantName:     "mark_versions",
-			wantRequired: []string{"url"},
-			wantDesc:     "Version history",
-		},
-		{
-			name:         "mark_publish",
-			tool:         mcpfmt.PublishTool(urlDesc(""), requiresToken),
-			wantName:     "mark_publish",
-			wantRequired: []string{"url", "body", "expected_version"},
-			wantDesc:     "Publish or update",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.tool.Name != tt.wantName {
-				t.Errorf("name = %q, want %q", tt.tool.Name, tt.wantName)
-			}
-			if !strings.Contains(tt.tool.Description, tt.wantDesc) {
-				t.Errorf("description %q does not contain %q", tt.tool.Description, tt.wantDesc)
-			}
-			schema := tt.tool.InputSchema
-			for _, req := range tt.wantRequired {
-				if !slices.Contains(schema.Required, req) {
-					t.Errorf("required params %v missing %q", schema.Required, req)
-				}
-				if _, ok := schema.Properties[req]; !ok {
-					t.Errorf("properties missing key %q", req)
-				}
-			}
-		})
-	}
-}
-
-func TestHostInstructions(t *testing.T) {
-	t.Run("with host", func(t *testing.T) {
-		hint := hostInstructions("mark://example.com:6309")
-		if !strings.Contains(hint, "example.com:6309") {
-			t.Errorf("hint %q should contain the host", hint)
-		}
-		if !strings.Contains(hint, "bare paths") {
-			t.Errorf("hint %q should mention bare paths", hint)
-		}
-	})
-
-	t.Run("without host", func(t *testing.T) {
-		hint := hostInstructions("")
-		if !strings.Contains(hint, "mark://") {
-			t.Errorf("hint %q should mention mark:// URLs", hint)
-		}
-	})
-}
-
-func TestURLDesc(t *testing.T) {
-	t.Run("with host", func(t *testing.T) {
-		desc := urlDesc("mark://example.com:6309")
-		if !strings.Contains(desc, "path, e.g. /") {
-			t.Errorf("desc %q should show a bare path example", desc)
-		}
-	})
-
-	t.Run("without host", func(t *testing.T) {
-		desc := urlDesc("")
-		if !strings.Contains(desc, "mark://") {
-			t.Errorf("desc %q should mention mark:// URL", desc)
-		}
-	})
-}
-
 // newCallToolRequest builds a CallToolRequest with the given arguments.
 func newCallToolRequest(args map[string]any) mcp.CallToolRequest {
 	return mcp.CallToolRequest{
@@ -270,21 +153,6 @@ func TestHandlerMarkPublish_NoToken(t *testing.T) {
 	assertIsToolError(t, result, "requires a token")
 }
 
-func TestToolDefinition_MarkDiscover(t *testing.T) {
-	t.Run("url is optional", func(t *testing.T) {
-		tool := markDiscoverTool()
-		if tool.Name != "mark_discover" {
-			t.Errorf("name = %q, want mark_discover", tool.Name)
-		}
-		if slices.Contains(tool.InputSchema.Required, "url") {
-			t.Error("url should not be required")
-		}
-		if !strings.Contains(tool.Description, "agent manifest") {
-			t.Error("description should mention agent manifest")
-		}
-	})
-}
-
 func TestHandlerMarkDiscover_NoHostNoURL(t *testing.T) {
 	h := &handler{client: &stubClient{}} // no default host
 	ctx := context.Background()
@@ -305,19 +173,6 @@ func TestHandlerMarkDiscover_InvalidURL(t *testing.T) {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
 	assertIsToolError(t, result, "requires -host flag")
-}
-
-func TestToolDefinition_MarkAppend(t *testing.T) {
-	tool := mcpfmt.AppendTool(urlDesc("mark://example.com:6309"), requiresToken)
-	if tool.Name != "mark_append" {
-		t.Errorf("name = %q, want mark_append", tool.Name)
-	}
-	if slices.Contains(tool.InputSchema.Required, "expected_version") {
-		t.Error("expected_version should not be required")
-	}
-	if !strings.Contains(tool.Description, "optional") {
-		t.Error("description should mention expected_version is optional")
-	}
 }
 
 func TestHandlerMarkAppend_NoToken(t *testing.T) {
@@ -547,19 +402,6 @@ func TestHandlerMarkGraphExport(t *testing.T) {
 	}
 	if !strings.Contains(text.Text, "## Edges") {
 		t.Error("expected edges section in output")
-	}
-}
-
-func TestToolDefinition_MarkGraphPublish(t *testing.T) {
-	tool := mcpfmt.GraphPublishTool("graph document target, e.g. "+urlDesc(""), requiresToken)
-	if tool.Name != "mark_graph_publish" {
-		t.Errorf("name = %q, want mark_graph_publish", tool.Name)
-	}
-	if !slices.Contains(tool.InputSchema.Required, "url") {
-		t.Error("url should be required")
-	}
-	if !slices.Contains(tool.InputSchema.Required, "expected_version") {
-		t.Error("expected_version should be required")
 	}
 }
 

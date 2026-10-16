@@ -90,8 +90,8 @@ func TestMCPGatewayToolsListMatchesAdvertisedNames(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools/list: result.tools missing or wrong type: %+v", resp.Result)
 	}
-	if len(tools) != len(mcpToolNames) {
-		t.Fatalf("tools/list returned %d tools, want %d", len(tools), len(mcpToolNames))
+	if len(tools) != len(knowledgeToolNames()) {
+		t.Fatalf("tools/list returned %d tools, want %d", len(tools), len(knowledgeToolNames()))
 	}
 	got := make(map[string]bool, len(tools))
 	for i, raw := range tools {
@@ -109,35 +109,28 @@ func TestMCPGatewayToolsListMatchesAdvertisedNames(t *testing.T) {
 			t.Errorf("tool %q: description is empty", name)
 		}
 	}
-	for _, want := range mcpToolNames {
+	for _, want := range knowledgeToolNames() {
 		if !got[want] {
 			t.Errorf("tools/list missing expected tool %q", want)
 		}
 	}
 }
 
-// TestMCPGatewayEveryAdvertisedToolHasAHandler is the canary
-// the placeholder test from Slices 1-4a evolved into. All 13
-// tools are real handlers now (Slice 4b+5); this test makes the
-// "no placeholder fall-throughs in production" invariant
-// permanent by asserting toolHandlers() returns a real handler
-// for every advertised tool name. A future tool definition added
-// to mcpToolNames without a matching handlers map entry fails
-// here, not at runtime.
+// TestMCPGatewayEveryAdvertisedToolHasAHandler: every tool the knowledge
+// profile advertises has a real handler and every handler is advertised, so a
+// new tool cannot fall through to notImplementedHandler at runtime.
 func TestMCPGatewayEveryAdvertisedToolHasAHandler(t *testing.T) {
 	gw := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
 
 	handlers := gw.toolHandlers()
-	for _, name := range mcpToolNames {
+	for _, name := range knowledgeToolNames() {
 		if _, ok := handlers[name]; !ok {
 			t.Errorf("toolHandlers() missing entry for %q — would fall through to notImplementedHandler", name)
 		}
 	}
-	// Reverse direction: catch any handler map entry whose name
-	// doesn't appear in mcpToolNames — would mean we wired a
-	// handler but never advertised the tool definition.
+	// A handler with no advertised tool was wired but never listed.
 	for name := range handlers {
-		if !slices.Contains(mcpToolNames, name) {
+		if !slices.Contains(knowledgeToolNames(), name) {
 			t.Errorf("toolHandlers() has %q but no advertised tool definition by that name", name)
 		}
 	}

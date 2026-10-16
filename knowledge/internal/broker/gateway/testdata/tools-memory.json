@@ -1,0 +1,488 @@
+[
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Append markdown to an existing document. expected_version optional; omitted or 0 resolves the current version. Catalog metadata (tags, importance, title, type) carries over; change it via mark_publish. route=today: url is a directory, the entry goes to its journal/<YYYY-MM-DD>.md (created when absent, hubs linked, tags widened; an archived scope refuses); a repeated entry is reported present, not written.",
+    "inputSchema": {
+      "properties": {
+        "body": {
+          "description": "markdown to append",
+          "type": "string"
+        },
+        "expected_version": {
+          "description": "version from prior fetch; omit or 0 to auto-resolve",
+          "type": "number"
+        },
+        "route": {
+          "description": "today: url names a directory and the entry lands in its dated journal",
+          "type": "string"
+        },
+        "tags": {
+          "description": "with route=today: comma-separated subjects of the entry, added to the journal's tags",
+          "type": "string"
+        },
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "body"
+      ],
+      "type": "object"
+    },
+    "name": "mark_append"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Archive a document: fetches as 'archived', history kept. recursive=true: url is a directory, every live document under it. Ancestor hubs drop the bullets that only linked what was archived.",
+    "inputSchema": {
+      "properties": {
+        "recursive": {
+          "description": "archive every live document under the directory url (default false)",
+          "type": "boolean"
+        },
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "mark_archive"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Documents linking to a URL, from the revision-aware graph store, with bounded source revalidation. Freshness, provenance and typed relations also appear in mark_explore. The store is per pod.",
+    "inputSchema": {
+      "properties": {
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "mark_backlinks"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Bring one document into shape: style findings, a proposed mechanical fix (an edit, or at 8KB a split into a hub plus topic files with anchors kept), inbound links to repoint, a proposal hash. apply=true with the hash writes it at the reported version.",
+    "inputSchema": {
+      "properties": {
+        "apply": {
+          "description": "write the proposal (default false: report only)",
+          "type": "boolean"
+        },
+        "proposal": {
+          "description": "the proposal hash from the report; required with apply",
+          "type": "string"
+        },
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "mark_curate"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Fetch the agent manifest (/.well-known/agent-manifest.md): purpose, key paths, auth, usage. not-found if absent.",
+    "inputSchema": {
+      "properties": {
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "mark_discover"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Read-only hygiene audit of a store or directory: broken links, orphans, missing hubs, untagged or untyped documents, write-policy compliance under the floor (axes, fields, allowed values), secrets and personal data, duplicates, hub and document shape, style, a stale style guide, ADR gaps. Bounded; Coverage lists gaps. deep: metadata lost across versions. promotion: candidates for a shared knowledge system.",
+    "inputSchema": {
+      "properties": {
+        "deep": {
+          "description": "walk version history for lost metadata (default false)",
+          "type": "boolean"
+        },
+        "promotion": {
+          "description": "list promotion candidates, promoted ones excluded (default false)",
+          "type": "boolean"
+        },
+        "url": {
+          "description": "world root or a directory, e.g. mark://team-a/ or mark://team-a/docs/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "mark_doctor"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Orient around one document: outline, outbound links, backlinks, siblings (10 each). Relation query arguments request grouped, paginated neighborhoods.",
+    "inputSchema": {
+      "properties": {
+        "cursor": {
+          "description": "continuation cursor from the prior result",
+          "type": "string"
+        },
+        "direction": {
+          "description": "incoming, outgoing, or both (default both)",
+          "enum": [
+            "incoming",
+            "outgoing",
+            "both"
+          ],
+          "type": "string"
+        },
+        "page_size": {
+          "description": "documents per page, 1-100 (default 10)",
+          "maximum": 100,
+          "minimum": 1,
+          "multipleOf": 1,
+          "type": "number"
+        },
+        "relations": {
+          "description": "relation predicates to include; empty string is body links; omit for all",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "mark_explore"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Fetch a document: status, version, title, markdown body; over 8KB an outline (headings with #anchors), url#<anchor> one section, force=true the full body. Unchanged re-fetch returns a short notice. <dir>/.context reads a session primer: hub, newest journal entries, active work.",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "description": "full body regardless of size or unchanged status (default false)",
+          "type": "boolean"
+        },
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md; #<anchor> for one section",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "mark_fetch"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Crawl outbound links from a document to depth: link graph with edge provenance and rel-* typed relations. External links recorded, not followed. Feeds the graph store for mark_backlinks.",
+    "inputSchema": {
+      "properties": {
+        "depth": {
+          "description": "max link depth (default 2, max 5)",
+          "type": "number"
+        },
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "mark_graph"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "List documents and subdirectories. Archived hidden unless include_archived; while complete=false pass next-cursor as cursor. For one document prefer mark_explore.",
+    "inputSchema": {
+      "properties": {
+        "cursor": {
+          "description": "continuation cursor from the prior result",
+          "type": "string"
+        },
+        "include_archived": {
+          "description": "include archived documents and all-archived directories (default false)",
+          "type": "boolean"
+        },
+        "page_size": {
+          "description": "entries per page, 1-1000 (default 1000)",
+          "maximum": 1000,
+          "minimum": 1,
+          "multipleOf": 1,
+          "type": "number"
+        },
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "mark_list"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends sections. A world without body match answers from the catalog and says so; system-wide: mark_lookup_all.",
+    "inputSchema": {
+      "properties": {
+        "budget": {
+          "description": "result tokens for the whole result: matched sections follow the table in rank order, then related documents of the strongest match, under '>>> path/vN#anchor' lines, whole sections, until spent (default 0: table only)",
+          "type": "number"
+        },
+        "filter": {
+          "description": "comma-separated key=value predicates: tag=, modified-after=, modified-before=",
+          "type": "string"
+        },
+        "limit": {
+          "description": "max results (default 10, cap 1000)",
+          "type": "number"
+        },
+        "match": {
+          "description": "catalog (default) or body",
+          "type": "string"
+        },
+        "query": {
+          "description": "subject matched against tags and titles (min 2 chars); '*' for all",
+          "type": "string"
+        },
+        "url": {
+          "description": "scope: mark://{worldName}/ or a subtree",
+          "type": "string"
+        },
+        "verbose": {
+          "description": "full tag lists per row (default false)",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "url",
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "mark_lookup"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Promote a document to a shared knowledge system, by phase. A write needs the packet from the report before it.",
+    "inputSchema": {
+      "properties": {
+        "body": {
+          "description": "refresh: the live knowledge body",
+          "type": "string"
+        },
+        "packet": {
+          "description": "stamp, refresh: the packet hash from the report before it",
+          "type": "string"
+        },
+        "phase": {
+          "description": "which phase to run",
+          "enum": [
+            "stage",
+            "stamp",
+            "refresh"
+          ],
+          "type": "string"
+        },
+        "stub": {
+          "description": "stamp: reduce the body to its title and summary (default false: keep it)",
+          "type": "boolean"
+        },
+        "target": {
+          "description": "stamp, refresh: the knowledge copy as <url>@v<N>",
+          "type": "string"
+        },
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md",
+          "type": "string"
+        },
+        "via": {
+          "description": "stamp: the knowledge server's name, recorded as promoted-via",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "phase"
+      ],
+      "type": "object"
+    },
+    "name": "mark_promote"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Publish or update a document (markdown body); expected_version from prior fetch, 0 to create; metadata replaces the current map; a first version is linked from its hub (hubs:); a note lists dropped tags or keys, style problems, a hub not linked. On conflict the default on_conflict=merge returns a merged candidate body (git-style markers where both sides changed) to review and republish at publish-at-version.",
+    "inputSchema": {
+      "properties": {
+        "body": {
+          "description": "markdown body",
+          "type": "string"
+        },
+        "expected_version": {
+          "description": "version from prior fetch; 0 to create",
+          "type": "number"
+        },
+        "metadata": {
+          "description": "string values stored with the document: tags (comma-separated) and importance (0-1) rank mark_lookup; rel-<predicate> declares a typed relation (e.g. rel-supersedes: /adr/0002.md); other keys stored opaquely. retention (positive int) permanently deletes all but the newest N versions on this and every later write carrying it: irreversible, confirm with the user first",
+          "properties": {},
+          "type": "object"
+        },
+        "on_conflict": {
+          "description": "merge (default): merged candidate body to review and republish at publish-at-version; fail: raw conflict status",
+          "type": "string"
+        },
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "body",
+        "expected_version"
+      ],
+      "type": "object"
+    },
+    "name": "mark_publish"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Version history: total and current version, hash chain validity, per-version timestamps.",
+    "inputSchema": {
+      "properties": {
+        "url": {
+          "description": "mark:// URL, e.g. mark://team-a/index.md",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "mark_versions"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Show your own world: your identity maps to one private world and every other tool addresses it as mark://{worldName}/{path}. Table columns: world, url (external, may be blank), address (internal), writable (always yes). Call once before the other tools.",
+    "inputSchema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "mark_worlds"
+  }
+]

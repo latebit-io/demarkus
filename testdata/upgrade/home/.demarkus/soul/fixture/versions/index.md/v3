@@ -1,0 +1,16 @@
+---
+version: 3
+archived: false
+previous-hash: sha256-46ff614b54d89c26a1e204bc4c55586cc168ed663a09e7d5a4e51f6048e2f1b6
+meta.agent: capture
+meta.importance: 0.8
+tags: [fixture, hub]
+type: Hub
+---
+# Fixture
+
+- [Decision](/fixture/adr/0001-decision.md): the first decision
+
+## Journal
+
+- [Journal](journal/): dated session notes

@@ -1,0 +1,12 @@
+---
+version: 1
+archived: false
+meta.agent: unknown
+meta.importance: 0.8
+tags: [fixture, hub]
+type: Hub
+---
+# Fixture
+
+- [Decision](/fixture/adr/0001-decision.md): the first decision
+- [Old note](/fixture/old.md): archived

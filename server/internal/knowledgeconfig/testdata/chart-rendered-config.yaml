@@ -1,0 +1,54 @@
+version: 1
+listen:
+  address: ":6309"
+  maxIncomingStreams: 128
+  idleTimeout: "30s"
+health:
+  address: ":8081"
+peers:
+  listen: ":6310"
+  service: "knowledge-peers.demarkus.svc"
+tls:
+  certFile: /run/demarkus/tls/tls.crt
+  keyFile: /run/demarkus/tls/tls.key
+floorWorld: "team-a"
+contentCheck:
+  pii: "block"
+  workDomains:
+    []
+worlds:
+  - name: "team-a"
+    authorities:
+      - "team-a.example.com"
+      - "team-a.knowledge.svc.cluster.local"
+    bucket:
+      url: "gs://deployment-team-a"
+      worldID: "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48"
+    auth:
+      tokensFile: "/run/demarkus/worlds/team-a/tokens.toml"
+      staticTokensFile: "/run/demarkus/worlds/team-a/static-tokens.toml"
+    policy:
+      path: /.well-known/demarkus/policy.md
+    readOnly: false
+    limits:
+      maxConcurrentRequests: 32
+      requestTimeout: "10s"
+      requestsPerSecond: 50
+      burst: 100
+  - name: "team-b"
+    authorities:
+      - "team-b.example.com"
+    bucket:
+      url: "gs://deployment-team-b"
+      worldID: "42b471f7-8d38-4c89-b44a-6f4f8b1a4f49"
+    auth:
+      tokensFile: "/run/demarkus/worlds/team-b/tokens.toml"
+      staticTokensFile: "/run/demarkus/worlds/team-b/static-tokens.toml"
+    policy:
+      path: /.well-known/demarkus/policy.md
+    readOnly: true
+    limits:
+      maxConcurrentRequests: 16
+      requestTimeout: "5s"
+      requestsPerSecond: 20
+      burst: 40

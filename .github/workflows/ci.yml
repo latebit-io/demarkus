@@ -28,6 +28,7 @@ jobs:
       release_contract: ${{ steps.filter.outputs.release_contract }}
       install: ${{ steps.filter.outputs.install }}
       agent_plugins: ${{ steps.filter.outputs.agent_plugins }}
+      lint_config: ${{ steps.filter.outputs.lint_config }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -36,23 +37,32 @@ jobs:
           filters: |
             protocol:
               - 'protocol/**'
+              - '.golangci.yml'
             server:
               - 'server/**'
+              - 'testdata/upgrade/**'
               - 'protocol/**'
             client:
               - 'client/**'
+              - '.golangci.yml'
+              - 'testdata/upgrade/**'
               - 'protocol/**'
             knowledge:
               - 'knowledge/**'
+              - '.golangci.yml'
               - 'server/**'
               - 'protocol/**'
               - 'client/**'
             tools:
               - 'tools/**'
+              - '.golangci.yml'
+              - 'testdata/upgrade/**'
               - 'protocol/**'
               - 'client/**'
             charts:
               - 'deploy/helm/**'
+              - 'scripts/check-chart-fixtures.sh'
+              - '**/testdata/chart-rendered-config.yaml'
             release_contract:
               - '.github/workflows/release.yml'
               - 'server/.goreleaser.yml'
@@ -82,6 +92,9 @@ jobs:
               - 'tools/demarkus-plugin/**'
               - 'tools/go.mod'
               - 'tools/go.sum'
+            lint_config:
+              - '.golangci.yml'
+              - '.golangci-ratchet.yml'
 
   repo-checks:
     runs-on: ubuntu-latest
@@ -114,7 +127,8 @@ jobs:
       needs.detect-changes.outputs.server == 'true' ||
       needs.detect-changes.outputs.client == 'true' ||
       needs.detect-changes.outputs.tools == 'true' ||
-      needs.detect-changes.outputs.knowledge == 'true'
+      needs.detect-changes.outputs.knowledge == 'true' ||
+      needs.detect-changes.outputs.lint_config == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -145,6 +159,13 @@ jobs:
             mod="${modfile%/go.mod}"
             (cd "$mod" && go mod download) || { sleep 15; (cd "$mod" && go mod download); }
           done
+      # Fetches the schema from golangci-lint.run, which times out at times;
+      # the lint steps skip it (verify: false), so it runs on config changes only.
+      - name: Verify lint configs
+        if: needs.detect-changes.outputs.lint_config == 'true'
+        run: |
+          golangci-lint config verify --config .golangci.yml
+          golangci-lint config verify --config .golangci-ratchet.yml
       - name: Lint ratchet
         run: bash scripts/lint-ratchet.sh
 
@@ -161,6 +182,7 @@ jobs:
         with:
           version: v2.9.0
           working-directory: protocol
+          verify: false
       - name: Test
         run: cd protocol && go test -race ./...
       - name: Vet
@@ -208,7 +230,9 @@ jobs:
   # after them: in one job they added four minutes to every server PR.
   lint-server:
     needs: detect-changes
-    if: needs.detect-changes.outputs.server == 'true'
+    if: >-
+      needs.detect-changes.outputs.server == 'true' ||
+      needs.detect-changes.outputs.lint_config == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -223,6 +247,7 @@ jobs:
         with:
           version: v2.9.0
           working-directory: server
+          verify: false
   cross-compile-server:
     needs: detect-changes
     if: needs.detect-changes.outputs.server == 'true'
@@ -263,6 +288,7 @@ jobs:
         with:
           version: v2.9.0
           working-directory: client
+          verify: false
       - name: Test
         run: cd client && go test -race ./...
       - name: Vet
@@ -291,6 +317,7 @@ jobs:
         with:
           version: v2.9.0
           working-directory: knowledge
+          verify: false
       - name: Test
         run: cd knowledge && go test -race ./...
       - name: Vet
@@ -315,6 +342,7 @@ jobs:
         with:
           version: v2.9.0
           working-directory: tools
+          verify: false
       - name: Test
         run: cd tools && go test -race ./...
       - name: Vet
@@ -505,17 +533,8 @@ jobs:
         run: helm unittest deploy/helm/demarkus-server
       - name: Unit test demarkus-knowledge-server chart
         run: helm unittest deploy/helm/demarkus-knowledge-server
-      # The broker's LoadConfig test reads this rendering; a chart change
-      # must regenerate it with the same command.
-      - name: Broker config fixture matches the chart
-        run: |
-          helm template knowledge deploy/helm/demarkus-knowledge-server -n demarkus \
-            -f deploy/helm/demarkus-knowledge-server/tests/fixtures/valid-values.yaml \
-            --set broker.stateBucket=gs://knowledge-broker-state \
-            --set broker.federation.hub=team-a \
-            --show-only templates/secret-broker-config.yaml \
-            | yq '.stringData["config.yaml"]' | sed -e '$ { /^$/d; }' \
-            | diff - knowledge/internal/broker/core/testdata/chart-rendered-config.yaml
+      - name: Config fixtures match the chart
+        run: bash scripts/check-chart-fixtures.sh
       - name: Unit test demarkus-knowledge-system umbrella chart
         run: helm unittest deploy/helm/demarkus-knowledge-system
 

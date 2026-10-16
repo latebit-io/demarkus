@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/latebit-io/demarkus/client/lookupexpand"
+	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -62,13 +64,6 @@ const (
 	curateApplyDesc     = "write the proposal (default false: report only)"
 	curateProposalDesc  = "the proposal hash from the report; required with apply"
 	promotePhaseDesc    = "which phase to run"
-	promoteBodyDesc     = "dry_run, apply: the distilled draft; refresh: the live knowledge body"
-	promoteMetadataDesc = "dry_run, apply: the draft's metadata object (tags, importance, type, the policy's axes)"
-	promoteSourceDesc   = "dry_run, apply: origin recorded as promoted-from (default none)"
-	promoteTargetDesc   = "stamp, refresh: the knowledge copy as <url>@v<N>"
-	promoteViaDesc      = "stamp: the knowledge server's name, recorded as promoted-via"
-	promoteStubDesc     = "stamp: reduce the body to its title and summary (default false: keep it)"
-	promotePacketDesc   = "apply, stamp, refresh: the packet hash from the report before it"
 	doctorDeepDesc      = "walk version history for lost metadata (default false)"
 	doctorPromotionDesc = "list promotion candidates, promoted ones excluded (default false)"
 	graphRetentionDesc  = "graph versions to keep (default 20; 0 keeps all); older permanently pruned"
@@ -81,9 +76,22 @@ func describe(base, suffix string) mcp.ToolOption {
 	return mcp.WithDescription(base)
 }
 
+// NewTool builds a classified mark_* tool: reads get the read-only hints,
+// since mcp-go defaults every tool to destructive. An unclassified name panics.
+func NewTool(name string, opts ...mcp.ToolOption) mcp.Tool {
+	class, ok := toolClasses[name]
+	if !ok {
+		panic("mcpfmt: unclassified tool " + name + ": add it to toolClasses")
+	}
+	if !class.write {
+		opts = append(slices.Clip(opts), mcp.WithReadOnlyHintAnnotation(true), mcp.WithDestructiveHintAnnotation(false))
+	}
+	return mcp.NewTool(name, opts...)
+}
+
 // FetchTool builds mark_fetch; urlDesc describes the surface's URL argument.
 func FetchTool(urlDesc, suffix string) mcp.Tool {
-	return mcp.NewTool("mark_fetch",
+	return NewTool("mark_fetch",
 		describe(fetchDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc+"; #<anchor> for one section")),
 		mcp.WithBoolean("force", mcp.Description(forceDesc)),
@@ -99,12 +107,12 @@ func ExploreTool(urlDesc, suffix string) mcp.Tool {
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 	)
 	options = append(options, neighborhoodParams...)
-	return mcp.NewTool("mark_explore", options...)
+	return NewTool("mark_explore", options...)
 }
 
 // ListTool builds mark_list.
 func ListTool(urlDesc, suffix string) mcp.Tool {
-	return mcp.NewTool("mark_list",
+	return NewTool("mark_list",
 		describe(listDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 		mcp.WithBoolean("include_archived", mcp.Description(includeArchivedDesc)),
@@ -118,7 +126,7 @@ func ListTool(urlDesc, suffix string) mcp.Tool {
 
 // VersionsTool builds mark_versions.
 func VersionsTool(urlDesc, suffix string) mcp.Tool {
-	return mcp.NewTool("mark_versions",
+	return NewTool("mark_versions",
 		describe(versionsDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 	)
@@ -126,7 +134,7 @@ func VersionsTool(urlDesc, suffix string) mcp.Tool {
 
 // GraphTool builds mark_graph.
 func GraphTool(urlDesc, suffix string) mcp.Tool {
-	return mcp.NewTool("mark_graph",
+	return NewTool("mark_graph",
 		describe(graphDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 		mcp.WithNumber("depth", mcp.Description(depthDesc)),
@@ -135,7 +143,7 @@ func GraphTool(urlDesc, suffix string) mcp.Tool {
 
 // BacklinksTool builds mark_backlinks.
 func BacklinksTool(urlDesc, suffix string) mcp.Tool {
-	return mcp.NewTool("mark_backlinks",
+	return NewTool("mark_backlinks",
 		describe(backlinksDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 	)
@@ -143,7 +151,7 @@ func BacklinksTool(urlDesc, suffix string) mcp.Tool {
 
 // PublishTool builds mark_publish.
 func PublishTool(urlDesc, suffix string) mcp.Tool {
-	return mcp.NewTool("mark_publish",
+	return NewTool("mark_publish",
 		describe(publishDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 		mcp.WithString("body", mcp.Required(), mcp.Description(bodyDesc)),
@@ -155,7 +163,7 @@ func PublishTool(urlDesc, suffix string) mcp.Tool {
 
 // AppendTool builds mark_append.
 func AppendTool(urlDesc, suffix string) mcp.Tool {
-	return mcp.NewTool("mark_append",
+	return NewTool("mark_append",
 		describe(appendDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 		mcp.WithString("body", mcp.Required(), mcp.Description(appendBodyDesc)),
@@ -167,7 +175,7 @@ func AppendTool(urlDesc, suffix string) mcp.Tool {
 
 // ArchiveTool builds mark_archive.
 func ArchiveTool(urlDesc, suffix string) mcp.Tool {
-	return mcp.NewTool("mark_archive",
+	return NewTool("mark_archive",
 		describe(archiveDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 		mcp.WithBoolean("recursive", mcp.Description(recursiveDesc)),
@@ -176,7 +184,7 @@ func ArchiveTool(urlDesc, suffix string) mcp.Tool {
 
 // CurateTool builds mark_curate.
 func CurateTool(urlDesc, suffix string) mcp.Tool {
-	return mcp.NewTool("mark_curate",
+	return NewTool("mark_curate",
 		describe(curateDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 		mcp.WithBoolean("apply", mcp.Description(curateApplyDesc)),
@@ -184,47 +192,85 @@ func CurateTool(urlDesc, suffix string) mcp.Tool {
 	)
 }
 
-// PromoteTool builds mark_promote for the phases a surface serves; only
-// the arguments those phases read are advertised.
+// PromoteTool builds mark_promote for the phases a surface serves; an
+// argument is advertised, and its phases named, only where a served phase reads it.
 func PromoteTool(urlDesc, suffix string, phases []string) mcp.Tool {
 	options := []mcp.ToolOption{
 		describe(promoteDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 		mcp.WithString("phase", mcp.Required(), mcp.Enum(phases...), mcp.Description(promotePhaseDesc)),
 	}
-	serves := func(names ...string) bool {
-		return slices.ContainsFunc(names, func(n string) bool { return slices.Contains(phases, n) })
+	for _, arg := range promoteArgs {
+		if desc := arg.phaseDesc(phases); desc != "" {
+			options = append(options, arg.with(arg.name, mcp.Description(desc)))
+		}
 	}
-	if serves("dry_run", "apply", "refresh") {
-		options = append(options, mcp.WithString("body", mcp.Description(promoteBodyDesc)))
+	return NewTool("mark_promote", options...)
+}
+
+// phaseClause is what an argument carries for the phases that read it.
+type phaseClause struct {
+	phases []string
+	text   string
+}
+
+type promoteArg struct {
+	name    string
+	with    func(string, ...mcp.PropertyOption) mcp.ToolOption
+	clauses []phaseClause
+}
+
+var promoteArgs = []promoteArg{
+	{"body", mcp.WithString, []phaseClause{
+		{[]string{promote.PhaseDryRun, promote.PhaseApply}, "the distilled draft"},
+		{[]string{promote.PhaseRefresh}, "the live knowledge body"},
+	}},
+	{"metadata", mcp.WithObject, []phaseClause{
+		{[]string{promote.PhaseDryRun, promote.PhaseApply}, "the draft's metadata object (tags, importance, type, the policy's axes)"},
+	}},
+	{"source", mcp.WithString, []phaseClause{
+		{[]string{promote.PhaseDryRun, promote.PhaseApply}, "origin recorded as promoted-from (default none)"},
+	}},
+	{"target", mcp.WithString, []phaseClause{
+		{[]string{promote.PhaseStamp, promote.PhaseRefresh}, "the knowledge copy as <url>@v<N>"},
+	}},
+	{"via", mcp.WithString, []phaseClause{
+		{[]string{promote.PhaseStamp}, "the knowledge server's name, recorded as promoted-via"},
+	}},
+	{"stub", mcp.WithBoolean, []phaseClause{
+		{[]string{promote.PhaseStamp}, "reduce the body to its title and summary (default false: keep it)"},
+	}},
+	{"packet", mcp.WithString, []phaseClause{
+		{[]string{promote.PhaseApply, promote.PhaseStamp, promote.PhaseRefresh}, "the packet hash from the report before it"},
+	}},
+}
+
+// phaseDesc renders the clauses a served phase reads, naming only served
+// phases; "" means no served phase reads the argument.
+func (a promoteArg) phaseDesc(served []string) string {
+	var parts []string
+	for _, c := range a.clauses {
+		var names []string
+		for _, phase := range c.phases {
+			if slices.Contains(served, phase) {
+				names = append(names, phase)
+			}
+		}
+		if len(names) > 0 {
+			parts = append(parts, strings.Join(names, ", ")+": "+c.text)
+		}
 	}
-	if serves("dry_run", "apply") {
-		options = append(options,
-			mcp.WithObject("metadata", mcp.Description(promoteMetadataDesc)),
-			mcp.WithString("source", mcp.Description(promoteSourceDesc)))
-	}
-	if serves("stamp", "refresh") {
-		options = append(options, mcp.WithString("target", mcp.Description(promoteTargetDesc)))
-	}
-	if serves("stamp") {
-		options = append(options,
-			mcp.WithString("via", mcp.Description(promoteViaDesc)),
-			mcp.WithBoolean("stub", mcp.Description(promoteStubDesc)))
-	}
-	if serves("apply", "stamp", "refresh") {
-		options = append(options, mcp.WithString("packet", mcp.Description(promotePacketDesc)))
-	}
-	return mcp.NewTool("mark_promote", options...)
+	return strings.Join(parts, "; ")
 }
 
 // GraphExportTool builds mark_graph_export, which takes no arguments.
 func GraphExportTool(suffix string) mcp.Tool {
-	return mcp.NewTool("mark_graph_export", describe(graphExportDescription, suffix))
+	return NewTool("mark_graph_export", describe(graphExportDescription, suffix))
 }
 
 // GraphPublishTool builds mark_graph_publish; targetDesc describes the graph document argument.
 func GraphPublishTool(targetDesc, suffix string) mcp.Tool {
-	return mcp.NewTool("mark_graph_publish",
+	return NewTool("mark_graph_publish",
 		describe(graphPublishDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(targetDesc)),
 		mcp.WithNumber("expected_version", mcp.Required(), mcp.Description(ExpectedVersionDesc)),
@@ -246,7 +292,7 @@ func LookupParams() []mcp.ToolOption {
 
 // DoctorTool builds mark_doctor; urlDesc describes the scope argument.
 func DoctorTool(urlDesc, suffix string) mcp.Tool {
-	return mcp.NewTool("mark_doctor",
+	return NewTool("mark_doctor",
 		describe(doctorDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 		mcp.WithBoolean("deep", mcp.Description(doctorDeepDesc)),
@@ -261,23 +307,37 @@ const (
 	ProfileFull = "full"
 )
 
-// AdvancedTools are absent from the lean profile. The plugin-prompts check
-// fails when a prompt template references one of them. mark_archive stays
-// in lean: /soul-archive is the only archive path a plugin user has.
-var AdvancedTools = map[string]bool{
-	"mark_discover":      true,
-	"mark_graph_export":  true,
-	"mark_graph_publish": true,
+type toolClass struct {
+	write    bool // changes a store or the graph store
+	advanced bool // absent from the lean profile
 }
 
-// KnownTools is every mark_* tool any surface serves. The plugin-prompts
-// check fails when a template names a tool outside it.
-var KnownTools = map[string]bool{
-	"mark_fetch": true, "mark_explore": true, "mark_list": true, "mark_versions": true,
-	"mark_lookup": true, "mark_lookup_all": true, "mark_publish": true, "mark_append": true,
-	"mark_archive": true, "mark_discover": true, "mark_backlinks": true, "mark_graph": true,
-	"mark_graph_export": true, "mark_graph_publish": true, "mark_worlds": true, "mark_doctor": true,
-	"mark_curate": true, "mark_promote": true,
+// toolClasses is every mark_* tool any surface serves. mark_archive stays in
+// lean: /soul-archive is the only archive path a plugin user has.
+var toolClasses = map[string]toolClass{
+	"mark_fetch": {}, "mark_explore": {}, "mark_list": {}, "mark_versions": {},
+	"mark_lookup": {}, "mark_lookup_all": {}, "mark_backlinks": {}, "mark_worlds": {},
+	"mark_doctor": {}, "mark_discover": {advanced: true}, "mark_graph_export": {advanced: true},
+	"mark_publish": {write: true}, "mark_append": {write: true}, "mark_archive": {write: true},
+	"mark_curate": {write: true}, "mark_promote": {write: true}, "mark_graph": {write: true},
+	"mark_graph_publish": {write: true, advanced: true},
+}
+
+// KnownTools and AdvancedTools are views of toolClasses; the plugin-prompts
+// check fails when a template names an unknown or advanced tool.
+var (
+	KnownTools    = toolSet(func(toolClass) bool { return true })
+	AdvancedTools = toolSet(func(c toolClass) bool { return c.advanced })
+)
+
+func toolSet(keep func(toolClass) bool) map[string]bool {
+	set := map[string]bool{}
+	for name, class := range toolClasses {
+		if keep(class) {
+			set[name] = true
+		}
+	}
+	return set
 }
 
 // ValidProfile rejects anything but the two named profiles. Surfaces call it

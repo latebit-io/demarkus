@@ -1,0 +1,5 @@
+
+[tokens.claude-code-plugin]
+hash = "sha256-6393231ffca751e5a75a29315e7550485c0224e0c69915493812e4a24b8c4dbe"
+paths = ["/**"]
+operations = ["publish", "archive"]

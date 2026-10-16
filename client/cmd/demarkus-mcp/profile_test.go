@@ -14,9 +14,11 @@ const (
 	leanSchemaBudgetBytes = 11510
 )
 
-func profileSchemas(profile string) []mcp.Tool {
+const exampleHost = "mark://example.com:6309"
+
+func profileSchemas(host, profile string) []mcp.Tool {
 	h := &handler{client: &stubClient{}}
-	entries := h.profileTools("mark://example.com:6309", profile)
+	entries := h.profileTools(host, profile)
 	tools := make([]mcp.Tool, 0, len(entries))
 	for i := range entries {
 		tools = append(tools, entries[i].Tool)
@@ -25,11 +27,8 @@ func profileSchemas(profile string) []mcp.Tool {
 }
 
 func TestToolProfiles(t *testing.T) {
-	full := profileSchemas(mcpfmt.ProfileFull)
-	lean := profileSchemas(mcpfmt.ProfileLean)
-	if len(full) != 16 {
-		t.Fatalf("full profile = %d tools, want 16", len(full))
-	}
+	full := profileSchemas(exampleHost, mcpfmt.ProfileFull)
+	lean := profileSchemas(exampleHost, mcpfmt.ProfileLean)
 	if len(lean) != len(full)-len(mcpfmt.AdvancedTools) {
 		t.Fatalf("lean profile = %d tools, want %d", len(lean), len(full)-len(mcpfmt.AdvancedTools))
 	}
@@ -38,16 +37,11 @@ func TestToolProfiles(t *testing.T) {
 			t.Errorf("lean profile exposes advanced tool %s", tool.Name)
 		}
 	}
-	for _, tool := range full {
-		if !mcpfmt.KnownTools[tool.Name] {
-			t.Errorf("%s is served but missing from mcpfmt.KnownTools", tool.Name)
-		}
-	}
 }
 
 func TestToolSchemaBudget(t *testing.T) {
 	for profile, budget := range map[string]int{mcpfmt.ProfileFull: fullSchemaBudgetBytes, mcpfmt.ProfileLean: leanSchemaBudgetBytes} {
-		if err := mcpfmt.CheckSchemaBudget(profileSchemas(profile), budget); err != nil {
+		if err := mcpfmt.CheckSchemaBudget(profileSchemas(exampleHost, profile), budget); err != nil {
 			t.Errorf("%s: %v", profile, err)
 		}
 	}

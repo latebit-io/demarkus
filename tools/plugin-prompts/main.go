@@ -15,6 +15,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/latebit-io/demarkus/tools/internal/reporoot"
 	"gopkg.in/yaml.v3"
 )
 
@@ -138,23 +139,7 @@ func main() {
 }
 
 func findRoot() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("get working directory: %w", err)
-	}
-	for {
-		manifestPath := filepath.Join(dir, "plugins", "prompt-source", "manifest.json")
-		if _, statErr := os.Stat(manifestPath); statErr == nil {
-			return dir, nil
-		} else if !errors.Is(statErr, fs.ErrNotExist) {
-			return "", fmt.Errorf("stat manifest %s: %w", manifestPath, statErr)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", errors.New("plugins/prompt-source/manifest.json not found in this directory or its parents")
-		}
-		dir = parent
-	}
+	return reporoot.Find("plugins/prompt-source/manifest.json")
 }
 
 // renderAll renders the manifest's targets and brands; brandsPath, when set,

@@ -1,0 +1,17 @@
+---
+version: 2
+archived: false
+previous-hash: sha256-d193feba7ce062c9474dc575d6875f7326acae1dec2ccc875c6b2e66a51005c2
+meta.agent: capture
+meta.importance: 0.7
+meta.rel-related: /fixture/index.md
+tags: [fixture, decision]
+type: ADR
+---
+# Decision
+
+We keep markdown, versioned.
+
+## Why
+
+History matters.

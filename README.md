@@ -1,3 +1,7 @@
+<!-- markdownlint-disable-next-line MD041 -->
+> [!WARNING]
+> **Beta.** Demarkus is pre-1.0 and under active development. Features, components, binaries, plugins and commands are in flux: any of them can change, move or be removed between releases. Pin a release for anything you depend on.
+
 # Demarkus
 
 **Memory for agents, knowledge for teams, a second brain for you**
@@ -8,7 +12,7 @@ Every link between documents feeds a persistent **knowledge graph**. Agents quer
 
 Underneath sits the **Mark Protocol**: versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Capability tokens gate writes, every change is kept, and one static binary runs anywhere.
 
-Architecturally, the servers (`demarkus-server`, `demarkus-knowledge-server`) are **memory storage engines**: deliberately simple, versioned, hash-chained document stores. The brokers are the access tier that turns an engine into a service. The **memory broker** gives each identity a private memory world over MCP with OAuth (memory as a service for Claude Desktop, ChatGPT, Cursor), and the **knowledge broker** composes many worlds into one organizational knowledge system. The intelligence (lookup, routing, graph traversal) lives in the agent.
+Architecturally, the servers are **memory storage engines**: deliberately simple, versioned, hash-chained document stores, `demarkus-server` for one store and `demarkus-knowledge-server` for many worlds. The access tier turns an engine into a service: `demarkus-knowledge` runs the multi-world server together with an OIDC-fronted MCP gateway in two profiles. The **memory** profile gives each identity a private memory world over MCP with OAuth (memory as a service for Claude Desktop, ChatGPT, Cursor), and the **knowledge** profile composes many worlds into one organizational knowledge system. Judgment stays with the agent (what to record, recall and link); mechanics such as journaling, hub upkeep and hygiene checks run in the tools.
 
 ## Install
 
@@ -59,6 +63,10 @@ Or link a checkout into `~/.cursor/plugins/local/demarkus-memory`. Restart Curso
 
 Teams: `demarkus-knowledge → Add` from the same marketplace to join a shared knowledge system. Details: [Cursor knowledge plugin](plugins/cursor-knowledge/).
 
+**Claude Cowork**
+
+Add this repository as a marketplace (Customize, Plugins) and install `demarkus-cowork`. Cowork's shell runs in a sandbox without access to `~/.demarkus`, so the plugin is MCP only and ships no hooks: provisioning and the shell-based commands run from Claude Code or a terminal. Details: [Cowork memory plugin](plugins/cowork-memory/).
+
 ### Binaries
 
 ```bash
@@ -82,7 +90,7 @@ See [full install docs](https://www.demarkus.io/install/) for platform-specific 
 
 ### Production knowledge system
 
-`demarkus-knowledge-server` hosts many isolated worlds in one process: TLS SNI selects the world, each world has its own GCS bucket, tokens, policy, and rate limits. It runs as two or more stateless replicas; writes race on a compare-and-swap head object in the bucket, so there is no leader election and no persistent volumes. Deploy with the [`deploy/helm/demarkus-knowledge-server`](deploy/helm/demarkus-knowledge-server/) chart; an empty bucket becomes a world on first start, seeded with the chart's initial write policy or the server's warn-level default.
+`demarkus-knowledge` hosts many isolated worlds in one process and serves the MCP gateways beside them: TLS SNI selects the world, and each world has its own GCS bucket, tokens, policy, and rate limits. It runs as two or more stateless replicas. Writes race on a compare-and-swap head object in the bucket, so they need no leader and no persistent volumes; background work (the sweeper and the federation graph) runs on one replica at a time under a Kubernetes Lease. Deploy with the [`deploy/helm/demarkus-knowledge-server`](deploy/helm/demarkus-knowledge-server/) chart or the [`demarkus-knowledge-system`](deploy/helm/demarkus-knowledge-system/) umbrella; an empty bucket becomes a world on first start, seeded with the chart's initial write policy or the server's warn-level default.
 
 ### See it in action
 
@@ -112,7 +120,8 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus-publish` | Direct-to-store writer for read-only server installs (chroot/RO mode) |
 | `demarkus` | CLI tool for all protocol operations (fetch, publish, append, graph, okf, etc.) |
 | `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
-| `demarkus-mcp` | MCP server for LLM agents (protocol verbs + graph crawling, backlinks, indexing) |
+| `demarkus-mcp` | MCP server for LLM agents: the protocol verbs as tools, plus graph crawling, backlinks, doctor, curate and promote |
+| `demarkus-plugin` | Shared core of the agent plugins: session start, hooks, the managed local server, the store registry; installed by the plugins |
 | `demarkus-knowledge` | Production knowledge system in one process: many worlds (SNI-routed, GCS-backed) plus the OIDC-fronted MCP gateways for the knowledge profile (system-wide `mark_lookup_all`) and the memory profile (one private world per identity, dynamic tenant provisioning) |
 | `demarkus-knowledge-server` | The multi-world server alone, for capability-token clients without SSO |
 
@@ -174,6 +183,7 @@ modified: 2026-01-15T10:30:00Z
 
 - [Cursor memory plugin](plugins/cursor-memory/): the same local memory for Cursor, as a Cursor Plugin (marketplace, team marketplace, or `~/.cursor/plugins/local`)
 - [Cursor knowledge plugin](plugins/cursor-knowledge/): join an organizational knowledge system from Cursor
+- [Cowork memory plugin](plugins/cowork-memory/): the same local memory for Claude Cowork, over MCP only
 - [pi memory plugin](plugins/pi-memory/): the same local memory for the pi coding agent
 - [pi knowledge plugin](plugins/pi-knowledge/): join an organizational knowledge system from pi
 

@@ -18,6 +18,9 @@ make lint
 echo "Checking lint ratchet..."
 bash scripts/lint-ratchet.sh
 
+echo "Checking layers..."
+(cd tools && go run ./layercheck)
+
 echo "Checking comment length on changed code..."
 bash scripts/check-comment-length.sh
 

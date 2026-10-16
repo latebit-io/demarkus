@@ -1,0 +1,2 @@
+# A capture keeps every file a released plugin wrote, whatever the repo ignores.
+!*

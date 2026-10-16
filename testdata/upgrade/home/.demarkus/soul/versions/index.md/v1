@@ -1,0 +1,10 @@
+---
+version: 1
+archived: false
+meta.agent: capture
+meta.importance: 0.9
+tags: [projects, index]
+---
+# Projects
+
+- [Fixture](/fixture/)

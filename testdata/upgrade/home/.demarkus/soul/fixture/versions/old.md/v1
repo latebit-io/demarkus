@@ -1,0 +1,11 @@
+---
+version: 1
+archived: false
+meta.agent: capture
+meta.importance: 0.2
+tags: [fixture]
+type: Note
+---
+# Old note
+
+Superseded.

@@ -1,0 +1,11 @@
+---
+version: 1
+archived: false
+meta.agent: capture
+meta.importance: 0.7
+tags: [fixture, decision]
+type: ADR
+---
+# Decision
+
+We keep markdown.
