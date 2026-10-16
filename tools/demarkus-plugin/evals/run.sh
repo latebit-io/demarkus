@@ -2,20 +2,22 @@
 # Runs the Claude Code memory plugin's eval suite: the shipped plugin is
 # copied beside this suite (claude plugin eval reads evals/ under the plugin)
 # so no eval file ships with the plugin. Extra arguments go to the eval.
-# Hooks run the released demarkus-plugin, so a binary change is evaluable
-# only after release; the session header is fixed (see session-start.sh below).
+# Prompts are regenerated and hooks run a working-tree build, so nothing waits
+# on a release; the session header is fixed (see session-start.sh below).
 set -euo pipefail
 
 cd "$(dirname "$0")/../../.."
+go -C tools run ./plugin-prompts write
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 cp -R plugins/claude-code/. "${work}/"
+go -C tools build -o "${work}/eval-bin/demarkus-plugin" ./demarkus-plugin
 cp -R tools/demarkus-plugin/evals "${work}/evals"
 rm -rf "${work}/evals/results"
 
 # The sandbox soul is empty, so the real header would contradict the mocks.
-# The stand-in keeps bootstrap (gates and nudges need the binary) and prints
-# a header per case: EVAL_PROJECT=new in a case's env is a project with no hub.
+# The stand-in installs the build for gates and nudges and prints a header
+# per case: EVAL_PROJECT=new in a case's env is a project with no hub.
 guidance="$(awk 'BEGIN { ORS = "" }
   !body && (/^<!--.*-->$/ || /^$/) { next }
   { body = 1; gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t"); print (n++ ? "\\n" : "") $0 }' \
@@ -30,15 +32,18 @@ for state in known new; do
   printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
     "${head} ${project}\\n\\n${stands}\\n\\n${guidance}" >"${work}/hooks/session-start.${state}.json"
 done
-cat >"${work}/hooks/session-start.sh" <<'EOF'
-#!/usr/bin/env bash
+# Each run gets a temp HOME; refuse rather than replace the operator's binary.
+stand_in='#!/usr/bin/env bash
 set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-bash "${HOOK_DIR}/../scripts/bootstrap.sh" 1>&2 || echo "[eval] bootstrap failed" >&2
-cat "${HOOK_DIR}/session-start.${EVAL_PROJECT:-known}.json"
-EOF
+[[ "${HOME}" != "@HOME@" ]] || { echo "[eval] HOME is the operator home; not installing" >&2; exit 1; }
+mkdir -p "${HOME}/.demarkus/bin" &&
+  install -m 0755 "${HOOK_DIR}/../eval-bin/demarkus-plugin" "${HOME}/.demarkus/bin/" ||
+  echo "[eval] demarkus-plugin install failed" >&2
+cat "${HOOK_DIR}/session-start.${EVAL_PROJECT:-known}.json"'
+printf '%s\n' "${stand_in//@HOME@/${HOME}}" >"${work}/hooks/session-start.sh"
 
 mkdir -p tools/demarkus-plugin/evals/results
 # A haiku judge misreads correct briefs.
-claude plugin eval --trust-plugin --no-publish --ablation none --judge-model sonnet \
+claude plugin eval --trust-plugin --no-publish --ablation none --judge-model sonnet -j 4 \
   --output-dir "tools/demarkus-plugin/evals/results/$(date +%Y%m%dT%H%M%S)" "$@" "${work}"
