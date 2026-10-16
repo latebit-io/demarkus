@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/directives"
@@ -20,6 +21,19 @@ import (
 
 // DocumentPath is the conventional template document, per world.
 const DocumentPath = "/.well-known/demarkus/template.md"
+
+// JournalDate names a journal entry: one document per day, "<date>.md".
+const JournalDate = "2006-01-02"
+
+// IsJournalEntry reports whether a journal directory's file name is a dated entry.
+func IsJournalEntry(name string) bool {
+	day, ok := strings.CutSuffix(name, ".md")
+	if !ok || len(day) != len(JournalDate) {
+		return false
+	}
+	_, err := time.Parse(JournalDate, day)
+	return err == nil
+}
 
 // Layout is one world's layout; Default when the template says nothing.
 type Layout struct {

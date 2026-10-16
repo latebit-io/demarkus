@@ -85,3 +85,14 @@ func TestSection(t *testing.T) {
 		t.Error("section names capitalize the directory")
 	}
 }
+
+func TestIsJournalEntry(t *testing.T) {
+	for name, want := range map[string]bool{
+		"2026-10-13.md": true, "2026-02-30.md": false, "2026-10-13.txt": false,
+		"notes.md": false, "2026-10-13-extra.md": false, "2026-1-3.md": false,
+	} {
+		if IsJournalEntry(name) != want {
+			t.Errorf("IsJournalEntry(%q) = %v, want %v", name, !want, want)
+		}
+	}
+}

@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -99,6 +100,46 @@ func TestLinkChecks(t *testing.T) {
 	}
 	if got := findings(r, CheckMissingHub); len(got) != 1 || !strings.HasPrefix(got[0], "/journal/:") {
 		t.Fatalf("missing hub: %v", got)
+	}
+}
+
+// A directory's hub may be its index.md or the document named after it; a
+// directory of dated journal entries needs none. Under a project scope the
+// scope's <dir>.md lies outside the inventory and is fetched.
+func TestMissingHubFollowsTheHubRule(t *testing.T) {
+	f := newFake(map[string]fakeDoc{
+		"/index.md":              tagged("# Hub\n\n- [Debt](/debt.md)\n- [Journal](/journal/)\n"),
+		"/debt.md":               tagged("# Debt\n\n- [x](/debt/x.md)\n"),
+		"/debt/x.md":             tagged("# X\n"),
+		"/journal/2026-10-01.md": tagged("# J\n"),
+		"/plans/a.md":            tagged("# A\n"),
+		"/p.md":                  tagged("# P\n\n- [y](/p/y.md)\n"),
+		"/p/y.md":                tagged("# Y\n"),
+	})
+	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findings(r, CheckMissingHub); len(got) != 1 || got[0] != "/plans/: 1 documents and no /plans/index.md or /plans.md" {
+		t.Fatalf("missing hub = %v", got)
+	}
+	for scope, want := range map[string]int{"/p/": 0, "/plans/": 1} {
+		r, err := Run(context.Background(), f, Options{Scope: scope})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := findings(r, CheckMissingHub); len(got) != want || len(r.Coverage) != 0 {
+			t.Errorf("scope %s: missing hub = %v, coverage %v", scope, got, r.Coverage)
+		}
+	}
+	f.missing["/p.md"] = protocol.StatusServerError
+	delete(f.docs, "/p.md")
+	r, err = Run(context.Background(), f, Options{Scope: "/p/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findings(r, CheckMissingHub); len(got) != 0 || !slices.ContainsFunc(r.Coverage, func(c string) bool { return strings.Contains(c, "hub check of /p/ skipped") }) {
+		t.Errorf("an unreadable hub is a coverage gap: %v, %v", got, r.Coverage)
 	}
 }
 

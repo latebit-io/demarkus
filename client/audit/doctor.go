@@ -8,7 +8,6 @@ package audit
 import (
 	"context"
 	"fmt"
-	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -159,7 +158,7 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 	}
 	a.checkLinks(ctx)
 	a.checkOrphans()
-	a.checkHubs()
+	a.checkHubs(ctx)
 	a.checkTitles()
 	a.checkADRSequence()
 	a.checkMetadata()
@@ -255,7 +254,3 @@ func title(d *document) string {
 }
 
 func live(status string) bool { return status == protocol.StatusOK }
-
-func (a *audit) hub() string {
-	return path.Join(a.opts.Scope, "index.md")
-}

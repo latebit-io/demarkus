@@ -3,7 +3,6 @@ package audit
 import (
 	"context"
 	"fmt"
-	"github.com/latebit-io/demarkus/client/mdoutline"
 	"maps"
 	"path"
 	"slices"
@@ -11,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite/gate"
+	"github.com/latebit-io/demarkus/client/hub"
+	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
@@ -121,21 +122,24 @@ func (a *audit) checkOrphans() {
 			reachedDirs[dir] = true
 		}
 	}
-	hub := a.hub()
+	scopeHub := hub.Paths(a.opts.Scope)[0]
 	for _, p := range a.order {
 		d := a.docs[p]
-		if p == hub || !live(d.status) || inbound[p] || reachedDirs[path.Dir(p)+"/"] {
+		if p == scopeHub || !live(d.status) || inbound[p] || reachedDirs[path.Dir(p)+"/"] {
 			continue
 		}
 		a.add(CheckOrphans, p, "no inbound link from any document in scope", "link it from its hub, or /soul-archive it")
 	}
 }
 
-// checkHubs: a project subtree with documents and no index.md. At the root
-// every top-level directory is a project; under a project scope, the scope.
-func (a *audit) checkHubs() {
+// checkHubs: a project (each top-level directory at the root, else the
+// scope) holding documents a hub should name and no hub at hub.Paths.
+func (a *audit) checkHubs(ctx context.Context) {
 	counts := map[string]int{}
 	for _, p := range a.order {
+		if !hub.Linkable(p) {
+			continue
+		}
 		project := a.opts.Scope
 		if project == "/" {
 			head, _, nested := strings.Cut(strings.TrimPrefix(p, "/"), "/")
@@ -147,10 +151,32 @@ func (a *audit) checkHubs() {
 		counts[project]++
 	}
 	for _, dir := range slices.Sorted(maps.Keys(counts)) {
-		if _, ok := a.docs[path.Join(dir, "index.md")]; !ok {
-			a.add(CheckMissingHub, dir, fmt.Sprintf("%d documents and no index.md", counts[dir]), "publish a hub linking each document once")
+		if !a.hasHub(ctx, dir) {
+			a.add(CheckMissingHub, dir, fmt.Sprintf("%d documents and no %s", counts[dir], strings.Join(hub.Paths(dir), " or ")), "publish a hub linking each document once")
 		}
 	}
+}
+
+// hasHub: the inventory holds a hub of dir, or one outside the scope (the
+// scope's own <dir>.md) answers a fetch; a failed fetch is a coverage gap.
+func (a *audit) hasHub(ctx context.Context, dir string) bool {
+	for _, p := range hub.Paths(dir) {
+		if _, ok := a.docs[p]; ok {
+			return true
+		}
+		if strings.HasPrefix(p, a.opts.Scope) {
+			continue
+		}
+		switch status := a.confirm(ctx, p); status {
+		case protocol.StatusNotFound, protocol.StatusArchived:
+			continue
+		case protocol.StatusOK:
+		default:
+			a.note("hub check of %s skipped: %s returned %s", dir, p, status)
+		}
+		return true
+	}
+	return false
 }
 
 func (a *audit) checkTitles() {

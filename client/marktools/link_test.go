@@ -44,6 +44,22 @@ func TestPublishLinksAFirstVersionFromTheNearestHub(t *testing.T) {
 	}
 }
 
+// Without an index.md, a directory's hub is the document named after it,
+// where curate's split puts the topics.
+func TestPublishLinksFromTheDocumentNamedAfterTheDirectory(t *testing.T) {
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"host:6309/index.md": fetchtest.Head("# Store\n\n- [Notes](/notes.md)\n", 3, nil),
+		"host:6309/notes.md": fetchtest.Head("# Notes\n\nWhat is here.\n\n- [Old](/notes/old.md)\n", 4, nil),
+	}}
+	got := publishNote(t, backend, "/notes/quic.md", noteBody, 0)
+	if got.IsError || !strings.HasSuffix(got.Text, "hubs:\n- /notes.md: bullet added\n") {
+		t.Fatalf("publish = %+v", got)
+	}
+	if hub := backend.PublishCall("/notes.md"); hub == nil || !strings.HasSuffix(hub.Body, "- [Old](/notes/old.md)\n- [QUIC retries](/notes/quic.md): Back off from 200ms, capped at 5s.\n") {
+		t.Errorf("hub publish = %+v", hub)
+	}
+}
+
 // A hub that already names the document, by name or by a link to its
 // directory, is left alone; a sibling's link is neither.
 func TestPublishSkipsAHubThatNamesTheDocument(t *testing.T) {

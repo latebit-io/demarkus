@@ -3,13 +3,9 @@ package marktools
 import (
 	"context"
 	"fmt"
-	"path"
-	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
-	"github.com/latebit-io/demarkus/client/docwrite/gate"
 	"github.com/latebit-io/demarkus/client/hub"
-	"github.com/latebit-io/demarkus/client/journal"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -19,7 +15,7 @@ import (
 // not editable, or none at all, is a note. The publish stands either way.
 func (t *Tools) linkOnPublish(ctx context.Context, at *landing, w *docwrite.Write, result *docwrite.Result) string {
 	version, err := docwrite.Version(result.Response.Metadata)
-	if err != nil || version != 1 || !linkable(at.target.Path) {
+	if err != nil || version != 1 || !hub.Linkable(at.target.Path) {
 		return ""
 	}
 	for _, hubPath := range hub.Ancestors(at.target.Path) {
@@ -36,7 +32,7 @@ func (t *Tools) linkOnPublish(ctx context.Context, at *landing, w *docwrite.Writ
 		default:
 			return mcpfmt.Note(fmt.Sprintf("hub %s not updated: %s", hubPath, h.Status))
 		}
-		added, err := hub.EnsureLink(ctx, doc, h, &hub.Link{Target: at.target.Path, Bullet: bulletFor(at.target.Path, w), Stamp: t.identityMeta(ctx)})
+		added, err := hub.EnsureLink(ctx, doc, h, &hub.Link{Target: at.target.Path, Bullet: hub.Bullet(at.target.Path, w.Body, w.Metadata), Stamp: t.identityMeta(ctx)})
 		switch {
 		case err != nil:
 			return mcpfmt.Note(err.Error())
@@ -47,32 +43,6 @@ func (t *Tools) linkOnPublish(ctx context.Context, at *landing, w *docwrite.Writ
 	}
 	return mcpfmt.Note(unlinked(at.target.Path))
 }
-
-// linkable: a document a hub should name. Hubs, logs, the store's own
-// .well-known pages and dated journal entries (reached through their
-// directory) are not.
-func linkable(p string) bool {
-	return !gate.NavExempt(p) && !strings.HasPrefix(p, "/.well-known/") && !journal.IsEntry(path.Base(p))
-}
-
-// bulletFor is the hub's one line for the document: its title linked, then
-// the description or the summary under the H1 when the hub rule allows it.
-func bulletFor(p string, w *docwrite.Write) string {
-	title := hub.Title(w.Body, w.Metadata, strings.TrimSuffix(path.Base(p), ".md"))
-	_, summary := gate.Summary(w.Body)
-	if d := w.Metadata["description"]; d != "" {
-		summary = d
-	}
-	bullet := fmt.Sprintf("- [%s](%s)", linkText.Replace(title), p)
-	if s := gate.BulletSummary(title, summary); s != "" {
-		bullet += ": " + s
-	}
-	return bullet
-}
-
-// linkText keeps a title inside its link: a bracket or backslash in it would
-// end the link text early.
-var linkText = strings.NewReplacer(`\`, `\\`, "[", `\[`, "]", `\]`)
 
 // unlinked words the finding when no ancestor hub exists, with the fix.
 func unlinked(p string) string {

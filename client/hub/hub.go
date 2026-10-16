@@ -185,19 +185,32 @@ func DropLinks(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, drop
 	return dropped, nil
 }
 
-// Ancestors are the index.md of every directory above the path, nearest
-// first, the path's own hub excluded.
+// Paths are where a directory's hub may live, in the order the rule prefers:
+// its index.md, else the document named after it (/a/b.md for /a/b/), where
+// curate's split puts a document's topics. The root has only /index.md.
+func Paths(dir string) []string {
+	dir = strings.TrimSuffix(dir, "/")
+	if dir == "" || dir == "." {
+		return []string{"/index.md"}
+	}
+	return []string{dir + "/index.md", dir + ".md"}
+}
+
+// Ancestors are the hubs that may name the path, nearest directory first,
+// each directory's Paths in order. An index.md skips its own directory; a
+// directory skips its index.md (archived with it), not its <dir>.md.
 func Ancestors(p string) []string {
+	if strings.HasSuffix(p, "/") {
+		return append(Paths(p)[1:], Ancestors(p+"index.md")...)
+	}
 	var hubs []string
-	dir := path.Dir(strings.TrimSuffix(p, "/"))
-	for {
-		if h := path.Join(dir, "index.md"); h != p {
-			hubs = append(hubs, h)
+	for dir := path.Dir(p); ; dir = path.Dir(dir) {
+		if !slices.Contains(Paths(dir), p) {
+			hubs = append(hubs, Paths(dir)...)
 		}
 		if dir == "/" || dir == "." {
 			return hubs
 		}
-		dir = path.Dir(dir)
 	}
 }
 

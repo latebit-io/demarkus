@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/journal"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/listwalk"
 	"github.com/latebit-io/demarkus/protocol"
@@ -163,7 +162,7 @@ func newestEntry(ctx context.Context, s soul, dir string) (name string, none boo
 	}
 	var newest string
 	err := w.Walk(ctx, dir, func(docPath string) error {
-		if name := path.Base(docPath); journal.IsEntry(name) && name > newest {
+		if name := path.Base(docPath); layout.IsJournalEntry(name) && name > newest {
 			newest = name
 		}
 		return nil
