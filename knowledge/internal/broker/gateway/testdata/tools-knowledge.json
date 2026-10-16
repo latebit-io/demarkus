@@ -66,10 +66,10 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Documents linking to a URL, from the revision-aware graph store, with bounded source revalidation. Freshness, provenance and typed relations also appear in mark_explore. The store is per pod.",
     "inputSchema": {
@@ -118,10 +118,10 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Fetch the agent manifest (/.well-known/agent-manifest.md): purpose, key paths, auth, usage. not-found if absent.",
     "inputSchema": {
@@ -140,10 +140,10 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Read-only hygiene audit of a store or directory: broken links, orphans, missing hubs, untagged or untyped documents, write-policy compliance under the floor (axes, fields, allowed values), secrets and personal data, duplicates, hub and document shape, style, a stale style guide, ADR gaps. Bounded; Coverage lists gaps. deep: metadata lost across versions. promotion: candidates for a shared knowledge system.",
     "inputSchema": {
@@ -170,10 +170,10 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Orient around one document: outline, outbound links, backlinks, siblings (10 each). Relation query arguments request grouped, paginated neighborhoods.",
     "inputSchema": {
@@ -221,10 +221,10 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Fetch a document: status, version, title, markdown body; over 8KB an outline (headings with #anchors), url#<anchor> one section, force=true the full body. Unchanged re-fetch returns a short notice. <dir>/.context reads a session primer: hub, newest journal entries, active work.",
     "inputSchema": {
@@ -273,10 +273,10 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Export the graph store as publishable markdown with mark:// links. Run mark_graph first.",
     "inputSchema": {
@@ -319,10 +319,10 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "List documents and subdirectories. Archived hidden unless include_archived; while complete=false pass next-cursor as cursor. For one document prefer mark_explore.",
     "inputSchema": {
@@ -356,10 +356,10 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends sections. A world without body match answers from the catalog and says so; system-wide: mark_lookup_all.",
     "inputSchema": {
@@ -403,10 +403,10 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Catalog lookup by subject across all readable worlds. One globally limited table of mark://{worldName}/{path} rows; partial world failures reported with matches. match=body also matches section text; budget>0 appends sections.",
     "inputSchema": {
@@ -458,7 +458,7 @@
     "inputSchema": {
       "properties": {
         "body": {
-          "description": "dry_run, apply: the distilled draft; refresh: the live knowledge body",
+          "description": "dry_run, apply: the distilled draft",
           "type": "string"
         },
         "metadata": {
@@ -467,7 +467,7 @@
           "type": "object"
         },
         "packet": {
-          "description": "apply, stamp, refresh: the packet hash from the report before it",
+          "description": "apply: the packet hash from the report before it",
           "type": "string"
         },
         "phase": {
@@ -538,10 +538,10 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Version history: total and current version, hash chain validity, per-version timestamps.",
     "inputSchema": {
@@ -560,10 +560,10 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
+      "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Readable worlds with a writable flag. Columns: world ({worldName} in mark://{worldName}/{path}), url, address, writable. Discover the system and pick a write destination.",
     "inputSchema": {

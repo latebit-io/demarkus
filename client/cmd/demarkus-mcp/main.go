@@ -143,8 +143,11 @@ func profileDefault() string {
 	return mcpfmt.ProfileFull
 }
 
-// requiresToken marks writes on the stdio surface, which authenticates by flag.
-const requiresToken = "Requires -token."
+// Write notes on the stdio surface, which authenticates by flag.
+const (
+	requiresToken      = "Requires -token."
+	writesRequireToken = "Writes require -token."
+)
 
 // tools is the full surface in registration order.
 func (h *handler) tools(host string) []mcpserver.ServerTool {
@@ -162,10 +165,10 @@ func (h *handler) tools(host string) []mcpserver.ServerTool {
 		{Tool: markDiscoverTool(), Handler: h.markDiscover},
 		{Tool: mcpfmt.BacklinksTool(url, ""), Handler: h.markBacklinks},
 		{Tool: mcpfmt.GraphExportTool(""), Handler: h.markGraphExport},
-		{Tool: mcpfmt.GraphPublishTool("graph document target, e.g. /graph.md or "+url, requiresToken), Handler: h.markGraphPublish},
+		{Tool: mcpfmt.GraphPublishTool(graphTargetDesc(host), requiresToken), Handler: h.markGraphPublish},
 		{Tool: mcpfmt.DoctorTool(scopeDesc(host), ""), Handler: h.markDoctor},
-		{Tool: mcpfmt.CurateTool(url, "apply "+requiresToken), Handler: h.markCurate},
-		{Tool: mcpfmt.PromoteTool(url, "Writes require -token.", promote.AllPhases), Handler: h.markPromote},
+		{Tool: mcpfmt.CurateTool(url, writesRequireToken), Handler: h.markCurate},
+		{Tool: mcpfmt.PromoteTool(url, writesRequireToken, promote.AllPhases), Handler: h.markPromote},
 	}
 }
 
@@ -256,6 +259,14 @@ func urlDesc(host string) string {
 	return "mark:// URL, e.g. mark://host/index.md"
 }
 
+// graphTargetDesc describes the mark_graph_publish target in the surface's URL form.
+func graphTargetDesc(host string) string {
+	if host != "" {
+		return "graph document target, e.g. /graph.md"
+	}
+	return "graph document target, e.g. mark://host/graph.md"
+}
+
 // scopeDesc describes a directory scope argument in the surface's URL form.
 func scopeDesc(host string) string {
 	if host != "" {
@@ -267,6 +278,7 @@ func scopeDesc(host string) string {
 func markLookupTool(host string) mcp.Tool {
 	options := append([]mcp.ToolOption{
 		mcp.WithDescription(mcpfmt.LookupDescription),
+		mcpfmt.ReadOnly(),
 		mcp.WithString("url", mcp.Required(), mcp.Description(mcpfmt.ScopeDesc("/")+"; "+urlDesc(host))),
 	}, mcpfmt.LookupParams()...)
 	return mcp.NewTool("mark_lookup", options...)
@@ -275,6 +287,7 @@ func markLookupTool(host string) mcp.Tool {
 func markDiscoverTool() mcp.Tool {
 	return mcp.NewTool("mark_discover",
 		mcp.WithDescription(mcpfmt.DiscoverDescription),
+		mcpfmt.ReadOnly(),
 		mcp.WithString("url", mcp.Description("server mark:// URL (optional with -host)")),
 	)
 }

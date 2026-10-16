@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"github.com/latebit-io/demarkus/client/docwrite/gate"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -90,5 +91,6 @@ func markWorldsSelfTool() mcp.Tool {
 		mcp.WithDescription(
 			"Show your own world: your identity maps to one private world and every other tool addresses it as mark://{worldName}/{path}. Table columns: world, url (external, may be blank), address (internal), writable (always yes). Call once before the other tools.",
 		),
+		mcpfmt.ReadOnly(),
 	)
 }

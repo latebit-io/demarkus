@@ -74,6 +74,7 @@ func markVersionsTool() mcp.Tool { return mcpfmt.VersionsTool(mcpURLDesc, "") }
 func markLookupTool() mcp.Tool {
 	options := append([]mcp.ToolOption{
 		mcp.WithDescription(mcpfmt.LookupDescription + " A world without body match answers from the catalog and says so; system-wide: mark_lookup_all."),
+		mcpfmt.ReadOnly(),
 		mcp.WithString("url", mcp.Required(), mcp.Description(mcpfmt.ScopeDesc("mark://{worldName}/"))),
 	}, mcpfmt.LookupParams()...)
 	return mcp.NewTool("mark_lookup", options...)
@@ -84,6 +85,7 @@ func markLookupAllTool() mcp.Tool {
 		mcp.WithDescription(
 			"Catalog lookup by subject across all readable worlds. One globally limited table of mark://{worldName}/{path} rows; partial world failures reported with matches. match=body also matches section text; budget>0 appends sections.",
 		),
+		mcpfmt.ReadOnly(),
 		mcp.WithString("query", mcp.Required(), mcp.Description(mcpfmt.QueryDesc)),
 		mcp.WithString("scope", mcp.Description("path applied to every world, e.g. / or /docs/ (default /)")),
 		mcp.WithString("filter", mcp.Description(mcpfmt.FilterDesc)),
@@ -111,6 +113,7 @@ func markPromoteTool(phases []string) mcp.Tool { return mcpfmt.PromoteTool(mcpUR
 func markDiscoverTool() mcp.Tool {
 	return mcp.NewTool("mark_discover",
 		mcp.WithDescription(mcpfmt.DiscoverDescription),
+		mcpfmt.ReadOnly(),
 		mcp.WithString("url", mcp.Required(), mcp.Description(mcpURLDesc)),
 	)
 }
@@ -124,6 +127,7 @@ func markGraphExportTool() mcp.Tool { return mcpfmt.GraphExportTool("") }
 func markWorldsTool() mcp.Tool {
 	return mcp.NewTool("mark_worlds",
 		mcp.WithDescription("Readable worlds with a writable flag. Columns: world ({worldName} in mark://{worldName}/{path}), url, address, writable. Discover the system and pick a write destination."),
+		mcpfmt.ReadOnly(),
 	)
 }
 

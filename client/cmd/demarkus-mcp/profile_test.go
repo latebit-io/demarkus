@@ -45,6 +45,9 @@ func TestToolProfiles(t *testing.T) {
 			t.Errorf("%s is served but missing from mcpfmt.KnownTools", tool.Name)
 		}
 	}
+	if err := mcpfmt.CheckReadOnly(full); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestToolSchemaBudget(t *testing.T) {
