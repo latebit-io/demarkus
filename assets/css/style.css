@@ -1,25 +1,26 @@
 /* Demarkus — "The Reading Room"
-   A rare-books archive after hours: deep ink, parchment text, antique gold.
+   A quiet reading room: forest ink, parchment text, soft sage accents.
    Calm scholarly authority over neon noise. Knowledge that endures. */
 
 :root {
-    --bg: #100e0b;
-    --bg-2: #15120d;
-    --surface: #17140f;
-    --surface-alt: #1b1711;
-    --panel: #0c0a07;
+    --bg: #0e1511;
+    --bg-2: #141d17;
+    --surface: #17221b;
+    --surface-alt: #1d2b22;
+    --panel: #0a100c;
 
     --ink: #ece4d2;
     --ink-soft: #d8cfba;
-    --muted: #a59a82;
-    --faint: #756c5a;
+    --muted: #a5b2a3;
+    --faint: #768575;
 
-    --gold: #c9a45a;
-    --gold-bright: #e2c177;
-    --gold-deep: #9c7c3e;
+    --accent: #94c5a0;
+    --accent-bright: #bde2c5;
+    --accent-deep: #608e6b;
+    --accent-rgb: 148, 197, 160;
     --oxblood: #8c3a39;
 
-    --rule: rgba(201, 164, 90, 0.22);
+    --rule: rgba(var(--accent-rgb), 0.22);
     --rule-soft: rgba(236, 228, 210, 0.1);
     --rule-hair: rgba(236, 228, 210, 0.06);
 
@@ -50,7 +51,7 @@ body {
     background-image:
         radial-gradient(
             1200px 680px at 50% -8%,
-            rgba(201, 164, 90, 0.07),
+            rgba(var(--accent-rgb), 0.07),
             transparent 60%
         ),
         repeating-linear-gradient(
@@ -60,7 +61,7 @@ body {
             transparent 1px,
             transparent 32px
         ),
-        linear-gradient(180deg, #100e0b 0%, #0d0b08 100%);
+        linear-gradient(180deg, var(--bg) 0%, var(--panel) 100%);
     background-attachment: fixed;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
@@ -80,13 +81,13 @@ body {
 }
 
 .graphfield .gf-edges line {
-    stroke: var(--gold);
+    stroke: var(--accent);
     stroke-width: 0.8;
     opacity: 0.13;
 }
 
 .graphfield .gf-nodes circle {
-    fill: var(--gold);
+    fill: var(--accent);
     opacity: 0.2;
 }
 
@@ -103,7 +104,7 @@ body {
     }
 }
 
-/* Soft vignette + a faint gilt horizon glow, replacing the neon squares */
+/* Soft vignette and a faint sage horizon glow. */
 .vignette {
     position: fixed;
     inset: 0;
@@ -112,7 +113,7 @@ body {
     background:
         radial-gradient(
             900px 520px at 50% 0%,
-            rgba(201, 164, 90, 0.06),
+            rgba(var(--accent-rgb), 0.06),
             transparent 70%
         ),
         radial-gradient(
@@ -128,13 +129,34 @@ body {
 }
 
 .beta-note {
-    color: var(--muted);
-    font-size: 0.95rem;
-    margin: 1rem 0;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin: 0 0 2rem;
+    padding: 1.15rem 1.4rem;
+    border: 1px solid var(--accent-deep);
+    border-left: 4px solid var(--accent);
+    border-radius: 3px;
+    background: var(--surface-alt);
+    color: var(--ink);
+    font-size: clamp(1.1rem, 1rem + 0.3vw, 1.25rem);
+    line-height: 1.5;
 }
 
 .beta-note strong {
-    color: var(--gold);
+    flex-shrink: 0;
+    padding: 0.35rem 0.7rem;
+    border-radius: 2px;
+    background: var(--accent);
+    color: var(--panel);
+    font-family: var(--mono);
+    font-size: 0.9rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.beta-note p {
+    margin: 0;
 }
 
 /* ---------- Masthead ---------- */
@@ -148,7 +170,7 @@ body {
     gap: 1rem 1.4rem;
     flex-wrap: wrap;
     border-bottom: 1px solid var(--rule);
-    box-shadow: 0 1px 0 0 rgba(201, 164, 90, 0.12);
+    box-shadow: 0 1px 0 0 rgba(var(--accent-rgb), 0.12);
 }
 
 .brand {
@@ -167,12 +189,12 @@ body {
     font-family: var(--display);
     font-weight: 600;
     font-size: 1.4rem;
-    color: var(--gold-bright);
+    color: var(--accent-bright);
     border: 1px solid var(--rule);
     background:
         radial-gradient(
             120% 120% at 30% 20%,
-            rgba(201, 164, 90, 0.16),
+            rgba(var(--accent-rgb), 0.16),
             transparent 70%
         ),
         var(--panel);
@@ -213,7 +235,7 @@ body {
     right: 0;
     bottom: -2px;
     height: 1px;
-    background: var(--gold);
+    background: var(--accent);
     transform: scaleX(0);
     transform-origin: left;
     transition: transform 220ms ease;
@@ -221,7 +243,7 @@ body {
 
 .top-nav a:hover,
 .top-nav a.is-active {
-    color: var(--gold-bright);
+    color: var(--accent-bright);
 }
 
 .top-nav a:hover::after,
@@ -252,14 +274,14 @@ body {
     bottom: -4px;
     width: 84px;
     height: 1px;
-    background: var(--gold);
+    background: var(--accent);
 }
 
 .eyebrow {
     display: inline-block;
     margin: 0 0 1rem;
     font-family: var(--mono);
-    color: var(--gold);
+    color: var(--accent);
     letter-spacing: 0.34em;
     text-transform: uppercase;
     font-size: 0.72rem;
@@ -339,7 +361,7 @@ body {
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.18em;
-    color: var(--gold);
+    color: var(--accent);
 }
 
 .content-card p,
@@ -360,7 +382,7 @@ body {
     font-size: 3.5em;
     line-height: 0.78;
     padding: 0.06em 0.12em 0 0;
-    color: var(--gold);
+    color: var(--accent);
 }
 
 .is-home .content-card > p:first-of-type {
@@ -388,7 +410,7 @@ body {
 }
 
 .content-card li::marker {
-    color: var(--gold-deep);
+    color: var(--accent-deep);
 }
 
 .content-card strong {
@@ -410,14 +432,14 @@ body {
     font-family: var(--display);
     font-size: 1.25rem;
     letter-spacing: 0.3em;
-    color: var(--gold);
+    color: var(--accent);
 }
 
-/* Links — quiet ink, gilt underline that draws on hover */
+/* Links — quiet ink, sage underline that draws on hover */
 .content-card a {
     color: var(--ink);
     text-decoration: none;
-    background-image: linear-gradient(var(--gold), var(--gold));
+    background-image: linear-gradient(var(--accent), var(--accent));
     background-position: 0 100%;
     background-repeat: no-repeat;
     background-size: 100% 1px;
@@ -428,15 +450,15 @@ body {
 }
 
 .content-card a:hover {
-    color: var(--gold-bright);
+    color: var(--accent-bright);
     background-size: 100% 2px;
 }
 
-/* Blockquote — a margin note in the gilt rule */
+/* Blockquote — a margin note beside a sage rule */
 .content-card blockquote {
     margin: 1.6rem 0;
     padding: 0.2rem 0 0.2rem 1.4rem;
-    border-left: 2px solid var(--gold);
+    border-left: 2px solid var(--accent);
     color: var(--muted);
     font-style: italic;
     font-size: 1.08rem;
@@ -451,8 +473,8 @@ body {
 .content-card code {
     font-family: var(--mono);
     font-size: 0.86em;
-    color: var(--gold-bright);
-    background: rgba(201, 164, 90, 0.08);
+    color: var(--accent-bright);
+    background: rgba(var(--accent-rgb), 0.08);
     border: 1px solid var(--rule-hair);
     padding: 0.08rem 0.36rem;
     border-radius: 2px;
@@ -463,7 +485,7 @@ body {
     overflow-x: auto;
     background: var(--panel);
     border: 1px solid var(--rule-soft);
-    border-left: 2px solid var(--gold-deep);
+    border-left: 2px solid var(--accent-deep);
     border-radius: 2px;
     padding: 1rem 1.15rem;
     box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.35);
@@ -494,7 +516,7 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.12em;
     font-size: 0.68rem;
-    color: var(--gold);
+    color: var(--accent);
     padding: 0.55rem 0.9rem;
     border-bottom: 1px solid var(--rule);
 }
@@ -507,11 +529,11 @@ body {
 }
 
 .content-card tbody tr:hover td {
-    background: rgba(201, 164, 90, 0.04);
+    background: rgba(var(--accent-rgb), 0.04);
 }
 
 .content-card td code {
-    color: var(--gold-bright);
+    color: var(--accent-bright);
 }
 
 /* ---------- Tier cards (three scales) ---------- */
@@ -525,7 +547,7 @@ body {
 
 .tier {
     border: 1px solid var(--rule-soft);
-    border-top: 2px solid var(--gold-deep);
+    border-top: 2px solid var(--accent-deep);
     border-radius: 2px;
     background: var(--surface);
     padding: 1.2rem 1.3rem 1.35rem;
@@ -547,7 +569,7 @@ body {
     font-size: 0.66rem;
     letter-spacing: 0.16em;
     text-transform: uppercase;
-    color: var(--gold);
+    color: var(--accent);
 }
 
 .content-card .tier .tier-links {
@@ -686,6 +708,15 @@ body {
 
     .content-card > p:first-of-type::first-letter {
         font-size: 3em;
+    }
+}
+
+@media (max-width: 560px) {
+    .beta-note {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.65rem;
+        padding: 1rem;
     }
 }
 
