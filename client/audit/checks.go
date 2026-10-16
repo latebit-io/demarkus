@@ -320,31 +320,51 @@ func (a *audit) checkReferences() {
 		for _, m := range mentions {
 			n, _ := strconv.Atoi(m[1])
 			num := fmt.Sprintf("%0*d", adrNumberWidth, n)
-			if num == own || seen[num] {
+			if m[2] != "" || num == own || seen[num] {
 				continue
 			}
 			seen[num] = true
-			target := adrTarget(byDir, p, n)
+			ref := resolveADR(byDir, p, n)
 			switch {
-			case target == "":
+			case len(ref.records) == 0:
 				a.add(CheckReferences, p, fmt.Sprintf("%q dangling: no adr/%s-*.md in scope", m[0], num), "restore the record or drop the reference")
-			case !slices.Contains(d.links, target):
-				a.add(CheckReferences, p, fmt.Sprintf("%q unlinked: %s exists but the body has no link to it", m[0], target), "[ADR "+num+"]("+target+")")
+			case slices.ContainsFunc(ref.records, func(r string) bool { return slices.Contains(d.links, r) }):
+			case ref.foreign:
+				a.add(CheckReferences, p, fmt.Sprintf("%q not in %s: %s is another series", m[0], ref.series, ref.records[0]), "link it if that record is meant")
+			case len(ref.records) > 1:
+				a.add(CheckReferences, p, fmt.Sprintf("%q ambiguous: %s share the number", m[0], strings.Join(ref.records, " and ")), "renumber one (ADR sequence), then link the record meant")
+			default:
+				a.add(CheckReferences, p, fmt.Sprintf("%q unlinked: %s exists but the body has no link to it", m[0], ref.records[0]), "[ADR "+num+"]("+ref.records[0]+")")
 			}
 		}
 	}
 }
 
-// adrTarget finds adr/NNNN-*.md in the citing document's own project: the
-// nearest adr directory walking up from the document. A number that exists
-// only in another project's series is not this document's reference.
-func adrTarget(byDir map[string]map[int][]string, from string, n int) string {
+// adrRef is what one ADR number names from a citing document.
+type adrRef struct {
+	records []string // sorted; more than one is a duplicated number
+	series  string   // the nearest series walking up, with its slash; "" when none
+	foreign bool     // records are in a series above it: another project's numbering
+}
+
+// resolveADR finds the number in the nearest adr directory walking up that
+// has it. Only a record in the document's own (nearest) series is provable.
+func resolveADR(byDir map[string]map[int][]string, from string, n int) adrRef {
+	var ref adrRef
 	for dir := path.Dir(from); ; dir = path.Dir(dir) {
-		if paths := byDir[path.Join(dir, "adr")][n]; len(paths) > 0 {
-			return slices.Min(paths)
+		series := path.Join(dir, "adr")
+		if nums, ok := byDir[series]; ok {
+			if ref.series == "" {
+				ref.series = series + "/"
+			}
+			if records := nums[n]; len(records) > 0 {
+				ref.records = slices.Sorted(slices.Values(records))
+				ref.foreign = ref.series != series+"/"
+				return ref
+			}
 		}
 		if dir == "/" || dir == "." {
-			return ""
+			return ref
 		}
 	}
 }

@@ -237,7 +237,16 @@ func TestReferenceChecks(t *testing.T) {
 		"/notes.md":               tagged("# Notes\n\nSee ADR-0001 and ADR 0009.\n\n```\nADR 0007 in a fence\n```\n"),
 		"/proj/index.md":          {Body: "# P\n\n- [a](/proj/adr/)\n", Meta: map[string]string{"tags": "index"}},
 		"/proj/adr/0001-local.md": tagged("# 0001. Local\n\nSummary.\n"),
-		"/proj/thoughts.md":       tagged("# T\n\nADR 0001 here means the project's own.\n"),
+		"/proj/thoughts.md":       tagged("# T\n\nADR 0001 here means the project's own; ADR 0002 is not in its series.\n"),
+		// Ranges are spans, not citations; a duplicated number is provable
+		// only when the body links one of its records.
+		"/ranges.md":      tagged("# R\n\nADR 0001 to 0002, ADR 0001-0002, ADR 0001 – 0002 and ADR 0001 through ADR 0002.\n"),
+		"/adr/0003-a.md":  tagged("# 0003. A\n\nSummary.\n"),
+		"/adr/0003-b.md":  tagged("# 0003. B\n\nSummary.\n"),
+		"/dup.md":         tagged("# D\n\nADR 0003 decided it.\n"),
+		"/dup-linked.md":  tagged("# D\n\n[ADR 0003](/adr/0003-b.md) decided it.\n"),
+		"/other/index.md": {Body: "# O\n\n- [x](/other/x.md)\n", Meta: map[string]string{"tags": "index"}},
+		"/other/x.md":     tagged("# X\n\nA project without its own series cites the root's ADR 0002.\n"),
 	})
 	r, err := Run(context.Background(), f, Options{Scope: "/"})
 	if err != nil {
@@ -245,9 +254,12 @@ func TestReferenceChecks(t *testing.T) {
 	}
 	got := findings(r, CheckReferences)
 	want := []string{
+		"/dup.md: \"ADR 0003\" ambiguous: /adr/0003-a.md and /adr/0003-b.md share the number",
 		"/notes.md: \"ADR-0001\" unlinked: /adr/0001-one.md exists",
 		"/notes.md: \"ADR 0009\" dangling",
+		"/other/x.md: \"ADR 0002\" unlinked: /adr/0002-two.md exists",
 		"/proj/thoughts.md: \"ADR 0001\" unlinked: /proj/adr/0001-local.md exists",
+		"/proj/thoughts.md: \"ADR 0002\" not in /proj/adr/: /adr/0002-two.md is another series",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("references: %v", got)

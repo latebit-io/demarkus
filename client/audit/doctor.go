@@ -39,7 +39,8 @@ const (
 )
 
 var (
-	adrReferenceRe = regexp.MustCompile(`(?i)\bADR[ -]?#?(\d{3,4})\b`)
+	// Group 2 is a range tail ("to 0027", "-0027"): a span, not a citation.
+	adrReferenceRe = regexp.MustCompile(`(?i)\bADR[ -]?#?(\d{3,4})\b(\s*(?:-|–|to|through)\s*(?:ADR[ -]?#?)?\d{3,4}\b)?`)
 	adrFileRe      = regexp.MustCompile(`^(\d{4})-.*\.md$`)
 )
 
