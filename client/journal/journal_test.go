@@ -145,6 +145,22 @@ func TestAppendLinksAnExistingHubUnderItsJournalSection(t *testing.T) {
 	}
 }
 
+func TestAppendUsesADirNamedHubWithoutAnIndex(t *testing.T) {
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"h/proj.md": fetchtest.Head("# Proj\n\n## Topics\n\n- [a](proj/a.md)\n", 2, map[string]string{"tags": "index"}),
+	}}
+	out, err := Append(t.Context(), docsOn(backend), Request{Dir: "/proj/", Entry: "Today.", Stamp: stamp, Now: day})
+	if err != nil || len(out.Notes) != 0 {
+		t.Fatalf("outcome = %+v err %v", out, err)
+	}
+	if hub := backend.PublishCall("/proj.md"); hub == nil || !strings.Contains(hub.Body, "## Journal\n\n- [Journal](proj/journal/)") || hub.ExpectedVersion != 2 {
+		t.Errorf("dir-named hub publish = %+v", hub)
+	}
+	if idx := backend.PublishCall("/proj/index.md"); idx != nil {
+		t.Errorf("a second hub was created: %+v", idx)
+	}
+}
+
 func TestAppendReportsHubFailuresAsNotes(t *testing.T) {
 	backend := &fetchtest.Client{
 		Published: map[string]fetch.Result{"h/proj/index.md": {Response: protocol.Response{Status: protocol.StatusUnauthorized}}},

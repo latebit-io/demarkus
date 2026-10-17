@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/hub"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/listwalk"
 	"github.com/latebit-io/demarkus/protocol"
@@ -115,26 +116,31 @@ func probe(ctx context.Context, s soul, slug string) ProjectStatus {
 		st.Reason = failure(ctx, lErr)
 		return st
 	}
-	var hub protocol.Response
+	var resp protocol.Response
 	var hErr error
 	if root := l.Root(slug); root != st.Root {
 		st.Root = root
 		cancelHub()
-		hub, hErr = s.fetch(ctx, root+"index.md")
+		resp, hErr = s.fetch(ctx, root+"index.md")
 	} else {
 		r := <-hubDone
-		hub, hErr = r.resp, r.err
+		resp, hErr = r.resp, r.err
 	}
 	hubPath := st.Root + "index.md"
+	// Without an index.md, the project's hub may be its <dir>.md.
+	if paths := hub.Paths(st.Root); hErr == nil && resp.Status == protocol.StatusNotFound && len(paths) > 1 {
+		hubPath = paths[1]
+		resp, hErr = s.fetch(ctx, hubPath)
+	}
 	switch {
 	case hErr != nil:
 		st.Reason = fmt.Sprintf("fetch %s: %s", hubPath, failure(ctx, hErr))
 		return st
-	case hub.Status == protocol.StatusNotFound:
+	case resp.Status == protocol.StatusNotFound:
 		st.State = ProjectNew
 		return st
-	case hub.Status != protocol.StatusOK && hub.Status != protocol.StatusArchived:
-		st.Reason = hubPath + ": " + hub.Status
+	case resp.Status != protocol.StatusOK && resp.Status != protocol.StatusArchived:
+		st.Reason = hubPath + ": " + resp.Status
 		return st
 	}
 	st.State, st.Reason = ProjectKnown, ""

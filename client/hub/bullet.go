@@ -31,11 +31,13 @@ func Bullet(p, body string, meta map[string]string) string {
 	return bullet
 }
 
-// JournalBullet is the scope hub's one link to its journal directory, and
-// the section it sits under; one link reaches every day.
-func JournalBullet(journal string) (section, bullet string) {
+// JournalBullet is hubPath's one link to the scope's journal directory, and
+// the section it sits under; one link reaches every day. The link is relative
+// to the hub, which may be the scope's <dir>.md above it.
+func JournalBullet(hubPath, scope, journal string) (section, bullet string) {
 	name := layout.Section(journal)
-	return "## " + name, fmt.Sprintf("- [%s](%s): dated session notes", name, journal)
+	rel := strings.TrimPrefix(strings.TrimPrefix(scope+journal, path.Dir(hubPath)), "/")
+	return "## " + name, fmt.Sprintf("- [%s](%s): dated session notes", name, rel)
 }
 
 // linkText keeps a title inside its link: a bracket or backslash in it would

@@ -50,7 +50,8 @@ func Apply(ctx context.Context, docs hub.Docs, p *Plan, stamp map[string]string)
 }
 
 func publishPlanned(ctx context.Context, doc *docwrite.Doc, w *PlanWrite, stamp map[string]string) Outcome {
-	meta := maps.Clone(w.Metadata)
+	meta := make(map[string]string, len(w.Metadata)+len(stamp))
+	maps.Copy(meta, w.Metadata)
 	maps.Copy(meta, stamp)
 	o := Outcome{Path: w.Path, Metadata: meta}
 	result, err := doc.Publish(ctx, docwrite.Write{Body: w.Body, ExpectedVersion: w.Version, Metadata: meta}, merge.OnConflictFail)

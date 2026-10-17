@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -119,6 +120,24 @@ func TestPlanLinksOrphansFromTheNearestHub(t *testing.T) {
 	}
 	if got := fixable(r, CheckOrphans); len(got) != 2 {
 		t.Errorf("fixable orphans = %v", got)
+	}
+}
+
+// A project whose hub is its <dir>.md links the journal from there, the link
+// relative to that hub; no index.md is created beside it.
+func TestPlanLinksAJournalFromADirNamedHub(t *testing.T) {
+	r, writes := planOf(t, map[string]fakeDoc{
+		"/index.md":                    hubDoc("# Hub\n\nThe store.\n\n- [Notes](/notes.md)\n"),
+		"/notes.md":                    hubDoc("# Notes\n\nThe topics.\n\n- [A](/notes/a.md)\n"),
+		"/notes/a.md":                  tagged("# A\n\nSummary.\n"),
+		"/notes/journal/2026-01-01.md": tagged("# Day one\n\nNotes.\n"),
+	})
+	want := "# Notes\n\nThe topics.\n\n- [A](/notes/a.md)\n\n## Journal\n\n- [Journal](notes/journal/): dated session notes\n"
+	if got := writes["/notes.md"].Body; got != want {
+		t.Errorf("dir-named hub = %q", got)
+	}
+	if _, ok := writes["/notes/index.md"]; ok || len(fixable(r, CheckOrphans)) != 1 {
+		t.Errorf("writes = %v, fixable orphans = %v", slices.Collect(maps.Keys(writes)), fixable(r, CheckOrphans))
 	}
 }
 

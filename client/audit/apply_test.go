@@ -46,3 +46,20 @@ func TestApplySkipsWhatARequiredWriteDidNotLand(t *testing.T) {
 		t.Errorf("publishes = %+v", backend.PublishCalls)
 	}
 }
+
+func TestApplyStampsAWriteWithoutMetadata(t *testing.T) {
+	backend := &fetchtest.Client{
+		Published: map[string]fetch.Result{"h/x.md": fetchtest.Head("# X\n", 2, nil)},
+		PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+			return fetchtest.Created(r.ExpectedVersion + 1), nil
+		},
+	}
+	docs := func(p string) *docwrite.Doc {
+		return &docwrite.Doc{Backend: backend, Host: "h", Path: p, Write: docwrite.SendOnce("w")}
+	}
+	plan := &Plan{Writes: []PlanWrite{{Path: "/x.md", Version: 2, Body: "# X\n\nLinked.\n"}}}
+	got := Apply(context.Background(), docs, plan, map[string]string{"agent": "a"})
+	if got[0].Result != Applied || backend.PublishCall("/x.md").Metadata["agent"] != "a" {
+		t.Errorf("outcome = %+v, publishes = %+v", got[0], backend.PublishCalls)
+	}
+}

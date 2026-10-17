@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/hub"
 	"github.com/latebit-io/demarkus/client/listwalk"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
@@ -44,11 +45,18 @@ func (t *Tools) Context(ctx context.Context, rawURL string) Result {
 	}
 	journalHeading := layout.Section(l.Journal)
 	fmt.Fprintf(&p.out, "# Context: %s\n", dir)
-	switch p.section(ctx, "Hub", dir+"index.md", false) {
+	// The hub is the first of hub.Paths the store has, live or archived.
+	var hubPath, status string
+	for _, hubPath = range hub.Paths(dir) {
+		if status = p.section(ctx, "Hub", hubPath, true); status != protocol.StatusNotFound {
+			break
+		}
+	}
+	switch status {
 	case protocol.StatusNotFound:
-		return text(fmt.Sprintf("status: new\n\nNo hub at %sindex.md: a new project; the journal route creates it.\n", dir))
+		return text(fmt.Sprintf("status: new\n\nNo hub at %s: a new project; the journal route creates it.\n", strings.Join(hub.Paths(dir), " or ")))
 	case protocol.StatusArchived:
-		return text(fmt.Sprintf("status: archived\n\n%sindex.md is archived: a retired project.\n", dir))
+		return text(fmt.Sprintf("status: archived\n\n%s is archived: a retired project.\n", hubPath))
 	}
 	entries, listed := p.newest(ctx, dir+l.Journal, contextJournalDays, layout.IsJournalEntry)
 	if listed && len(entries) == 0 {

@@ -148,6 +148,15 @@ func (pl *planner) nearestHub(p, assumed string) string {
 	return ""
 }
 
+// dirHub is the first of dir's hub.Paths the plan sees live, else the first.
+func (pl *planner) dirHub(dir string) string {
+	paths := hub.Paths(dir)
+	if i := slices.IndexFunc(paths, pl.exists); i >= 0 {
+		return paths[i]
+	}
+	return paths[0]
+}
+
 func (pl *planner) settle(findings ...int) {
 	for _, i := range findings {
 		pl.a.findings[i].Fixable = true
@@ -380,8 +389,11 @@ func (pl *planner) orphans() {
 	for _, l := range pl.a.leads.orphans {
 		switch p := l.path; {
 		case pl.a.layout.JournalEntry(p):
-			section, bullet := hub.JournalBullet(pl.a.layout.Journal)
-			pl.link(l, hub.Paths(path.Dir(path.Dir(p)))[0], &hub.Link{Target: path.Dir(p) + "/", Section: section, Bullet: bullet})
+			journalDir := path.Dir(p) + "/"
+			scope := strings.TrimSuffix(journalDir, pl.a.layout.Journal)
+			hubPath := pl.dirHub(scope)
+			section, bullet := hub.JournalBullet(hubPath, scope, pl.a.layout.Journal)
+			pl.link(l, hubPath, &hub.Link{Target: journalDir, Section: section, Bullet: bullet})
 		case !hub.Linkable(p):
 			pl.skip(CheckOrphans, p, "not a document a hub names; link its directory from the hub above it")
 		default:
