@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit-io/demarkus/client/mdoutline"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
 func TestShapeProblems(t *testing.T) {

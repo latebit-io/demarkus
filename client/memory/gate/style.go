@@ -8,8 +8,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/memory/okf"
+	"github.com/latebit-io/demarkus/client/memory/outline"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
 )
@@ -82,11 +83,11 @@ func Findings(problems []string, guide string) string {
 // sizeProblems applies the fetch threshold to a document that is not a
 // journal, which grows by the day and is read by section.
 func sizeProblems(url, body string) []string {
-	if len(body) < mdoutline.OutlineThreshold || journalPath(url) {
+	if len(body) < outline.Threshold || journalPath(url) {
 		return nil
 	}
 	return []string{stylerules.Prefix(stylerules.Size, fmt.Sprintf(
-		"body is %d KB, at or over the 8 KB fetch threshold, so a plain fetch returns an outline; split it into a hub plus topic files", len(body)/1024))}
+		"body is %d KB, at or over the %d KB fetch threshold, so a plain fetch returns an outline; split it into a hub plus topic files", len(body)/1024, outline.Threshold/1024))}
 }
 
 // Frontmatter reads the fence OpensWithFrontmatter detects: its keys as the

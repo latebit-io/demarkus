@@ -1,4 +1,4 @@
-package mdoutline
+package marktools
 
 import (
 	"strings"
@@ -19,15 +19,15 @@ func TestBinaryBody(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := BinaryBody(tt.body); got != tt.want {
-				t.Errorf("BinaryBody(%q) = %v, want %v", tt.body, got, tt.want)
+			if got := binaryBody(tt.body); got != tt.want {
+				t.Errorf("binaryBody(%q) = %v, want %v", tt.body, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestNonMarkdownNotice(t *testing.T) {
-	notice := NonMarkdownNotice(42)
+	notice := nonMarkdownNotice(42)
 	if !strings.Contains(notice, "42 bytes") {
 		t.Errorf("notice should carry the byte count, got: %s", notice)
 	}

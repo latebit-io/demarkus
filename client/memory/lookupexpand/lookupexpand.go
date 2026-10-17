@@ -12,8 +12,9 @@ import (
 
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/lookuptable"
-	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/memory/graph"
+	"github.com/latebit-io/demarkus/client/memory/outline"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
 // Delimiter opens every expanded block and every note. Body lines that start
@@ -234,7 +235,7 @@ func (e *expansion) document(ctx context.Context, path string) (*cached, bool) {
 func (e *expansion) render(path, anchor string, doc *cached) int {
 	body := doc.Body
 	p := piece{path: path, anchor: anchor, version: doc.Version}
-	if anchor == "" && len(body) >= mdoutline.OutlineThreshold {
+	if anchor == "" && len(body) >= outline.Threshold {
 		n := 0
 		for _, h := range matchingSections(body, doc.headings, e.terms) {
 			p.anchor, p.start, p.end, p.text = h.Anchor, h.Start, h.End, body[h.Start:h.End]
@@ -243,7 +244,7 @@ func (e *expansion) render(path, anchor string, doc *cached) int {
 			}
 		}
 		if n == 0 {
-			p.anchor, p.start, p.end, p.text = "", 0, 0, mdoutline.OutlineBody(path, body)
+			p.anchor, p.start, p.end, p.text = "", 0, 0, outline.Body(path, body)
 			if e.emit(&p) {
 				n++
 			}

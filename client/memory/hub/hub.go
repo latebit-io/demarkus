@@ -14,8 +14,8 @@ import (
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
 // Title is the hub's name: its H1, else its title metadata, else fallback.

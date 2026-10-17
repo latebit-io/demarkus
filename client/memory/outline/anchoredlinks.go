@@ -1,9 +1,10 @@
-package mdoutline
+package outline
 
 import (
 	"sort"
 
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
 // AnchoredLink is a body link with its label text and the anchor of the
@@ -20,7 +21,7 @@ type AnchoredLink struct {
 // links.Extract. Empty-label links attribute by their enclosing block's
 // start, which sits in the same section since headings cannot split a block.
 func AnchoredLinks(body string) []AnchoredLink {
-	hs := Headings(body)
+	hs := mdoutline.Headings(body)
 	infos := links.ExtractWithPositions(body)
 	out := make([]AnchoredLink, len(infos))
 	for i, info := range infos {
