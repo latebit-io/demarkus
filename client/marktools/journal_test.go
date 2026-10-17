@@ -11,7 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 )
 
-// The journal mechanic is tested in client/journal; here that the route
+// The journal mechanic is tested in client/memory/journal; here that the route
 // authorizes once, writes through the surface, and words the outcome.
 func TestAppendRouteTodayCreatesTheJournal(t *testing.T) {
 	backend := &fetchtest.Client{}

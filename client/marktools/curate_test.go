@@ -7,9 +7,9 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
-	"github.com/latebit-io/demarkus/client/graph"
-	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/marktools"
+	"github.com/latebit-io/demarkus/client/memory/graph"
+	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/render"
 )
@@ -33,7 +33,7 @@ func hashAfter(t *testing.T, report marktools.Result, key string) string {
 	return hash
 }
 
-// The mechanic is tested in client/curate; here that the tool reads the head,
+// The mechanic is tested in client/memory/curate; here that the tool reads the head,
 // finds the anchored links through the graph store, and words the report.
 func TestCurateReportsWithInboundLinks(t *testing.T) {
 	backend := &fetchtest.Client{Published: map[string]fetch.Result{

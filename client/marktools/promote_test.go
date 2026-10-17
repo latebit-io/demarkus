@@ -21,7 +21,7 @@ func packetOf(t *testing.T, report marktools.Result) string {
 	return hashAfter(t, report, "packet: ")
 }
 
-// The mechanics are tested in client/promote; here that each phase reads
+// The mechanics are tested in client/memory/promote; here that each phase reads
 // the head, authorizes its write, and words the outcome.
 func TestPromoteStageThenStamp(t *testing.T) {
 	backend := &fetchtest.Client{Published: map[string]fetch.Result{

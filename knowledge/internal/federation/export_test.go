@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/generation"
-	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/memory/graphstore"
 )
 
 // withBeta adds a second world, beta, holding one document.

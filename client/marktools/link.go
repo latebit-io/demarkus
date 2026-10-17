@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
-	"github.com/latebit-io/demarkus/client/hub"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/memory/hub"
 	"github.com/latebit-io/demarkus/protocol"
 )
 

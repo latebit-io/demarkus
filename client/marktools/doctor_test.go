@@ -12,7 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/render"
 )
 
-// The audit itself is tested in client/audit; here that the tool scopes it
+// The audit itself is tested in client/memory/audit; here that the tool scopes it
 // to the resolved target, reads with the read token, and words the outcome.
 func TestDoctorAuditsTheScopeThroughTheBackend(t *testing.T) {
 	docs := map[string]string{

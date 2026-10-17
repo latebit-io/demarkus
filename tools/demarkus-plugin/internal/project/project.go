@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/audit"
+	"github.com/latebit-io/demarkus/client/memory/audit"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"

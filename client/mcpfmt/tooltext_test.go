@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit-io/demarkus/client/promote"
+	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 

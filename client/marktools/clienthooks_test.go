@@ -7,10 +7,10 @@ import (
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/graph"
-	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/marktools"
+	"github.com/latebit-io/demarkus/client/memory/graph"
+	"github.com/latebit-io/demarkus/client/memory/graphstore"
 )
 
 // clientSurface is a direct client's binding of the hooks, as demarkus-mcp

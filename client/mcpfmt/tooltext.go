@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/lookupexpand"
-	"github.com/latebit-io/demarkus/client/promote"
+	"github.com/latebit-io/demarkus/client/memory/lookupexpand"
+	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/memory/graph"
 )
 
 func TestPartialCrawlStaysVisible(t *testing.T) {
