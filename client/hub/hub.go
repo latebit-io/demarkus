@@ -185,19 +185,32 @@ func DropLinks(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, drop
 	return dropped, nil
 }
 
-// Ancestors are the index.md of every directory above the path, nearest
-// first, the path's own hub excluded.
+// Paths are where a directory's hub may live, in the order the rule prefers:
+// its index.md, else the document named after it (/a/b.md for /a/b/), where
+// curate's split puts a document's topics. The root has only /index.md.
+func Paths(dir string) []string {
+	dir = strings.TrimSuffix(dir, "/")
+	if dir == "" || dir == "." {
+		return []string{"/index.md"}
+	}
+	return []string{dir + "/index.md", dir + ".md"}
+}
+
+// Ancestors are the hubs that may name the path, nearest directory first,
+// each directory's Paths in order. An index.md skips its own directory; a
+// directory skips its index.md (archived with it), not its <dir>.md.
 func Ancestors(p string) []string {
+	if strings.HasSuffix(p, "/") {
+		return append(Paths(p)[1:], Ancestors(p+"index.md")...)
+	}
 	var hubs []string
-	dir := path.Dir(strings.TrimSuffix(p, "/"))
-	for {
-		if h := path.Join(dir, "index.md"); h != p {
-			hubs = append(hubs, h)
+	for dir := path.Dir(p); ; dir = path.Dir(dir) {
+		if !slices.Contains(Paths(dir), p) {
+			hubs = append(hubs, Paths(dir)...)
 		}
 		if dir == "/" || dir == "." {
 			return hubs
 		}
-		dir = path.Dir(dir)
 	}
 }
 
@@ -238,6 +251,29 @@ func DropFromHubs(ctx context.Context, docs Docs, hubs []string, drop *Drop) []D
 // one) all reach a target; n counts them. Links are read from one parse of
 // the body and judged by the line they start on: a hub bullet is one line.
 func WithoutLinks(body, hubPath string, targets []string) (out string, n int) {
+	out, cut := cutLinks(body, hubPath, targets, "")
+	return out, len(cut)
+}
+
+// MoveLinks cuts the bullets WithoutLinks drops and puts bullet where the
+// first was. Moved are the cut lines with relative links made absolute, so
+// another hub can carry them verbatim.
+func MoveLinks(body, hubPath string, targets []string, bullet string) (out string, moved []string) {
+	out, moved = cutLinks(body, hubPath, targets, bullet)
+	for i, line := range moved {
+		for _, link := range links.ExtractWithPositions(line) {
+			if abs := links.ResolvePath(hubPath, link.Dest); abs != "" && abs != link.Dest {
+				line = strings.Replace(line, "]("+link.Dest, "]("+abs, 1)
+			}
+		}
+		moved[i] = line
+	}
+	return out, moved
+}
+
+// cutLinks drops the bullets whose links all reach a target, bullet (when
+// not "") taking the first one's line, and returns the dropped lines.
+func cutLinks(body, hubPath string, targets []string, bullet string) (out string, cut []string) {
 	byLine := map[int][]string{}
 	for _, link := range links.ExtractWithPositions(body) {
 		pos := link.OpenBracket
@@ -251,16 +287,19 @@ func WithoutLinks(body, hubPath string, targets []string) (out string, n int) {
 	lines := strings.Split(body, "\n")
 	kept := lines[:0]
 	for i, line := range lines {
-		if bulletLine.MatchString(line) && onlyReaches(byLine[i], hubPath, targets) {
-			n++
+		if !bulletLine.MatchString(line) || !onlyReaches(byLine[i], hubPath, targets) {
+			kept = append(kept, line)
 			continue
 		}
-		kept = append(kept, line)
+		if len(cut) == 0 && bullet != "" {
+			kept = append(kept, bullet)
+		}
+		cut = append(cut, line)
 	}
-	if n == 0 {
-		return body, 0
+	if len(cut) == 0 {
+		return body, nil
 	}
-	return strings.Join(kept, "\n"), n
+	return strings.Join(kept, "\n"), cut
 }
 
 var bulletLine = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s+`)

@@ -138,13 +138,21 @@ func TestContextPrimerNotesABadTemplate(t *testing.T) {
 func TestContextPrimerReportsANewOrRetiredProject(t *testing.T) {
 	backend := &fetchtest.Client{}
 	got := newTools(t, backend, directHooks()).Fetch(t.Context(), marktools.FetchArgs{URL: "/proj/.context"})
-	if got.IsError || !strings.HasPrefix(got.Text, "status: new\n\nNo hub at /proj/index.md") || len(backend.ListCalls) != 0 {
+	if got.IsError || !strings.HasPrefix(got.Text, "status: new\n\nNo hub at /proj/index.md or /proj.md:") || len(backend.ListCalls) != 0 {
 		t.Fatalf("new project: %+v (lists %d)", got, len(backend.ListCalls))
 	}
 	backend = &fetchtest.Client{Published: map[string]fetch.Result{"host:6309/proj/index.md": {Response: protocol.Response{Status: protocol.StatusArchived}}}}
 	got = newTools(t, backend, directHooks()).Fetch(t.Context(), marktools.FetchArgs{URL: "/proj/.context"})
 	if got.IsError || !strings.HasPrefix(got.Text, "status: archived\n\n/proj/index.md is archived") {
 		t.Fatalf("retired project: %+v", got)
+	}
+}
+
+func TestContextPrimerReadsADirNamedHub(t *testing.T) {
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{"host:6309/proj.md": fetchtest.Head("# Proj\n\n- [a](proj/a.md)\n", 2, nil)}}
+	got := newTools(t, backend, directHooks()).Fetch(t.Context(), marktools.FetchArgs{URL: "/proj/.context"})
+	if got.IsError || !strings.Contains(got.Text, "## Hub (/proj.md)\n\n# Proj") || strings.Contains(got.Text, "status: new") {
+		t.Fatalf("context = %+v", got)
 	}
 }
 

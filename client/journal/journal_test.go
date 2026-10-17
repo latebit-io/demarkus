@@ -145,6 +145,22 @@ func TestAppendLinksAnExistingHubUnderItsJournalSection(t *testing.T) {
 	}
 }
 
+func TestAppendUsesADirNamedHubWithoutAnIndex(t *testing.T) {
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"h/proj.md": fetchtest.Head("# Proj\n\n## Topics\n\n- [a](proj/a.md)\n", 2, map[string]string{"tags": "index"}),
+	}}
+	out, err := Append(t.Context(), docsOn(backend), Request{Dir: "/proj/", Entry: "Today.", Stamp: stamp, Now: day})
+	if err != nil || len(out.Notes) != 0 {
+		t.Fatalf("outcome = %+v err %v", out, err)
+	}
+	if hub := backend.PublishCall("/proj.md"); hub == nil || !strings.Contains(hub.Body, "## Journal\n\n- [Journal](proj/journal/)") || hub.ExpectedVersion != 2 {
+		t.Errorf("dir-named hub publish = %+v", hub)
+	}
+	if idx := backend.PublishCall("/proj/index.md"); idx != nil {
+		t.Errorf("a second hub was created: %+v", idx)
+	}
+}
+
 func TestAppendReportsHubFailuresAsNotes(t *testing.T) {
 	backend := &fetchtest.Client{
 		Published: map[string]fetch.Result{"h/proj/index.md": {Response: protocol.Response{Status: protocol.StatusUnauthorized}}},
@@ -218,16 +234,5 @@ func TestAppendDatesTheEntryByItsLocalDay(t *testing.T) {
 	out, err := Append(t.Context(), docsOn(backend), Request{Dir: "/proj/", Entry: "Late.", Now: late})
 	if err != nil || out.Path != "/proj/journal/2026-10-12.md" {
 		t.Fatalf("outcome = %+v err %v", out, err)
-	}
-}
-
-func TestIsEntry(t *testing.T) {
-	for name, want := range map[string]bool{
-		"2026-10-13.md": true, "2026-02-30.md": false, "2026-10-13.txt": false,
-		"notes.md": false, "2026-10-13-extra.md": false, "2026-1-3.md": false,
-	} {
-		if IsEntry(name) != want {
-			t.Errorf("IsEntry(%q) = %v, want %v", name, !want, want)
-		}
 	}
 }

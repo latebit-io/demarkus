@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/directives"
@@ -20,6 +21,19 @@ import (
 
 // DocumentPath is the conventional template document, per world.
 const DocumentPath = "/.well-known/demarkus/template.md"
+
+// JournalDate names a journal entry: one document per day, "<date>.md".
+const JournalDate = "2006-01-02"
+
+// IsJournalEntry reports whether a journal directory's file name is a dated entry.
+func IsJournalEntry(name string) bool {
+	day, ok := strings.CutSuffix(name, ".md")
+	if !ok || len(day) != len(JournalDate) {
+		return false
+	}
+	_, err := time.Parse(JournalDate, day)
+	return err == nil
+}
 
 // Layout is one world's layout; Default when the template says nothing.
 type Layout struct {
@@ -151,6 +165,17 @@ func assignList(dst *[]string, value string, ok func(string) bool) bool {
 
 // word is one token: non-empty, no inner whitespace.
 func word(s string) bool { return s != "" && !strings.ContainsAny(s, " \t") }
+
+// JournalDir reports a directory the layout keeps dated entries in, at any
+// depth (each project has its own).
+func (l *Layout) JournalDir(dir string) bool {
+	return path.Base(strings.TrimSuffix(dir, "/"))+"/" == l.Journal
+}
+
+// JournalEntry reports a dated entry directly in a journal directory.
+func (l *Layout) JournalEntry(p string) bool {
+	return IsJournalEntry(path.Base(p)) && l.JournalDir(path.Dir(p))
+}
 
 // Section is the hub heading for a directory: "journal/" reads "Journal".
 func Section(directory string) string {

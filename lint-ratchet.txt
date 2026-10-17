@@ -1,4 +1,4 @@
-3 client/audit/checks.go: Error return value of `strconv.Atoi` is not checked (errcheck)
+2 client/audit/checks.go: Error return value of `strconv.Atoi` is not checked (errcheck)
 1 client/cmd/demarkus-tui/main.go: Function 'processMarkers' has too many statements (62 > 60) (funlen)
 1 client/cmd/demarkus-tui/main.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 8 (revive)
 6 client/cmd/demarkus/main.go: Error return value of `fs.Parse` is not checked (errcheck)

@@ -50,19 +50,6 @@ type Outcome struct {
 // Docs binds the surface's write contract to one path on the store.
 type Docs func(docPath string) *docwrite.Doc
 
-// DateLayout names an entry: one document per day, "<date>.md".
-const DateLayout = "2006-01-02"
-
-// IsEntry reports whether a journal directory's file name is a dated entry.
-func IsEntry(name string) bool {
-	day, ok := strings.CutSuffix(name, ".md")
-	if !ok || len(day) != len(DateLayout) {
-		return false
-	}
-	_, err := time.Parse(DateLayout, day)
-	return err == nil
-}
-
 const (
 	defaultImportance = "0.4"
 	hubImportance     = "0.8"
@@ -86,13 +73,13 @@ func Append(ctx context.Context, docs Docs, req Request) (Outcome, error) { //no
 	if req.Layout.Journal == "" {
 		req.Layout = layout.Default()
 	}
-	r := run{Request: req, docs: docs, date: req.Now.Format(DateLayout)}
+	r := run{Request: req, docs: docs, date: req.Now.Format(layout.JournalDate)}
 
-	scopeHub := docs(r.Dir + "index.md")
-	hubHead, err := head(ctx, scopeHub)
+	scopeHub, hubHead, err := findHub(ctx, docs, r.Dir)
 	if err != nil {
 		return Outcome{}, err
 	}
+	r.scopeHub = scopeHub
 	// The today route refuses a retired scope.
 	if hubHead.Status == protocol.StatusArchived {
 		return Outcome{}, fmt.Errorf("%s is archived; nothing written", r.Dir)
@@ -116,12 +103,34 @@ func Append(ctx context.Context, docs Docs, req Request) (Outcome, error) { //no
 	return out, nil
 }
 
-// run is one request with its day and the scope's name resolved.
+// run is one request with its day and the scope's hub and name resolved.
 type run struct {
 	Request
-	docs  Docs
-	date  string
-	title string
+	docs     Docs
+	date     string
+	title    string
+	scopeHub *docwrite.Doc
+}
+
+// findHub is the first of the scope's hub.Paths the store has, live or
+// archived; none: its index.md, which the journal creates.
+func findHub(ctx context.Context, docs Docs, dir string) (*docwrite.Doc, *docwrite.Head, error) {
+	var first *docwrite.Doc
+	var firstHead *docwrite.Head
+	for _, p := range hub.Paths(dir) {
+		doc := docs(p)
+		h, err := head(ctx, doc)
+		if err != nil {
+			return nil, nil, err
+		}
+		if h.Status != protocol.StatusNotFound {
+			return doc, h, nil
+		}
+		if first == nil {
+			first, firstHead = doc, h
+		}
+	}
+	return first, firstHead, nil
 }
 
 // record creates today's document or appends to it; a creation conflict
@@ -209,11 +218,10 @@ type hubLink struct {
 // the journal directory (one link reaches every day), the root hub links the
 // project.
 func (r *run) links() []hubLink {
-	section := layout.Section(r.Layout.Journal)
-	bullet := fmt.Sprintf("- [%s](%s): dated session notes", section, r.Layout.Journal)
-	out := []hubLink{{doc: r.docs(r.Dir + "index.md"), Link: hub.Link{
-		Target: r.Dir + r.Layout.Journal, Bullet: bullet, Section: "## " + section,
-		CreateBody: fmt.Sprintf("# %s\n\n## %s\n\n%s\n", r.title, section, bullet),
+	section, bullet := hub.JournalBullet(r.scopeHub.Path, r.Dir, r.Layout.Journal)
+	out := []hubLink{{doc: r.scopeHub, Link: hub.Link{
+		Target: r.Dir + r.Layout.Journal, Bullet: bullet, Section: section,
+		CreateBody: fmt.Sprintf("# %s\n\n%s\n\n%s\n", r.title, section, bullet),
 		CreateMeta: map[string]string{"tags": strings.Join(protocol.MergeTags([]string{"index"}, []string{slugOf(r.Dir)}), ","), "importance": hubImportance},
 		Stamp:      r.Stamp,
 	}}}

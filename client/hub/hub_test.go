@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -141,6 +142,22 @@ func TestWithoutLinks(t *testing.T) {
 	}
 }
 
+// The bullet takes the first cut line; the cut lines come back with their
+// relative links made absolute, fragments kept.
+func TestMoveLinks(t *testing.T) {
+	body := "# Hub\n\n- [x](/x.md)\n- [a](plans/a.md#why): one\n- [x2](/x2.md)\n- [b](/proj/plans/b.md)\n"
+	got, moved := MoveLinks(body, "/proj/index.md", []string{"/proj/plans/"}, "- [Plans](plans/)")
+	if got != "# Hub\n\n- [x](/x.md)\n- [Plans](plans/)\n- [x2](/x2.md)\n" {
+		t.Errorf("body = %q", got)
+	}
+	if want := []string{"- [a](/proj/plans/a.md#why): one", "- [b](/proj/plans/b.md)"}; !slices.Equal(moved, want) {
+		t.Errorf("moved = %q", moved)
+	}
+	if got, moved := MoveLinks(body, "/proj/index.md", []string{"/none/"}, "- [N](/none/)"); got != body || moved != nil {
+		t.Errorf("nothing to move: %q %q", got, moved)
+	}
+}
+
 func TestDropLinksEditsOnlyWhenABulletGoes(t *testing.T) {
 	backend := &fetchtest.Client{Published: map[string]fetch.Result{"h/index.md": fetchtest.Head("# Hub\n\n- [a](/a.md)\n- [b](/b.md)\n", 2, map[string]string{"tags": "index", "retention": "1"})}}
 	n, err := DropLinks(t.Context(), docOn(backend, "/index.md"), nil, &Drop{Targets: []string{"/a.md"}, Stamp: map[string]string{"agent": "x"}})
@@ -166,26 +183,40 @@ func TestDropLinksEditsOnlyWhenABulletGoes(t *testing.T) {
 	}
 }
 
+// A directory's hub is its index.md, else the document named after it.
+func TestPaths(t *testing.T) {
+	for dir, want := range map[string]string{
+		"/": "/index.md", "/a/": "/a/index.md /a.md", "/a/b": "/a/b/index.md /a/b.md",
+	} {
+		if got := strings.Join(Paths(dir), " "); got != want {
+			t.Errorf("Paths(%s) = %s, want %s", dir, got, want)
+		}
+	}
+}
+
 func TestAncestorsAndDropFromHubs(t *testing.T) {
-	if got := Ancestors("/a/b/c.md"); strings.Join(got, " ") != "/a/b/index.md /a/index.md /index.md" {
-		t.Errorf("ancestors = %v", got)
-	}
-	if got := Ancestors("/a/index.md"); strings.Join(got, " ") != "/index.md" {
-		t.Errorf("own hub excluded: %v", got)
-	}
-	if got := Ancestors("/a/b/"); strings.Join(got, " ") != "/a/index.md /index.md" {
-		t.Errorf("directory = %v", got)
+	for p, want := range map[string]string{
+		"/a/b/c.md":   "/a/b/index.md /a/b.md /a/index.md /a.md /index.md",
+		"/a/index.md": "/index.md",
+		"/a/b/":       "/a/b.md /a/index.md /a.md /index.md",
+		"/c.md":       "/index.md",
+		"/index.md":   "",
+	} {
+		if got := strings.Join(Ancestors(p), " "); got != want {
+			t.Errorf("Ancestors(%s) = %s, want %s", p, got, want)
+		}
 	}
 	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"h/a/b.md":     fetchtest.Head("# B\n\n- [c](b/c.md)\n", 1, nil),
 		"h/a/index.md": fetchtest.Head("# A\n\n- [c](b/c.md)\n", 1, nil),
 		"h/index.md":   {Response: protocol.Response{Status: protocol.StatusUnauthorized}},
 	}}
 	docs := func(p string) *docwrite.Doc { return docOn(backend, p) }
-	if got := AncestorsOf("/a/d.md", "/a/b/c.md"); strings.Join(got, " ") != "/a/b/index.md /a/index.md /index.md" {
+	if got := AncestorsOf("/a/d.md", "/a/b/c.md"); strings.Join(got, " ") != "/a/b/index.md /a/index.md /a/b.md /a.md /index.md" {
 		t.Errorf("union = %v", got)
 	}
 	got := DropFromHubs(t.Context(), docs, AncestorsOf("/a/b/c.md"), &Drop{Targets: []string{"/a/b/c.md"}})
-	if len(got) != 3 || got[0].Dropped != 0 || got[1].Dropped != 1 || got[2].Err == nil {
+	if len(got) != 5 || got[0].Dropped != 0 || got[1].Dropped != 1 || got[2].Dropped != 1 || got[3].Dropped != 0 || got[4].Err == nil {
 		t.Errorf("drop = %+v", got)
 	}
 }

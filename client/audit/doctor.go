@@ -8,7 +8,6 @@ package audit
 import (
 	"context"
 	"fmt"
-	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -40,7 +39,8 @@ const (
 )
 
 var (
-	adrReferenceRe = regexp.MustCompile(`(?i)\bADR[ -]?#?(\d{3,4})\b`)
+	// Group 2 is a range tail ("to 0027", "-0027"): a span, not a citation.
+	adrReferenceRe = regexp.MustCompile(`(?i)\bADR[ -]?#?(\d{3,4})\b(\s*(?:-|–|to|through)\s*(?:ADR[ -]?#?)?\d{3,4}\b)?`)
 	adrFileRe      = regexp.MustCompile(`^(\d{4})-.*\.md$`)
 )
 
@@ -64,11 +64,13 @@ type Options struct {
 }
 
 // Finding is one report line: the document, what is wrong, and the fix.
+// Fixable marks a finding the report's Plan settles.
 type Finding struct {
-	Check  string `json:"check"`
-	Path   string `json:"path"`
-	Detail string `json:"detail"`
-	Fix    string `json:"fix,omitempty"`
+	Check   string `json:"check"`
+	Path    string `json:"path"`
+	Detail  string `json:"detail"`
+	Fix     string `json:"fix,omitempty"`
+	Fixable bool   `json:"fixable,omitempty"`
 }
 
 // Report is the audit result. Coverage lists every bound hit and every call
@@ -84,6 +86,8 @@ type Report struct {
 	// promoted; it reads on the summary line only when that check ran.
 	Promotion bool `json:"promotion"`
 	Promoted  int  `json:"promoted,omitempty"`
+	// Plan is what apply would write; a surface shows it, never the JSON.
+	Plan *Plan `json:"-"`
 }
 
 // document is one inventory entry after its fetch.
@@ -111,6 +115,7 @@ type audit struct {
 	// store's own); policyKnown is false when the store's could not be read.
 	policy      publishpolicy.Policy
 	policyKnown bool
+	leads       leads // findings a fix may settle, for the plan
 }
 
 // IsSlug reports whether s can be a store path segment; the layout owns the rule.
@@ -159,7 +164,7 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 	}
 	a.checkLinks(ctx)
 	a.checkOrphans()
-	a.checkHubs()
+	a.checkHubs(ctx)
 	a.checkTitles()
 	a.checkADRSequence()
 	a.checkMetadata()
@@ -175,15 +180,18 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 	if opts.Promotion {
 		a.checkPromotion()
 	}
-	return &Report{Scope: scope, Documents: len(a.order), Deep: opts.Deep, Promotion: opts.Promotion, Promoted: a.promoted, Findings: a.findings, Coverage: a.coverage}, nil
+	plan := a.plan()
+	return &Report{Scope: scope, Documents: len(a.order), Deep: opts.Deep, Promotion: opts.Promotion, Promoted: a.promoted, Findings: a.findings, Coverage: a.coverage, Plan: plan}, nil
 }
 
 func (a *audit) note(format string, args ...any) {
 	a.coverage = append(a.coverage, fmt.Sprintf(format, args...))
 }
 
-func (a *audit) add(check, docPath, detail, fix string) {
+// add files a finding and returns its index, which a lead records.
+func (a *audit) add(check, docPath, detail, fix string) int {
 	a.findings = append(a.findings, Finding{Check: check, Path: docPath, Detail: detail, Fix: fix})
+	return len(a.findings) - 1
 }
 
 // fetchAll reads every inventory document once, within the body budget.
@@ -255,7 +263,3 @@ func title(d *document) string {
 }
 
 func live(status string) bool { return status == protocol.StatusOK }
-
-func (a *audit) hub() string {
-	return path.Join(a.opts.Scope, "index.md")
-}

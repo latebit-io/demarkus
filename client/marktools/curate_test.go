@@ -11,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/render"
 )
 
 const curateDoc = "# Doc\n\n## Step 3 (DONE 2026-10-12)\n\nShipped — finally.\n"
@@ -149,5 +150,47 @@ func TestCurateApplyStopsOnAConflictAndSaysWhatLanded(t *testing.T) {
 	got := tools.Curate(t.Context(), marktools.CurateArgs{URL: "/plans/big.md", Apply: true, Proposal: hash})
 	if !got.IsError || !strings.HasPrefix(got.Text, "status: partial\n- /plans/big/alpha.md: created v1\n- /plans/big/beta.md: created v1\n- /plans/big.md: conflict\n") {
 		t.Fatalf("apply = %+v", got)
+	}
+}
+
+// A directory url proposes the doctor's fixes; apply binds to the plan's
+// hash, and a write that conflicts does not stop the others.
+func TestCurateScopeAppliesThePlanPerDocument(t *testing.T) {
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"host:6309/index.md": fetchtest.Head("# Hub\n\nThe store.\n\n- [A](/a.md): what A settles\n- [Old](/old.md): gone\n", 3, map[string]string{"tags": "index"}),
+		"host:6309/a.md":     fetchtest.Head("# A\n\nWhat A settles for readers.\n", 1, map[string]string{"tags": "t", "type": "Guide"}),
+		"host:6309/c.md":     fetchtest.Head("# C\n\nSee [the old one](/old.md).\n", 2, map[string]string{"tags": "t", "type": "Guide"}),
+		"host:6309/old.md":   {Response: protocol.Response{Status: protocol.StatusArchived}},
+	},
+		ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
+			entries := []render.ListEntry{{Name: "a.md"}, {Name: "c.md"}, {Name: "index.md"}}
+			return fetch.Result{Response: render.ListResponse("/", entries, "")}, nil
+		},
+		PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
+			if r.Path == "/c.md" {
+				return fetch.Result{Response: protocol.Response{Status: protocol.StatusConflict}}, nil
+			}
+			return fetchtest.Created(r.ExpectedVersion + 1), nil
+		},
+	}
+	tools := newTools(t, backend, writingHooks())
+	report := tools.Curate(t.Context(), marktools.CurateArgs{URL: "/"})
+	hash := proposalHash(t, report)
+	for _, want := range []string{"## / fix proposal\n", "- /c.md (v2): links to archived documents removed: 0 hub bullet(s), 1 inline with the text kept\n", "- /index.md (v3): links to archived documents removed: 1 hub bullet(s), 0 inline with the text kept; bullet for /c.md\n"} {
+		if !strings.Contains(report.Text, want) {
+			t.Errorf("proposal missing %q:\n%s", want, report.Text)
+		}
+	}
+	if got := tools.Curate(t.Context(), marktools.CurateArgs{URL: "/", Apply: true, Proposal: "stale"}); !got.IsError || !strings.Contains(got.Text, "proposal stale does not match / now ("+hash+")") || len(backend.PublishCalls) != 0 {
+		t.Fatalf("stale hash = %+v", got)
+	}
+	got := tools.Curate(t.Context(), marktools.CurateArgs{URL: "/", Apply: true, Proposal: hash})
+	want := "status: applied 1 of 2\n- /c.md: conflicted: changed since v2; rerun the proposal\n- /index.md: applied v4\n\nrerun mark_curate / for the rest and review it before applying\n"
+	if got.IsError || got.Text != want {
+		t.Fatalf("apply = %+v", got)
+	}
+	hub := backend.PublishCall("/index.md")
+	if hub == nil || hub.ExpectedVersion != 3 || hub.Token != "write-token" || hub.Metadata["agent"] != "test-agent" || hub.Body != "# Hub\n\nThe store.\n\n- [A](/a.md): what A settles\n- [C](/c.md): See the old one.\n" {
+		t.Errorf("hub publish = %+v", hub)
 	}
 }

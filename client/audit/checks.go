@@ -3,7 +3,6 @@ package audit
 import (
 	"context"
 	"fmt"
-	"github.com/latebit-io/demarkus/client/mdoutline"
 	"maps"
 	"path"
 	"slices"
@@ -11,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite/gate"
+	"github.com/latebit-io/demarkus/client/hub"
+	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
@@ -73,7 +74,7 @@ func (a *audit) checkLinks(ctx context.Context) {
 			switch {
 			case live(status):
 			case status == protocol.StatusArchived:
-				a.brokenLink(p, target, status, "drop the link")
+				a.leads.archived = append(a.leads.archived, archivedLead{path: p, target: target, findings: a.brokenLink(p, target, status, "drop the link")})
 			case status == protocol.StatusNotFound:
 				a.brokenLink(p, target, status, "fix the link or restore the target")
 			default:
@@ -96,16 +97,18 @@ func (a *audit) confirm(ctx context.Context, target string) string {
 	return resp.Status
 }
 
-// brokenLink: a hub's broken link is also a stale index entry.
-func (a *audit) brokenLink(p, target, status, fix string) {
-	a.add(CheckBrokenLinks, p, "-> "+target+" (fetch: "+status+")", fix)
+// brokenLink: a hub's broken link is also a stale index entry; the
+// findings' indices are returned.
+func (a *audit) brokenLink(p, target, status, fix string) []int {
+	found := []int{a.add(CheckBrokenLinks, p, "-> "+target+" (fetch: "+status+")", fix)}
 	if path.Base(p) == "index.md" {
 		word := "missing"
 		if status == protocol.StatusArchived {
 			word = "archived"
 		}
-		a.add(CheckStaleIndex, p, "-> "+target+" (hub links a "+word+" document)", fix)
+		found = append(found, a.add(CheckStaleIndex, p, "-> "+target+" (hub links a "+word+" document)", fix))
 	}
+	return found
 }
 
 // checkOrphans: a live document nothing in scope links to, the hub
@@ -121,21 +124,24 @@ func (a *audit) checkOrphans() {
 			reachedDirs[dir] = true
 		}
 	}
-	hub := a.hub()
+	scopeHub := hub.Paths(a.opts.Scope)[0]
 	for _, p := range a.order {
 		d := a.docs[p]
-		if p == hub || !live(d.status) || inbound[p] || reachedDirs[path.Dir(p)+"/"] {
+		if p == scopeHub || !live(d.status) || inbound[p] || reachedDirs[path.Dir(p)+"/"] {
 			continue
 		}
-		a.add(CheckOrphans, p, "no inbound link from any document in scope", "link it from its hub, or /soul-archive it")
+		a.leads.orphans = append(a.leads.orphans, lead{p, a.add(CheckOrphans, p, "no inbound link from any document in scope", "link it from its hub, or /soul-archive it")})
 	}
 }
 
-// checkHubs: a project subtree with documents and no index.md. At the root
-// every top-level directory is a project; under a project scope, the scope.
-func (a *audit) checkHubs() {
+// checkHubs: a project (each top-level directory at the root, else the
+// scope) holding documents a hub should name and no hub at hub.Paths.
+func (a *audit) checkHubs(ctx context.Context) {
 	counts := map[string]int{}
 	for _, p := range a.order {
+		if !hub.Linkable(p) {
+			continue
+		}
 		project := a.opts.Scope
 		if project == "/" {
 			head, _, nested := strings.Cut(strings.TrimPrefix(p, "/"), "/")
@@ -147,10 +153,36 @@ func (a *audit) checkHubs() {
 		counts[project]++
 	}
 	for _, dir := range slices.Sorted(maps.Keys(counts)) {
-		if _, ok := a.docs[path.Join(dir, "index.md")]; !ok {
-			a.add(CheckMissingHub, dir, fmt.Sprintf("%d documents and no index.md", counts[dir]), "publish a hub linking each document once")
+		switch {
+		case a.hasHub(ctx, dir):
+		case a.layout.JournalDir(dir):
+			a.add(CheckMissingHub, dir, fmt.Sprintf("%d documents that are not dated entries; a journal needs only its directory link", counts[dir]), "rename them to <date>.md or move them out")
+		default:
+			a.leads.hubs = append(a.leads.hubs, lead{dir, a.add(CheckMissingHub, dir, fmt.Sprintf("%d documents and no %s", counts[dir], strings.Join(hub.Paths(dir), " or ")), "publish a hub linking each document once")})
 		}
 	}
+}
+
+// hasHub: the inventory holds a hub of dir, or one outside the scope (the
+// scope's own <dir>.md) answers a fetch; a failed fetch is a coverage gap.
+func (a *audit) hasHub(ctx context.Context, dir string) bool {
+	for _, p := range hub.Paths(dir) {
+		if _, ok := a.docs[p]; ok {
+			return true
+		}
+		if strings.HasPrefix(p, a.opts.Scope) {
+			continue
+		}
+		switch status := a.confirm(ctx, p); status {
+		case protocol.StatusNotFound, protocol.StatusArchived:
+			continue
+		case protocol.StatusOK:
+		default:
+			a.note("hub check of %s skipped: %s returned %s", dir, p, status)
+		}
+		return true
+	}
+	return false
 }
 
 func (a *audit) checkTitles() {
@@ -222,7 +254,10 @@ func (a *audit) checkMetadata() {
 			if t != "" {
 				detail = "type=Document (generic default)"
 			}
-			a.add(CheckUntyped, p, detail, "re-publish with metadata.type (Reference, Decision, Architecture, Plan, Journal, Guide)")
+			i := a.add(CheckUntyped, p, detail, "re-publish with metadata.type (Reference, Decision, Architecture, Plan, Journal, Guide)")
+			if a.layout.JournalEntry(p) {
+				a.leads.journalType = append(a.leads.journalType, lead{p, i})
+			}
 		}
 	}
 }
@@ -257,7 +292,7 @@ func (a *audit) checkShape() {
 			switch id {
 			case stylerules.H1:
 			case stylerules.Frontmatter:
-				a.add(CheckFrontmatter, p, problem, "strip the block and re-publish with metadata out of band")
+				a.leads.frontmatter = append(a.leads.frontmatter, lead{p, a.add(CheckFrontmatter, p, problem, "strip the block and re-publish with metadata out of band")})
 			case stylerules.EmDash, stylerules.DuplicateHeading:
 				a.add(CheckStyle, p, problem, "/soul-curate "+p)
 			case stylerules.HubSize, stylerules.HubBullet, stylerules.HubFanout:
@@ -282,43 +317,84 @@ func (a *audit) checkReferences() {
 		if !live(d.status) {
 			continue
 		}
-		mentions := adrReferenceRe.FindAllStringSubmatch(stripCode(d.body), -1)
-		if len(mentions) == 0 {
-			continue
-		}
 		own := ""
 		if m := adrFileRe.FindStringSubmatch(path.Base(p)); m != nil && path.Base(path.Dir(p)) == "adr" {
 			own = m[1]
 		}
 		seen := map[string]bool{}
-		for _, m := range mentions {
-			n, _ := strconv.Atoi(m[1])
-			num := fmt.Sprintf("%0*d", adrNumberWidth, n)
-			if num == own || seen[num] {
+		for _, m := range adrMentions(d.body) {
+			if m.num == own || seen[m.num] {
 				continue
 			}
-			seen[num] = true
-			target := adrTarget(byDir, p, n)
+			seen[m.num] = true
+			ref := resolveADR(byDir, p, m.n)
 			switch {
-			case target == "":
-				a.add(CheckReferences, p, fmt.Sprintf("%q dangling: no adr/%s-*.md in scope", m[0], num), "restore the record or drop the reference")
-			case !slices.Contains(d.links, target):
-				a.add(CheckReferences, p, fmt.Sprintf("%q unlinked: %s exists but the body has no link to it", m[0], target), "[ADR "+num+"]("+target+")")
+			case len(ref.records) == 0:
+				a.add(CheckReferences, p, fmt.Sprintf("%q dangling: no adr/%s-*.md in scope", m.text, m.num), "restore the record or drop the reference")
+			case slices.ContainsFunc(ref.records, func(r string) bool { return slices.Contains(d.links, r) }):
+			case ref.foreign:
+				a.add(CheckReferences, p, fmt.Sprintf("%q not in %s: %s is another series", m.text, ref.series, ref.records[0]), "link it if that record is meant")
+			case len(ref.records) > 1:
+				a.add(CheckReferences, p, fmt.Sprintf("%q ambiguous: %s share the number", m.text, strings.Join(ref.records, " and ")), "renumber one (ADR sequence), then link the record meant")
+			default:
+				i := a.add(CheckReferences, p, fmt.Sprintf("%q unlinked: %s exists but the body has no link to it", m.text, ref.records[0]), "[ADR "+m.num+"]("+ref.records[0]+")")
+				a.leads.adr = append(a.leads.adr, adrLead{lead: lead{p, i}, num: m.num, record: ref.records[0]})
 			}
 		}
 	}
 }
 
-// adrTarget finds adr/NNNN-*.md in the citing document's own project: the
-// nearest adr directory walking up from the document. A number that exists
-// only in another project's series is not this document's reference.
-func adrTarget(byDir map[string]map[int][]string, from string, n int) string {
+// adrMention is one ADR citation outside code: its text, number (padded and
+// as read) and offsets. A range ("ADR 0001 to 0027") cites neither end.
+type adrMention struct {
+	text, num  string
+	n          int
+	start, end int
+}
+
+// adrMentions are the body's ADR citations in order; the check and the fix
+// read the same ones.
+func adrMentions(body string) []adrMention {
+	masked := stripCode(body)
+	var out []adrMention
+	for _, m := range adrReferenceRe.FindAllStringSubmatchIndex(masked, -1) {
+		if m[4] >= 0 {
+			continue
+		}
+		n, err := strconv.Atoi(masked[m[2]:m[3]])
+		if err != nil {
+			continue // unreachable: the regex matches digits only
+		}
+		out = append(out, adrMention{text: body[m[0]:m[1]], num: fmt.Sprintf("%0*d", adrNumberWidth, n), n: n, start: m[0], end: m[1]})
+	}
+	return out
+}
+
+// adrRef is what one ADR number names from a citing document.
+type adrRef struct {
+	records []string // sorted; more than one is a duplicated number
+	series  string   // the nearest series walking up, with its slash; "" when none
+	foreign bool     // records are in a series above it: another project's numbering
+}
+
+// resolveADR finds the number in the nearest adr directory walking up that
+// has it. Only a record in the document's own (nearest) series is provable.
+func resolveADR(byDir map[string]map[int][]string, from string, n int) adrRef {
+	var ref adrRef
 	for dir := path.Dir(from); ; dir = path.Dir(dir) {
-		if paths := byDir[path.Join(dir, "adr")][n]; len(paths) > 0 {
-			return slices.Min(paths)
+		series := path.Join(dir, "adr")
+		if nums, ok := byDir[series]; ok {
+			if ref.series == "" {
+				ref.series = series + "/"
+			}
+			if records := nums[n]; len(records) > 0 {
+				ref.records = slices.Sorted(slices.Values(records))
+				ref.foreign = ref.series != series+"/"
+				return ref
+			}
 		}
 		if dir == "/" || dir == "." {
-			return ""
+			return ref
 		}
 	}
 }

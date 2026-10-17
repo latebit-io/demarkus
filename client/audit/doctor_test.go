@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -102,6 +103,46 @@ func TestLinkChecks(t *testing.T) {
 	}
 }
 
+// A directory's hub may be its index.md or the document named after it; a
+// directory of dated journal entries needs none. Under a project scope the
+// scope's <dir>.md lies outside the inventory and is fetched.
+func TestMissingHubFollowsTheHubRule(t *testing.T) {
+	f := newFake(map[string]fakeDoc{
+		"/index.md":              tagged("# Hub\n\n- [Debt](/debt.md)\n- [Journal](/journal/)\n"),
+		"/debt.md":               tagged("# Debt\n\n- [x](/debt/x.md)\n"),
+		"/debt/x.md":             tagged("# X\n"),
+		"/journal/2026-10-01.md": tagged("# J\n"),
+		"/plans/a.md":            tagged("# A\n"),
+		"/p.md":                  tagged("# P\n\n- [y](/p/y.md)\n"),
+		"/p/y.md":                tagged("# Y\n"),
+	})
+	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findings(r, CheckMissingHub); len(got) != 1 || got[0] != "/plans/: 1 documents and no /plans/index.md or /plans.md" {
+		t.Fatalf("missing hub = %v", got)
+	}
+	for scope, want := range map[string]int{"/p/": 0, "/plans/": 1} {
+		r, err := Run(context.Background(), f, Options{Scope: scope})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := findings(r, CheckMissingHub); len(got) != want || len(r.Coverage) != 0 {
+			t.Errorf("scope %s: missing hub = %v, coverage %v", scope, got, r.Coverage)
+		}
+	}
+	f.missing["/p.md"] = protocol.StatusServerError
+	delete(f.docs, "/p.md")
+	r, err = Run(context.Background(), f, Options{Scope: "/p/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findings(r, CheckMissingHub); len(got) != 0 || !slices.ContainsFunc(r.Coverage, func(c string) bool { return strings.Contains(c, "hub check of /p/ skipped") }) {
+		t.Errorf("an unreadable hub is a coverage gap: %v, %v", got, r.Coverage)
+	}
+}
+
 func TestLinkConfirmationBudget(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("# Hub\n\n")
@@ -196,7 +237,16 @@ func TestReferenceChecks(t *testing.T) {
 		"/notes.md":               tagged("# Notes\n\nSee ADR-0001 and ADR 0009.\n\n```\nADR 0007 in a fence\n```\n"),
 		"/proj/index.md":          {Body: "# P\n\n- [a](/proj/adr/)\n", Meta: map[string]string{"tags": "index"}},
 		"/proj/adr/0001-local.md": tagged("# 0001. Local\n\nSummary.\n"),
-		"/proj/thoughts.md":       tagged("# T\n\nADR 0001 here means the project's own.\n"),
+		"/proj/thoughts.md":       tagged("# T\n\nADR 0001 here means the project's own; ADR 0002 is not in its series.\n"),
+		// Ranges are spans, not citations; a duplicated number is provable
+		// only when the body links one of its records.
+		"/ranges.md":      tagged("# R\n\nADR 0001 to 0002, ADR 0001-0002, ADR 0001 – 0002 and ADR 0001 through ADR 0002.\n"),
+		"/adr/0003-a.md":  tagged("# 0003. A\n\nSummary.\n"),
+		"/adr/0003-b.md":  tagged("# 0003. B\n\nSummary.\n"),
+		"/dup.md":         tagged("# D\n\nADR 0003 decided it.\n"),
+		"/dup-linked.md":  tagged("# D\n\n[ADR 0003](/adr/0003-b.md) decided it.\n"),
+		"/other/index.md": {Body: "# O\n\n- [x](/other/x.md)\n", Meta: map[string]string{"tags": "index"}},
+		"/other/x.md":     tagged("# X\n\nA project without its own series cites the root's ADR 0002.\n"),
 	})
 	r, err := Run(context.Background(), f, Options{Scope: "/"})
 	if err != nil {
@@ -204,9 +254,12 @@ func TestReferenceChecks(t *testing.T) {
 	}
 	got := findings(r, CheckReferences)
 	want := []string{
+		"/dup.md: \"ADR 0003\" ambiguous: /adr/0003-a.md and /adr/0003-b.md share the number",
 		"/notes.md: \"ADR-0001\" unlinked: /adr/0001-one.md exists",
 		"/notes.md: \"ADR 0009\" dangling",
+		"/other/x.md: \"ADR 0002\" unlinked: /adr/0002-two.md exists",
 		"/proj/thoughts.md: \"ADR 0001\" unlinked: /proj/adr/0001-local.md exists",
+		"/proj/thoughts.md: \"ADR 0002\" not in /proj/adr/: /adr/0002-two.md is another series",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("references: %v", got)

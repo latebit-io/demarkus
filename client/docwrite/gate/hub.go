@@ -22,7 +22,7 @@ const (
 	// HubBulletMax is the visible characters per bullet, link destinations
 	// stripped; a generated bullet stays under it by construction.
 	HubBulletMax    = 200
-	hubLinkMax      = 40  // distinct outbound documents before a second-level hub
+	HubLinkMax      = 40  // distinct outbound documents before a second-level hub
 	hubMinLinkItems = 5   // fewer link bullets than this is a list, not a link page
 	hubLinkShare    = 0.8 // share of text lines that are link bullets on a link page
 )
@@ -45,12 +45,22 @@ type bullet struct {
 	multiBlock bool
 }
 
-// HubProblems applies the hub rules when the document is a hub: index.md at
-// any depth, or a body that is mostly link bullets. Reads only the body.
-func HubProblems(url, body string) []string {
-	leaf := path.Base(url)
+// IsHub reports a link page: index.md at any depth, or a body that is
+// mostly link bullets.
+func IsHub(url, body string) bool {
 	items, textLines := listItems(body)
-	if leaf != "index.md" && !linkPage(items, textLines) {
+	return isHub(url, items, textLines)
+}
+
+func isHub(url string, items []bullet, textLines int) bool {
+	return path.Base(url) == "index.md" || linkPage(items, textLines)
+}
+
+// HubProblems applies the hub rules when the document is a hub (IsHub).
+// Reads only the body.
+func HubProblems(url, body string) []string {
+	items, textLines := listItems(body)
+	if !isHub(url, items, textLines) {
 		return nil
 	}
 	var problems []string
@@ -73,9 +83,9 @@ func HubProblems(url, body string) []string {
 			"%d hub bullet(s) run past one line or carry status (bold, Status:, a date, a PR number): %s; a hub is links plus one line each, status and summaries stay in the child",
 			len(bad), strings.Join(shown, ", "))))
 	}
-	if n := outboundDocs(body); n > hubLinkMax {
+	if n := OutboundDocs(body); n > HubLinkMax {
 		problems = append(problems, stylerules.Prefix(stylerules.HubFanout, fmt.Sprintf(
-			"%d outbound documents, over the %d a hub carries; add a second-level hub", n, hubLinkMax)))
+			"%d outbound documents, over the %d a hub carries; add a second-level hub", n, HubLinkMax)))
 	}
 	return problems
 }
@@ -109,10 +119,10 @@ func hubMarked(s string) bool {
 	return hubStatusKey.MatchString(s) || hubISODate.MatchString(s) || hubPRNumber.MatchString(s)
 }
 
-// outboundDocs counts distinct link destinations that are documents in the
+// OutboundDocs counts distinct link destinations that are documents in the
 // graph: mark:// and path links, fragment stripped by links.Extract; web
 // links are not documents.
-func outboundDocs(body string) int {
+func OutboundDocs(body string) int {
 	seen := make(map[string]bool)
 	for _, d := range links.Extract(body) {
 		if d == "" || strings.HasPrefix(d, "http://") || strings.HasPrefix(d, "https://") || strings.HasPrefix(d, "mailto:") {

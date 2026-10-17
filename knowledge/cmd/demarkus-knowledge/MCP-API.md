@@ -353,9 +353,22 @@ publishes the topics, then the document at the reported version with
 `on_conflict: fail`. A failure names what landed; a report rerun after
 it resumes.
 
+A directory url (with its slash) runs `mark_doctor`'s audit of the
+directory and proposes the fixes it can prove: bullets and inline links
+to archived documents removed, unlinked ADR mentions linked, orphans
+bulleted in their nearest hub, frontmatter fences lifted, dated journal
+entries typed `Journal`, and a missing hub generated at `<dir>/index.md`
+with the parent's bullets for it moved down. Every fix on one document
+is one write at the version the audit read; a batch is at most 100
+writes, created hubs first, and the report lists what is left to
+judgment. Apply recomputes the plan, refuses when its hash differs,
+then writes each document with `on_conflict: fail`, reporting each as
+applied, conflicted, refused, or skipped when a hub it moves bullets to
+did not land.
+
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `url` | string | yes | `mark://{worldName}/{path}` |
+| `url` | string | yes | `mark://{worldName}/{path}`, or a directory with its slash for the doctor's fixes. |
 | `apply` | boolean | no | Write the proposal (default false: report only). |
 | `proposal` | string | no | The hash from the report; required with `apply`. |
 

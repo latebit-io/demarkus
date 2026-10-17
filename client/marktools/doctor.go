@@ -27,16 +27,28 @@ func (t *Tools) Doctor(ctx context.Context, args DoctorArgs) Result {
 	if bad != nil {
 		return *bad
 	}
-	floor, bad := t.floorPolicy(ctx, target)
+	report, bad := t.runAudit(ctx, target, audit.Options{Deep: args.Deep, Promotion: args.Promotion})
 	if bad != nil {
 		return *bad
 	}
-	store := &audit.ClientStore{Client: t.backend, Host: target.Host, Token: t.readToken(ctx, target.Host)}
-	report, err := audit.Run(ctx, store, audit.Options{Scope: target.Path, Deep: args.Deep, Promotion: args.Promotion, Timeout: doctorTimeout, Floor: floor})
-	if err != nil {
-		return failure("doctor failed: %v", err)
-	}
 	return text(report.Markdown())
+}
+
+// runAudit runs one audit of the target's directory under the floor policy,
+// bounded for a tool call.
+func (t *Tools) runAudit(ctx context.Context, target Target, opts audit.Options) (*audit.Report, *Result) {
+	floor, bad := t.floorPolicy(ctx, target)
+	if bad != nil {
+		return nil, bad
+	}
+	opts.Scope, opts.Timeout, opts.Floor = target.Path, doctorTimeout, floor
+	store := &audit.ClientStore{Client: t.backend, Host: target.Host, Token: t.readToken(ctx, target.Host)}
+	report, err := audit.Run(ctx, store, opts)
+	if err != nil {
+		r := failure("doctor failed: %v", err)
+		return nil, &r
+	}
+	return report, nil
 }
 
 // floorPolicy reads the floor store's policy when the surface names one;

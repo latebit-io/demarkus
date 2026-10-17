@@ -151,17 +151,44 @@ func (t *Tools) writeScope(ctx context.Context) *GraphScope {
 // Best effort: the write already landed; a failed save is only logged.
 func (t *Tools) observeWrite(ctx context.Context, target Target, result graph.FetchResult) {
 	scope := t.writeScope(ctx)
-	if scope == nil {
-		return
-	}
-	if scope.Source != nil {
-		result.Source = scope.Source(target)
-	}
-	if !scope.Store.ObserveDocument(target.NodeURL, result) {
+	if scope == nil || !scope.observe(target, result) {
 		return
 	}
 	if err := scope.Store.Save(); err != nil {
 		t.warnf("warning: graph cache save after write mark://%s%s: %v", target.Host, target.Path, err)
+	}
+}
+
+// observe merges one landed write without saving; true when it changed the store.
+func (s *GraphScope) observe(target Target, result graph.FetchResult) bool {
+	if s.Source != nil {
+		result.Source = s.Source(target)
+	}
+	return s.Store.ObserveDocument(target.NodeURL, result)
+}
+
+// observed is one landed write for observeWrites.
+type observed struct {
+	target Target
+	result graph.FetchResult
+}
+
+// observeWrites is observeWrite for a batch: a save rewrites the whole
+// cache, so it runs once after every observation.
+func (t *Tools) observeWrites(ctx context.Context, writes []observed) {
+	scope := t.writeScope(ctx)
+	if scope == nil {
+		return
+	}
+	changed := false
+	for i := range writes {
+		changed = scope.observe(writes[i].target, writes[i].result) || changed
+	}
+	if !changed {
+		return
+	}
+	if err := scope.Store.Save(); err != nil {
+		t.warnf("warning: graph cache save after %d writes: %v", len(writes), err)
 	}
 }
 

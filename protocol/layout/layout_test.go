@@ -85,3 +85,30 @@ func TestSection(t *testing.T) {
 		t.Error("section names capitalize the directory")
 	}
 }
+
+func TestIsJournalEntry(t *testing.T) {
+	for name, want := range map[string]bool{
+		"2026-10-13.md": true, "2026-02-30.md": false, "2026-10-13.txt": false,
+		"notes.md": false, "2026-10-13-extra.md": false, "2026-1-3.md": false,
+	} {
+		if IsJournalEntry(name) != want {
+			t.Errorf("IsJournalEntry(%q) = %v, want %v", name, !want, want)
+		}
+	}
+}
+
+// A dated entry is one directly in a journal directory, at any depth.
+func TestJournalEntry(t *testing.T) {
+	l := Default()
+	for p, want := range map[string]bool{
+		"/journal/2026-10-13.md": true, "/proj/journal/2026-10-13.md": true,
+		"/plans/2026-10-13.md": false, "/journal/notes.md": false, "/journal/sub/2026-10-13.md": false,
+	} {
+		if l.JournalEntry(p) != want {
+			t.Errorf("JournalEntry(%q) = %v, want %v", p, !want, want)
+		}
+	}
+	if !l.JournalDir("/proj/journal/") || l.JournalDir("/plans/") {
+		t.Error("JournalDir")
+	}
+}
