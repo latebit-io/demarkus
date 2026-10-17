@@ -138,24 +138,39 @@ reviews:
 
     - path: "client/cmd/demarkus/**"
       instructions: >
-        CLI client. Shares internal packages with TUI and MCP.
+        CLI client. Shares packages with TUI and MCP.
 
         Check for:
         - Consistent behavior across CLI, TUI, and MCP (shared logic in
-          client/internal/, not duplicated per cmd/)
+          client/memory/, client/internal/ or the store client packages,
+          not duplicated per cmd/)
         - Proper exit codes and error messages
 
-    - path: "client/internal/**"
+    - path: "client/fetch/**"
       instructions: >
-        Shared client libraries: fetch (protocol client), graph, graphstore,
-        links, tokens, bookmarks, cache, index.
+        The protocol client.
 
         Check for:
         - fetch.Client is a faithful protocol client with no convenience
           logic (that belongs in cmd/ layers)
-        - graphstore.Save() lock scope: holds RLock across marshal + disk I/O.
-          Fine for infrequent calls, but flag if concurrent/periodic saves
-          are introduced
+
+    - path: "client/memory/**"
+      instructions: >
+        The memory model: journal, hubs, write gates, promote, curate,
+        doctor, outline and the graph. No MCP, no CLI.
+
+        Check for:
+        - No imports of mcp-go or of surface packages (marktools, mcpfmt,
+          mcpbind); tools/layercheck sees repo imports only
+        - graphstore.Save(): snapshot under the read lock, then marshal and
+          the temp-file write and rename outside it, serialized by saveMu;
+          flag I/O under s.mu or a write that skips the rename
+
+    - path: "client/internal/**"
+      instructions: >
+        Private client helpers: tokens, bookmarks, cache, launcher.
+
+        Check for:
         - Token resolution: consistent across CLI, TUI, MCP
 
   auto_review:
