@@ -23,7 +23,7 @@ Zero-config: the plugin spawns a local `demarkus-server`, generates a capability
 - **`/soul-journal`**: append an entry to today's journal.
 - **`/soul-status`**: show connection state and verify health.
 - **`/soul-doctor`**: read-only hygiene audit (orphans, broken links, untagged docs, stale index entries, hub and document shape, ADR gaps), one `mark_doctor` call over the store.
-- **`/soul-curate`**: bring one document into shape (summary, stable headings, hub rules, a split into hub plus topic files when it outgrows one fetch): `mark_curate` reports and proposes, a human gate, `mark_curate` applies.
+- **`/soul-curate`**: bring one document into shape (summary, stable headings, hub rules, a split into hub plus topic files when it outgrows one fetch), or apply `/soul-doctor`'s fixable findings across a directory: `mark_curate` reports and proposes, a human gate, `mark_curate` applies.
 - **`/soul-archive`**: archive one document or every live document under a directory (history kept, hidden from lists and lookup) and drop the hub bullets that linked it: one `mark_archive` call after a human gate.
 - **`/promote`**: lift a soul document to a shared knowledge system: `mark_promote` stages it, the knowledge plugin's skill distills and publishes through `mark_promote` on the destination, `mark_promote` back-stamps.
 - **`/promote-scan`**: sweep the soul for promotion candidates (`mark_doctor` with `promotion`).
