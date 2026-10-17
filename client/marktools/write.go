@@ -14,8 +14,8 @@ import (
 	"github.com/latebit-io/demarkus/client/journal"
 	"github.com/latebit-io/demarkus/client/listwalk"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/memory/metaguard"
 	"github.com/latebit-io/demarkus/client/merge"
-	"github.com/latebit-io/demarkus/client/metaguard"
 	"github.com/latebit-io/demarkus/protocol"
 )
 

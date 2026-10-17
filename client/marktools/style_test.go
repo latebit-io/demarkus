@@ -10,7 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
-// The style rules themselves are tested in client/docwrite/gate; here only
+// The style rules themselves are tested in client/memory/gate; here only
 // how a publish carries their verdict at each strictness.
 func TestPublishStyleGate(t *testing.T) {
 	const flawed = "No heading here — and an em dash.\n"

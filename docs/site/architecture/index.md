@@ -138,7 +138,7 @@ Demarkus aligns its document content model with [Google's Open Knowledge Format 
 - **Document level: compatible.** A stored document's persisted metadata uses OKF field names for the recognized fields (`type`, `title`, `description`, `resource`, `tags`, `timestamp`), with non-spec keys namespaced under `meta.*` and store-operational fields (`version`, `previous-hash`, `archived`) reserved by name. The server assigns a default `type: Document` on PUBLISH and APPEND when none is declared, so every concept is OKF-typed by construction.
 - **System level: superset.** Demarkus layers immutable versioning, a SHA-256 hash chain, QUIC transport, capability-based auth, and LOOKUP discovery on top of an OKF-compatible document. It is *not* an OKF bundle server: frontmatter is stripped before serving and the `versions/` layout is not a bundle tree.
 
-Bundle interoperability is therefore an out-of-band codec, not a wire feature. The `demarkus okf` subcommand (`client/internal/okf`) round-trips bundles (`validate` for v0.1 conformance, `import` for bundle → world, `export` for world subtree → conformant bundle) with verified byte-identical body round-trips. See [SPEC §14](../../SPEC.md) and ADRs 0002 (metadata alignment) and 0003 (default type).
+Bundle interoperability is therefore an out-of-band codec, not a wire feature. The `demarkus okf` subcommand (`client/memory/okf`) round-trips bundles (`validate` for v0.1 conformance, `import` for bundle → world, `export` for world subtree → conformant bundle) with verified byte-identical body round-trips. See [SPEC §14](../../SPEC.md) and ADRs 0002 (metadata alignment) and 0003 (default type).
 
 ## Deployment Topology
 

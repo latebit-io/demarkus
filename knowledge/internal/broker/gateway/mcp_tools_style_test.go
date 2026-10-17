@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit-io/demarkus/client/docwrite/gate"
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/protocol"
 )

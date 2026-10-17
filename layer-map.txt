@@ -30,7 +30,7 @@ server/internal/worldruntime                    store      # multi-world hosting
 server/internal/writepolicy                     store      # the mechanism; policy content is the tier's
 server/logthrottle                              store
 
-client/docwrite                                 storeclient  # the write contract; its gate is model
+client/docwrite                                 storeclient  # the write contract
 client/fetch                                    storeclient
 client/fetchtest                                storeclient
 client/generation                               storeclient
@@ -44,17 +44,15 @@ client/lookuptable                              storeclient
 client/merge                                    storeclient
 client/token                                    storeclient
 
+client/memory/...                               model
 client/audit                                    model
 client/curate                                   model
-client/docwrite/gate                            model
 client/graph                                    model
 client/graphstore                               model
 client/hub                                      model
-client/internal/okf                             model
 client/journal                                  model
 client/lookupexpand                             model
 client/mdoutline                                model
-client/metaguard                                model
 client/promote                                  model
 
 tools/demarkus-plugin/internal/config           soul

@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/docwrite/gate"
 	"github.com/latebit-io/demarkus/client/hub"
 	"github.com/latebit-io/demarkus/client/mdoutline"
+	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/stylerules"

@@ -13,7 +13,7 @@ func styleInput(body string) *Input {
 	}}
 }
 
-// The rules are tested in client/docwrite/gate; here only how the hook
+// The rules are tested in client/memory/gate; here only how the hook
 // applies them: which verbs, at what strictness, on which surfaces.
 func TestStyleGate(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})

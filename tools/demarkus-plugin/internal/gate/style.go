@@ -1,12 +1,12 @@
 // Package gate: documentation-style guard. The rules live in the shared
-// client/docwrite/gate package, which the MCP write path runs too; this
+// client/memory/gate package, which the MCP write path runs too; this
 // file only applies the hook's strictness to what they report.
 package gate
 
 import (
 	"fmt"
 
-	docgate "github.com/latebit-io/demarkus/client/docwrite/gate"
+	docgate "github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
