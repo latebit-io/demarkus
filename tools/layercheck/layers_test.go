@@ -76,24 +76,24 @@ func TestParseMap(t *testing.T) {
 
 func TestResolve(t *testing.T) {
 	m := layerMap{
-		{pattern: "client/docwrite/...", layer: "storeclient"},
-		{pattern: "client/docwrite/gate", layer: "model"},
-		{pattern: "server/...", layer: "store"},
-		{pattern: "server/internal/...", layer: "knowledge"},
-		{pattern: "tools", layer: "tool"},
+		{pattern: "a/...", layer: "storeclient"},
+		{pattern: "a/b", layer: "model"},
+		{pattern: "x/...", layer: "store"},
+		{pattern: "x/y/...", layer: "knowledge"},
+		{pattern: "t", layer: "tool"},
 	}
 	tests := []struct {
 		pkg  string
 		want string // "" for unmapped
 	}{
-		{pkg: "client/docwrite", want: "storeclient"},
-		{pkg: "client/docwrite/gate", want: "model"},
-		{pkg: "client/docwrite/gate/sub", want: "storeclient"},
-		{pkg: "client/docwritex", want: ""},
-		{pkg: "server/internal/x", want: "knowledge"},
-		{pkg: "server/blob", want: "store"},
-		{pkg: "tools", want: "tool"},
-		{pkg: "tools/x", want: ""},
+		{pkg: "a", want: "storeclient"},
+		{pkg: "a/b", want: "model"},
+		{pkg: "a/b/sub", want: "storeclient"},
+		{pkg: "ax", want: ""},
+		{pkg: "x/y/z", want: "knowledge"},
+		{pkg: "x/z", want: "store"},
+		{pkg: "t", want: "tool"},
+		{pkg: "t/z", want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.pkg, func(t *testing.T) {

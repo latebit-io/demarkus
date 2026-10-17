@@ -8,33 +8,33 @@ import (
 
 func TestCheck(t *testing.T) {
 	m := layerMap{
-		{pattern: "protocol/...", layer: "protocol", line: 1},
-		{pattern: "client/journal", layer: "model", line: 2},
-		{pattern: "client/mcpfmt", layer: "surface", line: 3},
-		{pattern: "client/fetch", layer: "storeclient", line: 4},
-		{pattern: "client/gone", layer: "model", line: 5},
+		{pattern: "x/wire/...", layer: "protocol", line: 1},
+		{pattern: "x/model", layer: "model", line: 2},
+		{pattern: "x/surface", layer: "surface", line: 3},
+		{pattern: "x/client", layer: "storeclient", line: 4},
+		{pattern: "x/gone", layer: "model", line: 5},
 	}
 	pkgs := []pkg{
-		{path: "protocol", imports: nil},
-		{path: "client/fetch", imports: []string{"protocol"}, testImports: []string{"client/journal"}},
-		{path: "client/journal", imports: []string{"client/fetch", "client/mcpfmt"}, testImports: []string{"client/mcpfmt", "client/journal"}},
-		{path: "client/mcpfmt", imports: []string{"client/journal", "client/new"}},
-		{path: "client/new"},
+		{path: "x/wire", imports: nil},
+		{path: "x/client", imports: []string{"x/wire"}, testImports: []string{"x/model"}},
+		{path: "x/model", imports: []string{"x/client", "x/surface"}, testImports: []string{"x/surface", "x/model"}},
+		{path: "x/surface", imports: []string{"x/model", "x/new"}},
+		{path: "x/new"},
 	}
 	r := check(m, pkgs)
 
 	wantViolations := []string{
-		"client/fetch (storeclient) -> client/journal (model) [test]",
-		"client/journal (model) -> client/mcpfmt (surface)",
+		"x/client (storeclient) -> x/model (model) [test]",
+		"x/model (model) -> x/surface (surface)",
 	}
 	if !slices.Equal(r.violations, wantViolations) {
 		t.Errorf("violations:\n%s\nwant:\n%s", strings.Join(r.violations, "\n"), strings.Join(wantViolations, "\n"))
 	}
-	if want := []string{"client/new"}; !slices.Equal(r.unmapped, want) {
+	if want := []string{"x/new"}; !slices.Equal(r.unmapped, want) {
 		t.Errorf("unmapped = %v, want %v", r.unmapped, want)
 	}
-	if len(r.unused) != 1 || r.unused[0].pattern != "client/gone" {
-		t.Errorf("unused = %v, want client/gone", r.unused)
+	if len(r.unused) != 1 || r.unused[0].pattern != "x/gone" {
+		t.Errorf("unused = %v, want x/gone", r.unused)
 	}
 }
 
@@ -46,9 +46,9 @@ func TestDiff(t *testing.T) {
 }
 
 func TestParseList(t *testing.T) {
-	out := repoPrefix + "client/journal\tfmt " + repoPrefix + "client/fetch\t" +
-		repoPrefix + "client/fetchtest testing " + repoPrefix + "client/journal\n" +
-		repoPrefix + "protocol\t\t \n"
+	out := repoPrefix + "x/model\tfmt " + repoPrefix + "x/client\t" +
+		repoPrefix + "x/clienttest testing " + repoPrefix + "x/model\n" +
+		repoPrefix + "x/wire\t\t \n"
 	pkgs, err := parseList([]byte(out))
 	if err != nil {
 		t.Fatal(err)
@@ -57,11 +57,11 @@ func TestParseList(t *testing.T) {
 		t.Fatalf("got %d packages, want 2", len(pkgs))
 	}
 	got := pkgs[0]
-	if got.path != "client/journal" || !slices.Equal(got.imports, []string{"client/fetch"}) ||
-		!slices.Equal(got.testImports, []string{"client/fetchtest", "client/journal"}) {
+	if got.path != "x/model" || !slices.Equal(got.imports, []string{"x/client"}) ||
+		!slices.Equal(got.testImports, []string{"x/clienttest", "x/model"}) {
 		t.Errorf("parsed %+v", got)
 	}
-	if pkgs[1].path != "protocol" || len(pkgs[1].imports)+len(pkgs[1].testImports) != 0 {
+	if pkgs[1].path != "x/wire" || len(pkgs[1].imports)+len(pkgs[1].testImports) != 0 {
 		t.Errorf("parsed %+v", pkgs[1])
 	}
 
