@@ -67,6 +67,7 @@ const (
 	doctorDeepDesc      = "walk version history for lost metadata (default false)"
 	doctorPromotionDesc = "list promotion candidates, promoted ones excluded (default false)"
 	graphRetentionDesc  = "graph versions to keep (default 20; 0 keeps all); older permanently pruned"
+	budgetDesc          = "result tokens for the whole result: matched sections follow the table in rank order, then related documents of the strongest match, under '" + lookupexpand.Delimiter + " path/vN#anchor' lines, whole sections, until spent (default 0: table only)"
 )
 
 func describe(base, suffix string) mcp.ToolOption {
@@ -278,6 +279,22 @@ func GraphPublishTool(targetDesc, suffix string) mcp.Tool {
 	)
 }
 
+// budgetParam is the lookup argument for expanded sections, in result tokens.
+const budgetParam = "budget"
+
+// BudgetParam declares the budget argument on a lookup tool.
+func BudgetParam() mcp.ToolOption {
+	return mcp.WithNumber(budgetParam, mcp.Description(budgetDesc))
+}
+
+// Budget reads the budget argument as bytes; zero when absent or not positive.
+func Budget(req *mcp.CallToolRequest) int {
+	if n := req.GetInt(budgetParam, 0); n > 0 {
+		return n * lookupexpand.BytesPerToken
+	}
+	return 0
+}
+
 // LookupParams are the lookup arguments both surfaces share after url.
 func LookupParams() []mcp.ToolOption {
 	return []mcp.ToolOption{
@@ -285,7 +302,7 @@ func LookupParams() []mcp.ToolOption {
 		mcp.WithString("filter", mcp.Description(FilterDesc)),
 		mcp.WithNumber("limit", mcp.Description(LimitDesc)),
 		mcp.WithString("match", mcp.Description(MatchDesc)),
-		lookupexpand.Option(),
+		BudgetParam(),
 		Lookup.Param(),
 	}
 }
