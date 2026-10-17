@@ -12,7 +12,8 @@ import (
 	"github.com/yuin/goldmark/text"
 
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/mdoutline"
+	"github.com/latebit-io/demarkus/client/memory/outline"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
 )
 
@@ -64,9 +65,9 @@ func HubProblems(url, body string) []string {
 		return nil
 	}
 	var problems []string
-	if len(body) >= mdoutline.OutlineThreshold {
+	if len(body) >= outline.Threshold {
 		problems = append(problems, stylerules.Prefix(stylerules.HubSize, fmt.Sprintf(
-			"hub body is %d KB, at or over the 8 KB fetch threshold, so a plain fetch returns an outline; split it into a link hub plus topic files", len(body)/1024)))
+			"hub body is %d KB, at or over the %d KB fetch threshold, so a plain fetch returns an outline; split it into a link hub plus topic files", len(body)/1024, outline.Threshold/1024)))
 	}
 	var bad []string
 	for _, b := range items {

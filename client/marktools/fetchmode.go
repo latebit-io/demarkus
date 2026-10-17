@@ -9,8 +9,9 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchdedup"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
-	"github.com/latebit-io/demarkus/client/mdoutline"
+	"github.com/latebit-io/demarkus/client/memory/outline"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
 // SeenStore remembers, for one agent, which version of a document was last
@@ -49,8 +50,8 @@ func (t *Tools) Fetch(ctx context.Context, args FetchArgs) Result {
 	body := result.Response.Body
 
 	// MCP text cannot carry binary faithfully; byte exact retrieval is the CLI's job.
-	if mdoutline.BinaryBody(body) {
-		return text(mcpfmt.FullWith(result, mdoutline.NonMarkdownNotice(len(body)), map[string]string{"mode": "binary"}, mcpfmt.FetchKeys...))
+	if binaryBody(body) {
+		return text(mcpfmt.FullWith(result, nonMarkdownNotice(len(body)), map[string]string{"mode": "binary"}, mcpfmt.FetchKeys...))
 	}
 	// A section works at any size and skips dedup: it asks for content the
 	// agent has not necessarily seen.
@@ -86,10 +87,10 @@ func (t *Tools) fullOrOutline(ctx context.Context, f *fetched, args FetchArgs) R
 		extra["note"] = fetchdedup.ChangedNote(prev, cur)
 	}
 	// Size gate: a large document answers with its outline unless forced.
-	if !args.Force && len(body) >= mdoutline.OutlineThreshold {
+	if !args.Force && len(body) >= outline.Threshold {
 		extra["mode"] = "outline"
 		extra["size"] = fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1)
-		return text(mcpfmt.FullWith(f.result, mdoutline.OutlineBody(f.docURL, body), extra, mcpfmt.FetchKeys...))
+		return text(mcpfmt.FullWith(f.result, outline.Body(f.docURL, body), extra, mcpfmt.FetchKeys...))
 	}
 	if cur.Identified() && t.hooks.Seen != nil {
 		t.hooks.Seen.Record(ctx, key, cur)
@@ -147,8 +148,8 @@ func (t *Tools) ReadResource(ctx context.Context, rawURI string) (Resource, erro
 	}
 	body := result.Response.Body
 	// A binary body reads as a plain text notice, never as mojibake.
-	if mdoutline.BinaryBody(body) {
-		return Resource{MIMEType: "text/plain", Text: mdoutline.NonMarkdownNotice(len(body))}, nil
+	if binaryBody(body) {
+		return Resource{MIMEType: "text/plain", Text: nonMarkdownNotice(len(body))}, nil
 	}
 	if anchor != "" {
 		if body, err = sectionOf(body, docURL, anchor); err != nil {

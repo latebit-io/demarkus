@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/mdoutline"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
 )
 

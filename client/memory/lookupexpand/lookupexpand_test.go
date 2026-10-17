@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latebit-io/demarkus/client/mdoutline"
+	"github.com/latebit-io/demarkus/client/memory/outline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/render"
 )
@@ -227,7 +227,7 @@ func TestExpandOutlinesLargeBarePath(t *testing.T) {
 	big := "# Big\n\nIntro.\n\n" + strings.Repeat("filler line\n\n", 800) + "## Tail\n\nend\n"
 	docs["/big.md"] = big
 	defer delete(docs, "/big.md")
-	if len(big) < mdoutline.OutlineThreshold {
+	if len(big) < outline.Threshold {
 		t.Fatal("fixture must be over the threshold")
 	}
 	var calls []string

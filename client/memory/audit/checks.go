@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/client/memory/hub"
 	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
 )
 

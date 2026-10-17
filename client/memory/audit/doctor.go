@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
@@ -34,7 +34,6 @@ const (
 	MaxAuditDuration = 10 * time.Minute
 	// maxUnconfirmedShown caps the pairs listed in the coverage note; the count stays exact.
 	maxUnconfirmedShown = 10
-	oversizedBytes      = 8 * 1024
 	adrNumberWidth      = 4
 )
 

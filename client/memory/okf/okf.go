@@ -1,8 +1,7 @@
 // Package okf reads and validates Open Knowledge Format (OKF) bundles — a
 // directory tree of markdown files with YAML frontmatter, cross-linked into a
-// relationship graph. It provides the parse primitives shared by the demarkus
-// OKF commands (validate now; import/export later) and a conformance validator
-// for OKF v0.1.
+// relationship graph — for the demarkus okf validate, import and export
+// commands, with a conformance validator for OKF v0.1.
 //
 // Spec: https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
 package okf

@@ -11,7 +11,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/mdoutline"
+	"github.com/latebit-io/demarkus/client/memory/outline"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -99,7 +99,7 @@ type ExtractedEdges struct {
 // ExtractDocumentEdges resolves body links and typed relations against docURL.
 func ExtractDocumentEdges(docURL, body string, metadata map[string]string) ExtractedEdges {
 	docURL = links.CanonicalURL(docURL)
-	anchored := mdoutline.AnchoredLinks(body)
+	anchored := outline.AnchoredLinks(body)
 	extracted := ExtractedEdges{
 		BodyLinkCount: len(anchored),
 		Edges:         make([]Edge, 0, len(anchored)),

@@ -19,11 +19,12 @@ import (
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/client/memory/hub"
+	"github.com/latebit-io/demarkus/client/memory/outline"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
 // frameCap: a section under it is the document's own frame and stays in
@@ -78,7 +79,7 @@ func Propose(in *Input) Proposal {
 		return p
 	}
 	headings := mdoutline.Headings(in.Body)
-	if len(in.Body) >= mdoutline.OutlineThreshold {
+	if len(in.Body) >= outline.Threshold {
 		split(in, headings, &p)
 	} else {
 		edit(in, headings, &p)
@@ -313,7 +314,7 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	}
 	preamble := strings.TrimRight(in.Body[:sections[0].heading.Start], "\n")
 	// Short sections stay only while the hub fits in one fetch.
-	for len(hubBody(preamble, sections, headings)) >= mdoutline.OutlineThreshold {
+	for len(hubBody(preamble, sections, headings)) >= outline.Threshold {
 		largest := -1
 		for i := range sections {
 			if sections[i].topic == "" && (largest < 0 || len(sections[i].text) > len(sections[largest].text)) {
@@ -512,7 +513,7 @@ type Source struct{ Name, Path, Body string }
 func InboundFrom(src *Source, targetPath, targetURL string) []Inbound {
 	var out []Inbound
 	want := links.CanonicalURL(targetURL)
-	for _, link := range mdoutline.AnchoredLinks(src.Body) {
+	for _, link := range outline.AnchoredLinks(src.Body) {
 		if link.Fragment == "" {
 			continue
 		}

@@ -8,10 +8,10 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/listing"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
-	"github.com/latebit-io/demarkus/client/mdoutline"
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
 // exploreSectionCap bounds each section of the card; overflow reads "+N more".
@@ -45,7 +45,7 @@ func (t *Tools) Explore(ctx context.Context, args ExploreArgs) Result { //nolint
 		return t.failed(SiteExplore, target.Host, err)
 	}
 	body := result.Response.Body
-	binary := mdoutline.BinaryBody(body)
+	binary := binaryBody(body)
 	observed := result
 	if binary {
 		observed.Response.Body = ""
@@ -66,7 +66,7 @@ func (t *Tools) Explore(ctx context.Context, args ExploreArgs) Result { //nolint
 
 	// An outline over a binary body is garbage; say what it is instead.
 	if binary {
-		notice := mdoutline.NonMarkdownNotice(len(body))
+		notice := nonMarkdownNotice(len(body))
 		if cacheWarning != "" {
 			notice += "\n" + cacheWarning
 		}
@@ -113,7 +113,7 @@ func observe(scope *GraphScope, target *Target, result fetch.Result) string {
 func writeDocumentSections(b *strings.Builder, body string) {
 	b.WriteString("## Outline\n")
 	if tree := mdoutline.Outline(body); tree != "" {
-		mdoutline.CappedList(b, strings.Split(strings.TrimRight(tree, "\n"), "\n"), exploreSectionCap, "headings")
+		cappedList(b, strings.Split(strings.TrimRight(tree, "\n"), "\n"), exploreSectionCap, "headings")
 	} else {
 		b.WriteString("(no headings)\n")
 	}
@@ -122,13 +122,13 @@ func writeDocumentSections(b *strings.Builder, body string) {
 		b.WriteString(para)
 		b.WriteString("\n")
 	}
-	out := mdoutline.LinkLines(body)
+	out := linkLines(body)
 	fmt.Fprintf(b, "\n## Outbound links (%d)\n", len(out))
 	if len(out) == 0 {
 		b.WriteString("(none)\n")
 		return
 	}
-	mdoutline.CappedList(b, out, exploreSectionCap, "links")
+	cappedList(b, out, exploreSectionCap, "links")
 }
 
 // graphSection is what the card's graph part needs.
@@ -203,5 +203,5 @@ func (t *Tools) writeSiblingsSection(ctx context.Context, b *strings.Builder, do
 		b.WriteString("(none)\n")
 		return
 	}
-	mdoutline.CappedList(b, lines, exploreSectionCap, "siblings")
+	cappedList(b, lines, exploreSectionCap, "siblings")
 }
