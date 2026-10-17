@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -63,7 +62,7 @@ func markLookupAllTool() mcp.Tool {
 		mcp.WithString("filter", mcp.Description(mcpfmt.FilterDesc)),
 		mcp.WithNumber("limit", mcp.Description("global "+mcpfmt.LimitDesc)),
 		mcp.WithString("match", mcp.Description(mcpfmt.MatchDesc+"; worlds without body match are listed")),
-		lookupexpand.Option(),
+		mcpfmt.BudgetParam(),
 		mcpfmt.LookupAll.Param(),
 	)
 }

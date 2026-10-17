@@ -10,27 +10,19 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mark3labs/mcp-go/mcp"
-
 	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/lookuptable"
 	"github.com/latebit-io/demarkus/client/mdoutline"
 )
 
-// Param is the tool argument: approximate result tokens for the whole result.
-const Param = "budget"
-
-// ParamDesc describes the budget argument on both surfaces.
-const ParamDesc = "result tokens for the whole result: matched sections follow the table in rank order, then related documents of the strongest match, under '" + Delimiter + " path/vN#anchor' lines, whole sections, until spent (default 0: table only)"
-
 // Delimiter opens every expanded block and every note. Body lines that start
 // with it (a nested blockquote) are indented one space, so only the frame
 // carries it at column zero.
 const Delimiter = ">>>"
 
-// bytesPerToken is the budget's unit; the surfaces carry no tokenizer.
-const bytesPerToken = 4
+// BytesPerToken is the budget's unit; the surfaces carry no tokenizer.
+const BytesPerToken = 4
 
 // MaxFetches bounds the documents one expansion fetches, direct and related:
 // the budget bounds output, this bounds wire calls.
@@ -81,19 +73,6 @@ func pinned(path, anchor string, version int) string {
 		loc += "#" + anchor
 	}
 	return loc
-}
-
-// Option declares the budget argument on a tool.
-func Option() mcp.ToolOption {
-	return mcp.WithNumber(Param, mcp.Description(ParamDesc))
-}
-
-// Budget reads the argument as bytes; zero when absent or not positive.
-func Budget(req *mcp.CallToolRequest) int {
-	if n := req.GetInt(Param, 0); n > 0 {
-		return n * bytesPerToken
-	}
-	return 0
 }
 
 // span is a printed byte range of one document and the block that holds it.
@@ -181,7 +160,7 @@ func Expand(ctx context.Context, in Input) string {
 		texts: make(map[string]string), linked: make(map[string]bool),
 	}
 	if e.remaining <= 0 {
-		e.note("the table alone used %d of %d result tokens; raise budget or fetch a row", in.Spent/bytesPerToken, in.Budget/bytesPerToken)
+		e.note("the table alone used %d of %d result tokens; raise budget or fetch a row", in.Spent/BytesPerToken, in.Budget/BytesPerToken)
 		return "\n" + e.b.String()
 	}
 	inTable := make(map[string]bool, len(rows))
@@ -312,7 +291,7 @@ func (e *expansion) emit(p *piece) bool {
 	}
 	if !e.add(loc, text) {
 		if len(e.unfit) < maxUnfitListed {
-			e.unfit = append(e.unfit, fmt.Sprintf("%s (~%d tokens)", loc, len(text)/bytesPerToken))
+			e.unfit = append(e.unfit, fmt.Sprintf("%s (~%d tokens)", loc, len(text)/BytesPerToken))
 		} else {
 			e.unfitMore++
 		}

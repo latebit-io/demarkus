@@ -12,7 +12,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -20,7 +19,7 @@ import (
 // tags are compared as a set, and identity keys are the surface's to stamp.
 var uncarried = map[string]bool{"retention": true, "tags": true}
 
-// maxValue bounds a dropped key's value in the note.
+// maxValue bounds a dropped key's value in the warning.
 const maxValue = 80
 
 // readTimeout bounds the read of the replaced version when the tool call
@@ -28,8 +27,8 @@ const maxValue = 80
 const readTimeout = 5 * time.Second
 
 // Gate runs after a successful update: read fetches the replaced version and
-// the note names what the new one dropped. A create or a pruned version yields
-// nothing; any other failed read is the caller's to log, never a blocker.
+// the warning names what the new one dropped. A create or a pruned version
+// yields nothing; any other failed read is the caller's to log, never a blocker.
 func Gate(ctx context.Context, expectedVersion int, meta map[string]string, read func(context.Context) (fetch.Result, error)) (string, error) {
 	if expectedVersion == 0 {
 		return "", nil
@@ -47,7 +46,7 @@ func Gate(ctx context.Context, expectedVersion int, meta map[string]string, read
 	default:
 		return "", fmt.Errorf("read v%d: status %s", expectedVersion, replaced.Response.Status)
 	}
-	return Compare(replaced.Response.Metadata, meta).Note(replaced.Response.Metadata["version"]), nil
+	return Compare(replaced.Response.Metadata, meta).Warning(replaced.Response.Metadata["version"]), nil
 }
 
 // Narrowing lists what a publish drops relative to the version it replaced.
@@ -83,9 +82,9 @@ func Compare(current, incoming map[string]string) Narrowing {
 	return n
 }
 
-// Note renders the warning appended to a successful publish result, or ""
-// when nothing was dropped. version is the replaced version's number.
-func (n Narrowing) Note(version string) string {
+// Warning is the sentence a surface appends to a successful publish result,
+// or "" when nothing was dropped. version is the replaced version's number.
+func (n Narrowing) Warning(version string) string {
 	var parts []string
 	if len(n.Tags) > 0 {
 		parts = append(parts, "tags "+strings.Join(n.Tags, ", "))
@@ -96,8 +95,8 @@ func (n Narrowing) Note(version string) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return mcpfmt.Note(fmt.Sprintf("this publish dropped %s carried by v%s; fetch with force: true and republish the complete metadata map to restore them",
-		strings.Join(parts, " and "), version))
+	return fmt.Sprintf("this publish dropped %s carried by v%s; fetch with force: true and republish the complete metadata map to restore them",
+		strings.Join(parts, " and "), version)
 }
 
 // truncate cuts value at maxValue bytes on a rune boundary.

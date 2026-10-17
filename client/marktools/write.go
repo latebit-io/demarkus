@@ -280,13 +280,16 @@ func formatWrite(r *docwrite.Result, fields ...string) string {
 // narrowingNote warns, after a write that landed, when it dropped tags or keys
 // the replaced version had. A failed check is logged and never fails the write.
 func (t *Tools) narrowingNote(ctx context.Context, doc *docwrite.Doc, w docwrite.Write) string {
-	note, err := metaguard.Gate(ctx, w.ExpectedVersion, w.Metadata, func(ctx context.Context) (fetch.Result, error) {
+	warning, err := metaguard.Gate(ctx, w.ExpectedVersion, w.Metadata, func(ctx context.Context) (fetch.Result, error) {
 		return doc.FetchVersion(ctx, w.ExpectedVersion)
 	})
 	if err != nil {
 		t.warnf("warning: publish metadata check mark://%s%s: %v", doc.Host, doc.Path, err)
 	}
-	return note
+	if warning == "" {
+		return ""
+	}
+	return mcpfmt.Note(warning)
 }
 
 // AppendArgs are mark_append's arguments; ExpectedVersion 0 resolves the

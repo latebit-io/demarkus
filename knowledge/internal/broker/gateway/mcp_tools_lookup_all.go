@@ -114,7 +114,7 @@ func (g *Gateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolReque
 	}
 	merged := report.result()
 	text := mcpfmt.Format(merged, mcpfmt.LookupAll.Options(&req))
-	if budget := lookupexpand.Budget(&req); budget > 0 {
+	if budget := mcpfmt.Budget(&req); budget > 0 {
 		text += lookupexpand.Expand(ctx, lookupexpand.Input{
 			Table: merged.Response.Body, Query: query, Budget: budget, Spent: len(text),
 			Fetch: func(ctx context.Context, loc string) (lookupexpand.Document, error) {

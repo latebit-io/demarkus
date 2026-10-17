@@ -6,7 +6,29 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/promote"
+	"github.com/mark3labs/mcp-go/mcp"
 )
+
+func TestBudgetReadsTokensAsBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want int
+	}{
+		{"absent", map[string]any{}, 0},
+		{"zero", map[string]any{"budget": 0}, 0},
+		{"negative", map[string]any{"budget": -5}, 0},
+		{"tokens", map[string]any{"budget": 1500}, 6000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := mcp.CallToolRequest{}
+			req.Params.Arguments = tc.args
+			if got := Budget(&req); got != tc.want {
+				t.Fatalf("Budget = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestNewToolHintsFollowClass(t *testing.T) {
 	read := NewTool("mark_fetch").Annotations

@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -138,7 +137,7 @@ func Lookup(req *mcp.CallToolRequest) (marktools.LookupArgs, error) {
 		Filter: req.GetString("filter", ""),
 		Limit:  req.GetInt("limit", 0),
 		Match:  req.GetString("match", ""),
-		Budget: lookupexpand.Budget(req),
+		Budget: mcpfmt.Budget(req),
 		Render: mcpfmt.Lookup.Options(req),
 	}, nil
 }
