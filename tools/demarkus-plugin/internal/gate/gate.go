@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	docgate "github.com/latebit-io/demarkus/client/docwrite/gate"
+	docgate "github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"

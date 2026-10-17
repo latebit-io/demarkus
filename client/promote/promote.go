@@ -13,10 +13,10 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
-	"github.com/latebit-io/demarkus/client/docwrite/gate"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/lookuptable"
 	"github.com/latebit-io/demarkus/client/mdoutline"
+	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"

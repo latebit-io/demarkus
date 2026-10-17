@@ -9,10 +9,10 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/internal/okf"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/listwalk"
+	"github.com/latebit-io/demarkus/client/memory/okf"
 	"github.com/latebit-io/demarkus/protocol"
 )
 

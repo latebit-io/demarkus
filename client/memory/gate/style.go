@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/internal/okf"
 	"github.com/latebit-io/demarkus/client/mdoutline"
+	"github.com/latebit-io/demarkus/client/memory/okf"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
 )

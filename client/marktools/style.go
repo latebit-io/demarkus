@@ -3,8 +3,8 @@ package marktools
 import (
 	"context"
 
-	"github.com/latebit-io/demarkus/client/docwrite/gate"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 

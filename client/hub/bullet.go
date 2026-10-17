@@ -5,7 +5,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/docwrite/gate"
+	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/protocol/layout"
 )
 
