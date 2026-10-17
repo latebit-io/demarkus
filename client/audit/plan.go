@@ -35,7 +35,8 @@ type Plan struct {
 	Hash    string
 }
 
-// PlanWrite is one document's composed fix.
+// PlanWrite is one document's composed fix; while the plan is built, the
+// pending write, kept when it has a fix.
 type PlanWrite struct {
 	Path     string
 	Version  int // the version read; 0 creates
@@ -43,6 +44,11 @@ type PlanWrite struct {
 	Metadata map[string]string
 	Requires []string // writes that must land first: the hub a parent's bullets move to
 	Fixes    []string // one line per change
+}
+
+func (w *PlanWrite) change(body, fix string) {
+	w.Body = body
+	w.Fixes = append(w.Fixes, fix)
 }
 
 // leads are the findings a fix may settle, recorded by the check that filed
@@ -59,8 +65,8 @@ type lead struct {
 }
 
 type archivedLead struct {
-	doc, target string
-	findings    []int // the broken link, and on a hub the stale entry
+	path, target string
+	findings     []int // the broken link, and on a hub the stale entry
 }
 
 type adrLead struct {
@@ -68,31 +74,16 @@ type adrLead struct {
 	num, record string
 }
 
-// draft is one document's pending write.
-type draft struct {
-	version  int
-	body     string
-	meta     map[string]string
-	requires []string
-	fixes    []string
-	changed  bool
-}
-
-func (d *draft) change(body, fix string) {
-	d.body, d.changed = body, true
-	d.fixes = append(d.fixes, fix)
-}
-
 type planner struct {
 	a       *audit
-	drafts  map[string]*draft
+	drafts  map[string]*PlanWrite
 	unfixed []Finding
 }
 
 // plan composes the fixes the leads prove. Hubs are generated before
 // orphans are placed, so an orphan sees the new hub and the room it frees.
 func (a *audit) plan() *Plan {
-	pl := &planner{a: a, drafts: map[string]*draft{}}
+	pl := &planner{a: a, drafts: map[string]*PlanWrite{}}
 	pl.frontmatter()
 	pl.journalType()
 	pl.archived()
@@ -104,32 +95,42 @@ func (a *audit) plan() *Plan {
 
 // draft opens p's pending write at the version the audit read; nil when p
 // is not a live document the audit read with its version.
-func (pl *planner) draft(p string) *draft {
-	if d, ok := pl.drafts[p]; ok {
-		return d
+func (pl *planner) draft(p string) *PlanWrite {
+	if w, ok := pl.drafts[p]; ok {
+		return w
 	}
 	doc, ok := pl.a.docs[p]
 	if !ok || !live(doc.status) {
 		return nil
 	}
 	if v, err := docwrite.Version(doc.meta); err == nil && v > 0 {
-		pl.drafts[p] = &draft{version: v, body: doc.body, meta: docwrite.Carried(doc.meta)}
+		pl.drafts[p] = &PlanWrite{Path: p, Version: v, Body: doc.body, Metadata: docwrite.Carried(doc.meta)}
 		return pl.drafts[p]
 	}
 	return nil
 }
 
+// open is draft for a document a lead names: one it cannot open is left to
+// a rerun.
+func (pl *planner) open(check, p string) *PlanWrite {
+	w := pl.draft(p)
+	if w == nil {
+		pl.skip(check, p, p+" was not read with a version; rerun the audit")
+	}
+	return w
+}
+
 // current is p's body and metadata with the plan's changes so far.
 func (pl *planner) current(p string) (body string, meta map[string]string) {
-	if d, ok := pl.drafts[p]; ok {
-		return d.body, d.meta
+	if w, ok := pl.drafts[p]; ok {
+		return w.Body, w.Metadata
 	}
 	return pl.a.docs[p].body, pl.a.docs[p].meta
 }
 
 // exists: a live document of the inventory, or a hub the plan creates.
 func (pl *planner) exists(p string) bool {
-	if d, ok := pl.drafts[p]; ok && d.version == 0 {
+	if w, ok := pl.drafts[p]; ok && w.Version == 0 {
 		return true
 	}
 	doc, ok := pl.a.docs[p]
@@ -157,45 +158,43 @@ func (pl *planner) skip(check, p, why string) {
 	pl.unfixed = append(pl.unfixed, Finding{Check: check, Path: p, Detail: why})
 }
 
-func (pl *planner) noDraft(check, p string) {
-	pl.skip(check, p, p+" was not read with a version; rerun the audit")
+// byPath groups leads by the document they name, paths sorted.
+func byPath[T any](found []T, pathOf func(T) string) (paths []string, by map[string][]T) {
+	by = map[string][]T{}
+	for _, l := range found {
+		by[pathOf(l)] = append(by[pathOf(l)], l)
+	}
+	return slices.Sorted(maps.Keys(by)), by
 }
 
 func (pl *planner) frontmatter() {
 	for _, l := range pl.a.leads.frontmatter {
-		d := pl.draft(l.path)
-		if d == nil {
-			pl.noDraft(CheckFrontmatter, l.path)
+		w := pl.open(CheckFrontmatter, l.path)
+		if w == nil {
 			continue
 		}
-		kv, rest, ok := gate.Frontmatter(d.body)
+		kv, rest, ok := gate.Frontmatter(w.Body)
 		if !ok {
 			pl.skip(CheckFrontmatter, l.path, "the fence does not parse as key: value lines; strip it by hand")
 			continue
 		}
-		keys := curate.Lift(kv, d.meta)
+		keys := curate.Lift(kv, w.Metadata)
 		if len(keys) == 0 {
 			keys = []string{"none"}
 		}
-		d.change(rest, "frontmatter fence removed; metadata keys: "+strings.Join(keys, ", "))
+		w.change(rest, "frontmatter fence removed; metadata keys: "+strings.Join(keys, ", "))
 		pl.settle(l.finding)
 	}
 }
 
-// isJournalEntry: a dated entry directly in a journal directory.
-func (a *audit) isJournalEntry(p string) bool {
-	return layout.IsJournalEntry(path.Base(p)) && path.Base(path.Dir(p))+"/" == a.layout.Journal
-}
-
 func (pl *planner) journalType() {
 	for _, l := range pl.a.leads.journalType {
-		d := pl.draft(l.path)
-		if d == nil {
-			pl.noDraft(CheckUntyped, l.path)
+		w := pl.open(CheckUntyped, l.path)
+		if w == nil {
 			continue
 		}
-		d.meta["type"] = "Journal"
-		d.change(d.body, "type Journal")
+		w.Metadata["type"] = "Journal"
+		w.change(w.Body, "type Journal")
 		pl.settle(l.finding)
 	}
 }
@@ -203,22 +202,17 @@ func (pl *planner) journalType() {
 // archived drops a hub's bullets that link only archived documents, then
 // unlinks the rest inline, keeping the text.
 func (pl *planner) archived() {
-	byDoc := map[string][]archivedLead{}
-	for _, l := range pl.a.leads.archived {
-		byDoc[l.doc] = append(byDoc[l.doc], l)
-	}
-	for _, doc := range slices.Sorted(maps.Keys(byDoc)) {
-		found := byDoc[doc]
-		d := pl.draft(doc)
-		if d == nil {
-			pl.noDraft(CheckBrokenLinks, doc)
+	paths, by := byPath(pl.a.leads.archived, func(l archivedLead) string { return l.path })
+	for _, doc := range paths {
+		w := pl.open(CheckBrokenLinks, doc)
+		if w == nil {
 			continue
 		}
 		targets := map[string]bool{}
-		for _, l := range found {
+		for _, l := range by[doc] {
 			targets[l.target] = true
 		}
-		body, bullets := d.body, 0
+		body, bullets := w.Body, 0
 		if gate.IsHub(doc, body) || pl.a.dirs[strings.TrimSuffix(doc, ".md")+"/"] {
 			body, bullets = hub.WithoutLinks(body, doc, slices.Sorted(maps.Keys(targets)))
 		}
@@ -227,15 +221,15 @@ func (pl *planner) archived() {
 		for _, dest := range links.Extract(body) {
 			left[links.ResolvePath(doc, dest)] = true
 		}
-		for _, l := range found {
+		for _, l := range by[doc] {
 			if left[l.target] {
 				pl.skip(CheckBrokenLinks, doc, "-> "+l.target+" is not an inline link; remove it by hand")
 				continue
 			}
 			pl.settle(l.findings...)
 		}
-		if body != d.body {
-			d.change(body, fmt.Sprintf("links to archived documents removed: %d hub bullet(s), %d inline with the text kept", bullets, inline))
+		if body != w.Body {
+			w.change(body, fmt.Sprintf("links to archived documents removed: %d hub bullet(s), %d inline with the text kept", bullets, inline))
 		}
 	}
 }
@@ -243,89 +237,54 @@ func (pl *planner) archived() {
 // unlinkInline replaces each inline link to a target with its text; n
 // counts them. A reference-style link has no inline destination and stays.
 func unlinkInline(body, docPath string, targets map[string]bool) (out string, n int) {
-	type cut struct{ start, end, textStart, textEnd int }
-	var cuts []cut
+	var cuts []links.LinkInfo
 	for _, l := range links.ExtractWithPositions(body) {
-		if l.OpenBracket < 0 || !targets[links.ResolvePath(docPath, l.Dest)] {
-			continue
-		}
-		if end := inlineEnd(body, l.CloseBracket); end > 0 {
-			cuts = append(cuts, cut{l.OpenBracket, end, l.OpenBracket + 1, l.CloseBracket})
+		if l.OpenBracket >= 0 && l.End > 0 && targets[links.ResolvePath(docPath, l.Dest)] {
+			cuts = append(cuts, l)
 		}
 	}
 	for i := len(cuts) - 1; i >= 0; i-- {
-		c := cuts[i]
-		body = body[:c.start] + body[c.textStart:c.textEnd] + body[c.end:]
+		c := &cuts[i]
+		body = body[:c.OpenBracket] + body[c.OpenBracket+1:c.CloseBracket] + body[c.End:]
 	}
 	return body, len(cuts)
 }
 
-// inlineEnd is the offset just past an inline link's "(dest)" that starts
-// after the ']' at closeBracket; -1 when none does.
-func inlineEnd(body string, closeBracket int) int {
-	i := closeBracket + 1
-	if i >= len(body) || body[i] != '(' {
-		return -1
-	}
-	depth := 0
-	for ; i < len(body); i++ {
-		switch body[i] {
-		case '\\':
-			i++
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return i + 1
-			}
-		case '\n':
-			return -1
-		}
-	}
-	return -1
-}
-
 func (pl *planner) adrLinks() {
-	byDoc := map[string][]adrLead{}
-	for _, l := range pl.a.leads.adr {
-		byDoc[l.path] = append(byDoc[l.path], l)
-	}
-	for _, doc := range slices.Sorted(maps.Keys(byDoc)) {
-		found := byDoc[doc]
-		d := pl.draft(doc)
-		if d == nil {
-			pl.noDraft(CheckReferences, doc)
+	paths, by := byPath(pl.a.leads.adr, func(l adrLead) string { return l.path })
+	for _, doc := range paths {
+		w := pl.open(CheckReferences, doc)
+		if w == nil {
 			continue
 		}
 		want := map[string]string{}
-		for _, l := range found {
+		for _, l := range by[doc] {
 			want[l.num] = l.record
 		}
-		body, linked := linkADRs(d.body, want)
+		body, linked := linkADRs(w.Body, want)
 		var nums []string
-		for _, l := range found {
+		for _, l := range by[doc] {
 			if !linked[l.num] {
-				pl.skip(CheckReferences, doc, "ADR "+l.num+" is mentioned only in code, links or headings; link it by hand")
+				pl.skip(CheckReferences, doc, "ADR "+l.num+" is mentioned only in links or headings; link it by hand")
 				continue
 			}
 			nums = append(nums, l.num)
 			pl.settle(l.finding)
 		}
 		if len(nums) > 0 {
-			d.change(body, "linked ADR "+strings.Join(nums, ", "))
+			w.change(body, "linked ADR "+strings.Join(nums, ", "))
 		}
 	}
 }
 
 // linkADRs links the first mention of each wanted number (number to
-// record) outside code, links, headings and ranges.
+// record) outside links and headings.
 func linkADRs(body string, want map[string]string) (out string, linked map[string]bool) {
 	type span struct{ start, end int }
 	var skip []span
 	for _, l := range links.ExtractWithPositions(body) {
 		if l.OpenBracket >= 0 {
-			skip = append(skip, span{l.OpenBracket, max(inlineEnd(body, l.CloseBracket), l.CloseBracket+1)})
+			skip = append(skip, span{l.OpenBracket, max(l.End, l.CloseBracket+1)})
 		}
 	}
 	for _, h := range mdoutline.Headings(body) {
@@ -335,29 +294,19 @@ func linkADRs(body string, want map[string]string) (out string, linked map[strin
 		}
 		skip = append(skip, span{h.Start, end})
 	}
-	inside := func(off int) bool {
-		return slices.ContainsFunc(skip, func(s span) bool { return off >= s.start && off < s.end })
-	}
-	type link struct {
-		start, end int
-		record     string
-	}
-	var adds []link
+	var adds []adrMention
 	linked = map[string]bool{}
-	masked := stripCode(body)
-	for _, m := range adrReferenceRe.FindAllStringSubmatchIndex(masked, -1) {
-		digits := masked[m[2]:m[3]] // three or four, as the check pads them
-		num := strings.Repeat("0", adrNumberWidth-len(digits)) + digits
-		record, ok := want[num]
-		if m[4] >= 0 || !ok || linked[num] || inside(m[0]) {
+	for _, m := range adrMentions(body) {
+		inside := slices.ContainsFunc(skip, func(s span) bool { return m.start >= s.start && m.start < s.end })
+		if _, ok := want[m.num]; !ok || linked[m.num] || inside {
 			continue
 		}
-		linked[num] = true
-		adds = append(adds, link{m[0], m[1], record})
+		linked[m.num] = true
+		adds = append(adds, m)
 	}
 	for i := len(adds) - 1; i >= 0; i-- {
-		l := adds[i]
-		body = body[:l.start] + "[" + body[l.start:l.end] + "](" + l.record + ")" + body[l.end:]
+		m := &adds[i]
+		body = body[:m.start] + "[" + m.text + "](" + want[m.num] + ")" + body[m.end:]
 	}
 	return body, linked
 }
@@ -368,10 +317,6 @@ func linkADRs(body string, want map[string]string) (out string, linked map[strin
 func (pl *planner) hubs() {
 	for _, l := range pl.a.leads.hubs {
 		dir := l.path
-		if path.Base(dir)+"/" == pl.a.layout.Journal {
-			pl.skip(CheckMissingHub, dir, "a journal holds dated entries; rename the rest to <date>.md or move them out")
-			continue
-		}
 		hubPath := hub.Paths(dir)[0]
 		parentPath := pl.nearestHub(hubPath, "")
 		parent := pl.draft(parentPath)
@@ -390,12 +335,12 @@ func (pl *planner) hubs() {
 		// A parent that links D/ itself keeps that bullet; else the first
 		// moved bullet's line becomes the one for D/.
 		dirBullet := fmt.Sprintf("- [%s](%s): %s", title, dir, summary)
-		linked := linksDir(parent.body, parentPath, dir)
+		linked := hub.Names(parent.Body, parentPath, hubPath)
 		replace := dirBullet
 		if linked {
 			replace = ""
 		}
-		parentBody, moved := hub.MoveLinks(parent.body, parentPath, inDir, replace)
+		parentBody, moved := hub.MoveLinks(parent.Body, parentPath, inDir, replace)
 		if !linked && len(moved) == 0 {
 			parentBody = hub.WithBullet(parentBody, "", dirBullet)
 		}
@@ -417,26 +362,16 @@ func (pl *planner) hubs() {
 			pl.skip(CheckMissingHub, dir, fmt.Sprintf("over the cap: one hub would link %d documents, %d is the cap; publish %s as its hub or add second-level hubs", n, gate.HubLinkMax, hub.Paths(dir)[1]))
 			continue
 		}
-		pl.drafts[hubPath] = &draft{
-			body:    body,
-			meta:    map[string]string{"tags": strings.Join(protocol.MergeTags([]string{"index"}, []string{path.Base(dir)}), ","), "importance": generatedHubImportance},
-			fixes:   []string{fmt.Sprintf("hub created: %d bullet(s) moved from %s, %d added", len(moved), parentPath, added)},
-			changed: true,
+		pl.drafts[hubPath] = &PlanWrite{
+			Path:     hubPath,
+			Body:     body,
+			Metadata: map[string]string{"tags": strings.Join(protocol.MergeTags([]string{"index"}, []string{path.Base(dir)}), ","), "importance": generatedHubImportance},
+			Fixes:    []string{fmt.Sprintf("hub created: %d bullet(s) moved from %s, %d added", len(moved), parentPath, added)},
 		}
 		parent.change(parentBody, fmt.Sprintf("%d bullet(s) moved to %s, one bullet for %s", len(moved), hubPath, dir))
-		parent.requires = append(parent.requires, hubPath)
+		parent.Requires = append(parent.Requires, hubPath)
 		pl.settle(l.finding)
 	}
-}
-
-// linksDir: the body links the directory itself, slash optional.
-func linksDir(body, from, dir string) bool {
-	for _, dest := range links.Extract(body) {
-		if r := links.ResolvePath(from, dest); r == dir || r == strings.TrimSuffix(dir, "/") {
-			return true
-		}
-	}
-	return false
 }
 
 // orphans links each orphan from its nearest hub by the directory rule; a
@@ -444,11 +379,9 @@ func linksDir(body, from, dir string) bool {
 func (pl *planner) orphans() {
 	for _, l := range pl.a.leads.orphans {
 		switch p := l.path; {
-		case pl.a.isJournalEntry(p):
-			project := path.Dir(path.Dir(p))
-			journal := strings.TrimSuffix(project, "/") + "/" + pl.a.layout.Journal
+		case pl.a.layout.JournalEntry(p):
 			section, bullet := hub.JournalBullet(pl.a.layout.Journal)
-			pl.link(l, hub.Paths(project)[0], &hub.Link{Target: journal, Section: section, Bullet: bullet})
+			pl.link(l, hub.Paths(path.Dir(path.Dir(p)))[0], &hub.Link{Target: path.Dir(p) + "/", Section: section, Bullet: bullet})
 		case !hub.Linkable(p):
 			pl.skip(CheckOrphans, p, "not a document a hub names; link its directory from the hub above it")
 		default:
@@ -466,18 +399,18 @@ func (pl *planner) orphans() {
 // link adds the bullet for want's target (the orphan or its directory) to
 // the hub unless the hub already names the orphan, and settles it.
 func (pl *planner) link(l lead, hubPath string, want *hub.Link) {
-	d := pl.draft(hubPath)
-	if d == nil {
+	w := pl.draft(hubPath)
+	if w == nil {
 		pl.skip(CheckOrphans, l.path, "its hub "+hubPath+" is not in scope")
 		return
 	}
 	switch {
-	case hub.Names(d.body, hubPath, l.path):
-	case gate.OutboundDocs(d.body) >= gate.HubLinkMax:
+	case hub.Names(w.Body, hubPath, l.path):
+	case gate.OutboundDocs(w.Body) >= gate.HubLinkMax:
 		pl.skip(CheckOrphans, l.path, fmt.Sprintf("its hub %s is at the cap of %d links", hubPath, gate.HubLinkMax))
 		return
 	default:
-		d.change(hub.WithBullet(d.body, want.Section, want.Bullet), "bullet for "+want.Target)
+		w.change(hub.WithBullet(w.Body, want.Section, want.Bullet), "bullet for "+want.Target)
 	}
 	pl.settle(l.finding)
 }
@@ -486,9 +419,9 @@ func (pl *planner) link(l lead, hubPath string, want *hub.Link) {
 // then by path), cuts the batch at MaxPlanWrites and hashes it.
 func (pl *planner) finish() *Plan {
 	p := &Plan{Unfixed: pl.unfixed}
-	for docPath, d := range pl.drafts {
-		if d.changed {
-			p.Writes = append(p.Writes, PlanWrite{Path: docPath, Version: d.version, Body: d.body, Metadata: d.meta, Requires: d.requires, Fixes: d.fixes})
+	for _, w := range pl.drafts {
+		if len(w.Fixes) > 0 {
+			p.Writes = append(p.Writes, *w)
 		}
 	}
 	rank := func(w *PlanWrite) int {
@@ -505,6 +438,7 @@ func (pl *planner) finish() *Plan {
 	})
 	if len(p.Writes) > MaxPlanWrites {
 		p.More = len(p.Writes) - MaxPlanWrites
+		clear(p.Writes[MaxPlanWrites:]) // the cut writes' bodies must not outlive the plan
 		p.Writes = p.Writes[:MaxPlanWrites]
 	}
 	if len(p.Writes) > 0 {

@@ -74,7 +74,7 @@ func (a *audit) checkLinks(ctx context.Context) {
 			switch {
 			case live(status):
 			case status == protocol.StatusArchived:
-				a.leads.archived = append(a.leads.archived, archivedLead{doc: p, target: target, findings: a.brokenLink(p, target, status, "drop the link")})
+				a.leads.archived = append(a.leads.archived, archivedLead{path: p, target: target, findings: a.brokenLink(p, target, status, "drop the link")})
 			case status == protocol.StatusNotFound:
 				a.brokenLink(p, target, status, "fix the link or restore the target")
 			default:
@@ -153,7 +153,11 @@ func (a *audit) checkHubs(ctx context.Context) {
 		counts[project]++
 	}
 	for _, dir := range slices.Sorted(maps.Keys(counts)) {
-		if !a.hasHub(ctx, dir) {
+		switch {
+		case a.hasHub(ctx, dir):
+		case a.layout.JournalDir(dir):
+			a.add(CheckMissingHub, dir, fmt.Sprintf("%d documents that are not dated entries; a journal needs only its directory link", counts[dir]), "rename them to <date>.md or move them out")
+		default:
 			a.leads.hubs = append(a.leads.hubs, lead{dir, a.add(CheckMissingHub, dir, fmt.Sprintf("%d documents and no %s", counts[dir], strings.Join(hub.Paths(dir), " or ")), "publish a hub linking each document once")})
 		}
 	}
@@ -251,7 +255,7 @@ func (a *audit) checkMetadata() {
 				detail = "type=Document (generic default)"
 			}
 			i := a.add(CheckUntyped, p, detail, "re-publish with metadata.type (Reference, Decision, Architecture, Plan, Journal, Guide)")
-			if a.isJournalEntry(p) {
+			if a.layout.JournalEntry(p) {
 				a.leads.journalType = append(a.leads.journalType, lead{p, i})
 			}
 		}
@@ -313,37 +317,57 @@ func (a *audit) checkReferences() {
 		if !live(d.status) {
 			continue
 		}
-		mentions := adrReferenceRe.FindAllStringSubmatch(stripCode(d.body), -1)
-		if len(mentions) == 0 {
-			continue
-		}
 		own := ""
 		if m := adrFileRe.FindStringSubmatch(path.Base(p)); m != nil && path.Base(path.Dir(p)) == "adr" {
 			own = m[1]
 		}
 		seen := map[string]bool{}
-		for _, m := range mentions {
-			n, _ := strconv.Atoi(m[1])
-			num := fmt.Sprintf("%0*d", adrNumberWidth, n)
-			if m[2] != "" || num == own || seen[num] {
+		for _, m := range adrMentions(d.body) {
+			if m.num == own || seen[m.num] {
 				continue
 			}
-			seen[num] = true
-			ref := resolveADR(byDir, p, n)
+			seen[m.num] = true
+			ref := resolveADR(byDir, p, m.n)
 			switch {
 			case len(ref.records) == 0:
-				a.add(CheckReferences, p, fmt.Sprintf("%q dangling: no adr/%s-*.md in scope", m[0], num), "restore the record or drop the reference")
+				a.add(CheckReferences, p, fmt.Sprintf("%q dangling: no adr/%s-*.md in scope", m.text, m.num), "restore the record or drop the reference")
 			case slices.ContainsFunc(ref.records, func(r string) bool { return slices.Contains(d.links, r) }):
 			case ref.foreign:
-				a.add(CheckReferences, p, fmt.Sprintf("%q not in %s: %s is another series", m[0], ref.series, ref.records[0]), "link it if that record is meant")
+				a.add(CheckReferences, p, fmt.Sprintf("%q not in %s: %s is another series", m.text, ref.series, ref.records[0]), "link it if that record is meant")
 			case len(ref.records) > 1:
-				a.add(CheckReferences, p, fmt.Sprintf("%q ambiguous: %s share the number", m[0], strings.Join(ref.records, " and ")), "renumber one (ADR sequence), then link the record meant")
+				a.add(CheckReferences, p, fmt.Sprintf("%q ambiguous: %s share the number", m.text, strings.Join(ref.records, " and ")), "renumber one (ADR sequence), then link the record meant")
 			default:
-				i := a.add(CheckReferences, p, fmt.Sprintf("%q unlinked: %s exists but the body has no link to it", m[0], ref.records[0]), "[ADR "+num+"]("+ref.records[0]+")")
-				a.leads.adr = append(a.leads.adr, adrLead{lead: lead{p, i}, num: num, record: ref.records[0]})
+				i := a.add(CheckReferences, p, fmt.Sprintf("%q unlinked: %s exists but the body has no link to it", m.text, ref.records[0]), "[ADR "+m.num+"]("+ref.records[0]+")")
+				a.leads.adr = append(a.leads.adr, adrLead{lead: lead{p, i}, num: m.num, record: ref.records[0]})
 			}
 		}
 	}
+}
+
+// adrMention is one ADR citation outside code: its text, number (padded and
+// as read) and offsets. A range ("ADR 0001 to 0027") cites neither end.
+type adrMention struct {
+	text, num  string
+	n          int
+	start, end int
+}
+
+// adrMentions are the body's ADR citations in order; the check and the fix
+// read the same ones.
+func adrMentions(body string) []adrMention {
+	masked := stripCode(body)
+	var out []adrMention
+	for _, m := range adrReferenceRe.FindAllStringSubmatchIndex(masked, -1) {
+		if m[4] >= 0 {
+			continue
+		}
+		n, err := strconv.Atoi(masked[m[2]:m[3]])
+		if err != nil {
+			continue // unreachable: the regex matches digits only
+		}
+		out = append(out, adrMention{text: body[m[0]:m[1]], num: fmt.Sprintf("%0*d", adrNumberWidth, n), n: n, start: m[0], end: m[1]})
+	}
+	return out
 }
 
 // adrRef is what one ADR number names from a citing document.

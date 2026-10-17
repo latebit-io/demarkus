@@ -96,3 +96,19 @@ func TestIsJournalEntry(t *testing.T) {
 		}
 	}
 }
+
+// A dated entry is one directly in a journal directory, at any depth.
+func TestJournalEntry(t *testing.T) {
+	l := Default()
+	for p, want := range map[string]bool{
+		"/journal/2026-10-13.md": true, "/proj/journal/2026-10-13.md": true,
+		"/plans/2026-10-13.md": false, "/journal/notes.md": false, "/journal/sub/2026-10-13.md": false,
+	} {
+		if l.JournalEntry(p) != want {
+			t.Errorf("JournalEntry(%q) = %v, want %v", p, !want, want)
+		}
+	}
+	if !l.JournalDir("/proj/journal/") || l.JournalDir("/plans/") {
+		t.Error("JournalDir")
+	}
+}

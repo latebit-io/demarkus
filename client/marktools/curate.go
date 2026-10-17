@@ -111,14 +111,14 @@ func (t *Tools) curateScope(ctx context.Context, target Target, args CurateArgs,
 	}
 	docs := func(p string) *docwrite.Doc { return t.doc(ctx, target.at(p), write) }
 	outcomes := audit.Apply(ctx, docs, plan, t.identityMeta(ctx))
-	landed := 0
+	var written []observed
 	for i := range outcomes {
 		if o := &outcomes[i]; o.Result == audit.Applied {
-			landed++
-			t.observeWrite(ctx, target.at(o.Path), graph.FetchResult{Status: protocol.StatusOK, Body: o.Body, Metadata: o.Metadata})
+			written = append(written, observed{target.at(o.Path), graph.FetchResult{Status: protocol.StatusOK, Body: plan.Writes[i].Body, Metadata: o.Metadata}})
 		}
 	}
-	out := audit.ApplyMarkdown(report.Scope, plan, outcomes)
+	t.observeWrites(ctx, written)
+	out, landed := audit.ApplyMarkdown(report.Scope, plan.More, outcomes)
 	if landed == 0 {
 		return failure("%s", out)
 	}

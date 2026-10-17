@@ -21,13 +21,12 @@ const (
 	Skipped    = "skipped"    // a write it requires did not land
 )
 
-// Outcome is one planned write after an apply.
+// Outcome is one planned write after an apply, in the plan's order.
 type Outcome struct {
 	Path     string
 	Result   string
-	Version  int    // the version written, when applied
-	Detail   string // why, when not applied
-	Body     string
+	Version  int               // the version written, when applied
+	Detail   string            // why, when not applied
 	Metadata map[string]string // as sent plus the response's keys
 }
 
@@ -53,7 +52,7 @@ func Apply(ctx context.Context, docs hub.Docs, p *Plan, stamp map[string]string)
 func publishPlanned(ctx context.Context, doc *docwrite.Doc, w *PlanWrite, stamp map[string]string) Outcome {
 	meta := maps.Clone(w.Metadata)
 	maps.Copy(meta, stamp)
-	o := Outcome{Path: w.Path, Body: w.Body, Metadata: meta}
+	o := Outcome{Path: w.Path, Metadata: meta}
 	result, err := doc.Publish(ctx, docwrite.Write{Body: w.Body, ExpectedVersion: w.Version, Metadata: meta}, merge.OnConflictFail)
 	status := result.Response.Status
 	switch {

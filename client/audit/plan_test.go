@@ -80,7 +80,7 @@ func TestPlanLinksUnlinkedADRReferences(t *testing.T) {
 	if got := writes["/notes.md"].Body; got != "# Notes\n\n## Why ADR 0001\n\n`ADR 0001` and [ADR 0001 notes](/heads.md), then [ADR 0001](/adr/0001-one.md) and [ADR-0002](/adr/0002-two.md), again ADR 0001.\n" {
 		t.Errorf("notes = %q", got)
 	}
-	if _, ok := writes["/heads.md"]; ok || !slices.Contains(unfixed(r), "/heads.md: ADR 0002 is mentioned only in code, links or headings; link it by hand") {
+	if _, ok := writes["/heads.md"]; ok || !slices.Contains(unfixed(r), "/heads.md: ADR 0002 is mentioned only in links or headings; link it by hand") {
 		t.Errorf("heading only: writes %v, unfixed %v", writes["/heads.md"], unfixed(r))
 	}
 	if got := fixable(r, CheckReferences); len(got) != 2 {
@@ -157,8 +157,8 @@ func TestPlanGeneratesAMissingHub(t *testing.T) {
 	}
 }
 
-// Over the cap, and a journal directory, a missing hub is reported, not
-// generated.
+// Over the cap a missing hub is left to judgment; a journal directory needs
+// no hub, so its finding names the documents that are not dated entries.
 func TestPlanReportsMissingHubsItCannotGenerate(t *testing.T) {
 	docs := map[string]fakeDoc{
 		"/index.md":         hubDoc("# Hub\n\nThe store.\n\n- [Big](/big/)\n- [Journal](/journal/)\n"),
@@ -171,12 +171,11 @@ func TestPlanReportsMissingHubsItCannotGenerate(t *testing.T) {
 	if len(writes) != 0 {
 		t.Errorf("writes = %v", writes)
 	}
-	want := []string{
-		"/big/: over the cap: one hub would link 41 documents, 40 is the cap; publish /big.md as its hub or add second-level hubs",
-		"/journal/: a journal holds dated entries; rename the rest to <date>.md or move them out",
-	}
-	if got := unfixed(r); !slices.Equal(got, want) {
+	if got := unfixed(r); !slices.Equal(got, []string{"/big/: over the cap: one hub would link 41 documents, 40 is the cap; publish /big.md as its hub or add second-level hubs"}) {
 		t.Errorf("unfixed = %v", got)
+	}
+	if got := findings(r, CheckMissingHub); !slices.Contains(got, "/journal/: 1 documents that are not dated entries; a journal needs only its directory link") {
+		t.Errorf("missing hub findings = %v", got)
 	}
 }
 

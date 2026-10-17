@@ -16,17 +16,17 @@ func (r *Report) Markdown() string {
 		fmt.Fprintf(&b, ", %d already promoted", r.Promoted)
 	}
 	b.WriteByte('\n')
-	hidden, fixable := 0, map[string]int{}
+	hidden, total, fixable := 0, 0, map[string]int{}
 	byCheck := map[string][]Finding{}
 	for _, f := range r.Findings {
 		byCheck[f.Check] = append(byCheck[f.Check], f)
 		if f.Fixable {
 			fixable[f.Check]++
-			fixable[""]++
+			total++
 		}
 	}
-	if n := fixable[""]; n > 0 {
-		fmt.Fprintf(&b, "%d fixable: mark_curate %s proposes the writes\n", n, r.Scope)
+	if total > 0 {
+		fmt.Fprintf(&b, "%d fixable: mark_curate %s proposes the writes\n", total, r.Scope)
 	}
 	for _, check := range CheckOrder {
 		fs := byCheck[check]
@@ -118,9 +118,9 @@ func (p *Plan) Markdown(scope string) string {
 }
 
 // ApplyMarkdown renders an apply: a count, one line per write, and what a
-// rerun takes.
-func ApplyMarkdown(scope string, p *Plan, outcomes []Outcome) string {
-	applied := 0
+// rerun takes (more is the plan's writes past the batch); applied counts
+// the writes that landed.
+func ApplyMarkdown(scope string, more int, outcomes []Outcome) (out string, applied int) {
 	var b strings.Builder
 	for i := range outcomes {
 		o := &outcomes[i]
@@ -136,8 +136,8 @@ func ApplyMarkdown(scope string, p *Plan, outcomes []Outcome) string {
 		applied++
 	}
 	head := fmt.Sprintf("status: applied %d of %d\n", applied, len(outcomes))
-	if p.More > 0 || applied < len(outcomes) {
+	if more > 0 || applied < len(outcomes) {
 		b.WriteString("\nrerun mark_curate " + scope + " for the rest and review it before applying\n")
 	}
-	return head + b.String()
+	return head + b.String(), applied
 }

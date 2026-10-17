@@ -166,6 +166,17 @@ func assignList(dst *[]string, value string, ok func(string) bool) bool {
 // word is one token: non-empty, no inner whitespace.
 func word(s string) bool { return s != "" && !strings.ContainsAny(s, " \t") }
 
+// JournalDir reports a directory the layout keeps dated entries in, at any
+// depth (each project has its own).
+func (l *Layout) JournalDir(dir string) bool {
+	return path.Base(strings.TrimSuffix(dir, "/"))+"/" == l.Journal
+}
+
+// JournalEntry reports a dated entry directly in a journal directory.
+func (l *Layout) JournalEntry(p string) bool {
+	return IsJournalEntry(path.Base(p)) && l.JournalDir(path.Dir(p))
+}
+
 // Section is the hub heading for a directory: "journal/" reads "Journal".
 func Section(directory string) string {
 	name := strings.TrimSuffix(directory, "/")

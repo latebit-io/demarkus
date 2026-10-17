@@ -79,6 +79,7 @@ type LinkInfo struct {
 	OpenBracket  int    // byte offset of '[' in source, -1 for links with no text nodes
 	CloseBracket int    // byte offset of ']' in source, -1 for links with no text nodes
 	BlockStart   int    // byte offset of the enclosing block's start, -1 if unknown; section-level position even when the brackets are unknown
+	End          int    // byte offset just past an inline link's "(dest)", -1 for other links
 }
 
 // ExtractWithPositions parses body as markdown and returns link info with source positions.
@@ -148,6 +149,7 @@ func ExtractWithPositions(body string) []LinkInfo {
 				OpenBracket:  -1,
 				CloseBracket: -1,
 				BlockStart:   blockStart,
+				End:          -1,
 			})
 			return ast.WalkContinue, nil
 		}
@@ -170,10 +172,37 @@ func ExtractWithPositions(body string) []LinkInfo {
 			OpenBracket:  open,
 			CloseBracket: closeBracket,
 			BlockStart:   blockStart,
+			End:          inlineEnd(src, closeBracket),
 		})
 		return ast.WalkContinue, nil
 	})
 	return infos
+}
+
+// inlineEnd is the offset just past the "(dest)" that follows the ']' at
+// closeBracket; -1 when none does (a reference-style link).
+func inlineEnd(src []byte, closeBracket int) int {
+	i := closeBracket + 1
+	if i >= len(src) || src[i] != '(' {
+		return -1
+	}
+	depth := 0
+	for ; i < len(src); i++ {
+		switch src[i] {
+		case '\\':
+			i++
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		case '\n':
+			return -1
+		}
+	}
+	return -1
 }
 
 // ExtractTitle returns the text of the first top-level heading in the markdown body.
