@@ -7,11 +7,11 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/graph"
-	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpbind"
+	"github.com/latebit-io/demarkus/client/memory/graph"
+	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"

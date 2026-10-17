@@ -8,8 +8,8 @@ import (
 	"strconv"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/lookupexpand"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/memory/lookupexpand"
 	"github.com/latebit-io/demarkus/protocol"
 )
 

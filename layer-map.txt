@@ -45,15 +45,7 @@ client/merge                                    storeclient
 client/token                                    storeclient
 
 client/memory/...                               model
-client/audit                                    model
-client/curate                                   model
-client/graph                                    model
-client/graphstore                               model
-client/hub                                      model
-client/journal                                  model
-client/lookupexpand                             model
 client/mdoutline                                model
-client/promote                                  model
 
 tools/demarkus-plugin/internal/config           soul
 tools/demarkus-plugin/internal/lockdir          soul

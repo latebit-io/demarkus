@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	soulpromote "github.com/latebit-io/demarkus/client/promote"
+	soulpromote "github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/facts"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"

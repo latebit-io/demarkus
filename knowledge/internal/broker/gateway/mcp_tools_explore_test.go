@@ -9,8 +9,8 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
-	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/protocol"
 )
 

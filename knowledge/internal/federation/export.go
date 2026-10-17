@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/generation"
-	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
 )
 

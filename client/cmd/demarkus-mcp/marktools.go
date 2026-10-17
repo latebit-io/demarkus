@@ -10,10 +10,10 @@ import (
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchdedup"
-	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpbind"
+	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
 )
 

@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/hub"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/listwalk"
+	"github.com/latebit-io/demarkus/client/memory/hub"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"

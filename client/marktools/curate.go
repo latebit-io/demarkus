@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/audit"
-	"github.com/latebit-io/demarkus/client/curate"
 	"github.com/latebit-io/demarkus/client/docwrite"
-	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/memory/audit"
+	"github.com/latebit-io/demarkus/client/memory/curate"
+	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/protocol"
 )
 

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/audit"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/memory/audit"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"

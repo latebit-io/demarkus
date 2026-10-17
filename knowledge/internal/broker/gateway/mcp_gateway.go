@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/graphstore"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/storage"
 	"github.com/mark3labs/mcp-go/mcp"

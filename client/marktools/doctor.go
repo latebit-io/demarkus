@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/audit"
+	"github.com/latebit-io/demarkus/client/memory/audit"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/graph"
+	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/protocol"

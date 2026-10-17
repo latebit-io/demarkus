@@ -7,7 +7,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
-	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )

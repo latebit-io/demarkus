@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/latebit-io/demarkus/client/graphstore"
+	"github.com/latebit-io/demarkus/client/memory/graphstore"
 )
 
 // contractGoldenPath is the deriver's /graph.md for one world, minus its

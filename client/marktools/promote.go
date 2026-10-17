@@ -10,10 +10,10 @@ import (
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/graph"
 	"github.com/latebit-io/demarkus/client/lookuptable"
+	"github.com/latebit-io/demarkus/client/memory/graph"
+	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/client/merge"
-	"github.com/latebit-io/demarkus/client/promote"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )

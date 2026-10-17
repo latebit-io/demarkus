@@ -1,6 +1,6 @@
 # Upward imports that predate the layer guard. tools/layercheck fails a new
 # one, and a fixed one still listed: run (cd tools && go run ./layercheck -update).
-client/fetchtest (storeclient) -> client/graphstore (model)
+client/fetchtest (storeclient) -> client/memory/graphstore (model)
 knowledge/internal/broker/core (knowledge) -> client/mcpfmt (surface)
 knowledge/internal/federation (knowledge) -> knowledge/internal/broker/gateway (surface) [test]
 tools/demarkus-plugin/internal/project (soul) -> tools/demarkus-plugin/internal/host (surface)
