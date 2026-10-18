@@ -5,7 +5,7 @@ argument-hint: "<{{.Store}} path | directory/>"
 
 Curate so an agent reads a document in one fetch and finds it by its subjects. `mark_curate` holds the rules and proposes the change; the agent shows it, gates it, applies it. Read-only until step 4.
 
-`$ARGUMENTS`: a document path (e.g. `/demarkus/plans/foo.md`), or a directory with its slash (`/demarkus/`, `/`) for the findings `mark_doctor` marks fixable. Empty: ask which{{if ne .Harness "cowork"}}; `/soul-doctor` lists candidates: Oversized, Hub shape and Document shape for a document, a `fixable:` line for a directory{{end}}.
+`$ARGUMENTS`: a document path (e.g. `/demarkus/plans/foo.md`), or a directory with its slash (`/demarkus/`, `/`) for the findings `mark_doctor` marks fixable. Empty: ask which; `/soul-doctor` lists candidates: Oversized, Hub shape and Document shape for a document, a `fixable:` line for a directory.
 
 {{template "store.tmpl" .}}
 

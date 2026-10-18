@@ -1,17 +1,13 @@
 ---
 name: remember
-description: {{if eq .Harness "cowork"}}Recall and record notes in the user's local {{.Store}}. Use when asked to remember, save, recall or query notes, at the start of substantive work, and to record decisions, bug lessons, patterns and progress.{{else}}Remember, save, recall, or query personal notes across {{.Agent}} sessions; versioned {{.Store}} by project, local or bound remote.{{end}}
+description: Remember, save, recall, or query personal notes across {{.Agent}} sessions; versioned {{.Store}} by project, local or bound remote.
 ---
 
 # Remember
 
 Routes "remember" / "recall" intents through the project's {{.Store}}: a versioned, link-graph-aware personal store, never the host's built-in memory. Each project lives at its root: `/<slug>/`, listed in `/index.md`; the template's `root_project` lives at `/`.
 
-{{if eq .Harness "cowork"}}## Standing behavior
-
-Consult the {{.Store}} before substantive work; record decisions, bug lessons, patterns and progress unprompted. No tag or destination gate runs here: every `mark_publish` sets `metadata.tags` and `importance`; write only to the user's confirmed project. Promote shared knowledge from a terminal session. No trivia, chat, secrets, or anything derivable from the repo.
-
-{{end}}## Triggers
+## Triggers
 
 "remember this", "save to memory", "save to my {{.Store}}", "note that", "jot down", "what do I know about X", "do I have notes on Y", "recall Z", "add this to my notes", "put this in my memory", "put this in my {{.Store}}", "find anything about", "what have I saved about". Not for ephemeral session context ("remember that we're using Python 3.12 here").
 

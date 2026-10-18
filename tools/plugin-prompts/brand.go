@@ -93,23 +93,23 @@ var pluginNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // rewritten with the brand's name, the rest is copied as-is. Harnesses absent
 // here (pi, OpenCode) carry their names in source and cannot be branded.
 type harnessLayout struct {
-	Manifest string   // plugin manifest with top-level name and description
-	MCP      string   // MCP server config; memory bases only, knowledge registers MCP at join
-	Copied   []string // directories shipped verbatim
+	Manifest string // plugin manifest with top-level name and description
+	MCP      string // MCP server config; memory bases only, knowledge registers MCP at join
 }
 
 var brandLayouts = map[string]harnessLayout{
-	"claude": {Manifest: ".claude-plugin/plugin.json", MCP: ".mcp.json", Copied: []string{"hooks", "scripts"}},
-	"cursor": {Manifest: ".cursor-plugin/plugin.json", MCP: "mcp.json", Copied: []string{"hooks", "scripts"}},
-	"cowork": {Manifest: ".claude-plugin/plugin.json", MCP: ".mcp.json", Copied: []string{"scripts"}},
+	"claude": {Manifest: ".claude-plugin/plugin.json", MCP: ".mcp.json"},
+	"cursor": {Manifest: ".cursor-plugin/plugin.json", MCP: "mcp.json"},
 }
+
+// brandCopiedDirs ship verbatim from the base plugin.
+var brandCopiedDirs = []string{"hooks", "scripts"}
 
 // brandCopiedRoots lists the base files a brand copies; each must exist.
 func brandCopiedRoots(base *target) []string {
-	layout := brandLayouts[base.Harness]
-	roots := append([]string(nil), layout.Copied...)
+	roots := append([]string(nil), brandCopiedDirs...)
 	if base.Surface == "memory" {
-		roots = append(roots, layout.MCP)
+		roots = append(roots, brandLayouts[base.Harness].MCP)
 	}
 	return roots
 }
@@ -130,7 +130,7 @@ func validateBrands(spec *manifest) error {
 			return fmt.Errorf("brand %q: unknown base target %q", b.Name, b.Base)
 		}
 		if _, ok := brandLayouts[base.Harness]; !ok {
-			return fmt.Errorf("brand %q: only claude, cursor and cowork targets can be branded (base %q is %s)", b.Name, b.Base, base.Harness)
+			return fmt.Errorf("brand %q: only claude and cursor targets can be branded (base %q is %s)", b.Name, b.Base, base.Harness)
 		}
 		if b.Name == "" || b.Description == "" || !pluginNameRE.MatchString(b.PluginName) {
 			return fmt.Errorf("brand %q: name, description, and a lowercase plugin_name are required", b.Name)
