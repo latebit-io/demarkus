@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.13.186
+## 0.13.188
 
 Deprecated: `demarkus-memory` now runs in Cowork ([what differs](../claude-code/README.md#claude-cowork)). Uninstall `demarkus-cowork`, then install `demarkus-memory`; this plugin leaves the marketplace in the next release.
 
