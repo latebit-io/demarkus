@@ -30,16 +30,20 @@ Zero-config: the plugin spawns a local `demarkus-server`, generates a capability
 - **`/soul-refresh`**: refresh promoted documents from the knowledge system, the downward leg of the coherence edge: `mark_promote` compares the soul copy with the live body and republishes it after the gate.
 - **`remember` skill**: routing rules for recall and recording (which file gets decisions, lessons, patterns, journal entries).
 
+### Claude Cowork
+
+The same plugin runs in Cowork. Its MCP server starts on your machine, so the `mark_*` tools reach the soul, but Cowork's shell and hooks run in a sandbox without `~/.demarkus`: the session hook injects the standing guidance without the project header, gates and nudges stay quiet, commands ask which project to use, and `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/promote`, `/promote-scan` and `/soul-refresh` say to run from a terminal session. Replaces the deprecated `demarkus-cowork`; never install both in one workspace.
+
 ## Hooks
 
-- **SessionStart**: standing guidance so sessions consult the soul first and record as they go.
+- **SessionStart**: standing guidance so sessions consult the soul first and record as they go, with a header naming the project, its soul and where the work stands. It reprovisions only where the plugin config exists; the MCP launcher installs and provisions.
 - **Publish tag-gate (Pre/PostToolUse)**: enforces `tags` and sane `importance` on `mark_publish` so documents stay findable via `mark_lookup`.
 - **Journal nudge (Stop)**: end-of-session reminder to journal when files changed but nothing was recorded.
 - **Recall and promote nudges (UserPromptSubmit)**: reminders to check the soul on recall-shaped questions and to promote ready material.
 
 ## Local state
 
-The plugin bootstraps the shared `demarkus-plugin` helper and keeps its state under `~/.demarkus/`: the managed server, its token, `plugin-memory.conf`, and per-project soul bindings in `project-souls`.
+The plugin's MCP launcher bootstraps the shared `demarkus-plugin` helper, which keeps its state under `~/.demarkus/`: the managed server, its token, `plugin-memory.conf`, and per-project soul bindings in `project-souls`.
 
 ## Development
 

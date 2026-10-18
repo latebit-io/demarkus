@@ -6,6 +6,8 @@ description: Show the demarkus-memory plugin's connection state and verify it's 
 
 Diagnose the plugin's setup: configured mode, soul path, port, server process, installed binaries, connectivity.
 
+Host-only: `demarkus-plugin` exit 127 (a sandbox, e.g. Cowork): reply in one line to run this from a terminal on the host, then stop; never install or provision here.
+
 ## Steps
 
 1. **Read validated plugin state.** Run `"$HOME/.demarkus/bin/demarkus-plugin" provision status`. It parses the config without shell evaluation and validates mode, soul path, and port. No configuration → suggest `/soul-init` and stop. Malformed config or inspection failure → surface the exact error; do not source `plugin-memory.conf` or interpolate its contents into shell code.

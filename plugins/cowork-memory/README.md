@@ -1,5 +1,7 @@
 # demarkus-cowork
 
+> **Deprecated.** [`demarkus-memory` runs in Cowork](../claude-code/README.md#claude-cowork) with the same soul, server and commands. Uninstall `demarkus-cowork`, then install `demarkus-memory`. This plugin leaves the marketplace in the next release.
+
 Local, versioned memory for [Claude Cowork](https://claude.com/product/cowork) via [demarkus](https://github.com/latebit-io/demarkus). It talks to the same `~/.demarkus` soul as the Claude Code, Cursor, OpenCode, and pi plugins: one store, one token.
 
 ## What differs from the Claude Code plugin

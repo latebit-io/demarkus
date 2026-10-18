@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.186
+
+Deprecated: `demarkus-memory` now runs in Cowork ([what differs](../claude-code/README.md#claude-cowork)). Uninstall `demarkus-cowork`, then install `demarkus-memory`; this plugin leaves the marketplace in the next release.
+
 ## 0.13.166
 
 Step 6 of the memory mechanics move prunes the prose the server now owns. The `remember` skill keeps the recall triggers, the per-project `/<slug>/` layout, the `type` map, the update flow and the record routes; the hub rules, metadata rules, retention, the new-project hub dance and the ADR inventory bounds are gone, since the write gate, the journal route and the server instructions carry them. The session guidance keeps store availability, the slug, the record routes and the commands to reach for and defers the read contract to the server instructions. The project identity partial is gone: `/soul-journal` creates a missing project hub through the route, which now refuses an archived project; `/soul-context` stops on the primer's `status: new` or `status: archived` line, which the primer now answers for a missing or archived hub; `/soul-archive` keeps its scope confirmation; the slug comes from the binding and the route's `path:` line names the subtree it wrote.

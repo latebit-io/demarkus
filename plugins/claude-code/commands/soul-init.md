@@ -6,6 +6,8 @@ description: Detect and configure your local demarkus soul (reuse existing or in
 
 Configure the demarkus-memory plugin's connection to a demarkus-server. Run once to set up, again to reconfigure.
 
+Host-only: `demarkus-plugin` exit 127 (a sandbox, e.g. Cowork): reply in one line to run this from a terminal on the host, then stop; never install or provision here.
+
 ## Steps
 
 1. Run detection with the Bash tool:

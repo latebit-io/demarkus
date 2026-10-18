@@ -4,7 +4,7 @@ description: Join a remote demarkus {{.Store}}, register its MCP server, and bin
 
 Connect this {{.Agent}} installation to a remote demarkus {{.Store}}: a direct-QUIC {{.Store}} server, or an HTTPS demarkus-memory-broker (hosted personal {{.Store}} behind OAuth). `/soul-init` manages a local {{.Store}}; `/knowledge-join` joins an organizational knowledge system.
 
-## Secret Boundary
+{{template "host.tmpl" .}}## Secret Boundary
 
 A join URL's `#token=` fragment and `--token` value are secrets. Never echo one or put one in process arguments (visible via process inspection). Tokened {{.Store}}: print the exact command with `<TOKEN>` on stdin; the user runs it in their own terminal and returns only non-secret `key=value` output. Public read-only {{.Store}}: no token, join directly. If the user already pasted a token-bearing join URL, do not repeat its fragment; extract the host and write the token as `<TOKEN>`.
 

@@ -8,6 +8,8 @@ Choose which joined soul **this project writes to by default**. The choice is th
 
 Explicit reads from a *different* joined soul stay unrestricted: call `mcp__<slug>__mark_*` directly. Every soul write goes through the bound server; the destination gate denies the rest.
 
+Host-only: `demarkus-plugin` exit 127 (a sandbox, e.g. Cowork): reply in one line to run this from a terminal on the host, then stop; never install or provision here.
+
 ## Steps
 
 1. **List the catalog.** Run:
