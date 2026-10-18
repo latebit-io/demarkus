@@ -14,7 +14,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-# run_hook <plugin> <bootstrap exit> <failing subcommand or "none"> [no-conf]
+# run_hook <plugin> <bootstrap exit> <failing subcommand or "none"> [no-conf|no-bin]
 run_hook() {
   local plugin="$1" bootstrap_exit="$2" failing="$3" tree
   tree=$(mktemp -d "$TMP/hook.XXXXXX")
@@ -30,7 +30,7 @@ echo "\$1" >> "$HOOK_HOME/calls"
 if [ "\$1" = "$failing" ]; then exit 7; fi
 if [ "\$1" = "guidance" ]; then echo '{"ok":true}'; fi
 STUB
-  chmod +x "$HOOK_HOME/.demarkus/bin/demarkus-plugin"
+  [ "${4:-}" = no-bin ] || chmod +x "$HOOK_HOME/.demarkus/bin/demarkus-plugin"
   HOOK_STATUS=0
   HOME="$HOOK_HOME" bash "$tree/hooks/session-start.sh" >"$TMP/out" 2>"$TMP/err" || HOOK_STATUS=$?
 }
@@ -62,12 +62,15 @@ done
 run_hook claude-code 0 none
 [ "$(calls)" = "provision guidance " ] || fail "claude-code: ran $(calls)"
 
-# No config: a provision would start a second soul; the static guidance stands
-# in, without the generator's marker lines.
-run_hook claude-code 0 none no-conf
-[ "$HOOK_STATUS" = 0 ] || fail "claude-code: no-config run exited $HOOK_STATUS"
-[ ! -e "$HOOK_HOME/calls" ] || fail "claude-code: ran $(calls)without a config"
-grep -v '^<!--.*-->$' "$ROOT/plugins/claude-code/context/session-guidance.md" | diff - "$TMP/out" >/dev/null ||
-  fail "claude-code: no-config output is not the static guidance"
+# No config or no usable binary (a sandbox, or the launcher's first run): a
+# provision would start a second soul; the static guidance stands in, without
+# the generator's marker lines.
+for missing in no-conf no-bin; do
+  run_hook claude-code 0 none "$missing"
+  [ "$HOOK_STATUS" = 0 ] || fail "claude-code: $missing run exited $HOOK_STATUS"
+  [ ! -e "$HOOK_HOME/calls" ] || fail "claude-code: $missing ran $(calls)"
+  grep -v '^<!--.*-->$' "$ROOT/plugins/claude-code/context/session-guidance.md" | diff - "$TMP/out" >/dev/null ||
+    fail "claude-code: $missing output is not the static guidance"
+done
 
 echo "PASS: session-start hooks"
