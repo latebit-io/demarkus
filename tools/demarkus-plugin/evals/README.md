@@ -20,6 +20,7 @@ against a hand-written answer:
   `{{input.*}}` placeholders are declared in the table.
 
 Edit the table in `tools/evalmocks/mocks.go`, then `cd tools && go run
-./evalmocks write`. `go run ./evalmocks check` runs in pre-commit and CI and
+./evalmocks write`. `go run ./evalmocks check` runs in pre-commit and in the
+CI tools job, the one that also watches `client/**` and `protocol/**`, and
 fails on a stale mock or a mock file the table does not list. The doctor and
 curate reports are still hand-written, listed in `handWritten`.
