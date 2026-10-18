@@ -88,6 +88,7 @@ jobs:
               - 'plugins/cursor-knowledge/**'
               - '.cursor-plugin/**'
               - 'tools/plugin-prompts/**'
+              - 'tools/evalmocks/**'
               - 'tools/demarkus-plugin/**'
               - 'tools/go.mod'
               - 'tools/go.sum'
@@ -403,11 +404,12 @@ jobs:
         with:
           go-version: "1.26"
           cache-dependency-path: tools/go.sum
-      - name: Check generated prompts
+      - name: Check generated prompts and eval mocks
         run: |
           cd tools
           go test -race ./plugin-prompts ./demarkus-plugin/...
           go run ./plugin-prompts check
+          go run ./evalmocks check
       - name: Install plugin development dependencies
         # No audit or fund calls in CI, and a short fetch timeout: a hung
         # registry request otherwise waits npm's 5-minute default per install.

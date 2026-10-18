@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
@@ -31,6 +32,17 @@ func TestAppendRouteTodayCreatesTheJournal(t *testing.T) {
 	}
 	if len(backend.PublishCalls) != 3 {
 		t.Errorf("publishes = %d, want journal plus two hubs", len(backend.PublishCalls))
+	}
+}
+
+// The Now hook dates the entry, so a renderer can reproduce the response.
+func TestAppendRouteTodayUsesTheSurfaceClock(t *testing.T) {
+	hooks := writingHooks()
+	hooks.Now = func() time.Time { return time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC) }
+	tools := newTools(t, &fetchtest.Client{}, hooks)
+	got := tools.Append(t.Context(), marktools.AppendArgs{URL: "/proj/", Body: "Shipped it.", Route: "today"})
+	if got.IsError || !strings.Contains(got.Text, "path: /proj/journal/2026-10-12.md\n") {
+		t.Fatalf("append = %+v", got)
 	}
 }
 

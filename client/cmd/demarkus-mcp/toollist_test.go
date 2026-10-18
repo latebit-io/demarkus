@@ -8,8 +8,8 @@ import (
 )
 
 // TestAgentSurfaceGolden pins tools/list and the server instructions with and
-// without -host; the plugin runs with -host and the lean profile, which
-// TestToolProfiles checks is a filter.
+// without -host, and the lean list the plugin runs with (-host), which
+// tools/evalmocks serves to the eval; TestToolProfiles checks lean is a filter.
 func TestAgentSurfaceGolden(t *testing.T) {
 	for name, host := range map[string]string{"host": exampleHost, "nohost": ""} {
 		t.Run(name, func(t *testing.T) {
@@ -17,4 +17,5 @@ func TestAgentSurfaceGolden(t *testing.T) {
 			mcpfmttest.Golden(t, "testdata/instructions-"+name+".txt", []byte(serverInstructions(host)+"\n"))
 		})
 	}
+	mcpfmttest.ToolsGolden(t, "testdata/tools-host-lean.json", profileSchemas(exampleHost, mcpfmt.ProfileLean))
 }

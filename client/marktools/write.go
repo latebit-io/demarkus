@@ -354,7 +354,7 @@ func (t *Tools) appendToday(ctx context.Context, target Target, args AppendArgs)
 	}
 	out, err := journal.Append(ctx, docs, journal.Request{
 		Dir: target.Path, Entry: args.Body, Tags: protocol.SplitTags(args.Tags),
-		Stamp: t.identityMeta(ctx), Layout: l,
+		Stamp: t.identityMeta(ctx), Layout: l, Now: t.now(),
 	})
 	if err != nil {
 		return failure("append failed: %v", err)

@@ -17,4 +17,6 @@ Finished the parser rewrite: the recursive descent parser replaces the table dri
 
 # Roadmap
 
+What is next for cwd, one bullet per item.
+
 - Next: CLI on the new parser, then remove the legacy path.
