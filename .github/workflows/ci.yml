@@ -350,6 +350,10 @@ jobs:
         run: cd tools && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: Build
         run: cd tools && go build ./...
+      # Here, not in test-agent-plugins: the mocks render from client and
+      # protocol code, which only this job's filter watches.
+      - name: Check generated eval mocks
+        run: cd tools && go run ./evalmocks check
 
   test-install:
     needs: detect-changes

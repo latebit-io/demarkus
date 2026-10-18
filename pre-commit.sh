@@ -39,6 +39,9 @@ bash scripts/test-hook-commands.sh
 echo "Checking generated plugin prompts..."
 (cd tools && go run ./plugin-prompts check)
 
+echo "Checking generated eval mocks..."
+(cd tools && go run ./evalmocks check)
+
 echo "✓ All checks passed"
 
 # A hint, not a check: the eval is paid and model-judged. Shared client and

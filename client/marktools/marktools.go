@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -103,6 +104,9 @@ type Hooks struct {
 	ErrText func(site Site, host string, err error) string
 	// Warnf reports a best effort step that failed; nil is log.Printf.
 	Warnf func(format string, args ...any)
+	// Now is the clock the journal route dates entries by; nil is time.Now.
+	// A fixed clock lets a renderer reproduce a response.
+	Now func() time.Time
 }
 
 // Tools runs the mark_* tools over one Backend.
@@ -205,6 +209,14 @@ func (t *Tools) warnf(format string, args ...any) {
 		return
 	}
 	log.Printf(format, args...)
+}
+
+// now is the surface's clock, the wall clock when it has none.
+func (t *Tools) now() time.Time {
+	if t.hooks.Now == nil {
+		return time.Now()
+	}
+	return t.hooks.Now()
 }
 
 // Verbatim is a hook error whose text is the tool's whole answer, with no

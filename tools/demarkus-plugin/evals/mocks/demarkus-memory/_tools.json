@@ -2,10 +2,10 @@
   "tools": [
     {
       "annotations": {
-        "readOnlyHint": false,
         "destructiveHint": true,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": false
       },
       "description": "Append markdown to an existing document. expected_version optional; omitted or 0 resolves the current version. Catalog metadata (tags, importance, title, type) carries over; change it via mark_publish. route=today: url is a directory, the entry goes to its journal/<YYYY-MM-DD>.md (created when absent, hubs linked, tags widened; an archived scope refuses); a repeated entry is reported present, not written. Requires -token.",
       "inputSchema": {
@@ -41,10 +41,10 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
         "destructiveHint": true,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": false
       },
       "description": "Archive a document: fetches as 'archived', history kept. recursive=true: url is a directory, every live document under it. Ancestor hubs drop the bullets that only linked what was archived. Requires -token.",
       "inputSchema": {
@@ -67,10 +67,10 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": true
       },
       "description": "Documents linking to a URL, from the revision-aware graph store, with bounded source revalidation. Freshness, provenance and typed relations also appear in mark_explore.",
       "inputSchema": {
@@ -89,12 +89,12 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
         "destructiveHint": true,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": false
       },
-      "description": "Bring one document into shape: style findings, a proposed mechanical fix (an edit, or at 8KB a split into a hub plus topic files with anchors kept), inbound links to repoint, a proposal hash. A directory url (trailing /) proposes mark_doctor's fixable findings under it, up to 100 writes. apply=true with the hash writes it at the reported versions. apply Requires -token.",
+      "description": "Bring one document into shape: style findings, a proposed mechanical fix (an edit, or at 8KB a split into a hub plus topic files with anchors kept), inbound links to repoint, a proposal hash. A directory url (trailing /) proposes mark_doctor's fixable findings under it, up to 100 writes. apply=true with the hash writes it at the reported versions. Writes require -token.",
       "inputSchema": {
         "properties": {
           "apply": {
@@ -119,10 +119,10 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": true
       },
       "description": "Read-only hygiene audit of a store or directory: broken links, orphans, missing hubs, untagged or untyped documents, write-policy compliance under the floor (axes, fields, allowed values), secrets and personal data, duplicates, hub and document shape, style, a stale style guide, ADR gaps. Bounded; Coverage lists gaps. deep: metadata lost across versions. promotion: candidates for a shared knowledge system.",
       "inputSchema": {
@@ -149,10 +149,10 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": true
       },
       "description": "Orient around one document: outline, outbound links, backlinks, siblings (10 each). Relation query arguments request grouped, paginated neighborhoods.",
       "inputSchema": {
@@ -200,10 +200,10 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": true
       },
       "description": "Fetch a document: status, version, title, markdown body; over 8KB an outline (headings with #anchors), url#<anchor> one section, force=true the full body. Unchanged re-fetch returns a short notice. <dir>/.context reads a session primer: hub, newest journal entries, active work.",
       "inputSchema": {
@@ -226,10 +226,10 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
         "destructiveHint": true,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": false
       },
       "description": "Crawl outbound links from a document to depth: link graph with edge provenance and rel-* typed relations. External links recorded, not followed. Feeds the graph store for mark_backlinks.",
       "inputSchema": {
@@ -252,10 +252,10 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": true
       },
       "description": "List documents and subdirectories. Archived hidden unless include_archived; while complete=false pass next-cursor as cursor. For one document prefer mark_explore.",
       "inputSchema": {
@@ -289,10 +289,10 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": true
       },
       "description": "Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends sections.",
       "inputSchema": {
@@ -336,10 +336,10 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
         "destructiveHint": true,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": false
       },
       "description": "Promote a document to a shared knowledge system, by phase. A write needs the packet from the report before it. Writes require -token.",
       "inputSchema": {
@@ -399,10 +399,10 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
         "destructiveHint": true,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": false
       },
       "description": "Publish or update a document (markdown body); expected_version from prior fetch, 0 to create; metadata replaces the current map; a first version is linked from its hub (hubs:); a note lists dropped tags or keys, style problems, a hub not linked. On conflict the default on_conflict=merge returns a merged candidate body (git-style markers where both sides changed) to review and republish at publish-at-version. Requires -token.",
       "inputSchema": {
@@ -440,10 +440,10 @@
     },
     {
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
         "idempotentHint": false,
-        "openWorldHint": true
+        "openWorldHint": true,
+        "readOnlyHint": true
       },
       "description": "Version history: total and current version, hash chain validity, per-version timestamps.",
       "inputSchema": {
