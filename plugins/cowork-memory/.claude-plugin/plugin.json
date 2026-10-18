@@ -1,7 +1,7 @@
 {
   "name": "demarkus-cowork",
-  "version": "0.13.187",
-  "description": "Local, versioned memory for Claude Cowork via demarkus. Wires the local demarkus MCP tools (fetch/publish/append/graph/lookup) to the same soul Claude Code uses. MCP only: Cowork's shell sandbox cannot reach ~/.demarkus, so there are no hooks, gates, nudges or shell commands.",
+  "version": "0.13.188",
+  "description": "Deprecated: install demarkus-memory, which runs in Claude Cowork too; this plugin leaves the marketplace in the next release.",
   "author": {
     "name": "latebit",
     "url": "https://github.com/latebit-io"

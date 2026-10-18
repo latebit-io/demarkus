@@ -1,5 +1,7 @@
 # demarkus-cowork
 
+> **Deprecated.** [`demarkus-memory` runs in Cowork](../claude-code/README.md#claude-cowork) with the same soul, server and commands. Uninstall `demarkus-cowork`, then install `demarkus-memory`. This plugin leaves the marketplace in the next release.
+
 Local, versioned memory for [Claude Cowork](https://claude.com/product/cowork) via [demarkus](https://github.com/latebit-io/demarkus). It talks to the same `~/.demarkus` soul as the Claude Code, Cursor, OpenCode, and pi plugins: one store, one token.
 
 ## What differs from the Claude Code plugin
@@ -21,7 +23,7 @@ Cowork with local MCP servers enabled; `bash`, `curl`, `tar`, and `sha256sum` or
 
 ## Install
 
-Upload the plugin as a zip (Customize, Plugins), or add this repository as a marketplace and install `demarkus-cowork`. Do not install it next to `demarkus-memory` in the same Cowork workspace: both register the same local MCP server.
+Install `demarkus-memory` instead ([Claude Cowork](../claude-code/README.md#claude-cowork)): add this repository as a marketplace (Customize, Plugins), uninstall `demarkus-cowork`, then install `demarkus-memory`. Never keep both in one Cowork workspace: they register the same local MCP server.
 
 Beside a branded Claude Code plugin on one machine, brand this plugin with the same `mcp_server_key`. `mcp-serve` records that key as the local memory's name for the gates, and a start without `--name` clears it, which would turn the gates off for the branded plugin.
 

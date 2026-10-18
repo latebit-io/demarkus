@@ -65,7 +65,7 @@ Teams: `demarkus-knowledge → Add` from the same marketplace to join a shared k
 
 **Claude Cowork**
 
-Add this repository as a marketplace (Customize, Plugins) and install `demarkus-cowork`. Cowork's shell runs in a sandbox without access to `~/.demarkus`, so the plugin is MCP only and ships no hooks: provisioning and the shell-based commands run from Claude Code or a terminal. Details: [Cowork memory plugin](plugins/cowork-memory/).
+Add this repository as a marketplace (Customize, Plugins) and install `demarkus-memory`, the same plugin as in Claude Code; uninstall the deprecated `demarkus-cowork` first. What differs in Cowork: [Claude Cowork](plugins/claude-code/README.md#claude-cowork).
 
 ### Binaries
 
@@ -183,7 +183,7 @@ modified: 2026-01-15T10:30:00Z
 
 - [Cursor memory plugin](plugins/cursor-memory/): the same local memory for Cursor, as a Cursor Plugin (marketplace, team marketplace, or `~/.cursor/plugins/local`)
 - [Cursor knowledge plugin](plugins/cursor-knowledge/): join an organizational knowledge system from Cursor
-- [Cowork memory plugin](plugins/cowork-memory/): the same local memory for Claude Cowork, over MCP only
+- [Cowork memory plugin](plugins/cowork-memory/): deprecated; `demarkus-memory` runs in Claude Cowork
 - [pi memory plugin](plugins/pi-memory/): the same local memory for the pi coding agent
 - [pi knowledge plugin](plugins/pi-knowledge/): join an organizational knowledge system from pi
 

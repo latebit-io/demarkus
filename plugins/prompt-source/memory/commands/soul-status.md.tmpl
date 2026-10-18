@@ -4,7 +4,7 @@ description: Show the {{.PluginName}} plugin's connection state and verify it's 
 
 Diagnose the plugin's setup: configured mode, {{.Store}} path, port, server process, installed binaries, connectivity.
 
-## Steps
+{{template "host.tmpl" .}}## Steps
 
 1. **Read validated plugin state.** Run `"$HOME/.demarkus/bin/demarkus-plugin" provision status`. It parses the config without shell evaluation and validates mode, {{.Store}} path, and port. No configuration → suggest `/soul-init` and stop. Malformed config or inspection failure → surface the exact error; do not source `plugin-memory.conf` or interpolate its contents into shell code.
 

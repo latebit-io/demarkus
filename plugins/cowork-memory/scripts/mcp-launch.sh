@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# MCP launcher (memory). Claude Code connects MCP servers while the SessionStart
-# hook is still bootstrapping, so a clean or freshly re-pinned machine would exec
-# a missing or stale binary. Install first; stdout stays clean for MCP stdio.
+# MCP launcher (memory), this plugin's only download: its hooks never bootstrap,
+# since a sandboxed hook (Cowork) cannot see ~/.demarkus. Install and provision
+# before exec so a fresh pin never runs a missing binary; stdout stays MCP-clean.
 set -euo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"

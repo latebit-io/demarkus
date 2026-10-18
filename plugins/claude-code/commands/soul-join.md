@@ -6,6 +6,8 @@ description: Join a remote demarkus soul, register its MCP server, and bind it t
 
 Connect this Claude Code installation to a remote demarkus soul: a direct-QUIC soul server, or an HTTPS demarkus-memory-broker (hosted personal soul behind OAuth). `/soul-init` manages a local soul; `/knowledge-join` joins an organizational knowledge system.
 
+Host-only: `demarkus-plugin` exit 127 (a sandbox, e.g. Cowork): reply in one line to run this from a terminal on the host, then stop; never install or provision here.
+
 ## Secret Boundary
 
 A join URL's `#token=` fragment and `--token` value are secrets. Never echo one or put one in process arguments (visible via process inspection). Tokened soul: print the exact command with `<TOKEN>` on stdin; the user runs it in their own terminal and returns only non-secret `key=value` output. Public read-only soul: no token, join directly. If the user already pasted a token-bearing join URL, do not repeat its fragment; extract the host and write the token as `<TOKEN>`.
