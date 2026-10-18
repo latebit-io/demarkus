@@ -32,7 +32,7 @@ Zero-config: the plugin spawns a local `demarkus-server`, generates a capability
 
 ### Claude Cowork
 
-The same plugin runs in Cowork. Its MCP server starts on your machine, so the `mark_*` tools reach the soul, but Cowork's shell and hooks run in a sandbox without `~/.demarkus`: the session hook injects the standing guidance without the project header, gates and nudges stay quiet, commands ask which project to use, and `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/promote`, `/promote-scan` and `/soul-refresh` say to run from a terminal session. Replaces the deprecated `demarkus-cowork`; never install both in one workspace.
+The same plugin runs in Cowork. Its MCP server starts on your machine, so the `mark_*` tools reach the soul, but Cowork's shell and hooks run in a sandbox without `~/.demarkus`: the session hook injects the standing guidance without the project header, gates and nudges stay quiet, commands ask which project to use, and `/soul-init`, `/soul-join`, `/soul-default`, `/soul-status`, `/promote`, `/promote-scan` and `/soul-refresh` say to run from a terminal session. Replaces the retired `demarkus-cowork`; uninstall it first, since both register the same local MCP server.
 
 ## Hooks
 

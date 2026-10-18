@@ -31,7 +31,6 @@ var canonicalOutputs = map[string]string{
 	"knowledge/opencode": "plugins/opencode-knowledge",
 	"memory/cursor":      "plugins/cursor-memory",
 	"knowledge/cursor":   "plugins/cursor-knowledge",
-	"memory/cowork":      "plugins/cowork-memory",
 }
 
 type manifest struct {
@@ -47,14 +46,12 @@ type target struct {
 	Output           string `json:"output"`
 	RepoInstructions string `json:"repo_instructions"`
 	ToolForm         string `json:"tool_form"`
-	// Exclude lists rendered paths (template suffix dropped, e.g.
-	// "commands/soul-init.md") this target does not ship.
-	Exclude []string `json:"exclude"`
-	// Plugin names surface in prose. PluginName is this target's own; the
-	// sibling names let memory and knowledge prompts refer to each other.
-	PluginName          string `json:"plugin_name"`
-	MemoryPluginName    string `json:"memory_plugin_name"`
-	KnowledgePluginName string `json:"knowledge_plugin_name"`
+	// Plugin names surface in prose, set by defaults or a brand. PluginName is
+	// this target's own; the sibling names let memory and knowledge prompts
+	// refer to each other.
+	PluginName          string `json:"-"`
+	MemoryPluginName    string `json:"-"`
+	KnowledgePluginName string `json:"-"`
 	// Store is the prose noun for the personal store ("soul" by default). It
 	// is deliberately not "memory": hosts have a built-in memory feature and
 	// agents conflated the two. Command and plugin names are unaffected.
@@ -211,10 +208,6 @@ func renderSurface(root string, target *target, seen map[string]string) ([]artif
 		return nil, err
 	}
 	var artifacts []artifact
-	excluded := make(map[string]bool, len(target.Exclude))
-	for _, name := range target.Exclude {
-		excluded[name] = false
-	}
 	templateRoot := filepath.Join(root, "plugins", "prompt-source", target.Surface)
 	partials, err := filepath.Glob(filepath.Join(templateRoot, partialsDir, "*.tmpl"))
 	if err != nil {
@@ -241,12 +234,7 @@ func renderSurface(root string, target *target, seen map[string]string) ([]artif
 		if err != nil {
 			return err
 		}
-		name := strings.TrimSuffix(rel, ".tmpl")
-		if _, skip := excluded[filepath.ToSlash(name)]; skip {
-			excluded[filepath.ToSlash(name)] = true
-			return nil
-		}
-		output := filepath.Join(root, target.Output, name)
+		output := filepath.Join(root, target.Output, strings.TrimSuffix(rel, ".tmpl"))
 		if target.Harness == "cursor" && filepath.Base(filepath.Dir(output)) == "commands" {
 			rendered, err = cursorCommand(strings.TrimSuffix(filepath.Base(output), ".md"), rendered)
 			if err != nil {
@@ -264,11 +252,6 @@ func renderSurface(root string, target *target, seen map[string]string) ([]artif
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render %s: %w", target.Name, err)
-	}
-	for name, matched := range excluded {
-		if !matched {
-			return nil, fmt.Errorf("render %s: exclude %q matches no template", target.Name, name)
-		}
 	}
 	return artifacts, nil
 }
@@ -343,7 +326,7 @@ func validateTarget(target *target) error {
 			target.PluginName = target.KnowledgePluginName
 		}
 	}
-	if target.Harness != "claude" && target.Harness != "pi" && target.Harness != "opencode" && target.Harness != "cursor" && target.Harness != "cowork" {
+	if target.Harness != "claude" && target.Harness != "pi" && target.Harness != "opencode" && target.Harness != "cursor" {
 		return fmt.Errorf("manifest target %s: invalid harness %q", target.Name, target.Harness)
 	}
 	return nil
@@ -511,8 +494,6 @@ func forbiddenTerms(harness string) []string {
 		return append(common, "OpenCode", "opencode", "CLAUDE_PROJECT_DIR", "AskUserQuestion", "mcp__", "Claude Code")
 	case "cursor":
 		return append(common, "OpenCode", "opencode", "CLAUDE_PROJECT_DIR", "AskUserQuestion", "mcp__", "Claude Code", "pi-mcp-adapter")
-	case "cowork":
-		return append(common, "OpenCode", "opencode", "CLAUDE_PROJECT_DIR", "AskUserQuestion", "mcp__", "Claude Code", "pi-mcp-adapter", "demarkus-plugin")
 	default:
 		return append(common, "Claude Code", "CLAUDE_PROJECT_DIR", "AskUserQuestion", "pi-mcp-adapter", "mcp__")
 	}
@@ -657,11 +638,6 @@ func checkAll(root string, artifacts []artifact) error {
 	for _, dir := range scans {
 		managedOnly := strings.HasPrefix(relSlash(root, dir), brandOutputPrefix)
 		err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
-			// A target may ship no file in a subtree (Cowork has no context/); a
-			// missing expected file is already reported as drift above.
-			if errors.Is(walkErr, fs.ErrNotExist) {
-				return nil
-			}
 			if walkErr != nil {
 				return walkErr
 			}

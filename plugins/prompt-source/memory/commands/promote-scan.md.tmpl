@@ -10,7 +10,7 @@ Ranked shortlist of {{.Store}} docs worth `/promote`; never promotes here.
 
 ## Steps
 
-1. **Detection gate.** {{if eq .Harness "cowork"}}No registry here: the user names the destination, or `/promote` resolves it per document; continue.{{else}}Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: registry failure, surface it, stop. `NONE`: nowhere to promote to; say so, stop. Otherwise note the destinations (`knowledge <slug>` and/or `target <slug> <path>`); `/promote` reaches any of them.{{end}}
+1. **Detection gate.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: registry failure, surface it, stop. `NONE`: nowhere to promote to; say so, stop. Otherwise note the destinations (`knowledge <slug>` and/or `target <slug> <path>`); `/promote` reaches any of them.
 
 2. **Sweep.** `mark_doctor` through the store's server with `promotion: true`; `url` is `/<slug>/` for one project (this project: `<root>`) or `/` (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it). Its `Promotion candidates` section lists each candidate with its reason; already promoted and staging documents are excluded, and the summary line counts the promoted. Tool error: surface it verbatim, stop. A Coverage line other than `complete`: the scan is partial; say which scope was not read.
 
