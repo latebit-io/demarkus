@@ -1,6 +1,6 @@
 {
   "name": "demarkus-cowork",
-  "version": "0.13.186",
+  "version": "0.13.187",
   "description": "Local, versioned memory for Claude Cowork via demarkus. Wires the local demarkus MCP tools (fetch/publish/append/graph/lookup) to the same soul Claude Code uses. MCP only: Cowork's shell sandbox cannot reach ~/.demarkus, so there are no hooks, gates, nudges or shell commands.",
   "author": {
     "name": "latebit",
