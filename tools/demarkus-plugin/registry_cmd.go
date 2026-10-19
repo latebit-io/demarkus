@@ -405,7 +405,11 @@ func registryProject(args []string) {
 		fail("project: " + err.Error())
 	}
 	st := guidance.Probe(r.Store, r.Slug)
-	if _, err := fmt.Println(r.Lines() + "\n" + st.Lines() + "\nverdict=" + guidance.Verdict(r, st)); err != nil {
+	configured, err := guidance.LocalConfigured()
+	if err != nil {
+		fail("project: " + err.Error())
+	}
+	if _, err := fmt.Println(r.Lines() + "\n" + st.Lines() + "\nverdict=" + guidance.Verdict(r, st, configured)); err != nil {
 		fail("project: write output: " + err.Error())
 	}
 }

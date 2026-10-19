@@ -168,20 +168,24 @@ func (t *Tools) promoteRefresh(ctx context.Context, target Target, args *Promote
 // the store rather than a capped tag lookup.
 func (t *Tools) promoteInventory(ctx context.Context, target Target) Result {
 	store := &audit.ClientStore{Client: t.backend, Host: target.Host, Token: t.readToken(ctx, target.Host)}
-	docs, total, err := audit.Promoted(ctx, store, target.Path, doctorTimeout)
+	inv, err := audit.Promoted(ctx, store, target.Path, doctorTimeout)
 	if err != nil {
 		return failure("refresh inventory failed: %v", err)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "status: inventory\npath: %s\ndocuments: %d\npromoted: %d\n", target.Path, total, len(docs))
-	for _, d := range docs {
+	fmt.Fprintf(&b, "status: inventory\npath: %s\ndocuments: %d\npromoted: %d\n", target.Path, inv.Documents, len(inv.Docs))
+	for _, gap := range inv.Coverage {
+		fmt.Fprintf(&b, "coverage: %s\n", gap)
+	}
+	for _, d := range inv.Docs {
+		name := target.at(d.Path).name() // what the agent passes back to refresh it
 		switch {
 		case d.Markers.Target == "":
-			fmt.Fprintf(&b, "- %s: tag only, no marker\n", d.Path)
+			fmt.Fprintf(&b, "- %s: tag only, no marker\n", name)
 		case d.Markers.Version == 0:
-			fmt.Fprintf(&b, "- %s: promoted-via none (legacy marker); promoted %s\n", d.Path, d.Markers.Target)
+			fmt.Fprintf(&b, "- %s: promoted-via none (legacy marker); promoted %s\n", name, d.Markers.Target)
 		default:
-			fmt.Fprintf(&b, "- %s: promoted-via %s; promoted %s@v%d\n", d.Path, d.Markers.Via, d.Markers.Target, d.Markers.Version)
+			fmt.Fprintf(&b, "- %s: promoted-via %s; promoted %s@v%d\n", name, d.Markers.Via, d.Markers.Target, d.Markers.Version)
 		}
 	}
 	return text(b.String())

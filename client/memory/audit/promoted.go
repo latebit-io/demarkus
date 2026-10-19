@@ -14,29 +14,37 @@ type PromotedDoc struct {
 	Markers promote.Markers
 }
 
+// Inventory is Promoted's result. Coverage lists every read that failed or
+// was cut short, so an inventory is complete only when it is empty.
+type Inventory struct {
+	Docs      []PromotedDoc
+	Documents int // live documents listed
+	Coverage  []string
+}
+
 // Promoted inventories the promoted documents under scope over the doctor's
-// walk and bounds, so a refresh needs no capped tag lookup. It returns them
-// in document order with the number of live documents read.
-func Promoted(ctx context.Context, store Store, scope string, timeout time.Duration) ([]PromotedDoc, int, error) {
+// walk and bounds, so a refresh needs no capped tag lookup. Documents come
+// in document order.
+func Promoted(ctx context.Context, store Store, scope string, timeout time.Duration) (*Inventory, error) {
 	a, err := newAudit(store, Options{Scope: scope, Timeout: timeout})
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
 	defer cancel()
 	if err := a.inventory(ctx); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	if err := a.fetchAll(ctx); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	var docs []PromotedDoc
+	inv := &Inventory{Documents: len(a.order), Coverage: a.coverage}
 	for _, p := range a.order {
 		d := a.docs[p]
 		if live(d.status) && promote.IsPromoted(d.meta, d.body) {
 			markers, _ := promote.ParseMarkers(d.body) // found is Target != ""
-			docs = append(docs, PromotedDoc{Path: p, Markers: markers})
+			inv.Docs = append(inv.Docs, PromotedDoc{Path: p, Markers: markers})
 		}
 	}
-	return docs, len(a.order), nil
+	return inv, nil
 }

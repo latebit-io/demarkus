@@ -119,8 +119,7 @@ func projectHeader(dir, warn string) (header, status string, err error) {
 		return "", "", err
 	}
 	if r.State == project.StateLocal {
-		cfg, err := config.LoadConfig()
-		if err != nil || cfg == nil {
+		if configured, err := LocalConfigured(); err != nil || !configured {
 			return "", "", err
 		}
 	}
@@ -189,4 +188,11 @@ func knowledge(in Input) (Output, error) {
 		parts = append(parts, "(No local demarkus store is configured here, so the store↔system guidance above is informational only; everything durable goes to the knowledge system.)")
 	}
 	return Output{Context: strings.Join(parts, "\n\n")}, nil
+}
+
+// LocalConfigured reports a usable plugin-memory.conf: the local store an
+// unbound project would write to exists. An unreadable one is an error.
+func LocalConfigured() (bool, error) {
+	cfg, err := config.LoadConfig()
+	return cfg != nil, err
 }

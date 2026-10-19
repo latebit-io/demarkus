@@ -120,17 +120,20 @@ func TestVerdictStopsOnlyForAStaleBinding(t *testing.T) {
 	known := ProjectStatus{State: ProjectKnown}
 	unknown := ProjectStatus{State: ProjectUnknown, Reason: "hosted store, not checked"}
 	stale := project.Resolution{Store: "gone", State: project.StateStale}
+	local := project.Resolution{Store: "demarkus-memory", State: project.StateLocal}
 	for _, c := range []struct {
-		r    project.Resolution
-		st   ProjectStatus
-		want string
+		r          project.Resolution
+		st         ProjectStatus
+		configured bool
+		want       string
 	}{
-		{project.Resolution{Store: "team", State: project.StateBound}, known, "use"},
-		{project.Resolution{Store: "demarkus-memory", State: project.StateLocal}, unknown, "use, root unconfirmed: hosted store, not checked"},
-		{stale, unknown, "stop: the bound store is " + stale.Hint()},
+		{project.Resolution{Store: "team", State: project.StateBound}, known, false, "use"},
+		{local, unknown, true, "use, root unconfirmed: hosted store, not checked"},
+		{local, unknown, false, "stop: no local store configured; run /soul-init"},
+		{stale, unknown, true, "stop: the bound store is " + stale.Hint()},
 	} {
-		if got := Verdict(c.r, c.st); got != c.want {
-			t.Errorf("Verdict(%s, %s) = %q, want %q", c.r.State, c.st.State, got, c.want)
+		if got := Verdict(c.r, c.st, c.configured); got != c.want {
+			t.Errorf("Verdict(%s, %s, %v) = %q, want %q", c.r.State, c.st.State, c.configured, got, c.want)
 		}
 	}
 }

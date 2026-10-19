@@ -256,7 +256,7 @@
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "List documents and subdirectories. Archived hidden unless include_archived; while complete=false pass next-cursor as cursor. An adr/ directory adds next: the unused decision number. For one document prefer mark_explore.",
+    "description": "List documents and subdirectories; an adr/ directory adds next:, the unused decision number. Archived hidden unless include_archived; while complete=false pass next-cursor as cursor. For one document prefer mark_explore.",
     "inputSchema": {
       "properties": {
         "cursor": {

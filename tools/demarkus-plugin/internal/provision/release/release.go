@@ -120,6 +120,9 @@ func DesiredVersions() string {
 		ServerVersion, ClientVersion, ToolsRef())
 }
 
+// Current reports every managed binary installed at its pin.
+func Current() bool { return installedVersions() == DesiredVersions() }
+
 // installedVersions is DesiredVersions' shape read from the binaries on disk. A
 // missing, unexecutable or broken binary reads as an empty field, which never
 // equals a pin, so EnsureBinaries re-downloads.

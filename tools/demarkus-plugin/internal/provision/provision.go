@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -586,8 +587,10 @@ func rootProblem(root string) string {
 	}
 	info, err := os.Stat(root)
 	switch {
-	case err != nil:
+	case errors.Is(err, fs.ErrNotExist):
 		return "root is gone"
+	case err != nil:
+		return "root unreadable: " + err.Error()
 	case !info.IsDir():
 		return "root is not a directory"
 	}
@@ -595,8 +598,8 @@ func rootProblem(root string) string {
 }
 
 // IfConfigured is Provision for a session hook: no config means nothing to do
-// (the default setup is the launcher's; a sandbox must never start a soul), and
-// a healthy server skips the binary and seed work the launcher already did.
+// (the default setup is the launcher's; a sandbox must never start a soul); a
+// healthy server on current binaries skips the work the launcher already did.
 func IfConfigured() error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -606,7 +609,7 @@ func IfConfigured() error {
 		progress.Logf("no plugin config; nothing to provision")
 		return nil
 	}
-	if w := healthWarning(cfg); w == "" {
+	if w := healthWarning(cfg); w == "" && release.Current() {
 		progress.Logf("healthy (mode=%s, memory=%s, port=%s)", cfg.Mode, cfg.MemoryDir, cfg.Port)
 		return nil
 	}
