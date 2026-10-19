@@ -86,6 +86,23 @@ func TestOpenDirCreatesOrRequiresTheDirectory(t *testing.T) {
 	}
 }
 
+// An entry the open walk could not index still counts against the cap: the
+// document exists on disk, the index just cannot see it.
+func TestOpenDirCountsSkippedEntriesAgainstTheCap(t *testing.T) {
+	dir := t.TempDir()
+	store := openDir(t, dir, filestore.Options{MaxDocuments: 2})
+	if err := create(store, "/good.md"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := os.Symlink("versions/missing.md/v1", filepath.Join(dir, "dangling.md")); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openDir(t, dir, filestore.Options{MaxDocuments: 2})
+	if err := create(reopened, "/third.md"); !errors.Is(err, backend.ErrQuota) {
+		t.Errorf("create with one indexed and one skipped entry under a cap of 2 = %v, want ErrQuota", err)
+	}
+}
+
 // MaxDocuments caps creates; a new version of an existing path always lands.
 func TestOpenDirCapsDocuments(t *testing.T) {
 	store := openDir(t, t.TempDir(), filestore.Options{MaxDocuments: 1})

@@ -32,8 +32,10 @@ type Store struct {
 	catalog   *catalog.Catalog
 	closed    bool
 	readOnly  bool
-	// maxDocuments caps distinct paths; zero is unlimited.
-	maxDocuments int
+	// maxDocuments caps distinct paths; zero is unlimited. unindexed counts
+	// the entries the open walk skipped, held against the cap: a document the
+	// index cannot see still exists on disk.
+	maxDocuments, unindexed int
 
 	// WATCH state, fixed at Open: the hub and the journal that makes its
 	// sequence durable. The hub's head is the last sequence assigned.
@@ -163,8 +165,8 @@ func (s *Store) commit(ctx context.Context, req *backend.WriteRequest, op string
 		}
 		// A new path past the cap is refused, whatever the expected version
 		// (an absent one writes unconditionally); an indexed path always lands.
-		if s.maxDocuments > 0 && !s.documents.Indexed(req.Path) && s.documents.IndexSize() >= s.maxDocuments {
-			return nil, fmt.Errorf("%w: store holds %d documents (limit %d)", ErrDocumentQuota, s.documents.IndexSize(), s.maxDocuments)
+		if held := s.documents.IndexSize() + s.unindexed; s.maxDocuments > 0 && !s.documents.Indexed(req.Path) && held >= s.maxDocuments {
+			return nil, fmt.Errorf("%w: store holds %d documents (limit %d)", ErrDocumentQuota, held, s.maxDocuments)
 		}
 		document, err := write(s.writeSpec(ctx, req))
 		if storefmt.Committed(err) {

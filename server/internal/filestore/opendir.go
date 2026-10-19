@@ -32,29 +32,31 @@ func OpenDir(dir string, opts Options) (*Store, error) {
 	err := documents.BuildIndexObserved(func(d storefmt.CurrentDoc) {
 		cat.Put(d.Path, d.Metadata, d.Body, d.Modified)
 	})
-	if err != nil && !logPartialWalk(logger, err) {
+	skipped, partial := logPartialWalk(logger, err)
+	if err != nil && !partial {
 		return nil, fmt.Errorf("document index build failed: %w", err)
 	}
-	logger.Info("document index built", "entries", documents.IndexSize())
+	logger.Info("document index built", "entries", documents.IndexSize(), "skipped", skipped)
 	store, err := Open(documents, cat, opts)
 	if err != nil {
 		return nil, fmt.Errorf("change journal: %w", err)
 	}
+	store.unindexed = skipped
 	return store, nil
 }
 
-// logPartialWalk reports each entry a completed walk skipped and returns
-// whether err was a partial walk at all.
-func logPartialWalk(logger *slog.Logger, err error) bool {
-	var partial *storefmt.PartialWalkError
-	if !errors.As(err, &partial) {
-		return false
+// logPartialWalk reports each entry a completed walk skipped and returns how
+// many, and whether err was a partial walk at all.
+func logPartialWalk(logger *slog.Logger, err error) (skipped int, partial bool) {
+	var walk *storefmt.PartialWalkError
+	if !errors.As(err, &walk) {
+		return 0, false
 	}
-	for _, e := range partial.Skipped {
+	for _, e := range walk.Skipped {
 		logger.Warn("document index skipped entry", "path", e.Path, "error", e.Err)
 	}
-	if partial.Total > len(partial.Skipped) {
-		logger.Warn("document index skipped more entries than listed", "total", partial.Total, "listed", len(partial.Skipped))
+	if walk.Total > len(walk.Skipped) {
+		logger.Warn("document index skipped more entries than listed", "total", walk.Total, "listed", len(walk.Skipped))
 	}
-	return true
+	return walk.Total, true
 }
