@@ -168,7 +168,7 @@ Operational notes:
 - Token files may be absent when a world opens: it serves reads with no tokens and loads a file once it appears. `staticTokensFile` holds operator-owned entries merged with the broker-owned `tokensFile`; a hash may appear in only one of them.
 - GCS credentials come from Application Default Credentials (Workload Identity on GKE); there are no credential flags or env vars.
 - The bucket must exist, but needs no out-of-band initialization: an existing empty one is initialized and seeded on first start, and a bucket holding objects but no world marker is refused.
-- A file world's directory is created on first open (a read-only one must exist); two file worlds cannot share or nest directories, and the server does not resolve symlinks when it checks that.
+- A file world's directory is created on first open (a read-only one must exist); two file worlds cannot share or nest directories, and the server does not resolve symlinks when it checks that. The server owns the directory while it is open: its index, catalog, change journal and document cap are built from one walk at open, so edit the tree only while the server is down, as with a single-process soul.
 - `policy.file` names a local file whose body seeds the world's first policy version instead of the embedded default. Seeding is create-only, so a world that already holds a policy keeps it, but the file is still read and validated on every open and must stay present and parseable.
 - `policy.file` applies to a writable world only. Configuration refuses it on a read-only world, which is never seeded and must already hold a valid policy in its bucket.
 
