@@ -120,7 +120,7 @@ func (e *PartialWalkError) Error() string {
 }
 
 // CurrentDoc describes a current, non-archived document version surfaced by
-// WalkCurrent. Body is the markdown content with store frontmatter stripped;
+// a store's BuildIndexObserved. Body is the markdown content with store frontmatter stripped;
 // Metadata is the publisher metadata as a bare-keyed map (see extractMetadata).
 type CurrentDoc struct {
 	Path     string

@@ -170,8 +170,7 @@ func New(root string) *Store {
 }
 
 // walkCurrentFiles calls fn with the raw stored bytes of each current, live
-// document. BuildIndex and WalkCurrent share it so the skip and containment
-// rules live in one place.
+// document, under one set of skip and containment rules.
 func (s *Store) walkCurrentFiles(fn func(reqPath string, data []byte, modified time.Time) error) error {
 	absRoot, err := s.resolvedRoot()
 	if err != nil {
@@ -311,18 +310,35 @@ func isLegacyVersionName(name string) bool {
 // BuildIndex walks the content root and indexes the current, live documents
 // by path, with the version and body hash each folds into the fingerprint.
 // Skips versions/ directories and archived documents.
-func (s *Store) BuildIndex() error {
-	s.indexMu.Lock()
-	defer s.indexMu.Unlock()
+func (s *Store) BuildIndex() error { return s.BuildIndexObserved(nil) }
 
-	s.pathIdx = make(map[string][digestLen]byte)
-	s.digest = [digestLen]byte{}
-	s.indexed = true
-
-	return s.walkCurrentFiles(func(reqPath string, data []byte, _ time.Time) error {
-		s.indexLocked(reqPath, storefmt.ContentHash(storefmt.ExtractBody(data)), indexVersion(data))
+// BuildIndexObserved is BuildIndex that also hands each indexed document to
+// observe, so a catalog is built from the one walk. The index is built aside
+// and swapped in whole: observe runs unlocked, a broken walk keeps the old.
+func (s *Store) BuildIndexObserved(observe func(storefmt.CurrentDoc)) error {
+	pathIdx := make(map[string][digestLen]byte)
+	var digest [digestLen]byte
+	err := s.walkCurrentFiles(func(reqPath string, data []byte, modified time.Time) error {
+		body := storefmt.ExtractBody(data)
+		if previous, ok := pathIdx[reqPath]; ok {
+			xorInto(&digest, previous)
+		}
+		folded := fold(reqPath, indexVersion(data), storefmt.ContentHash(body))
+		pathIdx[reqPath] = folded
+		xorInto(&digest, folded)
+		if observe != nil {
+			observe(storefmt.CurrentDoc{Path: reqPath, Body: body, Metadata: storefmt.ExtractMetadata(data), Modified: modified})
+		}
 		return nil
 	})
+	var partial *storefmt.PartialWalkError
+	if err != nil && !errors.As(err, &partial) {
+		return err
+	}
+	s.indexMu.Lock()
+	s.pathIdx, s.digest, s.indexed = pathIdx, digest, true
+	s.indexMu.Unlock()
+	return err
 }
 
 // indexLocked records reqPath (already canonical), replacing any earlier
@@ -342,19 +358,6 @@ func (s *Store) unindexLocked(reqPath string) {
 	}
 	delete(s.pathIdx, reqPath)
 	s.xorDigest(digest)
-}
-
-// WalkCurrent visits every current, non-archived document, with the same skip
-// rules as BuildIndex, so a derived index reads the same source of truth.
-func (s *Store) WalkCurrent(fn func(storefmt.CurrentDoc) error) error {
-	return s.walkCurrentFiles(func(reqPath string, data []byte, modified time.Time) error {
-		return fn(storefmt.CurrentDoc{
-			Path:     reqPath,
-			Body:     storefmt.ExtractBody(data),
-			Metadata: storefmt.ExtractMetadata(data),
-			Modified: modified,
-		})
-	})
 }
 
 // UpdateIndex indexes the current version of a document by body and
@@ -406,9 +409,11 @@ func fold(reqPath string, version int, hash string) (out [digestLen]byte) {
 }
 
 // xorDigest toggles one fold in the digest; XOR is its own inverse.
-func (s *Store) xorDigest(f [digestLen]byte) {
+func (s *Store) xorDigest(f [digestLen]byte) { xorInto(&s.digest, f) }
+
+func xorInto(dst *[digestLen]byte, f [digestLen]byte) {
 	for i, b := range f {
-		s.digest[i] ^= b
+		dst[i] ^= b
 	}
 }
 
