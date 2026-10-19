@@ -47,11 +47,11 @@ func storeNames() []string {
 }
 
 // gated is the write gate every soul write passes, whatever the backend: the
-// content scan (secrets warn for one release, personal data warns) and the
-// policy document when the soul publishes one. No seed, no floor.
+// content scan (a secret is refused, personal data warns) and the policy
+// document when the soul publishes one. No seed, no floor.
 func gated(b backend) backend {
 	b.Store = writepolicy.Enforce(b.Store, writepolicy.Options{Content: writepolicy.ContentOptions{
-		SecretsWarn: true, Options: contentcheck.Options{PII: contentcheck.Warn},
+		Options: contentcheck.Options{PII: contentcheck.Warn},
 	}})
 	return b
 }

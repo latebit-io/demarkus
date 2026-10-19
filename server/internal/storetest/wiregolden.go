@@ -74,6 +74,9 @@ func WireScenario(t *testing.T, b LookupBackend) []WireGolden {
 // placeholder rule does not accept a literal password.
 const WireSecret = "# Local Postgres\n\n```sh\nexport DSN=postgres://postgres:postgres@localhost:55432/app\n```\n" //nolint:gosec // test fixture: a throwaway container DSN, not a credential
 
+// WireSecretFixed is WireSecret after the remedy: the password a placeholder.
+const WireSecretFixed = "# Local Postgres\n\n```sh\nexport DSN=postgres://postgres:${POSTGRES_PASSWORD}@localhost:55432/app\n```\n" //nolint:gosec // test fixture: the placeholder the remedy asks for
+
 // gatedWireScenario drives the same body through the content gate twice:
 // a tier that warns lands it under the warning key, a tier that refuses
 // answers bad-request with the rule and line.
