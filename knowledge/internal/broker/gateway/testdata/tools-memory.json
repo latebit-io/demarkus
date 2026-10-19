@@ -366,7 +366,7 @@
     "inputSchema": {
       "properties": {
         "body": {
-          "description": "refresh: the live knowledge body, or omitted with a directory url to list its promoted documents",
+          "description": "refresh: the live body, or omitted with a directory url for its inventory",
           "type": "string"
         },
         "packet": {

@@ -224,7 +224,7 @@ type promoteArg struct {
 var promoteArgs = []promoteArg{
 	{"body", mcp.WithString, []phaseClause{
 		{[]string{promote.PhaseDryRun, promote.PhaseApply}, "the distilled draft"},
-		{[]string{promote.PhaseRefresh}, "the live knowledge body, or omitted with a directory url to list its promoted documents"},
+		{[]string{promote.PhaseRefresh}, "the live body, or omitted with a directory url for its inventory"},
 	}},
 	{"metadata", mcp.WithObject, []phaseClause{
 		{[]string{promote.PhaseDryRun, promote.PhaseApply}, "the draft's metadata object (tags, importance, type, the policy's axes)"},
