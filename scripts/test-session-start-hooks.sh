@@ -14,7 +14,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-# run_hook <plugin> <bootstrap exit> <failing subcommand or "none"> [no-conf|no-bin]
+# run_hook <plugin> <bootstrap exit> <failing subcommand or "none"> [no-bin]
 run_hook() {
   local plugin="$1" bootstrap_exit="$2" failing="$3" tree
   tree=$(mktemp -d "$TMP/hook.XXXXXX")
@@ -23,10 +23,9 @@ run_hook() {
   cp "$ROOT/plugins/$plugin/hooks/session-start.sh" "$tree/hooks/"
   cp "$ROOT/plugins/$plugin/context/session-guidance.md" "$tree/context/"
   printf '#!/usr/bin/env bash\necho bootstrap >> "%s/calls"\nexit %s\n' "$HOOK_HOME" "$bootstrap_exit" > "$tree/scripts/bootstrap.sh"
-  [ "${4:-}" = no-conf ] || echo "MODE=default" > "$HOOK_HOME/.demarkus/plugin-memory.conf"
   cat > "$HOOK_HOME/.demarkus/bin/demarkus-plugin" <<STUB
 #!/usr/bin/env bash
-echo "\$1" >> "$HOOK_HOME/calls"
+case "\$1" in provision) echo "\$1 \$2";; *) echo "\$1";; esac >> "$HOOK_HOME/calls"
 if [ "\$1" = "$failing" ]; then exit 7; fi
 if [ "\$1" = "guidance" ]; then echo '{"ok":true}'; fi
 STUB
@@ -58,19 +57,19 @@ for plugin in claude-code cursor-memory; do
   grep -q '"ok":true' "$TMP/out" || fail "$plugin: guidance not emitted after a failed provision"
 done
 
-# The Claude Code memory hook leaves the download to scripts/mcp-launch.sh.
+# The memory hooks provision only a configured setup (the launchers own the
+# default setup); the Claude Code one leaves the download to mcp-launch.sh.
+run_hook cursor-memory 0 none
+[ "$(calls)" = "bootstrap provision if-configured guidance " ] || fail "cursor-memory: ran $(calls)"
 run_hook claude-code 0 none
-[ "$(calls)" = "provision guidance " ] || fail "claude-code: ran $(calls)"
+[ "$(calls)" = "provision if-configured guidance " ] || fail "claude-code: ran $(calls)"
 
-# No config or no usable binary (a sandbox, or the launcher's first run): a
-# provision would start a second soul; the static guidance stands in, without
-# the generator's marker lines.
-for missing in no-conf no-bin; do
-  run_hook claude-code 0 none "$missing"
-  [ "$HOOK_STATUS" = 0 ] || fail "claude-code: $missing run exited $HOOK_STATUS"
-  [ ! -e "$HOOK_HOME/calls" ] || fail "claude-code: $missing ran $(calls)"
-  grep -v '^<!--.*-->$' "$ROOT/plugins/claude-code/context/session-guidance.md" | diff - "$TMP/out" >/dev/null ||
-    fail "claude-code: $missing output is not the static guidance"
-done
+# No usable binary (a sandbox, or the launcher's first run): the static
+# guidance stands in, without the generator's marker lines.
+run_hook claude-code 0 none no-bin
+[ "$HOOK_STATUS" = 0 ] || fail "claude-code: no-bin run exited $HOOK_STATUS"
+[ ! -e "$HOOK_HOME/calls" ] || fail "claude-code: no-bin ran $(calls)"
+grep -v '^<!--.*-->$' "$ROOT/plugins/claude-code/context/session-guidance.md" | diff - "$TMP/out" >/dev/null ||
+  fail "claude-code: no-bin output is not the static guidance"
 
 echo "PASS: session-start hooks"

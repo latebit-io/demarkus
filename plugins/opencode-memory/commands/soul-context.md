@@ -14,7 +14,8 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 "$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
 ```
 
-`<project-dir>`: the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes. Output: `slug=`, `store=`, `state=` (`local`, `bound`, `stale`; stale adds `hint=`), `root=`, `project=` (`known`, `new`, `unknown`; unknown adds `reason=`). Stale (header or line): the bound soul is unavailable; relay the hint, stop, never fall back to the local soul. Non-zero exit (no directory, unusable directory name), a missing line or an unrecognized `state`: surface it, stop. `<root>` below is the project root: `/` for the soul's root project, else `/<slug>/`. Project unknown (header or line): the root is the default, unconfirmed; name the reason once, continue. Every `mark_*` call goes through the store's server (the MCP server named `<store>`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
+`<project-dir>`: the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes. Read its `verdict=` line: `use`: continue with `slug=`, `store=`, `root=`; `use, root unconfirmed: <reason>`: name the reason once, continue; `stop: <reason>`: relay it, stop, never fall back to the local soul. A header marked stale or `Project: unknown` reads the same way. Non-zero exit, or a zero exit without a `verdict=` line: surface it, stop. `<root>` below is the project root: `/` for the soul's root project, else `/<slug>/`. Every `mark_*` call goes through the store's server (the MCP server named `<store>`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
+
 
 ## Steps
 

@@ -9,19 +9,15 @@ Configure the demarkus-memory plugin's connection to a demarkus-server. Run once
 
 ## Steps
 
-1. Run detection with the Bash tool:
-
-   `"$HOME/.demarkus/bin/demarkus-plugin" provision detect`
-
-   Every `provision` command here can fail. Check each exit status and output; on failure, surface the exact error and stop without reporting setup success.
+1. Bash: `"$HOME/.demarkus/bin/demarkus-plugin" provision detect`. Non-zero exit: surface it, stop; never read a failed inspection as "not running". Output: `NO_SERVER`, or `SERVERS` then one `PID PORT ROOT` row per reusable server; a `SKIPPED` block may follow either, its rows carrying their reason: show them, never offer them. Any other shape: surface it, stop. Every `provision` command here can fail: check each exit status and output; on failure, surface the exact error and stop without reporting setup success.
 
 2. Read the output:
 
-   - Exactly `NO_SERVER` → no demarkus-server running. Run:
+   - `NO_SERVER` → no reusable demarkus-server. Run:
      `"$HOME/.demarkus/bin/demarkus-plugin" provision init default`
      Do not assume the install landed at `~/.demarkus/soul/`: `default` falls back to isolated mode on a different root and port when 6310 is taken. Report the actual mode, soul path, and port (step 3) from the script's stderr or `~/.demarkus/plugin-memory.conf`.
 
-   - Starts with `SERVERS` → one or more demarkus-server processes running, one `PID PORT ROOT` line each (numeric PID, numeric PORT, absolute ROOT). Any other output, or a row that does not match: surface the exact output and stop; never pick a server from it. Show valid rows to the user in a clean list, then ask:
+   - `SERVERS` → show the rows in a clean list, then ask:
 
      > Detected running demarkus-server(s). Pick one to reuse for this plugin's soul, or say "isolated" to create a separate instance on its own port:
 
