@@ -142,6 +142,27 @@ func TestMemoryGuidanceProjectHeader(t *testing.T) {
 	}
 }
 
+// Without a local config an unbound project gets no header: the store it
+// would name does not exist, and a sandbox must not be told to set one up. A
+// project bound to a remote store keeps its header.
+func TestMemoryGuidanceHeaderNeedsAStore(t *testing.T) {
+	gfile := filepath.Join(t.TempDir(), "g.md")
+	if err := os.WriteFile(gfile, []byte("# standing guidance\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unbound := filepath.Join(t.TempDir(), "app")
+	setupHome(t, nil)
+	stubHealth(t, "")
+	out := eval(t, Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: unbound})
+	if out.Context != "# standing guidance\n" || out.Status != "" {
+		t.Fatalf("unconfigured local store: context %q, status %q", out.Context, out.Status)
+	}
+	setupHome(t, map[string]string{"project-souls": unbound + "\tteam\n", "souls": "team\tmark://team.example:6309\tfalse\t-\n"})
+	if out := ctx(t, Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: unbound}); !strings.Contains(out, "Bound store: `team`.") {
+		t.Fatalf("a remote binding needs no local config:\n%s", out)
+	}
+}
+
 func TestGuidanceSurfacesUnreadableFileAndRelativeProjectDir(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/no/such/dir\nPORT=6310\nMODE=default\n"})
 	if _, err := Evaluate(Input{Surface: "memory", GuidanceFile: filepath.Join(t.TempDir(), "missing.md")}); err == nil {

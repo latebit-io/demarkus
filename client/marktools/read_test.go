@@ -41,6 +41,33 @@ func TestList(t *testing.T) {
 	}
 }
 
+// An adr listing carries the number the agent is about to take, counted over
+// archived records too, so the skill no longer pages through them itself.
+func TestListOfAnADRDirectoryNamesTheNextNumber(t *testing.T) {
+	backend := &fetchtest.Client{ListFn: func(_ context.Context, r fetch.ListRequest) (fetch.Result, error) {
+		if r.IncludeArchived {
+			return fetchtest.ListPage(r.Path, "", "0001-a.md", "0002-b.md", "0004-retired.md"), nil
+		}
+		return fetchtest.ListPage(r.Path, "", "0001-a.md", "0002-b.md"), nil
+	}}
+	tools := newTools(t, backend, directHooks())
+
+	got := tools.List(t.Context(), marktools.ListArgs{URL: "/cwd/adr/"})
+	if got.IsError || !strings.Contains(got.Text, "\nentries: 2\nnext: 0005\n") {
+		t.Errorf("List = %+v", got)
+	}
+	if len(backend.ListCalls) != 2 || !backend.ListCalls[1].IncludeArchived {
+		t.Errorf("calls = %+v, want the page then an archived walk", backend.ListCalls)
+	}
+
+	backend.ListFn = func(context.Context, fetch.ListRequest) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}
+	if got := tools.List(t.Context(), marktools.ListArgs{URL: "/cwd/adr/"}); got.IsError || strings.Contains(got.Text, "next:") {
+		t.Errorf("not-found adr listing = %+v", got)
+	}
+}
+
 func TestListRefusesBadArgumentsAndAStuckCursor(t *testing.T) {
 	backend := &fetchtest.Client{}
 	tools := newTools(t, backend, directHooks())

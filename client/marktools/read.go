@@ -9,8 +9,10 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/memory/audit"
 	"github.com/latebit-io/demarkus/client/memory/lookupexpand"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/layout"
 )
 
 // ListArgs are mark_list's arguments as the surface read them.
@@ -47,7 +49,18 @@ func (t *Tools) List(ctx context.Context, args ListArgs) Result {
 			return failure("list failed: continuation cursor is missing or did not advance")
 		}
 	}
-	return text(mcpfmt.Full(result, "modified"))
+	var extra map[string]string
+	if args.Cursor == "" && result.Response.Status == protocol.StatusOK && layout.IsADRDir(target.Path) {
+		// The number an agent is about to take, on the first page only: every
+		// page of the directory, archived included.
+		store := &audit.ClientStore{Client: t.backend, Host: target.Host, Token: list.Token}
+		next, err := audit.NextADR(ctx, store, target.Path)
+		if err != nil {
+			return failure("list %s: next decision number: %v", target.Path, err)
+		}
+		extra = map[string]string{"next": next}
+	}
+	return text(mcpfmt.FullWith(result, result.Response.Body, extra, "modified"))
 }
 
 // listPageSize reads page_size from its JSON value: a whole number in range.

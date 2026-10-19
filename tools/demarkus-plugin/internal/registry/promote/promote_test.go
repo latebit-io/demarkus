@@ -11,6 +11,25 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/registrytest"
 )
 
+// detect-promote's output is parsed by three prompts; this pins its shape.
+func TestDetectReportsEveryDestinationOrNone(t *testing.T) {
+	home := registrytest.SetupHome(t)
+	rows, err := Detect()
+	if err != nil || Report(rows) != "NONE" {
+		t.Fatalf("empty registry: %q, %v", Report(rows), err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "knowledge-systems"), []byte("# joined\nteam\n\nlab\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddTarget("acme", "/shared", "Acme shared"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = Detect()
+	if err != nil || Report(rows) != "knowledge team\nknowledge lab\ntarget acme /shared Acme shared" {
+		t.Fatalf("Detect = %q, %v", Report(rows), err)
+	}
+}
+
 func TestPromoteTargetAdd(t *testing.T) {
 	home := registrytest.SetupHome(t)
 	if _, err := AddTarget("acme", "/shared", "Acme shared"); err != nil {

@@ -139,18 +139,12 @@ func ValidScope(scope string) (string, error) {
 // (inventory failed, store unreachable, unauthorized); no partial report is
 // returned with it.
 func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
-	scope, err := ValidScope(opts.Scope)
+	a, err := newAudit(store, opts)
 	if err != nil {
 		return nil, err
 	}
-	opts.Scope = scope
-	timeout := opts.Timeout
-	if timeout <= 0 {
-		timeout = MaxAuditDuration
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
 	defer cancel()
-	a := &audit{opts: opts, store: store, docs: map[string]*document{}, dirs: map[string]bool{}}
 	if a.layout, err = layout.Read(ctx, store.Fetch); err != nil {
 		return nil, err
 	}
@@ -180,7 +174,21 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 		a.checkPromotion()
 	}
 	plan := a.plan()
-	return &Report{Scope: scope, Documents: len(a.order), Deep: opts.Deep, Promotion: opts.Promotion, Promoted: a.promoted, Findings: a.findings, Coverage: a.coverage, Plan: plan}, nil
+	return &Report{Scope: a.opts.Scope, Documents: len(a.order), Deep: opts.Deep, Promotion: opts.Promotion, Promoted: a.promoted, Findings: a.findings, Coverage: a.coverage, Plan: plan}, nil
+}
+
+// newAudit checks the scope and settles the timeout the caller bounds the
+// run by.
+func newAudit(store Store, opts Options) (*audit, error) {
+	scope, err := ValidScope(opts.Scope)
+	if err != nil {
+		return nil, err
+	}
+	opts.Scope = scope
+	if opts.Timeout <= 0 {
+		opts.Timeout = MaxAuditDuration
+	}
+	return &audit{opts: opts, store: store, docs: map[string]*document{}, dirs: map[string]bool{}}, nil
 }
 
 func (a *audit) note(format string, args ...any) {

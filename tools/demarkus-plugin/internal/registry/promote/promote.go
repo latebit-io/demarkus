@@ -3,6 +3,7 @@
 package promote
 
 import (
+	"cmp"
 	"fmt"
 	pathpkg "path"
 	"strings"
@@ -80,6 +81,10 @@ func canonicalPromotePath(raw string) (string, error) {
 	}
 	return pathpkg.Clean(raw), nil
 }
+
+// Report renders Detect's rows as the detect-promote output the prompts
+// parse: NONE, or one destination per line.
+func Report(rows []string) string { return cmp.Or(strings.Join(rows, "\n"), "NONE") }
 
 // Detect lists every promote destination (brokered + plain), or nil when
 // none. "knowledge <slug>" / "target <slug> <path> [label]".

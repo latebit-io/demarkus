@@ -245,35 +245,37 @@ func argsRootMatches(args, target string) bool {
 	return false
 }
 
-// ListServers emits "PID PORT ROOT" per running demarkus-server, one per
-// line (empty when none). Args take precedence over env; falls back to
-// DEMARKUS_PORT/DEMARKUS_ROOT env, then the protocol default port / "(unknown)" root.
-func ListServers() (string, bool) {
+// Server is one running demarkus-server: Root is "" when neither its args
+// nor its environment name one.
+type Server struct {
+	PID  int
+	Port string
+	Root string
+}
+
+// ListServers finds every running demarkus-server. Args take precedence over
+// env; the port falls back to DEMARKUS_PORT, then the protocol default.
+func ListServers() ([]Server, bool) {
 	pids, ran := pgrepDemarkusServer()
 	if !ran {
-		return "", false
+		return nil, false
 	}
-	var lines []string
+	var servers []Server
 	for _, pid := range pids {
 		args, ran := Args(pid)
 		if !ran {
-			return "", false // an unlistable process is not an absent one
+			return nil, false // an unlistable process is not an absent one
 		}
 		if args == "" {
 			continue
 		}
-		port := PortOf(args, pid)
 		root := flagValue(args, rootFlagRe)
 		if root == "" {
-			// An unreadable environment lists as "(unknown)" below.
-			root, _ = procEnv(pid, "DEMARKUS_ROOT")
+			root, _ = procEnv(pid, "DEMARKUS_ROOT") // unreadable reads as unknown
 		}
-		if root == "" {
-			root = "(unknown)"
-		}
-		lines = append(lines, fmt.Sprintf("%d %s %s", pid, port, root))
+		servers = append(servers, Server{PID: pid, Port: PortOf(args, pid), Root: root})
 	}
-	return strings.Join(lines, "\n"), true
+	return servers, true
 }
 
 // PortOf returns the port the server listens on (-port flag in args,

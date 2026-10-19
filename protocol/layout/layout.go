@@ -217,3 +217,8 @@ func (l *Layout) Qualifies(p string, meta map[string]string) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// IsADRDir reports whether dir holds decision records: its last segment is adr.
+func IsADRDir(dir string) bool {
+	return path.Base(strings.TrimSuffix(dir, "/")) == "adr"
+}

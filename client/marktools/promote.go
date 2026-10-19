@@ -11,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/lookuptable"
+	"github.com/latebit-io/demarkus/client/memory/audit"
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/client/merge"
@@ -123,6 +124,9 @@ func (t *Tools) promoteStamp(ctx context.Context, target Target, args *PromoteAr
 // with the packet it writes the planned body.
 func (t *Tools) promoteRefresh(ctx context.Context, target Target, args *PromoteArgs) Result {
 	if args.Body == "" {
+		if strings.HasSuffix(target.Path, "/") && args.Target == "" && args.Packet == "" {
+			return t.promoteInventory(ctx, target)
+		}
 		return failure("refresh needs body: the live knowledge copy")
 	}
 	liveTarget, liveVersion, err := promote.ParseTarget(args.Target)
@@ -157,6 +161,30 @@ func (t *Tools) promoteRefresh(ctx context.Context, target Target, args *Promote
 	}
 	t.observeWritten(ctx, target, &w)
 	return text(writtenReport("refreshed", &w))
+}
+
+// promoteInventory answers refresh on a directory: every promoted document
+// under it with the copy it tracks, walked in full, so a refresh starts from
+// the store rather than a capped tag lookup.
+func (t *Tools) promoteInventory(ctx context.Context, target Target) Result {
+	store := &audit.ClientStore{Client: t.backend, Host: target.Host, Token: t.readToken(ctx, target.Host)}
+	docs, total, err := audit.Promoted(ctx, store, target.Path, doctorTimeout)
+	if err != nil {
+		return failure("refresh inventory failed: %v", err)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "status: inventory\npath: %s\ndocuments: %d\npromoted: %d\n", target.Path, total, len(docs))
+	for _, d := range docs {
+		switch {
+		case d.Markers.Target == "":
+			fmt.Fprintf(&b, "- %s: tag only, no marker\n", d.Path)
+		case d.Markers.Version == 0:
+			fmt.Fprintf(&b, "- %s: promoted-via none (legacy marker); promoted %s\n", d.Path, d.Markers.Target)
+		default:
+			fmt.Fprintf(&b, "- %s: promoted-via %s; promoted %s@v%d\n", d.Path, d.Markers.Via, d.Markers.Target, d.Markers.Version)
+		}
+	}
+	return text(b.String())
 }
 
 // writtenReport words a soul write that landed.

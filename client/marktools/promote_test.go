@@ -88,6 +88,41 @@ func TestPromoteRefreshReportsThenWritesWithThePacket(t *testing.T) {
 	}
 }
 
+// Refresh on a directory with no body is the inventory the refresh command
+// used to assemble from a capped tag lookup: every promoted document, walked.
+func TestPromoteRefreshOnADirectoryInventoriesPromotedDocuments(t *testing.T) {
+	backend := &fetchtest.Client{
+		Published: map[string]fetch.Result{
+			"host:6309/cwd/index.md":   fetchtest.Head("# Cwd\n\n- [a](a.md)\n", 1, nil),
+			"host:6309/cwd/a.md":       fetchtest.Head("# A\n\npromoted-via: team\npromoted: mark://latebit/a.md@v3\n\nBody.\n", 2, nil),
+			"host:6309/cwd/b.md":       fetchtest.Head("# B\n\nLocal only.\n", 1, nil),
+			"host:6309/cwd/old/leg.md": fetchtest.Head("# Legacy\n\npromoted: mark://old/leg.md\n", 1, nil),
+			"host:6309/cwd/old/tag.md": fetchtest.Head("# Tagged\n", 1, map[string]string{"tags": "promoted"}),
+		},
+		ListFn: func(_ context.Context, r fetch.ListRequest) (fetch.Result, error) {
+			switch strings.TrimSuffix(r.Path, "/") {
+			case "/cwd":
+				return fetchtest.ListPage(r.Path, "", "a.md", "b.md", "index.md", "old/"), nil
+			case "/cwd/old":
+				return fetchtest.ListPage(r.Path, "", "leg.md", "tag.md"), nil
+			}
+			return fetchtest.ListPage(r.Path, ""), nil
+		},
+	}
+	tools := newTools(t, backend, directHooks())
+	got := tools.Promote(t.Context(), marktools.PromoteArgs{URL: "/cwd/", Phase: "refresh"})
+	want := "status: inventory\npath: /cwd/\ndocuments: 5\npromoted: 3\n" +
+		"- /cwd/a.md: promoted-via team; promoted mark://latebit/a.md@v3\n" +
+		"- /cwd/old/leg.md: promoted-via none (legacy marker); promoted mark://old/leg.md\n" +
+		"- /cwd/old/tag.md: tag only, no marker\n"
+	if got.IsError || got.Text != want {
+		t.Fatalf("inventory = %+v\nwant\n%s", got, want)
+	}
+	if got := tools.Promote(t.Context(), marktools.PromoteArgs{URL: "/cwd/a.md", Phase: "refresh"}); !got.IsError || !strings.Contains(got.Text, "refresh needs body") {
+		t.Errorf("a document without a body = %+v", got)
+	}
+}
+
 // knowledgeBackend is a world with a blocking policy and one document the
 // draft duplicates by title.
 func knowledgeBackend() *fetchtest.Client {

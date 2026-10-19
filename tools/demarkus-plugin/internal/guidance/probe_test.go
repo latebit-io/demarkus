@@ -11,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 )
 
 // fakeSoul answers FETCH from docs (absent is not found) and LIST of the
@@ -112,6 +113,25 @@ func TestProbeStoreSkipsBrokerStores(t *testing.T) {
 	}
 	if got := probeStore(t.Context(), "gone", "app"); got.State != ProjectUnknown || !strings.Contains(got.Reason, "not in the catalog") {
 		t.Errorf("stale = %+v", got)
+	}
+}
+
+func TestVerdictStopsOnlyForAStaleBinding(t *testing.T) {
+	known := ProjectStatus{State: ProjectKnown}
+	unknown := ProjectStatus{State: ProjectUnknown, Reason: "hosted store, not checked"}
+	stale := project.Resolution{Store: "gone", State: project.StateStale}
+	for _, c := range []struct {
+		r    project.Resolution
+		st   ProjectStatus
+		want string
+	}{
+		{project.Resolution{Store: "team", State: project.StateBound}, known, "use"},
+		{project.Resolution{Store: "demarkus-memory", State: project.StateLocal}, unknown, "use, root unconfirmed: hosted store, not checked"},
+		{stale, unknown, "stop: the bound store is " + stale.Hint()},
+	} {
+		if got := Verdict(c.r, c.st); got != c.want {
+			t.Errorf("Verdict(%s, %s) = %q, want %q", c.r.State, c.st.State, got, c.want)
+		}
 	}
 }
 

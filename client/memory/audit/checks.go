@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/hub"
 	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
 )
@@ -199,7 +200,7 @@ func (a *audit) adrIndex() map[string]map[int][]string {
 	for _, p := range a.order {
 		dir := path.Dir(p)
 		m := adrFileRe.FindStringSubmatch(path.Base(p))
-		if path.Base(dir) != "adr" || m == nil {
+		if !layout.IsADRDir(dir) || m == nil {
 			continue
 		}
 		n, _ := strconv.Atoi(m[1]) // the regex guarantees four digits
@@ -318,7 +319,7 @@ func (a *audit) checkReferences() {
 			continue
 		}
 		own := ""
-		if m := adrFileRe.FindStringSubmatch(path.Base(p)); m != nil && path.Base(path.Dir(p)) == "adr" {
+		if m := adrFileRe.FindStringSubmatch(path.Base(p)); m != nil && layout.IsADRDir(path.Dir(p)) {
 			own = m[1]
 		}
 		seen := map[string]bool{}

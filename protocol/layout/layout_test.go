@@ -112,3 +112,11 @@ func TestJournalEntry(t *testing.T) {
 		t.Error("JournalDir")
 	}
 }
+
+func TestIsADRDir(t *testing.T) {
+	for dir, want := range map[string]bool{"/adr/": true, "/cwd/adr": true, "/cwd/adr/old/": false, "/adrs/": false, "/": false} {
+		if IsADRDir(dir) != want {
+			t.Errorf("IsADRDir(%q) = %v", dir, !want)
+		}
+	}
+}
