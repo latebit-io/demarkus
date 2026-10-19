@@ -66,6 +66,9 @@ type WriteRequest struct {
 	Metadata        map[string]string
 	// Precondition, when set, judges the write inside the commit.
 	Precondition Precondition
+	// Warnings, when set, receives what the precondition let through with a
+	// note, one line each; a retried commit replaces them.
+	Warnings *[]string
 }
 
 // Precondition runs after the conflict, archive and no-op checks and before

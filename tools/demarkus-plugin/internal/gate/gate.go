@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	docgate "github.com/latebit-io/demarkus/client/memory/gate"
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
@@ -119,6 +120,31 @@ func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, er
 		return nil, err
 	}
 	return &Decision{Decision: string(s), Reason: reason}, nil
+}
+
+// contentScanner runs the rules the soul server runs: secrets always, personal
+// data without work domains (a store names its own people).
+var contentScanner = contentcheck.New(contentcheck.Options{PII: contentcheck.Warn})
+
+// contentDecision scans a publish or append body before it leaves. A secret
+// blocks with the fix (an ask has no answerer in a headless run); personal
+// data warns. No knob: a secret is never a preference; the server judges too.
+func contentDecision(pt config.ParsedTool, args map[string]any) *Decision {
+	if pt.Verb != "publish" && pt.Verb != "append" {
+		return nil
+	}
+	body, _ := args["body"].(string)
+	findings := contentScanner.Scan(body)
+	if len(findings) == 0 {
+		return nil
+	}
+	target := urlOr(args, "the document")
+	if contentcheck.Secrets(findings) {
+		return &Decision{Decision: "block", Reason: fmt.Sprintf(
+			"demarkus %s to %s carries a secret: %s. Fix: %s.", pt.Verb, target, contentcheck.Summary(findings), contentcheck.Remedy(findings))}
+	}
+	return &Decision{Decision: "warn", Reason: fmt.Sprintf(
+		"demarkus %s to %s carries personal data: %s. Fix: %s.", pt.Verb, target, contentcheck.Summary(findings), contentcheck.Remedy(findings))}
 }
 
 // Evaluate applies the right gate(s) for the tool's target and returns the
@@ -249,6 +275,9 @@ func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambigu
 	if rd != nil {
 		decisions = append(decisions, *rd)
 	}
+	if cd := contentDecision(pt, args); cd != nil {
+		decisions = append(decisions, *cd)
+	}
 
 	// Documentation-style guard (publish only): body-shape rules.
 	sd, err := styleDecision(pt, args, docgate.Baseline)
@@ -323,6 +352,9 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	}
 	if rd != nil {
 		decisions = append(decisions, *rd)
+	}
+	if cd := contentDecision(pt, args); cd != nil {
+		decisions = append(decisions, *cd)
 	}
 	sd, err := styleDecision(pt, args, docgate.KnowledgeGuide)
 	if err != nil {

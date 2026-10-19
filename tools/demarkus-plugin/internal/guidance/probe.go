@@ -49,15 +49,6 @@ func Probe(store, slug string) ProjectStatus {
 	return probeProject(ctx, store, slug)
 }
 
-// Lines renders the status as key=value lines for the registry subcommand.
-func (p *ProjectStatus) Lines() string {
-	lines := "root=" + p.Root + "\nproject=" + p.State
-	if p.State == ProjectUnknown {
-		lines += "\nreason=" + p.Reason
-	}
-	return lines
-}
-
 // soulReader is the part of the protocol client the probe uses.
 type soulReader interface {
 	Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error)

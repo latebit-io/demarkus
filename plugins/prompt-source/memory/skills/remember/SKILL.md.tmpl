@@ -30,7 +30,7 @@ Update: `mark_fetch` with `force: true` (complete body and metadata map), apply 
 Routes:
 
 - **Fleeting note, session progress**: `/soul-journal`, or `mark_append` with `url` `<root>` and `route: "today"` (creates today's entry, a missing hub and, under `/<slug>/`, its `/index.md` link; a new project starts here).
-- **Decision**: `mark_list <root>adr/`; the number is its `next:` line. `not-found`: `0001`. No `next:` (older server) or a listing failure: say so, write no decision. Body: `# <NNNN>. <Title>`, one summary line, `## Status`, `## Context`, `## Decision`, `## Consequences`. Conflict on create: list again, take the new `next:`.
+- **Decision**: `mark_list <root>adr/`; the number is its `next:` line. No `next:` (older server) or a listing failure: say so, write no decision. Body: `# <NNNN>. <Title>`, one summary line, `## Status`, `## Context`, `## Decision`, `## Consequences`. Conflict on create: list again, take the new `next:`.
 - **Pattern or convention**: `patterns.md`. **Hard rule**: `guidelines.md`. **Bug lesson**: `debugging.md` (the non-obvious why). **Architecture change**: `architecture.md`. **Next, done, not prioritized**: `roadmap.md`. **Debt**: `debt.md`. **Plan**: `<name>.md` under the layout's `plans:` directory (`plans/` by default). **Open question or idea**: `thoughts.md`.
 - **Cross-project or unplaceable**: ask the user where.
 

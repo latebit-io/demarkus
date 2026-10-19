@@ -925,14 +925,21 @@ func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 		expectedVersion = v
 	}
 
-	doc, err := h.store.Publish(ctx, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta})
+	var warnings []string
+	doc, err := h.store.Publish(ctx, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta, Warnings: &warnings})
 	h.logPrune("PUBLISH", req.Path, tokenLabel, doc)
 	if err != nil {
 		h.writePublishError(w, req, expectedVersion, doc, err, tokenLabel)
 		return
 	}
 
-	h.logger.Info("publish", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body))
+	h.logger.Info("publish", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body), "warnings", len(warnings))
+	h.writeResponse(w, writtenResponse(doc, warnings))
+}
+
+// writtenResponse is the created response for a landed write; what its
+// gate let through rides along under the reserved warning key.
+func writtenResponse(doc *storefmt.Document, warnings []string) protocol.Response {
 	resp := protocol.Response{
 		Status: protocol.StatusCreated,
 		Metadata: map[string]string{
@@ -940,7 +947,10 @@ func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 			"modified": doc.Modified.Format(time.RFC3339),
 		},
 	}
-	h.writeResponse(w, resp)
+	if len(warnings) > 0 {
+		resp.Metadata["warning"] = strings.Join(warnings, "; ")
+	}
+	return resp
 }
 
 // refusal is a store error the client can act on, with its response.
@@ -1057,22 +1067,16 @@ func (h *Handler) handleAppend(ctx context.Context, call *writeCall) {
 		return
 	}
 
-	doc, err := h.store.Append(ctx, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta})
+	var warnings []string
+	doc, err := h.store.Append(ctx, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta, Warnings: &warnings})
 	h.logPrune("APPEND", req.Path, tokenLabel, doc)
 	if err != nil {
 		h.writeAppendError(w, req, expectedVersion, doc, err, tokenLabel)
 		return
 	}
 
-	h.logger.Info("append", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body))
-	resp := protocol.Response{
-		Status: protocol.StatusCreated,
-		Metadata: map[string]string{
-			"version":  strconv.Itoa(doc.Version),
-			"modified": doc.Modified.Format(time.RFC3339),
-		},
-	}
-	h.writeResponse(w, resp)
+	h.logger.Info("append", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body), "warnings", len(warnings))
+	h.writeResponse(w, writtenResponse(doc, warnings))
 }
 
 func (h *Handler) writeAppendError(w io.Writer, req protocol.Request, expectedVersion int, doc *storefmt.Document, err error, tokenLabel string) {

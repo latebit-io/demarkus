@@ -48,8 +48,9 @@ func (t *Tools) doc(ctx context.Context, target Target, write WriteFunc) *docwri
 	}
 }
 
-// writeFields are the response keys a write tool shows.
-var writeFields = []string{"version", "modified", "server-version"}
+// writeFields are the response keys a write tool shows; warning is what
+// the server's gate let through.
+var writeFields = []string{"version", "modified", "server-version", "warning"}
 
 // PublishArgs are mark_publish's arguments. ExpectedVersion is nil when the
 // caller left it out; Metadata is the raw JSON object.
@@ -151,7 +152,13 @@ func (t *Tools) writeScope(ctx context.Context) *GraphScope {
 // Best effort: the write already landed; a failed save is only logged.
 func (t *Tools) observeWrite(ctx context.Context, target Target, result graph.FetchResult) {
 	scope := t.writeScope(ctx)
-	if scope == nil || !scope.observe(target, result) {
+	if scope == nil {
+		return
+	}
+	// A write's response rides on its metadata; the gate's note is response
+	// only and would change the document's hash in the observation.
+	delete(result.Metadata, "warning")
+	if !scope.observe(target, result) {
 		return
 	}
 	if err := scope.Store.Save(); err != nil {

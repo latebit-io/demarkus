@@ -1,0 +1,10 @@
+---
+status: bad-request
+---
+
+# Bad request
+
+content check refused this write (a secret or personal data in the body):
+- secret/connection-string-password at line 4
+Fix: remove the secret and re-publish; a secret cannot be overridden.
+

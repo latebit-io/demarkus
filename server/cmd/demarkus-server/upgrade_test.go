@@ -20,12 +20,7 @@ import (
 func TestServesUpgradeCapture(t *testing.T) {
 	world, token := openUpgradeCapture(t, filepath.Join("..", "..", "..", "testdata", "upgrade", "home"))
 	send := func(verb, path string, meta map[string]string, body string) protocol.Response {
-		t.Helper()
-		resp, err := world.Exchange(context.Background(), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, protocol.Request{Verb: verb, Path: path, Metadata: meta, Body: body})
-		if err != nil {
-			t.Fatalf("%s %s: %v", verb, path, err)
-		}
-		return resp
+		return exchange(t, world, protocol.Request{Verb: verb, Path: path, Metadata: meta, Body: body})
 	}
 
 	if r := send(protocol.VerbFetch, "/fixture/index.md", nil, ""); r.Status != protocol.StatusOK || r.Metadata["type"] != "Hub" {
@@ -52,6 +47,16 @@ func TestServesUpgradeCapture(t *testing.T) {
 	if r.Metadata["chain-valid"] != "true" || r.Metadata["total"] != "3" {
 		t.Errorf("history after a new write: chain-valid %q, total %q", r.Metadata["chain-valid"], r.Metadata["total"])
 	}
+}
+
+// exchange sends one request in process and fails the test on a transport error.
+func exchange(t *testing.T, world worldruntime.Exchanger, req protocol.Request) protocol.Response {
+	t.Helper()
+	resp, err := world.Exchange(context.Background(), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", req.Verb, req.Path, err)
+	}
+	return resp
 }
 
 // openUpgradeCapture serves a copy of the capture's soul with its tokens
@@ -81,7 +86,7 @@ func openUpgradeCapture(t *testing.T, home string) (world worldruntime.Exchanger
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.DiscardHandler)
-	b, err := openFileStore(cfg, logger)
+	b, err := openStore(cfg, logger)
 	if err != nil {
 		t.Fatalf("open the captured soul: %v", err)
 	}

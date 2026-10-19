@@ -434,3 +434,29 @@ func TestMCPGatewayMarkPublishEndToEnd(t *testing.T) {
 		}
 	}
 }
+
+// A world's gate reports what it let through under the warning key; the
+// tool shows it as a field, so an agent fixes the body without a refusal.
+func TestHandleMarkPublishShowsTheWorldsWarning(t *testing.T) {
+	cfg := mcpTestConfig()
+	d := &fakeDispatcher{
+		Published: map[string]fetch.Result{
+			"team-a/foo.md": {Response: protocol.Response{Status: protocol.StatusOK, Metadata: map[string]string{"version": "3"}}},
+		},
+		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{
+				"version": "4", "warning": "publish policy (warn): missing-tags",
+			}}}, nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url": "mark://team-a/foo.md", "body": "# new content\n", "expected_version": float64(3),
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkPublish: %v, %+v", err, res)
+	}
+	if text := toolResultText(t, res); !strings.Contains(text, "\nwarning: publish policy (warn): missing-tags\n") {
+		t.Errorf("response missing the warning field\nfull:\n%s", text)
+	}
+}

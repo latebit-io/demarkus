@@ -8,7 +8,7 @@ Use the joined system's own tools (the destination server's `mark_*` tools); the
 
 ## Record
 
-Publish only when the user asks or confirms, through the `knowledge-promote` skill, never a direct `mark_publish` during a read task. Write-time gates (tags, required axes, retention, style) say what to fix; follow them.
+Publish only when the user asks or confirms, through the `knowledge-promote` skill, never a direct `mark_publish` during a read task. Write-time gates (tags, required axes, retention, style, secrets) say what to fix; follow them.
 
 ## Soul and knowledge system
 

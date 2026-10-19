@@ -282,3 +282,21 @@ func TestPublishRefusalShowsTheServersReason(t *testing.T) {
 		}
 	}
 }
+
+// What the server's gate let through rides on the response and reaches the
+// agent as a field; the graph observation never sees it.
+func TestPublishShowsTheServersWarning(t *testing.T) {
+	backend := hubbedStore()
+	backend.PublishFn = func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{
+			"version": "1", "warning": "content check: secret/connection-string-password at line 4",
+		}}}, nil
+	}
+	tools := newTools(t, backend, writingHooks())
+	got := tools.Publish(t.Context(), marktools.PublishArgs{
+		URL: "/doc.md", Body: "# Doc\n", ExpectedVersion: new(0), OnConflict: "fail", Metadata: map[string]string{"tags": "a"},
+	})
+	if got.IsError || !strings.Contains(got.Text, "\nwarning: content check: secret/connection-string-password at line 4\n") {
+		t.Errorf("Publish = %+v, want the warning field", got)
+	}
+}

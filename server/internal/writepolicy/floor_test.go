@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
+	"github.com/latebit-io/demarkus/server/internal/storetest"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
@@ -102,19 +103,6 @@ func TestEnforceContent(t *testing.T) {
 	if _, err := (backendtest.Direct{Store: raw}).WriteVersion(publishpolicy.DocumentPath, 0, []byte(warnPolicy), policyMeta); err != nil {
 		t.Fatalf("seed policy: %v", err)
 	}
-	type warning struct {
-		path     string
-		rules    []string
-		override string
-	}
-	var warned []warning
-	warn := func(path string, findings []contentcheck.Finding, override string) {
-		w := warning{path: path, override: override}
-		for _, f := range findings {
-			w.rules = append(w.rules, f.Rule)
-		}
-		warned = append(warned, w)
-	}
 	tags := map[string]string{"tags": "topic"}
 	secret := []byte("# Keys\n\n```\n-----BEGIN RSA PRIVATE KEY-----\n```\n")
 	sin := []byte("# Person\n\nSIN 046 454 286\n")
@@ -134,42 +122,37 @@ func TestEnforceContent(t *testing.T) {
 		}
 	})
 	t.Run("pii follows the mode", func(t *testing.T) {
-		block := backendtest.Direct{Store: writepolicy.Enforce(raw, writepolicy.Options{Require: true, Content: writepolicy.ContentOptions{Warn: warn}})}
-		if _, err := block.WriteVersion("/p.md", 0, sin, tags); !errors.Is(err, writepolicy.ErrContentBlocked) {
+		block := writepolicy.Enforce(raw, writepolicy.Options{Require: true})
+		if _, err := write(t, block, "/p.md", 0, sin, tags); !errors.Is(err, writepolicy.ErrContentBlocked) {
 			t.Errorf("default mode pii = %v, want blocked", err)
 		}
-		warned = nil
-		warnMode := backendtest.Direct{Store: writepolicy.Enforce(raw, writepolicy.Options{Require: true, Content: writepolicy.ContentOptions{Options: contentcheck.Options{PII: contentcheck.Warn}, Warn: warn}})}
-		if _, err := warnMode.WriteVersion("/p.md", 0, sin, tags); err != nil {
-			t.Fatalf("warn mode pii: %v", err)
+		warnMode := writepolicy.Enforce(raw, writepolicy.Options{Require: true, Content: writepolicy.ContentOptions{Options: contentcheck.Options{PII: contentcheck.Warn}}})
+		warnings, err := write(t, warnMode, "/p.md", 0, sin, tags)
+		if err != nil || len(warnings) != 1 || !strings.HasPrefix(warnings[0], "content check: pii/canadian-sin at line 3; fix: remove it") {
+			t.Errorf("warn mode pii = %q, %v", warnings, err)
 		}
-		if len(warned) != 1 || warned[0].path != "/p.md" || warned[0].override != "" || strings.Join(warned[0].rules, ",") != "canadian-sin" {
-			t.Errorf("warned = %+v", warned)
-		}
-		off := backendtest.Direct{Store: writepolicy.Enforce(raw, writepolicy.Options{Require: true, Content: writepolicy.ContentOptions{Options: contentcheck.Options{PII: contentcheck.Off}, Warn: warn}})}
-		warned = nil
-		if _, err := off.WriteVersion("/q.md", 0, sin, tags); err != nil || len(warned) != 0 {
-			t.Errorf("off mode pii = %v, warned %+v", err, warned)
+		off := writepolicy.Enforce(raw, writepolicy.Options{Require: true, Content: writepolicy.ContentOptions{Options: contentcheck.Options{PII: contentcheck.Off}}})
+		if warnings, err := write(t, off, "/q.md", 0, sin, tags); err != nil || len(warnings) != 0 {
+			t.Errorf("off mode pii = %q, %v", warnings, err)
 		}
 	})
 	t.Run("override lands personal data and is reported, never a secret", func(t *testing.T) {
-		warned = nil
-		gated := backendtest.Direct{Store: writepolicy.Enforce(raw, writepolicy.Options{Require: true, Content: writepolicy.ContentOptions{Warn: warn}})}
+		gated := writepolicy.Enforce(raw, writepolicy.Options{Require: true})
 		meta := map[string]string{"tags": "topic", contentcheck.OverrideKey: "test fixture number"}
-		doc, err := gated.WriteVersion("/sin.md", 0, sin, meta)
+		warnings, err := write(t, gated, "/sin.md", 0, sin, meta)
 		if err != nil {
 			t.Fatalf("override: %v", err)
 		}
-		if doc.Metadata[contentcheck.OverrideKey] != "test fixture number" {
-			t.Errorf("override not recorded: %v", doc.Metadata)
+		if doc, err := (backendtest.Direct{Store: raw}).Get("/sin.md", 0); err != nil || doc.Metadata[contentcheck.OverrideKey] != "test fixture number" {
+			t.Errorf("override not recorded: %v, %v", err, doc)
 		}
-		if len(warned) != 1 || warned[0].override != "test fixture number" {
-			t.Errorf("warned = %+v", warned)
+		if len(warnings) != 1 || warnings[0] != "content check overridden (test fixture number): pii/canadian-sin at line 3" {
+			t.Errorf("warnings = %q", warnings)
 		}
-		if _, err := gated.WriteVersion("/sin.md", 1, sin, map[string]string{"tags": "topic", contentcheck.OverrideKey: "  "}); !errors.Is(err, writepolicy.ErrContentBlocked) {
+		if _, err := write(t, gated, "/sin.md", 1, sin, map[string]string{"tags": "topic", contentcheck.OverrideKey: "  "}); !errors.Is(err, writepolicy.ErrContentBlocked) {
 			t.Errorf("blank override = %v, want blocked", err)
 		}
-		_, err = gated.WriteVersion("/keys.md", 0, secret, map[string]string{"tags": "topic", contentcheck.OverrideKey: "documented example key"})
+		_, err = write(t, gated, "/keys.md", 0, secret, map[string]string{"tags": "topic", contentcheck.OverrideKey: "documented example key"})
 		var contentErr *writepolicy.ContentError
 		if !errors.Is(err, writepolicy.ErrContentBlocked) || !errors.As(err, &contentErr) || !strings.Contains(contentErr.RejectionMessage(), contentcheck.Remedy(contentErr.Findings)) {
 			t.Errorf("secret under override = %v, want blocked with no override offered", err)
@@ -186,6 +169,91 @@ func TestEnforceContent(t *testing.T) {
 			}})}
 		if _, err := unreadable.WriteVersion("/r.md", 0, secret, tags); !errors.Is(err, writepolicy.ErrContentBlocked) {
 			t.Errorf("secret with the floor unreadable = %v, want the content refusal, not the floor error", err)
+		}
+	})
+}
+
+// write sends one publish with a warning sink and returns what it collected.
+func write(t *testing.T, store backend.Store, path string, version int, body []byte, meta map[string]string) ([]string, error) {
+	t.Helper()
+	var warnings []string
+	_, err := store.Publish(context.Background(), backend.WriteRequest{Path: path, ExpectedVersion: version, Content: body, Metadata: meta, Warnings: &warnings})
+	return warnings, err
+}
+
+func TestEnforceSecretsWarn(t *testing.T) {
+	raw := newStore(t)
+	if _, err := (backendtest.Direct{Store: raw}).WriteVersion(publishpolicy.DocumentPath, 0, []byte(warnPolicy), policyMeta); err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	// The doctor's three findings on the demarkus soul: one container DSN.
+	dsn := []byte(storetest.WireSecret)
+	placeholder := []byte(strings.Replace(storetest.WireSecret, "postgres:postgres@", "postgres:${POSTGRES_PASSWORD}@", 1))
+	sin := []byte("# Person\n\nSIN 046 454 286\n")
+	tags := map[string]string{"tags": "postgres"}
+	warned := writepolicy.Enforce(raw, writepolicy.Options{Require: true, Content: writepolicy.ContentOptions{
+		SecretsWarn: true, Options: contentcheck.Options{PII: contentcheck.Warn},
+	}})
+
+	t.Run("a secret lands with the stored remedy, the value never echoed", func(t *testing.T) {
+		warnings, err := write(t, warned, "/dsn.md", 0, dsn, tags)
+		if err != nil {
+			t.Fatalf("warn mode secret: %v", err)
+		}
+		if len(warnings) != 1 || !strings.HasPrefix(warnings[0], "content check: secret/connection-string-password at line 4; fix: treat the secret as compromised") || strings.Contains(warnings[0], "55432") {
+			t.Errorf("warnings = %q", warnings)
+		}
+	})
+	t.Run("the placeholder form is clean", func(t *testing.T) {
+		if warnings, err := write(t, warned, "/dsn.md", 1, placeholder, tags); err != nil || len(warnings) != 0 {
+			t.Errorf("placeholder = %q, %v; want no warning", warnings, err)
+		}
+	})
+	t.Run("personal data still follows its own mode", func(t *testing.T) {
+		blockPII := writepolicy.Enforce(raw, writepolicy.Options{Require: true, Content: writepolicy.ContentOptions{SecretsWarn: true}})
+		if _, err := write(t, blockPII, "/p.md", 0, sin, tags); !errors.Is(err, writepolicy.ErrContentBlocked) {
+			t.Errorf("pii under secrets warn = %v, want blocked", err)
+		}
+		warnings, err := write(t, warned, "/p.md", 0, sin, tags)
+		if err != nil || len(warnings) != 1 || !strings.HasPrefix(warnings[0], "content check: pii/canadian-sin at line 3; fix: remove it") {
+			t.Errorf("pii warn = %q, %v", warnings, err)
+		}
+	})
+}
+
+func TestEnforceReportsWarnLevelPolicyMisses(t *testing.T) {
+	raw := newStore(t)
+	if _, err := (backendtest.Direct{Store: raw}).WriteVersion(publishpolicy.DocumentPath, 0, []byte("# Write Policy\n\nstrictness: warn\nrequire_tags: category\n"), policyMeta); err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	gated := writepolicy.Enforce(raw, writepolicy.Options{Require: true})
+	t.Run("a miss under warn lands and is named", func(t *testing.T) {
+		warnings, err := write(t, gated, "/a.md", 0, []byte("# A\n"), nil)
+		if err != nil {
+			t.Fatalf("warn-level miss: %v", err)
+		}
+		want := "publish policy (warn): missing-tags"
+		if len(warnings) != 1 || warnings[0] != want {
+			t.Errorf("warnings = %q, want [%q]", warnings, want)
+		}
+	})
+	t.Run("a compliant write leaves the sink empty", func(t *testing.T) {
+		if warnings, err := write(t, gated, "/a.md", 1, []byte("# A\n"), map[string]string{"tags": "category:guide"}); err != nil || len(warnings) != 0 {
+			t.Errorf("compliant = %q, %v", warnings, err)
+		}
+	})
+	t.Run("no sink is fine", func(t *testing.T) {
+		if _, err := (backendtest.Direct{Store: gated}).WriteVersion("/b.md", 0, []byte("# B\n"), nil); err != nil {
+			t.Errorf("without a sink: %v", err)
+		}
+	})
+	t.Run("a refusal leaves the sink empty", func(t *testing.T) {
+		if _, err := (backendtest.Direct{Store: raw}).WriteVersion(publishpolicy.DocumentPath, 1, []byte("# Write Policy\n\nstrictness: block\nrequire_tags: category\n"), policyMeta); err != nil {
+			t.Fatalf("tighten policy: %v", err)
+		}
+		warnings, err := write(t, gated, "/c.md", 0, []byte("# C\n"), nil)
+		if !errors.Is(err, writepolicy.ErrPolicyBlocked) || len(warnings) != 0 {
+			t.Errorf("blocked = %q, %v", warnings, err)
 		}
 	})
 }

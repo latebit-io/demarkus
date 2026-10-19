@@ -32,11 +32,11 @@ func TestStatusRendering(t *testing.T) {
 	}{
 		{name: "known",
 			s:      sessionStatus{project: ProjectStatus{State: ProjectKnown, Root: "/app/", LastJournal: "2026-10-13", JournalPath: "/app/journal/2026-10-13.md"}, git: git},
-			header: "Project slug: `app`. Project root: `/app/`. Bound store: `soul`. Project: known, newest journal entry `/app/journal/2026-10-13.md`.\n\nWhere it stands:\n- branch: feat/x at 01234567",
+			header: "Project slug: `app`. Project root: `/app/`. Bound store: `soul`. Project: known, newest journal entry `/app/journal/2026-10-13.md`. Verdict: use\n\nWhere it stands:\n- branch: feat/x at 01234567",
 			user:   "demarkus: soul soul · project app · last journal 2026-10-13 · feat/x, 3 uncommitted"},
 		{name: "root project, no journal",
 			s:      sessionStatus{project: ProjectStatus{State: ProjectKnown, Root: "/", NoJournal: true}, gitNote: "not a git repository"},
-			header: "Project root: `/`. Bound store: `soul`. Project: known, no journal entry yet.\n\nWhere it stands: no git facts (not a git repository).",
+			header: "Project root: `/`. Bound store: `soul`. Project: known, no journal entry yet. Verdict: use\n\nWhere it stands: no git facts (not a git repository).",
 			user:   "demarkus: soul soul · project app"},
 		{name: "new",
 			s:      sessionStatus{project: ProjectStatus{State: ProjectNew, Root: "/app/"}, git: git},
@@ -44,7 +44,7 @@ func TestStatusRendering(t *testing.T) {
 			user:   "demarkus: soul soul · project app (new) · feat/x, 3 uncommitted"},
 		{name: "unknown never renders as new",
 			s:      sessionStatus{project: ProjectStatus{State: ProjectUnknown, Root: "/app/", Reason: "no answer within 3s"}, git: git},
-			header: "Project: unknown (no answer within 3s). Treat recall misses as inconclusive.",
+			header: "Project: unknown (no answer within 3s). Treat recall misses as inconclusive. Verdict: use, root unconfirmed: no answer within 3s",
 			user:   "demarkus: soul soul · project app (status unknown: no answer within 3s) · feat/x, 3 uncommitted",
 			deny:   "new"},
 		{name: "health warning replaces the tail",
@@ -115,5 +115,17 @@ func TestReadStatusKeepsTheDeadline(t *testing.T) {
 	}
 	if s.project.State != ProjectUnknown || s.git != nil || !strings.Contains(s.gitNote, "did not answer") {
 		t.Errorf("status = %+v", s)
+	}
+}
+
+// A stale binding's header carries the stop verdict the store partial acts on.
+func TestAgentHeaderCarriesTheStopVerdict(t *testing.T) {
+	stale := project.Resolution{Slug: "app", Store: "gone", State: project.StateStale}
+	s := sessionStatus{project: ProjectStatus{State: ProjectKnown, Root: "/app/"}, gitNote: "not a git repository"}
+	h := s.agentHeader(stale)
+	for _, want := range []string{" Verdict: stop:", "/soul-join", "/soul-default"} {
+		if !strings.Contains(h, want) {
+			t.Errorf("header = %q, want %q", h, want)
+		}
 	}
 }

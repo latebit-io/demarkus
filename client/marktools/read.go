@@ -50,9 +50,10 @@ func (t *Tools) List(ctx context.Context, args ListArgs) Result {
 		}
 	}
 	var extra map[string]string
-	if args.Cursor == "" && result.Response.Status == protocol.StatusOK && layout.IsADRDir(target.Path) {
+	status := result.Response.Status
+	if args.Cursor == "" && (status == protocol.StatusOK || status == protocol.StatusNotFound) && layout.IsADRDir(target.Path) {
 		// The number an agent is about to take, on the first page only: every
-		// page of the directory, archived included.
+		// page of the directory, archived included; a missing directory starts.
 		store := &audit.ClientStore{Client: t.backend, Host: target.Host, Token: list.Token}
 		next, err := audit.NextADR(ctx, store, target.Path)
 		if err != nil {

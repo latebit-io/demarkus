@@ -14,7 +14,7 @@ At the start of substantive work, compare `Where it stands:` with the newest jou
 
 ## Record as you go
 
-Write without prompting: decisions to `<root>adr/<NNNN>-<title>.md` (`type: Decision`), bug lessons to `<root>debugging.md`, patterns to `<root>patterns.md`, session progress through `/soul-journal`, and architecture, roadmap, debt, plans or open questions to their file under `<root>`. Keep `<root>index.md` current. The `remember` skill has the layout. Write-time gates (tags, destination, retention, style) say what to fix; follow them.
+Write without prompting: decisions to `<root>adr/<NNNN>-<title>.md` (`type: Decision`), bug lessons to `<root>debugging.md`, patterns to `<root>patterns.md`, session progress through `/soul-journal`, and architecture, roadmap, debt, plans or open questions to their file under `<root>`. Keep `<root>index.md` current. The `remember` skill has the layout. Write-time gates (tags, destination, retention, style, secrets) say what to fix; follow them.
 
 ## Restraint
 

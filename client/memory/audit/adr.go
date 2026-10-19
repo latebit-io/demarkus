@@ -7,18 +7,20 @@ import (
 	"strconv"
 
 	"github.com/latebit-io/demarkus/client/listwalk"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // NextADR is the next unused decision number in dir, zero padded, over
 // every page with archived records included: a retired number is never
-// reused. An empty directory starts at 0001.
+// reused. An empty or absent directory starts at 0001.
 func NextADR(ctx context.Context, store Store, dir string) (string, error) {
 	highest := 0
 	w := listwalk.Walker{
 		Client: storeLister{store}, IncludeArchived: true, MaxDepth: listwalk.RootOnly,
-		// Subdirectories hold no records; anything else hides a number.
+		// Subdirectories hold no records and a missing dir holds none;
+		// anything else hides a number.
 		OnProblem: func(p *listwalk.Problem) error {
-			if p.Kind == listwalk.ProblemDepth {
+			if p.Kind == listwalk.ProblemDepth || (p.Kind == listwalk.ProblemStatus && p.Status == protocol.StatusNotFound && p.Dir == dir) {
 				return nil
 			}
 			return listwalk.Abort(p)

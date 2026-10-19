@@ -61,13 +61,15 @@ func gitFailure(ctx context.Context, err error) string {
 	return err.Error()
 }
 
-// agentHeader is the project line, its state, and where the work stands.
+// agentHeader is the project line, its state, the verdict a prompt acts on,
+// and where the work stands. The local store is configured by the time a
+// header is built, so the verdict needs no second check.
 func (s *sessionStatus) agentHeader(r project.Resolution) string {
 	stands := standsHeading + " no git facts (" + s.gitNote + ")."
 	if s.git != nil {
 		stands = strings.TrimSuffix(facts.Render(standsHeading, facts.Session{Git: s.git}), "\n")
 	}
-	return r.Header(s.project.Root) + " " + s.project.sentence() + "\n\n" + stands
+	return r.Header(s.project.Root) + " " + s.project.sentence() + " Verdict: " + Verdict(r, s.project, true) + "\n\n" + stands
 }
 
 func (p *ProjectStatus) sentence() string {
