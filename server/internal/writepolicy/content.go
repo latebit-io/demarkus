@@ -19,8 +19,8 @@ var ErrContentBlocked = errors.New("content check blocked mutation")
 // lets through with a note reaches the writer through WriteRequest.Warnings.
 type ContentOptions struct {
 	contentcheck.Options
-	// SecretsWarn lets a secret land with a note, the one release a tier
-	// warns before it refuses; the rules always run.
+	// SecretsWarn lets a secret land with a note instead of refusing it: an
+	// operator knob no tier sets by default; the rules always run.
 	SecretsWarn bool
 }
 

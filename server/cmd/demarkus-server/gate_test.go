@@ -7,6 +7,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/protocol/wiretest"
 	"github.com/latebit-io/demarkus/server/internal/storetest"
 )
 
@@ -19,21 +20,19 @@ func TestSoulWritesAreGated(t *testing.T) {
 		meta["auth"] = token
 		return exchange(t, world, protocol.Request{Verb: protocol.VerbPublish, Path: path, Metadata: meta, Body: body})
 	}
-	tagged := func(version string) map[string]string {
-		return map[string]string{"expected-version": version, "tags": "postgres"}
-	}
+	tagged := func() map[string]string { return map[string]string{"expected-version": "0", "tags": "postgres"} }
 
-	r := send("/fixture/dsn.md", tagged("0"), storetest.WireSecret)
-	if r.Status != protocol.StatusCreated || !strings.HasPrefix(r.Metadata["warning"], "content check: secret/connection-string-password at line 4") || strings.Contains(r.Metadata["warning"], "55432") {
-		t.Errorf("secret on a soul: status %s, warning %q; want created with the rule and line, never the value", r.Status, r.Metadata["warning"])
+	// The refusal is the wire golden's, path aside: one wording, pinned once.
+	want := wiretest.Response(t, "publish-refused")
+	if r := send("/fixture/dsn.md", tagged(), storetest.WireSecret); r.Status != want.Status || r.Body != want.Body {
+		t.Errorf("secret on a soul: status %s, body %q; want the publish-refused golden", r.Status, r.Body)
 	}
-	clean := strings.Replace(storetest.WireSecret, "postgres:postgres@", "postgres:${POSTGRES_PASSWORD}@", 1)
-	if r := send("/fixture/dsn.md", tagged("1"), clean); r.Status != protocol.StatusCreated || r.Metadata["warning"] != "" {
+	if r := send("/fixture/dsn.md", tagged(), storetest.WireSecretFixed); r.Status != protocol.StatusCreated || r.Metadata["warning"] != "" {
 		t.Errorf("placeholder password: status %s, warning %q; want created, no warning", r.Status, r.Metadata["warning"])
 	}
 	// No policy document is the empty policy at warn: an untagged write lands
 	// and says so, the hook's tag gate mirrored on the server.
-	if r := send("/fixture/dsn.md", map[string]string{"expected-version": "2"}, "# Untagged\n"); r.Status != protocol.StatusCreated || r.Metadata["warning"] != "publish policy (warn): missing-tags" {
+	if r := send("/fixture/dsn.md", map[string]string{"expected-version": "1"}, "# Untagged\n"); r.Status != protocol.StatusCreated || r.Metadata["warning"] != "publish policy (warn): missing-tags" {
 		t.Errorf("no policy document: status %s, warning %q; want created with the tag warning", r.Status, r.Metadata["warning"])
 	}
 
@@ -41,7 +40,7 @@ func TestSoulWritesAreGated(t *testing.T) {
 	if r := send(publishpolicy.DocumentPath, map[string]string{"expected-version": "0", "tags": "policy", "type": "Policy"}, policy); r.Status != protocol.StatusCreated {
 		t.Fatalf("publish a soul policy: status %s, body %q", r.Status, r.Body)
 	}
-	if r := send("/fixture/dsn.md", map[string]string{"expected-version": "3"}, "# Untagged again\n"); r.Status != protocol.StatusBadRequest || !strings.Contains(r.Body, "missing-tags") {
+	if r := send("/fixture/dsn.md", map[string]string{"expected-version": "2"}, "# Untagged again\n"); r.Status != protocol.StatusBadRequest || !strings.Contains(r.Body, "missing-tags") {
 		t.Errorf("untagged under a block policy: status %s, body %q; want bad-request naming missing-tags", r.Status, r.Body)
 	}
 	if r := send(publishpolicy.DocumentPath, map[string]string{"expected-version": "1", "tags": "policy"}, "# Write Policy\n\nstrictness: nonsense\n"); r.Status != protocol.StatusBadRequest {

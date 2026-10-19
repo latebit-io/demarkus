@@ -188,7 +188,7 @@ func TestEnforceSecretsWarn(t *testing.T) {
 	}
 	// The doctor's three findings on the demarkus soul: one container DSN.
 	dsn := []byte(storetest.WireSecret)
-	placeholder := []byte(strings.Replace(storetest.WireSecret, "postgres:postgres@", "postgres:${POSTGRES_PASSWORD}@", 1))
+	placeholder := []byte(storetest.WireSecretFixed)
 	sin := []byte("# Person\n\nSIN 046 454 286\n")
 	tags := map[string]string{"tags": "postgres"}
 	warned := writepolicy.Enforce(raw, writepolicy.Options{Require: true, Content: writepolicy.ContentOptions{
