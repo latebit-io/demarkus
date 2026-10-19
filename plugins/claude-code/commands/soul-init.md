@@ -35,7 +35,7 @@ Host-only: `demarkus-plugin` exit 127 (a sandbox, e.g. Cowork): reply in one lin
        `"$HOME/.demarkus/bin/demarkus-plugin" provision init isolated`
        Creates a separate soul at `~/.demarkus/plugin-soul/` on a free port in `16310+`.
 
-3. MCP registration: the installed integration. Report mode, soul path, port. MCP not loaded yet → restart Claude Code, verify with `/soul`.
+3. MCP registration: the installed integration. Report mode, soul path, port. MCP not loaded yet → restart Claude, verify with `/soul`.
 
 ## Important
 

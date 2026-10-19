@@ -20,7 +20,7 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 
 ## Steps
 
-1. **Inventory.** `mark_promote` with `url: <root>`, `phase: refresh`, no `body`: `status: inventory`, rows `- <path>: promoted-via <via>; promoted <target>@v<N>`, `coverage:` lines (documents listed but not read: skipped-error). `refresh needs body` (older server): say so, stop. Other failure: exact error, stop. `$ARGUMENTS` names a path: keep the rows and `coverage:` lines at or under it; no row: say no promoted row matches it, stop. No row at all: nothing promoted, say so, stop.
+1. **Inventory.** `mark_promote` with `url: <root>`, `phase: refresh`, no `body`. `refresh needs body` (older server): say so, stop. Other failure: exact error, stop. `status: inventory` carries rows `- <path>: promoted-via <via>; promoted <target>@v<N>` and `coverage:` lines, one per document listed but not read; a coverage line is a skipped-error row. `$ARGUMENTS` names a path: keep the rows and coverage lines at or under it. No row of either kind: nothing promoted in that scope, name it, stop.
 
 2. **Destinations.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: surface, stop. `NONE`: no destination configured, nothing to refresh against (earlier promotions need their destination re-added first); say so, stop. Otherwise note the rows (`knowledge <slug>`, `target <slug> <path>`).
 

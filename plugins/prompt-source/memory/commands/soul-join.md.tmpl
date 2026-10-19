@@ -74,7 +74,7 @@ Hosted {{.Store}}: skip the QUIC join and MCP-registration steps below, but stil
    )
    ```
 
-   Add `--insecure` before `--bind` only when the user explicitly selected it. {{if eq .Harness "claude"}}Use `CLAUDE_PROJECT_DIR` for a public {{.Store}} executed through Bash; for the user-terminal token command, shell-escape its current absolute value rather than relying on that variable outside Claude Code.{{else}}Use the shell-escaped literal absolute project directory, not a variable a separate terminal may expand from the wrong cwd.{{end}}
+   Add `--insecure` before `--bind` only when the user explicitly selected it. {{if eq .Harness "claude"}}Use `CLAUDE_PROJECT_DIR` for a public {{.Store}} executed through Bash; for the user-terminal token command, shell-escape its current absolute value rather than relying on that variable outside Claude.{{else}}Use the shell-escaped literal absolute project directory, not a variable a separate terminal may expand from the wrong cwd.{{end}}
 
    Continue only on `OK` with one valid `slug=`, `host=`, `insecure=`, and optional `token-file=` value. `FAIL`: surface the message and stop. Reachability is checked by the first MCP call; absence of an HTTP probe is not success.
 

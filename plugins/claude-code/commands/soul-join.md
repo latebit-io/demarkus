@@ -70,7 +70,7 @@ Hosted soul: skip the QUIC join and MCP-registration steps below, but still appl
    )
    ```
 
-   Add `--insecure` before `--bind` only when the user explicitly selected it. Use `CLAUDE_PROJECT_DIR` for a public soul executed through Bash; for the user-terminal token command, shell-escape its current absolute value rather than relying on that variable outside Claude Code.
+   Add `--insecure` before `--bind` only when the user explicitly selected it. Use `CLAUDE_PROJECT_DIR` for a public soul executed through Bash; for the user-terminal token command, shell-escape its current absolute value rather than relying on that variable outside Claude.
 
    Continue only on `OK` with one valid `slug=`, `host=`, `insecure=`, and optional `token-file=` value. `FAIL`: surface the message and stop. Reachability is checked by the first MCP call; absence of an HTTP probe is not success.
 

@@ -41,7 +41,7 @@ Before any Bash, the entire argument must match `https://` plus a DNS hostname, 
 
    Endpoint registration fails: stop without running `knowledge-register`. Then run `claude mcp list`: `<slug>` present → a half-registered endpoint; give `claude mcp remove '<slug>'` as the repair and stop. Absent → report that no endpoint was created. Gate registration fails: leave the endpoint in place, report that exact partial state, give the failed command as the repair. No speculative rollback; never remove state another integration may use.
 
-4. Report local registration complete and stop. Tell the user to restart Claude Code and complete OAuth when prompted. Do not wait for OAuth, invoke MCP tools, or continue across the restart.
+4. Report local registration complete and stop. Tell the user to restart Claude and complete OAuth when prompted. Do not wait for OAuth, invoke MCP tools, or continue across the restart.
 
 ## After Restart
 
