@@ -25,8 +25,9 @@
 
 Standalone benchmark runners, evaluation datasets, performance probes, and reports
 belong on the `benchmarks` branch, never in changes destined for `main`. Keep
-ordinary correctness and regression tests with production code. Preserve raw
-evidence under ignored benchmark artifacts.
+ordinary correctness and regression tests with production code; a Go `Benchmark`
+function in a `*_test.go` file is one of those and stays. Preserve raw evidence
+under ignored benchmark artifacts.
 
 ## Prompt and tool-description token budget
 

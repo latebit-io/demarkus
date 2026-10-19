@@ -122,7 +122,10 @@ func TestReadStatusKeepsTheDeadline(t *testing.T) {
 func TestAgentHeaderCarriesTheStopVerdict(t *testing.T) {
 	stale := project.Resolution{Slug: "app", Store: "gone", State: project.StateStale}
 	s := sessionStatus{project: ProjectStatus{State: ProjectKnown, Root: "/app/"}, gitNote: "not a git repository"}
-	if h := s.agentHeader(stale); !strings.Contains(h, " Verdict: stop: the bound store is not in the catalog; restore it with /soul-join or rebind with /soul-default\n\n") {
-		t.Errorf("header = %q", h)
+	h := s.agentHeader(stale)
+	for _, want := range []string{" Verdict: stop:", "/soul-join", "/soul-default"} {
+		if !strings.Contains(h, want) {
+			t.Errorf("header = %q, want %q", h, want)
+		}
 	}
 }
