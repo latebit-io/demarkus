@@ -22,7 +22,7 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 
 ## Steps
 
-1. **Inventory.** `mark_promote` with `url: <root>`, `phase: refresh`, no `body`: `status: inventory`, rows `- <path>: promoted-via <via>; promoted <target>@v<N>`, `coverage:` lines (documents listed but not read: skipped-error). `refresh needs body` (older server): say so, stop. Other failure: exact error, stop. `$ARGUMENTS` names a path: keep the rows at or under it; none: say no promoted row matches it, stop. No row: nothing promoted, say so, stop.
+1. **Inventory.** `mark_promote` with `url: <root>`, `phase: refresh`, no `body`: `status: inventory`, rows `- <path>: promoted-via <via>; promoted <target>@v<N>`, `coverage:` lines (documents listed but not read: skipped-error). `refresh needs body` (older server): say so, stop. Other failure: exact error, stop. `$ARGUMENTS` names a path: keep the rows and `coverage:` lines at or under it; no row: say no promoted row matches it, stop. No row at all: nothing promoted, say so, stop.
 
 2. **Destinations.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: surface, stop. `NONE`: no destination configured, nothing to refresh against (earlier promotions need their destination re-added first); say so, stop. Otherwise note the rows (`knowledge <slug>`, `target <slug> <path>`).
 
@@ -38,7 +38,7 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
    - **Re-promote (soul proposes upward):** run `/promote` on this doc (update path, gated), then end this document's refresh; no marker bump.
    Always confirm before writing, a stub included.
 
-5. **Report.** Per doc: in-sync, refreshed (stub or full), surfaced-for-decision, dangling, skipped-error. Full paths. Say nothing was stale only when no row is skipped-error; otherwise report the skipped rows.
+5. **Report.** Per doc: in-sync, refreshed (stub or full), surfaced-for-decision, dangling, skipped-error. Full paths. Say nothing was stale only when every row is in-sync; a skipped-error row makes the refresh incomplete, say so.
 
 ## Don't
 
