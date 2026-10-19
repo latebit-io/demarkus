@@ -10,7 +10,9 @@ import (
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
-func TestWalkCurrent(t *testing.T) {
+// The observed index build is the one walk a catalog derives from: current
+// documents only, archived and legacy-archived excluded, indexed as it goes.
+func TestBuildIndexObservedWalksCurrentDocuments(t *testing.T) {
 	dir := t.TempDir()
 	s := New(dir)
 
@@ -43,21 +45,18 @@ func TestWalkCurrent(t *testing.T) {
 	}
 
 	got := make(map[string]storefmt.CurrentDoc)
-	if err := s.WalkCurrent(func(d storefmt.CurrentDoc) error {
-		got[d.Path] = d
-		return nil
-	}); err != nil {
-		t.Fatalf("WalkCurrent: %v", err)
+	if err := s.BuildIndexObserved(func(d storefmt.CurrentDoc) { got[d.Path] = d }); err != nil {
+		t.Fatalf("BuildIndexObserved: %v", err)
 	}
 
 	if _, ok := got["/archived.md"]; ok {
-		t.Error("archived document should be excluded from WalkCurrent")
+		t.Error("archived document should be excluded from the walk")
 	}
 	if _, ok := got["/legacy.md"]; ok {
-		t.Error("legacy archived tip should be excluded from WalkCurrent")
+		t.Error("legacy archived tip should be excluded from the walk")
 	}
-	if len(got) != 2 {
-		t.Fatalf("walked %d documents, want 2: %v", len(got), keysOf(got))
+	if len(got) != 2 || s.IndexSize() != 2 {
+		t.Fatalf("walked %d documents, indexed %d, want 2: %v", len(got), s.IndexSize(), keysOf(got))
 	}
 
 	a, ok := got["/a.md"]
@@ -78,11 +77,8 @@ func TestWalkCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = make(map[string]storefmt.CurrentDoc)
-	if err := s.WalkCurrent(func(d storefmt.CurrentDoc) error {
-		got[d.Path] = d
-		return nil
-	}); err != nil {
-		t.Fatalf("WalkCurrent after explicit false: %v", err)
+	if err := s.BuildIndexObserved(func(d storefmt.CurrentDoc) { got[d.Path] = d }); err != nil {
+		t.Fatalf("BuildIndexObserved after explicit false: %v", err)
 	}
 	if _, ok := got["/legacy.md"]; !ok || len(got) != 3 {
 		t.Errorf("explicit false walk = %v, want legacy.md and three documents", keysOf(got))

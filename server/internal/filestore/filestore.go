@@ -18,12 +18,24 @@ import (
 // ErrClosed means a write reached the store after Close.
 var ErrClosed = fmt.Errorf("filestore: %w", backend.ErrClosed)
 
+// ErrReadOnly means the store was opened read-only and takes no write.
+var ErrReadOnly = fmt.Errorf("filestore: %w", backend.ErrReadOnly)
+
+// ErrDocumentQuota rejects a create beyond Options.MaxDocuments; existing
+// documents keep taking updates, appends and archives.
+var ErrDocumentQuota = fmt.Errorf("document %w", backend.ErrQuota)
+
 // Store keeps file data, hash state, and catalog state behind one lock.
 type Store struct {
 	mu        sync.RWMutex
 	documents *protocolstore.Store
 	catalog   *catalog.Catalog
 	closed    bool
+	readOnly  bool
+	// maxDocuments caps distinct paths; zero is unlimited. unindexed counts
+	// the entries the open walk skipped, held against the cap: a document the
+	// index cannot see still exists on disk.
+	maxDocuments, unindexed int
 
 	// WATCH state, fixed at Open: the hub and the journal that makes its
 	// sequence durable. The hub's head is the last sequence assigned.
@@ -33,11 +45,16 @@ type Store struct {
 
 var _ backend.Store = (*Store)(nil)
 
-// Options configures WATCH on a file store.
+// Options configures a file store.
 type Options struct {
 	// ChangeRing enables WATCH with a hub of this many events; zero leaves
 	// WATCH off.
 	ChangeRing int
+	// ReadOnly refuses every write with backend.ErrReadOnly and opens no
+	// change journal, so nothing under the root is written.
+	ReadOnly bool
+	// MaxDocuments caps distinct document paths; zero is unlimited.
+	MaxDocuments int
 	// Logger receives change journal notices; nil uses slog.Default.
 	Logger *slog.Logger
 }
@@ -52,7 +69,8 @@ func New(documents *protocolstore.Store, lookup *catalog.Catalog) *Store {
 // the index first or every open starts a new epoch.
 func Open(documents *protocolstore.Store, lookup *catalog.Catalog, opts Options) (*Store, error) {
 	s := New(documents, lookup)
-	if opts.ChangeRing <= 0 {
+	s.readOnly, s.maxDocuments = opts.ReadOnly, opts.MaxDocuments
+	if opts.ChangeRing <= 0 || opts.ReadOnly {
 		return s, nil
 	}
 	logger := opts.Logger
@@ -142,8 +160,13 @@ func (s *Store) commit(ctx context.Context, req *backend.WriteRequest, op string
 	return call(ctx, func() (*storefmt.Document, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.closed {
-			return nil, ErrClosed
+		if err := s.writable(); err != nil {
+			return nil, err
+		}
+		// A new path past the cap is refused, whatever the expected version
+		// (an absent one writes unconditionally); an indexed path always lands.
+		if held := s.documents.IndexSize() + s.unindexed; s.maxDocuments > 0 && !s.documents.Indexed(req.Path) && held >= s.maxDocuments {
+			return nil, fmt.Errorf("%w: store holds %d documents (limit %d)", ErrDocumentQuota, held, s.maxDocuments)
 		}
 		document, err := write(s.writeSpec(ctx, req))
 		if storefmt.Committed(err) {
@@ -154,13 +177,24 @@ func (s *Store) commit(ctx context.Context, req *backend.WriteRequest, op string
 	})
 }
 
+// writable is the check every write runs first, under the lock.
+func (s *Store) writable() error {
+	switch {
+	case s.closed:
+		return ErrClosed
+	case s.readOnly:
+		return ErrReadOnly
+	}
+	return nil
+}
+
 // SetArchived commits archive and catalog state under one lock.
 func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (backend.ArchiveResult, error) {
 	return call(ctx, func() (backend.ArchiveResult, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.closed {
-			return backend.ArchiveResult{}, ErrClosed
+		if err := s.writable(); err != nil {
+			return backend.ArchiveResult{}, err
 		}
 		spec := &storefmt.ArchiveSpec{ArchiveChange: storefmt.ArchiveChange{Path: req.Path, Archived: req.Archived}}
 		if req.Precondition != nil {

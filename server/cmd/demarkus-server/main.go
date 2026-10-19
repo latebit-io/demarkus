@@ -9,15 +9,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/storefmt"
-	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/config"
+	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/logging"
 	"github.com/latebit-io/demarkus/server/internal/quicserve"
 	servertls "github.com/latebit-io/demarkus/server/internal/tls"
@@ -25,61 +23,23 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// currentWalker is the slice of a document store the catalog build needs.
-type currentWalker interface {
-	WalkCurrent(fn func(storefmt.CurrentDoc) error) error
-}
-
 type tokenReloader interface {
 	ReloadTokens() error
 }
 
-// buildCatalog builds the in-memory LOOKUP catalog and section index by
-// walking current documents, for backends that have no catalog of their
-// own. A failed walk leaves an empty catalog rather than aborting startup.
-func buildCatalog(s currentWalker, logger *slog.Logger) *catalog.Catalog {
-	cat := catalog.New()
-	err := s.WalkCurrent(func(d storefmt.CurrentDoc) error {
-		cat.Put(d.Path, d.Metadata, d.Body, d.Modified)
-		return nil
-	})
-	if err != nil && !logPartialWalk(logger, "lookup catalog", err) {
-		logger.Warn("lookup catalog build failed", "error", err)
-		return cat
-	}
-	logger.Info("lookup catalog built", "entries", cat.Len())
-	return cat
-}
-
-// logPartialWalk reports each entry a completed walk skipped and returns
-// true; any other error returns false for the caller to handle.
-func logPartialWalk(logger *slog.Logger, what string, err error) bool {
-	var partial *storefmt.PartialWalkError
-	if !errors.As(err, &partial) {
-		return false
-	}
-	for _, e := range partial.Skipped {
-		logger.Warn(what+" skipped entry", "path", e.Path, "error", e.Err)
-	}
-	if partial.Total > len(partial.Skipped) {
-		logger.Warn(what+" skipped more entries than listed", "total", partial.Total, "listed", len(partial.Skipped))
-	}
-	return true
-}
-
 // runtimeConfig wires the store into the one world runtime with the change
 // hub its commits feed.
-func runtimeConfig(cfg *config.Config, b backend, logger *slog.Logger) *worldruntime.Config {
+func runtimeConfig(cfg *config.Config, store *filestore.Store, logger *slog.Logger) *worldruntime.Config {
 	return &worldruntime.Config{
-		Store:          b.Store,
-		CloseBackend:   b.Close,
+		Store:          gated(store),
+		CloseBackend:   store.Close,
 		TokensFile:     cfg.TokensFile,
 		ReadOnly:       cfg.ReadOnly,
 		RequestTimeout: cfg.RequestTimeout,
 		RateLimit:      cfg.RateLimit,
 		RateBurst:      cfg.RateBurst,
 		Logger:         logger,
-		Changes:        b.Changes,
+		Changes:        store.Changes(),
 		MaxWatches:     cfg.MaxWatches,
 		MaxStreams:     cfg.MaxStreams,
 	}
@@ -139,8 +99,7 @@ func run() error {
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
 	tokens := flag.String("tokens", "", "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
-	storeBackend := flag.String("store", "",
-		fmt.Sprintf("document store backend: %s (overrides DEMARKUS_STORE)", strings.Join(storeNames(), " or ")))
+	storeBackend := flag.String("store", "", "document store backend: file (overrides DEMARKUS_STORE)")
 	readOnly := flag.Bool("read-only", false, "reject all write operations (also enabled via DEMARKUS_READ_ONLY)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
@@ -183,21 +142,19 @@ func run() error {
 		logger.Error("configuration invalid", "error", err)
 		return err
 	}
-	b, err := openStore(cfg, logger)
+	store, err := openStore(cfg, logger)
 	if err != nil {
 		logger.Error("store unavailable", "store", cfg.StoreBackend, "error", err)
 		return err
 	}
 	backendOwned := true
-	if b.Close != nil {
-		defer func() {
-			if backendOwned {
-				if err := b.Close(); err != nil {
-					logger.Warn("store close failed", "error", err)
-				}
+	defer func() {
+		if backendOwned {
+			if err := store.Close(); err != nil {
+				logger.Warn("store close failed", "error", err)
 			}
-		}()
-	}
+		}
+	}()
 	logger.Info("store ready", "backend", cfg.StoreBackend)
 
 	tlsConfig, prodMode, err := loadTLS(cfg, logger)
@@ -212,7 +169,7 @@ func run() error {
 		MaxIdleTimeout:        cfg.IdleTimeout,
 	}
 
-	runtime, err := worldruntime.New(runtimeConfig(cfg, b, logger))
+	runtime, err := worldruntime.New(runtimeConfig(cfg, store, logger))
 	if err != nil {
 		logger.Error("world runtime unavailable", "error", err)
 		return err

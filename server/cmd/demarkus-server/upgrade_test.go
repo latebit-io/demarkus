@@ -86,11 +86,11 @@ func openUpgradeCapture(t *testing.T, home string) (world worldruntime.Exchanger
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.DiscardHandler)
-	b, err := openStore(cfg, logger)
+	store, err := openStore(cfg, logger)
 	if err != nil {
 		t.Fatalf("open the captured soul: %v", err)
 	}
-	runtime, err := worldruntime.New(runtimeConfig(cfg, b, logger))
+	runtime, err := worldruntime.New(runtimeConfig(cfg, store, logger))
 	if err != nil {
 		t.Fatalf("world runtime over the captured soul: %v", err)
 	}

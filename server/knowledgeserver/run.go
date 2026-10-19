@@ -13,13 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"cloud.google.com/go/storage"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/blob/gcs"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
+	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/logging"
@@ -41,7 +41,8 @@ type Options struct {
 	// Logger defaults to JSON at info.
 	Logger *slog.Logger
 	// Buckets opens a world's bucket by name, for objects up to
-	// maxObjectBytes; nil opens it on GCS.
+	// maxObjectBytes; nil opens GCS on the first bucket world, so a server
+	// of file worlds needs no credentials.
 	Buckets func(ctx context.Context, bucket string, maxObjectBytes int64) (blob.Store, error)
 }
 
@@ -52,7 +53,7 @@ type Server struct {
 	configFile   string
 	logger       *slog.Logger
 	certificates *certsource.Source
-	gcs          *storage.Client
+	gcs          *gcs.Lazy
 	watchCtx     context.Context
 	stopWatchers context.CancelFunc
 	watcherGroup sync.WaitGroup
@@ -167,9 +168,36 @@ func Open(opts Options) (*Server, error) {
 	return s, nil
 }
 
-// bucketStores is the server's one store wiring: each world is a bucket
-// store over the blob store objects opens for it, in this replica's
-// compaction role.
+// worldStores is the server's store wiring: a file world opens its
+// directory, every other world a bucket store.
+func worldStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error), role bucketstore.CompactionRole) storeFactory {
+	buckets := bucketStores(objects, role)
+	return func(ctx context.Context, world *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore, error) {
+		if world.IsFile() {
+			return fileStore(world, hooks)
+		}
+		return buckets(ctx, world, hooks)
+	}
+}
+
+// fileStore opens a world's directory with the soul server's layout: the
+// store creates a writable one and refuses to write a read-only one. No
+// peers, so no commit hook.
+func fileStore(world *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore, error) {
+	store, err := filestore.OpenDir(world.Dir, filestore.Options{
+		ChangeRing:   changefeed.DefaultRingSize,
+		ReadOnly:     world.ReadOnly,
+		MaxDocuments: world.Limits.MaxDocuments,
+		Logger:       hooks.logger.With("dir", world.Dir),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("file world: %w", err)
+	}
+	return store, nil
+}
+
+// bucketStores opens each world as a bucket store over the blob store
+// objects opens for it, in this replica's compaction role.
 func bucketStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error), role bucketstore.CompactionRole) storeFactory {
 	return func(ctx context.Context, world *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore, error) {
 		bucket, err := objects(ctx, world)
@@ -208,17 +236,8 @@ func compactionRole(role knowledgeconfig.CompactionRole) bucketstore.CompactionR
 // whatever it reached.
 func (s *Server) open(buckets func(context.Context, string, int64) (blob.Store, error)) error {
 	if buckets == nil {
-		startupCtx, startupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer startupCancel()
-		client, err := storage.NewClient(startupCtx)
-		if err != nil {
-			s.logger.Error("GCS client unavailable", "error", err)
-			return err
-		}
-		s.gcs = client
-		buckets = func(_ context.Context, bucket string, maxObjectBytes int64) (blob.Store, error) {
-			return gcs.New(client, bucket, maxObjectBytes)
-		}
+		s.gcs = &gcs.Lazy{}
+		buckets = s.gcs.Open
 	}
 	objects := func(ctx context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
 		return buckets(ctx, world.Bucket.Name(), maxObjectBytes)
@@ -230,7 +249,7 @@ func (s *Server) open(buckets func(context.Context, string, int64) (blob.Store, 
 	}
 	s.peers = peers
 	worlds, err := newWorldManager(s.watchCtx, &s.watcherGroup, worldManagerConfig{
-		configFile: s.configFile, config: s.config, openStore: bucketStores(objects, compactionRole(s.config.Compaction.Role)), certs: s.certificates, peers: peers, logger: s.logger,
+		configFile: s.configFile, config: s.config, openStore: worldStores(objects, compactionRole(s.config.Compaction.Role)), certs: s.certificates, peers: peers, logger: s.logger,
 	})
 	if err != nil {
 		s.logger.Error("world startup failed", "error", err)
