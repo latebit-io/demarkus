@@ -4,7 +4,7 @@
       "name": "claude-memory",
       "surface": "memory",
       "harness": "claude",
-      "agent": "Claude Code",
+      "agent": "Claude",
       "output": "plugins/claude-code",
       "repo_instructions": "CLAUDE.md",
       "tool_form": "`mcp__<slug>__mark_*`"
@@ -31,7 +31,7 @@
       "name": "claude-knowledge",
       "surface": "knowledge",
       "harness": "claude",
-      "agent": "Claude Code",
+      "agent": "Claude",
       "output": "plugins/claude-code-knowledge",
       "repo_instructions": "CLAUDE.md",
       "tool_form": "`mcp__<slug>__mark_*`"

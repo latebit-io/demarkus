@@ -1,6 +1,6 @@
 # {{.MemoryPluginName}}: your demarkus {{.Store}} is available
 
-Your {{.Store}} is a versioned demarkus store behind the `{{.MemoryPluginName}}` MCP tools; "recall" and "record" here always mean it, never the host's built-in memory. Treat it like {{.RepoInstructions}}: consult before starting, record as you go, unprompted. {{if eq .Harness "claude"}}Never disable Claude Code's built-in memory tool unasked.{{else}}Never disable the host's built-in memory unasked.{{end}}
+Your {{.Store}} is a versioned demarkus store behind the `{{.MemoryPluginName}}` MCP tools; "recall" and "record" here always mean it, never the host's built-in memory. Treat it like {{.RepoInstructions}}: consult before starting, record as you go, unprompted. {{if eq .Harness "claude"}}Never disable Claude's built-in memory tool unasked.{{else}}Never disable the host's built-in memory unasked.{{end}}
 
 Everything lives under the header's `Project root:` (`<root>` below). Write through the bound store's tools ({{.ToolForm}}); the server's instructions carry the read contract. Ambiguous target: ask the user once.
 
@@ -12,7 +12,7 @@ At the start of substantive work, compare `Where it stands:` with the newest jou
 
 ## Record as you go
 
-Write without prompting: decisions to `<root>adr/<NNNN>-<title>.md`, bug lessons to `<root>debugging.md`, patterns to `<root>patterns.md`, session progress through `/soul-journal`, and architecture, roadmap, debt, plans or open questions to their file under `<root>`. Keep `<root>index.md` current. The `remember` skill has the layout. Write-time gates (tags, destination, retention, style) say what to fix; follow them.
+Write without prompting: decisions to `<root>adr/<NNNN>-<title>.md` (`type: Decision`), bug lessons to `<root>debugging.md`, patterns to `<root>patterns.md`, session progress through `/soul-journal`, and architecture, roadmap, debt, plans or open questions to their file under `<root>`. Keep `<root>index.md` current. The `remember` skill has the layout. Write-time gates (tags, destination, retention, style) say what to fix; follow them.
 
 ## Restraint
 

@@ -59,7 +59,7 @@ Host-only: `demarkus-plugin` exit 127 (a sandbox, e.g. Cowork): reply in one lin
    - Server not running (managed mode) → "Run /soul-init to restart, or check that demarkus-server is in the bin directory."
    - Server not running (reuse mode) → "Restart it with its service manager or original launch command, or rerun /soul-init to switch modes."
    - Connectivity unauthorized → "Token mismatch; rerun /soul-init."
-   - Managed binary missing or stale → "Remove only the affected managed binary, then restart Claude Code so provisioning reinstalls it; do not delete the shared bin directory."
+   - Managed binary missing or stale → "Remove only the affected managed binary, then restart Claude so provisioning reinstalls it; do not delete the shared bin directory."
    - Reuse-mode server binary broken → "Repair or restart it with its own service manager; do not reinstall shared plugin binaries."
    ```
 
