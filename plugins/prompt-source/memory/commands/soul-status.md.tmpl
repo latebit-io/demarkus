@@ -12,7 +12,7 @@ Diagnose the plugin's setup.
 
 3. **Connectivity.** `mark_fetch /index.md` through the store's server: `ok`, `not-found`, `unauthorized`, or the failure verbatim.
 
-4. **Report.** Step 1's lines, the servers, the connectivity result, then the fix for anything degraded that line 1 does not already name: `unauthorized` → "Token mismatch; rerun /soul-init." A managed binary not `ok` → "Remove only that binary, then restart {{.Agent}} so provisioning reinstalls it; do not delete the shared bin directory." A reused server's binary broken → "Repair or restart it with its own service manager; do not reinstall shared plugin binaries."
+4. **Report.** Step 1's lines, the servers, the connectivity result (`not checked` when step 3 was skipped), then the fix for anything degraded that line 1 does not already name: `unauthorized` → "Token mismatch; rerun /soul-init." A managed binary not `ok` → "Remove only that binary, then restart {{.Agent}} so provisioning reinstalls it; do not delete the shared bin directory." A reused server's binary broken → "Repair or restart it with its own service manager; do not reinstall shared plugin binaries."
 
 ## Don't
 
