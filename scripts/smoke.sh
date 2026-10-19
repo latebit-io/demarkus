@@ -1,14 +1,17 @@
 #!/bin/bash
-# Smoke test of built binaries over real QUIC: the file server on a temp root and
-# the knowledge server against fake-gcs-server in Docker.
+# Smoke test of built binaries over real QUIC: the file server on a temp root,
+# the knowledge server on a file world with no GCS, and the knowledge server
+# against fake-gcs-server in Docker.
 #
-# usage: bash scripts/smoke.sh [file|knowledge|all]   (default all)
+# usage: bash scripts/smoke.sh [file|file-world|knowledge|all]   (default all)
 # build: make server knowledge-server client tools
 set -u
 
 cd "$(dirname "$0")/.." || exit 2
 MODE=${1:-all}
 FILE_PORT=${SMOKE_FILE_PORT:-16409}
+FILE_WORLD_PORT=${SMOKE_FILE_WORLD_PORT:-16412}
+FILE_WORLD_HEALTH_PORT=${SMOKE_FILE_WORLD_HEALTH_PORT:-18183}
 KNOWLEDGE_PORT=${SMOKE_KNOWLEDGE_PORT:-16410}
 HEALTH_PORT=${SMOKE_HEALTH_PORT:-18181}
 # A second knowledge replica over the same bucket, hinted by the first.
@@ -410,7 +413,7 @@ smoke_file() {
   expect "drain with an open watch completes" 'all connections drained' -- tail -n 8 "$WORK/file.log"
   before_restart=$(wc -l <"$WORK/file.log")
   start_file || return 1
-  expect "restart rebuilds the lookup catalog" 'lookup catalog built.*entries=[1-9]' -- tail -n 12 "$WORK/file.log"
+  expect "restart rebuilds the index and catalog" 'document index built.*entries=[1-9]' -- tail -n 12 "$WORK/file.log"
   expect "restart serves the same data" 'version=2' -- "${C[@]}" "$U/docs/a.md"
   expect "restart keeps a valid chain" 'chain-valid=true' -- "${C[@]}" -X VERSIONS "$U/docs/a.md"
   # The watch outlives the restart without a resync: the change journal
@@ -426,6 +429,65 @@ smoke_file() {
   no_errors "file server" "$WORK/file.log"
 }
 
+# localhost_cert: the self-signed certificate every knowledge world serves.
+localhost_cert() {
+  [ -f "$WORK/cert.pem" ] && return 0
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
+    -addext subjectAltName=DNS:localhost \
+    -keyout "$WORK/key.pem" -out "$WORK/cert.pem" >/dev/null 2>&1 || setup_failed "generate the localhost certificate"
+}
+
+# The knowledge server on a directory: the soul's layout under a world, no
+# bucket, no peers, and no GCS client (credentials point at a missing file).
+smoke_file_world() {
+  local U="mark://localhost:$FILE_WORLD_PORT" first_lines status
+  echo "== knowledge server, file world"
+  localhost_cert || return 1
+  cat >"$WORK/file-world.yaml" <<EOF
+version: 1
+listen:
+  address: ":$FILE_WORLD_PORT"
+health:
+  address: ":$FILE_WORLD_HEALTH_PORT"
+tls:
+  certFile: $WORK/cert.pem
+  keyFile: $WORK/key.pem
+worlds:
+  - name: smoke
+    authorities: [localhost]
+    dir: $WORK/world
+    auth:
+      tokensFile: $WORK/tokens.toml
+    limits:
+      requestTimeout: 10s
+EOF
+  start_file_world() {
+    start_server "$U" "$WORK/file-world.log" env GOOGLE_APPLICATION_CREDENTIALS="$WORK/no-such-credentials.json" \
+      server/bin/demarkus-knowledge-server -config "$WORK/file-world.yaml"
+  }
+  start_file_world || return 1
+  expect "the directory was created and seeded" 'policy.md' -- ls "$WORK/world/.well-known/demarkus"
+  expect "the policy seed is logged" 'seeded the initial write policy' -- cat "$WORK/file-world.log"
+  refute "no GCS client was built" 'GCS' -- cat "$WORK/file-world.log"
+  verbs "$U"
+  policy "$U"
+  start_watch "$U"
+  watch_stream "$U"
+  stop_watch
+  stop_server
+  status=$?
+  expect "SIGTERM exits cleanly" '^0$' -- echo "$status"
+  first_lines=$(wc -l <"$WORK/file-world.log")
+  start_file_world || return 1
+  refute "restart does not reseed" 'seeded the initial write policy' -- tail -n "+$((first_lines + 1))" "$WORK/file-world.log"
+  expect "restart restored the change journal" 'change journal restored' -- tail -n "+$((first_lines + 1))" "$WORK/file-world.log"
+  expect "restart serves the curated policy" 'require_tags: domain' -- "${C[@]}" "$U$POLICY"
+  expect "restart serves the same data" 'version=2' -- "${C[@]}" "$U/docs/a.md"
+  expect "restart keeps a valid chain" 'chain-valid=true' -- "${C[@]}" -X VERSIONS "$U/docs/a.md"
+  stop_server
+  no_errors "file world" "$WORK/file-world.log"
+}
+
 smoke_knowledge() {
   local U="mark://localhost:$KNOWLEDGE_PORT" first_lines status
   echo "== knowledge server"
@@ -434,9 +496,7 @@ smoke_knowledge() {
     -scheme http -public-host "localhost:$GCS_PORT" >/dev/null || { setup_failed "start fake-gcs-server"; return 1; }
   retry "fake-gcs-server bucket" curl -fsS -X POST -H 'Content-Type: application/json' \
     -d '{"name":"smoke-world"}' "http://localhost:$GCS_PORT/storage/v1/b" || return 1
-  openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
-    -addext subjectAltName=DNS:localhost \
-    -keyout "$WORK/key.pem" -out "$WORK/cert.pem" >/dev/null 2>&1 || { setup_failed "generate the localhost certificate"; return 1; }
+  localhost_cert || return 1
   # knowledge_config <file> <port> <health port> <peer port> <peer's port>:
   # one replica's config; the two share the bucket and hint each other.
   knowledge_config() {
@@ -502,13 +562,15 @@ fi
 
 case "$MODE" in
 file) smoke_file ;;
+file-world) smoke_file_world ;;
 knowledge) smoke_knowledge ;;
 all)
   smoke_file
+  smoke_file_world
   smoke_knowledge
   ;;
 *)
-  echo "usage: bash scripts/smoke.sh [file|knowledge|all]" >&2
+  echo "usage: bash scripts/smoke.sh [file|file-world|knowledge|all]" >&2
   exit 2
   ;;
 esac
