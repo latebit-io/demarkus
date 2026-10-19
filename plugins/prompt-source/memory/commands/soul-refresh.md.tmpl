@@ -12,7 +12,7 @@ Keep promoted {{.Store}} documents fresh as their published copies evolve. **Dow
 
 1. **Inventory.** `mark_promote` with `url: <root>`, `phase: refresh`, no `body`. `refresh needs body` (older server): say so, stop. Other failure: exact error, stop. `status: inventory` carries rows `- <path>: promoted-via <via>; promoted <target>@v<N>` and `coverage:` lines, one per document listed but not read; a coverage line is a skipped-error row. `$ARGUMENTS` names a path: keep the rows and coverage lines at or under it. No row of either kind: nothing promoted in that scope, name it, stop.
 
-2. **Destinations.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: surface, stop. `NONE`: no destination configured, nothing to refresh against (earlier promotions need their destination re-added first); say so, stop. Otherwise note the rows (`knowledge <slug>`, `target <slug> <path>`).
+2. **Destinations.** {{template "destinations.tmpl" .}} `NONE`: say so, stop; earlier promotions need their destination re-added first.
 
 3. **Check each row.** `tag only, no marker`: skip, report. `promoted-via none`: ask the user which configured destination owns the target; never infer a broker from a `mark://` authority; a plain target `mark://<server>/<path>` is the bare `/path` through that server. A `promoted-via` slug with no destination row: skipped-error. Through that destination's tools, `mark_fetch` the target (without `@v<N>`) with `force: true`:
    - `not-found`: dangling; surface, do not delete the {{.Store}} doc, skip.
