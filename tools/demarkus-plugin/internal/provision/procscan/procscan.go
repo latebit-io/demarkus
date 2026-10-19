@@ -278,6 +278,14 @@ func ListServers() ([]Server, bool) {
 	return servers, true
 }
 
+// ListensOn reports whether pid's server listens on port. A process whose
+// arguments cannot be read, or that is gone, counts as listening: the port
+// check never restarts a server on its own; ownership decides that.
+func ListensOn(pid int, port string) bool {
+	args, ran := Args(pid)
+	return !ran || args == "" || PortOf(args, pid) == port
+}
+
 // PortOf returns the port the server listens on (-port flag in args,
 // else DEMARKUS_PORT env, else the protocol default).
 func PortOf(args string, pid int) string {

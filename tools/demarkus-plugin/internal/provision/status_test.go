@@ -3,6 +3,7 @@ package provision
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/procscan"
@@ -45,6 +46,15 @@ func TestDetectReportSkipsServersNoPromptMayReuse(t *testing.T) {
 		"14 6312 " + file + " (root is not a directory)"
 	if got := detectReport(servers); got != want {
 		t.Fatalf("detectReport =\n%s\nwant\n%s", got, want)
+	}
+	if os.Getuid() != 0 {
+		sealed := filepath.Join(root, "sealed")
+		if err := os.Mkdir(sealed, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		if got := rootProblem(sealed); !strings.HasPrefix(got, "root unreadable: ") {
+			t.Errorf("a directory this user cannot enter = %q", got)
+		}
 	}
 	if got := detectReport(nil); got != "NO_SERVER" {
 		t.Errorf("no servers = %q", got)

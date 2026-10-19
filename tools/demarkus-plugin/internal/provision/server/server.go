@@ -22,14 +22,18 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/progress"
 )
 
-// managedServerCurrent reports whether the managed server recorded in pidFile is
-// alive, is genuinely OUR demarkus-server for root (not a reused PID), AND the
-// binary version stamped in versionFile matches the current server pin.
-func managedServerCurrent(pidFile, versionFile, root string) (bool, error) {
-	switch procscan.ProbeAtRoot(procscan.ReadPID(pidFile), root) {
+// managedServerCurrent: the server recorded in pidFile is alive, genuinely OUR
+// demarkus-server for root (not a reused PID), on the configured port, and the
+// version stamped in versionFile matches the server pin.
+func managedServerCurrent(pidFile, versionFile, root string, port int) (bool, error) {
+	pid := procscan.ReadPID(pidFile)
+	switch procscan.ProbeAtRoot(pid, root) {
 	case procscan.Unknown:
 		return false, procscan.ErrOwnershipUnknown
 	case procscan.NotOurs:
+		return false, nil
+	}
+	if !procscan.ListensOn(pid, strconv.Itoa(port)) {
 		return false, nil
 	}
 	// A missing stamp reads as not current, which restarts onto the pinned binary.
@@ -53,7 +57,7 @@ func stopStaleManagedServer(runningPID int, memoryDir string) error {
 		}
 		return nil
 	}
-	progress.Logf("restarting managed demarkus-server onto upgraded binary (target=%s)", release.ServerVersion)
+	progress.Logf("restarting managed demarkus-server onto the configured binary and port (target=%s)", release.ServerVersion)
 	if err := procscan.Signal(runningPID, syscall.SIGTERM); err != nil && !procscan.AlreadyExited(err) {
 		progress.Warnf("SIGTERM to managed server pid %d: %v", runningPID, err)
 	}
@@ -78,8 +82,8 @@ func stopStaleManagedServer(runningPID int, memoryDir string) error {
 
 // retireStaleServer reports a current managed server, or stops a stale one of
 // ours and clears its bookkeeping. An unknown probe aborts before touching either.
-func retireStaleServer(pidFile, versionFile, memoryDir string) (bool, error) {
-	current, err := managedServerCurrent(pidFile, versionFile, memoryDir)
+func retireStaleServer(pidFile, versionFile, memoryDir string, port int) (bool, error) {
+	current, err := managedServerCurrent(pidFile, versionFile, memoryDir, port)
 	if err != nil || current {
 		return current, err
 	}
@@ -101,7 +105,7 @@ func Ensure(memoryDir string, port int) error {
 	pidFile := filepath.Join(memoryDir, ".pid")
 	versionFile := filepath.Join(memoryDir, ".server-version")
 
-	current, err := retireStaleServer(pidFile, versionFile, memoryDir)
+	current, err := retireStaleServer(pidFile, versionFile, memoryDir, port)
 	if err != nil || current {
 		return err
 	}

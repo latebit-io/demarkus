@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -527,11 +528,15 @@ func healthWarning(cfg *config.PluginConfig) string {
 		// Verify the recorded PID is genuinely OUR demarkus-server for this root,
 		// not just any live process that reused the number — otherwise a stale
 		// .pid would falsely report healthy while memory tools fail.
-		switch procscan.ProbeAtRoot(procscan.ReadPID(filepath.Join(cfg.MemoryDir, ".pid")), cfg.MemoryDir) {
+		pid := procscan.ReadPID(filepath.Join(cfg.MemoryDir, ".pid"))
+		switch procscan.ProbeAtRoot(pid, cfg.MemoryDir) {
 		case procscan.Unknown:
 			return fmt.Sprintf("cannot tell whether the demarkus-memory server for %s is running: process discovery did not complete. Run /soul-status to retry.", cfg.MemoryDir)
 		case procscan.NotOurs:
 			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /soul-init to restart, or /soul-status to diagnose.", cfg.MemoryDir)
+		}
+		if !procscan.ListensOn(pid, strings.TrimSpace(cfg.Port)) {
+			return fmt.Sprintf("the demarkus-memory server for %s is not on the configured port %s; the next provision restarts it there.", cfg.MemoryDir, cfg.Port)
 		}
 	case "reuse":
 		pid, ran := procscan.PIDAtRootProbed(cfg.MemoryDir)
@@ -593,6 +598,15 @@ func rootProblem(root string) string {
 		return "root unreadable: " + err.Error()
 	case !info.IsDir():
 		return "root is not a directory"
+	}
+	// Stat passes on a directory this user cannot enter; reading one entry does not.
+	dir, err := os.Open(root)
+	if err != nil {
+		return "root unreadable: " + err.Error()
+	}
+	defer dir.Close() //nolint:errcheck // read-only handle
+	if _, err := dir.Readdirnames(1); err != nil && !errors.Is(err, io.EOF) {
+		return "root unreadable: " + err.Error()
 	}
 	return ""
 }
