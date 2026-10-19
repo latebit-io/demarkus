@@ -380,6 +380,14 @@ func (s *Store) IndexSize() int {
 	return len(s.pathIdx)
 }
 
+// Indexed reports whether reqPath is a current indexed document.
+func (s *Store) Indexed(reqPath string) bool {
+	s.indexMu.RLock()
+	defer s.indexMu.RUnlock()
+	_, ok := s.pathIdx[storefmt.CanonicalPath(reqPath)]
+	return ok
+}
+
 // digestLen is the fingerprint width: change detection, not a security bound.
 const digestLen = 16
 

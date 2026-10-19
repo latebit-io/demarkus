@@ -98,4 +98,12 @@ func TestOpenDirCapsDocuments(t *testing.T) {
 	if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/a.md", ExpectedVersion: 1, Content: []byte("# Doc 2\n"), Metadata: map[string]string{}}); err != nil {
 		t.Errorf("new version under the cap: %v", err)
 	}
+	// An absent expected-version is an unconditional write (-1); it creates
+	// a path and so meets the cap like any create.
+	if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/c.md", ExpectedVersion: -1, Content: []byte("# Doc\n"), Metadata: map[string]string{}}); !errors.Is(err, backend.ErrQuota) {
+		t.Errorf("unconditional create past the cap = %v, want ErrQuota", err)
+	}
+	if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/a.md", ExpectedVersion: -1, Content: []byte("# Doc 3\n"), Metadata: map[string]string{}}); err != nil {
+		t.Errorf("unconditional new version under the cap: %v", err)
+	}
 }

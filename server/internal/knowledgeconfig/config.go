@@ -684,6 +684,12 @@ func (seen storeKeys) claim(kind, field, value string) error {
 	return nil
 }
 
+// within reports whether child lies under parent; both are canonical, and
+// an equal path is a duplicate, caught by claim.
+func within(child, parent string) bool {
+	return strings.HasPrefix(child, strings.TrimSuffix(parent, string(filepath.Separator))+string(filepath.Separator))
+}
+
 // validateStore checks the one store a world names: a directory, or a bucket
 // with its identity. Each is unique across worlds.
 func (world *WorldConfig) validateStore(location string, peers bool, seen storeKeys) error {
@@ -696,6 +702,13 @@ func (world *WorldConfig) validateStore(location string, peers bool, seen storeK
 		}
 		if peers {
 			return fmt.Errorf("%s.dir cannot be served with peers: a file world is one replica", location)
+		}
+		// One world's files under another's would be served and indexed twice;
+		// a symlink alias is not seen here and stays the operator's.
+		for key, previous := range seen {
+			if other, isDir := strings.CutPrefix(key, "dir\x00"); isDir && (within(world.Dir, other) || within(other, world.Dir)) {
+				return fmt.Errorf("%s.dir %q overlaps %s %q: worlds must not nest", location, world.Dir, previous, other)
+			}
 		}
 		return seen.claim("dir", location+".dir", world.Dir)
 	}

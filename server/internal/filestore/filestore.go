@@ -161,8 +161,9 @@ func (s *Store) commit(ctx context.Context, req *backend.WriteRequest, op string
 		if err := s.writable(); err != nil {
 			return nil, err
 		}
-		// A create past the cap is refused; the cap never blocks a new version.
-		if op == protocol.OpPublish && req.ExpectedVersion == 0 && s.maxDocuments > 0 && s.documents.IndexSize() >= s.maxDocuments {
+		// A new path past the cap is refused, whatever the expected version
+		// (an absent one writes unconditionally); an indexed path always lands.
+		if s.maxDocuments > 0 && !s.documents.Indexed(req.Path) && s.documents.IndexSize() >= s.maxDocuments {
 			return nil, fmt.Errorf("%w: store holds %d documents (limit %d)", ErrDocumentQuota, s.documents.IndexSize(), s.maxDocuments)
 		}
 		document, err := write(s.writeSpec(ctx, req))
