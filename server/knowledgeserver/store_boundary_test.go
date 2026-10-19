@@ -8,9 +8,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/backend"
-	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
@@ -23,7 +21,7 @@ func TestWorldManagerServesANonBucketStore(t *testing.T) {
 	tokens := writeTokens(t, t.TempDir(), "alice")
 	var opened *filestore.Store
 	files := func(_ context.Context, _ *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore, error) {
-		store, err := filestore.Open(protocolstore.New(t.TempDir()), catalog.New(), filestore.Options{ChangeRing: changefeed.DefaultRingSize, Logger: hooks.logger})
+		store, err := filestore.OpenDir(t.TempDir(), filestore.Options{ChangeRing: changefeed.DefaultRingSize, Logger: hooks.logger})
 		if err != nil {
 			return nil, err
 		}

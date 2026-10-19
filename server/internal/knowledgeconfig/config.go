@@ -157,14 +157,18 @@ type TLSConfig struct {
 }
 
 // WorldConfig contains one logical world's static startup configuration.
+// A world lives in exactly one of a GCS bucket or a directory.
 type WorldConfig struct {
 	Name        string       `yaml:"name"`
 	Authorities []string     `yaml:"authorities"`
 	Bucket      BucketConfig `yaml:"bucket"`
-	Auth        AuthConfig   `yaml:"auth"`
-	Policy      PolicyConfig `yaml:"policy"`
-	ReadOnly    bool         `yaml:"readOnly"`
-	Limits      LimitsConfig `yaml:"limits"`
+	// Dir is a file world's absolute directory, the soul server's layout;
+	// one replica, no peers.
+	Dir      string       `yaml:"dir"`
+	Auth     AuthConfig   `yaml:"auth"`
+	Policy   PolicyConfig `yaml:"policy"`
+	ReadOnly bool         `yaml:"readOnly"`
+	Limits   LimitsConfig `yaml:"limits"`
 	// Bootstrap marks a broker provisioned world. Deprecated: the open ignores
 	// it, since every writable world gets genesis and a seeded policy. It only
 	// forbids policy.file, because that world's broker owns its policy.
@@ -172,8 +176,12 @@ type WorldConfig struct {
 }
 
 // ID is the world's immutable identity, the key peer hints carry; it lives in
-// the bucket section because that is the store it identifies today.
+// the bucket section because that is the store it identifies. A file world
+// has none: nothing replicates it.
 func (world *WorldConfig) ID() string { return world.Bucket.WorldID }
+
+// IsFile reports whether the world lives in a directory.
+func (world *WorldConfig) IsFile() bool { return world.Dir != "" }
 
 // BucketConfig identifies one world's GCS bucket and immutable marker ID.
 type BucketConfig struct {
@@ -267,6 +275,7 @@ type rawWorldConfig struct {
 	Name        string          `yaml:"name"`
 	Authorities []string        `yaml:"authorities"`
 	Bucket      BucketConfig    `yaml:"bucket"`
+	Dir         string          `yaml:"dir"`
 	Auth        AuthConfig      `yaml:"auth"`
 	Policy      rawPolicyConfig `yaml:"policy"`
 	ReadOnly    bool            `yaml:"readOnly"`
@@ -451,6 +460,7 @@ func worldFromRaw(world *rawWorldConfig) WorldConfig {
 		Name:        world.Name,
 		Authorities: append([]string(nil), world.Authorities...),
 		Bucket:      world.Bucket,
+		Dir:         strings.TrimSpace(world.Dir),
 		Auth:        world.Auth,
 		Policy: PolicyConfig{
 			Path: valueOr(world.Policy.Path, defaultPolicyPath),
@@ -545,8 +555,7 @@ func (config *Config) Validate() error {
 func (config *Config) validateWorlds() error {
 	worldNames := make(map[string]int, len(config.Worlds))
 	authorities := make(map[string]int)
-	bucketURLs := make(map[string]int, len(config.Worlds))
-	worldIDs := make(map[string]int, len(config.Worlds))
+	seen := storeKeys{}
 	tokenFiles := make(map[string]tokenFileRef, len(config.Worlds))
 	for worldIndex := range config.Worlds {
 		world := &config.Worlds[worldIndex]
@@ -574,24 +583,9 @@ func (config *Config) validateWorlds() error {
 			world.Authorities[authorityIndex] = normalized
 		}
 
-		if err := validateBucketURL(world.Bucket.URL); err != nil {
-			return fmt.Errorf("%s.bucket.url: %w", location, err)
+		if err := world.validateStore(location, config.Peers.Enabled(), seen); err != nil {
+			return err
 		}
-		if previous, exists := bucketURLs[world.Bucket.URL]; exists {
-			return fmt.Errorf("%s.bucket.url %q duplicates worlds[%d].bucket.url", location, world.Bucket.URL, previous)
-		}
-		bucketURLs[world.Bucket.URL] = worldIndex
-		if !validWorldID(world.Bucket.WorldID) {
-			return fmt.Errorf("%s.bucket.worldID must be a canonical lowercase UUID with RFC 4122 variant (got %q)", location, world.Bucket.WorldID)
-		}
-		// The store holds the minimum; only it knows what the grace fences.
-		if world.Bucket.CheckpointGrace < 0 {
-			return fmt.Errorf("%s.bucket.checkpointGrace must not be negative (got %s)", location, time.Duration(world.Bucket.CheckpointGrace))
-		}
-		if previous, exists := worldIDs[world.Bucket.WorldID]; exists {
-			return fmt.Errorf("%s.bucket.worldID %q duplicates worlds[%d].bucket.worldID", location, world.Bucket.WorldID, previous)
-		}
-		worldIDs[world.Bucket.WorldID] = worldIndex
 
 		// Both files are optional: a world without either serves public reads
 		// and identity-granted writes. One directory watcher covers both.
@@ -674,6 +668,51 @@ func normalizeAuthority(authority string) (string, error) {
 		}
 	}
 	return normalized, nil
+}
+
+// storeKeys are the store identities claimed so far, each to the field that
+// claimed it.
+type storeKeys map[string]string
+
+// claim records field's value, refusing one another world already holds.
+func (seen storeKeys) claim(kind, field, value string) error {
+	key := kind + "\x00" + value
+	if previous, exists := seen[key]; exists {
+		return fmt.Errorf("%s %q duplicates %s", field, value, previous)
+	}
+	seen[key] = field
+	return nil
+}
+
+// validateStore checks the one store a world names: a directory, or a bucket
+// with its identity. Each is unique across worlds.
+func (world *WorldConfig) validateStore(location string, peers bool, seen storeKeys) error {
+	if world.IsFile() {
+		if world.Bucket != (BucketConfig{}) {
+			return fmt.Errorf("%s.dir and %s.bucket are exclusive: a world lives in one store", location, location)
+		}
+		if err := canonicalPath(location+".dir", world.Dir); err != nil {
+			return err
+		}
+		if peers {
+			return fmt.Errorf("%s.dir cannot be served with peers: a file world is one replica", location)
+		}
+		return seen.claim("dir", location+".dir", world.Dir)
+	}
+	if err := validateBucketURL(world.Bucket.URL); err != nil {
+		return fmt.Errorf("%s.bucket.url: %w", location, err)
+	}
+	if err := seen.claim("bucket", location+".bucket.url", world.Bucket.URL); err != nil {
+		return err
+	}
+	if !validWorldID(world.Bucket.WorldID) {
+		return fmt.Errorf("%s.bucket.worldID must be a canonical lowercase UUID with RFC 4122 variant (got %q)", location, world.Bucket.WorldID)
+	}
+	// The store holds the minimum; only it knows what the grace fences.
+	if world.Bucket.CheckpointGrace < 0 {
+		return fmt.Errorf("%s.bucket.checkpointGrace must not be negative (got %s)", location, time.Duration(world.Bucket.CheckpointGrace))
+	}
+	return seen.claim("worldID", location+".bucket.worldID", world.Bucket.WorldID)
 }
 
 func validateBucketURL(value string) error {
@@ -765,13 +804,20 @@ func validatePolicyPath(value string) error {
 
 // validatePolicyFile accepts an unset file and otherwise refuses a path
 // the seeder could not use, or a world whose policy is not the operator's.
+// canonicalPath accepts an absolute, clean path with no NUL byte.
+func canonicalPath(field, value string) error {
+	if strings.ContainsRune(value, '\x00') || !filepath.IsAbs(value) || filepath.Clean(value) != value {
+		return fmt.Errorf("%s must be a canonical absolute path (got %q)", field, value)
+	}
+	return nil
+}
+
 func validatePolicyFile(location string, world *WorldConfig) error {
 	if world.Policy.File == "" {
 		return nil
 	}
-	file := world.Policy.File
-	if strings.ContainsRune(file, '\x00') || !filepath.IsAbs(file) || filepath.Clean(file) != file {
-		return fmt.Errorf("%s.policy.file must be a canonical absolute path (got %q)", location, file)
+	if err := canonicalPath(location+".policy.file", world.Policy.File); err != nil {
+		return err
 	}
 	if world.ReadOnly {
 		return fmt.Errorf("%s.policy.file must not be set on a read-only world, which refuses the seed", location)

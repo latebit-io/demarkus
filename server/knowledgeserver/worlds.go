@@ -393,7 +393,8 @@ func (m *worldManager) Hint(hint peerhint.Hint) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, entry := range m.entries {
-		if entry.config.ID() != hint.WorldID {
+		// A file world has no ID; a hint can never be for it.
+		if entry.config.ID() == "" || entry.config.ID() != hint.WorldID {
 			continue
 		}
 		if follower, ok := entry.store.(backend.Follower); ok {

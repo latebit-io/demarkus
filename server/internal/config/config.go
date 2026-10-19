@@ -28,7 +28,7 @@ type Config struct {
 	LogFormat      string        // Log format: "text" (default) or "json"
 	LogLevel       string        // Log level: "debug", "info" (default), "warn", "error"
 	ReadOnly       bool          // Reject all write operations (PUBLISH, APPEND, ARCHIVE)
-	StoreBackend   string        // Document store backend; the registry in cmd/demarkus-server owns the set
+	StoreBackend   string        // Document store backend; file is the one this build carries
 }
 
 // NewConfig loads DEMARKUS_-prefixed environment configuration. Unparseable
@@ -91,15 +91,14 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-// ValidateStoreBackend checks a backend's required settings on the final
-// (post-override) values. Unknown names pass: the cmd/demarkus-server store
-// registry owns the compiled-in set and rejects them in openStore.
+// ValidateStoreBackend checks the backend's required settings on the final
+// (post-override) values. The file store is the one backend this server has.
 func (c *Config) ValidateStoreBackend() error {
 	if c.StoreBackend == "" {
 		c.StoreBackend = "file"
 	}
 	if c.StoreBackend != "file" {
-		return nil
+		return fmt.Errorf("store backend %q is not available (have: file)", c.StoreBackend)
 	}
 	if c.ContentDir == "" {
 		return errors.New("content directory is required (set DEMARKUS_ROOT or use -root)")

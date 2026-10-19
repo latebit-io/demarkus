@@ -48,10 +48,10 @@ type worldsTestHarness struct {
 const testWorldID = "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48"
 const testWorldIDB = "62b471f7-8d38-4c89-b44a-6f4f8b1a4f48"
 
-func testCertFiles(t *testing.T) (certFile, keyFile string) {
+func testCertFiles(t *testing.T, dnsName string) (certFile, keyFile string) {
 	t.Helper()
 	dir := t.TempDir()
-	certPEM, keyPEM := generateSelfSigned(t, "worlds.test")
+	certPEM, keyPEM := generateSelfSigned(t, dnsName)
 	certFile = filepath.Join(dir, "tls.crt")
 	keyFile = filepath.Join(dir, "tls.key")
 	if err := os.WriteFile(certFile, certPEM, 0o600); err != nil {
@@ -131,7 +131,7 @@ func newHarness(dir string) *worldsTestHarness {
 // open writes the config and starts the manager over openStore.
 func (h *worldsTestHarness) open(t *testing.T, worldsSection string, openStore storeFactory) error {
 	t.Helper()
-	certFile, keyFile := testCertFiles(t)
+	certFile, keyFile := testCertFiles(t, "worlds.test")
 	main := fmt.Sprintf(`version: 1
 tls:
   certFile: %s
