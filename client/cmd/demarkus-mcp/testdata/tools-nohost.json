@@ -322,7 +322,7 @@
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "List documents and subdirectories; an adr/ directory's first page adds next:, the unused decision number. Archived hidden unless include_archived; while complete=false pass next-cursor as cursor. For one document prefer mark_explore.",
+    "description": "List documents and subdirectories; first-page adr/ listings add next: (unused decision number). Archived hidden unless include_archived; while complete=false pass next-cursor as cursor. For one document prefer mark_explore.",
     "inputSchema": {
       "properties": {
         "cursor": {
