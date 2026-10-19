@@ -47,17 +47,32 @@ func (err *PolicyError) Unwrap() []error {
 func (err *PolicyError) RejectionMessage() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "publish policy (%s) refused this write:\n", err.Strictness)
-	for _, v := range err.Result.Violations {
-		switch {
-		case v.Name == "":
-			fmt.Fprintf(&b, "- %s\n", v.Code)
-		case v.Axis != "":
-			fmt.Fprintf(&b, "- %s: %s (allowed %s values: %s)\n", v.Code, v.Name, v.Axis, err.Policy.AllowedList(v.Axis))
-		default:
-			fmt.Fprintf(&b, "- %s: %s\n", v.Code, v.Name)
-		}
+	for _, v := range violationLines(err.Result, err.Policy) {
+		fmt.Fprintf(&b, "- %s\n", v)
 	}
 	return b.String()
+}
+
+// violationLines words each violation once, for a refusal or a warning.
+func violationLines(result publishpolicy.Result, policy publishpolicy.Policy) []string {
+	lines := make([]string, 0, len(result.Violations))
+	for _, v := range result.Violations {
+		switch {
+		case v.Name == "":
+			lines = append(lines, string(v.Code))
+		case v.Axis != "":
+			lines = append(lines, fmt.Sprintf("%s: %s (allowed %s values: %s)", v.Code, v.Name, v.Axis, policy.AllowedList(v.Axis)))
+		default:
+			lines = append(lines, fmt.Sprintf("%s: %s", v.Code, v.Name))
+		}
+	}
+	return lines
+}
+
+// policyWarning is the one line a warn-strictness policy miss reaches the
+// writer as.
+func policyWarning(result publishpolicy.Result, policy publishpolicy.Policy) string {
+	return "publish policy (warn): " + strings.Join(violationLines(result, policy), ", ")
 }
 
 // Current loads and validates the policy document from reader. With require
@@ -85,34 +100,35 @@ func Current(ctx context.Context, reader backend.Reader, require bool) (publishp
 	return policy, nil
 }
 
-// evaluate judges one prepared write: the body for secrets and personal
-// data first, then the metadata under the floor merged with this world's
-// policy; a candidate policy must be satisfiable under the floor.
-func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
-	if err := e.content.judge(write); err != nil {
-		return err
+// evaluate judges one prepared write: the body first, then the metadata
+// under the floor merged with this world's policy, a candidate policy last.
+// The notes are what a warn verdict let through; none on a refusal.
+func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) ([]string, error) {
+	notes, err := e.content.judge(write)
+	if err != nil {
+		return nil, err
 	}
 	var floor *publishpolicy.Policy
 	if e.options.Floor != nil {
 		read, err := e.options.Floor(ctx)
 		if err != nil {
-			return fmt.Errorf("%w: read floor policy: %w", ErrInvalidPolicy, err)
+			return nil, fmt.Errorf("%w: read floor policy: %w", ErrInvalidPolicy, err)
 		}
 		floor = &read
 	}
 	if write.Path == publishpolicy.DocumentPath {
 		candidate := publishpolicy.Parse(string(write.Content))
 		if err := candidate.Validate(); err != nil {
-			return fmt.Errorf("%w: %w: candidate policy: %v", backend.ErrRejected, ErrInvalidPolicy, err)
+			return nil, fmt.Errorf("%w: %w: candidate policy: %v", backend.ErrRejected, ErrInvalidPolicy, err)
 		}
 		if err := e.floorSatisfiable(ctx, candidate); err != nil {
-			return err
+			return nil, err
 		}
 		// A world list disjoint from the floor's would refuse every value on
 		// that axis; refuse the candidate instead.
 		if floor != nil {
 			if err := publishpolicy.Merge(*floor, candidate).Validate(); err != nil {
-				return fmt.Errorf("%w: %w: candidate policy merged under the floor: %v", backend.ErrRejected, ErrInvalidPolicy, err)
+				return nil, fmt.Errorf("%w: %w: candidate policy merged under the floor: %v", backend.ErrRejected, ErrInvalidPolicy, err)
 			}
 		}
 	}
@@ -120,22 +136,25 @@ func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write sto
 	// default directories; refuse it the way a bad policy is refused.
 	if write.Path == layout.DocumentPath {
 		if _, err := layout.Parse(string(write.Content)); err != nil {
-			return fmt.Errorf("%w: %w: candidate template: %v", backend.ErrRejected, ErrInvalidPolicy, err)
+			return nil, fmt.Errorf("%w: %w: candidate template: %v", backend.ErrRejected, ErrInvalidPolicy, err)
 		}
 	}
 	policy, err := Current(ctx, state, e.options.Require)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if floor != nil {
 		policy = publishpolicy.Merge(*floor, policy)
 	}
 	result := publishpolicy.EvaluateStrings(policy, write.Path, write.Metadata)
 	strictness := policy.EffectiveStrictness()
-	if result.Compliant() || strictness == publishpolicy.Warn {
-		return nil
+	switch {
+	case result.Compliant():
+		return notes, nil
+	case strictness == publishpolicy.Warn:
+		return append(notes, policyWarning(result, policy)), nil
 	}
-	return &PolicyError{Strictness: strictness, Result: result, Policy: policy}
+	return nil, &PolicyError{Strictness: strictness, Result: result, Policy: policy}
 }
 
 // floorSatisfiable refuses a candidate floor policy that, merged under any

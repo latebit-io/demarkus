@@ -391,8 +391,8 @@ func registryMemoryDefault(args []string) {
 	}
 }
 
-// registryProject prints the slug, store and binding state a prompt needs
-// before its first mark_* call, so no template restates the rule.
+// registryProject prints the slug, store, root and verdict a prompt needs
+// before its first mark_* call, so no template restates the state table.
 func registryProject(args []string) {
 	fs := flag.NewFlagSet("project", flag.ExitOnError)
 	dir := fs.String("dir", "", "the project directory (default: harness project variable)")
@@ -409,7 +409,7 @@ func registryProject(args []string) {
 	if err != nil {
 		fail("project: " + err.Error())
 	}
-	if _, err := fmt.Println(r.Lines() + "\n" + st.Lines() + "\nverdict=" + guidance.Verdict(r, st, configured)); err != nil {
+	if _, err := fmt.Printf("slug=%s\nstore=%s\nroot=%s\nverdict=%s\n", r.Slug, r.Store, st.Root, guidance.Verdict(r, st, configured)); err != nil {
 		fail("project: write output: " + err.Error())
 	}
 }

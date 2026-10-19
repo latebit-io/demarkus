@@ -10,7 +10,7 @@ Keep promoted {{.Store}} documents fresh as their published copies evolve. **Dow
 
 ## Steps
 
-1. **Inventory.** `mark_promote` with `url: <root>`, `phase: refresh`, no `body`. `refresh needs body` (older server): say so, stop. Other failure: exact error, stop. `status: inventory` carries rows `- <path>: promoted-via <via>; promoted <target>@v<N>` and `coverage:` lines, one per document listed but not read; a coverage line is a skipped-error row. `$ARGUMENTS` names a path: keep the rows and coverage lines at or under it. No row of either kind: nothing promoted in that scope, name it, stop.
+1. **Inventory.** `mark_promote` with `url: <root>`, `phase: refresh`, no `body`. `refresh needs body` (older server): say so, stop. Other failure: exact error, stop. `status: inventory` carries rows `- <path>: promoted-via <via>; promoted <target>@v<N>` and `coverage:` lines, one per document listed but not read; a coverage line is a skipped-error row. `$ARGUMENTS` names a document: pass it as `url`, its own row answers. No row of either kind: nothing promoted in that scope, name it, stop.
 
 2. **Destinations.** {{template "destinations.tmpl" .}} `NONE`: say so, stop; earlier promotions need their destination re-added first.
 

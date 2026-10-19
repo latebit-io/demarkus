@@ -41,10 +41,22 @@ func Promoted(ctx context.Context, store Store, scope string, timeout time.Durat
 	inv := &Inventory{Documents: len(a.order), Coverage: a.coverage}
 	for _, p := range a.order {
 		d := a.docs[p]
-		if live(d.status) && promote.IsPromoted(d.meta, d.body) {
-			markers, _ := promote.ParseMarkers(d.body) // found is Target != ""
-			inv.Docs = append(inv.Docs, PromotedDoc{Path: p, Markers: markers})
+		if !live(d.status) {
+			continue
+		}
+		if doc, ok := Classify(p, d.meta, d.body); ok {
+			inv.Docs = append(inv.Docs, doc)
 		}
 	}
 	return inv, nil
+}
+
+// Classify is one live document's inventory entry: its markers when it is
+// promoted, by marker or by tag alone, and false when it is not.
+func Classify(path string, meta map[string]string, body string) (PromotedDoc, bool) {
+	if !promote.IsPromoted(meta, body) {
+		return PromotedDoc{}, false
+	}
+	markers, _ := promote.ParseMarkers(body) // found is Target != ""
+	return PromotedDoc{Path: path, Markers: markers}, true
 }

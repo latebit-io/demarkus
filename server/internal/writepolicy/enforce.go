@@ -51,10 +51,16 @@ func chain[T any](inner, next func(context.Context, backend.Reader, T) error) fu
 	}
 }
 
-// guard adds the policy verdict after any precondition the caller set.
+// guard adds the policy verdict after any precondition the caller set; its
+// notes go to the request's sink, replaced on every run.
 func (e *enforcer) guard(req *backend.WriteRequest) {
+	warnings := req.Warnings
 	req.Precondition = chain(req.Precondition, func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
-		return e.evaluate(ctx, state, write)
+		notes, err := e.evaluate(ctx, state, write)
+		if warnings != nil {
+			*warnings = notes
+		}
+		return err
 	})
 }
 

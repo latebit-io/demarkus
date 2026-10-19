@@ -59,6 +59,7 @@ var reservedMetadataKeys = map[string]bool{
 	"matches":         true,
 	"match":           true,
 	"status":          true,
+	"warning":         true, // what a landed write's gate let through
 }
 
 // IsReservedMetadataKey reports a server-owned response metadata key.

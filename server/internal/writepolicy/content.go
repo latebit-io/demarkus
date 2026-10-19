@@ -15,12 +15,13 @@ import (
 var ErrContentBlocked = errors.New("content check blocked mutation")
 
 // ContentOptions configures the content scan on every write. The zero
-// value blocks personal data with no work domains.
+// value blocks secrets and personal data with no work domains. What a scan
+// lets through with a note reaches the writer through WriteRequest.Warnings.
 type ContentOptions struct {
 	contentcheck.Options
-	// Warn reports findings that did not refuse the write: a warn-mode PII
-	// hit, or any hit under an override. Nil drops them.
-	Warn func(path string, findings []contentcheck.Finding, override string)
+	// SecretsWarn lets a secret land with a note, the one release a tier
+	// warns before it refuses; the rules always run.
+	SecretsWarn bool
 }
 
 // ContentError carries the findings so the handler can list them without
@@ -63,30 +64,48 @@ func newContentGate(options ContentOptions) contentGate {
 	return contentGate{scanner: contentcheck.New(options.Options), options: options}
 }
 
-// judge scans the prepared body. A secret refuses the write, override or
-// not; personal data follows the mode, and an override lets it land,
-// reported with its reason.
-func (g contentGate) judge(write storefmt.PreparedWrite) error {
+// judge scans the prepared body; notes are what it let through. A secret
+// refuses unless the tier warns, override or not; personal data follows its
+// mode, and an override lets it land, reported with its reason.
+func (g contentGate) judge(write storefmt.PreparedWrite) ([]string, error) {
 	findings := g.scanner.Scan(string(write.Content))
 	if len(findings) == 0 {
-		return nil
+		return nil, nil
 	}
-	if contentcheck.Secrets(findings) {
-		return &ContentError{Findings: findings}
+	var secrets, personal []contentcheck.Finding
+	for _, f := range findings {
+		if f.Kind == contentcheck.Secret {
+			secrets = append(secrets, f)
+		} else {
+			personal = append(personal, f)
+		}
 	}
-	if override := strings.TrimSpace(write.Metadata[contentcheck.OverrideKey]); override != "" {
-		g.warn(write.Path, findings, override)
-		return nil
+	if len(secrets) > 0 && !g.options.SecretsWarn {
+		return nil, &ContentError{Findings: findings}
 	}
-	if g.options.PII != contentcheck.Warn {
-		return &ContentError{Findings: findings}
+	var notes []string
+	if len(secrets) > 0 {
+		notes = append(notes, note(secrets, ""))
 	}
-	g.warn(write.Path, findings, "")
-	return nil
+	if len(personal) > 0 {
+		override := strings.TrimSpace(write.Metadata[contentcheck.OverrideKey])
+		switch {
+		case override != "":
+			notes = append(notes, note(personal, override))
+		case g.options.PII != contentcheck.Warn:
+			return nil, &ContentError{Findings: personal}
+		default:
+			notes = append(notes, note(personal, ""))
+		}
+	}
+	return notes, nil
 }
 
-func (g contentGate) warn(path string, findings []contentcheck.Finding, override string) {
-	if g.options.Warn != nil {
-		g.options.Warn(path, findings, override)
+// note words findings that landed for the writer: rule and line, never the
+// value; the write is in history now, so the fix is the stored remedy.
+func note(findings []contentcheck.Finding, override string) string {
+	if override != "" {
+		return "content check overridden (" + override + "): " + contentcheck.Summary(findings)
 	}
+	return "content check: " + contentcheck.Summary(findings) + "; fix: " + contentcheck.StoredRemedy(findings)
 }

@@ -514,3 +514,26 @@ func TestCursorMultiRootBindingResolution(t *testing.T) {
 		t.Fatalf("env project dir should gate the write: got %q", d.Decision)
 	}
 }
+
+// The hook scans a body with the server's rules before the write leaves: a
+// secret blocks with the fix, personal data warns, a placeholder password passes.
+func TestContentGate(t *testing.T) {
+	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n", "knowledge-systems": "knowledge\n"})
+	dsn := "# Local Postgres\n\n```sh\nexport DSN=postgres://postgres:postgres@localhost:55432/app\n```\n"
+	placeholder := strings.Replace(dsn, "postgres:postgres@", "postgres:${POSTGRES_PASSWORD}@", 1)
+	tagged := map[string]any{"tags": "postgres"}
+
+	d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{"url": "/x.md", "body": dsn, "metadata": tagged}})
+	if d.Decision != "block" || !strings.Contains(d.Reason, "secret/connection-string-password at line 4") || strings.Contains(d.Reason, "55432") {
+		t.Errorf("memory secret: got %q (%s), want block naming the rule and line, never the value", d.Decision, d.Reason)
+	}
+	if d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{"url": "/x.md", "body": placeholder, "metadata": tagged}}); d.Decision != "allow" {
+		t.Errorf("placeholder password: got %q (%s), want allow", d.Decision, d.Reason)
+	}
+	if d := mustEval(t, &Input{Tool: "demarkus_memory_mark_append", Input: map[string]any{"url": "/x.md", "body": "SIN 046 454 286\n"}}); d.Decision != "warn" || !strings.Contains(d.Reason, "pii/canadian-sin at line 1") {
+		t.Errorf("memory personal data on append: got %q (%s), want warn", d.Decision, d.Reason)
+	}
+	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{"url": "/k.md", "body": dsn, "metadata": map[string]any{"tags": "category:guide", "type": "Guide"}}}); d.Decision != "block" {
+		t.Errorf("knowledge secret: got %q (%s), want block", d.Decision, d.Reason)
+	}
+}

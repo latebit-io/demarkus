@@ -137,11 +137,3 @@ func TestVerdictStopsOnlyForAStaleBinding(t *testing.T) {
 		}
 	}
 }
-
-func TestProjectStatusLines(t *testing.T) {
-	known := ProjectStatus{State: ProjectKnown, Root: "/"}
-	unknown := ProjectStatus{State: ProjectUnknown, Root: "/app/", Reason: "hosted store, not checked"}
-	if known.Lines() != "root=/\nproject=known" || unknown.Lines() != "root=/app/\nproject=unknown\nreason=hosted store, not checked" {
-		t.Errorf("lines = %q / %q", known.Lines(), unknown.Lines())
-	}
-}

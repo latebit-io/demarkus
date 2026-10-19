@@ -6,11 +6,13 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/config"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/handler"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 // backend is an opened document store. Close is nil when the backend owns no
@@ -44,6 +46,16 @@ func storeNames() []string {
 	return names
 }
 
+// gated is the write gate every soul write passes, whatever the backend: the
+// content scan (secrets warn for one release, personal data warns) and the
+// policy document when the soul publishes one. No seed, no floor.
+func gated(b backend) backend {
+	b.Store = writepolicy.Enforce(b.Store, writepolicy.Options{Content: writepolicy.ContentOptions{
+		SecretsWarn: true, Options: contentcheck.Options{PII: contentcheck.Warn},
+	}})
+	return b
+}
+
 // openStore opens the configured backend, naming what this build supports
 // when the requested one was not compiled in.
 func openStore(cfg *config.Config, logger *slog.Logger) (backend, error) {
@@ -52,7 +64,11 @@ func openStore(cfg *config.Config, logger *slog.Logger) (backend, error) {
 		return backend{}, fmt.Errorf("store backend %q is not available in this build (have: %s)",
 			cfg.StoreBackend, strings.Join(storeNames(), ", "))
 	}
-	return open(cfg, logger)
+	b, err := open(cfg, logger)
+	if err != nil {
+		return backend{}, err
+	}
+	return gated(b), nil
 }
 
 // openFileStore serves documents from versioned files under the content dir.

@@ -1,10 +1,5 @@
 # CLAUDE.md
 
-Project context — architecture, patterns, build commands, conventions, debugging
-notes, roadmap — lives on the **demarkus-soul** MCP server. Generic memory
-mechanics (recall, tagging, journaling, the project template) are handled by the
-demarkus-memory plugin; this file carries only what's specific to demarkus.
-
 ## How I work
 
 - No sycophancy — on code or ideas. Critically review before presenting: layering
@@ -15,7 +10,7 @@ demarkus-memory plugin; this file carries only what's specific to demarkus.
 - Memory tracks live data, not history. Long-lived state (globals, caches,
   indexes, snapshots) dies with its owner or evicts; a cap is not eviction.
   Clone what you keep from a larger buffer. New long-lived state ships with a
-  `memtest.Retained` test on production-shaped data. Rules: `/guidelines.md#memory`.
+  `memtest.Retained` test on production-shaped data.
 - Challenge ideas before agreeing: what's the downside? what breaks? what's the
   simpler alternative? is this the right problem? Push back when something doesn't
   hold up — disagreement backed by reasoning is expected.
@@ -26,48 +21,12 @@ demarkus-memory plugin; this file carries only what's specific to demarkus.
   code that has verbose comments, tighten them in the same edit.
 - After each implementation, run tests and `bash pre-commit.sh`.
 
-## Required preflight (every session, before writing code)
-
-From the demarkus-soul MCP server:
-
-1. `mark_fetch /index.md` — the hub
-2. `mark_fetch /patterns.md` — build commands, code style, workflow
-3. `mark_fetch /guidelines.md` — hard code-quality rules; read before writing code
-4. `mark_fetch /conventions.md` — collaboration + repo/plugin conventions (how I work)
-5. Fetch as needed: `/architecture.md`, `/debugging.md`, `/roadmap.md`
-6. If the MCP server is unavailable, stop and ask before proceeding.
-
-## demarkus-soul layout (demarkus at the root)
-
-```text
-/index.md         — hub, links to every section
-/architecture.md  — system design, module boundaries, key decisions
-/patterns.md      — code patterns, build commands, conventions, workflow
-/guidelines.md    — hard code-quality rules
-/conventions.md   — collaboration + repo/plugin conventions (how I work)
-/debugging.md     — lessons from bugs and investigations
-/roadmap.md       — what's done, what's next
-/thoughts.md      — reflections and ideas
-/journal/<YYYY-MM-DD>.md — dated session notes, one file per day
-/plans/<name>.md  — plan documents
-```
-
-The soul's template names demarkus as its root project (`root_project:
-demarkus` in `/.well-known/demarkus/template.md`), so the session header reads
-`Project root: /`. Other projects bound to this soul keep `/<slug>/` (for
-example `/demarkus-library/`).
-
-## Plans
-
-Never store plans in a vendor-specific folder. Publish them to demarkus-soul
-(`/plans/<name>.md`).
-
 ## Benchmarks
 
 Standalone benchmark runners, evaluation datasets, performance probes, and reports
 belong on the `benchmarks` branch, never in changes destined for `main`. Keep
-ordinary correctness and regression tests with production code. Record results
-in the soul; preserve raw evidence under ignored benchmark artifacts.
+ordinary correctness and regression tests with production code. Preserve raw
+evidence under ignored benchmark artifacts.
 
 ## Prompt and tool-description token budget
 
@@ -85,8 +44,4 @@ rewrite the step, define every named state (`incomplete-dedup`,
 `catalog-only`) once as terminal or carried forward and grep for every other
 use, give every call in the step its failure line, then reread against the
 skill's top-level rule. Repeated findings on one paragraph mean it was
-patched, not rewritten. Full rule: `/conventions.md` on demarkus-soul.
-
-## Doc style
-
-Natural language in soul docs; avoid overusing "-" within sentences (bullet "- " is fine).
+patched, not rewritten.

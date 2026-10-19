@@ -114,13 +114,3 @@ func (r Resolution) Header(root string) string {
 	}
 	return "Project slug: `" + r.Slug + "`. Project root: `" + root + "`. " + store
 }
-
-// Lines renders the resolution as key=value lines for the registry subcommand;
-// a stale binding adds a hint line with its recovery.
-func (r Resolution) Lines() string {
-	lines := "slug=" + r.Slug + "\nstore=" + r.Store + "\nstate=" + r.State
-	if r.State == StateStale {
-		lines += "\nhint=" + r.Hint()
-	}
-	return lines
-}

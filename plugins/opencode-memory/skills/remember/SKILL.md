@@ -21,7 +21,7 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 "$HOME/.demarkus/bin/demarkus-plugin" registry project --dir <project-dir>
 ```
 
-`<project-dir>`: the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes. Read its `verdict=` line: `use`: continue with `slug=`, `store=`, `root=`; `use, root unconfirmed: <reason>`: name the reason once, continue; `stop: <reason>`: relay it, stop, never fall back to the local soul. A header marked stale or `Project: unknown` reads the same way. Non-zero exit, or a zero exit without a `verdict=` line: surface it, stop. `<root>` below is the project root: `/` for the soul's root project, else `/<slug>/`. Every `mark_*` call goes through the store's server (the MCP server named `<store>`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
+`<project-dir>`: the absolute project directory as one POSIX-safe shell word; never wrap the raw path in literal single quotes. Read its `verdict=` line: `use`: continue with `slug=`, `store=`, `root=`; `use, root unconfirmed: <reason>`: name the reason once, continue; `stop: <reason>`: relay it, stop, never fall back to the local soul. A header present: act on its `Verdict:` the same way. Non-zero exit, or a zero exit without a `verdict=` line: surface it, stop. `<root>` below is the project root: `/` for the soul's root project, else `/<slug>/`. Every `mark_*` call goes through the store's server (the MCP server named `<store>`); a tool not connected or missing (older binary): say so, name the server, point at `/soul-status`, stop.
 
 
 ## Layout
@@ -41,7 +41,7 @@ Update: `mark_fetch` with `force: true` (complete body and metadata map), apply 
 Routes:
 
 - **Fleeting note, session progress**: `/soul-journal`, or `mark_append` with `url` `<root>` and `route: "today"` (creates today's entry, a missing hub and, under `/<slug>/`, its `/index.md` link; a new project starts here).
-- **Decision**: `mark_list <root>adr/`; the number is its `next:` line. `not-found`: `0001`. No `next:` (older server) or a listing failure: say so, write no decision. Body: `# <NNNN>. <Title>`, one summary line, `## Status`, `## Context`, `## Decision`, `## Consequences`. Conflict on create: list again, take the new `next:`.
+- **Decision**: `mark_list <root>adr/`; the number is its `next:` line. No `next:` (older server) or a listing failure: say so, write no decision. Body: `# <NNNN>. <Title>`, one summary line, `## Status`, `## Context`, `## Decision`, `## Consequences`. Conflict on create: list again, take the new `next:`.
 - **Pattern or convention**: `patterns.md`. **Hard rule**: `guidelines.md`. **Bug lesson**: `debugging.md` (the non-obvious why). **Architecture change**: `architecture.md`. **Next, done, not prioritized**: `roadmap.md`. **Debt**: `debt.md`. **Plan**: `<name>.md` under the layout's `plans:` directory (`plans/` by default). **Open question or idea**: `thoughts.md`.
 - **Cross-project or unplaceable**: ask the user where.
 

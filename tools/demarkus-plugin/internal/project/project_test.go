@@ -44,9 +44,6 @@ func TestResolveStates(t *testing.T) {
 	if r.Header("/my-repo/") != "Project slug: `my-repo`. Project root: `/my-repo/`. Bound store: `team`." {
 		t.Fatalf("header: %s", r.Header("/"))
 	}
-	if r.Lines() != "slug=my-repo\nstore=team\nstate=bound" {
-		t.Fatalf("lines: %s", r.Lines())
-	}
 
 	other := filepath.Join(t.TempDir(), "other")
 	t.Setenv("CLAUDE_PROJECT_DIR", other)
@@ -73,17 +70,14 @@ func TestResolveStates(t *testing.T) {
 	if r.Header("/") != "Project slug: `stale`. Project root: `/`. Bound store: `gone` (stale: not in the catalog; restore it with /soul-join or rebind with /soul-default)." {
 		t.Fatalf("stale header: %s", r.Header("/"))
 	}
-	if r.Lines() != "slug=stale\nstore=gone\nstate=stale\nhint=not in the catalog; restore it with /soul-join or rebind with /soul-default" {
-		t.Fatalf("stale lines: %s", r.Lines())
-	}
 	local := filepath.Join(t.TempDir(), "local")
 	home(t, map[string]string{"project-souls": local + "\tdemarkus-memory\n"})
 	r, err = Resolve(local)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.State != StateStale || !strings.Contains(r.Lines(), "hint=not in the catalog; restore it with /soul-init") {
-		t.Fatalf("a stale local binding must point at /soul-init: %+v %s", r, r.Lines())
+	if r.State != StateStale || !strings.Contains(r.Hint(), "restore it with /soul-init") {
+		t.Fatalf("a stale local binding must point at /soul-init: %+v %s", r, r.Hint())
 	}
 }
 

@@ -118,8 +118,18 @@ func TestPromoteRefreshOnADirectoryInventoriesPromotedDocuments(t *testing.T) {
 	if got.IsError || got.Text != want {
 		t.Fatalf("inventory = %+v\nwant\n%s", got, want)
 	}
-	if got := tools.Promote(t.Context(), marktools.PromoteArgs{URL: "/cwd/a.md", Phase: "refresh"}); !got.IsError || !strings.Contains(got.Text, "refresh needs body") {
-		t.Errorf("a document without a body = %+v", got)
+	// One document with no body answers its own row from its head: no walk.
+	backend.ListCalls = nil
+	got = tools.Promote(t.Context(), marktools.PromoteArgs{URL: "/cwd/a.md", Phase: "refresh"})
+	want = "status: inventory\npath: /cwd/a.md\ndocuments: 1\npromoted: 1\n- /cwd/a.md: promoted-via team; promoted mark://latebit/a.md@v3\n"
+	if got.IsError || got.Text != want || len(backend.ListCalls) != 0 {
+		t.Errorf("one document = %+v (lists %d)\nwant\n%s", got, len(backend.ListCalls), want)
+	}
+	if got := tools.Promote(t.Context(), marktools.PromoteArgs{URL: "/cwd/b.md", Phase: "refresh"}); got.IsError || got.Text != "status: inventory\npath: /cwd/b.md\ndocuments: 1\npromoted: 0\n" {
+		t.Errorf("an unpromoted document = %+v", got)
+	}
+	if got := tools.Promote(t.Context(), marktools.PromoteArgs{URL: "/cwd/a.md", Phase: "refresh", Target: "mark://latebit/a.md@v3"}); !got.IsError || !strings.Contains(got.Text, "refresh needs body") {
+		t.Errorf("a target without a body = %+v", got)
 	}
 }
 

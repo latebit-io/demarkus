@@ -115,6 +115,10 @@ func unknownOutcomeAdvice(err error) error {
 // print writes the outcome the way every request prints: the status line on
 // stderr when verbose or when it is a notice, the body on stdout.
 func (o *writeOutcome) print(verbose bool) {
+	// What the server's gate let through is a notice of its own.
+	if w := o.metadata["warning"]; w != "" {
+		fmt.Fprintf(os.Stderr, "demarkus: warning: %s\n", w)
+	}
 	if o.notice != "" {
 		fmt.Fprint(os.Stderr, o.notice)
 	} else if verbose {

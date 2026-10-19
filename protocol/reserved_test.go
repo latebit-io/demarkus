@@ -3,7 +3,7 @@ package protocol
 import "testing"
 
 func TestIsReservedMetadataKey(t *testing.T) {
-	for _, key := range []string{"version", "etag", "status", "matches"} {
+	for _, key := range []string{"version", "etag", "status", "matches", "warning"} {
 		if !IsReservedMetadataKey(key) {
 			t.Errorf("%q should be reserved", key)
 		}

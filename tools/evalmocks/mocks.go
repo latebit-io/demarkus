@@ -300,6 +300,16 @@ var mocks = []mock{
 			return t.Publish(ctx, marktools.PublishArgs{URL: "/cwd/adr/0005-keep-the-legacy-parser-one-release.md", ExpectedVersion: &v, Body: "# 0005. Keep the legacy parser one release\n\nSettles how long the table driven parser stays in the CLI.\n", Metadata: map[string]string{"tags": "decision,parser,cli", "importance": "0.8", "type": "Decision"}})
 		},
 	},
+	// publish-secret: the hook blocks the literal password; the clean body lands.
+	{
+		Rel:   inCase("publish-secret", "mark_publish"),
+		Store: publishAs(1),
+		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
+			v := 0
+			body := "# Local Postgres\n\nThrowaway container for the fixtures.\n\n```sh\ndocker run -d -p 55432:5432 -e POSTGRES_PASSWORD=postgres postgres:16\nexport DSN=postgres://postgres:${POSTGRES_PASSWORD}@localhost:55432/app\n```\n"
+			return t.Publish(ctx, marktools.PublishArgs{URL: "/cwd/notes/local-postgres.md", ExpectedVersion: &v, Body: body, Metadata: map[string]string{"tags": "postgres,docker", "importance": "0.4", "type": "Note"}})
+		},
+	},
 	// refresh-inventory: one refresh call on the project lists what is promoted.
 	{
 		Rel:   inCase("refresh-inventory", "mark_promote"),

@@ -33,10 +33,17 @@ func TestNextADRStartsAtOneAndSurfacesAFailedListing(t *testing.T) {
 	if next, err := NextADR(t.Context(), &ClientStore{Client: empty, Host: "h"}, "/cwd/adr/"); err != nil || next != "0001" {
 		t.Errorf("empty directory: %q, %v", next, err)
 	}
+	// A directory not there yet holds no records either: the series starts.
 	gone := &fetchtest.Client{ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 	}}
-	if _, err := NextADR(t.Context(), &ClientStore{Client: gone, Host: "h"}, "/cwd/adr/"); err == nil {
-		t.Error("a not-found listing produced a number")
+	if next, err := NextADR(t.Context(), &ClientStore{Client: gone, Host: "h"}, "/cwd/adr/"); err != nil || next != "0001" {
+		t.Errorf("missing directory: %q, %v", next, err)
+	}
+	down := &fetchtest.Client{ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
+	}}
+	if _, err := NextADR(t.Context(), &ClientStore{Client: down, Host: "h"}, "/cwd/adr/"); err == nil {
+		t.Error("a refused listing produced a number")
 	}
 }

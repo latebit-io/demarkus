@@ -124,8 +124,12 @@ func (t *Tools) promoteStamp(ctx context.Context, target Target, args *PromoteAr
 // with the packet it writes the planned body.
 func (t *Tools) promoteRefresh(ctx context.Context, target Target, args *PromoteArgs) Result {
 	if args.Body == "" {
-		if strings.HasSuffix(target.Path, "/") && args.Target == "" && args.Packet == "" {
+		switch {
+		case args.Target != "" || args.Packet != "":
+		case strings.HasSuffix(target.Path, "/"):
 			return t.promoteInventory(ctx, target)
+		default:
+			return t.promoteRow(ctx, target)
 		}
 		return failure("refresh needs body: the live knowledge copy")
 	}
@@ -172,23 +176,43 @@ func (t *Tools) promoteInventory(ctx context.Context, target Target) Result {
 	if err != nil {
 		return failure("refresh inventory failed: %v", err)
 	}
+	return text(inventoryReport(target, inv))
+}
+
+// promoteRow answers refresh on one document with no body: its own inventory
+// row from the head it has to read anyway, so a scoped refresh walks nothing.
+func (t *Tools) promoteRow(ctx context.Context, target Target) Result {
+	head, bad := t.promoteHead(ctx, t.doc(ctx, target, nil))
+	if bad != nil {
+		return *bad
+	}
+	inv := &audit.Inventory{Documents: 1}
+	if d, ok := audit.Classify(target.Path, head.Metadata, head.Body); ok {
+		inv.Docs = append(inv.Docs, d)
+	}
+	return text(inventoryReport(target, inv))
+}
+
+// inventoryReport words an inventory; each row names the document as the
+// agent passes it back to refresh it.
+func inventoryReport(target Target, inv *audit.Inventory) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "status: inventory\npath: %s\ndocuments: %d\npromoted: %d\n", target.Path, inv.Documents, len(inv.Docs))
 	for _, gap := range inv.Coverage {
 		fmt.Fprintf(&b, "coverage: %s\n", gap)
 	}
 	for _, d := range inv.Docs {
-		name := target.at(d.Path).name() // what the agent passes back to refresh it
+		name, m := target.at(d.Path).name(), d.Markers
 		switch {
-		case d.Markers.Target == "":
+		case m.Target == "":
 			fmt.Fprintf(&b, "- %s: tag only, no marker\n", name)
-		case d.Markers.Version == 0:
-			fmt.Fprintf(&b, "- %s: promoted-via none (legacy marker); promoted %s\n", name, d.Markers.Target)
+		case m.Version == 0:
+			fmt.Fprintf(&b, "- %s: promoted-via none (legacy marker); promoted %s\n", name, m.Target)
 		default:
-			fmt.Fprintf(&b, "- %s: promoted-via %s; promoted %s@v%d\n", name, d.Markers.Via, d.Markers.Target, d.Markers.Version)
+			fmt.Fprintf(&b, "- %s: promoted-via %s; promoted %s@v%d\n", name, m.Via, m.Target, m.Version)
 		}
 	}
-	return text(b.String())
+	return b.String()
 }
 
 // writtenReport words a soul write that landed.

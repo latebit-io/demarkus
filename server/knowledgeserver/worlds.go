@@ -158,9 +158,6 @@ func newWorldManager(watchCtx context.Context, group *sync.WaitGroup, cfg worldM
 		}},
 		policyStores: make(map[string]worldStore),
 	}
-	m.content.Warn = func(path string, findings []contentcheck.Finding, override string) {
-		m.logger.Warn("content check finding let through", "path", path, "findings", contentcheck.Summary(findings), "override", override)
-	}
 	router, err := snirouter.NewDynamic(nil)
 	if err != nil {
 		return nil, err

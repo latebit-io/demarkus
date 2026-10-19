@@ -63,8 +63,9 @@ func TestListOfAnADRDirectoryNamesTheNextNumber(t *testing.T) {
 	backend.ListFn = func(context.Context, fetch.ListRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
 	}
-	if got := tools.List(t.Context(), marktools.ListArgs{URL: "/cwd/adr/"}); got.IsError || strings.Contains(got.Text, "next:") {
-		t.Errorf("not-found adr listing = %+v", got)
+	// A directory with no records yet starts the series; the skill keeps no branch for it.
+	if got := tools.List(t.Context(), marktools.ListArgs{URL: "/cwd/adr/"}); got.IsError || !strings.Contains(got.Text, "\nnext: 0001\n") {
+		t.Errorf("not-found adr listing = %+v, want next: 0001", got)
 	}
 }
 

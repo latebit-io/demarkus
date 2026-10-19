@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 // WireGoldenTime replaces every wall-clock value in a golden, so the fixture
@@ -64,7 +66,28 @@ func WireScenario(t *testing.T, b LookupBackend) []WireGolden {
 		}
 		goldens = append(goldens, WireGolden{Name: step.name, Response: resp})
 	}
-	return goldens
+	return append(goldens, gatedWireScenario(t, b)...)
+}
+
+// WireSecret is the body the gated goldens carry: a throwaway container's
+// DSN, the shape the doctor once found three times in the demarkus soul. The
+// placeholder rule does not accept a literal password.
+const WireSecret = "# Local Postgres\n\n```sh\nexport DSN=postgres://postgres:postgres@localhost:55432/app\n```\n" //nolint:gosec // test fixture: a throwaway container DSN, not a credential
+
+// gatedWireScenario drives the same body through the content gate twice:
+// a tier that warns lands it under the warning key, a tier that refuses
+// answers bad-request with the rule and line.
+func gatedWireScenario(t *testing.T, b LookupBackend) []WireGolden {
+	t.Helper()
+	meta := map[string]string{"tags": "postgres, wire", "importance": "0.3"}
+	warned := NewHandler(LookupBackend{Store: writepolicy.Enforce(b.Store, writepolicy.Options{
+		Content: writepolicy.ContentOptions{SecretsWarn: true, Options: contentcheck.Options{PII: contentcheck.Warn}},
+	})})
+	refused := NewHandler(LookupBackend{Store: writepolicy.Enforce(b.Store, writepolicy.Options{})})
+	return []WireGolden{
+		{"publish-warned", pinWallClock(sendSettled(t, warned, request(protocol.VerbPublish, "/docs/dsn.md", withExpected(meta, "0"), WireSecret)))},
+		{"publish-refused", pinWallClock(sendSettled(t, refused, request(protocol.VerbPublish, "/docs/dsn-refused.md", withExpected(meta, "0"), WireSecret)))},
+	}
 }
 
 func withExpected(meta map[string]string, version string) map[string]string {

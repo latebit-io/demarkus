@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/procscan"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/release"
 )
@@ -74,5 +75,17 @@ func TestIfConfiguredDoesNothingWithoutAConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".demarkus", "plugin-memory.conf")); err == nil {
 		t.Fatal("a hook's provision wrote a config")
+	}
+}
+
+// The head line names the live server's pid, so /soul-status needs no
+// process scan of its own; no pid when none is ours.
+func TestStatusHeadCarriesThePid(t *testing.T) {
+	cfg := &config.PluginConfig{Mode: "default", MemoryDir: "/m", Port: "6309"}
+	if got := statusHead(cfg, 4242, ""); got != "mode=default memory=/m port=6309 pid=4242: healthy" {
+		t.Errorf("healthy = %q", got)
+	}
+	if got := statusHead(cfg, 0, "the demarkus-memory server is not running"); got != "mode=default memory=/m port=6309: the demarkus-memory server is not running" {
+		t.Errorf("down = %q", got)
 	}
 }

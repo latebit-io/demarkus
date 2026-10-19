@@ -455,10 +455,21 @@ func Status() (string, error) {
 	}
 	head := "no local memory configured (run /soul-init)"
 	if cfg != nil {
-		head = fmt.Sprintf("mode=%s memory=%s port=%s: %s", cfg.Mode, cfg.MemoryDir, cfg.Port, cmp.Or(healthWarning(cfg), "healthy"))
+		pid, warn := serverState(cfg)
+		head = statusHead(cfg, pid, warn)
 	}
 	lines := append([]string{head, "desired=" + release.DesiredVersions()}, release.BinaryLines()...)
 	return strings.Join(lines, "\n"), nil
+}
+
+// statusHead is status's first line; the pid of the live server it found
+// rides on it, so a prompt needs no process scan of its own.
+func statusHead(cfg *config.PluginConfig, pid int, warn string) string {
+	head := fmt.Sprintf("mode=%s memory=%s port=%s", cfg.Mode, cfg.MemoryDir, cfg.Port)
+	if pid > 0 {
+		head += fmt.Sprintf(" pid=%d", pid)
+	}
+	return head + ": " + cmp.Or(warn, "healthy")
 }
 
 // reuseDriftWarning reports an adopted server whose code is behind: a binary
@@ -523,34 +534,40 @@ func HealthWarning() (string, error) {
 
 // healthWarning is HealthWarning for a loaded config.
 func healthWarning(cfg *config.PluginConfig) string {
+	_, warn := serverState(cfg)
+	return warn
+}
+
+// serverState finds the live server for cfg: its pid (0 when none is ours)
+// and the warning when it is not healthy.
+func serverState(cfg *config.PluginConfig) (pid int, warn string) {
 	switch cfg.Mode {
 	case "default", "isolated":
-		// Verify the recorded PID is genuinely OUR demarkus-server for this root,
-		// not just any live process that reused the number — otherwise a stale
-		// .pid would falsely report healthy while memory tools fail.
-		pid := procscan.ReadPID(filepath.Join(cfg.MemoryDir, ".pid"))
+		// The recorded pid must be our demarkus-server at this root, not any
+		// process that reused the number: a stale .pid would read healthy.
+		pid = procscan.ReadPID(filepath.Join(cfg.MemoryDir, ".pid"))
 		switch procscan.ProbeAtRoot(pid, cfg.MemoryDir) {
 		case procscan.Unknown:
-			return fmt.Sprintf("cannot tell whether the demarkus-memory server for %s is running: process discovery did not complete. Run /soul-status to retry.", cfg.MemoryDir)
+			return 0, fmt.Sprintf("cannot tell whether the demarkus-memory server for %s is running: process discovery did not complete. Run /soul-status to retry.", cfg.MemoryDir)
 		case procscan.NotOurs:
-			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /soul-init to restart, or /soul-status to diagnose.", cfg.MemoryDir)
+			return 0, fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /soul-init to restart, or /soul-status to diagnose.", cfg.MemoryDir)
 		}
 		if !procscan.ListensOn(pid, strings.TrimSpace(cfg.Port)) {
-			return fmt.Sprintf("the demarkus-memory server for %s is not on the configured port %s; the next provision restarts it there.", cfg.MemoryDir, cfg.Port)
+			return pid, fmt.Sprintf("the demarkus-memory server for %s is not on the configured port %s; the next provision restarts it there.", cfg.MemoryDir, cfg.Port)
 		}
+		return pid, ""
 	case "reuse":
-		pid, ran := procscan.PIDAtRootProbed(cfg.MemoryDir)
+		var ran bool
+		pid, ran = procscan.PIDAtRootProbed(cfg.MemoryDir)
 		if !ran {
-			return fmt.Sprintf("cannot tell whether the reused server rooted at %s is running: process discovery did not complete. Run /soul-status to retry.", cfg.MemoryDir)
+			return 0, fmt.Sprintf("cannot tell whether the reused server rooted at %s is running: process discovery did not complete. Run /soul-status to retry.", cfg.MemoryDir)
 		}
 		if pid == 0 {
-			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /soul-init to reconfigure.", cfg.MemoryDir)
+			return 0, fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /soul-init to reconfigure.", cfg.MemoryDir)
 		}
-		if w := reuseDriftWarning(pid); w != "" {
-			return w
-		}
+		return pid, reuseDriftWarning(pid)
 	}
-	return ""
+	return 0, ""
 }
 
 // DetectServers reports running demarkus-server processes as "NO_SERVER" or

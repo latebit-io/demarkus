@@ -1,0 +1,6 @@
+---
+modified: "2026-01-01T00:00:00Z"
+status: created
+version: "1"
+warning: 'content check: secret/connection-string-password at line 4; fix: treat the secret as compromised: rotate or revoke it, then remove it and re-publish; earlier versions keep it until the operator purges them'
+---
