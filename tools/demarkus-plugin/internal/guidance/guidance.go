@@ -103,9 +103,9 @@ func memory(in Input) (Output, error) {
 	return Output{Context: strings.Join(parts, "\n\n"), Status: status}, nil
 }
 
-// projectHeader states the project, its soul root and state, and where the
-// work stands, as data for the agent; status is the user's line. Both empty
-// when no project directory is known; an unusable directory name is stated.
+// projectHeader states the project, its root, state and where the work stands
+// for the agent; status is the user's line. Both are empty without a project
+// directory, or when an unbound project would name an unconfigured local store.
 func projectHeader(dir, warn string) (header, status string, err error) {
 	r, err := project.Resolve(dir)
 	if errors.Is(err, project.ErrNoDir) {
@@ -117,6 +117,11 @@ func projectHeader(dir, warn string) (header, status string, err error) {
 			return "Project slug: none (" + slugErr.Error() + ").", slugStatus(slugErr), nil
 		}
 		return "", "", err
+	}
+	if r.State == project.StateLocal {
+		if configured, err := LocalConfigured(); err != nil || !configured {
+			return "", "", err
+		}
 	}
 	s := readStatus(r)
 	return s.agentHeader(r), s.userLine(r, warn), nil
@@ -183,4 +188,11 @@ func knowledge(in Input) (Output, error) {
 		parts = append(parts, "(No local demarkus store is configured here, so the store↔system guidance above is informational only; everything durable goes to the knowledge system.)")
 	}
 	return Output{Context: strings.Join(parts, "\n\n")}, nil
+}
+
+// LocalConfigured reports a usable plugin-memory.conf: the local store an
+// unbound project would write to exists. An unreadable one is an error.
+func LocalConfigured() (bool, error) {
+	cfg, err := config.LoadConfig()
+	return cfg != nil, err
 }

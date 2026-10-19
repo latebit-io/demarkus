@@ -322,7 +322,7 @@
       "openWorldHint": true,
       "readOnlyHint": true
     },
-    "description": "List documents and subdirectories. Archived hidden unless include_archived; while complete=false pass next-cursor as cursor. For one document prefer mark_explore.",
+    "description": "List documents and subdirectories; first-page adr/ listings add next: (unused decision number). Archived hidden unless include_archived; while complete=false pass next-cursor as cursor. For one document prefer mark_explore.",
     "inputSchema": {
       "properties": {
         "cursor": {
@@ -410,7 +410,7 @@
     "inputSchema": {
       "properties": {
         "body": {
-          "description": "dry_run, apply: the distilled draft; refresh: the live knowledge body",
+          "description": "dry_run, apply: the distilled draft; refresh: the live body, or omitted with a directory url for its inventory",
           "type": "string"
         },
         "metadata": {

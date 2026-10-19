@@ -46,6 +46,10 @@ func cmdProvision(args []string) {
 		}
 	}
 	switch args[0] {
+	case "if-configured":
+		if err := provision.IfConfigured(); err != nil {
+			fail(err.Error())
+		}
 	case "status":
 		printLine(provision.Status())
 	case "health":
@@ -55,59 +59,9 @@ func cmdProvision(args []string) {
 	case "verify-auth":
 		printLine(provision.VerifyAuth())
 	case "init":
-		// Parse flags and the positional mode in ANY order. Go's flag package
-		// stops at the first non-flag token, so it can't handle
-		// `provision init reuse --port N`; and a naive "first non-flag = mode"
-		// scan wrongly grabs a flag's value (`--port 6310 reuse` → mode "6310").
-		// So walk the args ourselves, knowing --port/--root each take a value
-		// (as `--flag V` or `--flag=V`); the first bare token is the mode.
-		mode := ""
-		port := 0
-		root := ""
-		rest := args[1:]
-		takeVal := func(i *int, flagName string) string {
-			if eq := strings.IndexByte(rest[*i], '='); eq >= 0 {
-				return rest[*i][eq+1:]
-			}
-			*i++
-			if *i >= len(rest) {
-				fail("provision init: " + flagName + " requires a value")
-			}
-			return rest[*i]
-		}
-		isFlag := func(a, name string) bool {
-			return a == "--"+name || a == "-"+name || strings.HasPrefix(a, "--"+name+"=") || strings.HasPrefix(a, "-"+name+"=")
-		}
-		for i := 0; i < len(rest); i++ {
-			a := rest[i]
-			switch {
-			case isFlag(a, "port"):
-				v := takeVal(&i, "--port")
-				n, err := strconv.Atoi(v)
-				if err != nil {
-					fail("provision init: --port wants an integer, got '" + v + "'")
-				}
-				port = n
-			case isFlag(a, "root"):
-				root = takeVal(&i, "--root")
-			case strings.HasPrefix(a, "-"):
-				fail("provision init: unknown flag '" + a + "'")
-			default:
-				if mode != "" {
-					fail("provision init: unexpected extra argument '" + a + "'")
-				}
-				mode = a
-			}
-		}
-		if mode == "" {
-			fail("provision init: requires a mode (default|reuse|isolated)")
-		}
-		if err := provision.Init(mode, port, root); err != nil {
-			fail(err.Error())
-		}
-		fmt.Println("OK: provisioned (mode=" + mode + ")")
+		cmdProvisionInit(args[1:])
 	default:
-		fail("provision: unknown subcommand '" + args[0] + "' (use: status|health|detect|verify-auth|init)")
+		fail("provision: unknown subcommand '" + args[0] + "' (use: if-configured|status|health|detect|verify-auth|init)")
 	}
 }
 
@@ -184,11 +138,7 @@ func cmdRegistry(args []string) {
 		if err != nil {
 			fail(err.Error())
 		}
-		if len(rows) == 0 {
-			fmt.Println("NONE")
-			return
-		}
-		fmt.Println(strings.Join(rows, "\n"))
+		fmt.Println(promote.Report(rows))
 	default:
 		fail("registry: unknown subcommand '" + args[0] + "'")
 	}
@@ -455,7 +405,11 @@ func registryProject(args []string) {
 		fail("project: " + err.Error())
 	}
 	st := guidance.Probe(r.Store, r.Slug)
-	if _, err := fmt.Println(r.Lines() + "\n" + st.Lines()); err != nil {
+	configured, err := guidance.LocalConfigured()
+	if err != nil {
+		fail("project: " + err.Error())
+	}
+	if _, err := fmt.Println(r.Lines() + "\n" + st.Lines() + "\nverdict=" + guidance.Verdict(r, st, configured)); err != nil {
 		fail("project: write output: " + err.Error())
 	}
 }
@@ -625,4 +579,54 @@ func cmdMcpServe(args []string) {
 		}
 		os.Exit(1)
 	}
+}
+
+// cmdProvisionInit parses `provision init` flags and the mode in any order.
+// The flag package stops at the first non-flag token (`init reuse --port N`),
+// so walk the args: --port/--root take a value, the first bare token is the mode.
+func cmdProvisionInit(rest []string) {
+	mode := ""
+	port := 0
+	root := ""
+	takeVal := func(i *int, flagName string) string {
+		if eq := strings.IndexByte(rest[*i], '='); eq >= 0 {
+			return rest[*i][eq+1:]
+		}
+		*i++
+		if *i >= len(rest) {
+			fail("provision init: " + flagName + " requires a value")
+		}
+		return rest[*i]
+	}
+	isFlag := func(a, name string) bool {
+		return a == "--"+name || a == "-"+name || strings.HasPrefix(a, "--"+name+"=") || strings.HasPrefix(a, "-"+name+"=")
+	}
+	for i := 0; i < len(rest); i++ {
+		a := rest[i]
+		switch {
+		case isFlag(a, "port"):
+			v := takeVal(&i, "--port")
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				fail("provision init: --port wants an integer, got '" + v + "'")
+			}
+			port = n
+		case isFlag(a, "root"):
+			root = takeVal(&i, "--root")
+		case strings.HasPrefix(a, "-"):
+			fail("provision init: unknown flag '" + a + "'")
+		default:
+			if mode != "" {
+				fail("provision init: unexpected extra argument '" + a + "'")
+			}
+			mode = a
+		}
+	}
+	if mode == "" {
+		fail("provision init: requires a mode (default|reuse|isolated)")
+	}
+	if err := provision.Init(mode, port, root); err != nil {
+		fail(err.Error())
+	}
+	fmt.Println("OK: provisioned (mode=" + mode + ")")
 }

@@ -3,9 +3,13 @@
 package provision
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -442,25 +446,19 @@ func VerifyAuth() (string, error) {
 	return fmt.Sprintf("write auth healthy (server pid %d, token registry %s)", pid, tokensTOML), nil
 }
 
-// Status returns a human-readable one-line status of the configured server, or a
-// note that no memory is configured.
+// Status reports the configured server's health, or that no memory is
+// configured, then the pins and one line per managed binary against them.
 func Status() (string, error) {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return "", err
 	}
-	if cfg == nil {
-		return "no local memory configured (run /soul-init)", nil
+	head := "no local memory configured (run /soul-init)"
+	if cfg != nil {
+		head = fmt.Sprintf("mode=%s memory=%s port=%s: %s", cfg.Mode, cfg.MemoryDir, cfg.Port, cmp.Or(healthWarning(cfg), "healthy"))
 	}
-	w, err := HealthWarning()
-	if err != nil {
-		return "", err
-	}
-	verdict := "healthy"
-	if w != "" {
-		verdict = w
-	}
-	return fmt.Sprintf("mode=%s memory=%s port=%s: %s\ndesired=%s", cfg.Mode, cfg.MemoryDir, cfg.Port, verdict, release.DesiredVersions()), nil
+	lines := append([]string{head, "desired=" + release.DesiredVersions()}, release.BinaryLines()...)
+	return strings.Join(lines, "\n"), nil
 }
 
 // reuseDriftWarning reports an adopted server whose code is behind: a binary
@@ -517,47 +515,117 @@ func replacedBinaryWarning(pid int, exe, got string) string {
 // modes trust .pid liveness, reuse also drift-checks the adopted process.
 func HealthWarning() (string, error) {
 	cfg, err := config.LoadConfig()
-	if err != nil {
+	if err != nil || cfg == nil {
 		return "", err
 	}
-	if cfg == nil {
-		return "", nil
-	}
+	return healthWarning(cfg), nil
+}
+
+// healthWarning is HealthWarning for a loaded config.
+func healthWarning(cfg *config.PluginConfig) string {
 	switch cfg.Mode {
 	case "default", "isolated":
 		// Verify the recorded PID is genuinely OUR demarkus-server for this root,
 		// not just any live process that reused the number — otherwise a stale
 		// .pid would falsely report healthy while memory tools fail.
-		switch procscan.ProbeAtRoot(procscan.ReadPID(filepath.Join(cfg.MemoryDir, ".pid")), cfg.MemoryDir) {
+		pid := procscan.ReadPID(filepath.Join(cfg.MemoryDir, ".pid"))
+		switch procscan.ProbeAtRoot(pid, cfg.MemoryDir) {
 		case procscan.Unknown:
-			return fmt.Sprintf("cannot tell whether the demarkus-memory server for %s is running: process discovery did not complete. Run /soul-status to retry.", cfg.MemoryDir), nil
+			return fmt.Sprintf("cannot tell whether the demarkus-memory server for %s is running: process discovery did not complete. Run /soul-status to retry.", cfg.MemoryDir)
 		case procscan.NotOurs:
-			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /soul-init to restart, or /soul-status to diagnose.", cfg.MemoryDir), nil
+			return fmt.Sprintf("the demarkus-memory server is not running (no live process for %s). Memory tools (mark_fetch/mark_publish/mark_lookup/...) will fail until it restarts; run /soul-init to restart, or /soul-status to diagnose.", cfg.MemoryDir)
+		}
+		if !procscan.ListensOn(pid, strings.TrimSpace(cfg.Port)) {
+			return fmt.Sprintf("the demarkus-memory server for %s is not on the configured port %s; the next provision restarts it there.", cfg.MemoryDir, cfg.Port)
 		}
 	case "reuse":
 		pid, ran := procscan.PIDAtRootProbed(cfg.MemoryDir)
 		if !ran {
-			return fmt.Sprintf("cannot tell whether the reused server rooted at %s is running: process discovery did not complete. Run /soul-status to retry.", cfg.MemoryDir), nil
+			return fmt.Sprintf("cannot tell whether the reused server rooted at %s is running: process discovery did not complete. Run /soul-status to retry.", cfg.MemoryDir)
 		}
 		if pid == 0 {
-			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /soul-init to reconfigure.", cfg.MemoryDir), nil
+			return fmt.Sprintf("demarkus-memory is configured to reuse a server rooted at %s, but none is running. Memory tools will fail until it is started; start that server or run /soul-init to reconfigure.", cfg.MemoryDir)
 		}
 		if w := reuseDriftWarning(pid); w != "" {
-			return w, nil
+			return w
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // DetectServers reports running demarkus-server processes as "NO_SERVER" or
-// "SERVERS\n<PID PORT ROOT>..." lines.
+// "SERVERS\n<PID PORT ROOT>..." lines, with the rows no prompt may reuse
+// under "SKIPPED", each with its reason.
 func DetectServers() (string, error) {
-	results, ran := procscan.ListServers()
+	servers, ran := procscan.ListServers()
 	if !ran {
 		return "", errors.New("could not list processes: the discovery probe did not run")
 	}
-	if results == "" {
-		return "NO_SERVER", nil
+	return detectReport(servers), nil
+}
+
+func detectReport(servers []procscan.Server) string {
+	var rows, skipped []string
+	for _, s := range servers {
+		row := fmt.Sprintf("%d %s %s", s.PID, s.Port, cmp.Or(s.Root, "(unknown)"))
+		if reason := rootProblem(s.Root); reason != "" {
+			skipped = append(skipped, row+" ("+reason+")")
+			continue
+		}
+		rows = append(rows, row)
 	}
-	return "SERVERS\n" + results, nil
+	out := "NO_SERVER"
+	if len(rows) > 0 {
+		out = "SERVERS\n" + strings.Join(rows, "\n")
+	}
+	if len(skipped) > 0 {
+		out += "\nSKIPPED\n" + strings.Join(skipped, "\n")
+	}
+	return out
+}
+
+// rootProblem says why a detected server cannot be reused: no root known, or
+// one that is gone, which a reuse setup would write bookkeeping into.
+func rootProblem(root string) string {
+	if root == "" {
+		return "root unknown"
+	}
+	info, err := os.Stat(root)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "root is gone"
+	case err != nil:
+		return "root unreadable: " + err.Error()
+	case !info.IsDir():
+		return "root is not a directory"
+	}
+	// Stat passes on a directory this user cannot enter; reading one entry does not.
+	dir, err := os.Open(root)
+	if err != nil {
+		return "root unreadable: " + err.Error()
+	}
+	defer dir.Close() //nolint:errcheck // read-only handle
+	if _, err := dir.Readdirnames(1); err != nil && !errors.Is(err, io.EOF) {
+		return "root unreadable: " + err.Error()
+	}
+	return ""
+}
+
+// IfConfigured is Provision for a session hook: no config means nothing to do
+// (the default setup is the launcher's; a sandbox must never start a soul); a
+// healthy server on current binaries skips the work the launcher already did.
+func IfConfigured() error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		progress.Logf("no plugin config; nothing to provision")
+		return nil
+	}
+	if w := healthWarning(cfg); w == "" && release.Current() {
+		progress.Logf("healthy (mode=%s, memory=%s, port=%s)", cfg.Mode, cfg.MemoryDir, cfg.Port)
+		return nil
+	}
+	return Provision()
 }

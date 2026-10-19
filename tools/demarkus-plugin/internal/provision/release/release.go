@@ -17,8 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/procscan"
-
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/progress"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/semver"
@@ -122,26 +120,15 @@ func DesiredVersions() string {
 		ServerVersion, ClientVersion, ToolsRef())
 }
 
+// Current reports every managed binary installed at its pin.
+func Current() bool { return installedVersions() == DesiredVersions() }
+
 // installedVersions is DesiredVersions' shape read from the binaries on disk. A
-// missing, unexecutable or too old binary reads as an empty field, which never
+// missing, unexecutable or broken binary reads as an empty field, which never
 // equals a pin, so EnsureBinaries re-downloads.
 func installedVersions() string {
-	return fmt.Sprintf("server=%s,client=%s,tools=%s",
-		binaryVersion("demarkus-server"),
-		binaryVersion("demarkus-mcp"),
-		binaryVersion("demarkus-token"),
-	)
-}
-
-// binaryVersion echoes the version BIN reports via --version, or "" if BIN is
-// missing, not executable, or errors (a pre-version binary errors on the unknown
-// flag). stderr is discarded so an old binary's noise can't leak in.
-func binaryVersion(name string) string {
-	p, err := config.BinPath(name)
-	if err != nil {
-		return ""
-	}
-	return procscan.BinaryVersionAt(p)
+	states := binaryStates()
+	return fmt.Sprintf("server=%s,client=%s,tools=%s", states[0].version, states[1].version, states[2].version)
 }
 
 // artifact is one pinned release archive: the binary it installs, the asset
