@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/protocol/wiretest"
 )
 
@@ -110,12 +112,22 @@ func cwdStore() *fetchtest.Client {
 			host + "/cwd/roadmap.md":            fetchtest.Head(roadmap, 8, meta),
 			host + "/cwd/roadmap.md/v8":         fetchtest.Head(roadmap, 8, meta),
 		},
-		ListFn: func(_ context.Context, r fetch.ListRequest) (fetch.Result, error) {
-			if r.Path == "/cwd/journal/" {
-				return fetchtest.ListPage(r.Path, "", "2026-10-11.md"), nil
-			}
-			return fetchtest.ListPage(r.Path, ""), nil
-		},
+		ListFn: pages(nil, nil),
+	}
+}
+
+// pages answers LIST from the story's directory tree plus a case's extra
+// directories; archived names are listed only when the request asks.
+func pages(extra, archived map[string][]string) func(context.Context, fetch.ListRequest) (fetch.Result, error) {
+	live := map[string][]string{"/cwd/journal/": {"2026-10-11.md"}}
+	maps.Copy(live, extra)
+	return func(_ context.Context, r fetch.ListRequest) (fetch.Result, error) {
+		dir := strings.TrimSuffix(r.Path, "/") + "/"
+		names := live[dir]
+		if r.IncludeArchived {
+			names = slices.Concat(names, archived[dir])
+		}
+		return fetchtest.ListPage(r.Path, "", names...), nil
 	}
 }
 
@@ -133,6 +145,32 @@ func publishAs(v int) func() *fetchtest.Client {
 func publishNotes(ctx context.Context, t *marktools.Tools) marktools.Result {
 	v := 0
 	return t.Publish(ctx, marktools.PublishArgs{URL: notesPath, ExpectedVersion: &v, Body: notesBody, Metadata: map[string]string{"tags": "quic,retries", "importance": "0.5", "type": "Note"}})
+}
+
+// adrStore is the story's store with three live decisions and a retired
+// fourth, so a decision listing names 0005.
+func adrStore() *fetchtest.Client {
+	s := cwdStore()
+	s.ListFn = pages(
+		map[string][]string{"/cwd/adr/": {"0001-recursive-descent-parser.md", "0002-fixtures-in-testdata.md", "0003-errors-carry-line-and-column.md"}},
+		map[string][]string{"/cwd/adr/": {"0004-table-driven-parser.md"}},
+	)
+	return s
+}
+
+// promotedStore is the story's store with one stamped document, one legacy
+// marker and one tag without a marker, for the refresh inventory.
+func promotedStore() *fetchtest.Client {
+	s := cwdStore()
+	stamped := promote.WithMarkers("# Patterns\n\nConventions the cwd code follows.\n", &promote.Markers{Via: "knowledge", Target: "mark://latebit/projects/cwd/patterns.md", Version: 2})
+	s.Published[host+"/cwd/patterns.md"] = fetchtest.Head(stamped, 3, map[string]string{"tags": "patterns,promoted", "type": "Guide"})
+	s.Published[host+"/cwd/notes/legacy.md"] = fetchtest.Head("# Legacy parser notes\n\npromoted: mark://team/notes/legacy.md\n\nKept while the rewrite was in progress.\n", 1, nil)
+	s.Published[host+"/cwd/notes/tagged.md"] = fetchtest.Head("# Tagged only\n\nTagged promoted by hand, never stamped.\n", 1, map[string]string{"tags": "promoted"})
+	s.ListFn = pages(map[string][]string{
+		"/cwd/":       {"index.md", "notes/", "patterns.md", "roadmap.md"},
+		"/cwd/notes/": {"legacy.md", "tagged.md"},
+	}, nil)
+	return s
 }
 
 func suite(tool string) string     { return mocksLeaf + "/" + tool + ".md" }
@@ -245,5 +283,30 @@ var mocks = []mock{
 			return &fetchtest.Client{PublishFn: answer[fetch.WriteRequest](golden("publish-created", map[string]string{"modified": modified}))}
 		},
 		Render: publishNotes,
+	},
+	// decision-number: the adr listing names 0005; the publish takes it.
+	{
+		Rel:   inCase("decision-number", "mark_list"),
+		Store: adrStore,
+		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
+			return t.List(ctx, marktools.ListArgs{URL: "/cwd/adr/"})
+		},
+	},
+	{
+		Rel:   inCase("decision-number", "mark_publish"),
+		Store: publishAs(1),
+		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
+			v := 0
+			return t.Publish(ctx, marktools.PublishArgs{URL: "/cwd/adr/0005-keep-the-legacy-parser-one-release.md", ExpectedVersion: &v, Body: "# 0005. Keep the legacy parser one release\n\nSettles how long the table driven parser stays in the CLI.\n", Metadata: map[string]string{"tags": "decision,parser,cli", "importance": "0.8", "type": "Decision"}})
+		},
+	},
+	// refresh-inventory: one refresh call on the project lists what is promoted.
+	{
+		Rel:   inCase("refresh-inventory", "mark_promote"),
+		Front: "---\nexpect:\n  phase: refresh\n---\n",
+		Store: promotedStore,
+		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
+			return t.Promote(ctx, marktools.PromoteArgs{URL: "/cwd/", Phase: "refresh"})
+		},
 	},
 }

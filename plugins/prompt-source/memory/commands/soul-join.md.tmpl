@@ -2,7 +2,7 @@
 description: Join a remote demarkus {{.Store}}, register its MCP server, and bind it to this project; a tokened QUIC join also stores the token in a 0600 file (broker joins use OAuth, no token file).
 ---
 
-Connect this {{.Agent}} installation to a remote demarkus {{.Store}}: a direct-QUIC {{.Store}} server, or an HTTPS demarkus-memory-broker (hosted personal {{.Store}} behind OAuth). `/soul-init` manages a local {{.Store}}; `/knowledge-join` joins an organizational knowledge system.
+Connect to a remote demarkus {{.Store}}: a direct-QUIC {{.Store}} server, or an HTTPS demarkus-memory-broker (hosted personal {{.Store}} behind OAuth). `/soul-init` manages a local {{.Store}}; `/knowledge-join` joins an organizational knowledge system.
 
 {{template "host.tmpl" .}}## Secret Boundary
 
