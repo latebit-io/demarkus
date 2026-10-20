@@ -158,6 +158,12 @@ func (t *Tools) observeWrite(ctx context.Context, target Target, result graph.Fe
 	// A write's response rides on its metadata; the gate's note is response
 	// only and would change the document's hash in the observation.
 	delete(result.Metadata, "warning")
+	// An older server answers a write without its etag; observed, the write
+	// would read as a conflict against the fetch after it, so that fetch
+	// observes it instead.
+	if result.Status == protocol.StatusOK && result.Metadata["etag"] == "" {
+		return
+	}
 	if !scope.observe(target, result) {
 		return
 	}

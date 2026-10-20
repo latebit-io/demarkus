@@ -46,6 +46,9 @@ var (
 // Store is the read surface an audit needs. Every method returns the wire
 // response so callers see status text, not a translated error.
 type Store interface {
+	// Authority is how the surface names the store ("host:port", or a world
+	// name behind a broker), so a mark:// link to it is internal; "" for none.
+	Authority() string
 	List(ctx context.Context, dir string, includeArchived bool, cursor string) (protocol.Response, error)
 	Fetch(ctx context.Context, docPath string) (protocol.Response, error)
 	Versions(ctx context.Context, docPath string) (protocol.Response, error)
@@ -103,6 +106,7 @@ type document struct {
 type audit struct {
 	opts     Options
 	store    Store
+	resolve  links.Resolver
 	docs     map[string]*document
 	order    []string
 	dirs     map[string]bool
@@ -188,7 +192,7 @@ func newAudit(store Store, opts Options) (*audit, error) {
 	if opts.Timeout <= 0 {
 		opts.Timeout = MaxAuditDuration
 	}
-	return &audit{opts: opts, store: store, docs: map[string]*document{}, dirs: map[string]bool{}}, nil
+	return &audit{opts: opts, store: store, resolve: links.ResolverFor(store.Authority()), docs: map[string]*document{}, dirs: map[string]bool{}}, nil
 }
 
 func (a *audit) note(format string, args ...any) {
@@ -237,12 +241,12 @@ func (a *audit) fetchAll(ctx context.Context) error {
 }
 
 // classifyLinks splits a body's links into documents and directories on this
-// store. links.Extract already drops fragments; mark:// authorities are other
-// stores and count as external.
+// store. links.Extract already drops fragments; a mark:// link is internal
+// only when its authority is this store's.
 func (a *audit) classifyLinks(d *document) {
 	seen := map[string]bool{}
 	for _, dest := range links.Extract(d.body) {
-		target := links.ResolvePath(d.path, dest)
+		target := a.resolve.Path(d.path, dest)
 		if target == "" || seen[target] {
 			continue
 		}

@@ -24,6 +24,7 @@ type fakeDoc struct {
 // fakeStore serves LIST pages in the server's shape (sorted names, opaque
 // cursor = last name) so listing.ParsePage sees real pagination.
 type fakeStore struct {
+	host       string // the authority a mark:// link resolves against
 	docs       map[string]fakeDoc
 	pageSize   int
 	listCalls  int
@@ -36,6 +37,8 @@ type fakeStore struct {
 func newFake(docs map[string]fakeDoc) *fakeStore {
 	return &fakeStore{docs: docs, pageSize: 2, listStatus: map[string]string{}, missing: map[string]string{}}
 }
+
+func (f *fakeStore) Authority() string { return f.host }
 
 func (f *fakeStore) List(_ context.Context, dir string, includeArchived bool, cursor string) (protocol.Response, error) {
 	f.listCalls++

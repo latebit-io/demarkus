@@ -223,12 +223,12 @@ func (pl *planner) archived() {
 		}
 		body, bullets := w.Body, 0
 		if gate.IsHub(doc, body) || pl.a.dirs[strings.TrimSuffix(doc, ".md")+"/"] {
-			body, bullets = hub.WithoutLinks(body, doc, slices.Sorted(maps.Keys(targets)))
+			body, bullets = hub.WithoutLinks(pl.a.resolve, body, doc, slices.Sorted(maps.Keys(targets)))
 		}
-		body, inline := unlinkInline(body, doc, targets)
+		body, inline := unlinkInline(pl.a.resolve, body, doc, targets)
 		left := map[string]bool{}
 		for _, dest := range links.Extract(body) {
-			left[links.ResolvePath(doc, dest)] = true
+			left[pl.a.resolve.Path(doc, dest)] = true
 		}
 		for _, l := range by[doc] {
 			if left[l.target] {
@@ -245,10 +245,10 @@ func (pl *planner) archived() {
 
 // unlinkInline replaces each inline link to a target with its text; n
 // counts them. A reference-style link has no inline destination and stays.
-func unlinkInline(body, docPath string, targets map[string]bool) (out string, n int) {
+func unlinkInline(r links.Resolver, body, docPath string, targets map[string]bool) (out string, n int) {
 	var cuts []links.LinkInfo
 	for _, l := range links.ExtractWithPositions(body) {
-		if l.OpenBracket >= 0 && l.End > 0 && targets[links.ResolvePath(docPath, l.Dest)] {
+		if l.OpenBracket >= 0 && l.End > 0 && targets[r.Path(docPath, l.Dest)] {
 			cuts = append(cuts, l)
 		}
 	}
@@ -344,12 +344,12 @@ func (pl *planner) hubs() {
 		// A parent that links D/ itself keeps that bullet; else the first
 		// moved bullet's line becomes the one for D/.
 		dirBullet := fmt.Sprintf("- [%s](%s): %s", title, dir, summary)
-		linked := hub.Names(parent.Body, parentPath, hubPath)
+		linked := hub.Names(pl.a.resolve, parent.Body, parentPath, hubPath)
 		replace := dirBullet
 		if linked {
 			replace = ""
 		}
-		parentBody, moved := hub.MoveLinks(parent.Body, parentPath, inDir, replace)
+		parentBody, moved := hub.MoveLinks(pl.a.resolve, parent.Body, parentPath, &hub.Move{Targets: inDir, Bullet: replace})
 		if !linked && len(moved) == 0 {
 			parentBody = hub.WithBullet(parentBody, "", dirBullet)
 		}
@@ -360,7 +360,7 @@ func (pl *planner) hubs() {
 		}
 		body, added := b.String(), 0
 		for _, q := range inDir {
-			if !hub.Linkable(q) || pl.nearestHub(q, hubPath) != hubPath || hub.Names(body, hubPath, q) {
+			if !hub.Linkable(q) || pl.nearestHub(q, hubPath) != hubPath || hub.Names(pl.a.resolve, body, hubPath, q) {
 				continue
 			}
 			qBody, qMeta := pl.current(q)
@@ -416,9 +416,9 @@ func (pl *planner) link(l lead, hubPath string, want *hub.Link) {
 		pl.skip(CheckOrphans, l.path, "its hub "+hubPath+" is not in scope")
 		return
 	}
-	switch {
-	case hub.Names(w.Body, hubPath, l.path):
-	case gate.OutboundDocs(w.Body) >= gate.HubLinkMax:
+	switch hub.PlaceOf(pl.a.resolve, w.Body, hubPath, l.path) {
+	case hub.Named:
+	case hub.AtCap:
 		pl.skip(CheckOrphans, l.path, fmt.Sprintf("its hub %s is at the cap of %d links", hubPath, gate.HubLinkMax))
 		return
 	default:

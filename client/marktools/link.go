@@ -11,8 +11,8 @@ import (
 )
 
 // linkOnPublish links a first version from the nearest ancestor hub that
-// exists, unless one already names it: a hubs line names the edit; a hub
-// not editable, or none at all, is a note. The publish stands either way.
+// exists, unless it names the document already (its directory counts). A
+// hub at the cap, not editable, or absent is a note; the publish stands.
 func (t *Tools) linkOnPublish(ctx context.Context, at *landing, w *docwrite.Write, result *docwrite.Result) string {
 	version, err := docwrite.Version(result.Response.Metadata)
 	if err != nil || version != 1 || !hub.Linkable(at.target.Path) {

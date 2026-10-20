@@ -379,10 +379,12 @@ The request body is the document content. It is stored as-is (the server prepend
 status: created
 version: <new version number>
 modified: <RFC 3339 timestamp>
+etag: <64-char hex SHA-256>
+content-hash: sha256-<64-char hex SHA-256>
 ---
 ```
 
-The `created` response MUST NOT include a body.
+The `created` response MUST NOT include a body. `etag` and `content-hash` are those of the version written, as a FETCH of it would return them.
 
 **Behaviour**:
 
@@ -488,6 +490,8 @@ The `auth` and `expected-version` metadata fields are REQUIRED. The `expected-ve
 status: created
 version: <new version number>
 modified: <RFC 3339 timestamp>
+etag: <64-char hex SHA-256>
+content-hash: sha256-<64-char hex SHA-256>
 ---
 ```
 

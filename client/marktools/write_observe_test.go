@@ -157,3 +157,20 @@ func TestArchiveObservesAbsenceAndClearsEdges(t *testing.T) {
 		t.Errorf("backlinks(hub) = %v still lists the archived document", back)
 	}
 }
+
+// An older server answers a write without its etag; observed, it would read
+// as a conflict against the fetch after it, so the write is not observed.
+func TestWriteWithoutAnEtagIsNotObserved(t *testing.T) {
+	store := graphstore.New()
+	backend := hubbedStore()
+	backend.PublishFn = func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{"version": "1"}}}, nil
+	}
+	tools := newTools(t, backend, graphHooks(store, new([]string)))
+	if got := tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: observedBody, ExpectedVersion: new(0), OnConflict: "fail"}); got.IsError {
+		t.Fatalf("publish = %+v", got)
+	}
+	if node := store.GetNode("mark://host/doc.md"); node != nil {
+		t.Fatalf("a write without an etag was observed: %+v", node)
+	}
+}

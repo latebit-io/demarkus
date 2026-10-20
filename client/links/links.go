@@ -235,6 +235,32 @@ func ExtractTitle(body string) string {
 	return title.String()
 }
 
+// Resolver resolves a document's links to paths on one store. The zero
+// value knows no authority, so every mark:// link is external to it.
+type Resolver struct{ authority string }
+
+// ResolverFor binds the store the surface names as host ("host:port", or a
+// world name behind a broker), parsed once; "" binds none.
+func ResolverFor(host string) Resolver {
+	if host == "" {
+		return Resolver{}
+	}
+	return Resolver{authority: AuthorityURL(host)}
+}
+
+// Path is ResolvePath that also reads a mark:// link to the bound store as
+// a path.
+func (r Resolver) Path(docPath, dest string) string {
+	if p := ResolvePath(docPath, dest); p != "" || r.authority == "" || len(dest) < len(markScheme) || !strings.EqualFold(dest[:len(markScheme)], markScheme) {
+		return p
+	}
+	t, err := ParseMark(dest)
+	if err != nil || t.AuthorityURL() != r.authority {
+		return ""
+	}
+	return cleanPath(docPath, t.Path)
+}
+
 // ResolvePath is the store path a link in docPath points at: fragment and
 // query dropped, absolute cleaned, relative joined to the document's
 // directory, a trailing slash kept. "" for an external link.
@@ -244,6 +270,11 @@ func ResolvePath(docPath, dest string) string {
 	if dest == "" || isAbsoluteURL(dest) {
 		return ""
 	}
+	return cleanPath(docPath, dest)
+}
+
+// cleanPath joins a path link to the document's directory.
+func cleanPath(docPath, dest string) string {
 	target := pathpkg.Clean(dest)
 	if !strings.HasPrefix(dest, "/") {
 		target = pathpkg.Join(pathpkg.Dir(docPath), dest)

@@ -462,10 +462,7 @@ func (h *Handler) serveStoredDocument(w io.Writer, req protocol.Request, doc *st
 	// Copy publisher metadata first, then set server-owned keys so they can't be overwritten.
 	meta := make(map[string]string)
 	copyPublisherMeta(meta, doc.Metadata)
-	meta["modified"] = doc.Modified.Format(time.RFC3339)
-	meta["etag"] = doc.ETag
-	meta["version"] = strconv.Itoa(doc.Version)
-	meta["content-hash"] = storefmt.ContentHash(doc.Content)
+	stampVersion(meta, doc)
 	maps.Copy(meta, extra)
 	h.writeResponse(w, protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: string(doc.Content)})
 }
@@ -937,16 +934,21 @@ func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 	h.writeResponse(w, writtenResponse(doc, warnings))
 }
 
-// writtenResponse is the created response for a landed write; what its
-// gate let through rides along under the reserved warning key.
+// stampVersion sets the keys that describe a stored version, on a fetch and
+// on the response to the write that made it.
+func stampVersion(meta map[string]string, doc *storefmt.Document) {
+	meta["version"] = strconv.Itoa(doc.Version)
+	meta["modified"] = doc.Modified.Format(time.RFC3339)
+	meta["etag"] = doc.ETag
+	meta["content-hash"] = storefmt.ContentHash(doc.Content)
+}
+
+// writtenResponse is the created response for a landed write: the version
+// it made, so a writer need not fetch to cite it; what the gate let through
+// rides along under the reserved warning key.
 func writtenResponse(doc *storefmt.Document, warnings []string) protocol.Response {
-	resp := protocol.Response{
-		Status: protocol.StatusCreated,
-		Metadata: map[string]string{
-			"version":  strconv.Itoa(doc.Version),
-			"modified": doc.Modified.Format(time.RFC3339),
-		},
-	}
+	resp := protocol.Response{Status: protocol.StatusCreated, Metadata: make(map[string]string, 5)}
+	stampVersion(resp.Metadata, doc)
 	if len(warnings) > 0 {
 		resp.Metadata["warning"] = strings.Join(warnings, "; ")
 	}

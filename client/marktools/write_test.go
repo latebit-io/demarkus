@@ -45,7 +45,7 @@ func TestPublishSendsTheWriteWithIdentity(t *testing.T) {
 		URL: "/doc.md", Body: "# Doc\n", ExpectedVersion: new(0), OnConflict: "fail",
 		Metadata: map[string]string{"tags": "a,b", "importance": "0.5", "agent": "someone-else", "user": "mallory@example.com"},
 	})
-	want := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: "created v1", Metadata: map[string]string{"version": "1"}}}, "version", "modified", "server-version")
+	want := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: "created v1", Metadata: map[string]string{"version": "1", "etag": "etag-v1"}}}, "version", "modified", "server-version")
 	if got.IsError || got.Text != want {
 		t.Fatalf("Publish = %+v, want %q", got, want)
 	}

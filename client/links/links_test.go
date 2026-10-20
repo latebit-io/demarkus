@@ -346,3 +346,18 @@ func TestResolvePath(t *testing.T) {
 		}
 	}
 }
+
+func TestResolverPath(t *testing.T) {
+	for host, cases := range map[string]map[string]string{
+		"":               {"mark://w/x.md": "", "b.md": "/docs/b.md"},
+		"w":              {"mark://w/x.md": "/x.md", "MARK://W/x.md": "/x.md", "mark://w:6309/d/": "/d/", "mark://w/x.md#s": "/x.md", "mark://v/x.md": "", "mark://w:6310/x.md": ""},
+		"localhost:6310": {"mark://localhost:6310/x.md": "/x.md", "mark://localhost/x.md": ""},
+	} {
+		r := ResolverFor(host)
+		for dest, want := range cases {
+			if got := r.Path("/docs/a.md", dest); got != want {
+				t.Errorf("ResolverFor(%q).Path(%q) = %q, want %q", host, dest, got, want)
+			}
+		}
+	}
+}

@@ -1196,6 +1196,9 @@ func testHandlePublish(t *testing.T, newBackend backendFactory) {
 		if resp.Metadata["modified"] == "" {
 			t.Error("expected modified in response metadata")
 		}
+		if len(resp.Metadata["etag"]) != 64 || !strings.HasPrefix(resp.Metadata["content-hash"], "sha256-") {
+			t.Errorf("a landed write answers with the version's etag and content hash: %v", resp.Metadata)
+		}
 	})
 
 	t.Run("creates new version of existing document", func(t *testing.T) {
