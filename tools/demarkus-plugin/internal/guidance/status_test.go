@@ -54,7 +54,7 @@ func TestStatusRendering(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			header, user := tt.s.agentHeader(app), tt.s.userLine(app, tt.warn)
+			header, user := tt.s.agentHeader(app), tt.s.userLine(app, tt.warn, baseBrand["memory"])
 			if !strings.Contains(header, tt.header) {
 				t.Errorf("header = %q, want %q", header, tt.header)
 			}

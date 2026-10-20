@@ -82,8 +82,11 @@ func TestRenderAllAddsBrandsFromFile(t *testing.T) {
 		if strings.Contains(string(a.Content), "/demarkus-memory:") {
 			t.Fatalf("%s: still names the base plugin", rel)
 		}
+		if rel == "context/brand.json" && string(a.Content) != "{\n  \"plugin_name\": \"acme-brain\",\n  \"store_noun\": \"soul\"\n}\n" {
+			t.Fatalf("brand.json = %q", a.Content)
+		}
 	}
-	for _, want := range []string{".claude-plugin/plugin.json", "README.md", ".mcp.json", "context/session-guidance.md"} {
+	for _, want := range []string{".claude-plugin/plugin.json", "README.md", ".mcp.json", "context/session-guidance.md", "context/brand.json"} {
 		if !seen[want] {
 			t.Fatalf("brand output lacks %s", want)
 		}

@@ -286,11 +286,35 @@ func brandArtifacts(root string, b *brand, base, t *target) ([]artifact, error) 
 	if err != nil {
 		return nil, fmt.Errorf("brand %s: %w", b.Name, err)
 	}
+	names, err := prettyJSON(brandNames{PluginName: t.PluginName, Store: t.Store})
+	if err != nil {
+		return nil, fmt.Errorf("brand %s: %w", b.Name, err)
+	}
 	out = append(out,
 		artifact{Path: filepath.Join(outDir, manifest), Content: pluginJSON, Target: t, Copied: true},
 		artifact{Path: filepath.Join(outDir, "README.md"), Content: []byte(brandReadme(b, base, t)), Target: t, Copied: true},
+		artifact{Path: filepath.Join(outDir, brandNamesFile), Content: names, Target: t, Copied: true},
 	)
 	return out, nil
+}
+
+// brandNamesFile sits beside the static guidance; the binary reads it for
+// the words a branded plugin's status line uses. Base plugins ship none.
+const brandNamesFile = "context/brand.json"
+
+// brandNames is the file's shape, mirrored by the binary's guidance package.
+type brandNames struct {
+	PluginName string `json:"plugin_name"`
+	Store      string `json:"store_noun"`
+}
+
+// prettyJSON renders a generated JSON file: indented, trailing newline.
+func prettyJSON(v any) ([]byte, error) {
+	out, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
 }
 
 // brandMCPConfig renames the base MCP server entry to key and appends
@@ -314,11 +338,7 @@ func brandMCPConfig(raw []byte, key string) ([]byte, error) {
 		return nil, fmt.Errorf("MCP server %q must have an args array", defaultMCPServerKey)
 	}
 	entry["args"] = append(args, "--name", key)
-	out, err := json.MarshalIndent(map[string]any{"mcpServers": map[string]any{key: entry}}, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(out, '\n'), nil
+	return prettyJSON(map[string]any{"mcpServers": map[string]any{key: entry}})
 }
 
 // manifestField is one rewritable top-level entry of plugin.json. line matches
