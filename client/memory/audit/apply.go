@@ -64,7 +64,7 @@ func publishPlanned(ctx context.Context, doc *docwrite.Doc, w *PlanWrite, stamp 
 	case status == protocol.StatusConflict:
 		o.Result, o.Detail = Conflicted, fmt.Sprintf("changed since v%d; rerun the proposal", w.Version)
 	case !protocol.IsWriteSuccess(status):
-		o.Result, o.Detail = Refused, status
+		o.Result, o.Detail = Refused, result.Response.Refusal()
 	default:
 		o.Result = Applied
 		maps.Copy(o.Metadata, result.Response.Metadata)

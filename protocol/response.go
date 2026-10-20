@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -45,6 +46,23 @@ type Response struct {
 	Status   string
 	Metadata map[string]string
 	Body     string
+}
+
+// ErrorBody is the body of an error response: the status as a title line,
+// then the reason.
+func ErrorBody(status, message string) string {
+	title := strings.ToUpper(status[:1]) + strings.ReplaceAll(status[1:], "-", " ")
+	return fmt.Sprintf("\n# %s\n\n%s\n", title, message)
+}
+
+// Refusal words an error response in one line: the status, with the reason
+// under the body's title line when there is one.
+func (resp Response) Refusal() string {
+	_, msg, _ := strings.Cut(strings.TrimSpace(resp.Body), "\n")
+	if msg = strings.Join(strings.Fields(msg), " "); msg == "" {
+		return resp.Status
+	}
+	return resp.Status + ": " + msg
 }
 
 // ParseResponse reads a response from r.

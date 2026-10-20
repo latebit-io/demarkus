@@ -7,6 +7,7 @@ import (
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // A create that finds the path taken is conflicted, the parent that would
@@ -44,6 +45,24 @@ func TestApplySkipsWhatARequiredWriteDidNotLand(t *testing.T) {
 	}
 	if len(backend.PublishCalls) != 2 || backend.PublishCall("/x.md").Metadata["agent"] != "a" {
 		t.Errorf("publishes = %+v", backend.PublishCalls)
+	}
+}
+
+// A refused write's outcome carries the server's reason, not the status alone.
+func TestApplyReportsTheRefusalReason(t *testing.T) {
+	backend := &fetchtest.Client{
+		Published: map[string]fetch.Result{"h/x.md": fetchtest.Head("# X\n", 2, nil)},
+		PublishFn: func(_ context.Context, _ fetch.WriteRequest) (fetch.Result, error) {
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusBadRequest, Body: "\n# Bad Request\n\nmissing required tag axis category\n"}}, nil
+		},
+	}
+	docs := func(p string) *docwrite.Doc {
+		return &docwrite.Doc{Backend: backend, Host: "h", Path: p, Write: docwrite.SendOnce("w")}
+	}
+	plan := &Plan{Writes: []PlanWrite{{Path: "/x.md", Version: 2, Body: "# X\n\nLinked.\n"}}}
+	got := Apply(context.Background(), docs, plan, nil)
+	if len(got) != 1 || got[0].Result != Refused || got[0].Detail != "bad-request: missing required tag axis category" {
+		t.Errorf("outcomes = %+v", got)
 	}
 }
 

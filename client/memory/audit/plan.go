@@ -371,16 +371,35 @@ func (pl *planner) hubs() {
 			pl.skip(CheckMissingHub, dir, fmt.Sprintf("over the cap: one hub would link %d documents, %d is the cap; publish %s as its hub or add second-level hubs", n, gate.HubLinkMax, hub.Paths(dir)[1]))
 			continue
 		}
+		meta := pl.hubMetadata(path.Base(dir), summary, parent.Metadata)
+		if why := pl.a.refuses(hubPath, meta); why != "" {
+			pl.skip(CheckMissingHub, dir, "the policy would refuse the hub: "+why+"; publish "+hubPath+" by hand")
+			continue
+		}
 		pl.drafts[hubPath] = &PlanWrite{
 			Path:     hubPath,
 			Body:     body,
-			Metadata: map[string]string{"tags": strings.Join(protocol.MergeTags([]string{"index"}, []string{path.Base(dir)}), ","), "importance": generatedHubImportance},
+			Metadata: meta,
 			Fixes:    []string{fmt.Sprintf("hub created: %d bullet(s) moved from %s, %d added", len(moved), parentPath, added)},
 		}
 		parent.change(parentBody, fmt.Sprintf("%d bullet(s) moved to %s, one bullet for %s", len(moved), hubPath, dir))
 		parent.Requires = append(parent.Requires, hubPath)
 		pl.settle(l.finding)
 	}
+}
+
+// hubMetadata is a generated hub's metadata: index tags, the parent hub's
+// tags on every axis the policy requires (a hub of the same kind), and the
+// summary as its description.
+func (pl *planner) hubMetadata(name, summary string, parent map[string]string) map[string]string {
+	var inherited []string
+	for _, t := range protocol.SplitTags(parent["tags"]) {
+		if axis, _, ok := strings.Cut(t, ":"); ok && slices.Contains(pl.a.policy.RequiredTagAxes, axis) {
+			inherited = append(inherited, t)
+		}
+	}
+	tags := protocol.MergeTags(protocol.MergeTags([]string{"index"}, []string{name}), inherited)
+	return map[string]string{"tags": strings.Join(tags, ","), "importance": generatedHubImportance, "description": summary}
 }
 
 // orphans links each orphan from its nearest hub by the directory rule; a

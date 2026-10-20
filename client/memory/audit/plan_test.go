@@ -176,6 +176,39 @@ func TestPlanGeneratesAMissingHub(t *testing.T) {
 	}
 }
 
+// Under a policy that requires tag axes and fields, the generated hub takes
+// them from its parent hub, and its description is its summary line.
+func TestPlanGeneratedHubCarriesWhatThePolicyRequires(t *testing.T) {
+	_, writes := planOf(t, map[string]fakeDoc{
+		"/.well-known/demarkus/policy.md": {Body: "# P\n\nstrictness: block\nrequire_tags: category, domain\nrequire_fields: type, description, agent\n", Meta: map[string]string{"tags": "category:governance,domain:music", "type": "Policy", "description": "P."}},
+		"/index.md":                       {Body: "# Hub\n\nThe store.\n\n- [One](/research/one.md): first\n", Meta: map[string]string{"tags": "category:hub,domain:music,entity:genre", "type": "Index", "description": "The store."}},
+		"/research/one.md":                {Body: "# One\n\nSummary.\n", Meta: map[string]string{"tags": "category:entity,domain:music", "type": "Genre", "description": "Summary."}},
+		"/research/two.md":                {Body: "# Two\n\nSummary.\n", Meta: map[string]string{"tags": "category:entity,domain:music", "type": "Genre", "description": "Summary."}},
+	})
+	want := map[string]string{"tags": "index,research,category:hub,domain:music", "importance": generatedHubImportance, "description": "Research documents, one link each."}
+	if got := writes["/research/index.md"].Metadata; !maps.Equal(got, want) {
+		t.Errorf("created metadata = %v, want %v", got, want)
+	}
+}
+
+// An axis the parent hub lacks stays missing; a blocking policy would refuse
+// the create, so the hub is left to judgment with the store's reason.
+func TestPlanLeavesAHubTheBlockingPolicyWouldRefuse(t *testing.T) {
+	r, writes := planOf(t, map[string]fakeDoc{
+		"/.well-known/demarkus/policy.md": {Body: "# P\n\nstrictness: block\nrequire_tags: category, owner\n", Meta: map[string]string{"tags": "category:governance,owner:ops", "type": "Policy"}},
+		"/index.md":                       {Body: "# Hub\n\nThe store.\n\n- [One](/research/one.md): first\n", Meta: map[string]string{"tags": "category:hub", "type": "Index"}},
+		"/research/one.md":                {Body: "# One\n\nSummary.\n", Meta: map[string]string{"tags": "category:entity,owner:ops", "type": "Genre"}},
+		"/research/two.md":                {Body: "# Two\n\nSummary.\n", Meta: map[string]string{"tags": "category:entity,owner:ops", "type": "Genre"}},
+	})
+	if _, ok := writes["/research/index.md"]; ok {
+		t.Errorf("hub drafted: %+v", writes["/research/index.md"])
+	}
+	want := "/research/: the policy would refuse the hub: missing required tag axis owner: (strictness block); publish /research/index.md by hand"
+	if got := r.Plan.Unfixed; len(got) != 1 || got[0].Check != CheckMissingHub || got[0].Path+": "+got[0].Detail != want {
+		t.Errorf("unfixed = %+v", got)
+	}
+}
+
 // Over the cap a missing hub is left to judgment; a journal directory needs
 // no hub, so its finding names the documents that are not dated entries.
 func TestPlanReportsMissingHubsItCannotGenerate(t *testing.T) {
