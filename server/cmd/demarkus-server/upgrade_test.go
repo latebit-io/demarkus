@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +10,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/config"
-	"github.com/latebit-io/demarkus/server/internal/worldruntime"
+	"github.com/latebit-io/demarkus/server/knowledgeserver"
 )
 
 // TestServesUpgradeCapture opens the soul a released plugin wrote
@@ -50,9 +49,10 @@ func TestServesUpgradeCapture(t *testing.T) {
 }
 
 // exchange sends one request in process and fails the test on a transport error.
-func exchange(t *testing.T, world worldruntime.Exchanger, req protocol.Request) protocol.Response {
+func exchange(t *testing.T, server *knowledgeserver.Server, req protocol.Request) protocol.Response {
 	t.Helper()
-	resp, err := world.Exchange(context.Background(), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, req)
+	// No authority: the soul answers every server name, including none.
+	resp, err := server.Exchange(context.Background(), "", req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", req.Verb, req.Path, err)
 	}
@@ -60,8 +60,8 @@ func exchange(t *testing.T, world worldruntime.Exchanger, req protocol.Request) 
 }
 
 // openUpgradeCapture serves a copy of the capture's soul with its tokens
-// file through main's runtime wiring, and returns the plugin's raw token.
-func openUpgradeCapture(t *testing.T, home string) (world worldruntime.Exchanger, token string) {
+// file through main's wiring, and returns the plugin's raw token.
+func openUpgradeCapture(t *testing.T, home string) (server *knowledgeserver.Server, token string) {
 	t.Helper()
 	state := filepath.Join(home, ".demarkus")
 	tokensFiles, err := filepath.Glob(filepath.Join(state, "tokens", "*", "tokens.toml"))
@@ -79,29 +79,17 @@ func openUpgradeCapture(t *testing.T, home string) (world worldruntime.Exchanger
 	}
 	cfg.ContentDir = t.TempDir()
 	cfg.TokensFile = tokensFiles[0]
+	cfg.Port = 0 // Open binds the listener; an ephemeral port keeps tests apart
 	if err := os.CopyFS(cfg.ContentDir, os.DirFS(filepath.Join(state, "soul"))); err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	logger := slog.New(slog.DiscardHandler)
-	store, err := openStore(cfg, logger)
+	server, err = open(cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("open the captured soul: %v", err)
 	}
-	runtime, err := worldruntime.New(runtimeConfig(cfg, store, logger))
-	if err != nil {
-		t.Fatalf("world runtime over the captured soul: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := runtime.Close(); err != nil {
-			t.Errorf("close runtime: %v", err)
-		}
-	})
-	world, ok := runtime.Endpoint("").(worldruntime.Exchanger)
-	if !ok {
-		t.Fatal("the runtime endpoint does not exchange in process")
-	}
-	return world, strings.TrimSpace(string(raw))
+	t.Cleanup(server.Close)
+	return server, strings.TrimSpace(string(raw))
 }

@@ -218,8 +218,10 @@ jobs:
           cd server
           deps="$(go list -deps ./cmd/demarkus-server)"
           test -n "$deps"
-          if grep -Eq '/internal/knowledge|cloud\.google\.com/go/storage' <<<"$deps"; then
-            echo "default demarkus-server depends on knowledge storage code" >&2
+          # The local profile shares the knowledge runtime (knowledgeconfig,
+          # the policy seed) but never the bucket store or a cloud client.
+          if grep -Eq '/internal/knowledge/bucketstore|/blob/gcs|cloud\.google\.com' <<<"$deps"; then
+            echo "demarkus-server depends on bucket or cloud storage code" >&2
             exit 1
           fi
           go build -o /tmp/demarkus-server ./cmd/demarkus-server

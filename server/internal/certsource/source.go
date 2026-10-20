@@ -12,8 +12,11 @@ import (
 
 // Source publishes certificates valid for a fixed authority set.
 type Source struct {
-	certFile    string
-	keyFile     string
+	// load is where a reload gets its certificate: the files, or a fresh
+	// one from a generator. regenerate marks the latter: an expired leaf is
+	// replaced on the next handshake instead of refusing it.
+	load        func() (tls.Certificate, error)
+	regenerate  bool
 	authorities []string
 	current     atomic.Pointer[tls.Certificate]
 	now         func() time.Time
@@ -27,8 +30,13 @@ func Open(certFile, keyFile string, authorities []string) (*Source, error) {
 		return nil, errors.New("certificate and key files are required")
 	}
 	source := &Source{
-		certFile:    certFile,
-		keyFile:     keyFile,
+		load: func() (tls.Certificate, error) {
+			certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				return tls.Certificate{}, fmt.Errorf("load TLS key pair: %w", err)
+			}
+			return certificate, nil
+		},
 		authorities: append([]string(nil), authorities...),
 		now:         time.Now,
 	}
@@ -38,12 +46,29 @@ func Open(certFile, keyFile string, authorities []string) (*Source, error) {
 	return source, nil
 }
 
+// Generated publishes a certificate minted in memory, the self-signed
+// development one; it pins no authority, and a reload or an expired leaf
+// mints a fresh one, so a soul that runs for days keeps answering.
+func Generated(generate func() (tls.Certificate, error)) (*Source, error) {
+	source := &Source{load: generate, regenerate: true, now: time.Now}
+	if err := source.Reload(); err != nil {
+		return nil, err
+	}
+	return source, nil
+}
+
 // Reload validates a complete replacement before publishing it.
 func (source *Source) Reload() error {
-	certificate, err := tls.LoadX509KeyPair(source.certFile, source.keyFile)
+	certificate, err := source.load()
 	if err != nil {
-		return fmt.Errorf("load TLS key pair: %w", err)
+		return err
 	}
+	return source.publish(certificate)
+}
+
+// publish validates certificate against the clock and the pinned
+// authorities, then makes it current.
+func (source *Source) publish(certificate tls.Certificate) error {
 	if len(certificate.Certificate) == 0 {
 		return errors.New("TLS certificate chain is empty")
 	}
@@ -83,7 +108,15 @@ func (source *Source) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, er
 	}
 	if certificate.Leaf != nil {
 		if err := validateTime(certificate.Leaf, source.currentTime()); err != nil {
-			return nil, err
+			if !source.regenerate {
+				return nil, err
+			}
+			// Concurrent handshakes may each mint one; the atomic pointer
+			// keeps whichever lands last, every one of them valid.
+			if reloadErr := source.Reload(); reloadErr != nil {
+				return nil, errors.Join(err, reloadErr)
+			}
+			return source.current.Load(), nil
 		}
 	}
 	return certificate, nil

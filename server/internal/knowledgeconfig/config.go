@@ -17,6 +17,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/server/internal/snirouter"
 	"gopkg.in/yaml.v3"
 )
 
@@ -145,7 +146,8 @@ func (config CompactionConfig) validate() error {
 	return fmt.Errorf("compaction.role %q must be %q or %q", config.Role, CompactionEager, CompactionBackstop)
 }
 
-// HealthConfig contains the private management listener address.
+// HealthConfig is the plain HTTP liveness and readiness listener; an empty
+// address opens none, which the local profile chooses.
 type HealthConfig struct {
 	Address string `yaml:"address"`
 }
@@ -155,6 +157,10 @@ type TLSConfig struct {
 	CertFile string `yaml:"certFile"`
 	KeyFile  string `yaml:"keyFile"`
 }
+
+// AnyAuthority as a world's only authority, on the only world, routes every
+// server name to it, including none: the local profile's one soul.
+const AnyAuthority = snirouter.AnyAuthority
 
 // WorldConfig contains one logical world's static startup configuration.
 // A world lives in exactly one of a GCS bucket or a directory.
@@ -233,6 +239,9 @@ type PolicyConfig struct {
 	// the world's first policy version instead of the embedded default.
 	// Empty keeps the default; either way seeding is create-only.
 	File string `yaml:"file"`
+	// Optional seeds nothing and judges by the empty policy when none exists;
+	// the default seeds a policy and refuses writes without one.
+	Optional bool `yaml:"optional"`
 }
 
 // LimitsConfig contains enforceable world-local fairness controls.
@@ -284,8 +293,9 @@ type rawWorldConfig struct {
 }
 
 type rawPolicyConfig struct {
-	Path *string `yaml:"path"`
-	File string  `yaml:"file"`
+	Path     *string `yaml:"path"`
+	File     string  `yaml:"file"`
+	Optional bool    `yaml:"optional"`
 }
 
 type rawLimitsConfig struct {
@@ -342,6 +352,7 @@ func load(filename string, readFragment func(fragmentPath string) ([]byte, error
 		return nil, fmt.Errorf("knowledge config: worlds file %q: %w", fragmentPath, err)
 	}
 	config.Worlds = append(config.Worlds, worlds...)
+	config.SetDefaults()
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("knowledge config: after merging worlds file %q: %w", fragmentPath, err)
 	}
@@ -427,8 +438,8 @@ func (raw *rawConfig) config() *Config {
 	config := &Config{
 		Version: raw.Version,
 		Listen: ListenConfig{
-			Address:            valueOr(raw.Listen.Address, ":6309"),
-			MaxIncomingStreams: valueOr(raw.Listen.MaxIncomingStreams, int64(128)),
+			Address:            valueOr(raw.Listen.Address, defaultListenAddress),
+			MaxIncomingStreams: valueOr(raw.Listen.MaxIncomingStreams, int64(defaultMaxIncomingStreams)),
 			IdleTimeout:        valueOr(raw.Listen.IdleTimeout, Duration(30*time.Second)),
 		},
 		Health:     HealthConfig{Address: valueOr(raw.Health.Address, ":8081")},
@@ -443,15 +454,10 @@ func (raw *rawConfig) config() *Config {
 			WorkDomains: trimmedLower(raw.ContentCheck.WorkDomains),
 		},
 	}
-	if config.Compaction.Role == "" {
-		config.Compaction.Role = CompactionEager
-	}
-	if config.ContentCheck.PII == "" {
-		config.ContentCheck.PII = contentcheck.Block
-	}
 	for index := range raw.Worlds {
 		config.Worlds[index] = worldFromRaw(&raw.Worlds[index])
 	}
+	config.SetDefaults()
 	return config
 }
 
@@ -463,19 +469,88 @@ func worldFromRaw(world *rawWorldConfig) WorldConfig {
 		Dir:         strings.TrimSpace(world.Dir),
 		Auth:        world.Auth,
 		Policy: PolicyConfig{
-			Path: valueOr(world.Policy.Path, defaultPolicyPath),
-			File: strings.TrimSpace(world.Policy.File),
+			Path:     valueOr(world.Policy.Path, defaultPolicyPath),
+			File:     strings.TrimSpace(world.Policy.File),
+			Optional: world.Policy.Optional,
 		},
 		ReadOnly: world.ReadOnly,
 		Limits: LimitsConfig{
-			MaxConcurrentRequests: valueOr(world.Limits.MaxConcurrentRequests, 32),
-			RequestTimeout:        valueOr(world.Limits.RequestTimeout, Duration(10*time.Second)),
-			RequestsPerSecond:     valueOr(world.Limits.RequestsPerSecond, 50.0),
-			Burst:                 valueOr(world.Limits.Burst, 100),
-			MaxWatches:            valueOr(world.Limits.MaxWatches, 1024),
+			// Explicit zeros in YAML mean the default here (a zero limit never
+			// validates); an omitted key is the same nil pointer.
+			MaxConcurrentRequests: valueOr(world.Limits.MaxConcurrentRequests, 0),
+			RequestTimeout:        valueOr(world.Limits.RequestTimeout, defaultRequestTimeout),
+			RequestsPerSecond:     valueOr(world.Limits.RequestsPerSecond, defaultRequestsPerSecond),
+			Burst:                 valueOr(world.Limits.Burst, defaultBurst),
+			MaxWatches:            valueOr(world.Limits.MaxWatches, 0),
 			MaxDocuments:          valueOr(world.Limits.MaxDocuments, 0),
 		},
 		Bootstrap: world.Bootstrap,
+	}
+}
+
+// The defaults a YAML omission and an in-memory zero both take.
+const (
+	defaultListenAddress         = ":6309"
+	defaultMaxIncomingStreams    = 128
+	defaultMaxConcurrentRequests = 32
+	defaultRequestTimeout        = Duration(10 * time.Second)
+	defaultRequestsPerSecond     = 50.0
+	defaultBurst                 = 100
+	defaultMaxWatches            = 1024
+)
+
+// LocalOptions is what the local profile takes from its environment.
+type LocalOptions struct {
+	// Dir is the soul's directory; TokensFile its capability tokens, empty
+	// for reads only.
+	Dir        string
+	TokensFile string
+	// ListenAddress is the QUIC listener; MaxStreams and IdleTimeout its
+	// per-connection limits.
+	ListenAddress string
+	MaxStreams    int64
+	IdleTimeout   Duration
+	// CertFile and KeyFile are the certificate pair; both empty generates a
+	// development certificate.
+	CertFile string
+	KeyFile  string
+	ReadOnly bool
+	// RequestTimeout, RequestsPerSecond and Burst are the world's limits as
+	// the environment set them: zero means no deadline or no rate limit, as
+	// the soul server has always read it. A zero MaxWatches takes the default.
+	RequestTimeout    Duration
+	RequestsPerSecond float64
+	Burst             int
+	MaxWatches        int
+}
+
+// LocalProfile is one soul in the shared runtime's terms: a file world on
+// every server name, no health port, no policy seed, personal data at warn,
+// no peers, no floor. SetDefaults fills what the options leave zero.
+func LocalProfile(options *LocalOptions) *Config {
+	return &Config{
+		Version: SchemaVersion,
+		Listen: ListenConfig{
+			Address:            options.ListenAddress,
+			MaxIncomingStreams: options.MaxStreams,
+			IdleTimeout:        options.IdleTimeout,
+		},
+		TLS:          TLSConfig{CertFile: options.CertFile, KeyFile: options.KeyFile},
+		ContentCheck: ContentCheckConfig{PII: contentcheck.Warn},
+		Worlds: []WorldConfig{{
+			Name:        "soul",
+			Authorities: []string{AnyAuthority},
+			Dir:         options.Dir,
+			Auth:        AuthConfig{TokensFile: options.TokensFile},
+			Policy:      PolicyConfig{Optional: true},
+			ReadOnly:    options.ReadOnly,
+			Limits: LimitsConfig{
+				RequestTimeout:    options.RequestTimeout,
+				RequestsPerSecond: options.RequestsPerSecond,
+				Burst:             options.Burst,
+				MaxWatches:        options.MaxWatches,
+			},
+		}},
 	}
 }
 
@@ -507,6 +582,48 @@ func valueOr[T any](value *T, fallback T) T {
 	return *value
 }
 
+// SetDefaults fills the settings a configuration built in memory may leave
+// zero and that must not stay zero (the listener, a required policy path,
+// the two caps). A zero timeout or rate stays what it says: none.
+func (config *Config) SetDefaults() {
+	if config.Listen.Address == "" {
+		config.Listen.Address = defaultListenAddress
+	}
+	if config.Listen.MaxIncomingStreams == 0 {
+		config.Listen.MaxIncomingStreams = defaultMaxIncomingStreams
+	}
+	if config.Compaction.Role == "" {
+		config.Compaction.Role = CompactionEager
+	}
+	if config.ContentCheck.PII == "" {
+		config.ContentCheck.PII = contentcheck.Block
+	}
+	for index := range config.Worlds {
+		world := &config.Worlds[index]
+		if world.Policy.Path == "" {
+			world.Policy.Path = defaultPolicyPath
+		}
+		if world.Limits.MaxConcurrentRequests == 0 {
+			world.Limits.MaxConcurrentRequests = defaultMaxConcurrentRequests
+		}
+		if world.Limits.MaxWatches == 0 {
+			world.Limits.MaxWatches = defaultMaxWatches
+		}
+	}
+}
+
+// PinnedAuthorities are the world's authorities a certificate is held to:
+// every one but the catch-all.
+func (world *WorldConfig) PinnedAuthorities() []string {
+	var pinned []string
+	for _, authority := range world.Authorities {
+		if authority != AnyAuthority {
+			pinned = append(pinned, authority)
+		}
+	}
+	return pinned
+}
+
 // Validate enforces schema, identity, routing, and limit invariants.
 func (config *Config) Validate() error {
 	if config == nil {
@@ -524,9 +641,6 @@ func (config *Config) Validate() error {
 	if config.Listen.IdleTimeout < 0 {
 		return fmt.Errorf("listen.idleTimeout must not be negative (got %s)", time.Duration(config.Listen.IdleTimeout))
 	}
-	if strings.TrimSpace(config.Health.Address) == "" {
-		return errors.New("health.address must not be empty")
-	}
 	if err := config.Peers.validate(); err != nil {
 		return err
 	}
@@ -536,11 +650,10 @@ func (config *Config) Validate() error {
 	if err := config.ContentCheck.validate(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(config.TLS.CertFile) == "" {
-		return errors.New("tls.certFile is required")
-	}
-	if strings.TrimSpace(config.TLS.KeyFile) == "" {
-		return errors.New("tls.keyFile is required")
+	// Both files, or neither: no pair means a self-signed development
+	// certificate, the local profile's default.
+	if (strings.TrimSpace(config.TLS.CertFile) == "") != (strings.TrimSpace(config.TLS.KeyFile) == "") {
+		return errors.New("tls.certFile and tls.keyFile are set together; both empty generates a development certificate")
 	}
 	// A dynamic deployment (worldsFile set) legitimately starts with zero
 	// worlds: the server idles until the provisioner writes the first one.
@@ -572,6 +685,12 @@ func (config *Config) validateWorlds() error {
 			return fmt.Errorf("%s.authorities must contain at least one authority", location)
 		}
 		for authorityIndex, authority := range world.Authorities {
+			if authority == AnyAuthority {
+				if len(config.Worlds) != 1 || len(world.Authorities) != 1 {
+					return fmt.Errorf("%s.authorities[%d] %q serves every server name, so it must be the only authority of the only world", location, authorityIndex, authority)
+				}
+				continue
+			}
 			normalized, err := normalizeAuthority(authority)
 			if err != nil {
 				return fmt.Errorf("%s.authorities[%d] %q: %w", location, authorityIndex, authority, err)
@@ -834,6 +953,9 @@ func validatePolicyFile(location string, world *WorldConfig) error {
 	}
 	if world.ReadOnly {
 		return fmt.Errorf("%s.policy.file must not be set on a read-only world, which refuses the seed", location)
+	}
+	if world.Policy.Optional {
+		return fmt.Errorf("%s.policy.file must not be set on an optional policy, which seeds nothing", location)
 	}
 	if world.Bootstrap {
 		return fmt.Errorf("%s.policy.file must not be set on a bootstrap world, whose provisioner owns its policy", location)

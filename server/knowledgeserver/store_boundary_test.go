@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/peerhint"
+	"github.com/latebit-io/demarkus/server/internal/worldstore"
 )
 
 // The manager serves a world on whatever store its factory opens; a file
@@ -20,8 +21,8 @@ import (
 func TestWorldManagerServesANonBucketStore(t *testing.T) {
 	tokens := writeTokens(t, t.TempDir(), "alice")
 	var opened *filestore.Store
-	files := func(_ context.Context, _ *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore, error) {
-		store, err := filestore.OpenDir(t.TempDir(), filestore.Options{ChangeRing: changefeed.DefaultRingSize, Logger: hooks.logger})
+	files := func(_ context.Context, _ *knowledgeconfig.WorldConfig, hooks worldstore.Hooks) (worldstore.Store, error) {
+		store, err := filestore.OpenDir(t.TempDir(), filestore.Options{ChangeRing: changefeed.DefaultRingSize, Logger: hooks.Logger})
 		if err != nil {
 			return nil, err
 		}

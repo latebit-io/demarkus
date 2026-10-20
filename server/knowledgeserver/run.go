@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,23 +13,21 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/server/blob"
-	"github.com/latebit-io/demarkus/server/blob/gcs"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/logging"
 	"github.com/latebit-io/demarkus/server/internal/management"
 	"github.com/latebit-io/demarkus/server/internal/quicserve"
+	servertls "github.com/latebit-io/demarkus/server/internal/tls"
 	"github.com/latebit-io/demarkus/server/internal/worldruntime"
+	"github.com/latebit-io/demarkus/server/internal/worldstore"
 	"github.com/quic-go/quic-go"
 )
 
 const (
-	maxObjectBytes  = 4 << 20
 	shutdownTimeout = 10 * time.Second
 )
 
@@ -38,12 +35,14 @@ const (
 type Options struct {
 	// ConfigFile is the strict multi-world YAML configuration.
 	ConfigFile string
+	// Config is the configuration in memory, the local profile's, in place
+	// of ConfigFile: no file watchers, no worlds fragment.
+	Config *knowledgeconfig.Config
 	// Logger defaults to JSON at info.
 	Logger *slog.Logger
-	// Buckets opens a world's bucket by name, for objects up to
-	// maxObjectBytes; nil opens GCS on the first bucket world, so a server
-	// of file worlds needs no credentials.
-	Buckets func(ctx context.Context, bucket string, maxObjectBytes int64) (blob.Store, error)
+	// Stores opens the bucket worlds; nil means this binary carries no bucket
+	// store and a bucket world fails its open by name. File worlds need none.
+	Stores worldstore.Factory
 }
 
 // Server is an opened knowledge server: worlds, peers and listeners, served
@@ -53,7 +52,6 @@ type Server struct {
 	configFile   string
 	logger       *slog.Logger
 	certificates *certsource.Source
-	gcs          *gcs.Lazy
 	watchCtx     context.Context
 	stopWatchers context.CancelFunc
 	watcherGroup sync.WaitGroup
@@ -63,7 +61,7 @@ type Server struct {
 	// listener once opened.
 	listeners  []quicListener
 	bearerOpen bool
-	health     *healthEndpoint
+	health     *management.Endpoint
 	closeOnce  sync.Once
 }
 
@@ -83,8 +81,9 @@ func (l quicListener) serve() error {
 }
 
 // Run is the knowledge server main: flags, Open, signals and Serve. Blocks
-// until shutdown completes. version is the binary's build version.
-func Run(arguments []string, version string) error {
+// until shutdown completes. version is the binary's build version; base
+// carries what the binary wires, its store factory above all.
+func Run(arguments []string, version string, base Options) error {
 	flags := flag.NewFlagSet("demarkus-knowledge-server", flag.ContinueOnError)
 	configFile := flags.String("config", "", "path to strict multi-world YAML configuration")
 	showVersion := flags.Bool("version", false, "print version and exit")
@@ -98,7 +97,8 @@ func Run(arguments []string, version string) error {
 	if *configFile == "" {
 		return errors.New("-config is required")
 	}
-	server, err := Open(Options{ConfigFile: *configFile})
+	base.ConfigFile = *configFile
+	server, err := Open(base)
 	if err != nil {
 		return err
 	}
@@ -142,39 +142,61 @@ func Open(opts Options) (*Server, error) {
 	if logger == nil {
 		logger = logging.New("json", "info", nil)
 	}
-	config, err := knowledgeconfig.Load(opts.ConfigFile)
+	config, err := loadConfig(opts)
 	if err != nil {
 		logger.Error("configuration invalid", "error", err)
 		return nil, err
 	}
-	// Dynamic mode (worldsFile set) skips authority pinning on the cert:
-	// tenant worlds come and go at runtime, so coverage is checked
-	// per-world with a warning instead of failing cert reloads.
-	authorities := configuredAuthorities(config)
-	if config.WorldsFile != "" {
-		authorities = nil
-	}
-	certificates, err := certsource.Open(config.TLS.CertFile, config.TLS.KeyFile, authorities)
+	certificates, err := openCertificates(config, logger)
 	if err != nil {
 		logger.Error("TLS setup failed", "error", err)
 		return nil, err
 	}
 	s := &Server{config: config, configFile: opts.ConfigFile, logger: logger, certificates: certificates}
 	s.watchCtx, s.stopWatchers = context.WithCancel(context.Background())
-	if err := s.open(opts.Buckets); err != nil {
+	if err := s.open(opts.Stores); err != nil {
 		s.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
+// loadConfig is the in-memory configuration, validated, or the file's.
+func loadConfig(opts Options) (*knowledgeconfig.Config, error) {
+	if opts.Config == nil {
+		return knowledgeconfig.Load(opts.ConfigFile)
+	}
+	opts.Config.SetDefaults()
+	if err := opts.Config.Validate(); err != nil {
+		return nil, err
+	}
+	return opts.Config, nil
+}
+
+// openCertificates is the configured pair pinned to the static authorities,
+// or a self-signed development certificate when none is configured. Dynamic
+// mode and a catch-all world skip the pin: coverage is warned per world.
+func openCertificates(config *knowledgeconfig.Config, logger *slog.Logger) (*certsource.Source, error) {
+	if config.TLS.CertFile == "" {
+		logger.Info("tls: using self-signed dev certificate (set tls.certFile and tls.keyFile for production)")
+		return certsource.Generated(servertls.GenerateDevCertificate)
+	}
+	authorities := configuredAuthorities(config)
+	if config.WorldsFile != "" {
+		authorities = nil
+	}
+	return certsource.Open(config.TLS.CertFile, config.TLS.KeyFile, authorities)
+}
+
 // worldStores is the server's store wiring: a file world opens its
-// directory, every other world a bucket store.
-func worldStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error), role bucketstore.CompactionRole) storeFactory {
-	buckets := bucketStores(objects, role)
-	return func(ctx context.Context, world *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore, error) {
+// directory; a bucket world goes to the factory the binary supplied.
+func worldStores(buckets worldstore.Factory) worldstore.Factory {
+	return func(ctx context.Context, world *knowledgeconfig.WorldConfig, hooks worldstore.Hooks) (worldstore.Store, error) {
 		if world.IsFile() {
 			return fileStore(world, hooks)
+		}
+		if buckets == nil {
+			return nil, fmt.Errorf("world %s is on a bucket, which this binary cannot open", world.Name)
 		}
 		return buckets(ctx, world, hooks)
 	}
@@ -183,12 +205,12 @@ func worldStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (bl
 // fileStore opens a world's directory with the soul server's layout: the
 // store creates a writable one and refuses to write a read-only one. No
 // peers, so no commit hook.
-func fileStore(world *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore, error) {
+func fileStore(world *knowledgeconfig.WorldConfig, hooks worldstore.Hooks) (worldstore.Store, error) {
 	store, err := filestore.OpenDir(world.Dir, filestore.Options{
 		ChangeRing:   changefeed.DefaultRingSize,
 		ReadOnly:     world.ReadOnly,
 		MaxDocuments: world.Limits.MaxDocuments,
-		Logger:       hooks.logger.With("dir", world.Dir),
+		Logger:       hooks.Logger.With("dir", world.Dir),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("file world: %w", err)
@@ -196,52 +218,9 @@ func fileStore(world *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore
 	return store, nil
 }
 
-// bucketStores opens each world as a bucket store over the blob store
-// objects opens for it, in this replica's compaction role.
-func bucketStores(objects func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error), role bucketstore.CompactionRole) storeFactory {
-	return func(ctx context.Context, world *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore, error) {
-		bucket, err := objects(ctx, world)
-		if err != nil {
-			return nil, fmt.Errorf("blob store: %w", err)
-		}
-		// Epoch = world ID, sequence = log sequence: a cursor resumes on any
-		// replica and across a restart.
-		store, err := bucketstore.Open(ctx, bucket, bucketstore.Options{
-			WorldID:         world.Bucket.WorldID,
-			Logger:          hooks.logger.With("bucket", world.Bucket.Name()),
-			RequestTimeout:  time.Duration(world.Limits.RequestTimeout),
-			MaxDocuments:    world.Limits.MaxDocuments,
-			ReadOnly:        world.ReadOnly,
-			CheckpointGrace: time.Duration(world.Bucket.CheckpointGrace),
-			Compaction:      role,
-			ChangeRing:      changefeed.DefaultRingSize,
-			Committed:       hooks.committed,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("bucket: %w", err)
-		}
-		return store, nil
-	}
-}
-
-// compactionRole is the store's role for the configured one.
-func compactionRole(role knowledgeconfig.CompactionRole) bucketstore.CompactionRole {
-	if role == knowledgeconfig.CompactionBackstop {
-		return bucketstore.Backstop
-	}
-	return bucketstore.Eager
-}
-
 // open fills in everything after TLS; Close on the partial Server undoes
 // whatever it reached.
-func (s *Server) open(buckets func(context.Context, string, int64) (blob.Store, error)) error {
-	if buckets == nil {
-		s.gcs = &gcs.Lazy{}
-		buckets = s.gcs.Open
-	}
-	objects := func(ctx context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
-		return buckets(ctx, world.Bucket.Name(), maxObjectBytes)
-	}
+func (s *Server) open(stores worldstore.Factory) error {
 	peers, err := openPeers(s.config.Peers, s.certificates, s.logger)
 	if err != nil {
 		s.logger.Error("peer hints unavailable", "error", err)
@@ -249,7 +228,7 @@ func (s *Server) open(buckets func(context.Context, string, int64) (blob.Store, 
 	}
 	s.peers = peers
 	worlds, err := newWorldManager(s.watchCtx, &s.watcherGroup, worldManagerConfig{
-		configFile: s.configFile, config: s.config, openStore: worldStores(objects, compactionRole(s.config.Compaction.Role)), certs: s.certificates, peers: peers, logger: s.logger,
+		configFile: s.configFile, config: s.config, openStore: worldStores(stores), certs: s.certificates, peers: peers, logger: s.logger,
 	})
 	if err != nil {
 		s.logger.Error("world startup failed", "error", err)
@@ -264,7 +243,7 @@ func (s *Server) open(buckets func(context.Context, string, int64) (blob.Store, 
 	}
 	s.listeners = append(s.listeners, quicListener{name: "QUIC server", server: quicServer, selector: worlds.Router().Selector()})
 
-	health, err := openHealth(s.config.Health.Address)
+	health, err := management.Listen(s.config.Health.Address)
 	if err != nil {
 		s.logger.Error("health listen failed", "error", err)
 		return err
@@ -337,17 +316,16 @@ func gatedSelector(route quicserve.Selector, gates Gates) quicserve.Selector {
 // ends or a listener fails, then drains the worlds and stops the
 // listeners. Close still has to run afterwards.
 func (s *Server) Serve(ctx context.Context) error {
-	startConfigWatchers(s.watchCtx, &s.watcherGroup, s.configFile, s.config, s.worlds, s.logger)
+	if s.configFile != "" {
+		startConfigWatchers(s.watchCtx, &s.watcherGroup, s.configFile, s.config, s.worlds, s.logger)
+	}
 
 	quicResult := make(chan error, len(s.listeners))
 	for _, listener := range s.listeners {
 		go func() { quicResult <- listener.serve() }()
 	}
-	healthResult := make(chan error, 1)
-	go func() { healthResult <- s.health.server.Serve(s.health.listener) }()
-	s.health.status.SetLive(true)
-	s.health.status.SetReady(true)
-	s.logger.Info("knowledge server started", "quic_addr", s.listeners[0].server.Addr(), "health_addr", s.health.listener.Addr(), "worlds", s.worlds.WorldCount())
+	healthResult := s.health.Serve()
+	s.logger.Info("knowledge server started", "quic_addr", s.listeners[0].server.Addr(), "health_addr", s.health.Addr(), "worlds", s.worlds.WorldCount())
 
 	var runErr error
 	select {
@@ -359,14 +337,9 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 	}
 
-	s.health.status.SetReady(false)
+	s.health.SetReady(false)
 	s.shutdownListeners()
-	s.health.status.SetLive(false)
-	healthCtx, healthCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := s.health.server.Shutdown(healthCtx); err != nil {
-		s.logger.Warn("health shutdown incomplete", "error", err)
-	}
-	healthCancel()
+	s.health.Shutdown(s.logger)
 	s.logger.Info("knowledge server stopped")
 	return runErr
 }
@@ -421,26 +394,14 @@ func (s *Server) Close() {
 				s.logger.Warn(listener.name+" close failed", "error", err)
 			}
 		}
-		if s.health != nil {
-			s.health.close(s.logger)
-		}
-		if s.gcs != nil {
-			if err := s.gcs.Close(); err != nil {
-				s.logger.Warn("GCS client close failed", "error", err)
-			}
-		}
+		s.health.Close(s.logger)
 	})
 }
 
 func configuredAuthorities(config *knowledgeconfig.Config) []string {
-	count := 0
+	authorities := make([]string, 0, len(config.Worlds))
 	for worldIndex := range config.Worlds {
-		count += len(config.Worlds[worldIndex].Authorities)
-	}
-	authorities := make([]string, 0, count)
-	for worldIndex := range config.Worlds {
-		world := &config.Worlds[worldIndex]
-		authorities = append(authorities, world.Authorities...)
+		authorities = append(authorities, config.Worlds[worldIndex].PinnedAuthorities()...)
 	}
 	return authorities
 }
@@ -467,33 +428,5 @@ func startConfigWatchers(
 				logger.Warn("config watcher exited", "target", target, "error", err)
 			}
 		})
-	}
-}
-
-// healthEndpoint is the private management listener and its state.
-type healthEndpoint struct {
-	listener net.Listener
-	server   *http.Server
-	status   *management.Health
-}
-
-func openHealth(address string) (*healthEndpoint, error) {
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return nil, err
-	}
-	status := &management.Health{}
-	server := &http.Server{
-		Handler:           status.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      5 * time.Second,
-		IdleTimeout:       30 * time.Second,
-	}
-	return &healthEndpoint{listener: listener, server: server, status: status}, nil
-}
-
-func (h *healthEndpoint) close(logger *slog.Logger) {
-	if err := h.server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Warn("health server close failed", "error", err)
 	}
 }

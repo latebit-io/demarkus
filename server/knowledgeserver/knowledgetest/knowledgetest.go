@@ -23,7 +23,9 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/server/blob"
+	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/knowledgeserver"
+	"github.com/latebit-io/demarkus/server/knowledgeserver/bucketworlds"
 )
 
 // World is one world a server serves, routed at Authority.
@@ -71,7 +73,9 @@ func Open(t testing.TB, buckets *Buckets, worlds ...World) *knowledgeserver.Serv
 	}
 	configFile := filepath.Join(dir, "config.yaml")
 	write(t, configFile, []byte(config.String()))
-	server, err := knowledgeserver.Open(knowledgeserver.Options{ConfigFile: configFile, Logger: slog.New(slog.DiscardHandler), Buckets: buckets.Open})
+	server, err := knowledgeserver.Open(knowledgeserver.Options{ConfigFile: configFile, Logger: slog.New(slog.DiscardHandler), Stores: bucketworlds.ForWorlds(func(ctx context.Context, world *knowledgeconfig.WorldConfig) (blob.Store, error) {
+		return buckets.Open(ctx, world.Bucket.Name(), bucketworlds.MaxObjectBytes)
+	})})
 	if err != nil {
 		t.Fatalf("open knowledge server for %v: %v", worlds, err)
 	}

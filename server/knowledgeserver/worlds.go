@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"path/filepath"
 	"reflect"
@@ -24,6 +23,7 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/peerhint"
 	"github.com/latebit-io/demarkus/server/internal/snirouter"
 	"github.com/latebit-io/demarkus/server/internal/worldruntime"
+	"github.com/latebit-io/demarkus/server/internal/worldstore"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
@@ -39,7 +39,7 @@ const worldRetryInterval = 15 * time.Second
 // The hot-reload seam for dynamic tenants (memory-broker plan Phase 3).
 type worldManager struct {
 	configFile string
-	openStore  storeFactory
+	openStore  worldstore.Factory
 	// hint tells peer replicas a world committed a sequence; a no-op
 	// without peers.
 	hint   func(worldID string, sequence int64)
@@ -83,50 +83,31 @@ type worldManager struct {
 
 	// floorWorld's policy is merged under every other world's; "" is none.
 	floorWorld string
+	// compaction is this replica's part in checkpointing shared stores.
+	compaction knowledgeconfig.CompactionRole
 	content    writepolicy.ContentOptions
 	// policyStores mirrors the live stores for the write path, which reads
 	// a sibling world's policy inside a commit. Its own lock, never held
 	// across a close: runtime.Close drains in-flight writes under m.mu.
 	policyMu     sync.RWMutex
-	policyStores map[string]worldStore
+	policyStores map[string]worldstore.Store
 }
 
 type worldEntry struct {
 	config  knowledgeconfig.WorldConfig
 	runtime *worldruntime.Runtime
 	// store is owned by runtime, which closes it.
-	store worldStore
+	store worldstore.Store
 	// published is set once a router publish carried this runtime; until
 	// then nothing routes to it and it can close at once.
 	published bool
-}
-
-// worldStore is a world's store as the manager holds it: contract types
-// only. Close ends its watches and refuses later writes (backend.ErrClosed);
-// a store several replicas share also implements backend.Follower.
-type worldStore interface {
-	backend.Store
-	backend.ChangeSource
-	io.Closer
-}
-
-// storeFactory opens a world's store, creating the world in empty storage
-// unless it is read-only. The server's wiring supplies the only one.
-type storeFactory func(ctx context.Context, world *knowledgeconfig.WorldConfig, hooks storeHooks) (worldStore, error)
-
-// storeHooks is what the manager hands a world's store at open.
-type storeHooks struct {
-	logger *slog.Logger
-	// committed runs with each sequence this replica learns its store
-	// committed through, by its own commit or one it lost a race to.
-	committed func(sequence int64)
 }
 
 // worldManagerConfig is what a world manager is built from.
 type worldManagerConfig struct {
 	configFile string
 	config     *knowledgeconfig.Config
-	openStore  storeFactory
+	openStore  worldstore.Factory
 	certs      *certsource.Source
 	// peers carries commit hints to and from the other replicas.
 	peers  *peerLinks
@@ -152,11 +133,12 @@ func newWorldManager(watchCtx context.Context, group *sync.WaitGroup, cfg worldM
 		pending:    make(map[string]knowledgeconfig.WorldConfig),
 		resilient:  config.WorldsFile != "",
 		floorWorld: config.FloorWorld,
+		compaction: config.Compaction.Role,
 		content: writepolicy.ContentOptions{Options: contentcheck.Options{
 			PII:         config.ContentCheck.PII,
 			WorkDomains: config.ContentCheck.WorkDomains,
 		}},
-		policyStores: make(map[string]worldStore),
+		policyStores: make(map[string]worldstore.Store),
 	}
 	router, err := snirouter.NewDynamic(nil)
 	if err != nil {
@@ -302,9 +284,10 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 	if err != nil {
 		return fmt.Errorf("policy seed: %w", err)
 	}
-	store, err := m.openStore(ctx, world, storeHooks{
-		logger:    m.logger.With("world", world.Name),
-		committed: m.committed(world.ID()),
+	store, err := m.openStore(ctx, world, worldstore.Hooks{
+		Logger:     m.logger.With("world", world.Name),
+		Committed:  m.committed(world.ID()),
+		Compaction: m.compaction,
 	})
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
@@ -316,7 +299,7 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 		}
 		return err
 	}
-	for _, authority := range world.Authorities {
+	for _, authority := range world.PinnedAuthorities() {
 		if err := m.certs.Covers(authority); err != nil {
 			m.logger.Warn("TLS certificate does not cover world authority; verifying clients will fail until the cert rotates",
 				"world", world.Name, "authority", authority, "err", err)
@@ -334,17 +317,20 @@ func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
 func (m *worldManager) serve(
 	ctx context.Context,
 	world *knowledgeconfig.WorldConfig,
-	store worldStore,
+	store worldstore.Store,
 	seed writepolicy.PolicySeed,
 ) (*worldruntime.Runtime, error) {
-	// Every world holds a usable policy before it serves a write. A provisioned
-	// world's broker replaces the marked seed with its own as version two.
-	created, err := writepolicy.Ensure(ctx, store, seed)
-	if err != nil {
-		return nil, fmt.Errorf("policy: %w", err)
-	}
-	if created {
-		m.logger.Info("seeded the initial write policy", "world", world.Name, "path", publishpolicy.DocumentPath)
+	// Every world with a required policy holds a usable one before it serves
+	// a write. A provisioned world's broker replaces the marked seed with its
+	// own as version two.
+	if !world.Policy.Optional {
+		created, err := writepolicy.Ensure(ctx, store, seed)
+		if err != nil {
+			return nil, fmt.Errorf("policy: %w", err)
+		}
+		if created {
+			m.logger.Info("seeded the initial write policy", "world", world.Name, "path", publishpolicy.DocumentPath)
+		}
 	}
 	if world.Name == m.floorWorld && !world.ReadOnly {
 		// The floor world also carries the style guide every finding cites.
@@ -358,7 +344,7 @@ func (m *worldManager) serve(
 	}
 	runtime, err := worldruntime.New(&worldruntime.Config{
 		Name:             world.Name,
-		Store:            writepolicy.Enforce(store, m.enforceOptions(world.Name)),
+		Store:            writepolicy.Enforce(store, m.enforceOptions(world)),
 		CloseBackend:     store.Close,
 		Changes:          store.Changes(),
 		MaxWatches:       world.Limits.MaxWatches,
@@ -404,9 +390,12 @@ func (m *worldManager) Hint(hint peerhint.Hint) {
 }
 
 // policySeed picks the world's initial policy: the operator's file when
-// configured, else the embedded default.
+// configured, else the embedded default; an optional policy has no seed.
 func policySeed(world *knowledgeconfig.WorldConfig) (writepolicy.PolicySeed, error) {
-	if world.Policy.File == "" {
+	switch {
+	case world.Policy.Optional:
+		return writepolicy.PolicySeed{}, nil
+	case world.Policy.File == "":
 		return knowledgeseed.DefaultPolicySeed(), nil
 	}
 	return knowledgeseed.PolicySeedFromFile(world.Policy.File)

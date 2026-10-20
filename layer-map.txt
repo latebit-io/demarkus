@@ -63,6 +63,7 @@ server/internal/knowledge/knowledgeseed         knowledge
 server/internal/knowledgeconfig                 knowledge
 server/internal/peerhint                        knowledge
 server/internal/snirouter                       knowledge
+server/internal/worldstore                      knowledge  # the store contract a binary's wiring fills
 server/knowledgeserver/...                      knowledge
 
 client/cmd/...                                  surface

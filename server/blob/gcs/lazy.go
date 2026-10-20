@@ -10,7 +10,7 @@ import (
 
 // Lazy opens bucket stores over one GCS client built on first use, so a
 // process that never reaches a bucket needs no credentials. A failed build
-// is retried on the next Open.
+// is retried on the next Open; the client lives as long as the process.
 type Lazy struct {
 	mu     sync.Mutex
 	client *storage.Client
@@ -29,23 +29,4 @@ func (l *Lazy) Open(ctx context.Context, bucket string, maxObjectBytes int64) (b
 		l.client = client
 	}
 	return New(l.client, bucket, maxObjectBytes)
-}
-
-// Opened reports whether a client was ever built.
-func (l *Lazy) Opened() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.client != nil
-}
-
-// Close releases the client, if one was built.
-func (l *Lazy) Close() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.client == nil {
-		return nil
-	}
-	err := l.client.Close()
-	l.client = nil
-	return err
 }
