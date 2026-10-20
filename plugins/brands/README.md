@@ -6,7 +6,7 @@ The demarkus repository ships no brands. A brand is declared in a small `brands.
 
 ## What a brand changes and what it keeps
 
-A brand changes the plugin name, its description, every place the prompts name the plugin, and the session status line (`acme-brain: memory …` instead of `demarkus: soul …`). It keeps, on purpose:
+A brand changes the plugin name, its description, every place the prompts name the plugin, and the session status line (`acme-brain: soul …` instead of `demarkus: soul …`; with `store_noun` set, that word changes too). It keeps, on purpose:
 
 - the `demarkus-plugin` binary, its pinned version in `scripts/bootstrap.sh`, and its download source (the demarkus GitHub releases).
 - the state directory `~/.demarkus` and the `DEMARKUS_*` environment variables.
