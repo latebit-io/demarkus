@@ -178,21 +178,25 @@ Deploy it with the Helm chart; see [Kubernetes & Helm](../deployment/kubernetes.
 
 The image `ghcr.io/latebit-io/demarkus-knowledge` has the binary as its entrypoint, so the mode is the arguments you pass. It is distroless and runs as uid 65532.
 
-The full system, worlds plus the broker, is what the chart runs:
+The full system, worlds plus the broker, is what the chart runs. The broker keeps its registrations and tokens in Kubernetes Secrets, so outside a cluster it needs a kubeconfig; under the chart the pod's service account supplies the credentials:
 
 ```sh
 docker run --rm -p 6309:6309/udp -p 8080:8080 -p 8081:8081 \
   -v /srv/demarkus/server.yaml:/etc/demarkus/config.yaml:ro \
   -v /srv/demarkus/broker.yaml:/etc/demarkus/broker/config.yaml:ro \
+  -v /srv/demarkus/tokens:/run/demarkus/worlds \
+  -v "$HOME/.kube/config:/etc/demarkus/kubeconfig:ro" \
   ghcr.io/latebit-io/demarkus-knowledge:<tag> \
-  -server-config /etc/demarkus/config.yaml -broker-config /etc/demarkus/broker/config.yaml
+  -server-config /etc/demarkus/config.yaml -broker-config /etc/demarkus/broker/config.yaml \
+  -kubeconfig /etc/demarkus/kubeconfig
 ```
 
-The worlds alone, for capability-token clients without SSO:
+The worlds alone, for capability-token clients without SSO; the token files the config names (under `/run/demarkus/worlds/` in the example above) are mounted so writes can be authorized:
 
 ```sh
 docker run --rm -p 6309:6309/udp -p 8081:8081 \
   -v /srv/demarkus/server.yaml:/etc/demarkus/config.yaml:ro \
+  -v /srv/demarkus/tokens:/run/demarkus/worlds:ro \
   -v /srv/demarkus/worlds:/var/lib/demarkus/worlds \
   ghcr.io/latebit-io/demarkus-knowledge:<tag> \
   -server-config /etc/demarkus/config.yaml
