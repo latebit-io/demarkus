@@ -37,7 +37,11 @@ func TestGeneratedMintsAgainOnReloadAndExpiry(t *testing.T) {
 	if err := source.Reload(); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
-	if second, _ := source.GetCertificate(nil); minted != 2 || second.Leaf.Equal(first.Leaf) {
+	second, err := source.GetCertificate(nil)
+	if err != nil {
+		t.Fatalf("GetCertificate after reload: %v", err)
+	}
+	if minted != 2 || second.Leaf.Equal(first.Leaf) {
 		t.Errorf("reload: minted %d, same leaf %t; want a fresh certificate", minted, second.Leaf.Equal(first.Leaf))
 	}
 
