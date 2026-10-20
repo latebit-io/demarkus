@@ -12,9 +12,11 @@ import (
 
 // Source publishes certificates valid for a fixed authority set.
 type Source struct {
-	// load is where a reload gets its certificate: the files, or the one
-	// certificate a static source holds.
+	// load is where a reload gets its certificate: the files, or a fresh
+	// one from a generator. regenerate marks the latter: an expired leaf is
+	// replaced on the next handshake instead of refusing it.
 	load        func() (tls.Certificate, error)
+	regenerate  bool
 	authorities []string
 	current     atomic.Pointer[tls.Certificate]
 	now         func() time.Time
@@ -44,10 +46,11 @@ func Open(certFile, keyFile string, authorities []string) (*Source, error) {
 	return source, nil
 }
 
-// Static publishes one in-memory certificate, the self-signed development
-// one; it pins no authority and a reload re-validates the same certificate.
-func Static(certificate tls.Certificate) (*Source, error) {
-	source := &Source{load: func() (tls.Certificate, error) { return certificate, nil }, now: time.Now}
+// Generated publishes a certificate minted in memory, the self-signed
+// development one; it pins no authority, and a reload or an expired leaf
+// mints a fresh one, so a soul that runs for days keeps answering.
+func Generated(generate func() (tls.Certificate, error)) (*Source, error) {
+	source := &Source{load: generate, regenerate: true, now: time.Now}
 	if err := source.Reload(); err != nil {
 		return nil, err
 	}
@@ -105,7 +108,15 @@ func (source *Source) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, er
 	}
 	if certificate.Leaf != nil {
 		if err := validateTime(certificate.Leaf, source.currentTime()); err != nil {
-			return nil, err
+			if !source.regenerate {
+				return nil, err
+			}
+			// Concurrent handshakes may each mint one; the atomic pointer
+			// keeps whichever lands last, every one of them valid.
+			if reloadErr := source.Reload(); reloadErr != nil {
+				return nil, errors.Join(err, reloadErr)
+			}
+			return source.current.Load(), nil
 		}
 	}
 	return certificate, nil

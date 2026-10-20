@@ -515,8 +515,9 @@ type LocalOptions struct {
 	CertFile string
 	KeyFile  string
 	ReadOnly bool
-	// RequestTimeout, RequestsPerSecond, Burst and MaxWatches are the
-	// world's limits; a zero takes the default.
+	// RequestTimeout, RequestsPerSecond and Burst are the world's limits as
+	// the environment set them: zero means no deadline or no rate limit, as
+	// the soul server has always read it. A zero MaxWatches takes the default.
 	RequestTimeout    Duration
 	RequestsPerSecond float64
 	Burst             int
@@ -581,8 +582,9 @@ func valueOr[T any](value *T, fallback T) T {
 	return *value
 }
 
-// SetDefaults fills what a configuration built in memory may leave zero,
-// the same values Parse gives an omitted key.
+// SetDefaults fills the settings a configuration built in memory may leave
+// zero and that must not stay zero (the listener, a required policy path,
+// the two caps). A zero timeout or rate stays what it says: none.
 func (config *Config) SetDefaults() {
 	if config.Listen.Address == "" {
 		config.Listen.Address = defaultListenAddress

@@ -297,7 +297,8 @@ if [[ "$SERVER_IMAGE" == "local" ]]; then
   SERVER_IMAGE=$(build_local_image image-server demarkus-server)
 fi
 if [[ -n "$SERVER_IMAGE" ]]; then
-  SERVER_IMAGE_ARGS=(--set "image.repository=${SERVER_IMAGE%:*}" --set "image.tag=${SERVER_IMAGE##*:}" --set "image.pullPolicy=IfNotPresent")
+  # --set-string: a tag like 0 must stay a string, or Helm reads it as a number.
+  SERVER_IMAGE_ARGS=(--set "image.repository=${SERVER_IMAGE%:*}" --set-string "image.tag=${SERVER_IMAGE##*:}" --set "image.pullPolicy=IfNotPresent")
 fi
 
 echo "--- installing demarkus-server chart $SERVER_CHART_VERSION"
@@ -371,7 +372,7 @@ done'
     --namespace "$NAMESPACE" --create-namespace \
     --values "$KNOWLEDGE_VALUES_FILE" \
     --set "image.repository=${KNOWLEDGE_IMAGE%:*}" \
-    --set "image.tag=${KNOWLEDGE_IMAGE##*:}" \
+    --set-string "image.tag=${KNOWLEDGE_IMAGE##*:}" \
     --set "image.pullPolicy=IfNotPresent" \
     --set "broker.webClients[0].clientID=$WEBCLIENT_ID" \
     --set-string "broker.webClients[0].clientSecretHash=$WEBCLIENT_SECRET_HASH" \

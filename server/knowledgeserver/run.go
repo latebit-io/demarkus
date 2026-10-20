@@ -179,11 +179,7 @@ func loadConfig(opts Options) (*knowledgeconfig.Config, error) {
 func openCertificates(config *knowledgeconfig.Config, logger *slog.Logger) (*certsource.Source, error) {
 	if config.TLS.CertFile == "" {
 		logger.Info("tls: using self-signed dev certificate (set tls.certFile and tls.keyFile for production)")
-		dev, err := servertls.GenerateDevCertificate()
-		if err != nil {
-			return nil, err
-		}
-		return certsource.Static(dev)
+		return certsource.Generated(servertls.GenerateDevCertificate)
 	}
 	authorities := configuredAuthorities(config)
 	if config.WorldsFile != "" {
