@@ -27,15 +27,31 @@ type Mapping struct {
 	Endpoint  quicserve.Endpoint
 }
 
+// AnyAuthority as a mapping's authority makes its endpoint the answer for
+// every server name the others do not hold, including none.
+const AnyAuthority = "*"
+
 // Router holds an immutable authority-to-endpoint mapping.
 type Router struct {
 	endpoints map[string]quicserve.Endpoint
+	catchAll  quicserve.Endpoint
 }
 
 // New validates and copies mappings into a Router.
 func New(mappings []Mapping) (*Router, error) {
 	endpoints := make(map[string]quicserve.Endpoint, len(mappings))
+	var catchAll quicserve.Endpoint
 	for _, mapping := range mappings {
+		if mapping.Authority == AnyAuthority {
+			if mapping.Endpoint == nil {
+				return nil, fmt.Errorf("mapping authority %q: endpoint is nil", mapping.Authority)
+			}
+			if catchAll != nil {
+				return nil, fmt.Errorf("%w: %q", ErrDuplicateAuthority, AnyAuthority)
+			}
+			catchAll = mapping.Endpoint
+			continue
+		}
 		authority, err := NormalizeAuthority(mapping.Authority)
 		if err != nil {
 			return nil, fmt.Errorf("mapping authority %q: %w", mapping.Authority, err)
@@ -48,7 +64,7 @@ func New(mappings []Mapping) (*Router, error) {
 		}
 		endpoints[authority] = mapping.Endpoint
 	}
-	return &Router{endpoints: endpoints}, nil
+	return &Router{endpoints: endpoints, catchAll: catchAll}, nil
 }
 
 // NormalizeAuthority validates a DNS authority and folds ASCII letters to lowercase.
@@ -158,13 +174,22 @@ func (r *Router) Select(connection *quic.Conn) (quicserve.Endpoint, error) {
 }
 
 func (r *Router) lookup(serverName string) (quicserve.Endpoint, error) {
+	// A dial by IP sends no server name; only a catch-all answers it.
+	if serverName == "" && r.catchAll != nil {
+		return r.catchAll, nil
+	}
 	authority, err := NormalizeAuthority(serverName)
 	if err != nil {
+		if r.catchAll != nil {
+			return r.catchAll, nil
+		}
 		return nil, err
 	}
-	endpoint, exists := r.endpoints[authority]
-	if !exists {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownAuthority, authority)
+	if endpoint, exists := r.endpoints[authority]; exists {
+		return endpoint, nil
 	}
-	return endpoint, nil
+	if r.catchAll != nil {
+		return r.catchAll, nil
+	}
+	return nil, fmt.Errorf("%w: %q", ErrUnknownAuthority, authority)
 }

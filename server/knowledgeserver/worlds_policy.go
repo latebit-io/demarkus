@@ -5,17 +5,19 @@ import (
 	"fmt"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
+	"github.com/latebit-io/demarkus/server/internal/worldstore"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 // enforceOptions judges world's writes: the content scan everywhere, the
 // floor world's policy under every other world's, and on the floor world a
 // check that a new floor leaves every world satisfiable.
-func (m *worldManager) enforceOptions(world string) writepolicy.Options {
-	options := writepolicy.Options{Require: true, Content: m.content}
+func (m *worldManager) enforceOptions(world *knowledgeconfig.WorldConfig) writepolicy.Options {
+	options := writepolicy.Options{Require: !world.Policy.Optional, Content: m.content}
 	switch {
 	case m.floorWorld == "":
-	case world == m.floorWorld:
+	case world.Name == m.floorWorld:
 		options.Worlds = m.worldPolicies
 	default:
 		options.Floor = m.floorPolicy
@@ -25,7 +27,7 @@ func (m *worldManager) enforceOptions(world string) writepolicy.Options {
 
 // setPolicyStore publishes (or with nil retracts) a live world's store to
 // the write path.
-func (m *worldManager) setPolicyStore(name string, store worldStore) {
+func (m *worldManager) setPolicyStore(name string, store worldstore.Store) {
 	m.policyMu.Lock()
 	defer m.policyMu.Unlock()
 	if store == nil {
@@ -53,7 +55,7 @@ func (m *worldManager) floorPolicy(ctx context.Context) (publishpolicy.Policy, e
 // policy.
 func (m *worldManager) worldPolicies(ctx context.Context) ([]publishpolicy.Policy, error) {
 	m.policyMu.RLock()
-	stores := make(map[string]worldStore, len(m.policyStores))
+	stores := make(map[string]worldstore.Store, len(m.policyStores))
 	for name, store := range m.policyStores {
 		if name != m.floorWorld {
 			stores[name] = store

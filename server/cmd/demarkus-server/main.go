@@ -1,88 +1,42 @@
+// demarkus-server serves one soul: the knowledge server's runtime in its
+// local profile, configured by DEMARKUS_* env and flags, no YAML, no bucket,
+// no account, no network beyond its own port.
 package main
 
 import (
 	"context"
-	"crypto/tls"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/signal"
-	"sync"
-	"syscall"
-	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/config"
-	"github.com/latebit-io/demarkus/server/internal/filestore"
+	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/logging"
-	"github.com/latebit-io/demarkus/server/internal/quicserve"
-	servertls "github.com/latebit-io/demarkus/server/internal/tls"
-	"github.com/latebit-io/demarkus/server/internal/worldruntime"
-	"github.com/quic-go/quic-go"
+	"github.com/latebit-io/demarkus/server/knowledgeserver"
 )
-
-type tokenReloader interface {
-	ReloadTokens() error
-}
-
-// runtimeConfig wires the store into the one world runtime with the change
-// hub its commits feed.
-func runtimeConfig(cfg *config.Config, store *filestore.Store, logger *slog.Logger) *worldruntime.Config {
-	return &worldruntime.Config{
-		Store:          gated(store),
-		CloseBackend:   store.Close,
-		TokensFile:     cfg.TokensFile,
-		ReadOnly:       cfg.ReadOnly,
-		RequestTimeout: cfg.RequestTimeout,
-		RateLimit:      cfg.RateLimit,
-		RateBurst:      cfg.RateBurst,
-		Logger:         logger,
-		Changes:        store.Changes(),
-		MaxWatches:     cfg.MaxWatches,
-		MaxStreams:     cfg.MaxStreams,
-	}
-}
 
 // version is set at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-// flagOverrides holds the CLI flag values that override env-derived config.
-type flagOverrides struct {
-	root         string
-	tlsCert      string
-	tlsKey       string
-	tokens       string
-	storeBackend string
-	port         int
-	readOnly     bool
-}
-
-// applyFlagOverrides applies non-empty/non-zero CLI flags onto cfg. Flags take
-// precedence over env vars.
-func applyFlagOverrides(cfg *config.Config, o *flagOverrides) {
-	if o.root != "" {
-		cfg.ContentDir = o.root
-	}
-	if o.port != 0 {
-		cfg.Port = o.port
-	}
-	if o.tlsCert != "" {
-		cfg.TLSCert = o.tlsCert
-	}
-	if o.tlsKey != "" {
-		cfg.TLSKey = o.tlsKey
-	}
-	if o.tokens != "" {
-		cfg.TokensFile = o.tokens
-	}
-	if o.storeBackend != "" {
-		cfg.StoreBackend = o.storeBackend
-	}
-	if o.readOnly {
-		cfg.ReadOnly = true
-	}
+// open is the server over cfg; tests serve a soul through it the way run does.
+func open(cfg *config.Config, logger *slog.Logger) (*knowledgeserver.Server, error) {
+	profile := knowledgeconfig.LocalProfile(&knowledgeconfig.LocalOptions{
+		Dir:               cfg.ContentDir,
+		TokensFile:        cfg.TokensFile,
+		ListenAddress:     fmt.Sprintf(":%d", cfg.Port),
+		MaxStreams:        int64(cfg.MaxStreams),
+		IdleTimeout:       knowledgeconfig.Duration(cfg.IdleTimeout),
+		CertFile:          cfg.TLSCert,
+		KeyFile:           cfg.TLSKey,
+		ReadOnly:          cfg.ReadOnly,
+		RequestTimeout:    knowledgeconfig.Duration(cfg.RequestTimeout),
+		RequestsPerSecond: cfg.RateLimit,
+		Burst:             cfg.RateBurst,
+		MaxWatches:        cfg.MaxWatches,
+	})
+	return knowledgeserver.Open(knowledgeserver.Options{Config: profile, Logger: logger})
 }
 
 func main() {
@@ -94,13 +48,15 @@ func main() {
 }
 
 func run() error {
-	root := flag.String("root", "", "content directory to serve (overrides DEMARKUS_ROOT)")
-	port := flag.Int("port", 0, "port to listen on (overrides DEMARKUS_PORT)")
-	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
-	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
-	tokens := flag.String("tokens", "", "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
-	storeBackend := flag.String("store", "", "document store backend: file (overrides DEMARKUS_STORE)")
-	readOnly := flag.Bool("read-only", false, "reject all write operations (also enabled via DEMARKUS_READ_ONLY)")
+	cfg, envErr := config.NewConfig()
+	// Flags default to the env-derived values, so a flag given wins.
+	flag.StringVar(&cfg.ContentDir, "root", cfg.ContentDir, "content directory to serve (overrides DEMARKUS_ROOT)")
+	flag.IntVar(&cfg.Port, "port", cfg.Port, "port to listen on (overrides DEMARKUS_PORT)")
+	flag.StringVar(&cfg.TLSCert, "tls-cert", cfg.TLSCert, "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
+	flag.StringVar(&cfg.TLSKey, "tls-key", cfg.TLSKey, "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
+	flag.StringVar(&cfg.TokensFile, "tokens", cfg.TokensFile, "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")
+	flag.StringVar(&cfg.StoreBackend, "store", cfg.StoreBackend, "document store backend: file (overrides DEMARKUS_STORE)")
+	flag.BoolVar(&cfg.ReadOnly, "read-only", cfg.ReadOnly, "reject all write operations (also enabled via DEMARKUS_READ_ONLY)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: demarkus-server [options]\n\n")
@@ -109,192 +65,39 @@ func run() error {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-
 	if *showVersion {
 		fmt.Println(version)
 		return nil
 	}
 
-	cfg, err := config.NewConfig()
-
 	// Create logger early so all subsequent output is structured.
 	logger := logging.New(cfg.LogFormat, cfg.LogLevel, nil)
-
 	// Fail-closed: running with silently-defaulted or invalid values (e.g. a
 	// typo'd port or a rate limiter that rejects everything) is worse than
 	// refusing to start.
-	if err != nil {
-		logger.Error("config invalid", "error", err)
-		return err
+	if envErr != nil {
+		logger.Error("config invalid", "error", envErr)
+		return envErr
 	}
-
-	applyFlagOverrides(cfg, &flagOverrides{
-		root:         *root,
-		port:         *port,
-		tlsCert:      *tlsCert,
-		tlsKey:       *tlsKey,
-		tokens:       *tokens,
-		storeBackend: *storeBackend,
-		readOnly:     *readOnly,
-	})
 	// Semantic validation runs once, on the final post-override values.
 	if err := cfg.Validate(); err != nil {
 		logger.Error("configuration invalid", "error", err)
 		return err
 	}
-	store, err := openStore(cfg, logger)
-	if err != nil {
-		logger.Error("store unavailable", "store", cfg.StoreBackend, "error", err)
-		return err
-	}
-	backendOwned := true
-	defer func() {
-		if backendOwned {
-			if err := store.Close(); err != nil {
-				logger.Warn("store close failed", "error", err)
-			}
-		}
-	}()
-	logger.Info("store ready", "backend", cfg.StoreBackend)
-
-	tlsConfig, prodMode, err := loadTLS(cfg, logger)
-	if err != nil {
-		logger.Error("tls setup failed", "error", err)
-		return err
-	}
-
-	quicConfig := &quic.Config{
-		MaxIncomingStreams:    int64(cfg.MaxStreams),
-		MaxIncomingUniStreams: 0,
-		MaxIdleTimeout:        cfg.IdleTimeout,
-	}
-
-	runtime, err := worldruntime.New(runtimeConfig(cfg, store, logger))
-	if err != nil {
-		logger.Error("world runtime unavailable", "error", err)
-		return err
-	}
-	backendOwned = false
-	defer func() {
-		if err := runtime.Close(); err != nil {
-			logger.Warn("world runtime close failed", "error", err)
-		}
-	}()
-	if cfg.TokensFile != "" {
-		logger.Info("auth: loaded tokens", "path", cfg.TokensFile)
-	} else {
+	if cfg.TokensFile == "" {
 		logger.Info("auth: no tokens file configured, writes disabled")
-	}
-	if cfg.RateLimit > 0 {
-		logger.Info("rate limit configured", "req_per_sec", cfg.RateLimit, "burst", cfg.RateBurst)
 	}
 	if cfg.ReadOnly {
 		logger.Info("read-only mode enabled, all write operations will be rejected")
 	}
+	logger.Info("serving soul", "root", cfg.ContentDir, "port", cfg.Port)
 
-	addr := fmt.Sprintf(":%d", cfg.Port)
-	server, err := quicserve.Listen(quicserve.Config{
-		Address:    addr,
-		TLSConfig:  tlsConfig,
-		QUICConfig: quicConfig,
-		Logger:     logger,
-	})
+	server, err := open(cfg, logger)
 	if err != nil {
-		logger.Error("listen failed", "addr", addr, "error", err)
 		return err
 	}
-	defer func() {
-		if err := server.Close(); err != nil {
-			logger.Warn("server close failed", "error", err)
-		}
-	}()
-
-	logger.Info("server started",
-		"addr", server.Addr().String(),
-		"root", cfg.ContentDir,
-		"idle_timeout", cfg.IdleTimeout.String(),
-		"request_timeout", cfg.RequestTimeout.String())
-
-	// Set up signal handling for graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigChan)
-
-	// Start SIGHUP handler for certificate reload (Unix only, no-op on Windows)
-	startCertReloader(cfg, prodMode, runtime, logger)
-
-	serveResult := make(chan error, 1)
-	go func() {
-		serveResult <- server.Serve(context.Background(), func(*quic.Conn) (quicserve.Endpoint, error) {
-			return runtime, nil
-		})
-	}()
-
-	var serveErr error
-	select {
-	case sig := <-sigChan:
-		logger.Info("received signal, initiating graceful shutdown", "signal", sig.String())
-		server.ShutdownAfter(runtime.Drain, 10*time.Second)
-		serveErr = <-serveResult
-	case serveErr = <-serveResult:
-		if !errors.Is(serveErr, quicserve.ErrServerClosed) {
-			logger.Error("listener error", "error", serveErr)
-		}
-	}
-
-	logger.Info("server stopped")
-	if serveErr != nil && !errors.Is(serveErr, quicserve.ErrServerClosed) {
-		return serveErr
-	}
-	return nil
-}
-
-var (
-	certMu      sync.RWMutex
-	currentCert *tls.Certificate
-)
-
-// loadCert loads a TLS certificate from disk and stores it for serving.
-func loadCert(certFile, keyFile string) error {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return fmt.Errorf("loading TLS certificate: %w", err)
-	}
-	certMu.Lock()
-	currentCert = &cert
-	certMu.Unlock()
-	return nil
-}
-
-// loadTLS configures reloadable production certificates or a self-signed
-// development certificate. A partial production certificate pair is invalid.
-func loadTLS(cfg *config.Config, logger *slog.Logger) (tlsConfig *tls.Config, prodMode bool, err error) {
-	haveCert := cfg.TLSCert != ""
-	haveKey := cfg.TLSKey != ""
-
-	switch {
-	case haveCert && haveKey:
-		logger.Info("tls: loading certificate", "path", cfg.TLSCert)
-		if err := loadCert(cfg.TLSCert, cfg.TLSKey); err != nil {
-			return nil, false, err
-		}
-		return &tls.Config{
-			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-				certMu.RLock()
-				defer certMu.RUnlock()
-				if currentCert == nil {
-					return nil, fmt.Errorf("tls: no certificate loaded")
-				}
-				return currentCert, nil
-			},
-			MinVersion: tls.VersionTLS13,
-			NextProtos: []string{protocol.ALPN},
-		}, true, nil
-	case haveCert != haveKey:
-		return nil, false, fmt.Errorf("both -tls-cert and -tls-key must be provided (got cert=%q, key=%q)", cfg.TLSCert, cfg.TLSKey)
-	default:
-		logger.Info("tls: using self-signed dev certificate (set DEMARKUS_TLS_CERT and DEMARKUS_TLS_KEY for production)")
-		tc, err := servertls.GenerateDevConfig()
-		return tc, false, err
-	}
+	defer server.Close()
+	ctx, stop := server.WatchSignals(context.Background())
+	defer stop()
+	return server.Serve(ctx)
 }

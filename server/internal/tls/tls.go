@@ -30,11 +30,24 @@ func LoadConfig(certFile, keyFile string) (*tls.Config, error) {
 }
 
 // GenerateDevConfig creates a self-signed TLS config for development.
-// It generates an ephemeral Ed25519 certificate in memory.
 func GenerateDevConfig() (*tls.Config, error) {
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	certificate, err := GenerateDevCertificate()
 	if err != nil {
 		return nil, err
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		MinVersion:   tls.VersionTLS13,
+		NextProtos:   []string{protocol.ALPN},
+	}, nil
+}
+
+// GenerateDevCertificate is an ephemeral self-signed Ed25519 certificate for
+// localhost and the loopback addresses, valid for a day.
+func GenerateDevCertificate() (tls.Certificate, error) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
 	}
 
 	now := time.Now()
@@ -49,15 +62,7 @@ func GenerateDevConfig() (*tls.Config, error) {
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, priv.Public(), priv)
 	if err != nil {
-		return nil, err
+		return tls.Certificate{}, err
 	}
-
-	return &tls.Config{
-		Certificates: []tls.Certificate{{
-			Certificate: [][]byte{certDER},
-			PrivateKey:  priv,
-		}},
-		MinVersion: tls.VersionTLS13,
-		NextProtos: []string{protocol.ALPN},
-	}, nil
+	return tls.Certificate{Certificate: [][]byte{certDER}, PrivateKey: priv}, nil
 }

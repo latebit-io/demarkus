@@ -28,6 +28,9 @@ SERVER_CHART_VERSION="${SERVER_CHART_VERSION:-0.50.0}"
 SERVER_CHART="oci://ghcr.io/latebit-io/charts/demarkus-server"
 KNOWLEDGE_RELEASE="${KNOWLEDGE_RELEASE:-knowledge}"
 KNOWLEDGE_IMAGE="${KNOWLEDGE_IMAGE:-}"
+# SERVER_IMAGE=local builds the demarkus-server image from this checkout for
+# Stage 1; <repository>:<tag> runs that image; empty runs the chart's.
+SERVER_IMAGE="${SERVER_IMAGE:-}"
 # Ephemeral curl pod image used by the smoke flows. Pinned so behavior is
 # reproducible across hosts; busybox sh + curl is all we need.
 MINT_CURL_IMAGE="${MINT_CURL_IMAGE:-curlimages/curl:8.11.1}"
@@ -85,6 +88,7 @@ usage: up.sh [--with-knowledge] [--with-argo] [--with-mcp-smoke]
 env overrides:
   CLUSTER, NAMESPACE, RELEASE, SERVER_CHART_VERSION, KNOWLEDGE_RELEASE,
   KNOWLEDGE_IMAGE (repository:tag to run instead of building),
+  SERVER_IMAGE (local to build demarkus-server from this checkout, or repository:tag),
   ARGO_RELEASE, ARGO_CHART_VERSION, ARGO_REPO_URL, MINT_CURL_IMAGE
 EOF
       exit 0
@@ -273,11 +277,35 @@ EOF
   exit 0
 fi
 
+# build_local_image <make target> <image name>: builds the image from this
+# checkout, tagged fresh so reruns rebuild, and sideloads it into the cluster.
+# Prints the image reference.
+build_local_image() {
+  local image
+  image="demarkus-kind/$2:local-$(date +%s)"
+  echo "--- building $2 image $image" >&2
+  ( cd "$REPO_ROOT" && make "$1" "IMAGE_REGISTRY=${image%%/*}" "TAG=${image##*:}" ) >&2
+  echo "--- sideloading image into kind cluster $CLUSTER" >&2
+  kind load docker-image "$image" --name "$CLUSTER" >&2
+  printf '%s\n' "$image"
+}
+
+SERVER_IMAGE_ARGS=()
+if [[ "$SERVER_IMAGE" == "local" ]]; then
+  require docker
+  require make
+  SERVER_IMAGE=$(build_local_image image-server demarkus-server)
+fi
+if [[ -n "$SERVER_IMAGE" ]]; then
+  SERVER_IMAGE_ARGS=(--set "image.repository=${SERVER_IMAGE%:*}" --set "image.tag=${SERVER_IMAGE##*:}" --set "image.pullPolicy=IfNotPresent")
+fi
+
 echo "--- installing demarkus-server chart $SERVER_CHART_VERSION"
 helm upgrade --install "$RELEASE" "$SERVER_CHART" \
   --version "$SERVER_CHART_VERSION" \
   --namespace "$NAMESPACE" --create-namespace \
   --values "$VALUES_FILE" \
+  "${SERVER_IMAGE_ARGS[@]}" \
   --wait --timeout 5m
 
 POD=$(pod_of "$NAMESPACE" "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/name=demarkus-server")
@@ -322,12 +350,7 @@ done'
   # image; otherwise the composed image is built from this checkout so the
   # chart wiring under test is this branch's, tagged fresh so reruns rebuild.
   if [[ -z "$KNOWLEDGE_IMAGE" ]]; then
-    KNOWLEDGE_IMAGE="demarkus-kind/demarkus-knowledge:local-$(date +%s)"
-    echo "--- building demarkus-knowledge image $KNOWLEDGE_IMAGE"
-    ( cd "$REPO_ROOT" && \
-        make image-knowledge "IMAGE_REGISTRY=${KNOWLEDGE_IMAGE%%/*}" "TAG=${KNOWLEDGE_IMAGE##*:}" )
-    echo "--- sideloading image into kind cluster $CLUSTER"
-    kind load docker-image "$KNOWLEDGE_IMAGE" --name "$CLUSTER"
+    KNOWLEDGE_IMAGE=$(build_local_image image-knowledge demarkus-knowledge)
   fi
 
   # Confidential web client for the web-SSO smoke below. The secret is

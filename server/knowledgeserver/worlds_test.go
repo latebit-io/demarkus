@@ -28,7 +28,9 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/peerhint"
 	"github.com/latebit-io/demarkus/server/internal/worldruntime"
+	"github.com/latebit-io/demarkus/server/internal/worldstore"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
+	"github.com/latebit-io/demarkus/server/knowledgeserver/bucketworlds"
 )
 
 // worldsTestHarness runs a worldManager over in-memory blob stores and a
@@ -120,7 +122,7 @@ func openHarness(
 			return h.memory(world.Name)
 		}
 	}
-	err := h.open(t, worldsSection, bucketStores(newStore, bucketstore.Eager))
+	err := h.open(t, worldsSection, bucketworlds.ForWorlds(newStore))
 	return h, err
 }
 
@@ -129,7 +131,7 @@ func newHarness(dir string) *worldsTestHarness {
 }
 
 // open writes the config and starts the manager over openStore.
-func (h *worldsTestHarness) open(t *testing.T, worldsSection string, openStore storeFactory) error {
+func (h *worldsTestHarness) open(t *testing.T, worldsSection string, openStore worldstore.Factory) error {
 	t.Helper()
 	certFile, keyFile := testCertFiles(t, "worlds.test")
 	main := fmt.Sprintf(`version: 1
@@ -176,7 +178,7 @@ func (h *worldsTestHarness) memory(world string) (*blob.Memory, error) {
 	if store, ok := h.stores[world]; ok {
 		return store, nil
 	}
-	store, err := blob.NewMemory(maxObjectBytes)
+	store, err := blob.NewMemory(bucketworlds.MaxObjectBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +385,7 @@ func TestWorldManagerRefusesUnreadablePolicyFile(t *testing.T) {
 func TestWorldManagerRefusesBucketWithForeignObjects(t *testing.T) {
 	tokens := writeTokens(t, t.TempDir(), "acme")
 	foreign := func(context.Context, *knowledgeconfig.WorldConfig) (blob.Store, error) {
-		store, err := blob.NewMemory(maxObjectBytes)
+		store, err := blob.NewMemory(bucketworlds.MaxObjectBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -786,8 +788,20 @@ func TestWorldManagerDynamicFragmentLeadsTheFile(t *testing.T) {
 	}
 }
 
+// world is a live world's config as the manager holds it.
+func (h *worldsTestHarness) world(t *testing.T, name string) *knowledgeconfig.WorldConfig {
+	t.Helper()
+	h.manager.mu.Lock()
+	defer h.manager.mu.Unlock()
+	entry := h.manager.entries[name]
+	if entry == nil {
+		t.Fatalf("world %s is not live", name)
+	}
+	return &entry.config
+}
+
 // store is a live world's raw store, below the policy enforcer.
-func (h *worldsTestHarness) store(t *testing.T, world string) worldStore {
+func (h *worldsTestHarness) store(t *testing.T, world string) worldstore.Store {
 	t.Helper()
 	h.manager.mu.Lock()
 	defer h.manager.mu.Unlock()
@@ -823,7 +837,7 @@ func TestWorldManagerFloorWorldGovernsEveryWorld(t *testing.T) {
 	if _, err := root.WriteVersion(publishpolicy.DocumentPath, 1, block, map[string]string{"tags": "category:governance"}); err != nil {
 		t.Fatalf("tighten floor: %v", err)
 	}
-	acme := backendtest.Direct{Store: writepolicy.Enforce(h.store(t, "acme"), h.manager.enforceOptions("acme"))}
+	acme := backendtest.Direct{Store: writepolicy.Enforce(h.store(t, "acme"), h.manager.enforceOptions(h.world(t, "acme")))}
 	if _, err := acme.WriteVersion("/a.md", 0, []byte("# A\n\nSummary.\n"), map[string]string{"tags": "topic"}); !errors.Is(err, writepolicy.ErrPolicyBlocked) {
 		t.Errorf("write below the floor = %v, want blocked", err)
 	}
@@ -838,7 +852,7 @@ func TestWorldManagerFloorWorldGovernsEveryWorld(t *testing.T) {
 	}
 
 	// A floor candidate no world could satisfy is refused on the floor world.
-	gatedRoot := backendtest.Direct{Store: writepolicy.Enforce(h.store(t, "root"), h.manager.enforceOptions("root"))}
+	gatedRoot := backendtest.Direct{Store: writepolicy.Enforce(h.store(t, "root"), h.manager.enforceOptions(h.world(t, "root")))}
 	if _, err := (backendtest.Direct{Store: h.store(t, "acme")}).WriteVersion(publishpolicy.DocumentPath, 1,
 		[]byte("# Write Policy\n\nstrictness: warn\nallow_tags.category: guide\n"), map[string]string{"tags": "category:governance"}); err != nil {
 		t.Fatalf("acme policy: %v", err)

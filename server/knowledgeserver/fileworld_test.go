@@ -13,8 +13,8 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/server/blob"
-	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
+	"github.com/latebit-io/demarkus/server/knowledgeserver/bucketworlds"
 )
 
 // capturedSoul is the upgrade capture's soul directory, as the plugin wrote it.
@@ -41,7 +41,7 @@ func noBuckets(_ context.Context, world *knowledgeconfig.WorldConfig) (blob.Stor
 func openFileWorld(t *testing.T, worldsSection string) (*Server, error) {
 	t.Helper()
 	h := newHarness(t.TempDir())
-	if err := h.open(t, worldsSection, worldStores(noBuckets, bucketstore.Eager)); err != nil {
+	if err := h.open(t, worldsSection, worldStores(bucketworlds.ForWorlds(noBuckets))); err != nil {
 		return nil, err
 	}
 	return &Server{worlds: h.manager}, nil
@@ -149,9 +149,8 @@ func TestReadOnlyFileWorldWritesNothing(t *testing.T) {
 }
 
 // TestOpenServesFileWorldsWithoutGCS: a server whose worlds are all
-// directories never builds the GCS client, so it runs with no credentials.
+// directories opens with no bucket factory at all.
 func TestOpenServesFileWorldsWithoutGCS(t *testing.T) {
-	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", filepath.Join(t.TempDir(), "absent.json"))
 	dir := t.TempDir()
 	certFile, keyFile := testCertFiles(t, "team.example.com")
 	tokens := writeTokens(t, dir, "team")
@@ -165,10 +164,18 @@ func TestOpenServesFileWorldsWithoutGCS(t *testing.T) {
 		t.Fatalf("Open with file worlds and no GCS credentials: %v", err)
 	}
 	defer server.Close()
-	if server.gcs.Opened() {
-		t.Error("a server of file worlds built a GCS client")
-	}
 	if !server.Routes("team.example.com") {
 		t.Error("the file world is not routed")
+	}
+}
+
+// TestOpenRefusesABucketWorldWithoutAFactory: a binary with no bucket store
+// names the world it cannot open instead of failing somewhere inside GCS.
+func TestOpenRefusesABucketWorldWithoutAFactory(t *testing.T) {
+	tokens := writeTokens(t, t.TempDir(), "alice")
+	h := newHarness(t.TempDir())
+	err := h.open(t, "worlds:\n"+worldFragment("alice", testWorldID, tokens, false), worldStores(nil))
+	if err == nil || !strings.Contains(err.Error(), "world alice is on a bucket, which this binary cannot open") {
+		t.Fatalf("bucket world with no factory: err %v; want the refusal by name", err)
 	}
 }

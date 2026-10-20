@@ -12,8 +12,9 @@ import (
 
 // Source publishes certificates valid for a fixed authority set.
 type Source struct {
-	certFile    string
-	keyFile     string
+	// load is where a reload gets its certificate: the files, or the one
+	// certificate a static source holds.
+	load        func() (tls.Certificate, error)
 	authorities []string
 	current     atomic.Pointer[tls.Certificate]
 	now         func() time.Time
@@ -27,8 +28,13 @@ func Open(certFile, keyFile string, authorities []string) (*Source, error) {
 		return nil, errors.New("certificate and key files are required")
 	}
 	source := &Source{
-		certFile:    certFile,
-		keyFile:     keyFile,
+		load: func() (tls.Certificate, error) {
+			certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				return tls.Certificate{}, fmt.Errorf("load TLS key pair: %w", err)
+			}
+			return certificate, nil
+		},
 		authorities: append([]string(nil), authorities...),
 		now:         time.Now,
 	}
@@ -38,12 +44,28 @@ func Open(certFile, keyFile string, authorities []string) (*Source, error) {
 	return source, nil
 }
 
+// Static publishes one in-memory certificate, the self-signed development
+// one; it pins no authority and a reload re-validates the same certificate.
+func Static(certificate tls.Certificate) (*Source, error) {
+	source := &Source{load: func() (tls.Certificate, error) { return certificate, nil }, now: time.Now}
+	if err := source.Reload(); err != nil {
+		return nil, err
+	}
+	return source, nil
+}
+
 // Reload validates a complete replacement before publishing it.
 func (source *Source) Reload() error {
-	certificate, err := tls.LoadX509KeyPair(source.certFile, source.keyFile)
+	certificate, err := source.load()
 	if err != nil {
-		return fmt.Errorf("load TLS key pair: %w", err)
+		return err
 	}
+	return source.publish(certificate)
+}
+
+// publish validates certificate against the clock and the pinned
+// authorities, then makes it current.
+func (source *Source) publish(certificate tls.Certificate) error {
 	if len(certificate.Certificate) == 0 {
 		return errors.New("TLS certificate chain is empty")
 	}
