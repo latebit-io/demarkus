@@ -22,6 +22,9 @@ type ClientStore struct {
 	Token  string
 }
 
+// Authority is the host the audit resolves the store's own links against.
+func (s *ClientStore) Authority() string { return s.Host }
+
 // List fetches one LIST page.
 func (s *ClientStore) List(ctx context.Context, dir string, includeArchived bool, cursor string) (protocol.Response, error) {
 	res, err := s.Client.List(ctx, fetch.ListRequest{Host: s.Host, Path: dir, Token: s.Token, IncludeArchived: includeArchived, Cursor: cursor})

@@ -14,6 +14,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
@@ -52,21 +53,50 @@ func EnsureLink(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, lin
 		if h.Status == protocol.StatusNotFound {
 			return docwrite.Write{Body: link.CreateBody, Metadata: stamped(link.CreateMeta, link.Stamp)}, true, nil
 		}
-		if reaches(h.Body, doc.Path, link.Target) {
+		switch PlaceOf(links.ResolverFor(doc.Host), h.Body, doc.Path, link.Target) {
+		case Named:
 			return docwrite.Write{}, false, nil
+		case AtCap:
+			return docwrite.Write{}, false, ErrAtCap
 		}
 		return docwrite.Write{Body: WithBullet(h.Body, link.Section, link.Bullet), Metadata: stamped(docwrite.Carried(h.Metadata), link.Stamp)}, true, nil
 	})
 	return added, settled(doc, &result, err)
 }
 
+// Place is where a target stands in a hub.
+type Place int
+
+// Open has room for a bullet; Named, the hub reaches the target already;
+// AtCap, the hub carries gate.HubLinkMax documents.
+const (
+	Open Place = iota
+	Named
+	AtCap
+)
+
+// ErrAtCap is EnsureLink's refusal when the hub has no room.
+var ErrAtCap = fmt.Errorf("at the cap of %d links; add a second-level hub, or link the directory so the hub names every document in it", gate.HubLinkMax)
+
+// PlaceOf is the one rule for adding a link: a target the hub reaches needs
+// nothing, a hub at the cap takes nothing, else a bullet goes in.
+func PlaceOf(r links.Resolver, body, hubPath, target string) Place {
+	switch {
+	case reaches(r, body, hubPath, target):
+		return Named
+	case gate.OutboundDocs(body) >= gate.HubLinkMax:
+		return AtCap
+	}
+	return Open
+}
+
 // reaches is the link a target needs: a directory, anything under it; a
 // document, the document itself or its directory.
-func reaches(body, hubPath, target string) bool {
+func reaches(r links.Resolver, body, hubPath, target string) bool {
 	if strings.HasSuffix(target, "/") {
-		return Reaches(body, hubPath, target)
+		return Reaches(r, body, hubPath, target)
 	}
-	return Names(body, hubPath, target)
+	return Names(r, body, hubPath, target)
 }
 
 // settled words an Edit outcome: nil when the write landed or the head
@@ -82,10 +112,10 @@ func settled(doc *docwrite.Doc, result *docwrite.Result, err error, unchanged ..
 }
 
 // Reaches reports a link from the hub to target: the target itself or, for
-// a directory, anything under it.
-func Reaches(body, hubPath, target string) bool {
+// a directory, anything under it. r resolves links on the hub's store.
+func Reaches(r links.Resolver, body, hubPath, target string) bool {
 	for _, dest := range links.Extract(body) {
-		if resolved := links.ResolvePath(hubPath, dest); resolved != "" && matches(resolved, target) {
+		if resolved := r.Path(hubPath, dest); resolved != "" && matches(resolved, target) {
 			return true
 		}
 	}
@@ -93,12 +123,12 @@ func Reaches(body, hubPath, target string) bool {
 }
 
 // Names reports a link to the document, or to its directory, which names
-// every document directly in it (a journal hub links journal/, not each
-// day); a sibling's link is neither.
-func Names(body, hubPath, docPath string) bool {
+// every document directly in it (a journal hub links journal/, a collection
+// hub the directory its views list); a sibling's link is neither.
+func Names(r links.Resolver, body, hubPath, docPath string) bool {
 	dir := path.Dir(docPath)
 	for _, dest := range links.Extract(body) {
-		switch links.ResolvePath(hubPath, dest) {
+		switch r.Path(hubPath, dest) {
 		case docPath, dir, dir + "/":
 			return true
 		}
@@ -171,7 +201,7 @@ func DropLinks(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, drop
 		if h.Status != protocol.StatusOK {
 			return docwrite.Write{}, false, nil
 		}
-		body, n := WithoutLinks(h.Body, doc.Path, drop.Targets)
+		body, n := WithoutLinks(links.ResolverFor(doc.Host), h.Body, doc.Path, drop.Targets)
 		dropped = n
 		if n == 0 {
 			return docwrite.Write{}, false, nil
@@ -250,19 +280,26 @@ func DropFromHubs(ctx context.Context, docs Docs, hubs []string, drop *Drop) []D
 // WithoutLinks is the body with every bullet dropped whose links (at least
 // one) all reach a target; n counts them. Links are read from one parse of
 // the body and judged by the line they start on: a hub bullet is one line.
-func WithoutLinks(body, hubPath string, targets []string) (out string, n int) {
-	out, cut := cutLinks(body, hubPath, targets, "")
+func WithoutLinks(r links.Resolver, body, hubPath string, targets []string) (out string, n int) {
+	out, cut := cutLinks(r, body, hubPath, &Move{Targets: targets})
 	return out, len(cut)
 }
 
-// MoveLinks cuts the bullets WithoutLinks drops and puts bullet where the
+// Move names the bullets MoveLinks cuts (those reaching only Targets) and
+// the one bullet that takes the first one's line; "" leaves none.
+type Move struct {
+	Targets []string
+	Bullet  string
+}
+
+// MoveLinks cuts the bullets WithoutLinks drops and puts m.Bullet where the
 // first was. Moved are the cut lines with relative links made absolute, so
 // another hub can carry them verbatim.
-func MoveLinks(body, hubPath string, targets []string, bullet string) (out string, moved []string) {
-	out, moved = cutLinks(body, hubPath, targets, bullet)
+func MoveLinks(r links.Resolver, body, hubPath string, m *Move) (out string, moved []string) {
+	out, moved = cutLinks(r, body, hubPath, m)
 	for i, line := range moved {
 		for _, link := range links.ExtractWithPositions(line) {
-			if abs := links.ResolvePath(hubPath, link.Dest); abs != "" && abs != link.Dest {
+			if abs := r.Path(hubPath, link.Dest); abs != "" && abs != link.Dest {
 				line = strings.Replace(line, "]("+link.Dest, "]("+abs, 1)
 			}
 		}
@@ -271,9 +308,9 @@ func MoveLinks(body, hubPath string, targets []string, bullet string) (out strin
 	return out, moved
 }
 
-// cutLinks drops the bullets whose links all reach a target, bullet (when
+// cutLinks drops the bullets whose links all reach a target, m.Bullet (when
 // not "") taking the first one's line, and returns the dropped lines.
-func cutLinks(body, hubPath string, targets []string, bullet string) (out string, cut []string) {
+func cutLinks(r links.Resolver, body, hubPath string, m *Move) (out string, cut []string) {
 	byLine := map[int][]string{}
 	for _, link := range links.ExtractWithPositions(body) {
 		pos := link.OpenBracket
@@ -287,12 +324,12 @@ func cutLinks(body, hubPath string, targets []string, bullet string) (out string
 	lines := strings.Split(body, "\n")
 	kept := lines[:0]
 	for i, line := range lines {
-		if !bulletLine.MatchString(line) || !onlyReaches(byLine[i], hubPath, targets) {
+		if !bulletLine.MatchString(line) || !onlyReaches(r, byLine[i], hubPath, m.Targets) {
 			kept = append(kept, line)
 			continue
 		}
-		if len(cut) == 0 && bullet != "" {
-			kept = append(kept, bullet)
+		if len(cut) == 0 && m.Bullet != "" {
+			kept = append(kept, m.Bullet)
 		}
 		cut = append(cut, line)
 	}
@@ -305,12 +342,12 @@ func cutLinks(body, hubPath string, targets []string, bullet string) (out string
 var bulletLine = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s+`)
 
 // onlyReaches: every link resolves to a target, and there is one.
-func onlyReaches(dests []string, hubPath string, targets []string) bool {
+func onlyReaches(r links.Resolver, dests []string, hubPath string, targets []string) bool {
 	if len(dests) == 0 {
 		return false
 	}
 	for _, dest := range dests {
-		resolved := links.ResolvePath(hubPath, dest)
+		resolved := r.Path(hubPath, dest)
 		if resolved == "" || !slices.ContainsFunc(targets, func(t string) bool { return matches(resolved, t) }) {
 			return false
 		}

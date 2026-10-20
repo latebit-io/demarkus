@@ -29,7 +29,7 @@ func TestPublishLinksAFirstVersionFromTheNearestHub(t *testing.T) {
 		"host:6309/notes/index.md": fetchtest.Head("# Notes\n\nWhat is here.\n", 2, map[string]string{"tags": "notes,index"}),
 	}}
 	got := publishNote(t, backend, "/notes/quic.md", noteBody, 0)
-	if got.IsError || got.Text != "status: created v1\nversion: 1\nhubs:\n- /notes/index.md: bullet added\n" {
+	if got.IsError || got.Text != "status: created v1\nversion: 1\netag: etag-v1\nhubs:\n- /notes/index.md: bullet added\n" {
 		t.Fatalf("publish = %+v", got)
 	}
 	hub := backend.PublishCall("/notes/index.md")
@@ -67,7 +67,7 @@ func TestPublishSkipsAHubThatNamesTheDocument(t *testing.T) {
 		"host:6309/index.md": fetchtest.Head("# Store\n\n- [Notes](/notes/)\n", 3, nil),
 	}}
 	got := publishNote(t, backend, "/notes/quic.md", noteBody, 0)
-	if got.IsError || got.Text != "status: created v1\nversion: 1\n" || len(backend.PublishCalls) != 1 {
+	if got.IsError || got.Text != "status: created v1\nversion: 1\netag: etag-v1\n" || len(backend.PublishCalls) != 1 {
 		t.Errorf("reached by directory = %+v, publishes %d", got, len(backend.PublishCalls))
 	}
 	// A sibling's link is not the directory's: the new document is still unnamed.
@@ -145,13 +145,13 @@ func TestPublishReportsAHubItCouldNotLink(t *testing.T) {
 		},
 	}
 	got := publishNote(t, backend, "/quic.md", noteBody, 0)
-	if got.IsError || got.Text != "status: created v1\nversion: 1\n\nnote: hub /index.md not updated: server unreachable\n" {
+	if got.IsError || got.Text != "status: created v1\nversion: 1\netag: etag-v1\n\nnote: hub /index.md not updated: server unreachable\n" {
 		t.Errorf("hub failed = %+v", got)
 	}
 
 	backend = &fetchtest.Client{}
 	got = publishNote(t, backend, "/notes/quic.md", noteBody, 0)
-	if got.IsError || got.Text != "status: created v1\nversion: 1\n\nnote: unlinked: no hub reaches /notes/quic.md; publish /notes/index.md with a bullet for it, or add one to /index.md\n" {
+	if got.IsError || got.Text != "status: created v1\nversion: 1\netag: etag-v1\n\nnote: unlinked: no hub reaches /notes/quic.md; publish /notes/index.md with a bullet for it, or add one to /index.md\n" {
 		t.Errorf("no hub = %+v", got)
 	}
 
@@ -161,7 +161,7 @@ func TestPublishReportsAHubItCouldNotLink(t *testing.T) {
 		"host:6309/index.md":       fetchtest.Head("# Store\n", 1, nil),
 	}}
 	got = publishNote(t, backend, "/notes/quic.md", noteBody, 0)
-	if got.IsError || got.Text != "status: created v1\nversion: 1\n\nnote: hub /notes/index.md not updated: unauthorized\n" || len(backend.PublishCalls) != 1 {
+	if got.IsError || got.Text != "status: created v1\nversion: 1\netag: etag-v1\n\nnote: hub /notes/index.md not updated: unauthorized\n" || len(backend.PublishCalls) != 1 {
 		t.Errorf("unreadable hub = %+v, publishes %d", got, len(backend.PublishCalls))
 	}
 	if len(backend.PublishCalls) != 1 {

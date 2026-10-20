@@ -86,7 +86,7 @@ Limits: up to 50 keys totaling 1024 bytes (`tags` counted at its serialized list
 
 ### Response fields (computed, not stored)
 
-On FETCH, the server returns `modified`, `etag`, and `content-hash` as protocol metadata. These are derived from the version file at read time and are not stored in frontmatter.
+On FETCH, the server returns `modified`, `etag`, and `content-hash` as protocol metadata, and a landed PUBLISH or APPEND answers with the same three for the version it wrote. These are derived from the version file and are not stored in frontmatter.
 
 ### If you write `---` at the top of your body
 

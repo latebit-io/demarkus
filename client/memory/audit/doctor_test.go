@@ -443,3 +443,34 @@ func TestReportMarkdownCapsEachCheck(t *testing.T) {
 		t.Fatalf("cap applied per check:\n%s", md)
 	}
 }
+
+// A world's hubs link absolutely to their own store: with the authority known
+// those links are inbound (a directory link names every document in it) and
+// a dangling one is broken; without it every absolute link is external.
+func TestAbsoluteLinksToTheOwnStoreAreInternal(t *testing.T) {
+	docs := map[string]fakeDoc{
+		"/index.md":              tagged("# Hub\n\n- [genres](mark://music/genres/index.md)\n"),
+		"/genres/index.md":       tagged("# Genres\n\n- [A](mark://music/genres/by-letter/a.md)\n- [records](mark://music/genres/)\n- [gone](mark://music/genres/gone.md)\n- [peer](mark://other/genres/x.md)\n"),
+		"/genres/by-letter/a.md": tagged("# A\n\nSummary.\n"),
+		"/genres/ululumama.md":   tagged("# Ululumama\n\nSummary.\n"),
+	}
+	f := newFake(docs)
+	f.host = "music"
+	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findings(r, CheckOrphans); len(got) != 0 {
+		t.Fatalf("absolute links to the own store are inbound: %v", got)
+	}
+	if got := findings(r, CheckBrokenLinks); len(got) != 1 || !strings.Contains(got[0], "/genres/index.md: -> /genres/gone.md") {
+		t.Fatalf("a dangling absolute link is broken: %v", got)
+	}
+	r, err = Run(context.Background(), newFake(docs), Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findings(r, CheckOrphans); len(got) != 3 {
+		t.Fatalf("without the authority every absolute link is external: %v", got)
+	}
+}

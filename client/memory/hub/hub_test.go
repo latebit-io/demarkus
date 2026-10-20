@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -9,6 +10,8 @@ import (
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
+	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -44,7 +47,7 @@ func TestNames(t *testing.T) {
 		"- [s](/notes/sibling.md)": false,
 		"- [o](/other.md)":         false,
 	} {
-		if got := Names(body, "/index.md", "/notes/quic.md"); got != want {
+		if got := Names(links.Resolver{}, body, "/index.md", "/notes/quic.md"); got != want {
 			t.Errorf("Names(%q) = %v, want %v", body, got, want)
 		}
 	}
@@ -59,11 +62,11 @@ func TestReaches(t *testing.T) {
 		"- [p](plans/p.md)":                   false,
 		"- [ext](https://x.example/journal/)": false,
 	} {
-		if got := Reaches(body, hub, "/proj/journal/"); got != want {
+		if got := Reaches(links.Resolver{}, body, hub, "/proj/journal/"); got != want {
 			t.Errorf("Reaches(%q) = %v, want %v", body, got, want)
 		}
 	}
-	if !Reaches("- [p](/proj/)", "/index.md", "/proj/") || !Reaches("- [p](/proj)", "/index.md", "/proj/") {
+	if !Reaches(links.Resolver{}, "- [p](/proj/)", "/index.md", "/proj/") || !Reaches(links.Resolver{}, "- [p](/proj)", "/index.md", "/proj/") {
 		t.Error("a project link reaches the project directory")
 	}
 }
@@ -132,12 +135,12 @@ func TestEnsureLinkRetriesOnceOnConflict(t *testing.T) {
 
 func TestWithoutLinks(t *testing.T) {
 	body := "# Hub\n\n## Plans\n\n- [a](/proj/plans/a.md): one\n- [b](plans/b.md) and [c](/other.md)\n- [j](journal/)\n- plain text\n- [ext](https://x.example/a.md)\n"
-	got, n := WithoutLinks(body, "/proj/index.md", []string{"/proj/plans/a.md", "/proj/journal/"})
+	got, n := WithoutLinks(links.Resolver{}, body, "/proj/index.md", []string{"/proj/plans/a.md", "/proj/journal/"})
 	want := "# Hub\n\n## Plans\n\n- [b](plans/b.md) and [c](/other.md)\n- plain text\n- [ext](https://x.example/a.md)\n"
 	if n != 2 || got != want {
 		t.Errorf("n = %d\n%s", n, got)
 	}
-	if _, n := WithoutLinks(body, "/proj/index.md", []string{"/proj/plans/"}); n != 1 {
+	if _, n := WithoutLinks(links.Resolver{}, body, "/proj/index.md", []string{"/proj/plans/"}); n != 1 {
 		t.Errorf("directory target drops %d, want the bullet under it", n)
 	}
 }
@@ -146,14 +149,14 @@ func TestWithoutLinks(t *testing.T) {
 // relative links made absolute, fragments kept.
 func TestMoveLinks(t *testing.T) {
 	body := "# Hub\n\n- [x](/x.md)\n- [a](plans/a.md#why): one\n- [x2](/x2.md)\n- [b](/proj/plans/b.md)\n"
-	got, moved := MoveLinks(body, "/proj/index.md", []string{"/proj/plans/"}, "- [Plans](plans/)")
+	got, moved := MoveLinks(links.Resolver{}, body, "/proj/index.md", &Move{Targets: []string{"/proj/plans/"}, Bullet: "- [Plans](plans/)"})
 	if got != "# Hub\n\n- [x](/x.md)\n- [Plans](plans/)\n- [x2](/x2.md)\n" {
 		t.Errorf("body = %q", got)
 	}
 	if want := []string{"- [a](/proj/plans/a.md#why): one", "- [b](/proj/plans/b.md)"}; !slices.Equal(moved, want) {
 		t.Errorf("moved = %q", moved)
 	}
-	if got, moved := MoveLinks(body, "/proj/index.md", []string{"/none/"}, "- [N](/none/)"); got != body || moved != nil {
+	if got, moved := MoveLinks(links.Resolver{}, body, "/proj/index.md", &Move{Targets: []string{"/none/"}, Bullet: "- [N](/none/)"}); got != body || moved != nil {
 		t.Errorf("nothing to move: %q %q", got, moved)
 	}
 }
@@ -218,5 +221,39 @@ func TestAncestorsAndDropFromHubs(t *testing.T) {
 	got := DropFromHubs(t.Context(), docs, AncestorsOf("/a/b/c.md"), &Drop{Targets: []string{"/a/b/c.md"}})
 	if len(got) != 5 || got[0].Dropped != 0 || got[1].Dropped != 1 || got[2].Dropped != 1 || got[3].Dropped != 0 || got[4].Err == nil {
 		t.Errorf("drop = %+v", got)
+	}
+}
+
+// A hub on a world links absolutely; a resolver bound to the hub's store
+// reads those links as paths, the zero resolver as external.
+func TestNamesAndReachesAbsoluteLinksToTheOwnStore(t *testing.T) {
+	body := "- [A](mark://music/genres/by-letter/a.md)\n- [records](mark://music/genres/)\n"
+	music := links.ResolverFor("music")
+	if !Names(music, body, "/genres/index.md", "/genres/x.md") || !Reaches(music, body, "/genres/index.md", "/genres/by-letter/") {
+		t.Error("an absolute link to the hub's store names and reaches")
+	}
+	if Names(links.Resolver{}, body, "/genres/index.md", "/genres/x.md") {
+		t.Error("no store bound: external")
+	}
+}
+
+// PlaceOf is the one rule for a bullet: named, at the cap, else open.
+func TestPlaceOf(t *testing.T) {
+	var full strings.Builder
+	for i := range gate.HubLinkMax {
+		fmt.Fprintf(&full, "- [d%d](/d%d.md)\n", i, i)
+	}
+	for name, c := range map[string]struct {
+		body string
+		want Place
+	}{
+		"named":    {"- [x](/x.md)\n", Named},
+		"open":     {"- [y](/y.md)\n", Open},
+		"at cap":   {full.String(), AtCap},
+		"full dir": {full.String() + "- [all](/)\n", Named},
+	} {
+		if got := PlaceOf(links.Resolver{}, c.body, "/index.md", "/x.md"); got != c.want {
+			t.Errorf("%s: PlaceOf = %v, want %v", name, got, c.want)
+		}
 	}
 }
