@@ -329,8 +329,9 @@ type toolClass struct {
 	advanced bool // absent from the lean profile
 }
 
-// toolClasses is every mark_* tool any surface serves. mark_archive stays in
-// lean: /soul-archive is the only archive path a plugin user has.
+// toolClasses is every mark_* tool any surface serves, the plugin binary's
+// host tools included. mark_archive stays in lean: /soul-archive is the only
+// archive path a plugin user has.
 var toolClasses = map[string]toolClass{
 	"mark_fetch": {}, "mark_explore": {}, "mark_list": {}, "mark_versions": {},
 	"mark_lookup": {}, "mark_lookup_all": {}, "mark_backlinks": {}, "mark_worlds": {},
@@ -338,6 +339,7 @@ var toolClasses = map[string]toolClass{
 	"mark_publish": {write: true}, "mark_append": {write: true}, "mark_archive": {write: true},
 	"mark_curate": {write: true}, "mark_promote": {write: true}, "mark_graph": {write: true},
 	"mark_graph_publish": {write: true, advanced: true},
+	"mark_host":          {}, "mark_host_setup": {write: true},
 }
 
 // KnownTools and AdvancedTools are views of toolClasses; the plugin-prompts

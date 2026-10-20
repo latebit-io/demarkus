@@ -9,7 +9,7 @@
 //	echo '{"tool":"...","input":{...},"cwd":"..."}' | demarkus-plugin gate
 //	demarkus-plugin version
 //
-// Subcommands: gate, nudge, journal-write, guidance, update-check, registry, provision, mcp-serve, doctor.
+// Subcommands: gate, nudge, journal-write, guidance, update-check, registry, provision, mcp-serve, mcp, doctor.
 package main
 
 import (
@@ -25,7 +25,9 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/gate"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/guidance"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/hosttools"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/nudge"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/release"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/update"
 )
 
@@ -33,6 +35,9 @@ import (
 var version = "dev"
 
 func main() {
+	// The installer fetches the token from the tools release this binary
+	// shipped in, and never re-downloads itself.
+	release.PluginVersion = version
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
@@ -52,6 +57,8 @@ func main() {
 		cmdRegistry(os.Args[2:])
 	case "mcp-serve":
 		cmdMcpServe(os.Args[2:])
+	case "mcp":
+		cmdMcp(os.Args[2:])
 	case "provision":
 		cmdProvision(os.Args[2:])
 	case "doctor":
@@ -74,6 +81,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  update-check  Report whether a newer release of the calling plugin exists\n")
 	fmt.Fprintf(os.Stderr, "  doctor    Audit a store for catalog hygiene and print the report (read-only)\n")
 	fmt.Fprintf(os.Stderr, "  registry  Manage joined stores, bindings and promote targets; `registry project` prints a project's slug, store and binding state\n")
+	fmt.Fprintf(os.Stderr, "  mcp       Tool provider for demarkus-mcp: `mcp tools` lists the host tools, `mcp call <tool>` runs one (JSON arguments on stdin)\n")
 	fmt.Fprintf(os.Stderr, "  version   Print version and exit\n")
 }
 
@@ -289,4 +297,34 @@ func printJSON(v any) {
 		return
 	}
 	fmt.Println(string(out))
+}
+
+// cmdMcp is the tool provider demarkus-mcp runs (client/mcpprovider): `mcp
+// tools` prints the host tool schemas, `mcp call <name>` reads the JSON
+// arguments on stdin and prints the result; a refusal is stderr and exit 1.
+func cmdMcp(args []string) {
+	switch {
+	case len(args) == 1 && args[0] == "tools":
+		out, err := json.Marshal(hosttools.Tools())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "mcp tools: marshal: "+err.Error())
+			os.Exit(2)
+		}
+		fmt.Println(string(out))
+	case len(args) == 2 && args[0] == "call":
+		var in map[string]any
+		if err := json.NewDecoder(os.Stdin).Decode(&in); err != nil {
+			fmt.Fprintln(os.Stderr, "mcp call: decode arguments: "+err.Error())
+			os.Exit(2)
+		}
+		out, err := hosttools.Call(args[1], in)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		fmt.Println(out)
+	default:
+		fmt.Fprintln(os.Stderr, "usage: demarkus-plugin mcp tools | mcp call <tool> (arguments as JSON on stdin)")
+		os.Exit(2)
+	}
 }

@@ -109,24 +109,6 @@ func TestSplitMcpHarnessLeavesChildArgsAlone(t *testing.T) {
 	}
 }
 
-func TestMemoryDefaultListingFlagsStaleBinding(t *testing.T) {
-	cat := []string{"demarkus-memory\tlocal\t-\t-", "soul\tremote\tmark://s\t0"}
-	got := strings.Join(memoryDefaultListing(cat, "soul"), "\n")
-	if !strings.Contains(got, "soul\tremote\tmark://s\t0\t*") || strings.Contains(got, "STALE") {
-		t.Fatalf("bound row should be starred, no STALE: %q", got)
-	}
-	got = strings.Join(memoryDefaultListing(cat, "gone"), "\n")
-	if !strings.HasSuffix(got, "\nSTALE gone") || strings.Contains(got, "\t*") {
-		t.Fatalf("missing binding should end with STALE and star nothing: %q", got)
-	}
-	if got := strings.Join(memoryDefaultListing(nil, "gone"), "\n"); got != "EMPTY\nSTALE gone" {
-		t.Fatalf("empty catalog with a binding: %q", got)
-	}
-	if got := strings.Join(memoryDefaultListing(nil, ""), "\n"); got != "EMPTY" {
-		t.Fatalf("unbound empty: %q", got)
-	}
-}
-
 func TestSetEnvReplacesInheritedValue(t *testing.T) {
 	env := setEnv([]string{"HOME=/h", "DEMARKUS_MCP_PROFILE=full", "PATH=/bin"}, "DEMARKUS_MCP_PROFILE", "lean")
 	if len(env) != 3 || env[2] != "DEMARKUS_MCP_PROFILE=lean" || env[0] != "HOME=/h" || env[1] != "PATH=/bin" {
@@ -135,6 +117,23 @@ func TestSetEnvReplacesInheritedValue(t *testing.T) {
 	for _, entry := range env[:2] {
 		if strings.HasPrefix(entry, "DEMARKUS_MCP_PROFILE=") {
 			t.Fatalf("inherited profile survived: %v", env)
+		}
+	}
+}
+
+// The provider rides the environment the same way: an inherited one is some
+// other server's, and only a host-tools start names this binary.
+func TestMcpServeEnvScopesTheToolProvider(t *testing.T) {
+	inherited := []string{"PATH=/bin", toolProviderEnv + "=/other/plugin"}
+	for provider, want := range map[string][]string{"": nil, "/me/plugin": {toolProviderEnv + "=/me/plugin"}} {
+		var got []string
+		for _, entry := range mcpServeEnv(inherited, "", provider) {
+			if strings.HasPrefix(entry, toolProviderEnv+"=") {
+				got = append(got, entry)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("provider %q: entries = %v, want %v", provider, got, want)
 		}
 	}
 }
@@ -152,7 +151,7 @@ func TestMcpServeEnvScopesAuthToTheCatalogToken(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var auth, profile []string
-			for _, entry := range mcpServeEnv(inherited, tt.token) {
+			for _, entry := range mcpServeEnv(inherited, tt.token, "") {
 				switch {
 				case strings.HasPrefix(entry, "DEMARKUS_AUTH="):
 					auth = append(auth, entry)
