@@ -491,9 +491,14 @@ func cmdMcpServe(args []string) {
 	fs := flag.NewFlagSet("mcp-serve", flag.ExitOnError)
 	memory := fs.String("memory", "", "joined remote-memory slug (omit for the local managed memory)")
 	name := fs.String("name", "", "MCP server name a branded plugin registers the local memory under; recorded so gates resolve it")
-	hostTools := fs.Bool("host-tools", os.Getenv(hostToolsEnv) != "", "serve mark_host and mark_host_setup beside the store's tools (local managed memory only; default from "+hostToolsEnv+")")
+	hostTools := fs.Bool("host-tools", false, "serve mark_host and mark_host_setup beside the store's tools (local managed memory only; "+hostToolsEnv+" set does the same)")
 	_ = fs.Parse(args) // ExitOnError: Parse never returns
 
+	// The env is a hint for the local server; exported shell-wide it must not
+	// take a joined memory's server down, so it never applies with --memory.
+	if *memory == "" && os.Getenv(hostToolsEnv) != "" {
+		*hostTools = true
+	}
 	if *memory != "" && (*name != "" || *hostTools) {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: -name and -host-tools apply to the local managed memory only")
 		os.Exit(2)

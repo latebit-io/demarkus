@@ -151,6 +151,18 @@ func TestLoadFailsWhenTheProviderCannotRun(t *testing.T) {
 	}
 }
 
+// A provider that vanishes after loading is a tool outcome, not a JSON-RPC
+// fault: the model reads it and reports it.
+func TestHandlerReportsAnUnavailableProviderAsAToolError(t *testing.T) {
+	res, err := handler("/nonexistent/provider", "fake_echo")(context.Background(), mcp.CallToolRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := res.Content[0].(mcp.TextContent).Text; !res.IsError || !strings.HasPrefix(text, "fake_echo: provider unavailable: ") {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
 func TestRunReportsATimeoutNotAnExit(t *testing.T) {
 	t.Setenv(fakeEnv, "slow")
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

@@ -82,7 +82,9 @@ func handler(bin, name string) mcpserver.ToolHandlerFunc {
 		case errors.As(err, &failed):
 			return mcp.NewToolResultError(name + ": " + failed.msg), nil
 		case err != nil:
-			return nil, fmt.Errorf("%s: %w", name, err)
+			// A tool outcome, like the store's own "internal:" results, so the
+			// model reports it instead of reading a JSON-RPC fault.
+			return mcp.NewToolResultError(name + ": provider unavailable: " + err.Error()), nil
 		}
 		return mcp.NewToolResultText(strings.TrimRight(string(out), "\n")), nil
 	}
@@ -98,6 +100,8 @@ func (e *toolError) Error() string { return e.msg }
 // success is relayed to the log so a provider's warning is never dropped.
 func run(ctx context.Context, bin string, stdin []byte, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
+	// A descendant holding the pipes must not outlive the deadline.
+	cmd.WaitDelay = 5 * time.Second
 	if len(stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
