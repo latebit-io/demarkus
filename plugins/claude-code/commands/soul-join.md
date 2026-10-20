@@ -29,7 +29,7 @@ Every `<shell-escaped-*>` placeholder: exactly one POSIX-safe shell word (embedd
 2. Register the HTTP MCP server (OAuth runs in the client on first use):
 
    ```bash
-   claude mcp add --transport http '<slug>' '<mcp-url>' --scope project
+   claude mcp add --transport http '<slug>' '<mcp-url>' --scope user
    ```
 
    Registration failure (non-zero exit): the catalog row and binding are already committed, so surface the exact error, report the join as partial (soul joined and bound, MCP server not registered), give the command as the retry, and do not confirm.
@@ -77,7 +77,7 @@ Hosted soul: skip the QUIC join and MCP-registration steps below, but still appl
 3. Register the MCP server without putting the token in config.
 
    ```bash
-    claude mcp add '<slug>' --scope project -- "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --memory '<slug>'
+    claude mcp add '<slug>' --scope user -- "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --memory '<slug>'
    ```
 
    Registration failure (non-zero exit): the catalog row and binding are already committed, so surface the exact error, report the join as partial (soul joined and bound, MCP server not registered), give the command as the retry, and do not confirm.
