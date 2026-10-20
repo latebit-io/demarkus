@@ -9,11 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/latebit-io/demarkus/protocol/layout"
-	"github.com/latebit-io/demarkus/protocol/publishpolicy"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
 )
 
 // Strictness is the enforcement level a gate applies to a violation.
@@ -207,126 +204,13 @@ func isOff(v string) bool {
 	return false
 }
 
-// KnowledgeStrictness env override → plugin-knowledge.strictness.<slug> → warn.
-func KnowledgeStrictness(slug string) (Strictness, error) {
+// KnowledgeStrictness is the gate's severity on a joined knowledge system:
+// the env override or warn. The server enforces the system's own policy.
+func KnowledgeStrictness() Strictness {
 	if v := os.Getenv("DEMARKUS_KNOWLEDGE_STRICTNESS"); v != "" {
-		return validStrictness(v, Warn), nil
+		return validStrictness(v, Warn)
 	}
-	if slug == "" {
-		return Warn, nil
-	}
-	p, err := path("plugin-knowledge.strictness." + slug)
-	if err != nil {
-		return Warn, err
-	}
-	s, err := readTrimmed(p)
-	if err != nil {
-		return Warn, err
-	}
-	return validStrictness(s, Warn), nil
-}
-
-func policyLists(tags, fields string) publishpolicy.Policy {
-	return publishpolicy.Parse(
-		"require_tags: " + strings.ReplaceAll(tags, "\n", " ") + "\n" +
-			"require_fields: " + strings.ReplaceAll(fields, "\n", " "))
-}
-
-// KnowledgeRequireTags per-slug required tag axes (e.g. "category team").
-func KnowledgeRequireTags(slug string) ([]string, error) {
-	if slug == "" {
-		return nil, nil
-	}
-	p, err := path("plugin-knowledge.require-tags." + slug)
-	if err != nil {
-		return nil, err
-	}
-	s, err := readRaw(p)
-	if err != nil {
-		return nil, err
-	}
-	return policyLists(s, "").RequiredTagAxes, nil
-}
-
-// KnowledgeRequireFields per-slug required OKF metadata fields (e.g. "type").
-func KnowledgeRequireFields(slug string) ([]string, error) {
-	if slug == "" {
-		return nil, nil
-	}
-	p, err := path("plugin-knowledge.require-fields." + slug)
-	if err != nil {
-		return nil, err
-	}
-	s, err := readRaw(p)
-	if err != nil {
-		return nil, err
-	}
-	return policyLists("", s).RequiredFields, nil
-}
-
-// KnowledgePolicy returns the mirrored publish policy for slug.
-func KnowledgePolicy(slug string) (publishpolicy.Policy, error) {
-	if slug == "" {
-		return legacyKnowledgePolicy(slug)
-	}
-	if policy, found, err := knowledgePolicySnapshot(slug); found || err != nil {
-		return policy, err
-	}
-	registryPath, err := path("knowledge-systems")
-	if err != nil {
-		return publishpolicy.Policy{}, err
-	}
-	if err := os.MkdirAll(filepath.Dir(registryPath), 0o755); err != nil {
-		return publishpolicy.Policy{}, err
-	}
-	var policy publishpolicy.Policy
-	err = lockdir.WithLock(registryPath+".lock", 100, 20*time.Millisecond, func() error {
-		var found bool
-		policy, found, err = knowledgePolicySnapshot(slug)
-		if err != nil || found {
-			return err
-		}
-		policy, err = legacyKnowledgePolicy(slug)
-		return err
-	})
-	return policy, err
-}
-
-func knowledgePolicySnapshot(slug string) (publishpolicy.Policy, bool, error) {
-	p, err := path("plugin-knowledge.policy." + slug)
-	if err != nil {
-		return publishpolicy.Policy{}, false, err
-	}
-	body, err := readRaw(p)
-	if err != nil || body == "" {
-		return publishpolicy.Policy{}, false, err
-	}
-	policy := publishpolicy.Parse(body)
-	policy.Strictness = policy.EffectiveStrictness()
-	if override := os.Getenv("DEMARKUS_KNOWLEDGE_STRICTNESS"); override != "" {
-		policy.Strictness = publishpolicy.Strictness(validStrictness(override, Warn))
-	}
-	return policy, true, nil
-}
-
-func legacyKnowledgePolicy(slug string) (publishpolicy.Policy, error) {
-	strictness, err := KnowledgeStrictness(slug)
-	if err != nil {
-		return publishpolicy.Policy{}, err
-	}
-	tags, err := KnowledgeRequireTags(slug)
-	if err != nil {
-		return publishpolicy.Policy{}, err
-	}
-	fields, err := KnowledgeRequireFields(slug)
-	if err != nil {
-		return publishpolicy.Policy{}, err
-	}
-	return publishpolicy.Policy{
-		Strictness:      publishpolicy.Strictness(strictness),
-		RequiredTagAxes: tags,
-		RequiredFields:  fields,
-	}, nil
+	return Warn
 }
 
 // --- registries ---------------------------------------------------------------

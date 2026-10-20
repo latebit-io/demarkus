@@ -364,57 +364,33 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 		decisions = append(decisions, *sd)
 	}
 	if pt.Verb == "publish" || pt.Verb == "append" {
-		td, err := knowledgeTagDecision(args, slug, pt.Verb)
-		if err != nil {
-			return Decision{}, err
-		}
-		if td != nil {
+		if td := knowledgeTagDecision(args, slug, pt.Verb); td != nil {
 			decisions = append(decisions, *td)
 		}
 	}
 	return combine(decisions), nil
 }
 
-// knowledgeTagDecision evaluates complete publishes or explicit append overrides.
-func knowledgeTagDecision(args map[string]any, slug, verb string) (*Decision, error) {
+// knowledgeTagDecision checks tags and importance on complete publishes or
+// explicit append overrides; the server enforces the system's policy.
+func knowledgeTagDecision(args map[string]any, slug, verb string) *Decision {
 	md := metadataOf(args)
 	url := urlOf(args)
-	policy, err := config.KnowledgePolicy(slug)
-	if err != nil {
-		return nil, err
-	}
-	policy = policy.ForCaller()
+	policy := publishpolicy.Policy{Strictness: publishpolicy.Strictness(config.KnowledgeStrictness())}
 	result := publishpolicy.Evaluate(policy, url, md)
 	if verb == "append" {
 		result = publishpolicy.EvaluateOverrides(policy, url, md)
 	}
 	if result.Compliant() {
-		return nil, nil
+		return nil
 	}
 
-	missingAxes := result.Names(publishpolicy.MissingTagAxis)
-	missingFields := result.Names(publishpolicy.MissingField)
 	var problems []string
 	if result.Has(publishpolicy.MissingTags) {
 		problems = append(problems, "no metadata.tags (it will be invisible to mark_lookup)")
 	}
 	if result.Has(publishpolicy.InvalidImportance) {
 		problems = append(problems, "metadata.importance outside [0,1]")
-	}
-	if len(missingAxes) > 0 {
-		problems = append(problems, fmt.Sprintf(
-			"missing required tag axes for this knowledge system: %s (tag as \"axis:value\", e.g. %s:<value>)",
-			strings.Join(missingAxes, " "), missingAxes[0]))
-	}
-	if len(missingFields) > 0 {
-		problems = append(problems, fmt.Sprintf(
-			"missing required OKF metadata fields: %s (set each as a key in the metadata object, e.g. metadata: {%q: \"...\"})",
-			strings.Join(missingFields, " "), missingFields[0]))
-	}
-	for _, v := range result.Violations {
-		if v.Code == publishpolicy.DisallowedTagValue {
-			problems = append(problems, fmt.Sprintf("tag %s is outside this knowledge system's allowed %s values (%s)", v.Name, v.Axis, policy.AllowedList(v.Axis)))
-		}
 	}
 	target := url
 	if target == "" {
@@ -425,7 +401,7 @@ func knowledgeTagDecision(args map[string]any, slug, verb string) (*Decision, er
 			"tags (comma-separated subjects derived from the content) and, if set, importance in [0,1]. "+
 			"Tags are what make this document findable via mark_lookup across the shared catalog.",
 		verb, target, slug, strings.Join(problems, "; "), verb)
-	return &Decision{Decision: string(policy.EffectiveStrictness()), Reason: reason}, nil
+	return &Decision{Decision: string(policy.EffectiveStrictness()), Reason: reason}
 }
 
 func urlOr(args map[string]any, fallback string) string {

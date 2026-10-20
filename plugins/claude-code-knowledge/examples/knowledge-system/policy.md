@@ -9,7 +9,7 @@ allow_tags.category: project|ops|governance|platform
 
 The write policy for this demarkus knowledge system. Joined agents (via the demarkus-knowledge Claude Code plugin's `/knowledge-join`) fetch this from `mark://root/.well-known/demarkus/policy.md` and follow it. Edit it here on `root` to change the policy for everyone; it is versioned like any demarkus document and propagates to each member on their next session.
 
-The lines above are the **enforced core**: the server enforces them on every write to every world (this `root` policy is the floor; a world's own `/.well-known/demarkus/policy.md` can only tighten it), and the agent mirrors them into the plugin's local gate (`strictness:` → severity, `require_tags:` → mandatory tag axes, `allow_tags.<axis>:` → the values an axis accepts, `|`-separated, and the optional `require_fields:` → mandatory OKF metadata fields such as `type`). `require_fields:` is omitted here so `type` stays advisory until the corpus is typed; add it (e.g. `require_fields: type`) to make it mandatory. Keep `governance` in the `category` list: this policy carries `category:governance` itself. Everything below is **convention** the agent follows; the `/knowledge-doctor` hygiene auditor can check it after the fact.
+The lines above are the **enforced core**: the server enforces them on every write to every world (this `root` policy is the floor; a world's own `/.well-known/demarkus/policy.md` can only tighten it), each with its meaning: `strictness:` the severity, `require_tags:` mandatory tag axes, `allow_tags.<axis>:` the values an axis accepts, `|`-separated, and the optional `require_fields:` mandatory OKF metadata fields such as `type`. `require_fields:` is omitted here so `type` stays advisory until the corpus is typed; add it (e.g. `require_fields: type`) to make it mandatory. Keep `governance` in the `category` list: this policy carries `category:governance` itself. Everything below is **convention** the agent follows; the `/knowledge-doctor` hygiene auditor can check it after the fact.
 
 ## What to publish here
 
@@ -21,7 +21,7 @@ This is a shared catalog, not a scratch pad. Publish when the content is useful 
 
 ## Required metadata on every publish
 
-Enforced by the plugin's publish gate, at the severity set by `strictness:` above:
+Enforced by the server on every write, at the severity set by `strictness:` above; the plugin's publish gate checks `tags` and `importance` before the call leaves the session:
 
 - `tags`: comma-separated subjects; never empty (an untagged doc is invisible to `mark_lookup`).
 - `importance`: float 0–1, chosen deliberately; reserve ≥0.8 for hubs, architecture, and key decisions.

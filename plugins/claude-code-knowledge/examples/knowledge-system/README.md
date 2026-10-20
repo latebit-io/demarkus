@@ -28,17 +28,9 @@ It declares who owns the world, what subject domain it holds, its partition role
 
 ## How a joined agent consumes them
 
-`/knowledge-join` registers the system so the publish tag-gate enforces on its writes (the same tag check as the local memory; tags travel in the tool call, so no broker access is needed for that). For the rest:
+The server enforces the policy on every write: `strictness:` sets the severity, `require_tags:` names tag axes each publish must carry as `axis:value` (e.g. `category:project`), `allow_tags:` lists the values per axis, `require_fields:` the metadata keys. A write that falls short is refused or warned with the rule to fix. `/knowledge-join` registers the system so the plugin's own publish gate adds the same `tags` presence check before the call leaves the session.
 
-1. On first substantive work against a knowledge system, the agent fetches `mark://root/.well-known/demarkus/policy.md` and `mark://root/.well-known/demarkus/template.md` and follows them; structure conventions are advisory by necessity (only the agent, via its MCP OAuth session, can reach the broker; a hook cannot).
-2. The agent mirrors the policy's **enforced core** into local files the gate reads (`<slug>` is the MCP server name `/knowledge-join` registered, shown by `claude mcp list`):
-
-   ```bash
-   printf '%s\n' "block"      > ~/.demarkus/plugin-knowledge.strictness.<slug>     # from strictness:
-   printf '%s\n' "category"   > ~/.demarkus/plugin-knowledge.require-tags.<slug>   # from require_tags:
-   ```
-
-   The org declares these once on `root`; each agent mirrors them; the local gate enforces them. `strictness:` sets the severity; `require_tags:` are tag axes the gate presence-checks (each satisfied by an `axis:value` tag, e.g. `category:project`).
+On first substantive work against a knowledge system, the agent fetches `mark://root/.well-known/demarkus/policy.md` and `mark://root/.well-known/demarkus/template.md` and follows them; structure conventions are advisory by necessity (only the agent, via its MCP OAuth session, can reach the broker; a hook cannot).
 
 ## Why this shape
 

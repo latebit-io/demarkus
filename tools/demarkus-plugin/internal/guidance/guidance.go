@@ -4,15 +4,19 @@
 package guidance
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/broker"
+	registryknowledge "github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/knowledge"
 )
 
 // Input selects which surface's session guidance to evaluate.
@@ -146,32 +150,101 @@ func memoryOffer() (string, error) {
 	return memoryOfferText, nil
 }
 
+// probeBroker is the broker reachability probe; tests replace it so none
+// dials out.
+var probeBroker = broker.Reach
+
+// systemStatus is one joined system as the session start reports it: a
+// probe error, or none with an empty url when the join recorded no url.
+type systemStatus struct {
+	slug, url string
+	err       error
+}
+
+// probeSystems reaches every joined broker side by side within statusBudget.
+func probeSystems(systems []string) ([]systemStatus, error) {
+	out := make([]systemStatus, len(systems))
+	ctx, cancel := context.WithTimeout(context.Background(), statusBudget)
+	defer cancel()
+	var wg sync.WaitGroup
+	for i, slug := range systems {
+		u, err := registryknowledge.URL(slug)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = systemStatus{slug: slug, url: u}
+		if u == "" {
+			continue
+		}
+		wg.Go(func() { out[i].err = probeBroker(ctx, u) })
+	}
+	wg.Wait()
+	return out, nil
+}
+
+// agentLine is the system's bullet in the session header.
+func (s *systemStatus) agentLine() string {
+	line := "- **" + s.slug + "** (MCP server `" + s.slug + "`"
+	switch {
+	case s.url == "":
+		return line + "; broker URL not recorded, re-join to enable the reachability check)"
+	case s.err != nil:
+		return line + ", " + s.url + "): ⚠️ " + s.err.Error()
+	}
+	return line + ", " + s.url + "): broker reachable"
+}
+
+// userWord is the system's word on the status line.
+func (s *systemStatus) userWord() string {
+	switch {
+	case s.url == "":
+		return s.slug + " joined"
+	case s.err != nil:
+		return s.slug + " ⚠️ broker unreachable"
+	}
+	return s.slug + " reachable"
+}
+
+// knowledgeNotConnected tells the agent how an unreachable or unauthenticated
+// system shows up: its tools are missing, so no shared read can run.
+const knowledgeNotConnected = "A joined system whose `mark_*` tools are absent from this session is not connected (OAuth pending, or its MCP server not registered on this host): say so before answering a shared question, never answer from memory as if it were."
+
 func knowledge(in Input) (Output, error) {
 	systems, err := config.ListKnowledgeSystems()
 	if err != nil {
 		return Output{}, err
 	}
 	if len(systems) == 0 {
-		// One-time pointer to /knowledge-join, then silent.
+		status := "demarkus-knowledge: no system joined · /knowledge-join <broker-url>"
+		// One-time pointer to /knowledge-join in the agent's context; the
+		// status line says it every session.
 		sentinel, err := config.StatePath(".knowledge-join-hint-shown")
 		if err != nil {
 			return Output{}, err
 		}
 		if _, e := os.Stat(sentinel); e == nil {
-			return Output{}, nil
+			return Output{Status: status}, nil
 		}
 		// Best effort: a missing sentinel only repeats the hint next session.
 		_ = os.MkdirAll(filepath.Dir(sentinel), 0o755)
 		_ = os.WriteFile(sentinel, nil, 0o644)
-		return Output{Context: "demarkus-knowledge is installed but no knowledge system is joined yet. To connect this installation to your organization's shared demarkus knowledge base, run `/knowledge-join <broker-url>`."}, nil
+		return Output{Context: "demarkus-knowledge is installed but no knowledge system is joined yet. To connect this installation to your organization's shared demarkus knowledge base, run `/knowledge-join <broker-url>`.", Status: status}, nil
+	}
+	states, err := probeSystems(systems)
+	if err != nil {
+		return Output{}, err
 	}
 
 	var b strings.Builder
 	b.WriteString("# demarkus knowledge system(s) joined\n\n")
 	b.WriteString("You are connected to the following organizational demarkus knowledge system(s), available as MCP servers (use `mark://<world>/<path>` URLs against them):\n")
-	for _, s := range systems {
-		b.WriteString("\n- **" + s + "** (MCP server `" + s + "`)")
+	words := make([]string, 0, len(states))
+	for i := range states {
+		b.WriteString("\n" + states[i].agentLine())
+		words = append(words, states[i].userWord())
 	}
+	b.WriteString("\n\n" + knowledgeNotConnected)
+	status := "demarkus-knowledge: " + strings.Join(words, " · ")
 	parts := []string{b.String()}
 	g, err := readFile(in.GuidanceFile)
 	if err != nil {
@@ -187,7 +260,7 @@ func knowledge(in Input) (Output, error) {
 	if !memory {
 		parts = append(parts, "(No local demarkus store is configured here, so the store↔system guidance above is informational only; everything durable goes to the knowledge system.)")
 	}
-	return Output{Context: strings.Join(parts, "\n\n")}, nil
+	return Output{Context: strings.Join(parts, "\n\n"), Status: status}, nil
 }
 
 // LocalConfigured reports a usable plugin-memory.conf: the local store an

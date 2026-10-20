@@ -180,47 +180,22 @@ func TestMostSevereWins(t *testing.T) {
 
 func TestKnowledgeGate(t *testing.T) {
 	t.Setenv("DEMARKUS_KNOWLEDGE_STRICTNESS", "block")
-	setupHome(t, map[string]string{
-		"knowledge-systems":                         "knowledge\n",
-		"plugin-knowledge.require-fields.knowledge": "type user\n", // user: gateway-stamped, never asked of the caller
-		"plugin-knowledge.require-tags.knowledge":   "category\n",
-	})
-	// tagless → block
-	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{"url": "/k.md"}}); d.Decision != "block" {
+	setupHome(t, map[string]string{"knowledge-systems": "knowledge\n"})
+	d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{"url": "/k.md"}})
+	if d.Decision != "block" {
 		t.Fatalf("ks tagless: want block, got %q", d.Decision)
 	}
-	// tags present but missing required axis (category:) and required field type → block
-	d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
-		"url": "/k.md", "metadata": map[string]any{"tags": "topic"},
-	}})
-	if d.Decision != "block" {
-		t.Fatalf("ks missing axis/type: want block, got %q", d.Decision)
-	}
-	wantReason := "demarkus publish to /k.md (knowledge system 'knowledge') has " +
-		"missing required tag axes for this knowledge system: category (tag as \"axis:value\", e.g. category:<value>); " +
-		"missing required OKF metadata fields: type (set each as a key in the metadata object, e.g. metadata: {\"type\": \"...\"}). " +
+	wantReason := "demarkus publish to /k.md (knowledge system 'knowledge') has no metadata.tags (it will be invisible to mark_lookup). " +
 		"Re-issue mark_publish with a metadata object: tags (comma-separated subjects derived from the content) and, if set, " +
 		"importance in [0,1]. Tags are what make this document findable via mark_lookup across the shared catalog."
 	if d.Reason != wantReason {
 		t.Fatalf("ks reason changed:\n got: %q\nwant: %q", d.Reason, wantReason)
 	}
-	// An axis declaration needs a non-empty value.
+	// Axes, fields and allowed values are the server's: a tagged publish passes here.
 	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
-		"url": "/k.md", "metadata": map[string]any{"tags": "category:", "type": "Reference"},
-	}}); d.Decision != "block" {
-		t.Fatalf("ks empty axis value: want block, got %q", d.Decision)
-	}
-	// satisfies axis + type → allow
-	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
-		"url": "/k.md", "metadata": map[string]any{"tags": "category:project,topic", "type": "Reference"},
+		"url": "/k.md", "metadata": map[string]any{"tags": "topic"},
 	}}); d.Decision != "allow" {
-		t.Fatalf("ks compliant: want allow, got %q (%s)", d.Decision, d.Reason)
-	}
-	// index.md is exempt from required type
-	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
-		"url": "/world/index.md", "metadata": map[string]any{"tags": "category:project"},
-	}}); d.Decision != "allow" {
-		t.Fatalf("ks index.md exempt: want allow, got %q (%s)", d.Decision, d.Reason)
+		t.Fatalf("ks tagged: want allow, got %q (%s)", d.Decision, d.Reason)
 	}
 	// Missing APPEND metadata inherits and remains unknown to the plugin.
 	if d := mustEval(t, &Input{Tool: "knowledge_mark_append", Input: map[string]any{"url": "/k.md"}}); d.Decision != "allow" {
@@ -228,42 +203,18 @@ func TestKnowledgeGate(t *testing.T) {
 	}
 	// Explicit overrides are enforceable before dispatch.
 	if d := mustEval(t, &Input{Tool: "knowledge_mark_append", Input: map[string]any{
-		"url": "/k.md", "metadata": map[string]any{"tags": "topic"},
+		"url": "/k.md", "metadata": map[string]any{"tags": "topic", "importance": 2},
 	}}); d.Decision != "block" || !strings.Contains(d.Reason, "mark_append") {
 		t.Fatalf("ks append override: want block, got %q (%s)", d.Decision, d.Reason)
 	}
 }
 
-func TestKnowledgeInvalidStrictnessDefaultsWarn(t *testing.T) {
-	setupHome(t, map[string]string{
-		"knowledge-systems":                     "knowledge\n",
-		"plugin-knowledge.strictness.knowledge": "invalid\n",
-	})
+func TestKnowledgeStrictnessDefaultsWarn(t *testing.T) {
+	t.Setenv("DEMARKUS_KNOWLEDGE_STRICTNESS", "")
+	setupHome(t, map[string]string{"knowledge-systems": "knowledge\n"})
 	d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{"url": "/k.md"}})
 	if d.Decision != "warn" {
-		t.Fatalf("invalid strictness: want warn, got %q (%s)", d.Decision, d.Reason)
-	}
-}
-
-// A policy-declared required field other than `type` must be enforced too — the
-// binary has the full metadata, so it checks any field generically.
-func TestKnowledgeRequiresArbitraryField(t *testing.T) {
-	t.Setenv("DEMARKUS_KNOWLEDGE_STRICTNESS", "block")
-	setupHome(t, map[string]string{
-		"knowledge-systems":                         "knowledge\n",
-		"plugin-knowledge.require-fields.knowledge": "authors\n",
-	})
-	// missing authors → block
-	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
-		"url": "/k.md", "metadata": map[string]any{"tags": "topic"},
-	}}); d.Decision != "block" {
-		t.Fatalf("missing required 'authors': want block, got %q", d.Decision)
-	}
-	// authors present → allow
-	if d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
-		"url": "/k.md", "metadata": map[string]any{"tags": "topic", "authors": "ada"},
-	}}); d.Decision != "allow" {
-		t.Fatalf("authors present: want allow, got %q (%s)", d.Decision, d.Reason)
+		t.Fatalf("default strictness: want warn, got %q (%s)", d.Decision, d.Reason)
 	}
 }
 

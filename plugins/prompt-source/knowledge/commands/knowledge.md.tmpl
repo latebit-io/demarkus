@@ -13,13 +13,7 @@ Orient in the joined organizational demarkus knowledge system(s). Knowledge-syst
 
 ## Steps
 
-1. **Find the joined systems.** Read the validated registry:
-
-   ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-list
-   ```
-
-   One line per joined system's MCP server slug. Success with no rows: nothing joined; suggest `/knowledge-join <broker-url>` and stop. Non-zero exit or malformed output: registry failure; surface it and stop, never report an empty registry.
+1. **Find the joined systems.** {{template "joined.tmpl" .}}
 
    If `$ARGUMENTS` is a `mark://<world>/` URL, call `mark_worlds` through each in-scope system's own MCP server to locate that readable world. Every directory call must succeed before deciding uniqueness or absence; on any failure, surface it and stop with scope resolution incomplete. No complete directory contains the world: report it unavailable to the current identity. More than one system has the same world name: ask which system.
 
@@ -36,7 +30,7 @@ Orient in the joined organizational demarkus knowledge system(s). Knowledge-syst
    - Blank/slug broker scope: `mark_lookup_all`, the system-wide card catalog. Tool error: surface and stop. Partial: disclose failed worlds and keep successful rows; empty partial results are inconclusive. Older broker: require a successful, complete `mark_worlds` directory first; malformed/failed directory means stop, empty directory means no readable scope. Request the same chosen global limit from each readable world's `mark_lookup`, qualify paths, merge by row ordinal ascending, importance descending, world name and path, then truncate once. Some failed worlds: disclose partial coverage; all fail: aggregate error and stop. Never reuse a stale world set.
    - Plain endpoint: `mark_lookup` directly; surface errors and stop.
    - `mark_fetch` the best `#anchor`; choose a section from an outline, or read a short unanchored document whole. The world's `index.md` is the backstop for untagged content. Surface every fetch failure; never invent a missing hub or turn errors into absence.
-   - `/knowledge-join` adds systems. `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-list` is the joined-system source of truth. Remove through the joining harness, then `registry knowledge-unregister <slug>`; surface any registry failure.
+   - `/knowledge-join` adds and removes systems.
 
 ## Don't
 

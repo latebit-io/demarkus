@@ -198,7 +198,7 @@ of those:
 |----------|------|-------------|
 | `mark_worlds` | MCP tool | List the system's worlds: name, URL, address, and whether you can write to each. Broker-only, since the local MCP's universe is its one world |
 | `mark_lookup_all` | MCP tool | Universe-wide catalog lookup: one query fanned out to every readable world, merged into a single globally limited table with `partial` status on per-world failures. Broker-only |
-| `/knowledge-join` | command | Validate an org broker URL, register it as an MCP server, and copy its policy into the local gates as a snapshot. Claude Code itself runs the OAuth flow on the first tool call; the command handles no tokens |
+| `/knowledge-join` | command | Validate an org broker URL and register it as a user-scope MCP server; the server enforces its write policy on every write. Claude Code itself runs the OAuth flow on the first tool call; the command handles no tokens |
 | `/knowledge` | command | List joined systems and show each `root` hub index |
 | `/knowledge-doctor` | command | Read-only hygiene audit: orphans, broken links, untagged and policy-noncompliant docs, ADR gaps, duplicates |
 | `knowledge-promote` | skill | The curation cascade that lands a staged document in the catalog; invoked by the memory plugin's `/promote` |
@@ -212,7 +212,7 @@ The standard is itself published on `root` under `.well-known/demarkus/`.
 - `policy.md`: strictness, required tag axes such as `category:`, optional required OKF fields.
 - `template.md`: per-world layout.
 - `style.md`: H1 as name, one-sentence summary under it, unique headings (headings are anchors), no em dashes, no frontmatter fences.
-- Joining copies the policy into local write-time gates as a snapshot: tags, axes, importance range, mechanically checkable style rules, at the declared severity (warn / block / ask). The gate runs offline and cannot reach the broker, so a policy change takes effect on the next join or mirror.
+- The server enforces the policy on every write; the plugin's write gate (tags, importance, destination, retention, style, as listed above) runs before the call leaves the session and mirrors none of the system's policy.
 - `/knowledge-doctor` audits the corpus after the fact.
 
 ## Why QUIC?

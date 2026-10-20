@@ -3,6 +3,8 @@
 package broker
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	neturl "net/url"
@@ -59,22 +61,38 @@ func Validate(rawURL string) (*Endpoint, error) {
 		return nil, fmt.Errorf("could not derive a usable MCP server slug from %s (host: %s)", u, parsed.Hostname())
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := Reach(ctx, u); err != nil {
+		return nil, err
+	}
+	return &Endpoint{URL: u, Slug: slug, McpURL: u + "/mcp"}, nil
+}
+
+// Reach confirms a broker answers at its public RFC 9728 metadata, the one
+// request that needs no OAuth; the join and the session status both use it.
+func Reach(ctx context.Context, u string) error {
 	meta := u + "/.well-known/oauth-protected-resource"
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Head(meta)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, meta, http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("broker unreachable at %s (DNS / TCP / TLS failure; check the URL and network)", meta)
+		return fmt.Errorf("broker URL does not parse: %s", u)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if errors.Is(err, context.DeadlineExceeded) || (err != nil && ctx.Err() != nil) {
+		return fmt.Errorf("broker did not answer at %s within the deadline: %w", meta, err)
+	}
+	if err != nil {
+		return fmt.Errorf("broker unreachable at %s (DNS / TCP / TLS failure; check the URL and network): %w", meta, err)
 	}
 	_ = resp.Body.Close()
 	switch resp.StatusCode {
 	case 200:
+		return nil
 	case 401, 403:
-		return nil, fmt.Errorf("broker rejected metadata fetch with HTTP %d (the metadata endpoint should be public; confirm this is a Slice 7+ demarkus-knowledge-broker)", resp.StatusCode)
+		return fmt.Errorf("broker rejected metadata fetch with HTTP %d (the metadata endpoint should be public; confirm this is a Slice 7+ demarkus-knowledge-broker)", resp.StatusCode)
 	case 404:
-		return nil, fmt.Errorf("broker has no /.well-known/oauth-protected-resource (HTTP 404); not a Slice 7+ demarkus-knowledge-broker, or the URL points at the management API instead of the MCP host")
+		return fmt.Errorf("broker has no /.well-known/oauth-protected-resource (HTTP 404); not a Slice 7+ demarkus-knowledge-broker, or the URL points at the management API instead of the MCP host")
 	default:
-		return nil, fmt.Errorf("broker metadata fetch returned HTTP %d (expected 200)", resp.StatusCode)
+		return fmt.Errorf("broker metadata fetch returned HTTP %d (expected 200)", resp.StatusCode)
 	}
-
-	return &Endpoint{URL: u, Slug: slug, McpURL: u + "/mcp"}, nil
 }

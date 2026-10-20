@@ -59,7 +59,6 @@
 1 server/internal/storetest/lookup_handler.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)
 1 server/knowledgeserver/run.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 6 (revive)
 1 tools/demarkus-plugin/doctor_cmd.go: Error return value of `fs.Parse` is not checked (errcheck)
-1 tools/demarkus-plugin/internal/config/config.go: G301: Expect directory permissions to be 0750 or less (gosec)
 1 tools/demarkus-plugin/internal/config/paths.go: G301: Expect directory permissions to be 0750 or less (gosec)
 1 tools/demarkus-plugin/internal/config/paths.go: G306: Expect WriteFile permissions to be 0600 or less (gosec)
 1 tools/demarkus-plugin/internal/gate/gate.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)

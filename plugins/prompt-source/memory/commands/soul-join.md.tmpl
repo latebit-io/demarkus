@@ -25,7 +25,7 @@ Every `<shell-escaped-*>` placeholder: exactly one POSIX-safe shell word (embedd
 {{if eq .Harness "claude"}}2. Register the HTTP MCP server (OAuth runs in the client on first use):
 
    ```bash
-   claude mcp add --transport http '<slug>' '<mcp-url>' --scope project
+   claude mcp add --transport http '<slug>' '<mcp-url>' --scope user
    ```
 {{else if or (eq .Harness "cursor") (eq .Harness "pi")}}2. Register the HTTP MCP server in `{{if eq .Harness "cursor"}}~/.cursor/mcp.json{{else}}~/.config/mcp/mcp.json{{end}}` (OAuth runs in {{.Agent}} on first use; `mcp-serve` does not apply to broker {{.Stores}}):
 
@@ -81,7 +81,7 @@ Hosted {{.Store}}: skip the QUIC join and MCP-registration steps below, but stil
 {{if eq .Harness "claude"}}3.{{else}}2.{{end}} Register the MCP server without putting the token in config.
 
 {{if eq .Harness "claude"}}   ```bash
-    claude mcp add '<slug>' --scope project -- "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --memory '<slug>'
+    claude mcp add '<slug>' --scope user -- "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --memory '<slug>'
    ```
 {{else if eq .Harness "cursor"}}   ```bash
     "$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor add '<slug>' "$HOME/.demarkus/bin/demarkus-plugin" mcp-serve --memory '<slug>'

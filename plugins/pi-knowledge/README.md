@@ -6,14 +6,14 @@ Join an organizational [demarkus](https://github.com/latebit-io/demarkus) **know
 
 - **Join over OAuth.** `/knowledge-join <broker-url>` validates the broker (RFC 9728 metadata), derives a slug, and registers it as an HTTP MCP server (`{url, auth: "oauth"}`) in `~/.config/mcp/mcp.json`. pi-mcp-adapter runs the OAuth flow on first use; no token stored locally.
 - **Consult-first guidance.** Names the joined systems and injects "check the shared catalog first, navigate via the `root` hub, record durable shared knowledge there" guidance, once per session. Catalog recall prefers the broker-wide `mark_lookup_all`, one lookup across every readable world, with a per-world fallback for older brokers and plain endpoints.
-- **Publish tag-gate.** Enforces `tags` + `importance` + the system's policy-declared **required tag axes** (`axis:value`) and **required OKF fields** (e.g. `type`) on writes to a joined system: `warn` by default, `block`/`ask` per the mirrored policy.
+- **Publish tag-gate.** Enforces `tags` + `importance` on writes to a joined system before the call leaves the session; the server enforces the system's policy (required tag axes, allowed values, required fields, strictness) on every write.
 - **Recall nudge.** On recall-shaped prompts about shared/org knowledge, reminds the agent to look in the system first.
 - **Slash commands.** `/knowledge`, `/knowledge-join`, `/knowledge-doctor`, plus the `knowledge-promote` cascade skill.
 
 ## Requirements
 
 - [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter) (HTTP + OAuth transport). Install with `pi install npm:pi-mcp-adapter`.
-- `bash`, `curl`, `node` on PATH (used by the bundled join/policy scripts).
+- `bash`, `curl`, `node` on PATH (used by `scripts/bootstrap.sh`).
 
 ## Install
 
@@ -49,7 +49,7 @@ Run `/mcp` to connect (and `/mcp-auth <slug>` if prompted) to complete OAuth. `/
 Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper behavior are checked separately.
 
 - `src/*.ts`: the Pi adapter that maps events and MCP registration onto the shared helper's gate, nudge, and guidance decisions.
-- `scripts/*.sh`: broker URL validation (`knowledge-join.sh`), registry write (`register-knowledge.sh`), and deterministic policy mirroring (`mirror-policy.sh`), reused verbatim from the Claude Code plugin; `mcp-config.mjs` registers the broker as an HTTP/OAuth MCP server.
+- `scripts/bootstrap.sh`: installs the shared helper, which validates the broker URL, writes the registry and registers the broker as an HTTP/OAuth MCP server.
 - `commands/*.md`, `context/`, and `skills/`: generated distribution artifacts. Edit the monorepo's `plugins/prompt-source/`, then run `cd tools && go run ./plugin-prompts write`.
 
 ### Behavior mapping (Claude Code → pi)
@@ -61,8 +61,6 @@ Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper be
 | `PreToolUse` publish gate | `tool_call` returning `{ block, reason }` |
 | publish gate `warn` (PostToolUse) | `tool_call` allows + injects a reminder message |
 | `claude mcp add --transport http` | `mcp-config.mjs add-http` → `{url, auth: "oauth"}` |
-
-`ask` strictness maps to a block whose reason tells the agent to confirm with the user first (pi's `tool_call` has no native "ask").
 
 ## Syncing changes back to the standalone repo
 

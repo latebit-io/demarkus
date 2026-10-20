@@ -14,6 +14,8 @@ Before any Bash, the entire argument must match `https://` plus a DNS hostname, 
 
 ## Join
 
+Host-only: `demarkus-plugin` exit 127 (a sandbox, e.g. Cowork): reply in one line to run this from a terminal session on the host (Cowork reaches a knowledge system through a claude.ai connector the admin adds); stop, never install here.
+
 1. Validate and derive the registration values:
 
    ```bash
@@ -25,32 +27,26 @@ Before any Bash, the entire argument must match `https://` plus a DNS hostname, 
 2. Check registration state before changing it:
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp list
    "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-list
    claude mcp list
    ```
 
-   Any check fails or `<slug>` already exists: stop. Never overwrite or remove existing state; to replace, the user must ask for explicit removal first.
+   Any check fails, or `<slug>` is already an MCP endpoint: stop. Never overwrite or remove existing state; to replace, the user must ask for explicit removal first. `<slug>` only in `knowledge-list`: continue; `knowledge-register` is idempotent for the same broker and refuses another.
 
-3. Register the endpoint, then the publish-gate entry. Check each result before continuing.
+3. Register the gate entry with the broker `url=` from step 1 (shared by every harness; the session status probes it), then the endpoint. Check each result before continuing.
 
    ```bash
-   claude mcp add --transport http <slug> <mcp-url> && \
-   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register '<slug>'
+   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register '<slug>' '<url>' && \
+   claude mcp add -s user --transport http <slug> <mcp-url>
    ```
 
-   Endpoint registration fails: stop without running `knowledge-register`. Then run `claude mcp list`: `<slug>` present → a half-registered endpoint; give `claude mcp remove '<slug>'` as the repair and stop. Absent → report that no endpoint was created. Gate registration fails: leave the endpoint in place, report that exact partial state, give the failed command as the repair. No speculative rollback; never remove state another integration may use.
+   Gate registration fails (a slug joined at another broker, a bad URL): stop before the endpoint, relay the message; its repair is `registry knowledge-unregister '<slug>'`, run only when the user asks. Endpoint registration fails: report it; the gate entry is idempotent, so a retry reruns both. No speculative rollback; never remove state another integration may use.
 
 4. Report local registration complete and stop. Tell the user to restart Claude and complete OAuth when prompted. Do not wait for OAuth, invoke MCP tools, or continue across the restart.
 
 ## After Restart
 
-In a later session, verify the exact slug is connected and call its read-only `mark_worlds`. Then fetch the root conventions with `force=true`:
-
-- `mark://root/.well-known/demarkus/template.md`
-- `mark://root/.well-known/demarkus/policy.md`
-
-Accept a document only when `status: ok` carries the full body and is not `mode: outline`. Policy exists: pass the exact body to `registry policy-mirror '<slug>'` via stdin, never embedding broker content in shell source or arguments. If the harness cannot pipe tool output directly, use a private temporary file: verify mode `0600`, byte equality, cleanup. Policy `not-found`: pass empty stdin to clear stale mirrors. Surface failures; never claim enforcement updated unless mirroring succeeds.
+In a later session, verify the exact slug is connected, call its read-only `mark_worlds`, then `/knowledge`.
 
 ## Remove
 

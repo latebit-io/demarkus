@@ -57,7 +57,7 @@ func TestMemoryJoinAndCollision(t *testing.T) {
 	if _, err := Memory("brain.example.com", "", false, ""); err == nil {
 		t.Error("expected alias-slug rejection")
 	}
-	if err := knowledge.Register("brain"); err == nil {
+	if err := knowledge.Register("brain", ""); err == nil {
 		t.Error("expected alias-slug rejection on knowledge register")
 	}
 	// a slug the routing predicate would read as "<plugin>_<alias>" is reserved too
@@ -67,7 +67,7 @@ func TestMemoryJoinAndCollision(t *testing.T) {
 	if _, err := Memory("acme-memory.example.com", "", false, ""); err == nil {
 		t.Error("expected plugin-prefixed alias rejection on join")
 	}
-	if err := knowledge.Register("acme-memory"); err == nil {
+	if err := knowledge.Register("acme-memory", ""); err == nil {
 		t.Error("expected plugin-prefixed alias rejection on knowledge register")
 	}
 }
