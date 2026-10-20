@@ -364,11 +364,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 		decisions = append(decisions, *sd)
 	}
 	if pt.Verb == "publish" || pt.Verb == "append" {
-		td, err := knowledgeTagDecision(args, slug, pt.Verb)
-		if err != nil {
-			return Decision{}, err
-		}
-		if td != nil {
+		if td := knowledgeTagDecision(args, slug, pt.Verb); td != nil {
 			decisions = append(decisions, *td)
 		}
 	}
@@ -377,7 +373,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 
 // knowledgeTagDecision checks tags and importance on complete publishes or
 // explicit append overrides; the server enforces the system's policy.
-func knowledgeTagDecision(args map[string]any, slug, verb string) (*Decision, error) {
+func knowledgeTagDecision(args map[string]any, slug, verb string) *Decision {
 	md := metadataOf(args)
 	url := urlOf(args)
 	policy := publishpolicy.Policy{Strictness: publishpolicy.Strictness(config.KnowledgeStrictness())}
@@ -386,7 +382,7 @@ func knowledgeTagDecision(args map[string]any, slug, verb string) (*Decision, er
 		result = publishpolicy.EvaluateOverrides(policy, url, md)
 	}
 	if result.Compliant() {
-		return nil, nil
+		return nil
 	}
 
 	var problems []string
@@ -405,7 +401,7 @@ func knowledgeTagDecision(args map[string]any, slug, verb string) (*Decision, er
 			"tags (comma-separated subjects derived from the content) and, if set, importance in [0,1]. "+
 			"Tags are what make this document findable via mark_lookup across the shared catalog.",
 		verb, target, slug, strings.Join(problems, "; "), verb)
-	return &Decision{Decision: string(policy.EffectiveStrictness()), Reason: reason}, nil
+	return &Decision{Decision: string(policy.EffectiveStrictness()), Reason: reason}
 }
 
 func urlOr(args map[string]any, fallback string) string {

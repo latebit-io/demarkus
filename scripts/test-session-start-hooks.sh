@@ -34,8 +34,9 @@ STUB
   HOOK_STATUS=0
   env PATH="${HOOK_PATH:-$PATH}" HOME="$HOOK_HOME" bash "$tree/hooks/session-start.sh" >"$TMP/out" 2>"$TMP/err" || HOOK_STATUS=$?
 }
+# The hook's own transform: leading marker and blank lines dropped, the rest as is.
 static_guidance() {
-  grep -v '^<!--.*-->$' "$ROOT/plugins/$1/context/session-guidance.md" | diff - "$TMP/out" >/dev/null
+  awk '!body && (/^<!--.*-->$/ || /^$/) { next } { body = 1; print }' "$ROOT/plugins/$1/context/session-guidance.md" | diff - "$TMP/out" >/dev/null
 }
 
 calls() { tr '\n' ' ' < "$HOOK_HOME/calls"; }

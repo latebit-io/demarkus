@@ -73,7 +73,7 @@ func fail(msg string) {
 // bash and the mcp-config.mjs JS; the switch below is the subcommand list.
 func cmdRegistry(args []string) {
 	if len(args) == 0 {
-		fail("registry: missing subcommand (mcp|memory-join|memory-default|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|promote-target|detect-promote|project)")
+		fail("registry: missing subcommand (mcp|memory-join|memory-default|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|policy-mirror|promote-target|detect-promote|project)")
 	}
 	switch args[0] {
 	case "mcp":
@@ -86,35 +86,8 @@ func cmdRegistry(args []string) {
 		registryProject(args[1:])
 	case "knowledge-join":
 		registryKnowledgeJoin(args[1:])
-	case "knowledge-register":
-		if len(args) != 2 {
-			fail("knowledge-register: usage: registry knowledge-register <slug>")
-		}
-		if err := knowledge.Register(args[1]); err != nil {
-			fail(err.Error())
-		}
-		fmt.Println("OK: registered knowledge system '" + args[1] + "'")
-	case "knowledge-list":
-		systems, err := config.ListKnowledgeSystems()
-		if err != nil {
-			fail(err.Error())
-		}
-		for _, s := range systems {
-			fmt.Println(s)
-		}
-	case "knowledge-unregister":
-		if len(args) != 2 {
-			fail("knowledge-unregister: usage: registry knowledge-unregister <slug>")
-		}
-		existed, err := knowledge.Unregister(args[1])
-		if err != nil {
-			fail(err.Error())
-		}
-		if existed {
-			fmt.Println("OK: unregistered knowledge system '" + args[1] + "'")
-		} else {
-			fmt.Println("OK: knowledge system '" + args[1] + "' was not registered")
-		}
+	case "knowledge-register", "knowledge-list", "knowledge-unregister", "policy-mirror":
+		registryKnowledge(args[0], args[1:])
 	case "promote-target":
 		registryPromoteTarget(args[1:])
 	case "detect-promote":
@@ -125,6 +98,58 @@ func cmdRegistry(args []string) {
 		fmt.Println(promote.Report(rows))
 	default:
 		fail("registry: unknown subcommand '" + args[0] + "'")
+	}
+}
+
+// registryKnowledge dispatches the knowledge-system registry subcommands.
+func registryKnowledge(sub string, args []string) {
+	switch sub {
+	case "knowledge-register":
+		if len(args) != 1 && len(args) != 2 {
+			fail("knowledge-register: usage: registry knowledge-register <slug> [broker-url]")
+		}
+		url := ""
+		if len(args) == 2 {
+			url = args[1]
+		}
+		if err := knowledge.Register(args[0], url); err != nil {
+			fail(err.Error())
+		}
+		fmt.Println("OK: registered knowledge system '" + args[0] + "'")
+	case "knowledge-list":
+		systems, err := config.ListKnowledgeSystems()
+		if err != nil {
+			fail(err.Error())
+		}
+		for _, s := range systems {
+			fmt.Println(s)
+		}
+	case "knowledge-unregister":
+		if len(args) != 1 {
+			fail("knowledge-unregister: usage: registry knowledge-unregister <slug>")
+		}
+		existed, err := knowledge.Unregister(args[0])
+		if err != nil {
+			fail(err.Error())
+		}
+		if existed {
+			fmt.Println("OK: unregistered knowledge system '" + args[0] + "'")
+		} else {
+			fmt.Println("OK: knowledge system '" + args[0] + "' was not registered")
+		}
+	case "policy-mirror":
+		// Older plugin prompts still pipe the policy here; the server enforces
+		// it now, so the call only drops a mirror an older helper left.
+		if len(args) != 1 {
+			fail("policy-mirror: usage: registry policy-mirror <slug> (policy body on stdin)")
+		}
+		if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+			fail("policy-mirror: read stdin: " + err.Error())
+		}
+		if err := knowledge.ClearPolicyMirror(args[0]); err != nil {
+			fail(err.Error())
+		}
+		fmt.Println("OK: policy for '" + args[0] + "' is enforced by the server; nothing mirrored")
 	}
 }
 

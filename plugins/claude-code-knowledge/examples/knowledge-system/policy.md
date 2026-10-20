@@ -21,7 +21,7 @@ This is a shared catalog, not a scratch pad. Publish when the content is useful 
 
 ## Required metadata on every publish
 
-Enforced by the plugin's publish gate, at the severity set by `strictness:` above:
+Enforced by the server on every write, at the severity set by `strictness:` above; the plugin's publish gate checks `tags` and `importance` before the call leaves the session:
 
 - `tags`: comma-separated subjects; never empty (an untagged doc is invisible to `mark_lookup`).
 - `importance`: float 0–1, chosen deliberately; reserve ≥0.8 for hubs, architecture, and key decisions.

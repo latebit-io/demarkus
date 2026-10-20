@@ -61,6 +61,7 @@ func TestLocalMemoryAliasResolvesBrandedServer(t *testing.T) {
 }
 
 func TestKnowledgeStrictness(t *testing.T) {
+	t.Setenv("DEMARKUS_KNOWLEDGE_STRICTNESS", "")
 	if got := KnowledgeStrictness(); got != Warn {
 		t.Fatalf("default = %q, want warn", got)
 	}

@@ -210,6 +210,7 @@ func TestKnowledgeGate(t *testing.T) {
 }
 
 func TestKnowledgeStrictnessDefaultsWarn(t *testing.T) {
+	t.Setenv("DEMARKUS_KNOWLEDGE_STRICTNESS", "")
 	setupHome(t, map[string]string{"knowledge-systems": "knowledge\n"})
 	d := mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{"url": "/k.md"}})
 	if d.Decision != "warn" {

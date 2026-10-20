@@ -14,7 +14,7 @@ Before any Bash, the entire argument must match `https://` plus a DNS hostname, 
 
 ## Join
 
-Host-only: `demarkus-plugin` exit 127 (a sandbox, e.g. Cowork): reply in one line to run this from a terminal session on the host, and that Cowork reaches a knowledge system through a claude.ai connector the admin adds; stop, never install here.
+Host-only: `demarkus-plugin` exit 127 (a sandbox, e.g. Cowork): reply in one line to run this from a terminal session on the host (Cowork reaches a knowledge system through a claude.ai connector the admin adds); stop, never install here.
 
 1. Validate and derive the registration values:
 
@@ -33,11 +33,11 @@ Host-only: `demarkus-plugin` exit 127 (a sandbox, e.g. Cowork): reply in one lin
 
    Any check fails, or `<slug>` is already an MCP endpoint: stop. Never overwrite or remove existing state; to replace, the user must ask for explicit removal first. `<slug>` only in `knowledge-list`: continue; `knowledge-register` is idempotent.
 
-3. Register the endpoint, then the publish-gate entry. Check each result before continuing.
+3. Register the endpoint, then the gate entry with the broker `url=` from step 1 (the session status probes it). Check each result before continuing.
 
    ```bash
    claude mcp add -s user --transport http <slug> <mcp-url> && \
-   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register '<slug>'
+   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register '<slug>' '<url>'
    ```
 
    Endpoint registration fails: stop without running `knowledge-register`. Then run `claude mcp list`: `<slug>` present → a half-registered endpoint; give `claude mcp remove '<slug>'` as the repair and stop. Absent → report that no endpoint was created. Gate registration fails: leave the endpoint in place, report that exact partial state, give the failed command as the repair. No speculative rollback; never remove state another integration may use.

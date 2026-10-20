@@ -1,6 +1,8 @@
 package guidance
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,27 +84,57 @@ func TestMemoryOfferOnTheStatusLineOnce(t *testing.T) {
 	}
 }
 
+// stubBroker stands in the broker probe: acme answers, beta refuses.
+func stubBroker(t *testing.T) {
+	t.Helper()
+	prev := probeBroker
+	probeBroker = func(_ context.Context, u string) error {
+		if strings.Contains(u, "beta") {
+			return errors.New("broker unreachable at " + u)
+		}
+		return nil
+	}
+	t.Cleanup(func() { probeBroker = prev })
+}
+
 func TestKnowledgeGuidance(t *testing.T) {
-	// no systems → one-time hint, then silent
+	// no systems → one-time hint in context, the status line every session
 	setupHome(t, nil)
-	first := ctx(t, Input{Surface: "knowledge"})
-	if !strings.Contains(first, "/knowledge-join") {
+	first := eval(t, Input{Surface: "knowledge"})
+	if !strings.Contains(first.Context, "/knowledge-join") {
 		t.Error("expected the one-time join hint when nothing is joined")
 	}
-	if ctx(t, Input{Surface: "knowledge"}) != "" {
+	second := eval(t, Input{Surface: "knowledge"})
+	if second.Context != "" {
 		t.Error("hint should show only once")
 	}
+	if want := "demarkus-knowledge: no system joined · /knowledge-join <broker-url>"; first.Status != want || second.Status != want {
+		t.Errorf("status = %q, %q", first.Status, second.Status)
+	}
 
-	// joined → lists the system
-	setupHome(t, map[string]string{"knowledge-systems": "acme\nbeta\n"})
+	// joined → each system with its probe; gamma's join recorded no url
+	stubBroker(t)
+	setupHome(t, map[string]string{
+		"knowledge-systems": "acme\nbeta\ngamma\n",
+		"knowledge-urls":    "acme\thttps://acme.example\nbeta\thttps://beta.example\n",
+	})
 	gfile := filepath.Join(t.TempDir(), "kg.md")
 	_ = os.WriteFile(gfile, []byte("# knowledge guidance"), 0o644)
-	out := ctx(t, Input{Surface: "knowledge", GuidanceFile: gfile})
-	if !strings.Contains(out, "**acme**") || !strings.Contains(out, "**beta**") {
-		t.Errorf("expected joined systems listed, got: %s", out[:min(120, len(out))])
+	out := eval(t, Input{Surface: "knowledge", GuidanceFile: gfile})
+	for _, want := range []string{
+		"- **acme** (MCP server `acme`, https://acme.example): broker reachable",
+		"- **beta** (MCP server `beta`, https://beta.example): ⚠️ broker unreachable at https://beta.example",
+		"- **gamma** (MCP server `gamma`; broker URL not recorded",
+		knowledgeNotConnected,
+		"# knowledge guidance",
+		"No local demarkus store is configured",
+	} {
+		if !strings.Contains(out.Context, want) {
+			t.Errorf("context lacks %q:\n%s", want, out.Context)
+		}
 	}
-	if !strings.Contains(out, "No local demarkus store is configured") {
-		t.Error("expected the memory↔system note when no memory is configured")
+	if want := "demarkus-knowledge: acme reachable · beta ⚠️ broker unreachable · gamma joined"; out.Status != want {
+		t.Errorf("status = %q, want %q", out.Status, want)
 	}
 }
 
