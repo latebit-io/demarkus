@@ -48,10 +48,6 @@ func TestReadsUpgradeCapture(t *testing.T) {
 	if err != nil || !slices.Equal(systems, []string{"acme"}) {
 		t.Errorf("knowledge systems = %v, %v", systems, err)
 	}
-	policy, err := config.KnowledgePolicy("acme")
-	if err != nil || !slices.Equal(policy.RequiredTagAxes, []string{"category"}) {
-		t.Errorf("acme policy mirror = %+v, %v", policy, err)
-	}
 	targets, err := config.PromoteTargets()
 	if err != nil || len(targets) != 1 || !strings.HasPrefix(targets[0], "archive ") {
 		t.Errorf("promote targets = %v, %v", targets, err)

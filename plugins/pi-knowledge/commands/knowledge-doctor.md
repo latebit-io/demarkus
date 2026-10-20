@@ -17,7 +17,7 @@ Same `mark_*` tools over the broker (`mark_worlds`, `mark_graph`, `mark_backlink
 
 From `$ARGUMENTS`:
 
-- **blank**: every joined system, all worlds. `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-list` prints one MCP server slug per line, reached through the destination server's `mark_*` tools. Successful empty output: nothing joined, suggest `/knowledge-join <broker-url>`, stop. Non-zero exit or malformed: surface, stop.
+- **blank**: every joined system, all worlds. `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-list` prints one joined system per line: its MCP server slug, reached through the destination server's `mark_*` tools. Nothing joined: suggest `/knowledge-join <broker-url>`, stop. Non-zero exit or malformed output: surface it, stop; never report an empty registry.
 - **a slug**: that system, all its worlds.
 - **`mark://<world>/`**: `mark_worlds` through every joined system, collect `(system, world)` matches; every directory call must succeed before deciding uniqueness or absence, else surface the failure and stop with scope unresolved. Exactly one match: audit it only, never expand. Several systems expose the name: ask which. None: report unavailable scope, stop.
 

@@ -73,7 +73,7 @@ func fail(msg string) {
 // bash and the mcp-config.mjs JS; the switch below is the subcommand list.
 func cmdRegistry(args []string) {
 	if len(args) == 0 {
-		fail("registry: missing subcommand (mcp|memory-join|memory-default|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|policy-mirror|promote-target|detect-promote|project)")
+		fail("registry: missing subcommand (mcp|memory-join|memory-default|knowledge-join|knowledge-register|knowledge-list|knowledge-unregister|promote-target|detect-promote|project)")
 	}
 	switch args[0] {
 	case "mcp":
@@ -115,18 +115,6 @@ func cmdRegistry(args []string) {
 		} else {
 			fmt.Println("OK: knowledge system '" + args[1] + "' was not registered")
 		}
-	case "policy-mirror":
-		if len(args) != 2 {
-			fail("policy-mirror: usage: registry policy-mirror <slug> (policy body on stdin)")
-		}
-		body, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			fail("policy-mirror: read stdin: " + err.Error()) // never mirror a partial read — it would clear enforcement
-		}
-		if err := knowledge.MirrorPolicy(args[1], string(body)); err != nil {
-			fail(err.Error())
-		}
-		fmt.Println("OK: mirrored policy for '" + args[1] + "'")
 	case "promote-target":
 		registryPromoteTarget(args[1:])
 	case "detect-promote":

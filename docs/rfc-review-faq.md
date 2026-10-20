@@ -212,7 +212,7 @@ The standard is itself published on `root` under `.well-known/demarkus/`.
 - `policy.md`: strictness, required tag axes such as `category:`, optional required OKF fields.
 - `template.md`: per-world layout.
 - `style.md`: H1 as name, one-sentence summary under it, unique headings (headings are anchors), no em dashes, no frontmatter fences.
-- Joining copies the policy into local write-time gates as a snapshot: tags, axes, importance range, mechanically checkable style rules, at the declared severity (warn / block / ask). The gate runs offline and cannot reach the broker, so a policy change takes effect on the next join or mirror.
+- The server enforces the policy on every write; the plugin's local gate checks only that tags and the mechanically checkable style rules are present before the call leaves the session.
 - `/knowledge-doctor` audits the corpus after the fact.
 
 ## Why QUIC?

@@ -15,6 +15,7 @@ trap 'rm -rf "$TMP"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # run_hook <plugin> <bootstrap exit> <failing subcommand or "none"> [no-bin]
+# HOOK_PATH replaces PATH for the run: with or without a claude CLI on it.
 run_hook() {
   local plugin="$1" bootstrap_exit="$2" failing="$3" tree
   tree=$(mktemp -d "$TMP/hook.XXXXXX")
@@ -31,7 +32,10 @@ if [ "\$1" = "guidance" ]; then echo '{"ok":true}'; fi
 STUB
   [ "${4:-}" = no-bin ] || chmod +x "$HOOK_HOME/.demarkus/bin/demarkus-plugin"
   HOOK_STATUS=0
-  HOME="$HOOK_HOME" bash "$tree/hooks/session-start.sh" >"$TMP/out" 2>"$TMP/err" || HOOK_STATUS=$?
+  env PATH="${HOOK_PATH:-$PATH}" HOME="$HOOK_HOME" bash "$tree/hooks/session-start.sh" >"$TMP/out" 2>"$TMP/err" || HOOK_STATUS=$?
+}
+static_guidance() {
+  grep -v '^<!--.*-->$' "$ROOT/plugins/$1/context/session-guidance.md" | diff - "$TMP/out" >/dev/null
 }
 
 calls() { tr '\n' ' ' < "$HOOK_HOME/calls"; }
@@ -64,12 +68,24 @@ run_hook cursor-memory 0 none
 run_hook claude-code 0 none
 [ "$(calls)" = "provision if-configured guidance " ] || fail "claude-code: ran $(calls)"
 
-# No usable binary (a sandbox, or the launcher's first run): the static
-# guidance stands in, without the generator's marker lines.
-run_hook claude-code 0 none no-bin
-[ "$HOOK_STATUS" = 0 ] || fail "claude-code: no-bin run exited $HOOK_STATUS"
-[ ! -e "$HOOK_HOME/calls" ] || fail "claude-code: no-bin ran $(calls)"
-grep -v '^<!--.*-->$' "$ROOT/plugins/claude-code/context/session-guidance.md" | diff - "$TMP/out" >/dev/null ||
-  fail "claude-code: no-bin output is not the static guidance"
+run_hook claude-code-knowledge 0 none
+[ "$(calls)" = "bootstrap guidance " ] || fail "claude-code-knowledge: ran $(calls)"
+
+# No usable binary and no claude CLI (a sandbox, or the memory launcher's first
+# run): the static guidance stands in, without the generator's marker lines.
+for plugin in claude-code claude-code-knowledge; do
+  HOOK_PATH="/usr/bin:/bin" run_hook "$plugin" 0 none no-bin
+  [ "$HOOK_STATUS" = 0 ] || fail "$plugin: no-bin run exited $HOOK_STATUS"
+  [ ! -e "$HOOK_HOME/calls" ] || fail "$plugin: no-bin ran $(calls)"
+  static_guidance "$plugin" || fail "$plugin: no-bin output is not the static guidance"
+done
+
+# The knowledge hook installs on a host (claude on PATH); a bootstrap that
+# leaves no binary still gets the static guidance.
+stubs=$(mktemp -d "$TMP/bin.XXXXXX")
+printf '#!/usr/bin/env bash\n' > "$stubs/claude" && chmod +x "$stubs/claude"
+HOOK_PATH="$stubs:/usr/bin:/bin" run_hook claude-code-knowledge 0 none no-bin
+[ "$(calls)" = "bootstrap " ] || fail "claude-code-knowledge: host no-bin ran $(calls)"
+static_guidance claude-code-knowledge || fail "claude-code-knowledge: host no-bin output is not the static guidance"
 
 echo "PASS: session-start hooks"

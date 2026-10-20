@@ -31,7 +31,7 @@ Before any Bash, the entire argument must match `https://` plus a DNS hostname, 
    # Also check MCP settings in Cursor for a server named <slug>.
    ```
 
-   Any check fails or `<slug>` already exists: stop. Never overwrite or remove existing state; to replace, the user must ask for explicit removal first.
+   Any check fails, or `<slug>` is already an MCP endpoint: stop. Never overwrite or remove existing state; to replace, the user must ask for explicit removal first. `<slug>` only in `knowledge-list`: continue; `knowledge-register` is idempotent.
 
 3. Register the endpoint, then the publish-gate entry. Check each result before continuing.
 
@@ -46,12 +46,7 @@ Before any Bash, the entire argument must match `https://` plus a DNS hostname, 
 
 ## After Restart
 
-In a later session, verify the exact slug is connected and call its read-only `mark_worlds`. Then fetch the root conventions with `force=true`:
-
-- `mark://root/.well-known/demarkus/template.md`
-- `mark://root/.well-known/demarkus/policy.md`
-
-Accept a document only when `status: ok` carries the full body and is not `mode: outline`. Policy exists: pass the exact body to `registry policy-mirror '<slug>'` via stdin, never embedding broker content in shell source or arguments. If the harness cannot pipe tool output directly, use a private temporary file: verify mode `0600`, byte equality, cleanup. Policy `not-found`: pass empty stdin to clear stale mirrors. Surface failures; never claim enforcement updated unless mirroring succeeds.
+In a later session, verify the exact slug is connected, call its read-only `mark_worlds`, then `/knowledge`.
 
 ## Remove
 

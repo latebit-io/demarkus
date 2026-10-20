@@ -72,14 +72,12 @@ if ! jq -se --argjson n "${#calls[@]}" \
 fi
 
 # Registry rows, all offline: a joined QUIC memory bound at join, a second
-# one bound as the default of another project, a knowledge system with its
-# policy mirror, and a plain promote target.
+# one bound as the default of another project, a knowledge system, and a
+# plain promote target.
 demarkus-plugin registry memory-join mark://team.example.com:6309 --token fixture-remote-token --bind "$HOME/project"
 demarkus-plugin registry memory-join mark://lab.example.com:6309 --token fixture-lab-token
 demarkus-plugin registry memory-default --bind "$HOME/other-project" --set lab
 demarkus-plugin registry knowledge-register acme
-printf '%s\n' '# Policy' '' 'strictness: block' 'require_tags: category' 'allow_tags.category: runbook|decision' >/tmp/policy.md
-demarkus-plugin registry policy-mirror acme </tmp/policy.md
 demarkus-plugin registry promote-target add archive "$HOME/.demarkus/soul/promoted" "Promoted notes"
 
 if pkill -TERM -f demarkus-server; then

@@ -14,7 +14,7 @@ Supports OpenCode V2 and V1 **1.18.29+** through one installed adapter. Older V1
 - `knowledge-promote` curates staged material into a writable destination.
 - Session guidance and recall nudges consult shared knowledge first.
 - Catalog recall prefers the broker-wide `mark_lookup_all`, one lookup across every readable world, with a per-world fallback for older brokers and plain endpoints.
-- Publish and append gates enforce mirrored system policy, retention confirmation, and style rules.
+- Publish and append gates enforce tags, retention confirmation, and style rules; the server enforces the system's write policy.
 - Co-installation with the memory plugin uses one gate owner, preventing duplicate blocks and warnings.
 
 No demarkus server or capability token is installed. The plugin bootstraps the small `demarkus-plugin` helper used for registry, guidance, gate, nudge, and update behavior. OpenCode owns broker OAuth credentials.
@@ -46,7 +46,6 @@ Restart once more after joining so OpenCode loads the new remote MCP entry. In V
 - Runtime assets: `~/.demarkus/opencode-knowledge/`
 - Joined slugs: `~/.demarkus/knowledge-systems`
 - Shared endpoints: `~/.config/mcp/mcp.json`
-- Mirrored policy: `~/.demarkus/plugin-knowledge.*.<slug>`
 
 Explicit MCP entries (`mcp.servers[slug]` in V2, `mcp[slug]` in V1) win over generated entries, including disabled servers and authentication settings. Reserved local-memory slugs are disabled in both versions. Joined systems without a shared endpoint produce a startup diagnostic; rerun `/knowledge-join` in OpenCode to repair them.
 

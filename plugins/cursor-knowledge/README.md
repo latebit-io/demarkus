@@ -11,7 +11,7 @@ This is the broker-fronted, multi-writer counterpart to [`demarkus-memory` for C
 - **`/knowledge-doctor`**: read-only hygiene audit of a joined system, per world (orphans, broken links, dangling references, untagged and policy-noncompliant docs, ADR gaps).
 - **`knowledge-promote` skill**: the curation cascade that lands a staged document in the catalog: triage (most content correctly stays personal), distill for a shared audience (stripping personal framing, secrets, PII), route to a **writable** world (via `mark_worlds` and each world's `world.md` descriptor), then `mark_promote` on the broker: `dry_run` checks the draft against the write grant, the world's policy, the style rules and the catalog (dedup by title and tags), a human gate capped by the destination's autonomy ceiling, `apply` publishes with provenance. It is the knowledge-side half of the promote bridge: the demarkus-memory plugin's `/promote` invokes it and applies the back-stamp; this side never writes the memory.
 - **Standing guidance (`sessionStart`)**: when a system is joined, each conversation is steered to consult the shared catalog first for shared subjects, navigate via the `root` hub and `mark://<world>/<path>` URLs, prefer the broker-wide `mark_lookup_all`, and (when a soul also exists) keep the soul and system lanes.
-- **Publish gate (`beforeMCPExecution`)**: enforces `tags` (and any required tag axes and OKF fields the system's policy declares) on writes to a joined system, at the severity the system chooses (`warn` / `block` / `ask`; Cursor supports `ask` natively). It gates **only** registered knowledge systems; the local soul and unrelated demarkus servers are left untouched.
+- **Publish gate (`beforeMCPExecution`)**: checks `tags` on writes to a joined system before the call leaves the session; the server enforces the system's write policy (required tag axes, allowed values, required fields, strictness) on every write. It gates **only** registered knowledge systems; the local soul and unrelated demarkus servers are left untouched.
 
 ## Requirements
 
@@ -51,10 +51,9 @@ Marketplace installs refresh from the repository (enable **Auto Refresh** in mar
 
 ## Local helper
 
-This plugin runs no local demarkus server. It bootstraps the shared `demarkus-plugin` helper for gates, guidance, and registry behavior, and reads the same registry and per-system policy mirror the other knowledge plugins write under `~/.demarkus/`:
+This plugin runs no local demarkus server. It bootstraps the shared `demarkus-plugin` helper for gates, guidance, and registry behavior, and reads the same registry the other knowledge plugins write under `~/.demarkus/`:
 
 - `~/.demarkus/knowledge-systems`: one joined MCP server slug per line.
-- `~/.demarkus/plugin-knowledge.strictness.<slug>`, `.require-tags.<slug>`, `.require-fields.<slug>`: mirrored per-system gate policy.
 
 It owns the `plugin-knowledge.*` namespace and never writes the memory plugin's files; it only checks whether a soul is configured so the soul and system guidance appears when relevant.
 
@@ -79,7 +78,7 @@ Cloud agents run no session or MCP hooks and do not read the user-scope `~/.curs
 
 ## Admin: publishing conventions
 
-A knowledge system's org-wide policy and per-world template live on its `root` hub under `mark://root/.well-known/demarkus/`. See the Claude Code plugin's [`examples/knowledge-system/`](../claude-code-knowledge/examples/knowledge-system/) for the format an admin publishes; joined agents fetch and follow them and mirror the enforceable knobs into the local gate.
+A knowledge system's org-wide policy and per-world template live on its `root` hub under `mark://root/.well-known/demarkus/`. See the Claude Code plugin's [`examples/knowledge-system/`](../claude-code-knowledge/examples/knowledge-system/) for the format an admin publishes; joined agents fetch and follow them; the server enforces the policy on every write.
 
 ## Syncing with the other plugins
 
