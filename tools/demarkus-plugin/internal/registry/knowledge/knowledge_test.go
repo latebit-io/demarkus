@@ -3,6 +3,7 @@ package knowledge
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/registrytest"
@@ -79,14 +80,19 @@ func TestRegisterRecordsTheBrokerURL(t *testing.T) {
 	if u, err := URL("acme"); err != nil || u != "" {
 		t.Fatalf("url of a join without one = %q, %v", u, err)
 	}
-	// A re-join records the url; a later one replaces it; beta is untouched.
-	for _, u := range []string{"https://acme.example", "https://acme.example:8443"} {
-		if err := Register("acme", u); err != nil {
-			t.Fatal(err)
-		}
-		if got, err := URL("acme"); err != nil || got != u {
-			t.Fatalf("url = %q, %v, want %q", got, err, u)
-		}
+	// A re-join records the url and repeats idempotently; another url for
+	// the same slug is refused until the slug is unregistered.
+	if err := Register("acme", "https://acme.example"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Register("acme", "https://acme.example"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Register("acme", "https://acme.example:8443"); err == nil || !strings.Contains(err.Error(), "joined at https://acme.example") {
+		t.Fatalf("different url accepted: %v", err)
+	}
+	if got, _ := URL("acme"); got != "https://acme.example" {
+		t.Fatalf("url after refusal = %q", got)
 	}
 	if err := Register("beta", "https://beta.example"); err != nil {
 		t.Fatal(err)
@@ -96,5 +102,29 @@ func TestRegisterRecordsTheBrokerURL(t *testing.T) {
 	}
 	if systems, _ := config.ListKnowledgeSystems(); len(systems) != 2 {
 		t.Fatalf("systems = %v", systems)
+	}
+}
+
+func TestRegisterRefusesABadURLBeforeWriting(t *testing.T) {
+	registrytest.SetupHome(t)
+	for _, u := range []string{"acme.example", "https://a\tb", "https://x\nhttps://y", "://nope"} {
+		if err := Register("acme", u); err == nil || !strings.Contains(err.Error(), "'acme'") {
+			t.Errorf("%q accepted: %v", u, err)
+		}
+	}
+	if systems, _ := config.ListKnowledgeSystems(); len(systems) != 0 {
+		t.Fatalf("slug stored despite a refused url: %v", systems)
+	}
+}
+
+// A failed url write must not leave the slug registered.
+func TestRegisterIsAtomicAcrossBothFiles(t *testing.T) {
+	registrytest.SetupHome(t)
+	registrytest.FailWritesTo(t, urlsFile)
+	if err := Register("acme", "https://acme.example"); err == nil {
+		t.Fatal("register succeeded with the url write failing")
+	}
+	if systems, _ := config.ListKnowledgeSystems(); len(systems) != 0 {
+		t.Fatalf("slug stored after a failed url write: %v", systems)
 	}
 }

@@ -31,16 +31,16 @@ Before any Bash, the entire argument must match `https://` plus a DNS hostname, 
    # Also check MCP settings in Cursor for a server named <slug>.
    ```
 
-   Any check fails, or `<slug>` is already an MCP endpoint: stop. Never overwrite or remove existing state; to replace, the user must ask for explicit removal first. `<slug>` only in `knowledge-list`: continue; `knowledge-register` is idempotent.
+   Any check fails, or `<slug>` is already an MCP endpoint: stop. Never overwrite or remove existing state; to replace, the user must ask for explicit removal first. `<slug>` only in `knowledge-list`: continue; `knowledge-register` is idempotent for the same broker and refuses another.
 
-3. Register the endpoint, then the gate entry with the broker `url=` from step 1 (the session status probes it). Check each result before continuing.
+3. Register the gate entry with the broker `url=` from step 1 (shared by every harness; the session status probes it), then the endpoint. Check each result before continuing.
 
    ```bash
-   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor add-http '<slug>' '<mcp-url>' && \
-   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register '<slug>' '<url>'
+   "$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-register '<slug>' '<url>' && \
+   "$HOME/.demarkus/bin/demarkus-plugin" registry mcp --harness cursor add-http '<slug>' '<mcp-url>'
    ```
 
-   Endpoint registration fails: stop without running `knowledge-register`. Gate registration fails: leave the endpoint in place, report that exact partial state, give the failed command as the repair. No speculative rollback; never remove state another integration may use.
+   Gate registration fails (a slug joined at another broker, a bad URL): stop before the endpoint, relay the message; its repair is `registry knowledge-unregister '<slug>'`, run only when the user asks. Endpoint registration fails: report it; the gate entry is idempotent, so a retry reruns both. No speculative rollback; never remove state another integration may use.
 
 4. Report local registration complete and stop. Tell the user to restart Cursor and complete OAuth when prompted. Do not wait for OAuth, invoke MCP tools, or continue across the restart.
 

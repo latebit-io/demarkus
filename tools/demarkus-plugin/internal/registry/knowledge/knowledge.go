@@ -4,6 +4,7 @@ package knowledge
 
 import (
 	"fmt"
+	neturl "net/url"
 	"os"
 	"slices"
 	"strings"
@@ -26,10 +27,26 @@ func checkSlug(slug string) error {
 // adapters read as bare slugs; the session status probes the url.
 const urlsFile = "knowledge-urls"
 
-// Register appends SLUG to the knowledge-system registry (idempotent) and
-// records its broker URL when given, replacing an earlier one.
+// checkURL rejects a url that would break a registry row or a probe.
+func checkURL(slug, url string) error {
+	if url == "" {
+		return nil
+	}
+	parsed, err := neturl.Parse(url)
+	if err != nil || strings.ContainsAny(url, "\t\r\n") || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("knowledge system '%s': broker URL %q is not an absolute URL", slug, url)
+	}
+	return nil
+}
+
+// Register adds SLUG and its broker URL to the registry in one atomic write.
+// Idempotent for the same url; another url is refused, since every harness
+// shares the registry and a silent replacement would strand their endpoints.
 func Register(slug, url string) error {
 	if err := checkSlug(slug); err != nil {
+		return err
+	}
+	if err := checkURL(slug, url); err != nil {
 		return err
 	}
 	p, err := config.StatePath("knowledge-systems")
@@ -41,69 +58,40 @@ func Register(slug, url string) error {
 		if err != nil {
 			return err
 		}
+		var mutations []statefile.Mutation
 		if !slices.Contains(rows, slug) {
 			if err := catalog.RejectLocalName(slug); err != nil {
 				return err
 			}
-			rows = append(rows, slug)
-			if err := statefile.Write(p, []byte(strings.Join(rows, "\n")+"\n")); err != nil {
+			m, err := statefile.Put(p, []byte(strings.Join(append(rows, slug), "\n")+"\n"), 0o644)
+			if err != nil {
 				return err
 			}
+			mutations = append(mutations, m)
 		}
-		if url == "" {
-			return nil
+		if url != "" {
+			current, err := URL(slug)
+			if err != nil {
+				return err
+			}
+			if current != "" && current != url {
+				return fmt.Errorf("knowledge system '%s' is joined at %s; run `registry knowledge-unregister %s` before joining %s", slug, current, slug, url)
+			}
+			if current == "" {
+				m, err := urlMutation(slug, url)
+				if err != nil {
+					return err
+				}
+				mutations = append(mutations, m)
+			}
 		}
-		return writeURL(slug, url)
+		return statefile.Apply(mutations)
 	})
 }
 
-// URL is the broker URL recorded for slug, "" when the join predates it.
-// Callers need no lock: a torn read only costs one session's probe.
-func URL(slug string) (string, error) {
-	rows, err := config.Records(urlsFile)
-	if err != nil {
-		return "", err
-	}
-	for _, row := range rows {
-		if name, u, ok := strings.Cut(row, "\t"); ok && name == slug {
-			return u, nil
-		}
-	}
-	return "", nil
-}
-
-// writeURL replaces slug's row in the url registry; url "" drops it.
-// Callers hold the knowledge-systems lock.
-func writeURL(slug, url string) error {
-	p, err := config.StatePath(urlsFile)
-	if err != nil {
-		return err
-	}
-	rows, err := config.Records(urlsFile)
-	if err != nil {
-		return err
-	}
-	kept := rows[:0]
-	for _, row := range rows {
-		if name, _, _ := strings.Cut(row, "\t"); name != slug {
-			kept = append(kept, row)
-		}
-	}
-	if url != "" {
-		kept = append(kept, slug+"\t"+url)
-	}
-	if len(kept) == 0 {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
-	}
-	return statefile.Write(p, []byte(strings.Join(kept, "\n")+"\n"))
-}
-
-// Unregister drops the slug from the registry, so the publish gate stops
-// enforcing on it, and clears the policy files an older helper mirrored.
-// Idempotent; existed reports whether the slug was registered.
+// Unregister drops the slug and its url from the registry, so the publish
+// gate stops enforcing on it, and clears the policy files an older helper
+// mirrored. Idempotent; existed reports whether the slug was registered.
 func Unregister(slug string) (existed bool, err error) {
 	if err := checkSlug(slug); err != nil {
 		return false, err
@@ -128,19 +116,66 @@ func Unregister(slug string) (existed bool, err error) {
 		if !existed {
 			return nil
 		}
-		if err := writeURL(slug, ""); err != nil {
+		systems, err := rowsMutation(p, kept)
+		if err != nil {
 			return err
 		}
-		if len(kept) == 0 {
-			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-				return err
-			}
-		} else if err := statefile.Write(p, []byte(strings.Join(kept, "\n")+"\n")); err != nil {
+		urls, err := urlMutation(slug, "")
+		if err != nil {
+			return err
+		}
+		if err := statefile.Apply([]statefile.Mutation{systems, urls}); err != nil {
 			return err
 		}
 		return clearPolicyMirror(slug)
 	})
 	return existed, err
+}
+
+// URL is the broker URL recorded for slug, "" when the join predates it.
+// Callers need no lock: a torn read only costs one session's probe.
+func URL(slug string) (string, error) {
+	rows, err := config.Records(urlsFile)
+	if err != nil {
+		return "", err
+	}
+	for _, row := range rows {
+		if name, u, ok := strings.Cut(row, "\t"); ok && name == slug {
+			return u, nil
+		}
+	}
+	return "", nil
+}
+
+// urlMutation stages slug's row in the url registry; url "" drops it.
+// Callers hold the knowledge-systems lock.
+func urlMutation(slug, url string) (statefile.Mutation, error) {
+	p, err := config.StatePath(urlsFile)
+	if err != nil {
+		return statefile.Mutation{}, err
+	}
+	rows, err := config.Records(urlsFile)
+	if err != nil {
+		return statefile.Mutation{}, err
+	}
+	kept := rows[:0]
+	for _, row := range rows {
+		if name, _, _ := strings.Cut(row, "\t"); name != slug {
+			kept = append(kept, row)
+		}
+	}
+	if url != "" {
+		kept = append(kept, slug+"\t"+url)
+	}
+	return rowsMutation(p, kept)
+}
+
+// rowsMutation stages a registry file's rows; none removes the file.
+func rowsMutation(p string, rows []string) (statefile.Mutation, error) {
+	if len(rows) == 0 {
+		return statefile.Delete(p)
+	}
+	return statefile.Put(p, []byte(strings.Join(rows, "\n")+"\n"), 0o644)
 }
 
 // policyFiles are the per-slug mirror files helpers before 0.71 wrote; the

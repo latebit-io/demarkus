@@ -4,6 +4,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	neturl "net/url"
@@ -77,8 +78,11 @@ func Reach(ctx context.Context, u string) error {
 		return fmt.Errorf("broker URL does not parse: %s", u)
 	}
 	resp, err := http.DefaultClient.Do(req)
+	if errors.Is(err, context.DeadlineExceeded) || (err != nil && ctx.Err() != nil) {
+		return fmt.Errorf("broker did not answer at %s within the deadline: %w", meta, err)
+	}
 	if err != nil {
-		return fmt.Errorf("broker unreachable at %s (DNS / TCP / TLS failure; check the URL and network)", meta)
+		return fmt.Errorf("broker unreachable at %s (DNS / TCP / TLS failure; check the URL and network): %w", meta, err)
 	}
 	_ = resp.Body.Close()
 	switch resp.StatusCode {
