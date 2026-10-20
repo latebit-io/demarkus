@@ -5,6 +5,7 @@ package guidance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -36,9 +37,41 @@ type Output struct {
 	Status  string `json:"status,omitempty"` // one line for the user; empty = nothing to show
 }
 
-// memoryOfferText is status-line only, never agent context: raised by the
-// agent, it landed inside unrelated replies.
-const memoryOfferText = "demarkus is now your persistent memory store; to make it the only one, ask to disable the host's built-in memory tool"
+// brandNames are the words a plugin's status line uses. The generator writes
+// context/brand.json beside a brand's guidance file; the base plugins have
+// none and keep the demarkus words in baseBrand.
+type brandNames struct {
+	PluginName string `json:"plugin_name"`
+	Store      string `json:"store_noun"`
+}
+
+var baseBrand = map[string]brandNames{
+	"memory":    {PluginName: "demarkus", Store: "soul"},
+	"knowledge": {PluginName: "demarkus-knowledge", Store: "soul"},
+}
+
+func readBrand(surface, guidanceFile string) (brandNames, error) {
+	b := baseBrand[surface]
+	if guidanceFile == "" {
+		return b, nil
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(guidanceFile), "brand.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return b, nil
+	}
+	if err != nil {
+		return brandNames{}, fmt.Errorf("read brand names: %w", err)
+	}
+	// Absent keys keep the base words.
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return brandNames{}, fmt.Errorf("parse brand.json: %w", err)
+	}
+	return b, nil
+}
+
+// memoryOfferText follows the plugin name on the status line, never in agent
+// context: raised by the agent, it landed inside unrelated replies.
+const memoryOfferText = " is now your persistent memory store; to make it the only one, ask to disable the host's built-in memory tool"
 
 // Evaluate builds the session guidance to inject for the requested surface.
 func Evaluate(in Input) (Output, error) {
@@ -80,7 +113,11 @@ func memory(in Input) (Output, error) {
 	if warn != "" {
 		parts = append(parts, "⚠️ "+warn)
 	}
-	header, status, err := projectHeader(in.ProjectDir, warn)
+	brand, err := readBrand("memory", in.GuidanceFile)
+	if err != nil {
+		return Output{}, err
+	}
+	header, status, err := projectHeader(in.ProjectDir, warn, brand)
 	if err != nil {
 		return Output{}, err
 	}
@@ -89,7 +126,7 @@ func memory(in Input) (Output, error) {
 	}
 	// The offer waits for a session that shows the user a healthy status line.
 	if warn == "" && status != "" && !in.NoStatus {
-		offer, err := memoryOffer()
+		offer, err := memoryOffer(brand)
 		if err != nil {
 			return Output{}, err
 		}
@@ -110,7 +147,7 @@ func memory(in Input) (Output, error) {
 // projectHeader states the project, its root, state and where the work stands
 // for the agent; status is the user's line. Both are empty without a project
 // directory, or when an unbound project would name an unconfigured local store.
-func projectHeader(dir, warn string) (header, status string, err error) {
+func projectHeader(dir, warn string, brand brandNames) (header, status string, err error) {
 	r, err := project.Resolve(dir)
 	if errors.Is(err, project.ErrNoDir) {
 		return "", "", nil
@@ -118,7 +155,7 @@ func projectHeader(dir, warn string) (header, status string, err error) {
 	if err != nil {
 		var slugErr *project.SlugError
 		if errors.As(err, &slugErr) {
-			return "Project slug: none (" + slugErr.Error() + ").", slugStatus(slugErr), nil
+			return "Project slug: none (" + slugErr.Error() + ").", slugStatus(slugErr, brand), nil
 		}
 		return "", "", err
 	}
@@ -128,7 +165,7 @@ func projectHeader(dir, warn string) (header, status string, err error) {
 		}
 	}
 	s := readStatus(r)
-	return s.agentHeader(r), s.userLine(r, warn), nil
+	return s.agentHeader(r), s.userLine(r, warn, brand), nil
 }
 
 // serverHealthWarning is provision.HealthWarning (the PID-at-root ownership
@@ -136,7 +173,7 @@ func projectHeader(dir, warn string) (header, status string, err error) {
 var serverHealthWarning = provision.HealthWarning
 
 // memoryOffer returns the one-time offer text the first time, "" thereafter.
-func memoryOffer() (string, error) {
+func memoryOffer(brand brandNames) (string, error) {
 	sentinel, err := config.StatePath(".memory-offer-shown")
 	if err != nil {
 		return "", err
@@ -147,7 +184,7 @@ func memoryOffer() (string, error) {
 	// Best effort: a missing sentinel only repeats the offer next session.
 	_ = os.MkdirAll(filepath.Dir(sentinel), 0o755)
 	_ = os.WriteFile(sentinel, nil, 0o644)
-	return memoryOfferText, nil
+	return brand.PluginName + memoryOfferText, nil
 }
 
 // probeBroker is the broker reachability probe; tests replace it so none
@@ -214,8 +251,12 @@ func knowledge(in Input) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
+	brand, err := readBrand("knowledge", in.GuidanceFile)
+	if err != nil {
+		return Output{}, err
+	}
 	if len(systems) == 0 {
-		status := "demarkus-knowledge: no system joined · /knowledge-join <broker-url>"
+		status := brand.PluginName + ": no system joined · /knowledge-join <broker-url>"
 		// One-time pointer to /knowledge-join in the agent's context; the
 		// status line says it every session.
 		sentinel, err := config.StatePath(".knowledge-join-hint-shown")
@@ -228,7 +269,7 @@ func knowledge(in Input) (Output, error) {
 		// Best effort: a missing sentinel only repeats the hint next session.
 		_ = os.MkdirAll(filepath.Dir(sentinel), 0o755)
 		_ = os.WriteFile(sentinel, nil, 0o644)
-		return Output{Context: "demarkus-knowledge is installed but no knowledge system is joined yet. To connect this installation to your organization's shared demarkus knowledge base, run `/knowledge-join <broker-url>`.", Status: status}, nil
+		return Output{Context: brand.PluginName + " is installed but no knowledge system is joined yet. To connect this installation to your organization's shared demarkus knowledge base, run `/knowledge-join <broker-url>`.", Status: status}, nil
 	}
 	states, err := probeSystems(systems)
 	if err != nil {
@@ -244,7 +285,7 @@ func knowledge(in Input) (Output, error) {
 		words = append(words, states[i].userWord())
 	}
 	b.WriteString("\n\n" + knowledgeNotConnected)
-	status := "demarkus-knowledge: " + strings.Join(words, " · ")
+	status := brand.PluginName + ": " + strings.Join(words, " · ")
 	parts := []string{b.String()}
 	g, err := readFile(in.GuidanceFile)
 	if err != nil {

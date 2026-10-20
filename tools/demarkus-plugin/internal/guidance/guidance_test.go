@@ -76,7 +76,7 @@ func TestMemoryOfferOnTheStatusLineOnce(t *testing.T) {
 		t.Errorf("offer on a host without a status line: %q", out.Status)
 	}
 	first := eval(t, in)
-	if !strings.HasSuffix(first.Status, " · "+memoryOfferText) || strings.Contains(first.Context, memoryOfferText) {
+	if !strings.HasSuffix(first.Status, " · demarkus"+memoryOfferText) || strings.Contains(first.Context, memoryOfferText) {
 		t.Errorf("offer: status %q, context %q", first.Status, first.Context)
 	}
 	if strings.Contains(eval(t, in).Status, memoryOfferText) {
@@ -223,5 +223,38 @@ func TestMemoryGuidanceSurvivesInvalidProjectName(t *testing.T) {
 	}
 	if o := eval(t, Input{Surface: "memory", ProjectDir: filepath.Join(t.TempDir(), "bad#name")}); o.Status != `demarkus: no project (directory name "bad#name" is not a valid slug)` {
 		t.Fatalf("status = %q", o.Status)
+	}
+}
+
+// A brand's context/brand.json beside the guidance file names the status
+// lines; the base plugins, with none, keep the demarkus words.
+func TestBrandNamesTheStatusLines(t *testing.T) {
+	project := filepath.Join(t.TempDir(), "app")
+	setupHome(t, map[string]string{
+		"plugin-memory.conf": "SOUL_DIR=/no/such/dir\nPORT=6310\nMODE=default\n",
+		"project-souls":      project + "\tteam\n",
+		"souls":              "team\tmark://team.example:6309\tfalse\t-\n",
+		"knowledge-systems":  "acme\n",
+	})
+	stubBroker(t)
+	dir := t.TempDir()
+	gfile := filepath.Join(dir, "session-guidance.md")
+	if err := os.WriteFile(gfile, []byte("# guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "brand.json"), []byte(`{"plugin_name": "acme-brain", "store_noun": "memory"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if o := eval(t, Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: project}); !strings.HasPrefix(o.Status, "acme-brain: memory team · project app") {
+		t.Fatalf("branded memory status = %q", o.Status)
+	}
+	if o := eval(t, Input{Surface: "knowledge", GuidanceFile: gfile}); o.Status != "acme-brain: acme joined" {
+		t.Fatalf("branded knowledge status = %q", o.Status)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "brand.json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Evaluate(Input{Surface: "memory", GuidanceFile: gfile, ProjectDir: project}); err == nil || !strings.Contains(err.Error(), "brand.json") {
+		t.Fatalf("malformed brand.json: %v", err)
 	}
 }

@@ -6,7 +6,7 @@ The demarkus repository ships no brands. A brand is declared in a small `brands.
 
 ## What a brand changes and what it keeps
 
-A brand changes the plugin name, its description, and every place the prompts name the plugin. It keeps, on purpose:
+A brand changes the plugin name, its description, every place the prompts name the plugin, and the session status line (`acme-brain: memory …` instead of `demarkus: soul …`). It keeps, on purpose:
 
 - the `demarkus-plugin` binary, its pinned version in `scripts/bootstrap.sh`, and its download source (the demarkus GitHub releases).
 - the state directory `~/.demarkus` and the `DEMARKUS_*` environment variables.
@@ -74,7 +74,7 @@ cd tools && go run ./plugin-prompts write --brands /path/to/brands.json \
          && go run ./plugin-prompts check --brands /path/to/brands.json
 ```
 
-`write` renders the prompts with your names, copies `hooks/` and `scripts/` plus the MCP config of a memory base from the base plugin, rewrites the name, description and any set identity fields in the plugin manifest (`.claude-plugin/plugin.json` or `.cursor-plugin/plugin.json`; version and hooks untouched), and writes a README into each `output`. A base missing any of those files fails the render. Every directory under `plugins/brands/` is managed: `write` deletes files and directories no configured brand produces, including the whole directory of a brand removed from the file, and `check` reports them as drift. Both need the full checkout, since the copied files come from the base plugin.
+`write` renders the prompts with your names, copies `hooks/` and `scripts/` plus the MCP config of a memory base from the base plugin, rewrites the name, description and any set identity fields in the plugin manifest (`.claude-plugin/plugin.json` or `.cursor-plugin/plugin.json`; version and hooks untouched), and writes a README and `context/brand.json` (the status line's words, read by the helper) into each `output`. A base missing any of those files fails the render. Every directory under `plugins/brands/` is managed: `write` deletes files and directories no configured brand produces, including the whole directory of a brand removed from the file, and `check` reports them as drift. Both need the full checkout, since the copied files come from the base plugin.
 
 ## Publishing from your own repository
 

@@ -88,8 +88,8 @@ func (p *ProjectStatus) sentence() string {
 
 // userLine is the one line the user sees. A server health warning replaces
 // the journal and git tail; no paths.
-func (s *sessionStatus) userLine(r project.Resolution, warn string) string {
-	line := "demarkus: soul " + r.Store + " · project " + r.Slug
+func (s *sessionStatus) userLine(r project.Resolution, warn string, brand brandNames) string {
+	line := brand.PluginName + ": " + brand.Store + " " + r.Store + " · project " + r.Slug
 	switch s.project.State {
 	case ProjectNew:
 		line += " (new)"
@@ -109,6 +109,6 @@ func (s *sessionStatus) userLine(r project.Resolution, warn string) string {
 }
 
 // slugStatus is the user line for a directory name that is no project slug.
-func slugStatus(err *project.SlugError) string {
-	return fmt.Sprintf("demarkus: no project (directory name %q is not a valid slug)", err.Name)
+func slugStatus(err *project.SlugError, brand brandNames) string {
+	return fmt.Sprintf("%s: no project (directory name %q is not a valid slug)", brand.PluginName, err.Name)
 }
