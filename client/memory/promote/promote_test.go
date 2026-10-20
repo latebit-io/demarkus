@@ -1,6 +1,7 @@
 package promote_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/lookuptable"
 	"github.com/latebit-io/demarkus/client/memory/promote"
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
@@ -179,6 +181,18 @@ func TestApplyRefreshWritesAtThePlannedVersionOnly(t *testing.T) {
 	p.Status = promote.RefreshInSync
 	if _, err := promote.ApplyRefresh(t.Context(), doc(backend, "/g.md"), nil, &p); err == nil {
 		t.Error("in-sync wrote")
+	}
+}
+
+// A refused write reports the store's reason from the error body, not the
+// status or the body's title line.
+func TestApplyRefreshReportsTheRefusalReason(t *testing.T) {
+	backend := &fetchtest.Client{PublishFn: func(_ context.Context, _ fetch.WriteRequest) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusBadRequest, Body: protocol.ErrorBody(protocol.StatusBadRequest, "missing required tag axis category")}}, nil
+	}}
+	p := &promote.Plan{Status: promote.RefreshStale, Path: "/g.md", Version: 5, Body: "# G\n"}
+	if _, err := promote.ApplyRefresh(t.Context(), doc(backend, "/g.md"), nil, p); err == nil || err.Error() != "publish /g.md: bad-request: missing required tag axis category" {
+		t.Fatalf("refusal = %v", err)
 	}
 }
 

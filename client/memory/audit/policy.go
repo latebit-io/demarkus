@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol"
@@ -45,31 +46,59 @@ func (a *audit) checkPolicy() {
 	if !a.policyKnown {
 		return
 	}
-	policy := a.policy.ForCaller()
-	strictness := a.policy.EffectiveStrictness()
 	for _, p := range a.order {
 		d := a.docs[p]
 		if !live(d.status) {
 			continue
 		}
-		for _, v := range publishpolicy.EvaluateStrings(policy, p, d.meta).Violations {
-			switch v.Code {
-			case publishpolicy.MissingTags:
-				continue
-			case publishpolicy.InvalidImportance:
-				a.add(CheckPolicy, p, fmt.Sprintf("importance %q is not a number in [0,1] (strictness %s)", d.meta["importance"], strictness), "re-publish with a valid metadata.importance")
-			case publishpolicy.MissingTagAxis:
-				a.add(CheckPolicy, p, fmt.Sprintf("missing required tag axis %s: (strictness %s)", v.Name, strictness), "re-publish with a "+v.Name+":<value> tag")
-			case publishpolicy.MissingField:
-				a.add(CheckPolicy, p, fmt.Sprintf("missing required metadata %s (strictness %s)", v.Name, strictness), "re-publish with metadata."+v.Name)
-			case publishpolicy.DisallowedTagValue:
-				a.add(CheckPolicy, p, fmt.Sprintf("tag %s is outside the allowed values for %s (%s) (strictness %s)",
-					v.Name, v.Axis, policy.AllowedList(v.Axis), strictness), "re-publish with an allowed "+v.Axis+": value")
-			default:
-				a.add(CheckPolicy, p, fmt.Sprintf("%s %s (strictness %s)", v.Code, v.Name, strictness), "re-publish with metadata the policy accepts")
-			}
+		for _, v := range a.violations(p, d.meta) {
+			detail, fix := a.violation(v, d.meta)
+			a.add(CheckPolicy, p, detail, fix)
 		}
 	}
+}
+
+// violations is what the store's policy holds against metadata at path;
+// none when the policy is unknown.
+func (a *audit) violations(p string, meta map[string]string) []publishpolicy.Violation {
+	if !a.policyKnown {
+		return nil
+	}
+	return slices.DeleteFunc(publishpolicy.EvaluateStrings(a.policy.ForCaller(), p, meta).Violations, func(v publishpolicy.Violation) bool {
+		return v.Code == publishpolicy.MissingTags
+	})
+}
+
+// violation words one violation as a finding's detail and fix.
+func (a *audit) violation(v publishpolicy.Violation, meta map[string]string) (detail, fix string) {
+	strictness := a.policy.EffectiveStrictness()
+	switch v.Code {
+	case publishpolicy.InvalidImportance:
+		return fmt.Sprintf("importance %q is not a number in [0,1] (strictness %s)", meta["importance"], strictness), "re-publish with a valid metadata.importance"
+	case publishpolicy.MissingTagAxis:
+		return fmt.Sprintf("missing required tag axis %s: (strictness %s)", v.Name, strictness), "re-publish with a " + v.Name + ":<value> tag"
+	case publishpolicy.MissingField:
+		return fmt.Sprintf("missing required metadata %s (strictness %s)", v.Name, strictness), "re-publish with metadata." + v.Name
+	case publishpolicy.DisallowedTagValue:
+		return fmt.Sprintf("tag %s is outside the allowed values for %s (%s) (strictness %s)",
+			v.Name, v.Axis, a.policy.AllowedList(v.Axis), strictness), "re-publish with an allowed " + v.Axis + ": value"
+	default:
+		return fmt.Sprintf("%s %s (strictness %s)", v.Code, v.Name, strictness), "re-publish with metadata the policy accepts"
+	}
+}
+
+// refuses is why the policy would refuse a write of meta at path, as the
+// store would (block and ask both reject); "" when it lands.
+func (a *audit) refuses(p string, meta map[string]string) string {
+	if a.policy.EffectiveStrictness() == publishpolicy.Warn {
+		return ""
+	}
+	var reasons []string
+	for _, v := range a.violations(p, meta) {
+		detail, _ := a.violation(v, meta)
+		reasons = append(reasons, detail)
+	}
+	return strings.Join(reasons, "; ")
 }
 
 // checkContent scans every body for secrets and personal data. A reviewed

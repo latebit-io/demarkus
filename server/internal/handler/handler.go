@@ -1129,7 +1129,7 @@ func (h *Handler) writeError(w io.Writer, status, message string) {
 	resp := protocol.Response{
 		Status:   status,
 		Metadata: map[string]string{},
-		Body:     fmt.Sprintf("\n# %s\n\n%s\n", statusTitle(status), message),
+		Body:     protocol.ErrorBody(status, message),
 	}
 	h.writeResponse(w, resp)
 }
@@ -1148,10 +1148,6 @@ func sanitize(s string) string {
 		}
 		return r
 	}, s)
-}
-
-func statusTitle(s string) string {
-	return strings.ToUpper(s[:1]) + strings.ReplaceAll(s[1:], "-", " ")
 }
 
 // logPrune audit-logs retention pruning. Deletions must be attributable, so

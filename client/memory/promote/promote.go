@@ -330,11 +330,7 @@ func BackStamp(ctx context.Context, doc *docwrite.Doc, identity map[string]strin
 // landed words a write's outcome: the version it wrote, or why it did not.
 func landed(w Written, result *docwrite.Result, written bool) (Written, error) {
 	if !written {
-		reason := result.Response.Status
-		if line, _, _ := strings.Cut(strings.TrimSpace(result.Response.Body), "\n"); line != "" {
-			reason += ": " + line
-		}
-		return Written{}, &Refusal{Reason: "publish " + w.Path + ": " + reason}
+		return Written{}, &Refusal{Reason: "publish " + w.Path + ": " + result.Response.Refusal()}
 	}
 	version, err := docwrite.Version(result.Response.Metadata)
 	if err != nil {

@@ -163,3 +163,21 @@ func TestResponseRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestRefusalReadsTheReasonUnderTheTitle(t *testing.T) {
+	body := ErrorBody(StatusBadRequest, "missing required tag axis category")
+	if body != "\n# Bad request\n\nmissing required tag axis category\n" {
+		t.Errorf("body = %q", body)
+	}
+	if got := (Response{Status: StatusBadRequest, Body: body}).Refusal(); got != "bad-request: missing required tag axis category" {
+		t.Errorf("refusal = %q", got)
+	}
+	if got := (Response{Status: StatusNotPermitted}).Refusal(); got != StatusNotPermitted {
+		t.Errorf("bare refusal = %q", got)
+	}
+	// A policy or content refusal lists its reasons on lines; one line reports them.
+	lines := ErrorBody(StatusBadRequest, "publish policy (block) refused this write:\n- missing required tag axis category\n- missing required metadata description\n")
+	if got := (Response{Status: StatusBadRequest, Body: lines}).Refusal(); got != "bad-request: publish policy (block) refused this write: - missing required tag axis category - missing required metadata description" {
+		t.Errorf("multiline refusal = %q", got)
+	}
+}
