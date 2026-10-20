@@ -22,6 +22,7 @@ import (
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/mcpprovider"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/protocol"
@@ -40,6 +41,7 @@ func main() {
 	noCache := flag.Bool("no-cache", false, "disable response caching")
 	cacheDir := flag.String("cache-dir", cache.DefaultDir(), "cache directory")
 	profile := flag.String("profile", profileDefault(), "tool profile: lean (plugin surface) or full; default from DEMARKUS_MCP_PROFILE")
+	toolProvider := flag.String("tool-provider", os.Getenv(toolProviderEnv), "binary whose `mcp tools` and `mcp call <name>` add tools to the list; default from "+toolProviderEnv)
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -77,7 +79,17 @@ func main() {
 		log.Printf("warning: -token and DEMARKUS_AUTH apply to the -host server only; none is set, so they are unused")
 	}
 	h := &handler{client: client, defaultHost: *defaultHost, token: *token, graphStore: gs}
-	s.AddTools(h.profileTools(*defaultHost, *profile)...)
+	served := h.profileTools(*defaultHost, *profile)
+	s.AddTools(served...)
+	if *toolProvider != "" {
+		// A broken provider costs its tools, never the store's: memory stays up.
+		provided, err := mcpprovider.Load(context.Background(), *toolProvider, servedNames(served))
+		if err != nil {
+			log.Printf("warning: tool provider %s: %v; its tools are unavailable", *toolProvider, err)
+		} else {
+			s.AddTools(provided...)
+		}
+	}
 
 	registerResources(s, h, *defaultHost)
 	registerPrompts(s, *defaultHost)
@@ -132,9 +144,21 @@ type handler struct {
 	seen   map[string]fetchdedup.Doc
 }
 
-// profileEnv lets a launcher select the profile without a flag an older
-// binary would reject; the flag still wins when given.
-const profileEnv = "DEMARKUS_MCP_PROFILE"
+// profileEnv and toolProviderEnv let a launcher choose without a flag an
+// older binary would reject; a flag still wins when given.
+const (
+	profileEnv      = "DEMARKUS_MCP_PROFILE"
+	toolProviderEnv = "DEMARKUS_MCP_TOOL_PROVIDER"
+)
+
+// servedNames is the set a provider may not shadow.
+func servedNames(tools []mcpserver.ServerTool) map[string]bool {
+	names := make(map[string]bool, len(tools))
+	for i := range tools {
+		names[tools[i].Tool.Name] = true
+	}
+	return names
+}
 
 func profileDefault() string {
 	if profile := os.Getenv(profileEnv); profile != "" {

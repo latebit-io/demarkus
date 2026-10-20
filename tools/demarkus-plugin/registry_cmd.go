@@ -6,16 +6,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/guidance"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/hosttools"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/release"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/broker"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/join"
@@ -27,9 +26,6 @@ import (
 // cmdProvision runs the server lifecycle (binary install, config, managed server,
 // token, seed). Replaces setup.sh / provision.sh / the lib.sh lifecycle.
 func cmdProvision(args []string) {
-	// Hand the binary's own release version to the installer so it fetches the
-	// token from the tools release it shipped in (and never re-downloads itself).
-	release.PluginVersion = version
 	if len(args) == 0 {
 		if err := provision.Provision(); err != nil {
 			fail(err.Error())
@@ -368,31 +364,28 @@ func registryMemoryDefault(args []string) {
 	if *bind == "" {
 		fail("memory-default: --bind DIR is required")
 	}
-	current, err := config.ProjectBinding(*bind)
-	if err != nil {
-		fail(err.Error())
-	}
 	switch {
 	case *list:
-		cat, err := catalog.Listing()
+		listing, err := hosttools.Catalog(*bind)
 		if err != nil {
 			fail(err.Error())
 		}
-		if _, err := fmt.Println(strings.Join(memoryDefaultListing(cat, current), "\n")); err != nil {
+		if _, err := fmt.Println(listing); err != nil {
 			fail("memory-default: write listing: " + err.Error())
 		}
 	case *set != "":
-		if err := catalog.BindProject(*bind, *set); err != nil {
+		out, err := hosttools.Default(*bind, *set)
+		if err != nil {
 			fail(err.Error())
 		}
-		fmt.Println("OK " + *set)
+		fmt.Println(out)
 	default:
 		fail("memory-default: choose --list or --set SLUG")
 	}
 }
 
 // registryProject prints the slug, store, root and verdict a prompt needs
-// before its first mark_* call, so no template restates the state table.
+// before its first mark_* call; mark_host project answers the same text.
 func registryProject(args []string) {
 	fs := flag.NewFlagSet("project", flag.ExitOnError)
 	dir := fs.String("dir", "", "the project directory (default: harness project variable)")
@@ -400,43 +393,13 @@ func registryProject(args []string) {
 	if len(fs.Args()) != 0 {
 		fail("project: usage: registry project [--dir DIR]")
 	}
-	r, err := project.Resolve(*dir)
+	out, err := hosttools.Project(*dir)
 	if err != nil {
 		fail("project: " + err.Error())
 	}
-	st := guidance.Probe(r.Store, r.Slug)
-	configured, err := guidance.LocalConfigured()
-	if err != nil {
-		fail("project: " + err.Error())
-	}
-	if _, err := fmt.Printf("slug=%s\nstore=%s\nroot=%s\nverdict=%s\n", r.Slug, r.Store, st.Root, guidance.Verdict(r, st, configured)); err != nil {
+	if _, err := fmt.Println(out); err != nil {
 		fail("project: write output: " + err.Error())
 	}
-}
-
-// memoryDefaultListing renders `memory-default --list`: EMPTY or starred
-// CATALOG rows, plus a trailing STALE line when the binding names a memory the
-// catalog lacks, so callers stop instead of falling back to the local memory.
-func memoryDefaultListing(cat []string, current string) []string {
-	var out []string
-	matched := false
-	if len(cat) == 0 {
-		out = append(out, "EMPTY")
-	} else {
-		out = append(out, "CATALOG")
-		for _, row := range cat {
-			marker := "-"
-			if strings.SplitN(row, "\t", 2)[0] == current {
-				marker = "*"
-				matched = true
-			}
-			out = append(out, row+"\t"+marker)
-		}
-	}
-	if current != "" && !matched {
-		out = append(out, "STALE "+current)
-	}
-	return out
 }
 
 func registryKnowledgeJoin(args []string) {
@@ -486,22 +449,35 @@ func setEnv(env []string, key, value string) []string {
 }
 
 // unsetEnv returns env without any entry for key.
-func unsetEnv(env []string, key string) []string {
+func unsetEnv(env []string, keys ...string) []string {
 	kept := env[:0:0]
 	for _, entry := range env {
-		if !strings.HasPrefix(entry, key+"=") {
+		name, _, _ := strings.Cut(entry, "=")
+		if !slices.Contains(keys, name) {
 			kept = append(kept, entry)
 		}
 	}
 	return kept
 }
 
+// toolProviderEnv names the binary demarkus-mcp loads host tools from; the
+// environment, not a flag, so an older demarkus-mcp still starts.
+const toolProviderEnv = "DEMARKUS_MCP_TOOL_PROVIDER"
+
+// hostToolsEnv set non-empty in the harness's MCP config asks mcp-serve for
+// the host tools without a flag an older plugin binary would reject.
+const hostToolsEnv = "DEMARKUS_HOST_TOOLS"
+
 // mcpServeEnv builds the demarkus-mcp environment. An inherited DEMARKUS_AUTH
-// is always dropped: it belongs to some other server, and exec keeps the first duplicate.
-func mcpServeEnv(base []string, token string) []string {
-	env := unsetEnv(base, "DEMARKUS_AUTH")
+// or provider is always dropped: it belongs to some other server, and exec
+// keeps the first duplicate.
+func mcpServeEnv(base []string, token, provider string) []string {
+	env := unsetEnv(base, "DEMARKUS_AUTH", toolProviderEnv)
 	if token != "" {
 		env = append(env, "DEMARKUS_AUTH="+token)
+	}
+	if provider != "" {
+		env = append(env, toolProviderEnv+"="+provider)
 	}
 	// Plugin prompts are checked against the lean profile. The environment
 	// carries the choice so an older demarkus-mcp still starts.
@@ -509,16 +485,27 @@ func mcpServeEnv(base []string, token string) []string {
 }
 
 // cmdMcpServe launches demarkus-mcp for the local memory or a joined remote one
-// (--memory <slug>), injecting DEMARKUS_AUTH from the shared state.
+// (--memory <slug>), injecting DEMARKUS_AUTH from the shared state; --host-tools
+// (or DEMARKUS_HOST_TOOLS) also loads this binary's host tools into the server.
 func cmdMcpServe(args []string) {
 	fs := flag.NewFlagSet("mcp-serve", flag.ExitOnError)
 	memory := fs.String("memory", "", "joined remote-memory slug (omit for the local managed memory)")
 	name := fs.String("name", "", "MCP server name a branded plugin registers the local memory under; recorded so gates resolve it")
+	hostTools := fs.Bool("host-tools", os.Getenv(hostToolsEnv) != "", "serve mark_host and mark_host_setup beside the store's tools (local managed memory only; default from "+hostToolsEnv+")")
 	_ = fs.Parse(args) // ExitOnError: Parse never returns
 
-	if *name != "" && *memory != "" {
-		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: -name applies to the local managed memory only")
+	if *memory != "" && (*name != "" || *hostTools) {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: -name and -host-tools apply to the local managed memory only")
 		os.Exit(2)
+	}
+	provider := ""
+	if *hostTools {
+		self, err := os.Executable()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: locate this binary for the host tools: "+err.Error())
+			os.Exit(1)
+		}
+		provider = self
 	}
 	mcpBin, err := config.BinPath("demarkus-mcp")
 	if err != nil {
@@ -543,7 +530,7 @@ func cmdMcpServe(args []string) {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: memory '"+id+"' is a broker memory served over HTTP MCP; register it with `claude mcp add --transport http` instead of mcp-serve")
 		os.Exit(1)
 	}
-	env := mcpServeEnv(os.Environ(), ep.Token)
+	env := mcpServeEnv(os.Environ(), ep.Token, provider)
 	argv := []string{mcpBin, "-host", ep.Host}
 	if ep.Insecure {
 		argv = append(argv, "-insecure")
@@ -625,8 +612,9 @@ func cmdProvisionInit(rest []string) {
 	if mode == "" {
 		fail("provision init: requires a mode (default|reuse|isolated)")
 	}
-	if err := provision.Init(mode, port, root); err != nil {
+	out, err := hosttools.Init(mode, port, root)
+	if err != nil {
 		fail(err.Error())
 	}
-	fmt.Println("OK: provisioned (mode=" + mode + ")")
+	fmt.Println(out)
 }

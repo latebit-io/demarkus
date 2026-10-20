@@ -1,0 +1,85 @@
+[
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "demarkus-memory plugin host state, read on the machine running this server (works from a sandboxed shell). action: status (local soul mode, path, port, health, binaries); auth (token check); detect (reusable demarkus-servers); project (dir: slug, store, root, verdict); catalog (dir: memories, default starred); promote (destinations). Answers are the demarkus-plugin CLI text.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "status",
+            "auth",
+            "detect",
+            "project",
+            "catalog",
+            "promote"
+          ],
+          "type": "string"
+        },
+        "dir": {
+          "description": "project directory (project, catalog)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "mark_host"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Change the demarkus-memory plugin's host setup. init: provision the local soul (mode default, isolated, or reuse with port and root). default: bind dir's default memory to slug.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "init",
+            "default"
+          ],
+          "type": "string"
+        },
+        "dir": {
+          "description": "project directory (default)",
+          "type": "string"
+        },
+        "mode": {
+          "description": "init mode",
+          "enum": [
+            "default",
+            "reuse",
+            "isolated"
+          ],
+          "type": "string"
+        },
+        "port": {
+          "description": "reuse: server port",
+          "type": "number"
+        },
+        "root": {
+          "description": "reuse: server root",
+          "type": "string"
+        },
+        "slug": {
+          "description": "memory to bind (default)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "mark_host_setup"
+  }
+]
