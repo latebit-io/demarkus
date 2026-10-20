@@ -87,10 +87,10 @@ func (a *audit) violation(v publishpolicy.Violation, meta map[string]string) (de
 	}
 }
 
-// refuses is why a blocking policy would refuse a write of meta at path, as
-// the store would; "" when it lands.
+// refuses is why the policy would refuse a write of meta at path, as the
+// store would (block and ask both reject); "" when it lands.
 func (a *audit) refuses(p string, meta map[string]string) string {
-	if a.policy.EffectiveStrictness() != publishpolicy.Block {
+	if a.policy.EffectiveStrictness() == publishpolicy.Warn {
 		return ""
 	}
 	var reasons []string
