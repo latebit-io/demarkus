@@ -4,7 +4,7 @@
 # against fake-gcs-server in Docker.
 #
 # usage: bash scripts/smoke.sh [file|file-world|knowledge|all]   (default all)
-# build: make server knowledge-server client tools
+# build: make server knowledge client tools
 set -u
 
 cd "$(dirname "$0")/.." || exit 2
@@ -32,9 +32,9 @@ esac
 WORLD_ID=52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
 POLICY=/.well-known/demarkus/policy.md
 
-for bin in server/bin/demarkus-server server/bin/demarkus-knowledge-server client/bin/demarkus client/bin/demarkus-mcp tools/bin/demarkus-token; do
+for bin in server/bin/demarkus-server knowledge/bin/demarkus-knowledge client/bin/demarkus client/bin/demarkus-mcp tools/bin/demarkus-token; do
   if [ ! -x "$bin" ]; then
-    echo "missing $bin: run make server knowledge-server client tools" >&2
+    echo "missing $bin: run make server knowledge client tools" >&2
     exit 2
   fi
 done
@@ -253,7 +253,7 @@ replica_pair() {
   # Both runs append to one log: run_start scopes each check to its own run.
   start_replica_b() {
     run_start=$( { wc -l <"$WORK/knowledge-b.log"; } 2>/dev/null || echo 0)
-    env STORAGE_EMULATOR_HOST="localhost:$GCS_PORT" server/bin/demarkus-knowledge-server -config "$WORK/knowledge-b.yaml" >>"$WORK/knowledge-b.log" 2>&1 </dev/null &
+    env STORAGE_EMULATOR_HOST="localhost:$GCS_PORT" knowledge/bin/demarkus-knowledge -server-config "$WORK/knowledge-b.yaml" >>"$WORK/knowledge-b.log" 2>&1 </dev/null &
     REPLICA_PID=$!
     retry "replica B at $B" healthy "$B"
   }
@@ -289,6 +289,7 @@ replica_pair() {
 policy() {
   local U=$1
   expect "seeded policy is version 1" 'version=1' -- "${C[@]}" "$U$POLICY"
+  # publishpolicy.SeedAgent: the name outlived the binary.
   expect "seeded policy carries the seed marker" 'agent=demarkus-knowledge-server' -- "${C[@]}" "$U$POLICY"
   expect "replace with a blocking policy" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 1 -meta tags=category:governance -meta type=Policy -body $'# Write Policy\n\nstrictness: block\nrequire_tags: domain\n' "$U$POLICY"
   expect "untagged publish is bad-request" 'bad-request' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -body "# U" "$U/gated/u.md"
@@ -463,7 +464,7 @@ worlds:
 EOF
   start_file_world() {
     start_server "$U" "$WORK/file-world.log" env GOOGLE_APPLICATION_CREDENTIALS="$WORK/no-such-credentials.json" \
-      server/bin/demarkus-knowledge-server -config "$WORK/file-world.yaml"
+      knowledge/bin/demarkus-knowledge -server-config "$WORK/file-world.yaml"
   }
   start_file_world || return 1
   expect "the directory was created and seeded" 'policy.md' -- ls "$WORK/world/.well-known/demarkus"
@@ -528,7 +529,7 @@ EOF
   knowledge_config "$WORK/knowledge-b.yaml" "$KNOWLEDGE_PORT_B" "$HEALTH_PORT_B" "$PEER_PORT_B" "$PEER_PORT"
   start_knowledge() {
     start_server "$U" "$WORK/knowledge.log" env STORAGE_EMULATOR_HOST="localhost:$GCS_PORT" \
-      server/bin/demarkus-knowledge-server -config "$WORK/knowledge.yaml"
+      knowledge/bin/demarkus-knowledge -server-config "$WORK/knowledge.yaml"
   }
   start_knowledge || return 1
   expect "genesis in the empty bucket is logged" 'created a new world' -- cat "$WORK/knowledge.log"

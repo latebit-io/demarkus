@@ -127,11 +127,11 @@ A healthy server returns:
 - Limits file size to 1 MB
 - Keeps a change journal at `<root>/.changes` so WATCH cursors survive a restart; a tree edited while the server was down (for example with `demarkus-publish`) starts a new epoch and watchers resync
 
-## Multi-World Mode (`demarkus-knowledge-server`)
+## Multi-World Mode (`demarkus-knowledge`)
 
-`demarkus-knowledge-server` is the production server: one process hosts many logically isolated worlds on one UDP listener, with TLS SNI selecting the world during the QUIC handshake. Each world is backed by its own GCS bucket, and any number of stateless replicas can share the buckets. A world can instead live in a directory (`dir` in place of `bucket`): the single-process server's layout, one replica, no GCS credentials needed when every world is a directory. Replicas tell each other about commits over a replica-only port (`peers` in the configuration; the chart wires it), so a WATCH on one replica sees a write made through another at once, and replicas writing one world take turns rather than one starving another. Without peers configured, a 5 s poll is the backstop for WATCH, and a replica that keeps losing write races to a busy peer can wait until that peer's queue drains.
+`demarkus-knowledge` is the production server: one process hosts many logically isolated worlds on one UDP listener, with TLS SNI selecting the world during the QUIC handshake. Each world is backed by its own GCS bucket, and any number of stateless replicas can share the buckets. A world can instead live in a directory (`dir` in place of `bucket`): the single-process server's layout, one replica, no GCS credentials needed when every world is a directory. Replicas tell each other about commits over a replica-only port (`peers` in the configuration; the chart wires it), so a WATCH on one replica sees a write made through another at once, and replicas writing one world take turns rather than one starving another. Without peers configured, a 5 s poll is the backstop for WATCH, and a replica that keeps losing write races to a busy peer can wait until that peer's queue drains.
 
-It takes one required flag, `-config`, pointing at a strict YAML file:
+It takes one required flag, `-server-config`, pointing at a strict YAML file; `-broker-config` adds the OIDC broker and the MCP gateways in the same process:
 
 ```yaml
 version: 1
@@ -173,6 +173,35 @@ Operational notes:
 - `policy.file` applies to a writable world only. Configuration refuses it on a read-only world, which is never seeded and must already hold a valid policy in its bucket.
 
 Deploy it with the Helm chart; see [Kubernetes & Helm](../deployment/kubernetes.md) and `deploy/helm/demarkus-knowledge-server/README.md`.
+
+### Running the image
+
+The image `ghcr.io/latebit-io/demarkus-knowledge` has the binary as its entrypoint, so the mode is the arguments you pass. It is distroless and runs as uid 65532.
+
+The full system, worlds plus the broker, is what the chart runs:
+
+```sh
+docker run --rm -p 6309:6309/udp -p 8080:8080 -p 8081:8081 \
+  -v /srv/demarkus/server.yaml:/etc/demarkus/config.yaml:ro \
+  -v /srv/demarkus/broker.yaml:/etc/demarkus/broker/config.yaml:ro \
+  ghcr.io/latebit-io/demarkus-knowledge:<tag> \
+  -server-config /etc/demarkus/config.yaml -broker-config /etc/demarkus/broker/config.yaml
+```
+
+The worlds alone, for capability-token clients without SSO:
+
+```sh
+docker run --rm -p 6309:6309/udp -p 8081:8081 \
+  -v /srv/demarkus/server.yaml:/etc/demarkus/config.yaml:ro \
+  -v /srv/demarkus/worlds:/var/lib/demarkus/worlds \
+  ghcr.io/latebit-io/demarkus-knowledge:<tag> \
+  -server-config /etc/demarkus/config.yaml
+```
+
+- A file world (`dir`) needs its directory mounted and writable by uid 65532; a bucket world needs the GCS credentials the note above describes.
+- Mount `tls.certFile` and `tls.keyFile` for a real certificate, or leave both out and the server self-signs; clients then verify with `-insecure`.
+- Port 8080 is the broker's HTTP listener and is unused in worlds-only mode; 8081 is the health listener unless `health.address: ""`.
+- The operator flows run the same way with their flags; `-deprovision-tenant` is documented in the chart's `README.md`.
 
 ## Next Steps
 

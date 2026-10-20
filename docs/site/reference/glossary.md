@@ -7,7 +7,7 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 ## Engine
 
 - **Mark Protocol**: the wire protocol. Versioned markdown documents over QUIC, addressed as `mark://<world>/<path>`. Specified in [SPEC.md](../../SPEC.md).
-- **world**: one server's versioned document store, the unit of storage and of addressing. A world has a name, a set of documents, a hash chain per document, and its own tokens and policy. `demarkus-server` hosts one world; `demarkus-knowledge-server` hosts many in one process.
+- **world**: one server's versioned document store, the unit of storage and of addressing. A world has a name, a set of documents, a hash chain per document, and its own tokens and policy. `demarkus-server` hosts one world; `demarkus-knowledge` hosts many in one process.
 - **document**: one markdown file in a world, with a full version history. Metadata (title, tags, importance, type, typed relations) travels out of band, not in the body.
 - **hub**: a document, conventionally `index.md`, whose links are the entry point to a world or to a set of worlds. Hubs can link to hubs.
 - **server**: a process that serves one or more worlds over the Mark Protocol. Servers are storage engines: they hold documents and hand them back; they do not search, rank, or route.
@@ -25,7 +25,7 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 ## Knowledge
 
 - **knowledge system**: an organization's shared, versioned knowledge base: many worlds composed behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same catalog. Replaces the older term *universe*.
-- **knowledge server**: the worlds half of `demarkus-knowledge`: many isolated worlds in one process, selected by TLS SNI, each backed by its own object-storage bucket. `demarkus-knowledge-server` is the same runtime without the broker.
+- **knowledge server**: the worlds half of `demarkus-knowledge`: many isolated worlds in one process, selected by TLS SNI, each backed by its own object-storage bucket. Given no broker config, `demarkus-knowledge` serves the worlds alone.
 - **knowledge broker**: the broker half of `demarkus-knowledge`: OIDC login and the MCP gateway that composes worlds into a knowledge system and answers system-wide catalog lookups, in the same process as the worlds.
 - **knowledge plugin**: the per-host adapter that joins a knowledge system with one command and adds knowledge-first guidance and its slash commands.
 - **root**: the conventional system namespace of a brokered knowledge system. `mark://root/.well-known/demarkus/` holds the write policy, the per-world template, and the style guide.

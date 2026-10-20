@@ -12,7 +12,7 @@ Every link between documents feeds a persistent **knowledge graph**. Agents quer
 
 Underneath sits the **Mark Protocol**: versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Capability tokens gate writes, every change is kept, and one static binary runs anywhere.
 
-Architecturally, the servers are **memory storage engines**: deliberately simple, versioned, hash-chained document stores, `demarkus-server` for one store and `demarkus-knowledge-server` for many worlds. The access tier turns an engine into a service: `demarkus-knowledge` runs the multi-world server together with an OIDC-fronted MCP gateway in two profiles. The **memory** profile gives each identity a private memory world over MCP with OAuth (memory as a service for Claude Desktop, ChatGPT, Cursor), and the **knowledge** profile composes many worlds into one organizational knowledge system. Judgment stays with the agent (what to record, recall and link); mechanics such as journaling, hub upkeep and hygiene checks run in the tools.
+Architecturally, the servers are **memory storage engines**: deliberately simple, versioned, hash-chained document stores, one runtime behind two binaries, `demarkus-server` for one store and the worlds half of `demarkus-knowledge` for many. The access tier turns an engine into a service: given a broker config, `demarkus-knowledge` adds an OIDC-fronted MCP gateway in two profiles. The **memory** profile gives each identity a private memory world over MCP with OAuth (memory as a service for Claude Desktop, ChatGPT, Cursor), and the **knowledge** profile composes many worlds into one organizational knowledge system. Judgment stays with the agent (what to record, recall and link); mechanics such as journaling, hub upkeep and hygiene checks run in the tools.
 
 ## Install
 
@@ -122,8 +122,7 @@ For more examples (tokens, publishing, editing), see [full usage guide](https://
 | `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
 | `demarkus-mcp` | MCP server for LLM agents: the protocol verbs as tools, plus graph crawling, backlinks, doctor, curate and promote |
 | `demarkus-plugin` | Shared core of the agent plugins: session start, hooks, the managed local server, the store registry; installed by the plugins |
-| `demarkus-knowledge` | Production knowledge system in one process: many worlds (SNI-routed, GCS-backed) plus the OIDC-fronted MCP gateways for the knowledge profile (system-wide `mark_lookup_all`) and the memory profile (one private world per identity, dynamic tenant provisioning) |
-| `demarkus-knowledge-server` | The multi-world server alone, for capability-token clients without SSO |
+| `demarkus-knowledge` | Production knowledge system in one process: many worlds (SNI-routed, on GCS buckets or directories) plus the OIDC-fronted MCP gateways for the knowledge profile (system-wide `mark_lookup_all`) and the memory profile (one private world per identity, dynamic tenant provisioning); with no broker config it serves the worlds alone, for capability-token clients without SSO |
 
 ## Protocol at a Glance
 
@@ -194,7 +193,6 @@ See [www.demarkus.io/ecosystem](https://www.demarkus.io/ecosystem/) for the full
 git clone https://github.com/latebit-io/demarkus.git
 cd demarkus
 make all   # protocol, server, client, tools, knowledge (demarkus-knowledge)
-make knowledge-server   # demarkus-knowledge-server
 ```
 
 Requires Go 1.26+. Binaries land in `server/bin/`, `client/bin/`, `tools/bin/`, and `knowledge/bin/`.

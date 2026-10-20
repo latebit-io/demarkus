@@ -46,7 +46,6 @@ client/demarkus
 client/demarkus-tui
 client/demarkus-mcp
 server/demarkus-server
-server/demarkus-knowledge-server
 tools/demarkus-token/demarkus-token
 tools/demarkus-publish/demarkus-publish
 knowledge/cmd/demarkus-knowledge/demarkus-knowledge

@@ -225,7 +225,6 @@ jobs:
             exit 1
           fi
           go build -o /tmp/demarkus-server ./cmd/demarkus-server
-          go build -o /tmp/demarkus-knowledge-server ./cmd/demarkus-knowledge-server
 
   # Lint and the release-target builds run beside the server tests, not
   # after them: in one job they added four minutes to every server PR.
@@ -273,7 +272,6 @@ jobs:
             rest="${target#*/}"
             case "$rest" in */*) export GOARCH="${rest%%/*}" GOARM="${rest#*/}" ;; *) export GOARCH="$rest" ;; esac
             CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-server
-            CGO_ENABLED=0 go build -o /dev/null ./cmd/demarkus-knowledge-server
             echo "ok $GOOS/$GOARCH${GOARM:+v$GOARM}"
           done
   test-client:
