@@ -1,7 +1,8 @@
 // demarkus-knowledge is the knowledge server and the broker in one process:
 // the worlds it serves are dispatched to the MCP gateways in process, every
 // other configured world over QUIC. The server config describes the world
-// runtimes, the broker config the gateways, identity and tenancy.
+// runtimes, the broker config the gateways, identity and tenancy. With no
+// broker config it serves the worlds alone, for clients that bring a token.
 package main
 
 import (
@@ -41,13 +42,13 @@ func run(arguments []string) error {
 		fmt.Println(version)
 		return nil
 	}
-	if *brokerConfig == "" {
-		return errors.New("-broker-config is required")
-	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
 
 	if *deprovision != "" {
+		if *brokerConfig == "" {
+			return errors.New("-deprovision-tenant requires -broker-config")
+		}
 		return runDeprovision(broker.DeprovisionOptions{
 			ConfigPath: *brokerConfig, KubeconfigPath: *kubeconfig,
 			Slug: *deprovision, DeleteBucket: *deleteBucket, Log: log,
@@ -77,12 +78,19 @@ func runDeprovision(opts broker.DeprovisionOptions) error {
 }
 
 func serve(serverConfig, brokerConfig, kubeconfig string, log *slog.Logger) error {
-	opts := broker.Options(version, kubeconfig)
 	server, err := knowledgeserver.Open(knowledgeserver.Options{ConfigFile: serverConfig, Logger: log, Stores: bucketworlds.GCS()})
 	if err != nil {
 		return err
 	}
 	defer server.Close()
+	if brokerConfig == "" {
+		// No broker config: the worlds alone, for capability-token clients.
+		log.Info("serving worlds alone, no broker")
+		ctx, stop := server.WatchSignals(context.Background())
+		defer stop()
+		return server.Serve(ctx)
+	}
+	opts := broker.Options(version, kubeconfig)
 	opts.LocalWorlds = server
 	b, err := broker.Open(brokerConfig, opts, log)
 	if err != nil {

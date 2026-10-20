@@ -41,8 +41,6 @@ This produces the following binaries:
 | `demarkus-knowledge` | `knowledge/bin/demarkus-knowledge` | The knowledge system: multi-world server, OIDC broker and both MCP gateways in one process |
 | `demarkus-publish` | `tools/bin/demarkus-publish` | Local publish (bypasses server) |
 
-`make knowledge-server` builds the multi-world GCS server (`server/bin/demarkus-knowledge-server`); it is not part of `make all`.
-
 Standalone load tests and retrieval benchmarks live on the `benchmarks` branch.
 
 > Build note: each module builds separately; use `make server` / `make client` / `make tools`, or from inside a module `cd server && go build -o bin/<name> ./cmd/<name>/` (same shape for `client/` and `tools/`).

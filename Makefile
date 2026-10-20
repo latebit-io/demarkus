@@ -1,4 +1,4 @@
-.PHONY: all protocol server knowledge-server client tools knowledge image image-server image-knowledge test clean install help lint fmt vet vuln fuzz smoke deps
+.PHONY: all protocol server client tools knowledge image image-server image-knowledge test clean install help lint fmt vet vuln fuzz smoke deps
 
 VERSION ?= $(shell (git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev) | tr -cd 'a-zA-Z0-9._-')
 
@@ -14,10 +14,9 @@ help:
 	@echo "  all       - Build protocol, server, client, tools, and knowledge"
 	@echo "  protocol  - Build protocol library"
 	@echo "  server    - Build demarkus-server (no external database deps)"
-	@echo "  knowledge-server - Build demarkus-knowledge-server (multi-world GCS backend)"
 	@echo "  client    - Build demarkus TUI client"
 	@echo "  tools     - Build token, publish (tools/bin/)"
-	@echo "  knowledge - Build demarkus-knowledge, the knowledge server and broker in one process (knowledge/bin/)"
+	@echo "  knowledge - Build demarkus-knowledge, the worlds and the broker in one process (knowledge/bin/)"
 	@echo "  image     - Build runtime container images (TAG overridable)"
 	@echo "  image-knowledge - Build the demarkus-knowledge image"
 	@echo "  test      - Run all tests"
@@ -43,11 +42,6 @@ server: protocol
 	@echo "Building demarkus-server..."
 	cd server && go build -o bin/demarkus-server ./cmd/demarkus-server
 	@echo "✓ Server built: server/bin/demarkus-server"
-
-knowledge-server: protocol
-	@echo "Building knowledge server..."
-	cd server && go build -ldflags "-X main.version=$(VERSION)" -o bin/demarkus-knowledge-server ./cmd/demarkus-knowledge-server
-	@echo "✓ Built: server/bin/demarkus-knowledge-server"
 
 # Build client
 client: protocol
@@ -187,7 +181,7 @@ fuzz:
 	@cd client && go test -run '^$$' -fuzz '^FuzzParseBytes$$' -fuzztime $(FUZZTIME) ./token
 
 # Built binaries over real QUIC; the knowledge half needs Docker.
-smoke: server knowledge-server client tools
+smoke: server knowledge client tools
 	@bash scripts/smoke.sh
 
 # Update dependencies

@@ -24,32 +24,11 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
 
-  - id: demarkus-knowledge-server
-    main: ./cmd/demarkus-knowledge-server
-    binary: demarkus-knowledge-server
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-      - arm
-    goarm:
-      - "7"
-    ldflags:
-      - -s -w -X main.version={{ .Version }}
-
 archives:
   - id: demarkus-server
     ids:
       - demarkus-server
     name_template: "demarkus-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-  - id: demarkus-knowledge-server
-    ids:
-      - demarkus-knowledge-server
-    name_template: "demarkus-knowledge-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: "demarkus-server_checksums.txt"

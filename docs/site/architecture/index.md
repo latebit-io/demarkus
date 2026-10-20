@@ -7,7 +7,7 @@ This page describes the Demarkus system architecture, key design decisions, and 
 Demarkus is a markdown‑native document protocol built on QUIC. The repository is organized as six modules:
 
 - **`protocol/`**: wire format and parsing/serialization only
-- **`server/`**: QUIC servers: `demarkus-server` (filesystem), `demarkus-knowledge-server` (multi-world, GCS)
+- **`server/`**: the store and the multi-world runtime; `demarkus-server`, the runtime's local profile over the filesystem
 - **`client/`**: CLI, TUI, and MCP server
 - **`tools/`**: the OIDC broker/MCP gateway, token tooling, direct-to-store publish, load testing
 - **`plugins/`**: agent plugins for Claude Code, OpenCode, and pi
@@ -39,7 +39,7 @@ The server:
 Core server pieces:
 
 - **Handler**: request parsing, verb routing, response formatting
-- **Store**: versioned document storage with hash‑chain integrity; backends are the filesystem (`demarkus-server`) and GCS (`demarkus-knowledge-server`)
+- **Store**: versioned document storage with hash‑chain integrity; backends are the filesystem (every soul, and a knowledge world on a directory) and GCS (knowledge worlds on buckets)
 - **Auth**: capability‑based token verification (hashes only)
 - **TLS**: dev cert generation, prod cert loading, SIGHUP reload
 
@@ -173,7 +173,7 @@ Agents (MCP over HTTPS, OIDC)
 
 ### Multi-world knowledge server
 
-At production scale, one `demarkus-knowledge-server` deployment replaces per-world server processes: TLS SNI selects the world during the QUIC handshake, each world has its own GCS bucket with an immutable world ID, and 2 or more stateless replicas share the buckets with no leader election (replicas race to create the next slot of a per-world commit log). See [Kubernetes & Helm](../deployment/kubernetes.md).
+At production scale, one `demarkus-knowledge` deployment replaces per-world server processes: TLS SNI selects the world during the QUIC handshake, each world has its own GCS bucket with an immutable world ID, and 2 or more stateless replicas share the buckets with no leader election (replicas race to create the next slot of a per-world commit log). See [Kubernetes & Helm](../deployment/kubernetes.md).
 
 ## Request Flow
 

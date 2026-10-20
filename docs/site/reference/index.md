@@ -34,7 +34,7 @@ Notes:
 
 ### Knowledge server configuration
 
-`demarkus-knowledge-server` reads no environment variables: all configuration is a strict YAML file passed with `-config`, and GCS credentials come from Application Default Credentials (Workload Identity on GKE). Unknown keys are rejected, and durations must be quoted strings.
+`demarkus-knowledge` reads no environment variables: all configuration is a strict YAML file passed with `-server-config`, and GCS credentials come from Application Default Credentials (Workload Identity on GKE). Unknown keys are rejected, and durations must be quoted strings.
 
 ```yaml
 version: 1                      # required, only supported value

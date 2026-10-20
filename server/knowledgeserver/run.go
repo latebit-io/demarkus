@@ -3,7 +3,6 @@ package knowledgeserver
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -78,34 +77,6 @@ func (l quicListener) serve() error {
 		return fmt.Errorf("%s stopped: %w", l.name, err)
 	}
 	return nil
-}
-
-// Run is the knowledge server main: flags, Open, signals and Serve. Blocks
-// until shutdown completes. version is the binary's build version; base
-// carries what the binary wires, its store factory above all.
-func Run(arguments []string, version string, base Options) error {
-	flags := flag.NewFlagSet("demarkus-knowledge-server", flag.ContinueOnError)
-	configFile := flags.String("config", "", "path to strict multi-world YAML configuration")
-	showVersion := flags.Bool("version", false, "print version and exit")
-	if err := flags.Parse(arguments); err != nil {
-		return err
-	}
-	if *showVersion {
-		fmt.Println(version)
-		return nil
-	}
-	if *configFile == "" {
-		return errors.New("-config is required")
-	}
-	base.ConfigFile = *configFile
-	server, err := Open(base)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	ctx, stop := server.WatchSignals(context.Background())
-	defer stop()
-	return server.Serve(ctx)
 }
 
 // WatchSignals returns a context that ends on a shutdown signal, and
