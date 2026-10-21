@@ -128,7 +128,7 @@ func TestParsesBrokerRenderedFragment(t *testing.T) {
 	}
 	// Every field the broker writes must arrive; a dropped one parses cleanly.
 	w := &worlds[0]
-	if !w.Bootstrap || w.Limits.MaxDocuments != 500 || len(w.Authorities) != 1 {
+	if !w.Bootstrap || !w.Gated || w.Limits.MaxDocuments != 500 || len(w.Authorities) != 1 {
 		t.Fatalf("parsed fragment world = %+v", w)
 	}
 	// A tenant names no tokens file: the identity grant is its write path.

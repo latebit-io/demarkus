@@ -75,9 +75,15 @@ func policyWarning(result publishpolicy.Result, policy publishpolicy.Policy) str
 	return "publish policy (warn): " + strings.Join(violationLines(result, policy), ", ")
 }
 
+// documentGetter is the one read Current needs; a view, a reader lent under
+// a commit and a lock-free CurrentReader all provide it.
+type documentGetter interface {
+	Get(ctx context.Context, reqPath string, version int) (*storefmt.Document, error)
+}
+
 // Current loads and validates the policy document from reader. With require
 // false a world without one has the empty policy.
-func Current(ctx context.Context, reader backend.Reader, require bool) (publishpolicy.Policy, error) {
+func Current(ctx context.Context, reader documentGetter, require bool) (publishpolicy.Policy, error) {
 	document, err := reader.Get(ctx, publishpolicy.DocumentPath, 0)
 	switch {
 	case errors.Is(err, backend.ErrNotFound):

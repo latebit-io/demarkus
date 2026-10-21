@@ -26,6 +26,8 @@ type fakeLocal struct {
 	watches chan protocol.Request
 	t       *testing.T // reports the watch's pipe errors
 	floor   string
+	// gated holds the authorities served behind a gate only.
+	gated map[string]struct{}
 }
 
 func (f *fakeLocal) Watch(_ context.Context, authority string, req protocol.Request) (net.Conn, error) {
@@ -55,6 +57,11 @@ func (f *fakeLocal) FloorWorld() string { return f.floor }
 
 func (f *fakeLocal) Routes(authority string) bool {
 	_, ok := f.served[authority]
+	return ok
+}
+
+func (f *fakeLocal) Gated(authority string) bool {
+	_, ok := f.gated[authority]
 	return ok
 }
 
@@ -224,6 +231,19 @@ func TestCheckLocalRequiresTheServerToRouteEveryLocalWorld(t *testing.T) {
 	}
 	if got := FloorOf(nil); got != "" {
 		t.Fatalf("FloorOf(nil) = %q", got)
+	}
+	// A local memory world the capability listener would serve is a start
+	// error: its reads must stay behind the bearer gate.
+	memory := brokertest.NewMemoryConfig()
+	memory.Worlds[0].Local = true
+	authority := memory.Worlds[0].Authority()
+	open := &fakeLocal{served: map[string]protocol.Response{authority: {}}}
+	if err := CheckLocal(memory.Registry(), open); err == nil || !strings.Contains(err.Error(), "gated: true") {
+		t.Fatalf("ungated memory world err = %v, want the gate required", err)
+	}
+	open.gated = map[string]struct{}{authority: {}}
+	if err := CheckLocal(memory.Registry(), open); err != nil {
+		t.Fatalf("gated memory world: %v", err)
 	}
 	if err := CheckLocal(brokertest.NewConfig().Registry(), nil); err != nil {
 		t.Fatalf("remote only worlds need no server: %v", err)

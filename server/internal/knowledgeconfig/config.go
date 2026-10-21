@@ -175,6 +175,10 @@ type WorldConfig struct {
 	Policy   PolicyConfig `yaml:"policy"`
 	ReadOnly bool         `yaml:"readOnly"`
 	Limits   LimitsConfig `yaml:"limits"`
+	// Gated serves the world only through a gated listener or in process:
+	// a private memory world, whose reads are the owner's, never the
+	// capability listener's anonymous ones.
+	Gated bool `yaml:"gated"`
 	// Bootstrap marks a broker provisioned world. Deprecated: the open ignores
 	// it, since every writable world gets genesis and a seeded policy. It only
 	// forbids policy.file, because that world's broker owns its policy.
@@ -289,6 +293,7 @@ type rawWorldConfig struct {
 	Policy      rawPolicyConfig `yaml:"policy"`
 	ReadOnly    bool            `yaml:"readOnly"`
 	Limits      rawLimitsConfig `yaml:"limits"`
+	Gated       bool            `yaml:"gated"`
 	Bootstrap   bool            `yaml:"bootstrap"`
 }
 
@@ -484,6 +489,7 @@ func worldFromRaw(world *rawWorldConfig) WorldConfig {
 			MaxWatches:            valueOr(world.Limits.MaxWatches, 0),
 			MaxDocuments:          valueOr(world.Limits.MaxDocuments, 0),
 		},
+		Gated:     world.Gated,
 		Bootstrap: world.Bootstrap,
 	}
 }

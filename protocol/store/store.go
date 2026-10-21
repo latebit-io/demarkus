@@ -391,6 +391,42 @@ func (s *Store) Indexed(reqPath string) bool {
 	return ok
 }
 
+// ErrPathAlias is a write whose path reaches an existing document under
+// another spelling.
+var ErrPathAlias = errors.New("path reaches an existing document under another spelling")
+
+// aliased reports a path the index lacks although the disk answers it: a
+// case-folding filesystem serving another document's files, which the
+// permission check never saw. False until the index is built.
+func (s *Store) aliased(reqPath string) bool {
+	s.indexMu.RLock()
+	defer s.indexMu.RUnlock()
+	if !s.indexed {
+		return false
+	}
+	_, ok := s.pathIdx[storefmt.CanonicalPath(reqPath)]
+	return !ok
+}
+
+// liveAlias is aliased for a path whose current file is a live document:
+// archived documents leave the index without being aliases, and a flat
+// file is no document. A failed look reads as no alias.
+func (s *Store) liveAlias(reqPath, current string) bool {
+	if !s.aliased(reqPath) {
+		return false
+	}
+	fi, err := os.Lstat(current)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	absRoot, err := s.resolvedRoot()
+	if err != nil {
+		return false
+	}
+	archived, err := entryArchived(current, absRoot)
+	return err == nil && !archived
+}
+
 // digestLen is the fingerprint width: change detection, not a security bound.
 const digestLen = 16
 
@@ -492,6 +528,9 @@ func (s *Store) Get(reqPath string, version int) (*storefmt.Document, error) {
 	archived, err := effectiveArchived(filepath.Dir(filePath), data)
 	if err != nil {
 		return nil, err
+	}
+	if !archived && s.aliased(reqPath) {
+		return nil, os.ErrNotExist
 	}
 
 	ver, err := s.CurrentVersionResult(reqPath)
@@ -1015,6 +1054,9 @@ func (s *Store) getVersion(reqPath string, version int) (*storefmt.Document, err
 	if err != nil {
 		return nil, err
 	}
+	if s.liveAlias(reqPath, loc.current) {
+		return nil, os.ErrNotExist
+	}
 	filePath, err := s.resolve(loc.versionReqPath(version))
 	if err != nil {
 		return nil, err
@@ -1360,6 +1402,9 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 		// dangling version file behind.
 		return nil, fmt.Errorf("cannot publish %s: a directory exists at this path: %w", reqPath, storefmt.ErrPathCollision)
 	} else {
+		if s.liveAlias(reqPath, currentFile) {
+			return nil, ErrPathAlias
+		}
 		// containWrite already held the versions tree inside the root.
 		next = highestPerDocVersion(versionsDir, base) + 1
 	}

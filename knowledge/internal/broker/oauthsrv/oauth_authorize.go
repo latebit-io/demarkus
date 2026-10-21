@@ -32,6 +32,11 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeAuthorizeJSONError(w, "invalid_request", "redirect_uri required")
 		return
 	}
+	// Who the user approves: an RFC 7591 client with a remote redirect is
+	// whoever registered it. A web client is the operator's; loopback and
+	// an allowlisted native scheme land on the user's own machine.
+	var consent bool
+	clientName := clientID
 	if webClient, ok := s.cfg.WebClient(clientID); ok {
 		// Registered confidential web client: the redirect target is
 		// the operator-curated exact-match allowlist, not loopback.
@@ -54,6 +59,10 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		if !ok || !record.allowsRedirect(redirectURI) {
 			writeAuthorizeJSONError(w, "invalid_request", "redirect_uri is not registered for this client; register it via the RFC 7591 registration_endpoint or use a loopback redirect")
 			return
+		}
+		consent = !isNativeRedirectURI(redirectURI)
+		if name := strings.TrimSpace(record.ClientName); name != "" {
+			clientName = name
 		}
 	}
 
@@ -100,6 +109,8 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		CodeChallenge:       codeChallenge,
 		CodeChallengeMethod: codeChallengeMethod,
 		Resource:            resource,
+		Consent:             consent,
+		ClientName:          clientName,
 	})
 	if errors.Is(err, errStateTooLarge) {
 		reply.fail("invalid_request", "authorization request too large")
@@ -124,15 +135,18 @@ var errStateTooLarge = errors.New("signed state exceeds the cookie budget")
 // setAuthCodeStateCookie signs the authorize request into the callback
 // cookie and returns its nonce, the state parameter sent to the IdP.
 func (s *Server) setAuthCodeStateCookie(w http.ResponseWriter, req *AuthCodeRequest) (string, error) {
+	return s.setStateCookie(w, stateCookieName, "/auth/callback", State{AuthCode: req})
+}
+
+// setStateCookie fills state's nonce and expiry, signs it into the cookie
+// name scoped to path, and returns the nonce. errStateTooLarge is a state
+// the cookie budget cannot carry.
+func (s *Server) setStateCookie(w http.ResponseWriter, name, path string, state State) (string, error) {
 	nonce, err := NewNonce()
 	if err != nil {
 		return "", fmt.Errorf("nonce: %w", err)
 	}
-	state := State{
-		Nonce:     nonce,
-		AuthCode:  req,
-		ExpiresAt: s.clock().Add(s.cfg.Server.StateTTL),
-	}
+	state.Nonce, state.ExpiresAt = nonce, s.clock().Add(s.cfg.Server.StateTTL)
 	signed, err := s.signer.Sign(state)
 	if err != nil {
 		return "", fmt.Errorf("sign state: %w", err)
@@ -141,9 +155,9 @@ func (s *Server) setAuthCodeStateCookie(w http.ResponseWriter, req *AuthCodeRequ
 		return "", errStateTooLarge
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     stateCookieName,
+		Name:     name,
 		Value:    signed,
-		Path:     "/auth/callback",
+		Path:     path,
 		HttpOnly: true,
 		Secure:   !s.cfg.Server.InsecureCookies,
 		SameSite: http.SameSiteLaxMode,
@@ -151,6 +165,20 @@ func (s *Server) setAuthCodeStateCookie(w http.ResponseWriter, req *AuthCodeRequ
 		MaxAge:   int(s.cfg.Server.StateTTL.Seconds()),
 	})
 	return nonce, nil
+}
+
+// clearCookie zeroes the cookie name at path, so a spent state or consent
+// cannot replay.
+func (s *Server) clearCookie(w http.ResponseWriter, name, path string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     name,
+		Value:    "",
+		Path:     path,
+		HttpOnly: true,
+		Secure:   !s.cfg.Server.InsecureCookies,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
 }
 
 // authCodeCallback resumes the request the signed state carried: exchange
@@ -190,6 +218,12 @@ func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, pendin
 		return
 	}
 
+	if pending.Consent {
+		// Anyone can register a client and send this link; the user, not
+		// the registration, approves where their credentials go.
+		s.askConsent(w, r, pending, &exchange.Claims)
+		return
+	}
 	authCode, err := s.authCodeStore.Issue(r.Context(), pending, &exchange.Claims)
 	if err != nil {
 		s.log.WarnContext(r.Context(), "broker: auth code bind failed",

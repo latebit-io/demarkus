@@ -134,9 +134,12 @@ func Ensure(memoryDir string, port int) error {
 	}
 	defer func() { _ = lf.Close() }()
 
+	// Loopback only: the soul's reads carry no token, so every interface
+	// would hand it to the LAN.
 	cmd := exec.Command(serverBin,
 		"-root", memoryDir,
 		"-port", strconv.Itoa(port),
+		"-listen", "127.0.0.1",
 		"-tokens", tokensPath,
 	)
 	cmd.Stdout = lf

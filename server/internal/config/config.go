@@ -14,7 +14,10 @@ import (
 
 // Config holds the server configuration.
 type Config struct {
-	Port           int
+	Port int
+	// ListenHost is the interface the UDP port binds; empty is every one.
+	// A managed soul binds loopback: its reads carry no token.
+	ListenHost     string
 	ContentDir     string
 	MaxStreams     int
 	MaxWatches     int           // Open WATCH streams per server (0 = runtime default)
@@ -39,6 +42,7 @@ func NewConfig() (*Config, error) {
 	var errs []error
 
 	config.Port = getEnvAsInt("DEMARKUS_PORT", protocol.DefaultPort, &errs)
+	config.ListenHost = getEnv("DEMARKUS_LISTEN", "")
 	config.ContentDir = getEnv("DEMARKUS_ROOT", "")
 	config.MaxStreams = getEnvAsInt("DEMARKUS_MAX_STREAMS", 10, &errs)
 	config.MaxWatches = getEnvAsInt("DEMARKUS_MAX_WATCHES", 0, &errs)

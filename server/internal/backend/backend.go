@@ -132,3 +132,10 @@ type ReadView interface {
 type ViewProvider interface {
 	OpenReadView(ctx context.Context) (ReadView, error)
 }
+
+// CurrentReader reads one current document outside any view, taking no
+// store lock: what a commit may read from another store while holding
+// its own lock, so two worlds' commits never wait on each other.
+type CurrentReader interface {
+	ReadCurrent(ctx context.Context, path string) (*storefmt.Document, error)
+}

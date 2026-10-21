@@ -8,7 +8,9 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
+	"strconv"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/internal/config"
@@ -25,7 +27,7 @@ func open(cfg *config.Config, logger *slog.Logger) (*knowledgeserver.Server, err
 	profile := knowledgeconfig.LocalProfile(&knowledgeconfig.LocalOptions{
 		Dir:               cfg.ContentDir,
 		TokensFile:        cfg.TokensFile,
-		ListenAddress:     fmt.Sprintf(":%d", cfg.Port),
+		ListenAddress:     net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.Port)),
 		MaxStreams:        int64(cfg.MaxStreams),
 		IdleTimeout:       knowledgeconfig.Duration(cfg.IdleTimeout),
 		CertFile:          cfg.TLSCert,
@@ -52,6 +54,7 @@ func run() error {
 	// Flags default to the env-derived values, so a flag given wins.
 	flag.StringVar(&cfg.ContentDir, "root", cfg.ContentDir, "content directory to serve (overrides DEMARKUS_ROOT)")
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "port to listen on (overrides DEMARKUS_PORT)")
+	flag.StringVar(&cfg.ListenHost, "listen", cfg.ListenHost, "interface to bind, e.g. 127.0.0.1; empty binds every one (overrides DEMARKUS_LISTEN)")
 	flag.StringVar(&cfg.TLSCert, "tls-cert", cfg.TLSCert, "path to TLS certificate PEM file (overrides DEMARKUS_TLS_CERT)")
 	flag.StringVar(&cfg.TLSKey, "tls-key", cfg.TLSKey, "path to TLS private key PEM file (overrides DEMARKUS_TLS_KEY)")
 	flag.StringVar(&cfg.TokensFile, "tokens", cfg.TokensFile, "path to TOML tokens file for auth (overrides DEMARKUS_TOKENS)")

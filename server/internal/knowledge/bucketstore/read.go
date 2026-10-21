@@ -91,6 +91,21 @@ func viewRead[T any](ctx context.Context, view *snapshotView, class readClass, f
 	return fn(callCtx, &readView{objects: view.objects, snapshot: pinned, deps: view.deps})
 }
 
+// ReadCurrent is one current document off a fresh view; views pin a
+// snapshot, so no lock is held for it.
+func (store *Store) ReadCurrent(ctx context.Context, reqPath string) (document *storefmt.Document, err error) {
+	view, err := store.OpenReadView(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := view.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+	return view.Get(ctx, reqPath, 0)
+}
+
 func (view *snapshotView) Get(ctx context.Context, reqPath string, version int) (*storefmt.Document, error) {
 	return viewRead(ctx, view, exactRead, func(ctx context.Context, r *readView) (*storefmt.Document, error) {
 		return r.Get(ctx, reqPath, version)

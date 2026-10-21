@@ -184,6 +184,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// per RFC 6749 §3.1. See oauth_authorize.go for the probe rationale.
 	mux.Handle("GET /oauth/authorize", s.ipRateLimit(http.HandlerFunc(s.oauthAuthorize)))
 	mux.Handle("POST /oauth/authorize", s.ipRateLimit(limitForm(http.HandlerFunc(s.oauthAuthorize))))
+	mux.Handle("POST "+consentPath, s.ipRateLimit(limitForm(http.HandlerFunc(s.oauthConsent))))
 	// RFC 7009 token revocation. Unauthenticated (possession of
 	// the token IS the authz signal) under the IP limiter for
 	// defense-in-depth. Operates on refresh tokens only.
@@ -248,13 +249,7 @@ func bindResource(claims *core.Claims, requested string) (core.Claims, error) {
 }
 
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
-	nonce, err := NewNonce()
-	if err != nil {
-		s.log.ErrorContext(r.Context(), "broker: nonce", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	state := State{Nonce: nonce, ExpiresAt: s.clock().Add(s.cfg.Server.StateTTL)}
+	var state State
 	// The device cookie's grant key moves into the signed state, so the
 	// callback dispatches on a tamper-evident value; the cookie is cleared.
 	if cookie, cerr := r.Cookie(deviceCookieName); cerr == nil && cookie.Value != "" {
@@ -269,22 +264,12 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		s.clearDeviceCookie(w)
 	}
-	signed, err := s.signer.Sign(state)
+	nonce, err := s.setStateCookie(w, stateCookieName, "/auth/callback", state)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: sign state", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     stateCookieName,
-		Value:    signed,
-		Path:     "/auth/callback",
-		HttpOnly: true,
-		Secure:   !s.cfg.Server.InsecureCookies,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  state.ExpiresAt,
-		MaxAge:   int(s.cfg.Server.StateTTL.Seconds()),
-	})
 	http.Redirect(w, r, s.verifier.AuthCodeURL(nonce), http.StatusFound)
 }
 
@@ -313,15 +298,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// State cookie has done its job — clear it before any branch so
 	// even error paths can't replay the nonce.
-	http.SetCookie(w, &http.Cookie{
-		Name:     stateCookieName,
-		Value:    "",
-		Path:     "/auth/callback",
-		HttpOnly: true,
-		Secure:   !s.cfg.Server.InsecureCookies,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
+	s.clearCookie(w, stateCookieName, "/auth/callback")
 
 	// Device dispatch rides the signed State minted at the latest
 	// /auth/login, so a stale device cookie cannot route a later login.

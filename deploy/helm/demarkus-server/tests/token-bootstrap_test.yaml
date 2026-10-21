@@ -99,10 +99,10 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'paths = \["/\*\*"\]'
+          pattern: "paths = \\[%s\\].*'\"/\\*\\*\"'"
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'operations = \["publish"\]'
+          pattern: "operations = \\[%s\\].*'\"publish\"'"
 
   - it: passes emitRawValues through to the Job
     documentSelector:

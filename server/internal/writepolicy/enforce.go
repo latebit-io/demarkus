@@ -74,6 +74,13 @@ func (e *enforcer) Append(ctx context.Context, req backend.WriteRequest) (*store
 	return e.Store.Append(ctx, req)
 }
 
+// currentReader adapts a lock-free current read to the one Get Current asks.
+type currentReader struct{ store backend.CurrentReader }
+
+func (r currentReader) Get(ctx context.Context, path string, _ int) (*storefmt.Document, error) {
+	return r.store.ReadCurrent(ctx, path)
+}
+
 // SetArchived refuses to archive a required policy: the world would then
 // refuse every write. The guard runs inside the commit, after the caller's own.
 func (e *enforcer) SetArchived(ctx context.Context, req backend.ArchiveRequest) (backend.ArchiveResult, error) {
@@ -102,6 +109,12 @@ func inspect(ctx context.Context, store backend.Store) error {
 
 // Read is Current through one view of store.
 func Read(ctx context.Context, store backend.Store, require bool) (policy publishpolicy.Policy, err error) {
+	// A store that reads without a view lock is read that way: this runs
+	// inside another world's commit, and a view's read lock against that
+	// world's own commit would be the second half of a deadlock.
+	if current, ok := store.(backend.CurrentReader); ok {
+		return Current(ctx, currentReader{current}, require)
+	}
 	view, err := store.OpenReadView(ctx)
 	if err != nil {
 		return publishpolicy.Policy{}, fmt.Errorf("read policy: %w", err)

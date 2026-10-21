@@ -24,6 +24,8 @@ type State struct {
 	DeviceKey string `json:"d,omitempty"`
 	// AuthCode is the authorize request, carried here instead of stored.
 	AuthCode *AuthCodeRequest `json:"a,omitempty"`
+	// Consent is a verified request awaiting the user's approval of the client.
+	Consent *ConsentPending `json:"c,omitempty"`
 }
 
 // Signer encodes and verifies State values into the signed cookie format

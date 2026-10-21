@@ -23,6 +23,18 @@ func (s *Server) Routes(authority string) bool {
 	return err == nil
 }
 
+// Gated reports whether the live world serving authority refuses ungated
+// streams, so the capability listener never answers it; false for an
+// authority nothing routes.
+func (s *Server) Gated(authority string) bool {
+	endpoint, err := s.worlds.Router().Lookup(authority)
+	if err != nil {
+		return false
+	}
+	gated, ok := endpoint.(worldruntime.Gatable)
+	return ok && gated.RequiresGate()
+}
+
 // Exchange answers req through the world that routes authority, in process,
 // under a QUIC stream's controls plus any protocol.Grant on ctx. A cancelled
 // ctx ends reads at once; a commit under way seals first and is reported.

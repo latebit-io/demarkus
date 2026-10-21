@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>demarkus — approve access</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem; color: #111; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+  p { color: #555; line-height: 1.4; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 1.5rem 0; }
+  dt { color: #555; }
+  dd { margin: 0; font-family: ui-monospace, monospace; word-break: break-all; }
+  form { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
+  button { font: inherit; padding: 0.75rem 1.5rem; border: 0; border-radius: 4px; cursor: pointer; }
+  .approve { background: #111; color: #fff; }
+  .approve:hover { background: #333; }
+  .deny { background: #eee; color: #111; }
+</style>
+</head>
+<body>
+<h1>Approve access</h1>
+<p>An application asks to use this demarkus broker as you. Approve only if you started this sign-in from it.</p>
+<dl>
+  <dt>Application</dt><dd>{{.ClientName}}</dd>
+  <dt>Client id</dt><dd>{{.ClientID}}</dd>
+  <dt>Sends the code to</dt><dd>{{.RedirectHost}}</dd>
+  {{if .Resource}}<dt>For</dt><dd>{{.Resource}}</dd>{{end}}
+  <dt>Signed in as</dt><dd>{{.Email}}</dd>
+</dl>
+<form method="post" action="/oauth/consent">
+  <input type="hidden" name="nonce" value="{{.Nonce}}">
+  <button type="submit" name="decision" value="approve" class="approve" autofocus>Approve</button>
+  <button type="submit" name="decision" value="deny" class="deny">Deny</button>
+</form>
+</body>
+</html>
