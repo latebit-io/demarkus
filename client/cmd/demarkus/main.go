@@ -681,8 +681,9 @@ func lookupMain(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "usage: demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-match body|similar] [-auth TOKEN] mark://host:port/scope/\n\n")
 		fmt.Fprintf(os.Stderr, "Look up documents by subject against the server's catalog. Use / as the scope\n")
 		fmt.Fprintf(os.Stderr, "to search everything, or a subtree like /docs/ to narrow it. -match body also\n")
-		fmt.Fprintf(os.Stderr, "matches section text; -match similar reads a draft from stdin and lists the\n")
-		fmt.Fprintf(os.Stderr, "documents it repeats. A server without the mode answers from the catalog.\n\n")
+		fmt.Fprintf(os.Stderr, "matches section text; a server without body match answers from the catalog.\n")
+		fmt.Fprintf(os.Stderr, "-match similar reads a draft from stdin and lists the documents it repeats;\n")
+		fmt.Fprintf(os.Stderr, "a server that predates the mode refuses it and the command exits non-zero.\n\n")
 		fs.PrintDefaults()
 	}
 	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error

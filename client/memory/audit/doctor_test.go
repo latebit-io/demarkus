@@ -515,7 +515,7 @@ func TestDuplicatesNearTier(t *testing.T) {
 	}
 	// A member that joined through another is scored with that edge, never
 	// against the first member it may not match.
-	if len(cluster) == 1 && !strings.Contains(cluster[0], ", /d.md (0.") || !strings.Contains(cluster[0], "shared with /") {
+	if len(cluster) != 1 || !strings.Contains(cluster[0], ", /d.md (0.86 shared with /b.md)") {
 		t.Errorf("cluster = %v, want /d.md scored with the member it joined through", cluster)
 	}
 	for _, want := range []string{"/a.md: contained in /patterns.md#shards (", "/tenants.md: contained in /patterns.md#tenants ("} {
