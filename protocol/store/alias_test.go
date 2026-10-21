@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // On a case-folding filesystem a path spelled differently reaches another
@@ -78,5 +80,19 @@ func TestReadCurrentPinsOneVersion(t *testing.T) {
 	}
 	if _, err := s.ReadCurrent("/missing.md"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing err = %v, want not exist", err)
+	}
+	// A canonical pointer naming a malformed version is corruption, not a
+	// missing document: the base matches exactly, so no alias is read into it.
+	if err := os.MkdirAll(filepath.Join(root, "versions", "bad.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "versions", "bad.md", "vX"), []byte("# Bad\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("versions", "bad.md", "vX"), filepath.Join(root, "bad.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReadCurrent("/bad.md"); !errors.Is(err, storefmt.ErrIntegrity) {
+		t.Fatalf("malformed pointer err = %v, want ErrIntegrity", err)
 	}
 }

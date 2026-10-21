@@ -580,7 +580,7 @@ func (s *Store) ReadCurrent(reqPath string) (*storefmt.Document, error) {
 	version := versionNumber(filepath.Base(versionFile))
 	docDir := filepath.Dir(versionFile)
 	if base := filepath.Base(docDir); version == 0 || base != loc.base || filepath.Base(filepath.Dir(docDir)) != versionsDirName {
-		if strings.EqualFold(base, loc.base) || s.aliased(reqPath) {
+		if (base != loc.base && strings.EqualFold(base, loc.base)) || s.aliased(reqPath) {
 			return nil, os.ErrNotExist
 		}
 		return nil, fmt.Errorf("%w: current pointer of %s names %s", storefmt.ErrIntegrity, reqPath, target)
