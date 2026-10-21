@@ -82,6 +82,15 @@ type LinkInfo struct {
 	End          int    // byte offset just past an inline link's "(dest)", -1 for other links
 }
 
+// Pos is the link's position in the source for section attribution: its
+// opening bracket, else its block's start, -1 when neither is known.
+func (l *LinkInfo) Pos() int {
+	if l.OpenBracket >= 0 {
+		return l.OpenBracket
+	}
+	return l.BlockStart
+}
+
 // ExtractWithPositions parses body as markdown and returns link info with source positions.
 // Same filtering as Extract (excludes fragment-only, strips fragments from destinations).
 func ExtractWithPositions(body string) []LinkInfo {

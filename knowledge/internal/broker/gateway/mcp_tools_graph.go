@@ -79,6 +79,11 @@ func (g *Gateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, world
 	src := graphstore.SeedSource{
 		Owner: worldName,
 		Fetch: reader(worldName),
+		// The one source form every observation of this world records.
+		Source: func(path string) string {
+			source, _ := g.worldSource(worldName, path) // the world is known: it is being seeded
+			return source
+		},
 		Rewrite: func(nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) ([]graphstore.StoredNode, []graphstore.StoredEdge) {
 			g.translateSeedURLs(nodes, edges)
 			return state.ownedRows(nodes, edges)

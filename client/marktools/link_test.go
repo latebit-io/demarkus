@@ -190,3 +190,21 @@ func TestWriteStatusNamesTheVersions(t *testing.T) {
 		t.Errorf("append = %+v", got)
 	}
 }
+
+// A hub with sections takes the bullet under the section listing the
+// document's siblings, not at the end of the page.
+func TestPublishLinksUnderTheSiblingsSection(t *testing.T) {
+	hubBody := "# Catalog\n\nHub.\n\n## Records\n\n- [Records](/notes/)\n\n## Manifests\n\n- [First](/notes/manifests/first.md): selection\n\n## Policies\n\n- [Policy](/policy.md): rules\n"
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"host:6309/notes/index.md": fetchtest.Head(hubBody, 5, nil),
+	}}
+	got := publishNote(t, backend, "/notes/manifests/quic.md", noteBody, 0)
+	if got.IsError || !strings.HasSuffix(got.Text, "hubs:\n- /notes/index.md: bullet added\n") {
+		t.Fatalf("publish = %+v", got)
+	}
+	hub := backend.PublishCall("/notes/index.md")
+	want := "# Catalog\n\nHub.\n\n## Records\n\n- [Records](/notes/)\n\n## Manifests\n\n- [First](/notes/manifests/first.md): selection\n- [QUIC retries](/notes/manifests/quic.md): Back off from 200ms, capped at 5s.\n\n## Policies\n\n- [Policy](/policy.md): rules\n"
+	if hub == nil || hub.Body != want {
+		t.Fatalf("hub body =\n%s\nwant\n%s", hub.Body, want)
+	}
+}

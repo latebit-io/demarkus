@@ -25,10 +25,7 @@ func AnchoredLinks(body string) []AnchoredLink {
 	infos := links.ExtractWithPositions(body)
 	out := make([]AnchoredLink, len(infos))
 	for i, info := range infos {
-		pos := info.OpenBracket
-		if pos < 0 {
-			pos = info.BlockStart
-		}
+		pos := info.Pos()
 		anchor := ""
 		if pos >= 0 {
 			// Headings are in Start order; the last one at or before the

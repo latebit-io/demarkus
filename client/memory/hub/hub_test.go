@@ -257,3 +257,26 @@ func TestPlaceOf(t *testing.T) {
 		}
 	}
 }
+
+// A hub with sections takes a new bullet under the section that lists the
+// document's siblings; a hub that lists none of them appends at the end.
+func TestSectionForJoinsTheSiblingsSection(t *testing.T) {
+	r := links.ResolverFor("music")
+	body := "# Genre Catalog\n\nHub.\n\n## Records\n\n- [Genre records](/genres/): every record\n\n" +
+		"## Inception-era views\n\n- [6th-century](mark://music/genres/by-era/6th-century.md): records\n- [9th-century](mark://music/genres/by-era/9th-century.md): records\n\n" +
+		"## Manifests\n\n- [Gagaku manifest](mark://music/genres/manifests/gagaku-2026-10-09.md): selection\n\n" +
+		"## Governing policies\n\n- [Write policy](mark://music/.well-known/demarkus/policy.md): rules\n"
+	for target, want := range map[string]string{
+		"/genres/manifests/chant-2026-10-21.md": "## Manifests",
+		"/genres/by-era/7th-century.md":         "## Inception-era views",
+		"/genres/families/plainchant.md":        "",
+		"/genres/manifests/":                    "",
+	} {
+		if got := SectionFor(r, body, "/genres/index.md", target); got != want {
+			t.Errorf("SectionFor(%s) = %q, want %q", target, got, want)
+		}
+	}
+	if got := SectionFor(links.Resolver{}, "# Flat\n\n- [a](/d/a.md)\n", "/index.md", "/d/b.md"); got != "" {
+		t.Errorf("sectionless hub = %q, want \"\"", got)
+	}
+}
