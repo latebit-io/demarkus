@@ -10,6 +10,7 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
@@ -39,7 +40,7 @@ type Docs func(docPath string) *docwrite.Doc
 type Link struct {
 	Target     string // directory with its slash, or a document path
 	Bullet     string
-	Section    string // "## Journal"; "" appends at the end
+	Section    string // "## Journal"; "" takes the siblings' section, else the end
 	CreateBody string
 	CreateMeta map[string]string
 	Stamp      map[string]string // the surface's identity keys, on every write
@@ -53,13 +54,18 @@ func EnsureLink(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, lin
 		if h.Status == protocol.StatusNotFound {
 			return docwrite.Write{Body: link.CreateBody, Metadata: stamped(link.CreateMeta, link.Stamp)}, true, nil
 		}
-		switch PlaceOf(links.ResolverFor(doc.Host), h.Body, doc.Path, link.Target) {
+		r := links.ResolverFor(doc.Host)
+		switch PlaceOf(r, h.Body, doc.Path, link.Target) {
 		case Named:
 			return docwrite.Write{}, false, nil
 		case AtCap:
 			return docwrite.Write{}, false, ErrAtCap
 		}
-		return docwrite.Write{Body: WithBullet(h.Body, link.Section, link.Bullet), Metadata: stamped(docwrite.Carried(h.Metadata), link.Stamp)}, true, nil
+		section := link.Section
+		if section == "" {
+			section = SectionFor(r, h.Body, doc.Path, link.Target)
+		}
+		return docwrite.Write{Body: WithBullet(h.Body, section, link.Bullet), Metadata: stamped(docwrite.Carried(h.Metadata), link.Stamp)}, true, nil
 	})
 	return added, settled(doc, &result, err)
 }
@@ -134,6 +140,39 @@ func Names(r links.Resolver, body, hubPath, docPath string) bool {
 		}
 	}
 	return false
+}
+
+// SectionFor is the "## " heading of the section whose links name the most
+// documents beside the target, so a new bullet joins its siblings; "" when
+// no section names one, which appends at the end.
+func SectionFor(r links.Resolver, body, hubPath, target string) string {
+	dir := path.Dir(strings.TrimSuffix(target, "/"))
+	sections := slices.DeleteFunc(mdoutline.Headings(body), func(h mdoutline.Heading) bool { return h.Level != 2 })
+	counts := make([]int, len(sections))
+	best := -1
+	for _, info := range links.ExtractWithPositions(body) {
+		resolved := r.Path(hubPath, info.Dest)
+		if resolved == "" || path.Dir(strings.TrimSuffix(resolved, "/")) != dir {
+			continue
+		}
+		pos := info.Pos()
+		if pos < 0 {
+			continue
+		}
+		// Sections are in Start order; the last one at or before the link holds it.
+		i := sort.Search(len(sections), func(j int) bool { return sections[j].Start > pos }) - 1
+		if i < 0 {
+			continue
+		}
+		counts[i]++
+		if best < 0 || counts[i] > counts[best] {
+			best = i
+		}
+	}
+	if best < 0 {
+		return ""
+	}
+	return "## " + sections[best].Text
 }
 
 // matches is one resolved link against one target: the document, or the
@@ -313,11 +352,7 @@ func MoveLinks(r links.Resolver, body, hubPath string, m *Move) (out string, mov
 func cutLinks(r links.Resolver, body, hubPath string, m *Move) (out string, cut []string) {
 	byLine := map[int][]string{}
 	for _, link := range links.ExtractWithPositions(body) {
-		pos := link.OpenBracket
-		if pos < 0 {
-			pos = link.BlockStart
-		}
-		if pos >= 0 {
+		if pos := link.Pos(); pos >= 0 {
 			byLine[strings.Count(body[:pos], "\n")] = append(byLine[strings.Count(body[:pos], "\n")], link.Dest)
 		}
 	}

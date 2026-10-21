@@ -70,6 +70,13 @@ func (g *Gateway) seedGraphStore(ctx context.Context, state *gatewayGraph) {
 // federation checkpoint in the hub, else its own published graph. Rows are
 // translated to world names, then filtered to the tenant's own.
 func (g *Gateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, worldName string) {
+	// The address is taken once: a world dropped by a registry refresh mid-seed
+	// still gets the source it had, never an empty one.
+	world, ok := g.deps.Worlds.Find(worldName)
+	if !ok {
+		return
+	}
+	address := world.Address()
 	reader := func(world string) func(context.Context, string, string) (protocol.Response, error) {
 		return func(ctx context.Context, path, ifNoneMatch string) (protocol.Response, error) {
 			result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: world, Path: path, IfNoneMatch: ifNoneMatch})
@@ -79,6 +86,8 @@ func (g *Gateway) seedWorldGraph(ctx context.Context, state *gatewayGraph, world
 	src := graphstore.SeedSource{
 		Owner: worldName,
 		Fetch: reader(worldName),
+		// The source form every observation of this world records (worldSource).
+		Source: func(path string) string { return links.NodeURL(address, path) },
 		Rewrite: func(nodes []graphstore.StoredNode, edges []graphstore.StoredEdge) ([]graphstore.StoredNode, []graphstore.StoredEdge) {
 			g.translateSeedURLs(nodes, edges)
 			return state.ownedRows(nodes, edges)

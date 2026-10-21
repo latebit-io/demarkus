@@ -18,6 +18,10 @@ type SeedSource struct {
 	// Hub, when set, reads the hub that may hold the owner world's
 	// checkpoint, preferred to the owner's own published graph.
 	Hub func(ctx context.Context, path, ifNoneMatch string) (protocol.Response, error)
+	// Source names a checkpoint row's observation source at path, the one
+	// the owner's own fetches record; nil is the owner's node URL, right for a
+	// dial host. A gateway keying worlds by name gives the world's address.
+	Source func(path string) string
 	// Rewrite adapts the rows before they become the owner's seed, and may drop
 	// some: a gateway translates addresses and filters by tenant. Nil keeps them.
 	Rewrite func(nodes []StoredNode, edges []StoredEdge) ([]StoredNode, []StoredEdge)

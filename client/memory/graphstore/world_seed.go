@@ -10,8 +10,9 @@ import (
 )
 
 // worldRows turns a world's checkpoint rows into graph rows observed at
-// observed: each source is the node mark://<world><path> at its version.
-func worldRows(world string, sources []WorldSource, observed time.Time) ([]StoredNode, []StoredEdge) {
+// observed: each is the node mark://<world><path> at its version, sourced
+// by source, nil for the node URL itself.
+func worldRows(world string, sources []WorldSource, observed time.Time, source func(path string) string) ([]StoredNode, []StoredEdge) {
 	count := 0
 	for i := range sources {
 		count += len(sources[i].Edges)
@@ -20,10 +21,20 @@ func worldRows(world string, sources []WorldSource, observed time.Time) ([]Store
 	for i := range sources {
 		src := &sources[i]
 		url := links.NodeURL(world, src.Path)
+		observedAt := url
+		if source != nil {
+			// A source that is not a mark URL would read as unknown, or as
+			// fresh when malformed but non-empty; the node URL stands in.
+			if named := source(src.Path); named != "" {
+				if _, err := links.ParseMark(named); err == nil {
+					observedAt = named
+				}
+			}
+		}
 		nodes = append(nodes, StoredNode{
 			URL: url, Title: src.Title, Status: protocol.StatusOK, LinkCount: src.LinkCount(), Etag: src.Etag,
 			Observation: graph.Observation{
-				Source: url, View: graph.ViewFederation, Revision: src.Version, Etag: src.Etag,
+				Source: observedAt, View: graph.ViewFederation, Revision: src.Version, Etag: src.Etag,
 				Complete: true, ObservedAt: observed, AttemptedAt: observed,
 			},
 		})
@@ -65,7 +76,7 @@ func (s *Store) seedCheckpoint(ctx context.Context, src *SeedSource, manifest pr
 			return err == nil && target.AuthorityURL() == authority && (!m.Complete || load.Kept[SourcePrefix(target.Path, m.PrefixLength)])
 		}
 	}
-	update.nodes, update.edges = worldRows(src.Owner, load.Sources, time.Now())
+	update.nodes, update.edges = worldRows(src.Owner, load.Sources, time.Now(), src.Source)
 	s.commitSeed(src, update)
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/generation"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
@@ -334,5 +335,99 @@ func TestSeedReadsTheWorldCheckpointFromTheHub(t *testing.T) {
 		if c.Host == "hub" && strings.Contains(c.Path, "/graph/worlds/hub/") {
 			t.Errorf("the hub, outside the federation here, was probed for a checkpoint at %s", c.Path)
 		}
+	}
+}
+
+// A document published through the gateway and the checkpoint row the
+// federation derives for the same version are one source: the backlink the
+// checkpoint adds reads fresh, never as a revision conflict.
+func TestCheckpointAgreesWithTheGatewaysOwnWriteObservation(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds[0].Local = true
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub"})
+	cfg.Federation.Hub = "hub"
+	body := "# Zeta\n\nSee [the catalog](mark://team-a/index.md) and [alpha](/alpha.md).\n"
+	meta := map[string]string{"version": "1", "etag": "etag-v1", "rel-related": "/alpha.md"}
+	source, _ := graphstore.DeriveSource("team-a", "/zeta.md", &protocol.Response{Status: protocol.StatusOK, Body: body, Metadata: meta})
+	shard, err := graphstore.BuildWorldShard("team-a", graphstore.SourcePrefix(source.Path, 1), []graphstore.WorldSource{source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := graphstore.BuildWorldManifest(graphstore.WorldManifest{
+		World: "team-a", Cursor: protocol.Cursor{Epoch: "e1", Seq: 2}, Complete: true, PrefixLength: 1,
+		Shards: []graphstore.WorldShardRef{shard.Ref(1)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := func(body string) fetch.Result {
+		return fetchtest.Head(body, 1, map[string]string{"content-hash": generation.BodyHash(body)})
+	}
+	d := &fakeDispatcher{
+		Published: map[string]fetch.Result{
+			"hub" + graphstore.WorldManifestPath("team-a"): doc(manifest),
+			"hub" + protocol.VersionPath(shard.Path, 1):    doc(shard.Body),
+		},
+		FetchFn: unavailableSeedSource,
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url": "mark://team-a/zeta.md", "body": body, "expected_version": float64(0),
+		"metadata": map[string]any{"rel-related": "/alpha.md"},
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkPublish = (%+v, %v)", res, err)
+	}
+	res, err = g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{"url": "mark://team-a/alpha.md"}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkBacklinks = (%+v, %v)", res, err)
+	}
+	text := toolResultText(t, res)
+	if !strings.Contains(text, "mark://team-a/zeta.md") {
+		t.Fatalf("backlink missing:\n%s", text)
+	}
+	if strings.Contains(text, "revision-conflict") || !strings.Contains(text, "freshness: fresh") {
+		t.Fatalf("the write and its checkpoint disagree:\n%s", text)
+	}
+}
+
+// A checkpoint row seeded with no local observation to mask it records the
+// world's address as its source, the form every gateway observation uses.
+func TestCheckpointRowsRecordTheWorldsAddressAsSource(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds[0].Local = true
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "hub", Namespace: "hub"})
+	cfg.Federation.Hub = "hub"
+	row := graphstore.WorldSource{Path: "/zeta.md", Version: 1, Title: "Zeta", Edges: []graphstore.WorldEdge{{To: "mark://team-a/alpha.md", Count: 1}}}
+	shard, err := graphstore.BuildWorldShard("team-a", graphstore.SourcePrefix(row.Path, 1), []graphstore.WorldSource{row})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := graphstore.BuildWorldManifest(graphstore.WorldManifest{
+		World: "team-a", Cursor: protocol.Cursor{Epoch: "e1", Seq: 1}, Complete: true, PrefixLength: 1,
+		Shards: []graphstore.WorldShardRef{shard.Ref(1)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := func(body string) fetch.Result {
+		return fetchtest.Head(body, 1, map[string]string{"content-hash": generation.BodyHash(body)})
+	}
+	d := &fakeDispatcher{
+		Published: map[string]fetch.Result{
+			"hub" + graphstore.WorldManifestPath("team-a"): doc(manifest),
+			"hub" + protocol.VersionPath(shard.Path, 1):    doc(shard.Body),
+		},
+		FetchFn: unavailableSeedSource,
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	if _, err := g.handleMarkBacklinks(withAliceClaims(context.Background()), callToolReq("mark_backlinks", map[string]any{"url": "mark://team-a/alpha.md"})); err != nil {
+		t.Fatal(err)
+	}
+	node := g.knowledgeGraph.graphStore.GetNode("mark://team-a/zeta.md")
+	want := links.NodeURL(cfg.Worlds[0].Address(), "/zeta.md")
+	if node == nil || node.Observation.Source != want {
+		t.Fatalf("seeded row source = %+v, want %q", node, want)
 	}
 }

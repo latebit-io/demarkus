@@ -20,7 +20,7 @@ func BuildWorldsExport(exported time.Time, worlds map[string][]WorldSource) stri
 	}
 	nodes, edges := make([]StoredNode, 0, rows), make([]StoredEdge, 0, links)
 	for world, sources := range worlds {
-		worldNodes, worldEdges := worldRows(world, sources, time.Time{})
+		worldNodes, worldEdges := worldRows(world, sources, time.Time{}, nil)
 		for i := range worldNodes {
 			worldNodes[i].Observation = graph.Observation{}
 		}

@@ -677,6 +677,9 @@ tool mark_list "{\"url\":\"mark://$WORLD/smoke/\"}"
 want "mark_list shows the document" "tools-$CLIENT_STATE.md"
 tool mark_explore "{\"url\":\"$DOC\"}"
 want "mark_explore returns the card" "## Outline"
+# The first graph read seeds every world; the gate allows the next check
+# five minutes later, which step 9 waits for.
+FIRST_GRAPH_READ=$(date +%s)
 tool mark_lookup "{\"url\":\"mark://$WORLD/\",\"query\":\"smoke\"}"
 want "mark_lookup answers from the catalog" "status: ok"
 
@@ -788,6 +791,20 @@ until tool mark_fetch "{\"url\":\"mark://$HUB/graph.md\",\"force\":true}" && gre
   sleep 1
 done
 echo "OK: the edit reached the hub /graph.md in $(($(date +%s) - START)) s (bound $EXPORT_BOUND s)"
+
+# 9. ONE SOURCE: the gateway observed its own write of the federation
+#    document; the checkpoint row it now seeds for the same version must
+#    read as that observation, fresh, never as a revision conflict. The
+#    seed gate re-checks five minutes after the first graph read, so this
+#    waits for it: the shape of a graph read minutes after a write.
+WAIT=$((FIRST_GRAPH_READ + 305 - $(date +%s)))
+if [ "$WAIT" -gt 0 ]; then echo "--- waiting ${WAIT}s for the seed gate"; sleep "$WAIT"; fi
+tool mark_backlinks "{\"url\":\"$DOC\"}"
+want "the federation document backlinks the smoke document" "$FED_PATH"
+if grep -q "revision-conflict" /tmp/rpc.out; then
+  echo "FAIL: the write observation and its checkpoint row read as a revision conflict"; cat /tmp/rpc.out; exit 1
+fi
+want "the write and its checkpoint row are one fresh source" "$FED_PATH)[^]]*freshness: fresh"
 tool mark_archive "{\"url\":\"mark://$WORLD$FED_PATH\"}"
 want "mark_archive retires the federation smoke document" "archived: true"
 '
