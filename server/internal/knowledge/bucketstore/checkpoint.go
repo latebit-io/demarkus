@@ -434,8 +434,9 @@ type shardLayout struct {
 	reuse bool
 }
 
-// group lays snap's documents out at bits; with the previous width, a shard
-// of unchanged documents is skipped. Only a written shard's paths are hashed.
+// group lays snap's documents out at bits; with the previous width, an
+// unchanged shard is reused: created, so under the object limit, and budgeted
+// when a change next writes it. Only a written shard's paths are hashed.
 func (writer checkpointWriter) group(snap *snapshot, bits int) shardLayout {
 	byShard := make([][]*pathState, 1<<bits)
 	snap.Paths.Ascend(func(state *pathState) bool {
