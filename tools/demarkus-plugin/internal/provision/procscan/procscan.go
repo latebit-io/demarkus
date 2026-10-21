@@ -280,12 +280,12 @@ func ListServers() ([]Server, bool) {
 }
 
 // BindsTo reports whether pid's server binds host (-listen flag, else
-// DEMARKUS_LISTEN env; neither is every interface). Same posture as
-// ListensOn: unreadable arguments count as a match, ownership decides.
+// DEMARKUS_LISTEN env; neither is every interface). Unlike ListensOn it
+// fails closed: a bind nobody could read is not loopback.
 func BindsTo(pid int, host string) bool {
 	args, ran := Args(pid)
 	if !ran || args == "" {
-		return true
+		return false
 	}
 	if h := flagValue(args, listenFlagRe); h != "" {
 		return h == host

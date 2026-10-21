@@ -27,6 +27,9 @@ func TestAliasedSpellingIsNotADocument(t *testing.T) {
 	if _, err := s.Get("/Private/doc.md", 1); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("aliased version err = %v, want not exist", err)
 	}
+	if _, err := s.ReadCurrent("/Private/doc.md"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("aliased ReadCurrent err = %v, want not exist", err)
+	}
 	// The write half only shows where the disk folds case.
 	if _, err := os.Stat(filepath.Join(root, "Private", "doc.md")); err != nil {
 		t.Skip("case-sensitive filesystem: the alias reaches nothing")

@@ -575,10 +575,14 @@ func (s *Store) ReadCurrent(reqPath string) (*storefmt.Document, error) {
 		return nil, err
 	}
 	// contain resolved symlinks, so the directory is compared by shape, not
-	// by the unresolved root: <versions>/<base>/vN.
-	version, ok := versionOfFile(versionFile)
+	// by the unresolved root: <versions>/<base>/vN. A spelling the index lacks
+	// fails that shape on a case-folding disk and is not-found, never a leak.
+	version := versionNumber(filepath.Base(versionFile))
 	docDir := filepath.Dir(versionFile)
-	if !ok || filepath.Base(docDir) != loc.base || filepath.Base(filepath.Dir(docDir)) != versionsDirName {
+	if version == 0 || filepath.Base(docDir) != loc.base || filepath.Base(filepath.Dir(docDir)) != versionsDirName {
+		if s.aliased(reqPath) {
+			return nil, os.ErrNotExist
+		}
 		return nil, fmt.Errorf("%w: current pointer of %s names %s", storefmt.ErrIntegrity, reqPath, target)
 	}
 	info, err := os.Stat(versionFile)
@@ -586,7 +590,7 @@ func (s *Store) ReadCurrent(reqPath string) (*storefmt.Document, error) {
 		return nil, err
 	}
 	if info.Size() > int64(protocol.MaxBodyLength+storefmt.MaxStoreFrontmatter) {
-		return nil, fmt.Errorf("file exceeds size limit")
+		return nil, fmt.Errorf("%w: file exceeds size limit", storefmt.ErrSizeLimit)
 	}
 	data, err := os.ReadFile(versionFile)
 	if err != nil {
@@ -607,12 +611,6 @@ func (s *Store) ReadCurrent(reqPath string) (*storefmt.Document, error) {
 		Metadata: storefmt.ExtractMetadata(data),
 		ETag:     storefmt.StoredETag(data),
 	}, nil
-}
-
-// versionOfFile is the version a per-document version file name carries.
-func versionOfFile(versionFile string) (int, bool) {
-	n, err := strconv.Atoi(strings.TrimPrefix(filepath.Base(versionFile), "v"))
-	return n, err == nil && n >= 1 && strings.HasPrefix(filepath.Base(versionFile), "v")
 }
 
 // ListEntries returns the backend-neutral directory listing used by the
@@ -1065,7 +1063,12 @@ func perDocVersionNumber(e os.DirEntry) int {
 	if !e.Type().IsRegular() {
 		return 0
 	}
-	name := e.Name()
+	return versionNumber(e.Name())
+}
+
+// versionNumber is the version a per-document file name "vN" carries, 0
+// for any other name.
+func versionNumber(name string) int {
 	if !strings.HasPrefix(name, "v") {
 		return 0
 	}
