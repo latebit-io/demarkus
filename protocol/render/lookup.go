@@ -10,7 +10,7 @@ import (
 // LookupResponse is the LOOKUP response for rows. match is the request's
 // match key; it is echoed only when carried, so empty leaves it out.
 func LookupResponse(query, scope string, rows []LookupRow, match string) protocol.Response {
-	body := match == protocol.MatchBody
+	body := protocol.MatchSectioned(match)
 	var sb strings.Builder
 	sb.WriteString(LookupHeading(query, scope))
 	sb.WriteString(LookupHeader(body))

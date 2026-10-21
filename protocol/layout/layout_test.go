@@ -120,3 +120,17 @@ func TestIsADRDir(t *testing.T) {
 		}
 	}
 }
+
+func TestRepeatsByDesign(t *testing.T) {
+	l := Default()
+	for _, p := range []string{"/index.md", "/x/index.md", "/log.md", "/.well-known/demarkus/policy.md", "/journal/2026-10-21.md", "/proj/journal/2026-10-21.md"} {
+		if !l.RepeatsByDesign(p) {
+			t.Errorf("%s not exempt", p)
+		}
+	}
+	for _, p := range []string{"/notes/journal/x.md", "/journal/notes.md", "/patterns.md", "/adr/0001-x.md"} {
+		if l.RepeatsByDesign(p) {
+			t.Errorf("%s exempt", p)
+		}
+	}
+}

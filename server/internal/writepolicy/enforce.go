@@ -3,6 +3,7 @@ package writepolicy
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -52,25 +53,32 @@ func chain[T any](inner, next func(context.Context, backend.Reader, T) error) fu
 }
 
 // guard adds the policy verdict after any precondition the caller set; its
-// notes go to the request's sink, replaced on every run.
-func (e *enforcer) guard(req *backend.WriteRequest) {
+// notes go to the request's sink, replaced on every run, with the
+// pre-commit near-duplicate notes after them.
+func (e *enforcer) guard(ctx context.Context, req *backend.WriteRequest) {
 	warnings := req.Warnings
+	var near []string
+	if warnings != nil {
+		near = e.nearDuplicates(ctx, *req)
+	}
 	req.Precondition = chain(req.Precondition, func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
 		notes, err := e.evaluate(ctx, state, write)
 		if warnings != nil {
-			*warnings = notes
+			*warnings = slices.Concat(notes, near)
 		}
 		return err
 	})
 }
 
 func (e *enforcer) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
-	e.guard(&req)
+	e.guard(ctx, &req)
 	return e.Store.Publish(ctx, req)
 }
 
+// Append judges the fragment, not the merged body: the target's own text
+// is what the fragment would repeat elsewhere, never a duplicate of itself.
 func (e *enforcer) Append(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
-	e.guard(&req)
+	e.guard(ctx, &req)
 	return e.Store.Append(ctx, req)
 }
 

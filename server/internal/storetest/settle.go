@@ -40,7 +40,7 @@ func sendSettled(t testing.TB, h *handler.Handler, req protocol.Request) (resp p
 	t.Helper()
 	settle(func() bool {
 		resp = Send(t, h, req)
-		return req.Verb != protocol.VerbLookup || req.Metadata["match"] != "body" || resp.Metadata["match"] != "catalog"
+		return req.Verb != protocol.VerbLookup || resp.Status != protocol.StatusOK || !protocol.Downgraded(req.Metadata["match"], resp.Metadata["match"])
 	})
 	return resp
 }

@@ -1,0 +1,8 @@
+---
+content-hash: sha256-6d6e7d7a7c2202b6b8de1304afafc9df95653662275256f00361315b08779930
+etag: bb31d1d331cdab397a1e6bb477af3f3c2098688fe8455d0df9c7fe95fc4da5b5
+modified: "2026-01-01T00:00:00Z"
+status: created
+version: "1"
+warning: 'near-duplicate check: near-duplicate of /docs/lesson.md (0.76 shared); fix: keep one document, append to or link the existing one'
+---

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
@@ -133,9 +134,12 @@ func testHandlerBodyReadAuth(t *testing.T, b LookupBackend) {
 	}
 }
 
-// fallbackStore refuses every body-mode Lookup, as a backend does while its
-// section index is built or behind.
-type fallbackStore struct{ handler.DocumentStore }
+// FallbackStore wraps a store so every section-index lookup mode answers
+// ErrBodyMatchUnavailable, as a bucket store does before its index covers
+// the snapshot; catalog mode answers as before.
+type FallbackStore struct{ handler.DocumentStore }
+
+type fallbackStore = FallbackStore
 
 func (s fallbackStore) OpenReadView(ctx context.Context) (backend.ReadView, error) {
 	view, err := s.DocumentStore.OpenReadView(ctx)
@@ -147,8 +151,10 @@ func (s fallbackStore) OpenReadView(ctx context.Context) (backend.ReadView, erro
 
 type fallbackView struct{ backend.ReadView }
 
+// Lookup answers catalog mode only: a section-index mode is refused as a
+// bucket store does before its index covers the snapshot.
 func (v fallbackView) Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error) {
-	if opts.Match == catalog.MatchBody {
+	if protocol.MatchSectioned(string(opts.Match)) {
 		return nil, backend.ErrBodyMatchUnavailable
 	}
 	return v.ReadView.Lookup(ctx, query, opts)
@@ -157,6 +163,11 @@ func (v fallbackView) Lookup(ctx context.Context, query string, opts catalog.Opt
 func testHandlerBodyFallback(t *testing.T, b LookupBackend) {
 	h := NewHandler(LookupBackend{Store: fallbackStore{b.Store}})
 	publishDoc(t, h, "/docs/doc.md", "# Doc\n\n## Section\n\npapaya\n", map[string]string{"tags": "fruit", "importance": "0.6"})
+	// A similar request without a section index has no catalog answer: an
+	// empty table that says so.
+	if resp := Send(t, h, request(protocol.VerbLookup, "/", map[string]string{"match": "similar"}, neardtest.RewordedDoc)); resp.Status != protocol.StatusOK || resp.Metadata["match"] != "catalog" || resp.Metadata["matches"] != "0" {
+		t.Errorf("similar fallback: %s match %q matches %q, want ok catalog 0", resp.Status, resp.Metadata["match"], resp.Metadata["matches"])
+	}
 
 	for _, scope := range []string{"/", "/docs"} {
 		body := Send(t, h, request(protocol.VerbLookup, scope, map[string]string{"query": "fruit", "match": "body"}, ""))

@@ -543,7 +543,7 @@ auth: <raw-token>\n
 - `query` (REQUIRED): the subject text. The server lowercases it and splits it on whitespace into terms. A document matches if any term matches its declared `tags` or its title. Matching is case-insensitive and term-based; the precise rule (exact tag membership, title substring) is implementation-defined but MUST be limited to `tags` and title. The query MUST be at least 2 characters; a missing, empty, or too-short query MUST return `bad-request`.
 - `filter` (OPTIONAL): a comma-separated list of `key=value` predicates applied **before** ranking. Each predicate matches a declared metadata value by exact equality, except the built-ins `modified-after` and `modified-before`, which compare an RFC 3339 timestamp (or date) against the document's modification time. A document MUST satisfy all predicates to be included. A malformed `filter` MUST return `bad-request`.
 - `limit` (OPTIONAL): the maximum number of results. Default **10**. Servers MUST impose a hard cap (RECOMMENDED **1000**).
-- `match` (OPTIONAL): `catalog` (default) or `body`. Selects catalog mode or body match. Any other value MUST return `bad-request`, whether or not the server implements body match. A server that does not implement body match MUST accept `body` and answer in catalog mode, echoing `match: catalog`; a server that predates the key answers in catalog mode with no echo.
+- `match` (OPTIONAL): `catalog` (default), `body` or `similar`. Selects catalog mode, body match, or similar match (see **Similar match** below). Any other value MUST return `bad-request`, whether or not the server implements body or similar match. A server that does not implement body match MUST accept `body` and answer in catalog mode, echoing `match: catalog`; the same holds for `similar`. A server that predates the key answers in catalog mode with no echo; a server that predates `similar` refuses it as an unknown value.
 - `auth` (OPTIONAL): a token used to authorise results on read-auth-protected paths (see Read authorisation below).
 
 **Success response** (`ok`):
@@ -597,11 +597,13 @@ The response header echoes `match: body` and the table gains a fifth column:
 
 `Path` is the document path followed by `#` and the section anchor; a bare-path section carries the document path alone. `Title` is the document title, a `›` separator, and the heading text; a bare-path row carries the document title alone. `Snippet` is one line of at most 240 bytes drawn from the section text with markup removed; truncation MUST fall on a UTF-8 rune boundary so the snippet is valid UTF-8. In body mode `matches` counts section rows. The response MUST NOT include more of the body than the snippet.
 
+**Similar match** (`match: similar`): an OPTIONAL capability over the same section index. The request body is a draft document; the answer is the current, non-archived documents under the scope that satisfy `filter` and that the draft repeats, judged by the server's near-duplicate rule (a token-overlap measure of the draft against each document's own text and each of its sections; the thresholds are implementation-defined and the same ones the server's write gate warns by). `query` is OPTIONAL and only names the report. A request without a body MUST return `bad-request`. The response echoes `match: similar` and uses the five-column body-match table: one row per document, `Path` with `#` and the section anchor when a section of a longer document holds the draft, `Title` as in body mode, and `Snippet` the verdict with its score, `near-duplicate (<share>)` or `contained (<share>)`, never document text. Rows are ordered strongest verdict first. A draft too short to judge answers `matches: 0`. While the section index does not cover the request's snapshot the server answers `match: catalog` with an empty table, which a client MUST treat as no answer, not as absence.
+
 Servers that implement body match SHOULD list `lookup-match: catalog, body` under a `## Capabilities` heading in their agent manifest (`/.well-known/agent-manifest.md`, §11.8). The manifest is author-published and advisory; the `match` echo on the response is the authoritative signal.
 
 **Errors**:
 
-- `bad-request`: Missing, empty, or too-short `query`, a malformed `filter`, an invalid `limit`, or an unknown `match` value.
+- `bad-request`: Missing, empty, or too-short `query` (except under `match: similar`), a `similar` request without a body, a malformed `filter`, an invalid `limit`, or an unknown `match` value.
 - `not-found`: The scope path does not exist or is not a directory.
 - `server-error`: Internal error.
 
@@ -740,7 +742,7 @@ The following status values are reserved for future use:
 | `query` | LOOKUP | String | Subject text matched against each document's `tags` and title. REQUIRED; minimum 2 characters. |
 | `filter` | LOOKUP | Comma-separated `key=value` | Predicates applied before ranking. Exact match on declared metadata, plus built-ins `modified-after` / `modified-before`. |
 | `limit` | LOOKUP | Decimal integer | Maximum number of results. Default 10; server-capped (RECOMMENDED 1000). |
-| `match` | LOOKUP | `catalog` or `body` | Catalog mode (default) or body match (§6.7). Unknown values are `bad-request` on every server; a server without body match answers `body` in catalog mode. |
+| `match` | LOOKUP | `catalog`, `body` or `similar` | Catalog mode (default), body match or similar match (§6.7). Unknown values are `bad-request` on every server; a server without body or similar match answers those in catalog mode. |
 | `page-size` | LIST | Decimal integer | Maximum entries in this page. Default and hard maximum 1000. |
 | `cursor` | LIST | Opaque string | Continuation from the preceding page of the same directory and archive mode. |
 | `include-archived` | LIST | `true` or `false` | Include archived documents and directories containing only archived documents. Default false. |
@@ -772,7 +774,7 @@ Two publisher keys are the identity convention: `agent` names the writing softwa
 | `chain-error` | VERSIONS | String | Description of chain verification failure. Present only when `chain-valid` is `false`. |
 | `content-hash` | FETCH | `sha256-` + 64-char lowercase hex | SHA-256 hash of the response body (stripped of store frontmatter), so a client can verify the body it received. |
 | `matches` | LOOKUP | Decimal integer | Number of rows returned in the table body: documents in catalog mode, sections in body mode. |
-| `match` | LOOKUP | `catalog` or `body` | The mode the server answered in. Present exactly when the request carried `match`. |
+| `match` | LOOKUP | `catalog`, `body` or `similar` | The mode the server answered in. Present exactly when the request carried `match`. |
 | `cursor` | WATCH (every block) | `<epoch>:<seq>` | Position to resume from (§6.8). |
 | `path` | WATCH (event block) | Server-relative path | The changed document. |
 | `op` | WATCH (event block) | `publish`, `append` or `archive` | What changed. Clients skip an unknown value. |

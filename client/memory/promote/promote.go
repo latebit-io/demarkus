@@ -488,6 +488,32 @@ type Candidate struct {
 	Body    string
 }
 
+// docTitle is the document title of a row: a section row joins the heading
+// after a separator.
+func docTitle(r lookuptable.Row) string {
+	title, _, _ := strings.Cut(r.Title, " › ")
+	return title
+}
+
+// SimilarCandidates folds the rows of a similar lookup into the candidates:
+// a path already listed gains the verdict, a new one is a candidate to read.
+func SimilarCandidates(candidates []Candidate, related []string, rows []lookuptable.Row) (merged []Candidate, rest []string) {
+	for _, r := range rows {
+		why := r.Snippet
+		if r.Anchor != "" {
+			why += " in #" + r.Anchor
+		}
+		if i := slices.IndexFunc(candidates, func(c Candidate) bool { return c.Path == r.Path }); i >= 0 {
+			candidates[i].Why += ", " + why
+			candidates[i].Fetch = true
+			continue
+		}
+		candidates = append(candidates, Candidate{Path: r.Path, Title: docTitle(r), Tags: r.Tags, Why: why, Fetch: true})
+		related = slices.DeleteFunc(related, func(s string) bool { return strings.HasPrefix(s, r.Path+": ") })
+	}
+	return candidates, related
+}
+
 // Check is the dry_run report: the draft against the world's policy and
 // style, the dedup findings, and the packet that binds apply to it.
 type Check struct {
@@ -542,7 +568,7 @@ func Candidates(rows []lookuptable.Row, d *Draft, byTags bool) (candidates []Can
 			continue
 		}
 		seen[r.Path] = true
-		rowTitle, _, _ := strings.Cut(r.Title, " › ")
+		rowTitle := docTitle(*r)
 		c := Candidate{Path: r.Path, Title: rowTitle, Tags: r.Tags}
 		switch shared := sharedTags(r.Tags, tags); {
 		case r.Path == d.Path:

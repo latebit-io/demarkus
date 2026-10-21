@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
 )
 
 func TestInventoryFollowsCursorsIntoSubdirectories(t *testing.T) {
@@ -472,5 +473,50 @@ func TestAbsoluteLinksToTheOwnStoreAreInternal(t *testing.T) {
 	}
 	if got := findings(r, CheckOrphans); len(got) != 3 {
 		t.Fatalf("without the authority every absolute link is external: %v", got)
+	}
+}
+
+func TestDuplicatesNearTier(t *testing.T) {
+	typed := func(body string) fakeDoc {
+		return fakeDoc{Body: body, Meta: map[string]string{"tags": "store", "type": "Guide"}}
+	}
+	f := newFake(map[string]fakeDoc{
+		"/index.md":              {Body: "# Hub\n\n- [a](/a.md)\n- [b](/b.md)\n- [c](/c.md)\n- [hub](/patterns.md)\n- [t](/tenants.md)\n- [j](/journal/)\n", Meta: map[string]string{"tags": "index"}},
+		"/a.md":                  typed(neardtest.LessonDoc),
+		"/b.md":                  typed(neardtest.RewordedDoc),
+		"/c.md":                  typed("# Sizing again\n\n" + neardtest.Reworded + "\n\nOne more line of text here.\n"),
+		"/patterns.md":           typed(neardtest.HubDoc),
+		"/tenants.md":            typed(neardtest.OtherDoc),
+		"/journal/2026-10-21.md": typed("# 2026-10-21\n\n" + neardtest.Reworded + "\n"),
+	})
+	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := findings(r, CheckDuplicates)
+	var cluster, contained []string
+	for _, g := range got {
+		switch {
+		case strings.Contains(g, "near-duplicate of"):
+			cluster = append(cluster, g)
+		case strings.Contains(g, "contained in"):
+			contained = append(contained, g)
+		default:
+			t.Errorf("unexpected finding %q", g)
+		}
+		if strings.Contains(g, "/journal/") {
+			t.Errorf("journal entry in a near-duplicate finding: %q", g)
+		}
+	}
+	if len(cluster) != 1 || !strings.HasPrefix(cluster[0], "/a.md: near-duplicate of /b.md (0.") || !strings.Contains(cluster[0], ", /c.md (0.") {
+		t.Errorf("cluster = %v, want one finding at /a.md naming /b.md and /c.md", cluster)
+	}
+	if len(contained) < 2 {
+		t.Errorf("contained = %v, want the shards section of /patterns.md for /a.md and /tenants.md for its section", contained)
+	}
+	for _, c := range contained {
+		if !strings.Contains(c, "/patterns.md#") {
+			t.Errorf("contained finding not against a section of the hub: %q", c)
+		}
 	}
 }

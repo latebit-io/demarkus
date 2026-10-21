@@ -134,6 +134,22 @@ func (index *sectionIndex) await(ctx context.Context, sequence int64) (*sectionV
 	}
 }
 
+// latest is the newest version built, nil when none, without waiting; it
+// activates the index so one gets built for the next caller.
+func (index *sectionIndex) latest() *sectionVersion {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	if index.closed {
+		return nil
+	}
+	index.activateLocked()
+	index.used = index.store.now()
+	if n := len(index.versions); n > 0 {
+		return index.versions[n-1]
+	}
+	return nil
+}
+
 // findLocked is the version at sequence; settled once the index has it or has
 // moved past it without it.
 func (index *sectionIndex) findLocked(sequence int64) (version *sectionVersion, settled bool) {

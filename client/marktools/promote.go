@@ -327,6 +327,9 @@ func (t *Tools) promoteDryRun(ctx context.Context, target Target, check *promote
 	if bad := t.dedup(ctx, target, check); bad != nil {
 		return *bad
 	}
+	if bad := t.similar(ctx, target, check); bad != nil {
+		return *bad
+	}
 	truncated := "[truncated]"
 	for i := range check.Candidates {
 		c := &check.Candidates[i]
@@ -355,7 +358,7 @@ func (t *Tools) dedup(ctx context.Context, target Target, check *promote.Check) 
 	if title == "" {
 		check.Notes = append(check.Notes, "no H1: dedup by title skipped")
 	} else {
-		rows, catalogOnly, err := t.lookupRows(ctx, target, title, fetch.MatchBody)
+		rows, catalogOnly, err := t.lookupRows(ctx, target, fetch.LookupRequest{Query: title, Match: fetch.MatchBody})
 		if err != nil {
 			bad := failure("status: incomplete-dedup\n%v", err)
 			return &bad
@@ -372,7 +375,7 @@ func (t *Tools) dedup(ctx context.Context, target Target, check *promote.Check) 
 	if len(tags) == 0 {
 		return nil
 	}
-	rows, _, err := t.lookupRows(ctx, target, strings.Join(tags[:min(3, len(tags))], " "), "")
+	rows, _, err := t.lookupRows(ctx, target, fetch.LookupRequest{Query: strings.Join(tags[:min(3, len(tags))], " ")})
 	if err != nil {
 		bad := failure("status: incomplete-dedup\n%v", err)
 		return &bad
@@ -387,23 +390,49 @@ func (t *Tools) dedup(ctx context.Context, target Target, check *promote.Check) 
 	return nil
 }
 
-// lookupRows is one lookup over the world; a page that fills is an error,
-// since a candidate may be beyond it.
-func (t *Tools) lookupRows(ctx context.Context, target Target, query, match string) (rows []lookuptable.Row, catalogOnly bool, err error) {
-	req := fetch.LookupRequest{Host: target.Host, Scope: "/", Token: t.readToken(ctx, target.Host), Query: query, Limit: dedupLimit, Match: match}
-	r, err := t.backend.Lookup(ctx, req)
-	if err != nil {
-		return nil, false, errors.New(t.errText(SiteLookup, target.Host, err))
+// similar asks the store which documents the draft repeats, the question
+// the write gate answers after a publish. An older server refuses the
+// mode: the dry run says so and stands on the title and tag lookups.
+func (t *Tools) similar(ctx context.Context, target Target, check *promote.Check) *Result {
+	rows, catalogOnly, err := t.lookupRows(ctx, target, fetch.LookupRequest{Query: check.Draft.Title(), Match: fetch.MatchSimilar, Body: check.Draft.Body})
+	switch {
+	case errors.Is(err, errMatchUnsupported):
+		check.Notes = append(check.Notes, "near-duplicate lookup not offered by this server; dedup by title and tags only")
+		return nil
+	case err != nil:
+		bad := failure("status: incomplete-dedup\n%v", err)
+		return &bad
+	case catalogOnly:
+		check.Notes = append(check.Notes, "near-duplicate lookup unanswered: "+fetch.CatalogFallbackNote)
+		return nil
 	}
-	if r.Response.Status != protocol.StatusOK {
-		return nil, false, fmt.Errorf("lookup %q: %s", query, r.Response.Status)
+	check.Candidates, check.Related = promote.SimilarCandidates(check.Candidates, check.Related, rows)
+	return nil
+}
+
+// errMatchUnsupported is a lookup mode the server predates.
+var errMatchUnsupported = errors.New("lookup mode not offered by this server")
+
+// lookupRows is one lookup over the world (host, scope, token and the
+// dedup limit filled in); a page that fills is an error, since a candidate
+// may be beyond it.
+func (t *Tools) lookupRows(ctx context.Context, target Target, req fetch.LookupRequest) (rows []lookuptable.Row, catalogOnly bool, err error) {
+	req.Host, req.Scope, req.Token, req.Limit = target.Host, "/", t.readToken(ctx, target.Host), dedupLimit
+	r, err := t.backend.Lookup(ctx, req)
+	switch {
+	case err != nil:
+		return nil, false, errors.New(t.errText(SiteLookup, target.Host, err))
+	case fetch.MatchUnsupported(req, r):
+		return nil, false, errMatchUnsupported
+	case r.Response.Status != protocol.StatusOK:
+		return nil, false, fmt.Errorf("lookup %q: %s", req.Query, r.Response.Status)
 	}
 	table, err := lookuptable.ParseTable(r.Response.Body)
 	if err != nil {
 		return nil, false, err
 	}
 	if len(table.Rows) >= dedupLimit {
-		return nil, false, fmt.Errorf("lookup %q: %d or more matches; narrow the draft's title or tags", query, dedupLimit)
+		return nil, false, fmt.Errorf("lookup %q: %d or more matches; narrow the draft's title or tags", req.Query, dedupLimit)
 	}
 	return table.Rows, fetch.AnsweredFromCatalog(req, r), nil
 }

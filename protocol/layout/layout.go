@@ -177,6 +177,16 @@ func (l *Layout) JournalEntry(p string) bool {
 	return IsJournalEntry(path.Base(p)) && l.JournalDir(path.Dir(p))
 }
 
+// RepeatsByDesign names the documents a near-duplicate check neither judges
+// nor compares: reserved documents, hubs, logs and journal entries.
+func (l *Layout) RepeatsByDesign(p string) bool {
+	switch path.Base(p) {
+	case "index.md", "log.md":
+		return true
+	}
+	return strings.HasPrefix(p, "/.well-known/") || l.JournalEntry(p)
+}
+
 // Section is the hub heading for a directory: "journal/" reads "Journal".
 func Section(directory string) string {
 	name := strings.TrimSuffix(directory, "/")

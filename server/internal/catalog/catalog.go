@@ -25,6 +25,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/mdtext"
+	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
@@ -46,10 +48,11 @@ type Entry struct {
 // Heading empty.
 type Result struct {
 	Entry
-	Score   int    // catalog mode: distinct query terms matched in tags or title
-	Anchor  string // body mode: section anchor without '#'
-	Heading string // body mode: heading text of the section
-	Snippet string // body mode: one line of section text, at most SnippetBytes
+	Score   int         // catalog mode: distinct query terms matched in tags or title
+	Anchor  string      // body mode: section anchor without '#'
+	Heading string      // body mode: heading text of the section
+	Snippet string      // body mode: one line of section text, at most SnippetBytes
+	Hit     neardup.Hit // similar mode: the verdict, worded by the renderer
 }
 
 // Location is the row's path, with #anchor when the row is a section.
@@ -78,6 +81,7 @@ type Mode string
 const (
 	MatchCatalog Mode = "catalog" // declared tags and title
 	MatchBody    Mode = "body"    // the section index
+	MatchSimilar Mode = "similar" // the documents a draft repeats
 )
 
 // ParseMode maps the wire value of the match key to a Mode; "" is catalog.
@@ -127,7 +131,7 @@ func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modif
 // and title terms, path demotion); every entry searched passes through it.
 func (e *Entry) Prepare() {
 	e.Path = storefmt.CanonicalPath(e.Path)
-	e.terms = newTermSet(fieldTokenSet(append(append([]string(nil), e.Tags...), e.Title)))
+	e.terms = newTermSet(mdtext.TokenSet(append(append([]string(nil), e.Tags...), e.Title)))
 	e.demote = 1
 	if slices.Contains(strings.Split(strings.Trim(e.Path, "/"), "/"), "journal") {
 		e.demote = journalDemote
@@ -179,8 +183,15 @@ type Options struct {
 	Filter []Predicate
 	// Max caps the number of results returned. Zero means no cap.
 	Max int
-	// Match selects catalog mode (default) or body mode.
+	// Match selects catalog mode (default), body mode or similar mode.
 	Match Mode
+	// Draft is what similar mode judges the documents against.
+	Draft *neardup.Text
+	// Skip excludes documents from similar mode: the draft's own path.
+	Skip func(path string) bool
+	// Stale lets a section-index mode answer from the newest index built
+	// rather than wait for one covering the snapshot: a gate's choice.
+	Stale bool
 }
 
 // Index is what a lookup searches: each searchable entry, prepared and never
@@ -217,7 +228,9 @@ func Search(index Index, query string, opts Options) ([]Result, error) {
 	switch opts.Match {
 	case "", MatchCatalog:
 	case MatchBody:
-		return lookupBody(index, queryTerms(query), NormalizeScope(opts.Scope), opts), nil
+		return lookupBody(index, mdtext.QueryTerms(query), NormalizeScope(opts.Scope), opts), nil
+	case MatchSimilar:
+		return similar(index, opts), nil
 	default:
 		return nil, fmt.Errorf("unknown match mode %q", opts.Match)
 	}
