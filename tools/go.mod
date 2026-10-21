@@ -2,7 +2,7 @@ module github.com/latebit-io/demarkus/tools
 
 go 1.26.0
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 replace github.com/latebit-io/demarkus/protocol => ../protocol
 
