@@ -23,7 +23,13 @@ func worldRows(world string, sources []WorldSource, observed time.Time, source f
 		url := links.NodeURL(world, src.Path)
 		observedAt := url
 		if source != nil {
-			observedAt = source(src.Path)
+			// A source that is not a mark URL would read as unknown, or as
+			// fresh when malformed but non-empty; the node URL stands in.
+			if named := source(src.Path); named != "" {
+				if _, err := links.ParseMark(named); err == nil {
+					observedAt = named
+				}
+			}
 		}
 		nodes = append(nodes, StoredNode{
 			URL: url, Title: src.Title, Status: protocol.StatusOK, LinkCount: src.LinkCount(), Etag: src.Etag,
