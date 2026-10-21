@@ -312,6 +312,10 @@ func (a *audit) checkNearDuplicates(ctx context.Context) {
 		}
 	}
 	cluster := newClusters()
+	// edges keeps every near-duplicate pair's score, so a member joined
+	// through another is reported with an edge it has, never a score
+	// against a document it may not match.
+	edges := map[string]map[string]float64{}
 	var held []Finding // the draft path and the hit's wording, in order
 	scanned := 0
 	for _, p := range a.order {
@@ -327,6 +331,12 @@ func (a *audit) checkNearDuplicates(ctx context.Context) {
 		for _, h := range neardup.Scan(doc.Whole, others(p)) {
 			if h.Verdict == neardup.VerdictNearDuplicate && h.Anchor == "" {
 				cluster.join(p, h.Path)
+				for a, b := range map[string]string{p: h.Path, h.Path: p} {
+					if edges[a] == nil {
+						edges[a] = map[string]float64{}
+					}
+					edges[a][b] = max(edges[a][b], h.Score)
+				}
 				continue
 			}
 			held = append(held, Finding{Path: p, Detail: h.String()})
@@ -335,16 +345,30 @@ func (a *audit) checkNearDuplicates(ctx context.Context) {
 	for _, members := range cluster.groups() {
 		first := members[0]
 		parts := make([]string, 0, len(members)-1)
-		// Scored against the first member: a transitive member may never
-		// have been compared with it directly.
 		for _, m := range members[1:] {
-			parts = append(parts, fmt.Sprintf("%s (%.2f shared)", m, docs[first].Whole.Set.Jaccard(docs[m].Whole.Set)))
+			if score, direct := edges[m][first]; direct {
+				parts = append(parts, fmt.Sprintf("%s (%.2f shared)", m, score))
+				continue
+			}
+			partner := strongest(edges[m])
+			parts = append(parts, fmt.Sprintf("%s (%.2f shared with %s)", m, edges[m][partner], partner))
 		}
 		a.add(CheckDuplicates, first, "near-duplicate of "+strings.Join(parts, ", "), "keep one, append to or link the rest")
 	}
 	for _, f := range held {
 		a.add(CheckDuplicates, f.Path, f.Detail, "append to or link the existing document")
 	}
+}
+
+// strongest is the partner with the highest score, the first path on a tie.
+func strongest(scores map[string]float64) string {
+	best := ""
+	for partner, score := range scores {
+		if best == "" || score > scores[best] || score == scores[best] && partner < best {
+			best = partner
+		}
+	}
+	return best
 }
 
 // clusters is union-find over paths, for one finding per reworded group.

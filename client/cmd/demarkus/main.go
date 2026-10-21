@@ -673,15 +673,16 @@ func lookupMain(ctx context.Context, args []string) {
 	query := fs.String("query", "", "subject to look up; matched against document tags and titles (required)")
 	filter := fs.String("filter", "", "comma-separated key=value predicates (e.g. project=broker,modified-after=2025-01-01)")
 	limit := fs.Int("limit", 0, "maximum results (0 = server default)")
-	match := fs.String("match", "", "catalog (default) or body: match section text too; rows carry path#anchor and a snippet")
+	match := fs.String("match", "", "catalog (default), body (match section text too; rows carry path#anchor and a snippet) or similar (the draft on stdin; rows are the documents it repeats)")
 	authToken := fs.String("auth", "", "auth token (env: DEMARKUS_AUTH)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	verbose := fs.Bool("v", false, "show status and metadata header before the results table")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-match body] [-auth TOKEN] mark://host:port/scope/\n\n")
+		fmt.Fprintf(os.Stderr, "usage: demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-match body|similar] [-auth TOKEN] mark://host:port/scope/\n\n")
 		fmt.Fprintf(os.Stderr, "Look up documents by subject against the server's catalog. Use / as the scope\n")
 		fmt.Fprintf(os.Stderr, "to search everything, or a subtree like /docs/ to narrow it. -match body also\n")
-		fmt.Fprintf(os.Stderr, "matches section text; a server without body match answers from the catalog.\n\n")
+		fmt.Fprintf(os.Stderr, "matches section text; -match similar reads a draft from stdin and lists the\n")
+		fmt.Fprintf(os.Stderr, "documents it repeats. A server without the mode answers from the catalog.\n\n")
 		fs.PrintDefaults()
 	}
 	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
@@ -690,8 +691,16 @@ func lookupMain(ctx context.Context, args []string) {
 		fs.Usage()
 		os.Exit(1)
 	}
-	if *query == "" {
+	if *query == "" && *match != fetch.MatchSimilar {
 		log.Fatal("lookup requires -query")
+	}
+	var draft string
+	if *match == fetch.MatchSimilar {
+		body, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			log.Fatalf("read the draft from stdin: %v", err)
+		}
+		draft = string(body)
 	}
 
 	target := mustTarget(fs.Arg(0))
@@ -704,7 +713,7 @@ func lookupMain(ctx context.Context, args []string) {
 
 	req := fetch.LookupRequest{
 		Host: host, Scope: scope, Token: token,
-		Query: *query, Filter: *filter, Limit: *limit, Match: *match,
+		Query: *query, Filter: *filter, Limit: *limit, Match: *match, Body: draft,
 	}
 	result, err := client.Lookup(ctx, req)
 	if err != nil {

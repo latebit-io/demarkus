@@ -481,10 +481,12 @@ func TestDuplicatesNearTier(t *testing.T) {
 		return fakeDoc{Body: body, Meta: map[string]string{"tags": "store", "type": "Guide"}}
 	}
 	f := newFake(map[string]fakeDoc{
-		"/index.md":              {Body: "# Hub\n\n- [a](/a.md)\n- [b](/b.md)\n- [c](/c.md)\n- [hub](/patterns.md)\n- [t](/tenants.md)\n- [j](/journal/)\n", Meta: map[string]string{"tags": "index"}},
-		"/a.md":                  typed(neardtest.LessonDoc),
-		"/b.md":                  typed(neardtest.RewordedDoc),
-		"/c.md":                  typed("# Sizing again\n\n" + neardtest.Reworded + "\n\nOne more line of text here.\n"),
+		"/index.md": {Body: "# Hub\n\n- [a](/a.md)\n- [b](/b.md)\n- [c](/c.md)\n- [d](/d.md)\n- [hub](/patterns.md)\n- [t](/tenants.md)\n- [j](/journal/)\n", Meta: map[string]string{"tags": "index"}},
+		"/a.md":     typed(neardtest.LessonDoc),
+		"/b.md":     typed(neardtest.RewordedDoc),
+		"/c.md":     typed("# Sizing again\n\n" + neardtest.Reworded + "\n\nOne more line of text here.\n"),
+		// Joins through /b.md or /c.md: too far from /a.md to be its candidate.
+		"/d.md":                  typed("# Sizing once more\n\n" + neardtest.Reworded + "\n\nThe replica index rebuilds lazily on the first body search, so an idle world keeps no section index resident and\n"),
 		"/patterns.md":           typed(neardtest.HubDoc),
 		"/tenants.md":            typed(neardtest.OtherDoc),
 		"/journal/2026-10-21.md": typed("# 2026-10-21\n\n" + neardtest.Reworded + "\n"),
@@ -510,6 +512,11 @@ func TestDuplicatesNearTier(t *testing.T) {
 	}
 	if len(cluster) != 1 || !strings.HasPrefix(cluster[0], "/a.md: near-duplicate of /b.md (0.") || !strings.Contains(cluster[0], ", /c.md (0.") {
 		t.Errorf("cluster = %v, want one finding at /a.md naming /b.md and /c.md", cluster)
+	}
+	// A member that joined through another is scored with that edge, never
+	// against the first member it may not match.
+	if len(cluster) == 1 && !strings.Contains(cluster[0], ", /d.md (0.") || !strings.Contains(cluster[0], "shared with /") {
+		t.Errorf("cluster = %v, want /d.md scored with the member it joined through", cluster)
 	}
 	for _, want := range []string{"/a.md: contained in /patterns.md#shards (", "/tenants.md: contained in /patterns.md#tenants ("} {
 		if !slices.ContainsFunc(contained, func(c string) bool { return strings.HasPrefix(c, want) }) {

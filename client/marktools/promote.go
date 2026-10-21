@@ -394,7 +394,9 @@ func (t *Tools) dedup(ctx context.Context, target Target, check *promote.Check) 
 // the write gate answers after a publish. An older server refuses the
 // mode: the dry run says so and stands on the title and tag lookups.
 func (t *Tools) similar(ctx context.Context, target Target, check *promote.Check) *Result {
-	rows, catalogOnly, err := t.lookupRows(ctx, target, fetch.LookupRequest{Query: check.Draft.Title(), Match: fetch.MatchSimilar, Body: check.Draft.Body})
+	// No query: the draft is the input, and a long H1 would be refused
+	// before the mode is judged.
+	rows, catalogOnly, err := t.lookupRows(ctx, target, fetch.LookupRequest{Match: fetch.MatchSimilar, Body: check.Draft.Body})
 	switch {
 	case errors.Is(err, errMatchUnsupported):
 		check.Notes = append(check.Notes, "near-duplicate lookup not offered by this server; dedup by title and tags only")
