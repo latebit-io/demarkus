@@ -109,4 +109,18 @@ func TestReadCurrentPinsOneVersion(t *testing.T) {
 	if _, err := s.ReadCurrent("/worse.md"); !errors.Is(err, storefmt.ErrIntegrity) {
 		t.Fatalf("malformed parent err = %v, want ErrIntegrity", err)
 	}
+	// A version file under another directory's versions tree is not this
+	// document's, however well the tail of the path is shaped.
+	if err := os.MkdirAll(filepath.Join(root, "other", "versions", "nested.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "other", "versions", "nested.md", "v1"), []byte("# Nested\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("other", "versions", "nested.md", "v1"), filepath.Join(root, "nested.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReadCurrent("/nested.md"); !errors.Is(err, storefmt.ErrIntegrity) {
+		t.Fatalf("nested versions tree err = %v, want ErrIntegrity", err)
+	}
 }
