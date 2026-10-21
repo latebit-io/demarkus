@@ -156,28 +156,31 @@ func createOrRead(ctx context.Context, objects blob.Store, object modelObject, f
 }
 
 // createContent creates a content-addressed object no drop ever deletes (a
-// history block, a blob): a taken name is this content, which readers verify
-// by hash, so it needs no read-back and no freshen.
+// history block, a blob): a taken name is this content, verified by hash, so
+// no read-back or freshen. A precondition is a taken name or rejected input.
 func createContent(ctx context.Context, objects blob.Store, object modelObject) error {
 	var lastErr error
 	for attempt := range maximumCreateAttempts {
 		_, err := objects.Create(ctx, object.Key, object.Data)
-		if err == nil || errors.Is(err, blob.ErrPrecondition) {
+		if err == nil {
 			return nil
 		}
-		if !retryableObjectError(err) {
+		rejected := errors.Is(err, blob.ErrPrecondition)
+		if !rejected && !retryableObjectError(err) {
 			return fmt.Errorf("create content object %q: %w", object.Key, err)
 		}
 		lastErr = err
-		if errors.Is(err, blob.ErrAmbiguous) {
-			// Unknown whether it landed, or a hedge met the name taken.
+		if rejected || errors.Is(err, blob.ErrAmbiguous) {
 			_, headErr := objects.Head(ctx, object.Key)
-			if headErr == nil {
+			switch {
+			case headErr == nil:
 				return nil
-			}
-			if !errors.Is(headErr, blob.ErrNotFound) && !retryableObjectError(headErr) {
+			case rejected && errors.Is(headErr, blob.ErrNotFound):
+				return fmt.Errorf("create content object %q: %w", object.Key, err)
+			case !errors.Is(headErr, blob.ErrNotFound) && !retryableObjectError(headErr):
 				return fmt.Errorf("reconcile content object %q: %w", object.Key, errors.Join(lastErr, headErr))
 			}
+			lastErr = errors.Join(lastErr, headErr)
 		}
 		if attempt == maximumCreateAttempts-1 {
 			break

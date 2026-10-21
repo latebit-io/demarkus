@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/protocol"
 )
@@ -46,6 +47,10 @@ func ParseImportance(s string) float64 {
 	return v
 }
 
+// MaxTitleBytes bounds a heading-derived title at the metadata cap a declared
+// one is under, so a body-sized heading never inflates a persisted entry.
+const MaxTitleBytes = protocol.MaxMetaBytes
+
 // resolveTitle returns the declared title, else the document's first level-1
 // heading, else the path's base name.
 func resolveTitle(declared string, body []byte, docPath string) string {
@@ -53,9 +58,20 @@ func resolveTitle(declared string, body []byte, docPath string) string {
 		return t
 	}
 	if h := firstH1(body); h != "" {
-		return h
+		return strings.TrimSpace(cutAtRune(h, MaxTitleBytes))
 	}
 	return path.Base(docPath)
+}
+
+// cutAtRune is s cut to at most n bytes on a rune boundary.
+func cutAtRune(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // firstH1 returns the text of the first level-1 ATX heading ("# ...") in body,

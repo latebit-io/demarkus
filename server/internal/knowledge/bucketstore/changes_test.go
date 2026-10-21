@@ -241,6 +241,8 @@ type bucketSite struct {
 	follow time.Duration
 	// noHedge opens them unhedged, for a bucket that holds one call.
 	noHedge bool
+	// shardBudget shrinks the shard byte budget.
+	shardBudget int
 	// trigger overrides when their compactors run; role is their part in it.
 	trigger *compactionTrigger
 	role    CompactionRole
@@ -268,7 +270,7 @@ func (s *bucketSite) open(t *testing.T, ring int) *Store {
 func (s *bucketSite) openOn(t *testing.T, objects blob.Store, ring int) *Store {
 	t.Helper()
 	var self atomic.Pointer[Store]
-	options := Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, Compaction: s.role, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger}
+	options := Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, Compaction: s.role, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger, shardBudget: s.shardBudget}
 	if s.hinted {
 		options.Committed = func(sequence int64) { s.hint(self.Load(), sequence) }
 	}

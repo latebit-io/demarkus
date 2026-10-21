@@ -22,12 +22,18 @@ const (
 	historyBlockSize = 256
 	// A folded checkpoint has the fewest shards, a power of two, that hold at
 	// most docsPerShard documents each (about 200 KB): 4096 at 1,000,000.
-	docsPerShard = 256
-	maxShardBits = 16
+	// A shard over maxShardBytes doubles the count instead; bits never fall.
+	docsPerShard  = 256
+	maxShardBits  = 16
+	maxShardBytes = MaxObjectBytes / 4
 	// maxSlotEntries bounds one slot's batch, and readers find the slot holding
 	// a sequence within this many names below it: raising it needs a new
 	// logSchema.
 	maxSlotEntries = 32
+
+	// MaxObjectBytes is the object limit a world's bucket is opened with; a
+	// root or shard beyond it fails the checkpoint instead of the create.
+	MaxObjectBytes = 4 << 20
 
 	objectPrefix     = "_demarkus/v1/"
 	markerKey        = objectPrefix + "head.json"

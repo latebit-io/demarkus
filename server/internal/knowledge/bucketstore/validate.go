@@ -304,8 +304,8 @@ func validateBlocks(blocks []blockRef, current int) error {
 	return nil
 }
 
-// validateFoldedRoot checks a folded root; its shard count must be the one
-// its document count gives, as every compactor computes it.
+// validateFoldedRoot checks a folded root; its shard count is at least the
+// one its document count gives, more where a shard's size widened the layout.
 func validateFoldedRoot(root *foldedRoot, expectedWorldID string) error {
 	if root.Schema != foldedSchema {
 		return fmt.Errorf("schema is %d, want %d", root.Schema, foldedSchema)
@@ -319,8 +319,9 @@ func validateFoldedRoot(root *foldedRoot, expectedWorldID string) error {
 	if root.DocumentCount < 0 || root.DocumentCount > docsPerShard<<maxShardBits {
 		return fmt.Errorf("document count %d is outside [0,%d]", root.DocumentCount, docsPerShard<<maxShardBits)
 	}
-	if want := shardBitsFor(root.DocumentCount); root.ShardBits != want {
-		return fmt.Errorf("shard bits are %d, want %d for %d documents", root.ShardBits, want, root.DocumentCount)
+	// Bits exceed the count's when a shard's size or an earlier layout forced them.
+	if least := shardBitsFor(root.DocumentCount); root.ShardBits < least || root.ShardBits > maxShardBits {
+		return fmt.Errorf("shard bits are %d, want %d to %d for %d documents", root.ShardBits, least, maxShardBits, root.DocumentCount)
 	}
 	if len(root.Shards) != 1<<root.ShardBits {
 		return fmt.Errorf("shard count is %d, want %d", len(root.Shards), 1<<root.ShardBits)

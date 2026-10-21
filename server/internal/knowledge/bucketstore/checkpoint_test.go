@@ -221,7 +221,7 @@ func (s *recordingCreates) snapshot() map[string][][]byte {
 
 // testCheckpointWriter writes checkpoints to objects as a store would.
 func testCheckpointWriter(objects blob.Store) checkpointWriter {
-	return checkpointWriter{bodyReader: bodyReader{objects: objects, logger: discardLogger, worldID: testWorldID}, workers: 4, now: time.Now, grace: defaultCheckpointGrace, pathHash: pathHash}
+	return checkpointWriter{bodyReader: bodyReader{objects: objects, logger: discardLogger, worldID: testWorldID}, workers: 4, now: time.Now, grace: defaultCheckpointGrace, pathHash: pathHash, budget: maxShardBytes}
 }
 
 // failCheckpoints refuses to create checkpoint objects, as a compactor that
@@ -1011,7 +1011,8 @@ func TestOpenRejectsFoldedInvariants(t *testing.T) {
 		name   string
 		mutate func(root *foldedRoot, shard *foldedShard)
 	}{
-		{name: "shard bits not the document count's", mutate: func(root *foldedRoot, _ *foldedShard) { root.ShardBits = 1 }},
+		{name: "shard bits above the count's without the shards", mutate: func(root *foldedRoot, _ *foldedShard) { root.ShardBits = 1 }},
+		{name: "shard bits below the document count's", mutate: func(root *foldedRoot, _ *foldedShard) { root.DocumentCount = docsPerShard + 1 }},
 		{name: "document count mismatch", mutate: func(root *foldedRoot, _ *foldedShard) { root.DocumentCount = 2 }},
 		{name: "wrong world", mutate: func(root *foldedRoot, _ *foldedShard) { root.WorldID = otherWorldID }},
 		{name: "wrong label", mutate: func(root *foldedRoot, _ *foldedShard) { root.Shards[0].Shard = "1" }},

@@ -71,6 +71,8 @@ type Options struct {
 	noHedge bool
 	// trigger overrides when the compactor runs, in tests.
 	trigger *compactionTrigger
+	// shardBudget shrinks maxShardBytes, in tests.
+	shardBudget int
 }
 
 // Store serves one world from the log: the snapshot it last applied, and
@@ -83,6 +85,7 @@ type Store struct {
 	shardWorkers   int
 	// checkpointGrace is Options.CheckpointGrace, defaulted.
 	checkpointGrace time.Duration
+	shardBudget     int
 	logger          *slog.Logger
 	maxDocuments    int
 	readOnly        bool
@@ -236,6 +239,7 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 		id:              id,
 		requestTimeout:  options.RequestTimeout,
 		checkpointGrace: options.CheckpointGrace,
+		shardBudget:     cmp.Or(options.shardBudget, maxShardBytes),
 		shardWorkers:    options.ShardWorkers,
 		logger:          options.Logger,
 		maxDocuments:    options.MaxDocuments,

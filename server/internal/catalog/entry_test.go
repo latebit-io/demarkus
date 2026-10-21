@@ -79,6 +79,8 @@ func TestResolveTitle(t *testing.T) {
 		{"falls back to h1", "", "# Heading", "/docs/x.md", "Heading"},
 		{"falls back to basename", "", "no heading", "/docs/x.md", "x.md"},
 		{"declared trimmed", "  Trimmed  ", "# H", "/x.md", "Trimmed"},
+		{"heading cut to the cap", "", "# " + strings.Repeat("x", MaxTitleBytes+1), "/x.md", strings.Repeat("x", MaxTitleBytes)},
+		{"heading cut on a rune boundary", "", "# " + strings.Repeat("x", MaxTitleBytes-1) + "é", "/x.md", strings.Repeat("x", MaxTitleBytes-1)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

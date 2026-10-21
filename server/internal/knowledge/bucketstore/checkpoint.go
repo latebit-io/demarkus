@@ -341,10 +341,12 @@ type checkpointWriter struct {
 	now      func() time.Time
 	grace    time.Duration
 	pathHash func(path string) string
+	// budget is the bytes a shard may hold before the layout widens.
+	budget int
 }
 
 func (store *Store) checkpointWriter() checkpointWriter {
-	return checkpointWriter{bodyReader: store.bodyReader(), workers: store.shardWorkers, now: store.now, grace: store.checkpointGrace, pathHash: pathHash}
+	return checkpointWriter{bodyReader: store.bodyReader(), workers: store.shardWorkers, now: store.now, grace: store.checkpointGrace, pathHash: pathHash, budget: store.shardBudget}
 }
 
 // write writes snap's changed history blocks and shards, the root, the
@@ -352,66 +354,38 @@ func (store *Store) checkpointWriter() checkpointWriter {
 // missing one costs readers blob reads and never fails the checkpoint.
 func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adoption, error) {
 	objects, worldID, workers := writer.objects, writer.worldID, writer.workers
-	bits := shardBitsFor(snap.Paths.Len())
-	byShard := make([][]*pathState, 1<<bits)
-	snap.Paths.Ascend(func(state *pathState) bool {
-		index := state.shard(bits)
-		byShard[index] = append(byShard[index], state)
-		return true
-	})
 	previous := snap.Checkpoint
-	reuse := previous.Bits == bits
-	// Only a shard that is written needs its documents' path hashes.
-	groups := make([][]grouped, 1<<bits)
-	var shards []int
-	var changed []grouped
-	for index, states := range byShard {
-		if reuse && !slices.ContainsFunc(states, func(state *pathState) bool { return !state.unchanged() }) {
-			continue
-		}
-		shards = append(shards, index)
-		groups[index] = make([]grouped, len(states))
-		for position, state := range states {
-			document := grouped{state: state, hash: writer.pathHash(state.Path)}
-			groups[index][position] = document
-			if !state.unchanged() {
-				changed = append(changed, document)
-			}
-		}
-	}
-
-	var mu sync.Mutex
-	entries := make(map[string]*baseEntry, len(changed))
-	err := runParallel(ctx, workers, changed, func(ctx context.Context, document grouped) error {
-		blocks, err := foldHistory(ctx, objects, document)
-		if err != nil {
-			return fmt.Errorf("fold history of %s: %w", document.state.Path, err)
-		}
-		state := document.state
-		base := &baseEntry{History: blocks, Current: state.Current, Archived: state.Archived, BodyHash: state.BodyHash, Modified: state.Modified}
-		mu.Lock()
-		entries[state.Path] = base
-		mu.Unlock()
-		return nil
-	})
+	// Bits never fall: a layout the count rule outgrew, or one a shard's size
+	// forced, is kept, else every checkpoint would fold the world again.
+	bits := max(shardBitsFor(snap.Paths.Len()), previous.Bits)
+	layout := writer.group(snap, bits)
+	// The changed set is the same at every width: a shard holding a change is
+	// always written.
+	entries, err := writer.foldChanged(ctx, layout.changed)
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint %d: %w", snap.Sequence, err)
 	}
+	for {
+		oversized, err := writer.measure(ctx, layout, entries)
+		if err != nil {
+			return nil, fmt.Errorf("checkpoint %d: %w", snap.Sequence, err)
+		}
+		if oversized < 0 {
+			break
+		}
+		if bits == maxShardBits || len(layout.groups[oversized]) == 1 {
+			return nil, fmt.Errorf("checkpoint %d: shard %s of %d documents exceeds %d bytes at %d bits", snap.Sequence, shardLabel(oversized, bits), len(layout.groups[oversized]), writer.budget, bits)
+		}
+		bits++
+		layout = writer.group(snap, bits)
+	}
 
 	refs := make([]shardRef, 1<<bits)
-	if reuse {
+	if layout.reuse {
 		copy(refs, previous.Shards)
 	}
-	err = runParallel(ctx, workers, shards, func(ctx context.Context, index int) error {
-		folded := make([]foldedEntry, len(groups[index]))
-		for position, document := range groups[index] {
-			base := entries[document.state.Path]
-			if base == nil {
-				base = document.state.Base
-			}
-			folded[position] = foldedEntryOf(document, base)
-		}
-		object, ref, err := foldShard(index, bits, folded)
+	err = runParallel(ctx, workers, layout.shards, func(ctx context.Context, index int) error {
+		object, ref, err := layout.fold(index, entries)
 		if err == nil {
 			err = createImmutable(ctx, objects, object)
 		}
@@ -422,6 +396,9 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 		return nil, fmt.Errorf("checkpoint %d: %w", snap.Sequence, err)
 	}
 	root, rootRef, err := foldRoot(worldID, snap.Paths.Len(), bits, refs)
+	if err == nil && len(root.Data) > MaxObjectBytes {
+		err = fmt.Errorf("root of %d shards is %d bytes, limit is %d", len(refs), len(root.Data), MaxObjectBytes)
+	}
 	if err == nil {
 		err = createImmutable(ctx, objects, root)
 	}
@@ -442,8 +419,112 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 		reader: writer.bodyReader, workers: workers, window: windowOf(now), bits: bits, previousBits: previous.Bits,
 		fence: dropFence{started: now, grace: writer.grace},
 	}
-	run.write(ctx, groups, shards)
+	run.write(ctx, layout.groups, layout.shards)
 	return &adoption{checkpoint: &checkpointBase{Sequence: snap.Sequence, Bits: bits, Shards: refs}, entries: entries, own: own}, nil
+}
+
+// shardLayout is a snapshot's documents at one shard width: the shards to
+// write, their documents, and the changed documents among them.
+type shardLayout struct {
+	bits    int
+	groups  [][]grouped
+	shards  []int
+	changed []grouped
+	// reuse keeps the previous checkpoint's unchanged shards.
+	reuse bool
+}
+
+// group lays snap's documents out at bits; with the previous width, a shard
+// of unchanged documents is skipped. Only a written shard's paths are hashed.
+func (writer checkpointWriter) group(snap *snapshot, bits int) shardLayout {
+	byShard := make([][]*pathState, 1<<bits)
+	snap.Paths.Ascend(func(state *pathState) bool {
+		index := state.shard(bits)
+		byShard[index] = append(byShard[index], state)
+		return true
+	})
+	layout := shardLayout{bits: bits, groups: make([][]grouped, 1<<bits), reuse: snap.Checkpoint.Bits == bits}
+	for index, states := range byShard {
+		if layout.reuse && !slices.ContainsFunc(states, func(state *pathState) bool { return !state.unchanged() }) {
+			continue
+		}
+		layout.shards = append(layout.shards, index)
+		layout.groups[index] = make([]grouped, len(states))
+		for position, state := range states {
+			document := grouped{state: state, hash: writer.pathHash(state.Path)}
+			layout.groups[index][position] = document
+			if !state.unchanged() {
+				layout.changed = append(layout.changed, document)
+			}
+		}
+	}
+	return layout
+}
+
+// foldChanged folds the changed documents' history blocks, by path.
+func (writer checkpointWriter) foldChanged(ctx context.Context, changed []grouped) (map[string]*baseEntry, error) {
+	var mu sync.Mutex
+	entries := make(map[string]*baseEntry, len(changed))
+	err := runParallel(ctx, writer.workers, changed, func(ctx context.Context, document grouped) error {
+		blocks, err := foldHistory(ctx, writer.objects, document)
+		if err != nil {
+			return fmt.Errorf("fold history of %s: %w", document.state.Path, err)
+		}
+		state := document.state
+		base := &baseEntry{History: blocks, Current: state.Current, Archived: state.Archived, BodyHash: state.BodyHash, Modified: state.Modified}
+		mu.Lock()
+		entries[state.Path] = base
+		mu.Unlock()
+		return nil
+	})
+	return entries, err
+}
+
+// fold is the written shard index as an object.
+func (layout shardLayout) fold(index int, entries map[string]*baseEntry) (modelObject, shardRef, error) {
+	folded := make([]foldedEntry, len(layout.groups[index]))
+	for position, document := range layout.groups[index] {
+		base := entries[document.state.Path]
+		if base == nil {
+			base = document.state.Base
+		}
+		folded[position] = foldedEntryOf(document, base)
+	}
+	return foldShard(index, layout.bits, folded)
+}
+
+// errOversized stops a measure at the first shard over budget.
+var errOversized = errors.New("shard over budget")
+
+// measure folds each written shard and reports the first over the budget,
+// -1 when all fit. Objects are not kept: a full fold of a large world would
+// hold every shard at once.
+func (writer checkpointWriter) measure(ctx context.Context, layout shardLayout, entries map[string]*baseEntry) (int, error) {
+	sizes := make([]int, len(layout.shards))
+	positions := make([]int, len(sizes))
+	for position := range positions {
+		positions[position] = position
+	}
+	err := runParallel(ctx, writer.workers, positions, func(_ context.Context, position int) error {
+		object, _, err := layout.fold(layout.shards[position], entries)
+		if err != nil {
+			return err
+		}
+		sizes[position] = len(object.Data)
+		if sizes[position] > writer.budget {
+			return errOversized
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errOversized) {
+		return -1, err
+	}
+	for position, size := range sizes {
+		if size > writer.budget {
+			return layout.shards[position], nil
+		}
+	}
+	return -1, nil
 }
 
 // foldHistory is a document's history blocks, one per absolute block of

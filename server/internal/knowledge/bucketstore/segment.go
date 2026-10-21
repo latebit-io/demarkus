@@ -24,9 +24,9 @@ const (
 	// segmentWindow is how often at most one shard's segment is written, so
 	// a world written everywhere does not rewrite every body each checkpoint.
 	segmentWindow = 10 * time.Minute
-	// segmentPartLimit caps one part's encoded bodies, under the 4 MiB cap on
-	// production objects; a body too large for a part is left out.
-	segmentPartLimit = 2<<20 - 1<<10
+	// segmentPartLimit caps one part's encoded bodies, under the object cap;
+	// a body too large for a part is left out.
+	segmentPartLimit = MaxObjectBytes/2 - 1<<10
 	// maxSegmentParts bounds what part 0 may claim; a part holds one body or more.
 	maxSegmentParts = 1 << 12
 	// segmentReaders reads one shard's bodies in parallel under each worker.
