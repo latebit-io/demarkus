@@ -26,9 +26,9 @@ import (
 // the bump workflow tracks their latest releases. fallbackToolsVersion serves
 // dev builds only: a real release derives the tools pin from its own Version.
 const (
-	ServerVersion        = "0.73.3"
+	ServerVersion        = "0.73.4"
 	ClientVersion        = "0.64.3"
-	fallbackToolsVersion = "0.72.3"
+	fallbackToolsVersion = "0.72.4"
 )
 
 // PluginVersion is the binary's own release, injected from main's ldflags. It
