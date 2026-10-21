@@ -30,6 +30,11 @@ func TestAliasedSpellingIsNotADocument(t *testing.T) {
 	if _, err := s.ReadCurrent("/Private/doc.md"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("aliased ReadCurrent err = %v, want not exist", err)
 	}
+	// A folded base is caught by the pointer's own spelling, so a store
+	// with no index built, as a tool opens it, answers the same.
+	if _, err := New(root).ReadCurrent("/private/Doc.md"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("aliased base without an index err = %v, want not exist", err)
+	}
 	// The write half only shows where the disk folds case.
 	if _, err := os.Stat(filepath.Join(root, "Private", "doc.md")); err != nil {
 		t.Skip("case-sensitive filesystem: the alias reaches nothing")
