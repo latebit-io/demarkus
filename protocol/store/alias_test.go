@@ -95,4 +95,18 @@ func TestReadCurrentPinsOneVersion(t *testing.T) {
 	if _, err := s.ReadCurrent("/bad.md"); !errors.Is(err, storefmt.ErrIntegrity) {
 		t.Fatalf("malformed pointer err = %v, want ErrIntegrity", err)
 	}
+	// A folded base under the wrong parent is corruption too: the layout
+	// is judged before any alias.
+	if err := os.MkdirAll(filepath.Join(root, "otherdir", "Worse.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "otherdir", "Worse.md", "v1"), []byte("# Worse\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("otherdir", "Worse.md", "v1"), filepath.Join(root, "worse.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReadCurrent("/worse.md"); !errors.Is(err, storefmt.ErrIntegrity) {
+		t.Fatalf("malformed parent err = %v, want ErrIntegrity", err)
+	}
 }

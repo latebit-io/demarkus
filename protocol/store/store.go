@@ -574,13 +574,17 @@ func (s *Store) ReadCurrent(reqPath string) (*storefmt.Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Shape check against the resolved target, <versions>/<base>/vN. A base
-	// matching only case-folded is another document's on a case-folding
-	// disk: not-found even unindexed; a folded directory is the index's.
+	// Layout first, <versions>/<base>/vN; then a base matching only
+	// case-folded is another document's on a case-folding disk: not-found
+	// even unindexed. A folded directory is the index's, below.
 	version := versionNumber(filepath.Base(versionFile))
 	docDir := filepath.Dir(versionFile)
-	if base := filepath.Base(docDir); version == 0 || base != loc.base || filepath.Base(filepath.Dir(docDir)) != versionsDirName {
-		if (base != loc.base && strings.EqualFold(base, loc.base)) || s.aliased(reqPath) {
+	base := filepath.Base(docDir)
+	if version == 0 || filepath.Base(filepath.Dir(docDir)) != versionsDirName {
+		return nil, fmt.Errorf("%w: current pointer of %s names %s", storefmt.ErrIntegrity, reqPath, target)
+	}
+	if base != loc.base {
+		if strings.EqualFold(base, loc.base) {
 			return nil, os.ErrNotExist
 		}
 		return nil, fmt.Errorf("%w: current pointer of %s names %s", storefmt.ErrIntegrity, reqPath, target)
