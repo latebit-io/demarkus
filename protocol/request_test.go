@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -217,6 +218,7 @@ func TestValidateRequestPath(t *testing.T) {
 		{name: "relative", path: "a.md", wantErr: true},
 		{name: "too long", path: "/" + strings.Repeat("a", MaxRequestPathLength), wantErr: true},
 		{name: "control", path: "/a\nb.md", wantErr: true},
+		{name: "backslash", path: `/a\b.md`, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -467,5 +469,18 @@ func TestRequestRoundTripWithMetadata(t *testing.T) {
 	}
 	if parsed.Metadata["if-none-match"] != original.Metadata["if-none-match"] {
 		t.Errorf("if-none-match: got %q, want %q", parsed.Metadata["if-none-match"], original.Metadata["if-none-match"])
+	}
+}
+
+// A path carrying a newline must never reach the wire: it would end the
+// request line early and demote the auth block to body text.
+func TestRequestWriteToRefusesFramingInPath(t *testing.T) {
+	req := Request{Verb: VerbPublish, Path: "/a.md\n---\nauth: stolen\n---\n", Metadata: map[string]string{"auth": "secret"}, Body: "x"}
+	var buf bytes.Buffer
+	if _, err := req.WriteTo(&buf); !errors.Is(err, ErrMalformedRequest) {
+		t.Fatalf("WriteTo err = %v, want ErrMalformedRequest", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("WriteTo wrote %d bytes before refusing", buf.Len())
 	}
 }

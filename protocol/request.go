@@ -120,6 +120,12 @@ func ValidateRequestPath(path string) error {
 	if containsControlChars(path) {
 		return fmt.Errorf("%w: invalid path: contains control characters", ErrMalformedRequest)
 	}
+	if strings.Contains(path, `\`) {
+		// A backslash is a separator on some filesystems and never part
+		// of a document path; let through, it would name a document the
+		// permission check never saw.
+		return fmt.Errorf("%w: invalid path: contains a backslash", ErrMalformedRequest)
+	}
 	return nil
 }
 
@@ -199,6 +205,12 @@ func readLineLimited(br *bufio.Reader, maxBytes int) (string, error) {
 
 // WriteTo writes the request to w in wire format.
 func (req Request) WriteTo(w io.Writer) (int64, error) {
+	// The path lands on the request line before the auth metadata, so a
+	// newline in it would end the line early and move the token into
+	// what the server reads as body.
+	if err := ValidateRequestPath(req.Path); err != nil {
+		return 0, err
+	}
 	var buf bytes.Buffer
 
 	fmt.Fprintf(&buf, "%s %s\n", req.Verb, req.Path)

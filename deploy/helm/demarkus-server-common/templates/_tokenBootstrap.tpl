@@ -131,7 +131,9 @@ spec:
                 TOKEN=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)
               fi
               HASH="sha256-$(printf %s "$TOKEN" | sha256sum | cut -d' ' -f1)"
-              TOML=$(printf '[tokens.%s]\nhash = "%s"\npaths = [{{ include "demarkus-server.tokenAdminPaths" . }}]\noperations = [{{ include "demarkus-server.tokenAdminOps" . }}]\n' "$LABEL" "$HASH")
+              # Paths and operations are printf arguments, never its format: a
+              # pattern with a percent sign must land in the policy verbatim.
+              TOML=$(printf '[tokens.%s]\nhash = "%s"\npaths = [%s]\noperations = [%s]\n' "$LABEL" "$HASH" '{{ include "demarkus-server.tokenAdminPaths" . }}' '{{ include "demarkus-server.tokenAdminOps" . }}')
               kubectl -n "$NS" create secret generic "$TOKENS_SECRET" --from-literal=tokens.toml="$TOML"
               kubectl -n "$NS" patch secret "$TOKENS_SECRET" -p '{"metadata":{"annotations":{"helm.sh/resource-policy":"keep"}}}'
               if [ "$EMIT_RAW" = "true" ]; then

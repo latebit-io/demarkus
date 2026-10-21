@@ -262,7 +262,12 @@ func handlerSnapshot(t *testing.T, h *handler.Handler, currents map[string]int) 
 			add(fmt.Sprintf("fetch %s/v%d", p, v), request(protocol.VerbFetch, fmt.Sprintf("%s/v%d", p, v), nil, ""))
 		}
 	}
+	// The client refuses a path the wire cannot carry (the empty scope);
+	// the handler's own tests pin the server's answer to a raw one.
 	for _, dir := range diffDirPaths {
+		if protocol.ValidateRequestPath(dir) != nil {
+			continue
+		}
 		add("fetchdir "+dir, request(protocol.VerbFetch, dir, nil, ""))
 		add("list "+dir, request(protocol.VerbList, dir, nil, ""))
 		add("list-archived "+dir, request(protocol.VerbList, dir, map[string]string{"include-archived": "true"}, ""))
@@ -272,6 +277,9 @@ func handlerSnapshot(t *testing.T, h *handler.Handler, currents map[string]int) 
 	}
 	for _, q := range diffQueries {
 		for _, scope := range diffScopes {
+			if protocol.ValidateRequestPath(scope) != nil {
+				continue
+			}
 			add(fmt.Sprintf("lookup q=%q scope=%q", q, scope), request(protocol.VerbLookup, scope, map[string]string{"query": q}, ""))
 		}
 	}
@@ -280,6 +288,9 @@ func handlerSnapshot(t *testing.T, h *handler.Handler, currents map[string]int) 
 	}
 	for _, q := range diffQueries {
 		for _, scope := range diffScopes {
+			if protocol.ValidateRequestPath(scope) != nil {
+				continue
+			}
 			add(fmt.Sprintf("lookup-body q=%q scope=%q", q, scope), request(protocol.VerbLookup, scope, map[string]string{"query": q, "match": "body"}, ""))
 		}
 	}

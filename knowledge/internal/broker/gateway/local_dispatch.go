@@ -17,6 +17,10 @@ import (
 // the startup check; an unrouted authority errors, nothing retries.
 type LocalWorlds interface {
 	Routes(authority string) bool
+	// Gated reports whether the world serving authority refuses ungated
+	// streams, which every memory world must: the capability listener would
+	// answer its reads anonymously.
+	Gated(authority string) bool
 	// FloorWorld names the world whose write policy the server merges under
 	// every other world's; "" is none. The tools judge by the same floor.
 	FloorWorld() string
@@ -59,8 +63,12 @@ func CheckLocal(worlds *core.WorldRegistry, local LocalWorlds) error {
 		if local == nil {
 			return fmt.Errorf("world %q is local but no knowledge server runs in this process", w.Name)
 		}
-		if authority := w.Authority(); !local.Routes(authority) {
+		authority := w.Authority()
+		if !local.Routes(authority) {
 			return fmt.Errorf("local world %q: the knowledge server in this process does not serve %q", w.Name, authority)
+		}
+		if w.Profile == core.ProfileMemory && !local.Gated(authority) {
+			return fmt.Errorf("local memory world %q: the knowledge server serves %q on the capability listener; set gated: true on it", w.Name, authority)
 		}
 	}
 	if floor := FloorOf(local); floor != "" {

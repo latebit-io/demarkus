@@ -16,6 +16,8 @@ import (
 // store several replicas share also implements backend.Follower.
 type Store interface {
 	backend.Store
+	// CurrentReader is what another world's commit reads a policy through.
+	backend.CurrentReader
 	backend.ChangeSource
 	io.Closer
 }

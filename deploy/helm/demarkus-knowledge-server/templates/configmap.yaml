@@ -57,6 +57,7 @@ data:
           file: {{ printf "/etc/demarkus/%s" (include "demarkus-knowledge-server.policyKey" $world.name) | quote }}
           {{- end }}
         readOnly: {{ $world.readOnly }}
+        gated: {{ eq $world.profile "memory" }}
         limits:
           maxConcurrentRequests: {{ $world.limits.maxConcurrentRequests }}
           requestTimeout: {{ $world.limits.requestTimeout | quote }}

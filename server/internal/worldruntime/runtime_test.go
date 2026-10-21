@@ -467,3 +467,50 @@ func (r *blockingReader) Read([]byte) (int, error) {
 	<-r.release
 	return 0, io.EOF
 }
+
+// A gated world answers no ungated stream, the capability listener's shape;
+// a gated connection and an in-process exchange serve it as before.
+func TestRuntimeRequiresGateOnGatedWorld(t *testing.T) {
+	runtime := newTestRuntime(t, &Config{RequireGate: true})
+	remote := testAddr("127.0.0.1:1234")
+
+	ungated := newTestStream("FETCH /health\n")
+	runtime.ServeStream(context.Background(), remote, ungated)
+	response, err := protocol.ParseResponse(&ungated.output)
+	if err != nil {
+		t.Fatalf("parse ungated response: %v", err)
+	}
+	if response.Status != protocol.StatusNotPermitted {
+		t.Fatalf("ungated status = %q, want %q", response.Status, protocol.StatusNotPermitted)
+	}
+
+	admit := func(string) (protocol.Gate, error) {
+		return func(context.Context, protocol.Request) (protocol.Grant, error) { return protocol.Grant{}, nil }, nil
+	}
+	gatable := runtime.Endpoint("w").(Gatable)
+	gated, err := gatable.Gated(admit)
+	if err != nil {
+		t.Fatalf("Gated: %v", err)
+	}
+	stream := newTestStream("FETCH /health\n")
+	gated.ServeStream(context.Background(), remote, stream)
+	if response, err = protocol.ParseResponse(&stream.output); err != nil || response.Status != protocol.StatusOK {
+		t.Fatalf("gated response = %q, %v; want ok", response.Status, err)
+	}
+
+	exchanger := runtime.Endpoint("w").(Exchanger)
+	response, err = exchanger.Exchange(context.Background(), remote, protocol.Request{Verb: protocol.VerbFetch, Path: "/health"})
+	if err != nil || response.Status != protocol.StatusOK {
+		t.Fatalf("in-process exchange = %q, %v; want ok", response.Status, err)
+	}
+	// The in-process watch door is a parsed request on a stream: authorized
+	// by the caller, so the gate requirement does not apply.
+	served := newTestStream("")
+	exchanger.ServeRequest(context.Background(), remote, protocol.Request{Verb: protocol.VerbFetch, Path: "/health"}, served)
+	if response, err = protocol.ParseResponse(&served.output); err != nil || response.Status != protocol.StatusOK {
+		t.Fatalf("in-process ServeRequest = %q, %v; want ok", response.Status, err)
+	}
+	if !gatable.RequiresGate() {
+		t.Fatal("endpoint does not report the gate requirement")
+	}
+}

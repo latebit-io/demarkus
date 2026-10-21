@@ -42,11 +42,15 @@ type Config struct {
 	OptionalTokensFiles bool
 	DisableTokenWatch   bool
 	ReadOnly            bool
-	RequestTimeout      time.Duration
-	MaxConcurrent       int
-	RateLimit           float64
-	RateBurst           int
-	Logger              *slog.Logger
+	// RequireGate refuses every network stream that reaches the world
+	// without a connection gate; in-process requests (Exchanger) are the
+	// caller's to authorize.
+	RequireGate    bool
+	RequestTimeout time.Duration
+	MaxConcurrent  int
+	RateLimit      float64
+	RateBurst      int
+	Logger         *slog.Logger
 	// Changes serves WATCH and is closed with the runtime; nil leaves the
 	// verb unsupported.
 	Changes *changefeed.Hub
@@ -63,6 +67,7 @@ type Runtime struct {
 	handler        *handler.Handler
 	tokens         *auth.Source
 	requestTimeout time.Duration
+	requireGate    bool
 	concurrent     chan struct{}
 	limiter        *ratelimit.Limiter
 	logger         *slog.Logger
@@ -127,6 +132,7 @@ func New(config *Config) (*Runtime, error) {
 	runtime := &Runtime{
 		tokens:         tokens,
 		requestTimeout: config.RequestTimeout,
+		requireGate:    config.RequireGate,
 		logger:         logger,
 		closeBackend:   config.CloseBackend,
 		changes:        config.Changes,
@@ -197,6 +203,8 @@ type Gates = func(authority string) (protocol.Gate, error)
 // Gatable is a routed endpoint that also serves bearer connections.
 type Gatable interface {
 	Gated(gates Gates) (quicserve.Endpoint, error)
+	// RequiresGate reports a world that refuses every ungated stream.
+	RequiresGate() bool
 }
 
 // exchange answers one request in process under the same controls as a
@@ -324,9 +332,11 @@ type runtimeEndpoint struct {
 	gate protocol.Gate
 }
 
-// serve answers one stream: parsed is its request when the caller already
-// holds one, else the request is read from stream.
+// serve answers one stream. parsed is the request when the caller holds
+// one: only the Exchanger door passes it, and that door is in process,
+// authorized by its caller, so no listener gate judges it.
 func (endpoint *runtimeEndpoint) serve(ctx context.Context, remote net.Addr, stream quicserve.Stream, parsed *protocol.Request) {
+	inProcess := parsed != nil
 	r, logger := endpoint.runtime, endpoint.logger
 	if !r.beginStream() {
 		if err := stream.Close(); err != nil {
@@ -375,7 +385,14 @@ func (endpoint *runtimeEndpoint) serve(ctx context.Context, remote net.Addr, str
 			return
 		}
 	}
-	if endpoint.gate != nil {
+	if endpoint.gate != nil || (r.requireGate && !inProcess) {
+		if endpoint.gate == nil {
+			// A gated world on the capability listener, which would answer
+			// a private world's reads anonymously.
+			delete(req.Metadata, "auth")
+			h.Deny(stream, req, auth.ErrNotPermitted)
+			return
+		}
 		grant, err := endpoint.gate(requestCtx, req)
 		// The bearer is not a capability token; the handler never sees it.
 		delete(req.Metadata, "auth")
@@ -398,6 +415,9 @@ func (endpoint *runtimeEndpoint) serve(ctx context.Context, remote net.Addr, str
 func (endpoint *runtimeEndpoint) ServeStream(ctx context.Context, remote net.Addr, stream quicserve.Stream) {
 	endpoint.serve(ctx, remote, stream, nil)
 }
+
+// RequiresGate reports whether the world refuses ungated streams.
+func (endpoint *runtimeEndpoint) RequiresGate() bool { return endpoint.runtime.requireGate }
 
 // Gated is this endpoint for one bearer connection: every request passes
 // the gate gates builds for the endpoint's authority.

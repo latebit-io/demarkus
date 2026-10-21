@@ -214,7 +214,7 @@ func New(deps *Deps, version string, dispatcher WorldDispatcher, profile *Profil
 	})
 	g := &Gateway{
 		deps:           deps,
-		dispatcher:     dispatcher,
+		dispatcher:     scopeDispatcher(deps.Worlds, dispatcher),
 		resource:       deps.Gateway.Resource(),
 		profile:        profile,
 		knowledgeGraph: &gatewayGraph{graphStore: graphstore.New()},

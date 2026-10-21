@@ -391,6 +391,42 @@ func (s *Store) Indexed(reqPath string) bool {
 	return ok
 }
 
+// ErrPathAlias is a write whose path reaches an existing document under
+// another spelling.
+var ErrPathAlias = errors.New("path reaches an existing document under another spelling")
+
+// aliased reports a path the index lacks although the disk answers it: a
+// case-folding filesystem serving another document's files, which the
+// permission check never saw. False until the index is built.
+func (s *Store) aliased(reqPath string) bool {
+	s.indexMu.RLock()
+	defer s.indexMu.RUnlock()
+	if !s.indexed {
+		return false
+	}
+	_, ok := s.pathIdx[storefmt.CanonicalPath(reqPath)]
+	return !ok
+}
+
+// liveAlias is aliased for a path whose current file is a live document:
+// archived documents leave the index without being aliases, and a flat
+// file is no document. A failed look reads as no alias.
+func (s *Store) liveAlias(reqPath, current string) bool {
+	if !s.aliased(reqPath) {
+		return false
+	}
+	fi, err := os.Lstat(current)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	absRoot, err := s.resolvedRoot()
+	if err != nil {
+		return false
+	}
+	archived, err := entryArchived(current, absRoot)
+	return err == nil && !archived
+}
+
 // digestLen is the fingerprint width: change detection, not a security bound.
 const digestLen = 16
 
@@ -493,6 +529,9 @@ func (s *Store) Get(reqPath string, version int) (*storefmt.Document, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !archived && s.aliased(reqPath) {
+		return nil, os.ErrNotExist
+	}
 
 	ver, err := s.CurrentVersionResult(reqPath)
 	if err != nil {
@@ -503,6 +542,74 @@ func (s *Store) Get(reqPath string, version int) (*storefmt.Document, error) {
 		Content:  storefmt.ExtractBody(data),
 		Modified: info.ModTime().UTC().Truncate(time.Second),
 		Version:  ver,
+		Archived: archived,
+		Metadata: storefmt.ExtractMetadata(data),
+		ETag:     storefmt.StoredETag(data),
+	}, nil
+}
+
+// ReadCurrent is Get pinned to one target: the pointer is read once, and
+// content, version and modified time come from the file it named even
+// while a commit swaps it. A current file that is no pointer is no document.
+func (s *Store) ReadCurrent(reqPath string) (*storefmt.Document, error) {
+	loc, err := s.locate(reqPath)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := os.Lstat(loc.current)
+	if err != nil {
+		return nil, err
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return nil, os.ErrNotExist
+	}
+	target, err := os.Readlink(loc.current)
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(loc.current), target)
+	}
+	versionFile, err := s.contain(target)
+	if err != nil {
+		return nil, err
+	}
+	// The target must be a version file in this document's own directory,
+	// both resolved the same way. A directory that matches only case-folded
+	// is another document's on a case-folding disk: not-found even unindexed.
+	docDir, err := s.contain(loc.docDir)
+	if err != nil {
+		return nil, err
+	}
+	version := versionNumber(filepath.Base(versionFile))
+	if targetDir := filepath.Dir(versionFile); version == 0 || targetDir != docDir {
+		if version > 0 && strings.EqualFold(targetDir, docDir) {
+			return nil, os.ErrNotExist
+		}
+		return nil, fmt.Errorf("%w: current pointer of %s names %s", storefmt.ErrIntegrity, reqPath, target)
+	}
+	info, err := os.Stat(versionFile)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > int64(protocol.MaxBodyLength+storefmt.MaxStoreFrontmatter) {
+		return nil, fmt.Errorf("%w: file exceeds size limit", storefmt.ErrSizeLimit)
+	}
+	data, err := os.ReadFile(versionFile)
+	if err != nil {
+		return nil, err
+	}
+	archived, err := effectiveArchived(docDir, data)
+	if err != nil {
+		return nil, err
+	}
+	if !archived && s.aliased(reqPath) {
+		return nil, os.ErrNotExist
+	}
+	return &storefmt.Document{
+		Content:  storefmt.ExtractBody(data),
+		Modified: info.ModTime().UTC().Truncate(time.Second),
+		Version:  version,
 		Archived: archived,
 		Metadata: storefmt.ExtractMetadata(data),
 		ETag:     storefmt.StoredETag(data),
@@ -959,7 +1066,12 @@ func perDocVersionNumber(e os.DirEntry) int {
 	if !e.Type().IsRegular() {
 		return 0
 	}
-	name := e.Name()
+	return versionNumber(e.Name())
+}
+
+// versionNumber is the version a per-document file name "vN" carries, 0
+// for any other name.
+func versionNumber(name string) int {
 	if !strings.HasPrefix(name, "v") {
 		return 0
 	}
@@ -1014,6 +1126,9 @@ func (s *Store) getVersion(reqPath string, version int) (*storefmt.Document, err
 	loc, err := s.locate(reqPath)
 	if err != nil {
 		return nil, err
+	}
+	if s.liveAlias(reqPath, loc.current) {
+		return nil, os.ErrNotExist
 	}
 	filePath, err := s.resolve(loc.versionReqPath(version))
 	if err != nil {
@@ -1360,6 +1475,9 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 		// dangling version file behind.
 		return nil, fmt.Errorf("cannot publish %s: a directory exists at this path: %w", reqPath, storefmt.ErrPathCollision)
 	} else {
+		if s.liveAlias(reqPath, currentFile) {
+			return nil, ErrPathAlias
+		}
 		// containWrite already held the versions tree inside the root.
 		next = highestPerDocVersion(versionsDir, base) + 1
 	}

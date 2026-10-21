@@ -17,6 +17,7 @@ All settings are via environment variables; flags override for dev use:
 |---------|------|---------|-------------|
 | `DEMARKUS_ROOT` | `-root` | *(required)* | Content directory to serve |
 | `DEMARKUS_PORT` | `-port` | `6309` | UDP port to listen on |
+| `DEMARKUS_LISTEN` | `-listen` | *(every interface)* | Interface to bind, e.g. `127.0.0.1`; the memory plugins bind their managed soul to loopback |
 | `DEMARKUS_TLS_CERT` | `-tls-cert` | *(dev cert)* | Path to TLS certificate PEM |
 | `DEMARKUS_TLS_KEY` | `-tls-key` | *(dev cert)* | Path to TLS private key PEM |
 | `DEMARKUS_TOKENS` | `-tokens` | *(none; writes disabled)* | Path to TOML tokens file |

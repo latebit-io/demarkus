@@ -39,6 +39,10 @@ type AuthCodeRequest struct {
 	CodeChallengeMethod string `json:"m"`
 	// Resource is the canonical RFC 8707 indicator; blank mints unbound tokens.
 	Resource string `json:"u,omitempty"`
+	// Consent asks the user to approve the client before a code is issued;
+	// ClientName is what that page calls it.
+	Consent    bool   `json:"k,omitempty"`
+	ClientName string `json:"n,omitempty"`
 }
 
 // authCodeStore issues and redeems authorization codes in the shared

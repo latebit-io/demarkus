@@ -470,8 +470,11 @@ type fragmentWorld struct {
 		URL     string `yaml:"url"`
 		WorldID string `yaml:"worldID"`
 	} `yaml:"bucket"`
-	Limits    *fragmentLimits `yaml:"limits,omitempty"`
-	Bootstrap bool            `yaml:"bootstrap"`
+	Limits *fragmentLimits `yaml:"limits,omitempty"`
+	// Gated keeps the tenant off the capability listener: its reads are the
+	// owner's through the bearer gate, never anonymous.
+	Gated     bool `yaml:"gated"`
+	Bootstrap bool `yaml:"bootstrap"`
 }
 
 // renderWorldsFragmentUnion renders the union of the existing fragment
@@ -498,6 +501,7 @@ func (p *Provisioner) renderWorldsFragmentUnion(registry *tenantRegistry, existi
 		world := fragmentWorld{
 			Name:        slug,
 			Authorities: []string{slug + "." + p.cfg.Provisioning.AuthorityDomain},
+			Gated:       true,
 			Bootstrap:   true,
 		}
 		world.Bucket.URL = "gs://" + p.bucketName(slug)

@@ -356,6 +356,7 @@ func (m *worldManager) serve(
 		OptionalTokensFiles: true,
 		DisableTokenWatch:   true, // the coordinator owns reloads
 		ReadOnly:            world.ReadOnly,
+		RequireGate:         world.Gated,
 		RequestTimeout:      time.Duration(world.Limits.RequestTimeout),
 		MaxConcurrent:       world.Limits.MaxConcurrentRequests,
 		RateLimit:           world.Limits.RequestsPerSecond,

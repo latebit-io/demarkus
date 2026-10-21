@@ -128,7 +128,7 @@ func TestEnsureTenantProvisionsAndConverges(t *testing.T) {
 	}
 	// Fragment rendered with the world, bootstrap on.
 	fragment := string(store.get(core.WorldsFragmentRef(cfg)))
-	for _, want := range []string{"name: " + world.Name, "bootstrap: true", "gs://memory-" + world.Name, world.Name + ".memory-worlds.svc.cluster.local"} {
+	for _, want := range []string{"name: " + world.Name, "gated: true", "bootstrap: true", "gs://memory-" + world.Name, world.Name + ".memory-worlds.svc.cluster.local"} {
 		if !strings.Contains(fragment, want) {
 			t.Errorf("fragment missing %q:\n%s", want, fragment)
 		}

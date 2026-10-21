@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"sync"
 	"testing"
@@ -169,4 +170,18 @@ func bindTestDevice(t *testing.T, broker *Server, deviceCode string, claims *cor
 	if err := broker.deviceStore.Bind(context.Background(), hashToken(deviceCode), claims); err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
+}
+
+// redirectlessClient is testClient with a cookie jar and redirects left
+// unfollowed, so a test reads each 302 it is handed.
+func redirectlessClient(t testing.TB, srv *httptest.Server) *http.Client {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := testClient(srv)
+	client.Jar = jar
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return client
 }

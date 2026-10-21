@@ -30,6 +30,7 @@ worlds:
     policy:
       path: /.well-known/demarkus/policy.md
     readOnly: false
+    gated: false
     limits:
       maxConcurrentRequests: 32
       requestTimeout: "10s"
@@ -47,6 +48,7 @@ worlds:
     policy:
       path: /.well-known/demarkus/policy.md
     readOnly: true
+    gated: false
     limits:
       maxConcurrentRequests: 16
       requestTimeout: "5s"

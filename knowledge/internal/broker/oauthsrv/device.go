@@ -648,14 +648,4 @@ func sameOriginPost(r *http.Request) bool {
 // clearDeviceCookie zeroes the device cookie. Called from /auth/callback's
 // device branch after Bind (or Deny) so the cookie can't replay against a
 // later flow. Mirrors the state-cookie clearing pattern in authCallback.
-func (s *Server) clearDeviceCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     deviceCookieName,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   !s.cfg.Server.InsecureCookies,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
-}
+func (s *Server) clearDeviceCookie(w http.ResponseWriter) { s.clearCookie(w, deviceCookieName, "/") }

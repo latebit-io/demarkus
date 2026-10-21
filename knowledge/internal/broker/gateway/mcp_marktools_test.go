@@ -42,8 +42,14 @@ func TestToolBodiesBinding(t *testing.T) {
 			}
 		})
 	}
-	if got := d.VersionsCalls[0]; got.Host != "team-z" || got.Path != "/foo.md" || got.Token != "" {
+	// The unknown world is refused by the profile view before any dispatch.
+	if got := d.VersionsCalls[0]; got.Host != "team-a" || got.Path != "/foo.md" || got.Token != "" {
 		t.Errorf("request = %+v, want the world as host and no token", got)
+	}
+	for _, call := range d.VersionsCalls {
+		if call.Host == "team-z" {
+			t.Errorf("unknown world reached the dispatcher: %+v", call)
+		}
 	}
 }
 

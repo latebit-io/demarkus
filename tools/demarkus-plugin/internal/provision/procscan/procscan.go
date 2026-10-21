@@ -111,6 +111,7 @@ var (
 	rootFlagRe   = regexp.MustCompile(`(?:^|\s)--?root[= ]+(\S+)`)
 	portFlagRe   = regexp.MustCompile(`(?:^|\s)--?port[= ]+(\d+)`)
 	tokensFlagRe = regexp.MustCompile(`(?:^|\s)--?tokens[= ]+(\S+)`)
+	listenFlagRe = regexp.MustCompile(`(?:^|\s)--?listen[= ]+(\S+)`)
 )
 
 // flagValue extracts a flag's value from a ps args string, "" when absent.
@@ -276,6 +277,21 @@ func ListServers() ([]Server, bool) {
 		servers = append(servers, Server{PID: pid, Port: PortOf(args, pid), Root: root})
 	}
 	return servers, true
+}
+
+// BindsTo reports whether pid's server binds host (-listen flag, else
+// DEMARKUS_LISTEN env; neither is every interface). Unlike ListensOn it
+// fails closed: a bind nobody could read is not loopback.
+func BindsTo(pid int, host string) bool {
+	args, ran := Args(pid)
+	if !ran || args == "" {
+		return false
+	}
+	if h := flagValue(args, listenFlagRe); h != "" {
+		return h == host
+	}
+	h, _ := procEnv(pid, "DEMARKUS_LISTEN")
+	return h == host
 }
 
 // ListensOn reports whether pid's server listens on port. A process whose
