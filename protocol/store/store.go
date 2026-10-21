@@ -548,6 +548,73 @@ func (s *Store) Get(reqPath string, version int) (*storefmt.Document, error) {
 	}, nil
 }
 
+// ReadCurrent is Get pinned to one target: the pointer is read once, and
+// content, version and modified time come from the file it named even
+// while a commit swaps it. A current file that is no pointer is no document.
+func (s *Store) ReadCurrent(reqPath string) (*storefmt.Document, error) {
+	loc, err := s.locate(reqPath)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := os.Lstat(loc.current)
+	if err != nil {
+		return nil, err
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return nil, os.ErrNotExist
+	}
+	target, err := os.Readlink(loc.current)
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(loc.current), target)
+	}
+	versionFile, err := s.contain(target)
+	if err != nil {
+		return nil, err
+	}
+	// contain resolved symlinks, so the directory is compared by shape, not
+	// by the unresolved root: <versions>/<base>/vN.
+	version, ok := versionOfFile(versionFile)
+	docDir := filepath.Dir(versionFile)
+	if !ok || filepath.Base(docDir) != loc.base || filepath.Base(filepath.Dir(docDir)) != versionsDirName {
+		return nil, fmt.Errorf("%w: current pointer of %s names %s", storefmt.ErrIntegrity, reqPath, target)
+	}
+	info, err := os.Stat(versionFile)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > int64(protocol.MaxBodyLength+storefmt.MaxStoreFrontmatter) {
+		return nil, fmt.Errorf("file exceeds size limit")
+	}
+	data, err := os.ReadFile(versionFile)
+	if err != nil {
+		return nil, err
+	}
+	archived, err := effectiveArchived(docDir, data)
+	if err != nil {
+		return nil, err
+	}
+	if !archived && s.aliased(reqPath) {
+		return nil, os.ErrNotExist
+	}
+	return &storefmt.Document{
+		Content:  storefmt.ExtractBody(data),
+		Modified: info.ModTime().UTC().Truncate(time.Second),
+		Version:  version,
+		Archived: archived,
+		Metadata: storefmt.ExtractMetadata(data),
+		ETag:     storefmt.StoredETag(data),
+	}, nil
+}
+
+// versionOfFile is the version a per-document version file name carries.
+func versionOfFile(versionFile string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimPrefix(filepath.Base(versionFile), "v"))
+	return n, err == nil && n >= 1 && strings.HasPrefix(filepath.Base(versionFile), "v")
+}
+
 // ListEntries returns the backend-neutral directory listing used by the
 // server's DocumentStore contract. It applies the same filtering as ListDir.
 func (s *Store) ListEntries(reqPath string, opts storefmt.ListOptions) ([]storefmt.DirEntry, error) {

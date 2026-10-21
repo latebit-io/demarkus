@@ -503,6 +503,13 @@ func TestRuntimeRequiresGateOnGatedWorld(t *testing.T) {
 	if err != nil || response.Status != protocol.StatusOK {
 		t.Fatalf("in-process exchange = %q, %v; want ok", response.Status, err)
 	}
+	// The in-process watch door is a parsed request on a stream: authorized
+	// by the caller, so the gate requirement does not apply.
+	served := newTestStream("")
+	exchanger.ServeRequest(context.Background(), remote, protocol.Request{Verb: protocol.VerbFetch, Path: "/health"}, served)
+	if response, err = protocol.ParseResponse(&served.output); err != nil || response.Status != protocol.StatusOK {
+		t.Fatalf("in-process ServeRequest = %q, %v; want ok", response.Status, err)
+	}
 	if !gatable.RequiresGate() {
 		t.Fatal("endpoint does not report the gate requirement")
 	}

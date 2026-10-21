@@ -91,6 +91,8 @@ func TestFlagValue(t *testing.T) {
 		{" demarkus-server -tokens=/etc/demarkus/tokens.toml -root /x", tokensFlagRe, "/etc/demarkus/tokens.toml"},
 		{" demarkus-server -root /x -port 6310", tokensFlagRe, ""},
 		{" demarkus-server -root /x -port 6310", portFlagRe, "6310"},
+		{" demarkus-server -root /x -listen 127.0.0.1 -port 6310", listenFlagRe, "127.0.0.1"},
+		{" demarkus-server -root /x -port 6310", listenFlagRe, ""},
 		{" demarkus-server -root=/x -port 6310", rootFlagRe, "/x"},
 	}
 	for _, c := range cases {

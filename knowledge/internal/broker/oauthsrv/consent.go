@@ -59,7 +59,13 @@ func (s *Server) askConsent(w http.ResponseWriter, r *http.Request, pending *Aut
 	if u, err := url.Parse(pending.RedirectURI); err == nil {
 		data.RedirectHost = u.Host
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// The page carries the email and a one-time nonce: never cached, never
+	// framed by another origin.
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("Content-Security-Policy", "frame-ancestors 'none'")
 	w.WriteHeader(http.StatusOK)
 	if err := consentTemplate.ExecuteTemplate(w, "consent.html", data); err != nil {
 		// The status is in flight; a broken template is a build fault.

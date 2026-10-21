@@ -218,11 +218,11 @@ func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (ba
 	})
 }
 
-// ReadCurrent reads a current document without the store lock: the current
-// pointer is renamed atomically, so the read sees one committed version.
-// The floor policy is read this way inside another world's commit.
+// ReadCurrent reads a current document without the store lock, pinned to
+// the version the pointer named when read, so a concurrent commit changes
+// nothing it returns; the floor policy is read this way inside a commit.
 func (s *Store) ReadCurrent(ctx context.Context, path string) (*storefmt.Document, error) {
-	return call(ctx, func() (*storefmt.Document, error) { return s.documents.Get(path, 0) })
+	return call(ctx, func() (*storefmt.Document, error) { return s.documents.ReadCurrent(path) })
 }
 
 // OpenReadView holds a read lock until the request closes the view.

@@ -22,9 +22,12 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/progress"
 )
 
+// loopbackHost is where a managed soul listens: its reads carry no token.
+const loopbackHost = "127.0.0.1"
+
 // managedServerCurrent: the server recorded in pidFile is alive, genuinely OUR
-// demarkus-server for root (not a reused PID), on the configured port, and the
-// version stamped in versionFile matches the server pin.
+// demarkus-server for root (not a reused PID), on the configured port and
+// loopback, and the version stamped in versionFile matches the server pin.
 func managedServerCurrent(pidFile, versionFile, root string, port int) (bool, error) {
 	pid := procscan.ReadPID(pidFile)
 	switch procscan.ProbeAtRoot(pid, root) {
@@ -34,6 +37,10 @@ func managedServerCurrent(pidFile, versionFile, root string, port int) (bool, er
 		return false, nil
 	}
 	if !procscan.ListensOn(pid, strconv.Itoa(port)) {
+		return false, nil
+	}
+	// A managed server from before the loopback launch is restarted onto it.
+	if !procscan.BindsTo(pid, loopbackHost) {
 		return false, nil
 	}
 	// A missing stamp reads as not current, which restarts onto the pinned binary.
@@ -139,7 +146,7 @@ func Ensure(memoryDir string, port int) error {
 	cmd := exec.Command(serverBin,
 		"-root", memoryDir,
 		"-port", strconv.Itoa(port),
-		"-listen", "127.0.0.1",
+		"-listen", loopbackHost,
 		"-tokens", tokensPath,
 	)
 	cmd.Stdout = lf

@@ -39,3 +39,36 @@ func TestAliasedSpellingIsNotADocument(t *testing.T) {
 		t.Fatalf("document after aliased write = %q, %v", doc.Content, err)
 	}
 }
+
+// ReadCurrent takes every field from the one version file the current
+// pointer named, and refuses a current file that is not a pointer.
+func TestReadCurrentPinsOneVersion(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	if _, err := s.Write("/doc.md", []byte("# One\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write("/doc.md", []byte("# Two\n"), map[string]string{"tags": "x"}); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := s.ReadCurrent("/doc.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Version != 2 || string(doc.Content) != "# Two\n" || doc.Metadata["tags"] != "x" || doc.ETag == "" {
+		t.Fatalf("ReadCurrent = %+v", doc)
+	}
+	got, err := s.Get("/doc.md", 0)
+	if err != nil || got.Version != doc.Version || got.ETag != doc.ETag || !got.Modified.Equal(doc.Modified) {
+		t.Fatalf("Get = %+v, %v; want the same document as ReadCurrent", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "flat.md"), []byte("# Flat\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReadCurrent("/flat.md"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("flat file err = %v, want not exist", err)
+	}
+	if _, err := s.ReadCurrent("/missing.md"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing err = %v, want not exist", err)
+	}
+}

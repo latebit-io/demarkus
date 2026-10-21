@@ -42,8 +42,9 @@ type Config struct {
 	OptionalTokensFiles bool
 	DisableTokenWatch   bool
 	ReadOnly            bool
-	// RequireGate refuses every stream that reaches the world without a
-	// connection gate; in-process exchanges are the caller's to authorize.
+	// RequireGate refuses every network stream that reaches the world
+	// without a connection gate; in-process requests (Exchanger) are the
+	// caller's to authorize.
 	RequireGate    bool
 	RequestTimeout time.Duration
 	MaxConcurrent  int
@@ -331,9 +332,11 @@ type runtimeEndpoint struct {
 	gate protocol.Gate
 }
 
-// serve answers one stream: parsed is its request when the caller already
-// holds one, else the request is read from stream.
+// serve answers one stream. parsed is the request when the caller holds
+// one: only the Exchanger door passes it, and that door is in process,
+// authorized by its caller, so no listener gate judges it.
 func (endpoint *runtimeEndpoint) serve(ctx context.Context, remote net.Addr, stream quicserve.Stream, parsed *protocol.Request) {
+	inProcess := parsed != nil
 	r, logger := endpoint.runtime, endpoint.logger
 	if !r.beginStream() {
 		if err := stream.Close(); err != nil {
@@ -382,7 +385,7 @@ func (endpoint *runtimeEndpoint) serve(ctx context.Context, remote net.Addr, str
 			return
 		}
 	}
-	if endpoint.gate != nil || r.requireGate {
+	if endpoint.gate != nil || (r.requireGate && !inProcess) {
 		if endpoint.gate == nil {
 			// A gated world on the capability listener, which would answer
 			// a private world's reads anonymously.
