@@ -591,7 +591,17 @@ func newTestMemory(t *testing.T) *blob.Memory {
 
 func initializedMemory(t *testing.T) *blob.Memory {
 	t.Helper()
-	objects := newTestMemory(t)
+	return initializedMemoryOf(t, 1<<20)
+}
+
+// initializedMemoryOf is an initialized world on a bucket with the given
+// object limit.
+func initializedMemoryOf(t *testing.T, limit int64) *blob.Memory {
+	t.Helper()
+	objects, err := blob.NewMemory(limit)
+	if err != nil {
+		t.Fatalf("new memory: %v", err)
+	}
 	if err := initialize(context.Background(), objects, testWorldID); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}

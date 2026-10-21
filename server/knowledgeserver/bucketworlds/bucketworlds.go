@@ -16,7 +16,7 @@ import (
 )
 
 // MaxObjectBytes bounds one object a world's store writes or reads.
-const MaxObjectBytes = 4 << 20
+const MaxObjectBytes = bucketstore.MaxObjectBytes
 
 // GCS is the production wiring: each world's bucket on Google Cloud Storage
 // through one client built on the first bucket world and held for the

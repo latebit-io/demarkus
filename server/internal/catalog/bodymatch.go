@@ -5,7 +5,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 )
 
 // BM25 parameters plus the weights added for a term found in the heading
@@ -212,9 +211,5 @@ func snippet(text string, terms []string) string {
 	if len(best) <= SnippetBytes {
 		return best
 	}
-	cut := SnippetBytes - len("...")
-	for cut > 0 && !utf8.RuneStart(best[cut]) {
-		cut--
-	}
-	return best[:cut] + "..."
+	return cutAtRune(best, SnippetBytes-len("...")) + "..."
 }
