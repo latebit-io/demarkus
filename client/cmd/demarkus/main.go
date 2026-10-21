@@ -116,7 +116,7 @@ func requestMain(ctx context.Context) {
 		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n")
 		fmt.Fprintf(os.Stderr, "       demarkus info [-insecure] mark://host:port\n")
 		fmt.Fprintf(os.Stderr, "       demarkus bookmark <add|list|remove>\n")
-		fmt.Fprintf(os.Stderr, "       demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-match body] mark://host:port/scope/\n")
+		fmt.Fprintf(os.Stderr, "       demarkus lookup [-query SUBJECT] [-filter K=V,...] [-limit N] [-match body|similar] mark://host:port/scope/\n")
 		fmt.Fprintf(os.Stderr, "       demarkus watch [-since CURSOR] [-auth TOKEN] mark://host:port/prefix/\n       demarkus ping [-insecure] mark://host:port\n")
 		fmt.Fprintf(os.Stderr, "       demarkus token <add|remove|list>\n\n")
 		flag.PrintDefaults()
@@ -698,14 +698,11 @@ func lookupMain(ctx context.Context, args []string) {
 	}
 	var draft string
 	if *match == fetch.MatchSimilar {
-		body, err := io.ReadAll(io.LimitReader(os.Stdin, protocol.MaxBodyLength+1))
+		body, err := readDraft(ctx, os.Stdin)
 		if err != nil {
 			log.Fatalf("read the draft from stdin: %v", err)
 		}
-		if int64(len(body)) > protocol.MaxBodyLength {
-			log.Fatalf("draft from stdin exceeds %d bytes", protocol.MaxBodyLength)
-		}
-		draft = string(body)
+		draft = body
 	}
 
 	target := mustTarget(fs.Arg(0))
@@ -729,6 +726,32 @@ func lookupMain(ctx context.Context, args []string) {
 	}
 
 	printResult(result, *verbose)
+}
+
+// readDraft reads a similar-mode draft up to the protocol's body limit; a
+// cancelled ctx returns at once even while stdin stays open.
+func readDraft(ctx context.Context, in io.Reader) (string, error) {
+	type read struct {
+		body []byte
+		err  error
+	}
+	done := make(chan read, 1)
+	go func() {
+		body, err := io.ReadAll(io.LimitReader(in, protocol.MaxBodyLength+1))
+		done <- read{body, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case r := <-done:
+		if r.err != nil {
+			return "", r.err
+		}
+		if int64(len(r.body)) > protocol.MaxBodyLength {
+			return "", fmt.Errorf("draft exceeds %d bytes", protocol.MaxBodyLength)
+		}
+		return string(r.body), nil
+	}
 }
 
 // exitCodeForStatus lets scripts detect a refused request: the body of a
@@ -837,7 +860,7 @@ func confirmRetention(meta map[string]string, yes bool, in *os.File, out io.Writ
 func validateVerb(verb string) error {
 	switch verb {
 	case protocol.VerbLookup:
-		return errors.New("use 'demarkus lookup -query SUBJECT mark://host/scope/' for LOOKUP requests")
+		return errors.New("use 'demarkus lookup [-query SUBJECT] [-match body|similar] mark://host/scope/' for LOOKUP requests")
 	case protocol.VerbWatch:
 		return errors.New("use 'demarkus watch mark://host/prefix/' for WATCH requests")
 	}
