@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
 )
 
 func TestInventoryFollowsCursorsIntoSubdirectories(t *testing.T) {
@@ -472,5 +473,59 @@ func TestAbsoluteLinksToTheOwnStoreAreInternal(t *testing.T) {
 	}
 	if got := findings(r, CheckOrphans); len(got) != 3 {
 		t.Fatalf("without the authority every absolute link is external: %v", got)
+	}
+}
+
+func TestDuplicatesNearTier(t *testing.T) {
+	typed := func(body string) fakeDoc {
+		return fakeDoc{Body: body, Meta: map[string]string{"tags": "store", "type": "Guide"}}
+	}
+	f := newFake(map[string]fakeDoc{
+		"/index.md": {Body: "# Hub\n\n- [a](/a.md)\n- [b](/b.md)\n- [c](/c.md)\n- [d](/d.md)\n- [hub](/patterns.md)\n- [t](/tenants.md)\n- [j](/journal/)\n", Meta: map[string]string{"tags": "index"}},
+		"/a.md":     typed(neardtest.LessonDoc),
+		"/b.md":     typed(neardtest.RewordedDoc),
+		"/c.md":     typed("# Sizing again\n\n" + neardtest.Reworded + "\n\nOne more line of text here.\n"),
+		// Joins through /b.md or /c.md: too far from /a.md to be its candidate.
+		"/d.md":                  typed("# Sizing once more\n\n" + neardtest.Reworded + "\n\nThe replica index rebuilds lazily on the first body search, so an idle world keeps no section index resident and\n"),
+		"/patterns.md":           typed(neardtest.HubDoc),
+		"/tenants.md":            typed(neardtest.OtherDoc),
+		"/journal/2026-10-21.md": typed("# 2026-10-21\n\n" + neardtest.Reworded + "\n"),
+	})
+	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := findings(r, CheckDuplicates)
+	var cluster, contained []string
+	for _, g := range got {
+		switch {
+		case strings.Contains(g, "near-duplicate of"):
+			cluster = append(cluster, g)
+		case strings.Contains(g, "contained in"):
+			contained = append(contained, g)
+		default:
+			t.Errorf("unexpected finding %q", g)
+		}
+		if strings.Contains(g, "/journal/") {
+			t.Errorf("journal entry in a near-duplicate finding: %q", g)
+		}
+	}
+	if len(cluster) != 1 || !strings.HasPrefix(cluster[0], "/a.md: near-duplicate of /b.md (0.") || !strings.Contains(cluster[0], ", /c.md (0.") {
+		t.Errorf("cluster = %v, want one finding at /a.md naming /b.md and /c.md", cluster)
+	}
+	// A member that joined through another is scored with that edge, never
+	// against the first member it may not match.
+	if len(cluster) != 1 || !strings.Contains(cluster[0], ", /d.md (0.86 shared with /b.md)") {
+		t.Errorf("cluster = %v, want /d.md scored with the member it joined through", cluster)
+	}
+	for _, want := range []string{"/a.md: contained in /patterns.md#shards (", "/tenants.md: contained in /patterns.md#tenants ("} {
+		if !slices.ContainsFunc(contained, func(c string) bool { return strings.HasPrefix(c, want) }) {
+			t.Errorf("contained = %v, want a finding %q", contained, want)
+		}
+	}
+	for _, c := range contained {
+		if !strings.Contains(c, "/patterns.md#") {
+			t.Errorf("contained finding not against a section of the hub: %q", c)
+		}
 	}
 }

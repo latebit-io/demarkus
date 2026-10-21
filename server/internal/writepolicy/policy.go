@@ -84,15 +84,15 @@ type documentGetter interface {
 // Current loads and validates the policy document from reader. With require
 // false a world without one has the empty policy.
 func Current(ctx context.Context, reader documentGetter, require bool) (publishpolicy.Policy, error) {
-	document, err := reader.Get(ctx, publishpolicy.DocumentPath, 0)
+	document, found, err := currentDocument(ctx, reader, publishpolicy.DocumentPath)
 	switch {
-	case errors.Is(err, backend.ErrNotFound):
+	case err != nil:
+		return publishpolicy.Policy{}, fmt.Errorf("load current policy: %w", err)
+	case !found:
 		if require {
 			return publishpolicy.Policy{}, fmt.Errorf("%w: %w: %s", ErrInvalidPolicy, errPolicyMissing, publishpolicy.DocumentPath)
 		}
 		return publishpolicy.Policy{}, nil
-	case err != nil:
-		return publishpolicy.Policy{}, fmt.Errorf("load current policy: %w", err)
 	case document.Archived:
 		return publishpolicy.Policy{}, fmt.Errorf("%w: %s is archived", ErrInvalidPolicy, publishpolicy.DocumentPath)
 	}
@@ -104,6 +104,16 @@ func Current(ctx context.Context, reader documentGetter, require bool) (publishp
 		)
 	}
 	return policy, nil
+}
+
+// currentDocument is the current version of a well-known document through
+// reader; found is false when there is none.
+func currentDocument(ctx context.Context, reader documentGetter, path string) (document *storefmt.Document, found bool, err error) {
+	document, err = reader.Get(ctx, path, 0)
+	if errors.Is(err, backend.ErrNotFound) {
+		return nil, false, nil
+	}
+	return document, err == nil, err
 }
 
 // evaluate judges one prepared write: the body first, then the metadata

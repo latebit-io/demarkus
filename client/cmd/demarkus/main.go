@@ -116,7 +116,7 @@ func requestMain(ctx context.Context) {
 		fmt.Fprintf(os.Stderr, "       demarkus graph [-depth N] [-insecure] mark://host:port/path\n")
 		fmt.Fprintf(os.Stderr, "       demarkus info [-insecure] mark://host:port\n")
 		fmt.Fprintf(os.Stderr, "       demarkus bookmark <add|list|remove>\n")
-		fmt.Fprintf(os.Stderr, "       demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-match body] mark://host:port/scope/\n")
+		fmt.Fprintf(os.Stderr, "       demarkus lookup [-query SUBJECT] [-filter K=V,...] [-limit N] [-match body|similar] mark://host:port/scope/\n")
 		fmt.Fprintf(os.Stderr, "       demarkus watch [-since CURSOR] [-auth TOKEN] mark://host:port/prefix/\n       demarkus ping [-insecure] mark://host:port\n")
 		fmt.Fprintf(os.Stderr, "       demarkus token <add|remove|list>\n\n")
 		flag.PrintDefaults()
@@ -670,18 +670,21 @@ func editorCommand(fields []string, file string) (name string, args []string) {
 
 func lookupMain(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("lookup", flag.ExitOnError)
-	query := fs.String("query", "", "subject to look up; matched against document tags and titles (required)")
+	query := fs.String("query", "", "subject to look up; matched against document tags and titles (required unless -match similar, where it only names the report)")
 	filter := fs.String("filter", "", "comma-separated key=value predicates (e.g. project=broker,modified-after=2025-01-01)")
 	limit := fs.Int("limit", 0, "maximum results (0 = server default)")
-	match := fs.String("match", "", "catalog (default) or body: match section text too; rows carry path#anchor and a snippet")
+	match := fs.String("match", "", "catalog (default), body (match section text too; rows carry path#anchor and a snippet) or similar (the draft on stdin; rows are the documents it repeats)")
 	authToken := fs.String("auth", "", "auth token (env: DEMARKUS_AUTH)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	verbose := fs.Bool("v", false, "show status and metadata header before the results table")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-match body] [-auth TOKEN] mark://host:port/scope/\n\n")
+		fmt.Fprintf(os.Stderr, "usage: demarkus lookup [-query SUBJECT] [-filter K=V,...] [-limit N] [-match body|similar] [-auth TOKEN] mark://host:port/scope/\n\n")
 		fmt.Fprintf(os.Stderr, "Look up documents by subject against the server's catalog. Use / as the scope\n")
 		fmt.Fprintf(os.Stderr, "to search everything, or a subtree like /docs/ to narrow it. -match body also\n")
-		fmt.Fprintf(os.Stderr, "matches section text; a server without body match answers from the catalog.\n\n")
+		fmt.Fprintf(os.Stderr, "matches section text; a server without body match answers from the catalog.\n")
+		fmt.Fprintf(os.Stderr, "-query is required except with -match similar, which reads a draft from stdin\n")
+		fmt.Fprintf(os.Stderr, "and lists the documents it repeats; a server that predates the mode refuses\n")
+		fmt.Fprintf(os.Stderr, "it and the command exits non-zero.\n\n")
 		fs.PrintDefaults()
 	}
 	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
@@ -690,8 +693,16 @@ func lookupMain(ctx context.Context, args []string) {
 		fs.Usage()
 		os.Exit(1)
 	}
-	if *query == "" {
+	if *query == "" && *match != fetch.MatchSimilar {
 		log.Fatal("lookup requires -query")
+	}
+	var draft string
+	if *match == fetch.MatchSimilar {
+		body, err := readDraft(ctx, os.Stdin)
+		if err != nil {
+			log.Fatalf("read the draft from stdin: %v", err)
+		}
+		draft = body
 	}
 
 	target := mustTarget(fs.Arg(0))
@@ -704,7 +715,7 @@ func lookupMain(ctx context.Context, args []string) {
 
 	req := fetch.LookupRequest{
 		Host: host, Scope: scope, Token: token,
-		Query: *query, Filter: *filter, Limit: *limit, Match: *match,
+		Query: *query, Filter: *filter, Limit: *limit, Match: *match, Body: draft,
 	}
 	result, err := client.Lookup(ctx, req)
 	if err != nil {
@@ -715,6 +726,32 @@ func lookupMain(ctx context.Context, args []string) {
 	}
 
 	printResult(result, *verbose)
+}
+
+// readDraft reads a similar-mode draft up to the protocol's body limit; a
+// cancelled ctx returns at once even while stdin stays open.
+func readDraft(ctx context.Context, in io.Reader) (string, error) {
+	type read struct {
+		body []byte
+		err  error
+	}
+	done := make(chan read, 1)
+	go func() {
+		body, err := io.ReadAll(io.LimitReader(in, protocol.MaxBodyLength+1))
+		done <- read{body, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case r := <-done:
+		if r.err != nil {
+			return "", r.err
+		}
+		if int64(len(r.body)) > protocol.MaxBodyLength {
+			return "", fmt.Errorf("draft exceeds %d bytes", protocol.MaxBodyLength)
+		}
+		return string(r.body), nil
+	}
 }
 
 // exitCodeForStatus lets scripts detect a refused request: the body of a
@@ -823,7 +860,7 @@ func confirmRetention(meta map[string]string, yes bool, in *os.File, out io.Writ
 func validateVerb(verb string) error {
 	switch verb {
 	case protocol.VerbLookup:
-		return errors.New("use 'demarkus lookup -query SUBJECT mark://host/scope/' for LOOKUP requests")
+		return errors.New("use 'demarkus lookup [-query SUBJECT] [-match body|similar] mark://host/scope/' for LOOKUP requests")
 	case protocol.VerbWatch:
 		return errors.New("use 'demarkus watch mark://host/prefix/' for WATCH requests")
 	}

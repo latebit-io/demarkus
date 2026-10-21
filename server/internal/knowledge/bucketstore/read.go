@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
@@ -141,18 +142,34 @@ func (view *snapshotView) VerifyChain(ctx context.Context, reqPath string) error
 // backend.ErrBodyMatchUnavailable and the caller answers from the catalog.
 func (view *snapshotView) Lookup(ctx context.Context, query string, options catalog.Options) ([]catalog.Result, error) {
 	return viewRead(ctx, view, catalogRead, func(ctx context.Context, r *readView) ([]catalog.Result, error) {
-		if options.Match != catalog.MatchBody {
+		if !protocol.MatchSectioned(string(options.Match)) {
 			return search(ctx, r.scan(), query, options)
 		}
-		if view.store == nil {
-			return nil, backend.ErrBodyMatchUnavailable
-		}
-		version, ok := view.store.sections.await(ctx, r.snapshot.Sequence)
-		if !ok {
-			return nil, backend.ErrBodyMatchUnavailable
+		version, err := view.sectionIndex(ctx, r, options.Stale)
+		if err != nil {
+			return nil, err
 		}
 		return search(ctx, version, query, options)
 	})
+}
+
+// sectionIndex is the section index version covering the pinned snapshot,
+// waited for briefly, or with stale the newest one built; a lent snapshot
+// or none in time refuses with backend.ErrBodyMatchUnavailable.
+func (view *snapshotView) sectionIndex(ctx context.Context, r *readView, stale bool) (*sectionVersion, error) {
+	if view.store == nil {
+		return nil, backend.ErrBodyMatchUnavailable
+	}
+	var version *sectionVersion
+	if stale {
+		version = view.store.sections.latest()
+	} else {
+		version, _ = view.store.sections.await(ctx, r.snapshot.Sequence)
+	}
+	if version == nil {
+		return nil, backend.ErrBodyMatchUnavailable
+	}
+	return version, nil
 }
 
 // attemptView lends a commit attempt's snapshot to a precondition as an

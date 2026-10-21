@@ -10,6 +10,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
+	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
@@ -87,9 +88,17 @@ func gatedWireScenario(t *testing.T, b LookupBackend) []WireGolden {
 		Content: writepolicy.ContentOptions{SecretsWarn: true, Options: contentcheck.Options{PII: contentcheck.Warn}},
 	})})
 	refused := NewHandler(LookupBackend{Store: writepolicy.Enforce(b.Store, writepolicy.Options{})})
+	lesson := map[string]string{"tags": "store, wire", "importance": "0.3"}
+	if resp := sendSettled(t, warned, request(protocol.VerbPublish, "/docs/lesson.md", withExpected(lesson, "0"), neardtest.LessonDoc)); resp.Status != protocol.StatusCreated {
+		t.Fatalf("setup /docs/lesson.md: status %s", resp.Status)
+	}
+	// The section index must cover the lesson before the reworded copy is judged.
+	sendSettled(t, warned, request(protocol.VerbLookup, "/", map[string]string{"query": "compactor", "match": "body"}, ""))
 	return []WireGolden{
 		{"publish-warned", pinWallClock(sendSettled(t, warned, request(protocol.VerbPublish, "/docs/dsn.md", withExpected(meta, "0"), WireSecret)))},
 		{"publish-refused", pinWallClock(sendSettled(t, refused, request(protocol.VerbPublish, "/docs/dsn-refused.md", withExpected(meta, "0"), WireSecret)))},
+		{"lookup-similar", pinWallClock(sendSettled(t, warned, request(protocol.VerbLookup, "/", map[string]string{"match": "similar", "query": "shard sizing"}, neardtest.RewordedDoc)))},
+		{"publish-near-duplicate", pinWallClock(sendSettled(t, warned, request(protocol.VerbPublish, "/docs/lesson-again.md", withExpected(lesson, "0"), neardtest.RewordedDoc)))},
 	}
 }
 

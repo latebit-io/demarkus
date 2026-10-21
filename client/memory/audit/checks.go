@@ -15,6 +15,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
+	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
 )
 
@@ -263,7 +264,7 @@ func (a *audit) checkMetadata() {
 	}
 }
 
-func (a *audit) checkDuplicates() {
+func (a *audit) checkDuplicates(ctx context.Context) {
 	byHash := map[string][]string{}
 	for _, p := range a.order {
 		if d := a.docs[p]; live(d.status) && d.meta["content-hash"] != "" {
@@ -278,6 +279,137 @@ func (a *audit) checkDuplicates() {
 		slices.Sort(paths)
 		a.add(CheckDuplicates, paths[0], "identical body at "+strings.Join(paths[1:], ", "), "keep one and link the rest")
 	}
+	a.checkNearDuplicates(ctx)
+}
+
+// checkNearDuplicates files the near tier: reworded copies as one finding
+// per cluster, documents a longer one holds; the first of identical copies
+// stands in. The scan is quadratic and stops at the audit timeout, noted.
+func (a *audit) checkNearDuplicates(ctx context.Context) {
+	docs := make(map[string]*neardup.Doc)
+	seenHash := map[string]bool{}
+	for _, p := range a.order {
+		d := a.docs[p]
+		hash := d.meta["content-hash"]
+		if !live(d.status) || a.layout.RepeatsByDesign(p) || (hash != "" && seenHash[hash]) {
+			continue
+		}
+		seenHash[hash] = true
+		if doc := neardup.Analyze(d.body); doc.Whole.Sig != 0 {
+			docs[p] = &doc
+		}
+	}
+	others := func(own string) func(yield func(neardup.Target) bool) {
+		return func(yield func(neardup.Target) bool) {
+			for i, q := range a.order {
+				if i%256 == 0 && ctx.Err() != nil {
+					return
+				}
+				if doc := docs[q]; q != own && doc != nil && !yield(doc.Target(q)) {
+					return
+				}
+			}
+		}
+	}
+	cluster := newClusters()
+	// edges keeps every near-duplicate pair's score, so a member joined
+	// through another is reported with an edge it has, never a score
+	// against a document it may not match.
+	edges := map[string]map[string]float64{}
+	var held []Finding // the draft path and the hit's wording, in order
+	scanned := 0
+	for _, p := range a.order {
+		doc, ok := docs[p]
+		if !ok {
+			continue
+		}
+		if ctx.Err() != nil {
+			a.note("near-duplicate scan stopped at the audit timeout after %d of %d documents; the rest were not compared", scanned, len(docs))
+			break
+		}
+		scanned++
+		for _, h := range neardup.Scan(doc.Whole, others(p)) {
+			if h.Verdict == neardup.VerdictNearDuplicate && h.Anchor == "" {
+				cluster.join(p, h.Path)
+				for a, b := range map[string]string{p: h.Path, h.Path: p} {
+					if edges[a] == nil {
+						edges[a] = map[string]float64{}
+					}
+					edges[a][b] = max(edges[a][b], h.Score)
+				}
+				continue
+			}
+			held = append(held, Finding{Path: p, Detail: h.String()})
+		}
+	}
+	for _, members := range cluster.groups() {
+		first := members[0]
+		parts := make([]string, 0, len(members)-1)
+		for _, m := range members[1:] {
+			if score, direct := edges[m][first]; direct {
+				parts = append(parts, fmt.Sprintf("%s (%.2f shared)", m, score))
+				continue
+			}
+			partner := strongest(edges[m])
+			parts = append(parts, fmt.Sprintf("%s (%.2f shared with %s)", m, edges[m][partner], partner))
+		}
+		a.add(CheckDuplicates, first, "near-duplicate of "+strings.Join(parts, ", "), "keep one, append to or link the rest")
+	}
+	for _, f := range held {
+		a.add(CheckDuplicates, f.Path, f.Detail, "append to or link the existing document")
+	}
+}
+
+// strongest is the partner with the highest score, the first path on a tie.
+func strongest(scores map[string]float64) string {
+	best := ""
+	for partner, score := range scores {
+		if best == "" || score > scores[best] || score == scores[best] && partner < best {
+			best = partner
+		}
+	}
+	return best
+}
+
+// clusters is union-find over paths, for one finding per reworded group.
+type clusters struct{ parent map[string]string }
+
+func newClusters() *clusters { return &clusters{parent: map[string]string{}} }
+
+func (c *clusters) find(p string) string {
+	if _, ok := c.parent[p]; !ok {
+		c.parent[p] = p
+	}
+	for c.parent[p] != p {
+		c.parent[p] = c.parent[c.parent[p]]
+		p = c.parent[p]
+	}
+	return p
+}
+
+func (c *clusters) join(a, b string) {
+	ra, rb := c.find(a), c.find(b)
+	if ra != rb {
+		c.parent[max(ra, rb)] = min(ra, rb)
+	}
+}
+
+// groups lists each cluster of two or more, members sorted, by first member.
+func (c *clusters) groups() [][]string {
+	byRoot := map[string][]string{}
+	for p := range c.parent {
+		byRoot[c.find(p)] = append(byRoot[c.find(p)], p)
+	}
+	var out [][]string
+	for _, members := range byRoot {
+		if len(members) < 2 {
+			continue
+		}
+		slices.Sort(members)
+		out = append(out, members)
+	}
+	slices.SortFunc(out, func(x, y []string) int { return strings.Compare(x[0], y[0]) })
+	return out
 }
 
 // checkShape runs the gate once per body and files each finding under the

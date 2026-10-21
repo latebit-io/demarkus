@@ -2,10 +2,12 @@ package storetest
 
 import (
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 )
 
@@ -18,6 +20,7 @@ func RunHandlerConformance(t *testing.T, factory LookupFactory) {
 	}{
 		{"VersionNamedDirectory", testHandlerVersionNamedDirectory},
 		{"PathCollisionIsBadRequest", testHandlerPathCollision},
+		{"SimilarLookup", testHandlerSimilar},
 	}
 	for _, st := range subtests {
 		t.Run(st.name, func(t *testing.T) { st.fn(t, factory(t)) })
@@ -110,5 +113,42 @@ func testPolicyRejection(t *testing.T, b LookupBackend) {
 	tagged := request(protocol.VerbPublish, "/tagged.md", map[string]string{"expected-version": "0", "tags": "domain:test"}, "# Tagged\n")
 	if resp := Send(t, h, tagged); resp.Status != protocol.StatusCreated {
 		t.Errorf("tagged publish = %s, want %s", resp.Status, protocol.StatusCreated)
+	}
+}
+
+// LOOKUP with match similar answers the documents the request body repeats:
+// one row per document, the verdict as the snippet, a section anchor when
+// a section holds the draft; a short draft has no rows; no body is bad-request.
+func testHandlerSimilar(t *testing.T, b LookupBackend) {
+	h := NewHandler(b)
+	publishDoc(t, h, "/docs/lesson.md", neardtest.LessonDoc, map[string]string{"tags": "store", "importance": "0.6"})
+	publishDoc(t, h, "/docs/patterns.md", neardtest.HubDoc, map[string]string{"tags": "patterns", "importance": "0.8"})
+	publishDoc(t, h, "/notes/other.md", neardtest.OtherDoc, map[string]string{"tags": "broker"})
+	similar := func(scope string, meta map[string]string, body string) protocol.Response {
+		m := map[string]string{"match": "similar"}
+		maps.Copy(m, meta)
+		return sendSettled(t, h, request(protocol.VerbLookup, scope, m, body))
+	}
+	resp := similar("/", nil, neardtest.RewordedDoc)
+	if resp.Status != protocol.StatusOK || resp.Metadata["match"] != "similar" || resp.Metadata["matches"] != "2" {
+		t.Fatalf("status %q match %q matches %q, want ok similar 2 (%s)", resp.Status, resp.Metadata["match"], resp.Metadata["matches"], resp.Body)
+	}
+	for _, want := range []string{
+		"| Path | Importance | Title | Tags | Snippet |",
+		`| /docs/lesson.md | 0.60 | Shards | store | near-duplicate \(0.76 shared\) |`,
+		`| /docs/patterns.md#shards | 0.80 | Patterns › Shards | patterns | contained \(0.`,
+	} {
+		if !strings.Contains(resp.Body, want) {
+			t.Errorf("body lacks %q:\n%s", want, resp.Body)
+		}
+	}
+	if resp := similar("/notes/", map[string]string{"query": "shards"}, neardtest.RewordedDoc); resp.Metadata["matches"] != "0" || !strings.Contains(resp.Body, `"shards" in /notes`) {
+		t.Errorf("scoped similar: matches %q body %q, want none under /notes/ named by the query", resp.Metadata["matches"], resp.Body)
+	}
+	if resp := similar("/", nil, "# Short\n\nfar too short to sign\n"); resp.Status != protocol.StatusOK || resp.Metadata["matches"] != "0" {
+		t.Errorf("short draft: %s matches %q, want ok with no rows", resp.Status, resp.Metadata["matches"])
+	}
+	if resp := similar("/", nil, ""); resp.Status != protocol.StatusBadRequest {
+		t.Errorf("similar without a body: %s, want bad-request", resp.Status)
 	}
 }

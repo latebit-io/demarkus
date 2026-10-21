@@ -1,0 +1,11 @@
+---
+match: similar
+matches: "1"
+status: ok
+---
+
+# Lookup matches for "shard sizing" in /
+
+| Path | Importance | Title | Tags | Snippet |
+|------|------------|-------|------|---------|
+| /docs/lesson.md | 0.30 | Shards | store, wire | near-duplicate \(0.76 shared\) |

@@ -109,7 +109,7 @@ type Store interface {
 var ErrBodyMatchUnavailable = errors.New("body match unavailable")
 
 // CatalogReader exposes LOOKUP against the same snapshot as Reader. A
-// body-mode Lookup may return ErrBodyMatchUnavailable.
+// section-index mode (body, similar) may return ErrBodyMatchUnavailable.
 type CatalogReader interface {
 	Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error)
 }

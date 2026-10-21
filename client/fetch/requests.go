@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"strconv"
+	"strings"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/quic-go/quic-go"
@@ -47,7 +48,8 @@ type LookupRequest struct {
 	Query              string
 	Filter             string // comma separated key=value predicates
 	Limit              int    // max results; <= 0 lets the server choose
-	Match              string // MatchCatalog (default) or MatchBody
+	Match              string // MatchCatalog (default), MatchBody or MatchSimilar
+	Body               string // MatchSimilar: the draft the server judges
 }
 
 // WriteRequest is a PUBLISH or an APPEND. ExpectedVersion is the optimistic
@@ -102,8 +104,11 @@ func (r VersionsRequest) Request() (protocol.Request, error) {
 // match mode is refused here once for every surface, not relayed back as a
 // bad-request body.
 func (r LookupRequest) Request() (protocol.Request, error) {
-	if r.Query == "" {
+	if r.Query == "" && r.Match != MatchSimilar {
 		return protocol.Request{}, errors.New("LOOKUP requires a non-empty query")
+	}
+	if r.Match == MatchSimilar && strings.TrimSpace(r.Body) == "" {
+		return protocol.Request{}, errors.New("LOOKUP match similar requires the draft as Body")
 	}
 	if _, err := protocol.ParseMatch(r.Match); err != nil {
 		return protocol.Request{}, err
@@ -118,6 +123,7 @@ func (r LookupRequest) Request() (protocol.Request, error) {
 	if r.Match != "" {
 		req.Metadata["match"] = r.Match
 	}
+	req.Body = r.Body
 	return req, nil
 }
 
@@ -243,7 +249,7 @@ func (c *Client) read(ctx context.Context, host string, req protocol.Request) (R
 // AnsweredFromCatalog reports a body match request that the server answered
 // in catalog mode: an ok response without the match: body echo.
 func AnsweredFromCatalog(req LookupRequest, r Result) bool {
-	return req.Match == MatchBody && r.Response.Status == protocol.StatusOK && r.Response.Metadata["match"] != MatchBody
+	return r.Response.Status == protocol.StatusOK && protocol.Downgraded(req.Match, r.Response.Metadata["match"])
 }
 
 // TokenResolver answers the capability token to send to host (host:port), or

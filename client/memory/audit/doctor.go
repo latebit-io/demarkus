@@ -166,7 +166,7 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 	a.checkADRSequence()
 	a.checkMetadata()
 	a.checkPolicy()
-	a.checkDuplicates()
+	a.checkDuplicates(ctx)
 	a.checkShape()
 	a.checkContent()
 	a.checkStyleGuide(ctx)

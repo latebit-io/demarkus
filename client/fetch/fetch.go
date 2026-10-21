@@ -176,6 +176,7 @@ func ParseListPageMetadata(resp protocol.Response) (ListPageMetadata, error) {
 const (
 	MatchCatalog = protocol.MatchCatalog
 	MatchBody    = protocol.MatchBody
+	MatchSimilar = protocol.MatchSimilar
 )
 
 // CatalogFallbackNote is what surfaces report when body match was requested

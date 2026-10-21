@@ -142,13 +142,23 @@ func knowledgeBackend() *fetchtest.Client {
 			"host:6309/docs/retries.md":              fetchtest.Head("# Retry Rules\n\nOlder rules.\n", 2, map[string]string{"tags": "retry"}),
 		},
 		LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
-			if r.Match != fetch.MatchBody {
-				return fetchtest.Lookup(r.Query, r.Scope, ""), nil
+			switch r.Match {
+			case fetch.MatchBody:
+				return fetchtest.Lookup(r.Query, r.Scope, r.Match,
+					render.LookupRow{Path: "/docs/retries.md", Title: "Retry Rules", Tags: []string{"retry"}, Importance: 0.5},
+					render.LookupRow{Path: "/docs/other.md", Title: "Other", Tags: []string{"misc"}, Importance: 0.3},
+				), nil
+			case fetch.MatchSimilar:
+				// The store's near-duplicate judgment: the same-title document
+				// reworded, and a section of a hub the lookups never surfaced.
+				// The target itself answers too when it exists: an update is not its own duplicate.
+				return fetchtest.Lookup(r.Query, r.Scope, r.Match,
+					render.LookupRow{Path: "/docs/retry-rules.md", Title: "Retry Rules", Tags: []string{"retry"}, Importance: 0.5, Snippet: "near-duplicate (0.98 shared)"},
+					render.LookupRow{Path: "/docs/retries.md", Title: "Retry Rules", Tags: []string{"retry"}, Importance: 0.5, Snippet: "near-duplicate (0.76 shared)"},
+					render.LookupRow{Path: "/docs/hub.md", Anchor: "retries", Title: "Hub › Retries", Tags: []string{"hub"}, Importance: 0.9, Snippet: "contained (0.91)"},
+				), nil
 			}
-			return fetchtest.Lookup(r.Query, r.Scope, r.Match,
-				render.LookupRow{Path: "/docs/retries.md", Title: "Retry Rules", Tags: []string{"retry"}, Importance: 0.5},
-				render.LookupRow{Path: "/docs/other.md", Title: "Other", Tags: []string{"misc"}, Importance: 0.3},
-			), nil
+			return fetchtest.Lookup(r.Query, r.Scope, ""), nil
 		},
 	}
 }
@@ -164,12 +174,12 @@ func TestPromoteDryRunChecksPolicyAndDedups(t *testing.T) {
 		t.Errorf("numbers = %+v (%s)", backend.PublishCalls, applied.Text)
 	}
 	backend.PublishCalls, draft.Phase, draft.Packet = nil, "dry_run", ""
-	for _, want := range []string{"target: /docs/retry-rules.md\nstatus: findings\nversion: 0\npolicy: strictness block; require_tags domain\n", "findings:\n- missing tag axis domain", "candidates:\n- /docs/retries.md: same title (v2); tags retry\n", "related:\n- /docs/other.md: Other\n", "packet: ", "\n=== /docs/retries.md (v2)\n# Retry Rules\n\nOlder rules."} {
+	for _, want := range []string{"target: /docs/retry-rules.md\nstatus: findings\nversion: 0\npolicy: strictness block; require_tags domain\n", "findings:\n- missing tag axis domain", "candidates:\n- /docs/retries.md: same title, near-duplicate (0.76 shared) (v2); tags retry\n- /docs/hub.md: contained (0.91) in #retries; tags hub\n", "related:\n- /docs/other.md: Other\n", "packet: ", "\n=== /docs/retries.md (v2)\n# Retry Rules\n\nOlder rules."} {
 		if !strings.Contains(got.Text, want) {
 			t.Errorf("dry run missing %q:\n%s", want, got.Text)
 		}
 	}
-	if got.IsError || len(backend.PublishCalls) != 0 {
+	if got.IsError || len(backend.PublishCalls) != 0 || strings.Contains(got.Text, "/docs/retry-rules.md: near-duplicate") {
 		t.Fatalf("dry run = %+v", got)
 	}
 	draft.URL = "/locked.md"
@@ -180,10 +190,20 @@ func TestPromoteDryRunChecksPolicyAndDedups(t *testing.T) {
 	if got := tools.Promote(t.Context(), draft); !got.IsError || !strings.Contains(got.Text, "needs body") {
 		t.Errorf("no body = %+v", got)
 	}
+	// An older server refuses the similar mode: the dry run says so and stands.
+	backend.LookupFn = func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+		if r.Match == fetch.MatchSimilar {
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusBadRequest}}, nil
+		}
+		return fetchtest.Lookup(r.Query, r.Scope, r.Match), nil
+	}
+	draft.Body = promoteSource
+	if got := tools.Promote(t.Context(), draft); got.IsError || !strings.Contains(got.Text, "note: near-duplicate lookup not offered by this server; dedup by title and tags only\n") {
+		t.Errorf("older server = %+v", got)
+	}
 	backend.LookupFn = func(context.Context, fetch.LookupRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusServerError}}, nil
 	}
-	draft.Body = promoteSource
 	if got := tools.Promote(t.Context(), draft); !got.IsError || !strings.HasPrefix(got.Text, "status: incomplete-dedup\n") {
 		t.Errorf("lookup failure = %+v", got)
 	}

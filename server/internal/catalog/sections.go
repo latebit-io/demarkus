@@ -3,19 +3,13 @@ package catalog
 import (
 	"maps"
 	"math"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
-	"github.com/latebit-io/demarkus/protocol/mdoutline"
+	"github.com/latebit-io/demarkus/protocol/mdtext"
+	"github.com/latebit-io/demarkus/protocol/neardup"
 )
-
-// maxTokenBytes drops hashes, long URLs, and similar one-off strings that
-// nobody types as a query; their word runs are still indexed.
-const maxTokenBytes = 32
 
 // termSet is an immutable sorted set of distinct tokens packed into one
 // string. It never pins the text its tokens were cut from.
@@ -77,6 +71,7 @@ type section struct {
 	tf      []uint8  // occurrences (capped), parallel to tokens
 	length  int32    // own-text token count
 	trail   []termID // distinct heading-trail tokens, sorted
+	sig     uint64   // near-duplicate signature of the own text; 0 under neardup.MinTokens
 }
 
 // DocSections is the section index of one body. It depends on the body
@@ -84,6 +79,7 @@ type section struct {
 type DocSections struct {
 	vocab    termSet // every token in the sections' text and trails
 	sections []section
+	sig      uint64 // near-duplicate signature of the whole own text; 0 under neardup.MinTokens
 }
 
 // Len returns the number of indexed sections.
@@ -103,6 +99,42 @@ func (d *DocSections) ids(terms []string) []termID {
 	return ids
 }
 
+// At and Set make the index a neardup.Sections with Len: sets are rebuilt
+// from the vocabulary for the few candidates a scan judges, never stored.
+func (d *DocSections) At(i int) neardup.Section {
+	return neardup.Section{Anchor: d.sections[i].anchor, Sig: d.sections[i].sig}
+}
+
+// Set is the token set of one section's own text, or of every section's for -1.
+func (d *DocSections) Set(section int) neardup.Set {
+	secs := d.sections
+	if section >= 0 {
+		secs = d.sections[section : section+1]
+	}
+	return neardup.SetOf(func(yield func(string) bool) {
+		for i := range secs {
+			for _, id := range secs[i].tokens {
+				if !yield(d.vocab.at(int(id))) {
+					return
+				}
+			}
+		}
+	})
+}
+
+// heading is the heading text of the section at anchor, "" when none.
+func (d *DocSections) heading(anchor string) string {
+	if anchor == "" {
+		return ""
+	}
+	for i := range d.sections {
+		if d.sections[i].anchor == anchor {
+			return d.sections[i].heading
+		}
+	}
+	return ""
+}
+
 // rawSection is a section with its tokens still as strings.
 type rawSection struct {
 	sec    section
@@ -118,32 +150,9 @@ func IndexSections(body []byte) *DocSections { return IndexSectionsString(string
 // IndexSectionsString is IndexSections for a body held as a string, which it
 // indexes without a copy.
 func IndexSectionsString(src string) *DocSections {
-	hs := mdoutline.Headings(src)
 	var raws []rawSection
-	preambleEnd := len(src)
-	if len(hs) > 0 {
-		preambleEnd = hs[0].Start
-	}
-	if s, ok := newSection("", "", src[:preambleEnd], nil); ok {
-		raws = append(raws, s)
-	}
-	var stack []mdoutline.Heading // ancestors of the current heading
-	for i, h := range hs {
-		for len(stack) > 0 && stack[len(stack)-1].Level >= h.Level {
-			stack = stack[:len(stack)-1]
-		}
-		trail := make([]string, 0, len(stack)+1)
-		for _, a := range stack {
-			trail = append(trail, a.Text)
-		}
-		trail = append(trail, h.Text)
-		stack = append(stack, h)
-
-		own := src[headingLineEnd(src, h.Start):h.End]
-		if i+1 < len(hs) {
-			own = src[headingLineEnd(src, h.Start):hs[i+1].Start]
-		}
-		if s, ok := newSection(h.Anchor, h.Text, own, trail); ok {
+	for _, p := range mdtext.Split(src) {
+		if s, ok := newSection(p.Anchor, p.Heading, p.Own, p.Trail); ok {
 			raws = append(raws, s)
 		}
 	}
@@ -164,6 +173,7 @@ func assignIDs(raws []rawSection) *DocSections {
 		}
 	}
 	doc := &DocSections{vocab: newTermSet(ids), sections: make([]section, len(raws))}
+	var whole neardup.Signer
 	var rank termID
 	for i := range doc.vocab.ends {
 		ids[doc.vocab.at(i)] = rank
@@ -182,49 +192,32 @@ func assignIDs(raws []rawSection) *DocSections {
 		for _, tok := range slices.Sorted(maps.Keys(raw.trail)) {
 			s.trail = append(s.trail, ids[tok])
 		}
+		var signer neardup.Signer
+		for tok, c := range raw.counts {
+			if len(tok) >= neardup.MinTokenBytes {
+				signer.Add(neardup.Hash(tok), c)
+			}
+		}
+		whole.Merge(&signer)
+		s.sig = signer.Sig()
 		doc.sections[i] = s
 	}
+	doc.sig = whole.Sig()
 	return doc
-}
-
-// headingLineEnd returns the offset just past the heading's first line.
-func headingLineEnd(src string, start int) int {
-	if nl := strings.IndexByte(src[start:], '\n'); nl >= 0 {
-		return start + nl + 1
-	}
-	return len(src)
 }
 
 // newSection strips markup and tokenizes own text. A heading with no text of
 // its own is still a section: its trail alone can match.
 func newSection(anchor, heading, raw string, trail []string) (rawSection, bool) {
-	text := stripMarkup(raw)
+	text := mdtext.Strip(raw)
 	if text == "" && heading == "" {
 		return rawSection{}, false
 	}
-	counts := make(map[string]int)
-	total := 0
-	for field := range strings.FieldsSeq(text) {
-		fieldTokens(field, func(tok string) {
-			counts[tok]++
-			total++
-		})
-	}
+	counts, total := mdtext.Counts(text)
 	// Single-line text can be a substring of the body; the clone keeps the
 	// index from pinning the whole body.
 	s := section{anchor: anchor, heading: heading, text: strings.Clone(text), length: int32(min(total, 1<<30))}
-	return rawSection{sec: s, counts: counts, trail: fieldTokenSet(trail)}, true
-}
-
-// fieldTokenSet tokenizes fields (headings, tags, a title) into a set.
-func fieldTokenSet(fields []string) map[string]struct{} {
-	seen := make(map[string]struct{})
-	for _, f := range fields {
-		for field := range strings.FieldsSeq(f) {
-			fieldTokens(field, func(tok string) { seen[tok] = struct{}{} })
-		}
-	}
-	return seen
+	return rawSection{sec: s, counts: counts, trail: mdtext.TokenSet(trail)}, true
 }
 
 // hasTerm reports whether the sorted id set contains id.
@@ -234,107 +227,4 @@ func hasTerm(set []termID, id termID) bool {
 	}
 	_, ok := slices.BinarySearch(set, id)
 	return ok
-}
-
-func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_' }
-
-func notWordRune(r rune) bool { return !isWordRune(r) }
-
-// fieldTokens emits a field as the trimmed whole word, then each run of word
-// characters in it, so path.Match is matched by path, match, and path.match.
-// Tokens are lowercase, at least two runes, and at most maxTokenBytes.
-func fieldTokens(field string, emit func(string)) {
-	whole := strings.ToLower(strings.TrimFunc(field, notWordRune))
-	if whole == "" {
-		return
-	}
-	if utf8.RuneCountInString(whole) >= 2 && len(whole) <= maxTokenBytes {
-		emit(whole)
-	}
-	if strings.IndexFunc(whole, notWordRune) < 0 {
-		return
-	}
-	for part := range strings.FieldsFuncSeq(whole, notWordRune) {
-		if utf8.RuneCountInString(part) >= 2 && len(part) <= maxTokenBytes {
-			emit(part)
-		}
-	}
-}
-
-// queryTerms splits a body-mode query into distinct whole-word terms; a
-// field over maxTokenBytes is queried as its word runs, as it was indexed.
-func queryTerms(query string) []string {
-	seen := make(map[string]bool)
-	var out []string
-	add := func(t string) {
-		if utf8.RuneCountInString(t) >= 2 && !seen[t] {
-			seen[t] = true
-			out = append(out, t)
-		}
-	}
-	for field := range strings.FieldsSeq(query) {
-		t := strings.ToLower(strings.TrimFunc(field, notWordRune))
-		if len(t) > maxTokenBytes {
-			fieldTokens(t, add)
-			continue
-		}
-		add(t)
-	}
-	return out
-}
-
-var (
-	imageRe    = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
-	linkRe     = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
-	htmlTagRe  = regexp.MustCompile(`</?[A-Za-z][^>]*>`)
-	listRe     = regexp.MustCompile(`^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?`)
-	quoteRe    = regexp.MustCompile(`^(?:>\s?)+`)
-	tableSepRe = regexp.MustCompile(`^\|?[\s|:-]+\|?$`)
-	inlineMark = strings.NewReplacer("`", "", "*", "", "~~", "", "|", " ")
-)
-
-// stripMarkup reduces markdown to prose lines: fences, list and quote
-// markers, link targets, tags, emphasis, and table pipes are dropped so
-// tokens and snippets carry words only.
-func stripMarkup(raw string) string {
-	var lines []string
-	for line := range strings.SplitSeq(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") || isSetextUnderline(line) {
-			continue
-		}
-		if strings.HasPrefix(line, "|") && tableSepRe.MatchString(line) {
-			continue
-		}
-		// Each pass is guarded by a byte probe: most prose lines carry no
-		// markup, and an unguarded regexp pass allocates even on a miss.
-		if line[0] == '>' {
-			if line = quoteRe.ReplaceAllString(line, ""); line == "" {
-				continue
-			}
-		}
-		if strings.IndexByte("-*+0123456789", line[0]) >= 0 {
-			line = listRe.ReplaceAllString(line, "")
-		}
-		if strings.Contains(line, "](") {
-			line = imageRe.ReplaceAllString(line, "$1")
-			line = linkRe.ReplaceAllString(line, "$1")
-		}
-		if strings.IndexByte(line, '<') >= 0 {
-			line = htmlTagRe.ReplaceAllString(line, "")
-		}
-		if strings.ContainsAny(line, "`*~|") {
-			line = inlineMark.Replace(line)
-		}
-		if line = strings.Join(strings.Fields(line), " "); line != "" {
-			lines = append(lines, line)
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-// isSetextUnderline reports a line of only = or - characters, which mdoutline
-// counts as part of the heading above it.
-func isSetextUnderline(line string) bool {
-	return line != "" && (strings.Trim(line, "=") == "" || strings.Trim(line, "-") == "")
 }

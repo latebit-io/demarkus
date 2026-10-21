@@ -120,6 +120,8 @@ const (
 	MatchCatalog = "catalog"
 	// MatchBody is the LOOKUP match mode over the section index of bodies.
 	MatchBody = "body"
+	// MatchSimilar answers which documents the request body repeats (§6.7).
+	MatchSimilar = "similar"
 
 	// MaxMetaKeys is the maximum number of publisher metadata keys. Sized to
 	// hold the recognized OKF fields (type, title, description, resource, tags,
@@ -179,6 +181,18 @@ func ParseMatch(match string) (string, error) {
 		return MatchCatalog, nil
 	case MatchBody:
 		return MatchBody, nil
+	case MatchSimilar:
+		return MatchSimilar, nil
 	}
-	return "", fmt.Errorf("match must be %q or %q, got %q", MatchCatalog, MatchBody, match)
+	return "", fmt.Errorf("match must be %q, %q or %q, got %q", MatchCatalog, MatchBody, MatchSimilar, match)
+}
+
+// MatchSectioned reports a mode answered from the section index, whose rows
+// are sections with a snippet.
+func MatchSectioned(match string) bool { return match == MatchBody || match == MatchSimilar }
+
+// Downgraded reports a lookup answered in a lesser mode than it asked for:
+// the server had no section index for the snapshot and said so.
+func Downgraded(requested, answered string) bool {
+	return requested != "" && requested != MatchCatalog && answered != requested
 }
