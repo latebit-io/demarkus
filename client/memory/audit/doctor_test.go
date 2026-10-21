@@ -511,8 +511,10 @@ func TestDuplicatesNearTier(t *testing.T) {
 	if len(cluster) != 1 || !strings.HasPrefix(cluster[0], "/a.md: near-duplicate of /b.md (0.") || !strings.Contains(cluster[0], ", /c.md (0.") {
 		t.Errorf("cluster = %v, want one finding at /a.md naming /b.md and /c.md", cluster)
 	}
-	if len(contained) < 2 {
-		t.Errorf("contained = %v, want the shards section of /patterns.md for /a.md and /tenants.md for its section", contained)
+	for _, want := range []string{"/a.md: contained in /patterns.md#shards (", "/tenants.md: contained in /patterns.md#tenants ("} {
+		if !slices.ContainsFunc(contained, func(c string) bool { return strings.HasPrefix(c, want) }) {
+			t.Errorf("contained = %v, want a finding %q", contained, want)
+		}
 	}
 	for _, c := range contained {
 		if !strings.Contains(c, "/patterns.md#") {

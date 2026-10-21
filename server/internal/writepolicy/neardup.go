@@ -67,7 +67,7 @@ func (e *enforcer) nearDuplicates(ctx context.Context, req backend.WriteRequest)
 // there is none or it is archived; a stored one parses, the gate refused the others.
 func currentLayout(ctx context.Context, reader documentGetter) (layout.Layout, error) {
 	document, found, err := currentDocument(ctx, reader, layout.DocumentPath)
-	if err != nil || !found {
+	if err != nil || !found || document.Archived {
 		return layout.Default(), err
 	}
 	return layout.Parse(string(document.Content))

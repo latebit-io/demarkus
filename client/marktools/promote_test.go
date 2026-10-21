@@ -151,7 +151,9 @@ func knowledgeBackend() *fetchtest.Client {
 			case fetch.MatchSimilar:
 				// The store's near-duplicate judgment: the same-title document
 				// reworded, and a section of a hub the lookups never surfaced.
+				// The target itself answers too when it exists: an update is not its own duplicate.
 				return fetchtest.Lookup(r.Query, r.Scope, r.Match,
+					render.LookupRow{Path: "/docs/retry-rules.md", Title: "Retry Rules", Tags: []string{"retry"}, Importance: 0.5, Snippet: "near-duplicate (0.98 shared)"},
 					render.LookupRow{Path: "/docs/retries.md", Title: "Retry Rules", Tags: []string{"retry"}, Importance: 0.5, Snippet: "near-duplicate (0.76 shared)"},
 					render.LookupRow{Path: "/docs/hub.md", Anchor: "retries", Title: "Hub › Retries", Tags: []string{"hub"}, Importance: 0.9, Snippet: "contained (0.91)"},
 				), nil
@@ -177,7 +179,7 @@ func TestPromoteDryRunChecksPolicyAndDedups(t *testing.T) {
 			t.Errorf("dry run missing %q:\n%s", want, got.Text)
 		}
 	}
-	if got.IsError || len(backend.PublishCalls) != 0 {
+	if got.IsError || len(backend.PublishCalls) != 0 || strings.Contains(got.Text, "/docs/retry-rules.md: near-duplicate") {
 		t.Fatalf("dry run = %+v", got)
 	}
 	draft.URL = "/locked.md"

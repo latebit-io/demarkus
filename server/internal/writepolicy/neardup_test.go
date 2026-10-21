@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
@@ -54,6 +55,25 @@ func TestEnforceWarnsNearDuplicate(t *testing.T) {
 			if strings.Contains(w, "/journal/") {
 				t.Errorf("journal entry named as a target: %q", warnings)
 			}
+		}
+	})
+	t.Run("the template names the journal; archived, the default does", func(t *testing.T) {
+		direct := backendtest.Direct{Store: raw}
+		if _, err := direct.WriteVersion(layout.DocumentPath, 0, []byte("# Template\n\njournal: log/\n"), map[string]string{"tags": "layout"}); err != nil {
+			t.Fatal(err)
+		}
+		if warnings, err := write(t, gated, "/log/2026-10-22.md", 0, reworded, tags); err != nil || len(warnings) != 0 {
+			t.Errorf("entry under the template's journal = %q, %v; want clean", warnings, err)
+		}
+		warnings, err := write(t, gated, "/journal/2026-10-22.md", 0, reworded, tags)
+		if err != nil || len(warnings) != 1 {
+			t.Errorf("entry under the default journal with another named = %q, %v; want the warning", warnings, err)
+		}
+		if _, err := direct.Archive(layout.DocumentPath, true); err != nil {
+			t.Fatal(err)
+		}
+		if warnings, err := write(t, gated, "/journal/2026-10-23.md", 0, reworded, tags); err != nil || len(warnings) != 0 {
+			t.Errorf("entry under the default journal with the template archived = %q, %v; want clean", warnings, err)
 		}
 	})
 	t.Run("an appended fragment already held elsewhere is named", func(t *testing.T) {

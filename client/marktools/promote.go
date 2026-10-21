@@ -406,12 +406,19 @@ func (t *Tools) similar(ctx context.Context, target Target, check *promote.Check
 		check.Notes = append(check.Notes, "near-duplicate lookup unanswered: "+fetch.CatalogFallbackNote)
 		return nil
 	}
+	// An update is not a duplicate of itself.
+	rows = slices.DeleteFunc(rows, func(r lookuptable.Row) bool { return r.Path == check.Draft.Path })
 	check.Candidates, check.Related = promote.SimilarCandidates(check.Candidates, check.Related, rows)
 	return nil
 }
 
-// errMatchUnsupported is a lookup mode the server predates.
+// errMatchUnsupported is a lookup mode the server predates: the client
+// validated the mode, so a bad-request on one is a server without it.
 var errMatchUnsupported = errors.New("lookup mode not offered by this server")
+
+func matchUnsupported(req fetch.LookupRequest, r fetch.Result) bool {
+	return req.Match != "" && req.Match != fetch.MatchCatalog && r.Response.Status == protocol.StatusBadRequest
+}
 
 // lookupRows is one lookup over the world (host, scope, token and the
 // dedup limit filled in); a page that fills is an error, since a candidate
@@ -422,7 +429,7 @@ func (t *Tools) lookupRows(ctx context.Context, target Target, req fetch.LookupR
 	switch {
 	case err != nil:
 		return nil, false, errors.New(t.errText(SiteLookup, target.Host, err))
-	case fetch.MatchUnsupported(req, r):
+	case matchUnsupported(req, r):
 		return nil, false, errMatchUnsupported
 	case r.Response.Status != protocol.StatusOK:
 		return nil, false, fmt.Errorf("lookup %q: %s", req.Query, r.Response.Status)

@@ -264,7 +264,7 @@ func (a *audit) checkMetadata() {
 	}
 }
 
-func (a *audit) checkDuplicates() {
+func (a *audit) checkDuplicates(ctx context.Context) {
 	byHash := map[string][]string{}
 	for _, p := range a.order {
 		if d := a.docs[p]; live(d.status) && d.meta["content-hash"] != "" {
@@ -279,13 +279,13 @@ func (a *audit) checkDuplicates() {
 		slices.Sort(paths)
 		a.add(CheckDuplicates, paths[0], "identical body at "+strings.Join(paths[1:], ", "), "keep one and link the rest")
 	}
-	a.checkNearDuplicates()
+	a.checkNearDuplicates(ctx)
 }
 
 // checkNearDuplicates files the near tier: reworded copies as one finding
-// per cluster, and documents a longer one already holds. Of identical
-// copies the first in order stands in; the rest are the exact tier's.
-func (a *audit) checkNearDuplicates() {
+// per cluster, documents a longer one holds; the first of identical copies
+// stands in. The scan is quadratic and stops at the audit timeout, noted.
+func (a *audit) checkNearDuplicates(ctx context.Context) {
 	docs := make(map[string]*neardup.Doc)
 	seenHash := map[string]bool{}
 	for _, p := range a.order {
@@ -301,7 +301,10 @@ func (a *audit) checkNearDuplicates() {
 	}
 	others := func(own string) func(yield func(neardup.Target) bool) {
 		return func(yield func(neardup.Target) bool) {
-			for _, q := range a.order {
+			for i, q := range a.order {
+				if i%256 == 0 && ctx.Err() != nil {
+					return
+				}
 				if doc := docs[q]; q != own && doc != nil && !yield(doc.Target(q)) {
 					return
 				}
@@ -310,11 +313,17 @@ func (a *audit) checkNearDuplicates() {
 	}
 	cluster := newClusters()
 	var held []Finding // the draft path and the hit's wording, in order
+	scanned := 0
 	for _, p := range a.order {
 		doc, ok := docs[p]
 		if !ok {
 			continue
 		}
+		if ctx.Err() != nil {
+			a.note("near-duplicate scan stopped at the audit timeout after %d of %d documents; the rest were not compared", scanned, len(docs))
+			break
+		}
+		scanned++
 		for _, h := range neardup.Scan(doc.Whole, others(p)) {
 			if h.Verdict == neardup.VerdictNearDuplicate && h.Anchor == "" {
 				cluster.join(p, h.Path)

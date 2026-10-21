@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"strconv"
+	"strings"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/quic-go/quic-go"
@@ -106,7 +107,7 @@ func (r LookupRequest) Request() (protocol.Request, error) {
 	if r.Query == "" && r.Match != MatchSimilar {
 		return protocol.Request{}, errors.New("LOOKUP requires a non-empty query")
 	}
-	if r.Match == MatchSimilar && r.Body == "" {
+	if r.Match == MatchSimilar && strings.TrimSpace(r.Body) == "" {
 		return protocol.Request{}, errors.New("LOOKUP match similar requires the draft as Body")
 	}
 	if _, err := protocol.ParseMatch(r.Match); err != nil {
@@ -249,12 +250,6 @@ func (c *Client) read(ctx context.Context, host string, req protocol.Request) (R
 // in catalog mode: an ok response without the match: body echo.
 func AnsweredFromCatalog(req LookupRequest, r Result) bool {
 	return r.Response.Status == protocol.StatusOK && protocol.Downgraded(req.Match, r.Response.Metadata["match"])
-}
-
-// MatchUnsupported reports a lookup refused for its match mode: the client
-// validated the mode, so a bad-request is a server that predates it.
-func MatchUnsupported(req LookupRequest, r Result) bool {
-	return req.Match != "" && req.Match != MatchCatalog && r.Response.Status == protocol.StatusBadRequest
 }
 
 // TokenResolver answers the capability token to send to host (host:port), or

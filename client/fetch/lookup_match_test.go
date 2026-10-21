@@ -49,3 +49,15 @@ func TestAnsweredFromCatalog(t *testing.T) {
 		t.Error("AnsweredFromCatalog: want true only for an ok body request lacking the echo")
 	}
 }
+
+func TestSimilarNeedsADraft(t *testing.T) {
+	for _, body := range []string{"", " \n\t"} {
+		if _, err := (LookupRequest{Scope: "/", Match: MatchSimilar, Body: body}).Request(); err == nil || !strings.Contains(err.Error(), "requires the draft") {
+			t.Errorf("similar with body %q = %v, want refused before dialing", body, err)
+		}
+	}
+	req, err := (LookupRequest{Scope: "/", Match: MatchSimilar, Body: "# Draft\n\nenough to send\n"}).Request()
+	if err != nil || req.Body == "" || req.Metadata["match"] != MatchSimilar || req.Metadata["query"] != "" {
+		t.Errorf("similar request = %+v, %v; want the draft as the body and no query", req, err)
+	}
+}
