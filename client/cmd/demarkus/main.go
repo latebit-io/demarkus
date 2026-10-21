@@ -670,7 +670,7 @@ func editorCommand(fields []string, file string) (name string, args []string) {
 
 func lookupMain(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("lookup", flag.ExitOnError)
-	query := fs.String("query", "", "subject to look up; matched against document tags and titles (required)")
+	query := fs.String("query", "", "subject to look up; matched against document tags and titles (required unless -match similar, where it only names the report)")
 	filter := fs.String("filter", "", "comma-separated key=value predicates (e.g. project=broker,modified-after=2025-01-01)")
 	limit := fs.Int("limit", 0, "maximum results (0 = server default)")
 	match := fs.String("match", "", "catalog (default), body (match section text too; rows carry path#anchor and a snippet) or similar (the draft on stdin; rows are the documents it repeats)")
@@ -678,12 +678,13 @@ func lookupMain(ctx context.Context, args []string) {
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	verbose := fs.Bool("v", false, "show status and metadata header before the results table")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: demarkus lookup -query SUBJECT [-filter K=V,...] [-limit N] [-match body|similar] [-auth TOKEN] mark://host:port/scope/\n\n")
+		fmt.Fprintf(os.Stderr, "usage: demarkus lookup [-query SUBJECT] [-filter K=V,...] [-limit N] [-match body|similar] [-auth TOKEN] mark://host:port/scope/\n\n")
 		fmt.Fprintf(os.Stderr, "Look up documents by subject against the server's catalog. Use / as the scope\n")
 		fmt.Fprintf(os.Stderr, "to search everything, or a subtree like /docs/ to narrow it. -match body also\n")
 		fmt.Fprintf(os.Stderr, "matches section text; a server without body match answers from the catalog.\n")
-		fmt.Fprintf(os.Stderr, "-match similar reads a draft from stdin and lists the documents it repeats;\n")
-		fmt.Fprintf(os.Stderr, "a server that predates the mode refuses it and the command exits non-zero.\n\n")
+		fmt.Fprintf(os.Stderr, "-query is required except with -match similar, which reads a draft from stdin\n")
+		fmt.Fprintf(os.Stderr, "and lists the documents it repeats; a server that predates the mode refuses\n")
+		fmt.Fprintf(os.Stderr, "it and the command exits non-zero.\n\n")
 		fs.PrintDefaults()
 	}
 	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
@@ -697,9 +698,12 @@ func lookupMain(ctx context.Context, args []string) {
 	}
 	var draft string
 	if *match == fetch.MatchSimilar {
-		body, err := io.ReadAll(os.Stdin)
+		body, err := io.ReadAll(io.LimitReader(os.Stdin, protocol.MaxBodyLength+1))
 		if err != nil {
 			log.Fatalf("read the draft from stdin: %v", err)
+		}
+		if int64(len(body)) > protocol.MaxBodyLength {
+			log.Fatalf("draft from stdin exceeds %d bytes", protocol.MaxBodyLength)
 		}
 		draft = string(body)
 	}
