@@ -162,7 +162,7 @@ func (view *snapshotView) sectionIndex(ctx context.Context, r *readView, stale b
 	}
 	var version *sectionVersion
 	if stale {
-		version = view.store.sections.latest()
+		version = view.store.sections.latest(ctx)
 	} else {
 		version, _ = view.store.sections.await(ctx, r.snapshot.Sequence)
 	}

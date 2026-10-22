@@ -16,10 +16,11 @@ import (
 )
 
 // The section index for body search (ADR 0012) is never built on the commit
-// path or when a slot applies: a world builds it on its first body search,
-// keeps it current behind installs, and drops it when idle (ADR 0036).
+// path or when a slot applies: built on the first body search, or warmed by
+// the write gate (WarmSections); dropped when idle (ADR 0036).
 const (
-	// sectionIdle is how long a world keeps its index without a body search.
+	// sectionIdle is how long a world keeps its index without a body search
+	// or a write.
 	sectionIdle = 30 * time.Minute
 	// sectionSteps bounds the installs queued for the index; past it the
 	// worker catches up to the served snapshot in one diff instead.
@@ -101,14 +102,50 @@ func (version *sectionVersion) Entries(scope string) iter.Seq2[*catalog.Entry, *
 // the index's wait for it; false when there is none in time. The first call
 // starts the build.
 func (index *sectionIndex) await(ctx context.Context, sequence int64) (*sectionVersion, bool) {
-	deadline := time.NewTimer(index.wait)
-	defer deadline.Stop()
+	return index.settle(ctx, func() (*sectionVersion, bool) { return index.findLocked(sequence) })
+}
+
+// latest is the newest version built, whatever snapshot it covers, waiting
+// the same bound for a cold index so a world's first writes are judged;
+// nil when none in time.
+func (index *sectionIndex) latest(ctx context.Context) *sectionVersion {
+	version, _ := index.settle(ctx, func() (*sectionVersion, bool) {
+		if n := len(index.versions); n > 0 {
+			return index.versions[n-1], true
+		}
+		return nil, false
+	})
+	return version
+}
+
+// activate starts the build; a no-op while the index is active or closed.
+func (index *sectionIndex) activate() {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	if index.closed {
+		return
+	}
+	index.activateLocked()
+	index.used = index.store.now()
+}
+
+// settle answers find at once, else waits up to the index's wait for a
+// publish that settles it, counted as a waiter against eviction; find runs
+// under the lock. The first call starts the build.
+func (index *sectionIndex) settle(ctx context.Context, find func() (*sectionVersion, bool)) (*sectionVersion, bool) {
 	index.mu.Lock()
 	if index.closed {
 		index.mu.Unlock()
 		return nil, false
 	}
 	index.activateLocked()
+	if version, settled := find(); settled {
+		index.used = index.store.now()
+		index.mu.Unlock()
+		return version, version != nil
+	}
+	deadline := time.NewTimer(index.wait)
+	defer deadline.Stop()
 	index.waiting++
 	defer func() {
 		index.mu.Lock()
@@ -117,12 +154,8 @@ func (index *sectionIndex) await(ctx context.Context, sequence int64) (*sectionV
 		index.mu.Unlock()
 	}()
 	for {
-		version, settled := index.findLocked(sequence)
 		published := index.published
 		index.mu.Unlock()
-		if settled {
-			return version, version != nil
-		}
 		select {
 		case <-published:
 		case <-deadline.C:
@@ -131,23 +164,11 @@ func (index *sectionIndex) await(ctx context.Context, sequence int64) (*sectionV
 			return nil, false
 		}
 		index.mu.Lock()
+		if version, settled := find(); settled {
+			index.mu.Unlock()
+			return version, version != nil
+		}
 	}
-}
-
-// latest is the newest version built, nil when none, without waiting; it
-// activates the index so one gets built for the next caller.
-func (index *sectionIndex) latest() *sectionVersion {
-	index.mu.Lock()
-	defer index.mu.Unlock()
-	if index.closed {
-		return nil
-	}
-	index.activateLocked()
-	index.used = index.store.now()
-	if n := len(index.versions); n > 0 {
-		return index.versions[n-1]
-	}
-	return nil
 }
 
 // findLocked is the version at sequence; settled once the index has it or has

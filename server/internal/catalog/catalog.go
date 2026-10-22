@@ -189,8 +189,9 @@ type Options struct {
 	Draft *neardup.Text
 	// Skip excludes documents from similar mode: the draft's own path.
 	Skip func(path string) bool
-	// Stale lets a section-index mode answer from the newest index built
-	// rather than wait for one covering the snapshot: a gate's choice.
+	// Stale lets a section-index mode answer from the newest index built,
+	// whatever snapshot it covers, waiting the store's freshness bound only
+	// for a cold index: a gate's choice, where a warning may trail a commit.
 	Stale bool
 }
 

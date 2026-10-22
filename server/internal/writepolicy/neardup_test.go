@@ -2,13 +2,16 @@ package writepolicy_test
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
+	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
+	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
 	"github.com/latebit-io/demarkus/server/internal/storetest"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
@@ -100,4 +103,61 @@ func TestEnforceWarnsNearDuplicate(t *testing.T) {
 			t.Errorf("without sections = %q, %v; want clean", warnings, err)
 		}
 	})
+}
+
+// warmable is a store that reports whether the gate asked it to warm its
+// section index at Enforce.
+type warmable struct {
+	backend.Store
+	warmed bool
+}
+
+func (w *warmable) WarmSections() { w.warmed = true }
+
+func TestEnforceWarmsTheSectionIndex(t *testing.T) {
+	w := &warmable{Store: newStore(t)}
+	writepolicy.Enforce(w, writepolicy.Options{})
+	if !w.warmed {
+		t.Error("Enforce did not warm the store's section index")
+	}
+}
+
+// A bucket store reopened on a world that already holds the lesson judges
+// its first gated write: Enforce warms the section index at wrap, and the
+// gate's stale read waits for the build instead of passing the write.
+func TestFirstWriteAfterReopenIsJudged(t *testing.T) {
+	ctx := context.Background()
+	memory, err := blob.NewMemory(4 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := bucketstore.Options{Logger: slog.New(slog.DiscardHandler), WorldID: "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48"}
+	tags := map[string]string{"tags": "store"}
+	writer, err := bucketstore.Open(ctx, memory, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := write(t, writer, "/notes/shards.md", 0, []byte(neardtest.LessonDoc), tags); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh, err := bucketstore.Open(ctx, memory, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := fresh.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	warnings, err := write(t, writepolicy.Enforce(fresh, writepolicy.Options{}), "/notes/again.md", 0, []byte(neardtest.RewordedDoc), tags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0], "near-duplicate check: near-duplicate of /notes/shards.md (0.") {
+		t.Errorf("first gated write after reopen = %q, want the near-duplicate warning", warnings)
+	}
 }

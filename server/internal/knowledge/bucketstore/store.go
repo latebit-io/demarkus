@@ -278,6 +278,15 @@ func Open(ctx context.Context, objects blob.Store, options Options) (*Store, err
 	return store, nil
 }
 
+// WarmSections starts the section index now rather than on the first body
+// search, so a write gate judges the first writes after open; nothing on a
+// read-only store, whose gate never runs.
+func (store *Store) WarmSections() {
+	if !store.readOnly {
+		store.sections.activate()
+	}
+}
+
 // notify runs the Committed hook, apart from the committer, so a hook that
 // writes to this store cannot deadlock it.
 func (store *Store) notify() {

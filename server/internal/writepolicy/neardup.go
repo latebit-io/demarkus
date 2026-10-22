@@ -30,11 +30,10 @@ func (e *enforcer) nearDuplicates(ctx context.Context, req backend.WriteRequest)
 		}
 	}()
 	own := storefmt.CanonicalPath(req.Path)
-	// Stale: the newest index built, never a wait for one covering this
-	// snapshot; a warning may trail a commit.
 	rows, err := view.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: true, Skip: func(path string) bool { return path == own }})
 	switch {
-	// No section index yet: no check, as body match falls back to the catalog.
+	// No section index within the bound: no check, as body match falls
+	// back to the catalog.
 	case errors.Is(err, backend.ErrBodyMatchUnavailable):
 		return notes
 	case err != nil:
