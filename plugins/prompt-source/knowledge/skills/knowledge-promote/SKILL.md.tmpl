@@ -31,7 +31,7 @@ Stages in order; each is a gate, failing one stops there, **not** published. Eve
    - `status: not-permitted`: surface, stop; never guess another target.
    - `status: policy-unavailable`, `status: incomplete-dedup`, tool error: surface, stop; nothing published.
    - `findings:`: fix the metadata (missing axes, fields, a tag value outside an axis's allowed list) or the draft (style; each finding opens with its rule id) and rerun. The `policy:` line is the world's `/.well-known/demarkus/policy.md` merged over root's floor, what the server judges by.
-   - `candidates:`: judge duplication from the shown bodies. A same-title or same-path document that covers the draft's subject is updated, not duplicated: `mark_fetch` it with `force: true`, fold the draft's new material into its complete body (nothing it held is dropped unasked), rerun the dry run with its path as `url` and that merged body; `version:` then reports what the update replaces. Apply publishes the body as sent: anything left out of it is gone. A conflict goes to the human, never overwritten.
+   - `candidates:`: judge duplication from the shown bodies. A same-title or same-path document covering the draft's subject is updated, not duplicated: `mark_fetch` it with `force: true`, merge the draft into its complete body (drop nothing unasked; apply publishes the body as sent), rerun the dry run with its path as `url` and the merged body; `version:` reports what the update replaces. A conflict goes to the human, never overwritten.
    - `related:` rows: judge from titles; fetch at most the ones that may overlap. `note: catalog-only`: dedup evidence is partial, said at the gate.
    - `status: ready` (or `findings` the user accepts as warnings): keep the `packet`.
 
