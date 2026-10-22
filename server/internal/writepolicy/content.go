@@ -22,6 +22,10 @@ type ContentOptions struct {
 	// SecretsWarn lets a secret land with a note instead of refusing it: an
 	// operator knob no tier sets by default; the rules always run.
 	SecretsWarn bool
+	// NearDuplicate is block (the default), warn (land with a note) or off
+	// for a body the world already holds in other words; a write carrying
+	// neardup.OverrideKey lands under every mode, its reason noted.
+	NearDuplicate contentcheck.Mode
 }
 
 // ContentError carries the findings so the handler can list them without

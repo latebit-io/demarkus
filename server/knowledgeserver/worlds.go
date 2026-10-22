@@ -137,7 +137,7 @@ func newWorldManager(watchCtx context.Context, group *sync.WaitGroup, cfg worldM
 		content: writepolicy.ContentOptions{Options: contentcheck.Options{
 			PII:         config.ContentCheck.PII,
 			WorkDomains: config.ContentCheck.WorkDomains,
-		}},
+		}, NearDuplicate: config.ContentCheck.NearDuplicate},
 		policyStores: make(map[string]worldstore.Store),
 	}
 	router, err := snirouter.NewDynamic(nil)

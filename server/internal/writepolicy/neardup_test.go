@@ -2,11 +2,14 @@ package writepolicy_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/layout"
+	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
@@ -18,7 +21,7 @@ import (
 
 func TestEnforceWarnsNearDuplicate(t *testing.T) {
 	raw := newStore(t)
-	gated := writepolicy.Enforce(raw, writepolicy.Options{})
+	gated := writepolicy.Enforce(raw, writepolicy.Options{Content: writepolicy.ContentOptions{NearDuplicate: contentcheck.Warn}})
 	tags := map[string]string{"tags": "store"}
 	lesson := []byte(neardtest.LessonDoc)
 	reworded := []byte(neardtest.RewordedDoc)
@@ -92,13 +95,19 @@ func TestEnforceWarnsNearDuplicate(t *testing.T) {
 			t.Errorf("append warnings = %q", warnings)
 		}
 	})
+	t.Run("an override keeps both and says so", func(t *testing.T) {
+		meta := map[string]string{"tags": "store", neardup.OverrideKey: " the lesson is quoted on purpose "}
+		if warnings, err := write(t, gated, "/notes/kept.md", 0, reworded, meta); err != nil || len(warnings) != 1 || warnings[0] != "near-duplicate check overridden (the lesson is quoted on purpose)" {
+			t.Errorf("override = %q, %v; want the reason noted", warnings, err)
+		}
+	})
 	t.Run("no sink, no scan", func(t *testing.T) {
 		if _, err := (backendtest.Direct{Store: gated}).WriteVersion("/notes/fourth.md", 0, reworded, tags); err != nil {
 			t.Error(err)
 		}
 	})
 	t.Run("a store without a section index is clean", func(t *testing.T) {
-		warnings, err := write(t, writepolicy.Enforce(storetest.FallbackStore{DocumentStore: raw}, writepolicy.Options{}), "/notes/fifth.md", 0, reworded, tags)
+		warnings, err := write(t, writepolicy.Enforce(storetest.FallbackStore{DocumentStore: raw}, writepolicy.Options{Content: writepolicy.ContentOptions{NearDuplicate: contentcheck.Warn}}), "/notes/fifth.md", 0, reworded, tags)
 		if err != nil || len(warnings) != 0 {
 			t.Errorf("without sections = %q, %v; want clean", warnings, err)
 		}
@@ -153,11 +162,48 @@ func TestFirstWriteAfterReopenIsJudged(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	warnings, err := write(t, writepolicy.Enforce(fresh, writepolicy.Options{}), "/notes/again.md", 0, []byte(neardtest.RewordedDoc), tags)
-	if err != nil {
+	_, err = write(t, writepolicy.Enforce(fresh, writepolicy.Options{}), "/notes/again.md", 0, []byte(neardtest.RewordedDoc), tags)
+	var refused *writepolicy.NearDuplicateError
+	if !errors.As(err, &refused) || len(refused.Hits) != 1 || refused.Hits[0].Path != "/notes/shards.md" {
+		t.Errorf("first gated write after reopen = %v, want the near-duplicate refusal naming the lesson", err)
+	}
+}
+
+// The default mode refuses: the write never lands, the refusal names the
+// document and the override; an update of the original, a journal entry
+// and an override still land. Off runs nothing.
+func TestEnforceRefusesNearDuplicate(t *testing.T) {
+	raw := newStore(t)
+	gated := writepolicy.Enforce(raw, writepolicy.Options{})
+	tags := map[string]string{"tags": "store"}
+	if _, err := write(t, gated, "/notes/shards.md", 0, []byte(neardtest.LessonDoc), tags); err != nil {
 		t.Fatal(err)
 	}
-	if len(warnings) != 1 || !strings.HasPrefix(warnings[0], "near-duplicate check: near-duplicate of /notes/shards.md (0.") {
-		t.Errorf("first gated write after reopen = %q, want the near-duplicate warning", warnings)
+	_, err := write(t, gated, "/notes/again.md", 0, []byte(neardtest.RewordedDoc), tags)
+	var refused *writepolicy.NearDuplicateError
+	if !errors.Is(err, writepolicy.ErrNearDuplicate) || !errors.Is(err, backend.ErrRejected) || !errors.As(err, &refused) {
+		t.Fatalf("reworded copy = %v, want a near-duplicate rejection", err)
+	}
+	want := "near-duplicate check refused this write: near-duplicate of /notes/shards.md (0.76 shared)\nFix: update or append to that document instead; to keep both, republish with metadata near-duplicate-override set to the reason.\n"
+	if got := refused.RejectionMessage(); got != want {
+		t.Errorf("message =\n%q\nwant\n%q", got, want)
+	}
+	direct := backendtest.Direct{Store: raw}
+	if v, err := direct.CurrentVersion("/notes/again.md"); err != nil || v != 0 {
+		t.Errorf("refused write landed at v%d, %v", v, err)
+	}
+	if _, err := write(t, gated, "/notes/shards.md", 1, []byte(neardtest.RewordedDoc), tags); err != nil {
+		t.Errorf("update of the original = %v, want it to land", err)
+	}
+	if _, err := write(t, gated, "/journal/2026-10-22.md", 0, []byte(neardtest.RewordedDoc), tags); err != nil {
+		t.Errorf("journal entry = %v, want it to land", err)
+	}
+	meta := map[string]string{"tags": "store", neardup.OverrideKey: "quoted on purpose"}
+	if warnings, err := write(t, gated, "/notes/kept.md", 0, []byte(neardtest.RewordedDoc), meta); err != nil || len(warnings) != 1 {
+		t.Errorf("override = %q, %v; want it to land with the reason noted", warnings, err)
+	}
+	off := writepolicy.Enforce(raw, writepolicy.Options{Content: writepolicy.ContentOptions{NearDuplicate: contentcheck.Off}})
+	if warnings, err := write(t, off, "/notes/off.md", 0, []byte(neardtest.RewordedDoc), tags); err != nil || len(warnings) != 0 {
+		t.Errorf("off = %q, %v; want it to land clean", warnings, err)
 	}
 }

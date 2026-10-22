@@ -33,6 +33,10 @@ const (
 	maxCandidates = 20
 )
 
+// OverrideKey is the publisher metadata key that keeps a near-duplicate:
+// the reason is stored with the version, the gate stays silent.
+const OverrideKey = "near-duplicate-override"
+
 // Verdict is the judgment on one target, ordered by strength.
 type Verdict uint8
 

@@ -29,6 +29,7 @@ data:
     {{- end }}
     contentCheck:
       pii: {{ .Values.server.contentCheck.pii | quote }}
+      nearDuplicate: {{ .Values.server.contentCheck.nearDuplicate | default "block" | quote }}
       workDomains:
         {{- range .Values.server.contentCheck.workDomains }}
         - {{ lower . | quote }}
