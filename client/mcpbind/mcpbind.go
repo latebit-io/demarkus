@@ -207,7 +207,7 @@ func Archive(req *mcp.CallToolRequest) (marktools.ArchiveArgs, error) {
 	if err != nil {
 		return marktools.ArchiveArgs{}, err
 	}
-	return marktools.ArchiveArgs{URL: url, Recursive: req.GetBool("recursive", false)}, nil
+	return marktools.ArchiveArgs{URL: url, Recursive: req.GetBool("recursive", false), ExpectedDocs: req.GetInt("expected_docs", 0)}, nil
 }
 
 // Curate binds mark_curate's arguments.

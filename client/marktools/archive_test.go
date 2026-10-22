@@ -97,3 +97,17 @@ func TestArchiveRecursiveRefusals(t *testing.T) {
 		t.Error("a refusal archived")
 	}
 }
+
+func TestArchiveRecursiveRefusesAMovedCount(t *testing.T) {
+	backend := &fetchtest.Client{ListFn: func(_ context.Context, r fetch.ListRequest) (fetch.Result, error) {
+		return fetchtest.ListPage(r.Path, "", "a.md", "b.md"), nil
+	}}
+	tools := newTools(t, backend, writingHooks())
+	got := tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/d/", Recursive: true, ExpectedDocs: 1})
+	if !got.IsError || got.Text != "archive refused: 2 live documents under /d/, expected 1; the directory changed since it was listed, list and gate again" {
+		t.Fatalf("archive = %+v", got)
+	}
+	if len(backend.ArchiveCalls) != 0 {
+		t.Error("a refused sweep archived")
+	}
+}

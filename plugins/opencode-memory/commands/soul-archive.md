@@ -24,10 +24,10 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 
 1. **Scope.** Target outside `<root>`: the user confirms it, else stop.
 
-2. **Collect.** Document: `mark_fetch`; `ok` continues; `archived` or `not-found`: say so, stop; other failure: surface, stop. Directory: `mark_list` to count the live documents (`next-cursor` as `cursor` until `complete: true`, recurse into subdirectories; over 100 list calls or 500 documents: stop, ask for a narrower directory); `not-found` or none: say so, stop; a listing failure: surface, stop.
+2. **Collect.** Document: `mark_fetch`; `ok` continues; `archived` or `not-found`: say so, stop; other failure: surface, stop. Directory: `mark_list` for the live documents (`next-cursor` as `cursor` until `complete: true`, recurse into subdirectories; over 100 list calls or 500 documents: stop, ask for a narrower directory); `not-found` or none: say so, stop; a listing failure: surface, stop. Keep the paths and their count `<N>`.
 
-3. **Gate.** Approval on the exact target: the document, or the directory with its document count. Declined: stop, nothing written.
+3. **Gate.** Approval on the exact target: the document, or the directory with its `<N>` documents (the paths on request). Declined: stop, nothing written.
 
-4. **Archive.** One `mark_archive` call: `url` the path (a broker store: `mark://<world>/<path>`); a directory adds `recursive: true`. The tool archives every document in listing order (bounded at 500), then drops the hub bullets whose links all pointed at what was archived; a bullet with a link elsewhere stays. Tool error: surface verbatim, stop.
+4. **Archive.** One `mark_archive` call: `url` the path (a broker store: `mark://<world>/<path>`); a directory adds `recursive: true` and `expected_docs: <N>`. The tool lists again and refuses when the live count moved (`archive refused`: the set changed, back to step 2), else archives every document in listing order (bounded at 500), then drops the hub bullets whose links all pointed at what was archived; a bullet with a link elsewhere stays. Other tool error: surface verbatim, stop.
 
 5. **Report.** The tool's lines verbatim: paths with versions, failures, `hubs:` bullets dropped, every `note:` (a hub left as it was). `status: partial`: name what did not archive; a bullet linking the directory stays until everything under it is archived.

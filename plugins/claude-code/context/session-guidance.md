@@ -4,7 +4,7 @@
 
 Your soul is a versioned demarkus store behind the `demarkus-memory` MCP tools; "recall" and "record" here always mean it, never the host's built-in memory. Treat it like CLAUDE.md: consult before starting, record as you go, unprompted. Never disable Claude's built-in memory tool unasked.
 
-Everything lives under the header's `Project root:` (`<root>` below). Write through the bound store's tools (`mcp__<slug>__mark_*`); the server's instructions carry the read contract. Ambiguous target: ask the user once.
+Everything lives under the header's `Project root:` (`<root>` below). Write through the bound store's tools (`mcp__<store>__mark_*`, `<store>` from `Bound store:`); the server's instructions carry the read contract. Ambiguous target: ask the user once.
 
 ## Recall first
 

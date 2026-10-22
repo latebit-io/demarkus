@@ -22,9 +22,9 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 
 `$ARGUMENTS`: an optional project slug and `--deep` (metadata lost across versions).
 
-`mark_doctor` through the store's server: `url` is `/<slug>/` for one project (this project: `<root>`), `/` for the whole soul (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it); `deep: true` with `--deep`. An invalid slug or scope is the tool's own refusal. Whole local soul: also run `"$HOME/.demarkus/bin/demarkus-plugin" provision verify-auth` via Bash and relay its verdict as one line after the report; a non-zero exit is a coverage gap, not a finding.
+`mark_doctor` through the store's server: `url` is `/<slug>/` for one project (this project: `<root>`), `/` for the whole soul (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it); `deep: true` with `--deep`. An invalid slug or scope is the tool's own refusal. Whole local soul on the host: also run `"$HOME/.demarkus/bin/demarkus-plugin" provision verify-auth` via Bash and relay its verdict as one line after the report; a non-zero exit is a coverage gap, not a finding.
 
-- Success: print the report verbatim, then a short prioritized "what I'd fix first". A `fixable:` line under the summary: name `/soul-curate <scope>` (the `url` above) as the one gated step for those, then the rest by judgment. "All clean" only with zero findings, Coverage `complete` and a healthy verify-auth verdict where one was due; otherwise name the gaps.
+- Success: print the report verbatim, then a short prioritized "what I'd fix first". A `fixable:` line under the summary: name `/soul-curate <path>` (the path under the store, `/` or `/<slug>/`, never a `mark://` url) as the one gated step for those, then the rest by judgment. "All clean" only with zero findings, Coverage `complete` and a healthy verify-auth verdict where one was due; otherwise name the gaps, auth not checked included.
 - Tool error (store unreachable, unauthorized, inventory bound, scope not found): surface it verbatim, stop. Never substitute a manual crawl.
 
 ## Don't

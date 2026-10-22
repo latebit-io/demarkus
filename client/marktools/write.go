@@ -385,10 +385,12 @@ func (t *Tools) appendToday(ctx context.Context, target Target, args AppendArgs)
 }
 
 // ArchiveArgs are mark_archive's arguments; Recursive takes a directory and
-// archives every live document under it.
+// archives every live document under it. ExpectedDocs, when positive, is the
+// live count the caller gated: a different count refuses the sweep.
 type ArchiveArgs struct {
-	URL       string
-	Recursive bool
+	URL          string
+	Recursive    bool
+	ExpectedDocs int
 }
 
 // Bounds on a recursive archive, so one call cannot sweep a whole store.
@@ -436,6 +438,9 @@ func (t *Tools) Archive(ctx context.Context, args ArchiveArgs) Result {
 	}
 	if len(paths) == 0 {
 		return failure("archive failed: no live documents under %s", target.Path)
+	}
+	if args.ExpectedDocs > 0 && len(paths) != args.ExpectedDocs {
+		return failure("archive refused: %d live documents under %s, expected %d; the directory changed since it was listed, list and gate again", len(paths), target.Path, args.ExpectedDocs)
 	}
 	var b strings.Builder
 	var archived []string

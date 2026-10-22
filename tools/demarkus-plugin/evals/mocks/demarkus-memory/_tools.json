@@ -49,6 +49,10 @@
       "description": "Archive a document: fetches as 'archived', history kept. recursive=true: url is a directory, every live document under it. Ancestor hubs drop the bullets that only linked what was archived. Requires -token.",
       "inputSchema": {
         "properties": {
+          "expected_docs": {
+            "description": "with recursive: the approved live count; another refuses (default 0: unchecked)",
+            "type": "number"
+          },
           "recursive": {
             "description": "archive every live document under the directory url (default false)",
             "type": "boolean"
