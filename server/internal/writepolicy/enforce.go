@@ -30,6 +30,11 @@ type Options struct {
 // Enforce wraps store so every PUBLISH and APPEND is judged by the world's
 // policy document. Reads pass through untouched.
 func Enforce(store backend.Store, options Options) backend.Store {
+	// The near-duplicate gate judges against the section index; a store
+	// that can build it ahead of the first write does so now.
+	if warm, ok := store.(interface{ WarmSections() }); ok {
+		warm.WarmSections()
+	}
 	return &enforcer{Store: store, options: options, content: newContentGate(options.Content)}
 }
 

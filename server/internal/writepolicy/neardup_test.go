@@ -101,3 +101,20 @@ func TestEnforceWarnsNearDuplicate(t *testing.T) {
 		}
 	})
 }
+
+// warmable is a store that reports whether the gate asked it to warm its
+// section index at Enforce.
+type warmable struct {
+	backend.Store
+	warmed bool
+}
+
+func (w *warmable) WarmSections() { w.warmed = true }
+
+func TestEnforceWarmsTheSectionIndex(t *testing.T) {
+	w := &warmable{Store: newStore(t)}
+	writepolicy.Enforce(w, writepolicy.Options{})
+	if !w.warmed {
+		t.Error("Enforce did not warm the store's section index")
+	}
+}
