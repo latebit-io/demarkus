@@ -11,9 +11,11 @@ import (
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
+	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/bucketstore"
 	"github.com/latebit-io/demarkus/server/internal/storetest"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
@@ -106,12 +108,78 @@ func TestEnforceWarnsNearDuplicate(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	t.Run("a store without a section index is clean", func(t *testing.T) {
-		warnings, err := write(t, writepolicy.Enforce(storetest.FallbackStore{DocumentStore: raw}, writepolicy.Options{Content: writepolicy.ContentOptions{NearDuplicate: contentcheck.Warn}}), "/notes/fifth.md", 0, reworded, tags)
-		if err != nil || len(warnings) != 0 {
-			t.Errorf("without sections = %q, %v; want clean", warnings, err)
+	t.Run("a store without a section index lands with the skip noted", func(t *testing.T) {
+		cold := readerOnly{storetest.FallbackStore{DocumentStore: raw}}
+		warnings, err := write(t, writepolicy.Enforce(cold, writepolicy.Options{Content: writepolicy.ContentOptions{NearDuplicate: contentcheck.Warn}}), "/notes/fifth.md", 0, reworded, tags)
+		if err != nil || len(warnings) != 1 || warnings[0] != "near-duplicate check skipped: no section index covers this write yet" {
+			t.Errorf("without sections = %q, %v; want the skip noted", warnings, err)
 		}
 	})
+}
+
+// readerOnly hands the commit a state without a catalog, as the bucket store
+// lends its commit attempts.
+type readerOnly struct{ backend.Store }
+
+func (r readerOnly) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
+	inner := req.Precondition
+	req.Precondition = func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
+		return inner(ctx, struct{ backend.Reader }{state}, write)
+	}
+	return r.Store.Publish(ctx, req)
+}
+
+// A check that cannot run refuses the write in block mode and notes it in
+// warn mode; the file store judges again inside the commit, so a copy that
+// landed after the pre-commit look is still refused.
+func TestEnforceNearDuplicateCheckFailures(t *testing.T) {
+	raw := newStore(t)
+	tags := map[string]string{"tags": "store"}
+	if _, err := write(t, raw, "/notes/shards.md", 0, []byte(neardtest.LessonDoc), tags); err != nil {
+		t.Fatal(err)
+	}
+	broken := brokenLookups{raw}
+	if _, err := write(t, writepolicy.Enforce(broken, writepolicy.Options{}), "/notes/again.md", 0, []byte(neardtest.RewordedDoc), tags); err == nil || !strings.Contains(err.Error(), "near-duplicate check: index on fire") {
+		t.Errorf("block mode with a failing check = %v, want the failure refused", err)
+	}
+	if v, err := (backendtest.Direct{Store: raw}).CurrentVersion("/notes/again.md"); err != nil || v != 0 {
+		t.Errorf("refused write landed at v%d, %v", v, err)
+	}
+	// Warn mode notes the failed look; the file store's commit judges again
+	// and that verdict, the warning, is what lands.
+	warnings, err := write(t, writepolicy.Enforce(broken, writepolicy.Options{Content: writepolicy.ContentOptions{NearDuplicate: contentcheck.Warn}}), "/notes/again.md", 0, []byte(neardtest.RewordedDoc), tags)
+	if err != nil || len(warnings) != 1 || !strings.HasPrefix(warnings[0], "near-duplicate check: near-duplicate of /notes/shards.md (0.76 shared)") {
+		t.Errorf("warn mode with a failing check = %q, %v; want the commit's warning", warnings, err)
+	}
+	warnings, err = write(t, writepolicy.Enforce(readerOnly{broken}, writepolicy.Options{Content: writepolicy.ContentOptions{NearDuplicate: contentcheck.Warn}}), "/notes/fourth.md", 0, []byte(neardtest.RewordedDoc), tags)
+	if err != nil || len(warnings) != 1 || warnings[0] != "near-duplicate check skipped: near-duplicate check: index on fire" {
+		t.Errorf("warn mode, failing check, no catalog at commit = %q, %v; want the skip noted", warnings, err)
+	}
+	// The pre-commit look sees a cold index; the commit itself sees the lesson.
+	cold := storetest.FallbackStore{DocumentStore: raw}
+	if _, err := write(t, writepolicy.Enforce(cold, writepolicy.Options{}), "/notes/third.md", 0, []byte(neardtest.RewordedDoc), tags); !errors.Is(err, writepolicy.ErrNearDuplicate) {
+		t.Errorf("commit-time judgment = %v, want the refusal", err)
+	}
+}
+
+// brokenLookups is a store whose views fail every section-index lookup.
+type brokenLookups struct{ backend.Store }
+
+func (b brokenLookups) OpenReadView(ctx context.Context) (backend.ReadView, error) {
+	view, err := b.Store.OpenReadView(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return brokenView{view}, nil
+}
+
+type brokenView struct{ backend.ReadView }
+
+func (v brokenView) Lookup(ctx context.Context, query string, opts catalog.Options) ([]catalog.Result, error) {
+	if opts.Match != catalog.MatchCatalog && opts.Match != "" {
+		return nil, errors.New("index on fire")
+	}
+	return v.ReadView.Lookup(ctx, query, opts)
 }
 
 // warmable is a store that reports whether the gate asked it to warm its

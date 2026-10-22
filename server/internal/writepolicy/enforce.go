@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
@@ -57,23 +58,67 @@ func chain[T any](inner, next func(context.Context, backend.Reader, T) error) fu
 	}
 }
 
-// guard runs the near-duplicate check before the commit, refusing or
-// noting, then adds the policy verdict after any precondition the caller
-// set; notes go to the request's sink, replaced on every run.
+// guard judges near-duplicates before the commit and again inside it when
+// the commit state holds a catalog (file store; the bucket store's does not,
+// its race accepted), then the policy; notes replace the sink every run.
 func (e *enforcer) guard(ctx context.Context, req *backend.WriteRequest) error {
-	warnings := req.Warnings
-	near, err := e.nearDuplicates(ctx, *req)
-	if err != nil {
+	if e.options.Content.NearDuplicate == contentcheck.Off {
+		req.Precondition = chain(req.Precondition, e.policyOnly(req.Warnings))
+		return nil
+	}
+	before, err := e.nearDuplicatesBefore(ctx, *req)
+	if before, err = e.tolerate(before, err); err != nil {
 		return err
 	}
+	if _, err := e.settleNearDuplicate(before); err != nil {
+		return err
+	}
+	warnings, subject := req.Warnings, subjectOf(*req)
 	req.Precondition = chain(req.Precondition, func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
 		notes, err := e.evaluate(ctx, state, write)
+		if warnings != nil {
+			*warnings = notes
+		}
+		if err != nil {
+			return err
+		}
+		verdict := before
+		if catalogState, ok := state.(nearCatalog); ok {
+			again, err := judgeNearDuplicate(ctx, catalogState, subject)
+			if again, err = e.tolerate(again, err); err != nil {
+				return err
+			}
+			if again.checked {
+				verdict = again
+			}
+		}
+		near, err := e.settleNearDuplicate(verdict)
 		if warnings != nil {
 			*warnings = slices.Concat(notes, near)
 		}
 		return err
 	})
 	return nil
+}
+
+// tolerate decides a judgment that could not run: block mode refuses the
+// write rather than let an unchecked body land; warn mode notes it.
+func (e *enforcer) tolerate(verdict nearVerdict, err error) (nearVerdict, error) {
+	if err == nil || e.options.Content.NearDuplicate != contentcheck.Warn {
+		return verdict, err
+	}
+	return nearVerdict{notes: []string{"near-duplicate check skipped: " + err.Error()}}, nil
+}
+
+// policyOnly is the precondition with the near-duplicate check off.
+func (e *enforcer) policyOnly(warnings *[]string) backend.Precondition {
+	return func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
+		notes, err := e.evaluate(ctx, state, write)
+		if warnings != nil {
+			*warnings = notes
+		}
+		return err
+	}
 }
 
 func (e *enforcer) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {

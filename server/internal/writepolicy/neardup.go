@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
@@ -42,64 +41,98 @@ func (err *NearDuplicateError) RejectionMessage() string {
 	return "near-duplicate check refused this write: " + strings.Join(parts, ", ") + "\nFix: update or append to that document instead; to keep both, republish with metadata " + neardup.OverrideKey + " set to the reason.\n"
 }
 
-// nearDuplicates judges the body before the commit on its own view: the
-// precondition's reader has no catalog, and a view inside the commit is the
-// deadlock Read warns about. A duplicate landing in between is only a missed warning.
-func (e *enforcer) nearDuplicates(ctx context.Context, req backend.WriteRequest) (notes []string, err error) {
-	mode := e.options.Content.NearDuplicate
-	if mode == contentcheck.Off {
-		return nil, nil
+// nearVerdict is one judgment of a body against the world: the hits, the
+// notes for the writer, and whether the index answered at all.
+type nearVerdict struct {
+	hits    []neardup.Hit
+	notes   []string
+	checked bool
+}
+
+// nearCatalog is the state a judgment reads: the section index and the
+// world's template.
+type nearCatalog interface {
+	backend.CatalogReader
+	documentGetter
+}
+
+// nearSubject is what a judgment reads of the write: the request's path,
+// body and metadata, never the prepared merge of an append.
+type nearSubject struct {
+	path string
+	body []byte
+	meta map[string]string
+}
+
+func subjectOf(req backend.WriteRequest) nearSubject {
+	return nearSubject{path: req.Path, body: req.Content, meta: req.Metadata}
+}
+
+// judgeNearDuplicate asks the index what the body repeats. An override
+// lands with its reason noted; a cold index (ErrBodyMatchUnavailable) is a
+// note and checked false; any other failure is the caller's to decide on.
+func judgeNearDuplicate(ctx context.Context, state nearCatalog, subject nearSubject) (nearVerdict, error) {
+	if reason := strings.TrimSpace(subject.meta[neardup.OverrideKey]); reason != "" {
+		return nearVerdict{notes: []string{"near-duplicate check overridden (" + reason + ")"}, checked: true}, nil
 	}
-	if reason := strings.TrimSpace(req.Metadata[neardup.OverrideKey]); reason != "" {
-		return []string{"near-duplicate check overridden (" + reason + ")"}, nil
-	}
-	draft := neardup.AnalyzeWhole(string(req.Content))
+	draft := neardup.AnalyzeWhole(string(subject.body))
 	if draft.Sig == 0 {
-		return nil, nil
+		return nearVerdict{checked: true}, nil
 	}
-	view, err := e.OpenReadView(ctx)
-	if err != nil {
-		return []string{"near-duplicate check skipped: " + err.Error()}, nil
-	}
-	defer func() {
-		if err := view.Close(); err != nil {
-			notes = append(notes, "near-duplicate check: close view: "+err.Error())
-		}
-	}()
-	own := storefmt.CanonicalPath(req.Path)
-	rows, err := view.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: true, Skip: func(path string) bool { return path == own }})
+	own := storefmt.CanonicalPath(subject.path)
+	rows, err := state.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: true, Skip: func(p string) bool { return p == own }})
 	switch {
-	// No section index within the bound: no check, as body match falls
-	// back to the catalog.
 	case errors.Is(err, backend.ErrBodyMatchUnavailable):
-		return notes, nil
+		return nearVerdict{notes: []string{"near-duplicate check skipped: no section index covers this write yet"}}, nil
 	case err != nil:
-		return append(notes, "near-duplicate check skipped: "+err.Error()), nil
+		return nearVerdict{}, fmt.Errorf("near-duplicate check: %w", err)
 	case len(rows) == 0:
-		return notes, nil
+		return nearVerdict{checked: true}, nil
 	}
 	// The template is read only with hits in hand: what repeats by design
 	// is neither judged nor named.
-	lay, err := currentLayout(ctx, view)
+	lay, err := currentLayout(ctx, state)
 	if err != nil {
-		return append(notes, "near-duplicate check skipped: "+err.Error()), nil
+		return nearVerdict{}, fmt.Errorf("near-duplicate check: %w", err)
 	}
+	verdict := nearVerdict{checked: true}
 	if lay.RepeatsByDesign(own) {
-		return notes, nil
+		return verdict, nil
 	}
-	hits := make([]neardup.Hit, 0, len(rows))
 	for i := range rows {
 		if !lay.RepeatsByDesign(rows[i].Path) {
-			hits = append(hits, rows[i].Hit)
+			verdict.hits = append(verdict.hits, rows[i].Hit)
 		}
 	}
-	if len(hits) == 0 {
-		return notes, nil
+	return verdict, nil
+}
+
+// nearDuplicatesBefore judges the write on its own view before the commit:
+// the commit's state may hold no catalog (a bucket store lends none), and a
+// view opened inside the commit is the deadlock Read warns about.
+func (e *enforcer) nearDuplicatesBefore(ctx context.Context, req backend.WriteRequest) (verdict nearVerdict, err error) {
+	view, err := e.OpenReadView(ctx)
+	if err != nil {
+		return nearVerdict{}, fmt.Errorf("near-duplicate check: open view: %w", err)
 	}
-	if mode == contentcheck.Warn {
-		return append(notes, neardup.Note(slices.Clip(hits))), nil
+	defer func() {
+		if closeErr := view.Close(); closeErr != nil && err == nil {
+			verdict.notes = append(verdict.notes, "near-duplicate check: close view: "+closeErr.Error())
+		}
+	}()
+	return judgeNearDuplicate(ctx, view, subjectOf(req))
+}
+
+// settleNearDuplicate turns a judgment into the write's fate under the mode:
+// refused on hits in block mode, noted in warn mode.
+func (e *enforcer) settleNearDuplicate(verdict nearVerdict) ([]string, error) {
+	if len(verdict.hits) == 0 {
+		return verdict.notes, nil
 	}
-	return nil, &NearDuplicateError{Hits: hits}
+	if e.options.Content.NearDuplicate == contentcheck.Warn {
+		return append(verdict.notes, neardup.Note(verdict.hits)), nil
+	}
+	return nil, &NearDuplicateError{Hits: verdict.hits}
 }
 
 // currentLayout is the world's template through reader, the default when
