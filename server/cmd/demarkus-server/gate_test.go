@@ -31,12 +31,12 @@ func TestSoulWritesAreGated(t *testing.T) {
 	if r := send("/fixture/dsn.md", tagged(), storetest.WireSecretFixed); r.Status != protocol.StatusCreated || r.Metadata["warning"] != "" {
 		t.Errorf("placeholder password: status %s, warning %q; want created, no warning", r.Status, r.Metadata["warning"])
 	}
-	// A reworded copy of a document the soul holds lands with the near-duplicate warning.
+	// A reworded copy of a document the soul holds is refused, naming it.
 	if r := send("/fixture/lesson.md", tagged(), neardtest.LessonDoc); r.Status != protocol.StatusCreated || r.Metadata["warning"] != "" {
 		t.Fatalf("lesson: status %s, warning %q; want created, no warning", r.Status, r.Metadata["warning"])
 	}
-	if r := send("/fixture/lesson-again.md", tagged(), neardtest.RewordedDoc); r.Status != protocol.StatusCreated || !strings.HasPrefix(r.Metadata["warning"], "near-duplicate check: near-duplicate of /fixture/lesson.md") {
-		t.Errorf("reworded lesson: status %s, warning %q; want created with the near-duplicate warning", r.Status, r.Metadata["warning"])
+	if r := send("/fixture/lesson-again.md", tagged(), neardtest.RewordedDoc); r.Status != protocol.StatusBadRequest || !strings.Contains(r.Body, "near-duplicate check refused this write: near-duplicate of /fixture/lesson.md") {
+		t.Errorf("reworded lesson: status %s, body %q; want bad-request naming the lesson", r.Status, r.Body)
 	}
 	// No policy document is the empty policy at warn: an untagged write lands
 	// and says so, the hook's tag gate mirrored on the server.

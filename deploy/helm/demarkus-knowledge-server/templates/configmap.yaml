@@ -35,6 +35,7 @@ data:
         {{- else }}
         []
         {{- end }}
+      nearDuplicate: {{ .Values.server.contentCheck.nearDuplicate | default "block" | quote }}
     worlds:
       {{- range $world := $worlds }}
       - name: {{ $world.name | quote }}

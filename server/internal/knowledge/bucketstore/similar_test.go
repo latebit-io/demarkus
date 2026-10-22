@@ -2,12 +2,16 @@ package bucketstore
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
 	"github.com/latebit-io/demarkus/server/internal/backend"
+	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 // similarHits is one similar-mode lookup of the reworded lesson on a view.
@@ -68,5 +72,50 @@ func TestFirstWriteAfterOpenIsJudged(t *testing.T) {
 	ro.WarmSections()
 	if ro.sections.isActive() {
 		t.Error("a read-only store warmed its section index")
+	}
+}
+
+// Block mode waits for the index covering the gate's snapshot: a reworded
+// copy published while the index lags behind the lesson is refused once it
+// catches up; warn mode reads the newest index built and lets it land.
+func TestBlockModeWaitsForTheCoveringIndex(t *testing.T) {
+	ctx := context.Background()
+	memory := initializedMemory(t)
+	gate := newGatedGets(memory)
+	store := openSectionStore(t, gate, nil)
+	tags := map[string]string{"tags": "store"}
+	write(t, store, "/notes/other.md", neardtest.OtherDoc, tags)
+	view, err := store.OpenReadView(ctx)
+	mustSucceed(t, err)
+	if hits := similarHits(t, view, catalog.Options{}); len(hits) != 0 {
+		t.Fatalf("before the lesson = %+v, want none", hits)
+	}
+	mustSucceed(t, view.Close())
+
+	gate.hold()
+	write(t, store, "/notes/shards.md", neardtest.LessonDoc, tags)
+	warning := backendtest.Direct{Store: writepolicy.Enforce(store, writepolicy.Options{Content: writepolicy.ContentOptions{NearDuplicate: contentcheck.Warn}})}
+	if _, err := warning.WriteVersion("/notes/warned.md", 0, []byte(neardtest.RewordedDoc), tags); err != nil {
+		t.Fatalf("warn mode behind the index = %v, want it to land", err)
+	}
+	blocking := backendtest.Direct{Store: writepolicy.Enforce(store, writepolicy.Options{})}
+	refused := make(chan error, 1)
+	go func() {
+		_, err := blocking.WriteVersion("/notes/again.md", 0, []byte(neardtest.RewordedDoc), tags)
+		refused <- err
+	}()
+	waitFor(t, "the block-mode lookup to wait on the index", func() bool {
+		store.sections.mu.Lock()
+		defer store.sections.mu.Unlock()
+		return store.sections.waiting > 0
+	})
+	select {
+	case err := <-refused:
+		t.Fatalf("block mode answered before the index caught up: %v", err)
+	default:
+	}
+	gate.release()
+	if err := <-refused; !errors.Is(err, writepolicy.ErrNearDuplicate) {
+		t.Fatalf("block mode behind the index = %v, want the refusal once it caught up", err)
 	}
 }

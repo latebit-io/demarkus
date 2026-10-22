@@ -36,10 +36,13 @@ server:
   # Secrets and personal data are scanned on every write. Secrets always
   # block; pii is block, warn (log, let it land) or off. workDomains are the
   # organization's email domains; an address outside them is personal data,
-  # and an empty list leaves email unchecked.
+  # and an empty list leaves email unchecked. nearDuplicate refuses a body
+  # the world already holds in other words (block), or lets it land with a
+  # warning (warn), or is off; metadata near-duplicate-override keeps both.
   contentCheck:
     pii: block
     workDomains: []
+    nearDuplicate: block
 
 # Static worlds; empty is valid only with provisioning enabled below, or when
 # the umbrella supplies global.worlds. An existing empty bucket is initialized

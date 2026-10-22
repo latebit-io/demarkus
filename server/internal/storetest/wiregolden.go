@@ -85,7 +85,7 @@ func gatedWireScenario(t *testing.T, b LookupBackend) []WireGolden {
 	t.Helper()
 	meta := map[string]string{"tags": "postgres, wire", "importance": "0.3"}
 	warned := NewHandler(LookupBackend{Store: writepolicy.Enforce(b.Store, writepolicy.Options{
-		Content: writepolicy.ContentOptions{SecretsWarn: true, Options: contentcheck.Options{PII: contentcheck.Warn}},
+		Content: writepolicy.ContentOptions{SecretsWarn: true, NearDuplicate: contentcheck.Warn, Options: contentcheck.Options{PII: contentcheck.Warn}},
 	})})
 	refused := NewHandler(LookupBackend{Store: writepolicy.Enforce(b.Store, writepolicy.Options{})})
 	lesson := map[string]string{"tags": "store, wire", "importance": "0.3"}
@@ -99,6 +99,7 @@ func gatedWireScenario(t *testing.T, b LookupBackend) []WireGolden {
 		{"publish-refused", pinWallClock(sendSettled(t, refused, request(protocol.VerbPublish, "/docs/dsn-refused.md", withExpected(meta, "0"), WireSecret)))},
 		{"lookup-similar", pinWallClock(sendSettled(t, warned, request(protocol.VerbLookup, "/", map[string]string{"match": "similar", "query": "shard sizing"}, neardtest.RewordedDoc)))},
 		{"publish-near-duplicate", pinWallClock(sendSettled(t, warned, request(protocol.VerbPublish, "/docs/lesson-again.md", withExpected(lesson, "0"), neardtest.RewordedDoc)))},
+		{"publish-near-duplicate-refused", pinWallClock(sendSettled(t, refused, request(protocol.VerbPublish, "/docs/lesson-refused.md", withExpected(lesson, "0"), neardtest.RewordedDoc)))},
 	}
 }
 

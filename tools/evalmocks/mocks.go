@@ -14,6 +14,7 @@ import (
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/memory/promote"
+	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
 	"github.com/latebit-io/demarkus/protocol/wiretest"
 )
 
@@ -99,6 +100,22 @@ func golden(name string, meta map[string]string) fetch.Result {
 // answer scripts one verb with a fixed response.
 func answer[R any](r fetch.Result) func(context.Context, R) (fetch.Result, error) {
 	return func(context.Context, R) (fetch.Result, error) { return r, nil }
+}
+
+// The near-duplicate story: the debugging page already holds the shard
+// lesson; the note the user saves is that lesson reworded.
+const (
+	debuggingPath = "/cwd/debugging.md"
+	debuggingBody = "# Debugging\n\nLessons from bugs and investigations.\n\n## Shards\n\n" + neardtest.Lesson + "\n"
+	shardNotePath = "/cwd/notes/shard-sizing.md"
+)
+
+// nearDupStore is the story's store with the debugging page at v1 and the
+// note's path still free.
+func nearDupStore() *fetchtest.Client {
+	s := cwdStore()
+	s.Published[host+debuggingPath] = fetchtest.Head(debuggingBody, 1, map[string]string{"tags": "debugging,shards", "type": "Reference"})
+	return s
 }
 
 // cwdStore is the story's store: hub, one journal entry, roadmap at v8.
@@ -308,6 +325,39 @@ var mocks = []mock{
 			v := 0
 			body := "# Local Postgres\n\nThrowaway container for the fixtures.\n\n```sh\ndocker run -d -p 55432:5432 -e POSTGRES_PASSWORD=postgres postgres:16\nexport DSN=postgres://postgres:${POSTGRES_PASSWORD}@localhost:55432/app\n```\n"
 			return t.Publish(ctx, marktools.PublishArgs{URL: "/cwd/notes/local-postgres.md", ExpectedVersion: &v, Body: body, Metadata: map[string]string{"tags": "postgres,docker", "importance": "0.4", "type": "Note"}})
+		},
+	},
+	// publish-near-duplicate: the store already holds the note in other
+	// words, so the server refuses the publish naming it; the agent appends there.
+	{
+		Rel:   inCase("publish-near-duplicate", "mark_publish"),
+		Subst: map[string]string{"near-duplicate of /docs/lesson-again.md (1.00 shared), near-duplicate of /docs/lesson.md (0.76 shared)": "near-duplicate of " + debuggingPath + "#shards (0.76 shared)"},
+		Store: func() *fetchtest.Client {
+			s := nearDupStore()
+			s.PublishFn = answer[fetch.WriteRequest](golden("publish-near-duplicate-refused", nil))
+			return s
+		},
+		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
+			v := 0
+			return t.Publish(ctx, marktools.PublishArgs{URL: shardNotePath, ExpectedVersion: &v, Body: neardtest.RewordedDoc, Metadata: map[string]string{"tags": "store,shards", "importance": "0.5", "type": "Note"}})
+		},
+	},
+	{
+		Rel:   inCase("publish-near-duplicate", "mark_fetch"),
+		Store: nearDupStore,
+		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
+			return t.Fetch(ctx, marktools.FetchArgs{URL: debuggingPath})
+		},
+	},
+	{
+		Rel: inCase("publish-near-duplicate", "mark_append"),
+		Store: func() *fetchtest.Client {
+			s := nearDupStore()
+			s.AppendFn = answer[fetch.WriteRequest](golden("append", map[string]string{"version": "2", "modified": modified}))
+			return s
+		},
+		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
+			return t.Append(ctx, marktools.AppendArgs{URL: debuggingPath, ExpectedVersion: 1, Body: neardtest.RewordedDoc})
 		},
 	},
 	// refresh-inventory: one refresh call on the project lists what is promoted.

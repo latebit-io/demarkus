@@ -28,7 +28,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["config.yaml"]
-          pattern: 'contentCheck:\n  pii: "block"\n  workDomains:\n    \[\]'
+          pattern: 'contentCheck:\n  pii: "block"\n  workDomains:\n    \[\]\n  nearDuplicate: "block"'
       - notMatchRegex:
           path: data["config.yaml"]
           pattern: 'floorWorld'
@@ -38,13 +38,14 @@ tests:
       broker.federation.hub: team-a
       server.contentCheck.pii: warn
       server.contentCheck.workDomains: ["Acme.Example"]
+      server.contentCheck.nearDuplicate: warn
     asserts:
       - matchRegex:
           path: data["config.yaml"]
           pattern: 'floorWorld: "team-a"'
       - matchRegex:
           path: data["config.yaml"]
-          pattern: 'contentCheck:\n  pii: "warn"\n  workDomains:\n    - "acme.example"'
+          pattern: 'contentCheck:\n  pii: "warn"\n  workDomains:\n    - "acme.example"\n  nearDuplicate: "warn"'
 
   - it: policyFloor overrides the hub
     set:

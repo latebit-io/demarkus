@@ -72,11 +72,17 @@ type ContentCheckConfig struct {
 	// WorkDomains are the email domains that belong to the organization;
 	// an address outside them is personal data. Empty leaves email unchecked.
 	WorkDomains []string `yaml:"workDomains"`
+	// NearDuplicate is block (the default), warn or off for a body the world
+	// already holds in other words; near-duplicate-override keeps both.
+	NearDuplicate contentcheck.Mode `yaml:"nearDuplicate"`
 }
 
 func (config ContentCheckConfig) validate() error {
 	if !config.PII.Valid() {
 		return fmt.Errorf("contentCheck.pii %q must be %q, %q or %q", config.PII, contentcheck.Block, contentcheck.Warn, contentcheck.Off)
+	}
+	if !config.NearDuplicate.Valid() {
+		return fmt.Errorf("contentCheck.nearDuplicate %q must be %q, %q or %q", config.NearDuplicate, contentcheck.Block, contentcheck.Warn, contentcheck.Off)
 	}
 	for _, domain := range config.WorkDomains {
 		if domain == "" || strings.ContainsAny(domain, " \t@/") {
@@ -455,8 +461,9 @@ func (raw *rawConfig) config() *Config {
 		Worlds:     make([]WorldConfig, len(raw.Worlds)),
 		FloorWorld: strings.TrimSpace(raw.FloorWorld),
 		ContentCheck: ContentCheckConfig{
-			PII:         contentcheck.Mode(strings.TrimSpace(string(raw.ContentCheck.PII))),
-			WorkDomains: trimmedLower(raw.ContentCheck.WorkDomains),
+			PII:           contentcheck.Mode(strings.TrimSpace(string(raw.ContentCheck.PII))),
+			WorkDomains:   trimmedLower(raw.ContentCheck.WorkDomains),
+			NearDuplicate: contentcheck.Mode(strings.TrimSpace(string(raw.ContentCheck.NearDuplicate))),
 		},
 	}
 	for index := range raw.Worlds {
@@ -603,6 +610,9 @@ func (config *Config) SetDefaults() {
 	}
 	if config.ContentCheck.PII == "" {
 		config.ContentCheck.PII = contentcheck.Block
+	}
+	if config.ContentCheck.NearDuplicate == "" {
+		config.ContentCheck.NearDuplicate = contentcheck.Block
 	}
 	for index := range config.Worlds {
 		world := &config.Worlds[index]
