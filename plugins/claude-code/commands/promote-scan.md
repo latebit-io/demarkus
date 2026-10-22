@@ -6,7 +6,7 @@ description: Sweep the soul for promotion candidates (high-signal, durable, not-
 
 Ranked shortlist of soul docs worth `/promote`; never promotes here.
 
-`$ARGUMENTS` optionally scopes to one project slug; empty means every project.
+`$ARGUMENTS` optionally scopes to one project slug; empty means the whole soul.
 
 Host-only: `demarkus-plugin` exit 127 (a sandbox, e.g. Cowork): reply in one line to run this from a terminal on the host, then stop; never install or provision here.
 
@@ -25,7 +25,7 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 
 1. **Detection gate.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: surface, stop. One destination per line: `knowledge <slug>` (brokered system) or `target <slug> <path> [label]` (plain endpoint with its declared write `<path>`), reached through `mcp__<slug>__mark_*` of that slug; or `NONE`. `NONE`: say so, stop.
 
-2. **Sweep.** `mark_doctor` through the store's server with `promotion: true`; `url` is `/<slug>/` for one project (this project: `<root>`) or `/` (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it). Its `Promotion candidates` section lists each candidate with its reason; already promoted and staging documents are excluded, and the summary line counts the promoted. Tool error: surface it verbatim, stop. A Coverage line other than `complete`: the scan is partial; say which scope was not read.
+2. **Sweep.** `mark_doctor` through the store's server with `promotion: true`; `url` is `/<slug>/` for a named project (this project: `<root>`), `/` with no argument (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it). Its `Promotion candidates` section lists each candidate with its reason; already promoted and staging documents are excluded, and the summary line counts the promoted. Tool error: surface it verbatim, stop. A Coverage line other than `complete`: the scan is partial; say which scope was not read.
 
 3. **Triage lightly.** Judge each candidate cheaply from its report line; `mark_fetch` with `force: true` at most 10 to decide: durable? useful beyond you? plausibly not in the catalog? Drop obvious failures; be ruthless; most soul content stays personal. Real triage, distill and dedup happen inside `/promote`. A fetch failure: list the path as unassessed.
 

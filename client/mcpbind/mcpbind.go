@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -207,7 +208,25 @@ func Archive(req *mcp.CallToolRequest) (marktools.ArchiveArgs, error) {
 	if err != nil {
 		return marktools.ArchiveArgs{}, err
 	}
-	return marktools.ArchiveArgs{URL: url, Recursive: req.GetBool("recursive", false)}, nil
+	expected, err := wholeNumber(req, "expected_docs")
+	if err != nil {
+		return marktools.ArchiveArgs{}, err
+	}
+	return marktools.ArchiveArgs{URL: url, Recursive: req.GetBool("recursive", false), ExpectedDocs: expected}, nil
+}
+
+// wholeNumber reads an optional non-negative integer argument; GetInt would
+// truncate 0.5 to 0 and silently disable a guard.
+func wholeNumber(req *mcp.CallToolRequest, name string) (int, error) {
+	switch value := req.GetArguments()[name].(type) {
+	case nil:
+		return 0, nil
+	case float64:
+		if value == math.Trunc(value) && value >= 0 && value <= math.MaxInt32 {
+			return int(value), nil
+		}
+	}
+	return 0, fmt.Errorf("%s must be a non-negative integer", name)
 }
 
 // Curate binds mark_curate's arguments.

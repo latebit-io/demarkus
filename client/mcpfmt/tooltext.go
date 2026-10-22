@@ -61,6 +61,7 @@ const (
 	metadataDesc        = "string values stored with the document: tags (comma-separated) and importance (0-1) rank mark_lookup; rel-<predicate> declares a typed relation (e.g. rel-supersedes: /adr/0002.md); other keys stored opaquely. retention (positive int) permanently deletes all but the newest N versions on this and every later write carrying it: irreversible, confirm with the user first"
 	depthDesc           = "max link depth (default 2, max 5)"
 	recursiveDesc       = "archive every live document under the directory url (default false)"
+	expectedDocsDesc    = "with recursive: approved live count; another refuses (0: unchecked)"
 	curateApplyDesc     = "write the proposal (default false: report only)"
 	curateProposalDesc  = "the proposal hash from the report; required with apply"
 	promotePhaseDesc    = "which phase to run"
@@ -180,6 +181,7 @@ func ArchiveTool(urlDesc, suffix string) mcp.Tool {
 		describe(archiveDescription, suffix),
 		mcp.WithString("url", mcp.Required(), mcp.Description(urlDesc)),
 		mcp.WithBoolean("recursive", mcp.Description(recursiveDesc)),
+		mcp.WithNumber("expected_docs", mcp.Description(expectedDocsDesc), mcp.MultipleOf(1)),
 	)
 }
 

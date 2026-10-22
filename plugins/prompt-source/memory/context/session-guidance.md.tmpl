@@ -2,7 +2,7 @@
 
 Your {{.Store}} is a versioned demarkus store behind the `{{.MemoryPluginName}}` MCP tools; "recall" and "record" here always mean it, never the host's built-in memory. Treat it like {{.RepoInstructions}}: consult before starting, record as you go, unprompted. {{if eq .Harness "claude"}}Never disable Claude's built-in memory tool unasked.{{else}}Never disable the host's built-in memory unasked.{{end}}
 
-Everything lives under the header's `Project root:` (`<root>` below). Write through the bound store's tools ({{.ToolForm}}); the server's instructions carry the read contract. Ambiguous target: ask the user once.
+Everything lives under the header's `Project root:` (`<root>` below). Write through the bound store's tools ({{if eq .Harness "claude"}}`mcp__<store>__mark_*`, `<store>` from `Bound store:`{{else}}the MCP server named by `Bound store:`{{end}}); the server's instructions carry the read contract. Ambiguous target: ask the user once.
 
 ## Recall first
 
