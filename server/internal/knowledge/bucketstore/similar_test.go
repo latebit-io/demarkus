@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/neardup"
@@ -105,7 +104,16 @@ func TestBlockModeWaitsForTheCoveringIndex(t *testing.T) {
 		_, err := blocking.WriteVersion("/notes/again.md", 0, []byte(neardtest.RewordedDoc), tags)
 		refused <- err
 	}()
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, "the block-mode lookup to wait on the index", func() bool {
+		store.sections.mu.Lock()
+		defer store.sections.mu.Unlock()
+		return store.sections.waiting > 0
+	})
+	select {
+	case err := <-refused:
+		t.Fatalf("block mode answered before the index caught up: %v", err)
+	default:
+	}
 	gate.release()
 	if err := <-refused; !errors.Is(err, writepolicy.ErrNearDuplicate) {
 		t.Fatalf("block mode behind the index = %v, want the refusal once it caught up", err)
