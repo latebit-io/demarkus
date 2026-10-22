@@ -347,17 +347,22 @@ func (a *audit) checkNearDuplicates(ctx context.Context) {
 }
 
 // nearDocs is the analysed body of every live document the near tier
-// judges, the first of identical copies standing in.
+// judges: the first undecided one of identical copies stands in, while an
+// overridden document always speaks for itself.
 func (a *audit) nearDocs() map[string]*neardup.Doc {
 	docs := make(map[string]*neardup.Doc)
 	seenHash := map[string]bool{}
 	for _, p := range a.order {
 		d := a.docs[p]
-		hash := d.meta["content-hash"]
-		if !live(d.status) || a.layout.RepeatsByDesign(p) || (hash != "" && seenHash[hash]) {
+		if !live(d.status) || a.layout.RepeatsByDesign(p) {
 			continue
 		}
-		seenHash[hash] = true
+		if hash := d.meta["content-hash"]; hash != "" && a.overridden(p) == "" {
+			if seenHash[hash] {
+				continue
+			}
+			seenHash[hash] = true
+		}
 		if doc := neardup.Analyze(d.body); doc.Whole.Sig != 0 {
 			docs[p] = &doc
 		}

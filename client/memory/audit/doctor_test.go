@@ -576,6 +576,21 @@ func TestDuplicatesNearTierOverride(t *testing.T) {
 			t.Errorf("a decided document glued a cluster: %+v", g)
 		}
 	}
+
+	// An overridden copy does not stand in for an identical undecided one:
+	// the lesson's undecided twin still clusters with the rewording.
+	f = newFake(map[string]fakeDoc{
+		"/index.md": {Body: "# Hub\n\n- [a](/a.md)\n- [b](/b.md)\n- [c](/c.md)\n", Meta: map[string]string{"tags": "index"}},
+		"/a.md":     kept(neardtest.LessonDoc, "quoted on purpose"),
+		"/b.md":     typed(neardtest.LessonDoc),
+		"/c.md":     typed(neardtest.RewordedDoc),
+	})
+	if r, err = Run(context.Background(), f, Options{Scope: "/"}); err != nil {
+		t.Fatal(err)
+	}
+	if g := duplicateFinding(r, "/b.md", "near-duplicate of"); g.Detail != "near-duplicate of /c.md (0.76 shared)" || g.Fix == "" {
+		t.Errorf("twin of an overridden copy = %+v, want it clustered with /c.md", g)
+	}
 }
 
 // duplicateFinding is the duplicate finding at path whose detail starts
