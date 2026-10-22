@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
 )
 
@@ -528,4 +529,62 @@ func TestDuplicatesNearTier(t *testing.T) {
 			t.Errorf("contained finding not against a section of the hub: %q", c)
 		}
 	}
+}
+
+// A near-duplicate kept with the override is a decision on the document:
+// its hits are filed at it with the reason and no remedy, and it glues no
+// cluster together; the undecided members cluster on their own edges.
+func TestDuplicatesNearTierOverride(t *testing.T) {
+	typed := func(body string) fakeDoc {
+		return fakeDoc{Body: body, Meta: map[string]string{"tags": "store", "type": "Guide"}}
+	}
+	kept := func(body, reason string) fakeDoc {
+		d := typed(body)
+		d.Meta[neardup.OverrideKey] = reason
+		return d
+	}
+	f := newFake(map[string]fakeDoc{
+		"/index.md":    {Body: "# Hub\n\n- [a](/a.md)\n- [b](/b.md)\n- [c](/c.md)\n- [t](/tenants.md)\n- [hub](/patterns.md)\n", Meta: map[string]string{"tags": "index"}},
+		"/a.md":        typed(neardtest.LessonDoc),
+		"/b.md":        kept(neardtest.RewordedDoc, " quoted on purpose "),
+		"/c.md":        typed("# Sizing again\n\n" + neardtest.Reworded + "\n\nOne more line of text here.\n"),
+		"/tenants.md":  kept(neardtest.OtherDoc, "the hub quotes it"),
+		"/patterns.md": typed(neardtest.HubDoc),
+	})
+	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]Finding{
+		"/a.md: near-duplicate of":    {Detail: "near-duplicate of /c.md (0.", Fix: "keep one, append to or link the rest"},
+		"/b.md: near-duplicate of /a": {Detail: "near-duplicate of /a.md (0.76 shared) (override: quoted on purpose)"},
+		"/b.md: near-duplicate of /c": {Detail: "near-duplicate of /c.md (0.", Fix: ""},
+		"/tenants.md: contained in":   {Detail: "contained in /patterns.md#tenants (1.00) (override: the hub quotes it)"},
+	}
+	for name, w := range want {
+		path, prefix, _ := strings.Cut(name, ": ")
+		g := duplicateFinding(r, path, prefix)
+		if !strings.HasPrefix(g.Detail, w.Detail) || g.Fix != w.Fix {
+			t.Errorf("%s = %+v, want detail %q fix %q", name, g, w.Detail, w.Fix)
+		}
+	}
+	if g := duplicateFinding(r, "/b.md", "near-duplicate of /c"); !strings.HasSuffix(g.Detail, " (override: quoted on purpose)") {
+		t.Errorf("the overridden document's second hit = %+v, want the reason", g)
+	}
+	for _, g := range r.Findings {
+		if g.Check == CheckDuplicates && strings.Contains(g.Detail, "/b.md") {
+			t.Errorf("a decided document glued a cluster: %+v", g)
+		}
+	}
+}
+
+// duplicateFinding is the duplicate finding at path whose detail starts
+// with prefix; zero when there is none.
+func duplicateFinding(r *Report, path, prefix string) Finding {
+	for _, g := range r.Findings {
+		if g.Check == CheckDuplicates && g.Path == path && strings.HasPrefix(g.Detail, prefix) {
+			return g
+		}
+	}
+	return Finding{}
 }

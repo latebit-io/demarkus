@@ -117,7 +117,7 @@ func (a *audit) checkContent() {
 		}
 		// An override covers personal data only; a secret under one is still a finding.
 		if override := strings.TrimSpace(d.meta[contentcheck.OverrideKey]); override != "" && !contentcheck.Secrets(findings) {
-			a.add(CheckContent, p, contentcheck.Summary(findings)+" (override: "+override+")", "")
+			a.add(CheckContent, p, withOverride(contentcheck.Summary(findings), override), "")
 			continue
 		}
 		a.add(CheckContent, p, contentcheck.Summary(findings), contentcheck.StoredRemedy(findings))

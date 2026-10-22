@@ -286,19 +286,7 @@ func (a *audit) checkDuplicates(ctx context.Context) {
 // per cluster, documents a longer one holds; the first of identical copies
 // stands in. The scan is quadratic and stops at the audit timeout, noted.
 func (a *audit) checkNearDuplicates(ctx context.Context) {
-	docs := make(map[string]*neardup.Doc)
-	seenHash := map[string]bool{}
-	for _, p := range a.order {
-		d := a.docs[p]
-		hash := d.meta["content-hash"]
-		if !live(d.status) || a.layout.RepeatsByDesign(p) || (hash != "" && seenHash[hash]) {
-			continue
-		}
-		seenHash[hash] = true
-		if doc := neardup.Analyze(d.body); doc.Whole.Sig != 0 {
-			docs[p] = &doc
-		}
-	}
+	docs := a.nearDocs()
 	others := func(own string) func(yield func(neardup.Target) bool) {
 		return func(yield func(neardup.Target) bool) {
 			for i, q := range a.order {
@@ -316,7 +304,7 @@ func (a *audit) checkNearDuplicates(ctx context.Context) {
 	// through another is reported with an edge it has, never a score
 	// against a document it may not match.
 	edges := map[string]map[string]float64{}
-	var held []Finding // the draft path and the hit's wording, in order
+	var held []Finding // a document's own findings, in order
 	scanned := 0
 	for _, p := range a.order {
 		doc, ok := docs[p]
@@ -328,8 +316,16 @@ func (a *audit) checkNearDuplicates(ctx context.Context) {
 			break
 		}
 		scanned++
+		reason := a.overridden(p)
 		for _, h := range neardup.Scan(doc.Whole, others(p)) {
-			if h.Verdict == neardup.VerdictNearDuplicate && h.Anchor == "" {
+			whole := h.Verdict == neardup.VerdictNearDuplicate && h.Anchor == ""
+			switch {
+			// The override is a decision on the document: its hits are on
+			// record with the reason, and it glues no cluster together.
+			case reason != "":
+				held = append(held, Finding{Path: p, Detail: withOverride(h.String(), reason)})
+			case whole && a.overridden(h.Path) != "":
+			case whole:
 				cluster.join(p, h.Path)
 				for a, b := range map[string]string{p: h.Path, h.Path: p} {
 					if edges[a] == nil {
@@ -337,27 +333,62 @@ func (a *audit) checkNearDuplicates(ctx context.Context) {
 					}
 					edges[a][b] = max(edges[a][b], h.Score)
 				}
-				continue
+			default:
+				held = append(held, Finding{Path: p, Detail: h.String(), Fix: "append to or link the existing document"})
 			}
-			held = append(held, Finding{Path: p, Detail: h.String()})
 		}
 	}
 	for _, members := range cluster.groups() {
-		first := members[0]
-		parts := make([]string, 0, len(members)-1)
-		for _, m := range members[1:] {
-			if score, direct := edges[m][first]; direct {
-				parts = append(parts, fmt.Sprintf("%s (%.2f shared)", m, score))
-				continue
-			}
-			partner := strongest(edges[m])
-			parts = append(parts, fmt.Sprintf("%s (%.2f shared with %s)", m, edges[m][partner], partner))
-		}
-		a.add(CheckDuplicates, first, "near-duplicate of "+strings.Join(parts, ", "), "keep one, append to or link the rest")
+		a.fileCluster(members, edges)
 	}
 	for _, f := range held {
-		a.add(CheckDuplicates, f.Path, f.Detail, "append to or link the existing document")
+		a.add(CheckDuplicates, f.Path, f.Detail, f.Fix)
 	}
+}
+
+// nearDocs is the analysed body of every live document the near tier
+// judges, the first of identical copies standing in.
+func (a *audit) nearDocs() map[string]*neardup.Doc {
+	docs := make(map[string]*neardup.Doc)
+	seenHash := map[string]bool{}
+	for _, p := range a.order {
+		d := a.docs[p]
+		hash := d.meta["content-hash"]
+		if !live(d.status) || a.layout.RepeatsByDesign(p) || (hash != "" && seenHash[hash]) {
+			continue
+		}
+		seenHash[hash] = true
+		if doc := neardup.Analyze(d.body); doc.Whole.Sig != 0 {
+			docs[p] = &doc
+		}
+	}
+	return docs
+}
+
+// fileCluster reports one cluster at its first member, the rest with the
+// edge each has: to the first, else to the strongest partner.
+func (a *audit) fileCluster(members []string, edges map[string]map[string]float64) {
+	first := members[0]
+	parts := make([]string, 0, len(members)-1)
+	for _, m := range members[1:] {
+		if score, direct := edges[m][first]; direct {
+			parts = append(parts, fmt.Sprintf("%s (%.2f shared)", m, score))
+			continue
+		}
+		partner := strongest(edges[m])
+		parts = append(parts, fmt.Sprintf("%s (%.2f shared with %s)", m, edges[m][partner], partner))
+	}
+	a.add(CheckDuplicates, first, "near-duplicate of "+strings.Join(parts, ", "), "keep one, append to or link the rest")
+}
+
+// overridden is the reason a document was kept beside its near-duplicate.
+func (a *audit) overridden(p string) string {
+	return strings.TrimSpace(a.docs[p].meta[neardup.OverrideKey])
+}
+
+// withOverride is a finding's wording once a recorded reason settles it.
+func withOverride(detail, reason string) string {
+	return detail + " (override: " + reason + ")"
 }
 
 // strongest is the partner with the highest score, the first path on a tie.
