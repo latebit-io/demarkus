@@ -71,7 +71,7 @@ func subjectOf(req backend.WriteRequest) nearSubject {
 // judgeNearDuplicate asks the index what the body repeats. An override
 // lands with its reason noted; a cold index (ErrBodyMatchUnavailable) is a
 // note and checked false; any other failure is the caller's to decide on.
-func judgeNearDuplicate(ctx context.Context, state nearCatalog, subject nearSubject) (nearVerdict, error) {
+func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, subject nearSubject) (nearVerdict, error) {
 	if reason := strings.TrimSpace(subject.meta[neardup.OverrideKey]); reason != "" {
 		return nearVerdict{notes: []string{"near-duplicate check overridden (" + reason + ")"}, checked: true}, nil
 	}
@@ -79,8 +79,11 @@ func judgeNearDuplicate(ctx context.Context, state nearCatalog, subject nearSubj
 	if draft.Sig == 0 {
 		return nearVerdict{checked: true}, nil
 	}
+	// A refusal reads the index covering its snapshot, waited for within
+	// the freshness bound; a warning may trail a commit and reads the newest.
 	own := storefmt.CanonicalPath(subject.path)
-	rows, err := state.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: true, Skip: func(p string) bool { return p == own }})
+	stale := e.options.Content.NearDuplicate == contentcheck.Warn
+	rows, err := state.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: stale, Skip: func(p string) bool { return p == own }})
 	switch {
 	case errors.Is(err, backend.ErrBodyMatchUnavailable):
 		return nearVerdict{notes: []string{"near-duplicate check skipped: no section index covers this write yet"}}, nil
@@ -120,7 +123,7 @@ func (e *enforcer) nearDuplicatesBefore(ctx context.Context, req backend.WriteRe
 			verdict.notes = append(verdict.notes, "near-duplicate check: close view: "+closeErr.Error())
 		}
 	}()
-	return judgeNearDuplicate(ctx, view, subjectOf(req))
+	return e.judgeNearDuplicate(ctx, view, subjectOf(req))
 }
 
 // settleNearDuplicate turns a judgment into the write's fate under the mode:

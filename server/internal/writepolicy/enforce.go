@@ -84,7 +84,7 @@ func (e *enforcer) guard(ctx context.Context, req *backend.WriteRequest) error {
 		}
 		verdict := before
 		if catalogState, ok := state.(nearCatalog); ok {
-			again, err := judgeNearDuplicate(ctx, catalogState, subject)
+			again, err := e.judgeNearDuplicate(ctx, catalogState, subject)
 			if again, err = e.tolerate(again, err); err != nil {
 				return err
 			}

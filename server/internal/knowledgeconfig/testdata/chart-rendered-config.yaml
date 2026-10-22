@@ -16,6 +16,7 @@ contentCheck:
   pii: "block"
   workDomains:
     []
+  nearDuplicate: "block"
 worlds:
   - name: "team-a"
     authorities:
