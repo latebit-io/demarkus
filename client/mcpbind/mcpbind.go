@@ -222,7 +222,7 @@ func wholeNumber(req *mcp.CallToolRequest, name string) (int, error) {
 	case nil:
 		return 0, nil
 	case float64:
-		if value == math.Trunc(value) && value >= 0 {
+		if value == math.Trunc(value) && value >= 0 && value <= math.MaxInt32 {
 			return int(value), nil
 		}
 	}

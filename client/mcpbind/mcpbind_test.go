@@ -192,7 +192,7 @@ func TestArchiveExpectedDocs(t *testing.T) {
 	if err != nil || !archive.Recursive || archive.ExpectedDocs != 3 {
 		t.Errorf("Archive = %+v, %v", archive, err)
 	}
-	for _, bad := range []any{float64(0.5), float64(-1), "3"} {
+	for _, bad := range []any{float64(0.5), float64(-1), float64(1 << 63), "3"} {
 		if _, err := Archive(call(map[string]any{"url": "/d/", "expected_docs": bad})); err == nil || !strings.Contains(err.Error(), "expected_docs must be a non-negative integer") {
 			t.Errorf("expected_docs %v err = %v", bad, err)
 		}
