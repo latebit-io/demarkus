@@ -23,12 +23,12 @@ click away. It is a view, not another store.
 - **Trail.** Follow a link and it opens beside the last one. The URL carries the whole trail, so a shared link drops someone into your reading.
 - **Margin.** Backlinks, trust signals, and properties per pane, on demand. Every edition one click back.
 - **Hover cards.** Title, status, and opening line before you click.
-- **Card catalog.** Search by tag, title, or section text, ranked by importance.
+- **Search.** Ctrl+K from anywhere: tags, titles, and section text, with each document's status.
 - **Copy address.** Any document or heading as a `mark://` link, ready for an agent.
 
 <figure class="shot">
-  <img src="/assets/img/library-catalog.png" alt="A search results page titled 'Catalog: broker' with a table of matching documents, their importance scores, titles, and tags" />
-  <figcaption>The card catalog: a lookup for &ldquo;broker,&rdquo; ranked by importance</figcaption>
+  <img src="/assets/img/library-catalog.png" alt="The search overlay over a reading pane: the query 'broker' lists matching documents with their paths and status badges such as active, draft, complete, and accepted" />
+  <figcaption>Search (Ctrl+K): &ldquo;broker&rdquo; across titles and tags, with status</figcaption>
 </figure>
 
 ## See the graph
@@ -37,8 +37,8 @@ click away. It is a view, not another store.
 documents and a link-graph canvas. [More on the graph →](/graph/)
 
 <figure class="shot">
-  <img src="/assets/img/library-graph.png" alt="A per-world map: a force-directed graph of the memory's documents, a central hub linked to architecture, roadmap, ADRs, and plans, with an unlinked grid below" />
-  <figcaption>A world's map: linked documents above, unlinked below</figcaption>
+  <img src="/assets/img/library-graph.png" alt="A per-world map: the memory's documents and directories as a graph, with hubs such as plans, journal, adr, and the library linked by dense edges, and topic clusters shaded" />
+  <figcaption>A world's map: directories sized by what they hold, and the links between them</figcaption>
 </figure>
 
 ## Ask
@@ -48,8 +48,8 @@ and cites what it used. Cited documents open as panes. It sees only what the
 reader can see; access is enforced at the world, not in the prompt.
 
 <figure class="shot">
-  <img src="/assets/img/library-librarian.png" alt="The architecture document open on the left; on the right the agent pane answers a question about which module owns wire format parsing, citing the architecture document it read" />
-  <figcaption>The library&rsquo;s agent answering from the document beside it</figcaption>
+  <img src="/assets/img/library-librarian.png" alt="The architecture document open on the left; on the right the library's agent explains how a note moves from an agent's memory into the shared knowledge system, citing the document it read" />
+  <figcaption>The library&rsquo;s agent answering, its source one click away</figcaption>
 </figure>
 
 Off until you give it a provider: any OpenAI-compatible endpoint via
