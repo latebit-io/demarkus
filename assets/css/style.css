@@ -676,6 +676,15 @@ body {
     color: var(--muted);
 }
 
+.colophon a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.colophon a:hover {
+    color: var(--accent-bright);
+}
+
 /* ---------- Motion ---------- */
 
 @keyframes rise {

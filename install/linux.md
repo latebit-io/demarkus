@@ -6,6 +6,8 @@ permalink: /install/linux/
 
 # Install on Linux
 
+Want memory for your agent? The [plugin](/memory/#install) needs none of this.
+
 ## Quick install (server + client)
 
 ```bash
@@ -108,5 +110,5 @@ Requires Go 1.26+.
 ## Related
 
 - [Public hub scenario](/scenarios/public-hub/)
-- [Deployment & TLS](/setup/) (full reference)
+- [Install a knowledge system](/install/stack/)
 - [Troubleshooting](/troubleshooting/)

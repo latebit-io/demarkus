@@ -1,39 +1,53 @@
 ---
 layout: default
-title: About the Mark Protocol
+title: The Mark Protocol
 permalink: /about/
+nav: docs
 ---
 
-# About the Mark Protocol
+# The Mark Protocol
 
-The Mark Protocol is the foundation under Demarkus's [agent memory and
-knowledge systems](/how-it-works/): it keeps them versioned, portable, and
-self-hostable. It is built on several core principles.
+Memory and knowledge sit on one foundation: versioned markdown served over QUIC.
+You never need to touch it to use Demarkus. It is why your notes stay portable
+and self-hostable.
 
-## Privacy First
+- **Versioned**: every write is a new immutable version, hash-chained. History is kept unless pruned with retention.
+- **Read-only by default**: writes need a capability token or a signed-in identity.
+- **Private**: no tracking, no cookies, no user agents logged.
+- **Encrypted**: QUIC with TLS 1.3, always.
+- **Markdown only**: no scripts, no templates, nothing executes.
+- **Self-hostable**: one static binary, no dependencies.
+- **Open**: CC0 specification, AGPL-3.0 implementation. Anyone can run a server.
 
-- **No user tracking** - No analytics or user-agent tracking.
-- **No cookies** - Stateless by design.
-- **Operational logging** - Errors, rate limits, and writes; security logs may include IP addresses.
-- **Anonymous by default** - Authentication grants capability, not identity.
+## At a glance
 
-## Security Minded
+**Transport**: QUIC, UDP 6309 · **Scheme**: `mark://` · **Content**: markdown + YAML frontmatter
 
-- **QUIC transport** - Encryption mandatory (TLS 1.3).
-- **Capability-based auth** - Tokens grant specific permissions.
-- **Versioning** - Complete audit trail of all changes.
-- **No client-side execution** - Markdown content only.
+```text
+FETCH /hello.md
+```
 
-## Distributed Preservation
+```text
+---
+status: ok
+version: 3
+modified: 2026-01-15T10:30:00Z
+---
 
-Every reader is a potential mirror:
+# Hello World
+```
 
-1. Content is cached locally when you read it.
-2. You can re-host content from your cache.
-3. Like Git for documents.
+**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `LOOKUP` · `WATCH` (read) · `PUBLISH` · `APPEND` · `ARCHIVE` (write)
 
-## Open
+## Portable by design
 
-- Public domain specification
-- Open source implementation
-- Anyone can run a server
+Every reader is a potential mirror. Content is cached when you read it, and you
+can re-host it from the cache. Documents are content-compatible with the
+[Open Knowledge Format](/reference/markdown/#open-knowledge-format-okf-compatibility)
+v0.1; `demarkus okf` validates, imports, and exports bundles.
+
+## Read more
+
+- [Protocol specification](https://github.com/latebit-io/demarkus/blob/main/docs/SPEC.md)
+- [Design rationale](https://github.com/latebit-io/demarkus/blob/main/docs/DESIGN.md)
+- [Security model](/security/)

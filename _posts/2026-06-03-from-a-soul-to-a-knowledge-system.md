@@ -7,7 +7,7 @@ permalink: /blog/from-a-soul-to-a-knowledge-system/
 
 # From a soul to a knowledge system
 
-> October 2026: the deployment and tool surface have changed since this post. See the current [knowledge-system guide](/scenarios/knowledge-system/) and [memory commands](/scenarios/agent-memory/).
+> October 2026: the deployment and tool surface have changed since this post. See the current [knowledge-system guide](/knowledge/) and [memory commands](/memory/).
 
 If you've used demarkus, it was probably as a soul, or as a personal wiki or journal. A little local server with all your secrets ;), one binary (0101) on whatever machine was lying around, holding your notes or your agent's memory. As a soul it remembers what you did last week so your agent doesn't start every session like it just woke up from a coma. As a wiki it's just your stuff, versioned, where you left it. Either way it's yours, and it's the right place to start.
 

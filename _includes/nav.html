@@ -5,19 +5,19 @@
         >Home</a
     >
     <a
-        class="{% if page.url contains '/install/' %}is-active{% endif %}"
-        href="{{ '/install/' | relative_url }}"
-        >Install</a
+        class="{% if page.url == '/memory/' %}is-active{% endif %}"
+        href="{{ '/memory/' | relative_url }}"
+        >Memory</a
     >
     <a
-        class="{% if page.url contains '/scenarios/' %}is-active{% endif %}"
-        href="{{ '/scenarios/' | relative_url }}"
-        >Scenarios</a
+        class="{% if page.url == '/knowledge/' %}is-active{% endif %}"
+        href="{{ '/knowledge/' | relative_url }}"
+        >Knowledge</a
     >
     <a
-        class="{% if page.url == '/how-it-works/' %}is-active{% endif %}"
-        href="{{ '/how-it-works/' | relative_url }}"
-        >How it works</a
+        class="{% if page.url == '/graph/' %}is-active{% endif %}"
+        href="{{ '/graph/' | relative_url }}"
+        >Graph</a
     >
     <a
         class="{% if page.url == '/library/' %}is-active{% endif %}"
@@ -25,34 +25,19 @@
         >Library</a
     >
     <a
-        class="{% if page.url == '/memory/' %}is-active{% endif %}"
-        href="{{ '/memory/' | relative_url }}"
-        >Memory</a
+        class="{% if page.url contains '/install/' %}is-active{% endif %}"
+        href="{{ '/install/' | relative_url }}"
+        >Install</a
     >
     <a
-        class="{% if page.url contains '/reference/' %}is-active{% endif %}"
+        class="{% if page.url contains '/reference/' or page.url contains '/scenarios/' or page.nav == 'docs' %}is-active{% endif %}"
         href="{{ '/reference/' | relative_url }}"
-        >Reference</a
-    >
-    <a
-        class="{% if page.url == '/security/' %}is-active{% endif %}"
-        href="{{ '/security/' | relative_url }}"
-        >Security</a
-    >
-    <a
-        class="{% if page.url == '/ecosystem/' %}is-active{% endif %}"
-        href="{{ '/ecosystem/' | relative_url }}"
-        >Ecosystem</a
+        >Docs</a
     >
     <a
         class="{% if page.url contains '/blog/' %}is-active{% endif %}"
         href="{{ '/blog/' | relative_url }}"
         >Blog</a
-    >
-    <a
-        class="{% if page.url == '/about/' %}is-active{% endif %}"
-        href="{{ '/about/' | relative_url }}"
-        >About</a
     >
     <a
         href="https://github.com/latebit-io/demarkus"

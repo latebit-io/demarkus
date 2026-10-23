@@ -2,9 +2,39 @@
 layout: default
 title: Troubleshooting
 permalink: /troubleshooting/
+nav: docs
 ---
 
 # Troubleshooting
+
+## Plugin issues
+
+### Memory tools missing or failing
+
+Run `/soul-status`: it checks the connection and says what to fix. `/soul-init`
+reconfigures the local soul. The session status line also shows a ⚠️ warning
+when something is unhealthy.
+
+- **Cursor**: if `demarkus-memory` shows as failed before the first conversation, toggle it once under Settings → MCP.
+- **OpenCode**: restart after install; the first session provisions the memory.
+- **pi**: run `/mcp` once (or restart) to connect the newly registered server.
+
+### Knowledge system won't connect
+
+Re-run `/knowledge-join <url>` with the full `https://` URL and finish sign-in
+in the browser. In Cursor, restart and complete OAuth under Settings → MCP; in
+OpenCode V2, open `/mcps`, select the server, and sign in.
+
+### A write is refused
+
+The refusal names the fix:
+
+- **Missing tags or axes**: add them to `metadata`, using values from the policy.
+- **Secret detected**: remove it; the line is named.
+- **Near-duplicate**: update the document it names, or pass `near-duplicate-override` with a reason to keep both.
+- **Wrong destination**: the project writes to its bound memory; `/soul-default` changes the binding.
+
+---
 
 ## Install issues
 

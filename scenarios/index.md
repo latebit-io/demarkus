@@ -1,48 +1,20 @@
 ---
 layout: default
-title: Scenarios
+title: Self-hosting guides
 permalink: /scenarios/
 ---
 
-# Scenarios
+# Self-hosting guides
 
-One versioned document model, three scales. Storage, identity, and discovery
-scale with the deployment.
+The plugins run [memory](/memory/) with nothing to set up, and a
+[knowledge system](/knowledge/) is one Helm install. These guides cover running
+servers by hand.
 
-## Personal: your memory
+| Guide | You get |
+|---|---|
+| [Personal knowledge base](/scenarios/personal-wiki/) | A local wiki with full history, browsed in the TUI |
+| [Team server](/scenarios/team/) | One shared server, open reads, per-person write tokens |
+| [Public hub](/scenarios/public-hub/) | A public server with Let's Encrypt and open reads |
+| [Manual agent memory](/memory/#any-mcp-agent) | Memory for an MCP agent without a plugin |
 
-A server of your own, on your machine or a remote host you join from every
-device.
-
-- [Agent memory](/scenarios/agent-memory/): persistent memory for Claude Code, OpenCode, pi, and other MCP agents
-- [Personal knowledge base](/scenarios/personal-wiki/): local wiki, full history, TUI browser
-
-## Team: a shared world
-
-One server a group reads, a [reading room](/library/) for humans, MCP for agents.
-Capability tokens scope each person's writes.
-
-- [Team knowledge base](/scenarios/team/): the manual build with per-person tokens
-- [Public hub](/scenarios/public-hub/): public server, Let's Encrypt, open reads
-
-## Enterprise: a knowledge system
-
-Many worlds behind one gateway, your identity provider in front. Teams join with
-one command; access is scoped per world. The [knowledge
-server](/ecosystem/#knowledge-server) derives the cross-world graph.
-
-- [Organizational knowledge system](/scenarios/knowledge-system/): architecture, reference deployment, how users join
-- [Install a knowledge system](/install/stack/): worlds, gateways, and library with Helm
-- [The library and the librarian](/library/): human front-end over the universe
-
-## They compose
-
-Anyone can run a personal memory and join the org system in the same agent, in
-Claude Code, [Cursor](https://cursor.com), [OpenCode](https://opencode.ai), or [pi](https://pi.dev). All four
-plugin pairs share one `~/.demarkus` state. `/promote` lifts a ready note from
-the private tier to the shared one through a curation gate; `/soul-refresh`
-reconciles it with the shared copy. The two plugins partition by
-server scope.
-
-For the full agent-driven flow, how data lands in memory and gets promoted up to
-the knowledge system, see [How knowledge flows](/how-it-works/).
+Need single sign-on and many worlds? [Install a knowledge system](/install/stack/).

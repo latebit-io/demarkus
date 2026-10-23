@@ -7,7 +7,7 @@ permalink: /blog/creating-an-automated-knowledge-universe/
 
 # Creating an automated knowledge universe
 
-> October 2026: the protocol now includes WATCH, and the knowledge server derives the cross-world graph. See the current [reference](/reference/) and [knowledge-system guide](/scenarios/knowledge-system/).
+> October 2026: the protocol now includes WATCH, and the knowledge server derives the cross-world graph. See the current [reference](/reference/) and [knowledge-system guide](/knowledge/).
 
 Humans are bad at documentation. Really bad. Not some of us, most of us. Maybe 1% of engineers consistently write and maintain accurate docs. The rest write it once and have intention of maintaining, but never do.
 

@@ -2,11 +2,22 @@
 layout: default
 title: Upgrade & Uninstall
 permalink: /upgrade/
+nav: docs
 ---
 
 # Upgrade & Uninstall
 
-## Upgrade
+## Plugins
+
+Update through your agent's plugin manager. Each plugin release pins its
+binaries; the next session installs them into `~/.demarkus/bin`. Your memory is
+untouched.
+
+## Knowledge systems
+
+Upgrade through Helm or your GitOps configuration.
+
+## Binaries
 
 ### Using demarkus-install (recommended)
 
@@ -46,8 +57,6 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 - `demarkus-library`, when installed via `--with-library`
 - `demarkus-install` (the update helper itself)
 
-Knowledge-system deployments upgrade through Helm or their GitOps configuration.
-
 ## What is preserved
 
 - `/etc/demarkus/tokens.toml` (or `~/.demarkus/tokens.toml` on macOS)
@@ -81,17 +90,11 @@ demarkus-install uninstall
 sudo demarkus-install uninstall
 ```
 
-This removes all installed binaries and the service configuration. Your content directory and tokens file are **not** removed.
+This removes the binaries, the service, and the config directory, tokens and
+TLS certificates included.
 
-To also remove config and data:
-
-```bash
-# macOS
-rm -rf ~/.demarkus
-
-# Linux
-sudo rm -rf /etc/demarkus
-```
+- **Linux**: config is `/etc/demarkus`. You are asked before the content directory is removed; `--keep-data` skips the question and keeps it.
+- **macOS**: config is `~/.demarkus`, which also holds the default content (`~/.demarkus/content`) and the memory plugins' state and soul. Back it up first if you want to keep any of it.
 
 ## Related
 

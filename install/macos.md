@@ -6,6 +6,8 @@ permalink: /install/macos/
 
 # Install on macOS
 
+Want memory for your agent? The [plugin](/memory/#install) needs none of this.
+
 ## Client only (recommended first step)
 
 Install the CLI, TUI browser, and MCP server with one command:

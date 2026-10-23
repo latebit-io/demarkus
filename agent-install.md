@@ -2,59 +2,47 @@
 layout: default
 title: Agent Install
 permalink: /agent-install/
+nav: docs
 ---
 
-# Agent Install
+# Agent install
 
-Use this page when you want an AI agent to install and configure Demarkus for you.
+Want memory for your agent? Install the [memory plugin](/memory/#install); it
+sets itself up. This page is for having an agent install a **server** for you.
 
-## Copy/Paste Brief for Agents
+## Brief to paste
 
 ```text
-Install and configure Demarkus on this machine.
+Install and configure a Demarkus server on this machine.
 
-Goals:
 1. Use the official install script:
    curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
-   - For client-only: add --client-only flag
-   - For Let's Encrypt TLS: add --domain yourdomain.com --root /srv/site
-   - For custom certs: add --tls-cert /path/cert.pem --tls-key /path/key.pem
-   - Optional (Linux-only): --with-library (read-only web reading room)
-   - On Linux, run with sudo for server installs
-2. Start demarkus-server and verify client connectivity.
-3. If requested, configure MCP using demarkus-mcp and create/update .mcp.json.
-4. Report exactly what was installed, where configs were written, and how to run/stop services.
+   - Client only: --client-only
+   - Let's Encrypt: --domain <domain> --root /srv/site
+   - Own certs: --tls-cert <cert.pem> --tls-key <key.pem>
+   - Linux only, read-only web reading room: --with-library
+   - On Linux, pipe to sudo bash for server installs
+2. Start demarkus-server and verify: demarkus [--insecure] mark://localhost:6309/health
+3. If asked, generate a publish token with demarkus-token and configure demarkus-mcp in .mcp.json.
+4. Report what was installed, where configs went, and how to start and stop the service.
 
 Constraints:
-- Do not assume trusted TLS certs are available.
-- For self-signed/local certs, use client --insecure where needed.
-- Keep commands idempotent and explain any destructive steps before running them.
-- If INSTALL_DIR (~/.local/bin or /usr/local/bin) is not in PATH, add it.
+- Use --insecure only for self-signed or local certs.
+- Keep commands idempotent; explain destructive steps before running them.
+- If the install dir (/usr/local/bin or ~/.local/bin) is not on PATH, add it.
 ```
 
-## Human Inputs to Provide
+## Tell it
 
-- Target mode:
-  - `public` (with domain + Let's Encrypt)
-  - `private/local` (self-signed/dev cert)
-- Operating system (`macOS` or `Linux`)
-- Desired content root path (for example `/srv/site` or `~/my-docs`)
-- Whether MCP should be configured now (`yes/no`)
-- If MCP = yes: host + token values
+- Mode: public (domain + Let's Encrypt) or local (self-signed)
+- OS: macOS or Linux (Windows: WSL2)
+- Content root, e.g. `/srv/site` or `~/my-docs`
+- Configure MCP now? If yes, the host and token
 
-## Minimal Verification Checklist
+## Check
 
-1. `demarkus-server` starts successfully.
-2. CLI fetch works:
-   - `demarkus --insecure mark://localhost:6309/health` (self-signed/local)
-   - or without `--insecure` when using trusted TLS.
-3. If MCP configured:
-   - `demarkus-mcp` can initialize and `mark_list` works.
+1. `demarkus-server` is running.
+2. `demarkus --insecure mark://localhost:6309/health` answers (drop `--insecure` with trusted TLS).
+3. With MCP: `mark_list` works.
 
-## Platform-specific guides
-
-- [macOS](/install/macos/)
-- [Linux](/install/linux/)
-- [Windows (WSL2)](/install/windows/)
-
-For persistent agent memory, see [Agent Memory](/scenarios/agent-memory/).
+Guides: [macOS](/install/macos/) · [Linux](/install/linux/) · [Windows](/install/windows/) · [Docker](/install/docker/)

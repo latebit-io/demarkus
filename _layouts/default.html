@@ -94,8 +94,8 @@
       </aside>
       {% if page.url == '/' %}
       <section class="hero">
-        <p class="eyebrow">Built on the Mark Protocol</p>
-        <h1>Memory for agents, knowledge for teams, a second brain for you</h1>
+        <p class="eyebrow">Agent memory · Knowledge base · Graph</p>
+        <h1>Memory for agents, knowledge for teams</h1>
         <p class="hero-copy">{{ site.description }}</p>
       </section>
       {% endif %}
@@ -106,8 +106,13 @@
 
     <footer class="shell site-footer">
       <p class="colophon">
-        <span>Demarkus &middot; Agent memory &amp; knowledge systems</span>
-        <span>Versioned &middot; Self-hostable &middot; Built on the Mark Protocol</span>
+        <span>Demarkus &middot; Memory, knowledge, graph</span>
+        <span>
+          <a href="{{ '/about/' | relative_url }}">Mark Protocol</a> &middot;
+          <a href="{{ '/security/' | relative_url }}">Security</a> &middot;
+          <a href="{{ '/ecosystem/' | relative_url }}">Ecosystem</a> &middot;
+          <a href="https://github.com/latebit-io/demarkus">GitHub</a>
+        </span>
       </p>
     </footer>
   </body>

@@ -4,145 +4,51 @@ title: Personal Knowledge Base
 permalink: /scenarios/personal-wiki/
 ---
 
-# Personal Knowledge Base
+# Personal knowledge base
 
-Run Demarkus locally as a private knowledge base: browse with the TUI, publish from the CLI or your agent, full version history on every document.
+A private wiki on your machine: write from the CLI, your editor, or your agent;
+browse in the TUI; every save versioned. No cloud, no account.
 
-## What you'll have
+If you run the [memory plugin](/memory/), you already have one: it is your soul.
+This guide sets one up by hand.
 
-- A local server with version history on every document
-- Write access controlled by capability tokens (not filesystem access)
-- Interactive TUI browser with link navigation
-- CLI for fetches, edits, and publishing
-- No cloud, no account, no tracking
-
-## Setup
-
-### 1. Install
+## Set up
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
 ```
 
-This installs the server and clients. The examples below use macOS paths;
-Linux installs use `/var/lib/demarkus` for content and `/etc/demarkus` for config.
-
-### 2. Generate a write token
-
-Generate a token for private reads and writes:
+The installer starts the server as a service and saves an initial token to
+`~/.demarkus/initial-token.txt`. For private reads too, make a token with both
+ops and restart the server:
 
 ```bash
 demarkus-token generate -label my-wiki -paths "/**" -ops read,publish -tokens ~/.demarkus/tokens.toml
+export DEMARKUS_AUTH='<raw-token>'
 ```
 
-Copy the raw token and set `DEMARKUS_AUTH` below. Reload or restart the server
-after changing its tokens file.
+macOS paths shown; Linux uses `/var/lib/demarkus` for content and
+`/etc/demarkus` for config.
 
-> If you used the full installer, the tokens file path is already configured. The installer saves an initial token to `~/.demarkus/initial-token.txt`.
-
-### 3. Start the server with write access
-
-If running manually (the installer starts the server automatically as a background service):
+## Write
 
 ```bash
-demarkus-server -root ~/.demarkus/content -tokens ~/.demarkus/tokens.toml
-```
-
-The server uses a self-signed certificate and listens on UDP 6309 on all
-interfaces. The read token above protects the content.
-
-### 4. Publish your first documents
-
-Everything goes through the protocol, with no writing files directly to disk:
-
-```bash
-export DEMARKUS_AUTH='your-raw-token'
+demarkus edit --insecure mark://localhost:6309/notes.md     # opens $EDITOR, publishes on save
 
 demarkus --insecure -X PUBLISH -expected-version 0 \
   -body "# My Wiki
 
-- [Notes](notes.md)
-- [Ideas](ideas.md)" \
-  mark://localhost:6309/index.md
-
-demarkus --insecure -X PUBLISH -expected-version 0 \
-  -body "# Notes
-
-Start writing here." \
-  mark://localhost:6309/notes.md
+- [Notes](notes.md)" mark://localhost:6309/index.md
 ```
 
-Each publish creates a new immutable version. Run `demarkus -X VERSIONS` to see the history:
+Always write through the server, never to the directory: only published
+writes get a version, a hash, and history.
+
+## Read
 
 ```bash
+demarkus-tui --insecure mark://localhost:6309/index.md      # Tab, Enter, [ ], d for the graph
 demarkus --insecure -X VERSIONS mark://localhost:6309/index.md
 ```
 
-### 5. Browse with the TUI
-
-```bash
-demarkus-tui --insecure mark://localhost:6309/index.md
-```
-
-**Keyboard shortcuts:**
-
-| Key | Action |
-|-----|--------|
-| `Tab` | Cycle through links |
-| `Enter` | Follow selected link |
-| `[` | Back |
-| `]` | Forward |
-| `d` | Document graph view |
-| `?` | Help |
-
-### 6. Read and write documents
-
-Fetch a document to stdout:
-
-```bash
-demarkus --insecure -v mark://localhost:6309/notes.md
-```
-
-Replace from a file, using the version you just fetched:
-
-```bash
-demarkus --insecure -X PUBLISH -expected-version 1 \
-  -body "$(cat notes.md)" \
-  mark://localhost:6309/notes.md
-```
-
-### 7. Edit documents
-
-The `edit` subcommand opens a document in `$EDITOR` and publishes on save:
-
-```bash
-demarkus edit --insecure mark://localhost:6309/notes.md
-```
-
-If the document doesn't exist yet, it opens an empty editor and creates it on save.
-
-## Why publish through the protocol?
-
-Writing files directly to the content directory bypasses version history, so those changes won't be tracked. Everything published via `demarkus -X PUBLISH` gets a version number, a hash, and an immutable record. That's what makes it a knowledge base rather than just a folder of files.
-
-## Running on startup (macOS)
-
-If you used the full installer, the server starts automatically via launchd. To start/stop manually:
-
-```bash
-# macOS 14+
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.latebit.demarkus.plist
-launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/io.latebit.demarkus.plist
-```
-
-## Running on startup (Linux)
-
-```bash
-sudo systemctl enable --now demarkus
-sudo systemctl status demarkus
-```
-
-## Related
-
-- [Install on macOS](/install/macos/)
-- [Install on Linux](/install/linux/)
+[TUI keys](/reference/tui-keybindings/) · [macOS](/install/macos/) · [Linux](/install/linux/)

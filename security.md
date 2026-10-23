@@ -2,11 +2,12 @@
 layout: default
 title: Security Model
 permalink: /security/
+nav: docs
 ---
 
 # Security Model
 
-The server under Demarkus's memory and knowledge tiers stores versioned markdown and nothing else. This page describes the attack surface, threat model, and hardening options for production deployments.
+Memory and knowledge live in servers that store versioned markdown and nothing else. Attack surface, threat model, and hardening below.
 
 ## Attack Surface
 
@@ -44,7 +45,9 @@ If an attacker obtains a write token, they can:
 - Prune version history on a document they can write, by setting `retention` on a publish
 - Nothing else: no code execution, no filesystem escape, no privilege escalation
 
-Retention is the store's only destructive operation. It needs no extra capability, since it runs under the same write authorization that could archive the document, so it is constrained instead: deletion targets come from enumerating the document's own stored versions, never from request input; every removal resolves inside an `os.Root` anchored at the store root, so a planted symlink cannot redirect it; and each pruned range is audit-logged with the writer's token label. Clients warn before setting `retention` on a document that is not a generated artifact.
+Retention is the store's only destructive operation. Deletion targets come from
+the document's own stored versions, never from request input; each pruned range
+is audit-logged with the writer's label.
 
 Mitigation:
 
@@ -147,16 +150,24 @@ echo "# Hello" | demarkus-publish -root /srv/demarkus/content -path /index.md
 
 Full versioning is preserved: `demarkus-publish` uses the same store code as the server. The server just serves what's on disk.
 
-## Knowledge system (broker)
+## Content checks
 
-In a [knowledge system](/scenarios/knowledge-system/), OIDC gateways front the
-worlds. Direct QUIC access is a separate deployment choice.
+Every write, to a soul or a knowledge system, passes the same checks at the store.
 
-- Users authenticate against your IdP. Gateway calls reach worlds in process under each world's access and write scope, without minting world tokens.
-- Auth follows the MCP authorization spec: discovery (RFC 8414 / 9728), dynamic client registration (RFC 7591), then authorization code with PKCE.
-- The [library](/library/) in broker mode is a confidential web client: tokens stay server-side, the browser holds an opaque session cookie, and state-changing requests carry CSRF protection.
-- The AI librarian works only the read ports the reader has, so it cannot surface a document the reader could not fetch.
-- A compromised knowledge process can access the worlds and buckets its service identity can reach.
+- **Secrets** are refused, naming the rule and line, never the value. No override.
+- **Personal data** is refused by default in a knowledge system and warned in a soul. A reviewed false positive lands with `content-check-override: <reason>`.
+- **Near-duplicates** are refused, naming the existing document. `near-duplicate-override: <reason>` keeps both.
+
+## Knowledge system
+
+OIDC gateways front the worlds. Users sign in with your identity provider; no
+world tokens are minted or copied.
+
+- **Standard MCP auth**: discovery (RFC 8414, 9728), dynamic client registration (RFC 7591), authorization code with PKCE, resource-bound tokens (RFC 8707), rotating refresh tokens.
+- **Per-world access**: reads need the world's `allow`; writes also land only in its `writeScope` paths.
+- **Hosted memory**: each identity maps to exactly one world. Reads and writes are locked to it; cross-tenant access is denied at the tool, resource, and crawl layers.
+- **Library**: a confidential web client. Tokens stay server-side; the browser holds an opaque session cookie; state-changing requests carry CSRF protection. Its agent reads only what the reader can.
+- **Blast radius**: a compromised knowledge process reaches the worlds and buckets its service identity can.
 
 ## Comparison
 
@@ -172,4 +183,4 @@ worlds. Direct QUIC access is a separate deployment choice.
 
 - [Install on Linux](/install/linux/)
 - [Publish a Public Hub](/scenarios/public-hub/)
-- [Organizational knowledge system](/scenarios/knowledge-system/)
+- [Organizational knowledge system](/knowledge/)

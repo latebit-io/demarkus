@@ -1,162 +1,71 @@
 ---
 layout: default
-title: Team Knowledge Base
+title: Team Server
 permalink: /scenarios/team/
 ---
 
-# Team Knowledge Base
+# Team server
 
-Run a shared knowledge base for a team: one server humans and agents write together, full version history, per-person or per-role write tokens, and open internal read access.
+One shared server that people and agents write together: open reads inside your
+network, per-person write tokens, full history.
 
-## What you'll have
+Need single sign-on, many worlds, and policy? Use a
+[knowledge system](/knowledge/) instead.
 
-- A shared server (VPS or internal host)
-- Read access for the whole team: no auth required
-- Write access controlled by capability tokens
-- Full version history for accountability and rollback
-- Everyone uses `demarkus-tui` or `demarkus` CLI to read and write
+## Layout
 
-## Architecture
-
-```
-Team server (mark://docs.internal.example.com)
-├── /runbooks/          # ops runbooks
-├── /decisions/         # architecture decision records
-├── /onboarding/        # getting started guides
-└── /projects/<name>/   # per-project docs
+```text
+mark://docs.internal.example.com
+├── /runbooks/
+├── /decisions/
+├── /onboarding/
+└── /projects/<name>/
 ```
 
-Each team member gets a personal publish token scoped to paths they own. A team lead token covers everything.
-
-For a reading room, add `--with-library` to the Linux install. For single sign-on
-and many worlds, use the [knowledge-system chart](/install/stack/).
-
-## Setup
-
-### 1. Install the server
-
-On a Linux host (VPS or internal):
+## Set up
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
   sudo bash -s -- --domain docs.internal.example.com --root /srv/team-docs
 ```
 
-Or with your own certificates:
+Own certificates: `--tls-cert /path/cert.pem --tls-key /path/key.pem`. Reading
+room in the browser: add `--with-library`.
+
+## Tokens
+
+The `publish` op grants PUBLISH, APPEND, and ARCHIVE on the matched paths.
+`**` includes descendants; `*` matches one segment.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
-  sudo bash -s -- --tls-cert /path/cert.pem --tls-key /path/key.pem
-```
+# Lead: everything
+sudo demarkus-token generate -label team-lead -paths "/**" -ops publish -tokens /etc/demarkus/tokens.toml
 
-### 2. Create initial structure
+# Developer: one project
+sudo demarkus-token generate -label dev-alice -paths "/projects/myproject/**" -ops publish -tokens /etc/demarkus/tokens.toml
 
-```bash
-sudo mkdir -p /srv/team-docs/{runbooks,decisions,onboarding}
-demarkus-publish -root /srv/team-docs -path /index.md -body "# Team Docs"
-demarkus-publish -root /srv/team-docs -path /runbooks/index.md -body "# Runbooks"
-```
+# Private paths: a read token gates them; everything else stays open
+sudo demarkus-token generate -label secret-reader -paths "/projects/secret/**" -ops read -tokens /etc/demarkus/tokens.toml
 
-### 3. Generate tokens
-
-**Team lead token (full access):**
-
-```bash
-sudo demarkus-token generate \
-  -paths "/**" \
-  -ops publish \
-  -tokens /etc/demarkus/tokens.toml \
-  -label "team-lead"
-```
-
-The `publish` op grants all writes (PUBLISH, APPEND, and ARCHIVE) for the matched paths. There is no separate `archive` operation.
-
-**Developer token (scoped to their project folder):**
-
-```bash
-sudo demarkus-token generate \
-  -paths "/projects/myproject/**" \
-  -ops publish \
-  -tokens /etc/demarkus/tokens.toml \
-  -label "dev-alice"
-```
-
-**Restricting reads (optional):**
-
-By default all reads are open. A token with the `read` op gates its paths. To make `/projects/secret/` and its descendants private:
-
-```bash
-sudo demarkus-token generate \
-  -paths "/projects/secret/**" \
-  -ops read \
-  -tokens /etc/demarkus/tokens.toml \
-  -label "secret-reader"
-```
-
-`**` includes descendants; `*` matches one path segment. Other paths stay read-open.
-
-After generating tokens, reload:
-
-```bash
 sudo systemctl restart demarkus
 ```
 
-### 4. Team members install client
+## Use
 
-Each team member runs:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
-  bash -s -- --client-only
-```
-
-### 5. Team members browse and publish
-
-Browse:
+People install the client (`install.sh --client-only`), then:
 
 ```bash
-demarkus-tui mark://docs.internal.example.com/index.md
+demarkus-tui mark://docs.internal.example.com/index.md                     # browse
+demarkus edit -auth "$TOKEN" mark://docs.internal.example.com/runbooks/deploy.md  # edit in $EDITOR
+demarkus -X VERSIONS mark://docs.internal.example.com/runbooks/deploy.md   # history
+demarkus mark://docs.internal.example.com/runbooks/deploy.md/v3            # one version
 ```
 
-Edit a document (opens `$EDITOR`, publishes on save):
-
-```bash
-demarkus edit -auth "$TOKEN" mark://docs.internal.example.com/runbooks/deploy.md
-```
-
-Publish directly:
-
-```bash
-demarkus -X PUBLISH -auth "$TOKEN" -expected-version 0 \
-  -body "# ADR 001: Use Demarkus for team docs" \
-  mark://docs.internal.example.com/decisions/001-use-demarkus.md
-```
-
-Set `TOKEN` to your raw token. `-expected-version 0` creates a new document; use
-the fetched version to replace one, or use `demarkus edit`.
-
-### 6. View version history
-
-```bash
-demarkus -X VERSIONS mark://docs.internal.example.com/runbooks/deploy.md
-```
-
-Fetch a specific version:
-
-```bash
-demarkus mark://docs.internal.example.com/runbooks/deploy.md/v3
-```
+Agents join with the memory plugin: `/soul-join` takes a join URL built by
+`demarkus-token join -host <host> -token <token>`.
 
 ## Tips
 
-- Scope tokens narrowly: per-person or per-directory
-- Use `-label` when generating tokens for audit clarity
-- `demarkus-tui` graph view (`d` key) shows document relationships
-- Archive keeps history; explicit retention can prune older versions
-
-## Related
-
-- [Install a knowledge system](/install/stack/): many worlds with single sign-on
-- [Install on Linux](/install/linux/)
-- [Public hub scenario](/scenarios/public-hub/)
-- [Organizational knowledge system](/scenarios/knowledge-system/): the next tier up
+- Scope tokens narrowly, label them for the audit log.
+- `d` in the TUI shows how documents link.
+- Archive keeps history; only explicit retention prunes it.

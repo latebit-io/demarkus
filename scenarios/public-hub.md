@@ -1,183 +1,78 @@
 ---
 layout: default
-title: Public Hub
+title: Public Server
 permalink: /scenarios/public-hub/
 ---
 
-# Public Hub
+# Public server
 
-Run a publicly accessible Demarkus server with TLS, open read access, and optional write tokens. Good for publishing docs, specs, or knowledge bases.
+Publish docs, specs, or a knowledge base on the open web of `mark://`: a VPS,
+a real certificate, open reads, token-gated writes.
 
-## The Hub Pattern
+## You need
 
-A **hub** is a demarkus server that acts as a discovery index: it links to other demarkus servers rather than hosting original content. Think of it as a curated directory for the demarkus network.
+- A Linux VPS (Ubuntu 22.04+)
+- A domain pointing at it
+- Port 80/TCP (Let's Encrypt) and 6309/UDP open
 
-Hubs organize servers into categories (tools, blogs, projects, other hubs) and publish an agent manifest at `/.well-known/agent-manifest.md` so LLM agents can discover and navigate the network automatically.
-
-The more hubs link to each other, the richer the network becomes. Anyone can run a hub.
-
-### Reference Implementation
-
-The public hub at [`mark://hub.demarkus.io`](https://github.com/latebit-io/demarkus-hub) is a working example. Its content lives in a Git repo and CI publishes to the live server on every push to `main`. Browse it:
-
-```bash
-demarkus mark://hub.demarkus.io/index.md
-```
-
-See the repo for structure, contributing guidelines, and how to list your own server: [github.com/latebit-io/demarkus-hub](https://github.com/latebit-io/demarkus-hub)
-
-## What you'll have
-
-- A server on a VPS with a real domain and Let's Encrypt certificate
-- Open read access over `mark://` (no auth required to read)
-- Write access restricted to token holders
-- Auto-renewing TLS with zero-downtime reloads
-
-## Prerequisites
-
-- A Linux VPS (Ubuntu 22.04+ recommended)
-- A domain name pointing to the VPS (A record → VPS IP)
-- Port 80 open (for Let's Encrypt HTTP challenge)
-- Port 6309/UDP open (for Mark Protocol)
-
-## Setup
-
-### 1. Install with Let's Encrypt
-
-SSH into your VPS and run:
+## Set up
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | \
   sudo bash -s -- --domain yourdomain.com --root /srv/site
-```
 
-This will:
-- Install all binaries to `/usr/local/bin`
-- Obtain a Let's Encrypt certificate via certbot
-- Configure and start the systemd service
-- Set up auto-renewal with zero-downtime reload
-
-### 2. Open firewall
-
-```bash
 sudo ufw allow 6309/udp
-sudo ufw allow 80/tcp    # for Let's Encrypt renewal
+sudo ufw allow 80/tcp
 ```
 
-### 3. Add your initial content
+The installer fetches the certificate, starts the systemd service, and renews
+with a zero-downtime reload (`SIGHUP`). Add `--with-library` for a reading room
+in the browser.
+
+Check from anywhere:
 
 ```bash
-demarkus-publish -root /srv/site -path /index.md -body "# Welcome
-
-This is a public Demarkus hub."
+demarkus mark://yourdomain.com/health
 ```
 
-### 4. Verify
+## Publish
 
-From your local machine:
+**On the server**, straight to the store. The server can then run
+[read-only](/security/#read-only-mode-maximum-lockdown):
 
 ```bash
-demarkus mark://yourdomain.com/index.md
+demarkus-publish -root /srv/site -path /index.md -body "# Welcome"
 ```
 
-You should see the document with `status: ok`.
-
-### 5. Publish content
-
-**Option A: Local publishing (recommended for public servers)**
-
-Use `demarkus-publish` to write directly to the versioned store on disk. No network write access is needed, so the server can run in [read-only mode](/security/#read-only-mode-maximum-lockdown) for maximum security:
+**Remotely**, with a token:
 
 ```bash
-demarkus-publish -root /srv/site -path /hello.md -body "# Hello"
-```
-
-**Option B: Remote publishing via tokens**
-
-Generate a publish token on the server:
-
-```bash
-sudo demarkus-token generate -label hub-writer -paths "/**" -ops publish -tokens /etc/demarkus/tokens.toml
-```
-
-Then reload the server config:
-
-```bash
+sudo demarkus-token generate -label writer -paths "/**" -ops publish -tokens /etc/demarkus/tokens.toml
 sudo systemctl restart demarkus
-```
 
-Set `TOKEN` to the raw token, then publish a new document from your local machine:
-
-```bash
 demarkus -X PUBLISH -auth "$TOKEN" -expected-version 0 \
   -body "# A new page" mark://yourdomain.com/new-page.md
 ```
 
-To replace a document, pass its fetched version as `-expected-version`, or use
+`-expected-version 0` creates; pass the fetched version to replace, or use
 `demarkus edit`.
 
-## Agent Discovery via Published Graphs
+## Be a hub
 
-Hubs can host graph exports. With the full MCP tool profile, an agent crawls a
-set of servers and publishes the discovered links for other agents to follow.
+A hub is a server whose documents link to other servers: a curated directory.
+Hubs can link to hubs. Publish `/.well-known/agent-manifest.md` (purpose, key
+paths, how to write) and agents find their way with `mark_discover`.
 
-### How it works
+Agents can also crawl a set of servers with `mark_graph` and publish what they
+found with `mark_graph_publish` (full tool profile). The result is plain
+markdown with `mark://` links that the next agent can follow.
+[The graph →](/graph/)
 
-1. An agent crawls servers using `mark_graph` to build a local graph store
-2. The agent publishes the graph to the hub using `mark_graph_publish` (e.g. `/graphs/my-network.md`)
-3. Another agent fetches the published graph and runs `mark_graph` on it
-4. The crawler follows `mark://` links and checks the source documents
-
-The published graph is plain markdown with `mark://` links in a table. No special format: the same link extraction the crawler already uses parses it naturally.
-
-### Multi-agent discovery
-
-Multiple agents can publish their graphs to the same hub:
-
-- Agent A publishes its graph from crawling `mark://server-a.com`
-- Agent B publishes its graph from crawling `mark://server-b.com`
-- Agent C follows both exports to explore the connected documents
-
-Each published graph is versioned, so you get a history of how the network evolved over time.
-
-### MCP tools
-
-| Tool | Purpose |
-|------|---------|
-| `mark_graph` | Crawl links from a document, persist to local graph store |
-| `mark_graph_export` | Export the local graph as publishable markdown |
-| `mark_graph_publish` | Export and publish the graph to a server in one step |
-| `mark_backlinks` | Query the local graph for reverse links |
-
-In a [knowledge system](/scenarios/knowledge-system/), the server derives the
-cross-world graph itself. Content-hash lookup and the standalone indexing agent
-have been retired.
-
-## Certificate renewal
-
-The installer configures this cron job automatically:
-
-```bash
-0 */12 * * * certbot renew --quiet --deploy-hook "pidof demarkus-server | xargs -r kill -HUP"
-```
-
-The `SIGHUP` signal triggers a zero-downtime certificate reload, with no connection drops.
-
-## Monitoring
+## Operate
 
 ```bash
 sudo systemctl status demarkus
 journalctl -u demarkus -f
 ```
 
-Health check:
-
-```bash
-demarkus mark://yourdomain.com/health
-```
-
-## Related
-
-- [Install on Linux](/install/linux/)
-- [Security Model](/security/): read-only mode, chroot install, hardening
-- [Troubleshooting](/troubleshooting/)
+[Install on Linux](/install/linux/) · [Security](/security/) · [Troubleshooting](/troubleshooting/)

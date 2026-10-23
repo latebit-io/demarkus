@@ -17,7 +17,7 @@ render it; knowledge-system writes also pass policy and content checks.
 Markdown + definition lists**.
 
 The rendering features below describe the TUI. The CLI returns markdown; MCP may
-return a section or outline. The library has its own renderer.
+return a section or outline. The [library](/library/) has its own renderer, with Mermaid and KaTeX.
 
 ## CommonMark
 
@@ -148,6 +148,7 @@ If you want a link to appear in the graph, use `[text](url)` or a reference link
 
 Publisher keys such as `rel-depends-on` also declare typed document relations.
 Graph results distinguish these from ordinary links and carry source revisions.
+See [the knowledge graph](/graph/).
 
 ## Document size
 

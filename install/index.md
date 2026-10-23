@@ -2,15 +2,58 @@
 layout: default
 title: Install
 permalink: /install/
+redirect_from:
+  - /setup/
 ---
 
 # Install
 
-Pick your platform, or deploy a shared knowledge system.
+## Memory for your agent
 
-## Knowledge system (Kubernetes)
+Start here. The plugin brings its own binaries; nothing else to install.
 
-GCS-backed worlds, OIDC gateways, and an optional [reading room](/library/), configured through one Helm values file.
+**Claude Code**
+
+```text
+/plugin marketplace add latebit-io/demarkus
+/plugin install demarkus-memory@demarkus
+```
+
+**Claude Cowork**: add `latebit-io/demarkus` as a marketplace (Customize →
+Plugins), then install `demarkus-memory`.
+
+**Cursor**
+
+```text
+Customize → Add Marketplace → Import from GitHub → https://github.com/latebit-io/demarkus (scope: User) → Import
+demarkus-memory → Add
+```
+
+**OpenCode**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+```
+
+**pi**
+
+```bash
+pi install npm:pi-mcp-adapter
+pi install git:github.com/latebit-io/demarkus-pi-memory
+```
+
+All plugins share `~/.demarkus`: one memory across every agent on the machine.
+[Memory →](/memory/)
+
+## Join a knowledge base
+
+Same marketplaces, the `demarkus-knowledge` plugin, then
+`/knowledge-join <url>`. [Knowledge →](/knowledge/#join)
+
+## Run a knowledge system
+
+Worlds, single sign-on, MCP gateways, and the [library](/library/) on
+Kubernetes from one Helm values file.
 
 ```bash
 helm upgrade --install demarkus oci://ghcr.io/latebit-io/charts/demarkus-knowledge-system \
@@ -19,57 +62,23 @@ helm upgrade --install demarkus oci://ghcr.io/latebit-io/charts/demarkus-knowled
 
 [Prerequisites and configuration →](/install/stack/)
 
-## macOS
+## Binaries
 
-One-line install. Sets up launchd service for the server, plus the CLI, TUI, and MCP binaries.
+Server, CLI, TUI, and MCP server, for self-hosting by hand.
 
 ```bash
+# macOS / Linux: server + client (Linux: pipe to sudo bash)
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash
-```
 
-[Full macOS guide →](/install/macos/)
-
-## Linux
-
-One-line install. Sets up a systemd service plus the server and client binaries (CLI, TUI, MCP).
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | sudo bash
-```
-
-[Full Linux guide →](/install/linux/), including Let's Encrypt TLS and the read-only chroot install.
-
-## Windows (WSL2)
-
-Demarkus runs inside WSL2. Same install script as Linux, run from your WSL2 shell.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | sudo bash
-```
-
-[Full Windows guide →](/install/windows/), covering WSL2 setup and systemd enablement.
-
-## Docker
-
-Multi-arch image (`linux/amd64`, `linux/arm64`, `linux/arm/v7`) published to GHCR on every release.
-
-```bash
-docker run -d \
-  --name demarkus \
-  -p 6309:6309/udp \
-  -v /srv/site:/data \
-  ghcr.io/latebit-io/demarkus-server:latest \
-  -root /data
-```
-
-[Full Docker guide →](/install/docker/): TLS, docker-compose, environment config.
-
-## Client only (no server)
-
-Skip the service setup and just install the CLI, TUI, and MCP binaries. Works on macOS, Linux, and WSL2:
-
-```bash
+# Client only: CLI, TUI, MCP
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --client-only
 ```
 
-Use this if you only want to browse remote servers like `mark://soul.demarkus.io`.
+| Platform | Guide |
+|---|---|
+| macOS | [launchd service, TLS, build from source](/install/macos/) |
+| Linux | [systemd, Let's Encrypt, read-only chroot, reading room](/install/linux/) |
+| Windows | [inside WSL2](/install/windows/) |
+| Docker | [multi-arch image, compose, TLS](/install/docker/) |
+
+[Upgrade & uninstall](/upgrade/) · [Troubleshooting](/troubleshooting/) · [Self-hosting guides](/scenarios/)
