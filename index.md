@@ -1,6 +1,5 @@
 ---
 layout: default
-title: Demarkus
 ---
 
 One store for what your agent learns and what your team knows: plain markdown,

@@ -90,11 +90,15 @@ demarkus-install uninstall
 sudo demarkus-install uninstall
 ```
 
-This removes the binaries, the service, and the config directory, tokens and
-TLS certificates included.
+This removes the binaries, the service, and the installer's config: tokens,
+TLS certificates, the version marker. You are asked before the content
+directory is removed; `--keep-data` keeps it without asking.
 
-- **Linux**: config is `/etc/demarkus`. You are asked before the content directory is removed; `--keep-data` skips the question and keeps it.
-- **macOS**: config is `~/.demarkus`, which also holds the default content (`~/.demarkus/content`) and the memory plugins' state and soul. Back it up first if you want to keep any of it.
+- **Linux**: config is `/etc/demarkus`, removed whole.
+- **macOS**: `~/.demarkus` is shared with the memory plugins. Only the installer's own files go; the plugins' binaries, state, and soul stay.
+
+Installed before October 23, 2026? Run `demarkus-install update` first: it
+fetches the current helper, whose macOS uninstall keeps the plugins' files.
 
 ## Related
 
