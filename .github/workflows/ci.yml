@@ -75,6 +75,7 @@ jobs:
               - 'scripts/test-install-renewal.sh'
               - 'scripts/test-install-restart.sh'
               - 'scripts/test-install-update-stack.sh'
+              - 'scripts/test-install-uninstall.sh'
             agent_plugins:
               - '.claude-plugin/**'
               - 'plugins/prompt-source/**'
@@ -376,6 +377,8 @@ jobs:
         run: shellcheck -S warning scripts/test-install-renewal.sh
       - name: Shellcheck the update-stack test
         run: shellcheck -S warning scripts/test-install-update-stack.sh
+      - name: Shellcheck the uninstall test
+        run: shellcheck -S warning scripts/test-install-uninstall.sh
       - name: Test certbot renewal wiring
         run: bash scripts/test-install-renewal.sh
       - name: Test stack component updates
@@ -384,6 +387,8 @@ jobs:
         run: bash scripts/test-install-checksum.sh
       - name: Test update stops and verifies only the installed server
         run: bash scripts/test-install-restart.sh
+      - name: Test macOS uninstall keeps plugin state
+        run: bash scripts/test-install-uninstall.sh
 
   test-agent-plugins:
     needs: detect-changes

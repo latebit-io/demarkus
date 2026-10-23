@@ -4,21 +4,19 @@
 
 # Demarkus
 
-**Memory for agents, knowledge for teams, a second brain for you**
+**Memory for agents, knowledge for teams**
 
-Demarkus gives your agent persistent, versioned memory: it records decisions, lessons, and progress as it works and recalls them in every later session. It is your second brain too: journals, logs, and notes with full history. The same store scales up to a team's shared world and an organizational **knowledge system**: a broker-fronted set of servers behind one HTTPS endpoint with single sign-on. Humans and agents read and write the same versioned catalog.
+Your agent records decisions, lessons, and progress as it works, and recalls them in every later session. When a note is ready for others, it moves up to your team's shared knowledge base. Every note is versioned markdown, and every link between notes is an edge in one knowledge graph.
 
-Every link between documents feeds a persistent **knowledge graph**. Agents query backlinks and related documents across sessions, the TUI and the [reading room](https://github.com/latebit-io/demarkus-library) render it, and the knowledge server aggregates it across worlds. Memory here is connected knowledge you traverse, not a pile of files.
+- **[Memory](https://www.demarkus.io/memory/)**: your agent's own versioned notes, filed as it works and recalled before the next task. Local, self-hosted, or hosted.
+- **[Knowledge base](https://www.demarkus.io/knowledge/)**: one shared catalog behind your login. Notes arrive from memory through a review gate; policy blocks secrets and duplicates on every write.
+- **[Graph](https://www.demarkus.io/graph/)**: links and typed relations form a persistent graph. Agents follow edges instead of loading files; people browse it in the [library](https://www.demarkus.io/library/).
 
-Underneath sits the **Mark Protocol**: versioned markdown served over QUIC. No rendering pipeline, no tracking, no central authority. Capability tokens gate writes, every change is kept, and one static binary runs anywhere.
+![Client install demo](docs/images/demarkus-client.gif)
 
-Architecturally, the servers are **memory storage engines**: deliberately simple, versioned, hash-chained document stores, one runtime behind two binaries, `demarkus-server` for one store and the worlds half of `demarkus-knowledge` for many. The access tier turns an engine into a service: given a broker config, `demarkus-knowledge` adds an OIDC-fronted MCP gateway in two profiles. The **memory** profile gives each identity a private memory world over MCP with OAuth (memory as a service for Claude Desktop, ChatGPT, Cursor), and the **knowledge** profile composes many worlds into one organizational knowledge system. Judgment stays with the agent (what to record, recall and link); mechanics such as journaling, hub upkeep and hygiene checks run in the tools.
+## Start here
 
-## Install
-
-### Agent memory plugins (start here)
-
-The fastest way to try Demarkus: give your coding agent persistent, versioned memory. The plugins manage their own binaries; no separate install needed.
+Give your agent memory. The plugin brings its own binaries: nothing to configure.
 
 **Claude Code**
 
@@ -27,18 +25,19 @@ The fastest way to try Demarkus: give your coding agent persistent, versioned me
 /plugin install demarkus-memory@demarkus
 ```
 
-Teams: `/plugin install demarkus-knowledge@demarkus` to join a shared [knowledge system](plugins/claude-code-knowledge/).
+**Claude Cowork**: add this repository as a marketplace (Customize, Plugins) and install `demarkus-memory`. What differs in Cowork: [Claude Cowork](plugins/claude-code/README.md#claude-cowork).
+
+**Cursor**
+
+```text
+Customize → Add Marketplace → Import from GitHub → https://github.com/latebit-io/demarkus (scope: User) → Import
+demarkus-memory → Add
+```
 
 **OpenCode**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
-```
-
-Teams: install the [OpenCode knowledge plugin](plugins/opencode-knowledge/) to join a shared knowledge system:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge/install.sh | bash
 ```
 
 **pi**
@@ -48,26 +47,46 @@ pi install npm:pi-mcp-adapter
 pi install git:github.com/latebit-io/demarkus-pi-memory
 ```
 
-Teams: [pi knowledge plugin](plugins/pi-knowledge/). Details: [pi memory plugin](plugins/pi-memory/).
+All plugins share `~/.demarkus`: one memory across every agent on the machine. Details per host: [Claude Code](plugins/claude-code/README.md), [Cursor](plugins/cursor-memory/), [OpenCode](plugins/opencode-memory/), [pi](plugins/pi-memory/).
 
-**Cursor**
+## Join a knowledge base
 
-Add this repository as a marketplace from the plugins panel, then add the plugin:
+Install the knowledge plugin beside the memory plugin, then join your system and sign in through the browser:
 
 ```text
-Customize → Add Marketplace → Import from GitHub → https://github.com/latebit-io/demarkus (scope: User) → Import
-demarkus-memory → Add
+/plugin install demarkus-knowledge@demarkus
+/knowledge-join https://knowledge.example.com
 ```
 
-Or link a checkout into `~/.cursor/plugins/local/demarkus-memory`. Restart Cursor. Details: [Cursor memory plugin](plugins/cursor-memory/).
+No server to run, no token to copy. Same plugin for [Cursor](plugins/cursor-knowledge/), [OpenCode](plugins/opencode-knowledge/), and [pi](plugins/pi-knowledge/). Try the live system: `/knowledge-join https://knowledge.demarkus.io`.
 
-Teams: `demarkus-knowledge → Add` from the same marketplace to join a shared knowledge system. Details: [Cursor knowledge plugin](plugins/cursor-knowledge/).
+## How it works
 
-**Claude Cowork**
+```text
+  agent ──record──▶ MEMORY ──/promote──▶ KNOWLEDGE BASE ──▶ LIBRARY
+    ▲               private   review     shared, governed    people
+    └──────────── recall · consult · follow the graph ◀───────┘
+```
 
-Add this repository as a marketplace (Customize, Plugins) and install `demarkus-memory`, the same plugin as in Claude Code; uninstall the retired `demarkus-cowork` first if you have it. What differs in Cowork: [Claude Cowork](plugins/claude-code/README.md#claude-cowork).
+- **Record as you go.** The agent files decisions, lessons, patterns, and a daily journal where they belong. Hooks catch untagged writes and missing journal entries.
+- **Recall with evidence.** `mark_lookup` returns the matching section and its related documents, not whole files.
+- **Promote what matters.** `/promote` distills a note, strips personal framing and secrets, checks for duplicates, and routes it to a writable world. You approve before it lands.
+- **Keep every version.** Nothing is overwritten. Every change has an author and a history.
 
-### Binaries
+The project keeps its own memory at `mark://soul.demarkus.io`; read it in the browser at [soul.demarkus.io](https://soul.demarkus.io).
+
+## Run a knowledge system
+
+`demarkus-knowledge` is one process: many worlds (one GCS bucket each, selected by TLS SNI), OIDC single sign-on, the MCP gateways, and the cross-world graph. It runs as two or more stateless replicas; writes commit by compare-and-swap on the bucket, so there is no leader and no persistent volume.
+
+```bash
+helm upgrade --install demarkus oci://ghcr.io/latebit-io/charts/demarkus-knowledge-system \
+  --namespace demarkus --create-namespace --values knowledge-system.yaml
+```
+
+The [`demarkus-knowledge-system`](deploy/helm/demarkus-knowledge-system/) umbrella declares every world once in one values file and can add the [library](https://github.com/latebit-io/demarkus-library). Given a second hostname, the same process serves **hosted memory**: one private world per signed-in person, for Claude Desktop, ChatGPT, Cursor, or any MCP host. See [Kubernetes & Helm](docs/site/deployment/kubernetes.md) and [Memory gateway](docs/site/tools/memory-broker.md).
+
+## Self-host by hand
 
 ```bash
 # macOS / Linux: server + client
@@ -75,148 +94,59 @@ curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh
 
 # Client only (CLI, TUI, MCP)
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install.sh | bash -s -- --client-only
-```
 
-Other install paths:
-
-```bash
 # Read-only chrooted server (Linux)
 curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/install-readonly.sh | sudo bash -s -- --domain yourdomain.com
 ```
 
-Kubernetes deployments use the Helm charts in [`deploy/helm/`](deploy/helm/) (server, knowledge system). The [`demarkus-knowledge-system`](deploy/helm/demarkus-knowledge-system/) umbrella installs a whole knowledge system from one values file that declares each world once.
-
-See [full install docs](https://www.demarkus.io/install/) for platform-specific guides and other options.
-
-### Production knowledge system
-
-`demarkus-knowledge` hosts many isolated worlds in one process and serves the MCP gateways beside them: TLS SNI selects the world, and each world has its own GCS bucket, tokens, policy, and rate limits. It runs as two or more stateless replicas. Writes race on a compare-and-swap head object in the bucket, so they need no leader and no persistent volumes; background work (the sweeper and the federation graph) runs on one replica at a time under a Kubernetes Lease. Deploy with the [`deploy/helm/demarkus-knowledge-server`](deploy/helm/demarkus-knowledge-server/) chart or the [`demarkus-knowledge-system`](deploy/helm/demarkus-knowledge-system/) umbrella; an empty bucket becomes a world on first start, seeded with the chart's initial write policy or the server's warn-level default.
-
-### See it in action
-
-![Client install demo](docs/images/demarkus-client.gif)
-
-## Quick Start
-
 ```bash
-# Fetch a document from the live memory server
-demarkus mark://soul.demarkus.io/index.md
-
-# Browse interactively with the TUI
-demarkus-tui mark://soul.demarkus.io/index.md
-
-# Run your own local server
-demarkus-server -root ./docs/site
+demarkus mark://soul.demarkus.io/index.md       # fetch
+demarkus-tui mark://soul.demarkus.io/index.md   # browse, with a graph view
+demarkus-server -root ./docs/site               # serve a directory
 ```
 
-For more examples (tokens, publishing, editing), see [full usage guide](https://www.demarkus.io/).
+Platform guides: [www.demarkus.io/install](https://www.demarkus.io/install/).
 
-## What's Included
+## Binaries
 
 | Binary | Purpose |
 |--------|---------|
-| `demarkus-server` | QUIC server with versioned document store, capability-based auth |
-| `demarkus-token` | Generate and manage write tokens |
-| `demarkus-publish` | Direct-to-store writer for read-only server installs (chroot/RO mode) |
-| `demarkus` | CLI tool for all protocol operations (fetch, publish, append, graph, okf, etc.) |
-| `demarkus-tui` | Terminal browser: markdown rendering, link navigation, persistent graph |
-| `demarkus-mcp` | MCP server for LLM agents: the protocol verbs as tools, plus graph crawling, backlinks, doctor, curate and promote |
-| `demarkus-plugin` | Shared core of the agent plugins: session start, hooks, the managed local server, the store registry; installed by the plugins |
-| `demarkus-knowledge` | Production knowledge system in one process: many worlds (SNI-routed, on GCS buckets or directories) plus the OIDC-fronted MCP gateways for the knowledge profile (system-wide `mark_lookup_all`) and the memory profile (one private world per identity, dynamic tenant provisioning); with no broker config it serves the worlds alone, for capability-token clients without SSO |
+| `demarkus-server` | One world: your local or self-hosted soul |
+| `demarkus-knowledge` | Many worlds, OIDC single sign-on, MCP gateways for knowledge and hosted memory, the cross-world graph; with no broker config it serves the worlds alone |
+| `demarkus` | CLI: fetch, publish, edit, lookup, graph, watch, okf |
+| `demarkus-tui` | Terminal browser with a persistent graph view |
+| `demarkus-mcp` | MCP server over one world: the protocol verbs as tools, plus graph, backlinks, doctor, curate and promote |
+| `demarkus-plugin` | Shared core of the agent plugins; installed by them |
+| `demarkus-token` | Capability tokens and join URLs |
+| `demarkus-publish` | Write straight to the store for read-only installs |
 
-## Protocol at a Glance
+## Built on the Mark Protocol
 
-**Transport**: QUIC (UDP 6309) | **Scheme**: `mark://` | **Content**: Markdown + YAML frontmatter
+Versioned markdown over QUIC (UDP 6309), addressed as `mark://<world>/<path>`. Every write is an immutable, hash-chained version. Capability tokens gate writes; reads are open unless a world enables read auth. No tracking, no cookies, nothing executes.
 
-Request:
+**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `LOOKUP` · `WATCH` · `PUBLISH` · `APPEND` · `ARCHIVE`
 
-```text
-FETCH /hello.md
-```
+A document is content-compatible with [Google's Open Knowledge Format v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog); `demarkus okf` validates, imports, and exports bundles. See the [specification](docs/SPEC.md) and [design rationale](docs/DESIGN.md).
 
-Response:
-
-```text
----
-status: ok
-version: 3
-modified: 2026-01-15T10:30:00Z
----
-
-# Hello World
-```
-
-**Verbs**: `FETCH` · `LIST` · `VERSIONS` · `LOOKUP` · `PUBLISH` · `APPEND` · `ARCHIVE` · `WATCH`
-
-**Open Knowledge Format**: A demarkus document is content-compatible with [Google's Open Knowledge Format (OKF) v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog): recognized OKF fields (`type`, `title`, `description`, `resource`, `tags`, `timestamp`) are stored as plain frontmatter, and the server types every document by default. At the system level demarkus is a superset, layering versioning, hash-chain integrity, QUIC transport, and capability auth around an OKF-compatible document. The `demarkus okf` subcommand validates, imports, and exports OKF bundles. See [SPEC §14](docs/SPEC.md).
-
-## Use Cases
-
-**Agent Memory**: Run a server as persistent memory across agent sessions. The Demarkus project itself uses this pattern at `mark://soul.demarkus.io` for architecture notes, debugging lessons, and journal entries. Hit the ground running with the [Claude Code plugin](plugins/claude-code/README.md).
-
-**Organizational Knowledge System**: Compose many servers ("worlds") into a broker-fronted knowledge system reachable through one HTTPS endpoint with OIDC single sign-on. A whole team joins with a single command, `/knowledge-join` from the [Claude Code knowledge plugin](plugins/claude-code-knowledge/), and their agents share organizational memory over MCP, with no per-developer server or token setup. Humans browse the same universe in the [web reading room](https://github.com/latebit-io/demarkus-library). See the [knowledge system scenario](https://www.demarkus.io/scenarios/knowledge-system/).
-
-**Personal Knowledge Base**: Local server, versioned documents, TUI browser. Everything from first write.
-
-**Public Documentation**: Deploy on a VPS, share links, gate writes with tokens.
-
-**Demarkus Hubs**: Link to content on other servers, building a federated directory of knowledge. Hubs can link to hubs.
-
-## Ecosystem
-
-- [demarkus-library](https://github.com/latebit-io/demarkus-library): web reading room; server-rendered front-end for browsing worlds through the broker (SSO) or direct QUIC
-- [Caztor](https://github.com/kevinboone/caztor): cross-platform Java GUI browser with preliminary Demarkus support
-- [Claude Code memory plugin](plugins/claude-code/README.md): zero-config local memory for Claude Code
-- [Claude Code knowledge plugin](plugins/claude-code-knowledge/): join an organizational knowledge system (broker-fronted, MCP OAuth)
-- [OpenCode memory plugin](plugins/opencode-memory/): the same local memory for OpenCode (one shared memory across harnesses). Install:
-
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
-  ```
-
-- [OpenCode knowledge plugin](plugins/opencode-knowledge/): join an organizational knowledge system through broker OAuth. Install:
-
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge/install.sh | bash
-  ```
-
-- [Cursor memory plugin](plugins/cursor-memory/): the same local memory for Cursor, as a Cursor Plugin (marketplace, team marketplace, or `~/.cursor/plugins/local`)
-- [Cursor knowledge plugin](plugins/cursor-knowledge/): join an organizational knowledge system from Cursor
-- [pi memory plugin](plugins/pi-memory/): the same local memory for the pi coding agent
-- [pi knowledge plugin](plugins/pi-knowledge/): join an organizational knowledge system from pi
-
-See [www.demarkus.io/ecosystem](https://www.demarkus.io/ecosystem/) for the full list.
-
-## Build from Source
+## Build from source
 
 ```bash
 git clone https://github.com/latebit-io/demarkus.git
 cd demarkus
-make all   # protocol, server, client, tools, knowledge (demarkus-knowledge)
+make all   # protocol, server, client, tools, knowledge
 ```
 
 Requires Go 1.26+. Binaries land in `server/bin/`, `client/bin/`, `tools/bin/`, and `knowledge/bin/`.
 
 ## Documentation
 
-- [Website](https://www.demarkus.io/): install guides, scenarios, troubleshooting
-- [Protocol Specification](docs/SPEC.md): complete wire format
-- [Design Rationale](docs/DESIGN.md): why things are built the way they are
-
-## Core Principles
-
-1. **Optimized for Information**: Markdown is the common language: structured enough for agents, readable enough for humans
-2. **Privacy First**: No user tracking, minimal logging, anonymity by default
-3. **Security Minded**: Encryption mandatory, capability-based auth, secure by default
-4. **Simplicity**: Human-readable protocol, minimal complexity
-5. **Anti-Commercialization**: No ads, no tracking, no central authority
-6. **Federation**: Anyone can run a server, content can be mirrored freely
+- [Website](https://www.demarkus.io/): memory, knowledge, graph, install guides
+- [Docs](docs/index.md): operator and contributor reference
+- [Glossary](docs/site/reference/glossary.md): one name per concept
+- [Ecosystem](https://www.demarkus.io/ecosystem/): plugins, readers, and tools
 
 ## License
 
 - Implementation: AGPL-3.0-only ([LICENSE](LICENSE))
-- Protocol Specification: CC0-1.0 ([LICENSE-PROTOCOL](LICENSE-PROTOCOL))
-
----
-
-*"The web we want, not the web we got."*
+- Agent plugins: MIT ([plugins/LICENSE](plugins/LICENSE))
+- Protocol specification: CC0-1.0 ([LICENSE-PROTOCOL](LICENSE-PROTOCOL))

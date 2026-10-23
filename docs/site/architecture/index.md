@@ -4,13 +4,14 @@ This page describes the Demarkus system architecture, key design decisions, and 
 
 ## System Overview
 
-Demarkus is a markdown‑native document protocol built on QUIC. The repository is organized as six modules:
+Demarkus is one engine with two products on top: memory (personal) and knowledge (shared), bridged by promote and refresh. The engine is the Mark Protocol, a markdown‑native document protocol built on QUIC, and its servers. The repository is organized as seven modules:
 
 - **`protocol/`**: wire format and parsing/serialization only
 - **`server/`**: the store and the multi-world runtime; `demarkus-server`, the runtime's local profile over the filesystem
 - **`client/`**: CLI, TUI, and MCP server
-- **`tools/`**: the OIDC broker/MCP gateway, token tooling, direct-to-store publish, load testing
-- **`plugins/`**: agent plugins for Claude Code, OpenCode, and pi
+- **`knowledge/`**: `demarkus-knowledge`, the worlds plus the OIDC broker and its knowledge and memory MCP gateways in one process
+- **`tools/`**: token tooling and join URLs, direct-to-store publish, `demarkus-plugin` (the shared core of the agent plugins), plugin prompt generation
+- **`plugins/`**: agent plugins for Claude Code and Cowork, Cursor, OpenCode, and pi
 - **`deploy/`**: Helm charts, Kubernetes examples, and the kind dev harness
 
 The architecture intentionally separates **protocol parsing** from **transport**, and **storage** from **network**, so that each layer can be tested independently.

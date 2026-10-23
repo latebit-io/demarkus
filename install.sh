@@ -2232,6 +2232,20 @@ RestrictSUIDSGID=yes
   exit_on_stack_failure
 }
 
+# Installer-owned entries under CONFIG_DIR. On macOS that is ~/.demarkus,
+# shared with the agent plugins (bin/, soul/, tokens/<id>/, logs/server-*),
+# so uninstall removes these and never the whole directory.
+installer_config_entries() {
+  printf '%s\n' version initial-token.txt tokens.toml tokens/tokens.toml tls \
+    logs/demarkus.log logs/demarkus.err
+}
+
+# plist_content_root prints the DEMARKUS_ROOT a launchd plist serves.
+plist_content_root() {
+  awk '/<key>DEMARKUS_ROOT<\/key>/ { getline; sub(/.*<string>/, ""); sub(/<\/string>.*/, ""); print; exit }' \
+    "$1" 2>/dev/null || true
+}
+
 do_uninstall() {
   local keep_data=false
 
@@ -2267,6 +2281,8 @@ do_uninstall() {
   if [ "$PLATFORM" = "linux" ] && $SUDO test -f "${SYSTEMD_DIR}/demarkus.service"; then
     content_root=$($SUDO grep DEMARKUS_ROOT "${SYSTEMD_DIR}/demarkus.service" 2>/dev/null \
       | sed 's/.*=//' || true)
+  elif [ "$PLATFORM" = "darwin" ]; then
+    content_root=$(plist_content_root "$HOME/Library/LaunchAgents/io.latebit.demarkus.plist")
   fi
 
   # Stop and disable service
@@ -2314,12 +2330,22 @@ do_uninstall() {
   done
   log_info "Removed binaries from ${INSTALL_DIR}/"
 
-  # Remove config (server, plus the library's when present).
-  for d in "$CONFIG_DIR" "$LIBRARY_CONFIG_DIR"; do
-    if [ -n "$d" ] && $SUDO test -d "$d"; then
-      remove_path "$d" && log_info "Removed ${d}/"
-    fi
-  done
+  # Remove config (server, plus the library's when present). macOS keeps the
+  # shared ~/.demarkus and drops only the installer's entries.
+  if [ "$PLATFORM" = "darwin" ]; then
+    local entry
+    while IFS= read -r entry; do
+      if [ -e "${CONFIG_DIR}/${entry}" ]; then
+        remove_path "${CONFIG_DIR}/${entry}" && log_info "Removed ${CONFIG_DIR}/${entry}"
+      fi
+    done < <(installer_config_entries)
+  else
+    for d in "$CONFIG_DIR" "$LIBRARY_CONFIG_DIR"; do
+      if [ -n "$d" ] && $SUDO test -d "$d"; then
+        remove_path "$d" && log_info "Removed ${d}/"
+      fi
+    done
+  fi
 
   # Remove content directory
   if [ "$keep_data" = false ]; then
@@ -2331,6 +2357,11 @@ do_uninstall() {
         log_info "Removed ${content_root}/"
       fi
     fi
+  fi
+
+  # ~/.demarkus goes only once empty; plugin state keeps it.
+  if [ "$PLATFORM" = "darwin" ]; then
+    rmdir "${CONFIG_DIR}/tokens" "${CONFIG_DIR}/logs" "$CONFIG_DIR" 2>/dev/null || true
   fi
 
   # Remove system users (Linux only), the retired broker's included.
@@ -2419,7 +2450,7 @@ main() {
       echo "  --library-version X.Y.Z  Reading-room version (default: latest)"
       echo ""
       echo "Uninstall options:"
-      echo "  --keep-data        Don't remove content directory"
+      echo "  --keep-data        Keep the content directory without asking"
       exit 1
       ;;
   esac
