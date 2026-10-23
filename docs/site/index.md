@@ -1,45 +1,38 @@
 # Demarkus Documentation
 
-Welcome to the Demarkus documentation site. This is the canonical table of contents for deploying, operating, and using a Demarkus server and client tools, built for **AI agents and human collaboration** around durable, readable information. Each section links to focused guides, and every directory has an `index.md` to keep navigation fast and graph-friendly.
+Memory for agents, knowledge for teams, linked into one knowledge graph. This is
+the table of contents; every directory has an `index.md` to keep navigation
+fast and graph-friendly.
 
-## Start Here
+## Products
 
-- [Install & Build](install/index.md)
-- [Install Script](install/index.md#install-script)
+- [Memory](memory/index.md): plugins, what the agent files, recall, gates, commands
+- [Knowledge base](knowledge/index.md): join, promote, policy, running one
+- [Knowledge graph](graph/index.md): links, typed relations, backlinks, the cross-world graph
+- [Glossary](reference/glossary.md): one name per concept
+
+## Install and run
+
+- [Install & Build](install/index.md): which install you want, plugin, script, or Helm
 - [Run a Server](server/index.md)
-- [Use the Clients](client/index.md)
-- [Philosophy & Intent](philosophy/index.md)
-- [Agent Queue Template](philosophy/agent-queue-template.md)
+- [Use the Clients](client/index.md): CLI, TUI, MCP
+- [Tools](tools/index.md): tokens, join URLs, direct-to-store publish
+- [Memory gateway](tools/memory-broker.md): hosted memory for any MCP host
 
 ## Deployment
 
 - [TLS & Production Deployment](deployment/index.md)
-- [Kubernetes & Helm](deployment/kubernetes.md): the charts, including the multi-world knowledge server (the production path)
+- [Kubernetes & Helm](deployment/kubernetes.md): the knowledge system, the production path
 - [Security Model](security/index.md)
-
-## Philosophy & Architecture
-
-- [Philosophy & Intent](philosophy/index.md)
-- [Architecture & Design](architecture/index.md)
-
-## Tools
-
-- [Token Tooling](tools/index.md)
 
 ## Reference
 
 - [Configuration & Env Vars](reference/index.md)
-- [Protocol Spec](../SPEC.md)
-- [Design Rationale](../DESIGN.md)
-
-## Graph-Friendly Navigation
-
-This site is intentionally cross-linked. If you want a quick crawl:
-
-- [Install → Run a Server](install/index.md#next-steps)
-- [Server → Deployment](server/index.md#production)
-- [Client → Tools](client/index.md#related-tools)
-- [Reference → Protocol](reference/index.md#protocol)
+- [Markdown](reference/markdown.md)
+- [Agent manifest](reference/agent-manifest.md)
+- [Architecture & Design](architecture/index.md)
+- [Philosophy & Intent](philosophy/index.md)
+- [Protocol Spec](../SPEC.md) · [Design Rationale](../DESIGN.md)
 
 ---
-If you are new, start with [Install & Build](install/index.md).
+New here? Start with [Memory](memory/index.md).

@@ -1,4 +1,4 @@
-```
+```text
  ____  _____ __  __    _    ____  _  ___   _ ____  
 |  _ \| ____|  \/  |  / \  |  _ \| |/ / | | / ___| 
 | | | |  _| | |\/| | / _ \ | |_) | ' /| | | \___ \ 
@@ -8,39 +8,29 @@
 
 # Demarkus Docs
 
-De-centralized - markdown - for us: an information web adjacent markdown protocol for knowledge sharing between humans and agents, agents to humans, and agents to agents
+Memory for agents, knowledge for teams. Your agent records what it learns and
+recalls it in every later session; what others should rely on moves up to a
+shared knowledge base. Every note is versioned markdown, and every link is an
+edge in one knowledge graph.
 
-It treats knowledge as first class citizen. 
+## Products
 
-For humans, it’s clarity: readable markdown, clean structure, and versioned.
+- [Memory](site/memory/index.md): your agent's own versioned notes
+- [Knowledge base](site/knowledge/index.md): one shared catalog behind your login
+- [Knowledge graph](site/graph/index.md): links, typed relations, backlinks
+- [Glossary](site/reference/glossary.md): one name per concept
 
-For agents, its low token markdown that agents can easily consume, consistent links, and a graph that can be explored, summarized, and improved.
+## Operate
 
-It creates a shared medium, one that both can navigate, verify, and build on together.
-
-Because every write is versioned, progress becomes visible.  
-Because every document links to others, knowledge becomes navigable.  
-Because the system is small and open, its easy to control.
-
-## Start Here
-
-- [Documentation Site](https://www.demarkus.io/)
+- [Documentation site](site/index.md): install, servers, clients, deployment, security
+- [Kubernetes & Helm](site/deployment/kubernetes.md): the knowledge system
+- [Memory gateway](site/tools/memory-broker.md): hosted memory for any MCP host
+- [Observability](deployment/observability.md)
 
 ## Protocol
 
-- [Protocol Specification](SPEC.md)
-- [Design Rationale](DESIGN.md)
-- [Architecture Decision Records](adr/index.md)
+- [Protocol specification](SPEC.md)
+- [Design rationale](DESIGN.md)
+- [Architecture decision records](adr/index.md)
 
-## Highlights
-
-- **Markdown-native protocol**
-- **QUIC transport**
-- **Immutable version history**
-- **Agent + human collaboration**
-- **Memory storage engines**: the servers are versioned, hash-chained document stores; brokers add the service tier, agents supply the intelligence
-- **Knowledge system**: `demarkus-knowledge`, the multi-world GCS-backed server with the OIDC broker and its MCP gateways in one process
-- **Memory service**: the same process's memory gateway gives each identity a private memory world over MCP OAuth, with dynamic tenant provisioning
-- **Knowledge graph**: persistent link graph with backlinks, exports, and federated snapshots
-
-If you're new, begin with the [Documentation Site](https://www.demarkus.io/).
+The website is [www.demarkus.io](https://www.demarkus.io/).
