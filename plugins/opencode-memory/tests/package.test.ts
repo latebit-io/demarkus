@@ -20,10 +20,13 @@ test("packed memory plugin runs from a clean home without an installer or runtim
     assert.ok(!paths.includes("install.sh"));
     assert.ok(!paths.some((path: string) => path.startsWith("tests/")));
     execFileSync("tar", ["-xzf", join(root, packed.filename), "-C", root]);
-    execFileSync(process.execPath, ["--test", join(import.meta.dirname, "installed.ts")], {
-      env: { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, "config"), DEMARKUS_TEST_PLUGIN: join(root, "package", "index.ts") },
-      stdio: "pipe", timeout: 60_000,
+    const childEnv = { ...process.env };
+    delete childEnv.NODE_TEST_CONTEXT;
+    const output = execFileSync(process.execPath, ["--test", "--test-reporter=tap", join(import.meta.dirname, "installed.ts")], {
+      env: { ...childEnv, HOME: home, XDG_CONFIG_HOME: join(home, "config"), DEMARKUS_TEST_PLUGIN: join(root, "package", "index.ts") },
+      encoding: "utf8", stdio: "pipe", timeout: 60_000,
     });
+    assert.match(output, /^# tests [1-9]\d*$/m, "installed-package assertions must run");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
