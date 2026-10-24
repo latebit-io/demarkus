@@ -19,7 +19,7 @@ Your agent's memory: versioned markdown it writes as it works and reads before t
 | pi | `pi install npm:pi-mcp-adapter` then `pi install git:github.com/latebit-io/demarkus-pi-memory` |
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+opencode plugin add 'github:latebit-io/demarkus#main::path:plugins/opencode-memory'
 ```
 
 The first session starts a local server, mints a token, wires the tools, and seeds the memory with a layout. Every plugin shares `~/.demarkus`, so every agent on the machine shares one memory.

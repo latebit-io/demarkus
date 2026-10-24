@@ -13,46 +13,58 @@ Local, versioned project memory for [OpenCode](https://opencode.ai) via [demarku
 
 ## Requirements
 
+- OpenCode V2 with `opencode plugin add` and Git package subdirectory support.
 - `bash`, `curl`, `tar` on PATH (used by the bundled provisioning scripts).
 
 ## Install
 
-No npm involved; OpenCode auto-loads plugin files from its global plugins directory. One-liner (downloads the plugin from the repo):
+Install the package directly from the monorepo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+opencode plugin add 'github:latebit-io/demarkus#main::path:plugins/opencode-memory'
 ```
 
-Or from a checkout:
+Start a session; the plugin provisions memory automatically. Diagnose with `/soul-status`, reconfigure with `/soul-init`. No separate installer or npm publication is needed. Existing script installs must [migrate first](MIGRATION.md).
 
-```bash
-git clone https://github.com/latebit-io/demarkus
-demarkus/plugins/opencode-memory/install.sh
+For development, configure the checkout directory in `opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["/absolute/path/to/demarkus/plugins/opencode-memory"]
+}
 ```
 
-This copies the plugin to `$XDG_CONFIG_HOME/opencode/plugins/demarkus-memory.ts` (default `~/.config/opencode/plugins/`), the skill to `skills/remember/`, and the assets it reads to `~/.demarkus/opencode-memory/`. On OpenCode V2 it also installs the generated Markdown commands in `~/.config/opencode/commands/` without replacing user commands. V1 (1.18.29+) continues to use the plugin's legacy command registration. Start (or restart) OpenCode; the first session provisions the memory. Diagnose with `/soul-status`, reconfigure with `/soul-init`, remove with `install.sh --uninstall`.
+OpenCode manages the package. Commands and skills register from its generated Markdown; guidance and bootstrap scripts resolve relative to the package, including paths containing spaces. User-defined commands and skills take precedence. Personal data, binaries and registries still live in `~/.demarkus`.
 
 ### Update
 
-Re-run the installer; it is idempotent and stages before it commits, so a failed update leaves the previous install intact:
+Use OpenCode's package manager:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
-# or, from a checkout
-git -C demarkus pull && demarkus/plugins/opencode-memory/install.sh
+opencode plugin check
+opencode plugin update 'github:latebit-io/demarkus#main::path:plugins/opencode-memory'
 ```
 
-`DEMARKUS_REF=<branch|tag|sha>` pins the git ref for the standalone install. Restart OpenCode afterwards; the managed binaries update themselves on the next session from the pins the new plugin carries.
+Replace `main` with a full commit SHA to pin a revision. Full commit pins are not updated automatically. The bundled bootstrap retains the shared helper's minimum-version pin and never downgrades a newer helper.
 
-### Update check
+### Remove
 
-On plugin init the adapter reads its version from the `package.json` that `install.sh` copies into `~/.demarkus/opencode-memory/`, and hands it to `demarkus-plugin update-check` together with this plugin's manifest URL and update command; the binary compares against the manifest on `main` and the adapter toasts whatever it returns. Notify-only: nothing installs itself, since the plugin file is already loaded and a rewrite could not take effect until the next restart. The binary throttles to one check per 24h (stamp: `~/.demarkus/.update-check-demarkus-opencode-memory`), the call is fire-and-forget so it cannot delay startup, and it stays silent when offline or before provisioning has installed the binary. Turn it off with `DEMARKUS_UPDATE_CHECK=0` or by writing `0` to `~/.demarkus/plugin.update-check`. A `DEMARKUS_REF`-pinned install still compares against `main`, so a pinned older revision reports an update.
+```bash
+opencode plugin remove 'github:latebit-io/demarkus#main::path:plugins/opencode-memory'
+```
+
+Use the exact configured target if pinned. Removing the plugin leaves your soul, shared binaries, registries and OAuth credentials intact.
 
 ## Architecture
 
-- `src/demarkus-memory.ts`: the whole adapter, one self-contained file (OpenCode's plugin dir loads flat files). All gate/nudge/guidance/update-check logic lives in the shared `demarkus-plugin` binary; the adapter hands it normalized JSON and applies the result. Fails open when the binary is absent.
+- `index.ts`: package entrypoint; exports only the plugin definition.
+- `src/demarkus-memory.ts`: host adapter. Gate, nudge, guidance and provisioning logic lives in the shared `demarkus-plugin` binary.
+- `src/package.ts`: generated-prompt registration, shared byte-for-byte with the knowledge package and checked by `scripts/check-identical-copies.sh`.
 - `scripts/bootstrap.sh`: pinned binary installer, reused verbatim from the Claude Code plugin (single source of truth for provisioning).
 - `commands/*.md`, `context/`, and `skills/`: generated distribution artifacts from `plugins/prompt-source/`; run `cd tools && go run ./plugin-prompts write` after editing canonical prompts.
+
+Branding remains governed by [the brand generator](../brands/README.md). OpenCode is not a brandable base; package installation does not introduce another prompt source or branding mechanism.
 
 ### Behavior mapping (Claude Code → OpenCode)
 
@@ -66,7 +78,7 @@ On plugin init the adapter reads its version from the `package.json` that `insta
 | `PostToolUse` promote-nudge | V2/V1 after-hook on a fresh ADR publish |
 | `Stop` journal-nudge | V2 queues model-only context for the next request; V1 toast, once per session |
 | `.mcp.json` bundled MCP server | V2 `mcp.transform`; V1 `config.mcp` |
-| `commands/*.md` | V2 installed Markdown files; V1 `config.command` |
-| skill | native `SKILL.md` in `~/.config/opencode/skills/` |
+| `commands/*.md` | V2 command transform; V1 `config.command` |
+| skill | V2 skill transform, reading the generated `SKILL.md` |
 
 `ask` strictness maps to a block whose reason tells the agent to confirm with the user first (`tool.execute.before` has no native "ask").

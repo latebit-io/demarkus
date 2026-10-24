@@ -37,7 +37,7 @@ demarkus-memory → Add
 **OpenCode**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory/install.sh | bash
+opencode plugin add 'github:latebit-io/demarkus#main::path:plugins/opencode-memory'
 ```
 
 **pi**

@@ -15,7 +15,7 @@ The memory MCP server key defaults to `demarkus-memory`, which is what tool name
 
 Because the state is shared, a brand replaces the upstream plugin on a machine. Installing both doubles every hook and both fight over one managed server. Tell your users to uninstall `demarkus-memory` and `demarkus-knowledge` before installing the brand.
 
-Brandable bases: `claude-memory`, `claude-knowledge`, `cursor-memory`, `cursor-knowledge`; a `claude-memory` brand runs in Claude Cowork too ([requirements and limits](../claude-code/README.md#claude-cowork)), and a `cowork-memory` brand moves to it. The pi and OpenCode plugins carry their names in TypeScript and install scripts and cannot be branded by the generator.
+Brandable bases: `claude-memory`, `claude-knowledge`, `cursor-memory`, `cursor-knowledge`; a `claude-memory` brand runs in Claude Cowork too ([requirements and limits](../claude-code/README.md#claude-cowork)), and a `cowork-memory` brand moves to it. The pi and OpenCode plugins carry their identities in TypeScript and package manifests and cannot be branded by the generator. OpenCode packages bundle the generated prompt files; package installation does not change this boundary.
 
 ## The brands file
 
