@@ -4,7 +4,7 @@ Connect [OpenCode](https://opencode.ai) to an organizational demarkus knowledge 
 
 This plugin complements [`demarkus-opencode-memory`](../opencode-memory/). Memory owns personal memories and working notes; knowledge owns shared, curated, authoritative material. Both reuse `~/.demarkus` registries and one helper binary.
 
-Supports OpenCode V2 and V1 **1.18.29+** through one installed adapter. Older V1 releases must upgrade before installing this version.
+Package installation requires OpenCode V2 with `opencode plugin add` and Git package subdirectory support, plus `bash`, `curl` and `tar` for helper provisioning.
 
 ## Features
 
@@ -17,18 +17,23 @@ Supports OpenCode V2 and V1 **1.18.29+** through one installed adapter. Older V1
 - Publish and append gates enforce tags, retention confirmation, and style rules; the server enforces the system's write policy.
 - Co-installation with the memory plugin uses one gate owner, preventing duplicate blocks and warnings.
 
-No demarkus server or capability token is installed. The plugin bootstraps the small `demarkus-plugin` helper used for registry, guidance, gate, nudge, and update behavior. OpenCode owns broker OAuth credentials.
+No demarkus server or capability token is installed. The plugin bootstraps the small `demarkus-plugin` helper used for registry, guidance, gate and nudge behavior. OpenCode owns broker OAuth credentials and package updates.
 
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge/install.sh | bash
+opencode plugin add 'github:latebit-io/demarkus#main::path:plugins/opencode-knowledge'
 ```
 
-Or from a checkout:
+No separate installer or npm publication is needed. Existing script installs must [migrate first](../opencode-memory/MIGRATION.md).
 
-```bash
-./plugins/opencode-knowledge/install.sh
+For development, configure the checkout directory in `opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["/absolute/path/to/demarkus/plugins/opencode-knowledge"]
+}
 ```
 
 Restart OpenCode. Existing systems already present in both `~/.demarkus/knowledge-systems` and `~/.config/mcp/mcp.json` load automatically; use `/knowledge` to verify them. To add a new system, run:
@@ -37,40 +42,45 @@ Restart OpenCode. Existing systems already present in both `~/.demarkus/knowledg
 /knowledge-join https://knowledge.example.com
 ```
 
-Restart once more after joining so OpenCode loads the new remote MCP entry. In V2, open `/mcps`, select the server, and sign in. In V1, complete OAuth when prompted or run `opencode mcp auth <slug>`.
+Restart once more after joining so OpenCode loads the new remote MCP entry. Open `/mcps`, select the server, and sign in.
 
 ## Layout
 
-- Plugin: `$XDG_CONFIG_HOME/opencode/plugins/demarkus-knowledge.ts`
-- Skill: `$XDG_CONFIG_HOME/opencode/skills/knowledge-promote/SKILL.md`
-- Runtime assets: `~/.demarkus/opencode-knowledge/`
+- Plugin, generated commands, skill and runtime assets: the OpenCode-managed package.
 - Joined slugs: `~/.demarkus/knowledge-systems`
 - Shared endpoints: `~/.config/mcp/mcp.json`
 
 Explicit MCP entries (`mcp.servers[slug]` in V2, `mcp[slug]` in V1) win over generated entries, including disabled servers and authentication settings. Reserved local-memory slugs are disabled in both versions. Joined systems without a shared endpoint produce a startup diagnostic; rerun `/knowledge-join` in OpenCode to repair them.
 
-V2 registers commands through the command API and adds guidance to model context without rewriting persisted user prompts. V1 retains its config and synthetic-message hooks. Existing command definitions take precedence. V2 bootstrap and update notices go to the server log; V1 uses toasts.
+V2 registers commands and skills through transforms and adds guidance to model context without rewriting persisted user prompts. Existing command and skill definitions take precedence. Bootstrap notices go to the server log.
 
 ## Update
 
-Rerun the installer and restart OpenCode. `DEMARKUS_REF=<branch|tag|sha>` pins standalone installation to a revision. The helper checks `main` once per day and shows a notify-only update toast; disable it with `DEMARKUS_UPDATE_CHECK=0` or `~/.demarkus/plugin.update-check` containing `0`.
+```bash
+opencode plugin check
+opencode plugin update 'github:latebit-io/demarkus#main::path:plugins/opencode-knowledge'
+```
+
+Replace `main` with a full commit SHA to pin a revision. Full commit pins are not updated automatically. The bundled bootstrap retains the shared helper's minimum-version pin and never downgrades a newer helper.
 
 ## Remove
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge/install.sh | bash -s -- --uninstall
+opencode plugin remove 'github:latebit-io/demarkus#main::path:plugins/opencode-knowledge'
 ```
 
-Uninstall leaves shared registrations and OAuth state intact. Before removing a joined system, confirm that deleting its shared endpoint will also disconnect pi. Then run `opencode mcp logout <slug>`, `"$HOME/.demarkus/bin/demarkus-plugin" registry mcp remove <slug>`, and `"$HOME/.demarkus/bin/demarkus-plugin" registry knowledge-unregister <slug>`, and restart OpenCode. A manually configured `config.mcp[slug]` entry must be removed through the same config mechanism that created it.
+Use the exact configured target if pinned. Removal leaves shared registrations and OAuth state intact. Explicit MCP configuration remains managed by the user.
 
 ## Development
 
 Runtime prompt files under `commands/`, `context/`, and `skills/` are generated from `plugins/prompt-source/`. Edit the canonical templates, then run `cd tools && go run ./plugin-prompts write`; CI rejects manual drift.
+
+`src/package.ts` is a checked copy of the memory package's prompt-registration adapter. Both packages ship their own generated artifacts and have no cross-package runtime dependency. OpenCode remains outside the [brand generator's supported bases](../brands/README.md).
 
 ```bash
 cd plugins/opencode-knowledge
 npm install
 npm test
 npm run typecheck
-shellcheck -S warning install.sh scripts/bootstrap.sh
+shellcheck -S warning scripts/bootstrap.sh
 ```

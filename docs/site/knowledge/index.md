@@ -30,7 +30,7 @@ Install the knowledge plugin next to the memory plugin.
 | pi | `pi install git:github.com/latebit-io/demarkus-pi-knowledge` |
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge/install.sh | bash
+opencode plugin add 'github:latebit-io/demarkus#main::path:plugins/opencode-knowledge'
 ```
 
 Then join your system and sign in through the browser:

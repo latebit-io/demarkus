@@ -1,24 +1,20 @@
-// demarkus-memory — the OpenCode port of the claude-code plugin (hook mapping
-// in README.md). Single self-contained file: OpenCode dir-loads it flat, and
-// install.sh places its assets under ~/.demarkus/opencode-memory/. All
-// gate/nudge/guidance logic lives in the shared demarkus-plugin binary; this
-// adapter fails open when the binary is absent (pre-provisioning).
+// OpenCode adapter; policy and provisioning stay in demarkus-plugin.
 
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { Plugin } from "@opencode/plugin";
+import { assertPackageInstall, loadCommand as readCommand, loadCommands, registerPrompts } from "./package.ts";
 
 const BIN = join(homedir(), ".demarkus", "bin", "demarkus-plugin");
-const ASSETS = join(homedir(), ".demarkus", "opencode-memory");
+const ASSETS = fileURLToPath(new URL("../", import.meta.url));
 const COMMANDS_DIR = join(ASSETS, "commands");
 const SCRIPTS_DIR = join(ASSETS, "scripts");
 const GUIDANCE_FILE = join(ASSETS, "context", "session-guidance.md");
-const MANIFEST = join(ASSETS, "package.json");
 const MCP_SERVER_NAME = "demarkus-memory";
-const PLUGIN_NAME = "demarkus-opencode-memory";
-const RAW_BASE = "https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-memory";
 const GATE_ADAPTERS = Symbol.for("io.demarkus.opencode.gate-adapters");
 
 interface GateDecision {
@@ -164,45 +160,11 @@ async function provision(): Promise<string> {
   return run(BIN, ["provision"], "provisioning", 600_000);
 }
 
-// Update notice. The binary owns the throttle, fetch, and comparison; the
-// adapter owns its release identity and where its version is recorded (the
-// manifest install.sh copied alongside the assets).
-async function checkForUpdate(): Promise<string> {
-  let installed = "";
-  try {
-    installed = (JSON.parse(readFileSync(MANIFEST, "utf8")) as { version?: string }).version ?? "";
-  } catch (e) {
-    // ENOENT = installed before the manifest was shipped; anything else is real.
-    if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      console.error(`[demarkus-memory] update check: unreadable manifest ${MANIFEST}: ${e}`);
-    }
-    return "";
-  }
-  if (!installed) return "";
-  const out = await runBin<{ message?: string }>([
-    "update-check",
-    "--plugin", PLUGIN_NAME,
-    "--installed", installed,
-    "--manifest-url", `${RAW_BASE}/package.json`,
-    "--update-command", `curl -fsSL ${RAW_BASE}/install.sh | bash`,
-  ], undefined, true);
-  return out?.message ?? "";
-}
-
-// Load a command markdown: parse the frontmatter description, strip the fence,
-// resolve ${DEMARKUS_SCRIPTS} to the installed scripts dir.
 export function loadCommand(file: string, commandsDir = COMMANDS_DIR): { description: string; template: string } {
-  const raw = readFileSync(join(commandsDir, file), "utf8");
-  const fm = raw.match(/^---\n([\s\S]*?)\n---\n/);
-  const description = fm?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^(["'])(.*)\1$/, "$2") ?? "";
-  const body = (fm ? raw.slice(fm[0].length) : raw).replace(/\$\{DEMARKUS_SCRIPTS\}/g, SCRIPTS_DIR).trim();
-  // $ARGUMENTS lets the user pass arguments; harmless when empty.
-  const template = `${body}\n\nUser arguments (may be empty): $ARGUMENTS\n`;
-  return { description, template };
+  return readCommand(file, commandsDir, SCRIPTS_DIR);
 }
 
-// Minimal structural types: OpenCode provides the real ones at runtime; keeping
-// them local avoids a dependency on @opencode-ai/plugin for a dir-dropped file.
+// The legacy adapter only needs the toast subset of the V1 client.
 type ToastClient = {
   tui?: { showToast?: (args: { body: { message: string; variant: string } }) => Promise<unknown> };
 };
@@ -225,6 +187,7 @@ function gateAdapters(directory: string): Set<string> {
 export const DemarkusMemoryPlugin = async ({ client, directory }: { client: ToastClient; directory: string }) => {
   const adapters = gateAdapters(directory);
   adapters.add("memory");
+  let disposed = false;
   const sessions = new Map<string, SessionState>();
   // Warn reasons carried from the before-hook to the after-hook (block/ask
   // never reach after: before throws), so the gate subprocess runs once per
@@ -254,21 +217,16 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
   // binary download must not block startup or stack concurrent runs.
   let provisioning: Promise<void> | null = null;
   const ensureProvisioned = () => {
+    if (disposed) return;
     provisioning ??= provision()
       .then((warning) => {
-        if (warning) void toast(warning, "warning");
+        if (warning && !disposed) void toast(warning, "warning");
       })
       .finally(() => {
         provisioning = null;
       });
   };
   ensureProvisioned();
-
-  // Fire-and-forget alongside provisioning: an update notice must never delay
-  // startup or block on the network.
-  void checkForUpdate().then((message) => {
-    if (message) void toast(message);
-  });
 
   return {
     // Register the MCP servers and the slash commands by mutating the merged
@@ -313,19 +271,8 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       }
 
       config.command = config.command ?? {};
-      let files: string[] = [];
-      try {
-        files = readdirSync(COMMANDS_DIR).filter((f) => f.endsWith(".md"));
-      } catch (e) {
-        console.error(`[demarkus-memory] commands unavailable (${ASSETS} not installed?): ${e}`);
-      }
-      for (const f of files) {
-        const name = f.replace(/\.md$/, "");
-        try {
-          config.command[name] = config.command[name] ?? loadCommand(f);
-        } catch (e) {
-          console.error(`[demarkus-memory] failed to load command '${name}': ${e}`);
-        }
+      for (const [name, command] of Object.entries(loadCommands(ASSETS))) {
+        config.command[name] ??= command;
       }
     },
 
@@ -451,6 +398,17 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       });
       if (nudge) await toast(nudge);
     },
+
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      sessions.clear();
+      pendingWarns.clear();
+      adapters.delete("memory");
+      if (adapters.size === 0) {
+        ((globalThis as GateGlobal)[GATE_ADAPTERS] as Map<string, Set<string>>).delete(directory);
+      }
+    },
   };
 };
 
@@ -461,20 +419,6 @@ type V2ToolAfter = V2ToolEvent & (
   | { status: "completed"; result: { content?: string | ReadonlyArray<{ type: string; text?: string }> } }
   | { status: "error"; error: unknown }
 );
-type V2Context = {
-  location: { directory: string };
-  mcp: { transform: (fn: (editor: { get: (name: string) => unknown; set: (name: string, config: unknown) => void }) => void) => Promise<unknown> };
-  session: {
-    hook: (
-      name: "prompt" | "context",
-      fn: (event: { sessionID: string; prompt: { text: string }; system: Array<{ type: "text"; text: string }> }) => Promise<void>,
-    ) => Promise<unknown>;
-  };
-  tool: {
-    hook: (name: "execute.before" | "execute.after", fn: (event: any) => Promise<void>) => Promise<unknown>;
-  };
-  event: { subscribe: (options: { signal: AbortSignal }) => AsyncIterable<{ type: string; data?: { sessionID?: string } }> };
-};
 
 type V2Services = {
   legacy?: typeof DemarkusMemoryPlugin;
@@ -484,7 +428,8 @@ type V2Services = {
 };
 
 /** Registers V2 memory hooks without persisting guidance in user prompts. */
-export async function setupV2(ctx: V2Context, services: V2Services = {}): Promise<() => void> {
+export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): Promise<() => void> {
+  await registerPrompts(ctx, ASSETS);
   const directory = ctx.location.directory;
   // Reuse the V1 MCP builder so local and joined memories stay in sync.
   const legacy = await (services.legacy ?? DemarkusMemoryPlugin)({
@@ -495,19 +440,6 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
       else console.info(message);
     } } },
   });
-  const config: Record<string, any> = {};
-  await legacy.config(config);
-  await ctx.mcp.transform((editor) => {
-    for (const [name, server] of Object.entries(config.mcp ?? {})) {
-      if (!editor.get(name)) {
-        const { enabled: _enabled, ...rest } = server as Record<string, unknown>;
-        editor.set(name, rest);
-      }
-    }
-  });
-  // V2 commands are installed as Markdown files by install.sh. Its command
-  // transform receives an already expanded prompt, not the raw $ARGUMENTS.
-
   const sessions = new Map<string, SessionState>();
   const pendingWarns = new Map<string, string>();
   const pendingContext = new Map<string, string[]>();
@@ -522,59 +454,84 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
     return value;
   };
 
-  await ctx.session.hook("prompt", async (event) => {
-    const recall = await (services.nudge ?? callNudge)({ event: "recall", surface: "memory", prompt: event.prompt.text });
-    if (recall) pendingContext.set(event.sessionID, [...(pendingContext.get(event.sessionID) ?? []), recall]);
-  });
-
-  await ctx.session.hook("context", async (event) => {
-    // Model-only context is not appended to the user's persisted prompt.
-    let g = guidance.get(event.sessionID);
-    if (g === undefined) {
-      // null = binary not ready; retry on the next context build.
-      const fresh = await (services.guidance ?? callGuidance)(directory);
-      if (fresh !== null) {
-        guidance.set(event.sessionID, fresh);
-        g = fresh;
-        // V2 has no toast channel; the status line goes where bootstrap failures do.
-        if (fresh.status) console.info(fresh.status);
-      }
-    }
-    if (g?.context) event.system.push({ type: "text", text: g.context });
-    for (const text of pendingContext.get(event.sessionID) ?? []) event.system.push({ type: "text", text });
-    pendingContext.delete(event.sessionID);
-  });
-
-  await ctx.tool.hook("execute.before", async (event: V2ToolEvent) => {
-    if (!isMemoryWrite(event.tool)) return;
-    const decision = await (services.gate ?? callGate)(event.tool, (event.input ?? {}) as Record<string, unknown>, directory);
-    if (decision.decision === "block") throw new Error(decision.reason ?? "demarkus-memory gate blocked this write");
-    if (decision.decision === "ask") throw new Error(`${decision.reason ?? "blocked"} Confirm with the user before retrying this write.`);
-    if (decision.decision === "warn" && decision.reason) pendingWarns.set(`${event.sessionID}:${event.id}`, decision.reason);
-  });
-  await ctx.tool.hook("execute.after", async (event: V2ToolAfter) => {
-    const key = `${event.sessionID}:${event.id}`;
-    const warn = pendingWarns.get(key);
-    pendingWarns.delete(key);
-    if (event.status !== "completed") return;
-    const s = state(event.sessionID);
-    if (!trackActivity(s, event.tool, event.input as Record<string, unknown> | undefined)) return;
-    const nudge = await (services.nudge ?? callNudge)({ event: "promote", tool: event.tool, input: event.input ?? {} });
-    const additions = [warn && `⚠️ ${warn}`, nudge].filter(Boolean).join("\n\n");
-    if (!additions) return;
-    const content = event.result.content;
-    event.result = {
-      ...event.result,
-      content: typeof content === "string"
-        ? `${content}\n\n${additions}`
-        : [...(content ?? []), { type: "text", text: additions }],
-    };
-  });
-
   const controller = new AbortController();
+  const cleanup = () => {
+    controller.abort();
+    sessions.clear();
+    pendingWarns.clear();
+    pendingContext.clear();
+    guidance.clear();
+    legacy.dispose();
+  };
+  try {
+    const config: Record<string, any> = {};
+    await legacy.config(config);
+    await ctx.mcp.transform((editor) => {
+      for (const [name, server] of Object.entries(config.mcp ?? {})) {
+        if (!editor.get(name)) {
+          const { enabled: _enabled, ...rest } = server as Record<string, unknown>;
+          editor.set(name, rest as Parameters<typeof editor.set>[1]);
+        }
+      }
+    });
+    await ctx.session.hook("prompt", async (event) => {
+      if (controller.signal.aborted) return;
+      const recall = await (services.nudge ?? callNudge)({ event: "recall", surface: "memory", prompt: event.prompt.text });
+      if (recall && !controller.signal.aborted) pendingContext.set(event.sessionID, [...(pendingContext.get(event.sessionID) ?? []), recall]);
+    });
+    await ctx.session.hook("context", async (event) => {
+      if (controller.signal.aborted) return;
+      let g = guidance.get(event.sessionID);
+      if (g === undefined) {
+        // null = binary not ready; retry on the next context build.
+        const fresh = await (services.guidance ?? callGuidance)(directory);
+        if (controller.signal.aborted) return;
+        if (fresh !== null) {
+          guidance.set(event.sessionID, fresh);
+          g = fresh;
+          if (fresh.status) console.info(fresh.status);
+        }
+      }
+      if (g?.context) event.system.push({ type: "text", text: g.context });
+      for (const text of pendingContext.get(event.sessionID) ?? []) event.system.push({ type: "text", text });
+      pendingContext.delete(event.sessionID);
+    });
+    await ctx.tool.hook("execute.before", async (event: V2ToolEvent) => {
+      if (!isMemoryWrite(event.tool) || controller.signal.aborted) return;
+      const decision = await (services.gate ?? callGate)(event.tool, (event.input ?? {}) as Record<string, unknown>, directory);
+      if (controller.signal.aborted) return;
+      if (decision.decision === "block") throw new Error(decision.reason ?? "demarkus-memory gate blocked this write");
+      if (decision.decision === "ask") throw new Error(`${decision.reason ?? "blocked"} Confirm with the user before retrying this write.`);
+      if (decision.decision === "warn" && decision.reason) pendingWarns.set(`${event.sessionID}:${event.id}`, decision.reason);
+    });
+    await ctx.tool.hook("execute.after", async (event: V2ToolAfter) => {
+      if (controller.signal.aborted) return;
+      const key = `${event.sessionID}:${event.id}`;
+      const warn = pendingWarns.get(key);
+      pendingWarns.delete(key);
+      if (event.status !== "completed") return;
+      const s = state(event.sessionID);
+      if (!trackActivity(s, event.tool, event.input as Record<string, unknown> | undefined)) return;
+      const nudge = await (services.nudge ?? callNudge)({ event: "promote", tool: event.tool, input: event.input ?? {} });
+      if (controller.signal.aborted) return;
+      const additions = [warn && `⚠️ ${warn}`, nudge].filter(Boolean).join("\n\n");
+      if (!additions) return;
+      const content = event.result.content;
+      event.result = {
+        ...event.result,
+        content: typeof content === "string"
+          ? `${content}\n\n${additions}`
+          : [...(content ?? []), { type: "text", text: additions }],
+      };
+    });
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
   void (async () => {
     try {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (controller.signal.aborted) return;
         if (event.type === "session.created") {
           await legacy.event({ event: { type: event.type } });
           continue;
@@ -594,13 +551,20 @@ export async function setupV2(ctx: V2Context, services: V2Services = {}): Promis
         if (s.idleNudged || !s.changedFiles || s.journalWrite) continue;
         s.idleNudged = true;
         const nudge = await (services.nudge ?? callNudge)({ event: "session-end", cwd: directory, changedFiles: true, journalWrite: false });
-        if (nudge) pendingContext.set(event.data.sessionID, [...(pendingContext.get(event.data.sessionID) ?? []), nudge]);
+        if (nudge && !controller.signal.aborted) pendingContext.set(event.data.sessionID, [...(pendingContext.get(event.data.sessionID) ?? []), nudge]);
       }
     } catch (error) {
       if (!controller.signal.aborted) console.error(`[demarkus-memory] event subscription failed: ${error}`);
     }
   })();
-  return () => controller.abort();
+  return cleanup;
 }
 
-export default { id: "demarkus-memory", setup: setupV2, server: DemarkusMemoryPlugin };
+export default {
+  id: "demarkus-memory",
+  setup: (ctx: Plugin.Context) => {
+    assertPackageInstall();
+    return setupV2(ctx);
+  },
+  server: DemarkusMemoryPlugin,
+} satisfies Plugin.Plugin & { server: typeof DemarkusMemoryPlugin };

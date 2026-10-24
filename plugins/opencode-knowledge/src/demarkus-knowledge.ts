@@ -3,23 +3,22 @@
 
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Plugin } from "@opencode/plugin";
+import { assertPackageInstall, loadCommand as readCommand, loadCommands, registerPrompts } from "./package.ts";
 
 const HOME = homedir();
 const BIN = join(HOME, ".demarkus", "bin", "demarkus-plugin");
-const ASSETS = join(HOME, ".demarkus", "opencode-knowledge");
+const ASSETS = fileURLToPath(new URL("../", import.meta.url));
 const COMMANDS_DIR = join(ASSETS, "commands");
 const SCRIPTS_DIR = join(ASSETS, "scripts");
 const GUIDANCE_FILE = join(ASSETS, "context", "session-guidance.md");
-const MANIFEST = join(ASSETS, "package.json");
 const KNOWLEDGE_SYSTEMS = join(HOME, ".demarkus", "knowledge-systems");
 const MCP_CATALOG = join(HOME, ".config", "mcp", "mcp.json");
-const PLUGIN_NAME = "demarkus-opencode-knowledge";
-const RAW_BASE = "https://raw.githubusercontent.com/latebit-io/demarkus/main/plugins/opencode-knowledge";
 const GATE_ADAPTERS = Symbol.for("io.demarkus.opencode.gate-adapters");
 
 interface GateDecision {
@@ -232,7 +231,7 @@ function run(command: string, args: string[], label: string, timeout: number): P
         return;
       }
       const tail = (stderr || "").trim().split("\n").slice(-3).join(" ");
-      resolve(`demarkus-knowledge ${label} failed: ${tail || err.message}. Re-run the installer to recover.`);
+    resolve(`demarkus-knowledge ${label} failed: ${tail || err.message}. Retry in a new session; check the plugin with opencode plugin check.`);
     });
   });
 }
@@ -241,59 +240,8 @@ async function bootstrap(): Promise<string> {
   return run("bash", [join(SCRIPTS_DIR, "bootstrap.sh")], "bootstrap", 2_500_000);
 }
 
-async function checkForUpdate(): Promise<string> {
-  let installed = "";
-  try {
-    installed = (JSON.parse(readFileSync(MANIFEST, "utf8")) as { version?: string }).version ?? "";
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      reportFailure("update check", `unreadable manifest ${MANIFEST}: ${error}`);
-    }
-    return "";
-  }
-  if (!installed) return "";
-  const output = await runBin<{ message?: string }>([
-    "update-check",
-    "--plugin",
-    PLUGIN_NAME,
-    "--installed",
-    installed,
-    "--manifest-url",
-    `${RAW_BASE}/package.json`,
-    "--update-command",
-    `curl -fsSL ${RAW_BASE}/install.sh | bash`,
-  ], undefined, true);
-  return output?.message ?? "";
-}
-
 export function loadCommand(file: string, commandsDir = COMMANDS_DIR): { description: string; template: string } {
-  const raw = readFileSync(join(commandsDir, file), "utf8");
-  const frontmatter = raw.match(/^---\n([\s\S]*?)\n---\n/);
-  const description = frontmatter?.[1].match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^(["'])(.*)\1$/, "$2") ?? "";
-  const body = (frontmatter ? raw.slice(frontmatter[0].length) : raw)
-    .replace(/\$\{DEMARKUS_SCRIPTS\}/g, SCRIPTS_DIR)
-    .trim();
-  return { description, template: `${body}\n\nUser arguments (may be empty): $ARGUMENTS\n` };
-}
-
-function loadCommands(): Record<string, ReturnType<typeof loadCommand>> {
-  const commands: Record<string, ReturnType<typeof loadCommand>> = {};
-  let files: string[];
-  try {
-    files = readdirSync(COMMANDS_DIR).filter((file) => file.endsWith(".md"));
-  } catch (error) {
-    console.error(`[demarkus-knowledge] commands unavailable (${ASSETS} not installed?): ${error}`);
-    return commands;
-  }
-  for (const file of files) {
-    const name = file.replace(/\.md$/, "");
-    try {
-      commands[name] = loadCommand(file);
-    } catch (error) {
-      console.error(`[demarkus-knowledge] failed to load command '${name}': ${error}`);
-    }
-  }
-  return commands;
+  return readCommand(file, commandsDir, SCRIPTS_DIR);
 }
 
 export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: ToastClient; directory: string }) => {
@@ -325,7 +273,6 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
   };
 
   let bootstrapping: Promise<void> | null = null;
-  let updateChecked = false;
   const ensureBootstrapped = () => {
     if (disposed) return;
     bootstrapping ??= bootstrap()
@@ -334,11 +281,6 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
         if (warning) {
           await toast(warning, "warning");
           return;
-        }
-        if (!updateChecked) {
-          updateChecked = true;
-          const message = await checkForUpdate();
-          if (message && !disposed) await toast(message);
         }
       })
       .finally(() => {
@@ -353,7 +295,7 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       wireKnowledgeMcp(config.mcp);
 
       config.command = config.command ?? {};
-      for (const [name, command] of Object.entries(loadCommands())) {
+      for (const [name, command] of Object.entries(loadCommands(ASSETS))) {
         config.command[name] ??= command;
       }
     },
@@ -461,6 +403,7 @@ type V2Services = {
 };
 
 export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): Promise<Plugin.Cleanup> {
+  await registerPrompts(ctx, ASSETS);
   const legacy = await DemarkusKnowledgePlugin({
     directory: ctx.location.directory,
     client: { tui: { showToast: async ({ body }) => {
@@ -494,29 +437,6 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
       }
       for (const [name, server] of Object.entries(wiring.servers)) {
         if (editor.get(name) === undefined) editor.set(name, server);
-      }
-    });
-    const commands = loadCommands();
-    const existing = new Set((await ctx.command.list()).data.map((command) => command.name));
-    await ctx.command.transform((editor) => {
-      for (const [name, command] of Object.entries(commands)) {
-        if (existing.has(name)) continue;
-        editor.add({
-          name,
-          description: command.description,
-          execute: async ({ sessionID, prompt, delivery }) => {
-            // Template expansion invalidates composer mention offsets.
-            await ctx.session.prompt({
-              ...prompt,
-              files: prompt.files?.map(({ mention: _mention, ...file }) => file),
-              agents: prompt.agents?.map(({ mention: _mention, ...agent }) => agent),
-              skills: prompt.skills?.map(({ mention: _mention, ...skill }) => skill),
-              sessionID,
-              text: command.template.replaceAll("$ARGUMENTS", () => prompt.text),
-              delivery,
-            });
-          },
-        });
       }
     });
     await ctx.session.hook("prompt", async (event) => {
@@ -611,6 +531,13 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
 }
 
 // V1 1.18.29+ calls server(); V2 validates id and calls setup().
-export default { id: "demarkus-knowledge", setup: setupV2, server: DemarkusKnowledgePlugin } satisfies Plugin.Plugin & {
+export default {
+  id: "demarkus-knowledge",
+  setup: (ctx: Plugin.Context) => {
+    assertPackageInstall();
+    return setupV2(ctx);
+  },
+  server: DemarkusKnowledgePlugin,
+} satisfies Plugin.Plugin & {
   server: typeof DemarkusKnowledgePlugin;
 };

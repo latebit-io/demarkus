@@ -436,18 +436,16 @@ jobs:
           npm run typecheck --prefix plugins/pi-knowledge
           npm run typecheck --prefix plugins/opencode-memory
           npm run typecheck --prefix plugins/opencode-knowledge
-      - name: Test OpenCode adapters and installers
+      - name: Test OpenCode adapters and packed packages
         run: |
           npm test --prefix plugins/opencode-memory
           npm test --prefix plugins/opencode-knowledge
-      - name: Check installers
+      - name: Check helper bootstraps
         run: |
-          bash -n plugins/opencode-memory/install.sh
           bash -n plugins/opencode-memory/scripts/bootstrap.sh
-          bash -n plugins/opencode-knowledge/install.sh
           bash -n plugins/opencode-knowledge/scripts/bootstrap.sh
-          shellcheck -S warning plugins/opencode-memory/install.sh plugins/opencode-memory/scripts/bootstrap.sh
-          shellcheck -S warning plugins/opencode-knowledge/install.sh plugins/opencode-knowledge/scripts/bootstrap.sh
+          shellcheck -S warning plugins/opencode-memory/scripts/bootstrap.sh
+          shellcheck -S warning plugins/opencode-knowledge/scripts/bootstrap.sh
       - name: Check the Cursor plugins
         run: |
           jq empty .cursor-plugin/marketplace.json

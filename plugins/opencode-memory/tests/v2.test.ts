@@ -9,6 +9,8 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
   const events: any[] = [];
   const ctx: any = {
     location: { directory: "/test/project" },
+    command: { list: async () => ({ data: [] }), transform: async (fn: any) => fn({ add: () => {} }) },
+    skill: { transform: async (fn: any) => fn({ list: () => [], add: () => {} }) },
     mcp: { transform: async (fn: any) => fn({ get: (name: string) => servers.get(name), set: (name: string, config: unknown) => servers.set(name, config) }) },
     session: {
       hook: async (name: string, fn: any) => { hooks.set(name, fn); },
@@ -37,6 +39,7 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
       return {
         config: async (config: any) => { config.mcp = { "demarkus-memory": { type: "local", command: ["bin", "mcp-serve"], enabled: true } }; },
         event: async ({ event }: { event: { type: string } }) => { lifecycle.push(event.type); },
+        dispose: () => {},
       } as any;
     },
     guidance: async () => ({ context: "Recall first", status: "demarkus: soul s · project p (new)" }),

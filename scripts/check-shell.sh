@@ -10,7 +10,10 @@ if ! command -v shellcheck &>/dev/null; then
 fi
 
 scripts=()
-while IFS= read -r f; do scripts+=("$f"); done < <(git ls-files '*.sh')
+# Deleted tracked files remain in the index until staged.
+while IFS= read -r f; do
+  if [[ -f "$f" ]]; then scripts+=("$f"); fi
+done < <(git ls-files -co --exclude-standard '*.sh')
 
 for f in "${scripts[@]}"; do
   bash -n "$f"
