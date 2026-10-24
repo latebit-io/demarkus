@@ -22,10 +22,18 @@ test("packed memory plugin runs from a clean home without an installer or runtim
     execFileSync("tar", ["-xzf", join(root, packed.filename), "-C", root]);
     const childEnv = { ...process.env };
     delete childEnv.NODE_TEST_CONTEXT;
-    const output = execFileSync(process.execPath, ["--test", "--test-reporter=tap", join(import.meta.dirname, "installed.ts")], {
-      env: { ...childEnv, HOME: home, XDG_CONFIG_HOME: join(home, "config"), DEMARKUS_TEST_PLUGIN: join(root, "package", "index.ts") },
-      encoding: "utf8", stdio: "pipe", timeout: 60_000,
-    });
+    let output: string;
+    try {
+      output = execFileSync(process.execPath, ["--test", "--test-reporter=tap", join(import.meta.dirname, "installed.ts")], {
+        env: { ...childEnv, HOME: home, XDG_CONFIG_HOME: join(home, "config"), DEMARKUS_TEST_PLUGIN: join(root, "package", "index.ts") },
+        encoding: "utf8", stdio: "pipe", timeout: 60_000,
+      });
+    } catch (error) {
+      const child = error as { stdout?: string; stderr?: string };
+      process.stderr.write(child.stdout ?? "");
+      process.stderr.write(child.stderr ?? "");
+      throw error;
+    }
     assert.match(output, /^# tests [1-9]\d*$/m, "installed-package assertions must run");
   } finally {
     rmSync(root, { recursive: true, force: true });
