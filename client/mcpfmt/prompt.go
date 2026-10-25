@@ -92,6 +92,13 @@ func buildPrompt(name string, raw []byte) (Prompt, error) {
 	}
 	desc := meta.Description
 	handler := func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go
+		// A stale client's renamed argument (the gateway's old entry) must not
+		// read as blank: a blank journal entry distills the whole session.
+		for k := range req.Params.Arguments {
+			if k != PromptArgument || !takesArg {
+				return nil, fmt.Errorf("prompt %s: unknown argument %q", name, k)
+			}
+		}
 		text := body
 		if takesArg {
 			text = strings.ReplaceAll(body, ArgumentsToken, strings.TrimSpace(req.Params.Arguments[PromptArgument]))

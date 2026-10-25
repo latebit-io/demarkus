@@ -1,11 +1,13 @@
 package mcpfmt
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"testing/fstest"
 
 	"github.com/latebit-io/demarkus/client/mcpfmt/mcpfmttest"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 const journalFile = "---\ndescription: \"Journal: append\"\nargument-hint: <entry text>\n---\n<!-- a -->\n<!-- b -->\n\nAppend.\n\nEntry: $ARGUMENTS\n"
@@ -37,6 +39,15 @@ func TestLoadPromptsServesEachFile(t *testing.T) {
 	}
 	if got := mcpfmttest.PromptText(t, primer.Handler, nil); got != "Read the primer.\n" {
 		t.Errorf("context body = %q", got)
+	}
+	for _, c := range []struct {
+		p    Prompt
+		args map[string]string
+	}{{journal, map[string]string{"entry": "shipped it"}}, {primer, map[string]string{PromptArgument: "x"}}} {
+		req := mcp.GetPromptRequest{Params: mcp.GetPromptParams{Arguments: c.args}}
+		if _, err := c.p.Handler(context.Background(), req); err == nil {
+			t.Errorf("%s accepted undeclared arguments %v", c.p.Prompt.Name, c.args)
+		}
 	}
 }
 
