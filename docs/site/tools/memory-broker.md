@@ -12,7 +12,7 @@ The endpoint is the broker's MCP gateway URL, for example `https://memory.exampl
 
 ### Claude Desktop
 
-Settings > Connectors > Add custom connector, with the gateway URL. Desktop walks the OAuth flow in the browser; after that the memory tools (`mark_fetch`, `mark_publish`, ...) and prompts (`soul-context`, `soul-journal`, `soul-export`) appear; the first two carry the same names as the plugin's slash commands. Usage guidance rides in the server instructions, so no client-side configuration is needed.
+Settings > Connectors > Add custom connector, with the gateway URL. Desktop walks the OAuth flow in the browser; after that the memory tools (`mark_fetch`, `mark_publish`, ...) and prompts (`soul-context`, `soul-journal`, `soul-export`) appear; the first two carry the names and text of the plugin's slash commands. Usage guidance rides in the server instructions, so no client-side configuration is needed.
 
 ### ChatGPT
 

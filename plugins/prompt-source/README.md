@@ -20,6 +20,10 @@ cd tools && go run ./plugin-prompts check
 
 Surface partial: `partials/<name>.tmpl`. Include with `{{template "<name>.tmpl" .}}`.
 
+## Prompt targets
+
+Two targets serve listed `commands` as MCP prompts of the same names: `gateway-memory` (the memory gateway, `knowledge/internal/broker/gateway/prompts/memory/`) and `mcp-memory` (`demarkus-mcp` with `-host` and the full profile, `client/cmd/demarkus-mcp/prompts/memory/`). Each surface embeds its directory and serves every file through `mcpfmt.LoadPrompts`, so the manifest list is the only list; a body holding `$ARGUMENTS` takes one `arguments` argument. Command references: `{{.Cmd "<name>" "<args>"}}`, a slash command in a plugin and the prompt on a prompt target. Other prompt-target branches (`{{.ServesPrompts}}`, `{{.PromptRoot}}`) go in partials.
+
 ## Store noun
 
 Prose never calls the personal store "memory": hosts ship a built-in memory feature and agents conflated the two. Templates write `{{.Store}}`, `{{.Stores}}`, and `{{.StoreTitle}}` (default `soul` / `souls` / `Soul`); a target or brand overrides them with `store_noun` and `store_noun_plural` in `manifest.json`. Plugin names, MCP server ids, and registry subcommands are identifiers and stay as they are; slash commands follow the noun (`/soul-*`).

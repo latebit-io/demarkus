@@ -5,29 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/client/mcpfmt/mcpfmttest"
 	"github.com/mark3labs/mcp-go/mcp"
 )
-
-func gatewayPromptText(t *testing.T, fn func(context.Context, mcp.GetPromptRequest) (*mcp.GetPromptResult, error), args map[string]string) string {
-	t.Helper()
-	res, err := fn(context.Background(), mcp.GetPromptRequest{
-		Params: mcp.GetPromptParams{Arguments: args},
-	})
-	if err != nil {
-		t.Fatalf("prompt handler: %v", err)
-	}
-	if len(res.Messages) != 1 {
-		t.Fatalf("got %d messages, want 1", len(res.Messages))
-	}
-	content, ok := res.Messages[0].Content.(mcp.TextContent)
-	if !ok {
-		t.Fatalf("content is %T, want TextContent", res.Messages[0].Content)
-	}
-	if res.Messages[0].Role != mcp.RoleUser {
-		t.Errorf("role = %q, want user", res.Messages[0].Role)
-	}
-	return content.Text
-}
 
 func TestGatewayPromptsList(t *testing.T) {
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), &fakeDispatcher{})
@@ -52,7 +32,7 @@ func TestGatewayPromptsList(t *testing.T) {
 }
 
 func TestGatewayOrientPrompt(t *testing.T) {
-	text := gatewayPromptText(t, orientPrompt, map[string]string{"url": "mark://team-a/plans/foo.md"})
+	text := mcpfmttest.PromptText(t, orientPrompt, map[string]string{"url": "mark://team-a/plans/foo.md"})
 	for _, want := range []string{"mark_explore", `"mark://team-a/plans/foo.md"`, "#<anchor>", "mark_fetch"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("orient prompt missing %q in:\n%s", want, text)
@@ -61,7 +41,7 @@ func TestGatewayOrientPrompt(t *testing.T) {
 }
 
 func TestGatewayRecallPromptLooksUpAllWorlds(t *testing.T) {
-	text := gatewayPromptText(t, recallPrompt, map[string]string{"subject": "escrow rules"})
+	text := mcpfmttest.PromptText(t, recallPrompt, map[string]string{"subject": "escrow rules"})
 	for _, want := range []string{"mark_lookup_all", `"escrow rules"`, `mark://<world>/<path>`, "status: partial response is not that error case", "disclose failed worlds", "never invent organizational memory", "top-level error envelope", "aggregate, transport, authorization, or dispatch failure", "stop without claiming the catalog is empty"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("recall prompt missing %q in:\n%s", want, text)
@@ -82,7 +62,7 @@ func TestGatewayRecallPromptLooksUpAllWorlds(t *testing.T) {
 
 func TestGatewayWhatsNewPrompt(t *testing.T) {
 	t.Run("universe-wide default", func(t *testing.T) {
-		text := gatewayPromptText(t, whatsNewPrompt, nil)
+		text := mcpfmttest.PromptText(t, whatsNewPrompt, nil)
 		for _, want := range []string{"7 days before today", "mark_lookup_all", `query "*"`, "modified-after=", "status: partial response is not that error case", "disclose failed worlds", "modified timestamp", "not exhaustive", "partial lookup with no matches is inconclusive", "top-level error envelope", "aggregate, transport, authorization, or dispatch failure", "stop without claiming nothing changed", `mark://<world>/<path>#<anchor>`} {
 			if !strings.Contains(text, want) {
 				t.Errorf("whats-new prompt missing %q in:\n%s", want, text)
@@ -98,7 +78,7 @@ func TestGatewayWhatsNewPrompt(t *testing.T) {
 		}
 	})
 	t.Run("world-scoped with since", func(t *testing.T) {
-		text := gatewayPromptText(t, whatsNewPrompt, map[string]string{"since": "2026-07-01", "world": "servicing"})
+		text := mcpfmttest.PromptText(t, whatsNewPrompt, map[string]string{"since": "2026-07-01", "world": "servicing"})
 		for _, want := range []string{`"2026-07-01"`, `Call mark_lookup with url "mark://servicing/", query "*", and filter "modified-after=<that date>"`, "stop without claiming nothing changed"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("scoped whats-new missing %q in:\n%s", want, text)

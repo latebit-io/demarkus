@@ -319,8 +319,9 @@ func DoctorTool(urlDesc, suffix string) mcp.Tool {
 	)
 }
 
-// Tool profiles. Lean omits the operator and federation tools that no plugin
-// prompt references; full is the complete surface for direct consumers.
+// Tool profiles. Lean is the plugin-hosted surface: no operator or federation
+// tools, and on demarkus-mcp no soul prompts, which the plugin ships as
+// commands. Full is the complete surface for direct consumers.
 const (
 	ProfileLean = "lean"
 	ProfileFull = "full"

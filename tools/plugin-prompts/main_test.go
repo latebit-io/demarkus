@@ -26,6 +26,8 @@ func TestForbiddenTermsAreHarnessSpecific(t *testing.T) {
 		{harness: "pi", term: "AskUserQuestion"},
 		{harness: "opencode", term: "mcp__"},
 		{harness: "opencode", term: "OpenClaw"},
+		{harness: "gateway", term: "demarkus-plugin"},
+		{harness: "mcp", term: "$HOME"},
 	} {
 		t.Run(test.harness+"/"+test.term, func(t *testing.T) {
 			if !contains(forbiddenTerms(test.harness), test.term) {
@@ -51,10 +53,10 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 80 rendered canonical prompts (four memory/knowledge pairs) plus each
-	// brand's share, derived from the manifest and source tree rather than
-	// from the render.
-	const canonical = 80
+	// 80 rendered canonical prompts (four memory/knowledge pairs), the
+	// prompt targets' listed commands (gateway, mcp), and each brand's share,
+	// derived from the manifest and source tree rather than from the render.
+	const canonical = 80 + 2 + 2
 	want := canonical + expectedBrandArtifacts(t, root)
 	if len(artifacts) != want {
 		t.Fatalf("renderAll() produced %d artifacts, want %d", len(artifacts), want)
@@ -159,7 +161,83 @@ func validManifest() manifest {
 			add(surface, harness)
 		}
 	}
+	for _, harness := range []string{"gateway", "mcp"} {
+		add("memory", harness)
+		spec.Targets[len(spec.Targets)-1].Commands = []string{"soul-context"}
+	}
 	return spec
+}
+
+func TestValidateManifestScopesCommandsToPromptTargets(t *testing.T) {
+	for _, i := range []int{1, 2} {
+		spec := validManifest()
+		spec.Targets[len(spec.Targets)-i].Commands = nil
+		if err := validateManifest(&spec); err == nil || !strings.Contains(err.Error(), "commands") {
+			t.Fatalf("validateManifest() error = %v, want a prompt target without commands rejected", err)
+		}
+	}
+	spec := validManifest()
+	spec.Targets[0].Commands = []string{"soul"}
+	if err := validateManifest(&spec); err == nil || !strings.Contains(err.Error(), "commands") {
+		t.Fatalf("validateManifest() error = %v, want a plugin target with commands rejected", err)
+	}
+}
+
+func TestGatewayTargetRendersListedCommandsOnly(t *testing.T) {
+	root, err := findRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := &target{Name: "gw", Surface: "memory", Harness: "gateway", Agent: "Agent", Output: "out", RepoInstructions: "r", ToolForm: "t", Commands: []string{"soul-journal"}}
+	applyStoreDefaults(gw)
+	artifacts, err := renderSurface(root, gw, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 1 || artifacts[0].Path != filepath.Join(root, "out", "commands", "soul-journal.md") {
+		t.Fatalf("rendered %v, want only commands/soul-journal.md", artifactPaths(artifacts))
+	}
+	if !strings.Contains(string(artifacts[0].Content), "`mark_worlds` names your world `<w>`") {
+		t.Fatalf("gateway store block missing:\n%s", artifacts[0].Content)
+	}
+	mcpTarget := *gw
+	mcpTarget.Harness = "mcp"
+	artifacts, err = renderSurface(root, &mcpTarget, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(artifacts[0].Content); strings.Contains(text, "mark_worlds") || !strings.Contains(text, "`/` for the root project") {
+		t.Fatalf("mcp store block must address bare paths without mark_worlds:\n%s", text)
+	}
+	gw.Commands = []string{"soul-missing"}
+	if _, err := renderSurface(root, gw, map[string]string{}); err == nil || !strings.Contains(err.Error(), "soul-missing") {
+		t.Fatalf("renderSurface() error = %v, want the unknown command named", err)
+	}
+}
+
+func TestCmdNamesCommandPerHarness(t *testing.T) {
+	plugin := &target{Harness: "claude"}
+	if got, err := plugin.Cmd("soul-journal", `"<entry>"`); err != nil || got != "`/soul-journal \"<entry>\"`" {
+		t.Errorf("plugin Cmd = %q, %v", got, err)
+	}
+	if got, _ := plugin.Cmd("soul-doctor", ""); got != "`/soul-doctor`" {
+		t.Errorf("plugin Cmd without args = %q", got)
+	}
+	gw := &target{Name: "gw", Harness: "gateway", Commands: []string{"soul-journal"}}
+	if got, err := gw.Cmd("soul-journal", `"<entry>"`); err != nil || got != "the `soul-journal` prompt" {
+		t.Errorf("prompt target Cmd = %q, %v", got, err)
+	}
+	if _, err := gw.Cmd("soul-curate", ""); err == nil {
+		t.Error("a prompt target must refuse a command it does not serve")
+	}
+}
+
+func artifactPaths(artifacts []artifact) []string {
+	paths := make([]string, len(artifacts))
+	for i := range artifacts {
+		paths[i] = artifacts[i].Path
+	}
+	return paths
 }
 
 func contains(values []string, want string) bool {

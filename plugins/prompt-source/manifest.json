@@ -71,6 +71,26 @@
       "output": "plugins/cursor-knowledge",
       "repo_instructions": "AGENTS.md or Cursor rules",
       "tool_form": "the destination server's `mark_*` tools"
+    },
+    {
+      "name": "gateway-memory",
+      "surface": "memory",
+      "harness": "gateway",
+      "agent": "Agent",
+      "output": "knowledge/internal/broker/gateway/prompts/memory",
+      "repo_instructions": "repo instructions",
+      "tool_form": "the destination server's `mark_*` tools",
+      "commands": ["soul-context", "soul-journal"]
+    },
+    {
+      "name": "mcp-memory",
+      "surface": "memory",
+      "harness": "mcp",
+      "agent": "Agent",
+      "output": "client/cmd/demarkus-mcp/prompts/memory",
+      "repo_instructions": "repo instructions",
+      "tool_form": "the destination server's `mark_*` tools",
+      "commands": ["soul-context", "soul-journal"]
     }
   ]
 }

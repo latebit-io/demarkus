@@ -5,33 +5,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/client/mcpfmt/mcpfmttest"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-func promptText(t *testing.T, fn func(context.Context, mcp.GetPromptRequest) (*mcp.GetPromptResult, error), args map[string]string) string {
-	t.Helper()
-	res, err := fn(context.Background(), mcp.GetPromptRequest{
-		Params: mcp.GetPromptParams{Arguments: args},
-	})
-	if err != nil {
-		t.Fatalf("prompt handler: %v", err)
-	}
-	if len(res.Messages) != 1 {
-		t.Fatalf("got %d messages, want 1", len(res.Messages))
-	}
-	content, ok := res.Messages[0].Content.(mcp.TextContent)
-	if !ok {
-		t.Fatalf("content is %T, want TextContent", res.Messages[0].Content)
-	}
-	if res.Messages[0].Role != mcp.RoleUser {
-		t.Errorf("role = %q, want user", res.Messages[0].Role)
-	}
-	return content.Text
-}
-
 func TestOrientPrompt(t *testing.T) {
-	text := promptText(t, orientPrompt, map[string]string{"url": "/plans/foo.md"})
+	text := mcpfmttest.PromptText(t, orientPrompt, map[string]string{"url": "/plans/foo.md"})
 	for _, want := range []string{"mark_explore", `"/plans/foo.md"`, "#<anchor>", "mark_fetch"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("orient prompt missing %q in:\n%s", want, text)
@@ -40,7 +21,7 @@ func TestOrientPrompt(t *testing.T) {
 }
 
 func TestRecallPrompt(t *testing.T) {
-	text := promptText(t, recallPrompt, map[string]string{"subject": "broker auth"})
+	text := mcpfmttest.PromptText(t, recallPrompt, map[string]string{"subject": "broker auth"})
 	for _, want := range []string{"mark_lookup", `"broker auth"`, "mark_explore", "never invent memory"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("recall prompt missing %q in:\n%s", want, text)
@@ -50,7 +31,7 @@ func TestRecallPrompt(t *testing.T) {
 
 func TestWhatsNewPrompt(t *testing.T) {
 	t.Run("default window", func(t *testing.T) {
-		text := promptText(t, whatsNewPrompt, nil)
+		text := mcpfmttest.PromptText(t, whatsNewPrompt, nil)
 		for _, want := range []string{"7 days before today", `query "*"`, "modified-after="} {
 			if !strings.Contains(text, want) {
 				t.Errorf("whats-new prompt missing %q in:\n%s", want, text)
@@ -58,7 +39,7 @@ func TestWhatsNewPrompt(t *testing.T) {
 		}
 	})
 	t.Run("explicit since", func(t *testing.T) {
-		text := promptText(t, whatsNewPrompt, map[string]string{"since": "2026-07-01"})
+		text := mcpfmttest.PromptText(t, whatsNewPrompt, map[string]string{"since": "2026-07-01"})
 		if !strings.Contains(text, `"2026-07-01"`) {
 			t.Errorf("whats-new prompt should carry the given date:\n%s", text)
 		}
@@ -90,24 +71,39 @@ func TestPromptsRequireArguments(t *testing.T) {
 }
 
 func TestRegisterPromptsListsAll(t *testing.T) {
-	s := mcpserverForPrompts(t)
-	resp := s.HandleMessage(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"prompts/list"}`))
-	result, ok := resp.(mcp.JSONRPCResponse)
-	if !ok {
-		t.Fatalf("prompts/list returned %T", resp)
-	}
-	list, ok := result.Result.(mcp.ListPromptsResult)
-	if !ok {
-		t.Fatalf("result is %T, want ListPromptsResult", result.Result)
-	}
-	got := make(map[string]bool, len(list.Prompts))
-	for _, p := range list.Prompts {
-		got[p.Name] = true
-	}
-	for _, want := range []string{"orient", "recall", "whats-new"} {
-		if !got[want] {
-			t.Errorf("prompts/list missing %q; got %v", want, got)
+	got := mcpserverForPrompts(t).ListPrompts()
+	for _, want := range []string{"orient", "recall", "whats-new", "soul-context", "soul-journal"} {
+		if got[want] == nil {
+			t.Errorf("prompts/list missing %q", want)
 		}
+	}
+}
+
+func TestSoulPromptsNeedHostAndFullProfile(t *testing.T) {
+	for _, tt := range []struct {
+		host, profile string
+		want          bool
+	}{
+		{"mark://example.com", mcpfmt.ProfileFull, true},
+		{"mark://example.com", mcpfmt.ProfileLean, false},
+		{"", mcpfmt.ProfileFull, false},
+	} {
+		s := mcpserver.NewMCPServer("test", "0")
+		registerPrompts(s, tt.host, tt.profile)
+		got := s.ListPrompts()
+		for _, name := range []string{"soul-context", "soul-journal"} {
+			if (got[name] != nil) != tt.want {
+				t.Errorf("host %q profile %s: %s listed = %v, want %v", tt.host, tt.profile, name, got[name] != nil, tt.want)
+			}
+		}
+	}
+}
+
+func TestSoulJournalAddressesBarePaths(t *testing.T) {
+	journal := mcpserverForPrompts(t).ListPrompts()["soul-journal"]
+	text := mcpfmttest.PromptText(t, journal.Handler, map[string]string{mcpfmt.PromptArgument: "shipped"})
+	if strings.Contains(text, "mark_worlds") || !strings.Contains(text, "`/` for the root project") || !strings.HasSuffix(text, "Entry: shipped\n") {
+		t.Errorf("soul-journal must address bare paths and fill its entry:\n%s", text)
 	}
 }
 
@@ -115,6 +111,6 @@ func TestRegisterPromptsListsAll(t *testing.T) {
 func mcpserverForPrompts(t *testing.T) *mcpserver.MCPServer {
 	t.Helper()
 	s := mcpserver.NewMCPServer("test", "0")
-	registerPrompts(s, "mark://example.com")
+	registerPrompts(s, "mark://example.com", mcpfmt.ProfileFull)
 	return s
 }
