@@ -31,6 +31,8 @@ var canonicalOutputs = map[string]string{
 	"knowledge/opencode": "plugins/opencode-knowledge",
 	"memory/cursor":      "plugins/cursor-memory",
 	"knowledge/cursor":   "plugins/cursor-knowledge",
+	"memory/gateway":     "knowledge/internal/broker/gateway/prompts/memory",
+	"memory/mcp":         "client/cmd/demarkus-mcp/prompts/memory",
 }
 
 type manifest struct {
@@ -46,6 +48,10 @@ type target struct {
 	Output           string `json:"output"`
 	RepoInstructions string `json:"repo_instructions"`
 	ToolForm         string `json:"tool_form"`
+	// Commands names the command templates a prompt target (gateway, mcp)
+	// renders: it serves MCP prompts, not a plugin tree. Plugin targets leave
+	// it empty and render every template.
+	Commands []string `json:"commands"`
 	// Plugin names surface in prose, set by defaults or a brand. PluginName is
 	// this target's own; the sibling names let memory and knowledge prompts
 	// refer to each other.
@@ -201,8 +207,9 @@ func renderAll(root, brandsPath string) ([]artifact, error) {
 	return artifacts, nil
 }
 
-// renderSurface renders every template under the target's surface
-// tree, skipping the partials directory, which templates include by name.
+// renderSurface renders every template under the target's surface tree,
+// skipping the partials directory, which templates include by name; a prompt
+// target renders only its listed commands.
 func renderSurface(root string, target *target, seen map[string]string) ([]artifact, error) {
 	if err := validateTarget(target); err != nil {
 		return nil, err
@@ -213,19 +220,7 @@ func renderSurface(root string, target *target, seen map[string]string) ([]artif
 	if err != nil {
 		return nil, fmt.Errorf("glob partials for %s: %w", target.Name, err)
 	}
-	err = filepath.WalkDir(templateRoot, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			if entry.Name() == partialsDir {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(entry.Name(), ".tmpl") {
-			return nil
-		}
+	render := func(path string) error {
 		rel, err := filepath.Rel(templateRoot, path)
 		if err != nil {
 			return err
@@ -249,6 +244,29 @@ func renderSurface(root string, target *target, seen map[string]string) ([]artif
 		}
 		artifacts = append(artifacts, artifact{Path: output, Content: rendered, Target: target})
 		return nil
+	}
+	if target.ServesPrompts() {
+		for _, name := range target.Commands {
+			if err := render(filepath.Join(templateRoot, "commands", name+".md.tmpl")); err != nil {
+				return nil, fmt.Errorf("render %s: %w", target.Name, err)
+			}
+		}
+		return artifacts, nil
+	}
+	err = filepath.WalkDir(templateRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == partialsDir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), ".tmpl") {
+			return nil
+		}
+		return render(path)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render %s: %w", target.Name, err)
@@ -326,10 +344,40 @@ func validateTarget(target *target) error {
 			target.PluginName = target.KnowledgePluginName
 		}
 	}
-	if target.Harness != "claude" && target.Harness != "pi" && target.Harness != "opencode" && target.Harness != "cursor" {
+	if !slices.Contains([]string{"claude", "pi", "opencode", "cursor", "gateway", "mcp"}, target.Harness) {
 		return fmt.Errorf("manifest target %s: invalid harness %q", target.Name, target.Harness)
 	}
+	if target.ServesPrompts() != (len(target.Commands) > 0) {
+		return fmt.Errorf("manifest target %s: commands is required for the gateway and mcp harnesses and only there", target.Name)
+	}
 	return nil
+}
+
+// ServesPrompts reports a harness whose commands become MCP prompts on a
+// server: no shell, no plugin helper, no session header.
+func (t *target) ServesPrompts() bool {
+	return t.Harness == "gateway" || t.Harness == "mcp"
+}
+
+// PromptRoot is the store root as a prompt target addresses it: the
+// caller's world on the gateway, a bare path on demarkus-mcp's -host.
+func (t *target) PromptRoot() string {
+	if t.Harness == "gateway" {
+		return "mark://<w>/"
+	}
+	return "/"
+}
+
+// Cmd names the command name in prose: the slash command with its args in a
+// plugin, the prompt of that name on a prompt target, which must serve it.
+func (t *target) Cmd(name, args string) (string, error) {
+	if !t.ServesPrompts() {
+		return "`/" + strings.TrimSpace(name+" "+args) + "`", nil
+	}
+	if !slices.Contains(t.Commands, name) {
+		return "", fmt.Errorf("%s does not serve %s", t.Name, name)
+	}
+	return "the `" + name + "` prompt", nil
 }
 
 // partialsDir holds a surface's shared blocks, included with
@@ -494,6 +542,9 @@ func forbiddenTerms(harness string) []string {
 		return append(common, "OpenCode", "opencode", "CLAUDE_PROJECT_DIR", "AskUserQuestion", "mcp__", "Claude Code")
 	case "cursor":
 		return append(common, "OpenCode", "opencode", "CLAUDE_PROJECT_DIR", "AskUserQuestion", "mcp__", "Claude Code", "pi-mcp-adapter")
+	case "gateway", "mcp":
+		// A plugin-less host has no shell, no local helper, no slash commands.
+		return append(forbiddenTerms("cursor"), "demarkus-plugin", "$HOME", "`/soul-", "`/promote", "`/knowledge")
 	default:
 		return append(common, "Claude Code", "CLAUDE_PROJECT_DIR", "AskUserQuestion", "pi-mcp-adapter", "mcp__")
 	}
@@ -626,7 +677,11 @@ func checkAll(root string, artifacts []artifact) error {
 			continue
 		}
 		outputs[output] = struct{}{}
-		for _, subtree := range []string{"commands", "context", "skills"} {
+		subtrees := []string{"commands", "context", "skills"}
+		if artifacts[i].Target.ServesPrompts() {
+			subtrees = subtrees[:1] // a prompt target renders commands only
+		}
+		for _, subtree := range subtrees {
 			scans = append(scans, filepath.Join(root, output, subtree))
 		}
 	}

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
@@ -94,14 +95,7 @@ func readFile(p string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read guidance file: %w", err)
 	}
-	text := string(b)
-	for {
-		line, rest, found := strings.Cut(text, "\n")
-		if !found || !strings.HasPrefix(line, "<!--") || !strings.HasSuffix(line, "-->") {
-			return strings.TrimLeft(text, "\n"), nil
-		}
-		text = rest
-	}
+	return mcpfmt.TrimGeneratedHeader(string(b)), nil
 }
 
 func memory(in Input) (Output, error) {

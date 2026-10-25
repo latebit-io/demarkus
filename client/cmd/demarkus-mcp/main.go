@@ -92,7 +92,7 @@ func main() {
 	}
 
 	registerResources(s, h, *defaultHost)
-	registerPrompts(s, *defaultHost)
+	registerPrompts(s, *defaultHost, *profile)
 	if *defaultHost != "" {
 		// Best-effort picker population; never blocks or fails startup.
 		// Best effort for the life of the process; each LIST has the client's own timeout.

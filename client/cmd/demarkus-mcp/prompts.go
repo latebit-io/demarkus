@@ -2,21 +2,27 @@ package main
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"log"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// MCP prompts: the workflows the tool descriptions teach, vended as
-// first-class commands (Claude Code surfaces them as /mcp__<server>__<name>
-// slash commands; Desktop shows them in the prompt picker). The server
-// versions the workflow — every connected agent gets the same flow without
-// the model having to remember strategy prose.
+// MCP prompts: workflows vended as commands (Claude Code: /mcp__<server>__<name>;
+// Desktop: the prompt picker), so every connected agent runs the same flow.
 
-// registerPrompts wires the prompts: orient, recall, whats-new, journal, context.
-func registerPrompts(s *mcpserver.MCPServer, defaultHost string) {
+// soulPromptFS holds the plugin's /soul-* commands rendered for this surface.
+//
+//go:embed prompts/memory/commands/*.md
+var soulPromptFS embed.FS
+
+// registerPrompts wires orient, recall, whats-new, and the soul prompts when
+// -host names a soul and no plugin (lean profile) already ships them.
+func registerPrompts(s *mcpserver.MCPServer, defaultHost, profile string) {
 	s.AddPrompt(mcp.NewPrompt("orient",
 		mcp.WithPromptDescription("Orient around a demarkus document: explore its neighborhood in one call, then read just the sections that matter."),
 		mcp.WithArgument("url",
@@ -40,78 +46,16 @@ func registerPrompts(s *mcpserver.MCPServer, defaultHost string) {
 		),
 	), whatsNewPrompt)
 
-	s.AddPrompt(mcp.NewPrompt("journal",
-		mcp.WithPromptDescription("Record a dated journal entry: today's document under a directory, created or appended, hubs kept current."),
-		mcp.WithArgument("entry", mcp.ArgumentDescription("what to record; omitted: distill the current conversation")),
-		mcp.WithArgument("dir", mcp.ArgumentDescription(scopeDesc(defaultHost)+" (default the store root)")),
-	), journalPrompt(defaultHost))
-
-	s.AddPrompt(mcp.NewPrompt("context",
-		mcp.WithPromptDescription("Restore working context from a directory: its hub, newest journal entries and active work, digested into a short brief."),
-		mcp.WithArgument("dir", mcp.ArgumentDescription(scopeDesc(defaultHost)+" (default the store root)")),
-	), contextPrompt(defaultHost))
-}
-
-// dirArg is the directory a journal or context prompt works under: the
-// store root by default, which only exists when -host names a server.
-func dirArg(req *mcp.GetPromptRequest, defaultHost string) (string, error) {
-	dir := strings.TrimSpace(req.Params.Arguments["dir"])
-	if dir == "" {
-		if defaultHost == "" {
-			return "", fmt.Errorf("dir argument is required without -host: a mark:// directory URL")
-		}
-		return "/", nil
+	if defaultHost == "" || profile == mcpfmt.ProfileLean {
+		return
 	}
-	if !strings.HasSuffix(dir, "/") {
-		dir += "/"
+	prompts, err := mcpfmt.LoadPrompts(soulPromptFS, "prompts/memory/commands")
+	if err != nil {
+		log.Printf("warning: soul prompts unavailable: %v", err)
 	}
-	return dir, nil
-}
-
-func journalPrompt(defaultHost string) mcpserver.PromptHandlerFunc {
-	return func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go
-		dir, err := dirArg(&req, defaultHost)
-		if err != nil {
-			return nil, err
-		}
-		return journalResult(dir, req.Params.Arguments["entry"]), nil
+	for _, p := range prompts {
+		s.AddPrompt(p.Prompt, p.Handler)
 	}
-}
-
-func journalResult(dir, entry string) *mcp.GetPromptResult {
-	entry = strings.TrimSpace(entry)
-	entryLine := "Distill the current conversation into one entry: what was worked on, decisions and why, open threads. The non-obvious only; skip trivia."
-	if entry != "" {
-		entryLine = fmt.Sprintf("Record this entry, expanded with relevant context from the conversation: %s", entry)
-	}
-	text := fmt.Sprintf(`Record a dated journal entry under %s.
-
-1. %s
-2. Call mark_append with url %q, route "today", body the entry, and tags naming its subjects (comma-separated).
-3. Relay the status, path, version and every note from the result. A decision or lesson worth finding later also goes to its own document (adr/, debugging.md, patterns.md) under the same directory.`, dir, entryLine, dir)
-	return mcp.NewGetPromptResult("Journal", []mcp.PromptMessage{
-		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
-	})
-}
-
-func contextPrompt(defaultHost string) mcpserver.PromptHandlerFunc {
-	return func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) { //nolint:gocritic // signature required by mcp-go
-		dir, err := dirArg(&req, defaultHost)
-		if err != nil {
-			return nil, err
-		}
-		return contextResult(dir), nil
-	}
-}
-
-func contextResult(dir string) *mcp.GetPromptResult {
-	text := fmt.Sprintf(`Restore working context from %s.
-
-1. Call mark_fetch with url %q.
-2. A status line (new or archived): relay it, stop. Otherwise report a short brief, no preamble: what is in flight, recent decisions, and one or two specific next steps from the latest entry. Cite each claim as its path. Relay every Coverage line; a primer with no journal says so plainly. Read nothing else unless asked.`, dir, dir+".context")
-	return mcp.NewGetPromptResult("Context", []mcp.PromptMessage{
-		mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(text)),
-	})
 }
 
 // requiredArg returns the trimmed argument value or an error naming it —

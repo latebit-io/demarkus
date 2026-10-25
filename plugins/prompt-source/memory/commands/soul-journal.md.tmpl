@@ -1,18 +1,18 @@
 ---
-description: Append an entry to today's journal for the current project
-argument-hint: <entry text>
+description: Append an entry to today's journal for the current project (given, or distilled from this session)
+argument-hint: "[entry text; blank distills this session]"
 ---
 
-Append the entry to today's journal for the current project: one file per day per project.
-
-`$ARGUMENTS` blank or whitespace: ask for the entry text and stop; no write tool.
+Append one entry to today's journal for the current project: one file per day per project.
 
 {{template "store.tmpl" .}}
 
 ## Steps
 
-1. **Write.** `mark_append` through the store's server: `url` `<root>`, `route: "today"`, `body` the entry text, `tags` the entry's concrete topics when it has any (comma-separated, e.g. `auth,release`; derived from the text, never invented).
+1. **Entry.** The `Entry:` line below, when not blank, is the entry as given. Blank: distill this session into one entry: what was worked on, decisions and why, open threads; the non-obvious only, no trivia, no secrets. Nothing worth recording: say so, ask for the entry text, stop; no write tool.
 
-2. **Report.** Relay `status`, `path`, `version` and every `note:` line verbatim; a note is a hub not updated, the entry stays committed, never resend it. A tool error: the exact text; the write is unconfirmed, so fetch today's journal before any retry.
+2. **Write.** `mark_append` through the store's server: `url` `<root>`, `route: "today"`, `body` the entry, `tags` the entry's concrete topics when it has any (comma-separated, e.g. `auth,release`; derived from the entry, never invented).
+
+3. **Report.** Relay `status`, `path`, `version` and every `note:` line verbatim; a note is a hub not updated, the entry stays committed, never resend it. A tool error: the exact text; the write is unconfirmed, so fetch today's journal before any retry.
 
 Entry: $ARGUMENTS

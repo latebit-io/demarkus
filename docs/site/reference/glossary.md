@@ -51,6 +51,6 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 | appliance, single-host install | retired with the standalone broker; the knowledge system deploys on Kubernetes |
 | librarian | the library's agent, or simply the agent |
 
-Plugin commands are `/soul-*` and act on your soul. Plugin names, MCP server ids, `demarkus-plugin` registry subcommands (`memory-join`, `memory-default`, `project`), and memory broker prompt names are identifiers and keep the memory form; their `soul-*` aliases remain for one release.
+Plugin commands (`/soul-*`) and memory broker prompts (`soul-context`, `soul-journal`, `soul-export`) act on your soul and carry its name. Plugin names, MCP server ids, and `demarkus-plugin` registry subcommands (`memory-join`, `memory-default`, `project`) are identifiers and keep the memory form.
 
 `soul.demarkus.io` is the project's own soul.
