@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/knowledge"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/statefile"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
@@ -86,8 +87,9 @@ func canonicalPromotePath(raw string) (string, error) {
 // parse: NONE, or one destination per line.
 func Report(rows []string) string { return cmp.Or(strings.Join(rows, "\n"), "NONE") }
 
-// Detect lists every promote destination (brokered + plain), or nil when
-// none. "knowledge <slug>" / "target <slug> <path> [label]".
+// Detect lists every promote destination, or nil: "knowledge <slug> [<host>]"
+// (host: the identity a back-stamp records, absent for a join older than the
+// URL registry) / "target <slug> <path> [label]".
 func Detect() ([]string, error) {
 	var out []string
 	systems, err := config.ListKnowledgeSystems()
@@ -95,7 +97,11 @@ func Detect() ([]string, error) {
 		return nil, err
 	}
 	for _, s := range systems {
-		out = append(out, "knowledge "+s)
+		host, err := knowledge.Host(s)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, strings.TrimSpace("knowledge "+s+" "+host))
 	}
 	targets, err := config.PromoteTargets()
 	if err != nil {

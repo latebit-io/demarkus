@@ -54,6 +54,8 @@ func TestHandleMarkWorldsListsAllReadable(t *testing.T) {
 
 	for _, want := range []string{
 		"status: ok",
+		// The system's identity, which a soul's back-stamp records as promoted-via.
+		"system: " + g.deps.Gateway.Host(),
 		"count: 2",
 		"| world | url | address | writable |",
 		// url = PublicURL; address = internal dial address (the topology graph's

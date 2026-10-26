@@ -10,7 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// Memory-broker prompts: the plugin's /soul-* commands for plugin-less hosts,
+// Memory-broker prompts: the memory plugin's commands for plugin-less hosts,
 // same names, bodies rendered from plugins/prompt-source (soul-export aside).
 // Each addresses the caller's one world; tenantGate scopes every tool call.
 

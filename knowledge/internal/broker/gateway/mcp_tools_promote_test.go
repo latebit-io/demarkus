@@ -87,8 +87,9 @@ func TestKnowledgePromoteDryRunThenApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	// The world's hub names the promoted document, as it would a mark_publish.
-	if text = toolResultText(t, res); res.IsError || text != "status: published\ntarget: mark://team-a/docs/x.md\nversion: 1\nhubs:\n- /index.md: bullet added\n" {
+	// The world's hub names the promoted document, as it would a mark_publish;
+	// via is the system's host, the identity the soul's back-stamp records.
+	if text = toolResultText(t, res); res.IsError || text != "status: published\ntarget: mark://team-a/docs/x.md\nversion: 1\nvia: gateway.example.com\nhubs:\n- /index.md: bullet added\n" {
 		t.Fatalf("apply = %s", text)
 	}
 	if hub := d.PublishCalls[1]; hub.Host != "team-a" || hub.Path != "/index.md" || !strings.HasSuffix(hub.Body, "- [X](/docs/x.md): What x settles for the team.\n") {

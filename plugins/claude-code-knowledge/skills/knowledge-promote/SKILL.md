@@ -39,9 +39,9 @@ Stages in order; each is a gate, failing one stops there, **not** published. Eve
 
 6. **Human gate.** Effective autonomy = `min(local preference, autonomy_ceiling)`, default human-in-the-loop. Present the draft, the target url, tags, importance, the findings, candidates and dedup notes; explicit approval before publishing. A model refute-check (does the distillation hold against its source?) may stand in only under `verify-then-auto` when local preference allows; `auto` (no gate) only for a low-stakes `scratch` world, never an authoritative one. Declined: stop, report, nothing published.
 
-7. **Apply.** `mark_promote` with the same `url`, `body`, `metadata`, `source`, `phase: apply` and the `packet`. `does not match` (the draft, metadata or target moved): back to step 5. `apply refused` (policy, style block, conflict): surface, fix through step 5 or stop; never retry blindly. `status: published`: keep its `target` and `version`. The response echoes the request url; never reconstruct it.
+7. **Apply.** `mark_promote` with the same `url`, `body`, `metadata`, `source`, `phase: apply` and the `packet`. `does not match` (the draft, metadata or target moved): back to step 5. `apply refused` (policy, style block, conflict): surface, fix through step 5 or stop; never retry blindly. `status: published`: keep its `target`, `version` and `via`. The response echoes the request url; never reconstruct it.
 
-8. **Return** the published `target`, its `version` and the publishing server slug. Broker: the full `mark://` url; plain: the bare path, the slug as the server identity. The caller back-stamps.
+8. **Return** the published `target`, its `version` and `via`. Broker: the full `mark://` url, `via` apply's `via:` line, else the server slug; plain: the bare path, the slug as `via`. The caller back-stamps.
 
 ## Model routing (batch use)
 

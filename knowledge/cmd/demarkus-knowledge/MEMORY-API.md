@@ -82,9 +82,15 @@ the protocol's 4MB object limit.
 ## Host guidance in the endpoint
 
 The initialize result carries server `instructions` (recall-first,
-record-as-you-go routing, metadata rules), and three prompts ship in
-place of the knowledge broker's: `soul-context` (restore working
-context from the soul), `soul-journal` (append a dated journal entry),
-and `soul-export` (byte-preserving export of every document to local
-files; the service is not a lock-in). Plugin-less hosts (Claude
-Desktop, ChatGPT, Cursor) get their usage contract from these.
+record-as-you-go routing, metadata rules), and the soul prompts ship
+in place of the knowledge broker's: `soul` (show the index),
+`soul-context` (restore working context), `soul-journal` (append a
+dated journal entry), `soul-doctor` (read-only hygiene audit),
+`soul-curate` and `soul-archive` (gated writes), `promote` and
+`promote-scan` (lift documents to a knowledge system connected as its
+own MCP server) and `soul-refresh` (pull promoted documents back down),
+each rendered from the plugin command of the same name, and
+`soul-export` (byte-preserving
+export of every document to local files; the service is not a
+lock-in). Plugin-less hosts (Claude Desktop, ChatGPT, Cursor) get their
+usage contract from these.

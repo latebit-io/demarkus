@@ -1,5 +1,5 @@
 ---
-description: Show the index of this project's {{.Store}} (the bound {{.Store}}, or the local one when unbound)
+description: Show the index of this project's {{.Store}}{{if not .ServesPrompts}} (the bound {{.Store}}, or the local one when unbound){{end}}
 ---
 
 Show the index of this project's {{.Store}}: `<root>index.md`.
@@ -8,9 +8,9 @@ Show the index of this project's {{.Store}}: `<root>index.md`.
 
 ## Steps
 
-1. **Fetch.** `mark_fetch` with `url: <root>index.md` (the confirmed root) and `force: true` through the bound store's server.
+1. **Fetch.** `mark_fetch` with `url: <root>index.md` and `force: true` through the store's server.
 
-2. **Render.** One line naming the {{.Store}} read (id and host, or "local {{.Store}}"), then the full index. Only an explicit `not-found` means no index: say so, suggest populating it. `unauthorized`, unreachable, transport, server, malformed or other failures: surface the actual error, stop, no population hint.
+2. **Render.** One line naming the {{.Store}} read{{if not .ServesPrompts}} (id and host, or "local {{.Store}}"){{end}}, then the full index. Only an explicit `not-found` means no index: say so, suggest populating it. `unauthorized`, unreachable, transport, server, malformed or other failures: surface the actual error, stop, no population hint.
 
 ## Don't
 

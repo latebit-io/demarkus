@@ -20,7 +20,8 @@ func TestMemoryGatewayServesRenderedPrompts(t *testing.T) {
 		}
 		got[name] = strings.Join(args, ",")
 	}
-	want := map[string]string{"soul-context": "", "soul-journal": mcpfmt.PromptArgument, "soul-export": "directory"}
+	arg := mcpfmt.PromptArgument
+	want := map[string]string{"promote": arg, "promote-scan": arg, "soul-refresh": arg, "soul": "", "soul-archive": arg, "soul-context": "", "soul-curate": arg, "soul-doctor": arg, "soul-journal": arg, "soul-export": "directory"}
 	if !maps.Equal(got, want) {
 		t.Fatalf("prompts = %v, want %v", got, want)
 	}

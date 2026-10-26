@@ -30,6 +30,7 @@ func (g *Gateway) toolBodies() (*marktools.Tools, error) {
 		Floor:   g.toolFloor,
 		Warnf:   func(format string, args ...any) { g.deps.Log.Warn(fmt.Sprintf(format, args...)) },
 		ErrText: toolSiteErrorText,
+		System:  g.system(),
 	})
 }
 

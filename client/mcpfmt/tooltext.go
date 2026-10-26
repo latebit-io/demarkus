@@ -238,7 +238,7 @@ var promoteArgs = []promoteArg{
 		{[]string{promote.PhaseStamp, promote.PhaseRefresh}, "the knowledge copy as <url>@v<N>"},
 	}},
 	{"via", mcp.WithString, []phaseClause{
-		{[]string{promote.PhaseStamp}, "the knowledge server's name, recorded as promoted-via"},
+		{[]string{promote.PhaseStamp}, "apply's via: or the server's name, recorded as promoted-via"},
 	}},
 	{"stub", mcp.WithBoolean, []phaseClause{
 		{[]string{promote.PhaseStamp}, "reduce the body to its title and summary (default false: keep it)"},

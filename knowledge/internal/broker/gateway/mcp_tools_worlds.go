@@ -3,8 +3,10 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -23,6 +25,9 @@ func (g *Gateway) handleMarkWorlds(ctx context.Context, _ mcp.CallToolRequest) (
 
 	var b strings.Builder
 	b.WriteString("status: ok\n")
+	if system := g.system(); system != "" {
+		fmt.Fprintf(&b, "system: %s\n", system)
+	}
 	fmt.Fprintf(&b, "count: %d\n", len(worlds))
 	if len(worlds) > 0 {
 		// url is the public address (may be empty); address is the internal
@@ -35,6 +40,15 @@ func (g *Gateway) handleMarkWorlds(ctx context.Context, _ mcp.CallToolRequest) (
 		}
 	}
 	return mcp.NewToolResultText(b.String()), nil
+}
+
+// system is this knowledge system's identity, the hostname a promotion
+// records as promoted-via on every host; a surface without apply is no destination.
+func (g *Gateway) system() string {
+	if !slices.Contains(g.profile.PromotePhases, promote.PhaseApply) {
+		return ""
+	}
+	return g.deps.Gateway.Host()
 }
 
 // yesNo renders a writable predicate as a stable table cell. The column is

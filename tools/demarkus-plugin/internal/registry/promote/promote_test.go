@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/knowledge"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/registrytest"
 )
@@ -21,11 +22,15 @@ func TestDetectReportsEveryDestinationOrNone(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".demarkus", "knowledge-systems"), []byte("# joined\nteam\n\nlab\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// lab joined before the url registry, so its row carries no host.
+	if err := knowledge.Register("team", "https://Knowledge.Example.com/mcp"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := AddTarget("acme", "/shared", "Acme shared"); err != nil {
 		t.Fatal(err)
 	}
 	rows, err = Detect()
-	if err != nil || Report(rows) != "knowledge team\nknowledge lab\ntarget acme /shared Acme shared" {
+	if err != nil || Report(rows) != "knowledge team knowledge.example.com\nknowledge lab\ntarget acme /shared Acme shared" {
 		t.Fatalf("Detect = %q, %v", Report(rows), err)
 	}
 }

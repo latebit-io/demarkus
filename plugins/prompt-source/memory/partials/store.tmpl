@@ -1,6 +1,6 @@
 ## {{.StoreTitle}} and project
 
-{{if .ServesPrompts}}{{if eq .Harness "gateway"}}`mark_worlds` names your world `<w>`; a failure: surface it, stop. {{end}}Project: the one the user names (`^[a-z0-9][a-z0-9._-]*$`), else the {{.Store}}'s root project. `<root>` below is the project root: `{{.PromptRoot}}` for the root project, else `{{.PromptRoot}}<slug>/`. The store's server is this MCP server.
+{{if .ServesPrompts}}{{if eq .Harness "gateway"}}`mark_worlds` names your world `<w>`; a failure: surface it, stop. A store path `/<p>` is the url `mark://<w>/<p>`. {{end}}Project: the one the user names (`^[a-z0-9][a-z0-9._-]*$`), else the {{.Store}}'s root project. `<root>` below is the project root: `{{.PromptRoot}}` for the root project, else `{{.PromptRoot}}<slug>/`. The store's server is this MCP server.
 {{else}}Slug, root and bound {{.Store}}: the session header `Project slug: ... Project root: ... Bound store: ...`. Header absent, or the user means another project (ask for its directory): run
 
 ```bash

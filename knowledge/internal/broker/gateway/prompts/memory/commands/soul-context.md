@@ -8,12 +8,12 @@ Bring the project's recent soul into the session so agent and user pick up where
 
 ## Soul and project
 
-`mark_worlds` names your world `<w>`; a failure: surface it, stop. Project: the one the user names (`^[a-z0-9][a-z0-9._-]*$`), else the soul's root project. `<root>` below is the project root: `mark://<w>/` for the root project, else `mark://<w>/<slug>/`. The store's server is this MCP server.
+`mark_worlds` names your world `<w>`; a failure: surface it, stop. A store path `/<p>` is the url `mark://<w>/<p>`. Project: the one the user names (`^[a-z0-9][a-z0-9._-]*$`), else the soul's root project. `<root>` below is the project root: `mark://<w>/` for the root project, else `mark://<w>/<slug>/`. The store's server is this MCP server.
 
 
 ## Steps
 
-1. **Read the primer.** `mark_fetch` through the store's server with `url` `<root>.context`. A tool error: surface it, stop. `status: new`: new project, say so, suggest the `soul-journal` prompt, stop. `status: archived`: say so, stop.
+1. **Read the primer.** `mark_fetch` through the store's server with `url` `<root>.context`. A tool error: surface it, stop. `status: new`: new project, say so, suggest the `soul-journal` prompt with `"<entry>"`, stop. `status: archived`: say so, stop.
 
 2. **Summarize.** Plain text, no preamble:
 

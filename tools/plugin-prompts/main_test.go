@@ -56,7 +56,16 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	// 80 rendered canonical prompts (four memory/knowledge pairs), the
 	// prompt targets' listed commands (gateway, mcp), and each brand's share,
 	// derived from the manifest and source tree rather than from the render.
-	const canonical = 80 + 2 + 2
+	spec, err := loadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := 80
+	for i := range spec.Targets {
+		if spec.Targets[i].ServesPrompts() {
+			canonical += len(spec.Targets[i].Commands)
+		}
+	}
 	want := canonical + expectedBrandArtifacts(t, root)
 	if len(artifacts) != want {
 		t.Fatalf("renderAll() produced %d artifacts, want %d", len(artifacts), want)
@@ -224,11 +233,55 @@ func TestCmdNamesCommandPerHarness(t *testing.T) {
 		t.Errorf("plugin Cmd without args = %q", got)
 	}
 	gw := &target{Name: "gw", Harness: "gateway", Commands: []string{"soul-journal"}}
-	if got, err := gw.Cmd("soul-journal", `"<entry>"`); err != nil || got != "the `soul-journal` prompt" {
+	if got, err := gw.Cmd("soul-journal", `"<entry>"`); err != nil || got != "the `soul-journal` prompt with `\"<entry>\"`" {
 		t.Errorf("prompt target Cmd = %q, %v", got, err)
+	}
+	if got, _ := gw.Cmd("soul-journal", ""); got != "the `soul-journal` prompt" {
+		t.Errorf("prompt target Cmd without args = %q", got)
 	}
 	if _, err := gw.Cmd("soul-curate", ""); err == nil {
 		t.Error("a prompt target must refuse a command it does not serve")
+	}
+}
+
+// TestPromptTargetsCoverMemoryCommands holds gateway parity: every memory
+// command a plugin-less host can run is served on each prompt target.
+func TestPromptTargetsCoverMemoryCommands(t *testing.T) {
+	pluginOnly := []string{"soul-init", "soul-join", "soul-default", "soul-status"} // host provisioning
+	root, err := findRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := filepath.Glob(filepath.Join(root, "plugins", "prompt-source", "memory", "commands", "*.md.tmpl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, p := range paths {
+		name := strings.TrimSuffix(filepath.Base(p), ".md.tmpl")
+		if i := slices.Index(pluginOnly, name); i >= 0 {
+			pluginOnly = slices.Delete(pluginOnly, i, i+1)
+			continue
+		}
+		want = append(want, name)
+	}
+	if len(pluginOnly) > 0 {
+		t.Errorf("plugin-only names without a template: %v", pluginOnly)
+	}
+	slices.Sort(want)
+	spec, err := loadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// validateManifest guarantees both memory prompt targets exist.
+	for i := range spec.Targets {
+		target := &spec.Targets[i]
+		if !target.ServesPrompts() || target.Surface != "memory" {
+			continue
+		}
+		if got := slices.Sorted(slices.Values(target.Commands)); !slices.Equal(got, want) {
+			t.Errorf("%s commands = %v, want %v", target.Name, got, want)
+		}
 	}
 }
 
@@ -312,11 +365,7 @@ func brandArtifactCount(t *testing.T, root string, artifacts []artifact) int {
 // manifest and the base plugin's source files.
 func expectedBrandArtifacts(t *testing.T, root string) int {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(root, "plugins", "prompt-source", "manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec, err := decodeManifest(raw)
+	spec, err := loadManifest(root)
 	if err != nil {
 		t.Fatal(err)
 	}

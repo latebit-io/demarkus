@@ -126,7 +126,10 @@ for full tag lists per row.
 List every world the authenticated identity may read, including each
 world's logical name, public URL, internal topology address, and
 whether the identity may also write it. This is broker-only and takes
-no parameters.
+no parameters. The knowledge broker heads the list with `system:
+<host>`, its hostname: the identity a soul's back-stamp records as
+`promoted-via`, the same on every host. A memory tenant's listing has
+none, since it is no promote destination.
 
 #### `mark_fetch`
 
@@ -401,7 +404,8 @@ draft refuses.
 - `apply` rechecks the draft against the packet and the policy, holds it
   to the style gate as `mark_publish` does, and publishes at that
   version with `on_conflict: fail`, `promoted-from` set to `source`
-  when given, agent and user stamped.
+  when given, agent and user stamped. The knowledge broker adds
+  `via: <host>`, its `system:` identity, for the stamp.
 - `stamp` writes `promoted-via: <via>` and `promoted: <target>` under
   the source's H1 and widens its tags with `promoted`, at the head with
   one retry. With `stub: true` the body becomes the title, the markers
@@ -424,7 +428,7 @@ draft refuses.
 | `metadata` | object | no | `dry_run`, `apply`: the draft's metadata (tags, importance, type, the policy's axes). |
 | `source` | string | no | `dry_run`, `apply`: the origin recorded as `promoted-from`. |
 | `target` | string | no | `stamp`, `refresh`: the knowledge copy as `<url>@v<N>`. |
-| `via` | string | no | `stamp`: the knowledge server's name, recorded as `promoted-via`. |
+| `via` | string | no | `stamp`: the `via:` line `apply` returned, else the knowledge server's name; recorded as `promoted-via`. |
 | `stub` | boolean | no | `stamp`: reduce the body to its title and summary (default false). |
 | `packet` | string | no | `apply`, `stamp`, `refresh`: the packet hash from the report before it. |
 
