@@ -148,6 +148,18 @@ func pages(extra, archived map[string][]string) func(context.Context, fetch.List
 	}
 }
 
+// exportStore lists two live documents and one archived at the root, no
+// directory, so the export walk is one listing and three fetches; every
+// fetch answers with a body naming the requested path.
+func exportStore() *fetchtest.Client {
+	return &fetchtest.Client{
+		Published: map[string]fetch.Result{
+			host + "/export-doc.md": fetchtest.Head("# Notes at /export-doc.md\n\nKept as written.\n", 2, map[string]string{"modified": modified}),
+		},
+		ListFn: pages(map[string][]string{"/": {"index.md", "roadmap.md"}}, map[string][]string{"/": {"old.md"}}),
+	}
+}
+
 // publishAs is the story's store answering every PUBLISH as the server does
 // when it makes version v.
 func publishAs(v int) func() *fetchtest.Client {
@@ -236,6 +248,22 @@ var mocks = []mock{
 		Store: cwdStore,
 		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
 			return t.Append(ctx, marktools.AppendArgs{URL: "/cwd/", Route: marktools.RouteToday, Tags: "remember,journal", Body: "Pruned the remember skill to the harness-specific parts; the route now refuses an archived project."})
+		},
+	},
+	// soul-export: the root listing, archived included, and one document.
+	{
+		Rel:   inCase("soul-export", "mark_list"),
+		Store: exportStore,
+		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
+			return t.List(ctx, marktools.ListArgs{URL: "/", IncludeArchived: true})
+		},
+	},
+	{
+		Rel:   inCase("soul-export", "mark_fetch"),
+		Subst: map[string]string{"/export-doc.md": "{{input.url}}"},
+		Store: exportStore,
+		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
+			return t.Fetch(ctx, marktools.FetchArgs{URL: "/export-doc.md", Force: true})
 		},
 	},
 	// archive-gate: the document the agent must show before asking.

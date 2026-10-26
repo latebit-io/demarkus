@@ -67,7 +67,7 @@ func MemoryProfile() *Profile {
 			markExploreTool(),
 			markListTool(),
 			markVersionsTool(),
-			markLookupTool(),
+			markLookupTool(false),
 			markPublishTool(),
 			markAppendTool(),
 			markArchiveTool(),

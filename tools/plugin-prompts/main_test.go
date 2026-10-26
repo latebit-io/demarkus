@@ -53,14 +53,14 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 80 rendered canonical prompts (four memory/knowledge pairs), the
+	// 84 rendered canonical prompts (four memory/knowledge pairs), the
 	// prompt targets' listed commands (gateway, mcp), and each brand's share,
 	// derived from the manifest and source tree rather than from the render.
 	spec, err := loadManifest(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical := 80
+	canonical := 84
 	for i := range spec.Targets {
 		if spec.Targets[i].ServesPrompts() {
 			canonical += len(spec.Targets[i].Commands)

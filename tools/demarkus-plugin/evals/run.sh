@@ -46,6 +46,7 @@ cat "${HOOK_DIR}/session-start.${EVAL_PROJECT:-known}.json"'
 printf '%s\n' "${stand_in//@HOME@/${HOME}}" >"${work}/hooks/session-start.sh"
 
 mkdir -p tools/demarkus-plugin/evals/results
-# A haiku judge misreads correct briefs.
-claude plugin eval --trust-plugin --no-publish --ablation none --judge-model sonnet -j 4 \
+# A haiku judge misreads correct briefs. Write is gated; soul-export saves
+# into the run's sandbox, and other cases do not allow it.
+claude plugin eval --trust-plugin --no-publish --ablation none --judge-model sonnet -j 4 --allow-tools Write \
   --output-dir "tools/demarkus-plugin/evals/results/$(date +%Y%m%dT%H%M%S)" "$@" "${work}"

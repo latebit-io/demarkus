@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -87,4 +88,25 @@ func lineAt(lines []string, i int) string {
 		return lines[i]
 	}
 	return "<end of file>"
+}
+
+var toolName = regexp.MustCompile(`\bmark_[a-z_]+\b`)
+
+// ServedToolsOnly fails when instructions or a tool's schema name a mark_*
+// tool the surface does not serve: guidance for a missing tool is dead tokens.
+func ServedToolsOnly(t testing.TB, instructions string, tools []mcp.Tool) {
+	t.Helper()
+	served := make([]string, len(tools))
+	for i := range tools {
+		served[i] = tools[i].Name
+	}
+	schemas, err := json.Marshal(tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range toolName.FindAllString(instructions+"\n"+string(schemas), -1) {
+		if !slices.Contains(served, name) {
+			t.Errorf("names %s, which this surface does not serve", name)
+		}
+	}
 }

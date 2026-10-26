@@ -88,9 +88,8 @@ in place of the knowledge broker's: `soul` (show the index),
 dated journal entry), `soul-doctor` (read-only hygiene audit),
 `soul-curate` and `soul-archive` (gated writes), `promote` and
 `promote-scan` (lift documents to a knowledge system connected as its
-own MCP server) and `soul-refresh` (pull promoted documents back down),
-each rendered from the plugin command of the same name, and
-`soul-export` (byte-preserving
-export of every document to local files; the service is not a
-lock-in). Plugin-less hosts (Claude Desktop, ChatGPT, Cursor) get their
+own MCP server), `soul-refresh` (pull promoted documents back down)
+and `soul-export` (byte-preserving export of every document to local
+files; the service is not a lock-in), each rendered from the plugin
+command of the same name. Plugin-less hosts (Claude Desktop, ChatGPT, Cursor) get their
 usage contract from these.
