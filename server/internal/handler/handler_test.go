@@ -1773,10 +1773,17 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 
 		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
 		h.HandleStream(context.Background(), stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse archive response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK || resp.Metadata["archived"] != "true" {
+			t.Fatalf("archive = status %q archived %q, want ok and true", resp.Status, resp.Metadata["archived"])
+		}
 
 		stream = newMockStream("VERSIONS /doc.md\n")
 		h.HandleStream(context.Background(), stream)
-		resp, err := protocol.ParseResponse(&stream.output)
+		resp, err = protocol.ParseResponse(&stream.output)
 		if err != nil {
 			t.Fatalf("parse response: %v", err)
 		}
