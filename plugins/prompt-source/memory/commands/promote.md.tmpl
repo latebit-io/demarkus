@@ -2,7 +2,7 @@
 description: "Promote a {{.Store}} document up to a shared knowledge system: stage, distill, gate, publish, and back-stamp the source"
 ---
 
-Promote one {{.Store}} document (staging tier) to a shared destination (curated, authoritative tier): a **brokered knowledge system** (joined via `/knowledge-join`) or a **plain remote demarkus server** registered as a promote target. `mark_promote` on the {{.Store}} server stages the source and writes the back-stamp; the {{.KnowledgePluginName}} plugin's `knowledge-promote` skill distills, checks and publishes on the destination. This command owns intent, destination and the back-stamp.
+{{if .ServesPrompts}}Promote one {{.Store}} document (staging tier) to a shared knowledge system (curated, authoritative tier) connected to this host as its own MCP server. `mark_promote` on this server stages the source and writes the back-stamp; `mark_promote` on the destination checks and publishes in the cascade below. This prompt owns intent, destination, cascade and back-stamp.{{else}}Promote one {{.Store}} document (staging tier) to a shared destination (curated, authoritative tier): a **brokered knowledge system** (joined via `/knowledge-join`) or a **plain remote demarkus server** registered as a promote target. `mark_promote` on the {{.Store}} server stages the source and writes the back-stamp; the {{.KnowledgePluginName}} plugin's `knowledge-promote` skill distills, checks and publishes on the destination. This command owns intent, destination and the back-stamp.{{end}}
 
 `$ARGUMENTS`: {{.Store}} path (e.g. `/demarkus/plans/foo.md`). Empty: ask which document.
 
@@ -12,27 +12,36 @@ Promote one {{.Store}} document (staging tier) to a shared destination (curated,
 
 1. **Destination.** {{template "destinations.tmpl" .}}
    - `knowledge`: the cascade selects the world.
+{{- if not .ServesPrompts}}
    - `target`: destination is that slug and path, no `mark_worlds` or `world.md`, default autonomy `human-only`.
    - `NONE`: promotion dormant. Offer both ways to enable it and act on the choice: `/knowledge-join <broker-url>` ({{.KnowledgePluginName}} plugin); or register a plain server now: confirm its MCP server slug{{if eq .Harness "claude"}} (from `claude mcp list`){{end}} and write path, shell-escape each value as one argument, run `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add <shell-escaped-slug> <shell-escaped-path> <shell-escaped-label-if-present>`; continue only on zero exit with `OK: registered promote target`, else surface, stop; rerun `detect-promote`, continue only when the exact new `target <slug> <path>` row appears.
+{{- else}}
+   - `NONE`: promotion needs a knowledge system connected here as its own MCP server (a custom connector); say so, stop.
+{{- end}}
    - Several destinations: ask which; one: use it. Previously promoted: the destination is decided in step 2.
 
-2. **Stage.** `mark_promote` through the store's server with `url` and `phase: stage`. Tool error (`not-found`, transport, authorization): surface, stop; never treat as absence. Keep the `packet`, the body and the metadata lines for the cascade. `candidate: no`: say why (not a shared type, under the importance floor, a staging directory), continue only on request. `status: promoted`: promoted before; tell the user where it lives (`promoted:` line) and continue only on an explicit **update** request: the destination is the step 1 row whose slug is `promoted-via` (none in the registry: stop); `promoted-via: none` (legacy marker): the user picks the configured destination that owns the target; never infer a broker from a `mark://` authority; a plain destination with a `mark://<server>/<path>` target uses the bare `/path`. The recorded target is the cascade's update target.
+2. **Stage.** `mark_promote` through the store's server with `url` and `phase: stage`. Tool error (`not-found`, transport, authorization): surface, stop; never treat as absence. Keep the `packet`, the body and the metadata lines for the cascade. `candidate: no`: say why (not a shared type, under the importance floor, a staging directory), continue only on request. `status: promoted`: promoted before; tell the user where it lives (`promoted:` line) and continue only on an explicit **update** request. {{template "via.tmpl" .}} No destination owns it: stop. The recorded target is the cascade's update target.
 
-3. **Cascade.** Hand the staged body and metadata, the destination (brokered, or plain `target` with its write path) and any update target to the `knowledge-promote` skill. It triages, distills, runs `dry_run` and `apply` on the destination with a human gate between, and returns the exact `target` url of the successful `apply`, its `version` and the publishing server slug.
+3. **Cascade.** {{if .ServesPrompts}}Run the cascade below on the staged body and metadata, the destination and any update target; it returns the `target` url of the successful `apply`, its `version` and `via`.{{else}}Hand the staged body and metadata, the destination (brokered, or plain `target` with its write path) and any update target to the `knowledge-promote` skill. It triages, distills, runs `dry_run` and `apply` on the destination with a human gate between, and returns the exact `target` url of the successful `apply`, its `version` and `via` (an older skill returns the server slug instead: that is `via`).{{end}}
    - Triaged out or declined at the gate: report, **stop without back-stamping**.
-   - Any failure, or a result missing target, slug or version: surface, **stop without back-stamping**.
+   - Any failure, or a result missing target, via or version: surface, **stop without back-stamping**.
 
-4. **Back-stamp.** Confirm the mode with the user: **marker only** (default; keeps the body, for documents still iterated in the {{.Store}}) or **stub** (title, markers, summary; recall follows the link, no rival copy). `mark_promote` through the store's server: `url`, `phase: stamp`, `target: <target>@v<N>` from step 3, `via: <slug>`, the step 2 `packet`, `stub: true` for a stub. A broker target is `mark://<world>/<path>`, a plain target its bare `/path`; never synthesize an authority from an MCP slug.
+4. **Back-stamp.** Confirm the mode with the user: **marker only** (default; keeps the body, for documents still iterated in the {{.Store}}) or **stub** (title, markers, summary; recall follows the link, no rival copy). `mark_promote` through the store's server: `url`, `phase: stamp`, `target: <target>@v<N>` and `via: <via>` from step 3, the step 2 `packet`, `stub: true` for a stub.{{if not .ServesPrompts}} A broker target is `mark://<world>/<path>`, a plain target its bare `/path`; never synthesize an authority from an MCP slug.{{end}}
    - `status: stamped`: done; `note:` lines are reported as is.
    - `stamp refused` (the document changed since staging): rerun step 2's stage, stamp again with the new `packet`, marker only.
-   - Any other failure: print the pending back-stamp lines verbatim (`promoted-via: <slug>` and `promoted: <target>@v<N>`), stop, never claim success.
+   - Any other failure: print the pending back-stamp lines verbatim (`promoted-via: <via>` and `promoted: <target>@v<N>`), stop, never claim success.
 
-5. **Report.** Destination target and version, server, back-stamp mode and version, {{.Store}} path, pending back-stamp if any. Full paths.
+5. **Report.** Destination target and version, `via`, back-stamp mode and version, {{.Store}} path, pending back-stamp if any. Full paths.
+{{if .ServesPrompts}}
+## Cascade
 
+{{template "cascade.tmpl" .}}{{end}}
 ## Don't
 
-- Promote without the human gate (default human-in-the-loop); autonomy is capped by the destination's `world.md` ceiling, never chosen here.
-- Back-stamp when nothing was published.
-- Write the knowledge system directly here, or let the knowledge plugin write the {{.Store}}; the back-stamp is one-directional.
+{{if not .ServesPrompts}}- Promote without the human gate (default human-in-the-loop); autonomy is capped by the destination's `world.md` ceiling, never chosen here.
+{{end}}- Back-stamp when nothing was published.
+- {{if .ServesPrompts}}Write the knowledge system other than through the cascade's `mark_promote`, or the {{.Store}} other than through the back-stamp{{else}}Write the knowledge system directly here, or let the knowledge plugin write the {{.Store}}{{end}}; the back-stamp is one-directional.
+{{- if not .ServesPrompts}}
 - Publish secrets, credentials or PII; distillation strips them.
 - Lower the bar: not durable and broadly useful stays personal.
+{{- end}}

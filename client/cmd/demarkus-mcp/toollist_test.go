@@ -15,7 +15,9 @@ func TestAgentSurfaceGolden(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			mcpfmttest.ToolsGolden(t, "testdata/tools-"+name+".json", profileSchemas(host, mcpfmt.ProfileFull))
 			mcpfmttest.Golden(t, "testdata/instructions-"+name+".txt", []byte(serverInstructions(host)+"\n"))
+			mcpfmttest.ServedToolsOnly(t, serverInstructions(host), profileSchemas(host, mcpfmt.ProfileFull))
 		})
 	}
 	mcpfmttest.ToolsGolden(t, "testdata/tools-host-lean.json", profileSchemas(exampleHost, mcpfmt.ProfileLean))
+	mcpfmttest.ServedToolsOnly(t, serverInstructions(exampleHost), profileSchemas(exampleHost, mcpfmt.ProfileLean))
 }

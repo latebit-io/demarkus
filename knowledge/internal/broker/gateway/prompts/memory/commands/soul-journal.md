@@ -9,7 +9,7 @@ Append one entry to today's journal for the current project: one file per day pe
 
 ## Soul and project
 
-`mark_worlds` names your world `<w>`; a failure: surface it, stop. Project: the one the user names (`^[a-z0-9][a-z0-9._-]*$`), else the soul's root project. `<root>` below is the project root: `mark://<w>/` for the root project, else `mark://<w>/<slug>/`. The store's server is this MCP server.
+`mark_worlds` names your world `<w>`; a failure: surface it, stop. A store path `/<p>` is the url `mark://<w>/<p>`. Project: the one the user names (`^[a-z0-9][a-z0-9._-]*$`), else the soul's root project. `<root>` below is the project root: `mark://<w>/` for the root project, else `mark://<w>/<slug>/`. The store's server is this MCP server.
 
 
 ## Steps

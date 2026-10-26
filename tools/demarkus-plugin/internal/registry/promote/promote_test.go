@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/knowledge"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/registrytest"
 )
@@ -14,19 +15,39 @@ import (
 // detect-promote's output is parsed by three prompts; this pins its shape.
 func TestDetectReportsEveryDestinationOrNone(t *testing.T) {
 	home := registrytest.SetupHome(t)
-	rows, err := Detect()
+	rows, err := Detect(true)
 	if err != nil || Report(rows) != "NONE" {
 		t.Fatalf("empty registry: %q, %v", Report(rows), err)
 	}
 	if err := os.WriteFile(filepath.Join(home, ".demarkus", "knowledge-systems"), []byte("# joined\nteam\n\nlab\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// lab joined before the url registry, so its row carries no host.
+	if err := knowledge.Register("team", "https://Knowledge.Example.com/mcp"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := AddTarget("acme", "/shared", "Acme shared"); err != nil {
 		t.Fatal(err)
 	}
-	rows, err = Detect()
+	rows, err = Detect(true)
+	if err != nil || Report(rows) != "knowledge team knowledge.example.com\nknowledge lab\ntarget acme /shared Acme shared" {
+		t.Fatalf("Detect(hosts) = %q, %v", Report(rows), err)
+	}
+	// Older plugins' prompts reject a third field on a knowledge row.
+	rows, err = Detect(false)
 	if err != nil || Report(rows) != "knowledge team\nknowledge lab\ntarget acme /shared Acme shared" {
 		t.Fatalf("Detect = %q, %v", Report(rows), err)
+	}
+	// Register refuses a hostless URL; a hand-edited registry can hold one.
+	// It fails only the hosts form.
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "knowledge-urls"), []byte("lab\thttps:///mcp\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Detect(false); err != nil {
+		t.Fatalf("Detect with a hostless URL: %v", err)
+	}
+	if _, err := Detect(true); err == nil {
+		t.Fatal("Detect(hosts) with a hostless URL: want error")
 	}
 }
 

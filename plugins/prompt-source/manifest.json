@@ -80,7 +80,7 @@
       "output": "knowledge/internal/broker/gateway/prompts/memory",
       "repo_instructions": "repo instructions",
       "tool_form": "the destination server's `mark_*` tools",
-      "commands": ["soul-context", "soul-journal"]
+      "commands": ["promote", "promote-scan", "soul", "soul-archive", "soul-context", "soul-curate", "soul-doctor", "soul-export", "soul-journal", "soul-refresh"]
     },
     {
       "name": "mcp-memory",
@@ -90,7 +90,7 @@
       "output": "client/cmd/demarkus-mcp/prompts/memory",
       "repo_instructions": "repo instructions",
       "tool_form": "the destination server's `mark_*` tools",
-      "commands": ["soul-context", "soul-journal"]
+      "commands": ["promote", "promote-scan", "soul", "soul-archive", "soul-context", "soul-curate", "soul-doctor", "soul-export", "soul-journal", "soul-refresh"]
     }
   ]
 }

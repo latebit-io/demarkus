@@ -1,0 +1,21 @@
+---
+description: "Export every {{.Store}} document verbatim to local files, plus a manifest"
+argument-hint: "[directory | blank = ./soul-export]"
+---
+
+Export every {{.Store}} document to local files.{{if .ServesPrompts}} Without a tool that writes local files: say so, stop.{{end}}
+
+`$ARGUMENTS`: the local directory `<dir>`; empty: `./soul-export`.
+
+{{template "store.tmpl" .}}
+
+## Steps
+
+1. **Walk.** `mark_list` through the store's server from {{if .ServesPrompts}}`{{.PromptRoot}}`{{else}}`/` (a broker store: `mark://<world>/` from `mark_worlds`){{end}}, the whole {{.Store}} whatever the project, with `include_archived: true`, recursing into every subdirectory; while `complete=false`, pass `next-cursor` as `cursor`. A listing failure: note that directory as not exported, continue.
+2. **Save.** Each document: `mark_fetch` with `force: true`; `archived`: `mark_versions`, then `mark_fetch` `<path>/v<N>` of the newest version with `force: true`. Write the body verbatim to `<dir>/documents/<path>` (`<path>` under the store root). A fetch or write failure: note the path as not exported, continue.
+3. **Report.** Write `<dir>/manifest.md`, one row per saved document (path, version and modified from its fetch, archived ones marked); a write failure: surface it. Then the document count, `<dir>/documents/`, the manifest path, every path or directory not exported. Any gap: the export is incomplete; say so.
+
+## Don't
+
+- Write the {{.Store}}.
+- Summarize, rewrite or reformat a body.

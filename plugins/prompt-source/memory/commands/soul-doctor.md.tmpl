@@ -3,7 +3,7 @@ description: "Audit the {{.Store}} (or a single project) for catalog hygiene: or
 argument-hint: "[project-slug | blank = whole {{.Store}}] [--deep]"
 ---
 
-Read-only health check over the project's {{.Store}}: one `mark_doctor` call runs every check and returns the report. **Never writes.** An organizational knowledge system is `/knowledge-doctor`'s territory ({{.KnowledgePluginName}} plugin).
+Read-only health check over the project's {{.Store}}: one `mark_doctor` call runs every check and returns the report. **Never writes.**{{if not .ServesPrompts}} An organizational knowledge system is `/knowledge-doctor`'s territory ({{.KnowledgePluginName}} plugin).{{end}}
 
 {{template "store.tmpl" .}}
 
@@ -11,9 +11,9 @@ Read-only health check over the project's {{.Store}}: one `mark_doctor` call run
 
 `$ARGUMENTS`: an optional project slug and `--deep` (metadata lost across versions).
 
-`mark_doctor` through the store's server: `url` is `/<slug>/` for one project (this project: `<root>`), `/` for the whole {{.Store}} (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it); `deep: true` with `--deep`. An invalid slug or scope is the tool's own refusal. Whole local {{.Store}} on the host: also run `"$HOME/.demarkus/bin/demarkus-plugin" provision verify-auth` via Bash and relay its verdict as one line after the report; a non-zero exit is a coverage gap, not a finding.{{if eq .Harness "claude"}} A sandbox (exit 127 above): no verify-auth, report auth as not checked.{{end}}
+`mark_doctor` through the store's server: `url` is {{if .ServesPrompts}}`<root>`{{else}}`/<slug>/` for one project (this project: `<root>`), `/` for the whole {{.Store}} (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it){{end}}; `deep: true` with `--deep`. An invalid slug or scope is the tool's own refusal.{{if not .ServesPrompts}} Whole local {{.Store}} on the host: also run `"$HOME/.demarkus/bin/demarkus-plugin" provision verify-auth` via Bash and relay its verdict as one line after the report; a non-zero exit is a coverage gap, not a finding.{{if eq .Harness "claude"}} A sandbox (exit 127 above): no verify-auth, report auth as not checked.{{end}}{{end}}
 
-- Success: print the report verbatim, then a short prioritized "what I'd fix first". A `fixable:` line under the summary: name `/soul-curate <path>` (the path under the store, `/` or `/<slug>/`, never a `mark://` url) as the one gated step for those, then the rest by judgment. "All clean" only with zero findings, Coverage `complete` and a healthy verify-auth verdict where one was due; otherwise name the gaps, auth not checked included.
+- Success: print the report verbatim, then a short prioritized "what I'd fix first". A `fixable:` line under the summary: name {{.Cmd "soul-curate" "<path>"}} (the path under the store, `/` or `/<slug>/`, never a `mark://` url) as the one gated step for those, then the rest by judgment. "All clean" only with zero findings{{if .ServesPrompts}} and Coverage `complete`; otherwise name the gaps.{{else}}, Coverage `complete` and a healthy verify-auth verdict where one was due; otherwise name the gaps, auth not checked included.{{end}}
 - Tool error (store unreachable, unauthorized, inventory bound, scope not found): surface it verbatim, stop. Never substitute a manual crawl.
 
 ## Don't

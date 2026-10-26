@@ -244,6 +244,9 @@ func TestMarkWorldsTenantScopedListsOnlyOwnWorld(t *testing.T) {
 	if strings.Contains(text, "bob-w") {
 		t.Errorf("mark_worlds leaked another tenant's world:\n%s", text)
 	}
+	if strings.Contains(text, "system:") {
+		t.Errorf("a tenant's memory is no promote destination, yet names a system:\n%s", text)
+	}
 }
 
 // TestMemoryResourceReadCrossTenantDenied: resource reads bypass the

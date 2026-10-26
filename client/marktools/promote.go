@@ -470,7 +470,11 @@ func (t *Tools) promoteApply(ctx context.Context, target Target, doc *docwrite.D
 	if err != nil {
 		return failure("apply: %v", err)
 	}
-	return text(fmt.Sprintf("status: published\ntarget: %s\nversion: %d\n", target.name(), version) + notes)
+	out := fmt.Sprintf("status: published\ntarget: %s\nversion: %d\n", target.name(), version)
+	if t.hooks.System != "" {
+		out += "via: " + t.hooks.System + "\n"
+	}
+	return text(out + notes)
 }
 
 // callerMeta is the caller's metadata without identity keys: the surface

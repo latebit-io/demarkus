@@ -147,6 +147,21 @@ func URL(slug string) (string, error) {
 	return "", nil
 }
 
+// Host is SLUG's promote identity, its broker URL's lowercased hostname; ""
+// for a join older than the URL registry. OAuth's resource binding keeps it
+// equal to the gateway's mark_worlds system: (its public URL's host).
+func Host(slug string) (string, error) {
+	raw, err := URL(slug)
+	if err != nil || raw == "" {
+		return "", err
+	}
+	u, err := neturl.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return "", fmt.Errorf("knowledge system '%s': broker URL %q has no host", slug, raw)
+	}
+	return strings.ToLower(u.Hostname()), nil
+}
+
 // urlMutation stages slug's row in the url registry; url "" drops it.
 // Callers hold the knowledge-systems lock.
 func urlMutation(slug, url string) (statefile.Mutation, error) {

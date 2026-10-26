@@ -5,13 +5,13 @@ argument-hint: "<{{.Store}} path | directory/>"
 
 Curate so an agent reads a document in one fetch and finds it by its subjects. `mark_curate` holds the rules and proposes the change; the agent shows it, gates it, applies it. Read-only until step 4.
 
-`$ARGUMENTS`: a document path (e.g. `/demarkus/plans/foo.md`), or a directory with its slash (`/demarkus/`, `/`) for the findings `mark_doctor` marks fixable. Empty: ask which; `/soul-doctor` lists candidates: Oversized, Hub shape and Document shape for a document, a `fixable:` line for a directory.
+`$ARGUMENTS`: a document path (e.g. `/demarkus/plans/foo.md`), or a directory with its slash (`/demarkus/`, `/`) for the findings `mark_doctor` marks fixable. Empty: ask which; {{.Cmd "soul-doctor" ""}} lists candidates: Oversized, Hub shape and Document shape for a document, a `fixable:` line for a directory.
 
 {{template "store.tmpl" .}}
 
 ## Steps
 
-1. **Report.** `mark_curate` through the store's server with `url` (a broker store: `mark://<world>/<path>`). Tool error: surface verbatim, stop. Document: `status: clean`: say so, stop; `status: report`: nothing mechanical; show the findings, offer a prose edit as a separate explicit ask, stop. Directory: `nothing to apply`: say so with what is left to judgment, stop.
+1. **Report.** `mark_curate` through the store's server with `url`{{if not .ServesPrompts}} (a broker store: `mark://<world>/<path>`){{end}}. Tool error: surface verbatim, stop. Document: `status: clean`: say so, stop; `status: report`: nothing mechanical; show the findings, offer a prose edit as a separate explicit ask, stop. Directory: `nothing to apply`: say so with what is left to judgment, stop.
 
 2. **Show.** The report verbatim. Document: findings, the proposal (`edit`: the rewritten body; `split`: every topic file and the hub, headings moved verbatim so anchors survive), what is left to the agent, the inbound links to repoint, the `proposal` hash; a `note:` on inbound links means that list is partial: say so.
 

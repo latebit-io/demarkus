@@ -390,7 +390,7 @@
             "type": "string"
           },
           "via": {
-            "description": "stamp: the knowledge server's name, recorded as promoted-via",
+            "description": "stamp: apply's via: or the server's name, recorded as promoted-via",
             "type": "string"
           }
         },

@@ -13,7 +13,7 @@ Project: the one the user names (`^[a-z0-9][a-z0-9._-]*$`), else the soul's root
 
 ## Steps
 
-1. **Read the primer.** `mark_fetch` through the store's server with `url` `<root>.context`. A tool error: surface it, stop. `status: new`: new project, say so, suggest the `soul-journal` prompt, stop. `status: archived`: say so, stop.
+1. **Read the primer.** `mark_fetch` through the store's server with `url` `<root>.context`. A tool error: surface it, stop. `status: new`: new project, say so, suggest the `soul-journal` prompt with `"<entry>"`, stop. `status: archived`: say so, stop.
 
 2. **Summarize.** Plain text, no preamble:
 

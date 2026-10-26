@@ -19,7 +19,7 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 
 ## Steps
 
-1. **Fetch.** `mark_fetch` with `url: <root>index.md` (the confirmed root) and `force: true` through the bound store's server.
+1. **Fetch.** `mark_fetch` with `url: <root>index.md` and `force: true` through the store's server.
 
 2. **Render.** One line naming the soul read (id and host, or "local soul"), then the full index. Only an explicit `not-found` means no index: say so, suggest populating it. `unauthorized`, unreachable, transport, server, malformed or other failures: surface the actual error, stop, no population hint.
 

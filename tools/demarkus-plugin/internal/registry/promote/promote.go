@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/knowledge"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/statefile"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
@@ -86,16 +87,25 @@ func canonicalPromotePath(raw string) (string, error) {
 // parse: NONE, or one destination per line.
 func Report(rows []string) string { return cmp.Or(strings.Join(rows, "\n"), "NONE") }
 
-// Detect lists every promote destination (brokered + plain), or nil when
-// none. "knowledge <slug>" / "target <slug> <path> [label]".
-func Detect() ([]string, error) {
+// Detect lists every promote destination, or nil: "knowledge <slug> [<host>]"
+// / "target <slug> <path> [label]". Only hosts adds the back-stamp identity
+// (none for a pre-URL-registry join): older plugins' prompts reject it.
+func Detect(hosts bool) ([]string, error) {
 	var out []string
 	systems, err := config.ListKnowledgeSystems()
 	if err != nil {
 		return nil, err
 	}
 	for _, s := range systems {
-		out = append(out, "knowledge "+s)
+		row := "knowledge " + s
+		if hosts {
+			host, err := knowledge.Host(s)
+			if err != nil {
+				return nil, err
+			}
+			row = strings.TrimSpace(row + " " + host)
+		}
+		out = append(out, row)
 	}
 	targets, err := config.PromoteTargets()
 	if err != nil {

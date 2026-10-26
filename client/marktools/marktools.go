@@ -107,6 +107,9 @@ type Hooks struct {
 	// Now is the clock the journal route dates entries by; nil is time.Now.
 	// A fixed clock lets a renderer reproduce a response.
 	Now func() time.Time
+	// System names this surface as a promote destination, a hostname every
+	// host agrees on; apply reports it as via for the back-stamp. Empty: none.
+	System string
 }
 
 // Tools runs the mark_* tools over one Backend.

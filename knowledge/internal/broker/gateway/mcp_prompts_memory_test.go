@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"maps"
 	"strings"
 	"testing"
 
@@ -12,17 +11,15 @@ import (
 func TestMemoryGatewayServesRenderedPrompts(t *testing.T) {
 	g := newMemoryGateway(t, mcpTestConfig(), seededDispatcher())
 	listed := g.mcpServer.ListPrompts()
-	got := map[string]string{}
-	for name, p := range listed {
-		args := make([]string, 0, len(p.Prompt.Arguments))
-		for _, a := range p.Prompt.Arguments {
-			args = append(args, a.Name)
-		}
-		got[name] = strings.Join(args, ",")
+	// Every embedded file is listed; LoadPrompts fails on a file it skips.
+	prompts, err := mcpfmt.LoadPrompts(memoryPromptFS, "prompts/memory/commands")
+	if err != nil || len(listed) != len(prompts) {
+		t.Fatalf("listed %d of %d prompts: %v", len(listed), len(prompts), err)
 	}
-	want := map[string]string{"soul-context": "", "soul-journal": mcpfmt.PromptArgument, "soul-export": "directory"}
-	if !maps.Equal(got, want) {
-		t.Fatalf("prompts = %v, want %v", got, want)
+	for _, p := range prompts {
+		if listed[p.Prompt.Name] == nil {
+			t.Errorf("prompts/list missing %q", p.Prompt.Name)
+		}
 	}
 	text := mcpfmttest.PromptText(t, listed["soul-journal"].Handler, map[string]string{mcpfmt.PromptArgument: "shipped"})
 	if !strings.Contains(text, "`mark://<w>/` for the root project") || !strings.HasSuffix(text, "Entry: shipped\n") {

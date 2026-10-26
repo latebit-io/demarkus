@@ -145,19 +145,27 @@ func findRoot() (string, error) {
 	return reporoot.Find("plugins/prompt-source/manifest.json")
 }
 
-// renderAll renders the manifest's targets and brands; brandsPath, when set,
-// names a brands file whose entries are added to the manifest's brands.
-func renderAll(root, brandsPath string) ([]artifact, error) {
-	manifestPath := filepath.Join(root, "plugins", "prompt-source", "manifest.json")
-	raw, err := os.ReadFile(manifestPath)
+// loadManifest reads, decodes and validates the prompt-source manifest.
+func loadManifest(root string) (manifest, error) {
+	raw, err := os.ReadFile(filepath.Join(root, "plugins", "prompt-source", "manifest.json"))
 	if err != nil {
-		return nil, fmt.Errorf("read manifest: %w", err)
+		return manifest{}, fmt.Errorf("read manifest: %w", err)
 	}
 	spec, err := decodeManifest(raw)
 	if err != nil {
-		return nil, fmt.Errorf("parse manifest: %w", err)
+		return manifest{}, fmt.Errorf("parse manifest: %w", err)
 	}
 	if err := validateManifest(&spec); err != nil {
+		return manifest{}, err
+	}
+	return spec, nil
+}
+
+// renderAll renders the manifest's targets and brands; brandsPath, when set,
+// names a brands file whose entries are added to the manifest's brands.
+func renderAll(root, brandsPath string) ([]artifact, error) {
+	spec, err := loadManifest(root)
+	if err != nil {
 		return nil, err
 	}
 	if brandsPath != "" {
@@ -215,10 +223,11 @@ func renderSurface(root string, target *target, seen map[string]string) ([]artif
 		return nil, err
 	}
 	var artifacts []artifact
-	templateRoot := filepath.Join(root, "plugins", "prompt-source", target.Surface)
-	partials, err := filepath.Glob(filepath.Join(templateRoot, partialsDir, "*.tmpl"))
+	sourceRoot := filepath.Join(root, "plugins", "prompt-source")
+	templateRoot := filepath.Join(sourceRoot, target.Surface)
+	partials, err := surfacePartials(sourceRoot, templateRoot)
 	if err != nil {
-		return nil, fmt.Errorf("glob partials for %s: %w", target.Name, err)
+		return nil, fmt.Errorf("partials for %s: %w", target.Name, err)
 	}
 	render := func(path string) error {
 		rel, err := filepath.Rel(templateRoot, path)
@@ -368,7 +377,7 @@ func (t *target) PromptRoot() string {
 	return "/"
 }
 
-// Cmd names the command name in prose: the slash command with its args in a
+// Cmd names the command name in prose with its args: the slash command in a
 // plugin, the prompt of that name on a prompt target, which must serve it.
 func (t *target) Cmd(name, args string) (string, error) {
 	if !t.ServesPrompts() {
@@ -377,12 +386,35 @@ func (t *target) Cmd(name, args string) (string, error) {
 	if !slices.Contains(t.Commands, name) {
 		return "", fmt.Errorf("%s does not serve %s", t.Name, name)
 	}
+	if args = strings.TrimSpace(args); args != "" {
+		return "the `" + name + "` prompt with `" + args + "`", nil
+	}
 	return "the `" + name + "` prompt", nil
 }
 
 // partialsDir holds a surface's shared blocks, included with
 // {{template "<file>" .}}, so one rule is stated once in source.
 const partialsDir = "partials"
+
+// surfacePartials are the surface's partials plus the cross-surface ones in
+// sourceRoot's own partials directory. A shared name may not shadow a
+// surface's, since the last parsed definition would silently win.
+func surfacePartials(sourceRoot, templateRoot string) ([]string, error) {
+	shared, err := filepath.Glob(filepath.Join(sourceRoot, partialsDir, "*.tmpl"))
+	if err != nil {
+		return nil, err
+	}
+	own, err := filepath.Glob(filepath.Join(templateRoot, partialsDir, "*.tmpl"))
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range shared {
+		if slices.ContainsFunc(own, func(o string) bool { return filepath.Base(o) == filepath.Base(s) }) {
+			return nil, fmt.Errorf("shared partial %s shadows the surface's own", filepath.Base(s))
+		}
+	}
+	return append(own, shared...), nil
+}
 
 // renderTemplate executes one template for a target; partials are the
 // surface's shared block files, parsed alongside it.

@@ -15,7 +15,7 @@ import (
 // MCP prompts: workflows vended as commands (Claude Code: /mcp__<server>__<name>;
 // Desktop: the prompt picker), so every connected agent runs the same flow.
 
-// soulPromptFS holds the plugin's /soul-* commands rendered for this surface.
+// soulPromptFS holds the memory plugin's commands rendered for this surface.
 //
 //go:embed prompts/memory/commands/*.md
 var soulPromptFS embed.FS

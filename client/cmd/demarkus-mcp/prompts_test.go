@@ -72,14 +72,19 @@ func TestPromptsRequireArguments(t *testing.T) {
 
 func TestRegisterPromptsListsAll(t *testing.T) {
 	got := mcpserverForPrompts(t).ListPrompts()
-	for _, want := range []string{"orient", "recall", "whats-new", "soul-context", "soul-journal"} {
+	for _, want := range []string{"orient", "recall", "whats-new"} {
 		if got[want] == nil {
 			t.Errorf("prompts/list missing %q", want)
 		}
 	}
 }
 
+// Every embedded command is listed; LoadPrompts fails on a file it skips.
 func TestSoulPromptsNeedHostAndFullProfile(t *testing.T) {
+	prompts, err := mcpfmt.LoadPrompts(soulPromptFS, "prompts/memory/commands")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tt := range []struct {
 		host, profile string
 		want          bool
@@ -91,7 +96,8 @@ func TestSoulPromptsNeedHostAndFullProfile(t *testing.T) {
 		s := mcpserver.NewMCPServer("test", "0")
 		registerPrompts(s, tt.host, tt.profile)
 		got := s.ListPrompts()
-		for _, name := range []string{"soul-context", "soul-journal"} {
+		for _, p := range prompts {
+			name := p.Prompt.Name
 			if (got[name] != nil) != tt.want {
 				t.Errorf("host %q profile %s: %s listed = %v, want %v", tt.host, tt.profile, name, got[name] != nil, tt.want)
 			}

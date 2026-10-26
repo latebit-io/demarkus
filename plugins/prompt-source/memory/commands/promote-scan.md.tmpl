@@ -1,8 +1,8 @@
 ---
-description: Sweep the {{.Store}} for promotion candidates (high-signal, durable, not-yet-promoted docs worth lifting to the knowledge system) and present them for /promote
+description: Sweep the {{.Store}} for promotion candidates (high-signal, durable, not-yet-promoted docs worth lifting to the knowledge system) and present them for {{if .ServesPrompts}}the promote prompt{{else}}/promote{{end}}
 ---
 
-Ranked shortlist of {{.Store}} docs worth `/promote`; never promotes here.
+Ranked shortlist of {{.Store}} docs worth {{.Cmd "promote" ""}}; never promotes here.
 
 `$ARGUMENTS` optionally scopes to one project slug; empty means the whole {{.Store}}.
 
@@ -10,11 +10,11 @@ Ranked shortlist of {{.Store}} docs worth `/promote`; never promotes here.
 
 ## Steps
 
-1. **Detection gate.** {{template "destinations.tmpl" .}} `NONE`: say so, stop.
+1. **Detection gate.** {{template "destinations.tmpl" .}}{{if .ServesPrompts}} Stop at the first destination.{{end}} `NONE`: say so, stop.
 
-2. **Sweep.** `mark_doctor` through the store's server with `promotion: true`; `url` is `/<slug>/` for a named project (this project: `<root>`), `/` with no argument (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it). Its `Promotion candidates` section lists each candidate with its reason; already promoted and staging documents are excluded, and the summary line counts the promoted. Tool error: surface it verbatim, stop. A Coverage line other than `complete`: the scan is partial; say which scope was not read.
+2. **Sweep.** `mark_doctor` through the store's server with `promotion: true`; `url` is {{if .ServesPrompts}}`<root>`{{else}}`/<slug>/` for a named project (this project: `<root>`), `/` with no argument (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it){{end}}. Its `Promotion candidates` section lists each candidate with its reason; already promoted and staging documents are excluded, and the summary line counts the promoted. Tool error: surface it verbatim, stop. A Coverage line other than `complete`: the scan is partial; say which scope was not read.
 
-3. **Triage lightly.** Judge each candidate cheaply from its report line; `mark_fetch` with `force: true` at most 10 to decide: durable? useful beyond you? plausibly not in the catalog? Drop obvious failures; be ruthless; most {{.Store}} content stays personal. Real triage, distill and dedup happen inside `/promote`. A fetch failure: list the path as unassessed.
+3. **Triage lightly.** Judge each candidate cheaply from its report line; `mark_fetch` with `force: true` at most 10 to decide: durable? useful beyond you? plausibly not in the catalog? Drop obvious failures; be ruthless; most {{.Store}} content stays personal. Real triage, distill and dedup happen inside {{.Cmd "promote" ""}}. A fetch failure: list the path as unassessed.
 
 4. **Present.** Plain text, highest-signal first:
 
@@ -25,12 +25,12 @@ Ranked shortlist of {{.Store}} docs worth `/promote`; never promotes here.
    2. /<slug>/architecture.md: <…>
    ...
 
-   Already promoted (excluded): N docs.   Run /promote <path> on any of the above.
+   Already promoted (excluded): N docs.   Run {{if .ServesPrompts}}the promote prompt with <path>{{else}}/promote <path>{{end}} on any of the above.
    ```
 
    Nothing qualifies and Coverage was `complete`: say so plainly; an empty sweep is healthy. A partial scan or an unassessed path is reported as such, never as a healthy empty result.
 
 ## Don't
 
-- Don't promote anything here; `/promote` runs the gate per doc.
+- Don't promote anything here; {{.Cmd "promote" ""}} runs the gate per doc.
 - Don't pad the list. A ruthless shortlist is the point; if most of the {{.Store}} qualified, the bar is wrong.

@@ -19,7 +19,7 @@ func mcpTools() []mcp.Tool {
 		markExploreTool(),
 		markListTool(),
 		markVersionsTool(),
-		markLookupTool(),
+		markLookupTool(true),
 		markLookupAllTool(),
 		markPublishTool(),
 		markAppendTool(),
@@ -44,9 +44,14 @@ func markListTool() mcp.Tool { return mcpfmt.ListTool(mcpURLDesc, "") }
 
 func markVersionsTool() mcp.Tool { return mcpfmt.VersionsTool(mcpURLDesc, "") }
 
-func markLookupTool() mcp.Tool {
+// markLookupTool points at mark_lookup_all only where the surface serves it.
+func markLookupTool(lookupAll bool) mcp.Tool {
+	desc := mcpfmt.LookupDescription + " A world without body match answers from the catalog and says so"
+	if lookupAll {
+		desc += "; system-wide: mark_lookup_all"
+	}
 	options := append([]mcp.ToolOption{
-		mcp.WithDescription(mcpfmt.LookupDescription + " A world without body match answers from the catalog and says so; system-wide: mark_lookup_all."),
+		mcp.WithDescription(desc + "."),
 		mcp.WithString("url", mcp.Required(), mcp.Description(mcpfmt.ScopeDesc("mark://{worldName}/"))),
 	}, mcpfmt.LookupParams()...)
 	return mcpfmt.NewTool("mark_lookup", options...)
