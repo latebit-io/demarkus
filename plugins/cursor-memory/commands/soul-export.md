@@ -23,8 +23,8 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 ## Steps
 
 1. **Walk.** `mark_list` through the store's server from `/` (a broker store: `mark://<world>/` from `mark_worlds`), the whole soul whatever the project, with `include_archived: true`, recursing into every subdirectory; while `complete=false`, pass `next-cursor` as `cursor`. A listing failure: note that directory as not exported, continue.
-2. **Save.** Each document: `mark_fetch` with `force: true`; `archived`: `mark_versions`, then `mark_fetch` `<path>/v<N>` of the newest version with `force: true`. Write the body verbatim to `<dir>/<path>` (`<path>` under the store root). A fetch or write failure: note the path as not exported, continue.
-3. **Report.** Write `<dir>/manifest.md`, one row per saved document (path, version and modified from its fetch, archived ones marked); a write failure: surface it. Then the document count, the manifest path, every path or directory not exported. Any gap: the export is incomplete; say so.
+2. **Save.** Each document: `mark_fetch` with `force: true`; `archived`: `mark_versions`, then `mark_fetch` `<path>/v<N>` of the newest version with `force: true`. Write the body verbatim to `<dir>/documents/<path>` (`<path>` under the store root). A fetch or write failure: note the path as not exported, continue.
+3. **Report.** Write `<dir>/manifest.md`, one row per saved document (path, version and modified from its fetch, archived ones marked); a write failure: surface it. Then the document count, `<dir>/documents/`, the manifest path, every path or directory not exported. Any gap: the export is incomplete; say so.
 
 ## Don't
 

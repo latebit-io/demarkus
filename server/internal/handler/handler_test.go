@@ -1765,6 +1765,26 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 		}
 	})
 
+	// soul-export finds an archived document's newest version this way.
+	t.Run("versions of archived document succeeds", func(t *testing.T) {
+		b := newBackend(t)
+		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
+		h := newHandler(b, ts)
+
+		stream := newMockStream("ARCHIVE /doc.md\n---\nauth: " + writerSecret + "\n---\n")
+		h.HandleStream(context.Background(), stream)
+
+		stream = newMockStream("VERSIONS /doc.md\n")
+		h.HandleStream(context.Background(), stream)
+		resp, err := protocol.ParseResponse(&stream.output)
+		if err != nil {
+			t.Fatalf("parse response: %v", err)
+		}
+		if resp.Status != protocol.StatusOK || resp.Metadata["current"] != "1" {
+			t.Errorf("archived versions = status %q current %q, want ok and 1", resp.Status, resp.Metadata["current"])
+		}
+	})
+
 	t.Run("publish with body to active document still works", func(t *testing.T) {
 		b := newBackend(t)
 		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
