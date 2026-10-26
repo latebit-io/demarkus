@@ -91,11 +91,7 @@ func cmdRegistry(args []string) {
 	case "promote-target":
 		registryPromoteTarget(args[1:])
 	case "detect-promote":
-		rows, err := promote.Detect()
-		if err != nil {
-			fail(err.Error())
-		}
-		fmt.Println(promote.Report(rows))
+		registryDetectPromote(args[1:])
 	default:
 		fail("registry: unknown subcommand '" + args[0] + "'")
 	}
@@ -413,6 +409,22 @@ func registryProject(args []string) {
 	if _, err := fmt.Println(out); err != nil {
 		fail("project: write output: " + err.Error())
 	}
+}
+
+// registryDetectPromote prints the promote destinations. Releases before
+// -hosts ignore arguments, so a newer prompt on an older binary gets hostless
+// rows, which its grammar accepts.
+func registryDetectPromote(args []string) {
+	fs := flag.NewFlagSet("detect-promote", flag.ContinueOnError)
+	hosts := fs.Bool("hosts", false, "append each knowledge system's host")
+	if err := fs.Parse(args); err != nil || len(fs.Args()) != 0 {
+		fail("detect-promote: usage: registry detect-promote [-hosts]")
+	}
+	rows, err := promote.Detect(*hosts)
+	if err != nil {
+		fail(err.Error())
+	}
+	fmt.Println(promote.Report(rows))
 }
 
 func registryKnowledgeJoin(args []string) {

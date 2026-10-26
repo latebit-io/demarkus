@@ -21,7 +21,7 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 
 ## Steps
 
-1. **Detection gate.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: surface, stop. One destination per line: `knowledge <slug> [<host>]` (brokered system, `<host>` its identity) or `target <slug> <path> [label]` (plain endpoint with its declared write `<path>`), reached through the destination server's `mark_*` tools of that slug; or `NONE`. `NONE`: say so, stop.
+1. **Detection gate.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote -hosts`. Non-zero exit or malformed output: surface, stop. One destination per line: `knowledge <slug> [<host>]` (brokered system, `<host>` its identity) or `target <slug> <path> [label]` (plain endpoint with its declared write `<path>`), reached through the destination server's `mark_*` tools of that slug; or `NONE`. `NONE`: say so, stop.
 
 2. **Sweep.** `mark_doctor` through the store's server with `promotion: true`; `url` is `/<slug>/` for a named project (this project: `<root>`), `/` with no argument (a broker store: `mark://<world>/` from `mark_worlds`, then the path under it). Its `Promotion candidates` section lists each candidate with its reason; already promoted and staging documents are excluded, and the summary line counts the promoted. Tool error: surface it verbatim, stop. A Coverage line other than `complete`: the scan is partial; say which scope was not read.
 

@@ -21,7 +21,7 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 
 ## Steps
 
-1. **Destination.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote`. Non-zero exit or malformed output: surface, stop. One destination per line: `knowledge <slug> [<host>]` (brokered system, `<host>` its identity) or `target <slug> <path> [label]` (plain endpoint with its declared write `<path>`), reached through the destination server's `mark_*` tools of that slug; or `NONE`.
+1. **Destination.** Bash: `"$HOME/.demarkus/bin/demarkus-plugin" registry detect-promote -hosts`. Non-zero exit or malformed output: surface, stop. One destination per line: `knowledge <slug> [<host>]` (brokered system, `<host>` its identity) or `target <slug> <path> [label]` (plain endpoint with its declared write `<path>`), reached through the destination server's `mark_*` tools of that slug; or `NONE`.
    - `knowledge`: the cascade selects the world.
    - `target`: destination is that slug and path, no `mark_worlds` or `world.md`, default autonomy `human-only`.
    - `NONE`: promotion dormant. Offer both ways to enable it and act on the choice: `/knowledge-join <broker-url>` (demarkus-knowledge plugin); or register a plain server now: confirm its MCP server slug and write path, shell-escape each value as one argument, run `"$HOME/.demarkus/bin/demarkus-plugin" registry promote-target add <shell-escaped-slug> <shell-escaped-path> <shell-escaped-label-if-present>`; continue only on zero exit with `OK: registered promote target`, else surface, stop; rerun `detect-promote`, continue only when the exact new `target <slug> <path>` row appears.

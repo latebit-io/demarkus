@@ -40,7 +40,7 @@ var (
 		{"project", withDir(Project)},
 		{"catalog", withDir(Catalog)},
 		{"promote", func(mcp.CallToolRequest) (string, error) {
-			rows, err := promote.Detect()
+			rows, err := promote.Detect(false)
 			if err != nil {
 				return "", err
 			}
