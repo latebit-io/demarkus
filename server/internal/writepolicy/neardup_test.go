@@ -276,8 +276,8 @@ func TestEnforceRefusesNearDuplicate(t *testing.T) {
 	}
 }
 
-// A split topic repeats its parent until the hub drops the section: a hit on
-// the parent its curated-from names is excused with a note. Any other hit
+// A split topic repeats its parent until the hub drops the section: the
+// source its curated-from names is not judged, with a note. Any other hit
 // still counts, and an existing document cannot claim a source it lacked.
 func TestEnforceExcusesTheSplitSource(t *testing.T) {
 	raw := newStore(t)
@@ -288,8 +288,8 @@ func TestEnforceExcusesTheSplitSource(t *testing.T) {
 	}
 	split := map[string]string{"tags": "store", neardup.CuratedFromKey: "notes/shards.md"}
 	warnings, err := write(t, gated, "/notes/shards/lesson.md", 0, []byte(neardtest.LessonDoc), split)
-	if err != nil || len(warnings) != 1 || !strings.HasSuffix(warnings[0], "/notes/shards.md (1.00 shared) excused, the document it was split from") {
-		t.Errorf("topic of its source = %q, %v; want it to land with the excuse noted", warnings, err)
+	if err != nil || len(warnings) != 1 || warnings[0] != "near-duplicate check: not judged against /notes/shards.md, the document it was split from" {
+		t.Errorf("topic of its source = %q, %v; want it to land with the skip noted", warnings, err)
 	}
 	if _, err := write(t, gated, "/notes/shards/lesson.md", 1, []byte(neardtest.LessonDoc+"\nEdited since the split.\n"), split); err != nil {
 		t.Errorf("edit of the topic naming its stored source = %v, want it to land", err)

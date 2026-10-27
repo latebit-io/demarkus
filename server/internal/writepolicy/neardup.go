@@ -87,14 +87,21 @@ func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, su
 		return nearVerdict{}, fmt.Errorf("near-duplicate check: %w", err)
 	}
 	stale := e.options.Content.NearDuplicate == contentcheck.Warn
-	rows, err := state.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: stale, Skip: func(p string) bool { return p == own }})
+	// The source is skipped, not judged and excused, so it never takes a
+	// candidate slot from the documents that are judged.
+	rows, err := state.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: stale, Skip: func(p string) bool { return p == own || p == parent }})
 	switch {
 	case errors.Is(err, backend.ErrBodyMatchUnavailable):
 		return nearVerdict{notes: []string{"near-duplicate check skipped: no section index covers this write yet"}}, nil
 	case err != nil:
 		return nearVerdict{}, fmt.Errorf("near-duplicate check: %w", err)
-	case len(rows) == 0:
-		return nearVerdict{checked: true}, nil
+	}
+	verdict := nearVerdict{checked: true}
+	if parent != "" {
+		verdict.notes = append(verdict.notes, "near-duplicate check: not judged against "+parent+", the document it was split from")
+	}
+	if len(rows) == 0 {
+		return verdict, nil
 	}
 	// The template is read only with hits in hand: what repeats by design
 	// is neither judged nor named.
@@ -102,16 +109,11 @@ func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, su
 	if err != nil {
 		return nearVerdict{}, fmt.Errorf("near-duplicate check: %w", err)
 	}
-	verdict := nearVerdict{checked: true}
 	if lay.RepeatsByDesign(own) {
 		return verdict, nil
 	}
 	for i := range rows {
-		switch {
-		case lay.RepeatsByDesign(rows[i].Path):
-		case rows[i].Path == parent:
-			verdict.notes = append(verdict.notes, "near-duplicate check: "+rows[i].Hit.String()+" excused, the document it was split from")
-		default:
+		if !lay.RepeatsByDesign(rows[i].Path) {
 			verdict.hits = append(verdict.hits, rows[i].Hit)
 		}
 	}

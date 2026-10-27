@@ -347,11 +347,12 @@ description naming the section and the parent, also its summary line),
 the document keeps its path as the hub with its preamble, a `Topics`
 list and its short sections, and its tags lose the non-axis ones only
 a topic mentions. A section opening on a table gets no summary in the
-list. Whatever the policy would still refuse a write for is listed
-before apply. The near-duplicate gate excuses, with a note, a topic's
-hit on the document its `curated-from` names, which holds the section
-until the hub lands; only a new document, or one already naming that
-source, may claim it. An older server refuses the topic instead. An
+list. What the policy still finds missing on a write is listed, as a
+warning under `warn` or a refusal under `block` or `ask`; apply writes
+nothing while a refusal remains. The near-duplicate gate does not
+judge a topic against the document its `curated-from` names, which
+holds the section until the hub lands, and notes that it did not; only
+a new document, or one already naming that source, may claim it. An older server refuses the topic instead. An
 unreadable policy refuses the report (`status: policy-unavailable`).
 
 With `apply: true` and the hash a report returned, the tool recomputes

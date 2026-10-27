@@ -141,8 +141,18 @@ func TestSplitMeetsTheWritePolicy(t *testing.T) {
 		t.Errorf("hub tags = %q", hub.Metadata["tags"])
 	}
 	want := "/plans/big/steps.md: the write policy refuses it without metadata source"
-	if !slices.Contains(p.Unfixed, want) || len(p.Unfixed) != len(p.Writes) {
-		t.Errorf("unfixed = %q, want %q for each write", p.Unfixed, want)
+	if !slices.Contains(p.Unfixed, want) || len(p.Unfixed) != len(p.Writes) || !slices.Equal(p.Refused, p.Unfixed) {
+		t.Errorf("unfixed = %q, refused = %q; want %q for each write", p.Unfixed, p.Refused, want)
+	}
+	// A refusal the report names stops apply before its first write.
+	var refusal *Refusal
+	if applied, err := Apply(context.Background(), nil, &p, nil); !errors.As(err, &refusal) || len(applied) != 0 || !strings.HasSuffix(refusal.Reason, "; nothing written") {
+		t.Errorf("apply = %+v, %v; want a refusal before any write", applied, err)
+	}
+	// Warn lets the writes land with a note, so the report says so and apply proceeds.
+	policy.Strictness = publishpolicy.Warn
+	if p := Propose(in); len(p.Refused) != 0 || !slices.Contains(p.Unfixed, "/plans/big/steps.md: the write policy warns on it without metadata source") {
+		t.Errorf("warn: unfixed = %q, refused = %q", p.Unfixed, p.Refused)
 	}
 }
 

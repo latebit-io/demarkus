@@ -73,6 +73,9 @@ type Proposal struct {
 	// (path#anchor), so inbound links can be repointed.
 	Moved map[string]string
 	Hash  string // binds an apply to this proposal at this version
+	// Refused is what a refusing write policy would stop; apply writes
+	// nothing while any remains, so a split never lands halfway.
+	Refused []string
 }
 
 // Propose reports the document and proposes the smallest mechanical change
@@ -341,7 +344,7 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		w := topicWrite(in, title, carried, s)
 		p.Writes = append(p.Writes, w)
 		p.Fixed = append(p.Fixed, fmt.Sprintf("%q moved to %s (%d bytes)", s.heading.Text, s.topic, len(w.Body)))
-		p.Unfixed = append(p.Unfixed, refusedFor(s.topic, w.Metadata, in.Policy)...)
+		p.policyGaps(s.topic, w.Metadata, in.Policy)
 		for _, h := range headings {
 			if h.Start >= s.heading.Start && h.Start < s.heading.End {
 				p.moved(h.Anchor, s.topic+"#"+h.Anchor)
@@ -354,19 +357,24 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	p.Writes = append(p.Writes, Write{Path: in.Path, Body: body, Metadata: meta})
 	p.Fixed = append(p.Fixed, fmt.Sprintf("%s becomes the hub (%d bytes)", in.Path, len(body)))
 	p.Kind = KindSplit
-	p.Unfixed = append(p.Unfixed, refusedFor(in.Path, meta, in.Policy)...)
+	p.policyGaps(in.Path, meta, in.Policy)
 	p.Unfixed = append(p.Unfixed, gate.AuditProblems(in.Path, body, meta["description"])...)
 }
 
-// refusedFor names what the write policy would refuse a write for, so a
-// split that cannot land says so before apply writes its first topic.
-func refusedFor(docPath string, meta map[string]string, policy *publishpolicy.Policy) []string {
-	missing := promote.Missing(docPath, meta, policy)
-	out := make([]string, 0, len(missing))
-	for _, m := range missing {
-		out = append(out, docPath+": the write policy refuses it without "+m)
+// policyGaps names what the write policy finds missing on a write, as the
+// server would judge it: warn lets it land with a note, block and ask refuse.
+func (p *Proposal) policyGaps(docPath string, meta map[string]string, policy *publishpolicy.Policy) {
+	verb, refuses := "warns on it without ", false
+	if policy != nil && policy.EffectiveStrictness() != publishpolicy.Warn {
+		verb, refuses = "refuses it without ", true
 	}
-	return out
+	for _, m := range promote.Missing(docPath, meta, policy) {
+		line := docPath + ": the write policy " + verb + m
+		p.Unfixed = append(p.Unfixed, line)
+		if refuses {
+			p.Refused = append(p.Refused, line)
+		}
+	}
 }
 
 // planSections cuts the body at its H2 headings, names each section's topic
@@ -676,6 +684,9 @@ func (r *Refusal) Error() string { return r.Path + ": " + r.Reason }
 func Apply(ctx context.Context, docs hub.Docs, p *Proposal, stamp map[string]string) (applied []Applied, err error) {
 	if len(p.Writes) == 0 {
 		return nil, fmt.Errorf("nothing to apply: the document is %s", p.Kind)
+	}
+	if len(p.Refused) > 0 {
+		return nil, &Refusal{Path: p.Path, Reason: strings.Join(p.Refused, "; ") + "; nothing written"}
 	}
 	a := applier{docs: docs, stamp: stamp}
 	topics := p.Writes[:len(p.Writes)-1]
