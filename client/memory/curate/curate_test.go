@@ -140,7 +140,7 @@ func TestSplitMeetsTheWritePolicy(t *testing.T) {
 	if hub.Metadata["tags"] != "plan,status:active" {
 		t.Errorf("hub tags = %q", hub.Metadata["tags"])
 	}
-	want := "/plans/big/steps.md: the write policy refuses it without metadata source"
+	want := "/plans/big/steps.md: the write policy refuses it: missing metadata source"
 	if !slices.Contains(p.Unfixed, want) || len(p.Unfixed) != len(p.Writes) || !slices.Equal(p.Refused, p.Unfixed) {
 		t.Errorf("unfixed = %q, refused = %q; want %q for each write", p.Unfixed, p.Refused, want)
 	}
@@ -151,8 +151,15 @@ func TestSplitMeetsTheWritePolicy(t *testing.T) {
 	}
 	// Warn lets the writes land with a note, so the report says so and apply proceeds.
 	policy.Strictness = publishpolicy.Warn
-	if p := Propose(in); len(p.Refused) != 0 || !slices.Contains(p.Unfixed, "/plans/big/steps.md: the write policy warns on it without metadata source") {
+	if p := Propose(in); len(p.Refused) != 0 || !slices.Contains(p.Unfixed, "/plans/big/steps.md: the write policy warns on it: missing metadata source") {
 		t.Errorf("warn: unfixed = %q, refused = %q", p.Unfixed, p.Refused)
+	}
+	// An untyped parent's topics carry the type the server would default, and
+	// a policy requiring type is met by it, on the topics and the hub alike.
+	in.Metadata = map[string]string{"tags": "plan,status:active", "owner": "team-a", "source": "s"}
+	in.Policy = &publishpolicy.Policy{Strictness: publishpolicy.Block, RequiredFields: []string{"type"}}
+	if p := Propose(in); len(p.Refused) != 0 || p.Writes[0].Metadata["type"] != protocol.OKFDefaultType {
+		t.Errorf("untyped: refused = %q, topic type = %q", p.Refused, p.Writes[0].Metadata["type"])
 	}
 }
 

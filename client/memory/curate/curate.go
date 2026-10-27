@@ -28,6 +28,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // frameCap: a section under it is the document's own frame and stays in
@@ -364,9 +365,9 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 // policyGaps names what the write policy finds missing on a write, as the
 // server would judge it: warn lets it land with a note, block and ask refuse.
 func (p *Proposal) policyGaps(docPath string, meta map[string]string, policy *publishpolicy.Policy) {
-	verb, refuses := "warns on it without ", false
+	verb, refuses := "warns on it: ", false
 	if policy != nil && policy.EffectiveStrictness() != publishpolicy.Warn {
-		verb, refuses = "refuses it without ", true
+		verb, refuses = "refuses it: ", true
 	}
 	for _, m := range promote.Missing(docPath, meta, policy) {
 		line := docPath + ": the write policy " + verb + m
@@ -430,6 +431,9 @@ func topicWrite(in *Input, title string, carried map[string]string, s *section) 
 	if t := carried["type"]; t != "" {
 		meta["type"] = t
 	}
+	// The server types an untyped topic on write; typing it here keeps the
+	// digest equal to what lands, so a resumed split finds it identical.
+	meta = storefmt.ApplyOKFTypeDefault(s.topic, meta)
 	if policy != nil {
 		for _, field := range policy.ForCaller().RequiredFields {
 			if _, set := meta[field]; !set && carried[field] != "" {

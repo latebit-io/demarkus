@@ -21,6 +21,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // Phases of one promotion, in order. The soul server serves stage, stamp and
@@ -534,21 +535,22 @@ func Examine(d *Draft, policy *publishpolicy.Policy) *Check {
 	return c
 }
 
-// Missing words the policy's violations on the metadata, as the server
-// would at commit; identity keys are the surface's and never asked for.
+// Missing words the policy's violations on the metadata, each a whole
+// finding, as the server would at commit: after its type default, and
+// never asking for identity keys, which are the surface's.
 func Missing(path string, meta map[string]string, policy *publishpolicy.Policy) []string {
 	if policy == nil {
 		return nil
 	}
 	var out []string
-	for _, v := range publishpolicy.EvaluateStrings(policy.ForCaller(), path, meta).Violations {
+	for _, v := range publishpolicy.EvaluateStrings(policy.ForCaller(), path, storefmt.ApplyOKFTypeDefault(path, meta)).Violations {
 		switch v.Code {
 		case publishpolicy.MissingTagAxis:
-			out = append(out, "tag axis "+v.Name+" (an "+v.Name+":<value> tag)")
+			out = append(out, "missing tag axis "+v.Name+" (an "+v.Name+":<value> tag)")
 		case publishpolicy.MissingField:
-			out = append(out, "metadata "+v.Name)
+			out = append(out, "missing metadata "+v.Name)
 		case publishpolicy.DisallowedTagValue:
-			out = append(out, "tag "+v.Name+" (allowed "+v.Axis+" values: "+policy.AllowedList(v.Axis)+")")
+			out = append(out, "disallowed tag "+v.Name+" (allowed "+v.Axis+" values: "+policy.AllowedList(v.Axis)+")")
 		default:
 			out = append(out, string(v.Code))
 		}
@@ -622,7 +624,7 @@ func (c *Check) Report() string {
 	if len(c.Missing) > 0 || len(c.Problems) > 0 {
 		b.WriteString("findings:\n")
 		for _, m := range c.Missing {
-			b.WriteString("- missing " + m + "\n")
+			b.WriteString("- " + m + "\n")
 		}
 		for _, p := range c.Problems {
 			b.WriteString("- " + p + "\n")
