@@ -307,7 +307,7 @@
             "type": "number"
           },
           "filter": {
-            "description": "comma-separated key=value predicates: tag=, modified-after=, modified-before=",
+            "description": "comma-separated key=value: tag=, modified-after=, modified-before=, based-on=",
             "type": "string"
           },
           "limit": {

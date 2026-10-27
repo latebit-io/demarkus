@@ -20,6 +20,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
+	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
@@ -551,6 +552,8 @@ func Missing(path string, meta map[string]string, policy *publishpolicy.Policy) 
 			out = append(out, "missing metadata "+v.Name)
 		case publishpolicy.DisallowedTagValue:
 			out = append(out, "disallowed tag "+v.Name+" (allowed "+v.Axis+" values: "+policy.AllowedList(v.Axis)+")")
+		case publishpolicy.UnpinnedSource:
+			out = append(out, "unpinned "+provenance.Key+" value "+v.Name+" (pin "+provenance.PinForms+")")
 		default:
 			out = append(out, string(v.Code))
 		}

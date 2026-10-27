@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/provenance"
 )
 
 // ViolationCode identifies one stable class of policy violation.
@@ -25,6 +26,9 @@ const (
 	// DisallowedTagValue means an `axis:value` tag carries a value outside
 	// the policy's allowed list for that axis; Name is the offending tag.
 	DisallowedTagValue ViolationCode = "disallowed-tag-value"
+	// UnpinnedSource means a rel-based-on value names no version, so its
+	// drift cannot be measured; Name is the value.
+	UnpinnedSource ViolationCode = "unpinned-source"
 )
 
 // Violation identifies a violation and its axis or field name, when
@@ -96,6 +100,11 @@ func evaluate(policy Policy, path string, metadata map[string]any, overridesOnly
 	}
 	if !importanceValid(metadata) {
 		result.Violations = append(result.Violations, Violation{Code: InvalidImportance})
+	}
+	if pins, ok := metadata[provenance.Key].(string); ok {
+		for _, ref := range provenance.Unpinned(pins) {
+			result.Violations = append(result.Violations, Violation{Code: UnpinnedSource, Name: ref})
+		}
 	}
 	if tagsPresent {
 		for _, axis := range policy.RequiredTagAxes {

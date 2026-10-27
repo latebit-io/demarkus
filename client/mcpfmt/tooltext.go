@@ -22,7 +22,7 @@ const (
 	LookupDescription   = "Catalog lookup by subject: matches tags and title; match=body also matches section text. Importance-ranked table (path, importance, title, tags; body rows add #anchor and a snippet). budget>0 appends sections."
 	DiscoverDescription = "Fetch the agent manifest (/.well-known/agent-manifest.md): purpose, key paths, auth, usage. not-found if absent."
 	QueryDesc           = "subject matched against tags and titles (min 2 chars); '*' for all"
-	FilterDesc          = "comma-separated key=value predicates: tag=, modified-after=, modified-before="
+	FilterDesc          = "comma-separated key=value: tag=, modified-after=, modified-before=, based-on="
 	LimitDesc           = "max results (default 10, cap 1000)"
 	MatchDesc           = "catalog (default) or body"
 	ExpectedVersionDesc = "version from prior fetch; 0 to create"

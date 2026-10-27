@@ -40,6 +40,10 @@ type Policy struct {
 	// carry; an axis absent from the map is free-form. One directive line
 	// per axis: `allow_tags.<axis>: v1|v2`.
 	AllowedTagValues map[string][]string
+	// Exempt lists the path patterns (token path syntax) this policy's
+	// directives skip: generated output, configuration. Merge never carries
+	// it, so a world's exemption never lifts a floor rule; see Effective.
+	Exempt []string
 }
 
 // allowTagsPrefix starts the per-axis allowed-values directive key.
@@ -53,6 +57,7 @@ func Parse(body string) Policy {
 		RequiredTagAxes:  splitList(found["require_tags"]),
 		RequiredFields:   splitList(found["require_fields"]),
 		AllowedTagValues: allowedValues(found),
+		Exempt:           splitList(found["exempt"]),
 	}
 }
 
@@ -106,7 +111,46 @@ func (p Policy) Validate() error {
 	if err := validateAllowedValues(p.AllowedTagValues); err != nil {
 		return err
 	}
+	if err := validateExempt(p.Exempt); err != nil {
+		return err
+	}
 	return validateSatisfiable(p)
+}
+
+// validateExempt holds each pattern to the token path syntax, rooted.
+func validateExempt(patterns []string) error {
+	if len(patterns) > maxExemptPatterns {
+		return fmt.Errorf("publish policy has too many exempt patterns: %d > %d", len(patterns), maxExemptPatterns)
+	}
+	for _, pattern := range patterns {
+		if !strings.HasPrefix(pattern, "/") {
+			return fmt.Errorf("exempt pattern %q is not rooted at /", pattern)
+		}
+		if err := protocol.ValidatePathPattern(pattern); err != nil {
+			return fmt.Errorf("exempt pattern %q: %w", pattern, err)
+		}
+	}
+	return nil
+}
+
+// at is the policy as it applies at documentPath: an exempt path keeps
+// only the strictness, so the baseline checks still decide its fate.
+func (p Policy) at(documentPath string) Policy {
+	if protocol.MatchesAnyPath(p.Exempt, documentPath) {
+		return Policy{Strictness: p.Strictness}
+	}
+	return p
+}
+
+// Effective is the policy a write at documentPath is held to: each layer's
+// own exemptions first, then the world merged under the floor; nil floor
+// means none.
+func Effective(floor *Policy, world Policy, documentPath string) Policy {
+	world = world.at(documentPath)
+	if floor == nil {
+		return world
+	}
+	return Merge(floor.at(documentPath), world)
 }
 
 // validateAllowedValues holds each allow_tags axis to the axis rules and
@@ -154,6 +198,7 @@ const (
 	maxRequiredAxes    = protocol.MaxMetaKeys
 	maxRequiredFields  = protocol.MaxMetaKeys
 	maxAllowedValues   = 64
+	maxExemptPatterns  = 64
 	maxPolicyNameBytes = 64
 )
 

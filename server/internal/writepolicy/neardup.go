@@ -136,20 +136,31 @@ func splitSource(ctx context.Context, reader documentGetter, own string, meta ma
 	return from, nil
 }
 
-// nearDuplicatesBefore judges the write on its own view before the commit:
-// the commit's state may hold no catalog (a bucket store lends none), and a
-// view opened inside the commit is the deadlock Read warns about.
-func (e *enforcer) nearDuplicatesBefore(ctx context.Context, req backend.WriteRequest) (verdict nearVerdict, err error) {
+// beforeCommit reads one view before the commit, since the commit's state
+// may lend no catalog and a view opened inside it is the deadlock Read warns
+// about: the near-duplicate judgment when the check is on, then the pins.
+func (e *enforcer) beforeCommit(ctx context.Context, req backend.WriteRequest) (verdict nearVerdict, pins []string, err error) {
+	near := e.options.Content.NearDuplicate != contentcheck.Off
 	view, err := e.OpenReadView(ctx)
 	if err != nil {
-		return nearVerdict{}, fmt.Errorf("near-duplicate check: open view: %w", err)
+		pins = []string{"source pins not checked: open view: " + err.Error()}
+		if !near {
+			return nearVerdict{}, pins, nil
+		}
+		verdict, err = e.tolerate(nearVerdict{}, fmt.Errorf("near-duplicate check: open view: %w", err))
+		return verdict, pins, err
 	}
 	defer func() {
-		if closeErr := view.Close(); closeErr != nil && err == nil {
-			verdict.notes = append(verdict.notes, "near-duplicate check: close view: "+closeErr.Error())
+		if closeErr := view.Close(); closeErr != nil {
+			pins = append(pins, "pre-commit read: close view: "+closeErr.Error())
 		}
 	}()
-	return e.judgeNearDuplicate(ctx, view, subjectOf(req))
+	if near {
+		if verdict, err = e.tolerate(e.judgeNearDuplicate(ctx, view, subjectOf(req))); err != nil {
+			return verdict, nil, err
+		}
+	}
+	return verdict, pinNotes(ctx, view, req), nil
 }
 
 // settleNearDuplicate turns a judgment into the write's fate under the mode:

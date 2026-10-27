@@ -418,6 +418,19 @@ func TestRelEdgesSkipsSelfReferenceAcrossURLForms(t *testing.T) {
 	}
 }
 
+// A pin names a version of a document; its edge lands on the document.
+func TestRelEdgesPinLandsOnTheDocument(t *testing.T) {
+	refs := RelEdges("mark://host/notes/a.md", map[string]string{"rel-based-on": "../adr/x.md/v5#rules, /api/v2, mark://other/y.md/v3"}).Refs
+	got := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		got = append(got, ref.Target+"#"+ref.Fragment)
+	}
+	want := []string{"mark://host/adr/x.md#rules", "mark://host/api/v2#", "mark://other/y.md#"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("targets = %q, want %q", got, want)
+	}
+}
+
 // A bracketed IPv6 authority carries the default port for dialing and drops it
 // for identity, the same as any other host.
 func TestCrawlIPv6Identity(t *testing.T) {

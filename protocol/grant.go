@@ -60,3 +60,41 @@ func ValidatePathPattern(pattern string) error {
 	_, err := path.Match(clean, clean)
 	return err
 }
+
+// MatchesAnyPath reports whether p matches a pattern: path.Match per segment
+// plus one ** as /** (anything under) or /**/ (any depth between). A
+// malformed pattern, refused by ValidatePathPattern at load, matches nothing.
+func MatchesAnyPath(patterns []string, p string) bool {
+	for _, pattern := range patterns {
+		if matchPath(pattern, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchPath(pattern, p string) bool {
+	if !strings.Contains(pattern, "**") {
+		matched, err := path.Match(pattern, p)
+		return err == nil && matched
+	}
+	if prefix, ok := strings.CutSuffix(pattern, "/**"); ok {
+		return strings.HasPrefix(p, prefix+"/")
+	}
+	prefix, suffix, ok := strings.Cut(pattern, "/**/")
+	if !ok || !strings.HasPrefix(p, prefix+"/") {
+		return false
+	}
+	// The suffix may span segments (/**/sub/*.md): try every tail that
+	// starts on a segment boundary.
+	remaining := p[len(prefix)+1:]
+	for i := range len(remaining) {
+		if i > 0 && remaining[i-1] != '/' {
+			continue
+		}
+		if matched, err := path.Match(suffix, remaining[i:]); err == nil && matched {
+			return true
+		}
+	}
+	return false
+}

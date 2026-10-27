@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/latebit-io/demarkus/protocol/provenance"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // predKind distinguishes the supported filter predicate forms.
@@ -14,6 +17,7 @@ const (
 	predTag                       // membership in the document's tags (key "tag")
 	predModAfter                  // modification time after a date
 	predModBefore                 // modification time before a date
+	predBasedOn                   // a rel-based-on pin on a source, any version
 )
 
 // Predicate is one parsed filter clause. A document must satisfy every
@@ -21,15 +25,13 @@ const (
 type Predicate struct {
 	kind  predKind
 	key   string    // predExact: the metadata key
-	value string    // predExact, predTag: the value to compare
+	value string    // predExact, predTag: the value to compare; predBasedOn: the source
 	t     time.Time // predModAfter, predModBefore: the boundary
 }
 
-// ParseFilter parses a comma-separated "key=value" filter string into
-// predicates. Built-in keys: "tag" (tag membership), "modified-after" and
-// "modified-before" (date comparison against the document's modification
-// time). Any other key matches a declared metadata value exactly. Returns an
-// error for a malformed clause or an unparseable date.
+// ParseFilter parses comma-separated "key=value" clauses. Built-ins: "tag"
+// (membership), "modified-after"/"modified-before" (against the modification
+// time), "based-on" (BasedOn); any other key matches metadata exactly.
 func ParseFilter(s string) ([]Predicate, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -60,11 +62,22 @@ func ParseFilter(s string) ([]Predicate, error) {
 			preds = append(preds, Predicate{kind: kind, t: t})
 		case "tag":
 			preds = append(preds, Predicate{kind: predTag, value: value})
+		case "based-on":
+			preds = append(preds, BasedOn(value))
 		default:
 			preds = append(preds, Predicate{kind: predExact, key: key, value: value})
 		}
 	}
 	return preds, nil
+}
+
+// BasedOn matches documents pinning source, or anything under it, at any
+// version: a document path, a directory, a repository URL.
+func BasedOn(source string) Predicate {
+	if !strings.Contains(source, "://") {
+		source = storefmt.CanonicalPath(source)
+	}
+	return Predicate{kind: predBasedOn, value: source}
 }
 
 // parseFilterTime accepts an RFC 3339 timestamp or a bare date (YYYY-MM-DD).
@@ -106,6 +119,13 @@ func (p Predicate) matches(e *Entry) bool {
 		return e.Modified.After(p.t)
 	case predModBefore:
 		return e.Modified.Before(p.t)
+	case predBasedOn:
+		for _, pin := range provenance.Parse(e.Metadata[provenance.Key]) {
+			if pin.Under(e.Path, p.value) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}

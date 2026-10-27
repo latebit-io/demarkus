@@ -211,6 +211,7 @@ func TestViolationCodeValues(t *testing.T) {
 		{name: "invalid importance", code: InvalidImportance, value: "invalid-importance"},
 		{name: "missing tag axis", code: MissingTagAxis, value: "missing-tag-axis"},
 		{name: "missing field", code: MissingField, value: "missing-field"},
+		{name: "unpinned source", code: UnpinnedSource, value: "unpinned-source"},
 	}
 
 	for _, tt := range tests {
@@ -417,5 +418,20 @@ func assertViolations(t *testing.T, result Result, want []Violation) {
 	t.Helper()
 	if !reflect.DeepEqual(result.Violations, want) {
 		t.Fatalf("violations = %#v, want %#v", result.Violations, want)
+	}
+}
+
+func TestEvaluateUnpinnedSource(t *testing.T) {
+	meta := map[string]any{"tags": "x", "rel-based-on": "/a.md/v2, /b.md, https://github.com/o/r/tree/main"}
+	result := Evaluate(Policy{}, "/doc.md", meta)
+	if got, want := result.Names(UnpinnedSource), []string{"/b.md", "https://github.com/o/r/tree/main"}; !slices.Equal(got, want) {
+		t.Fatalf("unpinned = %q, want %q", got, want)
+	}
+	if !Evaluate(Policy{}, "/doc.md", map[string]any{"tags": "x", "rel-based-on": "/a.md/v2"}).Compliant() {
+		t.Fatal("a pinned value is a violation")
+	}
+	// An append that does not touch the pins is not judged on them.
+	if !EvaluateOverrides(Policy{}, "/doc.md", map[string]any{"importance": "0.5"}).Compliant() {
+		t.Fatal("an append without pins is a violation")
 	}
 }

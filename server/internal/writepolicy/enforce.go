@@ -62,20 +62,20 @@ func chain[T any](inner, next func(context.Context, backend.Reader, T) error) fu
 // the commit state holds a catalog (file store; the bucket store's does not,
 // its race accepted), then the policy; notes replace the sink every run.
 func (e *enforcer) guard(ctx context.Context, req *backend.WriteRequest) error {
-	if e.options.Content.NearDuplicate == contentcheck.Off {
-		req.Precondition = chain(req.Precondition, e.policyOnly(req.Warnings))
-		return nil
-	}
-	before, err := e.nearDuplicatesBefore(ctx, *req)
-	if before, err = e.tolerate(before, err); err != nil {
+	before, pins, err := e.beforeCommit(ctx, *req)
+	if err != nil {
 		return err
 	}
 	if _, err := e.settleNearDuplicate(before); err != nil {
 		return err
 	}
+	if e.options.Content.NearDuplicate == contentcheck.Off {
+		req.Precondition = chain(req.Precondition, e.policyOnly(req.Warnings, pins))
+		return nil
+	}
 	warnings, subject := req.Warnings, subjectOf(*req)
 	req.Precondition = chain(req.Precondition, func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
-		notes, err := e.evaluate(ctx, state, write)
+		notes, err := e.evaluate(ctx, state, write, pins)
 		if warnings != nil {
 			*warnings = notes
 		}
@@ -111,9 +111,9 @@ func (e *enforcer) tolerate(verdict nearVerdict, err error) (nearVerdict, error)
 }
 
 // policyOnly is the precondition with the near-duplicate check off.
-func (e *enforcer) policyOnly(warnings *[]string) backend.Precondition {
+func (e *enforcer) policyOnly(warnings *[]string, pins []string) backend.Precondition {
 	return func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
-		notes, err := e.evaluate(ctx, state, write)
+		notes, err := e.evaluate(ctx, state, write, pins)
 		if warnings != nil {
 			*warnings = notes
 		}

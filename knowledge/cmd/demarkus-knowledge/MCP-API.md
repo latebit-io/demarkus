@@ -196,7 +196,7 @@ reads.
 | --- | --- | --- | --- |
 | `url` | string | yes | Scope: `mark://{worldName}/` for the whole world, or a subtree like `mark://{worldName}/docs/`. |
 | `query` | string | yes | Subject; matched against tags and titles (min 2 chars). |
-| `filter` | string | no | Comma-separated `key=value`; built-ins `tag=`, `modified-after=`, `modified-before=`. |
+| `filter` | string | no | Comma-separated `key=value`; built-ins `tag=`, `modified-after=`, `modified-before=`, `based-on=` (documents whose `rel-based-on` pins a document, directory or repository URL, any version). |
 | `limit` | number | no | Max results (server default 10, cap 1000). |
 | `match` | string | no | `catalog` (default) or `body`. |
 
@@ -277,8 +277,10 @@ whose table has drifted).
 The server judges the metadata under the world's
 `/.well-known/demarkus/policy.md` merged over the hub world's (the
 floor: the stricter strictness, the union of required axes and
-fields, the intersection of `allow_tags.<axis>` lists), and scans the
-body for secrets and personal data before any of it. A secret refuses
+fields, the intersection of `allow_tags.<axis>` lists; a policy's
+`exempt:` path patterns, in token path syntax, skip only that policy's
+own rules), and scans the body for secrets and personal data before any
+of it. A secret refuses
 the write, naming the rule and line and never the value; nothing is
 removed or edited for the caller, and the refusal cannot be overridden.
 Personal data follows the server's `contentCheck.pii` mode (`block` by
@@ -292,7 +294,7 @@ reviewed false positive land and is recorded with the version.
 | `body` | string | yes | Markdown content. |
 | `expected_version` | number | yes | From a prior fetch. `0` to create a new document. |
 | `on_conflict` | string | no | `"merge"` (default) or `"fail"`. |
-| `metadata` | object | no | Publisher metadata (`tags`, `importance`, opaque keys). Keys with the `rel-` prefix declare typed relations to other documents (`rel-supersedes: /adr/0002.md`, comma-separated for multiple targets); graph crawls ingest them as typed edges. |
+| `metadata` | object | no | Publisher metadata (`tags`, `importance`, opaque keys). Keys with the `rel-` prefix declare typed relations to other documents (`rel-supersedes: /adr/0002.md`, comma-separated for multiple targets); graph crawls ingest them as typed edges. `rel-based-on` pins the sources the document was written from as permalinks (`/adr/0006.md/v5`, a GitHub commit URL); a value naming no version is an `unpinned-source` violation, and the write's notes name a pin behind its source and the documents pinned to the one written. |
 
 #### `mark_append`
 

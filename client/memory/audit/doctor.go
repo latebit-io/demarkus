@@ -114,9 +114,11 @@ type audit struct {
 	coverage []string
 	promoted int // documents the promotion check excluded as already promoted
 	layout   layout.Layout
-	// policy is the effective write policy (the floor merged under the
-	// store's own); policyKnown is false when the store's could not be read.
+	// policy is the floor merged under the store's own, for strictness and
+	// allowed lists; own is the store's, which Effective exempts per path.
+	// policyKnown is false when the store's could not be read.
 	policy      publishpolicy.Policy
+	own         publishpolicy.Policy
 	policyKnown bool
 	leads       leads // findings a fix may settle, for the plan
 }
@@ -171,6 +173,7 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 	a.checkContent()
 	a.checkStyleGuide(ctx)
 	a.checkReferences()
+	a.checkDrift()
 	if opts.Deep {
 		a.checkLostMetadata(ctx)
 	}
