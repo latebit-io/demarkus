@@ -12,20 +12,28 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
-// maxDependentsNamed bounds the documents one dependents note names.
-const maxDependentsNamed = 10
+// Dependents notes read up to maxDependentsRead rows, so unreadable ones do
+// not crowd out the rest, and name up to maxDependentsNamed.
+const (
+	maxDependentsRead  = 100
+	maxDependentsNamed = 10
+)
 
 // pinNotes is what drift a write meets: its own pins behind their sources,
-// and documents pinned to an earlier version of this one. Read before the
-// commit and only ever noted, so a race costs a stale note.
+// and documents pinned to an earlier version of this one, naming only what
+// the writer may read. Noted before the commit, so a race costs a stale note.
 func pinNotes(ctx context.Context, view backend.ReadView, req backend.WriteRequest) []string {
-	return append(stalePins(ctx, view, req), dependents(ctx, view, req.Path)...)
+	readable := req.Readable
+	if readable == nil {
+		readable = func(string) bool { return true }
+	}
+	return append(stalePins(ctx, view, req, readable), dependents(ctx, view, req.Path, readable)...)
 }
 
 // stalePins checks each path pin the write declares against the current
 // version here, reading each source once; mark:// URL pins name a world
 // this store cannot see.
-func stalePins(ctx context.Context, reader backend.Reader, req backend.WriteRequest) []string {
+func stalePins(ctx context.Context, reader backend.Reader, req backend.WriteRequest, readable func(string) bool) []string {
 	type read struct {
 		doc *storefmt.Document
 		err error
@@ -34,7 +42,7 @@ func stalePins(ctx context.Context, reader backend.Reader, req backend.WriteRequ
 	reads := map[string]read{}
 	for _, pin := range provenance.Parse(req.Metadata[provenance.Key]) {
 		target, pinned := pin.Local(req.Path), pin.DocumentVersion()
-		if target == "" || pinned == 0 {
+		if target == "" || pinned == 0 || !readable(target) {
 			continue
 		}
 		r, ok := reads[target]
@@ -61,15 +69,15 @@ func stalePins(ctx context.Context, reader backend.Reader, req backend.WriteRequ
 
 // dependents names the documents pinned to docPath: every pin is on a
 // version this write replaces, so each may now be stale.
-func dependents(ctx context.Context, view backend.CatalogReader, docPath string) []string {
+func dependents(ctx context.Context, view backend.CatalogReader, docPath string, readable func(string) bool) []string {
 	own := storefmt.CanonicalPath(docPath)
-	rows, err := view.Lookup(ctx, "*", catalog.Options{Filter: []catalog.Predicate{catalog.BasedOn(own)}, Max: maxDependentsNamed + 2})
+	rows, err := view.Lookup(ctx, "*", catalog.Options{Filter: []catalog.Predicate{catalog.BasedOn(own)}, Max: maxDependentsRead})
 	if err != nil {
 		return []string{"dependents not checked: " + err.Error()}
 	}
 	var paths []string
 	for i := range rows {
-		if rows[i].Path != own {
+		if rows[i].Path != own && readable(rows[i].Path) {
 			paths = append(paths, rows[i].Path)
 		}
 	}

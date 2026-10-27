@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
@@ -63,5 +64,44 @@ func TestEnforceBlocksUnpinnedSource(t *testing.T) {
 	var policyErr *writepolicy.PolicyError
 	if !errors.As(err, &policyErr) || !strings.Contains(policyErr.RejectionMessage(), "unpinned-source: /adr/0006.md") {
 		t.Fatalf("unpinned publish = %v, want an unpinned-source refusal", err)
+	}
+}
+
+func TestPinNotesNameOnlyReadableDocuments(t *testing.T) {
+	raw := newStore(t)
+	gated := writepolicy.Enforce(raw, writepolicy.Options{})
+	tags := map[string]string{"tags": "x"}
+	for _, path := range []string{"/private/src.md", "/public/src.md"} {
+		for version := range 2 {
+			if _, err := write(t, gated, path, version, []byte("# Src\n\nRevision "+strconv.Itoa(version)+".\n"), tags); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := write(t, gated, "/private/dep.md", 0, []byte("# Dep\n"), map[string]string{"tags": "x", "rel-based-on": "/public/src.md/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	readable := func(p string) bool { return !strings.HasPrefix(p, "/private/") }
+	publish := func(path string, version int, meta map[string]string) []string {
+		var warnings []string
+		if _, err := gated.Publish(t.Context(), backend.WriteRequest{Path: path, ExpectedVersion: version, Content: []byte("# Doc\n\nNew.\n"), Metadata: meta, Warnings: &warnings, Readable: readable}); err != nil {
+			t.Fatal(err)
+		}
+		return warnings
+	}
+	// A pin on a protected source says nothing about it.
+	if warnings := publish("/public/probe.md", 0, map[string]string{"tags": "x", "rel-based-on": "/private/src.md/v1, /private/none.md/v1"}); len(warnings) != 0 {
+		t.Errorf("pins on protected sources = %q, want no notes", warnings)
+	}
+	// A protected dependent is not named.
+	if warnings := publish("/public/src.md", 2, tags); len(warnings) != 0 {
+		t.Errorf("protected dependent = %q, want no notes", warnings)
+	}
+	// Without the check, both are named.
+	if warnings, err := write(t, gated, "/public/control.md", 0, []byte("# C\n"), map[string]string{"tags": "x", "rel-based-on": "/private/src.md/v1"}); err != nil || len(warnings) != 1 {
+		t.Errorf("control pin = %q, %v; want the drift note", warnings, err)
+	}
+	if warnings, err := write(t, gated, "/public/src.md", 3, []byte("# Src\n\nAgain.\n"), tags); err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "/private/dep.md") {
+		t.Errorf("control dependents = %q, %v; want /private/dep.md named", warnings, err)
 	}
 }

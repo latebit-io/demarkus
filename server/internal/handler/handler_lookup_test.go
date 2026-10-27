@@ -367,3 +367,18 @@ func testHandleLookupMatchAll(t *testing.T, newBackend backendFactory) {
 		t.Errorf("want both paths, importance order:\n%s", resp.Body)
 	}
 }
+
+// A write's notes about other documents pass the check LOOKUP filters by.
+func TestReadableByFollowsReadAuth(t *testing.T) {
+	ts := auth.NewTokenStore(map[string]auth.Token{
+		protocol.HashToken("reader"): {Paths: []string{"/private/**"}, Operations: []string{"read"}},
+	})
+	h := &Handler{getTokenStore: func() *auth.TokenStore { return ts }}
+	anonymous := h.readableBy(protocol.Request{Metadata: map[string]string{}})
+	if anonymous("/private/x.md") || !anonymous("/public/x.md") {
+		t.Error("an anonymous writer reads /private/ or not /public/")
+	}
+	if reader := h.readableBy(protocol.Request{Metadata: map[string]string{"auth": "reader"}}); !reader("/private/x.md") {
+		t.Error("the read token does not read /private/")
+	}
+}
