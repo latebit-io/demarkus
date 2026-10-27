@@ -276,20 +276,34 @@ func TestEnforceRefusesNearDuplicate(t *testing.T) {
 	}
 }
 
-// A split topic repeats its parent until the hub drops the section, so the
-// parent its curated-from names is skipped; any other document still counts.
-func TestEnforceSkipsTheSplitParent(t *testing.T) {
+// A split topic repeats its parent until the hub drops the section: a hit on
+// the parent its curated-from names is excused with a note. Any other hit
+// still counts, and an existing document cannot claim a source it lacked.
+func TestEnforceExcusesTheSplitSource(t *testing.T) {
 	raw := newStore(t)
 	gated := writepolicy.Enforce(raw, writepolicy.Options{})
-	if _, err := write(t, gated, "/notes/shards.md", 0, []byte(neardtest.LessonDoc), map[string]string{"tags": "store"}); err != nil {
+	tags := map[string]string{"tags": "store"}
+	if _, err := write(t, gated, "/notes/shards.md", 0, []byte(neardtest.LessonDoc), tags); err != nil {
 		t.Fatal(err)
 	}
 	split := map[string]string{"tags": "store", neardup.CuratedFromKey: "notes/shards.md"}
-	if warnings, err := write(t, gated, "/notes/shards/lesson.md", 0, []byte(neardtest.LessonDoc), split); err != nil || len(warnings) != 0 {
-		t.Errorf("topic of its parent = %q, %v; want it to land clean", warnings, err)
+	warnings, err := write(t, gated, "/notes/shards/lesson.md", 0, []byte(neardtest.LessonDoc), split)
+	if err != nil || len(warnings) != 1 || !strings.HasSuffix(warnings[0], "/notes/shards.md (1.00 shared) excused, the document it was split from") {
+		t.Errorf("topic of its source = %q, %v; want it to land with the excuse noted", warnings, err)
+	}
+	if _, err := write(t, gated, "/notes/shards/lesson.md", 1, []byte(neardtest.LessonDoc+"\nEdited since the split.\n"), split); err != nil {
+		t.Errorf("edit of the topic naming its stored source = %v, want it to land", err)
 	}
 	split[neardup.CuratedFromKey] = "/notes/other.md"
 	if _, err := write(t, gated, "/notes/other/lesson.md", 0, []byte(neardtest.LessonDoc), split); !errors.Is(err, writepolicy.ErrNearDuplicate) {
-		t.Errorf("topic naming another parent = %v, want the refusal", err)
+		t.Errorf("topic naming another source = %v, want the refusal", err)
+	}
+	direct := backendtest.Direct{Store: raw}
+	if _, err := direct.WriteVersion("/notes/copy.md", 0, []byte(neardtest.RewordedDoc), tags); err != nil {
+		t.Fatal(err)
+	}
+	split[neardup.CuratedFromKey] = "/notes/shards.md"
+	if _, err := write(t, gated, "/notes/copy.md", 1, []byte(neardtest.LessonDoc), split); !errors.Is(err, writepolicy.ErrNearDuplicate) {
+		t.Errorf("existing document claiming a source = %v, want the refusal", err)
 	}
 }

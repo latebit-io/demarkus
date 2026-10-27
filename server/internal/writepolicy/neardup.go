@@ -82,12 +82,12 @@ func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, su
 	// A refusal reads the index covering its snapshot, waited for within
 	// the freshness bound; a warning may trail a commit and reads the newest.
 	own := storefmt.CanonicalPath(subject.path)
-	parent := own
-	if from := strings.TrimSpace(subject.meta[neardup.CuratedFromKey]); from != "" {
-		parent = storefmt.CanonicalPath(from)
+	parent, err := splitSource(ctx, state, own, subject.meta)
+	if err != nil {
+		return nearVerdict{}, fmt.Errorf("near-duplicate check: %w", err)
 	}
 	stale := e.options.Content.NearDuplicate == contentcheck.Warn
-	rows, err := state.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: stale, Skip: func(p string) bool { return p == own || p == parent }})
+	rows, err := state.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: stale, Skip: func(p string) bool { return p == own }})
 	switch {
 	case errors.Is(err, backend.ErrBodyMatchUnavailable):
 		return nearVerdict{notes: []string{"near-duplicate check skipped: no section index covers this write yet"}}, nil
@@ -107,11 +107,31 @@ func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, su
 		return verdict, nil
 	}
 	for i := range rows {
-		if !lay.RepeatsByDesign(rows[i].Path) {
+		switch {
+		case lay.RepeatsByDesign(rows[i].Path):
+		case rows[i].Path == parent:
+			verdict.notes = append(verdict.notes, "near-duplicate check: "+rows[i].Hit.String()+" excused, the document it was split from")
+		default:
 			verdict.hits = append(verdict.hits, rows[i].Hit)
 		}
 	}
 	return verdict, nil
+}
+
+// splitSource is the document a write's curated-from names, "" when there is
+// none or the write may not claim one: only a new document, or one whose
+// stored version names the same source, so no existing document acquires it.
+func splitSource(ctx context.Context, reader documentGetter, own string, meta map[string]string) (string, error) {
+	from := strings.TrimSpace(meta[neardup.CuratedFromKey])
+	if from == "" {
+		return "", nil
+	}
+	from = storefmt.CanonicalPath(from)
+	stored, found, err := currentDocument(ctx, reader, own)
+	if err != nil || (found && !stored.Archived && storefmt.CanonicalPath(stored.Metadata[neardup.CuratedFromKey]) != from) {
+		return "", err
+	}
+	return from, nil
 }
 
 // nearDuplicatesBefore judges the write on its own view before the commit:

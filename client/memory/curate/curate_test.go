@@ -3,6 +3,7 @@ package curate
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/neardup"
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
 func TestCleanDocumentProposesNothing(t *testing.T) {
@@ -116,6 +118,31 @@ func TestSplitMovesHeadingsVerbatimAndKeepsTheFrame(t *testing.T) {
 	}
 	if len(p.Unfixed) != 0 {
 		t.Errorf("unfixed = %v", p.Unfixed)
+	}
+}
+
+// Topics carry what the policy requires and the parent has; what neither
+// supplies is named before apply. Axis tags stay on the hub even when only
+// a moved section spells one out.
+func TestSplitMeetsTheWritePolicy(t *testing.T) {
+	body := strings.Replace(bigDoc(), "First sentence of steps.", "First sentence of steps, status:active.", 1)
+	policy := &publishpolicy.Policy{Strictness: publishpolicy.Block, RequiredTagAxes: []string{"status"}, RequiredFields: []string{"owner", "source", "user"}}
+	in := &Input{Path: "/plans/big.md", Body: body, Version: 7, Policy: policy,
+		Metadata: map[string]string{"tags": "plan,status:active", "type": "Plan", "owner": "team-a", "local-id": "p-1"}}
+	p := Propose(in)
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
+	}
+	topic, hub := p.Writes[1], p.Writes[len(p.Writes)-1]
+	if topic.Metadata["owner"] != "team-a" || topic.Metadata["local-id"] != "" || topic.Metadata["user"] != "" {
+		t.Errorf("topic metadata = %v", topic.Metadata)
+	}
+	if hub.Metadata["tags"] != "plan,status:active" {
+		t.Errorf("hub tags = %q", hub.Metadata["tags"])
+	}
+	want := "/plans/big/steps.md: the write policy refuses it without metadata source"
+	if !slices.Contains(p.Unfixed, want) || len(p.Unfixed) != len(p.Writes) {
+		t.Errorf("unfixed = %q, want %q for each write", p.Unfixed, want)
 	}
 }
 

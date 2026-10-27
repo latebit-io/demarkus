@@ -37,8 +37,8 @@ const (
 // the reason is stored with the version, the gate stays silent.
 const OverrideKey = "near-duplicate-override"
 
-// CuratedFromKey names the document a split topic came out of. The gate does
-// not judge the write against it: the topic lands before the hub drops it.
+// CuratedFromKey names the document a split topic came out of. The gate
+// excuses a hit on it with a note: the topic lands before the hub drops it.
 const CuratedFromKey = "curated-from"
 
 // Verdict is the judgment on one target, ordered by strength.
