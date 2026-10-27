@@ -82,8 +82,12 @@ func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, su
 	// A refusal reads the index covering its snapshot, waited for within
 	// the freshness bound; a warning may trail a commit and reads the newest.
 	own := storefmt.CanonicalPath(subject.path)
+	parent := own
+	if from := strings.TrimSpace(subject.meta[neardup.CuratedFromKey]); from != "" {
+		parent = storefmt.CanonicalPath(from)
+	}
 	stale := e.options.Content.NearDuplicate == contentcheck.Warn
-	rows, err := state.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: stale, Skip: func(p string) bool { return p == own }})
+	rows, err := state.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: stale, Skip: func(p string) bool { return p == own || p == parent }})
 	switch {
 	case errors.Is(err, backend.ErrBodyMatchUnavailable):
 		return nearVerdict{notes: []string{"near-duplicate check skipped: no section index covers this write yet"}}, nil

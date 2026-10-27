@@ -13,6 +13,7 @@ import (
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/text"
 )
 
@@ -164,10 +165,10 @@ func Outline(body string) string {
 }
 
 // OpeningParagraph returns the first top-level paragraph of body as raw
-// markdown, or "" when the document has none.
+// markdown, or "" when the document has none. A GFM table is not one.
 func OpeningParagraph(body string) string {
 	src := []byte(body)
-	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
+	doc := goldmark.New(goldmark.WithExtensions(extension.Table)).Parser().Parse(text.NewReader(src))
 	for n := doc.FirstChild(); n != nil; n = n.NextSibling() {
 		p, ok := n.(*ast.Paragraph)
 		if !ok {

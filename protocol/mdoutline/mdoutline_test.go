@@ -269,6 +269,7 @@ func TestOpeningParagraph(t *testing.T) {
 		{"no paragraph", "# Only headings\n\n## Nothing else\n", ""},
 		{"empty body", "", ""},
 		{"skips list to nothing", "# T\n\n- a list item\n", ""},
+		{"skips a table", "# T\n\n| a | b |\n|---|:-:|\n| 1 | 2 |\n\nAfter the table.\n", "After the table."},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

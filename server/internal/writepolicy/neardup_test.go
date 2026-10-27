@@ -275,3 +275,21 @@ func TestEnforceRefusesNearDuplicate(t *testing.T) {
 		t.Errorf("off = %q, %v; want it to land clean", warnings, err)
 	}
 }
+
+// A split topic repeats its parent until the hub drops the section, so the
+// parent its curated-from names is skipped; any other document still counts.
+func TestEnforceSkipsTheSplitParent(t *testing.T) {
+	raw := newStore(t)
+	gated := writepolicy.Enforce(raw, writepolicy.Options{})
+	if _, err := write(t, gated, "/notes/shards.md", 0, []byte(neardtest.LessonDoc), map[string]string{"tags": "store"}); err != nil {
+		t.Fatal(err)
+	}
+	split := map[string]string{"tags": "store", neardup.CuratedFromKey: "notes/shards.md"}
+	if warnings, err := write(t, gated, "/notes/shards/lesson.md", 0, []byte(neardtest.LessonDoc), split); err != nil || len(warnings) != 0 {
+		t.Errorf("topic of its parent = %q, %v; want it to land clean", warnings, err)
+	}
+	split[neardup.CuratedFromKey] = "/notes/other.md"
+	if _, err := write(t, gated, "/notes/other/lesson.md", 0, []byte(neardtest.LessonDoc), split); !errors.Is(err, writepolicy.ErrNearDuplicate) {
+		t.Errorf("topic naming another parent = %v, want the refusal", err)
+	}
+}

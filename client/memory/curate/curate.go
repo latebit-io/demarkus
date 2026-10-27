@@ -25,6 +25,7 @@ import (
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
+	"github.com/latebit-io/demarkus/protocol/neardup"
 )
 
 // frameCap: a section under it is the document's own frame and stays in
@@ -387,22 +388,23 @@ func planSections(in *Input, headings []mdoutline.Heading) (sections []section, 
 	return sections, ""
 }
 
-// topicWrite is one moved section as its own document: a derived H1, a link
-// back to the hub, the section verbatim; tags are the parent's name, its
-// slug and the parent tags it mentions.
+// topicWrite is one moved section as its own document: derived H1 and
+// summary, a link back, the section verbatim. Tags add every parent axis
+// tag to the mentioned ones, so a topic meets its parent's write policy.
 func topicWrite(title, parentPath string, carried map[string]string, s *section) Write {
 	tags := protocol.MergeTags([]string{strings.TrimSuffix(path.Base(parentPath), ".md"), mdoutline.Slug(s.heading.Text)}, nil)
 	lower := strings.ToLower(s.text)
 	for _, tag := range protocol.SplitTags(carried["tags"]) {
-		if mentions(lower, tag) {
+		if strings.Contains(tag, ":") || mentions(lower, tag) {
 			tags = protocol.MergeTags(tags, []string{tag})
 		}
 	}
-	meta := map[string]string{"tags": strings.Join(tags, ","), "importance": topicImportance(carried["importance"]), CuratedFrom: parentPath}
+	summary := fmt.Sprintf("The %s section of %s, split into its own document.", s.heading.Text, title)
+	meta := map[string]string{"tags": strings.Join(tags, ","), "importance": topicImportance(carried["importance"]), "description": summary, neardup.CuratedFromKey: parentPath}
 	if t := carried["type"]; t != "" {
 		meta["type"] = t
 	}
-	body := fmt.Sprintf("# %s: %s\n\nPart of [%s](%s).\n\n%s\n", title, s.heading.Text, title, parentPath, strings.TrimRight(s.text, "\n"))
+	body := fmt.Sprintf("# %s: %s\n\n%s\n\nPart of [%s](%s).\n\n%s\n", title, s.heading.Text, summary, title, parentPath, strings.TrimRight(s.text, "\n"))
 	meta[curatedDigest] = topicDigest(body, meta)
 	return Write{Path: s.topic, Body: body, Metadata: meta}
 }
@@ -621,10 +623,6 @@ func sansDigest(meta map[string]string) map[string]string {
 	return out
 }
 
-// CuratedFrom is the metadata key a topic carries naming the document it
-// was split from, so a resumed split may update it and nothing else may.
-const CuratedFrom = "curated-from"
-
 // Applied is one write the apply made or found in place.
 type Applied struct {
 	Path     string
@@ -671,7 +669,7 @@ func Apply(ctx context.Context, docs hub.Docs, p *Proposal, stamp map[string]str
 			return nil, &Refusal{Path: w.Path, Reason: "fetch: " + h.Status + "; nothing written"}
 		case h.Body == w.Body && maps.Equal(sansDigest(docwrite.Carried(h.Metadata)), sansDigest(w.Metadata)):
 			expected[i] = -1
-		case h.Metadata[CuratedFrom] == p.Path && h.Metadata[curatedDigest] == topicDigest(h.Body, docwrite.Carried(h.Metadata)) && h.Version > 0:
+		case h.Metadata[neardup.CuratedFromKey] == p.Path && h.Metadata[curatedDigest] == topicDigest(h.Body, docwrite.Carried(h.Metadata)) && h.Version > 0:
 			expected[i] = h.Version
 		default:
 			return nil, &Refusal{Path: w.Path, Reason: "exists and differs from the proposal; nothing written"}

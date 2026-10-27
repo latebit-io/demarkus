@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/neardup"
 )
 
 func TestCleanDocumentProposesNothing(t *testing.T) {
@@ -86,16 +87,18 @@ func bigDoc() string {
 
 func TestSplitMovesHeadingsVerbatimAndKeepsTheFrame(t *testing.T) {
 	in := &Input{Path: "/plans/big.md", Body: bigDoc(), Version: 7,
-		Metadata: map[string]string{"tags": "plan,steps,design,unrelated", "importance": "0.8", "type": "Plan", "title": "Big plan", "user": "u"}}
+		Metadata: map[string]string{"tags": "plan,steps,design,unrelated,status:active", "importance": "0.8", "type": "Plan", "title": "Big plan", "user": "u"}}
 	p := Propose(in)
 	if p.Kind != KindSplit || len(p.Writes) != 4 {
 		t.Fatalf("kind %s writes %d: %+v", p.Kind, len(p.Writes), p.Unfixed)
 	}
 	topic := p.Writes[1]
-	if topic.Path != "/plans/big/steps.md" || !strings.HasPrefix(topic.Body, "# Big plan: Steps\n\nPart of [Big plan](/plans/big.md).\n\n## Steps\n\nFirst sentence of steps. Second.\n\n### Steps detail\n") {
+	summary := "The Steps section of Big plan, split into its own document."
+	if topic.Path != "/plans/big/steps.md" || !strings.HasPrefix(topic.Body, "# Big plan: Steps\n\n"+summary+"\n\nPart of [Big plan](/plans/big.md).\n\n## Steps\n\nFirst sentence of steps. Second.\n\n### Steps detail\n") {
 		t.Errorf("topic = %s\n%s", topic.Path, topic.Body[:200])
 	}
-	if topic.Metadata["tags"] != "big,steps" || topic.Metadata["importance"] != "0.7" || topic.Metadata["type"] != "Plan" || topic.Metadata["title"] != "" || topic.Metadata[CuratedFrom] != "/plans/big.md" {
+	// Axis tags carry so the topic meets the write policy its parent met.
+	if topic.Metadata["tags"] != "big,steps,status:active" || topic.Metadata["description"] != summary || topic.Metadata["importance"] != "0.7" || topic.Metadata["type"] != "Plan" || topic.Metadata["title"] != "" || topic.Metadata[neardup.CuratedFromKey] != "/plans/big.md" {
 		t.Errorf("topic metadata = %v", topic.Metadata)
 	}
 	hub := p.Writes[3]
@@ -104,7 +107,7 @@ func TestSplitMovesHeadingsVerbatimAndKeepsTheFrame(t *testing.T) {
 		t.Errorf("hub:\n%s\nwant:\n%s", hub.Body, wantHub)
 	}
 	// Tags only a topic mentions leave the hub; the rest stay, whether the hub mentions them or nobody does.
-	if hub.Metadata["tags"] != "plan,unrelated" || hub.Metadata["importance"] != "0.8" || hub.Metadata["title"] != "Big plan" || hub.Metadata["user"] != "" {
+	if hub.Metadata["tags"] != "plan,unrelated,status:active" || hub.Metadata["importance"] != "0.8" || hub.Metadata["title"] != "Big plan" || hub.Metadata["user"] != "" {
 		t.Errorf("hub metadata = %v", hub.Metadata)
 	}
 	moves := p.Moves([]Inbound{{Source: "/index.md", Anchor: "steps-detail"}, {Source: "/x.md", Anchor: "goal"}})
@@ -140,6 +143,15 @@ func TestSplitMovesShortSectionsWhenTheHubWouldStillOverflow(t *testing.T) {
 	}
 	if hub := p.Writes[len(p.Writes)-1]; len(hub.Body) >= 8*1024 {
 		t.Errorf("hub still %d bytes", len(hub.Body))
+	}
+}
+
+func TestOneLineSkipsATable(t *testing.T) {
+	if got := oneLine("## Records\n\n| Genre | ID |\n|---|:-:|\n| Adab | g-1 |\n", 7); got != "" {
+		t.Errorf("table = %q, want none", got)
+	}
+	if got := oneLine("## Steps\n\nFirst sentence | with a pipe. Second.\n", 5); got != "First sentence | with a pipe." {
+		t.Errorf("prose = %q", got)
 	}
 }
 
@@ -208,7 +220,7 @@ func TestApplyPreflightsTopicsAndWritesTheHubLast(t *testing.T) {
 	// A topic an earlier apply of this document wrote is updated at any
 	// version while its digest still matches; one edited since refuses.
 	topicAt := func(body string, version int, digestOf string) *fetchtest.Client {
-		meta := map[string]string{CuratedFrom: "/plans/big.md", "tags": "x"}
+		meta := map[string]string{neardup.CuratedFromKey: "/plans/big.md", "tags": "x"}
 		meta[curatedDigest] = topicDigest(digestOf, meta)
 		return &fetchtest.Client{Published: map[string]fetch.Result{"h/plans/big/design.md": fetchtest.Head(body, version, meta), "h/plans/big.md": fetchtest.Head(in.Body, 2, in.Metadata)}}
 	}

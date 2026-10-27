@@ -341,9 +341,15 @@ metadata description inserted as the missing summary. At or over
 8 KB it is a split: every second-level section of weight moves
 verbatim to `<path without .md>/<slug>.md` (its headings kept, so
 anchors survive; it links back to the hub; tags are the parent's name,
-its slug and the parent tags it mentions), the document keeps its
-path as the hub with its preamble, a `Topics` list and its short
-sections, and its tags lose the ones only a topic mentions.
+its slug, the parent tags it mentions and every parent `axis:value`
+tag; a description naming the section and the parent, also its
+summary line, so the topic meets the write policy its parent met), the
+document keeps its path as the hub with its preamble, a `Topics` list
+and its short sections, and its tags lose the ones only a topic
+mentions. A section opening on a table gets no summary in the list.
+The near-duplicate gate does not judge a topic against the document
+its `curated-from` names, which still holds the section until the hub
+lands; an older server refuses the topic instead.
 
 With `apply: true` and the hash a report returned, the tool recomputes
 the proposal from the current head and refuses when the hash differs.

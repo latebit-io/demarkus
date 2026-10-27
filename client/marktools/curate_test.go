@@ -125,7 +125,7 @@ func TestCurateApplySplitPreflightsTopics(t *testing.T) {
 	_, alpha, _ := strings.Cut(report.Text, "=== /plans/big/alpha.md (")
 	_, alphaBody, _ := strings.Cut(alpha, ")\n")
 	alphaBody, _, _ = strings.Cut(alphaBody, "\n=== ")
-	backend.Published["host:6309/plans/big/alpha.md"] = fetchtest.Head(alphaBody, 1, map[string]string{"tags": "big,alpha", "importance": "0.7", "type": "Plan", "curated-from": "/plans/big.md"})
+	backend.Published["host:6309/plans/big/alpha.md"] = fetchtest.Head(alphaBody, 1, map[string]string{"tags": "big,alpha", "importance": "0.7", "type": "Plan", "description": "The Alpha section of Big, split into its own document.", "curated-from": "/plans/big.md"})
 	got = tools.Curate(t.Context(), marktools.CurateArgs{URL: "/plans/big.md", Apply: true, Proposal: hash})
 	if got.IsError || got.Text != "status: applied\n- /plans/big/alpha.md: skipped, identical\n- /plans/big/beta.md: created v1\n- /plans/big.md: updated v1\n" {
 		t.Fatalf("apply = %+v", got)
