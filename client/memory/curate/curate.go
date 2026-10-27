@@ -22,21 +22,27 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/client/memory/hub"
 	"github.com/latebit-io/demarkus/client/memory/outline"
+	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
+	"github.com/latebit-io/demarkus/protocol/neardup"
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // frameCap: a section under it is the document's own frame and stays in
 // the hub while the hub fits in one fetch.
 const frameCap = 1024
 
-// Input is the document as fetched.
+// Input is the document as fetched, and the write policy the server judges
+// a split's writes by (nil: none).
 type Input struct {
 	Path     string
 	Body     string
 	Version  int
 	Metadata map[string]string
+	Policy   *publishpolicy.Policy
 }
 
 // Write is one document the proposal publishes.
@@ -68,6 +74,9 @@ type Proposal struct {
 	// (path#anchor), so inbound links can be repointed.
 	Moved map[string]string
 	Hash  string // binds an apply to this proposal at this version
+	// Refused is what a refusing write policy would stop; apply writes
+	// nothing while any remains, so a split never lands halfway.
+	Refused []string
 }
 
 // Propose reports the document and proposes the smallest mechanical change
@@ -333,9 +342,10 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		if s.topic == "" {
 			continue
 		}
-		w := topicWrite(title, in.Path, carried, s)
+		w := topicWrite(in, title, carried, s)
 		p.Writes = append(p.Writes, w)
 		p.Fixed = append(p.Fixed, fmt.Sprintf("%q moved to %s (%d bytes)", s.heading.Text, s.topic, len(w.Body)))
+		p.policyGaps(s.topic, w.Metadata, in.Policy)
 		for _, h := range headings {
 			if h.Start >= s.heading.Start && h.Start < s.heading.End {
 				p.moved(h.Anchor, s.topic+"#"+h.Anchor)
@@ -348,7 +358,24 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	p.Writes = append(p.Writes, Write{Path: in.Path, Body: body, Metadata: meta})
 	p.Fixed = append(p.Fixed, fmt.Sprintf("%s becomes the hub (%d bytes)", in.Path, len(body)))
 	p.Kind = KindSplit
-	p.Unfixed = gate.AuditProblems(in.Path, body, meta["description"])
+	p.policyGaps(in.Path, meta, in.Policy)
+	p.Unfixed = append(p.Unfixed, gate.AuditProblems(in.Path, body, meta["description"])...)
+}
+
+// policyGaps names what the write policy finds missing on a write, as the
+// server would judge it: warn lets it land with a note, block and ask refuse.
+func (p *Proposal) policyGaps(docPath string, meta map[string]string, policy *publishpolicy.Policy) {
+	verb, refuses := "warns on it: ", false
+	if policy != nil && policy.EffectiveStrictness() != publishpolicy.Warn {
+		verb, refuses = "refuses it: ", true
+	}
+	for _, m := range promote.Missing(docPath, meta, policy) {
+		line := docPath + ": the write policy " + verb + m
+		p.Unfixed = append(p.Unfixed, line)
+		if refuses {
+			p.Refused = append(p.Refused, line)
+		}
+	}
 }
 
 // planSections cuts the body at its H2 headings, names each section's topic
@@ -387,28 +414,41 @@ func planSections(in *Input, headings []mdoutline.Heading) (sections []section, 
 	return sections, ""
 }
 
-// topicWrite is one moved section as its own document: a derived H1, a link
-// back to the hub, the section verbatim; tags are the parent's name, its
-// slug and the parent tags it mentions.
-func topicWrite(title, parentPath string, carried map[string]string, s *section) Write {
+// topicWrite is one moved section as its own document: derived H1 and
+// summary, a link back, the section verbatim. Every parent axis tag and
+// policy-required field carries, so a topic meets its parent's policy.
+func topicWrite(in *Input, title string, carried map[string]string, s *section) Write {
+	parentPath, policy := in.Path, in.Policy
 	tags := protocol.MergeTags([]string{strings.TrimSuffix(path.Base(parentPath), ".md"), mdoutline.Slug(s.heading.Text)}, nil)
 	lower := strings.ToLower(s.text)
 	for _, tag := range protocol.SplitTags(carried["tags"]) {
-		if mentions(lower, tag) {
+		if strings.Contains(tag, ":") || mentions(lower, tag) {
 			tags = protocol.MergeTags(tags, []string{tag})
 		}
 	}
-	meta := map[string]string{"tags": strings.Join(tags, ","), "importance": topicImportance(carried["importance"]), CuratedFrom: parentPath}
+	summary := fmt.Sprintf("The %s section of %s, split into its own document.", s.heading.Text, title)
+	meta := map[string]string{"tags": strings.Join(tags, ","), "importance": topicImportance(carried["importance"]), "description": summary, neardup.CuratedFromKey: parentPath}
 	if t := carried["type"]; t != "" {
 		meta["type"] = t
 	}
-	body := fmt.Sprintf("# %s: %s\n\nPart of [%s](%s).\n\n%s\n", title, s.heading.Text, title, parentPath, strings.TrimRight(s.text, "\n"))
+	// The server types an untyped topic on write; typing it here keeps the
+	// digest equal to what lands, so a resumed split finds it identical.
+	meta = storefmt.ApplyOKFTypeDefault(s.topic, meta)
+	if policy != nil {
+		for _, field := range policy.ForCaller().RequiredFields {
+			if _, set := meta[field]; !set && carried[field] != "" {
+				meta[field] = carried[field]
+			}
+		}
+	}
+	body := fmt.Sprintf("# %s: %s\n\n%s\n\nPart of [%s](%s).\n\n%s\n", title, s.heading.Text, summary, title, parentPath, strings.TrimRight(s.text, "\n"))
 	meta[curatedDigest] = topicDigest(body, meta)
 	return Write{Path: s.topic, Body: body, Metadata: meta}
 }
 
 // hubTags drops a tag the hub's own prose never mentions when a topic does;
-// the links list naming a topic is not a mention.
+// the links list naming a topic is not a mention. Axis tags always stay,
+// since a policy may require them.
 func hubTags(preamble string, sections []section, tags string) []string {
 	var own, moved strings.Builder
 	own.WriteString(preamble)
@@ -422,7 +462,7 @@ func hubTags(preamble string, sections []section, tags string) []string {
 	ownLower, movedLower := strings.ToLower(own.String()), strings.ToLower(moved.String())
 	var kept []string
 	for _, tag := range protocol.SplitTags(tags) {
-		if mentions(ownLower, tag) || !mentions(movedLower, tag) {
+		if strings.Contains(tag, ":") || mentions(ownLower, tag) || !mentions(movedLower, tag) {
 			kept = append(kept, tag)
 		}
 	}
@@ -621,10 +661,6 @@ func sansDigest(meta map[string]string) map[string]string {
 	return out
 }
 
-// CuratedFrom is the metadata key a topic carries naming the document it
-// was split from, so a resumed split may update it and nothing else may.
-const CuratedFrom = "curated-from"
-
 // Applied is one write the apply made or found in place.
 type Applied struct {
 	Path     string
@@ -653,6 +689,9 @@ func Apply(ctx context.Context, docs hub.Docs, p *Proposal, stamp map[string]str
 	if len(p.Writes) == 0 {
 		return nil, fmt.Errorf("nothing to apply: the document is %s", p.Kind)
 	}
+	if len(p.Refused) > 0 {
+		return nil, &Refusal{Path: p.Path, Reason: strings.Join(p.Refused, "; ") + "; nothing written"}
+	}
 	a := applier{docs: docs, stamp: stamp}
 	topics := p.Writes[:len(p.Writes)-1]
 	// Per topic: -1 skips an identical one, 0 creates, else updates at that
@@ -671,7 +710,7 @@ func Apply(ctx context.Context, docs hub.Docs, p *Proposal, stamp map[string]str
 			return nil, &Refusal{Path: w.Path, Reason: "fetch: " + h.Status + "; nothing written"}
 		case h.Body == w.Body && maps.Equal(sansDigest(docwrite.Carried(h.Metadata)), sansDigest(w.Metadata)):
 			expected[i] = -1
-		case h.Metadata[CuratedFrom] == p.Path && h.Metadata[curatedDigest] == topicDigest(h.Body, docwrite.Carried(h.Metadata)) && h.Version > 0:
+		case h.Metadata[neardup.CuratedFromKey] == p.Path && h.Metadata[curatedDigest] == topicDigest(h.Body, docwrite.Carried(h.Metadata)) && h.Version > 0:
 			expected[i] = h.Version
 		default:
 			return nil, &Refusal{Path: w.Path, Reason: "exists and differs from the proposal; nothing written"}

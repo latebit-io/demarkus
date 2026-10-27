@@ -200,8 +200,13 @@ func TestExamineAgainstThePolicy(t *testing.T) {
 	policy := publishpolicy.Parse("strictness: block\nrequire_tags: domain, category\nrequire_fields: type, user\n")
 	d := &promote.Draft{Path: "/x.md", Body: "# X\n\nWhat x settles — now.\n", Metadata: map[string]string{"tags": "domain:a,x"}, Version: 2}
 	c := promote.Examine(d, &policy)
-	if got := strings.Join(c.Missing, "|"); got != "tag axis category (an category:<value> tag)|metadata type" {
+	// The server types an untyped document before judging it, so type is not missing.
+	if got := strings.Join(c.Missing, "|"); got != "missing tag axis category (an category:<value> tag)" {
 		t.Errorf("missing = %q", got)
+	}
+	allowed := publishpolicy.Parse("strictness: block\nallow_tags.domain: a|b\n")
+	if got := promote.Missing("/x.md", map[string]string{"tags": "domain:c"}, &allowed); len(got) != 1 || !strings.HasPrefix(got[0], "disallowed tag domain:c (allowed domain values: ") {
+		t.Errorf("disallowed = %q", got)
 	}
 	if len(c.Problems) == 0 || c.Packet == "" {
 		t.Errorf("check = %+v", c)

@@ -341,9 +341,19 @@ metadata description inserted as the missing summary. At or over
 8 KB it is a split: every second-level section of weight moves
 verbatim to `<path without .md>/<slug>.md` (its headings kept, so
 anchors survive; it links back to the hub; tags are the parent's name,
-its slug and the parent tags it mentions), the document keeps its
-path as the hub with its preamble, a `Topics` list and its short
-sections, and its tags lose the ones only a topic mentions.
+its slug, the parent tags it mentions and every parent `axis:value`
+tag; the parent's fields the effective write policy requires; a
+description naming the section and the parent, also its summary line),
+the document keeps its path as the hub with its preamble, a `Topics`
+list and its short sections, and its tags lose the non-axis ones only
+a topic mentions. A section opening on a table gets no summary in the
+list. What the policy still finds missing on a write is listed, as a
+warning under `warn` or a refusal under `block` or `ask`; apply writes
+nothing while a refusal remains. The near-duplicate gate does not
+judge a topic against the document its `curated-from` names, which
+holds the section until the hub lands, and notes that it did not; only
+a new document, or one already naming that source, may claim it. An older server refuses the topic instead. An
+unreadable policy refuses the report (`status: policy-unavailable`).
 
 With `apply: true` and the hash a report returned, the tool recomputes
 the proposal from the current head and refuses when the hash differs.

@@ -82,15 +82,26 @@ func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, su
 	// A refusal reads the index covering its snapshot, waited for within
 	// the freshness bound; a warning may trail a commit and reads the newest.
 	own := storefmt.CanonicalPath(subject.path)
+	parent, err := splitSource(ctx, state, own, subject.meta)
+	if err != nil {
+		return nearVerdict{}, fmt.Errorf("near-duplicate check: %w", err)
+	}
 	stale := e.options.Content.NearDuplicate == contentcheck.Warn
-	rows, err := state.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: stale, Skip: func(p string) bool { return p == own }})
+	// The source is skipped, not judged and excused, so it never takes a
+	// candidate slot from the documents that are judged.
+	rows, err := state.Lookup(ctx, "", catalog.Options{Match: catalog.MatchSimilar, Draft: &draft, Stale: stale, Skip: func(p string) bool { return p == own || p == parent }})
 	switch {
 	case errors.Is(err, backend.ErrBodyMatchUnavailable):
 		return nearVerdict{notes: []string{"near-duplicate check skipped: no section index covers this write yet"}}, nil
 	case err != nil:
 		return nearVerdict{}, fmt.Errorf("near-duplicate check: %w", err)
-	case len(rows) == 0:
-		return nearVerdict{checked: true}, nil
+	}
+	verdict := nearVerdict{checked: true}
+	if parent != "" {
+		verdict.notes = append(verdict.notes, "near-duplicate check: not judged against "+parent+", the document it was split from")
+	}
+	if len(rows) == 0 {
+		return verdict, nil
 	}
 	// The template is read only with hits in hand: what repeats by design
 	// is neither judged nor named.
@@ -98,7 +109,6 @@ func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, su
 	if err != nil {
 		return nearVerdict{}, fmt.Errorf("near-duplicate check: %w", err)
 	}
-	verdict := nearVerdict{checked: true}
 	if lay.RepeatsByDesign(own) {
 		return verdict, nil
 	}
@@ -108,6 +118,22 @@ func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, su
 		}
 	}
 	return verdict, nil
+}
+
+// splitSource is the document a write's curated-from names, "" when there is
+// none or the write may not claim one: only a new document, or one whose
+// stored version names the same source, so no existing document acquires it.
+func splitSource(ctx context.Context, reader documentGetter, own string, meta map[string]string) (string, error) {
+	from := strings.TrimSpace(meta[neardup.CuratedFromKey])
+	if from == "" {
+		return "", nil
+	}
+	from = storefmt.CanonicalPath(from)
+	stored, found, err := currentDocument(ctx, reader, own)
+	if err != nil || (found && !stored.Archived && storefmt.CanonicalPath(stored.Metadata[neardup.CuratedFromKey]) != from) {
+		return "", err
+	}
+	return from, nil
 }
 
 // nearDuplicatesBefore judges the write on its own view before the commit:

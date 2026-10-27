@@ -55,7 +55,11 @@ func (t *Tools) Curate(ctx context.Context, args CurateArgs) Result {
 	if head.Status != protocol.StatusOK {
 		return failure("curate failed: fetch %s: %s", target.Path, head.Status)
 	}
-	proposal := curate.Propose(&curate.Input{Path: target.Path, Body: head.Body, Version: head.Version, Metadata: head.Metadata})
+	policy, bad := t.effectivePolicy(ctx, target)
+	if bad != nil {
+		return *bad
+	}
+	proposal := curate.Propose(&curate.Input{Path: target.Path, Body: head.Body, Version: head.Version, Metadata: head.Metadata, Policy: policy})
 	if !args.Apply {
 		var moves []curate.Move
 		var notes []string

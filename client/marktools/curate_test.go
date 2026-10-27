@@ -2,6 +2,7 @@ package marktools_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -125,13 +126,34 @@ func TestCurateApplySplitPreflightsTopics(t *testing.T) {
 	_, alpha, _ := strings.Cut(report.Text, "=== /plans/big/alpha.md (")
 	_, alphaBody, _ := strings.Cut(alpha, ")\n")
 	alphaBody, _, _ = strings.Cut(alphaBody, "\n=== ")
-	backend.Published["host:6309/plans/big/alpha.md"] = fetchtest.Head(alphaBody, 1, map[string]string{"tags": "big,alpha", "importance": "0.7", "type": "Plan", "curated-from": "/plans/big.md"})
+	backend.Published["host:6309/plans/big/alpha.md"] = fetchtest.Head(alphaBody, 1, map[string]string{"tags": "big,alpha", "importance": "0.7", "type": "Plan", "description": "The Alpha section of Big, split into its own document.", "curated-from": "/plans/big.md"})
 	got = tools.Curate(t.Context(), marktools.CurateArgs{URL: "/plans/big.md", Apply: true, Proposal: hash})
 	if got.IsError || got.Text != "status: applied\n- /plans/big/alpha.md: skipped, identical\n- /plans/big/beta.md: created v1\n- /plans/big.md: updated v1\n" {
 		t.Fatalf("apply = %+v", got)
 	}
 	if len(backend.PublishCalls) != 2 || backend.PublishCalls[0].Path != "/plans/big/beta.md" || backend.PublishCalls[0].ExpectedVersion != 0 || backend.PublishCalls[1].ExpectedVersion != 2 {
 		t.Errorf("publishes = %+v", backend.PublishCalls)
+	}
+}
+
+// The report reads the world's write policy, so topics carry its required
+// fields and an unavailable policy refuses rather than guessing.
+func TestCurateSplitReadsTheWritePolicy(t *testing.T) {
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"host:6309/plans/big.md":                   fetchtest.Head(bigBody(), 2, map[string]string{"tags": "plan", "owner": "team-a"}),
+		"host:6309/.well-known/demarkus/policy.md": fetchtest.Head("# Policy\n\nrequire_fields: owner\n", 1, nil),
+	}}
+	tools := newTools(t, backend, writingHooks())
+	report := tools.Curate(t.Context(), marktools.CurateArgs{URL: "/plans/big.md"})
+	if !strings.Contains(report.Text, "=== /plans/big/alpha.md (") || !strings.Contains(report.Text, "; owner: team-a;") {
+		t.Errorf("report = %s", report.Text)
+	}
+	delete(backend.Published, "host:6309/.well-known/demarkus/policy.md")
+	backend.FetchFn = func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
+		return fetch.Result{}, errors.New("unreachable")
+	}
+	if got := tools.Curate(t.Context(), marktools.CurateArgs{URL: "/plans/big.md"}); !got.IsError || !strings.Contains(got.Text, "status: policy-unavailable") {
+		t.Errorf("unavailable policy = %+v", got)
 	}
 }
 

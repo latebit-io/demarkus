@@ -3,6 +3,7 @@ package curate
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/neardup"
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
 func TestCleanDocumentProposesNothing(t *testing.T) {
@@ -86,16 +89,18 @@ func bigDoc() string {
 
 func TestSplitMovesHeadingsVerbatimAndKeepsTheFrame(t *testing.T) {
 	in := &Input{Path: "/plans/big.md", Body: bigDoc(), Version: 7,
-		Metadata: map[string]string{"tags": "plan,steps,design,unrelated", "importance": "0.8", "type": "Plan", "title": "Big plan", "user": "u"}}
+		Metadata: map[string]string{"tags": "plan,steps,design,unrelated,status:active", "importance": "0.8", "type": "Plan", "title": "Big plan", "user": "u"}}
 	p := Propose(in)
 	if p.Kind != KindSplit || len(p.Writes) != 4 {
 		t.Fatalf("kind %s writes %d: %+v", p.Kind, len(p.Writes), p.Unfixed)
 	}
 	topic := p.Writes[1]
-	if topic.Path != "/plans/big/steps.md" || !strings.HasPrefix(topic.Body, "# Big plan: Steps\n\nPart of [Big plan](/plans/big.md).\n\n## Steps\n\nFirst sentence of steps. Second.\n\n### Steps detail\n") {
+	summary := "The Steps section of Big plan, split into its own document."
+	if topic.Path != "/plans/big/steps.md" || !strings.HasPrefix(topic.Body, "# Big plan: Steps\n\n"+summary+"\n\nPart of [Big plan](/plans/big.md).\n\n## Steps\n\nFirst sentence of steps. Second.\n\n### Steps detail\n") {
 		t.Errorf("topic = %s\n%s", topic.Path, topic.Body[:200])
 	}
-	if topic.Metadata["tags"] != "big,steps" || topic.Metadata["importance"] != "0.7" || topic.Metadata["type"] != "Plan" || topic.Metadata["title"] != "" || topic.Metadata[CuratedFrom] != "/plans/big.md" {
+	// Axis tags carry so the topic meets the write policy its parent met.
+	if topic.Metadata["tags"] != "big,steps,status:active" || topic.Metadata["description"] != summary || topic.Metadata["importance"] != "0.7" || topic.Metadata["type"] != "Plan" || topic.Metadata["title"] != "" || topic.Metadata[neardup.CuratedFromKey] != "/plans/big.md" {
 		t.Errorf("topic metadata = %v", topic.Metadata)
 	}
 	hub := p.Writes[3]
@@ -104,7 +109,7 @@ func TestSplitMovesHeadingsVerbatimAndKeepsTheFrame(t *testing.T) {
 		t.Errorf("hub:\n%s\nwant:\n%s", hub.Body, wantHub)
 	}
 	// Tags only a topic mentions leave the hub; the rest stay, whether the hub mentions them or nobody does.
-	if hub.Metadata["tags"] != "plan,unrelated" || hub.Metadata["importance"] != "0.8" || hub.Metadata["title"] != "Big plan" || hub.Metadata["user"] != "" {
+	if hub.Metadata["tags"] != "plan,unrelated,status:active" || hub.Metadata["importance"] != "0.8" || hub.Metadata["title"] != "Big plan" || hub.Metadata["user"] != "" {
 		t.Errorf("hub metadata = %v", hub.Metadata)
 	}
 	moves := p.Moves([]Inbound{{Source: "/index.md", Anchor: "steps-detail"}, {Source: "/x.md", Anchor: "goal"}})
@@ -113,6 +118,48 @@ func TestSplitMovesHeadingsVerbatimAndKeepsTheFrame(t *testing.T) {
 	}
 	if len(p.Unfixed) != 0 {
 		t.Errorf("unfixed = %v", p.Unfixed)
+	}
+}
+
+// Topics carry what the policy requires and the parent has; what neither
+// supplies is named before apply. Axis tags stay on the hub even when only
+// a moved section spells one out.
+func TestSplitMeetsTheWritePolicy(t *testing.T) {
+	body := strings.Replace(bigDoc(), "First sentence of steps.", "First sentence of steps, status:active.", 1)
+	policy := &publishpolicy.Policy{Strictness: publishpolicy.Block, RequiredTagAxes: []string{"status"}, RequiredFields: []string{"owner", "source", "user"}}
+	in := &Input{Path: "/plans/big.md", Body: body, Version: 7, Policy: policy,
+		Metadata: map[string]string{"tags": "plan,status:active", "type": "Plan", "owner": "team-a", "local-id": "p-1"}}
+	p := Propose(in)
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
+	}
+	topic, hub := p.Writes[1], p.Writes[len(p.Writes)-1]
+	if topic.Metadata["owner"] != "team-a" || topic.Metadata["local-id"] != "" || topic.Metadata["user"] != "" {
+		t.Errorf("topic metadata = %v", topic.Metadata)
+	}
+	if hub.Metadata["tags"] != "plan,status:active" {
+		t.Errorf("hub tags = %q", hub.Metadata["tags"])
+	}
+	want := "/plans/big/steps.md: the write policy refuses it: missing metadata source"
+	if !slices.Contains(p.Unfixed, want) || len(p.Unfixed) != len(p.Writes) || !slices.Equal(p.Refused, p.Unfixed) {
+		t.Errorf("unfixed = %q, refused = %q; want %q for each write", p.Unfixed, p.Refused, want)
+	}
+	// A refusal the report names stops apply before its first write.
+	var refusal *Refusal
+	if applied, err := Apply(context.Background(), nil, &p, nil); !errors.As(err, &refusal) || len(applied) != 0 || !strings.HasSuffix(refusal.Reason, "; nothing written") {
+		t.Errorf("apply = %+v, %v; want a refusal before any write", applied, err)
+	}
+	// Warn lets the writes land with a note, so the report says so and apply proceeds.
+	policy.Strictness = publishpolicy.Warn
+	if p := Propose(in); len(p.Refused) != 0 || !slices.Contains(p.Unfixed, "/plans/big/steps.md: the write policy warns on it: missing metadata source") {
+		t.Errorf("warn: unfixed = %q, refused = %q", p.Unfixed, p.Refused)
+	}
+	// An untyped parent's topics carry the type the server would default, and
+	// a policy requiring type is met by it, on the topics and the hub alike.
+	in.Metadata = map[string]string{"tags": "plan,status:active", "owner": "team-a", "source": "s"}
+	in.Policy = &publishpolicy.Policy{Strictness: publishpolicy.Block, RequiredFields: []string{"type"}}
+	if p := Propose(in); len(p.Refused) != 0 || p.Writes[0].Metadata["type"] != protocol.OKFDefaultType {
+		t.Errorf("untyped: refused = %q, topic type = %q", p.Refused, p.Writes[0].Metadata["type"])
 	}
 }
 
@@ -140,6 +187,15 @@ func TestSplitMovesShortSectionsWhenTheHubWouldStillOverflow(t *testing.T) {
 	}
 	if hub := p.Writes[len(p.Writes)-1]; len(hub.Body) >= 8*1024 {
 		t.Errorf("hub still %d bytes", len(hub.Body))
+	}
+}
+
+func TestOneLineSkipsATable(t *testing.T) {
+	if got := oneLine("## Records\n\n| Genre | ID |\n|---|:-:|\n| Adab | g-1 |\n", 7); got != "" {
+		t.Errorf("table = %q, want none", got)
+	}
+	if got := oneLine("## Steps\n\nFirst sentence | with a pipe. Second.\n", 5); got != "First sentence | with a pipe." {
+		t.Errorf("prose = %q", got)
 	}
 }
 
@@ -208,7 +264,7 @@ func TestApplyPreflightsTopicsAndWritesTheHubLast(t *testing.T) {
 	// A topic an earlier apply of this document wrote is updated at any
 	// version while its digest still matches; one edited since refuses.
 	topicAt := func(body string, version int, digestOf string) *fetchtest.Client {
-		meta := map[string]string{CuratedFrom: "/plans/big.md", "tags": "x"}
+		meta := map[string]string{neardup.CuratedFromKey: "/plans/big.md", "tags": "x"}
 		meta[curatedDigest] = topicDigest(digestOf, meta)
 		return &fetchtest.Client{Published: map[string]fetch.Result{"h/plans/big/design.md": fetchtest.Head(body, version, meta), "h/plans/big.md": fetchtest.Head(in.Body, 2, in.Metadata)}}
 	}

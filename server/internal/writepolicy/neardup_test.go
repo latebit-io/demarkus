@@ -275,3 +275,35 @@ func TestEnforceRefusesNearDuplicate(t *testing.T) {
 		t.Errorf("off = %q, %v; want it to land clean", warnings, err)
 	}
 }
+
+// A split topic repeats its parent until the hub drops the section: the
+// source its curated-from names is not judged, with a note. Any other hit
+// still counts, and an existing document cannot claim a source it lacked.
+func TestEnforceExcusesTheSplitSource(t *testing.T) {
+	raw := newStore(t)
+	gated := writepolicy.Enforce(raw, writepolicy.Options{})
+	tags := map[string]string{"tags": "store"}
+	if _, err := write(t, gated, "/notes/shards.md", 0, []byte(neardtest.LessonDoc), tags); err != nil {
+		t.Fatal(err)
+	}
+	split := map[string]string{"tags": "store", neardup.CuratedFromKey: "notes/shards.md"}
+	warnings, err := write(t, gated, "/notes/shards/lesson.md", 0, []byte(neardtest.LessonDoc), split)
+	if err != nil || len(warnings) != 1 || warnings[0] != "near-duplicate check: not judged against /notes/shards.md, the document it was split from" {
+		t.Errorf("topic of its source = %q, %v; want it to land with the skip noted", warnings, err)
+	}
+	if _, err := write(t, gated, "/notes/shards/lesson.md", 1, []byte(neardtest.LessonDoc+"\nEdited since the split.\n"), split); err != nil {
+		t.Errorf("edit of the topic naming its stored source = %v, want it to land", err)
+	}
+	split[neardup.CuratedFromKey] = "/notes/other.md"
+	if _, err := write(t, gated, "/notes/other/lesson.md", 0, []byte(neardtest.LessonDoc), split); !errors.Is(err, writepolicy.ErrNearDuplicate) {
+		t.Errorf("topic naming another source = %v, want the refusal", err)
+	}
+	direct := backendtest.Direct{Store: raw}
+	if _, err := direct.WriteVersion("/notes/copy.md", 0, []byte(neardtest.RewordedDoc), tags); err != nil {
+		t.Fatal(err)
+	}
+	split[neardup.CuratedFromKey] = "/notes/shards.md"
+	if _, err := write(t, gated, "/notes/copy.md", 1, []byte(neardtest.LessonDoc), split); !errors.Is(err, writepolicy.ErrNearDuplicate) {
+		t.Errorf("existing document claiming a source = %v, want the refusal", err)
+	}
+}
