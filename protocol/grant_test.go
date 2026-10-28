@@ -34,6 +34,12 @@ func TestMatchesAnyPath(t *testing.T) {
 		{"infix glob multi-segment suffix", []string{"/docs/**/sub/*.md"}, "/docs/a/sub/x.md", true},
 		{"infix glob multi-segment suffix deep", []string{"/docs/**/sub/*.md"}, "/docs/a/b/sub/notes.md", true},
 		{"infix glob multi-segment suffix no match", []string{"/docs/**/sub/*.md"}, "/docs/a/other/x.md", false},
+		// Wildcards before **.
+		{"wildcard prefix recursive", []string{"/team/*/**"}, "/team/alice/sub/doc.md", true},
+		{"wildcard prefix recursive needs the segment", []string{"/team/*/**"}, "/team/doc.md", false},
+		{"wildcard prefix infix", []string{"/team/*/**/doc.md"}, "/team/alice/sub/doc.md", true},
+		{"wildcard prefix infix no intermediate dir", []string{"/team/*/**/doc.md"}, "/team/alice/doc.md", true},
+		{"wildcard prefix infix wrong root", []string{"/team/*/**/doc.md"}, "/other/alice/doc.md", false},
 	}
 
 	for _, tt := range tests {
