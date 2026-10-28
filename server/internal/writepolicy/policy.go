@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/layout"
+	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
@@ -60,6 +62,8 @@ func violationLines(result publishpolicy.Result, policy publishpolicy.Policy) []
 		switch {
 		case v.Name == "":
 			lines = append(lines, string(v.Code))
+		case v.Code == publishpolicy.UnpinnedSource:
+			lines = append(lines, fmt.Sprintf("%s: %s (pin %s)", v.Code, v.Name, provenance.PinForms))
 		case v.Axis != "":
 			lines = append(lines, fmt.Sprintf("%s: %s (allowed %s values: %s)", v.Code, v.Name, v.Axis, policy.AllowedList(v.Axis)))
 		default:
@@ -118,8 +122,8 @@ func currentDocument(ctx context.Context, reader documentGetter, path string) (d
 
 // evaluate judges one prepared write: the body first, then the metadata
 // under the floor merged with this world's policy, a candidate policy last.
-// The notes are what a warn verdict let through; none on a refusal.
-func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) ([]string, error) {
+// The notes are what a warn verdict let through, then drift; none on a refusal.
+func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite, d drift) ([]string, error) {
 	notes, err := e.content.judge(write)
 	if err != nil {
 		return nil, err
@@ -155,20 +159,18 @@ func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write sto
 			return nil, fmt.Errorf("%w: %w: candidate template: %v", backend.ErrRejected, ErrInvalidPolicy, err)
 		}
 	}
-	policy, err := Current(ctx, state, e.options.Require)
+	own, err := Current(ctx, state, e.options.Require)
 	if err != nil {
 		return nil, err
 	}
-	if floor != nil {
-		policy = publishpolicy.Merge(*floor, policy)
-	}
+	policy := publishpolicy.Effective(floor, own, write.Path)
 	result := publishpolicy.EvaluateStrings(policy, write.Path, write.Metadata)
 	strictness := policy.EffectiveStrictness()
 	switch {
 	case result.Compliant():
-		return notes, nil
+		return append(notes, d.notes(ctx, state, write)...), nil
 	case strictness == publishpolicy.Warn:
-		return append(notes, policyWarning(result, policy)), nil
+		return slices.Concat(notes, []string{policyWarning(result, policy)}, d.notes(ctx, state, write)), nil
 	}
 	return nil, &PolicyError{Strictness: strictness, Result: result, Policy: policy}
 }

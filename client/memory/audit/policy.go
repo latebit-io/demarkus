@@ -8,6 +8,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
+	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
 )
@@ -30,7 +31,7 @@ func (a *audit) readPolicy(ctx context.Context) {
 		own = publishpolicy.Parse(resp.Body)
 	}
 	a.policyKnown = true
-	a.policy = own
+	a.policy, a.own = own, own
 	if a.opts.Floor == nil {
 		return
 	}
@@ -64,7 +65,8 @@ func (a *audit) violations(p string, meta map[string]string) []publishpolicy.Vio
 	if !a.policyKnown {
 		return nil
 	}
-	return slices.DeleteFunc(publishpolicy.EvaluateStrings(a.policy.ForCaller(), p, meta).Violations, func(v publishpolicy.Violation) bool {
+	effective := publishpolicy.Effective(a.opts.Floor, a.own, p)
+	return slices.DeleteFunc(publishpolicy.EvaluateStrings(effective.ForCaller(), p, meta).Violations, func(v publishpolicy.Violation) bool {
 		return v.Code == publishpolicy.MissingTags
 	})
 }
@@ -79,6 +81,8 @@ func (a *audit) violation(v publishpolicy.Violation, meta map[string]string) (de
 		return fmt.Sprintf("missing required tag axis %s: (strictness %s)", v.Name, strictness), "re-publish with a " + v.Name + ":<value> tag"
 	case publishpolicy.MissingField:
 		return fmt.Sprintf("missing required metadata %s (strictness %s)", v.Name, strictness), "re-publish with metadata." + v.Name
+	case publishpolicy.UnpinnedSource:
+		return fmt.Sprintf("%s value %s is not a versioned permalink (strictness %s)", provenance.Key, v.Name, strictness), "pin " + provenance.PinForms
 	case publishpolicy.DisallowedTagValue:
 		return fmt.Sprintf("tag %s is outside the allowed values for %s (%s) (strictness %s)",
 			v.Name, v.Axis, a.policy.AllowedList(v.Axis), strictness), "re-publish with an allowed " + v.Axis + ": value"

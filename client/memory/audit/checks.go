@@ -41,6 +41,7 @@ const (
 	CheckContent       = "Secrets and personal data"
 	CheckStyleGuide    = "Style guide stale"
 	CheckReferences    = "Dangling and unlinked references"
+	CheckDrift         = "Source drift"
 	CheckLostMetadata  = "Metadata lost across versions"
 	CheckPromotion     = "Promotion candidates"
 	CheckTokenDrift    = "Token drift"
@@ -50,7 +51,7 @@ const (
 var CheckOrder = []string{
 	CheckBrokenLinks, CheckUnresolved, CheckOrphans, CheckStaleIndex, CheckMissingHub, CheckUntitled,
 	CheckADRSequence, CheckUntagged, CheckUntyped, CheckPolicy, CheckPolicyFloor, CheckDuplicates, CheckHubShape, CheckOversized,
-	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckContent, CheckStyleGuide, CheckReferences, CheckLostMetadata, CheckPromotion, CheckTokenDrift,
+	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckContent, CheckStyleGuide, CheckReferences, CheckDrift, CheckLostMetadata, CheckPromotion, CheckTokenDrift,
 }
 
 // checkLinks: a target absent from the live inventory is broken when a fetch

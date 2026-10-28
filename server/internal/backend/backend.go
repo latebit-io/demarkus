@@ -69,6 +69,9 @@ type WriteRequest struct {
 	// Warnings, when set, receives what the precondition let through with a
 	// note, one line each; a retried commit replaces them.
 	Warnings *[]string
+	// Readable, when set, reports whether the writer may read a path; notes
+	// naming other documents leave out the rest, as LOOKUP does. Nil reads all.
+	Readable func(path string) bool
 }
 
 // Precondition runs after the conflict, archive and no-op checks and before

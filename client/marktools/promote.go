@@ -281,9 +281,9 @@ func (t *Tools) promoteDraft(ctx context.Context, target Target, args *PromoteAr
 	return t.promoteApply(ctx, target, doc, draft)
 }
 
-// effectivePolicy is the policy the server will judge the write by: the
-// world's own merged over the floor world's when the surface names one.
-// Nil when neither has a policy document.
+// effectivePolicy is the policy the server will judge a write at target by:
+// the world's own merged over the floor world's when the surface names one,
+// each layer's exemptions applied. Nil when neither has a policy document.
 func (t *Tools) effectivePolicy(ctx context.Context, target Target) (*publishpolicy.Policy, *Result) {
 	own, bad := t.worldPolicy(ctx, target)
 	if bad != nil {
@@ -293,15 +293,15 @@ func (t *Tools) effectivePolicy(ctx context.Context, target Target) (*publishpol
 	if bad != nil {
 		return nil, bad
 	}
-	if floor == nil {
-		return own, nil
+	if floor == nil && own == nil {
+		return nil, nil
 	}
 	var world publishpolicy.Policy
 	if own != nil {
 		world = *own
 	}
-	merged := publishpolicy.Merge(*floor, world)
-	return &merged, nil
+	effective := publishpolicy.Effective(floor, world, target.Path)
+	return &effective, nil
 }
 
 // worldPolicy reads the world's write policy; not-found is no policy, any

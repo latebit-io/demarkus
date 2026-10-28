@@ -257,3 +257,28 @@ func TestEnforceReportsWarnLevelPolicyMisses(t *testing.T) {
 		}
 	})
 }
+
+func TestEnforceFloorExemptPaths(t *testing.T) {
+	raw := newStore(t)
+	if _, err := (backendtest.Direct{Store: raw}).WriteVersion(publishpolicy.DocumentPath, 0, []byte(warnPolicy), policyMeta); err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	floor := publishpolicy.Policy{Strictness: publishpolicy.Block, RequiredFields: []string{"user"}, Exempt: []string{"/graph/**"}}
+	gated := backendtest.Direct{Store: writepolicy.Enforce(raw, writepolicy.Options{Require: true, Floor: fixedFloor(floor)})}
+	// Generated output written under a grant carries no user.
+	generated := map[string]string{"tags": "category:federation"}
+	if _, err := gated.WriteVersion("/graph/manifest.md", 0, []byte("# Graph\n"), generated); err != nil {
+		t.Errorf("exempt graph write: %v", err)
+	}
+	if _, err := gated.WriteVersion("/notes/a.md", 0, []byte("# A\n"), generated); !errors.Is(err, writepolicy.ErrPolicyBlocked) {
+		t.Errorf("write outside the exemption = %v, want blocked", err)
+	}
+	// The world's own exemption never lifts the floor's rule.
+	world := "# Write Policy\n\nstrictness: warn\nexempt: /notes/**\n"
+	if _, err := gated.WriteVersion(publishpolicy.DocumentPath, 1, []byte(world), map[string]string{"tags": "category:governance", "user": "a@example.com"}); err != nil {
+		t.Fatalf("world policy: %v", err)
+	}
+	if _, err := gated.WriteVersion("/notes/a.md", 0, []byte("# A\n"), generated); !errors.Is(err, writepolicy.ErrPolicyBlocked) {
+		t.Errorf("write under a world exemption = %v, want the floor's block", err)
+	}
+}

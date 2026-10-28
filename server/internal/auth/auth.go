@@ -19,7 +19,6 @@ package auth
 import (
 	"errors"
 	"fmt"
-	"path"
 	"slices"
 	"strings"
 	"time"
@@ -141,10 +140,10 @@ func (ts *TokenStore) RequiresReadAuth(reqPath string) bool {
 	if ts == nil || reqPath == protocol.WellKnownManifestPath {
 		return false
 	}
-	if matchesAnyPath(ts.readPaths, reqPath) {
+	if protocol.MatchesAnyPath(ts.readPaths, reqPath) {
 		return true
 	}
-	return !strings.HasSuffix(reqPath, "/") && matchesAnyPath(ts.readPaths, reqPath+"/")
+	return !strings.HasSuffix(reqPath, "/") && protocol.MatchesAnyPath(ts.readPaths, reqPath+"/")
 }
 
 // AuthorizeRead decides a read of a canonical path: nil when the path is
@@ -217,7 +216,7 @@ func (ts *TokenStore) authorizeHashed(hashed, reqPath, operation string) (string
 	if !hasOperation(t.Operations, operation) {
 		return "", ErrNotPermitted
 	}
-	if !matchesAnyPath(t.Paths, reqPath) {
+	if !protocol.MatchesAnyPath(t.Paths, reqPath) {
 		return "", ErrNotPermitted
 	}
 	return t.Label, nil
@@ -225,63 +224,6 @@ func (ts *TokenStore) authorizeHashed(hashed, reqPath, operation string) (string
 
 func hasOperation(ops []string, target string) bool {
 	return slices.Contains(ops, target)
-}
-
-// matchesAnyPath checks if reqPath matches any of the glob patterns.
-// Supports single-level * and ? wildcards via path.Match, plus
-// recursive ** wildcards for matching across directory levels:
-//   - /docs/**       matches anything under /docs/
-//   - /docs/**/a.md  matches /docs/sub/a.md, /docs/a/b/a.md, etc.
-//   - /**            matches everything
-//
-// Only one ** wildcard is supported per pattern.
-//
-// Uses path.Match (not filepath.Match) because token paths are URL-style
-// forward slashes, and filepath.Match behavior varies by OS.
-func matchesAnyPath(patterns []string, reqPath string) bool {
-	for _, pattern := range patterns {
-		if matchPath(pattern, reqPath) {
-			return true
-		}
-	}
-	return false
-}
-
-// matchPath handles ** by splitting on /**/ into prefix and suffix, else
-// path.Match. Patterns pass protocol.ValidatePathPattern at load, so a
-// path.Match error is unreachable and ignored.
-func matchPath(pattern, reqPath string) bool {
-	if !strings.Contains(pattern, "**") {
-		matched, _ := path.Match(pattern, reqPath)
-		return matched
-	}
-
-	// Trailing /** — matches anything under the prefix.
-	if prefix, ok := strings.CutSuffix(pattern, "/**"); ok {
-		return strings.HasPrefix(reqPath, prefix+"/")
-	}
-
-	// Infix /**/ — prefix must match the start, suffix must match a trailing
-	// subpath. The suffix can span multiple segments (e.g. /**/sub/*.md).
-	if prefix, suffix, ok := strings.Cut(pattern, "/**/"); ok {
-		if !strings.HasPrefix(reqPath, prefix+"/") {
-			return false
-		}
-		remaining := reqPath[len(prefix)+1:]
-		// Try matching the suffix against every possible tail starting at
-		// a segment boundary, so /docs/**/sub/*.md matches /docs/a/sub/x.md.
-		for i := range len(remaining) {
-			if i > 0 && remaining[i-1] != '/' {
-				continue
-			}
-			if matched, _ := path.Match(suffix, remaining[i:]); matched {
-				return true
-			}
-		}
-		return false
-	}
-
-	return false
 }
 
 // Permits reports whether the grant covers reqPath. A grant has no load
@@ -292,5 +234,5 @@ func Permits(g *protocol.Grant, reqPath string) bool {
 			return false
 		}
 	}
-	return matchesAnyPath(g.Paths, reqPath)
+	return protocol.MatchesAnyPath(g.Paths, reqPath)
 }

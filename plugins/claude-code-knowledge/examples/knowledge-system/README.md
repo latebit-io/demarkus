@@ -28,7 +28,7 @@ It declares who owns the world, what subject domain it holds, its partition role
 
 ## How a joined agent consumes them
 
-The server enforces the policy on every write: `strictness:` sets the severity, `require_tags:` names tag axes each publish must carry as `axis:value` (e.g. `category:project`), `allow_tags:` lists the values per axis, `require_fields:` the metadata keys. A write that falls short is refused or warned with the rule to fix. `/knowledge-join` registers the system so the plugin's own publish gate adds the same `tags` presence check before the call leaves the session.
+The server enforces the policy on every write: `strictness:` sets the severity, `require_tags:` names tag axes each publish must carry as `axis:value` (e.g. `category:project`), `allow_tags:` lists the values per axis, `require_fields:` the metadata keys, `exempt:` the path patterns (generated output, configuration) the policy's own rules skip. A write that falls short is refused or warned with the rule to fix. `/knowledge-join` registers the system so the plugin's own publish gate adds the same `tags` presence check before the call leaves the session.
 
 On first substantive work against a knowledge system, the agent fetches `mark://root/.well-known/demarkus/policy.md` and `mark://root/.well-known/demarkus/template.md` and follows them; structure conventions are advisory by necessity (only the agent, via its MCP OAuth session, can reach the broker; a hook cannot).
 

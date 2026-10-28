@@ -372,6 +372,12 @@ func (h *Handler) checkReadAuth(reqPath, token string) error {
 	return h.tokenStore().AuthorizeRead(token, scopePath(reqPath))
 }
 
+// readableBy is the read check a write's notes about other documents pass,
+// the one LOOKUP filters its rows by.
+func (h *Handler) readableBy(req protocol.Request) func(string) bool {
+	return func(p string) bool { return h.checkReadAuth(p, req.Metadata["auth"]) == nil }
+}
+
 // scopePath is the canonical path with a trailing slash kept: "/" or a
 // prefix ending in "/" names a subtree, anything else one document.
 func scopePath(reqPath string) string {
@@ -953,7 +959,7 @@ func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 	}
 
 	var warnings []string
-	doc, err := h.store.Publish(ctx, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta, Warnings: &warnings})
+	doc, err := h.store.Publish(ctx, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta, Warnings: &warnings, Readable: h.readableBy(req)})
 	h.logPrune("PUBLISH", req.Path, tokenLabel, doc)
 	if err != nil {
 		h.writePublishError(w, req, expectedVersion, doc, err, tokenLabel)
@@ -1100,7 +1106,7 @@ func (h *Handler) handleAppend(ctx context.Context, call *writeCall) {
 	}
 
 	var warnings []string
-	doc, err := h.store.Append(ctx, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta, Warnings: &warnings})
+	doc, err := h.store.Append(ctx, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta, Warnings: &warnings, Readable: h.readableBy(req)})
 	h.logPrune("APPEND", req.Path, tokenLabel, doc)
 	if err != nil {
 		h.writeAppendError(w, req, expectedVersion, doc, err, tokenLabel)

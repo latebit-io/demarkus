@@ -40,7 +40,6 @@
 1 server/blob/blob.go: G115: integer overflow conversion int -> uint16 (gosec)
 1 server/blob/blobtest/conformance.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)
 2 server/blob/gcs/gcs.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)
-2 server/internal/auth/auth.go: Error return value of `path.Match` is not checked (errcheck)
 1 server/internal/catalog/sections.go: G115: integer overflow conversion int -> int32 (gosec)
 1 server/internal/catalog/sections.go: G115: integer overflow conversion int -> uint8 (gosec)
 1 server/internal/handler/handler.go: Error return value of `stream.Close` is not checked (errcheck)

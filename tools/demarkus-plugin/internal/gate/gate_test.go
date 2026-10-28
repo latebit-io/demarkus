@@ -488,3 +488,20 @@ func TestContentGate(t *testing.T) {
 		t.Errorf("knowledge secret: got %q (%s), want block", d.Decision, d.Reason)
 	}
 }
+
+func TestUnpinnedSourceGate(t *testing.T) {
+	t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
+	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	pins := func(value string) *Input {
+		return &Input{Tool: "demarkus_memory_mark_publish", Input: map[string]any{
+			"url": "/x.md", "metadata": map[string]any{"tags": "a", "rel-based-on": value},
+		}}
+	}
+	moving := mustEval(t, pins("/adr/a.md, /adr/b.md/v2"))
+	if moving.Decision != "block" || !strings.Contains(moving.Reason, "rel-based-on values that are no versioned permalink (/adr/a.md;") {
+		t.Fatalf("unpinned: got %q (%s)", moving.Decision, moving.Reason)
+	}
+	if pinned := mustEval(t, pins("/adr/a.md/v3")); pinned.Decision != "allow" {
+		t.Fatalf("pinned: got %q (%s)", pinned.Decision, pinned.Reason)
+	}
+}

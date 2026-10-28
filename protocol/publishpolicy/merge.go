@@ -22,9 +22,9 @@ func strictnessRank(s Strictness) int {
 	}
 }
 
-// Merge is the policy a world is held to under a floor: the stricter
-// strictness, the union of required axes and fields, per axis the
-// intersection of allowed values. A world only tightens the floor.
+// Merge is the policy a world is held to under a floor, which it only
+// tightens: the stricter strictness, the union of required axes and fields,
+// per axis the intersection of allowed values. Effective applies Exempt.
 func Merge(floor, world Policy) Policy {
 	merged := Policy{Strictness: world.EffectiveStrictness()}
 	if strictnessRank(floor.EffectiveStrictness()) > strictnessRank(merged.Strictness) {

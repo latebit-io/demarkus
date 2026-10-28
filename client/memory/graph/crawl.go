@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/memory/outline"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/provenance"
 )
 
 // Fetcher fetches one parsed mark:// target. A direct client dials
@@ -163,6 +164,11 @@ func RelEdges(docURL string, metadata map[string]string) RelResult {
 				reason = "whitespace in reference"
 			default:
 				target, frag, _ := strings.Cut(ref, "#")
+				// A version path pins a document (rel-based-on); the edge
+				// lands on the document, not on a node per version.
+				if pin := provenance.ParsePin(target); pin.DocumentVersion() > 0 {
+					target = pin.Source
+				}
 				resolved, fragment = links.CanonicalURL(links.Resolve(docURL, target)), frag
 				if resolved == docURL {
 					reason = "self reference"

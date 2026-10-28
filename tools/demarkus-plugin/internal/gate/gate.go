@@ -11,6 +11,7 @@ import (
 
 	docgate "github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
+	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
@@ -303,6 +304,7 @@ func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambigu
 			if result.Has(publishpolicy.InvalidImportance) {
 				problems = append(problems, "metadata.importance outside [0,1]")
 			}
+			problems = append(problems, unpinnedProblem(result)...)
 			target := urlOr(args, "the document")
 			reason := fmt.Sprintf(
 				"demarkus %s to %s has %s. Re-issue mark_%s with a metadata object: tags "+
@@ -392,6 +394,7 @@ func knowledgeTagDecision(args map[string]any, slug, verb string) *Decision {
 	if result.Has(publishpolicy.InvalidImportance) {
 		problems = append(problems, "metadata.importance outside [0,1]")
 	}
+	problems = append(problems, unpinnedProblem(result)...)
 	target := url
 	if target == "" {
 		target = "the document"
@@ -402,6 +405,15 @@ func knowledgeTagDecision(args map[string]any, slug, verb string) *Decision {
 			"Tags are what make this document findable via mark_lookup across the shared catalog.",
 		verb, target, slug, strings.Join(problems, "; "), verb)
 	return &Decision{Decision: string(policy.EffectiveStrictness()), Reason: reason}
+}
+
+// unpinnedProblem words the rel-based-on values that name no version.
+func unpinnedProblem(result publishpolicy.Result) []string {
+	names := result.Names(publishpolicy.UnpinnedSource)
+	if len(names) == 0 {
+		return nil
+	}
+	return []string{provenance.Key + " values that are no versioned permalink (" + strings.Join(names, ", ") + "; pin " + provenance.PinForms + ")"}
 }
 
 func urlOr(args map[string]any, fallback string) string {
