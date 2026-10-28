@@ -129,10 +129,10 @@ func validateExempt(patterns []string) error {
 		if err := protocol.ValidatePathPattern(pattern); err != nil {
 			return fmt.Errorf("exempt pattern %q: %w", pattern, err)
 		}
-		// MatchesAnyPath reads the part before ** literally, so a wildcard
-		// there would exempt nothing; refuse it rather than ignore it.
-		if before, _, ok := strings.Cut(pattern, "**"); ok && strings.ContainsAny(before, "*?") {
-			return fmt.Errorf("exempt pattern %q: the part before ** is literal, so its wildcard matches nothing", pattern)
+		// MatchesAnyPath reads the part before ** literally, so glob syntax
+		// there would not mean what it says; a pattern without ** escapes.
+		if before, _, ok := strings.Cut(pattern, "**"); ok && strings.ContainsAny(before, `*?[\`) {
+			return fmt.Errorf(`exempt pattern %q: the part before ** is literal, so * ? [ \ are refused there`, pattern)
 		}
 	}
 	return nil

@@ -13,12 +13,12 @@ func TestParseExempt(t *testing.T) {
 }
 
 func TestValidateExempt(t *testing.T) {
-	for _, pattern := range []string{"graph/**", "/a/**/b/**", "/a/[", "/a**", "/team/*/**", "/a?/**/log.md"} {
+	for _, pattern := range []string{"graph/**", "/a/**/b/**", "/a/[", "/a**", "/team/*/**", "/a?/**/log.md", "/team/[ab]/**", `/team/\[ab\]/**`} {
 		if err := (Policy{Exempt: []string{pattern}}).Validate(); err == nil {
 			t.Errorf("Validate accepted exempt pattern %q", pattern)
 		}
 	}
-	if err := (Policy{Exempt: []string{"/graph/**", "/index.md", "/*/log.md"}}).Validate(); err != nil {
+	if err := (Policy{Exempt: []string{"/graph/**", "/index.md", "/*/log.md", "/a/**/[ab].md", `/team/\[ab\]/*`}}).Validate(); err != nil {
 		t.Errorf("Validate refused valid patterns: %v", err)
 	}
 }

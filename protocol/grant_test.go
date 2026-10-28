@@ -38,6 +38,7 @@ func TestMatchesAnyPath(t *testing.T) {
 		{"literal prefix keeps brackets", []string{"/private[ab]/**"}, "/private[ab]/secret.md", true},
 		{"literal prefix no class", []string{"/private[ab]/**"}, "/privatea/secret.md", false},
 		{"literal prefix no wildcard", []string{"/team/*/**"}, "/team/alice/doc.md", false},
+		{"escaped bracket without **", []string{`/team/\[ab\]/*`}, "/team/[ab]/doc.md", true},
 	}
 
 	for _, tt := range tests {
