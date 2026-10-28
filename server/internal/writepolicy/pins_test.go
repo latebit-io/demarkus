@@ -130,14 +130,15 @@ func TestAppendNotesAnInheritedStalePin(t *testing.T) {
 	}
 }
 
-// Unreadable dependents ranked first never crowd a readable one out of the note.
+// Unreadable dependents ranked first never crowd a readable one out of the
+// note; 100 fill any cap a read-then-filter lookup would apply.
 func TestDependentsNoteSkipsUnreadableBeforeTheCap(t *testing.T) {
 	raw := newStore(t)
 	gated := writepolicy.Enforce(raw, writepolicy.Options{})
 	if _, err := write(t, gated, "/src.md", 0, []byte("# Src\n"), map[string]string{"tags": "x"}); err != nil {
 		t.Fatal(err)
 	}
-	for i := range 12 {
+	for i := range 100 {
 		meta := map[string]string{"tags": "x", "importance": "0.9", "rel-based-on": "/src.md/v1"}
 		if _, err := write(t, gated, "/private/dep"+strconv.Itoa(i)+".md", 0, []byte("# Dep "+strconv.Itoa(i)+"\n"), meta); err != nil {
 			t.Fatal(err)

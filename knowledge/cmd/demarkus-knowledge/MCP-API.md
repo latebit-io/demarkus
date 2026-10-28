@@ -294,7 +294,7 @@ reviewed false positive land and is recorded with the version.
 | `body` | string | yes | Markdown content. |
 | `expected_version` | number | yes | From a prior fetch. `0` to create a new document. |
 | `on_conflict` | string | no | `"merge"` (default) or `"fail"`. |
-| `metadata` | object | no | Publisher metadata (`tags`, `importance`, opaque keys). Keys with the `rel-` prefix declare typed relations to other documents (`rel-supersedes: /adr/0002.md`, comma-separated for multiple targets); graph crawls ingest them as typed edges. `rel-based-on` pins the sources the document was written from as permalinks (`/adr/0006.md/v5`, a GitHub commit URL); a value naming no version is an `unpinned-source` violation, and the write's notes name a pin behind its source and the documents pinned to the one written. |
+| `metadata` | object | no | Publisher metadata (`tags`, `importance`, opaque keys). Keys with the `rel-` prefix declare typed relations to other documents (`rel-supersedes: /adr/0002.md`, comma-separated for multiple targets); graph crawls ingest them as typed edges. `rel-based-on` pins the sources the document was written from as permalinks (`/adr/0006.md/v5`, a GitHub commit URL); a document path or GitHub URL naming no version is an `unpinned-source` violation (any other URL is taken as the writer's permalink), and the write's notes name a pin behind its source and the documents pinned to the one written. |
 
 #### `mark_append`
 
