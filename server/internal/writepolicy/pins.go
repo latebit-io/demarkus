@@ -19,29 +19,30 @@ const (
 	maxDependentsNamed = 10
 )
 
-// pinNotes is what drift a write meets: its own pins behind their sources,
-// and documents pinned to an earlier version of this one, naming only what
-// the writer may read. Noted before the commit, so a race costs a stale note.
-func pinNotes(ctx context.Context, view backend.ReadView, req backend.WriteRequest) []string {
-	readable := req.Readable
-	if readable == nil {
-		readable = func(string) bool { return true }
-	}
-	return append(stalePins(ctx, view, req, readable), dependents(ctx, view, req.Path, readable)...)
+// drift is what a write's notes about other documents need: the writer's
+// read check and the dependents read before the commit.
+type drift struct {
+	readable   func(string) bool
+	dependents []string
 }
 
-// stalePins checks each path pin the write declares against the current
-// version here, reading each source once; mark:// URL pins name a world
-// this store cannot see.
-func stalePins(ctx context.Context, reader backend.Reader, req backend.WriteRequest, readable func(string) bool) []string {
+// notes are the prepared write's stale pins, then its dependents.
+func (d drift) notes(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) []string {
+	return append(stalePins(ctx, state, write, d.readable), d.dependents...)
+}
+
+// stalePins checks the prepared write's path pins, inherited by an append
+// too, against the commit state, reading each source once and naming only
+// what the writer may read; mark:// URL pins name a world not seen here.
+func stalePins(ctx context.Context, reader backend.Reader, write storefmt.PreparedWrite, readable func(string) bool) []string {
 	type read struct {
 		doc *storefmt.Document
 		err error
 	}
 	var notes []string
 	reads := map[string]read{}
-	for _, pin := range provenance.Parse(req.Metadata[provenance.Key]) {
-		target, pinned := pin.Local(req.Path), pin.DocumentVersion()
+	for _, pin := range provenance.Parse(write.Metadata[provenance.Key]) {
+		target, pinned := pin.Local(write.Path), pin.DocumentVersion()
 		if target == "" || pinned == 0 || !readable(target) {
 			continue
 		}
@@ -67,8 +68,8 @@ func stalePins(ctx context.Context, reader backend.Reader, req backend.WriteRequ
 	return notes
 }
 
-// dependents names the documents pinned to docPath: every pin is on a
-// version this write replaces, so each may now be stale.
+// dependents names the readable documents pinned to docPath, read before
+// the commit: every pin is on a version this write replaces.
 func dependents(ctx context.Context, view backend.CatalogReader, docPath string, readable func(string) bool) []string {
 	own := storefmt.CanonicalPath(docPath)
 	rows, err := view.Lookup(ctx, "*", catalog.Options{Filter: []catalog.Predicate{catalog.BasedOn(own)}, Max: maxDependentsRead})

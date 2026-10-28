@@ -122,8 +122,8 @@ func currentDocument(ctx context.Context, reader documentGetter, path string) (d
 
 // evaluate judges one prepared write: the body first, then the metadata
 // under the floor merged with this world's policy, a candidate policy last.
-// The notes are what a warn verdict let through, then pins; none on a refusal.
-func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite, pins []string) ([]string, error) {
+// The notes are what a warn verdict let through, then drift; none on a refusal.
+func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite, d drift) ([]string, error) {
 	notes, err := e.content.judge(write)
 	if err != nil {
 		return nil, err
@@ -168,9 +168,9 @@ func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write sto
 	strictness := policy.EffectiveStrictness()
 	switch {
 	case result.Compliant():
-		return append(notes, pins...), nil
+		return append(notes, d.notes(ctx, state, write)...), nil
 	case strictness == publishpolicy.Warn:
-		return slices.Concat(notes, []string{policyWarning(result, policy)}, pins), nil
+		return slices.Concat(notes, []string{policyWarning(result, policy)}, d.notes(ctx, state, write)), nil
 	}
 	return nil, &PolicyError{Strictness: strictness, Result: result, Policy: policy}
 }

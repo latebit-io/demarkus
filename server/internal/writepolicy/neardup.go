@@ -138,21 +138,21 @@ func splitSource(ctx context.Context, reader documentGetter, own string, meta ma
 
 // beforeCommit reads one view before the commit, since the commit's state
 // may lend no catalog and a view opened inside it is the deadlock Read warns
-// about: the near-duplicate judgment when the check is on, then the pins.
-func (e *enforcer) beforeCommit(ctx context.Context, req backend.WriteRequest) (verdict nearVerdict, pins []string, err error) {
+// about: the near-duplicate judgment when the check is on, then dependents.
+func (e *enforcer) beforeCommit(ctx context.Context, req backend.WriteRequest) (verdict nearVerdict, notes []string, err error) {
 	near := e.options.Content.NearDuplicate != contentcheck.Off
 	view, err := e.OpenReadView(ctx)
 	if err != nil {
-		pins = []string{"source pins not checked: open view: " + err.Error()}
+		notes = []string{"dependents not checked: open view: " + err.Error()}
 		if !near {
-			return nearVerdict{}, pins, nil
+			return nearVerdict{}, notes, nil
 		}
 		verdict, err = e.tolerate(nearVerdict{}, fmt.Errorf("near-duplicate check: open view: %w", err))
-		return verdict, pins, err
+		return verdict, notes, err
 	}
 	defer func() {
 		if closeErr := view.Close(); closeErr != nil {
-			pins = append(pins, "pre-commit read: close view: "+closeErr.Error())
+			notes = append(notes, "pre-commit read: close view: "+closeErr.Error())
 		}
 	}()
 	if near {
@@ -160,7 +160,7 @@ func (e *enforcer) beforeCommit(ctx context.Context, req backend.WriteRequest) (
 			return verdict, nil, err
 		}
 	}
-	return verdict, pinNotes(ctx, view, req), nil
+	return verdict, dependents(ctx, view, req.Path, req.Readable), nil
 }
 
 // settleNearDuplicate turns a judgment into the write's fate under the mode:

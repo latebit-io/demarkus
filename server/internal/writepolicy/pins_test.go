@@ -105,3 +105,27 @@ func TestPinNotesNameOnlyReadableDocuments(t *testing.T) {
 		t.Errorf("control dependents = %q, %v; want /private/dep.md named", warnings, err)
 	}
 }
+
+// An append carries the base version's pins; its notes judge those too.
+func TestAppendNotesAnInheritedStalePin(t *testing.T) {
+	raw := newStore(t)
+	gated := writepolicy.Enforce(raw, writepolicy.Options{})
+	tags := map[string]string{"tags": "x"}
+	if _, err := write(t, gated, "/src.md", 0, []byte("# Src\n"), tags); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := write(t, gated, "/notes.md", 0, []byte("# Notes\n"), map[string]string{"tags": "x", "rel-based-on": "/src.md/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := write(t, gated, "/src.md", 1, []byte("# Src\n\nChanged.\n"), tags); err != nil {
+		t.Fatal(err)
+	}
+	var warnings []string
+	if _, err := gated.Append(t.Context(), backend.WriteRequest{Path: "/notes.md", ExpectedVersion: 1, Content: []byte("More.\n"), Warnings: &warnings}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"rel-based-on: /src.md is at v2, past the pinned v1; read what changed, update, pin v2"}
+	if !slices.Equal(warnings, want) {
+		t.Errorf("append warnings = %q, want %q", warnings, want)
+	}
+}
