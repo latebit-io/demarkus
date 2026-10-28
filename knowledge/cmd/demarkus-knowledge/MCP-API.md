@@ -196,7 +196,7 @@ reads.
 | --- | --- | --- | --- |
 | `url` | string | yes | Scope: `mark://{worldName}/` for the whole world, or a subtree like `mark://{worldName}/docs/`. |
 | `query` | string | yes | Subject; matched against tags and titles (min 2 chars). |
-| `filter` | string | no | Comma-separated `key=value`; built-ins `tag=`, `modified-after=`, `modified-before=`, `based-on=` (documents whose `rel-based-on` pins a document, directory or repository URL, any version). |
+| `filter` | string | no | Comma-separated `key=value`; built-ins `tag=`, `modified-after=`, `modified-before=`, `based-on=` (documents whose `rel-based-on` pins a document, directory, repository URL or GitHub tree/blob path, any version). |
 | `limit` | number | no | Max results (server default 10, cap 1000). |
 | `match` | string | no | `catalog` (default) or `body`. |
 

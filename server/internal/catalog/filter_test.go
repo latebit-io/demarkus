@@ -84,8 +84,12 @@ func TestBasedOnMatchesPinsAtAnyVersion(t *testing.T) {
 		{"based-on=/adr/", true},
 		{"based-on=adr//0006.md", true},
 		{"based-on=https://github.com/o/r", true},
+		{"based-on=https://github.com/o/r/tree/main/internal", true},
+		{"based-on=/adr/0006.md/v2", true},
 		{"based-on=/adr/0007.md", false},
 		{"based-on=https://github.com/o/r2", false},
+		{"based-on=https://github.com/o/r/blob/1234567/internal/x.go", false},
+		{"based-on=https://github.com/o/r/tree/main/other", false},
 		{"based-on=/adr/0006.md,tag=go", false},
 	}
 	for _, tt := range tests {

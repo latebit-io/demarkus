@@ -73,8 +73,10 @@ func ParseFilter(s string) ([]Predicate, error) {
 }
 
 // BasedOn matches documents pinning source, or anything under it, at any
-// version: a document path, a directory, a repository URL.
+// version: a document path, a directory, a repository URL or a path in one.
+// source reads as a pin does, so a version it names is dropped.
 func BasedOn(source string) Predicate {
+	source = provenance.ParsePin(source).Source
 	if !strings.Contains(source, "://") {
 		source = storefmt.CanonicalPath(source)
 	}

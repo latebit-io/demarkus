@@ -195,7 +195,8 @@ type Options struct {
 	Match Mode
 	// Draft is what similar mode judges the documents against.
 	Draft *neardup.Text
-	// Skip excludes documents from similar mode: the draft's own path.
+	// Skip excludes documents before Max counts them, in catalog and
+	// similar mode: a draft's own path, rows the caller may not read.
 	Skip func(path string) bool
 	// Stale lets a section-index mode answer from the newest index built,
 	// whatever snapshot it covers, waiting the store's freshness bound only
@@ -252,7 +253,7 @@ func Search(index Index, query string, opts Options) ([]Result, error) {
 
 	best := topResults{max: opts.Max}
 	for e := range index.Entries(scope) {
-		if !underScope(e.Path, scope) || !MatchesAll(e, opts.Filter) {
+		if !underScope(e.Path, scope) || !MatchesAll(e, opts.Filter) || (opts.Skip != nil && opts.Skip(e.Path)) {
 			continue
 		}
 		score := 0

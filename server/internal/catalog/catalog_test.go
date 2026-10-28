@@ -273,3 +273,14 @@ func TestMatchScoreAllocatesNothingForASCII(t *testing.T) {
 		t.Errorf("non-ASCII matchScore = %d, want 2", got)
 	}
 }
+
+// Skip drops a row before Max counts it, so skipped rows never crowd out the rest.
+func TestSkipAppliesBeforeMax(t *testing.T) {
+	c := New()
+	c.Set(&Entry{Path: "/hidden.md", Importance: 0.9})
+	c.Set(&Entry{Path: "/shown.md", Importance: 0.1})
+	rows := mustLookup(t, c, "*", Options{Max: 1, Skip: func(p string) bool { return p == "/hidden.md" }})
+	if len(rows) != 1 || rows[0].Path != "/shown.md" {
+		t.Errorf("rows = %+v, want /shown.md alone", rows)
+	}
+}

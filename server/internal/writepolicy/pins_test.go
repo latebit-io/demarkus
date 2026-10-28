@@ -129,3 +129,30 @@ func TestAppendNotesAnInheritedStalePin(t *testing.T) {
 		t.Errorf("append warnings = %q, want %q", warnings, want)
 	}
 }
+
+// Unreadable dependents ranked first never crowd a readable one out of the note.
+func TestDependentsNoteSkipsUnreadableBeforeTheCap(t *testing.T) {
+	raw := newStore(t)
+	gated := writepolicy.Enforce(raw, writepolicy.Options{})
+	if _, err := write(t, gated, "/src.md", 0, []byte("# Src\n"), map[string]string{"tags": "x"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 12 {
+		meta := map[string]string{"tags": "x", "importance": "0.9", "rel-based-on": "/src.md/v1"}
+		if _, err := write(t, gated, "/private/dep"+strconv.Itoa(i)+".md", 0, []byte("# Dep "+strconv.Itoa(i)+"\n"), meta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := write(t, gated, "/public/dep.md", 0, []byte("# Public dep\n"), map[string]string{"tags": "x", "importance": "0.1", "rel-based-on": "/src.md/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	var warnings []string
+	readable := func(p string) bool { return !strings.HasPrefix(p, "/private/") }
+	if _, err := gated.Publish(t.Context(), backend.WriteRequest{Path: "/src.md", ExpectedVersion: 1, Content: []byte("# Src\n\nChanged.\n"), Metadata: map[string]string{"tags": "x"}, Warnings: &warnings, Readable: readable}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"based on an earlier version of this document: /public/dep.md; check them against this change and re-pin"}
+	if !slices.Equal(warnings, want) {
+		t.Errorf("warnings = %q, want %q", warnings, want)
+	}
+}

@@ -12,12 +12,9 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
-// Dependents notes read up to maxDependentsRead rows, so unreadable ones do
-// not crowd out the rest, and name up to maxDependentsNamed.
-const (
-	maxDependentsRead  = 100
-	maxDependentsNamed = 10
-)
+// maxDependentsNamed caps the documents a dependents note names; one more
+// is read to say there are more.
+const maxDependentsNamed = 10
 
 // drift is what a write's notes about other documents need: the writer's
 // read check and the dependents read before the commit.
@@ -69,25 +66,27 @@ func stalePins(ctx context.Context, reader backend.Reader, write storefmt.Prepar
 }
 
 // dependents names the readable documents pinned to docPath, read before
-// the commit: every pin is on a version this write replaces.
+// the commit: every pin is on a version this write replaces. The lookup
+// skips unreadable rows, so they never take a slot under the cap.
 func dependents(ctx context.Context, view backend.CatalogReader, docPath string, readable func(string) bool) []string {
 	own := storefmt.CanonicalPath(docPath)
-	rows, err := view.Lookup(ctx, "*", catalog.Options{Filter: []catalog.Predicate{catalog.BasedOn(own)}, Max: maxDependentsRead})
+	rows, err := view.Lookup(ctx, "*", catalog.Options{
+		Filter: []catalog.Predicate{catalog.BasedOn(own)},
+		Skip:   func(p string) bool { return p == own || !readable(p) },
+		Max:    maxDependentsNamed + 1,
+	})
 	if err != nil {
 		return []string{"dependents not checked: " + err.Error()}
 	}
-	var paths []string
-	for i := range rows {
-		if rows[i].Path != own && readable(rows[i].Path) {
-			paths = append(paths, rows[i].Path)
-		}
-	}
-	if len(paths) == 0 {
+	if len(rows) == 0 {
 		return nil
 	}
-	named := paths[:min(len(paths), maxDependentsNamed)]
+	named := make([]string, min(len(rows), maxDependentsNamed))
+	for i := range named {
+		named[i] = rows[i].Path
+	}
 	more := ""
-	if len(paths) > len(named) {
+	if len(rows) > len(named) {
 		more = " and more"
 	}
 	return []string{fmt.Sprintf("based on an earlier version of this document: %s%s; check them against this change and re-pin", strings.Join(named, ", "), more)}

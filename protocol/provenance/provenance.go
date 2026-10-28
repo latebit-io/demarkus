@@ -37,7 +37,8 @@ type Pin struct {
 	Ref  string // as written
 	kind kind
 	// Source is the pinned thing without its version: a document path or
-	// mark:// URL, a repository URL, or Ref for an opaque pin.
+	// mark:// URL, a repository URL (with a tree or blob path), or Ref for
+	// an opaque pin.
 	Source string
 	// Version is a document's decimal version or a commit; "" when the
 	// value names none.
@@ -161,7 +162,8 @@ func cutVersion(target string) (source, version string) {
 const githubPrefix = "https://github.com/"
 
 // githubPin reads https://github.com/<owner>/<repo>[/(tree|blob|commit)/<ref>[/<path>]].
-// Only a commit hash pins: a branch or tag moves.
+// Only a commit hash pins: a branch or tag moves. Source keeps a tree or
+// blob path without its ref, so it matches at any version.
 func githubPin(ref, target string) Pin {
 	segments := strings.Split(strings.Trim(target[len(githubPrefix):], "/"), "/")
 	if len(segments) < 2 || segments[0] == "" || segments[1] == "" {
@@ -170,6 +172,9 @@ func githubPin(ref, target string) Pin {
 	pin := Pin{Ref: ref, kind: commit, Source: githubPrefix + segments[0] + "/" + strings.TrimSuffix(segments[1], ".git")}
 	if len(segments) >= 4 && (segments[2] == "tree" || segments[2] == "blob" || segments[2] == "commit") && isCommit(segments[3]) {
 		pin.Version = segments[3]
+	}
+	if len(segments) > 4 && (segments[2] == "tree" || segments[2] == "blob") {
+		pin.Source += "/" + strings.Join(segments[4:], "/")
 	}
 	return pin
 }
