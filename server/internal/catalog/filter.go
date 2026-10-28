@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -120,12 +121,7 @@ func (p Predicate) matches(e *Entry) bool {
 	case predModBefore:
 		return e.Modified.Before(p.t)
 	case predBasedOn:
-		for _, pin := range provenance.Parse(e.Metadata[provenance.Key]) {
-			if pin.Under(e.Path, p.value) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(e.pins, func(target string) bool { return provenance.Under(target, p.value) })
 	default:
 		return false
 	}

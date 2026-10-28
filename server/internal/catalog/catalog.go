@@ -27,6 +27,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/mdtext"
 	"github.com/latebit-io/demarkus/protocol/neardup"
+	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
@@ -39,8 +40,9 @@ type Entry struct {
 	Modified   time.Time
 	Metadata   map[string]string // declared publisher metadata, for filter predicates
 
-	terms  termSet // tag and title tokens for body match; set by Set
-	demote float64 // body-match prior multiplier from the path; set by Set
+	terms  termSet  // tag and title tokens for body match; set by Set
+	demote float64  // body-match prior multiplier from the path; set by Set
+	pins   []string // rel-based-on targets, for based-on filters; set by Set
 }
 
 // Result is a ranked LOOKUP match. Anchor, Heading, and Snippet are set
@@ -127,14 +129,20 @@ func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modif
 	c.sections[e.Path] = doc
 }
 
-// Prepare canonicalizes the path and derives what body match consults (tag
-// and title terms, path demotion); every entry searched passes through it.
+// Prepare canonicalizes the path and derives what body match (tag and title
+// terms, path demotion) and based-on filters (pin targets) consult, so a
+// scan parses nothing; every entry searched passes through it.
 func (e *Entry) Prepare() {
 	e.Path = storefmt.CanonicalPath(e.Path)
 	e.terms = newTermSet(mdtext.TokenSet(append(append([]string(nil), e.Tags...), e.Title)))
 	e.demote = 1
 	if slices.Contains(strings.Split(strings.Trim(e.Path, "/"), "/"), "journal") {
 		e.demote = journalDemote
+	}
+	pins := provenance.Parse(e.Metadata[provenance.Key])
+	e.pins = make([]string, len(pins))
+	for i, pin := range pins {
+		e.pins[i] = pin.Target(e.Path)
 	}
 }
 

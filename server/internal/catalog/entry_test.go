@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"fmt"
 	"runtime"
 	"slices"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/memtest"
+	"github.com/latebit-io/demarkus/protocol/provenance"
 )
 
 func TestParseImportance(t *testing.T) {
@@ -138,4 +140,26 @@ func TestFromDocumentTitleReleasesBody(t *testing.T) {
 		t.Errorf("heap grew %d bytes holding %d titles of a %d-byte body, want under %d", growth, len(entries), len(body), len(body))
 	}
 	runtime.KeepAlive(entries)
+}
+
+// Pin targets alias the entry's own metadata: only the slice and resolved
+// relative pins add to a prepared entry, never a copy of each value.
+func TestPreparedPinsAliasMetadata(t *testing.T) {
+	const n = 1000
+	build := func(key string) int64 {
+		entries := make([]*Entry, n)
+		growth := memtest.Retained(func() {
+			for i := range entries {
+				value := fmt.Sprintf("/adr/%04d-%s.md/v3, ../specs/reader.md/v12, https://github.com/o/r/tree/abcdef0123/internal/reader", i, strings.Repeat("x", 200))
+				entries[i] = FromDocument(fmt.Sprintf("/notes/n%d.md", i), map[string]string{key: value}, nil, time.Time{})
+				entries[i].Prepare()
+			}
+		})
+		runtime.KeepAlive(entries)
+		return growth
+	}
+	without, with := build("other"), build(provenance.Key)
+	if extra := (with - without) / n; extra > 128 {
+		t.Errorf("pins add %d bytes an entry, want at most 128", extra)
+	}
 }

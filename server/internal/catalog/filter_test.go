@@ -75,6 +75,7 @@ func TestBasedOnMatchesPinsAtAnyVersion(t *testing.T) {
 	e := &Entry{Path: "/notes/a.md", Metadata: map[string]string{
 		"rel-based-on": "../adr/0006.md/v5, https://github.com/o/r/tree/abcdef0/internal",
 	}}
+	e.Prepare()
 	tests := []struct {
 		filter string
 		want   bool

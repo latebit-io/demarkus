@@ -112,15 +112,24 @@ func (p Pin) Local(docPath string) string {
 	return path.Join(path.Dir(docPath), p.Source)
 }
 
-// Under reports whether the pin is on source or on something under it: a
-// directory, a repository URL covering its commits. docPath resolves a
-// relative pin.
-func (p Pin) Under(docPath, source string) bool {
-	pinned := p.Source
+// Target is what the pin is on, at any version: Local for a path pin, else
+// Source.
+func (p Pin) Target(docPath string) string {
 	if local := p.Local(docPath); local != "" {
-		pinned = local
+		return local
 	}
-	return pinned == source || strings.HasPrefix(pinned, strings.TrimSuffix(source, "/")+"/")
+	return p.Source
+}
+
+// Under reports whether target is source or something under it: a
+// directory, a repository URL covering its commits. It allocates nothing,
+// since a catalog filter calls it for every pin in a world.
+func Under(target, source string) bool {
+	if target == source {
+		return true
+	}
+	dir := strings.TrimSuffix(source, "/")
+	return len(target) > len(dir) && target[len(dir)] == '/' && strings.HasPrefix(target, dir)
 }
 
 // Drift words a document pin against its source's current version, one

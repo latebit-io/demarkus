@@ -77,9 +77,11 @@ func TestUnder(t *testing.T) {
 		{"https://github.com/o/r/tree/abcdef0/src", "/a.md", "https://github.com/o/r", true},
 		{"https://github.com/o/r2/tree/abcdef0", "/a.md", "https://github.com/o/r", false},
 		{"mark://w/x.md/v2", "/a.md", "mark://w/x.md", true},
+		{"/adr/x.md/v1", "/a.md", "/", true},
+		{"/adr", "/a.md", "/adr/", false},
 	}
 	for _, tt := range tests {
-		if got := ParsePin(tt.ref).Under(tt.doc, tt.source); got != tt.want {
+		if got := Under(ParsePin(tt.ref).Target(tt.doc), tt.source); got != tt.want {
 			t.Errorf("Under(%q in %q, %q) = %v, want %v", tt.ref, tt.doc, tt.source, got, tt.want)
 		}
 	}
