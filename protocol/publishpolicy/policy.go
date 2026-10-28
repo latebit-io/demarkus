@@ -129,6 +129,11 @@ func validateExempt(patterns []string) error {
 		if err := protocol.ValidatePathPattern(pattern); err != nil {
 			return fmt.Errorf("exempt pattern %q: %w", pattern, err)
 		}
+		// MatchesAnyPath reads the part before ** literally, so a wildcard
+		// there would exempt nothing; refuse it rather than ignore it.
+		if before, _, ok := strings.Cut(pattern, "**"); ok && strings.ContainsAny(before, "*?") {
+			return fmt.Errorf("exempt pattern %q: the part before ** is literal, so its wildcard matches nothing", pattern)
+		}
 	}
 	return nil
 }

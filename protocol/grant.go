@@ -61,9 +61,9 @@ func ValidatePathPattern(pattern string) error {
 	return err
 }
 
-// MatchesAnyPath reports whether p matches a pattern: path.Match per segment
-// plus one ** as /** (anything under) or /**/ (any depth between). A
-// malformed pattern, refused by ValidatePathPattern at load, matches nothing.
+// MatchesAnyPath reports whether p matches a pattern: path.Match, plus one
+// ** as /** (anything under) or /**/ (any depth between) after a literal
+// prefix; read protection and grants rely on that, so it stays literal.
 func MatchesAnyPath(patterns []string, p string) bool {
 	for _, pattern := range patterns {
 		if matchPath(pattern, p) {
@@ -75,33 +75,26 @@ func MatchesAnyPath(patterns []string, p string) bool {
 
 func matchPath(pattern, p string) bool {
 	if !strings.Contains(pattern, "**") {
-		return match(pattern, p)
+		matched, err := path.Match(pattern, p)
+		return err == nil && matched
 	}
-	prefix, suffix, infix := strings.Cut(pattern, "/**/")
-	if !infix {
-		prefix = strings.TrimSuffix(pattern, "/**")
+	if prefix, ok := strings.CutSuffix(pattern, "/**"); ok {
+		return strings.HasPrefix(p, prefix+"/")
 	}
-	// The prefix may hold wildcards (/team/*/**), so it is matched up to
-	// each slash; the suffix may span segments (/**/sub/*.md), so it is
-	// tried on every tail that starts on a segment boundary.
-	for i := range len(p) {
-		if p[i] != '/' || !match(prefix, p[:i]) {
+	prefix, suffix, ok := strings.Cut(pattern, "/**/")
+	if !ok || !strings.HasPrefix(p, prefix+"/") {
+		return false
+	}
+	// The suffix may span segments (/**/sub/*.md): try every tail that
+	// starts on a segment boundary.
+	remaining := p[len(prefix)+1:]
+	for i := range len(remaining) {
+		if i > 0 && remaining[i-1] != '/' {
 			continue
 		}
-		if !infix {
+		if matched, err := path.Match(suffix, remaining[i:]); err == nil && matched {
 			return true
-		}
-		rest := p[i+1:]
-		for j := range len(rest) {
-			if (j == 0 || rest[j-1] == '/') && match(suffix, rest[j:]) {
-				return true
-			}
 		}
 	}
 	return false
-}
-
-func match(pattern, name string) bool {
-	matched, err := path.Match(pattern, name)
-	return err == nil && matched
 }
