@@ -27,8 +27,8 @@ import (
 // dev builds only: a real release derives the tools pin from its own Version.
 const (
 	ServerVersion        = "0.80.0"
-	ClientVersion        = "0.70.0"
-	fallbackToolsVersion = "0.78.0"
+	ClientVersion        = "0.71.0"
+	fallbackToolsVersion = "0.79.0"
 )
 
 // PluginVersion is the binary's own release, injected from main's ldflags. It
