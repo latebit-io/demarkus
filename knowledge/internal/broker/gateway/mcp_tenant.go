@@ -119,7 +119,7 @@ func (g *Gateway) resolveOrProvision(ctx context.Context) (core.WorldConfig, err
 		_, ferr := g.dispatcher.Fetch(probeCtx, fetch.FetchRequest{Host: w.Name, Path: "/index.md"})
 		cancel()
 		if ferr != nil {
-			return core.WorldConfig{}, errors.New("your memory world is being provisioned; try again in about a minute")
+			return core.WorldConfig{}, errProvisioning
 		}
 		return w, nil
 	}
@@ -128,6 +128,7 @@ func (g *Gateway) resolveOrProvision(ctx context.Context) (core.WorldConfig, err
 
 // The provisioner's refusals in the client's words.
 var (
+	errProvisioning    = errors.New("your memory world is being provisioned; try again in about a minute")
 	errNotAdmitted     = errors.New("not authorized: this memory service does not admit your identity; contact the operator")
 	errBeingRemoved    = errors.New("your memory world is being removed; contact the operator if this persists")
 	errAtCapacity      = errors.New("this memory service is at capacity; contact the operator")

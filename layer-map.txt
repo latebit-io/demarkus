@@ -41,6 +41,7 @@ client/links                                    storeclient
 client/listing                                  storeclient
 client/listwalk                                 storeclient
 client/lookuptable                              storeclient
+client/mcpwatch                                 storeclient  # the MCP binding's WATCH client
 client/merge                                    storeclient
 client/token                                    storeclient
 

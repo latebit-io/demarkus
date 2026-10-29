@@ -50,6 +50,15 @@ no meaning for a single-world tenant) and `mark_graph_export` /
 (whole-store reads of the shared per-pod graph store would leak
 cross-tenant edges).
 
+## Resource subscriptions
+
+As on the knowledge gateway (`MCP-API.md`, Resource subscriptions), with
+the tenant rule: every subscribed URI must address the caller's own
+world, checked before any other lookup, so another tenant's world and a
+world that does not exist both answer `not-permitted`. A listen
+provisions the world on first arrival like any other call, but does not
+seed the memory template.
+
 ## Memory seeding
 
 A tenant world's first authorized tool call seeds the memory template

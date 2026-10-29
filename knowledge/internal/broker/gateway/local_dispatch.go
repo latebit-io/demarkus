@@ -169,6 +169,11 @@ func (c *Composite) Watch(ctx context.Context, r fetch.WatchRequest) (*fetch.Wat
 	}
 	authority := w.Authority()
 	dial := fetch.ConnDialer(func(ctx context.Context, req protocol.Request) (net.Conn, error) {
+		// A world gone from the registry ends the watch; reopening against
+		// it would retry for as long as the watch lives.
+		if now, ok := c.worlds.Find(r.Host); !ok || !now.Local || now.Authority() != authority {
+			return nil, &fetch.StatusError{Status: protocol.StatusNotFound, Message: fmt.Sprintf("world %q is no longer served here", r.Host)}
+		}
 		return c.local.Watch(ctx, authority, req)
 	})
 	return fetch.NewWatch(ctx, dial, r, localWatchHandshake)

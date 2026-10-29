@@ -28,9 +28,12 @@ import (
 	"github.com/latebit-io/demarkus/server/knowledgeserver/bucketworlds"
 )
 
-// World is one world a server serves, routed at Authority.
+// World is one world a server serves, routed at Authority. TokensFile, when
+// set, is its capability tokens file; Gated serves it as a memory world must.
 type World struct {
 	Name, Authority string
+	TokensFile      string
+	Gated           bool
 }
 
 // Buckets holds in-memory buckets by name: servers opened over one Buckets
@@ -70,6 +73,12 @@ func Open(t testing.TB, buckets *Buckets, worlds ...World) *knowledgeserver.Serv
 	for _, w := range worlds {
 		fmt.Fprintf(&config, "  - name: %s\n    authorities: [%s]\n    bucket:\n      url: gs://knowledgetest-%s\n      worldID: %s\n",
 			w.Name, w.Authority, w.Name, worldID(w.Name))
+		if w.TokensFile != "" {
+			fmt.Fprintf(&config, "    auth:\n      tokensFile: %s\n", w.TokensFile)
+		}
+		if w.Gated {
+			config.WriteString("    gated: true\n")
+		}
 	}
 	configFile := filepath.Join(dir, "config.yaml")
 	write(t, configFile, []byte(config.String()))

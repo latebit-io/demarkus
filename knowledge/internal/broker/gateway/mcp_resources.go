@@ -78,23 +78,37 @@ func (g *Gateway) readResource(ctx context.Context, req mcp.ReadResourceRequest)
 }
 
 // admitResourceRead is tenantGate for resource reads, which bypass the tool
-// middleware: the same door, then the same one world rule.
+// middleware: the same door, then the same one world rule, then seeding.
 func (g *Gateway) admitResourceRead(ctx context.Context, raw string) (context.Context, error) {
-	if !g.profile.TenantScoped {
-		return ctx, nil
-	}
-	ctx, w, err := g.admitTenant(ctx)
+	ctx, w, err := g.admitResourceURI(ctx, raw)
 	if err != nil {
 		return ctx, err
 	}
+	if g.profile.TenantScoped {
+		g.seedTenant(ctx, &w)
+	}
+	return ctx, nil
+}
+
+// admitResourceURI is the one world rule for a resource URI, shared by reads
+// and subscriptions; a subscription writes nothing, so it never seeds. The
+// knowledge gateway admits every URI here.
+func (g *Gateway) admitResourceURI(ctx context.Context, raw string) (context.Context, core.WorldConfig, error) {
+	if !g.profile.TenantScoped {
+		return ctx, core.WorldConfig{}, nil
+	}
+	ctx, w, err := g.admitTenant(ctx)
+	if err != nil {
+		return ctx, core.WorldConfig{}, err
+	}
 	owns, parseErr := tenantOwns(&w, raw)
 	if parseErr != nil {
-		return ctx, fmt.Errorf("invalid resource URI %q: %w", raw, parseErr)
+		return ctx, core.WorldConfig{}, fmt.Errorf("invalid resource URI %q: %w", raw, parseErr)
 	}
 	if !owns {
-		g.deps.Log.Warn("resource read denied cross-tenant access", "world", w.Name)
-		return ctx, crossTenantDenial(&w)
+		g.deps.Log.Warn("resource access denied cross-tenant access", "world", w.Name)
+		denial := crossTenantDenial(&w)
+		return ctx, core.WorldConfig{}, denial
 	}
-	g.seedTenant(ctx, &w)
-	return ctx, nil
+	return ctx, w, nil
 }

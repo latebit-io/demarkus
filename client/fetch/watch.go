@@ -13,13 +13,14 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// WatchRequest subscribes to change hints under Path: a prefix ending in "/"
-// or one document. Since resumes after a cursor from an earlier watch.
-// Coalesce asks for the newest event per path only when the watch lags.
+// WatchRequest subscribes to change hints under Path, a "/" prefix or one
+// document. Since resumes after a cursor; Coalesce asks for the newest event
+// per path when lagging; Queue bounds notices held for the consumer (0: 1024).
 type WatchRequest struct {
 	Host, Path, Token string
 	Since             protocol.Cursor
 	Coalesce          bool
+	Queue             int
 }
 
 // Notice is one item from a watch: an event, or a resync telling the
@@ -101,7 +102,14 @@ func NewWatch(ctx context.Context, dial WatchDialer, r WatchRequest, handshakeTi
 	if r.Path == "" {
 		return nil, errors.New("WATCH requires a path")
 	}
-	w := &Watch{dial: dial, handshakeTimeout: handshakeTimeout, req: r, notices: make(chan Notice, watchQueueSize), done: make(chan struct{}), stream: r.Since, consumed: r.Since}
+	if r.Queue < 0 {
+		return nil, fmt.Errorf("WATCH queue %d is negative", r.Queue)
+	}
+	queue := r.Queue
+	if queue == 0 {
+		queue = watchQueueSize
+	}
+	w := &Watch{dial: dial, handshakeTimeout: handshakeTimeout, req: r, notices: make(chan Notice, queue), done: make(chan struct{}), stream: r.Since, consumed: r.Since}
 	stream, err := w.open(ctx, r.Since)
 	if err != nil {
 		return nil, err

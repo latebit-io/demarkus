@@ -278,6 +278,35 @@ func TestCompositeWatchesLocalWorldInProcess(t *testing.T) {
 	}
 }
 
+// A provisioned world dropped from the registry ends its watches with
+// not-found at their next reopen, instead of a reopen loop.
+func TestCompositeWatchEndsWhenItsWorldLeaves(t *testing.T) {
+	cfg := brokertest.NewMemoryConfig()
+	registry := cfg.Registry()
+	tenant := core.WorldConfig{Name: "carol-w", Profile: core.ProfileMemory, Namespace: "carol-w", Local: true}
+	registry.SetDynamic([]core.WorldConfig{tenant}, nil)
+	cursor := protocol.Cursor{Epoch: "e1", Seq: 4}
+	local := &fakeLocal{
+		served:  map[string]protocol.Response{tenant.Authority(): {}},
+		watches: make(chan protocol.Request, 1),
+		t:       t,
+		// closing makes the watch reopen half a second later.
+		blocks: []protocol.WatchBlock{protocol.WatchControl(protocol.StatusOK, cursor), protocol.WatchControl(protocol.StatusClosing, cursor)},
+	}
+	w, err := NewComposite(registry, local, &fakeDispatcher{}).Watch(context.Background(), fetch.WatchRequest{Host: "carol-w", Path: "/"})
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	defer w.Close()
+	registry.SetDynamic(nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var refused *fetch.StatusError
+	if _, err := w.Next(ctx); !errors.As(err, &refused) || refused.Status != protocol.StatusNotFound {
+		t.Fatalf("Next = %v, want the watch ended with not-found", err)
+	}
+}
+
 func TestCompositeWatchRefusesRemoteAndUnknownWorlds(t *testing.T) {
 	c := NewComposite(brokertest.NewConfig().Registry(), &fakeLocal{}, &fakeDispatcher{})
 	if _, err := c.Watch(context.Background(), fetch.WatchRequest{Host: "team-a", Path: "/"}); !errors.Is(err, errWorldNotLocal) {

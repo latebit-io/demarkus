@@ -147,11 +147,20 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 	knowledge := gateway.KnowledgeProfile()
 	knowledgeDeps := gateway.DepsFor(cfg, knowledge, deps.SharedDeps, nil)
 	knowledgeDeps.Floor = gateway.FloorOf(opts.LocalWorlds)
+	// Subscriptions need the worlds in process; a nil *Composite must stay a
+	// nil interface.
+	var watches gateway.WorldWatcher
+	if composite != nil {
+		watches = composite
+	}
+	knowledgeDeps.Watches = watches
 	gateways := []*gateway.Gateway{gateway.New(knowledgeDeps, opts.Version, dispatcher, knowledge)}
 	gateways[0].Register(mux, "")
 	if cfg.Server.Memory.Enabled() {
 		memory := gateway.MemoryProfile()
-		gateways = append(gateways, gateway.New(gateway.DepsFor(cfg, memory, deps.SharedDeps, provisioner), opts.Version, dispatcher, memory))
+		memoryDeps := gateway.DepsFor(cfg, memory, deps.SharedDeps, provisioner)
+		memoryDeps.Watches = watches
+		gateways = append(gateways, gateway.New(memoryDeps, opts.Version, dispatcher, memory))
 		gateways[1].Register(mux, cfg.Server.Memory.Host())
 	}
 	b := &Broker{

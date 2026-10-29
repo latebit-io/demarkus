@@ -43,6 +43,9 @@ type Deps struct {
 	// merges under every other world's; the tools judge by the same floor.
 	// Set from the local server after DepsFor; empty is none.
 	Floor string
+	// Watches opens in-process watches for resource subscriptions; nil
+	// leaves subscriptions off. Set from the local server after DepsFor.
+	Watches WorldWatcher
 }
 
 // DepsFor builds one profile's gateway deps from what the management API
@@ -94,6 +97,8 @@ type Gateway struct {
 	// tools are the shared mark_* bodies bound to this gateway; nil only if
 	// the gateway was built without a dispatcher, which run reports.
 	tools *marktools.Tools
+	// subs serves resource subscriptions (mcp_watch.go); nil when off.
+	subs *subscriptions
 }
 
 // gatewayGraph keeps graph data and refresh state in the same isolation scope.
@@ -222,6 +227,10 @@ func New(deps *Deps, version string, dispatcher WorldDispatcher, profile *Profil
 		fetchSeen:      fetchSeen,
 	}
 	deps.Worlds.OnDrop(g.dropWorld)
+	if deps.Watches != nil {
+		g.subs = newSubscriptions(deps, g.admitResourceURI)
+		hooks.AddOnRequestInitialization(g.subs.admit)
+	}
 	tools, err := g.toolBodies()
 	if err != nil {
 		deps.Log.Error("mcp gateway: tool bodies unavailable", "err", err)
@@ -235,6 +244,10 @@ func New(deps *Deps, version string, dispatcher WorldDispatcher, profile *Profil
 	}
 	if profile.Instructions != "" {
 		opts = append(opts, mcpserver.WithInstructions(profile.Instructions))
+	}
+	if g.subs != nil {
+		// Subscriptions only; the world list never notifies.
+		opts = append(opts, mcpserver.WithResourceCapabilities(true, false))
 	}
 	if profile.TenantScoped {
 		// Every tool call passes the tenant gate BEFORE its handler:
@@ -328,7 +341,7 @@ func (g *Gateway) Register(mux *http.ServeMux, host string) {
 	// /mcp accepts both POST (request/notification) and GET (SSE
 	// listen channel) per the Streamable HTTP spec. No method filter
 	// on the route so mcp-go's transport sees every request type.
-	mux.Handle(host+core.MCPPath, g.gatewayAuth(core.SubjectRateLimit(g.deps.SubjectLimiter, g.deps.Log, g.transport)))
+	mux.Handle(host+core.MCPPath, g.gatewayAuth(core.SubjectRateLimit(g.deps.SubjectLimiter, g.deps.Log, listenStreams(g.transport))))
 	mux.HandleFunc("GET "+host+prmPath, g.oauthProtectedResource)
 	// prmPath+MCPPath is RFC 9728 §3.1's path-inserted form for a
 	// resource URL that carries a path. Same document.
