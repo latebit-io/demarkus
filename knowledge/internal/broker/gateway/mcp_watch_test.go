@@ -524,6 +524,22 @@ func (r *recordingWatcher) Watch(ctx context.Context, req fetch.WatchRequest) (*
 	return w, err
 }
 
+// A listen that reaches the hook without listenStreams, as on a transport
+// other than the gateway's HTTP route, is refused rather than acknowledged
+// with nothing attached.
+func TestListenWithoutTheHTTPRouteIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newWatchSystem(t).replica()
+	raw := json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"subscriptions/listen","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"notifications":{"resourceSubscriptions":["mark://team/"]}}}`)
+	err := r.gateway.subs.admit(withAliceClaims(context.Background()), float64(1), raw)
+	if err == nil || !strings.HasPrefix(err.Error(), protocol.StatusServerError+":") {
+		t.Fatalf("admit = %v, want a server-error refusal", err)
+	}
+	if n := r.gateway.subs.openCount(); n != 0 {
+		t.Fatalf("%d subscriptions open after the refusal", n)
+	}
+}
+
 // mcp-go refuses a listen without client capabilities after the hook
 // attached its watches; the request's end lets them go.
 func TestRefusedListenLeavesNoSubscription(t *testing.T) {

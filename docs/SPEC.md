@@ -44,7 +44,7 @@ The authority identifies the logical Mark server. It MAY resolve directly to tha
 
 ### 2.2. Transport
 
-The Mark Protocol runs exclusively over QUIC (RFC 9000). There is no plaintext fallback. TLS 1.3 is mandatory.
+The Mark Protocol wire runs exclusively over QUIC (RFC 9000). There is no plaintext fallback. TLS 1.3 is mandatory. A gateway MAY present the same contract to MCP clients over MCP Streamable HTTP; that is a binding of the contract, not of this wire, and §6.8.1 defines it for WATCH.
 
 ### 2.3. Content Format
 
