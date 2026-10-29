@@ -263,6 +263,16 @@ that sends an RFC 8707 `resource` gets a token bound to that gateway; one
 that does not gets a token valid at both. The tool contract is in
 `knowledge/cmd/demarkus-knowledge/MCP-API.md` and `MEMORY-API.md`.
 
+Resource subscriptions (MCP `subscriptions/listen`, ADR 0047 on the soul)
+hold one HTTP request open per listen for up to the bearer's lifetime, 15
+minutes for broker tokens. Set the Ingress or load balancer's read or
+backend timeout above that (ingress-nginx:
+`nginx.ingress.kubernetes.io/proxy-read-timeout: "1000"`), or idle
+listens are cut early: clients resume from their cursor, so the cost is
+reconnects, not lost events. A listen is a single request, so no session
+affinity is needed. The kind harness checks the binding across two
+replicas (`deploy/kind/watch-smoke.sh`).
+
 Access model: reads are open to any verified identity the world's `allow`
 admits; writes run under that identity's grant on `writeScope.paths`, in
 process, with no token. Static worlds carry `profile: knowledge`; a

@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -344,25 +345,40 @@ func TestWatchReconnectsAfterConnectionLoss(t *testing.T) {
 // reading the stream and reopens later, and the consumer still sees every
 // event once, in order.
 func TestWatchSlowConsumerLosesNothing(t *testing.T) {
-	f, _, c := startFeed(t)
-	w, err := c.Watch(t.Context(), WatchRequest{Host: f.addr(t), Path: "/"})
-	if err != nil {
-		t.Fatalf("Watch: %v", err)
+	tests := []struct {
+		name  string
+		queue int
+	}{
+		{name: "default queue"},
+		{name: "small queue", queue: 4},
 	}
-	defer w.Close()
-	const total = 3 * watchQueueSize
-	for i := 1; i <= total; i++ {
-		f.publish("/n/" + strconv.Itoa(i) + ".md")
-	}
-	waitOverflow(t, f)
-	for i := 1; i <= total; i++ {
-		got := expectEvent(t, w, "/n/"+strconv.Itoa(i)+".md")
-		if got.Cursor.Seq != uint64(i) {
-			t.Fatalf("seq = %d, want %d", got.Cursor.Seq, i)
-		}
-	}
-	if len(f.sinces()) < 2 {
-		t.Fatalf("subscribes = %v, want the watch to have reopened from its cursor", f.sinces())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, _, c := startFeed(t)
+			w, err := c.Watch(t.Context(), WatchRequest{Host: f.addr(t), Path: "/", Queue: tt.queue})
+			if err != nil {
+				t.Fatalf("Watch: %v", err)
+			}
+			defer w.Close()
+			held := cmp.Or(tt.queue, watchQueueSize)
+			if cap(w.notices) != held {
+				t.Fatalf("queue holds %d, want %d", cap(w.notices), held)
+			}
+			total := 3 * held
+			for i := 1; i <= total; i++ {
+				f.publish("/n/" + strconv.Itoa(i) + ".md")
+			}
+			waitOverflow(t, f)
+			for i := 1; i <= total; i++ {
+				got := expectEvent(t, w, "/n/"+strconv.Itoa(i)+".md")
+				if got.Cursor.Seq != uint64(i) {
+					t.Fatalf("seq = %d, want %d", got.Cursor.Seq, i)
+				}
+			}
+			if len(f.sinces()) < 2 {
+				t.Fatalf("subscribes = %v, want the watch to have reopened from its cursor", f.sinces())
+			}
+		})
 	}
 }
 

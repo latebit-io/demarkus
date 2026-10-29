@@ -13,7 +13,8 @@
 # and 8414 metadata checks, the RFC 6749 authorization_code + PKCE flow that
 # backs /knowledge-join (with the wrong-verifier and replay refusals), the
 # MCP tool calls an agent makes after joining (read, write under the identity
-# grant, refusals) and the confidential web-client flow (the library's SSO).
+# grant, refusals), the confidential web-client flow (the library's SSO) and
+# WATCH on the MCP binding across the two replicas (watch-smoke.sh).
 #
 # Verification runs `demarkus` against each server's own QUIC listener via
 # `kubectl exec`, which exercises the full read path without exposing
@@ -81,9 +82,10 @@ usage: up.sh [--with-knowledge] [--with-argo] [--with-mcp-smoke]
   --with-argo       install Argo CD + ApplicationSet templating two worlds
                     (replaces the Stage 1 server install)
   --with-mcp-smoke  drive the OAuth metadata checks, the authorization_code +
-                    PKCE flow behind /knowledge-join, the MCP tool calls and
-                    the confidential web-client flow against the knowledge
-                    Service. Requires --with-knowledge.
+                    PKCE flow behind /knowledge-join, the MCP tool calls,
+                    the confidential web-client flow and the WATCH smoke
+                    (watch-smoke.sh) against the knowledge Service.
+                    Requires --with-knowledge.
 
 env overrides:
   CLUSTER, NAMESPACE, RELEASE, SERVER_CHART_VERSION, KNOWLEDGE_RELEASE,
@@ -954,6 +956,10 @@ echo "OK: a client-bound refresh token is not rotated"
 echo "OK: confidential web-client flow end-to-end"
 '
     echo "--- confidential web-client flow passed"
+
+    CLUSTER="$CLUSTER" NAMESPACE="$NAMESPACE" KNOWLEDGE_RELEASE="$KNOWLEDGE_RELEASE" \
+      MINT_CURL_IMAGE="$MINT_CURL_IMAGE" WATCH_SMOKE_WORLD="$MCP_SMOKE_WORLD" \
+      "$SCRIPT_DIR/watch-smoke.sh"
   fi
 
   cat <<EOF

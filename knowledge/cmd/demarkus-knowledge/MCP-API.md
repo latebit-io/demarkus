@@ -100,6 +100,44 @@ links it discovers in document bodies, because real-world markdown
 embeds them; that leniency is crawl-scoped only, never the parser
 for caller-supplied URLs.
 
+## Resource subscriptions
+
+WATCH reaches MCP clients as resource subscriptions (SPEC §6.8.1; ADR
+0047 on the soul). The gateway advertises `resources.subscribe`; the
+contract is the WATCH verb's: hints, not content, with cursors.
+
+- **Subscribe** with a protocol 2026-07-28 `subscriptions/listen` whose
+  `notifications.resourceSubscriptions` lists URIs: `mark://{worldName}/{path}`
+  watches a document, a path ending in `/` its subtree, `mark://{worldName}/`
+  the world. The listen's response stream is the subscription and carries
+  one bearer. At most 64 URIs per listen and 256 open subscriptions per
+  identity per replica (`rate-limited` above). Only worlds served in this
+  process can be watched. `resources/subscribe` (2025-11-25 and earlier)
+  is refused with `bad-request: resource subscriptions need protocol
+  2026-07-28 subscriptions/listen`.
+- **Request `_meta`**: `demarkus.io/since`, an object from subscribed URI
+  to the last cursor processed; `demarkus.io/coalesce: "path"`.
+- **Admission** is a read of each URI by the bearer's identity, before
+  anything attaches; a listen is admitted whole or refused whole. A
+  refusal is a JSON-RPC error whose message starts with the SPEC §7
+  status (`not-found: world "x"`).
+- **Events**: `notifications/resources/updated` with `uri` the changed
+  document and `_meta` keys `demarkus.io/subscription` (the subscribed
+  URI), `demarkus.io/cursor`, `path`, `version`, `op`, and when known
+  `hash`, `agent`, `user`, plus `io.modelcontextprotocol/subscriptionId`.
+  Events are filtered as reads: a read-protected path never notifies.
+- **Control**: on the subscribed URI, `demarkus.io/resync: true` with the
+  cursor to continue from (rebuild what you derived; the subscription
+  stays open), or `demarkus.io/status` (`unauthorized`, `not-permitted`,
+  `closing`) with the last delivered cursor, which ends it.
+- **Lifetime**: until the stream ends, the gateway drains, or the bearer
+  expires: then `status: unauthorized`, and the stream closes 30 s later.
+  Renew with a new listen under a fresh bearer and `since`, then close the
+  old one; overlap repeats, never skips. Cursors resume on any replica.
+  No heartbeats: liveness is the transport's.
+- **Go clients**: `client/mcpwatch` renews, resumes and reads like a
+  `fetch.Watch`.
+
 ## Tool profiles
 
 `server.mcp.toolProfile` selects the surface `tools/list` returns. `full`

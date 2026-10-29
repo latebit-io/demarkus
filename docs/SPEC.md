@@ -700,6 +700,52 @@ Terminal, the last block of the stream:
 - `rate-limited`: the server's watch limit is reached.
 - `server-error`: internal error.
 
+#### 6.8.1. MCP binding
+
+An MCP gateway MAY offer WATCH to MCP clients as resource subscriptions over MCP Streamable HTTP. This subsection defines that binding; the QUIC wire above is unchanged. The binding carries the same contract: hints, not content; cursors of the form above; at-least-once, ordered delivery; read authorisation per event. MCP clients that know nothing of demarkus see plain resource notifications and re-read the resource, which is the correct reaction.
+
+**Resource URIs.** `mark://<world><path>`, where `<world>` is a world name the gateway routes and `<path>` follows the WATCH request path: a document path watches that document; a path ending in `/` watches every document under it at any depth; `mark://<world>/` watches the whole world. The path need not exist. A URI with a port, user information, a query or a fragment is `bad-request`.
+
+**Subscribing.**
+
+- Protocol version 2026-07-28 and later: a `subscriptions/listen` request whose `notifications.resourceSubscriptions` lists the URIs. The response stream of that request is the watch: every subscription in it lives exactly as long as the stream, like a WATCH stream.
+- Earlier protocol versions: `resources/subscribe` with one URI, delivered on the session's standalone GET stream, and `resources/unsubscribe`. A gateway MAY support only the 2026-07-28 form; it then refuses `resources/subscribe` with an error naming the form it supports.
+- The gateway advertises `resources.subscribe`.
+
+Request `_meta` keys, all OPTIONAL:
+
+- `demarkus.io/since`: on `subscriptions/listen`, an object mapping a subscribed URI to the cursor of the last event the client processed for it; on `resources/subscribe`, that cursor as a string. A URI without one starts at the head.
+- `demarkus.io/coalesce`: `path`, with the meaning of the WATCH `coalesce` key, for every URI of the request.
+
+**Admission.** Each URI is admitted exactly as a read of it by the request's identity: the same authentication, organisation and tenancy checks, before any watch attaches. A request is admitted whole or refused whole. A refusal is a JSON-RPC error whose message begins with the status of §7 that applies (`bad-request`, `not-found`, `not-permitted`, `rate-limited`, `server-error`), followed by `:` and a reason.
+
+**Events.** One `notifications/resources/updated` per event per subscription:
+
+- `params.uri`: the changed document, `mark://<world><path>`. For a document subscription it equals the subscribed URI.
+- `params._meta`: `demarkus.io/subscription` (the subscribed URI the event belongs to) and the event keys of WATCH under the same prefix: `demarkus.io/cursor`, `demarkus.io/path`, `demarkus.io/version`, `demarkus.io/op` (REQUIRED) and `demarkus.io/hash`, `demarkus.io/agent`, `demarkus.io/user` (OPTIONAL). On a 2026-07-28 stream every notification also carries `io.modelcontextprotocol/subscriptionId`.
+
+**Control notifications.** A `notifications/resources/updated` whose `params.uri` is the subscribed URI and whose `_meta` carries:
+
+- `demarkus.io/resync: true` and `demarkus.io/cursor`: the gateway cannot deliver this subscription's events from where it stands. The client MUST rebuild whatever it derived from this subscription before using the cursor. Unlike the WATCH terminal block, the subscription stays open and continues from that cursor.
+- `demarkus.io/status` (`unauthorized`, `not-permitted` or `closing`) and `demarkus.io/cursor`, the last delivered position: the subscription has ended, with the meaning of the WATCH terminal block.
+
+A client MUST ignore `_meta` keys it does not recognise and skip an event whose `op` it does not recognise.
+
+**Lifetime and renewal.**
+
+- A subscription ends when its stream ends, on `resources/unsubscribe` or session end (earlier versions), when the bearer it was admitted under expires (`status: unauthorized`), and when the gateway drains (`status: closing`).
+- A gateway that ends a stream SHOULD first send each open subscription's terminal notification and keep the stream open briefly so they are delivered. A client MUST NOT depend on them: any end of a stream ends its subscriptions, and the client resumes from the cursors it consumed.
+- Renewal: before the bearer expires, the client opens a new `subscriptions/listen` (or, on earlier versions, subscribes to the same URI again in its session) with a fresh bearer and `demarkus.io/since`, then closes the old stream. Overlap delivers duplicates, never gaps.
+- Cursors do not depend on the gateway instance that served them; a resume may land on any instance.
+
+**Rules.**
+
+- Delivery is at least once and in order within a subscription. Across subscriptions there is no order; each keeps its own cursor.
+- Every event is checked as a read of its path by the subscribing identity and omitted when that identity could not read it.
+- The gateway MUST NOT make the store wait on a slow client. It MAY coalesce pending events per path; beyond its bound it sends `resync`.
+- The binding has no heartbeat notifications. Liveness is the transport's; a client reopens its stream at least once per bearer lifetime.
+- Gateways SHOULD cap subscriptions per request and per identity and answer `rate-limited` above the cap.
+
 ## 7. Status Values
 
 Status values are text strings. There are no numeric status codes.
@@ -1100,6 +1146,7 @@ These will be specified in future versions of this document.
 | Max LOOKUP snippet | 240 bytes |
 | Max WATCH block | 8192 bytes |
 | WATCH heartbeat interval | 20 s (RECOMMENDED) |
+| WATCH MCP binding `_meta` prefix | `demarkus.io/` |
 | Hash algorithm | SHA-256 |
 | Hash format | `sha256-<64 lowercase hex chars>` |
 | Default OKF type | `Document` |

@@ -23,10 +23,32 @@ func scopeDispatcher(view *core.WorldView, inner WorldDispatcher) WorldDispatche
 }
 
 func (s *scopedDispatcher) check(worldName string) error {
-	if _, ok := s.view.Find(worldName); !ok {
+	return inView(s.view, worldName)
+}
+
+func inView(view *core.WorldView, worldName string) error {
+	if _, ok := view.Find(worldName); !ok {
 		return &errWorldNotFound{worldName: worldName}
 	}
 	return nil
+}
+
+// scopedWatcher watches only the worlds a gateway's profile view holds, as
+// scopedDispatcher reads only them.
+type scopedWatcher struct {
+	view  *core.WorldView
+	inner WorldWatcher
+}
+
+func scopeWatcher(view *core.WorldView, inner WorldWatcher) WorldWatcher {
+	return &scopedWatcher{view: view, inner: inner}
+}
+
+func (s *scopedWatcher) Watch(ctx context.Context, r fetch.WatchRequest) (*fetch.Watch, error) {
+	if err := inView(s.view, r.Host); err != nil {
+		return nil, err
+	}
+	return s.inner.Watch(ctx, r)
 }
 
 func (s *scopedDispatcher) Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error) {
