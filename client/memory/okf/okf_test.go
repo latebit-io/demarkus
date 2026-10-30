@@ -47,6 +47,13 @@ func TestParseFrontmatter(t *testing.T) {
 		{"quoted", `title: "Orders, Q1"`, map[string]string{"title": "Orders, Q1"}, false},
 		{"value with colon", "resource: https://x/y:8080\n", map[string]string{"resource": "https://x/y:8080"}, false},
 		{"comment and blank", "# c\n\ntype: Table\n", map[string]string{"type": "Table"}, false},
+		{"inline comment", "status: stable # reviewed\n", map[string]string{"status": "stable"}, false},
+		{"hash in quotes", `title: "a # b" # c`, map[string]string{"title": "a # b"}, false},
+		{"escaped quote", `title: "a \" # b"`, map[string]string{"title": `a \" # b`}, false},
+		{"hash in word", "title: C# guide\n", map[string]string{"title": "C# guide"}, false},
+		{"apostrophe", "title: don't # c\n", map[string]string{"title": "don't"}, false},
+		{"flow list comment", "tags: [a, 'b # c'] # d\n", map[string]string{"tags": "a,b # c"}, false},
+		{"block list comment", "tags: # list\n  - a # c\n", map[string]string{"tags": "a"}, false},
 		{"unparseable line", "type: Table\ngarbage line\n", nil, true},
 		{"orphan list item", "  - sales\n", nil, true},
 	}

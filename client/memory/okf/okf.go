@@ -54,12 +54,9 @@ func SplitFrontmatter(data []byte) (fm string, body []byte, ok bool) {
 	return "", data, false
 }
 
-// ParseFrontmatter parses an OKF frontmatter block into a flat key→value map,
-// mirroring the protocol's "frontmatter is a flat string map" model. A YAML flow
-// list (tags: [a, b]) or block list (tags:\n  - a) is flattened to a
-// comma-separated string. Comments and blank lines are ignored. A non-empty line
-// that is neither a comment, a "key: value" pair, nor a list item is reported as
-// a parse error so a malformed block fails conformance.
+// ParseFrontmatter parses an OKF frontmatter block into a flat string map, a YAML
+// list flattened to comma-separated values and comments dropped. Any other line
+// that is not "key: value" or a list item is an error, failing conformance.
 func ParseFrontmatter(fm string) (map[string]string, error) {
 	meta := map[string]string{}
 	lastListKey := ""
@@ -81,7 +78,7 @@ func ParseFrontmatter(fm string) (map[string]string, error) {
 			return nil, fmt.Errorf("unparseable frontmatter line: %q", trimmed)
 		}
 		key = strings.TrimSpace(key)
-		val = strings.TrimSpace(val)
+		val = stripComment(strings.TrimSpace(val))
 		if key == "" {
 			return nil, fmt.Errorf("empty key in frontmatter line: %q", trimmed)
 		}
@@ -106,9 +103,36 @@ func blockListItem(trimmed string) (string, bool) {
 		return "", true
 	}
 	if strings.HasPrefix(trimmed, "- ") {
-		return unquote(strings.TrimSpace(trimmed[2:])), true
+		return unquote(stripComment(strings.TrimSpace(trimmed[2:]))), true
 	}
 	return "", false
+}
+
+// stripComment drops a YAML inline comment from a trimmed value: a # at its
+// start or after whitespace, outside a quoted scalar. A quote opens a scalar
+// only where one starts, so the apostrophe in don't is plain text.
+func stripComment(val string) string {
+	var quote byte
+	scalarStart := true
+	for i := 0; i < len(val); i++ {
+		c := val[i]
+		switch {
+		case quote == '"' && c == '\\':
+			i++ // escaped character
+		case quote == '\'' && c == '\'' && i+1 < len(val) && val[i+1] == '\'':
+			i++ // '' is a literal quote
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case scalarStart && (c == '"' || c == '\''):
+			quote = c
+		case c == '#' && (i == 0 || val[i-1] == ' ' || val[i-1] == '\t'):
+			return strings.TrimSpace(val[:i])
+		}
+		scalarStart = quote == 0 && (c == '[' || c == ',' || (scalarStart && (c == ' ' || c == '\t')))
+	}
+	return val
 }
 
 func isFlowList(val string) bool {
