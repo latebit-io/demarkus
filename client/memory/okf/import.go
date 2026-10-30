@@ -115,10 +115,11 @@ func buildItem(rel string, data []byte, pfx string) PublishItem {
 func mapMetadata(fm map[string]string) (meta map[string]string, warnings []string) {
 	meta = map[string]string{}
 	var warns []string
+	status := strings.TrimSpace(fm["status"]) // reserved on the wire; folded into tags below
 	for _, k := range sortedKeys(fm) {
 		v := fm[k]
-		if k == "okf_version" {
-			continue // bundle-level marker, not a document field
+		if k == "okf_version" || k == "status" {
+			continue // okf_version: bundle-level marker, not a document field
 		}
 		key := k
 		if storefmt.IsReservedMetaKey(key) || !protocol.IsValidMetaKey(key) {
@@ -141,7 +142,32 @@ func mapMetadata(fm map[string]string) (meta map[string]string, warnings []strin
 		}
 		meta[key] = v
 	}
+	if w := foldStatus(meta, status); w != "" {
+		warns = append(warns, w)
+	}
 	return meta, warns
+}
+
+// foldStatus carries OKF's status field as a status: tag, which LOOKUP ranks
+// by. Absent (OKF's stable) or stable is accepted; a status: tag already in
+// tags wins, warning only against a declared field.
+func foldStatus(meta map[string]string, declared string) string {
+	value := declared
+	if value == "" || strings.EqualFold(value, "stable") {
+		value = "accepted"
+	}
+	tags := protocol.SplitTags(meta["tags"])
+	if have, ok := protocol.StatusOf(tags); ok {
+		if declared != "" && protocol.StandingOfStatus(have) != protocol.StandingOfStatus(value) {
+			return fmt.Sprintf("dropped OKF status %q: tag %q wins", declared, "status:"+have)
+		}
+		return ""
+	}
+	if strings.Contains(value, ",") {
+		return fmt.Sprintf("dropped OKF status %q (not a valid tag)", declared)
+	}
+	meta["tags"] = strings.Join(append(tags, "status:"+value), ",")
+	return ""
 }
 
 // enforceCaps drops the lowest-priority metadata keys until the map fits within

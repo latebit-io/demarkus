@@ -155,9 +155,9 @@ func rankBody(scan *bodyScan, terms []string) {
 }
 
 // prior scales a normalized score by declared importance, then by the
-// document's path demotion.
+// document's standing and path demotion.
 func prior(e *Entry) float64 {
-	return (priorFloor + (1-priorFloor)*e.Importance) * e.demote
+	return (priorFloor + (1-priorFloor)*e.Importance) * e.standing.Weight() * e.demote
 }
 
 // idfs is the BM25 inverse document frequency per term over the scanned

@@ -17,10 +17,18 @@ func TestYamlScalar(t *testing.T) {
 		{" lead", `" lead"`},
 		{"[bracket", `"[bracket"`},
 		{`has"quote`, `has"quote`}, // mid-scalar quote is valid bare YAML
+		{`Issue #4 "a" \b`, `"Issue #4 \"a\" \\b"`},
+		{"a\t#b", "\"a\t#b\""},
+		{"- item", `"- item"`},
+		{"? q", `"? q"`},
 	}
 	for _, tt := range tests {
-		if got := yamlScalar(tt.in); got != tt.want {
+		got := yamlScalar(tt.in)
+		if got != tt.want {
 			t.Errorf("yamlScalar(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+		if meta, err := ParseFrontmatter("k: " + got); err != nil || meta["k"] != tt.in {
+			t.Errorf("reparse of %q = %q, %v; want %q", got, meta["k"], err, tt.in)
 		}
 	}
 }
@@ -52,6 +60,22 @@ func TestRelFromPath(t *testing.T) {
 	// A path that climbs out of the bundle root must fail closed.
 	if _, err := relFromPath("/vendor/../../etc/passwd.md", "vendor"); err == nil {
 		t.Error("expected relFromPath to reject a traversing path")
+	}
+}
+
+func TestRenderConceptStatus(t *testing.T) {
+	for tags, want := range map[string]string{
+		"a,status:accepted":   "status: stable\n",
+		"status:wip":          "status: draft\n",
+		"status:superseded,b": "status: deprecated\n",
+		"status:deprecated":   "status: deprecated\n",
+		"status:acepted":      "status: draft\n",
+		"a":                   "status: draft\n", // OKF would read absent as stable
+	} {
+		got := renderConcept(map[string]string{"tags": tags}, "# B\n", "2026-06-22T15:56:55Z")
+		if !strings.Contains(got, want) {
+			t.Errorf("tags %q: missing %q in:\n%s", tags, want, got)
+		}
 	}
 }
 

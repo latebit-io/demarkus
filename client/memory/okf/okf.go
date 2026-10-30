@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/links"
+	"gopkg.in/yaml.v3"
 )
 
 // Reserved bundle filenames with defined structure. Every other ".md" file is a
@@ -54,12 +55,9 @@ func SplitFrontmatter(data []byte) (fm string, body []byte, ok bool) {
 	return "", data, false
 }
 
-// ParseFrontmatter parses an OKF frontmatter block into a flat key→value map,
-// mirroring the protocol's "frontmatter is a flat string map" model. A YAML flow
-// list (tags: [a, b]) or block list (tags:\n  - a) is flattened to a
-// comma-separated string. Comments and blank lines are ignored. A non-empty line
-// that is neither a comment, a "key: value" pair, nor a list item is reported as
-// a parse error so a malformed block fails conformance.
+// ParseFrontmatter parses an OKF frontmatter block into a flat string map, each
+// value decoded by parseValue. Any other line that is not "key: value" or a list
+// item is an error, failing conformance.
 func ParseFrontmatter(fm string) (map[string]string, error) {
 	meta := map[string]string{}
 	lastListKey := ""
@@ -81,21 +79,14 @@ func ParseFrontmatter(fm string) (map[string]string, error) {
 			return nil, fmt.Errorf("unparseable frontmatter line: %q", trimmed)
 		}
 		key = strings.TrimSpace(key)
-		val = strings.TrimSpace(val)
 		if key == "" {
 			return nil, fmt.Errorf("empty key in frontmatter line: %q", trimmed)
 		}
+		v, bare := parseValue(strings.TrimSpace(val))
+		meta[key] = v
 		lastListKey = ""
-		switch {
-		case val == "":
-			// A bare "key:" introduces a block list (items follow) or is an
-			// empty scalar; either way the value starts empty.
-			meta[key] = ""
-			lastListKey = key
-		case isFlowList(val):
-			meta[key] = parseFlowList(val)
-		default:
-			meta[key] = unquote(val)
+		if bare {
+			lastListKey = key // a bare "key:" may introduce a block list
 		}
 	}
 	return meta, nil
@@ -106,27 +97,64 @@ func blockListItem(trimmed string) (string, bool) {
 		return "", true
 	}
 	if strings.HasPrefix(trimmed, "- ") {
-		return unquote(strings.TrimSpace(trimmed[2:])), true
+		v, _ := parseValue(strings.TrimSpace(trimmed[2:])) // a bare item is empty
+		return v, true
 	}
 	return "", false
 }
 
-func isFlowList(val string) bool {
-	return strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]")
+// parseValue decodes one frontmatter value as YAML: quotes, escapes and comments
+// resolved, a list of scalars flattened to comma-separated items. bare reports
+// no value at all, as in "key:" or "key: # comment".
+func parseValue(raw string) (v string, bare bool) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+		return trimQuotes(raw), false // not YAML: import tolerates it, as written
+	}
+	if len(doc.Content) == 0 {
+		return "", true
+	}
+	n := doc.Content[0]
+	if n.Kind == yaml.ScalarNode {
+		return n.Value, false
+	}
+	if items, ok := scalarItems(n); ok {
+		return strings.Join(items, ","), false
+	}
+	// A mapping or nested list has no flat form: kept as YAML, comments dropped.
+	dropComments(n)
+	out, err := yaml.Marshal(n)
+	if err != nil {
+		return raw, false // a decoded node re-encodes; as written if not
+	}
+	return strings.TrimSpace(string(out)), false
 }
 
-func parseFlowList(val string) string {
-	inner := val[1 : len(val)-1]
-	var items []string
-	for p := range strings.SplitSeq(inner, ",") {
-		if s := unquote(strings.TrimSpace(p)); s != "" {
-			items = append(items, s)
+// scalarItems returns a sequence's non-empty items, ok only if all are scalars.
+func scalarItems(n *yaml.Node) ([]string, bool) {
+	if n.Kind != yaml.SequenceNode {
+		return nil, false
+	}
+	items := make([]string, 0, len(n.Content))
+	for _, c := range n.Content {
+		if c.Kind != yaml.ScalarNode {
+			return nil, false
+		}
+		if c.Value != "" {
+			items = append(items, c.Value)
 		}
 	}
-	return strings.Join(items, ",")
+	return items, true
 }
 
-func unquote(s string) string {
+func dropComments(n *yaml.Node) {
+	n.HeadComment, n.LineComment, n.FootComment = "", "", ""
+	for _, c := range n.Content {
+		dropComments(c)
+	}
+}
+
+func trimQuotes(s string) string {
 	if len(s) >= 2 {
 		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
 			return s[1 : len(s)-1]

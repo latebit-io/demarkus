@@ -40,9 +40,10 @@ type Entry struct {
 	Modified   time.Time
 	Metadata   map[string]string // declared publisher metadata, for filter predicates
 
-	terms  termSet  // tag and title tokens for body match; set by Set
-	demote float64  // body-match prior multiplier from the path; set by Set
-	pins   []string // rel-based-on targets, for based-on filters; set by Set
+	terms    termSet           // tag and title tokens for body match; set by Set
+	demote   float64           // body-match prior multiplier from the path; set by Set
+	standing protocol.Standing // status: tag tier, weighting importance; set by Set
+	pins     []string          // rel-based-on targets, for based-on filters; set by Set
 }
 
 // Result is a ranked LOOKUP match. Anchor, Heading, and Snippet are set
@@ -129,9 +130,9 @@ func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modif
 	c.sections[e.Path] = doc
 }
 
-// Prepare canonicalizes the path and derives what body match (tag and title
-// terms, path demotion) and based-on filters (pin targets) consult, so a
-// scan parses nothing; every entry searched passes through it.
+// Prepare canonicalizes the path and derives what ranking (tag and title
+// terms, path demotion, standing) and based-on filters (pin targets)
+// consult, so a scan parses nothing; every entry searched passes through it.
 func (e *Entry) Prepare() {
 	e.Path = storefmt.CanonicalPath(e.Path)
 	e.terms = newTermSet(mdtext.TokenSet(append(append([]string(nil), e.Tags...), e.Title)))
@@ -139,6 +140,7 @@ func (e *Entry) Prepare() {
 	if slices.Contains(strings.Split(strings.Trim(e.Path, "/"), "/"), "journal") {
 		e.demote = journalDemote
 	}
+	e.standing = protocol.StandingOf(e.Tags)
 	pins := provenance.Parse(e.Metadata[provenance.Key])
 	e.pins = make([]string, len(pins))
 	for i, pin := range pins {
@@ -232,8 +234,8 @@ func (index catalogIndex) Entries(string) iter.Seq2[*Entry, *DocSections] {
 }
 
 // Search returns documents whose tags or title match a query term, under the
-// scope and filters, by match count, importance, modified time, then path.
-// The query "*" matches every document, so the order reduces to importance.
+// scope and filters, in better's order. The query "*" matches every
+// document, so the order reduces to importance scaled by standing.
 func Search(index Index, query string, opts Options) ([]Result, error) {
 	switch opts.Match {
 	case "", MatchCatalog:
@@ -279,7 +281,7 @@ func (top *topResults) offer(e *Entry, score int) {
 		heap.Push(top, Result{Entry: *e, Score: score})
 		return
 	}
-	probe := Result{Entry: Entry{Path: e.Path, Importance: e.Importance, Modified: e.Modified}, Score: score}
+	probe := Result{Entry: Entry{Path: e.Path, Importance: e.Importance, Modified: e.Modified, standing: e.standing}, Score: score}
 	if better(&probe, &top.results[0]) {
 		top.results[0] = Result{Entry: *e, Score: score}
 		heap.Fix(top, 0)
@@ -404,19 +406,19 @@ func isASCII(s string) bool {
 	return true
 }
 
-// sortResults orders results by descending score, then importance, then
-// modification time, then ascending path for a deterministic tiebreak.
+// sortResults orders results by better.
 func sortResults(rs []Result) {
 	sort.Slice(rs, func(i, j int) bool { return better(&rs[i], &rs[j]) })
 }
 
-// better is the result order: higher score, importance, newer, then path.
+// better is the result order: higher score, scaled importance, newer, then
+// path.
 func better(a, b *Result) bool {
 	if a.Score != b.Score {
 		return a.Score > b.Score
 	}
-	if a.Importance != b.Importance {
-		return a.Importance > b.Importance
+	if ai, bi := a.standing.Scale(a.Importance), b.standing.Scale(b.Importance); ai != bi {
+		return ai > bi
 	}
 	if !a.Modified.Equal(b.Modified) {
 		return a.Modified.After(b.Modified)

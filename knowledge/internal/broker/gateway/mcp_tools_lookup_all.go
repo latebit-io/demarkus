@@ -31,6 +31,7 @@ type lookupAllMatch struct {
 	world      string
 	path       string
 	importance float64
+	weighted   float64 // importance scaled by status: standing, the tiebreak
 	title      string
 	tags       string
 	anchor     string // body mode: section anchor without '#'
@@ -97,8 +98,8 @@ func (g *Gateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolReque
 		if matches[i].rank != matches[j].rank {
 			return matches[i].rank < matches[j].rank
 		}
-		if matches[i].importance != matches[j].importance {
-			return matches[i].importance > matches[j].importance
+		if matches[i].weighted != matches[j].weighted {
+			return matches[i].weighted > matches[j].weighted
 		}
 		if matches[i].world != matches[j].world {
 			return matches[i].world < matches[j].world
@@ -250,6 +251,7 @@ func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch,
 			path:       row.Path,
 			anchor:     row.Anchor,
 			importance: row.Importance,
+			weighted:   protocol.StandingOf(protocol.SplitTags(row.Tags)).Scale(row.Importance),
 			title:      row.Title,
 			tags:       row.Tags,
 			snippet:    row.Snippet,

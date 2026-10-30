@@ -106,6 +106,8 @@ func renderConcept(meta map[string]string, body, modified string) string {
 		}
 	}
 
+	writeScalar(&b, "status", okfStatus(meta["tags"]))
+
 	// Producer-defined keys (including demarkus's importance) preserved bare,
 	// sorted for stable output.
 	for _, k := range sortedKeys(meta) {
@@ -117,6 +119,19 @@ func renderConcept(meta map[string]string, body, modified string) string {
 	b.WriteString("---\n")
 	b.WriteString(body)
 	return b.String()
+}
+
+// okfStatus names the tags' tier in OKF's vocabulary. Always written, since
+// OKF reads an absent status as stable; untagged is draft here.
+func okfStatus(tags string) string {
+	switch protocol.StandingOf(protocol.SplitTags(tags)) {
+	case protocol.StandingAccepted:
+		return "stable"
+	case protocol.StandingRetired:
+		return "deprecated"
+	default:
+		return "draft"
+	}
 }
 
 // normalizeTimestamp returns an RFC 3339 timestamp. A declared value is parsed
@@ -150,16 +165,18 @@ func writeScalar(b *strings.Builder, key, val string) {
 	b.WriteString(key + ": " + yamlScalar(val) + "\n")
 }
 
-// yamlScalar renders a value as a YAML scalar, double-quoting only when a bare
-// scalar would be ambiguous or reparse differently (a "key: value" collision, a
-// trailing comment, surrounding whitespace, an empty value, or a leading YAML
-// indicator character).
+// yamlScalar renders a value as a YAML scalar, double-quoting when a bare one
+// is invalid YAML (an empty value, a "key: value" collision, surrounding space,
+// a leading indicator) or would not reparse to itself (a comment, a "- " list).
 func yamlScalar(v string) string {
 	need := v == "" ||
 		strings.Contains(v, ": ") || strings.HasSuffix(v, ":") ||
-		strings.Contains(v, " #") ||
 		v != strings.TrimSpace(v) ||
 		strings.ContainsAny(v[:1], `[]{}#&*!|>'"%@`+"`,")
+	if !need {
+		got, _ := parseValue(v) // never bare: v is non-empty and not a comment
+		need = got != v
+	}
 	if !need {
 		return v
 	}

@@ -52,26 +52,61 @@ func TestMapMetadata(t *testing.T) {
 		"tags":         "a,b",
 		"okf_version":  "0.1",  // bundle-level, dropped
 		"version":      "9",    // reserved, dropped
+		"modified":     "x",    // response-reserved, dropped
+		"auth":         "t",    // request control, dropped
+		"Status":       "wip",  // sanitizes to the reserved status, dropped
 		"producer_key": "v",    // sanitized
 		"note":         "x\ny", // newline flattened
 	}
 	meta, warns := mapMetadata(in)
 
 	want := map[string]string{
-		"type": "Table", "title": "Orders", "tags": "a,b",
+		"type": "Table", "title": "Orders", "tags": "a,b,status:accepted",
 		"producer-key": "v", "note": "x y",
 	}
 	if !reflect.DeepEqual(meta, want) {
 		t.Errorf("mapMetadata = %v, want %v", meta, want)
 	}
 	joined := strings.Join(warns, "\n")
-	for _, sub := range []string{`dropped metadata key "version"`, `sanitized metadata key "producer_key"`, "flattened newlines"} {
+	for _, sub := range []string{`dropped metadata key "version"`, `dropped metadata key "modified"`, `dropped metadata key "auth"`, `dropped metadata key "Status"`, `sanitized metadata key "producer_key"`, "flattened newlines"} {
 		if !strings.Contains(joined, sub) {
 			t.Errorf("warnings missing %q; got %v", sub, warns)
 		}
 	}
 	if strings.Contains(joined, "okf_version") {
 		t.Errorf("okf_version should be dropped silently, got warn: %v", warns)
+	}
+}
+
+func TestMapMetadataFoldsStatusIntoTags(t *testing.T) {
+	tests := []struct {
+		name     string
+		in       map[string]string
+		wantTags string
+		wantWarn string
+	}{
+		{"status becomes a tag", map[string]string{"tags": "a", "status": "deprecated"}, "a,status:deprecated", ""},
+		{"stable is accepted", map[string]string{"status": "stable"}, "status:accepted", ""},
+		{"agreeing tag wins silently", map[string]string{"tags": "status:accepted", "status": "stable"}, "status:accepted", ""},
+		{"conflicting tag wins", map[string]string{"tags": "status:wip", "status": "stable"}, "status:wip", `dropped OKF status "stable": tag "status:wip" wins`},
+		{"comma is not a tag", map[string]string{"status": "a,b"}, "", "not a valid tag"},
+		{"absent is accepted", map[string]string{"tags": "a"}, "a,status:accepted", ""},
+		{"absent leaves a status tag alone", map[string]string{"tags": "status:wip"}, "status:wip", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta, warns := mapMetadata(tt.in)
+			if _, ok := meta["status"]; ok {
+				t.Errorf("reserved status key kept: %v", meta)
+			}
+			if meta["tags"] != tt.wantTags {
+				t.Errorf("tags = %q, want %q", meta["tags"], tt.wantTags)
+			}
+			joined := strings.Join(warns, "\n")
+			if tt.wantWarn == "" && joined != "" || !strings.Contains(joined, tt.wantWarn) {
+				t.Errorf("warnings = %v, want %q", warns, tt.wantWarn)
+			}
+		})
 	}
 }
 
@@ -173,7 +208,7 @@ func TestBuildImport_Integration(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing orders item; paths: %v", keysOf(byPath))
 	}
-	if ord.Metadata["type"] != "BigQuery Table" || ord.Metadata["tags"] != "sales,revenue" {
+	if ord.Metadata["type"] != "BigQuery Table" || ord.Metadata["tags"] != "sales,revenue,status:accepted" {
 		t.Errorf("orders metadata = %v", ord.Metadata)
 	}
 	if !strings.Contains(ord.Body, "/vendor/tables/customers.md") {
