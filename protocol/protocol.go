@@ -67,6 +67,20 @@ func IsReservedMetadataKey(key string) bool {
 	return reservedMetadataKeys[key]
 }
 
+// controlMetadataKeys are request metadata keys a server consumes as request
+// controls and never stores.
+var controlMetadataKeys = map[string]bool{
+	"auth":              true,
+	"expected-version":  true,
+	"if-none-match":     true,
+	"if-modified-since": true,
+}
+
+// IsControlMetadataKey reports a request control key, never publisher metadata.
+func IsControlMetadataKey(key string) bool {
+	return controlMetadataKeys[key]
+}
+
 // Identity keys are ordinary publisher metadata a writing surface stamps and
 // never lets a caller set; servers store them opaquely and echo them on
 // WATCH events.

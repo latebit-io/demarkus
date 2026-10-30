@@ -565,13 +565,15 @@ The body MUST be a markdown table, one row per result. Columns are the document'
 
 When the request carries `match`, the response MUST echo the mode it answered in as `match: catalog` or `match: body`. A request without `match` is answered exactly as before this key existed, with no `match` header. Clients MUST treat a response without `match: body` as a catalog answer, whatever the request asked for. A server that implements body match MAY answer a body request in catalog mode, echoing `match: catalog`, while its section index is being built or trails the committed state the request reads; it MUST NOT echo `match: body` for an answer from a section index that misses part of that state.
 
-**Ranking**: results are ordered by (1) the number of distinct query terms matched, then (2) descending `importance`, then (3) descending modification time, then (4) ascending path. Importance influences ordering only among documents that already matched the query; it MUST NOT cause an unmatched document to appear in the results.
+**Ranking**: results are ordered by (1) the number of distinct query terms matched, then (2) descending effective importance, the declared `importance` times the status weight, then (3) descending modification time, then (4) ascending path. Importance influences ordering only among documents that already matched the query; it MUST NOT cause an unmatched document to appear in the results.
 
 **Declared catalog metadata** (set on PUBLISH as publisher metadata):
 
 - `tags`: a comma-separated list of subject labels, e.g. `tags: go,auth,middleware`. The match target for `query`, and available for exact membership matching via `filter`.
 - `importance`: a decimal in the range [0,1] used as the ranking weight. Absent or invalid values MUST be treated as 0.5.
 - `title`: an OPTIONAL one-line title shown in results and included in the `query` match target. When absent, the server SHOULD derive it from the document's first level-1 heading, falling back to the path's base name.
+
+**Status weight**: the document's first tag of the form `status:<value>`, prefix and value compared case-insensitively, sets its weight: `accepted` or `stable` 1.0; `archived`, `superseded`, or `deprecated` 0.3; any other value, or no status tag, 0.8. `stable` and `deprecated` are OKF's `status` values; an OKF importer carries that field as this tag, since `status` is a reserved key, with `stable` or an absent field (OKF's default) as `status:accepted`. An exporter writes `draft` for a document with no status tag, since OKF would read an absent field as `stable`. A `status:archived` document is a soft archive: still matched, listed, and linked, unlike an archived document (§6.5). The tag stays an ordinary tag for `query` and `filter`, and results report declared `importance`, not effective.
 
 `tags`, `importance`, and `title` are the only publisher metadata keys a server interprets for LOOKUP; all other declared metadata remains opaque and is reachable only through `filter`.
 
@@ -584,7 +586,7 @@ When the request carries `match`, the response MUST echo the mode it answered in
 - Term: `query` split on whitespace, lowercased, terms shorter than 2 characters dropped. Section text is tokenised on token boundaries after splitting on every character that is not a letter, digit, or underscore, and also as each whole whitespace-separated word with surrounding punctuation trimmed, so `path.Match` is matched by `path`, `match`, and `path.match`. A query with no usable term matches nothing.
 - Match: a document whose declared `tags` or title contain every term is one row at its bare path, the catalog answer. Otherwise a section is a row when every term appears in its section text, in its heading trail (its heading and every ancestor heading), or in the document's `tags` or title, and at least one term appears in the text or trail itself.
 - Recall: every matching section of every current, non-archived document under the scope that satisfies `filter` and that the requester may read is a candidate. `limit` truncates after ordering. One row per section.
-- Ordering: importance is a prior among matching sections and MUST NOT cause a non-matching section to appear. Ties break by ascending path, then ascending anchor. Everything else about order is implementation-defined.
+- Ordering: importance and the status weight are a prior among matching sections and MUST NOT cause a non-matching section to appear. Ties break by ascending path, then ascending anchor. Everything else about order is implementation-defined.
 - Read authorisation: per-row filtering exactly as in catalog mode, by the document's path.
 
 The response header echoes `match: body` and the table gains a fifth column:
@@ -793,7 +795,7 @@ The following status values are reserved for future use:
 | `cursor` | LIST | Opaque string | Continuation from the preceding page of the same directory and archive mode. |
 | `include-archived` | LIST | `true` or `false` | Include archived documents and directories containing only archived documents. Default false. |
 | `since` | WATCH | Cursor (§6.8) | The last cursor the client processed; delivery resumes after it. Absent starts at the head. |
-| `tags` | PUBLISH, APPEND | Comma-separated string | Subject labels for the document. Interpreted by the server: matched by LOOKUP `query` and `filter`. |
+| `tags` | PUBLISH, APPEND | Comma-separated string | Subject labels for the document. Interpreted by the server: matched by LOOKUP `query` and `filter`; a `status:` tag sets the LOOKUP status weight. |
 | `importance` | PUBLISH, APPEND | Decimal in [0,1] | Ranking weight used by LOOKUP. Interpreted by the server. Absent or invalid is treated as 0.5. |
 | `title` | PUBLISH | String | One-line title shown in LOOKUP results and matched by `query`. Defaults to the first level-1 heading, then the path base name. |
 

@@ -21,7 +21,7 @@ func locations(rs []Result) string {
 }
 
 // TestReferenceRanking pins the order rules outside the spec: journal paths
-// demoted, a tags-or-title match boosted over a mere mention, a
+// and standing demoted, a tags-or-title match over a mere mention, a
 // heading-and-text section over a lower-importance tagged journal.
 func TestReferenceRanking(t *testing.T) {
 	tests := []struct {
@@ -47,6 +47,24 @@ func TestReferenceRanking(t *testing.T) {
 			},
 			query: "kiwi",
 			want:  "/notes.md#notes,/sub/journal/2026-01-01.md#day",
+		},
+		{
+			name: "superseded document sorts below a lower-importance draft",
+			docs: func(c *Catalog) {
+				putDoc(c, "/adr/0001.md", "# Old\n\nshared phrase kiwi\n", map[string]string{"tags": "adr,status:superseded", "importance": "0.9"})
+				putDoc(c, "/adr/0002.md", "# New\n\nshared phrase kiwi\n", map[string]string{"tags": "adr,status:draft", "importance": "0.6"})
+			},
+			query: "kiwi",
+			want:  "/adr/0002.md#new,/adr/0001.md#old",
+		},
+		{
+			name: "accepted document outranks an equal untagged one",
+			docs: func(c *Catalog) {
+				putDoc(c, "/a.md", "# A\n\nshared phrase kiwi\n", map[string]string{"importance": "0.6"})
+				putDoc(c, "/b.md", "# B\n\nshared phrase kiwi\n", map[string]string{"tags": "status:accepted", "importance": "0.6"})
+			},
+			query: "kiwi",
+			want:  "/b.md#b,/a.md#a",
 		},
 		{
 			name: "tagged document outranks a section that only mentions the term",

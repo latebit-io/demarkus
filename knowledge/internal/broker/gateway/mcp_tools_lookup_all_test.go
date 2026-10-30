@@ -272,6 +272,35 @@ func TestHandleMarkLookupAllAppliesGlobalLimitBounds(t *testing.T) {
 	}
 }
 
+// TestHandleMarkLookupAllTiebreaksOnStandingWeightedImportance pins the
+// cross-world tiebreak at equal rank: importance scaled by the status: tag,
+// as each world ranks its own rows.
+func TestHandleMarkLookupAllTiebreaksOnStandingWeightedImportance(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "team-b", Namespace: "team-b"})
+	d := &fakeDispatcher{
+		LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+			if r.Host == "team-a" {
+				return lookupResult(render.LookupRow{Path: "/old.md", Importance: 0.9, Title: "Old", Tags: []string{"auth", "status:superseded"}}), nil
+			}
+			return lookupResult(render.LookupRow{Path: "/new.md", Importance: 0.5, Title: "New", Tags: []string{"auth", "status:accepted"}}), nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkLookupAll(withAliceClaims(context.Background()), callToolReq("mark_lookup_all", map[string]any{"query": "auth"}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkLookupAll: %v %+v", err, res)
+	}
+	text := toolResultText(t, res)
+	newAt, oldAt := strings.Index(text, "mark://team-b/new.md"), strings.Index(text, "mark://team-a/old.md")
+	if newAt < 0 || oldAt < 0 || newAt > oldAt {
+		t.Errorf("accepted 0.5 must precede superseded 0.9:\n%s", text)
+	}
+	if !strings.Contains(text, "0.90") {
+		t.Errorf("declared importance not reported unscaled:\n%s", text)
+	}
+}
+
 func TestParseLookupAllMatchesRejectsMetadataDrift(t *testing.T) {
 	result := lookupResult(authRow)
 	result.Response.Metadata["matches"] = "2"

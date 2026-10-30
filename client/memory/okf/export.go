@@ -106,6 +106,8 @@ func renderConcept(meta map[string]string, body, modified string) string {
 		}
 	}
 
+	writeScalar(&b, "status", okfStatus(meta["tags"]))
+
 	// Producer-defined keys (including demarkus's importance) preserved bare,
 	// sorted for stable output.
 	for _, k := range sortedKeys(meta) {
@@ -117,6 +119,19 @@ func renderConcept(meta map[string]string, body, modified string) string {
 	b.WriteString("---\n")
 	b.WriteString(body)
 	return b.String()
+}
+
+// okfStatus names the tags' tier in OKF's vocabulary. Always written, since
+// OKF reads an absent status as stable; untagged is draft here.
+func okfStatus(tags string) string {
+	switch protocol.StandingOf(protocol.SplitTags(tags)) {
+	case protocol.StandingAccepted:
+		return "stable"
+	case protocol.StandingRetired:
+		return "deprecated"
+	default:
+		return "draft"
+	}
 }
 
 // normalizeTimestamp returns an RFC 3339 timestamp. A declared value is parsed

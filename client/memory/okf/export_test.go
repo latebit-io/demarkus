@@ -55,6 +55,22 @@ func TestRelFromPath(t *testing.T) {
 	}
 }
 
+func TestRenderConceptStatus(t *testing.T) {
+	for tags, want := range map[string]string{
+		"a,status:accepted":   "status: stable\n",
+		"status:wip":          "status: draft\n",
+		"status:superseded,b": "status: deprecated\n",
+		"status:deprecated":   "status: deprecated\n",
+		"status:acepted":      "status: draft\n",
+		"a":                   "status: draft\n", // OKF would read absent as stable
+	} {
+		got := renderConcept(map[string]string{"tags": tags}, "# B\n", "2026-06-22T15:56:55Z")
+		if !strings.Contains(got, want) {
+			t.Errorf("tags %q: missing %q in:\n%s", tags, want, got)
+		}
+	}
+}
+
 func TestRenderConcept(t *testing.T) {
 	meta := map[string]string{
 		"title": "Orders", "tags": "a,b", "resource": "https://x", "importance": "0.8",

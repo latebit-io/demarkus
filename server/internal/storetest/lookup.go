@@ -29,6 +29,7 @@ func RunLookupConformance(t *testing.T, factory LookupFactory) {
 		{"Matching", testLookupMatching},
 		{"Ranking", testLookupRanking},
 		{"Tiebreaks", testLookupTiebreaks},
+		{"Standing", testLookupStanding},
 		{"TitleFallback", testLookupTitleFallback},
 		{"WildcardLiteralTerms", testLookupWildcardLiteralTerms},
 		{"MatchAll", testLookupMatchAll},
@@ -108,6 +109,21 @@ func testLookupTiebreaks(t *testing.T, b LookupBackend) {
 		first, second = "/tie/b.md", "/tie/a.md" // b is newer: newest first
 	}
 	assertLookup(t, b, "go", catalog.Options{}, first, second)
+}
+
+func testLookupStanding(t *testing.T, b LookupBackend) {
+	// Importance scaled by the status: tag: accepted 1.0, none 0.8, retired 0.3.
+	catalogPublish(t, b, "/accepted.md", "x", map[string]string{"tags": "go,status:accepted", "importance": "0.5"})
+	catalogPublish(t, b, "/untagged.md", "x", map[string]string{"tags": "go", "importance": "0.6"})
+	catalogPublish(t, b, "/superseded.md", "x", map[string]string{"tags": "go,status:superseded", "importance": "0.9"})
+
+	assertLookup(t, b, "go", catalog.Options{}, "/accepted.md", "/untagged.md", "/superseded.md")
+	assertLookup(t, b, "*", catalog.Options{}, "/accepted.md", "/untagged.md", "/superseded.md")
+	// Declared importance is reported unscaled.
+	rs := mustLookup(t, b, "go", catalog.Options{})
+	if len(rs) != 3 || rs[2].Importance != 0.9 {
+		t.Errorf("results = %+v, want /superseded.md importance 0.9", rs)
+	}
 }
 
 func testLookupTitleFallback(t *testing.T, b LookupBackend) {

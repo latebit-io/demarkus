@@ -39,14 +39,6 @@ const (
 	maxLookupTerms = 32
 )
 
-// controlKeys are request metadata keys consumed by the handler and never stored.
-var controlKeys = map[string]bool{
-	"auth":              true,
-	"expected-version":  true,
-	"if-none-match":     true,
-	"if-modified-since": true,
-}
-
 // DocumentStore is the handler's view of a content store; storetest holds
 // every backend to the same contract.
 type DocumentStore = storagebackend.Store
@@ -1207,7 +1199,7 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 	var meta map[string]string
 	size := 0
 	for k, v := range reqMeta {
-		if controlKeys[k] {
+		if protocol.IsControlMetadataKey(k) {
 			continue
 		}
 		if protocol.IsReservedMetadataKey(k) {
@@ -1239,7 +1231,7 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 // leaking server-owned keys into responses.
 func copyPublisherMeta(dst, src map[string]string) {
 	for k, v := range src {
-		if protocol.IsReservedMetadataKey(k) || controlKeys[k] {
+		if protocol.IsReservedMetadataKey(k) || protocol.IsControlMetadataKey(k) {
 			continue
 		}
 		if !protocol.IsValidMetaKey(k) || !protocol.IsValidMetaValue(v) {

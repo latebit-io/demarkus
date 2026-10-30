@@ -43,10 +43,11 @@ var reservedMetaKeys = map[string]bool{
 	"archived":      true,
 }
 
-// IsReservedMetaKey reports a key a publish would refuse, so importers of
-// outside documents can drop or rename it first.
+// IsReservedMetaKey reports a key a publish would refuse or read as a request
+// control (store-owned, response-reserved, control), so importers of outside
+// documents can drop or rename it first.
 func IsReservedMetaKey(key string) bool {
-	return reservedMetaKeys[key]
+	return reservedMetaKeys[key] || protocol.IsReservedMetadataKey(key) || protocol.IsControlMetadataKey(key)
 }
 
 // ParseRetention accepts only a positive integer, the one form that prunes.
