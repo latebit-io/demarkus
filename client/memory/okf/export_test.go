@@ -18,6 +18,9 @@ func TestYamlScalar(t *testing.T) {
 		{"[bracket", `"[bracket"`},
 		{`has"quote`, `has"quote`}, // mid-scalar quote is valid bare YAML
 		{`Issue #4 "a" \b`, `"Issue #4 \"a\" \\b"`},
+		{"a\t#b", "\"a\t#b\""},
+		{"- item", `"- item"`},
+		{"? q", `"? q"`},
 	}
 	for _, tt := range tests {
 		got := yamlScalar(tt.in)

@@ -55,9 +55,9 @@ func SplitFrontmatter(data []byte) (fm string, body []byte, ok bool) {
 	return "", data, false
 }
 
-// ParseFrontmatter parses an OKF frontmatter block into a flat string map, a YAML
-// list flattened to comma-separated values and comments dropped. Any other line
-// that is not "key: value" or a list item is an error, failing conformance.
+// ParseFrontmatter parses an OKF frontmatter block into a flat string map, each
+// value decoded by parseValue. Any other line that is not "key: value" or a list
+// item is an error, failing conformance.
 func ParseFrontmatter(fm string) (map[string]string, error) {
 	meta := map[string]string{}
 	lastListKey := ""
@@ -79,21 +79,14 @@ func ParseFrontmatter(fm string) (map[string]string, error) {
 			return nil, fmt.Errorf("unparseable frontmatter line: %q", trimmed)
 		}
 		key = strings.TrimSpace(key)
-		val = stripComment(strings.TrimSpace(val))
 		if key == "" {
 			return nil, fmt.Errorf("empty key in frontmatter line: %q", trimmed)
 		}
+		v, bare := parseValue(strings.TrimSpace(val))
+		meta[key] = v
 		lastListKey = ""
-		switch {
-		case val == "":
-			// A bare "key:" introduces a block list (items follow) or is an
-			// empty scalar; either way the value starts empty.
-			meta[key] = ""
-			lastListKey = key
-		case isFlowList(val):
-			meta[key] = parseFlowList(val)
-		default:
-			meta[key] = unquote(val)
+		if bare {
+			lastListKey = key // a bare "key:" may introduce a block list
 		}
 	}
 	return meta, nil
@@ -104,75 +97,67 @@ func blockListItem(trimmed string) (string, bool) {
 		return "", true
 	}
 	if strings.HasPrefix(trimmed, "- ") {
-		return unquote(stripComment(strings.TrimSpace(trimmed[2:]))), true
+		v, _ := parseValue(strings.TrimSpace(trimmed[2:])) // a bare item is empty
+		return v, true
 	}
 	return "", false
 }
 
-// stripComment drops a YAML inline comment from a trimmed value: a # at its
-// start or after whitespace, outside a quoted scalar. A quote opens a scalar
-// only at its start: the value's, or after [ or a comma inside a flow list.
-func stripComment(val string) string {
-	var quote byte
-	flow := 0 // flow list depth
-	start := true
-	for i := 0; i < len(val); i++ {
-		c := val[i]
-		next := false
-		switch {
-		case quote == '"' && c == '\\':
-			i++ // escaped character
-		case quote == '\'' && c == '\'' && i+1 < len(val) && val[i+1] == '\'':
-			i++ // '' is a literal quote
-		case quote != 0:
-			if c == quote {
-				quote = 0
-			}
-		case start && (c == '"' || c == '\''):
-			quote = c
-		case start && c == '[':
-			flow++
-			next = true
-		case flow > 0 && c == ']':
-			flow--
-		case flow > 0 && c == ',':
-			next = true
-		case c == '#' && (i == 0 || val[i-1] == ' ' || val[i-1] == '\t'):
-			return strings.TrimSpace(val[:i])
-		case c == ' ' || c == '\t':
-			next = start
-		}
-		start = next
+// parseValue decodes one frontmatter value as YAML: quotes, escapes and comments
+// resolved, a list of scalars flattened to comma-separated items. bare reports
+// no value at all, as in "key:" or "key: # comment".
+func parseValue(raw string) (v string, bare bool) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+		return trimQuotes(raw), false // not YAML: import tolerates it, as written
 	}
-	return val
+	if len(doc.Content) == 0 {
+		return "", true
+	}
+	n := doc.Content[0]
+	if n.Kind == yaml.ScalarNode {
+		return n.Value, false
+	}
+	if items, ok := scalarItems(n); ok {
+		return strings.Join(items, ","), false
+	}
+	// A mapping or nested list has no flat form: kept as YAML, comments dropped.
+	dropComments(n)
+	out, err := yaml.Marshal(n)
+	if err != nil {
+		return raw, false // a decoded node re-encodes; as written if not
+	}
+	return strings.TrimSpace(string(out)), false
 }
 
-func isFlowList(val string) bool {
-	return strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]")
-}
-
-func parseFlowList(val string) string {
-	inner := val[1 : len(val)-1]
-	var items []string
-	for p := range strings.SplitSeq(inner, ",") {
-		if s := unquote(strings.TrimSpace(p)); s != "" {
-			items = append(items, s)
+// scalarItems returns a sequence's non-empty items, ok only if all are scalars.
+func scalarItems(n *yaml.Node) ([]string, bool) {
+	if n.Kind != yaml.SequenceNode {
+		return nil, false
+	}
+	items := make([]string, 0, len(n.Content))
+	for _, c := range n.Content {
+		if c.Kind != yaml.ScalarNode {
+			return nil, false
+		}
+		if c.Value != "" {
+			items = append(items, c.Value)
 		}
 	}
-	return strings.Join(items, ",")
+	return items, true
 }
 
-// unquote decodes a quoted YAML scalar, its escapes included, as export writes
-// them. A malformed escape, invalid YAML, keeps the raw text between the
-// quotes: import tolerates a bundle other tools would reject.
-func unquote(s string) string {
+func dropComments(n *yaml.Node) {
+	n.HeadComment, n.LineComment, n.FootComment = "", "", ""
+	for _, c := range n.Content {
+		dropComments(c)
+	}
+}
+
+func trimQuotes(s string) string {
 	if len(s) >= 2 {
 		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
-			var v string
-			if err := yaml.Unmarshal([]byte(s), &v); err != nil {
-				return s[1 : len(s)-1]
-			}
-			return v
+			return s[1 : len(s)-1]
 		}
 	}
 	return s

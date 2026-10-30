@@ -57,6 +57,8 @@ func TestParseFrontmatter(t *testing.T) {
 		{"comma in plain scalar", "title: Music, '80s # note\n", map[string]string{"title": "Music, '80s"}, false},
 		{"flow list comment", "tags: [a, 'b # c'] # d\n", map[string]string{"tags": "a,b # c"}, false},
 		{"block list comment", "tags: # list\n  - a # c\n", map[string]string{"tags": "a"}, false},
+		{"flow mapping", `extra: {id: 1, "topic #1": value} # c`, map[string]string{"extra": `{id: 1, "topic #1": value}`}, false},
+		{"yaml tag", `title: !!str "a # b"`, map[string]string{"title": "a # b"}, false},
 		{"unparseable line", "type: Table\ngarbage line\n", nil, true},
 		{"orphan list item", "  - sales\n", nil, true},
 	}

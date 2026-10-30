@@ -165,16 +165,18 @@ func writeScalar(b *strings.Builder, key, val string) {
 	b.WriteString(key + ": " + yamlScalar(val) + "\n")
 }
 
-// yamlScalar renders a value as a YAML scalar, double-quoting only when a bare
-// scalar would be ambiguous or reparse differently (a "key: value" collision, a
-// trailing comment, surrounding whitespace, an empty value, or a leading YAML
-// indicator character).
+// yamlScalar renders a value as a YAML scalar, double-quoting when a bare one
+// is invalid YAML (an empty value, a "key: value" collision, surrounding space,
+// a leading indicator) or would not reparse to itself (a comment, a "- " list).
 func yamlScalar(v string) string {
 	need := v == "" ||
 		strings.Contains(v, ": ") || strings.HasSuffix(v, ":") ||
-		strings.Contains(v, " #") ||
 		v != strings.TrimSpace(v) ||
 		strings.ContainsAny(v[:1], `[]{}#&*!|>'"%@`+"`,")
+	if !need {
+		got, _ := parseValue(v) // never bare: v is non-empty and not a comment
+		need = got != v
+	}
 	if !need {
 		return v
 	}
