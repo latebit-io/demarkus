@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/links"
+	"gopkg.in/yaml.v3"
 )
 
 // Reserved bundle filenames with defined structure. Every other ".md" file is a
@@ -110,12 +111,14 @@ func blockListItem(trimmed string) (string, bool) {
 
 // stripComment drops a YAML inline comment from a trimmed value: a # at its
 // start or after whitespace, outside a quoted scalar. A quote opens a scalar
-// only where one starts, so the apostrophe in don't is plain text.
+// only at its start: the value's, or after [ or a comma inside a flow list.
 func stripComment(val string) string {
 	var quote byte
-	scalarStart := true
+	flow := 0 // flow list depth
+	start := true
 	for i := 0; i < len(val); i++ {
 		c := val[i]
+		next := false
 		switch {
 		case quote == '"' && c == '\\':
 			i++ // escaped character
@@ -125,12 +128,21 @@ func stripComment(val string) string {
 			if c == quote {
 				quote = 0
 			}
-		case scalarStart && (c == '"' || c == '\''):
+		case start && (c == '"' || c == '\''):
 			quote = c
+		case start && c == '[':
+			flow++
+			next = true
+		case flow > 0 && c == ']':
+			flow--
+		case flow > 0 && c == ',':
+			next = true
 		case c == '#' && (i == 0 || val[i-1] == ' ' || val[i-1] == '\t'):
 			return strings.TrimSpace(val[:i])
+		case c == ' ' || c == '\t':
+			next = start
 		}
-		scalarStart = quote == 0 && (c == '[' || c == ',' || (scalarStart && (c == ' ' || c == '\t')))
+		start = next
 	}
 	return val
 }
@@ -150,10 +162,17 @@ func parseFlowList(val string) string {
 	return strings.Join(items, ",")
 }
 
+// unquote decodes a quoted YAML scalar, its escapes included, as export writes
+// them. A malformed escape, invalid YAML, keeps the raw text between the
+// quotes: import tolerates a bundle other tools would reject.
 func unquote(s string) string {
 	if len(s) >= 2 {
 		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
-			return s[1 : len(s)-1]
+			var v string
+			if err := yaml.Unmarshal([]byte(s), &v); err != nil {
+				return s[1 : len(s)-1]
+			}
+			return v
 		}
 	}
 	return s

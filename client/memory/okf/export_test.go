@@ -17,10 +17,15 @@ func TestYamlScalar(t *testing.T) {
 		{" lead", `" lead"`},
 		{"[bracket", `"[bracket"`},
 		{`has"quote`, `has"quote`}, // mid-scalar quote is valid bare YAML
+		{`Issue #4 "a" \b`, `"Issue #4 \"a\" \\b"`},
 	}
 	for _, tt := range tests {
-		if got := yamlScalar(tt.in); got != tt.want {
+		got := yamlScalar(tt.in)
+		if got != tt.want {
 			t.Errorf("yamlScalar(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+		if meta, err := ParseFrontmatter("k: " + got); err != nil || meta["k"] != tt.in {
+			t.Errorf("reparse of %q = %q, %v; want %q", got, meta["k"], err, tt.in)
 		}
 	}
 }
