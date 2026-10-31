@@ -146,6 +146,49 @@ func TestHelperResumesAfterAStreamLossOnAnotherReplica(t *testing.T) {
 	}
 }
 
+// A stream cut before any notice has no cursor to resume from: the reopen
+// starts at the head, so a write in the gap is never sent and a resync
+// stands in for it.
+func TestHelperResyncsAReopenWithoutACursor(t *testing.T) {
+	t.Parallel()
+	r := newWatchSystem(t).replica()
+	src := &sessions{
+		first: mcpwatch.Session{Listener: readerListener(t, r, "alice"), Expires: time.Now().Add(time.Hour)},
+		rest:  mcpwatch.Session{Listener: readerListener(t, r, "alice"), Expires: time.Now().Add(time.Hour)},
+	}
+	gap, published := make(chan struct{}), make(chan struct{})
+	// Holds the reopen until the test has written into the gap.
+	held := func(ctx context.Context) (mcpwatch.Session, error) {
+		if src.count() == 1 {
+			close(gap)
+			select {
+			case <-published:
+			case <-ctx.Done():
+				return mcpwatch.Session{}, ctx.Err()
+			}
+		}
+		return src.source(ctx)
+	}
+	w := openHelper(t, held, mcpwatch.Request{URI: "mark://team/g/"})
+	r.server.CloseClientConnections()
+	select {
+	case <-gap:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the cut stream never reopened")
+	}
+	r.publish(t, "/g/gap.md")
+	close(published)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if n, err := w.Next(ctx); err != nil || !n.Resync {
+		t.Fatalf("Next = %+v %v, want a resync for the write in the gap", n, err)
+	}
+	r.publish(t, "/g/after.md")
+	expectPath(t, w, "/g/after.md", 5*time.Second)
+	expectQuiet(t, w, 300*time.Millisecond)
+}
+
 // A bearer the source says will lapse is replaced before it does: the new
 // stream opens from the cursor under the fresh bearer, the old one closes,
 // and the overlap repeats nothing.

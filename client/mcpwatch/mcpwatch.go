@@ -125,8 +125,11 @@ type Watch struct {
 	// stream is where the next stream resumes from; consumed is the cursor of
 	// the last notice Next returned, which may lag behind what is queued.
 	stream, consumed protocol.Cursor
-	expires          time.Time
-	err              error
+	// owed is a resync not yet queued for a reopen from no cursor, which
+	// starts at the head and so never sends what landed during the gap.
+	owed    bool
+	expires time.Time
+	err     error
 }
 
 // Open subscribes and returns once the server has acknowledged, or with its
@@ -347,8 +350,8 @@ func text(meta map[string]any, key string) string {
 }
 
 // run follows streams until the watch ends: it renews ahead of a lapsing
-// bearer, renews at once on unauthorized, and reopens after a cut, a
-// closing drain or an overflow, always from the stream cursor.
+// bearer or at once on unauthorized, and reopens after a cut, a closing
+// drain or an overflow from the stream cursor, or with a resync if none.
 func (w *Watch) run(ctx context.Context, s *stream) {
 	defer w.cancel()
 	empty := retryMin
@@ -374,10 +377,32 @@ func (w *Watch) run(ctx context.Context, s *stream) {
 			w.finish(ctx.Err())
 			return
 		}
+		w.mu.Lock()
+		w.owed = w.owed || w.stream.IsZero()
+		w.mu.Unlock()
 		if s, err = w.reopen(ctx); err != nil {
 			w.finish(err)
 			return
 		}
+		w.resync(s)
+	}
+}
+
+// resync queues the owed resync once s is acknowledged, at the stream cursor
+// so Cursor never moves back. A full queue stops s like an overflow, and the
+// reopen after it pays instead.
+func (w *Watch) resync(s *stream) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.owed {
+		return
+	}
+	select {
+	case w.notices <- fetch.Notice{Resync: true, Event: protocol.WatchEvent{Cursor: w.stream}}:
+		w.owed = false
+	default:
+		s.dead = true
+		s.raise(signalOverflow)
 	}
 }
 
