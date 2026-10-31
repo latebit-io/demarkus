@@ -307,6 +307,11 @@ func (w *Watch) receive(s *stream, n mcp.JSONRPCNotification) {
 		w.stream = cursor // skipped, as the protocol asks, but passed
 		return
 	}
+	// The owed resync goes first: an event consumed ahead of it would move
+	// Cursor past the gap.
+	if !w.payOwed(s) {
+		return
+	}
 	select {
 	case w.notices <- notice:
 		w.stream, s.delivered = cursor, true
@@ -384,25 +389,28 @@ func (w *Watch) run(ctx context.Context, s *stream) {
 			w.finish(err)
 			return
 		}
-		w.resync(s)
+		// A quiet stream pays here; one that already delivered paid first.
+		w.mu.Lock()
+		w.payOwed(s)
+		w.mu.Unlock()
 	}
 }
 
-// resync queues the owed resync once s is acknowledged, at the stream cursor
-// so Cursor never moves back. A full queue stops s like an overflow, and the
-// reopen after it pays instead.
-func (w *Watch) resync(s *stream) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+// payOwed queues the owed resync at the stream cursor, so Cursor never moves
+// back. A full queue stops s like an overflow and keeps the debt for the next
+// reopen, reporting false. Callers hold w.mu.
+func (w *Watch) payOwed(s *stream) bool {
 	if !w.owed {
-		return
+		return true
 	}
 	select {
 	case w.notices <- fetch.Notice{Resync: true, Event: protocol.WatchEvent{Cursor: w.stream}}:
 		w.owed = false
+		return true
 	default:
 		s.dead = true
 		s.raise(signalOverflow)
+		return false
 	}
 }
 

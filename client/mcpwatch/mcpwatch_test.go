@@ -64,7 +64,7 @@ func TestReceiveDropsRepeatsAndStopsOnOverflow(t *testing.T) {
 
 // A reopen from no cursor owes a resync, queued at the stream cursor; a full
 // queue stops the stream and keeps the debt for the next reopen.
-func TestResyncPaysWhatAReopenOwes(t *testing.T) {
+func TestPayOwed(t *testing.T) {
 	tests := []struct {
 		name       string
 		owed       bool
@@ -84,9 +84,9 @@ func TestResyncPaysWhatAReopenOwes(t *testing.T) {
 				w.receive(s, event(seq))
 			}
 			w.owed = tt.owed
-			w.resync(s)
-			if got := signalOf(s); got != tt.wantSignal || w.owed != tt.wantOwed {
-				t.Fatalf("signal %q owed %v, want %q and %v", got, w.owed, tt.wantSignal, tt.wantOwed)
+			paid := w.payOwed(s)
+			if got := signalOf(s); got != tt.wantSignal || w.owed != tt.wantOwed || paid != (got == "") {
+				t.Fatalf("signal %q owed %v paid %v, want %q and %v", got, w.owed, paid, tt.wantSignal, tt.wantOwed)
 			}
 			var last fetch.Notice
 			for range len(w.notices) {
@@ -96,6 +96,20 @@ func TestResyncPaysWhatAReopenOwes(t *testing.T) {
 				t.Errorf("last notice = %+v, want resync %v at %v", last, tt.wantResync, w.stream)
 			}
 		})
+	}
+}
+
+// A reopened stream's first event queues behind the resync it owes, so
+// consuming the event cannot move Cursor past the gap.
+func TestReceivePaysTheOwedResyncFirst(t *testing.T) {
+	w, s := newTestWatch(4)
+	w.owed = true
+	w.receive(s, event(1))
+	if len(w.notices) != 2 || w.owed {
+		t.Fatalf("queued %d owed %v, want the resync and the event", len(w.notices), w.owed)
+	}
+	if first, second := <-w.notices, <-w.notices; !first.Resync || !first.Event.Cursor.IsZero() || second.Event.Cursor.Seq != 1 {
+		t.Errorf("queue = %+v, %+v; want the resync at no cursor, then e:1", first, second)
 	}
 }
 
