@@ -125,8 +125,11 @@ type Watch struct {
 	// stream is where the next stream resumes from; consumed is the cursor of
 	// the last notice Next returned, which may lag behind what is queued.
 	stream, consumed protocol.Cursor
-	expires          time.Time
-	err              error
+	// owed is a resync not yet queued for a reopen from no cursor, which
+	// starts at the head and so never sends what landed during the gap.
+	owed    bool
+	expires time.Time
+	err     error
 }
 
 // Open subscribes and returns once the server has acknowledged, or with its
@@ -304,6 +307,11 @@ func (w *Watch) receive(s *stream, n mcp.JSONRPCNotification) {
 		w.stream = cursor // skipped, as the protocol asks, but passed
 		return
 	}
+	// The owed resync goes first: an event consumed ahead of it would move
+	// Cursor past the gap.
+	if !w.payOwed(s) {
+		return
+	}
 	select {
 	case w.notices <- notice:
 		w.stream, s.delivered = cursor, true
@@ -347,8 +355,8 @@ func text(meta map[string]any, key string) string {
 }
 
 // run follows streams until the watch ends: it renews ahead of a lapsing
-// bearer, renews at once on unauthorized, and reopens after a cut, a
-// closing drain or an overflow, always from the stream cursor.
+// bearer or at once on unauthorized, and reopens after a cut, a closing
+// drain or an overflow from the stream cursor, or with a resync if none.
 func (w *Watch) run(ctx context.Context, s *stream) {
 	defer w.cancel()
 	empty := retryMin
@@ -374,10 +382,35 @@ func (w *Watch) run(ctx context.Context, s *stream) {
 			w.finish(ctx.Err())
 			return
 		}
+		w.mu.Lock()
+		w.owed = w.owed || w.stream.IsZero()
+		w.mu.Unlock()
 		if s, err = w.reopen(ctx); err != nil {
 			w.finish(err)
 			return
 		}
+		// A quiet stream pays here; one that already delivered paid first.
+		w.mu.Lock()
+		w.payOwed(s)
+		w.mu.Unlock()
+	}
+}
+
+// payOwed queues the owed resync at the stream cursor, so Cursor never moves
+// back. A full queue stops s like an overflow and keeps the debt for the next
+// reopen, reporting false. Callers hold w.mu.
+func (w *Watch) payOwed(s *stream) bool {
+	if !w.owed {
+		return true
+	}
+	select {
+	case w.notices <- fetch.Notice{Resync: true, Event: protocol.WatchEvent{Cursor: w.stream}}:
+		w.owed = false
+		return true
+	default:
+		s.dead = true
+		s.raise(signalOverflow)
+		return false
 	}
 }
 

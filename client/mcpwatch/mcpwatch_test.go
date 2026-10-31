@@ -62,6 +62,57 @@ func TestReceiveDropsRepeatsAndStopsOnOverflow(t *testing.T) {
 	}
 }
 
+// A reopen from no cursor owes a resync, queued at the stream cursor; a full
+// queue stops the stream and keeps the debt for the next reopen.
+func TestPayOwed(t *testing.T) {
+	tests := []struct {
+		name       string
+		owed       bool
+		queued     int // events already in a queue of 2
+		wantResync bool
+		wantOwed   bool
+		wantSignal string
+	}{
+		{name: "nothing owed", queued: 1},
+		{name: "owed", owed: true, queued: 1, wantResync: true},
+		{name: "owed to a full queue", owed: true, queued: 2, wantOwed: true, wantSignal: signalOverflow},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, s := newTestWatch(2)
+			for seq := 1; seq <= tt.queued; seq++ {
+				w.receive(s, event(seq))
+			}
+			w.owed = tt.owed
+			paid := w.payOwed(s)
+			if got := signalOf(s); got != tt.wantSignal || w.owed != tt.wantOwed || paid != (got == "") {
+				t.Fatalf("signal %q owed %v paid %v, want %q and %v", got, w.owed, paid, tt.wantSignal, tt.wantOwed)
+			}
+			var last fetch.Notice
+			for range len(w.notices) {
+				last = <-w.notices
+			}
+			if last.Resync != tt.wantResync || (tt.wantResync && last.Event.Cursor != w.stream) {
+				t.Errorf("last notice = %+v, want resync %v at %v", last, tt.wantResync, w.stream)
+			}
+		})
+	}
+}
+
+// A reopened stream's first event queues behind the resync it owes, so
+// consuming the event cannot move Cursor past the gap.
+func TestReceivePaysTheOwedResyncFirst(t *testing.T) {
+	w, s := newTestWatch(4)
+	w.owed = true
+	w.receive(s, event(1))
+	if len(w.notices) != 2 || w.owed {
+		t.Fatalf("queued %d owed %v, want the resync and the event", len(w.notices), w.owed)
+	}
+	if first, second := <-w.notices, <-w.notices; !first.Resync || !first.Event.Cursor.IsZero() || second.Event.Cursor.Seq != 1 {
+		t.Errorf("queue = %+v, %+v; want the resync at no cursor, then e:1", first, second)
+	}
+}
+
 func TestReceiveSignalsAndSkips(t *testing.T) {
 	tests := []struct {
 		name       string
