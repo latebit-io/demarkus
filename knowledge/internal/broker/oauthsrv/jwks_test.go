@@ -12,6 +12,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestJWKSHandlerServesPublicKey(t *testing.T) {
@@ -92,5 +93,16 @@ func TestJWKSHandlerVerifiesAgainstSignedToken(t *testing.T) {
 	// asserts the served JWK is the SAME key the signer holds.
 	if signer.PublicJWK().KeyID != keys[0].KeyID {
 		t.Errorf("served key kid does not match signer kid")
+	}
+}
+
+// NewServer falls back to slog.Default for a nil Log; the JWKS handler logs a
+// failed write through it, so it must get the resolved logger too.
+func TestNewServerGivesJWKSTheResolvedLogger(t *testing.T) {
+	cfg := brokertest.NewConfig()
+	cfg.Server.PublicURL = "https://broker.example.com"
+	_, srv := newTestServerWithSigner(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset(), brokertest.NewTestIDTokenSigner(t))
+	if srv.jwks == nil || srv.jwks.log == nil {
+		t.Fatal("JWKS handler has no logger with deps.Log nil")
 	}
 }

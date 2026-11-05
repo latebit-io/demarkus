@@ -112,7 +112,7 @@ func NewServer(cfg *core.Config, deps ServerDeps) *Server {
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
 	if deps.IDTokenSigner != nil {
-		jwks, err := newJWKSHandler(deps.IDTokenSigner, deps.Log)
+		jwks, err := newJWKSHandler(deps.IDTokenSigner, log)
 		if err != nil {
 			// Marshal failure is purely a programming error — the
 			// JWK struct cannot legitimately fail to serialize.
