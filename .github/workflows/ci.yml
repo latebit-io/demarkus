@@ -111,6 +111,8 @@ jobs:
         run: bash scripts/check-shell.sh
       - name: Plugin copies
         run: bash scripts/check-identical-copies.sh
+      - name: No tracked binaries
+        run: bash scripts/check-no-binaries.sh
       - name: Session start hooks report failures
         run: bash scripts/test-session-start-hooks.sh
       - name: Hook commands start under a spaced plugin root
