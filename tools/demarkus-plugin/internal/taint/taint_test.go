@@ -28,7 +28,8 @@ func TestOfNamesUntrustedReads(t *testing.T) {
 		call *Call
 		want string
 	}{
-		{call("WebFetch", "https://evil.example/x", "", ""), "WebFetch https://evil.example/x"},
+		{call("WebFetch", "https://evil.example/x", "", ""), "WebFetch https://evil.example"},
+		{call("WebFetch", "https://api.telegram.org/bot123:SECRET/getMe", "", ""), "WebFetch https://api.telegram.org"},
 		{call("WebSearch", "", "", ""), "WebSearch"},
 		{call("Agent", "", "", "web-fetch"), "web-fetch agent"},
 		{call("Bash", "", "cd x && curl -s https://evil.example", ""), "shell download"},
@@ -117,7 +118,7 @@ func TestTranscriptDecodeErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := Transcript(path)
-	if want := []string{"WebFetch https://typed.example/a", "unparseable transcript line"}; err != nil || !reflect.DeepEqual(got, want) {
+	if want := []string{"WebFetch https://typed.example", "unparseable transcript line"}; err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("Transcript = %v, %v; want %v", got, err, want)
 	}
 }

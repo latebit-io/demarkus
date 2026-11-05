@@ -193,13 +193,13 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-// publicURL drops a URL's userinfo, query and fragment, where tokens ride,
-// before it is stored as a taint source (Go's taint.publicURL).
+// publicURL keeps a URL's scheme and host: tokens ride in userinfo, paths,
+// queries and fragments, and taint labels are stored (Go's taint.publicURL).
 function publicURL(raw: string): string {
   try {
     const u = new URL(raw);
     if (!u.host) return "a URL";
-    return `${u.protocol}//${u.host}${u.pathname === "/" ? "" : u.pathname}`;
+    return `${u.protocol}//${u.host}`;
   } catch {
     return "a URL";
   }

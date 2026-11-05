@@ -69,15 +69,14 @@ func Of(c *Call, memoryID func(tool string) string) string {
 	return ""
 }
 
-// publicURL drops a URL's userinfo, query and fragment, where tokens ride,
-// before it is stored as a taint source.
+// publicURL keeps a URL's scheme and host: tokens ride in userinfo, paths
+// (bot tokens, webhooks), queries and fragments, and taint labels are stored.
 func publicURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		return "a URL"
 	}
-	u.User, u.RawQuery, u.Fragment, u.RawFragment, u.ForceQuery = nil, "", "", "", false
-	return u.String()
+	return u.Scheme + "://" + u.Host
 }
 
 // foreignRead flags a soul tool that is not a write and names a full mark://

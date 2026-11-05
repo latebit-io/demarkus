@@ -34,11 +34,11 @@ func TestTaintGate(t *testing.T) {
 	publish := map[string]any{"url": "/x.md", "body": "# X\n", "metadata": map[string]any{"tags": "a"}}
 
 	d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: web})
-	if d.Decision != "ask" || !strings.Contains(d.Reason, "WebFetch https://evil.example/p") {
+	if d.Decision != "ask" || !strings.Contains(d.Reason, "WebFetch https://evil.example") {
 		t.Fatalf("tainted publish = %q (%s), want ask naming the read", d.Decision, d.Reason)
 	}
 	meta, _ := d.UpdatedInput["metadata"].(map[string]any)
-	if meta[protocol.TaintKey] != protocol.TaintValue || meta[protocol.TaintFromKey] != "WebFetch https://evil.example/p" || meta["tags"] != "a" || d.UpdatedInput["body"] != "# X\n" {
+	if meta[protocol.TaintKey] != protocol.TaintValue || meta[protocol.TaintFromKey] != "WebFetch https://evil.example" || meta["tags"] != "a" || d.UpdatedInput["body"] != "# X\n" {
 		t.Errorf("stamp = %+v", d.UpdatedInput)
 	}
 	if _, touched := publish["metadata"].(map[string]any)[protocol.TaintKey]; touched {
