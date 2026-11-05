@@ -50,6 +50,41 @@ func StandingOf(tags []string) Standing {
 	return standingOfStatus[value]
 }
 
+// TaintKey and TaintValue mark a write made after its session read
+// untrusted content (a client hook stamps them). The label only tightens:
+// absence or any other value grants nothing.
+const (
+	TaintKey   = "source-trust"
+	TaintValue = "tainted"
+	// TaintFromKey names the untrusted reads behind the label.
+	TaintFromKey = "source-trust-from"
+)
+
+// IsTainted reports metadata carrying the taint label.
+func IsTainted(meta map[string]string) bool {
+	return strings.EqualFold(strings.TrimSpace(meta[TaintKey]), TaintValue)
+}
+
+// ClassifierKey carries a server's classifier verdict on a version:
+// "injection: <reason> (<model>)" or "unchecked: <why>"; see IsServerStampedKey.
+const ClassifierKey = "classifier"
+
+// Classifier verdict prefixes.
+const (
+	ClassifierInjection = "injection"
+	ClassifierUnchecked = "unchecked"
+)
+
+// IsInjectionStamp reports a classifier verdict of injection.
+func IsInjectionStamp(stamp string) bool {
+	return strings.HasPrefix(stamp, ClassifierInjection)
+}
+
+// ClassifierFlagged reports metadata whose classifier verdict is injection.
+func ClassifierFlagged(meta map[string]string) bool {
+	return IsInjectionStamp(meta[ClassifierKey])
+}
+
 // Weight scales importance in LOOKUP ranking (SPEC §6.7).
 func (s Standing) Weight() float64 {
 	switch s {

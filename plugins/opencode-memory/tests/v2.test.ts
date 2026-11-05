@@ -24,6 +24,7 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
     } },
   };
   const gateCalls: unknown[] = [];
+  const gateTaint: unknown[] = [];
   const sessionEndCwds: unknown[] = [];
   const lifecycle: string[] = [];
   const notices: string[] = [];
@@ -47,8 +48,9 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
       if (input.event === "session-end") sessionEndCwds.push(input.cwd);
       return input.event === "recall" ? "Recall nudge" : input.event === "promote" ? "Promote nudge" : "Journal nudge";
     },
-    gate: async (tool, input, directory) => {
+    gate: async (tool, input, directory, taint) => {
       gateCalls.push({ tool, input, directory });
+      gateTaint.push(taint);
       return input.block ? { decision: "block", reason: "write denied" } : { decision: "warn", reason: "Tag this publish" };
     },
   });
@@ -79,6 +81,11 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
   await hooks.get("execute.after")!(result);
   assert.deepEqual(gateCalls.at(-1), { tool: call.tool, input: call.input, directory: "/test/project" });
   assert.deepEqual(result.result, { content: "Saved\n\n⚠️ Tag this publish\n\nPromote nudge", metadata: { ok: true } });
+  assert.deepEqual(gateTaint.at(-1), []);
+  // A web read taints the session: every later write carries it to the gate.
+  await hooks.get("execute.after")!({ tool: "webfetch", sessionID: "s1", id: "web", input: { url: "https://evil.example" }, status: "completed", result: {} });
+  await hooks.get("execute.before")!({ tool: "demarkus-memory_mark_archive", sessionID: "s1", id: "arch", input: { url: "/note.md" } });
+  assert.deepEqual(gateTaint.at(-1), ["webfetch https://evil.example"]);
 
   await hooks.get("execute.after")!({ tool: "patch", sessionID: "s2", id: "edit", input: {}, status: "completed", result: {} });
   const idle = { type: "session.idle", data: { sessionID: "s2" } };

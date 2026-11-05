@@ -15,6 +15,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { callGate, callGuidance, callNudge } from "./plugin.js";
+import { recordTaint } from "./taint.js";
 
 interface UI {
   notify(message: string, level?: "info" | "warning" | "error"): void;
@@ -117,9 +118,12 @@ function normalizeToolCall(event: ToolCallEvent): { toolName: string; input: Rec
 
 export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
   let contextDelivered = false;
+  // Untrusted reads this session; a later demarkus write asks first.
+  let taint: string[] = [];
 
   pi.on("session_start", () => {
     contextDelivered = false;
+    taint = [];
   });
 
   pi.on("before_agent_start", async (event) => {
@@ -143,7 +147,7 @@ export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
   pi.on("tool_call", async (event) => {
     const { toolName, input } = normalizeToolCall(event);
     // Shared decision via the demarkus-plugin binary (knowledge tag/axes/fields gate).
-    const decision = await callGate(toolName, input, "");
+    const decision = await callGate(toolName, input, "", taint);
     if (decision.decision === "block" || decision.decision === "ask") {
       const reason =
         decision.decision === "ask"
@@ -151,6 +155,7 @@ export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
           : (decision.reason ?? "blocked");
       return { block: true, reason };
     }
+    recordTaint(taint, toolName, input);
     if (decision.decision === "warn" && decision.reason) {
       pi.sendMessage({ customType: CUSTOM, content: `⚠️ ${decision.reason}`, display: false }, { triggerTurn: false });
     }

@@ -25,6 +25,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/hiddentext"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
@@ -439,12 +440,8 @@ func infoMain(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("[%s]", result.Response.Status)
-	for k, v := range result.Response.Metadata {
-		fmt.Printf(" %s=%s", k, v)
-	}
-	fmt.Println()
-	fmt.Print(result.Response.Body)
+	fmt.Println(hiddentext.Reveal(statusLine(result.Response.Status, result.Response.Metadata)))
+	fmt.Print(display(result.Response.Body))
 }
 
 func tokenMain(args []string) {
@@ -772,10 +769,19 @@ func printResult(result fetch.Result, verbose bool) {
 		if result.FromCache {
 			line += " (cached)"
 		}
-		fmt.Fprintln(os.Stderr, line)
+		fmt.Fprintln(os.Stderr, hiddentext.Reveal(line))
 	}
-	fmt.Print(result.Response.Body)
+	fmt.Print(display(result.Response.Body))
 	exitOnFailedStatus(result.Response.Status)
+}
+
+// display reveals hidden text (terminal escapes, bidi overrides) when stdout
+// is a terminal; a pipe or file gets the stored bytes unchanged.
+func display(body string) string {
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		return hiddentext.Reveal(body)
+	}
+	return body
 }
 
 func exitOnFailedStatus(status string) {

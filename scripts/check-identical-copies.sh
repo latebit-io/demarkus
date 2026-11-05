@@ -10,6 +10,9 @@ cd "$(dirname "$0")/.."
 # canonical|copy, byte identical
 pairs=(
   "plugins/opencode-memory/src/package.ts|plugins/opencode-knowledge/src/package.ts"
+  "plugins/opencode-memory/src/taint.ts|plugins/opencode-knowledge/src/taint.ts"
+  "plugins/opencode-memory/src/taint.ts|plugins/pi-memory/src/taint.ts"
+  "plugins/opencode-memory/src/taint.ts|plugins/pi-knowledge/src/taint.ts"
   "plugins/claude-code/scripts/bootstrap.sh|plugins/claude-code-knowledge/scripts/bootstrap.sh"
   "plugins/claude-code/scripts/bootstrap.sh|plugins/cursor-memory/scripts/bootstrap.sh"
   "plugins/claude-code/scripts/bootstrap.sh|plugins/cursor-knowledge/scripts/bootstrap.sh"

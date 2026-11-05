@@ -17,6 +17,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionActivity } from "./nudges.js";
+import { recordTaint } from "./taint.js";
 import { callGate, callGuidance, callNudge, callUpdateCheck, type Guidance } from "./plugin.js";
 import { ensureMcpServerEntry, provisionServer } from "./setup.js";
 
@@ -154,12 +155,15 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   let guidance: Guidance | null = null;
   let projectDir = "";
   let activity = new SessionActivity();
+  // Untrusted reads this session; a later demarkus write asks first.
+  let taint: string[] = [];
 
   pi.on("session_start", async (_event, ctx) => {
     contextDelivered = false;
     guidance = null;
     projectDir = ctx.cwd;
     activity = new SessionActivity();
+    taint = [];
 
     // Provision first (this installs demarkus-plugin), then register the MCP
     // server via the binary.
@@ -206,7 +210,7 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
 
     // The shared demarkus-plugin binary owns the gate decision (publish tag-gate
     // + destination gate), so the logic lives in one place for every harness.
-    const decision = await callGate(toolName, input, ctx.cwd);
+    const decision = await callGate(toolName, input, ctx.cwd, taint);
     if (decision.decision === "block" || decision.decision === "ask") {
       // pi's tool_call has no native "ask"; treat it as a block whose reason
       // tells the agent to confirm with the user first.
@@ -220,6 +224,7 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     // Record activity only for calls that survive the gate, so a blocked
     // publish/append doesn't suppress the session-end journal nudge.
     activity.observe(toolName, input);
+    recordTaint(taint, toolName, input);
 
     // warn → allow + surface a reminder.
     if (decision.decision === "warn" && decision.reason) {

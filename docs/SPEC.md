@@ -140,6 +140,7 @@ Everything after the metadata closing delimiter (or after the request line if no
 - The body is OPTIONAL for all verbs.
 - For PUBLISH requests, the body contains the document content.
 - For PUBLISH and APPEND, the body MUST be valid UTF-8. A document is markdown text (§2.3); the server MUST reject a non-UTF-8 body with `bad-request` and MUST NOT store it.
+- For PUBLISH and APPEND, the body MUST NOT carry hidden text: C0 controls other than tab, line feed and a carriage return before a line feed; DEL; C1 controls; bidi embeddings, overrides and isolates (U+202A to U+202E, U+2066 to U+2069); U+2028, U+2029; interlinear annotations (U+FFF9 to U+FFFB); tag characters (U+E0000 to U+E007F) outside an emoji tag sequence; or a run of zero-width and variation-selector characters other than one variation selector followed by a zero-width joiner. A reader cannot see these, while a terminal or a language model acts on them. The server MUST reject such a body with `bad-request`, naming the code point, line and column, and MUST NOT store it. The rule applies to request bytes only; versions stored before it remain readable, and clients SHOULD reveal hidden text in them as visible code-point notation before display.
 - There is no protocol-level size limit on the body; servers SHOULD enforce a maximum document size (see Section 12.3).
 
 ## 5. Response Format
@@ -370,7 +371,7 @@ The `auth` metadata field is REQUIRED. The server hashes the raw token with SHA-
 
 The request body is the document content. It is stored as-is (the server prepends its own store frontmatter; the original content is preserved verbatim).
 
-**Document contract**: a published document is markdown text. The request path MUST end in `.md` and the body MUST be valid UTF-8 (§2.3, §4.4). The server MUST reject a path that does not end in `.md`, or a body that is not valid UTF-8, with `bad-request` and MUST NOT create a version. This gate also applies to APPEND (§6.6).
+**Document contract**: a published document is markdown text. The request path MUST end in `.md` and the body MUST be valid UTF-8 (§2.3, §4.4). The server MUST reject a path that does not end in `.md`, or a body that is not valid UTF-8 or carries hidden text (§4.4), with `bad-request` and MUST NOT create a version. This gate also applies to APPEND (§6.6).
 
 **Success response** (`created`):
 
@@ -423,7 +424,7 @@ The request MAY include an `expected-version` metadata field containing a decima
 **Other errors**:
 
 - `not-found`: Path validation failed (e.g., path traversal attempt).
-- `bad-request`: Path does not end in `.md`, or the body is not valid UTF-8 (see Document contract above).
+- `bad-request`: Path does not end in `.md`, or the body is not valid UTF-8 or carries hidden text (§4.4; see Document contract above).
 - `conflict`: `expected-version` does not match the current version (see optimistic concurrency above).
 - `server-error`: Internal error, content exceeds size limit, or publishing not configured.
 
@@ -515,7 +516,7 @@ content-hash: sha256-<64-char hex SHA-256>
 
 **Other errors**:
 
-- `bad-request`: Missing or invalid `expected-version` (must be >= 1), a non-`.md` path, a body that is not valid UTF-8 (see §6.4 Document contract), or merged metadata that breaches a limit the server enforces (§9.4).
+- `bad-request`: Missing or invalid `expected-version` (must be >= 1), a non-`.md` path, a body that is not valid UTF-8 or carries hidden text (see §6.4 Document contract), or merged metadata that breaches a limit the server enforces (§9.4).
 - `not-found`: Document does not exist or path validation failed.
 - `archived`: Document is archived. Unarchive first via PUBLISH with empty body.
 - `conflict`: `expected-version` does not match the current version. Response includes `your-version` and `server-version` metadata.
@@ -574,6 +575,8 @@ When the request carries `match`, the response MUST echo the mode it answered in
 - `title`: an OPTIONAL one-line title shown in results and included in the `query` match target. When absent, the server SHOULD derive it from the document's first level-1 heading, falling back to the path's base name.
 
 **Status weight**: the document's first tag of the form `status:<value>`, prefix and value compared case-insensitively, sets its weight: `accepted` or `stable` 1.0; `archived`, `superseded`, or `deprecated` 0.3; any other value, or no status tag, 0.8. `stable` and `deprecated` are OKF's `status` values; an OKF importer carries that field as this tag, since `status` is a reserved key, with `stable` or an absent field (OKF's default) as `status:accepted`. An exporter writes `draft` for a document with no status tag, since OKF would read an absent field as `stable`. A `status:archived` document is a soft archive: still matched, listed, and linked, unlike an archived document (§6.5). The tag stays an ordinary tag for `query` and `filter`, and results report declared `importance`, not effective.
+
+**Taint cap**: a document whose metadata carries `source-trust: tainted` (value compared case-insensitively) was written after its session read untrusted content; a client hook stamps it. Its status weight MUST NOT exceed 0.8: `accepted` or `stable` on a tainted document weighs as provisional. The label only tightens ranking; its absence, or any other value, grants nothing.
 
 `tags`, `importance`, and `title` are the only publisher metadata keys a server interprets for LOOKUP; all other declared metadata remains opaque and is reachable only through `filter`.
 
@@ -762,7 +765,7 @@ Status values are text strings. There are no numeric status codes.
 | `unauthorized` | Missing or invalid authentication token. |
 | `not-permitted` | Valid authentication but insufficient capability for the requested operation or path. |
 | `conflict` | Version conflict; `expected-version` did not match the current version. |
-| `bad-request` | Malformed request, or a document that violates the content contract (non-`.md` path, non-UTF-8 body). |
+| `bad-request` | Malformed request, or a document that violates the content contract (non-`.md` path, non-UTF-8 body, hidden text). |
 | `server-error` | The server encountered an error processing the request. |
 | `rate-limited` | The server refused the request under a rate or concurrency limit; retry later. |
 | `resync` | WATCH only (§6.8): the stream cannot continue from the client's cursor. Terminal; the block carries the cursor to resume from. |
@@ -802,6 +805,8 @@ The following status values are reserved for future use:
 Beyond the interpreted fields above, a PUBLISH request MAY carry additional publisher metadata as arbitrary `key: value` frontmatter lines. The server stores these opaquely and exposes them to LOOKUP `filter` predicates. Reserved store fields (§9.4) MUST be rejected. §9.4 specifies how publisher metadata is persisted, including the Open Knowledge Format field names that are stored as bare frontmatter fields.
 
 Two publisher keys are the identity convention: `agent` names the writing software and `user` the verified person behind the write. A writing surface that knows them MAY stamp them and MUST NOT let a caller override a key it stamps. Servers store them like any publisher metadata and echo them on WATCH events (§6.8).
+
+`classifier` is server-owned: a server that classifies written bodies for prompt injection MAY stamp its verdict there (`injection: <reason> (<model>)`, or `unchecked: <why>` when it could not decide), and MUST drop a writer's own value for the key before storing. A verdict never refuses a write. A LOOKUP status weight on a version stamped `injection` MUST NOT exceed 0.8, as for the taint cap.
 
 ### 8.2. Response Metadata
 
@@ -1065,7 +1070,9 @@ Servers MUST enforce read auth on FETCH, LIST, VERSIONS, LOOKUP (§6.7) and WATC
 **Token fields**:
 
 - `paths`: Array of glob patterns. `*` matches any single path segment (not recursive). `**` matches recursively: a trailing `/**` grants everything under the prefix, and an infix `/**/` matches any number of intermediate segments. At most one `**` per pattern.
-- `operations`: Array of permitted operations (`read`, `publish`).
+- `operations`: Array of permitted operations (`read`, `publish`, `govern`).
+
+**Governance documents**: paths under `/.well-known/demarkus/` (publish policy, layout template, style guide, world descriptor) steer every other writer. A server MAY restrict them per world; on a restricting world, PUBLISH, APPEND and ARCHIVE of such a path MUST require the `govern` operation instead of `publish`, and the server MUST answer a writer without it `not-permitted`. The check MUST run on the path slash-cleaned and case-folded, so a spelling variant cannot reach the same document. `govern` does not imply `publish`, nor `publish` `govern`. A restricting server SHOULD issue `govern` only to operator credentials, never to an agent's token.
 - `expires`: OPTIONAL RFC 3339 timestamp. If present, the token is invalid after this time.
 
 **Authentication flow**:

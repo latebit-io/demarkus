@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "@opencode/plugin";
 import { assertPackageInstall, loadCommand as readCommand, loadCommands, registerPrompts } from "./package.ts";
+import { isGatedWrite, recordTaint } from "./taint.ts";
 
 const BIN = join(homedir(), ".demarkus", "bin", "demarkus-plugin");
 const ASSETS = fileURLToPath(new URL("../", import.meta.url));
@@ -70,11 +71,12 @@ function runBin<T>(args: string[], payload?: unknown, allowEmpty = false, bin = 
   });
 }
 
-// callGate asks `demarkus-plugin gate` to decide a mark_publish/mark_append call.
+// callGate asks `demarkus-plugin gate` to decide a demarkus write; taint names the
+// session's untrusted reads.
 // Fails closed: only a missing helper allows; crash, timeout or bad output blocks.
-export async function callGate(toolName: string, input: Record<string, unknown>, cwd: string, bin = BIN): Promise<GateDecision> {
+export async function callGate(toolName: string, input: Record<string, unknown>, cwd: string, taint: string[] = [], bin = BIN): Promise<GateDecision> {
   if (!existsSync(bin)) return { decision: "allow" };
-  const d = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd }, false, bin);
+  const d = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd, taint }, false, bin);
   if (d && typeof d.decision === "string") return d;
   return { decision: "block", reason: `[demarkus-memory] gate failed (crash, timeout or bad output); write blocked. Retry, or reinstall ${bin}` };
 }
@@ -134,6 +136,8 @@ interface SessionState {
   idleNudged: boolean;
   changedFiles: boolean;
   journalWrite: boolean;
+  // Untrusted reads so far; a later demarkus write asks first.
+  taint: string[];
 }
 
 // run executes a provisioning step; resolves "" on success, a warning on failure.
@@ -197,7 +201,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
   const state = (id: string): SessionState => {
     let s = sessions.get(id);
     if (!s) {
-      s = { guidanceDelivered: false, idleNudged: false, changedFiles: false, journalWrite: false };
+      s = { guidanceDelivered: false, idleNudged: false, changedFiles: false, journalWrite: false, taint: [] };
       sessions.set(id, s);
     }
     return s;
@@ -325,8 +329,8 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       input: { tool: string; sessionID?: string; callID?: string },
       output: { args: Record<string, unknown> },
     ) => {
-      if (!isMemoryWrite(input.tool) || !adapters.has("memory")) return;
-      const decision = await callGate(input.tool, output.args ?? {}, directory);
+      if (!isGatedWrite(input.tool) || !adapters.has("memory")) return;
+      const decision = await callGate(input.tool, output.args ?? {}, directory, state(input.sessionID ?? "default").taint);
       if (decision.decision === "block") {
         throw new Error(decision.reason ?? "demarkus-memory gate blocked this write");
       }
@@ -349,6 +353,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
     ) => {
       if (!adapters.has("memory")) return;
       const s = state(input.sessionID ?? "default");
+      recordTaint(s.taint, input.tool, input.args);
       if (!trackActivity(s, input.tool, input.args)) return;
 
       const key = `${input.sessionID}:${input.callID}`;
@@ -448,7 +453,7 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
   const state = (id: string): SessionState => {
     let value = sessions.get(id);
     if (!value) {
-      value = { guidanceDelivered: false, idleNudged: false, changedFiles: false, journalWrite: false };
+      value = { guidanceDelivered: false, idleNudged: false, changedFiles: false, journalWrite: false, taint: [] };
       sessions.set(id, value);
     }
     return value;
@@ -497,8 +502,8 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
       pendingContext.delete(event.sessionID);
     });
     await ctx.tool.hook("execute.before", async (event: V2ToolEvent) => {
-      if (!isMemoryWrite(event.tool) || controller.signal.aborted) return;
-      const decision = await (services.gate ?? callGate)(event.tool, (event.input ?? {}) as Record<string, unknown>, directory);
+      if (!isGatedWrite(event.tool) || controller.signal.aborted) return;
+      const decision = await (services.gate ?? callGate)(event.tool, (event.input ?? {}) as Record<string, unknown>, directory, state(event.sessionID).taint);
       if (controller.signal.aborted) return;
       if (decision.decision === "block") throw new Error(decision.reason ?? "demarkus-memory gate blocked this write");
       if (decision.decision === "ask") throw new Error(`${decision.reason ?? "blocked"} Confirm with the user before retrying this write.`);
@@ -511,6 +516,7 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
       pendingWarns.delete(key);
       if (event.status !== "completed") return;
       const s = state(event.sessionID);
+      recordTaint(s.taint, event.tool, event.input as Record<string, unknown> | undefined);
       if (!trackActivity(s, event.tool, event.input as Record<string, unknown> | undefined)) return;
       const nudge = await (services.nudge ?? callNudge)({ event: "promote", tool: event.tool, input: event.input ?? {} });
       if (controller.signal.aborted) return;

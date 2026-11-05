@@ -11,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 )
 
 func exploreArgs(url string) marktools.ExploreArgs {
@@ -42,7 +43,7 @@ func TestExploreCard(t *testing.T) {
 
 	got := tools.Explore(t.Context(), exploreArgs("/hub.md#part"))
 	for _, want := range []string{
-		"## Outline\n", "## Opening\nThe opening paragraph.\n", "## Outbound links (1)\n",
+		"## Outline\n", "## Opening\n" + docframe.Frame("The opening paragraph."), "## Outbound links (1)\n",
 		"## Backlinks (0)\n", "## Siblings in / (2)\n- a.md\n- z.md\n",
 		"\nfetch /hub.md#<anchor> for a section; mark_fetch force=true for the full body\n",
 	} {

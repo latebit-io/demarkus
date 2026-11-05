@@ -12,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/listwalk"
 	"github.com/latebit-io/demarkus/client/memory/hub"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/layout"
 )
 
@@ -115,7 +116,12 @@ func (p *primer) section(ctx context.Context, heading, docPath string, optional 
 	case r.Response.Status != protocol.StatusOK:
 		p.coverage = append(p.coverage, fmt.Sprintf("%s: %s", docPath, r.Response.Status))
 	default:
-		fmt.Fprintf(&p.out, "\n## %s (%s)\n\n%s\n", heading, docPath, clip(r.Response.Body, contextBodyCap, fmt.Sprintf("(truncated; mark_fetch %s with force: true for the rest)", docPath)))
+		kept, cut := bound(r.Response.Body, contextBodyCap)
+		body := strings.TrimSuffix(docframe.Frame(kept)+docframe.Flags(kept, r.Response.Metadata), "\n")
+		if cut {
+			body += fmt.Sprintf("\n\n(truncated; mark_fetch %s with force: true for the rest)", docPath)
+		}
+		fmt.Fprintf(&p.out, "\n## %s (%s)\n\n%s\n", heading, docPath, body)
 	}
 	return r.Response.Status
 }
@@ -151,24 +157,24 @@ func (p *primer) newest(ctx context.Context, dir string, n int, keep func(name s
 	return paths, true
 }
 
-// clip bounds one body at a line, else a character, and ends it with the
-// trailer when it was cut.
-func clip(body string, limit int, trailer string) string {
+// bound trims trailing newlines and cuts body at limit, at a line, else a
+// rune boundary; cut reports whether it did.
+func bound(body string, limit int) (kept string, cut bool) {
 	body = strings.TrimRight(body, "\n")
 	if len(body) <= limit {
-		return body
+		return body, false
 	}
-	cut := limit
-	for cut > 0 && body[cut-1] != '\n' {
-		cut--
+	at := limit
+	for at > 0 && body[at-1] != '\n' {
+		at--
 	}
-	if cut == 0 {
-		cut = limit
-		for cut > 0 && !utf8.RuneStart(body[cut]) {
-			cut--
+	if at == 0 {
+		at = limit
+		for at > 0 && !utf8.RuneStart(body[at]) {
+			at--
 		}
 	}
-	return strings.TrimRight(body[:cut], "\n") + "\n\n" + trailer
+	return strings.TrimRight(body[:at], "\n"), true
 }
 
 // isContextPath reports the primer pseudo document.

@@ -13,12 +13,12 @@ function helper(script: string): string {
 }
 
 test("gate allows only when the helper is absent", async () => {
-  const d = await callGate("mark_publish", {}, "/tmp", join(tmpdir(), "demarkus-absent", "demarkus-plugin"));
+  const d = await callGate("mark_publish", {}, "/tmp", [], join(tmpdir(), "demarkus-absent", "demarkus-plugin"));
   assert.equal(d.decision, "allow");
 });
 
 test("gate passes the helper's verdict through", async () => {
-  const d = await callGate("mark_publish", {}, "/tmp", helper(`echo '{"decision":"block","reason":"no tags"}'`));
+  const d = await callGate("mark_publish", {}, "/tmp", [], helper(`echo '{"decision":"block","reason":"no tags"}'`));
   assert.deepEqual(d, { decision: "block", reason: "no tags" });
 });
 
@@ -29,7 +29,7 @@ for (const [name, script] of [
   ["no decision field", `echo '{"reason":"x"}'`],
 ] as const) {
   test(`gate blocks on helper ${name}`, async () => {
-    const d = await callGate("mark_publish", {}, "/tmp", helper(script));
+    const d = await callGate("mark_publish", {}, "/tmp", [], helper(script));
     assert.equal(d.decision, "block");
     assert.match(d.reason ?? "", /gate failed/);
   });

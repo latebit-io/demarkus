@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/server/internal/snirouter"
@@ -75,14 +76,102 @@ type ContentCheckConfig struct {
 	// NearDuplicate is block (the default), warn or off for a body the world
 	// already holds in other words; near-duplicate-override keeps both.
 	NearDuplicate contentcheck.Mode `yaml:"nearDuplicate"`
+	// Injection is warn (the default), block or off for text that steers an
+	// agent: instructions to it, dangerous commands, obfuscated or encoded
+	// forms. content-check-override with a reason lets a quote land.
+	Injection contentcheck.Mode `yaml:"injection"`
+	// Classifier is the write-time prompt-injection model; empty kind is off.
+	Classifier ClassifierConfig `yaml:"classifier"`
 }
 
-func (config ContentCheckConfig) validate() error {
+// trimmedClassifier normalizes the string fields as Parse does elsewhere.
+func trimmedClassifier(c ClassifierConfig) ClassifierConfig {
+	c.Kind = strings.ToLower(strings.TrimSpace(c.Kind))
+	c.URL = strings.TrimSpace(c.URL)
+	c.Model = strings.TrimSpace(c.Model)
+	return c
+}
+
+// ClassifierConfig selects the classifier a write's body is sent to. Its
+// verdict is a metadata stamp, never a refusal; see server/internal/classifier.
+// The anthropic kind reads its key from the SDK's chain (ANTHROPIC_API_KEY).
+type ClassifierConfig struct {
+	Kind        string   `yaml:"kind"`  // "", ClassifierHTTP or ClassifierAnthropic
+	URL         string   `yaml:"url"`   // http: the endpoint; anthropic: an optional base URL
+	Model       string   `yaml:"model"` // anthropic: the model; http: the name in stamps
+	Timeout     Duration `yaml:"timeout"`
+	Threshold   float64  `yaml:"threshold"`
+	MaxBytes    int      `yaml:"maxBytes"`
+	MaxInFlight int      `yaml:"maxInFlight"`
+}
+
+// Classifier kinds.
+const (
+	ClassifierHTTP      = "http"      // a JSON endpoint in front of a local model
+	ClassifierAnthropic = "anthropic" // a Claude judge with no tools
+)
+
+// Classifier defaults SetDefaults fills for a configured kind.
+const (
+	defaultClassifierTimeout     = Duration(5 * time.Second)
+	defaultClassifierThreshold   = 0.5
+	defaultClassifierMaxBytes    = 100 << 10
+	defaultClassifierMaxInFlight = 4
+	defaultClassifierModel       = "claude-opus-5-5"
+)
+
+// setDefaults fills a configured classifier's zero limits: a classifier call
+// never runs without a deadline.
+func (c *ClassifierConfig) setDefaults() {
+	if c.Kind == "" {
+		return
+	}
+	if c.Timeout == 0 {
+		c.Timeout = defaultClassifierTimeout
+	}
+	if c.Threshold == 0 {
+		c.Threshold = defaultClassifierThreshold
+	}
+	if c.MaxBytes == 0 {
+		c.MaxBytes = defaultClassifierMaxBytes
+	}
+	if c.MaxInFlight == 0 {
+		c.MaxInFlight = defaultClassifierMaxInFlight
+	}
+	if c.Kind == ClassifierAnthropic && c.Model == "" {
+		c.Model = defaultClassifierModel
+	}
+}
+
+func (c ClassifierConfig) validate() error {
+	switch c.Kind {
+	case "", ClassifierHTTP, ClassifierAnthropic:
+	default:
+		return fmt.Errorf("contentCheck.classifier.kind %q must be %s or %s", c.Kind, ClassifierHTTP, ClassifierAnthropic)
+	}
+	switch {
+	case c.Kind == ClassifierHTTP && c.URL == "":
+		return errors.New("contentCheck.classifier.url is required for kind http")
+	case c.Timeout < 0, c.Threshold < 0, c.Threshold > 1, c.MaxBytes < 0, c.MaxInFlight < 0:
+		return errors.New("contentCheck.classifier timeout, threshold (0-1), maxBytes and maxInFlight must not be negative")
+	case int64(c.MaxBytes) > protocol.MaxBodyLength:
+		return fmt.Errorf("contentCheck.classifier.maxBytes %d is over the body limit %d", c.MaxBytes, protocol.MaxBodyLength)
+	}
+	return nil
+}
+
+func (config *ContentCheckConfig) validate() error {
 	if !config.PII.Valid() {
 		return fmt.Errorf("contentCheck.pii %q must be %q, %q or %q", config.PII, contentcheck.Block, contentcheck.Warn, contentcheck.Off)
 	}
 	if !config.NearDuplicate.Valid() {
 		return fmt.Errorf("contentCheck.nearDuplicate %q must be %q, %q or %q", config.NearDuplicate, contentcheck.Block, contentcheck.Warn, contentcheck.Off)
+	}
+	if !config.Injection.Valid() {
+		return fmt.Errorf("contentCheck.injection %q must be %q, %q or %q", config.Injection, contentcheck.Block, contentcheck.Warn, contentcheck.Off)
+	}
+	if err := config.Classifier.validate(); err != nil {
+		return err
 	}
 	for _, domain := range config.WorkDomains {
 		if domain == "" || strings.ContainsAny(domain, " \t@/") {
@@ -252,7 +341,31 @@ type PolicyConfig struct {
 	// Optional seeds nothing and judges by the empty policy when none exists;
 	// the default seeds a policy and refuses writes without one.
 	Optional bool `yaml:"optional"`
+	// Governance is restricted (the default: governance documents need the
+	// govern operation) or open (publish suffices, as before govern).
+	Governance Governance `yaml:"governance"`
 }
+
+// validate checks the policy path and governance mode.
+func (policy PolicyConfig) validate(location string) error {
+	if err := validatePolicyPath(policy.Path); err != nil {
+		return fmt.Errorf("%s.policy.path: %w", location, err)
+	}
+	if g := policy.Governance; g != "" && g != GovernanceRestricted && g != GovernanceOpen {
+		return fmt.Errorf("%s.policy.governance %q must be %q or %q", location, g, GovernanceRestricted, GovernanceOpen)
+	}
+	return nil
+}
+
+// Governance is who may write a world's governance documents.
+type Governance string
+
+const (
+	// GovernanceRestricted requires the govern operation or grant.
+	GovernanceRestricted Governance = "restricted"
+	// GovernanceOpen lets any publisher write them.
+	GovernanceOpen Governance = "open"
+)
 
 // LimitsConfig contains enforceable world-local fairness controls.
 type LimitsConfig struct {
@@ -304,9 +417,10 @@ type rawWorldConfig struct {
 }
 
 type rawPolicyConfig struct {
-	Path     *string `yaml:"path"`
-	File     string  `yaml:"file"`
-	Optional bool    `yaml:"optional"`
+	Path       *string    `yaml:"path"`
+	File       string     `yaml:"file"`
+	Optional   bool       `yaml:"optional"`
+	Governance Governance `yaml:"governance"`
 }
 
 type rawLimitsConfig struct {
@@ -464,6 +578,8 @@ func (raw *rawConfig) config() *Config {
 			PII:           contentcheck.Mode(strings.TrimSpace(string(raw.ContentCheck.PII))),
 			WorkDomains:   trimmedLower(raw.ContentCheck.WorkDomains),
 			NearDuplicate: contentcheck.Mode(strings.TrimSpace(string(raw.ContentCheck.NearDuplicate))),
+			Injection:     contentcheck.Mode(strings.TrimSpace(string(raw.ContentCheck.Injection))),
+			Classifier:    trimmedClassifier(raw.ContentCheck.Classifier),
 		},
 	}
 	for index := range raw.Worlds {
@@ -481,9 +597,10 @@ func worldFromRaw(world *rawWorldConfig) WorldConfig {
 		Dir:         strings.TrimSpace(world.Dir),
 		Auth:        world.Auth,
 		Policy: PolicyConfig{
-			Path:     valueOr(world.Policy.Path, defaultPolicyPath),
-			File:     strings.TrimSpace(world.Policy.File),
-			Optional: world.Policy.Optional,
+			Path:       valueOr(world.Policy.Path, defaultPolicyPath),
+			File:       strings.TrimSpace(world.Policy.File),
+			Optional:   world.Policy.Optional,
+			Governance: Governance(strings.TrimSpace(string(world.Policy.Governance))),
 		},
 		ReadOnly: world.ReadOnly,
 		Limits: LimitsConfig{
@@ -555,8 +672,9 @@ func LocalProfile(options *LocalOptions) *Config {
 			Authorities: []string{AnyAuthority},
 			Dir:         options.Dir,
 			Auth:        AuthConfig{TokensFile: options.TokensFile},
-			Policy:      PolicyConfig{Optional: true},
-			ReadOnly:    options.ReadOnly,
+			// The soul's token is its agent's own; nobody else to govern.
+			Policy:   PolicyConfig{Optional: true, Governance: GovernanceOpen},
+			ReadOnly: options.ReadOnly,
 			Limits: LimitsConfig{
 				RequestTimeout:    options.RequestTimeout,
 				RequestsPerSecond: options.RequestsPerSecond,
@@ -614,10 +732,17 @@ func (config *Config) SetDefaults() {
 	if config.ContentCheck.NearDuplicate == "" {
 		config.ContentCheck.NearDuplicate = contentcheck.Block
 	}
+	if config.ContentCheck.Injection == "" {
+		config.ContentCheck.Injection = contentcheck.Warn
+	}
+	config.ContentCheck.Classifier.setDefaults()
 	for index := range config.Worlds {
 		world := &config.Worlds[index]
 		if world.Policy.Path == "" {
 			world.Policy.Path = defaultPolicyPath
+		}
+		if world.Policy.Governance == "" {
+			world.Policy.Governance = GovernanceRestricted
 		}
 		if world.Limits.MaxConcurrentRequests == 0 {
 			world.Limits.MaxConcurrentRequests = defaultMaxConcurrentRequests
@@ -741,8 +866,8 @@ func (config *Config) validateWorlds() error {
 			tokenFiles[clean] = tokenFileRef{world: worldIndex, field: file.field}
 		}
 
-		if err := validatePolicyPath(world.Policy.Path); err != nil {
-			return fmt.Errorf("%s.policy.path: %w", location, err)
+		if err := world.Policy.validate(location); err != nil {
+			return err
 		}
 		if err := validatePolicyFile(location, world); err != nil {
 			return err

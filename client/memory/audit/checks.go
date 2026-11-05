@@ -39,6 +39,10 @@ const (
 	CheckStyle         = "Style"
 	CheckFrontmatter   = "In-body frontmatter"
 	CheckContent       = "Secrets and personal data"
+	CheckHiddenText    = "Hidden text"
+	CheckInjection     = "Text that steers an agent"
+	CheckTainted       = "Written after untrusted input"
+	CheckClassifier    = "Flagged by the classifier"
 	CheckStyleGuide    = "Style guide stale"
 	CheckReferences    = "Dangling and unlinked references"
 	CheckDrift         = "Source drift"
@@ -51,7 +55,7 @@ const (
 var CheckOrder = []string{
 	CheckBrokenLinks, CheckUnresolved, CheckOrphans, CheckStaleIndex, CheckMissingHub, CheckUntitled,
 	CheckADRSequence, CheckUntagged, CheckUntyped, CheckPolicy, CheckPolicyFloor, CheckDuplicates, CheckHubShape, CheckOversized,
-	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckContent, CheckStyleGuide, CheckReferences, CheckDrift, CheckLostMetadata, CheckPromotion, CheckTokenDrift,
+	CheckDocumentShape, CheckStyle, CheckFrontmatter, CheckContent, CheckHiddenText, CheckInjection, CheckTainted, CheckClassifier, CheckStyleGuide, CheckReferences, CheckDrift, CheckLostMetadata, CheckPromotion, CheckTokenDrift,
 }
 
 // checkLinks: a target absent from the live inventory is broken when a fetch

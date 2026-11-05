@@ -44,7 +44,26 @@ Buckets need no out-of-band initialization. A world whose bucket is empty is
 created on first start: the server writes the world skeleton and seeds a
 default write policy that warns rather than blocks, then enforces it. Publish
 your own policy to `/.well-known/demarkus/policy.md` through the protocol and
-it governs the next write; restarts never revert it. A bucket holding objects
+it governs the next write; restarts never revert it.
+
+Everything under `/.well-known/demarkus/` (policy, template, style guide,
+world descriptor) is a governance document. A knowledge world restricts it
+(`governance: restricted`, the default): writes need a token with the
+`govern` operation, and an identity writing through the broker, the agent
+included, is refused. A memory-profile world is `open`, like a local soul:
+its owner curates their own layout. Mint a governor entry in
+`<name>-static-tokens` and keep its raw value away from agents:
+
+```toml
+[tokens.governor]
+hash = "sha256-..."
+paths = ["/.well-known/demarkus/**"]
+operations = ["govern"]
+```
+
+Set `governance: open` on a world to let any publisher write them, as before
+`govern` existed; an open world accepts a `govern` token too, so provision
+governors before restricting. A bucket holding objects
 but no world marker is refused, so a mistyped `bucket.url` naming a bucket
 already in use fails the open. A typo naming some other empty bucket still
 creates a world there, logged at Warn.
@@ -77,9 +96,38 @@ Every write is scanned for secrets (always refused) and personal data
 (`server.contentCheck.pii`: `block`, `warn` or `off`; `workDomains` lists
 the organization's email domains, and an address outside them counts as
 personal data once the list is set). A refusal names the rule and line,
-never the value. A secret is never overridable; for personal data,
-metadata `content-check-override: <reason>` lets a reviewed false
-positive land and is recorded with the version.
+never the value. Text that steers an agent rather than informs a reader
+(instructions to it, dangerous commands such as a download piped to a shell,
+suspicious links such as URL shorteners or raw public IPs, also in look-alike
+letters or base64, hex or url encoding;
+`server.contentCheck.injection`: `warn` by default, `block` or `off`) is
+flagged as a prompt-injection risk, and re-checked on every read. A world's
+policy can also name the hosts body links may point to
+(`allow_domains: github.com|example.org` in `policy.md`, enforced at its
+strictness; a world only narrows the floor's list). A secret is never overridable; for
+personal data or injection, metadata `content-check-override: <reason>`
+lets a reviewed false positive land and is recorded with the version.
+
+A classifier can judge each written body too
+(`server.contentCheck.classifier`). Its verdict never refuses a write: the
+server stamps `classifier: injection: <reason> (<model>)` on the version,
+returns it as a warning, ranks the document at most provisional in lookups,
+and the doctor lists it. A timeout, error or busy classifier stamps
+`classifier: unchecked: <why>`. A writer's own `classifier:` value is dropped.
+
+- `kind: http` posts `{"path", "text"}` to `url` and reads
+  `{"label", "score", "reason"}` (`reason` optional); a label other than
+  benign or safe, scored at or over `threshold` (default 0.5), flags. Run a
+  local model such as Llama Prompt Guard behind a small sidecar and admit it
+  with `networkPolicy.classifierEgress`.
+- `kind: anthropic` asks a Claude judge: no tools, the body framed as
+  untrusted data, a structured verdict. `model` defaults to `claude-opus-5-5`;
+  `claude-haiku-5-5` costs a fraction per write. `existingSecretRef` names
+  the Secret key the pod reads as `ANTHROPIC_API_KEY`. The body leaves the
+  cluster; a body carrying a secret is never sent.
+
+`timeout` (5s), `maxBytes` (100 KiB; a larger body is stamped unchecked,
+never cut) and `maxInFlight` (4) bound how long a write waits.
 
 ```yaml
 worlds:

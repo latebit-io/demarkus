@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Plugin } from "@opencode/plugin";
 import { assertPackageInstall, loadCommand as readCommand, loadCommands, registerPrompts } from "./package.ts";
+import { isGatedWrite, recordTaint } from "./taint.ts";
 
 const HOME = homedir();
 const BIN = join(HOME, ".demarkus", "bin", "demarkus-plugin");
@@ -33,6 +34,8 @@ interface RegistryPaths {
 
 interface SessionState {
   guidanceDelivered: boolean;
+  // Untrusted reads so far; a later demarkus write asks first.
+  taint: string[];
 }
 
 type ToastClient = {
@@ -87,11 +90,12 @@ function runBin<T>(args: string[], payload?: unknown, allowEmpty = false, bin = 
   });
 }
 
-// callGate asks `demarkus-plugin gate` to decide a mark_publish/mark_append call.
+// callGate asks `demarkus-plugin gate` to decide a demarkus write; taint names the
+// session's untrusted reads.
 // Fails closed: only a missing helper allows; crash, timeout or bad output blocks.
-export async function callGate(toolName: string, input: Record<string, unknown>, cwd: string, bin = BIN): Promise<GateDecision> {
+export async function callGate(toolName: string, input: Record<string, unknown>, cwd: string, taint: string[] = [], bin = BIN): Promise<GateDecision> {
   if (!existsSync(bin)) return { decision: "allow" };
-  const d = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd }, false, bin);
+  const d = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd, taint }, false, bin);
   if (d && typeof d.decision === "string") return d;
   return { decision: "block", reason: `[demarkus-knowledge] gate failed (crash, timeout or bad output); write blocked. Retry, or reinstall ${bin}` };
 }
@@ -110,10 +114,6 @@ async function callGuidance(): Promise<string | null> {
     GUIDANCE_FILE,
   ], undefined, true);
   return output === null ? null : (output.context ?? "");
-}
-
-function isKnowledgeWrite(toolName: string): boolean {
-  return /mark_(publish|append)$/.test(toolName);
 }
 
 function gateAdapters(directory: string): Set<string> {
@@ -258,7 +258,7 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
   const state = (id: string): SessionState => {
     let session = sessions.get(id);
     if (!session) {
-      session = { guidanceDelivered: false };
+      session = { guidanceDelivered: false, taint: [] };
       sessions.set(id, session);
     }
     return session;
@@ -338,12 +338,12 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       input: { tool: string; sessionID?: string; callID?: string },
       output: { args: Record<string, unknown> },
     ) => {
-      if (!isKnowledgeWrite(input.tool) || !knowledgeOwnsGate()) return;
+      if (!isGatedWrite(input.tool) || !knowledgeOwnsGate()) return;
       const key = input.sessionID && input.callID ? `${input.sessionID}:${input.callID}` : undefined;
       const pending: { warning?: string } = {};
       if (key) pendingWarns.set(key, pending);
       try {
-        const decision = await callGate(input.tool, output.args ?? {}, directory);
+        const decision = await callGate(input.tool, output.args ?? {}, directory, state(input.sessionID ?? "default").taint);
         if (decision.decision === "block") {
           throw new Error(decision.reason ?? "demarkus-knowledge gate blocked this write");
         }
@@ -357,13 +357,14 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
     },
 
     "tool.execute.after": async (
-      input: { tool: string; sessionID?: string; callID?: string },
+      input: { tool: string; sessionID?: string; callID?: string; args?: Record<string, unknown> },
       output: { output: string },
     ) => {
+      recordTaint(state(input.sessionID ?? "default").taint, input.tool, input.args);
       const key = `${input.sessionID}:${input.callID}`;
       const warning = pendingWarns.get(key)?.warning;
       pendingWarns.delete(key);
-      if (!isKnowledgeWrite(input.tool) || !knowledgeOwnsGate()) return;
+      if (!isGatedWrite(input.tool) || !knowledgeOwnsGate()) return;
       if (warning) output.output += `\n\nWarning: ${warning}`;
     },
 
@@ -477,7 +478,7 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
     await ctx.tool.hook("execute.after", async (event) => {
       const output = { output: "" };
       await legacy["tool.execute.after"](
-        { tool: event.tool, sessionID: event.sessionID, callID: event.id }, output,
+        { tool: event.tool, sessionID: event.sessionID, callID: event.id, args: event.input as Record<string, unknown> | undefined }, output,
       );
       if (event.status !== "completed" || !output.output) return;
       const content = event.result.content;

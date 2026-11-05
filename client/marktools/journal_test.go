@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 )
 
 // The journal mechanic is tested in client/memory/journal; here that the route
@@ -94,7 +95,7 @@ func TestContextPrimerReadsHubJournalAndPlans(t *testing.T) {
 		t.Fatalf("context = %+v", got)
 	}
 	for _, want := range []string{
-		"# Context: /proj/\n", "## Hub (/proj/index.md)\n\n# Proj\n\nThe hub.\n",
+		"# Context: /proj/\n", "## Hub (/proj/index.md)\n\n" + docframe.Frame("# Proj\n\nThe hub."),
 		"## Journal 2026-10-12 (/proj/journal/2026-10-12.md)", "## Journal 2026-10-10 (", "## Plans\n\n- /proj/plans/a.md\n- /proj/plans/b.md\n",
 	} {
 		if !strings.Contains(got.Text, want) {
@@ -163,7 +164,7 @@ func TestContextPrimerReportsANewOrRetiredProject(t *testing.T) {
 func TestContextPrimerReadsADirNamedHub(t *testing.T) {
 	backend := &fetchtest.Client{Published: map[string]fetch.Result{"host:6309/proj.md": fetchtest.Head("# Proj\n\n- [a](proj/a.md)\n", 2, nil)}}
 	got := newTools(t, backend, directHooks()).Fetch(t.Context(), marktools.FetchArgs{URL: "/proj/.context"})
-	if got.IsError || !strings.Contains(got.Text, "## Hub (/proj.md)\n\n# Proj") || strings.Contains(got.Text, "status: new") {
+	if got.IsError || !strings.Contains(got.Text, "## Hub (/proj.md)\n\n<doc-") || strings.Contains(got.Text, "status: new") {
 		t.Fatalf("context = %+v", got)
 	}
 }

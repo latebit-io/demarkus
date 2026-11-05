@@ -9,6 +9,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/render"
 )
@@ -29,7 +30,7 @@ func TestPromoteStageThenStamp(t *testing.T) {
 	}}
 	tools := newTools(t, backend, writingHooks())
 	stage := tools.Promote(t.Context(), marktools.PromoteArgs{URL: "/adr/0001-retry.md", Phase: "stage"})
-	for _, want := range []string{"status: staged\npath: /adr/0001-retry.md\nversion: 3\n", "candidate: decision record, type Decision, importance 0.9\n", "\n\n# Retry Rules\n"} {
+	for _, want := range []string{"status: staged\npath: /adr/0001-retry.md\nversion: 3\n", "candidate: decision record, type Decision, importance 0.9\n", ">\n# Retry Rules\n"} {
 		if !strings.Contains(stage.Text, want) {
 			t.Errorf("stage missing %q:\n%s", want, stage.Text)
 		}
@@ -174,7 +175,7 @@ func TestPromoteDryRunChecksPolicyAndDedups(t *testing.T) {
 		t.Errorf("numbers = %+v (%s)", backend.PublishCalls, applied.Text)
 	}
 	backend.PublishCalls, draft.Phase, draft.Packet = nil, "dry_run", ""
-	for _, want := range []string{"target: /docs/retry-rules.md\nstatus: findings\nversion: 0\npolicy: strictness block; require_tags domain\n", "findings:\n- missing tag axis domain", "candidates:\n- /docs/retries.md: same title, near-duplicate (0.76 shared) (v2); tags retry\n- /docs/hub.md: contained (0.91) in #retries; tags hub\n", "related:\n- /docs/other.md: Other\n", "packet: ", "\n=== /docs/retries.md (v2)\n# Retry Rules\n\nOlder rules."} {
+	for _, want := range []string{"target: /docs/retry-rules.md\nstatus: findings\nversion: 0\npolicy: strictness block; require_tags domain\n", "findings:\n- missing tag axis domain", "candidates:\n- /docs/retries.md: same title, near-duplicate (0.76 shared) (v2); tags retry\n- /docs/hub.md: contained (0.91) in #retries; tags hub\n", "related:\n- /docs/other.md: Other\n", "packet: ", "\n=== /docs/retries.md (v2)\n" + docframe.Frame("# Retry Rules\n\nOlder rules.")} {
 		if !strings.Contains(got.Text, want) {
 			t.Errorf("dry run missing %q:\n%s", want, got.Text)
 		}

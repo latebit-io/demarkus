@@ -66,6 +66,8 @@ func violationLines(result publishpolicy.Result, policy publishpolicy.Policy) []
 			lines = append(lines, fmt.Sprintf("%s: %s (pin %s)", v.Code, v.Name, provenance.PinForms))
 		case v.Axis != "":
 			lines = append(lines, fmt.Sprintf("%s: %s (allowed %s values: %s)", v.Code, v.Name, v.Axis, policy.AllowedList(v.Axis)))
+		case v.Code == publishpolicy.DisallowedLinkDomain:
+			lines = append(lines, fmt.Sprintf("%s: %s (allow_domains: %s)", v.Code, v.Name, policy.AllowedDomainList()))
 		default:
 			lines = append(lines, fmt.Sprintf("%s: %s", v.Code, v.Name))
 		}
@@ -124,7 +126,8 @@ func currentDocument(ctx context.Context, reader documentGetter, path string) (d
 // under the floor merged with this world's policy, a candidate policy last.
 // The notes are what a warn verdict let through, then drift; none on a refusal.
 func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite, d drift) ([]string, error) {
-	notes, err := e.content.judge(write)
+	body := string(write.Content)
+	notes, err := e.content.judge(body, write.Metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +140,7 @@ func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write sto
 		floor = &read
 	}
 	if write.Path == publishpolicy.DocumentPath {
-		candidate := publishpolicy.Parse(string(write.Content))
+		candidate := publishpolicy.Parse(body)
 		if err := candidate.Validate(); err != nil {
 			return nil, fmt.Errorf("%w: %w: candidate policy: %v", backend.ErrRejected, ErrInvalidPolicy, err)
 		}
@@ -155,7 +158,7 @@ func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write sto
 	// A template with a bad layout line would silently route writes to the
 	// default directories; refuse it the way a bad policy is refused.
 	if write.Path == layout.DocumentPath {
-		if _, err := layout.Parse(string(write.Content)); err != nil {
+		if _, err := layout.Parse(body); err != nil {
 			return nil, fmt.Errorf("%w: %w: candidate template: %v", backend.ErrRejected, ErrInvalidPolicy, err)
 		}
 	}
@@ -164,7 +167,7 @@ func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write sto
 		return nil, err
 	}
 	policy := publishpolicy.Effective(floor, own, write.Path)
-	result := publishpolicy.EvaluateStrings(policy, write.Path, write.Metadata)
+	result := publishpolicy.EvaluateBody(policy, write.Path, write.Metadata, body)
 	strictness := policy.EffectiveStrictness()
 	switch {
 	case result.Compliant():

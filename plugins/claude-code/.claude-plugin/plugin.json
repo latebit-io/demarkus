@@ -22,7 +22,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__.*__mark_(publish|append)",
+        "matcher": "mcp__.*__mark_(publish|append|archive|curate|promote|graph_publish)",
         "hooks": [
           {
             "type": "command",
@@ -34,7 +34,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__.*__mark_(publish|append)",
+        "matcher": "mcp__.*__mark_(publish|append|archive|curate|promote|graph_publish)",
         "hooks": [
           {
             "type": "command",

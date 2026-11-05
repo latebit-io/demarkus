@@ -91,6 +91,9 @@ worlds:
 	if world.Policy.Path != defaultPolicyPath {
 		t.Errorf("policy path: got %q", world.Policy.Path)
 	}
+	if world.Policy.Governance != GovernanceRestricted {
+		t.Errorf("governance default: got %q, want restricted", world.Policy.Governance)
+	}
 	if world.Policy.File != "" {
 		t.Errorf("policy file: got %q, want unset", world.Policy.File)
 	}
@@ -164,6 +167,7 @@ func TestValidateRequiredAndLimitFields(t *testing.T) {
 		{"checkpoint grace", func(config *Config) { config.Worlds[0].Bucket.CheckpointGrace = -1 }, "checkpointGrace must not be negative"},
 		{"policy path", func(config *Config) { config.Worlds[0].Policy.Path = "/policy/../policy.md" }, "canonical absolute path"},
 		{"unsupported policy path", func(config *Config) { config.Worlds[0].Policy.Path = "/policy.md" }, "only \"/.well-known/demarkus/policy.md\" is supported"},
+		{"governance mode", func(config *Config) { config.Worlds[0].Policy.Governance = "maybe" }, "policy.governance \"maybe\" must be \"restricted\" or \"open\""},
 		{"relative policy file", func(config *Config) { config.Worlds[0].Policy.File = "policy.md" }, "policy.file must be a canonical absolute path"},
 		{"policy file not canonical", func(config *Config) { config.Worlds[0].Policy.File = "/etc/demarkus/../policy.md" }, "policy.file must be a canonical absolute path"},
 		{"policy file on a read-only world", func(config *Config) {
@@ -374,8 +378,41 @@ func TestParsePeers(t *testing.T) {
 	}
 }
 
+func TestParseClassifier(t *testing.T) {
+	body := strings.Replace(validConfig, "health:", "contentCheck:\n  classifier:\n    kind: \" Anthropic \"\n    model: claude-haiku-5-5\n    timeout: 3s\n    maxBytes: 65536\nhealth:", 1)
+	config, err := Parse([]byte(body))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	want := ClassifierConfig{Kind: "anthropic", Model: "claude-haiku-5-5", Timeout: Duration(3 * time.Second), Threshold: 0.5, MaxBytes: 65536, MaxInFlight: 4}
+	if config.ContentCheck.Classifier != want {
+		t.Errorf("classifier = %+v, want %+v", config.ContentCheck.Classifier, want)
+	}
+	// Defaults fill only a configured kind; the model default is anthropic's.
+	http, err := Parse([]byte(strings.Replace(validConfig, "health:", "contentCheck:\n  classifier:\n    kind: http\n    url: http://pg:8080\nhealth:", 1)))
+	if err != nil {
+		t.Fatalf("Parse http: %v", err)
+	}
+	if got := http.ContentCheck.Classifier; got.Model != "" || got.Timeout != Duration(5*time.Second) || got.MaxBytes != 100<<10 {
+		t.Errorf("http classifier = %+v", got)
+	}
+	if plain, err := Parse([]byte(validConfig)); err != nil || plain.ContentCheck.Classifier != (ClassifierConfig{}) {
+		t.Errorf("no classifier = %+v, %v", plain.ContentCheck.Classifier, err)
+	}
+	for _, bad := range []string{
+		"contentCheck:\n  classifier:\n    kind: magic\n",
+		"contentCheck:\n  classifier:\n    kind: http\n",
+		"contentCheck:\n  classifier:\n    kind: http\n    url: http://pg:8080\n    threshold: 1.5\n",
+		"contentCheck:\n  classifier:\n    kind: anthropic\n    maxBytes: 999999999\n",
+	} {
+		if _, err := Parse([]byte(strings.Replace(validConfig, "health:", bad+"health:", 1))); err == nil {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+}
+
 func TestParseFloorAndContentCheck(t *testing.T) {
-	body := strings.Replace(validConfig, "health:", "floorWorld: world-a \ncontentCheck:\n  pii: warn\n  workDomains: [\" Acme.Example \"]\n  nearDuplicate: warn\nhealth:", 1)
+	body := strings.Replace(validConfig, "health:", "floorWorld: world-a \ncontentCheck:\n  pii: warn\n  workDomains: [\" Acme.Example \"]\n  nearDuplicate: warn\n  injection: block\nhealth:", 1)
 	config, err := Parse([]byte(body))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -383,7 +420,7 @@ func TestParseFloorAndContentCheck(t *testing.T) {
 	if config.FloorWorld != "world-a" {
 		t.Errorf("floorWorld = %q", config.FloorWorld)
 	}
-	want := ContentCheckConfig{PII: contentcheck.Warn, WorkDomains: []string{"acme.example"}, NearDuplicate: contentcheck.Warn}
+	want := ContentCheckConfig{PII: contentcheck.Warn, WorkDomains: []string{"acme.example"}, NearDuplicate: contentcheck.Warn, Injection: contentcheck.Block}
 	if !reflect.DeepEqual(config.ContentCheck, want) {
 		t.Errorf("contentCheck = %+v, want %+v", config.ContentCheck, want)
 	}
@@ -391,10 +428,10 @@ func TestParseFloorAndContentCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if plain.FloorWorld != "" || plain.ContentCheck.PII != contentcheck.Block || plain.ContentCheck.WorkDomains != nil {
-		t.Errorf("defaults = floor %q content %+v, want no floor and pii block", plain.FloorWorld, plain.ContentCheck)
+	if plain.FloorWorld != "" || plain.ContentCheck.PII != contentcheck.Block || plain.ContentCheck.WorkDomains != nil || plain.ContentCheck.Injection != contentcheck.Warn {
+		t.Errorf("defaults = floor %q content %+v, want no floor, pii block, injection warn", plain.FloorWorld, plain.ContentCheck)
 	}
-	for _, bad := range []string{"contentCheck:\n  pii: maybe\n", "contentCheck:\n  nearDuplicate: maybe\n", "contentCheck:\n  workDomains: [\"@acme.example\"]\n", "contentCheck:\n  workDomains: [\"acme.example\", \"\"]\n", "floorWorld: rot\n"} {
+	for _, bad := range []string{"contentCheck:\n  pii: maybe\n", "contentCheck:\n  nearDuplicate: maybe\n", "contentCheck:\n  injection: maybe\n", "contentCheck:\n  workDomains: [\"@acme.example\"]\n", "contentCheck:\n  workDomains: [\"acme.example\", \"\"]\n", "floorWorld: rot\n"} {
 		if _, err := Parse([]byte(strings.Replace(validConfig, "health:", bad+"health:", 1))); err == nil {
 			t.Errorf("%q parsed", bad)
 		}

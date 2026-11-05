@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
@@ -25,8 +26,7 @@ func Body(docURL, body string) string {
 	}
 	if para := mdoutline.OpeningParagraph(body); para != "" {
 		b.WriteString("\n")
-		b.WriteString(para)
-		b.WriteString("\n")
+		b.WriteString(docframe.Frame(para))
 	}
 	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; force=true for the full body\n", docURL)
 	return b.String()

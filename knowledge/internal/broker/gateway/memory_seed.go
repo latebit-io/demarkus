@@ -64,6 +64,17 @@ func memorySeedDocs() []memorySeedDoc {
 	}
 }
 
+// memorySeedGrant is the broker's own grant for the seed: exactly the seeded
+// paths, with govern for the policy and template.
+func memorySeedGrant() protocol.Grant {
+	docs := memorySeedDocs()
+	paths := make([]string, len(docs))
+	for i := range docs {
+		paths[i] = docs[i].path
+	}
+	return protocol.Grant{Label: "demarkus-memory-broker", Paths: paths, Govern: true}
+}
+
 // memorySeedRetryInterval throttles re-attempts after a failed seed, so an
 // unhealthy world does not add seed round trips to every tool call.
 const memorySeedRetryInterval = time.Minute
@@ -169,11 +180,14 @@ func (g *Gateway) seedMemoryWorld(ctx context.Context, w *core.WorldConfig) bool
 		g.deps.Log.Warn("memory seed check returned unexpected status", "world", w.Name, "status", result.Response.Status)
 		return false
 	}
-	granted, err := g.writeContext(ctx, w.Name)
+	// The tenant's own grant gates the seed; the writes run under a broker
+	// grant scoped to the seeded paths, the only one carrying govern.
+	tenant, err := g.writeContext(ctx, w.Name)
 	if err != nil {
 		g.deps.Log.Warn("memory seed refused", "world", w.Name, "err", err)
 		return false
 	}
+	granted := protocol.WithGrant(tenant, memorySeedGrant())
 	for _, doc := range memorySeedDocs() {
 		if seeded && !doc.overServerSeed {
 			continue

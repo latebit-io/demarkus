@@ -24,6 +24,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/hiddentext"
 	runewidth "github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 )
@@ -1727,7 +1728,8 @@ func (m *model) renderMarkdown(body string) (string, error) {
 		m.renderer = r
 		m.rendererWidth = wrapWidth
 	}
-	return m.renderer.Render(body)
+	// Stored versions may predate the server's hidden-text gate.
+	return m.renderer.Render(hiddentext.Reveal(body))
 }
 
 func errorView(err error) string {

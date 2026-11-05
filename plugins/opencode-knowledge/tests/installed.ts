@@ -291,7 +291,7 @@ test("V2 gates block and ask, preserve structured results, and discard failed/de
       ? "Saved\n\nWarning: policy reason"
       : [...(content ?? []), { type: "text", text: "Warning: policy reason" }]);
   }
-  assert.deepEqual(gateCalls().at(-1), { tool: call.tool, input: call.input, cwd: "/v2-gates" });
+  assert.deepEqual(gateCalls().at(-1), { tool: call.tool, input: call.input, cwd: "/v2-gates", taint: [] });
   for (const failure of ["error", "deleted", "idle"]) {
     await before(call);
     if (failure === "error") await after({ ...call, status: "error", error: { message: "failed" } });

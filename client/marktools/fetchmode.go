@@ -11,6 +11,9 @@ import (
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/memory/outline"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
+	"github.com/latebit-io/demarkus/protocol/docframe"
+	"github.com/latebit-io/demarkus/protocol/hiddentext"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
@@ -60,9 +63,19 @@ func (t *Tools) Fetch(ctx context.Context, args FetchArgs) Result {
 		if err != nil {
 			return failure("%v", err)
 		}
-		return text(mcpfmt.FullWith(result, section, map[string]string{"section": "#" + anchor}, mcpfmt.FetchKeys...))
+		extra := map[string]string{"section": "#" + anchor}
+		addReadWarning(extra, section, result.Response.Metadata)
+		return text(mcpfmt.FullWith(result, docframe.Frame(section), extra, mcpfmt.FetchKeys...))
 	}
 	return t.fullOrOutline(ctx, &fetched{target: target, docURL: docURL, result: result}, args)
+}
+
+// addReadWarning adds the steering findings in text to extra, if any: rules
+// change after a write, so a read re-checks.
+func addReadWarning(extra map[string]string, text string, meta map[string]string) {
+	if w := contentcheck.ReadWarning(text, meta); w != "" {
+		extra[contentcheck.WarningKey] = w
+	}
 }
 
 // fetched is an ok, textual FETCH answer on its way to the agent.
@@ -86,6 +99,7 @@ func (t *Tools) fullOrOutline(ctx context.Context, f *fetched, args FetchArgs) R
 	if seenBefore && cur.Identified() && prev != cur {
 		extra["note"] = fetchdedup.ChangedNote(prev, cur)
 	}
+	addReadWarning(extra, body, meta)
 	// Size gate: a large document answers with its outline unless forced.
 	if !args.Force && len(body) >= outline.Threshold {
 		extra["mode"] = "outline"
@@ -95,7 +109,7 @@ func (t *Tools) fullOrOutline(ctx context.Context, f *fetched, args FetchArgs) R
 	if cur.Identified() && t.hooks.Seen != nil {
 		t.hooks.Seen.Record(ctx, key, cur)
 	}
-	return text(mcpfmt.FullWith(f.result, body, extra, mcpfmt.FetchKeys...))
+	return text(mcpfmt.FullWith(f.result, docframe.Frame(body), extra, mcpfmt.FetchKeys...))
 }
 
 func (t *Tools) seenLookup(ctx context.Context, key string) (fetchdedup.Doc, bool) {
@@ -135,7 +149,7 @@ func (t *Tools) ReadResource(ctx context.Context, rawURI string) (Resource, erro
 		if primer.IsError {
 			return Resource{}, errors.New(primer.Text)
 		}
-		return Resource{MIMEType: "text/markdown", Text: primer.Text}, nil
+		return Resource{MIMEType: "text/markdown", Text: hiddentext.Reveal(primer.Text)}, nil
 	}
 	result, err := t.backend.Fetch(ctx, fetch.FetchRequest{
 		Host: target.Host, Path: target.Path, Token: t.readToken(ctx, target.Host),
@@ -156,5 +170,5 @@ func (t *Tools) ReadResource(ctx context.Context, rawURI string) (Resource, erro
 			return Resource{}, err
 		}
 	}
-	return Resource{MIMEType: "text/markdown", Text: body}, nil
+	return Resource{MIMEType: "text/markdown", Text: hiddentext.Reveal(body)}, nil
 }

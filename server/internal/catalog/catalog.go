@@ -141,6 +141,11 @@ func (e *Entry) Prepare() {
 		e.demote = journalDemote
 	}
 	e.standing = protocol.StandingOf(e.Tags)
+	// Unreviewed text from an untrusted read, or flagged by the classifier,
+	// never ranks as accepted.
+	if e.standing == protocol.StandingAccepted && (protocol.IsTainted(e.Metadata) || protocol.ClassifierFlagged(e.Metadata)) {
+		e.standing = protocol.StandingProvisional
+	}
 	pins := provenance.Parse(e.Metadata[provenance.Key])
 	e.pins = make([]string, len(pins))
 	for i, pin := range pins {

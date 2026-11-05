@@ -48,11 +48,12 @@ function runBin<T>(args: string[], payload?: unknown, bin = BIN): Promise<T | nu
   });
 }
 
-// callGate asks `demarkus-plugin gate` to decide a mark_publish/mark_append call.
+// callGate asks `demarkus-plugin gate` to decide a demarkus write; taint names the
+// session's untrusted reads.
 // Fails closed: only a missing helper allows; crash, timeout or bad output blocks.
-export async function callGate(toolName: string, input: Record<string, unknown>, cwd: string, bin = BIN): Promise<GateDecision> {
+export async function callGate(toolName: string, input: Record<string, unknown>, cwd: string, taint: string[] = [], bin = BIN): Promise<GateDecision> {
   if (!existsSync(bin)) return { decision: "allow" };
-  const d = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd }, bin);
+  const d = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd, taint }, bin);
   if (d && typeof d.decision === "string") return d;
   return { decision: "block", reason: `[demarkus-memory] gate failed (crash, timeout or bad output); write blocked. Retry, or reinstall ${bin}` };
 }

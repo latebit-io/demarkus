@@ -65,7 +65,7 @@ func Compare(current, incoming map[string]string) Narrowing {
 		}
 	}
 	for key, value := range current {
-		if protocol.IsReservedMetadataKey(key) || protocol.IsIdentityMetadataKey(key) || uncarried[key] {
+		if protocol.IsReservedMetadataKey(key) || protocol.IsIdentityMetadataKey(key) || protocol.IsServerStampedKey(key) || uncarried[key] {
 			continue
 		}
 		// The server stamps the default type on every version, so omitting

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
 )
 
 // strictnessRank orders strictness so Merge can take the stricter; absent
@@ -23,8 +24,8 @@ func strictnessRank(s Strictness) int {
 }
 
 // Merge is the policy a world is held to under a floor, which it only
-// tightens: the stricter strictness, the union of required axes and fields,
-// per axis the intersection of allowed values. Effective applies Exempt.
+// tightens: stricter strictness, union of required axes and fields, per-axis
+// intersection of values, the hosts both domain lists cover.
 func Merge(floor, world Policy) Policy {
 	merged := Policy{Strictness: world.EffectiveStrictness()}
 	if strictnessRank(floor.EffectiveStrictness()) > strictnessRank(merged.Strictness) {
@@ -45,6 +46,25 @@ func Merge(floor, world Policy) Policy {
 			merged.AllowedTagValues[axis] = slices.Clone(values)
 		}
 	}
+	merged.AllowDomains = mergeDomains(floor.AllowDomains, world.AllowDomains)
+	return merged
+}
+
+// mergeDomains keeps each listed host both lists cover, so a world narrows
+// github.com to docs.github.com; one side unset leaves the other's list.
+func mergeDomains(floor, world []string) []string {
+	switch {
+	case floor == nil:
+		return slices.Clone(world)
+	case world == nil:
+		return slices.Clone(floor)
+	}
+	merged := []string{}
+	for _, d := range slices.Concat(world, floor) {
+		if contentcheck.UnderDomain(d, floor) && contentcheck.UnderDomain(d, world) && !slices.Contains(merged, d) {
+			merged = append(merged, d)
+		}
+	}
 	return merged
 }
 
@@ -63,6 +83,12 @@ func Loosens(floor, world Policy) []string {
 		}
 		if extra := difference(worldValues, floor.AllowedTagValues[axis]); len(extra) > 0 {
 			out = append(out, fmt.Sprintf("allow_tags.%s adds %s, which the floor does not allow", axis, strings.Join(extra, ", ")))
+		}
+	}
+	if floor.AllowDomains != nil {
+		uncovered := slices.DeleteFunc(slices.Clone(world.AllowDomains), func(d string) bool { return contentcheck.UnderDomain(d, floor.AllowDomains) })
+		if len(uncovered) > 0 {
+			out = append(out, fmt.Sprintf("%s adds %s, which the floor does not allow", allowDomainsKey, strings.Join(uncovered, ", ")))
 		}
 	}
 	return out

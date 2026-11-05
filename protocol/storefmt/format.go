@@ -41,11 +41,11 @@ func SerializeVersion(version int, prevRaw, content []byte, meta map[string]stri
 	}
 	var sb strings.Builder
 	sb.WriteString(protocol.FrontmatterFence)
-	sb.WriteString(fmt.Sprintf("version: %d\n", version))
+	fmt.Fprintf(&sb, "version: %d\n", version)
 	sb.WriteString("archived: false\n")
 	if version > 1 {
 		h := sha256.Sum256(prevRaw)
-		sb.WriteString(fmt.Sprintf("previous-hash: sha256-%x\n", h))
+		fmt.Fprintf(&sb, "previous-hash: sha256-%x\n", h)
 	}
 	if len(meta) > 0 {
 		keys := make([]string, 0, len(meta))
@@ -56,11 +56,11 @@ func SerializeVersion(version int, prevRaw, content []byte, meta map[string]stri
 		for _, k := range keys {
 			switch {
 			case k == "tags" && okfKeys[k]:
-				sb.WriteString(fmt.Sprintf("tags: %s\n", FormatTagsList(meta[k])))
+				fmt.Fprintf(&sb, "tags: %s\n", FormatTagsList(meta[k]))
 			case okfKeys[k]:
-				sb.WriteString(fmt.Sprintf("%s: %s\n", k, meta[k]))
+				fmt.Fprintf(&sb, "%s: %s\n", k, meta[k])
 			default:
-				sb.WriteString(fmt.Sprintf("%s%s: %s\n", metaPrefix, k, meta[k]))
+				fmt.Fprintf(&sb, "%s%s: %s\n", metaPrefix, k, meta[k])
 			}
 		}
 	}

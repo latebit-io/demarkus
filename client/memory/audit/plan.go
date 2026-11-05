@@ -372,7 +372,7 @@ func (pl *planner) hubs() {
 			continue
 		}
 		meta := pl.hubMetadata(path.Base(dir), summary, parent.Metadata)
-		if why := pl.a.refuses(hubPath, meta); why != "" {
+		if why := pl.a.refuses(hubPath, meta, body); why != "" {
 			pl.skip(CheckMissingHub, dir, "the policy would refuse the hub: "+why+"; publish "+hubPath+" by hand")
 			continue
 		}

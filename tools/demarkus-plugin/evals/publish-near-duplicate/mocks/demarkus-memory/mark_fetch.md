@@ -3,6 +3,7 @@ version: 1
 tags: debugging,shards
 type: Reference
 
+<doc-a290cc58b07a98cb>
 # Debugging
 
 Lessons from bugs and investigations.
@@ -17,3 +18,4 @@ the size bound keeps every shard fetch under one round trip. The compactor
 runs off the writer so a split never blocks a publish; the checkpoint row
 carries the source of the write observation so replicas agree on which
 version a shard describes.
+</doc-a290cc58b07a98cb>

@@ -94,6 +94,12 @@ func IsIdentityMetadataKey(key string) bool {
 	return key == MetaAgent || key == MetaUser
 }
 
+// IsServerStampedKey reports stored metadata only the server writes: a
+// write's own value is dropped, so clients never carry or require it.
+func IsServerStampedKey(key string) bool {
+	return key == ClassifierKey
+}
+
 const (
 	// DefaultPort is the default port for Mark Protocol servers.
 	DefaultPort = 6309

@@ -2,8 +2,8 @@
 
 `make plugin-eval` runs `run.sh`: the shipped plugin is copied beside this
 suite, prompts are regenerated, hooks run a working-tree `demarkus-plugin`, and
-`claude plugin eval` judges each case. Paid, about a dollar a run; results land
-in `results/` (ignored).
+`claude plugin eval` judges each case. Paid, about $3 a full run (`--case <glob>`
+runs one); results land in `results/` (ignored).
 
 ## Mocks are generated
 
@@ -14,6 +14,9 @@ against a hand-written answer:
 - `mocks/demarkus-memory/_tools.json` wraps the `demarkus-mcp` lean tools/list
   golden (`tools-host-lean.json`), the profile the plugin starts the server
   with.
+- `steering-doc/prompt.md` carries the `demarkus-mcp` instructions golden
+  (`instructions-host.txt`) as `append_system_prompt`: a mock sends no
+  initialize result, so this is how the read contract reaches the agent.
 - Every other `mocks/demarkus-memory/<tool>.md`, suite or case level, is a
   `marktools` call over a fixture store that answers with the server's wire
   goldens (`protocol/wiretest/testdata`). The runner's frontmatter and

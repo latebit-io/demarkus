@@ -12,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
@@ -557,5 +558,23 @@ func TestDigestFramesItsParts(t *testing.T) {
 	first := docwrite.Digest("v1", "body")
 	if first != docwrite.Digest("v1", "body") || len(first) != 16 {
 		t.Fatal("digest is not stable or not 16 hex characters")
+	}
+}
+
+// Every write refuses a body pasted back with its read frame, before sending.
+func TestWritesRefuseAFramedBody(t *testing.T) {
+	backend := &fetchtest.Client{}
+	d := doc(backend)
+	framed := docframe.Frame("# Doc\n")
+	_, pub := d.Publish(context.Background(), docwrite.Write{Body: framed}, merge.OnConflictFail)
+	_, unchecked := d.PublishUnchecked(context.Background(), framed, nil)
+	_, app := d.Append(context.Background(), docwrite.AppendRequest{Body: framed, ExpectedVersion: 1})
+	for name, err := range map[string]error{"publish": pub, "unchecked": unchecked, "append": app} {
+		if !errors.Is(err, docwrite.ErrFramed) {
+			t.Errorf("%s = %v, want ErrFramed", name, err)
+		}
+	}
+	if len(backend.PublishCalls) != 0 || len(backend.AppendCalls) != 0 {
+		t.Errorf("sent despite the frame: %d publishes, %d appends", len(backend.PublishCalls), len(backend.AppendCalls))
 	}
 }

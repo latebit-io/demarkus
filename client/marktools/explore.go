@@ -11,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
@@ -84,6 +85,7 @@ func (t *Tools) Explore(ctx context.Context, args ExploreArgs) Result { //nolint
 	fmt.Fprintf(&b, "\nfetch %s#<anchor> for a section; mark_fetch force=true for the full body\n", docURL)
 
 	extra := map[string]string{"size": fmt.Sprintf("%d bytes, %d lines", len(body), strings.Count(body, "\n")+1)}
+	addReadWarning(extra, body, result.Response.Metadata)
 	return text(mcpfmt.FullWith(result, b.String(), extra, mcpfmt.FetchKeys...))
 }
 
@@ -119,8 +121,7 @@ func writeDocumentSections(b *strings.Builder, body string) {
 	}
 	if para := mdoutline.OpeningParagraph(body); para != "" {
 		b.WriteString("\n## Opening\n")
-		b.WriteString(para)
-		b.WriteString("\n")
+		b.WriteString(docframe.Frame(para))
 	}
 	out := linkLines(body)
 	fmt.Fprintf(b, "\n## Outbound links (%d)\n", len(out))

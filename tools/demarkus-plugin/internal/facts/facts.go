@@ -159,6 +159,24 @@ func classifySegment(tokens []string) (Check, bool) {
 	return "", false
 }
 
+// Runs reports whether any segment of command runs one of programs: quotes
+// respected, env assignments skipped, a path compared by its base name.
+func Runs(command string, programs ...[]string) bool {
+	segs, _ := splitSegments(command)
+	for _, seg := range segs {
+		tokens := strings.Fields(seg.stage)
+		for len(tokens) > 0 && isEnvAssignment(tokens[0]) {
+			tokens = tokens[1:]
+		}
+		for _, p := range programs {
+			if hasPrefix(tokens, p) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func hasPrefix(tokens, prefix []string) bool {
 	if len(tokens) < len(prefix) {
 		return false

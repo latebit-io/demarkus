@@ -36,6 +36,31 @@ data:
         []
         {{- end }}
       nearDuplicate: {{ .Values.server.contentCheck.nearDuplicate | default "block" | quote }}
+      injection: {{ .Values.server.contentCheck.injection | default "warn" | quote }}
+      {{- with .Values.server.contentCheck.classifier }}
+      {{- if .kind }}
+      classifier:
+        kind: {{ .kind | quote }}
+        {{- with .url }}
+        url: {{ . | quote }}
+        {{- end }}
+        {{- with .model }}
+        model: {{ . | quote }}
+        {{- end }}
+        {{- with .timeout }}
+        timeout: {{ . | quote }}
+        {{- end }}
+        {{- with .threshold }}
+        threshold: {{ . }}
+        {{- end }}
+        {{- with .maxBytes }}
+        maxBytes: {{ . }}
+        {{- end }}
+        {{- with .maxInFlight }}
+        maxInFlight: {{ . }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
     worlds:
       {{- range $world := $worlds }}
       - name: {{ $world.name | quote }}
@@ -57,6 +82,7 @@ data:
           {{- if $world.initialPolicy }}
           file: {{ printf "/etc/demarkus/%s" (include "demarkus-knowledge-server.policyKey" $world.name) | quote }}
           {{- end }}
+          governance: {{ $world.governance | default (ternary "open" "restricted" (eq $world.profile "memory")) | quote }}
         readOnly: {{ $world.readOnly }}
         gated: {{ eq $world.profile "memory" }}
         limits:

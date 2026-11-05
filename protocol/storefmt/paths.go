@@ -4,6 +4,8 @@ import (
 	"io/fs"
 	"path"
 	"strings"
+
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // CanonicalPath is the one spelling of a request path shared by every index
@@ -11,6 +13,13 @@ import (
 // slash, root is "/". Callers reject traversal via ContainsDotDot.
 func CanonicalPath(reqPath string) string {
 	return path.Clean("/" + reqPath)
+}
+
+// IsGovernancePath reports a path under protocol.GovernancePrefix, in its
+// canonical spelling and case-folded: a case-folding disk maps a variant onto
+// the same file.
+func IsGovernancePath(reqPath string) bool {
+	return strings.HasPrefix(strings.ToLower(CanonicalPath(reqPath))+"/", protocol.GovernancePrefix)
 }
 
 // RelPath is the storage-relative form of a request path: CanonicalPath

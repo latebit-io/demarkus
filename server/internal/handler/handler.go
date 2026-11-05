@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/hiddentext"
 	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/render"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -52,6 +53,9 @@ type Config struct {
 	// Watches serves WATCH; nil answers the verb bad-request, as a server
 	// without it does.
 	Watches *fanout.Fanout
+	// RestrictGovernance makes governance documents (policy, layout, style,
+	// world descriptor) writable only with the govern operation or grant.
+	RestrictGovernance bool
 }
 
 // Handler serves the Mark protocol over a DocumentStore. Build it with New.
@@ -61,6 +65,7 @@ type Handler struct {
 	logger        *slog.Logger
 	readOnly      bool
 	watches       *fanout.Fanout
+	restrictGov   bool
 }
 
 // New refuses a config without a store or a logger, so neither can be missing
@@ -78,6 +83,7 @@ func New(config Config) (*Handler, error) {
 		logger:        config.Logger,
 		readOnly:      config.ReadOnly,
 		watches:       config.Watches,
+		restrictGov:   config.RestrictGovernance,
 	}, nil
 }
 
@@ -254,28 +260,54 @@ func (h *Handler) serveWrite(ctx context.Context, w io.Writer, req protocol.Requ
 	}
 }
 
-// authorizeWrite checks the publish capability every write verb needs and
-// answers the denial itself: a grant on ctx decides alone, else the token.
-// Without a grant or a token store no write is allowed.
+// authorizeWrite checks publish (govern for a restricted governance path) and
+// answers the denial itself: a grant on ctx decides alone, else the token;
+// with neither, no write.
 func (h *Handler) authorizeWrite(ctx context.Context, w io.Writer, req protocol.Request) (tokenLabel string, ok bool) {
+	gov := storefmt.IsGovernancePath(req.Path)
+	restricted := gov && h.restrictGov
 	if grant, granted := protocol.GrantFrom(ctx); granted {
-		if !auth.Permits(&grant, req.Path) {
+		switch {
+		case !auth.Permits(&grant, req.Path):
 			h.Deny(w, req, auth.ErrNotPermitted)
-			return "", false
+		case restricted && !grant.Govern:
+			h.denyGovernance(w, req)
+		default:
+			return grant.Label, true
 		}
-		return grant.Label, true
+		return "", false
 	}
 	ts := h.tokenStore()
 	if ts == nil {
 		h.writeError(w, protocol.StatusNotPermitted, writeActivity[req.Verb]+" requires auth configuration")
 		return "", false
 	}
-	tokenLabel, err := ts.Authorize(req.Metadata["auth"], req.Path, "publish")
-	if err != nil {
-		h.Deny(w, req, err)
-		return "", false
+	var ops []string
+	switch {
+	case restricted:
+		ops = []string{protocol.OpGovern}
+	case gov: // an open world takes govern too, so governors exist before it restricts
+		ops = []string{"publish", protocol.OpGovern}
+	default:
+		ops = []string{"publish"}
 	}
-	return tokenLabel, true
+	tokenLabel, err := ts.AuthorizeAny(req.Metadata["auth"], req.Path, ops...)
+	switch {
+	case err == nil:
+		return tokenLabel, true
+	case restricted && auth.DenialStatus(err) == protocol.StatusNotPermitted:
+		h.denyGovernance(w, req)
+	default:
+		h.Deny(w, req, err)
+	}
+	return "", false
+}
+
+// denyGovernance names what a governance write lacks, so an operator knows
+// which credential to reach for.
+func (h *Handler) denyGovernance(w io.Writer, req protocol.Request) {
+	h.logger.Warn("governance write refused", "audit", true, "operation", req.Verb, "path", sanitize(req.Path))
+	h.writeError(w, protocol.StatusNotPermitted, "governance document: "+writeActivity[req.Verb]+" "+protocol.GovernancePrefix+" requires the "+protocol.OpGovern+" operation")
 }
 
 func isWriteVerb(verb string) bool {
@@ -918,7 +950,7 @@ func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 
 	// Contract before the empty-body shortcut: a non-.md path is rejected
 	// even with an empty body.
-	if err := storefmt.ValidateDocumentContent(req.Path, []byte(req.Body)); err != nil {
+	if err := storefmt.ValidateDocumentText(req.Path, req.Body); err != nil {
 		h.logger.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid document")
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
@@ -1064,7 +1096,7 @@ func (h *Handler) handleAppend(ctx context.Context, call *writeCall) {
 
 	// Contract before the empty-body check: a non-.md path is rejected as
 	// bad-request rather than reported as a missing body.
-	if err := storefmt.ValidateDocumentContent(req.Path, []byte(req.Body)); err != nil {
+	if err := storefmt.ValidateDocumentText(req.Path, req.Body); err != nil {
 		h.logger.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid document")
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return
@@ -1205,11 +1237,17 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 		if protocol.IsReservedMetadataKey(k) {
 			return nil, fmt.Errorf("metadata key %q is reserved", k)
 		}
+		if protocol.IsServerStampedKey(k) {
+			continue
+		}
 		if !protocol.IsValidMetaKey(k) {
 			return nil, fmt.Errorf("metadata key %q contains invalid characters", k)
 		}
 		if !protocol.IsValidMetaValue(v) {
 			return nil, fmt.Errorf("metadata value for key %q contains newlines", k)
+		}
+		if hits := hiddentext.Find(v); len(hits) > 0 {
+			return nil, fmt.Errorf("metadata value for key %q carries hidden characters: %s", k, hiddentext.Summary(hits))
 		}
 		if meta == nil {
 			meta = make(map[string]string)

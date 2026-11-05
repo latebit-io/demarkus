@@ -16,6 +16,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
@@ -78,6 +79,9 @@ type Write struct {
 // ErrInvalidExpectedVersion refuses a negative version on any write.
 var ErrInvalidExpectedVersion = errors.New("expected_version must be >= 0")
 
+// ErrFramed refuses a body pasted back with its read frame (docframe).
+var ErrFramed = errors.New("body carries a <doc-*> frame line from a read; write the text inside the frame, not the tags")
+
 // SendOnce is the WriteFunc of a surface with one fixed token and no retry.
 func SendOnce(token string) WriteFunc {
 	return func(ctx context.Context, op WriteOp) (fetch.Result, error) {
@@ -90,6 +94,9 @@ func SendOnce(token string) WriteFunc {
 func (d *Doc) Publish(ctx context.Context, w Write, mode string) (Result, error) {
 	if w.ExpectedVersion < 0 {
 		return Result{}, ErrInvalidExpectedVersion
+	}
+	if docframe.HasFrame(w.Body) {
+		return Result{}, ErrFramed
 	}
 	result, err := d.send(ctx, func(ctx context.Context, token string) (fetch.Result, error) {
 		return d.Backend.Publish(ctx, fetch.WriteRequest{
@@ -163,6 +170,9 @@ func (w *Write) landedAt(head *headDoc) bool {
 // PublishUnchecked replaces the document whatever its version: the caller has
 // said it does not care what is there. Nothing to merge, nothing to reconcile.
 func (d *Doc) PublishUnchecked(ctx context.Context, body string, meta map[string]string) (Result, error) {
+	if docframe.HasFrame(body) {
+		return Result{}, ErrFramed
+	}
 	r, err := d.Write(ctx, func(ctx context.Context, token string) (fetch.Result, error) {
 		return d.Backend.Publish(ctx, fetch.WriteRequest{
 			Host: d.Host, Path: d.Path, Token: token, Body: body, ExpectedVersion: -1, Metadata: meta,
@@ -189,6 +199,9 @@ func (e *VersionError) Error() string { return "could not resolve version: " + e
 func (d *Doc) Append(ctx context.Context, req AppendRequest) (Result, error) {
 	if req.ExpectedVersion < 0 {
 		return Result{}, ErrInvalidExpectedVersion
+	}
+	if docframe.HasFrame(req.Body) {
+		return Result{}, ErrFramed
 	}
 	expected := req.ExpectedVersion
 	if expected == 0 {
@@ -336,6 +349,9 @@ func (d *Doc) head(ctx context.Context, path string) (headDoc, error) {
 // writer's identical body under different metadata is not mistaken for ours.
 func (h *headDoc) carries(submitted map[string]string) bool {
 	for k, v := range submitted {
+		if protocol.IsServerStampedKey(k) {
+			continue
+		}
 		// An absent key is a mismatch even when the submitted value is empty.
 		actual, ok := h.metadata[k]
 		if !ok || strings.TrimSpace(actual) != strings.TrimSpace(v) {
@@ -375,12 +391,12 @@ func Digest(parts ...string) string {
 func Version(meta map[string]string) (int, error) { return optionalInt(meta, "version") }
 
 // Carried is the metadata a republish of a fetched document resends: the
-// publisher's keys without retention (never inherited) and without identity,
-// which the writing surface stamps again.
+// publisher's keys without retention (never inherited), identity (the
+// writing surface stamps it) or a server stamp.
 func Carried(meta map[string]string) map[string]string {
 	out := make(map[string]string, len(meta))
 	for k, v := range meta {
-		if k != "retention" && !protocol.IsReservedMetadataKey(k) && !protocol.IsIdentityMetadataKey(k) {
+		if k != "retention" && !protocol.IsReservedMetadataKey(k) && !protocol.IsIdentityMetadataKey(k) && !protocol.IsServerStampedKey(k) {
 			out[k] = v
 		}
 	}

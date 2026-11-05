@@ -18,6 +18,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/provenance"
@@ -262,7 +263,7 @@ func (s *Staged) Report() string {
 			fmt.Fprintf(&b, "%s: %s\n", k, v)
 		}
 	}
-	b.WriteString("\n" + s.Body)
+	b.WriteString("\n" + docframe.Frame(s.Body) + docframe.Flags(s.Body, s.Metadata))
 	return b.String()
 }
 
@@ -428,7 +429,7 @@ func (p *Plan) Report() string {
 	case RefreshBehind:
 		b.WriteString("note: the live version is behind the marker; the destination history is inconsistent, nothing to write\n")
 	case RefreshStale:
-		fmt.Fprintf(&b, "packet: %s\n\n%s", p.Packet, p.Body)
+		fmt.Fprintf(&b, "packet: %s\n\n%s%s", p.Packet, docframe.Frame(p.Body), docframe.Flags(p.Body, nil))
 	}
 	return b.String()
 }
@@ -488,6 +489,9 @@ type Candidate struct {
 	Fetch   bool
 	Version int
 	Body    string
+	// Truncated: Body was cut at the candidate cap; the report says so
+	// outside the frame.
+	Truncated bool
 }
 
 // docTitle is the document title of a row: a section row joins the heading
@@ -531,20 +535,20 @@ type Check struct {
 
 // Examine runs the gate and the policy on the draft. Nothing is fetched.
 func Examine(d *Draft, policy *publishpolicy.Policy) *Check {
-	c := &Check{Draft: *d, Policy: policy, Problems: gate.Problems(d.Path, d.Body, d.Metadata["description"]), Missing: Missing(d.Path, d.Metadata, policy)}
+	c := &Check{Draft: *d, Policy: policy, Problems: gate.Problems(d.Path, d.Body, d.Metadata["description"]), Missing: Missing(d.Path, d.Metadata, d.Body, policy)}
 	c.Packet = docwrite.Digest(d.Path, strconv.Itoa(d.Version), d.Body, metaDigest(d.Metadata), d.Source)
 	return c
 }
 
-// Missing words the policy's violations on the metadata, each a whole
-// finding, as the server would at commit: after its type default, and
-// never asking for identity keys, which are the surface's.
-func Missing(path string, meta map[string]string, policy *publishpolicy.Policy) []string {
+// Missing words the policy's violations on the metadata and the body's links,
+// each a whole finding, as the server would at commit: after its type
+// default, and never asking for identity keys, which are the surface's.
+func Missing(path string, meta map[string]string, body string, policy *publishpolicy.Policy) []string {
 	if policy == nil {
 		return nil
 	}
 	var out []string
-	for _, v := range publishpolicy.EvaluateStrings(policy.ForCaller(), path, storefmt.ApplyOKFTypeDefault(path, meta)).Violations {
+	for _, v := range publishpolicy.EvaluateBody(policy.ForCaller(), path, storefmt.ApplyOKFTypeDefault(path, meta), body).Violations {
 		switch v.Code {
 		case publishpolicy.MissingTagAxis:
 			out = append(out, "missing tag axis "+v.Name+" (an "+v.Name+":<value> tag)")
@@ -554,6 +558,8 @@ func Missing(path string, meta map[string]string, policy *publishpolicy.Policy) 
 			out = append(out, "disallowed tag "+v.Name+" (allowed "+v.Axis+" values: "+policy.AllowedList(v.Axis)+")")
 		case publishpolicy.UnpinnedSource:
 			out = append(out, "unpinned "+provenance.Key+" value "+v.Name+" (pin "+provenance.PinForms+")")
+		case publishpolicy.DisallowedLinkDomain:
+			out = append(out, "link to "+v.Name+" outside allow_domains ("+policy.AllowedDomainList()+")")
 		default:
 			out = append(out, string(v.Code))
 		}
@@ -622,6 +628,9 @@ func (c *Check) Report() string {
 		for _, axis := range slices.Sorted(maps.Keys(c.Policy.AllowedTagValues)) {
 			fmt.Fprintf(&b, "; allow_tags.%s %s", axis, c.Policy.AllowedList(axis))
 		}
+		if c.Policy.AllowDomains != nil {
+			fmt.Fprintf(&b, "; allow_domains %s", c.Policy.AllowedDomainList())
+		}
 		b.WriteString("\n")
 	}
 	if len(c.Missing) > 0 || len(c.Problems) > 0 {
@@ -660,7 +669,10 @@ func (c *Check) Report() string {
 	for i := range c.Candidates {
 		cd := &c.Candidates[i]
 		if cd.Body != "" {
-			fmt.Fprintf(&b, "\n=== %s (v%d)\n%s", cd.Path, cd.Version, cd.Body)
+			fmt.Fprintf(&b, "\n=== %s (v%d)\n%s%s", cd.Path, cd.Version, docframe.Frame(cd.Body), docframe.Flags(cd.Body, nil))
+			if cd.Truncated {
+				b.WriteString("[truncated]\n")
+			}
 		}
 	}
 	return b.String()

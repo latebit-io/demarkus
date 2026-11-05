@@ -26,6 +26,9 @@ type Options struct {
 	Worlds func(ctx context.Context) ([]publishpolicy.Policy, error)
 	// Content is the secrets and personal-data scan.
 	Content ContentOptions
+	// Classify is the classifier stamp for a written body ("" for none),
+	// set as protocol.ClassifierKey before the commit; nil classifies nothing.
+	Classify func(ctx context.Context, path, body string) string
 }
 
 // Enforce wraps store so every PUBLISH and APPEND is judged by the world's
@@ -58,10 +61,10 @@ func chain[T any](inner, next func(context.Context, backend.Reader, T) error) fu
 	}
 }
 
-// guard judges near-duplicates before the commit and again inside it when
-// the commit state holds a catalog (file store; the bucket store's does not,
-// its race accepted), then the policy; notes replace the sink every run.
-func (e *enforcer) guard(ctx context.Context, req *backend.WriteRequest) error {
+// guard judges near-duplicates and classifies before the commit, the
+// near-duplicates again inside it when its state holds a catalog (the bucket
+// store's does not, its race accepted), then the policy; notes replace the sink.
+func (e *enforcer) guard(ctx context.Context, req *backend.WriteRequest, appending bool) error {
 	if req.Readable == nil {
 		req.Readable = func(string) bool { return true }
 	}
@@ -72,16 +75,17 @@ func (e *enforcer) guard(ctx context.Context, req *backend.WriteRequest) error {
 	if _, err := e.settleNearDuplicate(before); err != nil {
 		return err
 	}
+	lead := e.classify(ctx, req, appending)
 	d := drift{readable: req.Readable, dependents: dependents}
 	if e.options.Content.NearDuplicate == contentcheck.Off {
-		req.Precondition = chain(req.Precondition, e.policyOnly(req.Warnings, d))
+		req.Precondition = chain(req.Precondition, e.policyOnly(req.Warnings, lead, d))
 		return nil
 	}
 	warnings, subject := req.Warnings, subjectOf(*req)
 	req.Precondition = chain(req.Precondition, func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
 		notes, err := e.evaluate(ctx, state, write, d)
 		if warnings != nil {
-			*warnings = notes
+			*warnings = slices.Concat(lead, notes)
 		}
 		if err != nil {
 			return err
@@ -98,7 +102,7 @@ func (e *enforcer) guard(ctx context.Context, req *backend.WriteRequest) error {
 		}
 		near, err := e.settleNearDuplicate(verdict)
 		if warnings != nil {
-			*warnings = slices.Concat(notes, near)
+			*warnings = slices.Concat(lead, notes, near)
 		}
 		return err
 	})
@@ -115,18 +119,18 @@ func (e *enforcer) tolerate(verdict nearVerdict, err error) (nearVerdict, error)
 }
 
 // policyOnly is the precondition with the near-duplicate check off.
-func (e *enforcer) policyOnly(warnings *[]string, d drift) backend.Precondition {
+func (e *enforcer) policyOnly(warnings *[]string, lead []string, d drift) backend.Precondition {
 	return func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
 		notes, err := e.evaluate(ctx, state, write, d)
 		if warnings != nil {
-			*warnings = notes
+			*warnings = slices.Concat(lead, notes)
 		}
 		return err
 	}
 }
 
 func (e *enforcer) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
-	if err := e.guard(ctx, &req); err != nil {
+	if err := e.guard(ctx, &req, false); err != nil {
 		return nil, err
 	}
 	return e.Store.Publish(ctx, req)
@@ -135,7 +139,7 @@ func (e *enforcer) Publish(ctx context.Context, req backend.WriteRequest) (*stor
 // Append judges the fragment, not the merged body: the target's own text
 // is what the fragment would repeat elsewhere, never a duplicate of itself.
 func (e *enforcer) Append(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
-	if err := e.guard(ctx, &req); err != nil {
+	if err := e.guard(ctx, &req, true); err != nil {
 		return nil, err
 	}
 	return e.Store.Append(ctx, req)

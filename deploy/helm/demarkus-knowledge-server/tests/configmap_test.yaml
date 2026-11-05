@@ -28,7 +28,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["config.yaml"]
-          pattern: 'contentCheck:\n  pii: "block"\n  workDomains:\n    \[\]\n  nearDuplicate: "block"'
+          pattern: 'contentCheck:\n  pii: "block"\n  workDomains:\n    \[\]\n  nearDuplicate: "block"\n  injection: "warn"'
       - notMatchRegex:
           path: data["config.yaml"]
           pattern: 'floorWorld'
@@ -39,13 +39,14 @@ tests:
       server.contentCheck.pii: warn
       server.contentCheck.workDomains: ["Acme.Example"]
       server.contentCheck.nearDuplicate: warn
+      server.contentCheck.injection: block
     asserts:
       - matchRegex:
           path: data["config.yaml"]
           pattern: 'floorWorld: "team-a"'
       - matchRegex:
           path: data["config.yaml"]
-          pattern: 'contentCheck:\n  pii: "warn"\n  workDomains:\n    - "acme.example"\n  nearDuplicate: "warn"'
+          pattern: 'contentCheck:\n  pii: "warn"\n  workDomains:\n    - "acme.example"\n  nearDuplicate: "warn"\n  injection: "block"'
 
   - it: policyFloor overrides the hub
     set:
@@ -105,6 +106,31 @@ tests:
       - matchRegex:
           path: data["config.yaml"]
           pattern: 'name: "alice"[\s\S]*gated: true'
+
+  - it: restricts governance on a knowledge world, opens it on memory, honours an override
+    set:
+      broker.memory.publicURL: https://memory.example.com
+      worldDefaults.bucketPrefix: gs://deployment-
+      worlds:
+        - name: team-a
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f41
+        - name: alice
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f42
+          profile: memory
+          allow: {emails: [alice@example.com]}
+        - name: lab
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f43
+          governance: open
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "team-a"[\s\S]*?governance: "restricted"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "alice"[\s\S]*?governance: "open"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "lab"[\s\S]*?governance: "open"'
 
   - it: passes a world's checkpoint grace through, and omits it unset
     set:
@@ -180,3 +206,18 @@ tests:
           pattern: 'name: "team-b"[\s\S]*file:'
       - isNull:
           path: data["policy-team-b.md"]
+
+  - it: renders no classifier by default
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'classifier:'
+
+  - it: renders a configured classifier
+    set:
+      server.contentCheck.classifier.kind: anthropic
+      server.contentCheck.classifier.model: claude-haiku-5-5
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'classifier:\n    kind: "anthropic"\n    model: "claude-haiku-5-5"\n    timeout: "5s"\nworlds:'

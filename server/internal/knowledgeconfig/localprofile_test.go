@@ -16,6 +16,7 @@ worlds:
     dir: /var/lib/demarkus/soul
     policy:
       optional: true
+      governance: open
 `
 
 func TestParseLocalProfile(t *testing.T) {
@@ -24,7 +25,7 @@ func TestParseLocalProfile(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	world := config.Worlds[0]
-	if world.Authorities[0] != AnyAuthority || !world.Policy.Optional || config.Health.Address != "" || config.TLS.CertFile != "" {
+	if world.Authorities[0] != AnyAuthority || !world.Policy.Optional || world.Policy.Governance != GovernanceOpen || config.Health.Address != "" || config.TLS.CertFile != "" {
 		t.Errorf("local profile = authorities %v, optional %t, health %q, cert %q", world.Authorities, world.Policy.Optional, config.Health.Address, config.TLS.CertFile)
 	}
 	if defaults, err := Parse([]byte(validConfig)); err != nil || defaults.Worlds[0].Policy.Optional || defaults.Health.Address != ":8081" {
@@ -36,6 +37,10 @@ func TestParseLocalProfile(t *testing.T) {
 	built.SetDefaults()
 	if err := built.Validate(); err != nil {
 		t.Fatalf("LocalProfile does not validate: %v", err)
+	}
+	// The soul's token is its agent's own: governance stays open.
+	if built.Worlds[0].Policy.Governance != GovernanceOpen {
+		t.Errorf("LocalProfile governance = %q, want open", built.Worlds[0].Policy.Governance)
 	}
 	if built.Worlds[0].Limits.MaxConcurrentRequests != defaultMaxConcurrentRequests || built.Worlds[0].Limits.MaxWatches != defaultMaxWatches || built.Worlds[0].Policy.Path != defaultPolicyPath {
 		t.Errorf("LocalProfile defaults = %+v, policy %q", built.Worlds[0].Limits, built.Worlds[0].Policy.Path)

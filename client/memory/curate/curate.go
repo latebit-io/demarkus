@@ -221,7 +221,8 @@ func replaceOutsideCode(body string, from, to int, code *codeMask) (out []byte, 
 }
 
 // Lift moves the fence's keys into meta (a key the document already carries
-// wins; name is the title; reserved and identity keys never) and names them.
+// wins; name is the title; reserved, identity and server-stamped keys never)
+// and names them.
 func Lift(kv, meta map[string]string) []string {
 	var keys []string
 	for _, k := range slices.Sorted(maps.Keys(kv)) {
@@ -230,7 +231,7 @@ func Lift(kv, meta map[string]string) []string {
 		if k == "name" {
 			k = "title"
 		}
-		if _, taken := meta[k]; v == "" || taken || protocol.IsReservedMetadataKey(k) || protocol.IsIdentityMetadataKey(k) {
+		if _, taken := meta[k]; v == "" || taken || protocol.IsReservedMetadataKey(k) || protocol.IsIdentityMetadataKey(k) || protocol.IsServerStampedKey(k) {
 			continue
 		}
 		meta[k] = v
@@ -345,7 +346,7 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		w := topicWrite(in, title, carried, s)
 		p.Writes = append(p.Writes, w)
 		p.Fixed = append(p.Fixed, fmt.Sprintf("%q moved to %s (%d bytes)", s.heading.Text, s.topic, len(w.Body)))
-		p.policyGaps(s.topic, w.Metadata, in.Policy)
+		p.policyGaps(s.topic, w.Metadata, w.Body, in.Policy)
 		for _, h := range headings {
 			if h.Start >= s.heading.Start && h.Start < s.heading.End {
 				p.moved(h.Anchor, s.topic+"#"+h.Anchor)
@@ -358,18 +359,18 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	p.Writes = append(p.Writes, Write{Path: in.Path, Body: body, Metadata: meta})
 	p.Fixed = append(p.Fixed, fmt.Sprintf("%s becomes the hub (%d bytes)", in.Path, len(body)))
 	p.Kind = KindSplit
-	p.policyGaps(in.Path, meta, in.Policy)
+	p.policyGaps(in.Path, meta, body, in.Policy)
 	p.Unfixed = append(p.Unfixed, gate.AuditProblems(in.Path, body, meta["description"])...)
 }
 
 // policyGaps names what the write policy finds missing on a write, as the
 // server would judge it: warn lets it land with a note, block and ask refuse.
-func (p *Proposal) policyGaps(docPath string, meta map[string]string, policy *publishpolicy.Policy) {
+func (p *Proposal) policyGaps(docPath string, meta map[string]string, body string, policy *publishpolicy.Policy) {
 	verb, refuses := "warns on it: ", false
 	if policy != nil && policy.EffectiveStrictness() != publishpolicy.Warn {
 		verb, refuses = "refuses it: ", true
 	}
-	for _, m := range promote.Missing(docPath, meta, policy) {
+	for _, m := range promote.Missing(docPath, meta, body, policy) {
 		line := docPath + ": the write policy " + verb + m
 		p.Unfixed = append(p.Unfixed, line)
 		if refuses {

@@ -60,7 +60,7 @@ func TestStageReportsMarkersAndTheLayoutVerdict(t *testing.T) {
 	l := layout.Default()
 	s := promote.Stage(&promote.Input{Path: "/guidelines.md", Body: stampedDoc, Version: 4, Metadata: map[string]string{"type": "Guideline", "tags": "rules", "importance": "0.9"}}, &l)
 	report := s.Report()
-	for _, want := range []string{"status: promoted\npath: /guidelines.md\nversion: 4\n", "candidate: type Guideline, importance 0.9\n", "promoted-via: knowledge\npromoted: mark://team/guidelines.md@v2\nmode: full\n", "packet: " + s.Packet + "\n", "tags: rules\n", "\n\n# Guidelines\n"} {
+	for _, want := range []string{"status: promoted\npath: /guidelines.md\nversion: 4\n", "candidate: type Guideline, importance 0.9\n", "promoted-via: knowledge\npromoted: mark://team/guidelines.md@v2\nmode: full\n", "packet: " + s.Packet + "\n", "tags: rules\n", ">\n# Guidelines\n"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("report missing %q:\n%s", want, report)
 		}
@@ -152,7 +152,7 @@ func TestPlanRefreshByMode(t *testing.T) {
 	if p.Mode != promote.ModeFull || p.Body != "# Guidelines\n\npromoted-via: knowledge\npromoted: mark://team/guidelines.md@v3\n\nRules, revised.\n\n## Errors\n\nWrap them.\n" || p.Packet == "" {
 		t.Errorf("full plan = %+v", p)
 	}
-	if r := p.Report(); !strings.HasPrefix(r, "status: stale\npath: /g.md\nversion: 5\ntracked: v2\nlive: v3\nmode: full\npacket: "+p.Packet+"\n\n# Guidelines") {
+	if r := p.Report(); !strings.HasPrefix(r, "status: stale\npath: /g.md\nversion: 5\ntracked: v2\nlive: v3\nmode: full\npacket: "+p.Packet+"\n\n<doc-") {
 		t.Errorf("report:\n%s", r)
 	}
 	stub, _ := promote.PlanRefresh(&promote.Input{Path: "/g.md", Body: stubDoc, Version: 5}, &promote.Refresh{Live: live, LiveVersion: 3, Target: "mark://team/guidelines.md"})
@@ -205,8 +205,16 @@ func TestExamineAgainstThePolicy(t *testing.T) {
 		t.Errorf("missing = %q", got)
 	}
 	allowed := publishpolicy.Parse("strictness: block\nallow_tags.domain: a|b\n")
-	if got := promote.Missing("/x.md", map[string]string{"tags": "domain:c"}, &allowed); len(got) != 1 || !strings.HasPrefix(got[0], "disallowed tag domain:c (allowed domain values: ") {
+	if got := promote.Missing("/x.md", map[string]string{"tags": "domain:c"}, "", &allowed); len(got) != 1 || !strings.HasPrefix(got[0], "disallowed tag domain:c (allowed domain values: ") {
 		t.Errorf("disallowed = %q", got)
+	}
+	// The server judges body links against allow_domains; the dry run must too.
+	links := publishpolicy.Parse("strictness: block\nallow_domains: github.com\n")
+	if got := promote.Missing("/x.md", map[string]string{"tags": "a"}, "see https://evil.io/x\n", &links); len(got) != 1 || got[0] != "link to evil.io outside allow_domains (github.com)" {
+		t.Errorf("link = %q", got)
+	}
+	if r := (&promote.Check{Policy: &links}).Report(); !strings.Contains(r, "policy: strictness block; allow_domains github.com\n") {
+		t.Errorf("report policy line = %q", r)
 	}
 	if len(c.Problems) == 0 || c.Packet == "" {
 		t.Errorf("check = %+v", c)

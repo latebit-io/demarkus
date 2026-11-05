@@ -17,6 +17,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/metaguard"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 )
 
 // WriteFunc runs a WriteOp under the surface's authorization; see docwrite.
@@ -272,7 +273,7 @@ func formatResult(r *docwrite.Result, fields ...string) string {
 	fmt.Fprintf(&b, "publish-at-version: %d\n", c.PublishAtVersion)
 	fmt.Fprintf(&b, "has-markers: %t\n", c.HasMarkers)
 	b.WriteString("\n")
-	b.WriteString(c.Body)
+	b.WriteString(docframe.Frame(c.Body) + docframe.Flags(c.Body, nil))
 	return b.String()
 }
 

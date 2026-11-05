@@ -14,6 +14,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/protocol/hiddentext"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -278,7 +279,13 @@ func Refused(err error) *mcp.CallToolResult {
 // Result is the tool result for a shared body's answer.
 func Result(r marktools.Result) *mcp.CallToolResult {
 	if r.IsError {
-		return mcp.NewToolResultError(r.Text)
+		return mcp.NewToolResultError(hiddentext.Reveal(r.Text))
 	}
-	return mcp.NewToolResultText(r.Text)
+	return Text(r.Text)
+}
+
+// Text is a tool result whose hidden text is revealed: every model-facing
+// answer passes here, and stored versions may predate the write gate.
+func Text(text string) *mcp.CallToolResult {
+	return mcp.NewToolResultText(hiddentext.Reveal(text))
 }

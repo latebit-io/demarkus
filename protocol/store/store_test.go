@@ -2065,6 +2065,9 @@ func TestValidateDocumentContent(t *testing.T) {
 		{"png bytes smuggled into .md", "/sneaky.md", png, storefmt.ErrInvalidContent},
 		{"invalid utf8 in .md", "/doc.md", []byte{0xff, 0xfe}, storefmt.ErrInvalidContent},
 		{"path checked before content", "/img.png", png, storefmt.ErrInvalidPath},
+		{"terminal escape in .md", "/doc.md", []byte("# Doc\n\x1b]52;c;eA==\x07\n"), storefmt.ErrHiddenText},
+		{"tag smuggling in .md", "/doc.md", []byte("# Doc\n\U000E0049\U000E0047\n"), storefmt.ErrHiddenText},
+		{"crlf at .md", "/doc.md", []byte("# Doc\r\nbody\r\n"), nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

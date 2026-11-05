@@ -271,6 +271,7 @@ func cmdGate() {
 		fail(fmt.Sprintf("parse input: %v", err))
 		return
 	}
+	in.Post = *format == "claude-post"
 	d, err := gate.Evaluate(&in)
 	if err != nil {
 		fail(fmt.Sprintf("evaluate: %v", err))
@@ -285,7 +286,7 @@ func emitDecision(d gate.Decision, format string) {
 		printJSON(d) // json
 		return
 	}
-	if out, emit := h.Gate(phase, d.Decision, d.Reason); emit {
+	if out, emit := h.Gate(phase, d.Decision, d.Reason, d.UpdatedInput); emit {
 		printJSON(out)
 	}
 }

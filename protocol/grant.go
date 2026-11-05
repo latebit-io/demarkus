@@ -20,7 +20,18 @@ type Grant struct {
 	// Expires is when the credential behind the grant lapses: a WATCH
 	// served under it ends unauthorized then. Zero never lapses.
 	Expires time.Time
+	// Govern lets the grant write governance documents on a world that
+	// restricts them (storefmt.IsGovernancePath); Paths still bound it.
+	Govern bool
 }
+
+// GovernancePrefix holds the documents that steer every writer: publish
+// policy, layout, style guide, world descriptor.
+const GovernancePrefix = "/.well-known/demarkus/"
+
+// OpGovern is the token operation that writes governance documents on a
+// world that restricts them; publish does not imply it, nor it publish.
+const OpGovern = "govern"
 
 // Gate admits one request a bearer listener read: the grant to serve it
 // under, or a refusal (ErrNotPermitted, else unauthorized).

@@ -16,6 +16,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
@@ -132,6 +133,10 @@ func (t *Tools) promoteRefresh(ctx context.Context, target Target, args *Promote
 			return t.promoteRow(ctx, target)
 		}
 		return failure("refresh needs body: the live knowledge copy")
+	}
+	// Input, not the write: a stub derives from it, so docwrite never sees it.
+	if docframe.HasFrame(args.Body) {
+		return failure("refresh refused: %v", docwrite.ErrFramed)
 	}
 	liveTarget, liveVersion, err := promote.ParseTarget(args.Target)
 	if err != nil {
@@ -330,14 +335,14 @@ func (t *Tools) promoteDryRun(ctx context.Context, target Target, check *promote
 	if bad := t.similar(ctx, target, check); bad != nil {
 		return *bad
 	}
-	truncated := "[truncated]"
 	for i := range check.Candidates {
 		c := &check.Candidates[i]
 		if !c.Fetch {
 			continue
 		}
 		if c.Path == target.Path {
-			c.Version, c.Body = head.Version, clip(head.Body, candidateCap, truncated)
+			c.Version = head.Version
+			c.Body, c.Truncated = bound(head.Body, candidateCap)
 			continue
 		}
 		d, err := FetchBody(t.fetch(ctx, target, c.Path))
@@ -345,7 +350,8 @@ func (t *Tools) promoteDryRun(ctx context.Context, target Target, check *promote
 			check.Notes = append(check.Notes, fmt.Sprintf("%s not read: %v", c.Path, err))
 			continue
 		}
-		c.Version, c.Body = d.Version, clip(d.Body, candidateCap, truncated)
+		c.Version = d.Version
+		c.Body, c.Truncated = bound(d.Body, candidateCap)
 	}
 	return text("target: " + target.name() + "\n" + check.Report())
 }
@@ -477,12 +483,12 @@ func (t *Tools) promoteApply(ctx context.Context, target Target, doc *docwrite.D
 	return text(out + notes)
 }
 
-// callerMeta is the caller's metadata without identity keys: the surface
-// stamps agent and user, a caller cannot write under another name.
+// callerMeta is the caller's metadata without identity keys (the surface
+// stamps agent and user) or a server stamp.
 func callerMeta(raw map[string]string) map[string]string {
 	meta := make(map[string]string, len(raw))
 	for k, v := range raw {
-		if !protocol.IsIdentityMetadataKey(k) {
+		if !protocol.IsIdentityMetadataKey(k) && !protocol.IsServerStampedKey(k) {
 			meta[k] = v
 		}
 	}
