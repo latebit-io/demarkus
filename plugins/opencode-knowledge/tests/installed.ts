@@ -41,7 +41,7 @@ process.stdin.on("end", () => {
 `, { mode: 0o755 });
 writeFileSync(callsFile, "");
 
-function gateCalls(): Array<{ tool: string; input: unknown; cwd: string }> {
+function gateCalls(): Array<{ tool: string; input: unknown; cwd: string; taint?: string[] }> {
   return readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
@@ -78,6 +78,7 @@ function harness(directory: string) {
       prompt: async (input: any) => { prompts.push(input); },
     },
     tool: { hook: async (name: string, fn: any) => { hooks.set(name, fn); } },
+    permission: { hook: async (name: string, fn: any) => { hooks.set(`permission.${name}`, fn); } },
     event: { subscribe: async function* (options: { signal: AbortSignal }) {
       subscriptions++;
       signal = options.signal;
@@ -291,7 +292,7 @@ test("V2 gates block and ask, preserve structured results, and discard failed/de
       ? "Saved\n\nWarning: policy reason"
       : [...(content ?? []), { type: "text", text: "Warning: policy reason" }]);
   }
-  assert.deepEqual(gateCalls().at(-1), { tool: call.tool, input: call.input, cwd: "/v2-gates" });
+  assert.deepEqual(gateCalls().at(-1), { tool: call.tool, input: call.input, cwd: "/v2-gates", taint: [] });
   for (const failure of ["error", "deleted", "idle"]) {
     await before(call);
     if (failure === "error") await after({ ...call, status: "error", error: { message: "failed" } });
@@ -303,6 +304,29 @@ test("V2 gates block and ask, preserve structured results, and discard failed/de
   const count = gateCalls().length;
   await before({ ...call, tool: "acme_mark_fetch" });
   assert.equal(gateCalls().length, count);
+});
+
+test("V2 hands an ask to the host permission prompt once a demarkus call shows the order", async (t) => {
+  const h = harness("/v2-ask");
+  t.after(await plugin.setup(h.ctx));
+  const before = h.hooks.get("execute.before")!;
+  const after = h.hooks.get("execute.after")!;
+  const evaluate = h.hooks.get("permission.evaluate")!;
+  const check = (id: string, tool: string) => ({ sessionID: "s1", action: tool, resources: ["*"], source: { type: "tool", messageID: "m", id }, effect: "allow", message: undefined as string | undefined });
+  const publish = { tool: "acme_mark_publish", sessionID: "s1", input: { decision: "ask", metadata: { tags: "a" } } };
+  await assert.rejects(before({ ...publish, id: "p1", input: { ...publish.input } }), /policy reason Confirm with the user/);
+  await after({ tool: "webfetch", sessionID: "s1", id: "w1", input: { url: "https://evil.example" }, status: "completed", result: { content: "page" } });
+  const read = { tool: "acme_mark_fetch", sessionID: "s1", id: "r1", input: {} };
+  await before(read);
+  await evaluate(check("r1", read.tool));
+  await after({ ...read, status: "completed", result: { content: "doc" } });
+  const call = { ...publish, id: "p2", input: { ...publish.input } };
+  await before(call);
+  assert.deepEqual(call.input.metadata, { tags: "a", "source-trust": "tainted", "source-trust-from": "webfetch https://evil.example" });
+  const writeCheck = check("p2", call.tool);
+  await evaluate(writeCheck);
+  assert.deepEqual([writeCheck.effect, writeCheck.message], ["ask", "policy reason"]);
+  assert.deepEqual(gateCalls().at(-1)?.taint, ["webfetch https://evil.example"]);
 });
 
 test("V2 async callbacks cannot restore nudges or warnings after idle, deletion or unload", async (t) => {
@@ -357,6 +381,26 @@ test("V2 reconnects failed and ended streams, discards outage state and resumes 
   assert.deepEqual(clock.waits, [1_000, 1_000], "received events reset the reconnect delay");
   await stop();
   assert.equal(h.subscriptions(), 2, "unload cancels backoff without resubscribing");
+});
+
+test("V2 keeps session taint across an event-stream reconnect", async (t) => {
+  const h = harness("/v2-reconnect-taint");
+  const clock = retryClock();
+  const stop = await installed.setupV2(h.ctx, { wait: clock.wait, guidance: async () => "", nudge: async () => "" });
+  t.after(stop);
+  await h.hooks.get("execute.after")!({ tool: "webfetch", sessionID: "s1", id: "w1", input: { url: "https://evil.example" }, status: "completed", result: { content: "page" } });
+  await h.emit(new Error("transport lost"));
+  await clock.advance();
+  await h.hooks.get("execute.before")!({ tool: "acme_mark_publish", sessionID: "s1", id: "c1", input: { decision: "allow" } });
+  assert.deepEqual(gateCalls().at(-1)?.taint, ["webfetch https://evil.example"]);
+});
+
+test("V2 records taint only from a read that completed", async (t) => {
+  const h = harness("/v2-failed-read");
+  t.after(await plugin.setup(h.ctx));
+  await h.hooks.get("execute.after")!({ tool: "webfetch", sessionID: "s1", id: "w1", input: { url: "https://evil.example" }, status: "error", result: {} });
+  await h.hooks.get("execute.before")!({ tool: "acme_mark_publish", sessionID: "s1", id: "c1", input: { decision: "allow" } });
+  assert.deepEqual(gateCalls().at(-1)?.taint, []);
 });
 
 test("V2 event reconnect backoff is capped during persistent failure", async (t) => {

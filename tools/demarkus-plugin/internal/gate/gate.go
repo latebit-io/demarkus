@@ -5,17 +5,21 @@ package gate
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	docgate "github.com/latebit-io/demarkus/client/memory/gate"
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/taint"
 )
 
 // Input accepts native {tool,input,cwd}, Claude, and Cursor hook payloads.
@@ -31,6 +35,13 @@ type Input struct {
 	// workspace_roots instead of cwd.
 	McpServerName  string   `json:"mcp_server_name"`
 	WorkspaceRoots []string `json:"workspace_roots"`
+	// TranscriptPath is Claude's session JSONL, scanned for untrusted reads.
+	TranscriptPath string `json:"transcript_path"`
+	// Taint lists untrusted reads an adapter that sees every tool tracked
+	// itself (OpenCode, pi).
+	Taint []string `json:"taint"`
+	// Post: a post-call hook, which shows only a warn.
+	Post bool `json:"-"`
 }
 
 // Decision is the gate verdict. Reason is plain; adapters add any presentation
@@ -38,6 +49,9 @@ type Input struct {
 type Decision struct {
 	Decision string `json:"decision"` // allow | warn | block | ask
 	Reason   string `json:"reason,omitempty"`
+	// UpdatedInput is the tool input with the taint stamp, for a host hook
+	// that can rewrite a call it asks about; never on the native wire.
+	UpdatedInput map[string]any `json:"-"`
 }
 
 func allow() Decision { return Decision{Decision: "allow"} }
@@ -129,7 +143,7 @@ var contentScanner = contentcheck.New(contentcheck.Options{PII: contentcheck.War
 
 // contentDecision scans a publish or append body before it leaves. A secret
 // blocks with the fix (an ask has no answerer in a headless run); personal
-// data warns. No knob: a secret is never a preference; the server judges too.
+// data and text addressed to an agent warn. No knob: the server judges too.
 func contentDecision(pt config.ParsedTool, args map[string]any) *Decision {
 	if pt.Verb != "publish" && pt.Verb != "append" {
 		return nil
@@ -145,7 +159,51 @@ func contentDecision(pt config.ParsedTool, args map[string]any) *Decision {
 			"demarkus %s to %s carries a secret: %s. Fix: %s.", pt.Verb, target, contentcheck.Summary(findings), contentcheck.Remedy(findings))}
 	}
 	return &Decision{Decision: "warn", Reason: fmt.Sprintf(
-		"demarkus %s to %s carries personal data: %s. Fix: %s.", pt.Verb, target, contentcheck.Summary(findings), contentcheck.Remedy(findings))}
+		"demarkus %s to %s carries %s: %s. Fix: %s.", pt.Verb, target, contentcheck.Describe(findings), contentcheck.Summary(findings), contentcheck.Remedy(findings))}
+}
+
+// taintDecision escalates a write after an untrusted read, where a planted
+// instruction would act; an unreadable transcript asks. No scan when the
+// verdict cannot show: a block stands, or a post hook drops an ask.
+func taintDecision(pt config.ParsedTool, args map[string]any, in *Input, d Decision) (*Decision, []string, error) {
+	if !mcpfmt.StoreWriteTools["mark_"+pt.Verb] || d.Decision == "block" {
+		return nil, nil, nil
+	}
+	s, err := config.TaintStrictness()
+	if err != nil || s == config.Off || (in.Post && s != config.Warn) {
+		return nil, nil, err
+	}
+	var found []string
+	if in.TranscriptPath != "" {
+		if found, err = taint.Transcript(in.TranscriptPath); err != nil {
+			return &Decision{Decision: string(config.Ask), Reason: fmt.Sprintf(
+				"demarkus %s: the session transcript could not be read (%v), so untrusted reads are unknown; approve only a write you reviewed.", pt.Verb, err)}, []string{"unreadable transcript"}, nil
+		}
+	}
+	sources := taint.Merge(in.Taint, found)
+	if len(sources) == 0 {
+		return nil, nil, nil
+	}
+	return &Decision{Decision: string(s), Reason: fmt.Sprintf(
+		"demarkus %s to %s after this session read untrusted content (%s): text planted there may be steering this write. Approve only if you reviewed what it writes; to relax this check, set DEMARKUS_TAINT_STRICTNESS=warn (or off).",
+		pt.Verb, urlOr(args, "the store"), strings.Join(sources, "; "))}, sources, nil
+}
+
+// stamped is a publish's input with the taint label in its metadata; other
+// verbs carry no metadata, so nil (an append inherits a stamped base).
+func stamped(pt config.ParsedTool, input map[string]any, sources []string) map[string]any {
+	if pt.Verb != "publish" || input == nil {
+		return nil
+	}
+	meta := maps.Clone(metadataOf(input))
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	meta[protocol.TaintKey] = protocol.TaintValue
+	meta[protocol.TaintFromKey] = strings.Join(sources, "; ")
+	out := maps.Clone(input)
+	out["metadata"] = meta
+	return out
 }
 
 // Evaluate applies the right gate(s) for the tool's target and returns the
@@ -164,29 +222,45 @@ func Evaluate(in *Input) (Decision, error) {
 		return allow(), nil
 	}
 
+	d, ours, err := route(pt, tool, args, in)
+	if err != nil || !ours {
+		return d, err
+	}
+	t, sources, err := taintDecision(pt, args, in, d)
+	if err != nil || t == nil {
+		return d, err
+	}
+	combined := combine([]Decision{d, *t})
+	// The proxy shape (tool "mcp") wraps its args; only a direct call is rewritten.
+	if combined.Decision == "ask" && tool == in.Tool {
+		combined.UpdatedInput = stamped(pt, in.Input, sources)
+	}
+	return combined, nil
+}
+
+// route runs the target's own guards; ours is false (allow) for a server the
+// gate does not hold.
+func route(pt config.ParsedTool, tool string, args map[string]any, in *Input) (d Decision, ours bool, err error) {
 	memoryID, err := config.MemoryTargetID(tool)
 	if err != nil {
-		return Decision{}, err
+		return Decision{}, false, err
 	}
 	if memoryID != "" {
 		cwd, ambiguous := in.Cwd, ""
 		if cwd == "" {
 			if cwd, ambiguous, err = projectDir(in.WorkspaceRoots); err != nil {
-				return Decision{}, err
+				return Decision{}, false, err
 			}
 		}
-		return evalMemory(pt, args, cwd, memoryID, ambiguous)
+		d, err = evalMemory(pt, args, cwd, memoryID, ambiguous)
+		return d, true, err
 	}
-
 	ksSlug, err := config.KnowledgeScope(tool)
-	if err != nil {
-		return Decision{}, err
+	if err != nil || ksSlug == "" {
+		return allow(), false, err // unrelated server — not ours to gate
 	}
-	if ksSlug != "" {
-		return evalKnowledge(pt, args, ksSlug)
-	}
-
-	return allow(), nil // unrelated server — not ours to gate
+	d, err = evalKnowledge(pt, args, ksSlug)
+	return d, true, err
 }
 
 // projectDir resolves the binding-check project when the payload has no cwd.

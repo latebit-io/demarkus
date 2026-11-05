@@ -36,7 +36,7 @@ type Host struct {
 	noStatus bool
 	nudge    func(event, text string) any
 	guidance func(text, status string) any
-	gate     func(phase, decision, reason string) (any, bool)
+	gate     func(phase, decision, reason string, updated map[string]any) (any, bool)
 }
 
 // The harnesses. Claude Code and Cursor run bash hooks and read a per-hook
@@ -140,9 +140,10 @@ func (h Host) Guidance(text, status string) any { return h.guidance(text, status
 // ShowsStatus reports whether the user sees the status line at session start.
 func (h Host) ShowsStatus() bool { return !h.noStatus }
 
-// Gate wraps a gate decision for phase; emit is false when this hook says nothing.
-func (h Host) Gate(phase, decision, reason string) (out any, emit bool) {
-	return h.gate(phase, decision, reason)
+// Gate wraps a gate decision for phase; emit is false when this hook says
+// nothing. updated, when set, replaces the tool input on a host that can.
+func (h Host) Gate(phase, decision, reason string, updated map[string]any) (out any, emit bool) {
+	return h.gate(phase, decision, reason, updated)
 }
 
 // hookOutput is Claude Code's envelope for hook output fields.
@@ -180,20 +181,24 @@ func cursorNudge(event, text string) any {
 }
 
 // claudeGate: block and ask are enforced before the call; warn is deferred to
-// PostToolUse as context.
-func claudeGate(phase, decision, reason string) (any, bool) {
+// PostToolUse as context. An ask may rewrite the input (the taint stamp): the
+// user approves the call as stamped, never an allow that skips the prompt.
+func claudeGate(phase, decision, reason string, updated map[string]any) (any, bool) {
 	switch phase {
 	case gatePre:
-		var pd string
+		fields := map[string]any{"permissionDecisionReason": reason}
 		switch decision {
 		case "block":
-			pd = "deny"
+			fields["permissionDecision"] = "deny"
 		case "ask":
-			pd = "ask"
+			fields["permissionDecision"] = "ask"
+			if updated != nil {
+				fields["updatedInput"] = updated
+			}
 		default:
 			return nil, false // allow/warn → no Pre output
 		}
-		return hookOutput("PreToolUse", map[string]any{"permissionDecision": pd, "permissionDecisionReason": reason}), true
+		return hookOutput("PreToolUse", fields), true
 	default:
 		if decision != "warn" {
 			return nil, false // block/ask already handled Pre; allow → nothing
@@ -203,7 +208,7 @@ func claudeGate(phase, decision, reason string) (any, bool) {
 }
 
 // cursorGate: one pre-call hook carries every verdict; warn is advice on an allow.
-func cursorGate(_, decision, reason string) (any, bool) {
+func cursorGate(_, decision, reason string, _ map[string]any) (any, bool) {
 	switch decision {
 	case "block":
 		return map[string]any{"permission": "deny", "user_message": reason, "agent_message": reason}, true

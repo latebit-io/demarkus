@@ -257,3 +257,25 @@ func TestReprovisionedWorldIsSeededAgain(t *testing.T) {
 		t.Errorf("publishes = %d, want the new world seeded too (%d)", got, 2*seededOnce)
 	}
 }
+
+// The seed writes under the broker's own grant: govern for the policy and
+// template, scoped to exactly the seeded paths, never the tenant's grant.
+func TestEnsureMemorySeedWritesUnderTheBrokerGovernGrant(t *testing.T) {
+	d := policyDispatcher(map[string]string{"version": "1", "agent": publishpolicy.SeedAgent})
+	var grants []protocol.Grant
+	d.PublishFn = func(ctx context.Context, _ fetch.WriteRequest) (fetch.Result, error) {
+		grant, _ := protocol.GrantFrom(ctx)
+		grants = append(grants, grant)
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated}}, nil
+	}
+	g := newMemoryGateway(t, brokertest.NewMemoryConfig(), d)
+	g.ensureMemorySeed(withAliceClaims(context.Background()), &g.deps.Worlds.All()[0])
+	if len(grants) != 3 {
+		t.Fatalf("seed publishes = %d, want 3", len(grants))
+	}
+	for _, grant := range grants {
+		if !grant.Govern || grant.Label != "demarkus-memory-broker" || strings.Join(grant.Paths, ",") != "/.well-known/demarkus/policy.md,/.well-known/demarkus/template.md,/index.md" {
+			t.Errorf("seed grant = %+v", grant)
+		}
+	}
+}

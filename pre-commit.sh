@@ -48,5 +48,5 @@ echo "✓ All checks passed"
 # protocol packages are left out; the eval mocks the server they back.
 eval_paths=(plugins/claude-code plugins/prompt-source tools/demarkus-plugin)
 if [ -n "$(git diff --name-only "$(git merge-base main HEAD)" -- "${eval_paths[@]}")$(git ls-files -o --exclude-standard -- "${eval_paths[@]}")" ]; then
-  echo "Plugin changed: run make plugin-eval (paid, about \$1)"
+  echo "Plugin changed: run make plugin-eval (paid, about \$3)"
 fi

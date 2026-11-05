@@ -7,5 +7,7 @@ worlds:
         worldID: 6bb48b98-9eed-46cb-882e-f76461c4b63f
       limits:
         maxDocuments: 500
+      policy:
+        governance: open
       gated: true
       bootstrap: true

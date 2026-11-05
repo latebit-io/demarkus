@@ -458,6 +458,12 @@ type fragmentLimits struct {
 	MaxDocuments int `yaml:"maxDocuments"`
 }
 
+// fragmentPolicy opens governance on a tenant: its owner curates their own
+// layout and policy, as on a local soul.
+type fragmentPolicy struct {
+	Governance string `yaml:"governance"`
+}
+
 // worldsFragmentDoc is the fragment's on-disk document shape.
 type worldsFragmentDoc struct {
 	Worlds []fragmentWorld `yaml:"worlds"`
@@ -471,6 +477,7 @@ type fragmentWorld struct {
 		WorldID string `yaml:"worldID"`
 	} `yaml:"bucket"`
 	Limits *fragmentLimits `yaml:"limits,omitempty"`
+	Policy *fragmentPolicy `yaml:"policy,omitempty"`
 	// Gated keeps the tenant off the capability listener: its reads are the
 	// owner's through the bearer gate, never anonymous.
 	Gated     bool `yaml:"gated"`
@@ -501,6 +508,7 @@ func (p *Provisioner) renderWorldsFragmentUnion(registry *tenantRegistry, existi
 		world := fragmentWorld{
 			Name:        slug,
 			Authorities: []string{slug + "." + p.cfg.Provisioning.AuthorityDomain},
+			Policy:      &fragmentPolicy{Governance: "open"},
 			Gated:       true,
 			Bootstrap:   true,
 		}

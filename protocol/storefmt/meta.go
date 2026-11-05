@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/hiddentext"
 )
 
 // MaxStoreFrontmatter bounds the frontmatter a version file carries: the
@@ -106,12 +107,25 @@ func ApplyOKFTypeDefault(reqPath string, meta map[string]string) map[string]stri
 }
 
 // ValidateDocumentContent enforces the document contract for PUBLISH/APPEND: a
-// .md path with a UTF-8 body. Callers map the errors to bad-request.
+// .md path with a UTF-8 body free of hidden text. Callers map the errors to
+// bad-request. Only request bytes: stored versions predating the rule still read.
 func ValidateDocumentContent(reqPath string, content []byte) error {
+	return ValidateDocumentText(reqPath, string(content))
+}
+
+// ValidateDocumentText is ValidateDocumentContent for a body held as a
+// string, so a request body is checked without a copy.
+func ValidateDocumentText(reqPath, body string) error {
 	if !strings.HasSuffix(reqPath, ".md") {
 		return ErrInvalidPath
 	}
-	return ValidateBody(content)
+	if !utf8.ValidString(body) {
+		return ErrInvalidContent
+	}
+	if hits := hiddentext.Find(body); len(hits) > 0 {
+		return fmt.Errorf("%w: %s; remove them and re-publish", ErrHiddenText, hiddentext.Summary(hits))
+	}
+	return nil
 }
 
 // ValidateBody checks a body is UTF-8 text. Each backend's Write calls it as

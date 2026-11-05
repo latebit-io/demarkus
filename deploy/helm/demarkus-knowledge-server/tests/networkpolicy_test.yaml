@@ -176,3 +176,25 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: admits egress to an in-cluster classifier
+    set:
+      networkPolicy.classifierEgress:
+        - to:
+            - podSelector:
+                matchLabels:
+                  app: prompt-guard
+          ports:
+            - protocol: TCP
+              port: 8080
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app: prompt-guard
+            ports:
+              - protocol: TCP
+                port: 8080

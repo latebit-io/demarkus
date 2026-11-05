@@ -42,6 +42,9 @@ type Config struct {
 	OptionalTokensFiles bool
 	DisableTokenWatch   bool
 	ReadOnly            bool
+	// RestrictGovernance requires the govern operation or grant to write
+	// governance documents (handler.Config.RestrictGovernance).
+	RestrictGovernance bool
 	// RequireGate refuses every network stream that reaches the world
 	// without a connection gate; in-process requests (Exchanger) are the
 	// caller's to authorize.
@@ -150,11 +153,12 @@ func New(config *Config) (*Runtime, error) {
 		}
 	}
 	runtime.handler, err = handler.New(handler.Config{
-		Store:         config.Store,
-		GetTokenStore: tokens.Current,
-		Logger:        logger,
-		ReadOnly:      config.ReadOnly,
-		Watches:       runtime.watches,
+		Store:              config.Store,
+		GetTokenStore:      tokens.Current,
+		Logger:             logger,
+		ReadOnly:           config.ReadOnly,
+		Watches:            runtime.watches,
+		RestrictGovernance: config.RestrictGovernance,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("world runtime: %w", err)

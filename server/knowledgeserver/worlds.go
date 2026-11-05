@@ -73,6 +73,9 @@ type worldManager struct {
 	// resilient marks dynamic deployments (worldsFile set): a failed
 	// world open degrades to pending instead of failing the process.
 	resilient bool
+	// classify stamps written bodies with the classifier's verdict; nil
+	// when no classifier is configured. One stamper serves every world.
+	classify func(ctx context.Context, path, body string) string
 	// reloadMu orders load-then-apply, so a file reload racing a push can
 	// never apply a pre-push world set after it; the push state lives under it.
 	reloadMu sync.Mutex
@@ -112,6 +115,7 @@ type worldManagerConfig struct {
 	// peers carries commit hints to and from the other replicas.
 	peers  *peerLinks
 	logger *slog.Logger
+	judges JudgeFactory
 }
 
 // newWorldManager opens the initial world set. In static mode (no
@@ -137,9 +141,15 @@ func newWorldManager(watchCtx context.Context, group *sync.WaitGroup, cfg worldM
 		content: writepolicy.ContentOptions{Options: contentcheck.Options{
 			PII:         config.ContentCheck.PII,
 			WorkDomains: config.ContentCheck.WorkDomains,
+			Steering:    config.ContentCheck.Injection,
 		}, NearDuplicate: config.ContentCheck.NearDuplicate},
 		policyStores: make(map[string]worldstore.Store),
 	}
+	classify, err := newClassify(config.ContentCheck.Classifier, cfg.judges, m.logger)
+	if err != nil {
+		return nil, err
+	}
+	m.classify = classify
 	router, err := snirouter.NewDynamic(nil)
 	if err != nil {
 		return nil, err
@@ -356,6 +366,7 @@ func (m *worldManager) serve(
 		OptionalTokensFiles: true,
 		DisableTokenWatch:   true, // the coordinator owns reloads
 		ReadOnly:            world.ReadOnly,
+		RestrictGovernance:  world.Policy.Governance != knowledgeconfig.GovernanceOpen,
 		RequireGate:         world.Gated,
 		RequestTimeout:      time.Duration(world.Limits.RequestTimeout),
 		MaxConcurrent:       world.Limits.MaxConcurrentRequests,

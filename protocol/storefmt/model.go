@@ -82,6 +82,11 @@ var ErrInvalidPath = fmt.Errorf("publish path must end in .md")
 // Markdown is UTF-8 text; binary content is not a markdown document (SPEC 2.3, 4.4).
 var ErrInvalidContent = fmt.Errorf("document body must be valid UTF-8 text")
 
+// ErrHiddenText is returned when a written body carries text a reader cannot
+// see but a terminal or model acts on: controls, bidi overrides, tag or
+// invisible runs (SPEC 2.3).
+var ErrHiddenText = fmt.Errorf("document body carries hidden characters")
+
 // ErrInvalidMeta is returned when publisher metadata breaks the key, value,
 // count, or size rules. Writes surface it past a caller's pre-check, since
 // APPEND's merge (SPEC 6.6) can breach caps both sides satisfied alone.

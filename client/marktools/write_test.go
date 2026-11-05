@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 )
 
 // writingHooks is a direct client with a write token, a named agent and a
@@ -43,7 +44,7 @@ func TestPublishSendsTheWriteWithIdentity(t *testing.T) {
 	tools := newTools(t, backend, writingHooks())
 	got := tools.Publish(t.Context(), marktools.PublishArgs{
 		URL: "/doc.md", Body: "# Doc\n", ExpectedVersion: new(0), OnConflict: "fail",
-		Metadata: map[string]string{"tags": "a,b", "importance": "0.5", "agent": "someone-else", "user": "mallory@example.com"},
+		Metadata: map[string]string{"tags": "a,b", "importance": "0.5", "agent": "someone-else", "user": "mallory@example.com", "classifier": "benign"},
 	})
 	want := mcpfmt.Full(fetch.Result{Response: protocol.Response{Status: "created v1", Metadata: map[string]string{"version": "1", "etag": "etag-v1"}}}, "version", "modified", "server-version")
 	if got.IsError || got.Text != want {
@@ -56,7 +57,8 @@ func TestPublishSendsTheWriteWithIdentity(t *testing.T) {
 	if sent.Host != "host:6309" || sent.Path != "/doc.md" || sent.Token != "write-token" || sent.Body != "# Doc\n" || sent.ExpectedVersion != 0 {
 		t.Errorf("sent = %+v", sent)
 	}
-	// Identity is the surface's to set: a caller cannot write under another name.
+	// Identity is the surface's to set: a caller cannot write under another
+	// name, nor send the server's classifier verdict.
 	if fmt.Sprint(sent.Metadata) != "map[agent:test-agent importance:0.5 tags:a,b user:alice@example.com]" {
 		t.Errorf("metadata = %v", sent.Metadata)
 	}
@@ -116,7 +118,7 @@ func TestPublishConflictOffersAMergeCandidate(t *testing.T) {
 	}
 	tools := newTools(t, backend, writingHooks())
 	got := tools.Publish(t.Context(), marktools.PublishArgs{URL: "/doc.md", Body: "a\nB\nc\n", ExpectedVersion: new(5)})
-	want := "status: merge-candidate\nyour-version: 5\ncurrent-version: 6\npublish-at-version: 6\nhas-markers: false\n\na\nB\nC\n"
+	want := "status: merge-candidate\nyour-version: 5\ncurrent-version: 6\npublish-at-version: 6\nhas-markers: false\n\n" + docframe.Frame("a\nB\nC\n")
 	if got.IsError || got.Text != want {
 		t.Errorf("merge candidate = %q\nwant %q", got.Text, want)
 	}

@@ -3,6 +3,7 @@ package publishpolicy
 import (
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -44,10 +45,17 @@ type Policy struct {
 	// directives skip: generated output, configuration. Merge never carries
 	// it, so a world's exemption never lifts a floor rule; see Effective.
 	Exempt []string
+	// AllowDomains lists the hosts body links may point to, a subdomain
+	// counting as its domain: `allow_domains: a.com|b.org`. Nil leaves links
+	// unchecked; empty (a disjoint merge) allows none, and Validate refuses it.
+	AllowDomains []string
 }
 
 // allowTagsPrefix starts the per-axis allowed-values directive key.
 const allowTagsPrefix = "allow_tags."
+
+// allowDomainsKey is the link-host allowlist directive key.
+const allowDomainsKey = "allow_domains"
 
 // Parse extracts the first occurrence of each supported policy directive.
 func Parse(body string) Policy {
@@ -58,7 +66,21 @@ func Parse(body string) Policy {
 		RequiredFields:   splitList(found["require_fields"]),
 		AllowedTagValues: allowedValues(found),
 		Exempt:           splitList(found["exempt"]),
+		AllowDomains:     allowedDomains(found),
 	}
+}
+
+// allowedDomains reads allow_domains lowercased; a present but blank line
+// is an empty, non-nil list, so Validate can refuse it.
+func allowedDomains(found map[string]string) []string {
+	raw, ok := found[allowDomainsKey]
+	if !ok {
+		return nil
+	}
+	if d := splitOn(strings.ToLower(raw), '|'); d != nil {
+		return d
+	}
+	return []string{}
 }
 
 // allowedValues collects every `allow_tags.<axis>` directive. A blank list
@@ -92,6 +114,31 @@ func splitOn(value string, sep rune) []string {
 	return fields
 }
 
+// AllowedDomainList words allow_domains as the directive writes it.
+func (p Policy) AllowedDomainList() string { return strings.Join(p.AllowDomains, "|") }
+
+var hostName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$`)
+
+// validateDomains holds allow_domains to bare host names; a set list that
+// allows nothing would refuse every link, so it is refused instead.
+func validateDomains(domains []string) error {
+	if domains == nil {
+		return nil
+	}
+	if len(domains) == 0 {
+		return fmt.Errorf("%s allows no domains", allowDomainsKey)
+	}
+	if len(domains) > maxAllowedValues {
+		return fmt.Errorf("%s has too many domains: %d > %d", allowDomainsKey, len(domains), maxAllowedValues)
+	}
+	for _, d := range domains {
+		if !hostName.MatchString(d) {
+			return fmt.Errorf("%s entry %q is not a host name (no scheme, port, path or wildcard)", allowDomainsKey, d)
+		}
+	}
+	return nil
+}
+
 // AllowedList words an axis's allowed values as the directive writes them.
 func (p Policy) AllowedList(axis string) string {
 	return strings.Join(p.AllowedTagValues[axis], "|")
@@ -112,6 +159,9 @@ func (p Policy) Validate() error {
 		return err
 	}
 	if err := validateExempt(p.Exempt); err != nil {
+		return err
+	}
+	if err := validateDomains(p.AllowDomains); err != nil {
 		return err
 	}
 	return validateSatisfiable(p)
@@ -266,7 +316,7 @@ func validateFields(fields []string) error {
 	}
 	seen := make(map[string]bool, len(fields))
 	for _, field := range fields {
-		if !validFieldName(field) || unavailableFields[field] {
+		if !validFieldName(field) || unavailableFields[field] || protocol.IsServerStampedKey(field) {
 			return fmt.Errorf("invalid required metadata field %q", field)
 		}
 		if seen[field] {

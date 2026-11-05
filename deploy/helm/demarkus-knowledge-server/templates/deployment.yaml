@@ -58,7 +58,8 @@ spec:
             {{- range $env := list
                   (dict "name" "OIDC_CLIENT_SECRET" "ref" .Values.broker.oidc.existingSecretRef)
                   (dict "name" "BROKER_SIGNING_KEY" "ref" .Values.broker.oidc.existingSigningKeyRef)
-                  (dict "name" "BROKER_COOKIE_KEY" "ref" .Values.broker.existingCookieKeyRef) }}
+                  (dict "name" "BROKER_COOKIE_KEY" "ref" .Values.broker.existingCookieKeyRef)
+                  (dict "name" "ANTHROPIC_API_KEY" "ref" .Values.server.contentCheck.classifier.existingSecretRef) }}
             {{- with $env.ref.name }}
             - name: {{ $env.name }}
               valueFrom:

@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/render"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -171,7 +172,7 @@ func TestHandleMarkFetchHappyPath(t *testing.T) {
 	}
 	text := toolResultText(t, res)
 	// Every metadata key on a plain call: there is no lean fetch.
-	if want := "status: ok\nversion: 3\nmodified: 2026-05-21T10:00:00Z\netag: abc123\ncontent-hash: sha256-deadbeef\n\n# hello\n"; text != want {
+	if want := "status: ok\nversion: 3\nmodified: 2026-05-21T10:00:00Z\netag: abc123\ncontent-hash: sha256-deadbeef\n\n" + docframe.Frame("# hello\n"); text != want {
 		t.Errorf("response = %q, want %q", text, want)
 	}
 	// Dispatcher must have seen the worldName + path resolved
@@ -479,7 +480,7 @@ func TestMCPGatewayMarkFetchEndToEnd(t *testing.T) {
 	}
 	first, _ := contents[0].(map[string]any)
 	text, _ := first["text"].(string)
-	for _, want := range []string{"status: ok\nversion: 1\nmodified: 2026-05-21T10:00:00Z\netag: abc\ncontent-hash: sha256-deadbeef\n\nbody via gateway"} {
+	for _, want := range []string{"status: ok\nversion: 1\nmodified: 2026-05-21T10:00:00Z\netag: abc\ncontent-hash: sha256-deadbeef\n\n" + docframe.Frame("body via gateway")} {
 		if !strings.Contains(text, want) {
 			t.Errorf("end-to-end text missing %q\nfull:\n%s", want, text)
 		}

@@ -318,3 +318,24 @@ tests:
           path: spec.template.spec.volumes[6]
       - notExists:
           path: spec.volumeClaimTemplates
+
+  - it: reads the classifier API key from its Secret
+    template: deployment.yaml
+    set:
+      server.contentCheck.classifier.kind: anthropic
+      server.contentCheck.classifier.existingSecretRef.name: anthropic-key
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ANTHROPIC_API_KEY
+            valueFrom: {secretKeyRef: {name: anthropic-key, key: api-key}}
+
+  - it: sets no classifier key by default
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ANTHROPIC_API_KEY
+          any: true

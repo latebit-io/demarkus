@@ -81,4 +81,4 @@ Branding remains governed by [the brand generator](../brands/README.md). OpenCod
 | `commands/*.md` | V2 command transform; V1 `config.command` |
 | skill | V2 skill transform, reading the generated `SKILL.md` |
 
-`ask` strictness maps to a block whose reason tells the agent to confirm with the user first (`tool.execute.before` has no native "ask").
+On OpenCode 2, an `ask` verdict becomes OpenCode's own permission prompt for that call; an approved `mark_publish` after an untrusted read carries `source-trust: tainted`. On OpenCode 1, and until a demarkus call shows the permission check arriving after `tool.execute.before`, `ask` is a block whose reason tells the agent to confirm with the user first.

@@ -17,6 +17,7 @@ contentCheck:
   workDomains:
     []
   nearDuplicate: "block"
+  injection: "warn"
 worlds:
   - name: "team-a"
     authorities:
@@ -30,6 +31,7 @@ worlds:
       staticTokensFile: "/run/demarkus/worlds/team-a/static-tokens.toml"
     policy:
       path: /.well-known/demarkus/policy.md
+      governance: "restricted"
     readOnly: false
     gated: false
     limits:
@@ -48,6 +50,7 @@ worlds:
       staticTokensFile: "/run/demarkus/worlds/team-b/static-tokens.toml"
     policy:
       path: /.well-known/demarkus/policy.md
+      governance: "restricted"
     readOnly: true
     gated: false
     limits:

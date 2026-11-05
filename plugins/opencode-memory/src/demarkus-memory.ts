@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "@opencode/plugin";
 import { assertPackageInstall, loadCommand as readCommand, loadCommands, registerPrompts } from "./package.ts";
+import { HostAsks, unpromptedWarning } from "./host-ask.ts";
+import { isGatedWrite, recordTaint, taintStamp } from "./taint.ts";
 
 const BIN = join(homedir(), ".demarkus", "bin", "demarkus-plugin");
 const ASSETS = fileURLToPath(new URL("../", import.meta.url));
@@ -70,11 +72,12 @@ function runBin<T>(args: string[], payload?: unknown, allowEmpty = false, bin = 
   });
 }
 
-// callGate asks `demarkus-plugin gate` to decide a mark_publish/mark_append call.
+// callGate asks `demarkus-plugin gate` to decide a demarkus write; taint names the
+// session's untrusted reads.
 // Fails closed: only a missing helper allows; crash, timeout or bad output blocks.
-export async function callGate(toolName: string, input: Record<string, unknown>, cwd: string, bin = BIN): Promise<GateDecision> {
+export async function callGate(toolName: string, input: Record<string, unknown>, cwd: string, taint: string[] = [], bin = BIN): Promise<GateDecision> {
   if (!existsSync(bin)) return { decision: "allow" };
-  const d = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd }, false, bin);
+  const d = await runBin<GateDecision>(["gate"], { tool: toolName, input, cwd, taint }, false, bin);
   if (d && typeof d.decision === "string") return d;
   return { decision: "block", reason: `[demarkus-memory] gate failed (crash, timeout or bad output); write blocked. Retry, or reinstall ${bin}` };
 }
@@ -134,6 +137,8 @@ interface SessionState {
   idleNudged: boolean;
   changedFiles: boolean;
   journalWrite: boolean;
+  // Untrusted reads so far; a later demarkus write asks first.
+  taint: string[];
 }
 
 // run executes a provisioning step; resolves "" on success, a warning on failure.
@@ -197,7 +202,7 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
   const state = (id: string): SessionState => {
     let s = sessions.get(id);
     if (!s) {
-      s = { guidanceDelivered: false, idleNudged: false, changedFiles: false, journalWrite: false };
+      s = { guidanceDelivered: false, idleNudged: false, changedFiles: false, journalWrite: false, taint: [] };
       sessions.set(id, s);
     }
     return s;
@@ -318,15 +323,15 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
     },
 
     // Gate memory writes before execution. block → throw (OpenCode cancels the
-    // call and shows the reason). ask → no native ask here, so block with a
-    // reason that routes through the user. allow/warn is stashed for the
+    // call and shows the reason). ask → V1 hooks have no ask channel, so block
+    // with a reason that routes through the user. warn is stashed for the
     // after-hook so the gate runs once per write.
     "tool.execute.before": async (
       input: { tool: string; sessionID?: string; callID?: string },
       output: { args: Record<string, unknown> },
     ) => {
-      if (!isMemoryWrite(input.tool) || !adapters.has("memory")) return;
-      const decision = await callGate(input.tool, output.args ?? {}, directory);
+      if (!isGatedWrite(input.tool) || !adapters.has("memory")) return;
+      const decision = await callGate(input.tool, output.args ?? {}, directory, state(input.sessionID ?? "default").taint);
       if (decision.decision === "block") {
         throw new Error(decision.reason ?? "demarkus-memory gate blocked this write");
       }
@@ -349,14 +354,15 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
     ) => {
       if (!adapters.has("memory")) return;
       const s = state(input.sessionID ?? "default");
-      if (!trackActivity(s, input.tool, input.args)) return;
-
+      recordTaint(s.taint, input.tool, input.args);
+      // Every gated write may carry a warn; only publish/append is activity.
       const key = `${input.sessionID}:${input.callID}`;
       const warn = pendingWarns.get(key);
       pendingWarns.delete(key);
       if (warn) {
         output.output += `\n\n⚠️ ${warn}`;
       }
+      if (!trackActivity(s, input.tool, input.args)) return;
       const nudge = await callNudge({ event: "promote", tool: input.tool, input: input.args ?? {} });
       if (nudge) output.output += `\n\n${nudge}`;
     },
@@ -443,12 +449,13 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
   const sessions = new Map<string, SessionState>();
   const pendingWarns = new Map<string, string>();
   const pendingContext = new Map<string, string[]>();
+  const asks = new HostAsks();
   // Per session: the status and facts in it describe one session's start.
   const guidance = new Map<string, Guidance>();
   const state = (id: string): SessionState => {
     let value = sessions.get(id);
     if (!value) {
-      value = { guidanceDelivered: false, idleNudged: false, changedFiles: false, journalWrite: false };
+      value = { guidanceDelivered: false, idleNudged: false, changedFiles: false, journalWrite: false, taint: [] };
       sessions.set(id, value);
     }
     return value;
@@ -496,25 +503,47 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
       for (const text of pendingContext.get(event.sessionID) ?? []) event.system.push({ type: "text", text });
       pendingContext.delete(event.sessionID);
     });
+    // Not gated on abort: an ask in flight at unload must still prompt.
+    await ctx.permission?.hook?.("evaluate", (event) => asks.evaluate(event));
     await ctx.tool.hook("execute.before", async (event: V2ToolEvent) => {
-      if (!isMemoryWrite(event.tool) || controller.signal.aborted) return;
-      const decision = await (services.gate ?? callGate)(event.tool, (event.input ?? {}) as Record<string, unknown>, directory);
+      if (controller.signal.aborted) return;
+      if (!isGatedWrite(event.tool)) {
+        asks.expect(event.tool, event.sessionID, event.id);
+        return;
+      }
+      const input = (event.input ?? {}) as Record<string, unknown>;
+      const taint = state(event.sessionID).taint;
+      const decision = await (services.gate ?? callGate)(event.tool, input, directory, taint);
       if (controller.signal.aborted) return;
       if (decision.decision === "block") throw new Error(decision.reason ?? "demarkus-memory gate blocked this write");
-      if (decision.decision === "ask") throw new Error(`${decision.reason ?? "blocked"} Confirm with the user before retrying this write.`);
+      if (decision.decision === "ask") {
+        const reason = decision.reason ?? "demarkus-memory gate asks before this write.";
+        if (!asks.defer(event.sessionID, event.id, reason)) throw new Error(`${reason} Confirm with the user before retrying this write.`);
+        // The host prompt approves the call as stamped, as on Claude Code.
+        const metadata = taintStamp(event.tool, input, taint);
+        if (metadata) event.input = { ...input, metadata };
+        return;
+      }
+      asks.expect(event.tool, event.sessionID, event.id);
       if (decision.decision === "warn" && decision.reason) pendingWarns.set(`${event.sessionID}:${event.id}`, decision.reason);
     });
     await ctx.tool.hook("execute.after", async (event: V2ToolAfter) => {
+      const reason = asks.settle(event.sessionID, event.id);
+      const unprompted = reason && event.status === "completed" ? unpromptedWarning(event.tool, reason) : "";
+      if (unprompted) console.error(`[demarkus-memory] ${unprompted}`);
       if (controller.signal.aborted) return;
       const key = `${event.sessionID}:${event.id}`;
       const warn = pendingWarns.get(key);
       pendingWarns.delete(key);
       if (event.status !== "completed") return;
       const s = state(event.sessionID);
-      if (!trackActivity(s, event.tool, event.input as Record<string, unknown> | undefined)) return;
-      const nudge = await (services.nudge ?? callNudge)({ event: "promote", tool: event.tool, input: event.input ?? {} });
+      recordTaint(s.taint, event.tool, event.input as Record<string, unknown> | undefined);
+      // Every gated write may carry a warn; only publish/append earns a nudge.
+      const nudge = trackActivity(s, event.tool, event.input as Record<string, unknown> | undefined)
+        ? await (services.nudge ?? callNudge)({ event: "promote", tool: event.tool, input: event.input ?? {} })
+        : "";
       if (controller.signal.aborted) return;
-      const additions = [warn && `⚠️ ${warn}`, nudge].filter(Boolean).join("\n\n");
+      const additions = [unprompted && `⚠️ ${unprompted}`, warn && `⚠️ ${warn}`, nudge].filter(Boolean).join("\n\n");
       if (!additions) return;
       const content = event.result.content;
       event.result = {
@@ -542,6 +571,7 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
             sessions.delete(id);
             pendingContext.delete(id);
             guidance.delete(id);
+            asks.dropSession(id);
             for (const key of pendingWarns.keys()) if (key.startsWith(`${id}:`)) pendingWarns.delete(key);
           }
           continue;

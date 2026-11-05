@@ -76,16 +76,6 @@ func Evaluate(policy Policy, path string, metadata map[string]any) Result {
 	return evaluate(policy, path, metadata, false)
 }
 
-// EvaluateStrings is Evaluate over the string metadata a store or a tool
-// holds.
-func EvaluateStrings(policy Policy, path string, metadata map[string]string) Result {
-	values := make(map[string]any, len(metadata))
-	for key, value := range metadata {
-		values[key] = value
-	}
-	return evaluate(policy, path, values, false)
-}
-
 // EvaluateOverrides checks only fields explicitly supplied by an update.
 // It catches invalid APPEND overrides without treating inherited fields as absent.
 func EvaluateOverrides(policy Policy, path string, metadata map[string]any) Result {

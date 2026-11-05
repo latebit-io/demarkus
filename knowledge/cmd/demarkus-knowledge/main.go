@@ -14,6 +14,7 @@ import (
 	"os"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker"
+	"github.com/latebit-io/demarkus/knowledge/internal/judge"
 	"github.com/latebit-io/demarkus/server/knowledgeserver"
 	"github.com/latebit-io/demarkus/server/knowledgeserver/bucketworlds"
 )
@@ -78,7 +79,7 @@ func runDeprovision(opts broker.DeprovisionOptions) error {
 }
 
 func serve(serverConfig, brokerConfig, kubeconfig string, log *slog.Logger) error {
-	server, err := knowledgeserver.Open(knowledgeserver.Options{ConfigFile: serverConfig, Logger: log, Stores: bucketworlds.GCS()})
+	server, err := knowledgeserver.Open(knowledgeserver.Options{ConfigFile: serverConfig, Logger: log, Stores: bucketworlds.GCS(), Judges: judge.New})
 	if err != nil {
 		return err
 	}

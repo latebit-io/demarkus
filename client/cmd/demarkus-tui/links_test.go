@@ -124,6 +124,18 @@ func TestInjectLinkMarkers(t *testing.T) {
 			},
 		},
 		{
+			name: "hidden text in a label matches its revealed rendering",
+			body: "see " + osc8("url.md", "he<U+202E>llo") + " rest",
+			infos: []links.LinkInfo{
+				{Dest: "url.md", Text: "he\u202Ello"},
+			},
+			check: func(t *testing.T, result string) {
+				if !strings.Contains(result, string(markerStart(0))) {
+					t.Error("missing start marker")
+				}
+			},
+		},
+		{
 			name: "multiple links get unique markers",
 			body: osc8("a.md", "first") + " and " + osc8("b.md", "second") + " end",
 			infos: []links.LinkInfo{

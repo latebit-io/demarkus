@@ -39,10 +39,35 @@ server:
   # and an empty list leaves email unchecked. nearDuplicate refuses a body
   # the world already holds in other words (block), or lets it land with a
   # warning (warn), or is off; metadata near-duplicate-override keeps both.
+  # injection flags text that steers an agent (ignore-previous-instructions
+  # in several languages, chat role tags, image beacons, dangerous commands,
+  # shortener/raw-IP/punycode/script links, also obfuscated or encoded):
+  # warn (default), block or off; metadata content-check-override with a
+  # reason lands a quoted example. Link hosts are a policy.md matter
+  # (allow_domains:), not a chart value.
   contentCheck:
     pii: block
     workDomains: []
     nearDuplicate: block
+    injection: warn
+    # classifier sends each written body to a prompt-injection model and
+    # stamps a server-owned `classifier:` verdict on the version (never a
+    # refusal; a timeout stamps unchecked). kind: "" (off), http (a JSON
+    # endpoint in front of a local model such as Prompt Guard: POST
+    # {path,text}, reply {label,score}) or anthropic (a Claude judge with no
+    # tools; the body leaves the cluster, a body with a secret never does).
+    # existingSecretRef names the Secret key the pod reads as ANTHROPIC_API_KEY.
+    classifier:
+      kind: ""
+      url: ""
+      model: ""
+      timeout: 5s
+      threshold: 0
+      maxBytes: 0
+      maxInFlight: 0
+      existingSecretRef:
+        name: ""
+        key: api-key
 
 # Static worlds; empty is valid only with provisioning enabled below, or when
 # the umbrella supplies global.worlds. An existing empty bucket is initialized
@@ -62,6 +87,8 @@ server:
 # /me/install hands direct clients (blank omits the world), hub marks the
 # federation hub (at most one world), profile picks the gateway (knowledge,
 # or memory for a hand-provisioned tenant whose allow names one identity).
+# governance is restricted (knowledge default: /.well-known/demarkus/ writes
+# need the govern token operation) or open (memory default: any publisher).
 worlds: []
   # - name: team-a
   #   worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
@@ -413,6 +440,10 @@ networkPolicy:
   # Direct QUIC clients (capability tokens), such as those behind a
   # LoadBalancer. Empty closes the QUIC port to everything but peer hints.
   externalCIDRs: []
+  # Egress rules (NetworkPolicyEgressRule) for an in-cluster classifier,
+  # e.g. [{to: [{podSelector: {matchLabels: {app: prompt-guard}}}],
+  # ports: [{protocol: TCP, port: 8080}]}]. The anthropic kind needs TCP/443.
+  classifierEgress: []
 
 podSecurityContext:
   runAsNonRoot: true

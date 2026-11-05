@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -39,7 +40,7 @@ func (g *Gateway) handleMarkWorlds(ctx context.Context, _ mcp.CallToolRequest) (
 				w.Name, w.PublicURL, w.Address(), yesNo(core.WorldAllows(&w.Allow, claims)))
 		}
 	}
-	return mcp.NewToolResultText(b.String()), nil
+	return mcpbind.Text(b.String()), nil
 }
 
 // system is this knowledge system's identity, the hostname a promotion

@@ -1396,6 +1396,38 @@ func testHandleWrite_RejectsNonMarkdown(t *testing.T, newBackend backendFactory)
 	})
 }
 
+func TestHandleWrite_RejectsHiddenText(t *testing.T) {
+	forEachBackend(t, testHandleWrite_RejectsHiddenText)
+}
+
+func testHandleWrite_RejectsHiddenText(t *testing.T, newBackend backendFactory) {
+	const secret = "hidden-secret"
+	ts := auth.NewTokenStore(map[string]auth.Token{
+		protocol.HashToken(secret): {Paths: []string{"/*"}, Operations: []string{"publish"}},
+	})
+	authMeta := "---\nauth: " + secret + "\n---\n"
+	tests := []struct{ name, req, want string }{
+		{"terminal escape", "PUBLISH /esc.md\n" + authMeta + "# Doc\n\x1b]0;owned\x07\n", "U+001B (control) at line 2, column 1"},
+		{"tag smuggling", "PUBLISH /tag.md\n" + authMeta + "# Doc\n\U000E0049\U000E0047\n", "U+E0049 (tag, 2 characters) at line 2, column 1"},
+		{"metadata value", "PUBLISH /meta.md\n---\nauth: " + secret + "\ntitle: a\U0000202Eb\n---\n# Doc\n", `key "title" carries hidden characters: U+202E (bidi)`},
+		{"append", "APPEND /bidi.md\n---\nauth: " + secret + "\nexpected-version: 1\n---\nx\U0000202Ey\n", "U+202E (bidi) at line 1, column 2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHandler(newBackend(t), ts)
+			stream := newMockStream(tt.req)
+			h.HandleStream(context.Background(), stream)
+			resp, err := protocol.ParseResponse(&stream.output)
+			if err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if resp.Status != protocol.StatusBadRequest || !strings.Contains(resp.Body, tt.want) {
+				t.Errorf("got %q %q, want %q containing %q", resp.Status, resp.Body, protocol.StatusBadRequest, tt.want)
+			}
+		})
+	}
+}
+
 func TestHandlePublishAuth(t *testing.T) { forEachBackend(t, testHandlePublishAuth) }
 
 func testHandlePublishAuth(t *testing.T, newBackend backendFactory) {

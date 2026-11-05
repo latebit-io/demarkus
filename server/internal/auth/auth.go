@@ -202,7 +202,12 @@ func (ts *TokenStore) Authorize(token, reqPath, operation string) (string, error
 	return ts.authorizeHashed(HashToken(token), reqPath, operation)
 }
 
-func (ts *TokenStore) authorizeHashed(hashed, reqPath, operation string) (string, error) {
+// AuthorizeAny is Authorize where any one of operations suffices.
+func (ts *TokenStore) AuthorizeAny(token, reqPath string, operations ...string) (string, error) {
+	return ts.authorizeHashed(HashToken(token), reqPath, operations...)
+}
+
+func (ts *TokenStore) authorizeHashed(hashed, reqPath string, operations ...string) (string, error) {
 	if hashed == "" {
 		return "", ErrNoToken
 	}
@@ -213,7 +218,7 @@ func (ts *TokenStore) authorizeHashed(hashed, reqPath, operation string) (string
 	if !t.expiresAt.IsZero() && ts.now().After(t.expiresAt) {
 		return "", ErrTokenExpired
 	}
-	if !hasOperation(t.Operations, operation) {
+	if !slices.ContainsFunc(operations, func(op string) bool { return hasOperation(t.Operations, op) }) {
 		return "", ErrNotPermitted
 	}
 	if !protocol.MatchesAnyPath(t.Paths, reqPath) {

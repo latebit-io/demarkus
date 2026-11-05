@@ -329,6 +329,7 @@ const (
 
 type toolClass struct {
 	write    bool // changes a store or the graph store
+	store    bool // changes a document store: the write gate's set
 	advanced bool // absent from the lean profile
 }
 
@@ -339,9 +340,9 @@ var toolClasses = map[string]toolClass{
 	"mark_fetch": {}, "mark_explore": {}, "mark_list": {}, "mark_versions": {},
 	"mark_lookup": {}, "mark_lookup_all": {}, "mark_backlinks": {}, "mark_worlds": {},
 	"mark_doctor": {}, "mark_discover": {advanced: true}, "mark_graph_export": {advanced: true},
-	"mark_publish": {write: true}, "mark_append": {write: true}, "mark_archive": {write: true},
-	"mark_curate": {write: true}, "mark_promote": {write: true}, "mark_graph": {write: true},
-	"mark_graph_publish": {write: true, advanced: true},
+	"mark_publish": {write: true, store: true}, "mark_append": {write: true, store: true}, "mark_archive": {write: true, store: true},
+	"mark_curate": {write: true, store: true}, "mark_promote": {write: true, store: true}, "mark_graph": {write: true},
+	"mark_graph_publish": {write: true, store: true, advanced: true},
 	"mark_host":          {}, "mark_host_setup": {write: true},
 }
 
@@ -350,6 +351,9 @@ var toolClasses = map[string]toolClass{
 var (
 	KnownTools    = toolSet(func(toolClass) bool { return true })
 	AdvancedTools = toolSet(func(c toolClass) bool { return c.advanced })
+	// StoreWriteTools are the tools the write gate holds; every host's hook
+	// matcher must name exactly these.
+	StoreWriteTools = toolSet(func(c toolClass) bool { return c.store })
 )
 
 func toolSet(keep func(toolClass) bool) map[string]bool {

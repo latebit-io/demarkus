@@ -17,6 +17,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionActivity } from "./nudges.js";
+import { branchTaint, recordTaint, taintStamp } from "./taint.js";
 import { callGate, callGuidance, callNudge, callUpdateCheck, type Guidance } from "./plugin.js";
 import { ensureMcpServerEntry, provisionServer } from "./setup.js";
 
@@ -24,10 +25,14 @@ import { ensureMcpServerEntry, provisionServer } from "./setup.js";
 // these local so the extension type-checks without the (optional) peer dep.
 interface UI {
   notify(message: string, level?: "info" | "warning" | "error"): void;
+  confirm?(title: string, message: string): Promise<boolean>;
 }
 interface ExtensionContext {
   cwd: string;
   ui: UI;
+  // Dialogs work (TUI, RPC); false in print and JSON modes.
+  hasUI?: boolean;
+  sessionManager?: { getBranch(): unknown[] };
 }
 interface ToolCallEvent {
   toolName: string;
@@ -131,6 +136,25 @@ function normalizeToolCall(event: ToolCallEvent): { toolName: string; input: Rec
   return { toolName, input };
 }
 
+type Verdict = { block: true; reason: string } | undefined;
+
+// ask settles a gate ask: a confirm dialog stands in for a native ask where
+// pi has a UI; elsewhere it blocks with a reason routed through the user. An
+// approved publish carries the taint stamp, as on Claude Code.
+async function ask(event: ToolCallEvent, ctx: ExtensionContext, toolName: string, input: Record<string, unknown>, reason: string, taint: string[]): Promise<Verdict> {
+  if (!ctx.hasUI || !ctx.ui.confirm) return { block: true, reason: `${reason} Confirm with the user before proceeding.` };
+  if (!(await ctx.ui.confirm("Approve this demarkus write?", reason))) {
+    return { block: true, reason: "The user declined this demarkus write; do not retry it unchanged." };
+  }
+  const metadata = taintStamp(toolName, input, taint);
+  if (metadata) {
+    // input is event.input or the proxy's args; string args were parsed into a copy.
+    input.metadata = metadata;
+    if (event.toolName === "mcp" && typeof event.input.args === "string") event.input.args = JSON.stringify(input);
+  }
+  return undefined;
+}
+
 // The plugin's own version, from the manifest pi installed alongside src/.
 async function checkForUpdate(): Promise<string> {
   let installed = "";
@@ -149,17 +173,30 @@ async function checkForUpdate(): Promise<string> {
   });
 }
 
+// Both Pi plugins see every tool call; with memory loaded it owns the gate,
+// so one write asks once (OpenCode's ownsGate).
+const GATE_ADAPTERS = Symbol.for("io.demarkus.pi.gate-adapters");
+function gateAdapters(): Set<string> {
+  const root = globalThis as typeof globalThis & { [key: symbol]: Set<string> | undefined };
+  return (root[GATE_ADAPTERS] ??= new Set<string>());
+}
+
 export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
+  gateAdapters().add("memory");
   let contextDelivered = false;
   let guidance: Guidance | null = null;
   let projectDir = "";
   let activity = new SessionActivity();
+  // Untrusted reads this session; a later demarkus write asks first.
+  let taint: string[] = [];
 
   pi.on("session_start", async (_event, ctx) => {
     contextDelivered = false;
     guidance = null;
     projectDir = ctx.cwd;
     activity = new SessionActivity();
+    // A resumed, reloaded or forked branch keeps the reads it made; a new one is empty.
+    taint = branchTaint(ctx.sessionManager?.getBranch() ?? [], (toolName, input) => normalizeToolCall({ toolName, input }));
 
     // Provision first (this installs demarkus-plugin), then register the MCP
     // server via the binary.
@@ -206,20 +243,17 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
 
     // The shared demarkus-plugin binary owns the gate decision (publish tag-gate
     // + destination gate), so the logic lives in one place for every harness.
-    const decision = await callGate(toolName, input, ctx.cwd);
-    if (decision.decision === "block" || decision.decision === "ask") {
-      // pi's tool_call has no native "ask"; treat it as a block whose reason
-      // tells the agent to confirm with the user first.
-      const reason =
-        decision.decision === "ask"
-          ? `${decision.reason ?? "blocked"} Confirm with the user before proceeding.`
-          : (decision.reason ?? "blocked");
-      return { block: true, reason };
+    const decision = await callGate(toolName, input, ctx.cwd, taint);
+    if (decision.decision === "block") return { block: true, reason: decision.reason ?? "blocked" };
+    if (decision.decision === "ask") {
+      const verdict = await ask(event, ctx, toolName, input, decision.reason ?? "demarkus write needs approval.", taint);
+      if (verdict) return verdict;
     }
 
     // Record activity only for calls that survive the gate, so a blocked
     // publish/append doesn't suppress the session-end journal nudge.
     activity.observe(toolName, input);
+    recordTaint(taint, toolName, input);
 
     // warn → allow + surface a reminder.
     if (decision.decision === "warn" && decision.reason) {

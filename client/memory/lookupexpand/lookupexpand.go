@@ -14,6 +14,8 @@ import (
 	"github.com/latebit-io/demarkus/client/lookuptable"
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/outline"
+	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 )
 
@@ -233,6 +235,15 @@ func (e *expansion) document(ctx context.Context, path string) (*cached, bool) {
 // A whole document whose H1 opens it is pinned to that H1's anchor, so the
 // block can be cited as a section, as the answer contract asks.
 func (e *expansion) render(path, anchor string, doc *cached) int {
+	n := e.renderBlocks(path, anchor, doc)
+	if n > 0 && protocol.ClassifierFlagged(doc.Metadata) {
+		e.note("%s: %s: %s", path, protocol.ClassifierKey, doc.Metadata[protocol.ClassifierKey])
+	}
+	return n
+}
+
+// renderBlocks is render without the classifier note.
+func (e *expansion) renderBlocks(path, anchor string, doc *cached) int {
 	body := doc.Body
 	p := piece{path: path, anchor: anchor, version: doc.Version}
 	if anchor == "" && len(body) >= outline.Threshold {
@@ -300,6 +311,13 @@ func (e *expansion) emit(p *piece) bool {
 	}
 	if !dup {
 		e.texts[text] = loc
+		var meta map[string]string
+		if doc := e.docs[p.path]; doc != nil {
+			meta = doc.Metadata
+		}
+		if w := contentcheck.ReadWarning(text, meta); w != "" {
+			e.note("%s: %s: %s", loc, contentcheck.WarningKey, w)
+		}
 	}
 	// A stub covers its range too, so a nested row is not printed after it.
 	if p.end > p.start {

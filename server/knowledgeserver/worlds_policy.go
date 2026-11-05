@@ -14,7 +14,7 @@ import (
 // floor world's policy under every other world's, and on the floor world a
 // check that a new floor leaves every world satisfiable.
 func (m *worldManager) enforceOptions(world *knowledgeconfig.WorldConfig) writepolicy.Options {
-	options := writepolicy.Options{Require: !world.Policy.Optional, Content: m.content}
+	options := writepolicy.Options{Require: !world.Policy.Optional, Content: m.content, Classify: m.classify}
 	switch {
 	case m.floorWorld == "":
 	case world.Name == m.floorWorld:

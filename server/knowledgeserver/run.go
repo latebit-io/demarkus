@@ -42,6 +42,9 @@ type Options struct {
 	// Stores opens the bucket worlds; nil means this binary carries no bucket
 	// store and a bucket world fails its open by name. File worlds need none.
 	Stores worldstore.Factory
+	// Judges builds the anthropic classifier kind; nil means this binary
+	// carries none and a config naming it fails the open.
+	Judges JudgeFactory
 }
 
 // Server is an opened knowledge server: worlds, peers and listeners, served
@@ -125,7 +128,7 @@ func Open(opts Options) (*Server, error) {
 	}
 	s := &Server{config: config, configFile: opts.ConfigFile, logger: logger, certificates: certificates}
 	s.watchCtx, s.stopWatchers = context.WithCancel(context.Background())
-	if err := s.open(opts.Stores); err != nil {
+	if err := s.open(opts.Stores, opts.Judges); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -191,7 +194,7 @@ func fileStore(world *knowledgeconfig.WorldConfig, hooks worldstore.Hooks) (worl
 
 // open fills in everything after TLS; Close on the partial Server undoes
 // whatever it reached.
-func (s *Server) open(stores worldstore.Factory) error {
+func (s *Server) open(stores worldstore.Factory, judges JudgeFactory) error {
 	peers, err := openPeers(s.config.Peers, s.certificates, s.logger)
 	if err != nil {
 		s.logger.Error("peer hints unavailable", "error", err)
@@ -200,6 +203,7 @@ func (s *Server) open(stores worldstore.Factory) error {
 	s.peers = peers
 	worlds, err := newWorldManager(s.watchCtx, &s.watcherGroup, worldManagerConfig{
 		configFile: s.configFile, config: s.config, openStore: worldStores(stores), certs: s.certificates, peers: peers, logger: s.logger,
+		judges: judges,
 	})
 	if err != nil {
 		s.logger.Error("world startup failed", "error", err)

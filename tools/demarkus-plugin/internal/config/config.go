@@ -21,6 +21,8 @@ const (
 	Warn  Strictness = "warn"
 	Block Strictness = "block"
 	Ask   Strictness = "ask"
+	// Off disables a guard that allows it (the taint guard).
+	Off Strictness = "off"
 )
 
 // LocalMemoryID is the reserved catalog id / MCP server name of the local managed memory.
@@ -111,34 +113,12 @@ func validStrictness(s string, def Strictness) Strictness {
 
 // MemoryTagStrictness env override → plugin-memory.strictness → warn (floor).
 func MemoryTagStrictness() (Strictness, error) {
-	if v := os.Getenv("DEMARKUS_MEMORY_STRICTNESS"); v != "" {
-		return validStrictness(v, Warn), nil
-	}
-	p, err := path("plugin-memory.strictness")
-	if err != nil {
-		return Warn, err
-	}
-	s, err := readTrimmed(p)
-	if err != nil {
-		return Warn, err
-	}
-	return validStrictness(s, Warn), nil
+	return strictness("DEMARKUS_MEMORY_STRICTNESS", "plugin-memory.strictness", Warn)
 }
 
 // MemoryDestStrictness env override → plugin-memory.dest-strictness → block.
 func MemoryDestStrictness() (Strictness, error) {
-	if v := os.Getenv("DEMARKUS_MEMORY_DEST_STRICTNESS"); v != "" {
-		return validStrictness(v, Block), nil
-	}
-	p, err := path("plugin-memory.dest-strictness")
-	if err != nil {
-		return Block, err
-	}
-	s, err := readTrimmed(p)
-	if err != nil {
-		return Block, err
-	}
-	return validStrictness(s, Block), nil
+	return strictness("DEMARKUS_MEMORY_DEST_STRICTNESS", "plugin-memory.dest-strictness", Block)
 }
 
 // StyleStrictness is the enforcement level for the documentation-style guard
@@ -146,36 +126,43 @@ func MemoryDestStrictness() (Strictness, error) {
 // env override → plugin.style-strictness → warn: style steers, it does not
 // wall; the reasons teach the rule at the moment it is broken.
 func StyleStrictness() (Strictness, error) {
-	if v := os.Getenv("DEMARKUS_STYLE_STRICTNESS"); v != "" {
-		return validStrictness(v, Warn), nil
-	}
-	p, err := path("plugin.style-strictness")
-	if err != nil {
-		return Warn, err
-	}
-	s, err := readTrimmed(p)
-	if err != nil {
-		return Warn, err
-	}
-	return validStrictness(s, Warn), nil
+	return strictness("DEMARKUS_STYLE_STRICTNESS", "plugin.style-strictness", Warn)
 }
 
 // RetentionStrictness is the retention guard's level: env override, then
 // plugin.retention-strictness, then ask. A prunable retention value deletes
 // older versions permanently, so a human decision is the default everywhere.
 func RetentionStrictness() (Strictness, error) {
-	if v := os.Getenv("DEMARKUS_RETENTION_STRICTNESS"); v != "" {
-		return validStrictness(v, Ask), nil
+	return strictness("DEMARKUS_RETENTION_STRICTNESS", "plugin.retention-strictness", Ask)
+}
+
+// TaintStrictness is the untrusted-read guard's level: env override, then
+// plugin.taint-strictness, then ask. Off turns the guard off.
+func TaintStrictness() (Strictness, error) {
+	v, err := knob("DEMARKUS_TAINT_STRICTNESS", "plugin.taint-strictness")
+	if err == nil && isOff(v) {
+		return Off, nil
 	}
-	p, err := path("plugin.retention-strictness")
+	return validStrictness(v, Ask), err
+}
+
+// strictness reads a guard's level: env override, then the ~/.demarkus file,
+// then def; an unreadable file is def with the error.
+func strictness(env, file string, def Strictness) (Strictness, error) {
+	v, err := knob(env, file)
+	return validStrictness(v, def), err
+}
+
+// knob is the env value, else the trimmed file content ("" when absent).
+func knob(env, file string) (string, error) {
+	if v := os.Getenv(env); v != "" {
+		return v, nil
+	}
+	p, err := path(file)
 	if err != nil {
-		return Ask, err
+		return "", err
 	}
-	s, err := readTrimmed(p)
-	if err != nil {
-		return Ask, err
-	}
-	return validStrictness(s, Ask), nil
+	return readTrimmed(p)
 }
 
 // UpdateCheckEnabled reports whether the plugin update check may run.

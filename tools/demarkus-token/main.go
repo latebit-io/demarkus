@@ -109,7 +109,7 @@ func cmdGenerate(args []string) {
 	fs := flag.NewFlagSet("generate", flag.ExitOnError)
 	label := fs.String("label", "", "human-readable label for this token (required)")
 	paths := fs.String("paths", "/**", "comma-separated path patterns; /** is recursive, a single * does not cross / (e.g. \"/docs/*,/public/**\")")
-	ops := fs.String("ops", "publish", "comma-separated operations (e.g. \"read,publish\")")
+	ops := fs.String("ops", "publish", "comma-separated operations: read, publish, govern (governance documents under /.well-known/demarkus/)")
 	tokensFile := fs.String("tokens", "", "path to tokens.toml file (appends entry if provided)")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: demarkus-token generate -label NAME [-paths PATTERNS] [-ops OPERATIONS] [-tokens FILE]\n\n")

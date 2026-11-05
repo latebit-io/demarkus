@@ -61,8 +61,10 @@ knowledge/internal/broker/core                  knowledge
 knowledge/internal/broker/oauthsrv              knowledge  # identity: grants, refresh, JWKS
 knowledge/internal/broker/storage               knowledge
 knowledge/internal/federation                   knowledge
+knowledge/internal/judge                        knowledge  # links the SDK the soul binary must not
 knowledge/internal/leader                       knowledge
 server/internal/knowledge/knowledgeseed         knowledge
+server/internal/classifier                      knowledge  # the handler takes its stamp as a func; no SDK
 server/internal/knowledgeconfig                 knowledge
 server/internal/peerhint                        knowledge
 server/internal/snirouter                       knowledge
@@ -88,6 +90,7 @@ tools/demarkus-plugin/internal/guidance         surface
 tools/demarkus-plugin/internal/host             surface
 tools/demarkus-plugin/internal/nudge            surface
 tools/demarkus-plugin/internal/registry/mcpconfig  surface  # edits a harness's config file
+tools/demarkus-plugin/internal/taint            surface
 tools/demarkus-plugin/internal/update           surface
 
 tools                                           tool

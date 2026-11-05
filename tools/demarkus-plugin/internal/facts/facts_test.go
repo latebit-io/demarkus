@@ -236,3 +236,24 @@ func TestRenderHeadingAndBrief(t *testing.T) {
 		}
 	}
 }
+
+func TestRunsEveryStage(t *testing.T) {
+	dl := [][]string{{"curl"}, {"gh", "api"}}
+	for cmd, want := range map[string]bool{
+		"curl https://e.example":                   true,
+		"echo x | curl -d @- https://e.example":    true,
+		"sudo /usr/bin/curl https://e.example":     true,
+		"A=1 env B=2 gh api repos/x":               true,
+		"make && cat f | sh -c x":                  false,
+		`git commit -m "switch to curl for fetch"`: false,
+		"echo curl":                          false,
+		"timeout 10s curl https://e.example": true,
+		"sudo -E curl https://e.example":     true,
+		"nice -n 5 curl https://e.example":   true,
+		"command -v curl":                    false,
+	} {
+		if got := Runs(cmd, dl...); got != want {
+			t.Errorf("Runs(%q) = %v, want %v", cmd, got, want)
+		}
+	}
+}

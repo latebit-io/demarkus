@@ -291,14 +291,16 @@ policy() {
   expect "seeded policy is version 1" 'version=1' -- "${C[@]}" "$U$POLICY"
   # publishpolicy.SeedAgent: the name outlived the binary.
   expect "seeded policy carries the seed marker" 'agent=demarkus-knowledge-server' -- "${C[@]}" "$U$POLICY"
-  expect "replace with a blocking policy" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 1 -meta tags=category:governance -meta type=Policy -body $'# Write Policy\n\nstrictness: block\nrequire_tags: domain\n' "$U$POLICY"
+  # A governance document takes the govern operation; publish is refused.
+  expect "a publish token cannot rewrite the policy" 'not-permitted' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 1 -meta tags=category:governance -body $'strictness: warn\n' "$U$POLICY"
+  expect "replace with a blocking policy" 'created' -- "${C[@]}" -X PUBLISH -auth "$G" -expected-version 1 -meta tags=category:governance -meta type=Policy -body $'# Write Policy\n\nstrictness: block\nrequire_tags: domain\n' "$U$POLICY"
   expect "untagged publish is bad-request" 'bad-request' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -body "# U" "$U/gated/u.md"
   expect "untagged publish names the violation" 'missing-tags' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -body "# U" "$U/gated/u.md"
   expect "tagged publish is created" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=domain:smoke -body "# T" "$U/gated/t.md"
   expect "append inheriting tags is created" 'created' -- "${C[@]}" -X APPEND -auth "$W" -expected-version 1 -body "more" "$U/gated/t.md"
   expect "append replacing tags is bad-request" 'bad-request' -- "${C[@]}" -X APPEND -auth "$W" -expected-version 2 -meta tags=other:x -body "more" "$U/gated/t.md"
-  expect "unenforceable candidate policy is bad-request" 'bad-request' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 2 -meta tags=category:governance -body $'strictness: nonsense\n' "$U$POLICY"
-  expect "archiving the required policy is bad-request" 'bad-request' -- "${C[@]}" -X ARCHIVE -auth "$W" "$U$POLICY"
+  expect "unenforceable candidate policy is bad-request" 'bad-request' -- "${C[@]}" -X PUBLISH -auth "$G" -expected-version 2 -meta tags=category:governance -body $'strictness: nonsense\n' "$U$POLICY"
+  expect "archiving the required policy is bad-request" 'bad-request' -- "${C[@]}" -X ARCHIVE -auth "$G" "$U$POLICY"
   expect "the policy is still live" 'version=2' -- "${C[@]}" "$U$POLICY"
 }
 
@@ -555,8 +557,9 @@ EOF
 : >"$WORK/tokens.toml"
 chmod 600 "$WORK/tokens.toml"
 W=$(mint writer '/**' publish)
+G=$(mint governor '/.well-known/demarkus/**' govern)
 R=$(mint reader '/private/**' read)
-if [ -z "$W" ] || [ -z "$R" ]; then
+if [ -z "$W" ] || [ -z "$G" ] || [ -z "$R" ]; then
   echo "FAIL  setup: mint tokens" >&2
   exit 1
 fi

@@ -127,7 +127,7 @@ func (g *Gateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolReque
 			},
 		})
 	}
-	return mcp.NewToolResultText(text), nil
+	return mcpbind.Text(text), nil
 }
 
 // lookupAllReport is everything the merged table renders.

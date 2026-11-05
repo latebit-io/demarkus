@@ -6,6 +6,8 @@ package facts
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -159,6 +161,51 @@ func classifySegment(tokens []string) (Check, bool) {
 	return "", false
 }
 
+// wrappers run the command after them, the TS adapters' set; true marks one
+// whose options and numeric values (timeout 10s, nice -n 5) come first.
+// command takes none: command -v curl runs nothing.
+var wrappers = map[string]bool{"sudo": true, "doas": true, "env": true, "exec": true, "nohup": true, "time": true,
+	"nice": true, "timeout": true, "xargs": true, "stdbuf": true, "command": false}
+
+// numericArg is a wrapper option value: 10, 2.5, 10s, 1m.
+var numericArg = regexp.MustCompile(`^\d[0-9.]*[smhd]?$`)
+
+// Runs reports whether any pipeline stage of command runs one of programs:
+// quotes respected, env assignments and wrappers (sudo -E) skipped, a path
+// compared by its base name.
+func Runs(command string, programs ...[]string) bool {
+	segs, _ := splitSegments(command)
+	for _, seg := range segs {
+		for _, stage := range append([]string{seg.stage}, seg.later...) {
+			tokens := commandWords(strings.Fields(stage))
+			if slices.ContainsFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) }) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// commandWords drops what precedes the command a stage runs: assignments,
+// wrappers and the wrappers' options.
+func commandWords(tokens []string) []string {
+	for len(tokens) > 0 {
+		takesOptions, wrapper := wrappers[filepath.Base(tokens[0])]
+		switch {
+		case isEnvAssignment(tokens[0]):
+			tokens = tokens[1:]
+		case wrapper:
+			tokens = tokens[1:]
+			for takesOptions && len(tokens) > 0 && (strings.HasPrefix(tokens[0], "-") || numericArg.MatchString(tokens[0])) {
+				tokens = tokens[1:]
+			}
+		default:
+			return tokens
+		}
+	}
+	return tokens
+}
+
 func hasPrefix(tokens, prefix []string) bool {
 	if len(tokens) < len(prefix) {
 		return false
@@ -183,8 +230,9 @@ func isEnvAssignment(tok string) bool {
 // segment is one command of a chain: its first pipeline stage, and whether a
 // pipe follows it (then the exit status is the last stage's).
 type segment struct {
-	stage string
-	piped bool
+	stage string   // the pipeline's first stage
+	piped bool     // stages follow it
+	later []string // the stages after the first
 }
 
 // splitSegments splits on &&, ||, ;, & and newlines outside quotes, so a check
@@ -194,19 +242,19 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 	andOnly = true
 	var cur strings.Builder
 	var quote byte
-	piped := false
-	flush := func() {
-		if s := strings.TrimSpace(cur.String()); s != "" {
-			segs = append(segs, segment{stage: s, piped: piped})
-		}
+	var stages []string
+	pipe := func() {
+		stages = append(stages, strings.TrimSpace(cur.String()))
 		cur.Reset()
-		piped = false
 	}
-	write := func(c byte) {
-		if !piped {
-			cur.WriteByte(c)
+	flush := func() {
+		pipe()
+		if stages[0] != "" {
+			segs = append(segs, segment{stage: stages[0], piped: len(stages) > 1, later: stages[1:]})
 		}
+		stages = nil
 	}
+	write := func(c byte) { _ = cur.WriteByte(c) } // a strings.Builder write never fails
 	for i := 0; i < len(command); i++ {
 		c := command[i]
 		switch {
@@ -227,7 +275,7 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 			flush()
 			i++
 		case c == '|':
-			piped = true
+			pipe()
 			if i+1 < len(command) && command[i+1] == '&' {
 				i++ // |& pipes stderr too
 			}

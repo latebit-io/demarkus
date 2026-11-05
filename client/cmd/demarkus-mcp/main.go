@@ -271,7 +271,7 @@ func (h *handler) resolveURL(rawURL string) (links.Target, error) {
 // server instructions once instead of every tool description.
 // serverInstructions is what initialize tells the agent, once per session.
 func serverInstructions(host string) string {
-	return hostInstructions(host) + " " + mcpfmt.SectionFirst + " " + mcpfmt.ReadOutcomes
+	return hostInstructions(host) + " " + mcpfmt.SectionFirst + " " + mcpfmt.ReadOutcomes + " " + mcpfmt.DocumentData
 }
 
 func hostInstructions(host string) string {

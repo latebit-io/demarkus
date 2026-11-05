@@ -32,3 +32,16 @@ func TestLookupStandingRanking(t *testing.T) {
 		t.Errorf("* = %v, want %v", got, want[:2])
 	}
 }
+
+// A tainted write ranks as provisional even when tagged accepted: status
+// is the writer's own claim, and the writer read untrusted content.
+func TestTaintedNeverRanksAccepted(t *testing.T) {
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	c := New()
+	c.Set(&Entry{Path: "/tainted.md", Tags: []string{"go", "status:accepted"}, Importance: 0.6, Modified: at, Metadata: map[string]string{"source-trust": "tainted"}})         // 0.48
+	c.Set(&Entry{Path: "/clean.md", Tags: []string{"go", "status:accepted"}, Importance: 0.5, Modified: at})                                                                   // 0.50
+	c.Set(&Entry{Path: "/flagged.md", Tags: []string{"go", "status:accepted"}, Importance: 0.55, Modified: at, Metadata: map[string]string{"classifier": "injection: x (m)"}}) // 0.44
+	if got, want := paths(mustLookup(t, c, "go", Options{})), []string{"/clean.md", "/tainted.md", "/flagged.md"}; !equalPaths(got, want) {
+		t.Errorf("go = %v, want %v", got, want)
+	}
+}

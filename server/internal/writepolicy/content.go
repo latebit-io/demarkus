@@ -6,17 +6,16 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
-	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 )
 
-// ErrContentBlocked reports a write refused for a secret or personal data in
-// its body.
+// ErrContentBlocked reports a write refused for a secret, personal data or
+// instruction-shaped text in its body.
 var ErrContentBlocked = errors.New("content check blocked mutation")
 
-// ContentOptions configures the content scan on every write. The zero
-// value blocks secrets and personal data with no work domains. What a scan
-// lets through with a note reaches the writer through WriteRequest.Warnings.
+// ContentOptions configures the write scan. The zero value blocks secrets and
+// personal data and warns on instruction-shaped text; what lands with a note
+// reaches the writer through WriteRequest.Warnings.
 type ContentOptions struct {
 	contentcheck.Options
 	// SecretsWarn lets a secret land with a note instead of refusing it: an
@@ -43,11 +42,11 @@ func (err *ContentError) Unwrap() []error {
 }
 
 // RejectionMessage names each rule and line and the way out: a secret is
-// removed, a personal-data false positive is overridden; the matched text
-// never appears.
+// removed, a personal-data or injection false positive is overridden; the
+// matched text never appears.
 func (err *ContentError) RejectionMessage() string {
 	var b strings.Builder
-	b.WriteString("content check refused this write (a secret or personal data in the body):\n")
+	b.WriteString("content check refused this write (" + contentcheck.Describe(err.Findings) + " in the body):\n")
 	for _, f := range err.Findings {
 		fmt.Fprintf(&b, "- %s\n", f)
 	}
@@ -65,25 +64,25 @@ func newContentGate(options ContentOptions) contentGate {
 	if options.PII == "" {
 		options.PII = contentcheck.Block
 	}
+	if options.Steering == "" {
+		options.Steering = contentcheck.Warn
+	}
 	return contentGate{scanner: contentcheck.New(options.Options), options: options}
 }
 
-// judge scans the prepared body; notes are what it let through. A secret
-// refuses unless the tier warns, override or not; personal data follows its
-// mode, and an override lets it land, reported with its reason.
-func (g contentGate) judge(write storefmt.PreparedWrite) ([]string, error) {
-	findings := g.scanner.Scan(string(write.Content))
+// judge scans the prepared body; notes are what it let through.
+func (g contentGate) judge(body string, meta map[string]string) ([]string, error) {
+	return g.verdict(g.scanner.Scan(body), meta)
+}
+
+// verdict decides a body's findings. A secret refuses unless the tier warns;
+// personal data and steering text follow their modes, and an override lands
+// them with its reason.
+func (g contentGate) verdict(findings []contentcheck.Finding, meta map[string]string) ([]string, error) {
 	if len(findings) == 0 {
 		return nil, nil
 	}
-	var secrets, personal []contentcheck.Finding
-	for _, f := range findings {
-		if f.Kind == contentcheck.Secret {
-			secrets = append(secrets, f)
-		} else {
-			personal = append(personal, f)
-		}
-	}
+	secrets := contentcheck.OfKind(findings, contentcheck.Secret)
 	if len(secrets) > 0 && !g.options.SecretsWarn {
 		return nil, &ContentError{Findings: findings}
 	}
@@ -91,15 +90,20 @@ func (g contentGate) judge(write storefmt.PreparedWrite) ([]string, error) {
 	if len(secrets) > 0 {
 		notes = append(notes, note(secrets, ""))
 	}
-	if len(personal) > 0 {
-		override := strings.TrimSpace(write.Metadata[contentcheck.OverrideKey])
+	override := strings.TrimSpace(meta[contentcheck.OverrideKey])
+	steering, _ := contentcheck.SplitSteering(findings)
+	for _, group := range []struct {
+		hits []contentcheck.Finding
+		mode contentcheck.Mode
+	}{{contentcheck.OfKind(findings, contentcheck.PII), g.options.PII}, {steering, g.options.Steering}} {
 		switch {
+		case len(group.hits) == 0:
 		case override != "":
-			notes = append(notes, note(personal, override))
-		case g.options.PII != contentcheck.Warn:
-			return nil, &ContentError{Findings: personal}
+			notes = append(notes, note(group.hits, override))
+		case group.mode != contentcheck.Warn:
+			return nil, &ContentError{Findings: group.hits}
 		default:
-			notes = append(notes, note(personal, ""))
+			notes = append(notes, note(group.hits, ""))
 		}
 	}
 	return notes, nil
@@ -109,7 +113,7 @@ func (g contentGate) judge(write storefmt.PreparedWrite) ([]string, error) {
 // value; the write is in history now, so the fix is the stored remedy.
 func note(findings []contentcheck.Finding, override string) string {
 	if override != "" {
-		return "content check overridden (" + override + "): " + contentcheck.Summary(findings)
+		return "content check overridden (" + override + "): " + contentcheck.Brief(findings)
 	}
-	return "content check: " + contentcheck.Summary(findings) + "; fix: " + contentcheck.StoredRemedy(findings)
+	return "content check: " + contentcheck.Brief(findings) + "; fix: " + contentcheck.StoredRemedy(findings)
 }

@@ -15,7 +15,7 @@ Project: the one the user names (`^[a-z0-9][a-z0-9._-]*$`), else the soul's root
 
 1. **Read the primer.** `mark_fetch` through the store's server with `url` `<root>.context`. A tool error: surface it, stop. `status: new`: new project, say so, suggest the `soul-journal` prompt with `"<entry>"`, stop. `status: archived`: say so, stop.
 
-2. **Summarize.** Plain text, no preamble:
+2. **Summarize.** Reply with the template below filled in, as markdown outside any code fence, and nothing before or after it.
 
    ```text
    ## <Project>: recent context
@@ -27,13 +27,13 @@ Project: the one the user names (`^[a-z0-9][a-z0-9._-]*$`), else the soul's root
    - <YYYY-MM-DD>: <one-line summary>
 
    ### Pick up where you left off
-   <one or two specific suggestions from the latest entry: what was the user about to do?>
+   <one or two specific suggestions from the latest entry: what was the user about to do? Its date over a week ago: the first suggestion says how old it is>
 
    ### Coverage
    <the primer's Coverage lines, verbatim; omit if none>
    ```
 
-   One line per summary; restore context, never read entries verbatim.
+   One line per summary or suggestion; restore context, never read entries verbatim.
 
 ## Don't
 

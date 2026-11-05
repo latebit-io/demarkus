@@ -2,6 +2,7 @@ package host
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -70,7 +71,7 @@ func TestGateShapes(t *testing.T) {
 			if !ok {
 				t.Fatalf("ForGate(%q) not ok", tt.format)
 			}
-			out, emit := h.Gate(phase, tt.decision, "r")
+			out, emit := h.Gate(phase, tt.decision, "r", nil)
 			if emit != (tt.want != "") {
 				t.Fatalf("emit = %v, want %v", emit, tt.want != "")
 			}
@@ -80,6 +81,26 @@ func TestGateShapes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// An ask carries a rewritten input to Claude, which shows the call as
+// stamped; a deny never does, and Cursor cannot rewrite at all.
+func TestGateUpdatedInput(t *testing.T) {
+	updated := map[string]any{"url": "/x.md", "metadata": map[string]any{"source-trust": "tainted"}}
+	h, phase, _ := ForGate("claude-pre")
+	out, _ := h.Gate(phase, "ask", "r", updated)
+	if got := encode(t, out); got != `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"r","updatedInput":{"metadata":{"source-trust":"tainted"},"url":"/x.md"}}}` {
+		t.Errorf("claude ask = %s", got)
+	}
+	out, _ = h.Gate(phase, "block", "r", updated)
+	if got := encode(t, out); strings.Contains(got, "updatedInput") {
+		t.Errorf("claude block rewrote the input: %s", got)
+	}
+	c, cphase, _ := ForGate("cursor")
+	out, _ = c.Gate(cphase, "ask", "r", updated)
+	if got := encode(t, out); strings.Contains(got, "tainted") {
+		t.Errorf("cursor carried a rewrite: %s", got)
 	}
 }
 

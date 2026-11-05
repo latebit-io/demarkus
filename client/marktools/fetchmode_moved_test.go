@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/render"
 )
 
@@ -355,7 +356,7 @@ func TestFetch_EveryKeyAndUnchangedNotice(t *testing.T) {
 		}}, nil
 	}})
 	first := fmText(t, tools, fmArgs{url: "mark://example.com/doc.md"})
-	want := "status: ok\nversion: 3\nmodified: 2026-07-04T00:00:00Z\netag: abc\nagent: x\ncontent-hash: sha256-1\ntags: a,b\ntitle: Doc\ntype: Note\n\n# Doc"
+	want := "status: ok\nversion: 3\nmodified: 2026-07-04T00:00:00Z\netag: abc\nagent: x\ncontent-hash: sha256-1\ntags: a,b\ntitle: Doc\ntype: Note\n\n" + docframe.Frame(fmSmallDoc)
 	if !strings.HasPrefix(first, want) {
 		t.Fatalf("envelope:\n%s", first)
 	}

@@ -63,6 +63,9 @@ spec:
         - protocol: TCP
           port: 443
     {{- end }}
+    {{- with .Values.networkPolicy.classifierEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
     - to:
         - ipBlock:
             cidr: 169.254.169.254/32
