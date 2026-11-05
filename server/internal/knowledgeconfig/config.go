@@ -161,6 +161,8 @@ func (c ClassifierConfig) validate() error {
 		return errors.New("contentCheck.classifier.url is required for kind http")
 	case c.URL != "" && !httpURL(c.URL):
 		return fmt.Errorf("contentCheck.classifier.url %q must be an http or https URL with a host", c.URL)
+	case c.Kind == ClassifierAnthropic && c.URL != "" && !strings.HasPrefix(strings.ToLower(c.URL), "https://"):
+		return fmt.Errorf("contentCheck.classifier.url %q must be https for kind anthropic: the API key rides every request", c.URL)
 	case c.Timeout < 0, c.Threshold < 0, c.Threshold > 1, c.MaxBytes < 0, c.MaxInFlight < 0:
 		return errors.New("contentCheck.classifier timeout, threshold (0-1), maxBytes and maxInFlight must not be negative")
 	case int64(c.MaxBytes) > protocol.MaxBodyLength:

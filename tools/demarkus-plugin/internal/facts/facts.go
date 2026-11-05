@@ -6,6 +6,7 @@ package facts
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -160,26 +161,49 @@ func classifySegment(tokens []string) (Check, bool) {
 	return "", false
 }
 
-// wrappers run the command after them.
-var wrappers = map[string]bool{"sudo": true, "doas": true, "env": true, "command": true, "exec": true, "nohup": true, "time": true}
+// wrappers run the command after them, the TS adapters' set; true marks one
+// whose options and numeric values (timeout 10s, nice -n 5) come first.
+// command takes none: command -v curl runs nothing.
+var wrappers = map[string]bool{"sudo": true, "doas": true, "env": true, "exec": true, "nohup": true, "time": true,
+	"nice": true, "timeout": true, "xargs": true, "stdbuf": true, "command": false}
+
+// numericArg is a wrapper option value: 10, 2.5, 10s, 1m.
+var numericArg = regexp.MustCompile(`^\d[0-9.]*[smhd]?$`)
 
 // Runs reports whether any pipeline stage of command runs one of programs:
-// quotes respected, env assignments and wrappers (sudo) skipped, a path
+// quotes respected, env assignments and wrappers (sudo -E) skipped, a path
 // compared by its base name.
 func Runs(command string, programs ...[]string) bool {
 	segs, _ := splitSegments(command)
 	for _, seg := range segs {
 		for _, stage := range append([]string{seg.stage}, seg.later...) {
-			tokens := strings.Fields(stage)
-			for len(tokens) > 0 && (isEnvAssignment(tokens[0]) || wrappers[filepath.Base(tokens[0])]) {
-				tokens = tokens[1:]
-			}
+			tokens := commandWords(strings.Fields(stage))
 			if slices.ContainsFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) }) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// commandWords drops what precedes the command a stage runs: assignments,
+// wrappers and the wrappers' options.
+func commandWords(tokens []string) []string {
+	for len(tokens) > 0 {
+		takesOptions, wrapper := wrappers[filepath.Base(tokens[0])]
+		switch {
+		case isEnvAssignment(tokens[0]):
+			tokens = tokens[1:]
+		case wrapper:
+			tokens = tokens[1:]
+			for takesOptions && len(tokens) > 0 && (strings.HasPrefix(tokens[0], "-") || numericArg.MatchString(tokens[0])) {
+				tokens = tokens[1:]
+			}
+		default:
+			return tokens
+		}
+	}
+	return tokens
 }
 
 func hasPrefix(tokens, prefix []string) bool {

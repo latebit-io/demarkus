@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Plugin } from "@opencode/plugin";
 import { assertPackageInstall, loadCommand as readCommand, loadCommands, registerPrompts } from "./package.ts";
-import { HostAsks } from "./host-ask.ts";
+import { HostAsks, unpromptedWarning } from "./host-ask.ts";
 import { isGatedWrite, recordTaint, taintStamp } from "./taint.ts";
 
 const HOME = homedir();
@@ -35,8 +35,6 @@ interface RegistryPaths {
 
 interface SessionState {
   guidanceDelivered: boolean;
-  // Untrusted reads so far; a later demarkus write asks first.
-  taint: string[];
 }
 
 type ToastClient = {
@@ -251,6 +249,17 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
   let disposed = false;
   const knowledgeOwnsGate = () => !disposed && ownsGate("knowledge", adapters);
   const sessions = new Map<string, SessionState>();
+  // Taint outlives resetSessionState: a reconnect cannot prove the session read
+  // nothing untrusted. Only a session delete or dispose clears it.
+  const taints = new Map<string, string[]>();
+  const taintOf = (id: string): string[] => {
+    let taint = taints.get(id);
+    if (!taint) {
+      taint = [];
+      taints.set(id, taint);
+    }
+    return taint;
+  };
   const pendingWarns = new Map<string, { warning?: string }>();
   const resetSessionState = () => {
     sessions.clear();
@@ -259,7 +268,7 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
   const state = (id: string): SessionState => {
     let session = sessions.get(id);
     if (!session) {
-      session = { guidanceDelivered: false, taint: [] };
+      session = { guidanceDelivered: false };
       sessions.set(id, session);
     }
     return session;
@@ -347,7 +356,7 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       const pending: { warning?: string } = {};
       if (key) pendingWarns.set(key, pending);
       try {
-        const taint = state(input.sessionID ?? "default").taint;
+        const taint = taintOf(input.sessionID ?? "default");
         const decision = await callGate(input.tool, output.args ?? {}, directory, taint);
         if (decision.decision === "block") {
           throw new Error(decision.reason ?? "demarkus-knowledge gate blocked this write");
@@ -370,7 +379,7 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       input: { tool: string; sessionID?: string; callID?: string; args?: Record<string, unknown> },
       output: { output: string },
     ) => {
-      recordTaint(state(input.sessionID ?? "default").taint, input.tool, input.args);
+      recordTaint(taintOf(input.sessionID ?? "default"), input.tool, input.args);
       const key = `${input.sessionID}:${input.callID}`;
       const warning = pendingWarns.get(key)?.warning;
       pendingWarns.delete(key);
@@ -386,7 +395,10 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       if (event.type !== "session.deleted" && event.type !== "session.idle") return;
       const id = event.type === "session.deleted" ? event.properties?.info?.id : event.properties?.sessionID;
       if (!id) return;
-      if (event.type === "session.deleted") sessions.delete(id);
+      if (event.type === "session.deleted") {
+        sessions.delete(id);
+        taints.delete(id);
+      }
       for (const key of pendingWarns.keys()) {
         if (key.startsWith(`${id}:`)) pendingWarns.delete(key);
       }
@@ -398,6 +410,7 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       if (disposed) return;
       disposed = true;
       resetSessionState();
+      taints.clear();
       adapters.delete("knowledge");
       if (adapters.size === 0) {
         const registry = (globalThis as GateGlobal)[GATE_ADAPTERS] as Map<string, Set<string>>;
@@ -493,9 +506,10 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
       asks.expect(event.tool, event.sessionID, event.id);
     });
     await ctx.tool.hook("execute.after", async (event) => {
-      const unprompted = asks.settle(event.sessionID, event.id);
-      if (unprompted && event.status === "completed") console.error(`[demarkus-knowledge] ${event.tool} ran without the permission prompt its ask needed: ${unprompted}`);
-      const output = { output: "" };
+      const reason = asks.settle(event.sessionID, event.id);
+      const unprompted = reason && event.status === "completed" ? unpromptedWarning(event.tool, reason) : "";
+      if (unprompted) console.error(`[demarkus-knowledge] ${unprompted}`);
+      const output = { output: unprompted ? `\n\nWarning: ${unprompted}` : "" };
       await legacy["tool.execute.after"](
         { tool: event.tool, sessionID: event.sessionID, callID: event.id, args: event.input as Record<string, unknown> | undefined }, output,
       );

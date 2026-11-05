@@ -383,6 +383,18 @@ test("V2 reconnects failed and ended streams, discards outage state and resumes 
   assert.equal(h.subscriptions(), 2, "unload cancels backoff without resubscribing");
 });
 
+test("V2 keeps session taint across an event-stream reconnect", async (t) => {
+  const h = harness("/v2-reconnect-taint");
+  const clock = retryClock();
+  const stop = await installed.setupV2(h.ctx, { wait: clock.wait, guidance: async () => "", nudge: async () => "" });
+  t.after(stop);
+  await h.hooks.get("execute.after")!({ tool: "webfetch", sessionID: "s1", id: "w1", input: { url: "https://evil.example" }, status: "completed", result: { content: "page" } });
+  await h.emit(new Error("transport lost"));
+  await clock.advance();
+  await h.hooks.get("execute.before")!({ tool: "acme_mark_publish", sessionID: "s1", id: "c1", input: { decision: "allow" } });
+  assert.deepEqual(gateCalls().at(-1)?.taint, ["webfetch https://evil.example"]);
+});
+
 test("V2 event reconnect backoff is capped during persistent failure", async (t) => {
   const h = harness("/v2-backoff");
   let subscriptions = 0;

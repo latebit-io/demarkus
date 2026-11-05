@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "@opencode/plugin";
 import { assertPackageInstall, loadCommand as readCommand, loadCommands, registerPrompts } from "./package.ts";
-import { HostAsks } from "./host-ask.ts";
+import { HostAsks, unpromptedWarning } from "./host-ask.ts";
 import { isGatedWrite, recordTaint, taintStamp } from "./taint.ts";
 
 const BIN = join(homedir(), ".demarkus", "bin", "demarkus-plugin");
@@ -528,8 +528,9 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
       if (decision.decision === "warn" && decision.reason) pendingWarns.set(`${event.sessionID}:${event.id}`, decision.reason);
     });
     await ctx.tool.hook("execute.after", async (event: V2ToolAfter) => {
-      const unprompted = asks.settle(event.sessionID, event.id);
-      if (unprompted && event.status === "completed") console.error(`[demarkus-memory] ${event.tool} ran without the permission prompt its ask needed: ${unprompted}`);
+      const reason = asks.settle(event.sessionID, event.id);
+      const unprompted = reason && event.status === "completed" ? unpromptedWarning(event.tool, reason) : "";
+      if (unprompted) console.error(`[demarkus-memory] ${unprompted}`);
       if (controller.signal.aborted) return;
       const key = `${event.sessionID}:${event.id}`;
       const warn = pendingWarns.get(key);
@@ -542,7 +543,7 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
         ? await (services.nudge ?? callNudge)({ event: "promote", tool: event.tool, input: event.input ?? {} })
         : "";
       if (controller.signal.aborted) return;
-      const additions = [warn && `⚠️ ${warn}`, nudge].filter(Boolean).join("\n\n");
+      const additions = [unprompted && `⚠️ ${unprompted}`, warn && `⚠️ ${warn}`, nudge].filter(Boolean).join("\n\n");
       if (!additions) return;
       const content = event.result.content;
       event.result = {

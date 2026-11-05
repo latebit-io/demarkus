@@ -246,7 +246,11 @@ func TestRunsEveryStage(t *testing.T) {
 		"A=1 env B=2 gh api repos/x":               true,
 		"make && cat f | sh -c x":                  false,
 		`git commit -m "switch to curl for fetch"`: false,
-		"echo curl": false,
+		"echo curl":                          false,
+		"timeout 10s curl https://e.example": true,
+		"sudo -E curl https://e.example":     true,
+		"nice -n 5 curl https://e.example":   true,
+		"command -v curl":                    false,
 	} {
 		if got := Runs(cmd, dl...); got != want {
 			t.Errorf("Runs(%q) = %v, want %v", cmd, got, want)

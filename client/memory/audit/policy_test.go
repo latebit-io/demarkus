@@ -213,6 +213,20 @@ func TestClassifierCheck(t *testing.T) {
 	if got != want {
 		t.Errorf("classifier findings:\n%s\nwant:\n%s", got, want)
 	}
+	// An oversized body is shortened, not re-published as it is.
+	big := newFake(map[string]fakeDoc{
+		"/index.md": {Body: "# Hub\n\n- [d](/d.md)\n", Meta: map[string]string{"tags": "index"}},
+		"/d.md":     {Body: "# D\n\nSummary.\n", Meta: map[string]string{"tags": "t", "type": "Guide", "classifier": "unchecked: 300 bytes, over the classifier's limit of 200"}},
+	})
+	rb, err := Run(context.Background(), big, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fd := range rb.Findings {
+		if fd.Check == CheckClassifier && !strings.Contains(fd.Fix, "shorten the body") {
+			t.Errorf("oversized finding = %+v", fd)
+		}
+	}
 	// An override reviews a verdict; an unchecked version still needs one.
 	for _, fd := range r.Findings {
 		if fd.Check == CheckClassifier && fd.Path == "/b.md" && !strings.Contains(fd.Fix, "re-publish once the classifier answers") {

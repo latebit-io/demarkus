@@ -190,6 +190,8 @@ func (a *audit) checkClassifier() {
 		detail := protocol.ClassifierKey + ": " + hiddentext.Reveal(verdict)
 		override := strings.TrimSpace(d.meta[contentcheck.OverrideKey])
 		switch {
+		case strings.Contains(verdict, protocol.ClassifierOverLimit):
+			a.add(CheckClassifier, p, detail, "shorten the body under the classifier's limit (or raise contentCheck.classifier.maxBytes), then re-publish so the version is checked")
 		case !protocol.ClassifierFlagged(d.meta):
 			a.add(CheckClassifier, p, detail, "re-publish once the classifier answers, so the version is checked")
 		case override != "":

@@ -188,18 +188,22 @@ test("V2 delivers every gated write's warn and hands an ask to the host prompt o
     await after(saved);
     assert.equal(saved.result.content, "Saved\n\nPromote nudge");
 
-    // An ask whose check never came is reported, not dropped.
+    // An ask whose check never came reaches the result, and later asks block
+    // until the order shows again.
     const errors: string[] = [];
     const original = console.error;
     console.error = (message: string) => { errors.push(message); };
     try {
       const skipped = { ...publish, id: "p3", input: { ...publish.input } };
       await before(skipped);
-      await after({ ...skipped, status: "completed", result: { content: "Saved" } });
+      const ran = { ...skipped, status: "completed", result: { content: "Saved" } };
+      await after(ran);
+      assert.match(ran.result.content, /⚠️ demarkus-memory_mark_publish ran without the approval prompt its ask needed; review this write with the user\. The ask: policy reason/);
+      await assert.rejects(before({ ...publish, id: "p4", input: { ...publish.input } }), /policy reason Confirm with the user/);
     } finally {
       console.error = original;
     }
-    assert.match(errors.join("\n"), /mark_publish ran without the permission prompt its ask needed: policy reason/);
+    assert.match(errors.join("\n"), /mark_publish ran without the approval prompt its ask needed/);
   } finally {
     stop();
   }

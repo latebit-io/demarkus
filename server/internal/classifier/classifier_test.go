@@ -66,7 +66,7 @@ func TestStamperSkipsAndBounds(t *testing.T) {
 	if got := s.Stamp(context.Background(), "/a.md", "# tiny"); got != "" {
 		t.Errorf("tiny body = %q, want no call and no stamp", got)
 	}
-	if got := s.Stamp(context.Background(), "/a.md", strings.Repeat("x", 300)); got != "unchecked: 300 bytes is over the classifier's 200" {
+	if got := s.Stamp(context.Background(), "/a.md", strings.Repeat("x", 300)); got != "unchecked: 300 bytes, over the classifier's limit of 200" {
 		t.Errorf("oversized body = %q", got)
 	}
 	done := make(chan string)

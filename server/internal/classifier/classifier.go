@@ -52,7 +52,7 @@ func (s *Stamper) Stamp(ctx context.Context, path, body string) string {
 	case len(body) < minBytes:
 		return ""
 	case len(body) > s.maxBytes:
-		return fmt.Sprintf("%s: %d bytes is over the classifier's %d", protocol.ClassifierUnchecked, len(body), s.maxBytes)
+		return fmt.Sprintf("%s: %d bytes, %s of %d", protocol.ClassifierUnchecked, len(body), protocol.ClassifierOverLimit, s.maxBytes)
 	}
 	select {
 	case s.slots <- struct{}{}:

@@ -69,10 +69,12 @@ func IsTainted(meta map[string]string) bool {
 // "injection: <reason> (<model>)" or "unchecked: <why>"; see IsServerStampedKey.
 const ClassifierKey = "classifier"
 
-// Classifier verdict prefixes.
+// Classifier verdict prefixes, and the phrase an unchecked verdict for a body
+// over the classifier's size limit carries.
 const (
 	ClassifierInjection = "injection"
 	ClassifierUnchecked = "unchecked"
+	ClassifierOverLimit = "over the classifier's limit"
 )
 
 // IsInjectionStamp reports a classifier verdict of injection.
