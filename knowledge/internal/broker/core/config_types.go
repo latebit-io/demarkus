@@ -18,8 +18,11 @@ import (
 // provider it trusts and the worlds of both gateway profiles. World Tokens
 // Secrets live in each world's namespace; the broker's own state in its namespace.
 type Config struct {
-	Server       ServerConfig       `yaml:"server"`
-	OIDC         OIDCConfig         `yaml:"oidc"`
+	Server ServerConfig `yaml:"server"`
+	OIDC   OIDCConfig   `yaml:"oidc"`
+	// Governors are the emails whose writes carry govern: governance
+	// documents on a restricted world. Each still needs the world's allow.
+	Governors    []string           `yaml:"governors"`
 	Worlds       []WorldConfig      `yaml:"worlds"`
 	WebClients   []WebClientConfig  `yaml:"webClients"`
 	Sweeper      SweeperConfig      `yaml:"sweeper"`

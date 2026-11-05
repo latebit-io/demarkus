@@ -47,12 +47,15 @@ your own policy to `/.well-known/demarkus/policy.md` through the protocol and
 it governs the next write; restarts never revert it.
 
 Everything under `/.well-known/demarkus/` (policy, template, style guide,
-world descriptor) is a governance document. A knowledge world restricts it
-(`governance: restricted`, the default): writes need a token with the
-`govern` operation, and an identity writing through the broker, the agent
-included, is refused. A memory-profile world is `open`, like a local soul:
-its owner curates their own layout. Mint a governor entry in
-`<name>-static-tokens` and keep its raw value away from agents:
+world descriptor) is a governance document. With `broker.governors` empty
+every world is `open`, as before `govern` existed: any publisher writes
+them. Name governors and each knowledge world restricts them
+(`governance: restricted`): a write needs the `govern` operation, which a
+governor's broker writes carry (each still needs the world's `allow`), and
+every other identity, its agent included, is refused. A memory-profile
+world stays `open`, like a local soul: its owner curates their own layout.
+A direct client takes a governor entry in `<name>-static-tokens` instead;
+keep its raw value away from agents:
 
 ```toml
 [tokens.governor]
@@ -61,9 +64,9 @@ paths = ["/.well-known/demarkus/**"]
 operations = ["govern"]
 ```
 
-Set `governance: open` on a world to let any publisher write them, as before
-`govern` existed; an open world accepts a `govern` token too, so provision
-governors before restricting. A bucket holding objects
+A world's own `governance:` (`open` or `restricted`) overrides the default;
+an open world accepts a `govern` token too, so provision governors before
+restricting. A bucket holding objects
 but no world marker is refused, so a mistyped `bucket.url` naming a bucket
 already in use fails the open. A typo naming some other empty bucket still
 creates a world there, logged at Warn.

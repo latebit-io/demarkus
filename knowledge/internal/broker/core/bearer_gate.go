@@ -13,9 +13,10 @@ import (
 // field (ADR 0033): the gateways' bearer check and audience, then the
 // world's tenancy and write predicates, decided per request.
 type BearerGate struct {
-	check  BearerCheck
-	issuer string
-	worlds *WorldRegistry
+	check     BearerCheck
+	issuer    string
+	worlds    *WorldRegistry
+	governors []string
 	// resources is each profile's gateway resource, the audience its worlds take.
 	resources map[string]string
 	log       *slog.Logger
@@ -25,9 +26,10 @@ type BearerGate struct {
 // gateways share.
 func NewBearerGate(cfg *Config, verifier Verifier, log *slog.Logger) *BearerGate {
 	return &BearerGate{
-		check:  BearerCheck{Verifier: verifier, AllowDomains: cfg.OIDC.AllowDomains},
-		issuer: cfg.OIDC.Issuer,
-		worlds: cfg.Registry(),
+		check:     BearerCheck{Verifier: verifier, AllowDomains: cfg.OIDC.AllowDomains},
+		issuer:    cfg.OIDC.Issuer,
+		worlds:    cfg.Registry(),
+		governors: cfg.Governors,
 		resources: map[string]string{
 			ProfileKnowledge: cfg.Server.Gateway(ProfileKnowledge).Resource(),
 			ProfileMemory:    cfg.Server.Gateway(ProfileMemory).Resource(),
@@ -76,7 +78,7 @@ func (b *BearerGate) admit(ctx context.Context, worldName, bearer string) (proto
 			return protocol.Grant{}, fmt.Errorf("%w: subject %s is not the tenant of %q", protocol.ErrNotPermitted, HashSubject(claims.Subject), w.Name)
 		}
 	}
-	grant, err := WriteGrant(&w, &claims)
+	grant, err := WriteGrant(&w, &claims, b.governors)
 	if err != nil {
 		// Knowledge reads pass the org gate alone; outside allow, no paths.
 		b.log.DebugContext(ctx, "broker: bearer reads only", "world", w.Name, "subject", HashSubject(claims.Subject), "err", err)

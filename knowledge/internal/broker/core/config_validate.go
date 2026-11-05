@@ -45,6 +45,9 @@ func (c *Config) validate() error {
 	if err := c.OIDC.validate(); err != nil {
 		return err
 	}
+	if err := normalizeList("governors", c.Governors); err != nil {
+		return err
+	}
 	if err := c.Provisioning.validate(); err != nil {
 		return err
 	}

@@ -107,8 +107,9 @@ tests:
           path: data["config.yaml"]
           pattern: 'name: "alice"[\s\S]*gated: true'
 
-  - it: restricts governance on a knowledge world, opens it on memory, honours an override
+  - it: restricts governance on a knowledge world once governors exist, opens it on memory, honours an override
     set:
+      broker.governors: [admin@example.com]
       broker.memory.publicURL: https://memory.example.com
       worldDefaults.bucketPrefix: gs://deployment-
       worlds:
@@ -131,6 +132,24 @@ tests:
       - matchRegex:
           path: data["config.yaml"]
           pattern: '- name: "lab"\n(?: {4}[^\n]*\n)*? {6}governance: "open"'
+
+  - it: keeps every world open without governors, as before govern, unless a world restricts
+    set:
+      broker.governors: []
+      worldDefaults.bucketPrefix: gs://deployment-
+      worlds:
+        - name: team-a
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f41
+        - name: lab
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f43
+          governance: restricted
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '- name: "team-a"\n(?: {4}[^\n]*\n)*? {6}governance: "open"'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '- name: "lab"\n(?: {4}[^\n]*\n)*? {6}governance: "restricted"'
 
   - it: passes a world's checkpoint grace through, and omits it unset
     set:

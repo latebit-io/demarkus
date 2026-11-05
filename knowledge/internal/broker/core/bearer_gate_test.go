@@ -32,6 +32,8 @@ func bearerGateFixture(t *testing.T) (*Config, *BearerGate, time.Time) {
 			},
 			{Name: "far", Profile: ProfileKnowledge, InternalAddress: "far.example.com:6309"},
 		},
+		// eve governs but is outside team-a's allow.
+		Governors: []string{"alice@example.com", "eve@other.test"},
 	}
 	identities := map[string]Claims{
 		"alice":        {Subject: "idp|alice", Email: "Alice@Example.com", EmailVerified: true, Expiry: expiry},
@@ -98,6 +100,31 @@ func TestBearerGateOnAKnowledgeWorld(t *testing.T) {
 		_, err := admitWith(t, gate, bearer)
 		if err == nil || errors.Is(err, protocol.ErrNotPermitted) {
 			t.Errorf("bearer %q: err = %v, want an unauthorized refusal", bearer, err)
+		}
+	}
+}
+
+// Govern rides on a governor's write grant, her own tenant world included;
+// a writer who is not one gets none, nor a governor outside the allow.
+func TestBearerGateGovernsForGovernors(t *testing.T) {
+	_, gates, _ := bearerGateFixture(t)
+	cases := []struct {
+		authority, bearer string
+		govern            bool
+	}{
+		{"team-a.example.com", "alice", true},
+		{"team-a.example.com", "bob", false},
+		{"team-a.example.com", "eve", false},
+		{"alice-w.tenants.example.com", "alice", true},
+	}
+	for _, c := range cases {
+		gate, err := gates.For(c.authority)
+		if err != nil {
+			t.Fatal(err)
+		}
+		grant, err := admitWith(t, gate, c.bearer)
+		if err != nil || grant.Govern != c.govern {
+			t.Errorf("%s on %s: govern %v, err %v; want govern %v", c.bearer, c.authority, grant.Govern, err, c.govern)
 		}
 	}
 }

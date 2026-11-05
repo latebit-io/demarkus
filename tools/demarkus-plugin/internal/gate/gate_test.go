@@ -218,6 +218,36 @@ func TestKnowledgeStrictnessDefaultsWarn(t *testing.T) {
 	}
 }
 
+// A knowledge write under /.well-known/demarkus/ warns by default, in any
+// spelling; other paths and reads pass, and the knob escalates it.
+func TestKnowledgeGovernanceWritesWarn(t *testing.T) {
+	t.Setenv("DEMARKUS_GOVERNANCE_STRICTNESS", "")
+	setupHome(t, map[string]string{"knowledge-systems": "knowledge\n"})
+	publish := func(url string) Decision {
+		return mustEval(t, &Input{Tool: "knowledge_mark_publish", Input: map[string]any{
+			"url": url, "body": "# Policy\n\nThe write policy.\n", "metadata": map[string]any{"tags": "category:governance"},
+		}})
+	}
+	for _, url := range []string{"mark://root/.well-known/demarkus/policy.md", "mark://root/.Well-Known/demarkus/style.md", "/.well-known/demarkus/template.md"} {
+		if d := publish(url); d.Decision != "warn" || !strings.Contains(d.Reason, "governance document") {
+			t.Errorf("publish %s: got %q (%s), want warn", url, d.Decision, d.Reason)
+		}
+	}
+	if d := mustEval(t, &Input{Tool: "knowledge_mark_archive", Input: map[string]any{"url": "mark://root/.well-known/demarkus/policy.md"}}); d.Decision != "warn" {
+		t.Errorf("archive policy: got %q (%s), want warn", d.Decision, d.Reason)
+	}
+	if d := publish("mark://root/docs/policy.md"); d.Decision != "allow" {
+		t.Errorf("publish outside governance: got %q (%s), want allow", d.Decision, d.Reason)
+	}
+	if d := mustEval(t, &Input{Tool: "knowledge_mark_fetch", Input: map[string]any{"url": "mark://root/.well-known/demarkus/policy.md"}}); d.Decision != "allow" {
+		t.Errorf("fetch policy: got %q, want allow", d.Decision)
+	}
+	t.Setenv("DEMARKUS_GOVERNANCE_STRICTNESS", "ask")
+	if d := publish("mark://root/.well-known/demarkus/policy.md"); d.Decision != "ask" {
+		t.Errorf("escalated: got %q, want ask", d.Decision)
+	}
+}
+
 func TestMcpProxyUnwrap(t *testing.T) {
 	t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
 	setupHome(t, nil)

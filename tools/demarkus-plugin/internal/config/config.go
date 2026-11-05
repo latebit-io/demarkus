@@ -136,6 +136,13 @@ func RetentionStrictness() (Strictness, error) {
 	return strictness("DEMARKUS_RETENTION_STRICTNESS", "plugin.retention-strictness", Ask)
 }
 
+// GovernanceStrictness is the knowledge governance guard's level: env
+// override, then plugin.governance-strictness, then warn. Warn keeps an open
+// world's flow prompt-free; ask puts a human on every policy write.
+func GovernanceStrictness() (Strictness, error) {
+	return strictness("DEMARKUS_GOVERNANCE_STRICTNESS", "plugin.governance-strictness", Warn)
+}
+
 // TaintStrictness is the untrusted-read guard's level: env override, then
 // plugin.taint-strictness, then ask. Off turns the guard off.
 func TaintStrictness() (Strictness, error) {

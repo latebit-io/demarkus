@@ -33,6 +33,8 @@ type Deps struct {
 	// management API uses too; AllowDomains is the broker wide domain gate.
 	core.SharedDeps
 	AllowDomains []string
+	// Governors is the config's list, handed to core.WriteGrant.
+	Governors []string
 	// Provisioner creates tenant worlds on first arrival; nil in static mode.
 	Provisioner *storage.Provisioner
 	// Hub is the world holding the federation checkpoints of the Federated
@@ -68,6 +70,7 @@ func DepsFor(cfg *core.Config, profile *Profile, shared core.SharedDeps, provisi
 		Realm:        cfg.Server.Realm,
 		SharedDeps:   shared,
 		AllowDomains: cfg.OIDC.AllowDomains,
+		Governors:    cfg.Governors,
 		Provisioner:  provisioner,
 	}
 }

@@ -135,10 +135,10 @@ func (c BearerCheck) Authenticate(ctx context.Context, resource, raw string) (Cl
 	return claims, err
 }
 
-// WriteGrant is what claims may write in w: the canonical email as the
-// audit label and w's write scope, or why nothing. The MCP write gate and
-// the bearer gate both decide here; the email checks repeat GateIdentity's.
-func WriteGrant(w *WorldConfig, claims *Claims) (protocol.Grant, error) {
+// WriteGrant is what claims may write in w (email label, write scope, govern
+// for a governor), or why nothing. The MCP write gate and the bearer gate
+// both decide here; the email checks repeat GateIdentity's.
+func WriteGrant(w *WorldConfig, claims *Claims, governors []string) (protocol.Grant, error) {
 	if !claims.EmailVerified {
 		return protocol.Grant{}, errors.New("identity email is not verified")
 	}
@@ -151,7 +151,9 @@ func WriteGrant(w *WorldConfig, claims *Claims) (protocol.Grant, error) {
 	if !WorldAllows(&w.Allow, &canonical) {
 		return protocol.Grant{}, fmt.Errorf("write access denied for world %q", w.Name)
 	}
-	return protocol.Grant{Label: canonical.Email, Paths: w.WriteScope.Paths, Expires: claims.Expiry}, nil
+	// Govern acts only where the world's own governance restricts.
+	govern := emailMatches(canonical.Email, governors)
+	return protocol.Grant{Label: canonical.Email, Paths: w.WriteScope.Paths, Expires: claims.Expiry, Govern: govern}, nil
 }
 
 // ResourceAllows reports whether a token may be used at resource: an

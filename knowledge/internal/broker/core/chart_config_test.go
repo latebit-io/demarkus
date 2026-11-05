@@ -30,6 +30,9 @@ func TestLoadConfigAcceptsTheChartRendering(t *testing.T) {
 	if got := OAuthStateRef(cfg).Name; got != "knowledge-oauth-state" {
 		t.Fatalf("oauth state Secret = %q, want the chart's name", got)
 	}
+	if len(cfg.Governors) != 1 || cfg.Governors[0] != "admin@example.com" {
+		t.Fatalf("governors = %v, want the chart's list", cfg.Governors)
+	}
 	want := FederationConfig{Hub: "team-a", LeaseName: "demarkus-federation", QuietPeriod: 30 * time.Second, Interval: time.Minute}
 	if cfg.Federation != want {
 		t.Fatalf("federation = %+v, want %+v", cfg.Federation, want)

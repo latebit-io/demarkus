@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	docgate "github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/protocol"
@@ -135,6 +136,32 @@ func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, er
 		return nil, err
 	}
 	return &Decision{Decision: string(s), Reason: reason}, nil
+}
+
+// governanceDecision flags a knowledge write under /.well-known/demarkus/:
+// the policy, template and style guide bind every writer, so the change is
+// surfaced (warn by default, ask or block by the knob).
+func governanceDecision(pt config.ParsedTool, args map[string]any) (*Decision, error) {
+	url := urlOf(args)
+	if !mcpfmt.StoreWriteTools["mark_"+pt.Verb] || !governanceURL(url) {
+		return nil, nil
+	}
+	s, err := config.GovernanceStrictness()
+	if err != nil {
+		return nil, err
+	}
+	return &Decision{Decision: string(s), Reason: fmt.Sprintf(
+		"demarkus %s to %s changes a governance document, which every writer of the knowledge system follows. "+
+			"Review the change with the user; DEMARKUS_GOVERNANCE_STRICTNESS adjusts this check (warn/ask/block).",
+		pt.Verb, url)}, nil
+}
+
+// governanceURL reports a mark:// URL or bare path naming a governance document.
+func governanceURL(raw string) bool {
+	if t, err := links.ParseMark(raw); err == nil {
+		return storefmt.IsGovernancePath(t.Path)
+	}
+	return storefmt.IsGovernancePath(raw)
 }
 
 // contentScanner runs the rules the soul server runs: secrets always, personal
@@ -431,6 +458,13 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 	}
 	if cd := contentDecision(pt, args); cd != nil {
 		decisions = append(decisions, *cd)
+	}
+	gd, err := governanceDecision(pt, args)
+	if err != nil {
+		return Decision{}, err
+	}
+	if gd != nil {
+		decisions = append(decisions, *gd)
 	}
 	sd, err := styleDecision(pt, args, docgate.KnowledgeGuide)
 	if err != nil {

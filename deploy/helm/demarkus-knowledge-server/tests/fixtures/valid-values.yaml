@@ -35,6 +35,7 @@ worlds:
 broker:
   publicURL: https://broker.example.com
   stateBucket: gs://deployment-broker-state
+  governors: [admin@example.com]
   oidc:
     issuer: https://accounts.example.com
     clientID: broker-app
