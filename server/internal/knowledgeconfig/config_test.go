@@ -91,8 +91,8 @@ worlds:
 	if world.Policy.Path != defaultPolicyPath {
 		t.Errorf("policy path: got %q", world.Policy.Path)
 	}
-	if world.Policy.Governance != GovernanceRestricted {
-		t.Errorf("governance default: got %q, want restricted", world.Policy.Governance)
+	if world.Policy.Governance != GovernanceOpen {
+		t.Errorf("governance default: got %q, want open (as before govern)", world.Policy.Governance)
 	}
 	if world.Policy.File != "" {
 		t.Errorf("policy file: got %q, want unset", world.Policy.File)

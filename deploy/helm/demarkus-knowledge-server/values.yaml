@@ -87,8 +87,9 @@ server:
 # /me/install hands direct clients (blank omits the world), hub marks the
 # federation hub (at most one world), profile picks the gateway (knowledge,
 # or memory for a hand-provisioned tenant whose allow names one identity).
-# governance is restricted (knowledge default: /.well-known/demarkus/ writes
-# need the govern token operation) or open (memory default: any publisher).
+# governance is restricted (/.well-known/demarkus/ writes need govern: a
+# broker governor or a govern token; the knowledge default once
+# broker.governors names anyone) or open (any publisher; otherwise the default).
 worlds: []
   # - name: team-a
   #   worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
@@ -290,6 +291,11 @@ broker:
     existingSigningKeyRef:
       name: ""
       key: signing-key.pem
+
+  # Emails whose writes to a knowledge world carry the govern operation: the
+  # policy, template and style guide of a restricted world. Each still needs
+  # the world's allow. Non-empty restricts knowledge worlds; empty keeps them open.
+  governors: []
 
   # Registered confidential web clients (RFC 6749 2.1), such as the library.
   # Each entry sets exactly one of clientSecret (hashed at load),

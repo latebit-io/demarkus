@@ -19,7 +19,7 @@ func (g *Gateway) writeGrantFor(claims *core.Claims, worldName string) (protocol
 	if worldCfg == nil {
 		return protocol.Grant{}, fmt.Errorf("world %q is not configured", worldName)
 	}
-	return core.WriteGrant(worldCfg, claims)
+	return core.WriteGrant(worldCfg, claims, g.deps.Governors)
 }
 
 // The write tools bind their arguments through mcpbind; marktools checks,

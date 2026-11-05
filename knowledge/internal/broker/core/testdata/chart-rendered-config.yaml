@@ -23,6 +23,7 @@ oidc:
   brokerSigningKey: |
     
   allowDomains: []
+governors: ["admin@example.com"]
 worlds:
   - name: "team-a"
     profile: "knowledge"

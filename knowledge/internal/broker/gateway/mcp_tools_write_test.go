@@ -460,3 +460,27 @@ func TestHandleMarkPublishShowsTheWorldsWarning(t *testing.T) {
 		t.Errorf("response missing the warning field\nfull:\n%s", text)
 	}
 }
+
+// A governor's publish carries govern; the same writer without the list
+// does not, so a restricted world refuses her governance write.
+func TestHandleMarkPublishGrantsGovernToGovernors(t *testing.T) {
+	for _, governors := range [][]string{{brokertest.AliceClaims().Email}, nil} {
+		cfg := mcpTestConfig()
+		cfg.Governors = governors
+		var grants []protocol.Grant
+		d := &fakeDispatcher{PublishFn: func(ctx context.Context, _ fetch.WriteRequest) (fetch.Result, error) {
+			grant, _ := protocol.GrantFrom(ctx)
+			grants = append(grants, grant)
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{"version": "1"}}}, nil
+		}}
+		g := newGatewayWithDispatcher(t, cfg, d)
+		if _, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+			"url": "mark://team-a/.well-known/demarkus/policy.md", "body": "# Write Policy\n\nThe policy.\n", "expected_version": float64(0),
+		})); err != nil {
+			t.Fatalf("handleMarkPublish: %v", err)
+		}
+		if want := governors != nil; len(grants) != 1 || grants[0].Govern != want {
+			t.Errorf("governors %v: grants %+v, want one with govern %v", governors, grants, want)
+		}
+	}
+}

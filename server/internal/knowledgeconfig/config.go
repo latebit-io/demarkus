@@ -352,8 +352,8 @@ type PolicyConfig struct {
 	// Optional seeds nothing and judges by the empty policy when none exists;
 	// the default seeds a policy and refuses writes without one.
 	Optional bool `yaml:"optional"`
-	// Governance is restricted (the default: governance documents need the
-	// govern operation) or open (publish suffices, as before govern).
+	// Governance is open (the default: publish suffices, as before govern)
+	// or restricted (governance documents need the govern operation).
 	Governance Governance `yaml:"governance"`
 }
 
@@ -753,7 +753,7 @@ func (config *Config) SetDefaults() {
 			world.Policy.Path = defaultPolicyPath
 		}
 		if world.Policy.Governance == "" {
-			world.Policy.Governance = GovernanceRestricted
+			world.Policy.Governance = GovernanceOpen
 		}
 		if world.Limits.MaxConcurrentRequests == 0 {
 			world.Limits.MaxConcurrentRequests = defaultMaxConcurrentRequests

@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -447,6 +448,20 @@ func TestLoadConfig(t *testing.T) {
 				`redirectURL: https://broker.example.com/auth/callback
   allowDomains: ["latebit.io", "   "]`, 1),
 			wantErr: "oidc.allowDomains[1] is empty",
+		},
+		{
+			name: "governors normalized to lowercase",
+			body: validConfig + "\ngovernors: [\"  Alice@Example.COM \"]\n",
+			validate: func(t *testing.T, c *Config) {
+				if want := []string{"alice@example.com"}; !slices.Equal(c.Governors, want) {
+					t.Errorf("governors = %v, want %v (lowercased + trimmed at load)", c.Governors, want)
+				}
+			},
+		},
+		{
+			name:    "governors empty entry rejected",
+			body:    validConfig + "\ngovernors: [\"alice@example.com\", \" \"]\n",
+			wantErr: "governors[1] is empty",
 		},
 		{
 			// Plan §6.2 Slice C.4 defaults: tokens 10/min burst 5,
