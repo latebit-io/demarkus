@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	docgate "github.com/latebit-io/demarkus/client/memory/gate"
+	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/provenance"
@@ -21,6 +22,7 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/taint"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // Input accepts native {tool,input,cwd}, Claude, and Cursor hook payloads.
@@ -143,7 +145,7 @@ func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, er
 // surfaced (warn by default, ask or block by the knob).
 func governanceDecision(pt config.ParsedTool, args map[string]any) (*Decision, error) {
 	url := urlOf(args)
-	if !mcpfmt.StoreWriteTools["mark_"+pt.Verb] || !governanceURL(url) {
+	if !mcpfmt.StoreWriteTools["mark_"+pt.Verb] || reportOnly(pt, args) || !governanceURL(url) {
 		return nil, nil
 	}
 	s, err := config.GovernanceStrictness()
@@ -154,6 +156,21 @@ func governanceDecision(pt config.ParsedTool, args map[string]any) (*Decision, e
 		"demarkus %s to %s changes a governance document, which every writer of the knowledge system follows. "+
 			"Review the change with the user; DEMARKUS_GOVERNANCE_STRICTNESS adjusts this check (warn/ask/block).",
 		pt.Verb, url)}, nil
+}
+
+// reportOnly is a curate or promote call that only builds the proposal or
+// packet its apply call needs; apply is read as the server's binding reads it.
+func reportOnly(pt config.ParsedTool, args map[string]any) bool {
+	switch pt.Verb {
+	case "curate":
+		req := mcp.CallToolRequest{}
+		req.Params.Arguments = args
+		return !req.GetBool("apply", false)
+	case "promote":
+		phase, _ := args["phase"].(string)
+		return phase == promote.PhaseDryRun
+	}
+	return false
 }
 
 // governanceURL reports a mark:// URL or bare path naming a governance document.

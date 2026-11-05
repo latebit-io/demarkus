@@ -248,6 +248,31 @@ func TestKnowledgeGovernanceWritesWarn(t *testing.T) {
 	}
 }
 
+// A report-only curate or a promote dry run writes nothing, so even a
+// blocking governance check lets the review through; the apply is held.
+func TestGovernanceCheckSkipsReportOnlyCalls(t *testing.T) {
+	t.Setenv("DEMARKUS_GOVERNANCE_STRICTNESS", "block")
+	setupHome(t, map[string]string{"knowledge-systems": "knowledge\n"})
+	policy := "mark://root/.well-known/demarkus/policy.md"
+	cases := []struct {
+		tool string
+		args map[string]any
+		want string
+	}{
+		{"knowledge_mark_curate", map[string]any{"url": policy}, "allow"},
+		{"knowledge_mark_curate", map[string]any{"url": policy, "apply": "false"}, "allow"},
+		{"knowledge_mark_curate", map[string]any{"url": policy, "apply": true}, "block"},
+		{"knowledge_mark_curate", map[string]any{"url": policy, "apply": "true"}, "block"},
+		{"knowledge_mark_promote", map[string]any{"url": policy, "phase": "dry_run"}, "allow"},
+		{"knowledge_mark_promote", map[string]any{"url": policy, "phase": "apply"}, "block"},
+	}
+	for _, c := range cases {
+		if d := mustEval(t, &Input{Tool: c.tool, Input: c.args}); d.Decision != c.want {
+			t.Errorf("%s %v: got %q (%s), want %s", c.tool, c.args, d.Decision, d.Reason, c.want)
+		}
+	}
+}
+
 func TestMcpProxyUnwrap(t *testing.T) {
 	t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
 	setupHome(t, nil)
