@@ -143,6 +143,13 @@ func (c *ClassifierConfig) setDefaults() {
 	}
 }
 
+// httpURL reports an absolute http(s) URL with a host; a scheme-less
+// host:port parses with the host as its scheme.
+func httpURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
 func (c ClassifierConfig) validate() error {
 	switch c.Kind {
 	case "", ClassifierHTTP, ClassifierAnthropic:
@@ -152,6 +159,8 @@ func (c ClassifierConfig) validate() error {
 	switch {
 	case c.Kind == ClassifierHTTP && c.URL == "":
 		return errors.New("contentCheck.classifier.url is required for kind http")
+	case c.URL != "" && !httpURL(c.URL):
+		return fmt.Errorf("contentCheck.classifier.url %q must be an http or https URL with a host", c.URL)
 	case c.Timeout < 0, c.Threshold < 0, c.Threshold > 1, c.MaxBytes < 0, c.MaxInFlight < 0:
 		return errors.New("contentCheck.classifier timeout, threshold (0-1), maxBytes and maxInFlight must not be negative")
 	case int64(c.MaxBytes) > protocol.MaxBodyLength:

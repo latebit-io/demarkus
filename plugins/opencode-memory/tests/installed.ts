@@ -28,7 +28,7 @@ let text = "";
 process.stdin.on("data", chunk => { text += chunk; });
 process.stdin.on("end", () => {
   const input = JSON.parse(text);
-  if (command === "gate") console.log(JSON.stringify({decision: "block", reason: "policy gate"}));
+  if (command === "gate") console.log(JSON.stringify({decision: input.input?.decision || "block", reason: "policy gate"}));
   else if (command === "nudge") console.log("{}");
   else process.exit(1);
 });
@@ -91,6 +91,17 @@ test("package entrypoint registers generated commands, skill, MCP and policy hoo
   await assert.rejects(h.hooks.get("execute.before")!({ tool: "demarkus-memory_mark_publish", sessionID: "s1", id: "write", input: {} }), /policy gate/);
   assert.equal(existsSync(join(home, ".demarkus", "opencode-memory")), false, "no copied runtime assets");
   assert.equal(existsSync(join(process.env.XDG_CONFIG_HOME!, "opencode", "commands")), false, "no installed prompt copies");
+});
+
+test("V1 adapter delivers every gated write's warn and blocks an ask", async (t) => {
+  const legacy = await plugin.server({ client: {}, directory: "/v1-memory" });
+  t.after(() => legacy.dispose());
+  const call = { tool: "demarkus-memory_mark_archive", sessionID: "s1", callID: "c1", args: { url: "/x.md" } };
+  await legacy["tool.execute.before"](call, { args: { url: "/x.md", decision: "warn" } });
+  const output = { output: "Archived" };
+  await legacy["tool.execute.after"](call, output);
+  assert.equal(output.output, "Archived\n\n⚠️ policy gate");
+  await assert.rejects(legacy["tool.execute.before"](call, { args: { decision: "ask" } }), /policy gate Confirm with the user/);
 });
 
 test("package preserves a skill override and releases gate ownership on reload", async () => {

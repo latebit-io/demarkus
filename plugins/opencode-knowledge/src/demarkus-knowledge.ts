@@ -10,7 +10,8 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Plugin } from "@opencode/plugin";
 import { assertPackageInstall, loadCommand as readCommand, loadCommands, registerPrompts } from "./package.ts";
-import { isGatedWrite, recordTaint } from "./taint.ts";
+import { HostAsks } from "./host-ask.ts";
+import { isGatedWrite, recordTaint, taintStamp } from "./taint.ts";
 
 const HOME = homedir();
 const BIN = join(HOME, ".demarkus", "bin", "demarkus-plugin");
@@ -334,21 +335,30 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       }
     },
 
+    // defer (V2 only) hands an ask to the host's permission prompt; without
+    // it, or when it refuses, an ask blocks with a reason for the user.
     "tool.execute.before": async (
       input: { tool: string; sessionID?: string; callID?: string },
       output: { args: Record<string, unknown> },
+      defer?: (reason: string) => boolean,
     ) => {
       if (!isGatedWrite(input.tool) || !knowledgeOwnsGate()) return;
       const key = input.sessionID && input.callID ? `${input.sessionID}:${input.callID}` : undefined;
       const pending: { warning?: string } = {};
       if (key) pendingWarns.set(key, pending);
       try {
-        const decision = await callGate(input.tool, output.args ?? {}, directory, state(input.sessionID ?? "default").taint);
+        const taint = state(input.sessionID ?? "default").taint;
+        const decision = await callGate(input.tool, output.args ?? {}, directory, taint);
         if (decision.decision === "block") {
           throw new Error(decision.reason ?? "demarkus-knowledge gate blocked this write");
         }
         if (decision.decision === "ask") {
-          throw new Error(`${decision.reason ?? "blocked"} Confirm with the user before retrying this write.`);
+          const reason = decision.reason ?? "demarkus-knowledge gate asks before this write.";
+          if (!defer?.(reason)) throw new Error(`${reason} Confirm with the user before retrying this write.`);
+          // The host prompt approves the call as stamped, as on Claude Code.
+          const metadata = taintStamp(input.tool, output.args ?? {}, taint);
+          if (metadata) output.args = { ...output.args, metadata };
+          return;
         }
         if (decision.decision === "warn") pending.warning = decision.reason;
       } finally {
@@ -415,6 +425,7 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
   });
   const controller = new AbortController();
   const pendingContext = new Map<string, { recall?: string }>();
+  const asks = new HostAsks();
   let guidance: string | null = null;
   let guidanceAttempts = 0;
   let guidanceLoading: Promise<void> | undefined;
@@ -469,13 +480,21 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
       pendingContext.delete(event.sessionID);
       if (recall) event.system.push({ type: "text", text: recall });
     });
+    // Not gated on abort: an ask in flight at unload must still prompt.
+    await ctx.permission?.hook?.("evaluate", (event) => asks.evaluate(event));
     await ctx.tool.hook("execute.before", async (event) => {
+      const call = { args: (event.input ?? {}) as Record<string, unknown> };
       await legacy["tool.execute.before"](
         { tool: event.tool, sessionID: event.sessionID, callID: event.id },
-        { args: (event.input ?? {}) as Record<string, unknown> },
+        call,
+        (reason) => asks.defer(event.sessionID, event.id, reason),
       );
+      event.input = call.args;
+      asks.expect(event.tool, event.sessionID, event.id);
     });
     await ctx.tool.hook("execute.after", async (event) => {
+      const unprompted = asks.settle(event.sessionID, event.id);
+      if (unprompted && event.status === "completed") console.error(`[demarkus-knowledge] ${event.tool} ran without the permission prompt its ask needed: ${unprompted}`);
       const output = { output: "" };
       await legacy["tool.execute.after"](
         { tool: event.tool, sessionID: event.sessionID, callID: event.id, args: event.input as Record<string, unknown> | undefined }, output,
@@ -505,6 +524,7 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
           if (event.type === "session.deleted" || event.type === "session.idle") {
             const id = event.data.sessionID;
             pendingContext.delete(id);
+            if (event.type === "session.deleted") asks.dropSession(id);
             await legacy.event({ event: { type: event.type, properties: { sessionID: id, info: { id } } } });
           }
         }

@@ -201,7 +201,7 @@ func TestClassifierCheck(t *testing.T) {
 	f := newFake(map[string]fakeDoc{
 		"/index.md": {Body: "# Hub\n\n- [a](/a.md)\n- [b](/b.md)\n- [c](/c.md)\n", Meta: map[string]string{"tags": "index"}},
 		"/a.md":     {Body: "# A\n\nSummary.\n", Meta: map[string]string{"tags": "t", "type": "Guide", "classifier": "injection: role override (judge)"}},
-		"/b.md":     {Body: "# B\n\nSummary.\n", Meta: map[string]string{"tags": "t", "type": "Guide", "classifier": "unchecked: classifier timed out"}},
+		"/b.md":     {Body: "# B\n\nSummary.\n", Meta: map[string]string{"tags": "t", "type": "Guide", "classifier": "unchecked: classifier timed out", "content-check-override": "a quote"}},
 		"/c.md":     {Body: "# C\n\nSummary.\n", Meta: map[string]string{"tags": "t", "type": "Guide", "classifier": "injection: quoted (judge)", "content-check-override": "security guide"}},
 	})
 	r, err := Run(context.Background(), f, Options{Scope: "/"})
@@ -212,5 +212,11 @@ func TestClassifierCheck(t *testing.T) {
 	want := "/a.md: classifier: injection: role override (judge)\n/b.md: classifier: unchecked: classifier timed out\n/c.md: classifier: injection: quoted (judge) (override: security guide)"
 	if got != want {
 		t.Errorf("classifier findings:\n%s\nwant:\n%s", got, want)
+	}
+	// An override reviews a verdict; an unchecked version still needs one.
+	for _, fd := range r.Findings {
+		if fd.Check == CheckClassifier && fd.Path == "/b.md" && !strings.Contains(fd.Fix, "re-publish once the classifier answers") {
+			t.Errorf("unchecked with an override = %+v", fd)
+		}
 	}
 }

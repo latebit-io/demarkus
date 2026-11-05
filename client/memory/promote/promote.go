@@ -489,6 +489,8 @@ type Candidate struct {
 	Fetch   bool
 	Version int
 	Body    string
+	// Metadata is the fetched version's, for the classifier verdict.
+	Metadata map[string]string
 	// Truncated: Body was cut at the candidate cap; the report says so
 	// outside the frame.
 	Truncated bool
@@ -669,7 +671,7 @@ func (c *Check) Report() string {
 	for i := range c.Candidates {
 		cd := &c.Candidates[i]
 		if cd.Body != "" {
-			fmt.Fprintf(&b, "\n=== %s (v%d)\n%s%s", cd.Path, cd.Version, docframe.Frame(cd.Body), docframe.Flags(cd.Body, nil))
+			fmt.Fprintf(&b, "\n=== %s (v%d)\n%s%s", cd.Path, cd.Version, docframe.Frame(cd.Body), docframe.Flags(cd.Body, cd.Metadata))
 			if cd.Truncated {
 				b.WriteString("[truncated]\n")
 			}

@@ -99,8 +99,8 @@ func TestReadWarning(t *testing.T) {
 }
 
 func TestLinkHosts(t *testing.T) {
-	text := "see https://User@Docs.Example.COM:8443/a, [x](\n//cdn.io/p.png)\n<img src=\"//[2001:db8::1]/x\"> and https://docs.example.com/b"
-	if got := strings.Join(LinkHosts(text), " "); got != "docs.example.com cdn.io 2001:db8::1" {
+	text := "see https://User@Docs.Example.COM:8443/a, [x](\n//cdn.io/p.png)\n<img src=\"//[2001:db8::1]/x\"> and https://docs.example.com/b\n[a](https:\\\\evil.io/x) [b](https:///evil2.io/y) https:/evil3.io"
+	if got := strings.Join(LinkHosts(text), " "); got != "docs.example.com cdn.io 2001:db8::1 evil.io evil2.io evil3.io" {
 		t.Errorf("LinkHosts = %q", got)
 	}
 	if ReservedName("api.example.com") != true || ReservedName("example.co") || !ReservedName("svc.test") {
@@ -116,6 +116,7 @@ func TestLinkRules(t *testing.T) {
 		{"<http://[2606:4700::1111]/x>", "link/raw-ip-host at line 1"},
 		{"[apple](https://xn--pple-43d.com/login)", "link/punycode-host at line 1"},
 		{"![p](//45.33.32.156/p.png)", "link/raw-ip-host at line 1"},
+		{`[p](https:\\45.33.32.156\p)`, "link/raw-ip-host at line 1"},
 		{`<img src="//xn--pple-43d.com/a.png">`, "link/punycode-host at line 1"},
 		{"[click](javascript:fetch('/x'))", "link/script-url at line 1"},
 		{`<a href="javascript:alert(1)">x</a>`, "link/script-url at line 1"},

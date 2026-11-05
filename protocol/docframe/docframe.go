@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
+	"github.com/latebit-io/demarkus/protocol/hiddentext"
 )
 
 // Frame wraps document text for the model. The id hashes the text: a body
@@ -36,15 +38,27 @@ func HasFrame(body string) bool {
 	return strings.Contains(body, "doc-") && frameLine.MatchString(body)
 }
 
+// maxVerdict bounds a stored verdict shown to a model: a foreign or
+// pre-gate version's value is not the server's clipped stamp.
+const maxVerdict = 200
+
 // Flags are the lines that mark text read under meta: its read warning and a
-// flagged classifier verdict, each newline-terminated; "" when neither.
+// flagged classifier verdict (revealed, bounded), each newline-terminated.
 func Flags(text string, meta map[string]string) string {
 	var b strings.Builder
 	if w := contentcheck.ReadWarning(text, meta); w != "" {
 		b.WriteString(contentcheck.WarningKey + ": " + w + "\n")
 	}
 	if protocol.ClassifierFlagged(meta) {
-		b.WriteString(protocol.ClassifierKey + ": " + meta[protocol.ClassifierKey] + "\n")
+		v := strings.Join(strings.Fields(meta[protocol.ClassifierKey]), " ")
+		if len(v) > maxVerdict {
+			n := maxVerdict
+			for n > 0 && !utf8.RuneStart(v[n]) {
+				n--
+			}
+			v = v[:n] + "…"
+		}
+		b.WriteString(protocol.ClassifierKey + ": " + hiddentext.Reveal(v) + "\n")
 	}
 	return b.String()
 }

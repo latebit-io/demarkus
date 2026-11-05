@@ -83,8 +83,9 @@ type rule struct {
 	kind    Kind
 	pattern *regexp.Regexp
 	confirm func(sub []string) bool
-	// words gate the pattern: one must occur in the case-folded line.
-	words []string
+	// words and tokens gate the pattern: a word must occur in the case-folded
+	// line, or a token as a whole word (the pattern's \b on both sides).
+	words, tokens []string
 }
 
 // Secret formats, high confidence only: a documented prefix plus a length,
@@ -184,17 +185,18 @@ func (s *Scanner) scan(body string, depth int) []Finding {
 	return findings
 }
 
-// matchRules calls hit for each rule text matches. A rule with words runs only
-// when one occurs in the line case-folded and space-led (" rm " at the start).
+// matchRules calls hit for each rule text matches. A rule with words or
+// tokens runs only when one occurs in the line case-folded and space-led.
 func matchRules(rules []rule, text string, hit func(*rule)) {
 	lower := ""
 	for i := range rules {
 		r := &rules[i]
-		if len(r.words) > 0 {
+		if len(r.words)+len(r.tokens) > 0 {
 			if lower == "" {
 				lower = " " + strings.ToLower(strings.Map(caseFoldRune, text))
 			}
-			if !slices.ContainsFunc(r.words, func(w string) bool { return strings.Contains(lower, w) }) {
+			if !slices.ContainsFunc(r.words, func(w string) bool { return strings.Contains(lower, w) }) &&
+				!slices.ContainsFunc(r.tokens, func(w string) bool { return hasToken(lower, w) }) {
 				continue
 			}
 		}
@@ -202,6 +204,25 @@ func matchRules(rules []rule, text string, hit func(*rule)) {
 			hit(r)
 		}
 	}
+}
+
+// hasToken reports tok in s between non-word bytes, as \b reads them.
+func hasToken(s, tok string) bool {
+	for i := 0; ; {
+		j := strings.Index(s[i:], tok)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(tok)
+		if (start == 0 || !isWordByte(s[start-1])) && (end == len(s) || !isWordByte(s[end])) {
+			return true
+		}
+		i = start + 1
+	}
+}
+
+func isWordByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c|0x20 >= 'a' && c|0x20 <= 'z'
 }
 
 // Scan is a one-off scan with a fresh Scanner.

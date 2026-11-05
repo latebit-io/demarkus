@@ -403,6 +403,9 @@ func TestParseClassifier(t *testing.T) {
 		"contentCheck:\n  classifier:\n    kind: magic\n",
 		"contentCheck:\n  classifier:\n    kind: http\n",
 		"contentCheck:\n  classifier:\n    kind: http\n    url: http://pg:8080\n    threshold: 1.5\n",
+		"contentCheck:\n  classifier:\n    kind: http\n    url: pg:8080\n",
+		"contentCheck:\n  classifier:\n    kind: http\n    url: ftp://pg/x\n",
+		"contentCheck:\n  classifier:\n    kind: anthropic\n    url: \"api.example\"\n",
 		"contentCheck:\n  classifier:\n    kind: anthropic\n    maxBytes: 999999999\n",
 	} {
 		if _, err := Parse([]byte(strings.Replace(validConfig, "health:", bad+"health:", 1))); err == nil {

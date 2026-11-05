@@ -6,6 +6,7 @@ package facts
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -159,17 +160,21 @@ func classifySegment(tokens []string) (Check, bool) {
 	return "", false
 }
 
-// Runs reports whether any segment of command runs one of programs: quotes
-// respected, env assignments skipped, a path compared by its base name.
+// wrappers run the command after them.
+var wrappers = map[string]bool{"sudo": true, "doas": true, "env": true, "command": true, "exec": true, "nohup": true, "time": true}
+
+// Runs reports whether any pipeline stage of command runs one of programs:
+// quotes respected, env assignments and wrappers (sudo) skipped, a path
+// compared by its base name.
 func Runs(command string, programs ...[]string) bool {
 	segs, _ := splitSegments(command)
 	for _, seg := range segs {
-		tokens := strings.Fields(seg.stage)
-		for len(tokens) > 0 && isEnvAssignment(tokens[0]) {
-			tokens = tokens[1:]
-		}
-		for _, p := range programs {
-			if hasPrefix(tokens, p) {
+		for _, stage := range append([]string{seg.stage}, seg.later...) {
+			tokens := strings.Fields(stage)
+			for len(tokens) > 0 && (isEnvAssignment(tokens[0]) || wrappers[filepath.Base(tokens[0])]) {
+				tokens = tokens[1:]
+			}
+			if slices.ContainsFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) }) {
 				return true
 			}
 		}
@@ -201,8 +206,9 @@ func isEnvAssignment(tok string) bool {
 // segment is one command of a chain: its first pipeline stage, and whether a
 // pipe follows it (then the exit status is the last stage's).
 type segment struct {
-	stage string
-	piped bool
+	stage string   // the pipeline's first stage
+	piped bool     // stages follow it
+	later []string // the stages after the first
 }
 
 // splitSegments splits on &&, ||, ;, & and newlines outside quotes, so a check
@@ -212,19 +218,19 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 	andOnly = true
 	var cur strings.Builder
 	var quote byte
-	piped := false
-	flush := func() {
-		if s := strings.TrimSpace(cur.String()); s != "" {
-			segs = append(segs, segment{stage: s, piped: piped})
-		}
+	var stages []string
+	pipe := func() {
+		stages = append(stages, strings.TrimSpace(cur.String()))
 		cur.Reset()
-		piped = false
 	}
-	write := func(c byte) {
-		if !piped {
-			cur.WriteByte(c)
+	flush := func() {
+		pipe()
+		if stages[0] != "" {
+			segs = append(segs, segment{stage: stages[0], piped: len(stages) > 1, later: stages[1:]})
 		}
+		stages = nil
 	}
+	write := func(c byte) { _ = cur.WriteByte(c) } // a strings.Builder write never fails
 	for i := 0; i < len(command); i++ {
 		c := command[i]
 		switch {
@@ -245,7 +251,7 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 			flush()
 			i++
 		case c == '|':
-			piped = true
+			pipe()
 			if i+1 < len(command) && command[i+1] == '&' {
 				i++ // |& pipes stderr too
 			}

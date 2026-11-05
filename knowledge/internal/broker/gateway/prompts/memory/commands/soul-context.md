@@ -15,7 +15,7 @@ Bring the project's recent soul into the session so agent and user pick up where
 
 1. **Read the primer.** `mark_fetch` through the store's server with `url` `<root>.context`. A tool error: surface it, stop. `status: new`: new project, say so, suggest the `soul-journal` prompt with `"<entry>"`, stop. `status: archived`: say so, stop.
 
-2. **Summarize.** Plain text: the template below and nothing before or after it.
+2. **Summarize.** Reply with the template below filled in, as markdown outside any code fence, and nothing before or after it.
 
    ```text
    ## <Project>: recent context

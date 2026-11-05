@@ -341,7 +341,7 @@ func (t *Tools) promoteDryRun(ctx context.Context, target Target, check *promote
 			continue
 		}
 		if c.Path == target.Path {
-			c.Version = head.Version
+			c.Version, c.Metadata = head.Version, head.Metadata
 			c.Body, c.Truncated = bound(head.Body, candidateCap)
 			continue
 		}
@@ -350,7 +350,7 @@ func (t *Tools) promoteDryRun(ctx context.Context, target Target, check *promote
 			check.Notes = append(check.Notes, fmt.Sprintf("%s not read: %v", c.Path, err))
 			continue
 		}
-		c.Version = d.Version
+		c.Version, c.Metadata = d.Version, d.Metadata
 		c.Body, c.Truncated = bound(d.Body, candidateCap)
 	}
 	return text("target: " + target.name() + "\n" + check.Report())

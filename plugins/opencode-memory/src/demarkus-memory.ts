@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "@opencode/plugin";
 import { assertPackageInstall, loadCommand as readCommand, loadCommands, registerPrompts } from "./package.ts";
-import { isGatedWrite, recordTaint } from "./taint.ts";
+import { HostAsks } from "./host-ask.ts";
+import { isGatedWrite, recordTaint, taintStamp } from "./taint.ts";
 
 const BIN = join(homedir(), ".demarkus", "bin", "demarkus-plugin");
 const ASSETS = fileURLToPath(new URL("../", import.meta.url));
@@ -322,8 +323,8 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
     },
 
     // Gate memory writes before execution. block → throw (OpenCode cancels the
-    // call and shows the reason). ask → no native ask here, so block with a
-    // reason that routes through the user. allow/warn is stashed for the
+    // call and shows the reason). ask → V1 hooks have no ask channel, so block
+    // with a reason that routes through the user. warn is stashed for the
     // after-hook so the gate runs once per write.
     "tool.execute.before": async (
       input: { tool: string; sessionID?: string; callID?: string },
@@ -354,14 +355,14 @@ export const DemarkusMemoryPlugin = async ({ client, directory }: { client: Toas
       if (!adapters.has("memory")) return;
       const s = state(input.sessionID ?? "default");
       recordTaint(s.taint, input.tool, input.args);
-      if (!trackActivity(s, input.tool, input.args)) return;
-
+      // Every gated write may carry a warn; only publish/append is activity.
       const key = `${input.sessionID}:${input.callID}`;
       const warn = pendingWarns.get(key);
       pendingWarns.delete(key);
       if (warn) {
         output.output += `\n\n⚠️ ${warn}`;
       }
+      if (!trackActivity(s, input.tool, input.args)) return;
       const nudge = await callNudge({ event: "promote", tool: input.tool, input: input.args ?? {} });
       if (nudge) output.output += `\n\n${nudge}`;
     },
@@ -448,6 +449,7 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
   const sessions = new Map<string, SessionState>();
   const pendingWarns = new Map<string, string>();
   const pendingContext = new Map<string, string[]>();
+  const asks = new HostAsks();
   // Per session: the status and facts in it describe one session's start.
   const guidance = new Map<string, Guidance>();
   const state = (id: string): SessionState => {
@@ -501,15 +503,33 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
       for (const text of pendingContext.get(event.sessionID) ?? []) event.system.push({ type: "text", text });
       pendingContext.delete(event.sessionID);
     });
+    // Not gated on abort: an ask in flight at unload must still prompt.
+    await ctx.permission?.hook?.("evaluate", (event) => asks.evaluate(event));
     await ctx.tool.hook("execute.before", async (event: V2ToolEvent) => {
-      if (!isGatedWrite(event.tool) || controller.signal.aborted) return;
-      const decision = await (services.gate ?? callGate)(event.tool, (event.input ?? {}) as Record<string, unknown>, directory, state(event.sessionID).taint);
+      if (controller.signal.aborted) return;
+      if (!isGatedWrite(event.tool)) {
+        asks.expect(event.tool, event.sessionID, event.id);
+        return;
+      }
+      const input = (event.input ?? {}) as Record<string, unknown>;
+      const taint = state(event.sessionID).taint;
+      const decision = await (services.gate ?? callGate)(event.tool, input, directory, taint);
       if (controller.signal.aborted) return;
       if (decision.decision === "block") throw new Error(decision.reason ?? "demarkus-memory gate blocked this write");
-      if (decision.decision === "ask") throw new Error(`${decision.reason ?? "blocked"} Confirm with the user before retrying this write.`);
+      if (decision.decision === "ask") {
+        const reason = decision.reason ?? "demarkus-memory gate asks before this write.";
+        if (!asks.defer(event.sessionID, event.id, reason)) throw new Error(`${reason} Confirm with the user before retrying this write.`);
+        // The host prompt approves the call as stamped, as on Claude Code.
+        const metadata = taintStamp(event.tool, input, taint);
+        if (metadata) event.input = { ...input, metadata };
+        return;
+      }
+      asks.expect(event.tool, event.sessionID, event.id);
       if (decision.decision === "warn" && decision.reason) pendingWarns.set(`${event.sessionID}:${event.id}`, decision.reason);
     });
     await ctx.tool.hook("execute.after", async (event: V2ToolAfter) => {
+      const unprompted = asks.settle(event.sessionID, event.id);
+      if (unprompted && event.status === "completed") console.error(`[demarkus-memory] ${event.tool} ran without the permission prompt its ask needed: ${unprompted}`);
       if (controller.signal.aborted) return;
       const key = `${event.sessionID}:${event.id}`;
       const warn = pendingWarns.get(key);
@@ -517,8 +537,10 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
       if (event.status !== "completed") return;
       const s = state(event.sessionID);
       recordTaint(s.taint, event.tool, event.input as Record<string, unknown> | undefined);
-      if (!trackActivity(s, event.tool, event.input as Record<string, unknown> | undefined)) return;
-      const nudge = await (services.nudge ?? callNudge)({ event: "promote", tool: event.tool, input: event.input ?? {} });
+      // Every gated write may carry a warn; only publish/append earns a nudge.
+      const nudge = trackActivity(s, event.tool, event.input as Record<string, unknown> | undefined)
+        ? await (services.nudge ?? callNudge)({ event: "promote", tool: event.tool, input: event.input ?? {} })
+        : "";
       if (controller.signal.aborted) return;
       const additions = [warn && `⚠️ ${warn}`, nudge].filter(Boolean).join("\n\n");
       if (!additions) return;
@@ -548,6 +570,7 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
             sessions.delete(id);
             pendingContext.delete(id);
             guidance.delete(id);
+            asks.dropSession(id);
             for (const key of pendingWarns.keys()) if (key.startsWith(`${id}:`)) pendingWarns.delete(key);
           }
           continue;

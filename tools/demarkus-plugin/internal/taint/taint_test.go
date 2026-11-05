@@ -105,6 +105,23 @@ func TestTranscriptReadsToolUseBlocksOnly(t *testing.T) {
 	}
 }
 
+// A field of the wrong type keeps the line's other blocks; a complete line
+// that is not JSON fails closed; a partial last line is skipped.
+func TestTranscriptDecodeErrors(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	body := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"WebFetch","input":{"url":"https://u:p@typed.example/a?token=abc#x","command":5}}]}}` + "\n" +
+		`{"type":"assistant","message":{"content":[{"type":"tool_use",broken` + "\n" +
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"WebSe`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Transcript(path)
+	if want := []string{"WebFetch https://typed.example/a", "unparseable transcript line"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("Transcript = %v, %v; want %v", got, err, want)
+	}
+}
+
 func writeLines(t *testing.T, path string, records ...map[string]any) {
 	t.Helper()
 	var b strings.Builder

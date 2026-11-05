@@ -48,4 +48,11 @@ func TestFlags(t *testing.T) {
 	if got != want {
 		t.Errorf("Flags = %q\nwant %q", got, want)
 	}
+	long := "injection: " + strings.Repeat("x", 300) + "\u202e"
+	if got := Flags("# D\n", map[string]string{"classifier": long}); len(got) > maxVerdict+40 || !strings.HasSuffix(got, "…\n") {
+		t.Errorf("long verdict = %q", got)
+	}
+	if got := Flags("# D\n", map[string]string{"classifier": "injection: a\u202eb"}); got != "classifier: injection: a<U+202E>b\n" {
+		t.Errorf("hidden verdict = %q", got)
+	}
 }

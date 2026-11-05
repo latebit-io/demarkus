@@ -17,13 +17,16 @@ func TestLoadAcceptsTheChartRendering(t *testing.T) {
 	if cfg.Listen.Address != ":6309" || cfg.Health.Address != ":8081" || cfg.Peers.Listen != ":6310" {
 		t.Fatalf("addresses = %+v, %+v, %+v; want the chart's ports", cfg.Listen, cfg.Health, cfg.Peers)
 	}
-	if cfg.FloorWorld != "team-a" || cfg.ContentCheck.PII != "block" {
-		t.Fatalf("floor = %q, pii = %q; want team-a and block", cfg.FloorWorld, cfg.ContentCheck.PII)
+	if cfg.FloorWorld != "team-a" || cfg.ContentCheck.PII != "block" || cfg.ContentCheck.Injection != "warn" {
+		t.Fatalf("floor = %q, pii = %q, injection = %q; want team-a, block, warn", cfg.FloorWorld, cfg.ContentCheck.PII, cfg.ContentCheck.Injection)
 	}
 	if len(cfg.Worlds) != 2 {
 		t.Fatalf("worlds = %d, want 2", len(cfg.Worlds))
 	}
 	a, b := cfg.Worlds[0], cfg.Worlds[1]
+	if a.Policy.Governance != GovernanceRestricted || b.Policy.Governance != GovernanceRestricted {
+		t.Fatalf("governance = %q, %q; want the chart's restricted default", a.Policy.Governance, b.Policy.Governance)
+	}
 	if a.Name != "team-a" || len(a.Authorities) != 2 || a.ReadOnly {
 		t.Fatalf("team-a = %+v", a)
 	}

@@ -60,4 +60,23 @@ func TestClassifyStampsWrites(t *testing.T) {
 	if len(sent) != before {
 		t.Error("a secret was sent to the classifier")
 	}
+	// Nor does a body the gate refuses: personal data blocks by default.
+	if _, err := store.Publish(ctx, backend.WriteRequest{Path: "/p.md", Content: []byte("# P\n\ncard 4111 1111 1111 1111\n"), Metadata: map[string]string{"tags": "notes"}}); err == nil {
+		t.Error("personal data landed")
+	}
+	if len(sent) != before {
+		t.Error("a refused body was sent to the classifier")
+	}
+}
+
+func TestContentNoteIsBrief(t *testing.T) {
+	store := writepolicy.Enforce(newStore(t), writepolicy.Options{})
+	var warnings []string
+	body := "# N\n\n" + strings.Repeat("rm -rf /\n", 7)
+	if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/n.md", Content: []byte(body), Metadata: map[string]string{"tags": "notes"}, Warnings: &warnings}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(warnings, "\n"); !strings.Contains(got, "; +2 more; fix: ") {
+		t.Errorf("warnings = %q", got)
+	}
 }

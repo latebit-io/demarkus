@@ -1345,6 +1345,8 @@ func injectLinkMarkers(rendered string, infos []links.LinkInfo) string {
 		if info.Text == "" {
 			continue
 		}
+		// Glamour renders the revealed body (renderMarkdown); match against it.
+		text, dest := hiddentext.Reveal(info.Text), hiddentext.Reveal(info.Dest)
 		for j, hl := range hyperlinks {
 			if used[j] {
 				continue
@@ -1353,8 +1355,8 @@ func injectLinkMarkers(rendered string, infos []links.LinkInfo) string {
 			if idx := strings.IndexByte(hlURL, '#'); idx != -1 {
 				hlURL = hlURL[:idx]
 			}
-			urlMatch := hlURL == info.Dest || strings.HasSuffix(hlURL, info.Dest) || strings.HasSuffix(info.Dest, hlURL)
-			if urlMatch && hl.text == info.Text {
+			urlMatch := hlURL == dest || strings.HasSuffix(hlURL, dest) || strings.HasSuffix(dest, hlURL)
+			if urlMatch && hl.text == text {
 				insertions = append(insertions,
 					insertion{runePos: hl.textStart, marker: string(markerStart(i))},
 					insertion{runePos: hl.textEnd, marker: string(markerEnd(i))},

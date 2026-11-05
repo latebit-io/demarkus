@@ -70,11 +70,15 @@ func newContentGate(options ContentOptions) contentGate {
 	return contentGate{scanner: contentcheck.New(options.Options), options: options}
 }
 
-// judge scans the prepared body; notes are what it let through. A secret
-// refuses unless the tier warns; personal data and injection follow their
-// modes, and an override lands them with its reason.
+// judge scans the prepared body; notes are what it let through.
 func (g contentGate) judge(body string, meta map[string]string) ([]string, error) {
-	findings := g.scanner.Scan(body)
+	return g.verdict(g.scanner.Scan(body), meta)
+}
+
+// verdict decides a body's findings. A secret refuses unless the tier warns;
+// personal data and steering text follow their modes, and an override lands
+// them with its reason.
+func (g contentGate) verdict(findings []contentcheck.Finding, meta map[string]string) ([]string, error) {
 	if len(findings) == 0 {
 		return nil, nil
 	}
@@ -109,7 +113,7 @@ func (g contentGate) judge(body string, meta map[string]string) ([]string, error
 // value; the write is in history now, so the fix is the stored remedy.
 func note(findings []contentcheck.Finding, override string) string {
 	if override != "" {
-		return "content check overridden (" + override + "): " + contentcheck.Summary(findings)
+		return "content check overridden (" + override + "): " + contentcheck.Brief(findings)
 	}
-	return "content check: " + contentcheck.Summary(findings) + "; fix: " + contentcheck.StoredRemedy(findings)
+	return "content check: " + contentcheck.Brief(findings) + "; fix: " + contentcheck.StoredRemedy(findings)
 }

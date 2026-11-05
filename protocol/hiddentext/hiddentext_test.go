@@ -18,6 +18,7 @@ func TestFindFlagsHiddenText(t *testing.T) {
 		{"bidi isolate", "\U00002066x\U00002069", "U+2066 (bidi) at line 1, column 1; U+2069 (bidi) at line 1, column 3"},
 		{"line separator", "a\U00002028b", "U+2028 (line-separator) at line 1, column 2"},
 		{"annotation", "a\U0000FFF9b", "U+FFF9 (annotation) at line 1, column 2"},
+		{"deprecated format", "a\U0000206Ab\U0000206F", "U+206A (invisible) at line 1, column 2; U+206F (invisible) at line 1, column 4"},
 		{"tag smuggling", "hi \U000E0049\U000E0047\U000E004E", "U+E0049 (tag, 3 characters) at line 1, column 4"},
 		{"stray cancel tag", "a\U000E007F", "U+E007F (tag) at line 1, column 2"},
 		{"variation selector run", "\U0001F600\U0000FE00\U0000FE01\U0000FE02", "U+FE00 (invisible, 3 characters) at line 1, column 2"},

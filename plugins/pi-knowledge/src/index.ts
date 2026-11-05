@@ -15,14 +15,18 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { callGate, callGuidance, callNudge } from "./plugin.js";
-import { recordTaint } from "./taint.js";
+import { branchTaint, recordTaint, taintStamp } from "./taint.js";
 
 interface UI {
   notify(message: string, level?: "info" | "warning" | "error"): void;
+  confirm?(title: string, message: string): Promise<boolean>;
 }
 interface ExtensionContext {
   cwd: string;
   ui: UI;
+  // Dialogs work (TUI, RPC); false in print and JSON modes.
+  hasUI?: boolean;
+  sessionManager?: { getBranch(): unknown[] };
 }
 interface ToolCallEvent {
   toolName: string;
@@ -116,14 +120,43 @@ function normalizeToolCall(event: ToolCallEvent): { toolName: string; input: Rec
   return { toolName, input };
 }
 
+type Verdict = { block: true; reason: string } | undefined;
+
+// ask settles a gate ask: a confirm dialog stands in for a native ask where
+// pi has a UI; elsewhere it blocks with a reason routed through the user. An
+// approved publish carries the taint stamp, as on Claude Code.
+async function ask(event: ToolCallEvent, ctx: ExtensionContext, toolName: string, input: Record<string, unknown>, reason: string, taint: string[]): Promise<Verdict> {
+  if (!ctx.hasUI || !ctx.ui.confirm) return { block: true, reason: `${reason} Confirm with the user before proceeding.` };
+  if (!(await ctx.ui.confirm("Approve this demarkus write?", reason))) {
+    return { block: true, reason: "The user declined this demarkus write; do not retry it unchanged." };
+  }
+  const metadata = taintStamp(toolName, input, taint);
+  if (metadata) {
+    // input is event.input or the proxy's args; string args were parsed into a copy.
+    input.metadata = metadata;
+    if (event.toolName === "mcp" && typeof event.input.args === "string") event.input.args = JSON.stringify(input);
+  }
+  return undefined;
+}
+
+// Both Pi plugins see every tool call; with memory loaded it owns the gate,
+// so one write asks once (OpenCode's ownsGate).
+const GATE_ADAPTERS = Symbol.for("io.demarkus.pi.gate-adapters");
+function gateAdapters(): Set<string> {
+  const root = globalThis as typeof globalThis & { [key: symbol]: Set<string> | undefined };
+  return (root[GATE_ADAPTERS] ??= new Set<string>());
+}
+
 export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
+  gateAdapters().add("knowledge");
   let contextDelivered = false;
   // Untrusted reads this session; a later demarkus write asks first.
   let taint: string[] = [];
 
-  pi.on("session_start", () => {
+  // A resumed, reloaded or forked branch keeps the reads it made; a new one is empty.
+  pi.on("session_start", (_event, ctx) => {
     contextDelivered = false;
-    taint = [];
+    taint = branchTaint(ctx.sessionManager?.getBranch() ?? [], (toolName, input) => normalizeToolCall({ toolName, input }));
   });
 
   pi.on("before_agent_start", async (event) => {
@@ -144,16 +177,18 @@ export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
     return { message: { customType: CUSTOM, content: parts.join("\n\n"), display: false } };
   });
 
-  pi.on("tool_call", async (event) => {
+  pi.on("tool_call", async (event, ctx) => {
     const { toolName, input } = normalizeToolCall(event);
+    if (gateAdapters().has("memory")) {
+      recordTaint(taint, toolName, input);
+      return undefined;
+    }
     // Shared decision via the demarkus-plugin binary (knowledge tag/axes/fields gate).
     const decision = await callGate(toolName, input, "", taint);
-    if (decision.decision === "block" || decision.decision === "ask") {
-      const reason =
-        decision.decision === "ask"
-          ? `${decision.reason ?? "blocked"} Confirm with the user before proceeding.`
-          : (decision.reason ?? "blocked");
-      return { block: true, reason };
+    if (decision.decision === "block") return { block: true, reason: decision.reason ?? "blocked" };
+    if (decision.decision === "ask") {
+      const verdict = await ask(event, ctx, toolName, input, decision.reason ?? "demarkus write needs approval.", taint);
+      if (verdict) return verdict;
     }
     recordTaint(taint, toolName, input);
     if (decision.decision === "warn" && decision.reason) {

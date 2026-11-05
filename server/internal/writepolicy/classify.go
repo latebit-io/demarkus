@@ -9,17 +9,19 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/backend"
 )
 
-// secretScan keeps credentials off the wire to the classifier.
-var secretScan = contentcheck.New(contentcheck.Options{PII: contentcheck.Off, Steering: contentcheck.Off})
-
-// classify stamps req with the classifier's verdict and returns it as a note.
-// A body with a secret is not sent: the gate refuses it unless the tier
-// warns. An append stamps only injection, never weakening its base's verdict.
+// classify stamps req with the classifier's verdict, returned as a note. A
+// refused body or one with a secret is never sent; an append stamps only
+// injection, never weakening its base's verdict.
 func (e *enforcer) classify(ctx context.Context, req *backend.WriteRequest, appending bool) []string {
-	if e.options.Classify == nil || contentcheck.Secrets(secretScan.Scan(string(req.Content))) {
+	if e.options.Classify == nil {
 		return nil
 	}
-	stamp := e.options.Classify(ctx, req.Path, string(req.Content))
+	body := string(req.Content)
+	findings := e.content.scanner.Scan(body)
+	if _, refused := e.content.verdict(findings, req.Metadata); refused != nil || contentcheck.Secrets(findings) {
+		return nil
+	}
+	stamp := e.options.Classify(ctx, req.Path, body)
 	if stamp == "" || appending && !protocol.IsInjectionStamp(stamp) {
 		return nil
 	}

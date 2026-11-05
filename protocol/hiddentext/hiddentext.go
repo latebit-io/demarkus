@@ -130,6 +130,8 @@ func scan(s string, yield func(start, end int, class Class) bool) {
 			class = Control
 		case r >= 0x202A && r <= 0x202E, r >= 0x2066 && r <= 0x2069:
 			class = Bidi
+		case r >= 0x206A && r <= 0x206F: // deprecated format controls, unused by text
+			class = Invisible
 		case r == 0x2028, r == 0x2029:
 			class = LineSeparator
 		case r >= 0xFFF9 && r <= 0xFFFB:

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -51,7 +52,7 @@ type Call struct {
 func Of(c *Call, memoryID func(tool string) string) string {
 	switch {
 	case c.Name == "WebFetch":
-		return Clean("WebFetch " + c.Input.URL)
+		return Clean("WebFetch " + publicURL(c.Input.URL))
 	case c.Name == "WebSearch":
 		return "WebSearch"
 	case (c.Name == "Agent" || c.Name == "Task") && c.Input.SubagentType == "web-fetch":
@@ -66,6 +67,17 @@ func Of(c *Call, memoryID func(tool string) string) string {
 		return Clean(c.Name)
 	}
 	return ""
+}
+
+// publicURL drops a URL's userinfo, query and fragment, where tokens ride,
+// before it is stored as a taint source.
+func publicURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "a URL"
+	}
+	u.User, u.RawQuery, u.Fragment, u.RawFragment, u.ForceQuery = nil, "", "", "", false
+	return u.String()
 }
 
 // foreignRead flags a soul tool that is not a write and names a full mark://
@@ -173,14 +185,7 @@ func (s *scanner) scan(r io.Reader) error {
 	for !s.full() {
 		raw, err := br.ReadBytes('\n')
 		if bytes.Contains(raw, toolUseMarker) {
-			var l line
-			if json.Unmarshal(raw, &l) == nil {
-				for i := range l.Message.Content {
-					if b := &l.Message.Content[i]; b.Type == "tool_use" {
-						s.add(Of(&b.Call, s.memoryID))
-					}
-				}
-			}
+			s.line(raw, err == nil)
 		}
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -190,6 +195,28 @@ func (s *scanner) scan(r io.Reader) error {
 		}
 	}
 	return nil
+}
+
+// line adds one transcript line's untrusted reads. A field of an unexpected
+// type keeps the rest decoded; a complete line that is not JSON counts as an
+// unknown read (fail closed); a partial last line is still being written.
+func (s *scanner) line(raw []byte, complete bool) {
+	var l line
+	err := json.Unmarshal(raw, &l)
+	var typeErr *json.UnmarshalTypeError
+	switch {
+	case err == nil, errors.As(err, &typeErr):
+	case complete:
+		s.add("unparseable transcript line")
+		return
+	default:
+		return
+	}
+	for i := range l.Message.Content {
+		if b := &l.Message.Content[i]; b.Type == "tool_use" {
+			s.add(Of(&b.Call, s.memoryID))
+		}
+	}
 }
 
 func (s *scanner) add(source string) {

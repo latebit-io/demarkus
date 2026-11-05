@@ -124,13 +124,13 @@ tests:
     asserts:
       - matchRegex:
           path: data["config.yaml"]
-          pattern: 'name: "team-a"[\s\S]*?governance: "restricted"'
+          pattern: '- name: "team-a"\n(?: {4}[^\n]*\n)*? {6}governance: "restricted"'
       - matchRegex:
           path: data["config.yaml"]
-          pattern: 'name: "alice"[\s\S]*?governance: "open"'
+          pattern: '- name: "alice"\n(?: {4}[^\n]*\n)*? {6}governance: "open"'
       - matchRegex:
           path: data["config.yaml"]
-          pattern: 'name: "lab"[\s\S]*?governance: "open"'
+          pattern: '- name: "lab"\n(?: {4}[^\n]*\n)*? {6}governance: "open"'
 
   - it: passes a world's checkpoint grace through, and omits it unset
     set:

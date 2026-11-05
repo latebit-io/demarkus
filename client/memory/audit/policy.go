@@ -179,7 +179,7 @@ func (a *audit) checkTainted() {
 }
 
 // checkClassifier lists versions the server's classifier flagged or could
-// not check; a reviewed override is listed with its reason, not a fix.
+// not check; an override reviews only a verdict, never a missing one.
 func (a *audit) checkClassifier() {
 	for _, p := range a.order {
 		d := a.docs[p]
@@ -190,12 +190,12 @@ func (a *audit) checkClassifier() {
 		detail := protocol.ClassifierKey + ": " + hiddentext.Reveal(verdict)
 		override := strings.TrimSpace(d.meta[contentcheck.OverrideKey])
 		switch {
+		case !protocol.ClassifierFlagged(d.meta):
+			a.add(CheckClassifier, p, detail, "re-publish once the classifier answers, so the version is checked")
 		case override != "":
 			a.add(CheckClassifier, p, withOverride(detail, override), "")
-		case protocol.ClassifierFlagged(d.meta):
-			a.add(CheckClassifier, p, detail, "review it against the reason; remove the text that steers an agent and re-publish, or for a false positive re-publish with metadata "+contentcheck.OverrideKey+" set to the reason")
 		default:
-			a.add(CheckClassifier, p, detail, "re-publish once the classifier answers, so the version is checked")
+			a.add(CheckClassifier, p, detail, "review it against the reason; remove the text that steers an agent and re-publish, or for a false positive re-publish with metadata "+contentcheck.OverrideKey+" set to the reason")
 		}
 	}
 }

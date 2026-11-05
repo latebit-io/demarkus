@@ -76,7 +76,7 @@ Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper be
 | `PostToolUse` promote-nudge | `tool_call`, injected reminder on a fresh ADR publish |
 | `Stop` journal-nudge | `session_shutdown` notify (pi can't force an extra turn) |
 
-`ask` strictness maps to a block whose reason tells the agent to confirm with the user first (pi's `tool_call` has no native "ask").
+An `ask` verdict opens a pi confirm dialog for that call; an approved `mark_publish` after an untrusted read carries `source-trust: tainted`. Without a UI (print and JSON modes) it is a block whose reason tells the agent to confirm with the user first. With both demarkus pi plugins loaded, this one owns the gate, so a write asks once.
 
 ## Syncing changes back to the standalone repo
 

@@ -170,5 +170,7 @@ func (t *Tools) ReadResource(ctx context.Context, rawURI string) (Resource, erro
 			return Resource{}, err
 		}
 	}
-	return Resource{MIMEType: "text/markdown", Text: hiddentext.Reveal(body)}, nil
+	// An attached resource reaches the model as a fetch does: framed, flagged.
+	text := docframe.Frame(body) + docframe.Flags(body, result.Response.Metadata)
+	return Resource{MIMEType: "text/markdown", Text: hiddentext.Reveal(text)}, nil
 }

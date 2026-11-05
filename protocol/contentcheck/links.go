@@ -14,12 +14,13 @@ import (
 const Link Kind = "link"
 
 // linkAuthority captures the authority of an http(s) URL, a protocol-relative
-// markdown target and a protocol-relative href or src.
-var linkAuthority = regexp.MustCompile(`(?i)\bhttps?://([^\s/<>()"'` + "`" + `|?#\\]+)|\]\(\s*//([^\s/)?#]+)|\b(?:href|src)\s*=\s*["']?//([^\s/"'>?#]+)`)
+// markdown target and a protocol-relative href or src. Browsers read any run
+// of slashes or backslashes after the scheme as "//".
+var linkAuthority = regexp.MustCompile(`(?i)\bhttps?:[/\\]+([^\s/<>()"'` + "`" + `|?#\\]+)|\]\(\s*//([^\s/)?#]+)|\b(?:href|src)\s*=\s*["']?//([^\s/"'>?#]+)`)
 
 var linkRules = []rule{
-	{name: "url-shortener", kind: Link, words: []string{"bit.ly", "tinyurl", "t.co/", "goo.gl", "is.gd", "ow.ly", "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at", "tiny.cc", "rb.gy", "t.ly", "s.id/"}, pattern: regexp.MustCompile(`(?i)\bhttps?://(?:www\.)?(?:bit\.ly|tinyurl\.com|t\.co|goo\.gl|is\.gd|ow\.ly|buff\.ly|rebrand\.ly|cutt\.ly|shorturl\.at|tiny\.cc|rb\.gy|t\.ly|s\.id)/`)},
-	{name: "raw-ip-host", kind: Link, words: []string{"//"}, pattern: linkAuthority, confirm: func(sub []string) bool {
+	{name: "url-shortener", kind: Link, words: []string{"bit.ly", "tinyurl", "t.co/", "goo.gl", "is.gd", "ow.ly", "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at", "tiny.cc", "rb.gy", "t.ly", "s.id/"}, pattern: regexp.MustCompile(`(?i)\bhttps?:[/\\]+(?:www\.)?(?:bit\.ly|tinyurl\.com|t\.co|goo\.gl|is\.gd|ow\.ly|buff\.ly|rebrand\.ly|cutt\.ly|shorturl\.at|tiny\.cc|rb\.gy|t\.ly|s\.id)/`)},
+	{name: "raw-ip-host", kind: Link, words: []string{"//", ":/", ":\\"}, pattern: linkAuthority, confirm: func(sub []string) bool {
 		ip, err := netip.ParseAddr(hostOf(sub[1] + sub[2] + sub[3]))
 		return err == nil && publicIP(ip)
 	}},
@@ -31,15 +32,17 @@ var linkRules = []rule{
 }
 
 // LinkHosts lists the lowercase hosts text links to, first seen first. Only
-// lines holding "//" can, each read with the line before for a target split
-// after "](".
+// lines holding "//", ":/" or ":\" can, each read with the line before for a
+// target split after "](".
 func LinkHosts(text string) []string {
 	var out []string
+	seen := map[string]bool{}
 	prev := ""
 	for line := range strings.SplitSeq(text, "\n") {
-		if strings.Contains(line, "//") {
+		if strings.Contains(line, "//") || strings.Contains(line, ":/") || strings.Contains(line, ":\\") {
 			for _, m := range linkAuthority.FindAllStringSubmatch(prev+"\n"+line, -1) {
-				if host := hostOf(m[1] + m[2] + m[3]); host != "" && !slices.Contains(out, host) {
+				if host := hostOf(m[1] + m[2] + m[3]); host != "" && !seen[host] {
+					seen[host] = true
 					out = append(out, host)
 				}
 			}

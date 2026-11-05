@@ -130,3 +130,77 @@ test("V2 registers MCP, guards writes and delivers guidance and nudges", async (
   assert.deepEqual(lifecycle, ["session.created"]);
   stop();
 });
+
+test("V2 delivers every gated write's warn and hands an ask to the host prompt once it shows the order", async () => {
+  const hooks = new Map<string, (event: any) => any>();
+  const ctx: any = {
+    location: { directory: "/test/project" },
+    command: { list: async () => ({ data: [] }), transform: async (fn: any) => fn({ add: () => {} }) },
+    skill: { transform: async (fn: any) => fn({ list: () => [], add: () => {} }) },
+    mcp: { transform: async (fn: any) => fn({ get: () => undefined, set: () => {} }) },
+    session: { hook: async (name: string, fn: any) => { hooks.set(name, fn); } },
+    tool: { hook: async (name: string, fn: any) => { hooks.set(name, fn); } },
+    permission: { hook: async (name: string, fn: any) => { hooks.set(`permission.${name}`, fn); } },
+    event: { subscribe: async function* ({ signal }: { signal: AbortSignal }) {
+      if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    } },
+  };
+  const stop = await setupV2(ctx, {
+    legacy: async () => ({ config: async () => {}, event: async () => {}, dispose: () => {} }) as any,
+    guidance: async () => null,
+    nudge: async (input) => input.event === "promote" ? "Promote nudge" : "",
+    gate: async (_tool, input) => typeof input.decision === "string"
+      ? { decision: input.decision as "warn" | "ask", reason: "policy reason" }
+      : { decision: "allow" },
+  });
+  try {
+    const before = hooks.get("execute.before")!;
+    const after = hooks.get("execute.after")!;
+    const evaluate = hooks.get("permission.evaluate")!;
+    const check = (id: string, tool: string) => ({ sessionID: "s1", action: tool, resources: ["*"], source: { type: "tool", messageID: "m", id }, effect: "allow", message: undefined as string | undefined });
+
+    // A warn on a write that is not publish/append still reaches the result, without a nudge.
+    const archive = { tool: "demarkus-memory_mark_archive", sessionID: "s1", id: "a1", input: { url: "/x.md", decision: "warn" } };
+    await before(archive);
+    const archived = { ...archive, status: "completed", result: { content: "Archived" } };
+    await after(archived);
+    assert.equal(archived.result.content, "Archived\n\n⚠️ policy reason");
+
+    // Until a demarkus call's check follows its execute.before, an ask blocks.
+    const publish = { tool: "demarkus-memory_mark_publish", sessionID: "s1", input: { url: "/x.md", decision: "ask", metadata: { tags: "a" } } };
+    await assert.rejects(before({ ...publish, id: "p1" }), /policy reason Confirm with the user/);
+    await after({ tool: "webfetch", sessionID: "s1", id: "w1", input: { url: "https://evil.example" }, status: "completed", result: {} });
+    const read = { tool: "demarkus-memory_mark_fetch", sessionID: "s1", id: "r1", input: { url: "/x.md" } };
+    await before(read);
+    const readCheck = check("r1", read.tool);
+    await evaluate(readCheck);
+    assert.equal(readCheck.effect, "allow");
+    await after({ ...read, status: "completed", result: { content: "doc" } });
+
+    // Then the ask defers: the call is stamped and its check becomes the prompt.
+    const call = { ...publish, id: "p2", input: { ...publish.input } };
+    await before(call);
+    assert.deepEqual(call.input.metadata, { tags: "a", "source-trust": "tainted", "source-trust-from": "webfetch https://evil.example" });
+    const writeCheck = check("p2", call.tool);
+    await evaluate(writeCheck);
+    assert.deepEqual([writeCheck.effect, writeCheck.message], ["ask", "policy reason"]);
+    const saved = { ...call, status: "completed", result: { content: "Saved" } };
+    await after(saved);
+    assert.equal(saved.result.content, "Saved\n\nPromote nudge");
+
+    // An ask whose check never came is reported, not dropped.
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (message: string) => { errors.push(message); };
+    try {
+      const skipped = { ...publish, id: "p3", input: { ...publish.input } };
+      await before(skipped);
+      await after({ ...skipped, status: "completed", result: { content: "Saved" } });
+    } finally {
+      console.error = original;
+    }
+    assert.match(errors.join("\n"), /mark_publish ran without the permission prompt its ask needed: policy reason/);
+  } finally {
+    stop();
+  }
+});

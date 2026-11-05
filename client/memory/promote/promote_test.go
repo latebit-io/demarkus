@@ -216,6 +216,11 @@ func TestExamineAgainstThePolicy(t *testing.T) {
 	if r := (&promote.Check{Policy: &links}).Report(); !strings.Contains(r, "policy: strictness block; allow_domains github.com\n") {
 		t.Errorf("report policy line = %q", r)
 	}
+	// A candidate's classifier verdict reaches the reader under its frame.
+	flagged := promote.Check{Candidates: []promote.Candidate{{Path: "/k.md", Version: 4, Body: "# K\n", Metadata: map[string]string{"classifier": "injection: role override (judge)"}}}}
+	if r := flagged.Report(); !strings.Contains(r, "</doc-") || !strings.Contains(r, ">\nclassifier: injection: role override (judge)\n") {
+		t.Errorf("candidate report = %q", r)
+	}
 	if len(c.Problems) == 0 || c.Packet == "" {
 		t.Errorf("check = %+v", c)
 	}

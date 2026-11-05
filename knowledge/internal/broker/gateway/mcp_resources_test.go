@@ -8,6 +8,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -84,12 +85,12 @@ func TestGatewayReadResource_WholeAndSection(t *testing.T) {
 	g := newGatewayWithDispatcher(t, mcpTestConfig(), fetchModeDispatcher(fetchModeDoc, "3", "abc"))
 
 	whole := gatewayReadResourceText(t, g, "mark://team-a/doc.md")
-	if whole != fetchModeDoc {
-		t.Errorf("whole read should return the exact body, got:\n%s", whole)
+	if whole != docframe.Frame(fetchModeDoc) {
+		t.Errorf("whole read should return the framed body, got:\n%s", whole)
 	}
 
 	section := gatewayReadResourceText(t, g, "mark://team-a/doc.md#setup")
-	if !strings.HasPrefix(section, "## Setup") || !strings.Contains(section, "Setup body.") {
+	if !strings.Contains(section, ">\n## Setup") || !strings.Contains(section, "Setup body.") {
 		t.Errorf("section read should return the section, got:\n%s", section)
 	}
 	if strings.Contains(section, "Usage body.") {
