@@ -461,17 +461,15 @@ func buildServerDeps(cfg *core.Config, store core.SecretStore, log *slog.Logger)
 
 	subject, login := core.NewRateLimits(&cfg.RateLimit)
 	return oauthsrv.ServerDeps{
-		SharedDeps: core.SharedDeps{
-			Verifier:       core.VerifierWith(verifier, idTokenSigner, cfg.Server.PublicURL, cfg.Server.Resources()),
-			SubjectLimiter: subject,
-			Clock:          time.Now,
-			Log:            log,
-		},
-		Signer:        signer,
-		Store:         store,
-		Discovery:     discovery,
-		IDTokenSigner: idTokenSigner,
-		LoginLimiter:  login,
+		Verifier:       core.VerifierWith(verifier, idTokenSigner, cfg.Server.PublicURL, cfg.Server.Resources()),
+		SubjectLimiter: subject,
+		Clock:          time.Now,
+		Log:            log,
+		Signer:         signer,
+		Store:          store,
+		Discovery:      discovery,
+		IDTokenSigner:  idTokenSigner,
+		LoginLimiter:   login,
 	}, nil
 }
 

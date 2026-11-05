@@ -124,7 +124,9 @@ func (c *Client) Close() {
 
 // closeConn closes best effort: the peer may already be gone, and no caller can act on it.
 func closeConn(conn *quic.Conn) {
-	_ = conn.CloseWithError(0, "")
+	if err := conn.CloseWithError(0, ""); err != nil {
+		log.Printf("[WARN] close connection to %s: %v", conn.RemoteAddr(), err)
+	}
 }
 
 // ErrListCompletenessUnknown means a LIST response predates machine-readable
@@ -529,12 +531,11 @@ func isConnectionError(err error) bool {
 // or the request timed out after it went out. The request is retried on a new
 // stream and the connection stays pooled.
 func isStreamError(err error) bool {
-	var reset *quic.StreamError
-	if errors.As(err, &reset) {
+	if _, reset := errors.AsType[*quic.StreamError](err); reset {
 		return true
 	}
-	var sent *sentError
-	return errors.As(err, &sent) && !isConnectionClosed(err) && isTimeoutError(err)
+	_, sent := errors.AsType[*sentError](err)
+	return sent && !isConnectionClosed(err) && isTimeoutError(err)
 }
 
 // isConnectionClosed reports a QUIC error that ends the connection itself.

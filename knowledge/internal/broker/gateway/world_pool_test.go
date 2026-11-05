@@ -67,8 +67,7 @@ func TestWorldPoolDispatchesUnknownWorldThroughTopLevelMethods(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := tc.fn()
-			var notFound *errWorldNotFound
-			if !errors.As(err, &notFound) {
+			if _, ok := errors.AsType[*errWorldNotFound](err); !ok {
 				t.Errorf("%s with unknown world: err = %v, want *errWorldNotFound", tc.name, err)
 			}
 		})

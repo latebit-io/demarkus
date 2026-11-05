@@ -80,7 +80,7 @@ func TestTenantSlugShape(t *testing.T) {
 	}
 	// Hostile local parts sanitize to a DNS-safe label.
 	weird := TenantSlug("https://idp", "s", "--Ünsafe..name!!@example.com")
-	label := strings.Split(weird, "-")[0]
+	label, _, _ := strings.Cut(weird, "-")
 	if label == "" || strings.HasPrefix(weird, "-") || strings.Contains(weird, "--") {
 		t.Errorf("hostile local part produced unsafe slug %q", weird)
 	}

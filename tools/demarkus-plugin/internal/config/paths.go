@@ -57,7 +57,7 @@ func SaveConfig(memory string, port int, mode, tokensTOML string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(h, 0o755); err != nil {
+	if err := os.MkdirAll(h, 0o700); err != nil {
 		return err
 	}
 	cfg, err := path("plugin-memory.conf")
@@ -74,7 +74,7 @@ func SaveConfig(memory string, port int, mode, tokensTOML string) error {
 		content += fmt.Sprintf("TOKENS=%s\n", shellQuote(tokensTOML))
 	}
 	tmp := cfg + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, cfg)

@@ -85,7 +85,7 @@ func main() {
 		// A broken provider costs its tools, never the store's: memory stays up.
 		provided, err := mcpprovider.Load(context.Background(), *toolProvider, servedNames(served))
 		if err != nil {
-			log.Printf("warning: tool provider %s: %v; its tools are unavailable", *toolProvider, err)
+			log.Printf("warning: tool provider %s: %v; its tools are unavailable", strconv.Quote(*toolProvider), err)
 		} else {
 			s.AddTools(provided...)
 		}

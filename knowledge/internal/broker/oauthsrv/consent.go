@@ -41,7 +41,7 @@ type consentData struct {
 // askConsent holds the verified request in a signed cookie and shows the
 // user who asked; the code is issued only by the form's approval.
 func (s *Server) askConsent(w http.ResponseWriter, r *http.Request, pending *AuthCodeRequest, claims *core.Claims) {
-	reply := &authorizeReply{w: w, r: r, redirectURI: pending.RedirectURI, clientState: pending.ClientState}
+	reply := &authorizeReply{s: s, w: w, r: r, redirectURI: pending.RedirectURI, clientState: pending.ClientState}
 	nonce, err := s.setStateCookie(w, consentCookieName, consentPath, State{Consent: &ConsentPending{Request: pending, Claims: *claims}})
 	if errors.Is(err, errStateTooLarge) {
 		reply.fail("invalid_request", "authorization request too large")
@@ -106,7 +106,7 @@ func (s *Server) oauthConsent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pending, claims := state.Consent.Request, state.Consent.Claims
-	reply := &authorizeReply{w: w, r: r, redirectURI: pending.RedirectURI, clientState: pending.ClientState}
+	reply := &authorizeReply{s: s, w: w, r: r, redirectURI: pending.RedirectURI, clientState: pending.ClientState}
 	if r.Form.Get("decision") != "approve" {
 		s.log.InfoContext(r.Context(), "broker: consent declined", "subject", core.HashSubject(claims.Subject))
 		reply.fail("access_denied", "the user declined the request")

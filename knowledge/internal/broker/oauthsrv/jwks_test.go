@@ -3,6 +3,7 @@ package oauthsrv
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,7 +16,7 @@ import (
 
 func TestJWKSHandlerServesPublicKey(t *testing.T) {
 	signer := brokertest.NewTestIDTokenSigner(t)
-	h, err := newJWKSHandler(signer)
+	h, err := newJWKSHandler(signer, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("newJWKSHandler: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestJWKSHandlerVerifiesAgainstSignedToken(t *testing.T) {
 	// the contract every OIDC client library executes — guarding
 	// it pins the broker's interop with strict implementations.
 	signer := brokertest.NewTestIDTokenSigner(t)
-	h, err := newJWKSHandler(signer)
+	h, err := newJWKSHandler(signer, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("newJWKSHandler: %v", err)
 	}

@@ -86,8 +86,9 @@ func (c *Cache) Put(host, path, verb string, resp protocol.Response) error {
 }
 
 // ensureDir creates dir; a flat-file entry from the old layout in the way is removed.
+// Owner-only: the tree names every host and path the user read.
 func (c *Cache) ensureDir(dir string) error {
-	err := os.MkdirAll(dir, 0o755)
+	err := os.MkdirAll(dir, 0o700)
 	if err == nil {
 		return nil
 	}
@@ -97,7 +98,7 @@ func (c *Cache) ensureDir(dir string) error {
 	if rmErr := os.Remove(dir + ".meta"); rmErr != nil && !os.IsNotExist(rmErr) {
 		return fmt.Errorf("remove stale cache metadata %s.meta: %w", dir, rmErr)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create cache dir %s: %w", dir, err)
 	}
 	return nil
@@ -111,27 +112,27 @@ func replaceFile(path string, data []byte) error {
 		return fmt.Errorf("create cache temp file for %s: %w", path, err)
 	}
 	if _, err := tmp.Write(data); err != nil {
-		return errors.Join(fmt.Errorf("write cache file %s: %w", path, err), tmp.Close(), removeTemp(tmp.Name()))
+		return errors.Join(fmt.Errorf("write cache file %s: %w", path, err), tmp.Close(), removeFile(tmp.Name()))
 	}
 	if err := tmp.Close(); err != nil {
-		return errors.Join(fmt.Errorf("close cache file %s: %w", path, err), removeTemp(tmp.Name()))
+		return errors.Join(fmt.Errorf("close cache file %s: %w", path, err), removeFile(tmp.Name()))
 	}
 	if err := renameFile(tmp.Name(), path); err != nil {
-		return errors.Join(fmt.Errorf("replace cache file %s: %w", path, err), removeTemp(tmp.Name()))
+		return errors.Join(fmt.Errorf("replace cache file %s: %w", path, err), removeFile(tmp.Name()))
 	}
 	return nil
 }
 
-func removeTemp(name string) error {
+func removeFile(name string) error {
 	if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove temp file %s: %w", name, err)
+		return fmt.Errorf("remove cache file %s: %w", name, err)
 	}
 	return nil
 }
 
 // Get reads a cached response. Returns nil if not cached.
-// If cache files are inconsistent (metadata missing but body exists),
-// cleans up the orphaned body and returns nil.
+// If cache files are inconsistent (one half of an entry missing), it removes
+// the orphan and returns nil; a failed removal is the error, still a miss.
 func (c *Cache) Get(host, path, verb string) (*Entry, error) {
 	filePath := c.filePath(host, path, verb)
 	metaPath := filePath + ".meta"
@@ -140,12 +141,8 @@ func (c *Cache) Get(host, path, verb string) (*Entry, error) {
 	var m meta
 	if _, err := toml.DecodeFile(metaPath, &m); err != nil {
 		if os.IsNotExist(err) {
-			// Metadata missing. Check if body exists (corrupted cache).
-			if _, err := os.Stat(filePath); err == nil {
-				// Body exists but metadata doesn't — clean it up.
-				_ = os.Remove(filePath)
-			}
-			return nil, nil
+			// Metadata missing: drop any orphaned body.
+			return nil, removeFile(filePath)
 		}
 		// Metadata unreadable for other reasons, treat as miss.
 		return nil, nil
@@ -155,8 +152,7 @@ func (c *Cache) Get(host, path, verb string) (*Entry, error) {
 	body, err := os.ReadFile(filePath)
 	if os.IsNotExist(err) {
 		// Body missing but metadata exists (corrupted cache). Clean up metadata.
-		_ = os.Remove(metaPath)
-		return nil, nil
+		return nil, removeFile(metaPath)
 	}
 	if err != nil {
 		return nil, err

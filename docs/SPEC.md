@@ -1121,7 +1121,7 @@ Observations carry an extraction `view`: `document` for ordinary extraction or `
 
 An observation MAY also carry `highest_revision`, the highest previously observed revision of that same source. If present, it MUST be at least `revision`; surviving older topology MUST remain stale after the newer seed owner's withdrawal. It is not the containing shard's version.
 
-The `/graph.md` export MAY append a `## Source observations` fenced JSON array of `{"url": "...", "observation": {...}}` rows. Existing node and edge tables are unchanged. Strict readers MUST reject malformed, duplicate or unmatched observation rows before applying the export. Readers without sidecar support retain topology with unknown freshness. Revision selection, last-good preservation and bounded revalidation policy are documented in [ADR 0013](adr/0013-graph-source-freshness.md).
+The `/graph.md` export MAY append a `## Source observations` fenced JSON array of `{"url": "...", "observation": {...}}` rows. Existing node and edge tables are unchanged. Strict readers MUST reject malformed, duplicate or unmatched observation rows before applying the export. Readers without sidecar support retain topology with unknown freshness. Revision selection, last-good preservation and bounded revalidation policy are documented in [ADR 0013](https://github.com/latebit-io/demarkus/blob/c0ade5b7/docs/adr/0013-graph-source-freshness.md).
 
 Publishers stage and verify the inactive slot before compare-and-swapping the manifest. Readers fetch every shard through its version path and verify version, byte count, content hash, kind, part, and aggregate counts before applying any rows. A failed fetch or integrity check leaves the previous local graph state and seed etag unchanged.
 

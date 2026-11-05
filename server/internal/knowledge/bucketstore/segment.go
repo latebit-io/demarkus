@@ -115,7 +115,7 @@ func parseSegmentKey(attributes blob.Attributes) (segmentPart, bool) {
 	if windowErr != nil || partErr != nil || part < 0 {
 		return segmentPart{}, false
 	}
-	return segmentPart{Attributes: attributes, segmentRef: segmentRef{label: fields[0], window: window}, part: part}, true
+	return segmentPart{Attributes: attributes, label: fields[0], window: window, part: part}, true
 }
 
 // latest is the newest segment of label, if any.

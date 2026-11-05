@@ -286,7 +286,7 @@ func (top *topResults) offer(e *Entry, score int) {
 		heap.Push(top, Result{Entry: *e, Score: score})
 		return
 	}
-	probe := Result{Entry: Entry{Path: e.Path, Importance: e.Importance, Modified: e.Modified, standing: e.standing}, Score: score}
+	probe := Result{Path: e.Path, Importance: e.Importance, Modified: e.Modified, standing: e.standing, Score: score}
 	if better(&probe, &top.results[0]) {
 		top.results[0] = Result{Entry: *e, Score: score}
 		heap.Fix(top, 0)

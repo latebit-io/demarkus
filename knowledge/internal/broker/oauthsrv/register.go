@@ -27,14 +27,14 @@ const clientIDByteLen = 16
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxRegisterBodySize+1))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error":             "invalid_client_metadata",
 			"error_description": "could not read request body",
 		})
 		return
 	}
 	if len(body) > maxRegisterBodySize {
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{
+		s.writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{
 			"error":             "invalid_client_metadata",
 			"error_description": "request body exceeds size limit",
 		})
@@ -49,7 +49,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	doc := map[string]any{}
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &doc); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{
 				"error":             "invalid_client_metadata",
 				"error_description": "request body is not valid JSON",
 			})
@@ -80,7 +80,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if rawName, present := doc["client_name"]; present {
 		var isString bool
 		if name, isString = rawName.(string); !isString || len(name) > maxClientNameLen {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{
 				"error":             "invalid_client_metadata",
 				"error_description": fmt.Sprintf("client_name must be a string of at most %d bytes", maxClientNameLen),
 			})
@@ -94,7 +94,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if uris, ok := doc["redirect_uris"]; ok {
 		redirectURIs, parseErr := parseRedirectURIs(uris)
 		if parseErr != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{
 				"error":             "invalid_redirect_uri",
 				"error_description": parseErr.Error(),
 			})
@@ -102,7 +102,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		}
 		if regErr := s.dynamicClients.Register(r.Context(), clientID, redirectURIs, name); regErr != nil {
 			s.log.ErrorContext(r.Context(), "broker: register: persist registration failed", "err", regErr)
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			s.writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"error":             "invalid_client_metadata",
 				"error_description": "registration could not be persisted; try again",
 			})
@@ -115,7 +115,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	// by intermediaries. RFC 7591 doesn't mandate it, but
 	// credential-issuing endpoint hygiene says set it anyway.
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusCreated, doc)
+	s.writeJSON(w, http.StatusCreated, doc)
 }
 
 // parseRedirectURIs decodes and validates RFC 7591 redirect_uris: a

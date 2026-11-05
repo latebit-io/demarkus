@@ -104,7 +104,7 @@ func failState(t testing.TB, broker *Server, err error) {
 // with the config's rate limits, no discovery and no id_token signer.
 func testServerDeps(t testing.TB, cfg *core.Config, verifier core.Verifier, k8s *fake.Clientset) ServerDeps {
 	t.Helper()
-	deps := ServerDeps{SharedDeps: core.SharedDeps{Verifier: verifier}, Signer: newTestSigner(t), Store: storage.NewK8sSecretStore(k8s), State: newTestState(t)}
+	deps := ServerDeps{Verifier: verifier, Signer: newTestSigner(t), Store: storage.NewK8sSecretStore(k8s), State: newTestState(t)}
 	deps.SubjectLimiter, deps.LoginLimiter = core.NewRateLimits(&cfg.RateLimit)
 	return deps
 }

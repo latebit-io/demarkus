@@ -81,8 +81,7 @@ func (a *judge) classify(ctx context.Context, path, body string) (injection bool
 	}
 	resp, err := a.client.Beta.Messages.New(ctx, params)
 	if err != nil {
-		var apiErr *anthropic.Error
-		if errors.As(err, &apiErr) {
+		if apiErr, ok := errors.AsType[*anthropic.Error](err); ok {
 			return false, "", fmt.Errorf("judge answered %d", apiErr.StatusCode)
 		}
 		return false, "", fmt.Errorf("judge unreachable: %w", err)

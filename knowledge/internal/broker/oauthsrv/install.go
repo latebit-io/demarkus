@@ -63,7 +63,7 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.InfoContext(r.Context(), "broker: /me/install succeeded",
 		"subject", core.HashSubject(claims.Subject), "worlds", len(out))
-	writeJSON(w, http.StatusOK, installResponse{
+	s.writeJSON(w, http.StatusOK, installResponse{
 		Email:  claims.Email,
 		Worlds: out,
 	})

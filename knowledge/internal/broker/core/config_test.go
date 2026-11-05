@@ -561,6 +561,20 @@ func TestLoadConfig(t *testing.T) {
 			},
 		},
 		{
+			name:    "insecureCookies refused on an https publicURL",
+			body:    strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, "publicURL: \"https://broker.example.com\"\n  insecureCookies: true", 1),
+			wantErr: "server.insecureCookies is for plain-HTTP dev only",
+		},
+		{
+			name: "insecureCookies allowed on a plain-http publicURL",
+			body: strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, "publicURL: \"http://localhost:8080\"\n  insecureCookies: true", 1),
+			validate: func(t *testing.T, c *Config) {
+				if !c.Server.InsecureCookies {
+					t.Error("insecureCookies=true on http publicURL not honored")
+				}
+			},
+		},
+		{
 			name:    "missing server.publicURL",
 			body:    strings.Replace(validConfig, `publicURL: "https://broker.example.com"`, `publicURL: ""`, 1),
 			wantErr: "server.publicURL is required",

@@ -97,12 +97,27 @@ func retireStaleServer(pidFile, versionFile, memoryDir string, port int) (bool, 
 	if err := stopStaleManagedServer(procscan.ReadPID(pidFile), memoryDir); err != nil {
 		return false, err
 	}
-	for _, f := range []string{pidFile, versionFile} {
+	clearBookkeeping(pidFile, versionFile)
+	return false, nil
+}
+
+// clearBookkeeping removes a server's .pid and .server-version. A leftover is
+// logged, not fatal: a later run re-proves ownership before acting on it.
+func clearBookkeeping(files ...string) {
+	for _, f := range files {
 		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
 			progress.Warnf("could not clear stale bookkeeping file %s: %v", f, err)
 		}
 	}
-	return false, nil
+}
+
+// abandonSpawn kills a just-spawned server whose bookkeeping could not be
+// written and clears what was; the caller returns the write error.
+func abandonSpawn(proc *os.Process, files ...string) {
+	if err := proc.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		progress.Warnf("kill unrecorded demarkus-server (pid=%d): %v", proc.Pid, err)
+	}
+	clearBookkeeping(files...)
 }
 
 // Ensure spawns a demarkus-server for memoryDir unless ours is
@@ -116,7 +131,7 @@ func Ensure(memoryDir string, port int) error {
 	if err != nil || current {
 		return err
 	}
-	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
+	if err := os.MkdirAll(memoryDir, 0o700); err != nil {
 		return err
 	}
 	tokensPath, err := config.ManagedTokensPath(memoryDir)
@@ -132,14 +147,15 @@ func Ensure(memoryDir string, port int) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(logFile), 0o700); err != nil {
 		return err
 	}
-	lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = lf.Close() }()
+	// Only the child writes the log, through its own descriptor.
+	defer progress.CloseOrWarn(lf, logFile)
 
 	// Loopback only: the soul's reads carry no token, so every interface
 	// would hand it to the LAN.
@@ -159,15 +175,12 @@ func Ensure(memoryDir string, port int) error {
 	// If we can't record ownership bookkeeping, kill the just-spawned server
 	// rather than leave a detached process with no valid .pid/.server-version
 	// (which a later run can neither recognize nor safely manage).
-	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
-		_ = cmd.Process.Kill()
-		_ = os.Remove(pidFile)
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(pid)+"\n"), 0o600); err != nil {
+		abandonSpawn(cmd.Process, pidFile)
 		return err
 	}
-	if err := os.WriteFile(versionFile, []byte(release.ServerVersion+"\n"), 0o644); err != nil {
-		_ = cmd.Process.Kill()
-		_ = os.Remove(pidFile)
-		_ = os.Remove(versionFile)
+	if err := os.WriteFile(versionFile, []byte(release.ServerVersion+"\n"), 0o600); err != nil {
+		abandonSpawn(cmd.Process, pidFile, versionFile)
 		return err
 	}
 	return (&spawned{cmd: cmd, pidFile: pidFile, versionFile: versionFile, logFile: logFile, port: port}).awaitReady(memoryDir)
@@ -189,8 +202,7 @@ func (s *spawned) awaitReady(memoryDir string) error {
 	go func() {
 		defer close(exited)
 		if err := s.cmd.Wait(); err != nil {
-			var exit *exec.ExitError
-			if !errors.As(err, &exit) {
+			if _, ok := errors.AsType[*exec.ExitError](err); !ok {
 				progress.Warnf("wait for demarkus-server (pid=%d): %v", pid, err)
 			}
 		}
@@ -228,11 +240,7 @@ func (s *spawned) awaitReady(memoryDir string) error {
 // startupFailure clears the bookkeeping of a server that died before it bound
 // its port and names the port with the log tail.
 func (s *spawned) startupFailure() error {
-	for _, f := range []string{s.pidFile, s.versionFile} {
-		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
-			progress.Warnf("could not clear stale bookkeeping file %s: %v", f, err)
-		}
-	}
+	clearBookkeeping(s.pidFile, s.versionFile)
 	tailInfo := ""
 	if t := tailFile(s.logFile, 5); t != "" {
 		tailInfo = "\nrecent log:\n" + t

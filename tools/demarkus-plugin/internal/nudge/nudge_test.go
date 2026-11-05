@@ -89,7 +89,7 @@ func TestPromoteNoDestination(t *testing.T) {
 func TestSessionEnd(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
 	sig := func(changed, write, pending bool) *Input {
-		return &Input{Event: "session-end", Signals: Signals{ChangedFiles: changed, MemoryWrite: write, PendingBackground: pending}}
+		return &Input{Event: "session-end", ChangedFiles: changed, MemoryWrite: write, PendingBackground: pending}
 	}
 	if eval(t, sig(true, false, false)) == "" {
 		t.Error("changed files + no memory write → journal nudge")
@@ -97,7 +97,7 @@ func TestSessionEnd(t *testing.T) {
 	if eval(t, sig(true, true, false)) != "" {
 		t.Error("a legacy memoryWrite from an older adapter still suppresses the nudge")
 	}
-	if eval(t, &Input{Event: "session-end", Signals: Signals{ChangedFiles: true, JournalWrite: true}}) != "" {
+	if eval(t, &Input{Event: "session-end", ChangedFiles: true, JournalWrite: true}) != "" {
 		t.Error("a journal write suppresses the nudge")
 	}
 	if eval(t, sig(false, false, false)) != "" {
@@ -122,7 +122,7 @@ func TestSessionEndScansTranscript(t *testing.T) {
 	if eval(t, &Input{Event: "session-end", TranscriptPath: path}) == "" {
 		t.Error("an Edit in the transcript should nudge")
 	}
-	if eval(t, &Input{Event: "session-end", TranscriptPath: path, Signals: Signals{JournalWrite: true}}) != "" {
+	if eval(t, &Input{Event: "session-end", TranscriptPath: path, JournalWrite: true}) != "" {
 		t.Error("adapter-supplied journalWrite OR-merges with the scan")
 	}
 	planOnly := filepath.Join(t.TempDir(), "p.jsonl")

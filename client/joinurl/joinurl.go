@@ -116,7 +116,7 @@ func validateHostPort(host string) error {
 			return fmt.Errorf("join URL has invalid port %q", port)
 		}
 	}
-	if n, _ := strconv.Atoi(port); n < 1 || n > 65535 {
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
 		return fmt.Errorf("join URL port %s is out of range (1-65535)", port)
 	}
 	return nil

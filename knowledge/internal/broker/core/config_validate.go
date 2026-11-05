@@ -30,6 +30,10 @@ func (c *Config) validate() error {
 	if err := c.Server.normalizePublicURLs(); err != nil {
 		return err
 	}
+	// Without Secure a state cookie leaks over any plain hop; only an all-HTTP dev setup may drop it.
+	if c.Server.InsecureCookies && !strings.HasPrefix(c.Server.PublicURL, "http://") {
+		return fmt.Errorf("server.insecureCookies is for plain-HTTP dev only, but server.publicURL is %q", c.Server.PublicURL)
+	}
 	if c.Server.StateTTL == 0 {
 		c.Server.StateTTL = 5 * time.Minute
 	}

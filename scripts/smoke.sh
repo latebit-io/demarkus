@@ -463,6 +463,9 @@ worlds:
       tokensFile: $WORK/tokens.toml
     limits:
       requestTimeout: 10s
+    # policy() checks the govern gate; open is the default since #703
+    policy:
+      governance: restricted
 EOF
   start_file_world() {
     start_server "$U" "$WORK/file-world.log" env GOOGLE_APPLICATION_CREDENTIALS="$WORK/no-such-credentials.json" \
@@ -525,6 +528,9 @@ worlds:
       tokensFile: $WORK/tokens.toml
     limits:
       requestTimeout: 10s
+    # policy() checks the govern gate; open is the default since #703
+    policy:
+      governance: restricted
 EOF
   }
   knowledge_config "$WORK/knowledge.yaml" "$KNOWLEDGE_PORT" "$HEALTH_PORT" "$PEER_PORT" "$PEER_PORT_B"

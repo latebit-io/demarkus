@@ -200,9 +200,9 @@ func TestOneLineSkipsATable(t *testing.T) {
 }
 
 func TestReplaceEmDashes(t *testing.T) {
-	in := "a — b\n— lead\n- — item\n`x — y` and z—w\n```\nc — d\n```\ne —  f\n~~~\n```\ng — h\n~~~\n``i — ` j`` k — l\n````\nm — n\n``` o\n````\n"
+	in := "a — b\n— lead\n- — item\n## — heading\n`x — y` and z—w\n```\nc — d\n```\ne —  f\n~~~\n```\ng — h\n~~~\n``i — ` j`` k — l\n````\nm — n\n``` o\n````\n"
 	got, n := replaceEmDashes(in)
-	want := "a, b\n— lead\n- — item\n`x — y` and z, w\n```\nc — d\n```\ne, f\n~~~\n```\ng — h\n~~~\n``i — ` j`` k, l\n````\nm — n\n``` o\n````\n"
+	want := "a, b\n— lead\n- — item\n## — heading\n`x — y` and z, w\n```\nc — d\n```\ne, f\n~~~\n```\ng — h\n~~~\n``i — ` j`` k, l\n````\nm — n\n``` o\n````\n"
 	if got != want || n != 4 {
 		t.Errorf("n %d\n%s\nwant\n%s", n, got, want)
 	}
@@ -210,10 +210,12 @@ func TestReplaceEmDashes(t *testing.T) {
 
 func TestWithoutStatus(t *testing.T) {
 	for in, want := range map[string][2]string{
-		"Step 3 (DONE 2026-10-12)": {"Step 3", "DONE 2026-10-12"},
-		"Rollout: SHIPPED":         {"Rollout", "SHIPPED"},
-		"PR #12 review (draft)":    {"PR review (draft)", "#12"},
-		"2026-10-12":               {"", "2026-10-12"},
+		"Step 3 (DONE 2026-10-12)":   {"Step 3", "DONE 2026-10-12"},
+		"Rollout: SHIPPED":           {"Rollout", "SHIPPED"},
+		"PR #12 review (draft)":      {"PR review (draft)", "#12"},
+		"2026-10-12":                 {"", "2026-10-12"},
+		"2026-03-02 — Audit Logging": {"Audit Logging", "2026-03-02"},
+		"Release – 2026-03-02":       {"Release", "2026-03-02"},
 	} {
 		name, status := withoutStatus(in)
 		if name != want[0] || status != want[1] {

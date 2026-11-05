@@ -587,7 +587,7 @@ func writeAll(root string, artifacts []artifact) error {
 	for i := range artifacts {
 		artifact := &artifacts[i]
 		expected[filepath.Clean(artifact.Path)] = struct{}{}
-		if err := os.MkdirAll(filepath.Dir(artifact.Path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(artifact.Path), 0o750); err != nil {
 			return fmt.Errorf("create output directory: %w", err)
 		}
 		mode := artifact.Mode

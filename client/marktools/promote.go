@@ -232,8 +232,7 @@ func writtenReport(status string, w *promote.Written) string {
 // promoteRefused words a soul write that did not land: the document's state
 // in the mechanic's words, a transport failure in the surface's.
 func (t *Tools) promoteRefused(phase string, target Target, err error) Result {
-	var refusal *promote.Refusal
-	if errors.As(err, &refusal) {
+	if _, refused := errors.AsType[*promote.Refusal](err); refused {
 		return failure("%s refused: %v", phase, err)
 	}
 	return t.writeFailed(SitePublish, target.Host, err)

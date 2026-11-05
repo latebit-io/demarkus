@@ -147,8 +147,7 @@ func projectHeader(dir, warn string, brand brandNames) (header, status string, e
 		return "", "", nil
 	}
 	if err != nil {
-		var slugErr *project.SlugError
-		if errors.As(err, &slugErr) {
+		if slugErr, ok := errors.AsType[*project.SlugError](err); ok {
 			return "Project slug: none (" + slugErr.Error() + ").", slugStatus(slugErr, brand), nil
 		}
 		return "", "", err
@@ -175,10 +174,20 @@ func memoryOffer(brand brandNames) (string, error) {
 	if _, e := os.Stat(sentinel); e == nil {
 		return "", nil // already shown
 	}
-	// Best effort: a missing sentinel only repeats the offer next session.
-	_ = os.MkdirAll(filepath.Dir(sentinel), 0o755)
-	_ = os.WriteFile(sentinel, nil, 0o644)
+	markShown(sentinel)
 	return brand.PluginName + memoryOfferText, nil
+}
+
+// markShown records a one-time notice's sentinel. A failure is logged, not
+// returned: a missing sentinel only repeats the notice next session.
+func markShown(sentinel string) {
+	if err := os.MkdirAll(filepath.Dir(sentinel), 0o700); err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] guidance: record notice shown: "+err.Error())
+		return
+	}
+	if err := os.WriteFile(sentinel, nil, 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] guidance: record notice shown: "+err.Error())
+	}
 }
 
 // probeBroker is the broker reachability probe; tests replace it so none
@@ -260,9 +269,7 @@ func knowledge(in Input) (Output, error) {
 		if _, e := os.Stat(sentinel); e == nil {
 			return Output{Status: status}, nil
 		}
-		// Best effort: a missing sentinel only repeats the hint next session.
-		_ = os.MkdirAll(filepath.Dir(sentinel), 0o755)
-		_ = os.WriteFile(sentinel, nil, 0o644)
+		markShown(sentinel)
 		return Output{Context: brand.PluginName + " is installed but no knowledge system is joined yet. To connect this installation to your organization's shared demarkus knowledge base, run `/knowledge-join <broker-url>`.", Status: status}, nil
 	}
 	states, err := probeSystems(systems)

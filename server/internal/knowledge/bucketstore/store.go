@@ -549,8 +549,7 @@ func (store *Store) readAhead(ctx context.Context, base *snapshot, known *slotRe
 		worldID: store.worldID, workers: store.shardWorkers,
 		onSlot: func(slot *slotObject) { applied = append(applied, appliedOf(slot)) },
 	})
-	var broken *applyError
-	if errors.As(err, &broken) {
+	if _, broken := errors.AsType[*applyError](err); broken {
 		return ahead{}, err
 	}
 	return ahead{next: next, applied: applied, confirmed: listed}, err

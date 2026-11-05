@@ -37,7 +37,7 @@ func FileTamper(t testing.TB, fs *store.Store, path string, version int, stored 
 	if err != nil {
 		t.Fatalf("FileTamper: %v", err)
 	}
-	if err := os.WriteFile(file, stored, 0o644); err != nil {
+	if err := os.WriteFile(file, stored, 0o600); err != nil {
 		t.Fatalf("FileTamper: %v", err)
 	}
 }

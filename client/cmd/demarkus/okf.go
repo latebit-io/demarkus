@@ -49,7 +49,10 @@ func okfValidateMain(args []string) {
 	fs := flag.NewFlagSet("okf validate", flag.ExitOnError)
 	strict := fs.Bool("strict", false, "treat warnings as failures")
 	quiet := fs.Bool("quiet", false, "print only the summary line")
-	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "okf validate: %v\n", err)
+		os.Exit(2)
+	}
 	if fs.NArg() != 1 {
 		okfUsage()
 		os.Exit(2)
@@ -84,7 +87,10 @@ func okfImportMain(ctx context.Context, args []string) {
 	authToken := fs.String("auth", "", "auth token for publishing (env: DEMARKUS_AUTH)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	dryRun := fs.Bool("dry-run", false, "build and report the plan without publishing")
-	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "okf import: %v\n", err)
+		os.Exit(2)
+	}
 	if fs.NArg() != 2 {
 		okfUsage()
 		os.Exit(2)
@@ -156,7 +162,10 @@ func okfExportMain(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("okf export", flag.ExitOnError)
 	authToken := fs.String("auth", "", "auth token for reads on private paths (env: DEMARKUS_AUTH)")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
-	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "okf export: %v\n", err)
+		os.Exit(2)
+	}
 	if fs.NArg() != 2 {
 		okfUsage()
 		os.Exit(2)
@@ -212,11 +221,11 @@ func okfExportMain(ctx context.Context, args []string) {
 	}
 	for _, f := range files {
 		full := filepath.Join(outDir, filepath.FromSlash(f.Path))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil { //nolint:gosec // a bundle exported to share
 			fmt.Fprintf(os.Stderr, "okf export: %v\n", err)
 			os.Exit(1)
 		}
-		if err := os.WriteFile(full, f.Content, 0o644); err != nil {
+		if err := os.WriteFile(full, f.Content, 0o644); err != nil { //nolint:gosec // a bundle exported to share
 			fmt.Fprintf(os.Stderr, "okf export: %v\n", err)
 			os.Exit(1)
 		}

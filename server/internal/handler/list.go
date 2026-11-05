@@ -101,8 +101,8 @@ func decodeListCursor(encoded, reqPath string, includeArchived bool) (string, er
 // buildDirectoryPage renders entries, already windowed past the cursor, up to
 // pageSize and the body limit; anything left over makes the page incomplete.
 func buildDirectoryPage(reqPath string, entries []storefmt.DirEntry, pageSize int) (directoryPage, error) {
-	for i, entry := range entries {
-		if i > 0 && entries[i-1].Name >= entry.Name {
+	for i := 1; i < len(entries); i++ {
+		if entries[i-1].Name >= entries[i].Name {
 			return directoryPage{}, errors.New("LIST entries are not strictly ordered")
 		}
 	}

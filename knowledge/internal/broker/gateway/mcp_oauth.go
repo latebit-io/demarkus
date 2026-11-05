@@ -40,5 +40,7 @@ func (g *Gateway) oauthProtectedResource(w http.ResponseWriter, _ *http.Request)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	_ = json.NewEncoder(w).Encode(body)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		g.deps.Log.Debug("write protected resource metadata", "error", err)
+	}
 }

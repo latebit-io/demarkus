@@ -155,11 +155,11 @@ func (p *Proposal) moved(anchor, to string) {
 
 var (
 	parenGroup    = regexp.MustCompile(`\s*\([^()]*\)`)
-	lineStartDash = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])?\s*—`)
+	lineStartDash = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)]|#{1,6})?\s*—`)
 )
 
 // replaceEmDashes turns em dashes into commas outside code and line starts,
-// where a dash may be a bullet; n is what changed.
+// where a dash may be a bullet or open a heading; n is what changed.
 func replaceEmDashes(body string) (out string, n int) {
 	code := codeMask{segs: mdoutline.CodeSegments(body)}
 	var b strings.Builder
@@ -250,8 +250,7 @@ type rename struct {
 // Edits run back to front so earlier offsets stay valid.
 func stripHeadingStatus(body string, headings []mdoutline.Heading) (string, []rename) {
 	var renamed []rename
-	for i := len(headings) - 1; i >= 0; i-- {
-		h := headings[i]
+	for i, h := range slices.Backward(headings) {
 		if h.Level == 1 || !gate.CarriesStatus(h.Text) {
 			continue
 		}
@@ -289,7 +288,8 @@ func withoutStatus(text string) (name, status string) {
 			return ""
 		})
 	}
-	return strings.Trim(gate.Collapse(text), " :,-"), strings.Join(removed, " ")
+	// A cut date leaves the dash that joined it to the name ("2026-03-02 — Audit").
+	return strings.Trim(gate.Collapse(text), " :,-—–"), strings.Join(removed, " ")
 }
 
 // withSummary puts the sentence under the first H1.

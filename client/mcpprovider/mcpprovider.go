@@ -15,6 +15,7 @@ import (
 	"maps"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,7 +123,8 @@ func run(ctx context.Context, bin string, stdin []byte, args ...string) ([]byte,
 		return nil, fmt.Errorf("provider %s: %w", bin, err)
 	}
 	if warn := strings.TrimSpace(stderr.String()); warn != "" {
-		log.Printf("tool provider %s %s: %s", bin, strings.Join(args, " "), warn)
+		// Quoted: the command line and stderr are untrusted; a newline would forge log lines.
+		log.Printf("tool provider %s: %s", strconv.Quote(bin+" "+strings.Join(args, " ")), strconv.Quote(warn))
 	}
 	return stdout.Bytes(), nil
 }

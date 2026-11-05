@@ -365,8 +365,7 @@ func integrityError(ctx context.Context, op, key string, cause error, ambiguous 
 }
 
 func providerStatus(err error) int {
-	var providerError *googleapi.Error
-	if errors.As(err, &providerError) {
+	if providerError, ok := errors.AsType[*googleapi.Error](err); ok {
 		return providerError.Code
 	}
 	return 0

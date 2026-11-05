@@ -119,8 +119,8 @@ func TestCloseFencesCommits(t *testing.T) {
 	// Close cannot return while the slot create is held; the window only
 	// gives a Close that skips it time to show it.
 	select {
-	case <-closed:
-		t.Fatal("Close returned while a slot create was in flight")
+	case err := <-closed:
+		t.Fatalf("Close returned while a slot create was in flight: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
 	holds.holds[2].open()

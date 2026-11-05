@@ -219,21 +219,19 @@ type hubLink struct {
 // project.
 func (r *run) links() []hubLink {
 	section, bullet := hub.JournalBullet(r.scopeHub.Path, r.Dir, r.Layout.Journal)
-	out := []hubLink{{doc: r.scopeHub, Link: hub.Link{
+	scope := hubLink{doc: r.scopeHub,
 		Target: r.Dir + r.Layout.Journal, Bullet: bullet, Section: section,
 		CreateBody: fmt.Sprintf("# %s\n\n%s\n\n%s\n", r.title, section, bullet),
 		CreateMeta: map[string]string{"tags": strings.Join(protocol.MergeTags([]string{"index"}, []string{slugOf(r.Dir)}), ","), "importance": hubImportance},
-		Stamp:      r.Stamp,
-	}}}
+		Stamp:      r.Stamp}
 	if r.Dir == "/" {
-		return out
+		return []hubLink{scope}
 	}
-	return append(out, hubLink{doc: r.docs("/index.md"), Link: hub.Link{
+	return []hubLink{scope, {doc: r.docs("/index.md"),
 		Target: r.Dir, Bullet: fmt.Sprintf("- [%s](%s)", r.title, r.Dir),
 		CreateBody: fmt.Sprintf("# Projects\n\n- [%s](%s)\n", r.title, r.Dir),
 		CreateMeta: map[string]string{"tags": "projects,index", "importance": rootImportance},
-		Stamp:      r.Stamp,
-	}})
+		Stamp:      r.Stamp}}
 }
 
 // titleFrom names the scope: the hub's name, else the slug, else the

@@ -73,10 +73,10 @@ func Ensure(root, tokensTOML string) error {
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(tokensTOML), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(tokensTOML), 0o700); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(tokenFile), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(tokenFile), 0o700); err != nil {
 		return err
 	}
 
@@ -84,12 +84,13 @@ func Ensure(root, tokensTOML string) error {
 	// created mode 600 from the start, never exposing the token to other local
 	// users for the window before the chmod below.
 	tmpTok := tokenFile + ".tmp"
-	genErr := withUmask(0o077, func() error {
+	genErr := withUmask(0o077, func() (err error) {
 		tf, err := os.OpenFile(tmpTok, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 		if err != nil {
 			return err
 		}
-		defer func() { _ = tf.Close() }()
+		// tf receives the raw token: a failed close fails the mint.
+		defer func() { err = errors.Join(err, tf.Close()) }()
 		gen := exec.Command(tokenBin, "generate",
 			"-label", tokenLabel,
 			"-paths", tokenPaths,
@@ -101,8 +102,7 @@ func Ensure(root, tokensTOML string) error {
 		return gen.Run()
 	})
 	if genErr != nil {
-		_ = os.Remove(tmpTok)
-		return fmt.Errorf("demarkus-token generate failed (tokens.toml: %s): %w", tokensTOML, genErr)
+		return errors.Join(fmt.Errorf("demarkus-token generate failed (tokens.toml: %s): %w", tokensTOML, genErr), removeTemp(tmpTok))
 	}
 
 	// Reload before committing the raw token: a matching token file must imply
@@ -110,8 +110,7 @@ func Ensure(root, tokensTOML string) error {
 	// remints.
 	if pid := findServerAtRoot(root); pid > 0 {
 		if err := reloadServer(pid); err != nil {
-			_ = os.Remove(tmpTok) // best-effort; a leftover .tmp never satisfies the gate
-			return fmt.Errorf("reload reminted token: %w", err)
+			return errors.Join(fmt.Errorf("reload reminted token: %w", err), removeTemp(tmpTok))
 		}
 	}
 
@@ -122,6 +121,14 @@ func Ensure(root, tokensTOML string) error {
 		return err
 	}
 	progress.Logf("generated plugin token (label=%s)", tokenLabel)
+	return nil
+}
+
+// removeTemp deletes the raw-token temp file, which a failed open never created.
+func removeTemp(p string) error {
+	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	return nil
 }
 

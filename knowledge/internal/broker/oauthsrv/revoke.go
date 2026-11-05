@@ -7,12 +7,12 @@ import "net/http"
 // a missing one 400. Anonymous: possession of the token is the authorization.
 func (s *Server) tokenRevoke(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
 	rawToken := r.PostFormValue("token")
 	if rawToken == "" {
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
 	// token_type_hint (RFC 7009 §2.1) adds nothing to a lookup by hash;
@@ -24,7 +24,7 @@ func (s *Server) tokenRevoke(w http.ResponseWriter, r *http.Request) {
 		// tells the caller the revocation did not land. JSON error shape per
 		// RFC 7009 §2.2.1 and RFC 6749 §5.2, like the rest of the surface.
 		s.log.ErrorContext(r.Context(), "broker: revoke refresh token failed", "err", err)
-		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		s.writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

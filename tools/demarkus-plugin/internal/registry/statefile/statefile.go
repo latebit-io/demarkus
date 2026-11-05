@@ -18,7 +18,7 @@ import (
 // WithLock runs fn while holding an atomic mkdir mutex for path+".lock".
 // Bounded ~2s.
 func WithLock(path string, fn func() error) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 	return lockdir.WithLock(path+".lock", 100, 20*time.Millisecond, fn)
@@ -30,7 +30,7 @@ func Write(path string, data []byte) error { return WriteFile(path, data, 0o644)
 // WriteFile is Write with an explicit mode. CreateTemp starts at
 // 0600, so secrets are never briefly world-readable before the exact chmod.
 func WriteFile(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")

@@ -36,7 +36,7 @@ const (
 // without its PID stamp. attempts*sleep bounds the total wait.
 func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error) error {
 	lockPid := filepath.Join(lockDir, "pid")
-	if err := os.MkdirAll(filepath.Dir(lockDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(lockDir), 0o750); err != nil {
 		return err
 	}
 	for range attempts {
@@ -92,18 +92,15 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 	return fmt.Errorf("could not acquire %s (held by another process?)", lockDir)
 }
 
-// tryAcquire stages a dir already containing the PID stamp and renames it
-// into the lock location: no unstamped window, rename onto a stamped lock
-// fails (contention). MkdirTemp naming makes leftover stages collision-free.
+// tryAcquire stages a pre-stamped dir and renames it into place: no unstamped
+// window, rename onto a stamped lock fails (contention). MkdirTemp's naming
+// keeps leftover stages collision-free; its 0700 is the lock's mode.
 func tryAcquire(lockDir string) (bool, error) {
 	stage, err := os.MkdirTemp(filepath.Dir(lockDir), filepath.Base(lockDir)+".stage-")
 	if err != nil {
 		return false, fmt.Errorf("stage lock: %w", err)
 	}
-	if err := os.Chmod(stage, 0o755); err != nil {
-		return false, errors.Join(fmt.Errorf("stage lock perms: %w", err), os.RemoveAll(stage))
-	}
-	if err := os.WriteFile(filepath.Join(stage, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stage, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 		return false, errors.Join(fmt.Errorf("stamp lock pid: %w", err), os.RemoveAll(stage))
 	}
 	var renameErr error

@@ -65,8 +65,7 @@ func (g *Gateway) tenantWorld(ctx context.Context) (core.WorldConfig, error) {
 	w, err := core.TenantWorldFor(g.deps.Worlds, g.deps.Issuer, claims)
 	if err != nil {
 		g.evictTenantGraphs(core.IdentityKey(g.deps.Issuer, claims.Subject))
-		var ambiguous core.AmbiguousTenantError
-		if errors.As(err, &ambiguous) {
+		if ambiguous, ok := errors.AsType[core.AmbiguousTenantError](err); ok {
 			g.deps.Log.Warn("tenant resolution ambiguous; denying closed",
 				"subject", core.HashSubject(claims.Subject), "first", ambiguous.First, "second", ambiguous.Second)
 		} else {

@@ -88,8 +88,8 @@ func spec(words ...string) generation.Spec[ref] {
 			for _, word := range words {
 				path := "/gen.shards/" + slot + "/" + word + ".md"
 				shards = append(shards, generation.Shard[ref]{
-					Artifact: generation.Artifact{Path: path, Body: word, ContentHash: generation.BodyHash(word)},
-					Ref:      func(version int) ref { return ref{Path: path, Version: version} },
+					Path: path, Body: word, ContentHash: generation.BodyHash(word),
+					Ref: func(version int) ref { return ref{Path: path, Version: version} },
 				})
 			}
 			return shards, nil

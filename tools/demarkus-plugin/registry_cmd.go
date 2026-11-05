@@ -369,7 +369,9 @@ func registryMemoryDefault(args []string) {
 	list := fs.Bool("list", false, "list the catalog")
 	set := fs.String("set", "", "set DIR's default memory to SLUG")
 	bind := fs.String("bind", "", "the project directory")
-	_ = fs.Parse(args) // ExitOnError: Parse never returns
+	if err := fs.Parse(args); err != nil {
+		fail("memory-default: " + err.Error())
+	}
 	if *bind == "" {
 		fail("memory-default: --bind DIR is required")
 	}
@@ -398,7 +400,9 @@ func registryMemoryDefault(args []string) {
 func registryProject(args []string) {
 	fs := flag.NewFlagSet("project", flag.ExitOnError)
 	dir := fs.String("dir", "", "the project directory (default: harness project variable)")
-	_ = fs.Parse(args) // ExitOnError: Parse never returns
+	if err := fs.Parse(args); err != nil {
+		fail("project: " + err.Error())
+	}
 	if len(fs.Args()) != 0 {
 		fail("project: usage: registry project [--dir DIR]")
 	}
@@ -517,7 +521,10 @@ func cmdMcpServe(args []string) {
 	memory := fs.String("memory", "", "joined remote-memory slug (omit for the local managed memory)")
 	name := fs.String("name", "", "MCP server name a branded plugin registers the local memory under; recorded so gates resolve it")
 	hostTools := fs.Bool("host-tools", false, "serve mark_host and mark_host_setup beside the store's tools (local managed memory only; "+hostToolsEnv+" set does the same)")
-	_ = fs.Parse(args) // ExitOnError: Parse never returns
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] mcp-serve: "+err.Error())
+		os.Exit(2)
+	}
 
 	// The env is a hint for the local server; exported shell-wide it must not
 	// take a joined memory's server down, so it never applies with --memory.

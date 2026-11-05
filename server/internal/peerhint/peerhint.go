@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -252,17 +251,19 @@ func (s *Sender) closeConns() {
 
 // ClientTLS is the sender's TLS config. Replicas share one certificate, so
 // a peer proves itself by presenting exactly this replica's; no CA needed.
+// VerifyConnection, unlike VerifyPeerCertificate, also runs on resumed sessions.
 func ClientTLS(own func() (*tls.Certificate, error)) *tls.Config {
 	return &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		NextProtos:         []string{ALPN},
 		InsecureSkipVerify: true, //nolint:gosec // the peer is checked against this replica's own certificate below
-		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
+		VerifyConnection: func(state tls.ConnectionState) error {
 			mine, err := own()
 			if err != nil {
 				return err
 			}
-			if len(raw) == 0 || len(mine.Certificate) == 0 || !bytes.Equal(raw[0], mine.Certificate[0]) {
+			peer := state.PeerCertificates
+			if len(peer) == 0 || len(mine.Certificate) == 0 || !bytes.Equal(peer[0].Raw, mine.Certificate[0]) {
 				return errors.New("peerhint: peer does not hold this replica's certificate")
 			}
 			return nil

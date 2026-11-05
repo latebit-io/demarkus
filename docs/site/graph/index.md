@@ -17,7 +17,7 @@ rel-supersedes: /adr/0002-metadata-alignment.md
 rel-depends-on: /architecture.md, mark://other-world/spec.md
 ```
 
-Supersedes, depends on, implements, derives from: whatever your catalog needs. A typed relation and a plain link between the same pair are separate edges. See [ADR 0004](../../adr/0004-edge-semantics-rel-convention.md).
+Supersedes, depends on, implements, derives from: whatever your catalog needs. A typed relation and a plain link between the same pair are separate edges. See [ADR 0004](https://github.com/latebit-io/demarkus/blob/c0ade5b7/docs/adr/0004-edge-semantics-rel-convention.md).
 
 ## The agent walks it
 

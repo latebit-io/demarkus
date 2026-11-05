@@ -473,9 +473,7 @@ func (l *listen) meta(sub *subscription, cursor protocol.Cursor) map[string]any 
 func resourceUpdated(uri string, meta map[string]any) mcp.JSONRPCNotification {
 	return mcp.JSONRPCNotification{
 		JSONRPC: mcp.JSONRPC_VERSION,
-		Notification: mcp.Notification{
-			Method: string(mcp.MethodNotificationResourceUpdated),
-			Params: mcp.NotificationParams{Meta: meta, AdditionalFields: map[string]any{"uri": uri}},
-		},
+		Method:  string(mcp.MethodNotificationResourceUpdated),
+		Params:  mcp.NotificationParams{Meta: meta, AdditionalFields: map[string]any{"uri": uri}},
 	}
 }

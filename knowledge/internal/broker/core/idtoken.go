@@ -141,13 +141,11 @@ func (s *IDTokenSigner) Sign(claims *Claims, brokerURL string, ttl time.Duration
 		aud = jwt.Audience{claims.Resource}
 	}
 	c := brokerIDTokenClaims{
-		Claims: jwt.Claims{
-			Issuer:   brokerURL,
-			Subject:  claims.Subject,
-			Audience: aud,
-			Expiry:   jwt.NewNumericDate(now.Add(ttl)),
-			IssuedAt: jwt.NewNumericDate(now),
-		},
+		Issuer:        brokerURL,
+		Subject:       claims.Subject,
+		Audience:      aud,
+		Expiry:        jwt.NewNumericDate(now.Add(ttl)),
+		IssuedAt:      jwt.NewNumericDate(now),
 		Email:         claims.Email,
 		EmailVerified: claims.EmailVerified,
 		Groups:        claims.Groups,

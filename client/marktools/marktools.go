@@ -145,8 +145,7 @@ func failure(format string, args ...any) Result {
 func (t *Tools) resolve(ctx context.Context, raw string) (Target, *Result) {
 	target, err := t.hooks.Resolve(ctx, raw)
 	if err != nil {
-		var verbatim verbatimError
-		if errors.As(err, &verbatim) {
+		if verbatim, ok := errors.AsType[verbatimError](err); ok {
 			bad := failure("%s", verbatim.text)
 			return Target{}, &bad
 		}
@@ -199,8 +198,7 @@ func defaultErrText(site Site, err error) string {
 // writeFailed is failed for a write: a version that could not be resolved is
 // the contract's own refusal and reads as it is worded there.
 func (t *Tools) writeFailed(site Site, host string, err error) Result {
-	var unresolved *docwrite.VersionError
-	if errors.As(err, &unresolved) {
+	if unresolved, ok := errors.AsType[*docwrite.VersionError](err); ok {
 		return failure("%v", unresolved)
 	}
 	return t.failed(site, host, err)

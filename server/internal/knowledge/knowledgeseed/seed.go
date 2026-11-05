@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -60,15 +61,18 @@ func PolicySeedFromFile(name string) (writepolicy.PolicySeed, error) {
 	return seed, nil
 }
 
-func readPolicyFile(name string) ([]byte, error) {
+func readPolicyFile(name string) (_ []byte, err error) {
 	// O_NONBLOCK: a FIFO at this path would otherwise park the world open
 	// until a writer appeared, and no context can interrupt that.
 	file, err := os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open policy file: %w", err)
 	}
-	// Read-only, so a close error cannot lose data.
-	defer func() { _ = file.Close() }()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close policy file: %w", closeErr))
+		}
+	}()
 	info, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat policy file: %w", err)

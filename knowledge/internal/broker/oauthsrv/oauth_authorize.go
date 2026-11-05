@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 )
@@ -17,19 +18,19 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
 	if err := r.ParseForm(); err != nil {
-		writeAuthorizeJSONError(w, "invalid_request", "could not parse form")
+		s.writeAuthorizeJSONError(w, "invalid_request", "could not parse form")
 		return
 	}
 	params := r.Form
 
 	clientID := strings.TrimSpace(params.Get("client_id"))
 	if clientID == "" {
-		writeAuthorizeJSONError(w, "invalid_request", "client_id required")
+		s.writeAuthorizeJSONError(w, "invalid_request", "client_id required")
 		return
 	}
 	redirectURI := strings.TrimSpace(params.Get("redirect_uri"))
 	if redirectURI == "" {
-		writeAuthorizeJSONError(w, "invalid_request", "redirect_uri required")
+		s.writeAuthorizeJSONError(w, "invalid_request", "redirect_uri required")
 		return
 	}
 	// Who the user approves: an RFC 7591 client with a remote redirect is
@@ -43,7 +44,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		// RFC 6749 §3.1.2.3 — pre-registered redirect URIs are the
 		// redirect-trust mechanism for confidential clients.
 		if !webClient.AllowsRedirect(redirectURI) {
-			writeAuthorizeJSONError(w, "invalid_request", "redirect_uri is not registered for this client")
+			s.writeAuthorizeJSONError(w, "invalid_request", "redirect_uri is not registered for this client")
 			return
 		}
 	} else if !isLoopbackRedirectURI(redirectURI) {
@@ -53,11 +54,11 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		record, ok, lookupErr := s.dynamicClients.Lookup(r.Context(), clientID)
 		if lookupErr != nil {
 			s.log.ErrorContext(r.Context(), "broker: authorize: dynamic client lookup failed", "err", lookupErr)
-			writeAuthorizeJSONError(w, "server_error", "client registry unavailable; try again")
+			s.writeAuthorizeJSONError(w, "server_error", "client registry unavailable; try again")
 			return
 		}
 		if !ok || !record.allowsRedirect(redirectURI) {
-			writeAuthorizeJSONError(w, "invalid_request", "redirect_uri is not registered for this client; register it via the RFC 7591 registration_endpoint or use a loopback redirect")
+			s.writeAuthorizeJSONError(w, "invalid_request", "redirect_uri is not registered for this client; register it via the RFC 7591 registration_endpoint or use a loopback redirect")
 			return
 		}
 		consent = !isNativeRedirectURI(redirectURI)
@@ -68,7 +69,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	// redirect_uri is now trusted. All subsequent errors redirect.
 	clientState := params.Get("state")
-	reply := &authorizeReply{w: w, r: r, redirectURI: redirectURI, clientState: clientState}
+	reply := &authorizeReply{s: s, w: w, r: r, redirectURI: redirectURI, clientState: clientState}
 
 	responseType := strings.TrimSpace(params.Get("response_type"))
 	if responseType != "code" {
@@ -154,38 +155,36 @@ func (s *Server) setStateCookie(w http.ResponseWriter, name, path string, state 
 	if len(signed) > maxStateCookieBytes {
 		return "", errStateTooLarge
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     name,
-		Value:    signed,
-		Path:     path,
-		HttpOnly: true,
-		Secure:   !s.cfg.Server.InsecureCookies,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  state.ExpiresAt,
-		MaxAge:   int(s.cfg.Server.StateTTL.Seconds()),
-	})
+	http.SetCookie(w, s.cookie(name, signed, path, s.cfg.Server.StateTTL))
 	return nonce, nil
 }
 
 // clearCookie zeroes the cookie name at path, so a spent state or consent
 // cannot replay.
 func (s *Server) clearCookie(w http.ResponseWriter, name, path string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     name,
-		Value:    "",
-		Path:     path,
-		HttpOnly: true,
-		Secure:   !s.cfg.Server.InsecureCookies,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
+	http.SetCookie(w, s.cookie(name, "", path, 0))
+}
+
+// cookie carries every broker cookie's attributes: HttpOnly, Lax so the IdP's
+// top-level redirect back still sends it, Secure unless dev runs plain HTTP.
+// A ttl of zero or less deletes the cookie.
+func (s *Server) cookie(name, value, path string, ttl time.Duration) *http.Cookie {
+	maxAge, expires := -1, time.Time{}
+	if ttl > 0 {
+		maxAge, expires = int(ttl.Seconds()), s.clock().Add(ttl)
+	}
+	//nolint:gosec // config validation refuses insecureCookies unless publicURL is plain http
+	return &http.Cookie{
+		Name: name, Value: value, Path: path, MaxAge: maxAge, Expires: expires,
+		HttpOnly: true, Secure: !s.cfg.Server.InsecureCookies, SameSite: http.SameSiteLaxMode,
+	}
 }
 
 // authCodeCallback resumes the request the signed state carried: exchange
 // the IdP code, gate the identity, issue the broker's code and redirect with
 // code, state and RFC 9207 iss, or with the matching OAuth error.
 func (s *Server) authCodeCallback(w http.ResponseWriter, r *http.Request, pending *AuthCodeRequest) {
-	reply := &authorizeReply{w: w, r: r, redirectURI: pending.RedirectURI, clientState: pending.ClientState}
+	reply := &authorizeReply{s: s, w: w, r: r, redirectURI: pending.RedirectURI, clientState: pending.ClientState}
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		s.log.InfoContext(r.Context(), "broker: auth code callback denied by idp", "err", errParam)
 		// The IdP error code may not match the OAuth 2.0
@@ -250,8 +249,8 @@ func grantError(err error) (code, description string) {
 // writeAuthorizeJSONError emits a pre-redirect-trust error in the
 // OAuth 2.0 JSON-400 shape. Only invoked while redirect_uri is not
 // yet trusted (missing/malformed client_id, redirect_uri).
-func writeAuthorizeJSONError(w http.ResponseWriter, code, description string) {
-	writeJSON(w, http.StatusBadRequest, map[string]string{
+func (s *Server) writeAuthorizeJSONError(w http.ResponseWriter, code, description string) {
+	s.writeJSON(w, http.StatusBadRequest, map[string]string{
 		"error":             code,
 		"error_description": description,
 	})
@@ -261,6 +260,7 @@ func writeAuthorizeJSONError(w http.ResponseWriter, code, description string) {
 // echoing its state. The caller has validated the URI as loopback or
 // registered; this type does not re-check.
 type authorizeReply struct {
+	s           *Server
 	w           http.ResponseWriter
 	r           *http.Request
 	redirectURI string
@@ -292,7 +292,7 @@ func (a *authorizeReply) redirect(set func(url.Values)) {
 	u, err := url.Parse(a.redirectURI)
 	if err != nil {
 		// The caller validated the URI; a JSON 400 still beats a malformed Location.
-		writeAuthorizeJSONError(a.w, "server_error", "invalid redirect_uri")
+		a.s.writeAuthorizeJSONError(a.w, "server_error", "invalid redirect_uri")
 		return
 	}
 	q := u.Query()

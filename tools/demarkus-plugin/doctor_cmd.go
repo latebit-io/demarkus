@@ -27,7 +27,9 @@ func cmdDoctor(args []string) {
 	dir := fs.String("dir", "", "project directory for the binding (default: harness project variable)")
 	deep := fs.Bool("deep", false, "also check metadata lost across versions")
 	asJSON := fs.Bool("json", false, "print the report as JSON")
-	_ = fs.Parse(args) // ExitOnError: Parse never returns
+	if err := fs.Parse(args); err != nil {
+		fail("doctor: " + err.Error())
+	}
 	if len(fs.Args()) != 0 {
 		fail("doctor: usage: doctor [--scope /<slug>/] [--store ID] [--dir DIR] [--deep] [--json]")
 	}

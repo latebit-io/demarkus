@@ -99,17 +99,17 @@ func ExtractWithPositions(body string) []LinkInfo {
 	doc := goldmark.DefaultParser().Parse(reader)
 
 	var infos []LinkInfo
-	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+	walk(doc, func(n ast.Node, entering bool) ast.WalkStatus {
 		if !entering {
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		}
 		link, ok := n.(*ast.Link)
 		if !ok {
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		}
 		dest := string(link.Destination)
 		if dest == "" || strings.HasPrefix(dest, "#") {
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		}
 		dest, fragment, _ := strings.Cut(dest, "#")
 
@@ -131,13 +131,13 @@ func ExtractWithPositions(body string) []LinkInfo {
 		// Find the byte range of the link text by collecting descendant text segments.
 		firstStart, lastStop := -1, -1
 		var linkText strings.Builder
-		_ = ast.Walk(link, func(child ast.Node, entering bool) (ast.WalkStatus, error) {
+		walk(link, func(child ast.Node, entering bool) ast.WalkStatus {
 			if !entering {
-				return ast.WalkContinue, nil
+				return ast.WalkContinue
 			}
 			t, ok := child.(*ast.Text)
 			if !ok {
-				return ast.WalkContinue, nil
+				return ast.WalkContinue
 			}
 			seg := t.Segment
 			linkText.Write(seg.Value(src))
@@ -145,7 +145,7 @@ func ExtractWithPositions(body string) []LinkInfo {
 				firstStart = seg.Start
 			}
 			lastStop = seg.Stop
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		})
 
 		if firstStart < 0 {
@@ -160,7 +160,7 @@ func ExtractWithPositions(body string) []LinkInfo {
 				BlockStart:   blockStart,
 				End:          -1,
 			})
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		}
 
 		// Scan backward from the first text segment to find '['.
@@ -183,9 +183,20 @@ func ExtractWithPositions(body string) []LinkInfo {
 			BlockStart:   blockStart,
 			End:          inlineEnd(src, closeBracket),
 		})
-		return ast.WalkContinue, nil
+		return ast.WalkContinue
 	})
 	return infos
+}
+
+// walk is ast.Walk for a callback that cannot fail.
+func walk(n ast.Node, visit func(n ast.Node, entering bool) ast.WalkStatus) {
+	err := ast.Walk(n, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		return visit(n, entering), nil
+	})
+	if err != nil {
+		// Unreachable: ast.Walk fails only when its callback does.
+		panic("links: ast.Walk: " + err.Error())
+	}
 }
 
 // inlineEnd is the offset just past the "(dest)" that follows the ']' at
@@ -222,24 +233,24 @@ func ExtractTitle(body string) string {
 	doc := goldmark.DefaultParser().Parse(reader)
 
 	var title strings.Builder
-	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+	walk(doc, func(n ast.Node, entering bool) ast.WalkStatus {
 		if !entering {
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		}
 		heading, ok := n.(*ast.Heading)
 		if !ok || heading.Level != 1 {
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		}
-		_ = ast.Walk(heading, func(child ast.Node, entering bool) (ast.WalkStatus, error) {
+		walk(heading, func(child ast.Node, entering bool) ast.WalkStatus {
 			if !entering {
-				return ast.WalkContinue, nil
+				return ast.WalkContinue
 			}
 			if t, ok := child.(*ast.Text); ok {
 				title.Write(t.Value(src))
 			}
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		})
-		return ast.WalkStop, nil
+		return ast.WalkStop
 	})
 	return title.String()
 }

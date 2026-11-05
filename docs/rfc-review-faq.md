@@ -81,7 +81,7 @@ so a deep crawl usually stops on the node cap rather than the depth limit).
 
 ## How is the graph built world to world?
 
-The knowledge server derives it in process (ADR 0034); the gateways read what it checkpoints.
+The knowledge server derives it in process (ADR 0050); the gateways read what it checkpoints.
 
 - One replica, Lease-elected, follows every world's change feed through an in-process WATCH and extracts links and `rel-` relations from each changed document. No crawl, no token, no separate workload.
 - After a quiet period it checkpoints the world's graph into the hub as version-pinned shards under `/graph/worlds/<world>/` with a manifest committed last, writing only shards whose bytes changed, then renders the hub's `/graph.md` from every world's checkpoint.
