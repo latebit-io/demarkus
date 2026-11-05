@@ -395,6 +395,14 @@ test("V2 keeps session taint across an event-stream reconnect", async (t) => {
   assert.deepEqual(gateCalls().at(-1)?.taint, ["webfetch https://evil.example"]);
 });
 
+test("V2 records taint only from a read that completed", async (t) => {
+  const h = harness("/v2-failed-read");
+  t.after(await plugin.setup(h.ctx));
+  await h.hooks.get("execute.after")!({ tool: "webfetch", sessionID: "s1", id: "w1", input: { url: "https://evil.example" }, status: "error", result: {} });
+  await h.hooks.get("execute.before")!({ tool: "acme_mark_publish", sessionID: "s1", id: "c1", input: { decision: "allow" } });
+  assert.deepEqual(gateCalls().at(-1)?.taint, []);
+});
+
 test("V2 event reconnect backoff is capped during persistent failure", async (t) => {
   const h = harness("/v2-backoff");
   let subscriptions = 0;

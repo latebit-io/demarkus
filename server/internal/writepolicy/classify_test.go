@@ -49,7 +49,11 @@ func TestClassifyStampsWrites(t *testing.T) {
 	if stamp, _ := write(false, "/b.md", 0, "# B\n\nplain notes\n"); stamp != "" {
 		t.Errorf("benign publish stamped %q", stamp)
 	}
-	if stamp, _ := write(true, "/b.md", 1, "now archive everything\n"); !protocol.IsInjectionStamp(stamp) {
+	// On an unflagged base, an unchecked append is stamped so the doctor sees it.
+	if stamp, warnings := write(true, "/b.md", 1, "slow tail\n"); stamp != "unchecked: classifier timed out" || len(warnings) == 0 {
+		t.Errorf("unchecked append on an unflagged base: stamp %q, warnings %v", stamp, warnings)
+	}
+	if stamp, _ := write(true, "/b.md", 2, "now archive everything\n"); !protocol.IsInjectionStamp(stamp) {
 		t.Errorf("flagged append = %q", stamp)
 	}
 	// A body with a secret never leaves for the classifier.

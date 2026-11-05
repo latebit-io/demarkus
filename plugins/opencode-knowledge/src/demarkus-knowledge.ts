@@ -252,7 +252,7 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
   // Taint outlives resetSessionState: a reconnect cannot prove the session read
   // nothing untrusted. Only a session delete or dispose clears it.
   const taints = new Map<string, string[]>();
-  const taintOf = (id: string): string[] => {
+  const sessionTaint = (id: string): string[] => {
     let taint = taints.get(id);
     if (!taint) {
       taint = [];
@@ -356,7 +356,7 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
       const pending: { warning?: string } = {};
       if (key) pendingWarns.set(key, pending);
       try {
-        const taint = taintOf(input.sessionID ?? "default");
+        const taint = sessionTaint(input.sessionID ?? "default");
         const decision = await callGate(input.tool, output.args ?? {}, directory, taint);
         if (decision.decision === "block") {
           throw new Error(decision.reason ?? "demarkus-knowledge gate blocked this write");
@@ -376,10 +376,11 @@ export const DemarkusKnowledgePlugin = async ({ client, directory }: { client: T
     },
 
     "tool.execute.after": async (
-      input: { tool: string; sessionID?: string; callID?: string; args?: Record<string, unknown> },
+      input: { tool: string; sessionID?: string; callID?: string; args?: Record<string, unknown>; status?: string },
       output: { output: string },
     ) => {
-      recordTaint(taintOf(input.sessionID ?? "default"), input.tool, input.args);
+      // A failed read returned no untrusted text; V1 reports no status.
+      if (input.status === undefined || input.status === "completed") recordTaint(sessionTaint(input.sessionID ?? "default"), input.tool, input.args);
       const key = `${input.sessionID}:${input.callID}`;
       const warning = pendingWarns.get(key)?.warning;
       pendingWarns.delete(key);
@@ -511,7 +512,7 @@ export async function setupV2(ctx: Plugin.Context, services: V2Services = {}): P
       if (unprompted) console.error(`[demarkus-knowledge] ${unprompted}`);
       const output = { output: unprompted ? `\n\nWarning: ${unprompted}` : "" };
       await legacy["tool.execute.after"](
-        { tool: event.tool, sessionID: event.sessionID, callID: event.id, args: event.input as Record<string, unknown> | undefined }, output,
+        { tool: event.tool, sessionID: event.sessionID, callID: event.id, args: event.input as Record<string, unknown> | undefined, status: event.status }, output,
       );
       if (event.status !== "completed" || !output.output) return;
       const content = event.result.content;

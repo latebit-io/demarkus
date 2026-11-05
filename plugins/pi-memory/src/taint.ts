@@ -32,7 +32,7 @@ export function isGatedWrite(toolName: string): boolean {
 export function taintOf(tool: string, args: Record<string, unknown> | undefined): string {
   const url = typeof args?.url === "string" ? args.url : "";
   if (MARK_TOOL.test(tool)) return foreignRead(tool, url);
-  if (WEB_TOOL.test(tool) && !LOCAL_TOOL.test(tool)) return clip(url ? `${tool} ${url}` : tool);
+  if (WEB_TOOL.test(tool) && !LOCAL_TOOL.test(tool)) return clip(url ? `${tool} ${publicURL(url)}` : tool);
   if (BROWSER_TOOL.test(tool)) return clip(tool);
   const command = typeof args?.command === "string" ? args.command : "";
   if (SHELL_TOOL.test(tool) && runsDownload(command)) return "shell download";
@@ -191,6 +191,18 @@ function closing(line: string, open: number): number {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+// publicURL drops a URL's userinfo, query and fragment, where tokens ride,
+// before it is stored as a taint source (Go's taint.publicURL).
+function publicURL(raw: string): string {
+  try {
+    const u = new URL(raw);
+    if (!u.host) return "a URL";
+    return `${u.protocol}//${u.host}${u.pathname === "/" ? "" : u.pathname}`;
+  } catch {
+    return "a URL";
+  }
 }
 
 function clip(s: string): string {

@@ -4,6 +4,9 @@ import { branchTaint, isGatedWrite, recordTaint, taintOf, taintStamp } from "../
 
 test("taintOf names untrusted reads and nothing else", () => {
   assert.equal(taintOf("webfetch", { url: "https://evil.example/p" }), "webfetch https://evil.example/p");
+  // Userinfo, query and fragment, where tokens ride, never reach stored metadata.
+  assert.equal(taintOf("webfetch", { url: "https://u:p@evil.example/p?token=abc#x" }), "webfetch https://evil.example/p");
+  assert.equal(taintOf("webfetch", { url: "not a url" }), "webfetch a URL");
   assert.equal(taintOf("websearch", {}), "websearch");
   assert.equal(taintOf("chrome_devtools_navigate", {}), "chrome_devtools_navigate");
   assert.equal(taintOf("bash", { command: "cd x && curl -s https://evil.example" }), "shell download");
