@@ -292,14 +292,19 @@ func stripHeadingStatus(body string, headings []mdoutline.Heading) (string, []re
 // inside the sentence ("after #420: x") leaves the heading as it is.
 func withoutStatus(text string) (name, status string) {
 	var removed []string
-	name = gate.Collapse(parenGroup.ReplaceAllStringFunc(text, func(group string) string {
-		inner := strings.TrimSpace(strings.Trim(strings.TrimSpace(group), "()"))
-		if !gate.CarriesStatus(inner) {
-			return group
+	var kept strings.Builder
+	last := 0
+	for _, m := range parenGroup.FindAllStringIndex(text, -1) {
+		inner := strings.TrimSpace(strings.Trim(strings.TrimSpace(text[m[0]:m[1]]), "()"))
+		// After a function word the group completes the phrase ("Fix for (#504)").
+		if !gate.CarriesStatus(inner) || functionWords[strings.ToLower(lastField(text[:m[0]]))] {
+			continue
 		}
-		removed = append(removed, inner)
-		return ""
-	}))
+		kept.WriteString(text[last:m[0]])
+		removed, last = append(removed, inner), m[1]
+	}
+	kept.WriteString(text[last:])
+	name = gate.Collapse(kept.String())
 	for {
 		tok, rest := leadingStatus(name)
 		if tok == "" {
@@ -440,7 +445,7 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		s.bullet = rebaseFragments(s.bullet, links.FragmentLinks(s.bullet), in.Path, homes)
 	}
 	for _, h := range headings {
-		if to, ok := homes[strings.ToLower(h.Anchor)]; ok && (to.path != in.Path || to.anchor != h.Anchor) {
+		if to, ok := homes.at[h.Anchor]; ok && (to.path != in.Path || to.anchor != h.Anchor) {
 			p.moved(h.Anchor, to.path+"#"+to.anchor)
 		}
 	}
@@ -467,12 +472,12 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 
 // rebaseFragments points each same-document link in text (found, offsets
 // into text), which lands in file here, at its heading's landing.
-func rebaseFragments(text string, found []links.FragmentLink, here string, homes map[string]landing) string {
+func rebaseFragments(text string, found []links.FragmentLink, here string, homes landings) string {
 	var b strings.Builder
 	last := 0
 	for _, l := range found {
-		to, ok := homes[strings.ToLower(l.Anchor)]
-		if !ok || (to.path == here && strings.EqualFold(to.anchor, l.Anchor)) {
+		from, to, ok := homes.find(l.Anchor)
+		if !ok || (to.path == here && to.anchor == from) {
 			continue
 		}
 		b.WriteString(text[last:l.Start])
@@ -501,11 +506,28 @@ func fragmentsIn(all []links.FragmentLink, start, n int) []links.FragmentLink {
 // landing is a heading's file and anchor after the split.
 type landing struct{ path, anchor string }
 
-// anchorHomes maps each heading's lowercase anchor to its landing. Each file
+// landings maps the document's anchors to where the split lands them.
+type landings struct {
+	headings []mdoutline.Heading
+	at       map[string]landing // by original anchor
+}
+
+// find resolves fragment as fetch does (mdoutline.Find: any case, or its
+// slug), returning the anchor it names and where that lands.
+func (l landings) find(fragment string) (anchor string, to landing, ok bool) {
+	h, ok := mdoutline.Find(l.headings, fragment)
+	if !ok {
+		return "", landing{}, false
+	}
+	to, ok = l.at[h.Anchor]
+	return h.Anchor, to, ok
+}
+
+// anchorHomes maps each heading's anchor to its landing. Each file
 // numbers duplicate slugs afresh, so a -1 suffix shifts when its twin moves:
 // anchors come from parsing the bodies the split writes.
-func anchorHomes(in *Input, title string, sections []section, headings []mdoutline.Heading) map[string]landing {
-	homes := make(map[string]landing, len(headings))
+func anchorHomes(in *Input, title string, sections []section, headings []mdoutline.Heading) landings {
+	homes := landings{headings: headings, at: make(map[string]landing, len(headings))}
 	// place zips a file's original headings with its parsed ones; a nil entry
 	// is a heading the split adds (the topic H1, the hub's links list).
 	place := func(file, body string, orig []*mdoutline.Heading) {
@@ -514,9 +536,9 @@ func anchorHomes(in *Input, title string, sections []section, headings []mdoutli
 			switch {
 			case h == nil:
 			case len(parsed) == len(orig):
-				homes[strings.ToLower(h.Anchor)] = landing{file, parsed[i].Anchor}
+				homes.at[h.Anchor] = landing{file, parsed[i].Anchor}
 			default: // unexpected shape: keep the anchor as written
-				homes[strings.ToLower(h.Anchor)] = landing{file, h.Anchor}
+				homes.at[h.Anchor] = landing{file, h.Anchor}
 			}
 		}
 	}

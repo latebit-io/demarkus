@@ -168,6 +168,9 @@ func TestSplitMeetsTheWritePolicy(t *testing.T) {
 // one whose section stays put, or sits in code, is left alone.
 func TestSplitRebasesSameDocumentLinks(t *testing.T) {
 	body := strings.Replace(bigDoc(), "One short frame section.", "One short frame section; see [steps](#steps-detail) and `[x](#design)`, [t](#design \"Design\"), \\[e](#design).", 1)
+	// Fragments resolve as fetch resolves them: any case, or by their slug.
+	body = strings.Replace(body, "One short frame section;", "One short frame section; [D](#DESIGN), [c](#config.yaml);", 1)
+	body = strings.Replace(body, "First sentence of design. Second.\n", "First sentence of design. Second.\n\n### Config.yaml\n\nNotes.\n", 1)
 	body = strings.Replace(body, "First sentence of measures.", "First sentence of measures, after [design](#design) and [goal](#goal).", 1)
 	p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}})
 	if p.Kind != KindSplit {
@@ -176,6 +179,9 @@ func TestSplitRebasesSameDocumentLinks(t *testing.T) {
 	byPath := map[string]string{}
 	for _, w := range p.Writes {
 		byPath[w.Path] = w.Body
+	}
+	if hub := byPath["/plans/big.md"]; !strings.Contains(hub, "[D](/plans/big/design.md#design), [c](/plans/big/design.md#configyaml);") {
+		t.Errorf("hub keeps a case or slug fragment:\n%s", hub)
 	}
 	if hub := byPath["/plans/big.md"]; !strings.Contains(hub, "[steps](/plans/big/steps.md#steps-detail) and `[x](#design)`, [t](/plans/big/design.md#design \"Design\"), \\[e](#design).") {
 		t.Errorf("hub:\n%s", hub)
@@ -296,6 +302,7 @@ func TestWithoutStatus(t *testing.T) {
 		"Status: MERGED (PR #384, 2026-08-28)":      {"Status", "PR #384, 2026-08-28 MERGED"},
 		// Status inside the sentence: cutting it would garble the heading.
 		"PR #12 review (draft)":                    {"PR #12 review (draft)", ""},
+		"Fix PR for (#504 and #505)":               {"Fix PR for (#504 and #505)", ""},
 		"Resolved 2026-09-21, track 3c":            {"Resolved 2026-09-21, track 3c", ""},
 		"Missing after #420: extensibility toggle": {"Missing after #420: extensibility toggle", ""},
 		"Fix PR for #504 and #505 (gate hang)":     {"Fix PR for #504 and #505 (gate hang)", ""},
