@@ -344,7 +344,7 @@
           "type": "string"
         },
         "url": {
-          "description": "mark://{worldName}/ or a dir like mark://{worldName}/adr/; docs: mark_fetch",
+          "description": "mark://{worldName}/ or a directory; docs: mark_fetch",
           "type": "string"
         },
         "verbose": {

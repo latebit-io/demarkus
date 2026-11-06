@@ -30,8 +30,8 @@ const (
 
 // LookupScopeDesc describes a lookup scope in the surface's URL form. The
 // server takes a root or directory only, so a document goes to mark_fetch.
-func LookupScopeDesc(root, dir string) string {
-	return root + " or a dir like " + dir + "; docs: mark_fetch"
+func LookupScopeDesc(root string) string {
+	return root + " or a directory; docs: mark_fetch"
 }
 
 // DocumentScope is the refusal for a lookup scoped to a document, "" for a

@@ -306,9 +306,9 @@ func scopeDesc(host string) string {
 
 func lookupScopeDesc(host string) string {
 	if host != "" {
-		return mcpfmt.LookupScopeDesc("/", "/demarkus/")
+		return mcpfmt.LookupScopeDesc("/")
 	}
-	return mcpfmt.LookupScopeDesc("mark://host/", "mark://host/demarkus/")
+	return mcpfmt.LookupScopeDesc("mark://host/")
 }
 
 func markLookupTool(host string) mcp.Tool {

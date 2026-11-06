@@ -388,7 +388,7 @@
           "type": "string"
         },
         "url": {
-          "description": "mark://host/ or a dir like mark://host/demarkus/; docs: mark_fetch",
+          "description": "mark://host/ or a directory; docs: mark_fetch",
           "type": "string"
         },
         "verbose": {
