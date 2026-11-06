@@ -221,6 +221,20 @@ func TestSplitRenumbersDuplicateAnchors(t *testing.T) {
 	}
 }
 
+// A heading nested in a list is a section, but its slice alone reads as
+// indented code; its links are found in the whole document.
+func TestSplitRebasesLinksUnderANestedHeading(t *testing.T) {
+	filler := strings.Repeat("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod.\n", 120)
+	body := "# Doc\n\nWhat the doc settles.\n\n## Alpha\n\n### Target\n\n" + filler + "\n- a\n  - b\n\n    ## Beta\n\n    see [t](#target)\n"
+	p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "doc"}})
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
+	}
+	if hub := p.Writes[len(p.Writes)-1].Body; !strings.Contains(hub, "see [t](/d/alpha.md#target)") {
+		t.Errorf("hub:\n%s", hub)
+	}
+}
+
 func TestSplitRefusesWhatItCannotName(t *testing.T) {
 	flat := "# Flat\n\nSummary here.\n\n" + strings.Repeat("line\n", 2000)
 	p := Propose(&Input{Path: "/f.md", Body: flat})

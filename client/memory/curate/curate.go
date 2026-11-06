@@ -429,11 +429,15 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	}
 	title := hub.Title(in.Body, in.Metadata, strings.TrimSuffix(path.Base(in.Path), ".md"))
 	homes := anchorHomes(in, title, sections, headings)
-	preamble = rebaseFragments(preamble, in.Path, homes)
+	// Parsed whole: a slice can lose its context (a heading nested in a list
+	// reads as indented code alone), so slices take their links by offset.
+	found := links.FragmentLinks(in.Body)
+	preamble = rebaseFragments(preamble, fragmentsIn(found, 0, len(preamble)), in.Path, homes)
 	for i := range sections {
-		sections[i].text = rebaseFragments(sections[i].text, cmp.Or(sections[i].topic, in.Path), homes)
+		s := &sections[i]
+		s.text = rebaseFragments(s.text, fragmentsIn(found, s.heading.Start, len(s.text)), cmp.Or(s.topic, in.Path), homes)
 		// The bullet quotes the section's opening line into the hub.
-		sections[i].bullet = rebaseFragments(sections[i].bullet, in.Path, homes)
+		s.bullet = rebaseFragments(s.bullet, links.FragmentLinks(s.bullet), in.Path, homes)
 	}
 	for _, h := range headings {
 		if to, ok := homes[strings.ToLower(h.Anchor)]; ok && (to.path != in.Path || to.anchor != h.Anchor) {
@@ -461,12 +465,12 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	p.Unfixed = append(p.Unfixed, gate.AuditProblems(in.Path, body, meta["description"])...)
 }
 
-// rebaseFragments points each same-document link ("[x](#a)") in text, which
-// lands in file here, at the heading's landing: its file and renumbered anchor.
-func rebaseFragments(text, here string, homes map[string]landing) string {
+// rebaseFragments points each same-document link in text (found, offsets
+// into text), which lands in file here, at its heading's landing.
+func rebaseFragments(text string, found []links.FragmentLink, here string, homes map[string]landing) string {
 	var b strings.Builder
 	last := 0
-	for _, l := range links.FragmentLinks(text) {
+	for _, l := range found {
 		to, ok := homes[strings.ToLower(l.Anchor)]
 		if !ok || (to.path == here && strings.EqualFold(to.anchor, l.Anchor)) {
 			continue
@@ -480,6 +484,18 @@ func rebaseFragments(text, here string, homes map[string]landing) string {
 	}
 	b.WriteString(text[last:])
 	return b.String()
+}
+
+// fragmentsIn is the links of all within [start, start+n), offsets made
+// relative to start.
+func fragmentsIn(all []links.FragmentLink, start, n int) []links.FragmentLink {
+	var out []links.FragmentLink
+	for _, l := range all {
+		if l.Start >= start && l.End <= start+n {
+			out = append(out, links.FragmentLink{Anchor: l.Anchor, Start: l.Start - start, End: l.End - start})
+		}
+	}
+	return out
 }
 
 // landing is a heading's file and anchor after the split.
