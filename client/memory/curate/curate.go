@@ -769,10 +769,15 @@ type Move struct{ Source, From, To string }
 // Moves are the inbound links the proposal's change breaks, with their new
 // targets.
 func (p *Proposal) Moves(inbound []Inbound) []Move {
+	// Matched as fetch resolves a fragment, so "#NEXT-2" finds next-2.
+	moved := make([]mdoutline.Heading, 0, len(p.Moved))
+	for anchor := range p.Moved {
+		moved = append(moved, mdoutline.Heading{Anchor: anchor})
+	}
 	var moves []Move
 	for _, link := range inbound {
-		if to, ok := p.Moved[link.Anchor]; ok {
-			moves = append(moves, Move{Source: link.Source, From: p.Path + "#" + link.Anchor, To: to})
+		if h, ok := mdoutline.Find(moved, link.Anchor); ok {
+			moves = append(moves, Move{Source: link.Source, From: p.Path + "#" + link.Anchor, To: p.Moved[h.Anchor]})
 		}
 	}
 	return moves

@@ -112,8 +112,9 @@ func TestSplitMovesHeadingsVerbatimAndKeepsTheFrame(t *testing.T) {
 	if hub.Metadata["tags"] != "plan,unrelated,status:active" || hub.Metadata["importance"] != "0.8" || hub.Metadata["title"] != "Big plan" || hub.Metadata["user"] != "" {
 		t.Errorf("hub metadata = %v", hub.Metadata)
 	}
-	moves := p.Moves([]Inbound{{Source: "/index.md", Anchor: "steps-detail"}, {Source: "/x.md", Anchor: "goal"}})
-	if len(moves) != 1 || moves[0] != (Move{Source: "/index.md", From: "/plans/big.md#steps-detail", To: "/plans/big/steps.md#steps-detail"}) {
+	moves := p.Moves([]Inbound{{Source: "/index.md", Anchor: "steps-detail"}, {Source: "/x.md", Anchor: "goal"}, {Source: "/y.md", Anchor: "Steps-Detail"}})
+	if len(moves) != 2 || moves[0] != (Move{Source: "/index.md", From: "/plans/big.md#steps-detail", To: "/plans/big/steps.md#steps-detail"}) ||
+		moves[1] != (Move{Source: "/y.md", From: "/plans/big.md#Steps-Detail", To: "/plans/big/steps.md#steps-detail"}) {
 		t.Errorf("moves = %+v", moves)
 	}
 	if len(p.Unfixed) != 0 {
