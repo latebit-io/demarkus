@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -100,7 +101,7 @@ func sha256Verify(checksumsFile, archive string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
+	defer progress.CloseOrWarn(f, archive)
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return err
@@ -182,7 +183,7 @@ func EnsureBinaries() (replaced bool, err error) {
 	if anyBinaryPresent() {
 		progress.Logf("binary version drift detected (installed=%s, desired=%s); re-downloading", installed, desired)
 	}
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		return false, err
 	}
 
@@ -195,7 +196,12 @@ func EnsureBinaries() (replaced bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = os.RemoveAll(tmp) }()
+	// A leftover download dir must not fail an install that already landed.
+	defer func() {
+		if err := os.RemoveAll(tmp); err != nil {
+			progress.Warnf("remove download dir %s: %v", tmp, err)
+		}
+	}()
 
 	progress.Logf("downloading demarkus binaries (server v%s, client v%s, tools v%s, %s)",
 		ServerVersion, ClientVersion, ToolsRef(), plat)
@@ -239,7 +245,11 @@ func download(url, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			progress.Warnf("close %s response body: %v", url, err)
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("GET %s: status %s", url, resp.Status)
 	}
@@ -249,13 +259,10 @@ func download(url, dest string) error {
 		return err
 	}
 	if _, err := io.Copy(f, resp.Body); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return err
+		return errors.Join(err, f.Close(), os.Remove(tmp))
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
+		return errors.Join(err, os.Remove(tmp))
 	}
 	return os.Rename(tmp, dest)
 }
@@ -267,12 +274,12 @@ func extractTarGz(archive, destDir string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
+	defer progress.CloseOrWarn(f, archive)
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = gz.Close() }()
+	defer progress.CloseOrWarn(gz, archive+" gzip stream")
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
@@ -289,11 +296,11 @@ func extractTarGz(archive, destDir string) error {
 		target := filepath.Join(destDir, clean)
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := os.MkdirAll(target, 0o750); err != nil {
 				return err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 				return err
 			}
 			out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode)&0o777)
@@ -301,8 +308,7 @@ func extractTarGz(archive, destDir string) error {
 				return err
 			}
 			if _, err := io.Copy(out, tr); err != nil { //nolint:gosec // trusted, sha256-verified archive
-				_ = out.Close()
-				return err
+				return errors.Join(err, out.Close())
 			}
 			if err := out.Close(); err != nil {
 				return err
@@ -318,28 +324,20 @@ func InstallFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := in.Close(); err != nil {
-			progress.Warnf("close %s after copy: %v", src, err)
-		}
-	}()
+	defer progress.CloseOrWarn(in, src)
 	tmp := dst + ".tmp"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		_ = os.Remove(tmp)
-		return err
+		return errors.Join(err, out.Close(), os.Remove(tmp))
 	}
 	if err := out.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
+		return errors.Join(err, os.Remove(tmp))
 	}
 	if err := os.Chmod(tmp, mode); err != nil {
-		_ = os.Remove(tmp)
-		return err
+		return errors.Join(err, os.Remove(tmp))
 	}
 	return os.Rename(tmp, dst)
 }

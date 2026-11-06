@@ -498,8 +498,7 @@ var (
 
 // retryable is a retry-later refusal (SPEC §7) or a transport failure.
 func retryable(err error) bool {
-	var refused *fetch.StatusError
-	if errors.As(err, &refused) {
+	if refused, ok := errors.AsType[*fetch.StatusError](err); ok {
 		return refused.Status == protocol.StatusRateLimited || refused.Status == protocol.StatusServerError
 	}
 	return !errors.Is(err, errSource) && !errors.Is(err, errNotModern) && !errors.Is(err, errNotOffered) && !errors.Is(err, context.Canceled)

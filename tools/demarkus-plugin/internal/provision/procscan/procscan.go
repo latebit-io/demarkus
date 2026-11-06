@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/progress"
 )
 
 // demarkusProtocolPort is demarkus-server's built-in default.
@@ -90,7 +91,8 @@ func PortIsFree(port int) bool {
 		}
 		return true // permissive on any other probe failure
 	}
-	_ = conn.Close() // probe connection; the dial result is the answer
+	// The bind result is the answer; a failed close only delays the port's release.
+	progress.CloseOrWarn(conn, "port probe socket")
 	return true
 }
 

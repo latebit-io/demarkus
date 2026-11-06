@@ -343,10 +343,10 @@ func TestWriteContextFailsClosed(t *testing.T) {
 
 // A refused world answer is the answer: nothing re-provisions or retries.
 func TestWriteHandlersDoNotRetryARefusal(t *testing.T) {
-	var attempts int32
+	var attempts atomic.Int32
 	d := &fakeDispatcher{
 		PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
-			atomic.AddInt32(&attempts, 1)
+			attempts.Add(1)
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
 		},
 	}
@@ -362,7 +362,7 @@ func TestWriteHandlersDoNotRetryARefusal(t *testing.T) {
 	if text := toolResultText(t, res); !strings.Contains(text, protocol.StatusUnauthorized) {
 		t.Fatalf("result = %q, want the world's refusal forwarded", text)
 	}
-	if got := atomic.LoadInt32(&attempts); got != 1 {
+	if got := attempts.Load(); got != 1 {
 		t.Errorf("publish attempts = %d, want 1", got)
 	}
 }

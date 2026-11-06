@@ -110,8 +110,11 @@ type Stream interface {
 // HandleStream reads a request from the stream and writes a response. ctx
 // bounds every store call the request makes; a WATCH runs until it ends.
 func (h *Handler) HandleStream(ctx context.Context, stream Stream) {
-	// The response is already written or failed; a close error changes nothing.
-	defer func() { _ = stream.Close() }()
+	defer func() {
+		if err := stream.Close(); err != nil {
+			h.logger.Debug("close stream", "error", err)
+		}
+	}()
 
 	req, ok := h.ReadRequest(stream)
 	if !ok {

@@ -2,6 +2,7 @@ package oauthsrv
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-jose/go-jose/v4"
@@ -17,19 +18,20 @@ import (
 type jwksHandler struct {
 	signer *core.IDTokenSigner
 	body   []byte
+	log    *slog.Logger
 }
 
 // newJWKSHandler renders the JWKS once at construction. The signer's
 // kid is stable across the broker's lifetime (no rotation in PR4),
 // so a one-time render avoids any per-request marshaling overhead.
 // Re-rendering on signer change is a phase-7 concern.
-func newJWKSHandler(signer *core.IDTokenSigner) (*jwksHandler, error) {
+func newJWKSHandler(signer *core.IDTokenSigner, log *slog.Logger) (*jwksHandler, error) {
 	set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{signer.PublicJWK()}}
 	body, err := json.MarshalIndent(set, "", "  ")
 	if err != nil {
 		return nil, err
 	}
-	return &jwksHandler{signer: signer, body: body}, nil
+	return &jwksHandler{signer: signer, body: body, log: log}, nil
 }
 
 // ServeHTTP writes the rendered JWKS body. Method enforcement is
@@ -43,5 +45,7 @@ func (h *jwksHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	// a computed value would silently drift if either side changed).
 	// Public (not private) because the JWKS is not user-scoped.
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	_, _ = w.Write(h.body)
+	if _, err := w.Write(h.body); err != nil {
+		h.log.Debug("write JWKS", "error", err)
+	}
 }

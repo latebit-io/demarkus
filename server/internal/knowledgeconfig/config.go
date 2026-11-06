@@ -313,14 +313,6 @@ func (config BucketConfig) Name() string {
 	return strings.TrimPrefix(config.URL, "gs://")
 }
 
-// ParseBucketURL validates an exact gs://bucket URL and returns its bucket name.
-func ParseBucketURL(value string) (string, error) {
-	if err := validateBucketURL(value); err != nil {
-		return "", err
-	}
-	return strings.TrimPrefix(value, "gs://"), nil
-}
-
 // ValidWorldID reports whether worldID is canonical lowercase with an RFC 4122 variant.
 func ValidWorldID(worldID string) bool {
 	return validWorldID(worldID)
@@ -459,7 +451,7 @@ func LoadWithFragment(filename string, fragment []byte) (*Config, error) {
 
 // readWorldsFile reads the fragment on disk; absent is not yet provisioned.
 func readWorldsFile(fragmentPath string) ([]byte, error) {
-	fragment, err := os.ReadFile(fragmentPath)
+	fragment, err := os.ReadFile(fragmentPath) //nolint:gosec // the operator's config names this path, not a request
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}

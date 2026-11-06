@@ -2121,7 +2121,7 @@ func TestFingerprint(t *testing.T) {
 	if a.Fingerprint() == sameBody {
 		t.Fatal("a metadata-only version left the fingerprint unchanged")
 	}
-	if _, _, err := a.ArchiveChecked(&storefmt.ArchiveSpec{ArchiveChange: storefmt.ArchiveChange{Path: "/y.md", Archived: true}}); err != nil {
+	if _, _, err := a.ArchiveChecked(&storefmt.ArchiveSpec{Path: "/y.md", Archived: true}); err != nil {
 		t.Fatal(err)
 	}
 	archived := a.Fingerprint()

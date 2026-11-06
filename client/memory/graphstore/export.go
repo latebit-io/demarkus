@@ -65,8 +65,8 @@ func buildExport(exported time.Time, nodes []StoredNode, edges []StoredEdge) str
 	var b strings.Builder
 	b.WriteString("# Document Graph\n\n")
 	b.WriteString(exportedLine + exported.UTC().Format(time.RFC3339) + "\n")
-	b.WriteString(fmt.Sprintf("> Nodes: %d\n", len(nodes)))
-	b.WriteString(fmt.Sprintf("> Edges: %d\n", len(edges)))
+	fmt.Fprintf(&b, "> Nodes: %d\n", len(nodes))
+	fmt.Fprintf(&b, "> Edges: %d\n", len(edges))
 
 	b.WriteString("\n## Nodes\n\n")
 	b.WriteString("| URL | Title | Status | Links |\n")
@@ -77,8 +77,8 @@ func buildExport(exported time.Time, nodes []StoredNode, edges []StoredEdge) str
 		if status == "" {
 			status = "external"
 		}
-		b.WriteString(fmt.Sprintf("| [%s](%s) | %s | %s | %d |\n",
-			n.URL, n.URL, escapeCell(n.Title), status, n.LinkCount))
+		fmt.Fprintf(&b, "| [%s](%s) | %s | %s | %d |\n",
+			n.URL, n.URL, escapeCell(n.Title), status, n.LinkCount)
 	}
 
 	if len(edges) > 0 {
@@ -86,8 +86,8 @@ func buildExport(exported time.Time, nodes []StoredNode, edges []StoredEdge) str
 		b.WriteString("| From | To | Rel | Label | Anchor | Count |\n")
 		b.WriteString("|------|----|-----|-------|--------|-------|")
 		for _, e := range edges {
-			b.WriteString(fmt.Sprintf("\n| %s | %s | %s | %s | %s | %d |",
-				e.From, e.To, e.Rel, escapeCell(e.Label), e.Anchor, max(e.Count, 1)))
+			fmt.Fprintf(&b, "\n| %s | %s | %s | %s | %s | %d |",
+				e.From, e.To, e.Rel, escapeCell(e.Label), e.Anchor, max(e.Count, 1))
 		}
 		b.WriteString("\n")
 	}
@@ -175,8 +175,10 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 			if m == nil {
 				continue
 			}
-			// The row regex admits digits only; overflow reads as zero links.
-			linkCount, _ := strconv.Atoi(m[4])
+			linkCount, err := strconv.Atoi(m[4])
+			if err != nil {
+				linkCount = 0 // digits only per the regex: an overflow reads as zero links
+			}
 			nodes = append(nodes, StoredNode{
 				URL:       m[1],
 				Title:     unescapeCell(m[2]),
@@ -185,8 +187,10 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 			})
 		case "edges":
 			if m := edgeRowRe.FindStringSubmatch(trimmed); m != nil {
-				// Digits only per the regex; overflow falls to the floor of one below.
-				count, _ := strconv.Atoi(m[6])
+				count, err := strconv.Atoi(m[6])
+				if err != nil {
+					count = 0 // digits only per the regex: an overflow falls to the floor of one below
+				}
 				edges = append(edges, StoredEdge{
 					From:   m[1],
 					To:     m[2],

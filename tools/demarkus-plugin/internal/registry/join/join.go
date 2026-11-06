@@ -51,7 +51,7 @@ func Memory(rawHost, token string, insecure bool, bindDir string) (*Result, erro
 		token = j.Token
 	}
 	h = j.Host
-	hostOnly := strings.SplitN(h, ":", 2)[0]
+	hostOnly, _, _ := strings.Cut(h, ":")
 	slug := catalog.DeriveSlug(hostOnly)
 	if slug == "" {
 		return nil, fmt.Errorf("could not derive a slug from host '%s'", rawHost)

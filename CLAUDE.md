@@ -20,6 +20,9 @@
   (why, invariants, platform caveats). No narration, no essays. When touching
   code that has verbose comments, tighten them in the same edit.
 - After each implementation, run tests and `bash pre-commit.sh`.
+- Builds go to `<module>/bin/`: `make`, or `go build -o bin/<name>`. Never a bare
+  `go build` of a main package or `go test -c` in the tree; `scripts/check-no-binaries.sh`
+  refuses a tracked binary.
 
 ## Benchmarks
 

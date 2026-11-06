@@ -21,13 +21,13 @@ const secretKey = "tokens.toml"
 
 func TestMutateSecretConflictRetries(t *testing.T) {
 	k8s := fake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "team-a-tokens", Namespace: "team-a"},
-		Data:       map[string][]byte{secretKey: []byte("v0")},
+		Name: "team-a-tokens", Namespace: "team-a",
+		Data: map[string][]byte{secretKey: []byte("v0")},
 	})
-	var conflicts int32
+	var conflicts atomic.Int32
 	k8s.PrependReactor("update", "secrets", func(_ k8stesting.Action) (bool, runtime.Object, error) {
-		if atomic.LoadInt32(&conflicts) < 2 {
-			atomic.AddInt32(&conflicts, 1)
+		if conflicts.Load() < 2 {
+			conflicts.Add(1)
 			return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "secrets"}, "team-a-tokens", errors.New("simulated"))
 		}
 		return false, nil, nil
@@ -40,7 +40,7 @@ func TestMutateSecretConflictRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mutateSecret: %v", err)
 	}
-	if got := atomic.LoadInt32(&conflicts); got != 2 {
+	if got := conflicts.Load(); got != 2 {
 		t.Errorf("simulated conflicts = %d, want 2 (retry-then-succeed)", got)
 	}
 
@@ -60,12 +60,12 @@ func TestMutateSecretConflictRetries(t *testing.T) {
 // maxConflictRetries and surfaces the conflict rather than spinning.
 func TestMutateSecretConflictExhaustsRetries(t *testing.T) {
 	k8s := fake.NewSimpleClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "team-a-tokens", Namespace: "team-a"},
-		Data:       map[string][]byte{secretKey: []byte("v0")},
+		Name: "team-a-tokens", Namespace: "team-a",
+		Data: map[string][]byte{secretKey: []byte("v0")},
 	})
-	var calls int32
+	var calls atomic.Int32
 	k8s.PrependReactor("update", "secrets", func(_ k8stesting.Action) (bool, runtime.Object, error) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "secrets"}, "team-a-tokens", errors.New("simulated"))
 	})
 
@@ -74,7 +74,7 @@ func TestMutateSecretConflictExhaustsRetries(t *testing.T) {
 	if err == nil {
 		t.Fatal("mutateSecret returned nil, want conflict error after retry budget")
 	}
-	if got := atomic.LoadInt32(&calls); got != int32(maxConflictRetries) {
+	if got := calls.Load(); got != int32(maxConflictRetries) {
 		t.Errorf("Update called %d times, want %d (full retry budget)", got, maxConflictRetries)
 	}
 }

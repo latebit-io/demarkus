@@ -31,6 +31,6 @@ edge in one knowledge graph.
 
 - [Protocol specification](SPEC.md)
 - [Design rationale](DESIGN.md)
-- [Architecture decision records](adr/index.md)
+- [Architecture decision records 0001 to 0027](https://github.com/latebit-io/demarkus/tree/c0ade5b7/docs/adr) (archived; later ADRs live in the project memory)
 
 The website is [www.demarkus.io](https://www.demarkus.io/).

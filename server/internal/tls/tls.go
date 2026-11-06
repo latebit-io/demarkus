@@ -6,28 +6,12 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"fmt"
 	"math/big"
 	"net"
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
 )
-
-// LoadConfig loads a TLS config from PEM-encoded certificate and key files.
-// Use this for production deployments with real certificates.
-func LoadConfig(certFile, keyFile string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("loading TLS certificate: %w", err)
-	}
-
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
-		NextProtos:   []string{protocol.ALPN},
-	}, nil
-}
 
 // GenerateDevConfig creates a self-signed TLS config for development.
 func GenerateDevConfig() (*tls.Config, error) {

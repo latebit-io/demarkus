@@ -30,6 +30,9 @@ bash scripts/check-shell.sh
 echo "Checking plugin copies..."
 bash scripts/check-identical-copies.sh
 
+echo "Checking for tracked binaries..."
+bash scripts/check-no-binaries.sh
+
 echo "Checking session start hooks..."
 bash scripts/test-session-start-hooks.sh
 

@@ -112,7 +112,7 @@ func NewServer(cfg *core.Config, deps ServerDeps) *Server {
 		trustForwardedFor: cfg.RateLimit.TrustForwardedFor,
 	}
 	if deps.IDTokenSigner != nil {
-		jwks, err := newJWKSHandler(deps.IDTokenSigner)
+		jwks, err := newJWKSHandler(deps.IDTokenSigner, log)
 		if err != nil {
 			// Marshal failure is purely a programming error — the
 			// JWK struct cannot legitimately fail to serialize.
@@ -207,7 +207,9 @@ func (s *Server) DynamicClients() *DynamicClientStore { return s.dynamicClients 
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	if _, err := w.Write([]byte("ok")); err != nil {
+		s.log.Debug("write probe response", "error", err)
+	}
 }
 
 // readyz is "process is up and not draining"; dependency probes can join later.
@@ -217,7 +219,9 @@ func (s *Server) readyz(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ready"))
+	if _, err := w.Write([]byte("ready")); err != nil {
+		s.log.Debug("write probe response", "error", err)
+	}
 }
 
 // resourceParam reads an RFC 8707 `resource`: blank when absent, canonical
@@ -337,7 +341,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	s.log.InfoContext(r.Context(), "broker: login succeeded", "subject", core.HashSubject(claims.Subject), "worlds", len(out))
-	writeJSON(w, http.StatusOK, installResponse{
+	s.writeJSON(w, http.StatusOK, installResponse{
 		Email:  claims.Email,
 		Worlds: out,
 	})
@@ -355,8 +359,10 @@ func limitForm(next http.Handler) http.Handler {
 	})
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
+func (s *Server) writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		s.log.Debug("write JSON response", "status", status, "error", err)
+	}
 }

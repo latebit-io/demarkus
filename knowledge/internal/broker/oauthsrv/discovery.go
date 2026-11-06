@@ -163,7 +163,9 @@ func (d *Discovery) Handler() http.Handler {
 		// HTTP header value is part of the wire contract and shouldn't
 		// silently drift if a future patch changes the in-process TTL.
 		w.Header().Set("Cache-Control", "public, max-age=300")
-		_, _ = w.Write(body)
+		if _, err := w.Write(body); err != nil {
+			d.log.Debug("write discovery document", "error", err)
+		}
 	})
 }
 
@@ -217,7 +219,11 @@ func (d *Discovery) refresh(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("upstream fetch: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			d.log.Debug("close upstream discovery body", "error", err)
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("upstream status %d", resp.StatusCode)
 	}

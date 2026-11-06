@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -174,8 +175,8 @@ func (index *sectionIndex) settle(ctx context.Context, find func() (*sectionVers
 // findLocked is the version at sequence; settled once the index has it or has
 // moved past it without it.
 func (index *sectionIndex) findLocked(sequence int64) (version *sectionVersion, settled bool) {
-	for position := len(index.versions) - 1; position >= 0; position-- {
-		switch candidate := index.versions[position]; {
+	for position, candidate := range slices.Backward(index.versions) {
+		switch {
 		case candidate.sequence == sequence:
 			return candidate, true
 		case candidate.sequence < sequence:

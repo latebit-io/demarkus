@@ -36,6 +36,9 @@ linters:
     rules:
       - path: _test\.go
         linters: [errcheck, gosec, funlen, revive]
+      # AsType's blank first result is the matched error, not a dropped failure
+      - linters: [errcheck]
+        source: 'errors\.AsType\['
 
 issues:
   max-issues-per-linter: 0

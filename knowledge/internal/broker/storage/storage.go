@@ -50,12 +50,10 @@ func (s *k8sSecretStore) Mutate(ctx context.Context, ref core.SecretRef, mutate 
 				return nil
 			}
 			fresh := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      ref.Name,
-					Namespace: ref.Namespace,
-				},
-				Type: corev1.SecretTypeOpaque,
-				Data: map[string][]byte{ref.Key: next},
+				Name:      ref.Name,
+				Namespace: ref.Namespace,
+				Type:      corev1.SecretTypeOpaque,
+				Data:      map[string][]byte{ref.Key: next},
 			}
 			_, createErr := s.client.CoreV1().Secrets(ref.Namespace).Create(ctx, fresh, metav1.CreateOptions{})
 			if createErr == nil {

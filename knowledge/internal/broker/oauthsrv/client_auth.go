@@ -74,7 +74,7 @@ func verifyWebClientSecret(wc *core.WebClientConfig, secret string) bool {
 // writeInvalidClient emits the RFC 6749 §5.2 invalid_client response:
 // 401 with a WWW-Authenticate challenge naming the Basic scheme the
 // broker prefers for confidential clients.
-func writeInvalidClient(w http.ResponseWriter) {
+func (s *Server) writeInvalidClient(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Basic realm="demarkus-knowledge-broker"`)
-	writeJSON(w, http.StatusUnauthorized, deviceTokenError{Error: "invalid_client"})
+	s.writeJSON(w, http.StatusUnauthorized, deviceTokenError{Error: "invalid_client"})
 }

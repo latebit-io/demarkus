@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/term"
@@ -210,7 +211,9 @@ func editMain(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "Creates a new document if it doesn't exist.\n\n")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	if fs.NArg() < 1 {
 		fs.Usage()
@@ -254,8 +257,7 @@ func editMain(ctx context.Context, args []string) {
 	if err != nil {
 		log.Fatalf("create temp file: %v", err)
 	}
-	// Best effort: a leftover temp file holds only what the user just saw.
-	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	defer removeEditFile(tmpFile.Name())
 
 	if _, err := tmpFile.WriteString(original); err != nil {
 		log.Fatalf("write temp file: %v", err)
@@ -296,6 +298,13 @@ func editMain(ctx context.Context, args []string) {
 	}
 }
 
+// removeEditFile deletes edit's temp file; a leftover holds only what the user just saw.
+func removeEditFile(name string) {
+	if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("remove temp file: %v", err)
+	}
+}
+
 func graphMain(ctx context.Context, args []string) {
 	// Handle "graph export" subcommand before flag parsing.
 	if len(args) > 0 && args[0] == "export" {
@@ -313,7 +322,9 @@ func graphMain(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "       demarkus graph export [-o file.md]\n\n")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	if fs.NArg() < 1 {
 		fs.Usage()
@@ -384,7 +395,9 @@ func graphExportMain(args []string) {
 		fmt.Fprintf(os.Stderr, "usage: demarkus graph export [-o file.md]\n\nExport the stored graph as a publishable markdown document.\n\n")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 	if fs.NArg() != 0 {
 		fs.Usage()
 		os.Exit(2)
@@ -398,7 +411,7 @@ func graphExportMain(args []string) {
 	md := gs.Export()
 
 	if *outFile != "" {
-		if err := os.WriteFile(*outFile, []byte(md), 0o644); err != nil {
+		if err := os.WriteFile(*outFile, []byte(md), 0o644); err != nil { //nolint:gosec // a publishable export the user asked for
 			log.Fatalf("failed to write %s: %v", *outFile, err)
 		}
 		fmt.Fprintf(os.Stderr, "Exported graph (%d nodes, %d edges) to %s\n", gs.NodeCount(), gs.EdgeCount(), *outFile)
@@ -415,7 +428,9 @@ func infoMain(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "Fetch the agent manifest from a Mark Protocol server.\n\n")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	if fs.NArg() < 1 {
 		fs.Usage()
@@ -496,7 +511,7 @@ func tokenMain(args []string) {
 		}
 
 	default:
-		log.Fatalf("unknown token command: %s", args[0])
+		log.Fatalf("unknown token command: %s", strconv.Quote(args[0]))
 	}
 }
 
@@ -543,7 +558,9 @@ func bookmarkMain(ctx context.Context, args []string) {
 	case "add":
 		fs := flag.NewFlagSet("bookmark add", flag.ExitOnError)
 		insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
-		_ = fs.Parse(args[1:]) // ExitOnError: Parse exits, never returns an error
+		if err := fs.Parse(args[1:]); err != nil {
+			log.Fatal(err)
+		}
 		if fs.NArg() < 1 {
 			log.Fatal("usage: demarkus bookmark add [-insecure] mark://host:port/path")
 		}
@@ -606,7 +623,7 @@ func bookmarkMain(ctx context.Context, args []string) {
 		fmt.Print(bs.Render())
 
 	default:
-		log.Fatalf("unknown bookmark command: %s", args[0])
+		log.Fatalf("unknown bookmark command: %s", strconv.Quote(args[0]))
 	}
 }
 
@@ -684,7 +701,9 @@ func lookupMain(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "it and the command exits non-zero.\n\n")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args) // ExitOnError: Parse exits, never returns an error
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	if fs.NArg() < 1 {
 		fs.Usage()

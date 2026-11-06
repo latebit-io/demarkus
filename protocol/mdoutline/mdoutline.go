@@ -35,19 +35,18 @@ func Headings(body string) []Heading {
 	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
 
 	var hs []Heading
-	// The callback never returns an error, so Walk cannot either.
-	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+	walk(doc, func(n ast.Node, entering bool) ast.WalkStatus {
 		if !entering {
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		}
 		h, ok := n.(*ast.Heading)
 		if !ok {
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		}
 		lines := h.Lines()
 		if lines.Len() == 0 {
 			// Empty heading ("#" with no text): nothing to slice or anchor.
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		}
 		start := lines.At(0).Start
 		for start > 0 && src[start-1] != '\n' {
@@ -58,7 +57,7 @@ func Headings(body string) []Heading {
 			Text:  headingText(h, src),
 			Start: start,
 		})
-		return ast.WalkContinue, nil
+		return ast.WalkContinue
 	})
 
 	// Generated suffixes count as taken, matching GitHub's slugger:
@@ -92,17 +91,27 @@ func Headings(body string) []Heading {
 // children (code spans, emphasis) the way GitHub does when slugging.
 func headingText(h *ast.Heading, src []byte) string {
 	var b strings.Builder
-	// The callback never returns an error, so Walk cannot either.
-	_ = ast.Walk(h, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+	walk(h, func(n ast.Node, entering bool) ast.WalkStatus {
 		if !entering {
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		}
 		if t, ok := n.(*ast.Text); ok {
 			b.Write(t.Segment.Value(src))
 		}
-		return ast.WalkContinue, nil
+		return ast.WalkContinue
 	})
 	return b.String()
+}
+
+// walk is ast.Walk for a callback that cannot fail.
+func walk(n ast.Node, visit func(n ast.Node, entering bool) ast.WalkStatus) {
+	err := ast.Walk(n, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		return visit(n, entering), nil
+	})
+	if err != nil {
+		// Unreachable: ast.Walk fails only when its callback does.
+		panic("mdoutline: ast.Walk: " + err.Error())
+	}
 }
 
 // Slug converts heading text to a GitHub-style anchor: lowercase, spaces to
@@ -217,9 +226,9 @@ func CodeSegments(body string) []Segment {
 	src := []byte(body)
 	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
 	var segs []Segment
-	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) { //nolint:errcheck // the callback never errors
+	walk(doc, func(n ast.Node, entering bool) ast.WalkStatus {
 		if !entering {
-			return ast.WalkContinue, nil
+			return ast.WalkContinue
 		}
 		switch v := n.(type) {
 		case *ast.FencedCodeBlock, *ast.CodeBlock:
@@ -234,9 +243,9 @@ func CodeSegments(body string) []Segment {
 					segs = append(segs, Segment{Start: t.Segment.Start, Stop: t.Segment.Stop})
 				}
 			}
-			return ast.WalkSkipChildren, nil
+			return ast.WalkSkipChildren
 		}
-		return ast.WalkContinue, nil
+		return ast.WalkContinue
 	})
 	return segs
 }

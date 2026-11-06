@@ -1164,7 +1164,7 @@ func (s *Store) getVersion(reqPath string, version int) (*storefmt.Document, err
 
 // ArchiveResult changes archive state and returns its committed result.
 func (s *Store) ArchiveResult(reqPath string, archived bool) (*storefmt.Document, bool, error) {
-	return s.ArchiveChecked(&storefmt.ArchiveSpec{ArchiveChange: storefmt.ArchiveChange{Path: reqPath, Archived: archived}})
+	return s.ArchiveChecked(&storefmt.ArchiveSpec{Path: reqPath, Archived: archived})
 }
 
 // ArchiveChecked is ArchiveResult with an optional check run before the state
@@ -1355,7 +1355,7 @@ func (s *Store) mkdirAllDurable(dir string) error {
 	if len(created) == 0 {
 		return nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // read-only installs publish as root, serve as another user
 		return err
 	}
 	// Shallowest first: each created directory is an entry in its parent.
@@ -1396,7 +1396,7 @@ func removeCreated(created []string) error {
 // createVersionFile writes and syncs a new version. O_EXCL is the immutability
 // guard: an existing file fails the create instead of racing a stat.
 func createVersionFile(vFile string, stored []byte, version int) error {
-	f, err := os.OpenFile(vFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := os.OpenFile(vFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // read-only installs publish as root, serve as another user
 	if err != nil {
 		if os.IsExist(err) {
 			return fmt.Errorf("version %d: %w", version, storefmt.ErrVersionExists)
@@ -1557,7 +1557,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 // pruneVersions keeps the newest keep versions, deleting oldest first and
 // stopping at the first failure so survivors stay a contiguous suffix. Removals
 // go through an os.Root at the store root; a planted symlink cannot redirect one.
-func (s *Store) pruneVersions(versionsDir, base string, current, keep int) *storefmt.PruneResult {
+func (s *Store) pruneVersions(versionsDir, base string, current, keep int) (res *storefmt.PruneResult) {
 	// Unbounded on purpose: the first retained write prunes the whole backlog.
 	cutoff := current - keep // delete versions <= cutoff
 	if cutoff < 1 {
@@ -1571,14 +1571,20 @@ func (s *Store) pruneVersions(versionsDir, base string, current, keep int) *stor
 	if err != nil {
 		return &storefmt.PruneResult{Err: fmt.Errorf("prune: open store root: %w", err)}
 	}
-	// Read-only directory handle; nothing actionable on close failure.
-	defer func() { _ = rootFS.Close() }()
+	// No logger at this layer: the close error rides in the result the caller audit-logs.
+	defer func() {
+		if err := rootFS.Close(); err != nil {
+			if res == nil {
+				res = &storefmt.PruneResult{}
+			}
+			res.Err = errors.Join(res.Err, fmt.Errorf("prune: close store root: %w", err))
+		}
+	}()
 
 	versions := s.findVersionsPerDoc(versionsDir, base)
 	sort.Slice(versions, func(i, j int) bool {
 		return versions[i].Version < versions[j].Version
 	})
-	var res *storefmt.PruneResult
 	for _, v := range versions {
 		if v.Version > cutoff {
 			break

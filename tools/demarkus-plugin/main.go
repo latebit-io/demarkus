@@ -114,7 +114,10 @@ func cmdNudge() {
 	changed := fs.Bool("changed-files", false, "session-end: the session changed files")
 	journalWrite := fs.Bool("journal-write", false, "session-end: a journal entry was written")
 	memoryWrite := fs.Bool("memory-write", false, "session-end: any memory write happened (adapters older than --journal-write)")
-	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits, never returns an error
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] nudge: "+err.Error())
+		return
+	}
 
 	in, err := readNudgeInput(os.Stdin)
 	if err != nil {
@@ -201,7 +204,10 @@ func cmdUpdateCheck() {
 	installed := fs.String("installed", "", "version the plugin is running")
 	manifestURL := fs.String("manifest-url", "", "URL of the published JSON manifest carrying {\"version\":...}")
 	updateCommand := fs.String("update-command", "", "what the user runs to update this plugin")
-	fs.Parse(os.Args[2:]) //nolint:errcheck // ExitOnError reports and exits
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] update-check: "+err.Error())
+		return
+	}
 
 	out, err := update.Evaluate(update.Input{
 		Plugin:        *plugin,
@@ -228,7 +234,10 @@ func cmdGuidance() {
 	guidanceFile := fs.String("guidance-file", "", "path to the plugin's static guidance markdown")
 	projectDir := fs.String("project-dir", "", "project directory for the slug and binding header (default: harness environment)")
 	format := fs.String("format", "json", "output format: json | claude | cursor")
-	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits, never returns an error
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] guidance: "+err.Error())
+		return
+	}
 
 	h, hooked := host.ForHook(*format)
 	out, err := guidance.Evaluate(guidance.Input{Surface: *surface, GuidanceFile: *guidanceFile, ProjectDir: *projectDir, NoStatus: hooked && !h.ShowsStatus()})
@@ -252,13 +261,15 @@ func cmdGuidance() {
 func cmdGate() {
 	fs := flag.NewFlagSet("gate", flag.ExitOnError)
 	format := fs.String("format", "json", "output format: json {decision,reason} | claude-pre (deny/ask) | claude-post (warn) | cursor (permission; warn = allow + agent_message)")
-	_ = fs.Parse(os.Args[2:]) // ExitOnError: Parse exits, never returns an error
-
 	fail := func(msg string) {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] gate: "+msg+"; deferring")
 		if *format == "json" {
 			fmt.Println(`{"decision":"allow"}`)
 		}
+	}
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		fail("parse flags: " + err.Error())
+		return
 	}
 
 	raw, err := io.ReadAll(os.Stdin)

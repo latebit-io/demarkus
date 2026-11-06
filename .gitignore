@@ -78,3 +78,5 @@ deploy/helm/*/Chart.lock
 
 # plugin eval runs (tools/demarkus-plugin/evals/run.sh)
 tools/demarkus-plugin/evals/results/
+
+.idea/

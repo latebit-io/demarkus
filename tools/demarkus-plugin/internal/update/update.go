@@ -119,7 +119,7 @@ func due(stamp string) bool {
 }
 
 func writeStamp(stamp string) error {
-	if err := os.MkdirAll(filepath.Dir(stamp), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(stamp), 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(stamp), err)
 	}
 	if err := os.WriteFile(stamp, []byte(strconv.FormatInt(time.Now().Unix(), 10)), 0o600); err != nil {

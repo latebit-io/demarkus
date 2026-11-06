@@ -196,7 +196,7 @@ func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (ba
 		if err := s.writable(); err != nil {
 			return backend.ArchiveResult{}, err
 		}
-		spec := &storefmt.ArchiveSpec{ArchiveChange: storefmt.ArchiveChange{Path: req.Path, Archived: req.Archived}}
+		spec := &storefmt.ArchiveSpec{Path: req.Path, Archived: req.Archived}
 		if req.Precondition != nil {
 			// Under the write lock, reading the state the change commits against.
 			spec.Check = func(change storefmt.ArchiveChange) error {

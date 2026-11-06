@@ -135,9 +135,9 @@ func (s *Store) Render() string {
 	var sb strings.Builder
 	sb.WriteString("# Bookmarks\n\n")
 	for _, b := range s.bookmarks {
-		sb.WriteString(fmt.Sprintf("- [%s](%s)", escapeTitle(b.Title), b.URL))
+		fmt.Fprintf(&sb, "- [%s](%s)", escapeTitle(b.Title), b.URL)
 		if b.Date != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", b.Date))
+			fmt.Fprintf(&sb, " — %s", b.Date)
 		}
 		sb.WriteString("\n")
 	}
@@ -167,7 +167,7 @@ func (s *Store) save() error {
 		return fmt.Errorf("create bookmarks directory: %w", err)
 	}
 	content := s.Render()
-	if err := os.WriteFile(s.path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(s.path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write bookmarks file: %w", err)
 	}
 	return nil

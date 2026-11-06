@@ -136,7 +136,7 @@ cd demarkus
 make all   # protocol, server, client, tools, knowledge
 ```
 
-Requires Go 1.26+. Binaries land in `server/bin/`, `client/bin/`, `tools/bin/`, and `knowledge/bin/`.
+Requires Go 1.27+. Binaries land in `server/bin/`, `client/bin/`, `tools/bin/`, and `knowledge/bin/`.
 
 ## Documentation
 

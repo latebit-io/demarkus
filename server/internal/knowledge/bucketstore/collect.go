@@ -31,7 +31,7 @@ func (fence dropFence) expired(modified time.Time) bool {
 
 // planDrop lists the checkpoints and reads the kept ones' roots.
 func (store *Store) planDrop(ctx context.Context) (dropPlan, error) {
-	plan := dropPlan{dropFence: dropFence{started: store.now(), grace: store.checkpointGrace}, kept: make(map[string]bool)}
+	plan := dropPlan{started: store.now(), grace: store.checkpointGrace, kept: make(map[string]bool)}
 	var listed []sequenced
 	for page, err := range sequencedPages(ctx, store.objects, checkpointPrefix, 0) {
 		if err != nil {

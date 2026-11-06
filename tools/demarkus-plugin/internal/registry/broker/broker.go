@@ -84,7 +84,10 @@ func Reach(ctx context.Context, u string) error {
 	if err != nil {
 		return fmt.Errorf("broker unreachable at %s (DNS / TCP / TLS failure; check the URL and network): %w", meta, err)
 	}
-	_ = resp.Body.Close()
+	// HEAD: no body to lose, so a failed close is only logged.
+	if err := resp.Body.Close(); err != nil {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] broker: close metadata response: "+err.Error())
+	}
 	switch resp.StatusCode {
 	case 200:
 		return nil

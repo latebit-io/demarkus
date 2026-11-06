@@ -209,7 +209,11 @@ func (a *audit) adrIndex() map[string]map[int][]string {
 		if !layout.IsADRDir(dir) || m == nil {
 			continue
 		}
-		n, _ := strconv.Atoi(m[1]) // the regex guarantees four digits
+		n, err := strconv.Atoi(m[1])
+		if err != nil { // unreachable: the regex guarantees four digits
+			a.note("adr %s: unparsable number %q", p, m[1])
+			continue
+		}
 		if byDir[dir] == nil {
 			byDir[dir] = map[int][]string{}
 		}
@@ -590,9 +594,12 @@ func (a *audit) checkLostMetadata(ctx context.Context) {
 		if !live(d.status) || strings.TrimSpace(d.meta["tags"]) != "" {
 			continue
 		}
-		// A missing or unparsable version leaves nothing to walk; the
-		// document is still reported as untagged by checkMetadata.
-		current, _ := strconv.Atoi(d.meta["version"])
+		current, err := strconv.Atoi(d.meta["version"])
+		if err != nil {
+			// A missing or unparsable version leaves nothing to walk; the
+			// document is still reported as untagged by checkMetadata.
+			continue
+		}
 		if current < 2 || !spend(p) {
 			continue
 		}

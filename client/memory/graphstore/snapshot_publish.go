@@ -51,8 +51,8 @@ func PublishSnapshot(ctx context.Context, opts SnapshotPublishOptions, fetchDocu
 			shards := make([]generation.Shard[SnapshotShardRef], len(artifacts))
 			for i := range artifacts {
 				shards[i] = generation.Shard[SnapshotShardRef]{
-					Artifact: generation.Artifact{Path: artifacts[i].Path, Body: artifacts[i].Body, ContentHash: artifacts[i].ContentHash},
-					Ref:      artifacts[i].Ref,
+					Path: artifacts[i].Path, Body: artifacts[i].Body, ContentHash: artifacts[i].ContentHash,
+					Ref: artifacts[i].Ref,
 				}
 			}
 			return shards, nil

@@ -173,7 +173,7 @@ func TestSaveCreatesDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected bookmarks file to exist: %v", err)
 	}
-	if got, want := info.Mode().Perm(), os.FileMode(0o644); got != want {
+	if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
 		t.Fatalf("expected file permissions %v, got %v", want, got)
 	}
 }

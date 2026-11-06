@@ -104,25 +104,25 @@ type deviceTokenError struct {
 // might plug in. Value is logged at debug for observability only.
 func (s *Server) deviceAuthorize(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
 	clientID := r.PostFormValue("client_id")
 	if clientID == "" {
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
 	s.log.DebugContext(r.Context(), "broker: device authorize", "client_id", clientID)
 	resource, err := s.resourceParam(r.PostFormValue("resource"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
 		return
 	}
 	deviceCode, userCode, expiresAt, err := s.deviceStore.Authorize(r.Context(), resource)
 	if errors.Is(err, errGrantStoreFull) {
 		s.log.WarnContext(r.Context(), "broker: device authorize refused", "err", err)
 		w.Header().Set("Retry-After", "60")
-		writeJSON(w, http.StatusServiceUnavailable, deviceTokenError{Error: "temporarily_unavailable"})
+		s.writeJSON(w, http.StatusServiceUnavailable, deviceTokenError{Error: "temporarily_unavailable"})
 		return
 	}
 	if err != nil {
@@ -133,7 +133,7 @@ func (s *Server) deviceAuthorize(w http.ResponseWriter, r *http.Request) {
 	now := s.clock()
 	verificationURI := s.cfg.Server.PublicURL + "/device"
 	verificationURIComplete := verificationURI + "?user_code=" + url.QueryEscape(userCode)
-	writeJSON(w, http.StatusOK, deviceAuthorizeResponse{
+	s.writeJSON(w, http.StatusOK, deviceAuthorizeResponse{
 		DeviceCode:              deviceCode,
 		UserCode:                userCode,
 		VerificationURI:         verificationURI,
@@ -201,15 +201,7 @@ func (s *Server) deviceFormPost(w http.ResponseWriter, r *http.Request) {
 		}, http.StatusBadRequest)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     deviceCookieName,
-		Value:    deviceKey,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   !s.cfg.Server.InsecureCookies,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(s.cfg.Server.DeviceCodeTTL.Seconds()),
-	})
+	http.SetCookie(w, s.cookie(deviceCookieName, deviceKey, "/", s.cfg.Server.DeviceCodeTTL))
 	http.Redirect(w, r, "/auth/login", http.StatusFound)
 }
 
@@ -221,7 +213,7 @@ func (s *Server) deviceFormPost(w http.ResponseWriter, r *http.Request) {
 // surface.
 func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
 	switch r.PostFormValue("grant_type") {
@@ -232,7 +224,7 @@ func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 	case authCodeGrantType:
 		s.deviceTokenAuthCode(w, r)
 	default:
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "unsupported_grant_type"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "unsupported_grant_type"})
 	}
 }
 
@@ -266,14 +258,14 @@ func (s *Server) grantTokens(ctx context.Context, claims *core.Claims, boundClie
 func (s *Server) collectDeviceGrant(w http.ResponseWriter, r *http.Request, deviceCode string, grant *core.Claims) {
 	claims, err := s.mintClaims(r, grant)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
 		return
 	}
 	success, err := s.grantTokens(r.Context(), &claims, "")
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: device grant tokens failed",
 			"err", err, "subject", core.HashSubject(claims.Subject))
-		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		s.writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
 	if err := s.deviceStore.Collect(r.Context(), deviceCode); err != nil {
@@ -281,21 +273,21 @@ func (s *Server) collectDeviceGrant(w http.ResponseWriter, r *http.Request, devi
 			s.log.ErrorContext(r.Context(), "broker: revoke uncollected refresh token", "err", revokeErr)
 		}
 		if errors.Is(err, errDeviceCodeNotFound) {
-			writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "expired_token"})
+			s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "expired_token"})
 			return
 		}
 		s.log.ErrorContext(r.Context(), "broker: device grant collect failed", "err", err)
-		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		s.writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
-	writeTokens(w, &success)
+	s.writeTokens(w, &success)
 }
 
 // writeTokens answers a token request with tokens, never cached (RFC 6749 §5.1).
-func writeTokens(w http.ResponseWriter, success *deviceTokenSuccess) {
+func (s *Server) writeTokens(w http.ResponseWriter, success *deviceTokenSuccess) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
-	writeJSON(w, http.StatusOK, success)
+	s.writeJSON(w, http.StatusOK, success)
 }
 
 // mintClaims applies the token request's RFC 8707 `resource` to the grant's
@@ -315,26 +307,26 @@ func (s *Server) mintClaims(r *http.Request, grant *core.Claims) (core.Claims, e
 func (s *Server) deviceTokenDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	deviceCode := r.PostFormValue("device_code")
 	if deviceCode == "" {
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
 	out, err := s.deviceStore.Poll(r.Context(), deviceCode)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: device poll failed", "err", err)
-		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		s.writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
 	switch {
 	case out.Status == statusComplete:
 		s.collectDeviceGrant(w, r, deviceCode, &out.Claims)
 	case out.Status == statusExpired:
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "expired_token"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "expired_token"})
 	case out.Status == statusDenied:
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "access_denied"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "access_denied"})
 	case out.SlowDown:
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "slow_down"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "slow_down"})
 	default:
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "authorization_pending"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "authorization_pending"})
 	}
 }
 
@@ -356,18 +348,18 @@ func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		// production, but keep the guard so a test misconfig
 		// fails loudly.
 		s.log.ErrorContext(r.Context(), "broker: refresh grant requested but id_token signer not wired")
-		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		s.writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
 	creds, err := parseClientAuth(r)
 	if err != nil {
 		s.log.DebugContext(r.Context(), "broker: refresh client auth malformed", "err", err)
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
 	rawRefresh := r.PostFormValue("refresh_token")
 	if rawRefresh == "" {
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
 	// Every check and the signature run before the rotation is written, so
@@ -397,25 +389,25 @@ func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 	case errors.Is(err, ErrRefreshTokenInvalid):
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
 		return
 	case errors.Is(err, errRefreshClientAuth):
 		s.log.InfoContext(r.Context(), "broker: refresh client auth failed", "bound_client_id", record.ClientID, "subject", subject)
-		writeInvalidClient(w)
+		s.writeInvalidClient(w)
 		return
 	case errors.Is(err, errRefreshIdentity):
 		s.log.InfoContext(r.Context(), "broker: refresh identity rejected", "err", err, "subject", subject, "hd", record.Claims.HD)
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
 		return
 	case errors.Is(err, errRefreshTarget):
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
 		return
 	default:
 		s.log.ErrorContext(r.Context(), "broker: refresh failed", "err", err, "subject", subject)
-		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		s.writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
-	writeTokens(w, &deviceTokenSuccess{
+	s.writeTokens(w, &deviceTokenSuccess{
 		AccessToken:  idToken,
 		IDToken:      idToken,
 		RefreshToken: nextRefresh,
@@ -471,13 +463,13 @@ func (s *Server) deviceTokenRefresh(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
 	if s.idTokenSigner == nil {
 		s.log.ErrorContext(r.Context(), "broker: auth_code grant requested but id_token signer not wired")
-		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		s.writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
 	creds, err := parseClientAuth(r)
 	if err != nil {
 		s.log.DebugContext(r.Context(), "broker: auth code client auth malformed", "err", err)
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
 	code := r.PostFormValue("code")
@@ -485,7 +477,7 @@ func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
 	redirectURI := r.PostFormValue("redirect_uri")
 	codeVerifier := r.PostFormValue("code_verifier")
 	if code == "" || clientID == "" || redirectURI == "" || codeVerifier == "" {
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_request"})
 		return
 	}
 
@@ -497,7 +489,7 @@ func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
 	if webClient, ok := s.cfg.WebClient(clientID); ok {
 		if !verifyWebClientSecret(webClient, creds.Secret) {
 			s.log.InfoContext(r.Context(), "broker: auth code client auth failed", "client_id", clientID)
-			writeInvalidClient(w)
+			s.writeInvalidClient(w)
 			return
 		}
 		boundClientID = clientID
@@ -507,28 +499,28 @@ func (s *Server) deviceTokenAuthCode(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if !isRedeemRefusal(err) {
 			s.log.ErrorContext(r.Context(), "broker: auth code redeem failed", "err", err)
-			writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+			s.writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 			return
 		}
 		// The axis is for the operator; the wire answer stays invalid_grant.
 		s.log.DebugContext(r.Context(), "broker: auth code redeem refused", "err", err)
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_grant"})
 		return
 	}
 	claims, err := s.mintClaims(r, &grant)
 	if err != nil {
 		// The code is spent; the client restarts from /oauth/authorize.
-		writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
+		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
 		return
 	}
 	success, err := s.grantTokens(r.Context(), &claims, boundClientID)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "broker: auth code tokens failed",
 			"err", err, "subject", core.HashSubject(claims.Subject))
-		writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
+		s.writeJSON(w, http.StatusInternalServerError, deviceTokenError{Error: "server_error"})
 		return
 	}
-	writeTokens(w, &success)
+	s.writeTokens(w, &success)
 }
 
 // isRedeemRefusal tells a refused code from a failure to read the store.

@@ -18,10 +18,9 @@ const testURI = "mark://team/docs/"
 func update(meta map[string]any) mcp.JSONRPCNotification {
 	full := map[string]any{MetaSubscription: testURI}
 	maps.Copy(full, meta)
-	return mcp.JSONRPCNotification{Notification: mcp.Notification{
+	return mcp.JSONRPCNotification{
 		Method: string(mcp.MethodNotificationResourceUpdated),
-		Params: mcp.NotificationParams{Meta: full, AdditionalFields: map[string]any{"uri": "mark://team/docs/a.md"}},
-	}}
+		Params: mcp.NotificationParams{Meta: full, AdditionalFields: map[string]any{"uri": "mark://team/docs/a.md"}}}
 }
 
 func event(seq int) mcp.JSONRPCNotification {
