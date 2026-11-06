@@ -433,6 +433,8 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	preamble = rebaseFragments(preamble, in.Path, homes)
 	for i := range sections {
 		sections[i].text = rebaseFragments(sections[i].text, cmp.Or(sections[i].topic, in.Path), homes)
+		// The bullet quotes the section's opening line into the hub.
+		sections[i].bullet = rebaseFragments(sections[i].bullet, in.Path, homes)
 	}
 	for _, h := range headings {
 		if to, ok := homes[strings.ToLower(h.Anchor)]; ok && (to.path != in.Path || to.anchor != h.Anchor) {

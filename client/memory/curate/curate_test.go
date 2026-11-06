@@ -182,6 +182,9 @@ func TestSplitRebasesSameDocumentLinks(t *testing.T) {
 	if m := byPath["/plans/big/measures.md"]; !strings.Contains(m, "after [design](/plans/big/design.md#design) and [goal](/plans/big.md#goal)") {
 		t.Errorf("measures:\n%s", m[:300])
 	}
+	if hub := byPath["/plans/big.md"]; !strings.Contains(hub, "after [design](/plans/big/design.md#design) and [goal](#goal)") {
+		t.Errorf("hub bullet keeps a moved fragment:\n%s", hub)
+	}
 }
 
 // Each file numbers duplicate headings afresh, so a twin's -1 suffix
