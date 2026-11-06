@@ -2,6 +2,7 @@
 package links
 
 import (
+	"bytes"
 	"net/url"
 	pathpkg "path"
 	"strings"
@@ -128,27 +129,8 @@ func ExtractWithPositions(body string) []LinkInfo {
 			}
 		}
 
-		// Find the byte range of the link text by collecting descendant text segments.
-		firstStart, lastStop := -1, -1
-		var linkText strings.Builder
-		walk(link, func(child ast.Node, entering bool) ast.WalkStatus {
-			if !entering {
-				return ast.WalkContinue
-			}
-			t, ok := child.(*ast.Text)
-			if !ok {
-				return ast.WalkContinue
-			}
-			seg := t.Segment
-			linkText.Write(seg.Value(src))
-			if firstStart < 0 {
-				firstStart = seg.Start
-			}
-			lastStop = seg.Stop
-			return ast.WalkContinue
-		})
-
-		if firstStart < 0 {
+		open, closeBracket, linkText := brackets(link, src)
+		if closeBracket < 0 {
 			// Link with no text nodes (e.g. [](a.md)) — preserve for navigation
 			// but mark bracket positions as unknown so marker injection skips it.
 			infos = append(infos, LinkInfo{
@@ -163,21 +145,10 @@ func ExtractWithPositions(body string) []LinkInfo {
 			return ast.WalkContinue
 		}
 
-		// Scan backward from the first text segment to find '['.
-		open := firstStart - 1
-		for open >= 0 && src[open] != '[' {
-			open--
-		}
-		// Scan forward from the last text segment to find ']'.
-		closeBracket := lastStop
-		for closeBracket < len(src) && src[closeBracket] != ']' {
-			closeBracket++
-		}
-
 		infos = append(infos, LinkInfo{
 			Dest:         dest,
 			Fragment:     fragment,
-			Text:         linkText.String(),
+			Text:         linkText,
 			OpenBracket:  open,
 			CloseBracket: closeBracket,
 			BlockStart:   blockStart,
@@ -186,6 +157,75 @@ func ExtractWithPositions(body string) []LinkInfo {
 		return ast.WalkContinue
 	})
 	return infos
+}
+
+// brackets finds a link's '[' and ']' from its descendant text segments, and
+// its rendered text; -1, -1 for a link with no text nodes.
+func brackets(link *ast.Link, src []byte) (open, closeBracket int, linkText string) {
+	firstStart, lastStop := -1, -1
+	var b strings.Builder
+	walk(link, func(child ast.Node, entering bool) ast.WalkStatus {
+		if t, ok := child.(*ast.Text); ok && entering {
+			b.Write(t.Segment.Value(src))
+			if firstStart < 0 {
+				firstStart = t.Segment.Start
+			}
+			lastStop = t.Segment.Stop
+		}
+		return ast.WalkContinue
+	})
+	if firstStart < 0 {
+		return -1, -1, ""
+	}
+	open = firstStart - 1
+	for open >= 0 && src[open] != '[' {
+		open--
+	}
+	closeBracket = lastStop
+	for closeBracket < len(src) && src[closeBracket] != ']' {
+		closeBracket++
+	}
+	return open, closeBracket, b.String()
+}
+
+// FragmentLink is an inline same-document link ("[x](#a)"): its anchor and
+// the byte span [Start, End) of the "#a" destination in the source.
+type FragmentLink struct {
+	Anchor     string
+	Start, End int
+}
+
+// FragmentLinks returns the inline fragment-only links in body, the ones
+// ExtractWithPositions drops. The parser skips code and escaped brackets,
+// and a span excludes any title, so rewriting it keeps the rest verbatim.
+func FragmentLinks(body string) []FragmentLink {
+	src := []byte(body)
+	var out []FragmentLink
+	walk(goldmark.DefaultParser().Parse(text.NewReader(src)), func(n ast.Node, entering bool) ast.WalkStatus {
+		link, ok := n.(*ast.Link)
+		if !entering || !ok || !bytes.HasPrefix(link.Destination, []byte("#")) {
+			return ast.WalkContinue
+		}
+		_, closeBracket, _ := brackets(link, src)
+		if closeBracket < 0 || inlineEnd(src, closeBracket) < 0 {
+			return ast.WalkContinue
+		}
+		start := closeBracket + 2 // past "]("
+		for start < len(src) && (src[start] == ' ' || src[start] == '\t' || src[start] == '\n' || src[start] == '<') {
+			start++
+		}
+		end := start
+		for end < len(src) && !strings.ContainsRune(" \t\n)>", rune(src[end])) {
+			end++
+		}
+		// An escaped or entity-coded destination differs from its source
+		// text; leave it rather than rewrite bytes that are not the anchor.
+		if bytes.Equal(src[start:end], link.Destination) {
+			out = append(out, FragmentLink{Anchor: string(link.Destination[1:]), Start: start, End: end})
+		}
+		return ast.WalkContinue
+	})
+	return out
 }
 
 // walk is ast.Walk for a callback that cannot fail.

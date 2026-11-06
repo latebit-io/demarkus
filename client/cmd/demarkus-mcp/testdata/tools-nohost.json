@@ -388,7 +388,7 @@
           "type": "string"
         },
         "url": {
-          "description": "scope: / or a subtree; mark:// URL, e.g. mark://host/index.md",
+          "description": "mark://host/ or a directory; docs: mark_fetch",
           "type": "string"
         },
         "verbose": {

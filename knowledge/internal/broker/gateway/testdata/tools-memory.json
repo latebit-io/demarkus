@@ -344,7 +344,7 @@
           "type": "string"
         },
         "url": {
-          "description": "scope: mark://{worldName}/ or a subtree",
+          "description": "mark://{worldName}/ or a directory; docs: mark_fetch",
           "type": "string"
         },
         "verbose": {

@@ -1,8 +1,10 @@
 package mcpfmt
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -28,9 +30,28 @@ const (
 	ExpectedVersionDesc = "version from prior fetch; 0 to create"
 )
 
-// ScopeDesc describes a lookup scope argument from the surface's example root.
-func ScopeDesc(example string) string {
-	return "scope: " + example + " or a subtree"
+// LookupScopeDesc describes a lookup scope in the surface's URL form. The
+// server takes a root or directory only, so a document goes to mark_fetch.
+func LookupScopeDesc(root string) string {
+	return root + " or a directory; docs: mark_fetch"
+}
+
+// DocumentScope refuses a lookup scoped to a document (the server's not-found
+// reads as missing). path is decoded; raw names it as the caller wrote it,
+// and a mark:// raw keeps its authority on the suggested directory.
+func DocumentScope(raw, path string) string {
+	if !strings.HasSuffix(path, ".md") {
+		return ""
+	}
+	u, _, _ := strings.Cut(raw, "#")
+	u, _, _ = strings.Cut(u, "?")
+	u = cmp.Or(u, path)
+	dir := path[:strings.LastIndex(path, "/")+1]
+	if parsed, err := url.Parse(u); err == nil && parsed.Host != "" {
+		parsed.Path, parsed.RawPath = dir, ""
+		dir = parsed.String()
+	}
+	return u + " is a document, not a lookup scope: mark_fetch it (url#anchor for one section), or look up in its directory " + dir
 }
 
 const (

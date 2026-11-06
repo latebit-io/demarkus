@@ -3,6 +3,7 @@ package marktools_test
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -120,6 +121,38 @@ func TestLookup(t *testing.T) {
 	want := mcpfmt.Format(fetchtest.Lookup("alpha", "/docs/", "", rows...), args.Render) + mcpfmt.Note(fetch.CatalogFallbackNote)
 	if got.IsError || got.Text != want {
 		t.Errorf("Lookup = %q\nwant     %q", got.Text, want)
+	}
+}
+
+// The server answers a document scope not-found, which reads as a missing
+// document; the tool refuses it first and names what to do instead.
+func TestLookupRefusesADocumentScope(t *testing.T) {
+	backend := &fetchtest.Client{}
+	hooks := directHooks()
+	// Production resolves through url.Parse, so the path arrives decoded.
+	hooks.Resolve = func(_ context.Context, raw string) (marktools.Target, error) {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return marktools.Target{}, err
+		}
+		return marktools.Target{Host: "host:6309", Path: u.Path}, nil
+	}
+	tools := newTools(t, backend, hooks)
+	for url, dir := range map[string]string{
+		"/trade-bot/journal/2026-11-05.md": "/trade-bot/journal/",
+		"mark://host:6309/docs/a.md#intro": "mark://host:6309/docs/",
+		"/index.md":                        "/",
+		"/docs/a%2Emd":                     "/docs/",
+		"/docs%2Fa.md":                     "/docs/",
+		"mark://host:6309/docs%2Fa.md":     "mark://host:6309/docs/",
+	} {
+		got := tools.Lookup(t.Context(), marktools.LookupArgs{URL: url, Query: "alpha", Match: fetch.MatchBody})
+		if !got.IsError || !strings.Contains(got.Text, "is a document, not a lookup scope: mark_fetch it") || !strings.HasSuffix(got.Text, "look up in its directory "+dir) {
+			t.Errorf("Lookup(%s) = %+v", url, got)
+		}
+	}
+	if len(backend.LookupCalls) != 0 {
+		t.Errorf("lookups sent: %+v", backend.LookupCalls)
 	}
 }
 

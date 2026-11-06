@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
+	"github.com/latebit-io/demarkus/client/memory/outline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
@@ -112,8 +113,9 @@ func TestSplitMovesHeadingsVerbatimAndKeepsTheFrame(t *testing.T) {
 	if hub.Metadata["tags"] != "plan,unrelated,status:active" || hub.Metadata["importance"] != "0.8" || hub.Metadata["title"] != "Big plan" || hub.Metadata["user"] != "" {
 		t.Errorf("hub metadata = %v", hub.Metadata)
 	}
-	moves := p.Moves([]Inbound{{Source: "/index.md", Anchor: "steps-detail"}, {Source: "/x.md", Anchor: "goal"}})
-	if len(moves) != 1 || moves[0] != (Move{Source: "/index.md", From: "/plans/big.md#steps-detail", To: "/plans/big/steps.md#steps-detail"}) {
+	moves := p.Moves([]Inbound{{Source: "/index.md", Anchor: "steps-detail"}, {Source: "/x.md", Anchor: "goal"}, {Source: "/y.md", Anchor: "Steps-Detail"}})
+	if len(moves) != 2 || moves[0] != (Move{Source: "/index.md", From: "/plans/big.md#steps-detail", To: "/plans/big/steps.md#steps-detail"}) ||
+		moves[1] != (Move{Source: "/y.md", From: "/plans/big.md#Steps-Detail", To: "/plans/big/steps.md#steps-detail"}) {
 		t.Errorf("moves = %+v", moves)
 	}
 	if len(p.Unfixed) != 0 {
@@ -160,6 +162,117 @@ func TestSplitMeetsTheWritePolicy(t *testing.T) {
 	in.Policy = &publishpolicy.Policy{Strictness: publishpolicy.Block, RequiredFields: []string{"type"}}
 	if p := Propose(in); len(p.Refused) != 0 || p.Writes[0].Metadata["type"] != protocol.OKFDefaultType {
 		t.Errorf("untyped: refused = %q, topic type = %q", p.Refused, p.Writes[0].Metadata["type"])
+	}
+}
+
+// A same-document link follows its section to the file that now holds it;
+// one whose section stays put, or sits in code, is left alone.
+func TestSplitRebasesSameDocumentLinks(t *testing.T) {
+	body := strings.Replace(bigDoc(), "One short frame section.", "One short frame section; see [steps](#steps-detail) and `[x](#design)`, [t](#design \"Design\"), \\[e](#design).", 1)
+	// Fragments resolve as fetch resolves them: any case, or by their slug.
+	body = strings.Replace(body, "One short frame section;", "One short frame section; [D](#DESIGN), [c](#config.yaml);", 1)
+	body = strings.Replace(body, "First sentence of design. Second.\n", "First sentence of design. Second.\n\n### Config.yaml\n\nNotes.\n", 1)
+	body = strings.Replace(body, "First sentence of measures.", "First sentence of measures, after [design](#design) and [goal](#goal).", 1)
+	p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}})
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
+	}
+	byPath := map[string]string{}
+	for _, w := range p.Writes {
+		byPath[w.Path] = w.Body
+	}
+	if hub := byPath["/plans/big.md"]; !strings.Contains(hub, "[D](/plans/big/design.md#design), [c](/plans/big/design.md#configyaml);") {
+		t.Errorf("hub keeps a case or slug fragment:\n%s", hub)
+	}
+	if hub := byPath["/plans/big.md"]; !strings.Contains(hub, "[steps](/plans/big/steps.md#steps-detail) and `[x](#design)`, [t](/plans/big/design.md#design \"Design\"), \\[e](#design).") {
+		t.Errorf("hub:\n%s", hub)
+	}
+	if m := byPath["/plans/big/measures.md"]; !strings.Contains(m, "after [design](/plans/big/design.md#design) and [goal](/plans/big.md#goal)") {
+		t.Errorf("measures:\n%s", m[:300])
+	}
+	if hub := byPath["/plans/big.md"]; !strings.Contains(hub, "after [design](/plans/big/design.md#design) and [goal](#goal)") {
+		t.Errorf("hub bullet keeps a moved fragment:\n%s", hub)
+	}
+}
+
+// Each file numbers duplicate headings afresh, so a twin's -1 suffix
+// shifts when the split separates them; links follow the new anchor.
+func TestSplitRenumbersDuplicateAnchors(t *testing.T) {
+	filler := strings.Repeat("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod.\n", 60)
+	body := "# Log\n\nWhat the log settles; see [b](#next-1).\n\n" +
+		"## Alpha\n\nAlpha work.\n\n### Next\n\n" + filler + "\n" +
+		"## Beta\n\nBeta work, after [a](#next) and [mine](#next-1).\n\n### Next\n\n" + filler + "\n" +
+		"## Gamma\n\nShort; see [g](#next-2).\n\n### Next\n\nDone.\n"
+	p := Propose(&Input{Path: "/log.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "log"}})
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
+	}
+	byPath := map[string]string{}
+	for _, w := range p.Writes {
+		byPath[w.Path] = w.Body
+	}
+	for file, want := range map[string]string{
+		"/log.md":      "see [b](/log/beta.md#next).",
+		"/log/beta.md": "after [a](/log/alpha.md#next) and [mine](#next).",
+	} {
+		if !strings.Contains(byPath[file], want) {
+			t.Errorf("%s missing %q:\n%s", file, want, byPath[file])
+		}
+	}
+	if hub := byPath["/log.md"]; !strings.Contains(hub, "see [g](#next).") {
+		t.Errorf("hub keeps Gamma's renumbered link:\n%s", hub)
+	}
+	for from, to := range map[string]string{"next": "/log/alpha.md#next", "next-1": "/log/beta.md#next", "next-2": "/log.md#next"} {
+		if p.Moved[from] != to {
+			t.Errorf("Moved[%s] = %q, want %q", from, p.Moved[from], to)
+		}
+	}
+}
+
+// A heading nested in a list is a section, but its slice alone reads as
+// indented code; its links are found in the whole document.
+func TestSplitRebasesLinksUnderANestedHeading(t *testing.T) {
+	filler := strings.Repeat("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod.\n", 120)
+	body := "# Doc\n\nWhat the doc settles.\n\n## Alpha\n\n### Target\n\n" + filler + "\n- a\n  - b\n\n    ## Beta\n\n    see [t](#target)\n"
+	p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "doc"}})
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
+	}
+	if hub := p.Writes[len(p.Writes)-1].Body; !strings.Contains(hub, "see [t](/d/alpha.md#target)") {
+		t.Errorf("hub:\n%s", hub)
+	}
+}
+
+// A split that would lose a heading refuses rather than write: one nested
+// in a list reads as code once moved, a second H1 sits outside every section.
+func TestSplitRefusesToLoseAHeading(t *testing.T) {
+	filler := strings.Repeat("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod.\n", 70)
+	nested := "# Doc\n\nWhat the doc settles.\n\n## Alpha\n\n" + filler + "\n- a\n  - b\n\n    ## Beta\n\n    " + filler
+	second := "# Doc\n\nWhat the doc settles.\n\n## Alpha\n\n" + filler + "\n# Appendix\n\n" + filler
+	for name, body := range map[string]string{"nested": nested, "second H1": second} {
+		p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "doc"}})
+		if p.Kind != KindReport || len(p.Writes) != 0 || !strings.Contains(strings.Join(p.Unfixed, " "), "heading") {
+			t.Errorf("%s: kind %s writes %d unfixed %v", name, p.Kind, len(p.Writes), p.Unfixed)
+		}
+	}
+}
+
+// The hub is sized with links rebased: a rebased link is longer, so a hub
+// under the threshold before rebasing can cross it, and moves more sections.
+func TestSplitSizesTheHubAfterRebasing(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("# Hub\n\nWhat the hub settles.\n\n## Big\n\n### Target\n\n" + strings.Repeat("big text line here.\n", 80) + "\n")
+	// Eight sections under the 1 KB a topic needs stay in the hub, each
+	// growing by 20 rebased links: under the threshold raw, over rebased.
+	for i := range 8 {
+		b.WriteString("## S" + string(rune('a'+i)) + "\n\n" + strings.Repeat("[t](#target) ", 20) + "\n\n" + strings.Repeat("w", 650) + "\n\n")
+	}
+	p := Propose(&Input{Path: "/plans/a-rather-long-hub-name.md", Body: b.String(), Version: 1, Metadata: map[string]string{"tags": "hub"}})
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
+	}
+	if hub := p.Writes[len(p.Writes)-1].Body; len(hub) >= outline.Threshold || len(p.Writes) < 3 {
+		t.Errorf("hub %d bytes in %d writes", len(hub), len(p.Writes))
 	}
 }
 
@@ -210,12 +323,28 @@ func TestReplaceEmDashes(t *testing.T) {
 
 func TestWithoutStatus(t *testing.T) {
 	for in, want := range map[string][2]string{
-		"Step 3 (DONE 2026-10-12)":   {"Step 3", "DONE 2026-10-12"},
-		"Rollout: SHIPPED":           {"Rollout", "SHIPPED"},
-		"PR #12 review (draft)":      {"PR review (draft)", "#12"},
-		"2026-10-12":                 {"", "2026-10-12"},
-		"2026-03-02 — Audit Logging": {"Audit Logging", "2026-03-02"},
-		"Release – 2026-03-02":       {"Release", "2026-03-02"},
+		"Step 3 (DONE 2026-10-12)":                  {"Step 3", "DONE 2026-10-12"},
+		"Rollout: SHIPPED":                          {"Rollout", "SHIPPED"},
+		"2026-10-12":                                {"", "2026-10-12"},
+		"2026-03-02 — Audit Logging":                {"Audit Logging", "2026-03-02"},
+		"2026-03-02 Audit Logging":                  {"Audit Logging", "2026-03-02"},
+		"Release – 2026-03-02":                      {"Release", "2026-03-02"},
+		"Superseded 2026-10-08":                     {"Superseded", "2026-10-08"},
+		"PR #700: CodeRabbit round 1":               {"CodeRabbit round 1", "PR #700"},
+		"Merged: PR #422":                           {"Merged", "PR #422"},
+		"COMPLETE — shipped the day it was written": {"shipped the day it was written", "COMPLETE"},
+		"Status: MERGED (PR #384, 2026-08-28)":      {"Status", "PR #384, 2026-08-28 MERGED"},
+		// Status inside the sentence: cutting it would garble the heading.
+		"PR #12 review (draft)":                    {"PR #12 review (draft)", ""},
+		"Fix PR for (#504 and #505)":               {"Fix PR for (#504 and #505)", ""},
+		"Resolved 2026-09-21, track 3c":            {"Resolved 2026-09-21, track 3c", ""},
+		"Missing after #420: extensibility toggle": {"Missing after #420: extensibility toggle", ""},
+		"Fix PR for #504 and #505 (gate hang)":     {"Fix PR for #504 and #505 (gate hang)", ""},
+		"Week 2026-09-22 to 2026-09-29":            {"Week 2026-09-22 to 2026-09-29", ""},
+		"Update: merged as PR #318":                {"Update: merged as PR #318", ""},
+		"MERGED to main (2026-05-30, PR #166)":     {"MERGED to main (2026-05-30, PR #166)", ""},
+		"Enforcement — MERGED to main (v0.4.0)":    {"Enforcement — MERGED to main (v0.4.0)", ""},
+		"#276 shipped and deployed (2026-07-25)":   {"#276 shipped and deployed (2026-07-25)", ""},
 	} {
 		name, status := withoutStatus(in)
 		if name != want[0] || status != want[1] {
@@ -279,6 +408,14 @@ func TestApplyPreflightsTopicsAndWritesTheHubLast(t *testing.T) {
 	backend = topicAt("# Big plan: Design\n\nmy edit\n", 4, older)
 	if _, err = Apply(t.Context(), docsOn(backend), &p, stamp); !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, "differs") || len(backend.PublishCalls) != 0 {
 		t.Fatalf("edited topic: %v (publishes %d)", err, len(backend.PublishCalls))
+	}
+
+	// The server's reason travels with the refusal.
+	backend = &fetchtest.Client{PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusBadRequest, Body: protocol.ErrorBody(protocol.StatusBadRequest, "near-duplicate of /other.md")}}, nil
+	}}
+	if _, err = Apply(t.Context(), docsOn(backend), &p, stamp); !errors.As(err, &refusal) || refusal.Reason != "bad-request: near-duplicate of /other.md" {
+		t.Fatalf("refused topic: %v", err)
 	}
 
 	backend = &fetchtest.Client{PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {

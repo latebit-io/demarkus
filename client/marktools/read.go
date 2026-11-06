@@ -102,6 +102,9 @@ func (t *Tools) Lookup(ctx context.Context, args LookupArgs) Result {
 	if bad != nil {
 		return *bad
 	}
+	if refusal := mcpfmt.DocumentScope(args.URL, target.Path); refusal != "" {
+		return failure("%s", refusal)
+	}
 	lookup := fetch.LookupRequest{
 		Host: target.Host, Scope: target.Path, Token: t.readToken(ctx, target.Host),
 		Query: args.Query, Filter: args.Filter, Limit: args.Limit, Match: args.Match,

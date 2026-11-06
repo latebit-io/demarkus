@@ -6,6 +6,7 @@ package curate
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -156,7 +157,23 @@ func (p *Proposal) moved(anchor, to string) {
 var (
 	parenGroup    = regexp.MustCompile(`\s*\([^()]*\)`)
 	lineStartDash = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)]|#{1,6})?\s*—`)
+	// Punctuation that sets a status token at an edge apart from the name.
+	leadJoint  = regexp.MustCompile(`^(?:\s*[—–:,]\s*|\s+-\s+)`)
+	trailJoint = regexp.MustCompile(`(?:\s*[—–:,]\s*|\s+-\s+)$`)
+	// A PR number takes its noun with it: "PR #700: x", "Merged: PR #422".
+	leadRef  = regexp.MustCompile(`^(?i:PRs?|issues?)\s+#`)
+	trailRef = regexp.MustCompile(`(?i)\b(?:PRs?|issues?)\s+$`)
+	isoDate  = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 )
+
+// functionWords end a phrase a trailing token completes ("merged as PR
+// #318", "Week 2026-09-22 to 2026-09-29"), so the token cannot go.
+var functionWords = map[string]bool{
+	"a": true, "after": true, "and": true, "as": true, "at": true, "before": true, "by": true,
+	"for": true, "from": true, "in": true, "into": true, "of": true, "on": true, "or": true,
+	"per": true, "since": true, "than": true, "the": true, "through": true, "till": true,
+	"to": true, "until": true, "via": true, "with": true,
+}
 
 // replaceEmDashes turns em dashes into commas outside code and line starts,
 // where a dash may be a bullet or open a heading; n is what changed.
@@ -271,25 +288,104 @@ func stripHeadingStatus(body string, headings []mdoutline.Heading) (string, []re
 }
 
 // withoutStatus removes a parenthesized group holding a status token whole,
-// then any bare token; the removed text is the status line.
+// then tokens at either edge; the removed text is the status line. A token
+// inside the sentence ("after #420: x") leaves the heading as it is.
 func withoutStatus(text string) (name, status string) {
 	var removed []string
-	text = parenGroup.ReplaceAllStringFunc(text, func(group string) string {
-		inner := strings.TrimSpace(strings.Trim(strings.TrimSpace(group), "()"))
-		if !gate.CarriesStatus(inner) {
-			return group
+	var kept strings.Builder
+	last := 0
+	for _, m := range parenGroup.FindAllStringIndex(text, -1) {
+		inner := strings.TrimSpace(strings.Trim(strings.TrimSpace(text[m[0]:m[1]]), "()"))
+		// After a function word the group completes the phrase ("Fix for (#504)").
+		if !gate.CarriesStatus(inner) || functionWords[strings.ToLower(lastField(text[:m[0]]))] {
+			continue
 		}
-		removed = append(removed, inner)
-		return ""
-	})
-	for _, re := range gate.StatusTokens {
-		text = re.ReplaceAllStringFunc(text, func(tok string) string {
-			removed = append(removed, tok)
-			return ""
-		})
+		kept.WriteString(text[last:m[0]])
+		removed, last = append(removed, inner), m[1]
 	}
-	// A cut date leaves the dash that joined it to the name ("2026-03-02 — Audit").
-	return strings.Trim(gate.Collapse(text), " :,-—–"), strings.Join(removed, " ")
+	kept.WriteString(text[last:])
+	name = gate.Collapse(kept.String())
+	for {
+		tok, rest := leadingStatus(name)
+		if tok == "" {
+			break
+		}
+		removed, name = append(removed, tok), rest
+	}
+	for {
+		rest, tok := trailingStatus(name)
+		if tok == "" {
+			break
+		}
+		removed, name = append(removed, tok), rest
+	}
+	if gate.CarriesStatus(name) {
+		return text, ""
+	}
+	return strings.Trim(name, " :,-—–"), strings.Join(removed, " ")
+}
+
+// leadingStatus cuts a status token opening s when punctuation sets it off,
+// or a space after a date ("2026-03-02 Audit"); tok is "" when none does.
+func leadingStatus(s string) (tok, rest string) {
+	from := 0
+	if m := leadRef.FindStringIndex(s); m != nil {
+		from = m[1] - 1
+	}
+	for _, re := range gate.StatusTokens {
+		loc := re.FindStringIndex(s[from:])
+		if len(loc) == 0 || loc[0] != 0 {
+			continue
+		}
+		end := from + loc[1]
+		rest = s[end:]
+		switch joint := leadJoint.FindString(rest); {
+		case rest == "":
+		case joint != "":
+			rest = rest[len(joint):]
+		case rest[0] == ' ' && isoDate.MatchString(s[from:end]):
+			rest = rest[1:]
+		default:
+			return "", s
+		}
+		return s[:end], rest
+	}
+	return "", s
+}
+
+// trailingStatus cuts a status token closing s when punctuation or a space
+// sets it off, unless the word before needs it; tok is "" when none goes.
+func trailingStatus(s string) (rest, tok string) {
+	for _, re := range gate.StatusTokens {
+		locs := re.FindAllStringIndex(s, -1)
+		if len(locs) == 0 || locs[len(locs)-1][1] != len(s) {
+			continue
+		}
+		start := locs[len(locs)-1][0]
+		if m := trailRef.FindStringIndex(s[:start]); m != nil && s[start] == '#' {
+			start = m[0]
+		}
+		rest = s[:start]
+		switch joint := trailJoint.FindString(rest); {
+		case rest == "":
+		case joint != "":
+			rest = rest[:len(rest)-len(joint)]
+		case strings.HasSuffix(rest, " ") && !functionWords[strings.ToLower(lastField(rest))]:
+			rest = strings.TrimRight(rest, " ")
+		default:
+			return s, ""
+		}
+		return rest, s[start:]
+	}
+	return s, ""
+}
+
+func lastField(s string) string {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[len(fields)-1]
 }
 
 // withSummary puts the sentence under the first H1.
@@ -314,53 +410,244 @@ type section struct {
 }
 
 // split moves every second-level section of weight into a topic file under
-// <path without .md>/, headings verbatim so anchors survive, and leaves the
-// document as the hub: its preamble, a links list, and its short sections.
+// <path without .md>/, headings verbatim, and leaves the document as the
+// hub: its preamble, a links list, and its short sections.
 func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	sections, refusal := planSections(in, headings)
 	if refusal != "" {
 		p.Unfixed = append(p.Unfixed, refusal)
 		return
 	}
-	preamble := strings.TrimRight(in.Body[:sections[0].heading.Start], "\n")
-	// Short sections stay only while the hub fits in one fetch.
-	for len(hubBody(preamble, sections, headings)) >= outline.Threshold {
-		largest := -1
-		for i := range sections {
-			if sections[i].topic == "" && (largest < 0 || len(sections[i].text) > len(sections[largest].text)) {
-				largest = i
-			}
-		}
-		if largest < 0 {
+	// Short sections stay only while the hub fits in one fetch: first by the
+	// raw text, then with links rebased, since a rebased link is longer.
+	for len(hubBody(preambleOf(in.Body, sections), sections, headings)) >= outline.Threshold {
+		if !moveLargest(sections) {
 			break
 		}
-		sections[largest].topic = sections[largest].candidate
 	}
 	title := hub.Title(in.Body, in.Metadata, strings.TrimSuffix(path.Base(in.Path), ".md"))
+	var homes landings
+	var preamble string
+	var plan []section
+	for {
+		if homes, refusal = anchorHomes(in, title, sections, headings); refusal != "" {
+			p.Unfixed = append(p.Unfixed, refusal)
+			return
+		}
+		preamble, plan = rebased(in, sections, homes)
+		if len(hubBody(preamble, plan, headings)) < outline.Threshold || !moveLargest(sections) {
+			break
+		}
+	}
 	carried := docwrite.Carried(in.Metadata)
+	var writes []Write
+	var fixed []string
+	for i := range plan {
+		if s := &plan[i]; s.topic != "" {
+			w := topicWrite(in, title, carried, s)
+			writes = append(writes, w)
+			fixed = append(fixed, fmt.Sprintf("%q moved to %s (%d bytes)", s.heading.Text, s.topic, len(w.Body)))
+		}
+	}
+	body := hubBody(preamble, plan, headings)
+	meta := maps.Clone(carried)
+	meta["tags"] = strings.Join(hubTags(preamble, plan, carried["tags"]), ",")
+	writes = append(writes, Write{Path: in.Path, Body: body, Metadata: meta})
+	if broken := brokenLink(writes, headings); broken != "" {
+		p.Unfixed = append(p.Unfixed, "a split would break "+broken+"; link it as #anchor from inside the document, or split by hand")
+		return
+	}
+	for _, h := range headings {
+		if to := homes.at[h.Anchor]; to.path != in.Path || to.anchor != h.Anchor {
+			p.moved(h.Anchor, to.path+"#"+to.anchor)
+		}
+	}
+	p.Writes = writes
+	p.Fixed = append(p.Fixed, fixed...)
+	p.Fixed = append(p.Fixed, fmt.Sprintf("%s becomes the hub (%d bytes)", in.Path, len(body)))
+	p.Kind = KindSplit
+	for _, w := range writes {
+		p.policyGaps(w.Path, w.Metadata, w.Body, in.Policy)
+	}
+	p.Unfixed = append(p.Unfixed, gate.AuditProblems(in.Path, body, meta["description"])...)
+}
+
+// moveLargest sends the largest section still in the hub to its topic file;
+// false when every section has moved.
+func moveLargest(sections []section) bool {
+	largest := -1
+	for i := range sections {
+		if sections[i].topic == "" && (largest < 0 || len(sections[i].text) > len(sections[largest].text)) {
+			largest = i
+		}
+	}
+	if largest < 0 {
+		return false
+	}
+	sections[largest].topic = sections[largest].candidate
+	return true
+}
+
+// rebased is the preamble and a copy of sections with same-document links
+// pointed at their landings. Parsed whole: a slice can lose its context (a
+// heading nested in a list reads as indented code alone).
+func rebased(in *Input, sections []section, homes landings) (preamble string, plan []section) {
+	found := links.FragmentLinks(in.Body)
+	preamble = preambleOf(in.Body, sections)
+	preamble = rebaseFragments(preamble, fragmentsIn(found, 0, len(preamble)), in.Path, homes)
+	plan = slices.Clone(sections)
+	for i := range plan {
+		s := &plan[i]
+		s.text = rebaseFragments(s.text, fragmentsIn(found, s.heading.Start, len(s.text)), cmp.Or(s.topic, in.Path), homes)
+		// The bullet quotes the section's opening line into the hub.
+		s.bullet = rebaseFragments(s.bullet, links.FragmentLinks(s.bullet), in.Path, homes)
+	}
+	return preamble, plan
+}
+
+// brokenLink names the first link among writes that resolved in the
+// original (headings) but finds no heading in what is written; a link
+// already broken before the split is not the split's to refuse.
+func brokenLink(writes []Write, headings []mdoutline.Heading) string {
+	written := make(map[string][]mdoutline.Heading, len(writes))
+	for _, w := range writes {
+		written[w.Path] = mdoutline.Headings(w.Body)
+	}
+	check := func(file, target, fragment string) string {
+		hs, ok := written[target]
+		if !ok {
+			return ""
+		}
+		if _, found := mdoutline.Find(hs, fragment); found {
+			return ""
+		}
+		if _, was := mdoutline.Find(headings, fragment); !was {
+			return ""
+		}
+		return fmt.Sprintf("a link to %s#%s in %s", target, fragment, file)
+	}
+	for _, w := range writes {
+		for _, l := range links.FragmentLinks(w.Body) {
+			if broken := check(w.Path, w.Path, l.Anchor); broken != "" {
+				return broken
+			}
+		}
+		for _, l := range links.ExtractWithPositions(w.Body) {
+			if l.Fragment == "" {
+				continue
+			}
+			if broken := check(w.Path, links.ResolvePath(w.Path, l.Dest), l.Fragment); broken != "" {
+				return broken
+			}
+		}
+	}
+	return ""
+}
+
+// rebaseFragments points each same-document link in text (found, offsets
+// into text), which lands in file here, at its heading's landing.
+func rebaseFragments(text string, found []links.FragmentLink, here string, homes landings) string {
+	var b strings.Builder
+	last := 0
+	for _, l := range found {
+		from, to, ok := homes.find(l.Anchor)
+		if !ok || (to.path == here && to.anchor == from) {
+			continue
+		}
+		b.WriteString(text[last:l.Start])
+		if to.path != here {
+			b.WriteString(to.path)
+		}
+		b.WriteString("#" + to.anchor)
+		last = l.End
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+// fragmentsIn is the links of all within [start, start+n), offsets made
+// relative to start.
+func fragmentsIn(all []links.FragmentLink, start, n int) []links.FragmentLink {
+	var out []links.FragmentLink
+	for _, l := range all {
+		if l.Start >= start && l.End <= start+n {
+			out = append(out, links.FragmentLink{Anchor: l.Anchor, Start: l.Start - start, End: l.End - start})
+		}
+	}
+	return out
+}
+
+// landing is a heading's file and anchor after the split.
+type landing struct{ path, anchor string }
+
+// landings maps the document's anchors to where the split lands them.
+type landings struct {
+	headings []mdoutline.Heading
+	at       map[string]landing // by original anchor
+}
+
+// find resolves fragment as fetch does (mdoutline.Find: any case, or its
+// slug), returning the anchor it names and where that lands.
+func (l landings) find(fragment string) (anchor string, to landing, ok bool) {
+	h, ok := mdoutline.Find(l.headings, fragment)
+	if !ok {
+		return "", landing{}, false
+	}
+	to, ok = l.at[h.Anchor]
+	return h.Anchor, to, ok
+}
+
+// anchorHomes maps each anchor to its landing, parsed from the bodies the
+// split writes (each file renumbers duplicate slugs). A heading that does not
+// come back from that parse is a refusal: its text or links would be lost.
+func anchorHomes(in *Input, title string, sections []section, headings []mdoutline.Heading) (homes landings, refusal string) {
+	homes = landings{headings: headings, at: make(map[string]landing, len(headings))}
+	// place zips a file's original headings with its parsed ones; a nil entry
+	// is a heading the split adds (the topic H1, the hub's links list).
+	place := func(file, body string, orig []*mdoutline.Heading) {
+		parsed := mdoutline.Headings(body)
+		for i, h := range orig {
+			if h == nil {
+				continue
+			}
+			if i >= len(parsed) || len(parsed) != len(orig) || parsed[i].Level != h.Level || parsed[i].Text != h.Text {
+				refusal = cmp.Or(refusal, fmt.Sprintf("heading %q would not survive the split into %s (nested in a list or block?); make it a top-level heading first", h.Text, file))
+				return
+			}
+			homes.at[h.Anchor] = landing{file, parsed[i].Anchor}
+		}
+	}
+	within := func(s *section) []*mdoutline.Heading {
+		var span []*mdoutline.Heading
+		for i := range headings {
+			if h := &headings[i]; h.Start >= s.heading.Start && h.Start < s.heading.End {
+				span = append(span, h)
+			}
+		}
+		return span
+	}
+	var hubHeads []*mdoutline.Heading
+	for i := range headings {
+		if headings[i].Start < sections[0].heading.Start {
+			hubHeads = append(hubHeads, &headings[i])
+		}
+	}
+	hubHeads = append(hubHeads, nil)
 	for i := range sections {
 		s := &sections[i]
 		if s.topic == "" {
+			hubHeads = append(hubHeads, within(s)...)
 			continue
 		}
-		w := topicWrite(in, title, carried, s)
-		p.Writes = append(p.Writes, w)
-		p.Fixed = append(p.Fixed, fmt.Sprintf("%q moved to %s (%d bytes)", s.heading.Text, s.topic, len(w.Body)))
-		p.policyGaps(s.topic, w.Metadata, w.Body, in.Policy)
-		for _, h := range headings {
-			if h.Start >= s.heading.Start && h.Start < s.heading.End {
-				p.moved(h.Anchor, s.topic+"#"+h.Anchor)
-			}
+		place(s.topic, topicBody(title, in.Path, s), append([]*mdoutline.Heading{nil}, within(s)...))
+	}
+	place(in.Path, hubBody(preambleOf(in.Body, sections), sections, headings), hubHeads)
+	for _, h := range headings {
+		if _, ok := homes.at[h.Anchor]; !ok && refusal == "" {
+			refusal = fmt.Sprintf("heading %q is outside every second-level section (a second H1?), so a split would drop it", h.Text)
 		}
 	}
-	body := hubBody(preamble, sections, headings)
-	meta := maps.Clone(carried)
-	meta["tags"] = strings.Join(hubTags(preamble, sections, carried["tags"]), ",")
-	p.Writes = append(p.Writes, Write{Path: in.Path, Body: body, Metadata: meta})
-	p.Fixed = append(p.Fixed, fmt.Sprintf("%s becomes the hub (%d bytes)", in.Path, len(body)))
-	p.Kind = KindSplit
-	p.policyGaps(in.Path, meta, body, in.Policy)
-	p.Unfixed = append(p.Unfixed, gate.AuditProblems(in.Path, body, meta["description"])...)
+	return homes, refusal
 }
 
 // policyGaps names what the write policy finds missing on a write, as the
@@ -415,6 +702,19 @@ func planSections(in *Input, headings []mdoutline.Heading) (sections []section, 
 	return sections, ""
 }
 
+// preambleOf is what precedes the first section: the hub keeps it.
+func preambleOf(body string, sections []section) string {
+	return strings.TrimRight(body[:sections[0].heading.Start], "\n")
+}
+
+func topicSummary(title string, s *section) string {
+	return fmt.Sprintf("The %s section of %s, split into its own document.", s.heading.Text, title)
+}
+
+func topicBody(title, parentPath string, s *section) string {
+	return fmt.Sprintf("# %s: %s\n\n%s\n\nPart of [%s](%s).\n\n%s\n", title, s.heading.Text, topicSummary(title, s), title, parentPath, strings.TrimRight(s.text, "\n"))
+}
+
 // topicWrite is one moved section as its own document: derived H1 and
 // summary, a link back, the section verbatim. Every parent axis tag and
 // policy-required field carries, so a topic meets its parent's policy.
@@ -427,7 +727,7 @@ func topicWrite(in *Input, title string, carried map[string]string, s *section) 
 			tags = protocol.MergeTags(tags, []string{tag})
 		}
 	}
-	summary := fmt.Sprintf("The %s section of %s, split into its own document.", s.heading.Text, title)
+	summary := topicSummary(title, s)
 	meta := map[string]string{"tags": strings.Join(tags, ","), "importance": topicImportance(carried["importance"]), "description": summary, neardup.CuratedFromKey: parentPath}
 	if t := carried["type"]; t != "" {
 		meta["type"] = t
@@ -442,7 +742,7 @@ func topicWrite(in *Input, title string, carried map[string]string, s *section) 
 			}
 		}
 	}
-	body := fmt.Sprintf("# %s: %s\n\n%s\n\nPart of [%s](%s).\n\n%s\n", title, s.heading.Text, summary, title, parentPath, strings.TrimRight(s.text, "\n"))
+	body := topicBody(title, parentPath, s)
 	meta[curatedDigest] = topicDigest(body, meta)
 	return Write{Path: s.topic, Body: body, Metadata: meta}
 }
@@ -571,10 +871,15 @@ type Move struct{ Source, From, To string }
 // Moves are the inbound links the proposal's change breaks, with their new
 // targets.
 func (p *Proposal) Moves(inbound []Inbound) []Move {
+	// Matched as fetch resolves a fragment, so "#NEXT-2" finds next-2.
+	moved := make([]mdoutline.Heading, 0, len(p.Moved))
+	for anchor := range p.Moved {
+		moved = append(moved, mdoutline.Heading{Anchor: anchor})
+	}
 	var moves []Move
 	for _, link := range inbound {
-		if to, ok := p.Moved[link.Anchor]; ok {
-			moves = append(moves, Move{Source: link.Source, From: p.Path + "#" + link.Anchor, To: to})
+		if h, ok := mdoutline.Find(moved, link.Anchor); ok {
+			moves = append(moves, Move{Source: link.Source, From: p.Path + "#" + link.Anchor, To: p.Moved[h.Anchor]})
 		}
 	}
 	return moves
@@ -756,7 +1061,7 @@ func (a *applier) publish(ctx context.Context, w *Write, expected int, action st
 		return Applied{}, fmt.Errorf("publish %s: %w", w.Path, err)
 	}
 	if !protocol.IsWriteSuccess(result.Response.Status) {
-		return Applied{}, &Refusal{Path: w.Path, Reason: result.Response.Status}
+		return Applied{}, &Refusal{Path: w.Path, Reason: result.Response.Refusal()}
 	}
 	version, err := docwrite.Version(result.Response.Metadata)
 	if err != nil {
