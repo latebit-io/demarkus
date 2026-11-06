@@ -418,56 +418,130 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		p.Unfixed = append(p.Unfixed, refusal)
 		return
 	}
-	preamble := preambleOf(in.Body, sections)
-	// Short sections stay only while the hub fits in one fetch.
-	for len(hubBody(preamble, sections, headings)) >= outline.Threshold {
-		largest := -1
-		for i := range sections {
-			if sections[i].topic == "" && (largest < 0 || len(sections[i].text) > len(sections[largest].text)) {
-				largest = i
-			}
-		}
-		if largest < 0 {
+	// Short sections stay only while the hub fits in one fetch: first by the
+	// raw text, then with links rebased, since a rebased link is longer.
+	for len(hubBody(preambleOf(in.Body, sections), sections, headings)) >= outline.Threshold {
+		if !moveLargest(sections) {
 			break
 		}
-		sections[largest].topic = sections[largest].candidate
 	}
 	title := hub.Title(in.Body, in.Metadata, strings.TrimSuffix(path.Base(in.Path), ".md"))
-	homes := anchorHomes(in, title, sections, headings)
-	// Parsed whole: a slice can lose its context (a heading nested in a list
-	// reads as indented code alone), so slices take their links by offset.
-	found := links.FragmentLinks(in.Body)
-	preamble = rebaseFragments(preamble, fragmentsIn(found, 0, len(preamble)), in.Path, homes)
+	var homes landings
+	var preamble string
+	var plan []section
+	for {
+		if homes, refusal = anchorHomes(in, title, sections, headings); refusal != "" {
+			p.Unfixed = append(p.Unfixed, refusal)
+			return
+		}
+		preamble, plan = rebased(in, sections, homes)
+		if len(hubBody(preamble, plan, headings)) < outline.Threshold || !moveLargest(sections) {
+			break
+		}
+	}
+	carried := docwrite.Carried(in.Metadata)
+	var writes []Write
+	var fixed []string
+	for i := range plan {
+		if s := &plan[i]; s.topic != "" {
+			w := topicWrite(in, title, carried, s)
+			writes = append(writes, w)
+			fixed = append(fixed, fmt.Sprintf("%q moved to %s (%d bytes)", s.heading.Text, s.topic, len(w.Body)))
+		}
+	}
+	body := hubBody(preamble, plan, headings)
+	meta := maps.Clone(carried)
+	meta["tags"] = strings.Join(hubTags(preamble, plan, carried["tags"]), ",")
+	writes = append(writes, Write{Path: in.Path, Body: body, Metadata: meta})
+	if broken := brokenLink(writes, headings); broken != "" {
+		p.Unfixed = append(p.Unfixed, "a split would break "+broken+"; link it as #anchor from inside the document, or split by hand")
+		return
+	}
+	for _, h := range headings {
+		if to := homes.at[h.Anchor]; to.path != in.Path || to.anchor != h.Anchor {
+			p.moved(h.Anchor, to.path+"#"+to.anchor)
+		}
+	}
+	p.Writes = writes
+	p.Fixed = append(p.Fixed, fixed...)
+	p.Fixed = append(p.Fixed, fmt.Sprintf("%s becomes the hub (%d bytes)", in.Path, len(body)))
+	p.Kind = KindSplit
+	for _, w := range writes {
+		p.policyGaps(w.Path, w.Metadata, w.Body, in.Policy)
+	}
+	p.Unfixed = append(p.Unfixed, gate.AuditProblems(in.Path, body, meta["description"])...)
+}
+
+// moveLargest sends the largest section still in the hub to its topic file;
+// false when every section has moved.
+func moveLargest(sections []section) bool {
+	largest := -1
 	for i := range sections {
-		s := &sections[i]
+		if sections[i].topic == "" && (largest < 0 || len(sections[i].text) > len(sections[largest].text)) {
+			largest = i
+		}
+	}
+	if largest < 0 {
+		return false
+	}
+	sections[largest].topic = sections[largest].candidate
+	return true
+}
+
+// rebased is the preamble and a copy of sections with same-document links
+// pointed at their landings. Parsed whole: a slice can lose its context (a
+// heading nested in a list reads as indented code alone).
+func rebased(in *Input, sections []section, homes landings) (preamble string, plan []section) {
+	found := links.FragmentLinks(in.Body)
+	preamble = preambleOf(in.Body, sections)
+	preamble = rebaseFragments(preamble, fragmentsIn(found, 0, len(preamble)), in.Path, homes)
+	plan = slices.Clone(sections)
+	for i := range plan {
+		s := &plan[i]
 		s.text = rebaseFragments(s.text, fragmentsIn(found, s.heading.Start, len(s.text)), cmp.Or(s.topic, in.Path), homes)
 		// The bullet quotes the section's opening line into the hub.
 		s.bullet = rebaseFragments(s.bullet, links.FragmentLinks(s.bullet), in.Path, homes)
 	}
-	for _, h := range headings {
-		if to, ok := homes.at[h.Anchor]; ok && (to.path != in.Path || to.anchor != h.Anchor) {
-			p.moved(h.Anchor, to.path+"#"+to.anchor)
+	return preamble, plan
+}
+
+// brokenLink names the first link among writes that resolved in the
+// original (headings) but finds no heading in what is written; a link
+// already broken before the split is not the split's to refuse.
+func brokenLink(writes []Write, headings []mdoutline.Heading) string {
+	written := make(map[string][]mdoutline.Heading, len(writes))
+	for _, w := range writes {
+		written[w.Path] = mdoutline.Headings(w.Body)
+	}
+	check := func(file, target, fragment string) string {
+		hs, ok := written[target]
+		if !ok {
+			return ""
+		}
+		if _, found := mdoutline.Find(hs, fragment); found {
+			return ""
+		}
+		if _, was := mdoutline.Find(headings, fragment); !was {
+			return ""
+		}
+		return fmt.Sprintf("a link to %s#%s in %s", target, fragment, file)
+	}
+	for _, w := range writes {
+		for _, l := range links.FragmentLinks(w.Body) {
+			if broken := check(w.Path, w.Path, l.Anchor); broken != "" {
+				return broken
+			}
+		}
+		for _, l := range links.ExtractWithPositions(w.Body) {
+			if l.Fragment == "" {
+				continue
+			}
+			if broken := check(w.Path, links.ResolvePath(w.Path, l.Dest), l.Fragment); broken != "" {
+				return broken
+			}
 		}
 	}
-	carried := docwrite.Carried(in.Metadata)
-	for i := range sections {
-		s := &sections[i]
-		if s.topic == "" {
-			continue
-		}
-		w := topicWrite(in, title, carried, s)
-		p.Writes = append(p.Writes, w)
-		p.Fixed = append(p.Fixed, fmt.Sprintf("%q moved to %s (%d bytes)", s.heading.Text, s.topic, len(w.Body)))
-		p.policyGaps(s.topic, w.Metadata, w.Body, in.Policy)
-	}
-	body := hubBody(preamble, sections, headings)
-	meta := maps.Clone(carried)
-	meta["tags"] = strings.Join(hubTags(preamble, sections, carried["tags"]), ",")
-	p.Writes = append(p.Writes, Write{Path: in.Path, Body: body, Metadata: meta})
-	p.Fixed = append(p.Fixed, fmt.Sprintf("%s becomes the hub (%d bytes)", in.Path, len(body)))
-	p.Kind = KindSplit
-	p.policyGaps(in.Path, meta, body, in.Policy)
-	p.Unfixed = append(p.Unfixed, gate.AuditProblems(in.Path, body, meta["description"])...)
+	return ""
 }
 
 // rebaseFragments points each same-document link in text (found, offsets
@@ -523,23 +597,24 @@ func (l landings) find(fragment string) (anchor string, to landing, ok bool) {
 	return h.Anchor, to, ok
 }
 
-// anchorHomes maps each heading's anchor to its landing. Each file
-// numbers duplicate slugs afresh, so a -1 suffix shifts when its twin moves:
-// anchors come from parsing the bodies the split writes.
-func anchorHomes(in *Input, title string, sections []section, headings []mdoutline.Heading) landings {
-	homes := landings{headings: headings, at: make(map[string]landing, len(headings))}
+// anchorHomes maps each anchor to its landing, parsed from the bodies the
+// split writes (each file renumbers duplicate slugs). A heading that does not
+// come back from that parse is a refusal: its text or links would be lost.
+func anchorHomes(in *Input, title string, sections []section, headings []mdoutline.Heading) (homes landings, refusal string) {
+	homes = landings{headings: headings, at: make(map[string]landing, len(headings))}
 	// place zips a file's original headings with its parsed ones; a nil entry
 	// is a heading the split adds (the topic H1, the hub's links list).
 	place := func(file, body string, orig []*mdoutline.Heading) {
 		parsed := mdoutline.Headings(body)
 		for i, h := range orig {
-			switch {
-			case h == nil:
-			case len(parsed) == len(orig):
-				homes.at[h.Anchor] = landing{file, parsed[i].Anchor}
-			default: // unexpected shape: keep the anchor as written
-				homes.at[h.Anchor] = landing{file, h.Anchor}
+			if h == nil {
+				continue
 			}
+			if i >= len(parsed) || len(parsed) != len(orig) || parsed[i].Level != h.Level || parsed[i].Text != h.Text {
+				refusal = cmp.Or(refusal, fmt.Sprintf("heading %q would not survive the split into %s (nested in a list or block?); make it a top-level heading first", h.Text, file))
+				return
+			}
+			homes.at[h.Anchor] = landing{file, parsed[i].Anchor}
 		}
 	}
 	within := func(s *section) []*mdoutline.Heading {
@@ -567,7 +642,12 @@ func anchorHomes(in *Input, title string, sections []section, headings []mdoutli
 		place(s.topic, topicBody(title, in.Path, s), append([]*mdoutline.Heading{nil}, within(s)...))
 	}
 	place(in.Path, hubBody(preambleOf(in.Body, sections), sections, headings), hubHeads)
-	return homes
+	for _, h := range headings {
+		if _, ok := homes.at[h.Anchor]; !ok && refusal == "" {
+			refusal = fmt.Sprintf("heading %q is outside every second-level section (a second H1?), so a split would drop it", h.Text)
+		}
+	}
+	return homes, refusal
 }
 
 // policyGaps names what the write policy finds missing on a write, as the

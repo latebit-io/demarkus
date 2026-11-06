@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
+	"github.com/latebit-io/demarkus/client/memory/outline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
@@ -239,6 +240,39 @@ func TestSplitRebasesLinksUnderANestedHeading(t *testing.T) {
 	}
 	if hub := p.Writes[len(p.Writes)-1].Body; !strings.Contains(hub, "see [t](/d/alpha.md#target)") {
 		t.Errorf("hub:\n%s", hub)
+	}
+}
+
+// A split that would lose a heading refuses rather than write: one nested
+// in a list reads as code once moved, a second H1 sits outside every section.
+func TestSplitRefusesToLoseAHeading(t *testing.T) {
+	filler := strings.Repeat("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod.\n", 70)
+	nested := "# Doc\n\nWhat the doc settles.\n\n## Alpha\n\n" + filler + "\n- a\n  - b\n\n    ## Beta\n\n    " + filler
+	second := "# Doc\n\nWhat the doc settles.\n\n## Alpha\n\n" + filler + "\n# Appendix\n\n" + filler
+	for name, body := range map[string]string{"nested": nested, "second H1": second} {
+		p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "doc"}})
+		if p.Kind != KindReport || len(p.Writes) != 0 || !strings.Contains(strings.Join(p.Unfixed, " "), "heading") {
+			t.Errorf("%s: kind %s writes %d unfixed %v", name, p.Kind, len(p.Writes), p.Unfixed)
+		}
+	}
+}
+
+// The hub is sized with links rebased: a rebased link is longer, so a hub
+// under the threshold before rebasing can cross it, and moves more sections.
+func TestSplitSizesTheHubAfterRebasing(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("# Hub\n\nWhat the hub settles.\n\n## Big\n\n### Target\n\n" + strings.Repeat("big text line here.\n", 80) + "\n")
+	// Eight sections under the 1 KB a topic needs stay in the hub, each
+	// growing by 20 rebased links: under the threshold raw, over rebased.
+	for i := range 8 {
+		b.WriteString("## S" + string(rune('a'+i)) + "\n\n" + strings.Repeat("[t](#target) ", 20) + "\n\n" + strings.Repeat("w", 650) + "\n\n")
+	}
+	p := Propose(&Input{Path: "/plans/a-rather-long-hub-name.md", Body: b.String(), Version: 1, Metadata: map[string]string{"tags": "hub"}})
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
+	}
+	if hub := p.Writes[len(p.Writes)-1].Body; len(hub) >= outline.Threshold || len(p.Writes) < 3 {
+		t.Errorf("hub %d bytes in %d writes", len(hub), len(p.Writes))
 	}
 }
 
