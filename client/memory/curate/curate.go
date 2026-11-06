@@ -406,15 +406,15 @@ type section struct {
 }
 
 // split moves every second-level section of weight into a topic file under
-// <path without .md>/, headings verbatim so anchors survive, and leaves the
-// document as the hub: its preamble, a links list, and its short sections.
+// <path without .md>/, headings verbatim, and leaves the document as the
+// hub: its preamble, a links list, and its short sections.
 func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	sections, refusal := planSections(in, headings)
 	if refusal != "" {
 		p.Unfixed = append(p.Unfixed, refusal)
 		return
 	}
-	preamble := strings.TrimRight(in.Body[:sections[0].heading.Start], "\n")
+	preamble := preambleOf(in.Body, sections)
 	// Short sections stay only while the hub fits in one fetch.
 	for len(hubBody(preamble, sections, headings)) >= outline.Threshold {
 		largest := -1
@@ -428,12 +428,17 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		}
 		sections[largest].topic = sections[largest].candidate
 	}
-	homes := anchorHomes(in.Path, sections, headings)
+	title := hub.Title(in.Body, in.Metadata, strings.TrimSuffix(path.Base(in.Path), ".md"))
+	homes := anchorHomes(in, title, sections, headings)
 	preamble = rebaseFragments(preamble, in.Path, homes)
 	for i := range sections {
 		sections[i].text = rebaseFragments(sections[i].text, cmp.Or(sections[i].topic, in.Path), homes)
 	}
-	title := hub.Title(in.Body, in.Metadata, strings.TrimSuffix(path.Base(in.Path), ".md"))
+	for _, h := range headings {
+		if to, ok := homes[strings.ToLower(h.Anchor)]; ok && (to.path != in.Path || to.anchor != h.Anchor) {
+			p.moved(h.Anchor, to.path+"#"+to.anchor)
+		}
+	}
 	carried := docwrite.Carried(in.Metadata)
 	for i := range sections {
 		s := &sections[i]
@@ -444,11 +449,6 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		p.Writes = append(p.Writes, w)
 		p.Fixed = append(p.Fixed, fmt.Sprintf("%q moved to %s (%d bytes)", s.heading.Text, s.topic, len(w.Body)))
 		p.policyGaps(s.topic, w.Metadata, w.Body, in.Policy)
-		for _, h := range headings {
-			if h.Start >= s.heading.Start && h.Start < s.heading.End {
-				p.moved(h.Anchor, s.topic+"#"+h.Anchor)
-			}
-		}
 	}
 	body := hubBody(preamble, sections, headings)
 	meta := maps.Clone(carried)
@@ -461,37 +461,75 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 }
 
 // rebaseFragments points each same-document link ("[x](#a)") in text, which
-// lands in file here, at the file now holding that anchor's section.
-func rebaseFragments(text, here string, homes map[string]string) string {
+// lands in file here, at the heading's landing: its file and renumbered anchor.
+func rebaseFragments(text, here string, homes map[string]landing) string {
 	code := codeMask{segs: mdoutline.CodeSegments(text)}
 	var b strings.Builder
 	last := 0
 	for _, m := range fragmentLink.FindAllStringSubmatchIndex(text, -1) {
-		home := homes[strings.ToLower(text[m[2]:m[3]])]
-		if home == "" || home == here || code.at(m[0]) {
+		anchor := text[m[2]:m[3]]
+		to, ok := homes[strings.ToLower(anchor)]
+		if !ok || code.at(m[0]) || (to.path == here && strings.EqualFold(to.anchor, anchor)) {
 			continue
 		}
 		b.WriteString(text[last : m[2]-1])
-		b.WriteString(home + "#")
-		last = m[2]
+		if to.path != here {
+			b.WriteString(to.path)
+		}
+		b.WriteString("#" + to.anchor)
+		last = m[3]
 	}
 	b.WriteString(text[last:])
 	return b.String()
 }
 
-// anchorHomes maps each heading anchor to the file it lives in after the split.
-func anchorHomes(hubPath string, sections []section, headings []mdoutline.Heading) map[string]string {
-	homes := make(map[string]string, len(headings))
-	for _, h := range headings {
-		home := hubPath
-		for i := range sections {
-			s := &sections[i]
-			if s.topic != "" && h.Start >= s.heading.Start && h.Start < s.heading.End {
-				home = s.topic
+// landing is a heading's file and anchor after the split.
+type landing struct{ path, anchor string }
+
+// anchorHomes maps each heading's lowercase anchor to its landing. Each file
+// numbers duplicate slugs afresh, so a -1 suffix shifts when its twin moves:
+// anchors come from parsing the bodies the split writes.
+func anchorHomes(in *Input, title string, sections []section, headings []mdoutline.Heading) map[string]landing {
+	homes := make(map[string]landing, len(headings))
+	// place zips a file's original headings with its parsed ones; a nil entry
+	// is a heading the split adds (the topic H1, the hub's links list).
+	place := func(file, body string, orig []*mdoutline.Heading) {
+		parsed := mdoutline.Headings(body)
+		for i, h := range orig {
+			switch {
+			case h == nil:
+			case len(parsed) == len(orig):
+				homes[strings.ToLower(h.Anchor)] = landing{file, parsed[i].Anchor}
+			default: // unexpected shape: keep the anchor as written
+				homes[strings.ToLower(h.Anchor)] = landing{file, h.Anchor}
 			}
 		}
-		homes[strings.ToLower(h.Anchor)] = home
 	}
+	within := func(s *section) []*mdoutline.Heading {
+		var span []*mdoutline.Heading
+		for i := range headings {
+			if h := &headings[i]; h.Start >= s.heading.Start && h.Start < s.heading.End {
+				span = append(span, h)
+			}
+		}
+		return span
+	}
+	var hubHeads []*mdoutline.Heading
+	for i := range headings {
+		if headings[i].Start < sections[0].heading.Start {
+			hubHeads = append(hubHeads, &headings[i])
+		}
+	}
+	hubHeads = append(hubHeads, nil)
+	for i := range sections {
+		s := &sections[i]
+		if s.topic == "" {
+			hubHeads = append(hubHeads, within(s)...)
+			continue
+		}
+		place(s.topic, topicBody(title, in.Path, s), append([]*mdoutline.Heading{nil}, within(s)...))
+	}
+	place(in.Path, hubBody(preambleOf(in.Body, sections), sections, headings), hubHeads)
 	return homes
 }
 
@@ -547,6 +585,19 @@ func planSections(in *Input, headings []mdoutline.Heading) (sections []section, 
 	return sections, ""
 }
 
+// preambleOf is what precedes the first section: the hub keeps it.
+func preambleOf(body string, sections []section) string {
+	return strings.TrimRight(body[:sections[0].heading.Start], "\n")
+}
+
+func topicSummary(title string, s *section) string {
+	return fmt.Sprintf("The %s section of %s, split into its own document.", s.heading.Text, title)
+}
+
+func topicBody(title, parentPath string, s *section) string {
+	return fmt.Sprintf("# %s: %s\n\n%s\n\nPart of [%s](%s).\n\n%s\n", title, s.heading.Text, topicSummary(title, s), title, parentPath, strings.TrimRight(s.text, "\n"))
+}
+
 // topicWrite is one moved section as its own document: derived H1 and
 // summary, a link back, the section verbatim. Every parent axis tag and
 // policy-required field carries, so a topic meets its parent's policy.
@@ -559,7 +610,7 @@ func topicWrite(in *Input, title string, carried map[string]string, s *section) 
 			tags = protocol.MergeTags(tags, []string{tag})
 		}
 	}
-	summary := fmt.Sprintf("The %s section of %s, split into its own document.", s.heading.Text, title)
+	summary := topicSummary(title, s)
 	meta := map[string]string{"tags": strings.Join(tags, ","), "importance": topicImportance(carried["importance"]), "description": summary, neardup.CuratedFromKey: parentPath}
 	if t := carried["type"]; t != "" {
 		meta["type"] = t
@@ -574,7 +625,7 @@ func topicWrite(in *Input, title string, carried map[string]string, s *section) 
 			}
 		}
 	}
-	body := fmt.Sprintf("# %s: %s\n\n%s\n\nPart of [%s](%s).\n\n%s\n", title, s.heading.Text, summary, title, parentPath, strings.TrimRight(s.text, "\n"))
+	body := topicBody(title, parentPath, s)
 	meta[curatedDigest] = topicDigest(body, meta)
 	return Write{Path: s.topic, Body: body, Metadata: meta}
 }

@@ -184,6 +184,40 @@ func TestSplitRebasesSameDocumentLinks(t *testing.T) {
 	}
 }
 
+// Each file numbers duplicate headings afresh, so a twin's -1 suffix
+// shifts when the split separates them; links follow the new anchor.
+func TestSplitRenumbersDuplicateAnchors(t *testing.T) {
+	filler := strings.Repeat("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod.\n", 60)
+	body := "# Log\n\nWhat the log settles; see [b](#next-1).\n\n" +
+		"## Alpha\n\nAlpha work.\n\n### Next\n\n" + filler + "\n" +
+		"## Beta\n\nBeta work, after [a](#next) and [mine](#next-1).\n\n### Next\n\n" + filler + "\n" +
+		"## Gamma\n\nShort; see [g](#next-2).\n\n### Next\n\nDone.\n"
+	p := Propose(&Input{Path: "/log.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "log"}})
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
+	}
+	byPath := map[string]string{}
+	for _, w := range p.Writes {
+		byPath[w.Path] = w.Body
+	}
+	for file, want := range map[string]string{
+		"/log.md":      "see [b](/log/beta.md#next).",
+		"/log/beta.md": "after [a](/log/alpha.md#next) and [mine](#next).",
+	} {
+		if !strings.Contains(byPath[file], want) {
+			t.Errorf("%s missing %q:\n%s", file, want, byPath[file])
+		}
+	}
+	if hub := byPath["/log.md"]; !strings.Contains(hub, "see [g](#next).") {
+		t.Errorf("hub keeps Gamma's renumbered link:\n%s", hub)
+	}
+	for from, to := range map[string]string{"next": "/log/alpha.md#next", "next-1": "/log/beta.md#next", "next-2": "/log.md#next"} {
+		if p.Moved[from] != to {
+			t.Errorf("Moved[%s] = %q, want %q", from, p.Moved[from], to)
+		}
+	}
+}
+
 func TestSplitRefusesWhatItCannotName(t *testing.T) {
 	flat := "# Flat\n\nSummary here.\n\n" + strings.Repeat("line\n", 2000)
 	p := Propose(&Input{Path: "/f.md", Body: flat})

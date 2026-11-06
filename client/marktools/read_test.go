@@ -143,6 +143,8 @@ func TestLookupRefusesADocumentScope(t *testing.T) {
 		"mark://host:6309/docs/a.md#intro": "mark://host:6309/docs/",
 		"/index.md":                        "/",
 		"/docs/a%2Emd":                     "/docs/",
+		"/docs%2Fa.md":                     "/docs/",
+		"mark://host:6309/docs%2Fa.md":     "mark://host:6309/docs/",
 	} {
 		got := tools.Lookup(t.Context(), marktools.LookupArgs{URL: url, Query: "alpha", Match: fetch.MatchBody})
 		if !got.IsError || !strings.Contains(got.Text, "is a document, not a lookup scope: mark_fetch it") || !strings.HasSuffix(got.Text, "look up in its directory "+dir) {

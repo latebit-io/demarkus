@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -35,17 +36,22 @@ func LookupScopeDesc(root string) string {
 	return root + " or a directory; docs: mark_fetch"
 }
 
-// DocumentScope is the refusal for a lookup scoped to a document, "" for a
-// root or directory: the server answers not-found, which reads as missing.
-// path is the resolved (decoded) path; url names it in the caller's form.
-func DocumentScope(url, path string) string {
+// DocumentScope refuses a lookup scoped to a document (the server's not-found
+// reads as missing). path is decoded; raw names it as the caller wrote it,
+// and a mark:// raw keeps its authority on the suggested directory.
+func DocumentScope(raw, path string) string {
 	if !strings.HasSuffix(path, ".md") {
 		return ""
 	}
-	u, _, _ := strings.Cut(url, "#")
+	u, _, _ := strings.Cut(raw, "#")
 	u, _, _ = strings.Cut(u, "?")
 	u = cmp.Or(u, path)
-	return u + " is a document, not a lookup scope: mark_fetch it (url#anchor for one section), or look up in its directory " + u[:strings.LastIndex(u, "/")+1]
+	dir := path[:strings.LastIndex(path, "/")+1]
+	if parsed, err := url.Parse(u); err == nil && parsed.Host != "" {
+		parsed.Path, parsed.RawPath = dir, ""
+		dir = parsed.String()
+	}
+	return u + " is a document, not a lookup scope: mark_fetch it (url#anchor for one section), or look up in its directory " + dir
 }
 
 const (
