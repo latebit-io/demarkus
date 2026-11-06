@@ -18,8 +18,9 @@ while IFS=$'\t' read -r -d '' added _ path; do
   git cat-file blob ":$path" >"$work/blob"
   magic=$(od -An -tx1 -N4 "$work/blob" | tr -d ' \n')
   case "$magic" in
-  # ELF; Mach-O 32/64 both byte orders, fat; PE/DOS "MZ"
-  7f454c46 | cffaedfe | cefaedfe | feedfacf | feedface | cafebabe | 4d5a*)
+  # ELF; Mach-O 32/64 both byte orders; fat 32/64 both byte orders; PE/DOS "MZ"
+  7f454c46 | cffaedfe | cefaedfe | feedfacf | feedface | \
+    cafebabe | bebafeca | cafebabf | bfbafeca | 4d5a*)
     found+=("$path")
     ;;
   esac
