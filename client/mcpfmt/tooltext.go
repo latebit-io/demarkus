@@ -1,6 +1,7 @@
 package mcpfmt
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -36,12 +37,14 @@ func LookupScopeDesc(root string) string {
 
 // DocumentScope is the refusal for a lookup scoped to a document, "" for a
 // root or directory: the server answers not-found, which reads as missing.
-func DocumentScope(url string) string {
-	u, _, _ := strings.Cut(url, "#")
-	u, _, _ = strings.Cut(u, "?")
-	if !strings.HasSuffix(u, ".md") {
+// path is the resolved (decoded) path; url names it in the caller's form.
+func DocumentScope(url, path string) string {
+	if !strings.HasSuffix(path, ".md") {
 		return ""
 	}
+	u, _, _ := strings.Cut(url, "#")
+	u, _, _ = strings.Cut(u, "?")
+	u = cmp.Or(u, path)
 	return u + " is a document, not a lookup scope: mark_fetch it (url#anchor for one section), or look up in its directory " + u[:strings.LastIndex(u, "/")+1]
 }
 

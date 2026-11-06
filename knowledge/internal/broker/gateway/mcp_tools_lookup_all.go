@@ -66,7 +66,7 @@ func (g *Gateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolReque
 	if err := protocol.ValidateRequestPath(scope); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid scope: %v", err)), nil
 	}
-	if refusal := mcpfmt.DocumentScope(scope); refusal != "" {
+	if refusal := mcpfmt.DocumentScope(scope, scope); refusal != "" {
 		return mcp.NewToolResultError("invalid scope: " + refusal), nil
 	}
 	limit := req.GetInt("limit", defaultLookupAllLimit)

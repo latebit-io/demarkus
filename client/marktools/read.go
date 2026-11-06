@@ -98,12 +98,12 @@ type LookupArgs struct {
 
 // Lookup answers mark_lookup: the ranked catalog table, then any expansion.
 func (t *Tools) Lookup(ctx context.Context, args LookupArgs) Result {
-	if refusal := mcpfmt.DocumentScope(args.URL); refusal != "" {
-		return failure("%s", refusal)
-	}
 	target, bad := t.resolve(ctx, args.URL)
 	if bad != nil {
 		return *bad
+	}
+	if refusal := mcpfmt.DocumentScope(args.URL, target.Path); refusal != "" {
+		return failure("%s", refusal)
 	}
 	lookup := fetch.LookupRequest{
 		Host: target.Host, Scope: target.Path, Token: t.readToken(ctx, target.Host),
