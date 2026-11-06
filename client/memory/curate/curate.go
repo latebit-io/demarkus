@@ -6,6 +6,7 @@ package curate
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -156,7 +157,24 @@ func (p *Proposal) moved(anchor, to string) {
 var (
 	parenGroup    = regexp.MustCompile(`\s*\([^()]*\)`)
 	lineStartDash = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)]|#{1,6})?\s*—`)
+	// Punctuation that sets a status token at an edge apart from the name.
+	leadJoint  = regexp.MustCompile(`^(?:\s*[—–:,]\s*|\s+-\s+)`)
+	trailJoint = regexp.MustCompile(`(?:\s*[—–:,]\s*|\s+-\s+)$`)
+	// A PR number takes its noun with it: "PR #700: x", "Merged: PR #422".
+	leadRef      = regexp.MustCompile(`^(?i:PRs?|issues?)\s+#`)
+	trailRef     = regexp.MustCompile(`(?i)\b(?:PRs?|issues?)\s+$`)
+	isoDate      = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+	fragmentLink = regexp.MustCompile(`\]\(#([^)\s]+)\)`)
 )
+
+// functionWords end a phrase a trailing token completes ("merged as PR
+// #318", "Week 2026-09-22 to 2026-09-29"), so the token cannot go.
+var functionWords = map[string]bool{
+	"a": true, "after": true, "and": true, "as": true, "at": true, "before": true, "by": true,
+	"for": true, "from": true, "in": true, "into": true, "of": true, "on": true, "or": true,
+	"per": true, "since": true, "than": true, "the": true, "through": true, "till": true,
+	"to": true, "until": true, "via": true, "with": true,
+}
 
 // replaceEmDashes turns em dashes into commas outside code and line starts,
 // where a dash may be a bullet or open a heading; n is what changed.
@@ -271,25 +289,99 @@ func stripHeadingStatus(body string, headings []mdoutline.Heading) (string, []re
 }
 
 // withoutStatus removes a parenthesized group holding a status token whole,
-// then any bare token; the removed text is the status line.
+// then tokens at either edge; the removed text is the status line. A token
+// inside the sentence ("after #420: x") leaves the heading as it is.
 func withoutStatus(text string) (name, status string) {
 	var removed []string
-	text = parenGroup.ReplaceAllStringFunc(text, func(group string) string {
+	name = gate.Collapse(parenGroup.ReplaceAllStringFunc(text, func(group string) string {
 		inner := strings.TrimSpace(strings.Trim(strings.TrimSpace(group), "()"))
 		if !gate.CarriesStatus(inner) {
 			return group
 		}
 		removed = append(removed, inner)
 		return ""
-	})
-	for _, re := range gate.StatusTokens {
-		text = re.ReplaceAllStringFunc(text, func(tok string) string {
-			removed = append(removed, tok)
-			return ""
-		})
+	}))
+	for {
+		tok, rest := leadingStatus(name)
+		if tok == "" {
+			break
+		}
+		removed, name = append(removed, tok), rest
 	}
-	// A cut date leaves the dash that joined it to the name ("2026-03-02 — Audit").
-	return strings.Trim(gate.Collapse(text), " :,-—–"), strings.Join(removed, " ")
+	for {
+		rest, tok := trailingStatus(name)
+		if tok == "" {
+			break
+		}
+		removed, name = append(removed, tok), rest
+	}
+	if gate.CarriesStatus(name) {
+		return text, ""
+	}
+	return strings.Trim(name, " :,-—–"), strings.Join(removed, " ")
+}
+
+// leadingStatus cuts a status token opening s when punctuation sets it off,
+// or a space after a date ("2026-03-02 Audit"); tok is "" when none does.
+func leadingStatus(s string) (tok, rest string) {
+	from := 0
+	if m := leadRef.FindStringIndex(s); m != nil {
+		from = m[1] - 1
+	}
+	for _, re := range gate.StatusTokens {
+		loc := re.FindStringIndex(s[from:])
+		if len(loc) == 0 || loc[0] != 0 {
+			continue
+		}
+		end := from + loc[1]
+		rest = s[end:]
+		switch joint := leadJoint.FindString(rest); {
+		case rest == "":
+		case joint != "":
+			rest = rest[len(joint):]
+		case rest[0] == ' ' && isoDate.MatchString(s[from:end]):
+			rest = rest[1:]
+		default:
+			return "", s
+		}
+		return s[:end], rest
+	}
+	return "", s
+}
+
+// trailingStatus cuts a status token closing s when punctuation or a space
+// sets it off, unless the word before needs it; tok is "" when none goes.
+func trailingStatus(s string) (rest, tok string) {
+	for _, re := range gate.StatusTokens {
+		locs := re.FindAllStringIndex(s, -1)
+		if len(locs) == 0 || locs[len(locs)-1][1] != len(s) {
+			continue
+		}
+		start := locs[len(locs)-1][0]
+		if m := trailRef.FindStringIndex(s[:start]); m != nil && s[start] == '#' {
+			start = m[0]
+		}
+		rest = s[:start]
+		switch joint := trailJoint.FindString(rest); {
+		case rest == "":
+		case joint != "":
+			rest = rest[:len(rest)-len(joint)]
+		case strings.HasSuffix(rest, " ") && !functionWords[strings.ToLower(lastField(rest))]:
+			rest = strings.TrimRight(rest, " ")
+		default:
+			return s, ""
+		}
+		return rest, s[start:]
+	}
+	return s, ""
+}
+
+func lastField(s string) string {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[len(fields)-1]
 }
 
 // withSummary puts the sentence under the first H1.
@@ -336,6 +428,11 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		}
 		sections[largest].topic = sections[largest].candidate
 	}
+	homes := anchorHomes(in.Path, sections, headings)
+	preamble = rebaseFragments(preamble, in.Path, homes)
+	for i := range sections {
+		sections[i].text = rebaseFragments(sections[i].text, cmp.Or(sections[i].topic, in.Path), homes)
+	}
 	title := hub.Title(in.Body, in.Metadata, strings.TrimSuffix(path.Base(in.Path), ".md"))
 	carried := docwrite.Carried(in.Metadata)
 	for i := range sections {
@@ -361,6 +458,41 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	p.Kind = KindSplit
 	p.policyGaps(in.Path, meta, body, in.Policy)
 	p.Unfixed = append(p.Unfixed, gate.AuditProblems(in.Path, body, meta["description"])...)
+}
+
+// rebaseFragments points each same-document link ("[x](#a)") in text, which
+// lands in file here, at the file now holding that anchor's section.
+func rebaseFragments(text, here string, homes map[string]string) string {
+	code := codeMask{segs: mdoutline.CodeSegments(text)}
+	var b strings.Builder
+	last := 0
+	for _, m := range fragmentLink.FindAllStringSubmatchIndex(text, -1) {
+		home := homes[strings.ToLower(text[m[2]:m[3]])]
+		if home == "" || home == here || code.at(m[0]) {
+			continue
+		}
+		b.WriteString(text[last : m[2]-1])
+		b.WriteString(home + "#")
+		last = m[2]
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+// anchorHomes maps each heading anchor to the file it lives in after the split.
+func anchorHomes(hubPath string, sections []section, headings []mdoutline.Heading) map[string]string {
+	homes := make(map[string]string, len(headings))
+	for _, h := range headings {
+		home := hubPath
+		for i := range sections {
+			s := &sections[i]
+			if s.topic != "" && h.Start >= s.heading.Start && h.Start < s.heading.End {
+				home = s.topic
+			}
+		}
+		homes[strings.ToLower(h.Anchor)] = home
+	}
+	return homes
 }
 
 // policyGaps names what the write policy finds missing on a write, as the
@@ -756,7 +888,7 @@ func (a *applier) publish(ctx context.Context, w *Write, expected int, action st
 		return Applied{}, fmt.Errorf("publish %s: %w", w.Path, err)
 	}
 	if !protocol.IsWriteSuccess(result.Response.Status) {
-		return Applied{}, &Refusal{Path: w.Path, Reason: result.Response.Status}
+		return Applied{}, &Refusal{Path: w.Path, Reason: result.Response.Refusal()}
 	}
 	version, err := docwrite.Version(result.Response.Metadata)
 	if err != nil {

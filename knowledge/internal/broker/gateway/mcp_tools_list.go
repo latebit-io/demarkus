@@ -52,7 +52,7 @@ func markLookupTool(lookupAll bool) mcp.Tool {
 	}
 	options := append([]mcp.ToolOption{
 		mcp.WithDescription(desc + "."),
-		mcp.WithString("url", mcp.Required(), mcp.Description(mcpfmt.ScopeDesc("mark://{worldName}/"))),
+		mcp.WithString("url", mcp.Required(), mcp.Description(mcpfmt.LookupScopeDesc("mark://{worldName}/", "mark://{worldName}/adr/"))),
 	}, mcpfmt.LookupParams()...)
 	return mcpfmt.NewTool("mark_lookup", options...)
 }

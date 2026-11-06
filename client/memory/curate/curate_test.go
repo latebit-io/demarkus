@@ -163,6 +163,27 @@ func TestSplitMeetsTheWritePolicy(t *testing.T) {
 	}
 }
 
+// A same-document link follows its section to the file that now holds it;
+// one whose section stays put, or sits in code, is left alone.
+func TestSplitRebasesSameDocumentLinks(t *testing.T) {
+	body := strings.Replace(bigDoc(), "One short frame section.", "One short frame section; see [steps](#steps-detail) and `[x](#design)`.", 1)
+	body = strings.Replace(body, "First sentence of measures.", "First sentence of measures, after [design](#design) and [goal](#goal).", 1)
+	p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}})
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
+	}
+	byPath := map[string]string{}
+	for _, w := range p.Writes {
+		byPath[w.Path] = w.Body
+	}
+	if hub := byPath["/plans/big.md"]; !strings.Contains(hub, "[steps](/plans/big/steps.md#steps-detail) and `[x](#design)`") {
+		t.Errorf("hub:\n%s", hub)
+	}
+	if m := byPath["/plans/big/measures.md"]; !strings.Contains(m, "after [design](/plans/big/design.md#design) and [goal](/plans/big.md#goal)") {
+		t.Errorf("measures:\n%s", m[:300])
+	}
+}
+
 func TestSplitRefusesWhatItCannotName(t *testing.T) {
 	flat := "# Flat\n\nSummary here.\n\n" + strings.Repeat("line\n", 2000)
 	p := Propose(&Input{Path: "/f.md", Body: flat})
@@ -210,12 +231,27 @@ func TestReplaceEmDashes(t *testing.T) {
 
 func TestWithoutStatus(t *testing.T) {
 	for in, want := range map[string][2]string{
-		"Step 3 (DONE 2026-10-12)":   {"Step 3", "DONE 2026-10-12"},
-		"Rollout: SHIPPED":           {"Rollout", "SHIPPED"},
-		"PR #12 review (draft)":      {"PR review (draft)", "#12"},
-		"2026-10-12":                 {"", "2026-10-12"},
-		"2026-03-02 — Audit Logging": {"Audit Logging", "2026-03-02"},
-		"Release – 2026-03-02":       {"Release", "2026-03-02"},
+		"Step 3 (DONE 2026-10-12)":                  {"Step 3", "DONE 2026-10-12"},
+		"Rollout: SHIPPED":                          {"Rollout", "SHIPPED"},
+		"2026-10-12":                                {"", "2026-10-12"},
+		"2026-03-02 — Audit Logging":                {"Audit Logging", "2026-03-02"},
+		"2026-03-02 Audit Logging":                  {"Audit Logging", "2026-03-02"},
+		"Release – 2026-03-02":                      {"Release", "2026-03-02"},
+		"Superseded 2026-10-08":                     {"Superseded", "2026-10-08"},
+		"PR #700: CodeRabbit round 1":               {"CodeRabbit round 1", "PR #700"},
+		"Merged: PR #422":                           {"Merged", "PR #422"},
+		"COMPLETE — shipped the day it was written": {"shipped the day it was written", "COMPLETE"},
+		"Status: MERGED (PR #384, 2026-08-28)":      {"Status", "PR #384, 2026-08-28 MERGED"},
+		// Status inside the sentence: cutting it would garble the heading.
+		"PR #12 review (draft)":                    {"PR #12 review (draft)", ""},
+		"Resolved 2026-09-21, track 3c":            {"Resolved 2026-09-21, track 3c", ""},
+		"Missing after #420: extensibility toggle": {"Missing after #420: extensibility toggle", ""},
+		"Fix PR for #504 and #505 (gate hang)":     {"Fix PR for #504 and #505 (gate hang)", ""},
+		"Week 2026-09-22 to 2026-09-29":            {"Week 2026-09-22 to 2026-09-29", ""},
+		"Update: merged as PR #318":                {"Update: merged as PR #318", ""},
+		"MERGED to main (2026-05-30, PR #166)":     {"MERGED to main (2026-05-30, PR #166)", ""},
+		"Enforcement — MERGED to main (v0.4.0)":    {"Enforcement — MERGED to main (v0.4.0)", ""},
+		"#276 shipped and deployed (2026-07-25)":   {"#276 shipped and deployed (2026-07-25)", ""},
 	} {
 		name, status := withoutStatus(in)
 		if name != want[0] || status != want[1] {
@@ -279,6 +315,14 @@ func TestApplyPreflightsTopicsAndWritesTheHubLast(t *testing.T) {
 	backend = topicAt("# Big plan: Design\n\nmy edit\n", 4, older)
 	if _, err = Apply(t.Context(), docsOn(backend), &p, stamp); !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, "differs") || len(backend.PublishCalls) != 0 {
 		t.Fatalf("edited topic: %v (publishes %d)", err, len(backend.PublishCalls))
+	}
+
+	// The server's reason travels with the refusal.
+	backend = &fetchtest.Client{PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusBadRequest, Body: protocol.ErrorBody(protocol.StatusBadRequest, "near-duplicate of /other.md")}}, nil
+	}}
+	if _, err = Apply(t.Context(), docsOn(backend), &p, stamp); !errors.As(err, &refusal) || refusal.Reason != "bad-request: near-duplicate of /other.md" {
+		t.Fatalf("refused topic: %v", err)
 	}
 
 	backend = &fetchtest.Client{PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {

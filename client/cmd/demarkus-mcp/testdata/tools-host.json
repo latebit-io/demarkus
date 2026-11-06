@@ -388,7 +388,7 @@
           "type": "string"
         },
         "url": {
-          "description": "scope: / or a subtree; path, e.g. /index.md",
+          "description": "/ or a dir like /demarkus/; docs: mark_fetch",
           "type": "string"
         },
         "verbose": {

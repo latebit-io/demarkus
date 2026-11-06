@@ -137,6 +137,7 @@ func TestHandleMarkLookupAllRejectsInvalidArguments(t *testing.T) {
 		{name: "relative scope", ctx: withAliceClaims(context.Background()), args: map[string]any{"query": "auth", "scope": "docs/"}},
 		{name: "control in scope", ctx: withAliceClaims(context.Background()), args: map[string]any{"query": "auth", "scope": "/docs/\nlimit: 1000"}},
 		{name: "zero limit", ctx: withAliceClaims(context.Background()), args: map[string]any{"query": "auth", "limit": float64(0)}},
+		{name: "document scope", ctx: withAliceClaims(context.Background()), args: map[string]any{"query": "auth", "scope": "/docs/a.md"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

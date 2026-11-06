@@ -304,10 +304,17 @@ func scopeDesc(host string) string {
 	return "mark:// URL of the store root or a directory, e.g. mark://host/demarkus/"
 }
 
+func lookupScopeDesc(host string) string {
+	if host != "" {
+		return mcpfmt.LookupScopeDesc("/", "/demarkus/")
+	}
+	return mcpfmt.LookupScopeDesc("mark://host/", "mark://host/demarkus/")
+}
+
 func markLookupTool(host string) mcp.Tool {
 	options := append([]mcp.ToolOption{
 		mcp.WithDescription(mcpfmt.LookupDescription),
-		mcp.WithString("url", mcp.Required(), mcp.Description(mcpfmt.ScopeDesc("/")+"; "+urlDesc(host))),
+		mcp.WithString("url", mcp.Required(), mcp.Description(lookupScopeDesc(host))),
 	}, mcpfmt.LookupParams()...)
 	return mcpfmt.NewTool("mark_lookup", options...)
 }

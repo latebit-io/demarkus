@@ -28,9 +28,21 @@ const (
 	ExpectedVersionDesc = "version from prior fetch; 0 to create"
 )
 
-// ScopeDesc describes a lookup scope argument from the surface's example root.
-func ScopeDesc(example string) string {
-	return "scope: " + example + " or a subtree"
+// LookupScopeDesc describes a lookup scope in the surface's URL form. The
+// server takes a root or directory only, so a document goes to mark_fetch.
+func LookupScopeDesc(root, dir string) string {
+	return root + " or a dir like " + dir + "; docs: mark_fetch"
+}
+
+// DocumentScope is the refusal for a lookup scoped to a document, "" for a
+// root or directory: the server answers not-found, which reads as missing.
+func DocumentScope(url string) string {
+	u, _, _ := strings.Cut(url, "#")
+	u, _, _ = strings.Cut(u, "?")
+	if !strings.HasSuffix(u, ".md") {
+		return ""
+	}
+	return u + " is a document, not a lookup scope: mark_fetch it (url#anchor for one section), or look up in its directory " + u[:strings.LastIndex(u, "/")+1]
 }
 
 const (

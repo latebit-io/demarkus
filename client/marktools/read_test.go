@@ -123,6 +123,26 @@ func TestLookup(t *testing.T) {
 	}
 }
 
+// The server answers a document scope not-found, which reads as a missing
+// document; the tool refuses it first and names what to do instead.
+func TestLookupRefusesADocumentScope(t *testing.T) {
+	backend := &fetchtest.Client{}
+	tools := newTools(t, backend, directHooks())
+	for url, dir := range map[string]string{
+		"/trade-bot/journal/2026-11-05.md": "/trade-bot/journal/",
+		"mark://host:6309/docs/a.md#intro": "mark://host:6309/docs/",
+		"/index.md":                        "/",
+	} {
+		got := tools.Lookup(t.Context(), marktools.LookupArgs{URL: url, Query: "alpha", Match: fetch.MatchBody})
+		if !got.IsError || !strings.Contains(got.Text, "is a document, not a lookup scope: mark_fetch it") || !strings.HasSuffix(got.Text, "look up in its directory "+dir) {
+			t.Errorf("Lookup(%s) = %+v", url, got)
+		}
+	}
+	if len(backend.LookupCalls) != 0 {
+		t.Errorf("lookups sent: %+v", backend.LookupCalls)
+	}
+}
+
 // Expansion reads each matched document, and the typed relations its
 // metadata declares, with the token the lookup used.
 func TestLookupExpandsWithinTheBudget(t *testing.T) {
