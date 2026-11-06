@@ -1,6 +1,7 @@
 package links
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -359,5 +360,19 @@ func TestResolverPath(t *testing.T) {
 				t.Errorf("ResolverFor(%q).Path(%q) = %q, want %q", host, dest, got, want)
 			}
 		}
+	}
+}
+
+// Only real inline links count: code, escaped brackets and links to other
+// documents are left alone, and a span covers the destination, not a title.
+func TestFragmentLinks(t *testing.T) {
+	body := "[a](#one) [b](#two \"Two\") [c]( <#three> ) `[d](#four)` \\[e](#five) [f](x.md#six)\n\n```\n[g](#seven)\n```\n"
+	found := FragmentLinks(body)
+	got := make([]string, 0, len(found))
+	for _, l := range found {
+		got = append(got, l.Anchor+"="+body[l.Start:l.End])
+	}
+	if want := []string{"one=#one", "two=#two", "three=#three"}; !slices.Equal(got, want) {
+		t.Errorf("FragmentLinks = %q, want %q", got, want)
 	}
 }

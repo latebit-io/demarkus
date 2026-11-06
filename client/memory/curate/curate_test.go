@@ -166,7 +166,7 @@ func TestSplitMeetsTheWritePolicy(t *testing.T) {
 // A same-document link follows its section to the file that now holds it;
 // one whose section stays put, or sits in code, is left alone.
 func TestSplitRebasesSameDocumentLinks(t *testing.T) {
-	body := strings.Replace(bigDoc(), "One short frame section.", "One short frame section; see [steps](#steps-detail) and `[x](#design)`.", 1)
+	body := strings.Replace(bigDoc(), "One short frame section.", "One short frame section; see [steps](#steps-detail) and `[x](#design)`, [t](#design \"Design\"), \\[e](#design).", 1)
 	body = strings.Replace(body, "First sentence of measures.", "First sentence of measures, after [design](#design) and [goal](#goal).", 1)
 	p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}})
 	if p.Kind != KindSplit {
@@ -176,7 +176,7 @@ func TestSplitRebasesSameDocumentLinks(t *testing.T) {
 	for _, w := range p.Writes {
 		byPath[w.Path] = w.Body
 	}
-	if hub := byPath["/plans/big.md"]; !strings.Contains(hub, "[steps](/plans/big/steps.md#steps-detail) and `[x](#design)`") {
+	if hub := byPath["/plans/big.md"]; !strings.Contains(hub, "[steps](/plans/big/steps.md#steps-detail) and `[x](#design)`, [t](/plans/big/design.md#design \"Design\"), \\[e](#design).") {
 		t.Errorf("hub:\n%s", hub)
 	}
 	if m := byPath["/plans/big/measures.md"]; !strings.Contains(m, "after [design](/plans/big/design.md#design) and [goal](/plans/big.md#goal)") {

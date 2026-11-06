@@ -161,10 +161,9 @@ var (
 	leadJoint  = regexp.MustCompile(`^(?:\s*[—–:,]\s*|\s+-\s+)`)
 	trailJoint = regexp.MustCompile(`(?:\s*[—–:,]\s*|\s+-\s+)$`)
 	// A PR number takes its noun with it: "PR #700: x", "Merged: PR #422".
-	leadRef      = regexp.MustCompile(`^(?i:PRs?|issues?)\s+#`)
-	trailRef     = regexp.MustCompile(`(?i)\b(?:PRs?|issues?)\s+$`)
-	isoDate      = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
-	fragmentLink = regexp.MustCompile(`\]\(#([^)\s]+)\)`)
+	leadRef  = regexp.MustCompile(`^(?i:PRs?|issues?)\s+#`)
+	trailRef = regexp.MustCompile(`(?i)\b(?:PRs?|issues?)\s+$`)
+	isoDate  = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 )
 
 // functionWords end a phrase a trailing token completes ("merged as PR
@@ -465,21 +464,19 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 // rebaseFragments points each same-document link ("[x](#a)") in text, which
 // lands in file here, at the heading's landing: its file and renumbered anchor.
 func rebaseFragments(text, here string, homes map[string]landing) string {
-	code := codeMask{segs: mdoutline.CodeSegments(text)}
 	var b strings.Builder
 	last := 0
-	for _, m := range fragmentLink.FindAllStringSubmatchIndex(text, -1) {
-		anchor := text[m[2]:m[3]]
-		to, ok := homes[strings.ToLower(anchor)]
-		if !ok || code.at(m[0]) || (to.path == here && strings.EqualFold(to.anchor, anchor)) {
+	for _, l := range links.FragmentLinks(text) {
+		to, ok := homes[strings.ToLower(l.Anchor)]
+		if !ok || (to.path == here && strings.EqualFold(to.anchor, l.Anchor)) {
 			continue
 		}
-		b.WriteString(text[last : m[2]-1])
+		b.WriteString(text[last:l.Start])
 		if to.path != here {
 			b.WriteString(to.path)
 		}
 		b.WriteString("#" + to.anchor)
-		last = m[3]
+		last = l.End
 	}
 	b.WriteString(text[last:])
 	return b.String()
