@@ -203,9 +203,11 @@ func FragmentLinks(body string) []FragmentLink {
 }
 
 // SelfLinks is FragmentLinks plus the links that name docPath before the
-// fragment ("/d.md#a", "d.md#a"); each span is still just the "#a".
+// fragment ("/d.md#a", "d.md#a", "?q#a"); each span is still just the "#a".
 func SelfLinks(body, docPath string) []FragmentLink {
-	return anchorSpans(body, func(dest string) bool { return dest == "" || ResolvePath(docPath, dest) == docPath })
+	return anchorSpans(body, func(dest string) bool {
+		return dest == "" || strings.HasPrefix(dest, "?") || ResolvePath(docPath, dest) == docPath
+	})
 }
 
 // anchorSpans returns the "#a" span of every inline link whose destination

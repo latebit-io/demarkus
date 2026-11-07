@@ -20,7 +20,7 @@ func FuzzEditKeepsLinks(f *testing.F) {
 		"## X (DONE)\n\n## X (WIP)\n\n## X\n\n[a](#x) [b](#x-1) [c](#x-wip)\n",
 		"Setext (DONE)\n----\n\n[s](#setext-done)\n",
 		"- [l](#later)\n\n### Later — maybe (DONE)\n",
-		"## Plan — later\n\n[a](/d.md#plan--later) [r](d.md#Plan--later) [o](/o.md#plan--later)\n",
+		"## Plan — later\n\n[a](/d.md#plan--later) [r](d.md#Plan--later) [o](/o.md#plan--later) [q](?v=1#plan--later)\n",
 	} {
 		f.Add(seed)
 	}
@@ -55,7 +55,7 @@ func FuzzEditKeepsLinks(f *testing.F) {
 				}
 			}
 			for _, l := range links.ExtractWithPositions(doc) {
-				if l.Fragment != "" && links.ResolvePath(in.Path, l.Dest) == in.Path {
+				if self := strings.HasPrefix(l.Dest, "?") || links.ResolvePath(in.Path, l.Dest) == in.Path; l.Fragment != "" && self {
 					if i := headingIndex(hs, l.Fragment); i >= 0 {
 						was[i] += by
 					}

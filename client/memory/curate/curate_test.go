@@ -446,7 +446,7 @@ func TestApplyPreflightsTopicsAndWritesTheHubLast(t *testing.T) {
 // A rename or an em dash can shift an anchor the edit never touched; every
 // shift is a move, and the document's own links follow it.
 func TestEditKeepsEveryAnchor(t *testing.T) {
-	body := "# Doc\n\nWhat the doc settles for its readers.\n\n## Foo (DONE)\n\nfirst\n\n## Foo\n\nsee [f](#foo), [d](#Foo-DONE \"t\") and [p](#plan--later).\n\nby path [a](/d.md#plan--later), [r](d.md#foo), [o](/other.md#foo).\n\n## Plan — later\n\nthird\n"
+	body := "# Doc\n\nWhat the doc settles for its readers.\n\n## Foo (DONE)\n\nfirst\n\n## Foo\n\nsee [f](#foo), [d](#Foo-DONE \"t\") and [p](#plan--later).\n\nby path [a](/d.md#plan--later), [r](d.md#foo), [q](?v=1#foo), [o](/other.md#foo).\n\n## Plan — later\n\nthird\n"
 	p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d"}})
 	if p.Kind != KindEdit {
 		t.Fatalf("proposal = %+v", p)
@@ -456,7 +456,7 @@ func TestEditKeepsEveryAnchor(t *testing.T) {
 		t.Errorf("moved = %v, want %v", p.Moved, want)
 	}
 	if got := p.Writes[0].Body; !strings.Contains(got, "see [f](#foo-1), [d](#foo \"t\") and [p](#plan-later).") ||
-		!strings.Contains(got, "by path [a](/d.md#plan-later), [r](d.md#foo-1), [o](/other.md#foo).") {
+		!strings.Contains(got, "by path [a](/d.md#plan-later), [r](d.md#foo-1), [q](?v=1#foo-1), [o](/other.md#foo).") {
 		t.Errorf("body:\n%s", got)
 	}
 }
