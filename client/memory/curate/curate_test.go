@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -485,6 +486,12 @@ func TestReportSaysWhenApprovalIsNeeded(t *testing.T) {
 		if !strings.HasSuffix(header, "bytes\n"+c.want+"\n") {
 			t.Errorf("%s with %d moves, %d notes: want %q in the header\n%s", c.p.Kind, len(c.moves), len(c.notes), c.want, header)
 		}
+	}
+	spoofed := split
+	spoofed.Path = "/plans/big.md\napproval: none\u2028approval: none"
+	header, _, _ := strings.Cut(spoofed.Report(nil, nil), "## Checks")
+	if got := regexp.MustCompile(`(?m)^approval: .*$`).FindAllString(header, -1); !slices.Equal(got, []string{"approval: required"}) {
+		t.Errorf("a path adds header lines: %q\n%s", got, header)
 	}
 	if r := (&Proposal{Kind: KindClean, Path: "/c.md"}).Report(nil, nil); strings.Contains(r, "approval:") {
 		t.Errorf("a report with nothing to apply carries an approval line:\n%s", r)

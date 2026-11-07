@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
@@ -893,7 +894,7 @@ func (p *Proposal) Moves(inbound []Inbound) []Move {
 // change, what is left, the links to repoint, then every body in full.
 func (p *Proposal) Report(moves []Move, notes []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "status: %s\npath: %s\nversion: %d\nsize: %d bytes\n", p.Kind, p.Path, p.Version, p.Size)
+	fmt.Fprintf(&b, "status: %s\npath: %s\nversion: %d\nsize: %d bytes\n", p.Kind, headerValue(p.Path), p.Version, p.Size)
 	// In the header, above any body the proposal quotes, so document text
 	// cannot pose as it.
 	if len(p.Writes) > 0 {
@@ -951,6 +952,15 @@ func (p *Proposal) approval(moves []Move, notes []string) string {
 		return "approval: none"
 	}
 	return "approval: required"
+}
+
+// headerValue keeps a field on its header line: a value with a newline or
+// any other non-printing rune is quoted, so it cannot add a line the gate reads.
+func headerValue(s string) string {
+	if strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		return strconv.Quote(s)
+	}
+	return s
 }
 
 func metaLine(meta map[string]string) string {
