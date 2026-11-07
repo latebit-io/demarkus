@@ -231,7 +231,7 @@ func TestSplitRebasesEveryLinkForm(t *testing.T) {
 // A moved section's relative links name what they named from the original:
 // written absolute in the topic file, left as they are in the hub.
 func TestSplitKeepsRelativeLinks(t *testing.T) {
-	line := "First sentence of design, see [o](other.md), [u](../up.md), ![i](img/a.png \"t\"), [q](other.md?x=1#sec), [s](big.md#goal), [a](/abs.md) and [h](https://e.x/y)."
+	line := "First sentence of design, see [o](other.md), [u](../up.md), ![i](img/a.png \"t\"), [q](other.md?x=1#sec), [s](big.md#goal), [a](/abs.md) and [h](https://e.x/y), [![b](b.svg)](ci.md)."
 	body := strings.Replace(bigDoc(), "First sentence of design. Second.", line+" Second.\n\nMore in [d].\n\n[d]: docs.md", 1)
 	body = strings.Replace(body, "One short frame section.", "One short frame section, near [n](notes.md).", 1)
 	p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}})
@@ -240,7 +240,7 @@ func TestSplitKeepsRelativeLinks(t *testing.T) {
 	}
 	byPath := bodies(p.Writes)
 	for file, want := range map[string]string{
-		"/plans/big/design.md": "see [o](/plans/other.md), [u](/up.md), ![i](/plans/img/a.png \"t\"), [q](/plans/other.md?x=1#sec), [s](/plans/big.md#goal), [a](/abs.md) and [h](https://e.x/y).",
+		"/plans/big/design.md": "see [o](/plans/other.md), [u](/up.md), ![i](/plans/img/a.png \"t\"), [q](/plans/other.md?x=1#sec), [s](/plans/big.md#goal), [a](/abs.md) and [h](https://e.x/y), [![b](/plans/b.svg)](/plans/ci.md).",
 		"/plans/big.md":        "near [n](notes.md).",
 	} {
 		if !strings.Contains(byPath[file], want) {
@@ -557,6 +557,7 @@ func TestEditKeepsEveryLinkForm(t *testing.T) {
 		{"definition by path", "## Plan — later\n\n[plan][p]\n\n[p]: /d.md#plan--later\n", "[plan][p]\n\n[p]: /d.md#plan-later\n", ""},
 		{"definition with a title", "[plan][p]\n\n## Plan — later\n\n[p]: <#kept> \"T\"\n", "[p]: <#kept> \"T\"\n", ""},
 		{"link with no text", "## Plan — later\n\n[](#plan--later)\n", "", "a link to #plan--later"},
+		{"badge", "[![p](#plan--later)](#plan--later)\n\n## Plan — later\n", "[![p](#plan-later)](#plan-later)", ""},
 	} {
 		p := Propose(&Input{Path: "/d.md", Body: head + c.body, Version: 1, Metadata: map[string]string{"tags": "d"}, Links: links.ResolverFor("h")})
 		switch {

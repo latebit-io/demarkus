@@ -698,7 +698,9 @@ func (rl *relocator) rewrite(text string, base int, spans []links.Span, here str
 	last := 0
 	for i := range spans {
 		sp := &spans[i]
-		if !sp.Rewritable() || sp.Start < base || sp.End > base+len(text) {
+		// Spans are in order and apart; one overlapping the last written
+		// would slice backwards.
+		if sp.Start < base+last || sp.End > base+len(text) {
 			continue
 		}
 		if to := rl.relocate(sp.Dest, here); to != sp.Dest {

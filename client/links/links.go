@@ -3,9 +3,11 @@ package links
 
 import (
 	"bytes"
+	"cmp"
 	"net/url"
 	pathpkg "path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -163,19 +165,40 @@ func blockStart(n ast.Node) int {
 }
 
 // brackets finds a link's or image's '[' and ']' from its descendant text
-// segments, and its rendered text; -1, -1 for one with no text nodes.
+// segments, and its rendered text; -1, -1 for one with no text nodes. A
+// nested link or image (a badge: [![alt](src)](href)) counts whole.
 func brackets(link ast.Node, src []byte) (open, closeBracket int, linkText string) {
 	firstStart, lastStop := -1, -1
 	var b strings.Builder
 	walk(link, func(child ast.Node, entering bool) ast.WalkStatus {
-		if t, ok := child.(*ast.Text); ok && entering {
-			b.Write(t.Segment.Value(src))
-			if firstStart < 0 {
-				firstStart = t.Segment.Start
-			}
-			lastStop = t.Segment.Stop
+		if !entering || child == link {
+			return ast.WalkContinue
 		}
-		return ast.WalkContinue
+		var start, stop int
+		status := ast.WalkContinue
+		switch v := child.(type) {
+		case *ast.Text:
+			b.Write(v.Segment.Value(src))
+			start, stop = v.Segment.Start, v.Segment.Stop
+		case *ast.Link, *ast.Image:
+			o, c, inner := brackets(v, src)
+			if o < 0 {
+				firstStart = -1 // unlocatable inside: so is link
+				return ast.WalkStop
+			}
+			b.WriteString(inner)
+			start, stop, status = o, linkEnd(src, v, c), ast.WalkSkipChildren
+			if v.Kind() == ast.KindImage {
+				start-- // its '!'
+			}
+		default:
+			return ast.WalkContinue
+		}
+		if firstStart < 0 {
+			firstStart = start
+		}
+		lastStop = stop
+		return status
 	})
 	if firstStart < 0 {
 		return -1, -1, ""
@@ -191,20 +214,39 @@ func brackets(link ast.Node, src []byte) (open, closeBracket int, linkText strin
 	return open, closeBracket, b.String()
 }
 
-// Span is a rewritable destination: an inline link's or image's, or a
-// reference definition's. [Start, End) are its bytes, -1 when not verbatim
-// (an escape, no text to find it by).
+// linkEnd is the offset just past link, whose ']' is at closeBracket: past
+// its "(dest)" or "[label]", or the ']' itself for a shortcut.
+func linkEnd(src []byte, link ast.Node, closeBracket int) int {
+	var ref *ast.ReferenceLink
+	switch v := link.(type) {
+	case *ast.Link:
+		ref = v.Reference
+	case *ast.Image:
+		ref = v.Reference
+	}
+	switch {
+	case ref == nil:
+		if end := inlineEnd(src, closeBracket); end >= 0 {
+			return end
+		}
+	case ref.Type != ast.ReferenceLinkShortcut:
+		if j := bytes.IndexByte(src[closeBracket+1:], ']'); j >= 0 {
+			return closeBracket + 1 + j + 1
+		}
+	}
+	return closeBracket + 1
+}
+
+// Span is a destination rewritable in place: an inline link's or image's,
+// or a reference definition's; [Start, End) are its bytes.
 type Span struct {
 	Dest       string
 	Start, End int
 }
 
-// Rewritable reports a span whose bytes can be replaced in place.
-func (s *Span) Rewritable() bool { return s.Start >= 0 }
-
-// Spans returns body's rewritable destinations in document order. The
-// parser skips code, and a span excludes any title, so a rewrite keeps the
-// rest verbatim. A reference-style use has none: its definition holds it.
+// Spans returns body's rewritable destinations in source order, a badge's
+// image before its link; none in code, for a reference use, an escape, or a
+// link with no text to find it by. A span excludes any title.
 func Spans(body string) []Span {
 	src := []byte(body)
 	var out []Span
@@ -212,42 +254,47 @@ func Spans(body string) []Span {
 		if !entering {
 			return ast.WalkContinue
 		}
+		var sp Span
+		ok := false
 		switch v := n.(type) {
 		case *ast.Link:
 			if v.Reference == nil {
-				out = append(out, inlineSpan(src, v, v.Destination))
+				sp, ok = inlineSpan(src, v, v.Destination)
 			}
 		case *ast.Image:
 			if v.Reference == nil {
-				out = append(out, inlineSpan(src, v, v.Destination))
+				sp, ok = inlineSpan(src, v, v.Destination)
 			}
 		case *ast.LinkReferenceDefinition:
-			out = append(out, definitionSpan(src, v))
+			sp, ok = definitionSpan(src, v)
+		}
+		if ok {
+			out = append(out, sp)
 		}
 		return ast.WalkContinue
 	})
+	slices.SortFunc(out, func(a, b Span) int { return cmp.Compare(a.Start, b.Start) })
 	return out
 }
 
 // inlineSpan finds an inline link's or image's destination in its "(dest)".
-func inlineSpan(src []byte, n ast.Node, dest []byte) Span {
+func inlineSpan(src []byte, n ast.Node, dest []byte) (Span, bool) {
 	if _, closeBracket, _ := brackets(n, src); closeBracket >= 0 && inlineEnd(src, closeBracket) >= 0 {
 		return verbatim(src, closeBracket+2, " \t\n)", dest) // past "]("
 	}
-	return Span{Dest: string(dest), Start: -1, End: -1}
+	return Span{}, false
 }
 
 // definitionSpan finds a reference definition's destination after its "]:".
-func definitionSpan(src []byte, d *ast.LinkReferenceDefinition) Span {
-	none := Span{Dest: string(d.Destination), Start: -1, End: -1}
+func definitionSpan(src []byte, d *ast.LinkReferenceDefinition) (Span, bool) {
 	lines := d.Lines()
 	if lines.Len() == 0 {
-		return none
+		return Span{}, false
 	}
 	from, to := lines.At(0).Start, lines.At(lines.Len()-1).Stop
 	i := bytes.IndexByte(src[from:to], '[')
 	if i < 0 {
-		return none
+		return Span{}, false
 	}
 	for i += from + 1; i < to && src[i] != ']'; i++ {
 		if src[i] == '\\' {
@@ -255,7 +302,7 @@ func definitionSpan(src []byte, d *ast.LinkReferenceDefinition) Span {
 		}
 	}
 	if i+1 >= to || src[i+1] != ':' {
-		return none
+		return Span{}, false
 	}
 	return verbatim(src[:to], i+2, " \t\n", d.Destination)
 }
@@ -263,8 +310,7 @@ func definitionSpan(src []byte, d *ast.LinkReferenceDefinition) Span {
 // verbatim is dest's span when its bytes follow from, past blanks: up to a
 // stop byte, or the '>' of a "<dest>". An escaped or entity-coded destination
 // differs from its source text: rewriting it would touch other bytes.
-func verbatim(src []byte, from int, stops string, dest []byte) Span {
-	s := Span{Dest: string(dest), Start: -1, End: -1}
+func verbatim(src []byte, from int, stops string, dest []byte) (Span, bool) {
 	for from < len(src) && strings.IndexByte(" \t\n", src[from]) >= 0 {
 		from++
 	}
@@ -275,10 +321,10 @@ func verbatim(src []byte, from int, stops string, dest []byte) Span {
 	for end < len(src) && strings.IndexByte(stops, src[end]) < 0 {
 		end++
 	}
-	if bytes.Equal(src[from:end], dest) {
-		s.Start, s.End = from, end
+	if !bytes.Equal(src[from:end], dest) {
+		return Span{}, false
 	}
-	return s
+	return Span{Dest: string(dest), Start: from, End: end}, true
 }
 
 // Definition is a reference definition as written, its container's prefixes

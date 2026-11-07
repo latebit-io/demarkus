@@ -129,6 +129,17 @@ func TestExtractWithPositions(t *testing.T) {
 				{Dest: "b.md", Text: "", OpenBracket: -1, CloseBracket: -1, BlockStart: 18},
 			},
 		},
+		{
+			// A badge's brackets are the link's, around its image; one whose
+			// image has no text to find it by is unknown.
+			name: "badge",
+			body: "[![ci](b.svg)](ci.md) ![[t](a.md)](p.png) [![](b.svg) x](y.md)",
+			want: []LinkInfo{
+				{Dest: "ci.md", Text: "ci", OpenBracket: 0, CloseBracket: 13},
+				{Dest: "a.md", Text: "t", OpenBracket: 24, CloseBracket: 26},
+				{Dest: "y.md", Text: "", OpenBracket: -1, CloseBracket: -1},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -365,18 +376,15 @@ func TestResolverPath(t *testing.T) {
 }
 
 // Inline links and images and reference definitions are rewritable; code,
-// escaped brackets and reference uses are not, and a span skips any title.
+// escaped brackets, reference uses and links with no text are not. A span
+// skips any title, and a badge's image comes before its link.
 func TestSpans(t *testing.T) {
-	body := "[a](one.md) [b](#two \"Two\") [c]( <three.md> ) ![i](p.png) `[d](four.md)` \\[e](five.md) [h][r] [](nine.md) [j](<a b.md>)\n\n```\n[g](seven.md)\n```\n\n[r]: eight.md \"T\"\n[s]:\n  <ten.md>\n"
+	body := "[a](one.md) [b](#two \"Two\") [c]( <three.md> ) ![i](p.png) `[d](four.md)` \\[e](five.md) [h][r] [](nine.md) [j](<a b.md>) [![x](q.png)](r.md)\n\n```\n[g](seven.md)\n```\n\n[r]: eight.md \"T\"\n[s]:\n  <ten.md>\n"
 	got := make([]string, 0, 8)
 	for _, sp := range Spans(body) {
-		span := "none"
-		if sp.Rewritable() {
-			span = body[sp.Start:sp.End]
-		}
-		got = append(got, sp.Dest+"="+span)
+		got = append(got, sp.Dest+"="+body[sp.Start:sp.End])
 	}
-	want := []string{"one.md=one.md", "#two=#two", "three.md=three.md", "p.png=p.png", "nine.md=none", "a b.md=a b.md", "eight.md=eight.md", "ten.md=ten.md"}
+	want := []string{"one.md=one.md", "#two=#two", "three.md=three.md", "p.png=p.png", "a b.md=a b.md", "q.png=q.png", "r.md=r.md", "eight.md=eight.md", "ten.md=ten.md"}
 	if !slices.Equal(got, want) {
 		t.Errorf("Spans = %q, want %q", got, want)
 	}

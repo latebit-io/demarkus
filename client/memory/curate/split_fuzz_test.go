@@ -31,6 +31,7 @@ func FuzzSplitKeepsHeadingsAndLinks(f *testing.F) {
 		"## Mid\n\n[r](rel.md?q#f) ![i](img.png) [d][dm] [s](d.md#pad-b) [e]() <mark://x/y> [p][pa]\n\n[dm]: ../doc.md \"T\"\n",
 		"## Mid\n\n[c][PA] [m][mid]\n\n" + strings.Repeat("mid text ", 300) + "\n\n[mid]: #next\n",
 		"## Mid\n\n[z][qd] " + strings.Repeat("mid text ", 300) + "\n\n> [qd]: <q d.md>\n> 'T'\n",
+		"## Mid\n\n[![b](b.svg)](ci.md) [![n](#next)](#next) ![[t](a.md)](p.png)\n",
 		// Fuzz finds: twins of the harness's Next heading, a link to the topics list.
 		"- A\n  - A\n#     neXt \n ## 00000000000000",
 		"## NeXt",
