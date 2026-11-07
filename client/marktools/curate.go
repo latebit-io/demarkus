@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/memory/audit"
 	"github.com/latebit-io/demarkus/client/memory/curate"
 	"github.com/latebit-io/demarkus/client/memory/graph"
@@ -59,7 +60,7 @@ func (t *Tools) Curate(ctx context.Context, args CurateArgs) Result {
 	if bad != nil {
 		return *bad
 	}
-	proposal := curate.Propose(&curate.Input{Path: target.Path, Body: head.Body, Version: head.Version, Metadata: head.Metadata, Policy: policy})
+	proposal := curate.Propose(&curate.Input{Path: target.Path, Body: head.Body, Version: head.Version, Metadata: head.Metadata, Policy: policy, Links: links.ResolverFor(target.Host)})
 	if !args.Apply {
 		var moves []curate.Move
 		var notes []string

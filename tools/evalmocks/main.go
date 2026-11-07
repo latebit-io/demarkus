@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -176,6 +177,7 @@ func checkAll(root string, artifacts []artifact) error {
 		known[rel] = struct{}{}
 	}
 	var unlisted []string
+	graders, offered := map[string][]byte{}, map[string][]byte{}
 	dir := filepath.Join(root, evalsDir)
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -192,8 +194,21 @@ func checkAll(root string, artifacts []artifact) error {
 			}
 			return nil
 		}
-		if _, ok := known[rel]; !ok && strings.Contains("/"+rel, "/mocks/") {
+		isMock, isGrader := strings.Contains("/"+rel, "/mocks/"), strings.Contains(rel, "/graders/")
+		if _, ok := known[rel]; !ok && isMock {
 			unlisted = append(unlisted, rel)
+		}
+		if isMock || isGrader {
+			content, err := os.ReadFile(path) //nolint:gosec // a path under the evals directory
+			if err != nil {
+				return err
+			}
+			if isGrader {
+				graders[rel] = content
+			} else {
+				c, _, _ := strings.Cut(rel, "/") // a case, or "mocks" for the suite
+				offered[c] = append(offered[c], content...)
+			}
 		}
 		return nil
 	})
@@ -209,8 +224,30 @@ func checkAll(root string, artifacts []artifact) error {
 		slices.Sort(unlisted)
 		msgs = append(msgs, "eval mocks neither rendered nor listed in handWritten (tools/evalmocks/main.go):\n  "+strings.Join(unlisted, "\n  "))
 	}
+	if stale := staleHashes(graders, offered); len(stale) > 0 {
+		msgs = append(msgs, "eval graders quote a proposal hash no mock offers (update the grader):\n  "+strings.Join(stale, "\n  "))
+	}
 	if len(msgs) == 0 {
 		return nil
 	}
 	return errors.New(strings.Join(msgs, "\n"))
+}
+
+var proposalHash = regexp.MustCompile(`\b[0-9a-f]{16}\b`)
+
+// staleHashes names each hash a case's grader quotes that neither its own
+// mocks nor the suite's (keyed "mocks") offer, sorted.
+func staleHashes(graders, offered map[string][]byte) []string {
+	var stale []string
+	for rel, text := range graders {
+		c, _, _ := strings.Cut(rel, "/")
+		mocks := string(offered[c]) + string(offered["mocks"])
+		for _, h := range proposalHash.FindAllString(string(text), -1) {
+			if !strings.Contains(mocks, h) {
+				stale = append(stale, rel+": "+h)
+			}
+		}
+	}
+	slices.Sort(stale)
+	return stale
 }

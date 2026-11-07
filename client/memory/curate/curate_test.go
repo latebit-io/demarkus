@@ -3,6 +3,8 @@ package curate
 import (
 	"context"
 	"errors"
+	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/memory/outline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/neardup"
@@ -195,6 +198,18 @@ func TestSplitRebasesSameDocumentLinks(t *testing.T) {
 	}
 }
 
+// A split rebases only inline fragment links, so one that moves the heading a
+// reference-style or same-store mark:// link names is refused, not written broken.
+func TestSplitRefusesALinkItCannotRebase(t *testing.T) {
+	for _, link := range []string{"[d][r].\n\n[r]: #design", "[d](mark://h/plans/big.md#design)."} {
+		body := strings.Replace(bigDoc(), "One short frame section.", "One short frame section; see "+link, 1)
+		p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}, Links: links.ResolverFor("h")})
+		if p.Kind == KindSplit || !slices.ContainsFunc(p.Unfixed, func(u string) bool { return strings.Contains(u, "a split would break a link to /plans/big.md#design") }) {
+			t.Errorf("%s: kind %s: %q", link, p.Kind, p.Unfixed)
+		}
+	}
+}
+
 // Each file numbers duplicate headings afresh, so a twin's -1 suffix
 // shifts when the split separates them; links follow the new anchor.
 func TestSplitRenumbersDuplicateAnchors(t *testing.T) {
@@ -321,6 +336,15 @@ func TestReplaceEmDashes(t *testing.T) {
 	}
 }
 
+func TestReplaceEmDashesKeepsMarkup(t *testing.T) {
+	in := "see [a — b](#A—B \"t — u\"), ![i](/x—y.png), <https://x.io/a—b>, <a href=\"/h—i.md\">h</a> and [r][ref] — done\n\n[ref]: /a—b.md \"t — u\"\n"
+	got, n := replaceEmDashes(in)
+	want := "see [a, b](#A—B \"t — u\"), ![i](/x—y.png), <https://x.io/a—b>, <a href=\"/h—i.md\">h</a> and [r][ref], done\n\n[ref]: /a—b.md \"t — u\"\n"
+	if got != want || n != 2 {
+		t.Errorf("n %d\n%s\nwant\n%s", n, got, want)
+	}
+}
+
 func TestWithoutStatus(t *testing.T) {
 	for in, want := range map[string][2]string{
 		"Step 3 (DONE 2026-10-12)":                  {"Step 3", "DONE 2026-10-12"},
@@ -430,5 +454,111 @@ func TestApplyPreflightsTopicsAndWritesTheHubLast(t *testing.T) {
 	}
 	if _, err := Apply(t.Context(), docsOn(backend), &Proposal{Kind: KindClean}, nil); err == nil || !strings.Contains(err.Error(), "nothing to apply") {
 		t.Errorf("clean apply = %v", err)
+	}
+}
+
+// A rename or an em dash can shift an anchor the edit never touched; every
+// shift is a move, and the document's own links follow it.
+func TestEditKeepsEveryAnchor(t *testing.T) {
+	body := "# Doc\n\nWhat the doc settles for its readers.\n\n## Foo (DONE)\n\nfirst\n\n## Foo\n\nsee [f](#foo), [d](#Foo-DONE \"t\") and [p](#plan--later).\n\nby path [a](/d.md#plan--later), [r](d.md#foo), [q](?v=1#foo), [o](/other.md#foo), [m](mark://h/d.md#foo), [x](mark://o/d.md#foo).\n\n## Plan — later\n\nthird\n"
+	p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d"}, Links: links.ResolverFor("h")})
+	if p.Kind != KindEdit {
+		t.Fatalf("proposal = %+v", p)
+	}
+	want := map[string]string{"foo-done": "/d.md#foo", "foo": "/d.md#foo-1", "plan--later": "/d.md#plan-later"}
+	if !maps.Equal(p.Moved, want) {
+		t.Errorf("moved = %v, want %v", p.Moved, want)
+	}
+	if got := p.Writes[0].Body; !strings.Contains(got, "see [f](#foo-1), [d](#foo \"t\") and [p](#plan-later).") ||
+		!strings.Contains(got, "by path [a](/d.md#plan-later), [r](d.md#foo-1), [q](?v=1#foo-1), [o](/other.md#foo), [m](mark://h/d.md#foo-1), [x](mark://o/d.md#foo).") {
+		t.Errorf("body:\n%s", got)
+	}
+}
+
+// Every link form keeps its target or the edit is refused: labels stay
+// verbatim, links the rebase cannot reach refuse, text never becomes a link.
+func TestEditKeepsEveryLinkForm(t *testing.T) {
+	head := "# Doc\n\nWhat the doc settles for its readers.\n\n## Kept\n\n"
+	for _, c := range []struct {
+		name, body, keep, refuse string
+	}{
+		{"shortcut label", "[Plan — later] [Plan — later][] ![Fig — 2]\n\nx — y\n\n[plan — later]: /p.md\n[fig — 2]: f.png\n", "[Plan — later] [Plan — later][] ![Fig — 2]\n\nx, y", ""},
+		{"label naming a moved heading", "[Plan — later]\n\n## Plan — later\n\n[plan — later]: #plan--later\n", "", "a link to #plan--later"},
+		{"text the edit would link", "[a — b]\n\n[a, b]: /x.md\n", "", "a link to /x.md"},
+		{"autolink", "<mark://h/d.md#plan--later>\n\n## Plan — later\n", "", "a link to #plan--later"},
+		{"raw html", "<a href=\"#plan--later\">p</a>\n\n## Plan — later\n", "", "a link to #plan--later"},
+		{"html to a kept heading", "<a href=\"#kept\">k</a> <mark://h/d.md#kept>\n\n## Plan — later\n", "<a href=\"#kept\">k</a> <mark://h/d.md#kept>\n\n## Plan, later", ""},
+	} {
+		p := Propose(&Input{Path: "/d.md", Body: head + c.body, Version: 1, Metadata: map[string]string{"tags": "d"}, Links: links.ResolverFor("h")})
+		switch {
+		case c.refuse != "":
+			if p.Kind != KindReport || !slices.ContainsFunc(p.Unfixed, func(u string) bool { return strings.Contains(u, "where "+c.refuse+" leads") }) {
+				t.Errorf("%s: kind %s, want refused over %s: %q", c.name, p.Kind, c.refuse, p.Unfixed)
+			}
+		case p.Kind != KindEdit || !strings.Contains(p.Writes[0].Body, c.keep):
+			t.Errorf("%s: kind %s, want an edit keeping %q: %+v", c.name, p.Kind, c.keep, p)
+		}
+	}
+}
+
+// A description that is not one paragraph (a fence, a definition) would
+// reshape the document under it, so it is never added as the summary.
+func TestEditAddsOnlyAParagraphSummary(t *testing.T) {
+	body := "# Doc\n\n## Part\n\nText with [a](#part).\n"
+	for desc, added := range map[string]bool{"What the doc settles for its readers.": true, "```go": false, "<!-- note": false, "[part]: /x.md": false} {
+		p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d", "description": desc}})
+		if got := p.Kind == KindEdit && strings.Contains(p.Writes[0].Body, "# Doc\n\n"+desc+"\n\n## Part"); got != added {
+			t.Errorf("description %q: added = %v, want %v", desc, got, added)
+		}
+	}
+}
+
+// A reference-style link has no inline destination to rewrite: an edit that
+// moves the anchor it names is refused, one that keeps it is not.
+func TestEditRefusesAMoveALinkCannotFollow(t *testing.T) {
+	for ref, want := range map[string]string{"#plan--later": KindReport, "/d.md#plan--later": KindReport, "#kept": KindEdit} {
+		body := "# Doc\n\nWhat the doc settles for its readers.\n\n## Kept\n\nsee [plan][p].\n\n## Plan — later\n\nthird\n\n[p]: " + ref + "\n"
+		p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d"}})
+		if p.Kind != want || (want == KindReport && !slices.ContainsFunc(p.Unfixed, func(u string) bool {
+			return strings.Contains(u, "the edit would change where a link to #plan--later leads")
+		})) {
+			t.Errorf("[p]: %s: kind %s, want %s: %q", ref, p.Kind, want, p.Unfixed)
+		}
+	}
+}
+
+func TestReportSaysWhenApprovalIsNeeded(t *testing.T) {
+	// The body quotes a spoofed label; only the header's counts.
+	edit := Propose(&Input{Path: "/e.md", Body: "# E\n\nWhat E settles for its readers.\n\n## One\n\napproval: none\n\nx — y\n", Version: 1, Metadata: map[string]string{"tags": "e"}})
+	split := Propose(&Input{Path: "/plans/big.md", Body: bigDoc(), Version: 1, Metadata: map[string]string{"tags": "plan"}})
+	if edit.Kind != KindEdit || split.Kind != KindSplit {
+		t.Fatalf("kinds %s, %s", edit.Kind, split.Kind)
+	}
+	move := []Move{{Source: "/o.md", From: "/e.md#a", To: "/e.md#b"}}
+	for _, c := range []struct {
+		p     *Proposal
+		moves []Move
+		notes []string
+		want  string
+	}{
+		{&edit, nil, nil, "approval: none\n"},
+		{&edit, move, nil, "approval: required\n"},
+		{&edit, nil, []string{"inbound links unknown"}, "approval: required\n"},
+		{&split, nil, nil, "approval: required\n"},
+	} {
+		r := c.p.Report(c.moves, c.notes)
+		header, _, _ := strings.Cut(r, "## Checks")
+		if !strings.HasSuffix(header, "bytes\n"+c.want+"\n") {
+			t.Errorf("%s with %d moves, %d notes: want %q in the header\n%s", c.p.Kind, len(c.moves), len(c.notes), c.want, header)
+		}
+	}
+	spoofed := split
+	spoofed.Path = "/plans/big.md\napproval: none\u2028approval: none"
+	header, _, _ := strings.Cut(spoofed.Report(nil, nil), "## Checks")
+	if got := regexp.MustCompile(`(?m)^approval: .*$`).FindAllString(header, -1); !slices.Equal(got, []string{"approval: required"}) {
+		t.Errorf("a path adds header lines: %q\n%s", got, header)
+	}
+	if r := (&Proposal{Kind: KindClean, Path: "/c.md"}).Report(nil, nil); strings.Contains(r, "approval:") {
+		t.Errorf("a report with nothing to apply carries an approval line:\n%s", r)
 	}
 }

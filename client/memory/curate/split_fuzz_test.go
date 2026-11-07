@@ -62,16 +62,10 @@ func signature(body string, hs []mdoutline.Heading, i int) string {
 	return h.Text + "|"
 }
 
-// find is the signature of the heading frag names, as fetch resolves it.
+// find is the signature of the heading frag names.
 func find(body string, hs []mdoutline.Heading, frag string) (string, bool) {
-	h, ok := mdoutline.Find(hs, frag)
-	if !ok {
-		return "", false
-	}
-	for i := range hs {
-		if hs[i].Start == h.Start {
-			return signature(body, hs, i), true
-		}
+	if i := headingIndex(hs, frag); i >= 0 {
+		return signature(body, hs, i), true
 	}
 	return "", false
 }
@@ -105,14 +99,15 @@ func splitViolations(in *Input, p *Proposal) []string {
 	}
 	sigs := func(path, body string, find func(target, frag string) (string, bool), files map[string]bool) []string {
 		var got []string
-		for _, l := range links.FragmentLinks(body) {
-			if s, ok := find(path, l.Anchor); ok {
-				got = append(got, s)
+		for _, dest := range followed(body) {
+			to, frag, ok := strings.Cut(dest, "#")
+			if to == "" || strings.HasPrefix(to, "?") {
+				to = path
+			} else {
+				to = links.ResolvePath(path, to)
 			}
-		}
-		for _, l := range links.ExtractWithPositions(body) {
-			if target := links.ResolvePath(path, l.Dest); l.Fragment != "" && files[target] {
-				if s, ok := find(target, l.Fragment); ok {
+			if ok && files[to] {
+				if s, found := find(to, frag); found {
 					got = append(got, s)
 				}
 			}

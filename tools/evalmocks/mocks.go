@@ -430,4 +430,27 @@ var mocks = []mock{
 			return t.Promote(ctx, marktools.PromoteArgs{URL: "/cwd/", Phase: "refresh"})
 		},
 	},
+	// curate-edit-auto: an edit that moves no anchor applies without a gate.
+	{
+		Rel:   inCase("curate-edit-auto", "mark_curate"),
+		Store: curateStore("/cwd/parser.md", "# Parser notes\n\nWhat the parser rewrite settled, for maintainers.\n\n## Tables\n\nThe table driven parser — kept for reference.\n"),
+		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
+			return t.Curate(ctx, marktools.CurateArgs{URL: "/cwd/parser.md"})
+		},
+	},
+	// curate-edit-note-gate: a renamed heading with inbound links unknown waits for approval.
+	{
+		Rel:   inCase("curate-edit-note-gate", "mark_curate"),
+		Store: curateStore("/cwd/plan.md", "# Plan\n\nWhat the parser plan settles, for maintainers.\n\n## Step 3 (DONE)\n\nThe table driven parser shipped.\n"),
+		Render: func(ctx context.Context, t *marktools.Tools) marktools.Result {
+			return t.Curate(ctx, marktools.CurateArgs{URL: "/cwd/plan.md"})
+		},
+	},
+}
+
+// curateStore holds one document at v3 for a curate report.
+func curateStore(path, body string) func() *fetchtest.Client {
+	return func() *fetchtest.Client {
+		return &fetchtest.Client{Published: map[string]fetch.Result{host + path: fetchtest.Head(body, 3, map[string]string{"tags": "parser"})}}
+	}
 }

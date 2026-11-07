@@ -99,3 +99,14 @@ func TestCheckReportsDriftAndUnlistedMocks(t *testing.T) {
 		t.Errorf("hand-written mock reported:\n%s", msg)
 	}
 }
+
+func TestStaleHashes(t *testing.T) {
+	graders := map[string][]byte{
+		"a/graders/x.md": []byte("hash 0123456789abcdef and 1111111111111111"),
+		"b/graders/y.md": []byte("suite hash 2222222222222222"),
+	}
+	offered := map[string][]byte{"a": []byte("proposal: 0123456789abcdef"), "mocks": []byte("proposal: 2222222222222222")}
+	if got, want := staleHashes(graders, offered), []string{"a/graders/x.md: 1111111111111111"}; !slices.Equal(got, want) {
+		t.Errorf("staleHashes = %q, want %q", got, want)
+	}
+}
