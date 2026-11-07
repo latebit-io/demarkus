@@ -45,6 +45,7 @@ type Input struct {
 	Version  int
 	Metadata map[string]string
 	Policy   *publishpolicy.Policy
+	Links    links.Resolver // the store's own mark:// links read as paths
 }
 
 // Write is one document the proposal publishes.
@@ -143,7 +144,7 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	for i, h := range headings {
 		homes.at[h.Anchor] = landing{path: in.Path, anchor: after[i].Anchor}
 	}
-	found := links.SelfLinks(body, in.Path)
+	found := in.Links.SelfLinks(body, in.Path)
 	for _, l := range found {
 		if from, to, ok := homes.find(l.Anchor); ok && to.anchor != from && !l.Rewritable() {
 			p.Unfixed = append(p.Unfixed, fmt.Sprintf("the edit would move #%s, named by a link it cannot rewrite (reference-style, say); edit by hand", from))
@@ -469,7 +470,7 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	meta := maps.Clone(carried)
 	meta["tags"] = strings.Join(hubTags(preamble, plan, carried["tags"]), ",")
 	writes = append(writes, Write{Path: in.Path, Body: body, Metadata: meta})
-	if broken := brokenLink(writes, headings); broken != "" {
+	if broken := brokenLink(in.Links, writes, headings); broken != "" {
 		p.Unfixed = append(p.Unfixed, "a split would break "+broken+"; link it as #anchor from inside the document, or split by hand")
 		return
 	}
@@ -520,7 +521,7 @@ func rebased(in *Input, sections []section, homes landings) (preamble string, pl
 // brokenLink names the first link among writes that resolved in the
 // original (headings) but finds no heading in what is written; a link
 // already broken before the split is not the split's to refuse.
-func brokenLink(writes []Write, headings []mdoutline.Heading) string {
+func brokenLink(r links.Resolver, writes []Write, headings []mdoutline.Heading) string {
 	written := make(map[string][]mdoutline.Heading, len(writes))
 	for _, w := range writes {
 		written[w.Path] = mdoutline.Headings(w.Body)
@@ -548,7 +549,7 @@ func brokenLink(writes []Write, headings []mdoutline.Heading) string {
 			if l.Fragment == "" {
 				continue
 			}
-			if broken := check(w.Path, links.ResolvePath(w.Path, l.Dest), l.Fragment); broken != "" {
+			if broken := check(w.Path, r.Path(w.Path, l.Dest), l.Fragment); broken != "" {
 				return broken
 			}
 		}

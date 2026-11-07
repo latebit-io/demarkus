@@ -22,12 +22,14 @@ func FuzzEditKeepsLinks(f *testing.F) {
 		"- [l](#later)\n\n### Later — maybe (DONE)\n",
 		"## Plan — later\n\n[a](/d.md#plan--later) [r](d.md#Plan--later) [o](/o.md#plan--later) [q](?v=1#plan--later)\n",
 		"## Plan — later\n\n[p][r] [](#plan--later)\n\n[r]: #plan--later\n",
+		"## Plan — later\n\n[m](mark://h/d.md#plan--later) [o](mark://o/d.md#plan--later)\n",
 	} {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, middle string) {
 		body := "# Doc\n\nWhat the doc settles for its readers.\n\n" + middle + "\n\n## Tail — end\n\nsee [t](#tail--end)\n"
-		in := &Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "doc"}}
+		resolver := links.ResolverFor("h")
+		in := &Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "doc"}, Links: resolver}
 		p := Propose(in)
 		if p.Kind != KindEdit {
 			return
@@ -56,7 +58,7 @@ func FuzzEditKeepsLinks(f *testing.F) {
 				}
 			}
 			for _, l := range links.ExtractWithPositions(doc) {
-				if self := strings.HasPrefix(l.Dest, "?") || links.ResolvePath(in.Path, l.Dest) == in.Path; l.Fragment != "" && self {
+				if self := strings.HasPrefix(l.Dest, "?") || resolver.Path(in.Path, l.Dest) == in.Path; l.Fragment != "" && self {
 					if i := headingIndex(hs, l.Fragment); i >= 0 {
 						was[i] += by
 					}

@@ -206,14 +206,6 @@ func FragmentLinks(body string) []FragmentLink {
 	return anchorSpans(body, func(dest string) bool { return dest == "" })
 }
 
-// SelfLinks is FragmentLinks plus the links that name docPath before the
-// fragment ("/d.md#a", "d.md#a", "?q#a"); each span is still just the "#a".
-func SelfLinks(body, docPath string) []FragmentLink {
-	return anchorSpans(body, func(dest string) bool {
-		return dest == "" || strings.HasPrefix(dest, "?") || ResolvePath(docPath, dest) == docPath
-	})
-}
-
 // anchorSpans returns every link whose destination before the fragment keep
 // accepts, with its "#a" span when it has one.
 func anchorSpans(body string, keep func(dest string) bool) []FragmentLink {
@@ -341,6 +333,15 @@ func (r Resolver) Path(docPath, dest string) string {
 		return ""
 	}
 	return cleanPath(docPath, t.Path)
+}
+
+// SelfLinks is FragmentLinks plus the links that name docPath before the
+// fragment ("/d.md#a", "?q#a", a mark:// URL on r's store); each span is
+// still just the "#a".
+func (r Resolver) SelfLinks(body, docPath string) []FragmentLink {
+	return anchorSpans(body, func(dest string) bool {
+		return dest == "" || strings.HasPrefix(dest, "?") || r.Path(docPath, dest) == docPath
+	})
 }
 
 // ResolvePath is the store path a link in docPath points at: fragment and

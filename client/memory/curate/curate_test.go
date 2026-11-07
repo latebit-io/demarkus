@@ -12,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
+	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/memory/outline"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/neardup"
@@ -197,13 +198,15 @@ func TestSplitRebasesSameDocumentLinks(t *testing.T) {
 	}
 }
 
-// A reference-style link cannot be rebased, so a split that moves its
-// heading to another file is refused rather than written broken.
-func TestSplitRefusesBreakingAReferenceLink(t *testing.T) {
-	body := strings.Replace(bigDoc(), "One short frame section.", "One short frame section; see [d][r].\n\n[r]: #design", 1)
-	p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}})
-	if p.Kind == KindSplit || !slices.ContainsFunc(p.Unfixed, func(u string) bool { return strings.Contains(u, "a split would break a link to /plans/big.md#design") }) {
-		t.Errorf("kind %s: %q", p.Kind, p.Unfixed)
+// A split rebases only inline fragment links, so one that moves the heading a
+// reference-style or same-store mark:// link names is refused, not written broken.
+func TestSplitRefusesALinkItCannotRebase(t *testing.T) {
+	for _, link := range []string{"[d][r].\n\n[r]: #design", "[d](mark://h/plans/big.md#design)."} {
+		body := strings.Replace(bigDoc(), "One short frame section.", "One short frame section; see "+link, 1)
+		p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}, Links: links.ResolverFor("h")})
+		if p.Kind == KindSplit || !slices.ContainsFunc(p.Unfixed, func(u string) bool { return strings.Contains(u, "a split would break a link to /plans/big.md#design") }) {
+			t.Errorf("%s: kind %s: %q", link, p.Kind, p.Unfixed)
+		}
 	}
 }
 
@@ -457,8 +460,8 @@ func TestApplyPreflightsTopicsAndWritesTheHubLast(t *testing.T) {
 // A rename or an em dash can shift an anchor the edit never touched; every
 // shift is a move, and the document's own links follow it.
 func TestEditKeepsEveryAnchor(t *testing.T) {
-	body := "# Doc\n\nWhat the doc settles for its readers.\n\n## Foo (DONE)\n\nfirst\n\n## Foo\n\nsee [f](#foo), [d](#Foo-DONE \"t\") and [p](#plan--later).\n\nby path [a](/d.md#plan--later), [r](d.md#foo), [q](?v=1#foo), [o](/other.md#foo).\n\n## Plan — later\n\nthird\n"
-	p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d"}})
+	body := "# Doc\n\nWhat the doc settles for its readers.\n\n## Foo (DONE)\n\nfirst\n\n## Foo\n\nsee [f](#foo), [d](#Foo-DONE \"t\") and [p](#plan--later).\n\nby path [a](/d.md#plan--later), [r](d.md#foo), [q](?v=1#foo), [o](/other.md#foo), [m](mark://h/d.md#foo), [x](mark://o/d.md#foo).\n\n## Plan — later\n\nthird\n"
+	p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d"}, Links: links.ResolverFor("h")})
 	if p.Kind != KindEdit {
 		t.Fatalf("proposal = %+v", p)
 	}
@@ -467,7 +470,7 @@ func TestEditKeepsEveryAnchor(t *testing.T) {
 		t.Errorf("moved = %v, want %v", p.Moved, want)
 	}
 	if got := p.Writes[0].Body; !strings.Contains(got, "see [f](#foo-1), [d](#foo \"t\") and [p](#plan-later).") ||
-		!strings.Contains(got, "by path [a](/d.md#plan-later), [r](d.md#foo-1), [q](?v=1#foo-1), [o](/other.md#foo).") {
+		!strings.Contains(got, "by path [a](/d.md#plan-later), [r](d.md#foo-1), [q](?v=1#foo-1), [o](/other.md#foo), [m](mark://h/d.md#foo-1), [x](mark://o/d.md#foo).") {
 		t.Errorf("body:\n%s", got)
 	}
 }

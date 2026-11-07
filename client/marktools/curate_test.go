@@ -63,6 +63,16 @@ func TestCurateReportsWithInboundLinks(t *testing.T) {
 	}
 }
 
+// The tool binds the store, so the document's own mark:// links follow an edit.
+func TestCurateRebasesSameStoreLinks(t *testing.T) {
+	body := "# Doc\n\nWhat the doc settles for its readers.\n\n## Step — two\n\nsee [s](mark://host:6309/doc.md#step--two) and [o](mark://other/doc.md#step--two).\n"
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{"host:6309/doc.md": fetchtest.Head(body, 1, map[string]string{"tags": "a"})}}
+	got := newTools(t, backend, directHooks()).Curate(t.Context(), marktools.CurateArgs{URL: "/doc.md"})
+	if got.IsError || !strings.Contains(got.Text, "see [s](mark://host:6309/doc.md#step-two) and [o](mark://other/doc.md#step--two).") {
+		t.Errorf("curate = %+v", got)
+	}
+}
+
 func TestCurateApplyBindsToTheProposal(t *testing.T) {
 	backend := &fetchtest.Client{Published: map[string]fetch.Result{
 		"host:6309/doc.md": fetchtest.Head(curateDoc, 4, map[string]string{"tags": "a", "agent": "old"}),
