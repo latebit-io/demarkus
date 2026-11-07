@@ -2,6 +2,7 @@ status: edit
 path: /cwd/parser.md
 version: 3
 size: 126 bytes
+approval: none
 
 ## Checks
 
@@ -13,7 +14,6 @@ size: 126 bytes
 
 proposal: d4d9db93fad30311
 Apply with apply: true and this proposal; it binds to v3.
-approval: none
 
 === /cwd/parser.md (tags: parser)
 # Parser notes

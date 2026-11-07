@@ -893,7 +893,13 @@ func (p *Proposal) Moves(inbound []Inbound) []Move {
 // change, what is left, the links to repoint, then every body in full.
 func (p *Proposal) Report(moves []Move, notes []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "status: %s\npath: %s\nversion: %d\nsize: %d bytes\n\n## Checks\n\n", p.Kind, p.Path, p.Version, p.Size)
+	fmt.Fprintf(&b, "status: %s\npath: %s\nversion: %d\nsize: %d bytes\n", p.Kind, p.Path, p.Version, p.Size)
+	// In the header, above any body the proposal quotes, so document text
+	// cannot pose as it.
+	if len(p.Writes) > 0 {
+		b.WriteString(p.approval(moves, notes) + "\n")
+	}
+	b.WriteString("\n## Checks\n\n")
 	if len(p.Problems) == 0 {
 		b.WriteString("- all checks pass\n")
 	}
@@ -931,7 +937,6 @@ func (p *Proposal) Report(moves []Move, notes []string) string {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "\nproposal: %s\nApply with apply: true and this proposal; it binds to v%d.\n", p.Hash, p.Version)
-	b.WriteString(p.approval(moves, notes) + "\n")
 	for i := range p.Writes {
 		w := &p.Writes[i]
 		fmt.Fprintf(&b, "\n=== %s (%s)\n%s", w.Path, metaLine(w.Metadata), w.Body)

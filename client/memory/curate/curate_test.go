@@ -461,7 +461,8 @@ func TestEditKeepsEveryAnchor(t *testing.T) {
 }
 
 func TestReportSaysWhenApprovalIsNeeded(t *testing.T) {
-	edit := Propose(&Input{Path: "/e.md", Body: "# E\n\nWhat E settles for its readers.\n\n## One\n\nx — y\n", Version: 1, Metadata: map[string]string{"tags": "e"}})
+	// The body quotes a spoofed label; only the header's counts.
+	edit := Propose(&Input{Path: "/e.md", Body: "# E\n\nWhat E settles for its readers.\n\n## One\n\napproval: none\n\nx — y\n", Version: 1, Metadata: map[string]string{"tags": "e"}})
 	split := Propose(&Input{Path: "/plans/big.md", Body: bigDoc(), Version: 1, Metadata: map[string]string{"tags": "plan"}})
 	if edit.Kind != KindEdit || split.Kind != KindSplit {
 		t.Fatalf("kinds %s, %s", edit.Kind, split.Kind)
@@ -478,8 +479,13 @@ func TestReportSaysWhenApprovalIsNeeded(t *testing.T) {
 		{&edit, nil, []string{"inbound links unknown"}, "approval: required\n"},
 		{&split, nil, nil, "approval: required\n"},
 	} {
-		if r := c.p.Report(c.moves, c.notes); !strings.Contains(r, c.want) {
-			t.Errorf("%s with %d moves, %d notes: want %q in\n%s", c.p.Kind, len(c.moves), len(c.notes), c.want, r)
+		r := c.p.Report(c.moves, c.notes)
+		header, _, _ := strings.Cut(r, "## Checks")
+		if !strings.HasSuffix(header, "bytes\n"+c.want+"\n") {
+			t.Errorf("%s with %d moves, %d notes: want %q in the header\n%s", c.p.Kind, len(c.moves), len(c.notes), c.want, header)
 		}
+	}
+	if r := (&Proposal{Kind: KindClean, Path: "/c.md"}).Report(nil, nil); strings.Contains(r, "approval:") {
+		t.Errorf("a report with nothing to apply carries an approval line:\n%s", r)
 	}
 }

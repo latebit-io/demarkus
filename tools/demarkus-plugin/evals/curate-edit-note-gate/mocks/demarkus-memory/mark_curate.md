@@ -2,6 +2,7 @@ status: edit
 path: /cwd/plan.md
 version: 3
 size: 107 bytes
+approval: required
 
 ## Checks
 
@@ -15,7 +16,6 @@ note: inbound links unknown: this server has no graph store
 
 proposal: b545c78f29b133f0
 Apply with apply: true and this proposal; it binds to v3.
-approval: required
 
 === /cwd/plan.md (tags: parser)
 # Plan
