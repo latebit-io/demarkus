@@ -197,6 +197,16 @@ func TestSplitRebasesSameDocumentLinks(t *testing.T) {
 	}
 }
 
+// A reference-style link cannot be rebased, so a split that moves its
+// heading to another file is refused rather than written broken.
+func TestSplitRefusesBreakingAReferenceLink(t *testing.T) {
+	body := strings.Replace(bigDoc(), "One short frame section.", "One short frame section; see [d][r].\n\n[r]: #design", 1)
+	p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}})
+	if p.Kind == KindSplit || !slices.ContainsFunc(p.Unfixed, func(u string) bool { return strings.Contains(u, "a split would break a link to /plans/big.md#design") }) {
+		t.Errorf("kind %s: %q", p.Kind, p.Unfixed)
+	}
+}
+
 // Each file numbers duplicate headings afresh, so a twin's -1 suffix
 // shifts when the split separates them; links follow the new anchor.
 func TestSplitRenumbersDuplicateAnchors(t *testing.T) {
@@ -459,6 +469,18 @@ func TestEditKeepsEveryAnchor(t *testing.T) {
 	if got := p.Writes[0].Body; !strings.Contains(got, "see [f](#foo-1), [d](#foo \"t\") and [p](#plan-later).") ||
 		!strings.Contains(got, "by path [a](/d.md#plan-later), [r](d.md#foo-1), [q](?v=1#foo-1), [o](/other.md#foo).") {
 		t.Errorf("body:\n%s", got)
+	}
+}
+
+// A reference-style link has no inline destination to rewrite: an edit that
+// moves the anchor it names is refused, one that keeps it is not.
+func TestEditRefusesAMoveALinkCannotFollow(t *testing.T) {
+	for ref, want := range map[string]string{"#plan--later": KindReport, "/d.md#plan--later": KindReport, "#kept": KindEdit} {
+		body := "# Doc\n\nWhat the doc settles for its readers.\n\n## Kept\n\nsee [plan][p].\n\n## Plan — later\n\nthird\n\n[p]: " + ref + "\n"
+		p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d"}})
+		if p.Kind != want || (want == KindReport && !slices.ContainsFunc(p.Unfixed, func(u string) bool { return strings.Contains(u, "#plan--later, named by a link") })) {
+			t.Errorf("[p]: %s: kind %s, want %s: %q", ref, p.Kind, want, p.Unfixed)
+		}
 	}
 }
 

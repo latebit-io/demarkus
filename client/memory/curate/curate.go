@@ -143,8 +143,15 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	for i, h := range headings {
 		homes.at[h.Anchor] = landing{path: in.Path, anchor: after[i].Anchor}
 	}
+	found := links.SelfLinks(body, in.Path)
+	for _, l := range found {
+		if from, to, ok := homes.find(l.Anchor); ok && to.anchor != from && !l.Rewritable() {
+			p.Unfixed = append(p.Unfixed, fmt.Sprintf("the edit would move #%s, named by a link it cannot rewrite (reference-style, say); edit by hand", from))
+			return
+		}
+	}
 	if p.recordMoves(in.Path, homes) {
-		body = rebaseFragments(body, links.SelfLinks(body, in.Path), in.Path, homes)
+		body = rebaseFragments(body, found, in.Path, homes)
 	}
 	p.Kind = KindEdit
 	p.Writes = []Write{{Path: in.Path, Body: body, Metadata: meta}}
@@ -550,13 +557,14 @@ func brokenLink(writes []Write, headings []mdoutline.Heading) string {
 }
 
 // rebaseFragments points each same-document link in text (found, offsets
-// into text), which lands in file here, at its heading's landing.
+// into text), which lands in file here, at its heading's landing. A link
+// with no span stays as written; callers refuse a move it would miss.
 func rebaseFragments(text string, found []links.FragmentLink, here string, homes landings) string {
 	var b strings.Builder
 	last := 0
 	for _, l := range found {
 		from, to, ok := homes.find(l.Anchor)
-		if !ok || (to.path == here && to.anchor == from) {
+		if !ok || !l.Rewritable() || (to.path == here && to.anchor == from) {
 			continue
 		}
 		b.WriteString(text[last:l.Start])

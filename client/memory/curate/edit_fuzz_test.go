@@ -21,6 +21,7 @@ func FuzzEditKeepsLinks(f *testing.F) {
 		"Setext (DONE)\n----\n\n[s](#setext-done)\n",
 		"- [l](#later)\n\n### Later — maybe (DONE)\n",
 		"## Plan — later\n\n[a](/d.md#plan--later) [r](d.md#Plan--later) [o](/o.md#plan--later) [q](?v=1#plan--later)\n",
+		"## Plan — later\n\n[p][r] [](#plan--later)\n\n[r]: #plan--later\n",
 	} {
 		f.Add(seed)
 	}
