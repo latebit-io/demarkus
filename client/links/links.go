@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"net/url"
 	pathpkg "path"
+	"regexp"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -242,6 +243,49 @@ func anchorSpans(body string, keep func(dest string) bool) []FragmentLink {
 	return out
 }
 
+// htmlRef is an href or src attribute in raw HTML, its value in any quoting.
+var htmlRef = regexp.MustCompile(`(?i)\b(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`)
+
+// Targets is every destination a reader can follow in body, in document
+// order: links and images inline or by reference, autolinks, and href or src
+// in raw HTML. Unlike Extract it keeps fragments and fragment-only links.
+func Targets(body string) []string {
+	src := []byte(body)
+	var out []string
+	walk(goldmark.DefaultParser().Parse(text.NewReader(src)), func(n ast.Node, entering bool) ast.WalkStatus {
+		if !entering {
+			return ast.WalkContinue
+		}
+		var html []byte
+		switch v := n.(type) {
+		case *ast.Link:
+			out = append(out, string(v.Destination))
+		case *ast.Image:
+			out = append(out, string(v.Destination))
+		case *ast.AutoLink:
+			out = append(out, string(v.URL(src)))
+		case *ast.RawHTML:
+			for i := range v.Segments.Len() {
+				seg := v.Segments.At(i)
+				html = append(html, seg.Value(src)...)
+			}
+		case *ast.HTMLBlock:
+			for i := range v.Lines().Len() {
+				line := v.Lines().At(i)
+				html = append(html, line.Value(src)...)
+			}
+			if v.HasClosure() {
+				html = append(html, v.ClosureLine.Value(src)...)
+			}
+		}
+		for _, m := range htmlRef.FindAllSubmatch(html, -1) {
+			out = append(out, string(bytes.Join(m[1:], nil)))
+		}
+		return ast.WalkContinue
+	})
+	return out
+}
+
 // walk is ast.Walk for a callback that cannot fail.
 func walk(n ast.Node, visit func(n ast.Node, entering bool) ast.WalkStatus) {
 	err := ast.Walk(n, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -335,13 +379,16 @@ func (r Resolver) Path(docPath, dest string) string {
 	return cleanPath(docPath, t.Path)
 }
 
+// Self reports a destination, fragment cut, that names docPath itself: ""
+// (a bare "#a"), a query, a path, or a mark:// URL on r's store.
+func (r Resolver) Self(docPath, dest string) bool {
+	return dest == "" || strings.HasPrefix(dest, "?") || r.Path(docPath, dest) == docPath
+}
+
 // SelfLinks is FragmentLinks plus the links that name docPath before the
-// fragment ("/d.md#a", "?q#a", a mark:// URL on r's store); each span is
-// still just the "#a".
+// fragment (see Self); each span is still just the "#a".
 func (r Resolver) SelfLinks(body, docPath string) []FragmentLink {
-	return anchorSpans(body, func(dest string) bool {
-		return dest == "" || strings.HasPrefix(dest, "?") || r.Path(docPath, dest) == docPath
-	})
+	return anchorSpans(body, func(dest string) bool { return r.Self(docPath, dest) })
 }
 
 // ResolvePath is the store path a link in docPath points at: fragment and

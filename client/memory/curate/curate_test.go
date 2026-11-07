@@ -475,13 +475,53 @@ func TestEditKeepsEveryAnchor(t *testing.T) {
 	}
 }
 
+// Every link form keeps its target or the edit is refused: labels stay
+// verbatim, links the rebase cannot reach refuse, text never becomes a link.
+func TestEditKeepsEveryLinkForm(t *testing.T) {
+	head := "# Doc\n\nWhat the doc settles for its readers.\n\n## Kept\n\n"
+	for _, c := range []struct {
+		name, body, keep, refuse string
+	}{
+		{"shortcut label", "[Plan — later] [Plan — later][] ![Fig — 2]\n\nx — y\n\n[plan — later]: /p.md\n[fig — 2]: f.png\n", "[Plan — later] [Plan — later][] ![Fig — 2]\n\nx, y", ""},
+		{"label naming a moved heading", "[Plan — later]\n\n## Plan — later\n\n[plan — later]: #plan--later\n", "", "a link to #plan--later"},
+		{"text the edit would link", "[a — b]\n\n[a, b]: /x.md\n", "", "a link to /x.md"},
+		{"autolink", "<mark://h/d.md#plan--later>\n\n## Plan — later\n", "", "a link to #plan--later"},
+		{"raw html", "<a href=\"#plan--later\">p</a>\n\n## Plan — later\n", "", "a link to #plan--later"},
+		{"html to a kept heading", "<a href=\"#kept\">k</a> <mark://h/d.md#kept>\n\n## Plan — later\n", "<a href=\"#kept\">k</a> <mark://h/d.md#kept>\n\n## Plan, later", ""},
+	} {
+		p := Propose(&Input{Path: "/d.md", Body: head + c.body, Version: 1, Metadata: map[string]string{"tags": "d"}, Links: links.ResolverFor("h")})
+		switch {
+		case c.refuse != "":
+			if p.Kind != KindReport || !slices.ContainsFunc(p.Unfixed, func(u string) bool { return strings.Contains(u, "where "+c.refuse+" leads") }) {
+				t.Errorf("%s: kind %s, want refused over %s: %q", c.name, p.Kind, c.refuse, p.Unfixed)
+			}
+		case p.Kind != KindEdit || !strings.Contains(p.Writes[0].Body, c.keep):
+			t.Errorf("%s: kind %s, want an edit keeping %q: %+v", c.name, p.Kind, c.keep, p)
+		}
+	}
+}
+
+// A description that is not one paragraph (a fence, a definition) would
+// reshape the document under it, so it is never added as the summary.
+func TestEditAddsOnlyAParagraphSummary(t *testing.T) {
+	body := "# Doc\n\n## Part\n\nText with [a](#part).\n"
+	for desc, added := range map[string]bool{"What the doc settles for its readers.": true, "```go": false, "<!-- note": false, "[part]: /x.md": false} {
+		p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d", "description": desc}})
+		if got := p.Kind == KindEdit && strings.Contains(p.Writes[0].Body, "# Doc\n\n"+desc+"\n\n## Part"); got != added {
+			t.Errorf("description %q: added = %v, want %v", desc, got, added)
+		}
+	}
+}
+
 // A reference-style link has no inline destination to rewrite: an edit that
 // moves the anchor it names is refused, one that keeps it is not.
 func TestEditRefusesAMoveALinkCannotFollow(t *testing.T) {
 	for ref, want := range map[string]string{"#plan--later": KindReport, "/d.md#plan--later": KindReport, "#kept": KindEdit} {
 		body := "# Doc\n\nWhat the doc settles for its readers.\n\n## Kept\n\nsee [plan][p].\n\n## Plan — later\n\nthird\n\n[p]: " + ref + "\n"
 		p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d"}})
-		if p.Kind != want || (want == KindReport && !slices.ContainsFunc(p.Unfixed, func(u string) bool { return strings.Contains(u, "#plan--later, named by a link") })) {
+		if p.Kind != want || (want == KindReport && !slices.ContainsFunc(p.Unfixed, func(u string) bool {
+			return strings.Contains(u, "the edit would change where a link to #plan--later leads")
+		})) {
 			t.Errorf("[p]: %s: kind %s, want %s: %q", ref, p.Kind, want, p.Unfixed)
 		}
 	}

@@ -220,8 +220,8 @@ func countLines(span []byte) int {
 type Segment struct{ Start, Stop int }
 
 // ProseSegments are the body's text ranges in document order: what a reader
-// reads as words, never code, raw HTML, autolinks, link targets or reference
-// definitions. Editors that rewrite prose touch only these.
+// reads as words, never code, raw HTML, autolinks, link targets, reference
+// labels or definitions. Editors that rewrite prose touch only these.
 func ProseSegments(body string) []Segment {
 	src := []byte(body)
 	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
@@ -233,12 +233,34 @@ func ProseSegments(body string) []Segment {
 		switch v := n.(type) {
 		case *ast.CodeSpan, *ast.RawHTML, *ast.AutoLink, *ast.HTMLBlock, *ast.FencedCodeBlock, *ast.CodeBlock:
 			return ast.WalkSkipChildren
+		case *ast.Link:
+			if isLabel(v.Reference) {
+				return ast.WalkSkipChildren
+			}
+		case *ast.Image:
+			if isLabel(v.Reference) {
+				return ast.WalkSkipChildren
+			}
 		case *ast.Text:
 			segs = append(segs, Segment{Start: v.Segment.Start, Stop: v.Segment.Stop})
 		}
 		return ast.WalkContinue
 	})
 	return segs
+}
+
+// isLabel reports a reference whose text is its label ([a], [a][]):
+// rewriting the text would part it from its definition.
+func isLabel(r *ast.ReferenceLink) bool {
+	return r != nil && r.Type != ast.ReferenceLinkFull
+}
+
+// IsParagraph reports whether s parses as exactly one paragraph, so set
+// between blank lines it adds that and nothing else (no fence, no definition).
+func IsParagraph(s string) bool {
+	doc := goldmark.DefaultParser().Parse(text.NewReader([]byte(s)))
+	_, ok := doc.FirstChild().(*ast.Paragraph)
+	return ok && doc.FirstChild().NextSibling() == nil
 }
 
 // CodeSegments are the body's code ranges in document order: fenced and

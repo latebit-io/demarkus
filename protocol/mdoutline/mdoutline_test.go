@@ -294,15 +294,31 @@ func TestCodeSegments(t *testing.T) {
 }
 
 func TestProseSegments(t *testing.T) {
-	body := "# T — u\n\na `x` [l — m](/p—q.md \"t\") <https://h/a—b> <b>raw</b> [r][ref]\n\n<div>\nblock\n</div>\n\n    code\n\n[ref]: /r—s.md\n"
+	body := "# T — u\n\na `x` [l — m](/p—q.md \"t\") <https://h/a—b> <b>raw</b> [r][ref] [ref] [Ref][] ![ref]\n\n<div>\nblock\n</div>\n\n    code\n\n[ref]: /r—s.md\n"
 	segs := ProseSegments(body)
 	got := make([]string, 0, len(segs))
 	for _, s := range segs {
 		got = append(got, body[s.Start:s.Stop])
 	}
-	want := []string{"T — u", "a ", " ", "l — m", " ", " ", "raw", " ", "r"}
+	want := []string{"T — u", "a ", " ", "l — m", " ", " ", "raw", " ", "r", " ", " ", " "}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ProseSegments = %q, want %q", got, want)
+	}
+}
+
+func TestIsParagraph(t *testing.T) {
+	for text, want := range map[string]bool{
+		"What it settles, see [x](/x.md).": true,
+		"```go":                            false,
+		"<!-- open":                        false,
+		"[r]: /x.md":                       false,
+		"# Title":                          false,
+		"- item":                           false,
+		"":                                 false,
+	} {
+		if got := IsParagraph(text); got != want {
+			t.Errorf("IsParagraph(%q) = %v, want %v", text, got, want)
+		}
 	}
 }
 

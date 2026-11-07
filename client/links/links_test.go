@@ -382,6 +382,14 @@ func TestFragmentLinks(t *testing.T) {
 	}
 }
 
+// Every form a reader follows counts, fragment kept; code does not.
+func TestTargets(t *testing.T) {
+	body := "[a](#one) [b][r] [c] ![i](p.png) <mark://h/d.md#two> <a href=\"#three\">x</a> <img src='q.png'> `[d](#no)`\n\n<div><a href=/e.md#four>y</a></div>\n\n[r]: /r.md#five\n[c]: #six\n"
+	if got, want := Targets(body), []string{"#one", "/r.md#five", "#six", "p.png", "mark://h/d.md#two", "#three", "q.png", "/e.md#four"}; !slices.Equal(got, want) {
+		t.Errorf("Targets = %q, want %q", got, want)
+	}
+}
+
 // A mark:// link is the document's own only on the resolver's store.
 func TestSelfLinks(t *testing.T) {
 	body := "[a](#one) [b](/docs/d.md#two \"T\") [c](d.md#three) [d](../docs/d.md?x#four) [e](/other.md#five) [f](mark://h/docs/d.md#six) [g](/docs/d.md) [h](?view=1#seven) [i](mark://h:6309/docs/d.md?x#eight) [j](mark://o/docs/d.md#nine)\n"

@@ -114,6 +114,7 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		p.Fixed = append(p.Fixed, "frontmatter fence removed; metadata keys: "+strings.Join(Lift(kv, meta), ", "))
 		headings = mdoutline.Headings(body)
 	}
+	before := body
 	// Headings are renamed on the offsets just parsed, before the em dash
 	// pass shifts them.
 	body, renamed := stripHeadingStatus(body, headings)
@@ -126,8 +127,9 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		}
 	}
 	after := mdoutline.Headings(body)
-	if desc := strings.TrimSpace(meta["description"]); desc != "" && gate.MissingSummary(body, after) {
-		body = withSummary(body, after, desc)
+	var summary string
+	if desc := strings.TrimSpace(meta["description"]); desc != "" && gate.MissingSummary(body, after) && mdoutline.IsParagraph(desc) {
+		body, summary = withSummary(body, after, desc), desc
 		after = mdoutline.Headings(body)
 		p.Fixed = append(p.Fixed, "metadata.description added as the summary under the H1")
 	}
@@ -144,16 +146,18 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	for i, h := range headings {
 		homes.at[h.Anchor] = landing{path: in.Path, anchor: after[i].Anchor}
 	}
-	found := in.Links.SelfLinks(body, in.Path)
-	for _, l := range found {
-		if from, to, ok := homes.find(l.Anchor); ok && to.anchor != from && !l.Rewritable() {
-			p.Unfixed = append(p.Unfixed, fmt.Sprintf("the edit would move #%s, named by a link it cannot rewrite (reference-style, say); edit by hand", from))
-			return
-		}
+	body = rebaseFragments(body, in.Links.SelfLinks(body, in.Path), in.Path, homes)
+	// Whatever form a link takes, it must lead where it did (heading i to
+	// heading i), and no text may have become one but the summary's.
+	want := targets(in.Links, in.Path, before, headings)
+	for k, n := range targets(in.Links, in.Path, summary, after) {
+		want[k] += n
 	}
-	if p.recordMoves(in.Path, homes) {
-		body = rebaseFragments(body, found, in.Path, homes)
+	if changed := linkChange(want, targets(in.Links, in.Path, body, after), headings); changed != "" {
+		p.Unfixed = append(p.Unfixed, "the edit would change where "+changed+" leads; edit by hand")
+		return
 	}
+	p.recordMoves(in.Path, homes)
 	p.Kind = KindEdit
 	p.Writes = []Write{{Path: in.Path, Body: body, Metadata: meta}}
 	p.Unfixed = gate.AuditProblems(in.Path, body, meta["description"])
@@ -540,21 +544,80 @@ func brokenLink(r links.Resolver, writes []Write, headings []mdoutline.Heading) 
 		return fmt.Sprintf("a link to %s#%s in %s", target, fragment, file)
 	}
 	for _, w := range writes {
-		for _, l := range links.FragmentLinks(w.Body) {
-			if broken := check(w.Path, w.Path, l.Anchor); broken != "" {
-				return broken
-			}
-		}
-		for _, l := range links.ExtractWithPositions(w.Body) {
-			if l.Fragment == "" {
+		for _, dest := range links.Targets(w.Body) {
+			doc, fragment, ok := strings.Cut(dest, "#")
+			if !ok {
 				continue
 			}
-			if broken := check(w.Path, r.Path(w.Path, l.Dest), l.Fragment); broken != "" {
+			to := r.Path(w.Path, doc)
+			if r.Self(w.Path, doc) {
+				to = w.Path
+			}
+			if broken := check(w.Path, to, fragment); broken != "" {
 				return broken
 			}
 		}
 	}
 	return ""
+}
+
+// target is where a link leads: a heading of the document by index, so a
+// renamed anchor that still lands compares equal; else its destination.
+type target struct {
+	dest    string
+	heading int
+}
+
+// targets counts where body's links lead, every form links.Targets finds.
+func targets(r links.Resolver, docPath, body string, headings []mdoutline.Heading) map[target]int {
+	out := map[target]int{}
+	for _, dest := range links.Targets(body) {
+		k := target{dest: dest, heading: -1}
+		if doc, frag, ok := strings.Cut(dest, "#"); ok && r.Self(docPath, doc) {
+			if i := headingIndex(headings, frag); i >= 0 {
+				k = target{heading: i}
+			}
+		}
+		out[k]++
+	}
+	return out
+}
+
+// linkChange names a link whose count differs between want and got, the
+// least by name so the report is stable; "" when none does.
+func linkChange(want, got map[target]int, headings []mdoutline.Heading) string {
+	var changed []string
+	for k, n := range want {
+		if got[k] != n {
+			changed = append(changed, k.name(headings))
+		}
+	}
+	for k := range got {
+		if _, ok := want[k]; !ok {
+			changed = append(changed, k.name(headings))
+		}
+	}
+	if len(changed) == 0 {
+		return ""
+	}
+	return "a link to " + slices.Min(changed)
+}
+
+func (t target) name(headings []mdoutline.Heading) string {
+	if t.heading >= 0 {
+		return "#" + headings[t.heading].Anchor
+	}
+	return t.dest
+}
+
+// headingIndex is the index of the heading frag names, as fetch resolves
+// it; -1 when none.
+func headingIndex(hs []mdoutline.Heading, frag string) int {
+	h, ok := mdoutline.Find(hs, frag)
+	if !ok {
+		return -1
+	}
+	return slices.IndexFunc(hs, func(x mdoutline.Heading) bool { return x.Start == h.Start })
 }
 
 // rebaseFragments points each same-document link in text (found, offsets
