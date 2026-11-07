@@ -363,16 +363,33 @@ func TestResolverPath(t *testing.T) {
 	}
 }
 
-// Only real inline links count: code, escaped brackets and links to other
-// documents are left alone, and a span covers the destination, not a title.
+// Only real links count: code, escaped brackets and links to other documents
+// are left alone, and a span covers the destination, not a title. A
+// reference-style link, or one with no text, is found with no span.
 func TestFragmentLinks(t *testing.T) {
-	body := "[a](#one) [b](#two \"Two\") [c]( <#three> ) `[d](#four)` \\[e](#five) [f](x.md#six)\n\n```\n[g](#seven)\n```\n"
+	body := "[a](#one) [b](#two \"Two\") [c]( <#three> ) `[d](#four)` \\[e](#five) [f](x.md#six) [h][r] [](#nine)\n\n```\n[g](#seven)\n```\n\n[r]: #eight\n"
 	found := FragmentLinks(body)
+	got := make([]string, 0, len(found))
+	for _, l := range found {
+		span := "none"
+		if l.Rewritable() {
+			span = body[l.Start:l.End]
+		}
+		got = append(got, l.Anchor+"="+span)
+	}
+	if want := []string{"one=#one", "two=#two", "three=#three", "eight=none", "nine=none"}; !slices.Equal(got, want) {
+		t.Errorf("FragmentLinks = %q, want %q", got, want)
+	}
+}
+
+func TestSelfLinks(t *testing.T) {
+	body := "[a](#one) [b](/docs/d.md#two \"T\") [c](d.md#three) [d](../docs/d.md?x#four) [e](/other.md#five) [f](mark://h/docs/d.md#six) [g](/docs/d.md) [h](?view=1#seven)\n"
+	found := SelfLinks(body, "/docs/d.md")
 	got := make([]string, 0, len(found))
 	for _, l := range found {
 		got = append(got, l.Anchor+"="+body[l.Start:l.End])
 	}
-	if want := []string{"one=#one", "two=#two", "three=#three"}; !slices.Equal(got, want) {
-		t.Errorf("FragmentLinks = %q, want %q", got, want)
+	if want := []string{"one=#one", "two=#two", "three=#three", "four=#four", "seven=#seven"}; !slices.Equal(got, want) {
+		t.Errorf("SelfLinks = %q, want %q", got, want)
 	}
 }

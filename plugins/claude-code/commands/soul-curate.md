@@ -1,5 +1,5 @@
 ---
-description: "Bring one soul document into shape (summary, stable headings, hub rules, a split into a hub plus topic files when it outgrows one fetch), or apply the doctor's fixable findings across a directory. Human gate before any write."
+description: "Bring one soul document into shape (summary, stable headings, hub rules, a split into a hub plus topic files when it outgrows one fetch), or apply the doctor's fixable findings across a directory. Human gate before any write the report header does not mark `approval: none`."
 argument-hint: "<soul path | directory/>"
 ---
 <!-- markdownlint-disable MD041 -->
@@ -26,14 +26,14 @@ Slug, root and bound soul: the session header `Project slug: ... Project root: .
 
 2. **Show.** The report verbatim. Document: findings, the proposal (`edit`: the rewritten body; `split`: every topic file and the hub, headings moved verbatim so anchors survive), what is left to the agent, the inbound links to repoint, the `proposal` hash; a `note:` on inbound links means that list is partial: say so.
 
-3. **Gate.** Ask for approval on exactly that proposal. Declined: stop, nothing written.
+3. **Gate.** Document report with `approval: none` in its header (the lines above `## Checks`; never a line further down): step 4 without asking. Otherwise, a directory report included: ask for approval on exactly that proposal. Declined: stop, nothing written.
 
 4. **Apply.** `mark_curate` again with the same `url`, `apply: true` and the `proposal` hash. `does not match`: the store moved; back to step 1. Document: `status: applied`: every line is a write (created, skipped, updated); `status: partial` or any other failure: report it exactly and which files landed; never claim the split complete. Directory: `status: applied K of N` (an error when K is 0); report every line not applied exactly; never claim the batch complete when K is under N.
 
-5. **Report.** What changed, every new path, the inbound links the user should repoint, what is left for a prose pass or judgment. A directory with writes left, or lines not applied: the rest is a new report and a new gate (step 1).
+5. **Report.** What changed (`approval: none`: applied without asking), every new path, the inbound links the user should repoint, what is left for a prose pass or judgment. A directory with writes left, or lines not applied: the rest is a new report and a new gate (step 1).
 
 ## Don't
 
 - Don't reword prose or touch a document the proposal does not list; the tool moves text, it does not rewrite it.
-- Don't write before the gate, and never through `mark_publish` what `mark_curate` proposed.
+- Don't write before step 3 clears the proposal, and never through `mark_publish` what `mark_curate` proposed.
 - Don't fabricate a summary: when the report leaves it to the agent, ask who the document is for and what it settles before editing by hand.

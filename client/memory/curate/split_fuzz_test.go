@@ -3,6 +3,7 @@ package curate
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -62,16 +63,20 @@ func signature(body string, hs []mdoutline.Heading, i int) string {
 	return h.Text + "|"
 }
 
-// find is the signature of the heading frag names, as fetch resolves it.
-func find(body string, hs []mdoutline.Heading, frag string) (string, bool) {
+// headingIndex is the index of the heading frag names, as fetch resolves
+// it; -1 when none.
+func headingIndex(hs []mdoutline.Heading, frag string) int {
 	h, ok := mdoutline.Find(hs, frag)
 	if !ok {
-		return "", false
+		return -1
 	}
-	for i := range hs {
-		if hs[i].Start == h.Start {
-			return signature(body, hs, i), true
-		}
+	return slices.IndexFunc(hs, func(x mdoutline.Heading) bool { return x.Start == h.Start })
+}
+
+// find is the signature of the heading frag names.
+func find(body string, hs []mdoutline.Heading, frag string) (string, bool) {
+	if i := headingIndex(hs, frag); i >= 0 {
+		return signature(body, hs, i), true
 	}
 	return "", false
 }

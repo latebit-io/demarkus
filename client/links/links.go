@@ -188,41 +188,63 @@ func brackets(link *ast.Link, src []byte) (open, closeBracket int, linkText stri
 	return open, closeBracket, b.String()
 }
 
-// FragmentLink is an inline same-document link ("[x](#a)"): its anchor and
-// the byte span [Start, End) of the "#a" destination in the source.
+// FragmentLink is a same-document link ("[x](#a)"): its anchor and the byte
+// span [Start, End) of the "#a" in the source, -1 when it has none to
+// rewrite (a reference-style link, one with no text).
 type FragmentLink struct {
 	Anchor     string
 	Start, End int
 }
 
-// FragmentLinks returns the inline fragment-only links in body, the ones
+// Rewritable reports a link whose span can be rewritten in place.
+func (l FragmentLink) Rewritable() bool { return l.Start >= 0 }
+
+// FragmentLinks returns the fragment-only links in body, the ones
 // ExtractWithPositions drops. The parser skips code and escaped brackets,
 // and a span excludes any title, so rewriting it keeps the rest verbatim.
 func FragmentLinks(body string) []FragmentLink {
+	return anchorSpans(body, func(dest string) bool { return dest == "" })
+}
+
+// SelfLinks is FragmentLinks plus the links that name docPath before the
+// fragment ("/d.md#a", "d.md#a", "?q#a"); each span is still just the "#a".
+func SelfLinks(body, docPath string) []FragmentLink {
+	return anchorSpans(body, func(dest string) bool {
+		return dest == "" || strings.HasPrefix(dest, "?") || ResolvePath(docPath, dest) == docPath
+	})
+}
+
+// anchorSpans returns every link whose destination before the fragment keep
+// accepts, with its "#a" span when it has one.
+func anchorSpans(body string, keep func(dest string) bool) []FragmentLink {
 	src := []byte(body)
 	var out []FragmentLink
 	walk(goldmark.DefaultParser().Parse(text.NewReader(src)), func(n ast.Node, entering bool) ast.WalkStatus {
 		link, ok := n.(*ast.Link)
-		if !entering || !ok || !bytes.HasPrefix(link.Destination, []byte("#")) {
+		if !entering || !ok {
 			return ast.WalkContinue
 		}
-		_, closeBracket, _ := brackets(link, src)
-		if closeBracket < 0 || inlineEnd(src, closeBracket) < 0 {
+		dest, fragment, hasFragment := bytes.Cut(link.Destination, []byte("#"))
+		if !hasFragment || !keep(string(dest)) {
 			return ast.WalkContinue
 		}
-		start := closeBracket + 2 // past "]("
-		for start < len(src) && (src[start] == ' ' || src[start] == '\t' || src[start] == '\n' || src[start] == '<') {
-			start++
+		l := FragmentLink{Anchor: string(fragment), Start: -1, End: -1}
+		if _, closeBracket, _ := brackets(link, src); closeBracket >= 0 && inlineEnd(src, closeBracket) >= 0 {
+			start := closeBracket + 2 // past "]("
+			for start < len(src) && (src[start] == ' ' || src[start] == '\t' || src[start] == '\n' || src[start] == '<') {
+				start++
+			}
+			end := start
+			for end < len(src) && !strings.ContainsRune(" \t\n)>", rune(src[end])) {
+				end++
+			}
+			// An escaped or entity-coded destination differs from its source
+			// text; rewriting it would touch bytes that are not the anchor.
+			if bytes.Equal(src[start:end], link.Destination) {
+				l.Start, l.End = start+len(dest), end
+			}
 		}
-		end := start
-		for end < len(src) && !strings.ContainsRune(" \t\n)>", rune(src[end])) {
-			end++
-		}
-		// An escaped or entity-coded destination differs from its source
-		// text; leave it rather than rewrite bytes that are not the anchor.
-		if bytes.Equal(src[start:end], link.Destination) {
-			out = append(out, FragmentLink{Anchor: string(link.Destination[1:]), Start: start, End: end})
-		}
+		out = append(out, l)
 		return ast.WalkContinue
 	})
 	return out
