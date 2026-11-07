@@ -29,6 +29,8 @@ func FuzzEditKeepsLinks(f *testing.F) {
 		"## Plan — later\n\n[Plan — later] [Plan — later][] ![Plan — later]\n\n[plan — later]: #plan--later\n",
 		"[a — b] [c — d]\n\n[a, b]: /x.md\n[c — d]: /y.md\n",
 		"## Plan — later\n\n<mark://h/d.md#plan--later> <https://o/x—y>\n",
+		"## A — B\n\n[![i](#a--b)](#a--b) ![[t](#a--b)](p.png)\n",
+		"# AB\n[0](#A—B)", // a fuzz find
 	} {
 		f.Add(seed)
 	}

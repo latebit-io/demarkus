@@ -3,6 +3,7 @@ package curate
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,13 +28,22 @@ func FuzzSplitKeepsHeadingsAndLinks(f *testing.F) {
 		"## Topics\n\n[t](#topics) [u](/d.md#pad-b)\n",
 		"## Mid\n\nx\n\n# Second\n\ndropped unless refused\n",
 		"- a\n  - b\n\n    ## Nested big\n\n    " + strings.Repeat("nested text ", 100) + "\n",
+		"## Mid\n\n[r](rel.md?q#f) ![i](img.png) [d][dm] [s](d.md#pad-b) [e]() <mark://x/y> [p][pa]\n\n[dm]: ../doc.md \"T\"\n",
+		"## Mid\n\n[c][PA] [m][mid]\n\n" + strings.Repeat("mid text ", 300) + "\n\n[mid]: #next\n",
+		"## Mid\n\n[z][qd] " + strings.Repeat("mid text ", 300) + "\n\n> [qd]: <q d.md>\n> 'T'\n",
+		"## Mid\n\n[![b](b.svg)](ci.md) [![n](#next)](#next) ![[t](a.md)](p.png)\n",
+		// Fuzz finds: twins of the harness's Next heading, a link to the topics list.
+		"- A\n  - A\n#     neXt \n ## 00000000000000",
+		"## NeXt",
+		"[](#topics )",
 	} {
 		f.Add(seed)
 	}
 	filler := strings.Repeat("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod.\n", 60)
 	f.Fuzz(func(t *testing.T, middle string) {
 		body := "# Doc\n\nWhat the doc settles; see [a](#pad-a).\n\n" + middle +
-			"\n\n## Pad A\n\n### Next\n\npad next\n\n" + filler + "\n## Pad B\n\nsee [n](#next) and [m](#Pad-A).\n\n" + filler
+			"\n\n## Pad A\n\nup to [u](../up.md).\n\n### Next\n\npad next\n\n[pa]: other.md\n\n" + filler +
+			"\n## Pad B\n\nsee [n](#next) and [m](#Pad-A), [o][pa].\n\n" + filler
 		in := &Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "doc"}}
 		if p := Propose(in); p.Kind == KindSplit {
 			for _, v := range splitViolations(in, &p) {
@@ -43,7 +53,11 @@ func FuzzSplitKeepsHeadingsAndLinks(f *testing.F) {
 	})
 }
 
-var linkDest = regexp.MustCompile(`\]\([^)]*\)`)
+var (
+	linkDest = regexp.MustCompile(`\]\([^)]*\)`)
+	// refDef is a reference definition line: not text, and a split may add one.
+	refDef = regexp.MustCompile(`^\[[^\]]*\]:`)
+)
 
 // signature names heading i of body by its text and the first line under it
 // before any other heading, links blanked: a twin "Next" elsewhere differs, a
@@ -55,11 +69,21 @@ func signature(body string, hs []mdoutline.Heading, i int) string {
 	}
 	for _, line := range strings.Split(body[h.Start:end], "\n")[1:] {
 		line = strings.TrimSpace(line)
-		if line != "" && strings.Trim(line, "=-") != "" {
+		if line != "" && strings.Trim(line, "=-") != "" && !refDef.MatchString(line) {
 			return h.Text + "|" + linkDest.ReplaceAllString(line, "]()")
 		}
 	}
 	return h.Text + "|"
+}
+
+// headingIndex is the index of the heading frag names, as fetch resolves
+// it; -1 when none.
+func headingIndex(hs []mdoutline.Heading, frag string) int {
+	h, ok := mdoutline.Find(hs, frag)
+	if !ok {
+		return -1
+	}
+	return slices.IndexFunc(hs, func(x mdoutline.Heading) bool { return x.Start == h.Start })
 }
 
 // find is the signature of the heading frag names.
@@ -93,9 +117,15 @@ func splitViolations(in *Input, p *Proposal) []string {
 			landed[k]--
 		}
 	}
-	// resolve finds the heading a fragment names in a written file.
+	// resolve finds the heading a fragment names in a written file; one the
+	// split added (the topics list, a topic's H1) is no original heading.
 	resolve := func(path, frag string) (string, bool) {
-		return find(written[path], heads[path], frag)
+		hs := heads[path]
+		i := headingIndex(hs, frag)
+		if i < 0 || !slices.ContainsFunc(orig, func(h mdoutline.Heading) bool { return h.Level == hs[i].Level && h.Text == hs[i].Text }) {
+			return "", false
+		}
+		return signature(written[path], hs, i), true
 	}
 	sigs := func(path, body string, find func(target, frag string) (string, bool), files map[string]bool) []string {
 		var got []string
@@ -103,18 +133,19 @@ func splitViolations(in *Input, p *Proposal) []string {
 			to, frag, ok := strings.Cut(dest, "#")
 			if to == "" || strings.HasPrefix(to, "?") {
 				to = path
-			} else {
-				to = links.ResolvePath(path, to)
+			} else if to = links.ResolvePath(path, to); to == "" {
+				got = append(got, "url "+dest)
+				continue
 			}
-			if ok && files[to] {
-				if s, found := find(to, frag); found {
-					got = append(got, s)
-				}
+			if s, found := find(to, frag); ok && files[to] && found {
+				got = append(got, s)
+			} else {
+				got = append(got, "path "+to+"#"+frag)
 			}
 		}
 		return got
 	}
-	// Every link that resolved before resolves after, to the same heading.
+	// Every link leads where it did: to the same heading, path or URL.
 	before := sigs(in.Path, in.Body, func(_, frag string) (string, bool) {
 		return find(in.Body, orig, frag)
 	}, map[string]bool{in.Path: true})
@@ -130,7 +161,7 @@ func splitViolations(in *Input, p *Proposal) []string {
 	}
 	for _, s := range before {
 		if after[s] == 0 {
-			out = append(out, fmt.Sprintf("link to %q no longer resolves to it", s))
+			out = append(out, fmt.Sprintf("link to %q no longer leads there", s))
 		} else {
 			after[s]--
 		}

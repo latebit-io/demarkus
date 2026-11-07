@@ -16,6 +16,9 @@
 coverage.*
 *.coverprofile
 profile.cov
+# Fuzz corpus `go test -fuzz` writes; a regression input goes in the
+# target's f.Add seeds.
+**/testdata/fuzz/
 .mark
 # Dependency directories (remove the comment below to include it)
 # vendor/
