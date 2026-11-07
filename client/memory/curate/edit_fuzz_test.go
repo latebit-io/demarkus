@@ -20,6 +20,7 @@ func FuzzEditKeepsLinks(f *testing.F) {
 		"## X (DONE)\n\n## X (WIP)\n\n## X\n\n[a](#x) [b](#x-1) [c](#x-wip)\n",
 		"Setext (DONE)\n----\n\n[s](#setext-done)\n",
 		"- [l](#later)\n\n### Later — maybe (DONE)\n",
+		"## Plan — later\n\n[a](/d.md#plan--later) [r](d.md#Plan--later) [o](/o.md#plan--later)\n",
 	} {
 		f.Add(seed)
 	}
@@ -45,18 +46,24 @@ func FuzzEditKeepsLinks(f *testing.F) {
 				t.Errorf("anchor %q (heading %d %q) lands on %d", h.Anchor, i, h.Text, got)
 			}
 		}
-		// The document's own links land where they did.
+		// The document's own links, by fragment or by its path, land where they did.
 		was := map[int]int{}
-		for _, l := range links.FragmentLinks(body) {
-			if i := headingIndex(before, l.Anchor); i >= 0 {
-				was[i]++
+		count := func(doc string, hs []mdoutline.Heading, by int) {
+			for _, l := range links.FragmentLinks(doc) {
+				if i := headingIndex(hs, l.Anchor); i >= 0 {
+					was[i] += by
+				}
+			}
+			for _, l := range links.ExtractWithPositions(doc) {
+				if l.Fragment != "" && links.ResolvePath(in.Path, l.Dest) == in.Path {
+					if i := headingIndex(hs, l.Fragment); i >= 0 {
+						was[i] += by
+					}
+				}
 			}
 		}
-		for _, l := range links.FragmentLinks(out) {
-			if i := headingIndex(after, l.Anchor); i >= 0 {
-				was[i]--
-			}
-		}
+		count(body, before, 1)
+		count(out, after, -1)
 		for i, n := range was {
 			if n > 0 {
 				t.Errorf("%d link(s) to heading %d %q no longer resolve to it", n, i, before[i].Text)

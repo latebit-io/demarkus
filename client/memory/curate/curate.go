@@ -143,7 +143,7 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		homes.at[h.Anchor] = landing{path: in.Path, anchor: after[i].Anchor}
 	}
 	if p.recordMoves(in.Path, homes) {
-		body = rebaseFragments(body, links.FragmentLinks(body), in.Path, homes)
+		body = rebaseFragments(body, links.SelfLinks(body, in.Path), in.Path, homes)
 	}
 	p.Kind = KindEdit
 	p.Writes = []Write{{Path: in.Path, Body: body, Metadata: meta}}

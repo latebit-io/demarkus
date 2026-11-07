@@ -376,3 +376,15 @@ func TestFragmentLinks(t *testing.T) {
 		t.Errorf("FragmentLinks = %q, want %q", got, want)
 	}
 }
+
+func TestSelfLinks(t *testing.T) {
+	body := "[a](#one) [b](/docs/d.md#two \"T\") [c](d.md#three) [d](../docs/d.md?x#four) [e](/other.md#five) [f](mark://h/docs/d.md#six) [g](/docs/d.md)\n"
+	found := SelfLinks(body, "/docs/d.md")
+	got := make([]string, 0, len(found))
+	for _, l := range found {
+		got = append(got, l.Anchor+"="+body[l.Start:l.End])
+	}
+	if want := []string{"one=#one", "two=#two", "three=#three", "four=#four"}; !slices.Equal(got, want) {
+		t.Errorf("SelfLinks = %q, want %q", got, want)
+	}
+}

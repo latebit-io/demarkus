@@ -199,11 +199,27 @@ type FragmentLink struct {
 // ExtractWithPositions drops. The parser skips code and escaped brackets,
 // and a span excludes any title, so rewriting it keeps the rest verbatim.
 func FragmentLinks(body string) []FragmentLink {
+	return anchorSpans(body, func(dest string) bool { return dest == "" })
+}
+
+// SelfLinks is FragmentLinks plus the links that name docPath before the
+// fragment ("/d.md#a", "d.md#a"); each span is still just the "#a".
+func SelfLinks(body, docPath string) []FragmentLink {
+	return anchorSpans(body, func(dest string) bool { return dest == "" || ResolvePath(docPath, dest) == docPath })
+}
+
+// anchorSpans returns the "#a" span of every inline link whose destination
+// before the fragment keep accepts.
+func anchorSpans(body string, keep func(dest string) bool) []FragmentLink {
 	src := []byte(body)
 	var out []FragmentLink
 	walk(goldmark.DefaultParser().Parse(text.NewReader(src)), func(n ast.Node, entering bool) ast.WalkStatus {
 		link, ok := n.(*ast.Link)
-		if !entering || !ok || !bytes.HasPrefix(link.Destination, []byte("#")) {
+		if !entering || !ok {
+			return ast.WalkContinue
+		}
+		dest, _, hasFragment := bytes.Cut(link.Destination, []byte("#"))
+		if !hasFragment || !keep(string(dest)) {
 			return ast.WalkContinue
 		}
 		_, closeBracket, _ := brackets(link, src)
@@ -221,7 +237,8 @@ func FragmentLinks(body string) []FragmentLink {
 		// An escaped or entity-coded destination differs from its source
 		// text; leave it rather than rewrite bytes that are not the anchor.
 		if bytes.Equal(src[start:end], link.Destination) {
-			out = append(out, FragmentLink{Anchor: string(link.Destination[1:]), Start: start, End: end})
+			hash := start + len(dest)
+			out = append(out, FragmentLink{Anchor: string(src[hash+1 : end]), Start: hash, End: end})
 		}
 		return ast.WalkContinue
 	})
