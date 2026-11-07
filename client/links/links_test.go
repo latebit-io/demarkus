@@ -1,6 +1,7 @@
 package links
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -363,47 +364,60 @@ func TestResolverPath(t *testing.T) {
 	}
 }
 
-// Only real links count: code, escaped brackets and links to other documents
-// are left alone, and a span covers the destination, not a title. A
-// reference-style link, or one with no text, is found with no span.
-func TestFragmentLinks(t *testing.T) {
-	body := "[a](#one) [b](#two \"Two\") [c]( <#three> ) `[d](#four)` \\[e](#five) [f](x.md#six) [h][r] [](#nine)\n\n```\n[g](#seven)\n```\n\n[r]: #eight\n"
-	found := FragmentLinks(body)
-	got := make([]string, 0, len(found))
-	for _, l := range found {
+// Inline links and images and reference definitions are rewritable; code,
+// escaped brackets and reference uses are not, and a span skips any title.
+func TestSpans(t *testing.T) {
+	body := "[a](one.md) [b](#two \"Two\") [c]( <three.md> ) ![i](p.png) `[d](four.md)` \\[e](five.md) [h][r] [](nine.md) [j](<a b.md>)\n\n```\n[g](seven.md)\n```\n\n[r]: eight.md \"T\"\n[s]:\n  <ten.md>\n"
+	got := make([]string, 0, 8)
+	for _, sp := range Spans(body) {
 		span := "none"
-		if l.Rewritable() {
-			span = body[l.Start:l.End]
+		if sp.Rewritable() {
+			span = body[sp.Start:sp.End]
 		}
-		got = append(got, l.Anchor+"="+span)
+		got = append(got, sp.Dest+"="+span)
 	}
-	if want := []string{"one=#one", "two=#two", "three=#three", "eight=none", "nine=none"}; !slices.Equal(got, want) {
-		t.Errorf("FragmentLinks = %q, want %q", got, want)
+	want := []string{"one.md=one.md", "#two=#two", "three.md=three.md", "p.png=p.png", "nine.md=none", "a b.md=a b.md", "eight.md=eight.md", "ten.md=ten.md"}
+	if !slices.Equal(got, want) {
+		t.Errorf("Spans = %q, want %q", got, want)
 	}
 }
 
-// Every form a reader follows counts, fragment kept; code does not.
+// A definition's text is as written, a quote's prefixes dropped, so it reads
+// the same copied out of its container.
+func TestDefinitions(t *testing.T) {
+	body := "[a]: one.md \"T\"\n\n> [b]:\n> <two.md>\n> 'Two'\n\n[A]: three.md\n"
+	got := make([]string, 0, 3)
+	for _, d := range Definitions(body) {
+		got = append(got, fmt.Sprintf("%s@%d=%s", d.Label, d.Pos, d.Text))
+	}
+	want := []string{"a@0=[a]: one.md \"T\"", "b@19=[b]:\n<two.md>\n'Two'", "A@44=[A]: three.md"}
+	if !slices.Equal(got, want) {
+		t.Errorf("Definitions = %q, want %q", got, want)
+	}
+}
+
 func TestTargets(t *testing.T) {
-	body := "[a](#one) [b][r] [c] ![i](p.png) <mark://h/d.md#two> <a href=\"#three\">x</a> <img src='q.png'> `[d](#no)`\n\n<div><a href=/e.md#four>y</a></div>\n\n[r]: /r.md#five\n[c]: #six\n"
-	if got, want := Targets(body), []string{"#one", "/r.md#five", "#six", "p.png", "mark://h/d.md#two", "#three", "q.png", "/e.md#four"}; !slices.Equal(got, want) {
+	body := "[a](#one) [b][r] [c] ![i](p.png) <mark://h/d.md#two> <a href=\"#three\">x</a> <img src='q.png'> `[d](#no)`\n\n<div><a href=/e.md#four>y</a></div>\n\nthen [e](#seven)\n\n[r]: /r.md#five\n[c]: #six\n"
+	got := make([]string, 0, 8)
+	for _, f := range Targets(body) {
+		got = append(got, fmt.Sprintf("%s@%d[%s]", f.Dest, f.Pos, f.Label))
+	}
+	want := []string{"#one@0[]", "/r.md#five@0[r]", "#six@0[c]", "p.png@0[]", "mark://h/d.md#two@0[]", "#three@0[]", "q.png@0[]", "/e.md#four@106[]", "#seven@143[]"}
+	if !slices.Equal(got, want) {
 		t.Errorf("Targets = %q, want %q", got, want)
 	}
 }
 
-// A mark:// link is the document's own only on the resolver's store.
-func TestSelfLinks(t *testing.T) {
-	body := "[a](#one) [b](/docs/d.md#two \"T\") [c](d.md#three) [d](../docs/d.md?x#four) [e](/other.md#five) [f](mark://h/docs/d.md#six) [g](/docs/d.md) [h](?view=1#seven) [i](mark://h:6309/docs/d.md?x#eight) [j](mark://o/docs/d.md#nine)\n"
-	spans := func(found []FragmentLink) []string {
-		got := make([]string, 0, len(found))
-		for _, l := range found {
-			got = append(got, l.Anchor+"="+body[l.Start:l.End])
+// A destination names the document itself by fragment, query, path, or a
+// mark:// URL on the resolver's store.
+func TestSelf(t *testing.T) {
+	r := ResolverFor("h")
+	for dest, want := range map[string]bool{"": true, "?x": true, "/docs/d.md": true, "d.md": true, "../docs/d.md?x": true, "mark://h/docs/d.md": true, "mark://h:6309/docs/d.md?x": true, "/other.md": false, "mark://o/docs/d.md": false, "https://h/docs/d.md": false} {
+		if got := r.Self("/docs/d.md", dest); got != want {
+			t.Errorf("Self(%q) = %v, want %v", dest, got, want)
 		}
-		return got
 	}
-	if got, want := spans(ResolverFor("h").SelfLinks(body, "/docs/d.md")), []string{"one=#one", "two=#two", "three=#three", "four=#four", "six=#six", "seven=#seven", "eight=#eight"}; !slices.Equal(got, want) {
-		t.Errorf("SelfLinks = %q, want %q", got, want)
-	}
-	if got, want := spans(Resolver{}.SelfLinks(body, "/docs/d.md")), []string{"one=#one", "two=#two", "three=#three", "four=#four", "seven=#seven"}; !slices.Equal(got, want) {
-		t.Errorf("unbound SelfLinks = %q, want %q", got, want)
+	if (Resolver{}).Self("/docs/d.md", "mark://h/docs/d.md") {
+		t.Error("an unbound resolver reads a mark:// URL as the document")
 	}
 }

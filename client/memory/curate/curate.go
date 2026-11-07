@@ -146,14 +146,16 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	for i, h := range headings {
 		homes.at[h.Anchor] = landing{path: in.Path, anchor: after[i].Anchor}
 	}
-	body = rebaseFragments(body, in.Links.SelfLinks(body, in.Path), in.Path, homes)
+	rl := relocator{r: in.Links, path: in.Path, homes: homes}
+	body = rl.rewrite(body, 0, links.Spans(body), in.Path)
 	// Whatever form a link takes, it must lead where it did (heading i to
 	// heading i), and no text may have become one but the summary's.
-	want := targets(in.Links, in.Path, before, headings)
-	for k, n := range targets(in.Links, in.Path, summary, after) {
+	is := landedKeys(in.Links, map[string][]mdoutline.Heading{in.Path: after}, homes)
+	want := originalKeys(in.Links, in.Path, headings).count(in.Path, before)
+	for k, n := range is.count(in.Path, summary) {
 		want[k] += n
 	}
-	if changed := linkChange(want, targets(in.Links, in.Path, body, after), headings); changed != "" {
+	if changed := linkChange(want, is.count(in.Path, body), headings); changed != "" {
 		p.Unfixed = append(p.Unfixed, "the edit would change where "+changed+" leads; edit by hand")
 		return
 	}
@@ -448,15 +450,16 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	}
 	title := hub.Title(in.Body, in.Metadata, strings.TrimSuffix(path.Base(in.Path), ".md"))
 	var homes landings
-	var preamble string
+	var preamble, hubDefs string
 	var plan []section
+	orig := linksOf(in)
 	for {
 		if homes, refusal = anchorHomes(in, title, sections, headings); refusal != "" {
 			p.Unfixed = append(p.Unfixed, refusal)
 			return
 		}
-		preamble, plan = rebased(in, sections, homes)
-		if len(hubBody(preamble, plan, headings)) < outline.Threshold || !moveLargest(sections) {
+		preamble, plan, hubDefs = orig.rebased(sections, homes)
+		if len(hubBody(preamble, plan, headings)+hubDefs) < outline.Threshold || !moveLargest(sections) {
 			break
 		}
 	}
@@ -470,12 +473,12 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 			fixed = append(fixed, fmt.Sprintf("%q moved to %s (%d bytes)", s.heading.Text, s.topic, len(w.Body)))
 		}
 	}
-	body := hubBody(preamble, plan, headings)
+	body := hubBody(preamble, plan, headings) + hubDefs
 	meta := maps.Clone(carried)
 	meta["tags"] = strings.Join(hubTags(preamble, plan, carried["tags"]), ",")
 	writes = append(writes, Write{Path: in.Path, Body: body, Metadata: meta})
-	if broken := brokenLink(in.Links, writes, headings); broken != "" {
-		p.Unfixed = append(p.Unfixed, "a split would break "+broken+"; link it as #anchor from inside the document, or split by hand")
+	if lost := orig.lostLink(sections, writes, homes); lost != "" {
+		p.Unfixed = append(p.Unfixed, "a split would change where "+lost+" leads; split by hand")
 		return
 	}
 	p.recordMoves(in.Path, homes)
@@ -505,60 +508,276 @@ func moveLargest(sections []section) bool {
 	return true
 }
 
-// rebased is the preamble and a copy of sections with same-document links
-// pointed at their landings. Parsed whole: a slice can lose its context (a
-// heading nested in a list reads as indented code alone).
-func rebased(in *Input, sections []section, homes landings) (preamble string, plan []section) {
-	found := links.FragmentLinks(in.Body)
-	preamble = preambleOf(in.Body, sections)
-	preamble = rebaseFragments(preamble, fragmentsIn(found, 0, len(preamble)), in.Path, homes)
+// docLinks is the original's links, parsed once for every split pass.
+type docLinks struct {
+	in      *Input
+	spans   []links.Span
+	defs    []links.Definition
+	targets []links.Followed
+}
+
+func linksOf(in *Input) *docLinks {
+	return &docLinks{in: in, spans: links.Spans(in.Body), defs: links.Definitions(in.Body), targets: links.Targets(in.Body)}
+}
+
+// rebased writes every link of the preamble and sections for the file it
+// lands in, and gives each file the definitions its uses need (the hub's as
+// hubDefs). Parsed whole: a slice alone can read differently.
+func (o *docLinks) rebased(sections []section, homes landings) (preamble string, plan []section, hubDefs string) {
+	in := o.in
+	rl := relocator{r: in.Links, path: in.Path, homes: homes}
+	defs := o.missingDefinitions(sections)
+	preamble = rl.rewrite(preambleOf(in.Body, sections), 0, o.spans, in.Path)
 	plan = slices.Clone(sections)
 	for i := range plan {
 		s := &plan[i]
-		s.text = rebaseFragments(s.text, fragmentsIn(found, s.heading.Start, len(s.text)), cmp.Or(s.topic, in.Path), homes)
+		s.text = rl.rewrite(s.text, s.heading.Start, o.spans, cmp.Or(s.topic, in.Path))
+		if s.topic != "" && defs[s.topic] != nil {
+			s.text = strings.TrimRight(s.text, "\n") + "\n\n" + rl.definitions(defs[s.topic], s.topic)
+		}
 		// The bullet quotes the section's opening line into the hub.
-		s.bullet = rebaseFragments(s.bullet, links.FragmentLinks(s.bullet), in.Path, homes)
+		s.bullet = rl.rewrite(s.bullet, 0, links.Spans(s.bullet), in.Path)
 	}
-	return preamble, plan
+	if defs[in.Path] != nil {
+		hubDefs = "\n" + rl.definitions(defs[in.Path], in.Path)
+	}
+	return preamble, plan, hubDefs
 }
 
-// brokenLink names the first link among writes that resolved in the
-// original (headings) but finds no heading in what is written; a link
-// already broken before the split is not the split's to refuse.
-func brokenLink(r links.Resolver, writes []Write, headings []mdoutline.Heading) string {
-	written := make(map[string][]mdoutline.Heading, len(writes))
+// missingDefinitions is, per file, the reference definitions its uses need
+// but the text it gets does not hold, a label's first definition winning.
+func (o *docLinks) missingDefinitions(sections []section) map[string][]*links.Definition {
+	type held struct{ file, label string }
+	first := map[string]*links.Definition{}
+	has := map[held]bool{}
+	for i := range o.defs {
+		d := &o.defs[i]
+		label := links.LabelKey(d.Label)
+		if first[label] == nil {
+			first[label] = d
+		}
+		has[held{landsIn(o.in.Path, sections, d.Pos), label}] = true
+	}
+	out := map[string][]*links.Definition{}
+	for _, r := range o.routes(sections) {
+		if r.Label == "" {
+			continue
+		}
+		k := held{r.file, links.LabelKey(r.Label)}
+		if d := first[k.label]; d != nil && !has[k] {
+			has[k] = true
+			out[r.file] = append(out[r.file], d)
+		}
+	}
+	return out
+}
+
+// route is a link of the original and the file a reader follows it from.
+type route struct {
+	file string
+	links.Followed
+}
+
+// routes is every link of the original from where its text lands, plus the
+// moved sections' hub bullets read as in the original, every label it
+// defines resolving.
+func (o *docLinks) routes(sections []section) []route {
+	out := make([]route, 0, len(o.targets))
+	for _, f := range o.targets {
+		out = append(out, route{landsIn(o.in.Path, sections, f.Pos), f})
+	}
+	var b strings.Builder
+	for i := range sections {
+		if sections[i].topic != "" {
+			b.WriteString(sections[i].bullet + "\n")
+		}
+	}
+	if b.Len() == 0 {
+		return out
+	}
+	for i := range o.defs {
+		b.WriteString("\n" + o.defs[i].Text + "\n")
+	}
+	for _, f := range links.Targets(b.String()) {
+		out = append(out, route{o.in.Path, f})
+	}
+	return out
+}
+
+// landsIn is the file the original's byte at pos goes to.
+func landsIn(docPath string, sections []section, pos int) string {
+	for i := range slices.Backward(sections) {
+		if pos >= sections[i].heading.Start {
+			return cmp.Or(sections[i].topic, docPath)
+		}
+	}
+	return docPath
+}
+
+// lostLink names a link of the original that, from the file its text lands
+// in, leads elsewhere or nowhere; "" when none does. Links the split adds
+// (the topics list, a topic's link back) are not the original's.
+func (o *docLinks) lostLink(sections []section, writes []Write, homes landings) string {
+	type at struct {
+		file string
+		t    target
+	}
+	in, headings := o.in, homes.headings
+	was := originalKeys(in.Links, in.Path, headings)
+	want := map[at]int{}
+	for _, r := range o.routes(sections) {
+		want[at{r.file, was.of(in.Path, r.Dest)}]++
+	}
+	files := make(map[string][]mdoutline.Heading, len(writes))
 	for _, w := range writes {
-		written[w.Path] = mdoutline.Headings(w.Body)
+		files[w.Path] = mdoutline.Headings(w.Body)
 	}
-	check := func(file, target, fragment string) string {
-		hs, ok := written[target]
-		if !ok {
-			return ""
-		}
-		if _, found := mdoutline.Find(hs, fragment); found {
-			return ""
-		}
-		if _, was := mdoutline.Find(headings, fragment); !was {
-			return ""
-		}
-		return fmt.Sprintf("a link to %s#%s in %s", target, fragment, file)
-	}
+	is := landedKeys(in.Links, files, homes)
+	got := map[at]int{}
 	for _, w := range writes {
-		for _, dest := range links.Targets(w.Body) {
-			doc, fragment, ok := strings.Cut(dest, "#")
-			if !ok {
-				continue
+		for t, n := range is.count(w.Path, w.Body) {
+			got[at{w.Path, t}] = n
+		}
+	}
+	var lost []string
+	for k, n := range want {
+		if got[k] < n {
+			lost = append(lost, "a link to "+k.t.name(headings)+" in "+k.file)
+		}
+	}
+	if len(lost) == 0 {
+		return ""
+	}
+	return slices.Min(lost)
+}
+
+// relocator writes the original's link destinations for the file a piece of
+// it lands in.
+type relocator struct {
+	r     links.Resolver
+	path  string // the original document
+	homes landings
+}
+
+// relocate is dest, as written in the original, written from file here: a
+// self link at its heading's landing (the link's own form kept where it
+// still names here), a relative path at what it named; anything else as is.
+func (rl *relocator) relocate(dest, here string) string {
+	doc, _, _ := strings.Cut(dest, "#")
+	frag := dest[len(doc):] // with its '#'
+	bare, _, _ := strings.Cut(doc, "?")
+	query := doc[len(bare):]
+	if !rl.r.Self(rl.path, doc) {
+		abs := links.ResolvePath(rl.path, doc)
+		if here == rl.path || abs == "" || strings.HasPrefix(doc, "/") {
+			return dest
+		}
+		return abs + query + frag
+	}
+	if frag != "" {
+		if from, to, ok := rl.homes.find(frag[1:]); ok {
+			if to.path != here || (doc != "" && here != rl.path) {
+				return to.path + query + "#" + to.anchor
 			}
-			to := r.Path(w.Path, doc)
-			if r.Self(w.Path, doc) {
-				to = w.Path
+			if to.anchor == from {
+				return dest
 			}
-			if broken := check(w.Path, to, fragment); broken != "" {
-				return broken
+			return doc + "#" + to.anchor
+		}
+	}
+	if here == rl.path {
+		return dest
+	}
+	return rl.path + query + frag
+}
+
+// rewrite relocates the spans inside text, which starts at base in the
+// original and lands in file here.
+func (rl *relocator) rewrite(text string, base int, spans []links.Span, here string) string {
+	var b strings.Builder
+	last := 0
+	for i := range spans {
+		sp := &spans[i]
+		if !sp.Rewritable() || sp.Start < base || sp.End > base+len(text) {
+			continue
+		}
+		if to := rl.relocate(sp.Dest, here); to != sp.Dest {
+			b.WriteString(text[last : sp.Start-base])
+			b.WriteString(to)
+			last = sp.End - base
+		}
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+// definitions copies defs as written for file here, one per line.
+func (rl *relocator) definitions(defs []*links.Definition, here string) string {
+	var b strings.Builder
+	for _, d := range defs {
+		b.WriteString(rl.rewrite(d.Text, 0, links.Spans(d.Text), here) + "\n")
+	}
+	return b.String()
+}
+
+// linkKeys names where links lead, so one destination compares equal across
+// a rewrite: a heading of the original by index, else its path or URL.
+type linkKeys struct {
+	r      links.Resolver
+	files  map[string][]mdoutline.Heading // each file's headings as written
+	origin map[landing]int                // a written heading's index in the original
+}
+
+// originalKeys reads links in the document as it was.
+func originalKeys(r links.Resolver, docPath string, headings []mdoutline.Heading) *linkKeys {
+	k := &linkKeys{r: r, files: map[string][]mdoutline.Heading{docPath: headings}, origin: make(map[landing]int, len(headings))}
+	for i, h := range headings {
+		k.origin[landing{docPath, h.Anchor}] = i
+	}
+	return k
+}
+
+// landedKeys reads links in the files written, tracing each heading back
+// through homes.
+func landedKeys(r links.Resolver, files map[string][]mdoutline.Heading, homes landings) *linkKeys {
+	k := &linkKeys{r: r, files: files, origin: make(map[landing]int, len(homes.headings))}
+	for i, h := range homes.headings {
+		k.origin[homes.at[h.Anchor]] = i
+	}
+	return k
+}
+
+// of is where dest, a link in file from, leads.
+func (k *linkKeys) of(from, dest string) target {
+	doc, frag, hasFrag := strings.Cut(dest, "#")
+	to := from
+	if !k.r.Self(from, doc) {
+		if to = k.r.Path(from, doc); to == "" {
+			return target{dest: dest, heading: -1}
+		}
+	}
+	// A fragment naming no heading of the original (the topics list a split
+	// adds) keys by its destination as written.
+	if hs, ok := k.files[to]; ok && hasFrag {
+		if h, found := mdoutline.Find(hs, frag); found {
+			if i, known := k.origin[landing{to, h.Anchor}]; known {
+				return target{heading: i}
 			}
 		}
 	}
-	return ""
+	if hasFrag {
+		to += "#" + frag
+	}
+	return target{dest: to, heading: -1}
+}
+
+// count tallies where body's links, written in file from, lead.
+func (k *linkKeys) count(from, body string) map[target]int {
+	out := map[target]int{}
+	for _, f := range links.Targets(body) {
+		out[k.of(from, f.Dest)]++
+	}
+	return out
 }
 
 // target is where a link leads: a heading of the document by index, so a
@@ -566,21 +785,6 @@ func brokenLink(r links.Resolver, writes []Write, headings []mdoutline.Heading) 
 type target struct {
 	dest    string
 	heading int
-}
-
-// targets counts where body's links lead, every form links.Targets finds.
-func targets(r links.Resolver, docPath, body string, headings []mdoutline.Heading) map[target]int {
-	out := map[target]int{}
-	for _, dest := range links.Targets(body) {
-		k := target{dest: dest, heading: -1}
-		if doc, frag, ok := strings.Cut(dest, "#"); ok && r.Self(docPath, doc) {
-			if i := headingIndex(headings, frag); i >= 0 {
-				k = target{heading: i}
-			}
-		}
-		out[k]++
-	}
-	return out
 }
 
 // linkChange names a link whose count differs between want and got, the
@@ -608,50 +812,6 @@ func (t target) name(headings []mdoutline.Heading) string {
 		return "#" + headings[t.heading].Anchor
 	}
 	return t.dest
-}
-
-// headingIndex is the index of the heading frag names, as fetch resolves
-// it; -1 when none.
-func headingIndex(hs []mdoutline.Heading, frag string) int {
-	h, ok := mdoutline.Find(hs, frag)
-	if !ok {
-		return -1
-	}
-	return slices.IndexFunc(hs, func(x mdoutline.Heading) bool { return x.Start == h.Start })
-}
-
-// rebaseFragments points each same-document link in text (found, offsets
-// into text), which lands in file here, at its heading's landing. A link
-// with no span stays as written; callers refuse a move it would miss.
-func rebaseFragments(text string, found []links.FragmentLink, here string, homes landings) string {
-	var b strings.Builder
-	last := 0
-	for _, l := range found {
-		from, to, ok := homes.find(l.Anchor)
-		if !ok || !l.Rewritable() || (to.path == here && to.anchor == from) {
-			continue
-		}
-		b.WriteString(text[last:l.Start])
-		if to.path != here {
-			b.WriteString(to.path)
-		}
-		b.WriteString("#" + to.anchor)
-		last = l.End
-	}
-	b.WriteString(text[last:])
-	return b.String()
-}
-
-// fragmentsIn is the links of all within [start, start+n), offsets made
-// relative to start.
-func fragmentsIn(all []links.FragmentLink, start, n int) []links.FragmentLink {
-	var out []links.FragmentLink
-	for _, l := range all {
-		if l.Start >= start && l.End <= start+n {
-			out = append(out, links.FragmentLink{Anchor: l.Anchor, Start: l.Start - start, End: l.End - start})
-		}
-	}
-	return out
 }
 
 // landing is a heading's file and anchor after the split.

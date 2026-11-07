@@ -91,6 +91,15 @@ func bigDoc() string {
 	return b.String()
 }
 
+// bodies is each write's body by path.
+func bodies(writes []Write) map[string]string {
+	out := make(map[string]string, len(writes))
+	for _, w := range writes {
+		out[w.Path] = w.Body
+	}
+	return out
+}
+
 func TestSplitMovesHeadingsVerbatimAndKeepsTheFrame(t *testing.T) {
 	in := &Input{Path: "/plans/big.md", Body: bigDoc(), Version: 7,
 		Metadata: map[string]string{"tags": "plan,steps,design,unrelated,status:active", "importance": "0.8", "type": "Plan", "title": "Big plan", "user": "u"}}
@@ -180,10 +189,7 @@ func TestSplitRebasesSameDocumentLinks(t *testing.T) {
 	if p.Kind != KindSplit {
 		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
 	}
-	byPath := map[string]string{}
-	for _, w := range p.Writes {
-		byPath[w.Path] = w.Body
-	}
+	byPath := bodies(p.Writes)
 	if hub := byPath["/plans/big.md"]; !strings.Contains(hub, "[D](/plans/big/design.md#design), [c](/plans/big/design.md#configyaml);") {
 		t.Errorf("hub keeps a case or slug fragment:\n%s", hub)
 	}
@@ -198,15 +204,78 @@ func TestSplitRebasesSameDocumentLinks(t *testing.T) {
 	}
 }
 
-// A split rebases only inline fragment links, so one that moves the heading a
-// reference-style or same-store mark:// link names is refused, not written broken.
-func TestSplitRefusesALinkItCannotRebase(t *testing.T) {
-	for _, link := range []string{"[d][r].\n\n[r]: #design", "[d](mark://h/plans/big.md#design)."} {
+// Every link form a split can rewrite follows its heading: a reference
+// definition, a same-store mark:// URL. One it cannot (raw HTML) refuses.
+func TestSplitRebasesEveryLinkForm(t *testing.T) {
+	for link, want := range map[string]string{
+		"[d][r].\n\n[r]: #design":            "see [d][r].\n\n[r]: /plans/big/design.md#design\n",
+		"[d](mark://h/plans/big.md#design).": "see [d](/plans/big/design.md#design).",
+		`<a href="#design">d</a>.`:           "",
+	} {
 		body := strings.Replace(bigDoc(), "One short frame section.", "One short frame section; see "+link, 1)
 		p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}, Links: links.ResolverFor("h")})
-		if p.Kind == KindSplit || !slices.ContainsFunc(p.Unfixed, func(u string) bool { return strings.Contains(u, "a split would break a link to /plans/big.md#design") }) {
-			t.Errorf("%s: kind %s: %q", link, p.Kind, p.Unfixed)
+		if want == "" {
+			if p.Kind == KindSplit || !slices.ContainsFunc(p.Unfixed, func(u string) bool {
+				return strings.Contains(u, "a split would change where a link to #design in /plans/big.md leads")
+			}) {
+				t.Errorf("%s: kind %s, want refused: %q", link, p.Kind, p.Unfixed)
+			}
+			continue
 		}
+		if p.Kind != KindSplit || !strings.Contains(p.Writes[len(p.Writes)-1].Body, want) {
+			t.Errorf("%s: kind %s, want the hub to hold %q: %q\n%+v", link, p.Kind, want, p.Unfixed, p.Writes)
+		}
+	}
+}
+
+// A moved section's relative links name what they named from the original:
+// written absolute in the topic file, left as they are in the hub.
+func TestSplitKeepsRelativeLinks(t *testing.T) {
+	line := "First sentence of design, see [o](other.md), [u](../up.md), ![i](img/a.png \"t\"), [q](other.md?x=1#sec), [s](big.md#goal), [a](/abs.md) and [h](https://e.x/y)."
+	body := strings.Replace(bigDoc(), "First sentence of design. Second.", line+" Second.\n\nMore in [d].\n\n[d]: docs.md", 1)
+	body = strings.Replace(body, "One short frame section.", "One short frame section, near [n](notes.md).", 1)
+	p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}})
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %q", p.Kind, p.Unfixed)
+	}
+	byPath := bodies(p.Writes)
+	for file, want := range map[string]string{
+		"/plans/big/design.md": "see [o](/plans/other.md), [u](/up.md), ![i](/plans/img/a.png \"t\"), [q](/plans/other.md?x=1#sec), [s](/plans/big.md#goal), [a](/abs.md) and [h](https://e.x/y).",
+		"/plans/big.md":        "near [n](notes.md).",
+	} {
+		if !strings.Contains(byPath[file], want) {
+			t.Errorf("%s missing %q:\n%s", file, want, byPath[file])
+		}
+	}
+	if !strings.Contains(byPath["/plans/big/design.md"], "[d]: /plans/docs.md\n") {
+		t.Errorf("a moved definition keeps its relative path:\n%s", byPath["/plans/big/design.md"])
+	}
+	if !strings.Contains(byPath["/plans/big.md"], "see [o](other.md), [u](../up.md)") {
+		t.Errorf("the hub bullet does not quote the line as the hub reads it:\n%s", byPath["/plans/big.md"])
+	}
+}
+
+// A file gets a copy of each definition its uses need, written for that
+// file, so no use reads as text where it lands; the hub's bullets included.
+func TestSplitCopiesReferenceDefinitions(t *testing.T) {
+	body := strings.Replace(bigDoc(), "First sentence of design. Second.", "First sentence of design, see [the docs][ext] and [goal][g]. Second.", 1)
+	body = strings.Replace(body, "First sentence of measures. Second.", "First sentence of measures. Second.\n\n[ext]: https://e.x/docs \"Docs\"\n[g]: #goal", 1)
+	p := Propose(&Input{Path: "/plans/big.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "plan"}})
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %q", p.Kind, p.Unfixed)
+	}
+	byPath := bodies(p.Writes)
+	for file, want := range map[string]string{
+		"/plans/big/design.md": "\n\n[ext]: https://e.x/docs \"Docs\"\n[g]: /plans/big.md#goal\n",
+		"/plans/big.md":        "\n\n[ext]: https://e.x/docs \"Docs\"\n[g]: #goal\n",
+	} {
+		if !strings.HasSuffix(byPath[file], want) {
+			t.Errorf("%s does not end %q:\n%s", file, want, byPath[file])
+		}
+	}
+	// Measures holds the definitions, rebased in place, and gets no copy.
+	if m := byPath["/plans/big/measures.md"]; strings.Count(m, "[ext]:") != 1 || !strings.Contains(m, "Second.\n\n[ext]: https://e.x/docs \"Docs\"\n[g]: /plans/big.md#goal\n") {
+		t.Errorf("measures:\n%s", m[:400])
 	}
 }
 
@@ -222,10 +291,7 @@ func TestSplitRenumbersDuplicateAnchors(t *testing.T) {
 	if p.Kind != KindSplit {
 		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
 	}
-	byPath := map[string]string{}
-	for _, w := range p.Writes {
-		byPath[w.Path] = w.Body
-	}
+	byPath := bodies(p.Writes)
 	for file, want := range map[string]string{
 		"/log.md":      "see [b](/log/beta.md#next).",
 		"/log/beta.md": "after [a](/log/alpha.md#next) and [mine](#next).",
@@ -483,11 +549,14 @@ func TestEditKeepsEveryLinkForm(t *testing.T) {
 		name, body, keep, refuse string
 	}{
 		{"shortcut label", "[Plan — later] [Plan — later][] ![Fig — 2]\n\nx — y\n\n[plan — later]: /p.md\n[fig — 2]: f.png\n", "[Plan — later] [Plan — later][] ![Fig — 2]\n\nx, y", ""},
-		{"label naming a moved heading", "[Plan — later]\n\n## Plan — later\n\n[plan — later]: #plan--later\n", "", "a link to #plan--later"},
+		{"label naming a moved heading", "[Plan — later]\n\n## Plan — later\n\n[plan — later]: #plan--later\n", "[Plan — later]\n\n## Plan, later\n\n[plan — later]: #plan-later\n", ""},
 		{"text the edit would link", "[a — b]\n\n[a, b]: /x.md\n", "", "a link to /x.md"},
 		{"autolink", "<mark://h/d.md#plan--later>\n\n## Plan — later\n", "", "a link to #plan--later"},
 		{"raw html", "<a href=\"#plan--later\">p</a>\n\n## Plan — later\n", "", "a link to #plan--later"},
 		{"html to a kept heading", "<a href=\"#kept\">k</a> <mark://h/d.md#kept>\n\n## Plan — later\n", "<a href=\"#kept\">k</a> <mark://h/d.md#kept>\n\n## Plan, later", ""},
+		{"definition by path", "## Plan — later\n\n[plan][p]\n\n[p]: /d.md#plan--later\n", "[plan][p]\n\n[p]: /d.md#plan-later\n", ""},
+		{"definition with a title", "[plan][p]\n\n## Plan — later\n\n[p]: <#kept> \"T\"\n", "[p]: <#kept> \"T\"\n", ""},
+		{"link with no text", "## Plan — later\n\n[](#plan--later)\n", "", "a link to #plan--later"},
 	} {
 		p := Propose(&Input{Path: "/d.md", Body: head + c.body, Version: 1, Metadata: map[string]string{"tags": "d"}, Links: links.ResolverFor("h")})
 		switch {
@@ -509,20 +578,6 @@ func TestEditAddsOnlyAParagraphSummary(t *testing.T) {
 		p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d", "description": desc}})
 		if got := p.Kind == KindEdit && strings.Contains(p.Writes[0].Body, "# Doc\n\n"+desc+"\n\n## Part"); got != added {
 			t.Errorf("description %q: added = %v, want %v", desc, got, added)
-		}
-	}
-}
-
-// A reference-style link has no inline destination to rewrite: an edit that
-// moves the anchor it names is refused, one that keeps it is not.
-func TestEditRefusesAMoveALinkCannotFollow(t *testing.T) {
-	for ref, want := range map[string]string{"#plan--later": KindReport, "/d.md#plan--later": KindReport, "#kept": KindEdit} {
-		body := "# Doc\n\nWhat the doc settles for its readers.\n\n## Kept\n\nsee [plan][p].\n\n## Plan — later\n\nthird\n\n[p]: " + ref + "\n"
-		p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d"}})
-		if p.Kind != want || (want == KindReport && !slices.ContainsFunc(p.Unfixed, func(u string) bool {
-			return strings.Contains(u, "the edit would change where a link to #plan--later leads")
-		})) {
-			t.Errorf("[p]: %s: kind %s, want %s: %q", ref, p.Kind, want, p.Unfixed)
 		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 const markScheme = "mark://"
@@ -115,21 +116,7 @@ func ExtractWithPositions(body string) []LinkInfo {
 		}
 		dest, fragment, _ := strings.Cut(dest, "#")
 
-		// Inline nodes carry no segments, but the enclosing block does;
-		// headings cannot occur inside a block, so its start is in the same
-		// section as the link. Skip inline ancestors (emphasis wrapping the
-		// link, etc.): BaseInline.Lines() panics by contract.
-		blockStart := -1
-		for p := link.Parent(); p != nil; p = p.Parent() {
-			if p.Type() != ast.TypeBlock {
-				continue
-			}
-			if lines := p.Lines(); lines != nil && lines.Len() > 0 {
-				blockStart = lines.At(0).Start
-				break
-			}
-		}
-
+		blockStart := blockStart(link)
 		open, closeBracket, linkText := brackets(link, src)
 		if closeBracket < 0 {
 			// Link with no text nodes (e.g. [](a.md)) — preserve for navigation
@@ -160,9 +147,24 @@ func ExtractWithPositions(body string) []LinkInfo {
 	return infos
 }
 
-// brackets finds a link's '[' and ']' from its descendant text segments, and
-// its rendered text; -1, -1 for a link with no text nodes.
-func brackets(link *ast.Link, src []byte) (open, closeBracket int, linkText string) {
+// blockStart is the start of the nearest block holding n, -1 if unknown.
+// Inline nodes carry no segments, but headings cannot occur inside a block,
+// so the block's start is in n's section. BaseInline.Lines() panics.
+func blockStart(n ast.Node) int {
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		if p.Type() != ast.TypeBlock {
+			continue
+		}
+		if lines := p.Lines(); lines != nil && lines.Len() > 0 {
+			return lines.At(0).Start
+		}
+	}
+	return -1
+}
+
+// brackets finds a link's or image's '[' and ']' from its descendant text
+// segments, and its rendered text; -1, -1 for one with no text nodes.
+func brackets(link ast.Node, src []byte) (open, closeBracket int, linkText string) {
 	firstStart, lastStop := -1, -1
 	var b strings.Builder
 	walk(link, func(child ast.Node, entering bool) ast.WalkStatus {
@@ -189,55 +191,116 @@ func brackets(link *ast.Link, src []byte) (open, closeBracket int, linkText stri
 	return open, closeBracket, b.String()
 }
 
-// FragmentLink is a same-document link ("[x](#a)"): its anchor and the byte
-// span [Start, End) of the "#a" in the source, -1 when it has none to
-// rewrite (a reference-style link, one with no text).
-type FragmentLink struct {
-	Anchor     string
+// Span is a rewritable destination: an inline link's or image's, or a
+// reference definition's. [Start, End) are its bytes, -1 when not verbatim
+// (an escape, no text to find it by).
+type Span struct {
+	Dest       string
 	Start, End int
 }
 
-// Rewritable reports a link whose span can be rewritten in place.
-func (l FragmentLink) Rewritable() bool { return l.Start >= 0 }
+// Rewritable reports a span whose bytes can be replaced in place.
+func (s *Span) Rewritable() bool { return s.Start >= 0 }
 
-// FragmentLinks returns the fragment-only links in body, the ones
-// ExtractWithPositions drops. The parser skips code and escaped brackets,
-// and a span excludes any title, so rewriting it keeps the rest verbatim.
-func FragmentLinks(body string) []FragmentLink {
-	return anchorSpans(body, func(dest string) bool { return dest == "" })
+// Spans returns body's rewritable destinations in document order. The
+// parser skips code, and a span excludes any title, so a rewrite keeps the
+// rest verbatim. A reference-style use has none: its definition holds it.
+func Spans(body string) []Span {
+	src := []byte(body)
+	var out []Span
+	walk(goldmark.DefaultParser().Parse(text.NewReader(src)), func(n ast.Node, entering bool) ast.WalkStatus {
+		if !entering {
+			return ast.WalkContinue
+		}
+		switch v := n.(type) {
+		case *ast.Link:
+			if v.Reference == nil {
+				out = append(out, inlineSpan(src, v, v.Destination))
+			}
+		case *ast.Image:
+			if v.Reference == nil {
+				out = append(out, inlineSpan(src, v, v.Destination))
+			}
+		case *ast.LinkReferenceDefinition:
+			out = append(out, definitionSpan(src, v))
+		}
+		return ast.WalkContinue
+	})
+	return out
 }
 
-// anchorSpans returns every link whose destination before the fragment keep
-// accepts, with its "#a" span when it has one.
-func anchorSpans(body string, keep func(dest string) bool) []FragmentLink {
+// inlineSpan finds an inline link's or image's destination in its "(dest)".
+func inlineSpan(src []byte, n ast.Node, dest []byte) Span {
+	if _, closeBracket, _ := brackets(n, src); closeBracket >= 0 && inlineEnd(src, closeBracket) >= 0 {
+		return verbatim(src, closeBracket+2, " \t\n)", dest) // past "]("
+	}
+	return Span{Dest: string(dest), Start: -1, End: -1}
+}
+
+// definitionSpan finds a reference definition's destination after its "]:".
+func definitionSpan(src []byte, d *ast.LinkReferenceDefinition) Span {
+	none := Span{Dest: string(d.Destination), Start: -1, End: -1}
+	lines := d.Lines()
+	if lines.Len() == 0 {
+		return none
+	}
+	from, to := lines.At(0).Start, lines.At(lines.Len()-1).Stop
+	i := bytes.IndexByte(src[from:to], '[')
+	if i < 0 {
+		return none
+	}
+	for i += from + 1; i < to && src[i] != ']'; i++ {
+		if src[i] == '\\' {
+			i++
+		}
+	}
+	if i+1 >= to || src[i+1] != ':' {
+		return none
+	}
+	return verbatim(src[:to], i+2, " \t\n", d.Destination)
+}
+
+// verbatim is dest's span when its bytes follow from, past blanks: up to a
+// stop byte, or the '>' of a "<dest>". An escaped or entity-coded destination
+// differs from its source text: rewriting it would touch other bytes.
+func verbatim(src []byte, from int, stops string, dest []byte) Span {
+	s := Span{Dest: string(dest), Start: -1, End: -1}
+	for from < len(src) && strings.IndexByte(" \t\n", src[from]) >= 0 {
+		from++
+	}
+	if from < len(src) && src[from] == '<' {
+		from, stops = from+1, ">\n"
+	}
+	end := from
+	for end < len(src) && strings.IndexByte(stops, src[end]) < 0 {
+		end++
+	}
+	if bytes.Equal(src[from:end], dest) {
+		s.Start, s.End = from, end
+	}
+	return s
+}
+
+// Definition is a reference definition as written, its container's prefixes
+// (a quote's "> ") dropped; Pos is where it starts.
+type Definition struct {
+	Label, Text string
+	Pos         int
+}
+
+// Definitions returns body's reference definitions in document order.
+func Definitions(body string) []Definition {
 	src := []byte(body)
-	var out []FragmentLink
+	var out []Definition
 	walk(goldmark.DefaultParser().Parse(text.NewReader(src)), func(n ast.Node, entering bool) ast.WalkStatus {
-		link, ok := n.(*ast.Link)
-		if !entering || !ok {
-			return ast.WalkContinue
-		}
-		dest, fragment, hasFragment := bytes.Cut(link.Destination, []byte("#"))
-		if !hasFragment || !keep(string(dest)) {
-			return ast.WalkContinue
-		}
-		l := FragmentLink{Anchor: string(fragment), Start: -1, End: -1}
-		if _, closeBracket, _ := brackets(link, src); closeBracket >= 0 && inlineEnd(src, closeBracket) >= 0 {
-			start := closeBracket + 2 // past "]("
-			for start < len(src) && (src[start] == ' ' || src[start] == '\t' || src[start] == '\n' || src[start] == '<') {
-				start++
+		if d, ok := n.(*ast.LinkReferenceDefinition); ok && entering && d.Lines().Len() > 0 {
+			var b strings.Builder
+			for i := range d.Lines().Len() {
+				seg := d.Lines().At(i)
+				b.Write(seg.Value(src))
 			}
-			end := start
-			for end < len(src) && !strings.ContainsRune(" \t\n)>", rune(src[end])) {
-				end++
-			}
-			// An escaped or entity-coded destination differs from its source
-			// text; rewriting it would touch bytes that are not the anchor.
-			if bytes.Equal(src[start:end], link.Destination) {
-				l.Start, l.End = start+len(dest), end
-			}
+			out = append(out, Definition{Label: string(d.Label), Text: b.String(), Pos: d.Lines().At(0).Start})
 		}
-		out = append(out, l)
 		return ast.WalkContinue
 	})
 	return out
@@ -246,25 +309,34 @@ func anchorSpans(body string, keep func(dest string) bool) []FragmentLink {
 // htmlRef is an href or src attribute in raw HTML, its value in any quoting.
 var htmlRef = regexp.MustCompile(`(?i)\b(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`)
 
+// Followed is a destination a reader can follow: Pos is the start of the
+// block it sits in, Label the reference it resolves through, "" for none.
+type Followed struct {
+	Dest, Label string
+	Pos         int
+}
+
 // Targets is every destination a reader can follow in body, in document
 // order: links and images inline or by reference, autolinks, and href or src
 // in raw HTML. Unlike Extract it keeps fragments and fragment-only links.
-func Targets(body string) []string {
+func Targets(body string) []Followed {
 	src := []byte(body)
-	var out []string
+	var out []Followed
 	walk(goldmark.DefaultParser().Parse(text.NewReader(src)), func(n ast.Node, entering bool) ast.WalkStatus {
 		if !entering {
 			return ast.WalkContinue
 		}
 		var html []byte
+		pos := -1
 		switch v := n.(type) {
 		case *ast.Link:
-			out = append(out, string(v.Destination))
+			out = append(out, Followed{Dest: string(v.Destination), Label: refLabel(v.Reference), Pos: blockStart(v)})
 		case *ast.Image:
-			out = append(out, string(v.Destination))
+			out = append(out, Followed{Dest: string(v.Destination), Label: refLabel(v.Reference), Pos: blockStart(v)})
 		case *ast.AutoLink:
-			out = append(out, string(v.URL(src)))
+			out = append(out, Followed{Dest: string(v.URL(src)), Pos: blockStart(v)})
 		case *ast.RawHTML:
+			pos = blockStart(v)
 			for i := range v.Segments.Len() {
 				seg := v.Segments.At(i)
 				html = append(html, seg.Value(src)...)
@@ -272,6 +344,9 @@ func Targets(body string) []string {
 		case *ast.HTMLBlock:
 			for i := range v.Lines().Len() {
 				line := v.Lines().At(i)
+				if i == 0 {
+					pos = line.Start
+				}
 				html = append(html, line.Value(src)...)
 			}
 			if v.HasClosure() {
@@ -279,11 +354,25 @@ func Targets(body string) []string {
 			}
 		}
 		for _, m := range htmlRef.FindAllSubmatch(html, -1) {
-			out = append(out, string(bytes.Join(m[1:], nil)))
+			out = append(out, Followed{Dest: string(bytes.Join(m[1:], nil)), Pos: pos})
 		}
 		return ast.WalkContinue
 	})
 	return out
+}
+
+// LabelKey is a reference label as matching compares it: case folded,
+// inner whitespace collapsed.
+func LabelKey(label string) string {
+	return util.ToLinkReference([]byte(label))
+}
+
+// refLabel is the label a reference link resolves through, "" for inline.
+func refLabel(r *ast.ReferenceLink) string {
+	if r == nil {
+		return ""
+	}
+	return string(r.Value)
 }
 
 // walk is ast.Walk for a callback that cannot fail.
@@ -383,12 +472,6 @@ func (r Resolver) Path(docPath, dest string) string {
 // (a bare "#a"), a query, a path, or a mark:// URL on r's store.
 func (r Resolver) Self(docPath, dest string) bool {
 	return dest == "" || strings.HasPrefix(dest, "?") || r.Path(docPath, dest) == docPath
-}
-
-// SelfLinks is FragmentLinks plus the links that name docPath before the
-// fragment (see Self); each span is still just the "#a".
-func (r Resolver) SelfLinks(body, docPath string) []FragmentLink {
-	return anchorSpans(body, func(dest string) bool { return r.Self(docPath, dest) })
 }
 
 // ResolvePath is the store path a link in docPath points at: fragment and
