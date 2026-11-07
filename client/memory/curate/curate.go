@@ -112,18 +112,15 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		p.Fixed = append(p.Fixed, "frontmatter fence removed; metadata keys: "+strings.Join(Lift(kv, meta), ", "))
 		headings = mdoutline.Headings(body)
 	}
-	// Headings are renamed on the offsets just parsed; the em dash pass
-	// comes after since it moves offsets but no heading.
-	var renamed []rename
-	body, renamed = stripHeadingStatus(body, headings)
-	for _, r := range renamed {
-		p.Fixed = append(p.Fixed, fmt.Sprintf("heading %q is now %q with its status on the line under it", r.from, r.to))
-	}
+	// Headings are renamed on the offsets just parsed, before the em dash
+	// pass shifts them.
+	body, renamed := stripHeadingStatus(body, headings)
+	p.Fixed = append(p.Fixed, renamed...)
 	if total := gate.EmDashCount(body); total > 0 {
 		var n int
 		body, n = replaceEmDashes(body)
 		if n > 0 {
-			p.Fixed = append(p.Fixed, fmt.Sprintf("%d of %d em dash(es) replaced with a comma; the rest are in code or open a line", n, total))
+			p.Fixed = append(p.Fixed, fmt.Sprintf("%d of %d em dash(es) replaced with a comma; the rest are in code, markup, or open a line", n, total))
 		}
 	}
 	after := mdoutline.Headings(body)
@@ -135,16 +132,33 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	if body == in.Body {
 		return
 	}
+	// Heading i before is heading i after, so any shifted anchor (a rename,
+	// an em dash, a renumbered twin) is a move the document's links follow.
+	if !slices.EqualFunc(headings, after, func(a, b mdoutline.Heading) bool { return a.Level == b.Level }) {
+		p.Unfixed = append(p.Unfixed, "the edit would add, drop or relevel a heading, so its anchors cannot be mapped; edit by hand")
+		return
+	}
+	homes := landings{headings: headings, at: make(map[string]landing, len(headings))}
+	for i, h := range headings {
+		homes.at[h.Anchor] = landing{path: in.Path, anchor: after[i].Anchor}
+	}
+	if p.recordMoves(in.Path, homes) {
+		body = rebaseFragments(body, links.FragmentLinks(body), in.Path, homes)
+	}
 	p.Kind = KindEdit
 	p.Writes = []Write{{Path: in.Path, Body: body, Metadata: meta}}
 	p.Unfixed = gate.AuditProblems(in.Path, body, meta["description"])
-	// Headings keep their count and order through a rename, so index maps
-	// the old anchor to the new one.
-	for _, r := range renamed {
-		if before, now := headings[r.index].Anchor, after[r.index].Anchor; before != now {
-			p.moved(before, in.Path+"#"+now)
+}
+
+// recordMoves notes every heading whose landing is not where it was; false
+// when none moved.
+func (p *Proposal) recordMoves(here string, homes landings) bool {
+	for _, h := range homes.headings {
+		if to := homes.at[h.Anchor]; to.path != here || to.anchor != h.Anchor {
+			p.moved(h.Anchor, to.path+"#"+to.anchor)
 		}
 	}
+	return len(p.Moved) > 0
 }
 
 func (p *Proposal) moved(anchor, to string) {
@@ -175,10 +189,10 @@ var functionWords = map[string]bool{
 	"to": true, "until": true, "via": true, "with": true,
 }
 
-// replaceEmDashes turns em dashes into commas outside code and line starts,
+// replaceEmDashes turns em dashes in prose into commas, except at line starts,
 // where a dash may be a bullet or open a heading; n is what changed.
 func replaceEmDashes(body string) (out string, n int) {
-	code := codeMask{segs: mdoutline.CodeSegments(body)}
+	prose := proseMask{segs: mdoutline.ProseSegments(body)}
 	var b strings.Builder
 	b.Grow(len(body))
 	for off := 0; off <= len(body); {
@@ -191,7 +205,7 @@ func replaceEmDashes(body string) (out string, n int) {
 			keep = off + m[1]
 		}
 		b.WriteString(body[off:keep])
-		line, changed := replaceOutsideCode(body, keep, end, &code)
+		line, changed := replaceInProse(body, keep, end, &prose)
 		b.Write(line)
 		n += changed
 		if end < len(body) {
@@ -204,25 +218,25 @@ func replaceEmDashes(body string) (out string, n int) {
 
 const emDash = "—"
 
-// codeMask answers whether a byte offset is code; offsets are asked in order.
-type codeMask struct {
+// proseMask answers whether a byte offset is prose; offsets are asked in order.
+type proseMask struct {
 	segs []mdoutline.Segment
 	i    int
 }
 
-func (m *codeMask) at(off int) bool {
+func (m *proseMask) at(off int) bool {
 	for m.i < len(m.segs) && m.segs[m.i].Stop <= off {
 		m.i++
 	}
 	return m.i < len(m.segs) && off >= m.segs[m.i].Start
 }
 
-// replaceOutsideCode rewrites body[from:to] with each em dash outside code
-// replaced by ", ", surrounding blanks folded; n is what changed.
-func replaceOutsideCode(body string, from, to int, code *codeMask) (out []byte, n int) {
+// replaceInProse rewrites body[from:to] with each em dash in prose replaced
+// by ", ", surrounding blanks folded; n is what changed.
+func replaceInProse(body string, from, to int, prose *proseMask) (out []byte, n int) {
 	out = make([]byte, 0, to-from)
 	for i := from; i < to; {
-		if !strings.HasPrefix(body[i:to], emDash) || code.at(i) {
+		if !strings.HasPrefix(body[i:to], emDash) || !prose.at(i) {
 			out = append(out, body[i])
 			i++
 			continue
@@ -257,17 +271,11 @@ func Lift(kv, meta map[string]string) []string {
 	return keys
 }
 
-type rename struct {
-	index    int // in the headings of the body as given
-	from, to string
-}
-
 // stripHeadingStatus moves the status tokens of every heading below the H1
 // onto a "Status:" line under it; a heading left empty stays as it is.
 // Edits run back to front so earlier offsets stay valid.
-func stripHeadingStatus(body string, headings []mdoutline.Heading) (string, []rename) {
-	var renamed []rename
-	for i, h := range slices.Backward(headings) {
+func stripHeadingStatus(body string, headings []mdoutline.Heading) (out string, renamed []string) {
+	for _, h := range slices.Backward(headings) {
 		if h.Level == 1 || !gate.CarriesStatus(h.Text) {
 			continue
 		}
@@ -281,7 +289,7 @@ func stripHeadingStatus(body string, headings []mdoutline.Heading) (string, []re
 		}
 		section := strings.Replace(line, h.Text, to, 1) + "\n\nStatus: " + status + "\n\n" + strings.TrimLeft(rest, "\n")
 		body = body[:h.Start] + section + body[h.End:]
-		renamed = append(renamed, rename{index: i, from: h.Text, to: to})
+		renamed = append(renamed, fmt.Sprintf("heading %q is now %q with its status on the line under it", h.Text, to))
 	}
 	slices.Reverse(renamed)
 	return body, renamed
@@ -457,11 +465,7 @@ func split(in *Input, headings []mdoutline.Heading, p *Proposal) {
 		p.Unfixed = append(p.Unfixed, "a split would break "+broken+"; link it as #anchor from inside the document, or split by hand")
 		return
 	}
-	for _, h := range headings {
-		if to := homes.at[h.Anchor]; to.path != in.Path || to.anchor != h.Anchor {
-			p.moved(h.Anchor, to.path+"#"+to.anchor)
-		}
-	}
+	p.recordMoves(in.Path, homes)
 	p.Writes = writes
 	p.Fixed = append(p.Fixed, fixed...)
 	p.Fixed = append(p.Fixed, fmt.Sprintf("%s becomes the hub (%d bytes)", in.Path, len(body)))
@@ -927,11 +931,21 @@ func (p *Proposal) Report(moves []Move, notes []string) string {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "\nproposal: %s\nApply with apply: true and this proposal; it binds to v%d.\n", p.Hash, p.Version)
+	b.WriteString(p.approval(moves, notes) + "\n")
 	for i := range p.Writes {
 		w := &p.Writes[i]
 		fmt.Fprintf(&b, "\n=== %s (%s)\n%s", w.Path, metaLine(w.Metadata), w.Body)
 	}
 	return b.String()
+}
+
+// approval says whether applying needs a human: an edit of one document with
+// no inbound link to repoint, and nothing unknown about them, does not.
+func (p *Proposal) approval(moves []Move, notes []string) string {
+	if p.Kind == KindEdit && len(moves) == 0 && len(notes) == 0 {
+		return "approval: none"
+	}
+	return "approval: required"
 }
 
 func metaLine(meta map[string]string) string {

@@ -3,6 +3,7 @@ package curate
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -321,6 +322,15 @@ func TestReplaceEmDashes(t *testing.T) {
 	}
 }
 
+func TestReplaceEmDashesKeepsMarkup(t *testing.T) {
+	in := "see [a — b](#A—B \"t — u\"), ![i](/x—y.png), <https://x.io/a—b>, <a href=\"/h—i.md\">h</a> and [r][ref] — done\n\n[ref]: /a—b.md \"t — u\"\n"
+	got, n := replaceEmDashes(in)
+	want := "see [a, b](#A—B \"t — u\"), ![i](/x—y.png), <https://x.io/a—b>, <a href=\"/h—i.md\">h</a> and [r][ref], done\n\n[ref]: /a—b.md \"t — u\"\n"
+	if got != want || n != 2 {
+		t.Errorf("n %d\n%s\nwant\n%s", n, got, want)
+	}
+}
+
 func TestWithoutStatus(t *testing.T) {
 	for in, want := range map[string][2]string{
 		"Step 3 (DONE 2026-10-12)":                  {"Step 3", "DONE 2026-10-12"},
@@ -430,5 +440,46 @@ func TestApplyPreflightsTopicsAndWritesTheHubLast(t *testing.T) {
 	}
 	if _, err := Apply(t.Context(), docsOn(backend), &Proposal{Kind: KindClean}, nil); err == nil || !strings.Contains(err.Error(), "nothing to apply") {
 		t.Errorf("clean apply = %v", err)
+	}
+}
+
+// A rename or an em dash can shift an anchor the edit never touched; every
+// shift is a move, and the document's own links follow it.
+func TestEditKeepsEveryAnchor(t *testing.T) {
+	body := "# Doc\n\nWhat the doc settles for its readers.\n\n## Foo (DONE)\n\nfirst\n\n## Foo\n\nsee [f](#foo), [d](#Foo-DONE \"t\") and [p](#plan--later).\n\n## Plan — later\n\nthird\n"
+	p := Propose(&Input{Path: "/d.md", Body: body, Version: 1, Metadata: map[string]string{"tags": "d"}})
+	if p.Kind != KindEdit {
+		t.Fatalf("proposal = %+v", p)
+	}
+	want := map[string]string{"foo-done": "/d.md#foo", "foo": "/d.md#foo-1", "plan--later": "/d.md#plan-later"}
+	if !maps.Equal(p.Moved, want) {
+		t.Errorf("moved = %v, want %v", p.Moved, want)
+	}
+	if got := p.Writes[0].Body; !strings.Contains(got, "see [f](#foo-1), [d](#foo \"t\") and [p](#plan-later).") {
+		t.Errorf("body:\n%s", got)
+	}
+}
+
+func TestReportSaysWhenApprovalIsNeeded(t *testing.T) {
+	edit := Propose(&Input{Path: "/e.md", Body: "# E\n\nWhat E settles for its readers.\n\n## One\n\nx — y\n", Version: 1, Metadata: map[string]string{"tags": "e"}})
+	split := Propose(&Input{Path: "/plans/big.md", Body: bigDoc(), Version: 1, Metadata: map[string]string{"tags": "plan"}})
+	if edit.Kind != KindEdit || split.Kind != KindSplit {
+		t.Fatalf("kinds %s, %s", edit.Kind, split.Kind)
+	}
+	move := []Move{{Source: "/o.md", From: "/e.md#a", To: "/e.md#b"}}
+	for _, c := range []struct {
+		p     *Proposal
+		moves []Move
+		notes []string
+		want  string
+	}{
+		{&edit, nil, nil, "approval: none\n"},
+		{&edit, move, nil, "approval: required\n"},
+		{&edit, nil, []string{"inbound links unknown"}, "approval: required\n"},
+		{&split, nil, nil, "approval: required\n"},
+	} {
+		if r := c.p.Report(c.moves, c.notes); !strings.Contains(r, c.want) {
+			t.Errorf("%s with %d moves, %d notes: want %q in\n%s", c.p.Kind, len(c.moves), len(c.notes), c.want, r)
+		}
 	}
 }

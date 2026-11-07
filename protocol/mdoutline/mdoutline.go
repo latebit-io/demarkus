@@ -219,6 +219,28 @@ func countLines(span []byte) int {
 // Segment is a byte range [Start, Stop) of the body.
 type Segment struct{ Start, Stop int }
 
+// ProseSegments are the body's text ranges in document order: what a reader
+// reads as words, never code, raw HTML, autolinks, link targets or reference
+// definitions. Editors that rewrite prose touch only these.
+func ProseSegments(body string) []Segment {
+	src := []byte(body)
+	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
+	var segs []Segment
+	walk(doc, func(n ast.Node, entering bool) ast.WalkStatus {
+		if !entering {
+			return ast.WalkContinue
+		}
+		switch v := n.(type) {
+		case *ast.CodeSpan, *ast.RawHTML, *ast.AutoLink, *ast.HTMLBlock, *ast.FencedCodeBlock, *ast.CodeBlock:
+			return ast.WalkSkipChildren
+		case *ast.Text:
+			segs = append(segs, Segment{Start: v.Segment.Start, Stop: v.Segment.Stop})
+		}
+		return ast.WalkContinue
+	})
+	return segs
+}
+
 // CodeSegments are the body's code ranges in document order: fenced and
 // indented block lines, and code span text. Editors that must leave code
 // alone skip them, so every surface agrees on what code is.
