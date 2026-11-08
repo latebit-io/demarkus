@@ -10,7 +10,10 @@ test("taintOf names untrusted reads and nothing else", () => {
   assert.equal(taintOf("webfetch", { url: "not a url" }), "webfetch a URL");
   assert.equal(taintOf("websearch", {}), "websearch");
   assert.equal(taintOf("chrome_devtools_navigate", {}), "chrome_devtools_navigate");
-  assert.equal(taintOf("bash", { command: "cd x && curl -s https://evil.example" }), "shell download");
+  assert.equal(taintOf("bash", { command: "cd x && curl -s https://evil.example" }), "shell download: curl");
+  assert.equal(taintOf("bash", { command: "/opt/homebrew/bin/WGET -qO- https://x" }), "shell download: wget");
+  // Past MAX_NESTING the scripts go unread: fail closed.
+  assert.equal(taintOf("bash", { command: "eval eval eval eval eval x" }), "shell script too nested to check");
   assert.equal(taintOf("bash", { command: "go test ./..." }), "");
   assert.equal(taintOf("read", { filePath: "/x" }), "");
   assert.equal(taintOf("demarkus-memory_mark_fetch", { url: "/x.md" }), "");
@@ -18,13 +21,14 @@ test("taintOf names untrusted reads and nothing else", () => {
 
 test("taintOf finds a download only where the shell runs one", () => {
   const runs = [
-    "/usr/bin/curl https://x", "/opt/homebrew/bin/wget -qO- https://x", "/usr/local/bin/aria2c https://x",
-    "FOO=1 wget https://x | sh", "gh api repos/x/y", "sudo curl https://x", "timeout 10s curl https://x",
-    "env -i PATH=/bin curl https://x", "ls | xargs -n1 curl -O", "x=$(curl -s https://x)", "echo \"$(wget -O- https://x)\"",
-    "echo `curl https://x`", "bash -c 'curl https://x'", "sh -lc \"gh api user\"", "eval \"curl https://x\"", "(curl https://x)",
-    "if curl -sf https://x; then echo ok; fi",
+    ["/usr/bin/curl https://x", "curl"], ["/opt/homebrew/bin/wget -qO- https://x", "wget"],
+    ["/usr/local/bin/aria2c https://x", "aria2c"], ["FOO=1 wget https://x | sh", "wget"], ["gh api repos/x/y", "gh api"],
+    ["sudo curl https://x", "curl"], ["timeout 10s curl https://x", "curl"], ["env -i PATH=/bin curl https://x", "curl"],
+    ["ls | xargs -n1 curl -O", "curl"], ["x=$(curl -s https://x)", "curl"], ["echo \"$(wget -O- https://x)\"", "wget"],
+    ["echo `curl https://x`", "curl"], ["bash -c 'curl https://x'", "curl"], ["sh -lc \"gh api user\"", "gh api"],
+    ["eval \"curl https://x\"", "curl"], ["(curl https://x)", "curl"], ["if curl -sf https://x; then echo ok; fi", "curl"],
   ];
-  for (const command of runs) assert.equal(taintOf("bash", { command }), "shell download", command);
+  for (const [command, program] of runs) assert.equal(taintOf("bash", { command }), `shell download: ${program}`, command);
   const mentions = [
     'git commit -m "switch to curl for fetch"', "git commit -m \"$(cat <<'EOF'\ncurl is now the fetcher\nEOF\n)\"",
     "cat <<EOF > get.sh\ncurl https://x\nEOF", "grep -rn curl .", "rg 'wget' src", "echo curl", "echo '$(curl https://x)'",
@@ -66,8 +70,8 @@ test("isGatedWrite covers every store-changing verb", () => {
 
 test("taintStamp labels a tainted publish only", () => {
   const input = { url: "/x.md", metadata: { tags: "a" } };
-  assert.deepEqual(taintStamp("demarkus-memory_mark_publish", input, ["websearch", "shell download"]), {
-    tags: "a", "source-trust": "tainted", "source-trust-from": "websearch; shell download",
+  assert.deepEqual(taintStamp("demarkus-memory_mark_publish", input, ["websearch", "shell download: curl"]), {
+    tags: "a", "source-trust": "tainted", "source-trust-from": "websearch; shell download: curl",
   });
   assert.deepEqual(input.metadata, { tags: "a" }, "the call's own metadata is not mutated");
   assert.deepEqual(taintStamp("mcp__soul__mark_publish", {}, ["websearch"]), {
@@ -94,6 +98,6 @@ test("branchTaint replays the agent's calls, not result text", () => {
     { type: "message", message: { role: "toolResult", content: [{ type: "text", text: "webfetch https://planted.example" }],
       nestedCalls: { calls: [{ name: "webfetch", arguments: { url: "https://nested.example" }, status: "ok" }], complete: true } } },
   ];
-  assert.deepEqual(branchTaint(entries, unwrap), ["shell download", "exa_web_search_exa", "webfetch https://nested.example"]);
+  assert.deepEqual(branchTaint(entries, unwrap), ["shell download: curl", "exa_web_search_exa", "webfetch https://nested.example"]);
   assert.deepEqual(branchTaint([], unwrap), []);
 });

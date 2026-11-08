@@ -170,20 +170,20 @@ var wrappers = map[string]bool{"sudo": true, "doas": true, "env": true, "exec": 
 // numericArg is a wrapper option value: 10, 2.5, 10s, 1m.
 var numericArg = regexp.MustCompile(`^\d[0-9.]*[smhd]?$`)
 
-// Runs reports whether any pipeline stage of command runs one of programs:
+// Runs names the first of programs some pipeline stage of command runs, or "":
 // quotes respected, env assignments and wrappers (sudo -E) skipped, a path
 // compared by its base name.
-func Runs(command string, programs ...[]string) bool {
+func Runs(command string, programs ...[]string) string {
 	segs, _ := splitSegments(command)
 	for _, seg := range segs {
 		for _, stage := range append([]string{seg.stage}, seg.later...) {
 			tokens := commandWords(strings.Fields(stage))
-			if slices.ContainsFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) }) {
-				return true
+			if i := slices.IndexFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) }); i >= 0 {
+				return strings.Join(programs[i], " ")
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 // commandWords drops what precedes the command a stage runs: assignments,

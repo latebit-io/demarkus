@@ -35,8 +35,7 @@ export function taintOf(tool: string, args: Record<string, unknown> | undefined)
   if (WEB_TOOL.test(tool) && !LOCAL_TOOL.test(tool)) return clip(url ? `${tool} ${publicURL(url)}` : tool);
   if (BROWSER_TOOL.test(tool)) return clip(tool);
   const command = typeof args?.command === "string" ? args.command : "";
-  if (SHELL_TOOL.test(tool) && runsDownload(command)) return "shell download";
-  return "";
+  return SHELL_TOOL.test(tool) ? shellRead(command) : "";
 }
 
 // recordTaint adds a call's untrusted read to sources, first seen first.
@@ -86,11 +85,11 @@ function foreignRead(tool: string, url: string): string {
   return clip(`mark://${m[1].toLowerCase()}${port === DEFAULT_PORT ? "" : `:${port}`}`);
 }
 
-// runsDownload: a downloader or gh api at a command position (past env
-// assignments, keywords, wrappers), in a substitution or a sh -c / eval
-// script. A name in quoted text or arguments is no run.
-function runsDownload(command: string, depth = 0): boolean {
-  if (depth > MAX_NESTING) return true;
+// shellRead labels a downloader or gh api run at a command position (past env
+// assignments, keywords, wrappers), in a substitution or a sh -c / eval script,
+// by program only (arguments carry tokens). Quoted text or arguments: no run.
+function shellRead(command: string, depth = 0): string {
+  if (depth > MAX_NESTING) return "shell script too nested to check";
   const scripts: string[] = [];
   for (const words of commandsOf(command.replace(HEREDOC, "$3\n"), scripts)) {
     let i = 0;
@@ -100,21 +99,24 @@ function runsDownload(command: string, depth = 0): boolean {
       i++;
       while (i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i]))) i++;
     }
-    if (runs(words, i, scripts)) return true;
+    const found = downloaderAt(words, i, scripts);
+    if (found) return `shell download: ${found}`;
   }
-  return scripts.some((script) => runsDownload(script, depth + 1));
+  return scripts.reduce((found, script) => found || shellRead(script, depth + 1), "");
 }
 
-// runs: the command at s downloads; a script it runs goes to scripts.
-function runs(words: string[], s: number, scripts: string[]): boolean {
+// downloaderAt names the downloader the command at s is, or ""; a script it
+// runs goes to scripts.
+function downloaderAt(words: string[], s: number, scripts: string[]): string {
   const name = program(words[s]);
-  if (DOWNLOADERS.has(name) || (name === "gh" && words[s + 1] === "api")) return true;
+  if (DOWNLOADERS.has(name)) return name;
+  if (name === "gh" && words[s + 1] === "api") return "gh api";
   if (name === "eval") scripts.push(words.slice(s + 1).join(" "));
   if (SHELLS.has(name)) {
     const flag = words.findIndex((w, j) => j > s && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(w));
     if (flag > 0 && flag + 1 < words.length) scripts.push(words[flag + 1]);
   }
-  return false;
+  return "";
 }
 
 // program is a command word's base name: a path runs its last segment.
