@@ -57,8 +57,12 @@ func Of(c *Call, memoryID func(tool string) string) string {
 		return "WebSearch"
 	case (c.Name == "Agent" || c.Name == "Task") && c.Input.SubagentType == "web-fetch":
 		return "web-fetch agent"
-	case c.Name == "Bash" && facts.Runs(c.Input.Command, downloaders...):
-		return "shell download"
+	case c.Name == "Bash":
+		// The program only: its arguments carry URLs and tokens.
+		if p := facts.Runs(c.Input.Command, downloaders...); p != "" {
+			return "shell download: " + p
+		}
+		return ""
 	}
 	if pt, ok := config.ParseTool(c.Name); ok {
 		return foreignRead(c, pt.Verb, memoryID)
