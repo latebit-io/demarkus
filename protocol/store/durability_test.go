@@ -272,6 +272,10 @@ func TestWriteFailedStatLeavesNothingVisible(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(root, "a.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("current pointer moved despite failed stat: %v", err)
 	}
+	vFile := newVersionFilePath(filepath.Join(root, "versions"), "a.md", 1)
+	if _, err := os.Lstat(vFile); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("version file left behind by a failed stat: %v", err)
+	}
 	statFile = (*os.File).Stat
 	if doc, err := s.Write("/a.md", []byte("# A\n"), nil); err != nil || doc.Version != 1 {
 		t.Errorf("write after the stat failure = %+v, %v; want version 1", doc, err)
