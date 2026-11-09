@@ -12,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/render"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/protocol/wiretest"
 )
 
@@ -56,13 +57,14 @@ func LostResponse() error { return fmt.Errorf("read response: %w", protocol.ErrO
 
 // History answers FETCH for a document with the given versions, oldest first:
 // docPath is the newest, docPath/vN is version N, anything else is not found.
-// Every version carries meta, as versions written by one publisher do.
+// Every version carries meta as a PUBLISH by one publisher stores it.
 func History(docPath string, meta map[string]string, bodies ...string) func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
+	stored := storefmt.PublishedMeta(docPath, meta)
 	return func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
 		for i, body := range bodies {
 			version := i + 1
 			if r.Path == protocol.VersionPath(docPath, version) || (version == len(bodies) && r.Path == docPath) {
-				return Head(body, version, meta), nil
+				return Head(body, version, stored), nil
 			}
 		}
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil

@@ -339,28 +339,31 @@ func (store *Store) loadOrCreate(ctx context.Context) error {
 	return store.load(ctx)
 }
 
-// load is a cold start: the newest checkpoint within one request's time and
-// every slot after it; no body is read. Replayed slots count toward the next
-// checkpoint.
+// load is a cold start: the newest checkpoint that loads, each tried within
+// one request's time, and every slot after it; no body is read. Replayed
+// slots count toward the next checkpoint.
 func (store *Store) load(ctx context.Context) error {
 	started := store.now()
-	baseCtx, cancel := context.WithTimeout(ctx, store.requestTimeout)
-	loaded, err := loadBase(baseCtx, store.objects, store.worldID, store.shardWorkers)
-	cancel()
+	base, err := store.loader(store.requestTimeout).loadBase(ctx)
 	if err != nil {
 		return err
 	}
-	return store.start(ctx, loaded, started)
+	return store.start(ctx, base, started)
+}
+
+func (store *Store) loader(timeout time.Duration) checkpointLoader {
+	return checkpointLoader{objects: store.objects, worldID: store.worldID, workers: store.shardWorkers, logger: store.logger, timeout: timeout}
 }
 
 // start serves a checkpoint's snapshot with every slot after it applied and
 // keeps the loaded one as an eager compactor's base. The replay reads the
 // bucket outside installMu; a reload a commit overtook replays on first.
-func (store *Store) start(ctx context.Context, loaded *snapshot, started time.Time) error {
+func (store *Store) start(ctx context.Context, base loadedBase, started time.Time) error {
+	loaded := base.snap
 	tip := store.derive(loaded)
 	var applied []appliedSlot
 	onSlot := func(slot *slotObject) { applied = append(applied, appliedOf(slot)) }
-	options := replayOptions{worldID: store.worldID, workers: store.shardWorkers, onSlot: onSlot}
+	options := replayOptions{worldID: store.worldID, workers: store.shardWorkers, onSlot: onSlot, reach: base.reach}
 	for {
 		if err := replay(ctx, store.objects, tip, options); err != nil {
 			return err
@@ -594,30 +597,24 @@ func (store *Store) runReload(life context.Context, flight *reloadFlight) {
 	close(flight.done)
 }
 
-// reloadIfBehind starts again from the newest checkpoint when one lies past
-// the served snapshot: its next slot may have been collected, which a probe
-// would take for the log's tip, and a commit would then fork the log.
+// reloadIfBehind starts again from the newest checkpoint that loads when one
+// lies past the served snapshot, or it diverged: an older release may have
+// collected its next slot, which a probe takes for the tip and a commit forks.
 func (store *Store) reloadIfBehind(ctx context.Context) error {
-	base, diverged := store.served.Load().snap, store.diverged.Load()
-	after := base.Sequence
-	if diverged {
-		after = 0 // the newest checkpoint, wherever it lies
-	}
-	newest, err := newestCheckpointSequence(ctx, store.objects, after)
-	if err != nil || newest == base.Sequence && !diverged {
+	served, diverged := store.served.Load().snap, store.diverged.Load()
+	// All of them, a few kept: a fallback past a broken newer one may need
+	// one at or below the served snapshot, replayed until it reaches the newest.
+	sequences, err := listCheckpoints(ctx, store.objects, 0)
+	if err != nil || !diverged && lastOr(sequences, 0) <= served.Sequence {
 		return err
 	}
-	store.logger.Warn("reloading from the newest checkpoint", "world", store.worldID, "served", base.Sequence, "checkpoint", newest, "diverged", diverged)
 	started := store.now()
-	checkpoint, err := readCheckpoint(ctx, store.objects, store.worldID, newest)
+	base, err := store.loader(0).newest(ctx, sequences)
 	if err != nil {
 		return err
 	}
-	loaded, err := loadCheckpoint(ctx, store.objects, checkpoint, store.shardWorkers)
-	if err != nil {
-		return err
-	}
-	if err := store.start(ctx, loaded, started); err != nil {
+	store.logger.Warn("reloading from the newest checkpoint", "world", store.worldID, "served", served.Sequence, "checkpoint", base.snap.Sequence, "diverged", diverged)
+	if err := store.start(ctx, base, started); err != nil {
 		return err
 	}
 	store.diverged.Store(false)

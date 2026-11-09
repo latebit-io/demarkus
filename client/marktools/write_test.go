@@ -14,6 +14,7 @@ import (
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/docframe"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // writingHooks is a direct client with a write token, a named agent and a
@@ -132,7 +133,8 @@ func TestPublishConflictOffersAMergeCandidate(t *testing.T) {
 // A write whose response was lost may have landed. The tool checks the head
 // and never invites a blind resend (the self conflict debt, C4's leftover).
 func TestWritesReconcileAfterAnUnknownOutcome(t *testing.T) {
-	sentMeta := map[string]string{"agent": "test-agent", "user": "alice@example.com"}
+	// The sent identity as the server stores it: typed by path.
+	sentMeta := storefmt.ApplyOKFTypeDefault("/doc.md", map[string]string{"agent": "test-agent", "user": "alice@example.com"})
 	tests := []struct {
 		name     string
 		call     func(*marktools.Tools) marktools.Result

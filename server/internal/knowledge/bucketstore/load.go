@@ -5,23 +5,165 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/latebit-io/demarkus/server/blob"
 )
 
-// loadBase reads the world marker and builds the snapshot its newest
-// checkpoint holds.
-func loadBase(ctx context.Context, objects blob.Store, worldID string, workers int) (*snapshot, error) {
-	if err := readMarker(ctx, objects, worldID); err != nil {
-		return nil, err
+// checkpointLoader builds the snapshot of a world's newest checkpoint that
+// loads. A set timeout bounds the listing and each checkpoint apart, so a
+// fallback gets a whole request's time.
+type checkpointLoader struct {
+	objects blob.Store
+	worldID string
+	workers int
+	logger  *slog.Logger
+	timeout time.Duration
+}
+
+func (loader checkpointLoader) bound(ctx context.Context) (context.Context, context.CancelFunc) {
+	if loader.timeout <= 0 {
+		return context.WithCancel(ctx)
 	}
-	checkpoint, err := newestCheckpoint(ctx, objects, worldID)
+	return context.WithTimeout(ctx, loader.timeout)
+}
+
+// loadedBase is the snapshot of the checkpoint that loaded, and the reach a
+// replay from it must get to.
+type loadedBase struct {
+	snap  *snapshot
+	reach reach
+}
+
+// reach is the newest listed checkpoint, which proves the log got that far;
+// skipped is why the ones after the loaded one did not load. Zero is none.
+type reach struct {
+	sequence int64
+	skipped  error
+}
+
+// reached checks a replay came as far as the reach.
+func (r reach) reached(tip *snapshot) error {
+	if tip.Sequence >= r.sequence {
+		return nil
+	}
+	return fmt.Errorf("%w: the log ends at %d, before checkpoint %d: %w", blob.ErrIntegrity, tip.Sequence, r.sequence, r.skipped)
+}
+
+// loadBase reads the world marker and lists every checkpoint, then loads as
+// newest does.
+func (loader checkpointLoader) loadBase(ctx context.Context) (loadedBase, error) {
+	markerCtx, cancel := loader.bound(ctx)
+	err := readMarker(markerCtx, loader.objects, loader.worldID)
+	cancel()
+	if err != nil {
+		return loadedBase{}, err
+	}
+	listCtx, cancel := loader.bound(ctx)
+	sequences, err := listCheckpoints(listCtx, loader.objects, 0)
+	cancel()
+	if err != nil {
+		return loadedBase{}, err
+	}
+	return loader.newest(ctx, sequences)
+}
+
+// newest loads as loadable does from sequences, every checkpoint listed; with
+// none loading, genesis stands in.
+func (loader checkpointLoader) newest(ctx context.Context, sequences []int64) (loadedBase, error) {
+	base, err := loader.loadable(ctx, sequences)
+	if err != nil || base.snap != nil {
+		return base, err
+	}
+	failures := base.reach.skipped
+	if len(sequences) == 0 {
+		failures = errors.New("world has a marker but no checkpoint")
+	}
+	base.reach.skipped = fmt.Errorf("%w: no checkpoint loads: %w", blob.ErrIntegrity, failures)
+	if err := loader.holdsSlotAfter(ctx, genesisSequence, base.reach.skipped); err != nil {
+		return loadedBase{}, err
+	}
+	loader.logger.Warn("no checkpoint loads; replaying the whole log from genesis", "world", loader.worldID, "error", base.reach.skipped)
+	loaded, err := genesisSnapshot()
+	if err != nil {
+		return loadedBase{}, err
+	}
+	base.snap = loaded
+	return base, nil
+}
+
+// loadable loads the newest of sequences that loads, skipping one missing or
+// corrupt in any object it names; snap is nil when none does. A bucket or
+// caller failure is returned as it is: only damage costs replay.
+func (loader checkpointLoader) loadable(ctx context.Context, sequences []int64) (loadedBase, error) {
+	base := loadedBase{reach: reach{sequence: lastOr(sequences, genesisSequence)}}
+	var failures []error
+	for _, sequence := range slices.Backward(sequences) {
+		loaded, err := loader.load(ctx, sequence)
+		if err == nil {
+			base.snap = loaded
+			break
+		}
+		if !damaged(ctx, err) {
+			return loadedBase{}, err
+		}
+		loader.logger.Warn("checkpoint does not load; trying the one before it", "world", loader.worldID, "checkpoint", sequence, "error", err)
+		failures = append(failures, err)
+	}
+	base.reach.skipped = errors.Join(failures...)
+	return base, nil
+}
+
+// damaged reports a checkpoint failing on its own objects, not on the bucket
+// or the caller: the one reason to skip it.
+func damaged(ctx context.Context, err error) bool {
+	return ctx.Err() == nil && (errors.Is(err, blob.ErrIntegrity) || errors.Is(err, blob.ErrNotFound))
+}
+
+// load bounds one checkpoint's reads apart, so each fallback gets the
+// loader's whole timeout.
+func (loader checkpointLoader) load(ctx context.Context, sequence int64) (*snapshot, error) {
+	ctx, cancel := loader.bound(ctx)
+	defer cancel()
+	checkpoint, err := readCheckpoint(ctx, loader.objects, loader.worldID, sequence)
 	if err != nil {
 		return nil, err
 	}
-	return loadCheckpoint(ctx, objects, checkpoint, workers)
+	loaded, err := loadCheckpoint(ctx, loader.objects, checkpoint, loader.workers)
+	if err != nil {
+		return nil, fmt.Errorf("load checkpoint %d: %w", sequence, err)
+	}
+	return loaded, nil
+}
+
+// holdsSlotAfter checks the log still holds the slot after sequence, so a
+// replay from there misses none; cause when it was collected.
+func (loader checkpointLoader) holdsSlotAfter(ctx context.Context, sequence int64, cause error) error {
+	headCtx, cancel := loader.bound(ctx)
+	defer cancel()
+	_, err := loader.objects.Head(headCtx, slotKey(sequence+1))
+	if errors.Is(err, blob.ErrNotFound) {
+		return cause
+	}
+	if err != nil {
+		return fmt.Errorf("head slot %d: %w", sequence+1, err)
+	}
+	return nil
+}
+
+// genesisSnapshot is the empty world checkpoint zero holds, on its layout.
+func genesisSnapshot() (*snapshot, error) {
+	_, ref, err := foldShard(0, 0, make([]foldedEntry, 0))
+	if err != nil {
+		return nil, fmt.Errorf("build genesis: %w", err)
+	}
+	loaded := newSnapshot()
+	loaded.Sequence = genesisSequence
+	loaded.Checkpoint = &checkpointBase{Sequence: genesisSequence, Shards: []shardRef{ref}}
+	return loaded, nil
 }
 
 // readMarker checks the marker names this world.
@@ -46,16 +188,6 @@ func readMarker(ctx context.Context, objects blob.Store, worldID string) error {
 	return nil
 }
 
-// newestCheckpoint lists the checkpoints and reads the one with the highest
-// sequence; the marker is written after checkpoint zero, so one must exist.
-func newestCheckpoint(ctx context.Context, objects blob.Store, worldID string) (checkpointObject, error) {
-	newest, err := newestCheckpointSequence(ctx, objects, 0)
-	if err != nil {
-		return checkpointObject{}, err
-	}
-	return readCheckpoint(ctx, objects, worldID, newest)
-}
-
 // readCheckpoint reads and checks the checkpoint at sequence.
 func readCheckpoint(ctx context.Context, objects blob.Store, worldID string, sequence int64) (checkpointObject, error) {
 	checkpoint, err := getValidated(ctx, objects, checkpointKey(sequence), func(checkpoint *checkpointObject) error {
@@ -70,20 +202,27 @@ func readCheckpoint(ctx context.Context, objects blob.Store, worldID string, seq
 	return checkpoint, nil
 }
 
-// newestCheckpointSequence lists the checkpoints after a known one, or all
-// of them from 0, for the highest sequence.
-func newestCheckpointSequence(ctx context.Context, objects blob.Store, after int64) (int64, error) {
-	newest := after
+// listCheckpoints lists the sequences of the checkpoints after a known one,
+// or of all from 0, ascending.
+func listCheckpoints(ctx context.Context, objects blob.Store, after int64) ([]int64, error) {
+	var sequences []int64
 	for page, err := range sequencedPages(ctx, objects, checkpointPrefix, after) {
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
-		newest = max(newest, page[len(page)-1].sequence)
+		for index := range page {
+			sequences = append(sequences, page[index].sequence)
+		}
 	}
-	if newest == 0 {
-		return 0, fmt.Errorf("%w: world has a marker but no checkpoint", blob.ErrIntegrity)
+	return sequences, nil
+}
+
+// lastOr is s's last element, or fallback when s is empty.
+func lastOr[T any](s []T, fallback T) T {
+	if len(s) == 0 {
+		return fallback
 	}
-	return newest, nil
+	return s[len(s)-1]
 }
 
 // loadCheckpoint builds the snapshot a checkpoint's root holds.
@@ -226,13 +365,14 @@ func (err *applyError) Unwrap() error { return err.error }
 
 // replayOptions names the world, the read parallelism, and who hears of each
 // applied slot. A positive until is the last sequence applied; stop, asked
-// after each slot, ends the replay early.
+// after each slot, ends the replay early; a replay short of reach fails.
 type replayOptions struct {
 	worldID string
 	workers int
 	onSlot  func(slot *slotObject)
 	until   int64
 	stop    func(slot *slotObject) bool
+	reach   reach
 }
 
 // replayChunk is how many slots a replay reads ahead of applying them.
@@ -241,6 +381,13 @@ const replayChunk = 256
 // replay applies every slot after loaded's sequence, a page of names at a
 // time, reading the slots in parallel a chunk at a time.
 func replay(ctx context.Context, objects blob.Store, loaded *snapshot, options replayOptions) error {
+	if err := applyLog(ctx, objects, loaded, options); err != nil {
+		return err
+	}
+	return options.reach.reached(loaded)
+}
+
+func applyLog(ctx context.Context, objects blob.Store, loaded *snapshot, options replayOptions) error {
 	for page, err := range sequencedPages(ctx, objects, logPrefix, loaded.Sequence) {
 		if err != nil {
 			return err

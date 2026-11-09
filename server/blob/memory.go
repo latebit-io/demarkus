@@ -237,7 +237,7 @@ func (m *Memory) List(ctx context.Context, prefix, startAfter, cursor string) (L
 
 func (m *Memory) validateWriteSize(data []byte) error {
 	if int64(len(data)) > m.maxObjectBytes {
-		return fmt.Errorf("%w: object is %d bytes, limit is %d", ErrPrecondition, len(data), m.maxObjectBytes)
+		return fmt.Errorf("%w: object is %d bytes, limit is %d", ErrTooLarge, len(data), m.maxObjectBytes)
 	}
 	return nil
 }

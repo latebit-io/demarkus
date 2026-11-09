@@ -201,6 +201,13 @@ func exactStoredField(line, key string) (string, bool) {
 
 func validStoredHash(value string) bool { return protocol.IsContentHash(value) }
 
+// PublishedMeta is the publisher metadata a PUBLISH of req stores at reqPath:
+// the map replaced whole, typed, tags in stored form. Reconciling clients and
+// test doubles share it so their idea of a landed write cannot drift.
+func PublishedMeta(reqPath string, req map[string]string) map[string]string {
+	return NormalizeMetadata(ApplyOKFTypeDefault(reqPath, req))
+}
+
 // PrepareAppendMeta builds the publisher metadata an APPEND stores: the base
 // version's merged with the request's, then typed (SPEC 6.6). Both backends
 // call it so the rules cannot drift; the write itself validates the result.

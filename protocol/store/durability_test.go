@@ -256,3 +256,24 @@ func TestWriteSettlesDebtForDirectoryRemovedByRollback(t *testing.T) {
 		t.Fatalf("retry: %v", err)
 	}
 }
+
+// The version's mtime is read before the pointer moves: a failure there must
+// leave nothing visible, never a current document the index never saw.
+func TestWriteFailedStatLeavesNothingVisible(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	statFile = func(*os.File) (os.FileInfo, error) { return nil, errors.New("disk gone") }
+	t.Cleanup(func() { statFile = (*os.File).Stat })
+
+	if doc, err := s.Write("/a.md", []byte("# A\n"), nil); err == nil || storefmt.Committed(err) {
+		t.Fatalf("write = %+v, %v; want an uncommitted stat error", doc, err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "a.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("current pointer moved despite failed stat: %v", err)
+	}
+	statFile = (*os.File).Stat
+	if doc, err := s.Write("/a.md", []byte("# A\n"), nil); err != nil || doc.Version != 1 {
+		t.Errorf("write after the stat failure = %+v, %v; want version 1", doc, err)
+	}
+}

@@ -27,7 +27,7 @@ var ErrDocumentQuota = fmt.Errorf("document %w", backend.ErrQuota)
 
 // Store keeps file data, hash state, and catalog state behind one lock.
 type Store struct {
-	mu        sync.RWMutex
+	mu        ctxRWMutex
 	documents *protocolstore.Store
 	catalog   *catalog.Catalog
 	closed    bool
@@ -61,7 +61,7 @@ type Options struct {
 
 // New wraps one file store and its derived catalog, without WATCH.
 func New(documents *protocolstore.Store, lookup *catalog.Catalog) *Store {
-	return &Store{documents: documents, catalog: lookup}
+	return &Store{mu: newCtxRWMutex(), documents: documents, catalog: lookup}
 }
 
 // Open is New plus WATCH (backend.ChangeSource): the change journal beside
@@ -96,9 +96,11 @@ func Open(documents *protocolstore.Store, lookup *catalog.Catalog, opts Options)
 func (s *Store) Changes() *changefeed.Hub { return s.changes }
 
 // Close ends every watch, releases the change journal and refuses later
-// writes; the documents need no close.
+// writes; the documents need no close. It waits for open views.
 func (s *Store) Close() error {
-	s.mu.Lock()
+	if err := s.mu.Lock(context.Background()); err != nil {
+		return fmt.Errorf("filestore: close: %w", err)
+	}
 	defer s.mu.Unlock()
 	s.closed = true
 	if s.changes == nil {
@@ -158,7 +160,9 @@ func (s *Store) Append(ctx context.Context, req backend.WriteRequest) (*storefmt
 // not, reaches the catalog and the watchers before its error is returned.
 func (s *Store) commit(ctx context.Context, req *backend.WriteRequest, op string, write func(*storefmt.WriteSpec) (*storefmt.Document, error)) (*storefmt.Document, error) {
 	return call(ctx, func() (*storefmt.Document, error) {
-		s.mu.Lock()
+		if err := s.mu.Lock(ctx); err != nil {
+			return nil, err
+		}
 		defer s.mu.Unlock()
 		if err := s.writable(); err != nil {
 			return nil, err
@@ -191,7 +195,9 @@ func (s *Store) writable() error {
 // SetArchived commits archive and catalog state under one lock.
 func (s *Store) SetArchived(ctx context.Context, req backend.ArchiveRequest) (backend.ArchiveResult, error) {
 	return call(ctx, func() (backend.ArchiveResult, error) {
-		s.mu.Lock()
+		if err := s.mu.Lock(ctx); err != nil {
+			return backend.ArchiveResult{}, err
+		}
 		defer s.mu.Unlock()
 		if err := s.writable(); err != nil {
 			return backend.ArchiveResult{}, err
@@ -227,10 +233,9 @@ func (s *Store) ReadCurrent(ctx context.Context, path string) (*storefmt.Documen
 
 // OpenReadView holds a read lock until the request closes the view.
 func (s *Store) OpenReadView(ctx context.Context) (backend.ReadView, error) {
-	if err := ctx.Err(); err != nil {
+	if err := s.mu.RLock(ctx); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
 	return &readView{reader: reader{store: s}}, nil
 }
 

@@ -2,8 +2,10 @@ package bucketstore
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -15,6 +17,8 @@ import (
 type ExportOptions struct {
 	WorldID string
 	Workers int
+	// Logger hears of checkpoints that do not load; nil is slog.Default.
+	Logger *slog.Logger
 }
 
 // ExportDocs reads every retained version from one snapshot of the log.
@@ -38,9 +42,11 @@ func ExportDocs(ctx context.Context, objects blob.Store, options ExportOptions, 
 	if workers == 0 {
 		workers = defaultShardWorkers
 	}
-	loaded, err := loadBase(ctx, objects, worldID, workers)
+	loader := checkpointLoader{objects: objects, worldID: worldID, workers: workers, logger: cmp.Or(options.Logger, slog.Default())}
+	base, err := loader.loadBase(ctx)
+	loaded := base.snap
 	if err == nil {
-		err = replay(ctx, objects, loaded, replayOptions{worldID: worldID, workers: workers})
+		err = replay(ctx, objects, loaded, replayOptions{worldID: worldID, workers: workers, reach: base.reach})
 	}
 	if err != nil {
 		return fmt.Errorf("export bucket store: %w", err)

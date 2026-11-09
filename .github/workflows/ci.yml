@@ -89,6 +89,8 @@ jobs:
               - 'plugins/cursor-knowledge/**'
               - '.cursor-plugin/**'
               - 'tools/plugin-prompts/**'
+              - 'knowledge/internal/broker/gateway/prompts/**'
+              - 'client/cmd/demarkus-mcp/prompts/**'
               - 'tools/demarkus-plugin/**'
               - 'tools/go.mod'
               - 'tools/go.sum'

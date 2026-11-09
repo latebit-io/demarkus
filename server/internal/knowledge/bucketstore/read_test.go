@@ -1010,10 +1010,10 @@ func installSnapshotEntry(t *testing.T, memory *blob.Memory, entry *foldedEntry)
 	installRoot(t, memory, root)
 }
 
-func corruptObject(t *testing.T, memory *blob.Memory, key string) {
+func corruptObject(t *testing.T, objects blob.Store, key string) {
 	t.Helper()
-	object := getObject(t, memory, key)
-	replaceObject(t, memory, key, object.Attributes.Generation, []byte("corrupt"))
+	object := getObject(t, objects, key)
+	replaceObject(t, objects, key, object.Attributes.Generation, []byte("corrupt"))
 }
 
 func removePreviousHash(t *testing.T, raw []byte) []byte {

@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // graphHooks is a surface with one graph store; targets are keyed by identity.
@@ -136,7 +137,7 @@ func TestGraphPublishReconcilesALostResponse(t *testing.T) {
 			return fetch.Result{}, fetchtest.LostResponse()
 		},
 		FetchFn: func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
-			return fetchtest.Head(landed.Body, 4, landed.Metadata), nil
+			return fetchtest.Head(landed.Body, 4, storefmt.ApplyOKFTypeDefault(landed.Path, landed.Metadata)), nil
 		},
 	}
 	var seeded []string

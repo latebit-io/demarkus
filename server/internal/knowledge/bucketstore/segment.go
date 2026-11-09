@@ -157,6 +157,7 @@ func writeSegment(ctx context.Context, objects blob.Store, ref segmentRef, bodie
 		models[part] = modelObject{Key: segmentKey(ref, part), Data: data}
 	}
 	create := func(ctx context.Context, part modelObject) error {
+		// A taken name is a racer's part.
 		if _, err := objects.Create(ctx, part.Key, part.Data); err != nil && !errors.Is(err, blob.ErrPrecondition) {
 			return fmt.Errorf("create %q: %w", part.Key, err)
 		}

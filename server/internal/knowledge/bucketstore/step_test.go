@@ -41,9 +41,11 @@ func startCompactor(t *testing.T, store *Store) {
 
 func newestCheckpointOf(t *testing.T, objects blob.Store) int64 {
 	t.Helper()
-	sequence, err := newestCheckpointSequence(context.Background(), objects, 0)
-	mustSucceed(t, err)
-	return sequence
+	sequences := checkpointSequences(t, objects, 0)
+	if len(sequences) == 0 {
+		t.Fatal("world has no checkpoint")
+	}
+	return sequences[len(sequences)-1]
 }
 
 // recentVersions counts the versions the served snapshot holds in memory.
@@ -123,7 +125,7 @@ func TestStepBoundaryIsDeterministic(t *testing.T) {
 	mustSucceed(t, peer.poll(ctx))
 	var targets [2]*snapshot
 	for index, store := range []*Store{writer, peer} {
-		target, err := store.stepTarget(ctx, store.served.Load().snap)
+		target, err := store.stepTarget(ctx, store.served.Load().snap, nil)
 		mustSucceed(t, err)
 		targets[index] = target
 	}

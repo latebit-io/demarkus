@@ -1283,10 +1283,11 @@ func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*
 	return s.write(reqPath, content, meta, nil)
 }
 
-// syncFile and syncDir are the durability calls; tests replace them.
+// syncFile, syncDir and statFile are the fallible file calls; tests replace them.
 var (
 	syncFile = (*os.File).Sync
 	syncDir  = syncDirectory
+	statFile = (*os.File).Stat
 )
 
 func syncDirectory(dir string) error {
@@ -1393,29 +1394,34 @@ func removeCreated(created []string) error {
 	return errors.Join(errs...)
 }
 
-// createVersionFile writes and syncs a new version. O_EXCL is the immutability
-// guard: an existing file fails the create instead of racing a stat.
-func createVersionFile(vFile string, stored []byte, version int) error {
+// createVersionFile writes and syncs a new version and returns its mtime, read
+// here so nothing fallible sits between the pointer swap and the index update.
+// O_EXCL is the immutability guard: an existing file fails the create.
+func createVersionFile(vFile string, stored []byte, version int) (time.Time, error) {
 	f, err := os.OpenFile(vFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // read-only installs publish as root, serve as another user
 	if err != nil {
 		if os.IsExist(err) {
-			return fmt.Errorf("version %d: %w", version, storefmt.ErrVersionExists)
+			return time.Time{}, fmt.Errorf("version %d: %w", version, storefmt.ErrVersionExists)
 		}
-		return fmt.Errorf("create version file: %w", err)
+		return time.Time{}, fmt.Errorf("create version file: %w", err)
 	}
 	if _, err := f.Write(stored); err != nil {
-		return errors.Join(fmt.Errorf("write version file: %w", err), f.Close(), removeIfPresent(vFile))
+		return time.Time{}, errors.Join(fmt.Errorf("write version file: %w", err), f.Close(), removeIfPresent(vFile))
 	}
 	if err := syncFile(f); err != nil {
-		return errors.Join(fmt.Errorf("sync version file: %w", err), f.Close(), removeIfPresent(vFile))
+		return time.Time{}, errors.Join(fmt.Errorf("sync version file: %w", err), f.Close(), removeIfPresent(vFile))
+	}
+	info, err := statFile(f)
+	if err != nil {
+		return time.Time{}, errors.Join(fmt.Errorf("stat version file: %w", err), f.Close(), removeIfPresent(vFile))
 	}
 	if err := f.Close(); err != nil {
-		return errors.Join(fmt.Errorf("close version file: %w", err), removeIfPresent(vFile))
+		return time.Time{}, errors.Join(fmt.Errorf("close version file: %w", err), removeIfPresent(vFile))
 	}
 	if err := syncDir(filepath.Dir(vFile)); err != nil {
-		return errors.Join(err, removeIfPresent(vFile))
+		return time.Time{}, errors.Join(err, removeIfPresent(vFile))
 	}
-	return nil
+	return info.ModTime(), nil
 }
 
 // swapCurrent points the current file at relTarget by renaming a temp symlink
@@ -1517,7 +1523,8 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 		return nil, fmt.Errorf("create per-doc versions dir: %w", err)
 	}
 
-	if err := createVersionFile(vFile, stored, next); err != nil {
+	modTime, err := createVersionFile(vFile, stored, next)
+	if err != nil {
 		return nil, err
 	}
 	var unsynced error
@@ -1530,11 +1537,6 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 		unsynced = fmt.Errorf("%w: %w", storefmt.ErrCommittedNotSynced, err)
 	}
 
-	info, err := os.Stat(vFile)
-	if err != nil {
-		return nil, fmt.Errorf("stat version file: %w", err)
-	}
-
 	s.UpdateIndex(reqPath, content, next)
 
 	// Metadata is the persisted form (what Get returns), not the request
@@ -1542,7 +1544,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 	// and the catalog must see one spelling whichever path populated it.
 	doc := &storefmt.Document{
 		Content:  content,
-		Modified: info.ModTime().UTC().Truncate(time.Second),
+		Modified: modTime.UTC().Truncate(time.Second),
 		Version:  next,
 		Archived: false,
 		Metadata: persisted,

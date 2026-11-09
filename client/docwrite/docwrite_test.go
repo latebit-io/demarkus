@@ -28,6 +28,11 @@ func versionOf(r docwrite.Result) int { //nolint:gocritic // a test reads one re
 	return v
 }
 
+// typed is meta as a server stores it at /doc.md: with the default type.
+func typed(meta map[string]string) map[string]string {
+	return storefmt.ApplyOKFTypeDefault("/doc.md", meta)
+}
+
 func answer(status string, meta map[string]string) func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
 	return func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{Status: status, Metadata: meta}}, nil
@@ -180,8 +185,8 @@ func TestRepublishingTheCandidateLands(t *testing.T) {
 	}
 }
 
-// What counts as "our write is at the head": the body at the next version under
-// every metadata key that was sent. Both modes and the conflict path agree.
+// What counts as "our write is at the head": the body at the next version
+// holding the metadata it stores. Both modes and the conflict path agree.
 func TestPublishRecognizesItsOwnWrite(t *testing.T) {
 	tags := map[string]string{"tags": "a,b"}
 	tests := []struct {
@@ -192,15 +197,15 @@ func TestPublishRecognizesItsOwnWrite(t *testing.T) {
 		wantOurs  bool
 		wantError bool
 	}{
-		{name: "lost response, write landed", head: fetchtest.Head("mine", 4, nil), wantOurs: true},
+		{name: "lost response, write landed", head: fetchtest.Head("mine", 4, typed(nil)), wantOurs: true},
 		{name: "lost response, write did not land", head: fetchtest.Head("old", 3, nil), wantError: true},
 		{name: "lost response, someone else wrote", head: fetchtest.Head("theirs", 4, nil), wantError: true},
-		{name: "lost response, our metadata landed", meta: tags, head: fetchtest.Head("mine", 4, tags), wantOurs: true},
-		{name: "lost response, someone else's metadata", meta: tags, head: fetchtest.Head("mine", 4, map[string]string{"tags": "z"}), wantError: true},
-		{name: "lost response, empty value sent, key absent", meta: map[string]string{"tags": ""}, head: fetchtest.Head("mine", 4, nil), wantError: true},
-		{name: "conflict with our own attempt", publish: conflictAt6, head: fetchtest.Head("mine", 4, nil), wantOurs: true},
+		{name: "lost response, our metadata landed", meta: tags, head: fetchtest.Head("mine", 4, typed(tags)), wantOurs: true},
+		{name: "lost response, someone else's metadata", meta: tags, head: fetchtest.Head("mine", 4, typed(map[string]string{"tags": "z"})), wantError: true},
+		{name: "lost response, empty value sent, key absent", meta: map[string]string{"tags": ""}, head: fetchtest.Head("mine", 4, typed(nil)), wantError: true},
+		{name: "conflict with our own attempt", publish: conflictAt6, head: fetchtest.Head("mine", 4, typed(nil)), wantOurs: true},
 		{name: "conflict with another writer", publish: conflictAt6, head: fetchtest.Head("theirs", 4, nil)},
-		{name: "conflict, same body, someone else's metadata", meta: tags, publish: conflictAt6, head: fetchtest.Head("mine", 4, nil)},
+		{name: "conflict, same body, someone else's metadata", meta: tags, publish: conflictAt6, head: fetchtest.Head("mine", 4, typed(nil))},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -251,11 +256,11 @@ func TestWritesReconcileAnUnknownOutcome(t *testing.T) {
 		landed      bool
 		wantVersion string
 	}{
-		{"publish landed", publish, fetchtest.Head("mine", 4, meta), true, "4"},
+		{"publish landed", publish, fetchtest.Head("mine", 4, typed(meta)), true, "4"},
 		{"publish not landed", publish, fetchtest.Head("theirs", 4, nil), false, ""},
-		{"append landed", appendMore, fetchtest.Head("old\nmore", 4, meta), true, "4"},
-		{"append by someone else", appendMore, fetchtest.Head("old\nmore", 4, map[string]string{"agent": "other"}), false, ""},
-		{"append without the key it sent", appendMore, fetchtest.Head("old\nmore", 4, nil), false, ""},
+		{"append landed", appendMore, fetchtest.Head("old\nmore", 4, typed(meta)), true, "4"},
+		{"append by someone else", appendMore, fetchtest.Head("old\nmore", 4, typed(map[string]string{"agent": "other"})), false, ""},
+		{"append without the key it sent", appendMore, fetchtest.Head("old\nmore", 4, typed(nil)), false, ""},
 		{"archive landed", archive, archived, true, ""},
 		{"archive still live", archive, fetchtest.Head("live", 3, nil), false, ""},
 	}
@@ -447,10 +452,10 @@ func TestReconcileLooksAtTheVersionItWroteNotTheHead(t *testing.T) {
 		call func(*docwrite.Doc) (docwrite.Result, error)
 		want bool
 	}{
-		{"publish landed, head moved on", fetchtest.Head("mine", 4, meta), func(d *docwrite.Doc) (docwrite.Result, error) {
+		{"publish landed, head moved on", fetchtest.Head("mine", 4, typed(meta)), func(d *docwrite.Doc) (docwrite.Result, error) {
 			return d.Publish(t.Context(), docwrite.Write{Body: "mine", ExpectedVersion: 3, Metadata: meta}, merge.OnConflictFail)
 		}, true},
-		{"append landed, head moved on", fetchtest.Head("old\nmore", 4, meta), func(d *docwrite.Doc) (docwrite.Result, error) {
+		{"append landed, head moved on", fetchtest.Head("old\nmore", 4, typed(meta)), func(d *docwrite.Doc) (docwrite.Result, error) {
 			return d.Append(t.Context(), docwrite.AppendRequest{Body: "more", ExpectedVersion: 3, Metadata: meta})
 		}, true},
 		{"v4 is someone else's", fetchtest.Head("theirs", 4, nil), func(d *docwrite.Doc) (docwrite.Result, error) {

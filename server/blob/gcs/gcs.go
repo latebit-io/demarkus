@@ -264,7 +264,7 @@ func (s *Store) write(
 
 func (s *Store) validateWriteSize(data []byte) error {
 	if int64(len(data)) > s.maxObjectBytes {
-		return fmt.Errorf("%w: object is %d bytes, limit is %d", blob.ErrPrecondition, len(data), s.maxObjectBytes)
+		return fmt.Errorf("%w: object is %d bytes, limit is %d", blob.ErrTooLarge, len(data), s.maxObjectBytes)
 	}
 	return nil
 }
