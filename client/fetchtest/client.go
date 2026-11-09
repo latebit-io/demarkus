@@ -12,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // Client is a scriptable fetch client that records every call. With no
@@ -185,13 +186,15 @@ func (c *Client) store(r fetch.WriteRequest, version int, result fetch.Result) (
 	if r.ExpectedVersion >= 0 && r.ExpectedVersion != current {
 		return status(protocol.StatusConflict, nil), nil
 	}
-	// As the server does: publisher keys survive, server owned keys are its own.
-	metadata := make(map[string]string, len(r.Metadata)+2)
+	// As the server does: publisher keys survive, typed by path with tags in
+	// stored form; server owned keys are its own.
+	kept := make(map[string]string, len(r.Metadata))
 	for key, value := range r.Metadata {
-		if !protocol.IsReservedMetadataKey(key) {
-			metadata[key] = value
+		if !storefmt.IsReservedMetaKey(key) {
+			kept[key] = value
 		}
 	}
+	metadata := storefmt.PublishedMeta(r.Path, kept)
 	metadata["version"] = strconv.Itoa(version)
 	metadata["content-hash"] = generation.BodyHash(r.Body)
 	stored := fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: r.Body, Metadata: metadata}}

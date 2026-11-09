@@ -202,7 +202,7 @@ func TestWriteBounds(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			err := store.validateWriteSize(test.data)
-			if test.wantErr != errors.Is(err, blob.ErrPrecondition) {
+			if test.wantErr != errors.Is(err, blob.ErrTooLarge) {
 				t.Errorf("validateWriteSize(%d) = %v", len(test.data), err)
 			}
 		})
@@ -218,10 +218,10 @@ func TestWriteBounds(t *testing.T) {
 		t.Fatalf("New(): %v", err)
 	}
 	attributes, err := bounded.Create(context.Background(), "key", []byte("1234"))
-	assertOperationError(t, err, nil, "create", "key", blob.ErrPrecondition)
+	assertOperationError(t, err, nil, "create", "key", blob.ErrTooLarge)
 	assertZeroAttributes(t, attributes)
 	attributes, err = bounded.Replace(context.Background(), "key", 1, []byte("1234"))
-	assertOperationError(t, err, nil, "replace", "key", blob.ErrPrecondition)
+	assertOperationError(t, err, nil, "replace", "key", blob.ErrTooLarge)
 	assertZeroAttributes(t, attributes)
 	if attempts.Load() != 0 {
 		t.Errorf("oversized writes made %d requests, want 0", attempts.Load())

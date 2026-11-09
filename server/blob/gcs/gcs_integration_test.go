@@ -43,7 +43,8 @@ func TestGCSIntegration(t *testing.T) {
 			t.Errorf("close GCS client: %v", err)
 		}
 	})
-	store, err := gcs.New(client, bucket, 2<<20)
+	const maxObjectBytes = 2 << 20
+	store, err := gcs.New(client, bucket, maxObjectBytes)
 	if err != nil {
 		t.Fatalf("create GCS store: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestGCSIntegration(t *testing.T) {
 		cleanupObjects(t, store, prefix)
 	})
 
-	blobtest.RunConformance(t, store, prefix)
+	blobtest.RunConformance(t, store, prefix, maxObjectBytes)
 }
 
 func cleanupObjects(t *testing.T, store blob.Store, prefix string) {

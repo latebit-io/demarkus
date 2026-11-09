@@ -69,8 +69,8 @@ type hedgeAnswer[T any] struct {
 }
 
 // hedge runs call, again past the delay when the budget allows; a success,
-// not found or precondition wins at once, other errors wait for an attempt
-// still running. A winning hedge's latency bounds the primary's from below.
+// not found, precondition or too large wins at once, other errors wait for an
+// attempt still running. A winning hedge's latency bounds the primary's from below.
 func hedge[T any](ctx context.Context, observed *latencies, budget *hedgeBudget, call func(context.Context) (T, error)) (T, error) {
 	budget.earn()
 	ctx, cancel := context.WithCancel(ctx)
@@ -101,7 +101,7 @@ func hedge[T any](ctx context.Context, observed *latencies, budget *hedgeBudget,
 			case hedgeSent && errors.Is(answer.err, ErrPrecondition):
 				var zero T
 				return zero, fmt.Errorf("%w: a hedged attempt found the name taken: %v", ErrAmbiguous, answer.err)
-			case errors.Is(answer.err, ErrNotFound) || errors.Is(answer.err, ErrPrecondition) || running == 0:
+			case errors.Is(answer.err, ErrNotFound) || errors.Is(answer.err, ErrPrecondition) || errors.Is(answer.err, ErrTooLarge) || running == 0:
 				// A primary that fails before the delay is the caller's to retry.
 				return answer.value, answer.err
 			}

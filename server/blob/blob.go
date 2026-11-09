@@ -68,6 +68,8 @@ var (
 	ErrNotFound = errors.New("blob not found")
 	// ErrPrecondition reports invalid input or a failed generation condition.
 	ErrPrecondition = errors.New("blob precondition failed")
+	// ErrTooLarge reports an object over the store's size limit.
+	ErrTooLarge = errors.New("blob too large")
 	// ErrThrottled reports temporary service rate limiting.
 	ErrThrottled = errors.New("blob throttled")
 	// ErrUnavailable reports a temporary service failure.

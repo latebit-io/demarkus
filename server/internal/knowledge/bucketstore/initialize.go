@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/latebit-io/demarkus/server/blob"
@@ -51,6 +52,10 @@ func initialize(ctx context.Context, objects blob.Store, worldID string) error {
 	return nil
 }
 
+// genesisSequence is checkpoint zero's: the first slot follows it, naming no
+// predecessor.
+const genesisSequence = 1
+
 // buildGenesis is the empty world's objects, the marker last: one empty
 // folded shard, its root, checkpoint zero.
 func buildGenesis(worldID string) ([]modelObject, error) {
@@ -62,8 +67,8 @@ func buildGenesis(worldID string) ([]modelObject, error) {
 	if err != nil {
 		return nil, err
 	}
-	checkpoint := checkpointObject{Schema: logSchema, WorldID: worldID, Sequence: 1, Root: rootRef}
-	if err := validateCheckpoint(&checkpoint, 1); err != nil {
+	checkpoint := checkpointObject{Schema: logSchema, WorldID: worldID, Sequence: genesisSequence, Root: rootRef}
+	if err := validateCheckpoint(&checkpoint, genesisSequence); err != nil {
 		return nil, fmt.Errorf("build checkpoint zero: %w", err)
 	}
 	checkpointData, err := marshalImmutable(checkpoint)
@@ -78,7 +83,7 @@ func buildGenesis(worldID string) ([]modelObject, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build marker: %w", err)
 	}
-	return []modelObject{shard, rootModel, {Key: checkpointKey(1), Data: checkpointData}, {Key: markerKey, Data: markerData}}, nil
+	return []modelObject{shard, rootModel, {Key: checkpointKey(genesisSequence), Data: checkpointData}, {Key: markerKey, Data: markerData}}, nil
 }
 
 // createImmutable creates an object a drop may delete (a shard, root,
@@ -205,9 +210,11 @@ func createMarker(ctx context.Context, objects blob.Store, worldID string, marke
 }
 
 // validateExistingWorld checks the bucket holds worldID's marker and a
-// checkpoint that loads. The caller opens the world again to serve it.
+// checkpoint that loads. The caller opens the world again to serve it, so a
+// fallback warns twice; this path has no store logger.
 func validateExistingWorld(ctx context.Context, objects blob.Store, worldID string) error {
-	if _, err := loadBase(ctx, objects, worldID, defaultShardWorkers); err != nil {
+	loader := checkpointLoader{objects: objects, worldID: worldID, workers: defaultShardWorkers, logger: slog.Default()}
+	if _, err := loader.loadBase(ctx); err != nil {
 		return fmt.Errorf("validate existing world: %w", err)
 	}
 	return nil

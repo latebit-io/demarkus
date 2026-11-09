@@ -96,8 +96,8 @@ func TestCompactorRefusesAnUnrebasedSnapshot(t *testing.T) {
 	if err := writer.checkpoint(ctx); !errors.Is(err, blob.ErrIntegrity) {
 		t.Fatalf("checkpoint on an unrebased snapshot: %v, want ErrIntegrity", err)
 	}
-	if newest, err := newestCheckpointSequence(ctx, objects, 0); err != nil || newest != peer.layout().Sequence {
-		t.Fatalf("newest checkpoint %d, %v; want the peer's %d alone", newest, err, peer.layout().Sequence)
+	if newest := newestCheckpointOf(t, objects); newest != peer.layout().Sequence {
+		t.Fatalf("newest checkpoint %d, want the peer's %d alone", newest, peer.layout().Sequence)
 	}
 }
 

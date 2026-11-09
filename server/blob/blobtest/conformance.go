@@ -17,12 +17,14 @@ import (
 const concurrentWriters = 2
 
 type suite struct {
-	store blob.Store
-	root  string
+	store    blob.Store
+	root     string
+	maxBytes int64
 }
 
-// RunConformance exercises Store behavior under an unused key prefix.
-func RunConformance(t *testing.T, store blob.Store, prefix string) {
+// RunConformance exercises Store behavior under an unused key prefix;
+// maxObjectBytes is the limit the store was built with.
+func RunConformance(t *testing.T, store blob.Store, prefix string, maxObjectBytes int64) {
 	t.Helper()
 	if store == nil {
 		t.Fatal("blobtest: nil store")
@@ -48,10 +50,11 @@ func RunConformance(t *testing.T, store blob.Store, prefix string) {
 		{"Validation", testValidation},
 		{"CanceledContext", testCanceledContext},
 		{"ZeroResults", testZeroResults},
+		{"SizeLimit", testSizeLimit},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			test.run(t, suite{store: store, root: root + test.name + "/"})
+			test.run(t, suite{store: store, root: root + test.name + "/", maxBytes: maxObjectBytes})
 		})
 	}
 }
@@ -519,4 +522,35 @@ func assertZeroListResult(t *testing.T, result blob.ListResult) {
 	if result.Objects != nil || result.NextCursor != "" {
 		t.Errorf("error list result = %+v, want zero", result)
 	}
+}
+
+// testSizeLimit: an object over the limit is refused as ErrTooLarge and
+// nothing is written; one at it is stored.
+func testSizeLimit(t *testing.T, s suite) {
+	ctx := context.Background()
+	over := make([]byte, s.maxBytes+1)
+	key := s.key("over")
+	attributes, err := s.store.Create(ctx, key, over)
+	requireOpError(t, err, blob.ErrTooLarge, "create", key)
+	assertZeroAttributes(t, attributes)
+	object, err := s.store.Get(ctx, key)
+	requireOpError(t, err, blob.ErrNotFound, "get", key)
+	assertZeroObject(t, &object)
+
+	replaced := s.key("replaced")
+	created := mustCreate(t, s.store, replaced, []byte("original"))
+	attributes, err = s.store.Replace(ctx, replaced, created.Generation, over)
+	requireOpError(t, err, blob.ErrTooLarge, "replace", replaced)
+	assertZeroAttributes(t, attributes)
+	assertData(t, s.store, replaced, "original")
+
+	// A taken name is a precondition failure, never a size one; size is checked
+	// first, so an oversized create over a taken name is ErrTooLarge.
+	_, err = s.store.Create(ctx, replaced, []byte("again"))
+	if !errors.Is(err, blob.ErrPrecondition) || errors.Is(err, blob.ErrTooLarge) {
+		t.Errorf("create over a taken name: %v, want a precondition failure that is not ErrTooLarge", err)
+	}
+	_, err = s.store.Create(ctx, replaced, over)
+	requireOpError(t, err, blob.ErrTooLarge, "create", replaced)
+	mustCreate(t, s.store, s.key("at-limit"), make([]byte, s.maxBytes))
 }

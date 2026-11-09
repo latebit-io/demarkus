@@ -3,6 +3,7 @@ package bucketstore
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -174,13 +175,16 @@ func (store *Store) step(ctx context.Context) (bool, error) {
 	// Only checkpoints after the known one are listed: the rest may be many
 	// until they are collected.
 	known := store.layout().Sequence
-	newest, err := newestCheckpointSequence(ctx, store.objects, known)
+	newer, err := listCheckpoints(ctx, store.objects, known)
 	if err != nil {
 		return false, err
 	}
-	if newest > known {
-		return false, store.adoptPeerCheckpoint(ctx, newest)
+	adopted, broken, err := store.adoptNewer(ctx, newer)
+	if adopted || err != nil {
+		return false, err
 	}
+	// A broken checkpoint still holds its name, so the next is written past it.
+	newest := lastOr(newer, known)
 	snap := store.served.Load().snap
 	if store.readOnly || snap.Sequence <= newest {
 		return false, nil
@@ -193,19 +197,19 @@ func (store *Store) step(ctx context.Context) (bool, error) {
 	if deferred, err := store.deferToPeer(ctx, known); deferred || err != nil {
 		return false, err
 	}
-	target, err := store.stepTarget(ctx, snap)
+	target, err := store.stepTarget(ctx, snap, broken)
 	if err != nil {
 		return false, err
 	}
-	adopted, err := store.checkpointWriter().write(ctx, target)
+	written, err := store.checkpointWriter().write(ctx, target)
 	if err != nil {
 		return false, err
 	}
-	store.installAdoption(adopted)
-	if adopted.own {
+	store.installAdoption(written)
+	if written.own {
 		store.compaction.written.Store(target.Sequence)
 	}
-	store.keepBase(target, adopted)
+	store.keepBase(target, written)
 	store.logger.Info("checkpoint written", "world", store.worldID, "sequence", target.Sequence, "served", snap.Sequence)
 	plan, err := store.planDrop(ctx)
 	if err == nil {
@@ -215,6 +219,23 @@ func (store *Store) step(ctx context.Context) (bool, error) {
 		store.logger.Warn("old checkpoints or slots not dropped; a later checkpoint retries", "world", store.worldID, "error", err)
 	}
 	return target != snap, nil
+}
+
+// adoptNewer adopts the newest of the newer checkpoints that loads, skipping
+// one missing or corrupt in any object it names; it returns those skipped.
+// A bucket or caller failure ends it, as no reason to skip.
+func (store *Store) adoptNewer(ctx context.Context, newer []int64) (adopted bool, broken []int64, err error) {
+	for _, sequence := range slices.Backward(newer) {
+		if err = store.adoptPeerCheckpoint(ctx, sequence); err == nil {
+			return true, broken, nil
+		}
+		if !damaged(ctx, err) {
+			return false, broken, err
+		}
+		store.logger.Warn("newer checkpoint does not load; skipping it", "world", store.worldID, "checkpoint", sequence, "error", err)
+		broken = append(broken, sequence)
+	}
+	return false, broken, nil
 }
 
 // deferToPeer reports whether the newest checkpoint is one to leave alone:
@@ -237,8 +258,8 @@ func (store *Store) deferToPeer(ctx context.Context, known int64) (bool, error) 
 
 // stepTarget is the snapshot the next checkpoint covers: snap when its
 // changes fit one step, else the base replayed to the slot boundary that
-// fills a step; without a base at the newest checkpoint, the whole backlog.
-func (store *Store) stepTarget(ctx context.Context, snap *snapshot) (*snapshot, error) {
+// fills a step, never a broken checkpoint's; without a base, the whole backlog.
+func (store *Store) stepTarget(ctx context.Context, snap *snapshot, broken []int64) (*snapshot, error) {
 	c := &store.compaction
 	limit := c.stepLimit()
 	if changedDocuments(snap, limit) <= limit {
@@ -257,7 +278,9 @@ func (store *Store) stepTarget(ctx context.Context, snap *snapshot) (*snapshot, 
 			for index := range slot.Entries {
 				touched[slot.Entries[index].Path] = struct{}{}
 			}
-			return len(touched) >= limit
+			// Steps are deterministic, so ending where a broken one did would
+			// meet its bytes under create-if-absent on every run.
+			return len(touched) >= limit && !slices.Contains(broken, slot.last())
 		},
 	}
 	if err := replay(ctx, store.objects, target, options); err != nil {
@@ -357,30 +380,18 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 	previous := snap.Checkpoint
 	// Bits never fall: a layout the count rule outgrew, or one a shard's size
 	// forced, is kept, else every checkpoint would fold the world again.
-	bits := max(shardBitsFor(snap.Paths.Len()), previous.Bits)
-	layout := writer.group(snap, bits)
+	layout := writer.group(snap, max(shardBitsFor(snap.Paths.Len()), previous.Bits))
 	// The changed set is the same at every width: a shard holding a change is
 	// always written.
 	entries, err := writer.foldChanged(ctx, layout.changed)
+	if err == nil {
+		layout, err = writer.fit(ctx, snap, layout, entries)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint %d: %w", snap.Sequence, err)
 	}
-	for {
-		oversized, err := writer.measure(ctx, layout, entries)
-		if err != nil {
-			return nil, fmt.Errorf("checkpoint %d: %w", snap.Sequence, err)
-		}
-		if oversized < 0 {
-			break
-		}
-		if bits == maxShardBits || len(layout.groups[oversized]) == 1 {
-			return nil, fmt.Errorf("checkpoint %d: shard %s of %d documents exceeds %d bytes at %d bits", snap.Sequence, shardLabel(oversized, bits), len(layout.groups[oversized]), writer.budget, bits)
-		}
-		bits++
-		layout = writer.group(snap, bits)
-	}
 
-	refs := make([]shardRef, 1<<bits)
+	refs := make([]shardRef, 1<<layout.bits)
 	if layout.reuse {
 		copy(refs, previous.Shards)
 	}
@@ -395,7 +406,7 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint %d: %w", snap.Sequence, err)
 	}
-	root, rootRef, err := foldRoot(worldID, snap.Paths.Len(), bits, refs)
+	root, rootRef, err := foldRoot(worldID, snap.Paths.Len(), layout.bits, refs)
 	if err == nil && len(root.Data) > MaxObjectBytes {
 		err = fmt.Errorf("root of %d shards is %d bytes, limit is %d", len(refs), len(root.Data), MaxObjectBytes)
 	}
@@ -416,11 +427,11 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 	}
 	now := writer.now()
 	run := &segmentRun{
-		reader: writer.bodyReader, workers: workers, window: windowOf(now), bits: bits, previousBits: previous.Bits,
+		reader: writer.bodyReader, workers: workers, window: windowOf(now), bits: layout.bits, previousBits: previous.Bits,
 		fence: dropFence{started: now, grace: writer.grace},
 	}
 	run.write(ctx, layout.groups, layout.shards)
-	return &adoption{checkpoint: &checkpointBase{Sequence: snap.Sequence, Bits: bits, Shards: refs}, entries: entries, own: own}, nil
+	return &adoption{checkpoint: &checkpointBase{Sequence: snap.Sequence, Bits: layout.bits, Shards: refs}, entries: entries, own: own}, nil
 }
 
 // shardLayout is a snapshot's documents at one shard width: the shards to
@@ -483,6 +494,29 @@ func (writer checkpointWriter) foldChanged(ctx context.Context, changed []groupe
 
 // fold is the written shard index as an object.
 func (layout shardLayout) fold(index int, entries map[string]*baseEntry) (modelObject, shardRef, error) {
+	return foldShard(index, layout.bits, layout.folded(index, entries))
+}
+
+// size is fold's object length, without its validation and hash: an Encoder
+// writes json.Marshal's bytes and a newline, uncopied.
+func (layout shardLayout) size(index int, entries map[string]*baseEntry) (int, error) {
+	var count byteCount
+	if err := json.NewEncoder(&count).Encode(newFoldedShard(index, layout.bits, layout.folded(index, entries))); err != nil {
+		return 0, fmt.Errorf("measure shard %s: %w", shardLabel(index, layout.bits), err)
+	}
+	return int(count) - 1, nil
+}
+
+// byteCount sizes an encoding without holding its bytes.
+type byteCount int
+
+func (count *byteCount) Write(data []byte) (int, error) {
+	*count += byteCount(len(data))
+	return len(data), nil
+}
+
+// folded prefers a changed document's newly folded base to its stored one.
+func (layout shardLayout) folded(index int, entries map[string]*baseEntry) []foldedEntry {
 	folded := make([]foldedEntry, len(layout.groups[index]))
 	for position, document := range layout.groups[index] {
 		base := entries[document.state.Path]
@@ -491,41 +525,101 @@ func (layout shardLayout) fold(index int, entries map[string]*baseEntry) (modelO
 		}
 		folded[position] = foldedEntryOf(document, base)
 	}
-	return foldShard(index, layout.bits, folded)
+	return folded
+}
+
+// fit widens layout until every written shard is within the budget.
+func (writer checkpointWriter) fit(ctx context.Context, snap *snapshot, layout shardLayout, entries map[string]*baseEntry) (shardLayout, error) {
+	var narrower parentSizes
+	for {
+		sizes, err := writer.measure(ctx, layout, entries, narrower)
+		if err != nil {
+			return shardLayout{}, err
+		}
+		position := slices.IndexFunc(layout.shards, func(index int) bool { return sizes[index] > writer.budget })
+		if position < 0 {
+			return layout, nil
+		}
+		oversized, bits := layout.shards[position], layout.bits
+		if bits == maxShardBits || len(layout.groups[oversized]) == 1 {
+			return shardLayout{}, fmt.Errorf("shard %s of %d documents exceeds %d bytes at %d bits", shardLabel(oversized, bits), len(layout.groups[oversized]), writer.budget, bits)
+		}
+		layout = writer.group(snap, bits+1)
+		growth, err := headerGrowth(layout.bits)
+		if err != nil {
+			return shardLayout{}, err
+		}
+		narrower = parentSizes{sizes: sizes, growth: growth}
+	}
+}
+
+// parentSizes are the sizes one width narrower, whose headers are growth
+// bytes shorter than their children's.
+type parentSizes struct {
+	sizes  []int
+	growth int
 }
 
 // errOversized stops a measure at the first shard over budget.
 var errOversized = errors.New("shard over budget")
 
-// measure folds each written shard and reports the first over the budget,
-// -1 when all fit. Objects are not kept: a full fold of a large world would
-// hold every shard at once.
-func (writer checkpointWriter) measure(ctx context.Context, layout shardLayout, entries map[string]*baseEntry) (int, error) {
-	sizes := make([]int, len(layout.shards))
-	positions := make([]int, len(sizes))
-	for position := range positions {
-		positions[position] = position
+// measure sizes the written shards, bounded by parents, holding no object: a
+// large world's would be every shard. -1 is unwritten, or unmeasured past a
+// stop at an oversized one.
+func (writer checkpointWriter) measure(ctx context.Context, layout shardLayout, entries map[string]*baseEntry, parents parentSizes) ([]int, error) {
+	sizes := make([]int, 1<<layout.bits)
+	for index := range sizes {
+		sizes[index] = -1
 	}
-	err := runParallel(ctx, writer.workers, positions, func(_ context.Context, position int) error {
-		object, _, err := layout.fold(layout.shards[position], entries)
+	pending := make([]int, 0, len(layout.shards))
+	for _, index := range layout.shards {
+		// A child holds a subset of its parent's entries, so only the header
+		// grows: the bound needs no measure while it fits.
+		if len(parents.sizes) > 0 {
+			if parent := parents.sizes[index>>1]; parent >= 0 && parent+parents.growth <= writer.budget {
+				sizes[index] = parent + parents.growth
+				continue
+			}
+		}
+		pending = append(pending, index)
+	}
+	err := runParallel(ctx, writer.workers, pending, func(_ context.Context, index int) error {
+		size, err := layout.size(index, entries)
 		if err != nil {
 			return err
 		}
-		sizes[position] = len(object.Data)
-		if sizes[position] > writer.budget {
+		sizes[index] = size
+		if size > writer.budget {
 			return errOversized
 		}
 		return nil
 	})
 	if err != nil && !errors.Is(err, errOversized) {
-		return -1, err
+		return nil, err
 	}
-	for position, size := range sizes {
-		if size > writer.budget {
-			return layout.shards[position], nil
-		}
+	return sizes, nil
+}
+
+// headerGrowth is how much a shard's own fields grow from bits-1 to bits.
+func headerGrowth(bits int) (int, error) {
+	narrow, err := headerLen(bits - 1)
+	if err != nil {
+		return 0, err
 	}
-	return -1, nil
+	wide, err := headerLen(bits)
+	if err != nil {
+		return 0, err
+	}
+	return wide - narrow, nil
+}
+
+// headerLen is the encoded length of an empty shard at bits.
+func headerLen(bits int) (int, error) {
+	data, err := json.Marshal(newFoldedShard(0, bits, []foldedEntry{}))
+	if err != nil {
+		return 0, fmt.Errorf("measure shard header: %w", err)
+	}
+	return len(data), nil
 }
 
 // foldHistory is a document's history blocks, one per absolute block of
@@ -603,8 +697,8 @@ func foldedEntryOf(document grouped, base *baseEntry) foldedEntry {
 
 // foldShard is one folded shard's object and the root's reference to it.
 func foldShard(index, bits int, entries []foldedEntry) (modelObject, shardRef, error) {
-	label := shardLabel(index, bits)
-	shard := foldedShard{Schema: foldedSchema, ShardBits: bits, Shard: label, Entries: entries}
+	shard := newFoldedShard(index, bits, entries)
+	label := shard.Shard
 	if err := validateFoldedShard(&shard, index, bits); err != nil {
 		return modelObject{}, shardRef{}, fmt.Errorf("build shard %s: %w", label, err)
 	}
@@ -613,6 +707,11 @@ func foldShard(index, bits int, entries []foldedEntry) (modelObject, shardRef, e
 		return modelObject{}, shardRef{}, fmt.Errorf("build shard %s: %w", label, err)
 	}
 	return object, shardRef{Shard: label, objectRef: ref}, nil
+}
+
+// newFoldedShard is the one shard value foldShard writes and size measures.
+func newFoldedShard(index, bits int, entries []foldedEntry) foldedShard {
+	return foldedShard{Schema: foldedSchema, ShardBits: bits, Shard: shardLabel(index, bits), Entries: entries}
 }
 
 func foldRoot(worldID string, documents, bits int, shards []shardRef) (modelObject, objectRef, error) {

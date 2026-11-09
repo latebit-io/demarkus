@@ -596,14 +596,14 @@ func initializedMemory(t *testing.T) *blob.Memory {
 
 // initializedMemoryOf is an initialized world on a bucket with the given
 // object limit.
-func initializedMemoryOf(t *testing.T, limit int64) *blob.Memory {
-	t.Helper()
+func initializedMemoryOf(tb testing.TB, limit int64) *blob.Memory {
+	tb.Helper()
 	objects, err := blob.NewMemory(limit)
 	if err != nil {
-		t.Fatalf("new memory: %v", err)
+		tb.Fatalf("new memory: %v", err)
 	}
 	if err := initialize(context.Background(), objects, testWorldID); err != nil {
-		t.Fatalf("initialize: %v", err)
+		tb.Fatalf("initialize: %v", err)
 	}
 	return objects
 }
@@ -642,13 +642,7 @@ func deleteObject(t *testing.T, objects blob.Store, key string) {
 // readFoldedRoot reads the world's newest checkpoint and its folded root.
 func readFoldedRoot(t *testing.T, objects blob.Store) (checkpointObject, foldedRoot) {
 	t.Helper()
-	checkpoint, err := newestCheckpoint(context.Background(), objects, testWorldID)
-	if err != nil {
-		t.Fatalf("newest checkpoint: %v", err)
-	}
-	var root foldedRoot
-	decodeObject(t, getObject(t, objects, checkpoint.Root.Key).Data, &root)
-	return checkpoint, root
+	return rootAt(t, objects, newestCheckpointOf(t, objects))
 }
 
 // installRoot makes root the world's newest checkpoint, as a compactor writes
@@ -662,11 +656,7 @@ func installRoot(t *testing.T, objects blob.Store, root any) {
 	if _, err := objects.Create(context.Background(), model.Key, model.Data); err != nil {
 		t.Fatalf("create root %q: %v", model.Key, err)
 	}
-	previous, err := newestCheckpointSequence(context.Background(), objects, 0)
-	if err != nil {
-		t.Fatalf("newest checkpoint: %v", err)
-	}
-	checkpoint := checkpointObject{Schema: logSchema, WorldID: testWorldID, Sequence: previous + 1, Root: ref}
+	checkpoint := checkpointObject{Schema: logSchema, WorldID: testWorldID, Sequence: newestCheckpointOf(t, objects) + 1, Root: ref}
 	data, err := marshalImmutable(checkpoint)
 	if err != nil {
 		t.Fatalf("marshal checkpoint: %v", err)

@@ -17,8 +17,8 @@ func TestRejectedContentFailsThePublish(t *testing.T) {
 	objects := initializedMemoryOf(t, 4096)
 	store := manualSite(objects).open(t, 0)
 	_, err := store.WriteVersion("/large.md", 0, []byte(strings.Repeat("x", 8192)), nil)
-	if !errors.Is(err, blob.ErrPrecondition) {
-		t.Fatalf("publish over the object limit = %v, want ErrPrecondition", err)
+	if !errors.Is(err, blob.ErrTooLarge) {
+		t.Fatalf("publish over the object limit = %v, want ErrTooLarge", err)
 	}
 	if _, err := store.Get("/large.md", 0); !errors.Is(err, backend.ErrNotFound) {
 		t.Fatalf("Get after the rejected publish = %v, want not found", err)
@@ -104,5 +104,31 @@ func TestOneOversizedEntryFailsTheCheckpoint(t *testing.T) {
 	err = store.checkpoint(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("checkpoint of one oversized entry = %v, want an error naming the shard", err)
+	}
+}
+
+// Two documents no shard can hold together that share every layout's shard
+// fail the checkpoint at maxShardBits, naming the shard, not the root.
+func TestWidestLayoutFailsOnTheShard(t *testing.T) {
+	// Pigeonhole: a pair shares the top maxShardBits bits within 1<<maxShardBits+1 paths.
+	seen := map[int]string{}
+	var pair []string
+	for i := 0; pair == nil; i++ {
+		path := fmt.Sprintf("/doc%d.md", i)
+		shard := shardOf(pathHash(path), maxShardBits)
+		if other, ok := seen[shard]; ok {
+			pair = []string{other, path}
+		}
+		seen[shard] = path
+	}
+	objects := initializedMemory(t)
+	store := (&bucketSite{objects: objects, trigger: manual, shardBudget: 2048}).open(t, 0)
+	for _, path := range pair {
+		_, err := store.WriteVersion(path, 0, []byte("# Doc\n"), wideMetadata)
+		mustSucceed(t, err)
+	}
+	err := store.checkpoint(context.Background())
+	if want := fmt.Sprintf("of 2 documents exceeds 2048 bytes at %d bits", maxShardBits); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("checkpoint of %v = %v, want an error containing %q", pair, err, want)
 	}
 }

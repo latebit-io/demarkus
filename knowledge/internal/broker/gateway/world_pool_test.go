@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -97,5 +99,98 @@ func TestWorldPoolLetsGoOfADroppedWorld(t *testing.T) {
 	cfg.Registry().SetDynamic([]core.WorldConfig{eve}, nil)
 	if second, _, err := pool.clientFor("eve-1"); err != nil || second == first {
 		t.Errorf("client after reprovisioning = %p (first %p), %v; want a new one", second, first, err)
+	}
+}
+
+// reprovisionDuringFind makes the pool's next registry lookup race change: the
+// lookup reads the registry, then change runs to completion (swap and drop
+// listeners) before the pool sees the result.
+func reprovisionDuringFind(pool *WorldPool, reg *core.WorldRegistry, change func()) {
+	raced := false
+	pool.find = func(name string) (core.WorldConfig, bool) {
+		w, ok := reg.Find(name)
+		if !raced {
+			raced = true
+			change()
+		}
+		return w, ok
+	}
+}
+
+// A reprovision or deprovision whose drop completes between the pool's lookup
+// and its cache insert leaves the current generation's route, or none, cached.
+func TestWorldPoolLookupRacingADropCachesCurrentState(t *testing.T) {
+	old := core.WorldConfig{Name: "eve-1", InternalAddress: "127.0.0.1:1", Generation: "t1"}
+	next := core.WorldConfig{Name: "eve-1", InternalAddress: "127.0.0.1:2", Generation: "t2"}
+	for _, tc := range []struct {
+		name  string
+		after []core.WorldConfig
+		want  string // empty: the world is unknown
+	}{
+		{"reprovision", []core.WorldConfig{next}, next.Address()},
+		{"deprovision", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &core.Config{}
+			reg := cfg.Registry()
+			pool := NewWorldPool(reg, fetch.Options{})
+			defer pool.Close()
+			reg.SetDynamic([]core.WorldConfig{old}, nil)
+			reprovisionDuringFind(pool, reg, func() { reg.SetDynamic(tc.after, nil) })
+			for _, when := range []string{"racing", "after the race"} {
+				_, host, err := pool.clientFor("eve-1")
+				if tc.want == "" && !errors.As(err, new(*errWorldNotFound)) || tc.want != "" && (err != nil || host != tc.want) {
+					t.Errorf("%s clientFor = %q, %v; want %q (empty: unknown world)", when, host, err, tc.want)
+				}
+				pool.find = reg.Find
+			}
+			pool.mu.Lock()
+			defer pool.mu.Unlock()
+			if n, want := len(pool.clients), len(tc.after); n != want {
+				t.Errorf("pool holds %d clients, want %d", n, want)
+			}
+		})
+	}
+}
+
+// Under concurrent lookups and reprovisions, once both settle every cached
+// route is the current generation's.
+func TestWorldPoolConcurrentReprovisionSettlesOnCurrentGeneration(t *testing.T) {
+	cfg := &core.Config{}
+	reg := cfg.Registry()
+	pool := NewWorldPool(reg, fetch.Options{})
+	defer pool.Close()
+	world := func(i int) core.WorldConfig {
+		return core.WorldConfig{Name: "eve-1", InternalAddress: fmt.Sprintf("127.0.0.1:%d", 1000+i), Generation: fmt.Sprint(i)}
+	}
+	reg.SetDynamic([]core.WorldConfig{world(0)}, nil)
+
+	const generations = 200
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for range 4 {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if _, _, err := pool.clientFor("eve-1"); err != nil {
+					t.Errorf("clientFor: %v", err)
+					return
+				}
+			}
+		})
+	}
+	for i := 1; i <= generations; i++ {
+		reg.SetDynamic([]core.WorldConfig{world(i)}, nil)
+	}
+	close(stop)
+	wg.Wait()
+
+	want := world(generations)
+	if _, host, err := pool.clientFor("eve-1"); err != nil || host != want.Address() {
+		t.Errorf("settled clientFor = %q, %v; want %q", host, err, want.Address())
 	}
 }

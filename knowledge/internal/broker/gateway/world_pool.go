@@ -43,9 +43,10 @@ type pooledWorld struct {
 // connection pool) per world, resolved to a cluster-internal host:port
 // via WorldConfig.Address; the mark:// scheme is implicit.
 type WorldPool struct {
-	worlds  *core.WorldRegistry
+	find    func(name string) (core.WorldConfig, bool) // the registry's Find; tests interpose
 	mu      sync.Mutex
 	clients map[string]pooledWorld
+	drops   uint64 // drop calls so far; a lookup that saw it change resolves again
 	opts    fetch.Options
 }
 
@@ -53,7 +54,7 @@ type WorldPool struct {
 // is the template every per world client inherits (TLS posture, timeouts).
 func NewWorldPool(worlds *core.WorldRegistry, opts fetch.Options) *WorldPool {
 	p := &WorldPool{
-		worlds:  worlds,
+		find:    worlds.Find,
 		clients: make(map[string]pooledWorld),
 		opts:    opts,
 	}
@@ -68,6 +69,7 @@ func (p *WorldPool) drop(worldName string) {
 	p.mu.Lock()
 	pooled, ok := p.clients[worldName]
 	delete(p.clients, worldName)
+	p.drops++
 	p.mu.Unlock()
 	if ok {
 		pooled.client.Close()
@@ -159,36 +161,38 @@ func (p *WorldPool) Close() {
 	}
 }
 
-// clientFor returns the worldName's lazily created client + host,
-// resolving from config at call time so provisioned tenants dial without
-// a pool rebuild. DialAddress dials there while SNI/URLs keep the authority.
+// clientFor returns the world's lazily created client and host. A drop that
+// lands between lookup and insert restarts the lookup; one after the insert
+// evicts it, so no route outlives its generation and a hit skips the check.
 func (p *WorldPool) clientFor(worldName string) (*fetch.Client, string, error) {
 	p.mu.Lock()
-	if pooled, ok := p.clients[worldName]; ok {
-		p.mu.Unlock()
-		return pooled.client, pooled.host, nil
-	}
-	p.mu.Unlock()
-
-	w, ok := p.worlds.Find(worldName)
-	if !ok {
-		return nil, "", &errWorldNotFound{worldName: worldName}
-	}
-	host := w.Address()
-	opts := p.opts
-	if w.DialAddress != "" {
-		// ServerName stays unset: fetch derives SNI from the authority
-		// itself, keeping that rule in one place.
-		opts.Endpoints = map[string]fetch.Endpoint{
-			host: {DialAddress: w.DialAddress},
-		}
-	}
-	p.mu.Lock()
 	defer p.mu.Unlock()
-	if pooled, ok := p.clients[worldName]; ok {
-		return pooled.client, pooled.host, nil
+	for {
+		if pooled, ok := p.clients[worldName]; ok {
+			return pooled.client, pooled.host, nil
+		}
+		drops := p.drops
+		p.mu.Unlock()
+		w, ok := p.find(worldName)
+		p.mu.Lock()
+		if !ok {
+			return nil, "", &errWorldNotFound{worldName: worldName}
+		}
+		// Another caller inserted, or a drop raced the lookup: the loop decides.
+		if _, hit := p.clients[worldName]; hit || p.drops != drops {
+			continue
+		}
+		host := w.Address()
+		opts := p.opts
+		if w.DialAddress != "" {
+			// ServerName stays unset: fetch derives SNI from the authority
+			// itself, keeping that rule in one place.
+			opts.Endpoints = map[string]fetch.Endpoint{
+				host: {DialAddress: w.DialAddress},
+			}
+		}
+		c := fetch.NewClient(opts)
+		p.clients[worldName] = pooledWorld{client: c, host: host}
+		return c, host, nil
 	}
-	c := fetch.NewClient(opts)
-	p.clients[worldName] = pooledWorld{client: c, host: host}
-	return c, host, nil
 }

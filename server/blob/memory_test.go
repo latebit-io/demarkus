@@ -15,21 +15,23 @@ import (
 	"github.com/latebit-io/demarkus/server/blob/blobtest"
 )
 
+const conformanceMaxBytes = 1 << 20
+
 func TestMemoryConformance(t *testing.T) {
-	store, err := blob.NewMemory(1 << 20)
+	store, err := blob.NewMemory(conformanceMaxBytes)
 	if err != nil {
 		t.Fatalf("new memory: %v", err)
 	}
-	blobtest.RunConformance(t, store, "conformance/")
+	blobtest.RunConformance(t, store, "conformance/", conformanceMaxBytes)
 }
 
 // A hedged store keeps the blob contract.
 func TestHedgedConformance(t *testing.T) {
-	store, err := blob.NewMemory(1 << 20)
+	store, err := blob.NewMemory(conformanceMaxBytes)
 	if err != nil {
 		t.Fatalf("new memory: %v", err)
 	}
-	blobtest.RunConformance(t, blob.Hedged(store), "conformance/")
+	blobtest.RunConformance(t, blob.Hedged(store), "conformance/", conformanceMaxBytes)
 }
 
 func TestMemoryPagination(t *testing.T) {
@@ -188,12 +190,12 @@ func TestMemoryLimitsAndValidation(t *testing.T) {
 			t.Fatalf("new memory: %v", err)
 		}
 		attributes, err := store.Create(context.Background(), "large", []byte("four"))
-		if !errors.Is(err, blob.ErrPrecondition) || attributes != (blob.Attributes{}) {
+		if !errors.Is(err, blob.ErrTooLarge) || attributes != (blob.Attributes{}) {
 			t.Fatalf("oversized create = (%+v, %v)", attributes, err)
 		}
 		created := mustCreate(t, store, "exact", []byte("123"))
 		attributes, err = store.Replace(context.Background(), "exact", created.Generation, []byte("four"))
-		if !errors.Is(err, blob.ErrPrecondition) || attributes != (blob.Attributes{}) {
+		if !errors.Is(err, blob.ErrTooLarge) || attributes != (blob.Attributes{}) {
 			t.Fatalf("oversized replace = (%+v, %v)", attributes, err)
 		}
 		object, err := store.Get(context.Background(), "exact")

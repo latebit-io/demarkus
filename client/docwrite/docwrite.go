@@ -104,7 +104,7 @@ func (d *Doc) Publish(ctx context.Context, w Write, mode string) (Result, error)
 			Body: w.Body, ExpectedVersion: w.ExpectedVersion, Metadata: w.Metadata,
 		})
 	}, probe{path: protocol.VersionPath(d.Path, w.ExpectedVersion+1), landed: func(written *headDoc) (bool, error) {
-		return w.landedAt(written), nil
+		return w.landedAt(d.Path, written), nil
 	}})
 	if err != nil {
 		if mode == merge.OnConflictMerge {
@@ -130,7 +130,7 @@ func (d *Doc) candidate(ctx context.Context, w Write, conflict Result) (Result, 
 		return Result{}, fmt.Errorf("fetch current: status %s", head.status)
 	}
 	// A conflict against our own earlier attempt is a success, not a merge.
-	if w.landedAt(&head) {
+	if w.landedAt(d.Path, &head) {
 		return reconciledAt(head.version), nil
 	}
 	// Without a real head version the follow up publish would be create only.
@@ -160,11 +160,11 @@ func (d *Doc) candidate(ctx context.Context, w Write, conflict Result) (Result, 
 	}}, nil
 }
 
-// landedAt is whether the head is exactly what w submitted: its body at the
-// next version, under every metadata key it sent.
-func (w *Write) landedAt(head *headDoc) bool {
+// landedAt is whether the head is exactly what w stores at path: its body at
+// the next version, holding the metadata its PUBLISH persists.
+func (w *Write) landedAt(path string, head *headDoc) bool {
 	return head.status == protocol.StatusOK && head.version == w.ExpectedVersion+1 &&
-		head.body == w.Body && head.carries(w.Metadata)
+		head.body == w.Body && head.holds(publishedMeta(path, w.Metadata))
 }
 
 // PublishUnchecked replaces the document whatever its version: the caller has
@@ -194,8 +194,8 @@ type VersionError struct{ Reason string }
 func (e *VersionError) Error() string { return "could not resolve version: " + e.Reason }
 
 // Append adds to the document. It landed when the next version is exactly the
-// base with the addition joined as the protocol joins them, under every
-// metadata key that was sent.
+// base with the addition joined as the protocol joins them, holding the
+// metadata the store merges from the base and the request.
 func (d *Doc) Append(ctx context.Context, req AppendRequest) (Result, error) {
 	if req.ExpectedVersion < 0 {
 		return Result{}, ErrInvalidExpectedVersion
@@ -217,11 +217,10 @@ func (d *Doc) Append(ctx context.Context, req AppendRequest) (Result, error) {
 		})
 	}, probe{path: protocol.VersionPath(d.Path, expected+1), landed: func(written *headDoc) (bool, error) {
 		// The cheap checks first: the base is read only for a likely match.
-		if written.status != protocol.StatusOK || written.version != expected+1 ||
-			!strings.HasSuffix(written.body, req.Body) || !written.carries(req.Metadata) {
+		if written.status != protocol.StatusOK || written.version != expected+1 || !strings.HasSuffix(written.body, req.Body) {
 			return false, nil
 		}
-		return d.isAppendOf(ctx, written, expected, req.Body)
+		return d.isAppendOf(ctx, written, expected, &req)
 	}})
 }
 
@@ -272,10 +271,10 @@ func (d *Doc) send(ctx context.Context, op WriteOp, look probe) (Result, error) 
 	return Result{}, err
 }
 
-// isAppendOf is whether written is the base version with addition appended. A
+// isAppendOf is whether written is what req stores over the base version. A
 // suffix alone would also match a competing write that ends in the same words.
 // A base that is gone (retention) proves nothing, so nothing is claimed.
-func (d *Doc) isAppendOf(ctx context.Context, written *headDoc, baseVersion int, addition string) (bool, error) {
+func (d *Doc) isAppendOf(ctx context.Context, written *headDoc, baseVersion int, req *AppendRequest) (bool, error) {
 	base, err := d.head(ctx, protocol.VersionPath(d.Path, baseVersion))
 	if err != nil {
 		return false, fmt.Errorf("fetch base v%d: %w", baseVersion, err)
@@ -283,11 +282,11 @@ func (d *Doc) isAppendOf(ctx context.Context, written *headDoc, baseVersion int,
 	if base.status != protocol.StatusOK {
 		return false, nil
 	}
-	want, err := storefmt.JoinContent([]byte(base.body), []byte(addition))
+	want, err := storefmt.JoinContent([]byte(base.body), []byte(req.Body))
 	if err != nil {
 		return false, fmt.Errorf("join append content: %w", err)
 	}
-	return written.body == string(want), nil
+	return written.body == string(want) && written.holds(appendedMeta(d.Path, base.metadata, req.Metadata)), nil
 }
 
 // reconciledAt answers as the server would have: a landed write is ok. The
@@ -345,20 +344,43 @@ func (d *Doc) head(ctx context.Context, path string) (headDoc, error) {
 	return headDoc{status: r.Response.Status, body: r.Response.Body, version: version, metadata: r.Response.Metadata}, nil
 }
 
-// carries is whether the document holds every submitted key, so another
-// writer's identical body under different metadata is not mistaken for ours.
-func (h *headDoc) carries(submitted map[string]string) bool {
-	for k, v := range submitted {
-		if protocol.IsServerStampedKey(k) {
-			continue
-		}
-		// An absent key is a mismatch even when the submitted value is empty.
-		actual, ok := h.metadata[k]
-		if !ok || strings.TrimSpace(actual) != strings.TrimSpace(v) {
-			return false
+// holds is whether the document's publisher metadata is exactly want, so a
+// version that kept a key our write dropped is not taken for ours.
+func (h *headDoc) holds(want map[string]string) bool {
+	return storefmt.MetaEqual(publisherKeys(h.metadata), want)
+}
+
+// publishedMeta is the publisher metadata a PUBLISH of meta to path persists.
+func publishedMeta(path string, meta map[string]string) map[string]string {
+	return storefmt.PublishedMeta(path, keptOf(meta))
+}
+
+// appendedMeta is what an APPEND of meta persists over base: the request's
+// keys over the base's, retention not inherited, then typed.
+func appendedMeta(path string, base, meta map[string]string) map[string]string {
+	return storefmt.NormalizeMetadata(storefmt.PrepareAppendMeta(path, publisherKeys(base), keptOf(meta)))
+}
+
+// keptOf is the request metadata a server stores: controls and server stamps
+// dropped. A reserved key, which the server refuses, stays so nothing matches.
+func keptOf(meta map[string]string) map[string]string {
+	return without(meta, func(k string) bool { return protocol.IsControlMetadataKey(k) || protocol.IsServerStampedKey(k) })
+}
+
+// publisherKeys is a read's metadata without response keys or server stamps.
+func publisherKeys(meta map[string]string) map[string]string {
+	return without(meta, func(k string) bool { return protocol.IsReservedMetadataKey(k) || protocol.IsServerStampedKey(k) })
+}
+
+// without copies meta minus the keys drop names.
+func without(meta map[string]string, drop func(string) bool) map[string]string {
+	out := make(map[string]string, len(meta))
+	for k, v := range meta {
+		if !drop(k) {
+			out[k] = v
 		}
 	}
-	return true
+	return out
 }
 
 // optionalInt reads an integer metadata value: absent is 0, malformed is an

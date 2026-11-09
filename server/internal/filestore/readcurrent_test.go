@@ -17,7 +17,9 @@ func TestReadCurrentTakesNoStoreLock(t *testing.T) {
 	if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/p.md", Content: []byte("# P\n")}); err != nil {
 		t.Fatal(err)
 	}
-	store.mu.Lock()
+	if err := store.mu.Lock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	defer store.mu.Unlock()
 	done := make(chan error, 1)
 	go func() {

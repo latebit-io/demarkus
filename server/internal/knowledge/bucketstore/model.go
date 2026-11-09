@@ -20,11 +20,11 @@ const (
 	foldedSchema     = 1
 	logSchema        = 1
 	historyBlockSize = 256
-	// A folded checkpoint has the fewest shards, a power of two, that hold at
-	// most docsPerShard documents each (about 200 KB): 4096 at 1,000,000.
-	// A shard over maxShardBytes doubles the count instead; bits never fall.
+	// Fewest power-of-two shards holding docsPerShard documents each; one over
+	// maxShardBytes doubles them, and bits never fall. maxShardBits is the most
+	// whose root fits an object: 193 bytes a ref, 3 MB at 14 bits, 6 MB at 15.
 	docsPerShard  = 256
-	maxShardBits  = 16
+	maxShardBits  = 14
 	maxShardBytes = MaxObjectBytes / 4
 	// maxSlotEntries bounds one slot's batch, and readers find the slot holding
 	// a sequence within this many names below it: raising it needs a new

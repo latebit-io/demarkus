@@ -140,13 +140,8 @@ func deleteNewer(t *testing.T, objects blob.Store, sequence int64) {
 // checkpointSequences lists the checkpoints after sequence.
 func checkpointSequences(t *testing.T, objects blob.Store, after int64) []int64 {
 	t.Helper()
-	var sequences []int64
-	for page, err := range sequencedPages(context.Background(), objects, checkpointPrefix, after) {
-		mustSucceed(t, err)
-		for index := range page {
-			sequences = append(sequences, page[index].sequence)
-		}
-	}
+	sequences, err := listCheckpoints(context.Background(), objects, after)
+	mustSucceed(t, err)
 	return sequences
 }
 
@@ -480,16 +475,27 @@ func TestShardCount(t *testing.T) {
 	}
 }
 
+// The widest root fits an object, so widening stops at maxShardBits with a
+// named shard instead of a root the bucket refuses.
+func TestWidestRootFitsAnObject(t *testing.T) {
+	refs := make([]shardRef, 1<<maxShardBits)
+	for index := range refs {
+		label := shardLabel(index, maxShardBits)
+		hash := hashHex([]byte(label))
+		refs[index] = shardRef{Shard: label, Key: shardKey(label, hash), Hash: hash}
+	}
+	root, _, err := foldRoot(testWorldID, docsPerShard<<maxShardBits, maxShardBits, refs)
+	mustSucceed(t, err)
+	if len(root.Data) > MaxObjectBytes {
+		t.Fatalf("root at %d shard bits is %d bytes, over the %d object limit", maxShardBits, len(root.Data), MaxObjectBytes)
+	}
+}
+
 // A store compacts once its newest checkpoint lags by the trigger's slots or
 // age; a read-only store never writes one but rebases on a peer's.
 func TestCompactorRunsOnLag(t *testing.T) {
 	quick := func(slots int, age time.Duration) *compactionTrigger {
 		return &compactionTrigger{slots: slots, age: age, wait: func() time.Duration { return 0 }}
-	}
-	newest := func(t *testing.T, objects blob.Store) int64 {
-		sequence, err := newestCheckpointSequence(context.Background(), objects, 0)
-		mustSucceed(t, err)
-		return sequence
 	}
 
 	t.Run("slots", func(t *testing.T) {
@@ -500,7 +506,7 @@ func TestCompactorRunsOnLag(t *testing.T) {
 			mustSucceed(t, err)
 		}
 		waitIdleCompactor(t, writer)
-		if sequence := newest(t, objects); sequence != 1 {
+		if sequence := newestCheckpointOf(t, objects); sequence != 1 {
 			t.Fatalf("checkpoint %d written after 3 slots, want none", sequence)
 		}
 		_, err := writer.WriteVersion("/doc.md", 3, []byte("v3"), nil)
@@ -515,12 +521,12 @@ func TestCompactorRunsOnLag(t *testing.T) {
 		mustSucceed(t, err)
 		time.Sleep(5 * time.Millisecond)
 		waitIdleCompactor(t, writer)
-		if sequence := newest(t, objects); sequence != 1 {
+		if sequence := newestCheckpointOf(t, objects); sequence != 1 {
 			t.Fatalf("checkpoint %d written with no slot after the first, want none until the next", sequence)
 		}
 		_, err = writer.WriteVersion("/doc.md", 1, []byte("v1"), nil)
 		mustSucceed(t, err)
-		waitFor(t, "a checkpoint", func() bool { return newest(t, objects) == 3 })
+		waitFor(t, "a checkpoint", func() bool { return newestCheckpointOf(t, objects) == 3 })
 	})
 
 	t.Run("read-only rebases on a peer's", func(t *testing.T) {
@@ -533,7 +539,7 @@ func TestCompactorRunsOnLag(t *testing.T) {
 		mustSucceed(t, err)
 		mustSucceed(t, reader.poll(context.Background()))
 		waitIdleCompactor(t, reader)
-		if sequence := newest(t, objects); sequence != 1 {
+		if sequence := newestCheckpointOf(t, objects); sequence != 1 {
 			t.Fatalf("read-only store wrote checkpoint %d", sequence)
 		}
 		mustSucceed(t, writer.checkpoint(context.Background()))
@@ -578,8 +584,7 @@ func TestCheckpointDuringWritesRebasesEveryInstall(t *testing.T) {
 	wg.Wait()
 	waitIdle(t, writer)
 
-	newest, err := newestCheckpointSequence(ctx, objects, 0)
-	mustSucceed(t, err)
+	newest := newestCheckpointOf(t, objects)
 	snap := writer.served.Load().snap
 	if snap.Checkpoint.Sequence != newest {
 		t.Fatalf("served snapshot rests on checkpoint %d, want the newest, %d", snap.Checkpoint.Sequence, newest)
