@@ -602,14 +602,15 @@ func (store *Store) runReload(life context.Context, flight *reloadFlight) {
 // collected its next slot, which a probe takes for the tip and a commit forks.
 func (store *Store) reloadIfBehind(ctx context.Context) error {
 	served, diverged := store.served.Load().snap, store.diverged.Load()
-	// All of them, a few kept: a fallback past a broken newer one may need
-	// one at or below the served snapshot, replayed until it reaches the newest.
+	// All of them, since a fallback past a broken newer one may need one at or
+	// below the served snapshot: a few, more while collection stalls, so each
+	// attempt is bounded as at cold start.
 	sequences, err := listCheckpoints(ctx, store.objects, 0)
 	if err != nil || !diverged && lastOr(sequences, 0) <= served.Sequence {
 		return err
 	}
 	started := store.now()
-	base, err := store.loader(0).newest(ctx, sequences)
+	base, err := store.loader(store.requestTimeout).newest(ctx, sequences)
 	if err != nil {
 		return err
 	}

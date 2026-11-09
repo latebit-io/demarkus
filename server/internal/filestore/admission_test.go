@@ -134,8 +134,8 @@ func TestCanceledReadViewBehindWriteLeaksNothing(t *testing.T) {
 		}
 		opened <- err
 	}()
-	// A view waiting behind a writer is invisible to TryAcquire: give it time
-	// to pass the pre-lock check and block.
+	// A queued view is invisible to TryAcquire, so it gets time to block. On a
+	// slow runner the cancel can land first: a false pass, never a false failure.
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	requireCanceled(t, opened, "queued OpenReadView")

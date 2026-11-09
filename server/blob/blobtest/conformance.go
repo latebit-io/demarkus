@@ -544,10 +544,13 @@ func testSizeLimit(t *testing.T, s suite) {
 	assertZeroAttributes(t, attributes)
 	assertData(t, s.store, replaced, "original")
 
-	// A taken name is a precondition failure, never a size one.
+	// A taken name is a precondition failure, never a size one; size is checked
+	// first, so an oversized create over a taken name is ErrTooLarge.
 	_, err = s.store.Create(ctx, replaced, []byte("again"))
 	if !errors.Is(err, blob.ErrPrecondition) || errors.Is(err, blob.ErrTooLarge) {
 		t.Errorf("create over a taken name: %v, want a precondition failure that is not ErrTooLarge", err)
 	}
+	_, err = s.store.Create(ctx, replaced, over)
+	requireOpError(t, err, blob.ErrTooLarge, "create", replaced)
 	mustCreate(t, s.store, s.key("at-limit"), make([]byte, s.maxBytes))
 }
