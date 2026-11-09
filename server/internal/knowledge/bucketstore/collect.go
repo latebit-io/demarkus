@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/blob"
 )
 
@@ -175,4 +177,92 @@ func deleteAt(ctx context.Context, objects blob.Store, attributes blob.Attribute
 		return fmt.Errorf("delete %q: %w", attributes.Key, err)
 	}
 	return nil
+}
+
+// notCollected is the warning a collection failure logs.
+const notCollected = "pruned blobs not collected; a later checkpoint retries"
+
+// collectBlobs deletes pruned blobs no kept checkpoint names once their
+// manifest is slotRetention old, past replicas probing the tip, in sequence
+// order up to the first not yet due. Failures log; a later step retries.
+func (store *Store) collectBlobs(ctx context.Context, plan dropPlan) {
+	fence := dropFence{started: plan.started, grace: slotRetention}
+	limit, handled := store.compaction.collectLimit(), 0
+	for page, err := range attributePages(ctx, store.objects, prunedPrefix, "") {
+		if err != nil {
+			store.logger.Warn(notCollected, "world", store.worldID, "error", err)
+			return
+		}
+		for _, listed := range page {
+			sequence, hash, ok := prunedOfKey(listed.Key)
+			switch {
+			case !ok:
+				store.logger.Warn("not a prune manifest name; left as it is", "world", store.worldID, "key", listed.Key)
+				continue
+			case sequence > plan.oldestKept || handled >= limit || !fence.expired(listed.Modified):
+				return
+			}
+			found, err := store.collectManifest(ctx, listed, sequence, hash)
+			handled += found
+			if err != nil {
+				store.logger.Warn(notCollected, "world", store.worldID, "manifest", listed.Key, "error", err)
+			}
+		}
+	}
+}
+
+// collectManifest collects one manifest part's blobs, then deletes the part at
+// its listed generation; it reports how many blobs it found.
+func (store *Store) collectManifest(ctx context.Context, listed blob.Attributes, sequence int64, hash string) (int, error) {
+	manifest, err := getImmutable(ctx, store.objects, keyedRef{objectRef{Key: listed.Key, Hash: hash}, listed.Key}, func(manifest *prunedObject) error {
+		return validatePruned(manifest, store.worldID, sequence)
+	})
+	if errors.Is(err, blob.ErrNotFound) {
+		return 0, nil // a racing collector finished it
+	}
+	if err != nil {
+		return 0, err
+	}
+	var found atomic.Int64
+	err = runParallel(ctx, store.shardWorkers, manifest.Entries, func(ctx context.Context, entry prunedEntry) error {
+		present, err := store.collectBlob(ctx, entry)
+		if present {
+			found.Add(1)
+		}
+		return err
+	})
+	if err == nil {
+		err = deleteAt(ctx, store.objects, listed)
+	}
+	return int(found.Load()), err
+}
+
+// collectBlob deletes a pruned version's blob at the generation read when its
+// stored header names that path and version. A legacy blob names no path and
+// may serve another document, so it stays, as does one naming another version.
+func (store *Store) collectBlob(ctx context.Context, entry prunedEntry) (bool, error) {
+	object, err := getVerified(ctx, store.objects, keyedRef{entry.Blob, blobKey(entry.Blob.Hash)})
+	var header storefmt.StoredVersionHeader
+	if err == nil {
+		if header, err = storefmt.InspectStoredVersion(object.Data); err != nil {
+			err = fmt.Errorf("%w: %v", blob.ErrIntegrity, err)
+		}
+	}
+	switch {
+	case errors.Is(err, blob.ErrNotFound):
+		return false, nil
+	case errors.Is(err, blob.ErrIntegrity):
+		store.logger.Warn("pruned blob does not verify; left as it is", "world", store.worldID, "key", entry.Blob.Key, "error", err)
+		return true, nil
+	case err != nil:
+		return false, err
+	case header.Path == "":
+		return true, nil
+	}
+	if err := header.CheckNames(entry.Path, entry.Version); err != nil {
+		store.logger.Warn("pruned blob names another version; left as it is", "world", store.worldID, "key", entry.Blob.Key,
+			"path", entry.Path, "version", entry.Version, "error", err)
+		return true, nil
+	}
+	return true, deleteAt(ctx, store.objects, object.Attributes)
 }

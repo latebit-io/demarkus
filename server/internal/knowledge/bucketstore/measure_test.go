@@ -48,7 +48,7 @@ func refoldWorld(tb testing.TB, documents int) *refold {
 	}
 	writer := store.checkpointWriter()
 	layout := writer.group(snap, shardBitsFor(documents))
-	entries, err := writer.foldChanged(ctx, layout.changed)
+	entries, _, err := writer.foldChanged(ctx, layout.changed)
 	if err != nil {
 		tb.Fatalf("fold history: %v", err)
 	}

@@ -92,7 +92,8 @@ func (s *snapshot) entryState(old *pathState, entry *slotEntry) (*pathState, err
 		if old == nil || old.Current != entry.Current || old.BodyHash != entry.BodyHash || !old.Modified.Equal(modified) || old.Archived == entry.Archived {
 			return nil, errors.New("archive transition does not follow the document's state")
 		}
-		state.Entry, state.Base, state.Recent = old.Entry, old.Base, retainFrom(old.Recent, entry.First)
+		state.Entry, state.Base = old.Entry, old.Base
+		state.Recent, state.Pruned = prune(old.Recent, old.Pruned, entry.First)
 		return state, nil
 	}
 	switch {
@@ -110,7 +111,8 @@ func (s *snapshot) entryState(old *pathState, entry *slotEntry) (*pathState, err
 	case entry.First < old.First:
 		return nil, fmt.Errorf("first retained version moves back from %d to %d", old.First, entry.First)
 	default:
-		state.Base, state.Recent = old.Base, retainFrom(old.Recent, entry.First)
+		state.Base = old.Base
+		state.Recent, state.Pruned = prune(old.Recent, old.Pruned, entry.First)
 	}
 	if state.Entry, err = catalogEntry(entry.Catalog); err != nil {
 		return nil, err
@@ -121,15 +123,6 @@ func (s *snapshot) entryState(old *pathState, entry *slotEntry) (*pathState, err
 	recent[len(recent)-1] = retainedVersion{entry: *entry.Version, modified: modified}
 	state.Recent = recent
 	return state, nil
-}
-
-// retainFrom drops the versions retention pruned below first.
-func retainFrom(versions []retainedVersion, first int) []retainedVersion {
-	index := 0
-	for index < len(versions) && versions[index].entry.Version < first {
-		index++
-	}
-	return versions[index:]
 }
 
 // catalogEntry is the prepared catalog entry a record describes.

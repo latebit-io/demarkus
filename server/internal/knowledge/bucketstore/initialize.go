@@ -160,9 +160,9 @@ func createOrRead(ctx context.Context, objects blob.Store, object modelObject, f
 	return nil, fmt.Errorf("create immutable object %q retries exhausted: %w", object.Key, lastErr)
 }
 
-// createContent creates a content-addressed object no drop ever deletes (a
-// history block, a blob): a taken name is this content, verified by hash, so
-// no read-back or freshen. A precondition is a taken name or rejected input.
+// createContent creates a history block or blob, no read-back or freshen: a
+// taken name is this content, verified by hash, and only a pruned blob, which
+// no write names again, is deleted. A precondition is a taken name or bad input.
 func createContent(ctx context.Context, objects blob.Store, object modelObject) error {
 	var lastErr error
 	for attempt := range maximumCreateAttempts {

@@ -212,7 +212,7 @@ func testEtagInResponse(t *testing.T, newBackend backendFactory) {
 	if err != nil {
 		t.Fatalf("parse response: %v", err)
 	}
-	stored, err := storefmt.SerializeVersion(1, nil, body, nil)
+	stored, err := storefmt.SerializeVersion(&storefmt.VersionSpec{Path: "/hello.md", Version: 1, Content: body})
 	if err != nil {
 		t.Fatalf("serialize expected stored bytes: %v", err)
 	}

@@ -15,10 +15,12 @@ import (
 
 const (
 	// historySchema versions history objects; foldedSchema roots and
-	// shards; logSchema the marker, checkpoints and slots.
+	// shards; logSchema the marker, checkpoints and slots; prunedSchema
+	// prune manifests.
 	historySchema    = 1
 	foldedSchema     = 1
 	logSchema        = 1
+	prunedSchema     = 1
 	historyBlockSize = 256
 	// Fewest power-of-two shards holding docsPerShard documents each; one over
 	// maxShardBytes doubles them, and bits never fall. maxShardBits is the most
@@ -39,6 +41,7 @@ const (
 	markerKey        = objectPrefix + "head.json"
 	checkpointPrefix = objectPrefix + "checkpoints/"
 	logPrefix        = objectPrefix + "log/"
+	prunedPrefix     = objectPrefix + "pruned/"
 )
 
 type objectRef struct {
@@ -162,6 +165,22 @@ type slotEntry struct {
 
 func (slot *slotObject) last() int64 { return slot.First + int64(len(slot.Entries)) - 1 }
 
+// prunedObject is one part of a prune manifest: versions that retention
+// pruned by the checkpoint at Sequence, whose blobs collectBlobs deletes.
+type prunedObject struct {
+	Schema   int           `json:"schema"`
+	WorldID  string        `json:"world_id"`
+	Sequence int64         `json:"sequence"`
+	Entries  []prunedEntry `json:"entries"`
+}
+
+// prunedEntry is one pruned version and the blob that held it.
+type prunedEntry struct {
+	Path    string    `json:"path"`
+	Version int       `json:"version"`
+	Blob    objectRef `json:"blob"`
+}
+
 type modelObject struct {
 	Key  string
 	Data []byte
@@ -276,14 +295,38 @@ func slotKey(first int64) string {
 	return fmt.Sprintf("%s%016x.json", logPrefix, first)
 }
 
+// prunedKey names a manifest part by its checkpoint's sequence, so a listing
+// comes in sequence order, and by its hash.
+func prunedKey(sequence int64, hash string) string {
+	return fmt.Sprintf("%s%016x-%s.json", prunedPrefix, sequence, hash)
+}
+
+// prunedOfKey parses the sequence and hash a manifest key names.
+func prunedOfKey(key string) (sequence int64, hash string, ok bool) {
+	name, ok := strings.CutPrefix(key, prunedPrefix)
+	if !ok || len(name) != 16+1+64+len(".json") || name[16] != '-' || !strings.HasSuffix(name, ".json") {
+		return 0, "", false
+	}
+	sequence, ok = parseSequence(name[:16])
+	if hash = name[17 : 17+64]; !ok || !validHash(hash) {
+		return 0, "", false
+	}
+	return sequence, hash, true
+}
+
 // sequenceOfKey parses the sequence a checkpoint or slot key names.
 func sequenceOfKey(key, prefix string) (int64, bool) {
 	name, ok := strings.CutPrefix(key, prefix)
 	if !ok || len(name) != 16+len(".json") || !strings.HasSuffix(name, ".json") {
 		return 0, false
 	}
-	sequence, err := strconv.ParseInt(name[:16], 16, 64)
-	if err != nil || sequence < 1 || fmt.Sprintf("%016x", sequence) != name[:16] {
+	return parseSequence(name[:16])
+}
+
+// parseSequence parses a positive sequence in its 16-hex-digit key spelling.
+func parseSequence(digits string) (int64, bool) {
+	sequence, err := strconv.ParseInt(digits, 16, 64)
+	if err != nil || sequence < 1 || fmt.Sprintf("%016x", sequence) != digits {
 		return 0, false
 	}
 	return sequence, true

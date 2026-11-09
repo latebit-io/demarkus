@@ -15,6 +15,13 @@ func CanonicalPath(reqPath string) string {
 	return path.Clean("/" + reqPath)
 }
 
+// ValidDocumentPath reports a path a document may live at: a valid request
+// path, in its canonical spelling, below the root. Being one, it fits a
+// stored frontmatter line within MaxStoreFrontmatter.
+func ValidDocumentPath(p string) bool {
+	return p != "/" && protocol.ValidateRequestPath(p) == nil && CanonicalPath(p) == p
+}
+
 // IsGovernancePath reports a path under protocol.GovernancePrefix, in its
 // canonical spelling and case-folded: a case-folding disk maps a variant onto
 // the same file.

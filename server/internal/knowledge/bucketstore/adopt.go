@@ -187,6 +187,8 @@ func (s *snapshot) adopt(a *adoption) error {
 			// Cloned: the old array holds the versions the checkpoint took.
 			state.Recent = slices.Clone(old.Recent[index:])
 		}
+		// The checkpoint's manifest or blocks hold the pruned versions it covers.
+		state.Pruned = prunedAbove(old.Pruned, base.Current)
 		s.put(old, &state)
 	}
 	s.Checkpoint = a.checkpoint

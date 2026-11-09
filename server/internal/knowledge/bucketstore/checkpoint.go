@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,11 +41,14 @@ const (
 	// minCheckpointGrace leaves a compactor that reused bytes just younger
 	// than freshenAge time to finish (checkpointTimeout) before they can go.
 	minCheckpointGrace = 2 * freshenAge
-	// A slot the oldest kept checkpoint covers goes once slotRetention old,
-	// for resumes and the federation deriver's cursors. A replica unconfirmed
-	// for staleAfter reloads before trusting a missing slot as the tip.
+	// A slot the oldest kept checkpoint covers goes once slotRetention old, for
+	// resumes and the deriver's cursors; a pruned blob too, for lagging readers.
+	// A replica unconfirmed for staleAfter reloads before trusting a missing slot.
 	slotRetention = 24 * time.Hour
 	staleAfter    = slotRetention / 2
+	// collectStep bounds the pruned blobs one step reads and deletes, and the
+	// entries of one manifest part, so a step always finishes a part.
+	collectStep = 512
 )
 
 // A drop must not take bytes a compactor reused just under freshenAge ago
@@ -56,11 +60,12 @@ type compactionTrigger struct {
 	slots int
 	age   time.Duration
 	wait  func() time.Duration
-	// timeout, step and delay override checkpointTimeout, checkpointStep and
-	// backstopDelay when set.
+	// timeout, step, delay and collect override checkpointTimeout,
+	// checkpointStep, backstopDelay and collectStep when set.
 	timeout time.Duration
 	step    int
 	delay   time.Duration
+	collect int
 }
 
 var defaultTrigger = compactionTrigger{
@@ -96,6 +101,8 @@ func (c *compaction) timeout() time.Duration { return cmp.Or(c.trigger.timeout, 
 func (c *compaction) stepLimit() int { return cmp.Or(c.trigger.step, checkpointStep) }
 
 func (c *compaction) backstopDelay() time.Duration { return cmp.Or(c.trigger.delay, backstopDelay) }
+
+func (c *compaction) collectLimit() int { return cmp.Or(c.trigger.collect, collectStep) }
 
 // keepsBase reports whether this store keeps a snapshot at the newest
 // checkpoint to step from: an eager writer does, a backstop or a read-only
@@ -214,6 +221,7 @@ func (store *Store) step(ctx context.Context) (bool, error) {
 	plan, err := store.planDrop(ctx)
 	if err == nil {
 		err = errors.Join(store.applyDrop(ctx, plan), store.dropSlots(ctx, plan))
+		store.collectBlobs(ctx, plan)
 	}
 	if err != nil {
 		store.logger.Warn("old checkpoints or slots not dropped; a later checkpoint retries", "world", store.worldID, "error", err)
@@ -364,17 +372,22 @@ type checkpointWriter struct {
 	now      func() time.Time
 	grace    time.Duration
 	pathHash func(path string) string
-	// budget is the bytes a shard may hold before the layout widens.
+	// budget is the bytes a shard may hold before the layout widens; part
+	// the most entries of one prune manifest part.
 	budget int
+	part   int
 }
 
 func (store *Store) checkpointWriter() checkpointWriter {
-	return checkpointWriter{bodyReader: store.bodyReader(), workers: store.shardWorkers, now: store.now, grace: store.checkpointGrace, pathHash: pathHash, budget: store.shardBudget}
+	return checkpointWriter{
+		bodyReader: store.bodyReader(), workers: store.shardWorkers, now: store.now, grace: store.checkpointGrace,
+		pathHash: pathHash, budget: store.shardBudget, part: store.compaction.collectLimit(),
+	}
 }
 
-// write writes snap's changed history blocks and shards, the root, the
-// checkpoint, then the shards' segments, which the root does not name: a
-// missing one costs readers blob reads and never fails the checkpoint.
+// write writes snap's changed history blocks and shards, its prune manifest,
+// the root, the checkpoint, then the shards' segments, which the root does
+// not name: a missing one costs readers blob reads and never fails it.
 func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adoption, error) {
 	objects, worldID, workers := writer.objects, writer.worldID, writer.workers
 	previous := snap.Checkpoint
@@ -383,9 +396,12 @@ func (writer checkpointWriter) write(ctx context.Context, snap *snapshot) (*adop
 	layout := writer.group(snap, max(shardBitsFor(snap.Paths.Len()), previous.Bits))
 	// The changed set is the same at every width: a shard holding a change is
 	// always written.
-	entries, err := writer.foldChanged(ctx, layout.changed)
+	entries, pruned, err := writer.foldChanged(ctx, layout.changed)
 	if err == nil {
 		layout, err = writer.fit(ctx, snap, layout, entries)
+	}
+	if err == nil {
+		err = writer.writePruned(ctx, snap.Sequence, pruned)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint %d: %w", snap.Sequence, err)
@@ -473,12 +489,14 @@ func (writer checkpointWriter) group(snap *snapshot, bits int) shardLayout {
 	return layout
 }
 
-// foldChanged folds the changed documents' history blocks, by path.
-func (writer checkpointWriter) foldChanged(ctx context.Context, changed []grouped) (map[string]*baseEntry, error) {
+// foldChanged folds the changed documents' history blocks, by path, and
+// lists the versions they pruned since their checkpoint entries.
+func (writer checkpointWriter) foldChanged(ctx context.Context, changed []grouped) (map[string]*baseEntry, []prunedEntry, error) {
 	var mu sync.Mutex
 	entries := make(map[string]*baseEntry, len(changed))
+	var pruned []prunedEntry
 	err := runParallel(ctx, writer.workers, changed, func(ctx context.Context, document grouped) error {
-		blocks, err := foldHistory(ctx, writer.objects, document)
+		blocks, documentPruned, err := writer.foldHistory(ctx, document)
 		if err != nil {
 			return fmt.Errorf("fold history of %s: %w", document.state.Path, err)
 		}
@@ -486,10 +504,39 @@ func (writer checkpointWriter) foldChanged(ctx context.Context, changed []groupe
 		base := &baseEntry{History: blocks, Current: state.Current, Archived: state.Archived, BodyHash: state.BodyHash, Modified: state.Modified}
 		mu.Lock()
 		entries[state.Path] = base
+		pruned = append(pruned, documentPruned...)
 		mu.Unlock()
 		return nil
 	})
-	return entries, err
+	return entries, pruned, err
+}
+
+// writePruned writes the pruned versions, sorted so racing compactors write
+// the same bytes, as manifest parts of at most part entries; collection
+// deletes them, so they are created as droppable objects are.
+func (writer checkpointWriter) writePruned(ctx context.Context, sequence int64, pruned []prunedEntry) error {
+	slices.SortFunc(pruned, func(a, b prunedEntry) int {
+		return cmp.Or(strings.Compare(a.Path, b.Path), cmp.Compare(a.Version, b.Version))
+	})
+	var parts []modelObject
+	for entries := range slices.Chunk(pruned, writer.part) {
+		manifest := prunedObject{Schema: prunedSchema, WorldID: writer.worldID, Sequence: sequence, Entries: entries}
+		err := validatePruned(&manifest, writer.worldID, sequence)
+		var object modelObject
+		if err == nil {
+			object, _, err = immutableJSON(func(hash string) string { return prunedKey(sequence, hash) }, manifest)
+		}
+		if err == nil && len(object.Data) > MaxObjectBytes {
+			err = fmt.Errorf("prune manifest part is %d bytes, limit is %d", len(object.Data), MaxObjectBytes)
+		}
+		if err != nil {
+			return fmt.Errorf("build prune manifest: %w", err)
+		}
+		parts = append(parts, object)
+	}
+	return runParallel(ctx, writer.workers, parts, func(ctx context.Context, object modelObject) error {
+		return createImmutable(ctx, writer.objects, object)
+	})
 }
 
 // fold is the written shard index as an object.
@@ -623,9 +670,10 @@ func headerLen(bits int) (int, error) {
 }
 
 // foldHistory is a document's history blocks, one per absolute block of
-// retained versions; it creates the blocks its checkpoint entry lacks.
-func foldHistory(ctx context.Context, objects blob.Store, document grouped) ([]blockRef, error) {
-	state := document.state
+// retained versions, and the versions pruned since its checkpoint entry: the
+// entry's below First, then the log's. It creates the blocks the entry lacks.
+func (writer checkpointWriter) foldHistory(ctx context.Context, document grouped) ([]blockRef, []prunedEntry, error) {
+	objects, state := writer.objects, document.state
 	var base []blockRef
 	baseCurrent := 0
 	if state.Base != nil {
@@ -633,7 +681,11 @@ func foldHistory(ctx context.Context, objects blob.Store, document grouped) ([]b
 	}
 	first := state.First
 	if first < 1 {
-		return nil, fmt.Errorf("%w: no first retained version", blob.ErrIntegrity)
+		return nil, nil, fmt.Errorf("%w: no first retained version", blob.ErrIntegrity)
+	}
+	pruned, err := writer.prunedBlocks(ctx, document, first)
+	if err != nil {
+		return nil, nil, err
 	}
 	var blocks []blockRef
 	for block := (first - 1) / historyBlockSize; block <= (state.Current-1)/historyBlockSize; block++ {
@@ -644,14 +696,18 @@ func foldHistory(ctx context.Context, objects blob.Store, document grouped) ([]b
 			continue
 		}
 		var versions []historyEntry
+		// The block holding First is read here, so its pruned versions come
+		// from this read; blocks wholly below First came from prunedBlocks.
 		if found && previous.Last >= from {
 			history, err := readBlock(ctx, objects, document.hash, previous)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			for _, entry := range history.Entries {
 				if entry.Version >= from {
 					versions = append(versions, entry)
+				} else {
+					pruned = append(pruned, prunedOf(state.Path, &entry))
 				}
 			}
 		}
@@ -660,20 +716,65 @@ func foldHistory(ctx context.Context, objects blob.Store, document grouped) ([]b
 				versions = append(versions, version.entry)
 			}
 		}
-		history := historyObject{Schema: historySchema, PathHash: document.hash, First: from, Last: to, Entries: versions}
-		if err := validateHistoryObject(&history); err != nil {
-			return nil, fmt.Errorf("%w: versions %d-%d: %v", blob.ErrIntegrity, from, to, err)
-		}
-		object, ref, err := immutableJSON(historyKey, history)
-		if err == nil {
-			err = createContent(ctx, objects, object)
-		}
+		ref, err := createBlock(ctx, objects, historyObject{Schema: historySchema, PathHash: document.hash, First: from, Last: to, Entries: versions})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		blocks = append(blocks, blockRef{First: from, Last: to, Hash: ref.Hash})
+		blocks = append(blocks, ref)
 	}
-	return blocks, nil
+	for node := state.Pruned; node != nil; node = node.next {
+		if node.version <= baseCurrent || node.version >= first {
+			return nil, nil, fmt.Errorf("%w: pruned v%d is outside (%d,%d)", blob.ErrIntegrity, node.version, baseCurrent, first)
+		}
+		pruned = append(pruned, prunedEntry{Path: state.Path, Version: node.version, Blob: node.blob})
+	}
+	return blocks, pruned, nil
+}
+
+// prunedBlocks lists the versions of the document's checkpoint blocks that
+// lie wholly below first, reading and verifying the blocks in parallel.
+func (writer checkpointWriter) prunedBlocks(ctx context.Context, document grouped, first int) ([]prunedEntry, error) {
+	if document.state.Base == nil {
+		return nil, nil
+	}
+	below := document.state.Base.History
+	if index := slices.IndexFunc(below, func(ref blockRef) bool { return ref.Last >= first }); index >= 0 {
+		below = below[:index]
+	}
+	dropped := make([][]prunedEntry, len(below))
+	err := runParallel(ctx, writer.workers, indexes(len(below)), func(ctx context.Context, index int) error {
+		history, err := readBlock(ctx, writer.objects, document.hash, below[index])
+		if err != nil {
+			return err
+		}
+		for entry := range history.Entries {
+			dropped[index] = append(dropped[index], prunedOf(document.state.Path, &history.Entries[entry]))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(dropped...), nil
+}
+
+func prunedOf(path string, version *historyEntry) prunedEntry {
+	return prunedEntry{Path: path, Version: version.Version, Blob: version.Blob}
+}
+
+// createBlock validates and creates one history block.
+func createBlock(ctx context.Context, objects blob.Store, history historyObject) (blockRef, error) {
+	if err := validateHistoryObject(&history); err != nil {
+		return blockRef{}, fmt.Errorf("%w: versions %d-%d: %v", blob.ErrIntegrity, history.First, history.Last, err)
+	}
+	object, ref, err := immutableJSON(historyKey, history)
+	if err == nil {
+		err = createContent(ctx, objects, object)
+	}
+	if err != nil {
+		return blockRef{}, err
+	}
+	return blockRef{First: history.First, Last: history.Last, Hash: ref.Hash}, nil
 }
 
 // blockAt is the block of blocks that covers absolute block index.

@@ -187,7 +187,7 @@ func loadWriteBase(ctx context.Context, view *readView, entry *pathState, write 
 	if err != nil {
 		return writeBase{}, err
 	}
-	previousRaw, storedTip, err := view.loadStored(ctx, &tip)
+	previousRaw, storedTip, err := view.loadStored(ctx, entry.Path, &tip)
 	if err != nil {
 		return writeBase{}, err
 	}
@@ -229,7 +229,7 @@ func (store *Store) buildWriteCandidate(
 	}
 
 	next := current + 1
-	stored, err := storefmt.SerializeVersion(next, base.previousRaw, body, metadata)
+	stored, err := storefmt.SerializeVersion(&storefmt.VersionSpec{Path: path, Version: next, Previous: base.previousRaw, Content: body, Metadata: metadata})
 	if err != nil {
 		return nil, mutationResult{}, err
 	}
@@ -296,7 +296,7 @@ func (store *Store) buildArchiveCandidate(
 	if err != nil {
 		return nil, mutationResult{}, err
 	}
-	raw, storedTip, err := view.loadStored(ctx, &tip)
+	raw, storedTip, err := view.loadStored(ctx, path, &tip)
 	if err != nil {
 		return nil, mutationResult{}, err
 	}
