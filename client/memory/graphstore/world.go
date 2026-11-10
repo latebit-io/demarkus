@@ -290,8 +290,9 @@ type WorldLoad struct {
 	Manifest WorldManifest
 	Sources  []WorldSource
 	Kept     map[string]bool
-	// Stripped are the prefixes whose stored shard held generated graph
-	// data the sources leave out: the writer replaces those shards.
+	// Stripped are the prefixes whose stored shard held generated graph data
+	// Sources leaves out: the writer replaces them. Manifest still counts
+	// the stored rows, so its totals are not Sources' when any is stripped.
 	Stripped []string
 }
 
@@ -371,8 +372,10 @@ func loadWorldShard(ctx context.Context, world string, ref *WorldShardRef, fetch
 	if err != nil {
 		return nil, false, err
 	}
+	// DeleteFunc reuses verified's array, so its length is taken first.
+	stored := len(verified)
 	sources = slices.DeleteFunc(verified, func(source WorldSource) bool { return protocol.IsGeneratedGraphPath(source.Path) })
-	stripped = len(sources) != len(verified)
+	stripped = len(sources) != stored
 	for i := range sources {
 		edges := slices.DeleteFunc(sources[i].Edges, func(edge WorldEdge) bool { return graph.IsGeneratedURL(edge.To) })
 		stripped = stripped || len(edges) != len(sources[i].Edges)
