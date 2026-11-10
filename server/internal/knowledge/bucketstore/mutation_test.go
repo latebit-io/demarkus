@@ -299,8 +299,8 @@ func TestCommitFailureLeavesTheLog(t *testing.T) {
 		store, memory := newWritableStore(t)
 		store.requestTimeout = 25 * time.Millisecond
 		store.objects = &blockingSlotCreateStore{Store: memory}
-		if _, err := store.WriteVersion("/doc", 0, []byte("body"), nil); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("write error = %v, want deadline", err)
+		if _, err := store.WriteVersion("/doc", 0, []byte("body"), nil); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, backend.ErrOutcomeUnknown) {
+			t.Fatalf("write error = %v, want an unknown outcome past the deadline", err)
 		}
 		assertNoSlot(t, memory, 2)
 	})

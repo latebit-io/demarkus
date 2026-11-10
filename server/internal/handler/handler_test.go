@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -2835,6 +2836,26 @@ func testHandlePublish_Retention(t *testing.T, newBackend backendFactory) {
 		}
 	})
 
+	t.Run("unknown outcome audit-logs the possible prune", func(t *testing.T) {
+		for _, verb := range []string{"PUBLISH", "APPEND"} {
+			t.Run(verb, func(t *testing.T) {
+				b := newBackend(t)
+				mustWrite(t, b, "/doc.md", []byte("# Version 1"), nil)
+				var logBuf bytes.Buffer
+				unknown := &unknownOutcomeStore{DocumentStore: b.Store}
+				h := mustNew(Config{Store: unknown, Logger: slog.New(slog.NewTextHandler(&logBuf, nil)), GetTokenStore: func() *auth.TokenStore { return tokenStore }})
+				stream := newMockStream(verb + " /doc.md\n---\nauth: " + testSecret + "\nexpected-version: 1\nretention: 2\n---\nmore\n")
+				h.HandleStream(context.Background(), stream)
+				log := logBuf.String()
+				for _, want := range []string{`msg="prune outcome unknown"`, "audit=true", "operation=" + verb, "path=/doc.md", "retention=2"} {
+					if !strings.Contains(log, want) {
+						t.Errorf("audit log missing %q:\n%s", want, log)
+					}
+				}
+			})
+		}
+	})
+
 	t.Run("invalid retention rejected", func(t *testing.T) {
 		for _, value := range []string{"zero", "0", "-1"} {
 			t.Run("retention="+value, func(t *testing.T) {
@@ -2979,4 +3000,16 @@ func testHandleAppend_Retention(t *testing.T, newBackend backendFactory) {
 			t.Errorf("unexpected prune audit entry:\n%s", logBuf.String())
 		}
 	})
+}
+
+// unknownOutcomeStore answers every write as one whose commit outcome is
+// unknown: the store took it, then the caller stopped waiting.
+type unknownOutcomeStore struct{ DocumentStore }
+
+func (unknownOutcomeStore) Publish(context.Context, storagebackend.WriteRequest) (*storefmt.Document, error) {
+	return nil, fmt.Errorf("operation test: %w: %w", storagebackend.ErrOutcomeUnknown, context.DeadlineExceeded)
+}
+
+func (s unknownOutcomeStore) Append(ctx context.Context, req storagebackend.WriteRequest) (*storefmt.Document, error) {
+	return s.Publish(ctx, req)
 }
