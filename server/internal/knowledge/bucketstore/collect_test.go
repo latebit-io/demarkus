@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -474,4 +475,58 @@ func prunedHeld(state *pathState) int {
 		n++
 	}
 	return n
+}
+
+// A path that JSON escapes sixfold still yields manifest parts under the
+// object limit: parts split by encoded size as well as by count.
+func TestPruneManifestPartsStayUnderTheObjectLimit(t *testing.T) {
+	ctx := context.Background()
+	objects := initializedMemoryOf(t, MaxObjectBytes)
+	path := "/" + strings.Repeat("&", 2000) + ".md"
+	if !storefmt.ValidDocumentPath(path) {
+		t.Fatalf("test path %q is not a document path", path[:20])
+	}
+	entries := make([]prunedEntry, collectStep)
+	for i := range entries {
+		hash := hashHex(fmt.Appendf(nil, "v%d", i))
+		entries[i] = prunedEntry{Path: path, Version: i + 1, Blob: objectRef{Key: blobKey(hash), Hash: hash}}
+	}
+	mustSucceed(t, testCheckpointWriter(objects).writePruned(ctx, genesisSequence, entries))
+	parts := listKeys(t, objects, prunedPrefix)
+	if len(parts) < 2 {
+		t.Fatalf("%d manifest parts for %d escaped entries, want them split", len(parts), len(entries))
+	}
+	for _, key := range parts {
+		if size := getObject(t, objects, key).Attributes.Size; size > MaxObjectBytes {
+			t.Errorf("manifest part %s is %d bytes, over the %d object limit", key, size, MaxObjectBytes)
+		}
+	}
+}
+
+// A blob already gone still costs its read against the step's cap, so a run
+// of such manifests cannot read past it.
+func TestCollectionCountsMissingBlobsAgainstTheCap(t *testing.T) {
+	ctx := context.Background()
+	objects := newClockedStore(t)
+	objects.writtenAgo(aged)
+	trigger := *manual
+	trigger.collect = 2
+	writer := (&bucketSite{objects: objects, trigger: &trigger}).open(t, 0)
+	missing := func(path string) []prunedEntry {
+		entries := make([]prunedEntry, 2)
+		for i := range entries {
+			hash := hashHex(fmt.Appendf(nil, "%s v%d", path, i))
+			entries[i] = prunedEntry{Path: path, Version: i + 1, Blob: objectRef{Key: blobKey(hash), Hash: hash}}
+		}
+		return entries
+	}
+	checkpointer := testCheckpointWriter(objects)
+	checkpointer.part = 2
+	mustSucceed(t, checkpointer.writePruned(ctx, genesisSequence, append(missing("/a.md"), missing("/b.md")...)))
+	plan, err := writer.planDrop(ctx)
+	mustSucceed(t, err)
+	writer.collectBlobs(ctx, plan)
+	if n := len(listKeys(t, objects, prunedPrefix)); n != 1 {
+		t.Errorf("%d manifests left after one capped step, want 1: missing blobs must count", n)
+	}
 }

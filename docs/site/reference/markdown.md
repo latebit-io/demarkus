@@ -137,7 +137,7 @@ If you want a link to appear in the graph, use `[text](url)` or a reference link
 
 - Body: up to 1 MiB (`MaxBodyLength = 1048576` bytes)
 - Publisher metadata: up to 50 keys, 1024 bytes total (`tags` counted at its serialized list length)
-- Stored frontmatter: up to 2 KiB on disk per version (publisher metadata plus the store's own operational fields)
+- Stored frontmatter: up to 2 KiB on disk per version (publisher metadata plus the store's own operational fields), plus the store's `path` line, which holds a path up to the request path limit
 
 ## Why so minimal?
 

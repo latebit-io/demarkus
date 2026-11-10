@@ -518,8 +518,12 @@ func (writer checkpointWriter) writePruned(ctx context.Context, sequence int64, 
 	slices.SortFunc(pruned, func(a, b prunedEntry) int {
 		return cmp.Or(strings.Compare(a.Path, b.Path), cmp.Compare(a.Version, b.Version))
 	})
-	var parts []modelObject
-	for entries := range slices.Chunk(pruned, writer.part) {
+	chunks, err := pruneParts(pruned, writer.part)
+	if err != nil {
+		return err
+	}
+	parts := make([]modelObject, 0, len(chunks))
+	for _, entries := range chunks {
 		manifest := prunedObject{Schema: prunedSchema, WorldID: writer.worldID, Sequence: sequence, Entries: entries}
 		err := validatePruned(&manifest, writer.worldID, sequence)
 		var object modelObject
@@ -537,6 +541,32 @@ func (writer checkpointWriter) writePruned(ctx context.Context, sequence int64, 
 	return runParallel(ctx, writer.workers, parts, func(ctx context.Context, object modelObject) error {
 		return createImmutable(ctx, writer.objects, object)
 	})
+}
+
+// prunePartBytes bounds a manifest part's encoded entries, below the object
+// limit by room for the part's own fields.
+const prunePartBytes = MaxObjectBytes - 1<<10
+
+// pruneParts splits sorted entries into parts of at most count entries and
+// prunePartBytes encoded: JSON escaping can grow a path sixfold.
+func pruneParts(entries []prunedEntry, count int) ([][]prunedEntry, error) {
+	var parts [][]prunedEntry
+	start, size := 0, 0
+	for i := range entries {
+		encoded, err := json.Marshal(&entries[i])
+		if err != nil {
+			return nil, fmt.Errorf("measure pruned entry: %w", err)
+		}
+		n := len(encoded) + 1 // the comma
+		if i > start && (i-start == count || size+n > prunePartBytes) {
+			parts, start, size = append(parts, entries[start:i]), i, 0
+		}
+		size += n
+	}
+	if start < len(entries) {
+		parts = append(parts, entries[start:])
+	}
+	return parts, nil
 }
 
 // fold is the written shard index as an object.

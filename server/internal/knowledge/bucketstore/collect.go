@@ -202,8 +202,8 @@ func (store *Store) collectBlobs(ctx context.Context, plan dropPlan) {
 			case sequence > plan.oldestKept || handled >= limit || !fence.expired(listed.Modified):
 				return
 			}
-			found, err := store.collectManifest(ctx, listed, sequence, hash)
-			handled += found
+			read, err := store.collectManifest(ctx, listed, sequence, hash)
+			handled += read
 			if err != nil {
 				store.logger.Warn(notCollected, "world", store.worldID, "manifest", listed.Key, "error", err)
 			}
@@ -212,7 +212,7 @@ func (store *Store) collectBlobs(ctx context.Context, plan dropPlan) {
 }
 
 // collectManifest collects one manifest part's blobs, then deletes the part at
-// its listed generation; it reports how many blobs it found.
+// its listed generation; it reports the blob reads it made, found or not.
 func (store *Store) collectManifest(ctx context.Context, listed blob.Attributes, sequence int64, hash string) (int, error) {
 	manifest, err := getImmutable(ctx, store.objects, keyedRef{objectRef{Key: listed.Key, Hash: hash}, listed.Key}, func(manifest *prunedObject) error {
 		return validatePruned(manifest, store.worldID, sequence)
@@ -223,24 +223,21 @@ func (store *Store) collectManifest(ctx context.Context, listed blob.Attributes,
 	if err != nil {
 		return 0, err
 	}
-	var found atomic.Int64
+	var read atomic.Int64
 	err = runParallel(ctx, store.shardWorkers, manifest.Entries, func(ctx context.Context, entry prunedEntry) error {
-		present, err := store.collectBlob(ctx, entry)
-		if present {
-			found.Add(1)
-		}
-		return err
+		read.Add(1)
+		return store.collectBlob(ctx, entry)
 	})
 	if err == nil {
 		err = deleteAt(ctx, store.objects, listed)
 	}
-	return int(found.Load()), err
+	return int(read.Load()), err
 }
 
 // collectBlob deletes a pruned version's blob at the generation read when its
 // stored header names that path and version. A legacy blob names no path and
 // may serve another document, so it stays, as does one naming another version.
-func (store *Store) collectBlob(ctx context.Context, entry prunedEntry) (bool, error) {
+func (store *Store) collectBlob(ctx context.Context, entry prunedEntry) error {
 	object, err := getVerified(ctx, store.objects, keyedRef{entry.Blob, blobKey(entry.Blob.Hash)})
 	var header storefmt.StoredVersionHeader
 	if err == nil {
@@ -250,19 +247,19 @@ func (store *Store) collectBlob(ctx context.Context, entry prunedEntry) (bool, e
 	}
 	switch {
 	case errors.Is(err, blob.ErrNotFound):
-		return false, nil
+		return nil
 	case errors.Is(err, blob.ErrIntegrity):
 		store.logger.Warn("pruned blob does not verify; left as it is", "world", store.worldID, "key", entry.Blob.Key, "error", err)
-		return true, nil
+		return nil
 	case err != nil:
-		return false, err
+		return err
 	case header.Path == "":
-		return true, nil
+		return nil
 	}
 	if err := header.CheckNames(entry.Path, entry.Version); err != nil {
 		store.logger.Warn("pruned blob names another version; left as it is", "world", store.worldID, "key", entry.Blob.Key,
 			"path", entry.Path, "version", entry.Version, "error", err)
-		return true, nil
+		return nil
 	}
-	return true, deleteAt(ctx, store.objects, object.Attributes)
+	return deleteAt(ctx, store.objects, object.Attributes)
 }
