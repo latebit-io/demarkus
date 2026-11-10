@@ -106,5 +106,5 @@ func markWorldsTool() mcp.Tool {
 }
 
 func markGraphPublishTool() mcp.Tool {
-	return mcpfmt.GraphPublishTool("the graph document, mark://hub/graph.md", "")
+	return mcpfmt.GraphPublishTool("the graph document, mark://{worldName}/graph.md", "")
 }

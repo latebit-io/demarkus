@@ -293,7 +293,7 @@ func graphTargetDesc(host string) string {
 	if host != "" {
 		return "the graph document, /graph.md"
 	}
-	return "the graph document, mark://host/graph.md"
+	return "the graph document, mark://{host}/graph.md"
 }
 
 // scopeDesc describes a directory scope argument in the surface's URL form.

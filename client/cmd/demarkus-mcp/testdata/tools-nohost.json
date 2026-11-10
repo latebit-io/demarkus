@@ -308,7 +308,7 @@
           "type": "number"
         },
         "url": {
-          "description": "the graph document, mark://host/graph.md",
+          "description": "the graph document, mark://{host}/graph.md",
           "type": "string"
         }
       },

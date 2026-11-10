@@ -151,8 +151,7 @@ func sameDocumentRepresentation(current *StoredNode, incoming *graph.Node) bool 
 		old.Source == next.Source && old.View == next.View && old.Revision == next.Revision && old.Etag == next.Etag
 }
 
-// IsGeneratedGraphPath is protocol.IsGeneratedGraphPath, kept for importers
-// outside this repository.
+// IsGeneratedGraphPath is kept for importers outside this repository.
 //
 // Deprecated: use protocol.IsGeneratedGraphPath.
 func IsGeneratedGraphPath(docPath string) bool { return protocol.IsGeneratedGraphPath(docPath) }

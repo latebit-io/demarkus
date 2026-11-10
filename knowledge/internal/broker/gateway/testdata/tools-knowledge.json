@@ -310,7 +310,7 @@
           "type": "number"
         },
         "url": {
-          "description": "the graph document, mark://hub/graph.md",
+          "description": "the graph document, mark://{worldName}/graph.md",
           "type": "string"
         }
       },

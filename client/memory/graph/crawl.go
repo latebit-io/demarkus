@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -96,34 +95,6 @@ type ExtractedEdges struct {
 	Edges         []Edge
 	Occurrences   []Occurrence
 	RejectedRels  []RejectedRel // rel- values that produced no edge
-}
-
-// IsGeneratedURL reports a canonical mark:// URL, or the rooted path a
-// single store names a document by, of generated graph data: neither node
-// nor edge end (SPEC 12.1). It runs per stored row.
-func IsGeneratedURL(raw string) bool {
-	docPath := raw
-	if rest, ok := strings.CutPrefix(raw, "mark://"); ok {
-		start := strings.IndexByte(rest, '/')
-		if start < 0 {
-			return false
-		}
-		docPath = rest[start:]
-	} else if !strings.HasPrefix(raw, "/") {
-		return false
-	}
-	// A generated path decodes to /graph...: two bytes settle the rest.
-	if len(docPath) < 2 || (docPath[1] != 'g' && docPath[1] != '%') {
-		return false
-	}
-	if strings.IndexByte(docPath, '%') >= 0 {
-		unescaped, err := url.PathUnescape(docPath)
-		if err != nil {
-			return false
-		}
-		docPath = unescaped
-	}
-	return protocol.IsGeneratedGraphPath(docPath)
 }
 
 // ExtractDocumentEdges resolves body links and typed relations against

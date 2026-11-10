@@ -357,11 +357,14 @@ func loadWorldShard(ctx context.Context, world string, ref *WorldShardRef, fetch
 		return nil, fmt.Errorf("%w: world shard %s returned %s", ErrWorldUnavailable, ref.Path, resp.Status)
 	}
 	sources, err := VerifyWorldShard(world, *ref, resp)
+	if err != nil {
+		return nil, err
+	}
 	// A row written before generated graph data left the graph may name it.
 	for i := range sources {
 		sources[i].Edges = slices.DeleteFunc(sources[i].Edges, func(edge WorldEdge) bool { return graph.IsGeneratedURL(edge.To) })
 	}
-	return sources, err
+	return sources, nil
 }
 
 // unavailable is a status that says nothing about the document: retry later.
