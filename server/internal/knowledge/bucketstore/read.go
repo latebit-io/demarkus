@@ -246,7 +246,7 @@ func (view *readView) get(ctx context.Context, reqPath string, version int) (*st
 	if !ok {
 		return nil, backend.ErrNotFound
 	}
-	raw, stored, err := view.loadStored(ctx, &retained)
+	raw, stored, err := view.loadStored(ctx, entry.Path, &retained)
 	if err != nil {
 		return nil, err
 	}
@@ -256,13 +256,14 @@ func (view *readView) get(ctx context.Context, reqPath string, version int) (*st
 	return documentFromRetained(raw, &retained, &stored, current && entry.Archived), nil
 }
 
-// loadStored reads a retained version's bytes and checks them against it.
-func (view *readView) loadStored(ctx context.Context, retained *retainedVersion) ([]byte, storedDocument, error) {
+// loadStored reads a retained version of the document at docPath and checks
+// its bytes against the record.
+func (view *readView) loadStored(ctx context.Context, docPath string, retained *retainedVersion) ([]byte, storedDocument, error) {
 	raw, err := view.loadBlob(ctx, retained.entry.Blob)
 	if err != nil {
 		return nil, storedDocument{}, fmt.Errorf("load v%d: %w", retained.entry.Version, err)
 	}
-	stored, err := validateStoredDocument(raw, retained)
+	stored, err := validateStoredDocument(raw, docPath, retained)
 	return raw, stored, err
 }
 
@@ -377,21 +378,21 @@ func (view *readView) verifyChain(ctx context.Context, reqPath string) error {
 			return fmt.Errorf("%w: v%d chain broken: previous-hash mismatch (want %s, got %s)",
 				blob.ErrIntegrity, current.entry.Version, expected, recorded)
 		}
-		if err := validateVersion(previousRaw, &previous); err != nil {
+		if err := validateVersion(previousRaw, entry.Path, &previous); err != nil {
 			return err
 		}
 		previous = current
 		previousRaw = currentRaw
 	}
-	if err := validateVersion(previousRaw, &previous); err != nil {
+	if err := validateVersion(previousRaw, entry.Path, &previous); err != nil {
 		return err
 	}
 	return ctx.Err()
 }
 
 // validateVersion checks a version's stored bytes against its log record.
-func validateVersion(raw []byte, retained *retainedVersion) error {
-	if _, err := validateStoredDocument(raw, retained); err != nil {
+func validateVersion(raw []byte, docPath string, retained *retainedVersion) error {
+	if _, err := validateStoredDocument(raw, docPath, retained); err != nil {
 		return fmt.Errorf("validate v%d: %w", retained.entry.Version, err)
 	}
 	if err := verifyBlobHash(retained.entry.Blob, raw); err != nil {
@@ -538,7 +539,7 @@ func (view *readView) history(ctx context.Context, state *pathState) ([]retained
 		}
 		versions = retainFrom(base, state.First)
 	}
-	versions = append(versions, retainFrom(state.Recent, state.First)...)
+	versions = append(versions, state.Recent...)
 	for index := 1; index < len(versions); index++ {
 		if versions[index].entry.Version != versions[index-1].entry.Version+1 {
 			return nil, fmt.Errorf("%w: retained versions skip from %d to %d", blob.ErrIntegrity, versions[index-1].entry.Version, versions[index].entry.Version)
@@ -551,6 +552,15 @@ func (view *readView) history(ctx context.Context, state *pathState) ([]retained
 		return nil, fmt.Errorf("%w: history tip does not match the document", blob.ErrIntegrity)
 	}
 	return versions, nil
+}
+
+// retainFrom drops the versions retention pruned below first.
+func retainFrom(versions []retainedVersion, first int) []retainedVersion {
+	index := 0
+	for index < len(versions) && versions[index].entry.Version < first {
+		index++
+	}
+	return versions[index:]
 }
 
 // baseHistory reads the versions a document's checkpoint entry retains.
@@ -600,11 +610,13 @@ func readBlock(ctx context.Context, objects objectGetter, documentHash string, r
 }
 
 func (view *readView) loadBlob(ctx context.Context, ref objectRef) ([]byte, error) {
-	return getVerified(ctx, view.objects, keyedRef{ref, blobKey(ref.Hash)})
+	object, err := getVerified(ctx, view.objects, keyedRef{ref, blobKey(ref.Hash)})
+	return object.Data, err
 }
 
 func (view *readView) loadBlobUnchecked(ctx context.Context, ref objectRef) ([]byte, error) {
-	return getReferenced(ctx, view.objects, keyedRef{ref, blobKey(ref.Hash)})
+	object, err := getReferenced(ctx, view.objects, keyedRef{ref, blobKey(ref.Hash)})
+	return object.Data, err
 }
 
 func verifyBlobHash(ref objectRef, data []byte) error {
@@ -625,14 +637,16 @@ func retainedAt(versions []retainedVersion, version int) (retainedVersion, bool)
 	return versions[index], true
 }
 
-func validateStoredDocument(raw []byte, retained *retainedVersion) (storedDocument, error) {
+// validateStoredDocument checks raw against its record and the document at
+// docPath; a version written before the store recorded paths names none.
+func validateStoredDocument(raw []byte, docPath string, retained *retainedVersion) (storedDocument, error) {
+	version := retained.entry.Version
 	header, err := storefmt.InspectStoredVersion(raw)
-	if err != nil {
-		return storedDocument{}, fmt.Errorf("%w: v%d stored version: %v", blob.ErrIntegrity, retained.entry.Version, err)
+	if err == nil {
+		err = header.CheckNames(docPath, version)
 	}
-	version := header.Version
-	if version != retained.entry.Version {
-		return storedDocument{}, fmt.Errorf("%w: stored version is %d, history says %d", blob.ErrIntegrity, version, retained.entry.Version)
+	if err != nil {
+		return storedDocument{}, fmt.Errorf("%w: v%d stored version: %v", blob.ErrIntegrity, version, err)
 	}
 	body := storefmt.ExtractBody(raw)
 	if bodyHash := storefmt.ContentHash(body); bodyHash != retained.entry.BodyHash {

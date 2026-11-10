@@ -69,7 +69,7 @@ func ExportDocs(ctx context.Context, objects blob.Store, options ExportOptions, 
 		versions := make([]storefmt.StoredVersion, len(history))
 		for index := range history {
 			retained := &history[index]
-			raw, _, err := view.loadStored(ctx, retained)
+			raw, _, err := view.loadStored(ctx, path, retained)
 			if err != nil {
 				return fmt.Errorf("export %s v%d: %w", path, retained.entry.Version, err)
 			}

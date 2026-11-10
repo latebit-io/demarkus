@@ -94,7 +94,7 @@ func (store *Store) runMutation(ctx context.Context, path string, build mutation
 	case <-ctx.Done():
 		// A request still queued is dropped untouched once its context ends.
 		if request.taken.Load() {
-			return mutationResult{}, fmt.Errorf("operation %s outcome unknown: %w", operationID, ctx.Err())
+			return mutationResult{}, fmt.Errorf("operation %s: %w: %w", operationID, backend.ErrOutcomeUnknown, ctx.Err())
 		}
 		return mutationResult{}, fmt.Errorf("operation %s wait for commit: %w", operationID, ctx.Err())
 	}
@@ -432,7 +432,8 @@ func (c *committer) created(b *batch, winner *blob.Object, err error) {
 	c.store.pending.Store(nil)
 	switch {
 	case err != nil:
-		c.fail(b, fmt.Errorf("create slot %d: %w", b.slot.First, err))
+		// A create cut off in flight may still land: no caller learns more.
+		c.fail(b, fmt.Errorf("create slot %d: %w: %w", b.slot.First, backend.ErrOutcomeUnknown, err))
 	case winner != nil:
 		c.rebase(b, winner)
 	default:

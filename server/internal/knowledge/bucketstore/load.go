@@ -559,44 +559,45 @@ type keyedRef struct {
 }
 
 func getImmutable[T any](ctx context.Context, objects objectGetter, keyed keyedRef, validate func(*T) error) (T, error) {
-	data, err := getVerified(ctx, objects, keyed)
+	object, err := getVerified(ctx, objects, keyed)
 	if err != nil {
 		var zero T
 		return zero, err
 	}
-	return decodeChecked(keyed.Key, data, validate)
+	return decodeChecked(keyed.Key, object.Data, validate)
 }
 
 // getVerified reads a referenced object and checks its bytes hash to it.
-func getVerified(ctx context.Context, objects objectGetter, keyed keyedRef) ([]byte, error) {
-	data, err := getReferenced(ctx, objects, keyed)
+func getVerified(ctx context.Context, objects objectGetter, keyed keyedRef) (blob.Object, error) {
+	object, err := getReferenced(ctx, objects, keyed)
 	if err == nil {
-		err = verifyBlobHash(keyed.objectRef, data)
+		err = verifyBlobHash(keyed.objectRef, object.Data)
 	}
 	if err != nil {
-		return nil, err
+		return blob.Object{}, err
 	}
-	return data, nil
+	return object, nil
 }
 
 // getReferenced is getVerified without the hash check, for a caller that
-// verifies the bytes another way: a missing object is an integrity failure.
-func getReferenced(ctx context.Context, objects objectGetter, keyed keyedRef) ([]byte, error) {
+// verifies the bytes another way: a missing object is an integrity failure
+// that also matches blob.ErrNotFound.
+func getReferenced(ctx context.Context, objects objectGetter, keyed keyedRef) (blob.Object, error) {
 	ref := keyed.objectRef
 	if err := verifyRef(ref, keyed.expectedKey); err != nil {
-		return nil, fmt.Errorf("%w: %v", blob.ErrIntegrity, err)
+		return blob.Object{}, fmt.Errorf("%w: %v", blob.ErrIntegrity, err)
 	}
-	value, err := objects.Get(ctx, ref.Key)
+	object, err := objects.Get(ctx, ref.Key)
 	if err != nil {
 		if errors.Is(err, blob.ErrNotFound) {
-			return nil, fmt.Errorf("%w: referenced object %q is missing: %w", blob.ErrIntegrity, ref.Key, err)
+			return blob.Object{}, fmt.Errorf("%w: referenced object %q is missing: %w", blob.ErrIntegrity, ref.Key, err)
 		}
-		return nil, fmt.Errorf("read referenced object %q: %w", ref.Key, err)
+		return blob.Object{}, fmt.Errorf("read referenced object %q: %w", ref.Key, err)
 	}
-	if err := validateReadObject(ref.Key, &value); err != nil {
-		return nil, err
+	if err := validateReadObject(ref.Key, &object); err != nil {
+		return blob.Object{}, err
 	}
-	return value.Data, nil
+	return object, nil
 }
 
 // decodeChecked decodes the canonical bytes read at key and validates them.

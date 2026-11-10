@@ -888,6 +888,7 @@ Each version file MUST be prefixed with a store-managed frontmatter block. The b
 ---
 version: 1
 archived: false
+path: /docs/doc.md
 ---
 <original document content>
 ```
@@ -899,11 +900,14 @@ archived: false
 version: <N>
 archived: false
 previous-hash: sha256-<64-char lowercase hex>
+path: /docs/doc.md
 ---
 <original document content>
 ```
 
-`version`, `archived`, and `previous-hash` (omitted for version 1) are reserved operational fields owned by the store. Publishers MUST NOT set them, and a server MUST reject a PUBLISH whose metadata declares a reserved key. The `archived` field is retained in stored bytes for legacy-format fallback; newly written versions MUST set it to `false`. A server MUST derive current archive state from a legacy current version whose field is `true` when no separate operational archive state exists, but archive and unarchive operations MUST NOT rewrite the field.
+`version`, `archived`, `previous-hash` (omitted for version 1), and `path` are operational fields owned by the store, written in that order. `version`, `archived`, and `previous-hash` are reserved: publishers MUST NOT set them, and a server MUST reject a PUBLISH whose metadata declares one. The `archived` field is retained in stored bytes for legacy-format fallback; newly written versions MUST set it to `false`. A server MUST derive current archive state from a legacy current version whose field is `true` when no separate operational archive state exists, but archive and unarchive operations MUST NOT rewrite the field.
+
+`path` is the canonical path of the document the version was written to: a valid request path (§4.2) with a single leading slash, no empty, `.` or `..` segments, no trailing slash, and never the root `/`. The store writes it on every new version. Versions written before the field existed omit it, and readers MUST accept both forms. A version whose `path` names another document fails integrity checks (§9.6). The store's `path` is never returned as metadata. A publisher MAY still declare a `path` metadata key: it is ordinary publisher metadata, stored as `meta.path` and returned as `path`.
 
 Publisher-declared metadata is written into the same block. The field names defined by the Open Knowledge Format (`type`, `title`, `description`, `resource`, `tags`, and `timestamp`) are written as **bare** frontmatter fields so the document's persisted metadata matches the OKF spec for the fields it covers; `tags` is serialized as a YAML flow list. Every other publisher key is written under a `meta.` prefix so it cannot collide with a reserved or OKF-recognized field. For example:
 
@@ -912,6 +916,7 @@ Publisher-declared metadata is written into the same block. The field names defi
 version: 3
 archived: false
 previous-hash: sha256-<64-char lowercase hex>
+path: /data/orders.md
 meta.importance: 0.8
 tags: [sales, revenue]
 title: Orders
@@ -950,6 +955,7 @@ To verify the integrity of a document's version history:
    b. Format as `sha256-<hex>`.
    c. Compare with the `previous-hash` value in version N's store frontmatter.
    d. If they do not match, the chain is broken at version N.
+3. A retained version whose store frontmatter carries `path` (§9.4) different from the document's canonical path fails verification.
 
 The oldest retained version is the verification root: its own `previous-hash` (absent for version 1, referencing a pruned file otherwise) is not checked.
 
@@ -973,9 +979,11 @@ When the newly written version N carries `retention: R` and more than R versions
 
 Retention is evaluated per write: a write that omits the key prunes nothing, regardless of what earlier versions declared. This holds for APPEND despite its metadata merge (§6.6): `retention` is never inherited from the base version, so an append prunes only when the append itself declares it. Absent retention, the default append-only model applies unchanged. Reads of a pruned version return not-found; VERSIONS lists only the retained versions.
 
+A store MAY defer deleting a pruned version's bytes while replicas or readers that predate the write can still name them; reads of a pruned version return not-found from the write on. The reference GCS store deletes a pruned version's blob once no retained checkpoint names it and 24 hours have passed since the checkpoint that recorded the prune; a blob written before versions recorded their `path` (§9.4) is kept.
+
 Retention is intended for generated documents that are republished wholesale (graph exports, indexes), where old versions carry no value. It is destructive: pruned versions are unrecoverable through the protocol. Clients SHOULD warn and require explicit confirmation before a write that sets `retention` on a document not known to be generated.
 
-Pruning requires no separate capability: it executes under the write authorization of the PUBLISH or APPEND that carries the key, the same trust level that can archive the document. A server MUST record version deletions in its audit log, attributing them to the authenticated writer (in the reference implementation: path, pruned version range, and token label).
+Pruning requires no separate capability: it executes under the write authorization of the PUBLISH or APPEND that carries the key, the same trust level that can archive the document. A server MUST record version deletions in its audit log, attributing them to the authenticated writer (in the reference implementation: path, pruned version range, and token label). A write whose commit outcome is unknown may still commit and prune, so the reference implementation then records the path, the retention count and the token label instead.
 
 Because pruning is the store's only destructive operation, deletion targets MUST NOT be derived from request input: version numbers come from enumerating the document's own stored versions, and each deletion MUST be scoped to the document being pruned. A filesystem store MUST additionally confine every deletion to the store root with symlink escapes rejected at delete time (the reference implementation resolves every removal inside an `os.Root` anchored at the store root, so a planted or raced symlink cannot redirect a delete outside the store, and a version file that is itself a symlink is unlinked, never followed). A database store achieves the same confinement by binding deletions to the document's path and version-number parameters, never to interpolated request text.
 

@@ -880,6 +880,11 @@ func entryArchived(childPath, absRoot string) (bool, error) {
 	if !info.Mode().IsRegular() {
 		return false, nil
 	}
+	// A sidecar decides archive state, so the header is read only without one.
+	docDir := filepath.Dir(resolved)
+	if archived, exists, err := readArchiveState(docDir); err != nil || exists {
+		return archived, err
+	}
 	f, err := os.Open(resolved)
 	if err != nil {
 		return false, fmt.Errorf("open document: %w", err)
@@ -895,7 +900,7 @@ func entryArchived(childPath, absRoot string) (bool, error) {
 	if closeErr != nil {
 		return false, fmt.Errorf("close current version: %w", closeErr)
 	}
-	return effectiveArchived(filepath.Dir(resolved), buf[:n])
+	return storefmt.IsArchived(buf[:n]), nil
 }
 
 // IsDir reports whether the given path is a directory within the content root.
@@ -1260,22 +1265,9 @@ func documentFromStored(data []byte, modified time.Time, version int, archived b
 	}
 }
 
-// Write creates a new version of a document. Every call produces a new
-// immutable version file; existing versions are never modified.
-//
-// The stored file is prefixed with a store-managed frontmatter block:
-//
-//	---
-//	version: N
-//	previous-hash: sha256-<hex>   ← omitted for v1
-//	archived: true|false
-//	tags: [a, b]                  ← recognized OKF fields, written bare
-//	meta.key: value               ← other publisher metadata (0–10 keys total)
-//	---
-//	<original content>
-//
-// The previous-hash is the SHA-256 of the raw on-disk bytes of version N-1,
-// forming a hash chain that allows chain integrity to be verified later.
+// Write creates a new immutable version file; existing versions are never
+// modified. The stored format (store fields, the previous-hash chain, the
+// path) is SPEC §9.4.
 func (s *Store) Write(reqPath string, content []byte, meta map[string]string) (*storefmt.Document, error) {
 	if err := storefmt.ValidateWrite(content, meta); err != nil {
 		return nil, err
@@ -1498,8 +1490,9 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 	}
 
 	vFile := loc.versionFile(next)
+	docPath := storefmt.CanonicalPath(reqPath)
 
-	stored, err := buildVersionFile(versionsDir, base, next, content, meta)
+	stored, err := buildVersionFile(&loc, &storefmt.VersionSpec{Path: docPath, Version: next, Content: content, Metadata: meta})
 	if err != nil {
 		return nil, err
 	}
@@ -1511,7 +1504,7 @@ func (s *Store) write(reqPath string, content []byte, meta map[string]string, ch
 	// The persisted form, not the request map: tags are normalized on the way in.
 	persisted := storefmt.ExtractMetadata(stored)
 	if check != nil {
-		prepared := storefmt.PreparedWrite{Path: storefmt.CanonicalPath(reqPath), Content: content, Metadata: persisted}
+		prepared := storefmt.PreparedWrite{Path: docPath, Content: content, Metadata: persisted}
 		if err := check(prepared); err != nil {
 			return nil, err
 		}
@@ -1782,6 +1775,7 @@ func (s *Store) VerifyChain(reqPath string) error {
 	if err != nil {
 		return fmt.Errorf("verify chain %s: %w", reqPath, err)
 	}
+	docPath := storefmt.CanonicalPath(reqPath)
 
 	var previousData []byte
 	// Delay chain errors until all files are read so missing files retain precedence.
@@ -1803,11 +1797,11 @@ func (s *Store) VerifyChain(reqPath string) error {
 		}
 		if formatErr == nil {
 			header, inspectErr := storefmt.InspectStoredVersion(currentData)
-			switch {
-			case inspectErr != nil:
+			if inspectErr == nil {
+				inspectErr = header.CheckNames(docPath, current.Version)
+			}
+			if inspectErr != nil {
 				formatErr = fmt.Errorf("%w: v%d: %v", storefmt.ErrIntegrity, current.Version, inspectErr)
-			case header.Version != current.Version:
-				formatErr = fmt.Errorf("%w: v%d stored version is %d", storefmt.ErrIntegrity, current.Version, header.Version)
 			}
 		}
 		previousData = currentData
@@ -1855,18 +1849,15 @@ func resolveNonExistent(path string) (string, error) {
 // write maps it to the topology collision error.
 var errUnderDocument = fmt.Errorf("%w: path is beneath a document", os.ErrNotExist)
 
-// buildVersionFile constructs the on-disk bytes for a version file:
-// store frontmatter (version, archived, previous-hash, publisher metadata)
-// followed by the document content.
-func buildVersionFile(versionsDir, base string, version int, content []byte, meta map[string]string) ([]byte, error) {
-	var prevData []byte
-	if version > 1 {
-		prevFile := newVersionFilePath(versionsDir, base, version-1)
-		var err error
-		prevData, err = os.ReadFile(prevFile)
+// buildVersionFile serializes spec, filling its chain link from the version
+// file before it.
+func buildVersionFile(loc *docLocation, spec *storefmt.VersionSpec) ([]byte, error) {
+	if spec.Version > 1 {
+		previous, err := os.ReadFile(loc.versionFile(spec.Version - 1))
 		if err != nil {
 			return nil, fmt.Errorf("read previous version for hashing: %w", err)
 		}
+		spec.Previous = previous
 	}
-	return storefmt.SerializeVersion(version, prevData, content, meta)
+	return storefmt.SerializeVersion(spec)
 }

@@ -58,6 +58,7 @@ func RunConformance(t *testing.T, factory Factory, tamper Tamper) {
 		{"ArchiveLifecycle", testArchiveLifecycle},
 		{"AppendSemantics", testAppendSemantics},
 		{"AppendMetadataMerge", testAppendMetadataMerge},
+		{"StoredVersionNamesPath", testStoredVersionNamesPath},
 		{"ListDirSemantics", testListDirSemantics},
 		{"IsDirSemantics", testIsDirSemantics},
 		{"Retention", testRetention},
@@ -95,7 +96,7 @@ func testWriteGetRoundtrip(t *testing.T, s Direct) {
 	if !bytes.Equal(doc.Content, []byte("# First\n")) {
 		t.Errorf("write-returned body = %q, want %q", doc.Content, "# First\n")
 	}
-	stored, err := storefmt.SerializeVersion(1, nil, []byte("# First\n"), meta)
+	stored, err := storefmt.SerializeVersion(&storefmt.VersionSpec{Path: "/notes/first.md", Version: 1, Content: []byte("# First\n"), Metadata: meta})
 	if err != nil {
 		t.Fatalf("serialize expected stored bytes: %v", err)
 	}
@@ -368,6 +369,52 @@ func testAppendSemantics(t *testing.T, s Direct) {
 	}
 	if _, err := s.AppendVersion("/nope.md", 1, []byte("x"), nil); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("append missing: err = %v, want ErrNotExist", err)
+	}
+}
+
+// testStoredVersionNamesPath pins the stored bytes of SPEC 9.4 through the
+// ETag, their hash: the store's canonical path after the chain link, a
+// publisher path as meta.path, and only the publisher's in FETCH metadata.
+func testStoredVersionNamesPath(t *testing.T, s Direct) {
+	const docPath = "/that/path.md"
+	v1 := "---\nversion: 1\narchived: false\npath: /that/path.md\nmeta.path: x\ntitle: T\n---\n# Body\n"
+	v2 := "---\nversion: 2\narchived: false\nprevious-hash: sha256-" + storefmt.StoredETag([]byte(v1)) +
+		"\npath: /that/path.md\nmeta.path: x\ntitle: T\ntype: Document\n---\n# Body\nmore\n"
+	created, err := s.WriteVersion("/that//path.md", 0, []byte("# Body\n"), map[string]string{"path": "x", "title": "T"})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	appended, err := s.AppendVersion(docPath, 1, []byte("more\n"), nil)
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	for _, want := range []struct {
+		version int
+		written *storefmt.Document
+		stored  string
+		meta    map[string]string
+	}{
+		{1, created, v1, map[string]string{"path": "x", "title": "T"}},
+		{2, appended, v2, map[string]string{"path": "x", "title": "T", "type": "Document"}},
+	} {
+		got, err := s.Get(docPath, want.version)
+		if err != nil {
+			t.Fatalf("get v%d: %v", want.version, err)
+		}
+		etag := storefmt.StoredETag([]byte(want.stored))
+		if want.written.ETag != etag || got.ETag != etag {
+			t.Errorf("v%d ETag write %q get %q, want hash of %q", want.version, want.written.ETag, got.ETag, want.stored)
+		}
+		if !maps.Equal(want.written.Metadata, want.meta) || !maps.Equal(got.Metadata, want.meta) {
+			t.Errorf("v%d metadata write %v get %v, want %v", want.version, want.written.Metadata, got.Metadata, want.meta)
+		}
+	}
+	if err := s.VerifyChain(docPath); err != nil {
+		t.Errorf("VerifyChain: %v", err)
+	}
+	mustWrite(t, s, "/that/plain.md", 0, "# Plain\n")
+	if got, err := s.Get("/that/plain.md", 0); err != nil || got.Metadata != nil {
+		t.Errorf("plain document metadata = %v, %v; want none, the store path stays in the stored bytes", got, err)
 	}
 }
 

@@ -299,8 +299,8 @@ func TestCommitFailureLeavesTheLog(t *testing.T) {
 		store, memory := newWritableStore(t)
 		store.requestTimeout = 25 * time.Millisecond
 		store.objects = &blockingSlotCreateStore{Store: memory}
-		if _, err := store.WriteVersion("/doc", 0, []byte("body"), nil); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("write error = %v, want deadline", err)
+		if _, err := store.WriteVersion("/doc", 0, []byte("body"), nil); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, backend.ErrOutcomeUnknown) {
+			t.Fatalf("write error = %v, want an unknown outcome past the deadline", err)
 		}
 		assertNoSlot(t, memory, 2)
 	})
@@ -366,8 +366,8 @@ func TestFirstReadPinsTheView(t *testing.T) {
 	}
 }
 
-// Retention trims versions held since the checkpoint; the chain stays whole
-// across what is left.
+// Retention drops pruned versions at once, holding their blobs only until the
+// next checkpoint; the chain stays whole across what is left.
 func TestRetentionAcrossManyVersions(t *testing.T) {
 	store, _ := newWritableStore(t)
 	for version := 1; version <= 257; version++ {
@@ -382,19 +382,26 @@ func TestRetentionAcrossManyVersions(t *testing.T) {
 	if pruned.Prune == nil || pruned.Prune.From != 1 || pruned.Prune.To != 253 {
 		t.Fatalf("prune = %+v, want 1-253", pruned.Prune)
 	}
-	if state := store.served.Load().snap.path("/history"); state.First != 254 || len(state.Recent) != 5 {
-		t.Errorf("snapshot keeps first %d and %d versions, want 254 and 5", state.First, len(state.Recent))
+	check := func(stage string, recent, held int) {
+		t.Helper()
+		if state := store.served.Load().snap.path("/history"); state.First != 254 || len(state.Recent) != recent || prunedHeld(state) != held {
+			t.Errorf("%s: snapshot keeps first %d, %d recent and %d pruned versions, want 254, %d and %d",
+				stage, state.First, len(state.Recent), prunedHeld(state), recent, held)
+		}
+		versions, err := store.Versions("/history")
+		if err != nil || len(versions) != 5 || versions[0].Version != 258 || versions[4].Version != 254 {
+			t.Fatalf("%s: retained versions = (%+v, %v)", stage, versions, err)
+		}
+		if err := store.VerifyChain("/history"); err != nil {
+			t.Fatalf("%s: verify retained chain: %v", stage, err)
+		}
+		if _, err := store.Get("/history", 253); !errors.Is(err, backend.ErrNotFound) {
+			t.Errorf("%s: pruned version read = %v, want not found", stage, err)
+		}
 	}
-	versions, err := store.Versions("/history")
-	if err != nil || len(versions) != 5 || versions[0].Version != 258 || versions[4].Version != 254 {
-		t.Fatalf("retained versions = (%+v, %v)", versions, err)
-	}
-	if err := store.VerifyChain("/history"); err != nil {
-		t.Fatalf("verify retained chain: %v", err)
-	}
-	if _, err := store.Get("/history", 253); !errors.Is(err, backend.ErrNotFound) {
-		t.Errorf("pruned version read = %v, want not found", err)
-	}
+	check("before the checkpoint", 5, 253)
+	mustSucceed(t, store.checkpoint(context.Background()))
+	check("after the checkpoint", 0, 0)
 }
 
 type writeOutcome struct {

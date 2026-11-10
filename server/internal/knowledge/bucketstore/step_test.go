@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/memtest"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/blob"
 )
 
@@ -386,12 +387,19 @@ func TestContentCreatesSkipReadBackAndFreshen(t *testing.T) {
 	t.Run("blobs", func(t *testing.T) {
 		writer := site.open(t, 0)
 		body := []byte("# Same body\n\nstored once\n")
-		_, err := writer.WriteVersion("/same/a.md", 0, body, nil)
+		// Stored bytes name their path, so only an earlier attempt at the same
+		// version takes the name: an abandoned commit, staged here by hand.
+		stored, err := storefmt.SerializeVersion(&storefmt.VersionSpec{Path: "/same/a.md", Version: 1, Content: body})
 		mustSucceed(t, err)
-		key := writer.served.Load().snap.path("/same/a.md").Recent[0].entry.Blob.Key
+		key := blobKey(hashHex(stored))
+		_, err = objects.Create(ctx, key, stored)
+		mustSucceed(t, err)
 		objects.reset()
-		_, err = writer.WriteVersion("/same/b.md", 0, body, nil)
+		_, err = writer.WriteVersion("/same/a.md", 0, body, nil)
 		mustSucceed(t, err)
+		if got := writer.served.Load().snap.path("/same/a.md").Recent[0].entry.Blob.Key; got != key {
+			t.Fatalf("the write staged blob %s, want the taken %s", got, key)
+		}
 		if creates := objects.count("create", key); creates != 1 {
 			t.Fatalf("the second write of one body created its blob %d times, want once", creates)
 		}

@@ -2,6 +2,7 @@ package bucketstore
 
 import (
 	"iter"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,12 +37,51 @@ type pathState struct {
 	Modified time.Time
 	Entry    *catalog.Entry // prepared
 	// Base is the document as a checkpoint holds it, nil when it arrived
-	// after; Recent are the versions committed since, oldest first.
+	// after; Recent are the retained versions committed since, oldest first.
 	Base   *baseEntry
 	Recent []retainedVersion
+	// Pruned are the versions committed since Base that retention pruned,
+	// newest first, for the next checkpoint's prune manifest.
+	Pruned *prunedNode
 	// hashPrefix is the path hash's top 32 bits, which name its shard, kept
 	// so a checkpoint need not hash every path again.
 	hashPrefix uint32
+}
+
+// prunedNode is one pruned version's blob. Snapshots share the list, so a
+// node once linked is never written.
+type prunedNode struct {
+	version int
+	blob    objectRef
+	next    *prunedNode
+}
+
+// prune drops the versions below first from recent, pushing their blobs
+// onto pruned.
+func prune(recent []retainedVersion, pruned *prunedNode, first int) ([]retainedVersion, *prunedNode) {
+	for len(recent) > 0 && recent[0].entry.Version < first {
+		pruned = &prunedNode{version: recent[0].entry.Version, blob: recent[0].entry.Blob, next: pruned}
+		recent = recent[1:]
+	}
+	return recent, pruned
+}
+
+// prunedAbove is pruned without the versions at or below current, copying
+// the nodes kept since other snapshots share them.
+func prunedAbove(pruned *prunedNode, current int) *prunedNode {
+	var kept []*prunedNode
+	node := pruned
+	for ; node != nil && node.version > current; node = node.next {
+		kept = append(kept, node)
+	}
+	if node == nil {
+		return pruned
+	}
+	var head *prunedNode
+	for _, node := range slices.Backward(kept) {
+		head = &prunedNode{version: node.version, blob: node.blob, next: head}
+	}
+	return head
 }
 
 // shard is the shard, of 1<<bits, that the document's path lies in.

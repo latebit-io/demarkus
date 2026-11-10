@@ -16,7 +16,7 @@
 1 client/merge/diff3.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)
 1 knowledge/internal/broker/oauthsrv/device_store.go: function-result-limit: maximum number of return results per function exceeded; max 3 but got 4 (revive)
 1 protocol/store/store.go: G122: Filesystem operation in filepath.Walk/WalkDir callback uses race-prone path; consider root-scoped APIs (e.g. os.Root) to prevent symlink TOCTOU traversal (gosec)
-2 protocol/store/store.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)
+1 protocol/store/store.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)
 1 server/blob/blob.go: G115: integer overflow conversion int -> uint16 (gosec)
 1 server/blob/blobtest/conformance.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)
 2 server/blob/gcs/gcs.go: argument-limit: maximum number of arguments per function exceeded; max 4 but got 5 (revive)

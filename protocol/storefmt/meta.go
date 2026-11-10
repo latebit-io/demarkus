@@ -13,8 +13,13 @@ import (
 )
 
 // MaxStoreFrontmatter bounds the frontmatter a version file carries: the
-// operational fields, MaxMetaBytes of publisher metadata and line overhead.
-const MaxStoreFrontmatter = 2048
+// operational fields, the longest path line, MaxMetaBytes of publisher
+// metadata and line overhead.
+const MaxStoreFrontmatter = 2048 + len(storePathKey+": \n") + protocol.MaxRequestPathLength
+
+// storePathKey is the store owned field naming the version's canonical
+// document path. Bare on disk; a publisher "path" key is stored as meta.path.
+const storePathKey = "path"
 
 // metaPrefix marks publisher keys the Open Knowledge Format does not define,
 // on disk "meta.importance: 0.8"; it is stripped before clients see the key.
@@ -205,6 +210,8 @@ func ExtractMetadata(data []byte) map[string]string {
 		switch {
 		case reservedMetaKeys[key]:
 			// Operational field — never publisher metadata.
+		case key == storePathKey:
+			// The store's document path; a publisher path reads from meta.path.
 		case strings.HasPrefix(key, metaPrefix):
 			// Re-check the unprefixed key so a stored "meta.archived" cannot
 			// resurrect a reserved operational field as publisher metadata.

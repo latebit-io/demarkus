@@ -197,7 +197,7 @@ func validateSlotEntry(entry *slotEntry) error {
 }
 
 func validateDocumentPath(path string) error {
-	if path == "/" || protocol.ValidateRequestPath(path) != nil || storefmt.ContainsDotDot(path) || storefmt.CanonicalPath(path) != path {
+	if !storefmt.ValidDocumentPath(path) {
 		return fmt.Errorf("path %q is not a canonical document path", path)
 	}
 	return nil
@@ -271,6 +271,35 @@ func validateHistoryObject(history *historyObject) error {
 		}
 		if _, err := parseTimestamp(entry.Modified); err != nil {
 			return fmt.Errorf("entry %d modified: %w", index, err)
+		}
+	}
+	return nil
+}
+
+// validatePruned checks a manifest part read at the key for sequence.
+func validatePruned(manifest *prunedObject, worldID string, sequence int64) error {
+	if manifest.Schema != prunedSchema {
+		return fmt.Errorf("schema is %d, want %d", manifest.Schema, prunedSchema)
+	}
+	if manifest.WorldID != worldID {
+		return fmt.Errorf("manifest belongs to world %q", manifest.WorldID)
+	}
+	if manifest.Sequence != sequence {
+		return fmt.Errorf("sequence is %d, key names %d", manifest.Sequence, sequence)
+	}
+	if len(manifest.Entries) == 0 {
+		return errors.New("entries must not be empty")
+	}
+	for index := range manifest.Entries {
+		entry := &manifest.Entries[index]
+		if err := validateDocumentPath(entry.Path); err != nil {
+			return fmt.Errorf("entry %d: %w", index, err)
+		}
+		if err := validateHistoryRange(entry.Version, entry.Version); err != nil {
+			return fmt.Errorf("entry %d version: %w", index, err)
+		}
+		if err := verifyRef(entry.Blob, blobKey(entry.Blob.Hash)); err != nil {
+			return fmt.Errorf("entry %d blob reference: %w", index, err)
 		}
 	}
 	return nil

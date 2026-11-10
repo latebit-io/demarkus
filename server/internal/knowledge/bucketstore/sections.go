@@ -535,7 +535,7 @@ func (reader bodyReader) read(ctx context.Context, state *pathState) ([]byte, er
 	retained, err := view.currentRetained(ctx, state)
 	var stored storedDocument
 	if err == nil {
-		_, stored, err = view.loadStored(ctx, &retained)
+		_, stored, err = view.loadStored(ctx, state.Path, &retained)
 	}
 	if errors.Is(err, blob.ErrIntegrity) || errors.Is(err, backend.ErrNotFound) {
 		reader.logger.Error("section index skipped a document whose body cannot be read", "world", reader.worldID, "path", state.Path, "error", err)

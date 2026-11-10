@@ -4,7 +4,7 @@ What you can rely on when authoring documents for Demarkus.
 
 ## The short version
 
-Demarkus does not parse or validate the markdown you write: the server treats your document body as an opaque blob and defers all rendering to the client. (On disk, the server prepends its own YAML frontmatter for `version`, `previous-hash`, `archived`, and any publisher `meta.*` keys, but that's stripped before the body is returned to clients.) What you see in the TUI depends entirely on the renderer. `demarkus-tui` uses [Glamour](https://github.com/charmbracelet/glamour) (v2), which is built on [goldmark](https://github.com/yuin/goldmark) and enables **CommonMark + GitHub Flavored Markdown + definition lists** by default.
+Demarkus does not parse or validate the markdown you write: the server treats your document body as an opaque blob and defers all rendering to the client. (On disk, the server prepends its own YAML frontmatter for `version`, `archived`, `previous-hash`, `path`, and any publisher `meta.*` keys, but that's stripped before the body is returned to clients.) What you see in the TUI depends entirely on the renderer. `demarkus-tui` uses [Glamour](https://github.com/charmbracelet/glamour) (v2), which is built on [goldmark](https://github.com/yuin/goldmark) and enables **CommonMark + GitHub Flavored Markdown + definition lists** by default.
 
 Everything on this page is what Glamour renders. Other clients (plain CLI, MCP) hand back raw markdown unchanged, so the consumer of that markdown decides what features it understands.
 
@@ -60,6 +60,7 @@ The server persists each version with its own YAML frontmatter block prepended t
 version: 3
 archived: false
 previous-hash: sha256-abc123…
+path: /notes/architecture.md
 type: Document
 title: Architecture Notes
 tags: [architecture, notes]
@@ -70,7 +71,7 @@ meta.author: Fritz
 
 The block mixes three kinds of keys:
 
-- **Operational** (`version`, `previous-hash`, `archived`): owned by the store. They are reserved: a publisher that tries to set them is rejected.
+- **Operational** (`version`, `archived`, `previous-hash`, `path`): owned by the store. `path` is the canonical path the version was written to, absent in versions written before it existed. `version`, `archived` and `previous-hash` are reserved: a publisher that tries to set them is rejected. A publisher `path` key is ordinary metadata, stored as `meta.path`.
 - **Open Knowledge Format fields** (`type`, `title`, `description`, `resource`, `tags`, `timestamp`): stored *bare* under their OKF names, so a demarkus document is content-compatible with [OKF v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog). `tags` is written as a YAML flow list.
 - **Other publisher metadata**: namespaced under `meta.*` to keep it clear of the reserved and OKF names.
 
@@ -136,7 +137,7 @@ If you want a link to appear in the graph, use `[text](url)` or a reference link
 
 - Body: up to 1 MiB (`MaxBodyLength = 1048576` bytes)
 - Publisher metadata: up to 50 keys, 1024 bytes total (`tags` counted at its serialized list length)
-- Stored frontmatter: up to 2 KiB on disk per version (publisher metadata plus the store's own operational fields)
+- Stored frontmatter: up to 2 KiB on disk per version (publisher metadata plus the store's own operational fields), plus the store's `path` line, which holds a path up to the request path limit
 
 ## Why so minimal?
 

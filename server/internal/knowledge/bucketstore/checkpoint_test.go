@@ -216,7 +216,10 @@ func (s *recordingCreates) snapshot() map[string][][]byte {
 
 // testCheckpointWriter writes checkpoints to objects as a store would.
 func testCheckpointWriter(objects blob.Store) checkpointWriter {
-	return checkpointWriter{objects: objects, logger: discardLogger, worldID: testWorldID, workers: 4, now: time.Now, grace: defaultCheckpointGrace, pathHash: pathHash, budget: maxShardBytes}
+	return checkpointWriter{
+		objects: objects, logger: discardLogger, worldID: testWorldID, workers: 4, now: time.Now,
+		grace: defaultCheckpointGrace, pathHash: pathHash, budget: maxShardBytes, part: collectStep,
+	}
 }
 
 // failCheckpoints refuses to create checkpoint objects, as a compactor that

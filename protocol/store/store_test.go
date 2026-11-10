@@ -211,7 +211,7 @@ func TestBuildIndex_SkipsSymlinkWithoutPerDocVersions(t *testing.T) {
 	if _, err := s.Write("/real.md", []byte("# Real\n"), nil); err != nil {
 		t.Fatal(err)
 	}
-	stored := storedVersion(t, 1, nil, "# Stray\n")
+	stored := storedVersion(t, "/flat.md", 1, nil, "# Stray\n")
 	if err := os.WriteFile(filepath.Join(root, "versions", "stray.bin"), stored, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestLegacyLayoutRefused(t *testing.T) {
 	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(legacyDir, "doc.md.v1"), storedVersion(t, 1, nil, "# Old\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(legacyDir, "doc.md.v1"), storedVersion(t, "/old/doc.md", 1, nil, "# Old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.BuildIndex(); !errors.Is(err, ErrLegacyLayout) {
@@ -323,9 +323,9 @@ func TestIsLegacyVersionName(t *testing.T) {
 
 // storedVersion is a version file as the writer produces it, so a fixture
 // placed on disk by hand cannot drift from the stored format.
-func storedVersion(t *testing.T, version int, previous []byte, content string) []byte {
+func storedVersion(t *testing.T, docPath string, version int, previous []byte, content string) []byte {
 	t.Helper()
-	stored, err := storefmt.SerializeVersion(version, previous, []byte(content), nil)
+	stored, err := storefmt.SerializeVersion(&storefmt.VersionSpec{Path: docPath, Version: version, Previous: previous, Content: []byte(content)})
 	if err != nil {
 		t.Fatalf("serialize v%d: %v", version, err)
 	}
@@ -645,8 +645,8 @@ func TestWrite_NewDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read version file: %v", err)
 	}
-	if !strings.HasPrefix(string(vData), "---\nversion: 1\narchived: false\n---\n") {
-		t.Errorf("v1 should have store frontmatter without previous-hash, got: %q", string(vData))
+	if !strings.HasPrefix(string(vData), "---\nversion: 1\narchived: false\npath: /new.md\n---\n") {
+		t.Errorf("v1 should have store frontmatter with path and without previous-hash, got: %q", string(vData))
 	}
 
 	// Current file should match version file.
@@ -1311,7 +1311,7 @@ func TestVerifyChainAcceptsLegacyArchivedNonTip(t *testing.T) {
 	if err := os.MkdirAll(docDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	v1, err := storefmt.SerializeVersion(1, nil, []byte("# V1\n"), nil)
+	v1, err := storefmt.SerializeVersion(&storefmt.VersionSpec{Path: "/doc.md", Version: 1, Content: []byte("# V1\n")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1319,7 +1319,7 @@ func TestVerifyChainAcceptsLegacyArchivedNonTip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v2, err := storefmt.SerializeVersion(2, v1, []byte("# V2\n"), nil)
+	v2, err := storefmt.SerializeVersion(&storefmt.VersionSpec{Path: "/doc.md", Version: 2, Previous: v1, Content: []byte("# V2\n")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1335,6 +1335,103 @@ func TestVerifyChainAcceptsLegacyArchivedNonTip(t *testing.T) {
 	if err := New(root).VerifyChain("/doc.md"); err != nil {
 		t.Fatalf("VerifyChain: %v", err)
 	}
+}
+
+// Every write records the canonical path, append and WriteVersion included;
+// VerifyChain refuses a version that names another document.
+func TestVersionNamesItsPath(t *testing.T) {
+	s := New(t.TempDir())
+	if _, err := s.Write("/dir//a.md", []byte("# A\n"), map[string]string{"path": "publisher"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append("/dir/a.md", 1, []byte("more\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.WriteVersion("/dir/a.md", 2, []byte("# A3\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+	for version := 1; version <= 3; version++ {
+		header := inspectVersionFile(t, s, "/dir/a.md", version)
+		if header.Path != "/dir/a.md" {
+			t.Errorf("v%d stored path = %q, want /dir/a.md", version, header.Path)
+		}
+	}
+	doc, err := s.Get("/dir/a.md", 1)
+	if err != nil || doc.Metadata["path"] != "publisher" {
+		t.Fatalf("v1 metadata = %v, %v; want publisher path", doc, err)
+	}
+	if err := s.VerifyChain("/dir/a.md"); err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+
+	for _, p := range []string{"/dir/b.md", "/dir/c.md"} {
+		if _, err := s.Write(p, []byte("# "+p+"\n"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	moved := readVersionFile(t, s, "/dir/b.md", 1)
+	cFile, err := s.VersionFilePath("/dir/c.md", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cFile, moved, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.VerifyChain("/dir/c.md"); !errors.Is(err, storefmt.ErrIntegrity) || !strings.Contains(err.Error(), "stored path") {
+		t.Fatalf("VerifyChain over a version of another document = %v, want stored path integrity error", err)
+	}
+}
+
+// Versions written before the store recorded paths still verify, and a new
+// write chains onto them.
+func TestVerifyChainAcceptsPathlessLegacyVersions(t *testing.T) {
+	root := t.TempDir()
+	docDir := filepath.Join(root, "versions", "doc.md")
+	if err := os.MkdirAll(docDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v1 := []byte("---\nversion: 1\narchived: false\n---\n# V1\n")
+	v2 := []byte(fmt.Sprintf("---\nversion: 2\narchived: false\nprevious-hash: sha256-%x\n---\n# V2\n", sha256.Sum256(v1)))
+	for version, stored := range map[int][]byte{1: v1, 2: v2} {
+		if err := os.WriteFile(filepath.Join(docDir, fmt.Sprintf("v%d", version)), stored, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join("versions", "doc.md", "v2"), filepath.Join(root, "doc.md")); err != nil {
+		t.Fatal(err)
+	}
+	s := New(root)
+	if _, err := s.Write("/doc.md", []byte("# V3\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if header := inspectVersionFile(t, s, "/doc.md", 3); header.Path != "/doc.md" {
+		t.Errorf("v3 stored path = %q, want /doc.md", header.Path)
+	}
+	if err := s.VerifyChain("/doc.md"); err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+}
+
+func readVersionFile(t *testing.T, s *Store, reqPath string, version int) []byte {
+	t.Helper()
+	file, err := s.VersionFilePath(reqPath, version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func inspectVersionFile(t *testing.T, s *Store, reqPath string, version int) storefmt.StoredVersionHeader {
+	t.Helper()
+	header, err := storefmt.InspectStoredVersion(readVersionFile(t, s, reqPath, version))
+	if err != nil {
+		t.Fatalf("v%d: %v", version, err)
+	}
+	return header
 }
 
 func TestArchiveStateFormat(t *testing.T) {

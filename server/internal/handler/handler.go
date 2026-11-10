@@ -988,6 +988,7 @@ func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 	var warnings []string
 	doc, err := h.store.Publish(ctx, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta, Warnings: &warnings, Readable: h.readableBy(req)})
 	h.logPrune("PUBLISH", req.Path, tokenLabel, doc)
+	h.logUnknownPrune("PUBLISH", call, err)
 	if err != nil {
 		h.writePublishError(w, req, expectedVersion, doc, err, tokenLabel)
 		return
@@ -1135,6 +1136,7 @@ func (h *Handler) handleAppend(ctx context.Context, call *writeCall) {
 	var warnings []string
 	doc, err := h.store.Append(ctx, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta, Warnings: &warnings, Readable: h.readableBy(req)})
 	h.logPrune("APPEND", req.Path, tokenLabel, doc)
+	h.logUnknownPrune("APPEND", call, err)
 	if err != nil {
 		h.writeAppendError(w, req, expectedVersion, doc, err, tokenLabel)
 		return
@@ -1226,6 +1228,16 @@ func (h *Handler) logPrune(operation, reqPath, tokenLabel string, doc *storefmt.
 		return
 	}
 	h.logger.Info("prune", "audit", true, "operation", operation, "path", sanitize(reqPath), "pruned_from", p.From, "pruned_to", p.To, "token_label", sanitize(tokenLabel), "success", true)
+}
+
+// logUnknownPrune attributes a prune a write may yet make: its commit outcome
+// is unknown, and a late commit's deletions must still name the writer.
+func (h *Handler) logUnknownPrune(operation string, call *writeCall, err error) {
+	keep := storefmt.RetentionValue(call.req.Metadata)
+	if keep <= 0 || !errors.Is(err, storagebackend.ErrOutcomeUnknown) {
+		return
+	}
+	h.logger.Warn("prune outcome unknown", "audit", true, "operation", operation, "path", sanitize(call.req.Path), "retention", keep, "token_label", sanitize(call.tokenLabel), "error", err)
 }
 
 // extractPublisherMeta returns non-control metadata keys from a request.

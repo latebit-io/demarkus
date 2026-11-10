@@ -20,6 +20,9 @@ var (
 	ErrRejected = errors.New("write rejected")
 	// ErrReadOnly means the store was opened read-only and takes no write.
 	ErrReadOnly = errors.New("store is read-only")
+	// ErrOutcomeUnknown means the store took a write and its caller stopped
+	// waiting: it may yet commit, retention prune included.
+	ErrOutcomeUnknown = errors.New("write outcome unknown")
 )
 
 // Rejection is an ErrRejected that carries its reason for the response body.

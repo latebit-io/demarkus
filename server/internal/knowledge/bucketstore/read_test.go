@@ -19,6 +19,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/blob"
 	"github.com/latebit-io/demarkus/server/internal/backend"
+	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 )
 
@@ -588,6 +589,52 @@ func TestReferencedObjectIntegrity(t *testing.T) {
 	}
 }
 
+// A blob naming another document fails as integrity on every read; a legacy
+// blob naming none reads and verifies, and a write chains onto it.
+func TestStoredPathNamesTheDocument(t *testing.T) {
+	t.Run("another document's version", func(t *testing.T) {
+		memory := initializedMemory(t)
+		commit := commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "one", "two")})
+		document := commit.documents["/docs/a.md"]
+		raw, err := storefmt.SerializeVersion(&storefmt.VersionSpec{Path: "/docs/b.md", Version: 1, Content: []byte("one"), Metadata: document.versions[1].metadata})
+		if err != nil {
+			t.Fatal(err)
+		}
+		installRawMutation(t, memory, document, 1, raw)
+		view := openTestReadView(t, memory)
+		defer closeTestReadView(t, view)
+		_, err = view.Get("/docs/a.md", 1)
+		if !errors.Is(err, storefmt.ErrIntegrity) || !strings.Contains(err.Error(), `stored path is "/docs/b.md"`) {
+			t.Errorf("Get error = %v, want stored path integrity error", err)
+		}
+	})
+
+	t.Run("legacy version without a path", func(t *testing.T) {
+		memory := initializedMemory(t)
+		commit := commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "one")})
+		document := commit.documents["/docs/a.md"]
+		legacy := bytes.Replace(document.versions[1].raw, []byte("path: /docs/a.md\n"), nil, 1)
+		if bytes.Equal(legacy, document.versions[1].raw) {
+			t.Fatal("test raw has no store path")
+		}
+		installRawMutation(t, memory, document, 1, legacy)
+		store, err := Open(context.Background(), memory, Options{Logger: discardLogger, WorldID: testWorldID})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		direct := backendtest.Direct{Store: store}
+		if doc, err := direct.Get("/docs/a.md", 1); err != nil || doc.ETag != storefmt.StoredETag(legacy) {
+			t.Fatalf("Get legacy = %+v, %v", doc, err)
+		}
+		if _, err := direct.AppendVersion("/docs/a.md", 1, []byte("more\n"), nil); err != nil {
+			t.Fatalf("append onto legacy: %v", err)
+		}
+		if err := direct.VerifyChain("/docs/a.md"); err != nil {
+			t.Fatalf("VerifyChain: %v", err)
+		}
+	})
+}
+
 func TestStoredArchiveHeaderIsLegacyOnly(t *testing.T) {
 	memory := initializedMemory(t)
 	document := newReadDocument("/docs/a.md", "one", "two")
@@ -692,7 +739,7 @@ func TestVerifyChainErrors(t *testing.T) {
 		memory := initializedMemory(t)
 		commit := commitReadDocuments(t, memory, []readDocumentSpec{newReadDocument("/docs/a.md", "one", "two")})
 		document := commit.documents["/docs/a.md"]
-		raw, err := storefmt.SerializeVersion(1, nil, []byte("changed"), document.versions[1].metadata)
+		raw, err := storefmt.SerializeVersion(&storefmt.VersionSpec{Path: "/docs/a.md", Version: 1, Content: []byte("changed"), Metadata: document.versions[1].metadata})
 		if err != nil {
 			t.Fatalf("serialize changed v1: %v", err)
 		}
@@ -852,7 +899,7 @@ func buildReadDocument(t *testing.T, memory *blob.Memory, spec *readDocumentSpec
 	retained := make([]historyEntry, 0, len(spec.Bodies)-spec.RetainFrom+1)
 	for index, body := range spec.Bodies {
 		version := index + 1
-		raw, err := storefmt.SerializeVersion(version, previousRaw, body, spec.Metadata[index])
+		raw, err := storefmt.SerializeVersion(&storefmt.VersionSpec{Path: spec.Path, Version: version, Previous: previousRaw, Content: body, Metadata: spec.Metadata[index]})
 		if err != nil {
 			t.Fatalf("serialize %s v%d: %v", spec.Path, version, err)
 		}
