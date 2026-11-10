@@ -39,7 +39,7 @@ Demarkus is one engine with two products on top and a bridge between them. The e
 
 ## Operations
 
-- **catalog**: the per-world index that `LOOKUP` searches: titles, tags, and importance. Not full-text search. A document that was never tagged or titled is not in the catalog.
+- **catalog**: the per-world index that `LOOKUP` searches: titles, tags, and importance. Not full-text search. A document that was never tagged or titled is not in the catalog. Generated graph documents (`/graph.md`, `/graph/manifest.md`, `/graph/shards/`, `/graph/worlds/`) are never lookup results.
 - **graph**: the persistent link graph across worlds, built by the agent and queried through backlinks, related documents, and exports.
 - **tenant**: broker-internal record for one hosted memory identity. Operator documentation only; never user-facing.
 

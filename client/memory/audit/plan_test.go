@@ -67,6 +67,22 @@ func TestPlanDropsLinksToArchivedDocuments(t *testing.T) {
 	}
 }
 
+// A hub drops a bullet naming generated graph data, which an earlier audit
+// asked for; prose that mentions it stays.
+func TestPlanDropsHubBulletsToGeneratedGraphData(t *testing.T) {
+	r, writes := planOf(t, map[string]fakeDoc{
+		"/index.md": hubDoc("# Hub\n\nThe store.\n\n- [Document Graph](/graph.md): the export\n- [Notes](/notes.md): live\n"),
+		"/notes.md": tagged("# Notes\n\nSummary. See [the graph](/graph.md).\n"),
+		"/graph.md": {Body: "# Document Graph\n"},
+	})
+	if got := writes["/index.md"].Body; got != "# Hub\n\nThe store.\n\n- [Notes](/notes.md): live\n" {
+		t.Errorf("hub = %q", got)
+	}
+	if len(fixable(r, CheckStaleIndex)) != 1 || len(r.Findings) != 1 {
+		t.Errorf("findings = %+v, want the hub's one fixable stale index entry", r.Findings)
+	}
+}
+
 // The first mention outside code, links and headings becomes a link; a
 // number mentioned nowhere else is left reported.
 func TestPlanLinksUnlinkedADRReferences(t *testing.T) {

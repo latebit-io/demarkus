@@ -454,7 +454,8 @@ func (store *Store) readStepSections(ctx context.Context, current *sectionVersio
 				}
 			}
 			latest[state.Path] = state.BodyHash
-			if previous != state.BodyHash {
+			// A body that keeps no index is not read.
+			if previous != state.BodyHash && state.Entry.Indexed() {
 				needs = append(needs, state)
 			}
 		}

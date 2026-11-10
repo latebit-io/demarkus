@@ -560,13 +560,13 @@ Returns an empty hint if the store is empty.
 
 Export the broker's graph store and publish it to a world in one
 step. `mark_graph_export` + `mark_publish` combined. This manual tool writes the
-single-document export to `url` (conventionally `/graph.md`); in a knowledge
+single-document export to `url`, which must be a world's `/graph.md`; in a knowledge
 system the hub's deriver checkpoints are seeded automatically. This tool does not seed
 the store itself; run `mark_graph`, `mark_backlinks`, or `mark_explore` first.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `url` | string | yes | Target where the graph document is published. |
+| `url` | string | yes | The graph document, `mark://<world>/graph.md`. |
 | `expected_version` | number | yes | From a prior fetch. `0` to create new. |
 
 ## Error envelope

@@ -260,6 +260,59 @@ func TestDeriverResumesFromItsCheckpoint(t *testing.T) {
 	}
 }
 
+// A shard written before generated graph data left the graph is replaced on
+// resume from the rows the load stripped, without reading the world again.
+func TestDeriverReplacesAShardHoldingGeneratedGraphData(t *testing.T) {
+	h, stop := seeded(t)
+	stop()
+	ctx := context.Background()
+	m, rows, err := h.checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := graphstore.SourcePrefix("/index.md", m.PrefixLength)
+	var stale []graphstore.WorldSource
+	for p, row := range rows {
+		if graphstore.SourcePrefix(p, m.PrefixLength) != prefix {
+			continue
+		}
+		if p == "/index.md" {
+			row.Edges = append(slices.Clone(row.Edges), graphstore.WorldEdge{To: "mark://alpha/graph.md", Label: "graph", Count: 1})
+		}
+		stale = append(stale, row)
+	}
+	shard, err := graphstore.BuildWorldShard("alpha", prefix, stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.hub.publish(ctx, shard.Path, shard.Body, -1); err != nil {
+		t.Fatal(err)
+	}
+	h.rewriteManifest("alpha", func(m *graphstore.WorldManifest) {
+		for i := range m.Shards {
+			if m.Shards[i].Prefix == prefix {
+				m.Shards[i] = shard.Ref(m.Shards[i].Version + 1)
+			}
+		}
+	})
+	reads := h.alpha.reads("/index.md")
+	h.start()
+	poll(t, "the stale shard replaced", func() error {
+		stored, err := h.hub.fetch(ctx, shard.Path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(stored.Body, "graph.md") {
+			return errors.New("the stored shard still names the graph export")
+		}
+		return nil
+	})
+	h.await(versions(seededRows))
+	if h.alpha.reads("/index.md") != reads {
+		t.Error("the world was read again")
+	}
+}
+
 // A checkpoint whose cursor is behind its rows, as a rebuild or an older
 // leader's leaves it, replays changes the rows already hold without a read.
 func TestDeriverReplayIsGuardedByVersion(t *testing.T) {

@@ -422,8 +422,9 @@ func TestIdleSectionIndexReleasesMemory(t *testing.T) {
 	}
 }
 
-// An active index under the agent's publish-and-prune loop tracks the live
-// documents: versions past a request's lifetime are dropped as new ones come.
+// An active index under a publish-and-prune loop of an agent-sized document
+// tracks the live documents: versions past a request's lifetime are dropped
+// as new ones come.
 func TestActiveSectionIndexTracksLiveData(t *testing.T) {
 	memory, err := blob.NewMemory(4 << 20)
 	mustSucceed(t, err)
@@ -432,7 +433,7 @@ func TestActiveSectionIndexTracksLiveData(t *testing.T) {
 	const requestTimeout = 200 * time.Millisecond
 	store := openSectionStore(t, objects, func(options *Options) { options.RequestTimeout = requestTimeout })
 	cycle := func(n int) {
-		publishPruned(t, store, "/graph.md", memtest.AgentGraphBody(n))
+		publishPruned(t, store, "/observations.md", memtest.AgentGraphBody(n))
 		publishPruned(t, store, "/index.md", fmt.Appendf(nil, "# Index\n\nCycle %d observations.\n", n))
 		settledRows(t, store, "observations")
 	}
@@ -445,6 +446,10 @@ func TestActiveSectionIndexTracksLiveData(t *testing.T) {
 		cycle(n)
 	}
 	settle()
+	// The premise: the agent-sized document is in the index measured.
+	if rows := settledRows(t, store, "observations"); !slices.ContainsFunc(rows, func(row string) bool { return strings.HasPrefix(row, "/observations.md") }) {
+		t.Fatalf("body rows = %v, want the agent-sized document among them", rows)
+	}
 	bytesBefore, objectsBefore := objects.bytes.Load(), objects.objects.Load()
 	growth := memtest.Retained(func() {
 		for n := warmup; n < warmup+cycles; n++ {
@@ -485,6 +490,35 @@ func TestCheckpointWithoutSegmentsBuildsFromBodies(t *testing.T) {
 	assertRows(t, openSectionStore(t, second, nil), "kqueue", "/docs/b.md#b")
 	if n := bodyReads(second); n != 0 {
 		t.Errorf("replica after the repair read %d bodies, want the segments only", n)
+	}
+}
+
+// Generated graph data keeps no section index, so no segment carries its
+// body and a build without segments does not read it.
+func TestSegmentsLeaveGeneratedGraphDataOut(t *testing.T) {
+	memory := initializedMemory(t)
+	writer := openSectionStore(t, memory, nil)
+	write(t, writer, "/docs/a.md", "# A\n\n## Hairpin\n\nnat\n", nil)
+	write(t, writer, protocol.GraphExportPath, "# Document Graph\n\nhairpin rows\n", nil)
+	mustSucceed(t, writer.checkpoint(context.Background()))
+	keys := listKeys(t, memory, segmentPrefix)
+	if len(keys) == 0 {
+		t.Fatal("no segment written")
+	}
+	for _, key := range keys {
+		var segment segmentObject
+		decodeObject(t, getObject(t, memory, key).Data, &segment)
+		for _, body := range segment.Bodies {
+			if body.Path == protocol.GraphExportPath {
+				t.Errorf("segment %s carries the graph export", key)
+			}
+		}
+		deleteObject(t, memory, key)
+	}
+	cold := newObservedBlobStore(memory)
+	assertRows(t, openSectionStore(t, cold, nil), "hairpin", "/docs/a.md#hairpin")
+	if n := bodyReads(cold); n != 1 {
+		t.Errorf("build without segments read %d bodies, want the authored document's only", n)
 	}
 }
 

@@ -455,3 +455,55 @@ func TestCrawlIPv6Identity(t *testing.T) {
 		}
 	}
 }
+
+// The path classes are protocol's; this pins the URL shapes around them.
+func TestIsGeneratedURL(t *testing.T) {
+	for _, raw := range []string{"mark://host/graph.md", "mark://host/%67raph.md", "/%67raph.md"} {
+		if !IsGeneratedURL(raw) {
+			t.Errorf("%q should be generated graph data", raw)
+		}
+	}
+	for _, raw := range []string{"mark://host", "mark://host/", "mark://host/docs/graph.md", "mark://host/100%25.md", "mark://host/%zz.md", "https://example.com/graph.md", "graph.md", ""} {
+		if IsGeneratedURL(raw) {
+			t.Errorf("%q should not be generated graph data", raw)
+		}
+	}
+}
+
+// Generated graph data is neither read for links nor an edge's target, so a
+// crawl never fetches it and never reaches documents only it names.
+func TestCrawlLeavesGeneratedGraphDataOut(t *testing.T) {
+	const export = "# Document Graph\n\n[home](/index.md) [hidden](/hidden.md)\n"
+	f := newMockFetcher()
+	f.addWithMeta("host:6309", "/index.md",
+		"# Home\n\n[graph](/graph.md) [shard](/graph/shards/a/nodes-000.md) [about](about.md) [web](https://example.com/graph.md)\n",
+		map[string]string{"rel-related": "/graph/manifest.md"})
+	f.add("host:6309", "/about.md", "# About\n")
+	f.add("host:6309", "/graph.md", export)
+	f.add("host:6309", "/hidden.md", "# Hidden\n")
+
+	g, err := Crawl(context.Background(), "mark://host/index.md", f, CrawlOptions{MaxDepth: 3})
+	if err != nil {
+		t.Fatalf("Crawl() error: %v", err)
+	}
+	if slices.ContainsFunc(f.calls, func(call string) bool { return strings.Contains(call, "/graph") || strings.Contains(call, "/hidden") }) {
+		t.Errorf("fetches = %v, want none of generated graph data or what only it names", f.calls)
+	}
+	if home := g.GetNode("mark://host/index.md"); home == nil || home.LinkCount != 2 {
+		t.Errorf("hub = %+v, want 2 counted links", home)
+	}
+	if g.Outcome.RejectedRels != 1 {
+		t.Errorf("RejectedRels = %d, want the relation to the manifest", g.Outcome.RejectedRels)
+	}
+	if extracted := ExtractDocumentEdges("mark://host/graph.md", export, nil); len(extracted.Edges) != 0 || extracted.BodyLinkCount != 0 {
+		t.Errorf("export as a source = %+v, want no edges", extracted)
+	}
+	// A single store names documents by rooted path (lookup expansion).
+	if rel := RelEdges("/doc.md", map[string]string{"rel-related": "/graph/manifest.md, /other.md"}); len(rel.Refs) != 1 || len(rel.Rejected) != 1 {
+		t.Errorf("bare-path relations = %+v, want one kept and the manifest rejected", rel)
+	}
+	calls := len(f.calls)
+	if g, err := Crawl(context.Background(), "mark://host/graph.md", f, CrawlOptions{}); err == nil || g != nil || len(f.calls) != calls {
+		t.Errorf("crawl from the export = %v, %v after %d fetches, want a refusal before any fetch", g, err, len(f.calls)-calls)
+	}
+}

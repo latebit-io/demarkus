@@ -63,7 +63,7 @@ func (h *testHub) shardReads() int {
 	defer h.mu.Unlock()
 	n := 0
 	for p, count := range h.reads {
-		if p != WorldManifestPath("alpha") && IsGeneratedGraphPath(p) {
+		if p != WorldManifestPath("alpha") && protocol.IsGeneratedGraphPath(p) {
 			n += count
 		}
 	}

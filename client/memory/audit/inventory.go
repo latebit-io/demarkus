@@ -14,15 +14,16 @@ import (
 )
 
 // inventory lists the live scope recursively, following every cursor. A
-// truncating bound fails the audit: every check below depends on knowing
-// which documents exist. Archived documents surface only as link targets.
+// truncating bound fails the audit: the checks need every document. Archived
+// documents surface only as link targets; generated graph data not at all.
 func (a *audit) inventory(ctx context.Context) error {
 	var dirs []string
 	docsIn := map[string][]string{}
 	walker := listwalk.Walker{
-		Client:    storeLister{a.store},
-		MaxLists:  MaxListCalls,
-		OnProblem: a.listProblem,
+		Client:        storeLister{a.store},
+		MaxLists:      MaxListCalls,
+		SkipGraphData: true,
+		OnProblem:     a.listProblem,
 		OnDir: func(dir string) {
 			dirs = append(dirs, dir)
 			a.dirs[dirKey(dir)] = true

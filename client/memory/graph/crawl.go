@@ -97,16 +97,21 @@ type ExtractedEdges struct {
 	RejectedRels  []RejectedRel // rel- values that produced no edge
 }
 
-// ExtractDocumentEdges resolves body links and typed relations against docURL.
+// ExtractDocumentEdges resolves body links and typed relations against
+// docURL. Generated graph data yields no edges and is no edge's target.
 func ExtractDocumentEdges(docURL, body string, metadata map[string]string) ExtractedEdges {
 	docURL = links.CanonicalURL(docURL)
-	anchored := outline.AnchoredLinks(body)
-	extracted := ExtractedEdges{
-		BodyLinkCount: len(anchored),
-		Edges:         make([]Edge, 0, len(anchored)),
+	if IsGeneratedURL(docURL) {
+		return ExtractedEdges{}
 	}
+	anchored := outline.AnchoredLinks(body)
+	extracted := ExtractedEdges{Edges: make([]Edge, 0, len(anchored))}
 	for _, link := range anchored {
 		to := links.CanonicalURL(links.Resolve(docURL, link.Dest))
+		if IsGeneratedURL(to) {
+			continue
+		}
+		extracted.BodyLinkCount++
 		extracted.Edges = append(extracted.Edges, Edge{From: docURL, To: to, Label: link.Label, Anchor: link.Anchor, Count: 1})
 		extracted.Occurrences = append(extracted.Occurrences, Occurrence{To: to, Fragment: link.Fragment, Anchor: link.Anchor, Label: link.Label, Ordinal: len(extracted.Occurrences)})
 	}
@@ -170,8 +175,11 @@ func RelEdges(docURL string, metadata map[string]string) RelResult {
 					target = pin.Source
 				}
 				resolved, fragment = links.CanonicalURL(links.Resolve(docURL, target)), frag
-				if resolved == docURL {
+				switch {
+				case resolved == docURL:
 					reason = "self reference"
+				case IsGeneratedURL(resolved):
+					reason = "generated graph data"
 				}
 			}
 			if reason != "" {
@@ -196,6 +204,9 @@ func Crawl(ctx context.Context, startURL string, fetcher Fetcher, opts CrawlOpti
 	}
 	if strings.HasPrefix(startURL, "mark://") && fetcher == nil {
 		return nil, fmt.Errorf("crawl %s: fetcher is required", startURL)
+	}
+	if IsGeneratedURL(startURL) {
+		return nil, fmt.Errorf("crawl %s: generated graph data is not part of the graph; start from a document", startURL)
 	}
 	o := &CrawlOutcome{StartURL: startURL, MaxDepth: opts.MaxDepth}
 	ctx, budget := fetch.WithResponseBudget(ctx, opts.MaxFetchBytes)

@@ -377,3 +377,30 @@ func TestWalkReportsEveryDirectoryItLists(t *testing.T) {
 		t.Errorf("dirs = %v, want every listed directory in walk order", dirs)
 	}
 }
+
+// SkipGraphData leaves generated graph data out without listing the
+// directories that hold only it; an authored document beside it is visited.
+func TestWalkSkipsGraphData(t *testing.T) {
+	l := &stubLister{listings: map[string][]string{
+		"/":                   {"a.md", "graph/", "graph.md"},
+		"/graph":              {"manifest.md", "notes.md", "shards/", "worlds/"},
+		"/graph/shards":       {"a/"},
+		"/graph/shards/a":     {"nodes-000.md"},
+		"/graph/worlds":       {"alpha/"},
+		"/graph/worlds/alpha": {"manifest.md"},
+	}}
+	walk := func(skip bool) (visited []string, lists int) {
+		l.requests = nil
+		w := Walker{Client: l, Host: "h", SkipGraphData: skip}
+		if err := w.Walk(t.Context(), "/", func(p string) error { visited = append(visited, p); return nil }); err != nil {
+			t.Fatalf("Walk: %v", err)
+		}
+		return visited, len(l.requests)
+	}
+	if visited, lists := walk(true); fmt.Sprint(visited) != "[/a.md /graph/notes.md]" || lists != 2 {
+		t.Errorf("skipping: visited %v in %d lists, want the authored documents in 2", visited, lists)
+	}
+	if visited, lists := walk(false); len(visited) != 6 || lists != 6 {
+		t.Errorf("not skipping: visited %v in %d lists, want all 6 in 6", visited, lists)
+	}
+}

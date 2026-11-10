@@ -77,7 +77,7 @@ so a deep crawl usually stops on the node cap rather than the depth limit).
 - Edges carry provenance: link label, source section anchor, occurrence count.
 - Typed relations come from `rel-<predicate>` publisher metadata, e.g. `rel-supersedes`.
 - Crawls persist to a graph store that answers `mark_backlinks`; a cold gateway seeds it from the hub's checkpoints, with `/graph.md` as fallback, and local crawls take precedence.
-- `mark_graph_publish` republishes the store as a crawlable `/graph.md` (the legacy single-document form; generated doc, default retention 20). In a knowledge system the server's deriver checkpoints version-pinned per-world shards into the hub.
+- `mark_graph_publish` republishes the store as `/graph.md` (the legacy single-document form; generated doc, default retention 20). In a knowledge system the server's deriver checkpoints version-pinned per-world shards into the hub.
 
 ## How is the graph built world to world?
 

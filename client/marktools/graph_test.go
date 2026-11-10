@@ -118,6 +118,7 @@ func TestGraphPublishNamesTheTargetByIdentity(t *testing.T) {
 		"negative version":   {marktools.GraphPublishArgs{URL: "/graph.md", ExpectedVersion: new(-1)}, "expected_version must be >= 0"},
 		"negative retention": {marktools.GraphPublishArgs{URL: "/locked.md", ExpectedVersion: new(0), Retention: -1}, "retention must be >= 0 (0 keeps every version)"},
 		"then authorization": {marktools.GraphPublishArgs{URL: "/locked.md", ExpectedVersion: new(0)}, "publish requires a token"},
+		"then the path":      {marktools.GraphPublishArgs{URL: "/maps/site.md", ExpectedVersion: new(0)}, "the graph export publishes to /graph.md, the path stores seed from"},
 	} {
 		if got := tools.GraphPublish(t.Context(), tt.args); !got.IsError || got.Text != tt.want {
 			t.Errorf("%s: got %+v, want %q", name, got, tt.want)
@@ -129,7 +130,7 @@ func TestGraphPublishNamesTheTargetByIdentity(t *testing.T) {
 // at the head, never resent.
 func TestGraphPublishReconcilesALostResponse(t *testing.T) {
 	store := linkedStore()
-	// /graph.md is the fake's seed path and never reaches FetchFn.
+	// The look reads the version path, which the fake answers like any document.
 	var landed fetch.WriteRequest // the export is stamped, so the head echoes what was sent
 	backend := &fetchtest.Client{
 		PublishFn: func(_ context.Context, r fetch.WriteRequest) (fetch.Result, error) {
@@ -141,8 +142,8 @@ func TestGraphPublishReconcilesALostResponse(t *testing.T) {
 		},
 	}
 	var seeded []string
-	got := newTools(t, backend, graphHooks(store, &seeded)).GraphPublish(t.Context(), marktools.GraphPublishArgs{URL: "/maps/site.md", ExpectedVersion: new(3), Retention: 20})
-	if got.IsError || got.Text != "Published graph (2 nodes, 1 edges) to mark://host/maps/site.md\nstatus: ok\nversion: 4\n" {
+	got := newTools(t, backend, graphHooks(store, &seeded)).GraphPublish(t.Context(), marktools.GraphPublishArgs{URL: "/graph.md", ExpectedVersion: new(3), Retention: 20})
+	if got.IsError || got.Text != "Published graph (2 nodes, 1 edges) to mark://host/graph.md\nstatus: ok\nversion: 4\n" {
 		t.Errorf("GraphPublish = %+v", got)
 	}
 	if len(backend.PublishCalls) != 1 {

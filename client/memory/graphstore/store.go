@@ -172,11 +172,17 @@ func Load(path string) (*Store, error) {
 	s.edgeIdx = make(map[edgeKey]int, len(doc.Edges))
 
 	// Rows load as stored: every write path canonicalizes URLs before Save.
+	// Generated graph data an older version stored is left behind.
 	for i := range doc.Nodes {
 		n := doc.Nodes[i]
-		s.nodes[n.URL] = &n
+		if !graph.IsGeneratedURL(n.URL) {
+			s.nodes[n.URL] = &n
+		}
 	}
 	for _, e := range doc.Edges {
+		if graph.IsGeneratedURL(e.From) || graph.IsGeneratedURL(e.To) {
+			continue
+		}
 		if _, exists := s.edgeIdx[e.key()]; !exists {
 			s.edgeIdx[e.key()] = len(s.edges)
 			s.edges = append(s.edges, e)

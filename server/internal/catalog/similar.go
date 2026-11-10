@@ -14,10 +14,7 @@ func similar(index Index, opts Options) []Result {
 		return nil
 	}
 	scope := NormalizeScope(opts.Scope)
-	admit := func(e *Entry) bool {
-		return underScope(e.Path, scope) && MatchesAll(e, opts.Filter) && (opts.Skip == nil || !opts.Skip(e.Path))
-	}
-	hits := neardup.Scan(*opts.Draft, targetsOf(index, scope, admit))
+	hits := neardup.Scan(*opts.Draft, targetsOf(index, scope, &opts))
 	if len(hits) == 0 {
 		return nil
 	}
@@ -38,10 +35,10 @@ func similar(index Index, opts Options) []Result {
 }
 
 // targetsOf yields each admitted document that has a section index.
-func targetsOf(index Index, scope string, admit func(*Entry) bool) iter.Seq[neardup.Target] {
+func targetsOf(index Index, scope string, opts *Options) iter.Seq[neardup.Target] {
 	return func(yield func(neardup.Target) bool) {
 		for entry, doc := range index.Entries(scope) {
-			if doc == nil || !admit(entry) {
+			if doc == nil || !opts.admits(entry, scope) {
 				continue
 			}
 			if !yield(neardup.Target{Path: entry.Path, Sig: doc.sig, Sections: doc}) {

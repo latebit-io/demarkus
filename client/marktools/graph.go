@@ -10,6 +10,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/client/merge"
+	"github.com/latebit-io/demarkus/protocol"
 )
 
 // GraphScope is the graph a call works on: one store for a stdio server, the
@@ -137,7 +138,8 @@ type GraphPublishArgs struct {
 	Retention       int
 }
 
-// GraphPublish answers mark_graph_publish: the export, published as a document.
+// GraphPublish answers mark_graph_publish: the export, published at the one
+// path stores seed from. Anywhere else it would be an authored document.
 func (t *Tools) GraphPublish(ctx context.Context, args GraphPublishArgs) Result {
 	// An empty url would otherwise resolve to the surface's default server.
 	if args.URL == "" {
@@ -157,6 +159,9 @@ func (t *Tools) GraphPublish(ctx context.Context, args GraphPublishArgs) Result 
 	write, bad := t.writer(ctx, target, "publish")
 	if bad != nil {
 		return *bad
+	}
+	if target.Path != protocol.GraphExportPath {
+		return failure("the graph export publishes to " + protocol.GraphExportPath + ", the path stores seed from")
 	}
 	scope, bad := t.graphScope(ctx)
 	if bad != nil {

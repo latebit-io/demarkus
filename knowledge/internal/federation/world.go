@@ -107,6 +107,10 @@ func (w *world) load(ctx context.Context) (protocol.Cursor, error) {
 	for i := range load.Sources {
 		w.place(graphstore.SourcePrefix(load.Sources[i].Path, w.prefixLength), load.Sources[i])
 	}
+	// A shard the load stripped of generated graph data is written again.
+	for _, prefix := range load.Stripped {
+		w.touch(prefix)
+	}
 	return m.Cursor, nil
 }
 
@@ -117,13 +121,8 @@ func (w *world) rebuild(ctx context.Context) error {
 	clear(w.shards)
 	clear(w.retry)
 	w.sources, w.partial = 0, false
-	walker := listwalk.Walker{Client: w.Source, Host: w.name, OnProblem: w.walkProblem, BeforeList: w.reads.Wait}
-	err := walker.Walk(ctx, "/", func(docPath string) error {
-		if graphstore.IsGeneratedGraphPath(docPath) {
-			return nil
-		}
-		return w.read(ctx, docPath)
-	})
+	walker := listwalk.Walker{Client: w.Source, Host: w.name, OnProblem: w.walkProblem, BeforeList: w.reads.Wait, SkipGraphData: true}
+	err := walker.Walk(ctx, "/", func(docPath string) error { return w.read(ctx, docPath) })
 	switch {
 	case errors.Is(err, listwalk.ErrListBudget):
 		w.markPartial("list budget exhausted", "")
@@ -210,7 +209,7 @@ func (w *world) owed() bool {
 // apply folds one change into the rows. The version guards replay: a change
 // at or below a row's version is already in it.
 func (w *world) apply(ctx context.Context, ev *protocol.WatchEvent) error {
-	if graphstore.IsGeneratedGraphPath(ev.Path) {
+	if protocol.IsGeneratedGraphPath(ev.Path) {
 		return nil
 	}
 	prefix := graphstore.SourcePrefix(ev.Path, w.prefixLength)

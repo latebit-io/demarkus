@@ -257,7 +257,7 @@ func (a *audit) classifyLinks(d *document) {
 			continue
 		}
 		seen[target] = true
-		if dir := strings.TrimSuffix(target, "/") + "/"; a.dirs[dir] {
+		if dir := dirKey(target); a.dirs[dir] {
 			d.dirLinks = append(d.dirLinks, dir)
 		} else {
 			d.links = append(d.links, target)

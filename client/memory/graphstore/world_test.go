@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -306,15 +307,47 @@ func TestSourcePrefixIsTheSHA256OfThePath(t *testing.T) {
 	}
 }
 
+// The path builders stay inside what the protocol predicate recognizes.
 func TestGeneratedGraphPaths(t *testing.T) {
-	for _, docPath := range []string{"/graph.md", "/graph.md/v3", "/graph/manifest.md", "/graph/manifest.md/v2", "/graph/shards/a/nodes-000.md", WorldManifestPath("latebit"), WorldShardPath("latebit", "0f")} {
-		if !IsGeneratedGraphPath(docPath) {
+	for _, docPath := range []string{WorldManifestPath("latebit"), WorldShardPath("latebit", "0f"), snapshotShardPath(SnapshotManifestPath, generation.SlotA, "nodes", 0)} {
+		if !protocol.IsGeneratedGraphPath(docPath) {
 			t.Errorf("generated path %q was not recognized", docPath)
 		}
 	}
-	for _, docPath := range []string{"/graph/authored.md", "/graph/worlds.md", "/graphs/x.md"} {
-		if IsGeneratedGraphPath(docPath) {
-			t.Errorf("authored path %q was treated as generated", docPath)
-		}
+}
+
+// A checkpoint written before generated graph data left the graph may hold
+// it as a source or an edge's target: the stored shards still verify, the
+// loaded rows leave it out, and the load names the shards to replace.
+func TestLoadWorldStripsGeneratedGraphData(t *testing.T) {
+	hub := WorldSource{Path: "/index.md", Version: 3, Etag: "e", Title: "Hub", Edges: []WorldEdge{
+		{To: "mark://latebit/graph.md", Label: "Document Graph", Count: 1},
+		{To: "mark://latebit/notes.md", Label: "Notes", Count: 1},
+	}}
+	export := WorldSource{Path: "/graph.md", Version: 9, Etag: "g", Title: "Document Graph"}
+	note := WorldSource{Path: "/notes.md", Version: 1, Etag: "n", Title: "Notes"}
+	manifest, shards := buildWorldCheckpoint(t, "latebit", []WorldSource{hub, export, note})
+	stored := map[string]string{}
+	for _, shard := range shards {
+		stored[protocol.VersionPath(shard.Path, 1)] = shard.Body
+	}
+	load, err := LoadWorld(context.Background(), WorldLoadRequest{World: "latebit", Manifest: published(manifest, 1), Fetch: func(_ context.Context, shard string) (protocol.Response, error) {
+		return published(stored[shard], 1), nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]WorldSource{}
+	for _, source := range load.Sources {
+		rows[source.Path] = source
+	}
+	if len(rows) != 2 || len(rows["/index.md"].Edges) != 1 || rows["/index.md"].Edges[0].To != "mark://latebit/notes.md" || rows["/notes.md"].Version != 1 {
+		t.Errorf("sources = %+v, want the hub with its edge to the note, and the note", load.Sources)
+	}
+	want := []string{SourcePrefix("/index.md", 1), SourcePrefix("/graph.md", 1)}
+	slices.Sort(want)
+	slices.Sort(load.Stripped)
+	if !slices.Equal(load.Stripped, slices.Compact(want)) {
+		t.Errorf("stripped = %v, want %v: the shards of the hub and the export", load.Stripped, want)
 	}
 }

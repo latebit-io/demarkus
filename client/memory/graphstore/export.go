@@ -24,9 +24,8 @@ var nodeRowRe = regexp.MustCompile(`^\|\s*\[[^\]]+\]\(([^)]+)\)\s*\|\s*((?:[^\\|
 // Rel and anchor may be empty; the label group handles escaped pipes like nodeRowRe's title.
 var edgeRowRe = regexp.MustCompile(`^\|\s*(\S+)\s*\|\s*(\S+)\s*\|\s*(\S*)\s*\|\s*((?:[^\\|]|\\.)*?)\s*\|\s*(\S*)\s*\|\s*(\d+)\s*\|$`)
 
-// Export renders the graph store as a publishable markdown document.
-// The output contains mark:// links so crawling the document naturally
-// discovers the topology. Thread-safe.
+// Export renders the graph store as a publishable markdown document, which
+// stores seed from; a crawl never reads it. Thread-safe.
 func (s *Store) Export() string {
 	nodes, edges := s.Snapshot()
 	return BuildExport(time.Now(), nodes, edges)

@@ -526,7 +526,7 @@ content-hash: sha256-<64-char hex SHA-256>
 
 Looks up documents by subject and returns a compact, importance-ranked list of matches. LOOKUP is a discovery aid: a card catalog, not full-text search. In its default catalog mode it matches a subject query against each document's declared `tags` and title, never against the document body. A server MAY additionally offer body match (see **Body match** below), selected by the optional `match` request key and answered from a section index the server maintains beside its catalog. Servers SHOULD answer LOOKUP from in-memory state and MUST NOT read document bodies at query time in either mode.
 
-LOOKUP operates over current versions only; archived documents MUST be excluded. The path in the request line is a scope: `LOOKUP /` covers the whole server, `LOOKUP /docs/` restricts to that subtree.
+LOOKUP operates over current versions only; archived documents MUST be excluded. Generated graph documents (§12.1) MUST be excluded in every mode, whatever their metadata or the scope: they are data, read by FETCH and LIST. The path in the request line is a scope: `LOOKUP /` covers the whole server, `LOOKUP /docs/` restricts to that subtree.
 
 **Request**:
 
@@ -1133,7 +1133,7 @@ The `/graph.md` export MAY append a `## Source observations` fenced JSON array o
 
 Publishers stage and verify the inactive slot before compare-and-swapping the manifest. Readers fetch every shard through its version path and verify version, byte count, content hash, kind, part, and aggregate counts before applying any rows. A failed fetch or integrity check leaves the previous local graph state and seed etag unchanged.
 
-Snapshot-aware readers prefer `/graph/manifest.md` and fall back to `/graph.md` only when the manifest is `not-found`. Federation agents publish the snapshot first and `/graph.md` second. Generated graph documents under `/graph/` are crawled but MUST NOT be interpreted as authored discovery links.
+Snapshot-aware readers prefer `/graph/manifest.md` and fall back to `/graph.md` only when the manifest is `not-found`. Federation agents publish the snapshot first and `/graph.md` second. Generated graph documents are `/graph.md`, `/graph/manifest.md` and every document under `/graph/shards/` or `/graph/worlds/`. They are data about the graph, not part of it: a graph builder MUST NOT read them for links and MUST NOT record them as nodes or as link targets, and LOOKUP omits them (§6.7).
 
 Manifest retention does not permit shard retention while a retained manifest can reference an older shard version: shards remain unpruned until a reference-aware collector can prove no retained manifest version names them. A fixed shard window is unsafe because failed or concurrent staging can advance shard versions without advancing manifest history.
 

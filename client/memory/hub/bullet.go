@@ -6,14 +6,16 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/memory/gate"
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
 )
 
 // Linkable reports a document a hub should name. Hubs, logs, the store's
-// own .well-known pages and dated journal entries (reached through their
-// directory) are not.
+// own .well-known pages, generated graph data and dated journal entries
+// (reached through their directory) are not.
 func Linkable(p string) bool {
-	return !gate.NavExempt(p) && !strings.HasPrefix(p, "/.well-known/") && !layout.IsJournalEntry(path.Base(p))
+	return !gate.NavExempt(p) && !strings.HasPrefix(p, "/.well-known/") && !protocol.IsGeneratedGraphPath(p) &&
+		!layout.IsJournalEntry(path.Base(p))
 }
 
 // Bullet is the hub's one line for the document: its title linked, then

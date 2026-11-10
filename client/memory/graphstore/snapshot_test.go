@@ -110,7 +110,7 @@ func TestGraphSnapshotRejectsAliasesAndMalformedGeneratedContent(t *testing.T) {
 }
 
 func TestGraphSnapshotRejectsUnrepresentableManifestValues(t *testing.T) {
-	if got := SnapshotShardRoot(SnapshotManifestPath); got != "/graph/shards" {
+	if got := SnapshotShardRoot(SnapshotManifestPath); got != protocol.GraphSnapshotShardRoot {
 		t.Fatalf("SnapshotShardRoot = %q", got)
 	}
 	if _, err := BuildSnapshotManifest("/graph/man|ifest.md", SnapshotManifest{
