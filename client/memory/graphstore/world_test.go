@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -316,20 +317,37 @@ func TestGeneratedGraphPaths(t *testing.T) {
 }
 
 // A checkpoint written before generated graph data left the graph may hold
-// an edge to it: the stored shard still verifies, the loaded row drops it.
-func TestLoadWorldDropsEdgesToGeneratedGraphData(t *testing.T) {
+// it as a source or an edge's target: the stored shards still verify, the
+// loaded rows leave it out, and the load names the shards to replace.
+func TestLoadWorldStripsGeneratedGraphData(t *testing.T) {
 	hub := WorldSource{Path: "/index.md", Version: 3, Etag: "e", Title: "Hub", Edges: []WorldEdge{
 		{To: "mark://latebit/graph.md", Label: "Document Graph", Count: 1},
 		{To: "mark://latebit/notes.md", Label: "Notes", Count: 1},
 	}}
-	manifest, shards := buildWorldCheckpoint(t, "latebit", []WorldSource{hub})
-	load, err := LoadWorld(context.Background(), WorldLoadRequest{World: "latebit", Manifest: published(manifest, 1), Fetch: func(context.Context, string) (protocol.Response, error) {
-		return published(shards[0].Body, 1), nil
+	export := WorldSource{Path: "/graph.md", Version: 9, Etag: "g", Title: "Document Graph"}
+	note := WorldSource{Path: "/notes.md", Version: 1, Etag: "n", Title: "Notes"}
+	manifest, shards := buildWorldCheckpoint(t, "latebit", []WorldSource{hub, export, note})
+	stored := map[string]string{}
+	for _, shard := range shards {
+		stored[protocol.VersionPath(shard.Path, 1)] = shard.Body
+	}
+	load, err := LoadWorld(context.Background(), WorldLoadRequest{World: "latebit", Manifest: published(manifest, 1), Fetch: func(_ context.Context, shard string) (protocol.Response, error) {
+		return published(stored[shard], 1), nil
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(load.Sources) != 1 || len(load.Sources[0].Edges) != 1 || load.Sources[0].Edges[0].To != "mark://latebit/notes.md" {
-		t.Errorf("sources = %+v, want the hub with its edge to the note only", load.Sources)
+	rows := map[string]WorldSource{}
+	for _, source := range load.Sources {
+		rows[source.Path] = source
+	}
+	if len(rows) != 2 || len(rows["/index.md"].Edges) != 1 || rows["/index.md"].Edges[0].To != "mark://latebit/notes.md" || rows["/notes.md"].Version != 1 {
+		t.Errorf("sources = %+v, want the hub with its edge to the note, and the note", load.Sources)
+	}
+	want := []string{SourcePrefix("/index.md", 1), SourcePrefix("/graph.md", 1)}
+	slices.Sort(want)
+	slices.Sort(load.Stripped)
+	if !slices.Equal(load.Stripped, slices.Compact(want)) {
+		t.Errorf("stripped = %v, want %v: the shards of the hub and the export", load.Stripped, want)
 	}
 }

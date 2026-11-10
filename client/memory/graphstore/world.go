@@ -290,6 +290,9 @@ type WorldLoad struct {
 	Manifest WorldManifest
 	Sources  []WorldSource
 	Kept     map[string]bool
+	// Stripped are the prefixes whose stored shard held generated graph
+	// data the sources leave out: the writer replaces those shards.
+	Stripped []string
 }
 
 // LoadWorld verifies the manifest and every shard it pins that the caller
@@ -311,7 +314,7 @@ func LoadWorld(ctx context.Context, req WorldLoadRequest) (WorldLoad, error) { /
 		return WorldLoad{}, err
 	}
 	load := WorldLoad{Manifest: m, Kept: keptShards(req.Previous, &m)}
-	fetched := make([][]WorldSource, len(m.Shards))
+	fetched, stripped := make([][]WorldSource, len(m.Shards)), make([]bool, len(m.Shards))
 	group, ctx := errgroup.WithContext(ctx)
 	group.SetLimit(worldLoadConcurrency)
 	for i := range m.Shards {
@@ -319,7 +322,7 @@ func LoadWorld(ctx context.Context, req WorldLoadRequest) (WorldLoad, error) { /
 			continue
 		}
 		group.Go(func() (err error) {
-			fetched[i], err = loadWorldShard(ctx, world, &m.Shards[i], req.Fetch)
+			fetched[i], stripped[i], err = loadWorldShard(ctx, world, &m.Shards[i], req.Fetch)
 			return err
 		})
 	}
@@ -327,6 +330,11 @@ func LoadWorld(ctx context.Context, req WorldLoadRequest) (WorldLoad, error) { /
 		return WorldLoad{}, err
 	}
 	load.Sources = slices.Concat(fetched...)
+	for i := range m.Shards {
+		if stripped[i] {
+			load.Stripped = append(load.Stripped, m.Shards[i].Prefix)
+		}
+	}
 	return load, nil
 }
 
@@ -348,23 +356,29 @@ func keptShards(prev, next *WorldManifest) map[string]bool {
 	return kept
 }
 
-func loadWorldShard(ctx context.Context, world string, ref *WorldShardRef, fetch func(context.Context, string) (protocol.Response, error)) ([]WorldSource, error) {
+// loadWorldShard reads one pinned shard. A shard written before generated
+// graph data left the graph may hold it as a source or an edge's target:
+// the rows come back without it, and stripped says the shard is stale.
+func loadWorldShard(ctx context.Context, world string, ref *WorldShardRef, fetch func(context.Context, string) (protocol.Response, error)) (sources []WorldSource, stripped bool, err error) {
 	resp, err := fetch(ctx, protocol.VersionPath(ref.Path, ref.Version))
 	if err != nil {
-		return nil, fmt.Errorf("%w: fetch world shard %s: %w", ErrWorldUnavailable, ref.Path, err)
+		return nil, false, fmt.Errorf("%w: fetch world shard %s: %w", ErrWorldUnavailable, ref.Path, err)
 	}
 	if unavailable(resp) {
-		return nil, fmt.Errorf("%w: world shard %s returned %s", ErrWorldUnavailable, ref.Path, resp.Status)
+		return nil, false, fmt.Errorf("%w: world shard %s returned %s", ErrWorldUnavailable, ref.Path, resp.Status)
 	}
-	sources, err := VerifyWorldShard(world, *ref, resp)
+	verified, err := VerifyWorldShard(world, *ref, resp)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	// A row written before generated graph data left the graph may name it.
+	sources = slices.DeleteFunc(verified, func(source WorldSource) bool { return protocol.IsGeneratedGraphPath(source.Path) })
+	stripped = len(sources) != len(verified)
 	for i := range sources {
-		sources[i].Edges = slices.DeleteFunc(sources[i].Edges, func(edge WorldEdge) bool { return graph.IsGeneratedURL(edge.To) })
+		edges := slices.DeleteFunc(sources[i].Edges, func(edge WorldEdge) bool { return graph.IsGeneratedURL(edge.To) })
+		stripped = stripped || len(edges) != len(sources[i].Edges)
+		sources[i].Edges = edges
 	}
-	return sources, nil
+	return sources, stripped, nil
 }
 
 // unavailable is a status that says nothing about the document: retry later.

@@ -107,6 +107,10 @@ func (w *world) load(ctx context.Context) (protocol.Cursor, error) {
 	for i := range load.Sources {
 		w.place(graphstore.SourcePrefix(load.Sources[i].Path, w.prefixLength), load.Sources[i])
 	}
+	// A shard the load stripped of generated graph data is written again.
+	for _, prefix := range load.Stripped {
+		w.touch(prefix)
+	}
 	return m.Cursor, nil
 }
 
