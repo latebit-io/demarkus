@@ -221,6 +221,9 @@ func (store *Store) step(ctx context.Context) (bool, error) {
 	plan, err := store.planDrop(ctx)
 	if err == nil {
 		err = errors.Join(store.applyDrop(ctx, plan), store.dropSlots(ctx, plan))
+	}
+	// A checkpoint a failed drop left behind may still retain pruned versions.
+	if err == nil {
 		store.collectBlobs(ctx, plan)
 	}
 	if err != nil {

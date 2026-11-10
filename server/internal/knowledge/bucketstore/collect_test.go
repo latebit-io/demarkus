@@ -530,3 +530,40 @@ func TestCollectionCountsMissingBlobsAgainstTheCap(t *testing.T) {
 		t.Errorf("%d manifests left after one capped step, want 1: missing blobs must count", n)
 	}
 }
+
+// failCheckpointDeletes refuses checkpoint deletes while on, as a drop that
+// fails mid-plan leaves a checkpoint behind.
+type failCheckpointDeletes struct {
+	blob.Store
+	on atomic.Bool
+}
+
+func (s *failCheckpointDeletes) Delete(ctx context.Context, key string, generation blob.Generation) error {
+	if s.on.Load() && strings.HasPrefix(key, checkpointPrefix) {
+		return blob.ErrUnavailable
+	}
+	return s.Store.Delete(ctx, key, generation)
+}
+
+// A checkpoint a failed drop left behind may retain pruned versions, so no
+// blob is collected that step; the next clean step collects them.
+func TestCollectionWaitsOutAFailedDrop(t *testing.T) {
+	ctx := context.Background()
+	clock := newClockedStore(t)
+	clock.writtenAgo(aged)
+	objects := &failCheckpointDeletes{Store: clock}
+	writer := manualSite(objects).open(t, 0)
+	blobs := writePruning(t, writer, "/doc.md", 3, 1)
+	mustSucceed(t, writer.checkpoint(ctx))
+	checkpointNext(t, writer)
+	objects.on.Store(true)
+	checkpointNext(t, writer)
+	if n := gone(t, objects, blobs[:2]); n != 0 {
+		t.Fatalf("%d pruned blobs went while a checkpoint drop failed", n)
+	}
+	objects.on.Store(false)
+	checkpointNext(t, writer)
+	if n := gone(t, objects, blobs[:2]); n != 2 {
+		t.Errorf("%d of 2 pruned blobs went on the next clean step", n)
+	}
+}
