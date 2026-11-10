@@ -38,7 +38,7 @@ In a [knowledge system](../knowledge/index.md) the server derives the cross-worl
 
 - **Library**: the floor shows every world; each world has a map and a link-graph canvas.
 - **TUI**: in `demarkus-tui`, `d` shows links out, `r` backlinks and typed relations, `t` the whole crawled graph.
-- **Export**: `mark_graph_export` writes the graph as markdown with `mark://` links; `mark_graph_publish` publishes it for other agents to crawl.
+- **Export**: `mark_graph_export` writes the graph as markdown with `mark://` links; `mark_graph_publish` publishes it at `/graph.md` for other agents to seed from.
 
 ## Why a graph
 

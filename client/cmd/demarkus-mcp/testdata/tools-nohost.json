@@ -296,7 +296,7 @@
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Export the graph store and publish it as crawlable markdown (mark_graph_export + mark_publish). Run mark_graph first. Requires -token.",
+    "description": "Export the graph store and publish it to /graph.md (mark_graph_export + mark_publish). Run mark_graph first. Requires -token.",
     "inputSchema": {
       "properties": {
         "expected_version": {
@@ -308,7 +308,7 @@
           "type": "number"
         },
         "url": {
-          "description": "graph document target, e.g. mark://host/graph.md",
+          "description": "the graph document, mark://host/graph.md",
           "type": "string"
         }
       },

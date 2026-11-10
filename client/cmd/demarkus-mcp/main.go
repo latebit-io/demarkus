@@ -291,9 +291,9 @@ func urlDesc(host string) string {
 // graphTargetDesc describes the mark_graph_publish target in the surface's URL form.
 func graphTargetDesc(host string) string {
 	if host != "" {
-		return "graph document target, e.g. /graph.md"
+		return "the graph document, /graph.md"
 	}
-	return "graph document target, e.g. mark://host/graph.md"
+	return "the graph document, mark://host/graph.md"
 }
 
 // scopeDesc describes a directory scope argument in the surface's URL form.

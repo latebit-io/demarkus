@@ -40,10 +40,12 @@ type Entry struct {
 	Modified   time.Time
 	Metadata   map[string]string // declared publisher metadata, for filter predicates
 
-	terms    termSet           // tag and title tokens for body match; set by Set
-	demote   float64           // body-match prior multiplier from the path; set by Set
-	standing protocol.Standing // status: tag tier, weighting importance; set by Set
-	pins     []string          // rel-based-on targets, for based-on filters; set by Set
+	// Derived by Prepare.
+	terms     termSet           // tag and title tokens for body match
+	demote    float64           // body-match prior multiplier from the path
+	standing  protocol.Standing // status: tag tier, weighting importance
+	generated bool              // graph data no mode answers with (SPEC 6.7)
+	pins      []string          // rel-based-on targets, for based-on filters
 }
 
 // Result is a ranked LOOKUP match. Anchor, Heading, and Snippet are set
@@ -123,16 +125,25 @@ func (c *Catalog) Set(e *Entry) {
 func (c *Catalog) Put(docPath string, meta map[string]string, body []byte, modified time.Time) {
 	e := FromDocument(docPath, meta, body, modified)
 	e.Prepare()
-	doc := IndexSections(body)
+	var doc *DocSections
+	if e.Indexed() {
+		doc = IndexSections(body)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[e.Path] = e
-	c.sections[e.Path] = doc
+	if doc != nil {
+		c.sections[e.Path] = doc
+	}
 }
 
-// Prepare canonicalizes the path and derives what ranking (tag and title
-// terms, path demotion, standing) and based-on filters (pin targets)
-// consult, so a scan parses nothing; every entry searched passes through it.
+// Indexed reports whether a prepared entry's document keeps a section index:
+// generated graph data answers no lookup (SPEC 6.7), so it keeps none.
+func (e *Entry) Indexed() bool { return !e.generated }
+
+// Prepare canonicalizes the path and derives what admission, ranking and
+// based-on filters consult, so a scan parses nothing; every entry searched
+// passes through it.
 func (e *Entry) Prepare() {
 	e.Path = storefmt.CanonicalPath(e.Path)
 	e.terms = newTermSet(mdtext.TokenSet(append(append([]string(nil), e.Tags...), e.Title)))
@@ -140,6 +151,7 @@ func (e *Entry) Prepare() {
 	if slices.Contains(strings.Split(strings.Trim(e.Path, "/"), "/"), "journal") {
 		e.demote = journalDemote
 	}
+	e.generated = protocol.IsGeneratedGraphPath(e.Path)
 	e.standing = protocol.StandingOf(e.Tags)
 	// Unreviewed text from an untrusted read, or flagged by the classifier,
 	// never ranks as accepted.
@@ -202,8 +214,8 @@ type Options struct {
 	Match Mode
 	// Draft is what similar mode judges the documents against.
 	Draft *neardup.Text
-	// Skip excludes documents before Max counts them, in catalog and
-	// similar mode: a draft's own path, rows the caller may not read.
+	// Skip excludes documents before Max counts them: a draft's own path,
+	// rows the caller may not read.
 	Skip func(path string) bool
 	// Stale lets a section-index mode answer from the newest index built,
 	// whatever snapshot it covers, waiting the store's freshness bound only
@@ -260,7 +272,7 @@ func Search(index Index, query string, opts Options) ([]Result, error) {
 
 	best := topResults{max: opts.Max}
 	for e := range index.Entries(scope) {
-		if !underScope(e.Path, scope) || !MatchesAll(e, opts.Filter) || (opts.Skip != nil && opts.Skip(e.Path)) {
+		if !opts.admits(e, scope) {
 			continue
 		}
 		score := 0
@@ -272,6 +284,13 @@ func Search(index Index, query string, opts Options) ([]Result, error) {
 		best.offer(e, score)
 	}
 	return best.sorted(), nil
+}
+
+// admits reports whether e is a candidate in any mode: authored, under scope,
+// passing the filter and Skip.
+func (opts *Options) admits(e *Entry, scope string) bool {
+	return !e.generated && underScope(e.Path, scope) && MatchesAll(e, opts.Filter) &&
+		(opts.Skip == nil || !opts.Skip(e.Path))
 }
 
 // topResults keeps the best max results seen, worst first, so a lookup over

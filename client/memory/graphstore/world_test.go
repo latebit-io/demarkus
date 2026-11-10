@@ -306,15 +306,30 @@ func TestSourcePrefixIsTheSHA256OfThePath(t *testing.T) {
 	}
 }
 
+// The path builders stay inside what the protocol predicate recognizes.
 func TestGeneratedGraphPaths(t *testing.T) {
-	for _, docPath := range []string{"/graph.md", "/graph.md/v3", "/graph/manifest.md", "/graph/manifest.md/v2", "/graph/shards/a/nodes-000.md", WorldManifestPath("latebit"), WorldShardPath("latebit", "0f")} {
-		if !IsGeneratedGraphPath(docPath) {
+	for _, docPath := range []string{WorldManifestPath("latebit"), WorldShardPath("latebit", "0f"), snapshotShardPath(SnapshotManifestPath, generation.SlotA, "nodes", 0)} {
+		if !protocol.IsGeneratedGraphPath(docPath) {
 			t.Errorf("generated path %q was not recognized", docPath)
 		}
 	}
-	for _, docPath := range []string{"/graph/authored.md", "/graph/worlds.md", "/graphs/x.md"} {
-		if IsGeneratedGraphPath(docPath) {
-			t.Errorf("authored path %q was treated as generated", docPath)
-		}
+}
+
+// A checkpoint written before generated graph data left the graph may hold
+// an edge to it: the stored shard still verifies, the loaded row drops it.
+func TestLoadWorldDropsEdgesToGeneratedGraphData(t *testing.T) {
+	hub := WorldSource{Path: "/index.md", Version: 3, Etag: "e", Title: "Hub", Edges: []WorldEdge{
+		{To: "mark://latebit/graph.md", Label: "Document Graph", Count: 1},
+		{To: "mark://latebit/notes.md", Label: "Notes", Count: 1},
+	}}
+	manifest, shards := buildWorldCheckpoint(t, "latebit", []WorldSource{hub})
+	load, err := LoadWorld(context.Background(), WorldLoadRequest{World: "latebit", Manifest: published(manifest, 1), Fetch: func(context.Context, string) (protocol.Response, error) {
+		return published(shards[0].Body, 1), nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(load.Sources) != 1 || len(load.Sources[0].Edges) != 1 || load.Sources[0].Edges[0].To != "mark://latebit/notes.md" {
+		t.Errorf("sources = %+v, want the hub with its edge to the note only", load.Sources)
 	}
 }

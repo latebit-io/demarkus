@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/neardup"
@@ -72,6 +73,11 @@ func subjectOf(req backend.WriteRequest) nearSubject {
 // lands with its reason noted; a cold index (ErrBodyMatchUnavailable) is a
 // note and checked false; any other failure is the caller's to decide on.
 func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, subject nearSubject) (nearVerdict, error) {
+	own := storefmt.CanonicalPath(subject.path)
+	// Generated graph data is not knowledge a document could already hold.
+	if protocol.IsGeneratedGraphPath(own) {
+		return nearVerdict{checked: true}, nil
+	}
 	if reason := strings.TrimSpace(subject.meta[neardup.OverrideKey]); reason != "" {
 		return nearVerdict{notes: []string{"near-duplicate check overridden (" + reason + ")"}, checked: true}, nil
 	}
@@ -81,7 +87,6 @@ func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, su
 	}
 	// A refusal reads the index covering its snapshot, waited for within
 	// the freshness bound; a warning may trail a commit and reads the newest.
-	own := storefmt.CanonicalPath(subject.path)
 	parent, err := splitSource(ctx, state, own, subject.meta)
 	if err != nil {
 		return nearVerdict{}, fmt.Errorf("near-duplicate check: %w", err)

@@ -69,6 +69,10 @@ func (a *audit) checkLinks(ctx context.Context) {
 			if _, ok := a.docs[target]; ok {
 				continue
 			}
+			if protocol.IsGeneratedGraphPath(target) {
+				a.graphLink(a.docs[p], target)
+				continue
+			}
 			status, known := confirmed[target]
 			if !known {
 				if len(confirmed) >= MaxLinkConfirms {
@@ -81,7 +85,7 @@ func (a *audit) checkLinks(ctx context.Context) {
 			switch {
 			case live(status):
 			case status == protocol.StatusArchived:
-				a.leads.archived = append(a.leads.archived, archivedLead{path: p, target: target, findings: a.brokenLink(p, target, status, "drop the link")})
+				a.leads.unlink = append(a.leads.unlink, unlinkLead{path: p, target: target, check: CheckBrokenLinks, what: "archived documents", findings: a.brokenLink(p, target, status, "drop the link")})
 			case status == protocol.StatusNotFound:
 				a.brokenLink(p, target, status, "fix the link or restore the target")
 			default:
@@ -93,6 +97,16 @@ func (a *audit) checkLinks(ctx context.Context) {
 		shown := unconfirmed[:min(len(unconfirmed), maxUnconfirmedShown)]
 		a.note("link confirmation budget of %d fetches spent; %d links unconfirmed, first %d: %s", MaxLinkConfirms, len(unconfirmed), len(shown), strings.Join(shown, ", "))
 	}
+}
+
+// graphLink: a link to generated graph data is never confirmed. On a hub it
+// is a stale entry: hubs name documents, and an earlier audit asked for it.
+func (a *audit) graphLink(d *document, target string) {
+	if !a.isHub(d.path, d.body) {
+		return
+	}
+	found := a.add(CheckStaleIndex, d.path, "-> "+target+" (hub links generated graph data)", "drop the bullet")
+	a.leads.unlink = append(a.leads.unlink, unlinkLead{path: d.path, target: target, check: CheckStaleIndex, what: "generated graph data", findings: []int{found}})
 }
 
 func (a *audit) confirm(ctx context.Context, target string) string {

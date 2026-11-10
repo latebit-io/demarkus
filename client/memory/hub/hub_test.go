@@ -190,6 +190,8 @@ func TestDropLinksEditsOnlyWhenABulletGoes(t *testing.T) {
 func TestPaths(t *testing.T) {
 	for dir, want := range map[string]string{
 		"/": "/index.md", "/a/": "/a/index.md /a.md", "/a/b": "/a/b/index.md /a/b.md",
+		// /graph.md is generated graph data, never the hub of /graph/.
+		"/graph/": "/graph/index.md", "/docs/graph/": "/docs/graph/index.md /docs/graph.md",
 	} {
 		if got := strings.Join(Paths(dir), " "); got != want {
 			t.Errorf("Paths(%s) = %s, want %s", dir, got, want)
@@ -278,5 +280,18 @@ func TestSectionForJoinsTheSiblingsSection(t *testing.T) {
 	}
 	if got := SectionFor(links.Resolver{}, "# Flat\n\n- [a](/d/a.md)\n", "/index.md", "/d/b.md"); got != "" {
 		t.Errorf("sectionless hub = %q, want \"\"", got)
+	}
+}
+
+func TestLinkable(t *testing.T) {
+	for _, p := range []string{"/notes.md", "/docs/graph.md", "/graph/notes.md"} {
+		if !Linkable(p) {
+			t.Errorf("%s should be linkable", p)
+		}
+	}
+	for _, p := range []string{"/index.md", "/.well-known/demarkus/policy.md", "/journal/2026-11-10.md", "/graph.md"} {
+		if Linkable(p) {
+			t.Errorf("%s should not be linkable", p)
+		}
 	}
 }

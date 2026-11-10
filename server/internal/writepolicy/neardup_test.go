@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/neardup"
@@ -265,6 +266,9 @@ func TestEnforceRefusesNearDuplicate(t *testing.T) {
 	}
 	if _, err := write(t, gated, "/journal/2026-10-22.md", 0, []byte(neardtest.RewordedDoc), tags); err != nil {
 		t.Errorf("journal entry = %v, want it to land", err)
+	}
+	if warnings, err := write(t, gated, protocol.GraphExportPath, 0, []byte(neardtest.RewordedDoc), tags); err != nil || len(warnings) != 0 {
+		t.Errorf("generated graph data = %q, %v; want it to land unjudged", warnings, err)
 	}
 	meta := map[string]string{"tags": "store", neardup.OverrideKey: "quoted on purpose"}
 	if warnings, err := write(t, gated, "/notes/kept.md", 0, []byte(neardtest.RewordedDoc), meta); err != nil || len(warnings) != 1 {

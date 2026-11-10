@@ -53,7 +53,7 @@ func lookupBody(index Index, words []string, scope string, opts Options) []Resul
 	if len(words) == 0 {
 		return nil
 	}
-	scan := scanBody(index, words, scope, opts.Filter)
+	scan := scanBody(index, words, scope, &opts)
 	if len(scan.found) == 0 {
 		return nil
 	}
@@ -74,12 +74,12 @@ func lookupBody(index Index, words []string, scope string, opts Options) []Resul
 	return results
 }
 
-func scanBody(index Index, terms []string, scope string, filter []Predicate) *bodyScan {
+func scanBody(index Index, terms []string, scope string, opts *Options) *bodyScan {
 	scan := &bodyScan{df: make([]int, len(terms))}
 	totalLength := 0
 	docHas := make([]bool, len(terms))
 	for e, doc := range index.Entries(scope) {
-		if !underScope(e.Path, scope) || !MatchesAll(e, filter) {
+		if !opts.admits(e, scope) {
 			continue
 		}
 		if doc == nil {

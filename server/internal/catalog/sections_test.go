@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/memtest"
 )
 
@@ -89,11 +90,11 @@ func TestBodyLookupDocTermsAndArchive(t *testing.T) {
 func TestRepublishKeepsIndexBounded(t *testing.T) {
 	c := New()
 	modified := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
-	c.Put("/graph.md", nil, memtest.AgentGraphBody(0), modified)
+	c.Put("/observations.md", nil, memtest.AgentGraphBody(0), modified)
 	const cycles = 60
 	growth := memtest.Retained(func() {
 		for cycle := 1; cycle <= cycles; cycle++ {
-			c.Put("/graph.md", nil, memtest.AgentGraphBody(cycle), modified)
+			c.Put("/observations.md", nil, memtest.AgentGraphBody(cycle), modified)
 		}
 	})
 	bodyBytes := int64(len(memtest.AgentGraphBody(0)))
@@ -102,6 +103,17 @@ func TestRepublishKeepsIndexBounded(t *testing.T) {
 	}
 	if got := mustLookup(t, c, "observations", Options{Match: MatchBody}); len(got) != 1 {
 		t.Errorf("body lookup after republish = %d rows, want 1", len(got))
+	}
+}
+
+// Generated graph data answers no lookup, so it keeps no section index.
+func TestPutIndexesNoGeneratedGraph(t *testing.T) {
+	c := New()
+	modified := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	c.Put("/observations.md", nil, memtest.AgentGraphBody(0), modified)
+	c.Put(protocol.GraphExportPath, nil, memtest.AgentGraphBody(0), modified)
+	if c.Sections("/observations.md") == nil || c.Sections(protocol.GraphExportPath) != nil {
+		t.Error("want a section index for the authored document only")
 	}
 }
 

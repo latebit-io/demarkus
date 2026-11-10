@@ -298,7 +298,7 @@
       "openWorldHint": true,
       "readOnlyHint": false
     },
-    "description": "Export the graph store and publish it as crawlable markdown (mark_graph_export + mark_publish). Run mark_graph first.",
+    "description": "Export the graph store and publish it to /graph.md (mark_graph_export + mark_publish). Run mark_graph first.",
     "inputSchema": {
       "properties": {
         "expected_version": {
@@ -310,7 +310,7 @@
           "type": "number"
         },
         "url": {
-          "description": "graph document target, e.g. mark://hub/graph.md",
+          "description": "the graph document, mark://hub/graph.md",
           "type": "string"
         }
       },

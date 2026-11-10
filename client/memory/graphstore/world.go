@@ -13,6 +13,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/links"
+	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"golang.org/x/sync/errgroup"
@@ -23,7 +24,7 @@ import (
 // shard. Bodies are deterministic: readers verify by rebuilding them.
 const (
 	// WorldGraphRoot holds one directory of checkpoint documents per world.
-	WorldGraphRoot = "/graph/worlds"
+	WorldGraphRoot = protocol.GraphWorldRoot
 	// WorldManifestFormat identifies the world manifest wire format.
 	WorldManifestFormat = "demarkus-graph-world/v1"
 	// WorldShardFormat identifies the world shard wire format.
@@ -355,7 +356,12 @@ func loadWorldShard(ctx context.Context, world string, ref *WorldShardRef, fetch
 	if unavailable(resp) {
 		return nil, fmt.Errorf("%w: world shard %s returned %s", ErrWorldUnavailable, ref.Path, resp.Status)
 	}
-	return VerifyWorldShard(world, *ref, resp)
+	sources, err := VerifyWorldShard(world, *ref, resp)
+	// A row written before generated graph data left the graph may name it.
+	for i := range sources {
+		sources[i].Edges = slices.DeleteFunc(sources[i].Edges, func(edge WorldEdge) bool { return graph.IsGeneratedURL(edge.To) })
+	}
+	return sources, err
 }
 
 // unavailable is a status that says nothing about the document: retry later.

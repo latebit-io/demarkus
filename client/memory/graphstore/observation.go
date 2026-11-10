@@ -5,9 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"maps"
-	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,7 +23,7 @@ type sourceRecord struct {
 // artifacts. Complete observations replace adjacency; failures age freshness.
 func (s *Store) ObserveDocument(docURL string, result graph.FetchResult) bool {
 	docURL = links.CanonicalURL(docURL)
-	if generatedGraphURL(docURL) {
+	if graph.IsGeneratedURL(docURL) {
 		return false
 	}
 	source := result.Source
@@ -153,35 +151,22 @@ func sameDocumentRepresentation(current *StoredNode, incoming *graph.Node) bool 
 		old.Source == next.Source && old.View == next.View && old.Revision == next.Revision && old.Etag == next.Etag
 }
 
-func generatedGraphURL(raw string) bool {
-	parsed, err := url.Parse(raw)
-	return err == nil && IsGeneratedGraphPath(parsed.Path)
-}
+// IsGeneratedGraphPath is protocol.IsGeneratedGraphPath, kept for importers
+// outside this repository.
+//
+// Deprecated: use protocol.IsGeneratedGraphPath.
+func IsGeneratedGraphPath(docPath string) bool { return protocol.IsGeneratedGraphPath(docPath) }
 
-// IsGeneratedGraphPath reports whether docPath, or a version of it, is graph
-// data this package publishes rather than an authored document.
-func IsGeneratedGraphPath(docPath string) bool {
-	return generatedGraphPath(docPath, GraphExportPath) || generatedGraphPath(docPath, SnapshotManifestPath) ||
-		strings.HasPrefix(docPath, SnapshotShardRoot(SnapshotManifestPath)+"/") || strings.HasPrefix(docPath, WorldGraphRoot+"/")
-}
-
-func generatedGraphPath(path, base string) bool {
-	if path == base {
-		return true
-	}
-	version, ok := strings.CutPrefix(path, base+"/v")
-	if !ok {
-		return false
-	}
-	n, err := strconv.Atoi(version)
-	return err == nil && n > 0
-}
-
+// sourceRecords groups rows by source, canonical. Generated graph data an
+// older crawl or a foreign export still carries is dropped.
 func sourceRecords(nodes []StoredNode, edges []StoredEdge) map[string]sourceRecord { //nolint:gocritic // normalize private candidate copies
 	records := make(map[string]sourceRecord, len(nodes))
 	for i := range nodes {
 		node := nodes[i]
 		node.URL = links.CanonicalURL(node.URL)
+		if graph.IsGeneratedURL(node.URL) {
+			continue
+		}
 		if node.Observation.Source != "" {
 			node.Observation.Source = links.CanonicalURL(node.Observation.Source)
 		}
@@ -189,6 +174,9 @@ func sourceRecords(nodes []StoredNode, edges []StoredEdge) map[string]sourceReco
 	}
 	for _, edge := range edges {
 		edge.From, edge.To = links.CanonicalURL(edge.From), links.CanonicalURL(edge.To)
+		if graph.IsGeneratedURL(edge.From) || graph.IsGeneratedURL(edge.To) {
+			continue
+		}
 		edge.Count = max(edge.Count, 1)
 		record := records[edge.From]
 		if record.Node.URL == "" {

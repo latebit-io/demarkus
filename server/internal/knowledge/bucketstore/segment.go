@@ -258,11 +258,15 @@ func (reader bodyReader) segment(ctx context.Context, ref segmentRef) (map[strin
 }
 
 // shardBodies returns the bodies of live documents, in their order: from
-// carried by body hash, the rest read in parallel. An unreadable body is nil.
+// carried by body hash, the rest read in parallel. An unreadable body is
+// nil, and so is one that keeps no section index: it is not read.
 func (reader bodyReader) shardBodies(ctx context.Context, live []*pathState, carried map[string]string) ([]*segmentBody, error) {
 	bodies := make([]*segmentBody, len(live))
 	err := runParallel(ctx, segmentReaders, indexes(len(live)), func(ctx context.Context, position int) error {
 		state := live[position]
+		if !state.Entry.Indexed() {
+			return nil
+		}
 		body, ok := carried[state.BodyHash]
 		if !ok {
 			read, err := reader.read(ctx, state)
@@ -352,9 +356,10 @@ func (run *segmentRun) write(ctx context.Context, groups [][]grouped, shards []i
 // hash, the others read once. Unchanged bodies with nothing to carry them come
 // out of the run's backfill budget, or the shard waits for a later window.
 func (run *segmentRun) shard(ctx context.Context, group []grouped, label string, source *segmentRef) (bool, error) {
+	// A segment carries what the section index is built from, nothing else.
 	var live []*pathState
 	for _, document := range group {
-		if !document.state.Archived {
+		if !document.state.Archived && document.state.Entry.Indexed() {
 			live = append(live, document.state)
 		}
 	}

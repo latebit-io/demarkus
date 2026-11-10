@@ -130,6 +130,9 @@ type Walker struct {
 	// BeforeList, when set, runs before every LIST: a crawler's politeness
 	// delay. Its error ends the walk.
 	BeforeList func(ctx context.Context) error
+	// SkipGraphData leaves generated graph data out: its documents are not
+	// visited and the directories holding only it are not listed.
+	SkipGraphData bool
 	// OnDir, when set, observes every directory the walk lists, before its
 	// first LIST and in walk order. Documents go to visit, directories here.
 	OnDir func(dir string)
@@ -201,9 +204,15 @@ func (w *walkRun) walk(dir string, depth int) error {
 		}
 		for _, entry := range page.Entries {
 			if entry.IsDir {
+				if w.SkipGraphData && protocol.IsGeneratedGraphPath(entry.Path+"/") {
+					continue
+				}
 				if err := w.walk(entry.Path, depth+1); err != nil {
 					return err
 				}
+				continue
+			}
+			if w.SkipGraphData && protocol.IsGeneratedGraphPath(entry.Path) {
 				continue
 			}
 			if err := w.visit(entry.Path); err != nil {

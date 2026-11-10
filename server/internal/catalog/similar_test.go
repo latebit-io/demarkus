@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/memtest"
 	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/neardup/neardtest"
@@ -41,6 +42,15 @@ func TestSimilarFindsTheRewordedCopy(t *testing.T) {
 	}
 	if hits := similarTo(t, c, neardtest.RewordedDoc, Options{Scope: "/notes/"}); len(hits) != 0 {
 		t.Errorf("hits under /notes/ = %+v, want none", hits)
+	}
+}
+
+// A draft repeating generated graph data repeats no authored document.
+func TestSimilarOmitsGeneratedGraph(t *testing.T) {
+	c := New()
+	putDoc(c, protocol.GraphExportPath, neardtest.LessonDoc, nil)
+	if hits := similarTo(t, c, neardtest.RewordedDoc, Options{}); len(hits) != 0 {
+		t.Errorf("hits = %+v, want none", hits)
 	}
 }
 

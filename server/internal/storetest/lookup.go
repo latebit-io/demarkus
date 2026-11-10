@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
@@ -38,6 +39,7 @@ func RunLookupConformance(t *testing.T, factory LookupFactory) {
 		{"ArchiveLifecycle", testLookupArchiveLifecycle},
 		{"UpdateReplacesEntry", testLookupUpdateReplacesEntry},
 		{"MaxCap", testLookupMaxCap},
+		{"OmitsGeneratedGraph", testLookupOmitsGeneratedGraph},
 	}
 	for _, st := range append(subtests, bodyLookupSubtests...) {
 		t.Run(st.name, func(t *testing.T) {
@@ -239,6 +241,30 @@ func testLookupMaxCap(t *testing.T, b LookupBackend) {
 
 	assertLookup(t, b, "go", catalog.Options{Max: 2}, "/m1.md", "/m2.md")
 	assertLookup(t, b, "go", catalog.Options{Max: 0}, "/m1.md", "/m2.md", "/m3.md")
+}
+
+// Generated graph data is no mode's answer, whatever its metadata or the
+// scope; an authored document beside it or sharing its name stays (SPEC 6.7).
+func testLookupOmitsGeneratedGraph(t *testing.T, b LookupBackend) {
+	const body = "# Graph notes\n\nedges between the worlds\n"
+	meta := map[string]string{"tags": "graph", "importance": "0.9"}
+	for _, path := range []string{
+		protocol.GraphExportPath,
+		protocol.GraphSnapshotManifestPath,
+		protocol.GraphSnapshotShardRoot + "/a/nodes-000.md",
+		protocol.GraphWorldRoot + "/alpha/manifest.md",
+	} {
+		catalogPublish(t, b, path, body, meta)
+	}
+	catalogPublish(t, b, "/docs/graph.md", body, map[string]string{"tags": "graph", "importance": "0.6"})
+	catalogPublish(t, b, "/graph/notes.md", body, map[string]string{"tags": "graph", "importance": "0.4"})
+
+	assertLookup(t, b, "*", catalog.Options{}, "/docs/graph.md", "/graph/notes.md")
+	assertLookup(t, b, "graph", catalog.Options{}, "/docs/graph.md", "/graph/notes.md")
+	assertLookup(t, b, "*", catalog.Options{Scope: "/graph/"}, "/graph/notes.md")
+	// Max counts authored documents only.
+	assertLookup(t, b, "*", catalog.Options{Max: 1}, "/docs/graph.md")
+	assertBodyRows(t, b, "edges", bodyOpts(), "/docs/graph.md#graph-notes", "/graph/notes.md#graph-notes")
 }
 
 // FileBackend is the file store paired with the in-memory catalog: the

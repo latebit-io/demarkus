@@ -2,6 +2,7 @@ package graphstore
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1086,4 +1087,64 @@ func TestReplaceSeedOwnershipPersists(t *testing.T) {
 	if got := store.Backlinks("mark://w/b.md"); len(got) != 1 {
 		t.Fatalf("persisted owner edge was erased: %v", got)
 	}
+}
+
+// Generated graph data never enters the store: not from a crawl, not from a
+// seed, and not from a file an older version saved.
+func TestStoreLeavesGeneratedGraphDataOut(t *testing.T) {
+	const hub, doc, export = "mark://a/index.md", "mark://a/a.md", "mark://a/graph.md"
+	const shard = "mark://a/graph/shards/a/nodes-000.md"
+	nodes := []StoredNode{{URL: hub, Status: "ok"}, {URL: doc, Status: "ok"}, {URL: export, Status: "ok"}}
+	edges := []StoredEdge{
+		{From: hub, To: doc, Count: 1}, {From: hub, To: export, Count: 1},
+		{From: export, To: doc, Count: 1}, {From: export, To: shard, Count: 1},
+	}
+	check := func(t *testing.T, s *Store) {
+		t.Helper()
+		if s.NodeCount() != 2 || s.EdgeCount() != 1 {
+			t.Errorf("nodes, edges = %d, %d, want 2, 1", s.NodeCount(), s.EdgeCount())
+		}
+		if got := s.Backlinks(doc); !slices.Equal(got, []string{hub}) {
+			t.Errorf("backlinks of the document = %v, want the hub only", got)
+		}
+	}
+
+	t.Run("merge", func(t *testing.T) {
+		g := graph.New()
+		for i := range nodes {
+			g.AddNode(&graph.Node{URL: nodes[i].URL, Status: "ok"})
+		}
+		for _, edge := range edges {
+			g.AddEdge(edge.From, edge.To)
+		}
+		s := New()
+		s.Merge(g, nil)
+		check(t, s)
+	})
+	t.Run("seed", func(t *testing.T) {
+		s := New()
+		s.ReplaceSeed("mark://a", nodes, edges)
+		check(t, s)
+	})
+	t.Run("load", func(t *testing.T) {
+		data, err := json.Marshal(document{
+			Version: schemaVersion, Nodes: nodes, Edges: edges,
+			LocalSources: map[string]sourceRecord{export: {Node: nodes[2], Edges: edges[2:]}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "graph.json")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		check(t, s)
+		if _, held := s.localSources[export]; held {
+			t.Error("the export is still a local source")
+		}
+	})
 }

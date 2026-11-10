@@ -254,15 +254,19 @@ func DropLinks(ctx context.Context, doc *docwrite.Doc, head *docwrite.Head, drop
 	return dropped, nil
 }
 
-// Paths are where a directory's hub may live, in the order the rule prefers:
-// its index.md, else the document named after it (/a/b.md for /a/b/), where
-// curate's split puts a document's topics. The root has only /index.md.
+// Paths are where a directory's hub may live, in the rule's order: its
+// index.md, else the document named after it (/a/b.md for /a/b/), where
+// curate's split puts topics. The root and /graph/ have only the first.
 func Paths(dir string) []string {
 	dir = strings.TrimSuffix(dir, "/")
 	if dir == "" || dir == "." {
 		return []string{"/index.md"}
 	}
-	return []string{dir + "/index.md", dir + ".md"}
+	named := dir + ".md"
+	if protocol.IsGeneratedGraphPath(named) {
+		return []string{dir + "/index.md"}
+	}
+	return []string{dir + "/index.md", named}
 }
 
 // Ancestors are the hubs that may name the path, nearest directory first,

@@ -188,7 +188,8 @@ func okfExportMain(ctx context.Context, args []string) {
 		root = "/"
 	}
 	// No OnProblem: an export that silently lacks a subtree is worse than none.
-	walker := listwalk.Walker{Client: client, Host: host, Token: token}
+	// Generated graph data is not knowledge to bundle.
+	walker := listwalk.Walker{Client: client, Host: host, Token: token, SkipGraphData: true}
 	paths, err := enumerateDocs(ctx, &walker, root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "okf export: %v\n", err)

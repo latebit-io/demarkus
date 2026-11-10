@@ -603,3 +603,22 @@ func duplicateFinding(r *Report, path, prefix string) Finding {
 	}
 	return Finding{}
 }
+
+// Generated graph data is no document to audit: not inventoried, not read,
+// and a link to it is not confirmed. Prose may mention it.
+func TestGeneratedGraphDataIsNotAudited(t *testing.T) {
+	f := newFake(map[string]fakeDoc{
+		"/index.md":                    tagged("# Hub\n\n- [notes](/notes.md)\n"),
+		"/notes.md":                    tagged("# Notes\n\nSummary. See [the graph](/graph.md) and [its snapshot](/graph/manifest.md).\n"),
+		"/graph.md":                    {Body: "# Document Graph\n\n[gone](/gone.md)\n"},
+		"/graph/shards/a/nodes-000.md": {Body: "# Graph Snapshot Shard\n"},
+	})
+	f.missing["/graph/manifest.md"] = protocol.StatusServerError
+	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Findings) != 0 {
+		t.Errorf("findings = %+v, want none", r.Findings)
+	}
+}

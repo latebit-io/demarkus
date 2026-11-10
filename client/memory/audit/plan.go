@@ -54,7 +54,7 @@ func (w *PlanWrite) change(body, fix string) {
 // leads are the findings a fix may settle, recorded by the check that filed
 // them with the finding's index.
 type leads struct {
-	archived                                []archivedLead
+	unlink                                  []unlinkLead
 	adr                                     []adrLead
 	orphans, hubs, frontmatter, journalType []lead
 }
@@ -64,8 +64,10 @@ type lead struct {
 	finding int
 }
 
-type archivedLead struct {
+// unlinkLead is a link to remove: check files a skip, what words the change.
+type unlinkLead struct {
 	path, target string
+	check, what  string
 	findings     []int // the broken link, and on a hub the stale entry
 }
 
@@ -86,7 +88,7 @@ func (a *audit) plan() *Plan {
 	pl := &planner{a: a, drafts: map[string]*PlanWrite{}}
 	pl.frontmatter()
 	pl.journalType()
-	pl.archived()
+	pl.unlink()
 	pl.adrLinks()
 	pl.hubs()
 	pl.orphans()
@@ -208,21 +210,27 @@ func (pl *planner) journalType() {
 	}
 }
 
-// archived drops a hub's bullets that link only archived documents, then
-// unlinks the rest inline, keeping the text.
-func (pl *planner) archived() {
-	paths, by := byPath(pl.a.leads.archived, func(l archivedLead) string { return l.path })
+// isHub: an index.md, the document named after a directory, or a link page,
+// which alone costs a parse.
+func (a *audit) isHub(p, body string) bool {
+	return path.Base(p) == "index.md" || a.dirs[strings.TrimSuffix(p, ".md")+"/"] || gate.IsHub(p, body)
+}
+
+// unlink drops a hub's bullets that link only archived documents or
+// generated graph data, then unlinks the rest inline, keeping the text.
+func (pl *planner) unlink() {
+	paths, by := byPath(pl.a.leads.unlink, func(l unlinkLead) string { return l.path })
 	for _, doc := range paths {
-		w := pl.open(CheckBrokenLinks, doc)
+		w := pl.open(by[doc][0].check, doc)
 		if w == nil {
 			continue
 		}
-		targets := map[string]bool{}
+		targets, what := map[string]bool{}, map[string]bool{}
 		for _, l := range by[doc] {
-			targets[l.target] = true
+			targets[l.target], what[l.what] = true, true
 		}
 		body, bullets := w.Body, 0
-		if gate.IsHub(doc, body) || pl.a.dirs[strings.TrimSuffix(doc, ".md")+"/"] {
+		if pl.a.isHub(doc, body) {
 			body, bullets = hub.WithoutLinks(pl.a.resolve, body, doc, slices.Sorted(maps.Keys(targets)))
 		}
 		body, inline := unlinkInline(pl.a.resolve, body, doc, targets)
@@ -232,13 +240,13 @@ func (pl *planner) archived() {
 		}
 		for _, l := range by[doc] {
 			if left[l.target] {
-				pl.skip(CheckBrokenLinks, doc, "-> "+l.target+" is not an inline link; remove it by hand")
+				pl.skip(l.check, doc, "-> "+l.target+" is not an inline link; remove it by hand")
 				continue
 			}
 			pl.settle(l.findings...)
 		}
 		if body != w.Body {
-			w.change(body, fmt.Sprintf("links to archived documents removed: %d hub bullet(s), %d inline with the text kept", bullets, inline))
+			w.change(body, fmt.Sprintf("links to %s removed: %d hub bullet(s), %d inline with the text kept", strings.Join(slices.Sorted(maps.Keys(what)), " and "), bullets, inline))
 		}
 	}
 }
@@ -368,7 +376,11 @@ func (pl *planner) hubs() {
 			added++
 		}
 		if n := gate.OutboundDocs(body); n > gate.HubLinkMax {
-			pl.skip(CheckMissingHub, dir, fmt.Sprintf("over the cap: one hub would link %d documents, %d is the cap; publish %s as its hub or add second-level hubs", n, gate.HubLinkMax, hub.Paths(dir)[1]))
+			advice := "add second-level hubs"
+			if named := hub.Paths(dir)[1:]; len(named) > 0 {
+				advice = "publish " + named[0] + " as its hub or " + advice
+			}
+			pl.skip(CheckMissingHub, dir, fmt.Sprintf("over the cap: one hub would link %d documents, %d is the cap; %s", n, gate.HubLinkMax, advice))
 			continue
 		}
 		meta := pl.hubMetadata(path.Base(dir), summary, parent.Metadata)
