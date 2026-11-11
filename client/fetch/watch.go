@@ -310,7 +310,12 @@ func (w *Watch) reopen(ctx context.Context, pace *Pace) (*watchStream, error) {
 			pace.Opened()
 			return stream, nil
 		}
-		if ctx.Err() != nil || !RetryLater(err) {
+		// Close cancelled the open under it: a clean end, whatever the
+		// aborted handshake read reported.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !RetryLater(err) {
 			return nil, err
 		}
 		if err := waitForRetry(ctx, pace.AfterFailedOpen()); err != nil {

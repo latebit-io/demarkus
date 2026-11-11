@@ -373,7 +373,11 @@ func (w *Watch) reopen(ctx context.Context, pace *fetch.Pace) (*stream, error) {
 			pace.Opened()
 			return s, nil
 		}
-		if !retryable(err) || ctx.Err() != nil {
+		// Close cancelled the open under it: a clean end, as fetch.Watch has it.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !retryable(err) {
 			return nil, err
 		}
 		if !sleep(ctx, pace.AfterFailedOpen()) {

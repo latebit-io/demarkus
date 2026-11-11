@@ -146,6 +146,47 @@ func TestOutOfBandArchiveStartsNewEpoch(t *testing.T) {
 	}
 }
 
+// A sequence skipped for an outside write is never handed out again: with
+// the tree back at the journal's fingerprint, a restart still resyncs.
+func TestSkippedSequenceIsNotReusedAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	store, hub := openWatched(t, root, 8)
+	publishN(t, store, 1)
+	epoch := hub.Epoch()
+
+	tool := protocolstore.New(root)
+	if _, err := tool.Write("/x.md", []byte("# X\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+	seen := func() {
+		t.Helper()
+		if err := tool.MarkChanged(); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.reindexIfChanged(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen()
+	skipped := hub.Head()
+	// The outside write is undone: the tree's fingerprint is the old one.
+	for _, gone := range []string{filepath.Join(root, "x.md"), filepath.Join(root, "versions", "x.md")} {
+		if err := os.RemoveAll(gone); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen()
+	closeStore(t, store)
+
+	_, reopened := openWatched(t, root, 8)
+	if reopened.Epoch() == epoch {
+		t.Fatal("epoch kept across a restart although a sequence was skipped under it")
+	}
+	if _, err := reopened.Subscribe(t.Context(), "/", skipped); !errors.Is(err, changefeed.ErrResync) {
+		t.Fatalf("resume from the skipped cursor: err = %v, want ErrResync", err)
+	}
+}
+
 // Close ends the watch and refuses later writes.
 func TestCloseEndsWatchAndRefusesWrites(t *testing.T) {
 	store, hub := openWatched(t, t.TempDir(), 8)

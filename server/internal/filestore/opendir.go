@@ -87,6 +87,7 @@ func (s *Store) reindexIfChanged(ctx context.Context) error {
 	s.generation.Store(&generation)
 	if s.changes != nil {
 		s.changes.Skip(s.changes.Head().Seq + 1)
+		s.journal.forget()
 	}
 	s.logger.Info("content changed outside the server; index and catalog rebuilt", "generation", generation.String())
 	return nil

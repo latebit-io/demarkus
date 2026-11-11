@@ -121,6 +121,15 @@ func (j *journal) append(ev changefeed.Event, fingerprint string) {
 	}
 }
 
+// forget makes the next open start a new epoch unless a commit follows: a
+// sequence was skipped for a change no event names, and a restart that kept
+// the epoch would hand that sequence to the next commit.
+func (j *journal) forget() {
+	if err := j.rewrite("", nil); err != nil {
+		j.lose("change journal not reset after an outside write", err)
+	}
+}
+
 // lose drops the file handle after a failure and logs once per outage;
 // later appends retry the rewrite on a backoff.
 func (j *journal) lose(what string, err error) {

@@ -8,7 +8,6 @@ import (
 	"maps"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/generation"
@@ -26,10 +25,11 @@ type exporter struct {
 	mu      sync.Mutex
 	pending map[string]struct{} // worlds whose checkpoint moved since their last load
 	wake    chan struct{}
-	// withdrawals counts worlds withdrawn; pruned is how many the live
-	// render already answered by pruning its older versions.
-	withdrawals atomic.Uint64
-	pruned      uint64
+	// withdrawals counts worlds withdrawn (mu, with pending). loaded is the
+	// count the loaded checkpoints reflect; pruned the count the live render
+	// answered by pruning its older versions.
+	withdrawals    uint64
+	loaded, pruned uint64
 
 	worlds map[string]*exportedWorld // absent until the world has a checkpoint
 	// owed is a render the live document may lack; liveVersion is that
@@ -66,22 +66,24 @@ func (e *exporter) pendAll() {
 }
 
 // changed tells the exporter world's checkpoint moved; it never blocks.
-func (e *exporter) changed(world string) {
+func (e *exporter) changed(world string) { e.pend(world, 0) }
+
+// withdrawn is changed for a world emptied on purpose: the render built from
+// its emptied checkpoint is written even if the live one already lacks its
+// rows, and prunes the versions that held them.
+func (e *exporter) withdrawn(world string) { e.pend(world, 1) }
+
+// pend marks world to load again and counts withdrawals in one step, so a
+// render never claims a withdrawal whose checkpoint it has not loaded.
+func (e *exporter) pend(world string, withdrawals uint64) {
 	e.mu.Lock()
 	e.pending[world] = struct{}{}
+	e.withdrawals += withdrawals
 	e.mu.Unlock()
 	select {
 	case e.wake <- struct{}{}:
 	default:
 	}
-}
-
-// withdrawn is changed for a world emptied on purpose: the next render is
-// written even if the live one already lacks its rows, and prunes the
-// versions that held them.
-func (e *exporter) withdrawn(world string) {
-	e.withdrawals.Add(1)
-	e.changed(world)
 }
 
 // run exports when a checkpoint moved, at most once per interval, until ctx
@@ -122,6 +124,7 @@ func (e *exporter) export(ctx context.Context) error {
 	e.mu.Lock()
 	moved := slices.Sorted(maps.Keys(e.pending))
 	clear(e.pending)
+	e.loaded = e.withdrawals
 	e.mu.Unlock()
 	var errs []error
 	for _, name := range moved {
@@ -193,7 +196,7 @@ func (e *exporter) write(ctx context.Context) error {
 			return err
 		}
 	}
-	withdrawals := e.withdrawals.Load()
+	withdrawals := e.loaded
 	content := generation.BodyHash(graphstore.ExportContent(body))
 	if content == e.liveContent && withdrawals == e.pruned {
 		e.owed = false

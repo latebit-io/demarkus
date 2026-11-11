@@ -49,7 +49,7 @@ func HubLister(l listwalk.Lister, hub string) func(ctx context.Context, dir stri
 
 // withdraw empties what the hub holds of world: every shard document, then
 // the manifest, then the export, each write pruning older versions. A
-// manifest an earlier withdrawal left ends it at one read.
+// manifest an earlier withdrawal left skips straight to the export.
 func (d *deriver) withdraw(ctx context.Context, world string) error {
 	path := graphstore.WorldManifestPath(world)
 	head, version, err := d.hubHead(ctx, path)
@@ -60,6 +60,9 @@ func (d *deriver) withdraw(ctx context.Context, world string) error {
 	var pinned []graphstore.WorldShardRef
 	if m, err := graphstore.ParseWorldManifest(world, head.Body); head.Status == protocol.StatusOK && err == nil {
 		if m.Cursor.Epoch == withdrawnEpoch && len(m.Shards) == 0 {
+			// The term that wrote it may have ended before the export was
+			// pruned: ask again, which costs one render.
+			d.export.withdrawn(world)
 			return nil
 		}
 		manifest.PrefixLength, pinned = m.PrefixLength, m.Shards
@@ -110,8 +113,9 @@ func (d *deriver) shardPrefixes(ctx context.Context, world string, pinned []grap
 	}
 	prefixes := make([]string, 0, len(paths))
 	for _, p := range paths {
+		// Anything else there, the manifest included, is not a shard.
 		prefix, isDoc := strings.CutSuffix(strings.TrimPrefix(p, dir+"/"), ".md")
-		if isDoc && p != graphstore.WorldManifestPath(world) {
+		if isDoc && graphstore.IsWorldPrefix(prefix) {
 			prefixes = append(prefixes, prefix)
 		}
 	}

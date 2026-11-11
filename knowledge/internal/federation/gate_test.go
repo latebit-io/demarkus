@@ -100,6 +100,12 @@ func TestGatedWorldIsWithdrawnFromAnOpenHub(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// And a document that is no shard: left alone, and no obstacle.
+	stray := graphstore.WorldGraphRoot + "/alpha/README.md"
+	if _, err := h.hub.io().Publish(context.Background(), stray, "# Not a shard\n", -1); err != nil {
+		t.Fatal(err)
+	}
+
 	refuse.Store(true)
 	h.await(withdrawn)
 	poll(t, "export without alpha", func() error {
@@ -121,6 +127,9 @@ func TestGatedWorldIsWithdrawnFromAnOpenHub(t *testing.T) {
 	}
 	if strings.Contains(h.hub.live(orphan), "rows") {
 		t.Errorf("the unpinned shard %s kept its rows", orphan)
+	}
+	if got := h.hub.live(stray); got != "# Not a shard\n" {
+		t.Errorf("a document that is no shard was rewritten: %q", got)
 	}
 	// Every version from before the withdrawal held the rows: none is left.
 	held := map[string]int{graphstore.WorldManifestPath("alpha"): 1, graphstore.GraphExportPath: 1, orphan: 1}
@@ -147,5 +156,63 @@ func TestHubListerListsOneDirectory(t *testing.T) {
 	}
 	if got, err := list(context.Background(), "/nowhere"); err != nil || len(got) != 0 {
 		t.Errorf("list of a missing directory = %v, %v; want empty", got, err)
+	}
+}
+
+// A term that finds the withdrawn manifest writes nothing more but still
+// asks for the export's prune: the term that wrote it may have ended first.
+func TestWithdrawAsksForTheExportPruneOverAMarkerManifest(t *testing.T) {
+	h := newHarness(t)
+	d := testDeriver(h.config())
+	ctx := context.Background()
+	body, err := graphstore.BuildWorldManifest(graphstore.WorldManifest{World: "alpha", Cursor: protocol.Cursor{Epoch: withdrawnEpoch}, PrefixLength: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.hub.io().Publish(ctx, graphstore.WorldManifestPath("alpha"), body, -1); err != nil {
+		t.Fatal(err)
+	}
+	mark := h.hub.mark()
+	if err := d.withdraw(ctx, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.hub.written(mark); len(got) != 0 {
+		t.Errorf("a landed withdrawal was written again at %v", got)
+	}
+	d.export.mu.Lock()
+	defer d.export.mu.Unlock()
+	if d.export.withdrawals != 1 {
+		t.Errorf("withdrawals = %d, want the export asked to prune once", d.export.withdrawals)
+	}
+}
+
+// A render built before a withdrawn world's checkpoint was loaded must not
+// answer for the withdrawal: it still holds the rows, and the one that drops
+// them would then keep it as an older version.
+func TestStaleRenderDoesNotClaimAWithdrawal(t *testing.T) {
+	h, stop := seeded(t)
+	awaitExport(t, h.hub.io(), seededNodes)
+	stop()
+	ctx := context.Background()
+	e := testDeriver(h.config()).export
+	e.pendAll()
+	if err := e.export(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The withdrawal arrives after the loads: this render predates it.
+	e.withdrawn("alpha")
+	e.owed = true
+	if err := e.write(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.pruned != 0 {
+		t.Fatal("a render from before the withdrawal was counted as its prune")
+	}
+	// The next pass loads the withdrawn world, and its render prunes.
+	if err := e.export(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.pruned != 1 {
+		t.Errorf("pruned = %d after the withdrawn world was loaded, want 1", e.pruned)
 	}
 }
