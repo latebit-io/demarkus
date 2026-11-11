@@ -2,20 +2,16 @@ package guidance
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/registrytest"
 )
 
 func TestResolveProjectFallsBackToTheHarnessDirectory(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if err := os.MkdirAll(filepath.Join(home, ".demarkus"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	registrytest.SetupHome(t)
 	t.Setenv("CURSOR_PROJECT_DIR", "")
 	t.Setenv("CLAUDE_PROJECT_DIR", "")
 	if _, err := ResolveProject(""); !errors.Is(err, project.ErrNoDir) || !strings.Contains(err.Error(), "--dir") {
@@ -47,7 +43,7 @@ func TestHeaderAndHint(t *testing.T) {
 			"Project slug: `stale`. Project root: `/r/`. Bound store: `gone` (stale: not in the catalog; restore it with /soul-join or rebind with /soul-default)."},
 	}
 	for _, c := range cases {
-		if got := Header(c.r, "/r/"); got != c.want {
+		if got := header(c.r, "/r/"); got != c.want {
 			t.Errorf("Header = %s\nwant %s", got, c.want)
 		}
 	}

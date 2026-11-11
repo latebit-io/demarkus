@@ -68,21 +68,19 @@ type model struct {
 	renderer      *glamour.TermRenderer
 	rendererWidth int
 
-	// History navigation. offHistory: the viewport shows something that is
-	// not history[histIdx] (an error, the bookmarks), so back returns to it.
-	history    []historyEntry
-	histIdx    int
-	offHistory bool
+	// History navigation.
+	history []historyEntry
+	histIdx int
 
 	// Link navigation
-	rawBody     string             // raw markdown body of current page
-	links       []string           // resolved absolute mark:// URLs
-	linkIdx     int                // -1 = none selected
-	linkInfos   []links.LinkInfo   // extended link info with source positions
-	rendered    string             // glamour output of rawBody, unhighlighted; "" when none
-	linkSpans   []termlinks.Span   // where each link sits in rendered
-	linkRegions []termlinks.Region // the cells each link occupies, for the mouse
-	hoverIdx    int                // -1 = no hover, index of link under mouse cursor
+	rawBody    string              // raw markdown body of current page
+	links      []string            // resolved absolute mark:// URLs
+	linkIdx    int                 // -1 = none selected
+	linkInfos  []links.LinkInfo    // extended link info with source positions
+	rendered   string              // glamour output of rawBody, unhighlighted; "" when none
+	renderedAt int                 // the wrap width rendered was made for
+	linkSegs   []termlinks.Segment // each link's cells and bytes in rendered, per line
+	hoverIdx   int                 // -1 = no hover, index of link under mouse cursor
 
 	// Fetch sequencing: ignore stale results from superseded fetches.
 	// currentURL is the document on screen, "" when none is. The address bar is
@@ -201,7 +199,6 @@ func (m *model) showDocument(entry *historyEntry) {
 	m.linkIdx = -1
 	m.hoverIdx = -1
 	m.err = nil
-	m.offHistory = false
 	if !m.ready {
 		m.pendingBody = entry.rawBody
 		return
@@ -216,7 +213,7 @@ func (m *model) showDocument(entry *historyEntry) {
 func (m *model) renderBody(body string) string {
 	rendered, err := m.renderMarkdown(body)
 	if err != nil {
-		m.rendered, m.linkSpans, m.linkRegions = "", nil, nil
+		m.rendered, m.linkSegs = "", nil
 		return hiddentext.Reveal(body)
 	}
 	shown := make([]termlinks.Link, len(m.linkInfos))
@@ -224,22 +221,39 @@ func (m *model) renderBody(body string) string {
 		// Glamour renders the revealed body (renderMarkdown); match against it.
 		shown[i] = termlinks.Link{Text: hiddentext.Reveal(li.Text), Dest: hiddentext.Reveal(li.Dest)}
 	}
-	m.rendered, m.linkSpans = rendered, termlinks.Locate(rendered, shown)
+	m.rendered, m.renderedAt, m.linkSegs = rendered, m.rendererWidth, termlinks.Locate(rendered, shown)
 	return m.paint()
 }
 
 // paint is the rendered document with the selected and hovered links lit.
-// Selection changes repaint; they never render markdown again.
+// Selection changes repaint; they never render or lay out again.
 func (m *model) paint() string {
-	content, regions := termlinks.Paint(m.rendered, m.linkSpans, func(i int) bool { return i == m.linkIdx || i == m.hoverIdx })
-	m.linkRegions = regions
-	return content
+	return termlinks.Paint(m.rendered, m.linkSegs, func(i int) bool { return i == m.linkIdx || i == m.hoverIdx })
+}
+
+// covering reports an error or the bookmarks shown over history[histIdx]:
+// neither is a page, so neither has a URL.
+func (m *model) covering() bool { return m.currentURL == "" && m.histIdx >= 0 }
+
+// reshow puts the page back after the help or the graph hid it: the render
+// in hand when it is still that page at this width, else a fresh one.
+func (m *model) reshow() {
+	entry := &m.history[m.histIdx]
+	if !m.ready || m.rendered == "" || m.currentURL != entry.url || m.rawBody != entry.rawBody || m.renderedAt != m.width-4 {
+		m.restoreHistory()
+		return
+	}
+	m.addressBar.SetValue(entry.url)
+	m.loading, m.fromCache = false, false
+	m.linkIdx, m.hoverIdx, m.err = -1, -1, nil
+	m.viewport.SetContent(m.paint())
+	m.viewport.GotoTop()
 }
 
 // leaveDocument clears the link state of a document no longer on screen.
 func (m *model) leaveDocument() {
 	m.links, m.linkInfos = nil, nil
-	m.rendered, m.linkSpans, m.linkRegions = "", nil, nil
+	m.rendered, m.linkSegs = "", nil
 	m.linkIdx, m.hoverIdx = -1, -1
 }
 
@@ -390,7 +404,7 @@ func (m model) handleMouseHover(msg tea.MouseMotionMsg) model {
 	if msg.Y >= 2 {
 		contentLine := msg.Y - 2 + m.viewport.YOffset()
 		contentCol := msg.X
-		for _, r := range m.linkRegions {
+		for _, r := range m.linkSegs {
 			if r.Line == contentLine && contentCol >= r.StartCol && contentCol < r.EndCol {
 				newHover = r.Index
 				break
@@ -445,7 +459,7 @@ func (m model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 			// Check if click lands on a link.
 			contentLine := msg.Y - 2 + m.viewport.YOffset()
 			contentCol := msg.X
-			for _, r := range m.linkRegions {
+			for _, r := range m.linkSegs {
 				if r.Line != contentLine || contentCol < r.StartCol || contentCol >= r.EndCol {
 					continue
 				}
@@ -612,7 +626,6 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.currentURL = ""
 		m.err = msg.err
-		m.offHistory = true
 		m.pendingBody = ""
 		m.status = ""
 		m.metadata = nil
@@ -759,7 +772,7 @@ func (m model) handleViewportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // whether there was anything to leave.
 func (m *model) leaveOverlay() bool {
 	switch {
-	case m.offHistory && m.histIdx >= 0:
+	case m.covering():
 		m.restoreHistory()
 	case m.status == "bookmarks":
 		m.status = ""
@@ -779,7 +792,7 @@ func (m *model) leaveOverlay() bool {
 // the page they covered, not the one before it.
 func (m *model) goBack() {
 	switch {
-	case m.offHistory && m.histIdx >= 0:
+	case m.covering():
 		m.restoreHistory()
 	case m.canGoBack():
 		m.histIdx--
@@ -806,7 +819,7 @@ func (m model) handleHelpDismiss(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.showHelp = false
 	if m.histIdx >= 0 {
-		m.restoreHistory()
+		m.reshow()
 	} else if m.ready {
 		m.viewport.SetContent("")
 	}
@@ -819,7 +832,7 @@ func (m model) handleHelpDismiss(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m model) linkVisible(idx int) bool {
 	top := m.viewport.YOffset()
 	bottom := top + m.viewport.Height()
-	for _, r := range m.linkRegions {
+	for _, r := range m.linkSegs {
 		if r.Index == idx {
 			return r.Line >= top && r.Line < bottom
 		}
@@ -833,7 +846,7 @@ func (m model) linkVisible(idx int) bool {
 func (m model) firstVisibleLinkIdx() int {
 	top := m.viewport.YOffset()
 	bottom := top + m.viewport.Height()
-	for _, r := range m.linkRegions {
+	for _, r := range m.linkSegs {
 		if r.Line >= top && r.Line < bottom {
 			return r.Index
 		}
@@ -860,7 +873,7 @@ func (m model) handleTabNavigation() (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(m.paint())
 			// Scroll to keep the selected link visible.
 			if m.linkIdx >= 0 {
-				for _, r := range m.linkRegions {
+				for _, r := range m.linkSegs {
 					if r.Index != m.linkIdx {
 						continue
 					}
@@ -977,22 +990,18 @@ func (m model) handleBookmarkToggle() (tea.Model, tea.Cmd) {
 	if url == "" || m.bookmarkStore == nil {
 		return m, nil
 	}
-	if m.bookmarkStore.Has(url) {
-		if err := m.bookmarkStore.Remove(url); err != nil {
-			m.bookmarkMsg = "Failed to remove bookmark: " + err.Error()
-		} else {
-			m.bookmarkMsg = "Bookmark removed"
-		}
-	} else {
-		title := links.ExtractTitle(m.rawBody)
-		if title == "" {
-			title = url
-		}
-		if err := m.bookmarkStore.Add(url, title); err != nil {
-			m.bookmarkMsg = "Failed to bookmark: " + err.Error()
-		} else {
-			m.bookmarkMsg = "Bookmarked!"
-		}
+	title := links.ExtractTitle(m.rawBody)
+	if title == "" {
+		title = url
+	}
+	// The store decides add or remove on the file as it is now.
+	switch added, err := m.bookmarkStore.Toggle(url, title); {
+	case err != nil:
+		m.bookmarkMsg = "Failed to update bookmarks: " + err.Error()
+	case added:
+		m.bookmarkMsg = "Bookmarked!"
+	default:
+		m.bookmarkMsg = "Bookmark removed"
 	}
 	m.bookmarkSeq++
 	seq := m.bookmarkSeq
@@ -1009,9 +1018,9 @@ func (m model) handleBookmarkView() (tea.Model, tea.Cmd) {
 	m.loading = false
 	m.cancelFetch()
 	m.fromCache = false
-	// The list is a document of its own, off the history: Esc or back returns.
+	// The list is a document of its own with no URL, so it covers the
+	// history page: Esc or back returns to it.
 	m.showDocument(&historyEntry{status: "bookmarks", rawBody: m.bookmarkStore.Render()})
-	m.offHistory = true
 	return m, nil
 }
 

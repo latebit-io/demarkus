@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/probe"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/provisiontest"
 )
 
@@ -222,8 +223,8 @@ func TestBinaryVersionAtTimeout(t *testing.T) {
 	if got := BinaryVersionAt(hang); got != "" {
 		t.Errorf("binaryVersionAt(hanging) = %q, want empty", got)
 	}
-	if d := time.Since(start); d > versionProbeTimeout+time.Second {
-		t.Errorf("binaryVersionAt(hanging) took %v, want within the %v budget", d, versionProbeTimeout)
+	if d := time.Since(start); d > probe.Timeout+time.Second {
+		t.Errorf("binaryVersionAt(hanging) took %v, want within the %v budget", d, probe.Timeout)
 	}
 }
 
@@ -249,7 +250,7 @@ func TestBinaryVersionAtKillsForkedChild(t *testing.T) {
 		if got != "" {
 			t.Errorf("binaryVersionAt(forking) = %q, want empty", got)
 		}
-	case <-time.After(versionProbeTimeout + 2*time.Second):
+	case <-time.After(probe.Timeout + 2*time.Second):
 		t.Fatal("binaryVersionAt never returned; the forked grandchild still holds the probe's stdout pipe")
 	}
 	beatSize := func() int64 {
@@ -303,24 +304,6 @@ func TestExecRefusal(t *testing.T) {
 				t.Errorf("execRefusal(%s) = %q, want %q", tt.name, got, tt.want)
 			}
 		})
-	}
-}
-
-// TestProbeBounded separates the two failures a discovery command can have: a
-// clean non-zero exit is an answer, an unrunnable command is not.
-func TestProbeBounded(t *testing.T) {
-	if out, ran := probeBounded(nil, "sh", "-c", "echo hello"); out != "hello" || !ran {
-		t.Errorf("probeBounded(echo) = %q, %v; want %q, true", out, ran, "hello")
-	}
-	// pgrep reports "no match" as exit 1, which must not read as a failed probe.
-	if out, ran := probeBounded(nil, "sh", "-c", "exit 1"); out != "" || !ran {
-		t.Errorf("probeBounded(exit 1) = %q, %v; want empty, true", out, ran)
-	}
-	if _, ran := probeBounded(nil, "definitely-not-a-real-command-9f3c"); ran {
-		t.Error("probeBounded(missing command) reported the probe as having run")
-	}
-	if _, ran := probeBounded(nil, "sh", "-c", "sleep 60"); ran {
-		t.Error("probeBounded(hanging command) reported the probe as having run")
 	}
 }
 

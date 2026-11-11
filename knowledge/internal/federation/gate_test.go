@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
@@ -264,7 +265,13 @@ func TestWithdrawalIsNotLandedUntilOldVersionsAreGone(t *testing.T) {
 	if e.pruned != 0 || !e.owed {
 		t.Fatalf("pruned %d, owed %t after a failed prune; want it still owed", e.pruned, e.owed)
 	}
+	// Within the backoff nothing is written: no version piles up meanwhile.
+	writes := h.hub.exportWrites()
+	if err := e.export(ctx); err != nil || h.hub.exportWrites() != writes || !e.owed {
+		t.Fatalf("export inside the prune backoff: %v, %d more writes, owed %t", err, h.hub.exportWrites()-writes, e.owed)
+	}
 	h.hub.setStuck(false)
+	e.pruneRetryAt = time.Time{} // the backoff has passed
 	if err := e.export(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -29,7 +29,16 @@ func visible(s string) string {
 	return b.String()
 }
 
-func TestLocate(t *testing.T) {
+// regionsOf is the cells of segments, as the mouse reads them.
+func regionsOf(segments []Segment) []Region {
+	regions := make([]Region, 0, len(segments))
+	for _, s := range segments {
+		regions = append(regions, s.Region)
+	}
+	return regions
+}
+
+func TestSpansOf(t *testing.T) {
 	tests := []struct {
 		name     string
 		rendered string
@@ -53,8 +62,8 @@ func TestLocate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			runes := []rune(tt.rendered)
 			var got []string
-			for _, s := range Locate(tt.rendered, tt.links) {
-				got = append(got, visible(string(runes[s.Start:s.End])))
+			for _, s := range spansOf(runes, tt.links) {
+				got = append(got, visible(string(runes[s.start:s.end])))
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("spans = %q, want %q", got, tt.want)
@@ -75,7 +84,7 @@ func TestPaint(t *testing.T) {
 	rendered := "see " + renderedLink("/p.md", "hello") + " rest"
 	spans := Locate(rendered, []Link{{"hello", "/p.md"}})
 
-	plain, regions := Paint(rendered, spans, none)
+	plain, regions := Paint(rendered, spans, none), regionsOf(spans)
 	if plain != rendered {
 		t.Errorf("unlit output changed: %q", plain)
 	}
@@ -84,7 +93,7 @@ func TestPaint(t *testing.T) {
 		t.Errorf("regions = %+v, want %+v", regions, want)
 	}
 
-	lit, _ := Paint(rendered, spans, only(0))
+	lit := Paint(rendered, spans, only(0))
 	if visible(lit) != "see hello /p.md rest" {
 		t.Errorf("highlight changed the visible text: %q", visible(lit))
 	}
@@ -97,7 +106,7 @@ func TestPaint(t *testing.T) {
 func TestPaintLightsOnlyTheChosenLink(t *testing.T) {
 	rendered := renderedLink("/a.md", "a") + " " + renderedLink("/b.md", "b") + " end"
 	spans := Locate(rendered, []Link{{"a", "/a.md"}, {"b", "/b.md"}})
-	lit, regions := Paint(rendered, spans, only(1))
+	lit, regions := Paint(rendered, spans, only(1)), regionsOf(spans)
 	if len(regions) != 2 || strings.Count(lit, reverseOn) != 1 {
 		t.Fatalf("regions = %+v, lit = %q", regions, lit)
 	}
@@ -109,7 +118,7 @@ func TestPaintLightsOnlyTheChosenLink(t *testing.T) {
 // Hit-testing is in cells: a wide rune before or inside a link counts two.
 func TestPaintCountsCells(t *testing.T) {
 	rendered := "你好" + renderedLink("/文.md", "link") + " end"
-	_, regions := Paint(rendered, Locate(rendered, []Link{{"link", "/文.md"}}), none)
+	regions := regionsOf(Locate(rendered, []Link{{"link", "/文.md"}}))
 	// "link" (4) + " " (1) + "/文.md" (6) from cell 4.
 	if want := []Region{{Index: 0, Line: 0, StartCol: 4, EndCol: 15}}; !reflect.DeepEqual(regions, want) {
 		t.Errorf("regions = %+v, want %+v", regions, want)
@@ -118,7 +127,7 @@ func TestPaintCountsCells(t *testing.T) {
 
 func TestPaintSkipsStyleSequences(t *testing.T) {
 	rendered := "line0\n\x1b[1mpre \x1b[0m" + osc8("/u.md", "\x1b[4mhi\x1b[0m") + " tail"
-	_, regions := Paint(rendered, Locate(rendered, []Link{{"hi", "/u.md"}}), none)
+	regions := regionsOf(Locate(rendered, []Link{{"hi", "/u.md"}}))
 	if want := []Region{{Index: 0, Line: 1, StartCol: 4, EndCol: 6}}; !reflect.DeepEqual(regions, want) {
 		t.Errorf("regions = %+v, want %+v", regions, want)
 	}
@@ -129,7 +138,7 @@ func TestPaintSkipsStyleSequences(t *testing.T) {
 func TestPaintWrappedLinkHasARegionPerLine(t *testing.T) {
 	rendered := "  see " + osc8("/u.md", "a long\n  label") + " after"
 	spans := Locate(rendered, []Link{{"a long label", "/u.md"}})
-	lit, regions := Paint(rendered, spans, only(0))
+	lit, regions := Paint(rendered, spans, only(0)), regionsOf(spans)
 	want := []Region{{Index: 0, Line: 0, StartCol: 6, EndCol: 12}, {Index: 0, Line: 1, StartCol: 2, EndCol: 7}}
 	if !reflect.DeepEqual(regions, want) {
 		t.Fatalf("regions = %+v, want %+v", regions, want)
@@ -142,7 +151,7 @@ func TestPaintWrappedLinkHasARegionPerLine(t *testing.T) {
 // A style reset inside a lit link would end the highlight; it is asserted again.
 func TestPaintKeepsTheHighlightAcrossAStyleReset(t *testing.T) {
 	rendered := osc8("/u.md", "\x1b[4mhi\x1b[0m") + " " + osc8("/u.md", "\x1b[34m/u.md\x1b[0m")
-	lit, _ := Paint(rendered, Locate(rendered, []Link{{"hi", "/u.md"}}), only(0))
+	lit := Paint(rendered, Locate(rendered, []Link{{"hi", "/u.md"}}), only(0))
 	if !strings.Contains(lit, "hi\x1b[0m"+reverseOn) {
 		t.Errorf("highlight lost at the reset between label and URL: %q", lit)
 	}
@@ -157,7 +166,7 @@ func TestDocumentRunesCannotForgeALink(t *testing.T) {
 	forged := string(rune(0xF0000)) + "click here" + string(rune(0xF1000))
 	rendered := forged + " then " + osc8("/real.md", "real")
 	spans := Locate(rendered, []Link{{"real", "/real.md"}})
-	lit, regions := Paint(rendered, spans, only(0))
+	lit, regions := Paint(rendered, spans, only(0)), regionsOf(spans)
 	if len(regions) != 1 || regions[0].Index != 0 || regions[0].StartCol < len("click here then ") {
 		t.Fatalf("regions = %+v, want the real link alone", regions)
 	}

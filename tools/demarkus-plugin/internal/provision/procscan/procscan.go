@@ -21,40 +21,12 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/probe"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/progress"
 )
 
 // demarkusProtocolPort is demarkus-server's built-in default.
 const demarkusProtocolPort = 6309
-
-// versionProbeTimeout is the whole budget for one probe: the drift check runs it
-// on an adopted binary this plugin did not install, and a hung one would stall
-// session start. probeKillGrace is the slice of it reserved for pipe cleanup.
-const (
-	versionProbeTimeout = 2 * time.Second
-	probeKillGrace      = 500 * time.Millisecond
-)
-
-// probeBounded runs a read-only discovery command under the probe budget, so a
-// stalled ps or pgrep cannot block session start or /soul-status. Empty on any
-// failure, matching its callers' best-effort contract; nil env inherits ours.
-func probeBounded(env []string, name string, args ...string) (string, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout-probeKillGrace)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
-	if env != nil {
-		cmd.Env = append(os.Environ(), env...)
-	}
-	cmd.WaitDelay = probeKillGrace
-	out, err := cmd.Output()
-	if err != nil {
-		// A clean non-zero exit is an answer (pgrep says "no match" that way);
-		// only a failure to run at all leaves us without one.
-		var exit *exec.ExitError
-		return "", errors.As(err, &exit) && ctx.Err() == nil
-	}
-	return strings.TrimSpace(string(out)), true
-}
 
 // BinaryVersionAt runs --version on an executable path. Empty when the path is
 // missing, not executable, or the binary is too old or too slow to answer.
@@ -63,7 +35,7 @@ func BinaryVersionAt(p string) string {
 	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout-probeKillGrace)
+	ctx, cancel := context.WithTimeout(context.Background(), probe.Timeout-probe.KillGrace)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p, "--version")
 	// Own group, killed whole: a --version that forks leaves the grandchild
@@ -71,7 +43,7 @@ func BinaryVersionAt(p string) string {
 	// unblocks Output() (measured: the probe hangs indefinitely).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = probeKillGrace
+	cmd.WaitDelay = probe.KillGrace
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	if err != nil {
@@ -351,7 +323,7 @@ func procIsOurs(pid int) bool {
 // so the two cannot describe different processes. Empty unless the owner is us,
 // or where ps reports a bare name (Linux comm) rather than a path.
 func psOwnedExecutable(pid int) string {
-	line, _ := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "uid=,comm=")
+	line, _ := probe.Bounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "uid=,comm=")
 	uidField, exe, found := strings.Cut(strings.TrimSpace(line), " ")
 	if !found {
 		return ""
@@ -461,7 +433,7 @@ func Signal(pid int, sig syscall.Signal) error {
 // pgrepDemarkusServer returns the PIDs of processes whose command line contains
 // "demarkus-server", sorted ascending (deterministic, matching pgrep order).
 func pgrepDemarkusServer() ([]int, bool) {
-	out, ran := probeBounded(nil, "pgrep", "-f", "demarkus-server")
+	out, ran := probe.Bounded(nil, "pgrep", "-f", "demarkus-server")
 	if !ran {
 		return nil, false
 	}
@@ -488,7 +460,7 @@ func pgrepDemarkusServer() ([]int, bool) {
 // Args returns the full command line of pid, or "". A leading space is added
 // so argsRootMatches can match a flag at the first position as a word.
 func Args(pid int) (string, bool) {
-	args, ran := probeBounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "args=")
+	args, ran := probe.Bounded(nil, "ps", "-p", strconv.Itoa(pid), "-o", "args=")
 	if !ran {
 		return "", false
 	}
@@ -510,7 +482,7 @@ func procEnv(pid int, name string) (string, bool) {
 		}
 		return "", true
 	}
-	env, ran := probeBounded(nil, "ps", "eww", "-p", strconv.Itoa(pid))
+	env, ran := probe.Bounded(nil, "ps", "eww", "-p", strconv.Itoa(pid))
 	if !ran {
 		return "", false
 	}

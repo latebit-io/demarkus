@@ -6,6 +6,7 @@ package termlinks
 import (
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	runewidth "github.com/mattn/go-runewidth"
 )
@@ -17,11 +18,11 @@ type Link struct {
 	Dest string
 }
 
-// Span is the extent of link Index in rendered output, as rune offsets
-// [Start, End). It covers the label and the URL the renderer prints after it.
-type Span struct {
-	Index      int
-	Start, End int
+// span is the extent of link index in rendered output, as rune offsets
+// [start, end). It covers the label and the URL the renderer prints after it.
+type span struct {
+	index      int
+	start, end int
 }
 
 // Region is the cells one line shows of link Index: columns [StartCol, EndCol).
@@ -30,6 +31,14 @@ type Region struct {
 	Index            int
 	Line             int
 	StartCol, EndCol int
+}
+
+// Segment is the part of one link a single line shows, trimmed of the spacing
+// a wrap leaves at either end: its cells, for the mouse, and its bytes
+// [Start, End) in the rendered text, for the highlight.
+type Segment struct {
+	Region
+	Start, End int
 }
 
 // Reverse video on and off: how a selected or hovered link is shown.
@@ -44,17 +53,22 @@ type hyperlink struct {
 	start, end int
 }
 
-// Locate matches links to the OSC 8 hyperlinks in rendered, in document
-// order. A link with no label, or one the renderer gave no hyperlink (a bare
-// #anchor), has no span.
-func Locate(rendered string, links []Link) []Span {
+// Locate lays out the links of rendered, in document order: one segment per
+// line a link shows on. A link with no label, or one the renderer gave no
+// hyperlink (a bare #anchor), has none. Done once per render, not per repaint.
+func Locate(rendered string, links []Link) []Segment {
 	if len(links) == 0 {
 		return nil
 	}
 	runes := []rune(rendered)
+	return layout(runes, spansOf(runes, links))
+}
+
+// spansOf matches links to the OSC 8 hyperlinks in runes, in rendered order.
+func spansOf(runes []rune, links []Link) []span {
 	found := hyperlinks(runes)
 	used := make([]bool, len(found))
-	var spans []Span
+	var spans []span
 	for i, link := range links {
 		if link.Text == "" {
 			continue
@@ -70,9 +84,9 @@ func Locate(rendered string, links []Link) []Span {
 		for j := first; j <= last; j++ {
 			used[j] = true
 		}
-		spans = append(spans, Span{Index: i, Start: found[first].start, End: found[last].end})
+		spans = append(spans, span{index: i, start: found[first].start, end: found[last].end})
 	}
-	sort.Slice(spans, func(a, b int) bool { return spans[a].Start < spans[b].Start })
+	sort.Slice(spans, func(a, b int) bool { return spans[a].start < spans[b].start })
 	return spans
 }
 
@@ -234,39 +248,61 @@ func scan(runes []rune, visit func(i int, r rune, visible bool)) {
 	}
 }
 
-// segment is the part of one span a single line shows, trimmed of the
-// spacing a wrap leaves at either end.
-type segment struct {
-	region     Region
-	start, end int // rune offsets [start, end)
-}
-
-// Paint highlights the spans lit reports, in reverse video, and returns the
-// cells every span occupies. Mouse hit-testing is in cells, not runes: CJK
-// and emoji take two columns, combining marks none.
-func Paint(rendered string, spans []Span, lit func(index int) bool) (string, []Region) {
-	runes := []rune(rendered)
-	segments := layout(runes, spans)
-	regions := make([]Region, 0, len(segments))
-	var marks []mark
-	for _, s := range segments {
-		regions = append(regions, s.region)
-		if lit(s.region.Index) {
-			marks = append(marks, mark{s.start, reverseOn}, mark{s.end, reverseOff})
+// Paint highlights the segments lit reports, in reverse video. Mouse
+// hit-testing reads the segments' cells, not runes: CJK and emoji take two
+// columns, combining marks none.
+func Paint(rendered string, segments []Segment, lit func(index int) bool) string {
+	var b strings.Builder
+	at := 0
+	for i := range segments {
+		seg := &segments[i]
+		if !lit(seg.Index) {
+			continue
 		}
+		if b.Len() == 0 {
+			b.Grow(len(rendered) + len(segments)*len(reverseOn+reverseOff))
+		}
+		b.WriteString(rendered[at:seg.Start])
+		b.WriteString(reverseOn)
+		writeLit(&b, rendered[seg.Start:seg.End])
+		b.WriteString(reverseOff)
+		at = seg.End
 	}
-	if len(marks) == 0 {
-		return rendered, regions
+	if b.Len() == 0 {
+		return rendered
 	}
-	return insert(runes, marks), regions
+	b.WriteString(rendered[at:])
+	return b.String()
 }
 
-// layout walks the text once, tracking line and column, and cuts each span
-// into its per-line segments.
-func layout(runes []rune, spans []Span) []segment {
-	var out []segment
-	var cur *segment
-	line, col, next := 0, 0, 0
+// writeLit copies a lit segment. A style reset inside it would end the
+// highlight, so reverse video is asserted again after each style sequence.
+func writeLit(b *strings.Builder, text string) {
+	for {
+		i := strings.Index(text, "\x1b[")
+		if i < 0 {
+			b.WriteString(text)
+			return
+		}
+		end := i + 2
+		for end < len(text) && (text[end] < 0x40 || text[end] > 0x7e) {
+			end++
+		}
+		end = min(end+1, len(text))
+		b.WriteString(text[:end])
+		if text[end-1] == 'm' {
+			b.WriteString(reverseOn)
+		}
+		text = text[end:]
+	}
+}
+
+// layout walks the text once, tracking line, column and byte offset, and cuts
+// each span into its per-line segments.
+func layout(runes []rune, spans []span) []Segment {
+	var out []Segment
+	var cur *Segment
+	line, col, next, offset := 0, 0, 0, 0
 	flush := func() {
 		if cur != nil {
 			out = append(out, *cur)
@@ -274,7 +310,9 @@ func layout(runes []rune, spans []Span) []segment {
 		}
 	}
 	scan(runes, func(i int, r rune, visible bool) {
-		for next < len(spans) && i >= spans[next].End {
+		start := offset
+		offset += utf8.RuneLen(r)
+		for next < len(spans) && i >= spans[next].end {
 			flush()
 			next++
 		}
@@ -287,46 +325,14 @@ func layout(runes []rune, spans []Span) []segment {
 			return
 		}
 		width := runewidth.RuneWidth(r)
-		if next < len(spans) && i >= spans[next].Start && r != ' ' {
+		if next < len(spans) && i >= spans[next].start && r != ' ' {
 			if cur == nil {
-				cur = &segment{region: Region{Index: spans[next].Index, Line: line, StartCol: col}, start: i}
+				cur = &Segment{Index: spans[next].index, Line: line, StartCol: col, Start: start}
 			}
-			cur.end, cur.region.EndCol = i+1, col+width
+			cur.End, cur.EndCol = offset, col+width
 		}
 		col += width
 	})
 	flush()
 	return out
-}
-
-// mark is text to insert before the rune at an offset.
-type mark struct {
-	at   int
-	text string
-}
-
-// insert writes marks into runes. A style reset inside a lit segment would
-// end the highlight, so reverse video is asserted again after each one.
-func insert(runes []rune, marks []mark) string {
-	var b strings.Builder
-	b.Grow(len(runes) + len(marks)*len(reverseOff))
-	lit, m := false, 0
-	i := 0
-	for i <= len(runes) {
-		for ; m < len(marks) && marks[m].at == i; m++ {
-			b.WriteString(marks[m].text)
-			lit = marks[m].text == reverseOn
-		}
-		if i == len(runes) {
-			break
-		}
-		if after, ok := csi(runes, i); ok && lit && runes[after-1] == 'm' {
-			b.WriteString(string(runes[i:after]) + reverseOn)
-			i = after
-			continue
-		}
-		b.WriteRune(runes[i])
-		i++
-	}
-	return b.String()
 }

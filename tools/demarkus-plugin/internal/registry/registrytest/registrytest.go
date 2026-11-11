@@ -14,12 +14,21 @@ import (
 )
 
 // SetupHome points HOME at a temp dir with an empty ~/.demarkus.
-func SetupHome(t *testing.T) string {
+func SetupHome(t *testing.T) string { return SetupHomeWith(t, nil) }
+
+// SetupHomeWith is SetupHome with files written into ~/.demarkus by name.
+func SetupHomeWith(t *testing.T, files map[string]string) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if err := os.MkdirAll(filepath.Join(home, ".demarkus"), 0o750); err != nil {
+	dir := filepath.Join(home, ".demarkus")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return home
 }

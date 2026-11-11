@@ -30,9 +30,9 @@ func Hint(r project.Resolution) string {
 	return "not in the catalog; restore it with " + restore + " or rebind with /soul-default"
 }
 
-// Header renders the resolution as the session-start line; root is the
+// header renders the resolution as the session-start line; root is the
 // project's directory in the store.
-func Header(r project.Resolution, root string) string {
+func header(r project.Resolution, root string) string {
 	store := "Bound store: `" + r.Store + "`."
 	switch r.State {
 	case project.StateLocal:

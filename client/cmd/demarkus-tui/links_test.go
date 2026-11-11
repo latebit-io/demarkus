@@ -65,8 +65,7 @@ func TestHandleBookmarkViewResetsLinkState(t *testing.T) {
 		links:         []string{"mark://host/stale.md"},
 		linkInfos:     []links.LinkInfo{{Dest: "stale.md", Text: "stale"}},
 		rendered:      "stale-rendered",
-		linkSpans:     []termlinks.Span{{Index: 0, Start: 0, End: 5}},
-		linkRegions:   []termlinks.Region{{Index: 0}},
+		linkSegs:      []termlinks.Segment{{Index: 0, Start: 0, End: 5}},
 		linkIdx:       0,
 		hoverIdx:      0,
 	}
@@ -90,9 +89,9 @@ func TestHandleBookmarkViewResetsLinkState(t *testing.T) {
 	if got.hoverIdx != -1 {
 		t.Errorf("hoverIdx = %d, want -1", got.hoverIdx)
 	}
-	// The list is off the history: it never replaces the page it covers.
-	if !got.offHistory || got.pendingBody == "" {
-		t.Errorf("offHistory = %v, pendingBody = %q; want the list shown off the history", got.offHistory, got.pendingBody)
+	// The list has no URL: it covers the history page, never replaces it.
+	if got.currentURL != "" || got.pendingBody == "" {
+		t.Errorf("currentURL = %q, pendingBody = %q; want the list shown over the history", got.currentURL, got.pendingBody)
 	}
 
 	// Rendered, the view owns its own link state: nothing of the stale page is left.
@@ -100,8 +99,8 @@ func TestHandleBookmarkViewResetsLinkState(t *testing.T) {
 	m.viewport = viewport.New(viewport.WithWidth(80), viewport.WithHeight(10))
 	out, _ = m.handleBookmarkView()
 	got = out.(model)
-	if got.rendered == "" || strings.Contains(got.rendered, "stale") || len(got.linkRegions) != 2 {
-		t.Errorf("rendered = %q, regions = %+v; want the two bookmarks' own", got.rendered, got.linkRegions)
+	if got.rendered == "" || strings.Contains(got.rendered, "stale") || len(got.linkSegs) != 2 {
+		t.Errorf("rendered = %q, segments = %+v; want the two bookmarks' own", got.rendered, got.linkSegs)
 	}
 }
 
@@ -136,20 +135,19 @@ func TestHandleTabNavigationResumesFromScrollPosition(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Lines of plain text, one per region, so a repaint lays out the same lines.
-			spans := make([]termlinks.Span, len(regions))
+			// Lines of plain text, each region's first cell lit on a repaint.
+			segs := make([]termlinks.Segment, len(regions))
 			rendered := strings.Repeat("x\n", 60)
 			for i, r := range regions {
-				spans[i] = termlinks.Span{Index: r.Index, Start: 2 * r.Line, End: 2*r.Line + 1}
+				segs[i] = termlinks.Segment{Region: r, Start: 2 * r.Line, End: 2*r.Line + 1}
 			}
 			m := model{
-				viewport:    vp,
-				links:       linkURLs,
-				linkRegions: regions,
-				linkSpans:   spans,
-				linkIdx:     tt.startIdx,
-				hoverIdx:    -1,
-				rendered:    rendered,
+				viewport: vp,
+				links:    linkURLs,
+				linkSegs: segs,
+				linkIdx:  tt.startIdx,
+				hoverIdx: -1,
+				rendered: rendered,
 			}
 			if got := m.firstVisibleLinkIdx(); got != tt.wantFirst {
 				t.Errorf("firstVisibleLinkIdx() = %d, want %d", got, tt.wantFirst)
@@ -261,8 +259,8 @@ func TestRestoreHistoryRendersAtTheCurrentWidth(t *testing.T) {
 		t.Errorf("restored at width 40: %d lines, at 100: %d; want the narrow restore rewrapped",
 			strings.Count(narrow.rendered, "\n"), strings.Count(wide.rendered, "\n"))
 	}
-	if narrow.currentURL != "mark://host/doc.md" || len(narrow.links) != 1 || len(narrow.linkRegions) == 0 {
-		t.Errorf("restored links = %v, regions = %+v; want the document's link located", narrow.links, narrow.linkRegions)
+	if narrow.currentURL != "mark://host/doc.md" || len(narrow.links) != 1 || len(narrow.linkSegs) == 0 {
+		t.Errorf("restored links = %v, regions = %+v; want the document's link located", narrow.links, narrow.linkSegs)
 	}
 }
 
@@ -380,24 +378,24 @@ func TestHandleMouseWheelPreservesHoverWhenNoScroll(t *testing.T) {
 func TestClickDuringLoadDoesNotPanic(t *testing.T) {
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(5))
 	m := model{
-		viewport:    vp,
-		ready:       true,
-		viewMode:    viewDocument,
-		links:       []string{"mark://example.com/next.md"},
-		linkRegions: []termlinks.Region{{Index: 0, Line: 0, StartCol: 0, EndCol: 10}},
-		rendered:    "rendered",
-		addressBar:  textinput.New(),
+		viewport:   vp,
+		ready:      true,
+		viewMode:   viewDocument,
+		links:      []string{"mark://example.com/next.md"},
+		linkSegs:   []termlinks.Segment{{Index: 0, Line: 0, StartCol: 0, EndCol: 10}},
+		rendered:   "rendered",
+		addressBar: textinput.New(),
 	}
 	click := tea.MouseClickMsg{Button: tea.MouseLeft, X: 1, Y: 2}
 
 	out, _ := m.handleMouseClick(click)
 	loading := out.(model)
-	if len(loading.linkRegions) != 0 || loading.rendered != "" {
-		t.Fatalf("followLink kept stale regions: %d regions, rendered %q", len(loading.linkRegions), loading.rendered)
+	if len(loading.linkSegs) != 0 || loading.rendered != "" {
+		t.Fatalf("followLink kept stale regions: %d regions, rendered %q", len(loading.linkSegs), loading.rendered)
 	}
 
 	// Stale regions from any other path must still be ignored, not indexed.
-	loading.linkRegions = []termlinks.Region{{Index: 3, Line: 0, StartCol: 0, EndCol: 10}}
+	loading.linkSegs = []termlinks.Segment{{Index: 3, Line: 0, StartCol: 0, EndCol: 10}}
 	if _, cmd := loading.handleMouseClick(click); cmd != nil {
 		t.Fatal("click on an out-of-range region must not follow a link")
 	}

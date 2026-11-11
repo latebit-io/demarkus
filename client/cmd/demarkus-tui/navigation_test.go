@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
@@ -35,11 +36,11 @@ func TestBackFromAFailedFetchReturnsToThePageItCovered(t *testing.T) {
 	for name, key := range map[string]tea.KeyPressMsg{"back": {Code: '['}, "esc": {Code: tea.KeyEscape}} {
 		out, _ := m.handleFetchResult(fetchResult{url: "mark://host/missing.md", seq: m.fetchSeq, err: errBoom})
 		failed := out.(model)
-		if !failed.offHistory || failed.err == nil {
-			t.Fatalf("%s: failed fetch = offHistory %v err %v", name, failed.offHistory, failed.err)
+		if !failed.covering() || failed.err == nil {
+			t.Fatalf("%s: failed fetch = covering %v err %v", name, failed.covering(), failed.err)
 		}
 		back := pressed(t, failed, key)
-		if back.currentURL != "mark://host/b.md" || back.err != nil || back.histIdx != 1 || back.offHistory {
+		if back.currentURL != "mark://host/b.md" || back.err != nil || back.histIdx != 1 || back.covering() {
 			t.Errorf("%s from the error: url %q err %v histIdx %d; want page B again", name, back.currentURL, back.err, back.histIdx)
 		}
 	}
@@ -103,19 +104,44 @@ func TestWrappedLinkIsClickableOnEveryLine(t *testing.T) {
 		viewport: viewport.New(viewport.WithWidth(44), viewport.WithHeight(20))}
 	m.showDocument(&historyEntry{url: "mark://host/doc.md", rawBody: body, status: "ok"})
 	lines := map[int]bool{}
-	for _, r := range m.linkRegions {
+	for _, r := range m.linkSegs {
 		if r.Index != 0 || r.EndCol <= r.StartCol {
 			t.Fatalf("region = %+v", r)
 		}
 		lines[r.Line] = true
 	}
 	if len(lines) < 2 {
-		t.Fatalf("regions = %+v, want one per line of the wrapped link", m.linkRegions)
+		t.Fatalf("regions = %+v, want one per line of the wrapped link", m.linkSegs)
 	}
 	// A click on the first line follows the link.
-	first := m.linkRegions[0]
+	first := m.linkSegs[0]
 	out, cmd := m.handleMouseClick(tea.MouseClickMsg{Button: tea.MouseLeft, X: first.StartCol, Y: first.Line + 2})
 	if cmd == nil || !out.(model).loading {
 		t.Error("a click on the first line of a wrapped link did not follow it")
+	}
+}
+
+// Dismissing the help puts back the render in hand: no markdown pass, unless
+// the terminal was resized while the help was up.
+func TestHelpDismissReusesTheRenderInHand(t *testing.T) {
+	entry := historyEntry{url: "mark://host/doc.md", rawBody: "# Doc\n\n[next](next.md)\n", status: "ok"}
+	m := model{ready: true, width: 60, height: 24, styleName: "dark", linkIdx: -1, hoverIdx: -1,
+		addressBar: textinput.New(), history: []historyEntry{entry}, histIdx: 0,
+		viewport: viewport.New(viewport.WithWidth(60), viewport.WithHeight(20))}
+	m.showDocument(&entry)
+	rendered := m.rendered
+	m.renderer = nil // a render would have to build one
+	m.showHelp, m.linkIdx = true, 0
+
+	out, _ := m.handleHelpDismiss(tea.KeyPressMsg{Code: tea.KeyEscape})
+	got := out.(model)
+	if got.renderer != nil || got.rendered != rendered || got.showHelp || got.linkIdx != -1 {
+		t.Fatalf("help dismiss rendered again (renderer %v) or kept state: showHelp %v linkIdx %d", got.renderer != nil, got.showHelp, got.linkIdx)
+	}
+
+	got.showHelp, got.width = true, 40
+	out, _ = got.handleHelpDismiss(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if resized := out.(model); resized.renderer == nil || resized.renderedAt != 36 {
+		t.Errorf("after a resize the page was not rendered for the new width: renderedAt %d", resized.renderedAt)
 	}
 }

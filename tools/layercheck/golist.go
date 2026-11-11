@@ -2,12 +2,15 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 )
 
 const repoPrefix = "github.com/latebit-io/demarkus/"
@@ -30,17 +33,23 @@ func listPackages(root string) ([]pkg, error) {
 	if len(mods) == 0 {
 		return nil, fmt.Errorf("no go.mod under %s/*", root)
 	}
-	var listed []pkg
-	for _, mod := range mods {
-		for _, goos := range platforms {
-			one, err := listModule(filepath.Dir(mod), goos)
-			if err != nil {
-				return nil, err
-			}
-			listed = append(listed, one...)
+	// One go list per module and platform, side by side: they share nothing.
+	runs := make([][]pkg, len(mods)*len(platforms))
+	errs := make([]error, len(runs))
+	var wg sync.WaitGroup
+	for i, mod := range mods {
+		for j, goos := range platforms {
+			wg.Go(func() {
+				n := i*len(platforms) + j
+				runs[n], errs[n] = listModule(filepath.Dir(mod), goos)
+			})
 		}
 	}
-	return mergePackages(listed), nil
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	return mergePackages(slices.Concat(runs...)), nil
 }
 
 func listModule(dir, goos string) ([]pkg, error) {
@@ -63,23 +72,16 @@ func listModule(dir, goos string) ([]pkg, error) {
 // mergePackages folds the listings of one package on several platforms into
 // one, with the union of their imports, ordered by path.
 func mergePackages(listed []pkg) []pkg {
-	byPath := map[string]*pkg{}
+	byPath := map[string]pkg{}
 	for _, p := range listed {
-		into, ok := byPath[p.path]
-		if !ok {
-			byPath[p.path] = &pkg{path: p.path}
-			into = byPath[p.path]
-		}
+		into := byPath[p.path]
+		into.path = p.path
 		into.imports = union(into.imports, p.imports)
 		into.testImports = union(into.testImports, p.testImports)
 		into.external = union(into.external, p.external)
+		byPath[p.path] = into
 	}
-	out := make([]pkg, 0, len(byPath))
-	for _, p := range byPath {
-		out = append(out, *p)
-	}
-	slices.SortFunc(out, func(a, b pkg) int { return strings.Compare(a.path, b.path) })
-	return out
+	return slices.SortedFunc(maps.Values(byPath), func(a, b pkg) int { return strings.Compare(a.path, b.path) })
 }
 
 func union(have, more []string) []string {

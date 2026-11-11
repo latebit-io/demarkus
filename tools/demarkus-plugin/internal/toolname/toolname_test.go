@@ -1,27 +1,11 @@
 package toolname
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/registrytest"
 )
-
-func setupHome(t *testing.T, files map[string]string) {
-	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".demarkus")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
 
 func TestParse(t *testing.T) {
 	cases := []struct {
@@ -65,7 +49,7 @@ func TestQualify(t *testing.T) {
 
 // A joined store whose slug holds "mark" routes like any other.
 func TestRoutingSurvivesMarkInTheServerName(t *testing.T) {
-	setupHome(t, map[string]string{"souls": "bookmark\tmark://b.example\t0\t-\n", "knowledge-systems": "benchmark-notes\n"})
+	registrytest.SetupHomeWith(t, map[string]string{"souls": "bookmark\tmark://b.example\t0\t-\n", "knowledge-systems": "benchmark-notes\n"})
 	if id, err := MemoryTargetID("mcp__bookmark__mark_publish"); err != nil || id != "bookmark" {
 		t.Errorf("memory target = %q, %v, want bookmark", id, err)
 	}
@@ -76,11 +60,11 @@ func TestRoutingSurvivesMarkInTheServerName(t *testing.T) {
 
 func TestLocalMemoryAliasResolvesBrandedServer(t *testing.T) {
 	branded := "mcp__plugin_acme-brain_memory__mark_publish"
-	setupHome(t, map[string]string{"knowledge-systems": "corp\n"})
+	registrytest.SetupHomeWith(t, map[string]string{"knowledge-systems": "corp\n"})
 	if id, err := MemoryTargetID(branded); err != nil || id != "" {
 		t.Fatalf("no alias: id=%q err=%v", id, err)
 	}
-	setupHome(t, map[string]string{"knowledge-systems": "corp\n", config.LocalMemoryAliasFile: "0123abcd memory\n"})
+	registrytest.SetupHomeWith(t, map[string]string{"knowledge-systems": "corp\n", config.LocalMemoryAliasFile: "0123abcd memory\n"})
 	for _, tool := range []string{branded, "mcp__memory__mark_append", "memory_mark_publish", "mcp__plugin_demarkus-memory_demarkus-memory__mark_publish"} {
 		id, err := MemoryTargetID(tool)
 		if err != nil || id != config.LocalMemoryID {

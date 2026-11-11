@@ -123,34 +123,60 @@ func (s *Store) Has(url string) bool {
 }
 
 func (s *Store) hasCanonical(url string) bool {
-	return slices.ContainsFunc(s.lines, func(l line) bool { return l.bm != nil && l.bm.URL == url })
+	return slices.ContainsFunc(s.lines, func(l line) bool { return l.marks(url) })
+}
+
+// marks reports the line that bookmarks the canonical url.
+func (l line) marks(url string) bool { return l.bm != nil && l.bm.URL == url }
+
+// with is lines plus a bookmark of the canonical url, dated today.
+func with(lines []line, url, title string) []line {
+	if len(lines) == 0 {
+		lines = []line{{raw: header}, {raw: ""}}
+	}
+	bm := Bookmark{Title: title, URL: url, Date: time.Now().Format("2006-01-02")}
+	return append(lines, line{raw: bm.markdown(), bm: &bm})
+}
+
+// without is lines less the bookmark of the canonical url, nil when there is none.
+func without(lines []line, url string) []line {
+	kept := slices.DeleteFunc(slices.Clone(lines), func(l line) bool { return l.marks(url) })
+	if len(kept) == len(lines) {
+		return nil
+	}
+	return kept
 }
 
 // Add appends a bookmark. If the URL is already bookmarked, this is a no-op.
 func (s *Store) Add(url, title string) error {
 	url = links.CanonicalURL(url)
 	return s.mutate(func(lines []line) []line {
-		if slices.ContainsFunc(lines, func(l line) bool { return l.bm != nil && l.bm.URL == url }) {
+		if without(lines, url) != nil {
 			return nil
 		}
-		if len(lines) == 0 {
-			lines = []line{{raw: header}, {raw: ""}}
-		}
-		bm := Bookmark{Title: title, URL: url, Date: time.Now().Format("2006-01-02")}
-		return append(lines, line{raw: bm.markdown(), bm: &bm})
+		return with(lines, url, title)
 	})
 }
 
 // Remove deletes the bookmark with the given URL and writes to disk.
 func (s *Store) Remove(url string) error {
 	url = links.CanonicalURL(url)
-	return s.mutate(func(lines []line) []line {
-		kept := slices.DeleteFunc(slices.Clone(lines), func(l line) bool { return l.bm != nil && l.bm.URL == url })
-		if len(kept) == len(lines) {
-			return nil
+	return s.mutate(func(lines []line) []line { return without(lines, url) })
+}
+
+// Toggle removes the bookmark of url, or adds it under title when there is
+// none, and reports which. It decides on the file as it is now, under the
+// lock: another process may have changed it since this store last read it.
+func (s *Store) Toggle(url, title string) (added bool, err error) {
+	url = links.CanonicalURL(url)
+	err = s.mutate(func(lines []line) []line {
+		if kept := without(lines, url); kept != nil {
+			return kept
 		}
-		return kept
+		added = true
+		return with(lines, url, title)
 	})
+	return added, err
 }
 
 // mutate applies change to the file as it is now, under the file's lock, so

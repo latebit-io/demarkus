@@ -33,6 +33,9 @@ const (
 	// retention keeps a checkpoint document's newest versions; a reader whose
 	// pinned shard was pruned rereads the manifest.
 	retention = 5
+	// maxPruneRetry caps the backoff of a withdrawal or export whose prune
+	// keeps failing.
+	maxPruneRetry = time.Hour
 	// gatePoll bounds how long a world goes without asking whether it may
 	// still be derived: nothing tells the deriver that a gate moved.
 	gatePoll = 15 * time.Second
@@ -70,11 +73,15 @@ func HubIO(w Writer, hub string) generation.IO {
 			return res.Response, err
 		},
 		Publish: func(ctx context.Context, path, body string, expected int) (protocol.Response, error) {
-			meta := generation.ArtifactMetadata("demarkus-federation", retention)
-			if prunes(ctx) {
+			keep, pruning := retention, prunes(ctx)
+			if pruning {
+				keep = 1
+			}
+			meta := generation.ArtifactMetadata("demarkus-federation", keep)
+			if pruning {
 				// The stamp makes every pruning write a new version: an
 				// unchanged publish would prune nothing, so no retry could.
-				meta["retention"], meta[prunedAtKey] = "1", time.Now().UTC().Format(time.RFC3339Nano)
+				meta[prunedAtKey] = time.Now().UTC().Format(time.RFC3339Nano)
 			}
 			res, err := w.Publish(protocol.WithGrant(ctx, Grant), fetch.WriteRequest{
 				Host: hub, Path: path, Body: body, ExpectedVersion: expected, Metadata: meta,
@@ -227,10 +234,15 @@ func (d *deriver) derive(ctx context.Context, name string) {
 func (d *deriver) stayOut(ctx context.Context, name string, log *slog.Logger, reason error) bool {
 	log.Warn("federation: world refused, withdrawing what the hub holds of it", "reason", reason)
 	withdrawn := false
+	// Each failed try may have written versions a broken store cannot
+	// prune, so tries back off instead of adding more every poll.
+	var retryAt time.Time
+	wait := d.gatePoll
 	for d.refused(name) != nil {
-		if !withdrawn {
+		if !withdrawn && !time.Now().Before(retryAt) {
 			if err := d.withdraw(ctx, name); err != nil && ctx.Err() == nil {
-				log.Error("federation: refused world not withdrawn from the hub", "err", err)
+				log.Error("federation: refused world not withdrawn from the hub", "err", err, "retry", wait)
+				retryAt, wait = time.Now().Add(wait), min(wait*2, maxPruneRetry)
 			} else {
 				withdrawn = true
 			}

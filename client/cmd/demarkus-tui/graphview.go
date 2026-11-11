@@ -468,7 +468,7 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cancelCrawl()
 		m.viewMode = viewDocument
 		if m.histIdx >= 0 {
-			m.restoreHistory()
+			m.reshow()
 		} else if m.ready {
 			m.viewport.SetContent("\n  No document loaded.\n  Use the address bar to load a document.\n")
 		}
@@ -480,7 +480,7 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cancelCrawl()
 		m.viewMode = viewDocument
 		if m.histIdx >= 0 {
-			m.restoreHistory()
+			m.reshow()
 		} else if m.ready {
 			m.viewport.SetContent("\n  No document loaded.\n  Use the address bar to load a document.\n")
 		}

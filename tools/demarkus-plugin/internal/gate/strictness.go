@@ -4,19 +4,20 @@ import (
 	"os"
 	"strings"
 
+	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
-// Strictness is the enforcement level a guard applies to a violation.
-type Strictness string
+// Strictness is the enforcement level a guard applies to a violation: the
+// policy's own levels, so a guard and a policy grade alike.
+type Strictness = publishpolicy.Strictness
 
-// Enforcement levels a guard can apply to a violation.
+// The policy's levels, and Off for a guard that can be disabled (taint).
 const (
-	Warn  Strictness = "warn"
-	Block Strictness = "block"
-	Ask   Strictness = "ask"
-	// Off disables a guard that allows it (the taint guard).
-	Off Strictness = "off"
+	Warn             = publishpolicy.Warn
+	Block            = publishpolicy.Block
+	Ask              = publishpolicy.Ask
+	Off   Strictness = "off"
 )
 
 func validStrictness(s string, def Strictness) Strictness {

@@ -18,7 +18,6 @@ import (
 	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
-	"github.com/latebit-io/demarkus/protocol/toolvocab"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/taint"
@@ -156,12 +155,9 @@ func governanceDecision(pt toolname.Parsed, args map[string]any) (*Decision, err
 		pt.Verb, url)}, nil
 }
 
-// storeWrite reports a tool that changes a document store.
-func storeWrite(pt toolname.Parsed) bool { return toolvocab.StoreWrite[toolvocab.Prefix+pt.Verb] }
-
 // writes reports a store-write call that sends a write, not a report.
 func writes(pt toolname.Parsed, args map[string]any) bool {
-	return storeWrite(pt) && !reportOnly(pt, args)
+	return pt.StoreWrite() && !reportOnly(pt, args)
 }
 
 // reportOnly is a curate or promote call that writes nothing: it builds the
@@ -217,7 +213,7 @@ func contentDecision(pt toolname.Parsed, args map[string]any) *Decision {
 // instruction would act; an unreadable transcript asks. No scan when the
 // verdict cannot show: a block stands, or a post hook drops an ask.
 func taintDecision(pt toolname.Parsed, args map[string]any, in *Input, d Decision) (*Decision, []string, error) {
-	if !storeWrite(pt) || d.Decision == "block" {
+	if !pt.StoreWrite() || d.Decision == "block" {
 		return nil, nil, nil
 	}
 	s, err := taintStrictness()
@@ -510,7 +506,7 @@ func evalKnowledge(pt toolname.Parsed, args map[string]any, slug string) (Decisi
 func knowledgeTagDecision(args map[string]any, slug, verb string) *Decision {
 	md := metadataOf(args)
 	url := urlOf(args)
-	policy := publishpolicy.Policy{Strictness: publishpolicy.Strictness(knowledgeStrictness())}
+	policy := publishpolicy.Policy{Strictness: knowledgeStrictness()}
 	result := publishpolicy.Evaluate(policy, url, md)
 	if verb == "append" {
 		result = publishpolicy.EvaluateOverrides(policy, url, md)

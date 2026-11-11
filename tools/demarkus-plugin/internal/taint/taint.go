@@ -19,7 +19,6 @@ import (
 
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/protocol/hiddentext"
-	"github.com/latebit-io/demarkus/protocol/toolvocab"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/facts"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/toolname"
 )
@@ -65,7 +64,7 @@ func Of(c *Call, memoryID func(tool string) string) string {
 		return ""
 	}
 	if pt, ok := toolname.Parse(c.Name); ok {
-		return foreignRead(c, pt.Verb, memoryID)
+		return foreignRead(c, pt, memoryID)
 	}
 	if strings.HasPrefix(c.Name, "mcp__") && (browserRe.MatchString(c.Name) || webToolRe.MatchString(c.Name)) {
 		return Clean(c.Name)
@@ -85,8 +84,8 @@ func publicURL(raw string) string {
 
 // foreignRead flags a soul tool that is not a write and names a full mark://
 // URL: the bound store takes bare paths, so a host is someone else's server.
-func foreignRead(c *Call, verb string, memoryID func(string) string) string {
-	if toolvocab.StoreWrite[toolvocab.Prefix+verb] || !strings.HasPrefix(c.Input.URL, "mark://") || memoryID(c.Name) == "" {
+func foreignRead(c *Call, pt toolname.Parsed, memoryID func(string) string) string {
+	if pt.StoreWrite() || !strings.HasPrefix(c.Input.URL, "mark://") || memoryID(c.Name) == "" {
 		return ""
 	}
 	target, err := links.ParseMark(c.Input.URL)

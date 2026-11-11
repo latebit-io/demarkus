@@ -1,7 +1,5 @@
-// Package lockdir provides an atomic mkdir mutex with stale-lock recovery,
-// shared by registry (state writes) and provision (session startup). A lock
-// is stamped with its owner's PID and the time taken: a live PID that started
-// after the stamp is a reused number, not the owner.
+// Package lockdir provides an atomic mkdir mutex with PID- and time-stamped
+// stale-lock recovery, shared by registry (state writes) and provision (session startup).
 // The directory remains the held-lock marker, so no fd spans the critical
 // section. A short-lived flock serializes acquire/reclaim/release transitions.
 // Assumption: mixed-version writers never overlap. Legacy (pre-staging) locks

@@ -17,6 +17,9 @@ type Parsed struct {
 	Verb   string // publish, append, fetch, ...
 }
 
+// StoreWrite reports a tool that changes a document store.
+func (p Parsed) StoreWrite() bool { return toolvocab.StoreWrite[toolvocab.Prefix+p.Verb] }
+
 // Parse reads mcp__<server>__mark_<verb> (Claude Code) and <server>_mark_<verb>
 // or mark_<verb> (pi-mcp-adapter). The tool is the longest known name the
 // string ends in, so a server named with "mark_" cannot shift the verb.

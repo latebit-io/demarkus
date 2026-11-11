@@ -426,3 +426,33 @@ func TestConcurrentStoresLoseNoBookmark(t *testing.T) {
 		t.Errorf("%d bookmarks survive, want %d", got, writers)
 	}
 }
+
+// Toggle decides on the file as it is now, not on this store's snapshot: a
+// bookmark another process added is removed, never added twice.
+func TestToggleDecidesOnTheFileAsItIsNow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	tui, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Add("mark://h/doc.md", "Doc"); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := tui.Toggle("mark://h/doc.md", "Doc"); err != nil || added {
+		t.Fatalf("Toggle over another process's bookmark = added %v, %v; want it removed", added, err)
+	}
+	if added, err := tui.Toggle("mark://h/doc.md", "Doc"); err != nil || !added {
+		t.Fatalf("Toggle with no bookmark = added %v, %v; want it added", added, err)
+	}
+	fresh, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(fresh.List()); got != 1 {
+		t.Errorf("%d bookmarks after remove then add, want 1", got)
+	}
+}

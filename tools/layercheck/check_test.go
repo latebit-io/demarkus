@@ -115,6 +115,10 @@ func TestMayUse(t *testing.T) {
 		{"storeclient", "cloud.google.com/go/storage", false},
 		{"knowledge", "k8s.io/client-go/rest", true},
 		{"soul", "k8s.io/client-go/rest", false},
+		{"knowledge", "charm.land/bubbletea/v2", false},
+		{"tool", "cloud.google.com/go/storage", true},
+		{"a-new-layer", "cloud.google.com/go/storage", false}, // denied until named
+		{"model", "golang.org/x/sync/errgroup", true},
 	} {
 		if got := mayUse(c.layer, c.path); got != c.want {
 			t.Errorf("mayUse(%s, %s) = %v, want %v", c.layer, c.path, got, c.want)
