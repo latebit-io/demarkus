@@ -70,7 +70,7 @@ Pi adapter CI typechecks the adapter and tests the built-in MCP wiring (`src/nat
 | `PostToolUse` promote-nudge | `tool_call`, injected reminder on a fresh ADR publish |
 | `Stop` journal-nudge | `session_shutdown` notify (pi can't force an extra turn) |
 
-An `ask` verdict opens a pi confirm dialog for that call; an approved `mark_publish` after an untrusted read carries `source-trust: tainted`. Without a UI (print and JSON modes) it is a block whose reason tells the agent to confirm with the user first. With both demarkus pi plugins loaded, this one owns the gate, so a write asks once. A write after an untrusted read (web, browser, `curl`, `gh api`) warns by default; `DEMARKUS_TAINT_STRICTNESS=ask` makes it ask, `off` silences it.
+An `ask` verdict opens a pi confirm dialog for that call; an approved `mark_publish` after an untrusted read carries `source-trust: tainted`. Without a UI (print and JSON modes) it is a block whose reason tells the agent to confirm with the user first. With both demarkus pi plugins loaded, this one owns the gate, so a write asks once. A write after an untrusted read (web, browser, `curl`, `gh api`) warns by default and is stored without the `source-trust` label, so the doctor's tainted review list misses it; `DEMARKUS_TAINT_STRICTNESS=ask` makes it ask and labels an approved publish, `off` silences it.
 
 ## Syncing changes back to the standalone repo
 

@@ -6,14 +6,19 @@ import { test } from "node:test";
 import { NativeServers, builtinMcp, ownedServers, type McpApi, type ServerConfig } from "../src/native.ts";
 
 // home is a temp dir holding the adapter's file and the registry files.
-function home(servers: Record<string, unknown>, souls = "", systems = ""): { config: string; state: string } {
+function home(servers: Record<string, unknown>, souls = "", systems = "", urls = ""): { config: string; state: string } {
   const dir = mkdtempSync(join(tmpdir(), "pi-native-"));
   const config = join(dir, "mcp.json");
   writeFileSync(config, JSON.stringify({ mcpServers: servers }));
   writeFileSync(join(dir, "souls"), souls);
   writeFileSync(join(dir, "knowledge-systems"), systems);
+  writeFileSync(join(dir, "knowledge-urls"), urls);
   return { config, state: dir };
 }
+
+// The registry rows of the stores FILE's URL entries were joined as.
+const CLOUD = "cloud\thttps://memory.example\t0\t-\n";
+const KNOWLEDGE_URL = "knowledge\thttps://knowledge.example\n";
 
 // fakePi records registrations; refuse names a server whose registration throws.
 function fakePi(commands: string[] = ["mcp"], refuse = ""): McpApi & { servers: Map<string, ServerConfig> } {
@@ -42,21 +47,40 @@ const FILE = {
 };
 
 test("each surface owns its own servers, and no one else's", () => {
-  const { config, state } = home(FILE, "cloud\thttps://memory.example\t0\n", "# joined\nknowledge https://knowledge.example\n");
-  assert.deepEqual(Object.fromEntries(ownedServers("memory", config, state)), {
+  const { config, state } = home(FILE, CLOUD, "# joined\nknowledge\n", KNOWLEDGE_URL);
+  assert.deepEqual(Object.fromEntries(ownedServers("memory", config, state).servers), {
     "demarkus-memory": { command: BIN, args: ["mcp-serve"], exposure: "direct" },
     team: { command: BIN, args: ["mcp-serve", "--memory", "team"], exposure: "direct" },
     cloud: { url: "https://memory.example/mcp", exposure: "direct" },
   });
   // The adapter's auth marker is dropped: pi reads auth as a provider token.
-  assert.deepEqual(Object.fromEntries(ownedServers("knowledge", config, state)), {
+  assert.deepEqual(Object.fromEntries(ownedServers("knowledge", config, state).servers), {
     knowledge: { url: "https://knowledge.example/mcp", exposure: "direct" },
   });
 });
 
+test("a URL entry is owned only where the registry records its endpoint", () => {
+  const moved = { cloud: { url: "https://elsewhere.example/mcp" }, knowledge: { url: "https://elsewhere.example/mcp" } };
+  const { config, state } = home(moved, CLOUD, "knowledge\n", KNOWLEDGE_URL);
+  assert.deepEqual(ownedServers("memory", config, state), { servers: new Map(), refused: ["cloud"] });
+  assert.deepEqual(ownedServers("knowledge", config, state), { servers: new Map(), refused: ["knowledge"] });
+
+  // Host case and a trailing slash are the same endpoint.
+  const same = home({ cloud: { url: "https://MEMORY.example/mcp/" } }, "cloud\thttps://memory.example/\t0\t-\n");
+  assert.deepEqual([...ownedServers("memory", same.config, same.state).servers.keys()], ["cloud"]);
+
+  // A store joined over QUIC is served by the binary, never by a URL entry.
+  const quic = home({ cloud: FILE.cloud }, "cloud\tmark://memory.example\t0\t/t\n");
+  assert.deepEqual(ownedServers("memory", quic.config, quic.state).refused, ["cloud"]);
+
+  // A knowledge join older than knowledge-urls records no endpoint to contradict.
+  const old = home({ knowledge: FILE.knowledge }, "", "knowledge\n");
+  assert.deepEqual([...ownedServers("knowledge", old.config, old.state).servers.keys()], ["knowledge"]);
+});
+
 test("a missing file owns nothing; a broken one throws", () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-native-"));
-  assert.equal(ownedServers("memory", join(dir, "mcp.json"), dir).size, 0);
+  assert.equal(ownedServers("memory", join(dir, "mcp.json"), dir).servers.size, 0);
   writeFileSync(join(dir, "mcp.json"), "{not json");
   assert.throws(() => ownedServers("memory", join(dir, "mcp.json"), dir));
 });
@@ -75,9 +99,23 @@ test("start registers, sync follows joins and removals", () => {
   const native = new NativeServers("memory", config, state);
   assert.deepEqual(native.start(pi), []);
   assert.deepEqual([...pi.servers.keys()], ["demarkus-memory"]);
+  const joined = { "demarkus-memory": FILE["demarkus-memory"], cloud: FILE.cloud };
 
-  writeFileSync(config, JSON.stringify({ mcpServers: { "demarkus-memory": FILE["demarkus-memory"], cloud: FILE.cloud } }));
-  writeFileSync(join(state, "souls"), "cloud\n");
+  writeFileSync(config, JSON.stringify({ mcpServers: joined }));
+  writeFileSync(join(state, "souls"), CLOUD);
+  assert.deepEqual(native.sync(pi), []);
+  assert.deepEqual([...pi.servers.keys()].sort(), ["cloud", "demarkus-memory"]);
+
+  // The entry moves off the joined host: disconnected, and reported once.
+  const moved = { "demarkus-memory": FILE["demarkus-memory"], cloud: { url: "https://elsewhere.example/mcp" } };
+  writeFileSync(config, JSON.stringify({ mcpServers: moved }));
+  const refused = native.sync(pi);
+  assert.equal(refused.length, 1);
+  assert.match(refused[0], /^cloud: its URL in .* is not the store joined as cloud$/);
+  assert.deepEqual(native.sync(pi), []);
+  assert.deepEqual([...pi.servers.keys()], ["demarkus-memory"]);
+
+  writeFileSync(config, JSON.stringify({ mcpServers: joined }));
   assert.deepEqual(native.sync(pi), []);
   assert.deepEqual([...pi.servers.keys()].sort(), ["cloud", "demarkus-memory"]);
 
@@ -87,7 +125,7 @@ test("start registers, sync follows joins and removals", () => {
 });
 
 test("with the adapter loaded nothing is registered", () => {
-  const { config, state } = home(FILE, "cloud\n", "knowledge\n");
+  const { config, state } = home(FILE, CLOUD, "knowledge\n", KNOWLEDGE_URL);
   const pi = fakePi(["mcp", "mcp-adapter"]);
   const native = new NativeServers("memory", config, state);
   assert.deepEqual(native.start(pi), []);

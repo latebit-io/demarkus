@@ -100,4 +100,11 @@ func TestTaintSkipsWhenItCannotMatter(t *testing.T) {
 	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, Taint: []string{"WebSearch"}, Post: true}); d.Decision != "warn" {
 		t.Errorf("post phase at warn = %q, want warn", d.Decision)
 	}
+	// A post hook cannot ask: an unreadable transcript warns there.
+	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: gone, Post: true}); d.Decision != "warn" || !strings.Contains(d.Reason, "could not be read") {
+		t.Errorf("post phase, unreadable transcript = %q (%s), want warn", d.Decision, d.Reason)
+	}
+	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: gone}); d.Decision != "ask" {
+		t.Errorf("pre phase, unreadable transcript = %q (%s), want ask", d.Decision, d.Reason)
+	}
 }

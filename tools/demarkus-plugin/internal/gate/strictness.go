@@ -65,8 +65,8 @@ func governanceStrictness() (Strictness, error) {
 }
 
 // taintStrictness defaults to warn: a routine gh api or web read must not
-// prompt every write; ask restores the prompt and the tainted stamp, off
-// turns the guard off.
+// prompt every write. A warned write carries no tainted stamp: Claude Code
+// rewrites a call only with a prompt. ask restores both, off drops the guard.
 func taintStrictness() (Strictness, error) {
 	v, err := config.Knob("DEMARKUS_TAINT_STRICTNESS", "plugin.taint-strictness")
 	if err == nil && config.IsOff(v) {
