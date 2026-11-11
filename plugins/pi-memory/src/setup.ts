@@ -4,7 +4,8 @@
 // demarkus-memory MCP server by asking the binary to do it — `demarkus-plugin
 // registry mcp add demarkus-memory <bin> mcp-serve` — so the config-write logic
 // (locking, atomic write, array-shape guard) lives once in the binary instead of
-// being duplicated here. pi-mcp-adapter then connects it from ~/.config/mcp/mcp.json.
+// being duplicated here. pi-mcp-adapter connects it from ~/.config/mcp/mcp.json;
+// without the adapter, native.ts registers it with pi's built-in MCP support.
 
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";

@@ -1,0 +1,113 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { NativeServers, builtinMcp, ownedServers, type McpApi, type ServerConfig } from "../src/native.ts";
+
+// home is a temp dir holding the adapter's file and the registry files.
+function home(servers: Record<string, unknown>, souls = "", systems = ""): { config: string; state: string } {
+  const dir = mkdtempSync(join(tmpdir(), "pi-native-"));
+  const config = join(dir, "mcp.json");
+  writeFileSync(config, JSON.stringify({ mcpServers: servers }));
+  writeFileSync(join(dir, "souls"), souls);
+  writeFileSync(join(dir, "knowledge-systems"), systems);
+  return { config, state: dir };
+}
+
+// fakePi records registrations; refuse names a server whose registration throws.
+function fakePi(commands: string[] = ["mcp"], refuse = ""): McpApi & { servers: Map<string, ServerConfig> } {
+  const servers = new Map<string, ServerConfig>();
+  return {
+    servers,
+    registerMcpServer(name, config) {
+      if (name === refuse) throw new Error("name taken");
+      servers.set(name, config);
+    },
+    unregisterMcpServer(name) {
+      servers.delete(name);
+    },
+    getCommands: () => commands.map((name) => ({ name })),
+  };
+}
+
+const BIN = "/home/u/.demarkus/bin/demarkus-plugin";
+const FILE = {
+  "demarkus-memory": { command: BIN, args: ["mcp-serve"] },
+  team: { command: BIN, args: ["mcp-serve", "--memory", "team"] },
+  cloud: { url: "https://memory.example/mcp", auth: "oauth" },
+  knowledge: { url: "https://knowledge.example/mcp", auth: "oauth" },
+  github: { url: "https://api.example/mcp", auth: "oauth" },
+  files: { command: "npx", args: ["-y", "server-filesystem"] },
+};
+
+test("each surface owns its own servers, and no one else's", () => {
+  const { config, state } = home(FILE, "cloud\thttps://memory.example\t0\n", "# joined\nknowledge https://knowledge.example\n");
+  assert.deepEqual(Object.fromEntries(ownedServers("memory", config, state)), {
+    "demarkus-memory": { command: BIN, args: ["mcp-serve"], exposure: "direct" },
+    team: { command: BIN, args: ["mcp-serve", "--memory", "team"], exposure: "direct" },
+    cloud: { url: "https://memory.example/mcp", exposure: "direct" },
+  });
+  // The adapter's auth marker is dropped: pi reads auth as a provider token.
+  assert.deepEqual(Object.fromEntries(ownedServers("knowledge", config, state)), {
+    knowledge: { url: "https://knowledge.example/mcp", exposure: "direct" },
+  });
+});
+
+test("a missing file owns nothing; a broken one throws", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-native-"));
+  assert.equal(ownedServers("memory", join(dir, "mcp.json"), dir).size, 0);
+  writeFileSync(join(dir, "mcp.json"), "{not json");
+  assert.throws(() => ownedServers("memory", join(dir, "mcp.json"), dir));
+});
+
+test("the built-in MCP is used only without pi-mcp-adapter", () => {
+  assert.equal(builtinMcp(fakePi(["mcp", "soul"])), true);
+  assert.equal(builtinMcp(fakePi(["mcp", "mcp-adapter"])), false);
+  assert.equal(builtinMcp(fakePi(["mcp", "mcp-auth"])), false);
+  assert.equal(builtinMcp(fakePi(["soul"])), false); // --no-mcp, or disabled in settings
+  assert.equal(builtinMcp({}), false); // pi before 0.99
+});
+
+test("start registers, sync follows joins and removals", () => {
+  const { config, state } = home({ "demarkus-memory": FILE["demarkus-memory"] });
+  const pi = fakePi();
+  const native = new NativeServers("memory", config, state);
+  assert.deepEqual(native.start(pi), []);
+  assert.deepEqual([...pi.servers.keys()], ["demarkus-memory"]);
+
+  writeFileSync(config, JSON.stringify({ mcpServers: { "demarkus-memory": FILE["demarkus-memory"], cloud: FILE.cloud } }));
+  writeFileSync(join(state, "souls"), "cloud\n");
+  assert.deepEqual(native.sync(pi), []);
+  assert.deepEqual([...pi.servers.keys()].sort(), ["cloud", "demarkus-memory"]);
+
+  writeFileSync(config, JSON.stringify({ mcpServers: { cloud: FILE.cloud } }));
+  assert.deepEqual(native.sync(pi), []);
+  assert.deepEqual([...pi.servers.keys()], ["cloud"]);
+});
+
+test("with the adapter loaded nothing is registered", () => {
+  const { config, state } = home(FILE, "cloud\n", "knowledge\n");
+  const pi = fakePi(["mcp", "mcp-adapter"]);
+  const native = new NativeServers("memory", config, state);
+  assert.deepEqual(native.start(pi), []);
+  assert.deepEqual(native.sync(pi), []);
+  assert.equal(pi.servers.size, 0);
+});
+
+test("a failure is reported once, and again when its cause changes", () => {
+  const { config, state } = home({ "demarkus-memory": FILE["demarkus-memory"], team: FILE.team });
+  const pi = fakePi(["mcp"], "team");
+  const native = new NativeServers("memory", config, state);
+  assert.deepEqual(native.start(pi), ["team: name taken"]);
+  assert.deepEqual(native.sync(pi), []);
+  assert.deepEqual([...pi.servers.keys()], ["demarkus-memory"]);
+
+  writeFileSync(config, "{not json");
+  const broken = native.sync(pi);
+  assert.equal(broken.length, 1);
+  assert.match(broken[0], /mcp\.json/);
+  assert.deepEqual(native.sync(pi), []);
+  // An unreadable file drops nothing that is connected.
+  assert.deepEqual([...pi.servers.keys()], ["demarkus-memory"]);
+});

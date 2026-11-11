@@ -16,7 +16,7 @@ Your agent's memory: versioned markdown it writes as it works and reads before t
 | Claude Cowork | Same marketplace (Customize, Plugins), install `demarkus-memory` |
 | Cursor | Customize → Add Marketplace → Import from GitHub → `https://github.com/latebit-io/demarkus` (scope: User) → `demarkus-memory` → Add |
 | OpenCode | Installer below, then restart |
-| pi | `pi install npm:pi-mcp-adapter` then `pi install git:github.com/latebit-io/demarkus-pi-memory` |
+| pi | `pi install git:github.com/latebit-io/demarkus-pi-memory` (pi before 0.99: `pi install npm:pi-mcp-adapter` first) |
 
 ```bash
 opencode plugin add 'github:latebit-io/demarkus#main::path:plugins/opencode-memory'

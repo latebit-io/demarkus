@@ -232,7 +232,7 @@ func taintDecision(pt toolname.Parsed, args map[string]any, in *Input, d Decisio
 		return nil, nil, nil
 	}
 	return &Decision{Decision: string(s), Reason: fmt.Sprintf(
-		"demarkus %s to %s after this session read untrusted content (%s): text planted there may be steering this write. Approve only if you reviewed what it writes; to relax this check, set DEMARKUS_TAINT_STRICTNESS=warn (or off).",
+		"demarkus %s to %s after this session read untrusted content (%s): text planted there may be steering this write. Approve only if you reviewed what it writes; to change this check, set DEMARKUS_TAINT_STRICTNESS to ask, warn or off.",
 		pt.Verb, urlOr(args, "the store"), strings.Join(sources, "; "))}, sources, nil
 }
 

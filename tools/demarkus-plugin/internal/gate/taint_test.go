@@ -33,6 +33,12 @@ func TestTaintGate(t *testing.T) {
 	clean := transcriptWith(t, "Read", map[string]any{"file_path": "/x"})
 	publish := map[string]any{"url": "/x.md", "body": "# X\n", "metadata": map[string]any{"tags": "a"}}
 
+	// The default is warn: a warning, no prompt and no stamp.
+	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: web}); d.Decision != "warn" || d.UpdatedInput != nil || !strings.Contains(d.Reason, "WebFetch https://evil.example") {
+		t.Fatalf("default tainted publish = %q (%s), updated %v; want warn naming the read, no stamp", d.Decision, d.Reason, d.UpdatedInput)
+	}
+
+	t.Setenv("DEMARKUS_TAINT_STRICTNESS", "ask")
 	d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: web})
 	if d.Decision != "ask" || !strings.Contains(d.Reason, "WebFetch https://evil.example") {
 		t.Fatalf("tainted publish = %q (%s), want ask naming the read", d.Decision, d.Reason)
@@ -80,6 +86,7 @@ func TestTaintGate(t *testing.T) {
 // block already outranks it.
 func TestTaintSkipsWhenItCannotMatter(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	t.Setenv("DEMARKUS_TAINT_STRICTNESS", "ask")
 	gone := filepath.Join(t.TempDir(), "gone.jsonl") // a scan would ask: unreadable
 	publish := map[string]any{"url": "/x.md", "body": "# X\n", "metadata": map[string]any{"tags": "a"}}
 	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: gone, Post: true}); d.Decision != "allow" {

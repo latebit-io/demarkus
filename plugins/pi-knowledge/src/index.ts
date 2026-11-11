@@ -1,9 +1,12 @@
 // demarkus-knowledge — pi extension.
 //
 // The pi port of the claude-code demarkus-knowledge plugin. A knowledge system
-// is an organizational, broker-fronted demarkus catalog reached over HTTPS via
-// the MCP adapter's OAuth. It owns no server; the shared helper supplies policy. It:
-//   - before_agent_start → injects standing guidance (once) + a recall nudge
+// is an organizational, broker-fronted demarkus catalog reached over HTTPS with
+// OAuth (pi's built-in MCP, or pi-mcp-adapter). It owns no server; the shared
+// helper supplies policy. It:
+//   - session_start      → connects the joined systems when pi's built-in MCP runs
+//   - before_agent_start → injects standing guidance (once) + a recall nudge,
+//                          and connects a system joined since the last turn
 //   - tool_call          → publish tag-gate (tags + importance + required axes /
 //                          fields) on writes to a joined knowledge system
 //   - registerCommand    → /knowledge, /knowledge-join, /knowledge-doctor
@@ -14,6 +17,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { NativeServers, type McpApi } from "./native.js";
 import { callGate, callGuidance, callNudge } from "./plugin.js";
 import { branchTaint, recordTaint, taintStamp } from "./taint.js";
 
@@ -37,7 +41,7 @@ interface BeforeAgentStartEvent {
   systemPrompt: string;
 }
 type MessageResult = { message: { customType: string; content: string; display: boolean } };
-interface ExtensionAPI {
+interface ExtensionAPI extends McpApi {
   on(event: "session_start", handler: (event: { reason: string }, ctx: ExtensionContext) => void | Promise<void>): void;
   on(
     event: "before_agent_start",
@@ -98,7 +102,8 @@ function commandBody(name: string, args: string): string {
 // pi-mcp-adapter routes MCP calls through a proxy tool named "mcp":
 //   { toolName: "mcp", input: { tool: "<prefixed name>", args: <json-string|object>, server?: string } }
 // Unwrap that to the underlying tool name + parsed args so the gate sees the
-// real publish call. Direct (non-proxied) tool calls pass through unchanged.
+// real publish call. Pi's built-in MCP calls mcp__<server>__<tool> directly,
+// which passes through unchanged.
 function normalizeToolCall(event: ToolCallEvent): { toolName: string; input: Record<string, unknown> } {
   let toolName = event.toolName;
   let input: Record<string, unknown> = event.input ?? {};
@@ -150,16 +155,23 @@ function gateAdapters(): Set<string> {
 export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
   gateAdapters().add("knowledge");
   let contextDelivered = false;
-  // Untrusted reads this session; a later demarkus write asks first.
+  // Untrusted reads this session, for the gate's taint guard.
   let taint: string[] = [];
+  const native = new NativeServers("knowledge");
+  const connect = (ctx: ExtensionContext, errors: string[]) => {
+    for (const error of errors) ctx.ui.notify(`demarkus-knowledge: MCP server not connected: ${error}`, "warning");
+  };
 
   // A resumed, reloaded or forked branch keeps the reads it made; a new one is empty.
   pi.on("session_start", (_event, ctx) => {
     contextDelivered = false;
     taint = branchTaint(ctx.sessionManager?.getBranch() ?? [], (toolName, input) => normalizeToolCall({ toolName, input }));
+    connect(ctx, native.start(pi));
   });
 
-  pi.on("before_agent_start", async (event) => {
+  pi.on("before_agent_start", async (event, ctx) => {
+    // A /knowledge-join since the last turn connects here, with no restart.
+    connect(ctx, native.sync(pi));
     const parts: string[] = [];
     if (!contextDelivered) {
       const context = await callGuidance("knowledge", GUIDANCE_FILE);

@@ -64,13 +64,15 @@ func governanceStrictness() (Strictness, error) {
 	return strictness("DEMARKUS_GOVERNANCE_STRICTNESS", "plugin.governance-strictness", Warn)
 }
 
-// taintStrictness defaults to ask; off turns the guard off.
+// taintStrictness defaults to warn: a routine gh api or web read must not
+// prompt every write; ask restores the prompt and the tainted stamp, off
+// turns the guard off.
 func taintStrictness() (Strictness, error) {
 	v, err := config.Knob("DEMARKUS_TAINT_STRICTNESS", "plugin.taint-strictness")
 	if err == nil && config.IsOff(v) {
 		return Off, nil
 	}
-	return validStrictness(v, Ask), err
+	return validStrictness(v, Warn), err
 }
 
 // knowledgeStrictness is the gate's severity on a joined knowledge system:
