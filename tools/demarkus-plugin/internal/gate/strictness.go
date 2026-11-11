@@ -69,10 +69,14 @@ func governanceStrictness() (Strictness, error) {
 // rewrites a call only with a prompt. ask restores both, off drops the guard.
 func taintStrictness() (Strictness, error) {
 	v, err := config.Knob("DEMARKUS_TAINT_STRICTNESS", "plugin.taint-strictness")
-	if err == nil && config.IsOff(v) {
+	switch {
+	case err == nil && config.IsOff(v):
 		return Off, nil
+	case strings.TrimSpace(v) == "":
+		return Warn, err
 	}
-	return validStrictness(v, Warn), err
+	// A set value that is no level (a typo, "ASK") must not weaken the guard.
+	return validStrictness(v, Ask), err
 }
 
 // knowledgeStrictness is the gate's severity on a joined knowledge system:

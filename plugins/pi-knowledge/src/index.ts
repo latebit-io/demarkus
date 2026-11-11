@@ -17,7 +17,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { NativeServers, type McpApi } from "./native.js";
+import { NativeServers, piConfigs, type McpApi } from "./native.js";
 import { callGate, callGuidance, callNudge } from "./plugin.js";
 import { branchTaint, recordTaint, taintStamp } from "./taint.js";
 
@@ -30,6 +30,7 @@ interface ExtensionContext {
   ui: UI;
   // Dialogs work (TUI, RPC); false in print and JSON modes.
   hasUI?: boolean;
+  isProjectTrusted?(): boolean;
   sessionManager?: { getBranch(): unknown[] };
 }
 interface ToolCallEvent {
@@ -158,20 +159,22 @@ export default function demarkusKnowledgeExtension(pi: ExtensionAPI): void {
   // Untrusted reads this session, for the gate's taint guard.
   let taint: string[] = [];
   const native = new NativeServers("knowledge");
-  const connect = (ctx: ExtensionContext, errors: string[]) => {
+  const report = (ctx: ExtensionContext, errors: string[]) => {
     for (const error of errors) ctx.ui.notify(`demarkus-knowledge: MCP server not connected: ${error}`, "warning");
   };
+  // Pi's own mcp.json files, whose servers override the ones registered here.
+  const piFiles = (ctx: ExtensionContext) => piConfigs(ctx.cwd, ctx.isProjectTrusted?.() ?? false);
 
   // A resumed, reloaded or forked branch keeps the reads it made; a new one is empty.
   pi.on("session_start", (_event, ctx) => {
     contextDelivered = false;
     taint = branchTaint(ctx.sessionManager?.getBranch() ?? [], (toolName, input) => normalizeToolCall({ toolName, input }));
-    connect(ctx, native.start(pi));
+    report(ctx, native.start(pi, piFiles(ctx)));
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
     // A /knowledge-join since the last turn connects here, with no restart.
-    connect(ctx, native.sync(pi));
+    report(ctx, native.sync(pi, piFiles(ctx)));
     const parts: string[] = [];
     if (!contextDelivered) {
       const context = await callGuidance("knowledge", GUIDANCE_FILE);

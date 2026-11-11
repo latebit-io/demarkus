@@ -12,7 +12,7 @@ Join an organizational [demarkus](https://github.com/latebit-io/demarkus) **know
 
 ## Requirements
 
-- pi 0.99 or later, whose built-in MCP support provides the HTTP and OAuth transport. On an older pi, install [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter) first (`pi install npm:pi-mcp-adapter`). Where the adapter is installed, on any version, the plugin leaves the connection to it.
+- pi 0.99 or later, whose built-in MCP support provides the HTTP and OAuth transport. On an older pi, install [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter) first (`pi install npm:pi-mcp-adapter`). Where the adapter is installed, on any version, the plugin leaves the connection to it. A server of the same name in pi's own `mcp.json` overrides the plugin's; when it points somewhere else, the plugin warns and registers nothing under that name.
 - `bash`, `curl`, `node` on PATH (used by `scripts/bootstrap.sh`).
 
 ## Install

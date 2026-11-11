@@ -72,6 +72,13 @@ func TestTaintGate(t *testing.T) {
 	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: filepath.Join(t.TempDir(), "gone.jsonl")}); d.Decision != "ask" || !strings.Contains(d.Reason, "could not be read") {
 		t.Errorf("unreadable transcript = %q (%s), want ask", d.Decision, d.Reason)
 	}
+	// A set value that is no level asks: a typo must not weaken the guard.
+	for _, invalid := range []string{"ASK", "strict"} {
+		t.Setenv("DEMARKUS_TAINT_STRICTNESS", invalid)
+		if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: web}); d.Decision != "ask" {
+			t.Errorf("taint strictness %q = %q, want ask", invalid, d.Decision)
+		}
+	}
 	t.Setenv("DEMARKUS_TAINT_STRICTNESS", "off")
 	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: web}); d.Decision != "allow" {
 		t.Errorf("taint off = %q, want allow", d.Decision)

@@ -20,8 +20,9 @@ function home(servers: Record<string, unknown>, souls = "", systems = "", urls =
 const CLOUD = "cloud\thttps://memory.example\t0\t-\n";
 const KNOWLEDGE_URL = "knowledge\thttps://knowledge.example\n";
 
-// fakePi records registrations; refuse names a server whose registration throws.
-function fakePi(commands: string[] = ["mcp"], refuse = ""): McpApi & { servers: Map<string, ServerConfig> } {
+// fakePi records registrations; refuse names a server whose registration
+// throws, stuck one whose unregistration throws.
+function fakePi(commands: string[] = ["mcp"], refuse = "", stuck = { name: "" }): McpApi & { servers: Map<string, ServerConfig> } {
   const servers = new Map<string, ServerConfig>();
   return {
     servers,
@@ -30,6 +31,7 @@ function fakePi(commands: string[] = ["mcp"], refuse = ""): McpApi & { servers: 
       servers.set(name, config);
     },
     unregisterMcpServer(name) {
+      if (name === stuck.name) throw new Error("busy");
       servers.delete(name);
     },
     getCommands: () => commands.map((name) => ({ name })),
@@ -62,8 +64,12 @@ test("each surface owns its own servers, and no one else's", () => {
 test("a URL entry is owned only where the registry records its endpoint", () => {
   const moved = { cloud: { url: "https://elsewhere.example/mcp" }, knowledge: { url: "https://elsewhere.example/mcp" } };
   const { config, state } = home(moved, CLOUD, "knowledge\n", KNOWLEDGE_URL);
-  assert.deepEqual(ownedServers("memory", config, state), { servers: new Map(), refused: ["cloud"] });
-  assert.deepEqual(ownedServers("knowledge", config, state), { servers: new Map(), refused: ["knowledge"] });
+  const memory = ownedServers("memory", config, state);
+  assert.equal(memory.servers.size, 0);
+  assert.match(memory.refused.get("cloud") ?? "", /is not the store joined as cloud$/);
+  const knowledge = ownedServers("knowledge", config, state);
+  assert.equal(knowledge.servers.size, 0);
+  assert.deepEqual([...knowledge.refused.keys()], ["knowledge"]);
 
   // Host case and a trailing slash are the same endpoint.
   const same = home({ cloud: { url: "https://MEMORY.example/mcp/" } }, "cloud\thttps://memory.example/\t0\t-\n");
@@ -71,11 +77,48 @@ test("a URL entry is owned only where the registry records its endpoint", () => 
 
   // A store joined over QUIC is served by the binary, never by a URL entry.
   const quic = home({ cloud: FILE.cloud }, "cloud\tmark://memory.example\t0\t/t\n");
-  assert.deepEqual(ownedServers("memory", quic.config, quic.state).refused, ["cloud"]);
+  assert.deepEqual([...ownedServers("memory", quic.config, quic.state).refused.keys()], ["cloud"]);
 
   // A knowledge join older than knowledge-urls records no endpoint to contradict.
   const old = home({ knowledge: FILE.knowledge }, "", "knowledge\n");
   assert.deepEqual([...ownedServers("knowledge", old.config, old.state).servers.keys()], ["knowledge"]);
+});
+
+test("settings pi shares with the adapter's file are registered as written", () => {
+  const env = { DEMARKUS_TAINT_STRICTNESS: "ask" };
+  const headers = { Authorization: "Bearer ${TOKEN}" };
+  const file = {
+    "demarkus-memory": { command: BIN, args: ["mcp-serve"], env, cwd: "/w", enabled: false, lifecycle: "lazy" },
+    cloud: { url: "https://memory.example/mcp", auth: "oauth", headers, enabled: false, bearerToken: "x" },
+  };
+  const { config, state } = home(file, CLOUD);
+  assert.deepEqual(Object.fromEntries(ownedServers("memory", config, state).servers), {
+    "demarkus-memory": { command: BIN, args: ["mcp-serve"], env, cwd: "/w", enabled: false, exposure: "direct" },
+    cloud: { url: "https://memory.example/mcp", headers, enabled: false, exposure: "direct" },
+  });
+});
+
+test("a server pi's own mcp.json points elsewhere is refused, naming the file", () => {
+  const { config, state } = home(FILE, CLOUD, "knowledge\n", KNOWLEDGE_URL);
+  const piFile = (servers: Record<string, unknown>) => {
+    const path = join(mkdtempSync(join(tmpdir(), "pi-own-")), "mcp.json");
+    writeFileSync(path, JSON.stringify({ mcpServers: servers }));
+    return path;
+  };
+  // Pi folds - and _ in a name, and its entry wins over a registration.
+  const other = piFile({ demarkus_memory: { command: "/elsewhere/demarkus-mcp" }, cloud: { url: "https://elsewhere.example/mcp" } });
+  const memory = ownedServers("memory", config, state, [other]);
+  assert.deepEqual([...memory.servers.keys()], ["team"]);
+  assert.deepEqual([...memory.refused.keys()].sort(), ["cloud", "demarkus-memory"]);
+  assert.ok(memory.refused.get("cloud")?.startsWith(`${other} defines it at another endpoint`));
+
+  // The same endpoint, an override of enabled alone, and a broken file refuse nothing.
+  const same = piFile({ cloud: { url: "https://memory.example/mcp/" }, team: { enabled: false }, "demarkus-memory": FILE["demarkus-memory"] });
+  const broken = join(mkdtempSync(join(tmpdir(), "pi-own-")), "mcp.json");
+  writeFileSync(broken, "{not json");
+  const clean = ownedServers("memory", config, state, [same, broken, join(state, "absent.json")]);
+  assert.equal(clean.refused.size, 0);
+  assert.deepEqual([...clean.servers.keys()].sort(), ["cloud", "demarkus-memory", "team"]);
 });
 
 test("a missing file owns nothing; a broken one throws", () => {
@@ -122,6 +165,23 @@ test("start registers, sync follows joins and removals", () => {
   writeFileSync(config, JSON.stringify({ mcpServers: { cloud: FILE.cloud } }));
   assert.deepEqual(native.sync(pi), []);
   assert.deepEqual([...pi.servers.keys()], ["cloud"]);
+});
+
+test("a server pi fails to drop stays tracked and is dropped on a later sync", () => {
+  const { config, state } = home({ "demarkus-memory": FILE["demarkus-memory"], team: FILE.team });
+  const stuck = { name: "team" };
+  const pi = fakePi(["mcp"], "", stuck);
+  const native = new NativeServers("memory", config, state);
+  assert.deepEqual(native.start(pi), []);
+
+  writeFileSync(config, JSON.stringify({ mcpServers: { "demarkus-memory": FILE["demarkus-memory"] } }));
+  assert.deepEqual(native.sync(pi), ["team: busy"]);
+  assert.deepEqual(native.sync(pi), []);
+  assert.deepEqual([...pi.servers.keys()].sort(), ["demarkus-memory", "team"]);
+
+  stuck.name = "";
+  assert.deepEqual(native.sync(pi), []);
+  assert.deepEqual([...pi.servers.keys()], ["demarkus-memory"]);
 });
 
 test("with the adapter loaded nothing is registered", () => {

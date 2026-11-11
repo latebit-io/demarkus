@@ -87,37 +87,91 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Owned is a surface's servers in the adapter's file. refused names a joined
-// store whose entry points somewhere the registry does not record: the gate
-// judges a write by server name, so connecting it would misdirect writes.
+// Owned is a surface's servers in the adapter's file. refused is each joined
+// store left unregistered, with why: the gate judges a write by server name,
+// so a name that reaches another endpoint would misdirect writes.
 export interface Owned {
   servers: Map<string, ServerConfig>;
-  refused: string[];
+  refused: Map<string, string>;
 }
 
-// ownedServers is the demarkus servers of surface in the adapter's file, as
-// pi takes them: declared to the model like every other harness, and without
-// the adapter's auth marker, which pi reads as a provider token.
-export function ownedServers(surface: Surface, configPath = MCP_CONFIG, stateDir = STATE_DIR): Owned {
-  const owned: Owned = { servers: new Map(), refused: [] };
-  const text = read(configPath);
-  if (!text.trim()) return owned;
-  const parsed: unknown = JSON.parse(text);
-  const servers = isRecord(parsed) && isRecord(parsed.mcpServers) ? parsed.mcpServers : {};
+// Settings pi and the adapter's file spell alike, registered as written. The
+// adapter's auth marker is not one: pi reads auth as a provider token.
+const CARRIED = { command: ["args", "env", "cwd", "enabled"], url: ["headers", "enabled"] } as const;
+
+// asPi is an adapter entry as pi takes it, declared to the model like on
+// every other harness.
+function asPi(entry: Record<string, unknown>, kind: keyof typeof CARRIED): ServerConfig {
+  const config: ServerConfig = { [kind]: entry[kind], exposure: "direct" };
+  for (const key of CARRIED[kind]) if (entry[key] !== undefined) config[key] = entry[key];
+  return config;
+}
+
+// mcpServers is the servers an mcp.json defines; a missing file defines none.
+function mcpServers(path: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(read(path).trim() || "{}");
+  return isRecord(parsed) && isRecord(parsed.mcpServers) ? parsed.mcpServers : {};
+}
+
+// piConfigs is pi's own mcp.json files: user-level, and the project's once it
+// is trusted. A server one defines overrides a registration of the same name.
+export function piConfigs(cwd: string, trusted: boolean): string[] {
+  const agent = process.env.PI_CODING_AGENT_DIR?.replace(/^~(?=$|\/)/, homedir()) || join(homedir(), ".pi", "agent");
+  return trusted ? [join(agent, "mcp.json"), join(cwd, ".pi", "mcp.json")] : [join(agent, "mcp.json")];
+}
+
+// Pi counts names that differ only in - and _ as one server.
+const fold = (name: string) => name.replaceAll("-", "_");
+
+function sameServer(entry: Record<string, unknown>, config: ServerConfig): boolean {
+  if (typeof config.url === "string") return typeof entry.url === "string" && sameUrl(entry.url, config.url);
+  return entry.command === config.command && JSON.stringify(entry.args ?? []) === JSON.stringify(config.args ?? []);
+}
+
+// overriding is the pi file whose entry pi connects in place of name, when
+// that entry reaches somewhere else; "" otherwise.
+function overriding(name: string, config: ServerConfig, piFiles: string[]): string {
+  for (const path of piFiles) {
+    let defined: Record<string, unknown>;
+    try {
+      defined = mcpServers(path);
+    } catch {
+      continue; // Pi reports its own unreadable file and takes no server from it.
+    }
+    for (const [other, entry] of Object.entries(defined)) {
+      // An entry with neither is a project override of enabled and exposure only.
+      if (fold(other) !== fold(name) || !isRecord(entry) || (entry.command === undefined && entry.url === undefined)) continue;
+      if (!sameServer(entry, config)) return path;
+    }
+  }
+  return "";
+}
+
+// ownedServers is the demarkus servers of surface in the adapter's file that
+// reach the store the registry records, checked against piFiles (piConfigs).
+export function ownedServers(surface: Surface, configPath = MCP_CONFIG, stateDir = STATE_DIR, piFiles: string[] = []): Owned {
+  const owned: Owned = { servers: new Map(), refused: new Map() };
   const remote = endpoints(surface, stateDir);
-  for (const [name, entry] of Object.entries(servers)) {
+  for (const [name, entry] of Object.entries(mcpServers(configPath))) {
     if (!isRecord(entry)) continue;
+    let config: ServerConfig;
     if (typeof entry.command === "string") {
       // Local and QUIC stores run a demarkus binary; they are the memory's.
       if (surface !== "memory" || !basename(entry.command).startsWith("demarkus-")) continue;
-      const config: ServerConfig = { command: entry.command, exposure: "direct" };
-      if (Array.isArray(entry.args)) config.args = entry.args;
-      owned.servers.set(name, config);
+      config = asPi(entry, "command");
     } else if (typeof entry.url === "string" && remote.has(name)) {
       const recorded = remote.get(name);
-      if (recorded === undefined || sameUrl(entry.url, recorded)) owned.servers.set(name, { url: entry.url, exposure: "direct" });
-      else owned.refused.push(name);
+      if (recorded !== undefined && !sameUrl(entry.url, recorded)) {
+        owned.refused.set(name, `its URL in ${configPath} is not the store joined as ${name}`);
+        continue;
+      }
+      config = asPi(entry, "url");
+    } else {
+      continue;
     }
+    const path = overriding(name, config, piFiles);
+    if (path) owned.refused.set(name, `${path} defines it at another endpoint; pi connects that one, not the store joined as ${name}`);
+    else owned.servers.set(name, config);
   }
   return owned;
 }
@@ -126,8 +180,7 @@ export function ownedServers(surface: Surface, configPath = MCP_CONFIG, stateDir
 // one surface. Registrations last one extension load, so start resets it.
 export class NativeServers {
   private live = new Map<string, string>();
-  private failed = new Map<string, string>();
-  private configError = "";
+  private reported = new Set<string>();
   private active = false;
   private readonly surface: Surface;
   private readonly configPath: string;
@@ -140,65 +193,54 @@ export class NativeServers {
   }
 
   // start is a session start: decide whether pi connects servers, then sync.
-  start(pi: McpApi): string[] {
+  start(pi: McpApi, piFiles: string[] = []): string[] {
     this.live.clear();
-    this.failed.clear();
-    this.configError = "";
+    this.reported.clear();
     this.active = builtinMcp(pi);
-    return this.sync(pi);
+    return this.sync(pi, piFiles);
   }
 
   // sync registers new and changed servers and drops the ones that left the
-  // file (a join or a removal mid-session). Returns each failure once.
-  sync(pi: McpApi): string[] {
+  // file (a join or a removal mid-session). Returns the failures that are new
+  // since the last sync, so one that persists is reported once.
+  sync(pi: McpApi, piFiles: string[] = []): string[] {
     if (!this.active) return [];
-    let owned: Owned;
+    const failures: string[] = [];
     try {
-      owned = ownedServers(this.surface, this.configPath, this.stateDir);
+      const { servers, refused } = ownedServers(this.surface, this.configPath, this.stateDir, piFiles);
+      for (const [name, why] of refused) failures.push(`${name}: ${why}`);
+      this.apply(pi, servers, failures);
     } catch (error) {
-      const text = `${this.configPath}: ${message(error)}`;
-      if (text === this.configError) return [];
-      this.configError = text;
-      return [text];
+      // An unreadable file drops nothing that is connected.
+      failures.push(`${this.configPath}: ${message(error)}`);
     }
-    this.configError = "";
-    const { servers, refused } = owned;
-    // A failure is remembered only while its server is still in the file.
-    for (const name of [...this.failed.keys()]) {
-      if (!servers.has(name) && !refused.includes(name)) this.failed.delete(name);
-    }
-    const errors: string[] = [];
-    for (const name of refused) {
-      errors.push(...this.once(name, `${name}: its URL in ${this.configPath} is not the store joined as ${name}`));
-    }
+    const fresh = failures.filter((failure) => !this.reported.has(failure));
+    this.reported = new Set(failures);
+    return fresh;
+  }
+
+  // apply makes pi's registrations match servers. A name leaves live only once
+  // pi dropped it, so a failed unregistration is retried on the next sync.
+  private apply(pi: McpApi, servers: Map<string, ServerConfig>, failures: string[]): void {
     for (const [name, config] of servers) {
       const key = JSON.stringify(config);
       if (this.live.get(name) === key) continue;
       try {
         pi.registerMcpServer?.(name, config);
         this.live.set(name, key);
-        this.failed.delete(name);
       } catch (error) {
-        errors.push(...this.once(name, `${name}: ${message(error)}`, key));
+        failures.push(`${name}: ${message(error)}`);
       }
     }
     for (const name of [...this.live.keys()]) {
       if (servers.has(name)) continue;
-      this.live.delete(name);
       try {
         pi.unregisterMcpServer?.(name);
+        this.live.delete(name);
       } catch (error) {
-        errors.push(`${name}: ${message(error)}`);
+        failures.push(`${name}: ${message(error)}`);
       }
     }
-    return errors;
-  }
-
-  // once reports a failure the first time its cause is seen, not every turn.
-  private once(name: string, text: string, cause = text): string[] {
-    if (this.failed.get(name) === cause) return [];
-    this.failed.set(name, cause);
-    return [text];
   }
 }
 

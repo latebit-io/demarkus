@@ -13,7 +13,7 @@ Local, versioned project memory for the [pi](https://pi.dev) coding agent, via [
 
 ## Requirements
 
-- pi 0.99 or later, whose built-in MCP support surfaces the demarkus tools. On an older pi, install [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter) first (`pi install npm:pi-mcp-adapter`). Where the adapter is installed, on any version, the plugin leaves the connection to it.
+- pi 0.99 or later, whose built-in MCP support surfaces the demarkus tools. On an older pi, install [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter) first (`pi install npm:pi-mcp-adapter`). Where the adapter is installed, on any version, the plugin leaves the connection to it. A server of the same name in pi's own `mcp.json` overrides the plugin's; when it points somewhere else, the plugin warns and registers nothing under that name.
 - `bash`, `curl`, `tar`, `node` on PATH (used by the bundled provisioning scripts).
 
 ## Install
