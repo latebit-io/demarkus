@@ -45,7 +45,7 @@ type Store struct {
 
 	// generation is the outside-writer marker the index and catalog were
 	// built under; a read that finds another rebuilds both first.
-	generation atomic.Pointer[string]
+	generation atomic.Pointer[protocolstore.Generation]
 	logger     *slog.Logger
 }
 
@@ -68,7 +68,7 @@ type Options struct {
 // New wraps one file store and its derived catalog, without WATCH.
 func New(documents *protocolstore.Store, lookup *catalog.Catalog) *Store {
 	s := &Store{mu: newCtxRWMutex(), documents: documents, catalog: lookup, logger: slog.Default()}
-	s.generation.Store(new(string))
+	s.generation.Store(new(protocolstore.Generation))
 	return s
 }
 

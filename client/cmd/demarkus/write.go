@@ -71,7 +71,7 @@ func publishFromCLI(ctx context.Context, w *cliWrite) (writeOutcome, error) {
 		return writeOutcome{}, errors.New("PUBLISH requires -expected-version: 0 to create, N to replace version N; " +
 			"-force overwrites whatever is there")
 	}
-	mode, err := parseOnConflict(w.onConflict)
+	mode, err := merge.ModeOf("-on-conflict", w.onConflict)
 	if err != nil {
 		return writeOutcome{}, err
 	}

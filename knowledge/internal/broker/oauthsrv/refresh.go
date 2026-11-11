@@ -325,12 +325,41 @@ func (s *RefreshStore) RevokeIdentity(ctx context.Context, identity string) (int
 		return 0, errors.New("revoke sessions: identity is empty")
 	}
 	email := core.CanonicalEmail(identity)
-	return s.dir.sweep(ctx, func(attrs blob.Attributes) (bool, blob.Generation, error) {
-		var record refreshTokenRecord
-		generation, err := s.dir.get(ctx, attrs.Key[len(refreshPrefix):], &record)
-		match := record.Claims.Subject == identity || core.CanonicalEmail(record.Claims.Email) == email
-		return match, generation, err
+	match := func(record *refreshTokenRecord) bool {
+		return record.Claims.Subject == identity || core.CanonicalEmail(record.Claims.Email) == email
+	}
+	revoked := 0
+	err := s.dir.each(ctx, "", func(attrs blob.Attributes) error {
+		done, err := s.revokeLogin(ctx, attrs.Key, match)
+		if done {
+			revoked++
+		}
+		return err
 	})
+	return revoked, err
+}
+
+// revokeLogin deletes the login at key when match holds. A refresh that
+// rotated it since the read leaves a usable token, so it reads again; a login
+// that keeps changing is an error, never a silent skip.
+func (s *RefreshStore) revokeLogin(ctx context.Context, key string, match func(*refreshTokenRecord) bool) (bool, error) {
+	for range maxRotateAttempts {
+		var record refreshTokenRecord
+		generation, err := s.dir.get(ctx, key[len(refreshPrefix):], &record)
+		if errors.Is(err, blob.ErrNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("read refresh login: %w", err)
+		}
+		if !match(&record) {
+			return false, nil
+		}
+		if done, err := s.dir.removeAt(ctx, key, generation); done || err != nil {
+			return done, err
+		}
+	}
+	return false, fmt.Errorf("refresh login %s changed on every attempt: run the revocation again", key[len(refreshPrefix):])
 }
 
 // Sweep deletes expired logins from the listing alone: a login id starts

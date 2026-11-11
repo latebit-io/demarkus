@@ -78,7 +78,7 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 	if bad != nil {
 		return *bad
 	}
-	mode, err := parseOnConflict(args.OnConflict)
+	mode, err := merge.ModeOf("on_conflict", args.OnConflict)
 	if err != nil {
 		return failure("%v", err)
 	}

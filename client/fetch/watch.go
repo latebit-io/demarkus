@@ -379,7 +379,7 @@ func (w *Watch) event(s *watchStream, block protocol.WatchBlock) bool {
 		s.unreadable = err
 		return false
 	}
-	return w.Resync(cursor)
+	return w.Unread(cursor)
 }
 
 // control applies a status block; done ends the stream as pump reports it.

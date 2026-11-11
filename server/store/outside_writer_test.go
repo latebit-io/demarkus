@@ -43,21 +43,31 @@ func TestOutsideWriteIsNotAnAlias(t *testing.T) {
 func TestGenerationMovesOnMarkChanged(t *testing.T) {
 	s := New(t.TempDir())
 	before, err := s.Generation()
-	if err != nil || before != "" {
-		t.Fatalf("Generation of an unmarked root = %q, %v", before, err)
+	if err != nil || !before.Equal(Generation{}) {
+		t.Fatalf("Generation of an unmarked root = %v, %v", before, err)
 	}
-	if err := s.MarkChanged(); err != nil {
-		t.Fatal(err)
-	}
-	first, err := s.Generation()
-	if err != nil || first == "" {
-		t.Fatalf("Generation after MarkChanged = %q, %v", first, err)
-	}
-	if err := s.MarkChanged(); err != nil {
-		t.Fatal(err)
-	}
-	if second, err := s.Generation(); err != nil || second == first {
-		t.Fatalf("Generation after a second MarkChanged = %q, %v; was %q", second, err, first)
+	// Marks in one clock tick, each replacing the last: a reused inode or
+	// an equal time must not make any two read as one.
+	const marks = 8
+	seen := make([]Generation, 0, marks+1)
+	seen = append(seen, before)
+	for range marks {
+		if err := s.MarkChanged(); err != nil {
+			t.Fatal(err)
+		}
+		next, err := s.Generation()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, earlier := range seen {
+			if next.Equal(earlier) {
+				t.Fatalf("Generation %v after MarkChanged reads as the earlier %v", next, earlier)
+			}
+		}
+		if again, err := s.Generation(); err != nil || !again.Equal(next) {
+			t.Fatalf("an unmoved marker reads as changed: %v then %v, %v", next, again, err)
+		}
+		seen = append(seen, next)
 	}
 	// The marker is never a document nor a listed entry.
 	if err := s.BuildIndex(); err != nil || s.IndexSize() != 0 {
@@ -113,5 +123,28 @@ func TestUnreadableVersionsRefuseTheWrite(t *testing.T) {
 	target, err := os.Readlink(filepath.Join(root, "doc.md"))
 	if err != nil || filepath.Base(target) != "v2" {
 		t.Fatalf("current pointer = %q, %v; want v2", target, err)
+	}
+}
+
+// The marker read every file-store read pays, with a marker and without.
+func BenchmarkGeneration(b *testing.B) {
+	for _, marked := range []bool{false, true} {
+		name := "unmarked"
+		if marked {
+			name = "marked"
+		}
+		b.Run(name, func(b *testing.B) {
+			s := New(b.TempDir())
+			if marked {
+				if err := s.MarkChanged(); err != nil {
+					b.Fatal(err)
+				}
+			}
+			for b.Loop() {
+				if _, err := s.Generation(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

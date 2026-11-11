@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
@@ -136,31 +137,78 @@ const generationName = ".generation"
 // MarkChanged tells a process serving this root that another one wrote it;
 // see Generation. A direct writer calls it after its writes.
 func (s *Store) MarkChanged() error {
+	path := filepath.Join(s.root, generationName)
+	previous, err := os.Stat(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("mark changed: %w", err)
+	}
 	var raw [8]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return fmt.Errorf("mark changed: %w", err)
 	}
-	_, err := WriteFileAtomic(filepath.Join(s.root, generationName), 0o644, func(w io.Writer) error {
+	_, err = WriteFileAtomic(path, 0o644, func(w io.Writer) error {
 		_, err := io.WriteString(w, hex.EncodeToString(raw[:]))
 		return err
 	})
 	if err != nil {
 		return fmt.Errorf("mark changed: %w", err)
 	}
+	if previous == nil {
+		return nil
+	}
+	return advanceMarker(path, previous.ModTime())
+}
+
+// advanceMarker keeps the marker's time strictly increasing, by a second so
+// a coarse filesystem clock still shows it: a reused inode with an equal time
+// would read as no change.
+func advanceMarker(path string, previous time.Time) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("mark changed: %w", err)
+	}
+	if info.ModTime().After(previous) {
+		return nil
+	}
+	next := previous.Add(time.Second)
+	if err := os.Chtimes(path, next, next); err != nil {
+		return fmt.Errorf("mark changed: %w", err)
+	}
 	return nil
 }
 
-// Generation is the marker's value, "" when no outside writer left one. A
-// server compares it per read and rebuilds its index when it moved.
-func (s *Store) Generation() (string, error) {
-	data, err := os.ReadFile(filepath.Join(s.root, generationName))
+// Generation is the marker as one stat sees it; the zero value is a root no
+// outside writer marked. A server compares it per read and rebuilds its
+// index when it moved, so it costs a stat, never a file read.
+type Generation struct{ marker os.FileInfo }
+
+// Generation stats the marker.
+func (s *Store) Generation() (Generation, error) {
+	info, err := os.Stat(filepath.Join(s.root, generationName))
 	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
+		return Generation{}, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("read generation marker: %w", err)
+		return Generation{}, fmt.Errorf("read generation marker: %w", err)
 	}
-	return string(data), nil
+	return Generation{marker: info}, nil
+}
+
+// Equal reports the same marker: MarkChanged always installs a new file, and
+// its time only moves forward, so file and time together name one mark.
+func (g Generation) Equal(other Generation) bool {
+	if g.marker == nil || other.marker == nil {
+		return g.marker == nil && other.marker == nil
+	}
+	return os.SameFile(g.marker, other.marker) && g.marker.ModTime().Equal(other.marker.ModTime())
+}
+
+// String is the mark's time, for logs.
+func (g Generation) String() string {
+	if g.marker == nil {
+		return "unmarked"
+	}
+	return g.marker.ModTime().UTC().Format(time.RFC3339Nano)
 }
 
 // digestLen is the fingerprint width: change detection, not a security bound.

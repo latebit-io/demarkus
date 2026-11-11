@@ -465,6 +465,50 @@ func TestRefreshStoreRevokeIdentity(t *testing.T) {
 	}
 }
 
+// racingDeletes runs before ahead of each delete, as a refresh that rotates
+// the login between the revocation's read and its delete would.
+type racingDeletes struct {
+	blob.Store
+	before func()
+}
+
+func (r *racingDeletes) Delete(ctx context.Context, key string, generation blob.Generation) error {
+	r.before()
+	return r.Store.Delete(ctx, key, generation)
+}
+
+// A login rotated mid-revocation is still revoked: the rotated token must
+// not survive a revocation that reported success.
+func TestRevokeIdentityFollowsALoginRotatedMeanwhile(t *testing.T) {
+	s := newRefreshStoreForTest(t)
+	raw := s.issue(t, "a@b.com", time.Hour)
+	objects, rotated := s.dir.objects, ""
+	s.dir.objects = &racingDeletes{Store: objects, before: func() {
+		if rotated == "" {
+			rotated = s.rotate(t, raw)
+		}
+	}}
+	revoked, err := s.RevokeIdentity(context.Background(), "a@b.com")
+	if err != nil || revoked != 1 {
+		t.Fatalf("RevokeIdentity = %d, %v; want 1", revoked, err)
+	}
+	if rotated == "" {
+		t.Fatal("the race never ran")
+	}
+	s.wantInvalid(t, rotated, "a token rotated during the revocation")
+}
+
+// A login that rotates on every attempt is reported, not counted as revoked.
+func TestRevokeIdentityReportsALoginItCannotCatch(t *testing.T) {
+	s := newRefreshStoreForTest(t)
+	raw := s.issue(t, "a@b.com", time.Hour)
+	objects := s.dir.objects
+	s.dir.objects = &racingDeletes{Store: objects, before: func() { raw = s.rotate(t, raw) }}
+	if revoked, err := s.RevokeIdentity(context.Background(), "a@b.com"); err == nil || revoked != 0 {
+		t.Fatalf("RevokeIdentity = %d, %v; want an error and nothing counted", revoked, err)
+	}
+}
+
 // With server.maxLoginAge set, a login refreshes on its sign-in claims only
 // that long; off, the default, it refreshes for its whole lifetime.
 func TestRefreshStoreMaxLoginAge(t *testing.T) {

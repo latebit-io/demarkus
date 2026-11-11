@@ -169,11 +169,24 @@ func (f *Feed) Event(ev *protocol.WatchEvent) bool {
 }
 
 // Resync tells the consumer to rebuild what it derived and continue after
-// cursor: the server said so, or a block that could not be read was passed.
-// A full queue keeps it owed and reports false, as Event does.
+// cursor, because the server said so. A full queue keeps it owed and reports
+// false, as Event does.
 func (f *Feed) Resync(cursor protocol.Cursor) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.stream, f.owed = cursor, true
+	return f.payLocked()
+}
+
+// Unread passes an event that could not be decoded but names its cursor: the
+// consumer missed it, so a resync is owed. A repeat is dropped as Event drops
+// one, so a server resending the block cannot move the cursor back.
+func (f *Feed) Unread(cursor protocol.Cursor) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !after(cursor, f.stream) {
+		return true
+	}
 	f.stream, f.owed = cursor, true
 	return f.payLocked()
 }
