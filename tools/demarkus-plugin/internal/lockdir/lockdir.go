@@ -66,7 +66,19 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 		}
 		time.Sleep(sleep)
 	}
-	return fmt.Errorf("could not acquire %s (held by another process?)", lockDir)
+	// The owner proven early in the wait may have died since and its PID
+	// gone to another process: look once more without the cache.
+	var fresh string
+	if held, err := heldBy(lockDir, &fresh); err != nil || held {
+		return errors.Join(err, fmt.Errorf("could not acquire %s (held by another process?)", lockDir))
+	}
+	if err := reclaimStale(lockDir); err != nil {
+		return err
+	}
+	if acquired, err := tryAcquire(lockDir); err != nil || !acquired {
+		return errors.Join(err, fmt.Errorf("could not acquire %s (held by another process?)", lockDir))
+	}
+	return runLocked(lockDir, fn)
 }
 
 // tryAcquire stages a pre-stamped dir and renames it into place: no unstamped

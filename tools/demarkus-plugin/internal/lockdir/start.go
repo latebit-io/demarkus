@@ -16,11 +16,12 @@ var lstartLayouts = []string{"Mon _2 Jan 15:04:05 2006", "Mon Jan _2 15:04:05 20
 // established, which every caller treats as "stay silent". /proc/<pid> ModTime
 // is no start time (it can be when the entry was instantiated); ps lstart is.
 func ProcessStart(pid int) (time.Time, bool) {
-	// lstart is locale-formatted.
-	out, _ := probe.Bounded([]string{"LC_ALL=C"}, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=")
+	// lstart is formatted for the locale and time zone: both are pinned, so
+	// two processes with different TZ read one start for one process.
+	out, _ := probe.Bounded([]string{"LC_ALL=C", "TZ=UTC"}, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=")
 	s := strings.Join(strings.Fields(out), " ")
 	for _, layout := range lstartLayouts {
-		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
 			return t, true
 		}
 	}

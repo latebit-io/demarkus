@@ -310,3 +310,34 @@ func TestAcquireStampsPIDAndIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Before giving up, the holder is looked at once more without the cache: a
+// PID reused during the wait is seen even when every attempt was spent.
+func TestWithLockLooksAgainBeforeGivingUp(t *testing.T) {
+	other := kind(own(t)) + ":1"
+	ran := false
+	if err := WithLock(stampLock(t, os.Getpid(), other), 0, time.Millisecond, func() error { ran = true; return nil }); err != nil || !ran {
+		t.Fatalf("with no attempts left a reused PID's lock was not taken: ran=%v err=%v", ran, err)
+	}
+	if err := WithLock(stampLock(t, os.Getpid(), own(t)), 0, time.Millisecond, func() error { return nil }); err == nil {
+		t.Error("a live holder's lock was taken on the last look")
+	}
+}
+
+// The start ps reports is read the same whatever TZ the process runs under:
+// two contenders in different zones must name one process alike.
+func TestProcessStartIgnoresTheTimeZone(t *testing.T) {
+	started, ok := ProcessStart(os.Getpid())
+	if !ok {
+		t.Skip("ps reports no start time here")
+	}
+	for _, tz := range []string{"UTC-1", "America/Toronto", "Asia/Tokyo"} {
+		t.Setenv("TZ", tz)
+		if again, ok := ProcessStart(os.Getpid()); !ok || !again.Equal(started) {
+			t.Errorf("under TZ=%s the start is %v (%v), want %v", tz, again, ok, started)
+		}
+	}
+	if d := time.Since(started); d < 0 || d > time.Hour {
+		t.Errorf("start %v is %v from now: not this test process's", started, d)
+	}
+}
