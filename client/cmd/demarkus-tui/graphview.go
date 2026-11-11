@@ -320,7 +320,7 @@ func renderGraphView(items []graphListItem, selectedIdx, width int) string {
 
 		// Truncate to terminal cells (CJK/emoji are double-width).
 		if width > 5 {
-			line = truncateCells(line, width-2)
+			line = truncateCells(hiddentext.Reveal(line), width-2)
 		}
 
 		b.WriteString(line)
@@ -383,7 +383,7 @@ func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 
 		line := fmt.Sprintf("%s%s %s%s", cursor, icon, label, item.observation.Annotation())
 		if width > 5 {
-			line = truncateCells(line, width-2)
+			line = truncateCells(hiddentext.Reveal(line), width-2)
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
@@ -403,7 +403,7 @@ func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 			}
 			detail := fmt.Sprintf("      %s [%s] source %s%s", direction, relation, source, edge.Source.Observation.Annotation())
 			if width > 7 {
-				detail = truncateCells(detail, width-2)
+				detail = truncateCells(hiddentext.Reveal(detail), width-2)
 			}
 			b.WriteString(detail)
 			b.WriteByte('\n')
@@ -447,7 +447,7 @@ func renderTopologyView(items []graphListItem, selectedIdx, width int) string {
 
 		line := fmt.Sprintf("%s%s %s%s%s", cursor, icon, label, density, item.observation.Annotation())
 		if width > 5 {
-			line = truncateCells(line, width-2)
+			line = truncateCells(hiddentext.Reveal(line), width-2)
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
@@ -577,7 +577,7 @@ func (m model) renderCurrentGraphSubView() string {
 	default:
 		view = renderGraphView(m.graphNodes, m.graphIdx, m.width)
 	}
-	// Titles and URLs are crawled documents' own; the views add no styling,
-	// so revealing the whole text touches nothing of ours.
+	// Titles and URLs are crawled documents' own. Lines are revealed before
+	// they are cut to width, since revealing widens them; this covers the rest.
 	return hiddentext.Reveal(prefix + view)
 }

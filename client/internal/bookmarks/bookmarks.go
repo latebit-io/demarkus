@@ -14,6 +14,7 @@ package bookmarks
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -91,8 +92,12 @@ func (s *Store) reload() error {
 }
 
 func parse(content string) []line {
+	if content == "" {
+		return nil
+	}
 	var lines []line
-	for raw := range strings.SplitSeq(strings.TrimRight(content, "\n"), "\n") {
+	// Only the last terminator goes: blank lines a person left at the end stay.
+	for raw := range strings.SplitSeq(strings.TrimSuffix(content, "\n"), "\n") {
 		if raw == emptyHint {
 			continue
 		}
@@ -129,13 +134,21 @@ func (s *Store) hasCanonical(url string) bool {
 // marks reports the line that bookmarks the canonical url.
 func (l line) marks(url string) bool { return l.bm != nil && l.bm.URL == url }
 
-// with is lines plus a bookmark of the canonical url, dated today.
+// with is lines plus a bookmark of the canonical url, dated today. It goes
+// after the last bookmark, so text a person wrote below the list stays below.
 func with(lines []line, url, title string) []line {
 	if len(lines) == 0 {
 		lines = []line{{raw: header}, {raw: ""}}
 	}
 	bm := Bookmark{Title: title, URL: url, Date: time.Now().Format("2006-01-02")}
-	return append(lines, line{raw: bm.markdown(), bm: &bm})
+	at := len(lines)
+	for i, l := range slices.Backward(lines) {
+		if l.bm != nil {
+			at = i + 1
+			break
+		}
+	}
+	return slices.Insert(slices.Clone(lines), at, line{raw: bm.markdown(), bm: &bm})
 }
 
 // without is lines less the bookmark of the canonical url, nil when there is none.
@@ -183,10 +196,14 @@ func (s *Store) Toggle(url, title string) (added bool, err error) {
 // another process's bookmarks are kept, and writes the result. change returns
 // nil for no change. Memory follows the disk: a failed write leaves it as is.
 func (s *Store) mutate(change func([]line) []line) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+	path, err := target(s.path)
+	if err != nil {
+		return fmt.Errorf("resolve bookmarks file %q: %w", s.path, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create bookmarks directory: %w", err)
 	}
-	return filelock.With(s.path, func() error {
+	return filelock.With(path, func() error {
 		if err := s.reload(); err != nil {
 			return err
 		}
@@ -194,12 +211,30 @@ func (s *Store) mutate(change func([]line) []line) error {
 		if next == nil {
 			return nil
 		}
-		if err := s.write(next); err != nil {
+		if err := write(path, next); err != nil {
 			return err
 		}
 		s.lines = next
 		return nil
 	})
+}
+
+// target is the file path names, a symlink followed: the link stays, and
+// every name of the file locks and replaces the same one.
+func target(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil || !errors.Is(err, fs.ErrNotExist) {
+		return resolved, err
+	}
+	// Absent, or a link to a file not written yet.
+	link, err := os.Readlink(path)
+	if err != nil {
+		return path, nil //nolint:nilerr // not a link: the path itself is the file to create
+	}
+	if !filepath.IsAbs(link) {
+		link = filepath.Join(filepath.Dir(path), link)
+	}
+	return link, nil
 }
 
 func (b *Bookmark) markdown() string {
@@ -239,15 +274,15 @@ func unescapeTitle(t string) string {
 	return t
 }
 
-// write replaces the file with lines through a temp file and a rename, so a
-// crash leaves the old file or the new one, never a truncated one.
-func (s *Store) write(lines []line) (err error) {
-	dir := filepath.Dir(s.path)
+// write replaces the file at path with lines through a temp file and a
+// rename, so a crash leaves the old file or the new one, never a truncated
+// one. An existing file keeps its mode: another reader may depend on it.
+func write(path string, lines []line) (err error) {
 	var content strings.Builder
 	for _, l := range lines {
 		content.WriteString(l.raw + "\n")
 	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(s.path)+".*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("write bookmarks file: %w", err)
 	}
@@ -256,13 +291,20 @@ func (s *Store) write(lines []line) (err error) {
 			err = errors.Join(err, removeTemp(tmp.Name()))
 		}
 	}()
+	if info, statErr := os.Stat(path); statErr == nil {
+		if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+			return fmt.Errorf("write bookmarks file: %w", errors.Join(err, tmp.Close()))
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return fmt.Errorf("write bookmarks file: %w", errors.Join(statErr, tmp.Close()))
+	}
 	if _, err := tmp.WriteString(content.String()); err != nil {
 		return fmt.Errorf("write bookmarks file: %w", errors.Join(err, tmp.Close()))
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("write bookmarks file: %w", err)
 	}
-	if err := os.Rename(tmp.Name(), s.path); err != nil {
+	if err := os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("write bookmarks file: %w", err)
 	}
 	return nil

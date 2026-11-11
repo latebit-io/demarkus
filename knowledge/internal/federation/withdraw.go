@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+
+	"github.com/latebit-io/demarkus/client/fetch"
 
 	"github.com/latebit-io/demarkus/client/listwalk"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
@@ -69,8 +72,15 @@ func (d *deriver) withdraw(ctx context.Context, world string) error {
 	var pinned []graphstore.WorldShardRef
 	if m, err := graphstore.ParseWorldManifest(world, head.Body); head.Status == protocol.StatusOK && err == nil {
 		if m.Cursor.Epoch == withdrawnEpoch && len(m.Shards) == 0 {
-			// The term that wrote it may have ended before the export was
-			// pruned: ask again, which costs one render.
+			// The write that left the marker may not have pruned, and its
+			// term may have ended before the export was: both are finished.
+			if held, err := d.holdsOlder(ctx, path, version); err != nil {
+				return err
+			} else if held {
+				if _, err := d.publishPruned(ctx, path, head.Body, version); err != nil {
+					return err
+				}
+			}
 			d.export.withdrawn(world)
 			return nil
 		}
@@ -108,17 +118,56 @@ func (d *deriver) withdraw(ctx context.Context, world string) error {
 // the write itself still succeeds.
 func (d *deriver) publishPruned(ctx context.Context, path, body string, expected int) (int, error) {
 	_, version, err := d.Hub.PublishDocument(pruning(ctx), path, body, expected)
-	if err != nil || version < 2 {
+	if err != nil {
 		return version, err
 	}
-	older, err := d.Hub.Fetch(ctx, protocol.VersionPath(path, version-1))
+	held, err := d.holdsOlder(ctx, path, version)
 	if err != nil {
 		return version, fmt.Errorf("confirm prune of %s: %w", path, err)
 	}
-	if older.Status != protocol.StatusNotFound {
-		return version, fmt.Errorf("%s v%d: %w", path, version-1, errNotPruned)
+	if held {
+		return version, fmt.Errorf("%s below v%d: %w", path, version, errNotPruned)
 	}
 	return version, nil
+}
+
+// holdsOlder reports whether the hub still keeps a version of path older
+// than version. The count sees every one; without it only the version just
+// before is asked for, and a store that skipped an older one goes unnoticed.
+func (d *deriver) holdsOlder(ctx context.Context, path string, version int) (bool, error) {
+	if d.CountVersions != nil {
+		kept, err := d.CountVersions(ctx, path)
+		return kept > 1, err
+	}
+	if version < 2 {
+		return false, nil
+	}
+	older, err := d.Hub.Fetch(ctx, protocol.VersionPath(path, version-1))
+	return older.Status != protocol.StatusNotFound, err
+}
+
+// VersionLister is what HubVersions asks: the hub's VERSIONS.
+type VersionLister interface {
+	Versions(ctx context.Context, r fetch.VersionsRequest) (fetch.Result, error)
+}
+
+// HubVersions is Config.CountVersions over hub as v reaches it: the total a
+// VERSIONS answer reports.
+func HubVersions(v VersionLister, hub string) func(ctx context.Context, path string) (int, error) {
+	return func(ctx context.Context, path string) (int, error) {
+		res, err := v.Versions(ctx, fetch.VersionsRequest{Host: hub, Path: path})
+		if err != nil {
+			return 0, err
+		}
+		if res.Response.Status != protocol.StatusOK {
+			return 0, fmt.Errorf("versions of %s returned %s", path, res.Response.Status)
+		}
+		total, err := strconv.Atoi(res.Response.Metadata["total"])
+		if err != nil {
+			return 0, fmt.Errorf("versions of %s: total %q: %w", path, res.Response.Metadata["total"], err)
+		}
+		return total, nil
+	}
 }
 
 // shardPrefixes are the shards world has in the hub: every one listed there,

@@ -4,6 +4,7 @@ package depstest
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -30,14 +31,23 @@ func Forbid(t *testing.T, pattern string, extra ...string) {
 	}
 }
 
+// platforms are the systems releases build for: a dependency only one of
+// them links is still linked.
+var platforms = []string{"linux", "darwin"}
+
 // forbidden lists one linked package for each forbidden prefix the closure
-// of pattern reaches.
+// of pattern reaches on any platform.
 func forbidden(pattern string, extra []string) ([]string, error) {
-	out, err := exec.Command("go", "list", "-deps", pattern).Output() //nolint:gosec // fixed binary; the pattern is the calling test's own
-	if err != nil {
-		return nil, fmt.Errorf("go list -deps %s: %w", pattern, err)
+	var deps []string
+	for _, goos := range platforms {
+		cmd := exec.Command("go", "list", "-deps", pattern) //nolint:gosec // fixed binary; the pattern is the calling test's own
+		cmd.Env = append(os.Environ(), "GOOS="+goos)
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("go list -deps %s for %s: %w", pattern, goos, err)
+		}
+		deps = append(deps, strings.Split(strings.TrimSpace(string(out)), "\n")...)
 	}
-	deps := strings.Split(strings.TrimSpace(string(out)), "\n")
 	var linked []string
 	for _, prefix := range slices.Concat(cloud, extra) {
 		for _, dep := range deps {

@@ -203,6 +203,9 @@ func (m *model) showDocument(entry *historyEntry) {
 		m.pendingBody = entry.rawBody
 		return
 	}
+	// An earlier page may still wait for the viewport: it must not replace
+	// this one when the ready message arrives.
+	m.pendingBody = ""
 	m.viewport.SetContent(m.renderBody(entry.rawBody))
 	m.viewport.GotoTop()
 }
@@ -832,9 +835,10 @@ func (m model) handleHelpDismiss(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m model) linkVisible(idx int) bool {
 	top := m.viewport.YOffset()
 	bottom := top + m.viewport.Height()
+	// A wrapped link is visible when any of its lines is.
 	for _, r := range m.linkSegs {
-		if r.Index == idx {
-			return r.Line >= top && r.Line < bottom
+		if r.Index == idx && r.Line >= top && r.Line < bottom {
+			return true
 		}
 	}
 	return false

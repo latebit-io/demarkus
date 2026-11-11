@@ -77,8 +77,9 @@ func spansOf(runes []rune, links []Link) []span {
 		if !ok {
 			continue
 		}
-		// The renderer prints the URL after the label as a hyperlink of its own.
-		if next := last + 1; next < len(found) && !used[next] && found[next].url == found[last].url && blank(runes[found[last].end:found[next].start]) {
+		// The renderer prints the URL after the label as a hyperlink of its
+		// own; another label to the same destination is the next link, not that.
+		if next := last + 1; next < len(found) && !used[next] && printsURL(&found[next], found[last].url) && blank(runes[found[last].end:found[next].start]) {
 			last = next
 		}
 		for j := first; j <= last; j++ {
@@ -121,11 +122,21 @@ func match(runes []rune, found []hyperlink, used []bool, link Link) (first, last
 	return 0, 0, false
 }
 
+// printsURL reports a hyperlink to url whose visible text is that URL, as
+// the renderer prints one after a label, wrapped or not.
+func printsURL(h *hyperlink, url string) bool {
+	return h.url == url && strings.Join(strings.Fields(h.text), "") == url
+}
+
 // sameDest compares a rendered hyperlink URL with a source destination; the
-// renderer may resolve a relative one and keeps the fragment.
+// renderer may resolve a relative one and keeps the fragment. An empty side
+// (a bare #anchor) matches only itself: every URL ends in the empty string.
 func sameDest(rendered, dest string) bool {
 	rendered, _, _ = strings.Cut(rendered, "#")
-	return rendered == dest || strings.HasSuffix(rendered, dest) || strings.HasSuffix(dest, rendered)
+	if rendered == dest {
+		return true
+	}
+	return rendered != "" && dest != "" && (strings.HasSuffix(rendered, dest) || strings.HasSuffix(dest, rendered))
 }
 
 // squash folds runs of whitespace, so a wrapped label equals its source.

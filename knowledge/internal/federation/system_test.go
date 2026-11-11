@@ -303,7 +303,7 @@ func TestWithdrawalPrunesInARealHub(t *testing.T) {
 	}
 
 	d := sys.deriver(replica, replica)
-	d.ListHub = HubLister(replica, hubWorld)
+	d.ListHub, d.CountVersions = HubLister(replica, hubWorld), HubVersions(replica, hubWorld)
 	if err := d.withdraw(ctx, teamWorld); err != nil {
 		t.Fatalf("withdraw: %v", err)
 	}
@@ -321,6 +321,11 @@ func TestWithdrawalPrunesInARealHub(t *testing.T) {
 		old, err := hub.Fetch(ctx, protocol.VersionPath(path, version))
 		if err != nil || old.Status != protocol.StatusNotFound {
 			t.Errorf("%s v%d, written before the withdrawal: status %q, %v; want not-found", path, version, old.Status, err)
+		}
+	}
+	for path := range held {
+		if kept, err := d.CountVersions(ctx, path); err != nil || kept != 1 {
+			t.Errorf("%s keeps %d versions, %v; want 1", path, kept, err)
 		}
 	}
 	live, err := hub.Fetch(ctx, graphstore.GraphExportPath)

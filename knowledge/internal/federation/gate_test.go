@@ -279,3 +279,56 @@ func TestWithdrawalIsNotLandedUntilOldVersionsAreGone(t *testing.T) {
 		t.Errorf("pruned = %d, loaded %d after the retry", e.pruned, e.loaded)
 	}
 }
+
+// A store that misses an older version while pruning removes the one just
+// before the write: the withdrawal must still see what is left.
+func TestWithdrawalSeesAVersionThePruneSkipped(t *testing.T) {
+	h, stop := seeded(t)
+	awaitExport(t, h.hub.io(), seededNodes)
+	stop()
+	ctx := context.Background()
+	// A second version of every shard, so a skipped oldest is not the latest.
+	h.alpha.publish("/a.md", "# A again\n")
+	stop = h.start()
+	h.await(versions(with(map[string]int{"/a.md": 2})))
+	stop()
+
+	d := testDeriver(h.config())
+	h.hub.setSkips(true)
+	if err := d.withdraw(ctx, "alpha"); !errors.Is(err, errNotPruned) {
+		t.Fatalf("withdraw over a prune that skipped a version = %v, want errNotPruned", err)
+	}
+	h.hub.setSkips(false)
+	if err := d.withdraw(ctx, "alpha"); err != nil {
+		t.Fatalf("withdraw once pruning is whole: %v", err)
+	}
+}
+
+// The manifest is written last: when its prune fails the marker is already
+// there, and the next try must finish that prune, not take the marker as done.
+func TestWithdrawalRetriesAManifestPruneOverItsMarker(t *testing.T) {
+	h, stop := seeded(t)
+	awaitExport(t, h.hub.io(), seededNodes)
+	stop()
+	ctx := context.Background()
+	manifest := graphstore.WorldManifestPath("alpha")
+	d := testDeriver(h.config())
+	h.hub.setStuckAt(manifest, true)
+	if err := d.withdraw(ctx, "alpha"); !errors.Is(err, errNotPruned) {
+		t.Fatalf("withdraw with the manifest prune failing = %v, want errNotPruned", err)
+	}
+	if m, rows, err := h.checkpoint(); err != nil || withdrawn(m, rows) != nil {
+		t.Fatalf("the marker manifest should be in place: %v, %v", withdrawn(m, rows), err)
+	}
+	if kept, _ := h.hub.count(ctx, manifest); kept < 2 {
+		t.Fatalf("manifest keeps %d versions, want the older one still there", kept)
+	}
+
+	h.hub.setStuckAt(manifest, false)
+	if err := d.withdraw(ctx, "alpha"); err != nil {
+		t.Fatalf("withdraw over the marker: %v", err)
+	}
+	if kept, _ := h.hub.count(ctx, manifest); kept != 1 {
+		t.Errorf("manifest keeps %d versions after the retry, want 1", kept)
+	}
+}

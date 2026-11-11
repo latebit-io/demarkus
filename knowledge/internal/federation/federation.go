@@ -101,6 +101,10 @@ type Config struct {
 	// so a withdrawal finds every shard a world left there. Nil withdraws
 	// only the shards its manifest pins.
 	ListHub func(ctx context.Context, dir string) ([]string, error)
+	// CountVersions is how many versions the hub keeps of a document
+	// (HubVersions): after a pruning write it must be one. Nil confirms only
+	// that the version just before the write is gone.
+	CountVersions func(ctx context.Context, path string) (int, error)
 	// QuietPeriod is how long a changed world rests before its checkpoint;
 	// Interval the least time between two checkpoints of one world.
 	QuietPeriod, Interval time.Duration

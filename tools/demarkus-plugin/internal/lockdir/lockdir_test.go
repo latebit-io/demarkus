@@ -213,16 +213,17 @@ func TestWithLock(t *testing.T) {
 	})
 }
 
-// stampLock leaves a lock dir as a holder with pid, stamped at taken, left it.
-func stampLock(t *testing.T, pid int, taken *time.Time) string {
+// stampLock leaves a lock dir as a holder with pid left it; stamp "" is a
+// legacy lock with no identity.
+func stampLock(t *testing.T, pid int, stamp string) string {
 	t.Helper()
 	lock := filepath.Join(t.TempDir(), "state.lock")
 	if err := os.Mkdir(lock, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	files := map[string]string{"pid": strconv.Itoa(pid)}
-	if taken != nil {
-		files[stampedFile] = strconv.FormatInt(taken.UnixNano(), 10)
+	if stamp != "" {
+		files[stampedFile] = stamp
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(lock, name), []byte(body), 0o600); err != nil {
@@ -232,25 +233,31 @@ func stampLock(t *testing.T, pid int, taken *time.Time) string {
 	return lock
 }
 
-// A dead holder's PID can go to another process (a reboot does it readily);
-// that process started after the lock was taken, so the lock is stale.
-func TestWithLockReclaimsAReusedPID(t *testing.T) {
-	if _, ok := ProcessStart(os.Getpid()); !ok {
-		t.Skip("ps reports no start time here")
+// own is this process's identity; the test is skipped where none can be read.
+func own(t *testing.T) string {
+	t.Helper()
+	id, ok := identity(os.Getpid())
+	if !ok {
+		t.Skip("no process identity can be read here")
 	}
-	longAgo := time.Now().Add(-24 * time.Hour)
+	return id
+}
+
+// A lock stamped with another process's identity under this live PID is a
+// reused number: reclaimed, whatever the clock says.
+func TestWithLockReclaimsAReusedPID(t *testing.T) {
+	other := kind(own(t)) + ":1"
 	ran := false
-	if err := WithLock(stampLock(t, os.Getpid(), &longAgo), 20, time.Millisecond, func() error { ran = true; return nil }); err != nil || !ran {
-		t.Fatalf("a lock stamped before its live PID started was not reclaimed: ran=%v err=%v", ran, err)
+	if err := WithLock(stampLock(t, os.Getpid(), other), 20, time.Millisecond, func() error { ran = true; return nil }); err != nil || !ran {
+		t.Fatalf("a lock stamped by another process under this PID was not reclaimed: ran=%v err=%v", ran, err)
 	}
 }
 
-// A live holder is never stolen from: one whose stamp follows its start, or a
-// legacy lock with no stamp time at all.
+// A live holder is never stolen from: one stamped with its own identity, a
+// legacy lock with none, or one whose identity cannot be compared.
 func TestWithLockWaitsOnALiveHolder(t *testing.T) {
-	now := time.Now()
-	for name, taken := range map[string]*time.Time{"stamped": &now, "legacy": nil} {
-		lock := stampLock(t, os.Getpid(), taken)
+	for name, stamp := range map[string]string{"stamped": own(t), "legacy": "", "another kind": "unknown:1"} {
+		lock := stampLock(t, os.Getpid(), stamp)
 		err := WithLock(lock, 5, time.Millisecond, func() error { t.Errorf("%s: ran inside a held lock", name); return nil })
 		if err == nil {
 			t.Errorf("%s: a live holder's lock was acquired", name)
@@ -261,18 +268,41 @@ func TestWithLockWaitsOnALiveHolder(t *testing.T) {
 	}
 }
 
-func TestAcquireStampsPIDAndTime(t *testing.T) {
+// Only an identity shown to match is remembered: one that could not be
+// compared is asked again on the next attempt.
+func TestHeldByCachesOnlyAVerifiedOwner(t *testing.T) {
+	var proven string
+	if held, err := heldBy(stampLock(t, os.Getpid(), "unknown:1"), &proven); err != nil || !held || proven != "" {
+		t.Errorf("uncomparable identity: held %v, proven %q, %v; want held and nothing cached", held, proven, err)
+	}
+	if held, err := heldBy(stampLock(t, os.Getpid(), own(t)), &proven); err != nil || !held || proven == "" {
+		t.Errorf("matching identity: held %v, proven %q, %v; want held and cached", held, proven, err)
+	}
+}
+
+// A stamp that exists but cannot be read is an error now, not a contention
+// timeout later.
+func TestUnreadableStampIsAnError(t *testing.T) {
+	lock := stampLock(t, os.Getpid(), "")
+	if err := os.Mkdir(filepath.Join(lock, stampedFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var proven string
+	if held, err := heldBy(lock, &proven); err == nil {
+		t.Errorf("heldBy over an unreadable stamp = %v, nil; want the read error", held)
+	}
+}
+
+func TestAcquireStampsPIDAndIdentity(t *testing.T) {
+	want := own(t)
 	lock := filepath.Join(t.TempDir(), "state.lock")
-	before := time.Now()
 	err := WithLock(lock, 5, time.Millisecond, func() error {
 		pid, err := os.ReadFile(filepath.Join(lock, "pid"))
 		if err != nil || string(pid) != strconv.Itoa(os.Getpid()) {
 			t.Errorf("pid stamp = %q, %v (a bare number: older binaries read it)", pid, err)
 		}
-		stamp, err := os.ReadFile(filepath.Join(lock, stampedFile))
-		nanos, convErr := strconv.ParseInt(string(stamp), 10, 64)
-		if err != nil || convErr != nil || time.Unix(0, nanos).Before(before) {
-			t.Errorf("time stamp = %q, %v %v", stamp, err, convErr)
+		if stamp, err := os.ReadFile(filepath.Join(lock, stampedFile)); err != nil || string(stamp) != want {
+			t.Errorf("identity stamp = %q, %v; want %q", stamp, err, want)
 		}
 		return nil
 	})

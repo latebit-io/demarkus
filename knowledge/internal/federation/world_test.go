@@ -67,7 +67,7 @@ func (h *harness) start() (stop func()) {
 }
 
 func (h *harness) config() Config {
-	return Config{Worlds: slices.Collect(maps.Keys(h.worlds)), Source: h.worlds, Hub: h.hub.io(), ListHub: h.hub.list}
+	return Config{Worlds: slices.Collect(maps.Keys(h.worlds)), Source: h.worlds, Hub: h.hub.io(), ListHub: h.hub.list, CountVersions: h.hub.count}
 }
 
 // startGated is start with every world refused while refuse is set, as a

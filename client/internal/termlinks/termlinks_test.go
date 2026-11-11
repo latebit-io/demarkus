@@ -57,6 +57,8 @@ func TestSpansOf(t *testing.T) {
 		{"two links to one destination", renderedLink("x.md", "a") + " " + renderedLink("x.md", "b"), []Link{{"a", "x.md"}, {"b", "x.md"}}, []string{"a x.md", "b x.md"}},
 		{"the renderer keeps the fragment", osc8("doc.md#sec", "sec"), []Link{{"sec", "doc.md"}}, []string{"sec"}},
 		{"ST-terminated hyperlink", "\x1b]8;;url.md\x1b\\hello\x1b]8;;\x1b\\", []Link{{"hello", "url.md"}}, []string{"hello"}},
+		{"two labels to one destination, no URL printed", osc8("x.md", "a") + " " + osc8("x.md", "b"), []Link{{"a", "x.md"}, {"b", "x.md"}}, []string{"a", "b"}},
+		{"a bare anchor takes no later link's hyperlink", osc8("other.md", "top"), []Link{{"top", ""}, {"top", "other.md"}}, []string{"top"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -172,5 +174,15 @@ func TestDocumentRunesCannotForgeALink(t *testing.T) {
 	}
 	if !strings.Contains(lit, forged) {
 		t.Errorf("document runes were consumed: %q", lit)
+	}
+}
+
+// A bare #anchor has an empty destination, which must not match the
+// hyperlink of a later link that shares its label.
+func TestBareAnchorDoesNotTakeAnotherLinksRegion(t *testing.T) {
+	rendered := "top and " + osc8("other.md", "top")
+	segs := Locate(rendered, []Link{{"top", ""}, {"top", "other.md"}})
+	if len(segs) != 1 || segs[0].Index != 1 {
+		t.Errorf("segments = %+v, want the one hyperlink located as link 1", segs)
 	}
 }

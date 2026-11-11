@@ -456,3 +456,101 @@ func TestToggleDecidesOnTheFileAsItIsNow(t *testing.T) {
 		t.Errorf("%d bookmarks after remove then add, want 1", got)
 	}
 }
+
+// Blank lines a person left at the end of the file survive a rewrite.
+func TestRewriteKeepsTrailingBlankLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	if err := os.WriteFile(path, []byte("# Bookmarks\n\n- [A](mark://h/a.md)\n\n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove("mark://h/a.md"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "# Bookmarks\n\n\n\n" {
+		t.Errorf("file = %q, %v; want the two trailing blank lines kept", got, err)
+	}
+}
+
+// A new bookmark joins the list, above notes written below it.
+func TestAddGoesAfterTheLastBookmarkNotTheFooter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	if err := os.WriteFile(path, []byte("# Bookmarks\n\n- [A](mark://h/a.md)\n\n## Notes\n\nMine.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://h/b.md", "B"); err != nil {
+		t.Fatal(err)
+	}
+	want := "# Bookmarks\n\n- [A](mark://h/a.md)\n- [B](mark://h/b.md) — " + s.List()[1].Date + "\n\n## Notes\n\nMine.\n"
+	if got, err := os.ReadFile(path); err != nil || string(got) != want {
+		t.Errorf("file =\n%s\nwant\n%s (%v)", got, want, err)
+	}
+}
+
+// A rewrite keeps the file's mode: a published bookmark file has readers.
+func TestRewriteKeepsTheFileMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	if err := os.WriteFile(path, []byte("# Bookmarks\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil { // past the umask
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://h/a.md", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o644 {
+		t.Errorf("mode after a rewrite = %v, %v; want 0644", info.Mode().Perm(), err)
+	}
+	// A new file is private.
+	fresh := filepath.Join(t.TempDir(), "bookmarks.md")
+	if s, err = Load(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://h/a.md", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(fresh); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("mode of a new file = %v, %v; want 0600", info.Mode().Perm(), err)
+	}
+}
+
+// A symlinked bookmark file stays a link: the rewrite lands in its target,
+// where the other readers of that file look.
+func TestRewriteFollowsASymlink(t *testing.T) {
+	dir := t.TempDir()
+	published, link := filepath.Join(dir, "site", "bookmarks.md"), filepath.Join(dir, "bookmarks.md")
+	if err := os.Mkdir(filepath.Dir(published), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(published, []byte("# Bookmarks\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(published, link); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://h/a.md", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link was replaced by a file: %v, %v", info.Mode(), err)
+	}
+	if got, err := os.ReadFile(published); err != nil || !strings.Contains(string(got), "mark://h/a.md") {
+		t.Errorf("target = %q, %v; want the bookmark written there", got, err)
+	}
+}

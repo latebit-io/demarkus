@@ -9,8 +9,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/internal/termlinks"
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/hiddentext"
+	runewidth "github.com/mattn/go-runewidth"
 )
 
 func fetched(t *testing.T, m model, url, body string) model {
@@ -143,5 +146,60 @@ func TestHelpDismissReusesTheRenderInHand(t *testing.T) {
 	out, _ = got.handleHelpDismiss(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if resized := out.(model); resized.renderer == nil || resized.renderedAt != 36 {
 		t.Errorf("after a resize the page was not rendered for the new width: renderedAt %d", resized.renderedAt)
+	}
+}
+
+// A page shown on a ready viewport clears an earlier page still waiting for
+// the ready message, which would otherwise replace it.
+func TestShownDocumentDropsAnEarlierPendingBody(t *testing.T) {
+	m := model{ready: true, width: 60, height: 24, styleName: "dark", linkIdx: -1, hoverIdx: -1,
+		pendingBody: "# Earlier\n", viewport: viewport.New(viewport.WithWidth(60), viewport.WithHeight(20))}
+	m.showDocument(&historyEntry{url: "mark://host/new.md", rawBody: "# New\n", status: "ok"})
+	if m.pendingBody != "" {
+		t.Fatalf("pendingBody = %q, want it dropped", m.pendingBody)
+	}
+	out, _ := m.handleViewportReady()
+	if got := out.(model); !strings.Contains(got.rendered, "New") || strings.Contains(got.rendered, "Earlier") {
+		t.Errorf("after the ready message the page is %q, want the new one", got.rendered)
+	}
+}
+
+// A wrapped link that starts above the window and continues inside it is
+// visible: Tab moves on from it instead of selecting it again.
+func TestLinkVisibleCountsEveryLineOfAWrappedLink(t *testing.T) {
+	vp := viewport.New(viewport.WithWidth(40), viewport.WithHeight(5))
+	vp.SetContent(strings.Repeat("x\n", 40))
+	vp.SetYOffset(10) // window is lines 10-14
+	m := model{viewport: vp, linkSegs: []termlinks.Segment{
+		{Index: 0, Line: 9, StartCol: 0, EndCol: 5},
+		{Index: 0, Line: 10, StartCol: 0, EndCol: 5},
+		{Index: 1, Line: 30, StartCol: 0, EndCol: 5},
+	}}
+	if !m.linkVisible(0) {
+		t.Error("a link whose second line is in the window reads as not visible")
+	}
+	if m.linkVisible(1) {
+		t.Error("a link below the window reads as visible")
+	}
+}
+
+// A graph line is cut to width after its hidden text is revealed: revealing
+// widens it, and a line cut first would wrap and shift the rows under it.
+func TestGraphLinesFitTheWidthAfterReveal(t *testing.T) {
+	const width = 40
+	title := strings.Repeat("t", width-12) + "\x1b\x1b\x1b"
+	items := []graphListItem{{url: "mark://host/a.md", title: title, status: "ok", observation: &graph.Observation{}}}
+	found := false
+	for line := range strings.SplitSeq(hiddentext.Reveal(renderGraphView(items, 0, width)), "\n") {
+		if !strings.Contains(line, "ttt") {
+			continue // the key help below the list is not a node's line
+		}
+		found = true
+		if cells := runewidth.StringWidth(line); cells > width {
+			t.Errorf("node line is %d cells, over the %d-cell width: %q", cells, width, line)
+		}
+	}
+	if !found {
+		t.Fatal("the node's line was not rendered")
 	}
 }
