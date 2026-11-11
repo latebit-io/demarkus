@@ -112,6 +112,12 @@ test("a server pi's own mcp.json points elsewhere is refused, naming the file", 
   assert.deepEqual([...memory.refused.keys()].sort(), ["cloud", "demarkus-memory"]);
   assert.ok(memory.refused.get("cloud")?.startsWith(`${other} defines it at another endpoint`));
 
+  // The same command under another HOME or directory serves another store.
+  for (const moved of [{ env: { HOME: "/other" } }, { cwd: "/other" }]) {
+    const relocated = piFile({ "demarkus-memory": { ...FILE["demarkus-memory"], ...moved } });
+    assert.deepEqual([...ownedServers("memory", config, state, [relocated]).refused.keys()], ["demarkus-memory"]);
+  }
+
   // The same endpoint, an override of enabled alone, and a broken file refuse nothing.
   const same = piFile({ cloud: { url: "https://memory.example/mcp/" }, team: { enabled: false }, "demarkus-memory": FILE["demarkus-memory"] });
   const broken = join(mkdtempSync(join(tmpdir(), "pi-own-")), "mcp.json");

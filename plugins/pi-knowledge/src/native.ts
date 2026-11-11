@@ -123,9 +123,16 @@ export function piConfigs(cwd: string, trusted: boolean): string[] {
 // Pi counts names that differ only in - and _ as one server.
 const fold = (name: string) => name.replaceAll("-", "_");
 
+// launch is how a stdio server starts. env and cwd count: they decide which
+// state directory the demarkus binary serves.
+function launch(server: Record<string, unknown>): string {
+  const env = isRecord(server.env) ? Object.entries(server.env).sort() : [];
+  return JSON.stringify([server.command, server.args ?? [], env, server.cwd ?? ""]);
+}
+
 function sameServer(entry: Record<string, unknown>, config: ServerConfig): boolean {
   if (typeof config.url === "string") return typeof entry.url === "string" && sameUrl(entry.url, config.url);
-  return entry.command === config.command && JSON.stringify(entry.args ?? []) === JSON.stringify(config.args ?? []);
+  return launch(entry) === launch(config);
 }
 
 // overriding is the pi file whose entry pi connects in place of name, when
