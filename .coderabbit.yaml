@@ -25,6 +25,12 @@ reviews:
     - "!plugins/*/context/**"
     - "!plugins/*/skills/**"
   path_instructions:
+    - path: "**"
+      instructions: >
+        Supported platforms are Linux and macOS only; releases build nothing
+        else. Windows is supported through WSL2 alone, which is Linux: do not
+        ask for native Windows handling, build tags, test skips or
+        portability, and flag any that a change adds.
     - path: "protocol/**"
       instructions: >
         Shared wire format library used by both server and client. Zero network

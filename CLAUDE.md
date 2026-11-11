@@ -24,6 +24,12 @@
   `go build` of a main package or `go test -c` in the tree; `scripts/check-no-binaries.sh`
   refuses a tracked binary.
 
+## Platforms
+
+Linux and macOS only; releases build nothing else. Windows is supported
+through WSL2 alone, which is Linux: no `windows` build tags or files, no
+`runtime.GOOS == "windows"` branches or test skips, no native Windows handling.
+
 ## Benchmarks
 
 Standalone benchmark runners, evaluation datasets, performance probes, and reports

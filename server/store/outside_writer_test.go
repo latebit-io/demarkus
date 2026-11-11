@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -83,7 +82,7 @@ func TestGenerationMovesOnMarkChanged(t *testing.T) {
 // listable, the shape of a read failure that is not "no such directory".
 func unreadableVersions(t *testing.T, root, base string) {
 	t.Helper()
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+	if os.Geteuid() == 0 {
 		t.Skip("needs a directory the process cannot list")
 	}
 	dir := filepath.Join(root, versionsDirName, base)
