@@ -81,9 +81,9 @@ func IsControlMetadataKey(key string) bool {
 	return controlMetadataKeys[key]
 }
 
-// Identity keys are ordinary publisher metadata a writing surface stamps and
-// never lets a caller set; servers store them opaquely and echo them on
-// WATCH events.
+// Identity keys describe one write, never the document: an APPEND inherits
+// neither. agent is what the writing surface says it is. user is stored only
+// from a Grant's User; a request's own value is dropped (SPEC 8.1).
 const (
 	MetaAgent = "agent" // the writing software
 	MetaUser  = "user"  // the verified person behind the write

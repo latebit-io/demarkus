@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -172,5 +174,42 @@ func TestWriteWithoutAnEtagIsNotObserved(t *testing.T) {
 	}
 	if node := store.GetNode("mark://host/doc.md"); node != nil {
 		t.Fatalf("a write without an etag was observed: %+v", node)
+	}
+}
+
+// A save rewrites the whole graph cache, so a sweep saves once: with a store
+// that cannot save, one warning, not one per archived document.
+func TestRecursiveArchiveSavesTheGraphOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to a read-only directory")
+	}
+	dir := t.TempDir()
+	store, err := graphstore.Load(filepath.Join(dir, "graph.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Errorf("restore %s: %v", dir, err)
+		}
+	})
+	var seeded, warnings []string
+	hooks := graphHooks(store, &seeded)
+	hooks.Warnf = func(format string, args ...any) { warnings = append(warnings, fmt.Sprintf(format, args...)) }
+	backend := &fetchtest.Client{ListFn: func(_ context.Context, r fetch.ListRequest) (fetch.Result, error) {
+		if strings.TrimSuffix(r.Path, "/") == "/proj/journal" {
+			return fetchtest.ListPage(r.Path, "", "a.md", "b.md", "c.md"), nil
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}}
+	got := newTools(t, backend, hooks).Archive(t.Context(), marktools.ArchiveArgs{URL: "/proj/journal/", Recursive: true})
+	if got.IsError || !strings.HasPrefix(got.Text, "status: archived\narchived: 3 of 3\n") {
+		t.Fatalf("archive = %+v", got)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "graph cache save after 3 writes") {
+		t.Fatalf("warnings = %q, want one save for the sweep", warnings)
 	}
 }

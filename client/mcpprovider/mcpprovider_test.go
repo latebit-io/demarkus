@@ -45,6 +45,11 @@ func fakeTools(mode string) {
 		fmt.Print(`[{"name":"mark_fetch","inputSchema":{"type":"object"}}]`)
 	case "slow":
 		time.Sleep(2 * time.Second)
+	case "flood":
+		chunk := strings.Repeat("x", 64<<10)
+		for range 2 * maxOutput / len(chunk) {
+			fmt.Print(chunk)
+		}
 	default:
 		tools := []mcp.Tool{
 			mcp.NewTool("fake_echo", mcp.WithDescription("echoes"),
@@ -71,6 +76,9 @@ func fakeCall(name string) {
 			os.Exit(3)
 		}
 		fmt.Fprintln(os.Stderr, "echoing")
+		if os.Getenv(fakeEnv) == "flood" {
+			fmt.Print(strings.Repeat("x", 2*maxOutput))
+		}
 		fmt.Printf("echo: %v\n", args["text"])
 	case "fake_fail":
 		fmt.Println("FAIL: refused")
@@ -171,5 +179,58 @@ func TestRunReportsATimeoutNotAnExit(t *testing.T) {
 	var failed *toolError
 	if err == nil || errors.As(err, &failed) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want the deadline", err)
+	}
+}
+
+// A provider's text is read from the host; an escape in it is revealed, in
+// an answer and in a refusal alike.
+func TestHandlerRevealsHiddenText(t *testing.T) {
+	t.Setenv(fakeEnv, "ok")
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"text": "a\x1b]0;owned\x07b"}
+	res, err := handler(os.Args[0], "fake_echo")(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := res.Content[0].(mcp.TextContent).Text; text != "echo: a<U+001B>]0;owned<U+0007>b" {
+		t.Errorf("text = %q, want the escape revealed", text)
+	}
+}
+
+// A runaway provider is refused, not buffered whole into the server.
+func TestRunBoundsProviderOutput(t *testing.T) {
+	t.Setenv(fakeEnv, "flood")
+	if _, err := run(context.Background(), os.Args[0], nil, "mcp", "tools"); err == nil || !strings.Contains(err.Error(), "output over") {
+		t.Fatalf("list err = %v, want the output bound", err)
+	}
+	res, err := handler(os.Args[0], "fake_echo")(context.Background(), mcp.CallToolRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := res.Content[0].(mcp.TextContent).Text; !res.IsError || !strings.Contains(text, "output over") || len(text) > 1024 {
+		t.Fatalf("call = %v %.80q, want a short tool error", res.IsError, text)
+	}
+}
+
+// A hung provider costs its tools, never the server's startup.
+func TestAttachDoesNotWaitOnASlowProvider(t *testing.T) {
+	var added []mcpserver.ServerTool
+	add := func(tools ...mcpserver.ServerTool) { added = append(added, tools...) }
+
+	t.Setenv(fakeEnv, "ok")
+	<-Attach(os.Args[0], nil, 10*time.Second, add)
+	if len(added) != 2 {
+		t.Fatalf("a prompt provider's tools = %d, want 2 before Attach returns", len(added))
+	}
+
+	t.Setenv(fakeEnv, "slow")
+	start := time.Now()
+	done := Attach(os.Args[0], nil, 50*time.Millisecond, add)
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("Attach waited %s on a slow provider", waited)
+	}
+	<-done // the slow listing is garbage: nothing more is added
+	if len(added) != 2 {
+		t.Errorf("tools after a failed listing = %d, want 2", len(added))
 	}
 }

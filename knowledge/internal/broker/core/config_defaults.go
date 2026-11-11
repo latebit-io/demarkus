@@ -47,6 +47,9 @@ func (s *ServerConfig) applyRefreshDefaults() error {
 	if s.IDTokenTTL < 0 {
 		return fmt.Errorf("server.idTokenTTL must be > 0 (got %s)", s.IDTokenTTL)
 	}
+	if s.MaxLoginAge < 0 {
+		return fmt.Errorf("server.maxLoginAge must not be negative (got %s); zero turns it off", s.MaxLoginAge)
+	}
 	// A refresh credential that expires before the bearer it mints could
 	// never renew it.
 	if s.IDTokenTTL >= s.RefreshTokenTTL {

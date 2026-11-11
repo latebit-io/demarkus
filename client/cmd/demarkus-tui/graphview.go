@@ -11,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
+	"github.com/latebit-io/demarkus/protocol/hiddentext"
 	runewidth "github.com/mattn/go-runewidth"
 )
 
@@ -566,13 +567,17 @@ func (m model) renderCurrentGraphSubView() string {
 	if m.graphWarning != "" {
 		prefix += "warning: " + m.graphWarning + "\n"
 	}
+	view := ""
 	switch m.graphSubView {
 	case subViewBacklinks:
 		prefix += fmt.Sprintf("relations: %d documents\n", m.graphPageTotal)
-		return prefix + renderBacklinksView(m.graphNodes, m.graphIdx, m.width)
+		view = renderBacklinksView(m.graphNodes, m.graphIdx, m.width)
 	case subViewTopology:
-		return prefix + renderTopologyView(m.graphNodes, m.graphIdx, m.width)
+		view = renderTopologyView(m.graphNodes, m.graphIdx, m.width)
 	default:
-		return prefix + renderGraphView(m.graphNodes, m.graphIdx, m.width)
+		view = renderGraphView(m.graphNodes, m.graphIdx, m.width)
 	}
+	// Titles and URLs are crawled documents' own; the views add no styling,
+	// so revealing the whole text touches nothing of ours.
+	return hiddentext.Reveal(prefix + view)
 }

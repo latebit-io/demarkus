@@ -122,7 +122,7 @@ func (a *audit) confirm(ctx context.Context, target string) string {
 // findings' indices are returned.
 func (a *audit) brokenLink(p, target, status, fix string) []int {
 	found := []int{a.add(CheckBrokenLinks, p, "-> "+target+" (fetch: "+status+")", fix)}
-	if path.Base(p) == "index.md" {
+	if a.isHub(p, a.docs[p].body) {
 		word := "missing"
 		if status == protocol.StatusArchived {
 			word = "archived"
@@ -151,7 +151,7 @@ func (a *audit) checkOrphans() {
 		if p == scopeHub || !live(d.status) || inbound[p] || reachedDirs[path.Dir(p)+"/"] {
 			continue
 		}
-		a.leads.orphans = append(a.leads.orphans, lead{p, a.add(CheckOrphans, p, "no inbound link from any document in scope", "link it from its hub, or /soul-archive it")})
+		a.leads.orphans = append(a.leads.orphans, lead{p, a.fixBy(a.add(CheckOrphans, p, "no inbound link from any document in scope", "or link it from its hub"), FixArchive)})
 	}
 }
 
@@ -486,15 +486,15 @@ func (a *audit) checkShape() {
 			case stylerules.Frontmatter:
 				a.leads.frontmatter = append(a.leads.frontmatter, lead{p, a.add(CheckFrontmatter, p, problem, "strip the block and re-publish with metadata out of band")})
 			case stylerules.EmDash, stylerules.DuplicateHeading:
-				a.add(CheckStyle, p, problem, "/soul-curate "+p)
+				a.fixBy(a.add(CheckStyle, p, problem, ""), FixCurate)
 			case stylerules.HubSize, stylerules.HubBullet, stylerules.HubFanout:
-				a.add(CheckHubShape, p, problem, "/soul-curate "+p)
+				a.fixBy(a.add(CheckHubShape, p, problem, ""), FixCurate)
 			case stylerules.Size:
-				a.add(CheckOversized, p, problem, "/soul-curate "+p+" (hub plus topic files)")
+				a.fixBy(a.add(CheckOversized, p, problem, "hub plus topic files"), FixCurate)
 			case stylerules.DescriptionShort, stylerules.DescriptionRestatesTitle, stylerules.DescriptionPlaceholder, stylerules.DescriptionMismatch:
 				a.add(CheckDocumentShape, p, problem, "re-publish with metadata.description equal to the H1 summary line")
 			default:
-				a.add(CheckDocumentShape, p, problem, "/soul-curate "+p)
+				a.fixBy(a.add(CheckDocumentShape, p, problem, ""), FixCurate)
 			}
 		}
 	}
@@ -664,7 +664,7 @@ func (a *audit) checkPromotion() {
 			a.promoted++
 			continue
 		}
-		a.add(CheckPromotion, p, why, "/promote "+p)
+		a.fixBy(a.add(CheckPromotion, p, why, ""), FixPromote)
 	}
 }
 

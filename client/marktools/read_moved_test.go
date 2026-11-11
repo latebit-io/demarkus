@@ -79,11 +79,11 @@ func TestLookupBodyMatch(t *testing.T) {
 		return got.Text
 	}
 	echoed := call(answer(true))
-	if !strings.Contains(echoed, "match: body") || strings.Contains(echoed, fetch.CatalogFallbackNote) {
+	if !strings.Contains(echoed, "match: body") || strings.Contains(echoed, mcpfmt.CatalogFallbackNote) {
 		t.Errorf("echoed body answer wrong:\n%s", echoed)
 	}
 	silent := call(answer(false))
-	if !strings.Contains(silent, fetch.CatalogFallbackNote) {
+	if !strings.Contains(silent, mcpfmt.CatalogFallbackNote) {
 		t.Errorf("catalog fallback not flagged:\n%s", silent)
 	}
 }

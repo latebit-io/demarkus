@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -41,21 +40,19 @@ func TestResolveStates(t *testing.T) {
 	if r.Slug != "my-repo" || r.Store != "team" || r.State != StateBound {
 		t.Fatalf("bound resolution wrong: %+v", r)
 	}
-	if r.Header("/my-repo/") != "Project slug: `my-repo`. Project root: `/my-repo/`. Bound store: `team`." {
-		t.Fatalf("header: %s", r.Header("/"))
-	}
 
+	// The harness variable is the surface's fallback, never the resolver's.
 	other := filepath.Join(t.TempDir(), "other")
 	t.Setenv("CLAUDE_PROJECT_DIR", other)
-	r, err = Resolve("")
+	if _, err := Resolve(""); !errors.Is(err, ErrNoDir) {
+		t.Fatalf("Resolve(\"\") with the harness variable set = %v, want ErrNoDir", err)
+	}
+	r, err = Resolve(other)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Dir != other || r.Store != "demarkus-memory" || r.State != StateLocal {
-		t.Fatalf("harness fallback wrong: %+v", r)
-	}
-	if r.Header("/other/") != "Project slug: `other`. Project root: `/other/`. Bound store: `demarkus-memory` (local, no project binding)." {
-		t.Fatalf("local header: %s", r.Header("/"))
+		t.Fatalf("unbound resolution wrong: %+v", r)
 	}
 
 	stale := filepath.Join(t.TempDir(), "stale")
@@ -67,17 +64,14 @@ func TestResolveStates(t *testing.T) {
 	if r.State != StateStale || r.Store != "gone" {
 		t.Fatalf("stale resolution wrong: %+v", r)
 	}
-	if r.Header("/") != "Project slug: `stale`. Project root: `/`. Bound store: `gone` (stale: not in the catalog; restore it with /soul-join or rebind with /soul-default)." {
-		t.Fatalf("stale header: %s", r.Header("/"))
-	}
 	local := filepath.Join(t.TempDir(), "local")
 	home(t, map[string]string{"project-souls": local + "\tdemarkus-memory\n"})
 	r, err = Resolve(local)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.State != StateStale || !strings.Contains(r.Hint(), "restore it with /soul-init") {
-		t.Fatalf("a stale local binding must point at /soul-init: %+v %s", r, r.Hint())
+	if r.State != StateStale || r.Store != "demarkus-memory" {
+		t.Fatalf("a local binding without a local store is stale: %+v", r)
 	}
 }
 

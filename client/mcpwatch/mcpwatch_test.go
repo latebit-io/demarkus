@@ -27,9 +27,29 @@ func event(seq int) mcp.JSONRPCNotification {
 	return update(map[string]any{MetaCursor: "e:" + strconv.Itoa(seq), MetaPath: "/docs/a.md", MetaVersion: float64(seq), MetaOp: protocol.OpPublish})
 }
 
-func newTestWatch(queue int) (*Watch, *stream) {
-	w := &Watch{uri: testURI, notices: make(chan fetch.Notice, queue), room: make(chan struct{}, 1), done: make(chan struct{})}
+func newTestWatch(t *testing.T, queue int) (*Watch, *stream) {
+	t.Helper()
+	feed, err := fetch.NewFeed(protocol.Cursor{}, queue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	feed.Start(func() {})
+	w := &Watch{Feed: feed, uri: testURI}
 	return w, &stream{watch: w, signal: make(chan string, 1)}
+}
+
+// queued drains the notices the feed holds.
+func queued(t *testing.T, w *Watch) []fetch.Notice {
+	t.Helper()
+	out := make([]fetch.Notice, 0, w.Queued())
+	for range w.Queued() {
+		n, err := w.Next(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 func signalOf(s *stream) string {
@@ -44,71 +64,53 @@ func signalOf(s *stream) string {
 // A renewal's overlap repeats cursors; only what is past the stream cursor
 // is queued, and a full queue stops the stream rather than skip a notice.
 func TestReceiveDropsRepeatsAndStopsOnOverflow(t *testing.T) {
-	w, s := newTestWatch(2)
+	w, s := newTestWatch(t, 2)
 	w.receive(s, event(1))
 	w.receive(s, event(1))
 	w.receive(s, event(2))
-	if len(w.notices) != 2 || w.stream.Seq != 2 {
-		t.Fatalf("queued %d, stream at %v; want 2 and e:2", len(w.notices), w.stream)
+	if w.Queued() != 2 || w.StreamCursor().Seq != 2 {
+		t.Fatalf("queued %d, stream at %v; want 2 and e:2", w.Queued(), w.StreamCursor())
 	}
 	w.receive(s, event(3))
-	if got := signalOf(s); got != signalOverflow || !s.dead {
-		t.Fatalf("signal %q dead %v, want overflow and a dead stream", got, s.dead)
+	if got := signalOf(s); got != signalOverflow || !s.dead.Load() {
+		t.Fatalf("signal %q dead %v, want overflow and a dead stream", got, s.dead.Load())
 	}
+	// Room again: the stopped stream still may not jump the event it dropped.
+	queued(t, w)
 	w.receive(s, event(4))
-	if w.stream.Seq != 2 {
-		t.Fatalf("stream cursor moved to %v past the overflow; the reopen would skip e:3", w.stream)
-	}
-}
-
-// A reopen from no cursor owes a resync, queued at the stream cursor; a full
-// queue stops the stream and keeps the debt for the next reopen.
-func TestPayOwed(t *testing.T) {
-	tests := []struct {
-		name       string
-		owed       bool
-		queued     int // events already in a queue of 2
-		wantResync bool
-		wantOwed   bool
-		wantSignal string
-	}{
-		{name: "nothing owed", queued: 1},
-		{name: "owed", owed: true, queued: 1, wantResync: true},
-		{name: "owed to a full queue", owed: true, queued: 2, wantOwed: true, wantSignal: signalOverflow},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			w, s := newTestWatch(2)
-			for seq := 1; seq <= tt.queued; seq++ {
-				w.receive(s, event(seq))
-			}
-			w.owed = tt.owed
-			paid := w.payOwed(s)
-			if got := signalOf(s); got != tt.wantSignal || w.owed != tt.wantOwed || paid != (got == "") {
-				t.Fatalf("signal %q owed %v paid %v, want %q and %v", got, w.owed, paid, tt.wantSignal, tt.wantOwed)
-			}
-			var last fetch.Notice
-			for range len(w.notices) {
-				last = <-w.notices
-			}
-			if last.Resync != tt.wantResync || (tt.wantResync && last.Event.Cursor != w.stream) {
-				t.Errorf("last notice = %+v, want resync %v at %v", last, tt.wantResync, w.stream)
-			}
-		})
+	if w.StreamCursor().Seq != 2 || w.Queued() != 2 {
+		t.Fatalf("stream cursor moved to %v past the overflow; the reopen would skip e:3", w.StreamCursor())
 	}
 }
 
 // A reopened stream's first event queues behind the resync it owes, so
 // consuming the event cannot move Cursor past the gap.
 func TestReceivePaysTheOwedResyncFirst(t *testing.T) {
-	w, s := newTestWatch(4)
-	w.owed = true
+	w, s := newTestWatch(t, 4)
+	w.Owe()
 	w.receive(s, event(1))
-	if len(w.notices) != 2 || w.owed {
-		t.Fatalf("queued %d owed %v, want the resync and the event", len(w.notices), w.owed)
+	got := queued(t, w)
+	if len(got) != 2 || !got[0].Resync || !got[0].Event.Cursor.IsZero() || got[1].Event.Cursor.Seq != 1 {
+		t.Errorf("queue = %+v; want the resync at no cursor, then e:1", got)
 	}
-	if first, second := <-w.notices, <-w.notices; !first.Resync || !first.Event.Cursor.IsZero() || second.Event.Cursor.Seq != 1 {
-		t.Errorf("queue = %+v, %+v; want the resync at no cursor, then e:1", first, second)
+}
+
+// A notice that names no cursor ends its stream as unplaced, which the loop
+// counts; every other signal keeps its pause.
+func TestSignalledEndings(t *testing.T) {
+	w, _ := newTestWatch(t, 1)
+	for signal, want := range map[string]ending{
+		signalMalformed:             {pause: endedPause, unplaced: true},
+		protocol.StatusClosing:      {pause: closingPause},
+		protocol.StatusUnauthorized: {},
+		signalOverflow:              {},
+	} {
+		if got, err := w.signalled(t.Context(), signal); err != nil || got != want {
+			t.Errorf("signalled(%s) = %+v, %v; want %+v", signal, got, err, want)
+		}
+	}
+	if _, err := w.signalled(t.Context(), protocol.StatusNotPermitted); err == nil {
+		t.Error("a terminal status must end the watch")
 	}
 }
 
@@ -118,23 +120,26 @@ func TestReceiveSignalsAndSkips(t *testing.T) {
 		meta       map[string]any
 		wantSignal string
 		wantQueued int
+		wantResync bool
 	}{
 		{name: "terminal status", meta: map[string]any{MetaCursor: "e:1", MetaStatus: protocol.StatusUnauthorized}, wantSignal: protocol.StatusUnauthorized},
 		{name: "malformed cursor", meta: map[string]any{MetaCursor: "nope"}, wantSignal: signalMalformed},
-		{name: "event without a version", meta: map[string]any{MetaCursor: "e:1", MetaPath: "/a.md", MetaOp: protocol.OpPublish}, wantSignal: signalMalformed},
+		// Passed, and said: the stream goes on from its cursor.
+		{name: "event without a version", meta: map[string]any{MetaCursor: "e:1", MetaPath: "/a.md", MetaOp: protocol.OpPublish}, wantQueued: 1, wantResync: true},
 		{name: "another subscription", meta: map[string]any{MetaSubscription: "mark://team/other/", MetaCursor: "e:1"}},
 		{name: "unknown op", meta: map[string]any{MetaCursor: "e:1", MetaPath: "/a.md", MetaVersion: float64(1), MetaOp: "rename"}},
-		{name: "resync", meta: map[string]any{MetaCursor: "e:9", MetaResync: true}, wantQueued: 1},
+		{name: "resync", meta: map[string]any{MetaCursor: "e:9", MetaResync: true}, wantQueued: 1, wantResync: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w, s := newTestWatch(4)
+			w, s := newTestWatch(t, 4)
 			w.receive(s, update(tt.meta))
 			if got := signalOf(s); got != tt.wantSignal {
 				t.Errorf("signal = %q, want %q", got, tt.wantSignal)
 			}
-			if len(w.notices) != tt.wantQueued {
-				t.Errorf("queued %d, want %d", len(w.notices), tt.wantQueued)
+			got := queued(t, w)
+			if len(got) != tt.wantQueued || (tt.wantResync && !got[0].Resync) {
+				t.Errorf("queued %+v, want %d (resync %v)", got, tt.wantQueued, tt.wantResync)
 			}
 		})
 	}
@@ -158,16 +163,22 @@ func TestNoticeOf(t *testing.T) {
 }
 
 func TestRefusal(t *testing.T) {
+	named := map[string]any{MetaStatus: protocol.StatusRateLimited}
 	tests := []struct {
-		message, status, rest string
+		message      string
+		data         any
+		status, rest string
 	}{
-		{"not-permitted: access denied", protocol.StatusNotPermitted, "access denied"},
-		{"rate-limited: more than 64 URIs in one listen", protocol.StatusRateLimited, "more than 64 URIs in one listen"},
-		{"Method not found", protocol.StatusBadRequest, "Method not found"},
-		{"weird: thing", protocol.StatusBadRequest, "weird: thing"},
+		{"not-permitted: access denied", nil, protocol.StatusNotPermitted, "access denied"},
+		{"rate-limited: more than 64 URIs in one listen", nil, protocol.StatusRateLimited, "more than 64 URIs in one listen"},
+		{"Method not found", nil, protocol.StatusBadRequest, "Method not found"},
+		{"weird: thing", nil, protocol.StatusBadRequest, "weird: thing"},
+		// The error's data names the status: the message is prose, not grammar.
+		{"too many listens: slow down", named, protocol.StatusRateLimited, "too many listens: slow down"},
+		{"not-found: gone", map[string]any{MetaStatus: "made-up"}, protocol.StatusNotFound, "gone"},
 	}
 	for _, tt := range tests {
-		if got := refusal(tt.message); got.Status != tt.status || got.Message != tt.rest {
+		if got := refusal(tt.message, tt.data); got.Status != tt.status || got.Message != tt.rest {
 			t.Errorf("refusal(%q) = %+v, want %s %q", tt.message, got, tt.status, tt.rest)
 		}
 	}
@@ -212,25 +223,5 @@ func TestRenewTime(t *testing.T) {
 				t.Errorf("renewTime = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestAfter(t *testing.T) {
-	last := protocol.Cursor{Epoch: "e", Seq: 5}
-	for _, tt := range []struct {
-		cursor protocol.Cursor
-		want   bool
-	}{
-		{protocol.Cursor{Epoch: "e", Seq: 6}, true},
-		{protocol.Cursor{Epoch: "e", Seq: 5}, false},
-		{protocol.Cursor{Epoch: "e", Seq: 4}, false},
-		{protocol.Cursor{Epoch: "f", Seq: 1}, true},
-	} {
-		if got := after(tt.cursor, last); got != tt.want {
-			t.Errorf("after(%v, %v) = %v", tt.cursor, last, got)
-		}
-	}
-	if !after(protocol.Cursor{Epoch: "e", Seq: 1}, protocol.Cursor{}) {
-		t.Error("nothing consumed yet: every cursor is new")
 	}
 }

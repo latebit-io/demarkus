@@ -2,35 +2,12 @@ package gateway
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
 )
-
-// WorldDispatcher is how the MCP tool handlers reach worlds; tests inject a
-// fake. It takes the fetch request structs with Host carrying the WORLD NAME,
-// never a dial address: *WorldPool resolves the address itself.
-type WorldDispatcher interface {
-	Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error)
-	List(ctx context.Context, r fetch.ListRequest) (fetch.Result, error)
-	Versions(ctx context.Context, r fetch.VersionsRequest) (fetch.Result, error)
-	Lookup(ctx context.Context, r fetch.LookupRequest) (fetch.Result, error)
-	Publish(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error)
-	Append(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error)
-	Archive(ctx context.Context, r fetch.ArchiveRequest) (fetch.Result, error)
-}
-
-// errWorldNotFound names a world the broker has no config for; handlers map
-// it to a tool error instead of a transport failure.
-type errWorldNotFound struct {
-	worldName string
-}
-
-func (e *errWorldNotFound) Error() string {
-	return fmt.Sprintf("broker: unknown world %q (not in broker config)", e.worldName)
-}
 
 // pooledWorld caches the per-world client together with its resolved
 // host so cache hits skip the config scan and address formatting.
@@ -48,6 +25,8 @@ type WorldPool struct {
 	clients map[string]pooledWorld
 	drops   uint64 // drop calls so far; a lookup that saw it change resolves again
 	opts    fetch.Options
+	// forgetDrops removes drop from the registry at Close.
+	forgetDrops func()
 }
 
 // NewWorldPool builds an empty pool; clients are created on first use. opts
@@ -58,7 +37,7 @@ func NewWorldPool(worlds *core.WorldRegistry, opts fetch.Options) *WorldPool {
 		clients: make(map[string]pooledWorld),
 		opts:    opts,
 	}
-	worlds.OnDrop(p.drop)
+	p.forgetDrops = worlds.OnDrop(p.drop)
 	return p
 }
 
@@ -78,7 +57,7 @@ func (p *WorldPool) drop(worldName string) {
 
 // Every verb is a byte for byte proxy: the world name in r.Host is swapped for
 // the world's address and the world's response comes back untransformed. An
-// unknown world answers errWorldNotFound.
+// unknown world answers dispatch.WorldNotFoundError.
 
 // Fetch dispatches a FETCH; IfNoneMatch carries the graph seeder's own etag.
 func (p *WorldPool) Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error) {
@@ -153,6 +132,7 @@ func (p *WorldPool) Archive(ctx context.Context, r fetch.ArchiveRequest) (fetch.
 // Close closes every per world client and its pooled QUIC connections; part
 // of the broker's shutdown path.
 func (p *WorldPool) Close() {
+	p.forgetDrops()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for name, pooled := range p.clients {
@@ -176,7 +156,7 @@ func (p *WorldPool) clientFor(worldName string) (*fetch.Client, string, error) {
 		w, ok := p.find(worldName)
 		p.mu.Lock()
 		if !ok {
-			return nil, "", &errWorldNotFound{worldName: worldName}
+			return nil, "", &dispatch.WorldNotFoundError{World: worldName}
 		}
 		// Another caller inserted, or a drop raced the lookup: the loop decides.
 		if _, hit := p.clients[worldName]; hit || p.drops != drops {

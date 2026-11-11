@@ -18,6 +18,7 @@ proposal: b545c78f29b133f0
 Apply with apply: true and this proposal; it binds to v3.
 
 === /cwd/plan.md (tags: parser)
+<doc-6b56467e19dc95ad>
 # Plan
 
 What the parser plan settles, for maintainers.
@@ -27,3 +28,4 @@ What the parser plan settles, for maintainers.
 Status: DONE
 
 The table driven parser shipped.
+</doc-6b56467e19dc95ad>

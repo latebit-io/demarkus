@@ -20,7 +20,7 @@ import (
 // bodies binds the shared tool bodies to this server: URLs resolve against
 // -host, reads carry the token stored for their host, writes need one.
 func (h *handler) bodies() (*marktools.Tools, error) {
-	return marktools.New(h.client, marktools.Hooks{
+	tools, err := marktools.New(h.client, marktools.Hooks{
 		Resolve:   h.resolveTarget,
 		ReadToken: func(_ context.Context, host string) string { return h.resolveToken(host) },
 		Writer:    h.writer,
@@ -28,6 +28,12 @@ func (h *handler) bodies() (*marktools.Tools, error) {
 		Agent:     mcpbind.ClientName,
 		Graph:     h.graphScope,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// This server ships with the memory plugin, whose commands a report cites.
+	tools.SetCommands(marktools.SoulCommands())
+	return tools, nil
 }
 
 // resolveTarget resolves a tool url; an empty one is the -host server.

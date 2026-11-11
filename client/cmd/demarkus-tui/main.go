@@ -6,7 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,13 +19,13 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/bookmarks"
 	"github.com/latebit-io/demarkus/client/internal/cache"
 	"github.com/latebit-io/demarkus/client/internal/launcher"
+	"github.com/latebit-io/demarkus/client/internal/termlinks"
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/hiddentext"
-	runewidth "github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 )
 
@@ -36,16 +36,14 @@ const (
 	focusViewport
 )
 
-// historyEntry stores a snapshot of a visited page for instant back/forward.
+// historyEntry is a visited page for back/forward without a fetch. It holds
+// the body once; rendering and links are derived again on restore, at the
+// width the terminal has then.
 type historyEntry struct {
-	url            string
-	rendered       string // glamour-rendered content (cleaned, no markers)
-	markedRendered string // glamour output with markers for re-highlighting
-	rawBody        string
-	status         string
-	metadata       map[string]string
-	links          []string         // resolved absolute mark:// URLs
-	linkInfos      []links.LinkInfo // link positions for marker injection
+	url      string
+	rawBody  string
+	status   string
+	metadata map[string]string
 }
 
 type model struct {
@@ -70,18 +68,21 @@ type model struct {
 	renderer      *glamour.TermRenderer
 	rendererWidth int
 
-	// History navigation
-	history []historyEntry
-	histIdx int
+	// History navigation. offHistory: the viewport shows something that is
+	// not history[histIdx] (an error, the bookmarks), so back returns to it.
+	history    []historyEntry
+	histIdx    int
+	offHistory bool
 
 	// Link navigation
-	rawBody        string           // raw markdown body of current page
-	links          []string         // resolved absolute mark:// URLs
-	linkIdx        int              // -1 = none selected
-	linkInfos      []links.LinkInfo // extended link info with source positions
-	linkRegions    []linkRegion     // rendered coordinate map for click detection
-	markedRendered string           // glamour output with markers (before highlight)
-	hoverIdx       int              // -1 = no hover, index of link under mouse cursor
+	rawBody     string             // raw markdown body of current page
+	links       []string           // resolved absolute mark:// URLs
+	linkIdx     int                // -1 = none selected
+	linkInfos   []links.LinkInfo   // extended link info with source positions
+	rendered    string             // glamour output of rawBody, unhighlighted; "" when none
+	linkSpans   []termlinks.Span   // where each link sits in rendered
+	linkRegions []termlinks.Region // the cells each link occupies, for the mouse
+	hoverIdx    int                // -1 = no hover, index of link under mouse cursor
 
 	// Fetch sequencing: ignore stale results from superseded fetches.
 	// currentURL is the document on screen, "" when none is. The address bar is
@@ -151,15 +152,17 @@ type clearBookmarkMsg struct{ seq uint64 }
 // issue where SetContent during viewport creation doesn't display.
 type viewportReady struct{}
 
-// pushHistory appends entry to history after histIdx, truncating forward entries.
-// Caps at 50 entries; returns updated (history, histIdx).
+// maxHistory caps the pages kept for back/forward.
+const maxHistory = 50
+
+// pushHistory appends entry after idx, dropping the forward entries and, past
+// maxHistory, the oldest. Dropped entries are cleared: a reslice alone would
+// keep their bodies reachable in the backing array.
 func pushHistory(history []historyEntry, idx int, entry historyEntry) (updated []historyEntry, newIdx int) {
-	// Truncate forward entries (everything after idx).
-	history = history[:idx+1]
-	history = append(history, entry)
-	// Cap at 50: drop oldest.
-	if len(history) > 50 {
-		history = history[len(history)-50:]
+	clear(history[idx+1:])
+	history = append(history[:idx+1], entry)
+	if over := len(history) - maxHistory; over > 0 {
+		history = slices.Delete(history, 0, over)
 	}
 	return history, len(history) - 1
 }
@@ -174,45 +177,70 @@ func (m model) canGoForward() bool {
 	return m.histIdx < len(m.history)-1
 }
 
-// restoreHistory applies the current history entry to the model state.
-// No network fetch — content is restored from the snapshot.
+// restoreHistory shows the current history entry again. No network fetch:
+// the body is the snapshot's, rendered for the terminal as it is now.
 func (m *model) restoreHistory() {
 	entry := m.history[m.histIdx]
 	m.addressBar.SetValue(entry.url)
+	m.loading = false
+	m.fromCache = false
+	m.showDocument(&entry)
+}
+
+// showDocument makes entry the document on screen: its links, its rendering.
+func (m *model) showDocument(entry *historyEntry) {
 	m.currentURL = entry.url
 	m.status = entry.status
 	m.metadata = entry.metadata
 	m.rawBody = entry.rawBody
-	m.links = entry.links
-	m.linkInfos = entry.linkInfos
-	m.markedRendered = entry.markedRendered
+	m.linkInfos = links.ExtractWithPositions(entry.rawBody)
+	m.links = make([]string, 0, len(m.linkInfos))
+	for _, li := range m.linkInfos {
+		m.links = append(m.links, links.Resolve(entry.url, li.Dest))
+	}
 	m.linkIdx = -1
 	m.hoverIdx = -1
 	m.err = nil
-	m.loading = false
-	m.fromCache = false
-	if m.ready {
-		content := entry.rendered
-		if content == "" && entry.rawBody != "" {
-			r, err := m.renderMarkdown(entry.rawBody)
-			if err != nil {
-				content = entry.rawBody
-			} else {
-				m.markedRendered = injectLinkMarkers(r, entry.linkInfos)
-				cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
-				m.linkRegions = regions
-				content = cleaned
-			}
-			m.history[m.histIdx].rendered = content
-			m.history[m.histIdx].markedRendered = m.markedRendered
-		} else if m.markedRendered != "" {
-			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
-			m.linkRegions = regions
-			content = cleaned
-		}
-		m.viewport.SetContent(content)
-		m.viewport.GotoTop()
+	m.offHistory = false
+	if !m.ready {
+		m.pendingBody = entry.rawBody
+		return
 	}
+	m.viewport.SetContent(m.renderBody(entry.rawBody))
+	m.viewport.GotoTop()
+}
+
+// renderBody renders body and locates its links; the result is the content
+// with the selected and hovered links lit. A body the renderer refuses is
+// shown as written, hidden text revealed, with no link regions.
+func (m *model) renderBody(body string) string {
+	rendered, err := m.renderMarkdown(body)
+	if err != nil {
+		m.rendered, m.linkSpans, m.linkRegions = "", nil, nil
+		return hiddentext.Reveal(body)
+	}
+	shown := make([]termlinks.Link, len(m.linkInfos))
+	for i, li := range m.linkInfos {
+		// Glamour renders the revealed body (renderMarkdown); match against it.
+		shown[i] = termlinks.Link{Text: hiddentext.Reveal(li.Text), Dest: hiddentext.Reveal(li.Dest)}
+	}
+	m.rendered, m.linkSpans = rendered, termlinks.Locate(rendered, shown)
+	return m.paint()
+}
+
+// paint is the rendered document with the selected and hovered links lit.
+// Selection changes repaint; they never render markdown again.
+func (m *model) paint() string {
+	content, regions := termlinks.Paint(m.rendered, m.linkSpans, func(i int) bool { return i == m.linkIdx || i == m.hoverIdx })
+	m.linkRegions = regions
+	return content
+}
+
+// leaveDocument clears the link state of a document no longer on screen.
+func (m *model) leaveDocument() {
+	m.links, m.linkInfos = nil, nil
+	m.rendered, m.linkSpans, m.linkRegions = "", nil, nil
+	m.linkIdx, m.hoverIdx = -1, -1
 }
 
 const helpText = `
@@ -355,7 +383,7 @@ func (m model) handleExternalOpenResult(msg externalOpenResult) (tea.Model, tea.
 }
 
 func (m model) handleMouseHover(msg tea.MouseMotionMsg) model {
-	if m.markedRendered == "" || m.showHelp || m.err != nil || m.status == "bookmarks" {
+	if m.rendered == "" || m.showHelp || m.err != nil {
 		return m
 	}
 	newHover := -1
@@ -363,17 +391,15 @@ func (m model) handleMouseHover(msg tea.MouseMotionMsg) model {
 		contentLine := msg.Y - 2 + m.viewport.YOffset()
 		contentCol := msg.X
 		for _, r := range m.linkRegions {
-			if r.line == contentLine && contentCol >= r.startCol && contentCol < r.endCol {
-				newHover = r.idx
+			if r.Line == contentLine && contentCol >= r.StartCol && contentCol < r.EndCol {
+				newHover = r.Index
 				break
 			}
 		}
 	}
 	if newHover != m.hoverIdx {
 		m.hoverIdx = newHover
-		cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
-		m.linkRegions = regions
-		m.viewport.SetContent(cleaned)
+		m.viewport.SetContent(m.paint())
 	}
 	return m
 }
@@ -397,18 +423,13 @@ func (m model) handleMouseWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
 	prevOffset := m.viewport.YOffset()
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
-	// If the scroll moved the content, the link under the cursor changed but
-	// hoverIdx still refers to the pre-scroll target. Drop the stale hover
-	// and re-render so we don't highlight the wrong link until the next
-	// motion event. Gated to document view — graph/help/error modes don't
-	// own m.markedRendered, and running processMarkers there would paste the
-	// previous document over the unrelated content currently in the viewport.
-	if m.viewMode == viewDocument && !m.showHelp && m.err == nil && m.status != "bookmarks" &&
-		m.viewport.YOffset() != prevOffset && m.hoverIdx != -1 && m.markedRendered != "" {
+	// A scroll moves another link under the cursor, so the hover is stale:
+	// drop it and repaint. Document view only: the other views do not show
+	// m.rendered, and a repaint there would paste the document over them.
+	if m.viewMode == viewDocument && !m.showHelp && m.err == nil &&
+		m.viewport.YOffset() != prevOffset && m.hoverIdx != -1 && m.rendered != "" {
 		m.hoverIdx = -1
-		cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
-		m.linkRegions = regions
-		m.viewport.SetContent(cleaned)
+		m.viewport.SetContent(m.paint())
 	}
 	return m, cmd
 }
@@ -425,14 +446,14 @@ func (m model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 			contentLine := msg.Y - 2 + m.viewport.YOffset()
 			contentCol := msg.X
 			for _, r := range m.linkRegions {
-				if r.line != contentLine || contentCol < r.startCol || contentCol >= r.endCol {
+				if r.Line != contentLine || contentCol < r.StartCol || contentCol >= r.EndCol {
 					continue
 				}
 				// Regions can outlive the links they index while a fetch is in flight.
-				if r.idx < 0 || r.idx >= len(m.links) {
+				if r.Index < 0 || r.Index >= len(m.links) {
 					break
 				}
-				return m.followLink(m.links[r.idx])
+				return m.followLink(m.links[r.Index])
 			}
 			m.focus = focusViewport
 			m.addressBar.Blur()
@@ -476,38 +497,10 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// rewrapHistoryEntry re-renders the active history snapshot at the current
-// width so restoreHistory brings the document back wrapped for the current
-// terminal, even if the resize happened while the viewport was showing
-// something else (help, graph, bookmarks, error). No-op when there's no
-// history entry to refresh.
-func (m *model) rewrapHistoryEntry() {
-	if m.histIdx < 0 || m.histIdx >= len(m.history) {
-		return
-	}
-	entry := &m.history[m.histIdx]
-	if entry.rawBody == "" {
-		return
-	}
-	r, err := m.renderMarkdown(entry.rawBody)
-	if err != nil {
-		return
-	}
-	entry.markedRendered = injectLinkMarkers(r, entry.linkInfos)
-	cleaned, _ := processMarkers(entry.markedRendered, -1, -1)
-	entry.rendered = cleaned
-}
-
 // rewrapContent re-renders the viewport content at the current width,
-// preserving the approximate scroll position and link selection.
-// Called on window resize so markdown re-wraps to the new width.
+// preserving the approximate scroll position and link selection. History
+// needs no refresh: an entry renders at the current width when restored.
 func (m *model) rewrapContent() {
-	// Always refresh the active history entry so restoreHistory (called
-	// from help dismiss, back/forward, and graph/bookmarks esc) returns the
-	// document at the current width — regardless of what the viewport is
-	// displaying right now.
-	m.rewrapHistoryEntry()
-
 	switch {
 	case m.viewMode == viewGraph:
 		switch {
@@ -519,26 +512,12 @@ func (m *model) rewrapContent() {
 			m.viewport.SetContent("")
 		}
 	case m.showHelp:
-		// Static plain text; no viewport re-render needed. The history
-		// entry was already refreshed above so dismissing help restores
-		// the document at the new width.
+		// Static plain text; dismissing help restores the document at the new width.
 	case m.err != nil:
 		m.viewport.SetContent(errorView(m.err))
 	case m.rawBody != "":
 		percent := m.viewport.ScrollPercent()
-		r, err := m.renderMarkdown(m.rawBody)
-		var cleaned string
-		if err != nil {
-			cleaned = m.rawBody
-			m.markedRendered = ""
-			m.linkRegions = nil
-		} else {
-			m.markedRendered = injectLinkMarkers(r, m.linkInfos)
-			var regions []linkRegion
-			cleaned, regions = processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
-			m.linkRegions = regions
-		}
-		m.viewport.SetContent(cleaned)
+		m.viewport.SetContent(m.renderBody(m.rawBody))
 		// Use the viewport's own line count so the restored offset matches
 		// its internal maxYOffset math exactly. strings.Count(cleaned, "\n")
 		// is off-by-one for non-empty buffers without a trailing newline.
@@ -552,15 +531,7 @@ func (m *model) rewrapContent() {
 
 func (m model) handleViewportReady() (tea.Model, tea.Cmd) {
 	if m.pendingBody != "" {
-		rendered, err := m.renderMarkdown(m.pendingBody)
-		if err != nil {
-			m.viewport.SetContent(m.pendingBody)
-		} else {
-			m.markedRendered = injectLinkMarkers(rendered, m.linkInfos)
-			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
-			m.linkRegions = regions
-			m.viewport.SetContent(cleaned)
-		}
+		m.viewport.SetContent(m.renderBody(m.pendingBody))
 		m.pendingBody = ""
 		m.viewport.GotoTop()
 	} else if m.err != nil {
@@ -641,25 +612,17 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.currentURL = ""
 		m.err = msg.err
+		m.offHistory = true
 		m.pendingBody = ""
 		m.status = ""
 		m.metadata = nil
 		m.fromCache = false
-		m.links = nil
-		m.linkIdx = -1
-		m.hoverIdx = -1
-		m.markedRendered = ""
-		m.linkRegions = nil
-		m.linkInfos = nil
+		m.leaveDocument()
 		if m.ready {
 			m.viewport.SetContent(errorView(msg.err))
 		}
 		return m, nil
 	}
-	m.currentURL = msg.url
-	m.err = nil
-	m.status = msg.result.Response.Status
-	m.metadata = msg.result.Response.Metadata
 	m.fromCache = msg.result.FromCache
 	var graphSave tea.Cmd
 	if m.graphStore != nil && m.graphStore.ObserveDocument(msg.graphURL, graph.FetchResult{
@@ -669,46 +632,9 @@ func (m model) handleFetchResult(msg fetchResult) (tea.Model, tea.Cmd) {
 		graphSave = saveGraphStore(m.graphStore, m.graphGeneration)
 	}
 
-	// Extract and resolve links from raw body.
-	m.rawBody = msg.result.Response.Body
-	m.linkInfos = links.ExtractWithPositions(m.rawBody)
-	m.links = make([]string, 0, len(m.linkInfos))
-	for _, li := range m.linkInfos {
-		m.links = append(m.links, links.Resolve(msg.url, li.Dest))
-	}
-	m.linkIdx = -1
-	m.hoverIdx = -1
-
-	// Render markdown, then inject link markers into the ANSI output.
-	var rendered string
-	if m.ready {
-		r, err := m.renderMarkdown(msg.result.Response.Body)
-		if err != nil {
-			rendered = msg.result.Response.Body
-			m.markedRendered = ""
-			m.linkRegions = nil
-		} else {
-			m.markedRendered = injectLinkMarkers(r, m.linkInfos)
-			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
-			m.linkRegions = regions
-			rendered = cleaned
-		}
-		m.viewport.SetContent(rendered)
-		m.viewport.GotoTop()
-	} else {
-		m.pendingBody = msg.result.Response.Body
-	}
-
-	m.history, m.histIdx = pushHistory(m.history, m.histIdx, historyEntry{
-		url:            msg.url,
-		rendered:       rendered,
-		markedRendered: m.markedRendered,
-		rawBody:        m.rawBody,
-		status:         m.status,
-		metadata:       m.metadata,
-		links:          m.links,
-		linkInfos:      m.linkInfos,
-	})
+	entry := historyEntry{url: msg.url, rawBody: msg.result.Response.Body, status: msg.result.Response.Status, metadata: msg.result.Response.Metadata}
+	m.showDocument(&entry)
+	m.history, m.histIdx = pushHistory(m.history, m.histIdx, entry)
 
 	m.focus = focusViewport
 	m.addressBar.Blur()
@@ -782,21 +708,7 @@ func (m model) handleViewportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.flushGraphStore()
 		return m, tea.Quit
 	case "esc":
-		if m.status == "bookmarks" {
-			if m.histIdx >= 0 {
-				m.restoreHistory()
-			} else {
-				m.status = ""
-				m.links = nil
-				m.linkRegions = nil
-				m.markedRendered = ""
-				m.rawBody = ""
-				m.linkIdx = -1
-				m.metadata = nil
-				if m.ready {
-					m.viewport.SetContent("")
-				}
-			}
+		if m.leaveOverlay() {
 			return m, nil
 		}
 	case "?":
@@ -815,10 +727,7 @@ func (m model) handleViewportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 	case "[", "alt+left":
-		if m.canGoBack() {
-			m.histIdx--
-			m.restoreHistory()
-		}
+		m.goBack()
 		return m, nil
 	case "]", "alt+right":
 		if m.canGoForward() {
@@ -843,6 +752,39 @@ func (m model) handleViewportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 	return m, cmd
+}
+
+// leaveOverlay leaves the bookmarks or a failed fetch for the page they
+// covered; with no page under them the bookmarks just clear. It reports
+// whether there was anything to leave.
+func (m *model) leaveOverlay() bool {
+	switch {
+	case m.offHistory && m.histIdx >= 0:
+		m.restoreHistory()
+	case m.status == "bookmarks":
+		m.status = ""
+		m.rawBody = ""
+		m.metadata = nil
+		m.leaveDocument()
+		if m.ready {
+			m.viewport.SetContent("")
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+// goBack shows the previous page. From an error or the bookmarks that is
+// the page they covered, not the one before it.
+func (m *model) goBack() {
+	switch {
+	case m.offHistory && m.histIdx >= 0:
+		m.restoreHistory()
+	case m.canGoBack():
+		m.histIdx--
+		m.restoreHistory()
+	}
 }
 
 func (m model) toggleFocus() model {
@@ -878,8 +820,8 @@ func (m model) linkVisible(idx int) bool {
 	top := m.viewport.YOffset()
 	bottom := top + m.viewport.Height()
 	for _, r := range m.linkRegions {
-		if r.idx == idx {
-			return r.line >= top && r.line < bottom
+		if r.Index == idx {
+			return r.Line >= top && r.Line < bottom
 		}
 	}
 	return false
@@ -892,8 +834,8 @@ func (m model) firstVisibleLinkIdx() int {
 	top := m.viewport.YOffset()
 	bottom := top + m.viewport.Height()
 	for _, r := range m.linkRegions {
-		if r.line >= top && r.line < bottom {
-			return r.idx
+		if r.Line >= top && r.Line < bottom {
+			return r.Index
 		}
 	}
 	return -1
@@ -904,7 +846,7 @@ func (m model) handleTabNavigation() (tea.Model, tea.Cmd) {
 		// If the current selection is outside the viewport (typically because
 		// the user wheel-scrolled away), resume tabbing from the first link
 		// visible in the current scroll window rather than snapping back.
-		if m.markedRendered != "" && (m.linkIdx < 0 || !m.linkVisible(m.linkIdx)) {
+		if m.rendered != "" && (m.linkIdx < 0 || !m.linkVisible(m.linkIdx)) {
 			if first := m.firstVisibleLinkIdx(); first >= 0 {
 				m.linkIdx = first - 1
 			}
@@ -914,20 +856,18 @@ func (m model) handleTabNavigation() (tea.Model, tea.Cmd) {
 			m.linkIdx = -1
 		}
 		// Re-highlight without re-rendering glamour.
-		if m.markedRendered != "" {
-			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
-			m.linkRegions = regions
-			m.viewport.SetContent(cleaned)
+		if m.rendered != "" {
+			m.viewport.SetContent(m.paint())
 			// Scroll to keep the selected link visible.
 			if m.linkIdx >= 0 {
-				for _, r := range regions {
-					if r.idx != m.linkIdx {
+				for _, r := range m.linkRegions {
+					if r.Index != m.linkIdx {
 						continue
 					}
-					if r.line < m.viewport.YOffset() {
-						m.viewport.SetYOffset(r.line)
-					} else if r.line >= m.viewport.YOffset()+m.viewport.Height() {
-						m.viewport.SetYOffset(r.line - m.viewport.Height() + 1)
+					if r.Line < m.viewport.YOffset() {
+						m.viewport.SetYOffset(r.Line)
+					} else if r.Line >= m.viewport.YOffset()+m.viewport.Height() {
+						m.viewport.SetYOffset(r.Line - m.viewport.Height() + 1)
 					}
 					break
 				}
@@ -953,11 +893,7 @@ func (m model) followLink(target string) (tea.Model, tea.Cmd) {
 	}
 	m.addressBar.SetValue(target)
 	m.loading = true
-	m.links = nil
-	m.linkRegions = nil
-	m.markedRendered = ""
-	m.linkIdx = -1
-	m.hoverIdx = -1
+	m.leaveDocument()
 	cmd := m.startFetch(target) // before the return: it changes m
 	return m, cmd
 }
@@ -989,38 +925,10 @@ func (m model) startBookmarkMsgClear() (tea.Model, tea.Cmd) {
 
 // isExternalURL reports whether raw has a non-empty, non-mark scheme.
 // Bare paths, relative references, and mark:// URLs are treated as internal.
-// Both authority-form (scheme://...) and opaque-form (mailto:user@...) are
-// recognised.
 func isExternalURL(raw string) bool {
-	scheme := schemeOf(raw)
+	scheme := launcher.SchemeOf(raw)
 	return scheme != "" && scheme != "mark"
 }
-
-// schemeOf returns the scheme component of raw in canonical lowercase form,
-// or the empty string if raw has no scheme. Matches RFC 3986 scheme syntax:
-// ALPHA *( ALPHA / DIGIT / + / - / . ) terminated by a colon, before any /, ?,
-// #, or end of string. Schemes are case-insensitive per RFC 3986 §3.1; we
-// normalise to lowercase here so callers can compare directly.
-func schemeOf(raw string) string {
-	for i, r := range raw {
-		switch {
-		case i == 0:
-			if !isAlpha(r) {
-				return ""
-			}
-		case r == ':':
-			return strings.ToLower(raw[:i])
-		case isAlpha(r) || isDigit(r) || r == '+' || r == '-' || r == '.':
-			// valid scheme char, continue
-		default:
-			return ""
-		}
-	}
-	return ""
-}
-
-func isAlpha(r rune) bool { return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') }
-func isDigit(r rune) bool { return r >= '0' && r <= '9' }
 
 func (m model) handleGraphToggle() (tea.Model, tea.Cmd) {
 	url := m.currentURL
@@ -1055,7 +963,7 @@ func (m model) handleGraphToggle() (tea.Model, tea.Cmd) {
 
 	if m.ready {
 		if len(m.graphNodes) > 0 {
-			m.viewport.SetContent(renderGraphView(m.graphNodes, m.graphIdx, m.width))
+			m.viewport.SetContent(m.renderCurrentGraphSubView())
 		} else {
 			m.viewport.SetContent("\n  Crawling document links...")
 		}
@@ -1097,37 +1005,13 @@ func (m model) handleBookmarkView() (tea.Model, tea.Cmd) {
 	if m.bookmarkStore == nil {
 		return m, nil
 	}
-	body := m.bookmarkStore.Render()
-	m.rawBody = body
-	m.linkInfos = links.ExtractWithPositions(body)
-	m.links = make([]string, 0, len(m.linkInfos))
-	for _, li := range m.linkInfos {
-		m.links = append(m.links, links.Resolve("", li.Dest))
-	}
-	m.linkIdx = -1
-	m.hoverIdx = -1
-	m.markedRendered = ""
-	m.linkRegions = nil
-	m.status = "bookmarks"
 	m.addressBar.SetValue("")
-	m.currentURL = ""
 	m.loading = false
 	m.cancelFetch()
-	m.metadata = nil
 	m.fromCache = false
-	m.err = nil
-	if m.ready {
-		r, err := m.renderMarkdown(body)
-		if err != nil {
-			m.viewport.SetContent(body)
-		} else {
-			m.markedRendered = injectLinkMarkers(r, m.linkInfos)
-			cleaned, regions := processMarkers(m.markedRendered, m.linkIdx, m.hoverIdx)
-			m.linkRegions = regions
-			m.viewport.SetContent(cleaned)
-		}
-		m.viewport.GotoTop()
-	}
+	// The list is a document of its own, off the history: Esc or back returns.
+	m.showDocument(&historyEntry{status: "bookmarks", rawBody: m.bookmarkStore.Render()})
+	m.offHistory = true
 	return m, nil
 }
 
@@ -1205,12 +1089,12 @@ func (m model) statusBarView() string {
 		return style.Render("Loading...")
 	}
 	if m.err != nil {
-		return style.Foreground(lipgloss.Color("9")).Render("Error: " + m.err.Error())
+		return style.Foreground(lipgloss.Color("9")).Render(hiddentext.Reveal("Error: " + m.err.Error()))
 	}
 
 	// Show transient bookmark message.
 	if m.bookmarkMsg != "" {
-		return style.Foreground(lipgloss.Color("10")).Render(m.bookmarkMsg)
+		return style.Foreground(lipgloss.Color("10")).Render(hiddentext.Reveal(m.bookmarkMsg))
 	}
 
 	// Show selected link in status bar (link navigation mode).
@@ -1221,7 +1105,7 @@ func (m model) statusBarView() string {
 			prefix = "↗ "
 		}
 		hint := fmt.Sprintf("[%d/%d] %s%s", m.linkIdx+1, len(m.links), prefix, target)
-		return style.Foreground(lipgloss.Color("12")).Render(hint)
+		return style.Foreground(lipgloss.Color("12")).Render(hiddentext.Reveal(hint))
 	}
 
 	if m.status == "" {
@@ -1247,7 +1131,8 @@ func (m model) statusBarView() string {
 	if m.status != protocol.StatusOK && m.status != "bookmarks" {
 		style = style.Foreground(lipgloss.Color("11"))
 	}
-	return style.Render(strings.Join(parts, "  "))
+	// Status and metadata are the server's words: revealed like a body.
+	return style.Render(hiddentext.Reveal(strings.Join(parts, "  ")))
 }
 
 // originHost returns the dial host of a user-entered URL, or "" when it does not parse.
@@ -1302,421 +1187,6 @@ func (m model) doFetch(ctx context.Context, raw string) tea.Cmd {
 	}
 }
 
-// linkRegion maps a link index to its position in the rendered output.
-type linkRegion struct {
-	idx      int // index into m.links
-	line     int // 0-based line number in rendered output
-	startCol int // start column (visual, excluding ANSI codes)
-	endCol   int // end column (visual, excluding ANSI codes)
-}
-
-const maxMarkedLinks = 0x1000 // 4096 links max to avoid marker range overlap
-
-// markerStart returns the start marker rune for link index i.
-func markerStart(i int) rune { return rune(0xF0000 + i) }
-
-// markerEnd returns the end marker rune for link index i.
-func markerEnd(i int) rune { return rune(0xF1000 + i) }
-
-// injectLinkMarkers inserts unique Unicode markers around each link's rendered text
-// in Glamour's ANSI output. Markers are placed by matching LinkInfo.Text against
-// the visible (non-ANSI) content. This runs AFTER Glamour rendering so markers
-// never affect word wrapping width calculations.
-func injectLinkMarkers(rendered string, infos []links.LinkInfo) string {
-	if len(infos) == 0 {
-		return rendered
-	}
-	if len(infos) > maxMarkedLinks {
-		infos = infos[:maxMarkedLinks]
-	}
-
-	runes := []rune(rendered)
-	hyperlinks := findHyperlinkRegions(runes)
-
-	type insertion struct {
-		runePos int
-		marker  string
-	}
-	var insertions []insertion
-
-	// Match each link to an OSC 8 hyperlink region by URL and visible text.
-	used := make([]bool, len(hyperlinks))
-	for i, info := range infos {
-		if info.Text == "" {
-			continue
-		}
-		// Glamour renders the revealed body (renderMarkdown); match against it.
-		text, dest := hiddentext.Reveal(info.Text), hiddentext.Reveal(info.Dest)
-		for j, hl := range hyperlinks {
-			if used[j] {
-				continue
-			}
-			hlURL := hl.url
-			if idx := strings.IndexByte(hlURL, '#'); idx != -1 {
-				hlURL = hlURL[:idx]
-			}
-			urlMatch := hlURL == dest || strings.HasSuffix(hlURL, dest) || strings.HasSuffix(dest, hlURL)
-			if urlMatch && hl.text == text {
-				insertions = append(insertions,
-					insertion{runePos: hl.textStart, marker: string(markerStart(i))},
-					insertion{runePos: hl.textEnd, marker: string(markerEnd(i))},
-				)
-				used[j] = true
-				break
-			}
-		}
-	}
-	if len(insertions) == 0 {
-		return rendered
-	}
-
-	// Sort insertions by position (URL matching may find links out of order).
-	sort.Slice(insertions, func(a, b int) bool {
-		return insertions[a].runePos < insertions[b].runePos
-	})
-
-	// Build result with marker insertions.
-	var result strings.Builder
-	result.Grow(len(rendered) + len(insertions)*4)
-	prev := 0
-	for _, ins := range insertions {
-		for _, r := range runes[prev:ins.runePos] {
-			result.WriteRune(r)
-		}
-		result.WriteString(ins.marker)
-		prev = ins.runePos
-	}
-	for _, r := range runes[prev:] {
-		result.WriteRune(r)
-	}
-	return result.String()
-}
-
-// hyperlinkRegion describes an OSC 8 hyperlink in Glamour's rendered output.
-type hyperlinkRegion struct {
-	url       string
-	text      string // visible text between the hyperlink start and reset
-	textStart int    // rune index of the first visible char of the link text
-	textEnd   int    // rune index after the last visible char
-}
-
-// parseOSC extracts the content of an OSC sequence starting at runes[start]
-// (the character after \x1b]). Returns the content string and the rune index
-// to resume scanning from (past the terminator).
-func parseOSC(runes []rune, start int) (content string, resume int) {
-	end := start
-	for end < len(runes) {
-		if runes[end] == '\x07' {
-			break
-		}
-		if runes[end] == '\x1b' && end+1 < len(runes) && runes[end+1] == '\\' {
-			break
-		}
-		end++
-	}
-	content = string(runes[start:end])
-	if end < len(runes) && runes[end] == '\x07' {
-		return content, end
-	}
-	if end+1 < len(runes) {
-		return content, end + 1
-	}
-	return content, end
-}
-
-// textStartAfterOSC returns the rune index where visible text begins after an
-// OSC terminator. resume is the value returned by parseOSC: the BEL index or
-// the trailing '\' of an ST sequence.
-func textStartAfterOSC(runes []rune, resume int) int {
-	if resume < len(runes) && runes[resume] == '\x07' {
-		return resume + 1
-	}
-	return resume + 1 // parseOSC already advanced past \x1b
-}
-
-// findHyperlinkRegions scans rendered ANSI output for OSC 8 hyperlink regions.
-// Each region contains the URL, visible text, and rune positions.
-func findHyperlinkRegions(runes []rune) []hyperlinkRegion {
-	var regions []hyperlinkRegion
-	var currentURL string
-	var visibleText strings.Builder
-	textStart := 0
-	inCSI := false
-	inLink := false
-
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-
-		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == ']' {
-			oscContent, resume := parseOSC(runes, i+2)
-			escPos := i // position of \x1b before the OSC
-
-			if strings.HasPrefix(oscContent, "8;") {
-				if _, url, ok := strings.Cut(oscContent[2:], ";"); ok {
-					if url == "" && currentURL != "" {
-						regions = append(regions, hyperlinkRegion{
-							url:       currentURL,
-							text:      visibleText.String(),
-							textStart: textStart,
-							textEnd:   escPos,
-						})
-						currentURL = ""
-						inLink = false
-						visibleText.Reset()
-					} else if url != "" {
-						currentURL = url
-						inLink = true
-						visibleText.Reset()
-						textStart = textStartAfterOSC(runes, resume)
-					}
-				}
-			}
-			i = resume
-			continue
-		}
-
-		if r == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
-			inCSI = true
-			continue
-		}
-		if inCSI {
-			if r == 'm' {
-				inCSI = false
-			}
-			continue
-		}
-
-		if inLink {
-			visibleText.WriteRune(r)
-		}
-	}
-	return regions
-}
-
-// findVisibleText searches for textRunes in runes starting from the given offset,
-// skipping ANSI escape sequences (CSI and OSC) during matching. Returns the rune
-// indices (start, end) of the match or (-1, -1) if not found.
-func findVisibleText(runes, textRunes []rune, from int) (startRune, endRune int) {
-	if len(textRunes) == 0 {
-		return -1, -1
-	}
-
-	// Build a map of visible character positions (skipping ANSI escape sequences).
-	type visChar struct {
-		runeIdx int
-		r       rune
-	}
-	var visible []visChar
-	inCSI := false
-	inOSC := false
-	for i := from; i < len(runes); i++ {
-		r := runes[i]
-		if r == '\x1b' && i+1 < len(runes) {
-			switch runes[i+1] {
-			case '[':
-				inCSI = true
-				continue
-			case ']':
-				inOSC = true
-				i++ // skip the ']'
-				continue
-			}
-		}
-		if inCSI {
-			if r == 'm' {
-				inCSI = false
-			}
-			continue
-		}
-		if inOSC {
-			if r == '\x07' {
-				inOSC = false
-			} else if r == '\\' && i > 0 && runes[i-1] == '\x1b' {
-				inOSC = false
-			}
-			continue
-		}
-		visible = append(visible, visChar{i, r})
-	}
-
-	// Substring search on visible characters.
-	for k := range len(visible) - len(textRunes) + 1 {
-		match := true
-		for j, tr := range textRunes {
-			if visible[k+j].r != tr {
-				match = false
-				break
-			}
-		}
-		if match {
-			return visible[k].runeIdx, visible[k+len(textRunes)-1].runeIdx + 1
-		}
-	}
-	return -1, -1
-}
-
-// isHighlighted reports whether a link index should be visually highlighted.
-// Hover takes priority, but Tab selection is also shown.
-func isHighlighted(idx, selectedIdx, hoverIdx int) bool {
-	return idx == hoverIdx || idx == selectedIdx
-}
-
-// escapeState tracks whether the scanner is inside a CSI or OSC escape sequence.
-type escapeState struct {
-	inCSI bool
-	inOSC bool
-}
-
-// handleEscape checks if rune r (at index i in runes) is part of an ANSI escape
-// sequence. If so, it writes the rune to result and returns true. Callers should
-// skip all further processing for that rune.
-func (es *escapeState) handleEscape(r rune, i int, runes []rune, result *strings.Builder) bool {
-	if r == '\x1b' && i+1 < len(runes) {
-		switch runes[i+1] {
-		case ']':
-			es.inOSC = true
-			result.WriteRune(r)
-			return true
-		case '[':
-			es.inCSI = true
-			result.WriteRune(r)
-			return true
-		}
-	}
-	if es.inOSC {
-		result.WriteRune(r)
-		if r == '\x07' {
-			es.inOSC = false
-		} else if r == '\\' && i > 0 && runes[i-1] == '\x1b' {
-			es.inOSC = false
-		}
-		return true
-	}
-	if es.inCSI {
-		result.WriteRune(r)
-		if r == 'm' {
-			es.inCSI = false
-		}
-		return true
-	}
-	return false
-}
-
-// processMarkers scans rendered ANSI output for link markers, records their
-// positions as linkRegions (including the URL glamour renders after the text),
-// and highlights links matching selectedIdx or hoverIdx with reverse video.
-// Marker state is tracked across the entire string to handle line-wrapped links.
-func processMarkers(rendered string, selectedIdx, hoverIdx int) (string, []linkRegion) {
-	var regions []linkRegion
-	var result strings.Builder
-	result.Grow(len(rendered))
-
-	lineNum := 0
-	visualCol := 0
-
-	openIdx := -1
-	openCol := 0
-
-	extendingIdx := -1
-	extendingCol := 0
-	seenURLChar := false
-
-	var esc escapeState
-
-	runes := []rune(rendered)
-	for i, r := range runes {
-		if esc.handleEscape(r, i, runes, &result) {
-			continue
-		}
-
-		// Newline resets visual column and may terminate URL extension.
-		if r == '\n' {
-			if extendingIdx >= 0 {
-				finishExtend(&regions, &result, extendingIdx, lineNum, openCol, extendingCol, selectedIdx, hoverIdx)
-				extendingIdx = -1
-				seenURLChar = false
-			}
-			result.WriteRune(r)
-			lineNum++
-			visualCol = 0
-			continue
-		}
-
-		// If extending past end marker to capture URL, check for termination.
-		if extendingIdx >= 0 {
-			if r == ' ' && seenURLChar {
-				finishExtend(&regions, &result, extendingIdx, lineNum, openCol, extendingCol, selectedIdx, hoverIdx)
-				extendingIdx = -1
-				seenURLChar = false
-				result.WriteRune(r)
-				visualCol++
-				continue
-			}
-			if r == ' ' {
-				extendingCol++
-				result.WriteRune(r)
-				visualCol++
-				continue
-			}
-			seenURLChar = true
-			w := runewidth.RuneWidth(r)
-			extendingCol += w
-			result.WriteRune(r)
-			visualCol += w
-			continue
-		}
-
-		// Check for start marker (U+F0000 + idx).
-		if r >= 0xF0000 && r < 0xF1000 {
-			idx := int(r - 0xF0000)
-			openIdx = idx
-			openCol = visualCol
-			if isHighlighted(idx, selectedIdx, hoverIdx) {
-				result.WriteString("\x1b[7m") // reverse video on
-			}
-			continue
-		}
-
-		// Check for end marker (U+F1000 + idx).
-		if r >= 0xF1000 && r < 0xF2000 {
-			idx := int(r - 0xF1000)
-			if openIdx == idx {
-				extendingIdx = idx
-				extendingCol = visualCol
-				openIdx = -1
-			}
-			continue
-		}
-
-		result.WriteRune(r)
-		// Mouse hit-testing is in terminal cells, not runes: CJK and emoji
-		// occupy two columns, combining marks zero.
-		visualCol += runewidth.RuneWidth(r)
-	}
-
-	// Flush state at end of input.
-	if extendingIdx >= 0 {
-		finishExtend(&regions, &result, extendingIdx, lineNum, openCol, extendingCol, selectedIdx, hoverIdx)
-	} else if openIdx >= 0 && isHighlighted(openIdx, selectedIdx, hoverIdx) {
-		result.WriteString("\x1b[27m") // close unclosed highlight
-	}
-
-	return result.String(), regions
-}
-
-// finishExtend closes an extending link region and turns off highlight if needed.
-func finishExtend(regions *[]linkRegion, result *strings.Builder, idx, lineNum, startCol, endCol, selectedIdx, hoverIdx int) {
-	*regions = append(*regions, linkRegion{
-		idx:      idx,
-		line:     lineNum,
-		startCol: startCol,
-		endCol:   endCol,
-	})
-	if isHighlighted(idx, selectedIdx, hoverIdx) {
-		result.WriteString("\x1b[27m") // reverse video off
-	}
-}
-
 func (m *model) renderMarkdown(body string) (string, error) {
 	wrapWidth := m.width - 4
 	if m.renderer == nil || m.rendererWidth != wrapWidth {
@@ -1734,8 +1204,10 @@ func (m *model) renderMarkdown(body string) (string, error) {
 	return m.renderer.Render(hiddentext.Reveal(body))
 }
 
+// errorView words a failure. Its text can quote a server or a URL, so
+// hidden text is revealed before it reaches the terminal.
 func errorView(err error) string {
-	return fmt.Sprintf("\n  Error: %s\n", err.Error())
+	return hiddentext.Reveal(fmt.Sprintf("\n  Error: %s\n", err.Error()))
 }
 
 // detectStyle probes the terminal background and returns "dark" or "light".
@@ -1768,7 +1240,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	externalSchemes, err := parseSchemeList(*externalLinks)
+	externalSchemes, err := launcher.ParseSchemes(*externalLinks)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "invalid -external-links value: %v\n", err)
 		os.Exit(1)
@@ -1792,48 +1264,4 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-// parseSchemeList splits a comma-separated scheme list, trimming whitespace
-// and dropping empty entries. Returns nil for an empty input (disables external
-// launching). Invalid entries fail the whole parse — a misconfigured flag must
-// not silently swallow unrecognisable schemes, because the user would assume
-// the scheme is enabled when it never matches anything.
-func parseSchemeList(csv string) ([]string, error) {
-	if csv == "" {
-		return nil, nil
-	}
-	parts := strings.Split(csv, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		s := strings.TrimSpace(p)
-		if s == "" {
-			continue
-		}
-		if !isValidScheme(s) {
-			return nil, fmt.Errorf("invalid URL scheme %q (schemes must match ALPHA *( ALPHA / DIGIT / \"+\" / \"-\" / \".\" ))", s)
-		}
-		out = append(out, s)
-	}
-	return out, nil
-}
-
-// isValidScheme reports whether s is a syntactically valid URL scheme per
-// RFC 3986: starts with ALPHA, followed by any of ALPHA / DIGIT / + / - / .
-func isValidScheme(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i, r := range s {
-		if i == 0 {
-			if !isAlpha(r) {
-				return false
-			}
-			continue
-		}
-		if !isAlpha(r) && !isDigit(r) && r != '+' && r != '-' && r != '.' {
-			return false
-		}
-	}
-	return true
 }

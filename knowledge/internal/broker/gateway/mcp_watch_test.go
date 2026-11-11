@@ -25,6 +25,7 @@ import (
 	"github.com/latebit-io/demarkus/client/mcpwatch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/memtest"
 	"github.com/latebit-io/demarkus/server/knowledgeserver/knowledgetest"
@@ -70,7 +71,7 @@ func (s *watchSystem) protect() {
 
 // watchReplica is one knowledge server and the gateway in its process.
 type watchReplica struct {
-	composite *Composite
+	composite *dispatch.Composite
 	gateway   *Gateway
 	server    *httptest.Server
 	url       string
@@ -78,19 +79,19 @@ type watchReplica struct {
 
 func (s *watchSystem) replica() *watchReplica {
 	s.t.Helper()
-	w, _ := s.cfg.Registry().Find(watchWorld)
+	w, _ := brokertest.Registry(s.t, s.cfg).Find(watchWorld)
 	server := knowledgetest.Open(s.t, s.buckets, knowledgetest.World{Name: watchWorld, Authority: w.Authority(), TokensFile: s.tokens})
 	return serveWatches(s.t, s.cfg, server, KnowledgeProfile())
 }
 
 // serveWatches checks the local worlds against server, as run does, and
 // serves profile's gateway with subscriptions on, over HTTP.
-func serveWatches(t *testing.T, cfg *core.Config, server LocalWorlds, profile *Profile) *watchReplica {
+func serveWatches(t *testing.T, cfg *core.Config, server dispatch.LocalWorlds, profile *Profile) *watchReplica {
 	t.Helper()
-	if err := CheckLocal(cfg.Registry(), server); err != nil {
+	if err := dispatch.CheckLocal(brokertest.Registry(t, cfg), server); err != nil {
 		t.Fatal(err)
 	}
-	composite := NewComposite(cfg.Registry(), server, nil)
+	composite := dispatch.NewComposite(brokertest.Registry(t, cfg), server, nil)
 	f := gatewayFixtureFor(t, cfg, core.SharedDeps{Verifier: watchVerifier()}, profile)
 	deps := DepsFor(cfg, profile, f.shared, nil)
 	deps.Watches = composite

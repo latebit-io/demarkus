@@ -1,4 +1,6 @@
-package gateway
+// Package dispatch reaches worlds by name: in process when the server here
+// serves them, over the network otherwise.
+package dispatch
 
 import (
 	"context"
@@ -32,9 +34,31 @@ type LocalWorlds interface {
 // acknowledgement, as a request timeout bounds a QUIC one.
 const localWatchHandshake = 10 * time.Second
 
-// errWorldNotLocal is a write to a world this process does not serve: the
+// ErrWorldNotLocal is a write to a world this process does not serve: the
 // grant never leaves the process, so nothing could authorize it there.
-var errWorldNotLocal = errors.New("not served by this broker; writes need a local world")
+var ErrWorldNotLocal = errors.New("not served by this broker; writes need a local world")
+
+// WorldDispatcher is how the tool handlers reach worlds; tests inject a fake.
+// Host carries the WORLD NAME, never a dial address.
+type WorldDispatcher interface {
+	Fetch(ctx context.Context, r fetch.FetchRequest) (fetch.Result, error)
+	List(ctx context.Context, r fetch.ListRequest) (fetch.Result, error)
+	Versions(ctx context.Context, r fetch.VersionsRequest) (fetch.Result, error)
+	Lookup(ctx context.Context, r fetch.LookupRequest) (fetch.Result, error)
+	Publish(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error)
+	Append(ctx context.Context, r fetch.WriteRequest) (fetch.Result, error)
+	Archive(ctx context.Context, r fetch.ArchiveRequest) (fetch.Result, error)
+}
+
+// WorldNotFoundError names a world the broker has no config for; handlers
+// map it to a tool error instead of a transport failure.
+type WorldNotFoundError struct {
+	World string
+}
+
+func (e *WorldNotFoundError) Error() string {
+	return fmt.Sprintf("broker: unknown world %q (not in broker config)", e.World)
+}
 
 // Composite serves a local world in this process and every other world over
 // the network, so worlds in other clusters keep working; writes are local
@@ -94,7 +118,7 @@ func FloorOf(local LocalWorlds) string {
 func (c *Composite) exchange(ctx context.Context, worldName string, encode func() (protocol.Request, error), remote func(context.Context) (fetch.Result, error)) (fetch.Result, error) {
 	w, ok := c.worlds.Find(worldName)
 	if !ok {
-		return fetch.Result{}, &errWorldNotFound{worldName: worldName}
+		return fetch.Result{}, &WorldNotFoundError{World: worldName}
 	}
 	if !w.Local {
 		return remote(ctx)
@@ -117,7 +141,7 @@ func (c *Composite) write(ctx context.Context, worldName string, encode func() (
 		return fetch.Result{}, core.ErrNotAuthorized
 	}
 	return c.exchange(ctx, worldName, encode, func(context.Context) (fetch.Result, error) {
-		return fetch.Result{}, fmt.Errorf("world %q: %w", worldName, errWorldNotLocal)
+		return fetch.Result{}, fmt.Errorf("world %q: %w", worldName, ErrWorldNotLocal)
 	})
 }
 
@@ -162,10 +186,10 @@ func (c *Composite) Archive(ctx context.Context, r fetch.ArchiveRequest) (fetch.
 func (c *Composite) Watch(ctx context.Context, r fetch.WatchRequest) (*fetch.Watch, error) {
 	w, ok := c.worlds.Find(r.Host)
 	if !ok {
-		return nil, &errWorldNotFound{worldName: r.Host}
+		return nil, &WorldNotFoundError{World: r.Host}
 	}
 	if !w.Local {
-		return nil, fmt.Errorf("watch world %q: %w", r.Host, errWorldNotLocal)
+		return nil, fmt.Errorf("watch world %q: %w", r.Host, ErrWorldNotLocal)
 	}
 	authority := w.Authority()
 	dial := fetch.ConnDialer(func(ctx context.Context, req protocol.Request) (net.Conn, error) {

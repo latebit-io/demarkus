@@ -40,6 +40,8 @@ Writes are denied unless you provide a tokens file. Reads are public by default.
 demarkus-server -root /srv/site -tokens /etc/demarkus/tokens.toml
 ```
 
+The file must exist: `demarkus-server` refuses to start when `-tokens` names a missing file, since a path is public unless a read token covers it and a mistyped path would serve everything.
+
 #### 3) Publish with the token
 
 ```bash
@@ -103,6 +105,8 @@ demarkus-publish -root /srv/site -path /index.md -body "# Hello"
 echo "# Hello" | demarkus-publish -root /srv/site -path /index.md
 ```
 
+A running server serves the publish on its next read: `demarkus-publish` moves a marker at `<root>/.generation`, and the server rebuilds its index and LOOKUP catalog when it sees the marker changed. No restart is needed. Watchers of a writable server are told to resync, since a direct write carries no change events.
+
 For maximum security, combine with the [read-only chroot install](../security/index.md#read-only-mode-maximum-lockdown). See also [Security Model](../security/index.md).
 
 ## Health Check
@@ -165,7 +169,7 @@ Operational notes:
 
 - `/livez` and `/readyz` are served as plain HTTP on the health address.
 - `SIGHUP` reloads TLS certificates and token files; token files also hot-reload on change.
-- Token files may be absent when a world opens: it serves reads with no tokens and loads a file once it appears. `staticTokensFile` holds operator-owned entries merged with the broker-owned `tokensFile`; a hash may appear in only one of them.
+- Token files may be absent when a world opens: it serves reads with no tokens, logs a warning, and loads a file once it appears. A file that is later removed revokes its tokens, but the paths its read tokens protected stay protected until it returns or the server restarts. `staticTokensFile` holds operator-owned entries merged with the broker-owned `tokensFile`; a hash may appear in only one of them.
 - GCS credentials come from Application Default Credentials (Workload Identity on GKE); there are no credential flags or env vars.
 - The bucket must exist, but needs no out-of-band initialization: an existing empty one is initialized and seeded on first start, and a bucket holding objects but no world marker is refused.
 - A file world's directory is created on first open (a read-only one must exist); two file worlds cannot share or nest directories, and the server does not resolve symlinks when it checks that. The server owns the directory while it is open: its index, catalog, change journal and document cap are built from one walk at open, so edit the tree only while the server is down, as with a single-process soul.
@@ -205,7 +209,7 @@ docker run --rm -p 6309:6309/udp -p 8081:8081 \
 - A file world (`dir`) needs its directory mounted and writable by uid 65532; a bucket world needs the GCS credentials the note above describes.
 - Mount `tls.certFile` and `tls.keyFile` for a real certificate, or leave both out and the server self-signs; clients then verify with `-insecure`.
 - Port 8080 is the broker's HTTP listener and is unused in worlds-only mode; 8081 is the health listener unless `health.address: ""`.
-- The operator flows run the same way with their flags; `-deprovision-tenant` is documented in the chart's `README.md`.
+- The operator flows run the same way with their flags; `-deprovision-tenant` and `-revoke-sessions` are documented in the chart's `README.md`.
 
 ## Next Steps
 

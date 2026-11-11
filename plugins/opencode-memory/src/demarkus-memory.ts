@@ -104,7 +104,7 @@ function isMemoryWrite(toolName: string): boolean {
   return /mark_(publish|append)$/.test(toolName);
 }
 
-// Mirrors config.IsJournalWrite in the plugin binary: route today, or a url
+// Mirrors toolname.IsJournalWrite in the plugin binary: route today, or a url
 // under a journal/ directory. A plan or ADR write is not a journal entry.
 function isJournalWrite(args: Record<string, unknown> | undefined): boolean {
   const url = typeof args?.url === "string" ? args.url : "";

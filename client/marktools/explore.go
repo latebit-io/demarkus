@@ -95,17 +95,8 @@ func observe(scope *GraphScope, target *Target, result fetch.Result) string {
 	if scope == nil {
 		return ""
 	}
-	source := ""
-	if scope.Source != nil {
-		source = scope.Source(*target)
-	}
-	store := scope.Store
-	if !store.ObserveDocument(target.NodeURL, graph.FetchResult{
-		Source: source, Status: result.Response.Status, Body: result.Response.Body, Metadata: result.Response.Metadata,
-	}) {
-		return ""
-	}
-	if err := store.Save(); err != nil {
+	seen := observed{*target, graph.FetchResult{Status: result.Response.Status, Body: result.Response.Body, Metadata: result.Response.Metadata}}
+	if err := scope.record([]observed{seen}); err != nil {
 		return fmt.Sprintf("graph cache save failed: %v\n", err)
 	}
 	return ""

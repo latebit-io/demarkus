@@ -289,34 +289,50 @@ func refreshValidation(current, next *graph.Observation) {
 }
 
 func selectSources(local map[string]sourceRecord, owners map[string]map[string]sourceRecord) map[string]sourceRecord { //nolint:gocritic // selection annotates copies without mutating owner evidence
+	order := slices.Sorted(maps.Keys(owners))
 	selected := make(map[string]sourceRecord)
-	for _, owner := range slices.Sorted(maps.Keys(owners)) {
-		records := owners[owner]
-		for key := range records {
-			candidate := records[key]
-			previous, exists := selected[key]
-			if !exists {
-				selected[key] = candidate
-				continue
-			}
-			selected[key] = chooseSource(previous, candidate)
+	pick := func(key string) {
+		if _, done := selected[key]; !done {
+			selected[key], _ = selectSource(key, local, owners, order)
+		}
+	}
+	for _, owner := range order {
+		for key := range owners[owner] {
+			pick(key)
 		}
 	}
 	for key := range local {
-		candidate := local[key]
-		previous, exists := selected[key]
-		if !exists {
-			selected[key] = candidate
-			continue
-		}
-		// Local is the tie-break incumbent; a newer seed still wins.
-		chosen := chooseSource(candidate, previous)
-		if chosen.Node.Seeded {
-			chosen.Node.CrawledAt = candidate.Node.CrawledAt
-		}
-		selected[key] = chosen
+		pick(key)
 	}
 	return selected
+}
+
+// selectSource is the record shown for key: the owners' candidates weighed
+// in order, then the local one, which is the tie-break incumbent though a
+// newer seed still wins. False when nobody holds key.
+func selectSource(key string, local map[string]sourceRecord, owners map[string]map[string]sourceRecord, order []string) (selected sourceRecord, found bool) {
+	for _, owner := range order {
+		candidate, held := owners[owner][key]
+		switch {
+		case !held:
+		case !found:
+			selected, found = candidate, true
+		default:
+			selected = chooseSource(selected, candidate)
+		}
+	}
+	candidate, held := local[key]
+	switch {
+	case !held:
+		return selected, found
+	case !found:
+		return candidate, true
+	}
+	chosen := chooseSource(candidate, selected)
+	if chosen.Node.Seeded {
+		chosen.Node.CrawledAt = candidate.Node.CrawledAt
+	}
+	return chosen, true
 }
 
 func chooseSource(incumbent, candidate sourceRecord) sourceRecord { //nolint:gocritic // selection annotates only the returned copy

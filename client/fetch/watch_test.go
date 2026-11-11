@@ -474,7 +474,7 @@ func TestCursorFollowsConsumption(t *testing.T) {
 	first := expectEvent(t, w, "/1.md")
 	waitFor(t, "the pump to queue the remaining events", func() bool { return len(w.notices) == 2 })
 	if got := w.Cursor(); got != first.Cursor {
-		t.Fatalf("cursor = %v, want the consumed %v (stream is at %v)", got, first.Cursor, w.streamCursor())
+		t.Fatalf("cursor = %v, want the consumed %v (stream is at %v)", got, first.Cursor, w.StreamCursor())
 	}
 	w.Close()
 

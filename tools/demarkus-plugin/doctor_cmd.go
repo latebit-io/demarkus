@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/memory/audit"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/guidance"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
@@ -36,12 +37,12 @@ func cmdDoctor(args []string) {
 	die := func(err error) { fail("doctor: " + err.Error()) }
 	id := *storeID
 	if id == "" {
-		r, err := project.Resolve(*dir)
+		r, err := guidance.ResolveProject(*dir)
 		if err != nil {
 			die(err)
 		}
 		if r.State == project.StateStale {
-			die(errors.New("bound store '" + r.Store + "' is " + r.Hint()))
+			die(errors.New("bound store '" + r.Store + "' is " + guidance.Hint(r)))
 		}
 		id = r.Store
 	}
@@ -57,6 +58,7 @@ func cmdDoctor(args []string) {
 	if id == config.LocalMemoryID && report.Scope == "/" {
 		addTokenDrift(report)
 	}
+	report.Commands = soulCommands()
 	out := report.Markdown()
 	if *asJSON {
 		if out, err = report.JSON(); err != nil {
@@ -65,6 +67,17 @@ func cmdDoctor(args []string) {
 	}
 	if _, err := fmt.Fprintln(os.Stdout, out); err != nil {
 		die(fmt.Errorf("write output: %w", err))
+	}
+}
+
+// soulCommands words a fix as the memory plugin's slash command, which is
+// what a person reading this report can run.
+func soulCommands() audit.Commands {
+	return audit.Commands{
+		Curate:  func(p string) string { return "/soul-curate " + p },
+		Archive: func(p string) string { return "/soul-archive " + p },
+		Promote: func(p string) string { return "/promote " + p },
+		Batch:   func(scope string) string { return "mark_curate " + scope },
 	}
 }
 

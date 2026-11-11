@@ -1,4 +1,4 @@
-// Package filestore gives the protocol file store atomic handler snapshots.
+// Package filestore gives the file store (server/store) atomic handler snapshots.
 package filestore
 
 import (
@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/latebit-io/demarkus/protocol"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
+	protocolstore "github.com/latebit-io/demarkus/server/store"
 )
 
 // ErrClosed means a write reached the store after Close.
@@ -41,6 +42,11 @@ type Store struct {
 	// sequence durable. The hub's head is the last sequence assigned.
 	changes *changefeed.Hub
 	journal *journal
+
+	// generation is the outside-writer marker the index and catalog were
+	// built under; a read that finds another rebuilds both first.
+	generation atomic.Pointer[string]
+	logger     *slog.Logger
 }
 
 var _ backend.Store = (*Store)(nil)
@@ -61,7 +67,9 @@ type Options struct {
 
 // New wraps one file store and its derived catalog, without WATCH.
 func New(documents *protocolstore.Store, lookup *catalog.Catalog) *Store {
-	return &Store{mu: newCtxRWMutex(), documents: documents, catalog: lookup}
+	s := &Store{mu: newCtxRWMutex(), documents: documents, catalog: lookup, logger: slog.Default()}
+	s.generation.Store(new(string))
+	return s
 }
 
 // Open is New plus WATCH (backend.ChangeSource): the change journal beside
@@ -70,13 +78,13 @@ func New(documents *protocolstore.Store, lookup *catalog.Catalog) *Store {
 func Open(documents *protocolstore.Store, lookup *catalog.Catalog, opts Options) (*Store, error) {
 	s := New(documents, lookup)
 	s.readOnly, s.maxDocuments = opts.ReadOnly, opts.MaxDocuments
+	if opts.Logger != nil {
+		s.logger = opts.Logger
+	}
 	if opts.ChangeRing <= 0 || opts.ReadOnly {
 		return s, nil
 	}
-	logger := opts.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
+	logger := s.logger
 	journal, err := openJournal(documents.Root(), documents.Fingerprint(), opts.ChangeRing, logger)
 	if err != nil {
 		return nil, err
@@ -231,8 +239,12 @@ func (s *Store) ReadCurrent(ctx context.Context, path string) (*storefmt.Documen
 	return call(ctx, func() (*storefmt.Document, error) { return s.documents.ReadCurrent(path) })
 }
 
-// OpenReadView holds a read lock until the request closes the view.
+// OpenReadView holds a read lock until the request closes the view. A tree
+// another process wrote since the last look is indexed again first.
 func (s *Store) OpenReadView(ctx context.Context) (backend.ReadView, error) {
+	if err := s.reindexIfChanged(ctx); err != nil {
+		return nil, err
+	}
 	if err := s.mu.RLock(ctx); err != nil {
 		return nil, err
 	}

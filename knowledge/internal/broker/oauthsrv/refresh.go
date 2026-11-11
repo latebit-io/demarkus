@@ -216,7 +216,7 @@ func (s *RefreshStore) Refresh(ctx context.Context, rawToken, client string, adm
 			return "", refreshTokenRecord{}, fmt.Errorf("read refresh login: %w", err)
 		}
 		now := s.clock()
-		if now.After(record.ExpiresAt) {
+		if now.After(record.ExpiresAt) || s.stale(&record, now) {
 			return "", refreshTokenRecord{}, ErrRefreshTokenInvalid
 		}
 		sibling := false
@@ -278,14 +278,59 @@ func (s *RefreshStore) revokeReused(ctx context.Context, token refreshToken, rec
 	s.log.WarnContext(ctx, "broker: refresh token reused; login revoked", "subject", subject)
 }
 
-// Revoke ends the login rawToken belongs to; an unknown token is not an
-// error (RFC 7009 §2.2). Any of the login's tokens revokes it.
+// stale reports a login older than server.maxLoginAge: its claims are the
+// IdP's of that day, so the user signs in again. Off at zero.
+func (s *RefreshStore) stale(record *refreshTokenRecord, now time.Time) bool {
+	maxAge := s.cfg.Server.MaxLoginAge
+	return maxAge > 0 && now.Sub(record.IssuedAt) > maxAge
+}
+
+// Revoke ends the login rawToken belongs to; an unknown token is no error
+// (RFC 7009 §2.2). It takes a secret the login honors or last rotated out:
+// a login id alone is not secret, it names bucket objects and shows in logs.
 func (s *RefreshStore) Revoke(ctx context.Context, rawToken string) error {
 	token, ok := parseRefreshToken(rawToken)
 	if !ok {
 		return nil
 	}
-	return s.dir.remove(ctx, token.name())
+	presented := hashToken(token.secret)
+	for range maxRotateAttempts {
+		var record refreshTokenRecord
+		generation, err := s.dir.get(ctx, token.name(), &record)
+		if errors.Is(err, blob.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read refresh login: %w", err)
+		}
+		if !slices.Contains(record.Current, presented) && presented != record.Previous {
+			return nil
+		}
+		// A refresh that rotated since the read holds a secret this caller
+		// may still own: read again rather than delete past it.
+		done, err := s.dir.removeAt(ctx, refreshPrefix+token.name(), generation)
+		if done || err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("refresh login %s changed on every attempt", token.login)
+}
+
+// RevokeIdentity ends every login of identity, an IdP subject or an email,
+// and returns how many: the operator's answer to an account disabled at the
+// IdP. Bearers already minted last out their idTokenTTL.
+func (s *RefreshStore) RevokeIdentity(ctx context.Context, identity string) (int, error) {
+	identity = strings.TrimSpace(identity)
+	if identity == "" {
+		return 0, errors.New("revoke sessions: identity is empty")
+	}
+	email := core.CanonicalEmail(identity)
+	return s.dir.sweep(ctx, func(attrs blob.Attributes) (bool, blob.Generation, error) {
+		var record refreshTokenRecord
+		generation, err := s.dir.get(ctx, attrs.Key[len(refreshPrefix):], &record)
+		match := record.Claims.Subject == identity || core.CanonicalEmail(record.Claims.Email) == email
+		return match, generation, err
+	})
 }
 
 // Sweep deletes expired logins from the listing alone: a login id starts

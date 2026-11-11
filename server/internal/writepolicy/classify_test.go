@@ -26,13 +26,12 @@ func TestClassifyStampsWrites(t *testing.T) {
 	ctx := context.Background()
 	write := func(appending bool, path string, expected int, body string) (string, []string) {
 		t.Helper()
-		var warnings []string
-		req := backend.WriteRequest{Path: path, ExpectedVersion: expected, Content: []byte(body), Metadata: map[string]string{"tags": "notes"}, Warnings: &warnings}
-		do := store.Publish
+		req := backend.WriteRequest{Path: path, ExpectedVersion: expected, Content: []byte(body), Metadata: map[string]string{"tags": "notes"}}
+		do := store.PublishNoted
 		if appending {
-			do = store.Append
+			do = store.AppendNoted
 		}
-		doc, err := do(ctx, req)
+		doc, warnings, err := do(ctx, req, backend.Sender{})
 		if err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
@@ -75,9 +74,9 @@ func TestClassifyStampsWrites(t *testing.T) {
 
 func TestContentNoteIsBrief(t *testing.T) {
 	store := writepolicy.Enforce(newStore(t), writepolicy.Options{})
-	var warnings []string
 	body := "# N\n\n" + strings.Repeat("rm -rf /\n", 7)
-	if _, err := store.Publish(context.Background(), backend.WriteRequest{Path: "/n.md", Content: []byte(body), Metadata: map[string]string{"tags": "notes"}, Warnings: &warnings}); err != nil {
+	_, warnings, err := store.PublishNoted(context.Background(), backend.WriteRequest{Path: "/n.md", Content: []byte(body), Metadata: map[string]string{"tags": "notes"}}, backend.Sender{})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(warnings, "\n"); !strings.Contains(got, "; +2 more; fix: ") {

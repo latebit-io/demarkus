@@ -16,6 +16,8 @@ func TestRunRefusesIncompleteFlags(t *testing.T) {
 		{"deprovision without the broker", []string{"-deprovision-tenant", "acme"}, "-deprovision-tenant requires -broker-config"},
 		{"delete-bucket without deprovision", []string{"-broker-config", "b.yaml", "-delete-bucket"}, "-delete-bucket requires -deprovision-tenant"},
 		{"broker without worlds", []string{"-broker-config", "b.yaml"}, "-server-config is required"},
+		{"revoke-sessions without the broker", []string{"-revoke-sessions", "eve@example.com"}, "-revoke-sessions requires -broker-config"},
+		{"revoke-sessions reads the broker config", []string{"-revoke-sessions", "eve@example.com", "-broker-config", "/nonexistent/b.yaml"}, "revoke sessions:"},
 		{"nothing", nil, "-server-config is required"},
 	}
 	for _, test := range tests {

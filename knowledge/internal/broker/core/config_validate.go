@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/toolvocab"
 )
 
 // maxSweeperInterval is the short lived token lifetime; a longer sweep leaves
@@ -240,9 +240,9 @@ func (s *ServerConfig) validateGateways() error {
 // validate fills the tool profile default and rejects an unknown one.
 func (g *GatewayConfig) validate(field string) error {
 	if g.ToolProfile == "" {
-		g.ToolProfile = mcpfmt.ProfileFull
+		g.ToolProfile = toolvocab.ProfileFull
 	}
-	if err := mcpfmt.ValidProfile(g.ToolProfile); err != nil {
+	if err := toolvocab.ValidProfile(g.ToolProfile); err != nil {
 		return fmt.Errorf("%s.toolProfile: %w", field, err)
 	}
 	return nil

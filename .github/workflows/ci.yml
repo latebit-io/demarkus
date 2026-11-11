@@ -59,6 +59,9 @@ jobs:
               - '.github/workflows/ci.yml'
               - 'testdata/upgrade/**'
               - 'protocol/**'
+              - 'server/store/**'
+              - 'server/go.mod'
+              - 'server/go.sum'
               - 'client/**'
             charts:
               - 'deploy/helm/**'
@@ -98,6 +101,8 @@ jobs:
             lint_config:
               - '.golangci.yml'
               - '.golangci-ratchet.yml'
+              - 'layer-map.txt'
+              - 'layer-ratchet.txt'
 
   repo-checks:
     runs-on: ubuntu-latest
@@ -173,6 +178,8 @@ jobs:
           golangci-lint config verify --config .golangci-ratchet.yml
       - name: Lint ratchet
         run: bash scripts/lint-ratchet.sh
+      - name: Layers
+        run: cd tools && go run ./layercheck
 
   test-protocol:
     needs: detect-changes

@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
@@ -63,6 +65,25 @@ type Config struct {
 	MaxWatches        int
 	MaxWatchesPerConn int
 	MaxStreams        int
+	// LookupPrior ranks body LOOKUP rows by the world's layout; nil takes
+	// LayoutPrior of the default layout.
+	LookupPrior func(path string) float64
+}
+
+// journalDemote is the body-match multiplier under a journal directory,
+// tuned on the retrieval benchmark.
+const journalDemote = 0.5
+
+// LayoutPrior demotes documents under lay's journal directory, at any depth:
+// dated notes rank below the durable documents they led to.
+func LayoutPrior(lay *layout.Layout) func(path string) float64 {
+	journal := "/" + lay.Journal
+	return func(path string) float64 {
+		if strings.Contains(path, journal) {
+			return journalDemote
+		}
+		return 1
+	}
 }
 
 // Runtime serves one world's streams with isolated auth and rate state.
@@ -152,7 +173,13 @@ func New(config *Config) (*Runtime, error) {
 			return nil, fmt.Errorf("world runtime: %w", err)
 		}
 	}
+	lookupPrior := config.LookupPrior
+	if lookupPrior == nil {
+		defaults := layout.Default()
+		lookupPrior = LayoutPrior(&defaults)
+	}
 	runtime.handler, err = handler.New(handler.Config{
+		LookupPrior:        lookupPrior,
 		Store:              config.Store,
 		GetTokenStore:      tokens.Current,
 		Logger:             logger,
@@ -242,27 +269,25 @@ func (r *Runtime) exchange(ctx context.Context, remote net.Addr, req protocol.Re
 	return resp, nil
 }
 
-// admit takes the concurrency slot and the rate-limit token for one
-// request, or refuses it with nothing held.
+// admit takes the rate-limit token, then the concurrency slot, for one
+// request, or refuses it with nothing held. The per-IP wait comes first and
+// holds nothing shared: an IP over its rate must not sit in the world's slots.
 func (r *Runtime) admit(ctx context.Context, remote net.Addr, logger *slog.Logger) (held slot, admitted bool) {
+	if r.limiter != nil {
+		waitCtx, cancel := context.WithTimeout(ctx, r.budget())
+		err := r.limiter.Wait(waitCtx, ratelimit.ExtractIP(remote))
+		cancel()
+		if err != nil {
+			if logIt, suppressed := r.rateRefusals.Allow(); logIt {
+				logger.Warn("rate limited", "ip", ratelimit.ExtractIP(remote), "error", err, "suppressed", suppressed)
+			}
+			return slot{}, false
+		}
+	}
 	if r.concurrent != nil && !r.acquire(ctx, remote, logger) {
 		return slot{}, false
 	}
-	held = slot{ch: r.concurrent}
-	if r.limiter == nil {
-		return held, true
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, r.budget())
-	err := r.limiter.Wait(waitCtx, ratelimit.ExtractIP(remote))
-	cancel()
-	if err != nil {
-		held.release()
-		if logIt, suppressed := r.rateRefusals.Allow(); logIt {
-			logger.Warn("rate limited", "ip", ratelimit.ExtractIP(remote), "error", err, "suppressed", suppressed)
-		}
-		return slot{}, false
-	}
-	return held, true
+	return slot{ch: r.concurrent}, true
 }
 
 // slot is one concurrency slot, released at most once; a nil channel is no

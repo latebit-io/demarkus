@@ -31,7 +31,7 @@ func TestEvictClosesOnlyTheExpectedConnection(t *testing.T) {
 	}
 
 	c.evict(addr, first)
-	c.release(first)
+	c.release(addr, first)
 	if first.Context().Err() != nil {
 		t.Fatal("connection closed while another request still holds it")
 	}
@@ -43,7 +43,7 @@ func TestEvictClosesOnlyTheExpectedConnection(t *testing.T) {
 		t.Fatal("evicted connection was handed out again")
 	}
 
-	c.release(second)
+	c.release(addr, second)
 	select {
 	case <-first.Context().Done():
 	case <-time.After(2 * time.Second):
@@ -59,6 +59,6 @@ func TestEvictClosesOnlyTheExpectedConnection(t *testing.T) {
 	if again != replacement {
 		t.Fatal("stale eviction dropped the replacement connection")
 	}
-	c.release(again)
-	c.release(replacement)
+	c.release(addr, again)
+	c.release(addr, replacement)
 }

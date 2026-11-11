@@ -12,6 +12,7 @@
 package bookmarks
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/internal/filelock"
 	"github.com/latebit-io/demarkus/client/links"
 )
 
@@ -33,11 +35,24 @@ type Bookmark struct {
 	Date  string
 }
 
-// Store manages bookmarks persisted as a markdown file.
+// Store manages bookmarks persisted as a markdown file. It keeps every line
+// of the file, so what a person wrote around the list survives a rewrite.
 type Store struct {
-	path      string
-	bookmarks []Bookmark
+	path  string
+	lines []line
 }
+
+// line is one line of the file: a bookmark, or text kept as written.
+type line struct {
+	raw string
+	bm  *Bookmark // nil for text; URL is canonical
+}
+
+const (
+	header = "# Bookmarks"
+	// emptyHint is shown for an empty list; never stored, dropped when read.
+	emptyHint = "No bookmarks yet. Press `b` on any page to bookmark it."
+)
 
 // DefaultPath returns the default bookmarks file path (~/.mark/bookmarks.md).
 func DefaultPath() string {
@@ -55,39 +70,51 @@ func Load(path string) (*Store, error) {
 		return nil, fmt.Errorf("bookmarks file path is empty (could not determine home directory)")
 	}
 	s := &Store{path: path}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
-		}
-		return nil, fmt.Errorf("read bookmarks file %q: %w", path, err)
+	if err := s.reload(); err != nil {
+		return nil, err
 	}
-	s.parse(string(data))
 	return s, nil
 }
 
-func (s *Store) parse(content string) {
-	for line := range strings.SplitSeq(content, "\n") {
-		m := linkRe.FindStringSubmatch(line)
-		if m == nil {
-			continue
+// reload replaces the in-memory lines with the file's; an absent file is empty.
+func (s *Store) reload() error {
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.lines = nil
+			return nil
 		}
-		// A file from before identity keys may hold one document twice; the first wins.
-		url := links.CanonicalURL(m[2])
-		if s.hasCanonical(url) {
-			continue
-		}
-		s.bookmarks = append(s.bookmarks, Bookmark{
-			Title: unescapeTitle(m[1]),
-			URL:   url,
-			Date:  m[3],
-		})
+		return fmt.Errorf("read bookmarks file %q: %w", s.path, err)
 	}
+	s.lines = parse(string(data))
+	return nil
 }
 
-// List returns all bookmarks.
+func parse(content string) []line {
+	var lines []line
+	for raw := range strings.SplitSeq(strings.TrimRight(content, "\n"), "\n") {
+		if raw == emptyHint {
+			continue
+		}
+		l := line{raw: raw}
+		if m := linkRe.FindStringSubmatch(raw); m != nil {
+			l.bm = &Bookmark{Title: unescapeTitle(m[1]), URL: links.CanonicalURL(m[2]), Date: m[3]}
+		}
+		lines = append(lines, l)
+	}
+	return lines
+}
+
+// List returns all bookmarks. A file from before identity keys may hold one
+// document twice; the first wins.
 func (s *Store) List() []Bookmark {
-	return s.bookmarks
+	var out []Bookmark
+	for _, l := range s.lines {
+		if l.bm != nil && !slices.ContainsFunc(out, func(b Bookmark) bool { return b.URL == l.bm.URL }) {
+			out = append(out, *l.bm)
+		}
+	}
+	return out
 }
 
 // Has reports whether the document is bookmarked, under any spelling of its URL.
@@ -96,53 +123,78 @@ func (s *Store) Has(url string) bool {
 }
 
 func (s *Store) hasCanonical(url string) bool {
-	return slices.ContainsFunc(s.bookmarks, func(b Bookmark) bool { return b.URL == url })
+	return slices.ContainsFunc(s.lines, func(l line) bool { return l.bm != nil && l.bm.URL == url })
 }
 
 // Add appends a bookmark. If the URL is already bookmarked, this is a no-op.
 func (s *Store) Add(url, title string) error {
 	url = links.CanonicalURL(url)
-	if s.hasCanonical(url) {
-		return nil
-	}
-	date := time.Now().Format("2006-01-02")
-	s.bookmarks = append(s.bookmarks, Bookmark{
-		Title: title,
-		URL:   url,
-		Date:  date,
+	return s.mutate(func(lines []line) []line {
+		if slices.ContainsFunc(lines, func(l line) bool { return l.bm != nil && l.bm.URL == url }) {
+			return nil
+		}
+		if len(lines) == 0 {
+			lines = []line{{raw: header}, {raw: ""}}
+		}
+		bm := Bookmark{Title: title, URL: url, Date: time.Now().Format("2006-01-02")}
+		return append(lines, line{raw: bm.markdown(), bm: &bm})
 	})
-	return s.save()
 }
 
 // Remove deletes the bookmark with the given URL and writes to disk.
 func (s *Store) Remove(url string) error {
 	url = links.CanonicalURL(url)
-	filtered := make([]Bookmark, 0, len(s.bookmarks))
-	for _, b := range s.bookmarks {
-		if b.URL != url {
-			filtered = append(filtered, b)
+	return s.mutate(func(lines []line) []line {
+		kept := slices.DeleteFunc(slices.Clone(lines), func(l line) bool { return l.bm != nil && l.bm.URL == url })
+		if len(kept) == len(lines) {
+			return nil
 		}
-	}
-	if len(filtered) == len(s.bookmarks) {
-		return nil
-	}
-	s.bookmarks = filtered
-	return s.save()
+		return kept
+	})
 }
 
-// Render returns the bookmarks as a markdown document.
+// mutate applies change to the file as it is now, under the file's lock, so
+// another process's bookmarks are kept, and writes the result. change returns
+// nil for no change. Memory follows the disk: a failed write leaves it as is.
+func (s *Store) mutate(change func([]line) []line) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return fmt.Errorf("create bookmarks directory: %w", err)
+	}
+	return filelock.With(s.path, func() error {
+		if err := s.reload(); err != nil {
+			return err
+		}
+		next := change(s.lines)
+		if next == nil {
+			return nil
+		}
+		if err := s.write(next); err != nil {
+			return err
+		}
+		s.lines = next
+		return nil
+	})
+}
+
+func (b *Bookmark) markdown() string {
+	out := fmt.Sprintf("- [%s](%s)", escapeTitle(b.Title), b.URL)
+	if b.Date != "" {
+		out += " — " + b.Date
+	}
+	return out
+}
+
+// Render returns the bookmarks as a markdown document: the list alone, for
+// a reader; the file keeps whatever else it holds.
 func (s *Store) Render() string {
 	var sb strings.Builder
-	sb.WriteString("# Bookmarks\n\n")
-	for _, b := range s.bookmarks {
-		fmt.Fprintf(&sb, "- [%s](%s)", escapeTitle(b.Title), b.URL)
-		if b.Date != "" {
-			fmt.Fprintf(&sb, " — %s", b.Date)
-		}
-		sb.WriteString("\n")
+	sb.WriteString(header + "\n\n")
+	list := s.List()
+	for i := range list {
+		sb.WriteString(list[i].markdown() + "\n")
 	}
-	if len(s.bookmarks) == 0 {
-		sb.WriteString("No bookmarks yet. Press `b` on any page to bookmark it.\n")
+	if len(list) == 0 {
+		sb.WriteString(emptyHint + "\n")
 	}
 	return sb.String()
 }
@@ -161,14 +213,38 @@ func unescapeTitle(t string) string {
 	return t
 }
 
-func (s *Store) save() error {
+// write replaces the file with lines through a temp file and a rename, so a
+// crash leaves the old file or the new one, never a truncated one.
+func (s *Store) write(lines []line) (err error) {
 	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create bookmarks directory: %w", err)
+	var content strings.Builder
+	for _, l := range lines {
+		content.WriteString(l.raw + "\n")
 	}
-	content := s.Render()
-	if err := os.WriteFile(s.path, []byte(content), 0o600); err != nil {
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(s.path)+".*.tmp")
+	if err != nil {
 		return fmt.Errorf("write bookmarks file: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, removeTemp(tmp.Name()))
+		}
+	}()
+	if _, err := tmp.WriteString(content.String()); err != nil {
+		return fmt.Errorf("write bookmarks file: %w", errors.Join(err, tmp.Close()))
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write bookmarks file: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), s.path); err != nil {
+		return fmt.Errorf("write bookmarks file: %w", err)
+	}
+	return nil
+}
+
+func removeTemp(name string) error {
+	if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

@@ -59,6 +59,16 @@ type Options struct {
 	// NAT or server idle timer never drops one between requests. Default 25s,
 	// under common NAT timeouts; negative disables.
 	KeepAlivePeriod time.Duration
+	// IdleTimeout closes a pooled connection no request or watch has used for
+	// this long, so a host reached once (a crawl follows links anywhere) does
+	// not stay connected for the client's life. Default 5m; negative disables.
+	IdleTimeout time.Duration
+	// MaxIdleConns caps the idle connections kept; past it the one unused
+	// longest is closed. Default 16; negative lifts the cap.
+	MaxIdleConns int
+	// Logf reports what no caller can act on: a failed close, an unreadable
+	// cache entry. Nil is log.Printf.
+	Logf func(format string, args ...any)
 }
 
 func (o *Options) applyDefaults() {
@@ -70,6 +80,15 @@ func (o *Options) applyDefaults() {
 	}
 	if o.KeepAlivePeriod == 0 {
 		o.KeepAlivePeriod = 25 * time.Second
+	}
+	if o.IdleTimeout == 0 {
+		o.IdleTimeout = 5 * time.Minute
+	}
+	if o.MaxIdleConns == 0 {
+		o.MaxIdleConns = 16
+	}
+	if o.Logf == nil {
+		o.Logf = log.Printf
 	}
 }
 
@@ -84,6 +103,17 @@ type Client struct {
 	// connections until their last request releases them.
 	inflight map[*quic.Conn]int
 	draining map[*quic.Conn]bool
+	// parked holds the pooled connections nothing is using, each with the
+	// timer that closes it; a connection in use is in none.
+	parked map[*quic.Conn]parkedConn
+}
+
+// parkedConn is one idle pooled connection: its pool key, when it went idle
+// and the timer that expires it (nil when idle close is off).
+type parkedConn struct {
+	host  string
+	since time.Time
+	timer *time.Timer
 }
 
 // NewClient creates a new client with the given options.
@@ -105,6 +135,7 @@ func NewClient(opts Options) *Client {
 		conns:    make(map[string]*quic.Conn),
 		inflight: make(map[*quic.Conn]int),
 		draining: make(map[*quic.Conn]bool),
+		parked:   make(map[*quic.Conn]parkedConn),
 	}
 }
 
@@ -112,20 +143,77 @@ func NewClient(opts Options) *Client {
 func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	for conn := range c.parked {
+		c.unparkLocked(conn)
+	}
 	for host, conn := range c.conns {
-		closeConn(conn)
+		c.closeConn(conn)
 		delete(c.conns, host)
 	}
 	for conn := range c.draining {
-		closeConn(conn)
+		c.closeConn(conn)
 		delete(c.draining, conn)
 	}
 }
 
 // closeConn closes best effort: the peer may already be gone, and no caller can act on it.
-func closeConn(conn *quic.Conn) {
+func (c *Client) closeConn(conn *quic.Conn) {
 	if err := conn.CloseWithError(0, ""); err != nil {
-		log.Printf("[WARN] close connection to %s: %v", conn.RemoteAddr(), err)
+		c.opts.Logf("[WARN] close connection to %s: %v", conn.RemoteAddr(), err)
+	}
+}
+
+// parkLocked records conn as idle, arms its expiry and returns the
+// connections over the idle cap for the caller to close. Callers hold c.mu.
+func (c *Client) parkLocked(host string, conn *quic.Conn) (over []*quic.Conn) {
+	p := parkedConn{host: host, since: time.Now()}
+	if c.opts.IdleTimeout > 0 {
+		p.timer = time.AfterFunc(c.opts.IdleTimeout, func() { c.expire(conn) })
+	}
+	c.parked[conn] = p
+	for c.opts.MaxIdleConns > 0 && len(c.parked) > c.opts.MaxIdleConns {
+		var oldest *quic.Conn
+		for candidate, at := range c.parked {
+			if oldest == nil || at.since.Before(c.parked[oldest].since) {
+				oldest = candidate
+			}
+		}
+		c.dropParkedLocked(oldest)
+		over = append(over, oldest)
+	}
+	return over
+}
+
+// unparkLocked takes conn out of the idle set, for a user or for good.
+func (c *Client) unparkLocked(conn *quic.Conn) {
+	if p, ok := c.parked[conn]; ok {
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+		delete(c.parked, conn)
+	}
+}
+
+// dropParkedLocked removes an idle conn from the pool; the caller closes it.
+func (c *Client) dropParkedLocked(conn *quic.Conn) {
+	host := c.parked[conn].host
+	c.unparkLocked(conn)
+	if c.conns[host] == conn {
+		delete(c.conns, host)
+	}
+}
+
+// expire closes conn if it is still idle: a user that took it meanwhile
+// unparked it first, and the timer then finds nothing.
+func (c *Client) expire(conn *quic.Conn) {
+	c.mu.Lock()
+	_, idle := c.parked[conn]
+	if idle {
+		c.dropParkedLocked(conn)
+	}
+	c.mu.Unlock()
+	if idle {
+		c.closeConn(conn)
 	}
 }
 
@@ -181,10 +269,6 @@ const (
 	MatchSimilar = protocol.MatchSimilar
 )
 
-// CatalogFallbackNote is what surfaces report when body match was requested
-// and the server answered from the catalog instead.
-const CatalogFallbackNote = "server answered from the catalog (no body match); an empty table is not evidence of absence"
-
 // cachedRead serves a read through the response cache when it may: only a
 // request without metadata, since a token would persist private content
 // to disk and an option is not part of the cache key.
@@ -199,7 +283,7 @@ func (c *Client) cachedRead(ctx context.Context, host string, encoded protocol.R
 			// An unreadable cache entry is a miss: the request goes out unconditional.
 			var cacheErr error
 			if cached, cacheErr = c.opts.Cache.Get(host, path, verb); cacheErr != nil {
-				log.Printf("[WARN] cache read %s %s%s: %v", verb, host, path, cacheErr)
+				c.opts.Logf("[WARN] cache read %s %s%s: %v", verb, host, path, cacheErr)
 			}
 			if cached != nil {
 				// Each attempt adds its validators to its own copy.
@@ -224,7 +308,7 @@ func (c *Client) cachedRead(ctx context.Context, host string, encoded protocol.R
 
 		if useCache && result.Response.Status == protocol.StatusOK {
 			if err := c.opts.Cache.Put(host, path, verb, result.Response); err != nil {
-				log.Printf("[WARN] cache write: %v", err)
+				c.opts.Logf("[WARN] cache write: %v", err)
 			}
 		}
 
@@ -368,7 +452,7 @@ func (c *Client) dispose(host string, conn *quic.Conn, err error) {
 	if err != nil && (isConnectionError(err) || conn.Context().Err() != nil) {
 		c.evict(host, conn)
 	}
-	c.release(conn)
+	c.release(host, conn)
 }
 
 func waitForRetry(ctx context.Context, delay time.Duration) error {
@@ -422,7 +506,7 @@ func (c *Client) getConnContext(ctx context.Context, host string) (*quic.Conn, e
 		// Another goroutine dialed and stored a connection while we were dialing.
 		// Use theirs; close ours.
 		c.mu.Unlock()
-		closeConn(conn)
+		c.closeConn(conn)
 		return existing, nil
 	}
 	c.conns[host] = conn
@@ -453,6 +537,7 @@ func (c *Client) acquire(ctx context.Context, host string) (*quic.Conn, error) {
 		// Still pooled and not retiring: an idle evict closes without marking draining.
 		if c.conns[host] == conn && !c.draining[conn] {
 			c.inflight[conn]++
+			c.unparkLocked(conn)
 			c.mu.Unlock()
 			return conn, nil
 		}
@@ -464,8 +549,9 @@ func (c *Client) acquire(ctx context.Context, host string) (*quic.Conn, error) {
 	}
 }
 
-// release ends one use of conn and closes it if it was evicted and is now idle.
-func (c *Client) release(conn *quic.Conn) {
+// release ends one use of conn: evicted and now idle it is closed, still
+// pooled and now idle it is parked until its next user or its expiry.
+func (c *Client) release(host string, conn *quic.Conn) {
 	c.mu.Lock()
 	c.inflight[conn]--
 	idle := c.inflight[conn] <= 0
@@ -476,9 +562,16 @@ func (c *Client) release(conn *quic.Conn) {
 	if closing {
 		delete(c.draining, conn)
 	}
+	var over []*quic.Conn
+	if idle && !closing && c.conns[host] == conn {
+		over = c.parkLocked(host, conn)
+	}
 	c.mu.Unlock()
 	if closing {
-		closeConn(conn)
+		c.closeConn(conn)
+	}
+	for _, old := range over {
+		c.closeConn(old)
 	}
 }
 
@@ -489,13 +582,14 @@ func (c *Client) evict(host string, conn *quic.Conn) {
 	if c.conns[host] == conn {
 		delete(c.conns, host)
 	}
+	c.unparkLocked(conn)
 	idle := c.inflight[conn] <= 0
 	if !idle {
 		c.draining[conn] = true
 	}
 	c.mu.Unlock()
 	if idle {
-		closeConn(conn)
+		c.closeConn(conn)
 	}
 }
 

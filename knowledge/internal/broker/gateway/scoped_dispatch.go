@@ -5,6 +5,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
 )
 
 // scopedDispatcher serves only the worlds a gateway's profile view holds.
@@ -12,10 +13,10 @@ import (
 // included; without this, a knowledge caller could name one by URL.
 type scopedDispatcher struct {
 	view  *core.WorldView
-	inner WorldDispatcher
+	inner dispatch.WorldDispatcher
 }
 
-func scopeDispatcher(view *core.WorldView, inner WorldDispatcher) WorldDispatcher {
+func scopeDispatcher(view *core.WorldView, inner dispatch.WorldDispatcher) dispatch.WorldDispatcher {
 	if view == nil || inner == nil {
 		return inner
 	}
@@ -28,7 +29,7 @@ func (s *scopedDispatcher) check(worldName string) error {
 
 func inView(view *core.WorldView, worldName string) error {
 	if _, ok := view.Find(worldName); !ok {
-		return &errWorldNotFound{worldName: worldName}
+		return &dispatch.WorldNotFoundError{World: worldName}
 	}
 	return nil
 }

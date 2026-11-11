@@ -391,28 +391,6 @@ func ExecRefusal(p string) string {
 // start time that only the display rounds down. Linux ps is not this accurate.
 const binaryReplaceSkew = time.Second
 
-// lstartLayouts covers both C-locale ps orderings: BSD/macOS puts the day of the
-// month before the month name, GNU after it.
-var lstartLayouts = []string{"Mon _2 Jan 15:04:05 2006", "Mon Jan _2 15:04:05 2006"}
-
-// processStart reports when pid started. ok is false whenever that cannot be
-// established, which every caller treats as "stay silent".
-func processStart(pid int) (time.Time, bool) {
-	// /proc/<pid> ModTime is not a defined start time: it can reflect when the
-	// procfs entry was instantiated, which hides a replacement. ps lstart is.
-	out, _ := probeBounded([]string{"LC_ALL=C"}, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=") // lstart is locale-formatted
-	if out == "" {
-		return time.Time{}, false
-	}
-	s := strings.Join(strings.Fields(out), " ")
-	for _, layout := range lstartLayouts {
-		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
-}
-
 // exeReplaced compares pid's running image against the file at exe. Linux
 // refuses to rewrite a running executable (ETXTBSY), so every real replacement
 // swaps the inode and procfs still names the original: exact, with no window.
@@ -441,7 +419,7 @@ func BinaryReplaced(pid int, exe string) bool {
 	if err != nil {
 		return false
 	}
-	started, ok := processStart(pid)
+	started, ok := lockdir.ProcessStart(pid)
 	return ok && info.ModTime().After(started.Add(binaryReplaceSkew))
 }
 

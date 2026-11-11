@@ -350,3 +350,30 @@ func TestPutInterruptedKeepsOldEtag(t *testing.T) {
 		}
 	}
 }
+
+// A path the wire would refuse never reaches the filesystem: unrooted, it
+// would resolve outside the cache directory.
+func TestInvalidPathIsRefusedBeforeTheFilesystem(t *testing.T) {
+	root := t.TempDir()
+	c := New(filepath.Join(root, "cache"))
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(outside, ".fetch")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// cache/<host>/../../outside is root/outside.
+	for _, path := range []string{"../../outside", "", "relative.md"} {
+		if entry, err := c.Get("host", path, protocol.VerbFetch); err == nil || entry != nil {
+			t.Errorf("Get(%q) = %v, %v; want a refusal", path, entry, err)
+		}
+		if err := c.Put("host", path, protocol.VerbFetch, protocol.Response{Status: protocol.StatusOK, Body: "x"}); err == nil {
+			t.Errorf("Put(%q) was accepted", path)
+		}
+	}
+	if got, err := os.ReadFile(victim); err != nil || string(got) != "keep" {
+		t.Errorf("a file outside the cache was touched: %q, %v", got, err)
+	}
+}

@@ -36,6 +36,7 @@ func run(arguments []string) error {
 	showVersion := flags.Bool("version", false, "print version and exit")
 	deprovision := flags.String("deprovision-tenant", "", "deprovision the named tenant world and exit (operator flow, run on a user's deletion request)")
 	deleteBucket := flags.Bool("delete-bucket", false, "with -deprovision-tenant: also permanently delete the tenant's GCS bucket and data")
+	revokeSessions := flags.String("revoke-sessions", "", "end every refresh login of the identity (an email or an IdP subject) and exit (operator flow, run when an account is disabled at the IdP)")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -58,6 +59,12 @@ func run(arguments []string) error {
 	if *deleteBucket {
 		return errors.New("-delete-bucket requires -deprovision-tenant")
 	}
+	if *revokeSessions != "" {
+		if *brokerConfig == "" {
+			return errors.New("-revoke-sessions requires -broker-config")
+		}
+		return runRevokeSessions(broker.RevokeSessionsOptions{ConfigPath: *brokerConfig, Identity: *revokeSessions, Log: log})
+	}
 	if *serverConfig == "" {
 		return errors.New("-server-config is required")
 	}
@@ -75,6 +82,17 @@ func runDeprovision(opts broker.DeprovisionOptions) error {
 		// The documented rerun-to-converge path: cleanup completed.
 		opts.Log.Warn("tenant absent from registry; cleanup converged", "world", opts.Slug)
 	}
+	return nil
+}
+
+// runRevokeSessions needs the broker config alone: the state bucket holds
+// the logins every serving pod reads. The identity stays out of the log.
+func runRevokeSessions(opts broker.RevokeSessionsOptions) error {
+	revoked, err := broker.RunRevokeSessions(context.Background(), opts)
+	if err != nil {
+		return fmt.Errorf("revoke sessions: %w", err)
+	}
+	opts.Log.Info("sessions revoked; bearers already minted last out server.idTokenTTL", "logins", revoked)
 	return nil
 }
 

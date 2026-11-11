@@ -220,7 +220,7 @@ func (io IO) PublishDocument(ctx context.Context, path, body string, expected in
 	if publishErr != nil {
 		head, err := io.Fetch(ctx, path)
 		if err != nil {
-			return protocol.Response{}, 0, fmt.Errorf("publish %s: %v; reconcile: %w", path, publishErr, err)
+			return protocol.Response{}, 0, fmt.Errorf("publish %s: %w; reconcile: %w", path, publishErr, err)
 		}
 		if version, err = verifyBody(path, body, head); err != nil {
 			return protocol.Response{}, 0, fmt.Errorf("publish %s: %w; reconcile: %w", path, publishErr, err)

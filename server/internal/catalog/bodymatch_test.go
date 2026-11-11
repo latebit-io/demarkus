@@ -20,8 +20,30 @@ func locations(rs []Result) string {
 	return strings.Join(out, ",")
 }
 
+// halveJournal is a world's layout prior as its wiring would supply it.
+func halveJournal(path string) float64 {
+	if strings.Contains(path, "/journal/") {
+		return 0.5
+	}
+	return 1
+}
+
+// The catalog demotes no directory by name: without a layout prior a
+// journal entry ranks as any other document, with one the world's rule holds.
+func TestLayoutPriorIsInjected(t *testing.T) {
+	c := New()
+	putDoc(c, "/journal/2026-01-01.md", "# Day\n\nshared phrase kiwi\n", map[string]string{"importance": "0.7"})
+	putDoc(c, "/notes.md", "# Notes\n\nshared phrase kiwi\n", map[string]string{"importance": "0.6"})
+	if got, want := locations(mustLookup(t, c, "kiwi", Options{Match: MatchBody})), "/journal/2026-01-01.md#day,/notes.md#notes"; got != want {
+		t.Errorf("without a prior = %s, want %s", got, want)
+	}
+	if got, want := locations(mustLookup(t, c, "kiwi", Options{Match: MatchBody, Prior: halveJournal})), "/notes.md#notes,/journal/2026-01-01.md#day"; got != want {
+		t.Errorf("with the layout prior = %s, want %s", got, want)
+	}
+}
+
 // TestReferenceRanking pins the order rules outside the spec: journal paths
-// and standing demoted, a tags-or-title match over a mere mention, a
+// (by the injected layout prior) and standing demoted, a tags-or-title match over a mere mention, a
 // heading-and-text section over a lower-importance tagged journal.
 func TestReferenceRanking(t *testing.T) {
 	tests := []struct {
@@ -89,7 +111,7 @@ func TestReferenceRanking(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := New()
 			tt.docs(c)
-			if got := locations(mustLookup(t, c, tt.query, Options{Match: MatchBody})); got != tt.want {
+			if got := locations(mustLookup(t, c, tt.query, Options{Match: MatchBody, Prior: halveJournal})); got != tt.want {
 				t.Errorf("body lookup %q = %s, want %s", tt.query, got, tt.want)
 			}
 		})

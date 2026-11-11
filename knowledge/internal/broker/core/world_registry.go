@@ -1,6 +1,7 @@
 package core
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -21,12 +22,16 @@ type WorldRegistry struct {
 	// tenants maps IdentityKey(issuer, subject) to the pinned slug, so tenant
 	// resolution survives an email change.
 	tenants map[string]string
-	onDrop  []func(name string)
+	// onDrop holds the listeners by registration id, so one can leave.
+	onDrop   map[int]func(name string)
+	nextDrop int
 }
 
-func newWorldRegistry(static []WorldConfig) *WorldRegistry {
+// NewWorldRegistry is the live world set over the config's static worlds;
+// Open builds the one every broker package shares.
+func NewWorldRegistry(static []WorldConfig) *WorldRegistry {
 	defaultProfiles(static)
-	return &WorldRegistry{static: static, staticIndex: indexByName(static)}
+	return &WorldRegistry{static: static, staticIndex: indexByName(static), onDrop: map[int]func(name string){}}
 }
 
 // defaultProfiles settles a blank profile as knowledge at registry ingress,
@@ -98,8 +103,11 @@ func (v *WorldView) Find(name string) (WorldConfig, bool) {
 // then decides whether the profile serves it.
 func (v *WorldView) SlugForIdentity(key string) (string, bool) { return v.reg.SlugForIdentity(key) }
 
-// OnDrop registers a listener for worlds that leave the registry, any profile.
-func (v *WorldView) OnDrop(listener func(name string)) { v.reg.OnDrop(listener) }
+// OnDrop registers a listener for worlds that leave the registry, any
+// profile; the returned func removes it.
+func (v *WorldView) OnDrop(listener func(name string)) (unregister func()) {
+	return v.reg.OnDrop(listener)
+}
 
 // Find returns a copy of the named world.
 func (r *WorldRegistry) Find(name string) (WorldConfig, bool) {
@@ -142,13 +150,20 @@ func (r *WorldRegistry) SlugForIdentity(key string) (string, bool) {
 	return slug, ok
 }
 
-// OnDrop registers a listener for worlds that leave the set. It runs after the
-// swap and outside the registry's lock, under whatever lock the caller of
-// SetDynamic holds: a listener must not reach back into the provisioner.
-func (r *WorldRegistry) OnDrop(listener func(name string)) {
+// OnDrop registers a listener for worlds that leave the set; unregister lets
+// it die with its owner. It runs after the swap under the SetDynamic caller's
+// lock, so a listener must not reach back into the provisioner.
+func (r *WorldRegistry) OnDrop(listener func(name string)) (unregister func()) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.onDrop = append(r.onDrop, listener)
+	id := r.nextDrop
+	r.nextDrop++
+	r.onDrop[id] = listener
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		delete(r.onDrop, id)
+	}
 }
 
 // SetDynamic replaces the provisioned set; static names win a collision. A
@@ -185,7 +200,12 @@ func (r *WorldRegistry) SetDynamic(worlds []WorldConfig, tenants map[string]stri
 		}
 	}
 	r.dynamic, r.dynamicIndex, r.tenants = next, nextIndex, index
-	listeners := slices.Clone(r.onDrop)
+	// In registration order, as a slice of listeners ran.
+	ids := slices.Sorted(maps.Keys(r.onDrop))
+	listeners := make([]func(name string), len(ids))
+	for i, id := range ids {
+		listeners[i] = r.onDrop[id]
+	}
 	r.mu.Unlock()
 
 	for _, name := range dropped {

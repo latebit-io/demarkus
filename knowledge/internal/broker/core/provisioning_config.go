@@ -93,6 +93,26 @@ func (p *ProvisioningConfig) tenantAuthority(slug string) string {
 	return fmt.Sprintf("%s.%s:%d", slug, p.AuthorityDomain, protocol.DefaultPort)
 }
 
+// MustGate names the authorities of the broker's private worlds: the local
+// memory worlds of the config and every tenant the provisioner can create.
+// The server must never answer one on the capability listener.
+func (c *Config) MustGate() func(authority string) bool {
+	private := map[string]bool{}
+	for i := range c.Worlds {
+		if w := &c.Worlds[i]; w.Local && w.Profile == ProfileMemory {
+			private[strings.ToLower(w.Authority())] = true
+		}
+	}
+	tenants := ""
+	if c.Provisioning.Enabled() && c.Provisioning.AuthorityDomain != "" {
+		tenants = "." + strings.ToLower(c.Provisioning.AuthorityDomain)
+	}
+	return func(authority string) bool {
+		authority = strings.ToLower(authority)
+		return private[authority] || tenants != "" && strings.HasSuffix(authority, tenants)
+	}
+}
+
 // TenantWorld renders the broker-side WorldConfig for one tenant. A tenant
 // is served by the server in this process, so it is local, addressed by its
 // authority, and written only under the identity grant.

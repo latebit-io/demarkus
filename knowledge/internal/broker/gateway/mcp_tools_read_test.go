@@ -8,6 +8,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/docframe"
@@ -390,9 +391,9 @@ func TestHandleMarkFetchInvalidURL(t *testing.T) {
 
 func TestHandleMarkFetchUnknownWorld(t *testing.T) {
 	// fakeDispatcher accepts any world, so the not found path needs the real
-	// WorldPool: one world team-a, and team-b must surface errWorldNotFound.
+	// WorldPool: one world team-a, and team-b must surface WorldNotFoundError.
 	cfg := mcpTestConfig()
-	pool := NewWorldPool(cfg.Registry(), fetch.Options{})
+	pool := NewWorldPool(brokertest.Registry(t, cfg), fetch.Options{})
 	g := newGatewayWithDispatcher(t, cfg, pool)
 	res, err := g.handleMarkFetch(withAliceClaims(context.Background()), callToolReq("mark_fetch", map[string]any{
 		"url": "mark://team-b/foo.md",
@@ -506,7 +507,7 @@ func TestHandleMarkLookupBodyMatchFallbackNote(t *testing.T) {
 	if seen.Match != fetch.MatchBody {
 		t.Errorf("dispatcher saw match %q, want body", seen.Match)
 	}
-	if text := toolResultText(t, res); !strings.Contains(text, fetch.CatalogFallbackNote) {
+	if text := toolResultText(t, res); !strings.Contains(text, mcpfmt.CatalogFallbackNote) {
 		t.Errorf("fallback note missing:\n%s", text)
 	}
 }

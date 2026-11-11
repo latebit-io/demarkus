@@ -31,8 +31,8 @@ func TestEnsureMemorySeedSeedsFreshWorld(t *testing.T) {
 	g.ensureMemorySeed(withAliceClaims(context.Background()), w)
 
 	calls := d.Calls().Publish
+	// No policy: the server seeds it when it opens the world.
 	wantOrder := []string{
-		"/.well-known/demarkus/policy.md",
 		"/.well-known/demarkus/template.md",
 		"/index.md",
 	}
@@ -164,28 +164,15 @@ func policyDispatcher(policyMeta map[string]string) *fakeDispatcher {
 	}
 }
 
-func TestEnsureMemorySeedReplacesServerSeededPolicy(t *testing.T) {
-	d := policyDispatcher(map[string]string{"version": "1", "agent": publishpolicy.SeedAgent})
-	g := newMemoryGateway(t, brokertest.NewMemoryConfig(), d)
-	g.ensureMemorySeed(withAliceClaims(context.Background()), &g.deps.Worlds.All()[0])
-
-	calls := d.Calls().Publish
-	if len(calls) != 3 || calls[0].Path != publishpolicy.DocumentPath {
-		t.Fatalf("seed publishes = %+v, want the policy first of three", calls)
-	}
-	// Version two over the server's marked seed; never create-only, which
-	// would conflict and leave the knowledge default in a memory world.
-	if calls[0].ExpectedVersion != 1 {
-		t.Errorf("policy expectedVersion = %d, want 1", calls[0].ExpectedVersion)
-	}
-}
-
-func TestEnsureMemorySeedKeepsCuratedPolicy(t *testing.T) {
+// The policy is the server's to seed and to upgrade: whatever policy a world
+// holds, the server's own default at version one included, the gateway
+// never writes one.
+func TestEnsureMemorySeedNeverWritesThePolicy(t *testing.T) {
 	for name, meta := range map[string]map[string]string{
+		"the server's default seed": {"version": "1", "agent": publishpolicy.SeedAgent},
+		"the server's memory seed":  {"version": "1", "agent": "demarkus-memory-broker"},
 		"written by a user":         {"version": "1", "agent": "alice@example.com"},
-		"seed already replaced":     {"version": "2", "agent": "demarkus-memory-broker"},
-		"marked seed edited later":  {"version": "3", "agent": publishpolicy.SeedAgent},
-		"no agent on the first one": {"version": "1"},
+		"edited later":              {"version": "3", "agent": publishpolicy.SeedAgent},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := policyDispatcher(meta)
@@ -193,7 +180,10 @@ func TestEnsureMemorySeedKeepsCuratedPolicy(t *testing.T) {
 			g.ensureMemorySeed(withAliceClaims(context.Background()), &g.deps.Worlds.All()[0])
 			for _, call := range d.Calls().Publish {
 				if call.Path == publishpolicy.DocumentPath {
-					t.Errorf("policy republished at expected version %d", call.ExpectedVersion)
+					t.Errorf("policy published at expected version %d", call.ExpectedVersion)
+				}
+				if call.ExpectedVersion != 0 {
+					t.Errorf("%s published at expected version %d, want create-only", call.Path, call.ExpectedVersion)
 				}
 			}
 			if got := len(d.Calls().Publish); got != 2 {
@@ -203,31 +193,22 @@ func TestEnsureMemorySeedKeepsCuratedPolicy(t *testing.T) {
 	}
 }
 
-// A server upgraded before its broker: the old broker's create-only policy
-// publish conflicted with the server's seed, yet the hub still landed.
-func TestEnsureMemorySeedReplacesServerSeedInSeededWorld(t *testing.T) {
+// A world holding the hub is seeded: nothing is written into it, whatever
+// policy it holds.
+func TestEnsureMemorySeedLeavesASeededWorldAlone(t *testing.T) {
 	d := &fakeDispatcher{
 		FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
-			path := r.Path
 			meta := map[string]string{"version": "1"}
-			if path == publishpolicy.DocumentPath {
+			if r.Path == publishpolicy.DocumentPath {
 				meta["agent"] = publishpolicy.SeedAgent
 			}
 			return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Metadata: meta, Body: "# Doc\n"}}, nil
 		},
 	}
 	g := newMemoryGateway(t, brokertest.NewMemoryConfig(), d)
-	w := &g.deps.Worlds.All()[0]
-	g.ensureMemorySeed(withAliceClaims(context.Background()), w)
-
-	calls := d.Calls().Publish
-	if len(calls) != 1 || calls[0].Path != publishpolicy.DocumentPath || calls[0].ExpectedVersion != 1 {
-		t.Fatalf("publishes into a seeded world = %+v, want only the policy at expected version 1", calls)
-	}
-	// Marked done: the next call adds no traffic.
-	g.ensureMemorySeed(withAliceClaims(context.Background()), w)
-	if got := len(d.Calls().Publish); got != 1 {
-		t.Errorf("second call published again (%d total)", got)
+	g.ensureMemorySeed(withAliceClaims(context.Background()), &g.deps.Worlds.All()[0])
+	if calls := d.Calls().Publish; len(calls) != 0 {
+		t.Fatalf("publishes into a seeded world = %+v, want none", calls)
 	}
 }
 
@@ -236,7 +217,7 @@ func TestEnsureMemorySeedReplacesServerSeedInSeededWorld(t *testing.T) {
 func TestReprovisionedWorldIsSeededAgain(t *testing.T) {
 	cfg := brokertest.NewMemoryConfig()
 	eve := core.WorldConfig{Name: "eve-1", Profile: core.ProfileMemory, Namespace: "memory", Allow: core.AllowConfig{Emails: []string{"alice@example.com"}}, Generation: "t1"}
-	cfg.Registry().SetDynamic([]core.WorldConfig{eve}, nil)
+	brokertest.Registry(t, cfg).SetDynamic([]core.WorldConfig{eve}, nil)
 	d := freshWorldDispatcher()
 	g := newMemoryGateway(t, cfg, d)
 	ctx := withAliceClaims(context.Background())
@@ -248,18 +229,18 @@ func TestReprovisionedWorldIsSeededAgain(t *testing.T) {
 		t.Fatalf("publishes = %d then %d, want one seeding", seededOnce, len(d.Calls().Publish))
 	}
 
-	cfg.Registry().SetDynamic(nil, nil) // deprovisioned
-	d.Published = nil                   // its bucket went with it
+	brokertest.Registry(t, cfg).SetDynamic(nil, nil) // deprovisioned
+	d.Published = nil                                // its bucket went with it
 	eve.Generation = "t2"
-	cfg.Registry().SetDynamic([]core.WorldConfig{eve}, nil)
+	brokertest.Registry(t, cfg).SetDynamic([]core.WorldConfig{eve}, nil)
 	g.ensureMemorySeed(ctx, &eve)
 	if got := len(d.Calls().Publish); got != 2*seededOnce {
 		t.Errorf("publishes = %d, want the new world seeded too (%d)", got, 2*seededOnce)
 	}
 }
 
-// The seed writes under the broker's own grant: govern for the policy and
-// template, scoped to exactly the seeded paths, never the tenant's grant.
+// The seed writes under the broker's own grant: govern for the template,
+// scoped to exactly the seeded paths, never the tenant's grant.
 func TestEnsureMemorySeedWritesUnderTheBrokerGovernGrant(t *testing.T) {
 	d := policyDispatcher(map[string]string{"version": "1", "agent": publishpolicy.SeedAgent})
 	var grants []protocol.Grant
@@ -270,11 +251,11 @@ func TestEnsureMemorySeedWritesUnderTheBrokerGovernGrant(t *testing.T) {
 	}
 	g := newMemoryGateway(t, brokertest.NewMemoryConfig(), d)
 	g.ensureMemorySeed(withAliceClaims(context.Background()), &g.deps.Worlds.All()[0])
-	if len(grants) != 3 {
-		t.Fatalf("seed publishes = %d, want 3", len(grants))
+	if len(grants) != 2 {
+		t.Fatalf("seed publishes = %d, want 2", len(grants))
 	}
 	for _, grant := range grants {
-		if !grant.Govern || grant.Label != "demarkus-memory-broker" || strings.Join(grant.Paths, ",") != "/.well-known/demarkus/policy.md,/.well-known/demarkus/template.md,/index.md" {
+		if !grant.Govern || grant.Label != "demarkus-memory-broker" || strings.Join(grant.Paths, ",") != "/.well-known/demarkus/template.md,/index.md" {
 			t.Errorf("seed grant = %+v", grant)
 		}
 	}

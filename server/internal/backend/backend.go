@@ -69,18 +69,41 @@ type WriteRequest struct {
 	Metadata        map[string]string
 	// Precondition, when set, judges the write inside the commit.
 	Precondition Precondition
-	// Warnings, when set, receives what the precondition let through with a
-	// note, one line each; a retried commit replaces them.
-	Warnings *[]string
-	// Readable, when set, reports whether the writer may read a path; notes
-	// naming other documents leave out the rest, as LOOKUP does. Nil reads all.
-	Readable func(path string) bool
 }
 
 // Precondition runs after the conflict, archive and no-op checks and before
 // anything is stored. state is what the write commits against. Its error refuses
 // the write and is returned as is; a retried commit runs it again.
-type Precondition func(ctx context.Context, state Reader, write storefmt.PreparedWrite) error
+type Precondition func(ctx context.Context, state CommitState, write storefmt.PreparedWrite) error
+
+// CommitState is the documents and catalog a write commits against, lent to
+// its precondition. A section-index Lookup may answer ErrBodyMatchUnavailable
+// (an index that trails commits); the judge then stands on its earlier read.
+type CommitState interface {
+	Reader
+	CatalogReader
+}
+
+// Sender is what a write gate above a store reads of a write's sender; it
+// never reaches a backend.
+type Sender struct {
+	// Readable reports whether the sender may read a path; notes naming other
+	// documents leave out the rest, as LOOKUP does. Nil reads all.
+	Readable func(path string) bool
+}
+
+// NotingStore is a store behind a write gate: a write that lands may carry
+// notes for its sender, one line each. A bare backend is not one.
+type NotingStore interface {
+	PublishNoted(ctx context.Context, req WriteRequest, sender Sender) (*storefmt.Document, []string, error)
+	AppendNoted(ctx context.Context, req WriteRequest, sender Sender) (*storefmt.Document, []string, error)
+}
+
+// SectionWarmer is a store that builds its section index on demand and can
+// start it ahead of the first body search.
+type SectionWarmer interface {
+	WarmSections()
+}
 
 // ArchiveRequest is one archive or unarchive transition.
 type ArchiveRequest struct {

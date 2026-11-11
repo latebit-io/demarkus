@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
+	protocolstore "github.com/latebit-io/demarkus/server/store"
 )
 
 // journalName is the change journal beside the documents: a dotfile, so

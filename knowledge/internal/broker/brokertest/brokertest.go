@@ -21,6 +21,22 @@ const (
 	BrokerNS = "broker-ns"
 )
 
+// registries holds each fixture config's live world set for its test, so a
+// test and the fixtures it builds from one config share one registry.
+var registries sync.Map // *core.Config to *core.WorldRegistry
+
+// Registry is cfg's world set for tb's test: the first call builds it, the
+// test's end forgets it.
+func Registry(tb testing.TB, cfg *core.Config) *core.WorldRegistry {
+	tb.Helper()
+	fresh := core.NewWorldRegistry(cfg.Worlds)
+	held, loaded := registries.LoadOrStore(cfg, fresh)
+	if !loaded {
+		tb.Cleanup(func() { registries.Delete(cfg) })
+	}
+	return held.(*core.WorldRegistry)
+}
+
 // HTTPTimeout fails a deadlocked handler in seconds, not at the suite timeout.
 const HTTPTimeout = 5 * time.Second
 

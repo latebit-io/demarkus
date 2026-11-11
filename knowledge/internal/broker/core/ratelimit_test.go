@@ -1,14 +1,12 @@
 package core
 
 import (
-	"bytes"
-	"context"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"strings"
+	"fmt"
+	"runtime"
 	"testing"
 	"time"
+
+	"github.com/latebit-io/demarkus/protocol/memtest"
 )
 
 func TestRateLimitRegistryNilWhenDisabledOrZero(t *testing.T) {
@@ -87,43 +85,66 @@ func TestRateLimitRegistryDenialDoesNotConsumeBudget(t *testing.T) {
 	}
 }
 
-func TestSubjectRateLimitMissingClaimsIs500(t *testing.T) {
-	// A route composed without the auth middleware upstream reaches the
-	// limiter with no claims; that is a 500 and a log line, never a bypass.
-	h := SubjectRateLimit(newRateLimitRegistry(60, 2), slog.Default(), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("handler reached despite missing claims")
-		w.WriteHeader(http.StatusOK)
-	}))
-	rr := httptest.NewRecorder()
-	r, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/me/install", http.NoBody)
-	h.ServeHTTP(rr, r)
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500", rr.Code)
+// An idle limiter has refilled, so dropping it changes no answer: the map
+// holds the keys of the last window, not every key ever seen.
+func TestRateLimitRegistryEvictsIdleLimiters(t *testing.T) {
+	reg := newRateLimitRegistry(60, 2) // refills in 2s
+	now := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+	reg.now = func() time.Time { return now }
+	for i := range 1000 {
+		reg.Reserve(fmt.Sprintf("old-%d", i))
+	}
+	reg.Reserve("busy")
+	reg.Reserve("busy")
+	now = now.Add(minSweepInterval)
+	if allowed, _ := reg.Reserve("fresh"); !allowed {
+		t.Fatal("fresh key denied")
+	}
+	if got := len(reg.limiters); got != 1 {
+		t.Fatalf("%d limiters after the sweep, want 1 (fresh)", got)
+	}
+	// busy was idle for a full refill, so its fresh bucket is the same bucket.
+	if allowed, _ := reg.Reserve("busy"); !allowed {
+		t.Fatal("refilled key denied after eviction")
 	}
 }
 
-// A refusal flood is one log line per window, while every request is still
-// refused: the limiter must not turn into a log-volume amplifier.
-func TestSubjectRateLimitLogsRefusalFloodOnce(t *testing.T) {
-	var logs bytes.Buffer
-	log := slog.New(slog.NewJSONHandler(&logs, nil))
-	h := SubjectRateLimit(newRateLimitRegistry(1, 1), log, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	ctx := CtxWithClaims(context.Background(), &Claims{Subject: "alice"})
-	refused := 0
-	for range 50 {
-		rr := httptest.NewRecorder()
-		r, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/mcp", http.NoBody)
-		h.ServeHTTP(rr, r)
-		if rr.Code == http.StatusTooManyRequests {
-			refused++
+// A key still short of a full refill keeps its spent bucket across a sweep.
+func TestRateLimitRegistrySweepKeepsSpentBuckets(t *testing.T) {
+	reg := newRateLimitRegistry(1, 2) // refills in 2m
+	now := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+	reg.now = func() time.Time { return now }
+	reg.Reserve("k")
+	reg.Reserve("k")
+	now = now.Add(minSweepInterval)
+	reg.Reserve("other") // sweeps
+	reg.Reserve("k")     // the one token a minute regenerated
+	if allowed, _ := reg.Reserve("k"); allowed {
+		t.Fatal("spent bucket was evicted before it refilled: the limit resets early")
+	}
+}
+
+// Memory tracks the keys of one window: a second flood of distinct keys
+// retains no more than the first.
+func TestRateLimitRegistryRetainsOneWindow(t *testing.T) {
+	reg := newRateLimitRegistry(60, 2)
+	now := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+	reg.now = func() time.Time { return now }
+	const keys = 20_000
+	flood := func(round int) {
+		for i := range keys {
+			reg.Reserve(fmt.Sprintf("2001:db8:%x:%x::/64", round, i))
 		}
+		now = now.Add(minSweepInterval)
 	}
-	if refused != 49 {
-		t.Fatalf("refused %d of 50, want 49", refused)
-	}
-	if got := strings.Count(logs.String(), "rate limit exceeded"); got != 1 {
-		t.Fatalf("logged %d refusal lines, want 1:\n%s", got, logs.String())
+	first := memtest.Retained(func() { flood(0) })
+	later := memtest.Retained(func() {
+		for round := 1; round <= 5; round++ {
+			flood(round)
+		}
+	})
+	runtime.KeepAlive(reg)
+	if later > first/2 {
+		t.Fatalf("five more floods retained %d bytes on top of the first's %d; idle limiters are not evicted", later, first)
 	}
 }

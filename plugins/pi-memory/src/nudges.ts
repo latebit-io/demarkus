@@ -12,7 +12,7 @@ function isMemoryWrite(toolName: string, input: Record<string, unknown>): boolea
   return /mark_(publish|append)$/.test(name);
 }
 
-// Mirrors config.IsJournalWrite in the plugin binary: route today, or a url
+// Mirrors toolname.IsJournalWrite in the plugin binary: route today, or a url
 // under a journal/ directory. Args arrive already unwrapped (normalizeToolCall).
 function isJournalWrite(args: Record<string, unknown>): boolean {
   const url = typeof args.url === "string" ? args.url : "";

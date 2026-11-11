@@ -164,3 +164,55 @@ func TestDefaultAllowlist(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSchemes(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    []string
+		wantErr bool
+	}{
+		{"empty disables", "", nil, false},
+		{"default set", "http,https,gemini,mailto", []string{"http", "https", "gemini", "mailto"}, false},
+		{"trims whitespace", "  http ,  https  ", []string{"http", "https"}, false},
+		{"drops empty entries", "http,,https,", []string{"http", "https"}, false},
+		{"preserves scheme special chars", "coap+tcp,svn-ssh,soap.beep", []string{"coap+tcp", "svn-ssh", "soap.beep"}, false},
+		{"rejects space in entry", "http, foo bar, https", nil, true},
+		{"rejects digit-leading scheme", "1http", nil, true},
+		{"rejects special chars", "http@s", nil, true},
+		{"rejects slash", "http/s", nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseSchemes(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("want error for %q, got nil with result %v", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("got[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestSchemeOf(t *testing.T) {
+	for raw, want := range map[string]string{
+		"mark://host/doc.md": "mark", "MARK://host/doc.md": "mark", "mailto:alice@example.com": "mailto",
+		"coap+tcp://x": "coap+tcp", "/index.md": "", "doc.md": "", "": "", "1http://x": "", "ht tp://x": "",
+	} {
+		if got := SchemeOf(raw); got != want {
+			t.Errorf("SchemeOf(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

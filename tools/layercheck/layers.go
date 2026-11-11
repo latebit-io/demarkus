@@ -11,25 +11,59 @@ import (
 // besides their own: dependencies point down only. Changing a row changes the
 // architecture and takes an ADR.
 var allowed = map[string][]string{
-	// wire types, stored format, shared contracts
-	"protocol": nil,
+	// the wire format alone: requests, responses, verbs, statuses
+	"wire": nil,
+	// what both sides share above the wire: stored format, policy, contracts
+	"protocol": {"wire"},
 	// server side of the memory store; never imports the client (ADR 0026)
-	"store": {"protocol"},
+	"store": {"wire", "protocol"},
 	// the store client, the SDK to be
-	"storeclient": {"protocol"},
+	"storeclient": {"wire", "protocol"},
 	// document kinds, hubs, write gates, journal, promote, doctor
-	"model": {"protocol", "storeclient"},
+	"model": {"wire", "protocol", "storeclient"},
 	// the two tiers are siblings: neither imports the other
-	"soul":      {"protocol", "store", "storeclient", "model"},
-	"knowledge": {"protocol", "store", "storeclient", "model"},
+	"soul":      {"wire", "protocol", "store", "storeclient", "model"},
+	"knowledge": {"wire", "protocol", "store", "storeclient", "model"},
 	// MCP tools, plugins, gateway, CLI, TUI and the binaries
-	"surface": {"protocol", "store", "storeclient", "model", "soul", "knowledge"},
+	"surface": {"wire", "protocol", "store", "storeclient", "model", "soul", "knowledge"},
 	// dev and ops utilities
-	"tool": {"protocol", "store", "storeclient", "model", "soul", "knowledge", "surface"},
+	"tool": {"wire", "protocol", "store", "storeclient", "model", "soul", "knowledge", "surface"},
+}
+
+// Outside modules that belong to one layer and stay out of the ones below.
+const (
+	mcpSDK    = "github.com/mark3labs/mcp-go"
+	tuiKit    = "charm.land/"
+	judgeSDK  = "github.com/anthropics/anthropic-sdk-go"
+	kubeAPI   = "k8s.io/"
+	oidcSDK   = "github.com/coreos/go-oidc"
+	gcpClient = "cloud.google.com/"
+)
+
+// external names, for each layer, the outside modules its production code
+// must not import. The store keeps gcpClient: server/blob/gcs is a backend.
+var external = map[string][]string{
+	"wire":        {mcpSDK, tuiKit, judgeSDK, kubeAPI, oidcSDK, gcpClient},
+	"protocol":    {mcpSDK, tuiKit, judgeSDK, kubeAPI, oidcSDK, gcpClient},
+	"store":       {mcpSDK, tuiKit, judgeSDK, kubeAPI, oidcSDK},
+	"storeclient": {mcpSDK, tuiKit, judgeSDK, kubeAPI, oidcSDK, gcpClient},
+	"model":       {mcpSDK, tuiKit, judgeSDK, kubeAPI, oidcSDK, gcpClient},
+	"soul":        {mcpSDK, tuiKit, judgeSDK, kubeAPI, oidcSDK, gcpClient},
+	"knowledge":   {mcpSDK, tuiKit},
 }
 
 func mayImport(from, to string) bool {
 	return from == to || slices.Contains(allowed[from], to)
+}
+
+// mayUse reports whether a layer may import the outside package path.
+func mayUse(layer, path string) bool {
+	for _, prefix := range external[layer] {
+		if path == prefix || strings.HasPrefix(path, strings.TrimSuffix(prefix, "/")+"/") {
+			return false
+		}
+	}
+	return true
 }
 
 // entry maps one package to a layer, or with a "/..." suffix that package and

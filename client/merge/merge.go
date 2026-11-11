@@ -1,25 +1,26 @@
 package merge
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
-// on_conflict values a publish accepts.
+// OnConflict is what a publish does when the document moved past the
+// version it was edited from.
+type OnConflict string
+
+// The two modes, by the name every surface gives them.
 const (
-	OnConflictMerge = "merge"
-	OnConflictFail  = "fail"
+	// OnConflictMerge answers with a three way merge candidate to review.
+	OnConflictMerge OnConflict = "merge"
+	// OnConflictFail answers with the server's conflict.
+	OnConflictFail OnConflict = "fail"
 )
 
-// ParseOnConflict normalizes a tool's on_conflict argument: blank means
-// merge, which MCP clients commonly send for an omitted optional field.
-func ParseOnConflict(raw string) (string, error) {
-	mode := strings.TrimSpace(raw)
-	if mode == "" {
-		return OnConflictMerge, nil
+// ModeNamed is the mode a surface's option names, surrounding space
+// ignored; ok is false for anything else. What an omitted option means, and
+// how a bad one is refused, are the surface's.
+func ModeNamed(name string) (mode OnConflict, ok bool) {
+	switch mode = OnConflict(strings.TrimSpace(name)); mode {
+	case OnConflictMerge, OnConflictFail:
+		return mode, true
 	}
-	if mode != OnConflictMerge && mode != OnConflictFail {
-		return "", fmt.Errorf("invalid on_conflict %q: expected \"merge\" or \"fail\"", mode)
-	}
-	return mode, nil
+	return "", false
 }

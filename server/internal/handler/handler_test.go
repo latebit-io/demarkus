@@ -16,12 +16,12 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
+	"github.com/latebit-io/demarkus/server/store"
 )
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))

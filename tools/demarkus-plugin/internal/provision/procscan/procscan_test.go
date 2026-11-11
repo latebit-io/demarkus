@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/lockdir"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/provisiontest"
 )
 
@@ -164,22 +165,22 @@ func TestProcessStart(t *testing.T) {
 	const settle = 2 * time.Second
 	time.Sleep(settle)
 
-	started, ok := processStart(cmd.Process.Pid)
+	started, ok := lockdir.ProcessStart(cmd.Process.Pid)
 	if !ok {
-		t.Fatalf("processStart(live pid) ok = false, want true")
+		t.Fatalf("lockdir.ProcessStart(live pid) ok = false, want true")
 	}
 	if d := time.Since(started); d < settle-time.Second {
-		t.Errorf("processStart(live pid) = %v, only %v ago; want the launch time, not the lookup time", started, d)
+		t.Errorf("lockdir.ProcessStart(live pid) = %v, only %v ago; want the launch time, not the lookup time", started, d)
 	}
 	if d := time.Since(started); d > time.Minute {
-		t.Errorf("processStart(live pid) = %v, %v ago; want within a minute", started, d)
+		t.Errorf("lockdir.ProcessStart(live pid) = %v, %v ago; want within a minute", started, d)
 	}
 
 	// Kill it, then ask about a pid that is certainly gone.
 	pid := cmd.Process.Pid
 	provisiontest.StopProcess(t, cmd)
-	if _, ok := processStart(pid); ok {
-		t.Errorf("processStart(dead pid) ok = true, want false")
+	if _, ok := lockdir.ProcessStart(pid); ok {
+		t.Errorf("lockdir.ProcessStart(dead pid) ok = true, want false")
 	}
 }
 

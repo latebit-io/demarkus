@@ -8,6 +8,7 @@ package federation
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -41,8 +42,9 @@ const (
 // the export rendered from them.
 var Grant = protocol.Grant{Label: "federation", Paths: []string{graphstore.WorldGraphRoot + "/**", graphstore.GraphExportPath}}
 
-// Source reads the derived worlds by name, anonymously: no token and no
-// grant, so a document the public cannot read never enters the graph.
+// Source reads the derived worlds by name with no token and no grant. In
+// process that passes a gated world's gate, so it does not keep a private
+// document out of the graph: Config.Refuse does, by gate.
 type Source interface {
 	listwalk.Lister
 	Watch(ctx context.Context, r fetch.WatchRequest) (*fetch.Watch, error)
@@ -83,6 +85,25 @@ type Config struct {
 	// Interval the least time between two checkpoints of one world.
 	QuietPeriod, Interval time.Duration
 	Log                   *slog.Logger
+	// Refuse says why a world must not be derived now, nil when it may: the
+	// broker's GateCheck. Asked before every run and every checkpoint, since
+	// a reload can gate a world or open the hub at any time. Nil derives all.
+	Refuse func(world string) error
+}
+
+// ErrGatedIntoOpenHub refuses a gated world whose graph an ungated hub
+// would hand to anonymous readers.
+var ErrGatedIntoOpenHub = errors.New("gated world would be published into an ungated hub; gate the hub or leave the world out")
+
+// GateCheck is the Refuse of a deployment: a world that is gated while hub
+// is not would have its paths, titles and links served anonymously.
+func GateCheck(hub string, gated func(world string) bool) func(world string) error {
+	return func(world string) error {
+		if gated(world) && !gated(hub) {
+			return fmt.Errorf("federation: world %q: %w (hub %q)", world, ErrGatedIntoOpenHub, hub)
+		}
+		return nil
+	}
 }
 
 // deriver is what every world's loop shares.
@@ -90,6 +111,14 @@ type deriver struct {
 	Config
 	reads  *rate.Limiter
 	export *exporter
+}
+
+// refused is Config.Refuse, nil without one.
+func (d *deriver) refused(world string) error {
+	if d.Refuse == nil {
+		return nil
+	}
+	return d.Refuse(world)
 }
 
 // Run derives every world until ctx ends. A world that fails starts over
@@ -150,7 +179,10 @@ func (d *deriver) derive(ctx context.Context, name string) {
 	for {
 		started := time.Now()
 		w := newWorld(d, name)
-		err := w.run(ctx)
+		err := d.refused(name)
+		if err == nil {
+			err = w.run(ctx)
+		}
 		if ctx.Err() != nil {
 			return
 		}

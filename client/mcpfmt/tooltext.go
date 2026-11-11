@@ -11,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/lookupexpand"
 	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/toolvocab"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -102,11 +103,11 @@ func describe(base, suffix string) mcp.ToolOption {
 // NewTool builds a classified mark_* tool: reads get the read-only hints,
 // since mcp-go defaults every tool to destructive. An unclassified name panics.
 func NewTool(name string, opts ...mcp.ToolOption) mcp.Tool {
-	class, ok := toolClasses[name]
+	class, ok := toolvocab.ClassOf(name)
 	if !ok {
-		panic("mcpfmt: unclassified tool " + name + ": add it to toolClasses")
+		panic("mcpfmt: unclassified tool " + name + ": add it to toolvocab")
 	}
-	if !class.write {
+	if !class.Write {
 		opts = append(slices.Clip(opts), mcp.WithReadOnlyHintAnnotation(true), mcp.WithDestructiveHintAnnotation(false))
 	}
 	return mcp.NewTool(name, opts...)
@@ -340,66 +341,26 @@ func DoctorTool(urlDesc, suffix string) mcp.Tool {
 	)
 }
 
-// Tool profiles. Lean is the plugin-hosted surface: no operator or federation
-// tools, and on demarkus-mcp no soul prompts, which the plugin ships as
-// commands. Full is the complete surface for direct consumers.
+// The tool vocabulary lives in protocol/toolvocab so the tiers can use it
+// without this package; these names keep the surfaces' call sites.
 const (
-	ProfileLean = "lean"
-	ProfileFull = "full"
+	ProfileLean = toolvocab.ProfileLean
+	ProfileFull = toolvocab.ProfileFull
 )
 
-type toolClass struct {
-	write    bool // changes a store or the graph store
-	store    bool // changes a document store: the write gate's set
-	advanced bool // absent from the lean profile
-}
-
-// toolClasses is every mark_* tool any surface serves, the plugin binary's
-// host tools included. mark_archive stays in lean: /soul-archive is the only
-// archive path a plugin user has.
-var toolClasses = map[string]toolClass{
-	"mark_fetch": {}, "mark_explore": {}, "mark_list": {}, "mark_versions": {},
-	"mark_lookup": {}, "mark_lookup_all": {}, "mark_backlinks": {}, "mark_worlds": {},
-	"mark_doctor": {}, "mark_discover": {advanced: true}, "mark_graph_export": {advanced: true},
-	"mark_publish": {write: true, store: true}, "mark_append": {write: true, store: true}, "mark_archive": {write: true, store: true},
-	"mark_curate": {write: true, store: true}, "mark_promote": {write: true, store: true}, "mark_graph": {write: true},
-	"mark_graph_publish": {write: true, store: true, advanced: true},
-	"mark_host":          {}, "mark_host_setup": {write: true},
-}
-
-// KnownTools and AdvancedTools are views of toolClasses; the plugin-prompts
-// check fails when a template names an unknown or advanced tool.
+// KnownTools and AdvancedTools are checked by plugin-prompts; StoreWriteTools
+// is the set every host's write-gate matcher names.
 var (
-	KnownTools    = toolSet(func(toolClass) bool { return true })
-	AdvancedTools = toolSet(func(c toolClass) bool { return c.advanced })
-	// StoreWriteTools are the tools the write gate holds; every host's hook
-	// matcher must name exactly these.
-	StoreWriteTools = toolSet(func(c toolClass) bool { return c.store })
+	KnownTools      = toolvocab.Known
+	AdvancedTools   = toolvocab.Advanced
+	StoreWriteTools = toolvocab.StoreWrite
 )
 
-func toolSet(keep func(toolClass) bool) map[string]bool {
-	set := map[string]bool{}
-	for name, class := range toolClasses {
-		if keep(class) {
-			set[name] = true
-		}
-	}
-	return set
-}
-
-// ValidProfile rejects anything but the two named profiles. Surfaces call it
-// at their input boundary (flag, config); the filters below trust the value.
-func ValidProfile(profile string) error {
-	if profile != ProfileLean && profile != ProfileFull {
-		return fmt.Errorf("unknown tool profile %q (lean or full)", profile)
-	}
-	return nil
-}
+// ValidProfile rejects anything but the two named profiles.
+func ValidProfile(profile string) error { return toolvocab.ValidProfile(profile) }
 
 // ProfileIncludes reports whether the profile exposes the named tool.
-func ProfileIncludes(profile, name string) bool {
-	return profile != ProfileLean || !AdvancedTools[name]
-}
+func ProfileIncludes(profile, name string) bool { return toolvocab.ProfileIncludes(profile, name) }
 
 // ProfileTools filters a full tool list down to the profile.
 func ProfileTools(profile string, full []mcp.Tool) []mcp.Tool {

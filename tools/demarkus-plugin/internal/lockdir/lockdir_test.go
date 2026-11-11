@@ -212,3 +212,71 @@ func TestWithLock(t *testing.T) {
 		}
 	})
 }
+
+// stampLock leaves a lock dir as a holder with pid, stamped at taken, left it.
+func stampLock(t *testing.T, pid int, taken *time.Time) string {
+	t.Helper()
+	lock := filepath.Join(t.TempDir(), "state.lock")
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{"pid": strconv.Itoa(pid)}
+	if taken != nil {
+		files[stampedFile] = strconv.FormatInt(taken.UnixNano(), 10)
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(lock, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return lock
+}
+
+// A dead holder's PID can go to another process (a reboot does it readily);
+// that process started after the lock was taken, so the lock is stale.
+func TestWithLockReclaimsAReusedPID(t *testing.T) {
+	if _, ok := ProcessStart(os.Getpid()); !ok {
+		t.Skip("ps reports no start time here")
+	}
+	longAgo := time.Now().Add(-24 * time.Hour)
+	ran := false
+	if err := WithLock(stampLock(t, os.Getpid(), &longAgo), 20, time.Millisecond, func() error { ran = true; return nil }); err != nil || !ran {
+		t.Fatalf("a lock stamped before its live PID started was not reclaimed: ran=%v err=%v", ran, err)
+	}
+}
+
+// A live holder is never stolen from: one whose stamp follows its start, or a
+// legacy lock with no stamp time at all.
+func TestWithLockWaitsOnALiveHolder(t *testing.T) {
+	now := time.Now()
+	for name, taken := range map[string]*time.Time{"stamped": &now, "legacy": nil} {
+		lock := stampLock(t, os.Getpid(), taken)
+		err := WithLock(lock, 5, time.Millisecond, func() error { t.Errorf("%s: ran inside a held lock", name); return nil })
+		if err == nil {
+			t.Errorf("%s: a live holder's lock was acquired", name)
+		}
+		if _, statErr := os.Stat(filepath.Join(lock, "pid")); statErr != nil {
+			t.Errorf("%s: the held lock was disturbed: %v", name, statErr)
+		}
+	}
+}
+
+func TestAcquireStampsPIDAndTime(t *testing.T) {
+	lock := filepath.Join(t.TempDir(), "state.lock")
+	before := time.Now()
+	err := WithLock(lock, 5, time.Millisecond, func() error {
+		pid, err := os.ReadFile(filepath.Join(lock, "pid"))
+		if err != nil || string(pid) != strconv.Itoa(os.Getpid()) {
+			t.Errorf("pid stamp = %q, %v (a bare number: older binaries read it)", pid, err)
+		}
+		stamp, err := os.ReadFile(filepath.Join(lock, stampedFile))
+		nanos, convErr := strconv.ParseInt(string(stamp), 10, 64)
+		if err != nil || convErr != nil || time.Unix(0, nanos).Before(before) {
+			t.Errorf("time stamp = %q, %v %v", stamp, err, convErr)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

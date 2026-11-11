@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	protocolstore "github.com/latebit-io/demarkus/server/store"
 )
 
 func TestReadViewPinsFileAndCatalogState(t *testing.T) {

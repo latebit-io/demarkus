@@ -139,7 +139,7 @@ func TestWatchCloseBetweenReadsReleasesClean(t *testing.T) {
 	at := protocol.Cursor{Epoch: "e1", Seq: 1}
 	f := &pipeFeed{t: t, released: make(chan error, 1), scripts: [][]protocol.WatchBlock{{
 		protocol.WatchControl(protocol.StatusOK, at),
-		protocol.WatchEvent{Cursor: at, Path: "/a.md", Version: 1, Op: protocol.OpPublish}.Block(),
+		protocol.WatchEvent{Cursor: protocol.Cursor{Epoch: "e1", Seq: 2}, Path: "/a.md", Version: 1, Op: protocol.OpPublish}.Block(),
 	}}}
 	s := &closeAtTop{aborted: make(chan struct{})}
 	dial := func(ctx context.Context, req protocol.Request) (WatchStream, error) {
@@ -210,5 +210,61 @@ func TestWatchBacksOffStreamsThatEndEmpty(t *testing.T) {
 	time.Sleep(400 * time.Millisecond)
 	if n := dials.Load(); n < 2 || n > 4 {
 		t.Fatalf("dialed %d times in 400 ms, want a reopen backing off from 100 ms", n)
+	}
+}
+
+// A block that reads as no event but names a cursor is passed, not resent
+// for ever: the consumer gets a resync there and the stream goes on.
+func TestWatchPassesAMalformedEventThatNamesACursor(t *testing.T) {
+	at := func(seq uint64) protocol.Cursor { return protocol.Cursor{Epoch: "e1", Seq: seq} }
+	bad := protocol.WatchBlock{Metadata: map[string]string{"cursor": at(2).String(), "path": "no-slash.md", "version": "1", "op": protocol.OpPublish}}
+	f := &pipeFeed{t: t, released: make(chan error, 1), scripts: [][]protocol.WatchBlock{{
+		protocol.WatchControl(protocol.StatusOK, at(1)), bad,
+		protocol.WatchEvent{Cursor: at(3), Path: "/b.md", Version: 1, Op: protocol.OpPublish}.Block(),
+	}}}
+	w, err := NewWatch(context.Background(), f.dial, WatchRequest{Path: "/"}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("NewWatch: %v", err)
+	}
+	defer w.Close()
+	if n := nextNotice(t, w); !n.Resync || n.Event.Cursor != at(2) {
+		t.Fatalf("notice = %+v, want a resync at %v", n, at(2))
+	}
+	expectEvent(t, w, "/b.md")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sinces) != 1 {
+		t.Errorf("subscribes = %v, want the one stream to carry on", f.sinces)
+	}
+}
+
+// A block that names no cursor cannot be passed: the watch reopens at a
+// growing pause and ends with the cause once the same block keeps coming.
+func TestWatchEndsOnABlockItCannotPass(t *testing.T) {
+	ack := protocol.WatchControl(protocol.StatusOK, protocol.Cursor{Epoch: "e1", Seq: 1})
+	bad := protocol.WatchBlock{Metadata: map[string]string{"cursor": "nowhere", "path": "/a.md", "version": "1", "op": protocol.OpPublish}}
+	f := &pipeFeed{t: t, released: make(chan error, 2*maxUnreadable)}
+	for range 2 * maxUnreadable {
+		f.scripts = append(f.scripts, []protocol.WatchBlock{ack, bad})
+	}
+	start := time.Now()
+	w, err := NewWatch(context.Background(), f.dial, WatchRequest{Path: "/"}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("NewWatch: %v", err)
+	}
+	defer w.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := w.Next(ctx); !errors.Is(err, protocol.ErrMalformedWatchBlock) {
+		t.Fatalf("Next = %v, want the malformed block to end the watch", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sinces) != maxUnreadable {
+		t.Errorf("%d streams opened, want %d before giving up", len(f.sinces), maxUnreadable)
+	}
+	// Pauses of 100, 200, 400 and 800 ms lie between the five streams.
+	if took := time.Since(start); took < time.Second {
+		t.Errorf("gave up after %v: the reopens were not paced", took)
 	}
 }

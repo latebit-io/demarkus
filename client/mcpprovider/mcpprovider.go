@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/protocol/hiddentext"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -28,6 +29,9 @@ const (
 	// A call may provision a server, which downloads binaries.
 	callTimeout = 5 * time.Minute
 	maxTools    = 32
+	// A provider answers with short text; more is a runaway, not an answer.
+	maxOutput = 1 << 20
+	maxStderr = 64 << 10
 )
 
 var toolName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
@@ -68,7 +72,31 @@ func Load(ctx context.Context, bin string, served map[string]bool) ([]mcpserver.
 	return bound, nil
 }
 
-// handler binds one provided tool to `<bin> mcp call <name>`.
+// Attach adds the provider's tools through add. It waits patience for the
+// listing; a slower provider's tools arrive when it answers, so a hung one
+// costs its own tools and never the server's startup. done closes either way.
+func Attach(bin string, served map[string]bool, patience time.Duration, add func(...mcpserver.ServerTool)) (done <-chan struct{}) {
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		// Bounded by Load's own timeout: no caller context outlives startup.
+		provided, err := Load(context.Background(), bin, served)
+		if err != nil {
+			log.Printf("warning: tool provider %s: %v; its tools are unavailable", strconv.Quote(bin), err)
+			return
+		}
+		add(provided...)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(patience):
+		log.Printf("warning: tool provider %s has not answered in %s; serving without its tools until it does", strconv.Quote(bin), patience)
+	}
+	return finished
+}
+
+// handler binds one provided tool to `<bin> mcp call <name>`. The text is the
+// provider's, read from the host: revealed like every model-facing answer.
 func handler(bin, name string) mcpserver.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		input, err := json.Marshal(req.GetArguments())
@@ -81,13 +109,13 @@ func handler(bin, name string) mcpserver.ToolHandlerFunc {
 		var failed *toolError
 		switch {
 		case errors.As(err, &failed):
-			return mcp.NewToolResultError(name + ": " + failed.msg), nil
+			return mcp.NewToolResultError(hiddentext.Reveal(name + ": " + failed.msg)), nil
 		case err != nil:
 			// A tool outcome, like the store's own "internal:" results, so the
 			// model reports it instead of reading a JSON-RPC fault.
-			return mcp.NewToolResultError(name + ": provider unavailable: " + err.Error()), nil
+			return mcp.NewToolResultError(hiddentext.Reveal(name + ": provider unavailable: " + err.Error())), nil
 		}
-		return mcp.NewToolResultText(strings.TrimRight(string(out), "\n")), nil
+		return mcp.NewToolResultText(hiddentext.Reveal(strings.TrimRight(string(out), "\n"))), nil
 	}
 }
 
@@ -106,7 +134,7 @@ func run(ctx context.Context, bin string, stdin []byte, args ...string) ([]byte,
 	if len(stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
-	var stdout, stderr bytes.Buffer
+	stdout, stderr := capped{limit: maxOutput}, capped{limit: maxStderr}
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	var exit *exec.ExitError
@@ -114,17 +142,37 @@ func run(ctx context.Context, bin string, stdin []byte, args ...string) ([]byte,
 	case ctx.Err() != nil: // the deadline killed it; not the tool's refusal
 		return nil, fmt.Errorf("provider %s %s: %w", bin, strings.Join(args, " "), ctx.Err())
 	case errors.As(err, &exit):
-		msg := strings.TrimSpace(stderr.String())
+		msg := strings.TrimSpace(stderr.buf.String())
 		if msg == "" {
 			msg = err.Error()
 		}
 		return nil, &toolError{msg: msg}
 	case err != nil:
 		return nil, fmt.Errorf("provider %s: %w", bin, err)
+	case stdout.over:
+		return nil, fmt.Errorf("provider %s %s: output over %d bytes", bin, strings.Join(args, " "), maxOutput)
 	}
-	if warn := strings.TrimSpace(stderr.String()); warn != "" {
+	if warn := strings.TrimSpace(stderr.buf.String()); warn != "" {
 		// Quoted: the command line and stderr are untrusted; a newline would forge log lines.
 		log.Printf("tool provider %s: %s", strconv.Quote(bin+" "+strings.Join(args, " ")), strconv.Quote(warn))
 	}
-	return stdout.Bytes(), nil
+	return stdout.buf.Bytes(), nil
+}
+
+// capped keeps the first limit bytes written and drops the rest, so a
+// runaway provider cannot grow a long-lived server; over records the drop.
+// The buffer is a field: embedded, its ReadFrom would bypass Write.
+type capped struct {
+	buf   bytes.Buffer
+	limit int
+	over  bool
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.limit - c.buf.Len(); room < len(p) {
+		c.over = true
+		c.buf.Write(p[:max(room, 0)])
+		return len(p), nil
+	}
+	return c.buf.Write(p)
 }

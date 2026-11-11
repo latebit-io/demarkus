@@ -5,19 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
-	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
-	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/certsource"
-	"github.com/latebit-io/demarkus/server/internal/configwatch"
 	"github.com/latebit-io/demarkus/server/internal/knowledge/knowledgeseed"
 	"github.com/latebit-io/demarkus/server/internal/knowledgeconfig"
 	"github.com/latebit-io/demarkus/server/internal/peerhint"
@@ -54,8 +51,24 @@ type worldManager struct {
 	watchCtx context.Context
 	group    *sync.WaitGroup
 
+	// applyMu serializes changes to the world set: a config apply and the
+	// retry loop. Worlds open under it and outside mu, so a slow store never
+	// holds up hints, a drain or a count.
+	applyMu sync.Mutex
+	// closed refuses a world set applied after Close; under applyMu.
+	closed bool
+	// appliers counts applies waiting for applyMu: the retry loop yields.
+	appliers atomic.Int32
+
 	mu      sync.Mutex
 	entries map[string]*worldEntry
+	// yield cancels the retry loop's opens when an apply arrives.
+	yield context.CancelFunc
+	// mustGate names the authorities the broker serves as private worlds,
+	// which must be gated; nil without a broker.
+	mustGate func(authority string) bool
+	// fragmentWarning is the last generated-fragment warning logged.
+	fragmentWarning string
 	// tokenDirs refcounts one watcher per distinct tokens-file parent
 	// dir: the coordinator reload is global, so per-world watchers on a
 	// shared dynamic-tenant Secret dir would only multiply fsnotify load.
@@ -160,6 +173,7 @@ func newWorldManager(watchCtx context.Context, group *sync.WaitGroup, cfg worldM
 		return nil, err
 	}
 	m.tokens = tokens
+	m.noteFragment(config.FragmentWarning)
 	if err := m.apply(config.Worlds); err != nil {
 		m.Close()
 		return nil, err
@@ -185,6 +199,7 @@ func (m *worldManager) Reload() error {
 	if err != nil {
 		return err
 	}
+	m.noteFragment(config.FragmentWarning)
 	return m.apply(config.Worlds)
 }
 
@@ -201,124 +216,11 @@ func (m *worldManager) SetDynamicWorlds(fragment []byte) error {
 	if err != nil {
 		return err
 	}
+	m.noteFragment(config.FragmentWarning)
 	if err := m.apply(config.Worlds); err != nil {
 		return err
 	}
 	m.dynamic, m.dynamicSet = slices.Clone(fragment), true
-	return nil
-}
-
-// retiredWorld is a runtime out of m.entries that the router may still reach.
-type retiredWorld struct {
-	name  string
-	entry *worldEntry
-}
-
-// apply diffs desired against live. In resilient mode per-world failures
-// are logged and retried; in static mode the first failure is returned.
-func (m *worldManager) apply(desired []knowledgeconfig.WorldConfig) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	want := make(map[string]*knowledgeconfig.WorldConfig, len(desired))
-	for index := range desired {
-		want[desired[index].Name] = &desired[index]
-	}
-
-	for name, entry := range m.entries {
-		target, keep := want[name]
-		if keep && reflect.DeepEqual(entry.config, *target) {
-			continue
-		}
-		if keep {
-			m.logger.Info("world config changed; replacing runtime", "world", name)
-		} else {
-			m.logger.Info("world removed", "world", name)
-		}
-		delete(m.entries, name)
-		m.setPolicyStore(name, nil)
-		if !entry.published {
-			m.retireEntryLocked(name, entry)
-			continue
-		}
-		// Closed by the next publish that succeeds, so the router never
-		// points at a closed runtime.
-		m.retiring = append(m.retiring, retiredWorld{name: name, entry: entry})
-	}
-	for name := range m.pending {
-		if _, keep := want[name]; !keep {
-			delete(m.pending, name)
-		}
-	}
-
-	var firstErr error
-	for name, target := range want {
-		if _, live := m.entries[name]; live {
-			continue
-		}
-		if err := m.openLocked(target); err != nil {
-			if !m.resilient {
-				if firstErr == nil {
-					firstErr = fmt.Errorf("open world %q: %w", name, err)
-				}
-				continue
-			}
-			m.logger.Warn("world open failed; will retry", "world", name, "err", err)
-			m.pending[name] = *target
-			continue
-		}
-		delete(m.pending, name)
-	}
-	// Publish unconditionally: the diff loop already closed removed and
-	// replaced worlds, so returning early would keep routing to them.
-	publishErr := m.publishLocked()
-	if publishErr != nil && m.resilient {
-		// Dynamic mode degrades like a failed open: log, mark for the
-		// retry loop, keep the process alive.
-		m.logger.Error("world publish failed; will retry", "error", publishErr)
-		m.needsPublish = true
-		publishErr = nil
-	}
-	return errors.Join(firstErr, publishErr)
-}
-
-// openLocked opens one world: store, policy seed, runtime, and its
-// token-file watcher.
-func (m *worldManager) openLocked(world *knowledgeconfig.WorldConfig) error {
-	ctx, cancel := context.WithTimeout(context.Background(), worldAddTimeout)
-	defer cancel()
-
-	// Before the store: an unusable policy file must fail the open without
-	// leaving a half-made world behind.
-	seed, err := policySeed(world)
-	if err != nil {
-		return fmt.Errorf("policy seed: %w", err)
-	}
-	store, err := m.openStore(ctx, world, worldstore.Hooks{
-		Logger:     m.logger.With("world", world.Name),
-		Committed:  m.committed(world.ID()),
-		Compaction: m.compaction,
-	})
-	if err != nil {
-		return fmt.Errorf("store: %w", err)
-	}
-	runtime, err := m.serve(ctx, world, store, seed)
-	if err != nil {
-		if closeErr := store.Close(); closeErr != nil {
-			m.logger.Warn("world store close failed", "world", world.Name, "error", closeErr)
-		}
-		return err
-	}
-	for _, authority := range world.PinnedAuthorities() {
-		if err := m.certs.Covers(authority); err != nil {
-			m.logger.Warn("TLS certificate does not cover world authority; verifying clients will fail until the cert rotates",
-				"world", world.Name, "authority", authority, "err", err)
-		}
-	}
-	m.entries[world.Name] = &worldEntry{config: *world, runtime: runtime, store: store}
-	m.setPolicyStore(world.Name, store)
-	m.acquireTokenWatchLocked(tokenFiles(world))
-	m.logger.Info("world opened", "world", world.Name)
 	return nil
 }
 
@@ -331,15 +233,24 @@ func (m *worldManager) serve(
 	seed writepolicy.PolicySeed,
 ) (*worldruntime.Runtime, error) {
 	// Every world with a required policy holds a usable one before it serves
-	// a write. A provisioned world's broker replaces the marked seed with its
-	// own as version two.
+	// a write, seeded here and nowhere else.
 	if !world.Policy.Optional {
 		created, err := writepolicy.Ensure(ctx, store, seed)
 		if err != nil {
 			return nil, fmt.Errorf("policy: %w", err)
 		}
 		if created {
-			m.logger.Info("seeded the initial write policy", "world", world.Name, "path", publishpolicy.DocumentPath)
+			m.logger.Info("seeded the initial write policy", "world", world.Name, "path", publishpolicy.DocumentPath, "seed", world.Seed)
+		}
+	}
+	if world.Seed == knowledgeconfig.SeedMemory {
+		// A failed upgrade leaves the world on the usable policy it has.
+		upgraded, err := knowledgeseed.UpgradeToMemory(ctx, store)
+		if err != nil {
+			m.logger.Warn("memory policy upgrade failed; the world keeps its policy", "world", world.Name, "err", err)
+		}
+		if upgraded {
+			m.logger.Info("replaced the default policy seed with the memory policy", "world", world.Name)
 		}
 	}
 	if world.Name == m.floorWorld && !world.ReadOnly {
@@ -362,8 +273,9 @@ func (m *worldManager) serve(
 		TokensFile:       world.Auth.TokensFile,
 		StaticTokensFile: world.Auth.StaticTokensFile,
 		// Knowledge worlds are public-read, so a tokens Secret that lands
-		// after the open only delays writes; the watcher reloads it.
-		OptionalTokensFiles: true,
+		// after the open only delays writes; the watcher reloads it. A soul
+		// requires its file.
+		OptionalTokensFiles: !world.Auth.Required,
 		DisableTokenWatch:   true, // the coordinator owns reloads
 		ReadOnly:            world.ReadOnly,
 		RestrictGovernance:  world.Policy.Governance != knowledgeconfig.GovernanceOpen,
@@ -407,213 +319,12 @@ func policySeed(world *knowledgeconfig.WorldConfig) (writepolicy.PolicySeed, err
 	switch {
 	case world.Policy.Optional:
 		return writepolicy.PolicySeed{}, nil
+	case world.Seed == knowledgeconfig.SeedMemory:
+		return knowledgeseed.MemoryPolicySeed(), nil
 	case world.Policy.File == "":
 		return knowledgeseed.DefaultPolicySeed(), nil
 	}
 	return knowledgeseed.PolicySeedFromFile(world.Policy.File)
-}
-
-// dirWatch is one refcounted configwatch watcher covering every world
-// whose tokens file lives in the same directory.
-type dirWatch struct {
-	cancel context.CancelFunc
-	// files refcounts every token file in the directory across worlds; the
-	// watcher consults it per event, so a world added later is covered.
-	mu    sync.Mutex
-	files map[string]int
-}
-
-func (watch *dirWatch) add(files []string) {
-	watch.mu.Lock()
-	defer watch.mu.Unlock()
-	for _, file := range files {
-		watch.files[filepath.Clean(file)]++
-	}
-}
-
-// remove drops files and reports whether the directory has none left.
-func (watch *dirWatch) remove(files []string) bool {
-	watch.mu.Lock()
-	defer watch.mu.Unlock()
-	for _, file := range files {
-		clean := filepath.Clean(file)
-		watch.files[clean]--
-		if watch.files[clean] <= 0 {
-			delete(watch.files, clean)
-		}
-	}
-	return len(watch.files) == 0
-}
-
-func (watch *dirWatch) has(cleanPath string) bool {
-	watch.mu.Lock()
-	defer watch.mu.Unlock()
-	return watch.files[cleanPath] > 0
-}
-
-// tokenFiles lists a world's configured token files. The chart projects
-// both into one directory, which the watcher below relies on.
-func tokenFiles(world *knowledgeconfig.WorldConfig) []string {
-	return auth.SourceConfig{TokensFile: world.Auth.TokensFile, StaticTokensFile: world.Auth.StaticTokensFile}.Files()
-}
-
-// acquireTokenWatchLocked starts (or shares) the watcher for the token
-// files' parent directory. The reload is the global coordinator pass, so
-// one watcher per directory is exactly as fresh as one per world.
-func (m *worldManager) acquireTokenWatchLocked(files []string) {
-	if len(files) == 0 {
-		return
-	}
-	dir := filepath.Dir(files[0])
-	if watch, ok := m.tokenDirs[dir]; ok {
-		watch.add(files)
-		return
-	}
-	watchCtx, cancel := context.WithCancel(m.watchCtx)
-	watch := &dirWatch{cancel: cancel, files: make(map[string]int, len(files))}
-	watch.add(files)
-	m.tokenDirs[dir] = watch
-	watcher := &configwatch.Watcher{Targets: files[:1], Relevant: watch.has, Reload: m.tokens.Reload, Logger: m.logger}
-	m.group.Go(func() {
-		if err := watcher.Run(watchCtx); err != nil {
-			m.logger.Warn("token watcher exited", "dir", dir, "error", err)
-		}
-	})
-}
-
-func (m *worldManager) releaseTokenWatchLocked(files []string) {
-	if len(files) == 0 {
-		return
-	}
-	dir := filepath.Dir(files[0])
-	watch, ok := m.tokenDirs[dir]
-	if !ok {
-		return
-	}
-	if !watch.remove(files) {
-		return
-	}
-	// No join: waiting under m.mu would stall every reload behind a
-	// slow watcher exit; the shared group collects the goroutine and a
-	// briefly overlapping successor only adds an idempotent reload.
-	watch.cancel()
-	delete(m.tokenDirs, dir)
-}
-
-func (m *worldManager) closeEntryLocked(name string, entry *worldEntry) {
-	delete(m.entries, name)
-	m.setPolicyStore(name, nil)
-	m.retireEntryLocked(name, entry)
-}
-
-// retireEntryLocked closes an entry already removed from m.entries.
-func (m *worldManager) retireEntryLocked(name string, entry *worldEntry) {
-	if m.beforeRetire != nil {
-		m.beforeRetire(name)
-	}
-	m.releaseTokenWatchLocked(tokenFiles(&entry.config))
-	if err := entry.runtime.Close(); err != nil {
-		m.logger.Warn("world runtime close failed", "world", name, "error", err)
-	}
-}
-
-// publishLocked rebuilds the router and token-coordinator views from
-// the live entries. A failure keeps that surface's previous view and is
-// returned to the caller; every apply re-attempts, so it self-heals.
-func (m *worldManager) publishLocked() error {
-	mappings := make([]snirouter.Mapping, 0, len(m.entries))
-	worlds := make([]tokenWorld, 0, len(m.entries))
-	for name, entry := range m.entries {
-		for _, authority := range entry.config.Authorities {
-			mappings = append(mappings, snirouter.Mapping{Authority: authority, Endpoint: entry.runtime.Endpoint(authority)})
-		}
-		// A world with no token files has no store to coordinate: reads are
-		// public and writes come through the identity grant.
-		if files := &entry.config.Auth; files.TokensFile != "" || files.StaticTokensFile != "" {
-			worlds = append(worlds, tokenWorld{name: name, runtime: entry.runtime})
-		}
-	}
-	// Prevalidate tokens, then let SwapWith pair routing with the token
-	// commit (it rolls routing back if the commit loses the tiny
-	// validate-to-commit race).
-	if err := m.tokens.ValidateWorlds(worlds); err != nil {
-		return err
-	}
-	if err := m.router.SwapWith(mappings, func() error {
-		return m.tokens.SetWorlds(worlds)
-	}); err != nil {
-		return fmt.Errorf("publish world views: %w", err)
-	}
-	for _, entry := range m.entries {
-		entry.published = true
-	}
-	// The router left them only now; a failed publish keeps them serving.
-	for _, retired := range m.retiring {
-		m.retireEntryLocked(retired.name, retired.entry)
-	}
-	m.retiring = nil
-	return nil
-}
-
-// retryLoop re-attempts pending world opens until ctx ends.
-func (m *worldManager) retryLoop(ctx context.Context) {
-	ticker := time.NewTicker(worldRetryInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			m.retryPending()
-		}
-	}
-}
-
-func (m *worldManager) retryPending() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.pending) == 0 && !m.needsPublish {
-		return
-	}
-	recovered := m.needsPublish
-	for name := range m.pending {
-		world := m.pending[name]
-		if err := m.openLocked(&world); err != nil {
-			m.logger.Warn("world open retry failed", "world", name, "err", err)
-			continue
-		}
-		delete(m.pending, name)
-		recovered = true
-	}
-	if recovered {
-		if err := m.reloadStagedTokensLocked(); err != nil {
-			m.logger.Error("staged token reload failed; publish deferred", "error", err)
-			m.needsPublish = true
-			return
-		}
-		if err := m.publishLocked(); err != nil {
-			m.logger.Error("publish after world retry failed", "error", err)
-			m.needsPublish = true
-			return
-		}
-		m.needsPublish = false
-	}
-}
-
-// reloadStagedTokensLocked refreshes runtimes no publish has carried yet; the
-// coordinator reloads published worlds only. A failure blocks the publish:
-// going live with the old snapshot could serve replaced credentials.
-func (m *worldManager) reloadStagedTokensLocked() error {
-	var errs []error
-	for name, entry := range m.entries {
-		if entry.published {
-			continue
-		}
-		if err := entry.runtime.ReloadTokens(); err != nil {
-			errs = append(errs, fmt.Errorf("world %q: %w", name, err))
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // Router exposes the dynamic router (selector + handshake hook source).
@@ -641,15 +352,58 @@ func (m *worldManager) Drain() {
 	}
 }
 
-// Close closes every live world through the one teardown path.
+// Close closes every live world through the one teardown path and refuses
+// any world set applied afterwards. The caller ends watchCtx first, which
+// ends an open still in flight.
 func (m *worldManager) Close() {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+	m.closed = true
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for name, entry := range m.entries {
-		m.closeEntryLocked(name, entry)
+		delete(m.entries, name)
+		m.setPolicyStore(name, nil)
+		m.retireEntryLocked(name, entry)
 	}
 	for _, retired := range m.retiring {
 		m.retireEntryLocked(retired.name, retired.entry)
 	}
 	m.retiring = nil
+}
+
+// noteFragment logs a generated fragment's skipped keys once per change, so
+// a rollout that mixes builds says so without repeating it on every reload.
+func (m *worldManager) noteFragment(warning string) {
+	m.mu.Lock()
+	changed := warning != m.fragmentWarning
+	m.fragmentWarning = warning
+	m.mu.Unlock()
+	if changed && warning != "" {
+		m.logger.Warn("worlds fragment carries keys this build does not know; they are skipped", "detail", warning)
+	}
+}
+
+// requireGate installs the broker's rule and refuses it when a live world
+// already breaks it: a private world must never have been served anonymously.
+func (m *worldManager) requireGate(must func(authority string) bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mustGate = must
+	var errs []error
+	for name, entry := range m.entries {
+		if m.ungatedLocked(&entry.config) {
+			errs = append(errs, fmt.Errorf("world %q %w", name, errUngated))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// errUngated is a world the broker serves as private that the capability
+// listener would answer anonymously.
+var errUngated = errors.New("must be gated: the broker serves it as a private world; set gated: true on it")
+
+// ungatedLocked reports whether world breaks the broker's rule.
+func (m *worldManager) ungatedLocked(world *knowledgeconfig.WorldConfig) bool {
+	return m.mustGate != nil && !world.Gated && slices.ContainsFunc(world.Authorities, m.mustGate)
 }

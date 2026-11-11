@@ -167,11 +167,11 @@ func knowledgeBackend() *fetchtest.Client {
 func TestPromoteDryRunChecksPolicyAndDedups(t *testing.T) {
 	backend := knowledgeBackend()
 	tools := newTools(t, backend, writingHooks())
-	draft := marktools.PromoteArgs{URL: "/docs/retry-rules.md", Phase: "dry_run", Body: promoteSource, Metadata: map[string]string{"tags": "retry", "importance": "0.7", "retention": "1000000", "pinned": "true"}}
+	draft := marktools.PromoteArgs{URL: "/docs/retry-rules.md", Phase: "dry_run", Body: promoteSource, Metadata: map[string]string{"tags": "retry", "importance": "0.7", "revision": "1000000", "pinned": "true"}}
 	got := tools.Promote(t.Context(), draft)
 	// Dedup finds the same-title row; the packet is over the values the write carries.
 	draft.Phase, draft.Packet = "apply", packetOf(t, got)
-	if applied := tools.Promote(t.Context(), draft); applied.IsError || backend.PublishCalls[0].Metadata["retention"] != "1000000" || backend.PublishCalls[0].Metadata["pinned"] != "true" || backend.PublishCalls[0].Metadata["importance"] != "0.7" {
+	if applied := tools.Promote(t.Context(), draft); applied.IsError || backend.PublishCalls[0].Metadata["revision"] != "1000000" || backend.PublishCalls[0].Metadata["pinned"] != "true" || backend.PublishCalls[0].Metadata["importance"] != "0.7" {
 		t.Errorf("numbers = %+v (%s)", backend.PublishCalls, applied.Text)
 	}
 	backend.PublishCalls, draft.Phase, draft.Packet = nil, "dry_run", ""
@@ -207,6 +207,21 @@ func TestPromoteDryRunChecksPolicyAndDedups(t *testing.T) {
 	}
 	if got := tools.Promote(t.Context(), draft); !got.IsError || !strings.HasPrefix(got.Text, "status: incomplete-dedup\n") {
 		t.Errorf("lookup failure = %+v", got)
+	}
+}
+
+// Retention prunes history on the write that carries it; a promotion is not
+// the human-confirmed publish that may, in either phase.
+func TestPromoteRefusesRetention(t *testing.T) {
+	backend := knowledgeBackend()
+	tools := newTools(t, backend, writingHooks())
+	draft := marktools.PromoteArgs{URL: "/docs/retry-rules.md", Phase: "dry_run", Body: promoteSource, Metadata: map[string]string{"tags": "retry,domain:eng", "retention": "1"}}
+	for _, phase := range []string{"dry_run", "apply"} {
+		draft.Phase, draft.Packet = phase, "any"
+		got := tools.Promote(t.Context(), draft)
+		if !got.IsError || !strings.Contains(got.Text, phase+" refused: metadata.retention") || len(backend.PublishCalls) != 0 {
+			t.Errorf("%s with retention = %+v, publishes %d", phase, got, len(backend.PublishCalls))
+		}
 	}
 }
 

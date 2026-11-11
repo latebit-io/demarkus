@@ -223,3 +223,30 @@ func TestPublishDocumentTellsAConflictFromItsOwnWrite(t *testing.T) {
 		t.Fatalf("another body over a stale version: %v, want ErrConflict", err)
 	}
 }
+
+// A failed reconcile read must not hide why the publish needed one.
+func TestPublishDocumentKeepsTheCauseWhenTheReconcileReadFails(t *testing.T) {
+	down := errors.New("store down")
+	for name, tc := range map[string]struct {
+		publish func() (protocol.Response, error)
+		want    error
+	}{
+		"conflict": {func() (protocol.Response, error) { return protocol.Response{Status: protocol.StatusConflict}, nil }, generation.ErrConflict},
+		"lost answer": {func() (protocol.Response, error) {
+			return protocol.Response{}, fmt.Errorf("read response: %w", protocol.ErrOutcomeUnknown)
+		}, protocol.ErrOutcomeUnknown},
+	} {
+		t.Run(name, func(t *testing.T) {
+			io := generation.IO{
+				Fetch: func(context.Context, string) (protocol.Response, error) { return protocol.Response{}, down },
+				Publish: func(context.Context, string, string, int) (protocol.Response, error) {
+					return tc.publish()
+				},
+			}
+			_, _, err := io.PublishDocument(t.Context(), "/doc.md", "one", 0)
+			if !errors.Is(err, tc.want) || !errors.Is(err, down) {
+				t.Fatalf("err = %v, want it to wrap %v and the read failure", err, tc.want)
+			}
+		})
+	}
+}

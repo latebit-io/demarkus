@@ -66,12 +66,14 @@ type Options struct {
 }
 
 // Finding is one report line: the document, what is wrong, and the fix.
-// Fixable marks a finding the report's Plan settles.
+// FixKind marks a fix one of the surface's commands settles for Path; Fix is
+// then what to add to it, never a command. Fixable: the report's Plan settles it.
 type Finding struct {
 	Check   string `json:"check"`
 	Path    string `json:"path"`
 	Detail  string `json:"detail"`
 	Fix     string `json:"fix,omitempty"`
+	FixKind string `json:"fix_kind,omitempty"`
 	Fixable bool   `json:"fixable,omitempty"`
 }
 
@@ -90,6 +92,8 @@ type Report struct {
 	Promoted  int  `json:"promoted,omitempty"`
 	// Plan is what apply would write; a surface shows it, never the JSON.
 	Plan *Plan `json:"-"`
+	// Commands is how the showing surface names its commands; zero names none.
+	Commands Commands `json:"-"`
 }
 
 // document is one inventory entry after its fetch.
@@ -209,6 +213,12 @@ func (a *audit) note(format string, args ...any) {
 func (a *audit) add(check, docPath, detail, fix string) int {
 	a.findings = append(a.findings, Finding{Check: check, Path: docPath, Detail: detail, Fix: fix})
 	return len(a.findings) - 1
+}
+
+// fixBy marks finding i as settled by the surface's command of that kind.
+func (a *audit) fixBy(i int, kind string) int {
+	a.findings[i].FixKind = kind
+	return i
 }
 
 // fetchAll reads every inventory document once, within the body budget.
