@@ -341,3 +341,22 @@ func TestProcessStartIgnoresTheTimeZone(t *testing.T) {
 		t.Errorf("start %v is %v from now: not this test process's", started, d)
 	}
 }
+
+// A lock released during the final sleep is free: the last look takes it
+// instead of reporting a timeout.
+func TestWithLockTakesALockReleasedDuringTheLastSleep(t *testing.T) {
+	lock := stampLock(t, os.Getpid(), own(t))
+	released := make(chan error, 1)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		released <- os.RemoveAll(lock)
+	}()
+	ran := false
+	err := WithLock(lock, 1, 200*time.Millisecond, func() error { ran = true; return nil })
+	if relErr := <-released; relErr != nil {
+		t.Fatal(relErr)
+	}
+	if err != nil || !ran {
+		t.Fatalf("a lock released during the last sleep was not taken: ran=%v err=%v", ran, err)
+	}
+}

@@ -45,40 +45,44 @@ func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error
 	// probes the holder's start time once, not once per attempt.
 	var proven string
 	for range attempts {
-		acquired, err := tryAcquire(lockDir)
+		acquired, err := tryOrReclaim(lockDir, &proven)
 		if err != nil {
 			return err
 		}
 		if acquired {
 			return runLocked(lockDir, fn)
 		}
-		// Reclaim when the recorded owner is gone, or when the stamp is
-		// missing entirely (legacy pre-staging crash left an unstamped dir;
-		// staged acquisition can no longer produce one).
-		held, err := heldBy(lockDir, &proven)
+		time.Sleep(sleep)
+	}
+	// One last look, with no cache: the lock may have been released during
+	// the final sleep, or its proven owner's PID gone to another process.
+	// Two tries, since a reclaim only frees the lock for the next one.
+	var fresh string
+	for range 2 {
+		acquired, err := tryOrReclaim(lockDir, &fresh)
 		if err != nil {
 			return err
 		}
-		if !held {
-			if err := reclaimStale(lockDir); err != nil {
-				return err
-			}
+		if acquired {
+			return runLocked(lockDir, fn)
 		}
-		time.Sleep(sleep)
 	}
-	// The owner proven early in the wait may have died since and its PID
-	// gone to another process: look once more without the cache.
-	var fresh string
-	if held, err := heldBy(lockDir, &fresh); err != nil || held {
-		return errors.Join(err, fmt.Errorf("could not acquire %s (held by another process?)", lockDir))
+	return fmt.Errorf("could not acquire %s (held by another process?)", lockDir)
+}
+
+// tryOrReclaim takes the lock when it is free. When it is not and its
+// recorded owner is gone, or it has no stamp at all (a legacy crash left
+// one), the stale lock is moved aside for the next try.
+func tryOrReclaim(lockDir string, proven *string) (bool, error) {
+	acquired, err := tryAcquire(lockDir)
+	if err != nil || acquired {
+		return acquired, err
 	}
-	if err := reclaimStale(lockDir); err != nil {
-		return err
+	held, err := heldBy(lockDir, proven)
+	if err != nil || held {
+		return false, err
 	}
-	if acquired, err := tryAcquire(lockDir); err != nil || !acquired {
-		return errors.Join(err, fmt.Errorf("could not acquire %s (held by another process?)", lockDir))
-	}
-	return runLocked(lockDir, fn)
+	return false, reclaimStale(lockDir)
 }
 
 // tryAcquire stages a pre-stamped dir and renames it into place: no unstamped
