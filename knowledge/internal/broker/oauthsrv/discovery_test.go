@@ -436,3 +436,89 @@ func serveAndDecodeErr(d *Discovery) (map[string]any, error) {
 	}
 	return doc, nil
 }
+
+// An IdP outage must cost one upstream fetch per backoff, not one per
+// request, and no request may queue behind another's fetch.
+func TestDiscoveryBacksOffAfterAFailedRefresh(t *testing.T) {
+	idp := newFakeDiscoveryIdP(t)
+	d, clk := newTestDiscovery(t, idp, time.Minute)
+	idp.status.Store(http.StatusServiceUnavailable)
+	clk.Advance(time.Minute + time.Second)
+	for range 20 {
+		_ = serveAndDecode(t, d)
+	}
+	if got := idp.hitCount(); got != 2 {
+		t.Fatalf("20 requests during an outage: hits = %d, want 2 (initial + one failed refresh)", got)
+	}
+	clk.Advance(discoveryFailureBackoff + time.Second)
+	_ = serveAndDecode(t, d)
+	if got := idp.hitCount(); got != 3 {
+		t.Fatalf("after the backoff: hits = %d, want 3", got)
+	}
+}
+
+// While one request refreshes against a slow IdP, the others are answered
+// from the cache at once.
+func TestDiscoveryServesStaleWhileAnotherRequestRefreshes(t *testing.T) {
+	release := make(chan struct{})
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) > 1 {
+			<-release
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"issuer":"https://idp.example.com"}`))
+	}))
+	t.Cleanup(upstream.Close)
+	t.Cleanup(func() { close(release) })
+	clk := brokertest.NewFakeClock(time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC))
+	d, err := NewDiscovery(context.Background(), DiscoveryConfig{BrokerURL: "https://broker.example.com", IdPIssuer: upstream.URL, TTL: time.Minute, Clock: clk.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Minute + time.Second)
+
+	refreshing := make(chan struct{})
+	go func() {
+		defer close(refreshing)
+		_, _ = serveAndDecodeErr(d)
+	}()
+	for hits.Load() < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	served := make(chan error, 1)
+	go func() {
+		_, err := serveAndDecodeErr(d)
+		served <- err
+	}()
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a request waited behind another request's upstream fetch")
+	}
+	release <- struct{}{}
+	<-refreshing
+}
+
+// A refresh cut short because its caller left is not an IdP failure: it
+// must not start a backoff.
+func TestDiscoveryCallerLeavingDoesNotBackOff(t *testing.T) {
+	idp := newFakeDiscoveryIdP(t)
+	d, clk := newTestDiscovery(t, idp, time.Minute)
+	clk.Advance(time.Minute + time.Second)
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	if body := d.get(gone); len(body) == 0 {
+		t.Fatal("no stale body for a caller that left")
+	}
+	_ = serveAndDecode(t, d)
+	if doc := serveAndDecode(t, d); doc["issuer"] != "https://broker.example.com" {
+		t.Fatalf("issuer = %v", doc["issuer"])
+	}
+	if _, expired := d.cached(); expired {
+		t.Fatal("the next request did not refresh after a caller left mid-refresh")
+	}
+}

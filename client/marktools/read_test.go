@@ -118,7 +118,7 @@ func TestLookup(t *testing.T) {
 	if len(backend.LookupCalls) != 1 || backend.LookupCalls[0] != wantReq {
 		t.Fatalf("calls = %+v, want %+v", backend.LookupCalls, wantReq)
 	}
-	want := mcpfmt.Format(fetchtest.Lookup("alpha", "/docs/", "", rows...), args.Render) + mcpfmt.Note(fetch.CatalogFallbackNote)
+	want := mcpfmt.Format(fetchtest.Lookup("alpha", "/docs/", "", rows...), args.Render) + mcpfmt.Note(mcpfmt.CatalogFallbackNote)
 	if got.IsError || got.Text != want {
 		t.Errorf("Lookup = %q\nwant     %q", got.Text, want)
 	}

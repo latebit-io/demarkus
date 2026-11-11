@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -30,17 +29,6 @@ type Config struct {
 	WorldDialer  WorldDialerConfig  `yaml:"worldDialer"`
 	Provisioning ProvisioningConfig `yaml:"provisioning"`
 	Federation   FederationConfig   `yaml:"federation"`
-
-	// registry is the live world set, built from Worlds on first use.
-	registryOnce sync.Once
-	registry     *WorldRegistry
-}
-
-// Registry is the live world set of both profiles: Worlds as loaded, plus
-// what provisioning adds. Each gateway reads its own View of it.
-func (c *Config) Registry() *WorldRegistry {
-	c.registryOnce.Do(func() { c.registry = newWorldRegistry(c.Worlds) })
-	return c.registry
 }
 
 // Gateway profiles: the knowledge surface (org open reads, per world Allow
@@ -158,6 +146,10 @@ type ServerConfig struct {
 	RefreshTokenTTL time.Duration `yaml:"refreshTokenTTL"`
 	// IDTokenTTL is the lifetime of a broker signed id_token. Default 15m.
 	IDTokenTTL time.Duration `yaml:"idTokenTTL"`
+	// MaxLoginAge is how long a login may keep refreshing on the claims the
+	// IdP gave at sign-in; past it the refresh is refused and the user signs
+	// in again, so a change at the IdP takes effect. Zero, the default, is off.
+	MaxLoginAge time.Duration `yaml:"maxLoginAge"`
 	// Realm names the product in the gateways' WWW-Authenticate challenge;
 	// blank lets each profile name itself.
 	Realm string `yaml:"realm"`

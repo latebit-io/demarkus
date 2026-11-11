@@ -19,12 +19,12 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
+	"github.com/latebit-io/demarkus/server/store"
 )
 
 // exitNotSynced is the status for a publish that is current but whose
-// directory sync failed.
+// directory sync, or notice to a running server, failed.
 const exitNotSynced = 2
 
 func main() {
@@ -36,7 +36,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Publish a document directly to the versioned store on disk.\n")
 		fmt.Fprintf(os.Stderr, "Reads from stdin if -body is not provided.\n\n")
 		fmt.Fprintf(os.Stderr, "Exit status: 0 published or unchanged, 1 failed, %d published but the\n", exitNotSynced)
-		fmt.Fprintf(os.Stderr, "directory sync failed (the version is current; its durability is unconfirmed).\n\n")
+		fmt.Fprintf(os.Stderr, "directory sync or the notice to a running server failed (the version is current).\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -95,9 +95,15 @@ func main() {
 
 	s := store.New(*root)
 	doc, err := s.Write(*path, content, nil)
+	if storefmt.Committed(err) {
+		// A server holding the root open indexes again on its next read.
+		if markErr := s.MarkChanged(); markErr != nil {
+			err = errors.Join(err, fmt.Errorf("%w: a running server serves the old index until restarted: %w", storefmt.ErrCommittedNotSynced, markErr))
+		}
+	}
 	if errors.Is(err, storefmt.ErrCommittedNotSynced) {
-		// The version is current; only its directory sync failed, which
-		// the exit status reports so scripts can tell.
+		// The version is current; only its directory sync or the server
+		// notice failed, which the exit status reports so scripts can tell.
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		fmt.Fprintf(os.Stderr, "published %s v%d\n", *path, doc.Version)
 		os.Exit(exitNotSynced)

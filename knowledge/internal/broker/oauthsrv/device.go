@@ -118,7 +118,9 @@ func (s *Server) deviceAuthorize(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, deviceTokenError{Error: "invalid_target"})
 		return
 	}
-	deviceCode, userCode, expiresAt, err := s.deviceStore.Authorize(r.Context(), resource)
+	// The fingerprint is the limiter's key, so a /64 shares one allowance.
+	origin := hashToken(s.clientIP(r))[:16]
+	deviceCode, userCode, expiresAt, err := s.deviceStore.Authorize(r.Context(), deviceRequest{Resource: resource, Origin: origin})
 	if errors.Is(err, errGrantStoreFull) {
 		s.log.WarnContext(r.Context(), "broker: device authorize refused", "err", err)
 		w.Header().Set("Retry-After", "60")

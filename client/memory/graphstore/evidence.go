@@ -1,7 +1,6 @@
 package graphstore
 
 import (
-	"maps"
 	"slices"
 
 	"github.com/latebit-io/demarkus/client/links"
@@ -48,12 +47,18 @@ func (s *Store) recordEvidence(node *graph.Node, occurrences []graph.Occurrence)
 	s.evidence[node.URL] = sourceEvidence{Revision: observation.Revision, Etag: observation.Etag, Occurrences: slices.Clone(occurrences)}
 }
 
-// pruneEvidenceLocked drops evidence whose local record moved on or is gone.
-func (s *Store) pruneEvidenceLocked() {
-	maps.DeleteFunc(s.evidence, func(url string, e sourceEvidence) bool {
-		accepted, exists := s.localSources[url]
-		return !exists || accepted.Node.Observation.Revision != e.Revision || accepted.Node.Observation.Etag != e.Etag
-	})
+// pruneEvidenceLocked drops the evidence of each url whose local record
+// moved on or is gone; only a merged source can have.
+func (s *Store) pruneEvidenceLocked(urls []string) {
+	for _, url := range urls {
+		e, held := s.evidence[url]
+		if !held {
+			continue
+		}
+		if accepted, exists := s.localSources[url]; !exists || accepted.Node.Observation.Revision != e.Revision || accepted.Node.Observation.Etag != e.Etag {
+			delete(s.evidence, url)
+		}
+	}
 }
 
 // edgeOccurrencesLocked is the current evidence behind one selected edge.

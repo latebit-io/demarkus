@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
+	protocolstore "github.com/latebit-io/demarkus/server/store"
 )
 
 // journalName is the change journal beside the documents: a dotfile, so
@@ -118,6 +118,15 @@ func (j *journal) append(ev changefeed.Event, fingerprint string) {
 	}
 	if err := j.rewrite(fingerprint, events); err != nil {
 		j.lose("change journal rewrite failed", err)
+	}
+}
+
+// forget makes the next open start a new epoch unless a commit follows: a
+// sequence was skipped for a change no event names, and a restart that kept
+// the epoch would hand that sequence to the next commit.
+func (j *journal) forget() {
+	if err := j.rewrite("", nil); err != nil {
+		j.lose("change journal not reset after an outside write", err)
 	}
 }
 

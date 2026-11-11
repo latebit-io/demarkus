@@ -15,6 +15,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
@@ -40,8 +41,8 @@ var policyMetadata = map[string]string{
 // caller can neither mutate the embedded body nor share its metadata map.
 func DefaultPolicySeed() writepolicy.PolicySeed {
 	metadata := maps.Clone(policyMetadata)
-	// Only the default is a placeholder a broker may replace; an operator's
-	// file is curated and must read as such.
+	// Only the default is a placeholder UpgradeToMemory may replace; an
+	// operator's file is curated and must read as such.
 	metadata["agent"] = publishpolicy.SeedAgent
 	return writepolicy.PolicySeed{Body: bytes.Clone(policyBody), Metadata: metadata}
 }
@@ -59,6 +60,56 @@ func PolicySeedFromFile(name string) (writepolicy.PolicySeed, error) {
 		return writepolicy.PolicySeed{}, fmt.Errorf("policy file %q: %w", name, err)
 	}
 	return seed, nil
+}
+
+// memoryPolicyBody is a personal memory's write policy.
+//
+//go:embed memory_policy.md
+var memoryPolicyBody []byte
+
+// MemorySeedAgent marks the tenant policy as seeded, not written by its
+// owner; never SeedAgent, which marks the knowledge default UpgradeToMemory
+// replaces.
+const MemorySeedAgent = "demarkus-memory-broker"
+
+// MemoryPolicySeed is the policy a personal memory world is seeded with.
+func MemoryPolicySeed() writepolicy.PolicySeed {
+	return writepolicy.PolicySeed{Body: bytes.Clone(memoryPolicyBody), Metadata: map[string]string{
+		"agent": MemorySeedAgent, "tags": "policy,write-policy,style,metadata",
+		"importance": "0.7", "type": "Reference",
+	}}
+}
+
+// policyStore is what the upgrade reads and writes a world's policy through.
+type policyStore interface {
+	backend.Store
+	backend.CurrentReader
+}
+
+// UpgradeToMemory replaces a memory world's policy that is still the default
+// seed at version one, and reports whether it did; any other policy stays.
+// Delete it once every deployment has opened its tenants on this build.
+func UpgradeToMemory(ctx context.Context, store policyStore) (bool, error) {
+	current, err := store.ReadCurrent(ctx, publishpolicy.DocumentPath)
+	if err != nil {
+		if errors.Is(err, backend.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read policy: %w", err)
+	}
+	if current.Archived || current.Version != 1 || current.Metadata["agent"] != publishpolicy.SeedAgent {
+		return false, nil
+	}
+	seed := MemoryPolicySeed()
+	request := backend.WriteRequest{Path: publishpolicy.DocumentPath, ExpectedVersion: 1, Content: seed.Body, Metadata: seed.Metadata}
+	if _, err := store.Publish(ctx, request); err != nil {
+		// Another replica upgraded it first, or its owner just wrote one.
+		if errors.Is(err, storefmt.ErrConflict) {
+			return false, nil
+		}
+		return false, fmt.Errorf("upgrade policy: %w", err)
+	}
+	return true, nil
 }
 
 func readPolicyFile(name string) (_ []byte, err error) {

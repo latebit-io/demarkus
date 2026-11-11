@@ -147,6 +147,10 @@ func (w *world) walkProblem(p *listwalk.Problem) error {
 // or the watch fails.
 func (w *world) follow(ctx context.Context, watch *fetch.Watch) error {
 	for {
+		// A gate closes on an idle world too: asked at every wake.
+		if err := w.refused(w.name); err != nil {
+			return err
+		}
 		at, due := w.due()
 		if due && !time.Now().Before(at) {
 			if err := w.checkpoint(ctx, watch.Cursor()); err != nil {
@@ -154,18 +158,18 @@ func (w *world) follow(ctx context.Context, watch *fetch.Watch) error {
 				case ctx.Err() != nil:
 					return ctx.Err()
 				case errors.Is(err, generation.ErrConflict):
-					// Another leader moved the manifest: start over from its
-					// checkpoint, never write over it.
+					// Another leader moved the manifest: start over, never write.
 					return err
 				}
 				w.log.Warn("federation: checkpoint failed", "err", err)
 			}
 			continue
 		}
-		wait, cancel := ctx, context.CancelFunc(func() {})
-		if due {
-			wait, cancel = context.WithDeadline(ctx, at)
+		wake := time.Now().Add(w.gatePoll)
+		if due && at.Before(wake) {
+			wake = at
 		}
+		wait, cancel := context.WithDeadline(ctx, wake)
 		notice, err := watch.Next(wait)
 		cancel()
 		switch {

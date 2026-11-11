@@ -184,6 +184,21 @@ func TestEditCarriesTheDocumentsMetadata(t *testing.T) {
 	}
 }
 
+// An edit is not the write that declared retention, nor the agent that wrote
+// the version before it: neither goes back with the republish.
+func TestEditDropsRetentionAndIdentity(t *testing.T) {
+	fetched := protocol.Response{Status: protocol.StatusOK, Body: "old", Metadata: map[string]string{
+		"version": "3", "tags": "graph", "retention": "2", protocol.MetaAgent: "claude-code", protocol.MetaUser: "someone",
+	}}
+	edited, err := editedFrom(fetched, "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(edited.meta) != "map[tags:graph]" {
+		t.Errorf("carried metadata = %v, want the tags alone", edited.meta)
+	}
+}
+
 func TestARefusedPublishPrintsTheServersReason(t *testing.T) {
 	const why = "\n# Bad Request\n\npolicy: missing-tags\n"
 	backend := &fetchtest.Client{PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
@@ -216,5 +231,47 @@ func TestArchiveExitsZero(t *testing.T) {
 	// The archived head carries no version, so the outcome invents none.
 	if version, claimed := got.metadata["version"]; claimed {
 		t.Errorf("version = %q, want none claimed", version)
+	}
+}
+
+// The CLI lands a write as every surface does: a first version is linked
+// from its hub, style findings are notes, and an archive drops the bullets
+// that only linked the document.
+func TestCLIWritesMaintainTheHub(t *testing.T) {
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"host:6309/index.md": fetchtest.Head("# Store\n\n- [Other](/other.md)\n", 1, map[string]string{"tags": "index"}),
+	}}
+	created, err := runWrite(t.Context(), &cliWrite{verb: protocol.VerbPublish, doc: cliDoc(backend), body: "# Doc\n\nWhat it is — briefly.\n", expectedVersion: new(0), meta: map[string]string{"tags": "a"}})
+	if err != nil || created.code != 0 {
+		t.Fatalf("publish = %+v, %v", created, err)
+	}
+	if len(created.notes) != 2 || created.notes[0] != "hub /index.md: bullet added" || !strings.HasPrefix(created.notes[1], "note: style problems in this publish: ") {
+		t.Errorf("notes = %q, want the hub edit then the style findings", created.notes)
+	}
+	hub := backend.PublishCall("/index.md")
+	if hub == nil || !strings.Contains(hub.Body, "](/doc.md)") || hub.Token != "tok" {
+		t.Fatalf("hub publish = %+v, want a bullet for /doc.md under the CLI's token", hub)
+	}
+
+	archived, err := runWrite(t.Context(), &cliWrite{verb: protocol.VerbArchive, doc: cliDoc(backend)})
+	if err != nil || archived.code != 0 {
+		t.Fatalf("archive = %+v, %v", archived, err)
+	}
+	if len(archived.notes) != 1 || archived.notes[0] != "hub /index.md: 1 bullet(s) dropped" {
+		t.Errorf("archive notes = %q, want the hub's dropped bullet", archived.notes)
+	}
+	if last := backend.PublishCalls[len(backend.PublishCalls)-1]; last.Path != "/index.md" || strings.Contains(last.Body, "/doc.md") {
+		t.Errorf("hub after the archive = %+v, want the bullet gone", last)
+	}
+}
+
+// -force is the raw verb: it overwrites whatever is there and touches no hub.
+func TestForcedPublishIsTheVerbAlone(t *testing.T) {
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"host:6309/index.md": fetchtest.Head("# Store\n", 1, nil),
+	}}
+	forced, err := runWrite(t.Context(), &cliWrite{verb: protocol.VerbPublish, doc: cliDoc(backend), body: "# Doc\n", force: true})
+	if err != nil || len(forced.notes) != 0 || len(backend.PublishCalls) != 1 {
+		t.Errorf("forced = %+v, %v; publishes %d, want the one write and no notes", forced, err, len(backend.PublishCalls))
 	}
 }

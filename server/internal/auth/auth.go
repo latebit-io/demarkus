@@ -47,6 +47,9 @@ type TokenStore struct {
 	tokens    map[string]Token // keyed by hash for fast lookup
 	readPaths []string         // pre-computed path patterns from tokens with "read" op
 	now       func() time.Time // injectable clock for testing
+	// held is each source file's read patterns as this store was loaded;
+	// a Source carries a vanished file's into the next store from here.
+	held map[string][]string
 }
 
 // Sentinel errors for authorization results.
@@ -94,6 +97,16 @@ func loadTokenFile(filePath string) (map[string]Token, error) {
 // NewTokenStore creates a TokenStore from an in-memory token map keyed by hash.
 func NewTokenStore(tokens map[string]Token) *TokenStore {
 	return &TokenStore{tokens: tokens, readPaths: collectReadPaths(tokens), now: time.Now}
+}
+
+// newSourcedStore is the store a Source loads: held is each file's read
+// patterns, a vanished file's included, and what the store protects.
+func newSourcedStore(tokens map[string]Token, held map[string][]string) *TokenStore {
+	store := &TokenStore{tokens: tokens, now: time.Now, held: held}
+	for _, patterns := range held {
+		store.readPaths = append(store.readPaths, patterns...)
+	}
+	return store
 }
 
 // Hashes returns the token hashes in sorted order.

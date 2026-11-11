@@ -3,8 +3,7 @@ package marktools
 import (
 	"context"
 
-	"github.com/latebit-io/demarkus/client/mcpfmt"
-	"github.com/latebit-io/demarkus/client/memory/gate"
+	"github.com/latebit-io/demarkus/client/memory/landing"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
@@ -16,24 +15,14 @@ type StyleGate struct {
 	Guide      string // what a finding cites; "" cites gate.Baseline
 }
 
-// styleGate runs the rules on a publish body. refused is the tool's answer
-// when the gate blocks; otherwise note is what to append to a landed write.
-func (t *Tools) styleGate(ctx context.Context, target Target, body, description string) (note string, refused *Result) {
-	problems := gate.Problems(target.Path, body, description)
-	if len(problems) == 0 {
-		return "", nil
+// stylePolicy asks the surface how it holds a publish to target to the
+// style rules; nil when it has no say, which warns and cites the baseline.
+func (t *Tools) stylePolicy(ctx context.Context, target Target) func() landing.Style {
+	if t.hooks.Style == nil {
+		return nil
 	}
-	policy := StyleGate{Strictness: publishpolicy.Warn}
-	if t.hooks.Style != nil {
-		policy = t.hooks.Style(ctx, target)
+	return func() landing.Style {
+		policy := t.hooks.Style(ctx, target)
+		return landing.Style{Strictness: policy.Strictness, Guide: policy.Guide}
 	}
-	if policy.Guide == "" {
-		policy.Guide = gate.Baseline
-	}
-	findings := gate.Findings(problems, policy.Guide)
-	if policy.Strictness == publishpolicy.Block {
-		bad := failure("publish refused, style problems: %s Fix the body and republish.", findings)
-		return "", &bad
-	}
-	return mcpfmt.Note("style problems in this publish: " + findings), nil
 }

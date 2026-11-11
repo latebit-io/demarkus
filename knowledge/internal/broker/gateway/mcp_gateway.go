@@ -11,7 +11,8 @@ import (
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
-	"github.com/latebit-io/demarkus/knowledge/internal/broker/storage"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/httpauth"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -36,7 +37,7 @@ type Deps struct {
 	// Governors is the config's list, handed to core.WriteGrant.
 	Governors []string
 	// Provisioner creates tenant worlds on first arrival; nil in static mode.
-	Provisioner *storage.Provisioner
+	Provisioner TenantProvisioner
 	// Hub is the world holding the federation checkpoints of the Federated
 	// worlds, whose graphs seed from them; the rest seed from their own.
 	Hub       string
@@ -50,9 +51,15 @@ type Deps struct {
 	Watches WorldWatcher
 }
 
+// TenantProvisioner converges the caller's world on first arrival;
+// *storage.Provisioner is the production one. Its refusals are storage's.
+type TenantProvisioner interface {
+	EnsureTenant(ctx context.Context, claims *core.Claims) (core.WorldConfig, error)
+}
+
 // DepsFor builds one profile's gateway deps from what the management API
-// shares. Run and the fixtures both build deps here.
-func DepsFor(cfg *core.Config, profile *Profile, shared core.SharedDeps, provisioner *storage.Provisioner) *Deps {
+// shares, shared.Worlds included. Run and the fixtures both build deps here.
+func DepsFor(cfg *core.Config, profile *Profile, shared core.SharedDeps, provisioner TenantProvisioner) *Deps {
 	var federated map[string]bool
 	if cfg.Federation.Hub != "" && !profile.TenantScoped { // a tenant's graph never leaves its own world
 		federated = map[string]bool{}
@@ -63,7 +70,7 @@ func DepsFor(cfg *core.Config, profile *Profile, shared core.SharedDeps, provisi
 	return &Deps{
 		Hub:          cfg.Federation.Hub,
 		Federated:    federated,
-		Worlds:       cfg.Registry().View(profile.Name),
+		Worlds:       shared.Worlds.View(profile.Name),
 		Issuer:       cfg.OIDC.Issuer,
 		PublicURL:    cfg.Server.PublicURL,
 		Gateway:      cfg.Server.Gateway(profile.Name),
@@ -81,7 +88,7 @@ type Gateway struct {
 	deps       *Deps
 	mcpServer  *mcpserver.MCPServer
 	transport  *mcpserver.StreamableHTTPServer
-	dispatcher WorldDispatcher
+	dispatcher dispatch.WorldDispatcher
 	// resource is this gateway's RFC 8707 indicator, the PRM `resource`.
 	resource string
 	// profile selects the product surface (knowledge vs memory):
@@ -102,6 +109,8 @@ type Gateway struct {
 	tools *marktools.Tools
 	// subs serves resource subscriptions (mcp_watch.go); nil when off.
 	subs *subscriptions
+	// forgetDrops removes dropWorld from the registry at Shutdown.
+	forgetDrops func()
 }
 
 // gatewayGraph keeps graph data and refresh state in the same isolation scope.
@@ -207,7 +216,7 @@ func (g *Gateway) dropWorld(name string) {
 // New narrows the profile's tools to the configured tool profile, registers
 // them and wraps them in Streamable HTTP. Production supplies *WorldPool;
 // tests inject a dispatcher fake.
-func New(deps *Deps, version string, dispatcher WorldDispatcher, profile *Profile) *Gateway {
+func New(deps *Deps, version string, dispatcher dispatch.WorldDispatcher, profile *Profile) *Gateway {
 	narrowed := *profile
 	narrowed.Tools = mcpfmt.ProfileTools(deps.Gateway.ToolProfile, profile.Tools)
 	profile = &narrowed
@@ -229,7 +238,7 @@ func New(deps *Deps, version string, dispatcher WorldDispatcher, profile *Profil
 		tenantGraphs:   make(map[string]*tenantGraph),
 		fetchSeen:      fetchSeen,
 	}
-	deps.Worlds.OnDrop(g.dropWorld)
+	g.forgetDrops = deps.Worlds.OnDrop(g.dropWorld)
 	if deps.Watches != nil {
 		g.subs = newSubscriptions(deps, g.admitResourceURI)
 		hooks.AddOnRequestInitialization(g.subs.admit)
@@ -282,6 +291,7 @@ func (g *Gateway) newTransport(idleTTL time.Duration) *mcpserver.StreamableHTTPS
 // Shutdown stops the session sweep and closes the open sessions; the HTTP
 // listener that mounted the gateway is the caller's.
 func (g *Gateway) Shutdown(ctx context.Context) error {
+	g.forgetDrops()
 	return g.transport.Shutdown(ctx)
 }
 
@@ -344,7 +354,7 @@ func (g *Gateway) Register(mux *http.ServeMux, host string) {
 	// /mcp accepts both POST (request/notification) and GET (SSE
 	// listen channel) per the Streamable HTTP spec. No method filter
 	// on the route so mcp-go's transport sees every request type.
-	mux.Handle(host+core.MCPPath, g.gatewayAuth(core.SubjectRateLimit(g.deps.SubjectLimiter, g.deps.Log, listenStreams(g.transport))))
+	mux.Handle(host+core.MCPPath, g.gatewayAuth(httpauth.SubjectRateLimit(g.deps.SubjectLimiter, g.deps.Log, listenStreams(g.transport))))
 	mux.HandleFunc("GET "+host+prmPath, g.oauthProtectedResource)
 	// prmPath+MCPPath is RFC 9728 §3.1's path-inserted form for a
 	// resource URL that carries a path. Same document.

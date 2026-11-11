@@ -515,10 +515,9 @@ func TestListDir_DotNamedDocDoesNotKeepShellDir(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	// A directory whose only doc is dot-named: the listing of the directory
-	// hides the doc (isHiddenEntry), so the directory must be pruned from its
-	// parent too — the index and the disk fallback must agree, or the parent
-	// shows an empty-shell directory.
+	// A directory whose only doc is dot-named lists nothing (isHiddenEntry),
+	// so its parent must prune it too: the index and the disk fallback agree,
+	// or the parent shows an empty shell.
 	if _, err := s.Write("/work/.scratch.md", []byte("# hidden\n"), nil); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -989,17 +988,9 @@ func TestWriteVersion(t *testing.T) {
 	})
 
 	t.Run("concurrent create race returns ErrConflict", func(t *testing.T) {
-		// Two writers both try to create a new document (expectedVersion=0).
-		// Writer A wins and creates v1. Writer B's pre-check now sees
-		// current=1 != 0, returning ErrConflict.
-		//
-		// The tighter O_EXCL race (both pass pre-check, one loses the
-		// file create) and the post-check race (version jump detection)
-		// cannot be triggered deterministically without injecting hooks
-		// between WriteVersion's pre-check and Write call. These paths
-		// are tested indirectly: TestWrite_ImmutabilityGuard verifies
-		// Write returns ErrVersionExists on O_EXCL collision, and the
-		// post-check is a defensive guard for the same class of race.
+		// Two creates (expectedVersion=0): A wins v1, B's pre-check sees 1 and
+		// conflicts. The O_EXCL and post-check races need hooks to trigger;
+		// TestWrite_ImmutabilityGuard covers the O_EXCL collision.
 		root := t.TempDir()
 		s := New(root)
 
@@ -2051,10 +2042,9 @@ func TestPruneVersions_AbortsOnError(t *testing.T) {
 }
 
 func TestPruneVersions_SymlinkedDocDirCannotEscape(t *testing.T) {
-	// A planted symlink at versions/{base} pointing outside the store must
-	// not let pruning delete files outside the root. Requires local disk
-	// access to set up (the protocol cannot create symlinks) — this guards
-	// the store as a public API and against confused-deputy reuse.
+	// A symlink planted at versions/{base} must not let pruning delete
+	// outside the root. It takes local disk access (the protocol makes no
+	// symlinks): the guard is for the store as a public API.
 	root := t.TempDir()
 	outside := t.TempDir()
 	for i := 1; i <= 3; i++ {

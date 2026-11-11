@@ -93,6 +93,32 @@ func (p *ProvisioningConfig) tenantAuthority(slug string) string {
 	return fmt.Sprintf("%s.%s:%d", slug, p.AuthorityDomain, protocol.DefaultPort)
 }
 
+// MustGate names the broker's private authorities: local memory worlds and
+// everything under the tenant domain, in any provisioning mode, since turning
+// it off leaves the tenants. A configured knowledge world there stays public.
+func (c *Config) MustGate() func(authority string) bool {
+	private, public := map[string]bool{}, map[string]bool{}
+	for i := range c.Worlds {
+		w := &c.Worlds[i]
+		if !w.Local {
+			continue
+		}
+		if authority := strings.ToLower(w.Authority()); w.Profile == ProfileMemory {
+			private[authority] = true
+		} else {
+			public[authority] = true
+		}
+	}
+	tenants := ""
+	if c.Provisioning.AuthorityDomain != "" {
+		tenants = "." + strings.ToLower(c.Provisioning.AuthorityDomain)
+	}
+	return func(authority string) bool {
+		authority = strings.ToLower(authority)
+		return private[authority] || tenants != "" && !public[authority] && strings.HasSuffix(authority, tenants)
+	}
+}
+
 // TenantWorld renders the broker-side WorldConfig for one tenant. A tenant
 // is served by the server in this process, so it is local, addressed by its
 // authority, and written only under the identity grant.

@@ -31,6 +31,7 @@ func (t *Tools) Doctor(ctx context.Context, args DoctorArgs) Result {
 	if bad != nil {
 		return *bad
 	}
+	report.Commands = *t.commands()
 	return text(report.Markdown())
 }
 

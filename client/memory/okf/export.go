@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/latebit-io/demarkus/client/memory/frontmatter"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
@@ -174,7 +175,7 @@ func yamlScalar(v string) string {
 		v != strings.TrimSpace(v) ||
 		strings.ContainsAny(v[:1], `[]{}#&*!|>'"%@`+"`,")
 	if !need {
-		got, _ := parseValue(v) // never bare: v is non-empty and not a comment
+		got, _ := frontmatter.Value(v) // never bare: v is non-empty and not a comment
 		need = got != v
 	}
 	if !need {

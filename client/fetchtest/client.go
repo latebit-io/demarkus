@@ -10,7 +10,6 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/generation"
-	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
@@ -53,7 +52,7 @@ func status(code string, meta map[string]string) fetch.Result {
 }
 
 func isSeedPath(path string) bool {
-	return path == graphstore.GraphExportPath || path == graphstore.SnapshotManifestPath
+	return path == protocol.GraphExportPath || path == protocol.GraphSnapshotManifestPath
 }
 
 // Fetch records and answers a FETCH. A done context fails first, as it does
@@ -277,7 +276,7 @@ func (c *Client) Unlock() { c.mu.Unlock() }
 
 // seedFn is the scripted answer for a seed document, nil when none is set.
 func (c *Client) seedFn(path string) func(context.Context, fetch.FetchRequest) (fetch.Result, error) {
-	if path == graphstore.SnapshotManifestPath && c.SnapshotFn != nil {
+	if path == protocol.GraphSnapshotManifestPath && c.SnapshotFn != nil {
 		return c.SnapshotFn
 	}
 	return c.SeedFn

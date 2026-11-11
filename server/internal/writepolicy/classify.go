@@ -12,7 +12,7 @@ import (
 // classify stamps req with the classifier's verdict, returned as a note. A
 // refused body or one with a secret is never sent; an append never replaces
 // its base's injection verdict with a weaker one.
-func (e *enforcer) classify(ctx context.Context, req *backend.WriteRequest, appending bool) []string {
+func (e *Enforcer) classify(ctx context.Context, req *backend.WriteRequest, appending bool) []string {
 	if e.options.Classify == nil {
 		return nil
 	}
@@ -46,23 +46,8 @@ func (e *enforcer) classify(ctx context.Context, req *backend.WriteRequest, appe
 
 // baseFlagged reports whether the document's current version carries an
 // injection verdict, read the way Read reads the policy.
-func (e *enforcer) baseFlagged(ctx context.Context, path string) (flagged bool, err error) {
-	var reader documentGetter
-	if current, ok := e.Store.(backend.CurrentReader); ok {
-		reader = currentReader{current}
-	} else {
-		view, err := e.OpenReadView(ctx)
-		if err != nil {
-			return false, err
-		}
-		defer func() {
-			if closeErr := view.Close(); closeErr != nil && err == nil {
-				err = closeErr
-			}
-		}()
-		reader = view
-	}
-	doc, found, err := currentDocument(ctx, reader, path)
+func (e *Enforcer) baseFlagged(ctx context.Context, path string) (bool, error) {
+	doc, found, err := currentDocument(ctx, currentReader{e.current}, path)
 	if err != nil || !found {
 		return false, err
 	}

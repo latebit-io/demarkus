@@ -17,8 +17,8 @@ type SourceConfig struct {
 	// A hash present in both files is a load error.
 	StaticTokensFile string
 	// Optional lets a missing file contribute no tokens instead of failing
-	// the load: on Kubernetes the Secret behind a file may be created after
-	// the world opens, and the watcher reloads once it is projected.
+	// the load: a Kubernetes Secret may be projected after the world opens.
+	// A file that vanishes revokes its tokens; their read paths stay protected.
 	Optional bool
 	// Logger reports files missing at open; nil discards.
 	Logger *slog.Logger
@@ -54,7 +54,7 @@ func OpenSource(config SourceConfig) (*Source, error) {
 	if config.Logger != nil && config.Optional {
 		for _, file := range source.files {
 			if _, err := os.Stat(file); errors.Is(err, os.ErrNotExist) {
-				config.Logger.Info("auth: tokens file not found, starting without its tokens", "path", file)
+				config.Logger.Warn("auth: tokens file not found, starting without its tokens; paths its read tokens would protect are public until it appears", "path", file)
 			}
 		}
 	}
@@ -84,20 +84,24 @@ func (s *Source) Reload() error {
 }
 
 // Load reads a complete replacement without publishing it. With Optional
-// set, the store is exactly the union of the files present on disk.
+// set, its tokens are the union of the files present on disk. A file gone
+// missing keeps protecting what the published store has it protect.
 func (s *Source) Load() (*TokenStore, error) {
 	if len(s.files) == 0 {
 		return nil, nil
 	}
 	merged := make(map[string]Token)
+	held := make(map[string][]string, len(s.files))
 	for _, file := range s.files {
 		tokens, err := loadTokenFile(file)
 		if err != nil {
 			if s.config.Optional && errors.Is(err, os.ErrNotExist) {
+				held[file] = s.vanished(file)
 				continue
 			}
 			return nil, err
 		}
+		held[file] = collectReadPaths(tokens)
 		for hash, token := range tokens {
 			if existing, ok := merged[hash]; ok {
 				return nil, fmt.Errorf("duplicate hash for labels %q and %q across tokens files", existing.Label, token.Label)
@@ -105,7 +109,22 @@ func (s *Source) Load() (*TokenStore, error) {
 			merged[hash] = token
 		}
 	}
-	return NewTokenStore(merged), nil
+	return newSourcedStore(merged, held), nil
+}
+
+// vanished returns the read patterns a now missing file holds in the
+// published store, so they stay protected with no token left to read them.
+// A path is public only when no token covers it: dropping them publishes it.
+func (s *Source) vanished(file string) []string {
+	published := s.current.Load()
+	if published == nil {
+		return nil
+	}
+	held := published.held[file]
+	if len(held) > 0 && s.config.Logger != nil {
+		s.config.Logger.Warn("auth: tokens file vanished; its tokens are revoked and the paths its read tokens protected stay protected until it returns or the server restarts", "path", file)
+	}
+	return held
 }
 
 // Publish atomically replaces the current token store with a staged load.

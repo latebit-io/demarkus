@@ -216,7 +216,7 @@ func (s *RefreshStore) Refresh(ctx context.Context, rawToken, client string, adm
 			return "", refreshTokenRecord{}, fmt.Errorf("read refresh login: %w", err)
 		}
 		now := s.clock()
-		if now.After(record.ExpiresAt) {
+		if now.After(record.ExpiresAt) || s.stale(&record, now) {
 			return "", refreshTokenRecord{}, ErrRefreshTokenInvalid
 		}
 		sibling := false
@@ -278,14 +278,88 @@ func (s *RefreshStore) revokeReused(ctx context.Context, token refreshToken, rec
 	s.log.WarnContext(ctx, "broker: refresh token reused; login revoked", "subject", subject)
 }
 
-// Revoke ends the login rawToken belongs to; an unknown token is not an
-// error (RFC 7009 §2.2). Any of the login's tokens revokes it.
+// stale reports a login older than server.maxLoginAge: its claims are the
+// IdP's of that day, so the user signs in again. Off at zero.
+func (s *RefreshStore) stale(record *refreshTokenRecord, now time.Time) bool {
+	maxAge := s.cfg.Server.MaxLoginAge
+	return maxAge > 0 && now.Sub(record.IssuedAt) > maxAge
+}
+
+// Revoke ends the login rawToken belongs to; an unknown token is no error
+// (RFC 7009 §2.2). It takes a secret the login honors or last rotated out:
+// a login id alone is not secret, it names bucket objects and shows in logs.
 func (s *RefreshStore) Revoke(ctx context.Context, rawToken string) error {
 	token, ok := parseRefreshToken(rawToken)
 	if !ok {
 		return nil
 	}
-	return s.dir.remove(ctx, token.name())
+	presented := hashToken(token.secret)
+	for range maxRotateAttempts {
+		var record refreshTokenRecord
+		generation, err := s.dir.get(ctx, token.name(), &record)
+		if errors.Is(err, blob.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read refresh login: %w", err)
+		}
+		if !slices.Contains(record.Current, presented) && presented != record.Previous {
+			return nil
+		}
+		// A refresh that rotated since the read holds a secret this caller
+		// may still own: read again rather than delete past it.
+		done, err := s.dir.removeAt(ctx, refreshPrefix+token.name(), generation)
+		if done || err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("refresh login %s changed on every attempt", token.login)
+}
+
+// RevokeIdentity ends every login of identity, an IdP subject or an email,
+// and returns how many: the operator's answer to an account disabled at the
+// IdP. Bearers already minted last out their idTokenTTL.
+func (s *RefreshStore) RevokeIdentity(ctx context.Context, identity string) (int, error) {
+	identity = strings.TrimSpace(identity)
+	if identity == "" {
+		return 0, errors.New("revoke sessions: identity is empty")
+	}
+	email := core.CanonicalEmail(identity)
+	match := func(record *refreshTokenRecord) bool {
+		return record.Claims.Subject == identity || core.CanonicalEmail(record.Claims.Email) == email
+	}
+	revoked := 0
+	err := s.dir.each(ctx, "", func(attrs blob.Attributes) error {
+		done, err := s.revokeLogin(ctx, attrs.Key, match)
+		if done {
+			revoked++
+		}
+		return err
+	})
+	return revoked, err
+}
+
+// revokeLogin deletes the login at key when match holds. A refresh that
+// rotated it since the read leaves a usable token, so it reads again; a login
+// that keeps changing is an error, never a silent skip.
+func (s *RefreshStore) revokeLogin(ctx context.Context, key string, match func(*refreshTokenRecord) bool) (bool, error) {
+	for range maxRotateAttempts {
+		var record refreshTokenRecord
+		generation, err := s.dir.get(ctx, key[len(refreshPrefix):], &record)
+		if errors.Is(err, blob.ErrNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("read refresh login: %w", err)
+		}
+		if !match(&record) {
+			return false, nil
+		}
+		if done, err := s.dir.removeAt(ctx, key, generation); done || err != nil {
+			return done, err
+		}
+	}
+	return false, fmt.Errorf("refresh login %s changed on every attempt: run the revocation again", key[len(refreshPrefix):])
 }
 
 // Sweep deletes expired logins from the listing alone: a login id starts

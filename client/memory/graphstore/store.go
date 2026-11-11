@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/internal/filelock"
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/memory/graph"
 )
@@ -39,6 +40,9 @@ type StoredNode struct {
 	Etag        string            `json:"etag,omitempty"`
 	CrawledAt   time.Time         `json:"crawled_at"`
 	Seeded      bool              `json:"seeded,omitempty"`
+	// GoneAt is when a local read first found the document absent or
+	// archived; the record is dropped once nothing needs it past deadRetention.
+	GoneAt time.Time `json:"gone_at,omitzero"`
 }
 
 // StoredEdge is a directed link between two document URLs.
@@ -98,7 +102,28 @@ type Store struct {
 	validating      map[string]time.Time
 	sourceRevisions map[string]int
 	evidence        map[string]sourceEvidence // local source URL -> occurrences at its accepted revision
+	// free lists the slots of edges a patched source left empty; a rebuild
+	// compacts them away.
+	free []int
+	// sourceRefs counts the selected nodes per observation source, so a
+	// source's high water leaves with the last node that shows it.
+	sourceRefs map[string]int
+	lastSweep  time.Time
+	// disk is the file as this store last read or wrote it (saveMu).
+	// seedDirty holds, per owner, the seedGen of its last replace here that
+	// no save has written yet.
+	disk      fileStamp
+	seedDirty map[string]uint64
+	seedGen   uint64
 }
+
+// A dead local source (not found, archived) stays while a seed claims the
+// document, something links to it, or a stale seed may still arrive: past
+// deadRetention it is dropped, checked every sweepInterval.
+const (
+	deadRetention = 7 * 24 * time.Hour
+	sweepInterval = time.Hour
+)
 
 // DefaultPath returns the default graph store location (~/.mark/graph.json).
 func DefaultPath() string {
@@ -121,6 +146,8 @@ func New() *Store {
 		worldPins:       make(map[string]*WorldManifest),
 		localSources:    make(map[string]sourceRecord),
 		representations: make(map[string][sha256.Size]byte),
+		sourceRefs:      make(map[string]int),
+		seedDirty:       make(map[string]uint64),
 	}
 }
 
@@ -131,42 +158,58 @@ func Load(path string) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("graphstore: empty path")
 	}
-
-	s := &Store{
-		path:            path,
-		nodes:           make(map[string]*StoredNode),
-		edgeIdx:         make(map[edgeKey]int),
-		incoming:        make(map[string][]int),
-		outgoing:        make(map[string][]int),
-		seedEtags:       make(map[string]string),
-		seedGraphs:      make(map[string]map[string]sourceRecord),
-		worldPins:       make(map[string]*WorldManifest),
-		localSources:    make(map[string]sourceRecord),
-		representations: make(map[string][sha256.Size]byte),
+	s := New()
+	s.path = path
+	doc, stamp, err := readDocument(path)
+	if err != nil {
+		return nil, err
 	}
+	s.disk = stamp
+	if doc != nil {
+		s.fill(doc)
+	}
+	return s, nil
+}
 
+// fileStamp tells one saved file from the next without reading it.
+type fileStamp struct {
+	modified time.Time
+	size     int64
+}
+
+// readDocument reads the store file: nil when there is none, or when an
+// older schema wrote it (a crawl cache is dropped, not upgraded, and the
+// next Save writes the current schema).
+func readDocument(path string) (*document, fileStamp, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fileStamp{}, nil
+	}
+	if err != nil {
+		return nil, fileStamp{}, fmt.Errorf("read graph store %q: %w", path, err)
+	}
+	stamp := fileStamp{modified: info.ModTime(), size: info.Size()}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return s, nil
-		}
-		return nil, fmt.Errorf("read graph store %q: %w", path, err)
+		return nil, fileStamp{}, fmt.Errorf("read graph store %q: %w", path, err)
 	}
-
 	var doc document
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("parse graph store %q: %w", path, err)
+		return nil, fileStamp{}, fmt.Errorf("parse graph store %q: %w", path, err)
 	}
 	if doc.Version < 1 || doc.Version > schemaVersion {
 		// A missing version is a damaged file, not an older schema: refuse
 		// rather than let the next Save overwrite it.
-		return nil, fmt.Errorf("graph store %q: unsupported schema version %d (expected %d)", path, doc.Version, schemaVersion)
+		return nil, fileStamp{}, fmt.Errorf("graph store %q: unsupported schema version %d (expected %d)", path, doc.Version, schemaVersion)
 	}
 	if doc.Version < schemaVersion {
-		// The store is a crawl cache: an older file is dropped, not upgraded,
-		// and the next Save writes the current schema.
-		return s, nil
+		return nil, stamp, nil
 	}
+	return &doc, stamp, nil
+}
+
+// fill loads doc into an empty store the caller alone holds.
+func (s *Store) fill(doc *document) {
 	s.nodes = make(map[string]*StoredNode, len(doc.Nodes))
 	s.edges = make([]StoredEdge, 0, len(doc.Edges))
 	s.edgeIdx = make(map[edgeKey]int, len(doc.Edges))
@@ -200,10 +243,21 @@ func Load(path string) (*Store, error) {
 		}
 		s.seedGraphs[owner] = records
 	}
-	s.loadCandidates(&doc)
+	s.loadCandidates(doc)
 	s.sourceRevisions = doc.SourceRevisions
-	s.loadEvidence(&doc)
-	return s, nil
+	s.loadEvidence(doc)
+	for _, node := range s.nodes {
+		s.sourceRefs[node.Observation.Source]++
+	}
+	// A file from before GoneAt starts its dead sources' clock now.
+	now := time.Now().UTC()
+	for key := range s.localSources {
+		if record := s.localSources[key]; gone(record.Node.Status) && record.Node.GoneAt.IsZero() {
+			record.Node.GoneAt = now
+			s.localSources[key] = record
+		}
+	}
+	s.patchLocked(s.sweepDeadLocked(now))
 }
 
 // loadCandidates rebuilds local (unseeded) sources; seeded rows are owned
@@ -226,26 +280,126 @@ func (s *Store) loadCandidates(doc *document) {
 	}
 }
 
-// Save atomically persists one store snapshot. Calls on one Store serialize;
-// independent process owners of the same path remain last-writer-wins.
+// Save atomically persists one store snapshot. Several processes share the
+// file (MCP servers, the TUI, the CLI), so under its lock a save first takes
+// in what another wrote since this store last read it: nobody's work is lost.
 func (s *Store) Save() error {
 	if s.path == "" {
 		return nil
 	}
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
-	doc := s.saveDocument()
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return err
+	}
+	return filelock.With(s.path, func() error {
+		if err := s.mergeDisk(); err != nil {
+			return err
+		}
+		doc, through := s.saveDocument()
+		data, err := json.MarshalIndent(doc, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := writeSaveFile(s.path, data); err != nil {
+			return err
+		}
+		return s.saved(through)
+	})
+}
 
-	data, err := json.MarshalIndent(doc, "", "  ")
+// saved records the file as this store's own. Only the seeds the written
+// snapshot held are clean: one replaced since, at a later seedGen, stays
+// dirty so the next save does not trade it for another process's older one.
+func (s *Store) saved(through uint64) error {
+	info, err := os.Stat(s.path)
 	if err != nil {
-		return err
+		return fmt.Errorf("stat graph store %q: %w", s.path, err)
 	}
+	s.disk = fileStamp{modified: info.ModTime(), size: info.Size()}
+	s.mu.Lock()
+	maps.DeleteFunc(s.seedDirty, func(_ string, gen uint64) bool { return gen <= through })
+	s.mu.Unlock()
+	return nil
+}
 
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+// mergeDisk takes in the file when another process saved it since this
+// store read or wrote it. A file this store cannot read is not overwritten.
+// Callers hold saveMu and the file lock.
+func (s *Store) mergeDisk() error {
+	info, err := os.Stat(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat graph store %q: %w", s.path, err)
+	}
+	if (fileStamp{modified: info.ModTime(), size: info.Size()}) == s.disk {
+		return nil
+	}
+	doc, _, err := readDocument(s.path)
+	if err != nil || doc == nil {
 		return err
 	}
-	return writeSaveFile(s.path, data)
+	other := New()
+	other.fill(doc)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.takeLocked(other)
+	return nil
+}
+
+// takeLocked merges another process's store: a local source it read at a
+// newer revision, or later, replaces this one's; a seed this process did
+// not replace itself is taken at the other's generation.
+func (s *Store) takeLocked(other *Store) {
+	changed := false
+	for key := range other.localSources {
+		theirs := other.localSources[key]
+		if ours, held := s.localSources[key]; held && !readLater(&theirs.Node, &ours.Node) {
+			continue
+		}
+		s.localSources[key], changed = theirs, true
+		delete(s.representations, key)
+		delete(s.evidence, key)
+		if evidence, held := other.evidence[key]; held {
+			if s.evidence == nil {
+				s.evidence = make(map[string]sourceEvidence)
+			}
+			s.evidence[key] = evidence
+		}
+	}
+	for owner, records := range other.seedGraphs {
+		if _, held := s.seedGraphs[owner]; s.seedDirty[owner] != 0 || (held && s.seedEtags[owner] == other.seedEtags[owner]) {
+			continue
+		}
+		s.seedGraphs[owner], s.seedEtags[owner], changed = records, other.seedEtags[owner], true
+		// The pins named the shards of the seed just replaced.
+		delete(s.worldPins, owner)
+	}
+	if !changed {
+		return
+	}
+	if s.sourceRevisions == nil {
+		s.sourceRevisions = make(map[string]int)
+	}
+	for source, revision := range other.sourceRevisions {
+		s.sourceRevisions[source] = max(s.sourceRevisions[source], revision)
+	}
+	s.rebuildSeedsLocked()
+	s.patchLocked(s.sweepDeadLocked(time.Now().UTC()))
+}
+
+// readLater reports theirs as the better record of one source: a newer
+// revision, else the later read.
+func readLater(theirs, ours *StoredNode) bool {
+	switch graph.CompareRevision(&theirs.Observation, &ours.Observation) {
+	case "newer":
+		return true
+	case "older":
+		return false
+	}
+	return theirs.CrawledAt.After(ours.CrawledAt)
 }
 
 func writeSaveFile(path string, data []byte) (saveErr error) {
@@ -283,7 +437,8 @@ func writeSaveFile(path string, data []byte) (saveErr error) {
 	return nil
 }
 
-func (s *Store) saveDocument() document {
+// saveDocument is the snapshot a save writes and the seedGen it reaches.
+func (s *Store) saveDocument() (doc document, through uint64) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -292,10 +447,10 @@ func (s *Store) saveDocument() document {
 		nodes = append(nodes, *n)
 	}
 
-	doc := document{
+	doc = document{
 		Version:         schemaVersion,
 		Nodes:           nodes,
-		Edges:           slices.Clone(s.edges),
+		Edges:           s.liveEdgesLocked(),
 		SourceRevisions: maps.Clone(s.sourceRevisions),
 	}
 	if len(s.evidence) > 0 {
@@ -322,11 +477,12 @@ func (s *Store) saveDocument() document {
 			doc.SeedGraphs[owner] = recordsData(records)
 		}
 	}
-	return doc
+	return doc, s.seedGen
 }
 
 // Merge replaces only fully observed sources; partial observations add new edges
-// without regressing stored rows or their last-known-good outgoing sets.
+// without regressing stored rows or their last-known-good outgoing sets. Only
+// the sources g names are reselected: the cost is theirs, not the store's.
 func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -350,36 +506,204 @@ func (s *Store) Merge(g *graph.Graph, etags map[string]string) int {
 		edges = append(edges, StoredEdge{From: e.From, To: e.To, Rel: e.Rel, Label: e.Label, Anchor: e.Anchor, Count: max(e.Count, 1)})
 	}
 	records := sourceRecords(nodes, edges)
+	keys := make([]string, 0, len(records))
 	for key := range records {
-		delete(s.representations, key)
-		incoming := records[key]
-		if incoming.Node.CrawledAt.IsZero() {
-			incoming.Node.CrawledAt = now
-		}
-		previous, exists := s.selectedRecordLocked(key)
-		if !observedStatus(incoming.Node.Status) {
-			// A failed source read cannot turn seed ownership into a local claim.
-			previous, exists = s.localSources[key]
-			for _, records := range s.seedGraphs {
-				if record, owned := records[key]; owned {
-					record.Node.Observation.Problem = "incomplete"
-					record.Node.Observation.AttemptedAt = incoming.Node.Observation.AttemptedAt
-					records[key] = record
-				}
+		s.localSources[key] = s.acceptLocked(key, records[key], now)
+		keys = append(keys, key)
+	}
+	s.pruneEvidenceLocked(keys)
+	if now.Sub(s.lastSweep) >= sweepInterval {
+		s.lastSweep = now
+		keys = append(keys, s.sweepDeadLocked(now)...)
+	}
+	s.patchLocked(keys)
+	return len(nodes)
+}
+
+// acceptLocked is the local record of key once incoming, one read of it, is
+// weighed against what the store holds.
+func (s *Store) acceptLocked(key string, incoming sourceRecord, now time.Time) sourceRecord { //nolint:gocritic // the record is reconciled into a new one
+	delete(s.representations, key)
+	if incoming.Node.CrawledAt.IsZero() {
+		incoming.Node.CrawledAt = now
+	}
+	previous, exists := s.selectedRecordLocked(key)
+	if !observedStatus(incoming.Node.Status) {
+		// A failed source read cannot turn seed ownership into a local claim.
+		previous, exists = s.localSources[key]
+		for _, records := range s.seedGraphs {
+			if record, owned := records[key]; owned {
+				record.Node.Observation.Problem = "incomplete"
+				record.Node.Observation.AttemptedAt = incoming.Node.Observation.AttemptedAt
+				records[key] = record
 			}
 		}
-		if exists {
-			incoming = reconcileObservation(previous, incoming, true)
-		}
-		if incoming.Node.CrawledAt.IsZero() {
-			incoming.Node.CrawledAt = now
-		}
-		incoming.Node.Seeded = false
-		s.localSources[key] = incoming
 	}
-	s.pruneEvidenceLocked()
-	s.rebuildSeedsLocked()
-	return len(nodes)
+	if exists {
+		incoming = reconcileObservation(previous, incoming, true)
+	}
+	if incoming.Node.CrawledAt.IsZero() {
+		incoming.Node.CrawledAt = now
+	}
+	incoming.Node.Seeded = false
+	incoming.Node.GoneAt = time.Time{}
+	if gone(incoming.Node.Status) {
+		incoming.Node.GoneAt = now
+		if held := s.localSources[key].Node; gone(held.Status) && !held.GoneAt.IsZero() {
+			incoming.Node.GoneAt = held.GoneAt
+		}
+	}
+	return incoming
+}
+
+// gone is a status that confirms the document is not there to read.
+func gone(status string) bool { return status == "not-found" || status == "archived" }
+
+// Sweep drops the dead local sources nothing needs as of now and reports
+// how many: Merge does it every sweepInterval, Load once.
+func (s *Store) Sweep(now time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dropped := s.sweepDeadLocked(now)
+	s.patchLocked(dropped)
+	return len(dropped)
+}
+
+// sweepDeadLocked forgets each local source dead for deadRetention that no
+// seed claims and nothing links to; the caller reselects the keys it returns.
+func (s *Store) sweepDeadLocked(now time.Time) (dropped []string) {
+	for key := range s.localSources {
+		node := s.localSources[key].Node
+		if !gone(node.Status) || node.GoneAt.IsZero() || now.Sub(node.GoneAt) < deadRetention || len(s.incoming[key]) > 0 || s.seedOwnsLocked(key) {
+			continue
+		}
+		delete(s.localSources, key)
+		delete(s.evidence, key)
+		delete(s.representations, key)
+		delete(s.validating, key)
+		dropped = append(dropped, key)
+	}
+	return dropped
+}
+
+func (s *Store) seedOwnsLocked(key string) bool {
+	for _, records := range s.seedGraphs {
+		if _, owned := records[key]; owned {
+			return true
+		}
+	}
+	return false
+}
+
+// patchLocked reselects keys alone: each one's node and edges are replaced
+// in place, leaving every other source as it is.
+func (s *Store) patchLocked(keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	if s.sourceRevisions == nil {
+		s.sourceRevisions = make(map[string]int)
+	}
+	order := slices.Sorted(maps.Keys(s.seedGraphs))
+	for _, key := range keys {
+		candidate, shown := selectSource(key, s.localSources, s.seedGraphs, order)
+		if shown {
+			s.annotateLocked(&candidate)
+		}
+		// Counted in before the old node is counted out, so a source both
+		// show keeps its high water.
+		if old := s.nodes[key]; old != nil {
+			s.unrefLocked(old.Observation.Source)
+		}
+		s.dropEdgesLocked(key)
+		if !shown {
+			delete(s.nodes, key)
+			continue
+		}
+		node := candidate.Node
+		s.nodes[key] = &node
+		s.addEdgesLocked(candidate.Edges)
+	}
+	// Mostly empty slots: the flat edge list is rebuilt to its live size.
+	if len(s.free) > 1024 && len(s.free) > len(s.edges)/2 {
+		s.rebuildSeedsLocked()
+	}
+}
+
+// annotateLocked counts candidate's source in, raises its high water and
+// marks a selected revision under it.
+func (s *Store) annotateLocked(candidate *sourceRecord) {
+	observation := &candidate.Node.Observation
+	s.sourceRefs[observation.Source]++
+	if observation.Source != "" && observation.HighestRevision > 0 {
+		s.sourceRevisions[observation.Source] = max(s.sourceRevisions[observation.Source], observation.HighestRevision)
+	}
+	if observation.Known() {
+		s.sourceRevisions[observation.Source] = max(s.sourceRevisions[observation.Source], observation.HighestRevision, observation.Revision)
+	}
+	if observation.Known() && observation.Revision < s.sourceRevisions[observation.Source] {
+		observation.Problem = "revision-regression"
+		observation.HighestRevision = s.sourceRevisions[observation.Source]
+	}
+}
+
+// unrefLocked counts one node of source out. A source no seed or crawl
+// holds any more is forgotten with its high water, or every source ever
+// seen would stay.
+func (s *Store) unrefLocked(source string) {
+	s.sourceRefs[source]--
+	if s.sourceRefs[source] <= 0 {
+		delete(s.sourceRefs, source)
+		delete(s.sourceRevisions, source)
+	}
+}
+
+// dropEdgesLocked removes key's outgoing edges, leaving their slots free.
+func (s *Store) dropEdgesLocked(key string) {
+	for _, index := range s.outgoing[key] {
+		edge := &s.edges[index]
+		delete(s.edgeIdx, edge.key())
+		if rest := slices.DeleteFunc(s.incoming[edge.To], func(i int) bool { return i == index }); len(rest) > 0 {
+			s.incoming[edge.To] = rest
+		} else {
+			delete(s.incoming, edge.To)
+		}
+		*edge = StoredEdge{}
+		s.free = append(s.free, index)
+	}
+	delete(s.outgoing, key)
+}
+
+// addEdgesLocked indexes one source's edges, into free slots first.
+func (s *Store) addEdgesLocked(edges []StoredEdge) {
+	for i := range edges {
+		edge := &edges[i]
+		if index, exists := s.edgeIdx[edge.key()]; exists {
+			s.edges[index] = *edge
+			continue
+		}
+		index := len(s.edges)
+		if n := len(s.free); n > 0 {
+			index, s.free = s.free[n-1], s.free[:n-1]
+			s.edges[index] = *edge
+		} else {
+			s.edges = append(s.edges, *edge)
+		}
+		s.edgeIdx[edge.key()] = index
+		s.incoming[edge.To] = append(s.incoming[edge.To], index)
+		s.outgoing[edge.From] = append(s.outgoing[edge.From], index)
+	}
+}
+
+// liveEdgesLocked copies the edges, the free slots left out.
+func (s *Store) liveEdgesLocked() []StoredEdge {
+	edges := make([]StoredEdge, 0, len(s.edges)-len(s.free))
+	for i := range s.edges {
+		if s.edges[i].From != "" {
+			edges = append(edges, s.edges[i])
+		}
+	}
+	return edges
 }
 
 // Caller must hold s.mu or own the unpublished store.
@@ -455,6 +779,8 @@ func (s *Store) replaceSeed(owner string, u *seedUpdate) int {
 		incoming[key] = record
 	}
 	s.seedGraphs[owner] = incoming
+	s.seedGen++
+	s.seedDirty[owner] = s.seedGen
 	s.rebuildSeedsLocked()
 	added := 0
 	for i := range nodes {
@@ -493,31 +819,14 @@ func (s *Store) selectedRecordLocked(key string) (sourceRecord, bool) {
 	return record, true
 }
 
+// rebuildSeedsLocked reselects every source: what a seed replacement costs,
+// and what compacts the edge list.
 func (s *Store) rebuildSeedsLocked() {
 	selected := selectSources(s.localSources, s.seedGraphs)
 	if s.sourceRevisions == nil {
 		s.sourceRevisions = make(map[string]int)
 	}
-	shown := make(map[string]bool, len(selected))
-	for key := range selected {
-		candidate := selected[key]
-		observation := &candidate.Node.Observation
-		shown[observation.Source] = true
-		if observation.Source != "" && observation.HighestRevision > 0 {
-			s.sourceRevisions[observation.Source] = max(s.sourceRevisions[observation.Source], observation.HighestRevision)
-		}
-		if observation.Known() {
-			s.sourceRevisions[observation.Source] = max(s.sourceRevisions[observation.Source], observation.HighestRevision, observation.Revision)
-		}
-		if observation.Known() && observation.Revision < s.sourceRevisions[observation.Source] {
-			observation.Problem = "revision-regression"
-			observation.HighestRevision = s.sourceRevisions[observation.Source]
-		}
-		selected[key] = candidate
-	}
-	// A source no seed or crawl holds any more is forgotten with its high
-	// water, or every source ever seen would stay.
-	maps.DeleteFunc(s.sourceRevisions, func(source string, _ int) bool { return !shown[source] })
+	s.sourceRefs = make(map[string]int, len(selected))
 	s.nodes = make(map[string]*StoredNode, len(selected))
 	edgeCapacity := 0
 	for key := range selected {
@@ -525,8 +834,10 @@ func (s *Store) rebuildSeedsLocked() {
 	}
 	s.edges = make([]StoredEdge, 0, edgeCapacity)
 	s.edgeIdx = make(map[edgeKey]int, edgeCapacity)
+	s.free = nil
 	for _, key := range slices.Sorted(maps.Keys(selected)) {
 		record := selected[key]
+		s.annotateLocked(&record)
 		node := record.Node
 		s.nodes[key] = &node
 		for i := range record.Edges {
@@ -539,6 +850,7 @@ func (s *Store) rebuildSeedsLocked() {
 			s.edges = append(s.edges, *edge)
 		}
 	}
+	maps.DeleteFunc(s.sourceRevisions, func(source string, _ int) bool { return s.sourceRefs[source] == 0 })
 	s.rebuildAdjacencyLocked()
 }
 
@@ -661,6 +973,9 @@ func (s *Store) ToGraph() *graph.Graph {
 		})
 	}
 	for _, e := range s.edges {
+		if e.From == "" {
+			continue // a free slot
+		}
 		g.AddEdgeInfo(graph.Edge{From: e.From, To: e.To, Rel: e.Rel, Label: e.Label, Anchor: e.Anchor, Count: max(e.Count, 1)})
 	}
 	return g
@@ -782,5 +1097,5 @@ func (s *Store) NodeCount() int {
 func (s *Store) EdgeCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.edges)
+	return len(s.edges) - len(s.free)
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/contentcheck"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/server/internal/snirouter"
+	"github.com/latebit-io/demarkus/server/knowledgeserver/worldsfragment"
 	"gopkg.in/yaml.v3"
 )
 
@@ -63,6 +64,9 @@ type Config struct {
 	FloorWorld string `yaml:"floorWorld"`
 	// ContentCheck is the secrets and personal-data scan on every write.
 	ContentCheck ContentCheckConfig `yaml:"contentCheck"`
+	// FragmentWarning names keys of a generated worlds fragment this build
+	// skipped; empty when it knew them all. For the log, never for behaviour.
+	FragmentWarning string `yaml:"-"`
 }
 
 // ContentCheckConfig tunes the content scan. Secrets always block; PII is
@@ -285,11 +289,15 @@ type WorldConfig struct {
 	// a private memory world, whose reads are the owner's, never the
 	// capability listener's anonymous ones.
 	Gated bool `yaml:"gated"`
-	// Bootstrap marks a broker provisioned world. Deprecated: the open ignores
-	// it, since every writable world gets genesis and a seeded policy. It only
-	// forbids policy.file, because that world's broker owns its policy.
-	Bootstrap bool `yaml:"bootstrap"`
+	// Seed names the policy a world without one is seeded with: "" the
+	// knowledge default, SeedMemory a personal memory's. policy.file is the
+	// operator's own text and excludes it.
+	Seed string `yaml:"seed"`
 }
+
+// SeedMemory seeds a personal memory's policy: what a provisioner's
+// fragment asks for, and a static memory world may.
+const SeedMemory = worldsfragment.SeedMemory
 
 // ID is the world's immutable identity, the key peer hints carry; it lives in
 // the bucket section because that is the store it identifies. A file world
@@ -332,6 +340,10 @@ type AuthConfig struct {
 	// StaticTokensFile holds operator-owned entries (an agent's publish
 	// token) merged with TokensFile; a reconciler can own it. Optional.
 	StaticTokensFile string `yaml:"staticTokensFile"`
+	// Required refuses to open the world while a configured file is missing.
+	// A soul sets it: its tokens file precedes the server in every install,
+	// and a mistyped path must not serve its protected paths publicly.
+	Required bool `yaml:"-"`
 }
 
 // PolicyConfig identifies the world-local policy document.
@@ -416,7 +428,10 @@ type rawWorldConfig struct {
 	ReadOnly    bool            `yaml:"readOnly"`
 	Limits      rawLimitsConfig `yaml:"limits"`
 	Gated       bool            `yaml:"gated"`
-	Bootstrap   bool            `yaml:"bootstrap"`
+	Seed        string          `yaml:"seed"`
+	// Bootstrap is read and ignored: fragments older brokers wrote carry it,
+	// and a strict parse must not refuse them.
+	Bootstrap bool `yaml:"bootstrap"`
 }
 
 type rawPolicyConfig struct {
@@ -475,11 +490,12 @@ func load(filename string, readFragment func(fragmentPath string) ([]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("knowledge config: read worlds file %q: %w", fragmentPath, err)
 	}
-	worlds, err := ParseWorldsFragment(fragment)
+	worlds, warning, err := parseWorldsFragment(fragment)
 	if err != nil {
 		return nil, fmt.Errorf("knowledge config: worlds file %q: %w", fragmentPath, err)
 	}
 	config.Worlds = append(config.Worlds, worlds...)
+	config.FragmentWarning = warning
 	config.SetDefaults()
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("knowledge config: after merging worlds file %q: %w", fragmentPath, err)
@@ -497,10 +513,60 @@ func (config *Config) WorldsFilePath(configFile string) string {
 	return filepath.Join(filepath.Dir(configFile), config.WorldsFile)
 }
 
-// ParseWorldsFragment strictly parses a worlds-only YAML document with
-// Parse's per-world defaults; empty input yields zero worlds and
-// cross-world invariants are validated by the caller after merging.
+// ParseWorldsFragment parses a worlds-only YAML document with Parse's
+// per-world defaults; empty input yields zero worlds and cross-world
+// invariants are validated by the caller after merging.
 func ParseWorldsFragment(data []byte) ([]WorldConfig, error) {
+	worlds, _, err := parseWorldsFragment(data)
+	return worlds, err
+}
+
+// parseWorldsFragment reads an operator's file strictly, so a mistyped key
+// is an error, and a provisioner's generated fragment leniently, so a newer
+// broker's key cannot stall a rollout: warning names what was skipped.
+func parseWorldsFragment(data []byte) (worlds []WorldConfig, warning string, err error) {
+	if !worldsfragment.Generated(data) {
+		worlds, err = parseOperatorFragment(data)
+		return worlds, "", err
+	}
+	doc, unknown, err := worldsfragment.Parse(data)
+	if err != nil {
+		return nil, "", err
+	}
+	worlds = make([]WorldConfig, len(doc.Worlds))
+	for index := range doc.Worlds {
+		world := worldFromFragment(&doc.Worlds[index])
+		// A seed kind of a newer broker is a key this build does not know:
+		// the world takes the default seed rather than stall the fragment.
+		if world.Seed != "" && world.Seed != SeedMemory {
+			unknown = strings.TrimSpace(unknown + fmt.Sprintf("\nworld %q: seed %q is not known, seeding the default", world.Name, world.Seed))
+			world.Seed = ""
+		}
+		worlds[index] = world
+	}
+	return worlds, unknown, nil
+}
+
+// worldFromFragment is a provisioned tenant as a world, through the same
+// defaults as any other.
+func worldFromFragment(world *worldsfragment.World) WorldConfig {
+	raw := rawWorldConfig{
+		Name:        world.Name,
+		Authorities: world.Authorities,
+		Bucket:      BucketConfig{URL: world.Bucket.URL, WorldID: world.Bucket.WorldID},
+		Gated:       world.Gated,
+		Seed:        world.Seed,
+	}
+	if world.Limits != nil {
+		raw.Limits.MaxDocuments = &world.Limits.MaxDocuments
+	}
+	if world.Policy != nil {
+		raw.Policy.Governance = Governance(world.Policy.Governance)
+	}
+	return worldFromRaw(&raw)
+}
+
+func parseOperatorFragment(data []byte) ([]WorldConfig, error) {
 	var raw struct {
 		Worlds []rawWorldConfig `yaml:"worlds"`
 	}
@@ -616,8 +682,8 @@ func worldFromRaw(world *rawWorldConfig) WorldConfig {
 			MaxWatches:            valueOr(world.Limits.MaxWatches, 0),
 			MaxDocuments:          valueOr(world.Limits.MaxDocuments, 0),
 		},
-		Gated:     world.Gated,
-		Bootstrap: world.Bootstrap,
+		Gated: world.Gated,
+		Seed:  strings.TrimSpace(world.Seed),
 	}
 }
 
@@ -674,7 +740,7 @@ func LocalProfile(options *LocalOptions) *Config {
 			Name:        "soul",
 			Authorities: []string{AnyAuthority},
 			Dir:         options.Dir,
-			Auth:        AuthConfig{TokensFile: options.TokensFile},
+			Auth:        AuthConfig{TokensFile: options.TokensFile, Required: true},
 			// The soul's token is its agent's own; nobody else to govern.
 			Policy:   PolicyConfig{Optional: true, Governance: GovernanceOpen},
 			ReadOnly: options.ReadOnly,
@@ -870,6 +936,9 @@ func (config *Config) validateWorlds() error {
 		}
 
 		if err := world.Policy.validate(location); err != nil {
+			return err
+		}
+		if err := validateSeed(location, world); err != nil {
 			return err
 		}
 		if err := validatePolicyFile(location, world); err != nil {
@@ -1088,6 +1157,24 @@ func canonicalPath(field, value string) error {
 	return nil
 }
 
+// validateSeed admits the seed kinds this build can seed, on a world that
+// takes a seed at all.
+func validateSeed(location string, world *WorldConfig) error {
+	switch {
+	case world.Seed == "":
+		return nil
+	case world.Seed != SeedMemory:
+		return fmt.Errorf("%s.seed %q must be %q or empty", location, world.Seed, SeedMemory)
+	case world.Policy.File != "":
+		return fmt.Errorf("%s.seed must not be set with policy.file: the file is the world's seed", location)
+	case world.Policy.Optional:
+		return fmt.Errorf("%s.seed must not be set on an optional policy, which seeds nothing", location)
+	case world.ReadOnly:
+		return fmt.Errorf("%s.seed must not be set on a read-only world, which refuses the seed", location)
+	}
+	return nil
+}
+
 func validatePolicyFile(location string, world *WorldConfig) error {
 	if world.Policy.File == "" {
 		return nil
@@ -1100,9 +1187,6 @@ func validatePolicyFile(location string, world *WorldConfig) error {
 	}
 	if world.Policy.Optional {
 		return fmt.Errorf("%s.policy.file must not be set on an optional policy, which seeds nothing", location)
-	}
-	if world.Bootstrap {
-		return fmt.Errorf("%s.policy.file must not be set on a bootstrap world, whose provisioner owns its policy", location)
 	}
 	return nil
 }

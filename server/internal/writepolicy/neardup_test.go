@@ -89,8 +89,7 @@ func TestEnforceWarnsNearDuplicate(t *testing.T) {
 		if warnings, err := write(t, gated, "/notes/tenants.md", 0, []byte(neardtest.OtherDoc), tags); err != nil || len(warnings) != 0 {
 			t.Fatalf("tenants = %q, %v; want clean", warnings, err)
 		}
-		var warnings []string
-		_, err := gated.Append(context.Background(), backend.WriteRequest{Path: "/notes/tenants.md", ExpectedVersion: 1, Content: []byte("\n## Shards\n\n" + neardtest.Reworded + "\n"), Warnings: &warnings})
+		_, warnings, err := gated.AppendNoted(context.Background(), backend.WriteRequest{Path: "/notes/tenants.md", ExpectedVersion: 1, Content: []byte("\n## Shards\n\n" + neardtest.Reworded + "\n")}, backend.Sender{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,16 +117,22 @@ func TestEnforceWarnsNearDuplicate(t *testing.T) {
 	})
 }
 
-// readerOnly hands the commit a state without a catalog, as the bucket store
-// lends its commit attempts.
+// readerOnly hands the commit a state with no section index, as the bucket
+// store lends its commit attempts.
 type readerOnly struct{ backend.Store }
 
 func (r readerOnly) Publish(ctx context.Context, req backend.WriteRequest) (*storefmt.Document, error) {
 	inner := req.Precondition
-	req.Precondition = func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
-		return inner(ctx, struct{ backend.Reader }{state}, write)
+	req.Precondition = func(ctx context.Context, state backend.CommitState, write storefmt.PreparedWrite) error {
+		return inner(ctx, noIndex{state}, write)
 	}
 	return r.Store.Publish(ctx, req)
+}
+
+type noIndex struct{ backend.CommitState }
+
+func (noIndex) Lookup(context.Context, string, catalog.Options) ([]catalog.Result, error) {
+	return nil, backend.ErrBodyMatchUnavailable
 }
 
 // A check that cannot run refuses the write in block mode and notes it in

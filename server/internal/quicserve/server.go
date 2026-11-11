@@ -152,6 +152,8 @@ func (s *Server) Serve(ctx context.Context, selector Selector) error {
 		}
 
 		handlerCtx, cancelHandler := context.WithCancel(WithConnState(context.WithoutCancel(ctx)))
+		// A peer that is gone ends its streams' work with it, not at their deadlines.
+		context.AfterFunc(connection.Context(), cancelHandler)
 		tracked := &trackedConnection{
 			connection: connection,
 			server:     s,
@@ -352,6 +354,8 @@ type connectionListener interface {
 
 type acceptedConnection interface {
 	QUICConn() *quic.Conn
+	// Context ends when the connection does, whichever side closed it.
+	Context() context.Context
 	AcceptStream(context.Context) (Stream, error)
 	RemoteAddr() net.Addr
 	CloseWithError(quic.ApplicationErrorCode, string) error

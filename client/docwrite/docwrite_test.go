@@ -386,7 +386,7 @@ func TestPublishKeepsTheServersExplanation(t *testing.T) {
 	backend := &fetchtest.Client{PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusBadRequest, Body: why}}, nil
 	}}
-	for _, mode := range []string{merge.OnConflictMerge, merge.OnConflictFail} {
+	for _, mode := range []merge.OnConflict{merge.OnConflictMerge, merge.OnConflictFail} {
 		got, err := doc(backend).Publish(t.Context(), docwrite.Write{Body: "x", ExpectedVersion: 1}, mode)
 		if err != nil || got.Response.Status != protocol.StatusBadRequest || got.Response.Body != why {
 			t.Errorf("%s mode = %+v, %v, want the refusal with its body", mode, got.Response, err)

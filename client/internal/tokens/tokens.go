@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/latebit-io/demarkus/client/internal/filelock"
 )
 
 type entry struct {
@@ -55,21 +56,30 @@ func Load(path string) (*Store, error) {
 	if path == "" {
 		return nil, fmt.Errorf("tokens file path is empty (could not determine home directory)")
 	}
-	s := &Store{path: path, tokens: make(map[string]entry), dir: loadDir(DirPath(path))}
+	stored, err := readTokens(path)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{path: path, tokens: stored, dir: loadDir(DirPath(path))}, nil
+}
+
+// readTokens decodes the tokens file; a missing or empty one holds none.
+func readTokens(path string) (map[string]entry, error) {
+	stored := make(map[string]entry)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return s, nil
+			return stored, nil
 		}
 		return nil, fmt.Errorf("read tokens file %q: %w", path, err)
 	}
 	if len(data) == 0 {
-		return s, nil
+		return stored, nil
 	}
-	if _, err := toml.Decode(string(data), &s.tokens); err != nil {
+	if _, err := toml.Decode(string(data), &stored); err != nil {
 		return nil, fmt.Errorf("parse tokens file %q: %w", path, err)
 	}
-	return s, nil
+	return stored, nil
 }
 
 // DirPath returns the tokens.d directory beside a tokens file; empty in, empty out.
@@ -175,15 +185,34 @@ func (s *Store) Get(host string) string {
 }
 
 // Set stores a token for the given host:port and writes to disk.
-func (s *Store) Set(host, token string) error {
-	s.tokens[host] = entry{Token: token}
-	return s.save()
+func (s *Store) Set(host, raw string) error {
+	return s.update(func(stored map[string]entry) { stored[host] = entry{Token: raw} })
 }
 
 // Remove deletes the token for the given host:port and writes to disk.
 func (s *Store) Remove(host string) error {
-	delete(s.tokens, host)
-	return s.save()
+	return s.update(func(stored map[string]entry) { delete(stored, host) })
+}
+
+// update applies change to what the file holds now, under the tokens file
+// lock, so an entry another process wrote since Load survives. The store
+// takes the result only once it is on disk.
+func (s *Store) update(change func(stored map[string]entry)) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return fmt.Errorf("create tokens directory: %w", err)
+	}
+	return filelock.With(s.path, func() error {
+		stored, err := readTokens(s.path)
+		if err != nil {
+			return err
+		}
+		change(stored)
+		if err := s.save(stored); err != nil {
+			return err
+		}
+		s.tokens = stored
+		return nil
+	})
 }
 
 // Hosts returns a sorted list of all host:port entries across both sources.
@@ -204,16 +233,12 @@ func (s *Store) Hosts() []string {
 }
 
 // save replaces the file by rename so a concurrent reader never sees it truncated.
-func (s *Store) save() error {
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create tokens directory: %w", err)
-	}
-	tmp, err := os.CreateTemp(dir, ".tokens-*.tmp")
+func (s *Store) save(stored map[string]entry) error {
+	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".tokens-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create tokens temp file: %w", err)
 	}
-	if err := writeTokens(tmp, s.tokens); err != nil {
+	if err := writeTokens(tmp, stored); err != nil {
 		return errors.Join(err, removeTemp(tmp.Name()))
 	}
 	if err := os.Rename(tmp.Name(), s.path); err != nil {

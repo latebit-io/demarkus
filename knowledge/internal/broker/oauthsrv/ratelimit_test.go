@@ -69,9 +69,28 @@ func TestServerClientIP(t *testing.T) {
 			want:              "10.0.0.5",
 		},
 		{
-			name:       "ipv6 RemoteAddr",
-			remoteAddr: "[::1]:55555",
-			want:       "::1",
+			name:       "ipv6 RemoteAddr keys on its /64",
+			remoteAddr: "[2001:db8:1:2:aaaa:bbbb:cccc:dddd]:55555",
+			want:       "2001:db8:1:2::/64",
+		},
+		{
+			name:              "trusted ipv6 XFF keys on its /64",
+			trustForwardedFor: true,
+			remoteAddr:        "10.0.0.5:55555",
+			xff:               "2001:db8:1:2::1, 10.0.0.1",
+			want:              "2001:db8:1:2::/64",
+		},
+		{
+			name:       "ipv4-mapped RemoteAddr is its ipv4 address",
+			remoteAddr: "[::ffff:10.0.0.5]:55555",
+			want:       "10.0.0.5",
+		},
+		{
+			name:              "trusted XFF that is no address falls back to RemoteAddr",
+			trustForwardedFor: true,
+			remoteAddr:        "10.0.0.5:55555",
+			xff:               "not-an-address-" + strings.Repeat("x", 4096),
+			want:              "10.0.0.5",
 		},
 		{
 			name:       "invalid RemoteAddr falls back to raw",

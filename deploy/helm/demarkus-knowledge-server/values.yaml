@@ -250,6 +250,11 @@ broker:
   maxSessionsPerUser: 20
   # Broker-signed id_token lifetime; must be less than refreshTokenTTL.
   idTokenTTL: 15m
+  # How long a login may keep refreshing on the claims the IdP gave at
+  # sign-in (e.g. 168h). Past it the user signs in again, so a group change
+  # or a disabled account takes effect. Empty is off: a login refreshes for
+  # its whole refreshTokenTTL.
+  maxLoginAge: ""
   # gs:// bucket for refresh token records and MCP host registrations, one
   # object each. Required; dedicated to the broker, never a world's bucket.
   # The workload identity needs roles/storage.objectAdmin on it.

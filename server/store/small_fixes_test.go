@@ -94,3 +94,28 @@ func TestWriteCheckedRefusalLeavesNothing(t *testing.T) {
 		t.Errorf("unchecked write = %+v, %v", doc, err)
 	}
 }
+
+// Moving one document's pointer must not touch a sibling whose name is the
+// pointer's old temp name.
+func TestWriteLeavesASiblingNamedLikeATempLink(t *testing.T) {
+	s := New(t.TempDir())
+	if _, err := s.Write("/notes.tmp", []byte("# Sibling\n"), nil); err != nil {
+		t.Fatalf("write sibling: %v", err)
+	}
+	if _, err := s.Write("/notes", []byte("# Notes\n"), nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	doc, err := s.Get("/notes.tmp", 0)
+	if err != nil || !strings.Contains(string(doc.Content), "Sibling") {
+		t.Fatalf("sibling after the write = %+v, %v", doc, err)
+	}
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), swapPrefix) {
+			t.Errorf("a temp link was left behind: %s", e.Name())
+		}
+	}
+}

@@ -20,7 +20,8 @@ var (
 	wordRe          = regexp.MustCompile(`[\p{L}\p{N}][\p{L}\p{N}'-]*`)
 	spaceRe         = regexp.MustCompile(`\s+`)
 	blankLine       = regexp.MustCompile(`\n[ \t]*\n`)
-	setextUnderline = regexp.MustCompile(`^[=-]+\s*$`)
+	atxLine         = regexp.MustCompile(`^[ \t>]*#{1,6}(?:[ \t]|$)`)
+	setextUnderline = regexp.MustCompile(`^[ \t>]*(?:=+|-+)[ \t]*$`)
 )
 
 // StatusTokens are what makes a heading carry status: a date, a PR number,
@@ -139,23 +140,43 @@ func summaryUnderH1(body string, headings []mdoutline.Heading) (title, summary s
 		if i+1 < len(headings) {
 			end = headings[i+1].Start
 		}
-		return h.Text, afterHeading(body[h.Start:end]), true
+		return h.Text, strings.TrimPrefix(body[HeadingEnd(body, h):end], "\n"), true
 	}
 	return "", "", false
 }
 
-// afterHeading drops the heading's own lines: the text line, plus a setext
-// underline (=== or ---) when one follows it.
-func afterHeading(section string) string {
-	_, rest, found := strings.Cut(section, "\n")
-	if !found {
-		return ""
+// HeadingEnd is the offset just past the heading's own lines, the closing
+// newline excluded: an ATX heading's line, a setext heading through its
+// underline. Every edit under a heading starts here, so none splits one.
+func HeadingEnd(body string, h mdoutline.Heading) int { //nolint:gocritic // a heading is read once
+	first := lineEnd(body, h.Start)
+	if atxLine.MatchString(body[h.Start:first]) {
+		return first
 	}
-	line, after, _ := strings.Cut(rest, "\n")
-	if setextUnderline.MatchString(strings.TrimRight(line, "\r")) {
-		return after
+	// Setext: text lines run to the underline, no blank line between.
+	for at := first; at < len(body); {
+		next := lineEnd(body, at+1)
+		line := strings.TrimRight(body[at+1:next], "\r")
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+		if setextUnderline.MatchString(line) {
+			return next
+		}
+		at = next
 	}
-	return rest
+	return first
+}
+
+// lineEnd is the offset of the newline ending the line at from, or len(body).
+func lineEnd(body string, from int) int {
+	if from >= len(body) {
+		return len(body)
+	}
+	if i := strings.IndexByte(body[from:], '\n'); i >= 0 {
+		return from + i
+	}
+	return len(body)
 }
 
 // headingFollowsH1 reports a heading after the first H1.

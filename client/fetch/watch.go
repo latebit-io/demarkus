@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
@@ -72,21 +71,12 @@ type WatchDialer func(ctx context.Context, req protocol.Request) (WatchStream, e
 
 // Watch is one subscription that outlives its streams: it reopens after a
 // closing block, a lost connection or a stall, resuming from its cursor, and
-// surfaces resync as a Notice.
+// surfaces resync as a Notice. Next, Cursor, Err and Close are its Feed's.
 type Watch struct {
+	*Feed
 	dial             WatchDialer
 	handshakeTimeout time.Duration
 	req              WatchRequest
-
-	notices chan Notice
-	done    chan struct{}
-	cancel  context.CancelFunc
-
-	mu sync.Mutex
-	// stream is where the next stream reopens from; consumed is the cursor
-	// of the last notice Next returned, which may lag behind what is queued.
-	stream, consumed protocol.Cursor
-	err              error
 }
 
 // Watch subscribes and returns once the server has acknowledged, or with the
@@ -102,93 +92,20 @@ func NewWatch(ctx context.Context, dial WatchDialer, r WatchRequest, handshakeTi
 	if r.Path == "" {
 		return nil, errors.New("WATCH requires a path")
 	}
-	if r.Queue < 0 {
-		return nil, fmt.Errorf("WATCH queue %d is negative", r.Queue)
+	feed, err := NewFeed(r.Since, r.Queue)
+	if err != nil {
+		return nil, err
 	}
-	queue := r.Queue
-	if queue == 0 {
-		queue = watchQueueSize
-	}
-	w := &Watch{dial: dial, handshakeTimeout: handshakeTimeout, req: r, notices: make(chan Notice, queue), done: make(chan struct{}), stream: r.Since, consumed: r.Since}
+	w := &Watch{Feed: feed, dial: dial, handshakeTimeout: handshakeTimeout, req: r}
 	stream, err := w.open(ctx, r.Since)
 	if err != nil {
 		return nil, err
 	}
-	if len(w.notices) == 0 {
-		// No resync to consume: the acknowledgement is where a caller resumes.
-		w.consumed = w.stream
-	}
+	w.settle()
 	runCtx, cancel := context.WithCancel(ctx)
-	w.cancel = cancel
+	w.Start(cancel)
 	go w.run(runCtx, stream)
 	return w, nil
-}
-
-// Next returns the next notice, or the error that ended the watch.
-func (w *Watch) Next(ctx context.Context) (Notice, error) {
-	select {
-	case n := <-w.notices:
-		return w.consume(n), nil
-	default:
-	}
-	select {
-	case n := <-w.notices:
-		return w.consume(n), nil
-	case <-w.done:
-		return Notice{}, w.Err()
-	case <-ctx.Done():
-		return Notice{}, ctx.Err()
-	}
-}
-
-func (w *Watch) consume(n Notice) Notice {
-	w.mu.Lock()
-	w.consumed = n.Event.Cursor
-	w.mu.Unlock()
-	return n
-}
-
-// Cursor is where a later watch resumes without missing anything: the
-// cursor of the last notice Next returned. Notices still queued are after
-// it, so a caller that persists it and restarts sees them again.
-func (w *Watch) Cursor() protocol.Cursor {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.consumed
-}
-
-// streamCursor is where the watch reopens its own stream: everything before
-// it is queued or consumed.
-func (w *Watch) streamCursor() protocol.Cursor {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.stream
-}
-
-// Err is why the watch ended, once Next has reported it.
-func (w *Watch) Err() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.err
-}
-
-// Close ends the watch.
-func (w *Watch) Close() {
-	w.cancel()
-	<-w.done
-}
-
-func (w *Watch) setCursor(c protocol.Cursor) {
-	w.mu.Lock()
-	w.stream = c
-	w.mu.Unlock()
-}
-
-func (w *Watch) finish(err error) {
-	w.mu.Lock()
-	w.err = err
-	w.mu.Unlock()
-	close(w.done)
 }
 
 // watchStream is one open WATCH stream and the reader over it.
@@ -200,6 +117,9 @@ type watchStream struct {
 	ended error
 	// blocks counts what the stream carried after its acknowledgement.
 	blocks int
+	// unreadable is a block that named no cursor to continue from; the
+	// stream ended on it.
+	unreadable error
 }
 
 func (s *watchStream) close() { s.stream.Release(s.ended) }
@@ -285,7 +205,7 @@ func (w *Watch) open(ctx context.Context, since protocol.Cursor) (*watchStream, 
 		case err == nil:
 			return stream, nil
 		case errors.Is(err, errResyncFirst):
-			since = w.streamCursor()
+			since = w.StreamCursor()
 		case attempt == maxRetries-1 || !isRetryable(err):
 			return nil, err
 		default:
@@ -325,7 +245,7 @@ func (w *Watch) subscribe(ctx context.Context, since protocol.Cursor) (*watchStr
 		stream.Release(err)
 		return nil, err
 	}
-	if err := w.accept(ctx, first); err != nil {
+	if err := w.accept(first); err != nil {
 		ws.close()
 		return nil, err
 	}
@@ -334,7 +254,7 @@ func (w *Watch) subscribe(ctx context.Context, since protocol.Cursor) (*watchStr
 
 // accept applies the first block: ok continues, resync is surfaced and
 // reported as errResyncFirst, anything else refuses the watch.
-func (w *Watch) accept(ctx context.Context, first protocol.WatchBlock) error {
+func (w *Watch) accept(first protocol.WatchBlock) error {
 	if first.Status != protocol.StatusOK && first.Status != protocol.StatusResync {
 		return &StatusError{Status: first.Status, Message: first.Metadata["message"]}
 	}
@@ -342,78 +262,72 @@ func (w *Watch) accept(ctx context.Context, first protocol.WatchBlock) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", first.Status, err)
 	}
-	w.setCursor(cursor)
 	if first.Status == protocol.StatusOK {
+		w.Skip(cursor)
 		return nil
 	}
-	// The queue may be full on a reopen; a plain send would park run and
-	// hang Close.
-	select {
-	case w.notices <- Notice{Resync: true, Event: protocol.WatchEvent{Cursor: cursor}}:
-		return errResyncFirst
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	// A full queue keeps the resync owed; the next stream pays it.
+	w.Resync(cursor)
+	return errResyncFirst
 }
 
-// run reads blocks until the watch ends, reopening the stream from the
-// cursor whenever it can.
+// run follows streams until the watch ends, reopening from the cursor
+// whenever it can, at the feed's pace.
 func (w *Watch) run(ctx context.Context, stream *watchStream) {
-	defer w.cancel()
-	backoff, empty := retryDelay, retryDelay
+	var pace Pace
 	for {
-		delay, err := w.pump(ctx, stream)
+		before := w.Queued()
+		floor, err := w.pump(ctx, stream)
 		stream.close()
+		queued := w.Queued() > before
+		if err == nil && stream.unreadable != nil && !queued {
+			err = pace.Unreadable(stream.unreadable)
+		}
 		if err != nil {
-			w.finish(err)
+			w.Finish(err)
 			return
 		}
-		// A stream that ended carrying nothing reopens after a growing pause,
-		// so a server ending every stream cannot spin the watch.
-		if stream.blocks == 0 {
-			delay = max(delay, empty)
-			empty = min(empty*2, 5*time.Second)
-		} else {
-			empty = retryDelay
-		}
-		if err := waitForRetry(ctx, delay); err != nil {
-			w.finish(err)
+		// A stream that ended in order after carrying blocks is progress too:
+		// a quiet world's streams are closed, not spun.
+		progress := queued || (stream.blocks > 0 && stream.ended == nil && stream.unreadable == nil)
+		if err := waitForRetry(ctx, pace.AfterStream(progress, floor)); err != nil {
+			w.Finish(err)
 			return
 		}
-		for {
-			var openErr error
-			stream, openErr = w.open(ctx, w.streamCursor())
-			if openErr == nil {
-				backoff = retryDelay
-				break
-			}
-			if ctx.Err() != nil || !reopenable(openErr) {
-				w.finish(openErr)
-				return
-			}
-			if err := waitForRetry(ctx, backoff); err != nil {
-				w.finish(err)
-				return
-			}
-			backoff = min(backoff*2, 5*time.Second)
+		if stream, err = w.reopen(ctx, &pace); err != nil {
+			w.Finish(err)
+			return
 		}
 	}
 }
 
-// reopenable is whether a failed reopen is worth another try: a refusal is
-// final unless it is a retry-later status (SPEC §7).
-func reopenable(err error) bool {
-	var refused *StatusError
-	if !errors.As(err, &refused) {
-		return true
+// reopen opens the next stream from the cursor, retrying what RetryLater
+// says is worth it.
+func (w *Watch) reopen(ctx context.Context, pace *Pace) (*watchStream, error) {
+	for {
+		stream, err := w.open(ctx, w.StreamCursor())
+		if err == nil {
+			pace.Opened()
+			return stream, nil
+		}
+		// Close cancelled the open under it: a clean end, whatever the
+		// aborted handshake read reported.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !RetryLater(err) {
+			return nil, err
+		}
+		if err := waitForRetry(ctx, pace.AfterFailedOpen()); err != nil {
+			return nil, err
+		}
 	}
-	return refused.Status == protocol.StatusRateLimited || refused.Status == protocol.StatusServerError
 }
 
-// pump delivers one stream's blocks until it ends. A nil error means the
-// watch survives and reopens after delay: the server said closing, the
-// stream was cut or stalled, or the queue wedged it.
-func (w *Watch) pump(ctx context.Context, s *watchStream) (delay time.Duration, err error) {
+// pump takes one stream's blocks until it ends. A nil error means the watch
+// survives and reopens after floor: the server said closing, the stream was
+// cut or stalled, a block named no cursor, or the queue filled.
+func (w *Watch) pump(ctx context.Context, s *watchStream) (floor time.Duration, err error) {
 	stop := context.AfterFunc(ctx, s.stream.Abort)
 	defer stop()
 	// Close aborted the stream under the loop: a clean end, whatever the
@@ -423,6 +337,10 @@ func (w *Watch) pump(ctx context.Context, s *watchStream) (delay time.Duration, 
 			s.ended, err = nil, ctx.Err()
 		}
 	}()
+	// A quiet stream still pays a resync owed from before it opened.
+	if !w.Pay() {
+		return 0, w.overflow(ctx, s)
+	}
 	for {
 		if err := s.stream.SetReadDeadline(time.Now().Add(watchStall)); err != nil {
 			s.ended = err
@@ -433,56 +351,72 @@ func (w *Watch) pump(ctx context.Context, s *watchStream) (delay time.Duration, 
 			return 0, ctx.Err()
 		}
 		if err != nil {
-			// A cut stream, a stall or a malformed block: resume from the cursor.
+			// A cut stream, a stall or broken framing: resume from the cursor.
 			s.ended = err
 			return 0, nil
 		}
 		s.blocks++
 		if block.Status == "" {
-			ev, err := block.Event()
-			if err != nil {
+			if w.event(s, block) {
+				continue
+			}
+			if s.unreadable != nil {
 				return 0, nil
 			}
-			w.setCursor(ev.Cursor)
-			if protocol.IsKnownOp(ev.Op) && !w.deliver(ctx, s, &Notice{Event: ev}) {
-				return 0, nil
-			}
-			continue
+			return 0, w.overflow(ctx, s)
 		}
-		cursor, cursorErr := block.Cursor()
-		if cursorErr == nil {
-			w.setCursor(cursor)
-		}
-		switch block.Status {
-		case protocol.StatusOK:
-		case protocol.StatusResync:
-			if cursorErr != nil {
-				return 0, nil
-			}
-			w.deliver(ctx, s, &Notice{Resync: true, Event: protocol.WatchEvent{Cursor: cursor}})
-			return 0, nil
-		case protocol.StatusClosing:
-			return 500 * time.Millisecond, nil
-		default:
-			return 0, &StatusError{Status: block.Status}
+		if done, floor, err := w.control(ctx, s, block); done {
+			return floor, err
 		}
 	}
 }
 
-// deliver queues n. A full queue cancels the stream, so the connection's
-// window stays free for other streams, then waits for room and reports false:
-// the caller reopens after n's cursor, so nothing is lost.
-func (w *Watch) deliver(ctx context.Context, s *watchStream, n *Notice) bool {
-	select {
-	case w.notices <- *n:
-		return true
+// event takes one event block; false stops the stream, on a full queue or
+// with s.unreadable set. A block that reads as no event but names a cursor
+// is passed and reported as a resync: the consumer missed what it announced.
+func (w *Watch) event(s *watchStream, block protocol.WatchBlock) bool {
+	ev, err := block.Event()
+	if err == nil {
+		return w.Event(&ev)
+	}
+	cursor, cursorErr := block.Cursor()
+	if cursorErr != nil {
+		s.unreadable = err
+		return false
+	}
+	return w.Unread(cursor)
+}
+
+// control applies a status block; done ends the stream as pump reports it.
+func (w *Watch) control(ctx context.Context, s *watchStream, block protocol.WatchBlock) (done bool, floor time.Duration, err error) {
+	cursor, cursorErr := block.Cursor()
+	if block.Status == protocol.StatusResync {
+		if cursorErr != nil {
+			s.unreadable = cursorErr
+			return true, 0, nil
+		}
+		if !w.Resync(cursor) {
+			return true, 0, w.overflow(ctx, s)
+		}
+		return true, 0, nil
+	}
+	if cursorErr == nil {
+		w.Skip(cursor)
+	}
+	switch block.Status {
+	case protocol.StatusOK:
+		return false, 0, nil
+	case protocol.StatusClosing:
+		return true, 500 * time.Millisecond, nil
 	default:
+		return true, 0, &StatusError{Status: block.Status}
 	}
+}
+
+// overflow cancels the stream over a full queue, so the connection's window
+// stays free for other streams, and waits for room: the next stream resumes
+// from the cursor, so nothing is lost.
+func (w *Watch) overflow(ctx context.Context, s *watchStream) error {
 	s.stream.Abort()
-	select {
-	case w.notices <- *n:
-		return false
-	case <-ctx.Done():
-		return false
-	}
+	return w.WaitRoom(ctx)
 }

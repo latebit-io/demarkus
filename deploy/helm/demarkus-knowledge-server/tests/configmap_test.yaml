@@ -105,7 +105,31 @@ tests:
     asserts:
       - matchRegex:
           path: data["config.yaml"]
+          pattern: 'name: "alice"[\s\S]*gated: true\n\s*seed: memory\n'
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: "team-a"[\s\S]*seed:'
+
+  - it: leaves the memory seed off a memory world with its own initial policy
+    set:
+      broker.memory.publicURL: https://memory.example.com
+      worlds:
+        - name: alice
+          worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48
+          profile: memory
+          bucket: {url: gs://deployment-alice}
+          allow: {emails: [alice@example.com]}
+          initialPolicy: |
+            # Write Policy
+
+            Ours.
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
           pattern: 'name: "alice"[\s\S]*gated: true'
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'seed:'
 
   - it: restricts governance on a knowledge world once governors exist, opens it on memory, honours an override
     set:

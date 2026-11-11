@@ -29,23 +29,25 @@ server/internal/tls                             store
 server/internal/worldruntime                    store      # multi-world hosting is core (plan lean)
 server/internal/writepolicy                     store      # the mechanism; policy content is the tier's
 server/logthrottle                              store
+server/store                                    store      # the versioned file store; exported for tools/demarkus-publish
 
 client/docwrite                                 storeclient  # the write contract
 client/fetch                                    storeclient
 client/fetchtest                                storeclient
 client/generation                               storeclient
 client/internal/cache                           storeclient
+client/internal/filelock                        storeclient
 client/internal/tokens                          storeclient
 client/joinurl                                  storeclient
 client/links                                    storeclient
 client/listing                                  storeclient
 client/listwalk                                 storeclient
 client/lookuptable                              storeclient
-client/mcpwatch                                 storeclient  # the MCP binding's WATCH client
 client/merge                                    storeclient
 client/token                                    storeclient
 
 client/mcpprovider                              surface
+client/mcpwatch                                 surface    # WATCH over the MCP binding: an mcp-go transport adapter on fetch.Feed
 client/memory/...                               model
 
 tools/demarkus-plugin/internal/config           soul
@@ -58,6 +60,8 @@ tools/demarkus-plugin/internal/semver           soul
 
 knowledge/internal/broker/brokertest            knowledge
 knowledge/internal/broker/core                  knowledge
+knowledge/internal/broker/dispatch              knowledge  # worlds by name: in process or over the network
+knowledge/internal/broker/httpauth              knowledge  # bearer and subject-limit middleware both listeners mount
 knowledge/internal/broker/oauthsrv              knowledge  # identity: grants, refresh, JWKS
 knowledge/internal/broker/storage               knowledge
 knowledge/internal/federation                   knowledge

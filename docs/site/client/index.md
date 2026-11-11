@@ -71,11 +71,13 @@ demarkus -X PUBLISH -expected-version 4 -auth $TOKEN mark://host/doc.md < candid
 
 `has-markers=true` means both sides changed the same lines and the candidate holds conflict markers to resolve first. `-on-conflict fail` prints the bare `conflict` status instead of merging.
 
+A write lands the same from the CLI as from the MCP tools. A version-checked `PUBLISH` that creates a document adds its bullet to the nearest hub (`index.md`) above it, and an `ARCHIVE` drops the bullets that only linked the document; each hub edit, a document no hub reaches, style findings, and tags or keys an update dropped are reported on stderr as `demarkus: ...` lines. `-force` is the bare verb: it touches no hub.
+
 A write is sent once. If its response is lost, the CLI looks at the document and reports success when the write is there; when it cannot tell, the error says the write may have landed. Fetch the document before retrying, because a resend would conflict with the first attempt.
 
 ### Edit a document
 
-Opens a document in `$EDITOR` (falls back to `vi`), then publishes changes when you exit the editor, checked against the version you opened and carrying the document's tags and other metadata. If the document doesn't exist, creates a new one. Empty documents are rejected.
+Opens a document in `$EDITOR` (falls back to `vi`), then publishes changes when you exit the editor, checked against the version you opened and carrying the document's tags and other metadata. `retention` and the `agent` and `user` of the version you opened are not carried: an edit never prunes history or claims another writer's identity. If the document doesn't exist, creates a new one. Empty documents are rejected.
 
 Your work is never lost: if someone else published while you were editing, the merged candidate is written to a temporary file; if the publish fails for any other reason, your edits are. Either way the message names the file.
 
@@ -126,7 +128,7 @@ demarkus-tui --insecure mark://localhost:6309/index.md
 
 - `Tab`: cycle links
 - `Enter`: follow selected link
-- `[` / `]`: back / forward
+- `[` / `]`: back / forward; from a failed fetch or the bookmarks, `[` or `Esc` returns to the page they cover
 - `d`: document graph view (loads stored graph instantly, live crawl updates in background)
 - `?`: help
 

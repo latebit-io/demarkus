@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/httpauth"
 )
 
 // gatewayAuth is the gateway's bearer gate: the bearer check every surface
@@ -15,7 +16,7 @@ import (
 func (g *Gateway) gatewayAuth(next http.Handler) http.Handler {
 	check := core.BearerCheck{Verifier: g.deps.Verifier, AllowDomains: g.deps.AllowDomains}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw := core.BearerToken(r)
+		raw := httpauth.BearerToken(r)
 		if raw == "" {
 			// RFC 6750 3.1: a missing Authorization header is invalid_request.
 			g.writeMCPAuthChallenge(w, "invalid_request", "Authorization: Bearer <id_token> required")

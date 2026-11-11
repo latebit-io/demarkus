@@ -174,10 +174,6 @@ func TestValidateRequiredAndLimitFields(t *testing.T) {
 			config.Worlds[0].Policy.File = "/etc/demarkus/policy.md"
 			config.Worlds[0].ReadOnly = true
 		}, "must not be set on a read-only world"},
-		{"policy file on a bootstrap world", func(config *Config) {
-			config.Worlds[0].Policy.File = "/etc/demarkus/policy.md"
-			config.Worlds[0].Bootstrap = true
-		}, "must not be set on a bootstrap world"},
 		{"concurrency", func(config *Config) { config.Worlds[0].Limits.MaxConcurrentRequests = 0 }, "maxConcurrentRequests must be positive"},
 		{"request timeout", func(config *Config) { config.Worlds[0].Limits.RequestTimeout = -1 }, "requestTimeout must not be negative"},
 		{"negative rate", func(config *Config) { config.Worlds[0].Limits.RequestsPerSecond = -1 }, "requestsPerSecond must not be negative"},

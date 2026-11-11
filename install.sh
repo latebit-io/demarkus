@@ -184,9 +184,8 @@ detect_platform() {
       ;;
     darwin) PLATFORM="darwin" ;;
     msys*|cygwin*|mingw*)
-      log_error "Windows detected. Download binaries directly from GitHub Releases:"
-      log_error "  https://github.com/${GITHUB_REPO}/releases"
-      log_error "Or use WSL2 — see: https://latebit-io.github.io/demarkus/install/windows/"
+      log_error "Windows is supported through WSL2 only: run this installer inside WSL2."
+      log_error "See: https://latebit-io.github.io/demarkus/install/windows/"
       exit 1
       ;;
     *)      log_error "Unsupported OS: $OS"; exit 1 ;;

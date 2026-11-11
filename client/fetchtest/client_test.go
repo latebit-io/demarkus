@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
 )
 
@@ -65,7 +64,7 @@ func TestDoneContextRunsNoCallback(t *testing.T) {
 	calls := map[string]func() error{
 		"Fetch": func() error { _, err := c.Fetch(ctx, fetch.FetchRequest{Host: "h", Path: "/doc.md"}); return err },
 		"Seed": func() error {
-			_, err := c.Fetch(ctx, fetch.FetchRequest{Host: "h", Path: graphstore.GraphExportPath})
+			_, err := c.Fetch(ctx, fetch.FetchRequest{Host: "h", Path: protocol.GraphExportPath})
 			return err
 		},
 		"List":     func() error { _, err := c.List(ctx, fetch.ListRequest{Host: "h", Path: "/"}); return err },
@@ -110,7 +109,7 @@ func TestSeedDocumentsNeverReachFetchFn(t *testing.T) {
 	}
 
 	unscripted := &Client{FetchFn: anyDoc}
-	for _, path := range []string{graphstore.GraphExportPath, graphstore.SnapshotManifestPath} {
+	for _, path := range []string{protocol.GraphExportPath, protocol.GraphSnapshotManifestPath} {
 		if got := fetchBody(unscripted, path); got != protocol.StatusNotFound+" " {
 			t.Errorf("unscripted seed %s = %q, want not found", path, got)
 		}
@@ -120,14 +119,14 @@ func TestSeedDocumentsNeverReachFetchFn(t *testing.T) {
 	}
 
 	scripted := &Client{FetchFn: anyDoc, SeedFn: seed}
-	if got := fetchBody(scripted, graphstore.SnapshotManifestPath); got != "ok seed "+graphstore.SnapshotManifestPath {
+	if got := fetchBody(scripted, protocol.GraphSnapshotManifestPath); got != "ok seed "+protocol.GraphSnapshotManifestPath {
 		t.Errorf("manifest = %q, want SeedFn's answer", got)
 	}
 	scripted.SnapshotFn = snapshot
-	if got := fetchBody(scripted, graphstore.SnapshotManifestPath); got != "ok snapshot" {
+	if got := fetchBody(scripted, protocol.GraphSnapshotManifestPath); got != "ok snapshot" {
 		t.Errorf("manifest = %q, want SnapshotFn to win", got)
 	}
-	if got := fetchBody(scripted, graphstore.GraphExportPath); got != "ok seed "+graphstore.GraphExportPath {
+	if got := fetchBody(scripted, protocol.GraphExportPath); got != "ok seed "+protocol.GraphExportPath {
 		t.Errorf("graph export = %q, want SeedFn's answer", got)
 	}
 	if len(scripted.SeedCalls) != 3 || len(scripted.FetchCalls) != 0 || scripted.SeedCalls[0].IfNoneMatch != "etag" {
@@ -135,10 +134,10 @@ func TestSeedDocumentsNeverReachFetchFn(t *testing.T) {
 	}
 
 	published := &Client{}
-	if _, err := published.Publish(t.Context(), fetch.WriteRequest{Host: "h", Path: graphstore.GraphExportPath, Body: "graph"}); err != nil {
+	if _, err := published.Publish(t.Context(), fetch.WriteRequest{Host: "h", Path: protocol.GraphExportPath, Body: "graph"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := fetchBody(published, graphstore.GraphExportPath); got != "ok graph" {
+	if got := fetchBody(published, protocol.GraphExportPath); got != "ok graph" {
 		t.Errorf("published seed = %q, want the stored body", got)
 	}
 }

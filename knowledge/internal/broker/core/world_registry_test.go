@@ -12,7 +12,7 @@ func registryWorld(name, generation string) WorldConfig {
 // A world that leaves the set, or comes back as a new one under the same name,
 // is announced once, after the swap, so every per-world cache can let go of it.
 func TestWorldRegistryAnnouncesDroppedWorlds(t *testing.T) {
-	registry := newWorldRegistry([]WorldConfig{{Name: "static"}})
+	registry := NewWorldRegistry([]WorldConfig{{Name: "static"}})
 	var dropped []string
 	registry.OnDrop(func(name string) {
 		// The hook runs outside the registry's lock and sees the new set.
@@ -41,7 +41,7 @@ func TestWorldRegistryAnnouncesDroppedWorlds(t *testing.T) {
 }
 
 func TestWorldRegistryIdentityIndex(t *testing.T) {
-	registry := newWorldRegistry([]WorldConfig{{Name: "static"}})
+	registry := NewWorldRegistry([]WorldConfig{{Name: "static"}})
 	registry.SetDynamic([]WorldConfig{registryWorld("eve-1", "t1")}, map[string]string{"iss|eve": "eve-1", "iss|mallory": "static"})
 	if slug, ok := registry.SlugForIdentity("iss|eve"); !ok || slug != "eve-1" {
 		t.Errorf("eve = %q, %v", slug, ok)
@@ -54,7 +54,7 @@ func TestWorldRegistryIdentityIndex(t *testing.T) {
 // A registry record written by hand or by an older build may carry a name no
 // tool URL can reach. It is kept out and reported, never served.
 func TestWorldRegistryRefusesUnaddressableProvisionedNames(t *testing.T) {
-	registry := newWorldRegistry(nil)
+	registry := NewWorldRegistry(nil)
 	rejected := registry.SetDynamic([]WorldConfig{registryWorld("Eve-1", "t1"), registryWorld("eve-2", "t1")}, map[string]string{"iss|a": "Eve-1", "iss|b": "eve-2"})
 	if !slices.Equal(rejected, []string{"Eve-1"}) {
 		t.Errorf("rejected = %v", rejected)
@@ -71,7 +71,7 @@ func TestWorldRegistryRefusesUnaddressableProvisionedNames(t *testing.T) {
 }
 
 func TestWorldViewServesOneProfile(t *testing.T) {
-	reg := newWorldRegistry([]WorldConfig{
+	reg := NewWorldRegistry([]WorldConfig{
 		{Name: "team-a"},
 		{Name: "team-b", Profile: ProfileKnowledge},
 		{Name: "alice-w", Profile: ProfileMemory},
@@ -98,5 +98,34 @@ func TestWorldViewServesOneProfile(t *testing.T) {
 	}
 	if slug, ok := memory.SlugForIdentity("idp|eve"); !ok || slug != "eve-1" {
 		t.Fatalf("memory view SlugForIdentity = %q, %v; want eve-1", slug, ok)
+	}
+}
+
+// A listener leaves with its owner: once unregistered it is neither called
+// nor held, and the others still run in registration order.
+func TestWorldRegistryOnDropUnregisters(t *testing.T) {
+	registry := NewWorldRegistry(nil)
+	var calls []string
+	first := registry.OnDrop(func(name string) { calls = append(calls, "first:"+name) })
+	registry.OnDrop(func(name string) { calls = append(calls, "second:"+name) })
+	third := registry.OnDrop(func(name string) { calls = append(calls, "third:"+name) })
+
+	registry.SetDynamic([]WorldConfig{registryWorld("eve-1", "t1")}, nil)
+	registry.SetDynamic(nil, nil)
+	if want := []string{"first:eve-1", "second:eve-1", "third:eve-1"}; !slices.Equal(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+
+	first()
+	third()
+	third() // twice is harmless
+	calls = nil
+	registry.SetDynamic([]WorldConfig{registryWorld("eve-1", "t2")}, nil)
+	registry.SetDynamic(nil, nil)
+	if want := []string{"second:eve-1"}; !slices.Equal(calls, want) {
+		t.Fatalf("calls after unregistering = %v, want %v", calls, want)
+	}
+	if got := len(registry.onDrop); got != 1 {
+		t.Fatalf("registry still holds %d listeners, want 1", got)
 	}
 }

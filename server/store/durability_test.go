@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -60,20 +61,31 @@ func TestWriteFailedSwapLeavesDocumentWritable(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	// A non empty directory where the temp link goes makes the swap fail early.
-	blocker := filepath.Join(root, "a.md.tmp")
-	if err := os.MkdirAll(filepath.Join(blocker, "x"), 0o755); err != nil {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a read-only directory")
+	}
+	// The versions tree stays writable; a read-only root refuses the temp
+	// link, so the swap fails after the version file exists.
+	if err := os.Mkdir(filepath.Join(root, "versions"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Write("/a.md", []byte("# A\n"), nil); err == nil {
-		t.Fatal("write: want the swap error")
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(root, 0o755); err != nil {
+			t.Errorf("restore %s: %v", root, err)
+		}
+	})
+	if _, err := s.Write("/a.md", []byte("# A\n"), nil); err == nil || !strings.Contains(err.Error(), "symlink current file") {
+		t.Fatalf("write = %v, want the swap error", err)
 	}
 	vFile := newVersionFilePath(filepath.Join(root, "versions"), "a.md", 1)
 	if _, err := os.Lstat(vFile); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("orphan version file left behind: %v", err)
 	}
 
-	if err := os.RemoveAll(blocker); err != nil {
+	if err := os.Chmod(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	doc, err := s.Write("/a.md", []byte("# A\n"), nil)

@@ -82,7 +82,7 @@ func RetentionValue(meta map[string]string) int {
 
 // mergeAppendMeta layers an APPEND's metadata over the base version's, request
 // keys winning (SPEC 6.6); without it an append drops the doc out of LOOKUP.
-// retention is never inherited: pruning belongs to the write declaring it.
+// retention and the identity keys belong to one write: never inherited.
 func mergeAppendMeta(base, req map[string]string) map[string]string {
 	if len(base) == 0 && len(req) == 0 {
 		return nil
@@ -90,6 +90,8 @@ func mergeAppendMeta(base, req map[string]string) map[string]string {
 	merged := make(map[string]string, len(base)+len(req))
 	maps.Copy(merged, base)
 	delete(merged, retentionKey)
+	delete(merged, protocol.MetaAgent)
+	delete(merged, protocol.MetaUser)
 	maps.Copy(merged, req)
 	return merged
 }

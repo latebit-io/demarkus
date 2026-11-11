@@ -48,7 +48,7 @@ func bearerGateFixture(t *testing.T) (*Config, *BearerGate, time.Time) {
 		}
 		return Claims{}, errors.New("signature invalid")
 	}}
-	return cfg, NewBearerGate(cfg, verifier, slog.New(slog.DiscardHandler)), expiry
+	return cfg, NewBearerGate(cfg, NewWorldRegistry(cfg.Worlds), verifier, slog.New(slog.DiscardHandler)), expiry
 }
 
 func admitWith(t *testing.T, gate protocol.Gate, bearer string) (protocol.Grant, error) {
@@ -149,12 +149,12 @@ func TestBearerGateOnATenantWorld(t *testing.T) {
 // Tenancy is the memory gateway's: an identity two tenant worlds admit owns
 // neither, on the wire as over MCP.
 func TestBearerGateRefusesAnAmbiguousTenant(t *testing.T) {
-	cfg, gates, _ := bearerGateFixture(t)
+	_, gates, _ := bearerGateFixture(t)
 	twin := WorldConfig{
 		Name: "alice-twin", Profile: ProfileMemory, Local: true, InternalAddress: "alice-twin.tenants.example.com:6309",
 		Allow: AllowConfig{Emails: []string{"alice@example.com"}},
 	}
-	cfg.Registry().SetDynamic([]WorldConfig{twin}, nil)
+	gates.worlds.SetDynamic([]WorldConfig{twin}, nil)
 	gate, err := gates.For("alice-w.tenants.example.com")
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +168,7 @@ func TestBearerGateAppliesTheOrgGate(t *testing.T) {
 	cfg, _, _ := bearerGateFixture(t)
 	cfg.OIDC.AllowDomains = []string{"example.com"}
 	identities := &fakeVerifier{Claims: Claims{Subject: "idp|alice", Email: "alice@example.com", EmailVerified: true}}
-	gate, err := NewBearerGate(cfg, identities, slog.New(slog.DiscardHandler)).For("team-a.example.com")
+	gate, err := NewBearerGate(cfg, NewWorldRegistry(cfg.Worlds), identities, slog.New(slog.DiscardHandler)).For("team-a.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,12 +178,12 @@ func TestBearerGateAppliesTheOrgGate(t *testing.T) {
 }
 
 func TestBearerGateReadsTheRegistryPerRequest(t *testing.T) {
-	cfg, gates, _ := bearerGateFixture(t)
+	_, gates, _ := bearerGateFixture(t)
 	bob := WorldConfig{
 		Name: "bob-w", Profile: ProfileMemory, Local: true, InternalAddress: "bob-w.tenants.example.com:6309",
 		Allow: AllowConfig{Emails: []string{"bob@example.com"}}, WriteScope: WriteScope{Paths: []string{"/**"}},
 	}
-	cfg.Registry().SetDynamic([]WorldConfig{bob}, nil)
+	gates.worlds.SetDynamic([]WorldConfig{bob}, nil)
 	gate, err := gates.For("bob-w.tenants.example.com")
 	if err != nil {
 		t.Fatalf("a provisioned tenant has a gate: %v", err)
@@ -191,7 +191,7 @@ func TestBearerGateReadsTheRegistryPerRequest(t *testing.T) {
 	if _, err := admitWith(t, gate, "bob"); err != nil {
 		t.Fatalf("before deprovision: %v", err)
 	}
-	cfg.Registry().SetDynamic(nil, nil)
+	gates.worlds.SetDynamic(nil, nil)
 	if _, err := admitWith(t, gate, "bob"); !errors.Is(err, protocol.ErrNotPermitted) {
 		t.Errorf("after deprovision on an open connection: err = %v, want ErrNotPermitted", err)
 	}

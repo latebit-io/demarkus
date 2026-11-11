@@ -1,4 +1,4 @@
-package gateway
+package dispatch
 
 import (
 	"context"
@@ -10,10 +10,14 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
+	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/protocol"
 )
+
+// fakeDispatcher is the scriptable remote; see client/fetchtest.
+type fakeDispatcher = fetchtest.Client
 
 // fakeLocal routes the authorities it knows; err fails every exchange.
 // A watch is answered with blocks, then held open until it is closed.
@@ -89,7 +93,7 @@ func TestCompositeServesLocalWorldWithWireRequest(t *testing.T) {
 		"team-a.team-a.svc.cluster.local": {Status: protocol.StatusOK, Body: "local"},
 	}}
 	remote := &fakeDispatcher{}
-	c := NewComposite(cfg.Registry(), local, remote)
+	c := NewComposite(brokertest.Registry(t, cfg), local, remote)
 
 	res, err := c.Fetch(context.Background(), fetch.FetchRequest{Host: "team-a", Path: "/index.md", Token: "tok"})
 	if err != nil {
@@ -116,7 +120,7 @@ func TestCompositeDispatchesRemoteWorldOverTheNetwork(t *testing.T) {
 	remote := &fakeDispatcher{ListFn: func(context.Context, fetch.ListRequest) (fetch.Result, error) {
 		return fetch.Result{Response: protocol.Response{Status: protocol.StatusOK, Body: "remote"}}, nil
 	}}
-	c := NewComposite(cfg.Registry(), local, remote)
+	c := NewComposite(brokertest.Registry(t, cfg), local, remote)
 
 	res, err := c.List(context.Background(), fetch.ListRequest{Host: "team-a", Path: "/"})
 	if err != nil {
@@ -135,7 +139,7 @@ func TestCompositeDoesNotRetryLocalFailureRemotely(t *testing.T) {
 	boom := errors.New("pipe broke")
 	local := &fakeLocal{err: boom}
 	remote := &fakeDispatcher{}
-	c := NewComposite(cfg.Registry(), local, remote)
+	c := NewComposite(brokertest.Registry(t, cfg), local, remote)
 
 	_, err := c.Publish(granted(), fetch.WriteRequest{Host: "team-a", Path: "/a.md", Body: "x"})
 	if !errors.Is(err, boom) {
@@ -149,11 +153,11 @@ func TestCompositeDoesNotRetryLocalFailureRemotely(t *testing.T) {
 func TestCompositeRefusesUnknownWorldAndBadRequests(t *testing.T) {
 	cfg := localConfig()
 	local := &fakeLocal{served: map[string]protocol.Response{"team-a.team-a.svc.cluster.local": {Status: protocol.StatusOK}}}
-	c := NewComposite(cfg.Registry(), local, &fakeDispatcher{})
+	c := NewComposite(brokertest.Registry(t, cfg), local, &fakeDispatcher{})
 
-	var notFound *errWorldNotFound
+	var notFound *WorldNotFoundError
 	if _, err := c.Fetch(context.Background(), fetch.FetchRequest{Host: "nowhere", Path: "/"}); !errors.As(err, &notFound) {
-		t.Fatalf("unknown world err = %v, want errWorldNotFound", err)
+		t.Fatalf("unknown world err = %v, want WorldNotFoundError", err)
 	}
 	if _, err := c.Append(granted(), fetch.WriteRequest{Host: "team-a", Path: "/a.md"}); err == nil {
 		t.Fatal("append without body or version was dispatched")
@@ -173,7 +177,7 @@ func TestCompositeWritesLocalWorldUnderTheGrant(t *testing.T) {
 	local := &fakeLocal{served: map[string]protocol.Response{
 		"team-a.team-a.svc.cluster.local": {Status: protocol.StatusCreated},
 	}}
-	c := NewComposite(cfg.Registry(), local, &fakeDispatcher{})
+	c := NewComposite(brokertest.Registry(t, cfg), local, &fakeDispatcher{})
 
 	res, err := c.Publish(granted(), fetch.WriteRequest{Host: "team-a", Path: "/a.md", Body: "x"})
 	if err != nil {
@@ -194,13 +198,13 @@ func TestCompositeRefusesWritesWithoutGrantOrLocalWorld(t *testing.T) {
 	cfg := brokertest.NewConfig()
 	local := &fakeLocal{}
 	remote := &fakeDispatcher{}
-	c := NewComposite(cfg.Registry(), local, remote)
+	c := NewComposite(brokertest.Registry(t, cfg), local, remote)
 
 	if _, err := c.Archive(context.Background(), fetch.ArchiveRequest{Host: "team-a", Path: "/a.md"}); !errors.Is(err, core.ErrNotAuthorized) {
 		t.Fatalf("ungranted write err = %v, want ErrNotAuthorized", err)
 	}
-	if _, err := c.Publish(granted(), fetch.WriteRequest{Host: "team-a", Path: "/a.md", Body: "x"}); !errors.Is(err, errWorldNotLocal) {
-		t.Fatalf("remote world write err = %v, want errWorldNotLocal", err)
+	if _, err := c.Publish(granted(), fetch.WriteRequest{Host: "team-a", Path: "/a.md", Body: "x"}); !errors.Is(err, ErrWorldNotLocal) {
+		t.Fatalf("remote world write err = %v, want ErrWorldNotLocal", err)
 	}
 	if len(local.calls) != 0 || len(remote.PublishCalls) != 0 {
 		t.Fatal("a refused write reached a world")
@@ -209,24 +213,24 @@ func TestCompositeRefusesWritesWithoutGrantOrLocalWorld(t *testing.T) {
 
 func TestCheckLocalRequiresTheServerToRouteEveryLocalWorld(t *testing.T) {
 	cfg := localConfig()
-	if err := CheckLocal(cfg.Registry(), nil); err == nil || !strings.Contains(err.Error(), "no knowledge server") {
+	if err := CheckLocal(brokertest.Registry(t, cfg), nil); err == nil || !strings.Contains(err.Error(), "no knowledge server") {
 		t.Fatalf("no server err = %v, want a local world refused", err)
 	}
 	unrouted := &fakeLocal{}
-	if err := CheckLocal(cfg.Registry(), unrouted); err == nil || !strings.Contains(err.Error(), "team-a.team-a.svc.cluster.local") {
+	if err := CheckLocal(brokertest.Registry(t, cfg), unrouted); err == nil || !strings.Contains(err.Error(), "team-a.team-a.svc.cluster.local") {
 		t.Fatalf("unrouted err = %v, want the authority named", err)
 	}
 	routed := &fakeLocal{served: map[string]protocol.Response{"team-a.team-a.svc.cluster.local": {}}}
-	if err := CheckLocal(cfg.Registry(), routed); err != nil {
+	if err := CheckLocal(brokertest.Registry(t, cfg), routed); err != nil {
 		t.Fatalf("routed: %v", err)
 	}
 	// The server's floor must be a local knowledge world the tools can reach.
 	routed.floor = "team-a"
-	if err := CheckLocal(cfg.Registry(), routed); err != nil {
+	if err := CheckLocal(brokertest.Registry(t, cfg), routed); err != nil {
 		t.Fatalf("local floor: %v", err)
 	}
 	routed.floor = "elsewhere"
-	if err := CheckLocal(cfg.Registry(), routed); err == nil || !strings.Contains(err.Error(), `floor world "elsewhere"`) {
+	if err := CheckLocal(brokertest.Registry(t, cfg), routed); err == nil || !strings.Contains(err.Error(), `floor world "elsewhere"`) {
 		t.Fatalf("foreign floor err = %v, want the floor named", err)
 	}
 	if got := FloorOf(nil); got != "" {
@@ -238,14 +242,14 @@ func TestCheckLocalRequiresTheServerToRouteEveryLocalWorld(t *testing.T) {
 	memory.Worlds[0].Local = true
 	authority := memory.Worlds[0].Authority()
 	open := &fakeLocal{served: map[string]protocol.Response{authority: {}}}
-	if err := CheckLocal(memory.Registry(), open); err == nil || !strings.Contains(err.Error(), "gated: true") {
+	if err := CheckLocal(brokertest.Registry(t, memory), open); err == nil || !strings.Contains(err.Error(), "gated: true") {
 		t.Fatalf("ungated memory world err = %v, want the gate required", err)
 	}
 	open.gated = map[string]struct{}{authority: {}}
-	if err := CheckLocal(memory.Registry(), open); err != nil {
+	if err := CheckLocal(brokertest.Registry(t, memory), open); err != nil {
 		t.Fatalf("gated memory world: %v", err)
 	}
-	if err := CheckLocal(brokertest.NewConfig().Registry(), nil); err != nil {
+	if err := CheckLocal(brokertest.Registry(t, brokertest.NewConfig()), nil); err != nil {
 		t.Fatalf("remote only worlds need no server: %v", err)
 	}
 }
@@ -261,7 +265,7 @@ func TestCompositeWatchesLocalWorldInProcess(t *testing.T) {
 			protocol.WatchEvent{Cursor: protocol.Cursor{Epoch: "e1", Seq: 5}, Path: "/a.md", Version: 2, Op: protocol.OpPublish}.Block(),
 		},
 	}
-	c := NewComposite(localConfig().Registry(), local, &fakeDispatcher{})
+	c := NewComposite(brokertest.Registry(t, localConfig()), local, &fakeDispatcher{})
 	w, err := c.Watch(context.Background(), fetch.WatchRequest{Host: "team-a", Path: "/", Since: protocol.Cursor{Epoch: "e1", Seq: 3}})
 	if err != nil {
 		t.Fatalf("watch: %v", err)
@@ -282,7 +286,7 @@ func TestCompositeWatchesLocalWorldInProcess(t *testing.T) {
 // not-found at their next reopen, instead of a reopen loop.
 func TestCompositeWatchEndsWhenItsWorldLeaves(t *testing.T) {
 	cfg := brokertest.NewMemoryConfig()
-	registry := cfg.Registry()
+	registry := brokertest.Registry(t, cfg)
 	tenant := core.WorldConfig{Name: "carol-w", Profile: core.ProfileMemory, Namespace: "carol-w", Local: true}
 	registry.SetDynamic([]core.WorldConfig{tenant}, nil)
 	cursor := protocol.Cursor{Epoch: "e1", Seq: 4}
@@ -308,12 +312,12 @@ func TestCompositeWatchEndsWhenItsWorldLeaves(t *testing.T) {
 }
 
 func TestCompositeWatchRefusesRemoteAndUnknownWorlds(t *testing.T) {
-	c := NewComposite(brokertest.NewConfig().Registry(), &fakeLocal{}, &fakeDispatcher{})
-	if _, err := c.Watch(context.Background(), fetch.WatchRequest{Host: "team-a", Path: "/"}); !errors.Is(err, errWorldNotLocal) {
-		t.Errorf("remote world err = %v, want errWorldNotLocal", err)
+	c := NewComposite(brokertest.Registry(t, brokertest.NewConfig()), &fakeLocal{}, &fakeDispatcher{})
+	if _, err := c.Watch(context.Background(), fetch.WatchRequest{Host: "team-a", Path: "/"}); !errors.Is(err, ErrWorldNotLocal) {
+		t.Errorf("remote world err = %v, want ErrWorldNotLocal", err)
 	}
-	var unknown *errWorldNotFound
+	var unknown *WorldNotFoundError
 	if _, err := c.Watch(context.Background(), fetch.WatchRequest{Host: "nope", Path: "/"}); !errors.As(err, &unknown) {
-		t.Errorf("unknown world err = %v, want errWorldNotFound", err)
+		t.Errorf("unknown world err = %v, want WorldNotFoundError", err)
 	}
 }

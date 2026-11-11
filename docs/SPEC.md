@@ -503,8 +503,8 @@ content-hash: sha256-<64-char hex SHA-256>
 - The combined content (existing + newline + appended) MUST NOT exceed the document size limit.
 - The `expected-version` metadata field is REQUIRED for APPEND (unlike PUBLISH where it is optional). Since APPEND is non-idempotent, the server cannot safely retry internally. The value MUST be >= 1; the server MUST reject `expected-version: 0` or absent `expected-version` as a bad request.
 - Conflict semantics match PUBLISH (see section 6.4). On conflict, fetch the latest version and verify whether your append was applied before retrying.
-- The new version's publisher metadata is the base version's metadata with the APPEND request's metadata layered over it; a key present in both takes the request's value. A document therefore keeps its `tags`, `importance`, `title`, and `type` across an append, and stays in the LOOKUP catalog (§6.7). Replacing metadata wholesale, including removing a key, requires PUBLISH.
-- `retention` (§9.9) is the one key that is NOT inherited: pruning is destructive, so it applies only to a write that declares it. An append to a document published with `retention` does not prune unless the append itself carries the key.
+- The new version's publisher metadata is the base version's metadata with the APPEND request's metadata layered over it; a key present in both takes the request's value. The identity keys `agent` and `user` (§8.1) and `retention` are the exception: they belong to the write that carried them and are never inherited. A document therefore keeps its `tags`, `importance`, `title`, and `type` across an append, and stays in the LOOKUP catalog (§6.7). Replacing metadata wholesale, including removing a key, requires PUBLISH.
+- `retention` (§9.9) is NOT inherited because pruning is destructive: it applies only to a write that declares it. An append to a document published with `retention` does not prune unless the append itself carries the key.
 - The OKF type default (§6.4) applies after the merge, so an append to a non-reserved path whose base version declares no `type` stores `type: Document`, while a declared type survives.
 - The merged metadata MUST satisfy whatever metadata key-count and size limits the implementation enforces (§9.4). An append whose merge breaches them is a `bad-request`.
 
@@ -609,10 +609,10 @@ Servers that implement body match SHOULD list `lookup-match: catalog, body` (wit
 **Errors**:
 
 - `bad-request`: Missing, empty, or too-short `query` (except under `match: similar`), a `similar` request without a body, a malformed `filter`, an invalid `limit`, or an unknown `match` value.
-- `not-found`: The scope path does not exist or is not a directory.
+- `not-found`: The scope path does not exist or is not a directory, and the requester is authorised to read it.
 - `server-error`: Internal error.
 
-A valid LOOKUP over an existing scope with no matching documents MUST return `ok` with `matches: 0` and a header-only table, not `not-found`.
+A valid LOOKUP over an existing scope with no matching documents MUST return `ok` with `matches: 0` and a header-only table, not `not-found`. A scope the requester is not authorised to read MUST be answered the same way whether or not it exists: `ok` with the rows under it the requester may read, so the status never tells a protected directory from a missing one.
 
 ### 6.8. WATCH
 
@@ -691,6 +691,7 @@ Terminal, the last block of the stream:
 
 - One block, fences included, MUST NOT exceed **8192 bytes**. A client MUST reject a longer block as malformed and reopen the stream. Block values follow the metadata grammar (§4.3): no line breaks.
 - A client MUST ignore keys it does not recognise in any block and MUST skip an event whose `op` it does not recognise, so a server or an intermediary can add keys and operations without a new verb.
+- A client that cannot decode an event block SHOULD pass it when the block carries a valid `cursor` and treat it as a `resync` at that cursor, since what it announced is unknown. A block without one cannot be passed: the client reopens from its last cursor after a growing pause, never at once, and SHOULD end the watch with an error when the same block keeps arriving.
 - A cursor is an opaque string of the form `<epoch>:<seq>`: the epoch is 1 to 64 characters of letters, digits, `.`, `_` and `-`; the sequence is a decimal integer without leading zeros. The server changes the epoch whenever its sequence restarts. A client uses a cursor only by passing it back; it MUST NOT infer a gap from cursor values, since events it may not read are omitted silently. A gap is signalled only by `resync`.
 - Delivery is at least once and in order within an epoch. Events MUST NOT be reordered. A server MAY deliver only the latest of several consecutive changes to one path; every version remains reachable through VERSIONS.
 - The write that produced an event is committed before the event is emitted, so a FETCH of the event's version succeeds unless the document was archived or pruned since.
@@ -804,7 +805,7 @@ The following status values are reserved for future use:
 
 Beyond the interpreted fields above, a PUBLISH request MAY carry additional publisher metadata as arbitrary `key: value` frontmatter lines. The server stores these opaquely and exposes them to LOOKUP `filter` predicates. Reserved store fields (§9.4) MUST be rejected. §9.4 specifies how publisher metadata is persisted, including the Open Knowledge Format field names that are stored as bare frontmatter fields.
 
-Two publisher keys are the identity convention: `agent` names the writing software and `user` the verified person behind the write. A writing surface that knows them MAY stamp them and MUST NOT let a caller override a key it stamps. Servers store them like any publisher metadata and echo them on WATCH events (§6.8).
+Two publisher keys are the identity convention: `agent` names the writing software and `user` the verified person behind the write. A writing surface that knows them MAY stamp them and MUST NOT let a caller override a key it stamps. A server stores `agent` like any publisher metadata. It MUST NOT store a request's own `user`: `user` is stored only when the server itself verified the person behind the request (a bearer identity), and is then that person whatever the request carried; a write authorised by a capability token, which names nobody, stores none. Both keys describe one write: an APPEND does not inherit them from the base version (§6.6). Servers echo them on WATCH events (§6.8).
 
 `classifier` is server-owned: a server that classifies written bodies for prompt injection MAY stamp its verdict there (`injection: <reason> (<model>)`, or `unchecked: <why>` when it could not decide), and MUST drop a writer's own value for the key before storing. A verdict never refuses a write. A LOOKUP status weight on a version stamped `injection` MUST NOT exceed 0.8, as for the taint cap.
 

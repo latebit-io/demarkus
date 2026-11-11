@@ -417,3 +417,112 @@ func TestLoginExpiry(t *testing.T) {
 		}
 	}
 }
+
+// A login id is not a secret: it names a bucket object and appears in logs.
+// Only a secret the login honors, or its last rotated-out one, revokes it.
+func TestRefreshStoreRevokeNeedsASecretOfTheLogin(t *testing.T) {
+	s := newRefreshStoreForTest(t)
+	first := s.issue(t, "a@b.com", time.Hour)
+	token, _ := parseRefreshToken(first)
+	forged := token
+	forged.secret = strings.Repeat("0", refreshSecretBytes*2)
+	if err := s.Revoke(context.Background(), forged.encode()); err != nil {
+		t.Fatalf("Revoke with a forged secret = %v, want a silent no-op", err)
+	}
+	second := s.rotate(t, first)
+	// The login survived the forged revoke; its rotated-out token still ends it.
+	if err := s.Revoke(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	s.wantInvalid(t, second, "a login revoked by its rotated-out token")
+}
+
+// The operator ends every login of an identity, by subject or by email,
+// leaving other users alone.
+func TestRefreshStoreRevokeIdentity(t *testing.T) {
+	s := newRefreshStoreForTest(t)
+	laptop := s.issue(t, "a@b.com", time.Hour)
+	s.now = s.now.Add(time.Second)
+	phone := s.issue(t, "a@b.com", time.Hour)
+	other := s.issue(t, "bob@b.com", time.Hour)
+
+	revoked, err := s.RevokeIdentity(context.Background(), " A@B.com ")
+	if err != nil || revoked != 2 {
+		t.Fatalf("RevokeIdentity by email = %d, %v; want 2", revoked, err)
+	}
+	s.wantInvalid(t, laptop, "a revoked identity's first login")
+	s.wantInvalid(t, phone, "a revoked identity's second login")
+	s.rotate(t, other)
+
+	if revoked, err := s.RevokeIdentity(context.Background(), "sub|bob@b.com"); err != nil || revoked != 1 {
+		t.Fatalf("RevokeIdentity by subject = %d, %v; want 1", revoked, err)
+	}
+	if revoked, err := s.RevokeIdentity(context.Background(), "nobody@b.com"); err != nil || revoked != 0 {
+		t.Fatalf("RevokeIdentity of an unknown identity = %d, %v; want 0", revoked, err)
+	}
+	if _, err := s.RevokeIdentity(context.Background(), "  "); err == nil {
+		t.Fatal("RevokeIdentity accepted an empty identity")
+	}
+}
+
+// racingDeletes runs before ahead of each delete, as a refresh that rotates
+// the login between the revocation's read and its delete would.
+type racingDeletes struct {
+	blob.Store
+	before func()
+}
+
+func (r *racingDeletes) Delete(ctx context.Context, key string, generation blob.Generation) error {
+	r.before()
+	return r.Store.Delete(ctx, key, generation)
+}
+
+// A login rotated mid-revocation is still revoked: the rotated token must
+// not survive a revocation that reported success.
+func TestRevokeIdentityFollowsALoginRotatedMeanwhile(t *testing.T) {
+	s := newRefreshStoreForTest(t)
+	raw := s.issue(t, "a@b.com", time.Hour)
+	objects, rotated := s.dir.objects, ""
+	s.dir.objects = &racingDeletes{Store: objects, before: func() {
+		if rotated == "" {
+			rotated = s.rotate(t, raw)
+		}
+	}}
+	revoked, err := s.RevokeIdentity(context.Background(), "a@b.com")
+	if err != nil || revoked != 1 {
+		t.Fatalf("RevokeIdentity = %d, %v; want 1", revoked, err)
+	}
+	if rotated == "" {
+		t.Fatal("the race never ran")
+	}
+	s.wantInvalid(t, rotated, "a token rotated during the revocation")
+}
+
+// A login that rotates on every attempt is reported, not counted as revoked.
+func TestRevokeIdentityReportsALoginItCannotCatch(t *testing.T) {
+	s := newRefreshStoreForTest(t)
+	raw := s.issue(t, "a@b.com", time.Hour)
+	objects := s.dir.objects
+	s.dir.objects = &racingDeletes{Store: objects, before: func() { raw = s.rotate(t, raw) }}
+	if revoked, err := s.RevokeIdentity(context.Background(), "a@b.com"); err == nil || revoked != 0 {
+		t.Fatalf("RevokeIdentity = %d, %v; want an error and nothing counted", revoked, err)
+	}
+}
+
+// With server.maxLoginAge set, a login refreshes on its sign-in claims only
+// that long; off, the default, it refreshes for its whole lifetime.
+func TestRefreshStoreMaxLoginAge(t *testing.T) {
+	s := newRefreshStoreForTest(t)
+	raw := s.issue(t, "a@b.com", 90*24*time.Hour)
+	s.now = s.now.Add(30 * 24 * time.Hour)
+	raw = s.rotate(t, raw) // off: a month-old login still refreshes
+
+	s.cfg.Server.MaxLoginAge = 7 * 24 * time.Hour
+	s.wantInvalid(t, raw, "a login older than maxLoginAge")
+
+	fresh := s.issue(t, "a@b.com", 90*24*time.Hour)
+	s.now = s.now.Add(6 * 24 * time.Hour)
+	fresh = s.rotate(t, fresh)
+	s.now = s.now.Add(2 * 24 * time.Hour)
+	s.wantInvalid(t, fresh, "a login past maxLoginAge since sign-in, however recently rotated")
+}

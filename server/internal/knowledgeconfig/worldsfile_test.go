@@ -3,8 +3,11 @@ package knowledgeconfig
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/latebit-io/demarkus/server/knowledgeserver/worldsfragment"
 )
 
 const dynamicBase = `version: 1
@@ -50,8 +53,9 @@ func TestLoadMergesWorldsFile(t *testing.T) {
 		t.Fatalf("worlds = %d, want 1 from fragment", len(config.Worlds))
 	}
 	world := &config.Worlds[0]
-	if world.Name != "fritz-3a9f" || !world.Bootstrap {
-		t.Errorf("fragment world = %+v, want name fritz-3a9f with bootstrap", world)
+	// bootstrap is read and ignored: older brokers' fragments carry it.
+	if world.Name != "fritz-3a9f" {
+		t.Errorf("fragment world = %+v, want name fritz-3a9f", world)
 	}
 	// Fragment worlds get the same defaults Parse applies.
 	if world.Limits.MaxConcurrentRequests != 32 || world.Policy.Path == "" {
@@ -128,7 +132,7 @@ func TestParsesBrokerRenderedFragment(t *testing.T) {
 	}
 	// Every field the broker writes must arrive; a dropped one parses cleanly.
 	w := &worlds[0]
-	if !w.Bootstrap || !w.Gated || w.Limits.MaxDocuments != 500 || len(w.Authorities) != 1 || w.Policy.Governance != GovernanceOpen {
+	if w.Seed != SeedMemory || !w.Gated || w.Limits.MaxDocuments != 500 || len(w.Authorities) != 1 || w.Policy.Governance != GovernanceOpen {
 		t.Fatalf("parsed fragment world = %+v", w)
 	}
 	// A tenant names no tokens file: the identity grant is its write path.
@@ -163,5 +167,122 @@ func TestLoadWithFragmentStandsInForTheFile(t *testing.T) {
 	config, err = LoadWithFragment(filepath.Join(dir, "config.yaml"), nil)
 	if err != nil || len(config.Worlds) != 0 {
 		t.Fatalf("empty push: worlds = %d, err = %v; want none", len(config.Worlds), err)
+	}
+}
+
+// Every field of the shared fragment type must arrive in the world the
+// server opens: a field the consumer forgot would parse cleanly and vanish.
+func TestGeneratedFragmentFieldsReachTheWorld(t *testing.T) {
+	tenant := worldsfragment.World{
+		Name: "eve-1", Authorities: []string{"eve-1.memory.svc.cluster.local"}, Gated: true, Seed: worldsfragment.SeedMemory,
+		Bucket: worldsfragment.Bucket{URL: "gs://memory-eve-1", WorldID: "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48"},
+		Limits: &worldsfragment.Limits{MaxDocuments: 500},
+		Policy: &worldsfragment.Policy{Governance: string(GovernanceOpen)},
+	}
+	data, err := worldsfragment.Render([]worldsfragment.World{tenant})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := writeConfigDir(t, dynamicBase, string(data))
+	config, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if config.FragmentWarning != "" {
+		t.Errorf("warning on a fragment this build rendered: %q", config.FragmentWarning)
+	}
+	w := &config.Worlds[0]
+	if w.Name != tenant.Name || !w.Gated || w.Bucket.URL != tenant.Bucket.URL || w.Bucket.WorldID != tenant.Bucket.WorldID ||
+		w.Limits.MaxDocuments != 500 || w.Policy.Governance != GovernanceOpen || len(w.Authorities) != 1 || w.Seed != SeedMemory {
+		t.Fatalf("world = %+v, want every fragment field", w)
+	}
+	// The defaults of any other world apply.
+	if w.Limits.MaxConcurrentRequests != 32 || w.Policy.Path == "" {
+		t.Errorf("fragment defaults missing: %+v", w)
+	}
+	// Reflection keeps the list above honest when the type grows.
+	if got := reflect.TypeOf(tenant).NumField(); got != 7 {
+		t.Fatalf("worldsfragment.World has %d fields; map the new one in worldFromFragment and assert it here", got)
+	}
+}
+
+// A newer broker's key in a generated fragment must not stop the worlds
+// from loading; an operator's file with the same key is still an error.
+func TestGeneratedFragmentToleratesUnknownKeysOperatorFileDoesNot(t *testing.T) {
+	body := `worlds:
+  - name: eve-1
+    authorities: [eve-1.memory.svc.cluster.local]
+    bucket: {url: "gs://memory-eve-1", worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+    gated: true
+    futureKnob: 3
+`
+	dir := writeConfigDir(t, dynamicBase, worldsfragment.Header+body)
+	config, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("generated fragment with an unknown key: %v", err)
+	}
+	if len(config.Worlds) != 1 || !config.Worlds[0].Gated {
+		t.Fatalf("worlds = %+v", config.Worlds)
+	}
+	if !strings.Contains(config.FragmentWarning, "futureKnob") {
+		t.Errorf("FragmentWarning = %q, want the skipped key named", config.FragmentWarning)
+	}
+
+	dir = writeConfigDir(t, dynamicBase, body)
+	if _, err := Load(filepath.Join(dir, "config.yaml")); err == nil || !strings.Contains(err.Error(), "futureKnob") {
+		t.Fatalf("operator file with a mistyped key: err = %v, want it refused", err)
+	}
+}
+
+// A seed kind this build cannot seed, from a newer broker, must not stall
+// the fragment: the world takes the default seed and the log says so. In an
+// operator's file the same kind is a mistake.
+func TestUnknownSeedKindDefaultsInAGeneratedFragmentOnly(t *testing.T) {
+	body := `worlds:
+  - name: eve-1
+    authorities: [eve-1.memory.svc.cluster.local]
+    bucket: {url: "gs://memory-eve-1", worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+    gated: true
+    seed: team
+`
+	dir := writeConfigDir(t, dynamicBase, worldsfragment.Header+body)
+	config, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("generated fragment with a seed kind of a newer broker: %v", err)
+	}
+	if config.Worlds[0].Seed != "" || !strings.Contains(config.FragmentWarning, `seed "team"`) {
+		t.Fatalf("seed = %q, warning = %q; want the default seed and the kind named", config.Worlds[0].Seed, config.FragmentWarning)
+	}
+
+	dir = writeConfigDir(t, dynamicBase, body)
+	if _, err := Load(filepath.Join(dir, "config.yaml")); err == nil || !strings.Contains(err.Error(), `seed "team"`) {
+		t.Fatalf("operator file with an unknown seed kind: err = %v, want it refused", err)
+	}
+}
+
+// An operator's static memory world asks for the memory seed with the same
+// key; it excludes the world's other seed sources.
+func TestSeedKeyOnAnOperatorsWorld(t *testing.T) {
+	world := `worlds:
+  - name: alice
+    authorities: [alice.memory.svc.cluster.local]
+    bucket: {url: "gs://memory-alice", worldID: 52b471f7-8d38-4c89-b44a-6f4f8b1a4f48}
+    gated: true
+    seed: memory
+`
+	dir := writeConfigDir(t, dynamicBase, world)
+	config, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil || config.Worlds[0].Seed != SeedMemory {
+		t.Fatalf("seed: memory on an operator's world: %v", err)
+	}
+	for extra, want := range map[string]string{
+		"    policy: {file: /etc/demarkus/policy.md}\n": "must not be set with policy.file",
+		"    policy: {optional: true}\n":                "must not be set on an optional policy",
+		"    readOnly: true\n":                          "must not be set on a read-only world",
+	} {
+		dir := writeConfigDir(t, dynamicBase, world+extra)
+		if _, err := Load(filepath.Join(dir, "config.yaml")); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("seed with %q: err = %v, want %q", strings.TrimSpace(extra), err, want)
+		}
 	}
 }

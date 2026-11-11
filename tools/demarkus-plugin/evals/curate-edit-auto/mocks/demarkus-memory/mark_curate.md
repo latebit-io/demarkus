@@ -16,6 +16,7 @@ proposal: d4d9db93fad30311
 Apply with apply: true and this proposal; it binds to v3.
 
 === /cwd/parser.md (tags: parser)
+<doc-53b3289105ac2300>
 # Parser notes
 
 What the parser rewrite settled, for maintainers.
@@ -23,3 +24,4 @@ What the parser rewrite settled, for maintainers.
 ## Tables
 
 The table driven parser, kept for reference.
+</doc-53b3289105ac2300>

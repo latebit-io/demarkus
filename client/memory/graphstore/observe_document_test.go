@@ -102,7 +102,8 @@ func TestObserveDocumentEqualRepresentationRefreshesWithoutRebuild(t *testing.T)
 	store.localSources[docURL] = local
 	store.nodes[docURL].Observation = local.Node.Observation
 	store.nodes[docURL].CrawledAt = stale
-	edgeAddress := &store.edges[0]
+	// A merge shows a new node; the equal-read path refreshes it in place.
+	shown := store.nodes[docURL]
 	store.mu.Unlock()
 
 	if !store.ObserveDocument(docURL, graph.FetchResult{
@@ -127,7 +128,7 @@ func TestObserveDocumentEqualRepresentationRefreshesWithoutRebuild(t *testing.T)
 	}
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	if &store.edges[0] != edgeAddress {
+	if store.nodes[docURL] != shown {
 		t.Fatal("equal representation rebuilt topology")
 	}
 	if !store.localSources[docURL].Node.Observation.ObservedAt.Equal(node.Observation.ObservedAt) {
@@ -195,7 +196,7 @@ func TestObserveDocumentMissingIdentityFallsBack(t *testing.T) {
 			if _, cached := store.representations[docURL]; !cached {
 				t.Fatal("fixture did not prime representation cache")
 			}
-			edgeAddress := &store.edges[0]
+			shown := store.nodes[docURL]
 			incoming := maps.Clone(metadata)
 			delete(incoming, field)
 			store.ObserveDocument(docURL, graph.FetchResult{Status: "ok", Body: body, Metadata: incoming})
@@ -203,7 +204,7 @@ func TestObserveDocumentMissingIdentityFallsBack(t *testing.T) {
 			if node.Observation.Revision != 1 || node.Etag != "one" || node.Observation.Problem != "revision-conflict" || node.Observation.Freshness() != "stale" {
 				t.Fatalf("missing %s bypassed reconciliation: %+v", field, node)
 			}
-			if &store.edges[0] == edgeAddress || store.EdgeCount() != 2 {
+			if store.nodes[docURL] == shown || store.EdgeCount() != 2 {
 				t.Fatal("missing identity did not rebuild last-good topology")
 			}
 		})
@@ -231,7 +232,7 @@ func TestObserveDocumentChangedIdentityFallsBack(t *testing.T) {
 			if _, cached := store.representations[docURL]; !cached {
 				t.Fatal("fixture did not prime representation cache")
 			}
-			edgeAddress := &store.edges[0]
+			shown := store.nodes[docURL]
 			result := graph.FetchResult{Status: "ok", Body: body, Metadata: maps.Clone(metadata)}
 			if tc.field == "" {
 				result.Source = tc.value
@@ -243,7 +244,7 @@ func TestObserveDocumentChangedIdentityFallsBack(t *testing.T) {
 			if node.Title != "Source" || node.LinkCount != 1 || node.Observation.Revision != tc.wantRevision || node.Etag != "one" || node.Observation.Source != docURL || node.Observation.Problem != tc.wantProblem {
 				t.Fatalf("changed identity result = %+v", node)
 			}
-			if &store.edges[0] == edgeAddress || store.EdgeCount() != 2 {
+			if store.nodes[docURL] == shown || store.EdgeCount() != 2 {
 				t.Fatal("changed identity bypassed topology reconciliation")
 			}
 		})

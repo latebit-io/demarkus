@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/latebit-io/demarkus/client/internal/filelock"
 )
 
 // File is the top-level shape of a tokens.toml — a map from label to Entry.
@@ -64,7 +65,7 @@ func AppendEntry(path, label string, entry *Entry) error {
 	if entry == nil {
 		return ErrNilEntry
 	}
-	return withLockedFile(path, func() error {
+	return filelock.With(path, func() error {
 		existing, err := os.ReadFile(path)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("read tokens file %q: %w", path, err)
@@ -170,7 +171,7 @@ func RemoveBytes(existing []byte, label string) ([]byte, error) {
 // ordering, quoting style) is not preserved — this is the rewrite path used
 // by revoke, not the append path.
 func WriteFile(path string, file File) error {
-	return withLockedFile(path, func() error {
+	return filelock.With(path, func() error {
 		return writeAtomic(path, func(w io.Writer) error {
 			if err := toml.NewEncoder(w).Encode(file); err != nil {
 				return fmt.Errorf("encode tokens file: %w", err)
@@ -182,7 +183,7 @@ func WriteFile(path string, file File) error {
 
 // writeAtomic publishes via temp file, rename and fsync of file and directory:
 // no partial reads, a revoke survives a crash, owner and mode carry over.
-// Callers hold the lock from withLockedFile.
+// Callers hold the lock from filelock.With.
 func writeAtomic(path string, fn func(io.Writer) error) error {
 	tmp := path + ".tmp"
 	if err := writeTemp(tmp, fn); err != nil {
@@ -238,25 +239,6 @@ func syncParentDir(path string) error {
 		return fmt.Errorf("close parent dir of %q: %w", path, err)
 	}
 	return nil
-}
-
-// withLockedFile runs fn under an exclusive advisory lock on `<path>.lock`. A
-// sidecar, so taking the lock never creates the data file.
-func withLockedFile(path string, fn func() error) (err error) {
-	lockPath := path + ".lock"
-	lf, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return fmt.Errorf("open lock file %q: %w", lockPath, err)
-	}
-	defer func() {
-		if cerr := lf.Close(); cerr != nil {
-			err = errors.Join(err, fmt.Errorf("close lock file %q: %w", lockPath, cerr))
-		}
-	}()
-	if err := lockExclusive(lf); err != nil {
-		return fmt.Errorf("acquire lock on %q: %w", lockPath, err)
-	}
-	return fn()
 }
 
 // FormatEntry renders one labeled entry as TOML. Bare-key labels stay

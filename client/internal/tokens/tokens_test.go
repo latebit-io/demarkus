@@ -429,3 +429,39 @@ func TestLoadDirMissingIsSilent(t *testing.T) {
 		t.Errorf("missing dir must not warn: %v", logged)
 	}
 }
+
+// Two stores loaded from one file are two processes: a write from one must
+// not drop what the other wrote since, and a failed write changes neither.
+func TestSetKeepsWhatAnotherProcessWrote(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.toml")
+	first, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Set("a:6309", "token-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Set("b:6309", "token-b"); err != nil {
+		t.Fatal(err)
+	}
+	if got := second.Get("a:6309"); got != "token-a" {
+		t.Errorf("the second writer holds %q for a:6309, want what the first wrote", got)
+	}
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Get("a:6309") != "token-a" || reloaded.Get("b:6309") != "token-b" {
+		t.Errorf("file holds %v, want both tokens", reloaded.Hosts())
+	}
+	if err := os.WriteFile(path, []byte("not = [toml"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Set("c:6309", "token-c"); err == nil || second.Get("c:6309") != "" {
+		t.Errorf("a write over an unreadable file: err %v, store holds %q", err, second.Get("c:6309"))
+	}
+}

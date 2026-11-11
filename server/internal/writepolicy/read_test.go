@@ -37,3 +37,38 @@ func TestReadPolicyTakesNoViewOnALockFreeStore(t *testing.T) {
 		t.Fatal("missing required policy read as present")
 	}
 }
+
+// A store behind the gate still reads lock-free: wrapping it must not turn a
+// policy read into a view, the deadlock half inside another world's commit.
+func TestEnforcedStoreReadsCurrentWithoutAView(t *testing.T) {
+	raw := newStore(t)
+	if _, err := (backendtest.Direct{Store: raw}).WriteVersion(publishpolicy.DocumentPath, 0, []byte(warnPolicy), policyMeta); err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	gated := writepolicy.Enforce(noView{raw.(*filestore.Store)}, writepolicy.Options{})
+	policy, err := writepolicy.Read(context.Background(), gated, true)
+	if err != nil || policy.Strictness != publishpolicy.Warn {
+		t.Fatalf("Read through the gate = %v, %v; want the warn policy", policy.Strictness, err)
+	}
+	if err := writepolicy.Validate(context.Background(), gated); err != nil {
+		t.Errorf("Validate through the gate: %v", err)
+	}
+}
+
+// viewOnly is a store with no lock-free read: CurrentOf reads it through a
+// view of its own.
+type viewOnly struct{ backend.Store }
+
+func TestCurrentOfFallsBackToAView(t *testing.T) {
+	raw := newStore(t)
+	if _, err := (backendtest.Direct{Store: raw}).WriteVersion("/a.md", 0, []byte("# A\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := writepolicy.CurrentOf(viewOnly{raw}).ReadCurrent(context.Background(), "/a.md")
+	if err != nil || string(doc.Content) != "# A\n" {
+		t.Fatalf("ReadCurrent through a view = %v, %v", doc, err)
+	}
+	if _, err := writepolicy.CurrentOf(viewOnly{raw}).ReadCurrent(context.Background(), "/none.md"); !errors.Is(err, backend.ErrNotFound) {
+		t.Errorf("missing document through a view = %v, want not found", err)
+	}
+}

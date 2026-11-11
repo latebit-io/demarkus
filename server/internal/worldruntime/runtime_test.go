@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/quicserve"
 	servertls "github.com/latebit-io/demarkus/server/internal/tls"
+	protocolstore "github.com/latebit-io/demarkus/server/store"
 	"github.com/quic-go/quic-go"
 )
 
@@ -513,4 +513,44 @@ func TestRuntimeRequiresGateOnGatedWorld(t *testing.T) {
 	if !gatable.RequiresGate() {
 		t.Fatal("endpoint does not report the gate requirement")
 	}
+}
+
+// An IP waiting out its rate holds no concurrency slot: another IP is served
+// at once, not after the first IP's wait.
+func TestRuntimeRateWaitHoldsNoSlot(t *testing.T) {
+	runtime := newTestRuntime(t, &Config{MaxConcurrent: 1, RateLimit: 0.05, RateBurst: 1, RequestTimeout: time.Minute})
+	slow := testAddr("192.0.2.1:1234")
+	if status := serveStatusFrom(context.Background(), runtime, slow); status != protocol.StatusOK {
+		t.Fatalf("first request = %q, want ok", status)
+	}
+	// The same IP again: its token is twenty seconds away.
+	waitCtx, stopWaiting := context.WithCancel(context.Background())
+	waited := make(chan string, 1)
+	go func() { waited <- serveStatusFrom(waitCtx, runtime, slow) }()
+	time.Sleep(50 * time.Millisecond)
+
+	served := make(chan string, 1)
+	go func() { served <- serveStatusFrom(context.Background(), runtime, testAddr("192.0.2.2:1234")) }()
+	select {
+	case status := <-served:
+		if status != protocol.StatusOK {
+			t.Errorf("other IP = %q, want ok", status)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("other IP waited behind an IP that was waiting out its rate")
+	}
+	stopWaiting()
+	if status := <-waited; status != protocol.StatusRateLimited {
+		t.Errorf("rate-limited request = %q, want %q", status, protocol.StatusRateLimited)
+	}
+}
+
+func serveStatusFrom(ctx context.Context, runtime *Runtime, remote net.Addr) string {
+	stream := newTestStream("FETCH /health\n")
+	runtime.ServeStream(ctx, remote, stream)
+	response, err := protocol.ParseResponse(&stream.output)
+	if err != nil {
+		return "unparsed: " + err.Error()
+	}
+	return response.Status
 }

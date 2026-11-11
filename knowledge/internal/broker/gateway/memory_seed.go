@@ -10,12 +10,11 @@ import (
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
-	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
 // Memory template seeding: a tenant world's first authorized call publishes
-// the memory layout (hub, policy, template). Version-checked publishes make it
-// idempotent across replicas; conflict = already seeded.
+// the memory layout (template, hub); the server seeds the policy on open.
+// Create-only publishes are idempotent across replicas: conflict is seeded.
 
 //go:embed memoryseed/*.md
 var memorySeedFS embed.FS
@@ -26,25 +25,13 @@ type memorySeedDoc struct {
 	embedName string
 	path      string
 	meta      map[string]string
-	// overServerSeed publishes as version two when the server's own marked
-	// seed holds version one; any other existing document is left alone.
-	overServerSeed bool
 }
 
 // memorySeedDocs is ordered: /index.md last, because its existence is the
-// seeded-check sentinel and must only appear once the other documents do.
+// seeded-check sentinel and must only appear once the template does.
 func memorySeedDocs() []memorySeedDoc {
 	const agent = "demarkus-memory-broker"
 	return []memorySeedDoc{
-		{
-			embedName:      "policy.md",
-			path:           publishpolicy.DocumentPath,
-			overServerSeed: true,
-			meta: map[string]string{
-				"agent": agent, "tags": "policy,write-policy,style,metadata",
-				"importance": "0.7", "type": "Reference",
-			},
-		},
 		{
 			embedName: "template.md",
 			path:      layout.DocumentPath,
@@ -65,7 +52,7 @@ func memorySeedDocs() []memorySeedDoc {
 }
 
 // memorySeedGrant is the broker's own grant for the seed: exactly the seeded
-// paths, with govern for the policy and template.
+// paths, with govern for the template.
 func memorySeedGrant() protocol.Grant {
 	docs := memorySeedDocs()
 	paths := make([]string, len(docs))
@@ -159,20 +146,16 @@ func (g *Gateway) ensureMemorySeed(ctx context.Context, w *core.WorldConfig) {
 	s.mu.Unlock()
 }
 
-// seedMemoryWorld seeds a world that lacks the /index.md sentinel; one that has
-// it is still checked for a server policy seed an older broker left in place.
-// True means verified seeded; false keeps the world eligible for retry.
+// seedMemoryWorld seeds a world that lacks the /index.md sentinel. True means
+// verified seeded; false keeps the world eligible for retry.
 func (g *Gateway) seedMemoryWorld(ctx context.Context, w *core.WorldConfig) bool {
 	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: w.Name, Path: "/index.md"})
 	if err != nil {
 		g.deps.Log.Warn("memory seed check failed", "world", w.Name, "err", err)
 		return false
 	}
-	seeded := false
 	switch result.Response.Status {
-	case protocol.StatusOK:
-		seeded = true
-	case protocol.StatusArchived:
+	case protocol.StatusOK, protocol.StatusArchived:
 		return true // archived counts as a deliberate act
 	case protocol.StatusNotFound:
 		// fresh world; seed below
@@ -189,75 +172,17 @@ func (g *Gateway) seedMemoryWorld(ctx context.Context, w *core.WorldConfig) bool
 	}
 	granted := protocol.WithGrant(tenant, memorySeedGrant())
 	for _, doc := range memorySeedDocs() {
-		if seeded && !doc.overServerSeed {
-			continue
-		}
-		if !g.publishMemorySeedDoc(granted, w, &doc, seeded) {
+		if !g.publishMemorySeedDoc(granted, w, &doc) {
 			return false
 		}
 	}
-	if !seeded {
-		g.deps.Log.Info("memory template seeded", "world", w.Name)
-	}
+	g.deps.Log.Info("memory template seeded", "world", w.Name)
 	return true
 }
 
-// seedAction is what to do with one seed document.
-type seedAction int
-
-const (
-	seedFailed  seedAction = iota // the check could not run; retry later
-	seedCreate                    // publish create-only
-	seedReplace                   // publish over the server's marked seed
-	seedKeep                      // something else holds the path; leave it
-)
-
-// expectedVersion is the version a publish for this action commits against.
-func (a seedAction) expectedVersion() int {
-	if a == seedReplace {
-		return 1
-	}
-	return 0
-}
-
-// memorySeedAction decides one seed publish. Only a version one carrying the
-// server's marker is replaced; a server that does not seed leaves not found.
-func (g *Gateway) memorySeedAction(ctx context.Context, w *core.WorldConfig, doc *memorySeedDoc) seedAction {
-	if !doc.overServerSeed {
-		return seedCreate
-	}
-	result, err := g.dispatcher.Fetch(ctx, fetch.FetchRequest{Host: w.Name, Path: doc.path})
-	if err != nil {
-		g.deps.Log.Warn("memory seed policy check failed", "world", w.Name, "path", doc.path, "err", err)
-		return seedFailed
-	}
-	meta := result.Response.Metadata
-	switch result.Response.Status {
-	case protocol.StatusNotFound:
-		return seedCreate
-	case protocol.StatusOK:
-		if meta["version"] == "1" && meta["agent"] == publishpolicy.SeedAgent {
-			return seedReplace
-		}
-		return seedKeep
-	case protocol.StatusArchived:
-		return seedKeep // archived counts as a deliberate act
-	}
-	g.deps.Log.Warn("memory seed policy check returned unexpected status", "world", w.Name, "path", doc.path, "status", result.Response.Status)
-	return seedFailed
-}
-
-// publishMemorySeedDoc publishes one seed document under ctx's grant and
-// reports whether the world may still be marked seeded. replaceOnly is for a
-// world holding the template: nothing is created, only a server seed replaced.
-func (g *Gateway) publishMemorySeedDoc(ctx context.Context, w *core.WorldConfig, doc *memorySeedDoc, replaceOnly bool) bool {
-	action := g.memorySeedAction(ctx, w, doc)
-	switch {
-	case action == seedFailed:
-		return false
-	case action == seedKeep, replaceOnly && action != seedReplace:
-		return true
-	}
+// publishMemorySeedDoc creates one seed document under ctx's grant and
+// reports whether the world may still be marked seeded.
+func (g *Gateway) publishMemorySeedDoc(ctx context.Context, w *core.WorldConfig, doc *memorySeedDoc) bool {
 	body, readErr := memorySeedFS.ReadFile("memoryseed/" + doc.embedName)
 	if readErr != nil {
 		// Broken embed is a build defect; surface loudly but keep the tool call alive.
@@ -265,8 +190,7 @@ func (g *Gateway) publishMemorySeedDoc(ctx context.Context, w *core.WorldConfig,
 		return false
 	}
 	pres, pubErr := g.dispatcher.Publish(ctx, fetch.WriteRequest{
-		Host: w.Name, Path: doc.path, Body: string(body),
-		ExpectedVersion: action.expectedVersion(), Metadata: doc.meta,
+		Host: w.Name, Path: doc.path, Body: string(body), Metadata: doc.meta,
 	})
 	if pubErr != nil {
 		g.deps.Log.Warn("memory seed publish failed", "world", w.Name, "path", doc.path, "err", pubErr)

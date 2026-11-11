@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	protocolstore "github.com/latebit-io/demarkus/server/store"
 )
 
 // ReadCurrent takes no store lock: a commit in one world may read another

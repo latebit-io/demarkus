@@ -41,7 +41,7 @@ func TestBatchCommitsInQueueOrder(t *testing.T) {
 	}
 	ahead := fillPipeline(t, holds, staged, func(path string) <-chan writeOutcome { return write(path, 0, nil) })
 	var judged atomic.Int64
-	counted := func(context.Context, backend.Reader, storefmt.PreparedWrite) error {
+	counted := func(context.Context, backend.CommitState, storefmt.PreparedWrite) error {
 		judged.Add(1)
 		return nil
 	}

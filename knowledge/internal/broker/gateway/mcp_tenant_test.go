@@ -28,7 +28,7 @@ import (
 func TestTenantWorldFor(t *testing.T) {
 	cfg := brokertest.NewMemoryConfig()
 	alice := &core.Claims{Subject: "google|alice", Email: "alice@example.com", EmailVerified: true}
-	w, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, alice)
+	w, err := core.TenantWorldFor(brokertest.Registry(t, cfg).View(core.ProfileMemory), cfg.OIDC.Issuer, alice)
 	if err != nil {
 		t.Fatalf("tenantWorldFor(alice): %v", err)
 	}
@@ -37,14 +37,14 @@ func TestTenantWorldFor(t *testing.T) {
 	}
 
 	stranger := &core.Claims{Subject: "google|eve", Email: "eve@example.com", EmailVerified: true}
-	if _, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, stranger); !errors.Is(err, core.ErrNotAuthorized) {
+	if _, err := core.TenantWorldFor(brokertest.Registry(t, cfg).View(core.ProfileMemory), cfg.OIDC.Issuer, stranger); !errors.Is(err, core.ErrNotAuthorized) {
 		t.Errorf("tenantWorldFor(stranger) err = %v, want ErrNotAuthorized", err)
 	}
 
 	// Ambiguity denies closed; error text stays opaque (world names
 	// identify tenants) while names ride the typed error for the log.
 	cfg.Worlds[1].Allow.Emails = []string{"alice@example.com"}
-	_, err = core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, alice)
+	_, err = core.TenantWorldFor(brokertest.Registry(t, cfg).View(core.ProfileMemory), cfg.OIDC.Issuer, alice)
 	if err == nil || errors.Is(err, core.ErrNotAuthorized) {
 		t.Fatalf("tenantWorldFor(ambiguous) err = %v, want a distinct ambiguity error", err)
 	}
@@ -500,7 +500,7 @@ func testMemoryGraphReauthorization(t *testing.T, failure, entrypoint string) {
 	identities := map[string]string{core.IdentityKey(cfg.OIDC.Issuer, "google|alice"): aliceWorld.Name}
 	if failure == "deprovision" {
 		cfg.Worlds = cfg.Worlds[1:]
-		cfg.Registry().SetDynamic([]core.WorldConfig{aliceWorld}, identities)
+		brokertest.Registry(t, cfg).SetDynamic([]core.WorldConfig{aliceWorld}, identities)
 	}
 	d := seededDispatcher()
 	for _, tenant := range []string{"alice", "bob"} {
@@ -518,7 +518,7 @@ func testMemoryGraphReauthorization(t *testing.T, failure, entrypoint string) {
 	}
 	old.graphStore.SetSeedEtag("alice-w", "retired-etag")
 	if failure == "deprovision" {
-		cfg.Registry().SetDynamic(nil, nil)
+		brokertest.Registry(t, cfg).SetDynamic(nil, nil)
 	} else {
 		cfg.Worlds[0].Allow.Emails = []string{"replacement@example.com"}
 	}
@@ -536,7 +536,7 @@ func testMemoryGraphReauthorization(t *testing.T, failure, entrypoint string) {
 		t.Error("authorization failure retained Alice's cached graph")
 	}
 	if failure == "deprovision" {
-		cfg.Registry().SetDynamic([]core.WorldConfig{aliceWorld}, identities)
+		brokertest.Registry(t, cfg).SetDynamic([]core.WorldConfig{aliceWorld}, identities)
 	} else {
 		cfg.Worlds[0] = aliceWorld
 	}

@@ -21,9 +21,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
-	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
-	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // Phases of one promotion, in order. The soul server serves stage, stamp and
@@ -64,11 +62,45 @@ type Markers struct {
 	Version int // the destination version the source tracks; 0 for a legacy marker
 }
 
-var markerLine = regexp.MustCompile(`(?m)^promoted(-via)?: (\S.*?)[ \t]*$`)
+// markerLine is one marker line; markerBlock says which lines may be one.
+var markerLine = regexp.MustCompile(`^promoted(-via)?: (\S.*?)[ \t]*$`)
 
-// Marked reports a back-stamped body: a standalone marker line.
+// markerBlock is the run of marker lines opening the block under the H1 (the
+// top of a body without one), as [start, end) with each line's newline. A
+// marker anywhere else is the document's own text: an example, a quote.
+func markerBlock(body string) (start, end int) {
+	at := 0
+	if _, headingEnd, ok := h1(body); ok {
+		at = min(headingEnd+1, len(body))
+	}
+	found := false
+	for at < len(body) {
+		stop := len(body)
+		if i := strings.IndexByte(body[at:], '\n'); i >= 0 {
+			stop = at + i + 1
+		}
+		line := strings.TrimRight(body[at:stop], "\r\n")
+		switch {
+		case markerLine.MatchString(line):
+			if !found {
+				start, found = at, true
+			}
+			end = stop
+		case found || strings.TrimSpace(line) != "":
+			return start, end
+		}
+		at = stop
+	}
+	return start, end
+}
+
+// Marked reports a back-stamped body: a marker line under its H1.
 func Marked(body string) bool {
-	return strings.Contains(body, "promoted") && markerLine.MatchString(body)
+	if !strings.Contains(body, "promoted") {
+		return false
+	}
+	start, end := markerBlock(body)
+	return end > start
 }
 
 // IsPromoted is the one rule every sweep uses: the promoted tag or a marker.
@@ -79,18 +111,22 @@ func IsPromoted(meta map[string]string, body string) bool {
 // ParseMarkers reads the marker lines; found is false without a `promoted:`
 // line. A legacy marker without @v<N> leaves Version 0.
 func ParseMarkers(body string) (m Markers, found bool) {
-	for _, match := range markerLine.FindAllStringSubmatch(body, -1) {
-		if match[1] == "-via" {
+	start, end := markerBlock(body)
+	for line := range strings.SplitSeq(body[start:end], "\n") {
+		match := markerLine.FindStringSubmatch(strings.TrimRight(line, "\r"))
+		switch {
+		case match == nil:
+		case match[1] == "-via":
 			m.Via = match[2]
-			continue
+		default:
+			found = true
+			m.Target, m.Version = splitVersion(match[2])
 		}
-		found = true
-		m.Target, m.Version = splitVersion(match[2])
 	}
 	return m, found
 }
 
-// ParseTarget reads `<target>@v<N>` as a tool argument; both parts are required.
+// ParseTarget reads `<target>@v<N>`; both parts are required.
 func ParseTarget(s string) (target string, version int, err error) {
 	target, version = splitVersion(strings.TrimSpace(s))
 	if target == "" || version == 0 {
@@ -118,18 +154,13 @@ func (m *Markers) Lines() string {
 
 func title(body string) string { return strings.TrimSpace(links.ExtractTitle(body)) }
 
-// h1 is the H1's line span [start, end) in body, or ok false; fenced code
-// and setext headings are read as markdown, not as lines starting with #.
+// h1 is the H1's own lines [start, end) in body, or ok false; a setext
+// heading runs through its underline (gate.HeadingEnd).
 func h1(body string) (start, end int, ok bool) {
 	for _, h := range mdoutline.Headings(body) {
-		if h.Level != 1 {
-			continue
+		if h.Level == 1 {
+			return h.Start, gate.HeadingEnd(body, h), true
 		}
-		end = h.Start + strings.IndexByte(body[h.Start:], '\n')
-		if end < h.Start {
-			end = len(body)
-		}
-		return h.Start, end, true
 	}
 	return 0, 0, false
 }
@@ -150,11 +181,21 @@ func WithMarkers(body string, m *Markers) string {
 	return out + "\n" + rest
 }
 
-var blankRun = regexp.MustCompile(`\n{3,}`)
-
-// WithoutMarkers drops the marker lines and the blank run they leave.
+// WithoutMarkers drops the marker block and the blank run it leaves; the
+// rest of the body is untouched.
 func WithoutMarkers(body string) string {
-	return blankRun.ReplaceAllString(markerLine.ReplaceAllString(body, ""), "\n\n")
+	start, end := markerBlock(body)
+	if end == start {
+		return body
+	}
+	head, tail := strings.TrimRight(body[:start], "\n"), strings.TrimLeft(body[end:], "\n")
+	switch {
+	case head == "":
+		return tail
+	case tail == "":
+		return head + "\n"
+	}
+	return head + "\n\n" + tail
 }
 
 // IsStub reports a source reduced to its title, markers and one summary
@@ -537,36 +578,9 @@ type Check struct {
 
 // Examine runs the gate and the policy on the draft. Nothing is fetched.
 func Examine(d *Draft, policy *publishpolicy.Policy) *Check {
-	c := &Check{Draft: *d, Policy: policy, Problems: gate.Problems(d.Path, d.Body, d.Metadata["description"]), Missing: Missing(d.Path, d.Metadata, d.Body, policy)}
+	c := &Check{Draft: *d, Policy: policy, Problems: gate.Problems(d.Path, d.Body, d.Metadata["description"]), Missing: gate.Missing(d.Path, d.Metadata, d.Body, policy)}
 	c.Packet = docwrite.Digest(d.Path, strconv.Itoa(d.Version), d.Body, metaDigest(d.Metadata), d.Source)
 	return c
-}
-
-// Missing words the policy's violations on the metadata and the body's links,
-// each a whole finding, as the server would at commit: after its type
-// default, and never asking for identity keys, which are the surface's.
-func Missing(path string, meta map[string]string, body string, policy *publishpolicy.Policy) []string {
-	if policy == nil {
-		return nil
-	}
-	var out []string
-	for _, v := range publishpolicy.EvaluateBody(policy.ForCaller(), path, storefmt.ApplyOKFTypeDefault(path, meta), body).Violations {
-		switch v.Code {
-		case publishpolicy.MissingTagAxis:
-			out = append(out, "missing tag axis "+v.Name+" (an "+v.Name+":<value> tag)")
-		case publishpolicy.MissingField:
-			out = append(out, "missing metadata "+v.Name)
-		case publishpolicy.DisallowedTagValue:
-			out = append(out, "disallowed tag "+v.Name+" (allowed "+v.Axis+" values: "+policy.AllowedList(v.Axis)+")")
-		case publishpolicy.UnpinnedSource:
-			out = append(out, "unpinned "+provenance.Key+" value "+v.Name+" (pin "+provenance.PinForms+")")
-		case publishpolicy.DisallowedLinkDomain:
-			out = append(out, "link to "+v.Name+" outside allow_domains ("+policy.AllowedDomainList()+")")
-		default:
-			out = append(out, string(v.Code))
-		}
-	}
-	return out
 }
 
 // Candidates picks the rows the draft may duplicate: the target path, the

@@ -68,12 +68,8 @@ type Discovery struct {
 	body  []byte
 	until time.Time
 
-	// refreshMu serializes TTL-expiry refreshes so N concurrent in-flight
-	// requests fire at most one upstream fetch instead of N. Cheap insurance
-	// — without it, a popular broker behind a fronting cache that all
-	// expires the well-known doc simultaneously would multiply load on the
-	// IdP by the in-flight request count. Held across the upstream fetch +
-	// body publish; the regular mu still owns reads of body/until.
+	// refreshMu makes one request at a time refresh; it is only ever tried,
+	// never waited on, so the rest serve the cached body meanwhile.
 	refreshMu sync.Mutex
 }
 
@@ -169,32 +165,39 @@ func (d *Discovery) Handler() http.Handler {
 	})
 }
 
-// get returns the cached body, refreshing inline on TTL expiry. Stale
-// served on refresh failure so the well-known endpoint stays available
-// during transient upstream issues. refreshMu serializes refreshes so
-// concurrent expirers don't stampede the upstream IdP — late arrivals
-// re-check the TTL after taking the lock and skip the fetch when a
-// prior holder already refreshed.
+// discoveryFailureBackoff is how long a failed refresh serves stale before
+// the next attempt: an IdP outage must cost one fetch per interval, not one
+// per request.
+const discoveryFailureBackoff = 30 * time.Second
+
+// get returns the cached body, refreshing on TTL expiry. One request
+// refreshes; the others serve the cache instead of queueing upstream. A
+// failed refresh serves stale and backs off, unless its caller left.
 func (d *Discovery) get(ctx context.Context) []byte {
-	d.mu.RLock()
-	expired := !d.clock().Before(d.until)
-	d.mu.RUnlock()
-	if expired {
-		d.refreshMu.Lock()
-		d.mu.RLock()
-		stillExpired := !d.clock().Before(d.until)
-		d.mu.RUnlock()
-		if stillExpired {
-			if err := d.refresh(ctx); err != nil {
-				d.log.WarnContext(ctx, "broker: discovery refresh failed, serving stale",
-					"err", err, "upstream", d.idpDiscovery)
-			}
-		}
-		d.refreshMu.Unlock()
+	if body, expired := d.cached(); !expired || !d.refreshMu.TryLock() {
+		return body
 	}
+	defer d.refreshMu.Unlock()
+	// Another request may have refreshed between the check and the lock.
+	if body, expired := d.cached(); !expired {
+		return body
+	}
+	if err := d.refresh(ctx); err != nil && ctx.Err() == nil {
+		d.log.WarnContext(ctx, "broker: discovery refresh failed, serving stale",
+			"err", err, "upstream", d.idpDiscovery)
+		d.mu.Lock()
+		d.until = d.clock().Add(max(min(d.ttl, discoveryFailureBackoff), 0))
+		d.mu.Unlock()
+	}
+	body, _ := d.cached()
+	return body
+}
+
+// cached is the body held and whether its TTL has run out.
+func (d *Discovery) cached() (body []byte, expired bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return d.body
+	return d.body, !d.clock().Before(d.until)
 }
 
 // refresh performs one upstream fetch + override pass. On success it

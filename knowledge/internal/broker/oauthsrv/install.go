@@ -73,9 +73,9 @@ func (s *Server) meInstall(w http.ResponseWriter, r *http.Request) {
 // every knowledge world plus the caller's own memory world. A memory
 // resolution error logs (redacted) and yields no memory row, never a leak.
 func (s *Server) listInstallableWorlds(ctx context.Context, claims *core.Claims) []installWorld {
-	worlds := core.ReadableWorlds(s.cfg.Registry().View(core.ProfileKnowledge))
+	worlds := core.ReadableWorlds(s.worlds.View(core.ProfileKnowledge))
 	if s.cfg.Server.Memory.Enabled() {
-		w, err := core.TenantWorldFor(s.cfg.Registry().View(core.ProfileMemory), s.cfg.OIDC.Issuer, claims)
+		w, err := core.TenantWorldFor(s.worlds.View(core.ProfileMemory), s.cfg.OIDC.Issuer, claims)
 		if err != nil {
 			s.log.WarnContext(ctx, "broker: memory world listing denied",
 				"subject", core.HashSubject(claims.Subject), "err", err)

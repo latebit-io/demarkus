@@ -15,7 +15,10 @@ func TestLocalMainCarriesNoCloud(t *testing.T) {
 		t.Fatalf("go list -deps: %v", err)
 	}
 	deps := strings.Split(strings.TrimSpace(string(out)), "\n")
-	for _, forbidden := range []string{"cloud.google.com/", "google.golang.org/grpc", "go.opentelemetry.io/", "github.com/coreos/go-oidc"} {
+	for _, forbidden := range []string{
+		"cloud.google.com/", "google.golang.org/grpc", "go.opentelemetry.io/", "github.com/coreos/go-oidc",
+		"github.com/anthropics/anthropic-sdk-go", "k8s.io/",
+	} {
 		for _, dep := range deps {
 			if strings.HasPrefix(dep, forbidden) {
 				t.Errorf("demarkus-server links %s: the local profile must carry nothing under %s", dep, forbidden)

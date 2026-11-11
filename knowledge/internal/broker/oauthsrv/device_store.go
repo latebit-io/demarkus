@@ -65,9 +65,15 @@ type deviceStore struct {
 	pollInterval time.Duration
 }
 
+// deviceRequest is one /device/authorize call: the resource it binds and
+// the fingerprint of the address it came from.
+type deviceRequest struct {
+	Resource, Origin string
+}
+
 // Authorize creates a pending grant and returns the codes the client gets.
 // A user code collision with a live grant retries a few times, then fails.
-func (s *deviceStore) Authorize(ctx context.Context, resource string) (deviceCode, userCode string, expiresAt time.Time, err error) {
+func (s *deviceStore) Authorize(ctx context.Context, req deviceRequest) (deviceCode, userCode string, expiresAt time.Time, err error) {
 	deviceCode, err = newDeviceCode()
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("device code: %w", err)
@@ -77,18 +83,32 @@ func (s *deviceStore) Authorize(ctx context.Context, resource string) (deviceCod
 		if len(st.Devices) >= maxDeviceGrants {
 			return errGrantStoreFull
 		}
+		if req.Origin != "" && st.devicesFrom(req.Origin) >= maxDeviceGrantsPerOrigin {
+			return errOriginGrantsFull
+		}
 		var genErr error
 		if canonical, genErr = freeUserCode(st); genErr != nil {
 			return genErr
 		}
 		expiresAt = s.grants.clock().Add(s.expiresIn)
-		st.Devices[hashToken(deviceCode)] = deviceGrant{UserCode: canonical, Status: statusPending, Resource: resource, ExpiresAt: expiresAt}
+		st.Devices[hashToken(deviceCode)] = deviceGrant{UserCode: canonical, Status: statusPending, Resource: req.Resource, Origin: req.Origin, ExpiresAt: expiresAt}
 		return nil
 	})
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
 	return deviceCode, formatUserCode(canonical), expiresAt, nil
+}
+
+// devicesFrom counts the live grants one origin holds.
+func (st *grantState) devicesFrom(origin string) int {
+	held := 0
+	for key := range st.Devices {
+		if st.Devices[key].Origin == origin {
+			held++
+		}
+	}
+	return held
 }
 
 // freeUserCode draws a user code no grant in st holds.

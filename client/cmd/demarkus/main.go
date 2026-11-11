@@ -175,28 +175,28 @@ func requestMain(ctx context.Context) {
 		return
 	}
 
-	var (
-		result fetch.Result
-		err    error
-	)
-	switch *verb {
-	case protocol.VerbFetch:
-		result, err = client.Fetch(ctx, fetch.FetchRequest{Host: host, Path: path, Token: token})
-	case protocol.VerbList:
-		result, err = client.List(ctx, fetch.ListRequest{
-			Host: host, Path: path, Token: token,
-			IncludeArchived: *includeArchived,
-			Cursor:          *listCursor,
-			PageSize:        *listPageSize,
-		})
-	case protocol.VerbVersions:
-		result, err = client.Versions(ctx, fetch.VersionsRequest{Host: host, Path: path, Token: token})
-	}
+	result, err := readVerb(ctx, client, *verb, &fetch.ListRequest{
+		Host: host, Path: path, Token: token,
+		IncludeArchived: *includeArchived,
+		Cursor:          *listCursor,
+		PageSize:        *listPageSize,
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	printResult(result, *verbose)
+}
+
+// readVerb sends FETCH, LIST or VERSIONS for the document r names; the
+// listing fields are LIST's alone.
+func readVerb(ctx context.Context, client *fetch.Client, verb string, r *fetch.ListRequest) (fetch.Result, error) {
+	switch verb {
+	case protocol.VerbList:
+		return client.List(ctx, *r)
+	case protocol.VerbVersions:
+		return client.Versions(ctx, fetch.VersionsRequest{Host: r.Host, Path: r.Path, Token: r.Token})
+	}
+	return client.Fetch(ctx, fetch.FetchRequest{Host: r.Host, Path: r.Path, Token: r.Token})
 }
 
 func editMain(ctx context.Context, args []string) {
@@ -252,36 +252,10 @@ func editMain(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "Document not found, creating new document.\n")
 	}
 
-	// Write content to a temp file for editing.
-	tmpFile, err := os.CreateTemp("", "demarkus-edit-*.md")
+	newBody, err := editInEditor(editorFields, original)
 	if err != nil {
-		log.Fatalf("create temp file: %v", err)
+		log.Fatal(err)
 	}
-	defer removeEditFile(tmpFile.Name())
-
-	if _, err := tmpFile.WriteString(original); err != nil {
-		log.Fatalf("write temp file: %v", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		log.Fatalf("close temp file: %v", err)
-	}
-
-	// Open the editor.
-	name, args := editorCommand(editorFields, tmpFile.Name())
-	cmd := exec.Command(name, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		log.Fatalf("editor exited with error: %v", err)
-	}
-
-	// Read back the edited content.
-	edited, err := os.ReadFile(tmpFile.Name())
-	if err != nil {
-		log.Fatalf("read temp file: %v", err)
-	}
-	newBody := string(edited)
 
 	if strings.TrimSpace(newBody) == "" {
 		fmt.Fprintln(os.Stderr, "Document is empty, skipping publish.")
@@ -296,6 +270,35 @@ func editMain(ctx context.Context, args []string) {
 	if code := saveEdit(directDoc(client, host, path, token), result.Response, newBody); code != 0 {
 		os.Exit(code)
 	}
+}
+
+// editInEditor opens original in the editor through a temp file and returns
+// what was saved there.
+func editInEditor(editorFields []string, original string) (string, error) {
+	tmpFile, err := os.CreateTemp("", "demarkus-edit-*.md")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	defer removeEditFile(tmpFile.Name())
+	if _, err := tmpFile.WriteString(original); err != nil {
+		return "", fmt.Errorf("write temp file: %w", errors.Join(err, tmpFile.Close()))
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", fmt.Errorf("close temp file: %w", err)
+	}
+	name, args := editorCommand(editorFields, tmpFile.Name())
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("editor exited with error: %w", err)
+	}
+	edited, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		return "", fmt.Errorf("read temp file: %w", err)
+	}
+	return string(edited), nil
 }
 
 // removeEditFile deletes edit's temp file; a leftover holds only what the user just saw.
@@ -356,13 +359,7 @@ func graphMain(ctx context.Context, args []string) {
 
 	g, err := gs.CrawlAndPersist(ctx, rawURL, graphstore.NewFetchFunc(client, tokens.Resolver{Credential: cred, Store: ts}), graphstore.CrawlOptions{
 		MaxDepth: *depth,
-		OnNode: func(n *graph.Node) {
-			title := n.Title
-			if title == "" {
-				title = n.URL
-			}
-			fmt.Printf("  [%s] %s (%d links)%s\n", n.Status, title, n.LinkCount, n.Observation.Annotation())
-		},
+		OnNode:   func(n *graph.Node) { fmt.Println(crawlNodeLine(n)) },
 	})
 	if err != nil && g == nil {
 		log.Fatal(err)
@@ -374,11 +371,23 @@ func graphMain(ctx context.Context, args []string) {
 	if g.EdgeCount() > 0 {
 		fmt.Println("\nEdges:")
 		for _, e := range g.GetEdges() {
-			from := nodeLabel(g, e.From)
-			to := nodeLabel(g, e.To)
-			fmt.Printf("  %s -> %s\n", from, to)
+			fmt.Println(crawlEdgeLine(g, e.From, e.To))
 		}
 	}
+}
+
+// crawlNodeLine and crawlEdgeLine word the crawl log. Titles and URLs come
+// from crawled documents, so hidden text is revealed before it reaches a terminal.
+func crawlNodeLine(n *graph.Node) string {
+	title := n.Title
+	if title == "" {
+		title = n.URL
+	}
+	return hiddentext.Reveal(fmt.Sprintf("  [%s] %s (%d links)%s", n.Status, title, n.LinkCount, n.Observation.Annotation()))
+}
+
+func crawlEdgeLine(g *graph.Graph, from, to string) string {
+	return hiddentext.Reveal(fmt.Sprintf("  %s -> %s", nodeLabel(g, from), nodeLabel(g, to)))
 }
 
 func nodeLabel(g *graph.Graph, url string) string {
@@ -595,7 +604,8 @@ func bookmarkMain(ctx context.Context, args []string) {
 		if err := bs.Add(rawURL, title); err != nil {
 			log.Fatalf("add bookmark: %v", err)
 		}
-		fmt.Fprintf(os.Stderr, "Bookmarked: [%s](%s)\n", title, rawURL)
+		// The title is the fetched document's: revealed like any other read.
+		fmt.Fprintln(os.Stderr, hiddentext.Reveal(fmt.Sprintf("Bookmarked: [%s](%s)", title, rawURL)))
 
 	case "remove":
 		if len(args) < 2 {
@@ -620,7 +630,7 @@ func bookmarkMain(ctx context.Context, args []string) {
 			fmt.Println("No bookmarks.")
 			return
 		}
-		fmt.Print(bs.Render())
+		fmt.Print(hiddentext.Reveal(bs.Render()))
 
 	default:
 		log.Fatalf("unknown bookmark command: %s", strconv.Quote(args[0]))
@@ -738,7 +748,7 @@ func lookupMain(ctx context.Context, args []string) {
 		log.Fatal(err)
 	}
 	if fetch.AnsweredFromCatalog(req, result) {
-		fmt.Fprintln(os.Stderr, "note: "+fetch.CatalogFallbackNote)
+		fmt.Fprintln(os.Stderr, "note: server answered from the catalog (no body match); an empty table is not evidence of absence")
 	}
 
 	printResult(result, *verbose)

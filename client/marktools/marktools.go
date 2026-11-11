@@ -116,6 +116,8 @@ type Hooks struct {
 type Tools struct {
 	backend Backend
 	hooks   Hooks
+	// named is how a doctor report names this surface's commands (SetCommands).
+	named Commands
 }
 
 // New refuses a nil backend and a missing Resolve hook: every tool needs both.

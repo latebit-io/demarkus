@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	protocolstore "github.com/latebit-io/demarkus/server/store"
 )
 
 // admissionWait bounds how long a canceled waiter may take to return; far
@@ -115,7 +115,7 @@ func TestCanceledReadViewBehindWriteLeaksNothing(t *testing.T) {
 	go func() {
 		_, err := s.Publish(t.Context(), backend.WriteRequest{
 			Path: "/a.md", ExpectedVersion: 1, Content: []byte("# v2\n"),
-			Precondition: func(context.Context, backend.Reader, storefmt.PreparedWrite) error {
+			Precondition: func(context.Context, backend.CommitState, storefmt.PreparedWrite) error {
 				close(inCommit)
 				<-release
 				return nil

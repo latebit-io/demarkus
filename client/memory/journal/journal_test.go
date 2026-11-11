@@ -225,6 +225,19 @@ func TestHasBlock(t *testing.T) {
 	if !hasBlock("# T\n\nfirst\n\nsecond line\n", "second line") || hasBlock("# T\n\nfirst second line\n", "second line") {
 		t.Error("hasBlock matches whole blocks only")
 	}
+	entry := "para one\n\npara two"
+	for body, want := range map[string]bool{
+		"# T\n\nfirst\n\npara one\n\npara two\n":        true,
+		"# T\r\n\r\npara one\r\n\r\npara two\r\n":       true,
+		"# T\n\npara one\n\npara two\n\nlater\n":        true,
+		"# T\n\nlead para one\n\npara two\n":            false,
+		"# T\n\npara one\n\npara two and more\n":        false,
+		"# T\n\npara one\n\npara two\nsame paragraph\n": false,
+	} {
+		if got := hasBlock(body, entry); got != want {
+			t.Errorf("hasBlock(%q) = %v, want %v", body, got, want)
+		}
+	}
 }
 
 func TestAppendDatesTheEntryByItsLocalDay(t *testing.T) {

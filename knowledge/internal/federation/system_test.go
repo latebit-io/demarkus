@@ -18,7 +18,7 @@ import (
 	"github.com/latebit-io/demarkus/client/generation"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
-	"github.com/latebit-io/demarkus/knowledge/internal/broker/gateway"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/server/knowledgeserver/knowledgetest"
 )
@@ -34,6 +34,8 @@ type system struct {
 	t       *testing.T
 	buckets *knowledgetest.Buckets
 	config  *core.Config
+	// registry is the world set every replica of the system shares.
+	registry *core.WorldRegistry
 }
 
 func newSystem(t *testing.T) *system {
@@ -41,38 +43,38 @@ func newSystem(t *testing.T) *system {
 		{Name: hubWorld, Namespace: hubWorld, Profile: core.ProfileKnowledge, Local: true},
 		{Name: teamWorld, Namespace: teamWorld, Profile: core.ProfileKnowledge, Local: true},
 	}}
-	return &system{t: t, buckets: &knowledgetest.Buckets{}, config: config}
+	return &system{t: t, buckets: &knowledgetest.Buckets{}, config: config, registry: core.NewWorldRegistry(config.Worlds)}
 }
 
 // replica opens one more knowledge server and returns its in-process
 // dispatcher.
-func (s *system) replica() *gateway.Composite {
-	all := s.config.Registry().All()
+func (s *system) replica() *dispatch.Composite {
+	all := s.registry.All()
 	worlds := make([]knowledgetest.World, len(all))
 	for i := range all {
 		worlds[i] = knowledgetest.World{Name: all[i].Name, Authority: all[i].Authority()}
 	}
 	server := knowledgetest.Open(s.t, s.buckets, worlds...)
-	if err := gateway.CheckLocal(s.config.Registry(), server); err != nil {
+	if err := dispatch.CheckLocal(s.registry, server); err != nil {
 		s.t.Fatal(err)
 	}
-	return gateway.NewComposite(s.config.Registry(), server, nil)
+	return dispatch.NewComposite(s.registry, server, nil)
 }
 
 // deriver derives team from source into the hub through replica, as the
 // broker wires it, logging to the test.
-func (s *system) deriver(replica *gateway.Composite, source Source) *deriver {
+func (s *system) deriver(replica *dispatch.Composite, source Source) *deriver {
 	log := slog.New(slog.NewTextHandler(testLog{s.t}, nil))
 	return testDeriver(Config{Worlds: []string{teamWorld}, Source: source, Hub: HubIO(replica, hubWorld), Log: log})
 }
 
 // lead runs a deriver until the returned stop, which waits for it to end.
-func (s *system) lead(replica *gateway.Composite, source Source) (stop func()) {
+func (s *system) lead(replica *dispatch.Composite, source Source) (stop func()) {
 	return runDeriver(s.t, s.deriver(replica, source))
 }
 
 // await polls until team's checkpoint, read through replica, satisfies check.
-func (s *system) await(replica *gateway.Composite, check func(graphstore.WorldManifest, map[string]graphstore.WorldSource) error) graphstore.WorldManifest {
+func (s *system) await(replica *dispatch.Composite, check func(graphstore.WorldManifest, map[string]graphstore.WorldSource) error) graphstore.WorldManifest {
 	s.t.Helper()
 	return awaitCheckpoint(s.t, HubIO(replica, hubWorld), teamWorld, check)
 }
@@ -86,7 +88,7 @@ func (l testLog) Write(p []byte) (int, error) {
 }
 
 // publish writes body as docPath's next version in team.
-func publish(t *testing.T, replica *gateway.Composite, docPath, body string) {
+func publish(t *testing.T, replica *dispatch.Composite, docPath, body string) {
 	t.Helper()
 	ctx := protocol.WithGrant(context.Background(), protocol.Grant{Label: "test", Paths: []string{"/**"}})
 	res, err := replica.Publish(ctx, fetch.WriteRequest{Host: teamWorld, Path: docPath, Body: body, ExpectedVersion: -1})
@@ -96,7 +98,7 @@ func publish(t *testing.T, replica *gateway.Composite, docPath, body string) {
 }
 
 // headCursor is team's feed position on replica.
-func headCursor(t *testing.T, replica *gateway.Composite) protocol.Cursor {
+func headCursor(t *testing.T, replica *dispatch.Composite) protocol.Cursor {
 	t.Helper()
 	watch, err := replica.Watch(context.Background(), fetch.WatchRequest{Host: teamWorld, Path: "/"})
 	if err != nil {
@@ -204,7 +206,7 @@ func TestDeposedLeadersLateCheckpointIsHarmless(t *testing.T) {
 
 // applyAndCheckpoint folds docPath's publish at version into w and
 // checkpoints it at replica's head.
-func applyAndCheckpoint(t *testing.T, w *world, replica *gateway.Composite, docPath string, version int) {
+func applyAndCheckpoint(t *testing.T, w *world, replica *dispatch.Composite, docPath string, version int) {
 	t.Helper()
 	applyEvent(t, w, docPath, version, protocol.OpPublish)
 	if err := w.checkpoint(context.Background(), headCursor(t, replica)); err != nil {
@@ -281,7 +283,7 @@ func TestNewLeaderWritesTheExportOnlyForAChange(t *testing.T) {
 
 // watchCounter counts the in-process watches a replica opens.
 type watchCounter struct {
-	gateway.LocalWorlds
+	dispatch.LocalWorlds
 	opened atomic.Int64
 }
 
@@ -295,13 +297,13 @@ func (c *watchCounter) Watch(ctx context.Context, authority string, req protocol
 func TestDeriverHoldsOneWatch(t *testing.T) {
 	t.Parallel()
 	sys := newSystem(t)
-	all := sys.config.Registry().All()
+	all := sys.registry.All()
 	worlds := make([]knowledgetest.World, len(all))
 	for i := range all {
 		worlds[i] = knowledgetest.World{Name: all[i].Name, Authority: all[i].Authority()}
 	}
 	local := &watchCounter{LocalWorlds: knowledgetest.Open(t, sys.buckets, worlds...)}
-	replica := gateway.NewComposite(sys.config.Registry(), local, nil)
+	replica := dispatch.NewComposite(sys.registry, local, nil)
 	publish(t, replica, "/a.md", "# A\n")
 	sys.lead(replica, replica)
 	sys.await(replica, versions(map[string]int{"/a.md": 1}))

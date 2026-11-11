@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchdedup"
@@ -32,6 +33,10 @@ import (
 
 // version is set at build time via -ldflags.
 var version = "dev"
+
+// providerPatience is how long startup waits for the tool provider's list;
+// past it the tools arrive by tools/list_changed.
+const providerPatience = 3 * time.Second
 
 func main() {
 	defaultHost := flag.String("host", "", "default Mark server (e.g. mark://localhost:6309)")
@@ -82,13 +87,8 @@ func main() {
 	served := h.profileTools(*defaultHost, *profile)
 	s.AddTools(served...)
 	if *toolProvider != "" {
-		// A broken provider costs its tools, never the store's: memory stays up.
-		provided, err := mcpprovider.Load(context.Background(), *toolProvider, servedNames(served))
-		if err != nil {
-			log.Printf("warning: tool provider %s: %v; its tools are unavailable", strconv.Quote(*toolProvider), err)
-		} else {
-			s.AddTools(provided...)
-		}
+		// A broken or hung provider costs its tools, never the store's.
+		mcpprovider.Attach(*toolProvider, servedNames(served), providerPatience, s.AddTools)
 	}
 
 	registerResources(s, h, *defaultHost)

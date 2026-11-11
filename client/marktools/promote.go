@@ -5,27 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"slices"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/fetch"
-	"github.com/latebit-io/demarkus/client/lookuptable"
+	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/memory/audit"
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/promote"
+	"github.com/latebit-io/demarkus/client/memory/worldpolicy"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
-// Dedup bounds: a lookup page that fills may hide a candidate beyond it,
-// and a candidate's body is shown up to candidateCap.
-const (
-	dedupLimit   = 50
-	candidateCap = 4 * 1024
-)
+// candidateCap bounds the body a dry run shows of each dedup candidate.
+const candidateCap = 4 * 1024
 
 // PromoteArgs are mark_promote's arguments; which ones a phase reads is in
 // the tool description. Metadata is the raw JSON object.
@@ -253,6 +249,11 @@ func (t *Tools) promoteDraft(ctx context.Context, target Target, args *PromoteAr
 	if apply && args.Packet == "" {
 		return failure("apply needs the packet hash from dry_run")
 	}
+	// A promotion never prunes the copy it lands on: retention is the
+	// declaring write's own, confirmed by a human on mark_publish.
+	if _, prunes := args.Metadata["retention"]; prunes {
+		return failure("%s refused: metadata.retention would prune the target's history; drop it", args.Phase)
+	}
 	write, bad := t.writer(ctx, target, "publish")
 	if bad != nil {
 		bad.Text = "status: not-permitted\n" + bad.Text
@@ -285,9 +286,9 @@ func (t *Tools) promoteDraft(ctx context.Context, target Target, args *PromoteAr
 	return t.promoteApply(ctx, target, doc, draft)
 }
 
-// effectivePolicy is the policy the server will judge a write at target by:
-// the world's own merged over the floor world's when the surface names one,
-// each layer's exemptions applied. Nil when neither has a policy document.
+// effectivePolicy is the policy the server will judge a write at target by
+// (worldpolicy.Effective): the world's own over the floor world's when the
+// surface names one. Nil when neither has a policy document.
 func (t *Tools) effectivePolicy(ctx context.Context, target Target) (*publishpolicy.Policy, *Result) {
 	own, bad := t.worldPolicy(ctx, target)
 	if bad != nil {
@@ -297,42 +298,44 @@ func (t *Tools) effectivePolicy(ctx context.Context, target Target) (*publishpol
 	if bad != nil {
 		return nil, bad
 	}
-	if floor == nil && own == nil {
-		return nil, nil
-	}
-	var world publishpolicy.Policy
-	if own != nil {
-		world = *own
-	}
-	effective := publishpolicy.Effective(floor, world, target.Path)
-	return &effective, nil
+	return worldpolicy.Effective(own, floor, target.Path), nil
 }
 
-// worldPolicy reads the world's write policy; not-found is no policy, any
-// other failure refuses, since the policy is what the gate checks against.
+// worldPolicy reads the world's write policy; one that cannot be read
+// refuses, since the policy is what the gate checks against.
 func (t *Tools) worldPolicy(ctx context.Context, target Target) (*publishpolicy.Policy, *Result) {
-	r, err := t.fetch(ctx, target, publishpolicy.DocumentPath)
+	policy, err := worldpolicy.Read(ctx, func(ctx context.Context, p string) (protocol.Response, error) {
+		r, err := t.fetch(ctx, target, p)
+		return r.Response, err
+	})
+	unavailable, failed := errors.AsType[*worldpolicy.Unavailable](err)
 	switch {
-	case err != nil:
-		bad := failure("status: policy-unavailable\n%s", t.errText(SiteFetch, target.Host, err))
+	case failed && unavailable.Err != nil:
+		bad := failure("status: policy-unavailable\n%s", t.errText(SiteFetch, target.Host, unavailable.Err))
 		return nil, &bad
-	case r.Response.Status == protocol.StatusNotFound:
-		return nil, nil
-	case r.Response.Status != protocol.StatusOK:
-		bad := failure("status: policy-unavailable\nfetch %s: %s", publishpolicy.DocumentPath, r.Response.Status)
+	case err != nil:
+		bad := failure("status: policy-unavailable\n%v", err)
 		return nil, &bad
 	}
-	policy := publishpolicy.Parse(r.Response.Body)
-	return &policy, nil
+	return policy, nil
 }
 
-// promoteDryRun fills the dedup findings and renders the report.
+// promoteDryRun fills the dedup findings (promote.Search) and renders the
+// report. A lookup that cannot be trusted ends it as incomplete-dedup.
 func (t *Tools) promoteDryRun(ctx context.Context, target Target, check *promote.Check, head *docwrite.Head) Result {
-	if bad := t.dedup(ctx, target, check); bad != nil {
-		return *bad
+	search := promote.Search{
+		CatalogNote: mcpfmt.CatalogFallbackNote,
+		Lookup: func(ctx context.Context, req fetch.LookupRequest) (fetch.Result, error) {
+			req.Host, req.Token = target.Host, t.readToken(ctx, target.Host)
+			r, err := t.backend.Lookup(ctx, req)
+			if err != nil {
+				return r, errors.New(t.errText(SiteLookup, target.Host, err))
+			}
+			return r, nil
+		},
 	}
-	if bad := t.similar(ctx, target, check); bad != nil {
-		return *bad
+	if err := search.Dedup(ctx, check); err != nil {
+		return failure("status: incomplete-dedup\n%v", err)
 	}
 	for i := range check.Candidates {
 		c := &check.Candidates[i]
@@ -355,102 +358,6 @@ func (t *Tools) promoteDryRun(ctx context.Context, target Target, check *promote
 	return text("target: " + target.name() + "\n" + check.Report())
 }
 
-// dedup runs the skill's two lookups: the title in body mode, then the
-// subject tags in the catalog when the title found nothing. A lookup that
-// cannot be trusted ends the dry run as incomplete-dedup.
-func (t *Tools) dedup(ctx context.Context, target Target, check *promote.Check) *Result {
-	title := check.Draft.Title()
-	if title == "" {
-		check.Notes = append(check.Notes, "no H1: dedup by title skipped")
-	} else {
-		rows, catalogOnly, err := t.lookupRows(ctx, target, fetch.LookupRequest{Query: title, Match: fetch.MatchBody})
-		if err != nil {
-			bad := failure("status: incomplete-dedup\n%v", err)
-			return &bad
-		}
-		if catalogOnly {
-			check.Notes = append(check.Notes, "catalog-only: "+fetch.CatalogFallbackNote)
-		}
-		check.Candidates, check.Related = promote.Candidates(rows, &check.Draft, false)
-	}
-	if len(check.Candidates) > 0 {
-		return nil
-	}
-	tags := check.Draft.SubjectTags()
-	if len(tags) == 0 {
-		return nil
-	}
-	rows, _, err := t.lookupRows(ctx, target, fetch.LookupRequest{Query: strings.Join(tags[:min(3, len(tags))], " ")})
-	if err != nil {
-		bad := failure("status: incomplete-dedup\n%v", err)
-		return &bad
-	}
-	var related []string
-	check.Candidates, related = promote.Candidates(rows, &check.Draft, true)
-	for _, r := range related {
-		if !slices.Contains(check.Related, r) {
-			check.Related = append(check.Related, r)
-		}
-	}
-	return nil
-}
-
-// similar asks the store which documents the draft repeats, the question
-// the write gate answers after a publish. An older server refuses the
-// mode: the dry run says so and stands on the title and tag lookups.
-func (t *Tools) similar(ctx context.Context, target Target, check *promote.Check) *Result {
-	// No query: the draft is the input, and a long H1 would be refused
-	// before the mode is judged.
-	rows, catalogOnly, err := t.lookupRows(ctx, target, fetch.LookupRequest{Match: fetch.MatchSimilar, Body: check.Draft.Body})
-	switch {
-	case errors.Is(err, errMatchUnsupported):
-		check.Notes = append(check.Notes, "near-duplicate lookup not offered by this server; dedup by title and tags only")
-		return nil
-	case err != nil:
-		bad := failure("status: incomplete-dedup\n%v", err)
-		return &bad
-	case catalogOnly:
-		check.Notes = append(check.Notes, "near-duplicate lookup unanswered: "+fetch.CatalogFallbackNote)
-		return nil
-	}
-	// An update is not a duplicate of itself.
-	rows = slices.DeleteFunc(rows, func(r lookuptable.Row) bool { return r.Path == check.Draft.Path })
-	check.Candidates, check.Related = promote.SimilarCandidates(check.Candidates, check.Related, rows)
-	return nil
-}
-
-// errMatchUnsupported is a lookup mode the server predates: the client
-// validated the mode, so a bad-request on one is a server without it.
-var errMatchUnsupported = errors.New("lookup mode not offered by this server")
-
-func matchUnsupported(req fetch.LookupRequest, r fetch.Result) bool {
-	return req.Match != "" && req.Match != fetch.MatchCatalog && r.Response.Status == protocol.StatusBadRequest
-}
-
-// lookupRows is one lookup over the world (host, scope, token and the
-// dedup limit filled in); a page that fills is an error, since a candidate
-// may be beyond it.
-func (t *Tools) lookupRows(ctx context.Context, target Target, req fetch.LookupRequest) (rows []lookuptable.Row, catalogOnly bool, err error) {
-	req.Host, req.Scope, req.Token, req.Limit = target.Host, "/", t.readToken(ctx, target.Host), dedupLimit
-	r, err := t.backend.Lookup(ctx, req)
-	switch {
-	case err != nil:
-		return nil, false, errors.New(t.errText(SiteLookup, target.Host, err))
-	case matchUnsupported(req, r):
-		return nil, false, errMatchUnsupported
-	case r.Response.Status != protocol.StatusOK:
-		return nil, false, fmt.Errorf("lookup %q: %s", req.Query, r.Response.Status)
-	}
-	table, err := lookuptable.ParseTable(r.Response.Body)
-	if err != nil {
-		return nil, false, err
-	}
-	if len(table.Rows) >= dedupLimit {
-		return nil, false, fmt.Errorf("lookup %q: %d or more matches; narrow the draft's title or tags", req.Query, dedupLimit)
-	}
-	return table.Rows, fetch.AnsweredFromCatalog(req, r), nil
-}
-
 // promoteApply publishes the checked draft as mark_publish would, with the
 // provenance key, at the version the dry run saw; the server's policy
 // decides the write as it does for every publish.
@@ -461,7 +368,7 @@ func (t *Tools) promoteApply(ctx context.Context, target Target, doc *docwrite.D
 		meta[promote.PromotedFrom] = draft.Source
 	}
 	w := docwrite.Write{Body: draft.Body, ExpectedVersion: draft.Version, Metadata: meta}
-	result, notes, bad := t.landPublish(ctx, &landing{target: target, doc: doc, mode: merge.OnConflictFail}, &w)
+	result, notes, bad := t.landPublish(ctx, &publishAt{target: target, doc: doc, mode: merge.OnConflictFail}, &w)
 	if bad != nil {
 		return *bad
 	}

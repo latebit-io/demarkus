@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/latebit-io/demarkus/client/memory/okf"
+	"github.com/latebit-io/demarkus/client/memory/frontmatter"
 	"github.com/latebit-io/demarkus/client/memory/outline"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
@@ -43,7 +43,7 @@ func collect(url, body, description string, withSize bool) []string {
 	var problems []string
 	if OpensWithFrontmatter(body) {
 		problems = append(problems, stylerules.Prefix(stylerules.Frontmatter,
-			"the body opens with a YAML frontmatter fence; demarkus carries metadata out of band, so the block is stored as literal content (garbled headings, invisible to mark_lookup); move name/tags/type into the metadata object and delete the fence"))
+			"the body opens with a YAML frontmatter fence; demarkus carries metadata out of band, so the block is stored as literal content (garbled headings, invisible to a lookup); move name/tags/type into the metadata object and delete the fence"))
 	}
 
 	headings := mdoutline.Headings(body)
@@ -90,17 +90,17 @@ func sizeProblems(url, body string) []string {
 		"body is %d KB, at or over the %d KB fetch threshold, so a plain fetch returns an outline; split it into a hub plus topic files", len(body)/1024, outline.Threshold/1024))}
 }
 
-// Frontmatter reads the fence OpensWithFrontmatter detects: its keys as the
-// OKF parser reads them and the body after the fence.
+// Frontmatter reads the fence OpensWithFrontmatter detects: its keys and the
+// body after the fence.
 func Frontmatter(body string) (kv map[string]string, rest string, ok bool) {
 	if !OpensWithFrontmatter(body) {
 		return nil, body, false
 	}
-	fm, after, found := okf.SplitFrontmatter([]byte(strings.TrimLeft(body, "\n\r\t ")))
+	fm, after, found := frontmatter.Split([]byte(strings.TrimLeft(body, "\n\r\t ")))
 	if !found {
 		return nil, body, false
 	}
-	kv, err := okf.ParseFrontmatter(fm)
+	kv, err := frontmatter.Parse(fm)
 	if err != nil {
 		return nil, body, false
 	}

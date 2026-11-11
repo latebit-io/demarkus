@@ -14,24 +14,23 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 const classifierStamp = "unchecked: test"
 
-// storeServer is a real protocol store behind the handler's metadata path:
-// controls and stale stamps dropped, a classifier stamp set, PUBLISH typed
-// (the store types an APPEND), reserved keys hidden from a FETCH.
+// storeServer is the stored document model behind the handler's metadata
+// path: controls and stale stamps dropped, a classifier stamp set, PUBLISH
+// typed (the store types an APPEND), reserved keys hidden from a FETCH.
 type storeServer struct {
-	store *store.Store
+	store *versionStore
 	lose  bool // the store runs each write, then its answer is lost
 }
 
 // newStoreServer holds one version per body, each published with meta.
 func newStoreServer(t *testing.T, meta map[string]string, bodies ...string) *storeServer {
 	t.Helper()
-	s := &storeServer{store: store.New(t.TempDir())}
+	s := &storeServer{store: newVersionStore()}
 	for i, body := range bodies {
 		s.put(t, protocol.VerbPublish, i, body, meta)
 	}

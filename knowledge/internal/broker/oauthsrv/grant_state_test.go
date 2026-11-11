@@ -104,7 +104,7 @@ func TestGrantDocumentHoldsNoRawCodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deviceCode, _, _, err := f.devices().Authorize(ctx, "")
+	deviceCode, _, _, err := f.devices().Authorize(ctx, deviceRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestGrantDocumentSweepsOnWrite(t *testing.T) {
 	if _, err := f.codes().Issue(ctx, testAuthCodeRequest(), aliceClaims()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := f.devices().Authorize(ctx, ""); err != nil {
+	if _, _, _, err := f.devices().Authorize(ctx, deviceRequest{}); err != nil {
 		t.Fatal(err)
 	}
 	f.clock.Advance(testExpiresIn + testPollInterval + time.Second)
@@ -157,11 +157,34 @@ func TestGrantDocumentCapsEachKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := f.devices().Authorize(ctx, ""); !errors.Is(err, errGrantStoreFull) {
+	if _, _, _, err := f.devices().Authorize(ctx, deviceRequest{}); !errors.Is(err, errGrantStoreFull) {
 		t.Fatalf("Authorize at the cap: err = %v, want errGrantStoreFull", err)
 	}
 	if _, err := f.codes().Issue(ctx, testAuthCodeRequest(), aliceClaims()); err != nil {
 		t.Fatalf("a full device kind refused an auth code: %v", err)
+	}
+}
+
+// One origin stops at its own cap while every other origin is still served:
+// anonymous grants from a few addresses must not lock device login for all.
+func TestDeviceGrantsCappedPerOrigin(t *testing.T) {
+	f := newGrantFixture(t)
+	ctx := context.Background()
+	for i := range maxDeviceGrantsPerOrigin {
+		if _, _, _, err := f.devices().Authorize(ctx, deviceRequest{Origin: "flood"}); err != nil {
+			t.Fatalf("grant %d of the origin's allowance: %v", i, err)
+		}
+	}
+	if _, _, _, err := f.devices().Authorize(ctx, deviceRequest{Origin: "flood"}); !errors.Is(err, errOriginGrantsFull) {
+		t.Fatalf("grant past the origin's cap: err = %v, want errOriginGrantsFull", err)
+	}
+	if _, _, _, err := f.devices().Authorize(ctx, deviceRequest{Origin: "other"}); err != nil {
+		t.Fatalf("another origin refused while one is at its cap: %v", err)
+	}
+	// The origin's grants expire, and its allowance with them.
+	f.clock.Advance(testExpiresIn + testPollInterval + time.Second)
+	if _, _, _, err := f.devices().Authorize(ctx, deviceRequest{Origin: "flood"}); err != nil {
+		t.Fatalf("origin still refused after its grants expired: %v", err)
 	}
 }
 

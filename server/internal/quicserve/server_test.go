@@ -326,6 +326,8 @@ type fakeConnection struct {
 	closeErr   error
 	mu         sync.Mutex
 	accepted   []*fakeStream
+	ctx        context.Context
+	end        context.CancelFunc
 }
 
 type acceptStreamResult struct {
@@ -334,10 +336,22 @@ type acceptStreamResult struct {
 }
 
 func newFakeConnection() *fakeConnection {
+	ctx, end := context.WithCancel(context.Background())
 	return &fakeConnection{
 		streams: make(chan acceptStreamResult, 8),
 		closed:  make(chan struct{}),
+		ctx:     ctx,
+		end:     end,
 	}
+}
+
+func (c *fakeConnection) Context() context.Context { return c.ctx }
+
+// drop is the peer going away: the connection's context ends and no further
+// stream arrives, with no close from the server.
+func (c *fakeConnection) drop() {
+	c.end()
+	c.streams <- acceptStreamResult{err: net.ErrClosed}
 }
 
 func (c *fakeConnection) QUICConn() *quic.Conn {
@@ -362,6 +376,7 @@ func (c *fakeConnection) RemoteAddr() net.Addr {
 func (c *fakeConnection) CloseWithError(quic.ApplicationErrorCode, string) error {
 	c.closeOnce.Do(func() {
 		c.closeCalls.Add(1)
+		c.end()
 		close(c.closed)
 		c.mu.Lock()
 		streams := append([]*fakeStream(nil), c.accepted...)
@@ -493,4 +508,33 @@ func assertNotClosed(t *testing.T, channel <-chan error, message string) {
 		t.Fatalf("%s: %v", message, err)
 	case <-time.After(20 * time.Millisecond):
 	}
+}
+
+// A stream handler's context ends when its peer's connection does, while the
+// handler is still running: its store work and waits stop with the peer.
+func TestHandlerContextEndsWithTheConnection(t *testing.T) {
+	listener := newFakeListener()
+	server := newServer(listener, discardLogger())
+	connection := newFakeConnection()
+	listener.accept(connection)
+
+	ended := make(chan error, 1)
+	started := make(chan struct{})
+	endpoint := endpointFunc(func(ctx context.Context, _ net.Addr, _ Stream) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			ended <- nil
+		case <-time.After(5 * time.Second):
+			ended <- errors.New("handler context outlived its connection")
+		}
+	})
+	serveResult := runServe(server, func(*quic.Conn) (Endpoint, error) { return endpoint, nil })
+	connection.accept(newFakeStream())
+	<-started
+	connection.drop()
+	if err := <-ended; err != nil {
+		t.Error(err)
+	}
+	shutdownServer(t, server, serveResult)
 }

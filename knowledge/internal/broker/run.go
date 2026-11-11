@@ -15,6 +15,7 @@ import (
 	gcs "cloud.google.com/go/storage"
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/gateway"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/oauthsrv"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/storage"
@@ -43,9 +44,12 @@ type RunOptions struct {
 // dispatches its worlds in process, applies the provisioner's worlds and
 // opens the bearer listener the broker's gate admits requests on.
 type LocalServer interface {
-	gateway.LocalWorlds
+	dispatch.LocalWorlds
 	storage.WorldsApplier
 	OpenBearerListener(address string, gates func(authority string) (protocol.Gate, error)) error
+	// RequireGate has the server refuse, from now on, an ungated world whose
+	// authority must names, and fails when one is already live.
+	RequireGate(must func(authority string) bool) error
 }
 
 // Broker is an opened broker: config, auth machinery and the listeners
@@ -95,6 +99,10 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 	if err != nil {
 		return nil, err
 	}
+	// The one live world set: the gateways, the gate, the pool and the
+	// provisioner all read and write this instance.
+	registry := core.NewWorldRegistry(cfg.Worlds)
+	deps.Worlds = registry
 	gcsClient, closeBuckets, err := storage.NewGCSClient(log)
 	if err != nil {
 		return nil, err
@@ -108,72 +116,107 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 		closeBuckets()
 		return nil, err
 	}
-	provisioner, err := enableProvisioning(cfg, storage.ProvisionerDeps{Store: store, Worlds: opts.LocalWorlds, Log: log}, gcsClient)
+	provisioner, err := enableProvisioning(cfg, storage.ProvisionerDeps{Store: store, Registry: registry, Worlds: opts.LocalWorlds, Log: log}, gcsClient)
 	if err != nil {
 		closeBuckets()
 		return nil, err
 	}
 
-	if cfg.RateLimit.Disabled {
-		log.Info("broker: rate limit disabled (rateLimit.disabled=true)")
-	} else {
-		log.Info("broker: rate limit enabled",
-			"tokensPerMin", cfg.RateLimit.Tokens.PerMinute,
-			"tokensBurst", cfg.RateLimit.Tokens.Burst,
-			"loginPerMin", cfg.RateLimit.Login.PerMinute,
-			"loginBurst", cfg.RateLimit.Login.Burst,
-			"trustForwardedFor", cfg.RateLimit.TrustForwardedFor)
-	}
-
-	if err := gateway.CheckLocal(cfg.Registry(), opts.LocalWorlds); err != nil {
+	logRateLimit(cfg, log)
+	refuseFederation, err := checkLocalWorlds(cfg, registry, opts.LocalWorlds)
+	if err != nil {
 		closeBuckets()
 		return nil, err
 	}
-	if err := openBearerListener(cfg, opts.LocalWorlds, deps.Verifier, log); err != nil {
+	if err := openBearerListener(cfg, opts.LocalWorlds, core.NewBearerGate(cfg, registry, deps.Verifier, log)); err != nil {
 		closeBuckets()
 		return nil, err
 	}
-	pool := gateway.NewWorldPool(cfg.Registry(), fetch.Options{Insecure: cfg.WorldDialer.InsecureSkipVerify})
-	var dispatcher gateway.WorldDispatcher = pool
-	var composite *gateway.Composite
+	pool := gateway.NewWorldPool(registry, fetch.Options{Insecure: cfg.WorldDialer.InsecureSkipVerify})
+	var dispatcher dispatch.WorldDispatcher = pool
+	var composite *dispatch.Composite
 	if opts.LocalWorlds != nil {
-		composite = gateway.NewComposite(cfg.Registry(), opts.LocalWorlds, pool)
+		composite = dispatch.NewComposite(registry, opts.LocalWorlds, pool)
 		dispatcher = composite
 	}
 	// One mux: the management API, the knowledge gateway on every host it
 	// does not claim, the memory gateway on its own hostname.
 	mux := http.NewServeMux()
 	srv.Register(mux)
-	knowledge := gateway.KnowledgeProfile()
-	knowledgeDeps := gateway.DepsFor(cfg, knowledge, deps.SharedDeps, nil)
-	knowledgeDeps.Floor = gateway.FloorOf(opts.LocalWorlds)
-	// Subscriptions need the worlds in process; a nil *Composite must stay a
-	// nil interface.
-	var watches gateway.WorldWatcher
-	if composite != nil {
-		watches = composite
-	}
-	knowledgeDeps.Watches = watches
-	gateways := []*gateway.Gateway{gateway.New(knowledgeDeps, opts.Version, dispatcher, knowledge)}
-	gateways[0].Register(mux, "")
-	if cfg.Server.Memory.Enabled() {
-		memory := gateway.MemoryProfile()
-		memoryDeps := gateway.DepsFor(cfg, memory, deps.SharedDeps, provisioner)
-		memoryDeps.Watches = watches
-		gateways = append(gateways, gateway.New(memoryDeps, opts.Version, dispatcher, memory))
-		gateways[1].Register(mux, cfg.Server.Memory.Host())
-	}
+	gateways := mountGateways(mux, &gatewayWiring{
+		cfg: cfg, opts: opts, shared: deps.SharedDeps,
+		dispatcher: dispatcher, composite: composite, provisioner: provisioner,
+	})
 	b := &Broker{
-		cfg:         cfg,
-		log:         log,
-		pool:        pool,
-		srv:         srv,
-		httpSrv:     newHardenedServer(cfg.Server.Addr, mux),
-		gateways:    gateways,
-		tasks:       &backgroundTasks{cfg: cfg, log: log, store: store, k8s: k8s, srv: srv, provisioner: provisioner, local: composite},
+		cfg:      cfg,
+		log:      log,
+		pool:     pool,
+		srv:      srv,
+		httpSrv:  newHardenedServer(cfg.Server.Addr, mux),
+		gateways: gateways,
+		tasks: &backgroundTasks{
+			cfg: cfg, log: log, store: store, k8s: k8s, srv: srv, provisioner: provisioner,
+			local: composite, refuseFederation: refuseFederation,
+		},
 		closeBucket: closeBuckets,
 	}
 	return b, nil
+}
+
+// logRateLimit says at start which limits are in force.
+func logRateLimit(cfg *core.Config, log *slog.Logger) {
+	if cfg.RateLimit.Disabled {
+		log.Info("broker: rate limit disabled (rateLimit.disabled=true)")
+		return
+	}
+	log.Info("broker: rate limit enabled",
+		"tokensPerMin", cfg.RateLimit.Tokens.PerMinute,
+		"tokensBurst", cfg.RateLimit.Tokens.Burst,
+		"loginPerMin", cfg.RateLimit.Login.PerMinute,
+		"loginBurst", cfg.RateLimit.Login.Burst,
+		"trustForwardedFor", cfg.RateLimit.TrustForwardedFor)
+}
+
+// gatewayWiring is what both gateways are built from.
+type gatewayWiring struct {
+	cfg        *core.Config
+	opts       *RunOptions
+	shared     core.SharedDeps
+	dispatcher dispatch.WorldDispatcher
+	// composite and provisioner are nil without local worlds or provisioning.
+	composite   *dispatch.Composite
+	provisioner *storage.Provisioner
+}
+
+// mountGateways builds the knowledge gateway, and the memory gateway when
+// configured, and mounts them on mux.
+func mountGateways(mux *http.ServeMux, w *gatewayWiring) []*gateway.Gateway {
+	knowledge := gateway.KnowledgeProfile()
+	knowledgeDeps := gateway.DepsFor(w.cfg, knowledge, w.shared, nil)
+	knowledgeDeps.Floor = dispatch.FloorOf(w.opts.LocalWorlds)
+	// Subscriptions need the worlds in process; a nil *Composite must stay a
+	// nil interface.
+	var watches gateway.WorldWatcher
+	if w.composite != nil {
+		watches = w.composite
+	}
+	knowledgeDeps.Watches = watches
+	knowledgeGateway := gateway.New(knowledgeDeps, w.opts.Version, w.dispatcher, knowledge)
+	knowledgeGateway.Register(mux, "")
+	if !w.cfg.Server.Memory.Enabled() {
+		return []*gateway.Gateway{knowledgeGateway}
+	}
+	memory := gateway.MemoryProfile()
+	// A nil *Provisioner must stay a nil interface: static mode has none.
+	var tenants gateway.TenantProvisioner
+	if w.provisioner != nil {
+		tenants = w.provisioner
+	}
+	memoryDeps := gateway.DepsFor(w.cfg, memory, w.shared, tenants)
+	memoryDeps.Watches = watches
+	memoryGateway := gateway.New(memoryDeps, w.opts.Version, w.dispatcher, memory)
+	memoryGateway.Register(mux, w.cfg.Server.Memory.Host())
+	return []*gateway.Gateway{knowledgeGateway, memoryGateway}
 }
 
 // Serve runs the listeners and the background tasks until ctx ends or a
@@ -238,6 +281,36 @@ func (b *Broker) Close() {
 	})
 }
 
+// checkLocalWorlds holds the in-process server to the broker's config: every
+// local world routed, every private world gated on each world set, no gated
+// world federated into an open hub. It returns the deriver's gate check.
+func checkLocalWorlds(cfg *core.Config, registry *core.WorldRegistry, local LocalServer) (refuseFederation func(world string) error, err error) {
+	if err := dispatch.CheckLocal(registry, local); err != nil {
+		return nil, err
+	}
+	if local == nil {
+		return nil, nil
+	}
+	if err := local.RequireGate(cfg.MustGate()); err != nil {
+		return nil, err
+	}
+	// Read from the live server on every call: a reload can gate a world.
+	gated := func(world string) bool {
+		w, ok := registry.Find(world)
+		return ok && local.Gated(w.Authority())
+	}
+	refuseFederation = federation.GateCheck(cfg.Federation.Hub, gated)
+	if cfg.Federation.Hub == "" {
+		return refuseFederation, nil
+	}
+	for _, world := range cfg.FederatedWorlds() {
+		if err := refuseFederation(world); err != nil {
+			return nil, err
+		}
+	}
+	return refuseFederation, nil
+}
+
 // importClientRegistrations moves registrations from the pre-bucket Secret
 // into the state bucket, so MCP hosts keep their client_id across the upgrade.
 func importClientRegistrations(cfg *core.Config, srv *oauthsrv.Server, store core.SecretStore, log *slog.Logger) error {
@@ -256,14 +329,14 @@ func importClientRegistrations(cfg *core.Config, srv *oauthsrv.Server, store cor
 
 // openBearerListener has the server in this process listen for identity
 // bearers on server.bearerAddr, admitted by the broker's gate.
-func openBearerListener(cfg *core.Config, local LocalServer, verifier core.Verifier, log *slog.Logger) error {
+func openBearerListener(cfg *core.Config, local LocalServer, gate *core.BearerGate) error {
 	if cfg.Server.BearerAddr == "" {
 		return nil
 	}
 	if local == nil {
 		return errors.New("server.bearerAddr needs a knowledge server in this process")
 	}
-	return local.OpenBearerListener(cfg.Server.BearerAddr, core.NewBearerGate(cfg, verifier, log).For)
+	return local.OpenBearerListener(cfg.Server.BearerAddr, gate.For)
 }
 
 // newHardenedServer is the one timeout policy for every broker listener:
@@ -324,7 +397,9 @@ type backgroundTasks struct {
 	srv         *oauthsrv.Server
 	provisioner *storage.Provisioner
 	// local dispatches to the worlds served in process; nil when none are.
-	local *gateway.Composite
+	local *dispatch.Composite
+	// refuseFederation is the deriver's gate check; nil derives every world.
+	refuseFederation func(world string) error
 }
 
 // start launches the leader-elected sweeper and federation deriver, and the
@@ -368,7 +443,9 @@ func (b *backgroundTasks) startFederation(ctx context.Context, wg *sync.WaitGrou
 	b.lead(ctx, wg, leaderTask{name: "federation", lease: f.LeaseName, run: func(ctx context.Context) {
 		federation.Run(ctx, federation.Config{
 			Worlds: worlds, Source: b.local, Hub: federation.HubIO(b.local, f.Hub),
+			ListHub:     federation.HubLister(b.local, f.Hub),
 			QuietPeriod: f.QuietPeriod, Interval: f.Interval, Log: log,
+			Refuse: b.refuseFederation,
 		})
 	}})
 }

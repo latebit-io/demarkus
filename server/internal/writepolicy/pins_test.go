@@ -83,8 +83,8 @@ func TestPinNotesNameOnlyReadableDocuments(t *testing.T) {
 	}
 	readable := func(p string) bool { return !strings.HasPrefix(p, "/private/") }
 	publish := func(path string, version int, meta map[string]string) []string {
-		var warnings []string
-		if _, err := gated.Publish(t.Context(), backend.WriteRequest{Path: path, ExpectedVersion: version, Content: []byte("# Doc\n\nNew.\n"), Metadata: meta, Warnings: &warnings, Readable: readable}); err != nil {
+		_, warnings, err := gated.PublishNoted(t.Context(), backend.WriteRequest{Path: path, ExpectedVersion: version, Content: []byte("# Doc\n\nNew.\n"), Metadata: meta}, backend.Sender{Readable: readable})
+		if err != nil {
 			t.Fatal(err)
 		}
 		return warnings
@@ -120,8 +120,8 @@ func TestAppendNotesAnInheritedStalePin(t *testing.T) {
 	if _, err := write(t, gated, "/src.md", 1, []byte("# Src\n\nChanged.\n"), tags); err != nil {
 		t.Fatal(err)
 	}
-	var warnings []string
-	if _, err := gated.Append(t.Context(), backend.WriteRequest{Path: "/notes.md", ExpectedVersion: 1, Content: []byte("More.\n"), Warnings: &warnings}); err != nil {
+	_, warnings, err := gated.AppendNoted(t.Context(), backend.WriteRequest{Path: "/notes.md", ExpectedVersion: 1, Content: []byte("More.\n")}, backend.Sender{})
+	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"rel-based-on: /src.md is at v2, past the pinned v1; read what changed, update, pin v2"}
@@ -147,9 +147,9 @@ func TestDependentsNoteSkipsUnreadableBeforeTheCap(t *testing.T) {
 	if _, err := write(t, gated, "/public/dep.md", 0, []byte("# Public dep\n"), map[string]string{"tags": "x", "importance": "0.1", "rel-based-on": "/src.md/v1"}); err != nil {
 		t.Fatal(err)
 	}
-	var warnings []string
 	readable := func(p string) bool { return !strings.HasPrefix(p, "/private/") }
-	if _, err := gated.Publish(t.Context(), backend.WriteRequest{Path: "/src.md", ExpectedVersion: 1, Content: []byte("# Src\n\nChanged.\n"), Metadata: map[string]string{"tags": "x"}, Warnings: &warnings, Readable: readable}); err != nil {
+	_, warnings, err := gated.PublishNoted(t.Context(), backend.WriteRequest{Path: "/src.md", ExpectedVersion: 1, Content: []byte("# Src\n\nChanged.\n"), Metadata: map[string]string{"tags": "x"}}, backend.Sender{Readable: readable})
+	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"based on an earlier version of this document: /public/dep.md; check them against this change and re-pin"}

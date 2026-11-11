@@ -453,6 +453,10 @@ func validateWorldManifest(m *WorldManifest) error {
 	return nil
 }
 
+// IsWorldPrefix reports a shard prefix of any valid length: what names a
+// shard document in a world's checkpoint directory.
+func IsWorldPrefix(prefix string) bool { return validateWorldPrefix(prefix, len(prefix)) == nil }
+
 // validateWorldPrefix accepts length lowercase hex digits, 1 to the maximum.
 func validateWorldPrefix(prefix string, length int) error {
 	if length < 1 || length > MaxWorldPrefixLength || len(prefix) != length {

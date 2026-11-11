@@ -157,7 +157,7 @@ func issueTestCode(t *testing.T, broker *Server, req *AuthCodeRequest, claims *c
 // authorizeTestDevice starts a device grant as /device/authorize would.
 func authorizeTestDevice(t *testing.T, broker *Server, resource string) (deviceCode, userCode string) {
 	t.Helper()
-	deviceCode, userCode, _, err := broker.deviceStore.Authorize(context.Background(), resource)
+	deviceCode, userCode, _, err := broker.deviceStore.Authorize(context.Background(), deviceRequest{Resource: resource})
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}

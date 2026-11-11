@@ -87,6 +87,10 @@ data:
           governance: {{ $world.governance | default (ternary "restricted" "open" $restrict) | quote }}
         readOnly: {{ $world.readOnly }}
         gated: {{ eq $world.profile "memory" }}
+        {{- /* The server seeds a memory's policy; an initialPolicy is the operator's own. */}}
+        {{- if and (eq $world.profile "memory") (not $world.initialPolicy) (not $world.readOnly) }}
+        seed: memory
+        {{- end }}
         limits:
           maxConcurrentRequests: {{ $world.limits.maxConcurrentRequests }}
           requestTimeout: {{ $world.limits.requestTimeout | quote }}

@@ -153,7 +153,8 @@ func WriteGrant(w *WorldConfig, claims *Claims, governors []string) (protocol.Gr
 	}
 	// Govern acts only where the world's own governance restricts.
 	govern := emailMatches(canonical.Email, governors)
-	return protocol.Grant{Label: canonical.Email, Paths: w.WriteScope.Paths, Expires: claims.Expiry, Govern: govern}, nil
+	// User is what the world stores as the write's author, whatever it carried.
+	return protocol.Grant{Label: canonical.Email, User: canonical.Email, Paths: w.WriteScope.Paths, Expires: claims.Expiry, Govern: govern}, nil
 }
 
 // ResourceAllows reports whether a token may be used at resource: an

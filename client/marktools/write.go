@@ -2,6 +2,7 @@ package marktools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"strconv"
@@ -14,7 +15,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/hub"
 	"github.com/latebit-io/demarkus/client/memory/journal"
-	"github.com/latebit-io/demarkus/client/memory/metaguard"
+	"github.com/latebit-io/demarkus/client/memory/landing"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/docframe"
@@ -77,7 +78,7 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 	if bad != nil {
 		return *bad
 	}
-	mode, err := merge.ParseOnConflict(args.OnConflict)
+	mode, err := merge.ModeOf("on_conflict", args.OnConflict)
 	if err != nil {
 		return failure("%v", err)
 	}
@@ -86,7 +87,7 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 		return *bad
 	}
 	w := docwrite.Write{Body: args.Body, ExpectedVersion: expected, Metadata: t.publisherMeta(ctx, args.Metadata)}
-	result, notes, bad := t.landPublish(ctx, &landing{target: target, doc: t.doc(ctx, target, write), mode: mode}, &w)
+	result, notes, bad := t.landPublish(ctx, &publishAt{target: target, doc: t.doc(ctx, target, write), mode: mode}, &w)
 	if bad != nil {
 		return *bad
 	}
@@ -94,32 +95,56 @@ func (t *Tools) Publish(ctx context.Context, args PublishArgs) Result { //nolint
 	return text(formatWrite(&result, writeFields...) + notes)
 }
 
-// landing is where a publish lands: the target, its bound document, and
+// publishAt is where a publish lands: the target, its bound document, and
 // the conflict mode.
-type landing struct {
+type publishAt struct {
 	target Target
 	doc    *docwrite.Doc
-	mode   string
+	mode   merge.OnConflict
 }
 
-// landPublish is the write every publish tool makes after its own checks:
-// style gate, write, graph, hub link of a first version; notes is what a
-// landed write carries after its fields (hubs edited, then the notes).
-func (t *Tools) landPublish(ctx context.Context, at *landing, w *docwrite.Write) (result docwrite.Result, notes string, bad *Result) {
-	styleNote, bad := t.styleGate(ctx, at.target, w.Body, w.Metadata["description"])
-	if bad != nil {
-		return docwrite.Result{}, "", bad
+// landPublish is the write every publish tool makes after its own checks
+// (landing.Publish), observed into the graph; notes is what a landed write
+// carries after its fields (hubs edited, then the notes).
+func (t *Tools) landPublish(ctx context.Context, at *publishAt, w *docwrite.Write) (result docwrite.Result, notes string, bad *Result) {
+	out, err := landing.Publish(ctx, landing.Beside(at.doc), &landing.PublishRequest{
+		Path: at.target.Path, Write: *w, Mode: at.mode, Style: t.stylePolicy(ctx, at.target), Stamp: t.identityMeta(ctx),
+	})
+	if refused, ok := errors.AsType[*landing.StyleRefusal](err); ok {
+		blocked := failure("publish refused, style problems: %s Fix the body and republish.", refused.Findings)
+		return docwrite.Result{}, "", &blocked
 	}
-	result, err := at.doc.Publish(ctx, *w, at.mode)
 	if err != nil {
 		failed := t.failed(SitePublish, at.target.Host, err)
 		return docwrite.Result{}, "", &failed
 	}
-	if !landed(&result) {
-		return result, "", nil
+	if !out.Landed {
+		return out.Result, "", nil
 	}
-	t.observePublished(ctx, at.target, w, &result)
-	return result, t.linkOnPublish(ctx, at, w, &result) + t.narrowingNote(ctx, at.doc, *w) + styleNote, nil
+	t.observePublished(ctx, at.target, w, &out.Result)
+	if out.NarrowedErr != nil {
+		t.warnf("warning: publish metadata check mark://%s%s: %v", at.doc.Host, at.doc.Path, out.NarrowedErr)
+	}
+	return out.Result, publishNotes(&out), nil
+}
+
+// publishNotes words what landed with a publish: the hub edited or why not,
+// what the update dropped, the style findings.
+func publishNotes(out *landing.Published) string {
+	notes := ""
+	switch {
+	case out.Hub.Added:
+		notes = "hubs:\n- " + out.Hub.Hub + ": bullet added\n"
+	case out.Hub.Problem != "":
+		notes = mcpfmt.Note(out.Hub.Problem)
+	}
+	if out.Narrowed != "" {
+		notes += mcpfmt.Note(out.Narrowed)
+	}
+	if out.StyleFindings != "" {
+		notes += mcpfmt.Note("style problems in this publish: " + out.StyleFindings)
+	}
+	return notes
 }
 
 // observePublished merges a landed publish into the graph: the body and
@@ -131,9 +156,7 @@ func (t *Tools) observePublished(ctx context.Context, target Target, w *docwrite
 }
 
 // landed is a write the server applied, not a merge candidate to review.
-func landed(r *docwrite.Result) bool {
-	return r.Candidate == nil && protocol.IsWriteSuccess(r.Response.Status)
-}
+func landed(r *docwrite.Result) bool { return landing.Landed(r) }
 
 // writeScope is the graph scope a landed write is observed into; nil when the
 // surface has none for this call, which is not a failure of the write.
@@ -148,62 +171,64 @@ func (t *Tools) writeScope(ctx context.Context) *GraphScope {
 	return scope
 }
 
-// observeWrite merges a landed write into the graph scope the way explore
-// merges a read, so the document and its edges are current without a crawl.
-// Best effort: the write already landed; a failed save is only logged.
-func (t *Tools) observeWrite(ctx context.Context, target Target, result graph.FetchResult) {
-	scope := t.writeScope(ctx)
-	if scope == nil {
-		return
-	}
-	// A write's response rides on its metadata; the gate's note is response
-	// only and would change the document's hash in the observation.
-	delete(result.Metadata, "warning")
-	// An older server answers a write without its etag; observed, the write
-	// would read as a conflict against the fetch after it, so that fetch
-	// observes it instead.
-	if result.Status == protocol.StatusOK && result.Metadata["etag"] == "" {
-		return
-	}
-	if !scope.observe(target, result) {
-		return
-	}
-	if err := scope.Store.Save(); err != nil {
-		t.warnf("warning: graph cache save after write mark://%s%s: %v", target.Host, target.Path, err)
-	}
-}
-
-// observe merges one landed write without saving; true when it changed the store.
-func (s *GraphScope) observe(target Target, result graph.FetchResult) bool {
-	if s.Source != nil {
-		result.Source = s.Source(target)
-	}
-	return s.Store.ObserveDocument(target.NodeURL, result)
-}
-
-// observed is one landed write for observeWrites.
+// observed is one landed write on its way into the graph.
 type observed struct {
 	target Target
 	result graph.FetchResult
 }
 
-// observeWrites is observeWrite for a batch: a save rewrites the whole
-// cache, so it runs once after every observation.
+// observeWrite merges a landed write into the graph scope the way explore
+// merges a read, so the document and its edges are current without a crawl.
+func (t *Tools) observeWrite(ctx context.Context, target Target, result graph.FetchResult) {
+	t.observeWrites(ctx, []observed{{target, result}})
+}
+
+// observeWrites merges a batch of landed writes and saves once: a save
+// rewrites the whole cache. Best effort: the writes landed; a failed save
+// is only logged.
 func (t *Tools) observeWrites(ctx context.Context, writes []observed) {
 	scope := t.writeScope(ctx)
-	if scope == nil {
+	if scope == nil || len(writes) == 0 {
 		return
 	}
-	changed := false
+	kept := writes[:0:0]
 	for i := range writes {
-		changed = scope.observe(writes[i].target, writes[i].result) || changed
+		w := writes[i]
+		// A write's response rides on its metadata; the gate's note is response
+		// only and would change the document's hash in the observation.
+		delete(w.result.Metadata, "warning")
+		// An older server answers a write without its etag; observed, the write
+		// would read as a conflict against the fetch after it, so that fetch
+		// observes it instead.
+		if w.result.Status == protocol.StatusOK && w.result.Metadata["etag"] == "" {
+			continue
+		}
+		kept = append(kept, w)
+	}
+	if err := scope.record(kept); err != nil {
+		what := fmt.Sprintf("%d writes", len(writes))
+		if len(writes) == 1 {
+			what = "write mark://" + writes[0].target.Host + writes[0].target.Path
+		}
+		t.warnf("warning: graph cache save after %s: %v", what, err)
+	}
+}
+
+// record merges observations into the store and saves once when any changed
+// it; reads and writes share it, so both record under the scope's Source.
+func (s *GraphScope) record(seen []observed) error {
+	changed := false
+	for i := range seen {
+		o := &seen[i]
+		if s.Source != nil {
+			o.result.Source = s.Source(o.target)
+		}
+		changed = s.Store.ObserveDocument(o.target.NodeURL, o.result) || changed
 	}
 	if !changed {
-		return
+		return nil
 	}
-	if err := scope.Store.Save(); err != nil {
-		t.warnf("warning: graph cache save after %d writes: %v", len(writes), err)
-	}
+	return s.Store.Save()
 }
 
 // observeAppended reads the appended head once; the client never holds the
@@ -289,21 +314,6 @@ func formatWrite(r *docwrite.Result, fields ...string) string {
 		status += fmt.Sprintf(" (was v%d)", v-1)
 	}
 	return mcpfmt.FullStatus(status, r.Response.Metadata, fields...)
-}
-
-// narrowingNote warns, after a write that landed, when it dropped tags or keys
-// the replaced version had. A failed check is logged and never fails the write.
-func (t *Tools) narrowingNote(ctx context.Context, doc *docwrite.Doc, w docwrite.Write) string {
-	warning, err := metaguard.Gate(ctx, w.ExpectedVersion, w.Metadata, func(ctx context.Context) (fetch.Result, error) {
-		return doc.FetchVersion(ctx, w.ExpectedVersion)
-	})
-	if err != nil {
-		t.warnf("warning: publish metadata check mark://%s%s: %v", doc.Host, doc.Path, err)
-	}
-	if warning == "" {
-		return ""
-	}
-	return mcpfmt.Note(warning)
 }
 
 // AppendArgs are mark_append's arguments; ExpectedVersion 0 resolves the
@@ -394,26 +404,21 @@ type ArchiveArgs struct {
 	ExpectedDocs int
 }
 
-// Bounds on a recursive archive, so one call cannot sweep a whole store.
-const (
-	archiveListCalls = 100
-	archiveDocs      = 500
-)
-
-// Archive answers mark_archive. After the archive, every ancestor hub drops
-// the bullets that only linked what was archived; a hub that could not be
-// edited is a note, the archive stands.
+// Archive answers mark_archive (landing.Archive, landing.ArchiveUnder): after
+// the archive, the ancestor hubs drop the bullets that only linked what was
+// archived; a hub that could not be edited is a note, the archive stands.
 func (t *Tools) Archive(ctx context.Context, args ArchiveArgs) Result {
 	target, bad := t.resolve(ctx, args.URL)
 	if bad != nil {
 		return *bad
 	}
 	if args.Recursive {
+		// Refused before authorization, as an argument is.
 		switch {
 		case !strings.HasSuffix(target.Path, "/"):
-			return failure("recursive needs a directory url ending in /")
+			return failure("%v", landing.ErrNotADirectory)
 		case target.Path == "/":
-			return failure("recursive archive of the store root is refused; name a directory under it")
+			return failure("%v", landing.ErrStoreRoot)
 		}
 	} else if isContextPath(target.Path) {
 		return failure("%s is reserved: the primer is read, never written", ContextLeaf)
@@ -422,87 +427,65 @@ func (t *Tools) Archive(ctx context.Context, args ArchiveArgs) Result {
 	if bad != nil {
 		return *bad
 	}
-	if !args.Recursive {
-		result, err := t.archiveOne(ctx, target, write)
-		if err != nil {
-			return t.writeFailed(SiteArchive, target.Host, err)
-		}
-		out := formatResult(&result, "version")
-		if landed(&result) {
-			out += t.dropHubLinks(ctx, target, write, &unlink{hubs: hub.Ancestors(target.Path), targets: []string{target.Path}})
-		}
-		return text(out)
+	docs := func(p string) *docwrite.Doc { return t.doc(ctx, target.at(p), write) }
+	if args.Recursive {
+		return t.archiveUnder(ctx, target, docs, args.ExpectedDocs)
 	}
-	paths, err := t.liveUnder(ctx, target)
+	out, err := landing.Archive(ctx, docs, target.Path, t.identityMeta(ctx))
 	if err != nil {
-		return failure("archive failed: %v", err)
+		return t.writeFailed(SiteArchive, target.Host, err)
 	}
-	if len(paths) == 0 {
-		return failure("archive failed: no live documents under %s", target.Path)
+	if out.Landed {
+		t.observeWrites(ctx, []observed{archivedAt(target, &out.Result)})
 	}
-	if args.ExpectedDocs > 0 && len(paths) != args.ExpectedDocs {
-		return failure("archive refused: %d live documents under %s, expected %d; the directory changed since it was listed, list and gate again", len(paths), target.Path, args.ExpectedDocs)
+	return text(formatResult(&out.Result, "version") + droppedText(out.Hubs))
+}
+
+// archiveUnder answers a recursive archive: one line per document, then the hubs.
+func (t *Tools) archiveUnder(ctx context.Context, target Target, docs hub.Docs, expected int) Result {
+	out, err := landing.ArchiveUnder(ctx, docs, &landing.Sweep{
+		Dir: target.Path, ExpectedDocs: expected, Stamp: t.identityMeta(ctx),
+		Walker: listwalk.Walker{Client: t.backend, Host: target.Host, Token: t.readToken(ctx, target.Host)},
+	})
+	if err != nil {
+		return failure("%v", err)
 	}
 	var b strings.Builder
-	var archived []string
-	for _, p := range paths {
-		result, err := t.archiveOne(ctx, target.at(p), write)
+	for i := range out.Docs {
+		d := &out.Docs[i]
 		switch {
-		case err != nil:
-			fmt.Fprintf(&b, "- %s: failed: %s\n", p, t.writeFailed(SiteArchive, target.Host, err).Text)
-		case !landed(&result):
-			fmt.Fprintf(&b, "- %s: failed: %s\n", p, result.Response.Status)
+		case d.Err != nil:
+			fmt.Fprintf(&b, "- %s: failed: %s\n", d.Path, t.writeFailed(SiteArchive, target.Host, d.Err).Text)
+		case !landed(&d.Result):
+			fmt.Fprintf(&b, "- %s: failed: %s\n", d.Path, d.Result.Response.Status)
 		default:
-			archived = append(archived, p)
-			fmt.Fprintf(&b, "- %s: v%s\n", p, result.Response.Metadata["version"])
+			fmt.Fprintf(&b, "- %s: v%s\n", d.Path, d.Result.Response.Metadata["version"])
 		}
 	}
-	// A bullet linking the directory goes only when nothing live is left
-	// under it; a partial sweep unlinks each archived path from its own hubs.
-	status, u := "partial", &unlink{hubs: hub.AncestorsOf(archived...), targets: archived}
-	if len(archived) == len(paths) {
-		status, u = "archived", &unlink{hubs: hub.Ancestors(target.Path), targets: []string{target.Path}}
+	// One save for the sweep, not one per document.
+	seen := make([]observed, 0, len(out.Archived))
+	for i := range out.Archived {
+		seen = append(seen, archivedAt(target.at(out.Archived[i].Path), &out.Archived[i].Result))
 	}
-	dropped := ""
-	if len(archived) > 0 {
-		dropped = t.dropHubLinks(ctx, target, write, u)
+	t.observeWrites(ctx, seen)
+	status := "partial"
+	if out.Complete {
+		status = "archived"
 	}
-	return text(fmt.Sprintf("status: %s\narchived: %d of %d\n%s%s", status, len(archived), len(paths), b.String(), dropped))
+	return text(fmt.Sprintf("status: %s\narchived: %d of %d\n%s%s", status, len(out.Archived), len(out.Docs), b.String(), droppedText(out.Hubs)))
 }
 
-// archiveOne archives one document and observes it into the graph.
-func (t *Tools) archiveOne(ctx context.Context, target Target, write WriteFunc) (docwrite.Result, error) {
-	result, err := t.doc(ctx, target, write).Archive(ctx)
-	if err == nil && landed(&result) {
-		// A confirmed archive is a complete observation: stale outgoing rows go.
-		t.observeWrite(ctx, target, graph.FetchResult{Status: protocol.StatusArchived, Metadata: result.Response.Metadata})
-	}
-	return result, err
+// archivedAt is a confirmed archive as an observation: complete, so the
+// document's stale outgoing rows go.
+func archivedAt(target Target, result *docwrite.Result) observed {
+	return observed{target, graph.FetchResult{Status: protocol.StatusArchived, Metadata: result.Response.Metadata}}
 }
 
-// liveUnder lists every live document under the directory, bounded.
-func (t *Tools) liveUnder(ctx context.Context, target Target) ([]string, error) {
-	var paths []string
-	w := listwalk.Walker{Client: t.backend, Host: target.Host, Token: t.readToken(ctx, target.Host), MaxLists: archiveListCalls}
-	err := w.Walk(ctx, target.Path, func(docPath string) error {
-		if len(paths) >= archiveDocs {
-			return fmt.Errorf("over %d documents under %s; archive a narrower directory", archiveDocs, target.Path)
-		}
-		paths = append(paths, docPath)
-		return nil
-	})
-	return paths, err
-}
-
-// unlink names the hubs to edit and what they must stop linking.
-type unlink struct{ hubs, targets []string }
-
-// dropHubLinks drops the targets' bullets from the hubs, reported as lines;
-// a hub that could not be edited is a note.
-func (t *Tools) dropHubLinks(ctx context.Context, target Target, write WriteFunc, u *unlink) string {
-	docs := func(p string) *docwrite.Doc { return t.doc(ctx, target.at(p), write) }
+// droppedText words the hub bullets an archive dropped, as lines; a hub that
+// could not be edited is a note.
+func droppedText(dropped []hub.Dropped) string {
 	var hubs, notes strings.Builder
-	for _, d := range hub.DropFromHubs(ctx, docs, u.hubs, &hub.Drop{Targets: u.targets, Stamp: t.identityMeta(ctx)}) {
+	for _, d := range dropped {
 		switch {
 		case d.Err != nil:
 			notes.WriteString(mcpfmt.Note(d.Err.Error()))

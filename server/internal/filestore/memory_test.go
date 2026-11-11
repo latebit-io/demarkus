@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/memtest"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	protocolstore "github.com/latebit-io/demarkus/server/store"
 )
 
 // Versions live on disk, so an agent-shaped publish-and-prune loop must leave
@@ -51,5 +51,52 @@ func checkPublishPruneHeap(t *testing.T, store *Store) {
 	t.Logf("heap grew %d bytes", growth)
 	if limit := 2 * bodyBytes; growth > limit {
 		t.Errorf("heap grew %d bytes over %d publish-and-prune cycles of a %d-byte body, want under %d", growth, cycles, bodyBytes, limit)
+	}
+}
+
+// A rebuild after an outside write swaps the catalog whole: repeated direct
+// publishes must leave the heap at one index and catalog, not one per rebuild.
+func TestOutsideWriteRebuildHeapTracksLiveData(t *testing.T) {
+	dir := t.TempDir()
+	tool := protocolstore.New(dir)
+	publish := func(n int) {
+		if _, err := tool.Write("/graph.md", memtest.AgentGraphBody(n), nil); err != nil {
+			t.Fatalf("outside publish %d: %v", n, err)
+		}
+		if err := tool.MarkChanged(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish(0)
+	store, err := OpenDir(dir, Options{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeStore(t, store) })
+	read := func() {
+		view, err := store.OpenReadView(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := view.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const warmup, cycles = 5, 40
+	for n := 1; n <= warmup; n++ {
+		publish(n)
+		read()
+	}
+	growth := memtest.Retained(func() {
+		for n := warmup + 1; n <= warmup+cycles; n++ {
+			publish(n)
+			read()
+		}
+	})
+	runtime.KeepAlive(store)
+	bodyBytes := int64(len(memtest.AgentGraphBody(0)))
+	t.Logf("heap grew %d bytes", growth)
+	if limit := 2 * bodyBytes; growth > limit {
+		t.Errorf("heap grew %d bytes over %d outside publishes of a %d-byte body, want under %d", growth, cycles, bodyBytes, limit)
 	}
 }
