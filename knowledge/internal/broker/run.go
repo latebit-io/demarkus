@@ -443,6 +443,7 @@ func (b *backgroundTasks) startFederation(ctx context.Context, wg *sync.WaitGrou
 	b.lead(ctx, wg, leaderTask{name: "federation", lease: f.LeaseName, run: func(ctx context.Context) {
 		federation.Run(ctx, federation.Config{
 			Worlds: worlds, Source: b.local, Hub: federation.HubIO(b.local, f.Hub),
+			ListHub:     federation.HubLister(b.local, f.Hub),
 			QuietPeriod: f.QuietPeriod, Interval: f.Interval, Log: log,
 			Refuse: b.refuseFederation,
 		})

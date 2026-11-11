@@ -75,7 +75,6 @@ func TestOpen_PlatformDispatch(t *testing.T) {
 		{"freebsd uses xdg-open", "freebsd", "https://example.com", "xdg-open", []string{"https://example.com"}},
 		{"openbsd uses xdg-open", "openbsd", "https://example.com", "xdg-open", []string{"https://example.com"}},
 		{"netbsd uses xdg-open", "netbsd", "https://example.com", "xdg-open", []string{"https://example.com"}},
-		{"windows uses rundll32", "windows", "https://example.com", "rundll32", []string{"url.dll,FileProtocolHandler", "https://example.com"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

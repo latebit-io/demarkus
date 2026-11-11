@@ -109,10 +109,12 @@ type Store struct {
 	// source's high water leaves with the last node that shows it.
 	sourceRefs map[string]int
 	lastSweep  time.Time
-	// disk is the file as this store last read or wrote it (saveMu);
-	// seedDirty names the owners whose seed this process replaced since.
+	// disk is the file as this store last read or wrote it (saveMu).
+	// seedDirty holds, per owner, the seedGen of its last replace here that
+	// no save has written yet.
 	disk      fileStamp
-	seedDirty map[string]bool
+	seedDirty map[string]uint64
+	seedGen   uint64
 }
 
 // A dead local source (not found, archived) stays while a seed claims the
@@ -145,7 +147,7 @@ func New() *Store {
 		localSources:    make(map[string]sourceRecord),
 		representations: make(map[string][sha256.Size]byte),
 		sourceRefs:      make(map[string]int),
-		seedDirty:       make(map[string]bool),
+		seedDirty:       make(map[string]uint64),
 	}
 }
 
@@ -294,26 +296,29 @@ func (s *Store) Save() error {
 		if err := s.mergeDisk(); err != nil {
 			return err
 		}
-		data, err := json.MarshalIndent(s.saveDocument(), "", "  ")
+		doc, through := s.saveDocument()
+		data, err := json.MarshalIndent(doc, "", "  ")
 		if err != nil {
 			return err
 		}
 		if err := writeSaveFile(s.path, data); err != nil {
 			return err
 		}
-		return s.saved()
+		return s.saved(through)
 	})
 }
 
-// saved records the file as this store's own: nothing in it is news.
-func (s *Store) saved() error {
+// saved records the file as this store's own. Only the seeds the written
+// snapshot held are clean: one replaced since, at a later seedGen, stays
+// dirty so the next save does not trade it for another process's older one.
+func (s *Store) saved(through uint64) error {
 	info, err := os.Stat(s.path)
 	if err != nil {
 		return fmt.Errorf("stat graph store %q: %w", s.path, err)
 	}
 	s.disk = fileStamp{modified: info.ModTime(), size: info.Size()}
 	s.mu.Lock()
-	clear(s.seedDirty)
+	maps.DeleteFunc(s.seedDirty, func(_ string, gen uint64) bool { return gen <= through })
 	s.mu.Unlock()
 	return nil
 }
@@ -365,7 +370,7 @@ func (s *Store) takeLocked(other *Store) {
 		}
 	}
 	for owner, records := range other.seedGraphs {
-		if _, held := s.seedGraphs[owner]; s.seedDirty[owner] || (held && s.seedEtags[owner] == other.seedEtags[owner]) {
+		if _, held := s.seedGraphs[owner]; s.seedDirty[owner] != 0 || (held && s.seedEtags[owner] == other.seedEtags[owner]) {
 			continue
 		}
 		s.seedGraphs[owner], s.seedEtags[owner], changed = records, other.seedEtags[owner], true
@@ -432,7 +437,8 @@ func writeSaveFile(path string, data []byte) (saveErr error) {
 	return nil
 }
 
-func (s *Store) saveDocument() document {
+// saveDocument is the snapshot a save writes and the seedGen it reaches.
+func (s *Store) saveDocument() (doc document, through uint64) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -441,7 +447,7 @@ func (s *Store) saveDocument() document {
 		nodes = append(nodes, *n)
 	}
 
-	doc := document{
+	doc = document{
 		Version:         schemaVersion,
 		Nodes:           nodes,
 		Edges:           s.liveEdgesLocked(),
@@ -471,7 +477,7 @@ func (s *Store) saveDocument() document {
 			doc.SeedGraphs[owner] = recordsData(records)
 		}
 	}
-	return doc
+	return doc, s.seedGen
 }
 
 // Merge replaces only fully observed sources; partial observations add new edges
@@ -773,7 +779,8 @@ func (s *Store) replaceSeed(owner string, u *seedUpdate) int {
 		incoming[key] = record
 	}
 	s.seedGraphs[owner] = incoming
-	s.seedDirty[owner] = true
+	s.seedGen++
+	s.seedDirty[owner] = s.seedGen
 	s.rebuildSeedsLocked()
 	added := 0
 	for i := range nodes {

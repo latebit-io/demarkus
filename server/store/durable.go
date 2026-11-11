@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -198,14 +200,19 @@ func createVersionFile(vFile string, stored []byte, version int) (time.Time, err
 	return info.ModTime(), nil
 }
 
+// swapPrefix starts the temp link of a pointer swap: hidden, so it is never a
+// document, and fixed length whatever the document's name.
+const swapPrefix = ".swap-"
+
 // swapCurrent points the current file at relTarget by renaming a temp symlink
-// over it, so readers never see it missing (relative, so the root can move).
-// applied false means the pointer did not move and the version is unreferenced.
+// over it, so readers never see it missing. The temp name is random: no
+// sibling document or other writer shares it. applied false: nothing moved.
 func swapCurrent(currentFile, relTarget string) (applied bool, err error) {
-	tmpLink := currentFile + ".tmp"
-	if err := removeIfPresent(tmpLink); err != nil {
-		return false, fmt.Errorf("clear stale temp link: %w", err)
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return false, fmt.Errorf("name temp link: %w", err)
 	}
+	tmpLink := filepath.Join(filepath.Dir(currentFile), swapPrefix+hex.EncodeToString(raw[:]))
 	if err := os.Symlink(relTarget, tmpLink); err != nil {
 		return false, fmt.Errorf("symlink current file: %w", err)
 	}

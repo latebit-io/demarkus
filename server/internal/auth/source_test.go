@@ -256,6 +256,11 @@ func writeTokenFile(t *testing.T, filePath string, hashes ...string) {
 	}
 }
 
+// publishOnly is a tokens file with one token that can publish and not read.
+func publishOnly(label, hash string) []byte {
+	return []byte("[tokens." + label + "]\nhash = " + strconv.Quote(hash) + "\npaths = [\"/**\"]\noperations = [\"publish\"]\n")
+}
+
 func tokenFile(hashes ...string) []byte {
 	var data strings.Builder
 	for i, hash := range hashes {
@@ -313,7 +318,7 @@ func TestOptionalSource(t *testing.T) {
 		}
 
 		// The file back with no read token: its paths are public again.
-		if err := os.WriteFile(filePath, []byte("[tokens.writer]\nhash = \"sha256-b\"\npaths = [\"/**\"]\noperations = [\"publish\"]\n"), 0o600); err != nil {
+		if err := os.WriteFile(filePath, publishOnly("writer", "sha256-b"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := source.Reload(); err != nil {
@@ -330,6 +335,47 @@ func TestOptionalSource(t *testing.T) {
 		}
 		if err := source.Current().AuthorizeRead("", "/doc.md"); err != nil {
 			t.Errorf("anonymous read after a file with no read token vanished: %v", err)
+		}
+	})
+
+	// A load that never published must not change what a vanished file
+	// keeps protected: protections belong to the published store.
+	t.Run("a failed load does not drop a protection", func(t *testing.T) {
+		dir := t.TempDir()
+		runtimeFile, static := filepath.Join(dir, "tokens.toml"), filepath.Join(dir, "static.toml")
+		writeTokenFile(t, runtimeFile, "sha256-a")
+		writer := publishOnly("writer", "sha256-b")
+		if err := os.WriteFile(static, writer, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		source, err := OpenSource(SourceConfig{TokensFile: runtimeFile, StaticTokensFile: static, Optional: true})
+		if err != nil {
+			t.Fatalf("OpenSource: %v", err)
+		}
+		// The runtime file loses its read token while the static file is
+		// broken: nothing is published.
+		readless := publishOnly("other", "sha256-c")
+		if err := os.WriteFile(runtimeFile, readless, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(static, []byte("invalid {{{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := source.Reload(); err == nil {
+			t.Fatal("Reload with a malformed static file succeeded")
+		}
+		// The runtime file vanishes and the static file is fixed.
+		if err := os.Remove(runtimeFile); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(static, writer, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := source.Reload(); err != nil {
+			t.Fatalf("Reload: %v", err)
+		}
+		if err := source.Current().AuthorizeRead("", "/doc.md"); !IsDenial(err) {
+			t.Errorf("anonymous read after an unpublished load and a vanished file: got %v, want a denial", err)
 		}
 	})
 

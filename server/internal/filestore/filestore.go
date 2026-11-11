@@ -2,11 +2,13 @@
 package filestore
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -42,10 +44,12 @@ type Store struct {
 	// sequence durable. The hub's head is the last sequence assigned.
 	changes *changefeed.Hub
 	journal *journal
+	// stopOutside ends the outside-write poll and waits for it; nil without WATCH.
+	stopOutside func()
 
 	// generation is the outside-writer marker the index and catalog were
 	// built under; a read that finds another rebuilds both first.
-	generation atomic.Pointer[string]
+	generation atomic.Pointer[protocolstore.Generation]
 	logger     *slog.Logger
 }
 
@@ -63,12 +67,15 @@ type Options struct {
 	MaxDocuments int
 	// Logger receives change journal notices; nil uses slog.Default.
 	Logger *slog.Logger
+	// outsidePoll overrides how often a store with waiting watchers checks
+	// for an outside writer; tests shorten it.
+	outsidePoll time.Duration
 }
 
 // New wraps one file store and its derived catalog, without WATCH.
 func New(documents *protocolstore.Store, lookup *catalog.Catalog) *Store {
 	s := &Store{mu: newCtxRWMutex(), documents: documents, catalog: lookup, logger: slog.Default()}
-	s.generation.Store(new(string))
+	s.generation.Store(new(protocolstore.Generation))
 	return s
 }
 
@@ -97,6 +104,7 @@ func Open(documents *protocolstore.Store, lookup *catalog.Catalog, opts Options)
 	journal.tail, journal.retained = nil, hub.Retained
 	s.changes, s.journal = hub, journal
 	logger.Info("change journal restored", "epoch", hub.Epoch(), "events", restored, "head", hub.Head().Seq)
+	s.watchOutside(cmp.Or(opts.outsidePoll, outsidePoll))
 	return s, nil
 }
 
@@ -106,6 +114,10 @@ func (s *Store) Changes() *changefeed.Hub { return s.changes }
 // Close ends every watch, releases the change journal and refuses later
 // writes; the documents need no close. It waits for open views.
 func (s *Store) Close() error {
+	// Before the lock: the poll may be waiting on it to rebuild.
+	if s.stopOutside != nil {
+		s.stopOutside()
+	}
 	if err := s.mu.Lock(context.Background()); err != nil {
 		return fmt.Errorf("filestore: close: %w", err)
 	}

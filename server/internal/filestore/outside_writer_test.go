@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
@@ -33,6 +34,21 @@ func lookupPaths(t *testing.T, store *filestore.Store, query string) []string {
 	return paths
 }
 
+// outsideWrite writes path, body pairs under dir as a second process does,
+// then moves the marker.
+func outsideWrite(t *testing.T, dir string, docs ...string) {
+	t.Helper()
+	tool := protocolstore.New(dir)
+	for i := 0; i < len(docs); i += 2 {
+		if _, err := tool.Write(docs[i], []byte(docs[i+1]), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tool.MarkChanged(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A direct writer (demarkus-publish) that marks the root changed is served by
 // a running read-only store without a restart: fetch, catalog and quota count.
 func TestOutsideWriterIsServedAfterMarkChanged(t *testing.T) {
@@ -46,15 +62,7 @@ func TestOutsideWriterIsServedAfterMarkChanged(t *testing.T) {
 		t.Fatalf("lookup before the outside write = %v", got)
 	}
 
-	if _, err := tool.Write("/new.md", []byte("# Narwhal\n"), nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tool.Write("/old.md", []byte("# Manatee\n"), nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := tool.MarkChanged(); err != nil {
-		t.Fatal(err)
-	}
+	outsideWrite(t, dir, "/new.md", "# Narwhal\n", "/old.md", "# Manatee\n")
 
 	if got := lookupPaths(t, store, "narwhal"); len(got) != 1 || got[0] != "/new.md" {
 		t.Errorf("lookup of the new document = %v, want /new.md", got)
@@ -76,13 +84,7 @@ func TestOutsideWriterResyncsWatchers(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := store.Changes().Head()
-	tool := protocolstore.New(dir)
-	if _, err := tool.Write("/b.md", []byte("# B\n"), nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := tool.MarkChanged(); err != nil {
-		t.Fatal(err)
-	}
+	outsideWrite(t, dir, "/b.md", "# B\n")
 	view, err := store.OpenReadView(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -103,5 +105,35 @@ func TestOutsideWriterResyncsWatchers(t *testing.T) {
 	}
 	if head := store.Changes().Head(); head.Seq != before.Seq+2 {
 		t.Errorf("head after the next commit = %d, want %d", head.Seq, before.Seq+2)
+	}
+}
+
+// A watcher waiting on the hub learns of an outside write with no read to
+// notice the marker for it: the poll rebuilds and the watch gets resync.
+func TestOutsideWriterResyncsAWaitingWatcherWithoutARead(t *testing.T) {
+	dir := t.TempDir()
+	store := openDir(t, dir, filestore.PollOutsideEvery(filestore.Options{ChangeRing: changefeed.DefaultRingSize}, 10*time.Millisecond))
+	if err := create(store, "/a.md"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sub, err := store.Changes().Subscribe(ctx, "/", store.Changes().Head())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	waited := make(chan error, 1)
+	go func() {
+		_, err := sub.Next(ctx)
+		waited <- err
+	}()
+
+	outsideWrite(t, dir, "/b.md", "# B\n")
+	if err := <-waited; !errors.Is(err, changefeed.ErrResync) {
+		t.Fatalf("the waiting watch got %v, want ErrResync", err)
+	}
+	if got := lookupPaths(t, store, "B"); len(got) != 1 {
+		t.Errorf("lookup after the poll rebuilt = %v, want /b.md", got)
 	}
 }

@@ -97,7 +97,7 @@ Full versioning is preserved because `demarkus-publish` writes directly to the v
 
 ## External Links in the TUI
 
-The TUI (`demarkus-tui`) can follow links whose scheme is not `mark://` (for example `https://`, `gemini://`, or `mailto:`) by handing the URL to the operating system's default handler (`open` on macOS, `xdg-open` on Linux, `rundll32 url.dll,FileProtocolHandler` on Windows).
+The TUI (`demarkus-tui`) can follow links whose scheme is not `mark://` (for example `https://`, `gemini://`, or `mailto:`) by handing the URL to the operating system's default handler (`open` on macOS, `xdg-open` on Linux).
 
 The security-relevant properties of this path:
 

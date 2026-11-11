@@ -69,14 +69,14 @@ func (s *Store) reindexIfChanged(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("filestore: %w", err)
 	}
-	if generation == *s.generation.Load() {
+	if generation.Equal(*s.generation.Load()) {
 		return nil
 	}
 	if err := s.mu.Lock(ctx); err != nil {
 		return err
 	}
 	defer s.mu.Unlock()
-	if generation == *s.generation.Load() {
+	if generation.Equal(*s.generation.Load()) {
 		return nil
 	}
 	cat, skipped, err := buildCatalog(s.documents, s.logger)
@@ -87,8 +87,9 @@ func (s *Store) reindexIfChanged(ctx context.Context) error {
 	s.generation.Store(&generation)
 	if s.changes != nil {
 		s.changes.Skip(s.changes.Head().Seq + 1)
+		s.journal.forget()
 	}
-	s.logger.Info("content changed outside the server; index and catalog rebuilt", "generation", generation)
+	s.logger.Info("content changed outside the server; index and catalog rebuilt", "generation", generation.String())
 	return nil
 }
 

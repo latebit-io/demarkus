@@ -256,6 +256,7 @@ type fakeHub struct {
 	writes  []string        // every checkpoint path a new version was written at
 	exports int             // publishes of the export, landed or not
 	failing map[string]bool // writes that fail for now
+	stuck   bool            // prunes fail for now: the write lands, old versions stay
 }
 
 func newFakeHub() *fakeHub {
@@ -264,6 +265,40 @@ func newFakeHub() *fakeHub {
 
 func (h *fakeHub) io() generation.IO {
 	return generation.IO{Fetch: h.fetch, Publish: h.publish}
+}
+
+// live is docPath's body as fetched now, "" when there is none.
+func (h *fakeHub) live(docPath string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.docs[docPath].Body
+}
+
+// version is docPath's current version, 0 when there is none.
+func (h *fakeHub) version(docPath string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.heads[docPath]
+}
+
+// setStuck makes prunes fail, or work again.
+func (h *fakeHub) setStuck(stuck bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.stuck = stuck
+}
+
+// list is Config.ListHub: the live documents directly in dir.
+func (h *fakeHub) list(_ context.Context, dir string) ([]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var paths []string
+	for docPath := range h.heads {
+		if name, in := strings.CutPrefix(docPath, dir+"/"); in && !strings.Contains(name, "/") {
+			paths = append(paths, docPath)
+		}
+	}
+	return paths, nil
 }
 
 func (h *fakeHub) fetch(_ context.Context, docPath string) (protocol.Response, error) {
@@ -275,7 +310,7 @@ func (h *fakeHub) fetch(_ context.Context, docPath string) (protocol.Response, e
 	return protocol.Response{Status: protocol.StatusNotFound}, nil
 }
 
-func (h *fakeHub) publish(_ context.Context, docPath, body string, expected int) (protocol.Response, error) {
+func (h *fakeHub) publish(ctx context.Context, docPath, body string, expected int) (protocol.Response, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if docPath == graphstore.GraphExportPath {
@@ -288,12 +323,19 @@ func (h *fakeHub) publish(_ context.Context, docPath, body string, expected int)
 	if expected >= 0 && expected != head {
 		return protocol.Response{Status: protocol.StatusConflict}, nil
 	}
-	if head == 0 || h.docs[docPath].Body != body {
+	// A pruning write carries its own stamp, so it is never an unchanged one.
+	if head == 0 || h.docs[docPath].Body != body || prunes(ctx) {
 		head++
 		resp := fetchtest.Head(body, head, map[string]string{"content-hash": generation.BodyHash(body)}).Response
 		h.docs[docPath], h.docs[protocol.VersionPath(docPath, head)], h.heads[docPath] = resp, resp, head
 		if docPath != graphstore.GraphExportPath { // counted in exports
 			h.writes = append(h.writes, docPath)
+		}
+	}
+	// A pruning write keeps no older version, as retention 1 does.
+	if prunes(ctx) && !h.stuck {
+		for version := 1; version < head; version++ {
+			delete(h.docs, protocol.VersionPath(docPath, version))
 		}
 	}
 	return protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{"version": fmt.Sprint(head)}}, nil

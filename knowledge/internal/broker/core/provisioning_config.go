@@ -93,23 +93,29 @@ func (p *ProvisioningConfig) tenantAuthority(slug string) string {
 	return fmt.Sprintf("%s.%s:%d", slug, p.AuthorityDomain, protocol.DefaultPort)
 }
 
-// MustGate names the authorities of the broker's private worlds: the local
-// memory worlds of the config and every tenant the provisioner can create.
-// The server must never answer one on the capability listener.
+// MustGate names the broker's private authorities: local memory worlds and
+// everything under the tenant domain, in any provisioning mode, since turning
+// it off leaves the tenants. A configured knowledge world there stays public.
 func (c *Config) MustGate() func(authority string) bool {
-	private := map[string]bool{}
+	private, public := map[string]bool{}, map[string]bool{}
 	for i := range c.Worlds {
-		if w := &c.Worlds[i]; w.Local && w.Profile == ProfileMemory {
-			private[strings.ToLower(w.Authority())] = true
+		w := &c.Worlds[i]
+		if !w.Local {
+			continue
+		}
+		if authority := strings.ToLower(w.Authority()); w.Profile == ProfileMemory {
+			private[authority] = true
+		} else {
+			public[authority] = true
 		}
 	}
 	tenants := ""
-	if c.Provisioning.Enabled() && c.Provisioning.AuthorityDomain != "" {
+	if c.Provisioning.AuthorityDomain != "" {
 		tenants = "." + strings.ToLower(c.Provisioning.AuthorityDomain)
 	}
 	return func(authority string) bool {
 		authority = strings.ToLower(authority)
-		return private[authority] || tenants != "" && strings.HasSuffix(authority, tenants)
+		return private[authority] || tenants != "" && !public[authority] && strings.HasSuffix(authority, tenants)
 	}
 }
 

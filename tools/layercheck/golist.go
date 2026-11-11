@@ -16,13 +16,12 @@ const listFormat = `{{.ImportPath}}{{"\t"}}{{join .Imports " "}}{{"\t"}}{{join .
 
 // Every build the repo ships or tests: a file behind one of these constraints
 // imports like any other. A new build tag joins buildTags.
-var platforms = []string{"linux", "darwin", "windows"}
+var platforms = []string{"linux", "darwin"}
 
 const buildTags = "gcsintegration"
 
 // listPackages lists every package of the top-level modules on every
-// platform; nested go.mod files (benchmark artifacts) stay out, as in
-// scripts/lint-ratchet.sh.
+// supported platform; nested go.mod files (benchmark artifacts) stay out.
 func listPackages(root string) ([]pkg, error) {
 	mods, err := filepath.Glob(filepath.Join(root, "*", "go.mod"))
 	if err != nil {

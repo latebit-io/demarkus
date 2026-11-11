@@ -93,10 +93,6 @@ func handlerFor(goos, rawURL string) (name string, args []string) {
 		return "open", []string{rawURL}
 	case "linux", "freebsd", "openbsd", "netbsd":
 		return "xdg-open", []string{rawURL}
-	case "windows":
-		// rundll32 invokes the URL handler directly. The URL is still an
-		// argv arg — Windows performs its own quoting, but no shell is used.
-		return "rundll32", []string{"url.dll,FileProtocolHandler", rawURL}
 	default:
 		return "", nil
 	}

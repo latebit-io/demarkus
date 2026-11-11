@@ -105,7 +105,7 @@ demarkus-publish -root /srv/site -path /index.md -body "# Hello"
 echo "# Hello" | demarkus-publish -root /srv/site -path /index.md
 ```
 
-A running server serves the publish on its next read: `demarkus-publish` moves a marker at `<root>/.generation`, and the server rebuilds its index and LOOKUP catalog when it sees the marker changed. No restart is needed. Watchers of a writable server are told to resync, since a direct write carries no change events.
+A running server serves the publish on its next read: `demarkus-publish` moves a marker at `<root>/.generation`, and the server rebuilds its index and LOOKUP catalog when it sees the marker changed. No restart is needed. Watchers of a writable server are told to resync, since a direct write carries no change events: at the next read, or within a few seconds while a watcher waits and no read arrives.
 
 For maximum security, combine with the [read-only chroot install](../security/index.md#read-only-mode-maximum-lockdown). See also [Security Model](../security/index.md).
 

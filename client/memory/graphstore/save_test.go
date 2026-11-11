@@ -114,3 +114,27 @@ func TestSaveRefusesAFileItCannotRead(t *testing.T) {
 		t.Errorf("file = %q, %v; want it untouched", got, err)
 	}
 }
+
+// A seed replaced after a save took its snapshot is not in the file, so the
+// save must not mark it clean: the next one would trade it for an older seed.
+func TestSavedKeepsASeedReplacedSinceTheSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.json")
+	store := loadAt(t, path)
+	seedRevision(store, "hub", revisionGraph(3, "three"))
+	seedRevision(store, "other", revisionGraph(1, "one"))
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	seedRevision(store, "other", revisionGraph(2, "two"))
+	_, through := store.saveDocument()
+	seedRevision(store, "hub", revisionGraph(4, "four"))
+	if err := store.saved(through); err != nil {
+		t.Fatal(err)
+	}
+	if store.seedDirty["hub"] == 0 {
+		t.Error("a seed replaced after the snapshot was marked saved")
+	}
+	if store.seedDirty["other"] != 0 {
+		t.Error("a seed the snapshot held stayed dirty")
+	}
+}

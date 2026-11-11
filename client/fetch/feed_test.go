@@ -132,3 +132,26 @@ func TestPaceGrowsWithoutProgress(t *testing.T) {
 		t.Error("an open did not reset the backoff")
 	}
 }
+
+// A server resending an undecodable block at a cursor already passed moves
+// nothing: no spurious resync, and the next stream resumes where it was.
+func TestFeedDropsARepeatedUnreadableBlock(t *testing.T) {
+	f := newTestFeed(t, 4)
+	f.Event(feedEvent(1))
+	f.Event(feedEvent(5))
+	<-f.notices
+	<-f.notices
+	if !f.Unread(protocol.Cursor{Epoch: "e", Seq: 3}) || len(f.notices) != 0 {
+		t.Fatalf("a repeat queued %d notices", len(f.notices))
+	}
+	if got := f.StreamCursor(); got.Seq != 5 {
+		t.Fatalf("stream at %v, want it left at e:5", got)
+	}
+	at := protocol.Cursor{Epoch: "e", Seq: 6}
+	if !f.Unread(at) || f.StreamCursor() != at {
+		t.Fatalf("a new unreadable block left the stream at %v", f.StreamCursor())
+	}
+	if n := <-f.notices; !n.Resync || n.Event.Cursor != at {
+		t.Errorf("notice = %+v, want a resync at %v", n, at)
+	}
+}
