@@ -11,8 +11,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/facts"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/toolname"
 )
 
 // Signals are the session-end facts an adapter supplies or the transcript
@@ -187,7 +187,7 @@ func (s *scanner) line(line []byte) {
 					s.checks[b.ID] = cmd
 				}
 			}
-			if config.IsJournalWrite(b.Name, b.Input.URL, b.Input.Route) {
+			if toolname.IsJournalWrite(b.Name, b.Input.URL, b.Input.Route) {
 				s.sig.JournalWrite = true
 			}
 		case "tool_result":

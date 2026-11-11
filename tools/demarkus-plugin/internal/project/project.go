@@ -1,7 +1,7 @@
 // Package project resolves the memory identity of a project directory: its
 // slug (the path segment under the store root) and the store it writes to.
-// The session-start header and the `registry project` subcommand both render
-// it, so the prompts state neither the slug rule nor the binding lookup.
+// The surfaces render it (guidance), so no prompt states the slug rule or
+// the binding lookup.
 package project
 
 import (
@@ -13,7 +13,6 @@ import (
 
 	"github.com/latebit-io/demarkus/client/memory/audit"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
 )
 
@@ -24,8 +23,8 @@ const (
 	StateStale = "stale" // bound to a store the catalog no longer lists
 )
 
-// ErrNoDir is returned when neither the caller nor the harness names a project directory.
-var ErrNoDir = errors.New("no project directory: pass --dir or set the harness project variable")
+// ErrNoDir is returned when the caller names no project directory.
+var ErrNoDir = errors.New("no project directory")
 
 // Resolution is a project's slug and bound store.
 type Resolution struct {
@@ -35,13 +34,9 @@ type Resolution struct {
 	State string // StateLocal, StateBound or StateStale
 }
 
-// Resolve derives the slug and binding for dir, falling back to the harness
-// project directory when dir is empty. Bindings are recorded absolute, so a
-// relative dir is made absolute before the lookup.
+// Resolve derives the slug and binding for dir. Bindings are recorded
+// absolute, so a relative dir is made absolute before the lookup.
 func Resolve(dir string) (Resolution, error) {
-	if dir == "" {
-		dir = host.ProjectDir()
-	}
 	if dir == "" {
 		return Resolution{}, ErrNoDir
 	}
@@ -91,26 +86,3 @@ func Slug(dir string) (string, error) {
 
 // IsSlug reports whether s can be a store path segment; the audit owns the rule.
 func IsSlug(s string) bool { return audit.IsSlug(s) }
-
-// Hint names the recovery for a binding the catalog no longer lists, so
-// prompts relay it instead of restating which command restores which store.
-func (r Resolution) Hint() string {
-	restore := "/soul-join"
-	if r.Store == config.LocalMemoryID {
-		restore = "/soul-init"
-	}
-	return "not in the catalog; restore it with " + restore + " or rebind with /soul-default"
-}
-
-// Header renders the resolution as the session-start line; root is the
-// project's directory in the store.
-func (r Resolution) Header(root string) string {
-	store := "Bound store: `" + r.Store + "`."
-	switch r.State {
-	case StateLocal:
-		store = "Bound store: `" + r.Store + "` (local, no project binding)."
-	case StateStale:
-		store = "Bound store: `" + r.Store + "` (stale: " + r.Hint() + ")."
-	}
-	return "Project slug: `" + r.Slug + "`. Project root: `" + root + "`. " + store
-}

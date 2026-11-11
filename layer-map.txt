@@ -1,11 +1,14 @@
 # Target layer of every Go package, wherever it lives today. tools/layercheck
-# (pre-commit) fails an import that points up, a package no line maps, and a
-# line that maps nothing. Layers and what each may import:
-# tools/layercheck/layers.go.
+# (pre-commit and CI) fails an import that points up, an outside module a
+# layer may not link, a package no line maps, and a line that maps nothing.
+# Layers and what each may import: tools/layercheck/layers.go.
 #
 # <package> maps one package; <package>/... also maps every package below it
 # that no line names. A move changes paths here, never the layers.
 
+protocol                                        wire
+protocol/render                                 wire
+protocol/wiretest                               wire
 protocol/...                                    protocol
 
 server/blob/...                                 store
@@ -79,6 +82,7 @@ client/cmd/...                                  surface
 client/fetchdedup                               surface
 client/internal/bookmarks                       surface
 client/internal/launcher                        surface
+client/internal/termlinks                       surface   # link cells in rendered terminal output
 client/marktools                                surface
 client/mcpbind                                  surface
 client/mcpfmt                                   surface
@@ -95,6 +99,7 @@ tools/demarkus-plugin/internal/host             surface
 tools/demarkus-plugin/internal/nudge            surface
 tools/demarkus-plugin/internal/registry/mcpconfig  surface  # edits a harness's config file
 tools/demarkus-plugin/internal/taint            surface
+tools/demarkus-plugin/internal/toolname         surface  # harness tool-name grammar and call routing
 tools/demarkus-plugin/internal/update           surface
 
 tools                                           tool

@@ -28,6 +28,7 @@ func TestAllowedIsAStrictOrder(t *testing.T) {
 
 func TestBoundaries(t *testing.T) {
 	forbidden := []struct{ from, to, why string }{
+		{"wire", "protocol", "the wire format stands alone"},
 		{"store", "storeclient", "the server never imports the client (ADR 0026)"},
 		{"storeclient", "store", "the client runs without the server"},
 		{"model", "store", "the model sits on the store client"},

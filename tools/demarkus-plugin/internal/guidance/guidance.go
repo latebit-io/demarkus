@@ -142,7 +142,7 @@ func memory(in Input) (Output, error) {
 // for the agent; status is the user's line. Both are empty without a project
 // directory, or when an unbound project would name an unconfigured local store.
 func projectHeader(dir, warn string, brand brandNames) (header, status string, err error) {
-	r, err := project.Resolve(dir)
+	r, err := ResolveProject(dir)
 	if errors.Is(err, project.ErrNoDir) {
 		return "", "", nil
 	}

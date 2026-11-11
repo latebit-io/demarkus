@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
 	docgate "github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/protocol"
@@ -22,6 +21,7 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/taint"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/toolname"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -111,14 +111,11 @@ func prunableRetention(md map[string]any) (string, bool) {
 	return "", false
 }
 
-// retentionDecision is the retention guard, independent of the tag and
-// destination gates: a publish or append whose metadata carries a prunable
-// retention value permanently deletes older versions, so the agent must
-// confirm with the user before the write goes through. mark_graph_publish is
-// exempt by construction — its verb parses as "graph_publish", and it sets
-// retention by design on a generated document.
-func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, error) {
-	if pt.Verb != "publish" && pt.Verb != "append" {
+// retentionDecision is the retention guard: a store write carrying a prunable
+// retention permanently deletes older versions, so the user confirms it.
+// mark_graph_publish is exempt: it sets retention by design.
+func retentionDecision(pt toolname.Parsed, args map[string]any) (*Decision, error) {
+	if !writes(pt, args) || pt.Verb == "graph_publish" {
 		return nil, nil
 	}
 	r, prunes := prunableRetention(metadataOf(args))
@@ -133,7 +130,7 @@ func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, er
 			"proceeding; if history matters, re-issue the write without the retention key. To relax this "+
 			"check, set DEMARKUS_RETENTION_STRICTNESS=warn.",
 		target, r, r)
-	s, err := config.RetentionStrictness()
+	s, err := retentionStrictness()
 	if err != nil {
 		return nil, err
 	}
@@ -143,12 +140,12 @@ func retentionDecision(pt config.ParsedTool, args map[string]any) (*Decision, er
 // governanceDecision flags a knowledge write under /.well-known/demarkus/:
 // the policy, template and style guide bind every writer, so the change is
 // surfaced (warn by default, ask or block by the knob).
-func governanceDecision(pt config.ParsedTool, args map[string]any) (*Decision, error) {
+func governanceDecision(pt toolname.Parsed, args map[string]any) (*Decision, error) {
 	url := urlOf(args)
-	if !mcpfmt.StoreWriteTools["mark_"+pt.Verb] || reportOnly(pt, args) || !governanceURL(url) {
+	if !writes(pt, args) || !governanceURL(url) {
 		return nil, nil
 	}
-	s, err := config.GovernanceStrictness()
+	s, err := governanceStrictness()
 	if err != nil {
 		return nil, err
 	}
@@ -158,9 +155,14 @@ func governanceDecision(pt config.ParsedTool, args map[string]any) (*Decision, e
 		pt.Verb, url)}, nil
 }
 
-// reportOnly is a curate or promote call that only builds the proposal or
-// packet its apply call needs; apply is read as the server's binding reads it.
-func reportOnly(pt config.ParsedTool, args map[string]any) bool {
+// writes reports a store-write call that sends a write, not a report.
+func writes(pt toolname.Parsed, args map[string]any) bool {
+	return pt.StoreWrite() && !reportOnly(pt, args)
+}
+
+// reportOnly is a curate or promote call that writes nothing: it builds the
+// proposal or packet a later call applies. Apply is read as the server reads it.
+func reportOnly(pt toolname.Parsed, args map[string]any) bool {
 	switch pt.Verb {
 	case "curate":
 		req := mcp.CallToolRequest{}
@@ -168,7 +170,8 @@ func reportOnly(pt config.ParsedTool, args map[string]any) bool {
 		return !req.GetBool("apply", false)
 	case "promote":
 		phase, _ := args["phase"].(string)
-		return phase == promote.PhaseDryRun
+		packet, _ := args["packet"].(string)
+		return phase == promote.PhaseDryRun || phase == promote.PhaseStage || (phase == promote.PhaseRefresh && packet == "")
 	}
 	return false
 }
@@ -185,11 +188,11 @@ func governanceURL(raw string) bool {
 // data without work domains (a store names its own people).
 var contentScanner = contentcheck.New(contentcheck.Options{PII: contentcheck.Warn})
 
-// contentDecision scans a publish or append body before it leaves. A secret
+// contentDecision scans the body of a store write before it leaves. A secret
 // blocks with the fix (an ask has no answerer in a headless run); personal
 // data and text addressed to an agent warn. No knob: the server judges too.
-func contentDecision(pt config.ParsedTool, args map[string]any) *Decision {
-	if pt.Verb != "publish" && pt.Verb != "append" {
+func contentDecision(pt toolname.Parsed, args map[string]any) *Decision {
+	if !writes(pt, args) {
 		return nil
 	}
 	body, _ := args["body"].(string)
@@ -209,18 +212,18 @@ func contentDecision(pt config.ParsedTool, args map[string]any) *Decision {
 // taintDecision escalates a write after an untrusted read, where a planted
 // instruction would act; an unreadable transcript asks. No scan when the
 // verdict cannot show: a block stands, or a post hook drops an ask.
-func taintDecision(pt config.ParsedTool, args map[string]any, in *Input, d Decision) (*Decision, []string, error) {
-	if !mcpfmt.StoreWriteTools["mark_"+pt.Verb] || d.Decision == "block" {
+func taintDecision(pt toolname.Parsed, args map[string]any, in *Input, d Decision) (*Decision, []string, error) {
+	if !pt.StoreWrite() || d.Decision == "block" {
 		return nil, nil, nil
 	}
-	s, err := config.TaintStrictness()
-	if err != nil || s == config.Off || (in.Post && s != config.Warn) {
+	s, err := taintStrictness()
+	if err != nil || s == Off || (in.Post && s != Warn) {
 		return nil, nil, err
 	}
 	var found []string
 	if in.TranscriptPath != "" {
 		if found, err = taint.Transcript(in.TranscriptPath); err != nil {
-			return &Decision{Decision: string(config.Ask), Reason: fmt.Sprintf(
+			return &Decision{Decision: string(Ask), Reason: fmt.Sprintf(
 				"demarkus %s: the session transcript could not be read (%v), so untrusted reads are unknown; approve only a write you reviewed.", pt.Verb, err)}, []string{"unreadable transcript"}, nil
 		}
 	}
@@ -235,7 +238,7 @@ func taintDecision(pt config.ParsedTool, args map[string]any, in *Input, d Decis
 
 // stamped is a publish's input with the taint label in its metadata; other
 // verbs carry no metadata, so nil (an append inherits a stamped base).
-func stamped(pt config.ParsedTool, input map[string]any, sources []string) map[string]any {
+func stamped(pt toolname.Parsed, input map[string]any, sources []string) map[string]any {
 	if pt.Verb != "publish" || input == nil {
 		return nil
 	}
@@ -259,9 +262,9 @@ func Evaluate(in *Input) (Decision, error) {
 		in.Tool = in.ToolName
 		in.Input = in.ToolInput
 	}
-	in.Tool = config.QualifyTool(in.Tool, in.McpServerName)
+	in.Tool = toolname.Qualify(in.Tool, in.McpServerName)
 	tool, args := host.NormalizeCall(in.Tool, in.Input)
-	pt, ok := config.ParseTool(tool)
+	pt, ok := toolname.Parse(tool)
 	if !ok {
 		return allow(), nil
 	}
@@ -284,8 +287,8 @@ func Evaluate(in *Input) (Decision, error) {
 
 // route runs the target's own guards; ours is false (allow) for a server the
 // gate does not hold.
-func route(pt config.ParsedTool, tool string, args map[string]any, in *Input) (d Decision, ours bool, err error) {
-	memoryID, err := config.MemoryTargetID(tool)
+func route(pt toolname.Parsed, tool string, args map[string]any, in *Input) (d Decision, ours bool, err error) {
+	memoryID, err := toolname.MemoryTargetID(tool)
 	if err != nil {
 		return Decision{}, false, err
 	}
@@ -299,7 +302,7 @@ func route(pt config.ParsedTool, tool string, args map[string]any, in *Input) (d
 		d, err = evalMemory(pt, args, cwd, memoryID, ambiguous)
 		return d, true, err
 	}
-	ksSlug, err := config.KnowledgeScope(tool)
+	ksSlug, err := toolname.KnowledgeScope(tool)
 	if err != nil || ksSlug == "" {
 		return allow(), false, err // unrelated server — not ours to gate
 	}
@@ -348,7 +351,7 @@ func projectDir(roots []string) (cwd, ambiguous string, err error) {
 		strings.Join(order, ", ")), nil
 }
 
-func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambiguous string) (Decision, error) {
+func evalMemory(pt toolname.Parsed, args map[string]any, cwd, memoryID, ambiguous string) (Decision, error) {
 	// The guards are independent: evaluate every one and return the most
 	// severe outcome (reasons at that severity combined), so a `warn` misroute
 	// never hides a `block` from the tag gate.
@@ -358,7 +361,7 @@ func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambigu
 	// An ambiguous multi-root workspace is gated at the same strictness rather
 	// than guessed, since the caller fails open on errors.
 	if (pt.Verb == "publish" || pt.Verb == "append") && ambiguous != "" {
-		s, err := config.MemoryDestStrictness()
+		s, err := memoryDestStrictness()
 		if err != nil {
 			return Decision{}, err
 		}
@@ -378,7 +381,7 @@ func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambigu
 					"To change which store this project uses, run /soul-default in this repo; to relax this check, set "+
 					"DEMARKUS_MEMORY_DEST_STRICTNESS=warn (or ask).",
 				target, memoryID, bound, bound)
-			s, err := config.MemoryDestStrictness()
+			s, err := memoryDestStrictness()
 			if err != nil {
 				return Decision{}, err
 			}
@@ -429,7 +432,7 @@ func evalMemory(pt config.ParsedTool, args map[string]any, cwd, memoryID, ambigu
 					"(comma-separated subjects derived from the content) and, if set, importance in [0,1]. "+
 					"Tags are what make this document findable via mark_lookup.",
 				pt.Verb, target, strings.Join(problems, "; "), pt.Verb)
-			s, err := config.MemoryTagStrictness()
+			s, err := memoryTagStrictness()
 			if err != nil {
 				return Decision{}, err
 			}
@@ -463,7 +466,7 @@ func combine(ds []Decision) Decision {
 	return best
 }
 
-func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Decision, error) {
+func evalKnowledge(pt toolname.Parsed, args map[string]any, slug string) (Decision, error) {
 	// Each guard selects its own verbs; combine independent outcomes by severity.
 	var decisions []Decision
 	rd, err := retentionDecision(pt, args)
@@ -503,7 +506,7 @@ func evalKnowledge(pt config.ParsedTool, args map[string]any, slug string) (Deci
 func knowledgeTagDecision(args map[string]any, slug, verb string) *Decision {
 	md := metadataOf(args)
 	url := urlOf(args)
-	policy := publishpolicy.Policy{Strictness: publishpolicy.Strictness(config.KnowledgeStrictness())}
+	policy := publishpolicy.Policy{Strictness: knowledgeStrictness()}
 	result := publishpolicy.Evaluate(policy, url, md)
 	if verb == "append" {
 		result = publishpolicy.EvaluateOverrides(policy, url, md)

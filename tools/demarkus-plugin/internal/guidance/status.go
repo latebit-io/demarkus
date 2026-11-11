@@ -69,7 +69,7 @@ func (s *sessionStatus) agentHeader(r project.Resolution) string {
 	if s.git != nil {
 		stands = strings.TrimSuffix(facts.Render(standsHeading, facts.Session{Git: s.git}), "\n")
 	}
-	return r.Header(s.project.Root) + " " + s.project.sentence() + " Verdict: " + Verdict(r, s.project, true) + "\n\n" + stands
+	return header(r, s.project.Root) + " " + s.project.sentence() + " Verdict: " + Verdict(r, s.project, true) + "\n\n" + stands
 }
 
 func (p *ProjectStatus) sentence() string {

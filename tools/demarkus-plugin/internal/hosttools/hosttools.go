@@ -12,7 +12,6 @@ import (
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/guidance"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/promote"
@@ -141,7 +140,7 @@ func Call(name string, args map[string]any) (string, error) {
 // Project is `registry project`: the slug, store, root and verdict a prompt
 // needs before its first mark_* call.
 func Project(dir string) (string, error) {
-	r, err := project.Resolve(dir)
+	r, err := guidance.ResolveProject(dir)
 	if err != nil {
 		return "", err
 	}

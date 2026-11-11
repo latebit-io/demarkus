@@ -44,7 +44,7 @@ func Evaluate(in Input) (Output, error) {
 	if err := in.validate(); err != nil {
 		return Output{}, err
 	}
-	enabled, err := config.UpdateCheckEnabled()
+	enabled, err := checkEnabled()
 	if err != nil {
 		return Output{}, err
 	}
@@ -160,4 +160,14 @@ func isNewer(latest, installed string) bool {
 	l, _ := semver.Parse(strings.TrimSpace(latest))
 	i, _ := semver.Parse(strings.TrimSpace(installed))
 	return i.Less(l)
+}
+
+// checkEnabled reports whether the update check may run: env override, then
+// plugin.update-check, then on. A file outlives an env var a GUI launch drops.
+func checkEnabled() (bool, error) {
+	v, err := config.Knob("DEMARKUS_UPDATE_CHECK", "plugin.update-check")
+	if err != nil {
+		return true, err
+	}
+	return !config.IsOff(v), nil
 }

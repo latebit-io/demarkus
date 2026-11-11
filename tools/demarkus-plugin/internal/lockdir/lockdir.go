@@ -1,5 +1,6 @@
-// Package lockdir provides an atomic mkdir mutex with PID-stamped stale-lock
-// recovery, shared by registry (state writes) and provision (session startup).
+// Package lockdir provides an atomic mkdir mutex with stale-lock recovery,
+// stamped with its owner's PID and process identity, shared by registry
+// (state writes) and provision (session startup).
 // The directory remains the held-lock marker, so no fd spans the critical
 // section. A short-lived flock serializes acquire/reclaim/release transitions.
 // Assumption: mixed-version writers never overlap. Legacy (pre-staging) locks
@@ -9,12 +10,14 @@
 package lockdir
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -35,61 +38,51 @@ const (
 // pre-stamped dir and renames it into place, so a lock dir is never visible
 // without its PID stamp. attempts*sleep bounds the total wait.
 func WithLock(lockDir string, attempts int, sleep time.Duration, fn func() error) error {
-	lockPid := filepath.Join(lockDir, "pid")
 	if err := os.MkdirAll(filepath.Dir(lockDir), 0o750); err != nil {
 		return err
 	}
+	// proven is the stamp last shown to be a live owner's, so a long wait
+	// probes the holder's start time once, not once per attempt.
+	var proven string
 	for range attempts {
-		acquired, err := tryAcquire(lockDir)
+		acquired, err := tryOrReclaim(lockDir, &proven)
 		if err != nil {
 			return err
 		}
 		if acquired {
 			return runLocked(lockDir, fn)
 		}
-		// Reclaim when the recorded owner is dead, or when the stamp is
-		// missing entirely (legacy pre-staging crash left an unstamped dir;
-		// staged acquisition can no longer produce one).
-		b, readErr := os.ReadFile(lockPid)
-		switch {
-		case readErr == nil:
-			pid, convErr := strconv.Atoi(strings.TrimSpace(string(b)))
-			if convErr != nil {
-				// Corrupt stamp: staged acquisition only writes valid PIDs,
-				// so reclaim like the unstamped-legacy case (self-heal)
-				// rather than treating it as live contention.
-				if err := reclaimStale(lockDir); err != nil {
-					return err
-				}
-				time.Sleep(sleep)
-				continue
-			}
-			if !PidAlive(pid) {
-				if err := reclaimStale(lockDir); err != nil {
-					return err
-				}
-				time.Sleep(sleep)
-				continue
-			}
-		case errors.Is(readErr, os.ErrNotExist):
-			exists, statErr := dirExists(lockDir)
-			if statErr != nil {
-				return statErr
-			}
-			if exists {
-				if err := reclaimStale(lockDir); err != nil {
-					return err
-				}
-				time.Sleep(sleep)
-				continue
-			}
-		default:
-			// Permission/IO/ENOTDIR: surface now, not as a timeout later.
-			return fmt.Errorf("read lock pid %s: %w", lockPid, readErr)
-		}
 		time.Sleep(sleep)
 	}
+	// One last look, with no cache: the lock may have been released during
+	// the final sleep, or its proven owner's PID gone to another process.
+	// Two tries, since a reclaim only frees the lock for the next one.
+	var fresh string
+	for range 2 {
+		acquired, err := tryOrReclaim(lockDir, &fresh)
+		if err != nil {
+			return err
+		}
+		if acquired {
+			return runLocked(lockDir, fn)
+		}
+	}
 	return fmt.Errorf("could not acquire %s (held by another process?)", lockDir)
+}
+
+// tryOrReclaim takes the lock when it is free. When it is not and its
+// recorded owner is gone, or it has no stamp at all (a legacy crash left
+// one), the stale lock is moved aside for the next try.
+func tryOrReclaim(lockDir string, proven *string) (bool, error) {
+	acquired, err := tryAcquire(lockDir)
+	if err != nil || acquired {
+		return acquired, err
+	}
+	held, err := heldBy(lockDir, proven)
+	if err != nil || held {
+		return false, err
+	}
+	return false, reclaimStale(lockDir)
 }
 
 // tryAcquire stages a pre-stamped dir and renames it into place: no unstamped
@@ -100,8 +93,16 @@ func tryAcquire(lockDir string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("stage lock: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(stage, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
-		return false, errors.Join(fmt.Errorf("stamp lock pid: %w", err), os.RemoveAll(stage))
+	// A separate file: an older binary reads "pid" as a bare number. With no
+	// identity to give, the lock is a legacy one: its live PID stands.
+	stamps := map[string]string{"pid": strconv.Itoa(os.Getpid())}
+	if id, ok := ownIdentity(); ok {
+		stamps[stampedFile] = id
+	}
+	for name, value := range stamps {
+		if err := os.WriteFile(filepath.Join(stage, name), []byte(value), 0o600); err != nil {
+			return false, errors.Join(fmt.Errorf("stamp lock %s: %w", name, err), os.RemoveAll(stage))
+		}
 	}
 	var renameErr error
 	renamed := false
@@ -146,14 +147,10 @@ func reclaimStale(lockDir string) error {
 	aside := fmt.Sprintf("%s.stale.%d-%d", lockDir, os.Getpid(), nameSeq.Add(1))
 	moved := false
 	guardErr := withGuard(lockDir, 1, func() error {
-		b, readErr := os.ReadFile(filepath.Join(lockDir, "pid"))
-		if readErr == nil {
-			pid, convErr := strconv.Atoi(strings.TrimSpace(string(b)))
-			if convErr == nil && PidAlive(pid) {
-				return nil
-			}
-		} else if !errors.Is(readErr, os.ErrNotExist) {
-			return fmt.Errorf("read lock pid before reclaim: %w", readErr)
+		// Revalidated under the guard: the owner may have changed since the caller looked.
+		var none string
+		if held, err := heldBy(lockDir, &none); err != nil || held {
+			return err
 		}
 		if err := os.Rename(lockDir, aside); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -277,6 +274,83 @@ func dirExists(path string) (bool, error) {
 		return false, fmt.Errorf("stat %s: %w", path, err)
 	}
 	return info.IsDir(), nil
+}
+
+// stampedFile holds the owner's process identity: a live PID with another
+// identity is a reused number, not the owner.
+const stampedFile = "stamped"
+
+// heldBy reports whether lockDir is held by a live owner. A lock dir with no
+// PID, a corrupt one, or a dead or replaced owner is not held; a vanished dir
+// is. proven caches the stamp already shown to be the live owner's.
+func heldBy(lockDir string, proven *string) (bool, error) {
+	b, err := os.ReadFile(filepath.Join(lockDir, "pid"))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		// Released between the caller's attempt and this read, or never stamped.
+		exists, statErr := dirExists(lockDir)
+		return !exists, statErr
+	case err != nil:
+		// Permission/IO/ENOTDIR: surface now, not as a timeout later.
+		return false, fmt.Errorf("read lock pid %s: %w", filepath.Join(lockDir, "pid"), err)
+	}
+	// Staged acquisition only writes valid PIDs, so a corrupt stamp self-heals.
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || !PidAlive(pid) {
+		return false, nil
+	}
+	stamp, err := os.ReadFile(filepath.Join(lockDir, stampedFile))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return true, nil // legacy lock or released meanwhile: the live PID stands
+	case err != nil:
+		return false, fmt.Errorf("read lock stamp %s: %w", filepath.Join(lockDir, stampedFile), err)
+	}
+	want := strings.TrimSpace(string(stamp))
+	id := strings.TrimSpace(string(b)) + "@" + want
+	if id == *proven {
+		return true, nil
+	}
+	got, ok := identity(pid)
+	if !ok || kind(got) != kind(want) {
+		return true, nil // cannot tell: wait, and ask again; never cached
+	}
+	if got != want {
+		return false, nil
+	}
+	*proven = id
+	return true, nil
+}
+
+// ownIdentity is this process's identity, read once.
+var ownIdentity = sync.OnceValues(func() (string, bool) { return identity(os.Getpid()) })
+
+// identity names one process for as long as it lives, whatever the wall
+// clock does meanwhile: its start in kernel ticks where /proc has it, else
+// the start ps recorded. ok is false when neither can be read.
+func identity(pid int) (string, bool) {
+	if b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat"); err == nil {
+		// comm, the second field, may hold spaces and parentheses.
+		_, rest, _ := strings.Cut(string(b[max(bytes.LastIndexByte(b, ')'), 0):]), " ")
+		if fields := strings.Fields(rest); len(fields) > procStartField {
+			return "ticks:" + fields[procStartField], true
+		}
+	}
+	if started, ok := ProcessStart(pid); ok {
+		return "lstart:" + strconv.FormatInt(started.Unix(), 10), true
+	}
+	return "", false
+}
+
+// procStartField is starttime, field 22 of /proc/<pid>/stat, counted from
+// the state field that follows comm.
+const procStartField = 19
+
+// kind is the part of an identity that says how it was read: two of
+// different kinds cannot be compared.
+func kind(id string) string {
+	k, _, _ := strings.Cut(id, ":")
+	return k
 }
 
 // PidAlive reports whether pid refers to a live process.

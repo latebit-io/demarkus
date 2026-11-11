@@ -130,7 +130,7 @@ func TestVerdictStopsOnlyForAStaleBinding(t *testing.T) {
 		{project.Resolution{Store: "team", State: project.StateBound}, known, false, "use"},
 		{local, unknown, true, "use, root unconfirmed: hosted store, not checked"},
 		{local, unknown, false, "stop: no local store configured; run /soul-init"},
-		{stale, unknown, true, "stop: the bound store is " + stale.Hint()},
+		{stale, unknown, true, "stop: the bound store is " + Hint(stale)},
 	} {
 		if got := Verdict(c.r, c.st, c.configured); got != c.want {
 			t.Errorf("Verdict(%s, %s, %v) = %q, want %q", c.r.State, c.st.State, c.configured, got, c.want)

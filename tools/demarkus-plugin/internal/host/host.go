@@ -1,6 +1,6 @@
 // Package host names the harnesses the plugin serves and what differs between
 // them at the output edge: hook payload shapes, the project directory
-// variable, the MCP config file. The tool name grammar stays with config.
+// variable, the MCP config file. The tool name grammar is toolname's.
 package host
 
 import (

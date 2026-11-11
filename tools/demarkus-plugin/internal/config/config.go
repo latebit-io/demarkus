@@ -7,22 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
-
-	"github.com/latebit-io/demarkus/protocol/layout"
-)
-
-// Strictness is the enforcement level a gate applies to a violation.
-type Strictness string
-
-// Enforcement levels a gate can apply to a violation.
-const (
-	Warn  Strictness = "warn"
-	Block Strictness = "block"
-	Ask   Strictness = "ask"
-	// Off disables a guard that allows it (the taint guard).
-	Off Strictness = "off"
 )
 
 // LocalMemoryID is the reserved catalog id / MCP server name of the local managed memory.
@@ -100,68 +85,9 @@ func stateExists(name string) (bool, error) {
 	return false, err
 }
 
-// --- strictness ---------------------------------------------------------------
-
-func validStrictness(s string, def Strictness) Strictness {
-	switch Strictness(strings.TrimSpace(s)) {
-	case Warn, Block, Ask:
-		return Strictness(strings.TrimSpace(s))
-	default:
-		return def
-	}
-}
-
-// MemoryTagStrictness env override → plugin-memory.strictness → warn (floor).
-func MemoryTagStrictness() (Strictness, error) {
-	return strictness("DEMARKUS_MEMORY_STRICTNESS", "plugin-memory.strictness", Warn)
-}
-
-// MemoryDestStrictness env override → plugin-memory.dest-strictness → block.
-func MemoryDestStrictness() (Strictness, error) {
-	return strictness("DEMARKUS_MEMORY_DEST_STRICTNESS", "plugin-memory.dest-strictness", Block)
-}
-
-// StyleStrictness is the enforcement level for the documentation-style guard
-// (frontmatter fence in the body, missing H1, em dashes, duplicate headings).
-// env override → plugin.style-strictness → warn: style steers, it does not
-// wall; the reasons teach the rule at the moment it is broken.
-func StyleStrictness() (Strictness, error) {
-	return strictness("DEMARKUS_STYLE_STRICTNESS", "plugin.style-strictness", Warn)
-}
-
-// RetentionStrictness is the retention guard's level: env override, then
-// plugin.retention-strictness, then ask. A prunable retention value deletes
-// older versions permanently, so a human decision is the default everywhere.
-func RetentionStrictness() (Strictness, error) {
-	return strictness("DEMARKUS_RETENTION_STRICTNESS", "plugin.retention-strictness", Ask)
-}
-
-// GovernanceStrictness is the knowledge governance guard's level: env
-// override, then plugin.governance-strictness, then warn. Warn keeps an open
-// world's flow prompt-free; ask puts a human on every policy write.
-func GovernanceStrictness() (Strictness, error) {
-	return strictness("DEMARKUS_GOVERNANCE_STRICTNESS", "plugin.governance-strictness", Warn)
-}
-
-// TaintStrictness is the untrusted-read guard's level: env override, then
-// plugin.taint-strictness, then ask. Off turns the guard off.
-func TaintStrictness() (Strictness, error) {
-	v, err := knob("DEMARKUS_TAINT_STRICTNESS", "plugin.taint-strictness")
-	if err == nil && isOff(v) {
-		return Off, nil
-	}
-	return validStrictness(v, Ask), err
-}
-
-// strictness reads a guard's level: env override, then the ~/.demarkus file,
-// then def; an unreadable file is def with the error.
-func strictness(env, file string, def Strictness) (Strictness, error) {
-	v, err := knob(env, file)
-	return validStrictness(v, def), err
-}
-
-// knob is the env value, else the trimmed file content ("" when absent).
-func knob(env, file string) (string, error) {
+// Knob is a setting's value: the env override, else the trimmed content of
+// the state file ("" when absent). An unreadable file is the error.
+func Knob(env, file string) (string, error) {
 	if v := os.Getenv(env); v != "" {
 		return v, nil
 	}
@@ -172,39 +98,13 @@ func knob(env, file string) (string, error) {
 	return readTrimmed(p)
 }
 
-// UpdateCheckEnabled reports whether the plugin update check may run.
-// env override → plugin.update-check → on: a notice once a day is cheap, and a
-// user who wants it gone gets a file, not just an env var a GUI launch drops.
-func UpdateCheckEnabled() (bool, error) {
-	if v := os.Getenv("DEMARKUS_UPDATE_CHECK"); v != "" {
-		return !isOff(v), nil
-	}
-	p, err := path("plugin.update-check")
-	if err != nil {
-		return true, err
-	}
-	s, err := readTrimmed(p)
-	if err != nil {
-		return true, err
-	}
-	return !isOff(s), nil
-}
-
-func isOff(v string) bool {
+// IsOff reports a knob value that turns its feature off.
+func IsOff(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "0", "off", "false", "no":
 		return true
 	}
 	return false
-}
-
-// KnowledgeStrictness is the gate's severity on a joined knowledge system:
-// the env override or warn. The server enforces the system's own policy.
-func KnowledgeStrictness() Strictness {
-	if v := os.Getenv("DEMARKUS_KNOWLEDGE_STRICTNESS"); v != "" {
-		return validStrictness(v, Warn)
-	}
-	return Warn
 }
 
 // --- registries ---------------------------------------------------------------
@@ -319,63 +219,13 @@ func ProjectBinding(dir string) (string, error) {
 	return "", nil
 }
 
-// --- MCP tool-name parsing ----------------------------------------------------
-
-var markVerbRe = regexp.MustCompile(`mark_([a-z_]+)$`)
-
-// ParsedTool is the server + verb extracted from an MCP tool name.
-type ParsedTool struct {
-	Server string // "" when un-prefixed (pi prefix "none")
-	Verb   string // publish, append, fetch, …
-}
-
-// ParseTool handles the harness tool-name shapes:
-//
-//	mcp__<server>__mark_<verb>   (Claude Code)
-//	<server>_mark_<verb>         (pi-mcp-adapter, prefix "server"; hyphens→"_")
-//	mark_<verb>                  (pi-mcp-adapter, prefix "none")
-func ParseTool(tool string) (ParsedTool, bool) {
-	m := markVerbRe.FindStringSubmatch(tool)
-	if m == nil {
-		return ParsedTool{}, false
-	}
-	verb := m[1]
-	server := strings.TrimSuffix(tool, "mark_"+verb)
-	server = strings.TrimPrefix(server, "mcp__")
-	server = strings.TrimSuffix(server, "__")
-	server = strings.TrimSuffix(server, "_")
-	return ParsedTool{Server: server, Verb: verb}, true
-}
-
-// journalDir is the layout's journal directory as a path segment ("/journal/").
-var journalDir = "/" + layout.Default().Journal
-
-// IsJournalWrite reports a write that records a journal entry: the today route
-// (marktools.RouteToday) or a path under the journal directory. The pi and
-// OpenCode adapters mirror it.
-func IsJournalWrite(tool, url, route string) bool {
-	pt, ok := ParseTool(tool)
-	if !ok || (pt.Verb != "publish" && pt.Verb != "append") {
-		return false
-	}
-	return route == "today" || strings.Contains(url, journalDir)
-}
-
-// QualifyTool prefixes a bare tool name with its MCP server when the harness
-// reports them separately (Cursor: tool_name + mcp_server_name), so ParseTool
-// can resolve the target server. Already-qualified names pass through.
-func QualifyTool(tool, server string) string {
-	if server == "" || tool == "" {
-		return tool
-	}
-	if pt, ok := ParseTool(tool); ok && pt.Server != "" {
-		return tool
-	}
-	return "mcp__" + server + "__" + tool
-}
+// --- MCP server names ---------------------------------------------------------
 
 // norm makes "demarkus-memory" and "demarkus_memory" compare equal.
 func norm(s string) string { return strings.ToLower(strings.ReplaceAll(s, "-", "_")) }
+
+// SameName reports two server or slug names equal up to case and hyphens.
+func SameName(a, b string) bool { return norm(a) == norm(b) }
 
 // LocalMemoryAliasFile holds "<write-token> <alias>": the MCP server name a
 // branded plugin serves the local memory under (empty for the default) and the
@@ -428,65 +278,6 @@ func ResolvesToLocalMemory(server string) (bool, error) {
 	return ServerMatches(server, alias), nil
 }
 
-func serverIsLocalMemory(server string) (bool, error) {
-	if server == "" {
-		return true, nil // un-prefixed: assume the local memory
-	}
-	return ResolvesToLocalMemory(server)
-}
-
-// MemoryTargetID canonical id of the memory a tool writes to (for binding compare),
-// or "" when the tool targets a knowledge system or unrelated server.
-func MemoryTargetID(tool string) (string, error) {
-	pt, ok := ParseTool(tool)
-	if !ok {
-		return "", nil
-	}
-	local, err := serverIsLocalMemory(pt.Server)
-	if err != nil {
-		return "", err
-	}
-	if local {
-		return LocalMemoryID, nil
-	}
-	remotes, err := ListRemoteMemories()
-	if err != nil {
-		return "", err
-	}
-	for _, slug := range remotes {
-		if norm(slug) == norm(pt.Server) {
-			return slug, nil
-		}
-	}
-	return "", nil
-}
-
-// KnowledgeScope the registered knowledge-system slug a tool targets, or "".
-// The local memory is explicitly NOT a knowledge target.
-func KnowledgeScope(tool string) (string, error) {
-	pt, ok := ParseTool(tool)
-	if !ok {
-		return "", nil
-	}
-	local, err := serverIsLocalMemory(pt.Server)
-	if err != nil {
-		return "", err
-	}
-	if local {
-		return "", nil
-	}
-	systems, err := ListKnowledgeSystems()
-	if err != nil {
-		return "", err
-	}
-	for _, slug := range systems {
-		if norm(slug) == norm(pt.Server) {
-			return slug, nil
-		}
-	}
-	return "", nil
-}
-
 // --- promote destinations + knowledge presence (for nudges) -------------------
 
 // KnowledgePresent at least one knowledge system is joined.
@@ -510,13 +301,6 @@ func PromoteDestinationPresent() (bool, error) {
 	}
 	targets, err := PromoteTargets()
 	return len(targets) > 0, err
-}
-
-// PublishGateScopeLocal true when a tool targets a memory this plugin routes
-// (local managed memory or a registered remote memory) — i.e. MemoryTargetID != "".
-func PublishGateScopeLocal(tool string) (bool, error) {
-	id, err := MemoryTargetID(tool)
-	return id != "", err
 }
 
 // --- managed-server config (plugin-memory.conf) -------------------------------

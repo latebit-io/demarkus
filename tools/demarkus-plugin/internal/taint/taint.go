@@ -18,10 +18,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/protocol/hiddentext"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/facts"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/toolname"
 )
 
 // MaxSources bounds what a reason or stamp names; the first reads matter.
@@ -64,8 +63,8 @@ func Of(c *Call, memoryID func(tool string) string) string {
 		}
 		return ""
 	}
-	if pt, ok := config.ParseTool(c.Name); ok {
-		return foreignRead(c, pt.Verb, memoryID)
+	if pt, ok := toolname.Parse(c.Name); ok {
+		return foreignRead(c, pt, memoryID)
 	}
 	if strings.HasPrefix(c.Name, "mcp__") && (browserRe.MatchString(c.Name) || webToolRe.MatchString(c.Name)) {
 		return Clean(c.Name)
@@ -85,8 +84,8 @@ func publicURL(raw string) string {
 
 // foreignRead flags a soul tool that is not a write and names a full mark://
 // URL: the bound store takes bare paths, so a host is someone else's server.
-func foreignRead(c *Call, verb string, memoryID func(string) string) string {
-	if mcpfmt.StoreWriteTools["mark_"+verb] || !strings.HasPrefix(c.Input.URL, "mark://") || memoryID(c.Name) == "" {
+func foreignRead(c *Call, pt toolname.Parsed, memoryID func(string) string) string {
+	if pt.StoreWrite() || !strings.HasPrefix(c.Input.URL, "mark://") || memoryID(c.Name) == "" {
 		return ""
 	}
 	target, err := links.ParseMark(c.Input.URL)
@@ -146,7 +145,7 @@ func Transcript(path string) ([]string, error) {
 }
 
 // scanner holds one Transcript call's sources and memoized store lookups
-// (each config.MemoryTargetID reads config files).
+// (each toolname.MemoryTargetID reads config files).
 type scanner struct {
 	found []string
 	ids   map[string]string
@@ -157,7 +156,7 @@ func (s *scanner) full() bool { return len(s.found) >= MaxSources }
 func (s *scanner) memoryID(tool string) string {
 	id, ok := s.ids[tool]
 	if !ok {
-		id, _ = config.MemoryTargetID(tool) //nolint:errcheck // unreadable config: not the soul, so no foreign read
+		id, _ = toolname.MemoryTargetID(tool) //nolint:errcheck // unreadable config: not the soul, so no foreign read
 		s.ids[tool] = id
 	}
 	return id

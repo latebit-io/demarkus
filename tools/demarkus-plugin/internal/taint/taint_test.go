@@ -15,7 +15,7 @@ func call(name, url, command, subagent string) *Call {
 	return c
 }
 
-// soul resolves the local memory server, as config.MemoryTargetID would.
+// soul resolves the local memory server, as toolname.MemoryTargetID would.
 func soul(tool string) string {
 	if strings.HasPrefix(tool, "mcp__demarkus-memory__") {
 		return "demarkus-memory"

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
 	"github.com/latebit-io/demarkus/protocol"
@@ -194,13 +195,18 @@ func TestStaleRenderDoesNotClaimAWithdrawal(t *testing.T) {
 	awaitExport(t, h.hub.io(), seededNodes)
 	stop()
 	ctx := context.Background()
-	e := testDeriver(h.config()).export
+	d := testDeriver(h.config())
+	e := d.export
 	e.pendAll()
 	if err := e.export(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// The withdrawal arrives after the loads: this render predates it.
-	e.withdrawn("alpha")
+	held := h.hub.version(graphstore.GraphExportPath)
+
+	// The world is withdrawn after the loads: a render now predates it.
+	if err := d.withdraw(ctx, "alpha"); err != nil {
+		t.Fatal(err)
+	}
 	e.owed = true
 	if err := e.write(ctx); err != nil {
 		t.Fatal(err)
@@ -208,11 +214,121 @@ func TestStaleRenderDoesNotClaimAWithdrawal(t *testing.T) {
 	if e.pruned != 0 {
 		t.Fatal("a render from before the withdrawal was counted as its prune")
 	}
-	// The next pass loads the withdrawn world, and its render prunes.
+
+	// The next pass loads the emptied checkpoint: its render drops the rows
+	// and prunes the version that held them.
 	if err := e.export(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if e.pruned != 1 {
 		t.Errorf("pruned = %d after the withdrawn world was loaded, want 1", e.pruned)
+	}
+	if strings.Contains(h.hub.live(graphstore.GraphExportPath), "mark://alpha/") {
+		t.Error("the export still lists the withdrawn world")
+	}
+	if h.hub.live(protocol.VersionPath(graphstore.GraphExportPath, held)) != "" {
+		t.Errorf("export v%d, which held the rows, is still readable", held)
+	}
+}
+
+// A store that fails to remove old versions still answers the write with
+// success: the withdrawal must not count as landed, and a retry must prune.
+func TestWithdrawalIsNotLandedUntilOldVersionsAreGone(t *testing.T) {
+	h, stop := seeded(t)
+	awaitExport(t, h.hub.io(), seededNodes)
+	stop()
+	ctx := context.Background()
+	d := testDeriver(h.config())
+	h.hub.setStuck(true)
+	if err := d.withdraw(ctx, "alpha"); !errors.Is(err, errNotPruned) {
+		t.Fatalf("withdraw over a failing prune = %v, want errNotPruned", err)
+	}
+	if m, rows, err := h.checkpoint(); err == nil && withdrawn(m, rows) == nil {
+		t.Fatal("the withdrawal was marked landed although old versions remain")
+	}
+
+	h.hub.setStuck(false)
+	if err := d.withdraw(ctx, "alpha"); err != nil {
+		t.Fatalf("withdraw once pruning works: %v", err)
+	}
+	m, rows, err := h.checkpoint()
+	if err != nil || withdrawn(m, rows) != nil {
+		t.Fatalf("checkpoint after the retry: %v, %v", withdrawn(m, rows), err)
+	}
+
+	// The export's prune is confirmed the same way.
+	e := d.export
+	h.hub.setStuck(true)
+	if err := e.export(ctx); !errors.Is(err, errNotPruned) {
+		t.Fatalf("export over a failing prune = %v, want errNotPruned", err)
+	}
+	if e.pruned != 0 || !e.owed {
+		t.Fatalf("pruned %d, owed %t after a failed prune; want it still owed", e.pruned, e.owed)
+	}
+	// Within the backoff nothing is written: no version piles up meanwhile.
+	writes := h.hub.exportWrites()
+	if err := e.export(ctx); err != nil || h.hub.exportWrites() != writes || !e.owed {
+		t.Fatalf("export inside the prune backoff: %v, %d more writes, owed %t", err, h.hub.exportWrites()-writes, e.owed)
+	}
+	h.hub.setStuck(false)
+	e.pruneRetryAt = time.Time{} // the backoff has passed
+	if err := e.export(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.pruned != e.loaded || e.pruned == 0 {
+		t.Errorf("pruned = %d, loaded %d after the retry", e.pruned, e.loaded)
+	}
+}
+
+// A store that misses an older version while pruning removes the one just
+// before the write: the withdrawal must still see what is left.
+func TestWithdrawalSeesAVersionThePruneSkipped(t *testing.T) {
+	h, stop := seeded(t)
+	awaitExport(t, h.hub.io(), seededNodes)
+	stop()
+	ctx := context.Background()
+	// A second version of every shard, so a skipped oldest is not the latest.
+	h.alpha.publish("/a.md", "# A again\n")
+	stop = h.start()
+	h.await(versions(with(map[string]int{"/a.md": 2})))
+	stop()
+
+	d := testDeriver(h.config())
+	h.hub.setSkips(true)
+	if err := d.withdraw(ctx, "alpha"); !errors.Is(err, errNotPruned) {
+		t.Fatalf("withdraw over a prune that skipped a version = %v, want errNotPruned", err)
+	}
+	h.hub.setSkips(false)
+	if err := d.withdraw(ctx, "alpha"); err != nil {
+		t.Fatalf("withdraw once pruning is whole: %v", err)
+	}
+}
+
+// The manifest is written last: when its prune fails the marker is already
+// there, and the next try must finish that prune, not take the marker as done.
+func TestWithdrawalRetriesAManifestPruneOverItsMarker(t *testing.T) {
+	h, stop := seeded(t)
+	awaitExport(t, h.hub.io(), seededNodes)
+	stop()
+	ctx := context.Background()
+	manifest := graphstore.WorldManifestPath("alpha")
+	d := testDeriver(h.config())
+	h.hub.setStuckAt(manifest, true)
+	if err := d.withdraw(ctx, "alpha"); !errors.Is(err, errNotPruned) {
+		t.Fatalf("withdraw with the manifest prune failing = %v, want errNotPruned", err)
+	}
+	if m, rows, err := h.checkpoint(); err != nil || withdrawn(m, rows) != nil {
+		t.Fatalf("the marker manifest should be in place: %v, %v", withdrawn(m, rows), err)
+	}
+	if kept, _ := h.hub.count(ctx, manifest); kept < 2 {
+		t.Fatalf("manifest keeps %d versions, want the older one still there", kept)
+	}
+
+	h.hub.setStuckAt(manifest, false)
+	if err := d.withdraw(ctx, "alpha"); err != nil {
+		t.Fatalf("withdraw over the marker: %v", err)
+	}
+	if kept, _ := h.hub.count(ctx, manifest); kept != 1 {
+		t.Errorf("manifest keeps %d versions after the retry, want 1", kept)
 	}
 }

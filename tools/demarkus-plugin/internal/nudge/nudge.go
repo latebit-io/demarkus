@@ -19,6 +19,7 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/facts"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/toolname"
 )
 
 // Input is the union of fields the three nudge events need; an adapter fills the
@@ -80,7 +81,7 @@ func (in *Input) normalizeTool() {
 		in.Tool = in.ToolName
 		in.Input = in.ToolInput
 	}
-	in.Tool = config.QualifyTool(in.Tool, in.McpServerName)
+	in.Tool = toolname.Qualify(in.Tool, in.McpServerName)
 }
 
 // Evaluate dispatches on the event and returns the nudge text (or empty).
@@ -123,7 +124,7 @@ func recall(in *Input) (Output, error) {
 
 func promote(in *Input) (Output, error) {
 	tool, args := host.NormalizeCall(in.Tool, in.Input)
-	pt, ok := config.ParseTool(tool)
+	pt, ok := toolname.Parse(tool)
 	if !ok || pt.Verb != "publish" {
 		return Output{}, nil
 	}
@@ -134,7 +135,7 @@ func promote(in *Input) (Output, error) {
 	if !present {
 		return Output{}, nil
 	}
-	local, err := config.PublishGateScopeLocal(tool)
+	local, err := toolname.TargetsMemory(tool)
 	if err != nil {
 		return Output{}, err
 	}

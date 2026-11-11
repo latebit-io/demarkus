@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/probe"
 )
 
 // Supervision names the service manager that runs a process. Restarting
@@ -55,16 +57,16 @@ func (s Supervision) mainPID() int {
 	var ran bool
 	switch {
 	case s.Kind == "launchd":
-		out, ran = probeBounded(nil, "launchctl", "print", "gui/"+strconv.Itoa(os.Getuid())+"/"+s.Unit)
+		out, ran = probe.Bounded(nil, "launchctl", "print", "gui/"+strconv.Itoa(os.Getuid())+"/"+s.Unit)
 		m := launchdPIDLine.FindStringSubmatch(out)
 		if m == nil {
 			return 0
 		}
 		out = m[1]
 	case s.User:
-		out, ran = probeBounded(nil, "systemctl", "--user", "show", "-p", "MainPID", "--value", s.Unit)
+		out, ran = probe.Bounded(nil, "systemctl", "--user", "show", "-p", "MainPID", "--value", s.Unit)
 	default:
-		out, ran = probeBounded(nil, "systemctl", "show", "-p", "MainPID", "--value", s.Unit)
+		out, ran = probe.Bounded(nil, "systemctl", "show", "-p", "MainPID", "--value", s.Unit)
 	}
 	if !ran {
 		return 0
@@ -127,7 +129,7 @@ func (s Supervision) Restart() error {
 	defer cancel()
 	argv := s.restartArgs()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // fixed supervisor binary; the unit came from the process itself
-	cmd.WaitDelay = probeKillGrace
+	cmd.WaitDelay = probe.KillGrace
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %w: %s", strings.Join(argv, " "), err, strings.TrimSpace(string(out)))
 	}

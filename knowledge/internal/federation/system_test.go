@@ -281,6 +281,59 @@ func TestNewLeaderWritesTheExportOnlyForAChange(t *testing.T) {
 	}
 }
 
+// Against a real store: a withdrawal lists the hub, empties the world's
+// checkpoint, and leaves no older version of it or of the export readable.
+func TestWithdrawalPrunesInARealHub(t *testing.T) {
+	t.Parallel()
+	ctx, sys := context.Background(), newSystem(t)
+	replica := sys.replica()
+	hub := HubIO(replica, hubWorld)
+	publish(t, replica, "/a.md", "# A\n")
+	stop := sys.lead(replica, replica)
+	before := sys.await(replica, versions(map[string]int{"/a.md": 1}))
+	awaitExport(t, hub, map[string]string{"mark://team/a.md": "A"})
+	stop()
+	exported, err := hub.Fetch(ctx, graphstore.GraphExportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exportVersion, err := generation.ResponseVersion(graphstore.GraphExportPath, exported)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d := sys.deriver(replica, replica)
+	d.ListHub, d.CountVersions = HubLister(replica, hubWorld), HubVersions(replica, hubWorld)
+	if err := d.withdraw(ctx, teamWorld); err != nil {
+		t.Fatalf("withdraw: %v", err)
+	}
+	if err := d.export.export(ctx); err != nil {
+		t.Fatalf("export after the withdrawal: %v", err)
+	}
+	if m, rows, err := loadCheckpoint(hub, teamWorld); err != nil || withdrawn(m, rows) != nil {
+		t.Fatalf("checkpoint after the withdrawal: %v, %v", withdrawn(m, rows), err)
+	}
+	held := map[string]int{graphstore.GraphExportPath: exportVersion, graphstore.WorldManifestPath(teamWorld): 1}
+	for _, ref := range before.Shards {
+		held[ref.Path] = ref.Version
+	}
+	for path, version := range held {
+		old, err := hub.Fetch(ctx, protocol.VersionPath(path, version))
+		if err != nil || old.Status != protocol.StatusNotFound {
+			t.Errorf("%s v%d, written before the withdrawal: status %q, %v; want not-found", path, version, old.Status, err)
+		}
+	}
+	for path := range held {
+		if kept, err := d.CountVersions(ctx, path); err != nil || kept != 1 {
+			t.Errorf("%s keeps %d versions, %v; want 1", path, kept, err)
+		}
+	}
+	live, err := hub.Fetch(ctx, graphstore.GraphExportPath)
+	if err != nil || strings.Contains(live.Body, "mark://team/") {
+		t.Errorf("the live export still lists the withdrawn world (%v)", err)
+	}
+}
+
 // watchCounter counts the in-process watches a replica opens.
 type watchCounter struct {
 	dispatch.LocalWorlds

@@ -11,6 +11,7 @@ type pkg struct {
 	path        string
 	imports     []string
 	testImports []string // test files only, may repeat imports
+	external    []string // outside modules production code imports
 }
 
 type report struct {
@@ -47,6 +48,11 @@ func check(m layerMap, pkgs []pkg) report {
 				line += " [test]"
 			}
 			r.violations = append(r.violations, line)
+		}
+		for _, to := range p.external {
+			if ok && !mayUse(from, to) {
+				r.violations = append(r.violations, fmt.Sprintf("%s (%s) -> %s (external)", p.path, from, to))
+			}
 		}
 	}
 	slices.Sort(r.violations)

@@ -11,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/client/internal/tokens"
 	"github.com/latebit-io/demarkus/client/memory/graph"
 	"github.com/latebit-io/demarkus/client/memory/graphstore"
+	"github.com/latebit-io/demarkus/protocol/hiddentext"
 	runewidth "github.com/mattn/go-runewidth"
 )
 
@@ -319,7 +320,7 @@ func renderGraphView(items []graphListItem, selectedIdx, width int) string {
 
 		// Truncate to terminal cells (CJK/emoji are double-width).
 		if width > 5 {
-			line = truncateCells(line, width-2)
+			line = truncateCells(hiddentext.Reveal(line), width-2)
 		}
 
 		b.WriteString(line)
@@ -382,7 +383,7 @@ func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 
 		line := fmt.Sprintf("%s%s %s%s", cursor, icon, label, item.observation.Annotation())
 		if width > 5 {
-			line = truncateCells(line, width-2)
+			line = truncateCells(hiddentext.Reveal(line), width-2)
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
@@ -402,7 +403,7 @@ func renderBacklinksView(items []graphListItem, selectedIdx, width int) string {
 			}
 			detail := fmt.Sprintf("      %s [%s] source %s%s", direction, relation, source, edge.Source.Observation.Annotation())
 			if width > 7 {
-				detail = truncateCells(detail, width-2)
+				detail = truncateCells(hiddentext.Reveal(detail), width-2)
 			}
 			b.WriteString(detail)
 			b.WriteByte('\n')
@@ -446,7 +447,7 @@ func renderTopologyView(items []graphListItem, selectedIdx, width int) string {
 
 		line := fmt.Sprintf("%s%s %s%s%s", cursor, icon, label, density, item.observation.Annotation())
 		if width > 5 {
-			line = truncateCells(line, width-2)
+			line = truncateCells(hiddentext.Reveal(line), width-2)
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
@@ -467,7 +468,7 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cancelCrawl()
 		m.viewMode = viewDocument
 		if m.histIdx >= 0 {
-			m.restoreHistory()
+			m.reshow()
 		} else if m.ready {
 			m.viewport.SetContent("\n  No document loaded.\n  Use the address bar to load a document.\n")
 		}
@@ -479,7 +480,7 @@ func (m model) handleGraphKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cancelCrawl()
 		m.viewMode = viewDocument
 		if m.histIdx >= 0 {
-			m.restoreHistory()
+			m.reshow()
 		} else if m.ready {
 			m.viewport.SetContent("\n  No document loaded.\n  Use the address bar to load a document.\n")
 		}
@@ -566,13 +567,17 @@ func (m model) renderCurrentGraphSubView() string {
 	if m.graphWarning != "" {
 		prefix += "warning: " + m.graphWarning + "\n"
 	}
+	view := ""
 	switch m.graphSubView {
 	case subViewBacklinks:
 		prefix += fmt.Sprintf("relations: %d documents\n", m.graphPageTotal)
-		return prefix + renderBacklinksView(m.graphNodes, m.graphIdx, m.width)
+		view = renderBacklinksView(m.graphNodes, m.graphIdx, m.width)
 	case subViewTopology:
-		return prefix + renderTopologyView(m.graphNodes, m.graphIdx, m.width)
+		view = renderTopologyView(m.graphNodes, m.graphIdx, m.width)
 	default:
-		return prefix + renderGraphView(m.graphNodes, m.graphIdx, m.width)
+		view = renderGraphView(m.graphNodes, m.graphIdx, m.width)
 	}
+	// Titles and URLs are crawled documents' own. Lines are revealed before
+	// they are cut to width, since revealing widens them; this covers the rest.
+	return hiddentext.Reveal(prefix + view)
 }

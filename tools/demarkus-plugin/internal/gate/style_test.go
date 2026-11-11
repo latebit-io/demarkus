@@ -3,8 +3,6 @@ package gate
 import (
 	"strings"
 	"testing"
-
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
 func styleInput(body string) *Input {
@@ -91,11 +89,11 @@ func TestStyleGateDescription(t *testing.T) {
 
 func TestStyleStrictnessDefault(t *testing.T) {
 	setupHome(t, nil)
-	s, err := config.StyleStrictness()
+	s, err := styleStrictness()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s != config.Warn {
+	if s != Warn {
 		t.Errorf("default style strictness = %q, want warn", s)
 	}
 }

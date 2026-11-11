@@ -1,8 +1,12 @@
 package bookmarks
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -266,5 +270,287 @@ func TestLoadMergesSpellingsOfOneDocument(t *testing.T) {
 	got := s.List()
 	if len(got) != 2 || got[0].URL != "mark://host/doc.md" || got[0].Title != "First" || got[1].URL != "mark://host:7000/doc.md" {
 		t.Errorf("bookmarks = %+v, want the first spelling kept and the other server untouched", got)
+	}
+}
+
+// The file is the user's: headings and notes around the list survive a rewrite.
+func TestRewriteKeepsWhatAPersonWrote(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	const written = "# My Hub\n\nReading list, newest last.\n\n- [A](mark://h/a.md) — 2026-01-01\n\n## Later\n\n- [B](mark://h/b.md)\n"
+	if err := os.WriteFile(path, []byte(written), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove("mark://h/a.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://h/c.md", "C"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# My Hub\n\nReading list, newest last.\n\n\n## Later\n\n- [B](mark://h/b.md)\n- [C](mark://h/c.md) — " + s.List()[1].Date + "\n"
+	if string(got) != want {
+		t.Errorf("file =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A long-lived store writes over the file as it is now, not as it was loaded.
+func TestMutationKeepsAnotherProcessesBookmarks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	tui, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Add("mark://h/cli.md", "CLI"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tui.Add("mark://h/tui.md", "TUI"); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fresh.Has("mark://h/cli.md") || !fresh.Has("mark://h/tui.md") || !tui.Has("mark://h/cli.md") {
+		t.Errorf("bookmarks = %+v, want both processes' entries", fresh.List())
+	}
+}
+
+// A failed write changes nothing: the store never shows what the disk lacks,
+// the old file stands, and no temp file is left behind.
+func TestFailedSaveLeavesMemoryAndFileAlone(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to a read-only directory")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bookmarks.md")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://h/kept.md", "Kept"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Errorf("restore %s: %v", dir, err)
+		}
+	})
+	if err := s.Add("mark://h/lost.md", "Lost"); err == nil {
+		t.Fatal("Add into a read-only directory succeeded")
+	}
+	if err := s.Remove("mark://h/kept.md"); err == nil {
+		t.Fatal("Remove in a read-only directory succeeded")
+	}
+	if s.Has("mark://h/lost.md") || !s.Has("mark://h/kept.md") {
+		t.Errorf("memory diverged from disk: %+v", s.List())
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(after, before) {
+		t.Errorf("file changed by a failed write: %q, %v", after, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if name := e.Name(); name != "bookmarks.md" && name != "bookmarks.md.lock" {
+			t.Errorf("a failed write left %s behind", name)
+		}
+	}
+}
+
+// The empty-list hint is for the reader; an older store wrote it to the file.
+func TestEmptyHintIsNeverStored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	if err := os.WriteFile(path, []byte(header+"\n\n"+emptyHint+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s.Render(), emptyHint) {
+		t.Error("an empty list renders without its hint")
+	}
+	if err := s.Add("mark://h/a.md", "A"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || strings.Contains(string(got), emptyHint) {
+		t.Errorf("file = %q, %v; the hint was stored", got, err)
+	}
+}
+
+// Stores in several processes each read, change and rewrite the file: under
+// the lock none of them drops another's bookmark.
+func TestConcurrentStoresLoseNoBookmark(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	const writers = 16
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Go(func() {
+			s, err := Load(path)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := s.Add(fmt.Sprintf("mark://h/%d.md", i), "doc"); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	fresh, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(fresh.List()); got != writers {
+		t.Errorf("%d bookmarks survive, want %d", got, writers)
+	}
+}
+
+// Toggle decides on the file as it is now, not on this store's snapshot: a
+// bookmark another process added is removed, never added twice.
+func TestToggleDecidesOnTheFileAsItIsNow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	tui, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Add("mark://h/doc.md", "Doc"); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := tui.Toggle("mark://h/doc.md", "Doc"); err != nil || added {
+		t.Fatalf("Toggle over another process's bookmark = added %v, %v; want it removed", added, err)
+	}
+	if added, err := tui.Toggle("mark://h/doc.md", "Doc"); err != nil || !added {
+		t.Fatalf("Toggle with no bookmark = added %v, %v; want it added", added, err)
+	}
+	fresh, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(fresh.List()); got != 1 {
+		t.Errorf("%d bookmarks after remove then add, want 1", got)
+	}
+}
+
+// Blank lines a person left at the end of the file survive a rewrite.
+func TestRewriteKeepsTrailingBlankLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	if err := os.WriteFile(path, []byte("# Bookmarks\n\n- [A](mark://h/a.md)\n\n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove("mark://h/a.md"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "# Bookmarks\n\n\n\n" {
+		t.Errorf("file = %q, %v; want the two trailing blank lines kept", got, err)
+	}
+}
+
+// A new bookmark joins the list, above notes written below it.
+func TestAddGoesAfterTheLastBookmarkNotTheFooter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	if err := os.WriteFile(path, []byte("# Bookmarks\n\n- [A](mark://h/a.md)\n\n## Notes\n\nMine.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://h/b.md", "B"); err != nil {
+		t.Fatal(err)
+	}
+	want := "# Bookmarks\n\n- [A](mark://h/a.md)\n- [B](mark://h/b.md) — " + s.List()[1].Date + "\n\n## Notes\n\nMine.\n"
+	if got, err := os.ReadFile(path); err != nil || string(got) != want {
+		t.Errorf("file =\n%s\nwant\n%s (%v)", got, want, err)
+	}
+}
+
+// A rewrite keeps the file's mode: a published bookmark file has readers.
+func TestRewriteKeepsTheFileMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bookmarks.md")
+	if err := os.WriteFile(path, []byte("# Bookmarks\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil { // past the umask
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://h/a.md", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o644 {
+		t.Errorf("mode after a rewrite = %v, %v; want 0644", info.Mode().Perm(), err)
+	}
+	// A new file is private.
+	fresh := filepath.Join(t.TempDir(), "bookmarks.md")
+	if s, err = Load(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://h/a.md", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(fresh); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("mode of a new file = %v, %v; want 0600", info.Mode().Perm(), err)
+	}
+}
+
+// A symlinked bookmark file stays a link: the rewrite lands in its target,
+// where the other readers of that file look.
+func TestRewriteFollowsASymlink(t *testing.T) {
+	dir := t.TempDir()
+	published, link := filepath.Join(dir, "site", "bookmarks.md"), filepath.Join(dir, "bookmarks.md")
+	if err := os.Mkdir(filepath.Dir(published), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(published, []byte("# Bookmarks\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(published, link); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("mark://h/a.md", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link was replaced by a file: %v, %v", info.Mode(), err)
+	}
+	if got, err := os.ReadFile(published); err != nil || !strings.Contains(string(got), "mark://h/a.md") {
+		t.Errorf("target = %q, %v; want the bookmark written there", got, err)
 	}
 }

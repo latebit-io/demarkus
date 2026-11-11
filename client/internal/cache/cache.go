@@ -61,6 +61,9 @@ var renameFile = os.Rename
 // Put replaces body then metadata, each by rename. A crash in between leaves
 // the old etag over the new body, which revalidates; the reverse never would.
 func (c *Cache) Put(host, path, verb string, resp protocol.Response) error {
+	if err := protocol.ValidateRequestPath(path); err != nil {
+		return fmt.Errorf("cache %s: %w", verb, err)
+	}
 	filePath := c.filePath(host, path, verb)
 
 	if err := c.ensureDir(filepath.Dir(filePath)); err != nil {
@@ -134,6 +137,10 @@ func removeFile(name string) error {
 // If cache files are inconsistent (one half of an entry missing), it removes
 // the orphan and returns nil; a failed removal is the error, still a miss.
 func (c *Cache) Get(host, path, verb string) (*Entry, error) {
+	// A path the wire refuses names no entry, and unrooted could leave Dir.
+	if err := protocol.ValidateRequestPath(path); err != nil {
+		return nil, fmt.Errorf("cache %s: %w", verb, err)
+	}
 	filePath := c.filePath(host, path, verb)
 	metaPath := filePath + ".meta"
 

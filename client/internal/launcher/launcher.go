@@ -93,10 +93,6 @@ func handlerFor(goos, rawURL string) (name string, args []string) {
 		return "open", []string{rawURL}
 	case "linux", "freebsd", "openbsd", "netbsd":
 		return "xdg-open", []string{rawURL}
-	case "windows":
-		// rundll32 invokes the URL handler directly. The URL is still an
-		// argv arg — Windows performs its own quoting, but no shell is used.
-		return "rundll32", []string{"url.dll,FileProtocolHandler", rawURL}
 	default:
 		return "", nil
 	}
@@ -106,3 +102,50 @@ func handlerFor(goos, rawURL string) (name string, args []string) {
 // file, javascript, and data are deliberately excluded — they have a long
 // history of handler-level RCEs and filesystem smuggling.
 var DefaultAllowlist = []string{"http", "https", "gemini", "mailto"}
+
+// SchemeOf returns the scheme of raw in lowercase, or "" when it has none:
+// ALPHA *( ALPHA / DIGIT / + / - / . ) before a colon (RFC 3986 §3.1). Both
+// authority form (scheme://...) and opaque form (mailto:user@...) count.
+func SchemeOf(raw string) string {
+	for i, r := range raw {
+		switch {
+		case i == 0:
+			if !isAlpha(r) {
+				return ""
+			}
+		case r == ':':
+			return strings.ToLower(raw[:i])
+		case !isSchemeRune(r):
+			return ""
+		}
+	}
+	return ""
+}
+
+// ParseSchemes splits a comma-separated scheme list, trimming whitespace and
+// dropping empty entries; "" is nil, which disables launching. An invalid
+// entry fails the whole list: silently dropped, it would read as enabled.
+func ParseSchemes(csv string) ([]string, error) {
+	if csv == "" {
+		return nil, nil
+	}
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		s := strings.TrimSpace(p)
+		if s == "" {
+			continue
+		}
+		if SchemeOf(s+":") != strings.ToLower(s) {
+			return nil, fmt.Errorf("invalid URL scheme %q (schemes must match ALPHA *( ALPHA / DIGIT / \"+\" / \"-\" / \".\" ))", s)
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+func isAlpha(r rune) bool { return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') }
+
+func isSchemeRune(r rune) bool {
+	return isAlpha(r) || (r >= '0' && r <= '9') || r == '+' || r == '-' || r == '.'
+}

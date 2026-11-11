@@ -30,6 +30,9 @@ type exporter struct {
 	// answered by pruning its older versions.
 	withdrawals    uint64
 	loaded, pruned uint64
+	// A prune that did not take is tried again after pruneWait, doubling.
+	pruneRetryAt time.Time
+	pruneWait    time.Duration
 
 	worlds map[string]*exportedWorld // absent until the world has a checkpoint
 	// owed is a render the live document may lack; liveVersion is that
@@ -197,15 +200,26 @@ func (e *exporter) write(ctx context.Context) error {
 		}
 	}
 	withdrawals := e.loaded
+	pruning := withdrawals != e.pruned && !time.Now().Before(e.pruneRetryAt)
 	content := generation.BodyHash(graphstore.ExportContent(body))
-	if content == e.liveContent && withdrawals == e.pruned {
-		e.owed = false
+	if content == e.liveContent && !pruning {
+		e.owed = withdrawals != e.pruned // a prune waiting out its backoff is still owed
 		return nil
 	}
-	if withdrawals != e.pruned {
-		ctx = pruning(ctx)
+	var version int
+	var err error
+	if pruning {
+		version, err = e.publishPruned(ctx, graphstore.GraphExportPath, body, e.liveVersion)
+	} else {
+		_, version, err = e.Hub.PublishDocument(ctx, graphstore.GraphExportPath, body, e.liveVersion)
 	}
-	_, version, err := e.Hub.PublishDocument(ctx, graphstore.GraphExportPath, body, e.liveVersion)
+	// The render landed but a version holding withdrawn rows did not go: it
+	// stays owed, and is pruned again after a growing pause.
+	if errors.Is(err, errNotPruned) {
+		e.liveVersion, e.liveContent = version, content
+		e.pruneWait = min(max(e.pruneWait*2, e.Interval), maxPruneRetry)
+		e.pruneRetryAt = time.Now().Add(e.pruneWait)
+	}
 	if errors.Is(err, generation.ErrConflict) {
 		// Another term wrote it: render again from the hub's checkpoints,
 		// never from the ones this term last saw.
@@ -215,7 +229,11 @@ func (e *exporter) write(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("export: %w", err)
 	}
-	e.liveVersion, e.liveContent, e.owed, e.pruned = version, content, false, withdrawals
+	e.liveVersion, e.liveContent = version, content
+	if pruning {
+		e.pruned, e.pruneWait = withdrawals, 0
+	}
+	e.owed = withdrawals != e.pruned
 	return nil
 }
 

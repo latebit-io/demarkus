@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/client/links"
 	"github.com/latebit-io/demarkus/client/memory/audit"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/guidance"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
@@ -34,16 +35,20 @@ func cmdDoctor(args []string) {
 		fail("doctor: usage: doctor [--scope /<slug>/] [--store ID] [--dir DIR] [--deep] [--json]")
 	}
 	die := func(err error) { fail("doctor: " + err.Error()) }
-	id := *storeID
+	// bound is the store the session's slash commands write to; "" when the
+	// binding cannot be read, which only matters under --store.
+	id, bound := *storeID, ""
+	r, err := guidance.ResolveProject(*dir)
+	switch {
+	case err == nil && r.State != project.StateStale:
+		bound = r.Store
+	case id == "" && err != nil:
+		die(err)
+	case id == "":
+		die(errors.New("bound store '" + r.Store + "' is " + guidance.Hint(r)))
+	}
 	if id == "" {
-		r, err := project.Resolve(*dir)
-		if err != nil {
-			die(err)
-		}
-		if r.State == project.StateStale {
-			die(errors.New("bound store '" + r.Store + "' is " + r.Hint()))
-		}
-		id = r.Store
+		id = bound
 	}
 	client, store, err := resolveStore(id)
 	if err != nil {
@@ -58,6 +63,12 @@ func cmdDoctor(args []string) {
 		addTokenDrift(report)
 	}
 	out := report.Markdown()
+	if id == bound {
+		report.Commands = soulCommands()
+		out = report.Markdown()
+	} else {
+		out = otherStoreNote(id, bound) + "\n\n" + out
+	}
 	if *asJSON {
 		if out, err = report.JSON(); err != nil {
 			die(err)
@@ -66,6 +77,28 @@ func cmdDoctor(args []string) {
 	if _, err := fmt.Fprintln(os.Stdout, out); err != nil {
 		die(fmt.Errorf("write output: %w", err))
 	}
+}
+
+// soulCommands words a fix as the memory plugin's slash command, which is
+// what a person reading this report can run.
+func soulCommands() audit.Commands {
+	return audit.Commands{
+		Curate:  func(p string) string { return "/soul-curate " + p },
+		Archive: func(p string) string { return "/soul-archive " + p },
+		Promote: func(p string) string { return "/promote " + p },
+		Batch:   func(scope string) string { return "/soul-curate " + scope },
+	}
+}
+
+// otherStoreNote heads a report of a store the session is not bound to: the
+// slash commands write to the bound store, so its fixes name actions alone.
+func otherStoreNote(audited, bound string) string {
+	binding := "this session has no usable binding"
+	if bound != "" {
+		binding = "this session is bound to `" + bound + "`"
+	}
+	return "> Store `" + audited + "` was audited, and " + binding + ". The fixes below name actions, not commands: " +
+		"/soul-curate, /soul-archive and /promote write to the bound store. Rebind with /soul-default to run them here."
 }
 
 // addTokenDrift folds the local write-auth probe into the report: drift is a

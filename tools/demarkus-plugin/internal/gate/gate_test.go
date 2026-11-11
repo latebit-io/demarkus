@@ -37,27 +37,11 @@ func mustEval(t *testing.T, in *Input) Decision {
 	return d
 }
 
-func TestParseTool(t *testing.T) {
-	cases := []struct {
-		tool       string
-		wantServer string
-		wantVerb   string
-		wantParsed bool
-	}{
-		{"demarkus_memory_mark_publish", "demarkus_memory", "publish", true},
-		{"mcp__demarkus-memory__mark_append", "demarkus-memory", "append", true},
-		{"mark_fetch", "", "fetch", true},
-		{"knowledge_mark_publish", "knowledge", "publish", true},
-		{"read_file", "", "", false},
-	}
-	for _, c := range cases {
-		pt, ok := config.ParseTool(c.tool)
-		if ok != c.wantParsed {
-			t.Errorf("%s: parsed=%v, want %v", c.tool, ok, c.wantParsed)
-			continue
-		}
-		if ok && (pt.Server != c.wantServer || pt.Verb != c.wantVerb) {
-			t.Errorf("%s: got {%q,%q}, want {%q,%q}", c.tool, pt.Server, pt.Verb, c.wantServer, c.wantVerb)
+func TestKnowledgeStrictness(t *testing.T) {
+	for env, want := range map[string]Strictness{"": Warn, "block": Block, "invalid": Warn} {
+		t.Setenv("DEMARKUS_KNOWLEDGE_STRICTNESS", env)
+		if got := knowledgeStrictness(); got != want {
+			t.Errorf("DEMARKUS_KNOWLEDGE_STRICTNESS=%q: %q, want %q", env, got, want)
 		}
 	}
 }
@@ -269,6 +253,41 @@ func TestGovernanceCheckSkipsReportOnlyCalls(t *testing.T) {
 	for _, c := range cases {
 		if d := mustEval(t, &Input{Tool: c.tool, Input: c.args}); d.Decision != c.want {
 			t.Errorf("%s %v: got %q (%s), want %s", c.tool, c.args, d.Decision, d.Reason, c.want)
+		}
+	}
+}
+
+// Retention and the content scan hold every store write that sends one: a
+// promote apply publishes its body and metadata like a publish does.
+func TestPromoteApplyIsGatedLikeAPublish(t *testing.T) {
+	setupHome(t, map[string]string{"knowledge-systems": "knowledge\n"})
+	meta := map[string]any{"tags": "category:guide", "type": "Guide", "retention": "1"}
+	dsn := "# Local Postgres\n\n```sh\nexport DSN=postgres://postgres:postgres@localhost:55432/app\n```\n"
+	cases := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"apply with retention", map[string]any{"url": "/k.md", "phase": "apply", "body": "# K\n", "metadata": meta, "packet": "p"}, "ask"},
+		{"dry run with retention", map[string]any{"url": "/k.md", "phase": "dry_run", "body": "# K\n", "metadata": meta}, "allow"},
+		{"apply with a secret", map[string]any{"url": "/k.md", "phase": "apply", "body": dsn, "packet": "p"}, "block"},
+		{"dry run with a secret", map[string]any{"url": "/k.md", "phase": "dry_run", "body": dsn}, "allow"},
+		{"refresh report of a copy with a secret", map[string]any{"url": "/k.md", "phase": "refresh", "body": dsn, "target": "/k.md@v1"}, "allow"},
+	}
+	for _, c := range cases {
+		if d := mustEval(t, &Input{Tool: "knowledge_mark_promote", Input: c.args}); d.Decision != c.want {
+			t.Errorf("%s: got %q (%s), want %s", c.name, d.Decision, d.Reason, c.want)
+		}
+	}
+}
+
+// A server whose name holds "mark_" is gated like any other.
+func TestServerNamedWithMarkIsGated(t *testing.T) {
+	t.Setenv("DEMARKUS_MEMORY_STRICTNESS", "block")
+	setupHome(t, map[string]string{"souls": "bookmark\tmark://b.example\t0\t-\n"})
+	for _, tool := range []string{"mcp__bookmark__mark_publish", "bookmark_mark_publish"} {
+		if d := mustEval(t, &Input{Tool: tool, Input: map[string]any{"url": "/x.md"}}); d.Decision != "block" {
+			t.Errorf("%s tagless: got %q (%s), want block", tool, d.Decision, d.Reason)
 		}
 	}
 }

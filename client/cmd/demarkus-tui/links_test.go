@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -11,54 +12,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/latebit-io/demarkus/client/internal/bookmarks"
+	"github.com/latebit-io/demarkus/client/internal/termlinks"
 	"github.com/latebit-io/demarkus/client/links"
 )
-
-// osc8 wraps text in an OSC 8 hyperlink sequence, matching Glamour v2 output.
-func osc8(url, text string) string {
-	return "\x1b]8;;" + url + "\x07" + text + "\x1b]8;;\x07"
-}
-
-func TestParseSchemeList(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		want    []string
-		wantErr bool
-	}{
-		{"empty disables", "", nil, false},
-		{"default set", "http,https,gemini,mailto", []string{"http", "https", "gemini", "mailto"}, false},
-		{"trims whitespace", "  http ,  https  ", []string{"http", "https"}, false},
-		{"drops empty entries", "http,,https,", []string{"http", "https"}, false},
-		{"preserves scheme special chars", "coap+tcp,svn-ssh,soap.beep", []string{"coap+tcp", "svn-ssh", "soap.beep"}, false},
-		{"rejects space in entry", "http, foo bar, https", nil, true},
-		{"rejects digit-leading scheme", "1http", nil, true},
-		{"rejects special chars", "http@s", nil, true},
-		{"rejects slash", "http/s", nil, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseSchemeList(tt.input)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("want error for %q, got nil with result %v", tt.input, got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if len(got) != len(tt.want) {
-				t.Fatalf("got %v, want %v", got, tt.want)
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("got[%d] = %q, want %q", i, got[i], tt.want[i])
-				}
-			}
-		})
-	}
-}
 
 func TestIsExternalURL(t *testing.T) {
 	tests := []struct {
@@ -91,349 +47,8 @@ func TestIsExternalURL(t *testing.T) {
 	}
 }
 
-func TestInjectLinkMarkers(t *testing.T) {
-	tests := []struct {
-		name  string
-		body  string
-		infos []links.LinkInfo
-		check func(t *testing.T, result string)
-	}{
-		{
-			name:  "no links",
-			body:  "Just text.",
-			infos: nil,
-			check: func(t *testing.T, result string) {
-				if result != "Just text." {
-					t.Errorf("got %q, want %q", result, "Just text.")
-				}
-			},
-		},
-		{
-			name: "single link gets markers via OSC 8",
-			body: "see " + osc8("url.md", "hello") + " rest",
-			infos: []links.LinkInfo{
-				{Dest: "url.md", Text: "hello"},
-			},
-			check: func(t *testing.T, result string) {
-				if !strings.Contains(result, string(markerStart(0))) {
-					t.Error("missing start marker")
-				}
-				if !strings.Contains(result, string(markerEnd(0))) {
-					t.Error("missing end marker")
-				}
-			},
-		},
-		{
-			name: "hidden text in a label matches its revealed rendering",
-			body: "see " + osc8("url.md", "he<U+202E>llo") + " rest",
-			infos: []links.LinkInfo{
-				{Dest: "url.md", Text: "he\u202Ello"},
-			},
-			check: func(t *testing.T, result string) {
-				if !strings.Contains(result, string(markerStart(0))) {
-					t.Error("missing start marker")
-				}
-			},
-		},
-		{
-			name: "multiple links get unique markers",
-			body: osc8("a.md", "first") + " and " + osc8("b.md", "second") + " end",
-			infos: []links.LinkInfo{
-				{Dest: "a.md", Text: "first"},
-				{Dest: "b.md", Text: "second"},
-			},
-			check: func(t *testing.T, result string) {
-				if !strings.Contains(result, string(markerStart(0))) {
-					t.Error("missing start marker for link 0")
-				}
-				if !strings.Contains(result, string(markerEnd(0))) {
-					t.Error("missing end marker for link 0")
-				}
-				if !strings.Contains(result, string(markerStart(1))) {
-					t.Error("missing start marker for link 1")
-				}
-				if !strings.Contains(result, string(markerEnd(1))) {
-					t.Error("missing end marker for link 1")
-				}
-			},
-		},
-		{
-			name: "matches link not preceding plain text with same word",
-			body: "Hubs link to servers. " + osc8("hubs.md", "Hubs") + " list",
-			infos: []links.LinkInfo{
-				{Dest: "hubs.md", Text: "Hubs"},
-			},
-			check: func(t *testing.T, result string) {
-				// Marker should be inside the OSC 8 region, not on the plain "Hubs".
-				if !strings.Contains(result, string(markerStart(0))) {
-					t.Error("missing start marker")
-				}
-				// The plain "Hubs" at position 0 should NOT have a marker before it.
-				if strings.HasPrefix(result, string(markerStart(0))) {
-					t.Error("marker incorrectly placed on plain text instead of hyperlink")
-				}
-			},
-		},
-		{
-			name: "empty text skipped",
-			body: "some text",
-			infos: []links.LinkInfo{
-				{Dest: "url.md", Text: "", OpenBracket: -1, CloseBracket: -1},
-			},
-			check: func(t *testing.T, result string) {
-				if result != "some text" {
-					t.Errorf("got %q, want %q", result, "some text")
-				}
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := injectLinkMarkers(tt.body, tt.infos)
-			tt.check(t, result)
-		})
-	}
-}
-
-func TestFindVisibleText(t *testing.T) {
-	tests := []struct {
-		name      string
-		runes     string
-		text      string
-		from      int
-		wantStart int
-		wantEnd   int
-	}{
-		{
-			name:      "plain text",
-			runes:     "hello world",
-			text:      "world",
-			wantStart: 6,
-			wantEnd:   11,
-		},
-		{
-			name:      "with ANSI codes",
-			runes:     "pre \x1b[35mhello\x1b[0m post",
-			text:      "hello",
-			wantStart: 9,
-			wantEnd:   14,
-		},
-		{
-			name:      "not found",
-			runes:     "hello world",
-			text:      "missing",
-			wantStart: -1,
-			wantEnd:   -1,
-		},
-		{
-			name:      "from offset",
-			runes:     "hello hello",
-			text:      "hello",
-			from:      5,
-			wantStart: 6,
-			wantEnd:   11,
-		},
-		{
-			name:      "empty text",
-			runes:     "hello",
-			text:      "",
-			wantStart: -1,
-			wantEnd:   -1,
-		},
-		{
-			name:      "skips OSC 8 hyperlink with BEL terminator",
-			runes:     "pre \x1b]8;;http://example.com\x07hello\x1b]8;;\x07 post",
-			text:      "hello",
-			wantStart: 28,
-			wantEnd:   33,
-		},
-		{
-			name:      "skips OSC 8 hyperlink with ST terminator",
-			runes:     "pre \x1b]8;;http://example.com\x1b\\hello\x1b]8;;\x1b\\ post",
-			text:      "hello",
-			wantStart: 29,
-			wantEnd:   34,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			start, end := findVisibleText([]rune(tt.runes), []rune(tt.text), tt.from)
-			if start != tt.wantStart {
-				t.Errorf("start = %d, want %d", start, tt.wantStart)
-			}
-			if end != tt.wantEnd {
-				t.Errorf("end = %d, want %d", end, tt.wantEnd)
-			}
-		})
-	}
-}
-
-func TestProcessMarkers(t *testing.T) {
-	s := func(i int) string { return string(markerStart(i)) }
-	e := func(i int) string { return string(markerEnd(i)) }
-
-	tests := []struct {
-		name        string
-		rendered    string
-		selectedIdx int
-		hoverIdx    int
-		wantClean   string
-		wantRegions int
-	}{
-		{
-			name:        "no markers",
-			rendered:    "plain text",
-			selectedIdx: -1,
-			hoverIdx:    -1,
-			wantClean:   "plain text",
-			wantRegions: 0,
-		},
-		{
-			// Simulates glamour output: text + space + url + space + rest.
-			// Region extends to cover the URL portion.
-			name:        "single marker with url extends region",
-			rendered:    "see " + s(0) + "hello" + e(0) + " /path.md rest",
-			selectedIdx: -1,
-			hoverIdx:    -1,
-			wantClean:   "see hello /path.md rest",
-			wantRegions: 1,
-		},
-		{
-			name:        "selected marker gets reverse video including url",
-			rendered:    "see " + s(0) + "hello" + e(0) + " /path.md rest",
-			selectedIdx: 0,
-			hoverIdx:    -1,
-			wantClean:   "see \x1b[7mhello /path.md\x1b[27m rest",
-			wantRegions: 1,
-		},
-		{
-			name:        "hover highlights link",
-			rendered:    "see " + s(0) + "hello" + e(0) + " /path.md rest",
-			selectedIdx: -1,
-			hoverIdx:    0,
-			wantClean:   "see \x1b[7mhello /path.md\x1b[27m rest",
-			wantRegions: 1,
-		},
-		{
-			// Two links: "text0 url0 text1 url1"
-			name:        "two links hover second",
-			rendered:    s(0) + "a" + e(0) + " /a.md " + s(1) + "b" + e(1) + " /b.md end",
-			selectedIdx: -1,
-			hoverIdx:    1,
-			wantClean:   "a /a.md \x1b[7mb /b.md\x1b[27m end",
-			wantRegions: 2,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cleaned, regions := processMarkers(tt.rendered, tt.selectedIdx, tt.hoverIdx)
-			if cleaned != tt.wantClean {
-				t.Errorf("cleaned = %q, want %q", cleaned, tt.wantClean)
-			}
-			if len(regions) != tt.wantRegions {
-				t.Errorf("regions = %d, want %d", len(regions), tt.wantRegions)
-			}
-		})
-	}
-}
-
-func TestProcessMarkersRegionPositions(t *testing.T) {
-	s := func(i int) string { return string(markerStart(i)) }
-	e := func(i int) string { return string(markerEnd(i)) }
-
-	// "xx" + link text + space + url + space + more text.
-	// Region should cover from "hello" through "/p.md" (columns 2-12).
-	rendered := "xx" + s(0) + "hello" + e(0) + " /p.md end"
-	_, regions := processMarkers(rendered, -1, -1)
-
-	if len(regions) != 1 {
-		t.Fatalf("expected 1 region, got %d", len(regions))
-	}
-	r := regions[0]
-	if r.idx != 0 {
-		t.Errorf("idx = %d, want 0", r.idx)
-	}
-	if r.line != 0 {
-		t.Errorf("line = %d, want 0", r.line)
-	}
-	if r.startCol != 2 {
-		t.Errorf("startCol = %d, want 2", r.startCol)
-	}
-	// "hello" (5) + " " (1) + "/p.md" (5) = 11 visual cols from start 2 = endCol 13
-	if r.endCol != 13 {
-		t.Errorf("endCol = %d, want 13", r.endCol)
-	}
-}
-
-func TestProcessMarkersWideRunes(t *testing.T) {
-	s := func(i int) string { return string(markerStart(i)) }
-	e := func(i int) string { return string(markerEnd(i)) }
-
-	// "你好" is 4 cells: the region must start at cell 4, not rune 2. The
-	// URL's wide rune exercises extendingCol accounting past the end marker.
-	rendered := "你好" + s(0) + "link" + e(0) + " /文.md end"
-	_, regions := processMarkers(rendered, -1, -1)
-
-	if len(regions) != 1 {
-		t.Fatalf("expected 1 region, got %d", len(regions))
-	}
-	r := regions[0]
-	if r.startCol != 4 {
-		t.Errorf("startCol = %d, want 4 (cell width, not rune count)", r.startCol)
-	}
-	// "link" (4) + " " (1) + "/文.md" ("/"=1, 文=2, ".md"=3 → 6) = 11 cells from start 4 = endCol 15
-	if r.endCol != 15 {
-		t.Errorf("endCol = %d, want 15", r.endCol)
-	}
-}
-
-func TestProcessMarkersMultiLine(t *testing.T) {
-	s := func(i int) string { return string(markerStart(i)) }
-	e := func(i int) string { return string(markerEnd(i)) }
-
-	rendered := "line0\n" + "pre " + s(0) + "link" + e(0) + " /url rest"
-	_, regions := processMarkers(rendered, -1, -1)
-
-	if len(regions) != 1 {
-		t.Fatalf("expected 1 region, got %d", len(regions))
-	}
-	r := regions[0]
-	if r.line != 1 {
-		t.Errorf("line = %d, want 1", r.line)
-	}
-	if r.startCol != 4 {
-		t.Errorf("startCol = %d, want 4", r.startCol)
-	}
-}
-
-func TestProcessMarkersAnsiSkipped(t *testing.T) {
-	s := func(i int) string { return string(markerStart(i)) }
-	e := func(i int) string { return string(markerEnd(i)) }
-
-	// ANSI codes should not affect visual column counting.
-	rendered := "\x1b[1m" + s(0) + "hi" + e(0) + " /u.md\x1b[0m rest"
-	_, regions := processMarkers(rendered, -1, -1)
-
-	if len(regions) != 1 {
-		t.Fatalf("expected 1 region, got %d", len(regions))
-	}
-	r := regions[0]
-	if r.startCol != 0 {
-		t.Errorf("startCol = %d, want 0", r.startCol)
-	}
-	// hi=2 + space=1 + /u.md=5 → endCol 8
-	if r.endCol != 8 {
-		t.Errorf("endCol = %d, want 8", r.endCol)
-	}
-}
-
-// TestHandleBookmarkViewResetsLinkState regression-tests gh#81. Opening the
-// bookmarks view must replace any stale link state carried over from the
-// previously-viewed document, so Tab highlights a bookmark entry rather than
-// re-rendering the prior page's marked content.
+// gh#81: opening the bookmarks view replaces the previous document's link
+// state, so Tab highlights a bookmark, not the prior page's content.
 func TestHandleBookmarkViewResetsLinkState(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bookmarks.md")
@@ -446,13 +61,13 @@ func TestHandleBookmarkViewResetsLinkState(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := model{
-		bookmarkStore:  store,
-		links:          []string{"mark://host/stale.md"},
-		linkInfos:      []links.LinkInfo{{Dest: "stale.md", Text: "stale"}},
-		markedRendered: "stale-marked",
-		linkRegions:    []linkRegion{{idx: 0}},
-		linkIdx:        0,
-		hoverIdx:       0,
+		bookmarkStore: store,
+		links:         []string{"mark://host/stale.md"},
+		linkInfos:     []links.LinkInfo{{Dest: "stale.md", Text: "stale"}},
+		rendered:      "stale-rendered",
+		linkSegs:      []termlinks.Segment{{Index: 0, Start: 0, End: 5}},
+		linkIdx:       0,
+		hoverIdx:      0,
 	}
 	out, _ := m.handleBookmarkView()
 	got := out.(model)
@@ -474,12 +89,18 @@ func TestHandleBookmarkViewResetsLinkState(t *testing.T) {
 	if got.hoverIdx != -1 {
 		t.Errorf("hoverIdx = %d, want -1", got.hoverIdx)
 	}
-	// ready is false, so no render path runs — stale markedRendered must still be cleared.
-	if got.markedRendered != "" {
-		t.Errorf("markedRendered = %q, want empty", got.markedRendered)
+	// The list has no URL: it covers the history page, never replaces it.
+	if got.currentURL != "" || got.pendingBody == "" {
+		t.Errorf("currentURL = %q, pendingBody = %q; want the list shown over the history", got.currentURL, got.pendingBody)
 	}
-	if got.linkRegions != nil {
-		t.Errorf("linkRegions = %v, want nil", got.linkRegions)
+
+	// Rendered, the view owns its own link state: nothing of the stale page is left.
+	m.ready, m.width, m.styleName = true, 80, "dark"
+	m.viewport = viewport.New(viewport.WithWidth(80), viewport.WithHeight(10))
+	out, _ = m.handleBookmarkView()
+	got = out.(model)
+	if got.rendered == "" || strings.Contains(got.rendered, "stale") || len(got.linkSegs) != 2 {
+		t.Errorf("rendered = %q, segments = %+v; want the two bookmarks' own", got.rendered, got.linkSegs)
 	}
 }
 
@@ -493,12 +114,12 @@ func TestHandleTabNavigationResumesFromScrollPosition(t *testing.T) {
 	vp.SetYOffset(30) // window now covers lines 30–39
 
 	linkURLs := []string{"a", "b", "c", "d", "e"}
-	regions := []linkRegion{
-		{idx: 0, line: 1, startCol: 0, endCol: 1},
-		{idx: 1, line: 5, startCol: 0, endCol: 1},
-		{idx: 2, line: 32, startCol: 0, endCol: 1}, // visible
-		{idx: 3, line: 34, startCol: 0, endCol: 1}, // visible
-		{idx: 4, line: 50, startCol: 0, endCol: 1},
+	regions := []termlinks.Region{
+		{Index: 0, Line: 1, StartCol: 0, EndCol: 1},
+		{Index: 1, Line: 5, StartCol: 0, EndCol: 1},
+		{Index: 2, Line: 32, StartCol: 0, EndCol: 1}, // visible
+		{Index: 3, Line: 34, StartCol: 0, EndCol: 1}, // visible
+		{Index: 4, Line: 50, StartCol: 0, EndCol: 1},
 	}
 
 	tests := []struct {
@@ -514,13 +135,19 @@ func TestHandleTabNavigationResumesFromScrollPosition(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Lines of plain text, each region's first cell lit on a repaint.
+			segs := make([]termlinks.Segment, len(regions))
+			rendered := strings.Repeat("x\n", 60)
+			for i, r := range regions {
+				segs[i] = termlinks.Segment{Region: r, Start: 2 * r.Line, End: 2*r.Line + 1}
+			}
 			m := model{
-				viewport:       vp,
-				links:          linkURLs,
-				linkRegions:    regions,
-				linkIdx:        tt.startIdx,
-				hoverIdx:       -1,
-				markedRendered: "sentinel", // non-empty so Tab enters the re-highlight branch
+				viewport: vp,
+				links:    linkURLs,
+				linkSegs: segs,
+				linkIdx:  tt.startIdx,
+				hoverIdx: -1,
+				rendered: rendered,
 			}
 			if got := m.firstVisibleLinkIdx(); got != tt.wantFirst {
 				t.Errorf("firstVisibleLinkIdx() = %d, want %d", got, tt.wantFirst)
@@ -560,10 +187,10 @@ func TestHandleWindowSizeRewrapsMarkdown(t *testing.T) {
 
 	out, _ := m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 24})
 	got := out.(model)
-	if got.markedRendered == "" {
-		t.Fatal("markedRendered is empty after resize; expected re-render")
+	if got.rendered == "" {
+		t.Fatal("rendered is empty after resize; expected re-render")
 	}
-	narrowLines := strings.Count(got.markedRendered, "\n")
+	narrowLines := strings.Count(got.rendered, "\n")
 	if narrowLines <= wideLines {
 		t.Errorf("narrow-width render has %d lines, wide-width had %d — expected narrow > wide due to rewrap",
 			narrowLines, wideLines)
@@ -592,8 +219,8 @@ func TestHandleWindowSizeStaysInGraphModeWhileCrawling(t *testing.T) {
 	}
 	out, _ := m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 24})
 	got := out.(model)
-	if got.markedRendered != "" {
-		t.Errorf("markedRendered = %q, want empty (graph mode should not touch it)", got.markedRendered)
+	if got.rendered != "" {
+		t.Errorf("rendered = %q, want empty (graph mode should not touch it)", got.rendered)
 	}
 	view := got.viewport.View()
 	if !strings.Contains(view, "Crawling") {
@@ -604,133 +231,59 @@ func TestHandleWindowSizeStaysInGraphModeWhileCrawling(t *testing.T) {
 	}
 }
 
-// TestHandleWindowSizePersistsRewrapToHistory verifies that a resize updates
-// the active history snapshot. Without this, restoreHistory (called by help
-// dismiss, back, and forward) would restore the pre-resize wrap.
-func TestHandleWindowSizePersistsRewrapToHistory(t *testing.T) {
-	vp := viewport.New(viewport.WithWidth(100), viewport.WithHeight(20))
-	body := "# Title\n\n" + strings.Repeat("word ", 200) + "\n"
-	m := model{
-		viewport:  vp,
-		ready:     true,
-		width:     100,
-		height:    24,
-		styleName: "dark",
-		rawBody:   body,
-		linkInfos: links.ExtractWithPositions(body),
-		linkIdx:   -1,
-		hoverIdx:  -1,
-		status:    "ok",
-		history: []historyEntry{{
-			url:            "mark://host/a.md",
-			rendered:       "OLD-WIDTH-RENDER",
-			markedRendered: "OLD-WIDTH-MARKED",
-			rawBody:        body,
-		}},
-		histIdx: 0,
+// History holds the body alone and renders it on restore, so a page comes
+// back wrapped for the terminal as it is now: a resize while help, the graph
+// or the bookmarks covered the page needs no refresh of the snapshot.
+func TestRestoreHistoryRendersAtTheCurrentWidth(t *testing.T) {
+	docBody := "# Doc\n\n" + strings.Repeat("word ", 200) + "\n\n[link](a.md)\n"
+	shown := func(width int, showHelp bool) model {
+		m := model{
+			viewport:   viewport.New(viewport.WithWidth(100), viewport.WithHeight(20)),
+			addressBar: textinput.New(),
+			ready:      true,
+			width:      100,
+			height:     24,
+			styleName:  "dark",
+			showHelp:   showHelp,
+			linkIdx:    -1,
+			hoverIdx:   -1,
+			history:    []historyEntry{{url: "mark://host/doc.md", rawBody: docBody, status: "ok"}},
+		}
+		out, _ := m.handleWindowSize(tea.WindowSizeMsg{Width: width, Height: 24})
+		m = out.(model)
+		m.restoreHistory()
+		return m
 	}
-	out, _ := m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 24})
-	got := out.(model)
-	if got.history[0].rendered == "OLD-WIDTH-RENDER" {
-		t.Error("history[0].rendered was not refreshed on resize")
+	wide, narrow := shown(100, true), shown(40, true)
+	if wide.rendered == "" || strings.Count(narrow.rendered, "\n") <= strings.Count(wide.rendered, "\n") {
+		t.Errorf("restored at width 40: %d lines, at 100: %d; want the narrow restore rewrapped",
+			strings.Count(narrow.rendered, "\n"), strings.Count(wide.rendered, "\n"))
 	}
-	if got.history[0].markedRendered == "OLD-WIDTH-MARKED" {
-		t.Error("history[0].markedRendered was not refreshed on resize")
-	}
-	if got.history[0].rendered == "" || got.history[0].markedRendered == "" {
-		t.Errorf("history fields unexpectedly empty after resize: rendered=%q markedRendered=%q",
-			got.history[0].rendered, got.history[0].markedRendered)
+	if narrow.currentURL != "mark://host/doc.md" || len(narrow.links) != 1 || len(narrow.linkSegs) == 0 {
+		t.Errorf("restored links = %v, regions = %+v; want the document's link located", narrow.links, narrow.linkSegs)
 	}
 }
 
-// TestHandleWindowSizeRefreshesHistoryFromEntryBody verifies that a resize
-// rewraps the history snapshot from the entry's own rawBody — not whatever
-// the model's current rawBody happens to be. Without this, resizing while
-// viewing bookmarks (or graph, or help) would either leave history at the
-// pre-resize wrap (so esc/back snaps back) or, worse, write the bookmark
-// body into the document's history slot. The right invariant: history is
-// refreshed from entry.rawBody, independent of display mode.
-func TestHandleWindowSizeRefreshesHistoryFromEntryBody(t *testing.T) {
-	vp := viewport.New(viewport.WithWidth(100), viewport.WithHeight(20))
-	bookmarkBody := "# Bookmarks\n\n- [A](mark://host/a.md) — 2026-01-01\n"
-	// Long paragraph in the entry so we can detect rewrapping by line count.
-	docBody := "# Doc\n\n" + strings.Repeat("word ", 200) + "\n"
-	m := model{
-		viewport:  vp,
-		ready:     true,
-		width:     100,
-		height:    24,
-		styleName: "dark",
-		rawBody:   bookmarkBody, // displayed content is bookmarks
-		linkInfos: links.ExtractWithPositions(bookmarkBody),
-		linkIdx:   -1,
-		hoverIdx:  -1,
-		status:    "bookmarks",
-		history: []historyEntry{{
-			url:            "mark://host/doc.md",
-			rendered:       "STALE-RENDER",
-			markedRendered: "STALE-MARKED",
-			rawBody:        docBody,
-			linkInfos:      links.ExtractWithPositions(docBody),
-		}},
-		histIdx: 0,
+// Dropped history entries are cleared, not just sliced away: a reslice keeps
+// their bodies reachable in the backing array.
+func TestPushHistoryClearsWhatItDrops(t *testing.T) {
+	var history []historyEntry
+	idx := -1
+	for i := range maxHistory + 5 {
+		history, idx = pushHistory(history, idx, historyEntry{url: "u", rawBody: strings.Repeat("b", 8), status: strconv.Itoa(i)})
 	}
-	out, _ := m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 24})
-	got := out.(model)
-
-	// Stale entries must be replaced.
-	if got.history[0].rendered == "STALE-RENDER" {
-		t.Error("history[0].rendered was not refreshed on resize")
+	if len(history) != maxHistory || idx != maxHistory-1 || history[0].status != "5" {
+		t.Fatalf("len = %d idx = %d oldest = %q; want the newest %d", len(history), idx, history[0].status, maxHistory)
 	}
-	if got.history[0].markedRendered == "STALE-MARKED" {
-		t.Error("history[0].markedRendered was not refreshed on resize")
+	// Going back three pages and loading a new one drops the forward entries.
+	history, idx = pushHistory(history, idx-3, historyEntry{url: "new", rawBody: "n"})
+	if len(history) != maxHistory-2 || history[idx].url != "new" {
+		t.Fatalf("len = %d, newest = %q", len(history), history[idx].url)
 	}
-	// The refresh must come from entry.rawBody (docBody), not m.rawBody (bookmarkBody).
-	if strings.Contains(got.history[0].rendered, "Bookmarks") ||
-		strings.Contains(got.history[0].markedRendered, "Bookmarks") {
-		t.Error("history refresh leaked bookmark content; should be sourced from entry.rawBody")
-	}
-	// Sanity: the refresh should contain markers of the doc body.
-	if !strings.Contains(got.history[0].rendered, "Doc") {
-		t.Errorf("history[0].rendered missing doc title; got:\n%s", got.history[0].rendered)
-	}
-}
-
-// TestHandleWindowSizeRefreshesHistoryWhileHelpVisible simulates the exact
-// scenario: open doc → press `?` → resize. The viewport keeps showing help
-// (static), but history must still be rewrapped so dismissing help returns
-// the document at the new width, not the pre-resize wrap.
-func TestHandleWindowSizeRefreshesHistoryWhileHelpVisible(t *testing.T) {
-	vp := viewport.New(viewport.WithWidth(100), viewport.WithHeight(20))
-	docBody := "# Doc\n\n" + strings.Repeat("word ", 200) + "\n"
-	m := model{
-		viewport:  vp,
-		ready:     true,
-		width:     100,
-		height:    24,
-		styleName: "dark",
-		showHelp:  true,
-		rawBody:   docBody,
-		linkInfos: links.ExtractWithPositions(docBody),
-		linkIdx:   -1,
-		hoverIdx:  -1,
-		status:    "ok",
-		history: []historyEntry{{
-			url:            "mark://host/doc.md",
-			rendered:       "WIDE-WIDTH-RENDER",
-			markedRendered: "WIDE-WIDTH-MARKED",
-			rawBody:        docBody,
-			linkInfos:      links.ExtractWithPositions(docBody),
-		}},
-		histIdx: 0,
-	}
-	out, _ := m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 24})
-	got := out.(model)
-	if got.history[0].rendered == "WIDE-WIDTH-RENDER" {
-		t.Error("history not refreshed while help was showing; dismissing help would snap back to pre-resize wrap")
-	}
-	if got.history[0].markedRendered == "WIDE-WIDTH-MARKED" {
-		t.Error("history markedRendered not refreshed while help was showing")
+	for i, e := range history[:cap(history)][len(history):] {
+		if e.rawBody != "" || e.url != "" {
+			t.Fatalf("dropped entry %d still holds its page: %+v", i, e)
+		}
 	}
 }
 
@@ -744,11 +297,11 @@ func TestHandleMouseWheelClearsStaleHover(t *testing.T) {
 	vp.SetContent(strings.Repeat("line\n", 50))
 
 	m := model{
-		viewport:       vp,
-		ready:          true,
-		markedRendered: "some marked content",
-		linkIdx:        -1,
-		hoverIdx:       3,
+		viewport: vp,
+		ready:    true,
+		rendered: "some rendered content",
+		linkIdx:  -1,
+		hoverIdx: 3,
 	}
 	out, _ := m.handleMouseWheel(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
 	got := out.(model)
@@ -757,11 +310,9 @@ func TestHandleMouseWheelClearsStaleHover(t *testing.T) {
 	}
 }
 
-// TestHandleMouseWheelDoesNotRehighlightOutsideDocumentView guards against
-// processMarkers replaying a stale m.markedRendered over unrelated content.
-// handleGraphToggle leaves markedRendered/hoverIdx intact when leaving the
-// document, so a wheel scroll in graph/help mode must not run the rehighlight
-// branch or the viewport gets overwritten with the previous document body.
+// Leaving the document keeps rendered and hoverIdx, so a wheel scroll in
+// graph or help mode must not rehighlight: that would paint the previous
+// document over the view.
 func TestHandleMouseWheelDoesNotRehighlightOutsideDocumentView(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -771,7 +322,6 @@ func TestHandleMouseWheelDoesNotRehighlightOutsideDocumentView(t *testing.T) {
 	}{
 		{"graph view", viewGraph, false, "ok"},
 		{"help view", viewDocument, true, "ok"},
-		{"bookmarks view", viewDocument, false, "bookmarks"},
 	}
 	const graphContent = "GRAPH-OR-HELP-CONTENT\n"
 	for _, tt := range tests {
@@ -785,17 +335,17 @@ func TestHandleMouseWheelDoesNotRehighlightOutsideDocumentView(t *testing.T) {
 				showHelp: tt.showHelp,
 				status:   tt.status,
 				// Stale state left over from the previous document view.
-				markedRendered: "PREVIOUS-DOCUMENT-MARKED",
-				linkIdx:        -1,
-				hoverIdx:       3,
+				rendered: "PREVIOUS-DOCUMENT-RENDERED",
+				linkIdx:  -1,
+				hoverIdx: 3,
 			}
 			out, _ := m.handleMouseWheel(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
 			got := out.(model)
 			if got.hoverIdx != 3 {
 				t.Errorf("hoverIdx = %d, want 3 (preserved outside document view)", got.hoverIdx)
 			}
-			if strings.Contains(got.viewport.View(), "PREVIOUS-DOCUMENT-MARKED") {
-				t.Errorf("wheel scroll leaked stale markedRendered into %s viewport", tt.name)
+			if strings.Contains(got.viewport.View(), "PREVIOUS-DOCUMENT-RENDERED") {
+				t.Errorf("wheel scroll leaked the stale document into %s viewport", tt.name)
 			}
 		})
 	}
@@ -810,11 +360,11 @@ func TestHandleMouseWheelPreservesHoverWhenNoScroll(t *testing.T) {
 	vp.SetContent(strings.Repeat("line\n", 3))
 
 	m := model{
-		viewport:       vp,
-		ready:          true,
-		markedRendered: "some marked content",
-		linkIdx:        -1,
-		hoverIdx:       3,
+		viewport: vp,
+		ready:    true,
+		rendered: "some rendered content",
+		linkIdx:  -1,
+		hoverIdx: 3,
 	}
 	out, _ := m.handleMouseWheel(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
 	got := out.(model)
@@ -828,24 +378,24 @@ func TestHandleMouseWheelPreservesHoverWhenNoScroll(t *testing.T) {
 func TestClickDuringLoadDoesNotPanic(t *testing.T) {
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(5))
 	m := model{
-		viewport:       vp,
-		ready:          true,
-		viewMode:       viewDocument,
-		links:          []string{"mark://example.com/next.md"},
-		linkRegions:    []linkRegion{{idx: 0, line: 0, startCol: 0, endCol: 10}},
-		markedRendered: "marked",
-		addressBar:     textinput.New(),
+		viewport:   vp,
+		ready:      true,
+		viewMode:   viewDocument,
+		links:      []string{"mark://example.com/next.md"},
+		linkSegs:   []termlinks.Segment{{Index: 0, Line: 0, StartCol: 0, EndCol: 10}},
+		rendered:   "rendered",
+		addressBar: textinput.New(),
 	}
 	click := tea.MouseClickMsg{Button: tea.MouseLeft, X: 1, Y: 2}
 
 	out, _ := m.handleMouseClick(click)
 	loading := out.(model)
-	if len(loading.linkRegions) != 0 || loading.markedRendered != "" {
-		t.Fatalf("followLink kept stale regions: %d regions, marked %q", len(loading.linkRegions), loading.markedRendered)
+	if len(loading.linkSegs) != 0 || loading.rendered != "" {
+		t.Fatalf("followLink kept stale regions: %d regions, rendered %q", len(loading.linkSegs), loading.rendered)
 	}
 
 	// Stale regions from any other path must still be ignored, not indexed.
-	loading.linkRegions = []linkRegion{{idx: 3, line: 0, startCol: 0, endCol: 10}}
+	loading.linkSegs = []termlinks.Segment{{Index: 3, Line: 0, StartCol: 0, EndCol: 10}}
 	if _, cmd := loading.handleMouseClick(click); cmd != nil {
 		t.Fatal("click on an out-of-range region must not follow a link")
 	}

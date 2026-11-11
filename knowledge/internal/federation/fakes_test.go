@@ -256,6 +256,9 @@ type fakeHub struct {
 	writes  []string        // every checkpoint path a new version was written at
 	exports int             // publishes of the export, landed or not
 	failing map[string]bool // writes that fail for now
+	stuck   bool            // prunes fail for now: the write lands, old versions stay
+	stuckAt map[string]bool // prunes of these paths fail for now
+	skips   bool            // prunes miss the oldest version, as a store that could not read it
 }
 
 func newFakeHub() *fakeHub {
@@ -271,6 +274,50 @@ func (h *fakeHub) live(docPath string) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.docs[docPath].Body
+}
+
+// version is docPath's current version, 0 when there is none.
+func (h *fakeHub) version(docPath string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.heads[docPath]
+}
+
+// setStuck makes prunes fail, or work again.
+func (h *fakeHub) setStuck(stuck bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.stuck = stuck
+}
+
+// setStuckAt makes the prunes of docPath fail, or work again.
+func (h *fakeHub) setStuckAt(docPath string, stuck bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.stuckAt == nil {
+		h.stuckAt = map[string]bool{}
+	}
+	h.stuckAt[docPath] = stuck
+}
+
+// setSkips makes prunes miss the oldest version, or not.
+func (h *fakeHub) setSkips(skips bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.skips = skips
+}
+
+// count is Config.CountVersions: the versions of docPath still readable.
+func (h *fakeHub) count(_ context.Context, docPath string) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	kept := 0
+	for version := 1; version <= h.heads[docPath]; version++ {
+		if h.docs[protocol.VersionPath(docPath, version)].Status != "" {
+			kept++
+		}
+	}
+	return kept, nil
 }
 
 // list is Config.ListHub: the live documents directly in dir.
@@ -308,7 +355,8 @@ func (h *fakeHub) publish(ctx context.Context, docPath, body string, expected in
 	if expected >= 0 && expected != head {
 		return protocol.Response{Status: protocol.StatusConflict}, nil
 	}
-	if head == 0 || h.docs[docPath].Body != body {
+	// A pruning write carries its own stamp, so it is never an unchanged one.
+	if head == 0 || h.docs[docPath].Body != body || prunes(ctx) {
 		head++
 		resp := fetchtest.Head(body, head, map[string]string{"content-hash": generation.BodyHash(body)}).Response
 		h.docs[docPath], h.docs[protocol.VersionPath(docPath, head)], h.heads[docPath] = resp, resp, head
@@ -317,8 +365,14 @@ func (h *fakeHub) publish(ctx context.Context, docPath, body string, expected in
 		}
 	}
 	// A pruning write keeps no older version, as retention 1 does.
-	if prunes(ctx) {
-		for version := 1; version < head; version++ {
+	if prunes(ctx) && !h.stuck && !h.stuckAt[docPath] {
+		oldest := 1
+		for ; oldest < head && h.docs[protocol.VersionPath(docPath, oldest)].Status == ""; oldest++ {
+		}
+		for version := oldest; version < head; version++ {
+			if h.skips && version == oldest {
+				continue
+			}
 			delete(h.docs, protocol.VersionPath(docPath, version))
 		}
 	}

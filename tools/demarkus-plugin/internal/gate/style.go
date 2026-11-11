@@ -7,12 +7,12 @@ import (
 	"fmt"
 
 	docgate "github.com/latebit-io/demarkus/client/memory/gate"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/toolname"
 )
 
 // styleDecision runs the shared style rules on a publish (appends are
 // fragments) at the configured strictness. Default warn; guide names the rules.
-func styleDecision(pt config.ParsedTool, args map[string]any, guide string) (*Decision, error) {
+func styleDecision(pt toolname.Parsed, args map[string]any, guide string) (*Decision, error) {
 	if pt.Verb != "publish" {
 		return nil, nil
 	}
@@ -25,7 +25,7 @@ func styleDecision(pt config.ParsedTool, args map[string]any, guide string) (*De
 	reason := fmt.Sprintf(
 		"demarkus publish to %s has style problems: %s DEMARKUS_STYLE_STRICTNESS adjusts this check (warn/ask/block).",
 		urlOr(args, "the document"), docgate.Findings(problems, guide))
-	s, err := config.StyleStrictness()
+	s, err := styleStrictness()
 	if err != nil {
 		return nil, err
 	}

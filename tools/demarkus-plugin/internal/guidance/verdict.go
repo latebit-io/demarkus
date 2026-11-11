@@ -8,7 +8,7 @@ import "github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 func Verdict(r project.Resolution, st ProjectStatus, localConfigured bool) string {
 	switch {
 	case r.State == project.StateStale:
-		return "stop: the bound store is " + r.Hint()
+		return "stop: the bound store is " + Hint(r)
 	case r.State == project.StateLocal && !localConfigured:
 		return "stop: no local store configured; run /soul-init"
 	case st.State == ProjectUnknown:
