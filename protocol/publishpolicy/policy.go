@@ -14,7 +14,7 @@ import (
 )
 
 // SeedAgent is the agent metadata value on a policy a knowledge server seeded
-// itself, so a provisioner can tell it from a curated policy and replace it.
+// itself, which tells it from a curated policy.
 const SeedAgent = "demarkus-knowledge-server"
 
 // DocumentPath is the conventional versioned policy document path.

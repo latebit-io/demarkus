@@ -8,6 +8,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
 )
 
 // The gateway's bindings of the shared tool bodies: a url names a world, and a
@@ -23,7 +24,7 @@ func TestToolBodiesBinding(t *testing.T) {
 		err       error
 		want      string
 	}{
-		{"unknown world", "mark://team-z/foo.md", &errWorldNotFound{worldName: "team-z"}, `broker: unknown world "team-z" (not in broker config)`},
+		{"unknown world", "mark://team-z/foo.md", &dispatch.WorldNotFoundError{World: "team-z"}, `broker: unknown world "team-z" (not in broker config)`},
 		{"refused identity", "mark://team-a/foo.md", core.ErrNotAuthorized, `not authorized for world "team-a"`},
 		{"unverified email", "mark://team-a/foo.md", core.ErrEmailUnverified, "identity email is not verified"},
 		{"transport", "mark://team-a/foo.md", errors.New("boom"), "versions failed: boom"},

@@ -4,10 +4,12 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/httpauth"
 	"github.com/latebit-io/demarkus/server/logthrottle"
 )
 
@@ -15,7 +17,7 @@ import (
 // the context for SubjectRateLimit; any failure is a plain 401 here.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw := core.BearerToken(r)
+		raw := httpauth.BearerToken(r)
 		if raw == "" {
 			http.Error(w, "Authorization: Bearer <id_token> required", http.StatusUnauthorized)
 			return
@@ -60,25 +62,46 @@ func (s *Server) ipRateLimit(next http.Handler) http.Handler {
 }
 
 // clientIP keys the IP limiter: the leftmost X-Forwarded-For entry when
-// trustForwardedFor is on, else the peer. Trusting the header behind no
-// proxy lets a client rotate synthetic IPs past the limiter.
+// trustForwardedFor is on and it is an address, else the peer. Trusting the
+// header behind no proxy lets a client rotate synthetic IPs past the limiter.
 func (s *Server) clientIP(r *http.Request) string {
 	if s.trustForwardedFor {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// Leftmost non-empty entry. Trim whitespace because
-			// proxies commonly emit "ip1, ip2, ip3" with spaces.
-			for part := range strings.SplitSeq(xff, ",") {
-				part = strings.TrimSpace(part)
-				if part != "" {
-					return part
-				}
+		// Leftmost non-empty entry; one that is no address never becomes a key.
+		for part := range strings.SplitSeq(r.Header.Get("X-Forwarded-For"), ",") {
+			if part = strings.TrimSpace(part); part == "" {
+				continue
 			}
+			if key, ok := addressKey(part); ok {
+				return key
+			}
+			break
 		}
 	}
 	// An unparsable RemoteAddr (tests) keys on the raw string.
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if key, ok := addressKey(host); ok {
+		return key
 	}
 	return host
+}
+
+// addressKey is the limiter key of an address: an IPv4 address itself, an
+// IPv6 address's /64, since one subscriber holds a whole /64 to rotate through.
+func addressKey(raw string) (string, bool) {
+	addr, err := netip.ParseAddr(raw)
+	if err != nil {
+		return "", false
+	}
+	addr = addr.Unmap().WithZone("")
+	if addr.Is4() {
+		return addr.String(), true
+	}
+	prefix, err := addr.Prefix(64)
+	if err != nil {
+		return "", false
+	}
+	return prefix.String(), true
 }

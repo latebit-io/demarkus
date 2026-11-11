@@ -11,7 +11,7 @@ import (
 func TestDeviceStoreAuthorize(t *testing.T) {
 	ctx := context.Background()
 	devices := newGrantFixture(t).devices()
-	deviceCode, userCode, expiresAt, err := devices.Authorize(ctx, "https://mcp.example.com/mcp")
+	deviceCode, userCode, expiresAt, err := devices.Authorize(ctx, deviceRequest{Resource: "https://mcp.example.com/mcp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func TestDeviceStoreAuthorize(t *testing.T) {
 	if expiresAt.IsZero() {
 		t.Error("no expiry")
 	}
-	other, _, _, err := devices.Authorize(ctx, "")
+	other, _, _, err := devices.Authorize(ctx, deviceRequest{})
 	if err != nil || other == deviceCode {
 		t.Fatalf("second grant: %q, %v; want a distinct code", other, err)
 	}
@@ -32,7 +32,7 @@ func TestDeviceLookupByUserCode(t *testing.T) {
 
 	t.Run("accepts canonical, hyphenated and spaced forms", func(t *testing.T) {
 		devices := newGrantFixture(t).devices()
-		deviceCode, userCode, _, err := devices.Authorize(ctx, "")
+		deviceCode, userCode, _, err := devices.Authorize(ctx, deviceRequest{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -48,7 +48,7 @@ func TestDeviceLookupByUserCode(t *testing.T) {
 	t.Run("misses unknown, expired and resolved grants", func(t *testing.T) {
 		f := newGrantFixture(t)
 		devices := f.devices()
-		deviceCode, userCode, _, err := devices.Authorize(ctx, "")
+		deviceCode, userCode, _, err := devices.Authorize(ctx, deviceRequest{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,7 +63,7 @@ func TestDeviceLookupByUserCode(t *testing.T) {
 		if _, ok, _ := devices.LookupByUserCode(ctx, userCode); ok {
 			t.Error("a completed grant resolved")
 		}
-		_, expiring, _, err := devices.Authorize(ctx, "")
+		_, expiring, _, err := devices.Authorize(ctx, deviceRequest{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,7 +79,7 @@ func TestDeviceBindAndDeny(t *testing.T) {
 
 	t.Run("resolve once; the second resolution is terminal", func(t *testing.T) {
 		devices := newGrantFixture(t).devices()
-		deviceCode, _, _, err := devices.Authorize(ctx, "")
+		deviceCode, _, _, err := devices.Authorize(ctx, deviceRequest{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +101,7 @@ func TestDeviceBindAndDeny(t *testing.T) {
 		if err := devices.Bind(ctx, "missing", aliceClaims()); !errors.Is(err, errDeviceCodeNotFound) {
 			t.Errorf("unknown: %v", err)
 		}
-		deviceCode, _, _, err := devices.Authorize(ctx, "")
+		deviceCode, _, _, err := devices.Authorize(ctx, deviceRequest{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +118,7 @@ func TestDevicePoll(t *testing.T) {
 	t.Run("pending, slow_down, then the claims once", func(t *testing.T) {
 		f := newGrantFixture(t)
 		devices := f.devices()
-		deviceCode, _, _, err := devices.Authorize(ctx, "https://mcp.example.com/mcp")
+		deviceCode, _, _, err := devices.Authorize(ctx, deviceRequest{Resource: "https://mcp.example.com/mcp"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -161,7 +161,7 @@ func TestDevicePoll(t *testing.T) {
 	t.Run("denied, expired and unknown", func(t *testing.T) {
 		f := newGrantFixture(t)
 		devices := f.devices()
-		denied, _, _, err := devices.Authorize(ctx, "")
+		denied, _, _, err := devices.Authorize(ctx, deviceRequest{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -174,7 +174,7 @@ func TestDevicePoll(t *testing.T) {
 		if out, _ := devices.Poll(ctx, "unknown"); out.Status != statusExpired {
 			t.Errorf("unknown: %+v", out)
 		}
-		expiring, _, _, err := devices.Authorize(ctx, "")
+		expiring, _, _, err := devices.Authorize(ctx, deviceRequest{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +190,7 @@ func TestDevicePoll(t *testing.T) {
 func TestDeviceGrantCrossesReplicas(t *testing.T) {
 	f := newGrantFixture(t)
 	ctx := context.Background()
-	deviceCode, userCode, _, err := f.devices().Authorize(ctx, "")
+	deviceCode, userCode, _, err := f.devices().Authorize(ctx, deviceRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

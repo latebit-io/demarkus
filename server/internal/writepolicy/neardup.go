@@ -51,7 +51,7 @@ type nearVerdict struct {
 }
 
 // nearCatalog is the state a judgment reads: the section index and the
-// world's template.
+// world's template. A view and a commit's state are both one.
 type nearCatalog interface {
 	backend.CatalogReader
 	documentGetter
@@ -72,7 +72,7 @@ func subjectOf(req backend.WriteRequest) nearSubject {
 // judgeNearDuplicate asks the index what the body repeats. An override
 // lands with its reason noted; a cold index (ErrBodyMatchUnavailable) is a
 // note and checked false; any other failure is the caller's to decide on.
-func (e *enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, subject nearSubject) (nearVerdict, error) {
+func (e *Enforcer) judgeNearDuplicate(ctx context.Context, state nearCatalog, subject nearSubject) (nearVerdict, error) {
 	own := storefmt.CanonicalPath(subject.path)
 	// Generated graph data is not knowledge a document could already hold.
 	if protocol.IsGeneratedGraphPath(own) {
@@ -144,7 +144,7 @@ func splitSource(ctx context.Context, reader documentGetter, own string, meta ma
 // beforeCommit reads one view before the commit, since the commit's state
 // may lend no catalog and a view opened inside it is the deadlock Read warns
 // about: the near-duplicate judgment when the check is on, then dependents.
-func (e *enforcer) beforeCommit(ctx context.Context, req backend.WriteRequest) (verdict nearVerdict, notes []string, err error) {
+func (e *Enforcer) beforeCommit(ctx context.Context, req backend.WriteRequest, sender backend.Sender) (verdict nearVerdict, notes []string, err error) {
 	near := e.options.Content.NearDuplicate != contentcheck.Off
 	view, err := e.OpenReadView(ctx)
 	if err != nil {
@@ -165,12 +165,12 @@ func (e *enforcer) beforeCommit(ctx context.Context, req backend.WriteRequest) (
 			return verdict, nil, err
 		}
 	}
-	return verdict, dependents(ctx, view, req.Path, req.Readable), nil
+	return verdict, dependents(ctx, view, req.Path, sender.Readable), nil
 }
 
 // settleNearDuplicate turns a judgment into the write's fate under the mode:
 // refused on hits in block mode, noted in warn mode.
-func (e *enforcer) settleNearDuplicate(verdict nearVerdict) ([]string, error) {
+func (e *Enforcer) settleNearDuplicate(verdict nearVerdict) ([]string, error) {
 	if len(verdict.hits) == 0 {
 		return verdict.notes, nil
 	}

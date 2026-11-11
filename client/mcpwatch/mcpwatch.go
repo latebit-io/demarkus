@@ -24,35 +24,33 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// The binding's _meta keys (SPEC §6.8.1), shared with the gateway that
-// writes them.
+// The binding's _meta keys and URI form are the wire contract in protocol;
+// these names stay for the gateway that reads them here.
 const (
-	MetaSince        = "demarkus.io/since"
-	MetaCoalesce     = "demarkus.io/coalesce"
-	MetaSubscription = "demarkus.io/subscription"
-	MetaCursor       = "demarkus.io/cursor"
-	MetaPath         = "demarkus.io/path"
-	MetaVersion      = "demarkus.io/version"
-	MetaOp           = "demarkus.io/op"
-	MetaHash         = "demarkus.io/hash"
-	MetaAgent        = "demarkus.io/agent"
-	MetaUser         = "demarkus.io/user"
-	MetaResync       = "demarkus.io/resync"
-	MetaStatus       = "demarkus.io/status"
+	MetaSince        = protocol.WatchMetaSince
+	MetaCoalesce     = protocol.WatchMetaCoalesce
+	MetaSubscription = protocol.WatchMetaSubscription
+	MetaCursor       = protocol.WatchMetaCursor
+	MetaPath         = protocol.WatchMetaPath
+	MetaVersion      = protocol.WatchMetaVersion
+	MetaOp           = protocol.WatchMetaOp
+	MetaHash         = protocol.WatchMetaHash
+	MetaAgent        = protocol.WatchMetaAgent
+	MetaUser         = protocol.WatchMetaUser
+	MetaResync       = protocol.WatchMetaResync
+	MetaStatus       = protocol.WatchMetaStatus
 )
 
-// SubscriptionURI is how both ends name a subscription to path in world:
-// the world name lowercase, the path as the URI parser decoded it.
-func SubscriptionURI(world, path string) string { return "mark://" + world + path }
+// SubscriptionURI is protocol.WatchSubscriptionURI.
+func SubscriptionURI(world, path string) string { return protocol.WatchSubscriptionURI(world, path) }
 
 const (
-	defaultQueue     = 1024
 	handshakeTimeout = 10 * time.Second
 	// renewBefore is how long before its bearer lapses a stream is replaced;
 	// a shorter-lived bearer renews at half its life.
-	renewBefore  = time.Minute
-	retryMin     = 100 * time.Millisecond
-	retryMax     = 5 * time.Second
+	renewBefore = time.Minute
+	// endedPause and closingPause are the least to wait before reopening.
+	endedPause   = 100 * time.Millisecond
 	closingPause = 500 * time.Millisecond
 )
 
@@ -109,27 +107,17 @@ type Request struct {
 	Queue    int
 }
 
-// Watch is one subscription that outlives its streams, read like a
-// fetch.Watch: Next, Cursor, Err, Close.
+// Watch is one subscription that outlives its streams. Its queue, cursors
+// and pace are fetch.Feed's, the same a QUIC watch runs on: Next, Cursor,
+// Err, Close.
 type Watch struct {
+	*fetch.Feed
 	source   Source
 	uri      string
 	coalesce bool
-
-	notices chan fetch.Notice
-	room    chan struct{}
-	done    chan struct{}
-	cancel  context.CancelFunc
-
-	mu sync.Mutex
-	// stream is where the next stream resumes from; consumed is the cursor of
-	// the last notice Next returned, which may lag behind what is queued.
-	stream, consumed protocol.Cursor
-	// owed is a resync not yet queued for a reopen from no cursor, which
-	// starts at the head and so never sends what landed during the gap.
-	owed    bool
+	// expires is the last session's bearer expiry; only Open, then run,
+	// ever opens, so it needs no lock.
 	expires time.Time
-	err     error
 }
 
 // Open subscribes and returns once the server has acknowledged, or with its
@@ -140,18 +128,11 @@ func Open(ctx context.Context, source Source, r Request) (*Watch, error) {
 	if err != nil {
 		return nil, fmt.Errorf("subscribe %q: %w", r.URI, err)
 	}
-	queue := r.Queue
-	if queue < 0 {
-		return nil, fmt.Errorf("subscribe %q: queue %d is negative", r.URI, queue)
+	feed, err := fetch.NewFeed(r.Since, r.Queue)
+	if err != nil {
+		return nil, fmt.Errorf("subscribe %q: %w", r.URI, err)
 	}
-	if queue == 0 {
-		queue = defaultQueue
-	}
-	w := &Watch{
-		source: source, uri: SubscriptionURI(target.Hostname(), target.Path), coalesce: r.Coalesce,
-		notices: make(chan fetch.Notice, queue), room: make(chan struct{}, 1), done: make(chan struct{}),
-		stream: r.Since, consumed: r.Since,
-	}
+	w := &Watch{Feed: feed, source: source, uri: SubscriptionURI(target.Hostname(), target.Path), coalesce: r.Coalesce}
 	// Every stream, the first included, lives as long as the watch.
 	runCtx, cancel := context.WithCancel(ctx)
 	s, err := w.open(runCtx)
@@ -159,71 +140,9 @@ func Open(ctx context.Context, source Source, r Request) (*Watch, error) {
 		cancel()
 		return nil, err
 	}
-	w.cancel = cancel
+	w.Start(cancel)
 	go w.run(runCtx, s)
 	return w, nil
-}
-
-// Next returns the next notice, or the error that ended the watch.
-func (w *Watch) Next(ctx context.Context) (fetch.Notice, error) {
-	select {
-	case n := <-w.notices:
-		return w.consume(n), nil
-	default:
-	}
-	select {
-	case n := <-w.notices:
-		return w.consume(n), nil
-	case <-w.done:
-		return fetch.Notice{}, w.Err()
-	case <-ctx.Done():
-		return fetch.Notice{}, ctx.Err()
-	}
-}
-
-func (w *Watch) consume(n fetch.Notice) fetch.Notice {
-	w.mu.Lock()
-	w.consumed = n.Event.Cursor
-	w.mu.Unlock()
-	select {
-	case w.room <- struct{}{}:
-	default:
-	}
-	return n
-}
-
-// Cursor is where a later watch resumes without missing anything: the
-// cursor of the last notice Next returned.
-func (w *Watch) Cursor() protocol.Cursor {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.consumed
-}
-
-// Err is why the watch ended, once Next has reported it.
-func (w *Watch) Err() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.err
-}
-
-// Close ends the watch and its stream.
-func (w *Watch) Close() {
-	w.cancel()
-	<-w.done
-}
-
-func (w *Watch) finish(err error) {
-	w.mu.Lock()
-	w.err = err
-	w.mu.Unlock()
-	close(w.done)
-}
-
-func (w *Watch) streamCursor() protocol.Cursor {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.stream
 }
 
 // Signals from a stream's notifications to the loop following it, beside
@@ -244,10 +163,9 @@ type stream struct {
 	endErr  error // set before ended closes
 	signal  chan string
 	// dead stops a stream's later notices once it overflowed, ended or was
-	// replaced; guarded by the watch's mu.
-	dead      bool
-	delivered bool
-	renewAt   time.Time
+	// replaced: what it dropped must come from the next stream, in order.
+	dead    atomic.Bool
+	renewAt time.Time
 }
 
 func (s *stream) acknowledge(n mcp.JSONRPCNotification) {
@@ -271,17 +189,23 @@ func (s *stream) raise(signal string) {
 
 // stop ends the stream; its later notices are dropped.
 func (s *stream) stop() {
-	s.watch.mu.Lock()
-	s.dead = true
-	s.watch.mu.Unlock()
+	s.dead.Store(true)
 	s.cancel()
 }
 
-// receive runs on the transport's reader: it queues an event or resync
-// without blocking, and drops what a renewal's overlap repeats.
+// overflow stops taking from s over a full queue; the loop reopens from the
+// stream cursor once there is room, so nothing is lost.
+func (s *stream) overflow() {
+	s.dead.Store(true)
+	s.raise(signalOverflow)
+}
+
+// receive runs on the transport's reader: it offers the feed an event or a
+// resync without blocking. A notice that reads as no event but names a
+// cursor is passed as a resync; one that names none ends the stream.
 func (w *Watch) receive(s *stream, n mcp.JSONRPCNotification) {
 	meta := n.Params.Meta
-	if meta[MetaSubscription] != w.uri {
+	if meta[MetaSubscription] != w.uri || s.dead.Load() {
 		return
 	}
 	cursor, err := protocol.ParseCursor(text(meta, MetaCursor))
@@ -294,39 +218,15 @@ func (w *Watch) receive(s *stream, n mcp.JSONRPCNotification) {
 		return
 	}
 	notice, err := noticeOf(meta, cursor)
-	if err != nil {
-		s.raise(signalMalformed)
-		return
+	taken := false
+	if err != nil || notice.Resync {
+		taken = w.Resync(cursor)
+	} else {
+		taken = w.Event(&notice.Event)
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if s.dead || (!notice.Resync && !after(cursor, w.stream)) {
-		return
+	if !taken {
+		s.overflow()
 	}
-	if !notice.Resync && !protocol.IsKnownOp(notice.Event.Op) {
-		w.stream = cursor // skipped, as the protocol asks, but passed
-		return
-	}
-	// The owed resync goes first: an event consumed ahead of it would move
-	// Cursor past the gap.
-	if !w.payOwed(s) {
-		return
-	}
-	select {
-	case w.notices <- notice:
-		w.stream, s.delivered = cursor, true
-	default:
-		// Full: nothing after this is taken from s, and the next stream
-		// resumes from the last queued cursor, so nothing is lost.
-		s.dead = true
-		s.raise(signalOverflow)
-	}
-}
-
-// after reports whether cursor is past last within one epoch; another epoch
-// is always new.
-func after(cursor, last protocol.Cursor) bool {
-	return last.IsZero() || cursor.Epoch != last.Epoch || cursor.Seq > last.Seq
 }
 
 // noticeOf decodes through the QUIC binding's event block, so both bindings
@@ -354,69 +254,63 @@ func text(meta map[string]any, key string) string {
 	return value
 }
 
+// errUnplaced is a notification that names no cursor to continue from.
+var errUnplaced = fmt.Errorf("%w: a notification names no cursor", protocol.ErrMalformedWatchBlock)
+
 // run follows streams until the watch ends: it renews ahead of a lapsing
 // bearer or at once on unauthorized, and reopens after a cut, a closing
 // drain or an overflow from the stream cursor, or with a resync if none.
 func (w *Watch) run(ctx context.Context, s *stream) {
-	defer w.cancel()
-	empty := retryMin
+	var pace fetch.Pace
+	before := w.Queued()
 	for {
-		next, pause, err := w.follow(ctx, s)
+		next, end, err := w.follow(ctx, s)
 		if err != nil {
-			w.finish(err)
+			w.Finish(err)
 			return
 		}
 		if next != nil {
 			s = next
 			continue
 		}
-		// A stream that ended carrying nothing reopens after a growing pause,
-		// so a server ending every stream cannot spin the watch.
-		if s.delivered {
-			empty = retryMin
-		} else {
-			pause = max(pause, empty)
-			empty = min(empty*2, retryMax)
+		queued := w.Queued() > before
+		if end.unplaced && !queued {
+			if err := pace.Unreadable(errUnplaced); err != nil {
+				w.Finish(err)
+				return
+			}
 		}
-		if !sleep(ctx, pause) {
-			w.finish(ctx.Err())
+		if !sleep(ctx, pace.AfterStream(queued, end.pause)) {
+			w.Finish(ctx.Err())
 			return
 		}
-		w.mu.Lock()
-		w.owed = w.owed || w.stream.IsZero()
-		w.mu.Unlock()
-		if s, err = w.reopen(ctx); err != nil {
-			w.finish(err)
+		// A reopen from no cursor starts at the head: what landed in the gap
+		// is never sent, so the consumer is owed a resync.
+		if w.StreamCursor().IsZero() {
+			w.Owe()
+		}
+		before = w.Queued()
+		if s, err = w.reopen(ctx, &pace); err != nil {
+			w.Finish(err)
 			return
 		}
 		// A quiet stream pays here; one that already delivered paid first.
-		w.mu.Lock()
-		w.payOwed(s)
-		w.mu.Unlock()
+		if !w.Pay() {
+			s.overflow()
+		}
 	}
 }
 
-// payOwed queues the owed resync at the stream cursor, so Cursor never moves
-// back. A full queue stops s like an overflow and keeps the debt for the next
-// reopen, reporting false. Callers hold w.mu.
-func (w *Watch) payOwed(s *stream) bool {
-	if !w.owed {
-		return true
-	}
-	select {
-	case w.notices <- fetch.Notice{Resync: true, Event: protocol.WatchEvent{Cursor: w.stream}}:
-		w.owed = false
-		return true
-	default:
-		s.dead = true
-		s.raise(signalOverflow)
-		return false
-	}
+// ending is how a stream that was not renewed ended: the least pause before
+// reopening, and whether it ended on a notification that named no cursor.
+type ending struct {
+	pause    time.Duration
+	unplaced bool
 }
 
 // follow waits on s until it ends. A renewal returns the stream that replaced
-// it; otherwise the pause before reopening, or the error that ends the watch.
-func (w *Watch) follow(ctx context.Context, s *stream) (next *stream, pause time.Duration, err error) {
+// it; otherwise how it ended, or the error that ends the watch.
+func (w *Watch) follow(ctx context.Context, s *stream) (next *stream, end ending, err error) {
 	var renew <-chan time.Time
 	if !s.renewAt.IsZero() {
 		timer := time.NewTimer(time.Until(s.renewAt))
@@ -427,65 +321,61 @@ func (w *Watch) follow(ctx context.Context, s *stream) (next *stream, pause time
 		select {
 		case <-ctx.Done():
 			s.stop()
-			return nil, 0, ctx.Err()
+			return nil, ending{}, ctx.Err()
 		case <-s.ended:
 			s.stop()
-			return nil, retryMin, nil
+			return nil, ending{pause: endedPause}, nil
 		case signal := <-s.signal:
 			s.stop()
-			switch signal {
-			case protocol.StatusUnauthorized:
-				return nil, 0, nil // the bearer lapsed: reopen at once from a fresh session
-			case protocol.StatusClosing:
-				return nil, closingPause, nil
-			case signalMalformed:
-				return nil, retryMin, nil
-			case signalOverflow:
-				return nil, 0, w.waitRoom(ctx)
-			default:
-				return nil, 0, &fetch.StatusError{Status: signal}
-			}
+			end, err := w.signalled(ctx, signal)
+			return nil, end, err
 		case <-renew:
 			renew = nil
 			successor, err := w.open(ctx)
 			switch {
 			case err == nil:
 				s.stop()
-				return successor, 0, nil
+				return successor, ending{}, nil
 			case retryable(err):
 				// Keep s; it renews at once when the server ends it.
 			default:
 				s.stop()
-				return nil, 0, err
+				return nil, ending{}, err
 			}
 		}
 	}
 }
 
-// waitRoom blocks until the queue has room again after an overflow.
-func (w *Watch) waitRoom(ctx context.Context) error {
-	for len(w.notices) == cap(w.notices) {
-		select {
-		case <-w.room:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+// signalled is how a stream that raised signal ended.
+func (w *Watch) signalled(ctx context.Context, signal string) (ending, error) {
+	switch signal {
+	case protocol.StatusUnauthorized:
+		return ending{}, nil // the bearer lapsed: reopen at once from a fresh session
+	case protocol.StatusClosing:
+		return ending{pause: closingPause}, nil
+	case signalMalformed:
+		return ending{pause: endedPause, unplaced: true}, nil
+	case signalOverflow:
+		return ending{}, w.WaitRoom(ctx)
+	default:
+		return ending{}, &fetch.StatusError{Status: signal}
 	}
-	return nil
 }
 
 // reopen opens a stream, retrying retry-later refusals and transport errors.
-func (w *Watch) reopen(ctx context.Context) (*stream, error) {
-	backoff := retryMin
+func (w *Watch) reopen(ctx context.Context, pace *fetch.Pace) (*stream, error) {
 	for {
 		s, err := w.open(ctx)
-		if err == nil || !retryable(err) || ctx.Err() != nil {
-			return s, err
+		if err == nil {
+			pace.Opened()
+			return s, nil
 		}
-		if !sleep(ctx, backoff) {
+		if !retryable(err) || ctx.Err() != nil {
+			return nil, err
+		}
+		if !sleep(ctx, pace.AfterFailedOpen()) {
 			return nil, ctx.Err()
 		}
-		backoff = min(backoff*2, retryMax)
 	}
 }
 
@@ -498,10 +388,7 @@ var (
 
 // retryable is a retry-later refusal (SPEC §7) or a transport failure.
 func retryable(err error) bool {
-	if refused, ok := errors.AsType[*fetch.StatusError](err); ok {
-		return refused.Status == protocol.StatusRateLimited || refused.Status == protocol.StatusServerError
-	}
-	return !errors.Is(err, errSource) && !errors.Is(err, errNotModern) && !errors.Is(err, errNotOffered) && !errors.Is(err, context.Canceled)
+	return fetch.RetryLater(err) && !errors.Is(err, errSource) && !errors.Is(err, errNotModern) && !errors.Is(err, errNotOffered) && !errors.Is(err, context.Canceled)
 }
 
 // open asks the source for a session and subscribes on it from the stream
@@ -540,7 +427,6 @@ func (w *Watch) open(ctx context.Context) (*stream, error) {
 		s.stop()
 		return nil, ctx.Err()
 	}
-	// Only Open, then run, ever opens: no lock for these two.
 	s.renewAt = renewTime(session.Expires, w.expires, time.Now())
 	w.expires = session.Expires
 	return s, nil
@@ -565,7 +451,7 @@ func (l *Listener) start(ctx context.Context, w *Watch, version string) (*stream
 		mcp.MetaKeyProtocolVersion:    version,
 		mcp.MetaKeyClientCapabilities: l.client.GetClientCapabilities(),
 	}
-	if since := w.streamCursor(); !since.IsZero() {
+	if since := w.StreamCursor(); !since.IsZero() {
 		meta[MetaSince] = map[string]string{w.uri: since.String()}
 	}
 	if w.coalesce {
@@ -615,14 +501,20 @@ func endError(resp *transport.JSONRPCResponse, err error) error {
 	case err != nil:
 		return fmt.Errorf("listen: %w", err)
 	case resp != nil && resp.Error != nil:
-		return refusal(resp.Error.Message)
+		return refusal(resp.Error.Message, resp.Error.Data)
 	}
 	return nil
 }
 
-// refusal reads the §7 status a gateway puts first in its error message; a
-// message without one is the server's bad request.
-func refusal(message string) *fetch.StatusError {
+// refusal reads the §7 status of a refused listen: the error's data when the
+// gateway names it there under MetaStatus, else the word it puts first in
+// its message; a message without one is the server's bad request.
+func refusal(message string, data any) *fetch.StatusError {
+	if fields, ok := data.(map[string]any); ok {
+		if status := text(fields, MetaStatus); slices.Contains(refusalStatuses, status) {
+			return &fetch.StatusError{Status: status, Message: message}
+		}
+	}
 	status, rest, ok := strings.Cut(message, ":")
 	if ok && slices.Contains(refusalStatuses, status) {
 		return &fetch.StatusError{Status: status, Message: strings.TrimSpace(rest)}

@@ -198,12 +198,17 @@ func TestEnforceContent(t *testing.T) {
 	})
 }
 
-// write sends one publish with a warning sink and returns what it collected.
+// write sends one publish and returns the notes it landed with; a store
+// behind no gate has none.
 func write(t *testing.T, store backend.Store, path string, version int, body []byte, meta map[string]string) ([]string, error) {
 	t.Helper()
-	var warnings []string
-	_, err := store.Publish(context.Background(), backend.WriteRequest{Path: path, ExpectedVersion: version, Content: body, Metadata: meta, Warnings: &warnings})
-	return warnings, err
+	req := backend.WriteRequest{Path: path, ExpectedVersion: version, Content: body, Metadata: meta}
+	if gated, ok := store.(backend.NotingStore); ok {
+		_, warnings, err := gated.PublishNoted(context.Background(), req, backend.Sender{})
+		return warnings, err
+	}
+	_, err := store.Publish(context.Background(), req)
+	return nil, err
 }
 
 func TestEnforceSecretsWarn(t *testing.T) {

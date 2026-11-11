@@ -5,11 +5,11 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
-	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/handler"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
+	"github.com/latebit-io/demarkus/server/store"
 )
 
 // TestFileStoreConformance runs the suite against the filestore backend that

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
 	"strings"
 	"testing"
 
@@ -114,7 +115,7 @@ func TestGatewayReadResource_LargeDocIsNotOutlined(t *testing.T) {
 func TestGatewayReadResource_Errors(t *testing.T) {
 	tests := []struct {
 		name       string
-		dispatcher WorldDispatcher
+		dispatcher dispatch.WorldDispatcher
 		uri        string
 		wantErr    string
 	}{

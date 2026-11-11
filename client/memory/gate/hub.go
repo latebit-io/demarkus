@@ -46,15 +46,25 @@ type bullet struct {
 	multiBlock bool
 }
 
-// IsHub reports a link page: index.md at any depth, or a body that is
-// mostly link bullets.
-func IsHub(url, body string) bool {
+// IsHub is the one hub rule: index.md at any depth, the document named
+// after a directory hasDir knows (nil knows none), or a body that is mostly
+// link bullets. The last alone costs a parse.
+func IsHub(url, body string, hasDir func(dir string) bool) bool {
+	if hubByName(url, hasDir) {
+		return true
+	}
 	items, textLines := listItems(body)
-	return isHub(url, items, textLines)
+	return linkPage(items, textLines)
 }
 
+// hubByName: index.md, or <dir>.md beside a directory <dir>/.
+func hubByName(url string, hasDir func(dir string) bool) bool {
+	return path.Base(url) == "index.md" || (hasDir != nil && strings.HasSuffix(url, ".md") && hasDir(strings.TrimSuffix(url, ".md")+"/"))
+}
+
+// isHub is IsHub over a body already parsed; a publish knows no directories.
 func isHub(url string, items []bullet, textLines int) bool {
-	return path.Base(url) == "index.md" || linkPage(items, textLines)
+	return hubByName(url, nil) || linkPage(items, textLines)
 }
 
 // HubProblems applies the hub rules when the document is a hub (IsHub).

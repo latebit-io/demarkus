@@ -14,6 +14,10 @@ import (
 type Grant struct {
 	// Label names the writer in the audit log, as a token's label would.
 	Label string
+	// User is the person the grant's issuer verified. A write under the
+	// grant stores it as MetaUser in place of whatever the request carried;
+	// empty, for a service, stores none.
+	User string
 	// Paths is the glob scope, in the token file's pattern language; none
 	// grants no write.
 	Paths []string

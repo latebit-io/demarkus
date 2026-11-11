@@ -14,6 +14,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/mcpwatch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -341,11 +342,11 @@ func listenOptions(meta map[string]json.RawMessage, subs []*subscription) (watch
 // watchRefusal names the §7 status of a watch that would not open.
 func watchRefusal(uri string, err error) error {
 	var refused *fetch.StatusError
-	var unknown *errWorldNotFound
+	var unknown *dispatch.WorldNotFoundError
 	switch {
 	case errors.As(err, &refused):
 		return fmt.Errorf("%s: %s: %w", refused.Status, uri, err)
-	case errors.As(err, &unknown), errors.Is(err, errWorldNotLocal):
+	case errors.As(err, &unknown), errors.Is(err, dispatch.ErrWorldNotLocal):
 		return fmt.Errorf("%s: %s: %w", protocol.StatusNotFound, uri, err)
 	}
 	return fmt.Errorf("%s: %s: %w", protocol.StatusServerError, uri, err)

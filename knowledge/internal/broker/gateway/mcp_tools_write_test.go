@@ -306,7 +306,7 @@ func TestHandleMarkArchiveHappyPath(t *testing.T) {
 
 func TestHandleMarkArchiveUnknownWorldSurfacesAsToolError(t *testing.T) {
 	cfg := mcpTestConfig()
-	pool := NewWorldPool(cfg.Registry(), fetch.Options{})
+	pool := NewWorldPool(brokertest.Registry(t, cfg), fetch.Options{})
 	g := newGatewayWithDispatcher(t, cfg, pool)
 	res, err := g.handleMarkArchive(withAliceClaims(context.Background()), callToolReq("mark_archive", map[string]any{
 		"url": "mark://team-b/foo.md",

@@ -7,13 +7,13 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
-	protocolstore "github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
 	"github.com/latebit-io/demarkus/server/internal/writepolicy"
+	protocolstore "github.com/latebit-io/demarkus/server/store"
 )
 
 const blockUntagged = "# Write Policy\n\nstrictness: block\nrequire_tags: domain\n"
@@ -66,7 +66,7 @@ func TestEnforceKeepsTheCallersPrecondition(t *testing.T) {
 	gated := writepolicy.Enforce(newStore(t), writepolicy.Options{})
 	req := backend.WriteRequest{
 		Path: "/a.md", Content: []byte("# A\n"),
-		Precondition: func(context.Context, backend.Reader, storefmt.PreparedWrite) error { return errMine },
+		Precondition: func(context.Context, backend.CommitState, storefmt.PreparedWrite) error { return errMine },
 	}
 	if _, err := gated.Publish(context.Background(), req); !errors.Is(err, errMine) {
 		t.Errorf("publish = %v, want the caller's precondition to run first", err)

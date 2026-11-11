@@ -24,9 +24,9 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/client/memory/hub"
 	"github.com/latebit-io/demarkus/client/memory/outline"
-	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/neardup"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
@@ -111,7 +111,7 @@ func edit(in *Input, headings []mdoutline.Heading, p *Proposal) {
 	body, meta := in.Body, docwrite.Carried(in.Metadata)
 	if kv, rest, ok := gate.Frontmatter(body); ok {
 		body = rest
-		p.Fixed = append(p.Fixed, "frontmatter fence removed; metadata keys: "+strings.Join(Lift(kv, meta), ", "))
+		p.Fixed = append(p.Fixed, "frontmatter fence removed; metadata keys: "+strings.Join(gate.Lift(kv, meta), ", "))
 		headings = mdoutline.Headings(body)
 	}
 	before := body
@@ -266,26 +266,6 @@ func replaceInProse(body string, from, to int, prose *proseMask) (out []byte, n 
 	return out, n
 }
 
-// Lift moves the fence's keys into meta (a key the document already carries
-// wins; name is the title; reserved, identity and server-stamped keys never)
-// and names them.
-func Lift(kv, meta map[string]string) []string {
-	var keys []string
-	for _, k := range slices.Sorted(maps.Keys(kv)) {
-		v := strings.TrimSpace(kv[k])
-		k = strings.ToLower(k)
-		if k == "name" {
-			k = "title"
-		}
-		if _, taken := meta[k]; v == "" || taken || protocol.IsReservedMetadataKey(k) || protocol.IsIdentityMetadataKey(k) || protocol.IsServerStampedKey(k) {
-			continue
-		}
-		meta[k] = v
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 // stripHeadingStatus moves the status tokens of every heading below the H1
 // onto a "Status:" line under it; a heading left empty stays as it is.
 // Edits run back to front so earlier offsets stay valid.
@@ -298,12 +278,14 @@ func stripHeadingStatus(body string, headings []mdoutline.Heading) (out string, 
 		if to == "" || to == h.Text {
 			continue
 		}
-		line, rest, _ := strings.Cut(body[h.Start:h.End], "\n")
+		// A later heading's edit moved this one's end; only its start is exact.
+		end := gate.HeadingEnd(body, h)
+		line := body[h.Start:end]
 		if !strings.Contains(line, h.Text) {
-			continue // setext or inline markup the rename cannot place
+			continue // inline markup the rename cannot place
 		}
-		section := strings.Replace(line, h.Text, to, 1) + "\n\nStatus: " + status + "\n\n" + strings.TrimLeft(rest, "\n")
-		body = body[:h.Start] + section + body[h.End:]
+		section := strings.Replace(line, h.Text, to, 1) + "\n\nStatus: " + status + "\n\n" + strings.TrimLeft(body[end:], "\n")
+		body = body[:h.Start] + section
 		renamed = append(renamed, fmt.Sprintf("heading %q is now %q with its status on the line under it", h.Text, to))
 	}
 	slices.Reverse(renamed)
@@ -417,8 +399,8 @@ func withSummary(body string, headings []mdoutline.Heading, summary string) stri
 		if h.Level != 1 {
 			continue
 		}
-		line, rest, _ := strings.Cut(body[h.Start:], "\n")
-		return body[:h.Start] + line + "\n\n" + summary + "\n\n" + strings.TrimLeft(rest, "\n")
+		end := gate.HeadingEnd(body, h)
+		return body[:end] + "\n\n" + summary + "\n\n" + strings.TrimLeft(body[end:], "\n")
 	}
 	return body
 }
@@ -896,7 +878,7 @@ func (p *Proposal) policyGaps(docPath string, meta map[string]string, body strin
 	if policy != nil && policy.EffectiveStrictness() != publishpolicy.Warn {
 		verb, refuses = "refuses it: ", true
 	}
-	for _, m := range promote.Missing(docPath, meta, body, policy) {
+	for _, m := range gate.Missing(docPath, meta, body, policy) {
 		line := docPath + ": the write policy " + verb + m
 		p.Unfixed = append(p.Unfixed, line)
 		if refuses {
@@ -1174,7 +1156,8 @@ func (p *Proposal) Report(moves []Move, notes []string) string {
 	fmt.Fprintf(&b, "\nproposal: %s\nApply with apply: true and this proposal; it binds to v%d.\n", p.Hash, p.Version)
 	for i := range p.Writes {
 		w := &p.Writes[i]
-		fmt.Fprintf(&b, "\n=== %s (%s)\n%s", w.Path, metaLine(w.Metadata), w.Body)
+		// Document text goes out framed and flagged, as every other read does.
+		fmt.Fprintf(&b, "\n=== %s (%s)\n%s%s", headerValue(w.Path), metaLine(w.Metadata), docframe.Frame(w.Body), docframe.Flags(w.Body, w.Metadata))
 	}
 	return b.String()
 }
@@ -1200,7 +1183,7 @@ func headerValue(s string) string {
 func metaLine(meta map[string]string) string {
 	parts := make([]string, 0, len(meta))
 	for _, k := range slices.Sorted(maps.Keys(meta)) {
-		parts = append(parts, k+": "+meta[k])
+		parts = append(parts, k+": "+headerValue(meta[k]))
 	}
 	return strings.Join(parts, "; ")
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/httpauth"
 	"github.com/latebit-io/demarkus/server/blob"
 )
 
@@ -25,7 +26,9 @@ const stateCookieName = "broker_oidc_state"
 // API. Tests pass a fake Verifier and a fake clientset and exercise every
 // route end-to-end without network or kube.
 type Server struct {
-	cfg       *core.Config
+	cfg *core.Config
+	// worlds is the live world set /me/install lists from.
+	worlds    *core.WorldRegistry
 	signer    *Signer
 	verifier  core.Verifier
 	discovery *Discovery
@@ -95,8 +98,14 @@ func NewServer(cfg *core.Config, deps ServerDeps) *Server {
 	// cfg carries resolved defaults: LoadConfig and the test configs apply them.
 	pollInterval := cfg.Server.DevicePollInterval
 	grants := &grantStore{store: deps.Store, ref: core.OAuthStateRef(cfg), clock: clock, grace: pollInterval}
+	// Without a shared registry the server lists the static worlds alone.
+	worlds := deps.Worlds
+	if worlds == nil {
+		worlds = core.NewWorldRegistry(cfg.Worlds)
+	}
 	s := &Server{
 		cfg:               cfg,
+		worlds:            worlds,
 		signer:            deps.Signer,
 		verifier:          deps.Verifier,
 		discovery:         deps.Discovery,
@@ -191,7 +200,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("POST /token/revoke", s.ipRateLimit(limitForm(http.HandlerFunc(s.tokenRevoke))))
 	// /me/install verifies the bearer, rate-limits by subject, and lists
 	// readable worlds without token material.
-	mux.Handle("GET /me/install", s.requireAuth(core.SubjectRateLimit(s.subjectReg, s.log, http.HandlerFunc(s.meInstall))))
+	mux.Handle("GET /me/install", s.requireAuth(httpauth.SubjectRateLimit(s.subjectReg, s.log, http.HandlerFunc(s.meInstall))))
 }
 
 // BeginDrain makes /readyz answer 503 from now on; the caller shuts the

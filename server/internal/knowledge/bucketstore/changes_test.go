@@ -78,11 +78,12 @@ func TestReplicasShareOneSequence(t *testing.T) {
 		t.Fatalf("heads differ: %v vs %v", a.hub.Head(), b.hub.Head())
 	}
 
-	appended, err := a.store.Append(ctx, backend.WriteRequest{Path: "/docs/one.md", ExpectedVersion: doc.Version, Content: []byte("more\n")})
+	// The append's own agent, not the base version's: identity is per write.
+	appended, err := a.store.Append(ctx, backend.WriteRequest{Path: "/docs/one.md", ExpectedVersion: doc.Version, Content: []byte("more\n"), Metadata: map[string]string{"agent": "session-b"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = changefeed.Event{Seq: 3, Path: "/docs/one.md", Version: 2, Hash: storefmt.ContentHash(appended.Content), Op: protocol.OpAppend, Agent: "session-a"}
+	want = changefeed.Event{Seq: 3, Path: "/docs/one.md", Version: 2, Hash: storefmt.ContentHash(appended.Content), Op: protocol.OpAppend, Agent: "session-b"}
 	if ev := a.next(t); ev != want {
 		t.Fatalf("local append hint = %+v, want %+v", ev, want)
 	}

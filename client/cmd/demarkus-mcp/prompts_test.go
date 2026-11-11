@@ -11,6 +11,39 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
+// The handlers of the workflow prompts as this server words them.
+var (
+	hosted         = workflow("mark://example.com")
+	orientPrompt   = hosted.Orient
+	recallPrompt   = hosted.Recall
+	whatsNewPrompt = hosted.WhatsNew
+)
+
+// A lookup answers up to its limit: the digest prompt must not claim the
+// whole catalog, and both prompts look the -host store up by bare path.
+func TestWhatsNewDoesNotClaimEveryDocument(t *testing.T) {
+	text := mcpfmttest.PromptText(t, whatsNewPrompt, nil)
+	if strings.Contains(text, "every catalogued document") || !strings.Contains(text, "10 unless limit is set") {
+		t.Errorf("whats-new overstates the lookup:\n%s", text)
+	}
+}
+
+func TestLookupPromptsNeedAHost(t *testing.T) {
+	for host, want := range map[string]bool{"": false, "mark://example.com": true} {
+		s := mcpserver.NewMCPServer("test", "0")
+		registerPrompts(s, host, mcpfmt.ProfileLean)
+		got := s.ListPrompts()
+		if got["orient"] == nil {
+			t.Errorf("host %q: orient not listed", host)
+		}
+		for _, name := range []string{"recall", "whats-new"} {
+			if (got[name] != nil) != want {
+				t.Errorf("host %q: %s listed = %v, want %v (it looks up url \"/\")", host, name, got[name] != nil, want)
+			}
+		}
+	}
+}
+
 func TestOrientPrompt(t *testing.T) {
 	text := mcpfmttest.PromptText(t, orientPrompt, map[string]string{"url": "/plans/foo.md"})
 	for _, want := range []string{"mark_explore", `"/plans/foo.md"`, "#<anchor>", "mark_fetch"} {

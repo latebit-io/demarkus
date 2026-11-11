@@ -15,11 +15,11 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
-	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/handler"
+	"github.com/latebit-io/demarkus/server/store"
 )
 
 // Factory returns a fresh, empty DocumentStore for one conformance subtest.
@@ -957,7 +957,7 @@ func testPrecondition(t *testing.T, s Direct) {
 	errRefused := errors.New("refused by precondition")
 	var seen []storefmt.PreparedWrite
 	record := func(verdict error) backend.Precondition {
-		return func(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite) error {
+		return func(ctx context.Context, state backend.CommitState, write storefmt.PreparedWrite) error {
 			current, err := state.Get(ctx, "/pre.md", 0)
 			if err != nil {
 				return fmt.Errorf("precondition read: %w", err)

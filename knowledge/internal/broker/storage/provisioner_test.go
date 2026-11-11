@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,7 +19,7 @@ import (
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/protocol"
-	"gopkg.in/yaml.v3"
+	"github.com/latebit-io/demarkus/server/knowledgeserver/worldsfragment"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -86,6 +87,80 @@ func TestTenantSlugShape(t *testing.T) {
 	}
 }
 
+// seedRegistry writes tenants as the registry document.
+func seedRegistry(t *testing.T, cfg *core.Config, store core.SecretStore, tenants map[string]tenantRecord) {
+	t.Helper()
+	err := store.Mutate(context.Background(), core.RegistryRef(cfg), func([]byte) ([]byte, error) {
+		return json.Marshal(tenantRegistry{Tenants: tenants})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// readRegistry decodes the registry document.
+func readRegistry(t *testing.T, cfg *core.Config, store *provisionerStore) tenantRegistry {
+	t.Helper()
+	registry, err := decodeRegistry(store.get(core.RegistryRef(cfg)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry
+}
+
+// A slug another identity holds is that tenant's world and bucket: a newcomer
+// whose short slug collides takes a wider one and overwrites nothing.
+func TestEnsureTenantNeverTakesAnotherIdentitysSlug(t *testing.T) {
+	cfg := brokertest.NewProvisioningConfig(core.ProvisionOpen)
+	store := newProvisionerStore()
+	eve := brokertest.EveClaims()
+	short := TenantSlug(cfg.OIDC.Issuer, eve.Subject, core.CanonicalEmail(eve.Email))
+	victim := tenantRecord{Email: "eve.adams@other.test", Issuer: cfg.OIDC.Issuer, Subject: "idp|victim", WorldID: "victim-world", Created: "2026-01-01T00:00:00Z"}
+	seedRegistry(t, cfg, store, map[string]tenantRecord{short: victim})
+	p := newTestProvisioner(cfg, store, &brokertest.FakeBuckets{})
+
+	world, err := p.EnsureTenant(context.Background(), eve)
+	if err != nil {
+		t.Fatalf("EnsureTenant: %v", err)
+	}
+	if world.Name == short || !strings.HasPrefix(world.Name, short) {
+		t.Fatalf("world = %q, want a wider slug than the held %q", world.Name, short)
+	}
+	registry := readRegistry(t, cfg, store)
+	if got := registry.Tenants[short]; got != victim {
+		t.Fatalf("the held slug's record changed: %+v, want %+v", got, victim)
+	}
+	if got := registry.Tenants[world.Name]; got.Subject != eve.Subject {
+		t.Fatalf("eve's record = %+v", got)
+	}
+	// The wider slug is pinned: the next arrival resolves it, not a third.
+	again, err := p.EnsureTenant(context.Background(), eve)
+	if err != nil || again.Name != world.Name {
+		t.Fatalf("second arrival = %q, %v; want %q", again.Name, err, world.Name)
+	}
+}
+
+// With every slug of the identity held by others, provisioning refuses.
+func TestEnsureTenantRefusesWhenEverySlugIsTaken(t *testing.T) {
+	cfg := brokertest.NewProvisioningConfig(core.ProvisionOpen)
+	store := newProvisionerStore()
+	eve := brokertest.EveClaims()
+	held := map[string]tenantRecord{}
+	for _, n := range slugSuffixBytes {
+		slug := tenantSlug(cfg.OIDC.Issuer, eve.Subject, core.CanonicalEmail(eve.Email), n)
+		held[slug] = tenantRecord{Issuer: cfg.OIDC.Issuer, Subject: "idp|holder-" + slug, WorldID: "w", Created: "2026-01-01T00:00:00Z"}
+	}
+	seedRegistry(t, cfg, store, held)
+	p := newTestProvisioner(cfg, store, &brokertest.FakeBuckets{})
+
+	if _, err := p.EnsureTenant(context.Background(), eve); !errors.Is(err, ErrSlugTaken) {
+		t.Fatalf("err = %v, want ErrSlugTaken", err)
+	}
+	if got := readRegistry(t, cfg, store); !maps.Equal(got.Tenants, held) {
+		t.Fatalf("registry changed on a refusal: %+v", got.Tenants)
+	}
+}
+
 func TestTenantWorldIDIsCanonicalUUID(t *testing.T) {
 	id := tenantWorldID("https://idp", "google|eve-123")
 	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
@@ -126,15 +201,15 @@ func TestEnsureTenantProvisionsAndConverges(t *testing.T) {
 	if len(buckets.Created) != 1 || buckets.Created[0] != "memory-"+world.Name {
 		t.Errorf("buckets created = %v", buckets.Created)
 	}
-	// Fragment rendered with the world, bootstrap on.
+	// Fragment rendered with the world, gated, and without the retired bootstrap key.
 	fragment := string(store.get(core.WorldsFragmentRef(cfg)))
-	for _, want := range []string{"name: " + world.Name, "gated: true", "bootstrap: true", "gs://memory-" + world.Name, world.Name + ".memory-worlds.svc.cluster.local"} {
+	for _, want := range []string{"name: " + world.Name, "gated: true", "gs://memory-" + world.Name, world.Name + ".memory-worlds.svc.cluster.local"} {
 		if !strings.Contains(fragment, want) {
 			t.Errorf("fragment missing %q:\n%s", want, fragment)
 		}
 	}
 	// Dynamic world visible to this pod's config immediately.
-	if _, ok := cfg.Registry().Find(world.Name); !ok {
+	if _, ok := p.registry.Find(world.Name); !ok {
 		t.Error("provisioned world not in dynamic set")
 	}
 
@@ -212,7 +287,7 @@ func TestEnsureTenantEmailChangeKeepsWorld(t *testing.T) {
 		t.Errorf("email change grew the fragment:\n%s", fragment)
 	}
 	// Dynamic world set converged on the new email for this pod.
-	w, ok := cfg.Registry().Find(original.Name)
+	w, ok := p.registry.Find(original.Name)
 	if !ok {
 		t.Fatal("original world missing from dynamic set")
 	}
@@ -234,7 +309,7 @@ func TestEnsureTenantEmailRefreshOnceThenFastPath(t *testing.T) {
 
 	// Stale record: identity index hits but Allow rejects the new email,
 	// denying so the slow path runs once and refreshes.
-	if _, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, movedEveClaims()); !errors.Is(err, core.ErrNotAuthorized) {
+	if _, err := core.TenantWorldFor(p.registry.View(core.ProfileMemory), cfg.OIDC.Issuer, movedEveClaims()); !errors.Is(err, core.ErrNotAuthorized) {
 		t.Fatalf("pre-refresh tenantWorldFor err = %v, want ErrNotAuthorized", err)
 	}
 
@@ -248,7 +323,7 @@ func TestEnsureTenantEmailRefreshOnceThenFastPath(t *testing.T) {
 	}
 
 	// Fast path: the resolver answers by identity index, no provisioner.
-	w, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, movedEveClaims())
+	w, err := core.TenantWorldFor(p.registry.View(core.ProfileMemory), cfg.OIDC.Issuer, movedEveClaims())
 	if err != nil {
 		t.Fatalf("post-refresh tenantWorldFor: %v", err)
 	}
@@ -285,7 +360,7 @@ func TestEnsureTenantSharedLocalPartDistinctWorlds(t *testing.T) {
 	if twinWorld.Name == eveWorld.Name {
 		t.Fatalf("shared local part collapsed two identities into %q", eveWorld.Name)
 	}
-	w, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, twin)
+	w, err := core.TenantWorldFor(p.registry.View(core.ProfileMemory), cfg.OIDC.Issuer, twin)
 	if err != nil {
 		t.Fatalf("tenantWorldFor(twin): %v", err)
 	}
@@ -394,7 +469,7 @@ func TestLegacyDuplicateIdentityResolvesDeterministically(t *testing.T) {
 	if world.Name != "a-eve-0000" {
 		t.Errorf("EnsureTenant resolved %q, want the first sorted slug a-eve-0000", world.Name)
 	}
-	w, err := core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, brokertest.EveClaims())
+	w, err := core.TenantWorldFor(p.registry.View(core.ProfileMemory), cfg.OIDC.Issuer, brokertest.EveClaims())
 	if err != nil {
 		t.Fatalf("tenantWorldFor: %v", err)
 	}
@@ -415,7 +490,7 @@ func TestLegacyDuplicateIdentityResolvesDeterministically(t *testing.T) {
 	if world.Name != "b-eve-1111" {
 		t.Errorf("EnsureTenant with tombstoned duplicate resolved %q, want b-eve-1111", world.Name)
 	}
-	w, err = core.TenantWorldFor(cfg.Registry().View(core.ProfileMemory), cfg.OIDC.Issuer, brokertest.EveClaims())
+	w, err = core.TenantWorldFor(p.registry.View(core.ProfileMemory), cfg.OIDC.Issuer, brokertest.EveClaims())
 	if err != nil {
 		t.Fatalf("tenantWorldFor with tombstoned duplicate: %v", err)
 	}
@@ -498,7 +573,7 @@ func TestEnsureTenantBucketFailureRetries(t *testing.T) {
 	if len(store.get(core.WorldsFragmentRef(cfg))) == 0 {
 		t.Error("fragment missing after converged retry")
 	}
-	if _, ok := cfg.Registry().Find(world.Name); !ok {
+	if _, ok := p.registry.Find(world.Name); !ok {
 		t.Error("world not visible after converged retry")
 	}
 }
@@ -518,7 +593,7 @@ func TestSyncRegistryPublishesDynamicWorlds(t *testing.T) {
 		t.Fatalf("SyncRegistry: %v", err)
 	}
 	slug := TenantSlug(cfg.OIDC.Issuer, "google|eve-123", "eve.adams@example.com")
-	if _, ok := sibling.Registry().Find(slug); !ok {
+	if _, ok := q.registry.Find(slug); !ok {
 		t.Errorf("sibling did not converge on tenant %q", slug)
 	}
 }
@@ -565,49 +640,87 @@ func TestWorldsFragmentGolden(t *testing.T) {
 	}
 }
 
-// TestFragmentUnionSurvivesStaleSnapshot: a replica holding a stale
-// registry snapshot must not drop a tenant a sibling published into the
-// fragment between the registry read and the fragment write.
-func TestFragmentUnionSurvivesStaleSnapshot(t *testing.T) {
+// The fragment is rendered from the registry as it stands at the write, so a
+// tenant a sibling provisioned after this pod read the registry is kept.
+func TestFragmentKeepsATenantProvisionedSinceTheRegistryRead(t *testing.T) {
 	cfg := brokertest.NewProvisioningConfig(core.ProvisionOpen)
-	store := newProvisionerStore()
-	sibling := newTestProvisioner(brokertest.NewProvisioningConfig(core.ProvisionOpen), store, &brokertest.FakeBuckets{})
+	raw := newProvisionerStore()
+	hooked := &hookedStore{SecretStore: raw, ref: core.WorldsFragmentRef(cfg)}
+	p := newTestProvisioner(cfg, hooked, &brokertest.FakeBuckets{})
+	sibling := newTestProvisioner(brokertest.NewProvisioningConfig(core.ProvisionOpen), raw, &brokertest.FakeBuckets{})
 
-	// Sibling provisions frank first; the fragment now carries his world.
 	frank := &core.Claims{Subject: "google|frank", Email: "frank@example.com", EmailVerified: true}
-	frankWorld, err := sibling.EnsureTenant(context.Background(), frank)
-	if err != nil {
-		t.Fatal(err)
+	var frankWorld core.WorldConfig
+	hooked.hook = func() {
+		var hookErr error
+		if frankWorld, hookErr = sibling.EnsureTenant(context.Background(), frank); hookErr != nil {
+			t.Errorf("racing EnsureTenant(frank): %v", hookErr)
+		}
 	}
-
-	// Provision eve, then simulate the worst case: render from an
-	// eve-only STALE snapshot over the live fragment; frank must survive.
-	p := newTestProvisioner(cfg, store, &brokertest.FakeBuckets{})
 	eveWorld, err := p.EnsureTenant(context.Background(), brokertest.EveClaims())
 	if err != nil {
 		t.Fatal(err)
 	}
-	stale := &tenantRegistry{Tenants: map[string]tenantRecord{
-		eveWorld.Name: {Email: "eve.adams@example.com", WorldID: tenantWorldID(cfg.OIDC.Issuer, "google|eve-123")},
-	}}
-	merged, err := p.renderWorldsFragmentUnion(stale, store.get(core.WorldsFragmentRef(cfg)))
-	if err != nil {
-		t.Fatalf("union render: %v", err)
-	}
-	var doc worldsFragmentDoc
-	if err := yaml.Unmarshal(merged, &doc); err != nil {
-		t.Fatalf("parse union fragment: %v", err)
+	doc, unknown, err := worldsfragment.Parse(raw.get(core.WorldsFragmentRef(cfg)))
+	if err != nil || unknown != "" {
+		t.Fatalf("parse fragment: %q, %v", unknown, err)
 	}
 	got := make([]string, 0, len(doc.Worlds))
-	for _, world := range doc.Worlds {
-		got = append(got, world.Name)
+	for i := range doc.Worlds {
+		got = append(got, doc.Worlds[i].Name)
 	}
 	// Exact sorted set: no drops, no duplicates, and the deterministic
 	// order Mutate's unchanged-bytes suppression depends on.
 	want := []string{eveWorld.Name, frankWorld.Name}
 	sort.Strings(want)
 	if !slices.Equal(got, want) {
-		t.Errorf("union fragment worlds = %v, want %v", got, want)
+		t.Errorf("fragment worlds = %v, want %v", got, want)
+	}
+	if _, ok := p.registry.Find(frankWorld.Name); !ok {
+		t.Error("this pod's world set lacks the tenant its own fragment names")
+	}
+}
+
+// A tenant deprovisioned between this pod's registry read and its fragment
+// write must stay gone: once its record is cleared nothing would ever take
+// a resurrected world out of the fragment again.
+func TestStaleRegistryReadCannotResurrectADeprovisionedWorld(t *testing.T) {
+	cfg := brokertest.NewProvisioningConfig(core.ProvisionOpen)
+	raw := newProvisionerStore()
+	operator := newTestProvisioner(brokertest.NewProvisioningConfig(core.ProvisionOpen), raw, &brokertest.FakeBuckets{})
+	frank := &core.Claims{Subject: "google|frank", Email: "frank@example.com", EmailVerified: true}
+	frankWorld, err := operator.EnsureTenant(context.Background(), frank)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Eve arrives on a serving pod: after its registry write (frank still
+	// live) and before its fragment write, the operator deprovisions frank
+	// start to finish.
+	hooked := &hookedStore{SecretStore: raw, ref: core.WorldsFragmentRef(cfg)}
+	p := newTestProvisioner(cfg, hooked, &brokertest.FakeBuckets{})
+	hooked.hook = func() {
+		if _, hookErr := operator.DeprovisionTenant(context.Background(), frankWorld.Name, false); hookErr != nil {
+			t.Errorf("racing DeprovisionTenant: %v", hookErr)
+		}
+	}
+	eveWorld, err := p.EnsureTenant(context.Background(), brokertest.EveClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fragment := string(raw.get(core.WorldsFragmentRef(cfg)))
+	if strings.Contains(fragment, "name: "+frankWorld.Name) {
+		t.Errorf("a deprovisioned world came back into the fragment:\n%s", fragment)
+	}
+	if !strings.Contains(fragment, "name: "+eveWorld.Name) {
+		t.Errorf("the new tenant is missing from the fragment:\n%s", fragment)
+	}
+	if _, ok := p.registry.Find(frankWorld.Name); ok {
+		t.Error("a deprovisioned world came back into this pod's world set")
+	}
+	if _, held := readRegistry(t, cfg, raw).Tenants[frankWorld.Name]; held {
+		t.Error("the deprovisioned record is back in the registry")
 	}
 }
 
@@ -710,7 +823,7 @@ func TestSyncRemovesTombstonedWorld(t *testing.T) {
 	if strings.Contains(fragment, "name: "+world.Name) {
 		t.Errorf("sync kept a tombstoned world in the fragment:\n%s", fragment)
 	}
-	if _, ok := sibling.Registry().Find(world.Name); ok {
+	if _, ok := q.registry.Find(world.Name); ok {
 		t.Error("sync kept a tombstoned world resolvable")
 	}
 }
@@ -787,7 +900,7 @@ func TestDeprovisionTenantRemovesEverything(t *testing.T) {
 		t.Errorf("deleted buckets = %v", deleted)
 	}
 	// Dynamic world set no longer resolves eve.
-	if _, ok := cfg.Registry().Find(world.Name); ok {
+	if _, ok := p.registry.Find(world.Name); ok {
 		t.Error("deprovisioned world still resolvable")
 	}
 
@@ -926,6 +1039,59 @@ func (f *fakeWorlds) ApplyWorldsFragment(fragment []byte) error {
 	return nil
 }
 
+// blockingWorlds parks every push until release closes, as a server opening
+// a slow world would.
+type blockingWorlds struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingWorlds) ApplyWorldsFragment([]byte) error {
+	b.entered <- struct{}{}
+	<-b.release
+	return nil
+}
+
+// The in-process push opens worlds, so it runs outside the provisioner's
+// lock: a slow open must not stall the registry sync or other identities.
+func TestProvisionerPushRunsOutsideItsLock(t *testing.T) {
+	cfg := brokertest.NewProvisioningConfig(core.ProvisionOpen)
+	worlds := &blockingWorlds{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	p := newTestProvisionerWith(cfg, newProvisionerStore(), worlds)
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.EnsureTenant(context.Background(), brokertest.EveClaims())
+		done <- err
+	}()
+	<-worlds.entered
+	if !p.projectMu.TryLock() || !p.mu.TryLock() {
+		close(worlds.release)
+		t.Fatal("a provisioner lock is held across the in-process push")
+	}
+	p.mu.Unlock()
+	p.projectMu.Unlock()
+	close(worlds.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A push that lost the race to a newer fragment must not put the older
+// world set back in force.
+func TestProvisionerNeverPushesAnOlderFragmentOverANewer(t *testing.T) {
+	cfg := brokertest.NewProvisioningConfig(core.ProvisionOpen)
+	worlds := &fakeWorlds{}
+	p := newTestProvisionerWith(cfg, newProvisionerStore(), worlds)
+	older := renderedFragment{body: []byte("older"), seq: 1}
+	newer := renderedFragment{body: []byte("newer"), seq: 2}
+	if !p.pushWorlds(newer) || !p.pushWorlds(older) {
+		t.Fatal("a push the server already covers must report it holds the fragment")
+	}
+	if !slices.Equal(worlds.fragments, []string{"newer"}) {
+		t.Fatalf("pushed %q, want only the newer fragment", worlds.fragments)
+	}
+}
+
 // TestProvisionerPushesWorldsInProcess: every registry change reaches the
 // server in this process at once, and a refused push never fails the flow.
 func TestProvisionerPushesWorldsInProcess(t *testing.T) {
@@ -963,5 +1129,154 @@ func TestProvisionerPushesWorldsInProcess(t *testing.T) {
 	}
 	if q.lastSync != [32]byte{} {
 		t.Fatal("a refused push marked the registry payload synced; the next tick would not retry it")
+	}
+}
+
+// blockingBuckets parks EnsureBucket for the buckets named in park until
+// release closes; every other bucket is created at once.
+type blockingBuckets struct {
+	brokertest.FakeBuckets
+	park    string
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingBuckets) EnsureBucket(ctx context.Context, bucket string) error {
+	if strings.Contains(bucket, b.park) {
+		b.entered <- struct{}{}
+		<-b.release
+	}
+	return b.FakeBuckets.EnsureBucket(ctx, bucket)
+}
+
+// One tenant's slow bucket is that tenant's alone: another identity's first
+// arrival completes while it hangs, and so does the registry sync.
+func TestSlowBucketHoldsUpOnlyItsOwnTenant(t *testing.T) {
+	cfg := brokertest.NewProvisioningConfig(core.ProvisionOpen)
+	store := newProvisionerStore()
+	buckets := &blockingBuckets{park: "eve-adams", entered: make(chan struct{}, 4), release: make(chan struct{})}
+	p := newTestProvisioner(cfg, store, buckets)
+
+	slow := make(chan error, 1)
+	go func() {
+		_, err := p.EnsureTenant(context.Background(), brokertest.EveClaims())
+		slow <- err
+	}()
+	<-buckets.entered
+
+	done := make(chan error, 1)
+	go func() {
+		frank := &core.Claims{Subject: "google|frank", Email: "frank@example.com", EmailVerified: true}
+		world, err := p.EnsureTenant(context.Background(), frank)
+		if err == nil {
+			if _, ok := p.registry.Find(world.Name); !ok {
+				err = errors.New("frank's world is not in the world set")
+			}
+		}
+		if err == nil {
+			err = p.SyncRegistry(context.Background())
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("another identity's provisioning waited on a tenant's slow bucket")
+	}
+
+	close(buckets.release)
+	if err := <-slow; err != nil {
+		t.Fatal(err)
+	}
+	fragment := string(store.get(core.WorldsFragmentRef(cfg)))
+	if !strings.Contains(fragment, "name: eve-adams-") || !strings.Contains(fragment, "name: frank-") {
+		t.Fatalf("fragment lacks one of the two tenants:\n%s", fragment)
+	}
+}
+
+// Concurrent arrivals of one identity are one flight: one bucket call, one
+// world, and a caller that leaves does not fail the ones still waiting.
+func TestConcurrentArrivalsOfOneIdentityShareAFlight(t *testing.T) {
+	cfg := brokertest.NewProvisioningConfig(core.ProvisionOpen)
+	buckets := &blockingBuckets{park: "eve-adams", entered: make(chan struct{}, 4), release: make(chan struct{})}
+	p := newTestProvisioner(cfg, newProvisionerStore(), buckets)
+
+	leaving, leave := context.WithCancel(context.Background())
+	left := make(chan error, 1)
+	go func() {
+		_, err := p.EnsureTenant(leaving, brokertest.EveClaims())
+		left <- err
+	}()
+	<-buckets.entered
+
+	worlds := make(chan string, 3)
+	calling := make(chan struct{}, 3)
+	for range 3 {
+		go func() {
+			calling <- struct{}{}
+			world, err := p.EnsureTenant(context.Background(), brokertest.EveClaims())
+			if err != nil {
+				t.Errorf("EnsureTenant: %v", err)
+			}
+			worlds <- world.Name
+		}()
+	}
+	for range 3 {
+		<-calling
+	}
+	// Let the three reach the flight before it is released; a flight has no
+	// way to say who waits on it.
+	time.Sleep(200 * time.Millisecond)
+	leave()
+	if err := <-left; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the caller that left: err = %v, want its own cancellation", err)
+	}
+	close(buckets.release)
+	first := <-worlds
+	for range 2 {
+		if got := <-worlds; got != first || got == "" {
+			t.Fatalf("callers of one flight got worlds %q and %q", first, got)
+		}
+	}
+	select {
+	case <-buckets.entered:
+		t.Fatal("one identity's concurrent arrivals reached the bucket more than once")
+	default:
+	}
+}
+
+// A refusal decided on a registry this pod has since moved past is not
+// remembered: the newer registry may admit the identity.
+func TestRefusalDecidedBeforeANewerRegistryIsNotRemembered(t *testing.T) {
+	cfg := brokertest.NewProvisioningConfig(core.ProvisionOpen)
+	cfg.Provisioning.MaxTenants = 1
+	raw := newProvisionerStore()
+	seedRegistry(t, cfg, raw, map[string]tenantRecord{
+		"frank-00000000": {Email: "frank@example.com", Issuer: cfg.OIDC.Issuer, Subject: "google|frank", WorldID: "w", Created: "2026-01-01T00:00:00Z"},
+	})
+	hooked := &hookedStore{SecretStore: raw, ref: core.RegistryRef(cfg)}
+	p := newTestProvisioner(cfg, hooked, &brokertest.FakeBuckets{})
+	// Between the flight's start and its registry write, a sync applies.
+	hooked.hook = func() {
+		if err := p.SyncRegistry(context.Background()); err != nil {
+			t.Errorf("SyncRegistry: %v", err)
+		}
+	}
+	eve := brokertest.EveClaims()
+	if _, err := p.EnsureTenant(context.Background(), eve); !errors.Is(err, ErrTenantCapacity) {
+		t.Fatalf("err = %v, want ErrTenantCapacity", err)
+	}
+	if held := p.refusals.recent(core.IdentityKey(cfg.OIDC.Issuer, eve.Subject), p.clock()); held != nil {
+		t.Fatalf("a refusal older than the applied registry was remembered: %v", held)
+	}
+	// Decided on the registry in force, it is.
+	if _, err := p.EnsureTenant(context.Background(), eve); !errors.Is(err, ErrTenantCapacity) {
+		t.Fatalf("err = %v, want ErrTenantCapacity", err)
+	}
+	if held := p.refusals.recent(core.IdentityKey(cfg.OIDC.Issuer, eve.Subject), p.clock()); held == nil {
+		t.Fatal("a refusal on the registry in force was not remembered")
 	}
 }

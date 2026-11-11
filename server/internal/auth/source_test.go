@@ -306,6 +306,31 @@ func TestOptionalSource(t *testing.T) {
 		if got := source.Current().Hashes(); len(got) != 0 {
 			t.Errorf("Hashes after removal: got %v, want none", got)
 		}
+		// What its read tokens protected stays protected: public reads
+		// would be the price of a file deleted and written again.
+		if err := source.Current().AuthorizeRead("", "/doc.md"); !IsDenial(err) {
+			t.Errorf("anonymous read after removal: got %v, want a denial", err)
+		}
+
+		// The file back with no read token: its paths are public again.
+		if err := os.WriteFile(filePath, []byte("[tokens.writer]\nhash = \"sha256-b\"\npaths = [\"/**\"]\noperations = [\"publish\"]\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := source.Reload(); err != nil {
+			t.Fatalf("Reload after the file returned: %v", err)
+		}
+		if err := source.Current().AuthorizeRead("", "/doc.md"); err != nil {
+			t.Errorf("anonymous read once the file holds no read token: %v", err)
+		}
+		if err := os.Remove(filePath); err != nil {
+			t.Fatal(err)
+		}
+		if err := source.Reload(); err != nil {
+			t.Fatalf("Reload after the second removal: %v", err)
+		}
+		if err := source.Current().AuthorizeRead("", "/doc.md"); err != nil {
+			t.Errorf("anonymous read after a file with no read token vanished: %v", err)
+		}
 	})
 
 	t.Run("malformed optional file still fails", func(t *testing.T) {

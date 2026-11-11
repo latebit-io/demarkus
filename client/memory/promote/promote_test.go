@@ -9,6 +9,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/client/lookuptable"
+	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/client/memory/promote"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
@@ -205,12 +206,12 @@ func TestExamineAgainstThePolicy(t *testing.T) {
 		t.Errorf("missing = %q", got)
 	}
 	allowed := publishpolicy.Parse("strictness: block\nallow_tags.domain: a|b\n")
-	if got := promote.Missing("/x.md", map[string]string{"tags": "domain:c"}, "", &allowed); len(got) != 1 || !strings.HasPrefix(got[0], "disallowed tag domain:c (allowed domain values: ") {
+	if got := gate.Missing("/x.md", map[string]string{"tags": "domain:c"}, "", &allowed); len(got) != 1 || !strings.HasPrefix(got[0], "disallowed tag domain:c (allowed domain values: ") {
 		t.Errorf("disallowed = %q", got)
 	}
 	// The server judges body links against allow_domains; the dry run must too.
 	links := publishpolicy.Parse("strictness: block\nallow_domains: github.com\n")
-	if got := promote.Missing("/x.md", map[string]string{"tags": "a"}, "see https://evil.io/x\n", &links); len(got) != 1 || got[0] != "link to evil.io outside allow_domains (github.com)" {
+	if got := gate.Missing("/x.md", map[string]string{"tags": "a"}, "see https://evil.io/x\n", &links); len(got) != 1 || got[0] != "link to evil.io outside allow_domains (github.com)" {
 		t.Errorf("link = %q", got)
 	}
 	if r := (&promote.Check{Policy: &links}).Report(); !strings.Contains(r, "policy: strictness block; allow_domains github.com\n") {
@@ -261,5 +262,44 @@ func TestCandidates(t *testing.T) {
 	}
 	if got := d.SubjectTags(); strings.Join(got, ",") != "retries,errors,go" {
 		t.Errorf("subject tags = %v", got)
+	}
+}
+
+// A marker is a line of the block under the H1: one quoted in an example
+// neither marks the document nor is rewritten by a stamp.
+func TestMarkersAreReadOnlyUnderTheH1(t *testing.T) {
+	example := "## Format\n\n```\npromoted-via: other\npromoted: mark://other/x.md@v9\n```\n\npromoted: /in-prose.md@v4\n"
+	plain := "# Promotion\n\nHow a source is stamped.\n\n" + example
+	if promote.Marked(plain) || promote.IsPromoted(nil, plain) {
+		t.Error("an example marker marked the document")
+	}
+	if _, found := promote.ParseMarkers(plain); found {
+		t.Error("an example marker was parsed as the document's")
+	}
+	if got := promote.WithoutMarkers(plain); got != plain {
+		t.Errorf("an unmarked body changed:\n%s", got)
+	}
+	m := promote.Markers{Via: "knowledge", Target: "mark://team/promotion.md", Version: 2}
+	stamped := promote.WithMarkers(plain, &m)
+	if !strings.HasSuffix(stamped, example) || !strings.HasPrefix(stamped, "# Promotion\n\npromoted-via: knowledge\npromoted: mark://team/promotion.md@v2\n\nHow a source") {
+		t.Errorf("stamp rewrote the example:\n%s", stamped)
+	}
+	if got, found := promote.ParseMarkers(stamped); !found || got != m {
+		t.Errorf("markers = %+v, want the stamp's, not the example's", got)
+	}
+	if got := promote.WithoutMarkers(stamped); got != plain {
+		t.Errorf("unstamped body differs from the original:\n%s", got)
+	}
+}
+
+// A setext H1 keeps its underline: the markers go under the heading whole.
+func TestMarkersGoUnderASetextH1(t *testing.T) {
+	m := promote.Markers{Via: "k", Target: "/t.md", Version: 1}
+	got := promote.WithMarkers("Guidelines\n==========\n\nHard rules.\n", &m)
+	if got != "Guidelines\n==========\n\npromoted-via: k\npromoted: /t.md@v1\n\nHard rules.\n" {
+		t.Errorf("stamped = %q", got)
+	}
+	if links := promote.Stub(got, ""); links != "# Guidelines\n\nHard rules.\n" {
+		t.Errorf("stub = %q", links)
 	}
 }

@@ -80,6 +80,15 @@ policy in a bucket. The projected file is still read and validated on every
 world open, so leave it in place once a world has started with it. A read-only
 world is never seeded, and setting `initialPolicy` on one fails rendering.
 
+A memory world (`profile: memory`, and every provisioned tenant) is seeded
+with the personal-memory policy instead of the knowledge default: the chart
+renders `seed: memory` on it unless it has an `initialPolicy`. The server
+alone seeds it; the broker writes the template and the hub on first use,
+never a policy. A memory world opened by an earlier release holds the
+knowledge default at version 1: the first open on this release replaces it
+with the memory policy as version 2, once, and leaves any policy its owner
+wrote.
+
 Policy directives parse anywhere in the body, so prose in `initialPolicy`
 must never begin a line with `strictness:`, `require_tags:`,
 `require_fields:` or `allow_tags.`.
@@ -368,12 +377,23 @@ kubectl -n demarkus exec deploy/knowledge -- \
 
 It tombstones the registry entry, rewrites the fragment (every replica drops
 the world), optionally destroys the bucket, then clears the tombstone; a
-crashed run converges on rerun.
+crashed run converges on rerun. The fragment is generated from the registry
+alone and says so in its first line: an entry added to the Secret by hand is
+dropped at the next write.
+
+The server refuses to serve a memory world, static or provisioned, that is
+not `gated: true`, at start and on every later reload; a world it already
+serves gated keeps serving that way. With `broker.federation` on, the broker
+refuses to start, and the deriver to checkpoint, when a federated world is
+gated while the hub is not: the hub would hand that world's paths, titles
+and links to anonymous readers. Gate the hub too, or leave the world out.
 
 Rate limits: `broker.rateLimit` buckets `/me/install` and the gateways per
 subject and `/auth/login` per IP, per replica. `trustForwardedFor` is on by
 default and is only safe behind an Ingress controller that strips spoofed
 `X-Forwarded-For` (nginx-ingress and Traefik do); turn it off without one.
+An IPv6 client is limited as its /64, and one client address holds at most
+50 pending device grants of the broker's 1000.
 
 Logins and MCP host registrations live in `broker.stateBucket`, one object
 each: `refresh/<user>/<login>` and `clients/<client_id>`. The user key is a
@@ -382,8 +402,20 @@ token. Never point it at a world's bucket. A public client's refresh token
 rotates on every refresh; a replaced token works for one more minute, then
 presenting it revokes the login. A `webClients` login keeps its token, since
 the client authenticates on every refresh. `broker.maxSessionsPerUser` (default 20) caps one user's
-logins, revoking the oldest. The leader-elected sweeper deletes logins past
-their 90 days. An optional lifecycle rule deleting objects older than 91
+logins, revoking the oldest. `broker.maxLoginAge` (off by default) makes a
+login sign in again after that long, however often it refreshed, so a change
+at the IdP reaches the claims the broker mints from. To end an identity's
+logins at once, when an account is disabled at the IdP:
+
+```bash
+kubectl -n demarkus exec deploy/knowledge -- \
+  /demarkus-knowledge -broker-config /etc/demarkus/broker/config.yaml \
+  -revoke-sessions <email or IdP subject>
+```
+
+Bearers already minted last out `broker.idTokenTTL`. `/token/revoke` ends a
+login only for a caller holding one of its tokens. The leader-elected sweeper
+deletes logins past their 90 days. An optional lifecycle rule deleting objects older than 91
 days is a safe backstop: a refresh rewrites the object, so it only catches
 records already expired.
 Keys live in Secrets the broker creates on first start (`<fullname>-signing-key`,

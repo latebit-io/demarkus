@@ -292,7 +292,7 @@ func gatedSelector(route quicserve.Selector, gates Gates) quicserve.Selector {
 // listeners. Close still has to run afterwards.
 func (s *Server) Serve(ctx context.Context) error {
 	if s.configFile != "" {
-		startConfigWatchers(s.watchCtx, &s.watcherGroup, s.configFile, s.config, s.worlds, s.logger)
+		s.startConfigWatchers()
 	}
 
 	quicResult := make(chan error, len(s.listeners))
@@ -345,6 +345,13 @@ func (s *Server) Reload() {
 	}
 }
 
+// RequireGate has every later world set refuse a world that must(authority)
+// names unless it is gated, and fails when a live world already breaks the
+// rule: the broker's private worlds must never be on the capability listener.
+func (s *Server) RequireGate(must func(authority string) bool) error {
+	return s.worlds.requireGate(must)
+}
+
 // ApplyWorldsFragment puts a worlds fragment in force ahead of the mounted
 // worldsFile, so a tenant provisioned in this process serves at once.
 func (s *Server) ApplyWorldsFragment(fragment []byte) error {
@@ -382,26 +389,15 @@ func configuredAuthorities(config *knowledgeconfig.Config) []string {
 }
 
 // startConfigWatchers reloads the world set when the main config or the
-// worldsFile fragment changes on disk (both are typically projected
-// ConfigMaps whose updates arrive as atomic symlink swaps).
-func startConfigWatchers(
-	ctx context.Context,
-	group *sync.WaitGroup,
-	configFile string,
-	config *knowledgeconfig.Config,
-	worlds *worldManager,
-	logger *slog.Logger,
-) {
-	targets := []string{configFile}
-	if fragment := config.WorldsFilePath(configFile); fragment != "" {
+// worldsFile fragment changes on disk (projected ConfigMaps swap symlinks).
+// A watcher that cannot start is started again, so a late mount is seen.
+func (s *Server) startConfigWatchers() {
+	targets := []string{s.configFile}
+	if fragment := s.config.WorldsFilePath(s.configFile); fragment != "" {
 		targets = append(targets, fragment)
 	}
 	for _, target := range targets {
-		watcher := &configwatch.Watcher{Targets: []string{target}, Reload: worlds.Reload, Logger: logger}
-		group.Go(func() {
-			if err := watcher.Run(ctx); err != nil {
-				logger.Warn("config watcher exited", "target", target, "error", err)
-			}
-		})
+		watcher := &configwatch.Watcher{Targets: []string{target}, Reload: s.worlds.Reload, Logger: s.logger}
+		s.watcherGroup.Go(func() { superviseWatcher(s.watchCtx, watcher, s.logger, worldRetryInterval) })
 	}
 }

@@ -125,7 +125,7 @@ func currentDocument(ctx context.Context, reader documentGetter, path string) (d
 // evaluate judges one prepared write: the body first, then the metadata
 // under the floor merged with this world's policy, a candidate policy last.
 // The notes are what a warn verdict let through, then drift; none on a refusal.
-func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite, d drift) ([]string, error) {
+func (e *Enforcer) evaluate(ctx context.Context, state backend.Reader, write storefmt.PreparedWrite, d drift) ([]string, error) {
 	body := string(write.Content)
 	notes, err := e.content.judge(body, write.Metadata)
 	if err != nil {
@@ -180,7 +180,7 @@ func (e *enforcer) evaluate(ctx context.Context, state backend.Reader, write sto
 
 // floorSatisfiable refuses a candidate floor policy that, merged under any
 // world's current policy, could not be met within the metadata budget.
-func (e *enforcer) floorSatisfiable(ctx context.Context, candidate publishpolicy.Policy) error {
+func (e *Enforcer) floorSatisfiable(ctx context.Context, candidate publishpolicy.Policy) error {
 	if e.options.Worlds == nil {
 		return nil
 	}

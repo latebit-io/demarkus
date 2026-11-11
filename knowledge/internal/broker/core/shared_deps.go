@@ -9,6 +9,8 @@ import (
 // management API and the gateway verify with one composed verifier and
 // one identity has one subject bucket across /me/install and /mcp.
 type SharedDeps struct {
+	// Worlds is the one live world set every broker package reads.
+	Worlds         *WorldRegistry
 	Verifier       Verifier
 	SubjectLimiter *RateLimitRegistry
 	Clock          func() time.Time

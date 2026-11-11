@@ -187,11 +187,15 @@ func Note(text string) string {
 	return "\nnote: " + text + "\n"
 }
 
+// CatalogFallbackNote is what a tool reports when body match was requested
+// and the server answered from the catalog instead.
+const CatalogFallbackNote = "server answered from the catalog (no body match); an empty table is not evidence of absence"
+
 // CatalogFallback is the note appended to a lookup result when body match
 // was requested and the server answered from the catalog; else "".
 func CatalogFallback(req fetch.LookupRequest, r fetch.Result) string {
 	if !fetch.AnsweredFromCatalog(req, r) {
 		return ""
 	}
-	return Note(fetch.CatalogFallbackNote)
+	return Note(CatalogFallbackNote)
 }

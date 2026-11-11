@@ -146,7 +146,9 @@ func (s *Store) claimValidation(url string) bool {
 	if s.validating == nil {
 		s.validating = make(map[string]time.Time)
 	}
-	if last, ok := s.validating[url]; ok && time.Since(last) < graph.FreshnessWindow {
+	// A claim past the window cools nothing down: only live ones are kept.
+	maps.DeleteFunc(s.validating, func(_ string, last time.Time) bool { return time.Since(last) >= graph.FreshnessWindow })
+	if _, cooling := s.validating[url]; cooling {
 		return false
 	}
 	s.validating[url] = time.Now()

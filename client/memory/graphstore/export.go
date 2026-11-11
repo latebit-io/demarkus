@@ -42,8 +42,7 @@ func (s *Store) Snapshot() ([]StoredNode, []StoredEdge) {
 	}
 	sort.Slice(nodes, func(i, j int) bool { return lessStoredNode(&nodes[i], &nodes[j]) })
 
-	edges := make([]StoredEdge, len(s.edges))
-	copy(edges, s.edges)
+	edges := s.liveEdgesLocked()
 	sort.Slice(edges, func(i, j int) bool { return lessStoredEdge(&edges[i], &edges[j]) })
 	return nodes, edges
 }
@@ -178,10 +177,11 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 			if err != nil {
 				linkCount = 0 // digits only per the regex: an overflow reads as zero links
 			}
+			// Cloned: a kept row must not hold the whole export body.
 			nodes = append(nodes, StoredNode{
-				URL:       m[1],
-				Title:     unescapeCell(m[2]),
-				Status:    m[3],
+				URL:       strings.Clone(m[1]),
+				Title:     strings.Clone(unescapeCell(m[2])),
+				Status:    strings.Clone(m[3]),
 				LinkCount: linkCount,
 			})
 		case "edges":
@@ -191,11 +191,11 @@ func ParseExport(body string) ([]StoredNode, []StoredEdge) {
 					count = 0 // digits only per the regex: an overflow falls to the floor of one below
 				}
 				edges = append(edges, StoredEdge{
-					From:   m[1],
-					To:     m[2],
-					Rel:    m[3],
-					Label:  unescapeCell(m[4]),
-					Anchor: m[5],
+					From:   strings.Clone(m[1]),
+					To:     strings.Clone(m[2]),
+					Rel:    strings.Clone(m[3]),
+					Label:  strings.Clone(unescapeCell(m[4])),
+					Anchor: strings.Clone(m[5]),
 					Count:  max(count, 1),
 				})
 			}

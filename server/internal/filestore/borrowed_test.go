@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
+	"github.com/latebit-io/demarkus/server/store"
 )
 
 // A precondition is lent a reader under the write lock. Closing it must not
@@ -29,7 +29,9 @@ func TestPreconditionReaderCloseIsHarmless(t *testing.T) {
 	}
 	write := backend.WriteRequest{
 		Path: "/a.md", Content: []byte("# A\n"),
-		Precondition: func(_ context.Context, state backend.Reader, _ storefmt.PreparedWrite) error { return closeLent(state) },
+		Precondition: func(_ context.Context, state backend.CommitState, _ storefmt.PreparedWrite) error {
+			return closeLent(state)
+		},
 	}
 	if _, err := s.Publish(ctx, write); err != nil {
 		t.Fatalf("publish: %v", err)

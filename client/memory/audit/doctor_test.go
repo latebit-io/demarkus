@@ -622,3 +622,55 @@ func TestGeneratedGraphDataIsNotAudited(t *testing.T) {
 		t.Errorf("findings = %+v, want none", r.Findings)
 	}
 }
+
+// A hub is a hub by the one rule: the document named after a directory
+// files a stale entry for its broken link as an index.md does.
+func TestDirNamedHubFilesAStaleIndexEntry(t *testing.T) {
+	f := newFake(map[string]fakeDoc{
+		"/index.md":     tagged("# Root\n\n- [plans](/plans.md)\n"),
+		"/plans.md":     tagged("# Plans\n\nEvery plan, one link each.\n\n- [a](/plans/a.md)\n- [gone](/plans/gone.md)\n"),
+		"/plans/a.md":   tagged("# A\n\nSummary.\n"),
+		"/notes.md":     tagged("# Notes\n\nProse with a [dead link](/plans/gone.md).\n"),
+		"/notes/n.md":   tagged("# N\n\nSummary.\n"),
+		"/other.md":     tagged("# Other\n\nProse with a [dead link](/plans/gone.md) and [n](/notes/n.md), [notes](/notes.md).\n"),
+		"/other-dir.md": tagged("# D\n\nSummary [o](/other.md).\n"),
+	})
+	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := findings(r, CheckStaleIndex)
+	if len(got) != 2 || !strings.Contains(got[0], "/notes.md: -> /plans/gone.md") || !strings.Contains(got[1], "/plans.md: -> /plans/gone.md") {
+		t.Fatalf("stale index entries = %v, want the two documents named after a directory and not /other.md", got)
+	}
+}
+
+// A finding names the kind of fix; only the surface showing it names a command.
+func TestFindingsCarryAFixKindAndNoCommand(t *testing.T) {
+	f := newFake(map[string]fakeDoc{
+		"/index.md":  tagged("# Hub\n\nEvery document, one link each.\n\n- [a](/a.md)\n"),
+		"/a.md":      tagged("# A\n\nWhat A settles for readers.\n\n## Done 2026-10-12\n\nx\n"),
+		"/lonely.md": tagged("# Lonely\n\nWhat lonely settles for readers.\n"),
+	})
+	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]string{}
+	for _, fd := range r.Findings {
+		if strings.Contains(fd.Fix, "/soul-") || strings.Contains(fd.Fix, "mark_") || strings.Contains(fd.Fix, "/promote") {
+			t.Errorf("finding names a surface command: %+v", fd)
+		}
+		kinds[fd.Check] = fd.FixKind
+	}
+	if kinds[CheckOrphans] != FixArchive || kinds[CheckDocumentShape] != FixCurate {
+		t.Fatalf("fix kinds = %v", kinds)
+	}
+	if md := r.Markdown(); !strings.Contains(md, "- /lonely.md: no inbound link from any document in scope; fix: archive /lonely.md (or link it from its hub)\n") || strings.Contains(md, "soul") {
+		t.Errorf("a report without a surface names the action alone:\n%s", md)
+	}
+	r.Commands = Commands{Curate: func(p string) string { return "/x-curate " + p }, Batch: func(p string) string { return "x_curate " + p }}
+	if md := r.Markdown(); !strings.Contains(md, "fix: /x-curate /a.md\n") || !strings.Contains(md, "fixable: x_curate / proposes") {
+		t.Errorf("the surface's commands are not cited:\n%s", md)
+	}
+}

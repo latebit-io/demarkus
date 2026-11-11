@@ -31,12 +31,15 @@ type codeGrant struct {
 // deviceGrant is one RFC 8628 grant from authorize to the poll that
 // collects it; Claims is set once the user signs in.
 type deviceGrant struct {
-	UserCode     string       `json:"userCode"`
-	Status       deviceStatus `json:"status"`
-	Resource     string       `json:"resource,omitempty"`
-	ExpiresAt    time.Time    `json:"expiresAt"`
-	LastPolledAt time.Time    `json:"lastPolledAt,omitzero"`
-	Claims       core.Claims  `json:"claims,omitzero"`
+	UserCode string       `json:"userCode"`
+	Status   deviceStatus `json:"status"`
+	// Origin fingerprints the address that asked for the grant, for the
+	// per-origin cap; never the address itself.
+	Origin       string      `json:"origin,omitempty"`
+	Resource     string      `json:"resource,omitempty"`
+	ExpiresAt    time.Time   `json:"expiresAt"`
+	LastPolledAt time.Time   `json:"lastPolledAt,omitzero"`
+	Claims       core.Claims `json:"claims,omitzero"`
 }
 
 const (
@@ -44,12 +47,19 @@ const (
 	// refuses new grants until entries expire, at most one TTL later.
 	maxCodeGrants   = 1000
 	maxDeviceGrants = 1000
+	// maxDeviceGrantsPerOrigin keeps one address from filling the store alone:
+	// device grants are anonymous, so the global cap would lock everyone out.
+	maxDeviceGrantsPerOrigin = 50
 	// maxGrantStateBytes keeps the document under the 1 MiB Secret limit.
 	maxGrantStateBytes = 900 << 10
 )
 
-// errGrantStoreFull is returned instead of growing the document past a cap.
-var errGrantStoreFull = errors.New("broker: too many pending grants")
+// errGrantStoreFull is returned instead of growing the document past a cap;
+// errOriginGrantsFull wraps it for one origin at its own cap.
+var (
+	errGrantStoreFull   = errors.New("broker: too many pending grants")
+	errOriginGrantsFull = fmt.Errorf("%w from this address", errGrantStoreFull)
+)
 
 // grantStore reads and updates the shared document. Every update drops
 // expired grants first, so the document holds live grants only.

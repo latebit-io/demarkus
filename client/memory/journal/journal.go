@@ -47,8 +47,8 @@ type Outcome struct {
 	Notes   []string
 }
 
-// Docs binds the surface's write contract to one path on the store.
-type Docs func(docPath string) *docwrite.Doc
+// Docs is hub.Docs: one binding serves the entry and its hubs.
+type Docs = hub.Docs
 
 const (
 	defaultImportance = "0.4"
@@ -264,15 +264,21 @@ func head(ctx context.Context, doc *docwrite.Doc) (*docwrite.Head, error) {
 	return h, nil
 }
 
-// hasBlock reports the entry present as its own blank line delimited block.
+// hasBlock reports the entry present as its own block: blank lines or the
+// body's ends bound it. The entry may itself hold blank lines.
 func hasBlock(body, entry string) bool {
-	if !strings.Contains(body, entry) {
-		return false
-	}
-	for block := range strings.SplitSeq(strings.ReplaceAll(body, "\r\n", "\n"), "\n\n") {
-		if strings.TrimSpace(block) == entry {
+	body, entry = strings.ReplaceAll(body, "\r\n", "\n"), strings.ReplaceAll(entry, "\r\n", "\n")
+	for from := 0; from < len(body); {
+		i := strings.Index(body[from:], entry)
+		if i < 0 {
+			return false
+		}
+		start := from + i
+		before, after := strings.TrimRight(body[:start], " \t"), strings.TrimLeft(body[start+len(entry):], " \t")
+		if (before == "" || strings.HasSuffix(before, "\n\n")) && (strings.TrimSpace(after) == "" || strings.HasPrefix(after, "\n\n")) {
 			return true
 		}
+		from = start + 1
 	}
 	return false
 }

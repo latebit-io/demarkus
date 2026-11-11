@@ -1,6 +1,7 @@
 package knowledgeserver
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -55,33 +56,43 @@ func (coordinator *tokenCoordinator) ValidateWorlds(worlds []tokenWorld) error {
 	return validateUniqueTokens(worlds, stores)
 }
 
+// Reload publishes the worlds whose token files load and reports the rest,
+// which keep their tokens: one broken file never holds back another world's
+// revocation. A cross-world check failure publishes nothing.
 func (coordinator *tokenCoordinator) Reload() error {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 
 	candidates := make([]*auth.TokenStore, len(coordinator.worlds))
+	loaded := make([]bool, len(coordinator.worlds))
+	var failed []error
 	for index, world := range coordinator.worlds {
 		store, err := world.runtime.LoadTokens()
+		if err == nil && store == nil {
+			err = errors.New("token store is nil")
+		}
 		if err != nil {
-			return fmt.Errorf("load tokens for world %q: %w", world.name, err)
+			failed = append(failed, fmt.Errorf("load tokens for world %q: %w", world.name, err))
+			candidates[index] = world.runtime.Tokens()
+			continue
 		}
-		if store == nil {
-			return fmt.Errorf("load tokens for world %q: token store is nil", world.name)
-		}
-		candidates[index] = store
+		candidates[index], loaded[index] = store, true
 	}
 	if err := validateUniqueTokens(coordinator.worlds, candidates); err != nil {
-		return err
+		return errors.Join(append(failed, err)...)
 	}
 	if err := coordinator.validateTransition(candidates); err != nil {
-		return err
+		return errors.Join(append(failed, err)...)
 	}
 	for index, world := range coordinator.worlds {
+		if !loaded[index] {
+			continue
+		}
 		if err := world.runtime.PublishTokens(candidates[index]); err != nil {
-			return fmt.Errorf("publish tokens for world %q: %w", world.name, err)
+			failed = append(failed, fmt.Errorf("publish tokens for world %q: %w", world.name, err))
 		}
 	}
-	return nil
+	return errors.Join(failed...)
 }
 
 func validateUniqueTokens(worlds []tokenWorld, stores []*auth.TokenStore) error {

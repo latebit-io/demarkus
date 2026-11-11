@@ -45,6 +45,8 @@ type worldsTestHarness struct {
 	// goroutine both reach them.
 	storesMu sync.Mutex
 	stores   map[string]*blob.Memory
+	// stop ends the manager's watch context, as Server.Close does first.
+	stop context.CancelFunc
 }
 
 const testWorldID = "52b471f7-8d38-4c89-b44a-6f4f8b1a4f48"
@@ -65,22 +67,27 @@ func testCertFiles(t *testing.T, dnsName string) (certFile, keyFile string) {
 	return certFile, keyFile
 }
 
-// worldFragment renders one world. Without bootstrap it is a statically
-// configured world, the path that enforces policy and seeds a default one.
-func worldFragment(name, worldID, tokensFile string, bootstrap bool) string {
+// worldFragment renders one world. standard false is the same world under a
+// changed config (a lower watch cap), which a reload replaces.
+func worldFragment(name, worldID, tokensFile string, standard bool) string {
+	watches := 1024
+	if !standard {
+		watches = 512
+	}
 	return fmt.Sprintf(`  - name: %s
     authorities:
       - %s.memory.svc.cluster.local
     bucket:
       url: gs://memory-%s
       worldID: %s
-    bootstrap: %t
+    limits:
+      maxWatches: %d
     auth:
       tokensFile: %s
-`, name, name, name, worldID, bootstrap, tokensFile)
+`, name, name, name, worldID, watches, tokensFile)
 }
 
-// worldStaticFragment renders a provisioned world with a static tokens file
+// worldStaticFragment renders a world with a static tokens file
 // beside its runtime one.
 func worldStaticFragment(name, worldID, tokensFile, staticFile string) string {
 	return worldFragment(name, worldID, tokensFile, true) + "      staticTokensFile: " + staticFile + "\n"
@@ -161,7 +168,7 @@ tls:
 		// The harness carries the stores the failed open touched.
 		return err
 	}
-	h.manager = manager
+	h.manager, h.stop = manager, cancel
 	t.Cleanup(func() {
 		h.manager.Close()
 		cancel()
@@ -657,10 +664,10 @@ func TestWorldManagerClosesSupersededStagedRuntime(t *testing.T) {
 	if err := os.WriteFile(tokensB, []byte(shared), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, bootstrap := range []bool{false, true} {
+	for _, standard := range []bool{false, true} {
 		h.writeFragment(t, "worlds:\n"+
 			worldFragment("alice", testWorldID, tokensA, true)+
-			worldFragment("bob", testWorldIDB, tokensB, bootstrap))
+			worldFragment("bob", testWorldIDB, tokensB, standard))
 		if err := h.manager.Reload(); err != nil {
 			t.Fatalf("reload: %v", err)
 		}

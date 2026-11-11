@@ -45,9 +45,10 @@ func TestCommitsPublishHints(t *testing.T) {
 	hash := storefmt.ContentHash(appended.Content)
 	want := []changefeed.Event{
 		{Seq: 1, Path: "/a.md", Version: 1, Hash: storefmt.ContentHash([]byte("# A\n")), Op: protocol.OpPublish, Agent: "claude-code"},
-		{Seq: 2, Path: "/a.md", Version: 2, Hash: hash, Op: protocol.OpAppend, Agent: "claude-code"},
-		{Seq: 3, Path: "/a.md", Version: 2, Hash: hash, Op: protocol.OpArchive, Agent: "claude-code"},
-		{Seq: 4, Path: "/a.md", Version: 2, Hash: hash, Op: protocol.OpPublish, Agent: "claude-code"},
+		// The append carried no agent and inherits none: identity is per write.
+		{Seq: 2, Path: "/a.md", Version: 2, Hash: hash, Op: protocol.OpAppend},
+		{Seq: 3, Path: "/a.md", Version: 2, Hash: hash, Op: protocol.OpArchive},
+		{Seq: 4, Path: "/a.md", Version: 2, Hash: hash, Op: protocol.OpPublish},
 	}
 	for _, w := range want {
 		ctx, cancel := context.WithTimeout(ctx, time.Second)

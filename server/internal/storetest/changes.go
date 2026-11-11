@@ -209,8 +209,9 @@ func testEventsFollowCommits(t *testing.T, site ChangeSite) {
 		agent, user    string
 	}{
 		{"/w/a.md", protocol.OpPublish, storefmt.ContentHash(first.Content), 1, "suite", "alice@example.com"},
-		{"/w/a.md", protocol.OpAppend, storefmt.ContentHash(appended.Content), 2, "suite", "alice@example.com"},
-		{"/w/a.md", protocol.OpArchive, storefmt.ContentHash(appended.Content), 2, "suite", "alice@example.com"},
+		// Identity is the write's own: the append carried none and inherits none.
+		{"/w/a.md", protocol.OpAppend, storefmt.ContentHash(appended.Content), 2, "", ""},
+		{"/w/a.md", protocol.OpArchive, storefmt.ContentHash(appended.Content), 2, "", ""},
 		{"/w/b.md", protocol.OpPublish, storefmt.ContentHash([]byte("# B\n")), 1, "", ""},
 	}
 	for i, w := range want {

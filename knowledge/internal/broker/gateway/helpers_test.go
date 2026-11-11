@@ -15,6 +15,7 @@ import (
 	"github.com/latebit-io/demarkus/client/fetchtest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/brokertest"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/storage"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -48,6 +49,7 @@ func gatewayFixtureFor(t testing.TB, cfg *core.Config, shared core.SharedDeps, p
 	store := storage.NewK8sSecretStore(fake.NewSimpleClientset())
 	clock := brokertest.NewFakeClock(fixedTestTime)
 	shared.Log, shared.Clock = slog.Default(), clock.Now
+	shared.Worlds = brokertest.Registry(t, cfg)
 	shared.SubjectLimiter, _ = core.NewRateLimits(&cfg.RateLimit)
 	return &gatewayFixture{t: t, cfg: cfg, shared: shared, store: store, clock: clock, profile: profile}
 }
@@ -55,14 +57,18 @@ func gatewayFixtureFor(t testing.TB, cfg *core.Config, shared core.SharedDeps, p
 // enableProvisioning wires dynamic tenant provisioning over the fixture's
 // store and clock.
 func (f *gatewayFixture) enableProvisioning(buckets storage.BucketCreator) *storage.Provisioner {
-	f.provisioner = storage.NewProvisioner(f.cfg, storage.ProvisionerDeps{Store: f.store, Buckets: buckets, Log: f.shared.Log, Clock: f.clock.Now})
+	f.provisioner = storage.NewProvisioner(f.cfg, storage.ProvisionerDeps{Store: f.store, Buckets: buckets, Registry: f.shared.Worlds, Log: f.shared.Log, Clock: f.clock.Now})
 	return f.provisioner
 }
 
 // gateway builds the gateway around d, for tests that call handlers
 // directly; the test's end stops its session sweep.
-func (f *gatewayFixture) gateway(d WorldDispatcher) *Gateway {
-	g := New(DepsFor(f.cfg, f.profile, f.shared, f.provisioner), "test", d, f.profile)
+func (f *gatewayFixture) gateway(d dispatch.WorldDispatcher) *Gateway {
+	var tenants TenantProvisioner
+	if f.provisioner != nil {
+		tenants = f.provisioner
+	}
+	g := New(DepsFor(f.cfg, f.profile, f.shared, tenants), "test", d, f.profile)
 	f.t.Cleanup(func() {
 		if err := g.Shutdown(context.Background()); err != nil {
 			f.t.Errorf("gateway shutdown: %v", err)
@@ -72,7 +78,7 @@ func (f *gatewayFixture) gateway(d WorldDispatcher) *Gateway {
 }
 
 // serve hosts the gateway's routes, for tests that drive the HTTP transport.
-func (f *gatewayFixture) serve(t testing.TB, d WorldDispatcher) *httptest.Server {
+func (f *gatewayFixture) serve(t testing.TB, d dispatch.WorldDispatcher) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(f.gateway(d).Routes())
 	t.Cleanup(ts.Close)
@@ -80,20 +86,20 @@ func (f *gatewayFixture) serve(t testing.TB, d WorldDispatcher) *httptest.Server
 }
 
 // newGatewayWithDispatcher is a knowledge gateway run as alice, in process.
-func newGatewayWithDispatcher(t testing.TB, cfg *core.Config, d WorldDispatcher) *Gateway {
+func newGatewayWithDispatcher(t testing.TB, cfg *core.Config, d dispatch.WorldDispatcher) *Gateway {
 	t.Helper()
 	return newGatewayFixture(t, cfg, &brokertest.FakeVerifier{Claims: brokertest.AliceClaims()}, KnowledgeProfile()).gateway(d)
 }
 
 // newMemoryGateway is a memory gateway run as alice, in process.
-func newMemoryGateway(t testing.TB, cfg *core.Config, d WorldDispatcher) *Gateway {
+func newMemoryGateway(t testing.TB, cfg *core.Config, d dispatch.WorldDispatcher) *Gateway {
 	t.Helper()
 	return newGatewayFixture(t, cfg, &brokertest.FakeVerifier{Claims: brokertest.AliceClaims()}, MemoryProfile()).gateway(d)
 }
 
 // memoryGatewayWithProvisioning is newMemoryGateway with dynamic provisioning
 // over the fake Secret store.
-func memoryGatewayWithProvisioning(t *testing.T, cfg *core.Config, d WorldDispatcher) (*Gateway, *brokertest.FakeBuckets) {
+func memoryGatewayWithProvisioning(t *testing.T, cfg *core.Config, d dispatch.WorldDispatcher) (*Gateway, *brokertest.FakeBuckets) {
 	t.Helper()
 	f := newGatewayFixture(t, cfg, &brokertest.FakeVerifier{Claims: brokertest.AliceClaims()}, MemoryProfile())
 	buckets := &brokertest.FakeBuckets{}
@@ -105,13 +111,13 @@ func memoryGatewayWithProvisioning(t *testing.T, cfg *core.Config, d WorldDispat
 // world pool, for tests that never reach a world.
 func newTestMCPGateway(t *testing.T, cfg *core.Config, verifier core.Verifier) *httptest.Server {
 	t.Helper()
-	pool := NewWorldPool(cfg.Registry(), fetch.Options{})
+	pool := NewWorldPool(brokertest.Registry(t, cfg), fetch.Options{})
 	t.Cleanup(pool.Close)
 	return newTestMCPGatewayWith(t, cfg, verifier, pool)
 }
 
 // newTestMCPGatewayWith serves a knowledge gateway over HTTP around d.
-func newTestMCPGatewayWith(t *testing.T, cfg *core.Config, verifier core.Verifier, d WorldDispatcher) *httptest.Server {
+func newTestMCPGatewayWith(t *testing.T, cfg *core.Config, verifier core.Verifier, d dispatch.WorldDispatcher) *httptest.Server {
 	t.Helper()
 	return newGatewayFixture(t, cfg, verifier, KnowledgeProfile()).serve(t, d)
 }

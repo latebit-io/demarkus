@@ -5,13 +5,13 @@ import (
 	"os"
 	"testing"
 
-	"github.com/latebit-io/demarkus/protocol/store"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	storagebackend "github.com/latebit-io/demarkus/server/internal/backend"
 	"github.com/latebit-io/demarkus/server/internal/backend/backendtest"
 	"github.com/latebit-io/demarkus/server/internal/catalog"
 	"github.com/latebit-io/demarkus/server/internal/changefeed"
 	"github.com/latebit-io/demarkus/server/internal/filestore"
+	"github.com/latebit-io/demarkus/server/store"
 )
 
 // backend is one DocumentStore, wired as main.go does. Tamper overwrites one version's stored bytes behind the store's back so

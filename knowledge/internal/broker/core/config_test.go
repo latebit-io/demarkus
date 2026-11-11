@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latebit-io/demarkus/client/mcpfmt"
+	"github.com/latebit-io/demarkus/protocol/toolvocab"
 )
 
 // validConfigTemplate carries a sentinel where the broker signing
@@ -942,8 +942,8 @@ func TestGatewayConfigValidate(t *testing.T) {
 		wantErr     string
 		wantProfile string
 	}{
-		{name: "tool profile defaults to full", wantProfile: mcpfmt.ProfileFull},
-		{name: "lean tool profile accepted", gateway: GatewayConfig{ToolProfile: "lean"}, wantProfile: mcpfmt.ProfileLean},
+		{name: "tool profile defaults to full", wantProfile: toolvocab.ProfileFull},
+		{name: "lean tool profile accepted", gateway: GatewayConfig{ToolProfile: "lean"}, wantProfile: toolvocab.ProfileLean},
 		{name: "unknown tool profile rejected", gateway: GatewayConfig{ToolProfile: "wide"}, wantErr: "server.mcp.toolProfile: unknown tool profile"},
 	}
 	for _, tt := range tests {
@@ -1058,5 +1058,20 @@ func TestServerConfigResourcesNameEveryGateway(t *testing.T) {
 	}
 	if s.Memory.Host() != "memory.example.com" {
 		t.Errorf("Memory.Host = %q", s.Memory.Host())
+	}
+}
+
+// maxLoginAge changes how often users sign in, so it is off unless set.
+func TestMaxLoginAgeIsOffByDefaultAndNeverNegative(t *testing.T) {
+	var s ServerConfig
+	if err := s.ApplyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if s.MaxLoginAge != 0 {
+		t.Fatalf("default maxLoginAge = %s, want off", s.MaxLoginAge)
+	}
+	s.MaxLoginAge = -time.Hour
+	if err := s.ApplyDefaults(); err == nil || !strings.Contains(err.Error(), "server.maxLoginAge") {
+		t.Fatalf("negative maxLoginAge: err = %v", err)
 	}
 }

@@ -11,7 +11,6 @@ import (
 
 	"github.com/latebit-io/demarkus/client/docwrite"
 	"github.com/latebit-io/demarkus/client/links"
-	"github.com/latebit-io/demarkus/client/memory/curate"
 	"github.com/latebit-io/demarkus/client/memory/gate"
 	"github.com/latebit-io/demarkus/client/memory/hub"
 	"github.com/latebit-io/demarkus/protocol"
@@ -189,7 +188,7 @@ func (pl *planner) frontmatter() {
 			pl.skip(CheckFrontmatter, l.path, "the fence does not parse as key: value lines; strip it by hand")
 			continue
 		}
-		keys := curate.Lift(kv, w.Metadata)
+		keys := gate.Lift(kv, w.Metadata)
 		if len(keys) == 0 {
 			keys = []string{"none"}
 		}
@@ -210,10 +209,9 @@ func (pl *planner) journalType() {
 	}
 }
 
-// isHub: an index.md, the document named after a directory, or a link page,
-// which alone costs a parse.
+// isHub is gate.IsHub over the directories the inventory listed.
 func (a *audit) isHub(p, body string) bool {
-	return path.Base(p) == "index.md" || a.dirs[strings.TrimSuffix(p, ".md")+"/"] || gate.IsHub(p, body)
+	return gate.IsHub(p, body, func(dir string) bool { return a.dirs[dir] })
 }
 
 // unlink drops a hub's bullets that link only archived documents or
@@ -305,11 +303,7 @@ func linkADRs(body string, want map[string]string) (out string, linked map[strin
 		}
 	}
 	for _, h := range mdoutline.Headings(body) {
-		end := len(body)
-		if i := strings.IndexByte(body[h.Start:], '\n'); i >= 0 {
-			end = h.Start + i
-		}
-		skip = append(skip, span{h.Start, end})
+		skip = append(skip, span{h.Start, gate.HeadingEnd(body, h)})
 	}
 	var adds []adrMention
 	linked = map[string]bool{}

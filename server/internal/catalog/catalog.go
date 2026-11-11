@@ -42,7 +42,6 @@ type Entry struct {
 
 	// Derived by Prepare.
 	terms     termSet           // tag and title tokens for body match
-	demote    float64           // body-match prior multiplier from the path
 	standing  protocol.Standing // status: tag tier, weighting importance
 	generated bool              // graph data no mode answers with (SPEC 6.7)
 	pins      []string          // rel-based-on targets, for based-on filters
@@ -147,10 +146,6 @@ func (e *Entry) Indexed() bool { return !e.generated }
 func (e *Entry) Prepare() {
 	e.Path = storefmt.CanonicalPath(e.Path)
 	e.terms = newTermSet(mdtext.TokenSet(append(append([]string(nil), e.Tags...), e.Title)))
-	e.demote = 1
-	if slices.Contains(strings.Split(strings.Trim(e.Path, "/"), "/"), "journal") {
-		e.demote = journalDemote
-	}
 	e.generated = protocol.IsGeneratedGraphPath(e.Path)
 	e.standing = protocol.StandingOf(e.Tags)
 	// Unreviewed text from an untrusted read, or flagged by the classifier,
@@ -217,6 +212,10 @@ type Options struct {
 	// Skip excludes documents before Max counts them: a draft's own path,
 	// rows the caller may not read.
 	Skip func(path string) bool
+	// Prior scales a body-mode row's prior by where its document sits in the
+	// world's layout (a journal entry under a durable note); nil scales none.
+	// The catalog knows no directory names: the world's wiring supplies them.
+	Prior func(path string) float64
 	// Stale lets a section-index mode answer from the newest index built,
 	// whatever snapshot it covers, waiting the store's freshness bound only
 	// for a cold index: a gate's choice, where a warning may trail a commit.
@@ -272,7 +271,7 @@ func Search(index Index, query string, opts Options) ([]Result, error) {
 
 	best := topResults{max: opts.Max}
 	for e := range index.Entries(scope) {
-		if !opts.admits(e, scope) {
+		if !opts.eligible(e, scope) {
 			continue
 		}
 		score := 0
@@ -280,6 +279,10 @@ func Search(index Index, query string, opts Options) ([]Result, error) {
 			if score = matchScore(e, terms); score == 0 {
 				continue
 			}
+		}
+		// After the match: Skip may cost a permission check per document.
+		if opts.skips(e) {
+			continue
 		}
 		best.offer(e, score)
 	}
@@ -289,9 +292,15 @@ func Search(index Index, query string, opts Options) ([]Result, error) {
 // admits reports whether e is a candidate in any mode: authored, under scope,
 // passing the filter and Skip.
 func (opts *Options) admits(e *Entry, scope string) bool {
-	return !e.generated && underScope(e.Path, scope) && MatchesAll(e, opts.Filter) &&
-		(opts.Skip == nil || !opts.Skip(e.Path))
+	return opts.eligible(e, scope) && !opts.skips(e)
 }
+
+// eligible is admits before Skip.
+func (opts *Options) eligible(e *Entry, scope string) bool {
+	return !e.generated && underScope(e.Path, scope) && MatchesAll(e, opts.Filter)
+}
+
+func (opts *Options) skips(e *Entry) bool { return opts.Skip != nil && opts.Skip(e.Path) }
 
 // topResults keeps the best max results seen, worst first, so a lookup over
 // a large world holds and sorts max results, not every match. max <= 0 keeps all.

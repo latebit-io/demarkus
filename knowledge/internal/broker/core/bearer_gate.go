@@ -22,13 +22,13 @@ type BearerGate struct {
 	log       *slog.Logger
 }
 
-// NewBearerGate builds the gate over cfg's worlds with the verifier the
-// gateways share.
-func NewBearerGate(cfg *Config, verifier Verifier, log *slog.Logger) *BearerGate {
+// NewBearerGate builds the gate over the live world set with the verifier
+// the gateways share.
+func NewBearerGate(cfg *Config, worlds *WorldRegistry, verifier Verifier, log *slog.Logger) *BearerGate {
 	return &BearerGate{
 		check:     BearerCheck{Verifier: verifier, AllowDomains: cfg.OIDC.AllowDomains},
 		issuer:    cfg.OIDC.Issuer,
-		worlds:    cfg.Registry(),
+		worlds:    worlds,
 		governors: cfg.Governors,
 		resources: map[string]string{
 			ProfileKnowledge: cfg.Server.Gateway(ProfileKnowledge).Resource(),

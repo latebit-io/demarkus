@@ -153,9 +153,9 @@ func (w *world) follow(ctx context.Context, watch *fetch.Watch) error {
 				switch {
 				case ctx.Err() != nil:
 					return ctx.Err()
-				case errors.Is(err, generation.ErrConflict):
-					// Another leader moved the manifest: start over from its
-					// checkpoint, never write over it.
+				case errors.Is(err, generation.ErrConflict), errors.Is(err, ErrGatedIntoOpenHub):
+					// Another leader moved the manifest, or the world may no
+					// longer be derived: start over, never write.
 					return err
 				}
 				w.log.Warn("federation: checkpoint failed", "err", err)
@@ -355,6 +355,10 @@ func (w *world) complete() bool { return !w.partial && len(w.retry) == 0 }
 // manifest if it lags. A failure leaves what is unwritten for the next one.
 func (w *world) checkpoint(ctx context.Context, cursor protocol.Cursor) error {
 	w.attempted = time.Now()
+	// Gating can change under a running loop; nothing is written past it.
+	if err := w.refused(w.name); err != nil {
+		return err
+	}
 	if len(w.retry) > 0 {
 		for path := range w.retry {
 			if err := w.read(ctx, path); err != nil {

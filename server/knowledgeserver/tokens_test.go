@@ -63,36 +63,45 @@ func TestTokenCoordinatorRejectsDuplicates(t *testing.T) {
 	})
 }
 
-func TestTokenCoordinatorLoadFailureKeepsCurrent(t *testing.T) {
-	first := &fakeTokenRuntime{current: tokenStore("a"), next: tokenStore("c")}
+// One world's broken file must not hold back another world's reload: a
+// token revoked in the first stays valid there until the second is fixed.
+func TestTokenCoordinatorPublishesTheWorldsThatLoad(t *testing.T) {
+	first := &fakeTokenRuntime{current: tokenStore("a", "revoked"), next: tokenStore("a")}
+	second := &fakeTokenRuntime{current: tokenStore("b"), loadErr: errors.New("malformed")}
+	third := &fakeTokenRuntime{current: tokenStore("c")} // loads nil
+	coordinator, err := newTokenCoordinator([]tokenWorld{{name: "first", runtime: first}, {name: "second", runtime: second}, {name: "third", runtime: third}})
+	if err != nil {
+		t.Fatalf("newTokenCoordinator: %v", err)
+	}
+	err = coordinator.Reload()
+	if err == nil || !strings.Contains(err.Error(), `world "second": malformed`) || !strings.Contains(err.Error(), `world "third": token store is nil`) {
+		t.Fatalf("Reload error = %v, want both failing worlds named", err)
+	}
+	if !slices.Equal(first.current.Hashes(), []string{"a"}) {
+		t.Fatalf("first = %v; the revocation was held back by another world's file", first.current.Hashes())
+	}
+	if !slices.Equal(second.current.Hashes(), []string{"b"}) || !slices.Equal(third.current.Hashes(), []string{"c"}) {
+		t.Fatal("a world whose file failed to load lost its current tokens")
+	}
+	if second.publishCalls != 0 || third.publishCalls != 0 {
+		t.Fatalf("publish calls on failed worlds = %d, %d; want zero", second.publishCalls, third.publishCalls)
+	}
+}
+
+// A world that failed to load still owns its current tokens: another world
+// must not take one of them in the same reload.
+func TestTokenCoordinatorChecksLoadedWorldsAgainstKeptTokens(t *testing.T) {
+	first := &fakeTokenRuntime{current: tokenStore("a"), next: tokenStore("b")}
 	second := &fakeTokenRuntime{current: tokenStore("b"), loadErr: errors.New("malformed")}
 	coordinator, err := newTokenCoordinator([]tokenWorld{{name: "first", runtime: first}, {name: "second", runtime: second}})
 	if err != nil {
 		t.Fatalf("newTokenCoordinator: %v", err)
 	}
-	if err := coordinator.Reload(); err == nil {
-		t.Fatal("Reload accepted load failure")
+	if err := coordinator.Reload(); err == nil || !strings.Contains(err.Error(), "shared by worlds") {
+		t.Fatalf("Reload error = %v, want the shared token refused", err)
 	}
-	if !slices.Equal(first.current.Hashes(), []string{"a"}) || !slices.Equal(second.current.Hashes(), []string{"b"}) {
-		t.Fatal("load failure partially published candidates")
-	}
-}
-
-func TestTokenCoordinatorNilLoadKeepsCurrent(t *testing.T) {
-	first := &fakeTokenRuntime{current: tokenStore("a"), next: tokenStore("c")}
-	second := &fakeTokenRuntime{current: tokenStore("b")}
-	coordinator, err := newTokenCoordinator([]tokenWorld{{name: "first", runtime: first}, {name: "second", runtime: second}})
-	if err != nil {
-		t.Fatalf("newTokenCoordinator: %v", err)
-	}
-	if err := coordinator.Reload(); err == nil || !strings.Contains(err.Error(), `world "second": token store is nil`) {
-		t.Fatalf("Reload error = %v, want nil-store error", err)
-	}
-	if first.publishCalls != 0 || second.publishCalls != 0 {
-		t.Fatalf("publish calls = %d, %d; want zero", first.publishCalls, second.publishCalls)
-	}
-	if !slices.Equal(first.current.Hashes(), []string{"a"}) || !slices.Equal(second.current.Hashes(), []string{"b"}) {
-		t.Fatal("nil load partially published candidates")
+	if first.publishCalls != 0 || !slices.Equal(first.current.Hashes(), []string{"a"}) {
+		t.Fatal("a reload that failed the cross-world check published")
 	}
 }
 

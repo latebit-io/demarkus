@@ -1,6 +1,7 @@
 package knowledgeseed
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/protocol/stylerules"
+	"github.com/latebit-io/demarkus/server/internal/writepolicy"
 )
 
 func TestDefaultPolicyParsesPermissive(t *testing.T) {
@@ -125,5 +127,24 @@ func TestStyleSeedCarriesTheRuleTable(t *testing.T) {
 	}
 	if len(seed.Metadata) == 0 {
 		t.Error("style seed carries no metadata")
+	}
+}
+
+// The memory policy is a seed the server can publish as it stands, and it
+// never carries the marker the upgrade replaces.
+func TestMemoryPolicySeedIsValidAndNotTheDefaultMarker(t *testing.T) {
+	seed := MemoryPolicySeed()
+	if err := writepolicy.ValidateSeed(seed); err != nil {
+		t.Fatalf("memory policy seed: %v", err)
+	}
+	if seed.Metadata["agent"] == publishpolicy.SeedAgent || seed.Metadata["agent"] != MemorySeedAgent {
+		t.Fatalf("memory seed agent = %q", seed.Metadata["agent"])
+	}
+	if bytes.Equal(seed.Body, DefaultPolicySeed().Body) {
+		t.Fatal("the memory policy is the knowledge default")
+	}
+	seed.Body[0], seed.Metadata["agent"] = 'x', "changed"
+	if again := MemoryPolicySeed(); again.Body[0] == 'x' || again.Metadata["agent"] == "changed" {
+		t.Fatal("MemoryPolicySeed shares its body or metadata between calls")
 	}
 }

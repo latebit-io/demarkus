@@ -49,6 +49,16 @@ func TestDoctorAuditsTheScopeThroughTheBackend(t *testing.T) {
 	if strings.Contains(got.Text, "Promotion candidates") {
 		t.Error("promotion section without the flag")
 	}
+	// A surface without the memory plugin cites its tools; the soul its commands.
+	if !strings.Contains(got.Text, "fix: mark_archive /orphan.md (or link it from its hub)") || strings.Contains(got.Text, "/soul-") {
+		t.Errorf("a surface without slash commands must cite the tool:\n%s", got.Text)
+	}
+	soulTools := newTools(t, backend, directHooks())
+	soulTools.SetCommands(marktools.SoulCommands())
+	soul := soulTools.Doctor(t.Context(), marktools.DoctorArgs{URL: "/"})
+	if !strings.Contains(soul.Text, "fix: /soul-archive /orphan.md (or link it from its hub)") || !strings.Contains(soul.Text, "1 fixable: mark_curate / proposes the writes\n") {
+		t.Errorf("the soul surface must cite its commands:\n%s", soul.Text)
+	}
 }
 
 func TestDoctorRefusesWhatItCannotTrust(t *testing.T) {

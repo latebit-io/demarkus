@@ -33,7 +33,7 @@ reviews:
         Key contracts to verify:
         - No breaking changes to the wire and stored format: the verbs,
           request and response shapes, frontmatter keys, the on-disk layout
-          under protocol/storefmt and protocol/store, and the SPEC. Other
+          under protocol/storefmt and server/store, and the SPEC. Other
           exported helpers in this module may change with their callers;
           the module is pre-1.0 and no external module imports them
         - Size limit constants (MaxBodyLength, MaxRequestLineLength, etc.)

@@ -76,6 +76,7 @@ func (t *Tools) Curate(ctx context.Context, args CurateArgs) Result {
 	docs := func(p string) *docwrite.Doc { return t.doc(ctx, target.at(p), write) }
 	applied, err := curate.Apply(ctx, docs, &proposal, t.identityMeta(ctx))
 	var b strings.Builder
+	var written []observed
 	for i := range applied {
 		a := &applied[i]
 		if a.Action == curate.ActionSkipped {
@@ -83,8 +84,9 @@ func (t *Tools) Curate(ctx context.Context, args CurateArgs) Result {
 			continue
 		}
 		fmt.Fprintf(&b, "- %s: %s v%d\n", a.Path, a.Action, a.Version)
-		t.observeWrite(ctx, target.at(a.Path), graph.FetchResult{Status: protocol.StatusOK, Body: a.Body, Metadata: a.Metadata})
+		written = append(written, observed{target.at(a.Path), graph.FetchResult{Status: protocol.StatusOK, Body: a.Body, Metadata: a.Metadata}})
 	}
+	t.observeWrites(ctx, written)
 	if err == nil {
 		return text("status: applied\n" + b.String())
 	}
@@ -123,7 +125,7 @@ func (t *Tools) curateScope(ctx context.Context, target Target, args CurateArgs,
 		}
 	}
 	t.observeWrites(ctx, written)
-	out, landed := audit.ApplyMarkdown(report.Scope, plan.More, outcomes)
+	out, landed := t.commands().ApplyMarkdown(report.Scope, plan.More, outcomes)
 	if landed == 0 {
 		return failure("%s", out)
 	}

@@ -6,7 +6,50 @@ import (
 	"strings"
 )
 
-// Markdown renders the shape /soul-doctor promises: heading with the count,
+// Fix kinds: what a surface's command settles for a finding's path.
+const (
+	FixCurate  = "curate"
+	FixArchive = "archive"
+	FixPromote = "promote"
+)
+
+// Commands is how the surface showing a report names its commands. A nil
+// func names the action alone, so no report cites a command its reader lacks.
+type Commands struct {
+	Curate, Archive, Promote func(path string) string
+	// Batch names what proposes a scope's fixable writes.
+	Batch func(scope string) string
+}
+
+// named is the command of that kind for path, the bare action when unset.
+func named(command func(string) string, action, path string) string {
+	if command != nil {
+		return command(path)
+	}
+	return action + " " + path
+}
+
+// FixText is the fix as the surface words it: its command for the finding's
+// kind, then the prose; a finding without a kind is its prose alone.
+func (c *Commands) FixText(f *Finding) string {
+	var command string
+	switch f.FixKind {
+	case FixCurate:
+		command = named(c.Curate, FixCurate, f.Path)
+	case FixArchive:
+		command = named(c.Archive, FixArchive, f.Path)
+	case FixPromote:
+		command = named(c.Promote, FixPromote, f.Path)
+	default:
+		return f.Fix
+	}
+	if f.Fix == "" {
+		return command
+	}
+	return command + " (" + f.Fix + ")"
+}
+
+// Markdown renders the hygiene report: heading with the count,
 // a summary line, one section per check with its count and the count apply
 // fixes, one bullet per finding, then Coverage.
 func (r *Report) Markdown() string {
@@ -26,7 +69,7 @@ func (r *Report) Markdown() string {
 		}
 	}
 	if total > 0 {
-		fmt.Fprintf(&b, "%d fixable: mark_curate %s proposes the writes\n", total, r.Scope)
+		fmt.Fprintf(&b, "%d fixable: %s proposes the writes\n", total, named(r.Commands.Batch, FixCurate, r.Scope))
 	}
 	for _, check := range CheckOrder {
 		fs := byCheck[check]
@@ -40,8 +83,8 @@ func (r *Report) Markdown() string {
 		b.WriteString(")\n")
 		for _, f := range fs[:min(len(fs), MaxShownPerCheck)] {
 			fmt.Fprintf(&b, "- %s: %s", f.Path, f.Detail)
-			if f.Fix != "" {
-				b.WriteString("; fix: " + f.Fix)
+			if fix := r.Commands.FixText(&f); fix != "" {
+				b.WriteString("; fix: " + fix)
 			}
 			b.WriteByte('\n')
 		}
@@ -120,7 +163,7 @@ func (p *Plan) Markdown(scope string) string {
 // ApplyMarkdown renders an apply: a count, one line per write, and what a
 // rerun takes (more is the plan's writes past the batch); applied counts
 // the writes that landed.
-func ApplyMarkdown(scope string, more int, outcomes []Outcome) (out string, applied int) {
+func (c *Commands) ApplyMarkdown(scope string, more int, outcomes []Outcome) (out string, applied int) {
 	var b strings.Builder
 	for i := range outcomes {
 		o := &outcomes[i]
@@ -137,7 +180,7 @@ func ApplyMarkdown(scope string, more int, outcomes []Outcome) (out string, appl
 	}
 	head := fmt.Sprintf("status: applied %d of %d\n", applied, len(outcomes))
 	if more > 0 || applied < len(outcomes) {
-		b.WriteString("\nrerun mark_curate " + scope + " for the rest and review it before applying\n")
+		b.WriteString("\nrerun " + named(c.Batch, FixCurate, scope) + " for the rest and review it before applying\n")
 	}
 	return head + b.String(), applied
 }

@@ -18,12 +18,11 @@ const (
 )
 
 // Reference ranking knobs tuned on the retrieval benchmark (plan:
-// token-efficient retrieval, workstream 3): the importance prior's floor,
-// the boost for a tags-or-title match, and the multiplier under journal/.
+// token-efficient retrieval, workstream 3): the importance prior's floor
+// and the boost for a tags-or-title match.
 const (
-	priorFloor    = 0.3
-	catalogBoost  = 2.0
-	journalDemote = 0.5
+	priorFloor   = 0.3
+	catalogBoost = 2.0
 )
 
 type bodyCandidate struct {
@@ -57,7 +56,7 @@ func lookupBody(index Index, words []string, scope string, opts Options) []Resul
 	if len(scan.found) == 0 {
 		return nil
 	}
-	rankBody(scan, words)
+	rankBody(scan, words, opts.Prior)
 	found := scan.found
 	if opts.Max > 0 && len(found) > opts.Max {
 		found = found[:opts.Max]
@@ -125,7 +124,7 @@ func scanBody(index Index, terms []string, scope string, opts *Options) *bodySca
 
 // rankBody scores (catalog rows boosted), normalizes by the best, applies
 // the prior, and sorts by score, then the spec's path-then-anchor tiebreak.
-func rankBody(scan *bodyScan, terms []string) {
+func rankBody(scan *bodyScan, terms []string, layoutPrior func(path string) float64) {
 	found := scan.found
 	idf := idfs(scan, len(terms))
 	maxScore := 0.0
@@ -142,6 +141,9 @@ func rankBody(scan *bodyScan, terms []string) {
 			norm = found[i].score / maxScore
 		}
 		found[i].score = norm * prior(found[i].entry)
+		if layoutPrior != nil {
+			found[i].score *= layoutPrior(found[i].entry.Path)
+		}
 	}
 	slices.SortStableFunc(found, func(a, b bodyCandidate) int {
 		if a.score != b.score {
@@ -155,9 +157,9 @@ func rankBody(scan *bodyScan, terms []string) {
 }
 
 // prior scales a normalized score by declared importance, then by the
-// document's standing and path demotion.
+// document's standing.
 func prior(e *Entry) float64 {
-	return (priorFloor + (1-priorFloor)*e.Importance) * e.standing.Weight() * e.demote
+	return (priorFloor + (1-priorFloor)*e.Importance) * e.standing.Weight()
 }
 
 // idfs is the BM25 inverse document frequency per term over the scanned

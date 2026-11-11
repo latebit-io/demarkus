@@ -1,7 +1,7 @@
-// Package docwrite is the write contract every surface shares: publish with a
+// Package docwrite is the write contract every caller shares: publish with a
 // merge candidate on conflict, append with version resolution, archive, and
 // for all three a look at the head, never a resend, when a response is lost.
-// It returns outcomes; a surface words them (tool text, CLI output, exit code).
+// It returns outcomes and sentinel errors; the caller words them.
 package docwrite
 
 import (
@@ -54,7 +54,8 @@ type Result struct {
 	Candidate  *Candidate
 }
 
-// StatusCandidate is how a surface names a Result that carries a Candidate.
+// StatusCandidate names a Result that carries a Candidate, beside the
+// protocol's statuses.
 const StatusCandidate = "merge-candidate"
 
 // Candidate is a three way merge offered after a version conflict. It is never
@@ -77,7 +78,7 @@ type Write struct {
 }
 
 // ErrInvalidExpectedVersion refuses a negative version on any write.
-var ErrInvalidExpectedVersion = errors.New("expected_version must be >= 0")
+var ErrInvalidExpectedVersion = errors.New("expected version is negative")
 
 // ErrFramed refuses a body pasted back with its read frame (docframe).
 var ErrFramed = errors.New("body carries a <doc-*> frame line from a read; write the text inside the frame, not the tags")
@@ -89,9 +90,9 @@ func SendOnce(token string) WriteFunc {
 	}
 }
 
-// Publish sends w once. mode is merge.OnConflictMerge or merge.OnConflictFail:
-// a version conflict comes back as a Candidate, or as the conflict status.
-func (d *Doc) Publish(ctx context.Context, w Write, mode string) (Result, error) {
+// Publish sends w once. A version conflict comes back as a Candidate under
+// merge.OnConflictMerge, as the conflict status under any other mode.
+func (d *Doc) Publish(ctx context.Context, w Write, mode merge.OnConflict) (Result, error) {
 	if w.ExpectedVersion < 0 {
 		return Result{}, ErrInvalidExpectedVersion
 	}
@@ -108,7 +109,8 @@ func (d *Doc) Publish(ctx context.Context, w Write, mode string) (Result, error)
 	}})
 	if err != nil {
 		if mode == merge.OnConflictMerge {
-			// Tool text in this mode has always named the step that failed.
+			// A merge has three steps (publish, fetch current, fetch base):
+			// its errors name theirs.
 			err = fmt.Errorf("publish: %w", err)
 		}
 		return Result{}, err

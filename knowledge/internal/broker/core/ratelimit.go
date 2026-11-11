@@ -1,24 +1,33 @@
 package core
 
 import (
-	"log/slog"
-	"math"
-	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
-	"github.com/latebit-io/demarkus/server/logthrottle"
 	"golang.org/x/time/rate"
 )
 
-// RateLimitRegistry keeps one *rate.Limiter per key (subject hash or client
-// IP). Per replica and without eviction by design; the sizing and the
-// trustForwardedFor caveat are in docs/site/deployment/kubernetes.md.
+// minSweepInterval bounds how often a registry scans for idle limiters.
+const minSweepInterval = time.Minute
+
+// RateLimitRegistry keeps one limiter per key (subject hash or client
+// address), per replica. A limiter idle long enough to have refilled is
+// dropped: a fresh one behaves the same, so memory tracks recent keys only.
 type RateLimitRegistry struct {
-	mu        sync.Map // key string → *rate.Limiter
 	perMinute int
 	burst     int
+	// refill is how long an exhausted bucket takes to fill again.
+	refill time.Duration
+	now    func() time.Time
+
+	mu       sync.Mutex
+	limiters map[string]*keyLimiter
+	swept    time.Time
+}
+
+type keyLimiter struct {
+	limiter *rate.Limiter
+	used    time.Time
 }
 
 // newRateLimitRegistry is nil for a non positive rate or burst; the
@@ -27,39 +36,55 @@ func newRateLimitRegistry(perMinute, burst int) *RateLimitRegistry {
 	if perMinute <= 0 || burst <= 0 {
 		return nil
 	}
-	return &RateLimitRegistry{perMinute: perMinute, burst: burst}
+	refill := time.Duration(float64(burst) / float64(perMinute) * float64(time.Minute))
+	return &RateLimitRegistry{
+		perMinute: perMinute, burst: burst, refill: refill, now: time.Now,
+		limiters: make(map[string]*keyLimiter),
+	}
 }
 
-// limiter is the key's bucket, allocated on first use.
-func (r *RateLimitRegistry) limiter(key string) *rate.Limiter {
-	if v, ok := r.mu.Load(key); ok {
-		return v.(*rate.Limiter)
+// limiter is the key's bucket, allocated on first use; the caller holds r.mu.
+func (r *RateLimitRegistry) limiter(key string, now time.Time) *rate.Limiter {
+	r.sweep(now)
+	entry, ok := r.limiters[key]
+	if !ok {
+		// rate.Limit is events per second; the operator's knob is per minute.
+		entry = &keyLimiter{limiter: rate.NewLimiter(rate.Limit(float64(r.perMinute)/60.0), r.burst)}
+		r.limiters[key] = entry
 	}
-	// rate.Limit accepts events/sec; we configure events/min so the
-	// operator-facing knob matches the human-scale rates in the plan.
-	lim := rate.NewLimiter(rate.Limit(float64(r.perMinute)/60.0), r.burst)
-	actual, _ := r.mu.LoadOrStore(key, lim)
-	return actual.(*rate.Limiter)
+	entry.used = now
+	return entry.limiter
+}
+
+// sweep drops every limiter idle for a full refill, at most once per
+// interval; the caller holds r.mu.
+func (r *RateLimitRegistry) sweep(now time.Time) {
+	if now.Sub(r.swept) < max(r.refill, minSweepInterval) {
+		return
+	}
+	r.swept = now
+	for key, entry := range r.limiters {
+		if now.Sub(entry.used) >= r.refill {
+			delete(r.limiters, key)
+		}
+	}
 }
 
 // Reserve charges key's bucket for one event. A denial reports the wait
 // (at least 1s, so Retry-After is never 0) and, through Reserve plus
 // Cancel, consumes no budget: hammering never pushes recovery out.
 func (r *RateLimitRegistry) Reserve(key string) (allowed bool, retryAfter time.Duration) {
-	lim := r.limiter(key)
-	res := lim.Reserve()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	res := r.limiter(key, now).ReserveN(now, 1)
 	if !res.OK() {
-		// Practically unreachable since we don't set a max-future-
-		// reservation, but if it ever does happen treat it as denial
-		// with a 1s retry (the minimum nonzero hint).
+		// Unreachable without a max future reservation; deny with the minimum hint.
 		return false, time.Second
 	}
-	if d := res.Delay(); d > 0 {
-		res.Cancel()
-		if d < time.Second {
-			d = time.Second
-		}
-		return false, d
+	if d := res.DelayFrom(now); d > 0 {
+		res.CancelAt(now)
+		return false, max(d, time.Second)
 	}
 	return true, 0
 }
@@ -72,35 +97,4 @@ func NewRateLimits(cfg *RateLimitConfig) (subject, login *RateLimitRegistry) {
 	}
 	return newRateLimitRegistry(cfg.Tokens.PerMinute, cfg.Tokens.Burst),
 		newRateLimitRegistry(cfg.Login.PerMinute, cfg.Login.Burst)
-}
-
-// SubjectRateLimit limits an authenticated route per subject, so rotating
-// IPs or several sessions of one identity share a bucket. It runs after the
-// auth middleware and fails closed when the claims are missing.
-func SubjectRateLimit(reg *RateLimitRegistry, log *slog.Logger, next http.Handler) http.Handler {
-	if reg == nil {
-		return next
-	}
-	refusals := logthrottle.New(logthrottle.DefaultWindow)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims, ok := ClaimsFromCtx(r.Context())
-		if !ok {
-			log.ErrorContext(r.Context(), "broker: subjectRateLimit missing claims in context; middleware miswired")
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		key := HashSubject(claims.Subject)
-		allowed, retryAfter := reg.Reserve(key)
-		if !allowed {
-			// A flood logs once per window with the held-back count, not per refusal.
-			if logIt, suppressed := refusals.Allow(); logIt {
-				log.WarnContext(r.Context(), "broker: rate limit exceeded",
-					"route", r.URL.Path, "subject", key, "retryAfter", retryAfter, "suppressed", suppressed)
-			}
-			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }

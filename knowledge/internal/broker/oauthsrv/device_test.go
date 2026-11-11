@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -250,7 +251,7 @@ func TestDeviceFormPostSuccessSetsCookieAndRedirects(t *testing.T) {
 	// Pre-seed a pending grant directly via the store so the test
 	// doesn't have to round-trip through /device/authorize. Keeps
 	// this test focused on the form-submit handler.
-	deviceCode, userCode, _, err := broker.deviceStore.Authorize(context.Background(), "")
+	deviceCode, userCode, _, err := broker.deviceStore.Authorize(context.Background(), deviceRequest{})
 	if err != nil {
 		t.Fatalf("seed Authorize: %v", err)
 	}
@@ -300,7 +301,7 @@ func TestDeviceFormPostSuccessSetsCookieAndRedirects(t *testing.T) {
 // before any cookie is set.
 func TestDeviceFormPostRejectsCrossOriginCSRF(t *testing.T) {
 	srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-	_, userCode, _, err := broker.deviceStore.Authorize(context.Background(), "")
+	_, userCode, _, err := broker.deviceStore.Authorize(context.Background(), deviceRequest{})
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -332,7 +333,7 @@ func TestDeviceFormPostRejectsCrossOriginCSRF(t *testing.T) {
 // browser submits and asserts the request proceeds normally.
 func TestDeviceFormPostAcceptsSameOriginPost(t *testing.T) {
 	srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-	deviceCode, userCode, _, err := broker.deviceStore.Authorize(context.Background(), "")
+	deviceCode, userCode, _, err := broker.deviceStore.Authorize(context.Background(), deviceRequest{})
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -376,7 +377,7 @@ func TestDeviceFormPostSecureMatchesInsecureCookiesFlag(t *testing.T) {
 			cfg := deviceTestConfig()
 			cfg.Server.InsecureCookies = tt.insecureCookies
 			srv, broker := newTestServer(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-			_, userCode, _, err := broker.deviceStore.Authorize(context.Background(), "")
+			_, userCode, _, err := broker.deviceStore.Authorize(context.Background(), deviceRequest{})
 			if err != nil {
 				t.Fatalf("Authorize: %v", err)
 			}
@@ -402,7 +403,7 @@ func TestDeviceFormPostSecureMatchesInsecureCookiesFlag(t *testing.T) {
 func TestDeviceTokenStates(t *testing.T) {
 	t.Run("pending returns authorization_pending", func(t *testing.T) {
 		srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
+		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), deviceRequest{})
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -414,7 +415,7 @@ func TestDeviceTokenStates(t *testing.T) {
 
 	t.Run("slow_down on rapid repeat poll", func(t *testing.T) {
 		srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
+		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), deviceRequest{})
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -431,7 +432,7 @@ func TestDeviceTokenStates(t *testing.T) {
 	t.Run("expired after TTL", func(t *testing.T) {
 		cfg := deviceTestConfig()
 		srv, broker := newTestServer(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
+		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), deviceRequest{})
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -452,7 +453,7 @@ func TestDeviceTokenStates(t *testing.T) {
 
 	t.Run("denied after Deny", func(t *testing.T) {
 		srv, broker := newTestServer(t, deviceTestConfig(), &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
-		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
+		deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), deviceRequest{})
 		if err != nil {
 			t.Fatalf("Authorize: %v", err)
 		}
@@ -569,7 +570,7 @@ func TestStaleDeviceCookieDoesNotHijackBrowserCallback(t *testing.T) {
 	// user gave up before completing the OIDC dance. Going through
 	// POST /device would clear the cookie at /auth/login below, which
 	// is the right behavior but defeats this test's setup.
-	deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
+	deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), deviceRequest{})
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -1079,7 +1080,7 @@ func TestDeviceTokenRefreshCrossGrantIsolation(t *testing.T) {
 	}
 
 	// And the reverse: device_code on the refresh branch.
-	deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), "")
+	deviceCode, _, _, err := broker.deviceStore.Authorize(context.Background(), deviceRequest{})
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -1215,5 +1216,43 @@ func TestDeviceTokenRefreshRotatesAndDetectsReuse(t *testing.T) {
 	}
 	if status, _, bad := refresh(third.RefreshToken); status != http.StatusBadRequest || bad.Error != "invalid_grant" {
 		t.Fatalf("newest token after reuse = %d %q, want invalid_grant", status, bad.Error)
+	}
+}
+
+// Over HTTP, one client address stops at its own allowance of pending device
+// grants with a retryable 503, while another address is still served: a
+// handful of addresses must not lock device login for everyone.
+func TestDeviceAuthorizeCapsPendingGrantsPerClientAddress(t *testing.T) {
+	cfg := deviceTestConfig()
+	cfg.RateLimit.TrustForwardedFor = true
+	_, broker := newTestServer(t, cfg, &brokertest.FakeVerifier{}, fake.NewSimpleClientset())
+	routes := broker.Routes()
+	authorize := func(forwardedFor string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/device/authorize", strings.NewReader(url.Values{"client_id": {"demarkus-cli"}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Forwarded-For", forwardedFor)
+		rec := httptest.NewRecorder()
+		routes.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Every address of one IPv6 /64 is the same client.
+	for i := range maxDeviceGrantsPerOrigin {
+		if rec := authorize(fmt.Sprintf("2001:db8:1:2::%x", i+1)); rec.Code != http.StatusOK {
+			t.Fatalf("grant %d of the address's allowance: status %d body %s", i, rec.Code, rec.Body)
+		}
+	}
+	refused := authorize("2001:db8:1:2::ffff")
+	if refused.Code != http.StatusServiceUnavailable || refused.Header().Get("Retry-After") == "" {
+		t.Fatalf("grant past the address's cap: status %d Retry-After %q, want a retryable 503", refused.Code, refused.Header().Get("Retry-After"))
+	}
+	var body deviceTokenError
+	if err := json.NewDecoder(refused.Body).Decode(&body); err != nil || body.Error != "temporarily_unavailable" {
+		t.Fatalf("refusal body = %+v, %v; want temporarily_unavailable", body, err)
+	}
+	for _, other := range []string{"2001:db8:1:3::1", "203.0.113.7"} {
+		if rec := authorize(other); rec.Code != http.StatusOK {
+			t.Fatalf("address %s refused while another is at its cap: status %d body %s", other, rec.Code, rec.Body)
+		}
 	}
 }

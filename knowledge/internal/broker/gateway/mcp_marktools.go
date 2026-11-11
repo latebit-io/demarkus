@@ -12,6 +12,7 @@ import (
 	"github.com/latebit-io/demarkus/client/marktools"
 	"github.com/latebit-io/demarkus/client/mcpbind"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
@@ -130,7 +131,7 @@ func (g *Gateway) run(call func(*marktools.Tools) marktools.Result) (*mcp.CallTo
 // toolSiteErrorText names the cause an agent can act on: an unknown world or
 // a refused identity; anything else is "<site> failed".
 func toolSiteErrorText(site marktools.Site, worldName string, err error) string {
-	var notFound *errWorldNotFound
+	var notFound *dispatch.WorldNotFoundError
 	unknownWorld := errors.As(err, &notFound)
 	switch {
 	case unknownWorld:
