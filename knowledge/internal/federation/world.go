@@ -147,25 +147,29 @@ func (w *world) walkProblem(p *listwalk.Problem) error {
 // or the watch fails.
 func (w *world) follow(ctx context.Context, watch *fetch.Watch) error {
 	for {
+		// A gate closes on an idle world too: asked at every wake.
+		if err := w.refused(w.name); err != nil {
+			return err
+		}
 		at, due := w.due()
 		if due && !time.Now().Before(at) {
 			if err := w.checkpoint(ctx, watch.Cursor()); err != nil {
 				switch {
 				case ctx.Err() != nil:
 					return ctx.Err()
-				case errors.Is(err, generation.ErrConflict), errors.Is(err, ErrGatedIntoOpenHub):
-					// Another leader moved the manifest, or the world may no
-					// longer be derived: start over, never write.
+				case errors.Is(err, generation.ErrConflict):
+					// Another leader moved the manifest: start over, never write.
 					return err
 				}
 				w.log.Warn("federation: checkpoint failed", "err", err)
 			}
 			continue
 		}
-		wait, cancel := ctx, context.CancelFunc(func() {})
-		if due {
-			wait, cancel = context.WithDeadline(ctx, at)
+		wake := time.Now().Add(w.gatePoll)
+		if due && at.Before(wake) {
+			wake = at
 		}
+		wait, cancel := context.WithDeadline(ctx, wake)
 		notice, err := watch.Next(wait)
 		cancel()
 		switch {
@@ -355,10 +359,6 @@ func (w *world) complete() bool { return !w.partial && len(w.retry) == 0 }
 // manifest if it lags. A failure leaves what is unwritten for the next one.
 func (w *world) checkpoint(ctx context.Context, cursor protocol.Cursor) error {
 	w.attempted = time.Now()
-	// Gating can change under a running loop; nothing is written past it.
-	if err := w.refused(w.name); err != nil {
-		return err
-	}
 	if len(w.retry) > 0 {
 		for path := range w.retry {
 			if err := w.read(ctx, path); err != nil {

@@ -266,6 +266,26 @@ func (h *fakeHub) io() generation.IO {
 	return generation.IO{Fetch: h.fetch, Publish: h.publish}
 }
 
+// live is docPath's body as fetched now, "" when there is none.
+func (h *fakeHub) live(docPath string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.docs[docPath].Body
+}
+
+// list is Config.ListHub: the live documents directly in dir.
+func (h *fakeHub) list(_ context.Context, dir string) ([]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var paths []string
+	for docPath := range h.heads {
+		if name, in := strings.CutPrefix(docPath, dir+"/"); in && !strings.Contains(name, "/") {
+			paths = append(paths, docPath)
+		}
+	}
+	return paths, nil
+}
+
 func (h *fakeHub) fetch(_ context.Context, docPath string) (protocol.Response, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -275,7 +295,7 @@ func (h *fakeHub) fetch(_ context.Context, docPath string) (protocol.Response, e
 	return protocol.Response{Status: protocol.StatusNotFound}, nil
 }
 
-func (h *fakeHub) publish(_ context.Context, docPath, body string, expected int) (protocol.Response, error) {
+func (h *fakeHub) publish(ctx context.Context, docPath, body string, expected int) (protocol.Response, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if docPath == graphstore.GraphExportPath {
@@ -294,6 +314,12 @@ func (h *fakeHub) publish(_ context.Context, docPath, body string, expected int)
 		h.docs[docPath], h.docs[protocol.VersionPath(docPath, head)], h.heads[docPath] = resp, resp, head
 		if docPath != graphstore.GraphExportPath { // counted in exports
 			h.writes = append(h.writes, docPath)
+		}
+	}
+	// A pruning write keeps no older version, as retention 1 does.
+	if prunes(ctx) {
+		for version := 1; version < head; version++ {
+			delete(h.docs, protocol.VersionPath(docPath, version))
 		}
 	}
 	return protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{"version": fmt.Sprint(head)}}, nil

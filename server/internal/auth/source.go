@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"sync"
 	"sync/atomic"
 )
 
@@ -41,16 +40,11 @@ type Source struct {
 	config  SourceConfig
 	files   []string
 	current atomic.Pointer[TokenStore]
-	// protected is each file's read patterns as last loaded. A file gone
-	// missing keeps protecting them: a path is public only when no token
-	// covers it, so dropping them with the file would publish its paths.
-	mu        sync.Mutex
-	protected map[string][]string
 }
 
 // OpenSource opens the configured files and publishes the initial store.
 func OpenSource(config SourceConfig) (*Source, error) {
-	source := &Source{config: config, files: config.Files(), protected: map[string][]string{}}
+	source := &Source{config: config, files: config.Files()}
 	if len(source.files) == 0 {
 		return source, nil
 	}
@@ -90,25 +84,24 @@ func (s *Source) Reload() error {
 }
 
 // Load reads a complete replacement without publishing it. With Optional
-// set, its tokens are the union of the files present on disk.
+// set, its tokens are the union of the files present on disk. A file gone
+// missing keeps protecting what the published store has it protect.
 func (s *Source) Load() (*TokenStore, error) {
 	if len(s.files) == 0 {
 		return nil, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	merged := make(map[string]Token)
-	var held []string
+	held := make(map[string][]string, len(s.files))
 	for _, file := range s.files {
 		tokens, err := loadTokenFile(file)
 		if err != nil {
 			if s.config.Optional && errors.Is(err, os.ErrNotExist) {
-				held = append(held, s.vanishedLocked(file)...)
+				held[file] = s.vanished(file)
 				continue
 			}
 			return nil, err
 		}
-		s.protected[file] = collectReadPaths(tokens)
+		held[file] = collectReadPaths(tokens)
 		for hash, token := range tokens {
 			if existing, ok := merged[hash]; ok {
 				return nil, fmt.Errorf("duplicate hash for labels %q and %q across tokens files", existing.Label, token.Label)
@@ -116,15 +109,18 @@ func (s *Source) Load() (*TokenStore, error) {
 			merged[hash] = token
 		}
 	}
-	store := NewTokenStore(merged)
-	store.readPaths = append(store.readPaths, held...)
-	return store, nil
+	return newSourcedStore(merged, held), nil
 }
 
-// vanishedLocked returns the read patterns a now missing file last held, so
-// they stay protected with no token left to read them.
-func (s *Source) vanishedLocked(file string) []string {
-	held := s.protected[file]
+// vanished returns the read patterns a now missing file holds in the
+// published store, so they stay protected with no token left to read them.
+// A path is public only when no token covers it: dropping them publishes it.
+func (s *Source) vanished(file string) []string {
+	published := s.current.Load()
+	if published == nil {
+		return nil
+	}
+	held := published.held[file]
 	if len(held) > 0 && s.config.Logger != nil {
 		s.config.Logger.Warn("auth: tokens file vanished; its tokens are revoked and the paths its read tokens protected stay protected until it returns or the server restarts", "path", file)
 	}

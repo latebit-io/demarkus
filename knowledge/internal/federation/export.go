@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/generation"
@@ -25,6 +26,10 @@ type exporter struct {
 	mu      sync.Mutex
 	pending map[string]struct{} // worlds whose checkpoint moved since their last load
 	wake    chan struct{}
+	// withdrawals counts worlds withdrawn; pruned is how many the live
+	// render already answered by pruning its older versions.
+	withdrawals atomic.Uint64
+	pruned      uint64
 
 	worlds map[string]*exportedWorld // absent until the world has a checkpoint
 	// owed is a render the live document may lack; liveVersion is that
@@ -69,6 +74,14 @@ func (e *exporter) changed(world string) {
 	case e.wake <- struct{}{}:
 	default:
 	}
+}
+
+// withdrawn is changed for a world emptied on purpose: the next render is
+// written even if the live one already lacks its rows, and prunes the
+// versions that held them.
+func (e *exporter) withdrawn(world string) {
+	e.withdrawals.Add(1)
+	e.changed(world)
 }
 
 // run exports when a checkpoint moved, at most once per interval, until ctx
@@ -180,10 +193,14 @@ func (e *exporter) write(ctx context.Context) error {
 			return err
 		}
 	}
+	withdrawals := e.withdrawals.Load()
 	content := generation.BodyHash(graphstore.ExportContent(body))
-	if content == e.liveContent {
+	if content == e.liveContent && withdrawals == e.pruned {
 		e.owed = false
 		return nil
+	}
+	if withdrawals != e.pruned {
+		ctx = pruning(ctx)
 	}
 	_, version, err := e.Hub.PublishDocument(ctx, graphstore.GraphExportPath, body, e.liveVersion)
 	if errors.Is(err, generation.ErrConflict) {
@@ -195,7 +212,7 @@ func (e *exporter) write(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("export: %w", err)
 	}
-	e.liveVersion, e.liveContent, e.owed = version, content, false
+	e.liveVersion, e.liveContent, e.owed, e.pruned = version, content, false, withdrawals
 	return nil
 }
 

@@ -21,7 +21,7 @@ func brokerTokens(generation int) []byte {
 	return []byte(b.String())
 }
 
-// A source remembers each file's read patterns as last loaded, replaced on
+// Each published store holds its files' read patterns, replaced whole on
 // every load: rotations and vanishings must not accumulate them.
 func TestSourceHeapTracksTheCurrentFile(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "tokens.toml")

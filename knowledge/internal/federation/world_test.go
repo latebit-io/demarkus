@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,7 +63,24 @@ func with(more map[string]int) map[string]int {
 
 // start runs a deriver until the returned stop, which waits for it to end.
 func (h *harness) start() (stop func()) {
-	return runDeriver(h.t, testDeriver(Config{Worlds: slices.Collect(maps.Keys(h.worlds)), Source: h.worlds, Hub: h.hub.io()}))
+	return runDeriver(h.t, testDeriver(h.config()))
+}
+
+func (h *harness) config() Config {
+	return Config{Worlds: slices.Collect(maps.Keys(h.worlds)), Source: h.worlds, Hub: h.hub.io(), ListHub: h.hub.list}
+}
+
+// startGated is start with every world refused while refuse is set, as a
+// gated world under an open hub is.
+func (h *harness) startGated(refuse *atomic.Bool) (stop func()) {
+	cfg := h.config()
+	cfg.Refuse = func(string) error {
+		if refuse.Load() {
+			return ErrGatedIntoOpenHub
+		}
+		return nil
+	}
+	return runDeriver(h.t, testDeriver(cfg))
 }
 
 // testDeriver is a deriver with a test's cadence and no read pacing.
@@ -70,7 +88,7 @@ func testDeriver(cfg Config) *deriver { //nolint:gocritic // a config is passed 
 	cfg.QuietPeriod, cfg.Interval = 20*time.Millisecond, 50*time.Millisecond
 	cfg.Log = cmp.Or(cfg.Log, slog.New(slog.DiscardHandler))
 	d := newDeriver(cfg)
-	d.reads = rate.NewLimiter(rate.Inf, 1)
+	d.reads, d.gatePoll = rate.NewLimiter(rate.Inf, 1), cfg.Interval
 	return d
 }
 

@@ -78,7 +78,7 @@ reviews:
         - Versioned path requests (/doc.md/v2) check auth on the base path
         - /.well-known/agent-manifest.md is always public
 
-    - path: "server/internal/store/**"
+    - path: "server/store/**"
       instructions: >
         Versioned document store using symlinks and SHA-256 hash chains.
         Each version is immutable once written.
