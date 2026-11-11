@@ -89,7 +89,8 @@ func ForGate(format string) (h Host, phase string, ok bool) {
 }
 
 // ForMcp resolves the --harness value of `registry mcp`: "" and "pi" edit
-// pi-mcp-adapter's file, "cursor" Cursor's.
+// the file pi-mcp-adapter reads and the pi plugins register from, "cursor"
+// Cursor's.
 func ForMcp(name string) (Host, error) {
 	switch name {
 	case "", "pi":

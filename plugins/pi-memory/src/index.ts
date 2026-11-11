@@ -2,10 +2,12 @@
 //
 // The pi port of the claude-code demarkus-memory plugin. Same behavior, mapped
 // onto pi's extension API:
-//   - session_start      → provision the managed server + wire the MCP entry,
+//   - session_start      → provision the managed server + wire the MCP entry
+//                          (pi's built-in MCP, or pi-mcp-adapter's file),
 //                          notify the session status line, plus a notify-only
 //                          update check (throttled, daily)
-//   - before_agent_start → inject standing guidance (once) + recall nudge
+//   - before_agent_start → inject standing guidance (once) + recall nudge,
+//                          and connect a store joined since the last turn
 //   - tool_call          → publish tag-gate + destination gate + promote nudge
 //   - session_shutdown   → journal nudge
 //   - registerCommand    → generated /soul-* and /promote prompts
@@ -16,6 +18,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { NativeServers, piConfigs, type McpApi } from "./native.js";
 import { SessionActivity } from "./nudges.js";
 import { branchTaint, recordTaint, taintStamp } from "./taint.js";
 import { callGate, callGuidance, callNudge, callUpdateCheck, type Guidance } from "./plugin.js";
@@ -32,6 +35,7 @@ interface ExtensionContext {
   ui: UI;
   // Dialogs work (TUI, RPC); false in print and JSON modes.
   hasUI?: boolean;
+  isProjectTrusted?(): boolean;
   sessionManager?: { getBranch(): unknown[] };
 }
 interface ToolCallEvent {
@@ -43,7 +47,7 @@ interface BeforeAgentStartEvent {
   systemPrompt: string;
 }
 type MessageResult = { message: { customType: string; content: string; display: boolean } };
-interface ExtensionAPI {
+interface ExtensionAPI extends McpApi {
   on(
     event: "session_start",
     handler: (event: { reason: string }, ctx: ExtensionContext) => void | Promise<void>,
@@ -114,7 +118,8 @@ function commandBody(name: string, args: string): string {
 // pi-mcp-adapter routes MCP calls through a proxy tool named "mcp":
 //   { toolName: "mcp", input: { tool: "<prefixed name>", args: <json-string|object>, server?: string } }
 // Unwrap that to the underlying tool name + parsed args so the gates see the
-// real publish/append call. Direct (non-proxied) tool calls pass through unchanged.
+// real publish/append call. Pi's built-in MCP calls mcp__<server>__<tool>
+// directly, which passes through unchanged.
 function normalizeToolCall(event: ToolCallEvent): { toolName: string; input: Record<string, unknown> } {
   let toolName = event.toolName;
   let input: Record<string, unknown> = event.input ?? {};
@@ -187,8 +192,14 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   let guidance: Guidance | null = null;
   let projectDir = "";
   let activity = new SessionActivity();
-  // Untrusted reads this session; a later demarkus write asks first.
+  // Untrusted reads this session, for the gate's taint guard.
   let taint: string[] = [];
+  const native = new NativeServers("memory");
+  const report = (ctx: ExtensionContext, errors: string[]) => {
+    for (const error of errors) ctx.ui.notify(`demarkus-memory: MCP server not connected: ${error}`, "warning");
+  };
+  // Pi's own mcp.json files, whose servers override the ones registered here.
+  const piFiles = (ctx: ExtensionContext) => piConfigs(ctx.cwd, ctx.isProjectTrusted?.() ?? false);
 
   pi.on("session_start", async (_event, ctx) => {
     contextDelivered = false;
@@ -206,6 +217,8 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
     if (mcp.status === "error") {
       ctx.ui.notify(`demarkus-memory: MCP registration failed: ${mcp.message}`, "warning");
     }
+    // After the entry exists: without pi-mcp-adapter, pi connects it from here.
+    report(ctx, native.start(pi, piFiles(ctx)));
     // After provisioning, so the status reflects the server just started.
     guidance = await callGuidance("memory", GUIDANCE_FILE, projectDir);
     if (guidance?.status) ctx.ui.notify(guidance.status, "info");
@@ -218,6 +231,8 @@ export default function demarkusMemoryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    // A /soul-join since the last turn connects here, with no restart.
+    report(ctx, native.sync(pi, piFiles(ctx)));
     const parts: string[] = [];
     if (!contextDelivered) {
       // null = binary failed; retry each turn rather than dropping guidance

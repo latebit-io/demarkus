@@ -223,7 +223,12 @@ func taintDecision(pt toolname.Parsed, args map[string]any, in *Input, d Decisio
 	var found []string
 	if in.TranscriptPath != "" {
 		if found, err = taint.Transcript(in.TranscriptPath); err != nil {
-			return &Decision{Decision: string(Ask), Reason: fmt.Sprintf(
+			unreadable := Ask
+			if in.Post {
+				// A post hook shows only a warn; an ask would drop every warning.
+				unreadable = Warn
+			}
+			return &Decision{Decision: string(unreadable), Reason: fmt.Sprintf(
 				"demarkus %s: the session transcript could not be read (%v), so untrusted reads are unknown; approve only a write you reviewed.", pt.Verb, err)}, []string{"unreadable transcript"}, nil
 		}
 	}
@@ -232,7 +237,7 @@ func taintDecision(pt toolname.Parsed, args map[string]any, in *Input, d Decisio
 		return nil, nil, nil
 	}
 	return &Decision{Decision: string(s), Reason: fmt.Sprintf(
-		"demarkus %s to %s after this session read untrusted content (%s): text planted there may be steering this write. Approve only if you reviewed what it writes; to relax this check, set DEMARKUS_TAINT_STRICTNESS=warn (or off).",
+		"demarkus %s to %s after this session read untrusted content (%s): text planted there may be steering this write. Approve only if you reviewed what it writes; to change this check, set DEMARKUS_TAINT_STRICTNESS to ask, warn or off.",
 		pt.Verb, urlOr(args, "the store"), strings.Join(sources, "; "))}, sources, nil
 }
 

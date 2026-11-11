@@ -43,9 +43,10 @@ opencode plugin add 'github:latebit-io/demarkus#main::path:plugins/opencode-memo
 **pi**
 
 ```bash
-pi install npm:pi-mcp-adapter
 pi install git:github.com/latebit-io/demarkus-pi-memory
 ```
+
+On pi before 0.99, run `pi install npm:pi-mcp-adapter` first.
 
 All plugins share `~/.demarkus`: one memory across every agent on the machine. Details per host: [Claude Code](plugins/claude-code/README.md), [Cursor](plugins/cursor-memory/), [OpenCode](plugins/opencode-memory/), [pi](plugins/pi-memory/).
 

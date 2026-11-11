@@ -4,7 +4,7 @@ Local, versioned project memory for the [pi](https://pi.dev) coding agent, via [
 
 ## What it does
 
-- **Zero-config provisioning.** On session start it downloads the pinned demarkus binaries, generates a `0600` capability token, spawns a managed local `demarkus-server`, and registers the `demarkus-memory` MCP server in the pi-mcp-adapter config (`~/.config/mcp/mcp.json`).
+- **Zero-config provisioning.** On session start it downloads the pinned demarkus binaries, generates a `0600` capability token, spawns a managed local `demarkus-server`, and records the `demarkus-memory` MCP server in `~/.config/mcp/mcp.json`. Pi's built-in MCP support connects it in the same session; with `pi-mcp-adapter` installed, the adapter connects it from that file instead.
 - **Standing guidance.** Injects "recall first, record as you go" guidance once per session so the agent self-documents to the soul.
 - **Publish tag-gate.** A tagless `mark_publish` is invisible to `mark_lookup` forever; the gate makes that loud at write time (`warn` by default, `block`/`ask` available).
 - **Destination gate.** When a repo is bound to a specific soul, a write aimed at a different soul is denied (default `block`) so writes land on the right soul.
@@ -13,16 +13,10 @@ Local, versioned project memory for the [pi](https://pi.dev) coding agent, via [
 
 ## Requirements
 
-- [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter): surfaces the demarkus MCP tools. Install with `pi install npm:pi-mcp-adapter`.
+- pi 0.99 or later, whose built-in MCP support surfaces the demarkus tools. On an older pi, install [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter) first (`pi install npm:pi-mcp-adapter`). Where the adapter is installed, on any version, the plugin leaves the connection to it. A server of the same name in pi's own `mcp.json` overrides the plugin's; when it points somewhere else, the plugin warns and registers nothing under that name.
 - `bash`, `curl`, `tar`, `node` on PATH (used by the bundled provisioning scripts).
 
 ## Install
-
-First install the MCP adapter (provides the demarkus tools):
-
-```bash
-pi install npm:pi-mcp-adapter
-```
 
 This package lives in the demarkus monorepo under `plugins/pi-memory/`. pi's `git:` installer reads a repository's **root** `package.json`, so a monorepo subdirectory can't be git-installed directly; install it from a local checkout instead:
 
@@ -37,7 +31,7 @@ If the plugin is published as its own repository, the one-line git form works to
 pi install git:github.com/latebit-io/demarkus-pi-memory
 ```
 
-On the next session the memory is provisioned automatically. Run `/mcp` (or restart pi) once after the first session to connect the newly-registered `demarkus-memory` server. Use `/soul-status` to diagnose, `/soul-init` to reconfigure (adopt an existing server, switch modes). Remove with `pi remove ./demarkus/plugins/pi-memory`.
+On the next session the memory is provisioned automatically and its tools are available in that session. With `pi-mcp-adapter`, run `/mcp` (or restart pi) once after the first session to connect the newly-registered `demarkus-memory` server. Use `/soul-status` to diagnose, `/soul-init` to reconfigure (adopt an existing server, switch modes). Remove with `pi remove ./demarkus/plugins/pi-memory`.
 
 ### Update
 
@@ -59,7 +53,7 @@ On session start, after provisioning, the extension hands `demarkus-plugin updat
 
 ## Architecture
 
-Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper behavior are checked separately.
+Pi adapter CI typechecks the adapter and tests the built-in MCP wiring (`src/native.ts`); generated prompt artifacts and shared helper behavior are checked separately.
 
 - `src/*.ts`: the Pi adapter: event mapping, MCP wiring, and calls into the shared `demarkus-plugin` helper (loaded directly by Pi via `tsx`, no build step).
 - `scripts/*.sh`: the demarkus binary/server lifecycle, reused verbatim from the Claude Code plugin (single source of truth for provisioning); `provision.sh` is the per-session entrypoint and `mcp-config.mjs` registers remote-soul MCP servers.
@@ -76,7 +70,7 @@ Pi adapter CI is typecheck-only; generated prompt artifacts and shared helper be
 | `PostToolUse` promote-nudge | `tool_call`, injected reminder on a fresh ADR publish |
 | `Stop` journal-nudge | `session_shutdown` notify (pi can't force an extra turn) |
 
-An `ask` verdict opens a pi confirm dialog for that call; an approved `mark_publish` after an untrusted read carries `source-trust: tainted`. Without a UI (print and JSON modes) it is a block whose reason tells the agent to confirm with the user first. With both demarkus pi plugins loaded, this one owns the gate, so a write asks once.
+An `ask` verdict opens a pi confirm dialog for that call; an approved `mark_publish` after an untrusted read carries `source-trust: tainted`. Without a UI (print and JSON modes) it is a block whose reason tells the agent to confirm with the user first. With both demarkus pi plugins loaded, this one owns the gate, so a write asks once. A write after an untrusted read (web, browser, `curl`, `gh api`) warns by default and is stored without the `source-trust` label, so the doctor's tainted review list misses it; `DEMARKUS_TAINT_STRICTNESS=ask` makes it ask and labels an approved publish, `off` silences it.
 
 ## Syncing changes back to the standalone repo
 

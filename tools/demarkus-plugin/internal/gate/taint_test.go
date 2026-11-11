@@ -33,6 +33,12 @@ func TestTaintGate(t *testing.T) {
 	clean := transcriptWith(t, "Read", map[string]any{"file_path": "/x"})
 	publish := map[string]any{"url": "/x.md", "body": "# X\n", "metadata": map[string]any{"tags": "a"}}
 
+	// The default is warn: a warning, no prompt and no stamp.
+	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: web}); d.Decision != "warn" || d.UpdatedInput != nil || !strings.Contains(d.Reason, "WebFetch https://evil.example") {
+		t.Fatalf("default tainted publish = %q (%s), updated %v; want warn naming the read, no stamp", d.Decision, d.Reason, d.UpdatedInput)
+	}
+
+	t.Setenv("DEMARKUS_TAINT_STRICTNESS", "ask")
 	d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: web})
 	if d.Decision != "ask" || !strings.Contains(d.Reason, "WebFetch https://evil.example") {
 		t.Fatalf("tainted publish = %q (%s), want ask naming the read", d.Decision, d.Reason)
@@ -66,6 +72,13 @@ func TestTaintGate(t *testing.T) {
 	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: filepath.Join(t.TempDir(), "gone.jsonl")}); d.Decision != "ask" || !strings.Contains(d.Reason, "could not be read") {
 		t.Errorf("unreadable transcript = %q (%s), want ask", d.Decision, d.Reason)
 	}
+	// A set value that is no level asks: a typo must not weaken the guard.
+	for _, invalid := range []string{"ASK", "strict"} {
+		t.Setenv("DEMARKUS_TAINT_STRICTNESS", invalid)
+		if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: web}); d.Decision != "ask" {
+			t.Errorf("taint strictness %q = %q, want ask", invalid, d.Decision)
+		}
+	}
 	t.Setenv("DEMARKUS_TAINT_STRICTNESS", "off")
 	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: web}); d.Decision != "allow" {
 		t.Errorf("taint off = %q, want allow", d.Decision)
@@ -80,6 +93,7 @@ func TestTaintGate(t *testing.T) {
 // block already outranks it.
 func TestTaintSkipsWhenItCannotMatter(t *testing.T) {
 	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	t.Setenv("DEMARKUS_TAINT_STRICTNESS", "ask")
 	gone := filepath.Join(t.TempDir(), "gone.jsonl") // a scan would ask: unreadable
 	publish := map[string]any{"url": "/x.md", "body": "# X\n", "metadata": map[string]any{"tags": "a"}}
 	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: gone, Post: true}); d.Decision != "allow" {
@@ -92,5 +106,12 @@ func TestTaintSkipsWhenItCannotMatter(t *testing.T) {
 	t.Setenv("DEMARKUS_TAINT_STRICTNESS", "warn")
 	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, Taint: []string{"WebSearch"}, Post: true}); d.Decision != "warn" {
 		t.Errorf("post phase at warn = %q, want warn", d.Decision)
+	}
+	// A post hook cannot ask: an unreadable transcript warns there.
+	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: gone, Post: true}); d.Decision != "warn" || !strings.Contains(d.Reason, "could not be read") {
+		t.Errorf("post phase, unreadable transcript = %q (%s), want warn", d.Decision, d.Reason)
+	}
+	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: gone}); d.Decision != "ask" {
+		t.Errorf("pre phase, unreadable transcript = %q (%s), want ask", d.Decision, d.Reason)
 	}
 }

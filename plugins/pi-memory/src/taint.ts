@@ -1,5 +1,5 @@
 // Untrusted reads a session made, for the gate's taint guard: once any is
-// recorded, a demarkus write asks first. Mirrors taint.Of in the plugin binary
+// recorded, a demarkus write warns, or asks at ask. Mirrors taint.Of in the plugin binary
 // (web, browser, shell download, foreign mark read); the binary cleans and caps.
 const WEB_TOOL = /fetch|scrape|crawl|search/i;
 // Local built-ins WEB_TOOL would catch.

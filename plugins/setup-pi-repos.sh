@@ -94,6 +94,6 @@ done
 
 echo
 echo "All set. Install with:"
-echo "  pi install npm:pi-mcp-adapter"
+echo "  pi install npm:pi-mcp-adapter   # only on pi before 0.99"
 echo "  pi install git:github.com/${ORG}/demarkus-pi-memory"
 echo "  pi install git:github.com/${ORG}/demarkus-pi-knowledge"

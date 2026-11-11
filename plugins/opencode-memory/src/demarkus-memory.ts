@@ -137,7 +137,7 @@ interface SessionState {
   idleNudged: boolean;
   changedFiles: boolean;
   journalWrite: boolean;
-  // Untrusted reads so far; a later demarkus write asks first.
+  // Untrusted reads so far, for the gate's taint guard.
   taint: string[];
 }
 
