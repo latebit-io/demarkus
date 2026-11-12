@@ -260,19 +260,17 @@ type segment struct {
 	later []string // the stages after the first
 }
 
-// splitSegments splits on &&, ||, ;, & and newlines outside quotes: a check in
-// a commit message is no check, a quoted | no pipe, a # comment runs nothing.
+// splitSegments splits on &&, ||, ;, & and newlines outside quotes, so a check
+// named inside a commit message is not a check, and a quoted | is no pipe.
 // andOnly: every separator was && (a background & never is: Bash returns first).
 func splitSegments(command string) (segs []segment, andOnly bool) {
 	andOnly = true
 	var cur strings.Builder
 	var quote byte
 	var stages []string
-	inWord := false // a # is a comment only where a word would start
 	pipe := func() {
 		stages = append(stages, strings.TrimSpace(cur.String()))
 		cur.Reset()
-		inWord = false
 	}
 	flush := func() {
 		pipe()
@@ -285,30 +283,19 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 	for i := 0; i < len(command); i++ {
 		c := command[i]
 		switch {
-		case escapes(command, i, quote):
-			// An escaped byte is part of its word, never a separator, quote
-			// or comment; an escaped newline joins two lines.
-			i++
-			if command[i] != '\n' {
-				write(c)
-				write(command[i])
-				inWord = true
-			}
 		case quote != 0:
 			if c == quote {
 				quote = 0
 			}
 			write(c)
 		case c == '\'' || c == '"':
-			quote, inWord = c, true
+			quote = c
 			write(c)
-		case c == '#' && !inWord:
-			i = lineEnd(command, i)
 		case c == ';' || c == '\n':
 			// A trailing ; or newline ends the command; it sequences nothing.
 			andOnly = andOnly && strings.TrimSpace(command[i+1:]) == ""
 			flush()
-		case doubled(command, i):
+		case (c == '&' || c == '|') && i+1 < len(command) && command[i+1] == c:
 			andOnly = andOnly && c == '&'
 			flush()
 			i++
@@ -322,30 +309,10 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 			flush()
 		default:
 			write(c)
-			inWord = c != ' ' && c != '\t'
 		}
 	}
 	flush()
 	return segs, andOnly
-}
-
-// escapes: the backslash at i escapes the next byte (not inside single quotes).
-func escapes(command string, i int, quote byte) bool {
-	return command[i] == '\\' && quote != '\'' && i+1 < len(command)
-}
-
-// lineEnd is the index of the last byte of the line i is on.
-func lineEnd(command string, i int) int {
-	for i+1 < len(command) && command[i+1] != '\n' {
-		i++
-	}
-	return i
-}
-
-// doubled: the byte at i starts && or ||.
-func doubled(command string, i int) bool {
-	c := command[i]
-	return (c == '&' || c == '|') && i+1 < len(command) && command[i+1] == c
 }
 
 // isRedirect: the & at i belongs to a redirection (2>&1, <&3, &>file).

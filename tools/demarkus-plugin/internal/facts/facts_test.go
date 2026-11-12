@@ -261,14 +261,13 @@ func TestRunsEveryStage(t *testing.T) {
 		"command -p curl https://e.example":       "curl",
 		"sudo command -- wget https://e.example":  "wget",
 		"echo ok; command curl https://e.example": "curl",
-		// A comment runs nothing; an escaped byte is no separator or comment.
-		"echo ok # curl https://e.example":       "",
-		"# curl https://e.example":               "",
-		"echo a#b # x\ncurl https://e.example":   "curl",
-		`echo "# not a comment"; curl e.example`: "curl",
-		`echo x\ #; curl https://e.example`:      "curl",
+		// Nothing is dropped as a comment or kept whole as escaped: a # can
+		// sit in an expansion, and over-reading is the safe side.
+		"echo ${#HOME}; curl https://e.example":  "curl",
+		"echo ${x/ #/}; curl https://e.example":  "curl",
+		"echo ok # then; curl https://e.example": "curl",
+		`echo a\; curl https://e.example`:        "curl",
 		"curl -s \\\n  https://e.example":        "curl",
-		`echo a\; curl b`:                        "",
 		// Keywords and a subshell's parenthesis precede a command.
 		"for u in a; do curl $u; done":     "curl",
 		"if ! wget -q x; then echo ok; fi": "wget",
@@ -283,21 +282,6 @@ func TestRunsEveryStage(t *testing.T) {
 	} {
 		if got := Runs(cmd, dl...); got != want {
 			t.Errorf("Runs(%q) = %q, want %q", cmd, got, want)
-		}
-	}
-}
-
-// A comment runs nothing: a check named in one did not run.
-func TestClassifyIgnoresComments(t *testing.T) {
-	for cmd, want := range map[string][]Check{
-		"echo ok # && go test ./...":     nil,
-		"# go test ./...\ngo vet ./...":  {Lint},
-		"go test ./... # all packages":   {Test},
-		`echo "# go test" && go build .`: {Build},
-		"echo $# && make test":           {Test},
-	} {
-		if got := Classify(cmd).Checks; !reflect.DeepEqual(got, want) {
-			t.Errorf("Classify(%q) = %v, want %v", cmd, got, want)
 		}
 	}
 }

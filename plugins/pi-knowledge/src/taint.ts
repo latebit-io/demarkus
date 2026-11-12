@@ -132,7 +132,6 @@ function program(word = ""): string {
 
 // commandsOf splits a shell line into simple commands of unquoted words;
 // $(...) and `...` bodies, which run even inside double quotes, go to scripts.
-// A # where a word starts is a comment.
 function commandsOf(line: string, scripts: string[]): string[][] {
   const commands: string[][] = [];
   let words: string[] = [];
@@ -178,9 +177,6 @@ function commandsOf(line: string, scripts: string[]): string[][] {
         text += line[i];
         open = true;
       }
-    } else if (c === "#" && !open) {
-      const end = line.indexOf("\n", i);
-      i = (end < 0 ? line.length : end) - 1;
     } else if (c === " " || c === "\t") {
       endWord();
     } else if (";&|\n(){}".includes(c)) {
