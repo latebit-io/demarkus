@@ -40,6 +40,8 @@ type Input struct {
 	WorkspaceRoots []string `json:"workspace_roots"`
 	// TranscriptPath is Claude's session JSONL, scanned for untrusted reads.
 	TranscriptPath string `json:"transcript_path"`
+	// ToolUseID is Claude's id of the call, the same for every hook on it.
+	ToolUseID string `json:"tool_use_id"`
 	// Taint lists untrusted reads an adapter that sees every tool tracked
 	// itself (OpenCode, pi).
 	Taint []string `json:"taint"`
