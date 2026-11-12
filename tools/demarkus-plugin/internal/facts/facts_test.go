@@ -269,11 +269,29 @@ func TestRunsArgs(t *testing.T) {
 		`curl -H "A:  b" 'x y' a\ b && gh api user`: {{Program: "curl", Args: []string{"-H", "A: b", "x y", "a b"}}, {Program: "gh api", Args: []string{"user"}}},
 		"ls | xargs -n1 curl -O":                    {{Program: "curl", Args: []string{"-O"}, Fed: true}},
 		"sudo curl":                                 {{Program: "curl", Args: []string{}}},
+		"A=1 env B=2 curl x":                        {{Program: "curl", Args: []string{"x"}, Env: true}},
+		"curl a#b # curl c; curl d\ncurl e":         {{Program: "curl", Args: []string{"a#b"}}, {Program: "curl", Args: []string{"e"}}},
+		`curl "# not a comment" '#' \# x`:           {{Program: "curl", Args: []string{"# not a comment", "#", "#", "x"}}},
 		`curl "http://unclosed`:                     {{Program: "curl"}},
 		"go test ./...":                             nil,
 	} {
 		if got := Runs(cmd, dl...); !reflect.DeepEqual(got, want) {
 			t.Errorf("Runs(%q) = %+v, want %+v", cmd, got, want)
+		}
+	}
+}
+
+// A comment runs nothing: a check named in one did not run.
+func TestClassifyIgnoresComments(t *testing.T) {
+	for cmd, want := range map[string][]Check{
+		"echo ok # && go test ./...":     nil,
+		"# go test ./...\ngo vet ./...":  {Lint},
+		"go test ./... # all packages":   {Test},
+		`echo "# go test" && go build .`: {Build},
+		"echo $# && make test":           {Test},
+	} {
+		if got := Classify(cmd).Checks; !reflect.DeepEqual(got, want) {
+			t.Errorf("Classify(%q) = %v, want %v", cmd, got, want)
 		}
 	}
 }

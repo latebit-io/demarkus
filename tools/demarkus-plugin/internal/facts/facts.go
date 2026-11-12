@@ -299,9 +299,8 @@ type segment struct {
 	later []string // the stages after the first
 }
 
-// splitSegments splits on &&, ||, ;, & and newlines outside quotes, so a check
-// named inside a commit message is not a check, and a quoted | is no pipe. A
-// comment (# starting a word) is dropped to its line's end: it runs nothing.
+// splitSegments splits on &&, ||, ;, & and newlines outside quotes: a check in
+// a commit message is no check, a quoted | no pipe, a # comment runs nothing.
 // andOnly: every separator was && (a background & never is: Bash returns first).
 func splitSegments(command string) (segs []segment, andOnly bool) {
 	andOnly = true

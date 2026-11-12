@@ -27,6 +27,9 @@ const MAX_NESTING = 3;
 const LOOPBACK = /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?(?:[/?#][^\s{}[\]\\@]*)?$/i;
 const REDIRECTION = /^(?:\d*|&)[<>]/;
 const EXPANSION = /[$`]/;
+// Ways a command sends a loopback curl elsewhere with nothing in its arguments
+// to show it: a proxy variable, a curlrc home, a function or alias named curl.
+const REROUTED = /\b(?:(?:https?|all|no)_proxy|curl_home)\b|\bcurl\s*\(\s*\)|\bfunction\s+curl\b|\balias\s+(?:-\w+\s+)*curl=/i;
 const CURL_FLAGS = "sSfiIvkN";
 const CURL_VALUES = "XHdowmAu";
 const CURL_LONG_FLAGS = new Set(["silent", "show-error", "fail", "fail-with-body", "include", "head", "verbose", "insecure", "compressed", "no-buffer", "no-progress-meter"]);
@@ -44,7 +47,7 @@ export function taintOf(tool: string, args: Record<string, unknown> | undefined)
   if (WEB_TOOL.test(tool) && !LOCAL_TOOL.test(tool)) return clip(url ? `${tool} ${publicURL(url)}` : tool);
   if (BROWSER_TOOL.test(tool)) return clip(tool);
   const command = typeof args?.command === "string" ? args.command : "";
-  return SHELL_TOOL.test(tool) ? shellRead(command) : "";
+  return SHELL_TOOL.test(tool) ? shellRead(command, !REROUTED.test(command)) : "";
 }
 
 // recordTaint adds a call's untrusted read to sources, first seen first.
@@ -97,25 +100,28 @@ function foreignRead(tool: string, url: string): string {
 // shellRead labels a downloader or gh api run at a command position (past env
 // assignments, keywords, wrappers), in a substitution or a sh -c / eval script,
 // by program only (arguments carry tokens). Quoted text or arguments: no run.
-function shellRead(command: string, depth = 0): string {
+// exempt: a local curl is no read (false once the command reroutes curl).
+function shellRead(command: string, exempt: boolean, depth = 0): string {
   if (depth > MAX_NESTING) return "shell script too nested to check";
   const scripts: string[] = [];
-  for (const words of commandsOf(command.replace(HEREDOC, "$3\n"), scripts)) {
+  for (const { words, expands } of commandsOf(command.replace(HEREDOC, "$3\n"), scripts)) {
     let i = 0;
     let fed = false; // xargs appends operands the words do not show
+    let env = false; // a variable set for the run (PATH, HOME, a proxy) can move it
     for (;;) {
-      while (i < words.length && (ENV_ASSIGN.test(words[i]) || KEYWORDS.has(words[i]))) i++;
+      for (; i < words.length && (ENV_ASSIGN.test(words[i]) || KEYWORDS.has(words[i])); i++) env ||= ENV_ASSIGN.test(words[i]);
       const wrapper = program(words[i]);
       if (!WRAPPERS.has(wrapper)) break;
       if (wrapper === "xargs") fed = true;
       i++;
       while (i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i]))) i++;
     }
-    if (!fed && program(words[i]) === "curl" && localCurl(words.slice(i + 1))) continue;
+    const plain = exempt && !fed && !env && !expands;
+    if (plain && program(words[i]) === "curl" && localCurl(words.slice(i + 1))) continue;
     const found = downloaderAt(words, i, scripts);
     if (found) return `shell download: ${found}`;
   }
-  return scripts.reduce((found, script) => found || shellRead(script, depth + 1), "");
+  return scripts.reduce((found, script) => found || shellRead(script, exempt, depth + 1), "");
 }
 
 // downloaderAt names the downloader the command at s is, or ""; a script it
@@ -164,12 +170,15 @@ function program(word = ""): string {
   return word.slice(word.lastIndexOf("/") + 1).toLowerCase();
 }
 
-// commandsOf splits a shell line into simple commands of unquoted words;
-// $(...) and `...` bodies, which run even inside double quotes, go to scripts
-// and leave a $ in the word. A brace inside a word is expansion, not a group.
-function commandsOf(line: string, scripts: string[]): string[][] {
-  const commands: string[][] = [];
+type Command = { words: string[]; expands: boolean };
+
+// commandsOf splits a shell line into simple commands of unquoted words.
+// $(...) and `...` bodies run even inside double quotes: they go to scripts
+// and mark the command. A brace inside a word is no group; a # word, a comment.
+function commandsOf(line: string, scripts: string[]): Command[] {
+  const commands: Command[] = [];
   let words: string[] = [];
+  let expands = false;
   let text = "";
   let open = false;
   let quote = "";
@@ -180,8 +189,9 @@ function commandsOf(line: string, scripts: string[]): string[][] {
   };
   const endCommand = () => {
     endWord();
-    if (words.length) commands.push(words);
+    if (words.length) commands.push({ words, expands });
     words = [];
+    expands = false;
   };
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
@@ -195,7 +205,7 @@ function commandsOf(line: string, scripts: string[]): string[][] {
       const stop = end < 0 ? line.length : end;
       scripts.push(line.slice(c === "`" ? i + 1 : i + 2, stop));
       i = stop;
-      text += "$";
+      expands = true;
       open = true;
       continue;
     }
@@ -210,6 +220,9 @@ function commandsOf(line: string, scripts: string[]): string[][] {
     } else if (c === "\\" && i + 1 < line.length) {
       text += line[++i];
       open = true;
+    } else if (c === "#" && !open) {
+      const end = line.indexOf("\n", i);
+      i = (end < 0 ? line.length : end) - 1;
     } else if (c === " " || c === "\t") {
       endWord();
     } else if (";&|\n()".includes(c) || ("{}".includes(c) && !open)) {
