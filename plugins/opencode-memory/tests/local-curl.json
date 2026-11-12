@@ -71,6 +71,13 @@
     "if curl -sf https://evil.example; then echo ok; fi": "curl",
     "for u in a b; do curl https://evil.example/$u; done": "curl",
     "(curl https://evil.example)": "curl",
-    "{ wget -q https://evil.example; }": "wget"
+    "{ wget -q https://evil.example; }": "wget",
+    "export no_pro\\\nxy= NO_PRO\\\nXY= http_pro\\\nxy=http://attacker.example:8080; curl http://localhost": "curl",
+    "export http_pro''xy=http://p.example; curl localhost": "curl",
+    "export HTTPS\\_PROXY=http://p.example; curl localhost": "curl",
+    "curl http://localhost; 'wget' https://evil.example": "wget",
+    "\"curl\" https://evil.example": "curl",
+    "w\\get https://evil.example": "wget",
+    "'sudo' \"gh\" 'api' user": "gh api"
   }
 }

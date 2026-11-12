@@ -61,7 +61,7 @@ func Of(c *Call, memoryID func(tool string) string) string {
 		// No run is exempt beside a script Runs could not read: it may be
 		// the read, and the run's label is then the only one.
 		runs, opaque := facts.Runs(c.Input.Command, downloaders...)
-		exempt := len(runs) > 0 && !opaque && !rerouted.MatchString(c.Input.Command)
+		exempt := len(runs) > 0 && !opaque && !reroutes(c.Input.Command)
 		for _, r := range runs {
 			if !exempt || !localCurl(r) {
 				return "shell download: " + r.Program

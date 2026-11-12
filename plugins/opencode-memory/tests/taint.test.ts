@@ -32,6 +32,7 @@ test("taintOf finds a download only where the shell runs one", () => {
     // A variable set for a shell reaches the script it runs: no local curl there.
     ["FOO=1 bash -c 'curl http://localhost'", "curl"], ["env FOO=1 sh -c \"eval 'curl localhost'\"", "curl"],
     ["curl http://localhost && bash -c 'wget https://x'", "wget"],
+    ["curl http://localhost; cat <(wget -qO- https://x)", "wget"], ["curl localhost > >(curl https://x)", "curl"],
   ];
   for (const [command, program] of runs) assert.equal(taintOf("bash", { command }), `shell download: ${program}`, command);
   const mentions = [

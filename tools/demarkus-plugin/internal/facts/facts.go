@@ -192,29 +192,47 @@ type Run struct {
 // respected, env assignments and wrappers (sudo -E) skipped, a path compared
 // by its base name. opaque: the command also runs something Runs cannot read.
 func Runs(command string, programs ...[]string) (runs []Run, opaque bool) {
-	opaque = strings.Contains(command, "$(") || strings.Contains(command, "`")
+	opaque = substitutes.MatchString(command)
 	segs, _ := splitSegments(command)
 	for _, seg := range segs {
 		for _, stage := range append([]string{seg.stage}, seg.later...) {
-			tokens, fed, env := commandWords(strings.Fields(stage))
+			// Names are matched bare ('wget' runs wget); arguments keep
+			// their quotes for words.
+			raw := strings.Fields(stage)
+			bare := make([]string, len(raw))
+			for i, t := range raw {
+				bare[i] = Bare(t)
+			}
+			tokens, fed, env := commandWords(bare)
 			opaque = opaque || nests(tokens)
 			i := slices.IndexFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) })
 			if i < 0 {
 				continue
 			}
 			p := programs[i]
-			runs = append(runs, Run{Program: strings.Join(p, " "), Args: words(strings.Join(tokens[len(p):], " ")), Fed: fed, Env: env})
+			args := raw[len(raw)-len(tokens)+len(p):]
+			runs = append(runs, Run{Program: strings.Join(p, " "), Args: words(strings.Join(args, " ")), Fed: fed, Env: env})
 		}
 	}
 	return runs, opaque
 }
 
-// nests: the stage's command is one of unread, or defines a function.
+// substitutes: the command runs a body in $(...), backticks, <(...) or >(...).
+var substitutes = regexp.MustCompile("[$<>][(]|`")
+
+var bare = strings.NewReplacer("\\\n", "", "'", "", `"`, "", `\`, "")
+
+// Bare is s as the shell names things: escaped newlines joined, quotes and
+// backslashes dropped. For finding more to flag or refuse, never to allow.
+func Bare(s string) string { return bare.Replace(s) }
+
+// nests: the stage's command is one of unread, a variable, or a function
+// definition.
 func nests(tokens []string) bool {
 	if len(tokens) == 0 {
 		return false
 	}
-	return unread[filepath.Base(tokens[0])] || strings.Contains(tokens[0], "()") ||
+	return unread[filepath.Base(tokens[0])] || strings.ContainsAny(tokens[0], "$") || strings.Contains(tokens[0], "()") ||
 		(len(tokens) > 1 && strings.HasPrefix(tokens[1], "()"))
 }
 

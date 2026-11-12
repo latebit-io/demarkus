@@ -280,8 +280,10 @@ func TestRunsArgs(t *testing.T) {
 		"for u in a; do curl $u; done":        {{Program: "curl", Args: []string{"$u"}}},
 		"if ! curl -f x; then (gh api y); fi": {{Program: "curl", Args: []string{"-f", "x"}}, {Program: "gh api", Args: []string{"y)"}}},
 		"{ curl x; }":                         {{Program: "curl", Args: []string{"x"}}},
-		`curl "http://unclosed`:               {{Program: "curl"}},
-		"go test ./...":                       nil,
+		// A quoted or escaped name is the name; arguments keep their quoting.
+		`'curl' "a b"; "sudo" c\url x; gh 'api' y`: {{Program: "curl", Args: []string{"a b"}}, {Program: "curl", Args: []string{"x"}}, {Program: "gh api", Args: []string{"y"}}},
+		`curl "http://unclosed`:                    {{Program: "curl"}},
+		"go test ./...":                            nil,
 	} {
 		if got, _ := Runs(cmd, dl...); !reflect.DeepEqual(got, want) {
 			t.Errorf("Runs(%q) = %+v, want %+v", cmd, got, want)
@@ -322,6 +324,10 @@ func TestRunsOpaque(t *testing.T) {
 		"if curl -f x; then echo ok; fi":         false,
 		`curl -d '{"a": 1}' -w '%{http_code}' x`: false,
 		"curl x && echo bash":                    false,
+		"curl x; cat <(wget y)":                  true,
+		"curl x > >(wget y)":                     true,
+		"curl x; $FETCH y":                       true,
+		"curl x; echo $HOME 2>&1 < in > out":     false,
 	} {
 		if _, got := Runs(cmd, []string{"curl"}); got != want {
 			t.Errorf("Runs(%q) opaque = %v, want %v", cmd, got, want)

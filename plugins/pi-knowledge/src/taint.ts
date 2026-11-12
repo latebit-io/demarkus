@@ -48,7 +48,13 @@ export function taintOf(tool: string, args: Record<string, unknown> | undefined)
   if (WEB_TOOL.test(tool) && !LOCAL_TOOL.test(tool)) return clip(url ? `${tool} ${publicURL(url)}` : tool);
   if (BROWSER_TOOL.test(tool)) return clip(tool);
   const command = typeof args?.command === "string" ? args.command : "";
-  return SHELL_TOOL.test(tool) ? shellRead(command, !REROUTED.test(command)) : "";
+  return SHELL_TOOL.test(tool) ? shellRead(command, !reroutes(command)) : "";
+}
+
+// reroutes also reads the command bare (escaped newlines joined, quotes and
+// backslashes dropped), so a name split by them is found.
+function reroutes(command: string): boolean {
+  return REROUTED.test(command) || REROUTED.test(command.replace(/\\\n/g, "").replace(/['"\\]/g, ""));
 }
 
 // recordTaint adds a call's untrusted read to sources, first seen first.

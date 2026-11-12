@@ -21,6 +21,12 @@ var redirection = regexp.MustCompile(`^(?:\d*|&)[<>]`)
 // function or alias named curl. Matched anywhere in the command, quoted or not.
 var rerouted = regexp.MustCompile(`\b(?:(?:https?|all|no)_proxy|(?:HTTPS?|ALL|NO)_PROXY|CURL_HOME)\b|\b(?:(?:XDG_CONFIG_)?HOME|PATH)=|\bcurl\s*\(\s*\)|\bfunction\s+curl\b|\balias\s+(?:-\w+\s+)*curl=`)
 
+// reroutes also reads the command bare, so a name split by quotes or an
+// escaped newline is found.
+func reroutes(command string) bool {
+	return rerouted.MatchString(command) || rerouted.MatchString(facts.Bare(command))
+}
+
 // curl options that leave the request on the named host. Anything else
 // (-L, --proxy, -K, --connect-to, --resolve, --url) is not vouched for.
 const (
