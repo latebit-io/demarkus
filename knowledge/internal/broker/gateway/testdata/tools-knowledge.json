@@ -293,37 +293,6 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "openWorldHint": true,
-      "readOnlyHint": false
-    },
-    "description": "Export the graph store and publish it to /graph.md (mark_graph_export + mark_publish). Run mark_graph first.",
-    "inputSchema": {
-      "properties": {
-        "expected_version": {
-          "description": "version from prior fetch; 0 to create",
-          "type": "number"
-        },
-        "retention": {
-          "description": "graph versions to keep (default 20; 0 keeps all); older permanently pruned",
-          "type": "number"
-        },
-        "url": {
-          "description": "the graph document, mark://{worldName}/graph.md",
-          "type": "string"
-        }
-      },
-      "required": [
-        "url",
-        "expected_version"
-      ],
-      "type": "object"
-    },
-    "name": "mark_graph_publish"
-  },
-  {
-    "annotations": {
       "destructiveHint": false,
       "idempotentHint": false,
       "openWorldHint": true,

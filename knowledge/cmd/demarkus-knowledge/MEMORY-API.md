@@ -45,8 +45,7 @@ caller's world (call it once to learn the `{worldName}` every other
 tool addresses as `mark://{worldName}/{path}`).
 
 Deliberately absent: `mark_lookup_all` (multi-world aggregation has
-no meaning for a single-world tenant) and `mark_graph_export` /
-`mark_graph_publish`
+no meaning for a single-world tenant) and `mark_graph_export`
 (whole-store reads of the shared per-pod graph store would leak
 cross-tenant edges).
 

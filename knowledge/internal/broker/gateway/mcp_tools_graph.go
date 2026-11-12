@@ -173,9 +173,3 @@ func (g *Gateway) handleMarkGraph(ctx context.Context, req mcp.CallToolRequest) 
 func (g *Gateway) handleMarkGraphExport(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
 	return g.run(func(t *marktools.Tools) marktools.Result { return t.GraphExport(ctx) })
 }
-
-// Graph publication is single-writer: version conflicts surface without merging.
-func (g *Gateway) handleMarkGraphPublish(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go
-	args := mcpbind.GraphPublish(&req)
-	return g.run(func(t *marktools.Tools) marktools.Result { return t.GraphPublish(ctx, args) })
-}
