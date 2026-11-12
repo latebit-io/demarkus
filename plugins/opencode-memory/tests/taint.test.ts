@@ -34,6 +34,8 @@ test("taintOf finds a download only where the shell runs one", () => {
     ["command -p curl https://x", "curl"], ["echo ok; command curl https://x", "curl"], ["sudo command -- wget https://x", "wget"],
     // An escaped newline joins two lines.
     ["curl -s \\\n  https://x", "curl"], ["sudo \\\n  wget https://x", "wget"],
+    // An escaped quote opens no quote.
+    ["echo \\\"; curl https://x", "curl"], ["echo \"5\\\" pipe\"; curl https://x", "curl"], ["echo 'a\\'; curl https://x", "curl"],
     // Nothing is dropped as a comment: a # can sit in an expansion.
     ["echo ${#HOME}; curl https://x", "curl"], ["echo {#,}; curl https://x", "curl"], ["echo ${x/ #/}; curl https://x", "curl"],
     ["echo ok # then; curl https://x", "curl"], ["echo ok # $(curl https://x)", "curl"],

@@ -261,13 +261,20 @@ func TestRunsEveryStage(t *testing.T) {
 		"command -p curl https://e.example":       "curl",
 		"sudo command -- wget https://e.example":  "wget",
 		"echo ok; command curl https://e.example": "curl",
-		// Nothing is dropped as a comment or kept whole as escaped: a # can
-		// sit in an expansion, and over-reading is the safe side.
+		// Nothing is dropped as a comment: a # can sit in an expansion.
 		"echo ${#HOME}; curl https://e.example":  "curl",
 		"echo ${x/ #/}; curl https://e.example":  "curl",
 		"echo ok # then; curl https://e.example": "curl",
-		`echo a\; curl https://e.example`:        "curl",
-		"curl -s \\\n  https://e.example":        "curl",
+		// An escaped byte is no separator and opens no quote; inside single
+		// quotes a backslash escapes nothing.
+		`echo \"; curl https://e.example`:         "curl",
+		`echo "5\" pipe"; curl https://e.example`: "curl",
+		`echo \\; curl https://e.example`:         "curl",
+		`echo 'a\'; curl https://e.example`:       "curl",
+		`echo a\; curl https://e.example`:         "",
+		// An escaped newline still splits: it continues no comment.
+		"true # \\\ncurl https://e.example": "curl",
+		"curl -s \\\n  https://e.example":   "curl",
 		// Keywords and a subshell's parenthesis precede a command.
 		"for u in a; do curl $u; done":     "curl",
 		"if ! wget -q x; then echo ok; fi": "wget",

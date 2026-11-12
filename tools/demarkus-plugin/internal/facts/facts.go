@@ -283,6 +283,11 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 	for i := 0; i < len(command); i++ {
 		c := command[i]
 		switch {
+		case escapes(command, i, quote):
+			// An escaped byte is part of its word: no separator, no quote.
+			i++
+			write(c)
+			write(command[i])
 		case quote != 0:
 			if c == quote {
 				quote = 0
@@ -313,6 +318,13 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 	}
 	flush()
 	return segs, andOnly
+}
+
+// escapes: the backslash at i escapes the next byte. Not inside single
+// quotes, and never a newline, which still splits: a backslash ending a
+// comment continues nothing, so the next line runs.
+func escapes(command string, i int, quote byte) bool {
+	return command[i] == '\\' && quote != '\'' && i+1 < len(command) && command[i+1] != '\n'
 }
 
 // isRedirect: the & at i belongs to a redirection (2>&1, <&3, &>file).
