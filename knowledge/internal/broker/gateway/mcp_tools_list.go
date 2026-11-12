@@ -13,6 +13,7 @@ const mcpURLDesc = "mark:// URL, e.g. mark://team-a/index.md"
 
 // mcpTools returns the direct-MCP parity tools plus broker-only mark_worlds and
 // mark_lookup_all, which operate on the knowledge system rather than one world.
+// mark_graph_publish is left to demarkus-mcp: federation derives a world's graph.
 func mcpTools() []mcp.Tool {
 	return []mcp.Tool{
 		markFetchTool(),
@@ -28,7 +29,6 @@ func mcpTools() []mcp.Tool {
 		markBacklinksTool(),
 		markGraphTool(),
 		markGraphExportTool(),
-		markGraphPublishTool(),
 		markWorldsTool(),
 		markDoctorTool(),
 		markCurateTool(),
@@ -103,8 +103,4 @@ func markWorldsTool() mcp.Tool {
 	return mcpfmt.NewTool("mark_worlds",
 		mcp.WithDescription("Readable worlds with a writable flag. Columns: world ({worldName} in mark://{worldName}/{path}), url, address, writable. Discover the system and pick a write destination."),
 	)
-}
-
-func markGraphPublishTool() mcp.Tool {
-	return mcpfmt.GraphPublishTool("the graph document, mark://{worldName}/graph.md", "")
 }

@@ -32,7 +32,7 @@ func TestMCPURLFormStatedOnceInInstructions(t *testing.T) {
 // Wire bytes of tools/list per profile with five percent headroom; o200k is
 // about 4.1 bytes per token (2026-10-12). Raise only with a measured offset.
 const (
-	knowledgeFullSchemaBudgetBytes = 14630
+	knowledgeFullSchemaBudgetBytes = 14420
 	knowledgeLeanSchemaBudgetBytes = 13200
 	memoryFullSchemaBudgetBytes    = 12410
 	memoryLeanSchemaBudgetBytes    = 11980

@@ -142,8 +142,8 @@ contract is the WATCH verb's: hints, not content, with cursors.
 
 `server.mcp.toolProfile` selects the surface `tools/list` returns. `full`
 (default) is the complete list below. `lean` omits the operator and
-federation tools no plugin prompt references: `mark_discover`,
-`mark_graph_export`, `mark_graph_publish`.
+federation tools no plugin prompt references, here `mark_discover` and
+`mark_graph_export`.
 The set is defined once in `client/mcpfmt` and shared with
 `demarkus-mcp -profile`; `tools/plugin-prompts check` fails when a prompt
 template references a tool outside it. Tool behavior is
@@ -151,11 +151,12 @@ identical in both profiles.
 
 ## Tools
 
-Thirteen tools below have semantic parity with the local
+Twelve tools below have semantic parity with the local
 `client/cmd/demarkus-mcp` stdio server. Both surfaces render tool text
 through one package, `client/mcpfmt`, so their output is byte-identical
 by construction; `mark_lookup` and `mark_lookup_all` take `verbose: true`
-for full tag lists per row.
+for full tag lists per row. The broker does not serve
+`mark_graph_publish`: federation derives a federated world's graph.
 
 ### Read
 
@@ -540,8 +541,7 @@ link graph. External (non-`mark://`) links are recorded but not
 followed. Edges carry provenance (link label, source section anchor,
 occurrence count) and typed relations ingested from `rel-<predicate>`
 publisher metadata. Results populate the broker's graph store for
-subsequent `mark_backlinks` / `mark_graph_export` /
-`mark_graph_publish` calls.
+subsequent `mark_backlinks` / `mark_graph_export` calls.
 
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -555,19 +555,6 @@ Edges table carries six columns (`From | To | Rel | Label | Anchor | Count`).
 Returns an empty hint if the store is empty.
 
 (No parameters.)
-
-#### `mark_graph_publish`
-
-Export the broker's graph store and publish it to a world in one
-step. `mark_graph_export` + `mark_publish` combined. This manual tool writes the
-single-document export to `url`, which must be a world's `/graph.md`; in a knowledge
-system the hub's deriver checkpoints are seeded automatically. This tool does not seed
-the store itself; run `mark_graph`, `mark_backlinks`, or `mark_explore` first.
-
-| Param | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `url` | string | yes | The graph document, `mark://<world>/graph.md`. |
-| `expected_version` | number | yes | From a prior fetch. `0` to create new. |
 
 ## Error envelope
 
