@@ -288,18 +288,22 @@ func cmdGate() {
 		fail(fmt.Sprintf("evaluate: %v", err))
 		return
 	}
-	emitDecision(d, *format)
+	emitDecision(d, *format, &in)
 }
 
-func emitDecision(d gate.Decision, format string) {
+func emitDecision(d gate.Decision, format string, in *gate.Input) {
 	h, phase, ok := host.ForGate(format)
 	if !ok {
 		printJSON(d) // json
 		return
 	}
-	if out, emit := h.Gate(phase, d.Decision, d.Reason, d.UpdatedInput); emit {
-		printJSON(out)
+	out, emit := h.Gate(phase, d.Decision, d.Reason, d.UpdatedInput)
+	// A post hook only advises, and both plugins' hooks advise alike: one
+	// shows it. Pre hooks all answer, since they enforce.
+	if !emit || (in.Post && !gate.Claim(in.ToolUseID)) {
+		return
 	}
+	printJSON(out)
 }
 
 func printJSON(v any) {
