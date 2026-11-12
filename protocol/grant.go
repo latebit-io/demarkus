@@ -27,6 +27,10 @@ type Grant struct {
 	// Govern lets the grant write governance documents on a world that
 	// restricts them (storefmt.IsGovernancePath); Paths still bound it.
 	Govern bool
+	// Graph lets the grant write generated graph data
+	// (storefmt.GeneratedGraphTarget): derived by its holder, never authored.
+	// Paths still bound it.
+	Graph bool
 }
 
 // GovernancePrefix holds the documents that steer every writer: publish

@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 	"github.com/latebit-io/demarkus/server/internal/auth"
 	"github.com/latebit-io/demarkus/server/internal/fanout"
 )
@@ -40,7 +41,7 @@ func (h *Handler) serveWatch(ctx context.Context, w io.Writer, req protocol.Requ
 		ctx, cancel = context.WithDeadlineCause(ctx, grant.Expires, auth.ErrTokenExpired)
 		defer cancel()
 	}
-	scope := scopePath(req.Path)
+	scope := storefmt.ScopePath(req.Path)
 	err := h.watches.Serve(ctx, fanout.Request{Scope: scope, Token: req.Metadata["auth"], Since: since, Coalesce: coalesce != ""}, w)
 	var limited *fanout.LimitError
 	switch {

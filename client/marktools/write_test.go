@@ -304,3 +304,31 @@ func TestPublishShowsTheServersWarning(t *testing.T) {
 		t.Errorf("Publish = %+v, want the warning field", got)
 	}
 }
+
+// Generated graph data is derived: no document tool writes it, and the
+// refusal comes before authorization or any request.
+func TestDocumentToolsRefuseGeneratedGraphData(t *testing.T) {
+	backend := &fetchtest.Client{}
+	tools := newTools(t, backend, writingHooks())
+	for _, p := range []string{"/graph.md", "/Graph/Worlds/team-a/manifest.md"} {
+		want := p + " is generated graph data: derived from the documents, never written directly"
+		for name, got := range map[string]marktools.Result{
+			"publish": tools.Publish(t.Context(), marktools.PublishArgs{URL: p, Body: "# Mine\n", ExpectedVersion: new(0)}),
+			"append":  tools.Append(t.Context(), marktools.AppendArgs{URL: p, Body: "more\n", ExpectedVersion: 1}),
+			"archive": tools.Archive(t.Context(), marktools.ArchiveArgs{URL: p}),
+			"curate":  tools.Curate(t.Context(), marktools.CurateArgs{URL: p, Apply: true, Proposal: "abc"}),
+			"promote": tools.Promote(t.Context(), marktools.PromoteArgs{URL: p, Phase: "apply", Body: "# Mine\n", Packet: "abc"}),
+		} {
+			if !got.IsError || !strings.HasSuffix(got.Text, want) {
+				t.Errorf("%s %s = %+v", name, p, got)
+			}
+		}
+	}
+	// A directory of it is refused too: the journal route writes beneath it.
+	if got := tools.Append(t.Context(), marktools.AppendArgs{URL: "/graph/worlds/", Body: "entry\n", Route: marktools.RouteToday}); !got.IsError || got.Text != "/graph/worlds/ is generated graph data: derived from the documents, never written directly" {
+		t.Errorf("journal under a generated directory = %+v", got)
+	}
+	if n := len(backend.PublishCalls) + len(backend.AppendCalls) + len(backend.ArchiveCalls) + len(backend.FetchCalls) + len(backend.ListCalls); n != 0 {
+		t.Errorf("a refusal sent %d requests", n)
+	}
+}

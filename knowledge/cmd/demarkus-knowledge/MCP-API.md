@@ -290,6 +290,11 @@ caller's world.
 
 ### Write
 
+Every write tool refuses a generated graph path (`/graph.md`,
+`/graph/manifest.md`, `/graph/shards/`, `/graph/worlds/`): the graph is
+derived from the documents. A recursive archive skips them. The world
+refuses them too (`not-permitted`).
+
 #### `mark_publish`
 
 Publish or update a document. The status line carries the version

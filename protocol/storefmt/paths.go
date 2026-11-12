@@ -29,6 +29,23 @@ func IsGovernancePath(reqPath string) bool {
 	return strings.HasPrefix(strings.ToLower(CanonicalPath(reqPath))+"/", protocol.GovernancePrefix)
 }
 
+// ScopePath is the canonical path with a trailing slash kept: "/" or a
+// prefix ending in "/" names a subtree, anything else one document.
+func ScopePath(reqPath string) string {
+	scope := CanonicalPath(reqPath)
+	if strings.HasSuffix(reqPath, "/") && scope != "/" {
+		scope += "/"
+	}
+	return scope
+}
+
+// GeneratedGraphTarget reports a write target that is generated graph data,
+// or a directory of it, under any spelling: scoped and case-folded, where
+// protocol.IsGeneratedGraphPath takes a stored path.
+func GeneratedGraphTarget(reqPath string) bool {
+	return protocol.IsGeneratedGraphPath(strings.ToLower(ScopePath(reqPath)))
+}
+
 // RelPath is the storage-relative form of a request path: CanonicalPath
 // without the leading slash, "" for the root. ".." is rejected with
 // fs.ErrNotExist so traversal never reaches a backend.
