@@ -22,6 +22,15 @@ const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const HEREDOC = /<<-?[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1([^\n]*)\n(?:[^\n]*\n)*?[ \t]*\2[ \t]*(?:\n|$)/g;
 const MAX_NESTING = 3;
+// localCurl's vocabulary, the binary's taint/local.go: a loopback URL with no
+// userinfo, glob or backslash, a redirection word, the options vouched for.
+const LOOPBACK = /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?(?:[/?#][^\s{}[\]\\@]*)?$/i;
+const REDIRECTION = /^(?:\d*|&)[<>]/;
+const EXPANSION = /[$`]/;
+const CURL_FLAGS = "sSfiIvkN";
+const CURL_VALUES = "XHdowmAu";
+const CURL_LONG_FLAGS = new Set(["silent", "show-error", "fail", "fail-with-body", "include", "head", "verbose", "insecure", "compressed", "no-buffer", "no-progress-meter"]);
+const CURL_LONG_VALUES = new Set(["request", "header", "data", "data-raw", "data-binary", "data-urlencode", "json", "output", "write-out", "max-time", "connect-timeout", "user-agent", "user", "retry", "retry-delay"]);
 
 // isGatedWrite matches every demarkus tool that changes a store.
 export function isGatedWrite(toolName: string): boolean {
@@ -93,12 +102,16 @@ function shellRead(command: string, depth = 0): string {
   const scripts: string[] = [];
   for (const words of commandsOf(command.replace(HEREDOC, "$3\n"), scripts)) {
     let i = 0;
+    let fed = false; // xargs appends operands the words do not show
     for (;;) {
       while (i < words.length && (ENV_ASSIGN.test(words[i]) || KEYWORDS.has(words[i]))) i++;
-      if (!WRAPPERS.has(program(words[i]))) break;
+      const wrapper = program(words[i]);
+      if (!WRAPPERS.has(wrapper)) break;
+      if (wrapper === "xargs") fed = true;
       i++;
       while (i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i]))) i++;
     }
+    if (!fed && program(words[i]) === "curl" && localCurl(words.slice(i + 1))) continue;
     const found = downloaderAt(words, i, scripts);
     if (found) return `shell download: ${found}`;
   }
@@ -119,13 +132,41 @@ function downloaderAt(words: string[], s: number, scripts: string[]): string {
   return "";
 }
 
+// localCurl: a curl run that reads this machine only: every operand a loopback
+// URL, every option a known one (-L, --proxy and the rest are not vouched
+// for). curl alone: wget and aria2c follow a redirect unasked.
+function localCurl(args: string[]): boolean {
+  if (args.some((w) => EXPANSION.test(w))) return false; // not what curl gets
+  let urls = 0;
+  for (let i = 0; i < args.length; i++) {
+    const w = args[i];
+    let value = false;
+    if (REDIRECTION.test(w)) continue;
+    if (w.startsWith("--")) {
+      value = CURL_LONG_VALUES.has(w.slice(2));
+      if (!value && !CURL_LONG_FLAGS.has(w.slice(2))) return false;
+    } else if (w.length > 1 && w[0] === "-") {
+      // A cluster: flags, then at most one option whose value is the rest of
+      // the cluster or, when none, the next word.
+      let j = 1;
+      while (j < w.length && CURL_FLAGS.includes(w[j])) j++;
+      if (j < w.length && !CURL_VALUES.includes(w[j])) return false;
+      value = j === w.length - 1;
+    } else if (LOOPBACK.test(w)) urls++;
+    else return false;
+    if (value && ++i >= args.length) return false;
+  }
+  return urls > 0;
+}
+
 // program is a command word's base name: a path runs its last segment.
 function program(word = ""): string {
   return word.slice(word.lastIndexOf("/") + 1).toLowerCase();
 }
 
 // commandsOf splits a shell line into simple commands of unquoted words;
-// $(...) and `...` bodies, which run even inside double quotes, go to scripts.
+// $(...) and `...` bodies, which run even inside double quotes, go to scripts
+// and leave a $ in the word. A brace inside a word is expansion, not a group.
 function commandsOf(line: string, scripts: string[]): string[][] {
   const commands: string[][] = [];
   let words: string[] = [];
@@ -154,6 +195,7 @@ function commandsOf(line: string, scripts: string[]): string[][] {
       const stop = end < 0 ? line.length : end;
       scripts.push(line.slice(c === "`" ? i + 1 : i + 2, stop));
       i = stop;
+      text += "$";
       open = true;
       continue;
     }
@@ -170,7 +212,7 @@ function commandsOf(line: string, scripts: string[]): string[][] {
       open = true;
     } else if (c === " " || c === "\t") {
       endWord();
-    } else if (";&|\n(){}".includes(c)) {
+    } else if (";&|\n()".includes(c) || ("{}".includes(c) && !open)) {
       endCommand();
     } else {
       text += c;

@@ -297,13 +297,18 @@ func emitDecision(d gate.Decision, format string, in *gate.Input) {
 		printJSON(d) // json
 		return
 	}
-	out, emit := h.Gate(phase, d.Decision, d.Reason, d.UpdatedInput)
 	// A post hook only advises, and both plugins' hooks advise alike: one
 	// shows it. Pre hooks all answer, since they enforce.
-	if !emit || (in.Post && !gate.Claim(in.ToolUseID)) {
-		return
+	v := host.Verdict{Decision: d.Decision, Reason: d.Reason, Updated: d.UpdatedInput}
+	if in.Post {
+		var ok bool
+		if v.Notice, ok = gate.Report(d, in); !ok {
+			return
+		}
 	}
-	printJSON(out)
+	if out, emit := h.Gate(phase, v); emit {
+		printJSON(out)
+	}
 }
 
 func printJSON(v any) {

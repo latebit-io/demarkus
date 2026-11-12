@@ -170,40 +170,101 @@ var wrappers = map[string]bool{"sudo": true, "doas": true, "env": true, "exec": 
 // numericArg is a wrapper option value: 10, 2.5, 10s, 1m.
 var numericArg = regexp.MustCompile(`^\d[0-9.]*[smhd]?$`)
 
-// Runs names the first of programs some pipeline stage of command runs, or "":
-// quotes respected, env assignments and wrappers (sudo -E) skipped, a path
-// compared by its base name.
-func Runs(command string, programs ...[]string) string {
+// Run is one of the programs asked about, as a pipeline stage runs it.
+type Run struct {
+	Program string   // as listed: "curl", "gh api"
+	Args    []string // the words after it, unquoted; nil when a quote is unclosed
+	Fed     bool     // under xargs, which appends operands the stage does not show
+}
+
+// Runs lists the programs the stages of command run, in order: quotes
+// respected, env assignments and wrappers (sudo -E) skipped, a path compared
+// by its base name.
+func Runs(command string, programs ...[]string) []Run {
+	var runs []Run
 	segs, _ := splitSegments(command)
 	for _, seg := range segs {
 		for _, stage := range append([]string{seg.stage}, seg.later...) {
-			tokens := commandWords(strings.Fields(stage))
-			if i := slices.IndexFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) }); i >= 0 {
-				return strings.Join(programs[i], " ")
+			tokens, fed := commandWords(strings.Fields(stage))
+			i := slices.IndexFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) })
+			if i < 0 {
+				continue
 			}
+			p := programs[i]
+			runs = append(runs, Run{Program: strings.Join(p, " "), Args: words(strings.Join(tokens[len(p):], " ")), Fed: fed})
 		}
 	}
-	return ""
+	return runs
 }
 
 // commandWords drops what precedes the command a stage runs: assignments,
-// wrappers and the wrappers' options.
-func commandWords(tokens []string) []string {
+// wrappers and the wrappers' options. fed: one of the wrappers was xargs.
+func commandWords(tokens []string) (rest []string, fed bool) {
 	for len(tokens) > 0 {
-		takesOptions, wrapper := wrappers[filepath.Base(tokens[0])]
+		name := filepath.Base(tokens[0])
+		takesOptions, wrapper := wrappers[name]
 		switch {
 		case isEnvAssignment(tokens[0]):
 			tokens = tokens[1:]
 		case wrapper:
+			fed = fed || name == "xargs"
 			tokens = tokens[1:]
 			for takesOptions && len(tokens) > 0 && (strings.HasPrefix(tokens[0], "-") || numericArg.MatchString(tokens[0])) {
 				tokens = tokens[1:]
 			}
 		default:
-			return tokens
+			return tokens, fed
 		}
 	}
-	return tokens
+	return tokens, fed
+}
+
+// words splits s into shell words, quotes and backslashes removed; nil for
+// an unclosed quote.
+func words(s string) []string {
+	out := []string{}
+	var cur strings.Builder
+	var quote byte
+	open := false
+	write := func(c byte) { _ = cur.WriteByte(c) } // a strings.Builder write never fails
+	end := func() {
+		if open {
+			out = append(out, cur.String())
+		}
+		cur.Reset()
+		open = false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote == '\'':
+			if c == quote {
+				quote = 0
+			} else {
+				write(c)
+			}
+		case quote == '"' && c == quote:
+			quote = 0
+		case c == '\\' && i+1 < len(s):
+			i++
+			write(s[i])
+			open = true
+		case quote == '"':
+			write(c)
+		case c == '\'' || c == '"':
+			quote, open = c, true
+		case c == ' ' || c == '\t':
+			end()
+		default:
+			write(c)
+			open = true
+		}
+	}
+	if quote != 0 {
+		return nil
+	}
+	end()
+	return out
 }
 
 func hasPrefix(tokens, prefix []string) bool {

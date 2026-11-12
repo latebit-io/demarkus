@@ -252,8 +252,28 @@ func TestRunsEveryStage(t *testing.T) {
 		"nice -n 5 curl https://e.example":   "curl",
 		"command -v curl":                    "",
 	} {
-		if got := Runs(cmd, dl...); got != want {
-			t.Errorf("Runs(%q) = %q, want %q", cmd, got, want)
+		got := ""
+		if runs := Runs(cmd, dl...); len(runs) > 0 {
+			got = runs[0].Program
+		}
+		if got != want {
+			t.Errorf("Runs(%q) first = %q, want %q", cmd, got, want)
+		}
+	}
+}
+
+// Every run is listed with its words unquoted, and marked when xargs feeds it.
+func TestRunsArgs(t *testing.T) {
+	dl := [][]string{{"curl"}, {"gh", "api"}}
+	for cmd, want := range map[string][]Run{
+		`curl -H "A:  b" 'x y' a\ b && gh api user`: {{Program: "curl", Args: []string{"-H", "A: b", "x y", "a b"}}, {Program: "gh api", Args: []string{"user"}}},
+		"ls | xargs -n1 curl -O":                    {{Program: "curl", Args: []string{"-O"}, Fed: true}},
+		"sudo curl":                                 {{Program: "curl", Args: []string{}}},
+		`curl "http://unclosed`:                     {{Program: "curl"}},
+		"go test ./...":                             nil,
+	} {
+		if got := Runs(cmd, dl...); !reflect.DeepEqual(got, want) {
+			t.Errorf("Runs(%q) = %+v, want %+v", cmd, got, want)
 		}
 	}
 }

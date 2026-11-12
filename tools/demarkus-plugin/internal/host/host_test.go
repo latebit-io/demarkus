@@ -51,19 +51,21 @@ func TestGateShapes(t *testing.T) {
 		name     string
 		format   string
 		decision string
+		notice   string // the part of the reason the user is shown
 		want     string // "" means the hook says nothing
 	}{
-		{"claude pre block", "claude-pre", "block", `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"r"}}`},
-		{"claude pre ask", "claude-pre", "ask", `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"r"}}`},
-		{"claude pre warn", "claude-pre", "warn", ""},
-		{"claude pre allow", "claude-pre", "allow", ""},
-		{"claude post warn", "claude-post", "warn", `{"hookSpecificOutput":{"additionalContext":"⚠️ r","hookEventName":"PostToolUse"}}`},
-		{"claude post block", "claude-post", "block", ""},
-		{"claude post allow", "claude-post", "allow", ""},
-		{"cursor block", "cursor", "block", `{"agent_message":"r","permission":"deny","user_message":"r"}`},
-		{"cursor ask", "cursor", "ask", `{"agent_message":"r","permission":"ask","user_message":"r"}`},
-		{"cursor warn", "cursor", "warn", `{"agent_message":"⚠️ r","permission":"allow"}`},
-		{"cursor allow", "cursor", "allow", `{"permission":"allow"}`},
+		{"claude pre block", "claude-pre", "block", "", `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"r"}}`},
+		{"claude pre ask", "claude-pre", "ask", "", `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"r"}}`},
+		{"claude pre warn", "claude-pre", "warn", "", ""},
+		{"claude pre allow", "claude-pre", "allow", "", ""},
+		{"claude post warn", "claude-post", "warn", "n", `{"hookSpecificOutput":{"additionalContext":"⚠️ r","hookEventName":"PostToolUse"},"systemMessage":"⚠️ n"}`},
+		{"claude post warn already shown", "claude-post", "warn", "", `{"hookSpecificOutput":{"additionalContext":"⚠️ r","hookEventName":"PostToolUse"}}`},
+		{"claude post block", "claude-post", "block", "", ""},
+		{"claude post allow", "claude-post", "allow", "", ""},
+		{"cursor block", "cursor", "block", "", `{"agent_message":"r","permission":"deny","user_message":"r"}`},
+		{"cursor ask", "cursor", "ask", "", `{"agent_message":"r","permission":"ask","user_message":"r"}`},
+		{"cursor warn", "cursor", "warn", "", `{"agent_message":"⚠️ r","permission":"allow"}`},
+		{"cursor allow", "cursor", "allow", "", `{"permission":"allow"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -71,7 +73,7 @@ func TestGateShapes(t *testing.T) {
 			if !ok {
 				t.Fatalf("ForGate(%q) not ok", tt.format)
 			}
-			out, emit := h.Gate(phase, tt.decision, "r", nil)
+			out, emit := h.Gate(phase, Verdict{Decision: tt.decision, Reason: "r", Notice: tt.notice})
 			if emit != (tt.want != "") {
 				t.Fatalf("emit = %v, want %v", emit, tt.want != "")
 			}
@@ -89,16 +91,16 @@ func TestGateShapes(t *testing.T) {
 func TestGateUpdatedInput(t *testing.T) {
 	updated := map[string]any{"url": "/x.md", "metadata": map[string]any{"source-trust": "tainted"}}
 	h, phase, _ := ForGate("claude-pre")
-	out, _ := h.Gate(phase, "ask", "r", updated)
+	out, _ := h.Gate(phase, Verdict{Decision: "ask", Reason: "r", Updated: updated})
 	if got := encode(t, out); got != `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"r","updatedInput":{"metadata":{"source-trust":"tainted"},"url":"/x.md"}}}` {
 		t.Errorf("claude ask = %s", got)
 	}
-	out, _ = h.Gate(phase, "block", "r", updated)
+	out, _ = h.Gate(phase, Verdict{Decision: "block", Reason: "r", Updated: updated})
 	if got := encode(t, out); strings.Contains(got, "updatedInput") {
 		t.Errorf("claude block rewrote the input: %s", got)
 	}
 	c, cphase, _ := ForGate("cursor")
-	out, _ = c.Gate(cphase, "ask", "r", updated)
+	out, _ = c.Gate(cphase, Verdict{Decision: "ask", Reason: "r", Updated: updated})
 	if got := encode(t, out); strings.Contains(got, "tainted") {
 		t.Errorf("cursor carried a rewrite: %s", got)
 	}

@@ -42,6 +42,8 @@ type Input struct {
 	TranscriptPath string `json:"transcript_path"`
 	// ToolUseID is Claude's id of the call, the same for every hook on it.
 	ToolUseID string `json:"tool_use_id"`
+	// SessionID is Claude's session, the scope of a warning shown once.
+	SessionID string `json:"session_id"`
 	// Taint lists untrusted reads an adapter that sees every tool tracked
 	// itself (OpenCode, pi).
 	Taint []string `json:"taint"`
@@ -57,6 +59,10 @@ type Decision struct {
 	// UpdatedInput is the tool input with the taint stamp, for a host hook
 	// that can rewrite a call it asks about; never on the native wire.
 	UpdatedInput map[string]any `json:"-"`
+	// A warn that includes the taint warning: sources are the reads it names,
+	// rest the other warnings in Reason ("" for none).
+	sources []string
+	rest    string
 }
 
 func allow() Decision { return Decision{Decision: "allow"} }
@@ -285,6 +291,12 @@ func Evaluate(in *Input) (Decision, error) {
 		return d, err
 	}
 	combined := combine([]Decision{d, *t})
+	if combined.Decision == "warn" && t.Decision == "warn" {
+		combined.sources = sources
+		if d.Decision == "warn" {
+			combined.rest = d.Reason
+		}
+	}
 	// The proxy shape (tool "mcp") wraps its args; only a direct call is rewritten.
 	if combined.Decision == "ask" && tool == in.Tool {
 		combined.UpdatedInput = stamped(pt, in.Input, sources)

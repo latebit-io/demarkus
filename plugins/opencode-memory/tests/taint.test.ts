@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { branchTaint, isGatedWrite, recordTaint, taintOf, taintStamp } from "../src/taint.ts";
 
@@ -35,6 +36,17 @@ test("taintOf finds a download only where the shell runs one", () => {
     "brew install curl", "sudo apt-get install -y curl wget", "command -v curl", "man wget", "gh pr view 1",
   ];
   for (const command of mentions) assert.equal(taintOf("bash", { command }), "", command);
+});
+
+// The cases are the binary's (taint/testdata/local-curl.json, a checked copy):
+// local commands read nothing, download maps one to its program.
+test("taintOf passes a curl that reads this machine only", () => {
+  const cases = JSON.parse(readFileSync(new URL("./local-curl.json", import.meta.url), "utf8"));
+  assert.ok(cases.local.length > 0 && Object.keys(cases.download).length > 0, "no cases read");
+  for (const command of cases.local) assert.equal(taintOf("bash", { command }), "", command);
+  for (const [command, program] of Object.entries(cases.download)) {
+    assert.equal(taintOf("bash", { command }), `shell download: ${program}`, command);
+  }
 });
 
 test("taintOf counts MCP web tools, not local search", () => {

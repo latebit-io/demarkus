@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PostToolUse gate adapter. The shared demarkus-plugin binary decides; on a warn
-# (the default strictness) it emits an additionalContext reminder, otherwise
+# (the default strictness) it emits a reminder to the model and the user, otherwise
 # nothing (block/ask were already enforced PreToolUse). Fails open when the
 # binary isn't installed yet.
 set -uo pipefail

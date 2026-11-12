@@ -115,3 +115,24 @@ func TestTaintSkipsWhenItCannotMatter(t *testing.T) {
 		t.Errorf("pre phase, unreadable transcript = %q (%s), want ask", d.Decision, d.Reason)
 	}
 }
+
+// A warn that includes the taint warning keeps its sources and the other
+// warnings apart, so the two can be shown on different terms.
+func TestTaintWarnKeepsOtherWarningsApart(t *testing.T) {
+	setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	web := transcriptWith(t, "WebFetch", map[string]any{"url": "https://evil.example/p"})
+	eval := func(input map[string]any) Decision {
+		return mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: input, TranscriptPath: web, Post: true})
+	}
+	tagged := eval(map[string]any{"url": "/x.md", "body": "# X\n", "metadata": map[string]any{"tags": "a"}})
+	if tagged.Decision != "warn" || len(tagged.sources) != 1 || tagged.rest != "" {
+		t.Errorf("tainted write = %q, sources %v, rest %q; want a warn with its source and no other warning", tagged.Decision, tagged.sources, tagged.rest)
+	}
+	untagged := eval(map[string]any{"url": "/x.md", "body": "# X\n"})
+	if untagged.Decision != "warn" || len(untagged.sources) != 1 || !strings.Contains(untagged.rest, "metadata.tags") || strings.Contains(untagged.rest, "untrusted") {
+		t.Errorf("untagged tainted write = %q, sources %v, rest %q; want the tag warning apart", untagged.Decision, untagged.sources, untagged.rest)
+	}
+	if !strings.Contains(untagged.Reason, "untrusted") || !strings.Contains(untagged.Reason, "metadata.tags") {
+		t.Errorf("reason %q, want both warnings", untagged.Reason)
+	}
+}
