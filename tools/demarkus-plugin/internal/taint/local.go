@@ -17,9 +17,9 @@ var loopbackURL = regexp.MustCompile(`(?i)^(?:https?://)?(?:localhost|127\.0\.0\
 var redirection = regexp.MustCompile(`^(?:\d*|&)[<>]`)
 
 // Ways a command sends a loopback curl elsewhere with nothing in its
-// arguments to show it: a proxy variable, a curlrc home, a function or alias
-// named curl. Matched anywhere in the command, quoted or not.
-var rerouted = regexp.MustCompile(`(?i)\b(?:(?:https?|all|no)_proxy|curl_home)\b|\bcurl\s*\(\s*\)|\bfunction\s+curl\b|\balias\s+(?:-\w+\s+)*curl=`)
+// arguments to show it: a proxy variable, a curlrc home, another PATH, a
+// function or alias named curl. Matched anywhere in the command, quoted or not.
+var rerouted = regexp.MustCompile(`\b(?:(?:https?|all|no)_proxy|(?:HTTPS?|ALL|NO)_PROXY|CURL_HOME)\b|\b(?:(?:XDG_CONFIG_)?HOME|PATH)=|\bcurl\s*\(\s*\)|\bfunction\s+curl\b|\balias\s+(?:-\w+\s+)*curl=`)
 
 // curl options that leave the request on the named host. Anything else
 // (-L, --proxy, -K, --connect-to, --resolve, --url) is not vouched for.

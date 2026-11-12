@@ -29,6 +29,9 @@ test("taintOf finds a download only where the shell runs one", () => {
     ["echo `curl https://x`", "curl"], ["bash -c 'curl https://x'", "curl"], ["sh -lc \"gh api user\"", "gh api"],
     ["eval \"curl https://x\"", "curl"], ["(curl https://x)", "curl"], ["if curl -sf https://x; then echo ok; fi", "curl"],
     ["curl$(:) https://x", "curl"], ["cu`:`rl https://x", "curl"], ["gh api$(:) user", "gh api"],
+    // A variable set for a shell reaches the script it runs: no local curl there.
+    ["FOO=1 bash -c 'curl http://localhost'", "curl"], ["env FOO=1 sh -c \"eval 'curl localhost'\"", "curl"],
+    ["curl http://localhost && bash -c 'wget https://x'", "wget"],
   ];
   for (const [command, program] of runs) assert.equal(taintOf("bash", { command }), `shell download: ${program}`, command);
   const mentions = [
@@ -36,6 +39,7 @@ test("taintOf finds a download only where the shell runs one", () => {
     "cat <<EOF > get.sh\ncurl https://x\nEOF", "grep -rn curl .", "rg 'wget' src", "echo curl", "echo '$(curl https://x)'",
     "brew install curl", "sudo apt-get install -y curl wget", "command -v curl", "man wget", "gh pr view 1",
     "# curl https://x", "echo ok # $(curl https://x)", "true # x; wget https://x",
+    "bash -c 'curl http://localhost'", "echo $(curl -s localhost:8080)",
   ];
   for (const command of mentions) assert.equal(taintOf("bash", { command }), "", command);
 });

@@ -28,8 +28,9 @@ const LOOPBACK = /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5}
 const REDIRECTION = /^(?:\d*|&)[<>]/;
 const EXPANSION = /[$`]/;
 // Ways a command sends a loopback curl elsewhere with nothing in its arguments
-// to show it: a proxy variable, a curlrc home, a function or alias named curl.
-const REROUTED = /\b(?:(?:https?|all|no)_proxy|curl_home)\b|\bcurl\s*\(\s*\)|\bfunction\s+curl\b|\balias\s+(?:-\w+\s+)*curl=/i;
+// to show it: a proxy variable, a curlrc home, another PATH, a function or
+// alias named curl.
+const REROUTED = /\b(?:(?:https?|all|no)_proxy|(?:HTTPS?|ALL|NO)_PROXY|CURL_HOME)\b|\b(?:(?:XDG_CONFIG_)?HOME|PATH)=|\bcurl\s*\(\s*\)|\bfunction\s+curl\b|\balias\s+(?:-\w+\s+)*curl=/;
 const CURL_FLAGS = "sSfiIvkN";
 const CURL_VALUES = "XHdowmAu";
 const CURL_LONG_FLAGS = new Set(["silent", "show-error", "fail", "fail-with-body", "include", "head", "verbose", "insecure", "compressed", "no-buffer", "no-progress-meter"]);
@@ -104,6 +105,7 @@ function foreignRead(tool: string, url: string): string {
 function shellRead(command: string, exempt: boolean, depth = 0): string {
   if (depth > MAX_NESTING) return "shell script too nested to check";
   const scripts: string[] = [];
+  let nested = exempt; // a variable set here reaches the scripts run from here
   for (const { words, expands } of commandsOf(command.replace(HEREDOC, "$3\n"), scripts)) {
     let i = 0;
     let fed = false; // xargs appends operands the words do not show
@@ -116,12 +118,13 @@ function shellRead(command: string, exempt: boolean, depth = 0): string {
       i++;
       while (i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i]))) i++;
     }
+    if (env) nested = false;
     const plain = exempt && !fed && !env && !expands;
     if (plain && program(words[i]) === "curl" && localCurl(words.slice(i + 1))) continue;
     const found = downloaderAt(words, i, scripts);
     if (found) return `shell download: ${found}`;
   }
-  return scripts.reduce((found, script) => found || shellRead(script, exempt, depth + 1), "");
+  return scripts.reduce((found, script) => found || shellRead(script, nested, depth + 1), "");
 }
 
 // downloaderAt names the downloader the command at s is, or ""; a script it
@@ -218,8 +221,11 @@ function commandsOf(line: string, scripts: string[]): Command[] {
       quote = c;
       open = true;
     } else if (c === "\\" && i + 1 < line.length) {
-      text += line[++i];
-      open = true;
+      // An escaped newline joins two lines; any other escaped byte is in a word.
+      if (line[++i] !== "\n") {
+        text += line[i];
+        open = true;
+      }
     } else if (c === "#" && !open) {
       const end = line.indexOf("\n", i);
       i = (end < 0 ? line.length : end) - 1;

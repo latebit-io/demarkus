@@ -253,7 +253,7 @@ func TestRunsEveryStage(t *testing.T) {
 		"command -v curl":                    "",
 	} {
 		got := ""
-		if runs := Runs(cmd, dl...); len(runs) > 0 {
+		if runs, _ := Runs(cmd, dl...); len(runs) > 0 {
 			got = runs[0].Program
 		}
 		if got != want {
@@ -272,10 +272,18 @@ func TestRunsArgs(t *testing.T) {
 		"A=1 env B=2 curl x":                        {{Program: "curl", Args: []string{"x"}, Env: true}},
 		"curl a#b # curl c; curl d\ncurl e":         {{Program: "curl", Args: []string{"a#b"}}, {Program: "curl", Args: []string{"e"}}},
 		`curl "# not a comment" '#' \# x`:           {{Program: "curl", Args: []string{"# not a comment", "#", "#", "x"}}},
-		`curl "http://unclosed`:                     {{Program: "curl"}},
-		"go test ./...":                             nil,
+		// An escaped space keeps the # inside its word: no comment, the curl runs.
+		`echo x\ #; curl y`: {{Program: "curl", Args: []string{"y"}}},
+		"curl -s \\\n  x":   {{Program: "curl", Args: []string{"-s", "x"}}},
+		`echo a\; curl b`:   nil,
+		// Keywords and a subshell's parenthesis precede a command.
+		"for u in a; do curl $u; done":        {{Program: "curl", Args: []string{"$u"}}},
+		"if ! curl -f x; then (gh api y); fi": {{Program: "curl", Args: []string{"-f", "x"}}, {Program: "gh api", Args: []string{"y)"}}},
+		"{ curl x; }":                         {{Program: "curl", Args: []string{"x"}}},
+		`curl "http://unclosed`:               {{Program: "curl"}},
+		"go test ./...":                       nil,
 	} {
-		if got := Runs(cmd, dl...); !reflect.DeepEqual(got, want) {
+		if got, _ := Runs(cmd, dl...); !reflect.DeepEqual(got, want) {
 			t.Errorf("Runs(%q) = %+v, want %+v", cmd, got, want)
 		}
 	}
@@ -292,6 +300,31 @@ func TestClassifyIgnoresComments(t *testing.T) {
 	} {
 		if got := Classify(cmd).Checks; !reflect.DeepEqual(got, want) {
 			t.Errorf("Classify(%q) = %v, want %v", cmd, got, want)
+		}
+	}
+}
+
+// A command is opaque when part of it runs where Runs does not look.
+func TestRunsOpaque(t *testing.T) {
+	for cmd, want := range map[string]bool{
+		"curl x && bash -c 'wget y'":             true,
+		`curl x; eval "$Y"`:                      true,
+		"curl x; . ./env.sh":                     true,
+		"curl x; echo $(wget -qO- y)":            true,
+		"curl x; echo `wget -qO- y`":             true,
+		"f() { wget y; }; curl x && f":           true,
+		"f () { wget y; }; curl x":               true,
+		"function f { wget y; }; curl x":         true,
+		"case $a in b) wget y;; esac; curl x":    true,
+		"sudo sh -c 'curl x'":                    true,
+		"curl x | jq . && go test ./...":         false,
+		"curl x || { echo fail; exit 1; }":       false,
+		"if curl -f x; then echo ok; fi":         false,
+		`curl -d '{"a": 1}' -w '%{http_code}' x`: false,
+		"curl x && echo bash":                    false,
+	} {
+		if _, got := Runs(cmd, []string{"curl"}); got != want {
+			t.Errorf("Runs(%q) opaque = %v, want %v", cmd, got, want)
 		}
 	}
 }

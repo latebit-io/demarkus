@@ -167,6 +167,16 @@ func classifySegment(tokens []string) (Check, bool) {
 var wrappers = map[string]bool{"sudo": true, "doas": true, "env": true, "exec": true, "nohup": true, "time": true,
 	"nice": true, "timeout": true, "xargs": true, "stdbuf": true, "command": false}
 
+// keywords precede a command and run nothing themselves: the TS adapters'
+// set, and the brace that opens a group.
+var keywords = map[string]bool{"if": true, "then": true, "elif": true, "else": true, "do": true, "while": true,
+	"until": true, "!": true, "{": true}
+
+// unread run commands Runs does not look into: a script handed to a shell or
+// eval, a sourced file, a case arm, a function body.
+var unread = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "eval": true,
+	"source": true, ".": true, "case": true, "function": true}
+
 // numericArg is a wrapper option value: 10, 2.5, 10s, 1m.
 var numericArg = regexp.MustCompile(`^\d[0-9.]*[smhd]?$`)
 
@@ -180,13 +190,14 @@ type Run struct {
 
 // Runs lists the programs the stages of command run, in order: quotes
 // respected, env assignments and wrappers (sudo -E) skipped, a path compared
-// by its base name.
-func Runs(command string, programs ...[]string) []Run {
-	var runs []Run
+// by its base name. opaque: the command also runs something Runs cannot read.
+func Runs(command string, programs ...[]string) (runs []Run, opaque bool) {
+	opaque = strings.Contains(command, "$(") || strings.Contains(command, "`")
 	segs, _ := splitSegments(command)
 	for _, seg := range segs {
 		for _, stage := range append([]string{seg.stage}, seg.later...) {
 			tokens, fed, env := commandWords(strings.Fields(stage))
+			opaque = opaque || nests(tokens)
 			i := slices.IndexFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) })
 			if i < 0 {
 				continue
@@ -195,17 +206,35 @@ func Runs(command string, programs ...[]string) []Run {
 			runs = append(runs, Run{Program: strings.Join(p, " "), Args: words(strings.Join(tokens[len(p):], " ")), Fed: fed, Env: env})
 		}
 	}
-	return runs
+	return runs, opaque
 }
 
-// commandWords drops what precedes the command a stage runs: assignments,
-// wrappers and the wrappers' options. fed: one of the wrappers was xargs;
-// env: an assignment was dropped.
+// nests: the stage's command is one of unread, or defines a function.
+func nests(tokens []string) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	return unread[filepath.Base(tokens[0])] || strings.Contains(tokens[0], "()") ||
+		(len(tokens) > 1 && strings.HasPrefix(tokens[1], "()"))
+}
+
+// commandWords drops what precedes the command a stage runs: keywords, a
+// subshell's parenthesis, assignments, wrappers and the wrappers' options.
+// fed: one of the wrappers was xargs; env: an assignment was dropped.
 func commandWords(tokens []string) (rest []string, fed, env bool) {
 	for len(tokens) > 0 {
+		if t := strings.TrimLeft(tokens[0], "("); t != tokens[0] {
+			tokens = tokens[1:]
+			if t != "" {
+				tokens = append([]string{t}, tokens...)
+			}
+			continue
+		}
 		name := filepath.Base(tokens[0])
 		takesOptions, wrapper := wrappers[name]
 		switch {
+		case keywords[tokens[0]]:
+			tokens = tokens[1:]
 		case isEnvAssignment(tokens[0]):
 			env = true
 			tokens = tokens[1:]
@@ -307,9 +336,11 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 	var cur strings.Builder
 	var quote byte
 	var stages []string
+	inWord := false // a # is a comment only where a word would start
 	pipe := func() {
 		stages = append(stages, strings.TrimSpace(cur.String()))
 		cur.Reset()
+		inWord = false
 	}
 	flush := func() {
 		pipe()
@@ -322,23 +353,30 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 	for i := 0; i < len(command); i++ {
 		c := command[i]
 		switch {
+		case escapes(command, i, quote):
+			// An escaped byte is part of its word, never a separator, quote
+			// or comment; an escaped newline joins two lines.
+			i++
+			if command[i] != '\n' {
+				write(c)
+				write(command[i])
+				inWord = true
+			}
 		case quote != 0:
 			if c == quote {
 				quote = 0
 			}
 			write(c)
 		case c == '\'' || c == '"':
-			quote = c
+			quote, inWord = c, true
 			write(c)
-		case c == '#' && wordStart(cur.String()):
-			for i+1 < len(command) && command[i+1] != '\n' {
-				i++
-			}
+		case c == '#' && !inWord:
+			i = lineEnd(command, i)
 		case c == ';' || c == '\n':
 			// A trailing ; or newline ends the command; it sequences nothing.
 			andOnly = andOnly && strings.TrimSpace(command[i+1:]) == ""
 			flush()
-		case (c == '&' || c == '|') && i+1 < len(command) && command[i+1] == c:
+		case doubled(command, i):
 			andOnly = andOnly && c == '&'
 			flush()
 			i++
@@ -352,15 +390,30 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 			flush()
 		default:
 			write(c)
+			inWord = c != ' ' && c != '\t'
 		}
 	}
 	flush()
 	return segs, andOnly
 }
 
-// wordStart: the next byte begins a word of the stage written so far.
-func wordStart(stage string) bool {
-	return stage == "" || stage[len(stage)-1] == ' ' || stage[len(stage)-1] == '\t'
+// escapes: the backslash at i escapes the next byte (not inside single quotes).
+func escapes(command string, i int, quote byte) bool {
+	return command[i] == '\\' && quote != '\'' && i+1 < len(command)
+}
+
+// lineEnd is the index of the last byte of the line i is on.
+func lineEnd(command string, i int) int {
+	for i+1 < len(command) && command[i+1] != '\n' {
+		i++
+	}
+	return i
+}
+
+// doubled: the byte at i starts && or ||.
+func doubled(command string, i int) bool {
+	c := command[i]
+	return (c == '&' || c == '|') && i+1 < len(command) && command[i+1] == c
 }
 
 // isRedirect: the & at i belongs to a redirection (2>&1, <&3, &>file).
