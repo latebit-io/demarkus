@@ -45,7 +45,7 @@ Stages in order; each is a gate, failing one stops there, **not** published. Eve
 
 4. **Tag.** Subject tags drawn from the draft, deliberate `importance` (0-1; 0.8 and up for hubs, architecture, key decisions), `type`. The destination's required axes (`category:` and the like) and fields come back as dry run findings. Re-tag; never copy soul tags across. `rel-based-on`: the staged values plus a repo pin per repo path the draft describes.
    - Repo pin: `https://github.com/<owner>/<repo>/tree/<sha>/<path>`, read in that repo: `<owner>/<repo>` from `git remote get-url origin`, a `github.com` remote only; `<sha>` from `git rev-parse HEAD`.
-   - Only a path the commit holds, unchanged since, on a commit GitHub has: `git cat-file -e <sha>:<path>` succeeds, `git status --porcelain -- <path>` is empty, `git branch -r --contains <sha>` is not.
+   - Only a path the commit holds, unchanged since, on a commit origin has: `git cat-file -e <sha>:<path>` succeeds, `git status --porcelain -- <path>` is empty, and after `git fetch origin`, `git branch -r --list 'origin/*' --contains <sha>` is not.
    - No shell, a git failure, another host, a failed check: no repo pin for that path.
    - Every pin, staged ones included, is stripped as step 2 strips the body: one carrying userinfo, a token, a secret or PII is dropped.
 
