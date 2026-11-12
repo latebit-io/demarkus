@@ -19,6 +19,7 @@ import (
 	"github.com/latebit-io/demarkus/client/merge"
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/docframe"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // WriteFunc runs a WriteOp under the surface's authorization; see docwrite.
@@ -27,9 +28,19 @@ type WriteFunc = docwrite.WriteFunc
 // WriteOp is one write, sent with the ctx and token it is given.
 type WriteOp = docwrite.WriteOp
 
-// writer asks the surface to authorize verb on target; its refusal is the
-// tool's answer, word for word.
+// writer is authorize for a document tool. Generated graph data is refused
+// first: it is derived, and a hand write breaks what seeds from it.
 func (t *Tools) writer(ctx context.Context, target Target, verb string) (WriteFunc, *Result) {
+	if storefmt.GeneratedGraphTarget(target.Path) {
+		bad := failure("%s is generated graph data: derived from the documents, never written directly", target.Path)
+		return nil, &bad
+	}
+	return t.authorize(ctx, target, verb)
+}
+
+// authorize asks the surface to authorize verb on target; its refusal is the
+// tool's answer, word for word.
+func (t *Tools) authorize(ctx context.Context, target Target, verb string) (WriteFunc, *Result) {
 	if t.hooks.Writer == nil {
 		bad := failure("%s is not available: this server has no writer", verb)
 		return nil, &bad
@@ -445,7 +456,7 @@ func (t *Tools) Archive(ctx context.Context, args ArchiveArgs) Result {
 func (t *Tools) archiveUnder(ctx context.Context, target Target, docs hub.Docs, expected int) Result {
 	out, err := landing.ArchiveUnder(ctx, docs, &landing.Sweep{
 		Dir: target.Path, ExpectedDocs: expected, Stamp: t.identityMeta(ctx),
-		Walker: listwalk.Walker{Client: t.backend, Host: target.Host, Token: t.readToken(ctx, target.Host)},
+		Walker: listwalk.Walker{Client: t.backend, Host: target.Host, Token: t.readToken(ctx, target.Host), SkipGraphData: true},
 	})
 	if err != nil {
 		return failure("%v", err)

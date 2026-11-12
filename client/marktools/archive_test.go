@@ -111,3 +111,26 @@ func TestArchiveRecursiveRefusesAMovedCount(t *testing.T) {
 		t.Error("a refused sweep archived")
 	}
 }
+
+// A sweep of /graph/ archives what was authored there and leaves the
+// generated graph data beside it.
+func TestArchiveRecursiveSkipsGeneratedGraphData(t *testing.T) {
+	backend := &fetchtest.Client{ListFn: func(_ context.Context, r fetch.ListRequest) (fetch.Result, error) {
+		if r.Path == "/graph/" {
+			return fetchtest.ListPage(r.Path, "", "manifest.md", "notes.md", "shards/", "worlds/"), nil
+		}
+		return fetchtest.ListPage(r.Path, "", "generated.md"), nil
+	}}
+	tools := newTools(t, backend, writingHooks())
+	got := tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/graph/", Recursive: true})
+	if got.IsError || !strings.HasPrefix(got.Text, "status: archived\narchived: 1 of 1\n- /graph/notes.md: ") {
+		t.Fatalf("archive = %+v", got)
+	}
+	// A generated directory holds nothing a sweep may take.
+	if got := tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/graph/worlds/", Recursive: true}); !got.IsError || !strings.Contains(got.Text, "no live documents under /graph/worlds/") {
+		t.Errorf("sweep of a generated directory = %+v", got)
+	}
+	if len(backend.ArchiveCalls) != 1 || backend.ArchiveCalls[0].Path != "/graph/notes.md" {
+		t.Errorf("archived = %+v", backend.ArchiveCalls)
+	}
+}

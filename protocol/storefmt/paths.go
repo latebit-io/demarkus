@@ -29,6 +29,13 @@ func IsGovernancePath(reqPath string) bool {
 	return strings.HasPrefix(strings.ToLower(CanonicalPath(reqPath))+"/", protocol.GovernancePrefix)
 }
 
+// GeneratedGraphTarget reports a write target that lands on generated graph
+// data (protocol.IsGeneratedGraphPath, which takes a stored path) under any
+// spelling: canonical and case-folded, as IsGovernancePath is.
+func GeneratedGraphTarget(reqPath string) bool {
+	return protocol.IsGeneratedGraphPath(strings.ToLower(CanonicalPath(reqPath)))
+}
+
 // RelPath is the storage-relative form of a request path: CanonicalPath
 // without the leading slash, "" for the root. ".." is rejected with
 // fs.ErrNotExist so traversal never reaches a backend.

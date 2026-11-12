@@ -10,9 +10,9 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/auth"
 )
 
-// authorizeWrite checks publish (govern for a restricted governance path) and
-// answers the denial itself: a grant on ctx decides alone, else the token;
-// with neither, no write.
+// authorizeWrite checks publish (govern for a restricted governance path, the
+// graph capability for generated graph data under a grant) and answers the
+// denial itself: a grant on ctx decides alone, else the token; neither, no write.
 func (h *Handler) authorizeWrite(ctx context.Context, w io.Writer, req protocol.Request) (tokenLabel string, ok bool) {
 	gov := storefmt.IsGovernancePath(req.Path)
 	restricted := gov && h.restrictGov
@@ -22,6 +22,8 @@ func (h *Handler) authorizeWrite(ctx context.Context, w io.Writer, req protocol.
 			h.Deny(w, req, auth.ErrNotPermitted)
 		case restricted && !grant.Govern:
 			h.denyGovernance(w, req)
+		case !grant.Graph && storefmt.GeneratedGraphTarget(req.Path):
+			h.denyGraph(w, req)
 		default:
 			return grant.Label, true
 		}
@@ -58,6 +60,13 @@ func (h *Handler) authorizeWrite(ctx context.Context, w io.Writer, req protocol.
 func (h *Handler) denyGovernance(w io.Writer, req protocol.Request) {
 	h.logger.Warn("governance write refused", "audit", true, "operation", req.Verb, "path", sanitize(req.Path))
 	h.writeError(w, protocol.StatusNotPermitted, "governance document: "+writeActivity[req.Verb]+" "+protocol.GovernancePrefix+" requires the "+protocol.OpGovern+" operation")
+}
+
+// denyGraph refuses a grant without Graph: only the deriver's writes
+// generated graph data.
+func (h *Handler) denyGraph(w io.Writer, req protocol.Request) {
+	h.logger.Warn("graph data write refused", "audit", true, "operation", req.Verb, "path", sanitize(req.Path))
+	h.writeError(w, protocol.StatusNotPermitted, "generated graph data: derived from the documents, never written directly")
 }
 
 // authorizeRead reports whether a read may proceed: a path no read token

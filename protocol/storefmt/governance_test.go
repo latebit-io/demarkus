@@ -19,3 +19,19 @@ func TestIsGovernancePath(t *testing.T) {
 		}
 	}
 }
+
+func TestGeneratedGraphTarget(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/graph.md":                        true,
+		"//graph.md":                       true,
+		"/a/../graph/manifest.md":          true,
+		"/GRAPH.md":                        true,
+		"/Graph/Worlds/team-a/manifest.md": true,
+		"/graph/notes.md":                  false,
+		"/":                                false,
+	} {
+		if got := GeneratedGraphTarget(p); got != want {
+			t.Errorf("GeneratedGraphTarget(%q) = %v, want %v", p, got, want)
+		}
+	}
+}

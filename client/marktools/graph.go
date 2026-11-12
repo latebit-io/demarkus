@@ -156,7 +156,7 @@ func (t *Tools) GraphPublish(ctx context.Context, args GraphPublishArgs) Result 
 	if args.Retention < 0 {
 		return failure("retention must be >= 0 (0 keeps every version)")
 	}
-	write, bad := t.writer(ctx, target, "publish")
+	write, bad := t.authorize(ctx, target, "publish")
 	if bad != nil {
 		return *bad
 	}

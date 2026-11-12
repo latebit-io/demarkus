@@ -484,3 +484,22 @@ func TestHandleMarkPublishGrantsGovernToGovernors(t *testing.T) {
 		}
 	}
 }
+
+// A world URL resolves to the path the tools refuse: graph data is the
+// deriver's, and nothing is dispatched.
+func TestHandleMarkPublishRefusesGeneratedGraphData(t *testing.T) {
+	d := &fakeDispatcher{}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	res, err := g.handleMarkPublish(withAliceClaims(context.Background()), callToolReq("mark_publish", map[string]any{
+		"url": "mark://team-a/graph.md", "body": "# Mine\n", "expected_version": float64(0),
+	}))
+	if err != nil {
+		t.Fatalf("handleMarkPublish: %v", err)
+	}
+	if text := toolResultText(t, res); !res.IsError || !strings.Contains(text, "is generated graph data") {
+		t.Errorf("publish = %q", text)
+	}
+	if n := len(d.PublishCalls) + len(d.FetchCalls); n != 0 {
+		t.Errorf("dispatcher saw %d calls for a refused write", n)
+	}
+}
